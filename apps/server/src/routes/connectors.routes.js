@@ -2,6 +2,13 @@ import { getSetupStatus } from "../../../../packages/core/src/setup.js";
 import { finishGmailOAuth, getGmailMessage, listGmailMessages, startGmailOAuth } from "../../../../packages/connectors/src/gmail.js";
 import { deliverWhatsAppReplies, getWhatsAppStatus, routeWhatsAppInbound } from "../../../../packages/connectors/src/whatsapp.js";
 import { writeConnectorConfig } from "../../../../packages/storage/src/config.js";
+import {
+  connectorConfigSchema,
+  connectorTestSchema,
+  gmailMessageSchema,
+  gmailMessagesSchema,
+  whatsappInboundSchema,
+} from "../../../../packages/shared/src/api-schemas.js";
 import { json } from "../http.js";
 
 export async function registerConnectorRoutes(app) {
@@ -9,14 +16,14 @@ export async function registerConnectorRoutes(app) {
     return json(reply, 200, await startGmailOAuth());
   });
 
-  app.get("/api/connectors/gmail/messages", async (request, reply) => {
+  app.get("/api/connectors/gmail/messages", { schema: gmailMessagesSchema }, async (request, reply) => {
     return json(reply, 200, await listGmailMessages({
       maxResults: request.query.maxResults || 10,
       query: request.query.q || "",
     }));
   });
 
-  app.get("/api/connectors/gmail/messages/:id", async (request, reply) => {
+  app.get("/api/connectors/gmail/messages/:id", { schema: gmailMessageSchema }, async (request, reply) => {
     return json(reply, 200, { message: await getGmailMessage(request.params.id) });
   });
 
@@ -24,7 +31,7 @@ export async function registerConnectorRoutes(app) {
     return json(reply, 200, await getWhatsAppStatus());
   });
 
-  app.post("/api/connectors/whatsapp/inbound", async (request, reply) => {
+  app.post("/api/connectors/whatsapp/inbound", { schema: whatsappInboundSchema }, async (request, reply) => {
     const routed = await routeWhatsAppInbound(request.body || {});
     return json(reply, routed.duplicate ? 200 : 202, routed);
   });
@@ -33,11 +40,11 @@ export async function registerConnectorRoutes(app) {
     return json(reply, 200, await deliverWhatsAppReplies());
   });
 
-  app.post("/api/connectors/:id/config", async (request, reply) => {
+  app.post("/api/connectors/:id/config", { schema: connectorConfigSchema }, async (request, reply) => {
     return json(reply, 200, { config: await writeConnectorConfig(request.params.id, request.body || {}) });
   });
 
-  app.post("/api/connectors/:id/test", async (request, reply) => {
+  app.post("/api/connectors/:id/test", { schema: connectorTestSchema }, async (request, reply) => {
     const status = await getSetupStatus();
     const connector = status.connectors.find((item) => item.id === request.params.id);
     if (!connector) return json(reply, 404, { error: "unknown_connector" });

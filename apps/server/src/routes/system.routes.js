@@ -5,6 +5,7 @@ import { getSetupStatus } from "../../../../packages/core/src/setup.js";
 import { publicConfig } from "../../../../packages/storage/src/config.js";
 import { ensureDataDirs } from "../../../../packages/storage/src/paths.js";
 import { listEvents } from "../../../../packages/storage/src/store.js";
+import { eventsSchema } from "../../../../packages/shared/src/api-schemas.js";
 import { json } from "../http.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -50,7 +51,7 @@ export async function registerSystemRoutes(app) {
     return json(reply, 200, { ...(await getSetupStatus()), config: await publicConfig() });
   });
 
-  app.get("/api/events", async (request, reply) => {
+  app.get("/api/events", { schema: eventsSchema }, async (request, reply) => {
     return json(reply, 200, { events: await listEvents(process.env, Number(request.query.limit || 100)) });
   });
 }

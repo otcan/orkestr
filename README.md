@@ -76,6 +76,7 @@ This repo is intentionally dependency-free for the first scaffold. It provides:
 - `GET/POST /api/agents/:id/messages` for local agent inbox/history.
 - `POST /api/agents/:id/run-next`, `GET /api/executors`, and `GET /api/executions` for the generic executor boundary.
 - Overlay executor module loading so private deployments can add a real Codex adapter without public host assumptions.
+- `packages/shared` for framework-neutral API schemas used by the Fastify API and future Angular services.
 - `GET/POST /api/timers`, `POST /api/timers/:id/run`, and `DELETE /api/timers/:id`.
 - `GET /api/events` for setup and scheduler activity.
 
