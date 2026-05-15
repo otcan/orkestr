@@ -10,6 +10,7 @@ import { getSetupStatus } from "../../../packages/core/src/setup.js";
 import { createTimer, deleteTimer, listTimers, markDueTimers, runTimerNow } from "../../../packages/core/src/timers.js";
 import { listVirtualBrowsers, openVirtualBrowser, prepareVirtualBrowser } from "../../../packages/browsers/src/browsers.js";
 import { finishGmailOAuth, getGmailMessage, listGmailMessages, startGmailOAuth } from "../../../packages/connectors/src/gmail.js";
+import { getWhatsAppStatus } from "../../../packages/connectors/src/whatsapp.js";
 import { publicConfig, writeConnectorConfig } from "../../../packages/storage/src/config.js";
 import { ensureDataDirs } from "../../../packages/storage/src/paths.js";
 import { listEvents } from "../../../packages/storage/src/store.js";
@@ -129,6 +130,10 @@ async function handleApi(req, res) {
   const gmailMessage = url.pathname.match(/^\/api\/connectors\/gmail\/messages\/([^/]+)$/);
   if (req.method === "GET" && gmailMessage) {
     json(res, 200, { message: await getGmailMessage(decodeURIComponent(gmailMessage[1])) });
+    return;
+  }
+  if (req.method === "GET" && url.pathname === "/api/connectors/whatsapp/status") {
+    json(res, 200, await getWhatsAppStatus());
     return;
   }
   const connectorConfig = url.pathname.match(/^\/api\/connectors\/([^/]+)\/config$/);

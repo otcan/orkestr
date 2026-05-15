@@ -5,6 +5,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { readConnectorConfig } from "../../storage/src/config.js";
 import { dataPaths } from "../../storage/src/paths.js";
+import { getWhatsAppStatus } from "./whatsapp.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -48,23 +49,11 @@ function status(id, label, state, summary, details = {}) {
   return { id, label, state, summary, details };
 }
 
-async function whatsappBridgeStatus(url) {
-  if (!url) return null;
-  try {
-    const response = await fetch(new URL("/health", url), { signal: AbortSignal.timeout(2000) });
-    if (!response.ok) return { ok: false, state: `HTTP ${response.status}` };
-    return await response.json();
-  } catch (error) {
-    return { ok: false, state: "unreachable", error: error.message };
-  }
-}
-
 export async function getConnectorStatuses({ env = process.env, home = os.homedir() } = {}) {
   const paths = dataPaths(env);
-  const [openaiConfig, gmailConfig, whatsappConfig] = await Promise.all([
+  const [openaiConfig, gmailConfig] = await Promise.all([
     readConnectorConfig("openai", env),
     readConnectorConfig("gmail", env),
-    readConnectorConfig("whatsapp", env),
   ]);
   const codexHome = path.resolve(env.CODEX_HOME || path.join(home, ".codex"));
   const codexAuthPath = path.join(codexHome, "auth.json");
@@ -76,8 +65,7 @@ export async function getConnectorStatuses({ env = process.env, home = os.homedi
   const gmailOAuthExists = await pathExists(path.join(paths.secrets, "gmail-token.json"));
   const gmailOAuthError = await readJsonIfExists(path.join(paths.secrets, "gmail-error.json"));
   const openaiKey = env.OPENAI_API_KEY || openaiConfig.openaiApiKey || "";
-  const bridgeUrl = env.WHATSAPP_BRIDGE_URL || whatsappConfig.bridgeUrl || "";
-  const bridge = await whatsappBridgeStatus(bridgeUrl);
+  const whatsapp = await getWhatsAppStatus(env);
 
   const connectors = {
     openai: openaiKey
@@ -113,14 +101,14 @@ export async function getConnectorStatuses({ env = process.env, home = os.homedi
     linkedin: linkedinProfileExists
       ? status("linkedin", "LinkedIn", "partial", "LinkedIn browser profile exists. Log in through the virtual browser.")
       : status("linkedin", "LinkedIn", "not_connected", "Prepare a LinkedIn virtual browser profile."),
-    whatsapp: bridge?.ok || bridge?.ready
-      ? status("whatsapp", "WhatsApp", "connected", "WhatsApp bridge is reachable and ready.", { bridgeUrl, bridge })
-      : bridgeUrl
-        ? status("whatsapp", "WhatsApp", "partial", "WhatsApp bridge URL is configured but not ready.", {
-            bridgeUrl,
-            bridge,
-          })
-        : status("whatsapp", "WhatsApp", "not_connected", "Configure a local WhatsApp bridge URL."),
+    whatsapp:
+      whatsapp.state === "paired"
+        ? status("whatsapp", "WhatsApp", "connected", whatsapp.summary, whatsapp)
+        : ["qr_needed", "unpaired"].includes(whatsapp.state)
+          ? status("whatsapp", "WhatsApp", "partial", whatsapp.summary, whatsapp)
+          : whatsapp.state === "not_configured"
+            ? status("whatsapp", "WhatsApp", "not_connected", whatsapp.summary, whatsapp)
+            : status("whatsapp", "WhatsApp", "broken", whatsapp.summary, whatsapp),
     browsers: chrome.command
       ? status("browsers", "Virtual Browsers", "connected", "Chrome-compatible browser is available.", {
           command: chrome.command,
