@@ -9,7 +9,7 @@
   "scripts": {
     "start": "node apps/server/src/server.js",
     "dev": "node apps/server/src/server.js --open",
-    "check": "find apps packages scripts examples -path '*/node_modules/*' -prune -o \\( -name '*.js' -o -name '*.mjs' \\) -print | while read -r file; do node --check \"$file\"; done && node --test && npm run web:build",
+    "check": "find apps packages scripts examples -path '*/node_modules/*' -prune -o \\( -name '*.js' -o -name '*.mjs' \\) -print | while read -r file; do node --check \"$file\"; done && npm run web:build && node --test",
     "test": "node --test",
     "web:build": "ng build web",
     "smoke": "node scripts/smoke.mjs",

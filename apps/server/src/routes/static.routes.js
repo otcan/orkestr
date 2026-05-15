@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 import { json } from "../http.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const publicDir = path.resolve(__dirname, "../../../web/public");
+const publicDir = path.resolve(__dirname, "../../../../dist/web/browser");
 
 const mimeTypes = new Map([
   [".html", "text/html; charset=utf-8"],
@@ -29,12 +29,20 @@ async function serveStaticPath(pathname, reply) {
       .type(mimeTypes.get(ext) || "application/octet-stream")
       .send(body);
   } catch {
-    const body = await fs.readFile(path.join(publicDir, "index.html"));
-    return reply
-      .code(200)
-      .header("cache-control", "no-store")
-      .type("text/html; charset=utf-8")
-      .send(body);
+    try {
+      const body = await fs.readFile(path.join(publicDir, "index.html"));
+      return reply
+        .code(200)
+        .header("cache-control", "no-store")
+        .type("text/html; charset=utf-8")
+        .send(body);
+    } catch {
+      return reply
+        .code(503)
+        .header("cache-control", "no-store")
+        .type("text/html; charset=utf-8")
+        .send("<!doctype html><title>Orkestr build missing</title><h1>Angular build missing</h1><p>Run <code>npm run web:build</code> before starting the server.</p>");
+    }
   }
 }
 
