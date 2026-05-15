@@ -35,3 +35,25 @@ export async function enqueueAgentMessage(agentId, input, env = process.env) {
   return message;
 }
 
+export async function updateAgentMessage(agentId, messageId, patch, env = process.env) {
+  const paths = await ensureDataDirs(env);
+  const filePath = path.join(paths.messages, `${safeAgentId(agentId)}.json`);
+  const messages = await listAgentMessages(agentId, env);
+  let updated = null;
+  const next = messages.map((message) => {
+    if (message.id !== messageId) return message;
+    updated = {
+      ...message,
+      ...patch,
+      updatedAt: new Date().toISOString(),
+    };
+    return updated;
+  });
+  if (!updated) {
+    const error = new Error("message_not_found");
+    error.statusCode = 404;
+    throw error;
+  }
+  await writeJson(filePath, next);
+  return updated;
+}

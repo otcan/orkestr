@@ -4,7 +4,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { execFile } from "node:child_process";
 import { createAgentFromTemplate, listAgents, templates } from "../../../packages/core/src/agents.js";
-import { executorAdapters } from "../../../packages/core/src/executors.js";
+import { listExecutions, listExecutorAdapters, runNextAgentMessage } from "../../../packages/core/src/executors.js";
 import { enqueueAgentMessage, listAgentMessages } from "../../../packages/core/src/messages.js";
 import { getSetupStatus } from "../../../packages/core/src/setup.js";
 import { createTimer, deleteTimer, listTimers, markDueTimers, runTimerNow } from "../../../packages/core/src/timers.js";
@@ -158,7 +158,11 @@ async function handleApi(req, res) {
     return;
   }
   if (req.method === "GET" && url.pathname === "/api/executors") {
-    json(res, 200, { executors: executorAdapters });
+    json(res, 200, { executors: listExecutorAdapters() });
+    return;
+  }
+  if (req.method === "GET" && url.pathname === "/api/executions") {
+    json(res, 200, { executions: await listExecutions() });
     return;
   }
   const agentTemplate = url.pathname.match(/^\/api\/agents\/templates\/([^/]+)$/);
@@ -173,6 +177,11 @@ async function handleApi(req, res) {
   }
   if (req.method === "POST" && agentMessages) {
     json(res, 201, { message: await enqueueAgentMessage(agentMessages[1], await readJson(req)) });
+    return;
+  }
+  const agentRun = url.pathname.match(/^\/api\/agents\/([^/]+)\/run-next$/);
+  if (req.method === "POST" && agentRun) {
+    json(res, 200, { execution: await runNextAgentMessage(agentRun[1], await readJson(req)) });
     return;
   }
   if (req.method === "GET" && url.pathname === "/api/timers") {

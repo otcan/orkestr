@@ -30,17 +30,22 @@ test("server exposes health, readiness, version, and agent message APIs", async 
       method: "POST",
       body: JSON.stringify({ text: "hello" }),
     });
+    const execution = await request(baseUrl, "/api/agents/job-search-assistant/run-next", {
+      method: "POST",
+      body: JSON.stringify({ executorId: "noop" }),
+    });
     const listed = await request(baseUrl, "/api/agents/job-search-assistant/messages");
 
     assert.equal(health.ok, true);
     assert.equal(ready.ok, true);
     assert.equal(version.name, "orkestr-oss");
     assert.equal(queued.message.state, "queued");
+    assert.equal(execution.execution.state, "completed");
     assert.equal(listed.messages.length, 1);
+    assert.equal(listed.messages[0].state, "completed");
   } finally {
     await new Promise((resolve) => server.close(resolve));
     if (priorHome === undefined) delete process.env.ORKESTR_HOME;
     else process.env.ORKESTR_HOME = priorHome;
   }
 });
-

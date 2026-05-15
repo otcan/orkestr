@@ -194,6 +194,9 @@ function renderAgents(payload) {
                 <textarea name="text" rows="3" placeholder="Send a test message to this agent"></textarea>
                 <button type="submit" class="secondary">Queue message</button>
               </form>
+              <div class="actions">
+                <button data-agent-run="${escapeHtml(agent.id)}">Run next</button>
+              </div>
             </article>
           `,
         )
@@ -209,6 +212,17 @@ function renderAgents(payload) {
         body: JSON.stringify(body),
       });
       form.reset();
+      await refresh();
+    });
+  });
+
+  agentsEl.querySelectorAll("[data-agent-run]").forEach((button) => {
+    button.addEventListener("click", async () => {
+      button.textContent = "Running...";
+      await api(`/api/agents/${button.dataset.agentRun}/run-next`, {
+        method: "POST",
+        body: JSON.stringify({ executorId: "noop" }),
+      });
       await refresh();
     });
   });

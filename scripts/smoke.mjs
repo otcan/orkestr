@@ -77,6 +77,10 @@ try {
     }),
   });
   await request(baseUrl, `/api/timers/${timer.timer.id}/run`, { method: "POST" });
+  await request(baseUrl, "/api/agents/job-search-assistant/run-next", {
+    method: "POST",
+    body: JSON.stringify({ executorId: "noop" }),
+  });
   await stop(server);
 
   server = start(home, port);
@@ -87,6 +91,7 @@ try {
 
   if (timers.timers.length !== 1) throw new Error("timer did not persist after restart");
   if (messages.messages.length !== 1) throw new Error("queued timer message did not persist after restart");
+  if (messages.messages[0].state !== "completed") throw new Error("noop executor did not complete message");
   if (!events.events.some((event) => event.type === "timer_manual_run")) {
     throw new Error("timer_manual_run event missing after restart");
   }
