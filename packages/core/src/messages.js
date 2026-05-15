@@ -38,10 +38,12 @@ export async function appendAgentMessage(agentId, input, env = process.env) {
   const externalId = String(input.externalId || "").trim();
   const chatId = String(input.chatId || "").trim();
   const from = String(input.from || "").trim();
+  const accountId = String(input.accountId || "").trim();
   if (connector) message.connector = connector;
   if (externalId) message.externalId = externalId;
   if (chatId) message.chatId = chatId;
   if (from) message.from = from;
+  if (accountId) message.accountId = accountId;
   if (Array.isArray(input.attachments) && input.attachments.length) {
     message.attachments = input.attachments.map((attachment) => ({ ...attachment }));
   }

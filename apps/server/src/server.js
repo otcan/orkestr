@@ -10,7 +10,7 @@ import { getSetupStatus } from "../../../packages/core/src/setup.js";
 import { createTimer, deleteTimer, listTimers, markDueTimers, runTimerNow } from "../../../packages/core/src/timers.js";
 import { listVirtualBrowsers, openVirtualBrowser, prepareVirtualBrowser } from "../../../packages/browsers/src/browsers.js";
 import { finishGmailOAuth, getGmailMessage, listGmailMessages, startGmailOAuth } from "../../../packages/connectors/src/gmail.js";
-import { getWhatsAppStatus, routeWhatsAppInbound } from "../../../packages/connectors/src/whatsapp.js";
+import { deliverWhatsAppReplies, getWhatsAppStatus, routeWhatsAppInbound } from "../../../packages/connectors/src/whatsapp.js";
 import { publicConfig, writeConnectorConfig } from "../../../packages/storage/src/config.js";
 import { ensureDataDirs } from "../../../packages/storage/src/paths.js";
 import { listEvents } from "../../../packages/storage/src/store.js";
@@ -141,6 +141,10 @@ async function handleApi(req, res) {
     json(res, routed.duplicate ? 200 : 202, routed);
     return;
   }
+  if (req.method === "POST" && url.pathname === "/api/connectors/whatsapp/deliver") {
+    json(res, 200, await deliverWhatsAppReplies());
+    return;
+  }
   const connectorConfig = url.pathname.match(/^\/api\/connectors\/([^/]+)\/config$/);
   if (req.method === "POST" && connectorConfig) {
     json(res, 200, { config: await writeConnectorConfig(connectorConfig[1], await readJson(req)) });
@@ -204,7 +208,9 @@ async function handleApi(req, res) {
   }
   const agentRun = url.pathname.match(/^\/api\/agents\/([^/]+)\/run-next$/);
   if (req.method === "POST" && agentRun) {
-    json(res, 200, { execution: await runNextAgentMessage(agentRun[1], await readJson(req)) });
+    const execution = await runNextAgentMessage(agentRun[1], await readJson(req));
+    const whatsappDelivery = await deliverWhatsAppReplies().catch((error) => ({ error: error.message || String(error) }));
+    json(res, 200, { execution, whatsappDelivery });
     return;
   }
   if (req.method === "GET" && url.pathname === "/api/timers") {

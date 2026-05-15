@@ -4,9 +4,10 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { startServer } from "../apps/server/src/server.js";
+import { runNextAgentMessage } from "../packages/core/src/executors.js";
 import { listAgentMessages } from "../packages/core/src/messages.js";
 import { getSetupStatus } from "../packages/core/src/setup.js";
-import { getWhatsAppStatus, routeWhatsAppInbound } from "../packages/connectors/src/whatsapp.js";
+import { deliverWhatsAppReplies, getWhatsAppStatus, routeWhatsAppInbound } from "../packages/connectors/src/whatsapp.js";
 import { writeConnectorConfig } from "../packages/storage/src/config.js";
 
 function response(payload, ok = true, status = 200) {
@@ -115,4 +116,34 @@ test("whatsapp inbound endpoint accepts direct agent target", async () => {
     if (priorHome === undefined) delete process.env.ORKESTR_HOME;
     else process.env.ORKESTR_HOME = priorHome;
   }
+});
+
+test("whatsapp delivery mirrors assistant replies once to the source chat", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-deliver-"));
+  const env = { ORKESTR_HOME: home };
+  await writeConnectorConfig("whatsapp", { bridgeUrl: "http://wa.local", apiToken: "secret-token" }, env);
+  await routeWhatsAppInbound(
+    { eventId: "wa-deliver-1", agentId: "agent-deliver", chatId: "chat-1", accountId: "main", text: "status?" },
+    env,
+  );
+  await runNextAgentMessage("agent-deliver", { executorId: "noop" }, env);
+
+  const calls = [];
+  const delivery = await deliverWhatsAppReplies(env, async (url, options) => {
+    calls.push({ url, options, body: JSON.parse(options.body) });
+    return response({ ok: true, ids: ["sent-1"] });
+  });
+  const duplicate = await deliverWhatsAppReplies(env, async () => {
+    throw new Error("should not resend");
+  });
+
+  assert.equal(delivery.delivered.length, 1);
+  assert.equal(delivery.failed.length, 0);
+  assert.equal(duplicate.delivered.length, 0);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].url.pathname, "/send-text");
+  assert.equal(calls[0].options.headers.authorization, "Bearer secret-token");
+  assert.equal(calls[0].body.to, "chat-1");
+  assert.equal(calls[0].body.accountId, "main");
+  assert.match(calls[0].body.text, /No-op executor received/);
 });
