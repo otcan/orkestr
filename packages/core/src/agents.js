@@ -1,4 +1,3 @@
-import { randomUUID } from "node:crypto";
 import { ensureDataDirs } from "../../storage/src/paths.js";
 import { appendEvent, readJson, writeJson } from "../../storage/src/store.js";
 
@@ -37,7 +36,7 @@ export async function createAgentFromTemplate(templateId, env = process.env) {
   const existing = agents.find((agent) => agent.templateId === templateId);
   if (existing) return existing;
   const agent = {
-    id: randomUUID(),
+    id: templateId,
     templateId,
     name: template.name,
     state: "draft",

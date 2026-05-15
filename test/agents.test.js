@@ -13,6 +13,7 @@ test("agent templates create stable local agent records", async () => {
   const second = await createAgentFromTemplate("job-search-assistant", env);
   const agents = await listAgents(env);
 
+  assert.equal(first.id, "job-search-assistant");
   assert.equal(first.id, second.id);
   assert.equal(agents.length, 1);
   assert.equal(agents[0].name, "Job Search Assistant");

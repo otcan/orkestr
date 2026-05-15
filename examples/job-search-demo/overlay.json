@@ -1,0 +1,10 @@
+{
+  "name": "Job Search Demo Overlay",
+  "executors": {
+    "default": "job-search-demo",
+    "modules": ["./executors/job-search-demo.js"]
+  },
+  "connectors": {},
+  "agents": [],
+  "timers": []
+}

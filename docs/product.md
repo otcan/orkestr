@@ -29,6 +29,15 @@ The first starter is a job-search assistant:
 
 This is the sharp initial wedge. Avoid adding generic chat surfaces until this works end-to-end.
 
+The public repo includes a deterministic demo for this flow:
+
+```bash
+npm run demo:job-search
+```
+
+It uses fake WhatsApp and executor data so contributors can validate the
+message-in, agent-run, WhatsApp-reply loop without personal credentials.
+
 ## V1 boundaries
 
 In:

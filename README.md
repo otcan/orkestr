@@ -79,13 +79,27 @@ This repo is intentionally dependency-free for the first scaffold. It provides:
 - `GET/POST /api/timers`, `POST /api/timers/:id/run`, and `DELETE /api/timers/:id`.
 - `GET /api/events` for setup and scheduler activity.
 
-What is not real yet: Gmail token exchange, WhatsApp QR/linking, full Codex execution, browser automation, and external message routing. Those should be added behind the existing setup surfaces instead of expanding the V1 scope.
+Still private-overlay territory: real Codex session orchestration, real browser automation against logged-in profiles, and production WhatsApp bridge hosting. Public code keeps generic APIs and mockable examples; private deployments provide host-specific executors, credentials, profiles, and bridge processes.
 
 ## Development
 
 ```bash
 npm run check
 npm run smoke
+npm run demo:job-search
 ```
+
+## Job-search demo
+
+The first end-to-end demo is dependency-free and uses only fake data:
+
+```bash
+npm run demo:job-search
+```
+
+It starts Orkestr with `examples/job-search-demo`, starts a mock WhatsApp bridge,
+creates the `job-search-assistant`, receives a fake WhatsApp message, runs the
+demo executor, and verifies that the assistant reply is mirrored back to the
+mock bridge exactly once.
 
 See `docs/private-overlay.md` for the public/private repo boundary.
