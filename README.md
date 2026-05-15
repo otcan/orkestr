@@ -65,7 +65,7 @@ The default demo is a job-search assistant that checks Gmail and LinkedIn and se
 
 This repo is intentionally dependency-free for the first scaffold. It provides:
 
-- `apps/server`, `apps/web`, `apps/cli`, and `packages/*` as the public monorepo boundary.
+- `apps/server` as the Fastify API, `apps/web` as the current static setup UI, `apps/cli`, and `packages/*` as the public monorepo boundary.
 - `GET /api/setup/status` for local connector health.
 - `GET /api/health`, `GET /api/ready`, and `GET /api/version`.
 - `ORKESTR_OVERLAY_DIR` for loading a private runtime overlay.

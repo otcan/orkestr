@@ -1,8 +1,8 @@
-import http from "node:http";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { execFile } from "node:child_process";
+import Fastify from "fastify";
 import { createAgentFromTemplate, listAgents, templates } from "../../../packages/core/src/agents.js";
 import { listExecutions, listExecutorAdapters, loadOverlayExecutorAdapters, runNextAgentMessage } from "../../../packages/core/src/executors.js";
 import { enqueueAgentMessage, listAgentMessages } from "../../../packages/core/src/messages.js";
@@ -27,14 +27,6 @@ const mimeTypes = new Map([
   [".svg", "image/svg+xml"],
 ]);
 
-function json(res, statusCode, payload) {
-  res.writeHead(statusCode, {
-    "content-type": "application/json; charset=utf-8",
-    "cache-control": "no-store",
-  });
-  res.end(JSON.stringify(payload, null, 2));
-}
-
 function escapeHtml(value) {
   return String(value ?? "")
     .replaceAll("&", "&amp;")
@@ -44,15 +36,16 @@ function escapeHtml(value) {
     .replaceAll("'", "&#039;");
 }
 
-async function readJson(req) {
-  const chunks = [];
-  for await (const chunk of req) chunks.push(chunk);
-  if (!chunks.length) return {};
-  return JSON.parse(Buffer.concat(chunks).toString("utf8"));
+function json(reply, statusCode, payload) {
+  return reply
+    .code(statusCode)
+    .header("cache-control", "no-store")
+    .type("application/json; charset=utf-8")
+    .send(payload);
 }
 
-async function serveStatic(req, res) {
-  const url = new URL(req.url, "http://localhost");
+async function serveStaticPath(pathname, reply) {
+  const url = new URL(pathname, "http://localhost");
   const requested = decodeURIComponent(url.pathname === "/" ? "/index.html" : url.pathname);
   const safePath = path.normalize(requested).replace(/^(\.\.[/\\])+/, "");
   const filePath = path.join(publicDir, safePath);
@@ -60,18 +53,18 @@ async function serveStatic(req, res) {
   const ext = path.extname(target);
   try {
     const body = await fs.readFile(target);
-    res.writeHead(200, {
-      "content-type": mimeTypes.get(ext) || "application/octet-stream",
-      "cache-control": "no-store",
-    });
-    res.end(body);
+    return reply
+      .code(200)
+      .header("cache-control", "no-store")
+      .type(mimeTypes.get(ext) || "application/octet-stream")
+      .send(body);
   } catch {
     const body = await fs.readFile(path.join(publicDir, "index.html"));
-    res.writeHead(200, {
-      "content-type": "text/html; charset=utf-8",
-      "cache-control": "no-store",
-    });
-    res.end(body);
+    return reply
+      .code(200)
+      .header("cache-control", "no-store")
+      .type("text/html; charset=utf-8")
+      .send(body);
   }
 }
 
@@ -91,191 +84,203 @@ async function dataDirReady() {
   return paths.home;
 }
 
-async function handleApi(req, res) {
-  const url = new URL(req.url, "http://localhost");
-  if (req.method === "GET" && url.pathname === "/api/health") {
-    json(res, 200, { ok: true, name: "orkestr", generatedAt: new Date().toISOString() });
-    return;
-  }
-  if (req.method === "GET" && url.pathname === "/api/version") {
-    json(res, 200, { ...(await appVersion()), generatedAt: new Date().toISOString() });
-    return;
-  }
-  if (req.method === "GET" && url.pathname === "/api/ready") {
+export async function createApp() {
+  const app = Fastify({ logger: false });
+
+  app.removeContentTypeParser("application/json");
+  app.addContentTypeParser("application/json", { parseAs: "string" }, (_request, body, done) => {
+    const text = String(body || "").trim();
+    if (!text) {
+      done(null, {});
+      return;
+    }
+    try {
+      done(null, JSON.parse(text));
+    } catch (error) {
+      done(error);
+    }
+  });
+
+  app.setErrorHandler((error, _request, reply) => {
+    json(reply, error.statusCode || 500, {
+      error: error.message || "internal_error",
+    });
+  });
+
+  app.get("/api/health", async (_request, reply) => {
+    return json(reply, 200, { ok: true, name: "orkestr", generatedAt: new Date().toISOString() });
+  });
+
+  app.get("/api/version", async (_request, reply) => {
+    return json(reply, 200, { ...(await appVersion()), generatedAt: new Date().toISOString() });
+  });
+
+  app.get("/api/ready", async (_request, reply) => {
     const status = await getSetupStatus();
-    json(res, 200, {
+    return json(reply, 200, {
       ok: true,
       dataHome: await dataDirReady(),
       setupState: status.setupState,
       overlayValid: status.overlay.valid,
       generatedAt: new Date().toISOString(),
     });
-    return;
-  }
-  if (req.method === "GET" && url.pathname === "/api/setup/status") {
-    json(res, 200, { ...(await getSetupStatus()), config: await publicConfig() });
-    return;
-  }
-  if (req.method === "GET" && url.pathname === "/api/connectors/gmail/oauth/start") {
-    json(res, 200, await startGmailOAuth());
-    return;
-  }
-  if (req.method === "GET" && url.pathname === "/api/connectors/gmail/messages") {
-    json(res, 200, await listGmailMessages({
-      maxResults: url.searchParams.get("maxResults") || 10,
-      query: url.searchParams.get("q") || "",
+  });
+
+  app.get("/api/setup/status", async (_request, reply) => {
+    return json(reply, 200, { ...(await getSetupStatus()), config: await publicConfig() });
+  });
+
+  app.get("/api/connectors/gmail/oauth/start", async (_request, reply) => {
+    return json(reply, 200, await startGmailOAuth());
+  });
+
+  app.get("/api/connectors/gmail/messages", async (request, reply) => {
+    return json(reply, 200, await listGmailMessages({
+      maxResults: request.query.maxResults || 10,
+      query: request.query.q || "",
     }));
-    return;
-  }
-  const gmailMessage = url.pathname.match(/^\/api\/connectors\/gmail\/messages\/([^/]+)$/);
-  if (req.method === "GET" && gmailMessage) {
-    json(res, 200, { message: await getGmailMessage(decodeURIComponent(gmailMessage[1])) });
-    return;
-  }
-  if (req.method === "GET" && url.pathname === "/api/connectors/whatsapp/status") {
-    json(res, 200, await getWhatsAppStatus());
-    return;
-  }
-  if (req.method === "POST" && url.pathname === "/api/connectors/whatsapp/inbound") {
-    const routed = await routeWhatsAppInbound(await readJson(req));
-    json(res, routed.duplicate ? 200 : 202, routed);
-    return;
-  }
-  if (req.method === "POST" && url.pathname === "/api/connectors/whatsapp/deliver") {
-    json(res, 200, await deliverWhatsAppReplies());
-    return;
-  }
-  const connectorConfig = url.pathname.match(/^\/api\/connectors\/([^/]+)\/config$/);
-  if (req.method === "POST" && connectorConfig) {
-    json(res, 200, { config: await writeConnectorConfig(connectorConfig[1], await readJson(req)) });
-    return;
-  }
-  if (req.method === "POST" && url.pathname.match(/^\/api\/connectors\/[^/]+\/test$/)) {
-    const id = url.pathname.split("/")[3];
+  });
+
+  app.get("/api/connectors/gmail/messages/:id", async (request, reply) => {
+    return json(reply, 200, { message: await getGmailMessage(request.params.id) });
+  });
+
+  app.get("/api/connectors/whatsapp/status", async (_request, reply) => {
+    return json(reply, 200, await getWhatsAppStatus());
+  });
+
+  app.post("/api/connectors/whatsapp/inbound", async (request, reply) => {
+    const routed = await routeWhatsAppInbound(request.body || {});
+    return json(reply, routed.duplicate ? 200 : 202, routed);
+  });
+
+  app.post("/api/connectors/whatsapp/deliver", async (_request, reply) => {
+    return json(reply, 200, await deliverWhatsAppReplies());
+  });
+
+  app.post("/api/connectors/:id/config", async (request, reply) => {
+    return json(reply, 200, { config: await writeConnectorConfig(request.params.id, request.body || {}) });
+  });
+
+  app.post("/api/connectors/:id/test", async (request, reply) => {
     const status = await getSetupStatus();
-    const connector = status.connectors.find((item) => item.id === id);
-    if (!connector) {
-      json(res, 404, { error: "unknown_connector" });
-      return;
-    }
-    json(res, 200, connector);
-    return;
-  }
-  if (req.method === "GET" && url.pathname === "/api/browsers") {
-    json(res, 200, { browsers: await listVirtualBrowsers() });
-    return;
-  }
-  const browserPrepare = url.pathname.match(/^\/api\/browsers\/([^/]+)\/prepare$/);
-  if (req.method === "POST" && browserPrepare) {
-    json(res, 200, { browser: await prepareVirtualBrowser(browserPrepare[1]) });
-    return;
-  }
-  const browserOpen = url.pathname.match(/^\/api\/browsers\/([^/]+)\/open$/);
-  if (req.method === "POST" && browserOpen) {
-    json(res, 200, { browser: await openVirtualBrowser(browserOpen[1]) });
-    return;
-  }
-  if (req.method === "GET" && url.pathname === "/api/agents/templates") {
-    json(res, 200, { templates });
-    return;
-  }
-  if (req.method === "GET" && url.pathname === "/api/agents") {
-    json(res, 200, { agents: await listAgents() });
-    return;
-  }
-  if (req.method === "GET" && url.pathname === "/api/executors") {
+    const connector = status.connectors.find((item) => item.id === request.params.id);
+    if (!connector) return json(reply, 404, { error: "unknown_connector" });
+    return json(reply, 200, connector);
+  });
+
+  app.get("/api/browsers", async (_request, reply) => {
+    return json(reply, 200, { browsers: await listVirtualBrowsers() });
+  });
+
+  app.post("/api/browsers/:slug/prepare", async (request, reply) => {
+    return json(reply, 200, { browser: await prepareVirtualBrowser(request.params.slug) });
+  });
+
+  app.post("/api/browsers/:slug/open", async (request, reply) => {
+    return json(reply, 200, { browser: await openVirtualBrowser(request.params.slug) });
+  });
+
+  app.get("/api/agents/templates", async (_request, reply) => {
+    return json(reply, 200, { templates });
+  });
+
+  app.post("/api/agents/templates/:templateId", async (request, reply) => {
+    return json(reply, 201, { agent: await createAgentFromTemplate(request.params.templateId) });
+  });
+
+  app.get("/api/agents", async (_request, reply) => {
+    return json(reply, 200, { agents: await listAgents() });
+  });
+
+  app.get("/api/executors", async (_request, reply) => {
     await loadOverlayExecutorAdapters();
-    json(res, 200, { executors: listExecutorAdapters() });
-    return;
-  }
-  if (req.method === "GET" && url.pathname === "/api/executions") {
-    json(res, 200, { executions: await listExecutions() });
-    return;
-  }
-  const agentTemplate = url.pathname.match(/^\/api\/agents\/templates\/([^/]+)$/);
-  if (req.method === "POST" && agentTemplate) {
-    json(res, 201, { agent: await createAgentFromTemplate(agentTemplate[1]) });
-    return;
-  }
-  const agentMessages = url.pathname.match(/^\/api\/agents\/([^/]+)\/messages$/);
-  if (req.method === "GET" && agentMessages) {
-    json(res, 200, { messages: await listAgentMessages(agentMessages[1]) });
-    return;
-  }
-  if (req.method === "POST" && agentMessages) {
-    json(res, 201, { message: await enqueueAgentMessage(agentMessages[1], await readJson(req)) });
-    return;
-  }
-  const agentRun = url.pathname.match(/^\/api\/agents\/([^/]+)\/run-next$/);
-  if (req.method === "POST" && agentRun) {
-    const execution = await runNextAgentMessage(agentRun[1], await readJson(req));
+    return json(reply, 200, { executors: listExecutorAdapters() });
+  });
+
+  app.get("/api/executions", async (_request, reply) => {
+    return json(reply, 200, { executions: await listExecutions() });
+  });
+
+  app.get("/api/agents/:agentId/messages", async (request, reply) => {
+    return json(reply, 200, { messages: await listAgentMessages(request.params.agentId) });
+  });
+
+  app.post("/api/agents/:agentId/messages", async (request, reply) => {
+    return json(reply, 201, { message: await enqueueAgentMessage(request.params.agentId, request.body || {}) });
+  });
+
+  app.post("/api/agents/:agentId/run-next", async (request, reply) => {
+    const execution = await runNextAgentMessage(request.params.agentId, request.body || {});
     const whatsappDelivery = await deliverWhatsAppReplies().catch((error) => ({ error: error.message || String(error) }));
-    json(res, 200, { execution, whatsappDelivery });
-    return;
-  }
-  if (req.method === "GET" && url.pathname === "/api/timers") {
-    json(res, 200, { timers: await listTimers() });
-    return;
-  }
-  if (req.method === "POST" && url.pathname === "/api/timers") {
-    json(res, 201, { timer: await createTimer(await readJson(req)) });
-    return;
-  }
-  const timerDelete = url.pathname.match(/^\/api\/timers\/([^/]+)$/);
-  if (req.method === "DELETE" && timerDelete) {
-    json(res, 200, { ok: await deleteTimer(timerDelete[1]) });
-    return;
-  }
-  const timerRun = url.pathname.match(/^\/api\/timers\/([^/]+)\/run$/);
-  if (req.method === "POST" && timerRun) {
-    json(res, 200, { event: await runTimerNow(timerRun[1]) });
-    return;
-  }
-  if (req.method === "GET" && url.pathname === "/api/events") {
-    json(res, 200, { events: await listEvents(process.env, Number(url.searchParams.get("limit") || 100)) });
-    return;
-  }
-  json(res, 404, { error: "not_found" });
+    return json(reply, 200, { execution, whatsappDelivery });
+  });
+
+  app.get("/api/timers", async (_request, reply) => {
+    return json(reply, 200, { timers: await listTimers() });
+  });
+
+  app.post("/api/timers", async (request, reply) => {
+    return json(reply, 201, { timer: await createTimer(request.body || {}) });
+  });
+
+  app.delete("/api/timers/:timerId", async (request, reply) => {
+    return json(reply, 200, { ok: await deleteTimer(request.params.timerId) });
+  });
+
+  app.post("/api/timers/:timerId/run", async (request, reply) => {
+    return json(reply, 200, { event: await runTimerNow(request.params.timerId) });
+  });
+
+  app.get("/api/events", async (request, reply) => {
+    return json(reply, 200, { events: await listEvents(process.env, Number(request.query.limit || 100)) });
+  });
+
+  app.get("/oauth/gmail/callback", async (request, reply) => {
+    const result = await finishGmailOAuth(new URLSearchParams(request.query));
+    return reply
+      .code(200)
+      .header("cache-control", "no-store")
+      .type("text/html; charset=utf-8")
+      .send(`<!doctype html><title>Gmail connected</title><h1>Gmail callback received</h1><p>State: ${escapeHtml(result.state)}</p>`);
+  });
+
+  app.setNotFoundHandler(async (request, reply) => {
+    if (request.url.startsWith("/api/")) return json(reply, 404, { error: "not_found" });
+    return serveStaticPath(request.url, reply);
+  });
+
+  return app;
+}
+
+function serverHandle(app) {
+  return {
+    address: () => app.server.address(),
+    close: (callback) => {
+      app.close()
+        .then(() => callback?.())
+        .catch((error) => callback?.(error));
+    },
+  };
 }
 
 export async function startServer({ port = 19812, host = "127.0.0.1", openBrowser = false } = {}) {
   await ensureDataDirs();
   await loadOverlayExecutorAdapters();
-  const server = http.createServer((req, res) => {
-    handleRequest(req, res).catch((error) => {
-      json(res, error.statusCode || 500, {
-        error: error.message || "internal_error",
-      });
-    });
-  });
+  const app = await createApp();
 
   const timer = setInterval(() => {
     markDueTimers().catch(() => {});
   }, 30_000);
-  server.on("close", () => clearInterval(timer));
+  app.addHook("onClose", async () => clearInterval(timer));
 
-  await new Promise((resolve) => server.listen(port, host, resolve));
+  await app.listen({ port, host });
   const url = `http://${host}:${port}`;
   console.log(`Orkestr setup wizard: ${url}`);
   if (openBrowser) {
     execFile("xdg-open", [url], { timeout: 1000 }, () => {});
   }
-  return server;
-}
-
-async function handleRequest(req, res) {
-  if (req.url.startsWith("/oauth/gmail/callback")) {
-    const url = new URL(req.url, "http://localhost");
-    const result = await finishGmailOAuth(url.searchParams);
-    res.writeHead(200, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" });
-    res.end(`<!doctype html><title>Gmail connected</title><h1>Gmail callback received</h1><p>State: ${escapeHtml(result.state)}</p>`);
-    return;
-  }
-  if (req.url.startsWith("/api/")) {
-    await handleApi(req, res);
-    return;
-  }
-  await serveStatic(req, res);
+  return serverHandle(app);
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {
