@@ -122,7 +122,7 @@ export async function runNextAgentMessage(agentId, options = {}, env = process.e
   await appendEvent({ type: "executor_started", executionId: execution.id, agentId, messageId: message.id, executorId: adapter.id }, env);
 
   try {
-    const result = await adapter.run({ agentId, message, env });
+    const result = await adapter.run({ agentId, message, execution, env });
     const finished = {
       ...execution,
       state: "completed",

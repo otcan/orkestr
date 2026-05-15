@@ -39,8 +39,8 @@ test("overlay executor modules can provide the default executor", async () => {
     `export const executorAdapter = {
       id: "test-private",
       label: "Test Private",
-      async run({ message }) {
-        return { output: "private:" + message.text };
+      async run({ message, execution }) {
+        return { output: "private:" + execution.id + ":" + message.text };
       }
     };\n`,
   );
@@ -51,5 +51,5 @@ test("overlay executor modules can provide the default executor", async () => {
   const messages = await listAgentMessages("demo", env);
 
   assert.equal(execution.executorId, "test-private");
-  assert.equal(messages[1].text, "private:hello");
+  assert.equal(messages[1].text, `private:${execution.id}:hello`);
 });
