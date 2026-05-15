@@ -7,6 +7,9 @@ import {
   exchangeGmailCode,
   finishGmailOAuth,
   getGmailAccessToken,
+  getGmailMessage,
+  listGmailMessages,
+  normalizeGmailMessage,
   readGmailToken,
   refreshGmailAccessToken,
   startGmailOAuth,
@@ -143,4 +146,90 @@ test("gmail oauth token failures are reflected in setup status", async () => {
   const gmail = status.connectors.find((connector) => connector.id === "gmail");
   assert.equal(gmail.state, "broken");
   assert.equal(gmail.details.error, "Bad code");
+});
+
+test("gmail message list uses stored access token", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-gmail-list-"));
+  const env = { ORKESTR_HOME: home };
+  await writeConnectorConfig("gmail", {
+    clientId: "client-id",
+    clientSecret: "client-secret",
+    redirectUri: "http://localhost/callback",
+  }, env);
+  await exchangeGmailCode("code-123", env, async () =>
+    jsonResponse({
+      access_token: "access-list",
+      refresh_token: "refresh-list",
+      expires_in: 3600,
+    }),
+  );
+
+  const result = await listGmailMessages({ maxResults: 2, query: "from:recruiter" }, env, async (url, options) => {
+    assert.equal(url.pathname, "/gmail/v1/users/me/messages");
+    assert.equal(url.searchParams.get("maxResults"), "2");
+    assert.equal(url.searchParams.get("q"), "from:recruiter");
+    assert.equal(options.headers.authorization, "Bearer access-list");
+    return jsonResponse({
+      messages: [{ id: "m1", threadId: "t1" }],
+      resultSizeEstimate: 1,
+    });
+  });
+
+  assert.equal(result.messages[0].id, "m1");
+});
+
+test("gmail message fetch normalizes headers and text", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-gmail-fetch-"));
+  const env = { ORKESTR_HOME: home };
+  await writeConnectorConfig("gmail", {
+    clientId: "client-id",
+    clientSecret: "client-secret",
+    redirectUri: "http://localhost/callback",
+  }, env);
+  await exchangeGmailCode("code-123", env, async () =>
+    jsonResponse({
+      access_token: "access-fetch",
+      refresh_token: "refresh-fetch",
+      expires_in: 3600,
+    }),
+  );
+
+  const message = await getGmailMessage("m1", env, async (url, options) => {
+    assert.equal(url.pathname, "/gmail/v1/users/me/messages/m1");
+    assert.equal(url.searchParams.get("format"), "full");
+    assert.equal(options.headers.authorization, "Bearer access-fetch");
+    return jsonResponse({
+      id: "m1",
+      threadId: "t1",
+      snippet: "Snippet",
+      payload: {
+        headers: [
+          { name: "Subject", value: "Recruiting" },
+          { name: "From", value: "recruiter@example.com" },
+          { name: "Date", value: "Fri, 15 May 2026 10:00:00 +0000" },
+        ],
+        parts: [
+          {
+            mimeType: "text/plain",
+            body: { data: Buffer.from("Plain body", "utf8").toString("base64url") },
+          },
+        ],
+      },
+    });
+  });
+
+  assert.equal(message.subject, "Recruiting");
+  assert.equal(message.from, "recruiter@example.com");
+  assert.equal(message.text, "Plain body");
+});
+
+test("gmail message normalization falls back to snippet", () => {
+  const message = normalizeGmailMessage({
+    id: "m2",
+    threadId: "t2",
+    snippet: "Only snippet",
+    payload: { headers: [{ name: "Subject", value: "Hello" }] },
+  });
+  assert.equal(message.subject, "Hello");
+  assert.equal(message.text, "Only snippet");
 });

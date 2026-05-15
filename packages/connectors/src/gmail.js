@@ -4,6 +4,7 @@ import { ensureDataDirs } from "../../storage/src/paths.js";
 import { appendEvent, readJson, writeJson, writeSecretJson } from "../../storage/src/store.js";
 
 const tokenUrl = "https://oauth2.googleapis.com/token";
+const gmailApiBase = "https://gmail.googleapis.com/gmail/v1/users/me";
 const gmailScopes = [
   "https://www.googleapis.com/auth/gmail.readonly",
   "https://www.googleapis.com/auth/gmail.modify",
@@ -185,4 +186,92 @@ export async function finishGmailOAuth(query, env = process.env, fetchImpl = fet
     expiresAt: token.expiresAt,
     receivedAt: new Date().toISOString(),
   };
+}
+
+function decodeBase64Url(data = "") {
+  const normalized = String(data).replace(/-/g, "+").replace(/_/g, "/");
+  return Buffer.from(normalized, "base64").toString("utf8");
+}
+
+function headerMap(headers = []) {
+  return Object.fromEntries(headers.map((header) => [String(header.name || "").toLowerCase(), String(header.value || "")]));
+}
+
+function collectPlainText(payload) {
+  if (!payload) return "";
+  if (payload.mimeType === "text/plain" && payload.body?.data) {
+    return decodeBase64Url(payload.body.data);
+  }
+  for (const part of payload.parts || []) {
+    const text = collectPlainText(part);
+    if (text) return text;
+  }
+  return "";
+}
+
+export function normalizeGmailMessage(message) {
+  const headers = headerMap(message.payload?.headers || []);
+  return {
+    id: message.id,
+    threadId: message.threadId,
+    labelIds: message.labelIds || [],
+    snippet: message.snippet || "",
+    internalDate: message.internalDate || "",
+    subject: headers.subject || "",
+    from: headers.from || "",
+    to: headers.to || "",
+    date: headers.date || "",
+    text: collectPlainText(message.payload) || message.snippet || "",
+  };
+}
+
+async function gmailApiGet(path, params, env, fetchImpl) {
+  const accessToken = await getGmailAccessToken(env, fetchImpl);
+  const url = new URL(`${gmailApiBase}${path}`);
+  for (const [key, value] of Object.entries(params || {})) {
+    if (value !== undefined && value !== null && String(value) !== "") {
+      url.searchParams.set(key, String(value));
+    }
+  }
+  const response = await fetchImpl(url, {
+    headers: {
+      authorization: `Bearer ${accessToken}`,
+      accept: "application/json",
+    },
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    const error = new Error(payload.error?.message || payload.error || `gmail_api_http_${response.status}`);
+    error.statusCode = 502;
+    throw error;
+  }
+  return payload;
+}
+
+export async function listGmailMessages({ maxResults = 10, query = "" } = {}, env = process.env, fetchImpl = fetch) {
+  const payload = await gmailApiGet(
+    "/messages",
+    {
+      maxResults: Math.max(1, Math.min(50, Number(maxResults) || 10)),
+      q: query,
+    },
+    env,
+    fetchImpl,
+  );
+  return {
+    messages: Array.isArray(payload.messages) ? payload.messages : [],
+    nextPageToken: payload.nextPageToken || "",
+    resultSizeEstimate: payload.resultSizeEstimate || 0,
+  };
+}
+
+export async function getGmailMessage(messageId, env = process.env, fetchImpl = fetch) {
+  const id = String(messageId || "").trim();
+  if (!id) {
+    const error = new Error("gmail_message_id_required");
+    error.statusCode = 400;
+    throw error;
+  }
+  const payload = await gmailApiGet(`/messages/${encodeURIComponent(id)}`, { format: "full" }, env, fetchImpl);
+  return normalizeGmailMessage(payload);
 }

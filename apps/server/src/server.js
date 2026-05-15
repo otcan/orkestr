@@ -9,7 +9,7 @@ import { enqueueAgentMessage, listAgentMessages } from "../../../packages/core/s
 import { getSetupStatus } from "../../../packages/core/src/setup.js";
 import { createTimer, deleteTimer, listTimers, markDueTimers, runTimerNow } from "../../../packages/core/src/timers.js";
 import { listVirtualBrowsers, openVirtualBrowser, prepareVirtualBrowser } from "../../../packages/browsers/src/browsers.js";
-import { finishGmailOAuth, startGmailOAuth } from "../../../packages/connectors/src/gmail.js";
+import { finishGmailOAuth, getGmailMessage, listGmailMessages, startGmailOAuth } from "../../../packages/connectors/src/gmail.js";
 import { publicConfig, writeConnectorConfig } from "../../../packages/storage/src/config.js";
 import { ensureDataDirs } from "../../../packages/storage/src/paths.js";
 import { listEvents } from "../../../packages/storage/src/store.js";
@@ -117,6 +117,18 @@ async function handleApi(req, res) {
   }
   if (req.method === "GET" && url.pathname === "/api/connectors/gmail/oauth/start") {
     json(res, 200, await startGmailOAuth());
+    return;
+  }
+  if (req.method === "GET" && url.pathname === "/api/connectors/gmail/messages") {
+    json(res, 200, await listGmailMessages({
+      maxResults: url.searchParams.get("maxResults") || 10,
+      query: url.searchParams.get("q") || "",
+    }));
+    return;
+  }
+  const gmailMessage = url.pathname.match(/^\/api\/connectors\/gmail\/messages\/([^/]+)$/);
+  if (req.method === "GET" && gmailMessage) {
+    json(res, 200, { message: await getGmailMessage(decodeURIComponent(gmailMessage[1])) });
     return;
   }
   const connectorConfig = url.pathname.match(/^\/api\/connectors\/([^/]+)\/config$/);
