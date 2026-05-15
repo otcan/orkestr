@@ -10,7 +10,7 @@ import { getSetupStatus } from "../../../packages/core/src/setup.js";
 import { createTimer, deleteTimer, listTimers, markDueTimers, runTimerNow } from "../../../packages/core/src/timers.js";
 import { listVirtualBrowsers, openVirtualBrowser, prepareVirtualBrowser } from "../../../packages/browsers/src/browsers.js";
 import { finishGmailOAuth, getGmailMessage, listGmailMessages, startGmailOAuth } from "../../../packages/connectors/src/gmail.js";
-import { getWhatsAppStatus } from "../../../packages/connectors/src/whatsapp.js";
+import { getWhatsAppStatus, routeWhatsAppInbound } from "../../../packages/connectors/src/whatsapp.js";
 import { publicConfig, writeConnectorConfig } from "../../../packages/storage/src/config.js";
 import { ensureDataDirs } from "../../../packages/storage/src/paths.js";
 import { listEvents } from "../../../packages/storage/src/store.js";
@@ -134,6 +134,11 @@ async function handleApi(req, res) {
   }
   if (req.method === "GET" && url.pathname === "/api/connectors/whatsapp/status") {
     json(res, 200, await getWhatsAppStatus());
+    return;
+  }
+  if (req.method === "POST" && url.pathname === "/api/connectors/whatsapp/inbound") {
+    const routed = await routeWhatsAppInbound(await readJson(req));
+    json(res, routed.duplicate ? 200 : 202, routed);
     return;
   }
   const connectorConfig = url.pathname.match(/^\/api\/connectors\/([^/]+)\/config$/);

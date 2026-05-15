@@ -3,8 +3,10 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
+import { startServer } from "../apps/server/src/server.js";
+import { listAgentMessages } from "../packages/core/src/messages.js";
 import { getSetupStatus } from "../packages/core/src/setup.js";
-import { getWhatsAppStatus } from "../packages/connectors/src/whatsapp.js";
+import { getWhatsAppStatus, routeWhatsAppInbound } from "../packages/connectors/src/whatsapp.js";
 import { writeConnectorConfig } from "../packages/storage/src/config.js";
 
 function response(payload, ok = true, status = 200) {
@@ -60,3 +62,57 @@ test("whatsapp setup status maps unreachable bridge to broken", async () => {
   assert.equal(whatsapp.state, "broken");
 });
 
+test("whatsapp inbound events route to configured agent and dedupe by event id", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-inbound-"));
+  const env = { ORKESTR_HOME: home };
+  await writeConnectorConfig("whatsapp", { routes: { "chat-1": "agent-1" } }, env);
+
+  const first = await routeWhatsAppInbound(
+    {
+      eventId: "wa-evt-1",
+      chatId: "chat-1",
+      from: "sender-1",
+      text: "Please check this",
+      attachments: [{ kind: "image", path: "/tmp/image.png" }],
+    },
+    env,
+  );
+  const second = await routeWhatsAppInbound({ eventId: "wa-evt-1", chatId: "chat-1", text: "duplicate" }, env);
+  const messages = await listAgentMessages("agent-1", env);
+
+  assert.equal(first.duplicate, false);
+  assert.equal(second.duplicate, true);
+  assert.equal(second.messageId, first.message.id);
+  assert.equal(messages.length, 1);
+  assert.equal(messages[0].source, "whatsapp_inbound");
+  assert.equal(messages[0].externalId, "wa-evt-1");
+  assert.equal(messages[0].chatId, "chat-1");
+  assert.equal(messages[0].from, "sender-1");
+  assert.equal(messages[0].attachments[0].kind, "image");
+});
+
+test("whatsapp inbound endpoint accepts direct agent target", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-api-"));
+  const priorHome = process.env.ORKESTR_HOME;
+  process.env.ORKESTR_HOME = home;
+  const server = await startServer({ port: 0, host: "127.0.0.1" });
+  const { port } = server.address();
+  try {
+    const response = await fetch(`http://127.0.0.1:${port}/api/connectors/whatsapp/inbound`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ eventId: "wa-api-1", agentId: "agent-api", text: "hello from WhatsApp" }),
+    });
+    const payload = await response.json();
+    const messages = await listAgentMessages("agent-api", { ORKESTR_HOME: home });
+
+    assert.equal(response.status, 202);
+    assert.equal(payload.duplicate, false);
+    assert.equal(messages.length, 1);
+    assert.equal(messages[0].text, "hello from WhatsApp");
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+    if (priorHome === undefined) delete process.env.ORKESTR_HOME;
+    else process.env.ORKESTR_HOME = priorHome;
+  }
+});

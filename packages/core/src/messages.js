@@ -34,6 +34,17 @@ export async function appendAgentMessage(agentId, input, env = process.env) {
     createdAt: new Date().toISOString(),
     state: String(input.state || "completed"),
   };
+  const connector = String(input.connector || "").trim();
+  const externalId = String(input.externalId || "").trim();
+  const chatId = String(input.chatId || "").trim();
+  const from = String(input.from || "").trim();
+  if (connector) message.connector = connector;
+  if (externalId) message.externalId = externalId;
+  if (chatId) message.chatId = chatId;
+  if (from) message.from = from;
+  if (Array.isArray(input.attachments) && input.attachments.length) {
+    message.attachments = input.attachments.map((attachment) => ({ ...attachment }));
+  }
   if (!message.text && !message.promptFile) {
     const error = new Error("message_text_required");
     error.statusCode = 400;
