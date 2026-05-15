@@ -9,7 +9,7 @@
   "scripts": {
     "start": "node apps/server/src/server.js",
     "dev": "node apps/server/src/server.js --open",
-    "check": "for file in apps/*/src/*.js apps/*/bin/*.js packages/*/src/*.js apps/web/public/*.js scripts/*.mjs examples/*/executors/*.js; do if [ -e \"$file\" ]; then node --check \"$file\"; fi; done && node --test",
+    "check": "find apps packages scripts examples -path '*/node_modules/*' -prune -o \\( -name '*.js' -o -name '*.mjs' \\) -print | while read -r file; do node --check \"$file\"; done && node --test",
     "test": "node --test",
     "smoke": "node scripts/smoke.mjs",
     "demo:job-search": "node scripts/job-search-demo.mjs"
