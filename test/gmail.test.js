@@ -11,6 +11,7 @@ import {
   refreshGmailAccessToken,
   startGmailOAuth,
 } from "../packages/connectors/src/gmail.js";
+import { getSetupStatus } from "../packages/core/src/setup.js";
 import { writeConnectorConfig } from "../packages/storage/src/config.js";
 
 function jsonResponse(payload, ok = true, status = 200) {
@@ -122,3 +123,24 @@ test("expired gmail tokens refresh with the stored refresh token", async () => {
   assert.equal(await getGmailAccessToken(env), "access-new");
 });
 
+test("gmail oauth token failures are reflected in setup status", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-gmail-error-"));
+  const env = { ORKESTR_HOME: home };
+  await writeConnectorConfig("gmail", {
+    clientId: "client-id",
+    clientSecret: "client-secret",
+    redirectUri: "http://localhost/callback",
+  }, env);
+
+  await assert.rejects(
+    () =>
+      exchangeGmailCode("bad-code", env, async () =>
+        jsonResponse({ error: "invalid_grant", error_description: "Bad code" }, false, 400),
+      ),
+    /Bad code/,
+  );
+  const status = await getSetupStatus({ env, home });
+  const gmail = status.connectors.find((connector) => connector.id === "gmail");
+  assert.equal(gmail.state, "broken");
+  assert.equal(gmail.details.error, "Bad code");
+});

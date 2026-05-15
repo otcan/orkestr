@@ -19,6 +19,14 @@ async function pathExists(filePath) {
   }
 }
 
+async function readJsonIfExists(filePath) {
+  try {
+    return JSON.parse(await fs.readFile(filePath, "utf8"));
+  } catch {
+    return {};
+  }
+}
+
 async function commandVersion(command, args = ["--version"]) {
   try {
     const { stdout, stderr } = await execFileAsync(command, args, { timeout: 2500 });
@@ -66,6 +74,7 @@ export async function getConnectorStatuses({ env = process.env, home = os.homedi
   const linkedinProfileExists = await pathExists(path.join(paths.browsers, "linkedin"));
   const gmailProfileExists = await pathExists(path.join(paths.browsers, "gmail"));
   const gmailOAuthExists = await pathExists(path.join(paths.secrets, "gmail-token.json"));
+  const gmailOAuthError = await readJsonIfExists(path.join(paths.secrets, "gmail-error.json"));
   const openaiKey = env.OPENAI_API_KEY || openaiConfig.openaiApiKey || "";
   const bridgeUrl = env.WHATSAPP_BRIDGE_URL || whatsappConfig.bridgeUrl || "";
   const bridge = await whatsappBridgeStatus(bridgeUrl);
@@ -91,6 +100,11 @@ export async function getConnectorStatuses({ env = process.env, home = os.homedi
     gmail:
       gmailOAuthExists
         ? status("gmail", "Gmail", "connected", "Gmail OAuth token is stored locally.")
+        : gmailOAuthError.message
+          ? status("gmail", "Gmail", "broken", "Gmail OAuth failed. Recheck credentials and restart OAuth.", {
+              error: gmailOAuthError.message,
+              updatedAt: gmailOAuthError.updatedAt,
+            })
         : gmailConfig.clientId || env.GMAIL_OAUTH_CLIENT_ID
           ? status("gmail", "Gmail", "partial", "Gmail OAuth client is configured. Complete OAuth next.")
         : gmailProfileExists

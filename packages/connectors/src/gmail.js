@@ -61,6 +61,15 @@ async function saveTokenPayload(payload, env, prior = {}) {
   return token;
 }
 
+async function saveOAuthError(error, env) {
+  const paths = await ensureDataDirs(env);
+  await writeSecretJson(`${paths.secrets}/gmail-error.json`, {
+    message: error.message || String(error),
+    statusCode: error.statusCode || 500,
+    updatedAt: new Date().toISOString(),
+  });
+}
+
 export async function readGmailToken(env = process.env) {
   const paths = await ensureDataDirs(env);
   return readJson(`${paths.secrets}/gmail-token.json`, {});
@@ -95,19 +104,24 @@ export async function exchangeGmailCode(code, env = process.env, fetchImpl = fet
     error.statusCode = 400;
     throw error;
   }
-  const payload = await requestToken(
-    {
-      grant_type: "authorization_code",
-      client_id: clientId,
-      client_secret: clientSecret,
-      redirect_uri: redirectUri,
-      code,
-    },
-    fetchImpl,
-  );
-  const token = await saveTokenPayload(payload, env);
-  await appendEvent({ type: "gmail_oauth_token_exchanged" }, env);
-  return token;
+  try {
+    const payload = await requestToken(
+      {
+        grant_type: "authorization_code",
+        client_id: clientId,
+        client_secret: clientSecret,
+        redirect_uri: redirectUri,
+        code,
+      },
+      fetchImpl,
+    );
+    const token = await saveTokenPayload(payload, env);
+    await appendEvent({ type: "gmail_oauth_token_exchanged" }, env);
+    return token;
+  } catch (error) {
+    await saveOAuthError(error, env);
+    throw error;
+  }
 }
 
 export async function refreshGmailAccessToken(env = process.env, fetchImpl = fetch) {
@@ -120,18 +134,23 @@ export async function refreshGmailAccessToken(env = process.env, fetchImpl = fet
     error.statusCode = 400;
     throw error;
   }
-  const payload = await requestToken(
-    {
-      grant_type: "refresh_token",
-      client_id: clientId,
-      client_secret: clientSecret,
-      refresh_token: refreshToken,
-    },
-    fetchImpl,
-  );
-  const token = await saveTokenPayload(payload, env, prior);
-  await appendEvent({ type: "gmail_oauth_token_refreshed" }, env);
-  return token;
+  try {
+    const payload = await requestToken(
+      {
+        grant_type: "refresh_token",
+        client_id: clientId,
+        client_secret: clientSecret,
+        refresh_token: refreshToken,
+      },
+      fetchImpl,
+    );
+    const token = await saveTokenPayload(payload, env, prior);
+    await appendEvent({ type: "gmail_oauth_token_refreshed" }, env);
+    return token;
+  } catch (error) {
+    await saveOAuthError(error, env);
+    throw error;
+  }
 }
 
 export async function getGmailAccessToken(env = process.env, fetchImpl = fetch) {
@@ -167,4 +186,3 @@ export async function finishGmailOAuth(query, env = process.env, fetchImpl = fet
     receivedAt: new Date().toISOString(),
   };
 }
-
