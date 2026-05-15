@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { spawn } from "node:child_process";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const demoOverlayDir = path.join(repoRoot, "examples", "job-search-demo");
@@ -63,7 +63,7 @@ async function startMockWhatsAppBridge() {
   };
 }
 
-function startOrkestr(home, port, bridgeUrl) {
+function startOrkestr(home, port, bridgeUrl, { log = true } = {}) {
   const child = spawn(process.execPath, ["apps/server/src/server.js"], {
     cwd: repoRoot,
     env: {
@@ -76,8 +76,10 @@ function startOrkestr(home, port, bridgeUrl) {
     },
     stdio: ["ignore", "pipe", "pipe"],
   });
-  child.stdout.on("data", (chunk) => process.stdout.write(chunk));
-  child.stderr.on("data", (chunk) => process.stderr.write(chunk));
+  if (log) {
+    child.stdout.on("data", (chunk) => process.stdout.write(chunk));
+    child.stderr.on("data", (chunk) => process.stderr.write(chunk));
+  }
   return child;
 }
 
@@ -87,46 +89,52 @@ async function stop(child) {
   await new Promise((resolve) => child.once("exit", resolve));
 }
 
-const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-job-demo-"));
-const port = Number(process.env.ORKESTR_JOB_DEMO_PORT || 19814);
-const baseUrl = `http://127.0.0.1:${port}`;
-const bridge = await startMockWhatsAppBridge();
-let server = null;
+export async function runJobSearchDemo({ port = Number(process.env.ORKESTR_JOB_DEMO_PORT || 19814), log = true } = {}) {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-job-demo-"));
+  const baseUrl = `http://127.0.0.1:${port}`;
+  const bridge = await startMockWhatsAppBridge();
+  let server = null;
 
-try {
-  server = startOrkestr(home, port, bridge.url);
-  await waitFor(`${baseUrl}/api/health`);
-  await request(baseUrl, "/api/agents/templates/job-search-assistant", { method: "POST" });
-  await request(baseUrl, "/api/connectors/whatsapp/config", {
-    method: "POST",
-    body: JSON.stringify({
-      bridgeUrl: bridge.url,
-      apiToken: "demo-token",
-      routes: { "demo-chat@g.us": "job-search-assistant" },
-    }),
-  });
-  await request(baseUrl, "/api/connectors/whatsapp/inbound", {
-    method: "POST",
-    body: JSON.stringify({
-      eventId: "demo-wa-1",
-      chatId: "demo-chat@g.us",
-      from: "demo-user",
-      text: "Any recruiting messages worth answering today?",
-    }),
-  });
-  const run = await request(baseUrl, "/api/agents/job-search-assistant/run-next", { method: "POST" });
-  const messages = await request(baseUrl, "/api/agents/job-search-assistant/messages");
+  try {
+    server = startOrkestr(home, port, bridge.url, { log });
+    await waitFor(`${baseUrl}/api/health`);
+    await request(baseUrl, "/api/agents/templates/job-search-assistant", { method: "POST" });
+    await request(baseUrl, "/api/connectors/whatsapp/config", {
+      method: "POST",
+      body: JSON.stringify({
+        bridgeUrl: bridge.url,
+        apiToken: "demo-token",
+        routes: { "demo-chat@g.us": "job-search-assistant" },
+      }),
+    });
+    await request(baseUrl, "/api/connectors/whatsapp/inbound", {
+      method: "POST",
+      body: JSON.stringify({
+        eventId: "demo-wa-1",
+        chatId: "demo-chat@g.us",
+        from: "demo-user",
+        text: "Any recruiting messages worth answering today?",
+      }),
+    });
+    const run = await request(baseUrl, "/api/agents/job-search-assistant/run-next", { method: "POST" });
+    const messages = await request(baseUrl, "/api/agents/job-search-assistant/messages");
 
-  if (run.execution.executorId !== "job-search-demo") throw new Error("demo executor was not selected");
-  if (messages.messages.length !== 2) throw new Error("expected one user message and one assistant reply");
-  if (bridge.sent.length !== 1) throw new Error(`expected one WhatsApp mirror, got ${bridge.sent.length}`);
-  if (bridge.sent[0].authorization !== "Bearer demo-token") throw new Error("WhatsApp bridge token was not sent");
-  if (bridge.sent[0].body.to !== "demo-chat@g.us") throw new Error("WhatsApp reply was sent to the wrong chat");
-  if (!bridge.sent[0].body.text.includes("Recruiting lead")) throw new Error("demo reply did not include recruiting summary");
+    if (run.execution.executorId !== "job-search-demo") throw new Error("demo executor was not selected");
+    if (messages.messages.length !== 2) throw new Error("expected one user message and one assistant reply");
+    if (bridge.sent.length !== 1) throw new Error(`expected one WhatsApp mirror, got ${bridge.sent.length}`);
+    if (bridge.sent[0].authorization !== "Bearer demo-token") throw new Error("WhatsApp bridge token was not sent");
+    if (bridge.sent[0].body.to !== "demo-chat@g.us") throw new Error("WhatsApp reply was sent to the wrong chat");
+    if (!bridge.sent[0].body.text.includes("Recruiting lead")) throw new Error("demo reply did not include recruiting summary");
 
-  console.log("Job-search demo passed");
-} finally {
-  await stop(server);
-  await bridge.close();
-  await fs.rm(home, { recursive: true, force: true });
+    if (log) console.log("Job-search demo passed");
+    return { run, messages: messages.messages, sent: bridge.sent };
+  } finally {
+    await stop(server);
+    await bridge.close();
+    await fs.rm(home, { recursive: true, force: true });
+  }
+}
+
+if (import.meta.url === pathToFileURL(process.argv[1]).href) {
+  await runJobSearchDemo();
 }
