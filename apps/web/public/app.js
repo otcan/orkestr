@@ -12,6 +12,7 @@ const connectorFields = {
   openai: [{ name: "openaiApiKey", label: "API key", type: "password", placeholder: "sk-..." }],
   gmail: [
     { name: "clientId", label: "OAuth client ID", placeholder: "123.apps.googleusercontent.com" },
+    { name: "clientSecret", label: "OAuth client secret", type: "password", placeholder: "GOCSPX-..." },
     { name: "redirectUri", label: "Redirect URI", placeholder: "http://localhost:19812/oauth/gmail/callback" },
   ],
   whatsapp: [{ name: "bridgeUrl", label: "Bridge URL", placeholder: "http://127.0.0.1:8787" }],

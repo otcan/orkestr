@@ -18,3 +18,17 @@ test("connector config is persisted and redacts OpenAI secrets", async () => {
   const openai = status.connectors.find((connector) => connector.id === "openai");
   assert.equal(openai.state, "connected");
 });
+
+test("gmail client secrets are stored outside public config", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-gmail-secret-"));
+  const env = { ORKESTR_HOME: home };
+  await writeConnectorConfig("gmail", { clientId: "client-id", clientSecret: "super-secret", redirectUri: "http://localhost/callback" }, env);
+
+  const publicRaw = JSON.parse(await fs.readFile(path.join(home, "config.json"), "utf8"));
+  const secretRaw = JSON.parse(await fs.readFile(path.join(home, "secrets", "gmail.json"), "utf8"));
+  const config = await publicConfig(env);
+
+  assert.equal(publicRaw.gmail.clientSecret, undefined);
+  assert.equal(secretRaw.clientSecret, "super-secret");
+  assert.equal(config.gmail.clientSecret, "supe...cret");
+});

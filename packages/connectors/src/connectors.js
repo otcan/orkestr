@@ -65,7 +65,7 @@ export async function getConnectorStatuses({ env = process.env, home = os.homedi
   const timersExist = await pathExists(paths.timers);
   const linkedinProfileExists = await pathExists(path.join(paths.browsers, "linkedin"));
   const gmailProfileExists = await pathExists(path.join(paths.browsers, "gmail"));
-  const gmailOAuthExists = await pathExists(path.join(paths.secrets, "gmail-oauth.json"));
+  const gmailOAuthExists = await pathExists(path.join(paths.secrets, "gmail-token.json"));
   const openaiKey = env.OPENAI_API_KEY || openaiConfig.openaiApiKey || "";
   const bridgeUrl = env.WHATSAPP_BRIDGE_URL || whatsappConfig.bridgeUrl || "";
   const bridge = await whatsappBridgeStatus(bridgeUrl);
@@ -90,7 +90,7 @@ export async function getConnectorStatuses({ env = process.env, home = os.homedi
           : status("codex", "Codex", "not_connected", "Install and authenticate Codex CLI."),
     gmail:
       gmailOAuthExists
-        ? status("gmail", "Gmail", "connected", "Gmail OAuth callback has been received.")
+        ? status("gmail", "Gmail", "connected", "Gmail OAuth token is stored locally.")
         : gmailConfig.clientId || env.GMAIL_OAUTH_CLIENT_ID
           ? status("gmail", "Gmail", "partial", "Gmail OAuth client is configured. Complete OAuth next.")
         : gmailProfileExists

@@ -1,7 +1,7 @@
 import { ensureDataDirs } from "./paths.js";
 import { appendEvent, readJson, writeJson, writeSecretJson } from "./store.js";
 
-const secretKeys = new Set(["openaiApiKey"]);
+const secretKeys = new Set(["openaiApiKey", "clientSecret", "apiToken", "accessToken", "refreshToken"]);
 
 function redactValue(key, value) {
   if (!secretKeys.has(key)) return value;
