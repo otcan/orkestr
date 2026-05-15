@@ -6,6 +6,17 @@
   "properties": {
     "name": { "type": "string" },
     "connectors": { "type": "object" },
+    "executors": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "default": { "type": "string" },
+        "modules": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      }
+    },
     "agents": {
       "type": "array",
       "items": { "type": "object" }

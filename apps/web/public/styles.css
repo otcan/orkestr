@@ -248,6 +248,27 @@ textarea {
   font-size: 0.82rem;
 }
 
+.message-list {
+  display: grid;
+  gap: 0.45rem;
+  margin: 0.8rem 0;
+}
+
+.message-row {
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: #fffdf7;
+  padding: 0.65rem;
+}
+
+.message-row.assistant {
+  background: #eef6ef;
+}
+
+.message-row p {
+  margin-top: 0.25rem;
+}
+
 @media (max-width: 780px) {
   .split {
     grid-template-columns: 1fr;

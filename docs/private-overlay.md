@@ -24,6 +24,10 @@ Minimum overlay file:
 {
   "name": "Private Orkestr",
   "connectors": {},
+  "executors": {
+    "default": "noop",
+    "modules": []
+  },
   "agents": [],
   "timers": []
 }

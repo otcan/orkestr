@@ -13,16 +13,26 @@ export async function listAgentMessages(agentId, env = process.env) {
 }
 
 export async function enqueueAgentMessage(agentId, input, env = process.env) {
+  return appendAgentMessage(agentId, {
+    ...input,
+    role: String(input.role || "user"),
+    state: String(input.state || "queued"),
+  }, env);
+}
+
+export async function appendAgentMessage(agentId, input, env = process.env) {
   const paths = await ensureDataDirs(env);
   const messages = await listAgentMessages(agentId, env);
   const message = {
     id: randomUUID(),
-    role: String(input.role || "user"),
+    role: String(input.role || "assistant"),
     source: String(input.source || "manual"),
     text: String(input.text || "").trim(),
     promptFile: String(input.promptFile || "").trim(),
+    parentMessageId: String(input.parentMessageId || "").trim() || null,
+    executionId: String(input.executionId || "").trim() || null,
     createdAt: new Date().toISOString(),
-    state: "queued",
+    state: String(input.state || "completed"),
   };
   if (!message.text && !message.promptFile) {
     const error = new Error("message_text_required");
@@ -31,7 +41,7 @@ export async function enqueueAgentMessage(agentId, input, env = process.env) {
   }
   messages.push(message);
   await writeJson(path.join(paths.messages, `${safeAgentId(agentId)}.json`), messages);
-  await appendEvent({ type: "agent_message_queued", agentId, messageId: message.id, source: message.source }, env);
+  await appendEvent({ type: `agent_message_${message.state}`, agentId, messageId: message.id, source: message.source, role: message.role }, env);
   return message;
 }
 

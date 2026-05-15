@@ -1,10 +1,13 @@
 import path from "node:path";
 import { randomUUID } from "node:crypto";
-import { dataPaths, ensureDataDirs } from "../../storage/src/paths.js";
+import { pathToFileURL } from "node:url";
+import { ensureDataDirs } from "../../storage/src/paths.js";
 import { appendEvent, readJson, writeJson } from "../../storage/src/store.js";
-import { listAgentMessages, updateAgentMessage } from "./messages.js";
+import { appendAgentMessage, listAgentMessages, updateAgentMessage } from "./messages.js";
+import { readOverlay } from "./overlay.js";
 
 const adapters = new Map();
+const loadedOverlayModules = new Set();
 
 export function registerExecutorAdapter(adapter) {
   if (!adapter?.id || typeof adapter.run !== "function") {
@@ -25,6 +28,45 @@ export function getExecutorAdapter(id = "noop") {
   return adapters.get(id) || adapters.get("noop");
 }
 
+async function registerModuleExports(module, env) {
+  if (typeof module.register === "function") {
+    await module.register({ registerExecutorAdapter, env });
+  }
+  if (module.executorAdapter) {
+    registerExecutorAdapter(module.executorAdapter);
+  }
+  if (Array.isArray(module.executorAdapters)) {
+    for (const adapter of module.executorAdapters) {
+      registerExecutorAdapter(adapter);
+    }
+  }
+}
+
+export async function loadOverlayExecutorAdapters(env = process.env) {
+  const overlay = await readOverlay(env);
+  const modules = Array.isArray(overlay.executors?.modules) ? overlay.executors.modules : [];
+  const loaded = [];
+  const failed = [];
+  for (const entry of modules) {
+    const modulePath = path.resolve(path.dirname(overlay.path), String(entry));
+    if (loadedOverlayModules.has(modulePath)) {
+      loaded.push(modulePath);
+      continue;
+    }
+    try {
+      const module = await import(pathToFileURL(modulePath).href);
+      await registerModuleExports(module, env);
+      loadedOverlayModules.add(modulePath);
+      loaded.push(modulePath);
+      await appendEvent({ type: "executor_module_loaded", modulePath }, env);
+    } catch (error) {
+      failed.push({ modulePath, error: error.message || String(error) });
+      await appendEvent({ type: "executor_module_failed", modulePath, error: error.message || String(error) }, env);
+    }
+  }
+  return { loaded, failed };
+}
+
 async function executionPath(env) {
   const paths = await ensureDataDirs(env);
   return path.join(paths.home, "executions.json");
@@ -43,7 +85,14 @@ async function saveExecution(execution, env) {
   return execution;
 }
 
-export async function runNextAgentMessage(agentId, { executorId = "noop" } = {}, env = process.env) {
+export async function defaultExecutorId(env = process.env) {
+  const overlay = await readOverlay(env);
+  return String(overlay.executors?.default || "noop");
+}
+
+export async function runNextAgentMessage(agentId, options = {}, env = process.env) {
+  await loadOverlayExecutorAdapters(env);
+  const executorId = options.executorId || (await defaultExecutorId(env));
   const adapter = getExecutorAdapter(executorId);
   if (!adapter) {
     const error = new Error("executor_not_found");
@@ -81,6 +130,19 @@ export async function runNextAgentMessage(agentId, { executorId = "noop" } = {},
       result: result || {},
     };
     await updateAgentMessage(agentId, message.id, { state: "completed", result: result || {} }, env);
+    const assistant = await appendAgentMessage(
+      agentId,
+      {
+        role: "assistant",
+        source: `executor:${adapter.id}`,
+        text: String(result?.output || result?.text || "Executor completed without text output."),
+        parentMessageId: message.id,
+        executionId: execution.id,
+        state: "completed",
+      },
+      env,
+    );
+    finished.assistantMessageId = assistant.id;
     await saveExecution(finished, env);
     await appendEvent({ type: "executor_completed", executionId: execution.id, agentId, messageId: message.id, executorId: adapter.id }, env);
     return finished;

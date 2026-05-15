@@ -4,7 +4,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { execFile } from "node:child_process";
 import { createAgentFromTemplate, listAgents, templates } from "../../../packages/core/src/agents.js";
-import { listExecutions, listExecutorAdapters, runNextAgentMessage } from "../../../packages/core/src/executors.js";
+import { listExecutions, listExecutorAdapters, loadOverlayExecutorAdapters, runNextAgentMessage } from "../../../packages/core/src/executors.js";
 import { enqueueAgentMessage, listAgentMessages } from "../../../packages/core/src/messages.js";
 import { getSetupStatus } from "../../../packages/core/src/setup.js";
 import { createTimer, deleteTimer, listTimers, markDueTimers, runTimerNow } from "../../../packages/core/src/timers.js";
@@ -158,6 +158,7 @@ async function handleApi(req, res) {
     return;
   }
   if (req.method === "GET" && url.pathname === "/api/executors") {
+    await loadOverlayExecutorAdapters();
     json(res, 200, { executors: listExecutorAdapters() });
     return;
   }
@@ -211,6 +212,7 @@ async function handleApi(req, res) {
 
 export async function startServer({ port = 19812, host = "127.0.0.1", openBrowser = false } = {}) {
   await ensureDataDirs();
+  await loadOverlayExecutorAdapters();
   const server = http.createServer((req, res) => {
     handleRequest(req, res).catch((error) => {
       json(res, error.statusCode || 500, {

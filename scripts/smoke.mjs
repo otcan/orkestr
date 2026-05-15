@@ -90,8 +90,9 @@ try {
   const events = await request(baseUrl, "/api/events?limit=20");
 
   if (timers.timers.length !== 1) throw new Error("timer did not persist after restart");
-  if (messages.messages.length !== 1) throw new Error("queued timer message did not persist after restart");
+  if (messages.messages.length !== 2) throw new Error("timer and assistant messages did not persist after restart");
   if (messages.messages[0].state !== "completed") throw new Error("noop executor did not complete message");
+  if (messages.messages[1].role !== "assistant") throw new Error("assistant output was not persisted");
   if (!events.events.some((event) => event.type === "timer_manual_run")) {
     throw new Error("timer_manual_run event missing after restart");
   }

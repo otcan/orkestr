@@ -9,9 +9,10 @@ export async function readOverlay(env = process.env) {
       path: "",
       valid: true,
       agents: [],
-      timers: [],
-      connectors: {},
-      errors: [],
+    timers: [],
+    connectors: {},
+    executors: {},
+    errors: [],
     };
   }
 
@@ -25,6 +26,7 @@ export async function readOverlay(env = process.env) {
       agents: [],
       timers: [],
       connectors: {},
+      executors: {},
       errors: [`Missing or invalid overlay file: ${overlayPath}`],
     };
   }
@@ -37,7 +39,7 @@ export async function readOverlay(env = process.env) {
     agents: Array.isArray(overlay.agents) ? overlay.agents : [],
     timers: Array.isArray(overlay.timers) ? overlay.timers : [],
     connectors: overlay.connectors && typeof overlay.connectors === "object" ? overlay.connectors : {},
+    executors: overlay.executors && typeof overlay.executors === "object" ? overlay.executors : {},
     errors: [],
   };
 }
-

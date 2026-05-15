@@ -8,6 +8,7 @@ The public repo provides:
 - a no-op executor used by tests and demos
 - a `codex` adapter slot that intentionally fails until configured by a private overlay or host package
 - persisted execution records
+- assistant output persistence as normal agent history messages
 
 The public executor interface must stay host-neutral. Do not put tmux, byobu, private paths, WhatsApp bindings, or machine-specific Codex launch commands in the public core.
 
@@ -28,3 +29,28 @@ POST /api/agents/:id/run-next
 ```
 
 Private deployments can register a real Codex executor later without changing agent inbox/history APIs.
+
+Private overlays can load adapter modules:
+
+```json
+{
+  "executors": {
+    "default": "private-codex",
+    "modules": ["./executors/private-codex.js"]
+  }
+}
+```
+
+Adapter modules may export `executorAdapter`, `executorAdapters`, or a `register({ registerExecutorAdapter, env })` function.
+
+Minimal adapter:
+
+```js
+export const executorAdapter = {
+  id: "private-codex",
+  label: "Private Codex",
+  async run({ message }) {
+    return { output: `Processed: ${message.text}` };
+  }
+};
+```

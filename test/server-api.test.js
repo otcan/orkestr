@@ -41,8 +41,9 @@ test("server exposes health, readiness, version, and agent message APIs", async 
     assert.equal(version.name, "orkestr-oss");
     assert.equal(queued.message.state, "queued");
     assert.equal(execution.execution.state, "completed");
-    assert.equal(listed.messages.length, 1);
+    assert.equal(listed.messages.length, 2);
     assert.equal(listed.messages[0].state, "completed");
+    assert.equal(listed.messages[1].role, "assistant");
   } finally {
     await new Promise((resolve) => server.close(resolve));
     if (priorHome === undefined) delete process.env.ORKESTR_HOME;

@@ -190,6 +190,19 @@ function renderAgents(payload) {
               <h3>${escapeHtml(agent.name)}</h3>
               <p>${escapeHtml(agent.connectors.join(", "))}</p>
               <p><small>${escapeHtml(agent.id)}</small></p>
+              <div class="message-list">
+                ${(agent.messages || [])
+                  .slice(-4)
+                  .map(
+                    (message) => `
+                      <div class="message-row ${escapeHtml(message.role)}">
+                        <strong>${escapeHtml(message.role)} · ${escapeHtml(message.state)}</strong>
+                        <p>${escapeHtml(message.text || message.promptFile || "")}</p>
+                      </div>
+                    `,
+                  )
+                  .join("")}
+              </div>
               <form class="connector-form" data-agent-message="${escapeHtml(agent.id)}">
                 <textarea name="text" rows="3" placeholder="Send a test message to this agent"></textarea>
                 <button type="submit" class="secondary">Queue message</button>
@@ -293,11 +306,17 @@ async function refresh() {
     api("/api/agents"),
     api("/api/events?limit=40"),
   ]);
+  const agentsWithMessages = await Promise.all(
+    agents.agents.map(async (agent) => ({
+      ...agent,
+      messages: (await api(`/api/agents/${encodeURIComponent(agent.id)}/messages`)).messages,
+    })),
+  );
   renderConnectors(status);
   renderBrowsers(browsers);
   renderTimers(timers);
   renderAgentTemplates(templates);
-  renderAgents(agents);
+  renderAgents({ agents: agentsWithMessages });
   renderEvents(events);
 }
 
