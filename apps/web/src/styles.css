@@ -67,6 +67,13 @@ h1 {
   margin: 22px 0;
 }
 
+.split {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 18px;
+  margin-top: 22px;
+}
+
 .card,
 .panel {
   border: 1px solid rgba(24, 32, 25, 0.14);
@@ -123,7 +130,13 @@ h1 {
   gap: 12px;
 }
 
-.connector-card {
+.stack {
+  display: grid;
+  gap: 14px;
+}
+
+.connector-card,
+.mini-card {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   gap: 18px;
@@ -136,7 +149,8 @@ h1 {
   margin: 0 0 8px;
 }
 
-.connector-card p {
+.connector-card p,
+.mini-card p {
   margin: 0;
 }
 
@@ -154,6 +168,12 @@ label {
 }
 
 input {
+  min-width: 0;
+}
+
+input,
+select,
+textarea {
   width: 100%;
   border: 1px solid rgba(24, 32, 25, 0.18);
   border-radius: 14px;
@@ -161,6 +181,10 @@ input {
   color: #182019;
   font: inherit;
   padding: 12px 14px;
+}
+
+textarea {
+  resize: vertical;
 }
 
 button {
@@ -179,6 +203,46 @@ button.secondary {
   color: #27331f;
 }
 
+button.danger {
+  background: #723424;
+}
+
+.message-list,
+.event-list {
+  display: grid;
+  gap: 8px;
+}
+
+.message-row,
+.event-row {
+  border-radius: 16px;
+  background: rgba(39, 55, 41, 0.06);
+  padding: 10px 12px;
+}
+
+.message-row p,
+.event-row p {
+  margin: 4px 0 0;
+}
+
+.event-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.timer-form {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin-bottom: 18px;
+}
+
+.timer-form textarea,
+.timer-form button {
+  grid-column: 1 / -1;
+}
+
 @media (max-width: 760px) {
   .shell {
     width: min(100vw - 20px, 1120px);
@@ -192,8 +256,10 @@ button.secondary {
   }
 
   .status-grid,
+  .split,
   .connector-card,
   .connector-form,
+  .timer-form,
   .panel-head,
   .actions {
     grid-template-columns: 1fr;

@@ -1,8 +1,8 @@
 import { AsyncPipe } from "@angular/common";
 import { Component, inject } from "@angular/core";
 import { FormsModule } from "@angular/forms";
-import { BehaviorSubject, combineLatest, firstValueFrom, map, startWith, switchMap } from "rxjs";
-import { ApiService } from "./api.service";
+import { BehaviorSubject, combineLatest, firstValueFrom, forkJoin, map, of, startWith, switchMap } from "rxjs";
+import { AgentWithMessages, ApiService } from "./api.service";
 
 interface ConnectorField {
   name: string;
@@ -97,6 +97,127 @@ const connectorFields: Record<string, ConnectorField[]> = {
             }
           </div>
         </section>
+
+        <section class="split">
+          <article class="panel">
+            <div class="panel-head">
+              <div>
+                <h2>Agent Starters</h2>
+                <p>Opinionated first-use flows.</p>
+              </div>
+            </div>
+            <div class="stack">
+              @for (template of vm.templates; track template.id) {
+                <article class="mini-card">
+                  <span class="state">{{ template.connectors.join(" + ") }}</span>
+                  <h3>{{ template.name }}</h3>
+                  <p>{{ template.tagline }}</p>
+                  <small>{{ template.defaultTimer.label }} · {{ template.defaultTimer.cadence }} at {{ template.defaultTimer.time }}</small>
+                  <button type="button" (click)="createAgent(template.id)">Create</button>
+                </article>
+              }
+            </div>
+          </article>
+
+          <article class="panel">
+            <div class="panel-head">
+              <div>
+                <h2>Configured Agents</h2>
+                <p>Queue messages and run the next item.</p>
+              </div>
+            </div>
+            <div class="stack">
+              @for (agent of vm.agents; track agent.id) {
+                <article class="mini-card">
+                  <span class="state">{{ agent.state }}</span>
+                  <h3>{{ agent.name }}</h3>
+                  <small>{{ agent.id }} · {{ agent.connectors.join(", ") }}</small>
+                  <div class="message-list">
+                    @for (message of lastMessages(agent.messages); track message.id) {
+                      <div class="message-row">
+                        <strong>{{ message.role }} · {{ message.state }}</strong>
+                        <p>{{ message.text || message.promptFile }}</p>
+                      </div>
+                    }
+                  </div>
+                  <textarea
+                    rows="3"
+                    placeholder="Send a test message to this agent"
+                    [ngModel]="agentDrafts[agent.id] || ''"
+                    (ngModelChange)="agentDrafts[agent.id] = $event"
+                  ></textarea>
+                  <div class="actions">
+                    <button class="secondary" type="button" (click)="queueAgentMessage(agent.id)">Queue message</button>
+                    <button type="button" (click)="runNextAgent(agent.id)">Run next</button>
+                  </div>
+                </article>
+              } @empty {
+                <p>No agents created yet.</p>
+              }
+            </div>
+          </article>
+        </section>
+
+        <section class="split">
+          <article class="panel">
+            <div class="panel-head">
+              <div>
+                <h2>Timers</h2>
+                <p>Recurring work from day one.</p>
+              </div>
+            </div>
+            <form class="timer-form" (submit)="createTimer(); $event.preventDefault()">
+              <input name="timer-label" placeholder="Morning recruiting scan" [(ngModel)]="timerDraft['label']" />
+              <input name="timer-target" placeholder="job-search-assistant" [(ngModel)]="timerDraft['target']" />
+              <select name="timer-cadence" [(ngModel)]="timerDraft['cadence']">
+                <option value="daily">Daily</option>
+                <option value="weekly">Weekly</option>
+                <option value="interval">Interval</option>
+                <option value="once">Once</option>
+              </select>
+              <input name="timer-time" placeholder="09:00" [(ngModel)]="timerDraft['time']" />
+              <textarea name="timer-prompt" rows="4" [(ngModel)]="timerDraft['prompt']"></textarea>
+              <button type="submit">Create timer</button>
+            </form>
+            <div class="stack">
+              @for (timer of vm.timers; track timer.id) {
+                <article class="mini-card">
+                  <span class="state connected">{{ timer.cadence }}</span>
+                  <h3>{{ timer.label }}</h3>
+                  <p>{{ timer.target }} · next {{ timer.nextRunAt }}</p>
+                  @if (timer.promptFile) {
+                    <small>{{ timer.promptFile }}</small>
+                  }
+                  <div class="actions">
+                    <button class="secondary" type="button" (click)="runTimer(timer.id)">Run now</button>
+                    <button class="danger" type="button" (click)="deleteTimer(timer.id)">Delete</button>
+                  </div>
+                </article>
+              } @empty {
+                <p>No timers yet.</p>
+              }
+            </div>
+          </article>
+
+          <article class="panel">
+            <div class="panel-head">
+              <div>
+                <h2>Activity</h2>
+                <p>Recent setup, timer, connector, and executor events.</p>
+              </div>
+            </div>
+            <div class="event-list">
+              @for (event of vm.events; track event.ts + event.type) {
+                <div class="event-row">
+                  <strong>{{ event.type }}</strong>
+                  <span>{{ event.ts }}</span>
+                </div>
+              } @empty {
+                <p>No events yet.</p>
+              }
+            </div>
+          </article>
+        </section>
       }
     </main>
   `,
@@ -106,17 +227,51 @@ export class AppComponent {
   private readonly refreshSignal$ = new BehaviorSubject(0);
 
   readonly drafts: Record<string, Record<string, string>> = {};
+  readonly agentDrafts: Record<string, string> = {};
+  readonly timerDraft: Record<string, string> = {
+    label: "Morning recruiting scan",
+    target: "job-search-assistant",
+    cadence: "daily",
+    time: "09:00",
+    prompt: "Check Gmail and LinkedIn for recruiting messages. Send a WhatsApp summary and draft replies where useful.",
+  };
 
   readonly vm$ = combineLatest({
     health: this.api.health().pipe(startWith(null)),
     setup: this.refreshSignal$.pipe(switchMap(() => this.api.setupStatus()), startWith(null)),
+    templates: this.refreshSignal$.pipe(switchMap(() => this.api.agentTemplates()), map((payload) => payload.templates), startWith([])),
+    agents: this.refreshSignal$.pipe(switchMap(() => this.loadAgents()), startWith([])),
+    timers: this.refreshSignal$.pipe(switchMap(() => this.api.timers()), map((payload) => payload.timers), startWith([])),
+    events: this.refreshSignal$.pipe(switchMap(() => this.api.events()), map((payload) => payload.events), startWith([])),
   }).pipe(
-    map(({ health, setup }) => ({
+    map(({ health, setup, templates, agents, timers, events }) => ({
       health,
       setup,
+      templates,
+      agents,
+      timers,
+      events,
       connectorCount: setup?.connectors?.length || 0,
     })),
   );
+
+  private loadAgents() {
+    return this.api.agents().pipe(
+      switchMap((payload) => {
+        if (!payload.agents.length) return of([] as AgentWithMessages[]);
+        return forkJoin(
+          payload.agents.map((agent) =>
+            this.api.agentMessages(agent.id).pipe(
+              map((messagesPayload) => ({
+                ...agent,
+                messages: messagesPayload.messages,
+              })),
+            ),
+          ),
+        );
+      }),
+    );
+  }
 
   fieldsFor(connectorId: string): ConnectorField[] {
     return connectorFields[connectorId] || [];
@@ -159,6 +314,44 @@ export class AppComponent {
   async startGmailOAuth(): Promise<void> {
     const payload = await firstValueFrom(this.api.startGmailOAuth());
     window.open(payload.authorizeUrl, "_blank", "noopener,noreferrer");
+    this.refresh();
+  }
+
+  lastMessages(messages: AgentWithMessages["messages"]): AgentWithMessages["messages"] {
+    return messages.slice(-4);
+  }
+
+  async createAgent(templateId: string): Promise<void> {
+    await firstValueFrom(this.api.createAgentFromTemplate(templateId));
+    this.refresh();
+  }
+
+  async queueAgentMessage(agentId: string): Promise<void> {
+    const text = String(this.agentDrafts[agentId] || "").trim();
+    if (!text) return;
+    await firstValueFrom(this.api.queueAgentMessage(agentId, text));
+    this.agentDrafts[agentId] = "";
+    this.refresh();
+  }
+
+  async runNextAgent(agentId: string): Promise<void> {
+    await firstValueFrom(this.api.runNextAgentMessage(agentId));
+    this.refresh();
+  }
+
+  async createTimer(): Promise<void> {
+    const body = Object.fromEntries(Object.entries(this.timerDraft).filter(([, value]) => String(value).trim()));
+    await firstValueFrom(this.api.createTimer(body));
+    this.refresh();
+  }
+
+  async runTimer(timerId: string): Promise<void> {
+    await firstValueFrom(this.api.runTimer(timerId));
+    this.refresh();
+  }
+
+  async deleteTimer(timerId: string): Promise<void> {
+    await firstValueFrom(this.api.deleteTimer(timerId));
     this.refresh();
   }
 }
