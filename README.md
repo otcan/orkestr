@@ -103,3 +103,4 @@ demo executor, and verifies that the assistant reply is mirrored back to the
 mock bridge exactly once.
 
 See `docs/private-overlay.md` for the public/private repo boundary.
+See `docs/milestone-2-release.md` for the current release checklist.
