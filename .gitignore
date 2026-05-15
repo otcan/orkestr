@@ -1,4 +1,5 @@
 node_modules/
+.angular/
 .env
 .env.*
 !.env.example
