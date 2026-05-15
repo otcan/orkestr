@@ -1,0 +1,20 @@
+{
+  "name": "orkestr-oss",
+  "version": "0.1.0",
+  "description": "Local-first personal agent workstation: setup, connectors, virtual browsers, WhatsApp, and timers.",
+  "type": "module",
+  "bin": {
+    "orkestr-oss": "./apps/cli/bin/orkestr-oss.js"
+  },
+  "scripts": {
+    "start": "node apps/server/src/server.js",
+    "dev": "node apps/server/src/server.js --open",
+    "check": "for file in apps/*/src/*.js apps/*/bin/*.js packages/*/src/*.js apps/web/public/*.js scripts/*.mjs; do if [ -e \"$file\" ]; then node --check \"$file\"; fi; done && node --test",
+    "test": "node --test",
+    "smoke": "node scripts/smoke.mjs"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "license": "MIT"
+}

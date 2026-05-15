@@ -1,0 +1,99 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Orkestr Setup</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <main class="shell">
+      <section class="hero">
+        <p class="eyebrow">Local-first personal agent workstation</p>
+        <h1>Give your AI agent a browser, WhatsApp, Gmail, LinkedIn, and a schedule.</h1>
+        <p class="lede">
+          Install once, connect your accounts, message agents from WhatsApp, watch their virtual browsers, and run timers.
+        </p>
+      </section>
+
+      <section class="panel">
+        <div class="panel-head">
+          <div>
+            <h2>Setup</h2>
+            <p id="home"></p>
+          </div>
+          <button id="refresh">Refresh</button>
+        </div>
+        <div id="connectors" class="grid"></div>
+      </section>
+
+      <section class="split">
+        <article class="panel">
+          <div class="panel-head">
+            <div>
+              <h2>Agent Starters</h2>
+              <p>Opinionated first-use flows, not a generic agent zoo.</p>
+            </div>
+          </div>
+          <div id="agent-templates" class="stack"></div>
+        </article>
+
+        <article class="panel">
+          <div class="panel-head">
+            <div>
+              <h2>Configured Agents</h2>
+              <p>Local records created from starters.</p>
+            </div>
+          </div>
+          <div id="agents" class="stack"></div>
+        </article>
+      </section>
+
+      <section class="split">
+        <article class="panel">
+          <div class="panel-head">
+            <div>
+              <h2>Virtual Browsers</h2>
+              <p>Prepare owned browser profiles for login-based work.</p>
+            </div>
+          </div>
+          <div id="browsers" class="stack"></div>
+        </article>
+
+        <article class="panel">
+          <div class="panel-head">
+            <div>
+              <h2>Timers</h2>
+              <p>Recurring work from day one.</p>
+            </div>
+          </div>
+          <form id="timer-form" class="timer-form">
+            <input name="label" placeholder="Morning recruiting scan" />
+            <input name="target" placeholder="job-search-assistant" />
+            <select name="cadence">
+              <option value="daily">Daily</option>
+              <option value="weekly">Weekly</option>
+              <option value="interval">Interval</option>
+              <option value="once">Once</option>
+            </select>
+            <input name="time" value="09:00" />
+            <textarea name="prompt" rows="4">Check Gmail and LinkedIn for recruiting messages. Send a WhatsApp summary and draft replies where useful.</textarea>
+            <button type="submit">Create timer</button>
+          </form>
+          <div id="timers" class="stack"></div>
+        </article>
+      </section>
+
+      <section class="panel events-panel">
+        <div class="panel-head">
+          <div>
+            <h2>Activity</h2>
+            <p>Local setup events and timer runs.</p>
+          </div>
+        </div>
+        <div id="events" class="event-list"></div>
+      </section>
+    </main>
+    <script src="/app.js" type="module"></script>
+  </body>
+</html>

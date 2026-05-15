@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Orkestr Connector Config",
+  "type": "object",
+  "additionalProperties": true,
+  "properties": {
+    "id": { "type": "string" },
+    "label": { "type": "string" },
+    "state": {
+      "type": "string",
+      "enum": ["connected", "partial", "not_connected", "broken"]
+    }
+  }
+}

@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Orkestr Private Overlay",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "name": { "type": "string" },
+    "connectors": { "type": "object" },
+    "agents": {
+      "type": "array",
+      "items": { "type": "object" }
+    },
+    "timers": {
+      "type": "array",
+      "items": { "type": "object" }
+    }
+  }
+}

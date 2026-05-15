@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Orkestr Timer",
+  "type": "object",
+  "required": ["label", "target", "cadence"],
+  "additionalProperties": true,
+  "properties": {
+    "label": { "type": "string" },
+    "target": { "type": "string" },
+    "cadence": {
+      "type": "string",
+      "enum": ["once", "daily", "weekly", "interval"]
+    },
+    "time": { "type": "string" },
+    "every": { "type": "string" },
+    "prompt": { "type": "string" },
+    "promptFile": { "type": "string" }
+  }
+}

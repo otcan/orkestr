@@ -1,0 +1,23 @@
+{
+  "name": "Example private overlay",
+  "connectors": {
+    "whatsapp": {
+      "bridgeUrl": "http://127.0.0.1:8787"
+    }
+  },
+  "agents": [
+    {
+      "id": "job-search-assistant",
+      "name": "Job Search Assistant"
+    }
+  ],
+  "timers": [
+    {
+      "label": "Example recruiting scan",
+      "target": "job-search-assistant",
+      "cadence": "daily",
+      "time": "09:00",
+      "prompt": "Check connected inboxes for recruiting messages and summarize important items."
+    }
+  ]
+}

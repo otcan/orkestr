@@ -1,0 +1,17 @@
+services:
+  orkestr:
+    build: .
+    ports:
+      - "19812:19812"
+    environment:
+      ORKESTR_HOME: /data
+      ORKESTR_PORT: "19812"
+      ORKESTR_HOST: 0.0.0.0
+      ORKESTR_OVERLAY_DIR: /overlay
+    volumes:
+      - orkestr-data:/data
+      - ./examples/private-overlay:/overlay:ro
+    restart: unless-stopped
+
+volumes:
+  orkestr-data:
