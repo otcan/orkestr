@@ -36,7 +36,19 @@ function codexThreadId(thread) {
 }
 
 function threadName(thread) {
-  return String(thread?.bindingName || thread?.binding?.displayName || thread?.name || thread?.id || "").trim();
+  return String(thread?.bindingName || thread?.binding?.displayName || thread?.name || thread?.title || thread?.id || "").trim();
+}
+
+function compactLabel(value) {
+  return String(value || "")
+    .replace(/[\r\n\t]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function tmuxWindowName(thread) {
+  const label = compactLabel(threadName(thread) || "Orkestr");
+  return Array.from(label).slice(0, 48).join("") || "Orkestr";
 }
 
 function shellQuote(value) {
@@ -113,6 +125,52 @@ async function tmuxHasSession(sessionName) {
 async function tmuxPaneId(sessionName) {
   const { stdout } = await execFileAsync("tmux", ["list-panes", "-t", sessionName, "-F", "#{pane_id}"]);
   return String(stdout || "").trim().split("\n").filter(Boolean)[0] || null;
+}
+
+async function renameTmuxWindow(sessionName, windowName) {
+  const target = String(sessionName || "").trim();
+  const name = compactLabel(windowName);
+  if (!target || !name) return;
+  await execFileAsync("tmux", ["set-window-option", "-t", target, "automatic-rename", "off"]).catch(() => {});
+  await execFileAsync("tmux", ["set-window-option", "-t", target, "allow-rename", "off"]).catch(() => {});
+  await execFileAsync("tmux", ["rename-window", "-t", target, name]);
+}
+
+async function saveLeaseWindowName(leaseId, windowName, env = process.env) {
+  if (!leaseId) return;
+  const leases = await listRuntimeLeases(env);
+  let changed = false;
+  const next = leases.map((lease) => {
+    if (lease.id !== leaseId || lease.windowName === windowName) return lease;
+    changed = true;
+    return { ...lease, windowName };
+  });
+  if (changed) await saveRuntimeLeases(next, env);
+}
+
+async function refreshTmuxWindowName(thread, lease, env = process.env) {
+  const windowName = tmuxWindowName(thread);
+  if (!lease?.sessionName) return windowName;
+  try {
+    await renameTmuxWindow(lease.sessionName, windowName);
+  } catch {
+    // Naming is best-effort and should not make a thread unattachable.
+  }
+  await saveLeaseWindowName(lease.id, windowName, env).catch(() => {});
+  return windowName;
+}
+
+export async function syncRuntimeWindowName(threadId, env = process.env) {
+  const thread = await getThread(threadId, env);
+  if (!thread) {
+    const error = new Error("thread_not_found");
+    error.statusCode = 404;
+    throw error;
+  }
+  const lease = await activeLeaseForThread(thread.id, env);
+  if (!lease) return null;
+  const windowName = await refreshTmuxWindowName(thread, lease, env);
+  return { sessionName: lease.sessionName, windowName };
 }
 
 async function capturePane(paneId, lines = 80) {
@@ -196,9 +254,10 @@ export async function runtimeStatus(threadId, env = process.env) {
     state,
     status: state,
     runtimeState: "live",
-    lease: { ...lease, paneId },
+    lease: { ...lease, paneId, windowName: lease.windowName || tmuxWindowName(thread) },
     sessionName: lease.sessionName,
     paneId,
+    windowName: lease.windowName || tmuxWindowName(thread),
     promptReady,
     promptReadyStable: promptReady,
     needsResumeDirectoryConfirmation,
@@ -316,7 +375,13 @@ export async function wakeThread(threadId, options = {}, env = process.env) {
   }
   const existing = await activeLeaseForThread(thread.id, env);
   if (existing) {
-    return { thread, lease: existing, reused: true, status: await runtimeStatus(thread.id, env) };
+    const windowName = await refreshTmuxWindowName(thread, existing, env);
+    return {
+      thread,
+      lease: { ...existing, windowName },
+      reused: true,
+      status: await runtimeStatus(thread.id, env),
+    };
   }
 
   const paths = await ensureDataDirs(env);
@@ -341,6 +406,8 @@ export async function wakeThread(threadId, options = {}, env = process.env) {
       },
     });
   }
+  const windowName = tmuxWindowName(thread);
+  await renameTmuxWindow(sessionName, windowName).catch(() => {});
   const paneId = await tmuxPaneId(sessionName).catch(() => null);
   const { rolloutPath, rolloutOffset } = await rolloutOffsetForThread(thread);
   const lease = {
@@ -349,6 +416,7 @@ export async function wakeThread(threadId, options = {}, env = process.env) {
     threadName: threadName(thread),
     sessionName,
     paneId,
+    windowName,
     workspace,
     repoPath: thread.repoPath || thread.executor?.metadata?.repoPath || null,
     branchName: thread.branchName || thread.executor?.metadata?.branchName || null,
@@ -375,6 +443,7 @@ export async function wakeThread(threadId, options = {}, env = process.env) {
       leaseId: lease.id,
       sessionName,
       paneId,
+      windowName,
       workspace,
       repoPath: lease.repoPath,
       branchName: lease.branchName,
@@ -383,7 +452,7 @@ export async function wakeThread(threadId, options = {}, env = process.env) {
     },
     executor: { ...(thread.executor || {}), sessionName, tmuxTarget: paneId },
   }, env);
-  await appendEvent({ type: "runtime_woken", threadId: thread.id, leaseId: lease.id, sessionName, paneId, reason: lease.reason }, env);
+  await appendEvent({ type: "runtime_woken", threadId: thread.id, leaseId: lease.id, sessionName, paneId, windowName, reason: lease.reason }, env);
   return { thread: updatedThread, lease, reused: false, status: await runtimeStatus(thread.id, env), dataHome: paths.home };
 }
 

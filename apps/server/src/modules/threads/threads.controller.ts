@@ -12,6 +12,7 @@ import {
   resolveCodexThreadMetadata,
   runtimeStatus,
   sleepThread,
+  syncRuntimeWindowName,
   wakeThread,
 } from "../../../../../packages/core/src/runtime-leases.js";
 import { createTimer, deleteTimer, listTimers } from "../../../../../packages/core/src/timers.js";
@@ -405,12 +406,20 @@ export class ThreadsController {
         message: `Thread is ${status.state}; run orkestr wake ${thread.bindingName || thread.name || thread.id} first.`,
       };
     }
+    const window = await syncRuntimeWindowName(thread.id).catch(() => null);
+    const runtime = window
+      ? {
+          ...status,
+          windowName: window.windowName,
+          lease: status.lease ? { ...status.lease, windowName: window.windowName } : status.lease,
+        }
+      : status;
     return {
       ok: true,
-      state: status.state,
+      state: runtime.state,
       thread,
-      runtime: status,
-      attachCommand: `tmux attach-session -t ${status.sessionName}`,
+      runtime,
+      attachCommand: `tmux attach-session -t ${runtime.sessionName}`,
     };
   }
 

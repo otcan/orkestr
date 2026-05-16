@@ -341,6 +341,7 @@ function handoffPrompt(parent, worker, input = {}) {
     `You are an Orkestr worker thread forked from "${parentName}".`,
     "",
     "Worker context:",
+    "- Role: worker thread. You are not the parent/root Orkestr thread.",
     `- Parent Orkestr thread: ${parent.id}`,
     `- Parent Codex thread: ${parentCodex}`,
     `- Root Orkestr thread: ${worker.rootThreadId}`,
@@ -351,11 +352,14 @@ function handoffPrompt(parent, worker, input = {}) {
     `- Base commit: ${worker.baseCommit}${dirtyNote}`,
     "",
     "Task:",
-    task,
+    task || "No task was supplied. Wait for parent/root instructions before making changes.",
     "",
     "Rules:",
     "- Work only inside this worker worktree and branch.",
     "- Do not modify the parent checkout.",
+    "- Do not merge into, push to, or otherwise mutate main from this worker thread.",
+    "- The parent/root Orkestr thread owns integration, merge-to-main, push-to-main, tags, and release actions.",
+    "- If asked to merge or push main, report your branch status and tell the parent/root thread to perform the integration.",
     "- Keep commits scoped to this branch.",
     "- Report changed files, verification commands, and any merge notes when done.",
   ].join("\n");
@@ -451,11 +455,12 @@ export async function createThreadWorker(parentThreadId, input = {}, env = proce
       sourceDirty,
       forkedFromCodexThreadId: codexThreadId(parent) || null,
     };
+    const prompt = handoffPrompt(parent, workerInput, input);
+    workerInput.handoffPrompt = prompt;
     const worker = await createThread(workerInput, env);
     let message = null;
     let updatedWorker = worker;
     if (task) {
-      const prompt = handoffPrompt(parent, worker, input);
       message = await enqueueThreadInput(worker.id, {
         text: prompt,
         source: "orkestr_worker_handoff",

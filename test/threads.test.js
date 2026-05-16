@@ -7,10 +7,10 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { startServer } from "../apps/server/src/server.js";
 import { runNextThreadMessage } from "../packages/core/src/executors.js";
-import { runtimeStatus } from "../packages/core/src/runtime-leases.js";
+import { runtimeStatus, syncRuntimeWindowName, wakeThread } from "../packages/core/src/runtime-leases.js";
 import { parseThreadInputCommand } from "../packages/core/src/thread-commands.js";
 import { createThreadWorker, listThreadWorkers, updateThreadRepo } from "../packages/core/src/thread-workers.js";
-import { appendThreadMessage, createThread, enqueueThreadInput, listThreadMessages, listThreads } from "../packages/core/src/threads.js";
+import { appendThreadMessage, createThread, enqueueThreadInput, listThreadMessages, listThreads, updateThread } from "../packages/core/src/threads.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -23,6 +23,65 @@ async function createTempGitRepo(prefix = "orkestr-worker-repo-") {
   await execFileAsync("git", ["add", "README.md"], { cwd: repo });
   await execFileAsync("git", ["commit", "-m", "initial"], { cwd: repo });
   return repo;
+}
+
+async function createFakeTmux(home) {
+  const bin = path.join(home, "bin");
+  const log = path.join(home, "tmux.log");
+  const state = path.join(home, "tmux.sessions");
+  await fs.mkdir(bin, { recursive: true });
+  const tmuxPath = path.join(bin, "tmux");
+  await fs.writeFile(
+    tmuxPath,
+    `#!/usr/bin/env bash
+set -euo pipefail
+{
+  printf '__CALL__'
+  for arg in "$@"; do printf '\\t%s' "$arg"; done
+  printf '\\n'
+} >> "$TMUX_LOG"
+
+cmd="\${1:-}"
+if [ "$#" -gt 0 ]; then shift; fi
+case "$cmd" in
+  has-session)
+    target=""
+    while [ "$#" -gt 0 ]; do
+      if [ "$1" = "-t" ]; then target="\${2:-}"; shift 2; else shift; fi
+    done
+    if [ -f "$TMUX_STATE" ] && grep -Fxq "$target" "$TMUX_STATE"; then exit 0; fi
+    exit 1
+    ;;
+  new-session)
+    session=""
+    while [ "$#" -gt 0 ]; do
+      if [ "$1" = "-s" ]; then session="\${2:-}"; shift 2; else shift; fi
+    done
+    if [ -n "$session" ]; then printf '%s\\n' "$session" >> "$TMUX_STATE"; fi
+    exit 0
+    ;;
+  list-panes)
+    printf '%%42\\n'
+    exit 0
+    ;;
+  capture-pane)
+    printf '> \\n'
+    exit 0
+    ;;
+  *)
+    exit 0
+    ;;
+esac
+`,
+    "utf8",
+  );
+  await fs.chmod(tmuxPath, 0o755);
+  return { bin, log, state };
+}
+
+function restoreEnvValue(key, value) {
+  if (value === undefined) delete process.env[key];
+  else process.env[key] = value;
 }
 
 test("threads are the primary routable runtime object", async () => {
@@ -55,6 +114,46 @@ test("threads default to wake-on-message and sleep without a runtime lease", asy
   assert.equal(status.hibernated, true);
 });
 
+test("thread runtimes name the tmux window after the thread for byobu", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-tmux-title-"));
+  const fakeTmux = await createFakeTmux(home);
+  const priorPath = process.env.PATH;
+  const priorTmuxLog = process.env.TMUX_LOG;
+  const priorTmuxState = process.env.TMUX_STATE;
+  process.env.PATH = `${fakeTmux.bin}:${priorPath || ""}`;
+  process.env.TMUX_LOG = fakeTmux.log;
+  process.env.TMUX_STATE = fakeTmux.state;
+
+  try {
+    const env = {
+      ORKESTR_HOME: path.join(home, "orkestr-home"),
+      HOME: path.join(home, "runtime-home"),
+      CODEX_HOME: path.join(home, "codex-home"),
+      PATH: process.env.PATH,
+      TMUX_LOG: fakeTmux.log,
+      TMUX_STATE: fakeTmux.state,
+    };
+    await createThread({ id: "demo-thread", name: "Demo Thread With A Readable Name" }, env);
+
+    const woken = await wakeThread("demo-thread", { reason: "test" }, env);
+    await updateThread("demo-thread", { name: "Renamed Thread" }, env);
+    const synced = await syncRuntimeWindowName("demo-thread", env);
+    const log = await fs.readFile(fakeTmux.log, "utf8");
+
+    assert.equal(woken.lease.windowName, "Demo Thread With A Readable Name");
+    assert.equal(woken.status.windowName, "Demo Thread With A Readable Name");
+    assert.deepEqual(synced, { sessionName: "orkestr-demo-thread", windowName: "Renamed Thread" });
+    assert.match(log, /__CALL__\tset-window-option\t-t\torkestr-demo-thread\tautomatic-rename\toff/);
+    assert.match(log, /__CALL__\tset-window-option\t-t\torkestr-demo-thread\tallow-rename\toff/);
+    assert.match(log, /__CALL__\trename-window\t-t\torkestr-demo-thread\tDemo Thread With A Readable Name/);
+    assert.match(log, /__CALL__\trename-window\t-t\torkestr-demo-thread\tRenamed Thread/);
+  } finally {
+    restoreEnvValue("PATH", priorPath);
+    restoreEnvValue("TMUX_LOG", priorTmuxLog);
+    restoreEnvValue("TMUX_STATE", priorTmuxState);
+  }
+});
+
 test("thread workers create a git worktree-backed child thread without resuming the parent Codex thread", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-worker-home-"));
   const repo = await createTempGitRepo();
@@ -83,10 +182,14 @@ test("thread workers create a git worktree-backed child thread without resuming 
   assert.equal(result.worker.gitBehind, null);
   assert.equal(result.worker.executor.codexThreadId, "");
   assert.equal(result.worker.executor.metadata.forkedFromCodexThreadId, "parent-codex-id");
+  assert.match(result.worker.handoffPrompt, /Role: worker thread\. You are not the parent\/root Orkestr thread/);
   assert.equal(workers.length, 1);
   assert.equal(workers[0].id, result.worker.id);
   assert.equal(await fs.stat(result.worker.worktreePath).then((stats) => stats.isDirectory()), true);
+  assert.match(messages[0].text, /Role: worker thread\. You are not the parent\/root Orkestr thread/);
   assert.match(messages[0].text, /Work only inside this worker worktree and branch/);
+  assert.match(messages[0].text, /Do not merge into, push to, or otherwise mutate main from this worker thread/);
+  assert.match(messages[0].text, /parent\/root Orkestr thread owns integration, merge-to-main, push-to-main, tags, and release actions/);
   assert.match(messages[0].text, new RegExp(result.worker.branchName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
 });
 
@@ -115,6 +218,8 @@ test("thread workers can be created as blank parallel chats", async () => {
   assert.equal(result.worker.remoteBranch, `origin/${result.worker.branchName}`);
   assert.equal(result.worker.gitAhead, null);
   assert.equal(result.worker.gitBehind, null);
+  assert.match(result.worker.handoffPrompt, /Role: worker thread\. You are not the parent\/root Orkestr thread/);
+  assert.match(result.worker.handoffPrompt, /No task was supplied\. Wait for parent\/root instructions before making changes/);
   assert.equal(result.message, null);
   assert.equal(messages.length, 0);
 });
