@@ -91,6 +91,8 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   draggingUpload = false;
   rawConnectionState = "idle";
   rawConnectionDetail = "";
+  sidebarWidth = 460;
+  sidebarResizing = false;
 
   private poller?: ReturnType<typeof setInterval>;
   private readonly rawTerminal = new RawTerminalController({
@@ -108,6 +110,28 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   private lastMessageSignature = "";
   private textStateThreadId = "";
   private readonly readStateVersionKey = "orkestr.threadRead.initialized.v1";
+  private readonly sidebarWidthKey = "orkestr.sidebar.width.v1";
+  private readonly sidebarDefaultWidth = 460;
+  private readonly sidebarMinWidth = 320;
+  private readonly sidebarMaxWidth = 760;
+  private sidebarResizeStartX = 0;
+  private sidebarResizeStartWidth = 0;
+  private readonly sidebarResizeMove = (event: Event) => {
+    const pointer = event as PointerEvent;
+    const nextWidth = this.sidebarResizeStartWidth + pointer.clientX - this.sidebarResizeStartX;
+    this.sidebarWidth = this.clampSidebarWidth(nextWidth);
+    this.persistSidebarWidth();
+    this.renderNow();
+  };
+  private readonly sidebarResizeEnd = () => {
+    if (!this.sidebarResizing) return;
+    this.sidebarResizing = false;
+    this.persistSidebarWidth();
+    globalThis.removeEventListener?.("pointermove", this.sidebarResizeMove);
+    globalThis.removeEventListener?.("pointerup", this.sidebarResizeEnd);
+    globalThis.document?.body?.classList.remove("sidebar-resizing-body");
+    this.renderNow();
+  };
   private readonly threadTextDefaults: Record<PersistedThreadTextField, string> = {
     draft: "",
     sidebarWorkerTask: "",
@@ -123,6 +147,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     this.selectedId = this.idFromPath();
     this.activePanel = this.panelFromPath();
     this.toolsView = this.toolsViewFromPath();
+    this.sidebarWidth = this.loadSidebarWidth();
     this.normalizeLegacyOpsPath();
     globalThis.addEventListener?.("popstate", this.popStateHandler);
     void this.refresh(true);
@@ -135,6 +160,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
       globalThis.cancelAnimationFrame(this.scrollFrame);
     }
     this.rawTerminal.dispose();
+    this.sidebarResizeEnd();
     globalThis.removeEventListener?.("popstate", this.popStateHandler);
   }
 
@@ -646,6 +672,23 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     this.pendingFiles = removePendingFile(this.pendingFiles, id);
   }
 
+  startSidebarResize(event: PointerEvent): void {
+    if (globalThis.innerWidth <= 860) return;
+    event.preventDefault();
+    this.sidebarResizing = true;
+    this.sidebarResizeStartX = event.clientX;
+    this.sidebarResizeStartWidth = this.sidebarWidth;
+    globalThis.document?.body?.classList.add("sidebar-resizing-body");
+    globalThis.addEventListener?.("pointermove", this.sidebarResizeMove);
+    globalThis.addEventListener?.("pointerup", this.sidebarResizeEnd);
+  }
+
+  resetSidebarWidth(): void {
+    this.sidebarWidth = this.sidebarDefaultWidth;
+    this.persistSidebarWidth();
+    this.renderNow();
+  }
+
   persistThreadTextField(field: PersistedThreadTextField, value: string): void {
     this[field] = value;
     const thread = this.selectedThread();
@@ -1073,6 +1116,31 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     pane.scrollTop = pane.scrollHeight;
     this.scrollAfterRender = false;
     this.shouldStickToBottom = true;
+  }
+
+  private loadSidebarWidth(): number {
+    try {
+      const stored = Number(globalThis.localStorage?.getItem(this.sidebarWidthKey));
+      if (Number.isFinite(stored)) return this.clampSidebarWidth(stored);
+    } catch {
+      return this.sidebarDefaultWidth;
+    }
+    return this.sidebarDefaultWidth;
+  }
+
+  private persistSidebarWidth(): void {
+    try {
+      globalThis.localStorage?.setItem(this.sidebarWidthKey, String(Math.round(this.sidebarWidth)));
+    } catch {
+      // Width persistence is optional; dragging still works for the current session.
+    }
+  }
+
+  private clampSidebarWidth(value: number): number {
+    const viewportMax = Number(globalThis.innerWidth || 0) > 0
+      ? Math.max(this.sidebarMinWidth, Math.min(this.sidebarMaxWidth, Number(globalThis.innerWidth) - 520))
+      : this.sidebarMaxWidth;
+    return Math.max(this.sidebarMinWidth, Math.min(viewportMax, Math.round(value)));
   }
 
   private openRawStream(thread: ThreadSummary): void {

@@ -1,4 +1,4 @@
-<main class="app-shell">
+<main class="app-shell" [class.sidebar-resizing]="sidebarResizing" [style.--sidebar-width.px]="sidebarWidth">
   <aside class="sidebar">
     <div class="brand">
       <div>
@@ -90,6 +90,15 @@
       }
     </nav>
   </aside>
+
+  <button
+    class="sidebar-resize-handle"
+    type="button"
+    aria-label="Resize thread sidebar"
+    title="Drag to resize thread sidebar. Double click to reset."
+    (pointerdown)="startSidebarResize($event)"
+    (dblclick)="resetSidebarWidth()"
+  ></button>
 
   <section class="chat">
     @if (activePanel === "ops") {
