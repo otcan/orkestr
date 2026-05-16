@@ -304,10 +304,13 @@ function numberValue(value) {
 function tokenCountMetadata(payload) {
   const info = recordValue(payload?.info);
   const rateLimits = recordValue(payload?.rate_limits);
-  const usage = recordValue(info?.total_token_usage) || recordValue(info?.last_token_usage);
+  const totalUsage = recordValue(info?.total_token_usage);
+  const latestUsage = recordValue(info?.last_token_usage);
+  const usage = latestUsage || totalUsage;
   const contextWindow = numberValue(info?.model_context_window);
   const metadata = {};
   if (usage) metadata.codexTokenUsage = usage;
+  if (totalUsage && totalUsage !== usage) metadata.codexTotalTokenUsage = totalUsage;
   if (contextWindow && contextWindow > 0) metadata.codexContextWindow = contextWindow;
   if (rateLimits) metadata.codexRateLimits = rateLimits;
   return metadata;

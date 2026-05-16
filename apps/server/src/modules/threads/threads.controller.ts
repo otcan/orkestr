@@ -128,6 +128,7 @@ function messagePage(thread: any, rawMessages: any[] = [], query: Record<string,
 function codexMetadata(thread: any) {
   const metadata = thread?.executor?.metadata && typeof thread.executor.metadata === "object" ? thread.executor.metadata : {};
   const tokenUsage = thread?.codexTokenUsage || metadata.codexTokenUsage || metadata.tokenUsage || null;
+  const totalTokenUsage = thread?.codexTotalTokenUsage || metadata.codexTotalTokenUsage || metadata.totalTokenUsage || null;
   const contextWindow = Number(thread?.codexContextWindow || metadata.codexContextWindow || metadata.contextWindow || 0) || null;
   const rateLimits = thread?.codexRateLimits || metadata.codexRateLimits || metadata.rateLimits || null;
   return {
@@ -144,6 +145,7 @@ function codexMetadata(thread: any) {
     codexModelUpdatedAt: thread?.codexModelUpdatedAt || metadata.codexModelUpdatedAt || null,
     codexContextWindow: contextWindow,
     codexTokenUsage: tokenUsage,
+    codexTotalTokenUsage: totalTokenUsage,
     codexRateLimits: rateLimits,
   };
 }

@@ -283,6 +283,13 @@ test("thread runtime summary reads Codex model and limits from live metadata", a
           reasoning_output_tokens: 10,
           total_tokens: 150,
         },
+        last_token_usage: {
+          input_tokens: 70,
+          cached_input_tokens: 20,
+          output_tokens: 10,
+          reasoning_output_tokens: 5,
+          total_tokens: 80,
+        },
         model_context_window: 258400,
       },
       rate_limits: {
@@ -316,7 +323,8 @@ test("thread runtime summary reads Codex model and limits from live metadata", a
     assert.equal(payload.codexModel, "gpt-test-codex");
     assert.equal(payload.codexReasoningEffort, "high");
     assert.equal(payload.codexContextWindow, 258400);
-    assert.equal(payload.codexTokenUsage.total_tokens, 150);
+    assert.equal(payload.codexTokenUsage.total_tokens, 80);
+    assert.equal(payload.codexTotalTokenUsage.total_tokens, 150);
     assert.equal(payload.codexRateLimits.primary.used_percent, 12);
     assert.equal(payload.codexRateLimits.secondary.used_percent, 34);
   } finally {
