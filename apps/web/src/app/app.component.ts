@@ -854,6 +854,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   }
 
   statusLabel(thread: ThreadSummary): string {
+    if (this.isThreadProcessing(thread)) return this.threadProcessingLabel(thread);
     const state = String(thread.publicStatus || thread.status || thread.state || "unknown");
     if (state === "ready") return "Ready";
     if (state === "sleeping") return "Sleeping";
@@ -862,12 +863,35 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   }
 
   statusClass(thread: ThreadSummary): string {
+    if (this.isThreadProcessing(thread)) return "hot";
     const state = String(thread.publicStatusCode || thread.status || thread.state || "").toLowerCase();
     if (state.includes("broken") || state.includes("failed")) return "bad";
     if (state.includes("stuck") || state.includes("working") || state.includes("running")) return "hot";
     if (state.includes("ready")) return "ready";
     if (state.includes("sleep")) return "sleep";
     return "idle";
+  }
+
+  isThreadProcessing(thread: ThreadSummary | null): boolean {
+    if (!thread) return false;
+    const activeCount = Number(thread.pendingCount || 0) + Number(thread.runningCount || 0);
+    const state = this.threadState(thread);
+    return Boolean(
+      thread.working ||
+      thread.typingActive ||
+      thread.backgroundWork ||
+      activeCount > 0 ||
+      /(?:working|running|processing|waking|pending)/.test(state),
+    );
+  }
+
+  threadProcessingLabel(thread: ThreadSummary | null): string {
+    if (!thread) return "Processing";
+    if (thread.backgroundWork) return "Background";
+    const state = this.threadState(thread);
+    if (state.includes("waking")) return "Starting";
+    if (Number(thread.pendingCount || 0) > 0 && !thread.working && !thread.typingActive) return "Queued";
+    return "Processing";
   }
 
   canWakeThread(thread: ThreadSummary): boolean {
@@ -916,6 +940,37 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
 
   messageText(message: ThreadMessage): string {
     return String(message.text || message.promptFile || "").trim();
+  }
+
+  messagePhase(message: ThreadMessage | null): string {
+    return String(message?.phase || "").trim().toLowerCase();
+  }
+
+  isFinalAssistantMessage(message: ThreadMessage | null): boolean {
+    if (String(message?.role || "").toLowerCase() !== "assistant") return false;
+    const phase = this.messagePhase(message);
+    return !phase || phase === "final_answer" || phase === "final";
+  }
+
+  isInfoAssistantMessage(message: ThreadMessage | null): boolean {
+    return String(message?.role || "").toLowerCase() === "assistant" && !this.isFinalAssistantMessage(message);
+  }
+
+  messageRoleLabel(message: ThreadMessage): string {
+    const role = String(message.role || "assistant").toLowerCase();
+    if (role === "user") return "You";
+    if (this.isFinalAssistantMessage(message)) return "Assistant";
+    if (this.messagePhase(message) === "plan") return "Plan";
+    return "Update";
+  }
+
+  messagePhaseLabel(message: ThreadMessage): string {
+    if (String(message.role || "").toLowerCase() !== "assistant") return "";
+    const phase = this.messagePhase(message);
+    if (!phase || phase === "final_answer" || phase === "final") return "Final answer";
+    if (phase === "commentary") return "Info";
+    if (phase === "plan") return "Plan";
+    return phase.replace(/_/g, " ");
   }
 
   messageTime(message: ThreadMessage): Date {

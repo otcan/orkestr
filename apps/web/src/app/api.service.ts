@@ -100,6 +100,7 @@ export interface ThreadSummary {
   typingActive?: boolean;
   backgroundWork?: boolean;
   pendingCount?: number;
+  runningCount?: number;
   activeRuntimeLeaseId?: string | null;
   hibernated?: boolean;
   lastError?: string | null;

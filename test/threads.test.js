@@ -69,7 +69,7 @@ case "$cmd" in
     exit 0
     ;;
   capture-pane)
-    printf '> \\n'
+    printf '%s\\n' "\${TMUX_CAPTURE_TEXT:-> }"
     exit 0
     ;;
   *)
@@ -155,6 +155,49 @@ test("thread runtimes name the tmux window after the thread for byobu", async ()
     restoreEnvValue("PATH", priorPath);
     restoreEnvValue("TMUX_LOG", priorTmuxLog);
     restoreEnvValue("TMUX_STATE", priorTmuxState);
+  }
+});
+
+test("runtime status keeps delivered Codex input processing until prompt returns", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-processing-status-"));
+  const fakeTmux = await createFakeTmux(home);
+  const priorPath = process.env.PATH;
+  const priorTmuxLog = process.env.TMUX_LOG;
+  const priorTmuxState = process.env.TMUX_STATE;
+  const priorTmuxCaptureText = process.env.TMUX_CAPTURE_TEXT;
+  process.env.PATH = `${fakeTmux.bin}:${priorPath || ""}`;
+  process.env.TMUX_LOG = fakeTmux.log;
+  process.env.TMUX_STATE = fakeTmux.state;
+
+  try {
+    const env = {
+      ORKESTR_HOME: path.join(home, "orkestr-home"),
+      HOME: path.join(home, "runtime-home"),
+      CODEX_HOME: path.join(home, "codex-home"),
+      PATH: process.env.PATH,
+      TMUX_LOG: fakeTmux.log,
+      TMUX_STATE: fakeTmux.state,
+    };
+    await createThread({ id: "processing-thread", name: "Processing Thread" }, env);
+    await wakeThread("processing-thread", { reason: "test" }, env);
+    process.env.TMUX_CAPTURE_TEXT = "Codex is still preparing a response";
+    await updateThread("processing-thread", { state: "working" }, env);
+
+    const busy = await runtimeStatus("processing-thread", env);
+
+    assert.equal(busy.state, "working");
+    assert.equal(busy.working, true);
+
+    process.env.TMUX_CAPTURE_TEXT = "> ";
+    const ready = await runtimeStatus("processing-thread", env);
+
+    assert.equal(ready.state, "ready");
+    assert.equal(ready.working, false);
+  } finally {
+    restoreEnvValue("PATH", priorPath);
+    restoreEnvValue("TMUX_LOG", priorTmuxLog);
+    restoreEnvValue("TMUX_STATE", priorTmuxState);
+    restoreEnvValue("TMUX_CAPTURE_TEXT", priorTmuxCaptureText);
   }
 });
 
