@@ -39,6 +39,14 @@ Open:
 http://127.0.0.1:19812
 ```
 
+CLI:
+
+```bash
+npx orkestr-oss list
+npx orkestr-oss attach
+npx orkestr-oss send <thread-name-or-id> "Run the next step"
+```
+
 Optional environment can be copied from `.env.example`:
 
 ```bash
@@ -135,3 +143,4 @@ See `docs/private-overlay.md` for the public/private repo boundary.
 See `docs/alpha-release.md` for the alpha release gate.
 See `docs/framework-deployment.md` for the NestJS, Angular, and Docker deployment flow.
 See `docs/milestone-2-release.md` for the current release checklist.
+See `docs/cli.md` for the CLI surface and roadmap.
