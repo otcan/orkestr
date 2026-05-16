@@ -39,6 +39,11 @@ Open:
 http://127.0.0.1:19812
 ```
 
+On a fresh install, the web app opens a first-run setup wizard. It guides the
+local OpenAI/Codex, Gmail, LinkedIn browser, and WhatsApp bridge checks, stores
+connector settings under `ORKESTR_HOME`, and lets you skip into the cockpit at
+any time.
+
 CLI:
 
 ```bash

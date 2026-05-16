@@ -2,10 +2,12 @@ import { DatePipe } from "@angular/common";
 import { AfterViewChecked, ChangeDetectorRef, Component, ElementRef, OnDestroy, OnInit, ViewChild, inject } from "@angular/core";
 import { FormsModule } from "@angular/forms";
 import { firstValueFrom } from "rxjs";
+import { OnboardingPageComponent } from "./onboarding-page.component";
 import { OpsPageComponent, ToolsView } from "./ops-page.component";
 import { RawTerminalController } from "./raw-terminal.controller";
 import {
   ApiService,
+  SetupStatus,
   ThreadAttachResponse,
   ThreadMessage,
   ThreadSummary,
@@ -26,17 +28,24 @@ type PersistedThreadTextField =
 
 @Component({
   selector: "ork-root",
-  imports: [DatePipe, FormsModule, OpsPageComponent],
+  imports: [DatePipe, FormsModule, OpsPageComponent, OnboardingPageComponent],
   templateUrl: "./app.component.html",
 })
 export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   private readonly api = inject(ApiService);
   private readonly cdr = inject(ChangeDetectorRef);
   private readonly popStateHandler = () => {
+    this.onboardingActive = this.onboardingFromPath();
     this.selectedId = this.idFromPath();
     this.activePanel = this.panelFromPath();
     this.toolsView = this.toolsViewFromPath();
     this.normalizeLegacyOpsPath();
+    if (this.onboardingActive) {
+      this.closeRawStream();
+      this.updateDocumentTitle();
+      this.renderNow();
+      return;
+    }
     if (this.activePanel === "ops") {
       this.closeRawStream();
       this.updateDocumentTitle();
@@ -57,6 +66,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   runtimeDetails: Record<string, unknown> | null = null;
   attachDetails: ThreadAttachResponse | null = null;
   opsSystem: Record<string, unknown> | null = null;
+  setupStatus: SetupStatus | null = null;
   selectedId = "";
   filterText = "";
   draft = "";
@@ -64,6 +74,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   apiOnline = false;
   busy = false;
   sending = false;
+  onboardingActive = false;
   activePanel: Panel = "chat";
   toolsView: ToolsView = "system";
   approveText = "Approved. Proceed.";
@@ -118,6 +129,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   };
 
   ngOnInit(): void {
+    this.onboardingActive = this.onboardingFromPath();
     this.selectedId = this.idFromPath();
     this.activePanel = this.panelFromPath();
     this.toolsView = this.toolsViewFromPath();
@@ -144,15 +156,26 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   async refresh(showBusy = true): Promise<void> {
     if (showBusy) this.busy = true;
     try {
-      const [threadsResult, systemResult] = await Promise.allSettled([
+      const [threadsResult, systemResult, setupResult] = await Promise.allSettled([
         firstValueFrom(this.api.threads()),
         firstValueFrom(this.api.systemSummary()),
+        firstValueFrom(this.api.setupStatus()),
       ]);
       if (threadsResult.status === "rejected") throw threadsResult.reason;
       const payload = threadsResult.value;
       if (systemResult.status === "fulfilled") this.opsSystem = systemResult.value;
+      if (setupResult.status === "fulfilled") this.setupStatus = setupResult.value;
       this.apiOnline = true;
       this.threads = [...payload.threads].sort((a, b) => this.activityMs(b) - this.activityMs(a));
+      if (this.shouldAutoOpenOnboarding()) {
+        this.onboardingActive = true;
+        this.replaceOnboardingPath();
+      }
+      if (this.onboardingActive) {
+        this.updateDocumentTitle();
+        this.error = "";
+        return;
+      }
       if (this.activePanel !== "ops" && !this.selectedId && this.threads.length) {
         this.selectedId = this.threadSlug(this.threads[0]);
         this.replacePath(this.selectedId, this.activePanel);
@@ -224,6 +247,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
 
   openTools(view: ToolsView = this.toolsView): void {
     if (this.activePanel === "raw") this.closeRawStream();
+    this.onboardingActive = false;
     this.toolsView = view;
     this.activePanel = "ops";
     this.pushOpsPath(view);
@@ -235,6 +259,25 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     this.toolsView = view;
     this.pushOpsPath(view);
     this.updateDocumentTitle();
+  }
+
+  openOnboarding(): void {
+    if (this.activePanel === "raw") this.closeRawStream();
+    this.onboardingActive = true;
+    this.clearOnboardingFlag("skipped");
+    this.pushOnboardingPath();
+    this.updateDocumentTitle();
+    this.renderNow();
+  }
+
+  async leaveOnboarding(completed = false): Promise<void> {
+    this.onboardingActive = false;
+    this.writeOnboardingFlag(completed ? "completed" : "skipped");
+    this.activePanel = "ops";
+    this.toolsView = "connectors";
+    this.pushOpsPath("connectors");
+    this.updateDocumentTitle();
+    await this.refresh(false);
   }
 
   async sendMessage(): Promise<void> {
@@ -672,6 +715,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   }
 
   selectedThread(): ThreadSummary | null {
+    if (this.onboardingActive) return null;
     if (this.activePanel === "ops") return null;
     if (!this.selectedId) return this.threads[0] || null;
     return this.resolveThread(this.selectedId) || null;
@@ -1110,6 +1154,11 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     return "";
   }
 
+  private onboardingFromPath(): boolean {
+    const parts = globalThis.location?.pathname?.split("/").filter(Boolean) || [];
+    return parts[0] === "ng" && parts[1] === "onboarding";
+  }
+
   private panelFromPath(): Panel {
     const parts = globalThis.location?.pathname?.split("/").filter(Boolean) || [];
     if (parts[0] === "ng" && parts[1] === "ops") return "ops";
@@ -1142,6 +1191,16 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     globalThis.history?.replaceState({}, "", this.pathForPanel(id, panel));
   }
 
+  private pushOnboardingPath(): void {
+    if (globalThis.location?.pathname === "/ng/onboarding") return;
+    globalThis.history?.pushState({}, "", "/ng/onboarding");
+  }
+
+  private replaceOnboardingPath(): void {
+    if (globalThis.location?.pathname === "/ng/onboarding") return;
+    globalThis.history?.replaceState({}, "", "/ng/onboarding");
+  }
+
   private pathForPanel(id: string, panel: Panel): string {
     if (panel === "ops") return this.opsPath(this.toolsView);
     const suffix = panel === "chat" ? "" : `/${panel}`;
@@ -1156,6 +1215,37 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
 
   private opsPath(view: ToolsView): string {
     return view === "system" ? "/ng/ops" : `/ng/ops/${view}`;
+  }
+
+  private shouldAutoOpenOnboarding(): boolean {
+    if (this.onboardingActive || !this.setupStatus || this.setupStatus.setupState === "ready") return false;
+    if (this.readOnboardingFlag("skipped") || this.readOnboardingFlag("completed")) return false;
+    const parts = globalThis.location?.pathname?.split("/").filter(Boolean) || [];
+    return parts.length === 0 || (parts.length === 1 && parts[0] === "ng");
+  }
+
+  private readOnboardingFlag(name: "skipped" | "completed"): boolean {
+    try {
+      return globalThis.localStorage?.getItem(`orkestr:onboarding:${name}`) === "1";
+    } catch {
+      return false;
+    }
+  }
+
+  private writeOnboardingFlag(name: "skipped" | "completed"): void {
+    try {
+      globalThis.localStorage?.setItem(`orkestr:onboarding:${name}`, "1");
+    } catch {
+      // Local storage can be unavailable; the URL still records the current view.
+    }
+  }
+
+  private clearOnboardingFlag(name: "skipped" | "completed"): void {
+    try {
+      globalThis.localStorage?.removeItem(`orkestr:onboarding:${name}`);
+    } catch {
+      // Ignore storage failures.
+    }
   }
 
   private activityMs(thread: ThreadSummary): number {
@@ -1219,6 +1309,10 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   }
 
   private updateDocumentTitle(): void {
+    if (this.onboardingActive) {
+      globalThis.document.title = "Setup · Orkestr";
+      return;
+    }
     if (this.activePanel === "ops") {
       globalThis.document.title = "Ops · Orkestr";
       return;

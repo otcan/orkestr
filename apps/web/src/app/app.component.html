@@ -1,3 +1,6 @@
+@if (onboardingActive) {
+  <ork-onboarding-page (skip)="leaveOnboarding(false)" (complete)="leaveOnboarding(true)"></ork-onboarding-page>
+} @else {
 <main class="app-shell">
   <aside class="sidebar">
     <div class="brand">
@@ -5,7 +8,10 @@
         <p class="eyebrow">Orkestr</p>
         <h1>Threads</h1>
       </div>
-      <span class="health" [class.ok]="apiOnline">{{ apiOnline ? "online" : "loading" }}</span>
+      <div class="brand-actions">
+        <button class="secondary setup-shortcut" type="button" (click)="openOnboarding()">Setup</button>
+        <span class="health" [class.ok]="apiOnline">{{ apiOnline ? "online" : "loading" }}</span>
+      </div>
     </div>
 
     <label class="search">
@@ -474,3 +480,4 @@
     }
   </section>
 </main>
+}

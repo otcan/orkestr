@@ -1,0 +1,127 @@
+<main class="onboarding-shell">
+  <section class="onboarding-hero">
+    <div>
+      <p class="eyebrow">Orkestr setup</p>
+      <h1>Connect your accounts</h1>
+      <p>
+        Orkestr runs locally. These steps store credentials under your local Orkestr home and prepare the accounts
+        needed for the first real agent workflow.
+      </p>
+    </div>
+    <div class="hero-actions">
+      <button class="secondary" type="button" (click)="skip.emit()">Skip to cockpit</button>
+      <button type="button" (click)="openApp()" [disabled]="busy">
+        {{ setupReady() ? "Open Orkestr" : "Open anyway" }}
+      </button>
+    </div>
+  </section>
+
+  @if (error) {
+    <div class="onboarding-notice error">{{ error }}</div>
+  }
+  @if (notice) {
+    <div class="onboarding-notice">{{ notice }}</div>
+  }
+
+  <section class="onboarding-layout">
+    <nav class="setup-steps" aria-label="Setup steps">
+      @for (step of steps; track step.id) {
+        <button type="button" [class.active]="activeStep === step.id" [class.done]="stepDone(step.id)" (click)="selectStep(step.id)">
+          <span>{{ step.eyebrow }}</span>
+          <strong>{{ step.label }}</strong>
+          <em [class]="stateClass(step.id)">{{ stateLabel(step.id) }}</em>
+        </button>
+      }
+    </nav>
+
+    <section class="setup-panel">
+      <header class="setup-panel-head">
+        <div>
+          <p class="eyebrow">{{ setup?.setupState || "checking" }}</p>
+          <h2>{{ steps.length }} account checks</h2>
+        </div>
+        <button class="secondary" type="button" (click)="load()" [disabled]="busy">{{ busy ? "Checking" : "Recheck" }}</button>
+      </header>
+
+      @if (activeStep === "openai") {
+        <form class="setup-form" (submit)="saveOpenAI(); $event.preventDefault()">
+          <h3>OpenAI</h3>
+          <p>{{ connector("openai")?.summary || "Add an API key so Orkestr can use OpenAI-backed agent work." }}</p>
+          <label>
+            <span>API key</span>
+            <input name="openai-api-key" type="password" [(ngModel)]="openaiApiKey" autocomplete="off" placeholder="sk-..." />
+          </label>
+          <button type="submit" [disabled]="busy || !openaiApiKey.trim()">Save OpenAI</button>
+        </form>
+      }
+
+      @if (activeStep === "codex") {
+        <section class="setup-form">
+          <h3>Codex CLI</h3>
+          <p>{{ connector("codex")?.summary || "Install and authenticate the Codex CLI on this machine." }}</p>
+          <div class="command-box">codex login</div>
+          <div class="command-box">CODEX_HOME={{ connectorDetail("codex", "codexHome") || "~/.codex" }}</div>
+          <button type="button" (click)="load()" [disabled]="busy">I signed in</button>
+        </section>
+      }
+
+      @if (activeStep === "gmail") {
+        <form class="setup-form" (submit)="saveGmail(); $event.preventDefault()">
+          <h3>Gmail</h3>
+          <p>{{ connector("gmail")?.summary || "Save OAuth client details, then connect your Gmail account." }}</p>
+          <label>
+            <span>OAuth client ID</span>
+            <input name="gmail-client-id" [(ngModel)]="gmailClientId" autocomplete="off" />
+          </label>
+          <label>
+            <span>OAuth client secret</span>
+            <input name="gmail-client-secret" type="password" [(ngModel)]="gmailClientSecret" autocomplete="off" />
+          </label>
+          <label>
+            <span>Redirect URI</span>
+            <input name="gmail-redirect-uri" [(ngModel)]="gmailRedirectUri" />
+          </label>
+          <div class="button-row">
+            <button type="submit" [disabled]="busy || !gmailClientId.trim() || !gmailRedirectUri.trim()">Save Gmail</button>
+            <button class="secondary" type="button" (click)="startGmailOAuth()" [disabled]="busy">Connect Gmail</button>
+          </div>
+          @if (oauthUrl) {
+            <a class="oauth-link" [href]="oauthUrl" target="_blank" rel="noreferrer">Open Google sign-in</a>
+          }
+        </form>
+      }
+
+      @if (activeStep === "linkedin") {
+        <section class="setup-form">
+          <h3>LinkedIn</h3>
+          <p>{{ connector("linkedin")?.summary || "Prepare a local browser profile and sign in to LinkedIn." }}</p>
+          <div class="button-row">
+            <button type="button" (click)="prepareLinkedIn()" [disabled]="busy">Prepare browser</button>
+            <button class="secondary" type="button" (click)="openLinkedIn()" [disabled]="busy">Open LinkedIn</button>
+          </div>
+        </section>
+      }
+
+      @if (activeStep === "whatsapp") {
+        <form class="setup-form" (submit)="saveWhatsApp(); $event.preventDefault()">
+          <h3>WhatsApp</h3>
+          <p>{{ connector("whatsapp")?.summary || "Connect a local WhatsApp bridge so messages can reach Orkestr." }}</p>
+          <label>
+            <span>Bridge URL</span>
+            <input name="whatsapp-bridge-url" [(ngModel)]="whatsappBridgeUrl" />
+          </label>
+          <label>
+            <span>Bridge token</span>
+            <input name="whatsapp-token" type="password" [(ngModel)]="whatsappApiToken" autocomplete="off" />
+          </label>
+          <button type="submit" [disabled]="busy || !whatsappBridgeUrl.trim()">Save WhatsApp</button>
+          @if (qrAvailable()) {
+            <div class="qr-panel">
+              <img [src]="qrUrl()" alt="WhatsApp pairing QR code" />
+            </div>
+          }
+        </form>
+      }
+    </section>
+  </section>
+</main>

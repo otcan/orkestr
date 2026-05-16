@@ -114,6 +114,17 @@ textarea:focus {
   gap: 16px;
 }
 
+.brand-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.setup-shortcut {
+  min-height: 32px;
+  padding: 6px 10px;
+}
+
 .brand h1,
 .chat-head h2,
 .panel-title h3 {
