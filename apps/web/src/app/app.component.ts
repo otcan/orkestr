@@ -104,6 +104,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   });
   private shouldStickToBottom = true;
   private scrollAfterRender = true;
+  private scrollFrame = 0;
   private lastMessageSignature = "";
   private textStateThreadId = "";
   private readonly readStateVersionKey = "orkestr.threadRead.initialized.v1";
@@ -130,16 +131,16 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
 
   ngOnDestroy(): void {
     if (this.poller) clearInterval(this.poller);
+    if (this.scrollFrame && typeof globalThis.cancelAnimationFrame === "function") {
+      globalThis.cancelAnimationFrame(this.scrollFrame);
+    }
     this.rawTerminal.dispose();
     globalThis.removeEventListener?.("popstate", this.popStateHandler);
   }
 
   ngAfterViewChecked(): void {
-    if (!this.scrollAfterRender || !this.messagePane?.nativeElement || this.activePanel !== "chat") return;
-    const pane = this.messagePane.nativeElement;
-    pane.scrollTop = pane.scrollHeight;
-    this.scrollAfterRender = false;
-    this.shouldStickToBottom = true;
+    if (!this.scrollAfterRender) return;
+    this.scrollMessagePaneToBottom();
   }
 
   async refresh(showBusy = true): Promise<void> {
@@ -181,8 +182,9 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   }
 
   async activateThread(thread: ThreadSummary): Promise<void> {
+    const nextPanel = this.activePanel === "raw" ? "raw" : "chat";
     this.selectedId = this.threadSlug(thread);
-    this.activePanel = "chat";
+    this.activePanel = nextPanel;
     this.pushPath(this.selectedId, this.activePanel);
     this.clearThreadPanelState();
     this.syncThreadMetaDraft(thread, true);
@@ -200,8 +202,8 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     this.attachDetails = null;
     this.closeRawStream();
     this.lastMessageSignature = "";
-    this.shouldStickToBottom = true;
-    this.scrollAfterRender = true;
+    this.shouldStickToBottom = this.activePanel === "chat";
+    this.scrollAfterRender = this.activePanel === "chat";
   }
 
   async openPanel(panel: Panel): Promise<void> {
@@ -218,8 +220,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     if (panel === "runtime") await this.loadRuntime();
     if (panel === "raw") await this.loadRaw();
     if (panel === "chat") {
-      this.shouldStickToBottom = true;
-      this.scrollAfterRender = true;
+      this.queueMessagePaneScrollToBottom();
     }
     this.renderNow();
   }
@@ -252,8 +253,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
       this.draft = "";
       this.clearThreadTextField(thread, "draft");
       this.pendingFiles = [];
-      this.shouldStickToBottom = true;
-      this.scrollAfterRender = true;
+      this.queueMessagePaneScrollToBottom();
       await this.refresh(false);
     } catch (error) {
       this.error = this.errorText(error);
@@ -860,7 +860,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   }
 
   threadUrl(thread: ThreadSummary): string {
-    return `/ng/thread/${encodeURIComponent(this.threadSlug(thread))}`;
+    return this.pathForPanel(this.threadSlug(thread), this.activePanel === "raw" ? "raw" : "chat");
   }
 
   rawUrl(thread: ThreadSummary): string {
@@ -1031,8 +1031,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     const signature = this.messages.map((message) => this.messageKey(message)).join("|");
     const changed = signature !== this.lastMessageSignature;
     if (forceBottom || (!this.lastMessageSignature && this.messages.length > 0) || (changed && wasNearBottom)) {
-      this.shouldStickToBottom = true;
-      this.scrollAfterRender = true;
+      this.queueMessagePaneScrollToBottom();
     }
     this.lastMessageSignature = signature;
     if (this.activePanel === "history") await this.loadHistory();
@@ -1046,6 +1045,34 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     const pane = this.messagePane?.nativeElement;
     if (!pane) return true;
     return pane.scrollHeight - pane.scrollTop - pane.clientHeight < 80;
+  }
+
+  private queueMessagePaneScrollToBottom(): void {
+    if (this.activePanel !== "chat") return;
+    this.shouldStickToBottom = true;
+    this.scrollAfterRender = true;
+    if (this.scrollFrame && typeof globalThis.cancelAnimationFrame === "function") {
+      globalThis.cancelAnimationFrame(this.scrollFrame);
+    }
+    const run = () => {
+      this.scrollFrame = 0;
+      this.scrollMessagePaneToBottom();
+      globalThis.setTimeout?.(() => this.scrollMessagePaneToBottom(), 0);
+    };
+    if (typeof globalThis.requestAnimationFrame === "function") {
+      this.scrollFrame = globalThis.requestAnimationFrame(() => globalThis.requestAnimationFrame(run));
+    } else {
+      globalThis.setTimeout?.(run, 0);
+    }
+  }
+
+  private scrollMessagePaneToBottom(): void {
+    if (this.activePanel !== "chat") return;
+    const pane = this.messagePane?.nativeElement;
+    if (!pane) return;
+    pane.scrollTop = pane.scrollHeight;
+    this.scrollAfterRender = false;
+    this.shouldStickToBottom = true;
   }
 
   private openRawStream(thread: ThreadSummary): void {
