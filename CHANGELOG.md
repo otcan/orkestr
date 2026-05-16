@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.0-alpha.4
+
+- Parse owner `/now` and `/interrupt` commands at the Orkestr thread input boundary so Codex never receives them as literal slash commands.
+- Return queued interrupt metadata so WhatsApp routing can track interrupt delivery instead of assuming synchronous injection.
+- Add a regression test for stripping `/now` before runtime delivery.
+
 ## 0.1.0-alpha.3
 
 - Normalize legacy timer records that still use `dueAt`, `text`, and `repeat` fields so they can fire under the new OSS scheduler.

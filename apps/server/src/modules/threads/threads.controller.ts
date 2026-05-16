@@ -20,6 +20,7 @@ import {
   listThreads,
   updateThread,
 } from "../../../../../packages/core/src/threads.js";
+import { parseThreadInputCommand } from "../../../../../packages/core/src/thread-commands.js";
 import { ensureDataDirs } from "../../../../../packages/storage/src/paths.js";
 import { ensureAttachmentsArray, httpError } from "../../common/http.js";
 
@@ -165,6 +166,17 @@ export class ThreadsController {
     ensureAttachmentsArray(body);
     const thread = await getThread(threadId);
     if (!thread) throw httpError("thread_not_found", 404);
+    const parsedCommand = body.parseCommands === true || body.controlAllowed === true || body.originOwner === true
+      ? parseThreadInputCommand(body)
+      : { command: null, text: String(body.text || "") };
+    if (parsedCommand.command === "interrupt") {
+      return this.interrupt(thread.id, {
+        ...body,
+        text: parsedCommand.text,
+        source: body.source || "interrupt",
+        parsedCommand: parsedCommand.rawCommand || parsedCommand.command,
+      });
+    }
     const before = await runtimeStatus(thread.id).catch(() => null);
     const message = await enqueueThreadInput(thread.id, body);
     if (body.autoRun === false) {
@@ -299,7 +311,16 @@ export class ThreadsController {
     if (String(body.text || "").trim()) {
       const message = await enqueueThreadInput(result.thread.id, { ...body, source: body.source || "interrupt" });
       requestThreadInputDelivery(result.thread.id);
-      return { ok: true, interrupted: true, message, runtime: result.status };
+      return {
+        ok: true,
+        interrupted: true,
+        message,
+        queued: true,
+        queueItemId: message.id,
+        reason: "interrupt",
+        state: "waking",
+        runtime: result.status,
+      };
     }
     return { ok: true, interrupted: true, runtime: result.status };
   }

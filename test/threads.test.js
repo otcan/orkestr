@@ -6,6 +6,7 @@ import test from "node:test";
 import { startServer } from "../apps/server/src/server.js";
 import { runNextThreadMessage } from "../packages/core/src/executors.js";
 import { runtimeStatus } from "../packages/core/src/runtime-leases.js";
+import { parseThreadInputCommand } from "../packages/core/src/thread-commands.js";
 import { createThread, enqueueThreadInput, listThreadMessages, listThreads } from "../packages/core/src/threads.js";
 
 test("threads are the primary routable runtime object", async () => {
@@ -36,6 +37,15 @@ test("threads default to wake-on-message and sleep without a runtime lease", asy
   assert.equal(status.state, "sleeping");
   assert.equal(status.promptReady, false);
   assert.equal(status.hibernated, true);
+});
+
+test("thread input commands strip /now before runtime delivery", () => {
+  assert.deepEqual(parseThreadInputCommand({ text: "/now run this immediately" }), {
+    command: "interrupt",
+    rawCommand: "now",
+    text: "run this immediately",
+  });
+  assert.equal(parseThreadInputCommand({ text: "normal message" }).command, null);
 });
 
 test("thread APIs create, queue, run, and list messages", async () => {

@@ -1,6 +1,6 @@
 {
   "name": "orkestr-oss",
-  "version": "0.1.0-alpha.3",
+  "version": "0.1.0-alpha.4",
   "description": "Local-first personal agent workstation: setup, connectors, virtual browsers, WhatsApp, and timers.",
   "type": "module",
   "bin": {
