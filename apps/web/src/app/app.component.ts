@@ -1,5 +1,5 @@
 import { DatePipe } from "@angular/common";
-import { AfterViewChecked, Component, ElementRef, OnDestroy, OnInit, ViewChild, inject } from "@angular/core";
+import { AfterViewChecked, ChangeDetectorRef, Component, ElementRef, OnDestroy, OnInit, ViewChild, inject } from "@angular/core";
 import { FormsModule } from "@angular/forms";
 import { firstValueFrom } from "rxjs";
 import { ApiService, ThreadMessage, ThreadSummary, ThreadUploadInput, TimerRecord } from "./api.service";
@@ -279,6 +279,7 @@ interface PendingFile {
 })
 export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   private readonly api = inject(ApiService);
+  private readonly cdr = inject(ChangeDetectorRef);
   private readonly popStateHandler = () => {
     this.selectedId = this.idFromPath();
     void this.loadSelectedThread(true);
@@ -348,6 +349,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
       this.error = this.errorText(error);
     } finally {
       this.busy = false;
+      this.renderNow();
     }
   }
 
@@ -364,6 +366,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     this.shouldStickToBottom = true;
     this.updateDocumentTitle();
     await this.loadSelectedThread(true);
+    this.renderNow();
   }
 
   async openPanel(panel: Panel): Promise<void> {
@@ -372,6 +375,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     if (panel === "timers") await this.loadTimers();
     if (panel === "runtime") await this.loadRuntime();
     if (panel === "chat") this.shouldStickToBottom = true;
+    this.renderNow();
   }
 
   async sendMessage(): Promise<void> {
@@ -691,6 +695,11 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     if (this.activePanel === "history") await this.loadHistory();
     if (this.activePanel === "timers") await this.loadTimers();
     if (this.activePanel === "runtime") await this.loadRuntime();
+    this.renderNow();
+  }
+
+  private renderNow(): void {
+    this.cdr.detectChanges();
   }
 
   private async uploadPendingFiles(thread: ThreadSummary): Promise<Array<Record<string, unknown>>> {

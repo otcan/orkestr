@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.0-alpha.1
+
+- Fix Angular thread UI repaint after async API loads so `/ng/thread/<name>` shows the thread sidebar and selected conversation immediately.
+
 ## 0.1.0-alpha.0
 
 Initial public alpha baseline.
