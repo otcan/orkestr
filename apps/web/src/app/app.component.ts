@@ -76,6 +76,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   detectingThreadRepo = false;
   sidebarWorkerTask = "";
   creatingSidebarWorker = false;
+  creatingWorkerParentId = "";
   pendingFiles: PendingFile[] = [];
   draggingUpload = false;
   rawConnectionState = "idle";
@@ -513,13 +514,15 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     const task = this.sidebarWorkerTask.trim();
     if (!parent || this.creatingSidebarWorker) return;
     this.creatingSidebarWorker = true;
+    this.creatingWorkerParentId = parent.id;
     this.busy = true;
     try {
       const body: Record<string, unknown> = {
         autoRun: Boolean(task),
       };
       if (task) body["task"] = task;
-      if (this.threadRepoDraft.trim()) body["repoPath"] = this.threadRepoDraft.trim();
+      const repoPath = this.threadMetaThreadId === parent.id ? this.threadRepoDraft.trim() : this.defaultRepoPath(parent);
+      if (repoPath) body["repoPath"] = repoPath;
       const result = await firstValueFrom(this.api.createThreadWorker(parent.id, body));
       this.sidebarWorkerTask = "";
       await this.refresh(false);
@@ -528,6 +531,35 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
       this.error = this.errorText(error);
     } finally {
       this.creatingSidebarWorker = false;
+      this.creatingWorkerParentId = "";
+      this.busy = false;
+      this.renderNow();
+    }
+  }
+
+  async createLeftMenuWorker(parent: ThreadSummary, event?: MouseEvent): Promise<void> {
+    event?.preventDefault();
+    event?.stopPropagation();
+    const root = this.workerParentThread(parent);
+    if (!root || this.creatingSidebarWorker) return;
+    this.creatingSidebarWorker = true;
+    this.creatingWorkerParentId = root.id;
+    this.busy = true;
+    try {
+      const body: Record<string, unknown> = {
+        label: `Worker ${this.childWorkers(root).length + 1}`,
+        autoRun: false,
+      };
+      const repoPath = this.defaultRepoPath(root);
+      if (repoPath) body["repoPath"] = repoPath;
+      const result = await firstValueFrom(this.api.createThreadWorker(root.id, body));
+      await this.refresh(false);
+      if (result.worker) await this.activateThread(result.worker);
+    } catch (error) {
+      this.error = this.errorText(error);
+    } finally {
+      this.creatingSidebarWorker = false;
+      this.creatingWorkerParentId = "";
       this.busy = false;
       this.renderNow();
     }

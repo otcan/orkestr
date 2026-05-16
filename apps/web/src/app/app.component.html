@@ -68,6 +68,14 @@
               }
             </div>
           }
+
+          @if (isThreadFamilyActive(thread)) {
+            <div class="worker-tree-actions">
+              <button type="button" (click)="createLeftMenuWorker(thread, $event)" [disabled]="busy || creatingSidebarWorker">
+                {{ creatingWorkerParentId === thread.id ? "Creating worker" : "New worker" }}
+              </button>
+            </div>
+          }
         </article>
       } @empty {
         <p class="empty">No matching threads.</p>

@@ -329,6 +329,22 @@ textarea:focus {
   font-size: 0.9rem;
 }
 
+.worker-tree-actions {
+  display: flex;
+  justify-content: flex-start;
+  margin: -2px 8px 9px 31px;
+}
+
+.worker-tree-actions button {
+  min-height: 30px;
+  border-color: rgba(104, 172, 219, 0.22);
+  border-radius: 999px;
+  background: rgba(3, 9, 12, 0.72);
+  color: #cfeeff;
+  font-size: 0.72rem;
+  padding: 5px 10px;
+}
+
 .thread-text {
   display: grid;
   gap: 3px;
