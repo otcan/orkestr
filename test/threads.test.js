@@ -78,6 +78,9 @@ test("thread workers create a git worktree-backed child thread without resuming 
   assert.equal(result.worker.rootThreadId, parent.id);
   assert.equal(result.worker.workerLabel, "Worker A");
   assert.match(result.worker.branchName, /^orkestr\/Parent-Thread\//);
+  assert.equal(result.worker.remoteBranch, `origin/${result.worker.branchName}`);
+  assert.equal(result.worker.gitAhead, null);
+  assert.equal(result.worker.gitBehind, null);
   assert.equal(result.worker.executor.codexThreadId, "");
   assert.equal(result.worker.executor.metadata.forkedFromCodexThreadId, "parent-codex-id");
   assert.equal(workers.length, 1);
@@ -97,6 +100,25 @@ test("thread worker creation requires a git repository path", async () => {
   );
 });
 
+test("thread workers can be created as blank parallel chats", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-worker-blank-home-"));
+  const repo = await createTempGitRepo("orkestr-thread-worker-blank-repo-");
+  const env = { ORKESTR_HOME: home };
+  const parent = await createThread({ id: "blank-worker-parent", name: "Blank Worker Parent", cwd: repo }, env);
+
+  const result = await createThreadWorker(parent.id, { label: "Blank Worker", autoRun: false }, env);
+  const messages = await listThreadMessages(result.worker.id, env);
+
+  assert.equal(result.worker.parentThreadId, parent.id);
+  assert.equal(result.worker.workerLabel, "Blank Worker");
+  assert.equal(result.worker.workerStatus, "created");
+  assert.equal(result.worker.remoteBranch, `origin/${result.worker.branchName}`);
+  assert.equal(result.worker.gitAhead, null);
+  assert.equal(result.worker.gitBehind, null);
+  assert.equal(result.message, null);
+  assert.equal(messages.length, 0);
+});
+
 test("thread repo metadata can be saved as first-class thread state", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-repo-meta-"));
   const repo = await createTempGitRepo("orkestr-thread-repo-meta-repo-");
@@ -108,8 +130,10 @@ test("thread repo metadata can be saved as first-class thread state", async () =
 
   assert.equal(result.thread.repoPath, repo);
   assert.equal(result.thread.repoRemoteUrl, "git@github.com:otcan/orkestr.git");
+  assert.equal(result.thread.remoteBranch, "origin/main");
   assert.equal(result.thread.branchName, "main");
   assert.equal(result.repo.repoRemoteUrl, "git@github.com:otcan/orkestr.git");
+  assert.equal(result.repo.remoteBranch, "origin/main");
   assert.equal(result.repo.branchName, "main");
   assert.match(result.thread.baseCommit, /^[0-9a-f]{40}$/);
 });

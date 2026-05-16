@@ -17,6 +17,12 @@ function nowIso() {
   return new Date().toISOString();
 }
 
+function optionalNumber(value) {
+  if (value === null || value === undefined || value === "") return null;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
 async function messagesPath(threadId, env) {
   const paths = await ensureDataDirs(env);
   return path.join(paths.threadMessages, `${safeThreadId(threadId)}.json`);
@@ -81,9 +87,12 @@ export async function createThread(input = {}, env = process.env) {
     workerStatus: String(input.workerStatus || "").trim() || null,
     repoPath: String(input.repoPath || input.projectRoot || "").trim() || null,
     repoRemoteUrl: String(input.repoRemoteUrl || input.remoteUrl || input.gitRemoteUrl || "").trim() || null,
+    remoteBranch: String(input.remoteBranch || input.gitRemoteBranch || input.upstreamBranch || "").trim() || null,
     baseBranch: String(input.baseBranch || "").trim() || null,
     branchName: String(input.branchName || "").trim() || null,
     baseCommit: String(input.baseCommit || "").trim() || null,
+    gitAhead: optionalNumber(input.gitAhead),
+    gitBehind: optionalNumber(input.gitBehind),
     worktreePath: String(input.worktreePath || "").trim() || null,
     sourceDirty: Boolean(input.sourceDirty),
     forkedFromCodexThreadId: String(input.forkedFromCodexThreadId || "").trim() || null,

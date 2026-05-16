@@ -285,7 +285,7 @@ textarea:focus {
 
 .thread-entry.active {
   border-color: rgba(126, 247, 142, 0.28);
-  background: rgba(21, 45, 22, 0.56);
+  background: rgba(21, 45, 22, 0.38);
 }
 
 .thread-item {
@@ -303,6 +303,30 @@ textarea:focus {
 .thread-item:hover,
 .thread-item.active {
   background: rgba(21, 45, 22, 0.42);
+}
+
+.worker-tree {
+  display: grid;
+  gap: 5px;
+  border-left: 1px solid rgba(104, 172, 219, 0.24);
+  margin: 0 0 8px 18px;
+  padding: 0 8px 0 12px;
+}
+
+.worker-thread {
+  border-radius: 10px;
+  background: rgba(3, 9, 12, 0.42);
+  padding: 9px 10px;
+}
+
+.worker-thread .status-dot {
+  width: 9px;
+  height: 9px;
+  box-shadow: 0 0 0 3px rgba(104, 172, 219, 0.1);
+}
+
+.worker-thread .thread-text strong {
+  font-size: 0.9rem;
 }
 
 .thread-text {
@@ -804,7 +828,7 @@ textarea:focus {
 
 .settings-facts {
   display: grid;
-  grid-template-columns: 88px minmax(0, 1fr);
+  grid-template-columns: 112px minmax(0, 1fr);
   gap: 8px 12px;
   border: 1px solid rgba(104, 172, 219, 0.14);
   border-radius: 10px;

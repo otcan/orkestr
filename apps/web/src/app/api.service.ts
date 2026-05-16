@@ -110,9 +110,12 @@ export interface ThreadSummary {
   workerStatus?: string | null;
   repoPath?: string | null;
   repoRemoteUrl?: string | null;
+  remoteBranch?: string | null;
   baseBranch?: string | null;
   branchName?: string | null;
   baseCommit?: string | null;
+  gitAhead?: number | null;
+  gitBehind?: number | null;
   worktreePath?: string | null;
   sourceDirty?: boolean;
   forkedFromCodexThreadId?: string | null;
@@ -208,8 +211,11 @@ export interface ThreadWorkerResponse {
   repoPath?: string;
   worktreePath?: string;
   branchName?: string;
+  remoteBranch?: string;
   baseBranch?: string;
   baseCommit?: string;
+  gitAhead?: number | null;
+  gitBehind?: number | null;
   sourceDirty?: boolean;
 }
 
@@ -218,9 +224,12 @@ export interface ThreadRepoResponse {
   repo?: {
     repoPath?: string | null;
     repoRemoteUrl?: string | null;
+    remoteBranch?: string | null;
     branchName?: string | null;
     baseBranch?: string | null;
     baseCommit?: string | null;
+    gitAhead?: number | null;
+    gitBehind?: number | null;
     sourceDirty?: boolean;
   };
   detected?: Record<string, unknown>;
