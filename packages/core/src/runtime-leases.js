@@ -522,6 +522,21 @@ export function requestThreadInputDelivery(threadId, env = process.env) {
   });
 }
 
+export function requestThreadWake(threadId, options = {}, env = process.env) {
+  setImmediate(() => {
+    void wakeThread(threadId, options, env).catch(async (error) => {
+      const errorText = error instanceof Error ? error.message : String(error);
+      await updateThread(threadId, { state: "sleeping", lastError: errorText }, env).catch(() => {});
+      await appendEvent({
+        type: "runtime_wake_failed",
+        threadId,
+        reason: options.reason || "wake",
+        error: errorText,
+      }, env).catch(() => {});
+    });
+  });
+}
+
 function collectMessageText(content = []) {
   return (Array.isArray(content) ? content : [])
     .map((part) => typeof part?.text === "string" ? part.text : "")

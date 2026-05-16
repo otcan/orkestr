@@ -386,6 +386,14 @@ textarea:focus {
   color: #cfeeff;
 }
 
+.new-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 999px;
+  background: #8cff9b;
+  box-shadow: 0 0 0 3px rgba(140, 255, 155, 0.16);
+}
+
 .status-dot {
   width: 11px;
   height: 11px;
@@ -672,41 +680,6 @@ textarea:focus {
 .panel-tabs button.active {
   background: rgba(52, 128, 58, 0.52);
   color: #edffef;
-}
-
-.thread-family-bar {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  margin: 0 0 12px;
-  padding: 0 2px;
-}
-
-.family-pill {
-  min-height: 34px;
-  border: 1px solid rgba(119, 205, 126, 0.18);
-  background: rgba(4, 10, 5, 0.72);
-  color: #d9fbd8;
-  padding: 7px 11px;
-}
-
-.family-pill.parent {
-  border-color: rgba(104, 172, 219, 0.28);
-}
-
-.family-pill.active {
-  border-color: rgba(126, 247, 142, 0.5);
-  background: rgba(52, 128, 58, 0.52);
-}
-
-.family-pill span {
-  display: block;
-  max-width: 220px;
-  overflow: hidden;
-  color: #91ad8b;
-  font-size: 0.66rem;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .messages,
