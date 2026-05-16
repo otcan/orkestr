@@ -14,6 +14,15 @@ import {
 import { appendPendingFiles, messageWithAttachmentPaths, PendingFile, removePendingFile, uploadPendingFiles } from "./thread-uploads";
 
 type Panel = "chat" | "history" | "timers" | "attach" | "settings" | "runtime" | "raw" | "ops";
+type PersistedThreadTextField =
+  | "draft"
+  | "sidebarWorkerTask"
+  | "timerLabel"
+  | "timerCadence"
+  | "timerTime"
+  | "timerPrompt"
+  | "approveText"
+  | "interruptText";
 
 @Component({
   selector: "ork-root",
@@ -34,6 +43,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
       this.renderNow();
       return;
     }
+    this.syncThreadTextState(this.selectedThread(), true);
     void this.loadSelectedThread(true);
   };
 
@@ -76,6 +86,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   detectingThreadRepo = false;
   sidebarWorkerTask = "";
   creatingSidebarWorker = false;
+  creatingWorkerParentId = "";
   pendingFiles: PendingFile[] = [];
   draggingUpload = false;
   rawConnectionState = "idle";
@@ -94,6 +105,17 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   private shouldStickToBottom = true;
   private scrollAfterRender = true;
   private lastMessageSignature = "";
+  private textStateThreadId = "";
+  private readonly threadTextDefaults: Record<PersistedThreadTextField, string> = {
+    draft: "",
+    sidebarWorkerTask: "",
+    timerLabel: "Thread timer",
+    timerCadence: "daily",
+    timerTime: "09:00",
+    timerPrompt: "",
+    approveText: "Approved. Proceed.",
+    interruptText: "",
+  };
 
   ngOnInit(): void {
     this.selectedId = this.idFromPath();
@@ -135,7 +157,9 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
         this.selectedId = this.threadSlug(this.threads[0]);
         this.replacePath(this.selectedId, this.activePanel);
       }
-      this.syncThreadMetaDraft(this.selectedThread());
+      const selected = this.selectedThread();
+      this.syncThreadMetaDraft(selected);
+      this.syncThreadTextState(selected);
       await this.loadSelectedThread(false);
       this.updateDocumentTitle();
       this.error = "";
@@ -160,6 +184,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     this.pushPath(this.selectedId, this.activePanel);
     this.clearThreadPanelState();
     this.syncThreadMetaDraft(thread, true);
+    this.syncThreadTextState(thread, true);
     this.updateDocumentTitle();
     await this.loadSelectedThread(true);
     this.renderNow();
@@ -223,6 +248,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
       const text = messageWithAttachmentPaths(originalText, attachments);
       await firstValueFrom(this.api.sendThreadInput(thread.id, text, attachments));
       this.draft = "";
+      this.clearThreadTextField(thread, "draft");
       this.pendingFiles = [];
       this.shouldStickToBottom = true;
       this.scrollAfterRender = true;
@@ -297,6 +323,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     try {
       await firstValueFrom(this.api.interruptThread(thread.id, this.interruptText.trim()));
       this.interruptText = "";
+      this.clearThreadTextField(thread, "interruptText");
       await this.refresh(false);
     } catch (error) {
       this.error = this.errorText(error);
@@ -400,6 +427,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
       }
       await firstValueFrom(this.api.createThreadTimer(thread.id, body));
       this.timerPrompt = "";
+      this.clearThreadTextField(thread, "timerPrompt");
       await this.loadTimers();
     } catch (error) {
       this.error = this.errorText(error);
@@ -443,15 +471,15 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   async createWorker(): Promise<void> {
     const thread = this.selectedThread();
     const task = this.workerTask.trim();
-    if (!thread || !task || this.creatingWorker) return;
+    if (!thread || this.creatingWorker) return;
     this.creatingWorker = true;
     this.busy = true;
     try {
       const body: Record<string, unknown> = {
         label: this.workerLabel.trim() || `Worker ${this.childWorkers(thread).length + 1}`,
-        task,
-        autoRun: this.workerAutoRun,
+        autoRun: this.workerAutoRun && Boolean(task),
       };
+      if (task) body["task"] = task;
       if (this.workerRepoPath.trim()) body["repoPath"] = this.workerRepoPath.trim();
       if (this.workerBranchName.trim()) body["branchName"] = this.workerBranchName.trim();
       const result = await firstValueFrom(this.api.createThreadWorker(thread.id, body));
@@ -511,23 +539,56 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   async createSidebarWorker(thread: ThreadSummary | null = this.selectedThread()): Promise<void> {
     const parent = this.workerParentThread(thread);
     const task = this.sidebarWorkerTask.trim();
-    if (!parent || !task || this.creatingSidebarWorker) return;
+    if (!parent || this.creatingSidebarWorker) return;
     this.creatingSidebarWorker = true;
+    this.creatingWorkerParentId = parent.id;
     this.busy = true;
     try {
       const body: Record<string, unknown> = {
-        task,
-        autoRun: true,
+        autoRun: Boolean(task),
       };
-      if (this.threadRepoDraft.trim()) body["repoPath"] = this.threadRepoDraft.trim();
+      if (task) body["task"] = task;
+      const repoPath = this.threadMetaThreadId === parent.id ? this.threadRepoDraft.trim() : this.defaultRepoPath(parent);
+      if (repoPath) body["repoPath"] = repoPath;
       const result = await firstValueFrom(this.api.createThreadWorker(parent.id, body));
       this.sidebarWorkerTask = "";
+      if (thread) this.clearThreadTextField(thread, "sidebarWorkerTask");
+      this.clearThreadTextField(parent, "sidebarWorkerTask");
       await this.refresh(false);
       if (result.worker) await this.activateThread(result.worker);
     } catch (error) {
       this.error = this.errorText(error);
     } finally {
       this.creatingSidebarWorker = false;
+      this.creatingWorkerParentId = "";
+      this.busy = false;
+      this.renderNow();
+    }
+  }
+
+  async createLeftMenuWorker(parent: ThreadSummary, event?: MouseEvent): Promise<void> {
+    event?.preventDefault();
+    event?.stopPropagation();
+    const root = this.workerParentThread(parent);
+    if (!root || this.creatingSidebarWorker) return;
+    this.creatingSidebarWorker = true;
+    this.creatingWorkerParentId = root.id;
+    this.busy = true;
+    try {
+      const body: Record<string, unknown> = {
+        label: `Worker ${this.childWorkers(root).length + 1}`,
+        autoRun: false,
+      };
+      const repoPath = this.defaultRepoPath(root);
+      if (repoPath) body["repoPath"] = repoPath;
+      const result = await firstValueFrom(this.api.createThreadWorker(root.id, body));
+      await this.refresh(false);
+      if (result.worker) await this.activateThread(result.worker);
+    } catch (error) {
+      this.error = this.errorText(error);
+    } finally {
+      this.creatingSidebarWorker = false;
+      this.creatingWorkerParentId = "";
       this.busy = false;
       this.renderNow();
     }
@@ -583,26 +644,31 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     this.pendingFiles = removePendingFile(this.pendingFiles, id);
   }
 
+  persistThreadTextField(field: PersistedThreadTextField, value: string): void {
+    this[field] = value;
+    const thread = this.selectedThread();
+    if (!thread) return;
+    this.writeThreadTextField(thread, field, value);
+  }
+
   filteredThreads(): ThreadSummary[] {
     const needle = this.filterText.trim().toLowerCase();
     if (!needle) return this.threads;
-    return this.threads.filter((thread) =>
-      [
-        thread.id,
-        thread.name,
-        thread.bindingName,
-        thread.title,
-        thread.codexThreadId,
-        thread.parentThreadId,
-        thread.repoPath,
-        thread.branchName,
-        thread.worktreePath,
-        thread["repoRemoteUrl"],
-        this.threadRemoteLabel(thread),
-      ]
-        .filter(Boolean)
-        .some((value) => String(value).toLowerCase().includes(needle)),
-    );
+    return this.threads.filter((thread) => this.threadMatchesFilter(thread));
+  }
+
+  threadTreeRoots(): ThreadSummary[] {
+    const roots = this.threads
+      .filter((thread) => !thread.parentThreadId || !this.threads.some((candidate) => candidate.id === thread.parentThreadId))
+      .filter((thread) => this.threadVisibleInTree(thread));
+    return roots.sort((a, b) => this.familyActivityMs(b) - this.familyActivityMs(a));
+  }
+
+  visibleChildWorkers(thread: ThreadSummary | null): ThreadSummary[] {
+    const children = this.childWorkers(thread);
+    const needle = this.filterText.trim();
+    if (!needle || this.threadMatchesFilter(thread)) return children;
+    return children.filter((worker) => this.threadMatchesFilter(worker));
   }
 
   selectedThread(): ThreadSummary | null {
@@ -613,6 +679,11 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
 
   isSelected(thread: ThreadSummary): boolean {
     return this.selectedThread()?.id === thread.id;
+  }
+
+  isThreadFamilyActive(thread: ThreadSummary): boolean {
+    const selected = this.selectedThread();
+    return selected?.id === thread.id || selected?.parentThreadId === thread.id;
   }
 
   threadTitle(thread: ThreadSummary): string {
@@ -638,11 +709,13 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     if (!thread) return "";
     const remote = this.threadRemoteLabel(thread);
     const repo = this.threadRepoLabel(thread);
-    const branch = this.threadBranchLabel(thread);
+    const branch = this.threadRemoteBranchLabel(thread) || this.threadBranchLabel(thread);
+    const gitDelta = this.threadGitDeltaLabel(thread);
     const parts: string[] = [];
     if (remote) parts.push(remote);
-    if (repo && !remote.toLowerCase().endsWith(`/${repo.toLowerCase()}`)) parts.push(repo);
+    if (!thread.parentThreadId && repo && !remote.toLowerCase().endsWith(`/${repo.toLowerCase()}`)) parts.push(repo);
     if (branch) parts.push(branch);
+    if (gitDelta) parts.push(gitDelta);
     return parts.join(" · ");
   }
 
@@ -664,6 +737,34 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
       this.objectValue(metadata, "remoteUrl") ||
       "",
     ).trim();
+  }
+
+  threadRemoteBranchLabel(thread: ThreadSummary | null): string {
+    if (!thread) return "";
+    const executor = thread["executor"];
+    const metadata = executor && typeof executor === "object" ? (executor as Record<string, unknown>)["metadata"] : null;
+    const remoteBranch = String(
+      thread["remoteBranch"] ||
+      thread["gitRemoteBranch"] ||
+      thread["upstreamBranch"] ||
+      this.objectValue(thread.runtime, "remoteBranch") ||
+      this.objectValue(thread.runtime, "gitRemoteBranch") ||
+      this.objectValue(metadata, "remoteBranch") ||
+      this.objectValue(metadata, "gitRemoteBranch") ||
+      "",
+    ).trim();
+    if (remoteBranch) return remoteBranch;
+    const branch = this.threadBranchLabel(thread);
+    return branch && this.threadRemoteUrl(thread) ? `origin/${branch}` : "";
+  }
+
+  threadGitDeltaLabel(thread: ThreadSummary | null): string {
+    if (!thread) return "";
+    const ahead = this.threadNumberValue(thread, "gitAhead");
+    const behind = this.threadNumberValue(thread, "gitBehind");
+    if (Number.isFinite(ahead) && Number.isFinite(behind)) return `↑${ahead} ↓${behind}`;
+    if (this.threadRemoteBranchLabel(thread) && thread.parentThreadId) return "not pushed";
+    return "";
   }
 
   threadMetaDirty(thread: ThreadSummary | null = this.selectedThread()): boolean {
@@ -695,16 +796,16 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
 
   defaultRepoPath(thread: ThreadSummary | null): string {
     if (!thread) return "";
-    return String(
-      thread.repoPath ||
+    const repoPath = String(thread.repoPath || this.objectValue(thread.runtime, "repoPath") || "").trim();
+    const worktreePath = String(
       thread.worktreePath ||
-      this.objectValue(thread.runtime, "repoPath") ||
       this.objectValue(thread.runtime, "worktreePath") ||
       this.objectValue(thread.runtime, "workspace") ||
       thread["cwd"] ||
       thread["workspace"] ||
       "",
     ).trim();
+    return thread.parentThreadId ? worktreePath || repoPath : repoPath || worktreePath;
   }
 
   statusLabel(thread: ThreadSummary): string {
@@ -965,6 +1066,43 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     this.threadBranchDraft = this.threadBranchLabel(thread);
   }
 
+  private syncThreadTextState(thread: ThreadSummary | null, force = false): void {
+    if (!thread) return;
+    if (!force && this.textStateThreadId === thread.id) return;
+    this.textStateThreadId = thread.id;
+    for (const field of Object.keys(this.threadTextDefaults) as PersistedThreadTextField[]) {
+      this[field] = this.readThreadTextField(thread, field) ?? this.threadTextDefaults[field];
+    }
+  }
+
+  private readThreadTextField(thread: ThreadSummary, field: PersistedThreadTextField): string | null {
+    try {
+      return globalThis.sessionStorage?.getItem(this.threadTextStorageKey(thread, field)) ?? null;
+    } catch {
+      return null;
+    }
+  }
+
+  private writeThreadTextField(thread: ThreadSummary, field: PersistedThreadTextField, value: string): void {
+    try {
+      globalThis.sessionStorage?.setItem(this.threadTextStorageKey(thread, field), value);
+    } catch {
+      // Session storage can be unavailable in strict browser modes; drafts then remain in memory only.
+    }
+  }
+
+  private clearThreadTextField(thread: ThreadSummary, field: PersistedThreadTextField): void {
+    try {
+      globalThis.sessionStorage?.removeItem(this.threadTextStorageKey(thread, field));
+    } catch {
+      // Ignore storage failures; clearing the in-memory field is already handled by the caller.
+    }
+  }
+
+  private threadTextStorageKey(thread: ThreadSummary, field: PersistedThreadTextField): string {
+    return `orkestr:thread:${thread.id}:text:${field}`;
+  }
+
   private resolveThread(value: string): ThreadSummary | undefined {
     const id = decodeURIComponent(String(value || "").trim());
     return this.threads.find((thread) =>
@@ -1039,6 +1177,40 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     return Number.isFinite(ms) ? ms : 0;
   }
 
+  private familyActivityMs(thread: ThreadSummary): number {
+    return Math.max(this.activityMs(thread), ...this.childWorkers(thread).map((worker) => this.activityMs(worker)));
+  }
+
+  private threadVisibleInTree(thread: ThreadSummary): boolean {
+    if (!this.filterText.trim()) return true;
+    return this.threadMatchesFilter(thread) || this.childWorkers(thread).some((worker) => this.threadMatchesFilter(worker));
+  }
+
+  private threadMatchesFilter(thread: ThreadSummary | null): boolean {
+    if (!thread) return false;
+    const needle = this.filterText.trim().toLowerCase();
+    if (!needle) return true;
+    return [
+      thread.id,
+      thread.name,
+      thread.bindingName,
+      thread.title,
+      thread.codexThreadId,
+      thread.parentThreadId,
+      thread.repoPath,
+      thread.branchName,
+      thread.worktreePath,
+      thread["repoRemoteUrl"],
+      thread["remoteBranch"],
+      this.threadRemoteLabel(thread),
+      this.threadRemoteBranchLabel(thread),
+      this.threadWorkspaceLabel(thread),
+      this.threadGitDeltaLabel(thread),
+    ]
+      .filter(Boolean)
+      .some((value) => String(value).toLowerCase().includes(needle));
+  }
+
   private formatRemoteUrl(value: string): string {
     const raw = String(value || "").trim();
     if (!raw) return "";
@@ -1048,6 +1220,15 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     const protocolMatch = withoutGitSuffix.match(/^[a-z]+:\/\/([^/]+)\/(.+)$/i);
     if (protocolMatch) return `${protocolMatch[1]}/${protocolMatch[2]}`;
     return withoutGitSuffix;
+  }
+
+  private threadNumberValue(thread: ThreadSummary | null, key: string): number {
+    if (!thread) return Number.NaN;
+    const executor = thread["executor"];
+    const metadata = executor && typeof executor === "object" ? (executor as Record<string, unknown>)["metadata"] : null;
+    const raw = thread[key] ?? this.pathValue(thread.runtime, key) ?? this.pathValue(metadata, key);
+    const parsed = Number(raw);
+    return Number.isFinite(parsed) ? parsed : Number.NaN;
   }
 
   private updateDocumentTitle(): void {

@@ -90,7 +90,7 @@ textarea:focus {
 
 .app-shell {
   display: grid;
-  grid-template-columns: minmax(270px, 340px) minmax(0, 1fr);
+  grid-template-columns: minmax(320px, 420px) minmax(0, 1fr);
   height: 100vh;
   overflow: hidden;
 }
@@ -102,7 +102,7 @@ textarea:focus {
   min-height: 0;
   border-right: 1px solid rgba(119, 205, 126, 0.18);
   background: rgba(5, 11, 5, 0.86);
-  padding: 22px;
+  padding: 18px;
 }
 
 .brand,
@@ -285,24 +285,65 @@ textarea:focus {
 
 .thread-entry.active {
   border-color: rgba(126, 247, 142, 0.28);
-  background: rgba(21, 45, 22, 0.56);
+  background: rgba(21, 45, 22, 0.38);
 }
 
 .thread-item {
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
-  align-items: center;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: start;
   gap: 10px;
+  position: relative;
   border: 1px solid transparent;
   border-radius: 12px;
   color: inherit;
-  padding: 12px;
+  padding: 12px 54px 12px 12px;
   text-decoration: none;
 }
 
 .thread-item:hover,
 .thread-item.active {
   background: rgba(21, 45, 22, 0.42);
+}
+
+.worker-tree {
+  display: grid;
+  gap: 5px;
+  border-left: 1px solid rgba(104, 172, 219, 0.24);
+  margin: 0 0 8px 18px;
+  padding: 0 8px 0 12px;
+}
+
+.worker-thread {
+  border-radius: 10px;
+  background: rgba(3, 9, 12, 0.42);
+  padding: 9px 10px;
+}
+
+.worker-thread .status-dot {
+  width: 9px;
+  height: 9px;
+  box-shadow: 0 0 0 3px rgba(104, 172, 219, 0.1);
+}
+
+.worker-thread .thread-text strong {
+  font-size: 0.9rem;
+}
+
+.worker-tree-actions {
+  display: flex;
+  justify-content: flex-start;
+  margin: -2px 8px 9px 31px;
+}
+
+.worker-tree-actions button {
+  min-height: 30px;
+  border-color: rgba(104, 172, 219, 0.22);
+  border-radius: 999px;
+  background: rgba(3, 9, 12, 0.72);
+  color: #cfeeff;
+  font-size: 0.72rem;
+  padding: 5px 10px;
 }
 
 .thread-text {
@@ -314,14 +355,29 @@ textarea:focus {
 .thread-text strong,
 .thread-text small {
   overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+
+.thread-text strong {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-height: 1.25;
+}
+
+.thread-text small {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-height: 1.3;
 }
 
 .thread-workspace-label {
   color: #b5d6eb;
   font-family: "IBM Plex Mono", "JetBrains Mono", "SFMono-Regular", Consolas, monospace;
   font-size: 0.68rem;
+  line-height: 1.35;
 }
 
 .thread-text small,
@@ -339,6 +395,16 @@ textarea:focus {
   flex-wrap: wrap;
   justify-content: flex-end;
   gap: 5px;
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  max-width: 44px;
+}
+
+.thread-item > .pending {
+  position: absolute;
+  top: 10px;
+  right: 10px;
 }
 
 .worker-count {
@@ -804,7 +870,7 @@ textarea:focus {
 
 .settings-facts {
   display: grid;
-  grid-template-columns: 88px minmax(0, 1fr);
+  grid-template-columns: 112px minmax(0, 1fr);
   gap: 8px 12px;
   border: 1px solid rgba(104, 172, 219, 0.14);
   border-radius: 10px;

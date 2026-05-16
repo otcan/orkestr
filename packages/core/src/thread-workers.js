@@ -66,10 +66,22 @@ async function resolveGitRoot(candidate) {
 function repoCandidates(parent, input = {}) {
   const metadata = parent.executor?.metadata && typeof parent.executor.metadata === "object" ? parent.executor.metadata : {};
   const runtime = parent.runtime && typeof parent.runtime === "object" ? parent.runtime : {};
-  return [
+  const explicit = [
     input.repoPath,
     input.projectRoot,
     input.cwd,
+  ];
+  const workerCheckout = [
+    parent.worktreePath,
+    parent.cwd,
+    parent.workspace,
+    runtime.worktreePath,
+    runtime.workspace,
+    metadata.worktreePath,
+    metadata.workspace,
+    metadata.cwd,
+  ];
+  const parentCheckout = [
     parent.repoPath,
     parent.projectRoot,
     parent.cwd,
@@ -85,7 +97,19 @@ function repoCandidates(parent, input = {}) {
     metadata.workspace,
     metadata.sourceWorkspace,
     metadata.sourceWorkingDirectory,
+  ];
+  return [
+    ...explicit,
+    ...(parent.parentThreadId ? workerCheckout : []),
+    ...parentCheckout,
+    ...(parent.parentThreadId ? [] : workerCheckout),
   ].map(nonEmptyString).filter(Boolean);
+}
+
+function optionalNumber(value) {
+  if (value === null || value === undefined || value === "") return null;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
 }
 
 async function resolveParentRepo(parent, input = {}) {
@@ -170,6 +194,30 @@ async function repoRemoteUrl(repoPath) {
   return await git(repoPath, ["config", "--get", "remote.origin.url"]).then((result) => result.stdout).catch(() => "");
 }
 
+async function remoteTrackingBranch(repoPath, branchName) {
+  const upstream = await git(repoPath, ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"])
+    .then((result) => result.stdout)
+    .catch(() => "");
+  if (upstream) return upstream;
+  return branchName ? `origin/${branchName}` : "";
+}
+
+async function gitAheadBehind(repoPath, remoteBranch) {
+  if (!remoteBranch) return { gitAhead: null, gitBehind: null };
+  const remoteExists = await git(repoPath, ["rev-parse", "--verify", "--quiet", remoteBranch])
+    .then(() => true)
+    .catch(() => false);
+  if (!remoteExists) return { gitAhead: null, gitBehind: null };
+  const counts = await git(repoPath, ["rev-list", "--left-right", "--count", `${remoteBranch}...HEAD`])
+    .then((result) => result.stdout)
+    .catch(() => "");
+  const [behind, ahead] = counts.split(/\s+/).map((value) => Number(value));
+  return {
+    gitAhead: Number.isFinite(ahead) ? ahead : null,
+    gitBehind: Number.isFinite(behind) ? behind : null,
+  };
+}
+
 export async function detectThreadRepo(threadId, env = process.env) {
   const thread = await getThread(threadId, env);
   if (!thread) throw httpError("thread_not_found", 404);
@@ -178,7 +226,18 @@ export async function detectThreadRepo(threadId, env = process.env) {
   const baseCommit = await git(repoPath, ["rev-parse", "HEAD"]).then((result) => result.stdout).catch(() => "");
   const sourceDirty = await worktreeDirty(repoPath);
   const remoteUrl = await repoRemoteUrl(repoPath);
-  return { repoPath, repoRemoteUrl: remoteUrl || null, branchName, baseBranch: branchName, baseCommit, sourceDirty };
+  const remoteBranch = await remoteTrackingBranch(repoPath, branchName);
+  const aheadBehind = await gitAheadBehind(repoPath, remoteBranch);
+  return {
+    repoPath,
+    repoRemoteUrl: remoteUrl || null,
+    remoteBranch: remoteBranch || null,
+    branchName,
+    baseBranch: branchName,
+    baseCommit,
+    sourceDirty,
+    ...aheadBehind,
+  };
 }
 
 export async function updateThreadRepo(threadId, input = {}, env = process.env) {
@@ -187,17 +246,23 @@ export async function updateThreadRepo(threadId, input = {}, env = process.env) 
   const shouldDetect = input.detect === true;
   let repoPath = nonEmptyString(input.repoPath || input.projectRoot || input.cwd);
   let remoteUrl = nonEmptyString(input.repoRemoteUrl || input.remoteUrl || input.gitRemoteUrl);
+  let remoteBranch = nonEmptyString(input.remoteBranch || input.gitRemoteBranch || input.upstreamBranch);
   let branchName = nonEmptyString(input.branchName || input.branch || input.baseBranch);
   let baseCommit = nonEmptyString(input.baseCommit);
   let sourceDirty = Boolean(input.sourceDirty);
+  let gitAhead = optionalNumber(input.gitAhead);
+  let gitBehind = optionalNumber(input.gitBehind);
 
   if (shouldDetect && !repoPath) {
     const detected = await detectThreadRepo(thread.id, env);
     repoPath = detected.repoPath;
     remoteUrl ||= detected.repoRemoteUrl;
+    remoteBranch ||= detected.remoteBranch;
     branchName ||= detected.branchName;
     baseCommit ||= detected.baseCommit;
     sourceDirty = detected.sourceDirty;
+    gitAhead ??= detected.gitAhead;
+    gitBehind ??= detected.gitBehind;
   }
 
   if (repoPath) {
@@ -206,22 +271,38 @@ export async function updateThreadRepo(threadId, input = {}, env = process.env) 
     repoPath = root;
     remoteUrl ||= await repoRemoteUrl(repoPath);
     branchName ||= await currentBranch(repoPath);
+    remoteBranch ||= await remoteTrackingBranch(repoPath, branchName);
+    const aheadBehind = await gitAheadBehind(repoPath, remoteBranch);
+    gitAhead = aheadBehind.gitAhead;
+    gitBehind = aheadBehind.gitBehind;
     baseCommit ||= await git(repoPath, ["rev-parse", "HEAD"]).then((result) => result.stdout).catch(() => "");
     sourceDirty = await worktreeDirty(repoPath);
-  } else if (!branchName && !remoteUrl) {
+  } else if (!branchName && !remoteUrl && !remoteBranch) {
     repoPath = "";
   }
 
   const patch = {
     repoPath: repoPath || null,
     repoRemoteUrl: remoteUrl || null,
+    remoteBranch: remoteBranch || null,
     branchName: branchName || null,
     baseBranch: branchName || null,
     baseCommit: baseCommit || null,
+    gitAhead,
+    gitBehind,
     sourceDirty,
   };
   const updated = await updateThread(thread.id, patch, env);
-  await appendEvent({ type: "thread_repo_updated", threadId: thread.id, repoPath: patch.repoPath, repoRemoteUrl: patch.repoRemoteUrl, branchName: patch.branchName }, env);
+  await appendEvent({
+    type: "thread_repo_updated",
+    threadId: thread.id,
+    repoPath: patch.repoPath,
+    repoRemoteUrl: patch.repoRemoteUrl,
+    remoteBranch: patch.remoteBranch,
+    branchName: patch.branchName,
+    gitAhead: patch.gitAhead,
+    gitBehind: patch.gitBehind,
+  }, env);
   return { thread: updated, repo: patch };
 }
 
@@ -298,7 +379,6 @@ export async function createThreadWorker(parentThreadId, input = {}, env = proce
   const parent = await getThread(parentThreadId, env);
   if (!parent) throw httpError("thread_not_found", 404);
   const task = nonEmptyString(input.task || input.prompt || input.message);
-  if (!task) throw httpError("worker_task_required", 400);
 
   const repoPath = await resolveParentRepo(parent, input);
   const workerId = nonEmptyString(input.id || input.threadId) || `worker-${safeSegment(parent.id, "parent")}-${randomUUID().slice(0, 8)}`;
@@ -317,6 +397,8 @@ export async function createThreadWorker(parentThreadId, input = {}, env = proce
   try {
     await git(repoPath, ["worktree", "add", "-b", branchName, worktreePath, baseCommit]);
     worktreeCreated = true;
+    const remoteBranch = nonEmptyString(input.remoteBranch || input.gitRemoteBranch || input.upstreamBranch) || await remoteTrackingBranch(worktreePath, branchName);
+    const aheadBehind = await gitAheadBehind(worktreePath, remoteBranch);
     const workerIndex = await workerIndexFor(parent.id, env);
     const workerLabel = nonEmptyString(input.label || input.name || input.workerLabel) || `Worker ${workerIndex}`;
     const rootId = rootThreadId(parent);
@@ -327,9 +409,11 @@ export async function createThreadWorker(parentThreadId, input = {}, env = proce
       workerLabel,
       repoPath,
       repoRemoteUrl: remoteUrl || null,
+      remoteBranch: remoteBranch || null,
       baseBranch,
       branchName,
       baseCommit,
+      ...aheadBehind,
       worktreePath,
       sourceDirty,
       forkedFromCodexThreadId: codexThreadId(parent) || null,
@@ -358,34 +442,41 @@ export async function createThreadWorker(parentThreadId, input = {}, env = proce
       workerStatus: "created",
       repoPath,
       repoRemoteUrl: remoteUrl || null,
+      remoteBranch: remoteBranch || null,
       baseBranch,
       branchName,
       baseCommit,
+      ...aheadBehind,
       worktreePath,
       sourceDirty,
       forkedFromCodexThreadId: codexThreadId(parent) || null,
     };
     const worker = await createThread(workerInput, env);
-    const prompt = handoffPrompt(parent, worker, input);
-    const message = await enqueueThreadInput(worker.id, {
-      text: prompt,
-      source: "orkestr_worker_handoff",
-    }, env);
-    const updatedWorker = await updateThread(worker.id, {
-      handoffPrompt: prompt,
-      handoffMessageId: message.id,
-      workerStatus: "queued",
-    }, env);
+    let message = null;
+    let updatedWorker = worker;
+    if (task) {
+      const prompt = handoffPrompt(parent, worker, input);
+      message = await enqueueThreadInput(worker.id, {
+        text: prompt,
+        source: "orkestr_worker_handoff",
+      }, env);
+      updatedWorker = await updateThread(worker.id, {
+        handoffPrompt: prompt,
+        handoffMessageId: message.id,
+        workerStatus: "queued",
+      }, env);
+    }
     await appendEvent({
       type: "thread_worker_created",
       threadId: parent.id,
       workerThreadId: worker.id,
       branchName,
+      remoteBranch,
       worktreePath,
       repoPath,
       sourceDirty,
     }, env);
-    return { parent, worker: updatedWorker, message, repoPath, worktreePath, branchName, baseBranch, baseCommit, sourceDirty };
+    return { parent, worker: updatedWorker, message, repoPath, worktreePath, branchName, remoteBranch, baseBranch, baseCommit, sourceDirty, ...aheadBehind };
   } catch (error) {
     if (worktreeCreated) {
       await git(repoPath, ["worktree", "remove", "--force", worktreePath]).catch(() => {});

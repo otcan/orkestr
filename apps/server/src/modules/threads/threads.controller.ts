@@ -231,7 +231,7 @@ export class ThreadsController {
   @HttpCode(201)
   async createWorker(@Param("threadId") threadId: string, @Body() body: Record<string, unknown> = {}) {
     const result: any = await createThreadWorker(threadId, body);
-    if (body.autoRun !== false) requestThreadInputDelivery(result.worker.id);
+    if (body.autoRun !== false && result.message) requestThreadInputDelivery(result.worker.id);
     return {
       ...result,
       worker: await threadRuntimeSummary(result.worker, await listThreadMessages(result.worker.id)),
