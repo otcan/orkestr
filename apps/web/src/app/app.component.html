@@ -13,85 +13,94 @@
       <input name="thread-search" [(ngModel)]="filterText" placeholder="agent, project, thread..." />
     </label>
 
-    @if (activePanel !== "ops" && selectedThread(); as activeThread) {
-      <section class="sidebar-card workspace-editor">
-        <div class="sidebar-card-title">
-          <span>Workspace</span>
-          <button class="text-button" type="button" (click)="detectSelectedThreadRepo(activeThread)" [disabled]="busy || detectingThreadRepo">
-            {{ detectingThreadRepo ? "Detecting" : "Detect" }}
-          </button>
-        </div>
-        <label class="sidebar-field">
-          <span>Repo</span>
-          <input name="thread-repo" [(ngModel)]="threadRepoDraft" placeholder="/path/to/git/repo" />
-        </label>
-        <label class="sidebar-field">
-          <span>Branch</span>
-          <input name="thread-branch" [(ngModel)]="threadBranchDraft" placeholder="main" />
-        </label>
-        <button type="button" (click)="saveThreadRepo(activeThread)" [disabled]="busy || savingThreadMeta || !threadMetaDirty(activeThread)">
-          {{ savingThreadMeta ? "Saving" : "Save repo" }}
-        </button>
-      </section>
-
-      <section class="sidebar-card worker-sidebar">
-        <div class="sidebar-card-title">
-          <span>Workers</span>
-          <small>{{ familyWorkers(activeThread).length }}</small>
-        </div>
-        <div class="sidebar-worker-list">
-          @if (parentThread(activeThread); as parent) {
-            <button type="button" class="sidebar-worker parent" (click)="activateThread(parent)">
-              <strong>Parent</strong>
-              <span>{{ threadTitle(parent) }}</span>
-            </button>
-          }
-          @for (worker of familyWorkers(activeThread); track worker.id) {
-            <button type="button" class="sidebar-worker" [class.active]="worker.id === activeThread.id" (click)="activateThread(worker)">
-              <strong>{{ worker.workerLabel || threadTitle(worker) }}</strong>
-              <span>{{ threadBranchLabel(worker) || "branch pending" }}</span>
-            </button>
-          } @empty {
-            <p class="empty compact">No workers yet.</p>
-          }
-        </div>
-        <textarea
-          name="sidebar-worker-task"
-          rows="3"
-          [(ngModel)]="sidebarWorkerTask"
-          placeholder="Task for a parallel worker"
-        ></textarea>
-        <button type="button" (click)="createSidebarWorker(activeThread)" [disabled]="busy || creatingSidebarWorker || !sidebarWorkerTask.trim()">
-          {{ creatingSidebarWorker ? "Creating" : "Add worker" }}
-        </button>
-      </section>
-    }
-
     <nav class="thread-list" aria-label="Orkestr threads">
       @for (thread of filteredThreads(); track thread.id) {
-        <a
-          class="thread-item"
-          [href]="threadUrl(thread)"
-          [class.active]="isSelected(thread)"
-          (click)="selectThread(thread, $event)"
-        >
-          <span class="status-dot" [class]="statusClass(thread)"></span>
-          <span class="thread-text">
-            <strong>{{ threadTitle(thread) }}</strong>
-            <small>
-              {{ statusLabel(thread) }} · {{ activityTime(thread) | date: "MMM d, HH:mm" }}
-              @if (threadRepoLabel(thread)) {
-                <span> · {{ threadRepoLabel(thread) }}</span>
+        <article class="thread-entry" [class.active]="isSelected(thread)">
+          <a
+            class="thread-item"
+            [href]="threadUrl(thread)"
+            [class.active]="isSelected(thread)"
+            (click)="selectThread(thread, $event)"
+          >
+            <span class="status-dot" [class]="statusClass(thread)"></span>
+            <span class="thread-text">
+              <strong>{{ threadTitle(thread) }}</strong>
+              <small>
+                {{ statusLabel(thread) }} · {{ activityTime(thread) | date: "MMM d, HH:mm" }}
+                @if (threadRepoLabel(thread)) {
+                  <span> · {{ threadRepoLabel(thread) }}</span>
+                }
+                @if (threadBranchLabel(thread)) {
+                  <span> · {{ threadBranchLabel(thread) }}</span>
+                }
+              </small>
+            </span>
+            <span class="thread-badges">
+              @if (familyWorkers(thread).length > 0) {
+                <span class="pending worker-count">{{ familyWorkers(thread).length }}</span>
               }
-              @if (threadBranchLabel(thread)) {
-                <span> · {{ threadBranchLabel(thread) }}</span>
+              @if ((thread.pendingCount || 0) > 0) {
+                <span class="pending">{{ thread.pendingCount }}</span>
               }
-            </small>
-          </span>
-          @if ((thread.pendingCount || 0) > 0) {
-            <span class="pending">{{ thread.pendingCount }}</span>
+            </span>
+          </a>
+
+          @if (activePanel !== "ops" && isSelected(thread)) {
+            <section class="thread-inline-tools">
+              <div class="sidebar-card workspace-editor">
+                <div class="sidebar-card-title">
+                  <span>Workspace</span>
+                  <button class="text-button" type="button" (click)="detectSelectedThreadRepo(thread)" [disabled]="busy || detectingThreadRepo">
+                    {{ detectingThreadRepo ? "Detecting" : "Detect" }}
+                  </button>
+                </div>
+                <label class="sidebar-field">
+                  <span>Repo</span>
+                  <input name="thread-repo-{{ thread.id }}" [(ngModel)]="threadRepoDraft" placeholder="/path/to/git/repo" />
+                </label>
+                <label class="sidebar-field">
+                  <span>Branch</span>
+                  <input name="thread-branch-{{ thread.id }}" [(ngModel)]="threadBranchDraft" placeholder="main" />
+                </label>
+                <button type="button" (click)="saveThreadRepo(thread)" [disabled]="busy || savingThreadMeta || !threadMetaDirty(thread)">
+                  {{ savingThreadMeta ? "Saving" : "Save repo" }}
+                </button>
+              </div>
+
+              <div class="sidebar-card worker-sidebar">
+                <div class="sidebar-card-title">
+                  <span>Workers</span>
+                  <small>{{ familyWorkers(thread).length }}</small>
+                </div>
+                <div class="sidebar-worker-list">
+                  @if (parentThread(thread); as parent) {
+                    <button type="button" class="sidebar-worker parent" (click)="activateThread(parent)">
+                      <strong>Parent</strong>
+                      <span>{{ threadTitle(parent) }}</span>
+                    </button>
+                  }
+                  @for (worker of familyWorkers(thread); track worker.id) {
+                    <button type="button" class="sidebar-worker" [class.active]="worker.id === thread.id" (click)="activateThread(worker)">
+                      <strong>{{ worker.workerLabel || threadTitle(worker) }}</strong>
+                      <span>{{ threadBranchLabel(worker) || "branch pending" }}</span>
+                    </button>
+                  } @empty {
+                    <p class="empty compact">No workers yet.</p>
+                  }
+                </div>
+                <textarea
+                  name="sidebar-worker-task-{{ thread.id }}"
+                  rows="3"
+                  [(ngModel)]="sidebarWorkerTask"
+                  placeholder="Task for a parallel worker"
+                ></textarea>
+                <button type="button" (click)="createSidebarWorker(thread)" [disabled]="busy || creatingSidebarWorker || !sidebarWorkerTask.trim()">
+                  {{ creatingSidebarWorker ? "Creating" : "Add worker" }}
+                </button>
+              </div>
+            </section>
           }
-        </a>
+        </article>
       } @empty {
         <p class="empty">No matching threads.</p>
       }
