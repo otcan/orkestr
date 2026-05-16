@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { listAgentMessages } from "../packages/core/src/messages.js";
-import { createTimer, listTimers, markDueTimers, nextRunAt } from "../packages/core/src/timers.js";
+import { createTimer, listTimers, markDueTimers, nextRunAt, normalizeStoredTimer } from "../packages/core/src/timers.js";
 import { createThread, listThreadMessages } from "../packages/core/src/threads.js";
 
 test("daily timers schedule the next future clock time", () => {
@@ -56,4 +56,46 @@ test("thread timers queue input on the target thread", async () => {
   assert.equal(messages.length, 1);
   assert.equal(messages[0].source, "timer_due");
   assert.equal(messages[0].text, "Run thread timer");
+});
+
+test("legacy dueAt timers are normalized as due work", () => {
+  const timer = normalizeStoredTimer({
+    id: "legacy-daily",
+    targetType: "thread",
+    target: "timer-thread",
+    text: "Run legacy timer",
+    dueAt: "2026-05-15T09:00:00.000Z",
+    status: "pending",
+    repeat: { type: "interval", everyMs: 86_400_000, label: "daily" },
+  }, new Date("2026-05-16T10:00:00.000Z"));
+
+  assert.equal(timer.enabled, true);
+  assert.equal(timer.cadence, "daily");
+  assert.equal(timer.prompt, "Run legacy timer");
+  assert.equal(timer.nextRunAt, "2026-05-15T09:00:00.000Z");
+});
+
+test("a failing due timer does not block later due timers", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-timer-failure-"));
+  const env = { ORKESTR_HOME: home };
+  await createThread({ id: "valid-thread", name: "Valid Thread" }, env);
+  await createTimer({ label: "Missing Thread", threadId: "missing-thread", prompt: "Should fail", cadence: "interval", every: "1h" }, env);
+  await createTimer({ label: "Valid Thread", threadId: "valid-thread", prompt: "Should run", cadence: "interval", every: "1h" }, env);
+  const timers = await listTimers(env);
+  timers[0].nextRunAt = "2020-01-01T00:00:00.000Z";
+  timers[1].nextRunAt = "2020-01-01T00:00:00.000Z";
+  await fs.writeFile(path.join(home, "timers.json"), `${JSON.stringify(timers, null, 2)}\n`);
+
+  const due = await markDueTimers(env, new Date("2026-05-15T10:00:00Z"));
+  const after = await listTimers(env);
+  const messages = await listThreadMessages("valid-thread", env);
+
+  assert.equal(due.length, 1);
+  assert.equal(due[0].label, "Valid Thread");
+  assert.equal(messages.length, 1);
+  assert.equal(messages[0].text, "Should run");
+  assert.equal(after[0].lastRunAt || null, null);
+  assert.equal(after[0].lastError, "thread_not_found");
+  assert.equal(after[0].nextRunAt, "2020-01-01T00:00:00.000Z");
+  assert.equal(after[1].lastRunAt, "2026-05-15T10:00:00.000Z");
 });

@@ -126,6 +126,11 @@ function panePromptReady(text) {
   return lines.some((line) => /^›(?:\s|$)/.test(line) && !/^›\s*\d+[.)]/.test(line));
 }
 
+function paneResumeDirectoryPrompt(text) {
+  const body = String(text || "");
+  return /Choose working directory to resume this session/i.test(body) && /Press enter to continue/i.test(body);
+}
+
 async function activeLeaseForThread(threadId, env = process.env) {
   const leases = await listRuntimeLeases(env);
   const active = [...leases].reverse().find((lease) => lease.threadId === threadId && !lease.endedAt) || null;
@@ -176,9 +181,10 @@ export async function runtimeStatus(threadId, env = process.env) {
 
   const paneId = lease.paneId || await tmuxPaneId(lease.sessionName).catch(() => null);
   const paneText = await capturePane(paneId).catch(() => "");
+  const needsResumeDirectoryConfirmation = paneResumeDirectoryPrompt(paneText);
   const promptReadyCandidate = panePromptReady(paneText);
   const working = !promptReadyCandidate && (paneWorking(paneText) || runningCount > 0);
-  const promptReady = promptReadyCandidate && !working;
+  const promptReady = promptReadyCandidate && !working && !needsResumeDirectoryConfirmation;
   const recentlyStarted = Date.now() - (Date.parse(lease.startedAt || "") || Date.now()) < 20_000;
   const state = working ? "working" : promptReady ? "ready" : recentlyStarted || pendingCount > 0 ? "waking" : "ready";
   return {
@@ -190,6 +196,7 @@ export async function runtimeStatus(threadId, env = process.env) {
     paneId,
     promptReady,
     promptReadyStable: promptReady,
+    needsResumeDirectoryConfirmation,
     working,
     foregroundWorking: working,
     typingActive: working,
@@ -363,6 +370,11 @@ async function waitForRuntimeReady(threadId, env = process.env) {
   let last = null;
   while (Date.now() < deadline) {
     last = await runtimeStatus(threadId, env);
+    if (last.needsResumeDirectoryConfirmation && last.paneId) {
+      await execFileAsync("tmux", ["send-keys", "-t", last.paneId, "C-m"]).catch(() => {});
+      await sleep(1000);
+      continue;
+    }
     if (last.promptReady && !last.working && last.paneId) return last;
     await sleep(500);
   }

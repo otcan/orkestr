@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.0-alpha.3
+
+- Normalize legacy timer records that still use `dueAt`, `text`, and `repeat` fields so they can fire under the new OSS scheduler.
+- Deliver due timers independently so one broken timer target cannot block later timers or mark them as run before delivery.
+- Keep failed timer records due and record `timer_due_failed` events instead of silently advancing them.
+- Automatically accept Codex's resume-directory prompt during runtime wake so hibernated timers can reach the Codex prompt.
+
 ## 0.1.0-alpha.2
 
 - Keep Raw terminal access inside the Angular thread cockpit instead of opening a separate window.

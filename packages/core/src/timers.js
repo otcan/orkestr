@@ -26,6 +26,19 @@ function parseIntervalMs(value) {
   return amount * dayMs;
 }
 
+function intervalText(milliseconds) {
+  const ms = Math.max(60_000, Number(milliseconds || 0) || 0);
+  if (ms % dayMs === 0) return `${ms / dayMs}d`;
+  if (ms % hourMs === 0) return `${ms / hourMs}h`;
+  return `${Math.max(1, Math.round(ms / 60_000))}m`;
+}
+
+function clockFromIso(value, fallback = "09:00") {
+  const date = new Date(value || "");
+  if (Number.isNaN(date.getTime())) return fallback;
+  return `${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
+}
+
 export function nextRunAt(timer, from = new Date()) {
   const cadence = String(timer.cadence || "daily").toLowerCase();
   if (cadence === "once") {
@@ -43,9 +56,49 @@ export function nextRunAt(timer, from = new Date()) {
   return next.toISOString();
 }
 
+export function normalizeStoredTimer(timer, now = new Date()) {
+  const status = String(timer.status || timer.legacy?.status || "").trim().toLowerCase();
+  const repeat = timer.repeat && typeof timer.repeat === "object" ? timer.repeat : timer.legacy?.repeat || null;
+  const repeatLabel = String(repeat?.label || repeat?.type || "").trim().toLowerCase();
+  const everyMs = Number(repeat?.everyMs || 0) || 0;
+  const legacyDueAt = String(timer.dueAt || timer.legacy?.dueAt || "").trim();
+  const cadence = String(timer.cadence || "").trim().toLowerCase() ||
+    (repeat
+      ? repeatLabel === "weekly"
+        ? "weekly"
+        : repeatLabel === "daily" || everyMs === dayMs
+          ? "daily"
+          : "interval"
+      : "once");
+  const every = String(timer.every || "").trim() || (cadence === "interval" ? intervalText(everyMs || dayMs) : null);
+  const enabled = timer.enabled !== false &&
+    !["cancelled", "canceled", "disabled", "failed"].includes(status) &&
+    !(status === "fired" && !repeat);
+  const normalized = {
+    ...timer,
+    id: String(timer.id || randomUUID()).trim(),
+    label: String(timer.label || repeatLabel || "Recurring agent task").trim(),
+    targetType: String(timer.targetType || (timer.threadId ? "thread" : "agent")).trim(),
+    target: String(timer.target || timer.threadId || timer.agentId || "job-search-assistant").trim(),
+    cadence,
+    time: String(timer.time || clockFromIso(legacyDueAt || timer.runAt)).trim(),
+    every,
+    runAt: String(timer.runAt || (cadence === "once" ? legacyDueAt : "")).trim(),
+    prompt: String(timer.prompt || timer.text || "").trim(),
+    promptFile: String(timer.promptFile || "").trim(),
+    enabled,
+    createdAt: timer.createdAt || now.toISOString(),
+  };
+  normalized.nextRunAt = enabled
+    ? String(timer.nextRunAt || legacyDueAt || nextRunAt(normalized, now)).trim()
+    : null;
+  return normalized;
+}
+
 export async function listTimers(env = process.env) {
   const paths = await ensureDataDirs(env);
-  return readJson(paths.timers, []);
+  const timers = await readJson(paths.timers, []);
+  return timers.map((timer) => normalizeStoredTimer(timer));
 }
 
 export async function createTimer(input, env = process.env) {
@@ -109,10 +162,13 @@ export async function runTimerNow(id, env = process.env, now = new Date()) {
     error.statusCode = 404;
     throw error;
   }
-  timer.lastRunAt = now.toISOString();
-  timer.nextRunAt = nextRunAt(timer, now);
-  await writeJson(paths.timers, timers);
   const message = await enqueueTimerMessage(timer, "timer_manual_run", env);
+  timer.lastRunAt = now.toISOString();
+  timer.nextRunAt = timer.cadence === "once" ? null : nextRunAt(timer, now);
+  if (timer.cadence === "once") timer.enabled = false;
+  delete timer.lastError;
+  delete timer.lastErrorAt;
+  await writeJson(paths.timers, timers);
   return appendEvent(
     {
       type: "timer_manual_run",
@@ -132,22 +188,24 @@ export async function markDueTimers(env = process.env, now = new Date()) {
   const timers = await listTimers(env);
   let changed = false;
   const due = [];
-  const next = timers.map((timer) => {
+  const next = [];
+  for (const timer of timers) {
     if (!timer.enabled || !timer.nextRunAt || Date.parse(timer.nextRunAt) > now.getTime()) {
-      return timer;
+      next.push(timer);
+      continue;
     }
-    due.push(timer);
-    changed = true;
-    return {
-      ...timer,
-      lastRunAt: now.toISOString(),
-      nextRunAt: nextRunAt(timer, now),
-    };
-  });
-  if (changed) {
-    await writeJson(paths.timers, next);
-    for (const timer of due) {
+    try {
       const message = await enqueueTimerMessage(timer, "timer_due", env);
+      due.push(timer);
+      changed = true;
+      next.push({
+        ...timer,
+        enabled: timer.cadence === "once" ? false : timer.enabled,
+        lastRunAt: now.toISOString(),
+        nextRunAt: timer.cadence === "once" ? null : nextRunAt(timer, now),
+        lastError: null,
+        lastErrorAt: null,
+      });
       await appendEvent(
         {
           ts: now.toISOString(),
@@ -160,7 +218,28 @@ export async function markDueTimers(env = process.env, now = new Date()) {
         },
         env,
       );
+    } catch (error) {
+      changed = true;
+      next.push({
+        ...timer,
+        lastError: error?.message || String(error),
+        lastErrorAt: now.toISOString(),
+        failureCount: Number(timer.failureCount || 0) + 1,
+      });
+      await appendEvent(
+        {
+          ts: now.toISOString(),
+          type: "timer_due_failed",
+          timerId: timer.id,
+          target: timer.target,
+          targetType: timer.targetType || "agent",
+          label: timer.label,
+          error: error?.message || String(error),
+        },
+        env,
+      ).catch(() => {});
     }
   }
+  if (changed) await writeJson(paths.timers, next);
   return due;
 }
