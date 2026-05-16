@@ -292,9 +292,64 @@ function sqlString(value) {
   return String(value || "").replaceAll("'", "''");
 }
 
-export async function resolveCodexThreadMetadata(threadOrId, env = process.env) {
-  const threadId = typeof threadOrId === "string" ? threadOrId : codexThreadId(threadOrId);
-  const id = String(threadId || "").trim();
+function recordValue(value) {
+  return value && typeof value === "object" && !Array.isArray(value) ? value : null;
+}
+
+function numberValue(value) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function tokenCountMetadata(payload) {
+  const info = recordValue(payload?.info);
+  const rateLimits = recordValue(payload?.rate_limits);
+  const usage = recordValue(info?.total_token_usage) || recordValue(info?.last_token_usage);
+  const contextWindow = numberValue(info?.model_context_window);
+  const metadata = {};
+  if (usage) metadata.codexTokenUsage = usage;
+  if (contextWindow && contextWindow > 0) metadata.codexContextWindow = contextWindow;
+  if (rateLimits) metadata.codexRateLimits = rateLimits;
+  return metadata;
+}
+
+async function resolveCodexRolloutMetadata(rolloutPath) {
+  const filePath = String(rolloutPath || "").trim();
+  if (!filePath) return {};
+  const stats = await fs.stat(filePath).catch(() => null);
+  if (!stats?.isFile() || Number(stats.size || 0) <= 0) return {};
+  const tailBytes = 1024 * 1024;
+  const start = Math.max(0, Number(stats.size) - tailBytes);
+  const length = Number(stats.size) - start;
+  const handle = await fs.open(filePath, "r").catch(() => null);
+  if (!handle) return {};
+  let body = "";
+  try {
+    const buffer = Buffer.alloc(length);
+    const { bytesRead } = await handle.read(buffer, 0, buffer.length, start);
+    body = buffer.subarray(0, bytesRead).toString("utf8");
+  } finally {
+    await handle.close().catch(() => {});
+  }
+  const lines = body.split("\n");
+  if (start > 0) lines.shift();
+  for (let index = lines.length - 1; index >= 0; index -= 1) {
+    const line = lines[index]?.trim();
+    if (!line) continue;
+    let parsed;
+    try {
+      parsed = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    if (parsed?.type !== "event_msg" || parsed.payload?.type !== "token_count") continue;
+    const metadata = tokenCountMetadata(parsed.payload);
+    if (Object.keys(metadata).length) return metadata;
+  }
+  return {};
+}
+
+async function resolveCodexThreadMetadataById(id, env = process.env) {
   if (!/^[0-9a-f-]{36}$/i.test(id)) return {};
   for (const home of codexHomes(env)) {
     const dbPath = path.join(home, "state_5.sqlite");
@@ -307,19 +362,34 @@ export async function resolveCodexThreadMetadata(threadOrId, env = process.env) 
       ].join(" ");
       const { stdout } = await execFileAsync("sqlite3", ["-readonly", "-separator", "\t", dbPath, query]);
       const [model, reasoningEffort, modelProvider, tokensUsed, rolloutPath] = String(stdout || "").trim().split("\t");
-      const metadata = {};
+      const normalizedRolloutPath = rolloutPath && path.isAbsolute(rolloutPath) ? rolloutPath : rolloutPath ? path.resolve(home, rolloutPath) : "";
+      const metadata = { codexThreadId: id };
       if (model) metadata.codexModel = model;
       if (reasoningEffort) metadata.codexReasoningEffort = reasoningEffort;
       if (modelProvider) metadata.codexModelProvider = modelProvider;
       const parsedTokens = Number(tokensUsed || 0);
       if (Number.isFinite(parsedTokens) && parsedTokens > 0) metadata.codexTokenUsage = { total_tokens: parsedTokens };
-      if (rolloutPath) metadata.codexRolloutPath = rolloutPath;
-      if (Object.keys(metadata).length) return metadata;
+      if (normalizedRolloutPath) metadata.codexRolloutPath = normalizedRolloutPath;
+      return { ...metadata, ...(await resolveCodexRolloutMetadata(normalizedRolloutPath)) };
     } catch {
       // Ignore missing sqlite, stale homes, or older Codex schemas.
     }
   }
   return {};
+}
+
+export async function resolveCodexThreadMetadata(threadOrId, env = process.env) {
+  const thread = threadOrId && typeof threadOrId === "object" ? threadOrId : null;
+  const threadId = typeof threadOrId === "string" ? threadOrId : codexThreadId(threadOrId);
+  const id = String(threadId || "").trim();
+  const metadata = await resolveCodexThreadMetadataById(id, env);
+  if (Object.keys(metadata).length) return metadata;
+  if (!thread) return {};
+  const workspace = thread.workspace || thread.cwd || thread.worktreePath || thread.repoPath || thread.runtime?.workspace;
+  const startedAt = thread.runtime?.startedAt || thread.startedAt || thread.updatedAt || thread.createdAt;
+  const discovered = await resolveCodexThreadByWorkspace(workspace, startedAt, env);
+  if (!discovered?.codexThreadId) return {};
+  return resolveCodexThreadMetadataById(discovered.codexThreadId, env);
 }
 
 async function resolveCodexThreadByWorkspace(workspace, startedAt, env = process.env) {
@@ -720,6 +790,7 @@ async function syncLeaseRollout(lease, env = process.env) {
       ...codexMetadata,
       executor: {
         ...(thread?.executor || {}),
+        codexThreadId: codexMetadata.codexThreadId || thread?.executor?.codexThreadId || "",
         metadata: { ...(thread?.executor?.metadata || {}), ...codexMetadata },
       },
     }, env).catch(() => {});

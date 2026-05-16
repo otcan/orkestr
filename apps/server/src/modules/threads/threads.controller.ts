@@ -150,12 +150,17 @@ function codexMetadata(thread: any) {
 
 async function threadRuntimeSummary(thread: any, messages: any[] = []) {
   const status = await runtimeStatus(thread.id).catch(() => null);
-  const liveCodexMetadata = await resolveCodexThreadMetadata(thread).catch(() => ({}));
+  const metadataTarget = {
+    ...thread,
+    runtime: status?.lease ? { ...(thread.runtime || {}), ...status.lease } : thread.runtime,
+  };
+  const liveCodexMetadata: any = await resolveCodexThreadMetadata(metadataTarget).catch(() => ({}));
   const codexThread = {
     ...thread,
     ...liveCodexMetadata,
     executor: {
       ...(thread.executor || {}),
+      codexThreadId: liveCodexMetadata.codexThreadId || thread.executor?.codexThreadId || "",
       metadata: {
         ...(thread.executor?.metadata || {}),
         ...liveCodexMetadata,
@@ -165,10 +170,11 @@ async function threadRuntimeSummary(thread: any, messages: any[] = []) {
   const state = status?.state || thread.state || "sleeping";
   const ready = state === "ready";
   const lastActivityAt = messages.at(-1)?.createdAt || thread.updatedAt || thread.createdAt || null;
+  const resolvedCodexThreadId = codexThreadId(codexThread);
   return {
     ...thread,
-    threadId: codexThreadId(thread) || thread.id,
-    codexThreadId: codexThreadId(thread) || null,
+    threadId: resolvedCodexThreadId || thread.id,
+    codexThreadId: resolvedCodexThreadId || null,
     status: state,
     state,
     routeEligible: true,
@@ -194,7 +200,7 @@ async function threadRuntimeSummary(thread: any, messages: any[] = []) {
     hibernated: state === "sleeping",
     lastActivityAt,
     threadUpdatedAt: thread.updatedAt || lastActivityAt,
-    inferredThreadId: codexThreadId(thread) || null,
+    inferredThreadId: resolvedCodexThreadId || null,
     wakePolicy: thread.wakePolicy || "wake-on-message",
     ...codexMetadata(codexThread),
   };
@@ -363,11 +369,12 @@ export class ThreadsController {
     const thread = await getThread(threadId);
     if (!thread) throw httpError("thread_not_found", 404);
     const messages = await listThreadMessages(thread.id);
+    const summary = await threadRuntimeSummary(thread, messages);
     return {
-      ...(await threadRuntimeSummary(thread, messages)),
+      ...summary,
       orkestrThreadId: thread.id,
-      threadId: codexThreadId(thread) || thread.id,
-      codexThreadId: codexThreadId(thread) || null,
+      threadId: summary.codexThreadId || codexThreadId(thread) || thread.id,
+      codexThreadId: summary.codexThreadId || codexThreadId(thread) || null,
     };
   }
 

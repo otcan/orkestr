@@ -25,6 +25,10 @@ async function createTempGitRepo(prefix = "orkestr-worker-repo-") {
   return repo;
 }
 
+function sqlQuote(value) {
+  return `'${String(value).replaceAll("'", "''")}'`;
+}
+
 async function createFakeTmux(home) {
   const bin = path.join(home, "bin");
   const log = path.join(home, "tmux.log");
@@ -250,6 +254,78 @@ test("thread input commands strip /now before runtime delivery", () => {
     text: "run this immediately",
   });
   assert.equal(parseThreadInputCommand({ text: "normal message" }).command, null);
+});
+
+test("thread runtime summary reads Codex model and limits from live metadata", async (t) => {
+  try {
+    await execFileAsync("sqlite3", ["--version"]);
+  } catch {
+    t.skip("sqlite3 unavailable");
+    return;
+  }
+
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-metadata-api-"));
+  const codexHome = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-codex-home-"));
+  const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-codex-workspace-"));
+  const codexThreadId = "11111111-1111-4111-8111-111111111111";
+  const rolloutPath = path.join(codexHome, "sessions", "rollout-metadata.jsonl");
+  await fs.mkdir(path.dirname(rolloutPath), { recursive: true });
+  await fs.writeFile(rolloutPath, `${JSON.stringify({
+    timestamp: "2026-05-16T10:00:00.000Z",
+    type: "event_msg",
+    payload: {
+      type: "token_count",
+      info: {
+        total_token_usage: {
+          input_tokens: 120,
+          cached_input_tokens: 40,
+          output_tokens: 30,
+          reasoning_output_tokens: 10,
+          total_tokens: 150,
+        },
+        model_context_window: 258400,
+      },
+      rate_limits: {
+        primary: { used_percent: 12, window_minutes: 300, resets_at: 1770000000 },
+        secondary: { used_percent: 34, window_minutes: 10080, resets_at: 1770500000 },
+        plan_type: "pro",
+      },
+    },
+  })}\n`, "utf8");
+  const nowMs = Date.now();
+  await execFileAsync("sqlite3", [path.join(codexHome, "state_5.sqlite"), [
+    "create table threads (id text primary key, rollout_path text not null, created_at integer not null, updated_at integer not null, source text not null, model_provider text not null, cwd text not null, title text not null, sandbox_policy text not null, approval_mode text not null, tokens_used integer not null default 0, archived integer not null default 0, model text, reasoning_effort text, created_at_ms integer, updated_at_ms integer);",
+    `insert into threads (id, rollout_path, created_at, updated_at, source, model_provider, cwd, title, sandbox_policy, approval_mode, tokens_used, archived, model, reasoning_effort, created_at_ms, updated_at_ms) values (${sqlQuote(codexThreadId)}, ${sqlQuote(rolloutPath)}, ${Math.floor(nowMs / 1000)}, ${Math.floor(nowMs / 1000)}, 'codex', 'openai', ${sqlQuote(workspace)}, 'Metadata Thread', 'workspace-write', 'never', 99, 0, 'gpt-test-codex', 'high', ${nowMs}, ${nowMs});`,
+  ].join("\n")]);
+
+  const priorHome = process.env.ORKESTR_HOME;
+  const priorCodexHome = process.env.CODEX_HOME;
+  process.env.ORKESTR_HOME = home;
+  process.env.CODEX_HOME = codexHome;
+  const server = await startServer({ port: 0, host: "127.0.0.1" });
+  const { port } = server.address();
+  const baseUrl = `http://127.0.0.1:${port}`;
+  try {
+    await createThread({ id: "metadata-api-thread", name: "Metadata API Thread", cwd: workspace }, { ORKESTR_HOME: home });
+    const response = await fetch(`${baseUrl}/api/threads/metadata-api-thread/runtime-lite`);
+    const payload = await response.json();
+
+    assert.equal(response.status, 200);
+    assert.equal(payload.codexThreadId, codexThreadId);
+    assert.equal(payload.threadId, codexThreadId);
+    assert.equal(payload.codexModel, "gpt-test-codex");
+    assert.equal(payload.codexReasoningEffort, "high");
+    assert.equal(payload.codexContextWindow, 258400);
+    assert.equal(payload.codexTokenUsage.total_tokens, 150);
+    assert.equal(payload.codexRateLimits.primary.used_percent, 12);
+    assert.equal(payload.codexRateLimits.secondary.used_percent, 34);
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+    if (priorHome === undefined) delete process.env.ORKESTR_HOME;
+    else process.env.ORKESTR_HOME = priorHome;
+    if (priorCodexHome === undefined) delete process.env.CODEX_HOME;
+    else process.env.CODEX_HOME = priorCodexHome;
+  }
 });
 
 test("thread APIs create, queue, run, and list messages", async () => {
