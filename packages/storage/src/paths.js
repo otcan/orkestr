@@ -17,6 +17,7 @@ export function dataPaths(env = process.env) {
     config: path.join(home, "config.json"),
     agents: path.join(home, "agents.json"),
     threads: path.join(home, "threads.json"),
+    threadsDb: path.join(home, "threads.sqlite"),
     threadMessages: path.join(home, "thread-messages"),
     runtimeLeases: path.join(home, "runtime-leases.json"),
     workspaces: path.join(home, "workspaces"),
