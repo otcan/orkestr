@@ -8,6 +8,7 @@ import { runNextThreadMessage } from "../../../../../packages/core/src/executors
 import {
   deliverPendingThreadInputs,
   requestThreadInputDelivery,
+  resolveCodexThreadMetadata,
   runtimeStatus,
   sleepThread,
   wakeThread,
@@ -53,6 +54,30 @@ function bridgeMessage(message: any, index: number) {
   };
 }
 
+function normalizedMessageText(value: unknown): string {
+  return String(value || "").replace(/\s+/g, " ").trim();
+}
+
+function duplicateAdjacentAssistant(previous: any, current: any): boolean {
+  if (!previous || !current) return false;
+  if (previous.role !== "assistant" || current.role !== "assistant") return false;
+  if (previous.source !== "codex-rollout" || current.source !== "codex-rollout") return false;
+  if (String(previous.phase || "") !== String(current.phase || "")) return false;
+  if (!normalizedMessageText(current.text) || normalizedMessageText(previous.text) !== normalizedMessageText(current.text)) return false;
+  const previousMs = Date.parse(String(previous.timestamp || previous.createdAt || ""));
+  const currentMs = Date.parse(String(current.timestamp || current.createdAt || ""));
+  return Number.isFinite(previousMs) && Number.isFinite(currentMs) && Math.abs(currentMs - previousMs) <= 5000;
+}
+
+function dedupeDisplayMessages(messages: any[] = []) {
+  const deduped: any[] = [];
+  for (const message of messages) {
+    if (duplicateAdjacentAssistant(deduped.at(-1), message)) continue;
+    deduped.push(message);
+  }
+  return deduped;
+}
+
 function safeUploadName(name: unknown): string {
   const base = path.basename(String(name || "upload.bin")).replace(/[^a-zA-Z0-9_.-]/g, "_");
   return base || "upload.bin";
@@ -70,7 +95,7 @@ function messagePage(thread: any, rawMessages: any[] = [], query: Record<string,
   const before = Math.max(0, Number.parseInt(String(query.before || "0"), 10) || 0);
   const requestedLimit = Math.max(0, Number.parseInt(String(query.limit || "0"), 10) || 0);
   const limit = requestedLimit ? Math.min(requestedLimit, 100) : 100;
-  let messages = rawMessages.map(bridgeMessage).filter((message) => message.text);
+  let messages = dedupeDisplayMessages(rawMessages.map(bridgeMessage).filter((message) => message.text));
   if (since > 0) messages = messages.filter((message) => Number(message.cursor || 0) > since);
   if (before > 0) messages = messages.filter((message) => Number(message.cursor || 0) < before);
   messages = messages.slice(-limit);
@@ -123,6 +148,18 @@ function codexMetadata(thread: any) {
 
 async function threadRuntimeSummary(thread: any, messages: any[] = []) {
   const status = await runtimeStatus(thread.id).catch(() => null);
+  const liveCodexMetadata = await resolveCodexThreadMetadata(thread).catch(() => ({}));
+  const codexThread = {
+    ...thread,
+    ...liveCodexMetadata,
+    executor: {
+      ...(thread.executor || {}),
+      metadata: {
+        ...(thread.executor?.metadata || {}),
+        ...liveCodexMetadata,
+      },
+    },
+  };
   const state = status?.state || thread.state || "sleeping";
   const ready = state === "ready";
   const lastActivityAt = messages.at(-1)?.createdAt || thread.updatedAt || thread.createdAt || null;
@@ -157,7 +194,7 @@ async function threadRuntimeSummary(thread: any, messages: any[] = []) {
     threadUpdatedAt: thread.updatedAt || lastActivityAt,
     inferredThreadId: codexThreadId(thread) || null,
     wakePolicy: thread.wakePolicy || "wake-on-message",
-    ...codexMetadata(thread),
+    ...codexMetadata(codexThread),
   };
 }
 

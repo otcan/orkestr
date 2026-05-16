@@ -10,7 +10,7 @@ import { runNextThreadMessage } from "../packages/core/src/executors.js";
 import { runtimeStatus } from "../packages/core/src/runtime-leases.js";
 import { parseThreadInputCommand } from "../packages/core/src/thread-commands.js";
 import { createThreadWorker, listThreadWorkers, updateThreadRepo } from "../packages/core/src/thread-workers.js";
-import { createThread, enqueueThreadInput, listThreadMessages, listThreads } from "../packages/core/src/threads.js";
+import { appendThreadMessage, createThread, enqueueThreadInput, listThreadMessages, listThreads } from "../packages/core/src/threads.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -154,6 +154,43 @@ test("thread APIs create, queue, run, and list messages", async () => {
     const payload = await listed.json();
     assert.equal(payload.thread.id, "api-thread");
     assert.equal(payload.messages.length, 2);
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+    if (priorHome === undefined) delete process.env.ORKESTR_HOME;
+    else process.env.ORKESTR_HOME = priorHome;
+  }
+});
+
+test("thread message API hides adjacent duplicate rollout assistant records", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-duplicate-api-"));
+  const priorHome = process.env.ORKESTR_HOME;
+  process.env.ORKESTR_HOME = home;
+  const server = await startServer({ port: 0, host: "127.0.0.1" });
+  const { port } = server.address();
+  const baseUrl = `http://127.0.0.1:${port}`;
+  try {
+    await createThread({ id: "duplicate-api-thread", name: "Duplicate API Thread" }, { ORKESTR_HOME: home });
+    await appendThreadMessage("duplicate-api-thread", {
+      role: "assistant",
+      source: "codex-rollout",
+      phase: "final_answer",
+      text: "same final answer",
+      createdAt: "2026-05-16T10:00:00.000Z",
+    }, { ORKESTR_HOME: home });
+    await appendThreadMessage("duplicate-api-thread", {
+      role: "assistant",
+      source: "codex-rollout",
+      phase: "final_answer",
+      text: "same final answer",
+      createdAt: "2026-05-16T10:00:00.500Z",
+    }, { ORKESTR_HOME: home });
+
+    const listed = await fetch(`${baseUrl}/api/threads/duplicate-api-thread/messages`);
+    const payload = await listed.json();
+
+    assert.equal(listed.status, 200);
+    assert.equal(payload.messages.length, 1);
+    assert.equal(payload.messages[0].text, "same final answer");
   } finally {
     await new Promise((resolve) => server.close(resolve));
     if (priorHome === undefined) delete process.env.ORKESTR_HOME;

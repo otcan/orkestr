@@ -7,6 +7,7 @@ import type { INestApplication } from "@nestjs/common";
 import { loadOverlayExecutorAdapters, recoverInterruptedExecutions } from "../../../packages/core/src/executors.js";
 import { drainAllPendingThreadInputs, syncRuntimeLeases } from "../../../packages/core/src/runtime-leases.js";
 import { markDueTimers } from "../../../packages/core/src/timers.js";
+import { deliverWhatsAppReplies } from "../../../packages/connectors/src/whatsapp.js";
 import { ensureDataDirs } from "../../../packages/storage/src/paths.js";
 import { AppModule } from "./app.module.js";
 import { JsonErrorFilter } from "./common/json-error.filter.js";
@@ -34,12 +35,12 @@ export async function startServer({ port = 19812, host = "127.0.0.1", openBrowse
   const timer = setInterval(() => {
     markDueTimers()
       .then(() => drainAllPendingThreadInputs())
-      .then(() => syncRuntimeLeases())
+      .then(() => syncRuntimeAndDeliverWhatsApp())
       .catch(() => {});
   }, 30_000);
 
   const runtimeMonitor = setInterval(() => {
-    syncRuntimeLeases().catch(() => {});
+    syncRuntimeAndDeliverWhatsApp().catch(() => {});
   }, 5_000);
 
   registerStaticFallback(app);
@@ -54,6 +55,14 @@ export async function startServer({ port = 19812, host = "127.0.0.1", openBrowse
   }
 
   return serverHandle(app, timer, runtimeMonitor);
+}
+
+async function syncRuntimeAndDeliverWhatsApp() {
+  const synced = await syncRuntimeLeases();
+  if ((synced.appended || 0) > 0) {
+    await deliverWhatsAppReplies().catch(() => {});
+  }
+  return synced;
 }
 
 export function serverHandle(app: INestApplication, timer?: NodeJS.Timeout, runtimeMonitor?: NodeJS.Timeout) {

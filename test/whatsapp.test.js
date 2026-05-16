@@ -7,7 +7,7 @@ import { startServer } from "../apps/server/src/server.js";
 import { runNextAgentMessage, runNextThreadMessage } from "../packages/core/src/executors.js";
 import { listAgentMessages } from "../packages/core/src/messages.js";
 import { getSetupStatus } from "../packages/core/src/setup.js";
-import { createThread, listThreadMessages } from "../packages/core/src/threads.js";
+import { appendThreadMessage, createThread, listThreadMessages } from "../packages/core/src/threads.js";
 import { deliverWhatsAppReplies, getWhatsAppStatus, routeWhatsAppInbound } from "../packages/connectors/src/whatsapp.js";
 import { writeConnectorConfig } from "../packages/storage/src/config.js";
 
@@ -177,4 +177,62 @@ test("whatsapp inbound can route directly to a thread and mirror its reply once"
   assert.equal(duplicate.delivered.length, 0);
   assert.equal(calls[0].url.pathname, "/send-text");
   assert.equal(calls[0].body.to, "chat-thread");
+});
+
+test("whatsapp inbound routes through enabled thread bindings", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-binding-"));
+  const env = { ORKESTR_HOME: home };
+  await createThread({
+    id: "bound-thread",
+    name: "Bound Thread",
+    binding: {
+      connector: "whatsapp",
+      chatId: "chat-bound",
+      displayName: "Bound Chat",
+      enabled: true,
+      outboundAccountId: "bound-account",
+    },
+  }, env);
+
+  const routed = await routeWhatsAppInbound({ eventId: "wa-bound-1", chatId: "chat-bound", text: "bound message" }, env);
+  const messages = await listThreadMessages("bound-thread", env);
+
+  assert.equal(routed.threadId, "bound-thread");
+  assert.equal(messages.length, 1);
+  assert.equal(messages[0].connector, "whatsapp");
+  assert.equal(messages[0].accountId, "bound-account");
+});
+
+test("whatsapp delivery skips duplicate live Codex answers for the same chat", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-duplicate-reply-"));
+  const env = { ORKESTR_HOME: home };
+  await createThread({ id: "thread-duplicate-wa", name: "Duplicate WA Thread" }, env);
+  await writeConnectorConfig("whatsapp", {
+    bridgeUrl: "http://wa.local",
+    threadRoutes: { "chat-duplicate": "thread-duplicate-wa" },
+  }, env);
+  const routed = await routeWhatsAppInbound({ eventId: "wa-duplicate-1", chatId: "chat-duplicate", text: "question" }, env);
+  for (let index = 0; index < 2; index += 1) {
+    await appendThreadMessage("thread-duplicate-wa", {
+      role: "assistant",
+      source: "codex-rollout",
+      phase: "final_answer",
+      state: "completed",
+      text: "same answer",
+      parentMessageId: routed.message.id,
+      connector: "whatsapp",
+      chatId: "chat-duplicate",
+    }, env);
+  }
+
+  const calls = [];
+  const delivery = await deliverWhatsAppReplies(env, async (url, options) => {
+    calls.push({ url, body: JSON.parse(options.body) });
+    return response({ ok: true, ids: ["sent-duplicate"] });
+  });
+
+  assert.equal(delivery.delivered.length, 1);
+  assert.equal(delivery.skipped.some((item) => item.reason === "duplicate_text"), true);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].body.text, "same answer");
 });

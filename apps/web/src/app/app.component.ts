@@ -816,12 +816,25 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   }
 
   codexModeValue(thread: ThreadSummary | null): string {
-    const mode = String(thread?.codexMode || thread?.desiredCodexMode || "").toLowerCase();
-    return mode === "plan" ? "plan" : "code";
+    const mode = String(
+      thread?.codexMode ||
+      thread?.desiredCodexMode ||
+      thread?.codexModeLabel ||
+      thread?.codexModeSource ||
+      "",
+    ).toLowerCase();
+    if (mode.includes("plan")) return "plan";
+    if (mode.includes("code")) return "code";
+    return "";
   }
 
   codexModelName(thread: ThreadSummary | null): string {
-    return String(thread?.codexModel || "Model unknown");
+    return String(
+      thread?.codexModel ||
+      this.objectValue(thread?.runtime, "codexModel") ||
+      this.objectValue(thread?.["executor"], "codexModel") ||
+      "Model not synced",
+    );
   }
 
   codexReasoningEffortLabel(thread: ThreadSummary | null): string {

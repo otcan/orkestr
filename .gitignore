@@ -9,5 +9,5 @@ dist/
 .orkestr/
 data/
 secrets/
-browsers/
+/browsers/
 *.log

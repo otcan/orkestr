@@ -17,6 +17,7 @@ import {
 
 const execFileAsync = promisify(execFile);
 const deliveryLocks = new Set();
+let runtimeSyncInFlight = null;
 
 function nowIso() {
   return new Date().toISOString();
@@ -80,6 +81,10 @@ function eventId({ threadId = "", timestamp = "", role = "", phase = "", text = 
     .createHash("sha256")
     .update(`${threadId}\n${timestamp}\n${role}\n${phase}\n${String(text || "").replace(/\s+/g, " ").trim()}`)
     .digest("hex");
+}
+
+function normalizedTextKey(value) {
+  return String(value || "").replace(/\s+/g, " ").trim();
 }
 
 async function runtimeLeasesPath(env) {
@@ -226,6 +231,36 @@ async function resolveCodexRolloutPath(threadId) {
 
 function sqlString(value) {
   return String(value || "").replaceAll("'", "''");
+}
+
+export async function resolveCodexThreadMetadata(threadOrId, env = process.env) {
+  const threadId = typeof threadOrId === "string" ? threadOrId : codexThreadId(threadOrId);
+  const id = String(threadId || "").trim();
+  if (!/^[0-9a-f-]{36}$/i.test(id)) return {};
+  for (const home of codexHomes(env)) {
+    const dbPath = path.join(home, "state_5.sqlite");
+    try {
+      const query = [
+        "select model, reasoning_effort, model_provider, tokens_used, rollout_path",
+        "from threads",
+        `where id='${sqlString(id)}'`,
+        "limit 1;",
+      ].join(" ");
+      const { stdout } = await execFileAsync("sqlite3", ["-readonly", "-separator", "\t", dbPath, query]);
+      const [model, reasoningEffort, modelProvider, tokensUsed, rolloutPath] = String(stdout || "").trim().split("\t");
+      const metadata = {};
+      if (model) metadata.codexModel = model;
+      if (reasoningEffort) metadata.codexReasoningEffort = reasoningEffort;
+      if (modelProvider) metadata.codexModelProvider = modelProvider;
+      const parsedTokens = Number(tokensUsed || 0);
+      if (Number.isFinite(parsedTokens) && parsedTokens > 0) metadata.codexTokenUsage = { total_tokens: parsedTokens };
+      if (rolloutPath) metadata.codexRolloutPath = rolloutPath;
+      if (Object.keys(metadata).length) return metadata;
+    } catch {
+      // Ignore missing sqlite, stale homes, or older Codex schemas.
+    }
+  }
+  return {};
 }
 
 async function resolveCodexThreadByWorkspace(workspace, startedAt, env = process.env) {
@@ -458,10 +493,15 @@ function submitDelayMs(env = process.env) {
 
 function inputTextForMessage(message) {
   const text = String(message.text || "").trim();
+  let body = text;
   if (message.promptFile) {
-    return text ? `${text}\n\nPrompt file: ${message.promptFile}` : `Run the prompt file: ${message.promptFile}`;
+    body = text ? `${text}\n\nPrompt file: ${message.promptFile}` : `Run the prompt file: ${message.promptFile}`;
   }
-  return text;
+  if (message.connector === "whatsapp" || message.source === "whatsapp_inbound") {
+    const source = String(message.from || message.chatId || "WhatsApp").trim();
+    return `[WhatsApp: ${source}]\n\n${body}`;
+  }
+  return body;
 }
 
 export async function deliverPendingThreadInputs(threadId, env = process.env) {
@@ -532,6 +572,7 @@ function collectMessageText(content = []) {
 
 function parseAssistantRolloutMessages(body, threadId, baseOffset = 0) {
   const messages = [];
+  const keyIndexes = new Map();
   let offset = baseOffset;
   for (const line of String(body || "").split("\n")) {
     const cursor = offset;
@@ -557,7 +598,7 @@ function parseAssistantRolloutMessages(body, threadId, baseOffset = 0) {
     }
     if (!text) continue;
     const timestamp = parsed.timestamp || nowIso();
-    messages.push({
+    const message = {
       cursor,
       role: "assistant",
       source: "codex-rollout",
@@ -565,15 +606,42 @@ function parseAssistantRolloutMessages(body, threadId, baseOffset = 0) {
       phase,
       text,
       eventId: eventId({ threadId, timestamp, role: "assistant", phase, text }),
-    });
+      sourceFormat: parsed?.type === "response_item" ? "response_item" : "event_msg",
+    };
+    const key = ["assistant", String(phase || ""), normalizedTextKey(text)].join("\n");
+    const existingIndex = keyIndexes.get(key);
+    if (existingIndex === undefined) {
+      keyIndexes.set(key, messages.length);
+      messages.push(message);
+    } else if (messages[existingIndex]?.sourceFormat !== "response_item" && message.sourceFormat === "response_item") {
+      messages[existingIndex] = message;
+    }
   }
-  return messages;
+  return messages.map(({ sourceFormat, ...message }) => message);
+}
+
+function latestWhatsAppInput(messages = []) {
+  return [...messages].reverse().find((message) =>
+    message?.role === "user" &&
+    (message.connector === "whatsapp" || message.source === "whatsapp_inbound") &&
+    String(message.chatId || "").trim(),
+  ) || null;
 }
 
 async function syncLeaseRollout(lease, env = process.env) {
+  const thread = await getThread(lease.threadId, env);
+  const codexMetadata = await resolveCodexThreadMetadata(thread, env).catch(() => ({}));
+  if (Object.keys(codexMetadata).length) {
+    await updateThread(lease.threadId, {
+      ...codexMetadata,
+      executor: {
+        ...(thread?.executor || {}),
+        metadata: { ...(thread?.executor?.metadata || {}), ...codexMetadata },
+      },
+    }, env).catch(() => {});
+  }
   let rolloutPath = lease.rolloutPath;
   if (!rolloutPath) {
-    const thread = await getThread(lease.threadId, env);
     rolloutPath = await resolveCodexRolloutPath(codexThreadId(thread));
     if (!rolloutPath) {
       const discovered = await resolveCodexThreadByWorkspace(lease.workspace, lease.startedAt, env);
@@ -608,6 +676,7 @@ async function syncLeaseRollout(lease, env = process.env) {
     String(message.phase || ""),
     String(message.text || "").replace(/\s+/g, " ").trim(),
   ].join("\n")));
+  const whatsappParent = latestWhatsAppInput(existing);
   let appended = 0;
   for (const message of parsed) {
     const key = [message.eventId || "", message.role, String(message.phase || ""), message.text.replace(/\s+/g, " ").trim()].join("\n");
@@ -620,14 +689,18 @@ async function syncLeaseRollout(lease, env = process.env) {
       cursor: null,
       phase: message.phase,
       eventId: message.eventId,
-    }, env);
+      parentMessageId: whatsappParent?.id || null,
+      connector: whatsappParent ? "whatsapp" : "",
+      chatId: whatsappParent?.chatId || "",
+      accountId: whatsappParent?.accountId || "",
+      }, env);
     existingKeys.add(key);
     appended += 1;
   }
   return { lease: { ...lease, rolloutPath, rolloutOffset: Number(stats.size || 0), heartbeatAt: nowIso() }, appended };
 }
 
-export async function syncRuntimeLeases(env = process.env) {
+async function syncRuntimeLeasesOnce(env = process.env) {
   const leases = await listRuntimeLeases(env);
   let changed = false;
   let appended = 0;
@@ -657,6 +730,14 @@ export async function syncRuntimeLeases(env = process.env) {
   }
   if (changed) await saveRuntimeLeases(next, env);
   return { leases: next, appended };
+}
+
+export async function syncRuntimeLeases(env = process.env) {
+  if (runtimeSyncInFlight) return runtimeSyncInFlight;
+  runtimeSyncInFlight = syncRuntimeLeasesOnce(env).finally(() => {
+    runtimeSyncInFlight = null;
+  });
+  return runtimeSyncInFlight;
 }
 
 export async function drainAllPendingThreadInputs(env = process.env) {

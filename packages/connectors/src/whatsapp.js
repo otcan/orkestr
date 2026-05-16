@@ -1,10 +1,13 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import crypto from "node:crypto";
 import { enqueueAgentMessage } from "../../core/src/messages.js";
 import { enqueueThreadInput, listThreadMessages, listThreads } from "../../core/src/threads.js";
 import { dataPaths, ensureDataDirs } from "../../storage/src/paths.js";
 import { readConnectorConfig } from "../../storage/src/config.js";
 import { appendEvent, readJson, writeJson } from "../../storage/src/store.js";
+
+let whatsappDeliveryInFlight = null;
 
 async function fetchJson(url, fetchImpl) {
   const response = await fetchImpl(url, { signal: AbortSignal.timeout(2000) });
@@ -109,15 +112,25 @@ function routeAgentId(input, config) {
   );
 }
 
-function routeThreadId(input, config) {
+async function routeThread(input, config, env) {
   const chatId = pickString(input.chatId, input.chat?.id, input.fromChatId);
   const routes = config.threadRoutes || config.threads || {};
-  return pickString(
+  const explicit = pickString(
     input.threadId,
     input.targetThreadId,
     chatId ? routes[chatId] : "",
     config.defaultThreadId,
   );
+  if (explicit) return { threadId: explicit, binding: null };
+  if (!chatId) return { threadId: "", binding: null };
+  const threads = await listThreads(env);
+  const thread = threads.find((item) => {
+    const binding = item?.binding || {};
+    return binding.enabled !== false &&
+      String(binding.connector || "whatsapp") === "whatsapp" &&
+      String(binding.chatId || "").trim() === chatId;
+  });
+  return thread ? { threadId: thread.id, binding: thread.binding || null } : { threadId: "", binding: null };
 }
 
 async function readWhatsAppState(env) {
@@ -153,7 +166,8 @@ export async function routeWhatsAppInbound(input = {}, env = process.env) {
     };
   }
 
-  const threadId = routeThreadId(input, config);
+  const threadRoute = await routeThread(input, config, env);
+  const threadId = threadRoute.threadId;
   const agentId = threadId ? "" : routeAgentId(input, config);
   if (!threadId && !agentId) throw badRequest("whatsapp_target_required");
 
@@ -163,7 +177,7 @@ export async function routeWhatsAppInbound(input = {}, env = process.env) {
 
   const chatId = pickString(input.chatId, input.chat?.id, input.fromChatId);
   const from = pickString(input.from, input.sender, input.author);
-  const accountId = pickString(input.accountId);
+  const accountId = pickString(input.accountId, threadRoute.binding?.outboundAccountId);
   const messageInput = {
     role: "user",
     source: "whatsapp_inbound",
@@ -247,7 +261,26 @@ async function sendWhatsAppText({ chatId, text, accountId, config, env, fetchImp
   return payload;
 }
 
-export async function deliverWhatsAppReplies(env = process.env, fetchImpl = fetch) {
+function normalizedDeliveryText(value) {
+  return String(value || "").replace(/\s+/g, " ").trim();
+}
+
+function deliveryTextKey(chatId, text) {
+  return crypto
+    .createHash("sha256")
+    .update(`${String(chatId || "").trim()}\n${normalizedDeliveryText(text)}`)
+    .digest("hex");
+}
+
+function shouldMirrorWhatsAppReply(message) {
+  if (message.source === "codex-rollout") {
+    const phase = String(message.phase || "final_answer").trim();
+    return !phase || phase === "final_answer";
+  }
+  return true;
+}
+
+async function deliverWhatsAppRepliesOnce(env = process.env, fetchImpl = fetch) {
   const config = await readConnectorConfig("whatsapp", env);
   const bridgeUrl = pickString(env.WHATSAPP_BRIDGE_URL, config.bridgeUrl);
   if (!bridgeUrl) {
@@ -255,6 +288,8 @@ export async function deliverWhatsAppReplies(env = process.env, fetchImpl = fetc
   }
   const state = await readWhatsAppState(env);
   const deliveredIds = new Set((state.outboundDeliveries || []).map((delivery) => delivery.messageId));
+  const deliveredTextKeys = new Set((state.outboundDeliveries || []).map((delivery) => delivery.textKey).filter(Boolean));
+  const batchTextKeys = new Set();
   const outboundDeliveries = [...(state.outboundDeliveries || [])];
   const delivered = [];
   const skipped = [];
@@ -267,6 +302,7 @@ export async function deliverWhatsAppReplies(env = process.env, fetchImpl = fetc
   for (const { agentId, threadId, messages, kind } of messageSets) {
     for (const message of messages) {
       if (message.role !== "assistant" || message.state !== "completed" || deliveredIds.has(message.id)) continue;
+      if (!shouldMirrorWhatsAppReply(message)) continue;
       const parent = messages.find((entry) => entry.id === message.parentMessageId);
       const whatsappOrigin = parent?.connector === "whatsapp" || parent?.source === "whatsapp_inbound" || message.connector === "whatsapp";
       if (!whatsappOrigin) continue;
@@ -276,6 +312,11 @@ export async function deliverWhatsAppReplies(env = process.env, fetchImpl = fetc
       const accountId = pickString(message.accountId, parent?.accountId);
       if (!chatId || !text) {
         skipped.push({ agentId, messageId: message.id, reason: !chatId ? "missing_chat_id" : "missing_text" });
+        continue;
+      }
+      const textKey = deliveryTextKey(chatId, text);
+      if (deliveredTextKeys.has(textKey) || batchTextKeys.has(textKey)) {
+        skipped.push({ agentId, threadId, messageId: message.id, reason: "duplicate_text" });
         continue;
       }
 
@@ -289,11 +330,14 @@ export async function deliverWhatsAppReplies(env = process.env, fetchImpl = fetc
           parentMessageId: message.parentMessageId,
           chatId,
           accountId,
+          textKey,
           deliveredAt: new Date().toISOString(),
           bridgeResponse: payload,
         };
         outboundDeliveries.push(delivery);
         deliveredIds.add(message.id);
+        deliveredTextKeys.add(textKey);
+        batchTextKeys.add(textKey);
         delivered.push(delivery);
         await appendEvent({ type: "whatsapp_outbound_delivered", agentId: agentId || null, threadId: threadId || null, messageId: message.id, chatId }, env);
       } catch (error) {
@@ -309,4 +353,12 @@ export async function deliverWhatsAppReplies(env = process.env, fetchImpl = fetc
     await writeWhatsAppState(state, env);
   }
   return { delivered, skipped, failed };
+}
+
+export async function deliverWhatsAppReplies(env = process.env, fetchImpl = fetch) {
+  if (whatsappDeliveryInFlight) return whatsappDeliveryInFlight;
+  whatsappDeliveryInFlight = deliverWhatsAppRepliesOnce(env, fetchImpl).finally(() => {
+    whatsappDeliveryInFlight = null;
+  });
+  return whatsappDeliveryInFlight;
 }
