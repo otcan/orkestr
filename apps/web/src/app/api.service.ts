@@ -219,6 +219,18 @@ export interface ThreadWorkerResponse {
   sourceDirty?: boolean;
 }
 
+export interface ThreadRepoResponse {
+  thread: ThreadSummary;
+  repo?: {
+    repoPath?: string | null;
+    branchName?: string | null;
+    baseBranch?: string | null;
+    baseCommit?: string | null;
+    sourceDirty?: boolean;
+  };
+  detected?: Record<string, unknown>;
+}
+
 @Injectable({ providedIn: "root" })
 export class ApiService {
   private readonly http = inject(HttpClient);
@@ -352,6 +364,14 @@ export class ApiService {
 
   createThreadWorker(id: string, body: Record<string, unknown>): Observable<ThreadWorkerResponse> {
     return this.http.post<ThreadWorkerResponse>(this.api(`/threads/${encodeURIComponent(id)}/workers`), body);
+  }
+
+  updateThreadRepo(id: string, body: Record<string, unknown>): Observable<ThreadRepoResponse> {
+    return this.http.put<ThreadRepoResponse>(this.api(`/threads/${encodeURIComponent(id)}/repo`), body);
+  }
+
+  detectThreadRepo(id: string): Observable<ThreadRepoResponse> {
+    return this.http.post<ThreadRepoResponse>(this.api(`/threads/${encodeURIComponent(id)}/repo/detect`), {});
   }
 
   sendThreadInput(id: string, text: string, attachments: Array<Record<string, unknown>> = []): Observable<unknown> {

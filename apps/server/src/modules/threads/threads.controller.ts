@@ -20,7 +20,7 @@ import {
   listThreads,
   updateThread,
 } from "../../../../../packages/core/src/threads.js";
-import { createThreadWorker, listThreadWorkers } from "../../../../../packages/core/src/thread-workers.js";
+import { createThreadWorker, detectThreadRepo, listThreadWorkers, updateThreadRepo } from "../../../../../packages/core/src/thread-workers.js";
 import { parseThreadInputCommand } from "../../../../../packages/core/src/thread-commands.js";
 import { ensureDataDirs } from "../../../../../packages/storage/src/paths.js";
 import { ensureAttachmentsArray, httpError } from "../../common/http.js";
@@ -196,6 +196,27 @@ export class ThreadsController {
     return {
       ...result,
       worker: await threadRuntimeSummary(result.worker, await listThreadMessages(result.worker.id)),
+    };
+  }
+
+  @Put(":threadId/repo")
+  async updateRepo(@Param("threadId") threadId: string, @Body() body: Record<string, unknown> = {}) {
+    const result: any = await updateThreadRepo(threadId, body);
+    return {
+      ...result,
+      thread: await threadRuntimeSummary(result.thread, await listThreadMessages(result.thread.id)),
+    };
+  }
+
+  @Post(":threadId/repo/detect")
+  @HttpCode(200)
+  async detectRepo(@Param("threadId") threadId: string) {
+    const detected = await detectThreadRepo(threadId);
+    const result: any = await updateThreadRepo(threadId, detected);
+    return {
+      ...result,
+      detected,
+      thread: await threadRuntimeSummary(result.thread, await listThreadMessages(result.thread.id)),
     };
   }
 

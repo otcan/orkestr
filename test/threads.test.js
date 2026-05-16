@@ -9,7 +9,7 @@ import { startServer } from "../apps/server/src/server.js";
 import { runNextThreadMessage } from "../packages/core/src/executors.js";
 import { runtimeStatus } from "../packages/core/src/runtime-leases.js";
 import { parseThreadInputCommand } from "../packages/core/src/thread-commands.js";
-import { createThreadWorker, listThreadWorkers } from "../packages/core/src/thread-workers.js";
+import { createThreadWorker, listThreadWorkers, updateThreadRepo } from "../packages/core/src/thread-workers.js";
 import { createThread, enqueueThreadInput, listThreadMessages, listThreads } from "../packages/core/src/threads.js";
 
 const execFileAsync = promisify(execFile);
@@ -97,6 +97,20 @@ test("thread worker creation requires a git repository path", async () => {
   );
 });
 
+test("thread repo metadata can be saved as first-class thread state", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-repo-meta-"));
+  const repo = await createTempGitRepo("orkestr-thread-repo-meta-repo-");
+  const env = { ORKESTR_HOME: home };
+  await createThread({ id: "repo-thread", name: "Repo Thread" }, env);
+
+  const result = await updateThreadRepo("repo-thread", { repoPath: repo, branchName: "main" }, env);
+
+  assert.equal(result.thread.repoPath, repo);
+  assert.equal(result.thread.branchName, "main");
+  assert.equal(result.repo.branchName, "main");
+  assert.match(result.thread.baseCommit, /^[0-9a-f]{40}$/);
+});
+
 test("thread input commands strip /now before runtime delivery", () => {
   assert.deepEqual(parseThreadInputCommand({ text: "/now run this immediately" }), {
     command: "interrupt",
@@ -166,11 +180,19 @@ test("thread API creates worker threads", async () => {
     const payload = await created.json();
     const listed = await fetch(`${baseUrl}/api/threads/worker-api-parent/workers`);
     const listPayload = await listed.json();
+    const repoUpdate = await fetch(`${baseUrl}/api/threads/worker-api-parent/repo`, {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ repoPath: repo, branchName: "main" }),
+    });
+    const repoPayload = await repoUpdate.json();
 
     assert.equal(created.status, 201);
     assert.equal(payload.worker.parentThreadId, "worker-api-parent");
     assert.match(payload.worker.branchName, /^orkestr\/Worker-API-Parent\//);
     assert.equal(listPayload.workers.length, 1);
+    assert.equal(repoUpdate.status, 200);
+    assert.equal(repoPayload.thread.repoPath, repo);
   } finally {
     await new Promise((resolve) => server.close(resolve));
     if (priorHome === undefined) delete process.env.ORKESTR_HOME;

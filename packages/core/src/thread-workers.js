@@ -166,6 +166,56 @@ async function worktreeDirty(repoPath) {
   return Boolean(status.trim());
 }
 
+export async function detectThreadRepo(threadId, env = process.env) {
+  const thread = await getThread(threadId, env);
+  if (!thread) throw httpError("thread_not_found", 404);
+  const repoPath = await resolveParentRepo(thread, {});
+  const branchName = await currentBranch(repoPath);
+  const baseCommit = await git(repoPath, ["rev-parse", "HEAD"]).then((result) => result.stdout).catch(() => "");
+  const sourceDirty = await worktreeDirty(repoPath);
+  return { repoPath, branchName, baseBranch: branchName, baseCommit, sourceDirty };
+}
+
+export async function updateThreadRepo(threadId, input = {}, env = process.env) {
+  const thread = await getThread(threadId, env);
+  if (!thread) throw httpError("thread_not_found", 404);
+  const shouldDetect = input.detect === true;
+  let repoPath = nonEmptyString(input.repoPath || input.projectRoot || input.cwd);
+  let branchName = nonEmptyString(input.branchName || input.branch || input.baseBranch);
+  let baseCommit = nonEmptyString(input.baseCommit);
+  let sourceDirty = Boolean(input.sourceDirty);
+
+  if (shouldDetect && !repoPath) {
+    const detected = await detectThreadRepo(thread.id, env);
+    repoPath = detected.repoPath;
+    branchName ||= detected.branchName;
+    baseCommit ||= detected.baseCommit;
+    sourceDirty = detected.sourceDirty;
+  }
+
+  if (repoPath) {
+    const root = await resolveGitRoot(repoPath);
+    if (!root) throw httpError("invalid_repo_path", 400);
+    repoPath = root;
+    branchName ||= await currentBranch(repoPath);
+    baseCommit ||= await git(repoPath, ["rev-parse", "HEAD"]).then((result) => result.stdout).catch(() => "");
+    sourceDirty = await worktreeDirty(repoPath);
+  } else if (!branchName) {
+    repoPath = "";
+  }
+
+  const patch = {
+    repoPath: repoPath || null,
+    branchName: branchName || null,
+    baseBranch: branchName || null,
+    baseCommit: baseCommit || null,
+    sourceDirty,
+  };
+  const updated = await updateThread(thread.id, patch, env);
+  await appendEvent({ type: "thread_repo_updated", threadId: thread.id, repoPath: patch.repoPath, branchName: patch.branchName }, env);
+  return { thread: updated, repo: patch };
+}
+
 function rootThreadId(parent) {
   return nonEmptyString(parent.rootThreadId || parent.parentThreadId || parent.id);
 }
