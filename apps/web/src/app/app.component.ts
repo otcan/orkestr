@@ -2,9 +2,21 @@ import { DatePipe } from "@angular/common";
 import { AfterViewChecked, ChangeDetectorRef, Component, ElementRef, OnDestroy, OnInit, ViewChild, inject } from "@angular/core";
 import { FormsModule } from "@angular/forms";
 import { firstValueFrom } from "rxjs";
-import { ApiService, ThreadMessage, ThreadSummary, ThreadUploadInput, TimerRecord } from "./api.service";
+import {
+  Agent,
+  AgentTemplate,
+  ApiService,
+  ConnectorStatus,
+  EventRecord,
+  SetupStatus,
+  ThreadAttachResponse,
+  ThreadMessage,
+  ThreadSummary,
+  ThreadUploadInput,
+  TimerRecord,
+} from "./api.service";
 
-type Panel = "chat" | "history" | "timers" | "attach" | "runtime";
+type Panel = "chat" | "history" | "timers" | "attach" | "runtime" | "raw" | "ops";
 
 interface PendingFile {
   id: string;
@@ -68,10 +80,16 @@ interface PendingFile {
               </p>
             </div>
             <div class="head-actions">
-              <a class="button secondary" [href]="rawUrl(thread)" target="_blank" rel="noopener">Raw</a>
-              <button class="secondary" type="button" (click)="wakeSelected()" [disabled]="busy">Wake</button>
-              <button class="secondary" type="button" (click)="sleepSelected()" [disabled]="busy">Sleep</button>
-              <button class="secondary danger-soft" type="button" (click)="recoverSelected()" [disabled]="busy">Recover</button>
+              <button class="secondary" type="button" [class.active]="activePanel === 'raw'" (click)="openPanel('raw')">Raw</button>
+              @if (canWakeThread(thread)) {
+                <button class="secondary" type="button" (click)="wakeSelected()" [disabled]="busy">Wake</button>
+              }
+              @if (canSleepThread(thread)) {
+                <button class="secondary" type="button" (click)="sleepSelected()" [disabled]="busy">Sleep</button>
+              }
+              @if (canRecoverThread(thread)) {
+                <button class="secondary danger-soft" type="button" (click)="recoverSelected()" [disabled]="busy">Recover</button>
+              }
             </div>
           </header>
 
@@ -81,6 +99,8 @@ interface PendingFile {
             <button type="button" [class.active]="activePanel === 'timers'" (click)="openPanel('timers')">Timers</button>
             <button type="button" [class.active]="activePanel === 'attach'" (click)="openPanel('attach')">Attach</button>
             <button type="button" [class.active]="activePanel === 'runtime'" (click)="openPanel('runtime')">Runtime</button>
+            <button type="button" [class.active]="activePanel === 'raw'" (click)="openPanel('raw')">Raw</button>
+            <button type="button" [class.active]="activePanel === 'ops'" (click)="openPanel('ops')">Ops</button>
           </nav>
 
           @if (error) {
@@ -229,6 +249,178 @@ interface PendingFile {
             </section>
           }
 
+          @if (activePanel === "raw") {
+            <section class="panel-body raw-panel">
+              <div class="panel-title">
+                <div>
+                  <p class="eyebrow">Raw Terminal</p>
+                  <h3>{{ attachDetails?.ok ? "Attach target" : "No attachable runtime" }}</h3>
+                </div>
+                <button class="secondary" type="button" (click)="loadRaw()" [disabled]="busy">Reload</button>
+              </div>
+              @if (attachDetails?.ok) {
+                <div class="terminal-card">
+                  <span class="term-prompt">$</span>
+                  <code>{{ attachDetails?.attachCommand }}</code>
+                </div>
+                <dl class="kv-grid">
+                  <div>
+                    <dt>State</dt>
+                    <dd>{{ attachDetails?.state || runtimeValue("state") || "unknown" }}</dd>
+                  </div>
+                  <div>
+                    <dt>Session</dt>
+                    <dd>{{ runtimeValue("sessionName") || thread.sessionName || "n/a" }}</dd>
+                  </div>
+                  <div>
+                    <dt>Pane</dt>
+                    <dd>{{ runtimeValue("paneId") || thread.paneId || "n/a" }}</dd>
+                  </div>
+                  <div>
+                    <dt>Workspace</dt>
+                    <dd>{{ leaseValue("workspace") || "n/a" }}</dd>
+                  </div>
+                </dl>
+                <p class="helper">Raw stays inside Orkestr now. Browser terminal embedding will use this attach target once a web PTY endpoint is available.</p>
+              } @else {
+                <div class="empty-state">
+                  <h3>{{ attachDetails?.message || "This thread has no live terminal lease." }}</h3>
+                  @if (canWakeThread(thread)) {
+                    <p>Wake the thread first, then reopen Raw.</p>
+                  } @else {
+                    <p>This thread is not currently eligible for raw terminal attach.</p>
+                  }
+                </div>
+              }
+            </section>
+          }
+
+          @if (activePanel === "ops") {
+            <section class="panel-body ops-panel">
+              <div class="panel-title">
+                <div>
+                  <p class="eyebrow">Orkestr Cockpit</p>
+                  <h3>System, connectors, agents, timers, browsers</h3>
+                </div>
+                <button class="secondary" type="button" (click)="loadOps()" [disabled]="busy">Reload</button>
+              </div>
+              <div class="ops-grid">
+                <article class="ops-card">
+                  <h4>System</h4>
+                  <p>{{ opsVersion?.name || "orkestr" }} {{ opsVersion?.version || "" }}</p>
+                  <small>Setup: {{ opsSetup?.setupState || "unknown" }} · Data: {{ opsSetup?.home || "n/a" }}</small>
+                </article>
+                <article class="ops-card">
+                  <h4>WhatsApp</h4>
+                  <p>{{ objectValue(opsWhatsApp, "state") || objectValue(opsWhatsApp, "status") || "unknown" }}</p>
+                  <small>{{ objectValue(opsWhatsApp, "summary") || objectValue(opsWhatsApp, "accountId") || "bridge status" }}</small>
+                </article>
+                <article class="ops-card">
+                  <h4>Runtime Leases</h4>
+                  <p>{{ opsRuntimeLeases.length }} leases</p>
+                  <small>Budget: {{ objectValue(opsRuntimeBudget, "maxLiveThreads") || "n/a" }} live threads</small>
+                </article>
+                <article class="ops-card">
+                  <h4>Executors</h4>
+                  <p>{{ opsExecutors.length }} adapters</p>
+                  <small>{{ opsExecutions.length }} recent executions</small>
+                </article>
+              </div>
+
+              <div class="ops-columns">
+                <section>
+                  <h4>Connectors</h4>
+                  <div class="compact-list">
+                    @for (connector of opsConnectors; track connector.id) {
+                      <article class="compact-row">
+                        <strong>{{ connector.label || connector.id }}</strong>
+                        <span>{{ connector.state }}</span>
+                        <p>{{ connector.summary }}</p>
+                      </article>
+                    } @empty {
+                      <p class="empty">No connector status loaded.</p>
+                    }
+                  </div>
+                </section>
+
+                <section>
+                  <h4>Agents</h4>
+                  <div class="compact-list">
+                    @for (agent of opsAgents; track agent.id) {
+                      <article class="compact-row">
+                        <strong>{{ agent.name || agent.id }}</strong>
+                        <span>{{ agent.state }}</span>
+                        <p>{{ (agent.connectors || []).join(", ") }}</p>
+                      </article>
+                    } @empty {
+                      <p class="empty">No agents yet.</p>
+                    }
+                  </div>
+                </section>
+
+                <section>
+                  <h4>Agent Templates</h4>
+                  <div class="compact-list">
+                    @for (template of opsAgentTemplates; track template.id) {
+                      <article class="compact-row">
+                        <strong>{{ template.name }}</strong>
+                        <span>{{ template.id }}</span>
+                        <p>{{ template.tagline }}</p>
+                      </article>
+                    } @empty {
+                      <p class="empty">No templates loaded.</p>
+                    }
+                  </div>
+                </section>
+
+                <section>
+                  <h4>Global Timers</h4>
+                  <div class="compact-list">
+                    @for (timer of opsTimers; track timer.id) {
+                      <article class="compact-row">
+                        <strong>{{ timer.label || timer.id }}</strong>
+                        <span>{{ timer.cadence }} · {{ timer.nextRunAt | date: "MMM d, HH:mm" }}</span>
+                        <p>{{ timer.target }}</p>
+                      </article>
+                    } @empty {
+                      <p class="empty">No global timers loaded.</p>
+                    }
+                  </div>
+                </section>
+
+                <section>
+                  <h4>Browsers</h4>
+                  <div class="compact-list">
+                    @for (browser of opsBrowsers; track objectValue(browser, "slug") || objectValue(browser, "id") || jsonLine(browser)) {
+                      <article class="compact-row">
+                        <strong>{{ objectValue(browser, "label") || objectValue(browser, "slug") || objectValue(browser, "id") }}</strong>
+                        <span>{{ objectValue(browser, "state") || objectValue(browser, "status") || "registered" }}</span>
+                        <p>{{ objectValue(browser, "url") || objectValue(browser, "profile") || jsonLine(browser) }}</p>
+                      </article>
+                    } @empty {
+                      <p class="empty">No browsers registered.</p>
+                    }
+                  </div>
+                </section>
+
+                <section>
+                  <h4>Events</h4>
+                  <div class="compact-list">
+                    @for (event of opsEvents; track eventKey(event)) {
+                      <article class="compact-row">
+                        <strong>{{ event.type }}</strong>
+                        <span>{{ event.ts | date: "MMM d, HH:mm:ss" }}</span>
+                        <p>{{ jsonLine(event) }}</p>
+                      </article>
+                    } @empty {
+                      <p class="empty">No events loaded.</p>
+                    }
+                  </div>
+                </section>
+              </div>
+            </section>
+          }
+
           <form
             class="composer"
             [class.dragging]="draggingUpload"
@@ -282,6 +474,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   private readonly cdr = inject(ChangeDetectorRef);
   private readonly popStateHandler = () => {
     this.selectedId = this.idFromPath();
+    this.activePanel = this.panelFromPath();
     void this.loadSelectedThread(true);
   };
 
@@ -292,6 +485,20 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   historyMessages: ThreadMessage[] = [];
   timers: TimerRecord[] = [];
   runtimeDetails: Record<string, unknown> | null = null;
+  attachDetails: ThreadAttachResponse | null = null;
+  opsSetup: SetupStatus | null = null;
+  opsVersion: Record<string, unknown> | null = null;
+  opsWhatsApp: Record<string, unknown> | null = null;
+  opsRuntimeBudget: Record<string, unknown> | null = null;
+  opsConnectors: ConnectorStatus[] = [];
+  opsAgents: Agent[] = [];
+  opsAgentTemplates: AgentTemplate[] = [];
+  opsTimers: TimerRecord[] = [];
+  opsEvents: EventRecord[] = [];
+  opsBrowsers: Array<Record<string, unknown>> = [];
+  opsRuntimeLeases: Array<Record<string, unknown>> = [];
+  opsExecutors: Array<Record<string, unknown>> = [];
+  opsExecutions: Array<Record<string, unknown>> = [];
   selectedId = "";
   filterText = "";
   draft = "";
@@ -311,10 +518,12 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
 
   private poller?: ReturnType<typeof setInterval>;
   private shouldStickToBottom = true;
+  private scrollAfterRender = true;
   private lastMessageSignature = "";
 
   ngOnInit(): void {
     this.selectedId = this.idFromPath();
+    this.activePanel = this.panelFromPath();
     globalThis.addEventListener?.("popstate", this.popStateHandler);
     void this.refresh(true);
     this.poller = setInterval(() => void this.refresh(false), 5000);
@@ -326,9 +535,11 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   }
 
   ngAfterViewChecked(): void {
-    if (!this.shouldStickToBottom || !this.messagePane?.nativeElement || this.activePanel !== "chat") return;
+    if (!this.scrollAfterRender || !this.messagePane?.nativeElement || this.activePanel !== "chat") return;
     const pane = this.messagePane.nativeElement;
     pane.scrollTop = pane.scrollHeight;
+    this.scrollAfterRender = false;
+    this.shouldStickToBottom = true;
   }
 
   async refresh(showBusy = true): Promise<void> {
@@ -339,7 +550,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
       this.threads = [...payload.threads].sort((a, b) => this.activityMs(b) - this.activityMs(a));
       if (!this.selectedId && this.threads.length) {
         this.selectedId = this.threadSlug(this.threads[0]);
-        this.replacePath(this.selectedId);
+        this.replacePath(this.selectedId, this.activePanel);
       }
       await this.loadSelectedThread(false);
       this.updateDocumentTitle();
@@ -357,13 +568,16 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     if (event.metaKey || event.ctrlKey || event.shiftKey || event.button === 1) return;
     event.preventDefault();
     this.selectedId = this.threadSlug(thread);
-    this.pushPath(this.selectedId);
+    this.activePanel = "chat";
+    this.pushPath(this.selectedId, this.activePanel);
     this.messages = [];
     this.historyMessages = [];
     this.timers = [];
     this.runtimeDetails = null;
+    this.attachDetails = null;
     this.lastMessageSignature = "";
     this.shouldStickToBottom = true;
+    this.scrollAfterRender = true;
     this.updateDocumentTitle();
     await this.loadSelectedThread(true);
     this.renderNow();
@@ -371,10 +585,17 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
 
   async openPanel(panel: Panel): Promise<void> {
     this.activePanel = panel;
+    const thread = this.selectedThread();
+    if (thread) this.pushPath(this.threadSlug(thread), panel);
     if (panel === "history") await this.loadHistory();
     if (panel === "timers") await this.loadTimers();
     if (panel === "runtime") await this.loadRuntime();
-    if (panel === "chat") this.shouldStickToBottom = true;
+    if (panel === "raw") await this.loadRaw();
+    if (panel === "ops") await this.loadOps();
+    if (panel === "chat") {
+      this.shouldStickToBottom = true;
+      this.scrollAfterRender = true;
+    }
     this.renderNow();
   }
 
@@ -391,6 +612,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
       this.draft = "";
       this.pendingFiles = [];
       this.shouldStickToBottom = true;
+      this.scrollAfterRender = true;
       await this.refresh(false);
     } catch (error) {
       this.error = this.errorText(error);
@@ -511,6 +733,64 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     }
   }
 
+  async loadRaw(): Promise<void> {
+    const thread = this.selectedThread();
+    if (!thread) return;
+    this.busy = true;
+    try {
+      const [attach, runtime] = await Promise.all([
+        firstValueFrom(this.api.attachThread(thread.id)),
+        firstValueFrom(this.api.threadRuntimeFull(thread.id)).catch(() => null),
+      ]);
+      this.attachDetails = attach;
+      if (runtime) this.runtimeDetails = runtime as unknown as Record<string, unknown>;
+    } catch (error) {
+      this.error = this.errorText(error);
+    } finally {
+      this.busy = false;
+    }
+  }
+
+  async loadOps(): Promise<void> {
+    this.busy = true;
+    try {
+      const [version, setup, whatsapp, agents, templates, timers, events, browsers, runtimeLeases, executors, executions] = await Promise.allSettled([
+        firstValueFrom(this.api.version()),
+        firstValueFrom(this.api.setupStatus()),
+        firstValueFrom(this.api.whatsappStatus()),
+        firstValueFrom(this.api.agents()),
+        firstValueFrom(this.api.agentTemplates()),
+        firstValueFrom(this.api.timers()),
+        firstValueFrom(this.api.events(40)),
+        firstValueFrom(this.api.browsers()),
+        firstValueFrom(this.api.runtimeLeases()),
+        firstValueFrom(this.api.executors()),
+        firstValueFrom(this.api.executions()),
+      ]);
+      if (version.status === "fulfilled") this.opsVersion = version.value;
+      if (setup.status === "fulfilled") {
+        this.opsSetup = setup.value;
+        this.opsConnectors = setup.value.connectors || [];
+      }
+      if (whatsapp.status === "fulfilled") this.opsWhatsApp = whatsapp.value;
+      if (agents.status === "fulfilled") this.opsAgents = agents.value.agents || [];
+      if (templates.status === "fulfilled") this.opsAgentTemplates = templates.value.templates || [];
+      if (timers.status === "fulfilled") this.opsTimers = timers.value.timers || [];
+      if (events.status === "fulfilled") this.opsEvents = events.value.events || [];
+      if (browsers.status === "fulfilled") this.opsBrowsers = browsers.value.browsers || [];
+      if (runtimeLeases.status === "fulfilled") {
+        this.opsRuntimeLeases = runtimeLeases.value.leases || [];
+        this.opsRuntimeBudget = runtimeLeases.value.budget || null;
+      }
+      if (executors.status === "fulfilled") this.opsExecutors = executors.value.executors || [];
+      if (executions.status === "fulfilled") this.opsExecutions = executions.value.executions || [];
+    } catch (error) {
+      this.error = this.errorText(error);
+    } finally {
+      this.busy = false;
+    }
+  }
+
   async createTimer(): Promise<void> {
     const thread = this.selectedThread();
     const prompt = this.timerPrompt.trim();
@@ -560,7 +840,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   rememberScrollPosition(): void {
     const pane = this.messagePane?.nativeElement;
     if (!pane) return;
-    this.shouldStickToBottom = pane.scrollHeight - pane.scrollTop - pane.clientHeight < 80;
+    this.shouldStickToBottom = this.isMessagePaneNearBottom();
   }
 
   handleDragOver(event: DragEvent): void {
@@ -640,6 +920,25 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     return "idle";
   }
 
+  canWakeThread(thread: ThreadSummary): boolean {
+    const state = this.threadState(thread);
+    return state.includes("sleep") || state.includes("hibernat");
+  }
+
+  canSleepThread(thread: ThreadSummary): boolean {
+    const state = this.threadState(thread);
+    const leaseId = String(thread.activeRuntimeLeaseId || "");
+    const reason = String(this.leaseValue("reason") || this.objectValue(thread["runtime"], "reason"));
+    if (!thread.activeRuntimeLeaseId && !thread.sessionName) return false;
+    if (leaseId.startsWith("adopt-") || reason.includes("adopt_existing")) return false;
+    return ["ready", "working", "waking"].some((item) => state.includes(item));
+  }
+
+  canRecoverThread(thread: ThreadSummary): boolean {
+    const state = this.threadState(thread);
+    return state.includes("broken") || state.includes("failed") || Boolean(thread["lastError"]);
+  }
+
   activityTime(thread: ThreadSummary): Date {
     return new Date(this.activityMs(thread));
   }
@@ -682,20 +981,68 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     return JSON.stringify(this.runtimeDetails || {}, null, 2);
   }
 
+  runtimeValue(key: string): string {
+    const runtime = this.runtimeDetails?.["runtime"];
+    if (runtime && typeof runtime === "object" && key in runtime) return String((runtime as Record<string, unknown>)[key] || "");
+    if (this.attachDetails?.runtime && key in this.attachDetails.runtime) return String(this.attachDetails.runtime[key] || "");
+    return "";
+  }
+
+  leaseValue(key: string): string {
+    const runtime = this.runtimeDetails?.["runtime"];
+    const lease = runtime && typeof runtime === "object" ? (runtime as Record<string, unknown>)["lease"] : null;
+    if (lease && typeof lease === "object" && key in lease) return String((lease as Record<string, unknown>)[key] || "");
+    const attachLease = this.attachDetails?.runtime?.["lease"];
+    if (attachLease && typeof attachLease === "object" && key in attachLease) return String((attachLease as Record<string, unknown>)[key] || "");
+    return "";
+  }
+
+  objectValue(value: unknown, key: string): string {
+    if (!value || typeof value !== "object") return "";
+    return String((value as Record<string, unknown>)[key] || "");
+  }
+
+  jsonLine(value: unknown): string {
+    try {
+      return JSON.stringify(value);
+    } catch {
+      return String(value || "");
+    }
+  }
+
+  eventKey(event: EventRecord): string {
+    return `${event.ts || ""}:${event.type}:${this.jsonLine(event).slice(0, 120)}`;
+  }
+
   private async loadSelectedThread(forceBottom: boolean): Promise<void> {
     const thread = this.selectedThread();
     if (!thread) return;
+    const wasNearBottom = this.isMessagePaneNearBottom();
     const payload = await firstValueFrom(this.api.threadMessages(thread.id, 150));
     this.messages = payload.messages || [];
     const signature = this.messages.map((message) => this.messageKey(message)).join("|");
-    if (forceBottom || signature !== this.lastMessageSignature) {
+    const changed = signature !== this.lastMessageSignature;
+    if (forceBottom || (!this.lastMessageSignature && this.messages.length > 0) || (changed && wasNearBottom)) {
       this.shouldStickToBottom = true;
-      this.lastMessageSignature = signature;
+      this.scrollAfterRender = true;
     }
+    this.lastMessageSignature = signature;
     if (this.activePanel === "history") await this.loadHistory();
     if (this.activePanel === "timers") await this.loadTimers();
     if (this.activePanel === "runtime") await this.loadRuntime();
+    if (this.activePanel === "raw") await this.loadRaw();
+    if (this.activePanel === "ops") await this.loadOps();
     this.renderNow();
+  }
+
+  private isMessagePaneNearBottom(): boolean {
+    const pane = this.messagePane?.nativeElement;
+    if (!pane) return true;
+    return pane.scrollHeight - pane.scrollTop - pane.clientHeight < 80;
+  }
+
+  private threadState(thread: ThreadSummary): string {
+    return String(thread.publicStatusCode || thread.status || thread.state || "").toLowerCase();
   }
 
   private renderNow(): void {
@@ -759,12 +1106,26 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     return "";
   }
 
-  private pushPath(id: string): void {
-    globalThis.history?.pushState({}, "", `/ng/thread/${encodeURIComponent(id)}`);
+  private panelFromPath(): Panel {
+    const parts = globalThis.location?.pathname?.split("/").filter(Boolean) || [];
+    const threadIndex = parts.indexOf("thread");
+    const panel = String(parts[threadIndex + 2] || "");
+    return ["history", "timers", "attach", "runtime", "raw", "ops"].includes(panel) ? panel as Panel : "chat";
   }
 
-  private replacePath(id: string): void {
-    globalThis.history?.replaceState({}, "", `/ng/thread/${encodeURIComponent(id)}`);
+  private pushPath(id: string, panel: Panel = "chat"): void {
+    const next = this.pathForPanel(id, panel);
+    if (globalThis.location?.pathname === next) return;
+    globalThis.history?.pushState({}, "", next);
+  }
+
+  private replacePath(id: string, panel: Panel = "chat"): void {
+    globalThis.history?.replaceState({}, "", this.pathForPanel(id, panel));
+  }
+
+  private pathForPanel(id: string, panel: Panel): string {
+    const suffix = panel === "chat" ? "" : `/${panel}`;
+    return `/ng/thread/${encodeURIComponent(id)}${suffix}`;
   }
 
   private activityMs(thread: ThreadSummary): number {

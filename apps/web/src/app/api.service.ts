@@ -100,6 +100,9 @@ export interface ThreadSummary {
   typingActive?: boolean;
   backgroundWork?: boolean;
   pendingCount?: number;
+  activeRuntimeLeaseId?: string | null;
+  hibernated?: boolean;
+  lastError?: string | null;
   lastActivityAt?: string;
   threadUpdatedAt?: string;
   updatedAt?: string;
@@ -115,6 +118,7 @@ export interface ThreadSummary {
     displayName?: string;
     enabled?: boolean;
   } | null;
+  runtime?: Record<string, unknown> | null;
   [key: string]: unknown;
 }
 
@@ -155,6 +159,15 @@ export interface ThreadRuntimeResponse {
   runtime?: Record<string, unknown>;
 }
 
+export interface ThreadAttachResponse {
+  ok: boolean;
+  state?: string;
+  thread?: ThreadSummary;
+  runtime?: Record<string, unknown>;
+  attachCommand?: string;
+  message?: string;
+}
+
 export interface ThreadUploadInput {
   name: string;
   mimetype?: string;
@@ -185,6 +198,10 @@ export class ApiService {
     return this.http.get<HealthResponse>(this.api("/health"));
   }
 
+  version(): Observable<Record<string, unknown>> {
+    return this.http.get<Record<string, unknown>>(this.api("/version"));
+  }
+
   setupStatus(): Observable<SetupStatus> {
     return this.http.get<SetupStatus>(this.api("/setup/status"));
   }
@@ -199,6 +216,10 @@ export class ApiService {
 
   startGmailOAuth(): Observable<GmailOAuthStartResponse> {
     return this.http.get<GmailOAuthStartResponse>(this.api("/connectors/gmail/oauth/start"));
+  }
+
+  whatsappStatus(): Observable<Record<string, unknown>> {
+    return this.http.get<Record<string, unknown>>(this.api("/connectors/whatsapp/status"));
   }
 
   agentTemplates(): Observable<{ templates: AgentTemplate[] }> {
@@ -225,6 +246,14 @@ export class ApiService {
     return this.http.post(this.api(`/agents/${encodeURIComponent(id)}/run-next`), { executorId: "noop" });
   }
 
+  executors(): Observable<{ executors: Array<Record<string, unknown>> }> {
+    return this.http.get<{ executors: Array<Record<string, unknown>> }>(this.api("/executors"));
+  }
+
+  executions(): Observable<{ executions: Array<Record<string, unknown>> }> {
+    return this.http.get<{ executions: Array<Record<string, unknown>> }>(this.api("/executions"));
+  }
+
   timers(): Observable<{ timers: TimerRecord[] }> {
     return this.http.get<{ timers: TimerRecord[] }>(this.api("/timers"));
   }
@@ -243,6 +272,14 @@ export class ApiService {
 
   events(limit = 50): Observable<{ events: EventRecord[] }> {
     return this.http.get<{ events: EventRecord[] }>(this.api(`/events?limit=${limit}`));
+  }
+
+  browsers(): Observable<{ browsers: Array<Record<string, unknown>> }> {
+    return this.http.get<{ browsers: Array<Record<string, unknown>> }>(this.api("/browsers"));
+  }
+
+  runtimeLeases(): Observable<{ leases: Array<Record<string, unknown>>; budget?: Record<string, unknown> }> {
+    return this.http.get<{ leases: Array<Record<string, unknown>>; budget?: Record<string, unknown> }>(this.api("/runtime-leases"));
   }
 
   threads(): Observable<{ threads: ThreadSummary[] }> {
@@ -289,6 +326,10 @@ export class ApiService {
 
   threadRuntimeFull(id: string): Observable<ThreadRuntimeResponse> {
     return this.http.get<ThreadRuntimeResponse>(this.api(`/threads/${encodeURIComponent(id)}/runtime`));
+  }
+
+  attachThread(id: string): Observable<ThreadAttachResponse> {
+    return this.http.post<ThreadAttachResponse>(this.api(`/threads/${encodeURIComponent(id)}/attach`), {});
   }
 
   threadHistory(id: string): Observable<ThreadHistoryResponse> {

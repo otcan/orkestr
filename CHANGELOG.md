@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.0-alpha.2
+
+- Keep Raw terminal access inside the Angular thread cockpit instead of opening a separate window.
+- Fix chat auto-scroll so it follows new messages only while the user is already at the bottom.
+- Hide Wake, Sleep, and Recover controls unless the selected thread is eligible for that action.
+- Add an Ops cockpit panel for connectors, agents, timers, browsers, runtime leases, events, and WhatsApp status.
+- Restyle the Angular UI with a denser terminal-oriented visual language.
+
 ## 0.1.0-alpha.1
 
 - Fix Angular thread UI repaint after async API loads so `/ng/thread/<name>` shows the thread sidebar and selected conversation immediately.
