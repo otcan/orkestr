@@ -2,6 +2,7 @@ import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { dataPaths, ensureDataDirs } from "../../storage/src/paths.js";
 import { appendEvent, readJson, writeJson } from "../../storage/src/store.js";
+import { listThreadRecords, saveThreadRecords } from "../../storage/src/thread-registry.js";
 
 const runningThreadIds = new Set();
 
@@ -29,8 +30,7 @@ async function messagesPath(threadId, env) {
 }
 
 export async function listThreads(env = process.env) {
-  const paths = await ensureDataDirs(env);
-  return readJson(paths.threads, []);
+  return listThreadRecords(env);
 }
 
 export async function getThread(threadId, env = process.env) {
@@ -40,9 +40,7 @@ export async function getThread(threadId, env = process.env) {
 }
 
 async function saveThreads(threads, env) {
-  const paths = await ensureDataDirs(env);
-  await writeJson(paths.threads, threads);
-  return threads;
+  return saveThreadRecords(threads, env);
 }
 
 export async function createThread(input = {}, env = process.env) {
