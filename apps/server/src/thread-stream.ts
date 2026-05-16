@@ -35,6 +35,15 @@ async function tmuxSendKey(paneId: string, key: string): Promise<void> {
   await execFileAsync("tmux", ["send-keys", "-t", paneId, key]);
 }
 
+async function resizePane(paneId: string, cols: unknown, rows: unknown): Promise<void> {
+  const parsedWidth = Number(cols);
+  const parsedHeight = Number(rows);
+  if (!Number.isFinite(parsedWidth) || !Number.isFinite(parsedHeight)) return;
+  const width = Math.max(40, Math.min(400, Math.floor(parsedWidth)));
+  const height = Math.max(8, Math.min(120, Math.floor(parsedHeight)));
+  await execFileAsync("tmux", ["resize-pane", "-t", paneId, "-x", String(width), "-y", String(height)]);
+}
+
 async function sendRawInput(paneId: string, data: string): Promise<void> {
   let literal = "";
   const flushLiteral = async () => {
@@ -141,6 +150,9 @@ export function attachThreadStreamUpgrade(server: Server): void {
             const payload = JSON.parse(raw.toString("utf8"));
             if (payload?.type === "input" && typeof payload.data === "string") {
               await sendRawInput(paneId, payload.data);
+              await pushSnapshot();
+            } else if (payload?.type === "resize") {
+              await resizePane(paneId, payload.cols, payload.rows).catch(() => undefined);
               await pushSnapshot();
             }
           })

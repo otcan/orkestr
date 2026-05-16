@@ -1,5 +1,8 @@
 import { DatePipe } from "@angular/common";
 import { AfterViewChecked, ChangeDetectorRef, Component, ElementRef, OnDestroy, OnInit, ViewChild, inject } from "@angular/core";
+import { FitAddon } from "@xterm/addon-fit";
+import { WebLinksAddon } from "@xterm/addon-web-links";
+import { Terminal } from "@xterm/xterm";
 import { FormsModule } from "@angular/forms";
 import { firstValueFrom } from "rxjs";
 import {
@@ -17,7 +20,7 @@ import {
 } from "./api.service";
 
 type Panel = "chat" | "history" | "timers" | "attach" | "runtime" | "raw" | "ops";
-type ToolsView = "system" | "desktops" | "models" | "settings" | "connectors";
+type ToolsView = "system" | "timers" | "desktops" | "models" | "settings" | "connectors";
 
 interface PendingFile {
   id: string;
@@ -88,54 +91,38 @@ interface PendingFile {
                 </span>
                 <b>Load {{ systemLoadLabel() }}</b>
               </button>
-              <div class="codex-capacity-card" [title]="codexCapacityTooltip(thread)">
-                <div class="codex-model-row">
-                  <strong>{{ codexModelName(thread) }}</strong>
-                  <span>{{ codexReasoningEffortLabel(thread) || "effort ?" }}</span>
-                </div>
-                <div class="codex-meter-row">
-                  <span class="codex-meter">
-                    <b>5h</b>
-                    <i><em [style.width.%]="codexRateRemaining(thread, 'primary') || 0"></em></i>
-                    <small>{{ codexRateRemainingLabel(thread, 'primary') }}</small>
-                  </span>
-                  <span class="codex-meter">
-                    <b>Week</b>
-                    <i><em [style.width.%]="codexRateRemaining(thread, 'secondary') || 0"></em></i>
-                    <small>{{ codexRateRemainingLabel(thread, 'secondary') }}</small>
-                  </span>
-                  <span class="codex-meter">
-                    <b>Ctx</b>
-                    <i><em [style.width.%]="codexContextPercent(thread) || 0"></em></i>
-                    <small>{{ codexContextLabel(thread) }}</small>
-                  </span>
-                </div>
-              </div>
-              <div class="codex-mode-toggle" title="Requested Codex mode for this Orkestr thread">
-                <button type="button" [class.active]="codexModeValue(thread) === 'code'" (click)="switchCodexMode('code')" [disabled]="busy">Code</button>
-                <button type="button" [class.active]="codexModeValue(thread) === 'plan'" (click)="switchCodexMode('plan')" [disabled]="busy">Plan</button>
-              </div>
-              <button class="secondary" type="button" [class.active]="activePanel === 'raw'" (click)="openPanel('raw')">Raw</button>
-              @if (canWakeThread(thread)) {
-                <button class="secondary" type="button" (click)="wakeSelected()" [disabled]="busy">Wake</button>
-              }
-              @if (canSleepThread(thread)) {
-                <button class="secondary" type="button" (click)="sleepSelected()" [disabled]="busy">Sleep</button>
-              }
-              @if (canRecoverThread(thread)) {
-                <button class="secondary danger-soft" type="button" (click)="recoverSelected()" [disabled]="busy">Recover</button>
-              }
+              <button class="secondary" type="button" [class.active]="activePanel === 'ops' && toolsView === 'settings'" (click)="openTools('settings')">Settings</button>
+              <button class="secondary" type="button" [class.active]="activePanel === 'ops' && toolsView === 'timers'" (click)="openTools('timers')">Timers</button>
+              <button class="secondary" type="button" [class.active]="activePanel === 'ops' && toolsView === 'desktops'" (click)="openTools('desktops')">Desktops</button>
             </div>
           </header>
 
           <nav class="panel-tabs" aria-label="Thread panels">
             <button type="button" [class.active]="activePanel === 'chat'" (click)="openPanel('chat')">Chat</button>
+            <button type="button" [class.active]="activePanel === 'raw'" (click)="openPanel('raw')">Raw</button>
             <button type="button" [class.active]="activePanel === 'history'" (click)="openPanel('history')">History</button>
-            <button type="button" [class.active]="activePanel === 'timers'" (click)="openPanel('timers')">Timers</button>
+            <button type="button" [class.active]="activePanel === 'timers'" (click)="openPanel('timers')">Thread Timers</button>
             <button type="button" [class.active]="activePanel === 'attach'" (click)="openPanel('attach')">Attach</button>
             <button type="button" [class.active]="activePanel === 'runtime'" (click)="openPanel('runtime')">Runtime</button>
-            <button type="button" [class.active]="activePanel === 'raw'" (click)="openPanel('raw')">Raw</button>
             <button type="button" [class.active]="activePanel === 'ops'" (click)="openPanel('ops')">Tools</button>
+            <span class="panel-spacer"></span>
+            <div class="codex-mode-toggle" title="Requested Codex mode for this Orkestr thread">
+              <button type="button" [class.active]="codexModeValue(thread) === 'code'" (click)="switchCodexMode('code')" [disabled]="busy">Code</button>
+              <button type="button" [class.active]="codexModeValue(thread) === 'plan'" (click)="switchCodexMode('plan')" [disabled]="busy">Plan</button>
+            </div>
+            <button class="model-pill" type="button" [class.active]="activePanel === 'ops' && toolsView === 'models'" (click)="openTools('models')" [title]="codexCapacityTooltip(thread)">
+              <span>{{ codexModelName(thread) }}</span>
+              <small>{{ codexReasoningEffortLabel(thread) || "effort ?" }} · 5h {{ codexRateRemainingLabel(thread, 'primary') }} · ctx {{ codexContextLabel(thread) }}</small>
+            </button>
+            @if (canWakeThread(thread)) {
+              <button class="secondary" type="button" (click)="wakeSelected()" [disabled]="busy">Wake</button>
+            }
+            @if (canSleepThread(thread)) {
+              <button class="secondary" type="button" (click)="sleepSelected()" [disabled]="busy">Sleep</button>
+            }
+            @if (canRecoverThread(thread)) {
+              <button class="secondary danger-soft" type="button" (click)="recoverSelected()" [disabled]="busy">Recover</button>
+            }
           </nav>
 
           @if (error) {
@@ -286,55 +273,16 @@ interface PendingFile {
 
           @if (activePanel === "raw") {
             <section class="panel-body raw-panel">
-              <div class="panel-title">
-                <div>
-                  <p class="eyebrow">Raw Terminal</p>
-                  <h3>{{ attachDetails?.ok ? "Attach target" : "No attachable runtime" }}</h3>
-                </div>
-                <button class="secondary" type="button" (click)="loadRaw()" [disabled]="busy">Reload</button>
-              </div>
               @if (attachDetails?.ok) {
-                <div class="terminal-card">
-                  <span class="term-prompt">$</span>
-                  <code>{{ attachDetails?.attachCommand }}</code>
+                <div class="raw-toolbar">
+                  <button class="secondary" type="button" (click)="openPanel('chat')">Back to Chat</button>
+                  <button class="secondary" type="button" (click)="focusRawTerminal()">Focus</button>
+                  <button class="secondary" type="button" (click)="reconnectRaw()" [disabled]="busy">Reconnect</button>
                 </div>
-                <div
-                  #rawScreen
-                  class="raw-terminal"
-                  tabindex="0"
-                  (click)="focusRawTerminal()"
-                  (keydown)="handleRawKeydown($event)"
-                  (paste)="handleRawPaste($event)"
-                  aria-label="Raw terminal"
-                >
-                  <pre>{{ rawScreenText || "Connecting to terminal..." }}</pre>
-                </div>
-                <div class="raw-status">
-                  <span>{{ rawConnectionState }}{{ rawConnectionDetail ? " · " + rawConnectionDetail : "" }}</span>
-                  <button class="secondary" type="button" (click)="focusRawTerminal()">Focus Keyboard</button>
-                </div>
-                <dl class="kv-grid">
-                  <div>
-                    <dt>State</dt>
-                    <dd>{{ attachDetails?.state || runtimeValue("state") || "unknown" }}</dd>
-                  </div>
-                  <div>
-                    <dt>Session</dt>
-                    <dd>{{ runtimeValue("sessionName") || thread.sessionName || "n/a" }}</dd>
-                  </div>
-                  <div>
-                    <dt>Pane</dt>
-                    <dd>{{ runtimeValue("paneId") || thread.paneId || "n/a" }}</dd>
-                  </div>
-                  <div>
-                    <dt>Workspace</dt>
-                    <dd>{{ leaseValue("workspace") || "n/a" }}</dd>
-                  </div>
-                </dl>
-                <p class="helper">Click the terminal before typing. The attach command remains available for a local tmux fallback.</p>
+                <div #rawTerminalHost class="raw-terminal-host" (click)="focusRawTerminal()" aria-label="Raw terminal"></div>
               } @else {
                 <div class="empty-state">
-                  <h3>{{ attachDetails?.message || "This thread has no live terminal lease." }}</h3>
+                  <h3>No live terminal</h3>
                   @if (canWakeThread(thread)) {
                     <p>Wake the thread first, then reopen Raw.</p>
                   } @else {
@@ -356,6 +304,7 @@ interface PendingFile {
               </div>
               <nav class="tool-tabs" aria-label="Orkestr tools">
                 <button type="button" [class.active]="toolsView === 'system'" (click)="toolsView = 'system'">System</button>
+                <button type="button" [class.active]="toolsView === 'timers'" (click)="toolsView = 'timers'">Timers</button>
                 <button type="button" [class.active]="toolsView === 'desktops'" (click)="toolsView = 'desktops'">Virtual Desktops</button>
                 <button type="button" [class.active]="toolsView === 'models'" (click)="toolsView = 'models'">Models</button>
                 <button type="button" [class.active]="toolsView === 'settings'" (click)="toolsView = 'settings'">Settings</button>
@@ -402,6 +351,39 @@ interface PendingFile {
                   } @empty {
                     <p class="empty">No process sample loaded.</p>
                   }
+                </div>
+              }
+
+              @if (toolsView === "timers") {
+                <div class="ops-columns">
+                  <section>
+                    <h4>Global Timers</h4>
+                    <div class="compact-list">
+                      @for (timer of opsTimers; track timer.id) {
+                        <article class="compact-row">
+                          <strong>{{ timer.label || timer.id }}</strong>
+                          <span>{{ timer.cadence }} · {{ timer.nextRunAt | date: "MMM d, HH:mm" }}</span>
+                          <p>{{ timer.target }}</p>
+                        </article>
+                      } @empty {
+                        <p class="empty">No global timers loaded.</p>
+                      }
+                    </div>
+                  </section>
+                  <section>
+                    <h4>Selected Thread Timers</h4>
+                    <div class="compact-list">
+                      @for (timer of timers; track timer.id) {
+                        <article class="compact-row">
+                          <strong>{{ timer.label }}</strong>
+                          <span>{{ timer.cadence }} · next {{ timer.nextRunAt | date: "MMM d, HH:mm" }}</span>
+                          <p>{{ timer.promptFile || timer.prompt || timer.target }}</p>
+                        </article>
+                      } @empty {
+                        <p class="empty">Open Thread Timers to add one for this chat.</p>
+                      }
+                    </div>
+                  </section>
                 </div>
               }
 
@@ -506,20 +488,6 @@ interface PendingFile {
                     </div>
                   </section>
                   <section>
-                    <h4>Global Timers</h4>
-                    <div class="compact-list">
-                      @for (timer of opsTimers; track timer.id) {
-                        <article class="compact-row">
-                          <strong>{{ timer.label || timer.id }}</strong>
-                          <span>{{ timer.cadence }} · {{ timer.nextRunAt | date: "MMM d, HH:mm" }}</span>
-                          <p>{{ timer.target }}</p>
-                        </article>
-                      } @empty {
-                        <p class="empty">No global timers loaded.</p>
-                      }
-                    </div>
-                  </section>
-                  <section>
                     <h4>Events</h4>
                     <div class="compact-list">
                       @for (event of opsEvents; track eventKey(event)) {
@@ -596,7 +564,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   };
 
   @ViewChild("messagePane") private readonly messagePane?: ElementRef<HTMLElement>;
-  @ViewChild("rawScreen") private readonly rawScreen?: ElementRef<HTMLElement>;
+  @ViewChild("rawTerminalHost") private readonly rawTerminalHost?: ElementRef<HTMLElement>;
 
   threads: ThreadSummary[] = [];
   messages: ThreadMessage[] = [];
@@ -639,12 +607,17 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   draggingUpload = false;
   rawConnectionState = "idle";
   rawConnectionDetail = "";
-  rawScreenText = "";
 
   private poller?: ReturnType<typeof setInterval>;
   private rawSocket?: WebSocket;
   private rawSocketThreadId = "";
   private rawReconnectTimer?: ReturnType<typeof setTimeout>;
+  private rawInputReadyTimer?: ReturnType<typeof setTimeout>;
+  private rawSocketGeneration = 0;
+  private rawInputReady = false;
+  private rawTerminal?: Terminal;
+  private rawFitAddon?: FitAddon;
+  private rawResizeObserver?: ResizeObserver;
   private shouldStickToBottom = true;
   private scrollAfterRender = true;
   private lastMessageSignature = "";
@@ -660,6 +633,8 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   ngOnDestroy(): void {
     if (this.poller) clearInterval(this.poller);
     this.closeRawStream();
+    this.rawResizeObserver?.disconnect();
+    this.rawTerminal?.dispose();
     globalThis.removeEventListener?.("popstate", this.popStateHandler);
   }
 
@@ -738,6 +713,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
 
   async openTools(view: ToolsView = this.toolsView): Promise<void> {
     this.toolsView = view;
+    if (view === "timers") await this.loadTimers();
     await this.openPanel("ops");
   }
 
@@ -1044,22 +1020,15 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   }
 
   focusRawTerminal(): void {
-    this.rawScreen?.nativeElement?.focus();
+    this.rawTerminal?.focus();
+    this.fitRawTerminal();
   }
 
-  handleRawKeydown(event: KeyboardEvent): void {
-    if (this.activePanel !== "raw") return;
-    const data = this.rawKeyData(event);
-    if (!data) return;
-    event.preventDefault();
-    this.sendRawInput(data);
-  }
-
-  handleRawPaste(event: ClipboardEvent): void {
-    const text = event.clipboardData?.getData("text/plain") || "";
-    if (!text) return;
-    event.preventDefault();
-    this.sendRawInput(text);
+  reconnectRaw(): void {
+    const thread = this.selectedThread();
+    if (!thread) return;
+    this.closeRawStream(false);
+    this.openRawStream(thread);
   }
 
   queueFiles(files: FileList | null): void {
@@ -1342,10 +1311,11 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
 
   private openRawStream(thread: ThreadSummary, attempt = 0): void {
     if (this.activePanel !== "raw") return;
-    if (!this.rawScreen?.nativeElement) {
+    if (!this.rawTerminalHost?.nativeElement) {
       if (attempt < 20) globalThis.setTimeout(() => this.openRawStream(thread, attempt + 1), 50);
       return;
     }
+    if (!this.ensureRawTerminal()) return;
     const threadId = thread.id;
     if (this.rawSocket && this.rawSocketThreadId === threadId && this.rawSocket.readyState <= WebSocket.OPEN) {
       this.focusRawTerminal();
@@ -1353,15 +1323,25 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     }
     this.closeRawStream(false);
     this.rawSocketThreadId = threadId;
+    this.rawInputReady = false;
     this.rawConnectionState = "connecting";
     this.rawConnectionDetail = "";
-    this.rawScreenText = this.rawScreenText || "Connecting to terminal...";
+    this.rawTerminal?.reset();
+    this.rawTerminal?.writeln("Connecting...");
+    this.fitRawTerminal();
     const protocol = globalThis.location?.protocol === "https:" ? "wss" : "ws";
-    const socket = new WebSocket(`${protocol}://${globalThis.location.host}/api/threads/${encodeURIComponent(threadId)}/stream`);
+    const socketGeneration = ++this.rawSocketGeneration;
+    const url = new URL(`${protocol}://${globalThis.location.host}/api/threads/${encodeURIComponent(threadId)}/stream`);
+    if (this.rawTerminal) {
+      url.searchParams.set("cols", String(this.rawTerminal.cols));
+      url.searchParams.set("rows", String(this.rawTerminal.rows));
+    }
+    const socket = new WebSocket(url.toString());
     this.rawSocket = socket;
     socket.addEventListener("open", () => {
       this.rawConnectionState = "connected";
-      this.rawConnectionDetail = "waiting for terminal";
+      this.rawConnectionDetail = "";
+      this.armRawInputReadyWatchdog(threadId, socketGeneration);
       this.renderNow();
       this.focusRawTerminal();
     });
@@ -1371,15 +1351,17 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     socket.addEventListener("close", () => {
       if (this.rawSocket !== socket) return;
       this.rawConnectionState = "disconnected";
-      this.rawConnectionDetail = "socket closed";
+      this.rawConnectionDetail = "";
+      this.rawInputReady = false;
       this.rawSocket = undefined;
       this.renderNow();
-      this.scheduleRawReconnect(threadId);
+      this.scheduleRawReconnect(threadId, socketGeneration);
     });
     socket.addEventListener("error", () => {
       if (this.rawSocket !== socket) return;
       this.rawConnectionState = "disconnected";
-      this.rawConnectionDetail = "socket error";
+      this.rawConnectionDetail = "";
+      this.rawInputReady = false;
       this.renderNow();
     });
   }
@@ -1389,43 +1371,76 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
       clearTimeout(this.rawReconnectTimer);
       this.rawReconnectTimer = undefined;
     }
+    if (this.rawInputReadyTimer) {
+      clearTimeout(this.rawInputReadyTimer);
+      this.rawInputReadyTimer = undefined;
+    }
+    this.rawSocketGeneration += 1;
     if (this.rawSocket) {
       this.rawSocket.close();
       this.rawSocket = undefined;
     }
     this.rawSocketThreadId = "";
+    this.rawInputReady = false;
     this.rawConnectionState = "idle";
     this.rawConnectionDetail = "";
-    if (clearScreen) this.rawScreenText = "";
+    if (clearScreen) {
+      this.rawResizeObserver?.disconnect();
+      this.rawResizeObserver = undefined;
+      this.rawTerminal?.dispose();
+      this.rawTerminal = undefined;
+      this.rawFitAddon = undefined;
+    }
   }
 
-  private scheduleRawReconnect(threadId: string): void {
+  private scheduleRawReconnect(threadId: string, socketGeneration: number): void {
     if (this.rawReconnectTimer || this.activePanel !== "raw") return;
     this.rawReconnectTimer = setTimeout(() => {
       this.rawReconnectTimer = undefined;
       const thread = this.selectedThread();
-      if (thread?.id === threadId && this.activePanel === "raw") this.openRawStream(thread);
+      if (thread?.id === threadId && this.activePanel === "raw" && this.rawSocketGeneration === socketGeneration) {
+        this.openRawStream(thread);
+      }
     }, 1500);
   }
 
   private handleRawSocketPayload(payload: Record<string, unknown>): void {
     const type = String(payload["type"] || "");
+    if (type === "input_ready") {
+      this.rawInputReady = true;
+      if (this.rawInputReadyTimer) {
+        clearTimeout(this.rawInputReadyTimer);
+        this.rawInputReadyTimer = undefined;
+      }
+      return;
+    }
+    if (type === "heartbeat" && payload["sessionAlive"] === false && this.rawSocketThreadId) {
+      this.scheduleRawReconnect(this.rawSocketThreadId, this.rawSocketGeneration);
+      return;
+    }
     if (type === "visible_screen") {
-      this.rawScreenText = String(payload["data"] || "");
+      this.rawTerminal?.reset();
+      this.rawTerminal?.write(String(payload["data"] || ""));
       this.rawConnectionState = "connected";
-      this.rawConnectionDetail = "live";
+      this.rawConnectionDetail = "";
       this.renderNow();
+      return;
+    }
+    if (type === "output") {
+      this.rawTerminal?.write(String(payload["data"] || ""));
       return;
     }
     if (type === "transport_ready") {
       this.rawConnectionState = "connected";
-      this.rawConnectionDetail = String(payload["transport"] || payload["state"] || "terminal");
+      this.rawConnectionDetail = "";
       this.renderNow();
       return;
     }
     if (type === "error") {
       this.rawConnectionState = "error";
-      this.rawConnectionDetail = String(payload["data"] || "terminal error");
+      this.rawConnectionDetail = "";
+      this.rawTerminal?.writeln("");
+      this.rawTerminal?.writeln(String(payload["data"] || "terminal error"));
       this.renderNow();
     }
   }
@@ -1435,31 +1450,74 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     this.rawSocket.send(JSON.stringify({ type: "input", data }));
   }
 
-  private rawKeyData(event: KeyboardEvent): string {
-    if (event.metaKey || event.altKey) return "";
-    if (event.ctrlKey && /^[a-z]$/i.test(event.key)) {
-      return String.fromCharCode(event.key.toUpperCase().charCodeAt(0) - 64);
+  private ensureRawTerminal(): boolean {
+    const host = this.rawTerminalHost?.nativeElement;
+    if (!host) return false;
+    if (!this.rawTerminal) {
+      this.rawTerminal = new Terminal({
+        cursorBlink: true,
+        cursorStyle: "block",
+        fontFamily: '"IBM Plex Mono", "JetBrains Mono", "SFMono-Regular", Consolas, monospace',
+        fontSize: 13,
+        scrollback: 100000,
+        theme: {
+          background: "#020602",
+          foreground: "#d9fbd8",
+          cursor: "#b6ff63",
+          selectionBackground: "rgba(126, 255, 142, 0.28)",
+        },
+      });
+      this.rawFitAddon = new FitAddon();
+      this.rawTerminal.loadAddon(this.rawFitAddon);
+      this.rawTerminal.loadAddon(new WebLinksAddon());
+      this.rawTerminal.open(host);
+      this.rawTerminal.onData((data) => {
+        if (this.rawInputReady) this.sendRawInput(data);
+      });
     }
-    switch (event.key) {
-      case "Enter":
-        return "\r";
-      case "Backspace":
-        return "\x7f";
-      case "Tab":
-        return "\t";
-      case "Escape":
-        return "\x1b";
-      case "ArrowUp":
-        return "\x1b[A";
-      case "ArrowDown":
-        return "\x1b[B";
-      case "ArrowRight":
-        return "\x1b[C";
-      case "ArrowLeft":
-        return "\x1b[D";
-      default:
-        return event.key.length === 1 ? event.key : "";
+    this.observeRawTerminalHost();
+    this.fitRawTerminal(true);
+    return true;
+  }
+
+  private observeRawTerminalHost(): void {
+    const host = this.rawTerminalHost?.nativeElement;
+    if (!host || this.rawResizeObserver) return;
+    this.rawResizeObserver = new ResizeObserver(() => this.fitRawTerminal(true));
+    this.rawResizeObserver.observe(host);
+  }
+
+  private fitRawTerminal(sendResize = false): void {
+    if (!this.rawTerminal || !this.rawFitAddon) return;
+    try {
+      this.rawFitAddon.fit();
+      if (sendResize && this.rawSocket?.readyState === WebSocket.OPEN) {
+        this.rawSocket.send(JSON.stringify({
+          type: "resize",
+          cols: this.rawTerminal.cols,
+          rows: this.rawTerminal.rows,
+        }));
+      }
+    } catch {
+      // The host can briefly disappear while Angular swaps panels.
     }
+  }
+
+  private armRawInputReadyWatchdog(threadId: string, socketGeneration: number): void {
+    if (this.rawInputReadyTimer) clearTimeout(this.rawInputReadyTimer);
+    this.rawInputReadyTimer = setTimeout(() => {
+      if (
+        this.activePanel !== "raw" ||
+        this.rawSocketThreadId !== threadId ||
+        this.rawSocketGeneration !== socketGeneration ||
+        this.rawInputReady
+      ) {
+        return;
+      }
+      this.rawSocket?.close();
+      this.rawSocket = undefined;
+      this.openRawStream(this.selectedThread() || { id: threadId } as ThreadSummary);
+    }, 7000);
   }
 
   private threadState(thread: ThreadSummary): string {

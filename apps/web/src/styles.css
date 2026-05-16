@@ -1,3 +1,5 @@
+@import "@xterm/xterm/css/xterm.css";
+
 :root {
   color: #d7e7ce;
   background: #070b07;
@@ -269,12 +271,12 @@ textarea:focus {
 
 .cockpit-actions {
   align-items: stretch;
-  max-width: min(860px, 64vw);
+  max-width: min(560px, 48vw);
 }
 
 .system-mini-card,
-.codex-capacity-card,
-.codex-mode-toggle {
+.codex-mode-toggle,
+.model-pill {
   border: 1px solid rgba(113, 218, 126, 0.22);
   background:
     radial-gradient(circle at top right, rgba(99, 212, 113, 0.16), transparent 55%),
@@ -411,6 +413,36 @@ textarea:focus {
   color: #061006;
 }
 
+.model-pill {
+  display: grid;
+  gap: 2px;
+  min-width: min(260px, 32vw);
+  min-height: 40px;
+  justify-items: start;
+  padding: 6px 10px;
+  text-align: left;
+}
+
+.model-pill span,
+.model-pill small {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.model-pill span {
+  color: #edffef;
+  font-size: 0.72rem;
+  font-weight: 900;
+}
+
+.model-pill small {
+  color: #91ad8b;
+  font-size: 0.62rem;
+  font-weight: 800;
+}
+
 .title-block {
   min-width: 0;
 }
@@ -441,6 +473,10 @@ textarea:focus {
   flex-wrap: wrap;
   gap: 8px;
   justify-content: flex-end;
+}
+
+.panel-spacer {
+  flex: 1 1 24px;
 }
 
 .panel-tabs {
@@ -661,46 +697,48 @@ textarea:focus {
 }
 
 .raw-panel {
-  grid-template-rows: auto auto minmax(260px, 1fr) auto auto;
+  align-content: stretch;
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: 8px;
+  padding: 8px;
 }
 
-.raw-terminal {
-  min-height: 340px;
+.raw-toolbar {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.raw-toolbar button {
+  min-height: 32px;
+  padding: 6px 10px;
+}
+
+.raw-terminal-host {
+  min-height: 0;
   overflow: auto;
   border: 1px solid rgba(119, 205, 126, 0.24);
   border-radius: 10px;
   background: #020602;
   color: #d9fbd8;
   outline: none;
-  padding: 12px;
+  padding: 6px;
   scrollbar-color: rgba(113, 218, 126, 0.45) transparent;
   scrollbar-width: thin;
 }
 
-.raw-terminal:focus {
+.raw-terminal-host:focus-within {
   border-color: rgba(120, 255, 137, 0.72);
   box-shadow: 0 0 0 2px rgba(126, 255, 142, 0.16);
 }
 
-.raw-terminal pre {
-  margin: 0;
-  min-width: max-content;
-  font-size: 0.86rem;
-  line-height: 1.25;
-  white-space: pre;
+.raw-terminal-host .xterm {
+  height: 100%;
+  padding: 2px;
 }
 
-.raw-status {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  color: #91ad8b;
-}
-
-.raw-status button {
-  min-height: 34px;
-  padding: 7px 11px;
+.raw-terminal-host .xterm-viewport {
+  background: transparent !important;
 }
 
 .kv-grid,
@@ -918,13 +956,12 @@ textarea:focus {
     grid-template-columns: 1fr;
   }
 
-  .raw-terminal {
+  .raw-terminal-host {
     min-height: 260px;
   }
 
-  .raw-status {
-    align-items: stretch;
-    flex-direction: column;
+  .model-pill {
+    min-width: 100%;
   }
 
   .composer-row {
