@@ -26,6 +26,7 @@
             class="thread-item tree-parent"
             [href]="threadUrl(thread)"
             [class.active]="isSelected(thread)"
+            [class.processing]="isThreadProcessing(thread)"
             (click)="selectThread(thread, $event)"
           >
             <span class="status-dot" [class]="statusClass(thread)"></span>
@@ -39,6 +40,9 @@
               }
               @if (threadWorkspaceLabel(thread)) {
                 <small class="thread-workspace-label">{{ threadWorkspaceLabel(thread) }}</small>
+              }
+              @if (isThreadProcessing(thread)) {
+                <small class="processing-line"><i></i>{{ threadProcessingLabel(thread) }}</small>
               }
             </span>
             <span class="thread-badges">
@@ -64,6 +68,7 @@
                   class="thread-item worker-thread"
                   [href]="threadUrl(worker)"
                   [class.active]="isSelected(worker)"
+                  [class.processing]="isThreadProcessing(worker)"
                   (click)="selectThread(worker, $event)"
                 >
                   <span class="status-dot" [class]="statusClass(worker)"></span>
@@ -77,6 +82,9 @@
                     }
                     @if (threadWorkspaceLabel(worker)) {
                       <small class="thread-workspace-label">{{ threadWorkspaceLabel(worker) }}</small>
+                    }
+                    @if (isThreadProcessing(worker)) {
+                      <small class="processing-line"><i></i>{{ threadProcessingLabel(worker) }}</small>
                     }
                   </span>
                   <span class="thread-badges">
@@ -202,9 +210,19 @@
       @if (activePanel === "chat") {
         <section #messagePane class="messages" (scroll)="rememberScrollPosition()">
           @for (message of messages; track messageKey(message)) {
-            <article class="message" [class.user]="message.role === 'user'" [class.failed]="message.state === 'failed'">
+            <article
+              class="message"
+              [class.user]="message.role === 'user'"
+              [class.assistant-final]="isFinalAssistantMessage(message)"
+              [class.assistant-info]="isInfoAssistantMessage(message)"
+              [class.assistant-plan]="messagePhase(message) === 'plan'"
+              [class.failed]="message.state === 'failed'"
+            >
               <div class="message-meta">
-                <strong>{{ message.role || "assistant" }}</strong>
+                <strong>{{ messageRoleLabel(message) }}</strong>
+                @if (messagePhaseLabel(message)) {
+                  <em class="phase-badge">{{ messagePhaseLabel(message) }}</em>
+                }
                 <span>{{ messageTime(message) | date: "MMM d, HH:mm:ss" }}</span>
                 @if (message.state && message.state !== "completed") {
                   <em>{{ message.state }}</em>

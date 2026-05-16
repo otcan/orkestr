@@ -210,6 +210,7 @@ async function threadRuntimeSummary(thread: any, messages: any[] = []) {
     backgroundWork: status?.backgroundWork ?? false,
     awaitingInput: false,
     pendingCount: status?.pendingCount ?? 0,
+    runningCount: status?.runningCount ?? 0,
     historyState: "ready",
     staleWorking: false,
     staleWorkingReason: null,
