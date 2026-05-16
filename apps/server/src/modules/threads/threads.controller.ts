@@ -8,6 +8,8 @@ import { runNextThreadMessage } from "../../../../../packages/core/src/executors
 import {
   deliverPendingThreadInputs,
   requestThreadInputDelivery,
+  requestThreadWake,
+  resolveCodexThreadMetadata,
   runtimeStatus,
   sleepThread,
   syncRuntimeWindowName,
@@ -54,6 +56,30 @@ function bridgeMessage(message: any, index: number) {
   };
 }
 
+function normalizedMessageText(value: unknown): string {
+  return String(value || "").replace(/\s+/g, " ").trim();
+}
+
+function duplicateAdjacentAssistant(previous: any, current: any): boolean {
+  if (!previous || !current) return false;
+  if (previous.role !== "assistant" || current.role !== "assistant") return false;
+  if (previous.source !== "codex-rollout" || current.source !== "codex-rollout") return false;
+  if (String(previous.phase || "") !== String(current.phase || "")) return false;
+  if (!normalizedMessageText(current.text) || normalizedMessageText(previous.text) !== normalizedMessageText(current.text)) return false;
+  const previousMs = Date.parse(String(previous.timestamp || previous.createdAt || ""));
+  const currentMs = Date.parse(String(current.timestamp || current.createdAt || ""));
+  return Number.isFinite(previousMs) && Number.isFinite(currentMs) && Math.abs(currentMs - previousMs) <= 5000;
+}
+
+function dedupeDisplayMessages(messages: any[] = []) {
+  const deduped: any[] = [];
+  for (const message of messages) {
+    if (duplicateAdjacentAssistant(deduped.at(-1), message)) continue;
+    deduped.push(message);
+  }
+  return deduped;
+}
+
 function safeUploadName(name: unknown): string {
   const base = path.basename(String(name || "upload.bin")).replace(/[^a-zA-Z0-9_.-]/g, "_");
   return base || "upload.bin";
@@ -71,7 +97,7 @@ function messagePage(thread: any, rawMessages: any[] = [], query: Record<string,
   const before = Math.max(0, Number.parseInt(String(query.before || "0"), 10) || 0);
   const requestedLimit = Math.max(0, Number.parseInt(String(query.limit || "0"), 10) || 0);
   const limit = requestedLimit ? Math.min(requestedLimit, 100) : 100;
-  let messages = rawMessages.map(bridgeMessage).filter((message) => message.text);
+  let messages = dedupeDisplayMessages(rawMessages.map(bridgeMessage).filter((message) => message.text));
   if (since > 0) messages = messages.filter((message) => Number(message.cursor || 0) > since);
   if (before > 0) messages = messages.filter((message) => Number(message.cursor || 0) < before);
   messages = messages.slice(-limit);
@@ -102,6 +128,7 @@ function messagePage(thread: any, rawMessages: any[] = [], query: Record<string,
 function codexMetadata(thread: any) {
   const metadata = thread?.executor?.metadata && typeof thread.executor.metadata === "object" ? thread.executor.metadata : {};
   const tokenUsage = thread?.codexTokenUsage || metadata.codexTokenUsage || metadata.tokenUsage || null;
+  const totalTokenUsage = thread?.codexTotalTokenUsage || metadata.codexTotalTokenUsage || metadata.totalTokenUsage || null;
   const contextWindow = Number(thread?.codexContextWindow || metadata.codexContextWindow || metadata.contextWindow || 0) || null;
   const rateLimits = thread?.codexRateLimits || metadata.codexRateLimits || metadata.rateLimits || null;
   return {
@@ -118,19 +145,38 @@ function codexMetadata(thread: any) {
     codexModelUpdatedAt: thread?.codexModelUpdatedAt || metadata.codexModelUpdatedAt || null,
     codexContextWindow: contextWindow,
     codexTokenUsage: tokenUsage,
+    codexTotalTokenUsage: totalTokenUsage,
     codexRateLimits: rateLimits,
   };
 }
 
 async function threadRuntimeSummary(thread: any, messages: any[] = []) {
   const status = await runtimeStatus(thread.id).catch(() => null);
+  const metadataTarget = {
+    ...thread,
+    runtime: status?.lease ? { ...(thread.runtime || {}), ...status.lease } : thread.runtime,
+  };
+  const liveCodexMetadata: any = await resolveCodexThreadMetadata(metadataTarget).catch(() => ({}));
+  const codexThread = {
+    ...thread,
+    ...liveCodexMetadata,
+    executor: {
+      ...(thread.executor || {}),
+      codexThreadId: liveCodexMetadata.codexThreadId || thread.executor?.codexThreadId || "",
+      metadata: {
+        ...(thread.executor?.metadata || {}),
+        ...liveCodexMetadata,
+      },
+    },
+  };
   const state = status?.state || thread.state || "sleeping";
   const ready = state === "ready";
   const lastActivityAt = messages.at(-1)?.createdAt || thread.updatedAt || thread.createdAt || null;
+  const resolvedCodexThreadId = codexThreadId(codexThread);
   return {
     ...thread,
-    threadId: codexThreadId(thread) || thread.id,
-    codexThreadId: codexThreadId(thread) || null,
+    threadId: resolvedCodexThreadId || thread.id,
+    codexThreadId: resolvedCodexThreadId || null,
     status: state,
     state,
     routeEligible: true,
@@ -156,9 +202,9 @@ async function threadRuntimeSummary(thread: any, messages: any[] = []) {
     hibernated: state === "sleeping",
     lastActivityAt,
     threadUpdatedAt: thread.updatedAt || lastActivityAt,
-    inferredThreadId: codexThreadId(thread) || null,
+    inferredThreadId: resolvedCodexThreadId || null,
     wakePolicy: thread.wakePolicy || "wake-on-message",
-    ...codexMetadata(thread),
+    ...codexMetadata(codexThread),
   };
 }
 
@@ -195,7 +241,10 @@ export class ThreadsController {
   @HttpCode(201)
   async createWorker(@Param("threadId") threadId: string, @Body() body: Record<string, unknown> = {}) {
     const result: any = await createThreadWorker(threadId, body);
-    if (body.autoRun !== false && result.message) requestThreadInputDelivery(result.worker.id);
+    if (body.wake !== false) {
+      if (body.autoRun !== false && result.message) requestThreadInputDelivery(result.worker.id);
+      else requestThreadWake(result.worker.id, { reason: "worker_created" });
+    }
     return {
       ...result,
       worker: await threadRuntimeSummary(result.worker, await listThreadMessages(result.worker.id)),
@@ -322,11 +371,12 @@ export class ThreadsController {
     const thread = await getThread(threadId);
     if (!thread) throw httpError("thread_not_found", 404);
     const messages = await listThreadMessages(thread.id);
+    const summary = await threadRuntimeSummary(thread, messages);
     return {
-      ...(await threadRuntimeSummary(thread, messages)),
+      ...summary,
       orkestrThreadId: thread.id,
-      threadId: codexThreadId(thread) || thread.id,
-      codexThreadId: codexThreadId(thread) || null,
+      threadId: summary.codexThreadId || codexThreadId(thread) || thread.id,
+      codexThreadId: summary.codexThreadId || codexThreadId(thread) || null,
     };
   }
 

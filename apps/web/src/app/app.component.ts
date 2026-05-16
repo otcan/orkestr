@@ -14,6 +14,15 @@ import {
 import { appendPendingFiles, messageWithAttachmentPaths, PendingFile, removePendingFile, uploadPendingFiles } from "./thread-uploads";
 
 type Panel = "chat" | "history" | "timers" | "attach" | "settings" | "runtime" | "raw" | "ops";
+type PersistedThreadTextField =
+  | "draft"
+  | "sidebarWorkerTask"
+  | "timerLabel"
+  | "timerCadence"
+  | "timerTime"
+  | "timerPrompt"
+  | "approveText"
+  | "interruptText";
 
 @Component({
   selector: "ork-root",
@@ -34,6 +43,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
       this.renderNow();
       return;
     }
+    this.syncThreadTextState(this.selectedThread(), true);
     void this.loadSelectedThread(true);
   };
 
@@ -81,6 +91,8 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   draggingUpload = false;
   rawConnectionState = "idle";
   rawConnectionDetail = "";
+  sidebarWidth = 460;
+  sidebarResizing = false;
 
   private poller?: ReturnType<typeof setInterval>;
   private readonly rawTerminal = new RawTerminalController({
@@ -94,12 +106,48 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   });
   private shouldStickToBottom = true;
   private scrollAfterRender = true;
+  private scrollFrame = 0;
   private lastMessageSignature = "";
+  private textStateThreadId = "";
+  private readonly readStateVersionKey = "orkestr.threadRead.initialized.v1";
+  private readonly sidebarWidthKey = "orkestr.sidebar.width.v1";
+  private readonly sidebarDefaultWidth = 460;
+  private readonly sidebarMinWidth = 320;
+  private readonly sidebarMaxWidth = 760;
+  private sidebarResizeStartX = 0;
+  private sidebarResizeStartWidth = 0;
+  private readonly sidebarResizeMove = (event: Event) => {
+    const pointer = event as PointerEvent;
+    const nextWidth = this.sidebarResizeStartWidth + pointer.clientX - this.sidebarResizeStartX;
+    this.sidebarWidth = this.clampSidebarWidth(nextWidth);
+    this.persistSidebarWidth();
+    this.renderNow();
+  };
+  private readonly sidebarResizeEnd = () => {
+    if (!this.sidebarResizing) return;
+    this.sidebarResizing = false;
+    this.persistSidebarWidth();
+    globalThis.removeEventListener?.("pointermove", this.sidebarResizeMove);
+    globalThis.removeEventListener?.("pointerup", this.sidebarResizeEnd);
+    globalThis.document?.body?.classList.remove("sidebar-resizing-body");
+    this.renderNow();
+  };
+  private readonly threadTextDefaults: Record<PersistedThreadTextField, string> = {
+    draft: "",
+    sidebarWorkerTask: "",
+    timerLabel: "Thread timer",
+    timerCadence: "daily",
+    timerTime: "09:00",
+    timerPrompt: "",
+    approveText: "Approved. Proceed.",
+    interruptText: "",
+  };
 
   ngOnInit(): void {
     this.selectedId = this.idFromPath();
     this.activePanel = this.panelFromPath();
     this.toolsView = this.toolsViewFromPath();
+    this.sidebarWidth = this.loadSidebarWidth();
     this.normalizeLegacyOpsPath();
     globalThis.addEventListener?.("popstate", this.popStateHandler);
     void this.refresh(true);
@@ -108,16 +156,17 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
 
   ngOnDestroy(): void {
     if (this.poller) clearInterval(this.poller);
+    if (this.scrollFrame && typeof globalThis.cancelAnimationFrame === "function") {
+      globalThis.cancelAnimationFrame(this.scrollFrame);
+    }
     this.rawTerminal.dispose();
+    this.sidebarResizeEnd();
     globalThis.removeEventListener?.("popstate", this.popStateHandler);
   }
 
   ngAfterViewChecked(): void {
-    if (!this.scrollAfterRender || !this.messagePane?.nativeElement || this.activePanel !== "chat") return;
-    const pane = this.messagePane.nativeElement;
-    pane.scrollTop = pane.scrollHeight;
-    this.scrollAfterRender = false;
-    this.shouldStickToBottom = true;
+    if (!this.scrollAfterRender) return;
+    this.scrollMessagePaneToBottom();
   }
 
   async refresh(showBusy = true): Promise<void> {
@@ -132,11 +181,14 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
       if (systemResult.status === "fulfilled") this.opsSystem = systemResult.value;
       this.apiOnline = true;
       this.threads = [...payload.threads].sort((a, b) => this.activityMs(b) - this.activityMs(a));
+      this.seedReadStateIfNeeded(this.threads);
       if (this.activePanel !== "ops" && !this.selectedId && this.threads.length) {
         this.selectedId = this.threadSlug(this.threads[0]);
         this.replacePath(this.selectedId, this.activePanel);
       }
-      this.syncThreadMetaDraft(this.selectedThread());
+      const selected = this.selectedThread();
+      this.syncThreadMetaDraft(selected);
+      this.syncThreadTextState(selected);
       await this.loadSelectedThread(false);
       this.updateDocumentTitle();
       this.error = "";
@@ -156,11 +208,13 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   }
 
   async activateThread(thread: ThreadSummary): Promise<void> {
+    const nextPanel = this.activePanel === "raw" ? "raw" : "chat";
     this.selectedId = this.threadSlug(thread);
-    this.activePanel = "chat";
+    this.activePanel = nextPanel;
     this.pushPath(this.selectedId, this.activePanel);
     this.clearThreadPanelState();
     this.syncThreadMetaDraft(thread, true);
+    this.syncThreadTextState(thread, true);
     this.updateDocumentTitle();
     await this.loadSelectedThread(true);
     this.renderNow();
@@ -174,8 +228,8 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     this.attachDetails = null;
     this.closeRawStream();
     this.lastMessageSignature = "";
-    this.shouldStickToBottom = true;
-    this.scrollAfterRender = true;
+    this.shouldStickToBottom = this.activePanel === "chat";
+    this.scrollAfterRender = this.activePanel === "chat";
   }
 
   async openPanel(panel: Panel): Promise<void> {
@@ -192,8 +246,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     if (panel === "runtime") await this.loadRuntime();
     if (panel === "raw") await this.loadRaw();
     if (panel === "chat") {
-      this.shouldStickToBottom = true;
-      this.scrollAfterRender = true;
+      this.queueMessagePaneScrollToBottom();
     }
     this.renderNow();
   }
@@ -224,9 +277,9 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
       const text = messageWithAttachmentPaths(originalText, attachments);
       await firstValueFrom(this.api.sendThreadInput(thread.id, text, attachments));
       this.draft = "";
+      this.clearThreadTextField(thread, "draft");
       this.pendingFiles = [];
-      this.shouldStickToBottom = true;
-      this.scrollAfterRender = true;
+      this.queueMessagePaneScrollToBottom();
       await this.refresh(false);
     } catch (error) {
       this.error = this.errorText(error);
@@ -298,6 +351,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     try {
       await firstValueFrom(this.api.interruptThread(thread.id, this.interruptText.trim()));
       this.interruptText = "";
+      this.clearThreadTextField(thread, "interruptText");
       await this.refresh(false);
     } catch (error) {
       this.error = this.errorText(error);
@@ -401,6 +455,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
       }
       await firstValueFrom(this.api.createThreadTimer(thread.id, body));
       this.timerPrompt = "";
+      this.clearThreadTextField(thread, "timerPrompt");
       await this.loadTimers();
     } catch (error) {
       this.error = this.errorText(error);
@@ -525,6 +580,8 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
       if (repoPath) body["repoPath"] = repoPath;
       const result = await firstValueFrom(this.api.createThreadWorker(parent.id, body));
       this.sidebarWorkerTask = "";
+      if (thread) this.clearThreadTextField(thread, "sidebarWorkerTask");
+      this.clearThreadTextField(parent, "sidebarWorkerTask");
       await this.refresh(false);
       if (result.worker) await this.activateThread(result.worker);
     } catch (error) {
@@ -613,6 +670,30 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
 
   removePendingFile(id: string): void {
     this.pendingFiles = removePendingFile(this.pendingFiles, id);
+  }
+
+  startSidebarResize(event: PointerEvent): void {
+    if (globalThis.innerWidth <= 860) return;
+    event.preventDefault();
+    this.sidebarResizing = true;
+    this.sidebarResizeStartX = event.clientX;
+    this.sidebarResizeStartWidth = this.sidebarWidth;
+    globalThis.document?.body?.classList.add("sidebar-resizing-body");
+    globalThis.addEventListener?.("pointermove", this.sidebarResizeMove);
+    globalThis.addEventListener?.("pointerup", this.sidebarResizeEnd);
+  }
+
+  resetSidebarWidth(): void {
+    this.sidebarWidth = this.sidebarDefaultWidth;
+    this.persistSidebarWidth();
+    this.renderNow();
+  }
+
+  persistThreadTextField(field: PersistedThreadTextField, value: string): void {
+    this[field] = value;
+    const thread = this.selectedThread();
+    if (!thread) return;
+    this.writeThreadTextField(thread, field, value);
   }
 
   filteredThreads(): ThreadSummary[] {
@@ -812,8 +893,17 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     return new Date(this.activityMs(thread));
   }
 
+  isThreadUnread(thread: ThreadSummary): boolean {
+    const activity = this.activityMs(thread);
+    return activity > 0 && activity > this.threadReadMs(thread);
+  }
+
+  isThreadFamilyUnread(thread: ThreadSummary): boolean {
+    return this.isThreadUnread(thread) || this.childWorkers(thread).some((worker) => this.isThreadUnread(worker));
+  }
+
   threadUrl(thread: ThreadSummary): string {
-    return `/ng/thread/${encodeURIComponent(this.threadSlug(thread))}`;
+    return this.pathForPanel(this.threadSlug(thread), this.activePanel === "raw" ? "raw" : "chat");
   }
 
   rawUrl(thread: ThreadSummary): string {
@@ -881,12 +971,25 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   }
 
   codexModeValue(thread: ThreadSummary | null): string {
-    const mode = String(thread?.codexMode || thread?.desiredCodexMode || "").toLowerCase();
-    return mode === "plan" ? "plan" : "code";
+    const mode = String(
+      thread?.codexMode ||
+      thread?.desiredCodexMode ||
+      thread?.codexModeLabel ||
+      thread?.codexModeSource ||
+      "",
+    ).toLowerCase();
+    if (mode.includes("plan")) return "plan";
+    if (mode.includes("code")) return "code";
+    return "";
   }
 
   codexModelName(thread: ThreadSummary | null): string {
-    return String(thread?.codexModel || "Model unknown");
+    return String(
+      thread?.codexModel ||
+      this.objectValue(thread?.runtime, "codexModel") ||
+      this.objectValue(thread?.["executor"], "codexModel") ||
+      "Model not synced",
+    );
   }
 
   codexReasoningEffortLabel(thread: ThreadSummary | null): string {
@@ -967,11 +1070,11 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     const wasNearBottom = this.isMessagePaneNearBottom();
     const payload = await firstValueFrom(this.api.threadMessages(thread.id, 150));
     this.messages = payload.messages || [];
+    this.markThreadRead(thread);
     const signature = this.messages.map((message) => this.messageKey(message)).join("|");
     const changed = signature !== this.lastMessageSignature;
     if (forceBottom || (!this.lastMessageSignature && this.messages.length > 0) || (changed && wasNearBottom)) {
-      this.shouldStickToBottom = true;
-      this.scrollAfterRender = true;
+      this.queueMessagePaneScrollToBottom();
     }
     this.lastMessageSignature = signature;
     if (this.activePanel === "history") await this.loadHistory();
@@ -985,6 +1088,59 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     const pane = this.messagePane?.nativeElement;
     if (!pane) return true;
     return pane.scrollHeight - pane.scrollTop - pane.clientHeight < 80;
+  }
+
+  private queueMessagePaneScrollToBottom(): void {
+    if (this.activePanel !== "chat") return;
+    this.shouldStickToBottom = true;
+    this.scrollAfterRender = true;
+    if (this.scrollFrame && typeof globalThis.cancelAnimationFrame === "function") {
+      globalThis.cancelAnimationFrame(this.scrollFrame);
+    }
+    const run = () => {
+      this.scrollFrame = 0;
+      this.scrollMessagePaneToBottom();
+      globalThis.setTimeout?.(() => this.scrollMessagePaneToBottom(), 0);
+    };
+    if (typeof globalThis.requestAnimationFrame === "function") {
+      this.scrollFrame = globalThis.requestAnimationFrame(() => globalThis.requestAnimationFrame(run));
+    } else {
+      globalThis.setTimeout?.(run, 0);
+    }
+  }
+
+  private scrollMessagePaneToBottom(): void {
+    if (this.activePanel !== "chat") return;
+    const pane = this.messagePane?.nativeElement;
+    if (!pane) return;
+    pane.scrollTop = pane.scrollHeight;
+    this.scrollAfterRender = false;
+    this.shouldStickToBottom = true;
+  }
+
+  private loadSidebarWidth(): number {
+    try {
+      const stored = Number(globalThis.localStorage?.getItem(this.sidebarWidthKey));
+      if (Number.isFinite(stored)) return this.clampSidebarWidth(stored);
+    } catch {
+      return this.sidebarDefaultWidth;
+    }
+    return this.sidebarDefaultWidth;
+  }
+
+  private persistSidebarWidth(): void {
+    try {
+      globalThis.localStorage?.setItem(this.sidebarWidthKey, String(Math.round(this.sidebarWidth)));
+    } catch {
+      // Width persistence is optional; dragging still works for the current session.
+    }
+  }
+
+  private clampSidebarWidth(value: number): number {
+    const viewportMax = Number(globalThis.innerWidth || 0) > 0
+      ? Math.max(this.sidebarMinWidth, Math.min(this.sidebarMaxWidth, Number(globalThis.innerWidth) - 520))
+      : this.sidebarMaxWidth;
+    return Math.max(this.sidebarMinWidth, Math.min(viewportMax, Math.round(value)));
   }
 
   private openRawStream(thread: ThreadSummary): void {
@@ -1015,6 +1171,43 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     this.threadMetaThreadId = thread.id;
     this.threadRepoDraft = this.defaultRepoPath(thread);
     this.threadBranchDraft = this.threadBranchLabel(thread);
+  }
+
+  private syncThreadTextState(thread: ThreadSummary | null, force = false): void {
+    if (!thread) return;
+    if (!force && this.textStateThreadId === thread.id) return;
+    this.textStateThreadId = thread.id;
+    for (const field of Object.keys(this.threadTextDefaults) as PersistedThreadTextField[]) {
+      this[field] = this.readThreadTextField(thread, field) ?? this.threadTextDefaults[field];
+    }
+  }
+
+  private readThreadTextField(thread: ThreadSummary, field: PersistedThreadTextField): string | null {
+    try {
+      return globalThis.sessionStorage?.getItem(this.threadTextStorageKey(thread, field)) ?? null;
+    } catch {
+      return null;
+    }
+  }
+
+  private writeThreadTextField(thread: ThreadSummary, field: PersistedThreadTextField, value: string): void {
+    try {
+      globalThis.sessionStorage?.setItem(this.threadTextStorageKey(thread, field), value);
+    } catch {
+      // Session storage can be unavailable in strict browser modes; drafts then remain in memory only.
+    }
+  }
+
+  private clearThreadTextField(thread: ThreadSummary, field: PersistedThreadTextField): void {
+    try {
+      globalThis.sessionStorage?.removeItem(this.threadTextStorageKey(thread, field));
+    } catch {
+      // Ignore storage failures; clearing the in-memory field is already handled by the caller.
+    }
+  }
+
+  private threadTextStorageKey(thread: ThreadSummary, field: PersistedThreadTextField): string {
+    return `orkestr:thread:${thread.id}:text:${field}`;
   }
 
   private resolveThread(value: string): ThreadSummary | undefined {
@@ -1093,6 +1286,41 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
 
   private familyActivityMs(thread: ThreadSummary): number {
     return Math.max(this.activityMs(thread), ...this.childWorkers(thread).map((worker) => this.activityMs(worker)));
+  }
+
+  private threadReadMs(thread: ThreadSummary): number {
+    const storage = this.readStateStorage();
+    if (!storage) return this.activityMs(thread);
+    const parsed = Number(storage.getItem(this.threadReadKey(thread.id)) || 0);
+    return Number.isFinite(parsed) ? parsed : 0;
+  }
+
+  private markThreadRead(thread: ThreadSummary | null = this.selectedThread()): void {
+    if (!thread) return;
+    const storage = this.readStateStorage();
+    if (!storage) return;
+    storage.setItem(this.threadReadKey(thread.id), String(this.activityMs(thread)));
+  }
+
+  private seedReadStateIfNeeded(threads: ThreadSummary[]): void {
+    const storage = this.readStateStorage();
+    if (!storage || storage.getItem(this.readStateVersionKey)) return;
+    for (const thread of threads) {
+      storage.setItem(this.threadReadKey(thread.id), String(this.activityMs(thread)));
+    }
+    storage.setItem(this.readStateVersionKey, new Date().toISOString());
+  }
+
+  private readStateStorage(): Storage | null {
+    try {
+      return globalThis.localStorage || null;
+    } catch {
+      return null;
+    }
+  }
+
+  private threadReadKey(threadId: string): string {
+    return `orkestr.threadRead.${threadId}`;
   }
 
   private threadVisibleInTree(thread: ThreadSummary): boolean {

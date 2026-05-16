@@ -136,6 +136,7 @@ export interface ThreadSummary {
   codexModelProvider?: string | null;
   codexContextWindow?: number | null;
   codexTokenUsage?: Record<string, number> | null;
+  codexTotalTokenUsage?: Record<string, number> | null;
   codexRateLimits?: {
     primary?: { used_percent?: number; window_minutes?: number; resets_at?: number } | null;
     secondary?: { used_percent?: number; window_minutes?: number; resets_at?: number } | null;
