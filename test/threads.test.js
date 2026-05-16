@@ -239,7 +239,7 @@ test("thread API creates worker threads", async () => {
     const created = await fetch(`${baseUrl}/api/threads/worker-api-parent/workers`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ label: "Worker API", task: "Build this in a worker.", autoRun: false }),
+      body: JSON.stringify({ label: "Worker API", task: "Build this in a worker.", autoRun: false, wake: false }),
     });
     const payload = await created.json();
     const listed = await fetch(`${baseUrl}/api/threads/worker-api-parent/workers`);

@@ -106,6 +106,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   private scrollAfterRender = true;
   private lastMessageSignature = "";
   private textStateThreadId = "";
+  private readonly readStateVersionKey = "orkestr.threadRead.initialized.v1";
   private readonly threadTextDefaults: Record<PersistedThreadTextField, string> = {
     draft: "",
     sidebarWorkerTask: "",
@@ -153,6 +154,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
       if (systemResult.status === "fulfilled") this.opsSystem = systemResult.value;
       this.apiOnline = true;
       this.threads = [...payload.threads].sort((a, b) => this.activityMs(b) - this.activityMs(a));
+      this.seedReadStateIfNeeded(this.threads);
       if (this.activePanel !== "ops" && !this.selectedId && this.threads.length) {
         this.selectedId = this.threadSlug(this.threads[0]);
         this.replacePath(this.selectedId, this.activePanel);
@@ -848,6 +850,15 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     return new Date(this.activityMs(thread));
   }
 
+  isThreadUnread(thread: ThreadSummary): boolean {
+    const activity = this.activityMs(thread);
+    return activity > 0 && activity > this.threadReadMs(thread);
+  }
+
+  isThreadFamilyUnread(thread: ThreadSummary): boolean {
+    return this.isThreadUnread(thread) || this.childWorkers(thread).some((worker) => this.isThreadUnread(worker));
+  }
+
   threadUrl(thread: ThreadSummary): string {
     return `/ng/thread/${encodeURIComponent(this.threadSlug(thread))}`;
   }
@@ -1016,6 +1027,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     const wasNearBottom = this.isMessagePaneNearBottom();
     const payload = await firstValueFrom(this.api.threadMessages(thread.id, 150));
     this.messages = payload.messages || [];
+    this.markThreadRead(thread);
     const signature = this.messages.map((message) => this.messageKey(message)).join("|");
     const changed = signature !== this.lastMessageSignature;
     if (forceBottom || (!this.lastMessageSignature && this.messages.length > 0) || (changed && wasNearBottom)) {
@@ -1179,6 +1191,41 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
 
   private familyActivityMs(thread: ThreadSummary): number {
     return Math.max(this.activityMs(thread), ...this.childWorkers(thread).map((worker) => this.activityMs(worker)));
+  }
+
+  private threadReadMs(thread: ThreadSummary): number {
+    const storage = this.readStateStorage();
+    if (!storage) return this.activityMs(thread);
+    const parsed = Number(storage.getItem(this.threadReadKey(thread.id)) || 0);
+    return Number.isFinite(parsed) ? parsed : 0;
+  }
+
+  private markThreadRead(thread: ThreadSummary | null = this.selectedThread()): void {
+    if (!thread) return;
+    const storage = this.readStateStorage();
+    if (!storage) return;
+    storage.setItem(this.threadReadKey(thread.id), String(this.activityMs(thread)));
+  }
+
+  private seedReadStateIfNeeded(threads: ThreadSummary[]): void {
+    const storage = this.readStateStorage();
+    if (!storage || storage.getItem(this.readStateVersionKey)) return;
+    for (const thread of threads) {
+      storage.setItem(this.threadReadKey(thread.id), String(this.activityMs(thread)));
+    }
+    storage.setItem(this.readStateVersionKey, new Date().toISOString());
+  }
+
+  private readStateStorage(): Storage | null {
+    try {
+      return globalThis.localStorage || null;
+    } catch {
+      return null;
+    }
+  }
+
+  private threadReadKey(threadId: string): string {
+    return `orkestr.threadRead.${threadId}`;
   }
 
   private threadVisibleInTree(thread: ThreadSummary): boolean {
