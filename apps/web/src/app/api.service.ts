@@ -72,7 +72,12 @@ export interface TimerRecord {
   target: string;
   cadence: string;
   nextRunAt: string;
+  time?: string;
+  every?: string | null;
+  prompt?: string;
   promptFile?: string;
+  enabled?: boolean;
+  createdAt?: string;
 }
 
 export interface EventRecord {
@@ -81,71 +86,228 @@ export interface EventRecord {
   [key: string]: unknown;
 }
 
+export interface ThreadSummary {
+  id: string;
+  name?: string;
+  title?: string;
+  bindingName?: string;
+  state?: string;
+  status?: string;
+  publicStatus?: string;
+  publicStatusCode?: string;
+  promptReady?: boolean;
+  working?: boolean;
+  typingActive?: boolean;
+  backgroundWork?: boolean;
+  pendingCount?: number;
+  lastActivityAt?: string;
+  threadUpdatedAt?: string;
+  updatedAt?: string;
+  createdAt?: string;
+  sessionName?: string | null;
+  paneId?: string | null;
+  tmuxTarget?: string | null;
+  threadId?: string;
+  codexThreadId?: string | null;
+  binding?: {
+    connector?: string;
+    chatId?: string;
+    displayName?: string;
+    enabled?: boolean;
+  } | null;
+  [key: string]: unknown;
+}
+
+export interface ThreadMessage {
+  id: string;
+  role: string;
+  source?: string;
+  text?: string;
+  promptFile?: string;
+  createdAt?: string;
+  timestamp?: string;
+  state?: string;
+  phase?: string;
+  cursor?: number;
+  attachments?: Array<Record<string, unknown>>;
+  error?: string;
+  [key: string]: unknown;
+}
+
+export interface ThreadMessagesResponse {
+  thread?: ThreadSummary;
+  messages: ThreadMessage[];
+  cursor?: number;
+  currentCursor?: number;
+  count?: number;
+  state?: string;
+}
+
+export interface ThreadHistoryResponse {
+  thread?: ThreadSummary;
+  messages: ThreadMessage[];
+  count?: number;
+  updatedAt?: string | null;
+}
+
+export interface ThreadRuntimeResponse {
+  thread?: ThreadSummary;
+  runtime?: Record<string, unknown>;
+}
+
+export interface ThreadUploadInput {
+  name: string;
+  mimetype?: string;
+  size?: number;
+  contentBase64: string;
+}
+
+export interface ThreadUploadResponse {
+  attachments: Array<Record<string, unknown>>;
+}
+
 @Injectable({ providedIn: "root" })
 export class ApiService {
   private readonly http = inject(HttpClient);
+  private readonly apiBase = this.resolveApiBase();
+
+  private resolveApiBase(): string {
+    const baseHref = globalThis.document?.querySelector("base")?.getAttribute("href") || "/";
+    const normalized = baseHref.endsWith("/") ? baseHref.slice(0, -1) : baseHref;
+    return `${normalized}/api`;
+  }
+
+  private api(path: string): string {
+    return `${this.apiBase}${path}`;
+  }
 
   health(): Observable<HealthResponse> {
-    return this.http.get<HealthResponse>("/api/health");
+    return this.http.get<HealthResponse>(this.api("/health"));
   }
 
   setupStatus(): Observable<SetupStatus> {
-    return this.http.get<SetupStatus>("/api/setup/status");
+    return this.http.get<SetupStatus>(this.api("/setup/status"));
   }
 
   saveConnectorConfig(id: string, body: Record<string, string>): Observable<ConnectorConfigResponse> {
-    return this.http.post<ConnectorConfigResponse>(`/api/connectors/${encodeURIComponent(id)}/config`, body);
+    return this.http.post<ConnectorConfigResponse>(this.api(`/connectors/${encodeURIComponent(id)}/config`), body);
   }
 
   testConnector(id: string): Observable<ConnectorStatus> {
-    return this.http.post<ConnectorStatus>(`/api/connectors/${encodeURIComponent(id)}/test`, {});
+    return this.http.post<ConnectorStatus>(this.api(`/connectors/${encodeURIComponent(id)}/test`), {});
   }
 
   startGmailOAuth(): Observable<GmailOAuthStartResponse> {
-    return this.http.get<GmailOAuthStartResponse>("/api/connectors/gmail/oauth/start");
+    return this.http.get<GmailOAuthStartResponse>(this.api("/connectors/gmail/oauth/start"));
   }
 
   agentTemplates(): Observable<{ templates: AgentTemplate[] }> {
-    return this.http.get<{ templates: AgentTemplate[] }>("/api/agents/templates");
+    return this.http.get<{ templates: AgentTemplate[] }>(this.api("/agents/templates"));
   }
 
   createAgentFromTemplate(id: string): Observable<{ agent: Agent }> {
-    return this.http.post<{ agent: Agent }>(`/api/agents/templates/${encodeURIComponent(id)}`, {});
+    return this.http.post<{ agent: Agent }>(this.api(`/agents/templates/${encodeURIComponent(id)}`), {});
   }
 
   agents(): Observable<{ agents: Agent[] }> {
-    return this.http.get<{ agents: Agent[] }>("/api/agents");
+    return this.http.get<{ agents: Agent[] }>(this.api("/agents"));
   }
 
   agentMessages(id: string): Observable<{ messages: AgentMessage[] }> {
-    return this.http.get<{ messages: AgentMessage[] }>(`/api/agents/${encodeURIComponent(id)}/messages`);
+    return this.http.get<{ messages: AgentMessage[] }>(this.api(`/agents/${encodeURIComponent(id)}/messages`));
   }
 
   queueAgentMessage(id: string, text: string): Observable<{ message: AgentMessage }> {
-    return this.http.post<{ message: AgentMessage }>(`/api/agents/${encodeURIComponent(id)}/messages`, { text });
+    return this.http.post<{ message: AgentMessage }>(this.api(`/agents/${encodeURIComponent(id)}/messages`), { text });
   }
 
   runNextAgentMessage(id: string): Observable<unknown> {
-    return this.http.post(`/api/agents/${encodeURIComponent(id)}/run-next`, { executorId: "noop" });
+    return this.http.post(this.api(`/agents/${encodeURIComponent(id)}/run-next`), { executorId: "noop" });
   }
 
   timers(): Observable<{ timers: TimerRecord[] }> {
-    return this.http.get<{ timers: TimerRecord[] }>("/api/timers");
+    return this.http.get<{ timers: TimerRecord[] }>(this.api("/timers"));
   }
 
   createTimer(body: Record<string, string>): Observable<{ timer: TimerRecord }> {
-    return this.http.post<{ timer: TimerRecord }>("/api/timers", body);
+    return this.http.post<{ timer: TimerRecord }>(this.api("/timers"), body);
   }
 
   runTimer(id: string): Observable<unknown> {
-    return this.http.post(`/api/timers/${encodeURIComponent(id)}/run`, {});
+    return this.http.post(this.api(`/timers/${encodeURIComponent(id)}/run`), {});
   }
 
   deleteTimer(id: string): Observable<unknown> {
-    return this.http.delete(`/api/timers/${encodeURIComponent(id)}`);
+    return this.http.delete(this.api(`/timers/${encodeURIComponent(id)}`));
   }
 
   events(limit = 50): Observable<{ events: EventRecord[] }> {
-    return this.http.get<{ events: EventRecord[] }>(`/api/events?limit=${limit}`);
+    return this.http.get<{ events: EventRecord[] }>(this.api(`/events?limit=${limit}`));
+  }
+
+  threads(): Observable<{ threads: ThreadSummary[] }> {
+    return this.http.get<{ threads: ThreadSummary[] }>(this.api("/threads"));
+  }
+
+  threadMessages(id: string, limit = 100): Observable<ThreadMessagesResponse> {
+    return this.http.get<ThreadMessagesResponse>(this.api(`/threads/${encodeURIComponent(id)}/messages?limit=${limit}`));
+  }
+
+  threadRuntime(id: string): Observable<ThreadSummary> {
+    return this.http.get<ThreadSummary>(this.api(`/threads/${encodeURIComponent(id)}/runtime-lite`));
+  }
+
+  sendThreadInput(id: string, text: string, attachments: Array<Record<string, unknown>> = []): Observable<unknown> {
+    const body: Record<string, unknown> = { text };
+    if (attachments.length) body["attachments"] = attachments;
+    return this.http.post(this.api(`/threads/${encodeURIComponent(id)}/input`), body);
+  }
+
+  wakeThread(id: string): Observable<unknown> {
+    return this.http.post(this.api(`/threads/${encodeURIComponent(id)}/wake`), { reason: "ui_wake" });
+  }
+
+  sleepThread(id: string): Observable<unknown> {
+    return this.http.post(this.api(`/threads/${encodeURIComponent(id)}/sleep`), { reason: "ui_sleep" });
+  }
+
+  resumeThread(id: string): Observable<unknown> {
+    return this.http.post(this.api(`/threads/${encodeURIComponent(id)}/resume`), { reason: "ui_resume" });
+  }
+
+  recoverThread(id: string): Observable<unknown> {
+    return this.http.post(this.api(`/threads/${encodeURIComponent(id)}/recover`), {});
+  }
+
+  interruptThread(id: string, text = ""): Observable<unknown> {
+    return this.http.post(this.api(`/threads/${encodeURIComponent(id)}/interrupt`), { text });
+  }
+
+  approveThread(id: string, text = "Approved. Proceed."): Observable<unknown> {
+    return this.http.post(this.api(`/threads/${encodeURIComponent(id)}/approve`), { text });
+  }
+
+  threadRuntimeFull(id: string): Observable<ThreadRuntimeResponse> {
+    return this.http.get<ThreadRuntimeResponse>(this.api(`/threads/${encodeURIComponent(id)}/runtime`));
+  }
+
+  threadHistory(id: string): Observable<ThreadHistoryResponse> {
+    return this.http.get<ThreadHistoryResponse>(this.api(`/threads/${encodeURIComponent(id)}/history`));
+  }
+
+  threadTimers(id: string): Observable<{ timers: TimerRecord[] }> {
+    return this.http.get<{ timers: TimerRecord[] }>(this.api(`/threads/${encodeURIComponent(id)}/timers`));
+  }
+
+  createThreadTimer(id: string, body: Record<string, string>): Observable<{ timer: TimerRecord }> {
+    return this.http.post<{ timer: TimerRecord }>(this.api(`/threads/${encodeURIComponent(id)}/timers`), body);
+  }
+
+  deleteThreadTimer(id: string, timerId: string): Observable<unknown> {
+    return this.http.delete(this.api(`/threads/${encodeURIComponent(id)}/timers/${encodeURIComponent(timerId)}`));
+  }
+
+  uploadThreadFiles(id: string, files: ThreadUploadInput[]): Observable<ThreadUploadResponse> {
+    return this.http.post<ThreadUploadResponse>(this.api(`/threads/${encodeURIComponent(id)}/uploads`), { files });
   }
 }

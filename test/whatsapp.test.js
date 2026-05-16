@@ -4,9 +4,10 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { startServer } from "../apps/server/src/server.js";
-import { runNextAgentMessage } from "../packages/core/src/executors.js";
+import { runNextAgentMessage, runNextThreadMessage } from "../packages/core/src/executors.js";
 import { listAgentMessages } from "../packages/core/src/messages.js";
 import { getSetupStatus } from "../packages/core/src/setup.js";
+import { createThread, listThreadMessages } from "../packages/core/src/threads.js";
 import { deliverWhatsAppReplies, getWhatsAppStatus, routeWhatsAppInbound } from "../packages/connectors/src/whatsapp.js";
 import { writeConnectorConfig } from "../packages/storage/src/config.js";
 
@@ -146,4 +147,34 @@ test("whatsapp delivery mirrors assistant replies once to the source chat", asyn
   assert.equal(calls[0].body.to, "chat-1");
   assert.equal(calls[0].body.accountId, "main");
   assert.match(calls[0].body.text, /No-op executor received/);
+});
+
+test("whatsapp inbound can route directly to a thread and mirror its reply once", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-thread-"));
+  const env = { ORKESTR_HOME: home };
+  await createThread({ id: "thread-wa", name: "WA Thread", executorId: "noop" }, env);
+  await writeConnectorConfig("whatsapp", {
+    bridgeUrl: "http://wa.local",
+    threadRoutes: { "chat-thread": "thread-wa" },
+  }, env);
+
+  const routed = await routeWhatsAppInbound({ eventId: "wa-thread-1", chatId: "chat-thread", text: "thread status?" }, env);
+  await runNextThreadMessage("thread-wa", {}, env);
+
+  const calls = [];
+  const delivery = await deliverWhatsAppReplies(env, async (url, options) => {
+    calls.push({ url, body: JSON.parse(options.body) });
+    return response({ ok: true, ids: ["sent-thread"] });
+  });
+  const duplicate = await deliverWhatsAppReplies(env, async () => {
+    throw new Error("should not resend");
+  });
+  const messages = await listThreadMessages("thread-wa", env);
+
+  assert.equal(routed.threadId, "thread-wa");
+  assert.equal(messages.length, 2);
+  assert.equal(delivery.delivered.length, 1);
+  assert.equal(duplicate.delivered.length, 0);
+  assert.equal(calls[0].url.pathname, "/send-text");
+  assert.equal(calls[0].body.to, "chat-thread");
 });

@@ -5,6 +5,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { readConnectorConfig } from "../../storage/src/config.js";
 import { dataPaths } from "../../storage/src/paths.js";
+import { readOverlay } from "../../core/src/overlay.js";
 import { getWhatsAppStatus } from "./whatsapp.js";
 
 const execFileAsync = promisify(execFile);
@@ -49,6 +50,34 @@ function status(id, label, state, summary, details = {}) {
   return { id, label, state, summary, details };
 }
 
+async function overlayConnectorStatus(id, overlay) {
+  const connector = overlay?.connectors?.[id];
+  if (!connector || typeof connector !== "object" || Array.isArray(connector)) return null;
+  const requiredPaths = Array.isArray(connector.requiredPaths) ? connector.requiredPaths.map(String).filter(Boolean) : [];
+  const missingPaths = [];
+  for (const requiredPath of requiredPaths) {
+    if (!(await pathExists(requiredPath))) missingPaths.push(requiredPath);
+  }
+  const requestedState = String(connector.state || "connected").trim() || "connected";
+  const state = missingPaths.length ? String(connector.missingState || "partial").trim() || "partial" : requestedState;
+  return status(
+    id,
+    String(connector.label || id).trim() || id,
+    state,
+    String(
+      missingPaths.length
+        ? connector.missingSummary || `Overlay connector is configured but ${missingPaths.length} required path(s) are missing.`
+        : connector.summary || "Configured by private overlay.",
+    ),
+    {
+      ...(connector.details && typeof connector.details === "object" ? connector.details : {}),
+      overlay: true,
+      requiredPaths,
+      missingPaths,
+    },
+  );
+}
+
 export async function getConnectorStatuses({ env = process.env, home = os.homedir() } = {}) {
   const paths = dataPaths(env);
   const [openaiConfig, gmailConfig] = await Promise.all([
@@ -66,6 +95,7 @@ export async function getConnectorStatuses({ env = process.env, home = os.homedi
   const gmailOAuthError = await readJsonIfExists(path.join(paths.secrets, "gmail-error.json"));
   const openaiKey = env.OPENAI_API_KEY || openaiConfig.openaiApiKey || "";
   const whatsapp = await getWhatsAppStatus(env);
+  const overlay = await readOverlay(env);
 
   const connectors = {
     openai: openaiKey
@@ -119,6 +149,11 @@ export async function getConnectorStatuses({ env = process.env, home = os.homedi
       ? status("timers", "Timers", "connected", "Timer store is initialized.")
       : status("timers", "Timers", "not_connected", "Create the first recurring timer."),
   };
+
+  const overlayStatuses = await Promise.all(connectorOrder.map((id) => overlayConnectorStatus(id, overlay)));
+  for (const override of overlayStatuses.filter(Boolean)) {
+    connectors[override.id] = override;
+  }
 
   return connectorOrder.map((id) => connectors[id]);
 }

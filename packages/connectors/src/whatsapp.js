@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { enqueueAgentMessage } from "../../core/src/messages.js";
+import { enqueueThreadInput, listThreadMessages, listThreads } from "../../core/src/threads.js";
 import { dataPaths, ensureDataDirs } from "../../storage/src/paths.js";
 import { readConnectorConfig } from "../../storage/src/config.js";
 import { appendEvent, readJson, writeJson } from "../../storage/src/store.js";
@@ -108,6 +109,17 @@ function routeAgentId(input, config) {
   );
 }
 
+function routeThreadId(input, config) {
+  const chatId = pickString(input.chatId, input.chat?.id, input.fromChatId);
+  const routes = config.threadRoutes || config.threads || {};
+  return pickString(
+    input.threadId,
+    input.targetThreadId,
+    chatId ? routes[chatId] : "",
+    config.defaultThreadId,
+  );
+}
+
 async function readWhatsAppState(env) {
   const paths = await ensureDataDirs(env);
   return readJson(paths.whatsapp, { inboundEvents: [] });
@@ -131,17 +143,19 @@ export async function routeWhatsAppInbound(input = {}, env = process.env) {
   const state = await readWhatsAppState(env);
   const existing = (state.inboundEvents || []).find((event) => event.eventId === eventId);
   if (existing) {
-    await appendEvent({ type: "whatsapp_inbound_duplicate", eventId, agentId: existing.agentId, messageId: existing.messageId }, env);
+    await appendEvent({ type: "whatsapp_inbound_duplicate", eventId, agentId: existing.agentId || null, threadId: existing.threadId || null, messageId: existing.messageId }, env);
     return {
       duplicate: true,
       event: existing,
-      agentId: existing.agentId,
+      agentId: existing.agentId || null,
+      threadId: existing.threadId || null,
       messageId: existing.messageId,
     };
   }
 
-  const agentId = routeAgentId(input, config);
-  if (!agentId) throw badRequest("whatsapp_agent_required");
+  const threadId = routeThreadId(input, config);
+  const agentId = threadId ? "" : routeAgentId(input, config);
+  if (!threadId && !agentId) throw badRequest("whatsapp_target_required");
 
   const text = pickString(input.text, input.body, input.message);
   const promptFile = pickString(input.promptFile);
@@ -150,25 +164,25 @@ export async function routeWhatsAppInbound(input = {}, env = process.env) {
   const chatId = pickString(input.chatId, input.chat?.id, input.fromChatId);
   const from = pickString(input.from, input.sender, input.author);
   const accountId = pickString(input.accountId);
-  const message = await enqueueAgentMessage(
-    agentId,
-    {
-      role: "user",
-      source: "whatsapp_inbound",
-      connector: "whatsapp",
-      externalId: eventId,
-      chatId,
-      from,
-      accountId,
-      text,
-      promptFile,
-      attachments: Array.isArray(input.attachments) ? input.attachments : [],
-    },
-    env,
-  );
+  const messageInput = {
+    role: "user",
+    source: "whatsapp_inbound",
+    connector: "whatsapp",
+    externalId: eventId,
+    chatId,
+    from,
+    accountId,
+    text,
+    promptFile,
+    attachments: Array.isArray(input.attachments) ? input.attachments : [],
+  };
+  const message = threadId
+    ? await enqueueThreadInput(threadId, messageInput, env)
+    : await enqueueAgentMessage(agentId, messageInput, env);
   const event = {
     eventId,
-    agentId,
+    agentId: agentId || null,
+    threadId: threadId || null,
     messageId: message.id,
     chatId,
     from,
@@ -176,11 +190,12 @@ export async function routeWhatsAppInbound(input = {}, env = process.env) {
   };
   state.inboundEvents = [...(state.inboundEvents || []), event];
   await writeWhatsAppState(state, env);
-  await appendEvent({ type: "whatsapp_inbound_routed", eventId, agentId, messageId: message.id, chatId }, env);
+  await appendEvent({ type: "whatsapp_inbound_routed", eventId, agentId: agentId || null, threadId: threadId || null, messageId: message.id, chatId }, env);
   return {
     duplicate: false,
     event,
-    agentId,
+    agentId: agentId || null,
+    threadId: threadId || null,
     message,
   };
 }
@@ -193,6 +208,15 @@ async function listMessageSets(env) {
     const agentId = path.basename(file, ".json");
     const messages = await readJson(path.join(paths.messages, file), []);
     if (Array.isArray(messages)) sets.push({ agentId, messages });
+  }
+  return sets;
+}
+
+async function listThreadMessageSets(env) {
+  const sets = [];
+  for (const thread of await listThreads(env)) {
+    const messages = await listThreadMessages(thread.id, env);
+    if (Array.isArray(messages)) sets.push({ threadId: thread.id, messages });
   }
   return sets;
 }
@@ -236,7 +260,11 @@ export async function deliverWhatsAppReplies(env = process.env, fetchImpl = fetc
   const skipped = [];
   const failed = [];
 
-  for (const { agentId, messages } of await listMessageSets(env)) {
+  const messageSets = [
+    ...(await listMessageSets(env)).map((set) => ({ ...set, kind: "agent" })),
+    ...(await listThreadMessageSets(env)).map((set) => ({ ...set, kind: "thread" })),
+  ];
+  for (const { agentId, threadId, messages, kind } of messageSets) {
     for (const message of messages) {
       if (message.role !== "assistant" || message.state !== "completed" || deliveredIds.has(message.id)) continue;
       const parent = messages.find((entry) => entry.id === message.parentMessageId);
@@ -254,7 +282,9 @@ export async function deliverWhatsAppReplies(env = process.env, fetchImpl = fetc
       try {
         const payload = await sendWhatsAppText({ chatId, text, accountId, config, env, fetchImpl });
         const delivery = {
-          agentId,
+          kind,
+          agentId: agentId || null,
+          threadId: threadId || null,
           messageId: message.id,
           parentMessageId: message.parentMessageId,
           chatId,
@@ -265,9 +295,9 @@ export async function deliverWhatsAppReplies(env = process.env, fetchImpl = fetc
         outboundDeliveries.push(delivery);
         deliveredIds.add(message.id);
         delivered.push(delivery);
-        await appendEvent({ type: "whatsapp_outbound_delivered", agentId, messageId: message.id, chatId }, env);
+        await appendEvent({ type: "whatsapp_outbound_delivered", agentId: agentId || null, threadId: threadId || null, messageId: message.id, chatId }, env);
       } catch (error) {
-        const failure = { agentId, messageId: message.id, chatId, error: error.message || String(error) };
+        const failure = { kind, agentId: agentId || null, threadId: threadId || null, messageId: message.id, chatId, error: error.message || String(error) };
         failed.push(failure);
         await appendEvent({ type: "whatsapp_outbound_failed", ...failure }, env);
       }

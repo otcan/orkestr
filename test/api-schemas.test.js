@@ -13,7 +13,7 @@ test("shared API schemas expose high-value request contracts", () => {
   assert.equal(timerCreateSchema.body.properties.promptFile.type, "string");
 });
 
-test("Fastify validates WhatsApp inbound request schema", async () => {
+test("NestJS validates WhatsApp inbound request schema", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-schema-api-"));
   const priorHome = process.env.ORKESTR_HOME;
   process.env.ORKESTR_HOME = home;

@@ -5,6 +5,15 @@ import { ensureDataDirs } from "../../storage/src/paths.js";
 import { appendEvent, readJson, writeJson } from "../../storage/src/store.js";
 import { appendAgentMessage, listAgentMessages, updateAgentMessage } from "./messages.js";
 import { readOverlay } from "./overlay.js";
+import {
+  appendThreadMessage,
+  getThread,
+  listThreadMessages,
+  nextQueuedThreadMessage,
+  updateThread,
+  updateThreadMessage,
+  withThreadLock,
+} from "./threads.js";
 
 const adapters = new Map();
 const loadedOverlayModules = new Set();
@@ -85,6 +94,43 @@ async function saveExecution(execution, env) {
   return execution;
 }
 
+export async function recoverInterruptedExecutions(env = process.env) {
+  const executions = await listExecutions(env);
+  const running = executions.filter((execution) => execution.state === "running");
+  const recovered = [];
+  for (const execution of running) {
+    const failed = {
+      ...execution,
+      state: "failed",
+      finishedAt: new Date().toISOString(),
+      error: "interrupted_by_orkestr_restart",
+    };
+    if (execution.threadId && execution.messageId) {
+      await updateThreadMessage(execution.threadId, execution.messageId, {
+        state: "failed",
+        error: failed.error,
+      }, env).catch(() => {});
+      const remainingQueued = (await listThreadMessages(execution.threadId, env)).some((entry) => entry.state === "queued");
+      await updateThread(execution.threadId, { state: remainingQueued ? "queued" : "ready", lastError: failed.error }, env).catch(() => {});
+    } else if (execution.agentId && execution.messageId) {
+      await updateAgentMessage(execution.agentId, execution.messageId, {
+        state: "failed",
+        error: failed.error,
+      }, env).catch(() => {});
+    }
+    await saveExecution(failed, env);
+    await appendEvent({
+      type: "executor_interrupted_recovered",
+      executionId: execution.id,
+      threadId: execution.threadId || null,
+      agentId: execution.agentId || null,
+      messageId: execution.messageId || null,
+    }, env);
+    recovered.push(failed);
+  }
+  return recovered;
+}
+
 export async function defaultExecutorId(env = process.env) {
   const overlay = await readOverlay(env);
   return String(overlay.executors?.default || "noop");
@@ -158,6 +204,91 @@ export async function runNextAgentMessage(agentId, options = {}, env = process.e
     await appendEvent({ type: "executor_failed", executionId: execution.id, agentId, messageId: message.id, executorId: adapter.id }, env);
     throw error;
   }
+}
+
+export async function runNextThreadMessage(threadId, options = {}, env = process.env) {
+  await loadOverlayExecutorAdapters(env);
+  const thread = await getThread(threadId, env);
+  if (!thread) {
+    const error = new Error("thread_not_found");
+    error.statusCode = 404;
+    throw error;
+  }
+  return withThreadLock(thread.id, async () => {
+    const executorId = options.executorId || thread.executor?.id || (await defaultExecutorId(env));
+    const adapter = getExecutorAdapter(executorId);
+    if (!adapter) {
+      const error = new Error("executor_not_found");
+      error.statusCode = 404;
+      throw error;
+    }
+    const message = await nextQueuedThreadMessage(thread.id, env);
+    if (!message) {
+      const error = new Error("no_queued_messages");
+      error.statusCode = 404;
+      throw error;
+    }
+
+    await updateThread(thread.id, { state: "working", executor: { ...(thread.executor || {}), id: adapter.id } }, env);
+    await updateThreadMessage(thread.id, message.id, { state: "running", executorId: adapter.id }, env);
+    const execution = await saveExecution(
+      {
+        id: randomUUID(),
+        threadId: thread.id,
+        messageId: message.id,
+        executorId: adapter.id,
+        state: "running",
+        startedAt: new Date().toISOString(),
+      },
+      env,
+    );
+    await appendEvent({ type: "executor_started", executionId: execution.id, threadId: thread.id, messageId: message.id, executorId: adapter.id }, env);
+
+    try {
+      const freshThread = await getThread(thread.id, env);
+      const result = await adapter.run({ thread: freshThread || thread, threadId: thread.id, message, execution, env });
+      const finished = {
+        ...execution,
+        state: "completed",
+        finishedAt: new Date().toISOString(),
+        result: result || {},
+      };
+      await updateThreadMessage(thread.id, message.id, { state: "completed", result: result || {} }, env);
+      const assistant = await appendThreadMessage(
+        thread.id,
+        {
+          role: "assistant",
+          source: `executor:${adapter.id}`,
+          text: String(result?.output || result?.text || "Executor completed without text output."),
+          parentMessageId: message.id,
+          executionId: execution.id,
+          state: "completed",
+          connector: message.connector || "",
+          chatId: message.chatId || "",
+          accountId: message.accountId || "",
+        },
+        env,
+      );
+      finished.assistantMessageId = assistant.id;
+      await saveExecution(finished, env);
+      const remainingQueued = (await listThreadMessages(thread.id, env)).some((entry) => entry.state === "queued");
+      await updateThread(thread.id, { state: remainingQueued ? "queued" : "ready" }, env);
+      await appendEvent({ type: "executor_completed", executionId: execution.id, threadId: thread.id, messageId: message.id, executorId: adapter.id }, env);
+      return finished;
+    } catch (error) {
+      const failed = {
+        ...execution,
+        state: "failed",
+        finishedAt: new Date().toISOString(),
+        error: error.message || String(error),
+      };
+      await updateThreadMessage(thread.id, message.id, { state: "failed", error: failed.error }, env);
+      await updateThread(thread.id, { state: "broken", lastError: failed.error }, env);
+      await saveExecution(failed, env);
+      await appendEvent({ type: "executor_failed", executionId: execution.id, threadId: thread.id, messageId: message.id, executorId: adapter.id }, env);
+      throw error;
+    }
+  });
 }
 
 registerExecutorAdapter({

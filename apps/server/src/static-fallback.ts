@@ -1,12 +1,10 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
-import { json } from "../http.js";
+import type { INestApplication } from "@nestjs/common";
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const publicDir = path.resolve(__dirname, "../../../../dist/web/browser");
+const publicDir = path.resolve(process.cwd(), "dist/web/browser");
 
-const mimeTypes = new Map([
+const mimeTypes = new Map<string, string>([
   [".html", "text/html; charset=utf-8"],
   [".js", "text/javascript; charset=utf-8"],
   [".css", "text/css; charset=utf-8"],
@@ -14,41 +12,46 @@ const mimeTypes = new Map([
   [".svg", "image/svg+xml"],
 ]);
 
-async function serveStaticPath(pathname, reply) {
-  const url = new URL(pathname, "http://localhost");
+export function registerStaticFallback(app: INestApplication): void {
+  const expressApp = app.getHttpAdapter().getInstance();
+  expressApp.use(async (request: any, response: any, next: () => void) => {
+    const url = String(request.url || "");
+    if (url.startsWith("/api/") || url.startsWith("/oauth/")) {
+      return next();
+    }
+    return serveStaticPath(url || "/", response);
+  });
+}
+
+async function serveStaticPath(requestUrl: string, response: any) {
+  const url = new URL(requestUrl, "http://localhost");
   const requested = decodeURIComponent(url.pathname === "/" ? "/index.html" : url.pathname);
   const safePath = path.normalize(requested).replace(/^(\.\.[/\\])+/, "");
   const filePath = path.join(publicDir, safePath);
   const target = filePath.startsWith(publicDir) ? filePath : path.join(publicDir, "index.html");
   const ext = path.extname(target);
+
   try {
     const body = await fs.readFile(target);
-    return reply
-      .code(200)
+    return response
+      .status(200)
       .header("cache-control", "no-store")
       .type(mimeTypes.get(ext) || "application/octet-stream")
       .send(body);
   } catch {
     try {
       const body = await fs.readFile(path.join(publicDir, "index.html"));
-      return reply
-        .code(200)
+      return response
+        .status(200)
         .header("cache-control", "no-store")
         .type("text/html; charset=utf-8")
         .send(body);
     } catch {
-      return reply
-        .code(503)
+      return response
+        .status(503)
         .header("cache-control", "no-store")
         .type("text/html; charset=utf-8")
         .send("<!doctype html><title>Orkestr build missing</title><h1>Angular build missing</h1><p>Run <code>npm run web:build</code> before starting the server.</p>");
     }
   }
-}
-
-export async function registerStaticRoutes(app) {
-  app.setNotFoundHandler(async (request, reply) => {
-    if (request.url.startsWith("/api/")) return json(reply, 404, { error: "not_found" });
-    return serveStaticPath(request.url, reply);
-  });
 }

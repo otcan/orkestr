@@ -16,6 +16,10 @@ export function dataPaths(env = process.env) {
     secrets: path.join(home, "secrets"),
     config: path.join(home, "config.json"),
     agents: path.join(home, "agents.json"),
+    threads: path.join(home, "threads.json"),
+    threadMessages: path.join(home, "thread-messages"),
+    runtimeLeases: path.join(home, "runtime-leases.json"),
+    workspaces: path.join(home, "workspaces"),
     timers: path.join(home, "timers.json"),
     events: path.join(home, "events.jsonl"),
     whatsapp: path.join(home, "whatsapp.json"),
@@ -27,6 +31,8 @@ export async function ensureDataDirs(env = process.env) {
   await fs.mkdir(paths.home, { recursive: true });
   await fs.mkdir(paths.browsers, { recursive: true });
   await fs.mkdir(paths.messages, { recursive: true });
+  await fs.mkdir(paths.threadMessages, { recursive: true });
+  await fs.mkdir(paths.workspaces, { recursive: true });
   await fs.mkdir(paths.oauth, { recursive: true });
   await fs.mkdir(paths.secrets, { recursive: true, mode: 0o700 });
   return paths;

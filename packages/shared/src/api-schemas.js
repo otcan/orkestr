@@ -46,6 +46,8 @@ export const whatsappInboundSchema = {
       messageId: stringValue,
       agentId: stringValue,
       targetAgentId: stringValue,
+      threadId: stringValue,
+      targetThreadId: stringValue,
       chatId: stringValue,
       fromChatId: stringValue,
       from: stringValue,
@@ -100,12 +102,62 @@ export const agentRunSchema = {
   body: objectValue,
 };
 
+export const threadCreateSchema = {
+  body: {
+    type: "object",
+    properties: {
+      id: stringValue,
+      threadId: stringValue,
+      name: stringValue,
+      title: stringValue,
+      state: stringValue,
+      executorId: stringValue,
+      codexThreadId: stringValue,
+      bindingName: stringValue,
+      executor: objectValue,
+      binding: objectValue,
+    },
+    additionalProperties: true,
+  },
+};
+
+export const threadInputSchema = {
+  ...idParams("threadId"),
+  body: {
+    type: "object",
+    properties: {
+      role: stringValue,
+      source: stringValue,
+      text: stringValue,
+      promptFile: stringValue,
+      connector: stringValue,
+      externalId: stringValue,
+      chatId: stringValue,
+      from: stringValue,
+      accountId: stringValue,
+      attachments: {
+        type: "array",
+        items: objectValue,
+      },
+    },
+    additionalProperties: true,
+  },
+};
+
+export const threadRunSchema = {
+  ...idParams("threadId"),
+  body: objectValue,
+};
+
 export const timerCreateSchema = {
   body: {
     type: "object",
     properties: {
       label: stringValue,
       target: stringValue,
+      targetType: stringValue,
+      threadId: stringValue,
+      agentId: stringValue,
       cadence: stringValue,
       time: stringValue,
       every: stringValue,

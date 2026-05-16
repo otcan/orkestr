@@ -5,6 +5,7 @@ import path from "node:path";
 import test from "node:test";
 import { listAgentMessages } from "../packages/core/src/messages.js";
 import { createTimer, listTimers, markDueTimers, nextRunAt } from "../packages/core/src/timers.js";
+import { createThread, listThreadMessages } from "../packages/core/src/threads.js";
 
 test("daily timers schedule the next future clock time", () => {
   const from = new Date("2026-05-15T06:00:00Z");
@@ -38,4 +39,21 @@ test("due timers are marked and rescheduled", async () => {
   const messages = await listAgentMessages("job-search-assistant", env);
   assert.equal(messages.length, 1);
   assert.equal(messages[0].source, "timer_due");
+});
+
+test("thread timers queue input on the target thread", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-timers-"));
+  const env = { ORKESTR_HOME: home };
+  await createThread({ id: "timer-thread", name: "Timer Thread" }, env);
+  await createTimer({ label: "Thread Due", threadId: "timer-thread", prompt: "Run thread timer", cadence: "interval", every: "1h" }, env);
+  const timers = await listTimers(env);
+  timers[0].nextRunAt = "2020-01-01T00:00:00.000Z";
+  await fs.writeFile(path.join(home, "timers.json"), `${JSON.stringify(timers, null, 2)}\n`);
+
+  await markDueTimers(env, new Date("2026-05-15T10:00:00Z"));
+  const messages = await listThreadMessages("timer-thread", env);
+
+  assert.equal(messages.length, 1);
+  assert.equal(messages[0].source, "timer_due");
+  assert.equal(messages[0].text, "Run thread timer");
 });

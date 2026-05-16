@@ -35,6 +35,7 @@ Run these before tagging or publishing:
 npm run check
 npm run smoke
 npm run demo:job-search
+docker build -t orkestr-oss:test .
 ```
 
 Expected result:
@@ -42,6 +43,8 @@ Expected result:
 - `npm run check` passes all unit and end-to-end tests.
 - `npm run smoke` proves persisted timers/messages/events survive restart.
 - `npm run demo:job-search` proves the mock WhatsApp-to-agent-to-WhatsApp loop.
+- `docker build` proves the production image builds Angular and can start from
+  compiled assets.
 
 ## Manual Demo
 
@@ -102,7 +105,7 @@ Private overlays must not be copied into the public repo when they contain:
 
 1. Confirm `git status --short` is clean.
 2. Run the verification commands above.
-3. Review `README.md`, `docs/product.md`, and this checklist.
-4. Create a signed or annotated tag, for example `v0.2.0-milestone-2`.
+3. Review `README.md`, `docs/product.md`, `docs/framework-deployment.md`, and this checklist.
+4. Create a signed or annotated tag, for example `v0.1.0-alpha.0`.
 5. Push `main` and the tag.
 6. Create release notes from the included scope and known gaps.

@@ -1,5 +1,6 @@
 import { ensureDataDirs } from "../../storage/src/paths.js";
 import { appendEvent, readJson, writeJson } from "../../storage/src/store.js";
+import { createThread } from "./threads.js";
 
 export const templates = [
   {
@@ -39,6 +40,7 @@ export async function createAgentFromTemplate(templateId, env = process.env) {
     id: templateId,
     templateId,
     name: template.name,
+    threadId: templateId,
     state: "draft",
     connectors: template.connectors,
     systemPrompt: template.systemPrompt,
@@ -47,6 +49,17 @@ export async function createAgentFromTemplate(templateId, env = process.env) {
   };
   agents.push(agent);
   await writeJson(paths.agents, agents);
+  await createThread(
+    {
+      id: templateId,
+      name: template.name,
+      title: template.name,
+      bindingName: templateId,
+      executorId: "",
+      state: "ready",
+    },
+    env,
+  );
   await appendEvent({ type: "agent_created", agentId: agent.id, templateId }, env);
   return agent;
 }

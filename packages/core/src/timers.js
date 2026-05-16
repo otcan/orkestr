@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { dataPaths, ensureDataDirs } from "../../storage/src/paths.js";
 import { appendEvent, readJson, writeJson } from "../../storage/src/store.js";
 import { enqueueAgentMessage } from "./messages.js";
+import { enqueueThreadInput } from "./threads.js";
 
 const hourMs = 60 * 60 * 1000;
 const dayMs = 24 * hourMs;
@@ -60,7 +61,8 @@ export async function createTimer(input, env = process.env) {
   const timer = {
     id: randomUUID(),
     label: String(input.label || "Recurring agent task").trim(),
-    target: String(input.target || "job-search-assistant").trim(),
+    targetType: String(input.targetType || (input.threadId ? "thread" : "agent")).trim(),
+    target: String(input.target || input.threadId || input.agentId || "job-search-assistant").trim(),
     cadence: String(input.cadence || "daily").trim().toLowerCase(),
     time: String(input.time || "09:00").trim(),
     every: String(input.every || "").trim() || null,
@@ -74,6 +76,17 @@ export async function createTimer(input, env = process.env) {
   await writeJson(paths.timers, timers);
   await appendEvent({ type: "timer_created", timerId: timer.id, label: timer.label, target: timer.target }, env);
   return timer;
+}
+
+async function enqueueTimerMessage(timer, source, env) {
+  const input = {
+    source,
+    text: timer.prompt,
+    promptFile: timer.promptFile || "",
+  };
+  return timer.targetType === "thread"
+    ? enqueueThreadInput(timer.target, input, env)
+    : enqueueAgentMessage(timer.target, input, env);
 }
 
 export async function deleteTimer(id, env = process.env) {
@@ -99,15 +112,7 @@ export async function runTimerNow(id, env = process.env, now = new Date()) {
   timer.lastRunAt = now.toISOString();
   timer.nextRunAt = nextRunAt(timer, now);
   await writeJson(paths.timers, timers);
-  const message = await enqueueAgentMessage(
-    timer.target,
-    {
-      source: "timer_manual_run",
-      text: timer.prompt,
-      promptFile: timer.promptFile || "",
-    },
-    env,
-  );
+  const message = await enqueueTimerMessage(timer, "timer_manual_run", env);
   return appendEvent(
     {
       type: "timer_manual_run",
@@ -142,21 +147,14 @@ export async function markDueTimers(env = process.env, now = new Date()) {
   if (changed) {
     await writeJson(paths.timers, next);
     for (const timer of due) {
-      const message = await enqueueAgentMessage(
-        timer.target,
-        {
-          source: "timer_due",
-          text: timer.prompt,
-          promptFile: timer.promptFile || "",
-        },
-        env,
-      );
+      const message = await enqueueTimerMessage(timer, "timer_due", env);
       await appendEvent(
         {
           ts: now.toISOString(),
           type: "timer_due",
           timerId: timer.id,
           target: timer.target,
+          targetType: timer.targetType || "agent",
           messageId: message.id,
           label: timer.label,
         },
