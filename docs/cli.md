@@ -20,6 +20,11 @@ orkestr sleep <thread-name-or-id>
 `orkestr attach` without an argument fetches live threads and asks which thread
 to attach to. This removes the old list-copy-attach workflow.
 
+Attach keeps the backing tmux session name stable, but names the tmux/byobu
+window after the Orkestr thread on wake and attach. The current runtime model is
+one Orkestr thread per tmux session; grouping multiple live thread panes into a
+single byobu session would need a separate session/window mapping.
+
 The API base defaults to `http://127.0.0.1:19812` and can be overridden with:
 
 ```bash
