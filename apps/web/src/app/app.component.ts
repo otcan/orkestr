@@ -741,7 +741,15 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
 
   threadBranchLabel(thread: ThreadSummary | null): string {
     if (!thread) return "";
-    return String(thread.branchName || this.objectValue(thread.runtime, "branchName") || "").trim();
+    const executor = thread["executor"];
+    const metadata = executor && typeof executor === "object" ? (executor as Record<string, unknown>)["metadata"] : null;
+    return String(
+      thread.branchName ||
+      this.objectValue(thread.runtime, "branchName") ||
+      this.objectValue(metadata, "branchName") ||
+      thread.baseBranch ||
+      "",
+    ).trim();
   }
 
   threadRepoLabel(thread: ThreadSummary | null): string {
@@ -754,12 +762,10 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     if (!thread) return "";
     const remote = this.threadRemoteLabel(thread);
     const repo = this.threadRepoLabel(thread);
-    const branch = this.threadRemoteBranchLabel(thread) || this.threadBranchLabel(thread);
     const gitDelta = this.threadGitDeltaLabel(thread);
     const parts: string[] = [];
     if (remote) parts.push(remote);
     if (!thread.parentThreadId && repo && !remote.toLowerCase().endsWith(`/${repo.toLowerCase()}`)) parts.push(repo);
-    if (branch) parts.push(branch);
     if (gitDelta) parts.push(gitDelta);
     return parts.join(" · ");
   }
@@ -805,10 +811,21 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
 
   threadGitDeltaLabel(thread: ThreadSummary | null): string {
     if (!thread) return "";
+    const baseAhead = this.threadNumberValue(thread, "gitBaseAhead");
+    const changedFiles = this.threadNumberValue(thread, "gitChangedFiles");
+    const dirtyFiles = this.threadNumberValue(thread, "gitDirtyFiles");
+    const baseParts: string[] = [];
+    if (Number.isFinite(baseAhead) && baseAhead > 0) baseParts.push(`${baseAhead} commit${baseAhead === 1 ? "" : "s"}`);
+    if (Number.isFinite(changedFiles) && changedFiles > 0) baseParts.push(`${changedFiles} file${changedFiles === 1 ? "" : "s"}`);
+    if (Number.isFinite(dirtyFiles) && dirtyFiles > 0) baseParts.push(`${dirtyFiles} dirty`);
+    if (baseParts.length) {
+      const comparison = String(thread.gitComparisonLabel || this.objectValue(thread.runtime, "gitComparisonLabel") || "").trim();
+      return `diff${comparison ? ` vs ${comparison}` : ""}: ${baseParts.join(", ")}`;
+    }
     const ahead = this.threadNumberValue(thread, "gitAhead");
     const behind = this.threadNumberValue(thread, "gitBehind");
-    if (Number.isFinite(ahead) && Number.isFinite(behind)) return `↑${ahead} ↓${behind}`;
-    if (this.threadRemoteBranchLabel(thread) && thread.parentThreadId) return "not pushed";
+    if (Number.isFinite(ahead) && Number.isFinite(behind) && (ahead > 0 || behind > 0)) return `ahead ${ahead} behind ${behind}`;
+    if (this.booleanThreadValue(thread, "gitRemoteMissing") && thread.parentThreadId) return "not pushed";
     return "";
   }
 
@@ -1371,6 +1388,14 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     const raw = thread[key] ?? this.pathValue(thread.runtime, key) ?? this.pathValue(metadata, key);
     const parsed = Number(raw);
     return Number.isFinite(parsed) ? parsed : Number.NaN;
+  }
+
+  private booleanThreadValue(thread: ThreadSummary | null, key: string): boolean {
+    if (!thread) return false;
+    const executor = thread["executor"];
+    const metadata = executor && typeof executor === "object" ? (executor as Record<string, unknown>)["metadata"] : null;
+    const raw = thread[key] ?? this.pathValue(thread.runtime, key) ?? this.pathValue(metadata, key);
+    return raw === true || raw === "true" || raw === 1 || raw === "1";
   }
 
   private updateDocumentTitle(): void {

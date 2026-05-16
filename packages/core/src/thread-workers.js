@@ -190,6 +190,14 @@ async function worktreeDirty(repoPath) {
   return Boolean(status.trim());
 }
 
+async function worktreeDirtyFiles(repoPath) {
+  const status = await git(repoPath, ["status", "--porcelain"]).then((result) => result.stdout).catch(() => "");
+  return new Set(status
+    .split("\n")
+    .map((line) => line.slice(3).trim().split(" -> ").at(-1))
+    .filter(Boolean)).size;
+}
+
 async function repoRemoteUrl(repoPath) {
   return await git(repoPath, ["config", "--get", "remote.origin.url"]).then((result) => result.stdout).catch(() => "");
 }
@@ -204,9 +212,7 @@ async function remoteTrackingBranch(repoPath, branchName) {
 
 async function gitAheadBehind(repoPath, remoteBranch) {
   if (!remoteBranch) return { gitAhead: null, gitBehind: null };
-  const remoteExists = await git(repoPath, ["rev-parse", "--verify", "--quiet", remoteBranch])
-    .then(() => true)
-    .catch(() => false);
+  const remoteExists = await refExists(repoPath, remoteBranch);
   if (!remoteExists) return { gitAhead: null, gitBehind: null };
   const counts = await git(repoPath, ["rev-list", "--left-right", "--count", `${remoteBranch}...HEAD`])
     .then((result) => result.stdout)
@@ -218,6 +224,128 @@ async function gitAheadBehind(repoPath, remoteBranch) {
   };
 }
 
+async function refExists(repoPath, ref) {
+  if (!ref) return false;
+  return await git(repoPath, ["rev-parse", "--verify", "--quiet", ref])
+    .then(() => true)
+    .catch(() => false);
+}
+
+async function changedFilesSince(repoPath, baseCommit) {
+  if (!baseCommit || !(await refExists(repoPath, baseCommit))) return null;
+  const diff = await git(repoPath, ["diff", "--name-only", `${baseCommit}..HEAD`])
+    .then((result) => result.stdout)
+    .catch(() => "");
+  const dirty = await git(repoPath, ["status", "--porcelain"])
+    .then((result) => result.stdout)
+    .catch(() => "");
+  const paths = new Set();
+  for (const line of diff.split("\n")) {
+    const file = nonEmptyString(line);
+    if (file) paths.add(file);
+  }
+  for (const line of dirty.split("\n")) {
+    const file = nonEmptyString(line.slice(3).split(" -> ").at(-1));
+    if (file) paths.add(file);
+  }
+  return paths.size;
+}
+
+async function commitsSince(repoPath, baseCommit) {
+  if (!baseCommit || !(await refExists(repoPath, baseCommit))) return null;
+  const count = await git(repoPath, ["rev-list", "--count", `${baseCommit}..HEAD`])
+    .then((result) => Number(result.stdout))
+    .catch(() => Number.NaN);
+  return Number.isFinite(count) ? count : null;
+}
+
+async function mergeBase(repoPath, ref) {
+  if (!ref || !(await refExists(repoPath, ref))) return "";
+  return await git(repoPath, ["merge-base", "HEAD", ref])
+    .then((result) => result.stdout)
+    .catch(() => "");
+}
+
+async function gitComparisonStats(repoPath, baseCommit, label) {
+  if (!baseCommit || !(await refExists(repoPath, baseCommit))) return null;
+  return {
+    gitComparisonBase: baseCommit,
+    gitComparisonLabel: label || "base",
+    gitBaseAhead: await commitsSince(repoPath, baseCommit),
+    gitChangedFiles: await changedFilesSince(repoPath, baseCommit),
+  };
+}
+
+async function gitBaseComparison(repoPath, thread, branchName) {
+  const metadata = thread?.executor?.metadata && typeof thread.executor.metadata === "object" ? thread.executor.metadata : {};
+  const explicitBaseCommit = nonEmptyString(thread?.baseCommit || metadata.baseCommit);
+  const baseBranch = nonEmptyString(thread?.baseBranch || metadata.baseBranch);
+  const comparisons = [];
+  const explicit = await gitComparisonStats(repoPath, explicitBaseCommit, "base");
+  if (explicit) comparisons.push(explicit);
+
+  const baseRefs = [...new Set([
+    baseBranch,
+    baseBranch && !baseBranch.includes("/") ? `origin/${baseBranch}` : "",
+  ].map(nonEmptyString).filter((ref) => ref && ref !== branchName))];
+  for (const ref of baseRefs) {
+    const base = await mergeBase(repoPath, ref);
+    const stats = await gitComparisonStats(repoPath, base, ref);
+    if (stats) comparisons.push(stats);
+  }
+
+  return comparisons.sort((a, b) => {
+    const scoreA = Number(a.gitBaseAhead || 0) + Number(a.gitChangedFiles || 0);
+    const scoreB = Number(b.gitBaseAhead || 0) + Number(b.gitChangedFiles || 0);
+    return scoreB - scoreA;
+  })[0] || {
+    gitComparisonBase: null,
+    gitComparisonLabel: null,
+    gitBaseAhead: null,
+    gitChangedFiles: null,
+  };
+}
+
+function threadCheckoutPath(thread) {
+  const runtime = thread?.runtime && typeof thread.runtime === "object" ? thread.runtime : {};
+  return nonEmptyString(
+    thread?.worktreePath ||
+    runtime.worktreePath ||
+    runtime.workspace ||
+    thread?.repoPath ||
+    thread?.cwd ||
+    thread?.workspace,
+  );
+}
+
+export async function detectThreadGitState(threadOrId, env = process.env) {
+  const thread = typeof threadOrId === "string" ? await getThread(threadOrId, env) : threadOrId;
+  if (!thread) return {};
+  const checkout = threadCheckoutPath(thread);
+  const repoPath = await resolveGitRoot(checkout).catch(() => null);
+  if (!repoPath) return {};
+  const branchName = await currentBranch(repoPath);
+  const remoteUrl = await repoRemoteUrl(repoPath);
+  const remoteBranch = await remoteTrackingBranch(repoPath, branchName);
+  const remoteExists = await refExists(repoPath, remoteBranch);
+  const aheadBehind = await gitAheadBehind(repoPath, remoteBranch);
+  const sourceDirty = await worktreeDirty(repoPath);
+  const gitDirtyFiles = await worktreeDirtyFiles(repoPath);
+  const comparison = await gitBaseComparison(repoPath, thread, branchName);
+  return {
+    repoPath,
+    repoRemoteUrl: remoteUrl || null,
+    remoteBranch: remoteBranch || null,
+    branchName,
+    sourceDirty,
+    gitDirtyFiles,
+    ...comparison,
+    gitRemoteBranchExists: remoteExists,
+    gitRemoteMissing: Boolean(remoteBranch && !remoteExists),
+    ...aheadBehind,
+  };
+}
+
 export async function detectThreadRepo(threadId, env = process.env) {
   const thread = await getThread(threadId, env);
   if (!thread) throw httpError("thread_not_found", 404);
@@ -225,9 +353,11 @@ export async function detectThreadRepo(threadId, env = process.env) {
   const branchName = await currentBranch(repoPath);
   const baseCommit = await git(repoPath, ["rev-parse", "HEAD"]).then((result) => result.stdout).catch(() => "");
   const sourceDirty = await worktreeDirty(repoPath);
+  const gitDirtyFiles = await worktreeDirtyFiles(repoPath);
   const remoteUrl = await repoRemoteUrl(repoPath);
   const remoteBranch = await remoteTrackingBranch(repoPath, branchName);
   const aheadBehind = await gitAheadBehind(repoPath, remoteBranch);
+  const remoteExists = await refExists(repoPath, remoteBranch);
   return {
     repoPath,
     repoRemoteUrl: remoteUrl || null,
@@ -236,6 +366,11 @@ export async function detectThreadRepo(threadId, env = process.env) {
     baseBranch: branchName,
     baseCommit,
     sourceDirty,
+    gitDirtyFiles,
+    gitBaseAhead: 0,
+    gitChangedFiles: gitDirtyFiles,
+    gitRemoteBranchExists: remoteExists,
+    gitRemoteMissing: Boolean(remoteBranch && !remoteExists),
     ...aheadBehind,
   };
 }

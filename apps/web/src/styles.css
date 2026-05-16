@@ -407,6 +407,14 @@ textarea:focus {
   line-height: 1.35;
 }
 
+.thread-text .thread-branch-label {
+  color: #dce7af;
+  font-family: "IBM Plex Mono", "JetBrains Mono", "SFMono-Regular", Consolas, monospace;
+  font-size: 0.68rem;
+  font-weight: 800;
+  line-height: 1.35;
+}
+
 .thread-text small,
 .subline,
 .helper,

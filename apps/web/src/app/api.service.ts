@@ -116,6 +116,13 @@ export interface ThreadSummary {
   baseCommit?: string | null;
   gitAhead?: number | null;
   gitBehind?: number | null;
+  gitBaseAhead?: number | null;
+  gitChangedFiles?: number | null;
+  gitDirtyFiles?: number | null;
+  gitComparisonBase?: string | null;
+  gitComparisonLabel?: string | null;
+  gitRemoteBranchExists?: boolean | null;
+  gitRemoteMissing?: boolean | null;
   worktreePath?: string | null;
   sourceDirty?: boolean;
   forkedFromCodexThreadId?: string | null;
@@ -217,6 +224,13 @@ export interface ThreadWorkerResponse {
   baseCommit?: string;
   gitAhead?: number | null;
   gitBehind?: number | null;
+  gitBaseAhead?: number | null;
+  gitChangedFiles?: number | null;
+  gitDirtyFiles?: number | null;
+  gitComparisonBase?: string | null;
+  gitComparisonLabel?: string | null;
+  gitRemoteBranchExists?: boolean | null;
+  gitRemoteMissing?: boolean | null;
   sourceDirty?: boolean;
 }
 
@@ -231,6 +245,13 @@ export interface ThreadRepoResponse {
     baseCommit?: string | null;
     gitAhead?: number | null;
     gitBehind?: number | null;
+    gitBaseAhead?: number | null;
+    gitChangedFiles?: number | null;
+    gitDirtyFiles?: number | null;
+    gitComparisonBase?: string | null;
+    gitComparisonLabel?: string | null;
+    gitRemoteBranchExists?: boolean | null;
+    gitRemoteMissing?: boolean | null;
     sourceDirty?: boolean;
   };
   detected?: Record<string, unknown>;

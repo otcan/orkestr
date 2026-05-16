@@ -24,7 +24,7 @@ import {
   listThreads,
   updateThread,
 } from "../../../../../packages/core/src/threads.js";
-import { createThreadWorker, detectThreadRepo, listThreadWorkers, updateThreadRepo } from "../../../../../packages/core/src/thread-workers.js";
+import { createThreadWorker, detectThreadGitState, detectThreadRepo, listThreadWorkers, updateThreadRepo } from "../../../../../packages/core/src/thread-workers.js";
 import { parseThreadInputCommand } from "../../../../../packages/core/src/thread-commands.js";
 import { ensureDataDirs } from "../../../../../packages/storage/src/paths.js";
 import { ensureAttachmentsArray, httpError } from "../../common/http.js";
@@ -152,8 +152,10 @@ function codexMetadata(thread: any) {
 
 async function threadRuntimeSummary(thread: any, messages: any[] = []) {
   const status = await runtimeStatus(thread.id).catch(() => null);
+  const gitState: any = await detectThreadGitState(thread).catch(() => ({}));
   const metadataTarget = {
     ...thread,
+    ...gitState,
     runtime: status?.lease ? { ...(thread.runtime || {}), ...status.lease } : thread.runtime,
   };
   const liveCodexMetadata: any = await resolveCodexThreadMetadata(metadataTarget).catch(() => ({}));
@@ -175,6 +177,7 @@ async function threadRuntimeSummary(thread: any, messages: any[] = []) {
   const resolvedCodexThreadId = codexThreadId(codexThread);
   return {
     ...thread,
+    ...gitState,
     threadId: resolvedCodexThreadId || thread.id,
     codexThreadId: resolvedCodexThreadId || null,
     status: state,

@@ -9,7 +9,7 @@ import { startServer } from "../apps/server/src/server.js";
 import { runNextThreadMessage } from "../packages/core/src/executors.js";
 import { runtimeStatus, syncRuntimeWindowName, wakeThread } from "../packages/core/src/runtime-leases.js";
 import { parseThreadInputCommand } from "../packages/core/src/thread-commands.js";
-import { createThreadWorker, listThreadWorkers, updateThreadRepo } from "../packages/core/src/thread-workers.js";
+import { createThreadWorker, detectThreadGitState, listThreadWorkers, updateThreadRepo } from "../packages/core/src/thread-workers.js";
 import { appendThreadMessage, createThread, enqueueThreadInput, listThreadMessages, listThreads, updateThread } from "../packages/core/src/threads.js";
 
 const execFileAsync = promisify(execFile);
@@ -205,6 +205,47 @@ test("thread worker creation requires a git repository path", async () => {
     () => createThreadWorker("no-repo-thread", { task: "try to fork" }, env),
     /thread_repo_not_found/,
   );
+});
+
+test("thread worker git state reports live branch and base deviation", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-worker-git-state-home-"));
+  const repo = await createTempGitRepo("orkestr-thread-worker-git-state-repo-");
+  const env = { ORKESTR_HOME: home };
+  const parent = await createThread({ id: "git-state-parent", name: "Git State Parent", cwd: repo }, env);
+  const result = await createThreadWorker(parent.id, { label: "Git State Worker", autoRun: false }, env);
+  const committedPath = path.join(result.worker.worktreePath, "committed.txt");
+  const dirtyPath = path.join(result.worker.worktreePath, "dirty.txt");
+
+  await fs.writeFile(committedPath, "committed worker change\n", "utf8");
+  await execFileAsync("git", ["add", "committed.txt"], { cwd: result.worker.worktreePath });
+  await execFileAsync("git", ["commit", "-m", "worker change"], { cwd: result.worker.worktreePath });
+  await fs.writeFile(dirtyPath, "dirty worker change\n", "utf8");
+
+  const state = await detectThreadGitState(result.worker, env);
+
+  assert.equal(state.branchName, result.worker.branchName);
+  assert.equal(state.gitBaseAhead, 1);
+  assert.equal(state.gitChangedFiles, 2);
+  assert.equal(state.gitDirtyFiles, 1);
+  assert.equal(state.gitRemoteMissing, true);
+});
+
+test("thread worker git state falls back to base branch when stored base commit is stale", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-worker-git-fallback-home-"));
+  const repo = await createTempGitRepo("orkestr-thread-worker-git-fallback-repo-");
+  const env = { ORKESTR_HOME: home };
+  const parent = await createThread({ id: "git-fallback-parent", name: "Git Fallback Parent", cwd: repo }, env);
+  const result = await createThreadWorker(parent.id, { label: "Git Fallback Worker", autoRun: false }, env);
+  await fs.writeFile(path.join(result.worker.worktreePath, "fallback.txt"), "worker branch change\n", "utf8");
+  await execFileAsync("git", ["add", "fallback.txt"], { cwd: result.worker.worktreePath });
+  await execFileAsync("git", ["commit", "-m", "worker fallback change"], { cwd: result.worker.worktreePath });
+  const head = await execFileAsync("git", ["rev-parse", "HEAD"], { cwd: result.worker.worktreePath }).then((result) => String(result.stdout).trim());
+
+  const state = await detectThreadGitState({ ...result.worker, baseCommit: head }, env);
+
+  assert.equal(state.gitComparisonLabel, "main");
+  assert.equal(state.gitBaseAhead, 1);
+  assert.equal(state.gitChangedFiles, 1);
 });
 
 test("thread workers can be created as blank parallel chats", async () => {

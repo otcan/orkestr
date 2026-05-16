@@ -28,6 +28,9 @@
               <small>
                 {{ statusLabel(thread) }} · {{ activityTime(thread) | date: "MMM d, HH:mm" }}
               </small>
+              @if (threadBranchLabel(thread)) {
+                <small class="thread-branch-label">{{ threadBranchLabel(thread) }}</small>
+              }
               @if (threadWorkspaceLabel(thread)) {
                 <small class="thread-workspace-label">{{ threadWorkspaceLabel(thread) }}</small>
               }
@@ -60,6 +63,9 @@
                     <small>
                       {{ statusLabel(worker) }} · {{ activityTime(worker) | date: "MMM d, HH:mm" }}
                     </small>
+                    @if (threadBranchLabel(worker)) {
+                      <small class="thread-branch-label">{{ threadBranchLabel(worker) }}</small>
+                    }
                     @if (threadWorkspaceLabel(worker)) {
                       <small class="thread-workspace-label">{{ threadWorkspaceLabel(worker) }}</small>
                     }
