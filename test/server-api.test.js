@@ -35,6 +35,18 @@ test("server exposes health, readiness, version, and agent message APIs", async 
       body: JSON.stringify({ executorId: "noop" }),
     });
     const listed = await request(baseUrl, "/api/agents/job-search-assistant/messages");
+    const system = await request(baseUrl, "/api/system/summary");
+    const processes = await request(baseUrl, "/api/system/processes?sort=cpu");
+    const browserSessions = await request(baseUrl, "/api/browser-sessions");
+    const preparedBrowser = await request(baseUrl, "/api/browser-sessions/linkedin/prepare", { method: "POST" });
+    const createdThread = await request(baseUrl, "/api/threads", {
+      method: "POST",
+      body: JSON.stringify({ name: "mode-test", codexModel: "gpt-test" }),
+    });
+    const mode = await request(baseUrl, `/api/threads/${createdThread.thread.id}/codex-mode`, {
+      method: "POST",
+      body: JSON.stringify({ mode: "plan" }),
+    });
 
     assert.equal(health.ok, true);
     assert.equal(ready.ok, true);
@@ -44,6 +56,12 @@ test("server exposes health, readiness, version, and agent message APIs", async 
     assert.equal(listed.messages.length, 2);
     assert.equal(listed.messages[0].state, "completed");
     assert.equal(listed.messages[1].role, "assistant");
+    assert.ok(system.cpu.count >= 1);
+    assert.ok(Array.isArray(processes.processes));
+    assert.ok(browserSessions.sessions.some((session) => session.slug === "linkedin"));
+    assert.equal(preparedBrowser.browser.slug, "linkedin");
+    assert.equal(mode.thread.codexMode, "plan");
+    assert.equal(mode.thread.codexModel, "gpt-test");
   } finally {
     await new Promise((resolve) => server.close(resolve));
     if (priorHome === undefined) delete process.env.ORKESTR_HOME;

@@ -95,6 +95,29 @@ function messagePage(thread: any, rawMessages: any[] = [], query: Record<string,
   };
 }
 
+function codexMetadata(thread: any) {
+  const metadata = thread?.executor?.metadata && typeof thread.executor.metadata === "object" ? thread.executor.metadata : {};
+  const tokenUsage = thread?.codexTokenUsage || metadata.codexTokenUsage || metadata.tokenUsage || null;
+  const contextWindow = Number(thread?.codexContextWindow || metadata.codexContextWindow || metadata.contextWindow || 0) || null;
+  const rateLimits = thread?.codexRateLimits || metadata.codexRateLimits || metadata.rateLimits || null;
+  return {
+    codexMode: thread?.codexMode || metadata.codexMode || thread?.desiredCodexMode || null,
+    codexModeLabel: thread?.codexModeLabel || metadata.codexModeLabel || null,
+    codexModeRaw: thread?.codexModeRaw || metadata.codexModeRaw || null,
+    codexModeSource: thread?.codexModeSource || metadata.codexModeSource || null,
+    codexModeUpdatedAt: thread?.codexModeUpdatedAt || metadata.codexModeUpdatedAt || null,
+    desiredCodexMode: thread?.desiredCodexMode || null,
+    desiredCodexModeUpdatedAt: thread?.desiredCodexModeUpdatedAt || null,
+    codexModel: thread?.codexModel || metadata.codexModel || process.env.ORKESTR_DEFAULT_CODEX_MODEL || process.env.OPENAI_MODEL || null,
+    codexModelProvider: thread?.codexModelProvider || metadata.codexModelProvider || "codex",
+    codexReasoningEffort: thread?.codexReasoningEffort || metadata.codexReasoningEffort || process.env.ORKESTR_DEFAULT_CODEX_REASONING || null,
+    codexModelUpdatedAt: thread?.codexModelUpdatedAt || metadata.codexModelUpdatedAt || null,
+    codexContextWindow: contextWindow,
+    codexTokenUsage: tokenUsage,
+    codexRateLimits: rateLimits,
+  };
+}
+
 async function threadRuntimeSummary(thread: any, messages: any[] = []) {
   const status = await runtimeStatus(thread.id).catch(() => null);
   const state = status?.state || thread.state || "sleeping";
@@ -131,6 +154,7 @@ async function threadRuntimeSummary(thread: any, messages: any[] = []) {
     threadUpdatedAt: thread.updatedAt || lastActivityAt,
     inferredThreadId: codexThreadId(thread) || null,
     wakePolicy: thread.wakePolicy || "wake-on-message",
+    ...codexMetadata(thread),
   };
 }
 
@@ -329,6 +353,29 @@ export class ThreadsController {
   @HttpCode(202)
   async approve(@Param("threadId") threadId: string, @Body() body: Record<string, unknown> = {}) {
     return this.input(threadId, { ...body, text: String(body.text || "Approved. Proceed."), source: body.source || "approval" });
+  }
+
+  @Post(":threadId/codex-mode")
+  @HttpCode(200)
+  async codexMode(@Param("threadId") threadId: string, @Body() body: Record<string, unknown> = {}) {
+    const thread = await getThread(threadId);
+    if (!thread) throw httpError("thread_not_found", 404);
+    const mode = String(body.mode || "").trim().toLowerCase();
+    if (mode !== "code" && mode !== "plan") throw httpError("invalid_codex_mode", 400);
+    const updatedAt = new Date().toISOString();
+    const updated: any = await updateThread(thread.id, {
+      desiredCodexMode: mode,
+      desiredCodexModeUpdatedAt: updatedAt,
+      codexMode: mode,
+      codexModeSource: "orkestr-ui",
+      codexModeUpdatedAt: updatedAt,
+    });
+    return {
+      ok: true,
+      mode,
+      applied: true,
+      thread: await threadRuntimeSummary(updated, await listThreadMessages(updated.id || thread.id)),
+    };
   }
 
   @Post(":threadId/hibernate")

@@ -11,6 +11,7 @@ import { ensureDataDirs } from "../../../packages/storage/src/paths.js";
 import { AppModule } from "./app.module.js";
 import { JsonErrorFilter } from "./common/json-error.filter.js";
 import { registerStaticFallback } from "./static-fallback.js";
+import { attachThreadStreamUpgrade } from "./thread-stream.js";
 
 export async function createApp(): Promise<INestApplication> {
   const app = await NestFactory.create(AppModule, { logger: false });
@@ -43,6 +44,7 @@ export async function startServer({ port = 19812, host = "127.0.0.1", openBrowse
 
   registerStaticFallback(app);
   await app.init();
+  attachThreadStreamUpgrade(app.getHttpServer());
   await app.listen(port, host);
 
   const url = `http://${host}:${port}`;

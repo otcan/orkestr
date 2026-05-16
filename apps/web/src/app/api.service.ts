@@ -112,6 +112,21 @@ export interface ThreadSummary {
   tmuxTarget?: string | null;
   threadId?: string;
   codexThreadId?: string | null;
+  codexMode?: "code" | "plan" | string | null;
+  codexModeLabel?: string | null;
+  codexModeSource?: string | null;
+  codexReasoningEffort?: string | null;
+  codexModel?: string | null;
+  codexModelProvider?: string | null;
+  codexContextWindow?: number | null;
+  codexTokenUsage?: Record<string, number> | null;
+  codexRateLimits?: {
+    primary?: { used_percent?: number; window_minutes?: number; resets_at?: number } | null;
+    secondary?: { used_percent?: number; window_minutes?: number; resets_at?: number } | null;
+    plan_type?: string | null;
+    rate_limit_reached_type?: string | null;
+  } | null;
+  desiredCodexMode?: "code" | "plan" | string | null;
   binding?: {
     connector?: string;
     chatId?: string;
@@ -282,6 +297,18 @@ export class ApiService {
     return this.http.get<{ leases: Array<Record<string, unknown>>; budget?: Record<string, unknown> }>(this.api("/runtime-leases"));
   }
 
+  systemSummary(): Observable<Record<string, unknown>> {
+    return this.http.get<Record<string, unknown>>(this.api("/system/summary"));
+  }
+
+  systemProcesses(sort = "cpu"): Observable<{ count: number; processes: Array<Record<string, unknown>> }> {
+    return this.http.get<{ count: number; processes: Array<Record<string, unknown>> }>(this.api(`/system/processes?sort=${encodeURIComponent(sort)}`));
+  }
+
+  modelStatus(): Observable<Record<string, unknown>> {
+    return this.http.get<Record<string, unknown>>(this.api("/models/status"));
+  }
+
   threads(): Observable<{ threads: ThreadSummary[] }> {
     return this.http.get<{ threads: ThreadSummary[] }>(this.api("/threads"));
   }
@@ -324,6 +351,10 @@ export class ApiService {
     return this.http.post(this.api(`/threads/${encodeURIComponent(id)}/approve`), { text });
   }
 
+  setCodexMode(id: string, mode: "code" | "plan"): Observable<{ thread?: ThreadSummary }> {
+    return this.http.post<{ thread?: ThreadSummary }>(this.api(`/threads/${encodeURIComponent(id)}/codex-mode`), { mode });
+  }
+
   threadRuntimeFull(id: string): Observable<ThreadRuntimeResponse> {
     return this.http.get<ThreadRuntimeResponse>(this.api(`/threads/${encodeURIComponent(id)}/runtime`));
   }
@@ -350,5 +381,13 @@ export class ApiService {
 
   uploadThreadFiles(id: string, files: ThreadUploadInput[]): Observable<ThreadUploadResponse> {
     return this.http.post<ThreadUploadResponse>(this.api(`/threads/${encodeURIComponent(id)}/uploads`), { files });
+  }
+
+  browserSessions(): Observable<{ sessions: Array<Record<string, unknown>> }> {
+    return this.http.get<{ sessions: Array<Record<string, unknown>> }>(this.api("/browser-sessions"));
+  }
+
+  browserAction(slug: string, action: string): Observable<unknown> {
+    return this.http.post(this.api(`/browser-sessions/${encodeURIComponent(slug)}/${encodeURIComponent(action)}`), {});
   }
 }

@@ -17,6 +17,7 @@ import {
 } from "./api.service";
 
 type Panel = "chat" | "history" | "timers" | "attach" | "runtime" | "raw" | "ops";
+type ToolsView = "system" | "desktops" | "models" | "settings" | "connectors";
 
 interface PendingFile {
   id: string;
@@ -79,7 +80,41 @@ interface PendingFile {
                 <span>{{ thread.codexThreadId || thread.threadId || thread.id }}</span>
               </p>
             </div>
-            <div class="head-actions">
+            <div class="head-actions cockpit-actions">
+              <button class="system-mini-card" type="button" [class.active]="activePanel === 'ops'" (click)="openTools('system')" title="Open system resources">
+                <span>
+                  <strong>CPU {{ formatPercent(systemCpuPercent()) }}</strong>
+                  <em>RAM {{ formatPercent(systemMemoryPercent()) }}</em>
+                </span>
+                <b>Load {{ systemLoadLabel() }}</b>
+              </button>
+              <div class="codex-capacity-card" [title]="codexCapacityTooltip(thread)">
+                <div class="codex-model-row">
+                  <strong>{{ codexModelName(thread) }}</strong>
+                  <span>{{ codexReasoningEffortLabel(thread) || "effort ?" }}</span>
+                </div>
+                <div class="codex-meter-row">
+                  <span class="codex-meter">
+                    <b>5h</b>
+                    <i><em [style.width.%]="codexRateRemaining(thread, 'primary') || 0"></em></i>
+                    <small>{{ codexRateRemainingLabel(thread, 'primary') }}</small>
+                  </span>
+                  <span class="codex-meter">
+                    <b>Week</b>
+                    <i><em [style.width.%]="codexRateRemaining(thread, 'secondary') || 0"></em></i>
+                    <small>{{ codexRateRemainingLabel(thread, 'secondary') }}</small>
+                  </span>
+                  <span class="codex-meter">
+                    <b>Ctx</b>
+                    <i><em [style.width.%]="codexContextPercent(thread) || 0"></em></i>
+                    <small>{{ codexContextLabel(thread) }}</small>
+                  </span>
+                </div>
+              </div>
+              <div class="codex-mode-toggle" title="Requested Codex mode for this Orkestr thread">
+                <button type="button" [class.active]="codexModeValue(thread) === 'code'" (click)="switchCodexMode('code')" [disabled]="busy">Code</button>
+                <button type="button" [class.active]="codexModeValue(thread) === 'plan'" (click)="switchCodexMode('plan')" [disabled]="busy">Plan</button>
+              </div>
               <button class="secondary" type="button" [class.active]="activePanel === 'raw'" (click)="openPanel('raw')">Raw</button>
               @if (canWakeThread(thread)) {
                 <button class="secondary" type="button" (click)="wakeSelected()" [disabled]="busy">Wake</button>
@@ -100,7 +135,7 @@ interface PendingFile {
             <button type="button" [class.active]="activePanel === 'attach'" (click)="openPanel('attach')">Attach</button>
             <button type="button" [class.active]="activePanel === 'runtime'" (click)="openPanel('runtime')">Runtime</button>
             <button type="button" [class.active]="activePanel === 'raw'" (click)="openPanel('raw')">Raw</button>
-            <button type="button" [class.active]="activePanel === 'ops'" (click)="openPanel('ops')">Ops</button>
+            <button type="button" [class.active]="activePanel === 'ops'" (click)="openPanel('ops')">Tools</button>
           </nav>
 
           @if (error) {
@@ -263,6 +298,21 @@ interface PendingFile {
                   <span class="term-prompt">$</span>
                   <code>{{ attachDetails?.attachCommand }}</code>
                 </div>
+                <div
+                  #rawScreen
+                  class="raw-terminal"
+                  tabindex="0"
+                  (click)="focusRawTerminal()"
+                  (keydown)="handleRawKeydown($event)"
+                  (paste)="handleRawPaste($event)"
+                  aria-label="Raw terminal"
+                >
+                  <pre>{{ rawScreenText || "Connecting to terminal..." }}</pre>
+                </div>
+                <div class="raw-status">
+                  <span>{{ rawConnectionState }}{{ rawConnectionDetail ? " · " + rawConnectionDetail : "" }}</span>
+                  <button class="secondary" type="button" (click)="focusRawTerminal()">Focus Keyboard</button>
+                </div>
                 <dl class="kv-grid">
                   <div>
                     <dt>State</dt>
@@ -281,7 +331,7 @@ interface PendingFile {
                     <dd>{{ leaseValue("workspace") || "n/a" }}</dd>
                   </div>
                 </dl>
-                <p class="helper">Raw stays inside Orkestr now. Browser terminal embedding will use this attach target once a web PTY endpoint is available.</p>
+                <p class="helper">Click the terminal before typing. The attach command remains available for a local tmux fallback.</p>
               } @else {
                 <div class="empty-state">
                   <h3>{{ attachDetails?.message || "This thread has no live terminal lease." }}</h3>
@@ -300,124 +350,191 @@ interface PendingFile {
               <div class="panel-title">
                 <div>
                   <p class="eyebrow">Orkestr Cockpit</p>
-                  <h3>System, connectors, agents, timers, browsers</h3>
+                  <h3>System, resources, models, settings, virtual desktops</h3>
                 </div>
                 <button class="secondary" type="button" (click)="loadOps()" [disabled]="busy">Reload</button>
               </div>
-              <div class="ops-grid">
-                <article class="ops-card">
-                  <h4>System</h4>
-                  <p>{{ opsVersion?.name || "orkestr" }} {{ opsVersion?.version || "" }}</p>
-                  <small>Setup: {{ opsSetup?.setupState || "unknown" }} · Data: {{ opsSetup?.home || "n/a" }}</small>
-                </article>
-                <article class="ops-card">
-                  <h4>WhatsApp</h4>
-                  <p>{{ objectValue(opsWhatsApp, "state") || objectValue(opsWhatsApp, "status") || "unknown" }}</p>
-                  <small>{{ objectValue(opsWhatsApp, "summary") || objectValue(opsWhatsApp, "accountId") || "bridge status" }}</small>
-                </article>
-                <article class="ops-card">
-                  <h4>Runtime Leases</h4>
-                  <p>{{ opsRuntimeLeases.length }} leases</p>
-                  <small>Budget: {{ objectValue(opsRuntimeBudget, "maxLiveThreads") || "n/a" }} live threads</small>
-                </article>
-                <article class="ops-card">
-                  <h4>Executors</h4>
-                  <p>{{ opsExecutors.length }} adapters</p>
-                  <small>{{ opsExecutions.length }} recent executions</small>
-                </article>
-              </div>
+              <nav class="tool-tabs" aria-label="Orkestr tools">
+                <button type="button" [class.active]="toolsView === 'system'" (click)="toolsView = 'system'">System</button>
+                <button type="button" [class.active]="toolsView === 'desktops'" (click)="toolsView = 'desktops'">Virtual Desktops</button>
+                <button type="button" [class.active]="toolsView === 'models'" (click)="toolsView = 'models'">Models</button>
+                <button type="button" [class.active]="toolsView === 'settings'" (click)="toolsView = 'settings'">Settings</button>
+                <button type="button" [class.active]="toolsView === 'connectors'" (click)="toolsView = 'connectors'">Connectors</button>
+              </nav>
 
-              <div class="ops-columns">
-                <section>
-                  <h4>Connectors</h4>
-                  <div class="compact-list">
-                    @for (connector of opsConnectors; track connector.id) {
-                      <article class="compact-row">
-                        <strong>{{ connector.label || connector.id }}</strong>
-                        <span>{{ connector.state }}</span>
-                        <p>{{ connector.summary }}</p>
-                      </article>
-                    } @empty {
-                      <p class="empty">No connector status loaded.</p>
-                    }
-                  </div>
-                </section>
+              @if (toolsView === "system") {
+                <div class="ops-grid resource-grid">
+                  <article class="ops-card critical">
+                    <h4>CPU</h4>
+                    <p>{{ formatPercent(systemCpuPercent()) }}</p>
+                    <small>{{ objectPath(opsSystem, 'cpu.count') || '--' }} cores · load {{ systemLoadLabel() }}</small>
+                    <i><em [style.width.%]="systemCpuPercent()"></em></i>
+                  </article>
+                  <article class="ops-card">
+                    <h4>Memory</h4>
+                    <p>{{ formatPercent(systemMemoryPercent()) }}</p>
+                    <small>{{ formatBytes(numberPath(opsSystem, 'memory.used')) }} / {{ formatBytes(numberPath(opsSystem, 'memory.total')) }}</small>
+                    <i><em [style.width.%]="systemMemoryPercent()"></em></i>
+                  </article>
+                  <article class="ops-card">
+                    <h4>Disk</h4>
+                    <p>{{ formatPercent(numberPath(opsSystem, 'disk.percent')) }}</p>
+                    <small>{{ formatBytes(numberPath(opsSystem, 'disk.used')) }} / {{ formatBytes(numberPath(opsSystem, 'disk.total')) }}</small>
+                    <i><em [style.width.%]="numberPath(opsSystem, 'disk.percent')"></em></i>
+                  </article>
+                  <article class="ops-card">
+                    <h4>Orkestr</h4>
+                    <p>{{ formatBytes(numberPath(opsSystem, 'orkestr.rss')) }}</p>
+                    <small>PID {{ objectPath(opsSystem, 'orkestr.pid') || '--' }} · {{ opsRuntimeLeases.length }} leases</small>
+                    <i><em [style.width.%]="runtimeLeasePercent()"></em></i>
+                  </article>
+                </div>
+                <div class="process-table">
+                  <div class="process-row head"><span>PID</span><span>User</span><span>CPU</span><span>Mem</span><span>Command</span></div>
+                  @for (process of opsProcesses; track objectValue(process, 'pid') || jsonLine(process)) {
+                    <div class="process-row">
+                      <span>{{ objectValue(process, 'pid') }}</span>
+                      <span>{{ objectValue(process, 'user') }}</span>
+                      <span>{{ formatPercent(numberValue(process, 'cpu')) }}</span>
+                      <span>{{ formatBytes(numberValue(process, 'rss')) }}</span>
+                      <span>{{ objectValue(process, 'command') }} {{ objectValue(process, 'args') }}</span>
+                    </div>
+                  } @empty {
+                    <p class="empty">No process sample loaded.</p>
+                  }
+                </div>
+              }
 
-                <section>
-                  <h4>Agents</h4>
-                  <div class="compact-list">
-                    @for (agent of opsAgents; track agent.id) {
-                      <article class="compact-row">
-                        <strong>{{ agent.name || agent.id }}</strong>
-                        <span>{{ agent.state }}</span>
-                        <p>{{ (agent.connectors || []).join(", ") }}</p>
-                      </article>
-                    } @empty {
-                      <p class="empty">No agents yet.</p>
-                    }
-                  </div>
-                </section>
+              @if (toolsView === "desktops") {
+                <div class="desktop-grid">
+                  @for (browser of opsBrowsers; track objectValue(browser, "slug") || objectValue(browser, "id") || jsonLine(browser)) {
+                    <article class="desktop-card">
+                      <div>
+                        <h4>{{ objectValue(browser, "label") || objectValue(browser, "slug") || objectValue(browser, "id") }}</h4>
+                        <p>{{ objectValue(browser, "purpose") || objectValue(browser, "url") || "Virtual browser session" }}</p>
+                        <small>{{ objectValue(browser, "status") || objectValue(browser, "state") || "unknown" }} · {{ objectValue(browser, "profileDir") || objectValue(browser, "profile") }}</small>
+                      </div>
+                      <div class="desktop-actions">
+                        <button type="button" (click)="browserAction(browser, 'prepare')" [disabled]="busy">Prepare</button>
+                        <button type="button" (click)="browserAction(browser, 'start')" [disabled]="busy">Open</button>
+                      </div>
+                    </article>
+                  } @empty {
+                    <p class="empty">No virtual desktops registered.</p>
+                  }
+                </div>
+              }
 
-                <section>
-                  <h4>Agent Templates</h4>
-                  <div class="compact-list">
-                    @for (template of opsAgentTemplates; track template.id) {
-                      <article class="compact-row">
-                        <strong>{{ template.name }}</strong>
-                        <span>{{ template.id }}</span>
-                        <p>{{ template.tagline }}</p>
-                      </article>
-                    } @empty {
-                      <p class="empty">No templates loaded.</p>
-                    }
-                  </div>
-                </section>
+              @if (toolsView === "models") {
+                <div class="ops-grid">
+                  <article class="ops-card">
+                    <h4>Selected Thread Model</h4>
+                    <p>{{ codexModelName(thread) }}</p>
+                    <small>{{ codexReasoningEffortLabel(thread) || 'reasoning unknown' }} · {{ codexContextLabel(thread) }} context</small>
+                  </article>
+                  <article class="ops-card">
+                    <h4>Local Models</h4>
+                    <p>{{ objectPath(opsModels, 'ollama.ok') === 'true' ? 'ready' : 'overlay needed' }}</p>
+                    <small>{{ objectPath(opsModels, 'ollama.baseUrl') || 'http://127.0.0.1:11434' }}</small>
+                  </article>
+                  <article class="ops-card">
+                    <h4>External</h4>
+                    <p>{{ objectPath(opsModels, 'external.configured') === 'true' ? 'configured' : 'not configured' }}</p>
+                    <small>{{ objectPath(opsModels, 'external.baseUrl') || 'no base URL' }}</small>
+                  </article>
+                  <article class="ops-card">
+                    <h4>Executor Adapters</h4>
+                    <p>{{ opsExecutors.length }} adapters</p>
+                    <small>{{ opsExecutions.length }} recent executions</small>
+                  </article>
+                </div>
+              }
 
-                <section>
-                  <h4>Global Timers</h4>
-                  <div class="compact-list">
-                    @for (timer of opsTimers; track timer.id) {
-                      <article class="compact-row">
-                        <strong>{{ timer.label || timer.id }}</strong>
-                        <span>{{ timer.cadence }} · {{ timer.nextRunAt | date: "MMM d, HH:mm" }}</span>
-                        <p>{{ timer.target }}</p>
-                      </article>
-                    } @empty {
-                      <p class="empty">No global timers loaded.</p>
-                    }
-                  </div>
-                </section>
+              @if (toolsView === "settings") {
+                <div class="ops-grid">
+                  <article class="ops-card">
+                    <h4>Build</h4>
+                    <p>{{ opsVersion?.name || "orkestr" }} {{ opsVersion?.version || "" }}</p>
+                    <small>Data: {{ opsSetup?.home || "n/a" }}</small>
+                  </article>
+                  <article class="ops-card">
+                    <h4>Setup</h4>
+                    <p>{{ opsSetup?.setupState || "unknown" }}</p>
+                    <small>Overlay {{ objectPath(opsSetup, 'overlay.valid') || 'unknown' }}</small>
+                  </article>
+                  <article class="ops-card">
+                    <h4>Runtime Budget</h4>
+                    <p>{{ objectValue(opsRuntimeBudget, "maxLiveThreads") || "n/a" }} live threads</p>
+                    <small>{{ opsRuntimeLeases.length }} leases currently recorded</small>
+                  </article>
+                  <article class="ops-card">
+                    <h4>WhatsApp</h4>
+                    <p>{{ objectValue(opsWhatsApp, "state") || objectValue(opsWhatsApp, "status") || "unknown" }}</p>
+                    <small>{{ objectValue(opsWhatsApp, "summary") || objectValue(opsWhatsApp, "accountId") || "bridge status" }}</small>
+                  </article>
+                </div>
+              }
 
-                <section>
-                  <h4>Browsers</h4>
-                  <div class="compact-list">
-                    @for (browser of opsBrowsers; track objectValue(browser, "slug") || objectValue(browser, "id") || jsonLine(browser)) {
-                      <article class="compact-row">
-                        <strong>{{ objectValue(browser, "label") || objectValue(browser, "slug") || objectValue(browser, "id") }}</strong>
-                        <span>{{ objectValue(browser, "state") || objectValue(browser, "status") || "registered" }}</span>
-                        <p>{{ objectValue(browser, "url") || objectValue(browser, "profile") || jsonLine(browser) }}</p>
-                      </article>
-                    } @empty {
-                      <p class="empty">No browsers registered.</p>
-                    }
-                  </div>
-                </section>
-
-                <section>
-                  <h4>Events</h4>
-                  <div class="compact-list">
-                    @for (event of opsEvents; track eventKey(event)) {
-                      <article class="compact-row">
-                        <strong>{{ event.type }}</strong>
-                        <span>{{ event.ts | date: "MMM d, HH:mm:ss" }}</span>
-                        <p>{{ jsonLine(event) }}</p>
-                      </article>
-                    } @empty {
-                      <p class="empty">No events loaded.</p>
-                    }
-                  </div>
-                </section>
-              </div>
+              @if (toolsView === "connectors") {
+                <div class="ops-columns">
+                  <section>
+                    <h4>Connectors</h4>
+                    <div class="compact-list">
+                      @for (connector of opsConnectors; track connector.id) {
+                        <article class="compact-row">
+                          <strong>{{ connector.label || connector.id }}</strong>
+                          <span>{{ connector.state }}</span>
+                          <p>{{ connector.summary }}</p>
+                        </article>
+                      } @empty {
+                        <p class="empty">No connector status loaded.</p>
+                      }
+                    </div>
+                  </section>
+                  <section>
+                    <h4>Agents</h4>
+                    <div class="compact-list">
+                      @for (agent of opsAgents; track agent.id) {
+                        <article class="compact-row">
+                          <strong>{{ agent.name || agent.id }}</strong>
+                          <span>{{ agent.state }}</span>
+                          <p>{{ (agent.connectors || []).join(", ") }}</p>
+                        </article>
+                      } @empty {
+                        <p class="empty">No agents yet.</p>
+                      }
+                    </div>
+                  </section>
+                  <section>
+                    <h4>Global Timers</h4>
+                    <div class="compact-list">
+                      @for (timer of opsTimers; track timer.id) {
+                        <article class="compact-row">
+                          <strong>{{ timer.label || timer.id }}</strong>
+                          <span>{{ timer.cadence }} · {{ timer.nextRunAt | date: "MMM d, HH:mm" }}</span>
+                          <p>{{ timer.target }}</p>
+                        </article>
+                      } @empty {
+                        <p class="empty">No global timers loaded.</p>
+                      }
+                    </div>
+                  </section>
+                  <section>
+                    <h4>Events</h4>
+                    <div class="compact-list">
+                      @for (event of opsEvents; track eventKey(event)) {
+                        <article class="compact-row">
+                          <strong>{{ event.type }}</strong>
+                          <span>{{ event.ts | date: "MMM d, HH:mm:ss" }}</span>
+                          <p>{{ jsonLine(event) }}</p>
+                        </article>
+                      } @empty {
+                        <p class="empty">No events loaded.</p>
+                      }
+                    </div>
+                  </section>
+                </div>
+              }
             </section>
           }
 
@@ -479,6 +596,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   };
 
   @ViewChild("messagePane") private readonly messagePane?: ElementRef<HTMLElement>;
+  @ViewChild("rawScreen") private readonly rawScreen?: ElementRef<HTMLElement>;
 
   threads: ThreadSummary[] = [];
   messages: ThreadMessage[] = [];
@@ -499,6 +617,9 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   opsRuntimeLeases: Array<Record<string, unknown>> = [];
   opsExecutors: Array<Record<string, unknown>> = [];
   opsExecutions: Array<Record<string, unknown>> = [];
+  opsSystem: Record<string, unknown> | null = null;
+  opsProcesses: Array<Record<string, unknown>> = [];
+  opsModels: Record<string, unknown> | null = null;
   selectedId = "";
   filterText = "";
   draft = "";
@@ -507,6 +628,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   busy = false;
   sending = false;
   activePanel: Panel = "chat";
+  toolsView: ToolsView = "system";
   approveText = "Approved. Proceed.";
   interruptText = "";
   timerLabel = "Thread timer";
@@ -515,8 +637,14 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   timerPrompt = "";
   pendingFiles: PendingFile[] = [];
   draggingUpload = false;
+  rawConnectionState = "idle";
+  rawConnectionDetail = "";
+  rawScreenText = "";
 
   private poller?: ReturnType<typeof setInterval>;
+  private rawSocket?: WebSocket;
+  private rawSocketThreadId = "";
+  private rawReconnectTimer?: ReturnType<typeof setTimeout>;
   private shouldStickToBottom = true;
   private scrollAfterRender = true;
   private lastMessageSignature = "";
@@ -531,6 +659,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
 
   ngOnDestroy(): void {
     if (this.poller) clearInterval(this.poller);
+    this.closeRawStream();
     globalThis.removeEventListener?.("popstate", this.popStateHandler);
   }
 
@@ -545,7 +674,13 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   async refresh(showBusy = true): Promise<void> {
     if (showBusy) this.busy = true;
     try {
-      const payload = await firstValueFrom(this.api.threads());
+      const [threadsResult, systemResult] = await Promise.allSettled([
+        firstValueFrom(this.api.threads()),
+        firstValueFrom(this.api.systemSummary()),
+      ]);
+      if (threadsResult.status === "rejected") throw threadsResult.reason;
+      const payload = threadsResult.value;
+      if (systemResult.status === "fulfilled") this.opsSystem = systemResult.value;
       this.apiOnline = true;
       this.threads = [...payload.threads].sort((a, b) => this.activityMs(b) - this.activityMs(a));
       if (!this.selectedId && this.threads.length) {
@@ -575,6 +710,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     this.timers = [];
     this.runtimeDetails = null;
     this.attachDetails = null;
+    this.closeRawStream();
     this.lastMessageSignature = "";
     this.shouldStickToBottom = true;
     this.scrollAfterRender = true;
@@ -584,6 +720,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   }
 
   async openPanel(panel: Panel): Promise<void> {
+    if (this.activePanel === "raw" && panel !== "raw") this.closeRawStream();
     this.activePanel = panel;
     const thread = this.selectedThread();
     if (thread) this.pushPath(this.threadSlug(thread), panel);
@@ -597,6 +734,11 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
       this.scrollAfterRender = true;
     }
     this.renderNow();
+  }
+
+  async openTools(view: ToolsView = this.toolsView): Promise<void> {
+    this.toolsView = view;
+    await this.openPanel("ops");
   }
 
   async sendMessage(): Promise<void> {
@@ -692,6 +834,35 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     }
   }
 
+  async switchCodexMode(mode: "code" | "plan"): Promise<void> {
+    const thread = this.selectedThread();
+    if (!thread) return;
+    this.busy = true;
+    try {
+      const result = await firstValueFrom(this.api.setCodexMode(thread.id, mode));
+      if (result.thread) this.threads = this.threads.map((item) => item.id === result.thread?.id ? result.thread : item);
+      await this.refresh(false);
+    } catch (error) {
+      this.error = this.errorText(error);
+    } finally {
+      this.busy = false;
+    }
+  }
+
+  async browserAction(browser: Record<string, unknown>, action: string): Promise<void> {
+    const slug = this.objectValue(browser, "slug") || this.objectValue(browser, "id");
+    if (!slug) return;
+    this.busy = true;
+    try {
+      await firstValueFrom(this.api.browserAction(slug, action));
+      await this.loadOps();
+    } catch (error) {
+      this.error = this.errorText(error);
+    } finally {
+      this.busy = false;
+    }
+  }
+
   async loadHistory(): Promise<void> {
     const thread = this.selectedThread();
     if (!thread) return;
@@ -744,8 +915,11 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
       ]);
       this.attachDetails = attach;
       if (runtime) this.runtimeDetails = runtime as unknown as Record<string, unknown>;
+      if (attach.ok) this.openRawStream(thread);
+      else this.closeRawStream();
     } catch (error) {
       this.error = this.errorText(error);
+      this.closeRawStream();
     } finally {
       this.busy = false;
     }
@@ -754,7 +928,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   async loadOps(): Promise<void> {
     this.busy = true;
     try {
-      const [version, setup, whatsapp, agents, templates, timers, events, browsers, runtimeLeases, executors, executions] = await Promise.allSettled([
+      const [version, setup, whatsapp, agents, templates, timers, events, browsers, runtimeLeases, executors, executions, system, processes, models] = await Promise.allSettled([
         firstValueFrom(this.api.version()),
         firstValueFrom(this.api.setupStatus()),
         firstValueFrom(this.api.whatsappStatus()),
@@ -762,10 +936,13 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
         firstValueFrom(this.api.agentTemplates()),
         firstValueFrom(this.api.timers()),
         firstValueFrom(this.api.events(40)),
-        firstValueFrom(this.api.browsers()),
+        firstValueFrom(this.api.browserSessions()),
         firstValueFrom(this.api.runtimeLeases()),
         firstValueFrom(this.api.executors()),
         firstValueFrom(this.api.executions()),
+        firstValueFrom(this.api.systemSummary()),
+        firstValueFrom(this.api.systemProcesses("cpu")),
+        firstValueFrom(this.api.modelStatus()),
       ]);
       if (version.status === "fulfilled") this.opsVersion = version.value;
       if (setup.status === "fulfilled") {
@@ -777,13 +954,16 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
       if (templates.status === "fulfilled") this.opsAgentTemplates = templates.value.templates || [];
       if (timers.status === "fulfilled") this.opsTimers = timers.value.timers || [];
       if (events.status === "fulfilled") this.opsEvents = events.value.events || [];
-      if (browsers.status === "fulfilled") this.opsBrowsers = browsers.value.browsers || [];
+      if (browsers.status === "fulfilled") this.opsBrowsers = browsers.value.sessions || [];
       if (runtimeLeases.status === "fulfilled") {
         this.opsRuntimeLeases = runtimeLeases.value.leases || [];
         this.opsRuntimeBudget = runtimeLeases.value.budget || null;
       }
       if (executors.status === "fulfilled") this.opsExecutors = executors.value.executors || [];
       if (executions.status === "fulfilled") this.opsExecutions = executions.value.executions || [];
+      if (system.status === "fulfilled") this.opsSystem = system.value;
+      if (processes.status === "fulfilled") this.opsProcesses = processes.value.processes || [];
+      if (models.status === "fulfilled") this.opsModels = models.value;
     } catch (error) {
       this.error = this.errorText(error);
     } finally {
@@ -861,6 +1041,25 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     event.preventDefault();
     this.draggingUpload = false;
     this.queueFiles(event.dataTransfer?.files || null);
+  }
+
+  focusRawTerminal(): void {
+    this.rawScreen?.nativeElement?.focus();
+  }
+
+  handleRawKeydown(event: KeyboardEvent): void {
+    if (this.activePanel !== "raw") return;
+    const data = this.rawKeyData(event);
+    if (!data) return;
+    event.preventDefault();
+    this.sendRawInput(data);
+  }
+
+  handleRawPaste(event: ClipboardEvent): void {
+    const text = event.clipboardData?.getData("text/plain") || "";
+    if (!text) return;
+    event.preventDefault();
+    this.sendRawInput(text);
   }
 
   queueFiles(files: FileList | null): void {
@@ -971,10 +1170,101 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     return Math.max(2, Math.min(10, this.draft.split("\n").length));
   }
 
-  formatBytes(value: number): string {
-    if (value < 1024) return `${value} B`;
-    if (value < 1024 * 1024) return `${Math.round(value / 102.4) / 10} KB`;
-    return `${Math.round(value / 1024 / 102.4) / 10} MB`;
+  formatBytes(value: unknown): string {
+    const bytes = Number(value || 0);
+    if (!Number.isFinite(bytes) || bytes <= 0) return "0 B";
+    if (bytes < 1024) return `${Math.round(bytes)} B`;
+    if (bytes < 1024 * 1024) return `${Math.round(bytes / 102.4) / 10} KB`;
+    if (bytes < 1024 * 1024 * 1024) return `${Math.round(bytes / 1024 / 102.4) / 10} MB`;
+    return `${Math.round(bytes / 1024 / 1024 / 102.4) / 10} GB`;
+  }
+
+  formatPercent(value: unknown): string {
+    const percent = Number(value);
+    if (!Number.isFinite(percent)) return "--";
+    return `${Math.round(percent)}%`;
+  }
+
+  numberValue(value: unknown, key: string): number {
+    if (!value || typeof value !== "object") return 0;
+    const parsed = Number((value as Record<string, unknown>)[key]);
+    return Number.isFinite(parsed) ? parsed : 0;
+  }
+
+  numberPath(value: unknown, path: string): number {
+    const raw = this.pathValue(value, path);
+    const parsed = Number(raw);
+    return Number.isFinite(parsed) ? parsed : 0;
+  }
+
+  objectPath(value: unknown, path: string): string {
+    const raw = this.pathValue(value, path);
+    if (raw === null || raw === undefined) return "";
+    return String(raw);
+  }
+
+  systemCpuPercent(): number {
+    return this.numberPath(this.opsSystem, "cpu.percent") || this.numberPath(this.opsSystem, "cpuPercent");
+  }
+
+  systemMemoryPercent(): number {
+    return this.numberPath(this.opsSystem, "memory.percent");
+  }
+
+  systemLoadLabel(): string {
+    const load = this.numberPath(this.opsSystem, "loadAverage.one");
+    return Number.isFinite(load) ? `${Math.round(load * 10) / 10}` : "--";
+  }
+
+  runtimeLeasePercent(): number {
+    const max = Number(this.objectValue(this.opsRuntimeBudget, "maxLiveThreads")) || 20;
+    return Math.max(0, Math.min(100, (this.opsRuntimeLeases.length / max) * 100));
+  }
+
+  codexModeValue(thread: ThreadSummary | null): string {
+    const mode = String(thread?.codexMode || thread?.desiredCodexMode || "").toLowerCase();
+    return mode === "plan" ? "plan" : "code";
+  }
+
+  codexModelName(thread: ThreadSummary | null): string {
+    return String(thread?.codexModel || this.objectPath(this.opsModels, "codex.model") || "Model unknown");
+  }
+
+  codexReasoningEffortLabel(thread: ThreadSummary | null): string {
+    return String(thread?.codexReasoningEffort || this.objectPath(this.opsModels, "codex.reasoningEffort") || "").trim();
+  }
+
+  codexRateRemaining(thread: ThreadSummary | null, key: "primary" | "secondary"): number | null {
+    const used = Number(thread?.codexRateLimits?.[key]?.used_percent);
+    if (!Number.isFinite(used)) return null;
+    return Math.max(0, Math.min(100, 100 - used));
+  }
+
+  codexRateRemainingLabel(thread: ThreadSummary | null, key: "primary" | "secondary"): string {
+    const remaining = this.codexRateRemaining(thread, key);
+    return remaining === null ? "--" : `${Math.round(remaining)}%`;
+  }
+
+  codexContextPercent(thread: ThreadSummary | null): number | null {
+    const total = Number(thread?.codexContextWindow || 0);
+    const used = Number(thread?.codexTokenUsage?.["total_tokens"] || thread?.codexTokenUsage?.["input_tokens"] || 0);
+    if (!Number.isFinite(total) || total <= 0 || !Number.isFinite(used)) return null;
+    return Math.max(0, Math.min(100, (used / total) * 100));
+  }
+
+  codexContextLabel(thread: ThreadSummary | null): string {
+    const percent = this.codexContextPercent(thread);
+    return percent === null ? "--" : `${Math.round(percent)}%`;
+  }
+
+  codexCapacityTooltip(thread: ThreadSummary | null): string {
+    return [
+      `Model: ${this.codexModelName(thread)}`,
+      `Reasoning: ${this.codexReasoningEffortLabel(thread) || "unknown"}`,
+      `5h remaining: ${this.codexRateRemainingLabel(thread, "primary")}`,
+      `Weekly remaining: ${this.codexRateRemainingLabel(thread, "secondary")}`,
+      `Context: ${this.codexContextLabel(thread)}`,
+    ].join("\n");
   }
 
   runtimeJson(): string {
@@ -1000,6 +1290,15 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   objectValue(value: unknown, key: string): string {
     if (!value || typeof value !== "object") return "";
     return String((value as Record<string, unknown>)[key] || "");
+  }
+
+  private pathValue(value: unknown, path: string): unknown {
+    let current = value;
+    for (const part of path.split(".")) {
+      if (!current || typeof current !== "object") return null;
+      current = (current as Record<string, unknown>)[part];
+    }
+    return current;
   }
 
   jsonLine(value: unknown): string {
@@ -1039,6 +1338,128 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     const pane = this.messagePane?.nativeElement;
     if (!pane) return true;
     return pane.scrollHeight - pane.scrollTop - pane.clientHeight < 80;
+  }
+
+  private openRawStream(thread: ThreadSummary, attempt = 0): void {
+    if (this.activePanel !== "raw") return;
+    if (!this.rawScreen?.nativeElement) {
+      if (attempt < 20) globalThis.setTimeout(() => this.openRawStream(thread, attempt + 1), 50);
+      return;
+    }
+    const threadId = thread.id;
+    if (this.rawSocket && this.rawSocketThreadId === threadId && this.rawSocket.readyState <= WebSocket.OPEN) {
+      this.focusRawTerminal();
+      return;
+    }
+    this.closeRawStream(false);
+    this.rawSocketThreadId = threadId;
+    this.rawConnectionState = "connecting";
+    this.rawConnectionDetail = "";
+    this.rawScreenText = this.rawScreenText || "Connecting to terminal...";
+    const protocol = globalThis.location?.protocol === "https:" ? "wss" : "ws";
+    const socket = new WebSocket(`${protocol}://${globalThis.location.host}/api/threads/${encodeURIComponent(threadId)}/stream`);
+    this.rawSocket = socket;
+    socket.addEventListener("open", () => {
+      this.rawConnectionState = "connected";
+      this.rawConnectionDetail = "waiting for terminal";
+      this.renderNow();
+      this.focusRawTerminal();
+    });
+    socket.addEventListener("message", (event) => {
+      this.handleRawSocketPayload(JSON.parse(String(event.data || "{}")));
+    });
+    socket.addEventListener("close", () => {
+      if (this.rawSocket !== socket) return;
+      this.rawConnectionState = "disconnected";
+      this.rawConnectionDetail = "socket closed";
+      this.rawSocket = undefined;
+      this.renderNow();
+      this.scheduleRawReconnect(threadId);
+    });
+    socket.addEventListener("error", () => {
+      if (this.rawSocket !== socket) return;
+      this.rawConnectionState = "disconnected";
+      this.rawConnectionDetail = "socket error";
+      this.renderNow();
+    });
+  }
+
+  private closeRawStream(clearScreen = true): void {
+    if (this.rawReconnectTimer) {
+      clearTimeout(this.rawReconnectTimer);
+      this.rawReconnectTimer = undefined;
+    }
+    if (this.rawSocket) {
+      this.rawSocket.close();
+      this.rawSocket = undefined;
+    }
+    this.rawSocketThreadId = "";
+    this.rawConnectionState = "idle";
+    this.rawConnectionDetail = "";
+    if (clearScreen) this.rawScreenText = "";
+  }
+
+  private scheduleRawReconnect(threadId: string): void {
+    if (this.rawReconnectTimer || this.activePanel !== "raw") return;
+    this.rawReconnectTimer = setTimeout(() => {
+      this.rawReconnectTimer = undefined;
+      const thread = this.selectedThread();
+      if (thread?.id === threadId && this.activePanel === "raw") this.openRawStream(thread);
+    }, 1500);
+  }
+
+  private handleRawSocketPayload(payload: Record<string, unknown>): void {
+    const type = String(payload["type"] || "");
+    if (type === "visible_screen") {
+      this.rawScreenText = String(payload["data"] || "");
+      this.rawConnectionState = "connected";
+      this.rawConnectionDetail = "live";
+      this.renderNow();
+      return;
+    }
+    if (type === "transport_ready") {
+      this.rawConnectionState = "connected";
+      this.rawConnectionDetail = String(payload["transport"] || payload["state"] || "terminal");
+      this.renderNow();
+      return;
+    }
+    if (type === "error") {
+      this.rawConnectionState = "error";
+      this.rawConnectionDetail = String(payload["data"] || "terminal error");
+      this.renderNow();
+    }
+  }
+
+  private sendRawInput(data: string): void {
+    if (!data || this.rawSocket?.readyState !== WebSocket.OPEN) return;
+    this.rawSocket.send(JSON.stringify({ type: "input", data }));
+  }
+
+  private rawKeyData(event: KeyboardEvent): string {
+    if (event.metaKey || event.altKey) return "";
+    if (event.ctrlKey && /^[a-z]$/i.test(event.key)) {
+      return String.fromCharCode(event.key.toUpperCase().charCodeAt(0) - 64);
+    }
+    switch (event.key) {
+      case "Enter":
+        return "\r";
+      case "Backspace":
+        return "\x7f";
+      case "Tab":
+        return "\t";
+      case "Escape":
+        return "\x1b";
+      case "ArrowUp":
+        return "\x1b[A";
+      case "ArrowDown":
+        return "\x1b[B";
+      case "ArrowRight":
+        return "\x1b[C";
+      case "ArrowLeft":
+        return "\x1b[D";
+      default:
+        return event.key.length === 1 ? event.key : "";
+    }
   }
 
   private threadState(thread: ThreadSummary): string {
