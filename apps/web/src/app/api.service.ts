@@ -103,6 +103,18 @@ export interface ThreadSummary {
   activeRuntimeLeaseId?: string | null;
   hibernated?: boolean;
   lastError?: string | null;
+  parentThreadId?: string | null;
+  rootThreadId?: string | null;
+  workerIndex?: number | null;
+  workerLabel?: string | null;
+  workerStatus?: string | null;
+  repoPath?: string | null;
+  baseBranch?: string | null;
+  branchName?: string | null;
+  baseCommit?: string | null;
+  worktreePath?: string | null;
+  sourceDirty?: boolean;
+  forkedFromCodexThreadId?: string | null;
   lastActivityAt?: string;
   threadUpdatedAt?: string;
   updatedAt?: string;
@@ -192,6 +204,19 @@ export interface ThreadUploadInput {
 
 export interface ThreadUploadResponse {
   attachments: Array<Record<string, unknown>>;
+}
+
+export interface ThreadWorkerResponse {
+  parent?: ThreadSummary;
+  thread?: ThreadSummary;
+  worker: ThreadSummary;
+  message?: ThreadMessage;
+  repoPath?: string;
+  worktreePath?: string;
+  branchName?: string;
+  baseBranch?: string;
+  baseCommit?: string;
+  sourceDirty?: boolean;
 }
 
 @Injectable({ providedIn: "root" })
@@ -319,6 +344,14 @@ export class ApiService {
 
   threadRuntime(id: string): Observable<ThreadSummary> {
     return this.http.get<ThreadSummary>(this.api(`/threads/${encodeURIComponent(id)}/runtime-lite`));
+  }
+
+  threadWorkers(id: string): Observable<{ thread?: ThreadSummary; workers: ThreadSummary[] }> {
+    return this.http.get<{ thread?: ThreadSummary; workers: ThreadSummary[] }>(this.api(`/threads/${encodeURIComponent(id)}/workers`));
+  }
+
+  createThreadWorker(id: string, body: Record<string, unknown>): Observable<ThreadWorkerResponse> {
+    return this.http.post<ThreadWorkerResponse>(this.api(`/threads/${encodeURIComponent(id)}/workers`), body);
   }
 
   sendThreadInput(id: string, text: string, attachments: Array<Record<string, unknown>> = []): Observable<unknown> {

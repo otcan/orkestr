@@ -3,11 +3,27 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 import { startServer } from "../apps/server/src/server.js";
 import { runNextThreadMessage } from "../packages/core/src/executors.js";
 import { runtimeStatus } from "../packages/core/src/runtime-leases.js";
 import { parseThreadInputCommand } from "../packages/core/src/thread-commands.js";
+import { createThreadWorker, listThreadWorkers } from "../packages/core/src/thread-workers.js";
 import { createThread, enqueueThreadInput, listThreadMessages, listThreads } from "../packages/core/src/threads.js";
+
+const execFileAsync = promisify(execFile);
+
+async function createTempGitRepo(prefix = "orkestr-worker-repo-") {
+  const repo = await fs.mkdtemp(path.join(os.tmpdir(), prefix));
+  await execFileAsync("git", ["init", "-b", "main"], { cwd: repo });
+  await execFileAsync("git", ["config", "user.email", "orkestr@example.test"], { cwd: repo });
+  await execFileAsync("git", ["config", "user.name", "Orkestr Test"], { cwd: repo });
+  await fs.writeFile(path.join(repo, "README.md"), "# test repo\n", "utf8");
+  await execFileAsync("git", ["add", "README.md"], { cwd: repo });
+  await execFileAsync("git", ["commit", "-m", "initial"], { cwd: repo });
+  return repo;
+}
 
 test("threads are the primary routable runtime object", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-threads-"));
@@ -37,6 +53,48 @@ test("threads default to wake-on-message and sleep without a runtime lease", asy
   assert.equal(status.state, "sleeping");
   assert.equal(status.promptReady, false);
   assert.equal(status.hibernated, true);
+});
+
+test("thread workers create a git worktree-backed child thread without resuming the parent Codex thread", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-worker-home-"));
+  const repo = await createTempGitRepo();
+  const env = { ORKESTR_HOME: home };
+  const parent = await createThread({
+    id: "parent-thread",
+    name: "Parent Thread",
+    cwd: repo,
+    executor: { type: "codex", codexThreadId: "parent-codex-id", metadata: { codexModel: "gpt-test" } },
+  }, env);
+
+  const result = await createThreadWorker(parent.id, {
+    label: "Worker A",
+    task: "Investigate the feature on a parallel branch.",
+    autoRun: false,
+  }, env);
+  const workers = await listThreadWorkers(parent.id, env);
+  const messages = await listThreadMessages(result.worker.id, env);
+
+  assert.equal(result.worker.parentThreadId, parent.id);
+  assert.equal(result.worker.rootThreadId, parent.id);
+  assert.equal(result.worker.workerLabel, "Worker A");
+  assert.match(result.worker.branchName, /^orkestr\/Parent-Thread\//);
+  assert.equal(result.worker.executor.codexThreadId, "");
+  assert.equal(result.worker.executor.metadata.forkedFromCodexThreadId, "parent-codex-id");
+  assert.equal(workers.length, 1);
+  assert.equal(workers[0].id, result.worker.id);
+  assert.equal(await fs.stat(result.worker.worktreePath).then((stats) => stats.isDirectory()), true);
+  assert.match(messages[0].text, /Work only inside this worker worktree and branch/);
+  assert.match(messages[0].text, new RegExp(result.worker.branchName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+});
+
+test("thread worker creation requires a git repository path", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-worker-missing-repo-"));
+  const env = { ORKESTR_HOME: home };
+  await createThread({ id: "no-repo-thread", name: "No Repo Thread", cwd: home }, env);
+  await assert.rejects(
+    () => createThreadWorker("no-repo-thread", { task: "try to fork" }, env),
+    /thread_repo_not_found/,
+  );
 });
 
 test("thread input commands strip /now before runtime delivery", () => {
@@ -79,6 +137,40 @@ test("thread APIs create, queue, run, and list messages", async () => {
     const payload = await listed.json();
     assert.equal(payload.thread.id, "api-thread");
     assert.equal(payload.messages.length, 2);
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+    if (priorHome === undefined) delete process.env.ORKESTR_HOME;
+    else process.env.ORKESTR_HOME = priorHome;
+  }
+});
+
+test("thread API creates worker threads", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-worker-api-"));
+  const repo = await createTempGitRepo("orkestr-worker-api-repo-");
+  const priorHome = process.env.ORKESTR_HOME;
+  process.env.ORKESTR_HOME = home;
+  const server = await startServer({ port: 0, host: "127.0.0.1" });
+  const { port } = server.address();
+  const baseUrl = `http://127.0.0.1:${port}`;
+  try {
+    await fetch(`${baseUrl}/api/threads`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ id: "worker-api-parent", name: "Worker API Parent", cwd: repo }),
+    });
+    const created = await fetch(`${baseUrl}/api/threads/worker-api-parent/workers`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ label: "Worker API", task: "Build this in a worker.", autoRun: false }),
+    });
+    const payload = await created.json();
+    const listed = await fetch(`${baseUrl}/api/threads/worker-api-parent/workers`);
+    const listPayload = await listed.json();
+
+    assert.equal(created.status, 201);
+    assert.equal(payload.worker.parentThreadId, "worker-api-parent");
+    assert.match(payload.worker.branchName, /^orkestr\/Worker-API-Parent\//);
+    assert.equal(listPayload.workers.length, 1);
   } finally {
     await new Promise((resolve) => server.close(resolve));
     if (priorHome === undefined) delete process.env.ORKESTR_HOME;

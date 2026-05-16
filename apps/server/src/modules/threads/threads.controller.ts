@@ -20,6 +20,7 @@ import {
   listThreads,
   updateThread,
 } from "../../../../../packages/core/src/threads.js";
+import { createThreadWorker, listThreadWorkers } from "../../../../../packages/core/src/thread-workers.js";
 import { parseThreadInputCommand } from "../../../../../packages/core/src/thread-commands.js";
 import { ensureDataDirs } from "../../../../../packages/storage/src/paths.js";
 import { ensureAttachmentsArray, httpError } from "../../common/http.js";
@@ -174,6 +175,28 @@ export class ThreadsController {
   @Post()
   async create(@Body() body: Record<string, unknown> = {}) {
     return { thread: await createThread({ wakePolicy: "wake-on-message", ...body }) };
+  }
+
+  @Get(":threadId/workers")
+  async workers(@Param("threadId") threadId: string) {
+    const parent = await getThread(threadId);
+    if (!parent) throw httpError("thread_not_found", 404);
+    const workers = await listThreadWorkers(parent.id);
+    return {
+      thread: await threadRuntimeSummary(parent, await listThreadMessages(parent.id)),
+      workers: await Promise.all(workers.map(async (worker: any) => threadRuntimeSummary(worker, await listThreadMessages(worker.id)))),
+    };
+  }
+
+  @Post(":threadId/workers")
+  @HttpCode(201)
+  async createWorker(@Param("threadId") threadId: string, @Body() body: Record<string, unknown> = {}) {
+    const result: any = await createThreadWorker(threadId, body);
+    if (body.autoRun !== false) requestThreadInputDelivery(result.worker.id);
+    return {
+      ...result,
+      worker: await threadRuntimeSummary(result.worker, await listThreadMessages(result.worker.id)),
+    };
   }
 
   @Get(":threadId/messages")
