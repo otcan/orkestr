@@ -195,13 +195,6 @@ export interface ThreadAttachResponse {
   message?: string;
 }
 
-export interface ThreadUploadInput {
-  name: string;
-  mimetype?: string;
-  size?: number;
-  contentBase64: string;
-}
-
 export interface ThreadUploadResponse {
   attachments: Array<Record<string, unknown>>;
 }
@@ -432,8 +425,12 @@ export class ApiService {
     return this.http.delete(this.api(`/threads/${encodeURIComponent(id)}/timers/${encodeURIComponent(timerId)}`));
   }
 
-  uploadThreadFiles(id: string, files: ThreadUploadInput[]): Observable<ThreadUploadResponse> {
-    return this.http.post<ThreadUploadResponse>(this.api(`/threads/${encodeURIComponent(id)}/uploads`), { files });
+  uploadThreadFiles(id: string, files: File[]): Observable<ThreadUploadResponse> {
+    const body = new FormData();
+    for (const file of files) {
+      body.append("files", file, file.name);
+    }
+    return this.http.post<ThreadUploadResponse>(this.api(`/threads/${encodeURIComponent(id)}/uploads`), body);
   }
 
   browserSessions(): Observable<{ sessions: Array<Record<string, unknown>> }> {

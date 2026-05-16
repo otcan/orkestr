@@ -132,6 +132,7 @@ textarea:focus {
 
 .health,
 .status-pill,
+.branch-pill,
 .pending {
   border-radius: 999px;
   background: rgba(91, 115, 79, 0.36);
@@ -154,6 +155,101 @@ textarea:focus {
   font-size: 0.75rem;
   font-weight: 900;
   text-transform: uppercase;
+}
+
+.sidebar-card {
+  display: grid;
+  gap: 10px;
+  border: 1px solid rgba(119, 205, 126, 0.16);
+  border-radius: 10px;
+  background: rgba(2, 7, 2, 0.72);
+  padding: 12px;
+}
+
+.sidebar-card-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  color: #8cff9b;
+  font-size: 0.72rem;
+  font-weight: 900;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.sidebar-card-title small {
+  border-radius: 999px;
+  background: rgba(91, 115, 79, 0.36);
+  color: #d8f9cd;
+  padding: 3px 7px;
+}
+
+.text-button {
+  min-height: 0;
+  border: 0;
+  background: transparent;
+  color: #a8ffb2;
+  font-size: 0.72rem;
+  padding: 0;
+}
+
+.sidebar-field {
+  display: grid;
+  gap: 5px;
+  color: #91ad8b;
+  font-size: 0.68rem;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.sidebar-field input,
+.worker-sidebar textarea {
+  min-height: 34px;
+  font-size: 0.76rem;
+}
+
+.sidebar-worker-list {
+  display: grid;
+  gap: 7px;
+}
+
+.sidebar-worker {
+  display: grid;
+  gap: 2px;
+  min-height: 42px;
+  border: 1px solid rgba(119, 205, 126, 0.14);
+  border-radius: 8px;
+  background: rgba(4, 10, 5, 0.72);
+  color: #d9fbd8;
+  padding: 7px 9px;
+  text-align: left;
+}
+
+.sidebar-worker.active {
+  border-color: rgba(126, 247, 142, 0.48);
+  background: rgba(52, 128, 58, 0.46);
+}
+
+.sidebar-worker.parent {
+  border-color: rgba(104, 172, 219, 0.28);
+}
+
+.sidebar-worker strong,
+.sidebar-worker span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sidebar-worker span {
+  color: #91ad8b;
+  font-size: 0.68rem;
+}
+
+.empty.compact {
+  margin: 0;
+  font-size: 0.76rem;
 }
 
 .thread-list {
@@ -252,6 +348,16 @@ textarea:focus {
 .status-pill.bad {
   background: #f06d52;
   color: #1a0703;
+}
+
+.branch-pill {
+  max-width: min(360px, 32vw);
+  overflow: hidden;
+  background: rgba(52, 90, 118, 0.42);
+  color: #cfeeff;
+  text-overflow: ellipsis;
+  text-transform: none;
+  white-space: nowrap;
 }
 
 .chat {
@@ -500,6 +606,41 @@ textarea:focus {
   color: #edffef;
 }
 
+.thread-family-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 0 0 12px;
+  padding: 0 2px;
+}
+
+.family-pill {
+  min-height: 34px;
+  border: 1px solid rgba(119, 205, 126, 0.18);
+  background: rgba(4, 10, 5, 0.72);
+  color: #d9fbd8;
+  padding: 7px 11px;
+}
+
+.family-pill.parent {
+  border-color: rgba(104, 172, 219, 0.28);
+}
+
+.family-pill.active {
+  border-color: rgba(126, 247, 142, 0.5);
+  background: rgba(52, 128, 58, 0.52);
+}
+
+.family-pill span {
+  display: block;
+  max-width: 220px;
+  overflow: hidden;
+  color: #91ad8b;
+  font-size: 0.66rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .messages,
 .panel-body {
   min-height: 0;
@@ -609,6 +750,8 @@ textarea:focus {
   display: grid;
   align-content: start;
   gap: 16px;
+  min-height: 0;
+  overflow: auto;
 }
 
 .compact-list {
@@ -663,6 +806,76 @@ textarea:focus {
   gap: 10px;
 }
 
+.worker-panel {
+  display: grid;
+  gap: 12px;
+  border: 1px solid rgba(104, 172, 219, 0.18);
+  border-radius: 12px;
+  background: rgba(3, 9, 12, 0.55);
+  padding: 12px;
+}
+
+.worker-row p {
+  color: #91ad8b;
+  font-family: "IBM Plex Mono", "JetBrains Mono", "SFMono-Regular", Consolas, monospace;
+  font-size: 0.76rem;
+}
+
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 30;
+  display: grid;
+  place-items: center;
+  background: rgba(0, 0, 0, 0.62);
+  padding: 18px;
+}
+
+.worker-dialog {
+  display: grid;
+  gap: 12px;
+  width: min(680px, 100%);
+  max-height: min(760px, calc(100vh - 36px));
+  overflow: auto;
+  border: 1px solid rgba(119, 205, 126, 0.26);
+  border-radius: 12px;
+  background: #061006;
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.5);
+  padding: 16px;
+}
+
+.worker-dialog label {
+  display: grid;
+  gap: 6px;
+}
+
+.worker-dialog label span {
+  color: #8cff9b;
+  font-size: 0.72rem;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.worker-task textarea {
+  min-height: 170px;
+}
+
+.checkbox-row {
+  display: flex !important;
+  grid-template-columns: none;
+  align-items: center;
+}
+
+.checkbox-row input {
+  width: auto;
+}
+
+.dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
 .runtime-json {
   overflow: auto;
   border: 1px solid rgba(119, 205, 126, 0.16);
@@ -700,6 +913,8 @@ textarea:focus {
   align-content: stretch;
   grid-template-rows: auto minmax(0, 1fr);
   gap: 8px;
+  min-height: 0;
+  overflow: hidden;
   padding: 8px;
 }
 
@@ -715,6 +930,8 @@ textarea:focus {
 }
 
 .raw-terminal-host {
+  width: 100%;
+  height: 100%;
   min-height: 0;
   overflow: auto;
   border: 1px solid rgba(119, 205, 126, 0.24);
@@ -906,9 +1123,9 @@ textarea:focus {
   align-items: end;
 }
 
-.square {
-  width: 42px;
-  padding: 0;
+.upload-button {
+  min-width: 84px;
+  padding: 0 12px;
 }
 
 .visually-hidden {

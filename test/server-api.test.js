@@ -47,6 +47,14 @@ test("server exposes health, readiness, version, and agent message APIs", async 
       method: "POST",
       body: JSON.stringify({ mode: "plan" }),
     });
+    const form = new FormData();
+    form.append("files", new Blob(["hello attachment"], { type: "text/plain" }), "hello.txt");
+    const uploadResponse = await fetch(`${baseUrl}/api/threads/${createdThread.thread.id}/uploads`, {
+      method: "POST",
+      body: form,
+    });
+    assert.ok(uploadResponse.ok, `/uploads returned ${uploadResponse.status}`);
+    const upload = await uploadResponse.json();
 
     assert.equal(health.ok, true);
     assert.equal(ready.ok, true);
@@ -62,6 +70,9 @@ test("server exposes health, readiness, version, and agent message APIs", async 
     assert.equal(preparedBrowser.browser.slug, "linkedin");
     assert.equal(mode.thread.codexMode, "plan");
     assert.equal(mode.thread.codexModel, "gpt-test");
+    assert.equal(upload.attachments[0].filename, "hello.txt");
+    assert.equal(upload.attachments[0].mimetype, "text/plain");
+    assert.ok(String(upload.attachments[0].saved_path || "").endsWith("hello.txt"));
   } finally {
     await new Promise((resolve) => server.close(resolve));
     if (priorHome === undefined) delete process.env.ORKESTR_HOME;

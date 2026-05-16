@@ -1,7 +1,8 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
-import { Body, Controller, Delete, Get, HttpCode, Param, Post, Put, Query } from "@nestjs/common";
+import { Body, Controller, Delete, Get, HttpCode, Param, Post, Put, Query, UploadedFiles, UseInterceptors } from "@nestjs/common";
+import { AnyFilesInterceptor } from "@nestjs/platform-express";
 import { deliverWhatsAppReplies } from "../../../../../packages/connectors/src/whatsapp.js";
 import { runNextThreadMessage } from "../../../../../packages/core/src/executors.js";
 import {
@@ -58,6 +59,7 @@ function safeUploadName(name: unknown): string {
 }
 
 function uploadBuffer(file: any): Buffer {
+  if (Buffer.isBuffer(file?.buffer)) return file.buffer;
   const encoded = String(file?.contentBase64 || "").trim();
   if (!encoded) throw httpError("upload_content_required", 400);
   return Buffer.from(encoded, "base64");
@@ -280,19 +282,24 @@ export class ThreadsController {
 
   @Post(":threadId/uploads")
   @HttpCode(201)
-  async uploads(@Param("threadId") threadId: string, @Body() body: Record<string, unknown> = {}) {
+  @UseInterceptors(AnyFilesInterceptor({ limits: { fileSize: 25 * 1024 * 1024, files: 20 } }))
+  async uploads(
+    @Param("threadId") threadId: string,
+    @Body() body: Record<string, unknown> = {},
+    @UploadedFiles() uploadedFiles: any[] = [],
+  ) {
     const thread = await getThread(threadId);
     if (!thread) throw httpError("thread_not_found", 404);
-    const files = Array.isArray(body.files) ? body.files : [];
+    const files = uploadedFiles.length ? uploadedFiles : Array.isArray(body.files) ? body.files : [];
     if (!files.length) throw httpError("upload_files_required", 400);
     const paths = await ensureDataDirs();
     const uploadDir = path.join(paths.home, "uploads", thread.id);
     await fs.mkdir(uploadDir, { recursive: true, mode: 0o700 });
     const attachments: Array<Record<string, unknown>> = [];
     for (const file of files) {
-      const name = safeUploadName((file as any)?.name);
+      const name = safeUploadName((file as any)?.originalname || (file as any)?.name);
       const buffer = uploadBuffer(file);
-      if (buffer.length > 10 * 1024 * 1024) throw httpError(`upload_too_large:${name}`, 413);
+      if (buffer.length > 25 * 1024 * 1024) throw httpError(`upload_too_large:${name}`, 413);
       const storedName = `${new Date().toISOString().replace(/[:.]/g, "-")}-${randomUUID().slice(0, 8)}-${name}`;
       const savedPath = path.join(uploadDir, storedName);
       await fs.writeFile(savedPath, buffer, { mode: 0o600 });

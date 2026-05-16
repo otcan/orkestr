@@ -79,11 +79,15 @@ async function sendRawInput(paneId: string, data: string): Promise<void> {
   await flushLiteral();
 }
 
-function upgradePath(url: string | undefined): { threadId: string } | null {
+function upgradePath(url: string | undefined): { threadId: string; cols: string | null; rows: string | null } | null {
   const parsed = new URL(url || "/", "http://localhost");
   const match = parsed.pathname.match(/^\/api\/threads\/([^/]+)\/stream$/);
   if (!match?.[1]) return null;
-  return { threadId: decodeURIComponent(match[1]) };
+  return {
+    threadId: decodeURIComponent(match[1]),
+    cols: parsed.searchParams.get("cols"),
+    rows: parsed.searchParams.get("rows"),
+  };
 }
 
 export function attachThreadStreamUpgrade(server: Server): void {
@@ -108,6 +112,7 @@ export function attachThreadStreamUpgrade(server: Server): void {
       socket.destroy();
       return;
     }
+    await resizePane(paneId, target.cols, target.rows).catch(() => undefined);
 
     wss.handleUpgrade(request, socket, head, (ws) => {
       let lastScreen = "";

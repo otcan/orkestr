@@ -1,0 +1,196 @@
+<section class="panel-body ops-panel global-ops-panel">
+  <div class="panel-title">
+    <div>
+      <p class="eyebrow">Orkestr Ops</p>
+      <h3>System, resources, models, settings, virtual desktops</h3>
+    </div>
+    <button class="secondary" type="button" (click)="loadOps()" [disabled]="busy">Reload</button>
+  </div>
+
+  @if (error) {
+    <div class="notice error">{{ error }}</div>
+  }
+
+  <nav class="tool-tabs" aria-label="Orkestr tools">
+    <button type="button" [class.active]="toolsView === 'system'" (click)="setToolsView('system')">System</button>
+    <button type="button" [class.active]="toolsView === 'timers'" (click)="setToolsView('timers')">Timers</button>
+    <button type="button" [class.active]="toolsView === 'desktops'" (click)="setToolsView('desktops')">Virtual Desktops</button>
+    <button type="button" [class.active]="toolsView === 'models'" (click)="setToolsView('models')">Models</button>
+    <button type="button" [class.active]="toolsView === 'settings'" (click)="setToolsView('settings')">Settings</button>
+    <button type="button" [class.active]="toolsView === 'connectors'" (click)="setToolsView('connectors')">Connectors</button>
+  </nav>
+
+  @if (toolsView === "system") {
+    <div class="ops-grid resource-grid">
+      <article class="ops-card critical">
+        <h4>CPU</h4>
+        <p>{{ formatPercent(systemCpuPercent()) }}</p>
+        <small>{{ objectPath(opsSystem, 'cpu.count') || '--' }} cores · load {{ systemLoadLabel() }}</small>
+        <i><em [style.width.%]="systemCpuPercent()"></em></i>
+      </article>
+      <article class="ops-card">
+        <h4>Memory</h4>
+        <p>{{ formatPercent(systemMemoryPercent()) }}</p>
+        <small>{{ formatBytes(numberPath(opsSystem, 'memory.used')) }} / {{ formatBytes(numberPath(opsSystem, 'memory.total')) }}</small>
+        <i><em [style.width.%]="systemMemoryPercent()"></em></i>
+      </article>
+      <article class="ops-card">
+        <h4>Disk</h4>
+        <p>{{ formatPercent(numberPath(opsSystem, 'disk.percent')) }}</p>
+        <small>{{ formatBytes(numberPath(opsSystem, 'disk.used')) }} / {{ formatBytes(numberPath(opsSystem, 'disk.total')) }}</small>
+        <i><em [style.width.%]="numberPath(opsSystem, 'disk.percent')"></em></i>
+      </article>
+      <article class="ops-card">
+        <h4>Orkestr</h4>
+        <p>{{ formatBytes(numberPath(opsSystem, 'orkestr.rss')) }}</p>
+        <small>PID {{ objectPath(opsSystem, 'orkestr.pid') || '--' }} · {{ opsRuntimeLeases.length }} leases</small>
+        <i><em [style.width.%]="runtimeLeasePercent()"></em></i>
+      </article>
+    </div>
+    <div class="process-table">
+      <div class="process-row head"><span>PID</span><span>User</span><span>CPU</span><span>Mem</span><span>Command</span></div>
+      @for (process of opsProcesses; track objectValue(process, 'pid') || jsonLine(process)) {
+        <div class="process-row">
+          <span>{{ objectValue(process, 'pid') }}</span>
+          <span>{{ objectValue(process, 'user') }}</span>
+          <span>{{ formatPercent(numberValue(process, 'cpu')) }}</span>
+          <span>{{ formatBytes(numberValue(process, 'rss')) }}</span>
+          <span>{{ objectValue(process, 'command') }} {{ objectValue(process, 'args') }}</span>
+        </div>
+      } @empty {
+        <p class="empty">No process sample loaded.</p>
+      }
+    </div>
+  }
+
+  @if (toolsView === "timers") {
+    <div class="ops-columns">
+      <section>
+        <h4>Global Timers</h4>
+        <div class="compact-list">
+          @for (timer of opsTimers; track timer.id) {
+            <article class="compact-row">
+              <strong>{{ timer.label || timer.id }}</strong>
+              <span>{{ timer.cadence }} · {{ timer.nextRunAt | date: "MMM d, HH:mm" }}</span>
+              <p>{{ timer.target }}</p>
+            </article>
+          } @empty {
+            <p class="empty">No global timers loaded.</p>
+          }
+        </div>
+      </section>
+    </div>
+  }
+
+  @if (toolsView === "desktops") {
+    <div class="desktop-grid">
+      @for (browser of opsBrowsers; track objectValue(browser, "slug") || objectValue(browser, "id") || jsonLine(browser)) {
+        <article class="desktop-card">
+          <div>
+            <h4>{{ objectValue(browser, "label") || objectValue(browser, "slug") || objectValue(browser, "id") }}</h4>
+            <p>{{ objectValue(browser, "purpose") || objectValue(browser, "url") || "Virtual browser session" }}</p>
+            <small>{{ objectValue(browser, "status") || objectValue(browser, "state") || "unknown" }} · {{ objectValue(browser, "profileDir") || objectValue(browser, "profile") }}</small>
+          </div>
+          <div class="desktop-actions">
+            <button type="button" (click)="browserAction(browser, 'prepare')" [disabled]="busy">Prepare</button>
+            <button type="button" (click)="browserAction(browser, 'start')" [disabled]="busy">Open</button>
+          </div>
+        </article>
+      } @empty {
+        <p class="empty">No virtual desktops registered.</p>
+      }
+    </div>
+  }
+
+  @if (toolsView === "models") {
+    <div class="ops-grid">
+      <article class="ops-card">
+        <h4>Local Models</h4>
+        <p>{{ objectPath(opsModels, 'ollama.ok') === 'true' ? 'ready' : 'overlay needed' }}</p>
+        <small>{{ objectPath(opsModels, 'ollama.baseUrl') || 'http://127.0.0.1:11434' }}</small>
+      </article>
+      <article class="ops-card">
+        <h4>External</h4>
+        <p>{{ objectPath(opsModels, 'external.configured') === 'true' ? 'configured' : 'not configured' }}</p>
+        <small>{{ objectPath(opsModels, 'external.baseUrl') || 'no base URL' }}</small>
+      </article>
+      <article class="ops-card">
+        <h4>Executor Adapters</h4>
+        <p>{{ opsExecutors.length }} adapters</p>
+        <small>{{ opsExecutions.length }} recent executions</small>
+      </article>
+    </div>
+  }
+
+  @if (toolsView === "settings") {
+    <div class="ops-grid">
+      <article class="ops-card">
+        <h4>Build</h4>
+        <p>{{ opsVersion?.name || "orkestr" }} {{ opsVersion?.version || "" }}</p>
+        <small>Data: {{ opsSetup?.home || "n/a" }}</small>
+      </article>
+      <article class="ops-card">
+        <h4>Setup</h4>
+        <p>{{ opsSetup?.setupState || "unknown" }}</p>
+        <small>Overlay {{ objectPath(opsSetup, 'overlay.valid') || 'unknown' }}</small>
+      </article>
+      <article class="ops-card">
+        <h4>Runtime Budget</h4>
+        <p>{{ objectValue(opsRuntimeBudget, "maxLiveThreads") || "n/a" }} live threads</p>
+        <small>{{ opsRuntimeLeases.length }} leases currently recorded</small>
+      </article>
+      <article class="ops-card">
+        <h4>WhatsApp</h4>
+        <p>{{ objectValue(opsWhatsApp, "state") || objectValue(opsWhatsApp, "status") || "unknown" }}</p>
+        <small>{{ objectValue(opsWhatsApp, "summary") || objectValue(opsWhatsApp, "accountId") || "bridge status" }}</small>
+      </article>
+    </div>
+  }
+
+  @if (toolsView === "connectors") {
+    <div class="ops-columns">
+      <section>
+        <h4>Connectors</h4>
+        <div class="compact-list">
+          @for (connector of opsConnectors; track connector.id) {
+            <article class="compact-row">
+              <strong>{{ connector.label || connector.id }}</strong>
+              <span>{{ connector.state }}</span>
+              <p>{{ connector.summary }}</p>
+            </article>
+          } @empty {
+            <p class="empty">No connector status loaded.</p>
+          }
+        </div>
+      </section>
+      <section>
+        <h4>Agents</h4>
+        <div class="compact-list">
+          @for (agent of opsAgents; track agent.id) {
+            <article class="compact-row">
+              <strong>{{ agent.name || agent.id }}</strong>
+              <span>{{ agent.state }}</span>
+              <p>{{ (agent.connectors || []).join(", ") }}</p>
+            </article>
+          } @empty {
+            <p class="empty">No agents yet.</p>
+          }
+        </div>
+      </section>
+      <section>
+        <h4>Events</h4>
+        <div class="compact-list">
+          @for (event of opsEvents; track eventKey(event)) {
+            <article class="compact-row">
+              <strong>{{ event.type }}</strong>
+              <span>{{ event.ts | date: "MMM d, HH:mm:ss" }}</span>
+              <p>{{ jsonLine(event) }}</p>
+            </article>
+          } @empty {
+            <p class="empty">No events loaded.</p>
+          }
+        </div>
+      </section>
+    </div>
+  }
+</section>
