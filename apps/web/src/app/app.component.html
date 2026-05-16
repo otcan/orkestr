@@ -224,15 +224,21 @@
             <button class="secondary" type="button" (click)="loadTimers()" [disabled]="busy">Reload</button>
           </div>
           <form class="timer-editor" (submit)="createTimer(); $event.preventDefault()">
-            <input name="timer-label" [(ngModel)]="timerLabel" placeholder="Label" />
-            <select name="timer-cadence" [(ngModel)]="timerCadence">
+            <input name="timer-label" [(ngModel)]="timerLabel" (ngModelChange)="persistThreadTextField('timerLabel', $event)" placeholder="Label" />
+            <select name="timer-cadence" [(ngModel)]="timerCadence" (ngModelChange)="persistThreadTextField('timerCadence', $event)">
               <option value="once">Once</option>
               <option value="daily">Daily</option>
               <option value="weekly">Weekly</option>
               <option value="interval">Interval</option>
             </select>
-            <input name="timer-time" [(ngModel)]="timerTime" placeholder="09:00 or every 2h" />
-            <textarea name="timer-prompt" rows="3" [(ngModel)]="timerPrompt" placeholder="Timer instruction or prompt-file note"></textarea>
+            <input name="timer-time" [(ngModel)]="timerTime" (ngModelChange)="persistThreadTextField('timerTime', $event)" placeholder="09:00 or every 2h" />
+            <textarea
+              name="timer-prompt"
+              rows="3"
+              [(ngModel)]="timerPrompt"
+              (ngModelChange)="persistThreadTextField('timerPrompt', $event)"
+              placeholder="Timer instruction or prompt-file note"
+            ></textarea>
             <button type="submit" [disabled]="busy || !timerPrompt.trim()">Add timer</button>
           </form>
           <div class="compact-list">
@@ -364,6 +370,7 @@
                   name="settings-worker-task-{{ thread.id }}"
                   rows="4"
                   [(ngModel)]="sidebarWorkerTask"
+                  (ngModelChange)="persistThreadTextField('sidebarWorkerTask', $event)"
                   placeholder="Leave empty to create a blank worker chat"
                 ></textarea>
               </label>
@@ -387,9 +394,9 @@
             <button class="secondary" type="button" (click)="loadRuntime()" [disabled]="busy">Reload</button>
           </div>
           <div class="runtime-actions">
-            <input name="approve-text" [(ngModel)]="approveText" placeholder="Approval text" />
+            <input name="approve-text" [(ngModel)]="approveText" (ngModelChange)="persistThreadTextField('approveText', $event)" placeholder="Approval text" />
             <button type="button" (click)="approveSelected()" [disabled]="busy">Approve</button>
-            <input name="interrupt-text" [(ngModel)]="interruptText" placeholder="Interrupt message" />
+            <input name="interrupt-text" [(ngModel)]="interruptText" (ngModelChange)="persistThreadTextField('interruptText', $event)" placeholder="Interrupt message" />
             <button class="danger-soft" type="button" (click)="interruptSelected()" [disabled]="busy">Interrupt</button>
           </div>
           <pre class="runtime-json">{{ runtimeJson() }}</pre>
@@ -451,6 +458,7 @@
               name="thread-input"
               [rows]="composerRows()"
               [(ngModel)]="draft"
+              (ngModelChange)="persistThreadTextField('draft', $event)"
               (keydown)="handleComposerKeydown($event)"
               placeholder="Message {{ threadTitle(thread) }}"
             ></textarea>

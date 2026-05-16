@@ -14,6 +14,15 @@ import {
 import { appendPendingFiles, messageWithAttachmentPaths, PendingFile, removePendingFile, uploadPendingFiles } from "./thread-uploads";
 
 type Panel = "chat" | "history" | "timers" | "attach" | "settings" | "runtime" | "raw" | "ops";
+type PersistedThreadTextField =
+  | "draft"
+  | "sidebarWorkerTask"
+  | "timerLabel"
+  | "timerCadence"
+  | "timerTime"
+  | "timerPrompt"
+  | "approveText"
+  | "interruptText";
 
 @Component({
   selector: "ork-root",
@@ -34,6 +43,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
       this.renderNow();
       return;
     }
+    this.syncThreadTextState(this.selectedThread(), true);
     void this.loadSelectedThread(true);
   };
 
@@ -95,6 +105,17 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   private shouldStickToBottom = true;
   private scrollAfterRender = true;
   private lastMessageSignature = "";
+  private textStateThreadId = "";
+  private readonly threadTextDefaults: Record<PersistedThreadTextField, string> = {
+    draft: "",
+    sidebarWorkerTask: "",
+    timerLabel: "Thread timer",
+    timerCadence: "daily",
+    timerTime: "09:00",
+    timerPrompt: "",
+    approveText: "Approved. Proceed.",
+    interruptText: "",
+  };
 
   ngOnInit(): void {
     this.selectedId = this.idFromPath();
@@ -136,7 +157,9 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
         this.selectedId = this.threadSlug(this.threads[0]);
         this.replacePath(this.selectedId, this.activePanel);
       }
-      this.syncThreadMetaDraft(this.selectedThread());
+      const selected = this.selectedThread();
+      this.syncThreadMetaDraft(selected);
+      this.syncThreadTextState(selected);
       await this.loadSelectedThread(false);
       this.updateDocumentTitle();
       this.error = "";
@@ -161,6 +184,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     this.pushPath(this.selectedId, this.activePanel);
     this.clearThreadPanelState();
     this.syncThreadMetaDraft(thread, true);
+    this.syncThreadTextState(thread, true);
     this.updateDocumentTitle();
     await this.loadSelectedThread(true);
     this.renderNow();
@@ -224,6 +248,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
       const text = messageWithAttachmentPaths(originalText, attachments);
       await firstValueFrom(this.api.sendThreadInput(thread.id, text, attachments));
       this.draft = "";
+      this.clearThreadTextField(thread, "draft");
       this.pendingFiles = [];
       this.shouldStickToBottom = true;
       this.scrollAfterRender = true;
@@ -298,6 +323,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     try {
       await firstValueFrom(this.api.interruptThread(thread.id, this.interruptText.trim()));
       this.interruptText = "";
+      this.clearThreadTextField(thread, "interruptText");
       await this.refresh(false);
     } catch (error) {
       this.error = this.errorText(error);
@@ -401,6 +427,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
       }
       await firstValueFrom(this.api.createThreadTimer(thread.id, body));
       this.timerPrompt = "";
+      this.clearThreadTextField(thread, "timerPrompt");
       await this.loadTimers();
     } catch (error) {
       this.error = this.errorText(error);
@@ -525,6 +552,8 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
       if (repoPath) body["repoPath"] = repoPath;
       const result = await firstValueFrom(this.api.createThreadWorker(parent.id, body));
       this.sidebarWorkerTask = "";
+      if (thread) this.clearThreadTextField(thread, "sidebarWorkerTask");
+      this.clearThreadTextField(parent, "sidebarWorkerTask");
       await this.refresh(false);
       if (result.worker) await this.activateThread(result.worker);
     } catch (error) {
@@ -613,6 +642,13 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
 
   removePendingFile(id: string): void {
     this.pendingFiles = removePendingFile(this.pendingFiles, id);
+  }
+
+  persistThreadTextField(field: PersistedThreadTextField, value: string): void {
+    this[field] = value;
+    const thread = this.selectedThread();
+    if (!thread) return;
+    this.writeThreadTextField(thread, field, value);
   }
 
   filteredThreads(): ThreadSummary[] {
@@ -1015,6 +1051,43 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     this.threadMetaThreadId = thread.id;
     this.threadRepoDraft = this.defaultRepoPath(thread);
     this.threadBranchDraft = this.threadBranchLabel(thread);
+  }
+
+  private syncThreadTextState(thread: ThreadSummary | null, force = false): void {
+    if (!thread) return;
+    if (!force && this.textStateThreadId === thread.id) return;
+    this.textStateThreadId = thread.id;
+    for (const field of Object.keys(this.threadTextDefaults) as PersistedThreadTextField[]) {
+      this[field] = this.readThreadTextField(thread, field) ?? this.threadTextDefaults[field];
+    }
+  }
+
+  private readThreadTextField(thread: ThreadSummary, field: PersistedThreadTextField): string | null {
+    try {
+      return globalThis.sessionStorage?.getItem(this.threadTextStorageKey(thread, field)) ?? null;
+    } catch {
+      return null;
+    }
+  }
+
+  private writeThreadTextField(thread: ThreadSummary, field: PersistedThreadTextField, value: string): void {
+    try {
+      globalThis.sessionStorage?.setItem(this.threadTextStorageKey(thread, field), value);
+    } catch {
+      // Session storage can be unavailable in strict browser modes; drafts then remain in memory only.
+    }
+  }
+
+  private clearThreadTextField(thread: ThreadSummary, field: PersistedThreadTextField): void {
+    try {
+      globalThis.sessionStorage?.removeItem(this.threadTextStorageKey(thread, field));
+    } catch {
+      // Ignore storage failures; clearing the in-memory field is already handled by the caller.
+    }
+  }
+
+  private threadTextStorageKey(thread: ThreadSummary, field: PersistedThreadTextField): string {
+    return `orkestr:thread:${thread.id}:text:${field}`;
   }
 
   private resolveThread(value: string): ThreadSummary | undefined {
