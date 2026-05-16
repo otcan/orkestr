@@ -203,6 +203,35 @@ test("whatsapp inbound routes through enabled thread bindings", async () => {
   assert.equal(messages[0].accountId, "bound-account");
 });
 
+test("whatsapp delivery respects thread binding mirroring toggle", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-mirror-toggle-"));
+  const env = { ORKESTR_HOME: home };
+  await writeConnectorConfig("whatsapp", { bridgeUrl: "http://wa.local" }, env);
+  await createThread({
+    id: "mirror-off-thread",
+    name: "Mirror Off Thread",
+    executorId: "noop",
+    binding: {
+      connector: "whatsapp",
+      chatId: "chat-mirror-off",
+      displayName: "Mirror Off Chat",
+      enabled: true,
+      mirrorToWhatsApp: false,
+    },
+  }, env);
+
+  const routed = await routeWhatsAppInbound({ eventId: "wa-mirror-off-1", chatId: "chat-mirror-off", text: "hello" }, env);
+  await runNextThreadMessage("mirror-off-thread", {}, env);
+  const delivery = await deliverWhatsAppReplies(env, async () => {
+    throw new Error("should not send when mirroring is disabled");
+  });
+
+  assert.equal(routed.threadId, "mirror-off-thread");
+  assert.equal(delivery.delivered.length, 0);
+  assert.equal(delivery.failed.length, 0);
+  assert.equal(delivery.skipped.some((item) => item.reason === "mirroring_disabled"), true);
+});
+
 test("whatsapp delivery skips duplicate live Codex answers for the same chat", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-duplicate-reply-"));
   const env = { ORKESTR_HOME: home };

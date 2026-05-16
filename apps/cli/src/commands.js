@@ -24,6 +24,8 @@ export async function runCli(argv = process.argv.slice(2), context = {}) {
     if (global.help || command === "help") return writeHelp(ctx);
     if (command === "serve" || command.startsWith("--")) return serve(command.startsWith("--") ? global.argv : args, ctx);
     if (command === "list") return list(args, ctx);
+    if (command === "thread") return threadCommand(args, ctx);
+    if (command === "worker") return workerCommand(args, ctx);
     if (command === "attach") return attach(args, ctx);
     if (command === "send") return send(args, ctx);
     if (command === "wake") return postThreadAction("wake", args, ctx);
@@ -67,6 +69,64 @@ async function list(argv, ctx) {
   const threads = payload?.threads || [];
   if (argv.includes("--json")) ctx.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
   else ctx.stdout.write(`${formatThreadTable(threads)}\n`);
+  return 0;
+}
+
+async function threadCommand(argv, ctx) {
+  const subcommand = argv[0] || "";
+  if (subcommand === "create") return createThreadCommand(argv.slice(1), ctx);
+  throw new Error("Usage: orkestr thread create <name> [--id id] [--cwd path] [--command command] [--executor id] [--json]");
+}
+
+async function createThreadCommand(argv, ctx) {
+  const json = argv.includes("--json");
+  const name = positional(argv)[0];
+  if (!name) throw new Error("Usage: orkestr thread create <name> [--id id] [--cwd path] [--command command] [--executor id] [--json]");
+  const body = { name };
+  const id = flagValue(argv, "--id");
+  const cwd = flagValue(argv, "--cwd");
+  const command = flagValue(argv, "--command") || flagValue(argv, "--cmd");
+  const executorId = flagValue(argv, "--executor");
+  if (id) body.id = id;
+  if (cwd) body.cwd = cwd;
+  if (command) body.command = command;
+  if (executorId) body.executorId = executorId;
+  const payload = await requestJson("/api/threads", { ...ctx, method: "POST", body });
+  if (json) ctx.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
+  else ctx.stdout.write(`Created ${threadName(payload.thread || body)}\n`);
+  return 0;
+}
+
+async function workerCommand(argv, ctx) {
+  const subcommand = argv[0] || "";
+  if (subcommand === "create") return createWorkerCommand(argv.slice(1), ctx);
+  throw new Error("Usage: orkestr worker create <parent-thread> [task text] [--task text] [--blank] [--label label] [--repo path] [--branch branch] [--no-wake] [--json]");
+}
+
+async function createWorkerCommand(argv, ctx) {
+  const json = argv.includes("--json");
+  const values = positional(argv);
+  const parent = values[0];
+  if (!parent) throw new Error("Usage: orkestr worker create <parent-thread> [task text] [--task text] [--blank] [--label label] [--repo path] [--branch branch] [--no-wake] [--json]");
+  const blank = argv.includes("--blank");
+  const task = blank ? "" : (flagValue(argv, "--task") || values.slice(1).join(" ")).trim();
+  const body = {};
+  const label = flagValue(argv, "--label");
+  const repoPath = flagValue(argv, "--repo") || flagValue(argv, "--repo-path") || flagValue(argv, "--cwd");
+  const branchName = flagValue(argv, "--branch") || flagValue(argv, "--branch-name");
+  if (label) body.label = label;
+  if (task) body.task = task;
+  if (blank) body.autoRun = false;
+  if (repoPath) body.repoPath = repoPath;
+  if (branchName) body.branchName = branchName;
+  if (argv.includes("--no-wake")) body.wake = false;
+  const payload = await requestJson(`/api/threads/${encodeURIComponent(parent)}/workers`, {
+    ...ctx,
+    method: "POST",
+    body,
+  });
+  if (json) ctx.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
+  else ctx.stdout.write(`Created ${threadName(payload.worker || {}) || payload.worker?.id || "worker"}\n`);
   return 0;
 }
 
@@ -137,6 +197,8 @@ function writeUsage(stream) {
   stream.write(`Usage:
   orkestr [serve] [--open] [--host 127.0.0.1] [--port 19812]
   orkestr list [--json] [--api http://127.0.0.1:19812]
+  orkestr thread create <name> [--id id] [--cwd path] [--command command] [--executor id] [--json]
+  orkestr worker create <parent-thread> [task text] [--task text] [--blank] [--label label] [--repo path] [--branch branch] [--no-wake] [--json]
   orkestr attach [thread-name-or-id] [--print] [--json]
   orkestr send <thread-name-or-id> "<message>" [--json]
   orkestr wake <thread-name-or-id> [--json]
@@ -149,8 +211,22 @@ Environment:
 
 function positional(argv) {
   const values = [];
-  const flagsWithValues = new Set(["--host", "--port"]);
-  const flagsWithoutValues = new Set(["--json", "--print", "--open"]);
+  const flagsWithValues = new Set([
+    "--branch",
+    "--branch-name",
+    "--cmd",
+    "--command",
+    "--cwd",
+    "--executor",
+    "--host",
+    "--id",
+    "--label",
+    "--port",
+    "--repo",
+    "--repo-path",
+    "--task",
+  ]);
+  const flagsWithoutValues = new Set(["--blank", "--json", "--no-wake", "--print", "--open"]);
   for (let index = 0; index < argv.length; index += 1) {
     const value = argv[index];
     if (flagsWithoutValues.has(value)) continue;

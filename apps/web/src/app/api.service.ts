@@ -70,6 +70,8 @@ export interface TimerRecord {
   id: string;
   label: string;
   target: string;
+  targetType?: string;
+  threadId?: string;
   cadence: string;
   nextRunAt: string;
   time?: string;
@@ -116,6 +118,13 @@ export interface ThreadSummary {
   baseCommit?: string | null;
   gitAhead?: number | null;
   gitBehind?: number | null;
+  gitBaseAhead?: number | null;
+  gitChangedFiles?: number | null;
+  gitDirtyFiles?: number | null;
+  gitComparisonBase?: string | null;
+  gitComparisonLabel?: string | null;
+  gitRemoteBranchExists?: boolean | null;
+  gitRemoteMissing?: boolean | null;
   worktreePath?: string | null;
   sourceDirty?: boolean;
   forkedFromCodexThreadId?: string | null;
@@ -149,6 +158,10 @@ export interface ThreadSummary {
     chatId?: string;
     displayName?: string;
     enabled?: boolean;
+    allowOtherPeople?: boolean;
+    mirrorToWhatsApp?: boolean;
+    outboundAccountId?: string | null;
+    replyPrefix?: string;
   } | null;
   runtime?: Record<string, unknown> | null;
   [key: string]: unknown;
@@ -217,6 +230,13 @@ export interface ThreadWorkerResponse {
   baseCommit?: string;
   gitAhead?: number | null;
   gitBehind?: number | null;
+  gitBaseAhead?: number | null;
+  gitChangedFiles?: number | null;
+  gitDirtyFiles?: number | null;
+  gitComparisonBase?: string | null;
+  gitComparisonLabel?: string | null;
+  gitRemoteBranchExists?: boolean | null;
+  gitRemoteMissing?: boolean | null;
   sourceDirty?: boolean;
 }
 
@@ -231,9 +251,22 @@ export interface ThreadRepoResponse {
     baseCommit?: string | null;
     gitAhead?: number | null;
     gitBehind?: number | null;
+    gitBaseAhead?: number | null;
+    gitChangedFiles?: number | null;
+    gitDirtyFiles?: number | null;
+    gitComparisonBase?: string | null;
+    gitComparisonLabel?: string | null;
+    gitRemoteBranchExists?: boolean | null;
+    gitRemoteMissing?: boolean | null;
     sourceDirty?: boolean;
   };
   detected?: Record<string, unknown>;
+}
+
+export interface ThreadBindingResponse {
+  ok: boolean;
+  thread: ThreadSummary;
+  binding: NonNullable<ThreadSummary["binding"]>;
 }
 
 @Injectable({ providedIn: "root" })
@@ -369,6 +402,10 @@ export class ApiService {
 
   createThreadWorker(id: string, body: Record<string, unknown>): Observable<ThreadWorkerResponse> {
     return this.http.post<ThreadWorkerResponse>(this.api(`/threads/${encodeURIComponent(id)}/workers`), body);
+  }
+
+  updateThreadBinding(id: string, body: Record<string, unknown>): Observable<ThreadBindingResponse> {
+    return this.http.put<ThreadBindingResponse>(this.api(`/threads/${encodeURIComponent(id)}/binding`), body);
   }
 
   updateThreadRepo(id: string, body: Record<string, unknown>): Observable<ThreadRepoResponse> {

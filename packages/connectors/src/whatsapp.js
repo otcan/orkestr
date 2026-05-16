@@ -230,7 +230,7 @@ async function listThreadMessageSets(env) {
   const sets = [];
   for (const thread of await listThreads(env)) {
     const messages = await listThreadMessages(thread.id, env);
-    if (Array.isArray(messages)) sets.push({ threadId: thread.id, messages });
+    if (Array.isArray(messages)) sets.push({ threadId: thread.id, thread, messages });
   }
   return sets;
 }
@@ -280,6 +280,11 @@ function shouldMirrorWhatsAppReply(message) {
   return true;
 }
 
+function threadAllowsWhatsAppMirroring(thread) {
+  if (!thread?.binding) return true;
+  return thread.binding.mirrorToWhatsApp !== false && thread.binding.mirrorReplies !== false;
+}
+
 async function deliverWhatsAppRepliesOnce(env = process.env, fetchImpl = fetch) {
   const config = await readConnectorConfig("whatsapp", env);
   const bridgeUrl = pickString(env.WHATSAPP_BRIDGE_URL, config.bridgeUrl);
@@ -299,13 +304,17 @@ async function deliverWhatsAppRepliesOnce(env = process.env, fetchImpl = fetch) 
     ...(await listMessageSets(env)).map((set) => ({ ...set, kind: "agent" })),
     ...(await listThreadMessageSets(env)).map((set) => ({ ...set, kind: "thread" })),
   ];
-  for (const { agentId, threadId, messages, kind } of messageSets) {
+  for (const { agentId, threadId, thread, messages, kind } of messageSets) {
     for (const message of messages) {
       if (message.role !== "assistant" || message.state !== "completed" || deliveredIds.has(message.id)) continue;
       if (!shouldMirrorWhatsAppReply(message)) continue;
       const parent = messages.find((entry) => entry.id === message.parentMessageId);
       const whatsappOrigin = parent?.connector === "whatsapp" || parent?.source === "whatsapp_inbound" || message.connector === "whatsapp";
       if (!whatsappOrigin) continue;
+      if (kind === "thread" && !threadAllowsWhatsAppMirroring(thread)) {
+        skipped.push({ agentId, threadId, messageId: message.id, reason: "mirroring_disabled" });
+        continue;
+      }
 
       const chatId = pickString(message.chatId, parent?.chatId);
       const text = pickString(message.text);

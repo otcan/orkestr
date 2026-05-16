@@ -37,6 +37,7 @@ test("server exposes health, readiness, version, and agent message APIs", async 
     const listed = await request(baseUrl, "/api/agents/job-search-assistant/messages");
     const system = await request(baseUrl, "/api/system/summary");
     const processes = await request(baseUrl, "/api/system/processes?sort=cpu");
+    const browsers = await request(baseUrl, "/api/browsers");
     const browserSessions = await request(baseUrl, "/api/browser-sessions");
     const preparedBrowser = await request(baseUrl, "/api/browser-sessions/linkedin/prepare", { method: "POST" });
     const createdThread = await request(baseUrl, "/api/threads", {
@@ -66,6 +67,7 @@ test("server exposes health, readiness, version, and agent message APIs", async 
     assert.equal(listed.messages[1].role, "assistant");
     assert.ok(system.cpu.count >= 1);
     assert.ok(Array.isArray(processes.processes));
+    assert.ok(browsers.browsers.some((browser) => browser.slug === "linkedin"));
     assert.ok(browserSessions.sessions.some((session) => session.slug === "linkedin"));
     assert.equal(preparedBrowser.browser.slug, "linkedin");
     assert.equal(mode.thread.codexMode, "plan");

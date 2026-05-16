@@ -24,7 +24,7 @@ import {
   listThreads,
   updateThread,
 } from "../../../../../packages/core/src/threads.js";
-import { createThreadWorker, detectThreadRepo, listThreadWorkers, updateThreadRepo } from "../../../../../packages/core/src/thread-workers.js";
+import { createThreadWorker, detectThreadGitState, detectThreadRepo, listThreadWorkers, updateThreadRepo } from "../../../../../packages/core/src/thread-workers.js";
 import { parseThreadInputCommand } from "../../../../../packages/core/src/thread-commands.js";
 import { ensureDataDirs } from "../../../../../packages/storage/src/paths.js";
 import { ensureAttachmentsArray, httpError } from "../../common/http.js";
@@ -83,6 +83,20 @@ function dedupeDisplayMessages(messages: any[] = []) {
 function safeUploadName(name: unknown): string {
   const base = path.basename(String(name || "upload.bin")).replace(/[^a-zA-Z0-9_.-]/g, "_");
   return base || "upload.bin";
+}
+
+function hasOwn(value: Record<string, unknown>, key: string): boolean {
+  return Object.prototype.hasOwnProperty.call(value, key);
+}
+
+function optionalBodyString(body: Record<string, unknown>, key: string, fallback: unknown = ""): string {
+  return String(hasOwn(body, key) ? body[key] : fallback || "").trim();
+}
+
+function optionalBodyBoolean(body: Record<string, unknown>, key: string, fallback = true): boolean {
+  const value = hasOwn(body, key) ? body[key] : fallback;
+  if (typeof value === "string") return !["0", "false", "no", "off"].includes(value.trim().toLowerCase());
+  return value !== false;
 }
 
 function uploadBuffer(file: any): Buffer {
@@ -152,8 +166,10 @@ function codexMetadata(thread: any) {
 
 async function threadRuntimeSummary(thread: any, messages: any[] = []) {
   const status = await runtimeStatus(thread.id).catch(() => null);
+  const gitState: any = await detectThreadGitState(thread).catch(() => ({}));
   const metadataTarget = {
     ...thread,
+    ...gitState,
     runtime: status?.lease ? { ...(thread.runtime || {}), ...status.lease } : thread.runtime,
   };
   const liveCodexMetadata: any = await resolveCodexThreadMetadata(metadataTarget).catch(() => ({}));
@@ -175,6 +191,7 @@ async function threadRuntimeSummary(thread: any, messages: any[] = []) {
   const resolvedCodexThreadId = codexThreadId(codexThread);
   return {
     ...thread,
+    ...gitState,
     threadId: resolvedCodexThreadId || thread.id,
     codexThreadId: resolvedCodexThreadId || null,
     status: state,
@@ -566,14 +583,18 @@ export class ThreadsController {
   async binding(@Param("threadId") threadId: string, @Body() body: Record<string, unknown> = {}) {
     const thread = await getThread(threadId);
     if (!thread) throw httpError("thread_not_found", 404);
+    const current = thread.binding || {};
+    const displayName = optionalBodyString(body, "displayName", current.displayName || thread.name || thread.id) || thread.name || thread.id;
     const binding = {
-      ...(thread.binding || {}),
-      connector: String(body.connector || "whatsapp"),
-      chatId: String(body.chatId || thread.binding?.chatId || "").trim(),
-      displayName: String(body.displayName || thread.binding?.displayName || thread.name || thread.id).trim(),
-      enabled: body.enabled !== false,
-      replyPrefix: String(body.replyPrefix || thread.binding?.replyPrefix || "otcanclaw:").trim(),
-      outboundAccountId: body.outboundAccountId ? String(body.outboundAccountId) : thread.binding?.outboundAccountId || null,
+      ...current,
+      connector: optionalBodyString(body, "connector", current.connector || "whatsapp") || "whatsapp",
+      chatId: optionalBodyString(body, "chatId", current.chatId || ""),
+      displayName,
+      enabled: optionalBodyBoolean(body, "enabled", current.enabled !== false),
+      allowOtherPeople: optionalBodyBoolean(body, "allowOtherPeople", current.allowOtherPeople !== false),
+      mirrorToWhatsApp: optionalBodyBoolean(body, "mirrorToWhatsApp", current.mirrorToWhatsApp !== false),
+      replyPrefix: optionalBodyString(body, "replyPrefix", current.replyPrefix || "otcanclaw:") || "otcanclaw:",
+      outboundAccountId: optionalBodyString(body, "outboundAccountId", current.outboundAccountId || "") || null,
       updatedAt: new Date().toISOString(),
     };
     const updated = await updateThread(thread.id, { binding, bindingName: binding.displayName });

@@ -70,6 +70,65 @@ test("CLI sends input with Orkestr command parsing enabled", async () => {
   assert.match(stdout.text(), /Queued thread-1/);
 });
 
+test("CLI creates threads through the public API", async () => {
+  const stdout = capture();
+  const seen = [];
+  const code = await runCli(["thread", "create", "Demo Thread", "--id", "demo-thread", "--cwd", "/repo", "--command", "codex", "--executor", "codex"], {
+    stdout,
+    stderr: capture(),
+    fetchImpl: fakeFetch({
+      "POST /api/threads": { thread: { id: "demo-thread", name: "Demo Thread" } },
+    }, seen),
+  });
+
+  assert.equal(code, 0);
+  assert.deepEqual(seen[0].body, {
+    name: "Demo Thread",
+    id: "demo-thread",
+    cwd: "/repo",
+    command: "codex",
+    executorId: "codex",
+  });
+  assert.match(stdout.text(), /Created Demo Thread/);
+});
+
+test("CLI creates worker threads with task metadata", async () => {
+  const stdout = capture();
+  const seen = [];
+  const code = await runCli(["worker", "create", "Parent", "--task", "Build this", "--label", "Worker A", "--repo", "/repo", "--branch", "orkestr/parent/worker-a"], {
+    stdout,
+    stderr: capture(),
+    fetchImpl: fakeFetch({
+      "POST /api/threads/Parent/workers": { worker: { id: "worker-1", bindingName: "Parent-Worker-A" } },
+    }, seen),
+  });
+
+  assert.equal(code, 0);
+  assert.deepEqual(seen[0].body, {
+    task: "Build this",
+    label: "Worker A",
+    repoPath: "/repo",
+    branchName: "orkestr/parent/worker-a",
+  });
+  assert.match(stdout.text(), /Created Parent-Worker-A/);
+});
+
+test("CLI creates blank workers and can disable wake", async () => {
+  const stdout = capture();
+  const seen = [];
+  const code = await runCli(["worker", "create", "Parent", "--blank", "--no-wake", "--json"], {
+    stdout,
+    stderr: capture(),
+    fetchImpl: fakeFetch({
+      "POST /api/threads/Parent/workers": { worker: { id: "worker-blank", bindingName: "Parent-Worker-Blank" } },
+    }, seen),
+  });
+
+  assert.equal(code, 0);
+  assert.deepEqual(seen[0].body, { autoRun: false, wake: false });
+  assert.match(stdout.text(), /"id": "worker-blank"/);
+});
+
 test("CLI attach can select a thread and print the tmux command", async () => {
   const stdout = capture();
   const selected = { id: "thread-1", name: "Demo", state: "ready" };

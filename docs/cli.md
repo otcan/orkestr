@@ -9,6 +9,9 @@ directly.
 ```bash
 orkestr serve --open
 orkestr list
+orkestr thread create "My Thread" --cwd /path/to/repo
+orkestr worker create otcanClaw-features --task "Investigate this in parallel"
+orkestr worker create otcanClaw-features --blank
 orkestr attach
 orkestr attach <thread-name-or-id>
 orkestr attach <thread-name-or-id> --print
@@ -19,6 +22,14 @@ orkestr sleep <thread-name-or-id>
 
 `orkestr attach` without an argument fetches live threads and asks which thread
 to attach to. This removes the old list-copy-attach workflow.
+
+`orkestr thread create` creates a top-level Orkestr thread through the public API.
+Useful flags are `--id`, `--cwd`, `--command`, `--executor`, and `--json`.
+
+`orkestr worker create` creates a git worktree-backed worker from an existing
+parent thread. Pass task text positionally or with `--task`; use `--blank` for a
+parallel chat with no first message. Worker creation wakes the new worker by
+default; pass `--no-wake` when scripting tests or preparing a worker offline.
 
 Attach keeps the backing tmux session name stable, but names the tmux/byobu
 window after the Orkestr thread on wake and attach. The current runtime model is

@@ -1,19 +1,22 @@
 import fs from "node:fs/promises";
-import { spawn } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
+import { promisify } from "node:util";
 import { dataPaths, ensureDataDirs } from "../../storage/src/paths.js";
-import { appendEvent } from "../../storage/src/store.js";
+import { appendEvent, readJson, writeJson } from "../../storage/src/store.js";
+
+const execFileAsync = promisify(execFile);
 
 const browserCatalog = [
   {
     slug: "linkedin",
     label: "LinkedIn",
-    purpose: "LinkedIn virtual browser profile",
+    purpose: "Log in to LinkedIn with an owned local browser profile.",
     startUrl: "https://www.linkedin.com/",
   },
   {
     slug: "gmail",
     label: "Gmail",
-    purpose: "Gmail virtual browser profile",
+    purpose: "Optional Gmail browser profile for accounts that need browser access.",
     startUrl: "https://mail.google.com/",
   },
 ];
@@ -38,16 +41,32 @@ async function pathExists(filePath) {
   }
 }
 
-function chromeCommand(env = process.env) {
-  return String(env.ORKESTR_CHROME_PATH || env.CHROME_PATH || "google-chrome").trim();
+async function commandExists(command) {
+  try {
+    await execFileAsync(command, ["--version"], { timeout: 2500 });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function chromeCommand(env = process.env) {
+  const configured = String(env.ORKESTR_CHROME_PATH || env.CHROME_PATH || "").trim();
+  if (configured) return configured;
+  for (const command of ["google-chrome", "chrome", "chromium", "chromium-browser"]) {
+    if (await commandExists(command)) return command;
+  }
+  return "google-chrome";
 }
 
 function profileDir(slug, env = process.env) {
   return `${dataPaths(env).browsers}/${slug}`;
 }
 
-function publicBrowserRecord(browser, configured, env = process.env) {
+async function publicBrowserRecord(browser, env = process.env) {
   const dir = profileDir(browser.slug, env);
+  const metadata = await readJson(`${dir}/browser.json`, {});
+  const configured = await pathExists(dir);
   return {
     ...browser,
     id: browser.slug,
@@ -57,16 +76,15 @@ function publicBrowserRecord(browser, configured, env = process.env) {
     status: configured ? "prepared" : "not_prepared",
     state: configured ? "prepared" : "not_prepared",
     url: browser.startUrl,
+    preparedAt: metadata.preparedAt || null,
+    lastOpenedAt: metadata.lastOpenedAt || null,
+    launchCommand: metadata.launchCommand || null,
   };
 }
 
 export async function listVirtualBrowsers(env = process.env) {
   await ensureDataDirs(env);
-  const browsers = [];
-  for (const browser of browserCatalog) {
-    browsers.push(publicBrowserRecord(browser, await pathExists(profileDir(browser.slug, env)), env));
-  }
-  return browsers;
+  return Promise.all(browserCatalog.map((browser) => publicBrowserRecord(browser, env)));
 }
 
 export async function prepareVirtualBrowser(slug, env = process.env) {
@@ -74,20 +92,33 @@ export async function prepareVirtualBrowser(slug, env = process.env) {
   await ensureDataDirs(env);
   const dir = profileDir(browser.slug, env);
   await fs.mkdir(dir, { recursive: true, mode: 0o700 });
-  const record = publicBrowserRecord(browser, true, env);
-  await appendEvent({ type: "browser_prepared", slug: browser.slug, profileDir: dir }, env);
-  return record;
+  const prior = await readJson(`${dir}/browser.json`, {});
+  const preparedAt = prior.preparedAt || new Date().toISOString();
+  await writeJson(`${dir}/browser.json`, {
+    ...prior,
+    slug: browser.slug,
+    label: browser.label,
+    profileDir: dir,
+    preparedAt,
+    updatedAt: new Date().toISOString(),
+  });
+  await appendEvent({ type: "browser_prepared", browser: browser.slug, slug: browser.slug, profileDir: dir }, env);
+  return publicBrowserRecord(browser, env);
 }
 
 export async function openVirtualBrowser(slug, env = process.env) {
-  const browser = await prepareVirtualBrowser(slug, env);
+  const browser = browserBySlug(slug);
+  const prepared = await prepareVirtualBrowser(slug, env);
   const launchDisabled = String(env.ORKESTR_BROWSER_LAUNCH_DISABLED || "").trim() === "1";
+  const command = launchDisabled ? "" : await chromeCommand(env);
   let launched = false;
   let pid = null;
-  if (!launchDisabled) {
+  let launchError = "";
+
+  if (!launchDisabled && command) {
     try {
-      const child = spawn(chromeCommand(env), [
-        `--user-data-dir=${browser.profileDir}`,
+      const child = spawn(command, [
+        `--user-data-dir=${prepared.profileDir}`,
         "--no-first-run",
         "--new-window",
         browser.startUrl,
@@ -98,10 +129,27 @@ export async function openVirtualBrowser(slug, env = process.env) {
       child.unref();
       launched = true;
       pid = child.pid || null;
-    } catch {
-      launched = false;
+    } catch (error) {
+      launchError = error?.message || String(error);
     }
   }
-  await appendEvent({ type: "browser_open_requested", slug: browser.slug, launched, pid, profileDir: browser.profileDir }, env);
-  return { ...browser, launched, pid };
+
+  const openedAt = new Date().toISOString();
+  await writeJson(`${prepared.profileDir}/browser.json`, {
+    slug: browser.slug,
+    label: browser.label,
+    profileDir: prepared.profileDir,
+    preparedAt: prepared.preparedAt || openedAt,
+    lastOpenedAt: openedAt,
+    launchCommand: command || null,
+    launchError: launchError || null,
+  });
+  await appendEvent({ type: "browser_open_requested", browser: browser.slug, slug: browser.slug, launched, pid, profileDir: prepared.profileDir }, env);
+  return {
+    ...(await publicBrowserRecord(browser, env)),
+    launched,
+    pid,
+    launchDisabled,
+    launchError,
+  };
 }

@@ -136,6 +136,17 @@ textarea:focus {
   gap: 16px;
 }
 
+.brand-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.setup-shortcut {
+  min-height: 32px;
+  padding: 6px 10px;
+}
+
 .brand h1,
 .chat-head h2,
 .panel-title h3 {
@@ -319,7 +330,7 @@ textarea:focus {
   border: 1px solid transparent;
   border-radius: 12px;
   color: inherit;
-  padding: 10px 48px 10px 10px;
+  padding: 10px 64px 10px 10px;
   text-decoration: none;
 }
 
@@ -407,6 +418,14 @@ textarea:focus {
   line-height: 1.35;
 }
 
+.thread-text .thread-branch-label {
+  color: #dce7af;
+  font-family: "IBM Plex Mono", "JetBrains Mono", "SFMono-Regular", Consolas, monospace;
+  font-size: 0.68rem;
+  font-weight: 800;
+  line-height: 1.35;
+}
+
 .thread-text small,
 .subline,
 .helper,
@@ -425,7 +444,7 @@ textarea:focus {
   position: absolute;
   top: 10px;
   right: 10px;
-  max-width: 44px;
+  max-width: 58px;
 }
 
 .thread-item > .pending {
@@ -437,6 +456,12 @@ textarea:focus {
 .worker-count {
   background: rgba(104, 172, 219, 0.3);
   color: #cfeeff;
+}
+
+.timer-count {
+  background: rgba(207, 184, 74, 0.2);
+  color: #fff2aa;
+  text-transform: none;
 }
 
 .new-dot {
@@ -953,6 +978,19 @@ textarea:focus {
 .settings-actions {
   display: flex;
   justify-content: flex-end;
+}
+
+.settings-toggle {
+  gap: 9px;
+  justify-content: flex-start;
+  color: #d9fbd8;
+  font-size: 0.84rem;
+  font-weight: 800;
+}
+
+.settings-toggle span {
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .compact-list {

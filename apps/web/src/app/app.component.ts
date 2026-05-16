@@ -2,10 +2,12 @@ import { DatePipe } from "@angular/common";
 import { AfterViewChecked, ChangeDetectorRef, Component, ElementRef, OnDestroy, OnInit, ViewChild, inject } from "@angular/core";
 import { FormsModule } from "@angular/forms";
 import { firstValueFrom } from "rxjs";
+import { OnboardingPageComponent } from "./onboarding-page.component";
 import { OpsPageComponent, ToolsView } from "./ops-page.component";
 import { RawTerminalController } from "./raw-terminal.controller";
 import {
   ApiService,
+  SetupStatus,
   ThreadAttachResponse,
   ThreadMessage,
   ThreadSummary,
@@ -13,7 +15,7 @@ import {
 } from "./api.service";
 import { appendPendingFiles, messageWithAttachmentPaths, PendingFile, removePendingFile, uploadPendingFiles } from "./thread-uploads";
 
-type Panel = "chat" | "history" | "timers" | "attach" | "settings" | "runtime" | "raw" | "ops";
+type Panel = "chat" | "history" | "timers" | "attach" | "settings" | "workers" | "runtime" | "raw" | "ops";
 type PersistedThreadTextField =
   | "draft"
   | "sidebarWorkerTask"
@@ -26,17 +28,24 @@ type PersistedThreadTextField =
 
 @Component({
   selector: "ork-root",
-  imports: [DatePipe, FormsModule, OpsPageComponent],
+  imports: [DatePipe, FormsModule, OpsPageComponent, OnboardingPageComponent],
   templateUrl: "./app.component.html",
 })
 export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   private readonly api = inject(ApiService);
   private readonly cdr = inject(ChangeDetectorRef);
   private readonly popStateHandler = () => {
+    this.onboardingActive = this.onboardingFromPath();
     this.selectedId = this.idFromPath();
     this.activePanel = this.panelFromPath();
     this.toolsView = this.toolsViewFromPath();
     this.normalizeLegacyOpsPath();
+    if (this.onboardingActive) {
+      this.closeRawStream();
+      this.updateDocumentTitle();
+      this.renderNow();
+      return;
+    }
     if (this.activePanel === "ops") {
       this.closeRawStream();
       this.updateDocumentTitle();
@@ -54,9 +63,11 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   messages: ThreadMessage[] = [];
   historyMessages: ThreadMessage[] = [];
   timers: TimerRecord[] = [];
+  allTimers: TimerRecord[] = [];
   runtimeDetails: Record<string, unknown> | null = null;
   attachDetails: ThreadAttachResponse | null = null;
   opsSystem: Record<string, unknown> | null = null;
+  setupStatus: SetupStatus | null = null;
   selectedId = "";
   filterText = "";
   draft = "";
@@ -64,6 +75,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   apiOnline = false;
   busy = false;
   sending = false;
+  onboardingActive = false;
   activePanel: Panel = "chat";
   toolsView: ToolsView = "system";
   approveText = "Approved. Proceed.";
@@ -84,6 +96,15 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   threadMetaThreadId = "";
   savingThreadMeta = false;
   detectingThreadRepo = false;
+  whatsappBindingThreadId = "";
+  whatsappChatId = "";
+  whatsappDisplayName = "";
+  whatsappReplyPrefix = "otcanclaw:";
+  whatsappOutboundAccountId = "";
+  whatsappBindingEnabled = true;
+  whatsappAllowOtherPeople = true;
+  whatsappMirrorToWhatsApp = true;
+  savingThreadBinding = false;
   sidebarWorkerTask = "";
   creatingSidebarWorker = false;
   creatingWorkerParentId = "";
@@ -144,6 +165,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   };
 
   ngOnInit(): void {
+    this.onboardingActive = this.onboardingFromPath();
     this.selectedId = this.idFromPath();
     this.activePanel = this.panelFromPath();
     this.toolsView = this.toolsViewFromPath();
@@ -172,22 +194,36 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   async refresh(showBusy = true): Promise<void> {
     if (showBusy) this.busy = true;
     try {
-      const [threadsResult, systemResult] = await Promise.allSettled([
+      const [threadsResult, systemResult, setupResult, timersResult] = await Promise.allSettled([
         firstValueFrom(this.api.threads()),
         firstValueFrom(this.api.systemSummary()),
+        firstValueFrom(this.api.setupStatus()),
+        firstValueFrom(this.api.timers()),
       ]);
       if (threadsResult.status === "rejected") throw threadsResult.reason;
       const payload = threadsResult.value;
       if (systemResult.status === "fulfilled") this.opsSystem = systemResult.value;
+      if (setupResult.status === "fulfilled") this.setupStatus = setupResult.value;
+      if (timersResult.status === "fulfilled") this.allTimers = timersResult.value.timers || [];
       this.apiOnline = true;
       this.threads = [...payload.threads].sort((a, b) => this.activityMs(b) - this.activityMs(a));
       this.seedReadStateIfNeeded(this.threads);
+      if (this.shouldAutoOpenOnboarding()) {
+        this.onboardingActive = true;
+        this.replaceOnboardingPath();
+      }
+      if (this.onboardingActive) {
+        this.updateDocumentTitle();
+        this.error = "";
+        return;
+      }
       if (this.activePanel !== "ops" && !this.selectedId && this.threads.length) {
         this.selectedId = this.threadSlug(this.threads[0]);
         this.replacePath(this.selectedId, this.activePanel);
       }
       const selected = this.selectedThread();
       this.syncThreadMetaDraft(selected);
+      this.syncThreadBindingDraft(selected);
       this.syncThreadTextState(selected);
       await this.loadSelectedThread(false);
       this.updateDocumentTitle();
@@ -214,6 +250,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     this.pushPath(this.selectedId, this.activePanel);
     this.clearThreadPanelState();
     this.syncThreadMetaDraft(thread, true);
+    this.syncThreadBindingDraft(thread, true);
     this.syncThreadTextState(thread, true);
     this.updateDocumentTitle();
     await this.loadSelectedThread(true);
@@ -245,6 +282,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     if (panel === "timers") await this.loadTimers();
     if (panel === "runtime") await this.loadRuntime();
     if (panel === "raw") await this.loadRaw();
+    if (panel === "settings") this.syncThreadBindingDraft(this.selectedThread(), true);
     if (panel === "chat") {
       this.queueMessagePaneScrollToBottom();
     }
@@ -253,6 +291,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
 
   openTools(view: ToolsView = this.toolsView): void {
     if (this.activePanel === "raw") this.closeRawStream();
+    this.onboardingActive = false;
     this.toolsView = view;
     this.activePanel = "ops";
     this.pushOpsPath(view);
@@ -264,6 +303,25 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     this.toolsView = view;
     this.pushOpsPath(view);
     this.updateDocumentTitle();
+  }
+
+  openOnboarding(): void {
+    if (this.activePanel === "raw") this.closeRawStream();
+    this.onboardingActive = true;
+    this.clearOnboardingFlag("skipped");
+    this.pushOnboardingPath();
+    this.updateDocumentTitle();
+    this.renderNow();
+  }
+
+  async leaveOnboarding(completed = false): Promise<void> {
+    this.onboardingActive = false;
+    this.writeOnboardingFlag(completed ? "completed" : "skipped");
+    this.activePanel = "ops";
+    this.toolsView = "connectors";
+    this.pushOpsPath("connectors");
+    this.updateDocumentTitle();
+    await this.refresh(false);
   }
 
   async sendMessage(): Promise<void> {
@@ -453,7 +511,8 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
       } else {
         body["time"] = this.timerTime.trim() || "09:00";
       }
-      await firstValueFrom(this.api.createThreadTimer(thread.id, body));
+      const payload = await firstValueFrom(this.api.createThreadTimer(thread.id, body));
+      if (payload.timer) this.allTimers = this.upsertTimer(this.allTimers, payload.timer);
       this.timerPrompt = "";
       this.clearThreadTextField(thread, "timerPrompt");
       await this.loadTimers();
@@ -470,6 +529,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     this.busy = true;
     try {
       await firstValueFrom(this.api.deleteThreadTimer(thread.id, timer.id));
+      this.allTimers = this.allTimers.filter((item) => item.id !== timer.id);
       await this.loadTimers();
     } catch (error) {
       this.error = this.errorText(error);
@@ -559,6 +619,32 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
       this.error = this.errorText(error);
     } finally {
       this.detectingThreadRepo = false;
+      this.busy = false;
+      this.renderNow();
+    }
+  }
+
+  async saveThreadBinding(thread: ThreadSummary | null = this.selectedThread()): Promise<void> {
+    if (!thread || this.savingThreadBinding) return;
+    this.savingThreadBinding = true;
+    this.busy = true;
+    try {
+      const result = await firstValueFrom(this.api.updateThreadBinding(thread.id, {
+        connector: "whatsapp",
+        chatId: this.whatsappChatId.trim(),
+        displayName: this.whatsappDisplayName.trim() || this.threadTitle(thread),
+        enabled: this.whatsappBindingEnabled,
+        allowOtherPeople: this.whatsappAllowOtherPeople,
+        mirrorToWhatsApp: this.whatsappMirrorToWhatsApp,
+        replyPrefix: this.whatsappReplyPrefix.trim() || "otcanclaw:",
+        outboundAccountId: this.whatsappOutboundAccountId.trim(),
+      }));
+      if (result.thread) this.replaceThread(result.thread);
+      this.syncThreadBindingDraft(result.thread || thread, true);
+    } catch (error) {
+      this.error = this.errorText(error);
+    } finally {
+      this.savingThreadBinding = false;
       this.busy = false;
       this.renderNow();
     }
@@ -717,6 +803,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   }
 
   selectedThread(): ThreadSummary | null {
+    if (this.onboardingActive) return null;
     if (this.activePanel === "ops") return null;
     if (!this.selectedId) return this.threads[0] || null;
     return this.resolveThread(this.selectedId) || null;
@@ -741,7 +828,15 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
 
   threadBranchLabel(thread: ThreadSummary | null): string {
     if (!thread) return "";
-    return String(thread.branchName || this.objectValue(thread.runtime, "branchName") || "").trim();
+    const executor = thread["executor"];
+    const metadata = executor && typeof executor === "object" ? (executor as Record<string, unknown>)["metadata"] : null;
+    return String(
+      thread.branchName ||
+      this.objectValue(thread.runtime, "branchName") ||
+      this.objectValue(metadata, "branchName") ||
+      thread.baseBranch ||
+      "",
+    ).trim();
   }
 
   threadRepoLabel(thread: ThreadSummary | null): string {
@@ -754,12 +849,10 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     if (!thread) return "";
     const remote = this.threadRemoteLabel(thread);
     const repo = this.threadRepoLabel(thread);
-    const branch = this.threadRemoteBranchLabel(thread) || this.threadBranchLabel(thread);
     const gitDelta = this.threadGitDeltaLabel(thread);
     const parts: string[] = [];
     if (remote) parts.push(remote);
     if (!thread.parentThreadId && repo && !remote.toLowerCase().endsWith(`/${repo.toLowerCase()}`)) parts.push(repo);
-    if (branch) parts.push(branch);
     if (gitDelta) parts.push(gitDelta);
     return parts.join(" · ");
   }
@@ -805,16 +898,55 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
 
   threadGitDeltaLabel(thread: ThreadSummary | null): string {
     if (!thread) return "";
+    const baseAhead = this.threadNumberValue(thread, "gitBaseAhead");
+    const changedFiles = this.threadNumberValue(thread, "gitChangedFiles");
+    const dirtyFiles = this.threadNumberValue(thread, "gitDirtyFiles");
+    const baseParts: string[] = [];
+    if (Number.isFinite(baseAhead) && baseAhead > 0) baseParts.push(`${baseAhead} commit${baseAhead === 1 ? "" : "s"}`);
+    if (Number.isFinite(changedFiles) && changedFiles > 0) baseParts.push(`${changedFiles} file${changedFiles === 1 ? "" : "s"}`);
+    if (Number.isFinite(dirtyFiles) && dirtyFiles > 0) baseParts.push(`${dirtyFiles} dirty`);
+    if (baseParts.length) {
+      const comparison = String(thread.gitComparisonLabel || this.objectValue(thread.runtime, "gitComparisonLabel") || "").trim();
+      return `diff${comparison ? ` vs ${comparison}` : ""}: ${baseParts.join(", ")}`;
+    }
     const ahead = this.threadNumberValue(thread, "gitAhead");
     const behind = this.threadNumberValue(thread, "gitBehind");
-    if (Number.isFinite(ahead) && Number.isFinite(behind)) return `↑${ahead} ↓${behind}`;
-    if (this.threadRemoteBranchLabel(thread) && thread.parentThreadId) return "not pushed";
+    if (Number.isFinite(ahead) && Number.isFinite(behind) && (ahead > 0 || behind > 0)) return `ahead ${ahead} behind ${behind}`;
+    if (this.booleanThreadValue(thread, "gitRemoteMissing") && thread.parentThreadId) return "not pushed";
     return "";
   }
 
   threadMetaDirty(thread: ThreadSummary | null = this.selectedThread()): boolean {
     if (!thread || this.threadMetaThreadId !== thread.id) return false;
     return this.threadRepoDraft.trim() !== this.defaultRepoPath(thread) || this.threadBranchDraft.trim() !== this.threadBranchLabel(thread);
+  }
+
+  threadBindingDirty(thread: ThreadSummary | null = this.selectedThread()): boolean {
+    if (!thread || this.whatsappBindingThreadId !== thread.id) return false;
+    const binding = thread.binding || {};
+    return this.whatsappChatId.trim() !== String(binding.chatId || "") ||
+      this.whatsappDisplayName.trim() !== String(binding.displayName || this.threadTitle(thread)) ||
+      this.whatsappReplyPrefix.trim() !== String(binding.replyPrefix || "otcanclaw:") ||
+      this.whatsappOutboundAccountId.trim() !== String(binding.outboundAccountId || "") ||
+      this.whatsappBindingEnabled !== (binding.enabled !== false) ||
+      this.whatsappAllowOtherPeople !== (binding.allowOtherPeople !== false) ||
+      this.whatsappMirrorToWhatsApp !== (binding.mirrorToWhatsApp !== false);
+  }
+
+  whatsappChatLabel(thread: ThreadSummary | null): string {
+    const binding = thread?.binding;
+    const chatId = String(binding?.chatId || "").trim();
+    if (!chatId) return "No WhatsApp chat connected";
+    return String(binding?.displayName || chatId).trim();
+  }
+
+  whatsappChatDetail(thread: ThreadSummary | null): string {
+    const binding = thread?.binding;
+    const chatId = String(binding?.chatId || "").trim();
+    if (!chatId) return "Add a chat id to route WhatsApp messages into this thread.";
+    const state = binding?.enabled === false ? "inbound off" : "inbound on";
+    const mirror = binding?.mirrorToWhatsApp === false ? "WA mirror off" : "WA mirror on";
+    return `${chatId} · ${state} · ${mirror}`;
   }
 
   childWorkers(thread: ThreadSummary | null): ThreadSummary[] {
@@ -900,6 +1032,23 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
 
   isThreadFamilyUnread(thread: ThreadSummary): boolean {
     return this.isThreadUnread(thread) || this.childWorkers(thread).some((worker) => this.isThreadUnread(worker));
+  }
+
+  threadTimerCount(thread: ThreadSummary): number {
+    return this.familyTimers(thread).length;
+  }
+
+  ownThreadTimerCount(thread: ThreadSummary): number {
+    return this.threadTimersFor(thread).length;
+  }
+
+  threadTimerTooltip(thread: ThreadSummary): string {
+    const timers = this.familyTimers(thread);
+    if (!timers.length) return "No timers";
+    const [next] = timers;
+    const label = String(next.label || "Timer");
+    const count = timers.length === 1 ? "1 timer" : `${timers.length} timers`;
+    return `${count}. Next: ${label} at ${this.timerTimeLabel(next)}`;
   }
 
   threadUrl(thread: ThreadSummary): string {
@@ -1197,6 +1346,20 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     this.threadBranchDraft = this.threadBranchLabel(thread);
   }
 
+  private syncThreadBindingDraft(thread: ThreadSummary | null, force = false): void {
+    if (!thread) return;
+    if (!force && this.whatsappBindingThreadId === thread.id && this.threadBindingDirty(thread)) return;
+    const binding = thread.binding || {};
+    this.whatsappBindingThreadId = thread.id;
+    this.whatsappChatId = String(binding.chatId || "");
+    this.whatsappDisplayName = String(binding.displayName || this.threadTitle(thread));
+    this.whatsappReplyPrefix = String(binding.replyPrefix || "otcanclaw:");
+    this.whatsappOutboundAccountId = String(binding.outboundAccountId || "");
+    this.whatsappBindingEnabled = binding.enabled !== false;
+    this.whatsappAllowOtherPeople = binding.allowOtherPeople !== false;
+    this.whatsappMirrorToWhatsApp = binding.mirrorToWhatsApp !== false;
+  }
+
   private syncThreadTextState(thread: ThreadSummary | null, force = false): void {
     if (!thread) return;
     if (!force && this.textStateThreadId === thread.id) return;
@@ -1254,12 +1417,17 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     return "";
   }
 
+  private onboardingFromPath(): boolean {
+    const parts = globalThis.location?.pathname?.split("/").filter(Boolean) || [];
+    return parts[0] === "ng" && parts[1] === "onboarding";
+  }
+
   private panelFromPath(): Panel {
     const parts = globalThis.location?.pathname?.split("/").filter(Boolean) || [];
     if (parts[0] === "ng" && parts[1] === "ops") return "ops";
     const threadIndex = parts.indexOf("thread");
     const panel = String(parts[threadIndex + 2] || "");
-    return ["history", "timers", "attach", "settings", "runtime", "raw", "ops"].includes(panel) ? panel as Panel : "chat";
+    return ["history", "timers", "attach", "settings", "workers", "runtime", "raw", "ops"].includes(panel) ? panel as Panel : "chat";
   }
 
   private toolsViewFromPath(): ToolsView {
@@ -1286,6 +1454,16 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     globalThis.history?.replaceState({}, "", this.pathForPanel(id, panel));
   }
 
+  private pushOnboardingPath(): void {
+    if (globalThis.location?.pathname === "/ng/onboarding") return;
+    globalThis.history?.pushState({}, "", "/ng/onboarding");
+  }
+
+  private replaceOnboardingPath(): void {
+    if (globalThis.location?.pathname === "/ng/onboarding") return;
+    globalThis.history?.replaceState({}, "", "/ng/onboarding");
+  }
+
   private pathForPanel(id: string, panel: Panel): string {
     if (panel === "ops") return this.opsPath(this.toolsView);
     const suffix = panel === "chat" ? "" : `/${panel}`;
@@ -1302,6 +1480,37 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     return view === "system" ? "/ng/ops" : `/ng/ops/${view}`;
   }
 
+  private shouldAutoOpenOnboarding(): boolean {
+    if (this.onboardingActive || !this.setupStatus || this.setupStatus.setupState === "ready") return false;
+    if (this.readOnboardingFlag("skipped") || this.readOnboardingFlag("completed")) return false;
+    const parts = globalThis.location?.pathname?.split("/").filter(Boolean) || [];
+    return parts.length === 0 || (parts.length === 1 && parts[0] === "ng");
+  }
+
+  private readOnboardingFlag(name: "skipped" | "completed"): boolean {
+    try {
+      return globalThis.localStorage?.getItem(`orkestr:onboarding:${name}`) === "1";
+    } catch {
+      return false;
+    }
+  }
+
+  private writeOnboardingFlag(name: "skipped" | "completed"): void {
+    try {
+      globalThis.localStorage?.setItem(`orkestr:onboarding:${name}`, "1");
+    } catch {
+      // Local storage can be unavailable; the URL still records the current view.
+    }
+  }
+
+  private clearOnboardingFlag(name: "skipped" | "completed"): void {
+    try {
+      globalThis.localStorage?.removeItem(`orkestr:onboarding:${name}`);
+    } catch {
+      // Ignore storage failures.
+    }
+  }
+
   private activityMs(thread: ThreadSummary): number {
     const value = thread.lastActivityAt || thread.threadUpdatedAt || thread.updatedAt || thread.createdAt || "";
     const ms = Date.parse(String(value));
@@ -1310,6 +1519,42 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
 
   private familyActivityMs(thread: ThreadSummary): number {
     return Math.max(this.activityMs(thread), ...this.childWorkers(thread).map((worker) => this.activityMs(worker)));
+  }
+
+  private threadTimersFor(thread: ThreadSummary | null): TimerRecord[] {
+    if (!thread) return [];
+    const candidates = [thread.id, thread.name, thread.bindingName, thread.title]
+      .filter(Boolean)
+      .map((value) => String(value));
+    return this.allTimers
+      .filter((timer) => timer.enabled !== false)
+      .filter((timer) => {
+        const targetType = String(timer.targetType || (timer.threadId ? "thread" : "")).toLowerCase();
+        if (targetType && targetType !== "thread") return false;
+        const target = String(timer.target || timer.threadId || "").trim();
+        return Boolean(target && candidates.includes(target));
+      })
+      .sort((a, b) => this.timerMs(a) - this.timerMs(b));
+  }
+
+  private familyTimers(thread: ThreadSummary): TimerRecord[] {
+    const timers = [thread, ...this.childWorkers(thread)].flatMap((item) => this.threadTimersFor(item));
+    return [...new Map(timers.map((timer) => [timer.id, timer])).values()].sort((a, b) => this.timerMs(a) - this.timerMs(b));
+  }
+
+  private upsertTimer(timers: TimerRecord[], timer: TimerRecord): TimerRecord[] {
+    return [...timers.filter((item) => item.id !== timer.id), timer].sort((a, b) => this.timerMs(a) - this.timerMs(b));
+  }
+
+  private timerMs(timer: TimerRecord): number {
+    const ms = Date.parse(String(timer.nextRunAt || ""));
+    return Number.isFinite(ms) ? ms : Number.MAX_SAFE_INTEGER;
+  }
+
+  private timerTimeLabel(timer: TimerRecord): string {
+    const ms = this.timerMs(timer);
+    if (!Number.isFinite(ms) || ms === Number.MAX_SAFE_INTEGER) return "not scheduled";
+    return new Date(ms).toLocaleString();
   }
 
   private threadReadMs(thread: ThreadSummary): number {
@@ -1397,7 +1642,19 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     return Number.isFinite(parsed) ? parsed : Number.NaN;
   }
 
+  private booleanThreadValue(thread: ThreadSummary | null, key: string): boolean {
+    if (!thread) return false;
+    const executor = thread["executor"];
+    const metadata = executor && typeof executor === "object" ? (executor as Record<string, unknown>)["metadata"] : null;
+    const raw = thread[key] ?? this.pathValue(thread.runtime, key) ?? this.pathValue(metadata, key);
+    return raw === true || raw === "true" || raw === 1 || raw === "1";
+  }
+
   private updateDocumentTitle(): void {
+    if (this.onboardingActive) {
+      globalThis.document.title = "Setup · Orkestr";
+      return;
+    }
     if (this.activePanel === "ops") {
       globalThis.document.title = "Ops · Orkestr";
       return;

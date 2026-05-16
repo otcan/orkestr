@@ -4,12 +4,14 @@ import {
   openVirtualBrowser,
   prepareVirtualBrowser,
 } from "../../../../../packages/browsers/src/browsers.js";
+import { httpError } from "../../common/http.js";
 
 @Controller("api")
 export class BrowsersController {
   @Get("browsers")
   async browsers() {
-    return { browsers: await listVirtualBrowsers() };
+    const browsers = await listVirtualBrowsers();
+    return { browsers, sessions: browsers };
   }
 
   @Get("browser-sessions")
@@ -30,10 +32,9 @@ export class BrowsersController {
   }
 
   private async runAction(slug: string, action: string) {
-    if (action === "prepare") return { browser: await prepareVirtualBrowser(slug) };
-    if (action === "start" || action === "open") return { browser: await openVirtualBrowser(slug) };
-    const error = new Error("unknown_browser_action") as Error & { statusCode?: number };
-    error.statusCode = 400;
-    throw error;
+    const normalized = String(action || "").trim().toLowerCase();
+    if (normalized === "prepare") return { browser: await prepareVirtualBrowser(slug) };
+    if (normalized === "start" || normalized === "open") return { browser: await openVirtualBrowser(slug) };
+    throw httpError("unknown_browser_action", 404);
   }
 }

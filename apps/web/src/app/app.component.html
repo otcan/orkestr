@@ -1,3 +1,6 @@
+@if (onboardingActive) {
+  <ork-onboarding-page (skip)="leaveOnboarding(false)" (complete)="leaveOnboarding(true)"></ork-onboarding-page>
+} @else {
 <main class="app-shell" [class.sidebar-resizing]="sidebarResizing" [style.--sidebar-width.px]="sidebarWidth">
   <aside class="sidebar">
     <div class="brand">
@@ -5,7 +8,10 @@
         <p class="eyebrow">Orkestr</p>
         <h1>Threads</h1>
       </div>
-      <span class="health" [class.ok]="apiOnline">{{ apiOnline ? "online" : "loading" }}</span>
+      <div class="brand-actions">
+        <button class="secondary setup-shortcut" type="button" (click)="openOnboarding()">Setup</button>
+        <span class="health" [class.ok]="apiOnline">{{ apiOnline ? "online" : "loading" }}</span>
+      </div>
     </div>
 
     <label class="search">
@@ -28,6 +34,9 @@
               <small>
                 {{ statusLabel(thread) }} · {{ activityTime(thread) | date: "MMM d, HH:mm" }}
               </small>
+              @if (threadBranchLabel(thread)) {
+                <small class="thread-branch-label">{{ threadBranchLabel(thread) }}</small>
+              }
               @if (threadWorkspaceLabel(thread)) {
                 <small class="thread-workspace-label">{{ threadWorkspaceLabel(thread) }}</small>
               }
@@ -35,6 +44,9 @@
             <span class="thread-badges">
               @if (isThreadFamilyUnread(thread)) {
                 <span class="new-dot" title="New activity"></span>
+              }
+              @if (threadTimerCount(thread) > 0) {
+                <span class="pending timer-count" [title]="threadTimerTooltip(thread)">T {{ threadTimerCount(thread) }}</span>
               }
               @if (childWorkers(thread).length > 0) {
                 <span class="pending worker-count">{{ childWorkers(thread).length }}</span>
@@ -60,6 +72,9 @@
                     <small>
                       {{ statusLabel(worker) }} · {{ activityTime(worker) | date: "MMM d, HH:mm" }}
                     </small>
+                    @if (threadBranchLabel(worker)) {
+                      <small class="thread-branch-label">{{ threadBranchLabel(worker) }}</small>
+                    }
                     @if (threadWorkspaceLabel(worker)) {
                       <small class="thread-workspace-label">{{ threadWorkspaceLabel(worker) }}</small>
                     }
@@ -67,6 +82,9 @@
                   <span class="thread-badges">
                     @if (isThreadUnread(worker)) {
                       <span class="new-dot" title="New activity"></span>
+                    }
+                    @if (ownThreadTimerCount(worker) > 0) {
+                      <span class="pending timer-count" [title]="threadTimerTooltip(worker)">T {{ ownThreadTimerCount(worker) }}</span>
                     }
                     @if ((worker.pendingCount || 0) > 0) {
                       <span class="pending">{{ worker.pendingCount }}</span>
@@ -113,7 +131,6 @@
             @if (threadBranchLabel(thread)) {
               <span class="branch-pill">{{ threadBranchLabel(thread) }}</span>
             }
-            <span>{{ thread.codexThreadId || thread.threadId || thread.id }}</span>
           </p>
         </div>
         <div class="head-actions cockpit-actions">
@@ -137,6 +154,7 @@
         <button type="button" [class.active]="activePanel === 'timers'" (click)="openPanel('timers')">Thread Timers</button>
         <button type="button" [class.active]="activePanel === 'attach'" (click)="openPanel('attach')">Attach</button>
         <button type="button" [class.active]="activePanel === 'settings'" (click)="openPanel('settings')">Settings</button>
+        <button type="button" [class.active]="activePanel === 'workers'" (click)="openPanel('workers')">Parallel Work</button>
         <button type="button" [class.active]="activePanel === 'runtime'" (click)="openPanel('runtime')">Runtime</button>
         <span class="panel-spacer"></span>
         <div class="codex-mode-toggle" title="Requested Codex mode for this Orkestr thread">
@@ -315,7 +333,7 @@
           <div class="panel-title">
             <div>
               <p class="eyebrow">Thread Settings</p>
-              <h3>Workspace and workers</h3>
+              <h3>Workspace and WhatsApp</h3>
             </div>
           </div>
 
@@ -360,45 +378,105 @@
             <section class="settings-card">
               <div class="panel-title compact-title">
                 <div>
-                  <p class="eyebrow">Parallel Work</p>
-                  <h3>{{ familyWorkers(thread).length }} workers</h3>
+                  <p class="eyebrow">WhatsApp</p>
+                  <h3>{{ whatsappChatLabel(thread) }}</h3>
                 </div>
               </div>
-              <div class="compact-list">
-                @if (parentThread(thread); as parent) {
-                  <article class="compact-row">
-                    <strong>Parent: {{ threadTitle(parent) }}</strong>
-                    <span>{{ threadWorkspaceLabel(parent) || "workspace not set" }}</span>
-                    <button class="secondary" type="button" (click)="activateThread(parent)">Open parent</button>
-                  </article>
-                }
-                @for (worker of familyWorkers(thread); track worker.id) {
-                  <article class="compact-row worker-row">
-                    <strong>{{ worker.workerLabel || threadTitle(worker) }}</strong>
-                    <span>{{ threadWorkspaceLabel(worker) || "workspace pending" }}</span>
-                    <p>{{ worker.worktreePath || worker.repoPath || "worktree pending" }}</p>
-                    <button class="secondary" type="button" (click)="activateThread(worker)">Open</button>
-                  </article>
-                } @empty {
-                  <p class="empty">No worker threads have been created from this thread.</p>
-                }
+              <div class="settings-facts">
+                <span>Connected chat</span>
+                <strong>{{ whatsappChatLabel(thread) }}</strong>
+                <span>Chat id</span>
+                <strong>{{ thread.binding?.chatId || "No chat id" }}</strong>
+                <span>Inbound</span>
+                <strong>{{ thread.binding?.enabled === false ? "Off" : "On" }}</strong>
+                <span>Other people</span>
+                <strong>{{ thread.binding?.allowOtherPeople === false ? "Blocked" : "Allowed" }}</strong>
+                <span>WA mirror</span>
+                <strong>{{ thread.binding?.mirrorToWhatsApp === false ? "Off" : "On" }}</strong>
               </div>
-              <label class="settings-field settings-worker-task">
-                <span>Optional first message</span>
-                <textarea
-                  name="settings-worker-task-{{ thread.id }}"
-                  rows="4"
-                  [(ngModel)]="sidebarWorkerTask"
-                  (ngModelChange)="persistThreadTextField('sidebarWorkerTask', $event)"
-                  placeholder="Leave empty to create a blank worker chat"
-                ></textarea>
+              <p class="helper">{{ whatsappChatDetail(thread) }}</p>
+              <label class="settings-field">
+                <span>Display name</span>
+                <input name="thread-wa-name-{{ thread.id }}" [(ngModel)]="whatsappDisplayName" placeholder="WhatsApp chat name" />
+              </label>
+              <label class="settings-field">
+                <span>Chat id</span>
+                <input name="thread-wa-chat-{{ thread.id }}" [(ngModel)]="whatsappChatId" placeholder="chat id from the bridge" />
+              </label>
+              <label class="settings-field">
+                <span>Reply prefix</span>
+                <input name="thread-wa-prefix-{{ thread.id }}" [(ngModel)]="whatsappReplyPrefix" placeholder="otcanclaw:" />
+              </label>
+              <label class="settings-field">
+                <span>Outbound account</span>
+                <input name="thread-wa-account-{{ thread.id }}" [(ngModel)]="whatsappOutboundAccountId" placeholder="optional account id" />
+              </label>
+              <label class="checkbox-row settings-toggle">
+                <input name="thread-wa-enabled-{{ thread.id }}" type="checkbox" [(ngModel)]="whatsappBindingEnabled" />
+                <span>Route WhatsApp messages into this thread</span>
+              </label>
+              <label class="checkbox-row settings-toggle">
+                <input name="thread-wa-others-{{ thread.id }}" type="checkbox" [(ngModel)]="whatsappAllowOtherPeople" />
+                <span>Other people allowed</span>
+              </label>
+              <label class="checkbox-row settings-toggle">
+                <input name="thread-wa-mirror-{{ thread.id }}" type="checkbox" [(ngModel)]="whatsappMirrorToWhatsApp" />
+                <span>Mirror replies to WA</span>
               </label>
               <div class="settings-actions">
-                <button type="button" (click)="createSidebarWorker(thread)" [disabled]="busy || creatingSidebarWorker">
-                  {{ creatingSidebarWorker ? "Creating" : "Create worker" }}
+                <button type="button" (click)="saveThreadBinding(thread)" [disabled]="busy || savingThreadBinding || !threadBindingDirty(thread)">
+                  {{ savingThreadBinding ? "Saving" : "Save WhatsApp" }}
                 </button>
               </div>
             </section>
+          </div>
+        </section>
+      }
+
+      @if (activePanel === "workers") {
+        <section class="panel-body thread-settings-panel">
+          <div class="panel-title">
+            <div>
+              <p class="eyebrow">Parallel Work</p>
+              <h3>{{ familyWorkers(thread).length }} workers</h3>
+            </div>
+          </div>
+
+          <div class="worker-panel">
+            <div class="compact-list">
+              @if (parentThread(thread); as parent) {
+                <article class="compact-row">
+                  <strong>Parent: {{ threadTitle(parent) }}</strong>
+                  <span>{{ threadWorkspaceLabel(parent) || "workspace not set" }}</span>
+                  <button class="secondary" type="button" (click)="activateThread(parent)">Open parent</button>
+                </article>
+              }
+              @for (worker of familyWorkers(thread); track worker.id) {
+                <article class="compact-row worker-row">
+                  <strong>{{ worker.workerLabel || threadTitle(worker) }}</strong>
+                  <span>{{ threadWorkspaceLabel(worker) || "workspace pending" }}</span>
+                  <p>{{ worker.worktreePath || worker.repoPath || "worktree pending" }}</p>
+                  <button class="secondary" type="button" (click)="activateThread(worker)">Open</button>
+                </article>
+              } @empty {
+                <p class="empty">No worker threads have been created from this thread.</p>
+              }
+            </div>
+            <label class="settings-field settings-worker-task">
+              <span>Optional first message</span>
+              <textarea
+                name="settings-worker-task-{{ thread.id }}"
+                rows="4"
+                [(ngModel)]="sidebarWorkerTask"
+                (ngModelChange)="persistThreadTextField('sidebarWorkerTask', $event)"
+                placeholder="Leave empty to create a blank worker chat"
+              ></textarea>
+            </label>
+            <div class="settings-actions">
+              <button type="button" (click)="createSidebarWorker(thread)" [disabled]="busy || creatingSidebarWorker">
+                {{ creatingSidebarWorker ? "Creating" : "Create worker" }}
+              </button>
+            </div>
           </div>
         </section>
       }
@@ -493,3 +571,4 @@
     }
   </section>
 </main>
+}
