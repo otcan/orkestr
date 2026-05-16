@@ -511,6 +511,7 @@ textarea:focus {
 
 .system-mini-card,
 .codex-mode-toggle,
+.codex-capacity-card,
 .model-pill {
   border: 1px solid rgba(113, 218, 126, 0.22);
   background:
@@ -552,8 +553,12 @@ textarea:focus {
   display: grid;
   gap: 7px;
   min-width: min(360px, 38vw);
+  min-height: 58px;
+  align-items: center;
+  justify-items: stretch;
   padding: 8px 11px;
   border-radius: 12px;
+  text-align: left;
 }
 
 .codex-model-row,
@@ -595,7 +600,7 @@ textarea:focus {
 
 .codex-meter {
   display: grid;
-  grid-template-columns: auto minmax(34px, 1fr) auto;
+  grid-template-columns: minmax(26px, auto) minmax(34px, 1fr) minmax(28px, auto);
   align-items: center;
   gap: 5px;
   color: #bfe9bd;
@@ -607,6 +612,16 @@ textarea:focus {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.codex-meter b {
+  font-weight: 900;
+}
+
+.codex-meter small {
+  color: #edffef;
+  font-weight: 900;
+  text-align: right;
 }
 
 .codex-meter i,
@@ -624,6 +639,26 @@ textarea:focus {
   height: 100%;
   border-radius: inherit;
   background: linear-gradient(90deg, #63d471, #b6ff63);
+}
+
+.codex-meter.warn em {
+  background: linear-gradient(90deg, #ffd166, #ff9f1c);
+}
+
+.codex-meter.danger em {
+  background: linear-gradient(90deg, #ff7a59, #ff3b30);
+}
+
+.codex-meter.context em {
+  background: linear-gradient(90deg, #58d6d1, #63d471);
+}
+
+.codex-meter.context.warn em {
+  background: linear-gradient(90deg, #ffd166, #ff9f1c);
+}
+
+.codex-meter.context.danger em {
+  background: linear-gradient(90deg, #ff7a59, #ff3b30);
 }
 
 .codex-mode-toggle {
@@ -728,6 +763,15 @@ textarea:focus {
   color: #9bb996;
   min-height: 36px;
   padding: 8px 13px;
+}
+
+.panel-tabs .codex-capacity-card {
+  background:
+    radial-gradient(circle at top right, rgba(99, 212, 113, 0.16), transparent 55%),
+    rgba(2, 8, 3, 0.92);
+  color: #c9f6ca;
+  min-height: 58px;
+  padding: 8px 11px;
 }
 
 .panel-tabs button.active {
@@ -1339,7 +1383,8 @@ textarea:focus {
     min-height: 260px;
   }
 
-  .model-pill {
+  .model-pill,
+  .codex-capacity-card {
     min-width: 100%;
   }
 

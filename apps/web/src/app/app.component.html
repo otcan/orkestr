@@ -143,9 +143,28 @@
           <button type="button" [class.active]="codexModeValue(thread) === 'code'" (click)="switchCodexMode('code')" [disabled]="busy">Code</button>
           <button type="button" [class.active]="codexModeValue(thread) === 'plan'" (click)="switchCodexMode('plan')" [disabled]="busy">Plan</button>
         </div>
-        <button class="model-pill" type="button" (click)="openTools('models')" [title]="codexCapacityTooltip(thread)">
-          <span>{{ codexModelName(thread) }}</span>
-          <small>{{ codexReasoningEffortLabel(thread) || "effort ?" }} · 5h {{ codexRateRemainingLabel(thread, 'primary') }} · ctx {{ codexContextLabel(thread) }}</small>
+        <button class="codex-capacity-card" type="button" (click)="openTools('models')" [title]="codexCapacityTooltip(thread)">
+          <span class="codex-model-row">
+            <strong>{{ codexModelName(thread) }}</strong>
+            <span>{{ codexReasoningEffortLabel(thread) || "effort ?" }}</span>
+          </span>
+          <span class="codex-meter-row">
+            <span class="codex-meter" [class.warn]="codexRateTone(thread, 'primary') === 'warn'" [class.danger]="codexRateTone(thread, 'primary') === 'danger'">
+              <b>5h</b>
+              <i><em [style.width.%]="codexRateRemainingFill(thread, 'primary')"></em></i>
+              <small>{{ codexRateRemainingLabel(thread, 'primary') }}</small>
+            </span>
+            <span class="codex-meter" [class.warn]="codexRateTone(thread, 'secondary') === 'warn'" [class.danger]="codexRateTone(thread, 'secondary') === 'danger'">
+              <b>Week</b>
+              <i><em [style.width.%]="codexRateRemainingFill(thread, 'secondary')"></em></i>
+              <small>{{ codexRateRemainingLabel(thread, 'secondary') }}</small>
+            </span>
+            <span class="codex-meter context" [class.warn]="codexContextTone(thread) === 'warn'" [class.danger]="codexContextTone(thread) === 'danger'">
+              <b>Ctx</b>
+              <i><em [style.width.%]="codexContextFill(thread)"></em></i>
+              <small>{{ codexContextLabel(thread) }}</small>
+            </span>
+          </span>
         </button>
         @if (canWakeThread(thread)) {
           <button class="secondary" type="button" (click)="wakeSelected()" [disabled]="busy">Wake</button>

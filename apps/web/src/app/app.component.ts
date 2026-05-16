@@ -1002,9 +1002,21 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     return Math.max(0, Math.min(100, 100 - used));
   }
 
+  codexRateRemainingFill(thread: ThreadSummary | null, key: "primary" | "secondary"): number {
+    return this.codexRateRemaining(thread, key) ?? 0;
+  }
+
   codexRateRemainingLabel(thread: ThreadSummary | null, key: "primary" | "secondary"): string {
     const remaining = this.codexRateRemaining(thread, key);
     return remaining === null ? "--" : `${Math.round(remaining)}%`;
+  }
+
+  codexRateTone(thread: ThreadSummary | null, key: "primary" | "secondary"): string {
+    const remaining = this.codexRateRemaining(thread, key);
+    if (remaining === null) return "unknown";
+    if (remaining <= 10) return "danger";
+    if (remaining <= 25) return "warn";
+    return "ok";
   }
 
   codexContextPercent(thread: ThreadSummary | null): number | null {
@@ -1014,9 +1026,21 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     return Math.max(0, Math.min(100, (used / total) * 100));
   }
 
+  codexContextFill(thread: ThreadSummary | null): number {
+    return this.codexContextPercent(thread) ?? 0;
+  }
+
   codexContextLabel(thread: ThreadSummary | null): string {
     const percent = this.codexContextPercent(thread);
     return percent === null ? "--" : `${Math.round(percent)}%`;
+  }
+
+  codexContextTone(thread: ThreadSummary | null): string {
+    const percent = this.codexContextPercent(thread);
+    if (percent === null) return "unknown";
+    if (percent >= 90) return "danger";
+    if (percent >= 75) return "warn";
+    return "ok";
   }
 
   codexCapacityTooltip(thread: ThreadSummary | null): string {
