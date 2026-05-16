@@ -166,6 +166,10 @@ async function worktreeDirty(repoPath) {
   return Boolean(status.trim());
 }
 
+async function repoRemoteUrl(repoPath) {
+  return await git(repoPath, ["config", "--get", "remote.origin.url"]).then((result) => result.stdout).catch(() => "");
+}
+
 export async function detectThreadRepo(threadId, env = process.env) {
   const thread = await getThread(threadId, env);
   if (!thread) throw httpError("thread_not_found", 404);
@@ -173,7 +177,8 @@ export async function detectThreadRepo(threadId, env = process.env) {
   const branchName = await currentBranch(repoPath);
   const baseCommit = await git(repoPath, ["rev-parse", "HEAD"]).then((result) => result.stdout).catch(() => "");
   const sourceDirty = await worktreeDirty(repoPath);
-  return { repoPath, branchName, baseBranch: branchName, baseCommit, sourceDirty };
+  const remoteUrl = await repoRemoteUrl(repoPath);
+  return { repoPath, repoRemoteUrl: remoteUrl || null, branchName, baseBranch: branchName, baseCommit, sourceDirty };
 }
 
 export async function updateThreadRepo(threadId, input = {}, env = process.env) {
@@ -181,6 +186,7 @@ export async function updateThreadRepo(threadId, input = {}, env = process.env) 
   if (!thread) throw httpError("thread_not_found", 404);
   const shouldDetect = input.detect === true;
   let repoPath = nonEmptyString(input.repoPath || input.projectRoot || input.cwd);
+  let remoteUrl = nonEmptyString(input.repoRemoteUrl || input.remoteUrl || input.gitRemoteUrl);
   let branchName = nonEmptyString(input.branchName || input.branch || input.baseBranch);
   let baseCommit = nonEmptyString(input.baseCommit);
   let sourceDirty = Boolean(input.sourceDirty);
@@ -188,6 +194,7 @@ export async function updateThreadRepo(threadId, input = {}, env = process.env) 
   if (shouldDetect && !repoPath) {
     const detected = await detectThreadRepo(thread.id, env);
     repoPath = detected.repoPath;
+    remoteUrl ||= detected.repoRemoteUrl;
     branchName ||= detected.branchName;
     baseCommit ||= detected.baseCommit;
     sourceDirty = detected.sourceDirty;
@@ -197,22 +204,24 @@ export async function updateThreadRepo(threadId, input = {}, env = process.env) 
     const root = await resolveGitRoot(repoPath);
     if (!root) throw httpError("invalid_repo_path", 400);
     repoPath = root;
+    remoteUrl ||= await repoRemoteUrl(repoPath);
     branchName ||= await currentBranch(repoPath);
     baseCommit ||= await git(repoPath, ["rev-parse", "HEAD"]).then((result) => result.stdout).catch(() => "");
     sourceDirty = await worktreeDirty(repoPath);
-  } else if (!branchName) {
+  } else if (!branchName && !remoteUrl) {
     repoPath = "";
   }
 
   const patch = {
     repoPath: repoPath || null,
+    repoRemoteUrl: remoteUrl || null,
     branchName: branchName || null,
     baseBranch: branchName || null,
     baseCommit: baseCommit || null,
     sourceDirty,
   };
   const updated = await updateThread(thread.id, patch, env);
-  await appendEvent({ type: "thread_repo_updated", threadId: thread.id, repoPath: patch.repoPath, branchName: patch.branchName }, env);
+  await appendEvent({ type: "thread_repo_updated", threadId: thread.id, repoPath: patch.repoPath, repoRemoteUrl: patch.repoRemoteUrl, branchName: patch.branchName }, env);
   return { thread: updated, repo: patch };
 }
 
@@ -300,6 +309,7 @@ export async function createThreadWorker(parentThreadId, input = {}, env = proce
 
   const baseCommit = await git(repoPath, ["rev-parse", "HEAD"]).then((result) => result.stdout);
   const baseBranch = nonEmptyString(input.baseBranch) || await currentBranch(repoPath);
+  const remoteUrl = await repoRemoteUrl(repoPath);
   const sourceDirty = await worktreeDirty(repoPath);
   await fs.mkdir(path.dirname(worktreePath), { recursive: true });
 
@@ -316,6 +326,7 @@ export async function createThreadWorker(parentThreadId, input = {}, env = proce
       workerIndex,
       workerLabel,
       repoPath,
+      repoRemoteUrl: remoteUrl || null,
       baseBranch,
       branchName,
       baseCommit,
@@ -346,6 +357,7 @@ export async function createThreadWorker(parentThreadId, input = {}, env = proce
       workerLabel,
       workerStatus: "created",
       repoPath,
+      repoRemoteUrl: remoteUrl || null,
       baseBranch,
       branchName,
       baseCommit,

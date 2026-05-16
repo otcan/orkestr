@@ -100,13 +100,16 @@ test("thread worker creation requires a git repository path", async () => {
 test("thread repo metadata can be saved as first-class thread state", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-repo-meta-"));
   const repo = await createTempGitRepo("orkestr-thread-repo-meta-repo-");
+  await execFileAsync("git", ["remote", "add", "origin", "git@github.com:otcan/orkestr.git"], { cwd: repo });
   const env = { ORKESTR_HOME: home };
   await createThread({ id: "repo-thread", name: "Repo Thread" }, env);
 
   const result = await updateThreadRepo("repo-thread", { repoPath: repo, branchName: "main" }, env);
 
   assert.equal(result.thread.repoPath, repo);
+  assert.equal(result.thread.repoRemoteUrl, "git@github.com:otcan/orkestr.git");
   assert.equal(result.thread.branchName, "main");
+  assert.equal(result.repo.repoRemoteUrl, "git@github.com:otcan/orkestr.git");
   assert.equal(result.repo.branchName, "main");
   assert.match(result.thread.baseCommit, /^[0-9a-f]{40}$/);
 });

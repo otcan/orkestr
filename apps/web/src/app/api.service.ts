@@ -109,6 +109,7 @@ export interface ThreadSummary {
   workerLabel?: string | null;
   workerStatus?: string | null;
   repoPath?: string | null;
+  repoRemoteUrl?: string | null;
   baseBranch?: string | null;
   branchName?: string | null;
   baseCommit?: string | null;
@@ -216,6 +217,7 @@ export interface ThreadRepoResponse {
   thread: ThreadSummary;
   repo?: {
     repoPath?: string | null;
+    repoRemoteUrl?: string | null;
     branchName?: string | null;
     baseBranch?: string | null;
     baseCommit?: string | null;

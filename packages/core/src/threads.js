@@ -80,6 +80,7 @@ export async function createThread(input = {}, env = process.env) {
     workerLabel: String(input.workerLabel || "").trim() || null,
     workerStatus: String(input.workerStatus || "").trim() || null,
     repoPath: String(input.repoPath || input.projectRoot || "").trim() || null,
+    repoRemoteUrl: String(input.repoRemoteUrl || input.remoteUrl || input.gitRemoteUrl || "").trim() || null,
     baseBranch: String(input.baseBranch || "").trim() || null,
     branchName: String(input.branchName || "").trim() || null,
     baseCommit: String(input.baseCommit || "").trim() || null,

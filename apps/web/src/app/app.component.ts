@@ -13,7 +13,7 @@ import {
 } from "./api.service";
 import { appendPendingFiles, messageWithAttachmentPaths, PendingFile, removePendingFile, uploadPendingFiles } from "./thread-uploads";
 
-type Panel = "chat" | "history" | "timers" | "attach" | "runtime" | "raw" | "ops";
+type Panel = "chat" | "history" | "timers" | "attach" | "settings" | "runtime" | "raw" | "ops";
 
 @Component({
   selector: "ork-root",
@@ -587,7 +587,19 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     const needle = this.filterText.trim().toLowerCase();
     if (!needle) return this.threads;
     return this.threads.filter((thread) =>
-      [thread.id, thread.name, thread.bindingName, thread.title, thread.codexThreadId, thread.parentThreadId, thread.repoPath, thread.branchName, thread.worktreePath]
+      [
+        thread.id,
+        thread.name,
+        thread.bindingName,
+        thread.title,
+        thread.codexThreadId,
+        thread.parentThreadId,
+        thread.repoPath,
+        thread.branchName,
+        thread.worktreePath,
+        thread["repoRemoteUrl"],
+        this.threadRemoteLabel(thread),
+      ]
         .filter(Boolean)
         .some((value) => String(value).toLowerCase().includes(needle)),
     );
@@ -620,6 +632,38 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     const repo = this.defaultRepoPath(thread);
     if (!repo) return "";
     return repo.split("/").filter(Boolean).at(-1) || repo;
+  }
+
+  threadWorkspaceLabel(thread: ThreadSummary | null): string {
+    if (!thread) return "";
+    const remote = this.threadRemoteLabel(thread);
+    const repo = this.threadRepoLabel(thread);
+    const branch = this.threadBranchLabel(thread);
+    const parts: string[] = [];
+    if (remote) parts.push(remote);
+    if (repo && !remote.toLowerCase().endsWith(`/${repo.toLowerCase()}`)) parts.push(repo);
+    if (branch) parts.push(branch);
+    return parts.join(" · ");
+  }
+
+  threadRemoteLabel(thread: ThreadSummary | null): string {
+    return this.formatRemoteUrl(this.threadRemoteUrl(thread));
+  }
+
+  threadRemoteUrl(thread: ThreadSummary | null): string {
+    if (!thread) return "";
+    const executor = thread["executor"];
+    const metadata = executor && typeof executor === "object" ? (executor as Record<string, unknown>)["metadata"] : null;
+    return String(
+      thread["repoRemoteUrl"] ||
+      thread["remoteUrl"] ||
+      thread["gitRemoteUrl"] ||
+      this.objectValue(thread.runtime, "repoRemoteUrl") ||
+      this.objectValue(thread.runtime, "remoteUrl") ||
+      this.objectValue(metadata, "repoRemoteUrl") ||
+      this.objectValue(metadata, "remoteUrl") ||
+      "",
+    ).trim();
   }
 
   threadMetaDirty(thread: ThreadSummary | null = this.selectedThread()): boolean {
@@ -933,7 +977,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     if (parts[0] === "ng" && parts[1] === "ops") return "ops";
     const threadIndex = parts.indexOf("thread");
     const panel = String(parts[threadIndex + 2] || "");
-    return ["history", "timers", "attach", "runtime", "raw", "ops"].includes(panel) ? panel as Panel : "chat";
+    return ["history", "timers", "attach", "settings", "runtime", "raw", "ops"].includes(panel) ? panel as Panel : "chat";
   }
 
   private toolsViewFromPath(): ToolsView {
@@ -980,6 +1024,17 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     const value = thread.lastActivityAt || thread.threadUpdatedAt || thread.updatedAt || thread.createdAt || "";
     const ms = Date.parse(String(value));
     return Number.isFinite(ms) ? ms : 0;
+  }
+
+  private formatRemoteUrl(value: string): string {
+    const raw = String(value || "").trim();
+    if (!raw) return "";
+    const withoutGitSuffix = raw.replace(/\.git$/i, "");
+    const sshMatch = withoutGitSuffix.match(/^git@([^:]+):(.+)$/);
+    if (sshMatch) return `${sshMatch[1]}/${sshMatch[2]}`;
+    const protocolMatch = withoutGitSuffix.match(/^[a-z]+:\/\/([^/]+)\/(.+)$/i);
+    if (protocolMatch) return `${protocolMatch[1]}/${protocolMatch[2]}`;
+    return withoutGitSuffix;
   }
 
   private updateDocumentTitle(): void {
