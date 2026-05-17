@@ -20,7 +20,9 @@ const deliveryLocks = new Set();
 const deliveryTimers = new Map();
 let runtimeSyncInFlight = null;
 const pendingInputStates = new Set(["queued", "pending_delivery", "awaiting_ack"]);
+const needInputPhases = new Set(["need_input", "awaiting_input", "question", "request_user_input"]);
 const deliveryRetryDefaultsMs = [1000, 3000, 8000, 20_000, 60_000];
+const defaultRuntimeIdleSleepMs = 15 * 60 * 1000;
 
 function nowIso() {
   return new Date().toISOString();
@@ -37,6 +39,17 @@ function isoAfter(ms) {
 function positiveNumber(value) {
   const parsed = Number(value);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+}
+
+function timestampMs(value) {
+  const parsed = Date.parse(String(value || ""));
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function runtimeIdleSleepMs(env = process.env) {
+  const raw = String(env.ORKESTR_RUNTIME_IDLE_SLEEP_MS ?? "").trim().toLowerCase();
+  if (["0", "off", "false", "disabled"].includes(raw)) return 0;
+  return positiveNumber(raw) || defaultRuntimeIdleSleepMs;
 }
 
 function safeName(value) {
@@ -581,6 +594,65 @@ export async function sleepThread(threadId, options = {}, env = process.env) {
   }, env);
   await appendEvent({ type: "runtime_slept", threadId: thread.id, reason: options.reason || "sleep", killed: options.kill !== false }, env);
   return { thread: updated, slept: active.length };
+}
+
+function latestMessageActivityMs(messages = []) {
+  return messages.reduce((latest, message) => Math.max(
+    latest,
+    timestampMs(message?.createdAt),
+    timestampMs(message?.timestamp),
+    timestampMs(message?.deliveredAt),
+  ), 0);
+}
+
+function hasPendingNeedInput(messages = []) {
+  let latestNeedInputMs = 0;
+  let latestUserMs = 0;
+  for (const message of messages) {
+    const messageMs = Math.max(timestampMs(message?.createdAt), timestampMs(message?.timestamp));
+    if (String(message?.role || "").toLowerCase() === "user") {
+      latestUserMs = Math.max(latestUserMs, messageMs);
+      continue;
+    }
+    const phase = String(message?.phase || "").trim().toLowerCase();
+    if (String(message?.role || "").toLowerCase() === "assistant" && needInputPhases.has(phase) && String(message?.text || "").trim()) {
+      latestNeedInputMs = Math.max(latestNeedInputMs, messageMs);
+    }
+  }
+  return latestNeedInputMs > latestUserMs;
+}
+
+function runtimeActivityMs(lease, messages = []) {
+  return Math.max(
+    latestMessageActivityMs(messages),
+    timestampMs(lease?.startedAt),
+  );
+}
+
+function adoptedRuntimeLease(lease = {}) {
+  return String(lease.id || "").startsWith("adopt-") || String(lease.reason || "").includes("adopt_existing");
+}
+
+function idleSleepDecision({ lease, messages = [], status }, env = process.env) {
+  const idleSleepMs = runtimeIdleSleepMs(env);
+  if (!idleSleepMs || !lease || !status) return null;
+  if (adoptedRuntimeLease(lease)) return null;
+  if (status.state !== "ready" || status.promptReady !== true || status.promptReadyStable !== true) return null;
+  if (status.working || status.foregroundWorking || status.backgroundWork || status.typingActive) return null;
+  if (Number(status.pendingCount || 0) > 0 || Number(status.runningCount || 0) > 0 || Number(status.awaitingAckCount || 0) > 0) return null;
+  if (status.nextDeliveryAttemptAt) return null;
+  if (hasPendingNeedInput(messages)) return null;
+
+  const lastActivityMs = runtimeActivityMs(lease, messages);
+  if (!lastActivityMs) return null;
+  const idleMs = Date.now() - lastActivityMs;
+  if (idleMs < idleSleepMs) return null;
+  return {
+    reason: "idle_auto_sleep",
+    idleMs,
+    idleSleepMs,
+    lastActivityAt: new Date(lastActivityMs).toISOString(),
+  };
 }
 
 async function waitForRuntimeReady(threadId, env = process.env) {
@@ -1172,6 +1244,42 @@ async function syncRuntimeLeasesOnce(env = process.env) {
           const acknowledged = await acknowledgeThreadInputDelivery(thread, awaitingAck, status, env).catch(() => null);
           if (acknowledged) scheduleThreadInputDelivery(thread.id, env, 0);
         }
+      }
+      const idleSleep = idleSleepDecision({ lease: synced.lease, messages, status }, env);
+      if (thread && idleSleep) {
+        const endedAt = nowIso();
+        const endedLease = {
+          ...synced.lease,
+          endedAt,
+          endReason: idleSleep.reason,
+          idleMs: idleSleep.idleMs,
+          lastActivityAt: idleSleep.lastActivityAt,
+        };
+        await execFileAsync("tmux", ["kill-session", "-t", endedLease.sessionName]).catch(() => {});
+        await updateThread(lease.threadId, {
+          state: "sleeping",
+          activeRuntimeLeaseId: null,
+          runtime: {
+            state: "sleeping",
+            endedAt,
+            reason: idleSleep.reason,
+            idleMs: idleSleep.idleMs,
+            lastActivityAt: idleSleep.lastActivityAt,
+          },
+        }, env).catch(() => {});
+        await appendEvent({
+          type: "runtime_slept",
+          threadId: lease.threadId,
+          reason: idleSleep.reason,
+          killed: true,
+          auto: true,
+          idleMs: idleSleep.idleMs,
+          idleSleepMs: idleSleep.idleSleepMs,
+          lastActivityAt: idleSleep.lastActivityAt,
+        }, env).catch(() => {});
+        next.push(endedLease);
+        changed = true;
+        continue;
       }
       await updateThread(lease.threadId, {
         state: status.state,

@@ -7,7 +7,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { startServer } from "../apps/server/src/server.js";
 import { runNextThreadMessage } from "../packages/core/src/executors.js";
-import { deliverPendingThreadInputs, drainAllPendingThreadInputs, runtimeStatus, syncRuntimeLeases, syncRuntimeWindowName, wakeThread } from "../packages/core/src/runtime-leases.js";
+import { deliverPendingThreadInputs, drainAllPendingThreadInputs, listRuntimeLeases, runtimeStatus, sleepThread, syncRuntimeLeases, syncRuntimeWindowName, wakeThread } from "../packages/core/src/runtime-leases.js";
 import { parseThreadInputCommand } from "../packages/core/src/thread-commands.js";
 import { createThreadWorker, detectThreadGitState, listThreadWorkers, updateThreadRepo } from "../packages/core/src/thread-workers.js";
 import { appendThreadMessage, createThread, deleteThread, enqueueThreadInput, listThreadMessages, listThreads, updateThread, updateThreadMessage } from "../packages/core/src/threads.js";
@@ -62,6 +62,17 @@ case "$cmd" in
       if [ "$1" = "-s" ]; then session="\${2:-}"; shift 2; else shift; fi
     done
     if [ -n "$session" ]; then printf '%s\\n' "$session" >> "$TMUX_STATE"; fi
+    exit 0
+    ;;
+  kill-session)
+    target=""
+    while [ "$#" -gt 0 ]; do
+      if [ "$1" = "-t" ]; then target="\${2:-}"; shift 2; else shift; fi
+    done
+    if [ -n "$target" ] && [ -f "$TMUX_STATE" ]; then
+      grep -Fxv "$target" "$TMUX_STATE" > "$TMUX_STATE.tmp" || true
+      mv "$TMUX_STATE.tmp" "$TMUX_STATE"
+    fi
     exit 0
     ;;
   list-panes)
@@ -140,6 +151,161 @@ test("threads default to wake-on-message and sleep without a runtime lease", asy
   assert.equal(status.state, "sleeping");
   assert.equal(status.promptReady, false);
   assert.equal(status.hibernated, true);
+});
+
+test("thread wake and sleep lifecycle updates runtime leases and status", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-wake-sleep-"));
+  const fakeTmux = await createFakeTmux(home);
+  const priorPath = process.env.PATH;
+  const priorTmuxLog = process.env.TMUX_LOG;
+  const priorTmuxState = process.env.TMUX_STATE;
+  process.env.PATH = `${fakeTmux.bin}:${priorPath || ""}`;
+  process.env.TMUX_LOG = fakeTmux.log;
+  process.env.TMUX_STATE = fakeTmux.state;
+
+  try {
+    const env = {
+      ORKESTR_HOME: path.join(home, "orkestr-home"),
+      HOME: path.join(home, "runtime-home"),
+      CODEX_HOME: path.join(home, "codex-home"),
+      PATH: process.env.PATH,
+      TMUX_LOG: fakeTmux.log,
+      TMUX_STATE: fakeTmux.state,
+    };
+    await createThread({ id: "cycle-thread", name: "Cycle Thread" }, env);
+
+    const woken = await wakeThread("cycle-thread", { reason: "test_wake" }, env);
+    let status = await runtimeStatus("cycle-thread", env);
+    let leases = await listRuntimeLeases(env);
+
+    assert.equal(woken.reused, false);
+    assert.equal(woken.thread.state, "ready");
+    assert.equal(status.state, "ready");
+    assert.equal(status.runtimeState, "live");
+    assert.equal(status.hibernated, false);
+    assert.equal(leases.length, 1);
+    assert.equal(leases[0].threadId, "cycle-thread");
+    assert.equal(leases[0].reason, "test_wake");
+    assert.equal(leases[0].endedAt, undefined);
+
+    const slept = await sleepThread("cycle-thread", { reason: "test_sleep" }, env);
+    status = await runtimeStatus("cycle-thread", env);
+    leases = await listRuntimeLeases(env);
+    const log = await fs.readFile(fakeTmux.log, "utf8");
+
+    assert.equal(slept.slept, 1);
+    assert.equal(slept.thread.state, "sleeping");
+    assert.equal(slept.thread.activeRuntimeLeaseId, null);
+    assert.equal(status.state, "sleeping");
+    assert.equal(status.runtimeState, "none");
+    assert.equal(status.hibernated, true);
+    assert.equal(leases[0].endReason, "test_sleep");
+    assert.ok(leases[0].endedAt);
+    assert.match(log, /__CALL__\tkill-session\t-t\torkestr-cycle-thread/);
+
+    const sleptAgain = await sleepThread("cycle-thread", { reason: "test_sleep_again" }, env);
+    assert.equal(sleptAgain.slept, 0);
+    assert.equal(sleptAgain.thread.state, "sleeping");
+  } finally {
+    restoreEnvValue("PATH", priorPath);
+    restoreEnvValue("TMUX_LOG", priorTmuxLog);
+    restoreEnvValue("TMUX_STATE", priorTmuxState);
+  }
+});
+
+test("runtime sync auto-sleeps stable idle ready runtimes", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-auto-sleep-"));
+  const fakeTmux = await createFakeTmux(home);
+  const priorPath = process.env.PATH;
+  const priorTmuxLog = process.env.TMUX_LOG;
+  const priorTmuxState = process.env.TMUX_STATE;
+  process.env.PATH = `${fakeTmux.bin}:${priorPath || ""}`;
+  process.env.TMUX_LOG = fakeTmux.log;
+  process.env.TMUX_STATE = fakeTmux.state;
+
+  try {
+    const env = {
+      ORKESTR_HOME: path.join(home, "orkestr-home"),
+      HOME: path.join(home, "runtime-home"),
+      CODEX_HOME: path.join(home, "codex-home"),
+      PATH: process.env.PATH,
+      TMUX_LOG: fakeTmux.log,
+      TMUX_STATE: fakeTmux.state,
+      ORKESTR_RUNTIME_IDLE_SLEEP_MS: "1",
+    };
+    await createThread({ id: "idle-thread", name: "Idle Thread" }, env);
+    await wakeThread("idle-thread", { reason: "test_wake" }, env);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    await syncRuntimeLeases(env);
+
+    const status = await runtimeStatus("idle-thread", env);
+    const leases = await listRuntimeLeases(env);
+    const log = await fs.readFile(fakeTmux.log, "utf8");
+
+    assert.equal(status.state, "sleeping");
+    assert.equal(status.hibernated, true);
+    assert.equal(leases[0].endReason, "idle_auto_sleep");
+    assert.ok(Number(leases[0].idleMs || 0) >= 1);
+    assert.match(log, /__CALL__\tkill-session\t-t\torkestr-idle-thread/);
+  } finally {
+    restoreEnvValue("PATH", priorPath);
+    restoreEnvValue("TMUX_LOG", priorTmuxLog);
+    restoreEnvValue("TMUX_STATE", priorTmuxState);
+  }
+});
+
+test("runtime sync does not auto-sleep pending or working runtimes", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-auto-sleep-guards-"));
+  const fakeTmux = await createFakeTmux(home);
+  const priorPath = process.env.PATH;
+  const priorTmuxLog = process.env.TMUX_LOG;
+  const priorTmuxState = process.env.TMUX_STATE;
+  const priorTmuxCaptureText = process.env.TMUX_CAPTURE_TEXT;
+  process.env.PATH = `${fakeTmux.bin}:${priorPath || ""}`;
+  process.env.TMUX_LOG = fakeTmux.log;
+  process.env.TMUX_STATE = fakeTmux.state;
+
+  try {
+    const env = {
+      ORKESTR_HOME: path.join(home, "orkestr-home"),
+      HOME: path.join(home, "runtime-home"),
+      CODEX_HOME: path.join(home, "codex-home"),
+      PATH: process.env.PATH,
+      TMUX_LOG: fakeTmux.log,
+      TMUX_STATE: fakeTmux.state,
+      ORKESTR_RUNTIME_IDLE_SLEEP_MS: "1",
+    };
+    process.env.TMUX_CAPTURE_TEXT = "› ";
+    await createThread({ id: "pending-thread", name: "Pending Thread" }, env);
+    await wakeThread("pending-thread", { reason: "test_wake" }, env);
+    await appendThreadMessage("pending-thread", { role: "user", text: "queued work", state: "queued" }, env);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    await syncRuntimeLeases(env);
+
+    let status = await runtimeStatus("pending-thread", env);
+    let leases = await listRuntimeLeases(env);
+    assert.notEqual(status.state, "sleeping");
+    assert.equal(status.pendingCount, 1);
+    assert.equal(leases.find((lease) => lease.threadId === "pending-thread")?.endedAt, undefined);
+
+    process.env.TMUX_CAPTURE_TEXT = "• Working (1s)";
+    await createThread({ id: "working-thread", name: "Working Thread" }, env);
+    await wakeThread("working-thread", { reason: "test_wake" }, env);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    await syncRuntimeLeases(env);
+
+    status = await runtimeStatus("working-thread", env);
+    leases = await listRuntimeLeases(env);
+    assert.equal(status.state, "working");
+    assert.equal(status.working, true);
+    assert.equal(leases.find((lease) => lease.threadId === "working-thread")?.endedAt, undefined);
+  } finally {
+    restoreEnvValue("PATH", priorPath);
+    restoreEnvValue("TMUX_LOG", priorTmuxLog);
+    restoreEnvValue("TMUX_STATE", priorTmuxState);
+    restoreEnvValue("TMUX_CAPTURE_TEXT", priorTmuxCaptureText);
+  }
 });
 
 test("thread runtimes name the tmux window after the thread for byobu", async () => {
