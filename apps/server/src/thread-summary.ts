@@ -77,8 +77,8 @@ function codexMetadata(thread: any) {
 }
 
 function threadSummaryCacheTtlMs(): number {
-  const parsed = Number(process.env.ORKESTR_THREAD_SUMMARY_CACHE_TTL_MS || 30_000);
-  return Number.isFinite(parsed) ? Math.max(0, parsed) : 30_000;
+  const parsed = Number(process.env.ORKESTR_THREAD_SUMMARY_CACHE_TTL_MS || 120_000);
+  return Number.isFinite(parsed) ? Math.max(0, parsed) : 120_000;
 }
 
 function threadSummaryCacheKey(thread: any, messages: any[] = []): string {
@@ -90,8 +90,11 @@ function threadSummaryCacheKey(thread: any, messages: any[] = []): string {
   }, {});
   return JSON.stringify({
     id: thread?.id || null,
-    updatedAt: thread?.updatedAt || null,
+    name: thread?.name || null,
+    title: thread?.title || null,
+    bindingName: thread?.bindingName || null,
     state: thread?.state || null,
+    status: thread?.status || null,
     activeRuntimeLeaseId: thread?.activeRuntimeLeaseId || null,
     runtimeState: thread?.runtime?.state || null,
     paneId: thread?.runtime?.paneId || thread?.executor?.tmuxTarget || null,
@@ -100,6 +103,10 @@ function threadSummaryCacheKey(thread: any, messages: any[] = []): string {
     branchName: thread?.branchName || null,
     baseCommit: thread?.baseCommit || null,
     baseBranch: thread?.baseBranch || null,
+    remoteBranch: thread?.remoteBranch || null,
+    workerStatus: thread?.workerStatus || null,
+    workerLabel: thread?.workerLabel || null,
+    binding: thread?.binding || null,
     messageCount: messages.length,
     pendingCounts,
     lastMessageId: lastMessage?.id || null,
