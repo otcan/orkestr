@@ -22,18 +22,49 @@ Orkestr makes those pieces explicit. The default target is a single developer ru
 
 ## Quickstart
 
-One-command install from a shell:
+Docker is the preferred first-run path. The image includes the Codex runtime,
+tmux, git, ripgrep, Chromium, and the compiled Orkestr web app, so users do not
+install Codex on the host.
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/orkestr/orkestr-oss/main/scripts/install.sh | bash
+mkdir orkestr && cd orkestr
+curl -fsSLO https://raw.githubusercontent.com/otcan/orkestr/main/docker-compose.yml
+curl -fsSLo .env https://raw.githubusercontent.com/otcan/orkestr/main/.env.docker.example
+docker compose up -d
+```
+
+Then open:
+
+```text
+http://127.0.0.1:19812/setup
+```
+
+In setup, choose the Codex workflow and use **Open Codex sign-in**. Orkestr starts
+Codex device authorization inside the container and shows the one-time browser
+code. Runtime state, including Codex auth, is stored in the `orkestr-data`
+Docker volume. Edit `.env` before starting the container to provide OpenAI,
+Tailscale/Caddy, OAuth, workspace, or overlay settings.
+
+Shell install is still available for contributors and operators who prefer a
+host-native runtime:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/otcan/orkestr/main/scripts/install.sh | bash
 ```
 
 Local clone flow:
 
 ```bash
-git clone https://github.com/orkestr/orkestr-oss.git
-cd orkestr-oss
+git clone https://github.com/otcan/orkestr.git
+cd orkestr
 ./scripts/install.sh --local --serve
+```
+
+Local Docker build flow:
+
+```bash
+cp .env.docker.example .env
+docker compose -f docker-compose.yml -f docker-compose.build.yml up --build
 ```
 
 Then open:
@@ -69,7 +100,7 @@ npm run demo:coding-agent
 
 That demo starts Orkestr with a temporary local home, creates a coding-agent thread, prepares the virtual desktop profile, queues a repository-review task, and prints the public log. It does not require WhatsApp, Gmail, LinkedIn, or Codex credentials.
 
-For a real local Codex run, see [examples/coding-agent-demo/README.md](examples/coding-agent-demo/README.md).
+For a real Codex run, use the Docker setup flow or see [examples/coding-agent-demo/README.md](examples/coding-agent-demo/README.md).
 
 Optional real Codex demo mode:
 
@@ -108,6 +139,7 @@ More detail: [docs/architecture.md](docs/architecture.md).
 
 - First-run setup at `/setup`
 - OpenAI and Codex connection checks
+- Docker image with Codex, tmux, git, ripgrep, and Chromium installed
 - Built-in local WhatsApp bridge with two QR-paired account slots
 - Thread-first runtime API for local Codex sessions
 - Virtual browser registry, including a general-purpose virtual desktop

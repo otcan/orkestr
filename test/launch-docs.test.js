@@ -26,5 +26,6 @@ test("public launch docs expose the minimum launch surface", async () => {
   assert.match(roadmap, /Secure access onboarding/);
   assert.match(architecture, /Legacy `\/ng\/\*` paths/);
   assert.match(demoLog, /Coding-agent demo passed/);
-  assert.match(example, /Codex CLI installed and logged in/);
+  assert.match(readme, /Docker is the preferred first-run path/);
+  assert.match(example, /Codex signed in from the Orkestr setup page/);
 });

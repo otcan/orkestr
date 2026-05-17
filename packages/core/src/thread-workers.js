@@ -279,26 +279,29 @@ async function gitComparisonStats(repoPath, baseCommit, label) {
 async function gitBaseComparison(repoPath, thread, branchName) {
   const metadata = thread?.executor?.metadata && typeof thread.executor.metadata === "object" ? thread.executor.metadata : {};
   const explicitBaseCommit = nonEmptyString(thread?.baseCommit || metadata.baseCommit);
-  const baseBranch = nonEmptyString(thread?.baseBranch || metadata.baseBranch);
-  const comparisons = [];
-  const explicit = await gitComparisonStats(repoPath, explicitBaseCommit, "base");
-  if (explicit) comparisons.push(explicit);
-
-  const baseRefs = [...new Set([
-    baseBranch,
-    baseBranch && !baseBranch.includes("/") ? `origin/${baseBranch}` : "",
+  const baseBranches = [...new Set([
+    thread?.baseBranch,
+    metadata.baseBranch,
   ].map(nonEmptyString).filter((ref) => ref && ref !== branchName))];
+  const branchComparisons = [];
+  const baseRefs = [...new Set(baseBranches.flatMap((baseBranch) => [
+    baseBranch && !baseBranch.includes("/") ? `origin/${baseBranch}` : "",
+    baseBranch,
+  ]).map(nonEmptyString).filter((ref) => ref && ref !== branchName))];
   for (const ref of baseRefs) {
     const base = await mergeBase(repoPath, ref);
     const stats = await gitComparisonStats(repoPath, base, ref);
-    if (stats) comparisons.push(stats);
+    if (stats) branchComparisons.push(stats);
+  }
+  if (branchComparisons.length) {
+    return branchComparisons.sort((a, b) => {
+      const scoreA = Number(a.gitBaseAhead || 0) + Number(a.gitChangedFiles || 0);
+      const scoreB = Number(b.gitBaseAhead || 0) + Number(b.gitChangedFiles || 0);
+      return scoreA - scoreB;
+    })[0];
   }
 
-  return comparisons.sort((a, b) => {
-    const scoreA = Number(a.gitBaseAhead || 0) + Number(a.gitChangedFiles || 0);
-    const scoreB = Number(b.gitBaseAhead || 0) + Number(b.gitChangedFiles || 0);
-    return scoreB - scoreA;
-  })[0] || {
+  return await gitComparisonStats(repoPath, explicitBaseCommit, "base") || {
     gitComparisonBase: null,
     gitComparisonLabel: null,
     gitBaseAhead: null,

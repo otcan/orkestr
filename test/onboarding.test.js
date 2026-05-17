@@ -17,7 +17,10 @@ test("onboarding focuses the first loop on virtual desktop and WhatsApp", async 
 
   assert.ok(!onboarding.includes("Job Search Assistant"));
   assert.ok(!onboarding.includes("job-search"));
+  assert.ok(!onboarding.includes("codex login"));
+  assert.ok(!onboarding.includes("CODEX_HOME="));
   assert.ok(onboarding.includes("Virtual Desktop Generation"));
+  assert.ok(onboarding.includes("Open Codex sign-in"));
   assert.ok(onboarding.includes('id: "virtual-desktop"'));
   assert.ok(onboarding.includes("Create first thread"));
   assert.ok(onboarding.includes("Bind WhatsApp chat"));

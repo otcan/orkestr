@@ -42,6 +42,9 @@ export class OnboardingPageComponent implements OnInit, OnDestroy {
   whatsappChatName = "";
   testMessage = "Hello from Orkestr onboarding.";
   securityPairingCode = "";
+  codexDeviceCode = "";
+  codexAuthUrl = "";
+  codexAuthExpiresAt = "";
 
   openaiApiKey = "";
   gmailClientId = "";
@@ -280,7 +283,7 @@ export class OnboardingPageComponent implements OnInit, OnDestroy {
         className: this.setup?.home ? "ready" : "idle",
       },
       {
-        label: "Codex CLI",
+        label: "Codex runtime",
         state: this.stateLabel("codex"),
         summary: this.connector("codex")?.summary || "Checking Codex",
         className: this.stateClass("codex"),
@@ -383,6 +386,24 @@ export class OnboardingPageComponent implements OnInit, OnDestroy {
       await firstValueFrom(this.api.pairSecurityBrowser(code));
       this.securityPairingCode = "";
       this.notice = "This browser is paired.";
+      this.error = "";
+      await this.load(false);
+    } catch (error) {
+      this.error = this.errorText(error);
+    } finally {
+      this.busy = false;
+    }
+  }
+
+  async startCodexDeviceAuth(): Promise<void> {
+    this.busy = true;
+    try {
+      const result = await firstValueFrom(this.api.startCodexDeviceAuth());
+      this.codexDeviceCode = result.code || "";
+      this.codexAuthUrl = result.authUrl || "";
+      this.codexAuthExpiresAt = result.expiresAt || "";
+      if (this.codexAuthUrl) globalThis.open?.(this.codexAuthUrl, "_blank", "noopener,noreferrer");
+      this.notice = this.codexDeviceCode ? "Codex sign-in opened. Enter the device code in the browser." : "Codex sign-in started.";
       this.error = "";
       await this.load(false);
     } catch (error) {

@@ -8,12 +8,12 @@ Run local coding agents with WhatsApp, browser desktops, timers, and inspectable
 
 1. Install Orkestr.
 2. Open `/setup`.
-3. Connect Codex.
+3. Open Codex sign-in from the setup page.
 4. Pair WhatsApp 1 with the built-in local bridge.
 5. Prepare the Virtual Desktop profile.
 6. Create the first coding thread.
 7. Send a task from the web UI, CLI, or WhatsApp.
-8. Attach to the local Codex session.
+8. Inspect the live Codex session from the web cockpit.
 9. Inspect the result and activity log.
 
 ## Default Starter
@@ -31,7 +31,8 @@ Run the deterministic public demo:
 npm run demo:coding-agent
 ```
 
-Run the real local Codex example:
+Run the real Codex example from the Docker setup flow, or use the host-native
+CLI path as a contributor:
 
 ```bash
 npx orkestr-oss thread create "Repo launch reviewer" --id repo-launch-reviewer --cwd "$PWD" --executor codex

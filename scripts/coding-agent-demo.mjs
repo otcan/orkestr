@@ -111,7 +111,7 @@ export async function runCodingAgentDemo({ port = Number(process.env.ORKESTR_COD
       console.log(`Thread: ${result.thread.id} (${result.thread.name})`);
       console.log(`Virtual desktop profile: ${result.desktop.profileDir}`);
       console.log(`Queued task: ${result.messages[0].text}`);
-      console.log("Next real-agent step: run `npx orkestr-oss wake demo-coding-agent` with Codex installed and logged in.");
+      console.log("Next real-agent step: open /setup, complete Codex sign-in, then wake demo-coding-agent.");
     }
     return result;
   } finally {
@@ -123,7 +123,7 @@ export async function runCodingAgentDemo({ port = Number(process.env.ORKESTR_COD
 
 export async function runRealCodexDemo({ port = Number(process.env.ORKESTR_REAL_CODEX_DEMO_PORT || 19817), repo = process.cwd(), log = true } = {}) {
   const workspace = path.resolve(repo);
-  if (!(await commandOk("codex"))) throw new Error("codex command not found. Install and log in to Codex before running --real-codex.");
+  if (!(await commandOk("codex"))) throw new Error("codex command not found. Use the Docker image or install Codex in the Orkestr runtime before running --real-codex.");
   if (!(await commandOk("tmux", ["-V"]))) throw new Error("tmux command not found. Install tmux before running --real-codex.");
   if (!(await commandOk("git", ["-C", workspace, "rev-parse", "--show-toplevel"]))) {
     throw new Error(`--repo must point to a git repository: ${workspace}`);

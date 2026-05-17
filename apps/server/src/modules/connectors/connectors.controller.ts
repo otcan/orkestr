@@ -11,6 +11,7 @@ import {
   getWhatsAppStatus,
   routeWhatsAppInbound,
 } from "../../../../../packages/connectors/src/whatsapp.js";
+import { startCodexDeviceAuth } from "../../../../../packages/connectors/src/codex.js";
 import {
   getLocalWhatsAppBridgeStatus,
   getLocalWhatsAppQrSvg,
@@ -23,6 +24,12 @@ import { ensureAttachmentsArray, httpError } from "../../common/http.js";
 
 @Controller("api/connectors")
 export class ConnectorsController {
+  @Post("codex/device-auth")
+  @HttpCode(200)
+  async codexDeviceAuth() {
+    return startCodexDeviceAuth();
+  }
+
   @Get("gmail/oauth/start")
   async startGmailOAuth() {
     return beginGmailOAuth();

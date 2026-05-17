@@ -1,0 +1,4 @@
+services:
+  orkestr:
+    build:
+      context: .

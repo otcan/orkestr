@@ -80,6 +80,18 @@ export interface GmailOAuthStartResponse {
   authorizeUrl: string;
 }
 
+export interface CodexDeviceAuthResponse {
+  ok: boolean;
+  state: string;
+  command: string;
+  codexHome: string;
+  authUrl: string;
+  code: string;
+  expiresAt: string;
+  startedAt: string;
+  message?: string;
+}
+
 export interface AgentTemplate {
   id: string;
   name: string;
@@ -387,6 +399,10 @@ export class ApiService {
 
   startGmailOAuth(): Observable<GmailOAuthStartResponse> {
     return this.http.get<GmailOAuthStartResponse>(this.api("/connectors/gmail/oauth/start"));
+  }
+
+  startCodexDeviceAuth(): Observable<CodexDeviceAuthResponse> {
+    return this.http.post<CodexDeviceAuthResponse>(this.api("/connectors/codex/device-auth"), {});
   }
 
   whatsappStatus(): Observable<Record<string, unknown>> {

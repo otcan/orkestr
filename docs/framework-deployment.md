@@ -34,19 +34,36 @@ builds Angular, and runs the Node test suite.
 ## Docker
 
 ```bash
-docker compose up --build
+cp .env.docker.example .env
+docker compose up -d
+```
+
+The default Compose file runs the published image:
+
+```text
+ghcr.io/otcan/orkestr:latest
+```
+
+For a local source build, layer the build override:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.build.yml up --build
 ```
 
 The Dockerfile uses a multi-stage build:
 
 - `build` installs all dependencies, compiles the NestJS backend, and compiles Angular.
-- `runtime` installs production dependencies, copies server code and `dist`,
-  and runs the compiled NestJS server with `npm start`.
+- `runtime` installs production dependencies plus Codex, tmux, git, ripgrep,
+  Chromium, and process tools, copies server code and `dist`, and runs the
+  compiled NestJS server with `npm start`.
 
 Runtime data is stored in `ORKESTR_HOME`, which defaults to `/data` in the
-container. Private overlays are mounted separately with `ORKESTR_OVERLAY_DIR`;
-do not bake secrets, WhatsApp state, browser profiles, or personal prompts into
-the public image.
+container. `CODEX_HOME` defaults to `/data/codex`, so Codex device auth started
+from the setup UI persists in the same Docker volume. Docker settings are read
+from `.env` by Compose; start from `.env.docker.example` for OpenAI,
+Tailscale/Caddy, OAuth, workspace, and overlay settings. Private overlays are
+mounted separately with `ORKESTR_OVERLAY_DIR`; do not bake secrets, WhatsApp
+state, browser profiles, or personal prompts into the public image.
 
 ## Release Checklist
 
@@ -54,6 +71,6 @@ the public image.
 2. Run `npm run check`.
 3. Run `npm run smoke`.
 4. Run `npm run demo:coding-agent`.
-5. Run `docker build -t orkestr-oss:test .`.
+5. Run `npm run docker:build`.
 6. Review `README.md`, `docs/private-overlay.md`, and this file.
 7. Tag and publish only after the private overlay has been checked for leaks.

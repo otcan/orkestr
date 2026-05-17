@@ -291,6 +291,25 @@ test("thread worker git state falls back to base branch when stored base commit 
   assert.equal(state.gitChangedFiles, 1);
 });
 
+test("thread worker git state clears base deviation after branch is merged", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-worker-git-merged-home-"));
+  const repo = await createTempGitRepo("orkestr-thread-worker-git-merged-repo-");
+  const env = { ORKESTR_HOME: home };
+  const parent = await createThread({ id: "git-merged-parent", name: "Git Merged Parent", cwd: repo }, env);
+  const result = await createThreadWorker(parent.id, { label: "Git Merged Worker", autoRun: false }, env);
+  await fs.writeFile(path.join(result.worker.worktreePath, "merged.txt"), "worker branch change\n", "utf8");
+  await execFileAsync("git", ["add", "merged.txt"], { cwd: result.worker.worktreePath });
+  await execFileAsync("git", ["commit", "-m", "worker merged change"], { cwd: result.worker.worktreePath });
+  await execFileAsync("git", ["merge", "--no-ff", result.worker.branchName, "-m", "merge worker"], { cwd: repo });
+
+  const state = await detectThreadGitState({ ...result.worker, baseBranch: result.worker.branchName }, env);
+
+  assert.equal(state.gitComparisonLabel, "main");
+  assert.equal(state.gitBaseAhead, 0);
+  assert.equal(state.gitChangedFiles, 0);
+  assert.equal(state.gitDirtyFiles, 0);
+});
+
 test("thread workers can be created as blank parallel chats", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-worker-blank-home-"));
   const repo = await createTempGitRepo("orkestr-thread-worker-blank-repo-");

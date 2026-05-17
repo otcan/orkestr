@@ -1,0 +1,17 @@
+.git
+.angular
+.env
+.env.*
+.orkestr
+browsers
+data
+dist
+node_modules
+secrets
+tmp
+*.log
+coverage
+docs/assets/*.tmp
+examples/private-overlay/secrets
+examples/private-overlay/browsers
+examples/private-overlay/whatsapp-bridge

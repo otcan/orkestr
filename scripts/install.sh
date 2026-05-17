@@ -55,7 +55,7 @@ if [ "$local_mode" -eq 1 ]; then
   repo_dir="$(pwd)"
 else
   need git
-  repo_url="${ORKESTR_REPO_URL:-https://github.com/orkestr/orkestr-oss.git}"
+  repo_url="${ORKESTR_REPO_URL:-https://github.com/otcan/orkestr.git}"
   if [ -d "$repo_dir/.git" ]; then
     git -C "$repo_dir" pull --ff-only
   else

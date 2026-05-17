@@ -906,6 +906,16 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     if (Number.isFinite(baseAhead) && baseAhead > 0) baseParts.push(`${baseAhead} commit${baseAhead === 1 ? "" : "s"}`);
     if (Number.isFinite(changedFiles) && changedFiles > 0) baseParts.push(`${changedFiles} file${changedFiles === 1 ? "" : "s"}`);
     if (Number.isFinite(dirtyFiles) && dirtyFiles > 0) baseParts.push(`${dirtyFiles} dirty`);
+    if (
+      Number.isFinite(baseAhead) &&
+      Number.isFinite(changedFiles) &&
+      Number.isFinite(dirtyFiles) &&
+      baseAhead === 0 &&
+      changedFiles === 0 &&
+      dirtyFiles === 0
+    ) {
+      return "";
+    }
     if (baseParts.length) {
       const comparison = String(thread.gitComparisonLabel || this.objectValue(thread.runtime, "gitComparisonLabel") || "").trim();
       return `diff${comparison ? ` vs ${comparison}` : ""}: ${baseParts.join(", ")}`;
@@ -913,7 +923,6 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     const ahead = this.threadNumberValue(thread, "gitAhead");
     const behind = this.threadNumberValue(thread, "gitBehind");
     if (Number.isFinite(ahead) && Number.isFinite(behind) && (ahead > 0 || behind > 0)) return `ahead ${ahead} behind ${behind}`;
-    if (this.booleanThreadValue(thread, "gitRemoteMissing") && thread.parentThreadId) return "not pushed";
     return "";
   }
 

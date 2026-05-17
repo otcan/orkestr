@@ -6,6 +6,7 @@ import { promisify } from "node:util";
 import { readConnectorConfig } from "../../storage/src/config.js";
 import { dataPaths } from "../../storage/src/paths.js";
 import { readOverlay } from "../../core/src/overlay.js";
+import { defaultCodexHome } from "./codex.js";
 import { getWhatsAppStatus } from "./whatsapp.js";
 
 const execFileAsync = promisify(execFile);
@@ -84,7 +85,7 @@ export async function getConnectorStatuses({ env = process.env, home = os.homedi
     readConnectorConfig("openai", env),
     readConnectorConfig("gmail", env),
   ]);
-  const codexHome = path.resolve(env.CODEX_HOME || path.join(home, ".codex"));
+  const codexHome = defaultCodexHome(env, home);
   const codexAuthPath = path.join(codexHome, "auth.json");
   const chrome = await firstCommandVersion(["google-chrome", "chrome", "chromium", "chromium-browser"]);
   const codex = await firstCommandVersion(["codex"]);
@@ -103,18 +104,23 @@ export async function getConnectorStatuses({ env = process.env, home = os.homedi
       : status("openai", "OpenAI", "not_connected", "Add an OpenAI API key or connect Codex auth."),
     codex:
       codex.command && (await pathExists(codexAuthPath))
-        ? status("codex", "Codex", "connected", "Codex CLI and auth file are present.", {
+        ? status("codex", "Codex", "connected", "Codex runtime is installed and signed in.", {
             command: codex.command,
             version: codex.version,
             codexHome,
+            dockerRuntime: String(env.ORKESTR_DOCKER || "").trim() === "1",
           })
         : codex.command
-          ? status("codex", "Codex", "partial", "Codex CLI is installed, but auth is not connected.", {
+          ? status("codex", "Codex", "partial", "Codex runtime is installed. Sign in from this setup page.", {
               command: codex.command,
               version: codex.version,
               codexHome,
+              dockerRuntime: String(env.ORKESTR_DOCKER || "").trim() === "1",
             })
-          : status("codex", "Codex", "not_connected", "Install and authenticate Codex CLI."),
+          : status("codex", "Codex", "not_connected", "Codex runtime is missing. Use the Docker image or install Codex in the Orkestr runtime.", {
+              codexHome,
+              dockerRuntime: String(env.ORKESTR_DOCKER || "").trim() === "1",
+            }),
     gmail:
       gmailOAuthExists
         ? status("gmail", "Gmail", "connected", "Gmail OAuth token is stored locally.")
