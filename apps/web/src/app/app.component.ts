@@ -1,5 +1,5 @@
 import { DatePipe } from "@angular/common";
-import { AfterViewChecked, ChangeDetectorRef, Component, ElementRef, OnDestroy, OnInit, ViewChild, inject } from "@angular/core";
+import { AfterViewChecked, ChangeDetectorRef, Component, ElementRef, OnDestroy, OnInit, ViewChild, inject, signal } from "@angular/core";
 import { FormsModule } from "@angular/forms";
 import { firstValueFrom } from "rxjs";
 import { OnboardingPageComponent } from "./onboarding-page.component";
@@ -17,6 +17,7 @@ import {
 import { appendPendingFiles, messageWithAttachmentPaths, PendingFile, removePendingFile, uploadPendingFiles } from "./thread-uploads";
 
 type Panel = "chat" | "history" | "timers" | "attach" | "settings" | "workers" | "runtime" | "raw" | "ops";
+type CodexRateLimitKey = "primary" | "secondary";
 type PersistedThreadTextField =
   | "draft"
   | "sidebarWorkerTask"
@@ -61,7 +62,9 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   @ViewChild("rawTerminalHost") private readonly rawTerminalHost?: ElementRef<HTMLElement>;
 
   threads: ThreadSummary[] = [];
-  messages: ThreadMessage[] = [];
+  readonly messageCache = signal<Record<string, ThreadMessage[]>>({});
+  readonly loadingThreadIds = signal<Record<string, boolean>>({});
+  readonly activeThreadIds = signal<Record<string, number>>({});
   historyMessages: ThreadMessage[] = [];
   timers: TimerRecord[] = [];
   allTimers: TimerRecord[] = [];
@@ -86,6 +89,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   timerTime = "09:00";
   timerPrompt = "";
   workerModalOpen = false;
+  modelDetailsOpen = false;
   creatingWorker = false;
   workerLabel = "Worker 1";
   workerTask = "";
@@ -129,7 +133,9 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   private shouldStickToBottom = true;
   private scrollAfterRender = true;
   private scrollFrame = 0;
-  private lastMessageSignature = "";
+  private readonly lastActivityByThread = new Map<string, number>();
+  private readonly threadLoadTokens = new Map<string, number>();
+  private threadLoadSequence = 0;
   private textStateThreadId = "";
   private readonly readStateVersionKey = "orkestr.threadRead.initialized.v1";
   private readonly sidebarWidthKey = "orkestr.sidebar.width.v1";
@@ -207,6 +213,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
       if (setupResult.status === "fulfilled") this.setupStatus = setupResult.value;
       if (timersResult.status === "fulfilled") this.allTimers = timersResult.value.timers || [];
       this.apiOnline = true;
+      this.trackThreadActivity(payload.threads);
       this.threads = [...payload.threads].sort((a, b) => this.activityMs(b) - this.activityMs(a));
       this.seedReadStateIfNeeded(this.threads);
       if (this.shouldAutoOpenOnboarding()) {
@@ -248,24 +255,25 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     const nextPanel = this.activePanel === "raw" ? "raw" : "chat";
     this.selectedId = this.threadSlug(thread);
     this.activePanel = nextPanel;
+    this.modelDetailsOpen = false;
     this.pushPath(this.selectedId, this.activePanel);
+    this.beginThreadLoad(thread.id);
     this.clearThreadPanelState();
     this.syncThreadMetaDraft(thread, true);
     this.syncThreadBindingDraft(thread, true);
     this.syncThreadTextState(thread, true);
     this.updateDocumentTitle();
+    this.renderNow();
     await this.loadSelectedThread(true);
     this.renderNow();
   }
 
   private clearThreadPanelState(): void {
-    this.messages = [];
     this.historyMessages = [];
     this.timers = [];
     this.runtimeDetails = null;
     this.attachDetails = null;
     this.closeRawStream();
-    this.lastMessageSignature = "";
     this.shouldStickToBottom = this.activePanel === "chat";
     this.scrollAfterRender = this.activePanel === "chat";
   }
@@ -275,6 +283,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
       this.openTools(this.toolsView);
       return;
     }
+    this.modelDetailsOpen = false;
     if (this.activePanel === "raw" && panel !== "raw") this.closeRawStream();
     this.activePanel = panel;
     const thread = this.selectedThread();
@@ -292,6 +301,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
 
   openTools(view: ToolsView = this.toolsView): void {
     if (this.activePanel === "raw") this.closeRawStream();
+    this.modelDetailsOpen = false;
     this.onboardingActive = false;
     this.toolsView = view;
     this.activePanel = "ops";
@@ -334,6 +344,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     try {
       const attachments = await uploadPendingFiles(this.api, thread.id, this.pendingFiles);
       const text = messageWithAttachmentPaths(originalText, attachments);
+      this.markThreadActive(thread.id, 120_000);
       await firstValueFrom(this.api.sendThreadInput(thread.id, text, attachments));
       this.draft = "";
       this.clearThreadTextField(thread, "draft");
@@ -432,6 +443,20 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     } finally {
       this.busy = false;
     }
+  }
+
+  openModelDetails(event?: Event): void {
+    event?.preventDefault();
+    event?.stopPropagation();
+    if (!this.selectedThread()) return;
+    this.modelDetailsOpen = true;
+    this.renderNow();
+  }
+
+  closeModelDetails(): void {
+    if (!this.modelDetailsOpen) return;
+    this.modelDetailsOpen = false;
+    this.renderNow();
   }
 
   async loadHistory(): Promise<void> {
@@ -810,6 +835,16 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     return this.resolveThread(this.selectedId) || null;
   }
 
+  selectedMessages(): ThreadMessage[] {
+    const thread = this.selectedThread();
+    return thread ? this.messageCache()[thread.id] || [] : [];
+  }
+
+  selectedMessagesLoading(): boolean {
+    const thread = this.selectedThread();
+    return thread ? this.threadLoading(thread) && this.selectedMessages().length === 0 : false;
+  }
+
   isSelected(thread: ThreadSummary): boolean {
     return this.selectedThread()?.id === thread.id;
   }
@@ -1056,8 +1091,18 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   isThreadProcessing(thread: ThreadSummary | null): boolean {
     if (!thread) return false;
     const activeCount = Number(thread.pendingCount || 0) + Number(thread.runningCount || 0);
-    const state = this.threadState(thread);
+    const state = [
+      this.threadState(thread),
+      thread.publicStatus,
+      thread.publicStatusCode,
+      thread.workerStatus,
+      this.objectValue(thread.runtime, "state"),
+      this.objectValue(thread.runtime, "status"),
+      this.objectValue(thread.runtime, "executionState"),
+    ].join(" ").toLowerCase();
     return Boolean(
+      this.threadLoading(thread) ||
+      this.threadRecentlyActive(thread) ||
       thread.working ||
       thread.typingActive ||
       thread.backgroundWork ||
@@ -1067,12 +1112,13 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   }
 
   threadProcessingLabel(thread: ThreadSummary | null): string {
-    if (!thread) return "Processing";
+    if (!thread) return "Working";
+    if (this.threadLoading(thread)) return "Loading";
     if (thread.backgroundWork) return "Background";
     const state = this.threadState(thread);
     if (state.includes("waking")) return "Starting";
     if (Number(thread.pendingCount || 0) > 0 && !thread.working && !thread.typingActive) return "Queued";
-    return "Processing";
+    return "Working";
   }
 
   threadProcessingShortLabel(thread: ThreadSummary | null): string {
@@ -1080,7 +1126,8 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     if (label === "Background") return "BG";
     if (label === "Starting") return "Start";
     if (label === "Queued") return "Queue";
-    return "Run";
+    if (label === "Loading") return "Load";
+    return "Working";
   }
 
   canWakeThread(thread: ThreadSummary): boolean {
@@ -1261,22 +1308,65 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     return String(thread?.codexReasoningEffort || "").trim();
   }
 
-  codexRateRemaining(thread: ThreadSummary | null, key: "primary" | "secondary"): number | null {
+  codexModelProviderLabel(thread: ThreadSummary | null): string {
+    return String(thread?.codexModelProvider || "codex").trim() || "codex";
+  }
+
+  codexPlanTypeLabel(thread: ThreadSummary | null): string {
+    return String(thread?.codexRateLimits?.plan_type || "").trim() || "unknown";
+  }
+
+  codexRateLimitNotice(thread: ThreadSummary | null): string {
+    const reached = String(thread?.codexRateLimits?.rate_limit_reached_type || "").trim();
+    return reached ? `Rate limit reached: ${reached}` : "";
+  }
+
+  codexRateRemaining(thread: ThreadSummary | null, key: CodexRateLimitKey): number | null {
     const used = Number(thread?.codexRateLimits?.[key]?.used_percent);
     if (!Number.isFinite(used)) return null;
     return Math.max(0, Math.min(100, 100 - used));
   }
 
-  codexRateRemainingFill(thread: ThreadSummary | null, key: "primary" | "secondary"): number {
+  codexRateRemainingFill(thread: ThreadSummary | null, key: CodexRateLimitKey): number {
     return this.codexRateRemaining(thread, key) ?? 0;
   }
 
-  codexRateRemainingLabel(thread: ThreadSummary | null, key: "primary" | "secondary"): string {
+  codexRateRemainingLabel(thread: ThreadSummary | null, key: CodexRateLimitKey): string {
     const remaining = this.codexRateRemaining(thread, key);
     return remaining === null ? "--" : `${Math.round(remaining)}%`;
   }
 
-  codexRateTone(thread: ThreadSummary | null, key: "primary" | "secondary"): string {
+  codexRateUsedLabel(thread: ThreadSummary | null, key: CodexRateLimitKey): string {
+    const used = Number(thread?.codexRateLimits?.[key]?.used_percent);
+    return Number.isFinite(used) ? `${Math.round(Math.max(0, Math.min(100, used)))}%` : "--";
+  }
+
+  codexRateWindowLabel(thread: ThreadSummary | null, key: CodexRateLimitKey): string {
+    const minutes = Number(thread?.codexRateLimits?.[key]?.window_minutes);
+    if (!Number.isFinite(minutes) || minutes <= 0) return "--";
+    return this.formatDurationMinutes(minutes);
+  }
+
+  codexRateResetRelativeLabel(thread: ThreadSummary | null, key: CodexRateLimitKey): string {
+    const resetAt = this.codexRateResetDate(thread, key);
+    if (!resetAt) return "--";
+    const diffMs = resetAt.getTime() - Date.now();
+    if (diffMs <= 0) return "resetting now";
+    return `in ${this.formatDurationMinutes(Math.ceil(diffMs / 60000))}`;
+  }
+
+  codexRateResetTimeLabel(thread: ThreadSummary | null, key: CodexRateLimitKey): string {
+    const resetAt = this.codexRateResetDate(thread, key);
+    if (!resetAt) return "--";
+    return resetAt.toLocaleString([], {
+      month: "short",
+      day: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+    });
+  }
+
+  codexRateTone(thread: ThreadSummary | null, key: CodexRateLimitKey): string {
     const remaining = this.codexRateRemaining(thread, key);
     if (remaining === null) return "unknown";
     if (remaining <= 10) return "danger";
@@ -1300,6 +1390,23 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     return percent === null ? "--" : `${Math.round(percent)}%`;
   }
 
+  codexContextUsedLabel(thread: ThreadSummary | null): string {
+    const used = this.codexContextUsedTokens(thread);
+    return used === null ? "--" : this.formatTokenCount(used);
+  }
+
+  codexContextRemainingLabel(thread: ThreadSummary | null): string {
+    const total = Number(thread?.codexContextWindow || 0);
+    const used = this.codexContextUsedTokens(thread);
+    if (!Number.isFinite(total) || total <= 0 || used === null) return "--";
+    return this.formatTokenCount(Math.max(0, total - used));
+  }
+
+  codexContextWindowLabel(thread: ThreadSummary | null): string {
+    const total = Number(thread?.codexContextWindow || 0);
+    return Number.isFinite(total) && total > 0 ? this.formatTokenCount(total) : "--";
+  }
+
   codexContextTone(thread: ThreadSummary | null): string {
     const percent = this.codexContextPercent(thread);
     if (percent === null) return "unknown";
@@ -1316,6 +1423,37 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
       `Weekly remaining: ${this.codexRateRemainingLabel(thread, "secondary")}`,
       `Context: ${this.codexContextLabel(thread)}`,
     ].join("\n");
+  }
+
+  private codexContextUsedTokens(thread: ThreadSummary | null): number | null {
+    const used = Number(thread?.codexTokenUsage?.["total_tokens"] || thread?.codexTokenUsage?.["input_tokens"] || 0);
+    return Number.isFinite(used) && used >= 0 ? used : null;
+  }
+
+  private codexRateResetDate(thread: ThreadSummary | null, key: CodexRateLimitKey): Date | null {
+    const raw = Number(thread?.codexRateLimits?.[key]?.resets_at);
+    if (!Number.isFinite(raw) || raw <= 0) return null;
+    const millis = raw > 1_000_000_000_000 ? raw : raw * 1000;
+    const date = new Date(millis);
+    return Number.isFinite(date.getTime()) ? date : null;
+  }
+
+  private formatDurationMinutes(totalMinutes: number): string {
+    const minutes = Math.max(1, Math.round(totalMinutes));
+    if (minutes < 60) return `${minutes}m`;
+    const hours = Math.floor(minutes / 60);
+    const remainderMinutes = minutes % 60;
+    if (hours < 24) return remainderMinutes ? `${hours}h ${remainderMinutes}m` : `${hours}h`;
+    const days = Math.floor(hours / 24);
+    const remainderHours = hours % 24;
+    return remainderHours ? `${days}d ${remainderHours}h` : `${days}d`;
+  }
+
+  private formatTokenCount(value: number): string {
+    const tokens = Math.max(0, Math.round(value));
+    if (tokens < 1000) return `${tokens}`;
+    if (tokens < 1_000_000) return `${Math.round(tokens / 100) / 10}k`;
+    return `${Math.round(tokens / 100_000) / 10}m`;
   }
 
   runtimeJson(): string {
@@ -1356,21 +1494,86 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     if (this.activePanel === "ops") return;
     const thread = this.selectedThread();
     if (!thread) return;
+    const threadId = thread.id;
+    const loadToken = this.beginThreadLoad(threadId);
     const wasNearBottom = this.isMessagePaneNearBottom();
-    const payload = await firstValueFrom(this.api.threadMessages(thread.id, 150));
-    this.messages = payload.messages || [];
-    this.markThreadRead(thread);
-    const signature = this.messages.map((message) => this.messageKey(message)).join("|");
-    const changed = signature !== this.lastMessageSignature;
-    if (forceBottom || (!this.lastMessageSignature && this.messages.length > 0) || (changed && wasNearBottom)) {
-      this.queueMessagePaneScrollToBottom();
+    try {
+      const payload = await firstValueFrom(this.api.threadMessages(threadId, 150));
+      if (this.threadLoadTokens.get(threadId) !== loadToken) return;
+      const nextMessages = payload.messages || [];
+      const previousMessages = this.messageCache()[threadId] || [];
+      const previousSignature = previousMessages.map((message) => this.messageKey(message)).join("|");
+      const signature = nextMessages.map((message) => this.messageKey(message)).join("|");
+      const changed = signature !== previousSignature;
+      this.messageCache.update((cache) => ({ ...cache, [threadId]: nextMessages }));
+      const currentThread = this.selectedThread();
+      if (currentThread?.id === threadId) this.markThreadRead(currentThread);
+      if (forceBottom || (!previousSignature && nextMessages.length > 0) || (changed && wasNearBottom)) {
+        this.queueMessagePaneScrollToBottom();
+      }
+      if (previousSignature && changed && nextMessages.length > 0) this.markThreadActive(threadId, 45_000);
+      if (this.activePanel === "history") await this.loadHistory();
+      if (this.activePanel === "timers") await this.loadTimers();
+      if (this.activePanel === "runtime") await this.loadRuntime();
+      if (this.activePanel === "raw") await this.loadRaw();
+    } finally {
+      this.finishThreadLoad(threadId, loadToken);
     }
-    this.lastMessageSignature = signature;
-    if (this.activePanel === "history") await this.loadHistory();
-    if (this.activePanel === "timers") await this.loadTimers();
-    if (this.activePanel === "runtime") await this.loadRuntime();
-    if (this.activePanel === "raw") await this.loadRaw();
     this.renderNow();
+  }
+
+  private beginThreadLoad(threadId: string): number {
+    const token = ++this.threadLoadSequence;
+    this.threadLoadTokens.set(threadId, token);
+    this.loadingThreadIds.update((loading) => ({ ...loading, [threadId]: true }));
+    return token;
+  }
+
+  private finishThreadLoad(threadId: string, token: number): void {
+    if (this.threadLoadTokens.get(threadId) !== token) return;
+    this.threadLoadTokens.delete(threadId);
+    this.loadingThreadIds.update((loading) => {
+      const next = { ...loading };
+      delete next[threadId];
+      return next;
+    });
+  }
+
+  threadLoading(thread: ThreadSummary | null): boolean {
+    return Boolean(thread?.id && this.loadingThreadIds()[thread.id]);
+  }
+
+  private trackThreadActivity(threads: ThreadSummary[]): void {
+    const now = Date.now();
+    for (const thread of threads) {
+      const activity = this.activityMs(thread);
+      const previous = this.lastActivityByThread.get(thread.id);
+      if (previous && activity > previous && activity > now - 120_000) {
+        this.markThreadActive(thread.id, 45_000);
+      }
+      this.lastActivityByThread.set(thread.id, activity);
+    }
+    this.pruneActiveThreads(now);
+  }
+
+  private markThreadActive(threadId: string, durationMs: number): void {
+    const until = Date.now() + durationMs;
+    this.activeThreadIds.update((active) => ({ ...active, [threadId]: Math.max(Number(active[threadId] || 0), until) }));
+  }
+
+  private pruneActiveThreads(now = Date.now()): void {
+    const active = this.activeThreadIds();
+    const next: Record<string, number> = {};
+    for (const [threadId, until] of Object.entries(active)) {
+      if (Number(until || 0) > now) next[threadId] = until;
+    }
+    if (Object.keys(next).length !== Object.keys(active).length) this.activeThreadIds.set(next);
+  }
+
+  private threadRecentlyActive(thread: ThreadSummary | null): boolean {
+    if (!thread?.id) return false;
+    const until = Number(this.activeThreadIds()[thread.id] || 0);
+    return until > Date.now();
   }
 
   private isMessagePaneNearBottom(): boolean {

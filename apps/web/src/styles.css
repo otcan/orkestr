@@ -529,7 +529,7 @@ textarea:focus {
   position: absolute;
   top: 10px;
   right: 10px;
-  max-width: 58px;
+  max-width: 88px;
 }
 
 .thread-item > .pending {
@@ -553,6 +553,7 @@ textarea:focus {
   border-color: rgba(255, 209, 102, 0.44);
   background: rgba(255, 209, 102, 0.24);
   color: #ffe7a3;
+  max-width: none;
   text-transform: uppercase;
   animation: processing-badge-pulse 1.2s ease-in-out infinite;
 }
@@ -763,6 +764,11 @@ textarea:focus {
   text-align: left;
 }
 
+.codex-capacity-card.active {
+  border-color: rgba(99, 212, 113, 0.72);
+  box-shadow: 0 0 0 3px rgba(99, 212, 113, 0.14);
+}
+
 .codex-model-row,
 .codex-meter-row,
 .codex-meter {
@@ -861,6 +867,179 @@ textarea:focus {
 
 .codex-meter.context.danger em {
   background: linear-gradient(90deg, #ff7a59, #ff3b30);
+}
+
+.model-detail-backdrop {
+  position: fixed;
+  z-index: 80;
+  inset: 0;
+  display: flex;
+  align-items: flex-start;
+  justify-content: flex-end;
+  padding: 126px 26px 24px;
+  background: rgba(3, 9, 4, 0.38);
+  backdrop-filter: blur(5px);
+}
+
+.model-detail-modal {
+  display: grid;
+  gap: 16px;
+  width: min(760px, calc(100vw - 52px));
+  max-height: calc(100vh - 148px);
+  overflow: auto;
+  border: 1px solid rgba(99, 212, 113, 0.24);
+  border-radius: 12px;
+  background: #071207;
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.44);
+  padding: 18px;
+}
+
+.model-detail-head,
+.model-detail-card header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  min-width: 0;
+}
+
+.model-detail-head h3 {
+  overflow-wrap: anywhere;
+  color: #edffef;
+  font-size: 1rem;
+  line-height: 1.2;
+}
+
+.icon-close {
+  width: 34px;
+  min-width: 34px;
+  height: 34px;
+  padding: 0;
+  border-radius: 999px;
+  font-size: 1.2rem;
+  line-height: 1;
+}
+
+.model-detail-meta {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.model-detail-meta span {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  border: 1px solid rgba(140, 255, 155, 0.14);
+  border-radius: 8px;
+  background: rgba(99, 212, 113, 0.07);
+  padding: 10px;
+}
+
+.model-detail-meta b,
+.model-detail-card dt {
+  color: #91ad8b;
+  font-size: 0.64rem;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.model-detail-meta strong,
+.model-detail-card dd {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: #edffef;
+  font-weight: 900;
+}
+
+.model-limit-notice {
+  border: 1px solid rgba(255, 122, 89, 0.36);
+  border-radius: 8px;
+  color: #ffd6c9;
+  background: rgba(255, 122, 89, 0.12);
+  margin: 0;
+  padding: 10px 12px;
+  font-size: 0.82rem;
+  font-weight: 800;
+}
+
+.model-detail-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.model-detail-card {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+  border: 1px solid rgba(140, 255, 155, 0.16);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.035);
+  padding: 12px;
+}
+
+.model-detail-card header span {
+  color: #bfe9bd;
+  font-size: 0.76rem;
+  font-weight: 900;
+}
+
+.model-detail-card header strong {
+  color: #a8ffb2;
+  font-size: 1.1rem;
+}
+
+.model-large-meter i {
+  display: block;
+  height: 10px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: rgba(122, 135, 116, 0.28);
+}
+
+.model-large-meter em {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #63d471, #b6ff63);
+}
+
+.model-detail-card.warn .model-large-meter em {
+  background: linear-gradient(90deg, #ffd166, #ff9f1c);
+}
+
+.model-detail-card.danger .model-large-meter em {
+  background: linear-gradient(90deg, #ff7a59, #ff3b30);
+}
+
+.model-detail-card.context .model-large-meter em {
+  background: linear-gradient(90deg, #58d6d1, #63d471);
+}
+
+.model-detail-card.context.warn .model-large-meter em {
+  background: linear-gradient(90deg, #ffd166, #ff9f1c);
+}
+
+.model-detail-card.context.danger .model-large-meter em {
+  background: linear-gradient(90deg, #ff7a59, #ff3b30);
+}
+
+.model-detail-card dl {
+  display: grid;
+  grid-template-columns: minmax(72px, auto) minmax(0, 1fr);
+  gap: 7px 10px;
+  margin: 0;
+}
+
+.model-detail-card dt,
+.model-detail-card dd {
+  margin: 0;
+}
+
+.model-detail-card dd {
+  text-align: right;
+  font-size: 0.76rem;
 }
 
 .codex-mode-toggle {
@@ -1733,6 +1912,23 @@ textarea:focus {
   .model-pill,
   .codex-capacity-card {
     min-width: 100%;
+  }
+
+  .model-detail-backdrop {
+    align-items: stretch;
+    justify-content: center;
+    padding: 70px 12px 12px;
+  }
+
+  .model-detail-modal {
+    width: 100%;
+    max-height: calc(100vh - 82px);
+    padding: 14px;
+  }
+
+  .model-detail-meta,
+  .model-detail-grid {
+    grid-template-columns: 1fr;
   }
 
   .composer-row {

@@ -222,7 +222,15 @@
           <button type="button" [class.active]="codexModeValue(thread) === 'code'" (click)="switchCodexMode('code')" [disabled]="busy">Code</button>
           <button type="button" [class.active]="codexModeValue(thread) === 'plan'" (click)="switchCodexMode('plan')" [disabled]="busy">Plan</button>
         </div>
-        <button class="codex-capacity-card" type="button" (click)="openTools('models')" [title]="codexCapacityTooltip(thread)">
+        <button
+          class="codex-capacity-card"
+          type="button"
+          [class.active]="modelDetailsOpen"
+          (click)="openModelDetails($event)"
+          [title]="codexCapacityTooltip(thread)"
+          aria-haspopup="dialog"
+          [attr.aria-expanded]="modelDetailsOpen"
+        >
           <span class="codex-model-row">
             <strong>{{ codexModelName(thread) }}</strong>
             <span>{{ codexReasoningEffortLabel(thread) || "effort ?" }}</span>
@@ -256,45 +264,153 @@
         }
       </nav>
 
+      @if (modelDetailsOpen) {
+        @if (selectedThread(); as modelThread) {
+          <div class="model-detail-backdrop" (click)="closeModelDetails()">
+            <section class="model-detail-modal" role="dialog" aria-modal="true" aria-label="Model capacity details" (click)="$event.stopPropagation()">
+              <header class="model-detail-head">
+                <div>
+                  <p class="eyebrow">Model Capacity</p>
+                  <h3>{{ codexModelName(modelThread) }}</h3>
+                </div>
+                <button class="secondary icon-close" type="button" aria-label="Close model details" (click)="closeModelDetails()">×</button>
+              </header>
+
+              <div class="model-detail-meta">
+                <span>
+                  <b>Provider</b>
+                  <strong>{{ codexModelProviderLabel(modelThread) }}</strong>
+                </span>
+                <span>
+                  <b>Reasoning</b>
+                  <strong>{{ codexReasoningEffortLabel(modelThread) || "unknown" }}</strong>
+                </span>
+                <span>
+                  <b>Plan</b>
+                  <strong>{{ codexPlanTypeLabel(modelThread) }}</strong>
+                </span>
+              </div>
+
+              @if (codexRateLimitNotice(modelThread)) {
+                <p class="model-limit-notice">{{ codexRateLimitNotice(modelThread) }}</p>
+              }
+
+              <div class="model-detail-grid">
+                <article class="model-detail-card" [class.warn]="codexRateTone(modelThread, 'primary') === 'warn'" [class.danger]="codexRateTone(modelThread, 'primary') === 'danger'">
+                  <header>
+                    <span>5-hour cap</span>
+                    <strong>{{ codexRateRemainingLabel(modelThread, 'primary') }}</strong>
+                  </header>
+                  <div class="model-large-meter">
+                    <i><em [style.width.%]="codexRateRemainingFill(modelThread, 'primary')"></em></i>
+                  </div>
+                  <dl>
+                    <dt>Used</dt>
+                    <dd>{{ codexRateUsedLabel(modelThread, 'primary') }}</dd>
+                    <dt>Remaining</dt>
+                    <dd>{{ codexRateRemainingLabel(modelThread, 'primary') }}</dd>
+                    <dt>Window</dt>
+                    <dd>{{ codexRateWindowLabel(modelThread, 'primary') }}</dd>
+                    <dt>Reset</dt>
+                    <dd>{{ codexRateResetRelativeLabel(modelThread, 'primary') }}</dd>
+                    <dt>Reset time</dt>
+                    <dd>{{ codexRateResetTimeLabel(modelThread, 'primary') }}</dd>
+                  </dl>
+                </article>
+
+                <article class="model-detail-card" [class.warn]="codexRateTone(modelThread, 'secondary') === 'warn'" [class.danger]="codexRateTone(modelThread, 'secondary') === 'danger'">
+                  <header>
+                    <span>Weekly cap</span>
+                    <strong>{{ codexRateRemainingLabel(modelThread, 'secondary') }}</strong>
+                  </header>
+                  <div class="model-large-meter">
+                    <i><em [style.width.%]="codexRateRemainingFill(modelThread, 'secondary')"></em></i>
+                  </div>
+                  <dl>
+                    <dt>Used</dt>
+                    <dd>{{ codexRateUsedLabel(modelThread, 'secondary') }}</dd>
+                    <dt>Remaining</dt>
+                    <dd>{{ codexRateRemainingLabel(modelThread, 'secondary') }}</dd>
+                    <dt>Window</dt>
+                    <dd>{{ codexRateWindowLabel(modelThread, 'secondary') }}</dd>
+                    <dt>Reset</dt>
+                    <dd>{{ codexRateResetRelativeLabel(modelThread, 'secondary') }}</dd>
+                    <dt>Reset time</dt>
+                    <dd>{{ codexRateResetTimeLabel(modelThread, 'secondary') }}</dd>
+                  </dl>
+                </article>
+
+                <article class="model-detail-card context" [class.warn]="codexContextTone(modelThread) === 'warn'" [class.danger]="codexContextTone(modelThread) === 'danger'">
+                  <header>
+                    <span>Context</span>
+                    <strong>{{ codexContextLabel(modelThread) }}</strong>
+                  </header>
+                  <div class="model-large-meter">
+                    <i><em [style.width.%]="codexContextFill(modelThread)"></em></i>
+                  </div>
+                  <dl>
+                    <dt>Used</dt>
+                    <dd>{{ codexContextUsedLabel(modelThread) }}</dd>
+                    <dt>Remaining</dt>
+                    <dd>{{ codexContextRemainingLabel(modelThread) }}</dd>
+                    <dt>Window</dt>
+                    <dd>{{ codexContextWindowLabel(modelThread) }}</dd>
+                    <dt>Thread</dt>
+                    <dd>{{ modelThread.codexThreadId || modelThread.threadId || modelThread.id }}</dd>
+                  </dl>
+                </article>
+              </div>
+            </section>
+          </div>
+        }
+      }
+
       @if (error) {
         <div class="notice error">{{ error }}</div>
       }
 
       @if (activePanel === "chat") {
         <section #messagePane class="messages" (scroll)="rememberScrollPosition()">
-          @for (message of messages; track messageKey(message)) {
-            <article
-              class="message"
-              [class.user]="message.role === 'user'"
-              [class.assistant-final]="isFinalAssistantMessage(message)"
-              [class.assistant-info]="isInfoAssistantMessage(message)"
-              [class.assistant-plan]="messagePhase(message) === 'plan'"
-              [class.failed]="message.state === 'failed'"
-            >
-              <div class="message-meta">
-                <strong>{{ messageRoleLabel(message) }}</strong>
-                @if (messagePhaseLabel(message)) {
-                  <em class="phase-badge">{{ messagePhaseLabel(message) }}</em>
-                }
-                <span>{{ messageTime(message) | date: "MMM d, HH:mm:ss" }}</span>
-                @if (message.state && message.state !== "completed") {
-                  <em>{{ message.state }}</em>
-                }
-              </div>
-              <div class="message-body" [innerHTML]="messageTextHtml(message)"></div>
-              @if ((message.attachments || []).length > 0) {
-                <div class="attachments">
-                  @for (attachment of message.attachments || []; track attachmentLabel(attachment)) {
-                    <span>{{ attachmentLabel(attachment) }}</span>
+          @if (selectedMessagesLoading()) {
+            <div class="empty-state loading-state">
+              <h3>Loading messages</h3>
+              <p>Fetching the selected chat without clearing the current thread state.</p>
+            </div>
+          } @else {
+            @for (message of selectedMessages(); track messageKey(message)) {
+              <article
+                class="message"
+                [class.user]="message.role === 'user'"
+                [class.assistant-final]="isFinalAssistantMessage(message)"
+                [class.assistant-info]="isInfoAssistantMessage(message)"
+                [class.assistant-plan]="messagePhase(message) === 'plan'"
+                [class.failed]="message.state === 'failed'"
+              >
+                <div class="message-meta">
+                  <strong>{{ messageRoleLabel(message) }}</strong>
+                  @if (messagePhaseLabel(message)) {
+                    <em class="phase-badge">{{ messagePhaseLabel(message) }}</em>
+                  }
+                  <span>{{ messageTime(message) | date: "MMM d, HH:mm:ss" }}</span>
+                  @if (message.state && message.state !== "completed") {
+                    <em>{{ message.state }}</em>
                   }
                 </div>
-              }
-            </article>
-          } @empty {
-            <div class="empty-state">
-              <h3>No messages yet</h3>
-              <p>This thread exists, but no normalized Orkestr messages are stored yet.</p>
-            </div>
+                <div class="message-body" [innerHTML]="messageTextHtml(message)"></div>
+                @if ((message.attachments || []).length > 0) {
+                  <div class="attachments">
+                    @for (attachment of message.attachments || []; track attachmentLabel(attachment)) {
+                      <span>{{ attachmentLabel(attachment) }}</span>
+                    }
+                  </div>
+                }
+              </article>
+            } @empty {
+              <div class="empty-state">
+                <h3>No messages yet</h3>
+                <p>This thread exists, but no normalized Orkestr messages are stored yet.</p>
+              </div>
+            }
           }
         </section>
       }
