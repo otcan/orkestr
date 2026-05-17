@@ -76,13 +76,15 @@ export async function readGmailToken(env = process.env) {
   return readJson(`${paths.secrets}/gmail-token.json`, {});
 }
 
-export async function startGmailOAuth(env = process.env) {
+export async function startGmailOAuth(env = process.env, options = {}) {
   const config = await readConnectorConfig("gmail", env);
   const { clientId, redirectUri } = requireOAuthConfig(config);
   const paths = await ensureDataDirs(env);
   const state = randomUUID();
+  const account = String(options.account || config.account || "").trim();
   await writeJson(`${paths.oauth}/gmail-state.json`, {
     state,
+    account,
     createdAt: new Date().toISOString(),
   });
   const url = new URL("https://accounts.google.com/o/oauth2/v2/auth");
@@ -93,8 +95,9 @@ export async function startGmailOAuth(env = process.env) {
   url.searchParams.set("prompt", "consent");
   url.searchParams.set("scope", gmailScopes.join(" "));
   url.searchParams.set("state", state);
+  if (account) url.searchParams.set("login_hint", account);
   await appendEvent({ type: "gmail_oauth_started" }, env);
-  return { authorizeUrl: url.toString(), state, redirectUri };
+  return { authorizeUrl: url.toString(), state, redirectUri, account };
 }
 
 export async function exchangeGmailCode(code, env = process.env, fetchImpl = fetch) {
@@ -182,6 +185,7 @@ export async function finishGmailOAuth(query, env = process.env, fetchImpl = fet
   return {
     ok: true,
     state,
+    account: savedState.account || "",
     scope: token.scope,
     expiresAt: token.expiresAt,
     receivedAt: new Date().toISOString(),

@@ -1,7 +1,7 @@
 import { Component, EventEmitter, Input, OnChanges, OnDestroy, OnInit, Output, SimpleChanges, inject } from "@angular/core";
 import { FormsModule } from "@angular/forms";
 import { firstValueFrom } from "rxjs";
-import { ApiService, ConnectorStatus, SetupStatus, ThreadSummary } from "./api.service";
+import { ApiService, ConnectorStatus, GmailMessage, SetupStatus, ThreadSummary } from "./api.service";
 
 type ConnectorStep = "openai" | "codex" | "gmail" | "linkedin" | "whatsapp" | "browsers";
 type OnboardingStep = "goal" | "system" | "security" | ConnectorStep | "finish";
@@ -29,8 +29,10 @@ export class OnboardingPageComponent implements OnInit, OnChanges, OnDestroy {
   private poller?: ReturnType<typeof setInterval>;
 
   @Input() mode: SetupPageMode = "onboarding";
+  @Input() setupSection = "";
   @Output() skip = new EventEmitter<void>();
   @Output() complete = new EventEmitter<void>();
+  @Output() setupSectionChange = new EventEmitter<string>();
 
   setup: SetupStatus | null = null;
   busy = false;
@@ -49,9 +51,13 @@ export class OnboardingPageComponent implements OnInit, OnChanges, OnDestroy {
   codexAuthExpiresAt = "";
 
   openaiApiKey = "";
+  gmailAccount = "";
   gmailClientId = "";
   gmailClientSecret = "";
-  gmailRedirectUri = "http://127.0.0.1:19812/oauth/gmail/callback";
+  gmailRedirectUri = this.defaultGmailRedirectUri();
+  gmailSampleQuery = "in:inbox newer_than:7d";
+  gmailSampleMessages: GmailMessage[] = [];
+  gmailSampleLoading = false;
   private formHydrated = false;
   private stepInitialized = false;
 
@@ -101,7 +107,10 @@ export class OnboardingPageComponent implements OnInit, OnChanges, OnDestroy {
   }
 
   ngOnChanges(changes: SimpleChanges): void {
-    if (changes["mode"]) this.ensureActiveStepAvailable();
+    if (changes["mode"] || changes["setupSection"]) {
+      this.applySetupSectionFromInput();
+      this.ensureActiveStepAvailable();
+    }
   }
 
   ngOnDestroy(): void {
@@ -145,15 +154,22 @@ export class OnboardingPageComponent implements OnInit, OnChanges, OnDestroy {
       return;
     }
     const body: Record<string, string> = { clientId, redirectUri };
+    if (this.gmailAccount.trim()) body["account"] = this.gmailAccount.trim();
     if (clientSecret) body["clientSecret"] = clientSecret;
     await this.saveConnector("gmail", body, "Gmail OAuth settings saved.");
     this.gmailClientSecret = "";
   }
 
+  async submitGmailAuth(): Promise<void> {
+    await this.saveGmail();
+    if (this.error) return;
+    await this.startGmailOAuth();
+  }
+
   async startGmailOAuth(): Promise<void> {
     this.busy = true;
     try {
-      const result = await firstValueFrom(this.api.startGmailOAuth());
+      const result = await firstValueFrom(this.api.startGmailOAuth(this.gmailAccount));
       this.oauthUrl = result.authorizeUrl;
       globalThis.open?.(result.authorizeUrl, "_blank", "noopener,noreferrer");
       this.notice = "Google sign-in opened in a new tab.";
@@ -162,6 +178,25 @@ export class OnboardingPageComponent implements OnInit, OnChanges, OnDestroy {
       this.error = this.errorText(error);
     } finally {
       this.busy = false;
+    }
+  }
+
+  async loadGmailSample(): Promise<void> {
+    this.gmailSampleLoading = true;
+    try {
+      const list = await firstValueFrom(this.api.gmailMessages(5, this.gmailSampleQuery));
+      const ids = (list.messages || []).map((message) => message.id).filter(Boolean).slice(0, 5);
+      const details = await Promise.all(ids.map(async (id) => {
+        const result = await firstValueFrom(this.api.gmailMessage(id));
+        return result.message;
+      }));
+      this.gmailSampleMessages = details;
+      this.notice = details.length ? "Loaded recent Gmail messages." : "Gmail connected, but no messages matched this probe.";
+      this.error = "";
+    } catch (error) {
+      this.error = this.errorText(error);
+    } finally {
+      this.gmailSampleLoading = false;
     }
   }
 
@@ -188,6 +223,29 @@ export class OnboardingPageComponent implements OnInit, OnChanges, OnDestroy {
   connectorDetail(id: string, key: string): string {
     const value = this.connector(id)?.details?.[key];
     return value === null || value === undefined ? "" : String(value);
+  }
+
+  gmailStatusLabel(): string {
+    const state = this.connector("gmail")?.state;
+    if (!state) return "not connected";
+    return String(state).replace(/_/g, " ");
+  }
+
+  gmailStatusClass(): string {
+    return this.stateClass("gmail");
+  }
+
+  gmailConfigSummary(): string {
+    if (!this.gmailClientId.trim()) return "OAuth client is not configured.";
+    return this.gmailRedirectUri.trim() || this.defaultGmailRedirectUri();
+  }
+
+  gmailSampleDate(message: GmailMessage): string {
+    const timestamp = Date.parse(String(message.date || ""));
+    if (Number.isFinite(timestamp)) return new Date(timestamp).toLocaleString([], { dateStyle: "short", timeStyle: "short" });
+    const internal = Number(message.internalDate || 0);
+    if (Number.isFinite(internal) && internal > 0) return new Date(internal).toLocaleString([], { dateStyle: "short", timeStyle: "short" });
+    return "-";
   }
 
   stateLabel(id: string): string {
@@ -628,6 +686,7 @@ export class OnboardingPageComponent implements OnInit, OnChanges, OnDestroy {
     this.activeStep = id;
     this.stepInitialized = true;
     this.persistProgress();
+    if (this.isSetupMode()) this.setupSectionChange.emit(id);
   }
 
   previousStep(): void {
@@ -701,6 +760,7 @@ export class OnboardingPageComponent implements OnInit, OnChanges, OnDestroy {
     if (this.formHydrated) return;
     const config = setup.config || {};
     const gmail = config["gmail"] || {};
+    if (!this.gmailAccount && gmail["account"]) this.gmailAccount = String(gmail["account"]);
     if (!this.gmailClientId && gmail["clientId"]) this.gmailClientId = String(gmail["clientId"]);
     if (gmail["redirectUri"]) this.gmailRedirectUri = String(gmail["redirectUri"]);
     this.formHydrated = true;
@@ -720,6 +780,14 @@ export class OnboardingPageComponent implements OnInit, OnChanges, OnDestroy {
   private ensureActiveStepAvailable(): void {
     if (this.pageSections().some((step) => step.id === this.activeStep)) return;
     this.activeStep = this.isSetupMode() ? "system" : "goal";
+  }
+
+  private applySetupSectionFromInput(): void {
+    if (!this.isSetupMode()) return;
+    const section = String(this.setupSection || "").trim().toLowerCase();
+    const match = this.setupSections().find((step) => step.id === section);
+    this.activeStep = match?.id || "system";
+    this.stepInitialized = true;
   }
 
   private restoreProgress(): void {
@@ -754,5 +822,10 @@ export class OnboardingPageComponent implements OnInit, OnChanges, OnDestroy {
   private errorText(error: unknown): string {
     if (error && typeof error === "object" && "message" in error) return String((error as { message?: unknown }).message);
     return String(error || "Unknown error");
+  }
+
+  private defaultGmailRedirectUri(): string {
+    const origin = String(globalThis.location?.origin || "").trim();
+    return `${origin || "http://127.0.0.1:19812"}/oauth/gmail/callback`;
   }
 }

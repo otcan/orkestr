@@ -36,13 +36,15 @@ test("gmail oauth start builds an authorize URL and saves state", async () => {
     redirectUri: "http://localhost:19812/oauth/gmail/callback",
   }, env);
 
-  const started = await startGmailOAuth(env);
+  const started = await startGmailOAuth(env, { account: "person@example.com" });
   const state = JSON.parse(await fs.readFile(path.join(home, "oauth", "gmail-state.json"), "utf8"));
   const url = new URL(started.authorizeUrl);
 
   assert.equal(url.hostname, "accounts.google.com");
   assert.equal(url.searchParams.get("client_id"), "client-id");
   assert.equal(url.searchParams.get("state"), state.state);
+  assert.equal(url.searchParams.get("login_hint"), "person@example.com");
+  assert.equal(state.account, "person@example.com");
 });
 
 test("gmail authorization code is exchanged and stored securely", async () => {

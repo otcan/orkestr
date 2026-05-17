@@ -16,6 +16,7 @@ test("server serves the built Angular UI at root", async () => {
     const html = await response.text();
     const onboardingResponse = await fetch(`http://127.0.0.1:${port}/setup`);
     const onboardingHtml = await onboardingResponse.text();
+    const setupGmailResponse = await fetch(`http://127.0.0.1:${port}/setup/gmail`);
     const workflowOnboardingResponse = await fetch(`http://127.0.0.1:${port}/onboarding`);
     const legacyOnboardingResponse = await fetch(`http://127.0.0.1:${port}/ng/onboarding`);
     const opsResponse = await fetch(`http://127.0.0.1:${port}/ops`);
@@ -25,6 +26,7 @@ test("server serves the built Angular UI at root", async () => {
     assert.ok(html.includes("<ork-root></ork-root>"));
     assert.equal(onboardingResponse.status, 200);
     assert.ok(onboardingHtml.includes("<ork-root></ork-root>"));
+    assert.equal(setupGmailResponse.status, 200);
     assert.equal(workflowOnboardingResponse.status, 200);
     assert.equal(legacyOnboardingResponse.status, 200);
     assert.equal(opsResponse.status, 200);

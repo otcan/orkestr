@@ -20,6 +20,7 @@ import { appendPendingFiles, messageWithAttachmentPaths, PendingFile, removePend
 type Panel = "chat" | "history" | "timers" | "attach" | "settings" | "workers" | "runtime" | "raw" | "ops";
 type CodexRateLimitKey = "primary" | "secondary";
 type SetupPageMode = "setup" | "onboarding";
+type SetupSection = "system" | "security" | "openai" | "codex" | "gmail" | "linkedin" | "whatsapp" | "browsers";
 type PersistedThreadTextField =
   | "draft"
   | "sidebarWorkerTask"
@@ -41,6 +42,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   private readonly popStateHandler = () => {
     this.onboardingActive = this.onboardingFromPath();
     this.setupPageMode = this.setupPageModeFromPath();
+    this.setupSection = this.setupSectionFromPath();
     this.selectedId = this.idFromPath();
     this.activePanel = this.panelFromPath();
     this.toolsView = this.toolsViewFromPath();
@@ -85,6 +87,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   threadWizardOpen = false;
   onboardingActive = false;
   setupPageMode: SetupPageMode = "setup";
+  setupSection: SetupSection = "system";
   activePanel: Panel = "chat";
   toolsView: ToolsView = "system";
   approveText = "Approved. Proceed.";
@@ -184,6 +187,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   ngOnInit(): void {
     this.onboardingActive = this.onboardingFromPath();
     this.setupPageMode = this.setupPageModeFromPath();
+    this.setupSection = this.setupSectionFromPath();
     this.selectedId = this.idFromPath();
     this.activePanel = this.panelFromPath();
     this.toolsView = this.toolsViewFromPath();
@@ -443,17 +447,37 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     this.renderNow();
   }
 
-  openSetup(): void {
+  openSetup(section: SetupSection = this.setupSection || "system"): void {
     if (this.activePanel === "raw") this.closeRawStream();
     this.threadWizardOpen = false;
     this.onboardingActive = true;
     this.setupPageMode = "setup";
-    this.pushSetupPath();
+    this.setupSection = section;
+    this.pushSetupPath(section);
     this.updateDocumentTitle();
     this.renderNow();
   }
 
+  handleSetupSectionChange(section: string): void {
+    this.openSetup(this.normalizeSetupSection(section));
+  }
+
   async leaveOnboarding(completed = false): Promise<void> {
+    if (this.setupPageMode === "setup") {
+      this.onboardingActive = false;
+      this.threadWizardOpen = false;
+      if (this.selectedThread()) {
+        this.activePanel = "chat";
+        this.pushPath(this.selectedId, "chat");
+      } else {
+        this.activePanel = "ops";
+        this.toolsView = "connectors";
+        this.pushOpsPath("connectors");
+      }
+      this.updateDocumentTitle();
+      await this.refresh(false);
+      return;
+    }
     this.onboardingActive = false;
     this.writeOnboardingFlag(completed ? "completed" : "skipped");
     if (completed) {
@@ -1925,6 +1949,11 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     return parts[0] === "setup" ? "setup" : "onboarding";
   }
 
+  private setupSectionFromPath(): SetupSection {
+    const parts = globalThis.location?.pathname?.split("/").filter(Boolean) || [];
+    return parts[0] === "setup" ? this.normalizeSetupSection(parts[1]) : this.setupSection;
+  }
+
   private panelFromPath(): Panel {
     const parts = globalThis.location?.pathname?.split("/").filter(Boolean) || [];
     if (parts[0] === "ops" || (parts[0] === "ng" && parts[1] === "ops")) return "ops";
@@ -1983,9 +2012,17 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     globalThis.history?.replaceState({}, "", "/onboarding");
   }
 
-  private pushSetupPath(): void {
-    if (globalThis.location?.pathname === "/setup") return;
-    globalThis.history?.pushState({}, "", "/setup");
+  private pushSetupPath(section: SetupSection = this.setupSection): void {
+    const next = `/setup/${section}`;
+    if (globalThis.location?.pathname === next) return;
+    globalThis.history?.pushState({}, "", next);
+  }
+
+  private normalizeSetupSection(value: unknown): SetupSection {
+    const section = String(value || "").trim().toLowerCase();
+    return ["system", "security", "openai", "codex", "gmail", "linkedin", "whatsapp", "browsers"].includes(section)
+      ? section as SetupSection
+      : "system";
   }
 
   private pathForPanel(id: string, panel: Panel): string {

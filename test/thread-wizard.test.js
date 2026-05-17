@@ -24,6 +24,8 @@ test("main UI exposes a guided first thread generation flow", async () => {
   assert.ok(sources.includes('placeholder="agent, project, thread"'));
   assert.ok(sources.includes("sidebar-new-thread"));
   assert.ok(sources.includes("(click)=\"openSetup()\""));
+  assert.ok(sources.includes("[setupSection]=\"setupSection\""));
+  assert.ok(sources.includes("handleSetupSectionChange"));
   assert.ok(sources.includes("Name the coding agent"));
   assert.ok(sources.includes("Select a workspace or clone a repo"));
   assert.ok(sources.includes("Use workspace"));

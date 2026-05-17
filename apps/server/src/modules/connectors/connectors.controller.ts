@@ -31,8 +31,8 @@ export class ConnectorsController {
   }
 
   @Get("gmail/oauth/start")
-  async startGmailOAuth() {
-    return beginGmailOAuth();
+  async startGmailOAuth(@Query("account") account = "") {
+    return beginGmailOAuth(process.env, { account });
   }
 
   @Get("gmail/messages")

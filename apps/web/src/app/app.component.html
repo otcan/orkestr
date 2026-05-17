@@ -1,5 +1,11 @@
 @if (onboardingActive) {
-  <ork-onboarding-page [mode]="setupPageMode" (skip)="leaveOnboarding(false)" (complete)="leaveOnboarding(true)"></ork-onboarding-page>
+  <ork-onboarding-page
+    [mode]="setupPageMode"
+    [setupSection]="setupSection"
+    (setupSectionChange)="handleSetupSectionChange($event)"
+    (skip)="leaveOnboarding(false)"
+    (complete)="leaveOnboarding(true)"
+  ></ork-onboarding-page>
 } @else {
 <main class="app-shell" [class.sidebar-resizing]="sidebarResizing" [style.--sidebar-width.px]="sidebarWidth">
   <aside class="sidebar">

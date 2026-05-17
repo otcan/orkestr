@@ -81,6 +81,31 @@ export interface SecurityPairResponse {
 
 export interface GmailOAuthStartResponse {
   authorizeUrl: string;
+  state?: string;
+  redirectUri?: string;
+}
+
+export interface GmailMessageListResponse {
+  messages: Array<{ id: string; threadId?: string }>;
+  nextPageToken?: string;
+  resultSizeEstimate?: number;
+}
+
+export interface GmailMessage {
+  id: string;
+  threadId?: string;
+  labelIds?: string[];
+  snippet?: string;
+  internalDate?: string;
+  subject?: string;
+  from?: string;
+  to?: string;
+  date?: string;
+  text?: string;
+}
+
+export interface GmailMessageResponse {
+  message: GmailMessage;
 }
 
 export interface CodexDeviceAuthResponse {
@@ -409,8 +434,20 @@ export class ApiService {
     return this.http.post<ConnectorStatus>(this.api(`/connectors/${encodeURIComponent(id)}/test`), {});
   }
 
-  startGmailOAuth(): Observable<GmailOAuthStartResponse> {
-    return this.http.get<GmailOAuthStartResponse>(this.api("/connectors/gmail/oauth/start"));
+  startGmailOAuth(account = ""): Observable<GmailOAuthStartResponse> {
+    const suffix = account.trim() ? `?account=${encodeURIComponent(account.trim())}` : "";
+    return this.http.get<GmailOAuthStartResponse>(this.api(`/connectors/gmail/oauth/start${suffix}`));
+  }
+
+  gmailMessages(maxResults = 5, query = ""): Observable<GmailMessageListResponse> {
+    const params = new URLSearchParams();
+    params.set("maxResults", String(maxResults));
+    if (query.trim()) params.set("q", query.trim());
+    return this.http.get<GmailMessageListResponse>(this.api(`/connectors/gmail/messages?${params.toString()}`));
+  }
+
+  gmailMessage(id: string): Observable<GmailMessageResponse> {
+    return this.http.get<GmailMessageResponse>(this.api(`/connectors/gmail/messages/${encodeURIComponent(id)}`));
   }
 
   startCodexDeviceAuth(): Observable<CodexDeviceAuthResponse> {
