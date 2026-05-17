@@ -17,11 +17,14 @@ test("docker image carries the agent runtime instead of requiring host Codex ins
   assert.match(dockerfile, /CODEX_HOME=\/data\/codex/);
   assert.match(compose, /ghcr\.io\/otcan\/orkestr:latest/);
   assert.match(compose, /ORKESTR_BIND_ADDRESS/);
+  assert.match(compose, /ORKESTR_DOCKER_HOST_BIND_ADDRESS/);
+  assert.match(compose, /ORKESTR_REVERSE_PROXY_LOCAL_BIND/);
   assert.match(compose, /OPENAI_API_KEY/);
   assert.match(compose, /ORKESTR_PUBLIC_HTTPS_URL/);
   assert.match(compose, /CODEX_HOME: \$\{CODEX_HOME:-\/data\/codex\}/);
   assert.match(buildCompose, /build:/);
   assert.match(envExample, /^OPENAI_API_KEY=/m);
+  assert.match(envExample, /^ORKESTR_REVERSE_PROXY_LOCAL_BIND=/m);
   assert.match(envExample, /^ORKESTR_PUBLIC_HTTPS_URL=/m);
   assert.match(envExample, /^ORKESTR_TAILSCALE_HTTPS_NAME=/m);
   assert.match(publishWorkflow, /ghcr\.io/);

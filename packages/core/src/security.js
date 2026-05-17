@@ -98,18 +98,27 @@ export async function securityStatus(env = process.env) {
   const caddy = await commandStatus("caddy", ["version"]);
   const tailscale = await commandStatus("tailscale", ["status", "--json"]);
   const httpsUrl = String(env.ORKESTR_PUBLIC_HTTPS_URL || env.ORKESTR_HTTPS_URL || env.ORKESTR_TAILSCALE_HTTPS_NAME || "").trim();
+  const caddyConfigured = String(env.ORKESTR_CADDY_ENABLED || "").trim() === "1";
+  const proxyLocalBindSetting = String(env.ORKESTR_REVERSE_PROXY_LOCAL_BIND || "").trim();
+  const dockerHostBind = String(env.ORKESTR_DOCKER_HOST_BIND_ADDRESS || env.ORKESTR_BIND_ADDRESS || "").trim();
+  const proxyLocalBind = proxyLocalBindSetting === "1" || (proxyLocalBindSetting !== "0" && isLocalBind(dockerHostBind));
   const authRequired = String(env.ORKESTR_AUTH_REQUIRED || "").trim() === "1";
   const authEnabled = Boolean(authRequired || config.enabled || (config.sessions || []).length);
   const sessionCount = (config.sessions || []).filter((session) => Date.parse(session.expiresAt || "") > Date.now()).length;
   const challengeActive = (config.challenges || []).some((challenge) => Date.parse(challenge.expiresAt || "") > Date.now());
   const bindLocal = isLocalBind(host);
+  const externallyLocal = bindLocal || proxyLocalBind;
   const httpsConfigured = httpsUrl.startsWith("https://") || httpsUrl.endsWith(".ts.net");
-  const remoteReady = bindLocal || (httpsConfigured && authEnabled && sessionCount > 0);
+  const tailscaleConfigured = (tailscale.installed && !tailscale.error) || httpsUrl.endsWith(".ts.net");
+  const remoteReady = externallyLocal || (httpsConfigured && authEnabled && sessionCount > 0);
 
   return {
     generatedAt: nowIso(),
     bindHost: host,
     bindLocal,
+    proxyLocalBind,
+    dockerHostBind,
+    externallyLocal,
     authEnabled,
     authRequired,
     paired: sessionCount > 0,
@@ -120,22 +129,22 @@ export async function securityStatus(env = process.env) {
       url: httpsUrl,
     },
     caddy: {
-      installed: caddy.installed,
-      configured: String(env.ORKESTR_CADDY_ENABLED || "").trim() === "1",
-      version: caddy.version || "",
-      error: caddy.error || "",
+      installed: caddy.installed || caddyConfigured,
+      configured: caddyConfigured,
+      version: caddy.version || (caddyConfigured ? "host-managed" : ""),
+      error: caddy.installed || caddyConfigured ? "" : caddy.error || "",
     },
     tailscale: {
       installed: tailscale.installed,
-      configured: tailscale.installed && !tailscale.error,
-      version: tailscale.version || "",
-      error: tailscale.error || "",
+      configured: tailscaleConfigured,
+      version: tailscale.version || (httpsUrl.endsWith(".ts.net") ? "host-managed" : ""),
+      error: tailscale.installed || tailscaleConfigured ? "" : tailscale.error || "",
     },
     remoteReady,
     warnings: [
-      ...(!bindLocal ? ["Orkestr is not bound to localhost. Put it behind TLS and browser pairing before remote use."] : []),
-      ...(!authEnabled && !bindLocal ? ["Browser pairing is not enabled for a non-local bind."] : []),
-      ...(!httpsConfigured && !bindLocal ? ["HTTPS is not configured for remote access."] : []),
+      ...(!externallyLocal ? ["Orkestr is not bound to localhost. Put it behind TLS and browser pairing before remote use."] : []),
+      ...(!authEnabled && !externallyLocal ? ["Browser pairing is not enabled for a non-local bind."] : []),
+      ...(!httpsConfigured && !externallyLocal ? ["HTTPS is not configured for remote access."] : []),
     ],
   };
 }

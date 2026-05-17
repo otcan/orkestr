@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { startServer } from "../apps/server/src/server.js";
+import { securityStatus } from "../packages/core/src/security.js";
 
 function saveEnv(keys) {
   return Object.fromEntries(keys.map((key) => [key, process.env[key]]));
@@ -63,6 +64,26 @@ test("browser pairing protects API routes when auth is required", async () => {
     assert.equal(allowed.status, 200);
   } finally {
     await new Promise((resolve) => server.close(resolve));
+    restoreEnv(prior);
+  }
+});
+
+test("docker localhost publish is treated as a local external bind", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-security-"));
+  const prior = saveEnv(["ORKESTR_HOME", "ORKESTR_HOST", "ORKESTR_DOCKER_HOST_BIND_ADDRESS", "ORKESTR_REVERSE_PROXY_LOCAL_BIND"]);
+  process.env.ORKESTR_HOME = home;
+  process.env.ORKESTR_HOST = "0.0.0.0";
+  process.env.ORKESTR_DOCKER_HOST_BIND_ADDRESS = "127.0.0.1";
+  delete process.env.ORKESTR_REVERSE_PROXY_LOCAL_BIND;
+
+  try {
+    const status = await securityStatus();
+    assert.equal(status.bindLocal, false);
+    assert.equal(status.proxyLocalBind, true);
+    assert.equal(status.externallyLocal, true);
+    assert.equal(status.remoteReady, true);
+    assert.deepEqual(status.warnings, []);
+  } finally {
     restoreEnv(prior);
   }
 });

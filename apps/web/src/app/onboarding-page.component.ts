@@ -305,12 +305,15 @@ export class OnboardingPageComponent implements OnInit, OnDestroy {
 
   securityChecks(): Array<{ label: string; state: string; summary: string; className: string }> {
     const security = this.setup?.security || {};
+    const bindHost = security.bindHost || "127.0.0.1";
+    const dockerHostBind = security.dockerHostBind || "127.0.0.1";
+    const bindIsSafe = Boolean(security.externallyLocal || security.bindLocal);
     return [
       {
         label: "Bind address",
-        state: security.bindLocal ? "local" : "remote",
-        summary: security.bindLocal ? `Bound to ${security.bindHost || "127.0.0.1"}` : `Bound to ${security.bindHost || "non-local address"}`,
-        className: security.bindLocal ? "ready" : "bad",
+        state: security.proxyLocalBind ? "proxied" : security.bindLocal ? "local" : "remote",
+        summary: security.proxyLocalBind ? `Container bind ${bindHost}; host publishes ${dockerHostBind}` : security.bindLocal ? `Bound to ${bindHost}` : `Bound to ${bindHost || "non-local address"}`,
+        className: bindIsSafe ? "ready" : "bad",
       },
       {
         label: "Caddy",
@@ -340,7 +343,7 @@ export class OnboardingPageComponent implements OnInit, OnDestroy {
   securityDone(): boolean {
     const security = this.setup?.security;
     if (!security) return false;
-    return Boolean(security.remoteReady || security.bindLocal);
+    return Boolean(security.remoteReady || security.externallyLocal || security.bindLocal);
   }
 
   securityStepLabel(): string {
@@ -348,14 +351,14 @@ export class OnboardingPageComponent implements OnInit, OnDestroy {
     if (!security) return "checking";
     if (security.remoteReady) return "ready";
     if (security.authEnabled && !security.paired) return "pair browser";
-    if (!security.bindLocal) return "review";
+    if (!security.externallyLocal && !security.bindLocal) return "review";
     return "local";
   }
 
   securityStepClass(): string {
     const security = this.setup?.security;
     if (!security) return "idle";
-    if (security.remoteReady || security.bindLocal) return "ready";
+    if (security.remoteReady || security.externallyLocal || security.bindLocal) return "ready";
     if (security.authEnabled || security.https?.configured || security.caddy?.installed) return "partial";
     return "bad";
   }

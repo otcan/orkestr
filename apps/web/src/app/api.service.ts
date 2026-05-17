@@ -31,6 +31,9 @@ export interface SetupStatus {
 export interface SecurityStatus {
   bindHost?: string;
   bindLocal?: boolean;
+  proxyLocalBind?: boolean;
+  dockerHostBind?: string;
+  externallyLocal?: boolean;
   authEnabled?: boolean;
   authRequired?: boolean;
   paired?: boolean;
