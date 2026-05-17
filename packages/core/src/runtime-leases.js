@@ -221,14 +221,19 @@ async function activeLeaseForThread(threadId, env = process.env) {
   return null;
 }
 
-export async function runtimeStatus(threadId, env = process.env) {
+/**
+ * @param {string} threadId
+ * @param {any} [env]
+ * @param {any[] | null} [messagesOverride]
+ */
+export async function runtimeStatus(threadId, env = process.env, messagesOverride = null) {
   const thread = await getThread(threadId, env);
   if (!thread) {
     const error = new Error("thread_not_found");
     error.statusCode = 404;
     throw error;
   }
-  const messages = await listThreadMessages(thread.id, env);
+  const messages = Array.isArray(messagesOverride) ? messagesOverride : await listThreadMessages(thread.id, env);
   const pendingCount = messages.filter((message) => pendingInputStates.has(message.state)).length;
   const awaitingAckCount = messages.filter((message) => message.state === "awaiting_ack").length;
   const nextDeliveryAttemptAt = messages
@@ -1157,11 +1162,11 @@ async function syncRuntimeLeasesOnce(env = process.env) {
     }
     const synced = await syncLeaseRollout(lease, env).catch(() => ({ lease, appended: 0 }));
     appended += synced.appended || 0;
-    const status = await runtimeStatus(lease.threadId, env).catch(() => null);
+    const thread = await getThread(lease.threadId, env).catch(() => null);
+    const messages = thread ? await listThreadMessages(thread.id, env).catch(() => []) : [];
+    const status = await runtimeStatus(lease.threadId, env, messages).catch(() => null);
     if (status) {
-      const thread = await getThread(lease.threadId, env).catch(() => null);
       if (thread) {
-        const messages = await listThreadMessages(thread.id, env).catch(() => []);
         const awaitingAck = messages.find((message) => message.role === "user" && message.state === "awaiting_ack");
         if (awaitingAck) {
           const acknowledged = await acknowledgeThreadInputDelivery(thread, awaitingAck, status, env).catch(() => null);

@@ -100,8 +100,8 @@ function threadSummaryCacheTtlMs(): number {
 }
 
 function threadSummaryPayloadCacheTtlMs(): number {
-  const parsed = Number(process.env.ORKESTR_THREAD_SUMMARY_PAYLOAD_CACHE_TTL_MS || 2500);
-  return Number.isFinite(parsed) ? Math.max(0, parsed) : 2500;
+  const parsed = Number(process.env.ORKESTR_THREAD_SUMMARY_PAYLOAD_CACHE_TTL_MS || 5000);
+  return Number.isFinite(parsed) ? Math.max(0, parsed) : 5000;
 }
 
 function threadMetadataCacheKey(thread: any, status: any): string {
@@ -146,7 +146,7 @@ async function cachedThreadMetadata(thread: any, status: any, ttlMs: number) {
 
 export async function threadRuntimeSummary(thread: any, messages: any[] = [], options: ThreadSummaryOptions = {}) {
   const ttlMs = Number(options.cacheTtlMs ?? 0) || 0;
-  const status = await runtimeStatus(thread.id).catch(() => null);
+  const status = await runtimeStatus(thread.id, process.env, messages).catch(() => null);
   const { gitState, liveCodexMetadata } = await cachedThreadMetadata(thread, status, ttlMs);
   const codexThread = {
     ...thread,
