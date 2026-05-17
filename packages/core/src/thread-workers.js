@@ -182,6 +182,8 @@ async function worktreePathFor(parent, workerId, env = process.env) {
 async function currentBranch(repoPath) {
   const branch = await git(repoPath, ["rev-parse", "--abbrev-ref", "HEAD"]).then((result) => result.stdout).catch(() => "");
   if (branch && branch !== "HEAD") return branch;
+  const symbolicBranch = await git(repoPath, ["symbolic-ref", "--short", "HEAD"]).then((result) => result.stdout).catch(() => "");
+  if (symbolicBranch) return symbolicBranch;
   return await git(repoPath, ["rev-parse", "--short", "HEAD"]).then((result) => result.stdout).catch(() => "detached");
 }
 
@@ -313,9 +315,10 @@ function threadCheckoutPath(thread) {
   const runtime = thread?.runtime && typeof thread.runtime === "object" ? thread.runtime : {};
   return nonEmptyString(
     thread?.worktreePath ||
-    runtime.worktreePath ||
-    runtime.workspace ||
     thread?.repoPath ||
+    runtime.worktreePath ||
+    runtime.repoPath ||
+    runtime.workspace ||
     thread?.cwd ||
     thread?.workspace,
   );
