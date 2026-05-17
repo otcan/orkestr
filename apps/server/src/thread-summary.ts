@@ -4,6 +4,7 @@ import { detectThreadGitState } from "../../../packages/core/src/thread-workers.
 
 type ThreadSummaryOptions = {
   cacheTtlMs?: number;
+  payloadCacheTtlMs?: number;
 };
 
 const threadMetadataCache = new Map<string, {
@@ -12,6 +13,18 @@ const threadMetadataCache = new Map<string, {
   gitState: Record<string, unknown>;
   liveCodexMetadata: Record<string, unknown>;
 }>();
+
+let threadSummaryPayloadCache: {
+  cacheKey: string;
+  expiresAt: number;
+  payload: Record<string, unknown> | null;
+  inFlight: Promise<Record<string, unknown>> | null;
+} = {
+  cacheKey: "",
+  expiresAt: 0,
+  payload: null,
+  inFlight: null,
+};
 
 export function codexThreadId(thread: any): string {
   return String(thread?.executor?.codexThreadId || thread?.codexThreadId || "").trim();
@@ -84,6 +97,11 @@ function codexMetadata(thread: any) {
 function threadSummaryCacheTtlMs(): number {
   const parsed = Number(process.env.ORKESTR_THREAD_SUMMARY_CACHE_TTL_MS || 120_000);
   return Number.isFinite(parsed) ? Math.max(0, parsed) : 120_000;
+}
+
+function threadSummaryPayloadCacheTtlMs(): number {
+  const parsed = Number(process.env.ORKESTR_THREAD_SUMMARY_PAYLOAD_CACHE_TTL_MS || 2500);
+  return Number.isFinite(parsed) ? Math.max(0, parsed) : 2500;
 }
 
 function threadMetadataCacheKey(thread: any, status: any): string {
@@ -192,17 +210,67 @@ export async function threadRuntimeSummary(thread: any, messages: any[] = [], op
 
 export async function threadSummaryPayload(options: ThreadSummaryOptions = {}) {
   const cacheTtlMs = Number(options.cacheTtlMs ?? threadSummaryCacheTtlMs()) || 0;
-  const threads = await listThreads();
-  const activeThreadIds = new Set(threads.map((thread: any) => String(thread?.id || "")).filter(Boolean));
-  for (const id of threadMetadataCache.keys()) {
-    if (!activeThreadIds.has(id)) threadMetadataCache.delete(id);
+  const payloadCacheTtlMs = Number(options.payloadCacheTtlMs ?? threadSummaryPayloadCacheTtlMs()) || 0;
+  const payloadCacheKey = JSON.stringify({ cacheTtlMs });
+  const now = Date.now();
+  if (
+    payloadCacheTtlMs > 0 &&
+    threadSummaryPayloadCache.cacheKey === payloadCacheKey &&
+    threadSummaryPayloadCache.payload &&
+    threadSummaryPayloadCache.expiresAt > now
+  ) {
+    return threadSummaryPayloadCache.payload;
   }
-  return {
-    generatedAt: new Date().toISOString(),
-    threads: await Promise.all(threads.map(async (thread: any) => threadRuntimeSummary(
-      thread,
-      await listThreadMessages(thread.id),
-      { cacheTtlMs },
-    ))),
-  };
+  if (
+    payloadCacheTtlMs > 0 &&
+    threadSummaryPayloadCache.cacheKey === payloadCacheKey &&
+    threadSummaryPayloadCache.inFlight
+  ) {
+    return threadSummaryPayloadCache.inFlight;
+  }
+  const computePayload = (async () => {
+    const threads = await listThreads();
+    const activeThreadIds = new Set(threads.map((thread: any) => String(thread?.id || "")).filter(Boolean));
+    for (const id of threadMetadataCache.keys()) {
+      if (!activeThreadIds.has(id)) threadMetadataCache.delete(id);
+    }
+    return {
+      generatedAt: new Date().toISOString(),
+      threads: await Promise.all(threads.map(async (thread: any) => threadRuntimeSummary(
+        thread,
+        await listThreadMessages(thread.id),
+        { cacheTtlMs },
+      ))),
+    };
+  })();
+  if (payloadCacheTtlMs > 0) {
+    threadSummaryPayloadCache = {
+      cacheKey: payloadCacheKey,
+      expiresAt: 0,
+      payload: null,
+      inFlight: computePayload,
+    };
+  }
+  try {
+    const payload = await computePayload;
+    if (payloadCacheTtlMs > 0) {
+      threadSummaryPayloadCache = {
+        cacheKey: payloadCacheKey,
+        expiresAt: Date.now() + payloadCacheTtlMs,
+        payload,
+        inFlight: null,
+      };
+    }
+    return payload;
+  } catch (error) {
+    if (threadSummaryPayloadCache.inFlight === computePayload) {
+      threadSummaryPayloadCache = {
+        cacheKey: "",
+        expiresAt: 0,
+        payload: null,
+        inFlight: null,
+      };
+    }
+    throw error;
+  }
 }

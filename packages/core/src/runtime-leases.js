@@ -18,11 +18,9 @@ import {
 const execFileAsync = promisify(execFile);
 const deliveryLocks = new Set();
 const deliveryTimers = new Map();
-const processCpuSamples = new Map();
 let runtimeSyncInFlight = null;
 const pendingInputStates = new Set(["queued", "pending_delivery", "awaiting_ack"]);
 const deliveryRetryDefaultsMs = [1000, 3000, 8000, 20_000, 60_000];
-const processClockTicks = 100;
 
 function nowIso() {
   return new Date().toISOString();
@@ -208,103 +206,6 @@ function paneResumeDirectoryPrompt(text) {
   return /Choose working directory to resume this session/i.test(body) && /Press enter to continue/i.test(body);
 }
 
-async function tmuxPaneProcessId(paneId) {
-  if (!paneId) return null;
-  const { stdout } = await execFileAsync("tmux", ["display-message", "-p", "-t", paneId, "#{pane_pid}"]);
-  const pid = Number(String(stdout || "").trim());
-  return Number.isFinite(pid) && pid > 0 ? pid : null;
-}
-
-async function processChildren(pid) {
-  const root = Number(pid);
-  if (!Number.isFinite(root) || root <= 0) return [];
-  const seen = new Set([root]);
-  const queue = [root];
-  const descendants = [];
-  while (queue.length && descendants.length < 64) {
-    const current = queue.shift();
-    const raw = await fs.readFile(`/proc/${current}/task/${current}/children`, "utf8").catch(() => "");
-    for (const child of raw.trim().split(/\s+/).filter(Boolean).map((value) => Number(value))) {
-      if (!Number.isFinite(child) || seen.has(child)) continue;
-      seen.add(child);
-      descendants.push(child);
-      queue.push(child);
-    }
-  }
-  return descendants;
-}
-
-async function processCommandLine(pid) {
-  const raw = await fs.readFile(`/proc/${pid}/cmdline`, "utf8").catch(() => "");
-  return raw.replace(/\0/g, " ").trim();
-}
-
-async function processCpuSample(pid) {
-  const stat = await fs.readFile(`/proc/${pid}/stat`, "utf8").catch(() => "");
-  const end = stat.lastIndexOf(")");
-  if (end < 0) return null;
-  const parts = stat.slice(end + 2).trim().split(/\s+/);
-  const utime = Number(parts[11] || 0);
-  const stime = Number(parts[12] || 0);
-  const startTime = Number(parts[19] || 0);
-  if (!Number.isFinite(utime) || !Number.isFinite(stime) || !Number.isFinite(startTime)) return null;
-  return {
-    key: `${pid}:${startTime}`,
-    cpuTicks: utime + stime,
-    startTime,
-    sampledAtMs: Date.now(),
-  };
-}
-
-function pruneProcessCpuSamples(now = Date.now()) {
-  for (const [key, sample] of processCpuSamples.entries()) {
-    if (now - sample.sampledAtMs > 120_000) processCpuSamples.delete(key);
-  }
-}
-
-async function processCpuPercent(pid) {
-  const sample = await processCpuSample(pid);
-  if (!sample) return 0;
-  const previous = processCpuSamples.get(sample.key);
-  processCpuSamples.set(sample.key, sample);
-  pruneProcessCpuSamples(sample.sampledAtMs);
-  if (previous && sample.sampledAtMs > previous.sampledAtMs) {
-    const elapsedSeconds = (sample.sampledAtMs - previous.sampledAtMs) / 1000;
-    const cpuSeconds = (sample.cpuTicks - previous.cpuTicks) / processClockTicks;
-    return elapsedSeconds > 0 ? Math.max(0, (cpuSeconds / elapsedSeconds) * 100) : 0;
-  }
-  const uptimeRaw = await fs.readFile("/proc/uptime", "utf8").catch(() => "");
-  const uptime = Number(uptimeRaw.split(/\s+/)[0] || 0);
-  const elapsed = uptime - sample.startTime / processClockTicks;
-  if (!Number.isFinite(elapsed) || elapsed <= 0) return 0;
-  return (sample.cpuTicks / processClockTicks / elapsed) * 100;
-}
-
-function runtimeProcessWorkingCpuPercent(env = process.env) {
-  const parsed = Number(env.ORKESTR_RUNTIME_PROCESS_WORKING_CPU_PERCENT || 5);
-  return Number.isFinite(parsed) ? Math.max(1, parsed) : 5;
-}
-
-async function paneProcessActivity(paneId, env = process.env) {
-  const panePid = await tmuxPaneProcessId(paneId).catch(() => null);
-  if (!panePid) return { processWorking: false, processCpuPercent: 0, activeCodexProcessCount: 0 };
-  const threshold = runtimeProcessWorkingCpuPercent(env);
-  let totalCpu = 0;
-  let activeCodexProcessCount = 0;
-  for (const pid of await processChildren(panePid)) {
-    const command = await processCommandLine(pid);
-    if (!/\bcodex\b/i.test(command)) continue;
-    const cpu = await processCpuPercent(pid);
-    if (cpu >= threshold) activeCodexProcessCount += 1;
-    totalCpu += cpu;
-  }
-  return {
-    processWorking: totalCpu >= threshold,
-    processCpuPercent: Math.round(totalCpu * 10) / 10,
-    activeCodexProcessCount,
-  };
-}
-
 async function activeLeaseForThread(threadId, env = process.env) {
   const leases = await listRuntimeLeases(env);
   const active = [...leases].reverse().find((lease) => lease.threadId === threadId && !lease.endedAt) || null;
@@ -364,13 +265,8 @@ export async function runtimeStatus(threadId, env = process.env) {
   const paneText = await capturePane(paneId).catch(() => "");
   const needsResumeDirectoryConfirmation = paneResumeDirectoryPrompt(paneText);
   const paneWorkingCandidate = paneWorking(paneText);
-  const processActivity = await paneProcessActivity(paneId, env).catch(() => ({
-    processWorking: false,
-    processCpuPercent: 0,
-    activeCodexProcessCount: 0,
-  }));
-  const promptReadyCandidate = !paneWorkingCandidate && !processActivity.processWorking && panePromptReady(paneText);
-  const working = paneWorkingCandidate || processActivity.processWorking || (!promptReadyCandidate && runningCount > 0);
+  const promptReadyCandidate = !paneWorkingCandidate && panePromptReady(paneText);
+  const working = paneWorkingCandidate || (!promptReadyCandidate && runningCount > 0);
   const promptReady = promptReadyCandidate && !working && !needsResumeDirectoryConfirmation;
   const recentlyStarted = Date.now() - (Date.parse(lease.startedAt || "") || Date.now()) < 20_000;
   const state = working ? "working" : promptReady ? "ready" : recentlyStarted || pendingCount > 0 ? "waking" : "ready";
@@ -385,9 +281,6 @@ export async function runtimeStatus(threadId, env = process.env) {
     promptReady,
     promptReadyStable: promptReady,
     needsResumeDirectoryConfirmation,
-    processWorking: processActivity.processWorking,
-    processCpuPercent: processActivity.processCpuPercent,
-    activeCodexProcessCount: processActivity.activeCodexProcessCount,
     working,
     foregroundWorking: working,
     typingActive: working,
