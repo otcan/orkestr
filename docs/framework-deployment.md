@@ -25,7 +25,7 @@ refreshing the server-served UI.
 ```bash
 npm run check
 npm run smoke
-npm run demo:job-search
+npm run demo:coding-agent
 ```
 
 `npm run check` performs JavaScript syntax checks, compiles the NestJS backend,
@@ -53,7 +53,7 @@ the public image.
 1. Confirm `git status --short` is clean.
 2. Run `npm run check`.
 3. Run `npm run smoke`.
-4. Run `npm run demo:job-search`.
+4. Run `npm run demo:coding-agent`.
 5. Run `docker build -t orkestr-oss:test .`.
 6. Review `README.md`, `docs/private-overlay.md`, and this file.
 7. Tag and publish only after the private overlay has been checked for leaks.

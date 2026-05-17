@@ -4,19 +4,19 @@ import { createThread } from "./threads.js";
 
 export const templates = [
   {
-    id: "job-search-assistant",
-    name: "Job Search Assistant",
-    tagline: "Checks Gmail and LinkedIn for recruiting messages and sends WhatsApp summaries.",
-    connectors: ["gmail", "linkedin", "whatsapp", "browsers", "timers"],
+    id: "coding-agent",
+    name: "Coding Agent",
+    tagline: "Runs a local Codex-backed coding thread with optional WhatsApp and virtual desktop control.",
+    connectors: ["codex", "whatsapp", "browsers", "timers"],
     defaultTimer: {
-      label: "Weekday recruiting scan",
+      label: "Daily repo check",
       cadence: "daily",
       time: "09:00",
       prompt:
-        "Check Gmail and LinkedIn for recruiting/recruiter messages. Summarize anything important and draft replies where useful. Send the summary to WhatsApp.",
+        "Inspect the configured repository for important changes, blockers, or follow-up work. Summarize the result without making changes unless explicitly asked.",
     },
     systemPrompt:
-      "You are a personal job-search assistant. Use Gmail and LinkedIn through user-owned connectors. Never send messages without explicit approval unless the user configured that behavior.",
+      "You are a local coding agent. Work inside the configured repository, explain changes clearly, and do not use private credentials or host-specific assumptions.",
   },
 ];
 

@@ -25,10 +25,55 @@ export interface SetupStatus {
     configured?: boolean;
     valid?: boolean;
   };
+  security?: SecurityStatus;
+}
+
+export interface SecurityStatus {
+  bindHost?: string;
+  bindLocal?: boolean;
+  authEnabled?: boolean;
+  authRequired?: boolean;
+  paired?: boolean;
+  sessionCount?: number;
+  challengeActive?: boolean;
+  remoteReady?: boolean;
+  warnings?: string[];
+  https?: {
+    configured?: boolean;
+    url?: string;
+  };
+  caddy?: {
+    installed?: boolean;
+    configured?: boolean;
+    version?: string;
+    error?: string;
+  };
+  tailscale?: {
+    installed?: boolean;
+    configured?: boolean;
+    version?: string;
+    error?: string;
+  };
 }
 
 export interface ConnectorConfigResponse {
   config: Record<string, string>;
+}
+
+export interface SecurityChallengeResponse {
+  ok: boolean;
+  challengeId: string;
+  expiresAt: string;
+  code?: string;
+}
+
+export interface SecurityPairResponse {
+  ok: boolean;
+  security: SecurityStatus;
+  session?: {
+    id: string;
+    expiresAt: string;
+  };
 }
 
 export interface GmailOAuthStartResponse {
@@ -80,6 +125,28 @@ export interface TimerRecord {
   promptFile?: string;
   enabled?: boolean;
   createdAt?: string;
+}
+
+export interface TimerDoctorIssue {
+  severity: string;
+  code: string;
+  message: string;
+  timerId?: string | null;
+  timerLabel?: string | null;
+  target?: string | null;
+  targetType?: string | null;
+  details?: Record<string, unknown>;
+}
+
+export interface TimerDoctorResponse {
+  ok: boolean;
+  status: string;
+  summary: string;
+  generatedAt: string;
+  storePath?: string;
+  storeExists?: boolean;
+  counts?: Record<string, number>;
+  issues: TimerDoctorIssue[];
 }
 
 export interface EventRecord {
@@ -297,6 +364,14 @@ export class ApiService {
     return this.http.get<SetupStatus>(this.api("/setup/status"));
   }
 
+  createSecurityChallenge(): Observable<SecurityChallengeResponse> {
+    return this.http.post<SecurityChallengeResponse>(this.api("/setup/security/challenge"), {});
+  }
+
+  pairSecurityBrowser(code: string): Observable<SecurityPairResponse> {
+    return this.http.post<SecurityPairResponse>(this.api("/setup/security/pair"), { code });
+  }
+
   saveConnectorConfig(id: string, body: Record<string, string>): Observable<ConnectorConfigResponse> {
     return this.http.post<ConnectorConfigResponse>(this.api(`/connectors/${encodeURIComponent(id)}/config`), body);
   }
@@ -311,6 +386,20 @@ export class ApiService {
 
   whatsappStatus(): Observable<Record<string, unknown>> {
     return this.http.get<Record<string, unknown>>(this.api("/connectors/whatsapp/status"));
+  }
+
+  startWhatsAppAccount(accountId: string): Observable<Record<string, unknown>> {
+    return this.http.post<Record<string, unknown>>(
+      this.api(`/connectors/whatsapp/bridge/accounts/${encodeURIComponent(accountId)}/start`),
+      {},
+    );
+  }
+
+  logoutWhatsAppAccount(accountId: string): Observable<Record<string, unknown>> {
+    return this.http.post<Record<string, unknown>>(
+      this.api(`/connectors/whatsapp/bridge/accounts/${encodeURIComponent(accountId)}/logout`),
+      {},
+    );
   }
 
   agentTemplates(): Observable<{ templates: AgentTemplate[] }> {
@@ -347,6 +436,10 @@ export class ApiService {
 
   timers(): Observable<{ timers: TimerRecord[] }> {
     return this.http.get<{ timers: TimerRecord[] }>(this.api("/timers"));
+  }
+
+  timerDoctor(): Observable<TimerDoctorResponse> {
+    return this.http.get<TimerDoctorResponse>(this.api("/timers/doctor"));
   }
 
   createTimer(body: Record<string, string>): Observable<{ timer: TimerRecord }> {
@@ -387,6 +480,10 @@ export class ApiService {
 
   threads(): Observable<{ threads: ThreadSummary[] }> {
     return this.http.get<{ threads: ThreadSummary[] }>(this.api("/threads"));
+  }
+
+  createThread(body: Record<string, unknown>): Observable<{ thread: ThreadSummary }> {
+    return this.http.post<{ thread: ThreadSummary }>(this.api("/threads"), body);
   }
 
   threadMessages(id: string, limit = 100): Observable<ThreadMessagesResponse> {

@@ -1,6 +1,7 @@
 import { connectorOrder, getConnectorStatuses } from "../../connectors/src/connectors.js";
 import { dataPaths } from "../../storage/src/paths.js";
 import { readOverlay } from "./overlay.js";
+import { securityStatus } from "./security.js";
 
 export { connectorOrder };
 
@@ -21,11 +22,13 @@ export async function getSetupStatus({ env = process.env, home } = {}) {
   const paths = dataPaths(env);
   const connectors = await getConnectorStatuses({ env, home });
   const overlay = await readOverlay(env);
+  const security = await securityStatus(env);
   return {
     generatedAt: new Date().toISOString(),
     home: paths.home,
     setupState: setupState(connectors),
     overlay,
+    security,
     connectors,
   };
 }

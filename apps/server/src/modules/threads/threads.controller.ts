@@ -37,22 +37,58 @@ function messageCursor(message: any, index: number): number {
   return Number(message?.cursor || 0) || index + 1;
 }
 
+const needInputPhases = new Set(["need_input", "awaiting_input", "question", "request_user_input"]);
+
+function isNeedInputMessage(message: any): boolean {
+  const role = String(message?.role || message?.kind || "assistant").trim().toLowerCase();
+  const phase = String(message?.phase || "").trim().toLowerCase();
+  return role === "assistant" && needInputPhases.has(phase) && !!String(message?.text || "").trim();
+}
+
+function latestPendingQuestion(messages: any[] = []) {
+  let userRepliedAfterQuestion = false;
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    const text = String(message?.text || "").trim();
+    if (!text) continue;
+    const role = String(message?.role || message?.kind || "").trim().toLowerCase();
+    if (role === "user") {
+      userRepliedAfterQuestion = true;
+      continue;
+    }
+    if (!isNeedInputMessage(message)) continue;
+    if (userRepliedAfterQuestion) return null;
+    const timestamp = message?.timestamp || message?.createdAt || null;
+    const eventId = String(message?.eventId || message?.id || "").trim() || null;
+    return {
+      text,
+      eventId,
+      messageId: message?.id || null,
+      cursor: messageCursor(message, index),
+      timestamp,
+      phase: message?.phase || null,
+    };
+  }
+  return null;
+}
+
 function bridgeMessage(message: any, index: number) {
   const role = String(message?.role || "assistant").trim() === "user" ? "user" : "assistant";
   const text = String(message?.text || "").trim();
   const timestamp = message?.timestamp || message?.createdAt || new Date().toISOString();
+  const phase = message?.phase || (role === "assistant" ? "final_answer" : null);
   return {
     ...message,
     cursor: messageCursor(message, index),
     timestamp,
     role,
     kind: role,
-    phase: message?.phase || (role === "assistant" ? "final_answer" : null),
+    phase,
     source: message?.source || "thread",
     stable: true,
     text,
     eventId: message?.eventId || message?.id || `${timestamp}:${index}`,
-    awaitingInputCandidate: false,
+    awaitingInputCandidate: isNeedInputMessage({ ...message, role, phase, text }),
   };
 }
 
@@ -111,6 +147,7 @@ function messagePage(thread: any, rawMessages: any[] = [], query: Record<string,
   const before = Math.max(0, Number.parseInt(String(query.before || "0"), 10) || 0);
   const requestedLimit = Math.max(0, Number.parseInt(String(query.limit || "0"), 10) || 0);
   const limit = requestedLimit ? Math.min(requestedLimit, 100) : 100;
+  const pendingQuestion = latestPendingQuestion(rawMessages);
   let messages = dedupeDisplayMessages(rawMessages.map(bridgeMessage).filter((message) => message.text));
   if (since > 0) messages = messages.filter((message) => Number(message.cursor || 0) > since);
   if (before > 0) messages = messages.filter((message) => Number(message.cursor || 0) < before);
@@ -135,7 +172,9 @@ function messagePage(thread: any, rawMessages: any[] = [], query: Record<string,
     state: status?.state || thread.state || "sleeping",
     source: "orkestr-oss",
     staleWorking: false,
-    awaitingInput: false,
+    awaitingInput: !!pendingQuestion,
+    awaitingInputEventId: pendingQuestion?.eventId || null,
+    pendingQuestion,
   };
 }
 
@@ -188,6 +227,7 @@ async function threadRuntimeSummary(thread: any, messages: any[] = []) {
   const state = status?.state || thread.state || "sleeping";
   const ready = state === "ready";
   const lastActivityAt = messages.at(-1)?.createdAt || thread.updatedAt || thread.createdAt || null;
+  const pendingQuestion = latestPendingQuestion(messages);
   const resolvedCodexThreadId = codexThreadId(codexThread);
   return {
     ...thread,
@@ -208,7 +248,9 @@ async function threadRuntimeSummary(thread: any, messages: any[] = []) {
     foregroundWorking: status?.foregroundWorking ?? state === "working",
     typingActive: status?.typingActive ?? state === "working",
     backgroundWork: status?.backgroundWork ?? false,
-    awaitingInput: false,
+    awaitingInput: !!pendingQuestion,
+    awaitingInputEventId: pendingQuestion?.eventId || null,
+    pendingQuestion,
     pendingCount: status?.pendingCount ?? 0,
     runningCount: status?.runningCount ?? 0,
     historyState: "ready",

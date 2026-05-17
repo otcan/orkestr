@@ -52,6 +52,67 @@ test("CLI lists threads from the public API", async () => {
   assert.match(stdout.text(), /thread-1/);
 });
 
+test("CLI lists timers from the public API", async () => {
+  const stdout = capture();
+  const code = await runCli(["timers"], {
+    stdout,
+    stderr: capture(),
+    fetchImpl: fakeFetch({
+      "GET /api/timers": {
+        timers: [{ id: "timer-1", label: "Daily", target: "thread-1", cadence: "daily", nextRunAt: "2026-05-15T09:00:00.000Z" }],
+      },
+    }),
+  });
+
+  assert.equal(code, 0);
+  assert.match(stdout.text(), /Daily/);
+  assert.match(stdout.text(), /thread-1/);
+});
+
+test("CLI doctors timers through the public API", async () => {
+  const stdout = capture();
+  const code = await runCli(["doctor", "timers"], {
+    stdout,
+    stderr: capture(),
+    fetchImpl: fakeFetch({
+      "GET /api/timers/doctor": {
+        ok: true,
+        status: "ok",
+        summary: "1 timer checked.",
+        storeExists: true,
+        counts: { total: 1, enabled: 1, disabled: 0, due: 0, errors: 0, warnings: 0 },
+        issues: [],
+      },
+    }),
+  });
+
+  assert.equal(code, 0);
+  assert.match(stdout.text(), /Timers: ok/);
+  assert.match(stdout.text(), /1 timer checked/);
+});
+
+test("CLI timer doctor exits nonzero for broken timers", async () => {
+  const stdout = capture();
+  const code = await runCli(["timers", "doctor"], {
+    stdout,
+    stderr: capture(),
+    fetchImpl: fakeFetch({
+      "GET /api/timers/doctor": {
+        ok: false,
+        status: "broken",
+        summary: "1 timer problem needs attention.",
+        storeExists: true,
+        counts: { total: 1, enabled: 1, disabled: 0, due: 1, errors: 1, warnings: 0 },
+        issues: [{ severity: "error", code: "missing_thread_target", timerLabel: "Broken", message: "Timer targets a thread that does not exist." }],
+      },
+    }),
+  });
+
+  assert.equal(code, 1);
+  assert.match(stdout.text(), /Timers: broken/);
+  assert.match(stdout.text(), /missing_thread_target/);
+});
+
 test("CLI sends input with Orkestr command parsing enabled", async () => {
   const stdout = capture();
   const seen = [];

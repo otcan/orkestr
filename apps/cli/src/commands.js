@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
 import { startServer } from "../../server/src/server.js";
 import { defaultApiBase, requestJson } from "./api-client.js";
-import { formatThreadTable, threadName } from "./format.js";
+import { formatThreadTable, formatTimerDoctor, formatTimerTable, threadName } from "./format.js";
 import { pickThread as defaultPickThread } from "./thread-picker.js";
 
 export async function runCli(argv = process.argv.slice(2), context = {}) {
@@ -24,6 +24,8 @@ export async function runCli(argv = process.argv.slice(2), context = {}) {
     if (global.help || command === "help") return writeHelp(ctx);
     if (command === "serve" || command.startsWith("--")) return serve(command.startsWith("--") ? global.argv : args, ctx);
     if (command === "list") return list(args, ctx);
+    if (command === "doctor") return doctorCommand(args, ctx);
+    if (command === "timers" || command === "timer") return timersCommand(args, ctx);
     if (command === "thread") return threadCommand(args, ctx);
     if (command === "worker") return workerCommand(args, ctx);
     if (command === "attach") return attach(args, ctx);
@@ -69,6 +71,51 @@ async function list(argv, ctx) {
   const threads = payload?.threads || [];
   if (argv.includes("--json")) ctx.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
   else ctx.stdout.write(`${formatThreadTable(threads)}\n`);
+  return 0;
+}
+
+async function doctorCommand(argv, ctx) {
+  const subject = positional(argv)[0] || "timers";
+  if (subject === "timers" || subject === "timer") return doctorTimersCommand(argv, ctx);
+  throw new Error("Usage: orkestr doctor [timers] [--json]");
+}
+
+async function timersCommand(argv, ctx) {
+  const subcommand = argv[0]?.startsWith("--") ? "list" : argv[0] || "list";
+  const rest = subcommand === "list" && argv[0]?.startsWith("--") ? argv : argv.slice(1);
+  if (subcommand === "list") return listTimersCommand(rest, ctx);
+  if (subcommand === "doctor") return doctorTimersCommand(rest, ctx);
+  if (subcommand === "run") return runTimerCommand(rest, ctx);
+  throw new Error("Usage: orkestr timers [list|doctor|run <timer-id>] [--json]");
+}
+
+async function listTimersCommand(argv, ctx) {
+  const json = argv.includes("--json");
+  const payload = await requestJson("/api/timers", ctx);
+  if (json) ctx.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
+  else ctx.stdout.write(`${formatTimerTable(payload?.timers || [])}\n`);
+  return 0;
+}
+
+async function doctorTimersCommand(argv, ctx) {
+  const json = argv.includes("--json");
+  const payload = await requestJson("/api/timers/doctor", ctx);
+  if (json) ctx.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
+  else ctx.stdout.write(`${formatTimerDoctor(payload)}\n`);
+  return payload?.ok === false || payload?.status === "broken" ? 1 : 0;
+}
+
+async function runTimerCommand(argv, ctx) {
+  const json = argv.includes("--json");
+  const timerId = positional(argv)[0];
+  if (!timerId) throw new Error("Usage: orkestr timers run <timer-id> [--json]");
+  const payload = await requestJson(`/api/timers/${encodeURIComponent(timerId)}/run`, {
+    ...ctx,
+    method: "POST",
+    body: {},
+  });
+  if (json) ctx.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
+  else ctx.stdout.write(`Ran timer ${timerId}\n`);
   return 0;
 }
 
@@ -197,6 +244,8 @@ function writeUsage(stream) {
   stream.write(`Usage:
   orkestr [serve] [--open] [--host 127.0.0.1] [--port 19812]
   orkestr list [--json] [--api http://127.0.0.1:19812]
+  orkestr doctor [timers] [--json]
+  orkestr timers [list|doctor|run <timer-id>] [--json]
   orkestr thread create <name> [--id id] [--cwd path] [--command command] [--executor id] [--json]
   orkestr worker create <parent-thread> [task text] [--task text] [--blank] [--label label] [--repo path] [--branch branch] [--no-wake] [--json]
   orkestr attach [thread-name-or-id] [--print] [--json]

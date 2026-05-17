@@ -1,11 +1,14 @@
 import { randomUUID } from "node:crypto";
+import fs from "node:fs/promises";
 import { dataPaths, ensureDataDirs } from "../../storage/src/paths.js";
 import { appendEvent, readJson, writeJson } from "../../storage/src/store.js";
 import { enqueueAgentMessage } from "./messages.js";
-import { enqueueThreadInput } from "./threads.js";
+import { enqueueThreadInput, listThreads } from "./threads.js";
 
 const hourMs = 60 * 60 * 1000;
 const dayMs = 24 * hourMs;
+const timerDoctorGraceMs = 2 * 60 * 1000;
+const timerCadences = new Set(["once", "daily", "weekly", "interval"]);
 
 function parseClock(time = "09:00") {
   const match = String(time || "").match(/^(\d{1,2}):(\d{2})$/);
@@ -79,7 +82,7 @@ export function normalizeStoredTimer(timer, now = new Date()) {
     id: String(timer.id || randomUUID()).trim(),
     label: String(timer.label || repeatLabel || "Recurring agent task").trim(),
     targetType: String(timer.targetType || (timer.threadId ? "thread" : "agent")).trim(),
-    target: String(timer.target || timer.threadId || timer.agentId || "job-search-assistant").trim(),
+    target: String(timer.target || timer.threadId || timer.agentId || "coding-agent").trim(),
     cadence,
     time: String(timer.time || clockFromIso(legacyDueAt || timer.runAt)).trim(),
     every,
@@ -101,6 +104,142 @@ export async function listTimers(env = process.env) {
   return timers.map((timer) => normalizeStoredTimer(timer));
 }
 
+async function fileExists(filePath) {
+  if (!filePath) return false;
+  try {
+    await fs.access(filePath);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function timerIssue(timer, severity, code, message, details = {}) {
+  return {
+    severity,
+    code,
+    message,
+    timerId: timer?.id || null,
+    timerLabel: timer?.label || null,
+    target: timer?.target || null,
+    targetType: timer?.targetType || null,
+    details,
+  };
+}
+
+function timerStatusFromIssues(issues) {
+  if (issues.some((issue) => issue.severity === "error")) return "broken";
+  if (issues.some((issue) => issue.severity === "warning")) return "warning";
+  return "ok";
+}
+
+export async function doctorTimers(env = process.env, now = new Date()) {
+  const paths = await ensureDataDirs(env);
+  const issues = [];
+  let storeExists = true;
+  try {
+    await fs.access(paths.timers);
+  } catch (error) {
+    if (error?.code === "ENOENT") {
+      storeExists = false;
+    } else {
+      issues.push(timerIssue(null, "error", "timer_store_unreadable", "Timer store cannot be read.", {
+        path: paths.timers,
+        error: error?.message || String(error),
+      }));
+    }
+  }
+
+  let timers = [];
+  try {
+    timers = await listTimers(env);
+  } catch (error) {
+    issues.push(timerIssue(null, "error", "timer_store_invalid", "Timer store is not valid JSON.", {
+      path: paths.timers,
+      error: error?.message || String(error),
+    }));
+  }
+
+  const threads = await listThreads(env).catch(() => []);
+  const threadKeys = new Set(threads.flatMap((thread) => [thread.id, thread.name, thread.bindingName].filter(Boolean).map(String)));
+  const nowMs = now.getTime();
+
+  for (const timer of timers) {
+    const enabled = timer.enabled !== false;
+    const cadence = String(timer.cadence || "").trim().toLowerCase();
+    const nextMs = Date.parse(String(timer.nextRunAt || ""));
+    if (!timerCadences.has(cadence)) {
+      issues.push(timerIssue(timer, "error", "invalid_cadence", `Timer cadence "${cadence || "missing"}" is not supported.`));
+    }
+    if (!timer.prompt && !timer.promptFile) {
+      issues.push(timerIssue(timer, "error", "missing_prompt", "Timer has neither prompt nor promptFile."));
+    }
+    if (timer.promptFile && !(await fileExists(timer.promptFile))) {
+      issues.push(timerIssue(timer, "error", "missing_prompt_file", "Timer promptFile does not exist.", {
+        promptFile: timer.promptFile,
+      }));
+    }
+    if (String(timer.targetType || "").toLowerCase() === "thread" && !threadKeys.has(String(timer.target || ""))) {
+      issues.push(timerIssue(timer, "error", "missing_thread_target", "Timer targets a thread that does not exist."));
+    }
+    if (enabled && !timer.nextRunAt) {
+      issues.push(timerIssue(timer, "error", "missing_next_run", "Enabled timer has no nextRunAt."));
+    } else if (enabled && Number.isNaN(nextMs)) {
+      issues.push(timerIssue(timer, "error", "invalid_next_run", "Enabled timer nextRunAt is not a valid timestamp.", {
+        nextRunAt: timer.nextRunAt,
+      }));
+    } else if (enabled && nextMs + timerDoctorGraceMs < nowMs) {
+      issues.push(timerIssue(timer, "error", "timer_overdue", "Enabled timer is overdue; the timer loop may not be running.", {
+        nextRunAt: timer.nextRunAt,
+        overdueMs: nowMs - nextMs,
+      }));
+    }
+    if (timer.lastError) {
+      issues.push(timerIssue(timer, "warning", "last_timer_error", "Timer recorded a previous delivery error.", {
+        lastError: timer.lastError,
+        lastErrorAt: timer.lastErrorAt || null,
+        failureCount: Number(timer.failureCount || 0) || 0,
+      }));
+    }
+  }
+
+  if (!storeExists && !issues.length) {
+    issues.push(timerIssue(null, "warning", "timer_store_missing", "Timer store has not been initialized yet.", {
+      path: paths.timers,
+    }));
+  }
+
+  const enabledTimers = timers.filter((timer) => timer.enabled !== false);
+  const dueTimers = enabledTimers.filter((timer) => {
+    const nextMs = Date.parse(String(timer.nextRunAt || ""));
+    return Number.isFinite(nextMs) && nextMs <= nowMs;
+  });
+  const status = timerStatusFromIssues(issues);
+  const counts = {
+    total: timers.length,
+    enabled: enabledTimers.length,
+    disabled: timers.length - enabledTimers.length,
+    due: dueTimers.length,
+    errors: issues.filter((issue) => issue.severity === "error").length,
+    warnings: issues.filter((issue) => issue.severity === "warning").length,
+  };
+  const summary = status === "broken"
+    ? `${counts.errors} timer problem${counts.errors === 1 ? "" : "s"} need attention.`
+    : status === "warning"
+      ? `${counts.warnings} timer warning${counts.warnings === 1 ? "" : "s"} found.`
+      : `${counts.total} timer${counts.total === 1 ? "" : "s"} checked.`;
+  return {
+    ok: status !== "broken",
+    status,
+    summary,
+    generatedAt: now.toISOString(),
+    storePath: paths.timers,
+    storeExists,
+    counts,
+    issues,
+  };
+}
+
 export async function createTimer(input, env = process.env) {
   const paths = await ensureDataDirs(env);
   const timers = await listTimers(env);
@@ -115,7 +254,7 @@ export async function createTimer(input, env = process.env) {
     id: randomUUID(),
     label: String(input.label || "Recurring agent task").trim(),
     targetType: String(input.targetType || (input.threadId ? "thread" : "agent")).trim(),
-    target: String(input.target || input.threadId || input.agentId || "job-search-assistant").trim(),
+    target: String(input.target || input.threadId || input.agentId || "coding-agent").trim(),
     cadence: String(input.cadence || "daily").trim().toLowerCase(),
     time: String(input.time || "09:00").trim(),
     every: String(input.every || "").trim() || null,

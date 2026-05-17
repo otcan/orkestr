@@ -1,9 +1,20 @@
 import { Component, EventEmitter, OnDestroy, OnInit, Output, inject } from "@angular/core";
 import { FormsModule } from "@angular/forms";
 import { firstValueFrom } from "rxjs";
-import { ApiService, ConnectorStatus, SetupStatus } from "./api.service";
+import { ApiService, ConnectorStatus, SetupStatus, ThreadSummary } from "./api.service";
 
-type OnboardingStep = "openai" | "codex" | "gmail" | "linkedin" | "whatsapp";
+type ConnectorStep = "openai" | "codex" | "gmail" | "linkedin" | "whatsapp" | "browsers";
+type OnboardingStep = "goal" | "system" | "security" | ConnectorStep | "finish";
+type OnboardingGoalId = "whatsapp-codex" | "virtual-desktop" | "inbox-summary";
+
+interface OnboardingGoal {
+  id: OnboardingGoalId;
+  label: string;
+  eyebrow: string;
+  summary: string;
+  recommended?: boolean;
+  requiredSteps: ConnectorStep[];
+}
 
 @Component({
   selector: "ork-onboarding-page",
@@ -13,6 +24,7 @@ type OnboardingStep = "openai" | "codex" | "gmail" | "linkedin" | "whatsapp";
 })
 export class OnboardingPageComponent implements OnInit, OnDestroy {
   private readonly api = inject(ApiService);
+  private readonly storageKey = "orkestr:onboarding";
   private poller?: ReturnType<typeof setInterval>;
 
   @Output() skip = new EventEmitter<void>();
@@ -23,26 +35,62 @@ export class OnboardingPageComponent implements OnInit, OnDestroy {
   error = "";
   notice = "";
   oauthUrl = "";
-  activeStep: OnboardingStep = "openai";
+  activeStep: OnboardingStep = "goal";
+  selectedGoal: OnboardingGoalId = "whatsapp-codex";
+  firstThread: ThreadSummary | null = null;
+  whatsappChatId = "";
+  whatsappChatName = "";
+  testMessage = "Hello from Orkestr onboarding.";
+  securityPairingCode = "";
 
   openaiApiKey = "";
   gmailClientId = "";
   gmailClientSecret = "";
   gmailRedirectUri = "http://127.0.0.1:19812/oauth/gmail/callback";
-  whatsappBridgeUrl = "http://127.0.0.1:8787";
-  whatsappApiToken = "";
   private formHydrated = false;
   private stepInitialized = false;
 
-  readonly steps: Array<{ id: OnboardingStep; label: string; eyebrow: string }> = [
+  readonly whatsappAccounts = [
+    { id: "account-1", label: "WhatsApp 1" },
+    { id: "account-2", label: "WhatsApp 2" },
+  ];
+
+  readonly goals: OnboardingGoal[] = [
+    {
+      id: "whatsapp-codex",
+      label: "WhatsApp Codex worker",
+      eyebrow: "Recommended",
+      summary: "Control a local Codex worker from WhatsApp.",
+      recommended: true,
+      requiredSteps: ["codex", "whatsapp"],
+    },
+    {
+      id: "virtual-desktop",
+      label: "Virtual Desktop Generation",
+      eyebrow: "Browser work",
+      summary: "Create a local browser desktop that agents can use for web tasks.",
+      requiredSteps: ["codex", "browsers", "whatsapp"],
+    },
+    {
+      id: "inbox-summary",
+      label: "Inbox summary",
+      eyebrow: "Daily brief",
+      summary: "Read Gmail and send a scheduled WhatsApp digest.",
+      requiredSteps: ["openai", "gmail", "whatsapp"],
+    },
+  ];
+
+  readonly connectorSteps: Array<{ id: ConnectorStep; label: string; eyebrow: string }> = [
     { id: "openai", label: "OpenAI", eyebrow: "Model access" },
     { id: "codex", label: "Codex", eyebrow: "Local agent" },
     { id: "gmail", label: "Gmail", eyebrow: "Inbox" },
     { id: "linkedin", label: "LinkedIn", eyebrow: "Browser" },
     { id: "whatsapp", label: "WhatsApp", eyebrow: "Messages" },
+    { id: "browsers", label: "Virtual Desktop", eyebrow: "Browser runtime" },
   ];
 
   ngOnInit(): void {
+    this.restoreProgress();
     void this.load();
     this.poller = setInterval(() => void this.load(false), 5000);
   }
@@ -57,7 +105,7 @@ export class OnboardingPageComponent implements OnInit, OnDestroy {
       const setup = await firstValueFrom(this.api.setupStatus());
       this.setup = setup;
       this.hydrateForms(setup);
-      if (!this.stepInitialized || this.stepDone(this.activeStep)) {
+      if (!this.stepInitialized) {
         this.activeStep = this.firstOpenStep();
         this.stepInitialized = true;
       }
@@ -109,24 +157,19 @@ export class OnboardingPageComponent implements OnInit, OnDestroy {
   }
 
   async prepareLinkedIn(): Promise<void> {
-    await this.browserAction("prepare", "LinkedIn browser profile prepared.");
+    await this.browserAction("linkedin", "prepare", "LinkedIn browser profile prepared.");
   }
 
   async openLinkedIn(): Promise<void> {
-    await this.browserAction("start", "LinkedIn browser requested.");
+    await this.browserAction("linkedin", "start", "LinkedIn browser requested.");
   }
 
-  async saveWhatsApp(): Promise<void> {
-    const bridgeUrl = this.whatsappBridgeUrl.trim();
-    if (!bridgeUrl) {
-      this.error = "WhatsApp needs a bridge URL.";
-      return;
-    }
-    const body: Record<string, string> = { bridgeUrl };
-    const apiToken = this.whatsappApiToken.trim();
-    if (apiToken) body["apiToken"] = apiToken;
-    await this.saveConnector("whatsapp", body, "WhatsApp bridge settings saved.");
-    this.whatsappApiToken = "";
+  async prepareVirtualDesktop(): Promise<void> {
+    await this.browserAction("desktop", "prepare", "Virtual desktop profile prepared.");
+  }
+
+  async openVirtualDesktop(): Promise<void> {
+    await this.browserAction("desktop", "start", "Virtual desktop requested.");
   }
 
   connector(id: string): ConnectorStatus | null {
@@ -150,7 +193,27 @@ export class OnboardingPageComponent implements OnInit, OnDestroy {
     return "idle";
   }
 
+  stepStateLabel(id: OnboardingStep): string {
+    if (id === "goal") return this.selectedGoal ? "selected" : "choose";
+    if (id === "system") return this.setup ? "checked" : "checking";
+    if (id === "security") return this.securityStepLabel();
+    if (id === "finish") return this.goalRequiredSteps().every((step) => this.stepDone(step)) ? "ready" : "review";
+    return this.stateLabel(id);
+  }
+
+  stepStateClass(id: OnboardingStep): string {
+    if (id === "goal") return this.selectedGoal ? "ready" : "idle";
+    if (id === "system") return this.setup ? "ready" : "idle";
+    if (id === "security") return this.securityStepClass();
+    if (id === "finish") return this.goalRequiredSteps().every((step) => this.stepDone(step)) ? "ready" : "partial";
+    return this.stateClass(id);
+  }
+
   stepDone(id: OnboardingStep): boolean {
+    if (id === "goal") return Boolean(this.selectedGoal);
+    if (id === "system") return Boolean(this.setup);
+    if (id === "security") return this.securityDone();
+    if (id === "finish") return this.goalRequiredSteps().every((step) => this.stepDone(step));
     const state = this.connector(id)?.state;
     return state === "connected" || state === "partial";
   }
@@ -159,17 +222,361 @@ export class OnboardingPageComponent implements OnInit, OnDestroy {
     return this.setup?.setupState === "ready";
   }
 
-  qrUrl(): string {
-    return String(this.connector("whatsapp")?.details?.["qrUrl"] || "");
+  activeStepIndex(): number {
+    return Math.max(0, this.activeSteps().findIndex((step) => step.id === this.activeStep));
   }
 
-  qrAvailable(): boolean {
-    return Boolean(this.qrUrl());
+  activeStepLabel(): string {
+    return this.activeSteps()[this.activeStepIndex()]?.label || "";
+  }
+
+  progressPercent(): number {
+    return ((this.activeStepIndex() + 1) / this.activeSteps().length) * 100;
+  }
+
+  completedStepCount(): number {
+    return this.activeSteps().filter((step) => this.stepDone(step.id)).length;
+  }
+
+  isFirstStep(): boolean {
+    return this.activeStepIndex() === 0;
+  }
+
+  isLastStep(): boolean {
+    return this.activeStepIndex() === this.activeSteps().length - 1;
+  }
+
+  activeSteps(): Array<{ id: OnboardingStep; label: string; eyebrow: string }> {
+    const byId = Object.fromEntries(this.connectorSteps.map((step) => [step.id, step]));
+    return [
+      { id: "goal", label: "Choose a goal", eyebrow: "Start here" },
+      { id: "system", label: "System check", eyebrow: "Local machine" },
+      { id: "security", label: "Secure access", eyebrow: "Remote safety" },
+      ...this.goalRequiredSteps().map((id) => byId[id]),
+      { id: "finish", label: "Ready to run", eyebrow: "First loop" },
+    ];
+  }
+
+  activeGoal(): OnboardingGoal {
+    return this.goals.find((goal) => goal.id === this.selectedGoal) || this.goals[0];
+  }
+
+  goalRequiredSteps(): ConnectorStep[] {
+    return this.activeGoal().requiredSteps;
+  }
+
+  selectGoal(goalId: OnboardingGoalId): void {
+    this.selectedGoal = goalId;
+    if (!this.activeSteps().some((step) => step.id === this.activeStep)) this.activeStep = "goal";
+    this.persistProgress();
+  }
+
+  systemChecks(): Array<{ label: string; state: string; summary: string; className: string }> {
+    return [
+      {
+        label: "Local home",
+        state: this.setup?.home ? "ready" : "checking",
+        summary: this.setup?.home || "Waiting for Orkestr home",
+        className: this.setup?.home ? "ready" : "idle",
+      },
+      {
+        label: "Codex CLI",
+        state: this.stateLabel("codex"),
+        summary: this.connector("codex")?.summary || "Checking Codex",
+        className: this.stateClass("codex"),
+      },
+      {
+        label: "Chrome browser",
+        state: this.stateLabel("browsers"),
+        summary: this.connector("browsers")?.summary || "Checking browser runtime",
+        className: this.stateClass("browsers"),
+      },
+      {
+        label: "WhatsApp bridge",
+        state: this.stateLabel("whatsapp"),
+        summary: this.connector("whatsapp")?.summary || "Checking local bridge",
+        className: this.stateClass("whatsapp"),
+      },
+    ];
+  }
+
+  securityChecks(): Array<{ label: string; state: string; summary: string; className: string }> {
+    const security = this.setup?.security || {};
+    return [
+      {
+        label: "Bind address",
+        state: security.bindLocal ? "local" : "remote",
+        summary: security.bindLocal ? `Bound to ${security.bindHost || "127.0.0.1"}` : `Bound to ${security.bindHost || "non-local address"}`,
+        className: security.bindLocal ? "ready" : "bad",
+      },
+      {
+        label: "Caddy",
+        state: security.caddy?.installed ? "installed" : "missing",
+        summary: security.caddy?.version || security.caddy?.error || "Install Caddy before exposing Orkestr remotely",
+        className: security.caddy?.installed ? "ready" : "idle",
+      },
+      {
+        label: "Tailscale HTTPS",
+        state: security.https?.configured ? "configured" : security.tailscale?.installed ? "available" : "missing",
+        summary: security.https?.url || security.tailscale?.version || security.tailscale?.error || "Use Tailscale and HTTPS for remote access",
+        className: security.https?.configured ? "ready" : security.tailscale?.installed ? "partial" : "idle",
+      },
+      {
+        label: "Browser pairing",
+        state: security.paired ? "paired" : security.authEnabled ? "required" : "optional",
+        summary: security.paired ? `${security.sessionCount || 1} paired browser session` : "Pair this browser before enabling remote access",
+        className: security.paired ? "ready" : security.authEnabled ? "partial" : "idle",
+      },
+    ];
+  }
+
+  securityWarnings(): string[] {
+    return this.setup?.security?.warnings || [];
+  }
+
+  securityDone(): boolean {
+    const security = this.setup?.security;
+    if (!security) return false;
+    return Boolean(security.remoteReady || security.bindLocal);
+  }
+
+  securityStepLabel(): string {
+    const security = this.setup?.security;
+    if (!security) return "checking";
+    if (security.remoteReady) return "ready";
+    if (security.authEnabled && !security.paired) return "pair browser";
+    if (!security.bindLocal) return "review";
+    return "local";
+  }
+
+  securityStepClass(): string {
+    const security = this.setup?.security;
+    if (!security) return "idle";
+    if (security.remoteReady || security.bindLocal) return "ready";
+    if (security.authEnabled || security.https?.configured || security.caddy?.installed) return "partial";
+    return "bad";
+  }
+
+  async createSecurityChallenge(): Promise<void> {
+    this.busy = true;
+    try {
+      const result = await firstValueFrom(this.api.createSecurityChallenge());
+      if (result.code) this.securityPairingCode = result.code;
+      this.notice = result.code ? "Pairing code generated for this browser." : "Pairing code generated. Check the Orkestr server logs on the host.";
+      this.error = "";
+      await this.load(false);
+    } catch (error) {
+      this.error = this.errorText(error);
+    } finally {
+      this.busy = false;
+    }
+  }
+
+  async pairSecurityBrowser(): Promise<void> {
+    const code = this.securityPairingCode.trim();
+    if (!code) {
+      this.error = "Enter the browser pairing code.";
+      return;
+    }
+    this.busy = true;
+    try {
+      await firstValueFrom(this.api.pairSecurityBrowser(code));
+      this.securityPairingCode = "";
+      this.notice = "This browser is paired.";
+      this.error = "";
+      await this.load(false);
+    } catch (error) {
+      this.error = this.errorText(error);
+    } finally {
+      this.busy = false;
+    }
+  }
+
+  whatsappAccount(id: string): Record<string, unknown> {
+    const accounts = this.connector("whatsapp")?.details?.["accounts"];
+    if (!Array.isArray(accounts)) return {};
+    return (accounts as Array<Record<string, unknown>>).find((account) => String(account["accountId"]) === id) || {};
+  }
+
+  whatsappAccountState(id: string): string {
+    return String(this.whatsappAccount(id)["state"] || "idle").replace(/_/g, " ");
+  }
+
+  whatsappAccountClass(id: string): string {
+    const state = String(this.whatsappAccount(id)["state"] || "").toLowerCase();
+    if (state === "ready") return "ready";
+    if (["qr_needed", "starting", "authenticated"].includes(state)) return "partial";
+    if (["failed", "auth_failure", "dependency_missing"].includes(state)) return "bad";
+    return "idle";
+  }
+
+  whatsappAccountError(id: string): string {
+    return String(this.whatsappAccount(id)["error"] || "");
+  }
+
+  whatsappQrUrl(id: string): string {
+    const account = this.whatsappAccount(id);
+    const url = String(account["qrUrl"] || "");
+    const updatedAt = String(account["updatedAt"] || "");
+    if (!url || !updatedAt) return url;
+    return `${url}${url.includes("?") ? "&" : "?"}v=${encodeURIComponent(updatedAt)}`;
+  }
+
+  whatsappQrAvailable(id: string): boolean {
+    return Boolean(this.whatsappQrUrl(id));
+  }
+
+  async startWhatsApp(accountId: string): Promise<void> {
+    this.busy = true;
+    try {
+      await firstValueFrom(this.api.saveConnectorConfig("whatsapp", { bridgeMode: "local", maxAccounts: "2" }));
+      await firstValueFrom(this.api.startWhatsAppAccount(accountId));
+      this.notice = `${this.whatsappAccountLabel(accountId)} is starting.`;
+      this.error = "";
+      await this.load(false);
+    } catch (error) {
+      this.error = this.errorText(error);
+    } finally {
+      this.busy = false;
+    }
+  }
+
+  async logoutWhatsApp(accountId: string): Promise<void> {
+    this.busy = true;
+    try {
+      await firstValueFrom(this.api.logoutWhatsAppAccount(accountId));
+      this.notice = `${this.whatsappAccountLabel(accountId)} disconnected.`;
+      this.error = "";
+      await this.load(false);
+    } catch (error) {
+      this.error = this.errorText(error);
+    } finally {
+      this.busy = false;
+    }
+  }
+
+  async createFirstThread(): Promise<void> {
+    this.busy = true;
+    try {
+      const thread = await this.ensureFirstThread();
+      this.notice = `${thread.name || thread.id} is ready.`;
+      this.error = "";
+      await this.load(false);
+    } catch (error) {
+      this.error = this.errorText(error);
+    } finally {
+      this.busy = false;
+    }
+  }
+
+  async prepareFirstLoop(): Promise<void> {
+    this.busy = true;
+    try {
+      const thread = await this.ensureFirstThread();
+      const actions = ["thread"];
+      if (this.goalRequiredSteps().includes("browsers")) {
+        await firstValueFrom(this.api.browserAction("desktop", "prepare"));
+        actions.push("desktop");
+      }
+      if (this.goalRequiredSteps().includes("whatsapp")) {
+        await firstValueFrom(this.api.saveConnectorConfig("whatsapp", { bridgeMode: "local", maxAccounts: "2" }));
+        await firstValueFrom(this.api.startWhatsAppAccount("account-1"));
+        actions.push("WhatsApp 1");
+      }
+      this.notice = `${thread.name || thread.id} first loop prepared: ${actions.join(", ")}.`;
+      this.error = "";
+      await this.load(false);
+    } catch (error) {
+      this.error = this.errorText(error);
+    } finally {
+      this.busy = false;
+    }
+  }
+
+  async bindFirstThread(): Promise<void> {
+    const chatId = this.whatsappChatId.trim();
+    if (!chatId) {
+      this.error = "Enter a WhatsApp chat ID before binding.";
+      return;
+    }
+    this.busy = true;
+    try {
+      const thread = await this.ensureFirstThread();
+      const result = await firstValueFrom(
+        this.api.updateThreadBinding(thread.id, {
+          connector: "whatsapp",
+          chatId,
+          displayName: this.whatsappChatName.trim() || this.firstThreadName(),
+          enabled: true,
+          allowOtherPeople: true,
+          mirrorToWhatsApp: true,
+          outboundAccountId: "account-1",
+          replyPrefix: "orkestr:",
+        }),
+      );
+      this.firstThread = result.thread;
+      this.notice = `${this.firstThread.name || this.firstThread.id} is bound to WhatsApp.`;
+      this.error = "";
+      await this.load(false);
+    } catch (error) {
+      this.error = this.errorText(error);
+    } finally {
+      this.busy = false;
+    }
+  }
+
+  async sendFirstTestMessage(): Promise<void> {
+    const text = this.testMessage.trim();
+    if (!text) {
+      this.error = "Enter a test message before sending.";
+      return;
+    }
+    this.busy = true;
+    try {
+      const thread = await this.ensureFirstThread();
+      await firstValueFrom(this.api.sendThreadInput(thread.id, text));
+      this.notice = `Queued a test message for ${thread.name || thread.id}.`;
+      this.error = "";
+      await this.load(false);
+    } catch (error) {
+      this.error = this.errorText(error);
+    } finally {
+      this.busy = false;
+    }
+  }
+
+  firstThreadName(): string {
+    return `${this.activeGoal().label}`;
+  }
+
+  firstThreadId(): string {
+    return `onboarding-${this.selectedGoal}`;
+  }
+
+  firstThreadBindingSummary(): string {
+    const binding = this.firstThread?.binding;
+    if (!binding?.chatId) return "No WhatsApp chat bound yet.";
+    return `${binding.displayName || this.firstThread?.name || this.firstThread?.id} -> ${binding.chatId}`;
   }
 
   selectStep(id: OnboardingStep): void {
+    if (!this.activeSteps().some((step) => step.id === id)) return;
     this.activeStep = id;
     this.stepInitialized = true;
+    this.persistProgress();
+  }
+
+  previousStep(): void {
+    const index = this.activeStepIndex();
+    const steps = this.activeSteps();
+    if (index > 0) this.selectStep(steps[index - 1].id);
+  }
+
+  nextStep(): void {
+    const index = this.activeStepIndex();
+    const steps = this.activeSteps();
+    if (index < steps.length - 1) this.selectStep(steps[index + 1].id);
+    else this.openApp();
   }
 
   openApp(): void {
@@ -191,10 +598,10 @@ export class OnboardingPageComponent implements OnInit, OnDestroy {
     }
   }
 
-  private async browserAction(action: string, message: string): Promise<void> {
+  private async browserAction(slug: string, action: string, message: string): Promise<void> {
     this.busy = true;
     try {
-      await firstValueFrom(this.api.browserAction("linkedin", action));
+      await firstValueFrom(this.api.browserAction(slug, action));
       this.notice = message;
       this.error = "";
       await this.load(false);
@@ -205,19 +612,69 @@ export class OnboardingPageComponent implements OnInit, OnDestroy {
     }
   }
 
+  private async ensureFirstThread(): Promise<ThreadSummary> {
+    const response = await firstValueFrom(
+      this.api.createThread({
+        id: this.firstThreadId(),
+        name: this.firstThreadName(),
+        title: this.firstThreadName(),
+        bindingName: this.firstThreadName(),
+        wakePolicy: "wake-on-message",
+        executorId: "codex",
+        codexMode: "code",
+        desiredCodexMode: "code",
+      }),
+    );
+    this.firstThread = response.thread;
+    return response.thread;
+  }
+
   private hydrateForms(setup: SetupStatus): void {
     if (this.formHydrated) return;
     const config = setup.config || {};
     const gmail = config["gmail"] || {};
-    const whatsapp = config["whatsapp"] || {};
     if (!this.gmailClientId && gmail["clientId"]) this.gmailClientId = String(gmail["clientId"]);
     if (gmail["redirectUri"]) this.gmailRedirectUri = String(gmail["redirectUri"]);
-    if (whatsapp["bridgeUrl"]) this.whatsappBridgeUrl = String(whatsapp["bridgeUrl"]);
     this.formHydrated = true;
   }
 
+  private whatsappAccountLabel(accountId: string): string {
+    return this.whatsappAccounts.find((account) => account.id === accountId)?.label || accountId;
+  }
+
   private firstOpenStep(): OnboardingStep {
-    return this.steps.find((step) => !this.stepDone(step.id))?.id || this.activeStep || "openai";
+    const steps = this.activeSteps();
+    const storedStep = steps.find((step) => step.id === this.activeStep)?.id;
+    return steps.find((step) => !this.stepDone(step.id))?.id || storedStep || "goal";
+  }
+
+  private restoreProgress(): void {
+    try {
+      const raw = globalThis.localStorage?.getItem(this.storageKey);
+      if (!raw) return;
+      const saved = JSON.parse(raw) as { goal?: OnboardingGoalId; activeStep?: OnboardingStep };
+      if (saved.goal && this.goals.some((goal) => goal.id === saved.goal)) this.selectedGoal = saved.goal;
+      if (saved.activeStep && this.activeSteps().some((step) => step.id === saved.activeStep)) {
+        this.activeStep = saved.activeStep;
+        this.stepInitialized = true;
+      }
+    } catch {
+      // Ignore corrupt browser-local onboarding state.
+    }
+  }
+
+  private persistProgress(): void {
+    try {
+      globalThis.localStorage?.setItem(
+        this.storageKey,
+        JSON.stringify({
+          goal: this.selectedGoal,
+          activeStep: this.activeStep,
+        }),
+      );
+    } catch {
+      // Storage is optional; onboarding still works without it.
+    }
   }
 
   private errorText(error: unknown): string {

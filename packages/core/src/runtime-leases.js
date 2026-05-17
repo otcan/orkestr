@@ -729,6 +729,52 @@ function collectMessageText(content = []) {
     .trim();
 }
 
+function optionLabel(index) {
+  const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+  return alphabet[index] || String(index + 1);
+}
+
+function parseJsonObject(value) {
+  if (!value || typeof value !== "string") return null;
+  try {
+    const parsed = JSON.parse(value);
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function formatRequestUserInput(argumentsText) {
+  const args = parseJsonObject(argumentsText);
+  const questions = Array.isArray(args?.questions) ? args.questions : [];
+  const sections = [];
+  for (const [questionIndex, rawQuestion] of questions.entries()) {
+    if (!rawQuestion || typeof rawQuestion !== "object") continue;
+    const header = String(rawQuestion.header || rawQuestion.id || `Question ${questionIndex + 1}`).trim();
+    const question = String(rawQuestion.question || "").trim();
+    if (!question) continue;
+    const lines = [`${questionIndex + 1}. ${header}: ${question}`];
+    const options = Array.isArray(rawQuestion.options) ? rawQuestion.options : [];
+    for (const [optionIndex, rawOption] of options.entries()) {
+      if (!rawOption || typeof rawOption !== "object") continue;
+      const label = String(rawOption.label || "").trim();
+      const description = String(rawOption.description || "").trim();
+      if (!label && !description) continue;
+      const optionText = description ? `${label}: ${description}` : label;
+      lines.push(`   ${optionLabel(optionIndex)}. ${optionText}`);
+    }
+    sections.push(lines.join("\n"));
+  }
+  if (!sections.length) return "";
+  return [
+    "Codex needs input to continue:",
+    "",
+    sections.join("\n\n"),
+    "",
+    "Reply with your choices or a short free-form answer.",
+  ].join("\n").trim();
+}
+
 function parseAssistantRolloutMessages(body, threadId, baseOffset = 0) {
   const messages = [];
   const keyIndexes = new Map();
@@ -754,6 +800,9 @@ function parseAssistantRolloutMessages(body, threadId, baseOffset = 0) {
     } else if (parsed?.type === "event_msg" && parsed.payload?.type === "item_completed" && parsed.payload?.item?.type === "Plan") {
       text = String(parsed.payload.item.text || "").trim();
       phase = "plan";
+    } else if (parsed?.type === "response_item" && parsed.payload?.type === "function_call" && parsed.payload?.name === "request_user_input") {
+      text = formatRequestUserInput(parsed.payload.arguments);
+      phase = "need_input";
     }
     if (!text) continue;
     const timestamp = parsed.timestamp || nowIso();

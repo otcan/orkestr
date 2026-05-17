@@ -11,17 +11,17 @@
   },
   "agents": [
     {
-      "id": "job-search-assistant",
-      "name": "Job Search Assistant"
+      "id": "coding-agent",
+      "name": "Coding Agent"
     }
   ],
   "timers": [
     {
-      "label": "Example recruiting scan",
-      "target": "job-search-assistant",
+      "label": "Example repo check",
+      "target": "coding-agent",
       "cadence": "daily",
       "time": "09:00",
-      "prompt": "Check connected inboxes for recruiting messages and summarize important items."
+      "prompt": "Inspect the configured repository for blockers and summarize important follow-up work."
     }
   ]
 }

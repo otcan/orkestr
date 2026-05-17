@@ -8,11 +8,10 @@ import { enqueueAgentMessage, listAgentMessages } from "../packages/core/src/mes
 test("agent messages are queued and persisted", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-messages-"));
   const env = { ORKESTR_HOME: home };
-  const message = await enqueueAgentMessage("job-search-assistant", { text: "Check inbox" }, env);
-  const messages = await listAgentMessages("job-search-assistant", env);
+  const message = await enqueueAgentMessage("coding-agent", { text: "Check repo" }, env);
+  const messages = await listAgentMessages("coding-agent", env);
 
   assert.equal(messages.length, 1);
   assert.equal(messages[0].id, message.id);
   assert.equal(messages[0].state, "queued");
 });
-

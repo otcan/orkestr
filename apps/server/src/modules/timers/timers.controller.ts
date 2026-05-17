@@ -1,11 +1,16 @@
 import { Body, Controller, Delete, Get, HttpCode, Param, Post } from "@nestjs/common";
-import { createTimer, deleteTimer, listTimers, runTimerNow } from "../../../../../packages/core/src/timers.js";
+import { createTimer, deleteTimer, doctorTimers, listTimers, runTimerNow } from "../../../../../packages/core/src/timers.js";
 
 @Controller("api/timers")
 export class TimersController {
   @Get()
   async list() {
     return { timers: await listTimers() };
+  }
+
+  @Get("doctor")
+  async doctor() {
+    return doctorTimers();
   }
 
   @Post()

@@ -26,15 +26,15 @@ test("server exposes health, readiness, version, and agent message APIs", async 
     const health = await request(baseUrl, "/api/health");
     const ready = await request(baseUrl, "/api/ready");
     const version = await request(baseUrl, "/api/version");
-    const queued = await request(baseUrl, "/api/agents/job-search-assistant/messages", {
+    const queued = await request(baseUrl, "/api/agents/coding-agent/messages", {
       method: "POST",
       body: JSON.stringify({ text: "hello" }),
     });
-    const execution = await request(baseUrl, "/api/agents/job-search-assistant/run-next", {
+    const execution = await request(baseUrl, "/api/agents/coding-agent/run-next", {
       method: "POST",
       body: JSON.stringify({ executorId: "noop" }),
     });
-    const listed = await request(baseUrl, "/api/agents/job-search-assistant/messages");
+    const listed = await request(baseUrl, "/api/agents/coding-agent/messages");
     const system = await request(baseUrl, "/api/system/summary");
     const processes = await request(baseUrl, "/api/system/processes?sort=cpu");
     const browsers = await request(baseUrl, "/api/browsers");

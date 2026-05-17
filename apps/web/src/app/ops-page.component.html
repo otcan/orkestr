@@ -64,6 +64,23 @@
   }
 
   @if (toolsView === "timers") {
+    <div class="ops-grid">
+      <article class="ops-card" [class.critical]="opsTimerDoctor?.status !== undefined && opsTimerDoctor?.status !== 'ok'">
+        <h4>Timer Doctor</h4>
+        <p>{{ opsTimerDoctor?.status || "unknown" }}</p>
+        <small>{{ opsTimerDoctor?.summary || "No timer diagnostic loaded." }}</small>
+      </article>
+      <article class="ops-card">
+        <h4>Enabled</h4>
+        <p>{{ objectPath(opsTimerDoctor, 'counts.enabled') || '0' }}</p>
+        <small>{{ objectPath(opsTimerDoctor, 'counts.disabled') || '0' }} disabled · {{ objectPath(opsTimerDoctor, 'counts.due') || '0' }} due</small>
+      </article>
+      <article class="ops-card" [class.critical]="objectPath(opsTimerDoctor, 'counts.errors') !== '0' && objectPath(opsTimerDoctor, 'counts.errors') !== ''">
+        <h4>Issues</h4>
+        <p>{{ objectPath(opsTimerDoctor, 'counts.errors') || '0' }}</p>
+        <small>{{ objectPath(opsTimerDoctor, 'counts.warnings') || '0' }} warnings</small>
+      </article>
+    </div>
     <div class="ops-columns">
       <section>
         <h4>Global Timers</h4>
@@ -76,6 +93,20 @@
             </article>
           } @empty {
             <p class="empty">No global timers loaded.</p>
+          }
+        </div>
+      </section>
+      <section>
+        <h4>Doctor Findings</h4>
+        <div class="compact-list">
+          @for (issue of opsTimerDoctor?.issues || []; track issue.timerId || issue.code || issue.message) {
+            <article class="compact-row">
+              <strong>{{ issue.timerLabel || issue.timerId || "Timer store" }}</strong>
+              <span>{{ issue.severity }} · {{ issue.code }}</span>
+              <p>{{ issue.message }}</p>
+            </article>
+          } @empty {
+            <p class="empty">No timer findings.</p>
           }
         </div>
       </section>

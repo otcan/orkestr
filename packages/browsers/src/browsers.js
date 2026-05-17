@@ -8,6 +8,12 @@ const execFileAsync = promisify(execFile);
 
 const browserCatalog = [
   {
+    slug: "desktop",
+    label: "Virtual Desktop",
+    purpose: "General-purpose local browser desktop for agent-driven web tasks.",
+    startUrl: "about:blank",
+  },
+  {
     slug: "linkedin",
     label: "LinkedIn",
     purpose: "Log in to LinkedIn with an owned local browser profile.",

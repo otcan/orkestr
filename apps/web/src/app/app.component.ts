@@ -39,7 +39,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     this.selectedId = this.idFromPath();
     this.activePanel = this.panelFromPath();
     this.toolsView = this.toolsViewFromPath();
-    this.normalizeLegacyOpsPath();
+    this.normalizeLegacyRoutePath();
     if (this.onboardingActive) {
       this.closeRawStream();
       this.updateDocumentTitle();
@@ -170,7 +170,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     this.activePanel = this.panelFromPath();
     this.toolsView = this.toolsViewFromPath();
     this.sidebarWidth = this.loadSidebarWidth();
-    this.normalizeLegacyOpsPath();
+    this.normalizeLegacyRoutePath();
     globalThis.addEventListener?.("popstate", this.popStateHandler);
     void this.refresh(true);
     this.poller = setInterval(() => void this.refresh(false), 5000);
@@ -949,6 +949,22 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     return `${chatId} · ${state} · ${mirror}`;
   }
 
+  showWhatsAppChatIcon(thread: ThreadSummary | null): boolean {
+    const binding = thread?.binding;
+    if (!binding) return false;
+    const connector = String(binding.connector || "whatsapp").toLowerCase();
+    const chatId = String(binding.chatId || "").toLowerCase();
+    return connector === "whatsapp" && Boolean(chatId);
+  }
+
+  whatsappChatIconTitle(thread: ThreadSummary | null): string {
+    const label = this.whatsappChatLabel(thread);
+    const binding = thread?.binding;
+    const chatId = String(binding?.chatId || "").toLowerCase();
+    const groupSuffix = binding?.allowOtherPeople !== false || chatId.includes("@g.us") || chatId.includes("g.us") ? " · group" : "";
+    return `${label} · WhatsApp chat${groupSuffix}`;
+  }
+
   childWorkers(thread: ThreadSummary | null): ThreadSummary[] {
     if (!thread) return [];
     return this.threads
@@ -1474,12 +1490,12 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
 
   private onboardingFromPath(): boolean {
     const parts = globalThis.location?.pathname?.split("/").filter(Boolean) || [];
-    return parts[0] === "ng" && parts[1] === "onboarding";
+    return parts[0] === "setup" || (parts[0] === "ng" && parts[1] === "onboarding");
   }
 
   private panelFromPath(): Panel {
     const parts = globalThis.location?.pathname?.split("/").filter(Boolean) || [];
-    if (parts[0] === "ng" && parts[1] === "ops") return "ops";
+    if (parts[0] === "ops" || (parts[0] === "ng" && parts[1] === "ops")) return "ops";
     const threadIndex = parts.indexOf("thread");
     const panel = String(parts[threadIndex + 2] || "");
     return ["history", "timers", "attach", "settings", "workers", "runtime", "raw", "ops"].includes(panel) ? panel as Panel : "chat";
@@ -1487,12 +1503,28 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
 
   private toolsViewFromPath(): ToolsView {
     const parts = globalThis.location?.pathname?.split("/").filter(Boolean) || [];
-    const candidate = parts[0] === "ng" && parts[1] === "ops" ? String(parts[2] || "system") : "system";
+    const candidate = parts[0] === "ops"
+      ? String(parts[1] || "system")
+      : parts[0] === "ng" && parts[1] === "ops" ? String(parts[2] || "system") : "system";
     return ["system", "timers", "desktops", "models", "settings", "connectors"].includes(candidate) ? candidate as ToolsView : "system";
   }
 
-  private normalizeLegacyOpsPath(): void {
+  private normalizeLegacyRoutePath(): void {
     const parts = globalThis.location?.pathname?.split("/").filter(Boolean) || [];
+    if (parts[0] === "ng" && parts[1] === "onboarding") {
+      globalThis.history?.replaceState({}, "", "/setup");
+      return;
+    }
+    if (parts[0] === "ng" && parts[1] === "ops") {
+      const suffix = parts[2] ? `/${parts[2]}` : "";
+      globalThis.history?.replaceState({}, "", `/ops${suffix}`);
+      return;
+    }
+    if (parts[0] === "ng" && parts[1] === "thread" && parts[2]) {
+      const suffix = parts[3] ? `/${parts[3]}` : "";
+      globalThis.history?.replaceState({}, "", `/thread/${parts[2]}${suffix}`);
+      return;
+    }
     const threadIndex = parts.indexOf("thread");
     if (threadIndex >= 0 && parts[threadIndex + 2] === "ops") {
       globalThis.history?.replaceState({}, "", this.opsPath(this.toolsView));
@@ -1510,19 +1542,19 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   }
 
   private pushOnboardingPath(): void {
-    if (globalThis.location?.pathname === "/ng/onboarding") return;
-    globalThis.history?.pushState({}, "", "/ng/onboarding");
+    if (globalThis.location?.pathname === "/setup") return;
+    globalThis.history?.pushState({}, "", "/setup");
   }
 
   private replaceOnboardingPath(): void {
-    if (globalThis.location?.pathname === "/ng/onboarding") return;
-    globalThis.history?.replaceState({}, "", "/ng/onboarding");
+    if (globalThis.location?.pathname === "/setup") return;
+    globalThis.history?.replaceState({}, "", "/setup");
   }
 
   private pathForPanel(id: string, panel: Panel): string {
     if (panel === "ops") return this.opsPath(this.toolsView);
     const suffix = panel === "chat" ? "" : `/${panel}`;
-    return `/ng/thread/${encodeURIComponent(id)}${suffix}`;
+    return `/thread/${encodeURIComponent(id)}${suffix}`;
   }
 
   private pushOpsPath(view: ToolsView): void {
@@ -1532,7 +1564,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   }
 
   private opsPath(view: ToolsView): string {
-    return view === "system" ? "/ng/ops" : `/ng/ops/${view}`;
+    return view === "system" ? "/ops" : `/ops/${view}`;
   }
 
   private shouldAutoOpenOnboarding(): boolean {

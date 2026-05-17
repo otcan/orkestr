@@ -9,6 +9,7 @@ import { drainAllPendingThreadInputs, syncRuntimeLeases } from "../../../package
 import { markDueTimers } from "../../../packages/core/src/timers.js";
 import { deliverWhatsAppReplies } from "../../../packages/connectors/src/whatsapp.js";
 import { ensureDataDirs } from "../../../packages/storage/src/paths.js";
+import { authorizeHttpRequest } from "../../../packages/core/src/security.js";
 import { AppModule } from "./app.module.js";
 import { JsonErrorFilter } from "./common/json-error.filter.js";
 import { registerStaticFallback } from "./static-fallback.js";
@@ -19,6 +20,26 @@ export async function createApp(): Promise<INestApplication> {
   app.use((_request, response, next) => {
     response.setHeader("cache-control", "no-store");
     next();
+  });
+  app.use(async (request, response, next) => {
+    try {
+      const result = await authorizeHttpRequest(request);
+      if (result.ok) return next();
+      return response
+        .status(result.statusCode || 401)
+        .type("application/json")
+        .send(JSON.stringify({
+          ok: false,
+          error: result.error || "unauthorized",
+          security: result.status,
+        }));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      return response
+        .status(500)
+        .type("application/json")
+        .send(JSON.stringify({ ok: false, error: message }));
+    }
   });
   app.useGlobalFilters(new JsonErrorFilter());
   return app;

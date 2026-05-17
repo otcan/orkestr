@@ -3,9 +3,10 @@ import os from "node:os";
 import path from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { Body, Controller, Get, HttpCode, Post, Query } from "@nestjs/common";
+import { Body, Controller, Get, HttpCode, Post, Query, Req, Res } from "@nestjs/common";
 import { listRuntimeLeases } from "../../../../../packages/core/src/runtime-leases.js";
 import { getSetupStatus } from "../../../../../packages/core/src/setup.js";
+import { createPairingChallenge, pairBrowser, securityStatus, sessionCookieHeader } from "../../../../../packages/core/src/security.js";
 import { publicConfig } from "../../../../../packages/storage/src/config.js";
 import { ensureDataDirs } from "../../../../../packages/storage/src/paths.js";
 import { listEvents } from "../../../../../packages/storage/src/store.js";
@@ -154,6 +155,32 @@ export class SystemController {
   @Get("setup/status")
   async setupStatus() {
     return { ...(await getSetupStatus()), config: await publicConfig() };
+  }
+
+  @Get("setup/security/status")
+  async setupSecurityStatus() {
+    return { security: await securityStatus() };
+  }
+
+  @Post("setup/security/challenge")
+  @HttpCode(200)
+  async setupSecurityChallenge(@Req() request: any) {
+    return createPairingChallenge({ request } as any);
+  }
+
+  @Post("setup/security/pair")
+  @HttpCode(200)
+  async setupSecurityPair(@Body() body: Record<string, unknown> = {}, @Req() request: any, @Res({ passthrough: true }) response: any) {
+    const result = await pairBrowser({
+      code: String(body.code || ""),
+      userAgent: String(request?.headers?.["user-agent"] || ""),
+    } as any);
+    response.setHeader("set-cookie", sessionCookieHeader(result.token));
+    return {
+      ok: true,
+      session: result.session,
+      security: await securityStatus(),
+    };
   }
 
   @Get("events")

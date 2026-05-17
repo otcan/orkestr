@@ -1,151 +1,171 @@
 # Orkestr
 
-Orkestr is a local-first personal agent workstation.
+Orkestr is a local-first workstation for running coding agents from your own machine.
 
-Install once, connect your accounts, message agents from WhatsApp, watch their virtual browsers, and schedule recurring work.
+It gives a local Codex session a control plane: setup, WhatsApp routing, virtual browser desktops, timers, logs, and a small web cockpit. It is designed for personal infrastructure first, not hosted multi-user SaaS.
 
-> Status: `0.1.0-alpha.0`. This is an early public alpha scaffold. It is useful
-> for local development, demos, and private-overlay integration; it is not a
-> hosted multi-user product.
+> Public alpha. Do not expose Orkestr directly to the public internet. Keep it bound to `127.0.0.1` unless you have put it behind a trusted private network, TLS, and an auth boundary.
 
-## V1 scope
+![Orkestr demo storyboard](docs/assets/orkestr-demo.gif)
 
-- Setup wizard
-- OpenAI and Codex connection checks
-- Connector config persistence for OpenAI, Gmail, and WhatsApp
-- Gmail connector surface
-- LinkedIn virtual browser surface
-- WhatsApp bridge surface
-- Virtual browser registry
-- Agent starter templates
-- Timers and manual timer runs
-- Local activity log
+## Why This Exists
 
-Nothing else is in scope for V1.
+Coding agents are useful, but the useful work usually lives outside the chat window:
+
+- a repository on disk
+- a browser profile with user-owned login state
+- a WhatsApp thread where the user actually gives instructions
+- recurring tasks that should run without reopening an IDE
+- logs that explain what happened after the agent wakes up
+
+Orkestr makes those pieces explicit. The default target is a single developer running local agents on a laptop, workstation, or private VPS.
 
 ## Quickstart
 
+One-command install from a shell:
+
 ```bash
-git clone <repo-url> orkestr
-cd orkestr
-npm install
+curl -fsSL https://raw.githubusercontent.com/orkestr/orkestr-oss/main/scripts/install.sh | bash
+```
+
+Local clone flow:
+
+```bash
+git clone https://github.com/orkestr/orkestr-oss.git
+cd orkestr-oss
+./scripts/install.sh --local --serve
+```
+
+Then open:
+
+```text
+http://127.0.0.1:19812/setup
+```
+
+Manual development flow:
+
+```bash
+npm ci
 npm run build
 npm start
 ```
 
-Open:
-
-```text
-http://127.0.0.1:19812
-```
-
-On a fresh install, the web app opens a first-run setup wizard. It guides the
-local OpenAI/Codex, Gmail, LinkedIn browser, and WhatsApp bridge checks, stores
-connector settings under `ORKESTR_HOME`, and lets you skip into the cockpit at
-any time.
-
-CLI:
+Useful CLI commands:
 
 ```bash
-npx orkestr-oss list
-npx orkestr-oss attach
-npx orkestr-oss send <thread-name-or-id> "Run the next step"
+npx orkestr-oss serve --open
+npx orkestr-oss thread create "Repo launch reviewer" --cwd "$PWD" --executor codex
+npx orkestr-oss send repo-launch-reviewer "Inspect this repo and list launch blockers."
+npx orkestr-oss attach repo-launch-reviewer
 ```
 
-Optional environment can be copied from `.env.example`:
+## First Demo
+
+Run the public dry-run coding-agent demo:
 
 ```bash
-cp .env.example .env
+npm run demo:coding-agent
 ```
 
-The public repo does not include real credentials, browser profiles, WhatsApp
-session state, hostnames, or personal prompts. Put those in a private overlay and
-load it with `ORKESTR_OVERLAY_DIR`.
+That demo starts Orkestr with a temporary local home, creates a coding-agent thread, prepares the virtual desktop profile, queues a repository-review task, and prints the public log. It does not require WhatsApp, Gmail, LinkedIn, or Codex credentials.
 
-Docker:
+For a real local Codex run, see [examples/coding-agent-demo/README.md](examples/coding-agent-demo/README.md).
+
+Optional real Codex demo mode:
 
 ```bash
-docker compose up --build
+node scripts/coding-agent-demo.mjs --real-codex --repo "$PWD"
 ```
 
-## Product promise
-
-Give your AI agent:
-
-- a browser
-- WhatsApp
-- Gmail
-- LinkedIn
-- a schedule
-
-The default demo is a job-search assistant that checks Gmail and LinkedIn and sends WhatsApp summaries.
-
-## Current alpha surface
-
-This repo is a NestJS API plus Angular web app. It provides:
-
-- `apps/server` as the NestJS API, `apps/web/src` as the Angular UI, `apps/cli`, and `packages/*` as the public monorepo boundary.
-- `GET /api/setup/status` for local connector health.
-- `GET /api/health`, `GET /api/ready`, and `GET /api/version`.
-- `ORKESTR_OVERLAY_DIR` for loading a private runtime overlay.
-- `POST /api/connectors/:id/config` for storing connector settings under `ORKESTR_HOME`.
-- `GET /api/connectors/gmail/oauth/start` and `/oauth/gmail/callback` as the Gmail OAuth skeleton.
-- `GET /api/browsers` plus prepare/open actions for owned browser profiles.
-- `GET /api/agents/templates` and `POST /api/agents/templates/:id` for first agent creation.
-- `GET/POST /api/agents/:id/messages` for local agent inbox/history.
-- `POST /api/agents/:id/run-next`, `GET /api/executors`, and `GET /api/executions` for the generic executor boundary.
-- Overlay executor module loading so private deployments can add a real Codex adapter without public host assumptions.
-- `packages/shared` for framework-neutral API contracts used by the NestJS API and future Angular services.
-- `GET/POST /api/timers`, `POST /api/timers/:id/run`, and `DELETE /api/timers/:id`.
-- `GET /api/events` for setup and scheduler activity.
-- Thread-first runtime APIs: `GET/POST /api/threads`, `POST /api/threads/:id/input`,
-  `GET /api/threads/:id/messages`, `GET /api/threads/:id/history`,
-  `POST /api/threads/:id/wake`, `POST /api/threads/:id/sleep`,
-  `POST /api/threads/:id/approve`, `POST /api/threads/:id/interrupt`,
-  `POST /api/threads/:id/uploads`, and per-thread timers.
-
-Still private-overlay territory: production credentials, real browser automation
-against logged-in profiles, production WhatsApp bridge hosting, and any
-host-specific executor behavior. Public code keeps generic APIs and mockable
-examples; private deployments provide credentials, profiles, bindings, and
-bridge processes.
-
-## Development
+Regenerate the README demo asset:
 
 ```bash
-npm install
-npm run dev
+npm run demo:record
 ```
 
-`npm run dev` builds the Angular UI once, starts the NestJS API, and serves the
-built UI from `dist/web/browser`.
+Public demo logs live in [docs/demo-logs](docs/demo-logs).
 
-Before pushing or releasing:
+## Architecture
+
+```mermaid
+flowchart LR
+  User[User browser or CLI] --> API[NestJS API]
+  WhatsApp[WhatsApp account] --> Bridge[Built-in local WhatsApp bridge]
+  Bridge --> API
+  API --> Store[(ORKESTR_HOME data, config, events)]
+  API --> Threads[Thread runtime API]
+  Threads --> Tmux[tmux session lease]
+  Tmux --> Codex[Codex CLI]
+  API --> Browsers[Virtual browser profiles]
+  Browsers --> Desktop[Local Chrome desktop]
+  API --> Timers[Timers]
+  Timers --> Threads
+```
+
+More detail: [docs/architecture.md](docs/architecture.md).
+
+## What Is Included
+
+- First-run setup at `/setup`
+- OpenAI and Codex connection checks
+- Built-in local WhatsApp bridge with two QR-paired account slots
+- Thread-first runtime API for local Codex sessions
+- Virtual browser registry, including a general-purpose virtual desktop
+- Gmail OAuth surface
+- LinkedIn and Gmail browser profiles
+- Timers and manual timer runs
+- CLI for listing, creating, waking, sending to, and attaching threads
+- Local activity logs and deterministic public demos
+
+## Security Warning
+
+Orkestr can wake local agents, pass text into terminal sessions, open browser profiles, and store connector credentials under `ORKESTR_HOME`.
+
+Minimum safe defaults:
+
+- Keep `ORKESTR_HOST=127.0.0.1`.
+- Do not expose raw `/api/*`, thread streams, or terminal routes to the public internet.
+- Use Tailscale plus Caddy/TLS before remote access.
+- Keep real overlays, browser profiles, WhatsApp session state, Gmail tokens, and hostnames out of this public repo.
+- Treat this alpha as single-user software.
+
+See [SECURITY.md](SECURITY.md).
+
+## Roadmap
+
+Near-term launch work:
+
+- Secure access onboarding: Caddy/Tailscale HTTPS checks and first-browser pairing.
+- Better setup path naming and legacy `/ng/*` compatibility cleanup.
+- A recorded end-to-end demo video using a real local Codex session.
+- More complete browser desktop controls and status.
+- Public examples for WhatsApp-to-thread routing and timers.
+
+Full roadmap: [ROADMAP.md](ROADMAP.md).
+
+## Contributing
+
+Contributions are welcome while the project is still small. Start with:
 
 ```bash
 npm run check
-npm run smoke
-npm run demo:job-search
+npm run demo:coding-agent
+npm run launch:check
 ```
 
-`npm run check` includes syntax checks, the Angular production build, and the
-Node test suite.
+Public code must not include credentials, private hostnames, personal browser profiles, WhatsApp IDs, private prompts, or deployment-only paths. See [CONTRIBUTING.md](CONTRIBUTING.md) for the working rules.
 
-## Job-search demo
+## Public/Private Boundary
 
-The first end-to-end demo is dependency-free and uses only fake data:
+Generic product code belongs here. Personal deployment code belongs outside this repo and is loaded through `ORKESTR_OVERLAY_DIR`.
 
-```bash
-npm run demo:job-search
-```
+Examples of private-only material:
 
-It starts Orkestr with `examples/job-search-demo`, starts a mock WhatsApp bridge,
-creates the `job-search-assistant`, receives a fake WhatsApp message, runs the
-demo executor, and verifies that the assistant reply is mirrored back to the
-mock bridge exactly once.
+- real connector credentials
+- real WhatsApp chat IDs
+- browser profile state
+- personal prompts and timers
+- VPS hostnames
+- host-specific Codex launch behavior
 
-See `docs/private-overlay.md` for the public/private repo boundary.
-See `docs/alpha-release.md` for the alpha release gate.
-See `docs/framework-deployment.md` for the NestJS, Angular, and Docker deployment flow.
-See `docs/milestone-2-release.md` for the current release checklist.
-See `docs/cli.md` for the CLI surface and roadmap.
+See [docs/private-overlay.md](docs/private-overlay.md).

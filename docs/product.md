@@ -1,44 +1,46 @@
 # Product
 
-## One-line pitch
+## One-Line Pitch
 
-Give your AI agent a browser, WhatsApp, Gmail, LinkedIn, and a schedule.
+Run local coding agents with WhatsApp, browser desktops, timers, and inspectable logs.
 
-## First user journey
+## First User Journey
 
 1. Install Orkestr.
-2. Setup wizard opens.
-3. Connect OpenAI/Codex.
-4. Configure the WhatsApp bridge.
-5. Configure Gmail OAuth.
-6. Prepare Gmail and LinkedIn virtual browser profiles.
-7. Open LinkedIn virtual browser and log in.
-8. Create the first agent template.
-9. Add a recurring timer.
-10. Message the agent from WhatsApp.
-11. Watch it work in the browser.
+2. Open `/setup`.
+3. Connect Codex.
+4. Pair WhatsApp 1 with the built-in local bridge.
+5. Prepare the Virtual Desktop profile.
+6. Create the first coding thread.
+7. Send a task from the web UI, CLI, or WhatsApp.
+8. Attach to the local Codex session.
+9. Inspect the result and activity log.
 
-## Default starter
+## Default Starter
 
-The first starter is a job-search assistant:
+The public starter is a coding-agent loop:
 
-- watches Gmail and LinkedIn for recruiting messages
-- summarizes important messages to WhatsApp
-- drafts replies, but does not send them without approval
-- runs from a daily timer by default
+- one Orkestr thread maps to one local Codex runtime
+- messages can be queued from the web UI, CLI, or WhatsApp
+- the virtual desktop profile is prepared for browser-based work
+- timers can queue recurring work later
 
-This is the sharp initial wedge. Avoid adding generic chat surfaces until this works end-to-end.
-
-The public repo includes a deterministic demo for this flow:
+Run the deterministic public demo:
 
 ```bash
-npm run demo:job-search
+npm run demo:coding-agent
 ```
 
-It uses fake WhatsApp and executor data so contributors can validate the
-message-in, agent-run, WhatsApp-reply loop without personal credentials.
+Run the real local Codex example:
 
-## V1 boundaries
+```bash
+npx orkestr-oss thread create "Repo launch reviewer" --id repo-launch-reviewer --cwd "$PWD" --executor codex
+npx orkestr-oss wake repo-launch-reviewer
+npx orkestr-oss send repo-launch-reviewer "Inspect this repo and list launch blockers. Do not edit files."
+npx orkestr-oss attach repo-launch-reviewer
+```
+
+## V1 Boundaries
 
 In:
 
@@ -49,8 +51,8 @@ In:
 - connector checks
 - virtual browser profiles
 - WhatsApp connector surface
-- agent starter records
-- agent inbox records
+- thread runtime records
+- Codex CLI runtime handoff
 - timers
 - local activity events
 - Docker local deployment
@@ -60,6 +62,6 @@ Out:
 - enterprise teams
 - plugin marketplace
 - Slack/Discord
-- Kubernetes
+- Kubernetes as a required install path
 - multi-tenant hosting
 - private host assumptions

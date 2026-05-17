@@ -1,7 +1,7 @@
 import { DatePipe } from "@angular/common";
 import { Component, EventEmitter, Input, OnDestroy, OnInit, Output, inject } from "@angular/core";
 import { firstValueFrom } from "rxjs";
-import { Agent, AgentTemplate, ApiService, ConnectorStatus, EventRecord, SetupStatus, TimerRecord } from "./api.service";
+import { Agent, AgentTemplate, ApiService, ConnectorStatus, EventRecord, SetupStatus, TimerDoctorResponse, TimerRecord } from "./api.service";
 
 export type ToolsView = "system" | "timers" | "desktops" | "models" | "settings" | "connectors";
 
@@ -27,6 +27,7 @@ export class OpsPageComponent implements OnInit, OnDestroy {
   opsAgents: Agent[] = [];
   opsAgentTemplates: AgentTemplate[] = [];
   opsTimers: TimerRecord[] = [];
+  opsTimerDoctor: TimerDoctorResponse | null = null;
   opsEvents: EventRecord[] = [];
   opsBrowsers: Array<Record<string, unknown>> = [];
   opsRuntimeLeases: Array<Record<string, unknown>> = [];
@@ -53,13 +54,14 @@ export class OpsPageComponent implements OnInit, OnDestroy {
   async loadOps(showBusy = true): Promise<void> {
     if (showBusy) this.busy = true;
     try {
-      const [version, setup, whatsapp, agents, templates, timers, events, browsers, runtimeLeases, executors, executions, system, processes, models] = await Promise.allSettled([
+      const [version, setup, whatsapp, agents, templates, timers, timerDoctor, events, browsers, runtimeLeases, executors, executions, system, processes, models] = await Promise.allSettled([
         firstValueFrom(this.api.version()),
         firstValueFrom(this.api.setupStatus()),
         firstValueFrom(this.api.whatsappStatus()),
         firstValueFrom(this.api.agents()),
         firstValueFrom(this.api.agentTemplates()),
         firstValueFrom(this.api.timers()),
+        firstValueFrom(this.api.timerDoctor()),
         firstValueFrom(this.api.events(40)),
         firstValueFrom(this.api.browserSessions()),
         firstValueFrom(this.api.runtimeLeases()),
@@ -78,6 +80,7 @@ export class OpsPageComponent implements OnInit, OnDestroy {
       if (agents.status === "fulfilled") this.opsAgents = agents.value.agents || [];
       if (templates.status === "fulfilled") this.opsAgentTemplates = templates.value.templates || [];
       if (timers.status === "fulfilled") this.opsTimers = timers.value.timers || [];
+      if (timerDoctor.status === "fulfilled") this.opsTimerDoctor = timerDoctor.value;
       if (events.status === "fulfilled") this.opsEvents = events.value.events || [];
       if (browsers.status === "fulfilled") this.opsBrowsers = browsers.value.sessions || [];
       if (runtimeLeases.status === "fulfilled") {

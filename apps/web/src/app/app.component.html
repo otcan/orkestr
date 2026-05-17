@@ -29,7 +29,20 @@
             [class.processing]="isThreadProcessing(thread)"
             (click)="selectThread(thread, $event)"
           >
-            <span class="status-dot" [class]="statusClass(thread)"></span>
+            <span class="thread-leading">
+              <span class="status-dot" [class]="statusClass(thread)"></span>
+              @if (showWhatsAppChatIcon(thread)) {
+                <span class="whatsapp-chat-icon" [title]="whatsappChatIconTitle(thread)" aria-label="WhatsApp chat">
+                  <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                    <path class="wa-chat-back" d="M5.25 6.75h8.7a3.15 3.15 0 0 1 3.15 3.15v2.25a3.15 3.15 0 0 1-3.15 3.15H9.2l-4.1 2.65.98-3.02a3.15 3.15 0 0 1-2.98-3.14V9.9a3.15 3.15 0 0 1 3.15-3.15Z"></path>
+                    <path class="wa-chat-front" d="M8.45 4.75h10.2a3.15 3.15 0 0 1 3.15 3.15v4.05a3.15 3.15 0 0 1-3.15 3.15H13.9l-4.25 2.72 1-3.08a3.15 3.15 0 0 1-2.2-3V7.9a3.15 3.15 0 0 1 3.15-3.15Z"></path>
+                    <circle class="wa-chat-dot" cx="11.3" cy="9.95" r="1.05"></circle>
+                    <circle class="wa-chat-dot" cx="15.1" cy="9.95" r="1.05"></circle>
+                    <circle class="wa-chat-dot" cx="18.9" cy="9.95" r="1.05"></circle>
+                  </svg>
+                </span>
+              }
+            </span>
             <span class="thread-text">
               <strong>{{ threadTitle(thread) }}</strong>
               <small>
@@ -71,7 +84,20 @@
                   [class.processing]="isThreadProcessing(worker)"
                   (click)="selectThread(worker, $event)"
                 >
-                  <span class="status-dot" [class]="statusClass(worker)"></span>
+                  <span class="thread-leading">
+                    <span class="status-dot" [class]="statusClass(worker)"></span>
+                    @if (showWhatsAppChatIcon(worker)) {
+                      <span class="whatsapp-chat-icon" [title]="whatsappChatIconTitle(worker)" aria-label="WhatsApp chat">
+                        <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                          <path class="wa-chat-back" d="M5.25 6.75h8.7a3.15 3.15 0 0 1 3.15 3.15v2.25a3.15 3.15 0 0 1-3.15 3.15H9.2l-4.1 2.65.98-3.02a3.15 3.15 0 0 1-2.98-3.14V9.9a3.15 3.15 0 0 1 3.15-3.15Z"></path>
+                          <path class="wa-chat-front" d="M8.45 4.75h10.2a3.15 3.15 0 0 1 3.15 3.15v4.05a3.15 3.15 0 0 1-3.15 3.15H13.9l-4.25 2.72 1-3.08a3.15 3.15 0 0 1-2.2-3V7.9a3.15 3.15 0 0 1 3.15-3.15Z"></path>
+                          <circle class="wa-chat-dot" cx="11.3" cy="9.95" r="1.05"></circle>
+                          <circle class="wa-chat-dot" cx="15.1" cy="9.95" r="1.05"></circle>
+                          <circle class="wa-chat-dot" cx="18.9" cy="9.95" r="1.05"></circle>
+                        </svg>
+                      </span>
+                    }
+                  </span>
                   <span class="thread-text">
                     <strong>{{ worker.workerLabel || threadTitle(worker) }}</strong>
                     <small>

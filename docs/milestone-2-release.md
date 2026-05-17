@@ -1,29 +1,24 @@
 # Milestone 2 Release Checklist
 
-Milestone 2 turns the scaffold into a usable public baseline for the first
-Orkestr loop:
+Milestone 2 turns the scaffold into a usable public baseline for the first Orkestr loop:
 
-1. create the job-search assistant
-2. receive a WhatsApp-origin message
-3. queue it in the agent inbox
-4. run an executor through the overlay boundary
-5. persist the assistant reply
-6. mirror the final reply back through the WhatsApp bridge
+1. create a coding-agent thread
+2. prepare the virtual desktop profile
+3. queue repository work
+4. wake a local Codex runtime when the operator is ready
+5. persist messages, runtime state, timers, and events
+6. keep private host behavior outside the public repo
 
-The public repo remains generic. Real host-specific Codex launch behavior,
-personal prompts, credentials, WhatsApp IDs, browser profiles, and timers belong
-in a private overlay loaded with `ORKESTR_OVERLAY_DIR`.
+The public repo remains generic. Real credentials, WhatsApp IDs, browser profiles, personal prompts, and host-specific Codex launch behavior belong in a private overlay loaded with `ORKESTR_OVERLAY_DIR`.
 
 ## Included
 
 - Private overlay loading with executor adapter registration.
 - Generic executor boundary plus no-op executor.
-- Gmail OAuth start, callback, token exchange, refresh, failure tracking, and
-  inbox read APIs.
-- WhatsApp bridge status, inbound routing, event-id dedupe, and final text reply
-  delivery through `/send-text`.
-- Stable `job-search-assistant` starter id.
-- Deterministic public job-search demo overlay.
+- Gmail OAuth start, callback, token exchange, refresh, failure tracking, and inbox read APIs.
+- WhatsApp bridge status, inbound routing, event-id dedupe, and final text reply delivery through `/send-text`.
+- Stable `coding-agent` starter id.
+- Deterministic public coding-agent demo.
 - Automated demo smoke test in `node:test`.
 - Local smoke test for persistence, timers, executor output, and activity events.
 
@@ -32,30 +27,28 @@ in a private overlay loaded with `ORKESTR_OVERLAY_DIR`.
 Run these before tagging or publishing:
 
 ```bash
+npm run launch:check
 npm run check
 npm run smoke
-npm run demo:job-search
+npm run demo:coding-agent
 docker build -t orkestr-oss:test .
 ```
 
 Expected result:
 
+- `npm run launch:check` passes the grouped launch gate.
 - `npm run check` passes all unit and end-to-end tests.
 - `npm run smoke` proves persisted timers/messages/events survive restart.
-- `npm run demo:job-search` proves the mock WhatsApp-to-agent-to-WhatsApp loop.
-- `docker build` proves the production image builds Angular and can start from
-  compiled assets.
+- `npm run demo:coding-agent` proves the public coding-agent setup loop.
+- `docker build` proves the production image builds Angular and can start from compiled assets.
 
 ## Manual Demo
 
 ```bash
-npm run demo:job-search
+npm run demo:coding-agent
 ```
 
-The demo starts a mock WhatsApp bridge, starts Orkestr with
-`examples/job-search-demo`, creates `job-search-assistant`, injects a fake
-WhatsApp message, runs the demo executor, and verifies exactly one mirrored
-reply was sent back to the mock bridge.
+The demo starts Orkestr with a temporary local home, creates `demo-coding-agent`, prepares the virtual desktop profile, queues a repo-inspection task, and prints the next real Codex step.
 
 ## API Surface To Keep Stable
 
@@ -69,8 +62,13 @@ reply was sent back to the mock bridge.
 - `POST /api/connectors/whatsapp/deliver`
 - `GET/POST /api/agents/:id/messages`
 - `POST /api/agents/:id/run-next`
+- `GET/POST /api/threads`
+- `POST /api/threads/:id/input`
+- `POST /api/threads/:id/wake`
 - `GET/POST /api/timers`
 - `POST /api/timers/:id/run`
+- `GET /api/browser-sessions`
+- `POST /api/browser-sessions/:slug/:action`
 - `GET /api/events`
 
 ## Private Overlay Contract
@@ -93,19 +91,7 @@ Private overlays must not be copied into the public repo when they contain:
 
 ## Known Gaps
 
-- Real Codex session orchestration belongs to a private executor adapter for now.
-- Gmail and LinkedIn reasoning is not yet an autonomous production assistant in
-  the public repo; the demo executor is deterministic by design.
-- WhatsApp media mirroring is not included in this milestone; final text replies
-  are covered.
-- The public UI is still a setup workstation, not a full production operations
-  console.
-
-## Release Steps
-
-1. Confirm `git status --short` is clean.
-2. Run the verification commands above.
-3. Review `README.md`, `docs/product.md`, `docs/framework-deployment.md`, and this checklist.
-4. Create a signed or annotated tag, for example `v0.1.0-alpha.0`.
-5. Push `main` and the tag.
-6. Create release notes from the included scope and known gaps.
+- Secure remote access onboarding is planned but not complete.
+- The public demo queues a coding-agent task; running real Codex still depends on the operator's local Codex install/login.
+- WhatsApp media mirroring is not included in this milestone; final text replies are covered.
+- The public UI is still a setup workstation, not a full production operations console.

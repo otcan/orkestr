@@ -1,0 +1,26 @@
+import assert from "node:assert/strict";
+import fs from "node:fs/promises";
+import test from "node:test";
+
+const onboardingSources = [
+  "apps/web/src/app/onboarding-page.component.ts",
+  "apps/web/src/app/onboarding-page.component.html",
+];
+
+async function readSources(paths) {
+  return (await Promise.all(paths.map((sourcePath) => fs.readFile(sourcePath, "utf8")))).join("\n");
+}
+
+test("onboarding focuses the first loop on virtual desktop and WhatsApp", async () => {
+  const onboarding = await readSources(onboardingSources);
+  const browsers = await fs.readFile("packages/browsers/src/browsers.js", "utf8");
+
+  assert.ok(!onboarding.includes("Job Search Assistant"));
+  assert.ok(!onboarding.includes("job-search"));
+  assert.ok(onboarding.includes("Virtual Desktop Generation"));
+  assert.ok(onboarding.includes('id: "virtual-desktop"'));
+  assert.ok(onboarding.includes("Create first thread"));
+  assert.ok(onboarding.includes("Bind WhatsApp chat"));
+  assert.ok(onboarding.includes("Send test message"));
+  assert.ok(browsers.includes('slug: "desktop"'));
+});

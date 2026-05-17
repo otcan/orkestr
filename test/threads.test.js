@@ -7,7 +7,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { startServer } from "../apps/server/src/server.js";
 import { runNextThreadMessage } from "../packages/core/src/executors.js";
-import { runtimeStatus, syncRuntimeWindowName, wakeThread } from "../packages/core/src/runtime-leases.js";
+import { runtimeStatus, syncRuntimeLeases, syncRuntimeWindowName, wakeThread } from "../packages/core/src/runtime-leases.js";
 import { parseThreadInputCommand } from "../packages/core/src/thread-commands.js";
 import { createThreadWorker, detectThreadGitState, listThreadWorkers, updateThreadRepo } from "../packages/core/src/thread-workers.js";
 import { appendThreadMessage, createThread, enqueueThreadInput, listThreadMessages, listThreads, updateThread } from "../packages/core/src/threads.js";
@@ -417,6 +417,122 @@ test("thread runtime summary reads Codex model and limits from live metadata", a
     else process.env.ORKESTR_HOME = priorHome;
     if (priorCodexHome === undefined) delete process.env.CODEX_HOME;
     else process.env.CODEX_HOME = priorCodexHome;
+  }
+});
+
+test("thread runtime sync surfaces Codex plan questions as pending input", async (t) => {
+  try {
+    await execFileAsync("sqlite3", ["--version"]);
+  } catch {
+    t.skip("sqlite3 unavailable");
+    return;
+  }
+
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-plan-question-"));
+  const fakeTmux = await createFakeTmux(home);
+  const codexHome = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-codex-plan-question-"));
+  const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-codex-plan-workspace-"));
+  const codexThreadId = "22222222-2222-4222-8222-222222222222";
+  const rolloutPath = path.join(codexHome, "sessions", "rollout-plan-question.jsonl");
+  await fs.mkdir(path.dirname(rolloutPath), { recursive: true });
+  await fs.writeFile(rolloutPath, "", "utf8");
+  const nowMs = Date.now();
+  await execFileAsync("sqlite3", [path.join(codexHome, "state_5.sqlite"), [
+    "create table threads (id text primary key, rollout_path text not null, created_at integer not null, updated_at integer not null, source text not null, model_provider text not null, cwd text not null, title text not null, sandbox_policy text not null, approval_mode text not null, tokens_used integer not null default 0, archived integer not null default 0, model text, reasoning_effort text, created_at_ms integer, updated_at_ms integer);",
+    `insert into threads (id, rollout_path, created_at, updated_at, source, model_provider, cwd, title, sandbox_policy, approval_mode, tokens_used, archived, model, reasoning_effort, created_at_ms, updated_at_ms) values (${sqlQuote(codexThreadId)}, ${sqlQuote(rolloutPath)}, ${Math.floor(nowMs / 1000)}, ${Math.floor(nowMs / 1000)}, 'codex', 'openai', ${sqlQuote(workspace)}, 'Plan Question Thread', 'workspace-write', 'never', 0, 0, 'gpt-test-codex', 'medium', ${nowMs}, ${nowMs});`,
+  ].join("\n")]);
+
+  const priorHome = process.env.ORKESTR_HOME;
+  const priorCodexHome = process.env.CODEX_HOME;
+  const priorPath = process.env.PATH;
+  const priorTmuxLog = process.env.TMUX_LOG;
+  const priorTmuxState = process.env.TMUX_STATE;
+  process.env.ORKESTR_HOME = path.join(home, "orkestr-home");
+  process.env.CODEX_HOME = codexHome;
+  process.env.PATH = `${fakeTmux.bin}:${priorPath || ""}`;
+  process.env.TMUX_LOG = fakeTmux.log;
+  process.env.TMUX_STATE = fakeTmux.state;
+  let server = null;
+
+  try {
+    const env = {
+      ORKESTR_HOME: process.env.ORKESTR_HOME,
+      HOME: path.join(home, "runtime-home"),
+      CODEX_HOME: codexHome,
+      PATH: process.env.PATH,
+      TMUX_LOG: fakeTmux.log,
+      TMUX_STATE: fakeTmux.state,
+    };
+    await createThread({
+      id: "plan-question-thread",
+      name: "Plan Question Thread",
+      cwd: workspace,
+      executor: { type: "codex", codexThreadId },
+    }, env);
+    await wakeThread("plan-question-thread", { reason: "test" }, env);
+    await fs.appendFile(rolloutPath, `${JSON.stringify({
+      timestamp: "2026-05-16T21:23:24.316Z",
+      type: "response_item",
+      payload: {
+        type: "function_call",
+        name: "request_user_input",
+        call_id: "call_plan_questions",
+        arguments: JSON.stringify({
+          questions: [
+            {
+              header: "First Step",
+              id: "first_step",
+              question: "What should a brand-new user accomplish first?",
+              options: [
+                { label: "Connect accounts", description: "Prioritize connector setup before timers." },
+                { label: "Create timer", description: "Prioritize scheduling the first workflow." },
+              ],
+            },
+          ],
+        }),
+      },
+    })}\n`, "utf8");
+
+    await syncRuntimeLeases(env);
+    const messages = await listThreadMessages("plan-question-thread", env);
+    const planQuestion = messages.find((message) => message.phase === "need_input");
+
+    assert.ok(planQuestion);
+    assert.equal(planQuestion.role, "assistant");
+    assert.match(planQuestion.text, /Codex needs input to continue/);
+    assert.match(planQuestion.text, /What should a brand-new user accomplish first\?/);
+    assert.match(planQuestion.text, /A\. Connect accounts: Prioritize connector setup before timers\./);
+
+    server = await startServer({ port: 0, host: "127.0.0.1" });
+    const { port } = server.address();
+    const baseUrl = `http://127.0.0.1:${port}`;
+    const response = await fetch(`${baseUrl}/api/threads/plan-question-thread/messages`);
+    const payload = await response.json();
+
+    assert.equal(response.status, 200);
+    assert.equal(payload.awaitingInput, true);
+    assert.equal(payload.awaitingInputEventId, planQuestion.eventId);
+    assert.equal(payload.pendingQuestion.text, planQuestion.text);
+
+    await appendThreadMessage("plan-question-thread", {
+      role: "user",
+      source: "whatsapp_inbound",
+      text: "Connect accounts",
+      createdAt: "2026-05-16T21:24:00.000Z",
+    }, env);
+    const answeredResponse = await fetch(`${baseUrl}/api/threads/plan-question-thread/messages`);
+    const answeredPayload = await answeredResponse.json();
+
+    assert.equal(answeredResponse.status, 200);
+    assert.equal(answeredPayload.awaitingInput, false);
+    assert.equal(answeredPayload.pendingQuestion, null);
+  } finally {
+    if (server) await new Promise((resolve) => server.close(resolve));
+    restoreEnvValue("ORKESTR_HOME", priorHome);
+    restoreEnvValue("CODEX_HOME", priorCodexHome);
+    restoreEnvValue("PATH", priorPath);
+    restoreEnvValue("TMUX_LOG", priorTmuxLog);
+    restoreEnvValue("TMUX_STATE", priorTmuxState);
   }
 });
 

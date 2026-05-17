@@ -11,6 +11,13 @@ import {
   getWhatsAppStatus,
   routeWhatsAppInbound,
 } from "../../../../../packages/connectors/src/whatsapp.js";
+import {
+  getLocalWhatsAppBridgeStatus,
+  getLocalWhatsAppQrSvg,
+  logoutLocalWhatsAppAccount,
+  sendLocalWhatsAppText,
+  startLocalWhatsAppAccount,
+} from "../../../../../packages/connectors/src/whatsapp-local-bridge.js";
 import { writeConnectorConfig } from "../../../../../packages/storage/src/config.js";
 import { ensureAttachmentsArray, httpError } from "../../common/http.js";
 
@@ -34,6 +41,56 @@ export class ConnectorsController {
   @Get("whatsapp/status")
   async whatsappStatus() {
     return getWhatsAppStatus();
+  }
+
+  @Get("whatsapp/bridge/health")
+  async whatsappBridgeHealth() {
+    return getLocalWhatsAppBridgeStatus();
+  }
+
+  @Get("whatsapp/bridge/accounts")
+  async whatsappBridgeAccounts() {
+    const status = await getLocalWhatsAppBridgeStatus();
+    return { accounts: status.accounts, state: status.state };
+  }
+
+  @Post("whatsapp/bridge/accounts/:accountId/start")
+  @HttpCode(202)
+  async whatsappBridgeAccountStart(@Param("accountId") accountId: string) {
+    return { account: await startLocalWhatsAppAccount(accountId) };
+  }
+
+  @Post("whatsapp/bridge/accounts/:accountId/logout")
+  @HttpCode(200)
+  async whatsappBridgeAccountLogout(@Param("accountId") accountId: string) {
+    return { account: await logoutLocalWhatsAppAccount(accountId) };
+  }
+
+  @Get("whatsapp/bridge/qr.svg")
+  async whatsappBridgeQr(@Query("accountId") accountId = "account-1", @Res() response: any) {
+    const svg = await getLocalWhatsAppQrSvg(accountId);
+    if (!svg) {
+      return response
+        .status(404)
+        .header("cache-control", "no-store")
+        .type("application/json; charset=utf-8")
+        .send({ error: "whatsapp_qr_not_available" });
+    }
+    return response
+      .status(200)
+      .header("cache-control", "no-store")
+      .type("image/svg+xml; charset=utf-8")
+      .send(svg);
+  }
+
+  @Post("whatsapp/bridge/send-text")
+  @HttpCode(200)
+  async whatsappBridgeSendText(@Body() body: Record<string, unknown> = {}) {
+    return sendLocalWhatsAppText({
+      chatId: String(body.to || body.chatId || ""),
+      text: String(body.text || ""),
+      accountId: String(body.accountId || ""),
+    });
   }
 
   @Post("whatsapp/inbound")

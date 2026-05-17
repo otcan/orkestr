@@ -9,11 +9,11 @@ import { enqueueAgentMessage, listAgentMessages } from "../packages/core/src/mes
 test("noop executor completes the next queued agent message", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-executors-"));
   const env = { ORKESTR_HOME: home };
-  await enqueueAgentMessage("job-search-assistant", { text: "hello executor" }, env);
+  await enqueueAgentMessage("coding-agent", { text: "hello executor" }, env);
 
   const adapters = listExecutorAdapters();
-  const execution = await runNextAgentMessage("job-search-assistant", { executorId: "noop" }, env);
-  const messages = await listAgentMessages("job-search-assistant", env);
+  const execution = await runNextAgentMessage("coding-agent", { executorId: "noop" }, env);
+  const messages = await listAgentMessages("coding-agent", env);
   const executions = await listExecutions(env);
 
   assert.ok(adapters.some((adapter) => adapter.id === "noop"));

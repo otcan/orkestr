@@ -9,6 +9,9 @@ directly.
 ```bash
 orkestr serve --open
 orkestr list
+orkestr doctor timers
+orkestr timers
+orkestr timers run <timer-id>
 orkestr thread create "My Thread" --cwd /path/to/repo
 orkestr worker create otcanClaw-features --task "Investigate this in parallel"
 orkestr worker create otcanClaw-features --blank
@@ -30,6 +33,11 @@ Useful flags are `--id`, `--cwd`, `--command`, `--executor`, and `--json`.
 parent thread. Pass task text positionally or with `--task`; use `--blank` for a
 parallel chat with no first message. Worker creation wakes the new worker by
 default; pass `--no-wake` when scripting tests or preparing a worker offline.
+
+`orkestr doctor timers` checks the timer store, enabled schedules, thread
+targets, prompt files, stale due timers, and recorded delivery errors through
+the public API. `orkestr timers` lists timers, and `orkestr timers run <id>`
+queues one immediately.
 
 Attach keeps the backing tmux session name stable, but names the tmux/byobu
 window after the Orkestr thread on wake and attach. The current runtime model is

@@ -65,19 +65,19 @@ try {
     method: "POST",
     body: JSON.stringify({ openaiApiKey: "sk-smoke-test" }),
   });
-  await request(baseUrl, "/api/agents/templates/job-search-assistant", { method: "POST" });
+  await request(baseUrl, "/api/agents/templates/coding-agent", { method: "POST" });
   const timer = await request(baseUrl, "/api/timers", {
     method: "POST",
     body: JSON.stringify({
       label: "Smoke timer",
-      target: "job-search-assistant",
+      target: "coding-agent",
       cadence: "daily",
       time: "09:00",
       prompt: "Run smoke task",
     }),
   });
   await request(baseUrl, `/api/timers/${timer.timer.id}/run`, { method: "POST" });
-  await request(baseUrl, "/api/agents/job-search-assistant/run-next", {
+  await request(baseUrl, "/api/agents/coding-agent/run-next", {
     method: "POST",
     body: JSON.stringify({ executorId: "noop" }),
   });
@@ -86,7 +86,7 @@ try {
   server = start(home, port);
   await waitFor(`${baseUrl}/api/health`);
   const timers = await request(baseUrl, "/api/timers");
-  const messages = await request(baseUrl, "/api/agents/job-search-assistant/messages");
+  const messages = await request(baseUrl, "/api/agents/coding-agent/messages");
   const events = await request(baseUrl, "/api/events?limit=20");
 
   if (timers.timers.length !== 1) throw new Error("timer did not persist after restart");

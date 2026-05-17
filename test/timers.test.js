@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { listAgentMessages } from "../packages/core/src/messages.js";
-import { createTimer, listTimers, markDueTimers, nextRunAt, normalizeStoredTimer } from "../packages/core/src/timers.js";
+import { createTimer, doctorTimers, listTimers, markDueTimers, nextRunAt, normalizeStoredTimer } from "../packages/core/src/timers.js";
 import { createThread, listThreadMessages } from "../packages/core/src/threads.js";
 
 test("daily timers schedule the next future clock time", () => {
@@ -25,6 +25,63 @@ test("timer persistence creates records with a next run", async () => {
   assert.ok(timers[0].nextRunAt);
 });
 
+test("timer doctor reports healthy configured timers", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-timer-doctor-ok-"));
+  const env = { ORKESTR_HOME: home };
+  await createThread({ id: "timer-thread", name: "Timer Thread" }, env);
+  await fs.writeFile(
+    path.join(home, "timers.json"),
+    `${JSON.stringify([
+      {
+        id: "healthy-timer",
+        label: "Healthy",
+        targetType: "thread",
+        target: "timer-thread",
+        cadence: "daily",
+        time: "13:00",
+        prompt: "Run healthy timer",
+        enabled: true,
+        nextRunAt: "2026-05-15T13:00:00.000Z",
+      },
+    ], null, 2)}\n`,
+  );
+
+  const result = await doctorTimers(env, new Date("2026-05-15T10:00:00.000Z"));
+
+  assert.equal(result.status, "ok");
+  assert.equal(result.ok, true);
+  assert.equal(result.counts.total, 1);
+  assert.deepEqual(result.issues, []);
+});
+
+test("timer doctor reports broken targets, prompt files, and stale due timers", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-timer-doctor-broken-"));
+  const env = { ORKESTR_HOME: home };
+  await fs.writeFile(
+    path.join(home, "timers.json"),
+    `${JSON.stringify([
+      {
+        id: "broken-timer",
+        label: "Broken",
+        targetType: "thread",
+        target: "missing-thread",
+        cadence: "daily",
+        time: "09:00",
+        promptFile: path.join(home, "missing-prompt.md"),
+        enabled: true,
+        nextRunAt: "2026-05-15T09:00:00.000Z",
+      },
+    ], null, 2)}\n`,
+  );
+
+  const result = await doctorTimers(env, new Date("2026-05-15T10:00:00.000Z"));
+  const codes = result.issues.map((issue) => issue.code).sort();
+
+  assert.equal(result.status, "broken");
+  assert.equal(result.ok, false);
+  assert.deepEqual(codes, ["missing_prompt_file", "missing_thread_target", "timer_overdue"]);
+});
+
 test("due timers are marked and rescheduled", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-due-"));
   const env = { ORKESTR_HOME: home };
@@ -36,7 +93,7 @@ test("due timers are marked and rescheduled", async () => {
   assert.equal(due.length, 1);
   const after = await listTimers(env);
   assert.equal(after[0].lastRunAt, "2026-05-15T10:00:00.000Z");
-  const messages = await listAgentMessages("job-search-assistant", env);
+  const messages = await listAgentMessages("coding-agent", env);
   assert.equal(messages.length, 1);
   assert.equal(messages[0].source, "timer_due");
 });

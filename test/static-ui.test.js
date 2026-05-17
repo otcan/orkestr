@@ -14,13 +14,19 @@ test("server serves the built Angular UI at root", async () => {
   try {
     const response = await fetch(`http://127.0.0.1:${port}/`);
     const html = await response.text();
-    const onboardingResponse = await fetch(`http://127.0.0.1:${port}/ng/onboarding`);
+    const onboardingResponse = await fetch(`http://127.0.0.1:${port}/setup`);
     const onboardingHtml = await onboardingResponse.text();
+    const legacyOnboardingResponse = await fetch(`http://127.0.0.1:${port}/ng/onboarding`);
+    const opsResponse = await fetch(`http://127.0.0.1:${port}/ops`);
+    const threadResponse = await fetch(`http://127.0.0.1:${port}/thread/demo`);
 
     assert.equal(response.status, 200);
     assert.ok(html.includes("<ork-root></ork-root>"));
     assert.equal(onboardingResponse.status, 200);
     assert.ok(onboardingHtml.includes("<ork-root></ork-root>"));
+    assert.equal(legacyOnboardingResponse.status, 200);
+    assert.equal(opsResponse.status, 200);
+    assert.equal(threadResponse.status, 200);
   } finally {
     await new Promise((resolve) => server.close(resolve));
     if (priorHome === undefined) delete process.env.ORKESTR_HOME;
