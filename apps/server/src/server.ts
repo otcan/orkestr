@@ -79,8 +79,8 @@ export async function startServer({ port = 19812, host = "127.0.0.1", openBrowse
 }
 
 function runtimeMonitorIntervalMs() {
-  const parsed = Number(process.env.ORKESTR_RUNTIME_MONITOR_INTERVAL_MS || 15_000);
-  return Number.isFinite(parsed) ? Math.max(5000, parsed) : 15_000;
+  const parsed = Number(process.env.ORKESTR_RUNTIME_MONITOR_INTERVAL_MS || 30_000);
+  return Number.isFinite(parsed) ? Math.max(5000, parsed) : 30_000;
 }
 
 async function syncRuntimeAndDeliverWhatsApp() {
