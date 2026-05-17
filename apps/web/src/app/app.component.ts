@@ -5,6 +5,7 @@ import { firstValueFrom } from "rxjs";
 import { OnboardingPageComponent } from "./onboarding-page.component";
 import { OpsPageComponent, ToolsView } from "./ops-page.component";
 import { RawTerminalController } from "./raw-terminal.controller";
+import { renderMessageTextHtml } from "./message-renderer";
 import {
   ApiService,
   SetupStatus,
@@ -957,6 +958,29 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     return connector === "whatsapp" && Boolean(chatId);
   }
 
+  whatsappAvatarUrl(thread: ThreadSummary | null): string {
+    const binding = thread?.binding;
+    return this.firstUrl(
+      binding?.avatarUrl,
+      binding?.iconUrl,
+      binding?.pictureUrl,
+      binding?.photoUrl,
+      binding?.profilePicUrl,
+      thread?.["whatsappAvatarUrl"],
+      thread?.["avatarUrl"],
+      thread?.["iconUrl"],
+    );
+  }
+
+  whatsappAvatarLines(thread: ThreadSummary | null): string[] {
+    const title = this.whatsappChatLabel(thread) || (thread ? this.threadTitle(thread) : "WhatsApp");
+    return this.chatIconLines(title);
+  }
+
+  isWhatsAppAvatarPrimaryLine(line: string): boolean {
+    return /^W\d+$/i.test(String(line || "").trim());
+  }
+
   whatsappChatIconTitle(thread: ThreadSummary | null): string {
     const label = this.whatsappChatLabel(thread);
     const binding = thread?.binding;
@@ -1042,6 +1066,14 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     return "Processing";
   }
 
+  threadProcessingShortLabel(thread: ThreadSummary | null): string {
+    const label = this.threadProcessingLabel(thread);
+    if (label === "Background") return "BG";
+    if (label === "Starting") return "Start";
+    if (label === "Queued") return "Queue";
+    return "Run";
+  }
+
   canWakeThread(thread: ThreadSummary): boolean {
     const state = this.threadState(thread);
     return state.includes("sleep") || state.includes("hibernat");
@@ -1105,6 +1137,10 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
 
   messageText(message: ThreadMessage): string {
     return String(message.text || message.promptFile || "").trim();
+  }
+
+  messageTextHtml(message: ThreadMessage): string {
+    return renderMessageTextHtml(this.messageText(message));
   }
 
   messagePhase(message: ThreadMessage | null): string {
@@ -1718,6 +1754,40 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     const protocolMatch = withoutGitSuffix.match(/^[a-z]+:\/\/([^/]+)\/(.+)$/i);
     if (protocolMatch) return `${protocolMatch[1]}/${protocolMatch[2]}`;
     return withoutGitSuffix;
+  }
+
+  private firstUrl(...values: unknown[]): string {
+    for (const value of values) {
+      const text = String(value || "").trim();
+      if (/^(https?:|data:image\/|\/)/i.test(text)) return text;
+    }
+    return "";
+  }
+
+  private splitChatIconWords(title: string): string[] {
+    const cleaned = String(title || "")
+      .replace(/^otcanclaw[-_\s]*/i, "")
+      .replace(/personalized/gi, "personal")
+      .replace(/metabolimics/gi, "metabolomics")
+      .replace(/[^a-zA-Z0-9]+/g, " ")
+      .trim();
+    return cleaned ? cleaned.split(/\s+/).filter(Boolean) : ["main"];
+  }
+
+  private chatIconLines(title: string): string[] {
+    const words = this.splitChatIconWords(title);
+    const workerIndex = words.findIndex((word) => /^worker$/i.test(word));
+    if (workerIndex >= 0 && words[workerIndex + 1]) {
+      const topic = words.slice(0, workerIndex).join(" ") || "chat";
+      return ["ORKESTR", `W${words[workerIndex + 1]}`, topic.toUpperCase()].map((line) => line.slice(0, 11));
+    }
+    if (words.length === 1 && /^main$/i.test(words[0])) {
+      return ["ORKESTR", "MAIN"];
+    }
+    if (words.length === 1) {
+      return ["ORKESTR", words[0].toUpperCase().slice(0, 12)];
+    }
+    return ["ORKESTR", words[0].toUpperCase().slice(0, 11), words.slice(1).join(" ").toUpperCase().slice(0, 11)];
   }
 
   private threadNumberValue(thread: ThreadSummary | null, key: string): number {

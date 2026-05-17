@@ -225,6 +225,11 @@ export interface ThreadSummary {
     connector?: string;
     chatId?: string;
     displayName?: string;
+    avatarUrl?: string;
+    iconUrl?: string;
+    pictureUrl?: string;
+    photoUrl?: string;
+    profilePicUrl?: string;
     enabled?: boolean;
     allowOtherPeople?: boolean;
     mirrorToWhatsApp?: boolean;
