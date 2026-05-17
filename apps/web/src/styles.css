@@ -1647,6 +1647,11 @@ ork-first-thread-wizard.first-thread-host {
   padding: 14px;
 }
 
+.settings-card.danger-card {
+  border-color: rgba(255, 122, 89, 0.34);
+  background: rgba(31, 9, 6, 0.58);
+}
+
 .compact-title {
   margin-bottom: 0;
 }
@@ -1691,7 +1696,13 @@ ork-first-thread-wizard.first-thread-host {
 
 .settings-actions {
   display: flex;
+  flex-wrap: wrap;
   justify-content: flex-end;
+  gap: 8px;
+}
+
+.settings-actions.compact-actions {
+  justify-content: flex-start;
 }
 
 .settings-toggle {

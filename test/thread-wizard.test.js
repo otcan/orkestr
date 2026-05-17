@@ -39,8 +39,14 @@ test("main UI exposes a guided first thread generation flow", async () => {
   assert.ok(sources.includes("git\", [\"clone\""));
   assert.ok(sources.includes("clone_target_not_empty"));
   assert.ok(sources.includes("<ork-first-thread-wizard"));
+  assert.ok(sources.includes("Connect WhatsApp"));
+  assert.ok(sources.includes("External or unlisted chat id"));
+  assert.ok(sources.includes("Delete thread"));
+  assert.ok(sources.includes("this.api.deleteThread"));
   assert.ok(!sources.includes("What should the agent do?"));
   assert.ok(!sources.includes("How should it run?"));
+  assert.ok(!sources.includes(`(click)="openPanel('attach')">Attach</button>`));
+  assert.ok(!sources.includes(`(click)="openPanel('runtime')">Runtime</button>`));
   assert.ok(!sources.includes(`<button class="secondary" type="button" [class.active]="activePanel === 'raw'" (click)="openPanel('raw')">Raw</button>`));
   assert.ok(!wizardSources.includes("this.api.sendThreadInput"));
 });

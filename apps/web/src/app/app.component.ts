@@ -1280,7 +1280,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   }
 
   whatsappAccounts(): WhatsAppAccount[] {
-    const status = this.whatsappStatusDetails || {};
+    const status = (this.whatsappStatusDetails || {}) as WhatsAppStatusResponse;
     const health = status.health && typeof status.health === "object" ? status.health as Record<string, unknown> : {};
     const candidates = [
       ...(Array.isArray(status.accounts) ? status.accounts : []),

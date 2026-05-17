@@ -536,7 +536,7 @@
           <div class="panel-title">
             <div>
               <p class="eyebrow">Thread Settings</p>
-              <h3>Workspace and WhatsApp</h3>
+              <h3>Workspace, WhatsApp, deletion</h3>
             </div>
           </div>
 
@@ -677,6 +677,41 @@
               <div class="settings-actions">
                 <button type="button" (click)="saveThreadBinding(thread)" [disabled]="busy || savingThreadBinding || !threadBindingDirty(thread)">
                   {{ savingThreadBinding ? "Saving" : "Save WhatsApp" }}
+                </button>
+              </div>
+            </section>
+
+            <section class="settings-card danger-card">
+              <div class="panel-title compact-title">
+                <div>
+                  <p class="eyebrow">Danger Zone</p>
+                  <h3>Delete thread</h3>
+                </div>
+              </div>
+              <p class="helper">
+                Delete this Orkestr thread and its stored messages. Type the thread name or id to enable deletion.
+              </p>
+              <div class="settings-facts">
+                <span>Thread</span>
+                <strong>{{ threadTitle(thread) }}</strong>
+                <span>Thread id</span>
+                <strong>{{ thread.id }}</strong>
+                <span>Workers</span>
+                <strong>{{ childWorkers(thread).length }}</strong>
+              </div>
+              @if (childWorkers(thread).length > 0) {
+                <label class="checkbox-row settings-toggle">
+                  <input name="thread-delete-workers-{{ thread.id }}" type="checkbox" [(ngModel)]="deleteThreadWorkers" />
+                  <span>Delete worker threads too</span>
+                </label>
+              }
+              <label class="settings-field">
+                <span>Confirm delete</span>
+                <input name="thread-delete-confirm-{{ thread.id }}" [(ngModel)]="deleteThreadConfirm" [placeholder]="threadTitle(thread)" />
+              </label>
+              <div class="settings-actions">
+                <button class="danger-soft" type="button" (click)="deleteSelectedThread(thread)" [disabled]="busy || deletingThread || !threadDeleteConfirmMatches(thread)">
+                  {{ deletingThread ? "Deleting" : "Delete thread" }}
                 </button>
               </div>
             </section>
