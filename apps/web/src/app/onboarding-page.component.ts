@@ -97,7 +97,7 @@ export class OnboardingPageComponent implements OnInit, OnChanges, OnDestroy {
     { id: "gmail", label: "Gmail", eyebrow: "Inbox" },
     { id: "linkedin", label: "LinkedIn", eyebrow: "Browser" },
     { id: "whatsapp", label: "WhatsApp", eyebrow: "Messages" },
-    { id: "browsers", label: "Virtual Desktop", eyebrow: "Browser runtime" },
+    { id: "browsers", label: "Desktops", eyebrow: "Browser runtime" },
   ];
 
   ngOnInit(): void {
@@ -209,11 +209,11 @@ export class OnboardingPageComponent implements OnInit, OnChanges, OnDestroy {
   }
 
   async prepareVirtualDesktop(): Promise<void> {
-    await this.browserAction("desktop", "prepare", "Virtual desktop profile prepared.");
+    await this.browserAction("desktop", "prepare", "Desktop profile prepared.");
   }
 
   async openVirtualDesktop(): Promise<void> {
-    await this.browserAction("desktop", "start", "Virtual desktop requested.");
+    await this.browserAction("desktop", "start", "Desktop requested.");
   }
 
   connector(id: string): ConnectorStatus | null {

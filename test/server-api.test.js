@@ -68,6 +68,7 @@ test("server exposes health, readiness, version, and agent message APIs", async 
     assert.ok(system.cpu.count >= 1);
     assert.ok(Array.isArray(processes.processes));
     assert.ok(browsers.browsers.some((browser) => browser.slug === "linkedin"));
+    assert.ok(browserSessions.sessions.length >= 3);
     assert.ok(browserSessions.sessions.some((session) => session.slug === "linkedin"));
     assert.equal(preparedBrowser.browser.slug, "linkedin");
     assert.equal(mode.thread.codexMode, "plan");

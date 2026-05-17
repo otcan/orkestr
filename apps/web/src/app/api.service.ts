@@ -16,6 +16,42 @@ export interface ConnectorStatus {
   details?: Record<string, unknown>;
 }
 
+export interface BrowserSession {
+  id?: string;
+  slug?: string;
+  label?: string;
+  type?: string;
+  access?: string;
+  status?: string;
+  state?: string;
+  purpose?: string;
+  notes?: string;
+  url?: string | null;
+  desk_url?: string | null;
+  cdp_url?: string | null;
+  cdp_ok?: boolean | null;
+  owner_service?: string | null;
+  root_pid?: number | null;
+  uptime?: string | null;
+  profileDir?: string;
+  profile?: string;
+  profile_path?: string;
+  configured?: boolean;
+  control?: Record<string, boolean>;
+  safe_cleanup?: boolean;
+  launchDisabled?: boolean;
+  launchError?: string | null;
+  preparedAt?: string | null;
+  lastOpenedAt?: string | null;
+  stoppedAt?: string | null;
+  cleanedAt?: string | null;
+  debugPort?: number | null;
+  lease?: Record<string, unknown> | null;
+  leased?: boolean;
+  leaseOwnerThreadId?: string | null;
+  leaseOwnerLabel?: string | null;
+}
+
 export interface SetupStatus {
   setupState: string;
   home: string;
@@ -573,8 +609,8 @@ export class ApiService {
     return this.http.get<{ events: EventRecord[] }>(this.api(`/events?limit=${limit}`));
   }
 
-  browsers(): Observable<{ browsers: Array<Record<string, unknown>> }> {
-    return this.http.get<{ browsers: Array<Record<string, unknown>> }>(this.api("/browsers"));
+  browsers(): Observable<{ browsers: BrowserSession[]; sessions?: BrowserSession[] }> {
+    return this.http.get<{ browsers: BrowserSession[]; sessions?: BrowserSession[] }>(this.api("/browsers"));
   }
 
   runtimeLeases(): Observable<{ leases: Array<Record<string, unknown>>; budget?: Record<string, unknown> }> {
@@ -702,11 +738,11 @@ export class ApiService {
     return this.http.post<ThreadUploadResponse>(this.api(`/threads/${encodeURIComponent(id)}/uploads`), body);
   }
 
-  browserSessions(): Observable<{ sessions: Array<Record<string, unknown>> }> {
-    return this.http.get<{ sessions: Array<Record<string, unknown>> }>(this.api("/browser-sessions"));
+  browserSessions(): Observable<{ sessions: BrowserSession[]; browsers?: BrowserSession[] }> {
+    return this.http.get<{ sessions: BrowserSession[]; browsers?: BrowserSession[] }>(this.api("/browser-sessions"));
   }
 
-  browserAction(slug: string, action: string): Observable<unknown> {
-    return this.http.post(this.api(`/browser-sessions/${encodeURIComponent(slug)}/${encodeURIComponent(action)}`), {});
+  browserAction(slug: string, action: string): Observable<{ browser: BrowserSession }> {
+    return this.http.post<{ browser: BrowserSession }>(this.api(`/browser-sessions/${encodeURIComponent(slug)}/${encodeURIComponent(action)}`), {});
   }
 }

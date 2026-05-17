@@ -284,8 +284,8 @@
 
       @if (activeStep === "browsers") {
         <section class="setup-form">
-          <h3>Virtual Desktop</h3>
-          <p>{{ connector("browsers")?.summary || "Prepare a local browser desktop for agent-driven web tasks." }}</p>
+          <h3>Desktops</h3>
+          <p>{{ connector("browsers")?.summary || "Prepare local browser desktops for agent-driven web tasks." }}</p>
           <div class="button-row">
             <button type="button" (click)="prepareVirtualDesktop()" [disabled]="busy">Prepare desktop</button>
             <button class="secondary" type="button" (click)="openVirtualDesktop()" [disabled]="busy">Open desktop</button>

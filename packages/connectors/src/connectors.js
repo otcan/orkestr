@@ -149,11 +149,11 @@ export async function getConnectorStatuses({ env = process.env, home = os.homedi
             ? status("whatsapp", "WhatsApp", "not_connected", whatsapp.summary, whatsapp)
             : status("whatsapp", "WhatsApp", "broken", whatsapp.summary, whatsapp),
     browsers: chrome.command
-      ? status("browsers", "Virtual Browsers", "connected", "Chrome-compatible browser is available.", {
+      ? status("browsers", "Desktops", "connected", "Chrome-compatible browser is available.", {
           command: chrome.command,
           version: chrome.version,
         })
-      : status("browsers", "Virtual Browsers", "broken", "No Chrome-compatible browser command found."),
+      : status("browsers", "Desktops", "broken", "No Chrome-compatible browser command found."),
     timers: timersExist
       ? status("timers", "Timers", "connected", "Timer store is initialized.")
       : status("timers", "Timers", "not_connected", "Create the first recurring timer."),

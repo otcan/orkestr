@@ -10,7 +10,7 @@ Run local coding agents with WhatsApp, browser desktops, timers, and inspectable
 2. Open `/setup`.
 3. Open Codex sign-in from the setup page.
 4. Pair WhatsApp 1 with the built-in local bridge.
-5. Prepare the Virtual Desktop profile.
+5. Prepare the desktop profile.
 6. Create the first coding thread.
 7. Send a task from the web UI, CLI, or WhatsApp.
 8. Inspect the live Codex session from the web cockpit.

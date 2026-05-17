@@ -1,7 +1,7 @@
 import { DatePipe } from "@angular/common";
 import { Component, EventEmitter, Input, OnDestroy, OnInit, Output, inject } from "@angular/core";
 import { firstValueFrom } from "rxjs";
-import { Agent, AgentTemplate, ApiService, ConnectorStatus, EventRecord, SetupStatus, TimerDoctorResponse, TimerRecord } from "./api.service";
+import { Agent, AgentTemplate, ApiService, BrowserSession, ConnectorStatus, EventRecord, SetupStatus, TimerDoctorResponse, TimerRecord } from "./api.service";
 
 export type ToolsView = "system" | "timers" | "desktops" | "models" | "settings" | "connectors";
 
@@ -29,7 +29,7 @@ export class OpsPageComponent implements OnInit, OnDestroy {
   opsTimers: TimerRecord[] = [];
   opsTimerDoctor: TimerDoctorResponse | null = null;
   opsEvents: EventRecord[] = [];
-  opsBrowsers: Array<Record<string, unknown>> = [];
+  opsBrowsers: BrowserSession[] = [];
   opsRuntimeLeases: Array<Record<string, unknown>> = [];
   opsExecutors: Array<Record<string, unknown>> = [];
   opsExecutions: Array<Record<string, unknown>> = [];
@@ -82,7 +82,7 @@ export class OpsPageComponent implements OnInit, OnDestroy {
       if (timers.status === "fulfilled") this.opsTimers = timers.value.timers || [];
       if (timerDoctor.status === "fulfilled") this.opsTimerDoctor = timerDoctor.value;
       if (events.status === "fulfilled") this.opsEvents = events.value.events || [];
-      if (browsers.status === "fulfilled") this.opsBrowsers = browsers.value.sessions || [];
+      if (browsers.status === "fulfilled") this.opsBrowsers = browsers.value.sessions || browsers.value.browsers || [];
       if (runtimeLeases.status === "fulfilled") {
         this.opsRuntimeLeases = runtimeLeases.value.leases || [];
         this.opsRuntimeBudget = runtimeLeases.value.budget || null;
@@ -100,8 +100,8 @@ export class OpsPageComponent implements OnInit, OnDestroy {
     }
   }
 
-  async browserAction(browser: Record<string, unknown>, action: string): Promise<void> {
-    const slug = this.objectValue(browser, "slug") || this.objectValue(browser, "id");
+  async browserAction(browser: BrowserSession, action: "prepare" | "start" | "stop" | "restart" | "cleanup"): Promise<void> {
+    const slug = this.browserSlug(browser);
     if (!slug) return;
     this.busy = true;
     try {
@@ -150,6 +150,49 @@ export class OpsPageComponent implements OnInit, OnDestroy {
   objectValue(value: unknown, key: string): string {
     if (!value || typeof value !== "object") return "";
     return String((value as Record<string, unknown>)[key] || "");
+  }
+
+  browserSlug(browser: BrowserSession): string {
+    return String(browser.slug || browser.id || "").trim();
+  }
+
+  browserLabel(browser: BrowserSession): string {
+    return String(browser.label || browser.slug || browser.id || "Desktop").trim();
+  }
+
+  browserSummary(browser: BrowserSession): string {
+    return String(browser.notes || browser.purpose || browser.url || "Local browser desktop").trim();
+  }
+
+  browserProfile(browser: BrowserSession): string {
+    return String(browser.profile_path || browser.profileDir || browser.profile || "").trim();
+  }
+
+  browserStatus(browser: BrowserSession): string {
+    return String(browser.status || browser.state || "unknown").trim();
+  }
+
+  browserType(browser: BrowserSession): string {
+    return String(browser.type || browser.access || "desktop").trim();
+  }
+
+  browserPid(browser: BrowserSession): string {
+    return browser.root_pid ? String(browser.root_pid) : "";
+  }
+
+  browserCdpLabel(browser: BrowserSession): string {
+    if (!browser.cdp_url) return "";
+    return browser.cdp_ok === false ? "CDP down" : "CDP ready";
+  }
+
+  canBrowserAction(browser: BrowserSession, action: "prepare" | "start" | "stop" | "restart" | "cleanup"): boolean {
+    if (!browser.control) {
+      if (action === "prepare" || action === "start") return true;
+      if (action === "restart") return !!browser.configured;
+      if (action === "stop") return this.browserStatus(browser) === "running";
+      if (action === "cleanup") return !!browser.configured && this.browserStatus(browser) !== "running";
+    }
+    return browser.control?.[action] === true;
   }
 
   systemCpuPercent(): number {

@@ -33,5 +33,6 @@ test("onboarding focuses the first loop on virtual desktop and WhatsApp", async 
   assert.ok(onboarding.includes("Add Gmail Login"));
   assert.ok(onboarding.includes("Gmail Probe"));
   assert.ok(onboarding.includes("setupSectionChange"));
+  assert.ok(onboarding.includes('label: "Desktops"'));
   assert.ok(browsers.includes('slug: "desktop"'));
 });
