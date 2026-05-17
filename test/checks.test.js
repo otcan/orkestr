@@ -19,6 +19,27 @@ test("OpenAI reports connected when OPENAI_API_KEY exists", async () => {
   assert.equal(openai.state, "connected");
 });
 
+test("Codex reports connected when the runtime OpenAI key is provided", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-codex-key-"));
+  const bin = path.join(home, "bin");
+  await fs.mkdir(bin, { recursive: true });
+  await fs.writeFile(path.join(bin, "codex"), "#!/bin/sh\necho codex-cli test\n");
+  await fs.chmod(path.join(bin, "codex"), 0o755);
+  const priorPath = process.env.PATH;
+  process.env.PATH = `${bin}${path.delimiter}${priorPath || ""}`;
+
+  try {
+    const status = await getSetupStatus({ env: { ORKESTR_HOME: home, OPENAI_API_KEY: "test", ORKESTR_DOCKER: "1" }, home });
+    const codex = status.connectors.find((connector) => connector.id === "codex");
+    assert.equal(codex.state, "connected");
+    assert.equal(codex.details.authMode, "api_key");
+    assert.match(codex.summary, /OPENAI_API_KEY/);
+  } finally {
+    if (priorPath === undefined) delete process.env.PATH;
+    else process.env.PATH = priorPath;
+  }
+});
+
 test("private overlay can provide host-native connector status", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-overlay-status-"));
   const overlayDir = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-overlay-status-config-"));

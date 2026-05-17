@@ -95,6 +95,8 @@ export async function getConnectorStatuses({ env = process.env, home = os.homedi
   const gmailOAuthExists = await pathExists(path.join(paths.secrets, "gmail-token.json"));
   const gmailOAuthError = await readJsonIfExists(path.join(paths.secrets, "gmail-error.json"));
   const openaiKey = env.OPENAI_API_KEY || openaiConfig.openaiApiKey || "";
+  const codexAuthExists = await pathExists(codexAuthPath);
+  const codexEnvKey = Boolean(env.OPENAI_API_KEY);
   const whatsapp = await getWhatsAppStatus(env);
   const overlay = await readOverlay(env);
 
@@ -103,11 +105,12 @@ export async function getConnectorStatuses({ env = process.env, home = os.homedi
       ? status("openai", "OpenAI", "connected", "OpenAI key is configured locally.")
       : status("openai", "OpenAI", "not_connected", "Add an OpenAI API key or connect Codex auth."),
     codex:
-      codex.command && (await pathExists(codexAuthPath))
-        ? status("codex", "Codex", "connected", "Codex runtime is installed and signed in.", {
+      codex.command && (codexAuthExists || codexEnvKey)
+        ? status("codex", "Codex", "connected", codexAuthExists ? "Codex runtime is installed and signed in." : "Codex runtime is installed and will use OPENAI_API_KEY from the runtime env.", {
             command: codex.command,
             version: codex.version,
             codexHome,
+            authMode: codexAuthExists ? "device_auth" : "api_key",
             dockerRuntime: String(env.ORKESTR_DOCKER || "").trim() === "1",
           })
         : codex.command
