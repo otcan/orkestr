@@ -101,6 +101,20 @@ function summaryStreamIntervalMs(): number {
   return Number.isFinite(parsed) ? Math.max(1000, parsed) : 10_000;
 }
 
+function stableRuntimeSummary(runtime: unknown): unknown {
+  if (!runtime || typeof runtime !== "object") return runtime || null;
+  const { heartbeatAt, updatedAt, ...stable } = runtime as Record<string, unknown>;
+  return stable;
+}
+
+function stableSummaryBody(payload: { threads?: Array<Record<string, unknown>> }): string {
+  const threads = (payload.threads || []).map((thread) => {
+    const { updatedAt, threadUpdatedAt, runtime, ...stable } = thread;
+    return { ...stable, runtime: stableRuntimeSummary(runtime) };
+  });
+  return JSON.stringify(threads);
+}
+
 export function attachThreadStreamUpgrade(server: Server): void {
   if (attachedServers.has(server)) return;
   attachedServers.add(server);
@@ -116,7 +130,7 @@ export function attachThreadStreamUpgrade(server: Server): void {
     summaryInFlight = true;
     try {
       const payload = await threadSummaryPayload();
-      const stableBody = JSON.stringify(payload.threads || []);
+      const stableBody = stableSummaryBody(payload);
       if (!force && stableBody === lastSummaryBody) return;
       lastSummaryBody = stableBody;
       const message = { type: "threads_summary", ...payload };
