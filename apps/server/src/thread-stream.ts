@@ -97,8 +97,8 @@ function summaryStreamPath(url: string | undefined): boolean {
 }
 
 function summaryStreamIntervalMs(): number {
-  const parsed = Number(process.env.ORKESTR_SUMMARY_STREAM_INTERVAL_MS || 30_000);
-  return Number.isFinite(parsed) ? Math.max(5000, parsed) : 30_000;
+  const parsed = Number(process.env.ORKESTR_SUMMARY_STREAM_INTERVAL_MS || 10_000);
+  return Number.isFinite(parsed) ? Math.max(5000, parsed) : 10_000;
 }
 
 function rawSnapshotActiveIntervalMs(): number {

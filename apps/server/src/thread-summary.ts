@@ -6,7 +6,12 @@ type ThreadSummaryOptions = {
   cacheTtlMs?: number;
 };
 
-const threadSummaryCache = new Map<string, { cacheKey: string; expiresAt: number; summary: Record<string, unknown> }>();
+const threadMetadataCache = new Map<string, {
+  cacheKey: string;
+  expiresAt: number;
+  gitState: Record<string, unknown>;
+  liveCodexMetadata: Record<string, unknown>;
+}>();
 
 export function codexThreadId(thread: any): string {
   return String(thread?.executor?.codexThreadId || thread?.codexThreadId || "").trim();
@@ -81,51 +86,28 @@ function threadSummaryCacheTtlMs(): number {
   return Number.isFinite(parsed) ? Math.max(0, parsed) : 120_000;
 }
 
-function threadSummaryCacheKey(thread: any, messages: any[] = []): string {
-  const lastMessage = messages.at(-1) || {};
-  const pendingCounts = messages.reduce((counts: Record<string, number>, message: any) => {
-    const state = String(message?.state || "unknown");
-    counts[state] = (counts[state] || 0) + 1;
-    return counts;
-  }, {});
+function threadMetadataCacheKey(thread: any, status: any): string {
+  const metadata = thread?.executor?.metadata && typeof thread.executor.metadata === "object" ? thread.executor.metadata : {};
   return JSON.stringify({
     id: thread?.id || null,
-    name: thread?.name || null,
-    title: thread?.title || null,
-    bindingName: thread?.bindingName || null,
-    state: thread?.state || null,
-    status: thread?.status || null,
-    activeRuntimeLeaseId: thread?.activeRuntimeLeaseId || null,
-    runtimeState: thread?.runtime?.state || null,
-    paneId: thread?.runtime?.paneId || thread?.executor?.tmuxTarget || null,
-    sessionName: thread?.runtime?.sessionName || thread?.executor?.sessionName || null,
+    activeRuntimeLeaseId: status?.lease?.id || thread?.activeRuntimeLeaseId || null,
+    codexThreadId: thread?.executor?.codexThreadId || thread?.codexThreadId || metadata.codexThreadId || null,
     repoPath: thread?.repoPath || thread?.worktreePath || null,
+    workspace: thread?.workspace || thread?.cwd || status?.lease?.workspace || thread?.runtime?.workspace || null,
     branchName: thread?.branchName || null,
     baseCommit: thread?.baseCommit || null,
     baseBranch: thread?.baseBranch || null,
     remoteBranch: thread?.remoteBranch || null,
-    workerStatus: thread?.workerStatus || null,
-    workerLabel: thread?.workerLabel || null,
-    binding: thread?.binding || null,
-    messageCount: messages.length,
-    pendingCounts,
-    lastMessageId: lastMessage?.id || null,
-    lastMessageState: lastMessage?.state || null,
-    lastMessageDeliveryState: lastMessage?.deliveryState || null,
-    lastMessageDeliveryNextAttemptAt: lastMessage?.deliveryNextAttemptAt || null,
-    lastMessageUpdatedAt: lastMessage?.updatedAt || lastMessage?.createdAt || null,
+    executorMetadata: metadata,
   });
 }
 
-export async function threadRuntimeSummary(thread: any, messages: any[] = [], options: ThreadSummaryOptions = {}) {
-  const ttlMs = Number(options.cacheTtlMs ?? 0) || 0;
-  const cacheKey = ttlMs > 0 ? threadSummaryCacheKey(thread, messages) : "";
-  const cached = ttlMs > 0 ? threadSummaryCache.get(String(thread?.id || "")) : null;
+async function cachedThreadMetadata(thread: any, status: any, ttlMs: number) {
+  const cacheKey = ttlMs > 0 ? threadMetadataCacheKey(thread, status) : "";
+  const cached = ttlMs > 0 ? threadMetadataCache.get(String(thread?.id || "")) : null;
   if (cached && cached.cacheKey === cacheKey && cached.expiresAt > Date.now()) {
-    return cached.summary;
+    return { gitState: cached.gitState, liveCodexMetadata: cached.liveCodexMetadata };
   }
-
-  const status = await runtimeStatus(thread.id).catch(() => null);
   const gitState: any = await detectThreadGitState(thread).catch(() => ({}));
   const metadataTarget = {
     ...thread,
@@ -133,6 +115,21 @@ export async function threadRuntimeSummary(thread: any, messages: any[] = [], op
     runtime: status?.lease ? { ...(thread.runtime || {}), ...status.lease } : thread.runtime,
   };
   const liveCodexMetadata: any = await resolveCodexThreadMetadata(metadataTarget).catch(() => ({}));
+  if (ttlMs > 0 && thread?.id) {
+    threadMetadataCache.set(String(thread.id), {
+      cacheKey,
+      expiresAt: Date.now() + ttlMs,
+      gitState,
+      liveCodexMetadata,
+    });
+  }
+  return { gitState, liveCodexMetadata };
+}
+
+export async function threadRuntimeSummary(thread: any, messages: any[] = [], options: ThreadSummaryOptions = {}) {
+  const ttlMs = Number(options.cacheTtlMs ?? 0) || 0;
+  const status = await runtimeStatus(thread.id).catch(() => null);
+  const { gitState, liveCodexMetadata } = await cachedThreadMetadata(thread, status, ttlMs);
   const codexThread = {
     ...thread,
     ...liveCodexMetadata,
@@ -190,9 +187,6 @@ export async function threadRuntimeSummary(thread: any, messages: any[] = [], op
     wakePolicy: thread.wakePolicy || "wake-on-message",
     ...codexMetadata(codexThread),
   };
-  if (ttlMs > 0 && thread?.id) {
-    threadSummaryCache.set(String(thread.id), { cacheKey, expiresAt: Date.now() + ttlMs, summary });
-  }
   return summary;
 }
 
@@ -200,8 +194,8 @@ export async function threadSummaryPayload(options: ThreadSummaryOptions = {}) {
   const cacheTtlMs = Number(options.cacheTtlMs ?? threadSummaryCacheTtlMs()) || 0;
   const threads = await listThreads();
   const activeThreadIds = new Set(threads.map((thread: any) => String(thread?.id || "")).filter(Boolean));
-  for (const id of threadSummaryCache.keys()) {
-    if (!activeThreadIds.has(id)) threadSummaryCache.delete(id);
+  for (const id of threadMetadataCache.keys()) {
+    if (!activeThreadIds.has(id)) threadMetadataCache.delete(id);
   }
   return {
     generatedAt: new Date().toISOString(),

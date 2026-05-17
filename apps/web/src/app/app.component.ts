@@ -1239,13 +1239,12 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
       this.threadState(thread),
       thread.publicStatus,
       thread.publicStatusCode,
-      thread.workerStatus,
       this.objectValue(thread.runtime, "state"),
       this.objectValue(thread.runtime, "status"),
       this.objectValue(thread.runtime, "executionState"),
     ].join(" ").toLowerCase();
     return Boolean(
-      this.threadRecentlyActive(thread) ||
+      this.threadLoading(thread) ||
       thread.working ||
       thread.typingActive ||
       thread.backgroundWork ||
@@ -1256,6 +1255,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
 
   threadProcessingLabel(thread: ThreadSummary | null): string {
     if (!thread) return "Working";
+    if (this.threadLoading(thread)) return "Loading";
     if (thread.backgroundWork) return "Background";
     const state = this.threadState(thread);
     if (state.includes("waking")) return "Starting";
