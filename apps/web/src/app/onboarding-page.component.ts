@@ -95,7 +95,7 @@ export class OnboardingPageComponent implements OnInit, OnDestroy {
   ngOnInit(): void {
     this.restoreProgress();
     void this.load();
-    this.poller = setInterval(() => void this.load(false), 5000);
+    this.poller = setInterval(() => void this.load(false), 30_000);
   }
 
   ngOnDestroy(): void {

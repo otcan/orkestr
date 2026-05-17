@@ -39,7 +39,7 @@ export class OpsPageComponent implements OnInit, OnDestroy {
 
   ngOnInit(): void {
     void this.loadOps();
-    this.poller = setInterval(() => void this.loadOps(false), 5000);
+    this.poller = setInterval(() => void this.loadOps(false), 30_000);
   }
 
   ngOnDestroy(): void {

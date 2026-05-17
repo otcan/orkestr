@@ -8,6 +8,7 @@ const execFileAsync = promisify(execFile);
 const cookieName = "orkestr_session";
 const challengeTtlMs = 10 * 60 * 1000;
 const sessionTtlMs = 90 * 24 * 60 * 60 * 1000;
+const commandStatusCache = new Map();
 
 function nowIso() {
   return new Date().toISOString();
@@ -46,19 +47,32 @@ async function writeSecurityConfig(config, env = process.env) {
   return next;
 }
 
-async function commandStatus(command, args = ["--version"]) {
+function commandStatusCacheTtlMs(env = process.env) {
+  const parsed = Number(env.ORKESTR_SECURITY_COMMAND_CACHE_TTL_MS || 30_000);
+  return Number.isFinite(parsed) ? Math.max(0, parsed) : 30_000;
+}
+
+async function commandStatus(command, args = ["--version"], env = process.env) {
+  const cacheKey = JSON.stringify([command, args]);
+  const ttlMs = commandStatusCacheTtlMs(env);
+  const cached = ttlMs > 0 ? commandStatusCache.get(cacheKey) : null;
+  if (cached && cached.expiresAt > Date.now()) return cached.status;
   try {
     const { stdout, stderr } = await execFileAsync(command, args, { timeout: 2500 });
-    return {
+    const status = {
       installed: true,
       version: String(stdout || stderr || "").split("\n")[0].trim(),
     };
+    if (ttlMs > 0) commandStatusCache.set(cacheKey, { expiresAt: Date.now() + ttlMs, status });
+    return status;
   } catch (error) {
-    return {
+    const status = {
       installed: false,
       version: "",
       error: error?.code === "ENOENT" ? "not_installed" : error?.message || String(error),
     };
+    if (ttlMs > 0) commandStatusCache.set(cacheKey, { expiresAt: Date.now() + ttlMs, status });
+    return status;
   }
 }
 
@@ -95,8 +109,8 @@ export function securityCookieName() {
 export async function securityStatus(env = process.env) {
   const config = await readSecurityConfig(env);
   const host = bindHost(env);
-  const caddy = await commandStatus("caddy", ["version"]);
-  const tailscale = await commandStatus("tailscale", ["status", "--json"]);
+  const caddy = await commandStatus("caddy", ["version"], env);
+  const tailscale = await commandStatus("tailscale", ["status", "--json"], env);
   const httpsUrl = String(env.ORKESTR_PUBLIC_HTTPS_URL || env.ORKESTR_HTTPS_URL || env.ORKESTR_TAILSCALE_HTTPS_NAME || "").trim();
   const caddyConfigured = String(env.ORKESTR_CADDY_ENABLED || "").trim() === "1";
   const proxyLocalBindSetting = String(env.ORKESTR_REVERSE_PROXY_LOCAL_BIND || "").trim();
