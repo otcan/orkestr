@@ -9,6 +9,7 @@
         <h1>Threads</h1>
       </div>
       <div class="brand-actions">
+        <button class="new-thread-button" type="button" (click)="openThreadWizard()">New Coding Agent</button>
         <button class="secondary setup-shortcut" type="button" (click)="openOnboarding()">Setup</button>
         <span class="health" [class.ok]="apiOnline">{{ apiOnline ? "online" : "loading" }}</span>
       </div>
@@ -155,6 +156,9 @@
         <p class="empty">No matching threads.</p>
       }
     </nav>
+    @if (!threads.length) {
+      <button class="sidebar-create-thread" type="button" (click)="openThreadWizard()">Create first coding agent</button>
+    }
   </aside>
 
   <button
@@ -169,6 +173,14 @@
   <section class="chat">
     @if (activePanel === "ops") {
       <ork-ops-page [toolsView]="toolsView" (toolsViewChange)="setToolsView($event)"></ork-ops-page>
+    } @else if (threadWizardOpen || !threads.length) {
+      <ork-first-thread-wizard
+        class="first-thread-host"
+        [setupStatus]="setupStatus"
+        [canCancel]="threads.length > 0"
+        (cancel)="closeThreadWizard()"
+        (created)="handleThreadWizardCreated($event)"
+      ></ork-first-thread-wizard>
     } @else if (selectedThread(); as thread) {
       <header class="chat-head">
         @if (showWhatsAppChatIcon(thread)) {
@@ -218,50 +230,52 @@
         <button type="button" [class.active]="activePanel === 'workers'" (click)="openPanel('workers')">Parallel Work</button>
         <button type="button" [class.active]="activePanel === 'runtime'" (click)="openPanel('runtime')">Runtime</button>
         <span class="panel-spacer"></span>
-        <div class="codex-mode-toggle" title="Requested Codex mode for this Orkestr thread">
-          <button type="button" [class.active]="codexModeValue(thread) === 'code'" (click)="switchCodexMode('code')" [disabled]="busy">Code</button>
-          <button type="button" [class.active]="codexModeValue(thread) === 'plan'" (click)="switchCodexMode('plan')" [disabled]="busy">Plan</button>
+        <div class="codex-control-scroll" aria-label="Codex controls">
+          <div class="codex-mode-toggle" title="Requested Codex mode for this Orkestr thread">
+            <button type="button" [class.active]="codexModeValue(thread) === 'code'" (click)="switchCodexMode('code')" [disabled]="busy">Code</button>
+            <button type="button" [class.active]="codexModeValue(thread) === 'plan'" (click)="switchCodexMode('plan')" [disabled]="busy">Plan</button>
+          </div>
+          <button
+            class="codex-capacity-card"
+            type="button"
+            [class.active]="modelDetailsOpen"
+            (click)="openModelDetails($event)"
+            [title]="codexCapacityTooltip(thread)"
+            aria-haspopup="dialog"
+            [attr.aria-expanded]="modelDetailsOpen"
+          >
+            <span class="codex-model-row">
+              <strong>{{ codexModelName(thread) }}</strong>
+              <span>{{ codexReasoningEffortLabel(thread) || "effort ?" }}</span>
+            </span>
+            <span class="codex-meter-row">
+              <span class="codex-meter" [class.warn]="codexRateTone(thread, 'primary') === 'warn'" [class.danger]="codexRateTone(thread, 'primary') === 'danger'">
+                <b>5h</b>
+                <i><em [style.width.%]="codexRateRemainingFill(thread, 'primary')"></em></i>
+                <small>{{ codexRateRemainingLabel(thread, 'primary') }}</small>
+              </span>
+              <span class="codex-meter" [class.warn]="codexRateTone(thread, 'secondary') === 'warn'" [class.danger]="codexRateTone(thread, 'secondary') === 'danger'">
+                <b>Week</b>
+                <i><em [style.width.%]="codexRateRemainingFill(thread, 'secondary')"></em></i>
+                <small>{{ codexRateRemainingLabel(thread, 'secondary') }}</small>
+              </span>
+              <span class="codex-meter context" [class.warn]="codexContextTone(thread) === 'warn'" [class.danger]="codexContextTone(thread) === 'danger'">
+                <b>Ctx</b>
+                <i><em [style.width.%]="codexContextFill(thread)"></em></i>
+                <small>{{ codexContextLabel(thread) }}</small>
+              </span>
+            </span>
+          </button>
+          @if (canWakeThread(thread)) {
+            <button class="secondary" type="button" (click)="wakeSelected()" [disabled]="busy">Wake</button>
+          }
+          @if (canSleepThread(thread)) {
+            <button class="secondary" type="button" (click)="sleepSelected()" [disabled]="busy">Sleep</button>
+          }
+          @if (canRecoverThread(thread)) {
+            <button class="secondary danger-soft" type="button" (click)="recoverSelected()" [disabled]="busy">Recover</button>
+          }
         </div>
-        <button
-          class="codex-capacity-card"
-          type="button"
-          [class.active]="modelDetailsOpen"
-          (click)="openModelDetails($event)"
-          [title]="codexCapacityTooltip(thread)"
-          aria-haspopup="dialog"
-          [attr.aria-expanded]="modelDetailsOpen"
-        >
-          <span class="codex-model-row">
-            <strong>{{ codexModelName(thread) }}</strong>
-            <span>{{ codexReasoningEffortLabel(thread) || "effort ?" }}</span>
-          </span>
-          <span class="codex-meter-row">
-            <span class="codex-meter" [class.warn]="codexRateTone(thread, 'primary') === 'warn'" [class.danger]="codexRateTone(thread, 'primary') === 'danger'">
-              <b>5h</b>
-              <i><em [style.width.%]="codexRateRemainingFill(thread, 'primary')"></em></i>
-              <small>{{ codexRateRemainingLabel(thread, 'primary') }}</small>
-            </span>
-            <span class="codex-meter" [class.warn]="codexRateTone(thread, 'secondary') === 'warn'" [class.danger]="codexRateTone(thread, 'secondary') === 'danger'">
-              <b>Week</b>
-              <i><em [style.width.%]="codexRateRemainingFill(thread, 'secondary')"></em></i>
-              <small>{{ codexRateRemainingLabel(thread, 'secondary') }}</small>
-            </span>
-            <span class="codex-meter context" [class.warn]="codexContextTone(thread) === 'warn'" [class.danger]="codexContextTone(thread) === 'danger'">
-              <b>Ctx</b>
-              <i><em [style.width.%]="codexContextFill(thread)"></em></i>
-              <small>{{ codexContextLabel(thread) }}</small>
-            </span>
-          </span>
-        </button>
-        @if (canWakeThread(thread)) {
-          <button class="secondary" type="button" (click)="wakeSelected()" [disabled]="busy">Wake</button>
-        }
-        @if (canSleepThread(thread)) {
-          <button class="secondary" type="button" (click)="sleepSelected()" [disabled]="busy">Sleep</button>
-        }
-        @if (canRecoverThread(thread)) {
-          <button class="secondary danger-soft" type="button" (click)="recoverSelected()" [disabled]="busy">Recover</button>
-        }
       </nav>
 
       @if (modelDetailsOpen) {
@@ -753,7 +767,8 @@
     } @else {
       <section class="empty-state full">
         <h2>No thread selected</h2>
-        <p>Select a thread from the left sidebar.</p>
+        <p>Select a thread from the left sidebar or create a new coding agent.</p>
+        <button type="button" (click)="openThreadWizard()">New Coding Agent</button>
       </section>
     }
   </section>

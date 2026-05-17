@@ -1,0 +1,143 @@
+<section class="first-thread-wizard" aria-label="Create coding agent thread">
+  <header class="first-thread-head">
+    <div>
+      <p class="eyebrow">New Coding Agent</p>
+      <h2>Create the first thread</h2>
+      <p class="helper">Start with a task, choose the workspace, then Orkestr creates the Codex thread and sends the first message.</p>
+    </div>
+    @if (canCancel) {
+      <button class="secondary" type="button" (click)="cancel.emit()" [disabled]="busy">Close</button>
+    }
+  </header>
+
+  <div class="wizard-progress" aria-hidden="true">
+    <span [style.width.%]="progressPercent()"></span>
+  </div>
+
+  <nav class="wizard-step-tabs" aria-label="Thread creation progress">
+    @for (step of steps; track step.id; let index = $index) {
+      <button
+        type="button"
+        [class.active]="index === stepIndex"
+        [class.done]="stepDone(index)"
+        (click)="selectStep(index)"
+        [disabled]="!canSelectStep(index)"
+      >
+        <span>{{ index + 1 }}</span>
+        {{ step.label }}
+      </button>
+    }
+  </nav>
+
+  @if (error) {
+    <div class="notice error">{{ error }}</div>
+  }
+
+  @if (creationStage) {
+    <div class="wizard-stage">
+      <span></span>
+      {{ creationStage }}
+    </div>
+  }
+
+  <form class="wizard-panel" (submit)="createAndStart(); $event.preventDefault()">
+    @if (activeStep() === "task") {
+      <div class="wizard-section-title">
+        <p class="eyebrow">Task</p>
+        <h3>What should the agent do?</h3>
+      </div>
+      <textarea
+        name="first-thread-task"
+        rows="8"
+        [(ngModel)]="task"
+        placeholder="Example: inspect this repository and list the top three launch blockers."
+        [disabled]="busy"
+      ></textarea>
+      <div class="thread-template-grid">
+        @for (template of templates; track template.id) {
+          <button class="thread-template" type="button" (click)="applyTemplate(template)" [disabled]="busy">
+            <strong>{{ template.label }}</strong>
+            <span>{{ template.mode }}</span>
+          </button>
+        }
+      </div>
+    }
+
+    @if (activeStep() === "workspace") {
+      <div class="wizard-section-title">
+        <p class="eyebrow">Workspace</p>
+        <h3>Where should it work?</h3>
+      </div>
+      <div class="segmented-control">
+        <button
+          type="button"
+          [class.active]="workspaceMode === 'isolated'"
+          (click)="workspaceMode = 'isolated'; workspace = workspace || '/workspace'"
+          [disabled]="busy"
+        >
+          Isolated workspace
+        </button>
+        <button type="button" [class.active]="workspaceMode === 'repo'" (click)="workspaceMode = 'repo'" [disabled]="busy">
+          Existing repo path
+        </button>
+      </div>
+      <label class="wizard-field">
+        <span>{{ selectedWorkspaceLabel() }}</span>
+        <input name="first-thread-workspace" [(ngModel)]="workspace" placeholder="/workspace" [disabled]="busy" />
+      </label>
+    }
+
+    @if (activeStep() === "runtime") {
+      <div class="wizard-section-title">
+        <p class="eyebrow">Runtime</p>
+        <h3>How should it run?</h3>
+      </div>
+      <div class="runtime-check-grid">
+        <article [class.ready]="connectorReady('openai')">
+          <span>OpenAI</span>
+          <strong>{{ openAiConnector()?.state || "checking" }}</strong>
+          <p>{{ connectorSummary('openai') }}</p>
+        </article>
+        <article [class.ready]="connectorReady('codex')">
+          <span>Codex</span>
+          <strong>{{ codexConnector()?.state || "checking" }}</strong>
+          <p>{{ connectorSummary('codex') }}</p>
+        </article>
+      </div>
+      <div class="segmented-control">
+        <button type="button" [class.active]="codexMode === 'code'" (click)="codexMode = 'code'" [disabled]="busy">Code</button>
+        <button type="button" [class.active]="codexMode === 'plan'" (click)="codexMode = 'plan'" [disabled]="busy">Plan</button>
+      </div>
+      <label class="wizard-field">
+        <span>Thread name</span>
+        <input name="first-thread-name" [(ngModel)]="threadName" [placeholder]="suggestedThreadName()" [disabled]="busy" />
+      </label>
+    }
+
+    @if (activeStep() === "review") {
+      <div class="wizard-section-title">
+        <p class="eyebrow">Review</p>
+        <h3>Create and start</h3>
+      </div>
+      <dl class="wizard-review">
+        <dt>Name</dt>
+        <dd>{{ suggestedThreadName() }}</dd>
+        <dt>Workspace</dt>
+        <dd>{{ workspace || "/workspace" }}</dd>
+        <dt>Mode</dt>
+        <dd>{{ codexMode }}</dd>
+        <dt>First task</dt>
+        <dd>{{ task || "No task entered" }}</dd>
+      </dl>
+    }
+
+    <div class="wizard-actions">
+      <button class="secondary" type="button" (click)="previous()" [disabled]="busy || stepIndex === 0">Back</button>
+      @if (activeStep() !== "review") {
+        <button type="button" (click)="next()" [disabled]="busy || !canContinue()">Next</button>
+      } @else {
+        <button type="submit" [disabled]="!canCreate()">{{ busy ? "Starting" : "Create and Start" }}</button>
+      }
+    </div>
+  </form>
+</section>

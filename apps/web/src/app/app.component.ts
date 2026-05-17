@@ -2,6 +2,7 @@ import { DatePipe } from "@angular/common";
 import { AfterViewChecked, ChangeDetectorRef, Component, ElementRef, OnDestroy, OnInit, ViewChild, inject, signal } from "@angular/core";
 import { FormsModule } from "@angular/forms";
 import { firstValueFrom } from "rxjs";
+import { FirstThreadWizardComponent } from "./first-thread-wizard.component";
 import { OnboardingPageComponent } from "./onboarding-page.component";
 import { OpsPageComponent, ToolsView } from "./ops-page.component";
 import { RawTerminalController } from "./raw-terminal.controller";
@@ -30,7 +31,7 @@ type PersistedThreadTextField =
 
 @Component({
   selector: "ork-root",
-  imports: [DatePipe, FormsModule, OpsPageComponent, OnboardingPageComponent],
+  imports: [DatePipe, FormsModule, FirstThreadWizardComponent, OpsPageComponent, OnboardingPageComponent],
   templateUrl: "./app.component.html",
 })
 export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
@@ -79,6 +80,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   apiOnline = false;
   busy = false;
   sending = false;
+  threadWizardOpen = false;
   onboardingActive = false;
   activePanel: Panel = "chat";
   toolsView: ToolsView = "system";
@@ -360,6 +362,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
 
   async activateThread(thread: ThreadSummary): Promise<void> {
     const nextPanel = this.activePanel === "raw" ? "raw" : "chat";
+    this.threadWizardOpen = false;
     this.selectedId = this.threadSlug(thread);
     this.activePanel = nextPanel;
     this.modelDetailsOpen = false;
@@ -409,6 +412,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   openTools(view: ToolsView = this.toolsView): void {
     if (this.activePanel === "raw") this.closeRawStream();
     this.modelDetailsOpen = false;
+    this.threadWizardOpen = false;
     this.onboardingActive = false;
     this.toolsView = view;
     this.activePanel = "ops";
@@ -425,6 +429,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
 
   openOnboarding(): void {
     if (this.activePanel === "raw") this.closeRawStream();
+    this.threadWizardOpen = false;
     this.onboardingActive = true;
     this.clearOnboardingFlag("skipped");
     this.pushOnboardingPath();
@@ -435,11 +440,42 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   async leaveOnboarding(completed = false): Promise<void> {
     this.onboardingActive = false;
     this.writeOnboardingFlag(completed ? "completed" : "skipped");
-    this.activePanel = "ops";
-    this.toolsView = "connectors";
-    this.pushOpsPath("connectors");
+    if (completed) {
+      this.threadWizardOpen = true;
+      this.activePanel = "chat";
+      globalThis.history?.pushState({}, "", "/");
+    } else {
+      this.threadWizardOpen = false;
+      this.activePanel = "ops";
+      this.toolsView = "connectors";
+      this.pushOpsPath("connectors");
+    }
     this.updateDocumentTitle();
     await this.refresh(false);
+  }
+
+  openThreadWizard(): void {
+    if (this.activePanel === "raw") this.closeRawStream();
+    this.threadWizardOpen = true;
+    this.onboardingActive = false;
+    this.activePanel = "chat";
+    this.modelDetailsOpen = false;
+    this.updateDocumentTitle();
+    this.renderNow();
+  }
+
+  closeThreadWizard(): void {
+    if (!this.threads.length) return;
+    this.threadWizardOpen = false;
+    this.updateDocumentTitle();
+    this.renderNow();
+  }
+
+  async handleThreadWizardCreated(thread: ThreadSummary): Promise<void> {
+    this.threadWizardOpen = false;
+    await this.refresh(false);
+    const created = this.threads.find((candidate) => candidate.id === thread.id) || thread;
+    await this.activateThread(created);
   }
 
   async sendMessage(): Promise<void> {
@@ -937,6 +973,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
 
   selectedThread(): ThreadSummary | null {
     if (this.onboardingActive) return null;
+    if (this.threadWizardOpen) return null;
     if (this.activePanel === "ops") return null;
     if (!this.selectedId) return this.threads[0] || null;
     return this.resolveThread(this.selectedId) || null;
@@ -1208,7 +1245,6 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
       this.objectValue(thread.runtime, "executionState"),
     ].join(" ").toLowerCase();
     return Boolean(
-      this.threadLoading(thread) ||
       this.threadRecentlyActive(thread) ||
       thread.working ||
       thread.typingActive ||
@@ -1220,7 +1256,6 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
 
   threadProcessingLabel(thread: ThreadSummary | null): string {
     if (!thread) return "Working";
-    if (this.threadLoading(thread)) return "Loading";
     if (thread.backgroundWork) return "Background";
     const state = this.threadState(thread);
     if (state.includes("waking")) return "Starting";
