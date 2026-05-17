@@ -21,10 +21,13 @@ function response(payload, ok = true, status = 200) {
   };
 }
 
-test("whatsapp status reports not configured without bridge URL", async () => {
+test("whatsapp status defaults to the built-in local bridge", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-empty-"));
   const status = await getWhatsAppStatus({ ORKESTR_HOME: home });
-  assert.equal(status.state, "not_configured");
+  assert.equal(status.state, "unpaired");
+  assert.equal(status.mode, "local");
+  assert.equal(status.bridgeUrl, "/api/connectors/whatsapp/bridge");
+  assert.equal(status.accounts.length, 2);
 });
 
 test("whatsapp status reports paired from health readiness", async () => {

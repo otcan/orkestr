@@ -29,10 +29,13 @@ export class OnboardingPageComponent implements OnInit, OnDestroy {
   gmailClientId = "";
   gmailClientSecret = "";
   gmailRedirectUri = "http://127.0.0.1:19812/oauth/gmail/callback";
-  whatsappBridgeUrl = "http://127.0.0.1:8787";
-  whatsappApiToken = "";
   private formHydrated = false;
   private stepInitialized = false;
+
+  readonly whatsappAccounts = [
+    { id: "account-1", label: "WhatsApp 1" },
+    { id: "account-2", label: "WhatsApp 2" },
+  ];
 
   readonly steps: Array<{ id: OnboardingStep; label: string; eyebrow: string }> = [
     { id: "openai", label: "OpenAI", eyebrow: "Model access" },
@@ -116,19 +119,6 @@ export class OnboardingPageComponent implements OnInit, OnDestroy {
     await this.browserAction("start", "LinkedIn browser requested.");
   }
 
-  async saveWhatsApp(): Promise<void> {
-    const bridgeUrl = this.whatsappBridgeUrl.trim();
-    if (!bridgeUrl) {
-      this.error = "WhatsApp needs a bridge URL.";
-      return;
-    }
-    const body: Record<string, string> = { bridgeUrl };
-    const apiToken = this.whatsappApiToken.trim();
-    if (apiToken) body["apiToken"] = apiToken;
-    await this.saveConnector("whatsapp", body, "WhatsApp bridge settings saved.");
-    this.whatsappApiToken = "";
-  }
-
   connector(id: string): ConnectorStatus | null {
     return this.setup?.connectors?.find((connector) => connector.id === id) || null;
   }
@@ -159,12 +149,67 @@ export class OnboardingPageComponent implements OnInit, OnDestroy {
     return this.setup?.setupState === "ready";
   }
 
-  qrUrl(): string {
-    return String(this.connector("whatsapp")?.details?.["qrUrl"] || "");
+  whatsappAccount(id: string): Record<string, unknown> {
+    const accounts = this.connector("whatsapp")?.details?.["accounts"];
+    if (!Array.isArray(accounts)) return {};
+    return (accounts as Array<Record<string, unknown>>).find((account) => String(account["accountId"]) === id) || {};
   }
 
-  qrAvailable(): boolean {
-    return Boolean(this.qrUrl());
+  whatsappAccountState(id: string): string {
+    return String(this.whatsappAccount(id)["state"] || "idle").replace(/_/g, " ");
+  }
+
+  whatsappAccountClass(id: string): string {
+    const state = String(this.whatsappAccount(id)["state"] || "").toLowerCase();
+    if (state === "ready") return "ready";
+    if (["qr_needed", "starting", "authenticated"].includes(state)) return "partial";
+    if (["failed", "auth_failure", "dependency_missing"].includes(state)) return "bad";
+    return "idle";
+  }
+
+  whatsappAccountError(id: string): string {
+    return String(this.whatsappAccount(id)["error"] || "");
+  }
+
+  whatsappQrUrl(id: string): string {
+    const account = this.whatsappAccount(id);
+    const url = String(account["qrUrl"] || "");
+    const updatedAt = String(account["updatedAt"] || "");
+    if (!url || !updatedAt) return url;
+    return `${url}${url.includes("?") ? "&" : "?"}v=${encodeURIComponent(updatedAt)}`;
+  }
+
+  whatsappQrAvailable(id: string): boolean {
+    return Boolean(this.whatsappQrUrl(id));
+  }
+
+  async startWhatsApp(accountId: string): Promise<void> {
+    this.busy = true;
+    try {
+      await firstValueFrom(this.api.saveConnectorConfig("whatsapp", { bridgeMode: "local", maxAccounts: "2" }));
+      await firstValueFrom(this.api.startWhatsAppAccount(accountId));
+      this.notice = `${this.whatsappAccountLabel(accountId)} is starting.`;
+      this.error = "";
+      await this.load(false);
+    } catch (error) {
+      this.error = this.errorText(error);
+    } finally {
+      this.busy = false;
+    }
+  }
+
+  async logoutWhatsApp(accountId: string): Promise<void> {
+    this.busy = true;
+    try {
+      await firstValueFrom(this.api.logoutWhatsAppAccount(accountId));
+      this.notice = `${this.whatsappAccountLabel(accountId)} disconnected.`;
+      this.error = "";
+      await this.load(false);
+    } catch (error) {
+      this.error = this.errorText(error);
+    } finally {
+      this.busy = false;
+    }
   }
 
   selectStep(id: OnboardingStep): void {
@@ -209,11 +254,13 @@ export class OnboardingPageComponent implements OnInit, OnDestroy {
     if (this.formHydrated) return;
     const config = setup.config || {};
     const gmail = config["gmail"] || {};
-    const whatsapp = config["whatsapp"] || {};
     if (!this.gmailClientId && gmail["clientId"]) this.gmailClientId = String(gmail["clientId"]);
     if (gmail["redirectUri"]) this.gmailRedirectUri = String(gmail["redirectUri"]);
-    if (whatsapp["bridgeUrl"]) this.whatsappBridgeUrl = String(whatsapp["bridgeUrl"]);
     this.formHydrated = true;
+  }
+
+  private whatsappAccountLabel(accountId: string): string {
+    return this.whatsappAccounts.find((account) => account.id === accountId)?.label || accountId;
   }
 
   private firstOpenStep(): OnboardingStep {

@@ -5,6 +5,11 @@ import { enqueueThreadInput, listThreadMessages, listThreads } from "../../core/
 import { dataPaths, ensureDataDirs } from "../../storage/src/paths.js";
 import { readConnectorConfig } from "../../storage/src/config.js";
 import { appendEvent, readJson, writeJson } from "../../storage/src/store.js";
+import {
+  getLocalWhatsAppBridgeStatus,
+  localWhatsAppBridgeBasePath,
+  sendLocalWhatsAppText,
+} from "./whatsapp-local-bridge.js";
 
 async function fetchJson(url, fetchImpl) {
   const response = await fetchImpl(url, { signal: AbortSignal.timeout(2000) });
@@ -31,13 +36,84 @@ function hasReadySignal(payload) {
   );
 }
 
+function configuredBridgeUrl(config = {}, env = process.env) {
+  return String(env.WHATSAPP_BRIDGE_URL || config.bridgeUrl || "").trim().replace(/\/+$/, "");
+}
+
+function bridgeMode(config = {}, env = process.env) {
+  return String(env.WHATSAPP_BRIDGE_MODE || config.bridgeMode || "local").trim() || "local";
+}
+
+function firstAccountError(accounts = []) {
+  return accounts.map((account) => account.error).find(Boolean) || "";
+}
+
+async function getLocalStatus(env) {
+  const health = await getLocalWhatsAppBridgeStatus(env);
+  if (hasReadySignal(health)) {
+    return {
+      state: "paired",
+      summary: "Built-in WhatsApp bridge is paired.",
+      mode: "local",
+      bridgeUrl: localWhatsAppBridgeBasePath,
+      health,
+      accounts: health.accounts,
+      qrAvailable: false,
+    };
+  }
+  if (health.qrAvailable) {
+    return {
+      state: "qr_needed",
+      summary: "Built-in WhatsApp bridge is ready for pairing; scan a QR code.",
+      mode: "local",
+      bridgeUrl: localWhatsAppBridgeBasePath,
+      health,
+      accounts: health.accounts,
+      qrAvailable: true,
+      qrUrl: health.qrUrl,
+    };
+  }
+  if (health.state === "failed") {
+    return {
+      state: "unreachable",
+      summary: firstAccountError(health.accounts) || "Built-in WhatsApp bridge could not start.",
+      mode: "local",
+      bridgeUrl: localWhatsAppBridgeBasePath,
+      health,
+      accounts: health.accounts,
+      qrAvailable: false,
+    };
+  }
+  if (health.state === "starting") {
+    return {
+      state: "unpaired",
+      summary: "Built-in WhatsApp bridge is starting. QR codes will appear shortly.",
+      mode: "local",
+      bridgeUrl: localWhatsAppBridgeBasePath,
+      health,
+      accounts: health.accounts,
+      qrAvailable: false,
+    };
+  }
+  return {
+    state: "unpaired",
+    summary: "Start WhatsApp 1 or WhatsApp 2 and scan the QR code.",
+    mode: "local",
+    bridgeUrl: localWhatsAppBridgeBasePath,
+    health,
+    accounts: health.accounts,
+    qrAvailable: false,
+  };
+}
+
 export async function getWhatsAppStatus(env = process.env, fetchImpl = fetch) {
   const config = await readConnectorConfig("whatsapp", env);
-  const bridgeUrl = String(env.WHATSAPP_BRIDGE_URL || config.bridgeUrl || "").trim().replace(/\/+$/, "");
+  const bridgeUrl = configuredBridgeUrl(config, env);
   if (!bridgeUrl) {
+    if (bridgeMode(config, env) === "local") return getLocalStatus(env);
     return {
       state: "not_configured",
-      summary: "Configure a local WhatsApp bridge URL.",
+      summary: "Configure a WhatsApp bridge or enable the built-in local bridge.",
       bridgeUrl: "",
       health: null,
       qrAvailable: false,
@@ -222,7 +298,10 @@ async function listThreadMessageSets(env) {
 }
 
 async function sendWhatsAppText({ chatId, text, accountId, config, env, fetchImpl }) {
-  const bridgeUrl = pickString(env.WHATSAPP_BRIDGE_URL, config.bridgeUrl).replace(/\/+$/, "");
+  const bridgeUrl = configuredBridgeUrl(config, env);
+  if (!bridgeUrl && bridgeMode(config, env) === "local") {
+    return sendLocalWhatsAppText({ chatId, text, accountId, env });
+  }
   if (!bridgeUrl) throw badRequest("whatsapp_bridge_not_configured");
   const apiToken = pickString(env.WHATSAPP_BRIDGE_TOKEN, env.WA_HTTP_TOKEN, config.apiToken);
   const headers = { "content-type": "application/json" };
@@ -249,8 +328,8 @@ async function sendWhatsAppText({ chatId, text, accountId, config, env, fetchImp
 
 export async function deliverWhatsAppReplies(env = process.env, fetchImpl = fetch) {
   const config = await readConnectorConfig("whatsapp", env);
-  const bridgeUrl = pickString(env.WHATSAPP_BRIDGE_URL, config.bridgeUrl);
-  if (!bridgeUrl) {
+  const bridgeUrl = configuredBridgeUrl(config, env);
+  if (!bridgeUrl && bridgeMode(config, env) !== "local") {
     return { delivered: [], skipped: [], failed: [], status: "not_configured" };
   }
   const state = await readWhatsAppState(env);

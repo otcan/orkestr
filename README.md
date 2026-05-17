@@ -15,7 +15,7 @@ Install once, connect your accounts, message agents from WhatsApp, watch their v
 - Connector config persistence for OpenAI, Gmail, and WhatsApp
 - Gmail connector surface
 - LinkedIn virtual browser surface
-- WhatsApp bridge surface
+- Built-in local WhatsApp bridge with two QR-paired account slots
 - Virtual browser registry
 - Agent starter templates
 - Timers and manual timer runs
@@ -40,7 +40,7 @@ http://127.0.0.1:19812
 ```
 
 On a fresh install, the web app opens a first-run setup wizard. It guides the
-local OpenAI/Codex, Gmail, LinkedIn browser, and WhatsApp bridge checks, stores
+local OpenAI/Codex, Gmail, LinkedIn browser, and WhatsApp pairing checks, stores
 connector settings under `ORKESTR_HOME`, and lets you skip into the cockpit at
 any time.
 
@@ -105,7 +105,7 @@ This repo is a NestJS API plus Angular web app. It provides:
   `POST /api/threads/:id/uploads`, and per-thread timers.
 
 Still private-overlay territory: production credentials, real browser automation
-against logged-in profiles, production WhatsApp bridge hosting, and any
+against logged-in profiles, production WhatsApp hosting/routing policy, and any
 host-specific executor behavior. Public code keeps generic APIs and mockable
 examples; private deployments provide credentials, profiles, bindings, and
 bridge processes.

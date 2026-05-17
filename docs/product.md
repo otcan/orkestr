@@ -9,7 +9,7 @@ Give your AI agent a browser, WhatsApp, Gmail, LinkedIn, and a schedule.
 1. Install Orkestr.
 2. Setup wizard opens.
 3. Connect OpenAI/Codex.
-4. Configure the WhatsApp bridge.
+4. Connect WhatsApp 1 or WhatsApp 2 with the built-in local QR bridge.
 5. Configure Gmail OAuth.
 6. Prepare Gmail and LinkedIn virtual browser profiles.
 7. Open LinkedIn virtual browser and log in.

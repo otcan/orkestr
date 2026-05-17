@@ -103,24 +103,32 @@
       }
 
       @if (activeStep === "whatsapp") {
-        <form class="setup-form" (submit)="saveWhatsApp(); $event.preventDefault()">
+        <section class="setup-form">
           <h3>WhatsApp</h3>
-          <p>{{ connector("whatsapp")?.summary || "Connect a local WhatsApp bridge so messages can reach Orkestr." }}</p>
-          <label>
-            <span>Bridge URL</span>
-            <input name="whatsapp-bridge-url" [(ngModel)]="whatsappBridgeUrl" />
-          </label>
-          <label>
-            <span>Bridge token</span>
-            <input name="whatsapp-token" type="password" [(ngModel)]="whatsappApiToken" autocomplete="off" />
-          </label>
-          <button type="submit" [disabled]="busy || !whatsappBridgeUrl.trim()">Save WhatsApp</button>
-          @if (qrAvailable()) {
-            <div class="qr-panel">
-              <img [src]="qrUrl()" alt="WhatsApp pairing QR code" />
-            </div>
-          }
-        </form>
+          <p>{{ connector("whatsapp")?.summary || "Connect one or two WhatsApp accounts with the local bridge." }}</p>
+          <div class="whatsapp-accounts">
+            @for (account of whatsappAccounts; track account.id) {
+              <article class="whatsapp-account">
+                <div>
+                  <strong>{{ account.label }}</strong>
+                  <em [class]="whatsappAccountClass(account.id)">{{ whatsappAccountState(account.id) }}</em>
+                  @if (whatsappAccountError(account.id)) {
+                    <small>{{ whatsappAccountError(account.id) }}</small>
+                  }
+                </div>
+                <div class="button-row">
+                  <button type="button" (click)="startWhatsApp(account.id)" [disabled]="busy">Connect</button>
+                  <button class="secondary" type="button" (click)="logoutWhatsApp(account.id)" [disabled]="busy">Disconnect</button>
+                </div>
+                @if (whatsappQrAvailable(account.id)) {
+                  <div class="qr-panel">
+                    <img [src]="whatsappQrUrl(account.id)" alt="WhatsApp pairing QR code" />
+                  </div>
+                }
+              </article>
+            }
+          </div>
+        </section>
       }
     </section>
   </section>

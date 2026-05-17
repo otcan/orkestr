@@ -278,6 +278,20 @@ export class ApiService {
     return this.http.get<Record<string, unknown>>(this.api("/connectors/whatsapp/status"));
   }
 
+  startWhatsAppAccount(accountId: string): Observable<Record<string, unknown>> {
+    return this.http.post<Record<string, unknown>>(
+      this.api(`/connectors/whatsapp/bridge/accounts/${encodeURIComponent(accountId)}/start`),
+      {},
+    );
+  }
+
+  logoutWhatsAppAccount(accountId: string): Observable<Record<string, unknown>> {
+    return this.http.post<Record<string, unknown>>(
+      this.api(`/connectors/whatsapp/bridge/accounts/${encodeURIComponent(accountId)}/logout`),
+      {},
+    );
+  }
+
   agentTemplates(): Observable<{ templates: AgentTemplate[] }> {
     return this.http.get<{ templates: AgentTemplate[] }>(this.api("/agents/templates"));
   }

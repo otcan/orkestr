@@ -134,9 +134,9 @@ export async function getConnectorStatuses({ env = process.env, home = os.homedi
     whatsapp:
       whatsapp.state === "paired"
         ? status("whatsapp", "WhatsApp", "connected", whatsapp.summary, whatsapp)
-        : ["qr_needed", "unpaired"].includes(whatsapp.state)
+        : whatsapp.state === "qr_needed"
           ? status("whatsapp", "WhatsApp", "partial", whatsapp.summary, whatsapp)
-          : whatsapp.state === "not_configured"
+          : ["not_configured", "unpaired"].includes(whatsapp.state)
             ? status("whatsapp", "WhatsApp", "not_connected", whatsapp.summary, whatsapp)
             : status("whatsapp", "WhatsApp", "broken", whatsapp.summary, whatsapp),
     browsers: chrome.command
