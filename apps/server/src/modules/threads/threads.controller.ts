@@ -1,6 +1,8 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
+import { promisify } from "node:util";
 import { Body, Controller, Delete, Get, HttpCode, Param, Post, Put, Query, UploadedFiles, UseInterceptors } from "@nestjs/common";
 import { AnyFilesInterceptor } from "@nestjs/platform-express";
 import { deliverWhatsAppReplies } from "../../../../../packages/connectors/src/whatsapp.js";
@@ -27,6 +29,8 @@ import { parseThreadInputCommand } from "../../../../../packages/core/src/thread
 import { ensureDataDirs } from "../../../../../packages/storage/src/paths.js";
 import { codexThreadId, threadRuntimeSummary, threadSummaryPayload } from "../../thread-summary.js";
 import { ensureAttachmentsArray, httpError } from "../../common/http.js";
+
+const execFileAsync = promisify(execFile);
 
 function messageCursor(message: any, index: number): number {
   return Number(message?.cursor || 0) || index + 1;
@@ -130,6 +134,70 @@ function optionalBodyBoolean(body: Record<string, unknown>, key: string, fallbac
   return value !== false;
 }
 
+function safeCloneSegment(value: string): string {
+  const withoutGitSuffix = value.replace(/\.git$/i, "");
+  const tail = withoutGitSuffix.split(/[/:]/).filter(Boolean).at(-1) || "repo";
+  return tail.replace(/[^a-zA-Z0-9_.-]/g, "-").replace(/^-+|-+$/g, "").slice(0, 64) || "repo";
+}
+
+function validGitRemote(value: string): boolean {
+  return /^(https?:\/\/|ssh:\/\/|git@)[^\s]+$/i.test(value);
+}
+
+async function pathExists(filePath: string): Promise<boolean> {
+  return Boolean(await fs.stat(filePath).catch(() => null));
+}
+
+function pathInside(parent: string, candidate: string): boolean {
+  const relative = path.relative(parent, candidate);
+  return Boolean(relative && !relative.startsWith("..") && !path.isAbsolute(relative));
+}
+
+async function prepareThreadCreateBody(body: Record<string, unknown> = {}): Promise<Record<string, unknown>> {
+  if (!optionalBodyBoolean(body, "cloneRepo", false)) return body;
+  const remoteUrl = optionalBodyString(body, "repoRemoteUrl", optionalBodyString(body, "remoteUrl", body["gitRemoteUrl"]));
+  if (!remoteUrl) throw httpError("repo_url_required", 400);
+  if (!validGitRemote(remoteUrl)) throw httpError("invalid_repo_url", 400);
+
+  const paths = await ensureDataDirs();
+  const configuredRoot = String(process.env.ORKESTR_RUNTIME_WORKSPACE_ROOT || "").trim();
+  const cloneRoot = path.resolve(configuredRoot || process.env.ORKESTR_CLONE_ROOT || paths.workspaces);
+  const requestedTarget = optionalBodyString(body, "workspace", optionalBodyString(body, "cwd", body["repoPath"]));
+  const target = path.resolve(
+    requestedTarget
+      ? path.isAbsolute(requestedTarget) ? requestedTarget : path.join(cloneRoot, requestedTarget)
+      : path.join(cloneRoot, safeCloneSegment(remoteUrl)),
+  );
+  if (configuredRoot && !pathInside(cloneRoot, target)) throw httpError("clone_target_outside_workspace_root", 400);
+
+  let shouldClone = false;
+  if (await pathExists(target)) {
+    if (!(await pathExists(path.join(target, ".git")))) {
+      const entries = await fs.readdir(target).catch(() => []);
+      if (entries.length > 0) throw httpError("clone_target_not_empty", 409);
+      shouldClone = true;
+    }
+  } else {
+    await fs.mkdir(path.dirname(target), { recursive: true });
+    shouldClone = true;
+  }
+  if (shouldClone) {
+    try {
+      await execFileAsync("git", ["clone", "--depth", "1", remoteUrl, target], { timeout: 120_000, maxBuffer: 8 * 1024 * 1024 });
+    } catch {
+      throw httpError("repo_clone_failed", 400);
+    }
+  }
+
+  return {
+    ...body,
+    workspace: target,
+    cwd: target,
+    repoPath: target,
+    repoRemoteUrl: remoteUrl,
+  };
+}
+
 function uploadBuffer(file: any): Buffer {
   if (Buffer.isBuffer(file?.buffer)) return file.buffer;
   const encoded = String(file?.contentBase64 || "").trim();
@@ -187,7 +255,8 @@ export class ThreadsController {
 
   @Post()
   async create(@Body() body: Record<string, unknown> = {}) {
-    return { thread: await createThread({ wakePolicy: "wake-on-message", ...body }) };
+    const prepared = await prepareThreadCreateBody(body);
+    return { thread: await createThread({ wakePolicy: "wake-on-message", ...prepared }) };
   }
 
   @Get(":threadId/workers")
@@ -404,7 +473,6 @@ export class ThreadsController {
     const result = await wakeThread(threadId, { reason: "interrupt" });
     const paneId = result.status?.paneId || result.lease?.paneId;
     if (paneId) {
-      const { execFile } = await import("node:child_process");
       await new Promise((resolve) => execFile("tmux", ["send-keys", "-t", paneId, "Escape"], () => resolve(null)));
       await new Promise((resolve) => execFile("tmux", ["send-keys", "-t", paneId, "C-c"], () => resolve(null)));
     }

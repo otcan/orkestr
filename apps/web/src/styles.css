@@ -764,15 +764,13 @@ ork-first-thread-wizard.first-thread-host {
   transition: width 180ms ease;
 }
 
-.wizard-step-tabs,
-.segmented-control {
+.wizard-step-tabs {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
 }
 
-.wizard-step-tabs button,
-.segmented-control button {
+.wizard-step-tabs button {
   border: 1px solid rgba(113, 218, 126, 0.2);
   background: rgba(3, 8, 3, 0.72);
   color: #9bb996;
@@ -792,8 +790,7 @@ ork-first-thread-wizard.first-thread-host {
 }
 
 .wizard-step-tabs button.active,
-.wizard-step-tabs button.done,
-.segmented-control button.active {
+.wizard-step-tabs button.done {
   border-color: rgba(126, 247, 142, 0.62);
   background: rgba(52, 128, 58, 0.46);
   color: #edffef;
@@ -834,15 +831,13 @@ ork-first-thread-wizard.first-thread-host {
   padding: 16px;
 }
 
-.thread-template-grid,
-.runtime-check-grid {
+.workspace-choice-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 10px;
 }
 
-.thread-template,
-.runtime-check-grid article {
+.workspace-choice {
   display: grid;
   align-content: start;
   gap: 5px;
@@ -855,27 +850,17 @@ ork-first-thread-wizard.first-thread-host {
   text-align: left;
 }
 
-.thread-template span,
-.runtime-check-grid span {
+.workspace-choice.active {
+  border-color: rgba(126, 247, 142, 0.62);
+  background: rgba(52, 128, 58, 0.32);
+}
+
+.workspace-choice span {
   color: #91ad8b;
-  font-size: 0.68rem;
-  font-weight: 900;
-  text-transform: uppercase;
-}
-
-.runtime-check-grid article.ready {
-  border-color: rgba(126, 247, 142, 0.46);
-  background: rgba(52, 128, 58, 0.24);
-}
-
-.runtime-check-grid article strong {
-  color: #a8ffb2;
-}
-
-.runtime-check-grid article p {
-  margin: 0;
-  color: #91ad8b;
+  font-size: 0.76rem;
+  font-weight: 700;
   line-height: 1.4;
+  text-transform: none;
 }
 
 .wizard-field {
@@ -2155,8 +2140,7 @@ ork-first-thread-wizard.first-thread-host {
   .timer-editor,
   .runtime-actions,
   .settings-grid,
-  .thread-template-grid,
-  .runtime-check-grid,
+  .workspace-choice-grid,
   .wizard-review {
     grid-template-columns: 1fr;
   }

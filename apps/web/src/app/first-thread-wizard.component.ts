@@ -1,18 +1,10 @@
 import { Component, EventEmitter, Input, Output, inject } from "@angular/core";
 import { FormsModule } from "@angular/forms";
 import { firstValueFrom } from "rxjs";
-import { ApiService, ConnectorStatus, SetupStatus, ThreadSummary } from "./api.service";
+import { ApiService, ThreadSummary } from "./api.service";
 
-type WizardStepId = "task" | "workspace" | "runtime" | "review";
-type CodexMode = "code" | "plan";
-type WorkspaceMode = "isolated" | "repo";
-
-interface ThreadTemplate {
-  id: string;
-  label: string;
-  task: string;
-  mode: CodexMode;
-}
+type WizardStepId = "name" | "workspace" | "review";
+type WorkspaceMode = "" | "workspace" | "clone";
 
 @Component({
   selector: "ork-first-thread-wizard",
@@ -22,56 +14,28 @@ interface ThreadTemplate {
 export class FirstThreadWizardComponent {
   private readonly api = inject(ApiService);
 
-  @Input() setupStatus: SetupStatus | null = null;
   @Input() canCancel = true;
   @Output() cancel = new EventEmitter<void>();
   @Output() created = new EventEmitter<ThreadSummary>();
 
   readonly steps: Array<{ id: WizardStepId; label: string }> = [
-    { id: "task", label: "Task" },
+    { id: "name", label: "Name" },
     { id: "workspace", label: "Workspace" },
-    { id: "runtime", label: "Runtime" },
-    { id: "review", label: "Start" },
-  ];
-  readonly templates: ThreadTemplate[] = [
-    {
-      id: "repo-review",
-      label: "Review this repo",
-      task: "Inspect this repository and list the top three public-launch blockers. Do not edit files yet.",
-      mode: "plan",
-    },
-    {
-      id: "fix-test",
-      label: "Fix a failing test",
-      task: "Find the failing test, explain the cause briefly, implement the smallest fix, and run the relevant test again.",
-      mode: "code",
-    },
-    {
-      id: "readme",
-      label: "Improve README",
-      task: "Review the README for a first-time user, then make focused edits that clarify install, setup, and first use.",
-      mode: "code",
-    },
-    {
-      id: "feature",
-      label: "Build a small feature",
-      task: "Implement the requested feature with focused code changes, add or update tests, and summarize the result.",
-      mode: "code",
-    },
+    { id: "review", label: "Create" },
   ];
 
   stepIndex = 0;
-  task = "";
   threadName = "";
-  workspaceMode: WorkspaceMode = "isolated";
-  workspace = "/workspace";
-  codexMode: CodexMode = "code";
+  workspaceMode: WorkspaceMode = "";
+  workspace = "";
+  repoUrl = "";
+  cloneTarget = "";
   busy = false;
   error = "";
   creationStage = "";
 
   activeStep(): WizardStepId {
-    return this.steps[this.stepIndex]?.id || "task";
+    return this.steps[this.stepIndex]?.id || "name";
   }
 
   progressPercent(): number {
@@ -82,10 +46,9 @@ export class FirstThreadWizardComponent {
     return index < this.stepIndex;
   }
 
-  applyTemplate(template: ThreadTemplate): void {
-    this.task = template.task;
-    this.codexMode = template.mode;
-    if (!this.threadName.trim()) this.threadName = template.label;
+  chooseWorkspaceMode(mode: Exclude<WorkspaceMode, "">): void {
+    this.workspaceMode = mode;
+    if (mode === "workspace" && !this.workspace.trim()) this.workspace = "/workspace";
   }
 
   next(): void {
@@ -109,41 +72,41 @@ export class FirstThreadWizardComponent {
 
   canContinue(): boolean {
     const step = this.activeStep();
-    if (step === "task") return Boolean(this.task.trim());
-    if (step === "workspace") return Boolean(this.workspace.trim());
+    if (step === "name") return Boolean(this.agentName());
+    if (step === "workspace") return this.workspaceReady();
     return true;
   }
 
   canCreate(): boolean {
-    return Boolean(this.task.trim() && this.workspace.trim() && !this.busy);
+    return Boolean(this.agentName() && this.workspaceReady() && !this.busy);
   }
 
-  selectedWorkspaceLabel(): string {
-    return this.workspaceMode === "isolated" ? "Isolated workspace" : "Existing repo path";
+  agentName(): string {
+    return this.threadName.trim();
   }
 
-  suggestedThreadName(): string {
-    const explicit = this.threadName.trim();
-    if (explicit) return explicit;
-    const firstLine = this.task.trim().split(/\n+/)[0] || "Coding Agent";
-    return firstLine.replace(/[.?!:]$/, "").slice(0, 72) || "Coding Agent";
+  workspaceReady(): boolean {
+    if (this.workspaceMode === "workspace") return Boolean(this.workspace.trim());
+    if (this.workspaceMode === "clone") return Boolean(this.repoUrl.trim() && this.cloneWorkspacePath());
+    return false;
   }
 
-  openAiConnector(): ConnectorStatus | null {
-    return this.connector("openai");
+  workspaceModeLabel(): string {
+    if (this.workspaceMode === "clone") return "Clone repo";
+    if (this.workspaceMode === "workspace") return "Existing workspace";
+    return "Not selected";
   }
 
-  codexConnector(): ConnectorStatus | null {
-    return this.connector("codex");
+  cloneWorkspacePath(): string {
+    return this.cloneTarget.trim() || this.suggestedCloneTarget();
   }
 
-  connectorReady(id: string): boolean {
-    return this.connector(id)?.state === "connected";
+  finalWorkspacePath(): string {
+    return this.workspaceMode === "clone" ? this.cloneWorkspacePath() : this.workspace.trim();
   }
 
-  connectorSummary(id: string): string {
-    const connector = this.connector(id);
-    return connector?.summary || "Not checked yet.";
+  suggestedCloneTarget(): string {
+    return `/workspace/${this.repoSlug(this.repoUrl)}`;
   }
 
   async createAndStart(): Promise<void> {
@@ -151,9 +114,9 @@ export class FirstThreadWizardComponent {
     this.busy = true;
     this.error = "";
     try {
-      const name = this.suggestedThreadName();
-      const workspace = this.workspace.trim() || "/workspace";
-      this.creationStage = "Creating thread";
+      const name = this.agentName();
+      const workspace = this.finalWorkspacePath();
+      this.creationStage = this.workspaceMode === "clone" ? "Cloning repo" : "Creating agent";
       const response = await firstValueFrom(this.api.createThread({
         id: this.threadId(name),
         name,
@@ -161,18 +124,18 @@ export class FirstThreadWizardComponent {
         bindingName: name,
         wakePolicy: "wake-on-message",
         executorId: "codex",
-        codexMode: this.codexMode,
-        desiredCodexMode: this.codexMode,
+        codexMode: "code",
+        desiredCodexMode: "code",
         workspace,
         cwd: workspace,
-        repoPath: this.workspaceMode === "repo" ? workspace : "",
+        repoPath: workspace,
+        repoRemoteUrl: this.workspaceMode === "clone" ? this.repoUrl.trim() : "",
+        cloneRepo: this.workspaceMode === "clone",
       }));
       const thread = response.thread;
-      this.creationStage = "Sending task";
-      await firstValueFrom(this.api.sendThreadInput(thread.id, this.task.trim()));
       this.creationStage = "Starting Codex";
       await firstValueFrom(this.api.wakeThread(thread.id));
-      this.creationStage = "Agent running";
+      this.creationStage = "Agent ready";
       this.created.emit(thread);
     } catch (error) {
       this.error = this.errorText(error);
@@ -181,8 +144,16 @@ export class FirstThreadWizardComponent {
     }
   }
 
-  private connector(id: string): ConnectorStatus | null {
-    return this.setupStatus?.connectors?.find((connector) => connector.id === id) || null;
+  private repoSlug(repoUrl: string): string {
+    const raw = String(repoUrl || "").trim();
+    const fallback = this.agentName() || "repo";
+    const withoutGit = raw.replace(/\.git$/i, "");
+    const tail = withoutGit.split(/[/:]/).filter(Boolean).at(-1) || fallback;
+    return tail
+      .toLowerCase()
+      .replace(/[^a-z0-9_.-]+/g, "-")
+      .replace(/^-+|-+$/g, "")
+      .slice(0, 48) || "repo";
   }
 
   private threadId(name: string): string {

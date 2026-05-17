@@ -176,7 +176,6 @@
     } @else if (threadWizardOpen || !threads.length) {
       <ork-first-thread-wizard
         class="first-thread-host"
-        [setupStatus]="setupStatus"
         [canCancel]="threads.length > 0"
         (cancel)="closeThreadWizard()"
         (created)="handleThreadWizardCreated($event)"
