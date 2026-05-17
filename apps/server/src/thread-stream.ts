@@ -4,6 +4,7 @@ import type { Server } from "node:http";
 import { WebSocketServer, type WebSocket } from "ws";
 import { runtimeStatus } from "../../../packages/core/src/runtime-leases.js";
 import { getThread } from "../../../packages/core/src/threads.js";
+import { threadSummaryPayload } from "./thread-summary.js";
 
 const execFileAsync = promisify(execFile);
 const attachedServers = new WeakSet<Server>();
@@ -90,13 +91,84 @@ function upgradePath(url: string | undefined): { threadId: string; cols: string 
   };
 }
 
+function summaryStreamPath(url: string | undefined): boolean {
+  const parsed = new URL(url || "/", "http://localhost");
+  return parsed.pathname === "/api/threads/summary/stream";
+}
+
+function summaryStreamIntervalMs(): number {
+  const parsed = Number(process.env.ORKESTR_SUMMARY_STREAM_INTERVAL_MS || 10_000);
+  return Number.isFinite(parsed) ? Math.max(1000, parsed) : 10_000;
+}
+
 export function attachThreadStreamUpgrade(server: Server): void {
   if (attachedServers.has(server)) return;
   attachedServers.add(server);
 
   const wss = new WebSocketServer({ noServer: true });
+  const summaryClients = new Set<WebSocket>();
+  let summaryTimer: NodeJS.Timeout | null = null;
+  let summaryInFlight = false;
+  let lastSummaryBody = "";
+
+  const pushThreadSummary = async (force = false) => {
+    if (!summaryClients.size || summaryInFlight) return;
+    summaryInFlight = true;
+    try {
+      const payload = await threadSummaryPayload();
+      const stableBody = JSON.stringify(payload.threads || []);
+      if (!force && stableBody === lastSummaryBody) return;
+      lastSummaryBody = stableBody;
+      const message = { type: "threads_summary", ...payload };
+      for (const client of summaryClients) wsSend(client, message);
+    } catch (error) {
+      const message = { type: "error", data: error instanceof Error ? error.message : String(error) };
+      for (const client of summaryClients) wsSend(client, message);
+    } finally {
+      summaryInFlight = false;
+    }
+  };
+
+  const ensureSummaryTimer = () => {
+    if (summaryTimer) return;
+    summaryTimer = setInterval(() => {
+      void pushThreadSummary(false);
+    }, summaryStreamIntervalMs());
+    if (typeof summaryTimer.unref === "function") summaryTimer.unref();
+  };
+
+  const stopSummaryTimerIfIdle = () => {
+    if (summaryClients.size || !summaryTimer) return;
+    clearInterval(summaryTimer);
+    summaryTimer = null;
+  };
 
   server.on("upgrade", async (request, socket, head) => {
+    if (summaryStreamPath(request.url)) {
+      wss.handleUpgrade(request, socket, head, (ws) => {
+        summaryClients.add(ws);
+        ensureSummaryTimer();
+        wsSend(ws, {
+          type: "transport_ready",
+          transport: "threads-summary",
+          intervalMs: summaryStreamIntervalMs(),
+        });
+        void pushThreadSummary(true);
+        const heartbeatTimer = setInterval(() => {
+          wsSend(ws, { type: "heartbeat", ts: Date.now(), clients: summaryClients.size });
+        }, 30_000);
+        if (typeof heartbeatTimer.unref === "function") heartbeatTimer.unref();
+        const close = () => {
+          summaryClients.delete(ws);
+          clearInterval(heartbeatTimer);
+          stopSummaryTimerIfIdle();
+        };
+        ws.on("close", close);
+        ws.on("error", close);
+      });
+      return;
+    }
+
     const target = upgradePath(request.url);
     if (!target) return;
 

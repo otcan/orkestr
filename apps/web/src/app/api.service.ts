@@ -185,6 +185,8 @@ export interface ThreadSummary {
   backgroundWork?: boolean;
   pendingCount?: number;
   runningCount?: number;
+  awaitingAckCount?: number;
+  nextDeliveryAttemptAt?: string | null;
   activeRuntimeLeaseId?: string | null;
   hibernated?: boolean;
   lastError?: string | null;
@@ -370,6 +372,13 @@ export class ApiService {
 
   private api(path: string): string {
     return `${this.apiBase}${path}`;
+  }
+
+  threadSummaryStreamUrl(): string {
+    const base = globalThis.location?.href || "http://localhost/";
+    const url = new URL(this.api("/threads/summary/stream"), base);
+    url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
+    return url.toString();
   }
 
   health(): Observable<HealthResponse> {

@@ -120,7 +120,12 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   sidebarWidth = 460;
   sidebarResizing = false;
 
-  private poller?: ReturnType<typeof setInterval>;
+  private fallbackPoller?: ReturnType<typeof setInterval>;
+  private systemPoller?: ReturnType<typeof setInterval>;
+  private summaryReconnectTimer?: ReturnType<typeof setTimeout>;
+  private summarySocket?: WebSocket;
+  private destroyed = false;
+  private applyingSummary = false;
   private readonly rawTerminal = new RawTerminalController({
     host: () => this.rawTerminalHost?.nativeElement || null,
     isActive: () => this.activePanel === "raw",
@@ -180,11 +185,16 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     this.normalizeLegacyRoutePath();
     globalThis.addEventListener?.("popstate", this.popStateHandler);
     void this.refresh(true);
-    this.poller = setInterval(() => void this.refresh(false), 5000);
+    this.connectSummaryStream();
+    this.systemPoller = setInterval(() => void this.loadSystemSummarySilent(), 30_000);
   }
 
   ngOnDestroy(): void {
-    if (this.poller) clearInterval(this.poller);
+    this.destroyed = true;
+    this.stopFallbackPolling();
+    if (this.systemPoller) clearInterval(this.systemPoller);
+    if (this.summaryReconnectTimer) clearTimeout(this.summaryReconnectTimer);
+    this.summarySocket?.close();
     if (this.scrollFrame && typeof globalThis.cancelAnimationFrame === "function") {
       globalThis.cancelAnimationFrame(this.scrollFrame);
     }
@@ -242,6 +252,103 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     } finally {
       this.busy = false;
       this.renderNow();
+    }
+  }
+
+  private connectSummaryStream(): void {
+    if (this.destroyed || typeof globalThis.WebSocket === "undefined") {
+      this.startFallbackPolling();
+      return;
+    }
+    if (this.summarySocket && this.summarySocket.readyState <= WebSocket.OPEN) return;
+    const socket = new WebSocket(this.api.threadSummaryStreamUrl());
+    this.summarySocket = socket;
+    socket.onopen = () => {
+      if (this.summarySocket !== socket) return;
+      this.apiOnline = true;
+      this.stopFallbackPolling();
+      this.renderNow();
+    };
+    socket.onmessage = (event) => {
+      void this.handleSummaryStreamMessage(event.data);
+    };
+    socket.onclose = () => {
+      if (this.summarySocket !== socket) return;
+      this.summarySocket = undefined;
+      this.startFallbackPolling();
+      this.scheduleSummaryReconnect();
+    };
+    socket.onerror = () => {
+      socket.close();
+    };
+  }
+
+  private scheduleSummaryReconnect(): void {
+    if (this.destroyed || this.summaryReconnectTimer) return;
+    this.summaryReconnectTimer = setTimeout(() => {
+      this.summaryReconnectTimer = undefined;
+      this.connectSummaryStream();
+    }, 5000);
+  }
+
+  private startFallbackPolling(): void {
+    if (this.fallbackPoller) return;
+    this.fallbackPoller = setInterval(() => void this.refresh(false), 30_000);
+  }
+
+  private stopFallbackPolling(): void {
+    if (!this.fallbackPoller) return;
+    clearInterval(this.fallbackPoller);
+    this.fallbackPoller = undefined;
+  }
+
+  private async loadSystemSummarySilent(): Promise<void> {
+    try {
+      this.opsSystem = await firstValueFrom(this.api.systemSummary());
+      this.renderNow();
+    } catch {
+      // System telemetry is best-effort and should not surface as a chat error.
+    }
+  }
+
+  private async handleSummaryStreamMessage(raw: unknown): Promise<void> {
+    let payload: { type?: string; threads?: ThreadSummary[] };
+    try {
+      payload = JSON.parse(String(raw || "{}"));
+    } catch {
+      return;
+    }
+    if (payload.type !== "threads_summary" || !Array.isArray(payload.threads)) return;
+    await this.applyThreadSummaryStream(payload.threads);
+  }
+
+  private async applyThreadSummaryStream(threads: ThreadSummary[]): Promise<void> {
+    if (this.applyingSummary) return;
+    this.applyingSummary = true;
+    try {
+      const previousSelected = this.selectedThread();
+      const previousSignature = this.threadReloadSignature(previousSelected);
+      this.apiOnline = true;
+      this.threads = [...threads].sort((a, b) => this.activityMs(b) - this.activityMs(a));
+      this.seedReadStateIfNeeded(this.threads);
+      if (this.activePanel !== "ops" && !this.selectedId && this.threads.length) {
+        this.selectedId = this.threadSlug(this.threads[0]);
+        this.replacePath(this.selectedId, this.activePanel);
+      }
+      const selected = this.selectedThread();
+      this.syncThreadMetaDraft(selected);
+      this.syncThreadBindingDraft(selected);
+      this.syncThreadTextState(selected);
+      const nextSignature = this.threadReloadSignature(selected);
+      const cachedMessages = selected ? this.messageCache()[selected.id] || [] : [];
+      if (selected && (!cachedMessages.length || previousSignature !== nextSignature)) {
+        await this.loadSelectedThread(false);
+      }
+      this.updateDocumentTitle();
+      this.error = "";
+      this.renderNow();
+    } finally {
+      this.applyingSummary = false;
     }
   }
 
@@ -1727,6 +1834,27 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
 
   private threadSlug(thread: ThreadSummary): string {
     return String(thread.bindingName || thread.name || thread.id);
+  }
+
+  private threadReloadSignature(thread: ThreadSummary | null): string {
+    if (!thread) return "";
+    return [
+      thread.id,
+      thread.lastActivityAt || "",
+      thread.threadUpdatedAt || "",
+      thread.updatedAt || "",
+      thread.state || "",
+      thread.status || "",
+      thread.publicStatusCode || "",
+      thread.pendingCount ?? "",
+      thread.runningCount ?? "",
+      thread.awaitingAckCount ?? "",
+      thread.nextDeliveryAttemptAt || "",
+      String(thread.awaitingInput || ""),
+      String(thread.awaitingInputEventId || ""),
+      JSON.stringify(thread.codexTokenUsage || null),
+      JSON.stringify(thread.codexRateLimits || null),
+    ].join("|");
   }
 
   private idFromPath(): string {

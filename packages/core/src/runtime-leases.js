@@ -17,7 +17,10 @@ import {
 
 const execFileAsync = promisify(execFile);
 const deliveryLocks = new Set();
+const deliveryTimers = new Map();
 let runtimeSyncInFlight = null;
+const pendingInputStates = new Set(["queued", "pending_delivery", "awaiting_ack"]);
+const deliveryRetryDefaultsMs = [1000, 3000, 8000, 20_000, 60_000];
 
 function nowIso() {
   return new Date().toISOString();
@@ -25,6 +28,15 @@ function nowIso() {
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function isoAfter(ms) {
+  return new Date(Date.now() + Math.max(0, ms)).toISOString();
+}
+
+function positiveNumber(value) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
 }
 
 function safeName(value) {
@@ -217,7 +229,12 @@ export async function runtimeStatus(threadId, env = process.env) {
     throw error;
   }
   const messages = await listThreadMessages(thread.id, env);
-  const pendingCount = messages.filter((message) => ["queued", "pending_delivery"].includes(message.state)).length;
+  const pendingCount = messages.filter((message) => pendingInputStates.has(message.state)).length;
+  const awaitingAckCount = messages.filter((message) => message.state === "awaiting_ack").length;
+  const nextDeliveryAttemptAt = messages
+    .filter((message) => message.role === "user" && message.state === "awaiting_ack" && message.deliveryNextAttemptAt)
+    .map((message) => String(message.deliveryNextAttemptAt))
+    .sort()[0] || null;
   const runningCount = messages.filter((message) => message.state === "running").length;
   const lease = await activeLeaseForThread(thread.id, env);
   if (!lease) {
@@ -236,6 +253,8 @@ export async function runtimeStatus(threadId, env = process.env) {
       typingActive: false,
       backgroundWork: false,
       pendingCount,
+      awaitingAckCount,
+      nextDeliveryAttemptAt,
       runningCount,
       wakePolicy: thread.wakePolicy || "wake-on-message",
       hibernated: state === "sleeping",
@@ -268,6 +287,8 @@ export async function runtimeStatus(threadId, env = process.env) {
     typingActive: working,
     backgroundWork: false,
     pendingCount,
+    awaitingAckCount,
+    nextDeliveryAttemptAt,
     runningCount,
     wakePolicy: thread.wakePolicy || "wake-on-message",
     hibernated: false,
@@ -648,6 +669,194 @@ function inputTextForMessage(message) {
   return body;
 }
 
+function deliveryPayloadHash(message) {
+  return crypto.createHash("sha256").update(inputTextForMessage(message)).digest("hex");
+}
+
+function deliveryAttempt(message) {
+  return Math.max(0, Number(message?.deliveryAttempt || 0) || 0);
+}
+
+function deliveryAckWaitMs(env = process.env) {
+  return Math.max(0, Number(env.ORKESTR_DELIVERY_ACK_WAIT_MS ?? 2500) || 0);
+}
+
+function deliveryRetryBackoffMs(attempt, env = process.env) {
+  const configured = String(env.ORKESTR_DELIVERY_ACK_BACKOFF_MS || "")
+    .split(",")
+    .map((value) => positiveNumber(value.trim()))
+    .filter(Boolean);
+  const schedule = configured.length ? configured : deliveryRetryDefaultsMs;
+  return schedule[Math.min(Math.max(0, Number(attempt || 1) - 1), schedule.length - 1)];
+}
+
+function deliveryDueInMs(message) {
+  const dueMs = Date.parse(message?.deliveryNextAttemptAt || "");
+  if (!Number.isFinite(dueMs) || dueMs <= 0) return 0;
+  return Math.max(0, dueMs - Date.now());
+}
+
+function compactDeliveryText(value) {
+  return String(value || "").replace(/\s+/g, " ").trim();
+}
+
+function paneContainsDeliveryText(paneText, messageText) {
+  const expected = compactDeliveryText(messageText);
+  if (!expected) return false;
+  const sample = expected.length > 160 ? expected.slice(0, 160) : expected;
+  const promptText = String(paneText || "")
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => /^›(?:\s|$)/.test(line))
+    .join(" ");
+  return compactDeliveryText(promptText).includes(sample);
+}
+
+async function rolloutSnapshotForDelivery(thread, lease, env = process.env) {
+  const rolloutPath = String(
+    lease?.rolloutPath ||
+    thread?.codexRolloutPath ||
+    thread?.executor?.metadata?.codexRolloutPath ||
+    "",
+  ).trim();
+  if (!rolloutPath) return { deliveryRolloutPath: "", deliveryRolloutOffset: 0 };
+  const stats = await fs.stat(rolloutPath).catch(() => null);
+  return {
+    deliveryRolloutPath: rolloutPath,
+    deliveryRolloutOffset: Number(stats?.size || lease?.rolloutOffset || 0) || 0,
+  };
+}
+
+async function deliveryAckEvidence(thread, message, status, env = process.env) {
+  if (message?.state !== "awaiting_ack") return null;
+  if (status?.working || status?.state === "working") return { observedVia: "runtime_working" };
+
+  const rolloutPath = String(
+    message.deliveryRolloutPath ||
+    status?.lease?.rolloutPath ||
+    thread?.codexRolloutPath ||
+    thread?.executor?.metadata?.codexRolloutPath ||
+    "",
+  ).trim();
+  if (rolloutPath) {
+    const stats = await fs.stat(rolloutPath).catch(() => null);
+    const sentOffset = Number(message.deliveryRolloutOffset || 0) || 0;
+    if (Number(stats?.size || 0) > sentOffset) return { observedVia: "codex_rollout_growth" };
+  }
+  return null;
+}
+
+async function acknowledgeThreadInputDelivery(thread, message, status, env = process.env) {
+  const evidence = await deliveryAckEvidence(thread, message, status, env);
+  if (!evidence) return null;
+  const deliveredAt = nowIso();
+  await updateThreadMessage(thread.id, message.id, {
+    state: "completed",
+    deliveryState: "delivered",
+    deliveredAt,
+    observedVia: evidence.observedVia,
+    error: null,
+  }, env);
+  await updateThread(thread.id, {
+    state: status?.state || "working",
+    lastError: null,
+  }, env).catch(() => {});
+  await appendEvent({
+    type: "thread_input_delivered",
+    threadId: thread.id,
+    messageId: message.id,
+    paneId: status?.paneId || message.deliveryPaneId || null,
+    observedVia: evidence.observedVia,
+  }, env);
+  return message.id;
+}
+
+async function waitForThreadInputAck(thread, messageId, env = process.env) {
+  const waitMs = deliveryAckWaitMs(env);
+  const deadline = Date.now() + waitMs;
+  do {
+    const messages = await listThreadMessages(thread.id, env);
+    const message = messages.find((item) => item.id === messageId);
+    if (!message || message.state !== "awaiting_ack") return message?.state === "completed" ? message.id : null;
+    const status = await runtimeStatus(thread.id, env).catch(() => null);
+    const acknowledged = await acknowledgeThreadInputDelivery(thread, message, status, env);
+    if (acknowledged) return acknowledged;
+    if (Date.now() >= deadline) break;
+    await sleep(Math.min(250, Math.max(25, deadline - Date.now())));
+  } while (Date.now() < deadline);
+  return null;
+}
+
+async function sendThreadInputToPane(thread, message, status, env = process.env) {
+  const attempt = deliveryAttempt(message) + 1;
+  const inputText = inputTextForMessage(message);
+  const sentAt = nowIso();
+  const nextAttemptAt = isoAfter(deliveryRetryBackoffMs(attempt, env));
+  const rollout = await rolloutSnapshotForDelivery(thread, status.lease, env);
+  await updateThreadMessage(thread.id, message.id, {
+    state: "pending_delivery",
+    deliveryState: attempt > 1 ? "retrying_delivery" : "delivering",
+    deliveryAttempt: attempt,
+    deliveryPayloadHash: deliveryPayloadHash(message),
+    deliveryFirstAttemptAt: message.deliveryFirstAttemptAt || sentAt,
+    deliveryLastAttemptAt: sentAt,
+    deliveryNextAttemptAt: nextAttemptAt,
+    deliveryPaneId: status.paneId,
+    runtimeLeaseId: status.lease?.id || null,
+    ...rollout,
+    error: null,
+  }, env);
+
+  let submittedExistingPaste = false;
+  if (attempt > 1 && status.paneId) {
+    const paneText = await capturePane(status.paneId, 40).catch(() => "");
+    submittedExistingPaste = paneContainsDeliveryText(paneText, inputText);
+  }
+  if (!submittedExistingPaste) await pasteTmuxText(status.paneId, inputText, env);
+
+  const delayMs = submitDelayMs(env);
+  if (delayMs > 0) await sleep(delayMs);
+  for (const key of submitKeys(env)) {
+    await execFileAsync("tmux", ["send-keys", "-t", status.paneId, key]);
+  }
+
+  await updateThreadMessage(thread.id, message.id, {
+    state: "awaiting_ack",
+    deliveryState: "awaiting_ack",
+    deliveryAttempt: attempt,
+    deliveryLastAttemptAt: sentAt,
+    deliveryNextAttemptAt: nextAttemptAt,
+    observedVia: submittedExistingPaste ? "tmux_submit_existing_pending_ack" : "tmux_send_pending_ack",
+    deliveryPaneId: status.paneId,
+    runtimeLeaseId: status.lease?.id || null,
+    ...rollout,
+    error: null,
+  }, env);
+  await appendEvent({
+    type: "thread_input_delivery_attempted",
+    threadId: thread.id,
+    messageId: message.id,
+    attempt,
+    paneId: status.paneId,
+    nextAttemptAt,
+    observedVia: submittedExistingPaste ? "tmux_submit_existing" : "tmux_send",
+  }, env);
+  return { messageId: message.id, nextAttemptAt };
+}
+
+function scheduleThreadInputDelivery(threadId, env = process.env, delayMs = 0) {
+  const id = String(threadId || "").trim();
+  if (!id) return;
+  const current = deliveryTimers.get(id);
+  if (current) clearTimeout(current);
+  const timer = setTimeout(() => {
+    deliveryTimers.delete(id);
+    void deliverPendingThreadInputs(id, env);
+  }, Math.max(0, Number(delayMs) || 0));
+  if (typeof timer.unref === "function") timer.unref();
+  deliveryTimers.set(id, timer);
+}
+
 export async function deliverPendingThreadInputs(threadId, env = process.env) {
   const thread = await getThread(threadId, env);
   if (!thread) return [];
@@ -657,31 +866,55 @@ export async function deliverPendingThreadInputs(threadId, env = process.env) {
   try {
     for (;;) {
       const messages = await listThreadMessages(thread.id, env);
-      const next = messages.find((message) => message.role === "user" && ["queued", "pending_delivery"].includes(message.state));
+      const awaitingAck = messages.find((message) => message.role === "user" && message.state === "awaiting_ack");
+      if (awaitingAck) {
+        const status = await runtimeStatus(thread.id, env).catch(() => null);
+        const acknowledged = await acknowledgeThreadInputDelivery(thread, awaitingAck, status, env);
+        if (acknowledged) {
+          delivered.push(acknowledged);
+          continue;
+        }
+        const dueInMs = deliveryDueInMs(awaitingAck);
+        if (dueInMs > 0) {
+          scheduleThreadInputDelivery(thread.id, env, dueInMs);
+          break;
+        }
+        if (!status?.paneId || status.state === "sleeping") {
+          await updateThreadMessage(thread.id, awaitingAck.id, {
+            state: "queued",
+            deliveryState: "waiting_runtime_start",
+            error: null,
+          }, env).catch(() => {});
+          continue;
+        }
+        if (!status.promptReady || status.working) {
+          const attempt = Math.max(1, deliveryAttempt(awaitingAck));
+          const nextAttemptAt = isoAfter(deliveryRetryBackoffMs(attempt, env));
+          await updateThreadMessage(thread.id, awaitingAck.id, {
+            deliveryState: status.working ? "awaiting_runtime_completion" : "waiting_runtime_ready",
+            deliveryNextAttemptAt: nextAttemptAt,
+          }, env).catch(() => {});
+          scheduleThreadInputDelivery(thread.id, env, deliveryDueInMs({ deliveryNextAttemptAt: nextAttemptAt }));
+          break;
+        }
+      }
+
+      const next = messages.find((message) => message.role === "user" && ["queued", "pending_delivery", "awaiting_ack"].includes(message.state));
       if (!next) break;
       await updateThreadMessage(thread.id, next.id, { state: "pending_delivery", deliveryState: "waking" }, env);
       await updateThread(thread.id, { state: "waking" }, env);
       try {
         await wakeThread(thread.id, { reason: next.source || "message" }, env);
         const status = await waitForRuntimeReady(thread.id, env);
-        await updateThreadMessage(thread.id, next.id, { deliveryState: "delivering" }, env);
-        await pasteTmuxText(status.paneId, inputTextForMessage(next), env);
-        const delayMs = submitDelayMs(env);
-        if (delayMs > 0) await sleep(delayMs);
-        for (const key of submitKeys(env)) {
-          await execFileAsync("tmux", ["send-keys", "-t", status.paneId, key]);
+        const attempt = await sendThreadInputToPane(thread, next, status, env);
+        const acknowledged = await waitForThreadInputAck(thread, next.id, env);
+        if (acknowledged) {
+          delivered.push(acknowledged);
+          continue;
         }
-        const deliveredAt = nowIso();
-        await updateThreadMessage(thread.id, next.id, {
-          state: "completed",
-          deliveryState: "delivered",
-          deliveredAt,
-          observedVia: "tmux_send",
-          runtimeLeaseId: status.lease?.id || null,
-        }, env);
         await updateThread(thread.id, { state: "working", lastError: null }, env);
-        await appendEvent({ type: "thread_input_delivered", threadId: thread.id, messageId: next.id, paneId: status.paneId }, env);
-        delivered.push(next.id);
+        scheduleThreadInputDelivery(thread.id, env, deliveryDueInMs({ deliveryNextAttemptAt: attempt.nextAttemptAt }));
+        break;
       } catch (error) {
         const errorText = error instanceof Error ? error.message : String(error);
         if (shouldDeferRuntimeDelivery(error)) {
@@ -700,10 +933,8 @@ export async function deliverPendingThreadInputs(threadId, env = process.env) {
   return delivered;
 }
 
-export function requestThreadInputDelivery(threadId, env = process.env) {
-  setImmediate(() => {
-    void deliverPendingThreadInputs(threadId, env);
-  });
+export function requestThreadInputDelivery(threadId, env = process.env, delayMs = 0) {
+  scheduleThreadInputDelivery(threadId, env, delayMs);
 }
 
 export function requestThreadWake(threadId, options = {}, env = process.env) {
@@ -929,6 +1160,15 @@ async function syncRuntimeLeasesOnce(env = process.env) {
     appended += synced.appended || 0;
     const status = await runtimeStatus(lease.threadId, env).catch(() => null);
     if (status) {
+      const thread = await getThread(lease.threadId, env).catch(() => null);
+      if (thread) {
+        const messages = await listThreadMessages(thread.id, env).catch(() => []);
+        const awaitingAck = messages.find((message) => message.role === "user" && message.state === "awaiting_ack");
+        if (awaitingAck) {
+          const acknowledged = await acknowledgeThreadInputDelivery(thread, awaitingAck, status, env).catch(() => null);
+          if (acknowledged) scheduleThreadInputDelivery(thread.id, env, 0);
+        }
+      }
       await updateThread(lease.threadId, {
         state: status.state,
         runtime: { ...(status.lease || synced.lease), state: status.state },
@@ -954,7 +1194,7 @@ export async function drainAllPendingThreadInputs(env = process.env) {
   const results = [];
   for (const thread of threads) {
     const messages = await listThreadMessages(thread.id, env);
-    if (messages.some((message) => message.role === "user" && ["queued", "pending_delivery"].includes(message.state))) {
+    if (messages.some((message) => message.role === "user" && pendingInputStates.has(message.state))) {
       results.push({ threadId: thread.id, delivered: await deliverPendingThreadInputs(thread.id, env) });
     }
   }

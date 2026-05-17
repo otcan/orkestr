@@ -393,7 +393,7 @@
                   }
                   <span>{{ messageTime(message) | date: "MMM d, HH:mm:ss" }}</span>
                   @if (message.state && message.state !== "completed") {
-                    <em>{{ message.state }}</em>
+                    <em>{{ message.deliveryState || message.state }}</em>
                   }
                 </div>
                 <div class="message-body" [innerHTML]="messageTextHtml(message)"></div>

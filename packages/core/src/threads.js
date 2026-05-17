@@ -173,7 +173,7 @@ export async function appendThreadMessage(threadId, input, env = process.env) {
   }
   messages.push(message);
   await writeJson(await messagesPath(thread.id, env), messages);
-  const activeInputStates = new Set(["queued", "pending_delivery", "running"]);
+  const activeInputStates = new Set(["queued", "pending_delivery", "awaiting_ack", "running"]);
   await updateThread(thread.id, { state: activeInputStates.has(message.state) ? message.state : thread.state }, env);
   await appendEvent({ type: `thread_message_${message.state}`, threadId: thread.id, messageId: message.id, source: message.source, role: message.role }, env);
   return message;

@@ -190,6 +190,20 @@ test("CLI creates blank workers and can disable wake", async () => {
   assert.match(stdout.text(), /"id": "worker-blank"/);
 });
 
+test("CLI reports inputs waiting for runtime acknowledgement", async () => {
+  const stdout = capture();
+  const code = await runCli(["send", "Demo", "ship", "it"], {
+    stdout,
+    stderr: capture(),
+    fetchImpl: fakeFetch({
+      "POST /api/threads/Demo/input": { ok: true, queued: true, deliveryState: "awaiting_ack", orkestrThreadId: "thread-1" },
+    }),
+  });
+
+  assert.equal(code, 0);
+  assert.match(stdout.text(), /Awaiting ack thread-1/);
+});
+
 test("CLI attach can select a thread and print the tmux command", async () => {
   const stdout = capture();
   const selected = { id: "thread-1", name: "Demo", state: "ready" };

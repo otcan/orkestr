@@ -9,7 +9,6 @@ import {
   deliverPendingThreadInputs,
   requestThreadInputDelivery,
   requestThreadWake,
-  resolveCodexThreadMetadata,
   runtimeStatus,
   sleepThread,
   syncRuntimeWindowName,
@@ -21,17 +20,13 @@ import {
   enqueueThreadInput,
   getThread,
   listThreadMessages,
-  listThreads,
   updateThread,
 } from "../../../../../packages/core/src/threads.js";
-import { createThreadWorker, detectThreadGitState, detectThreadRepo, listThreadWorkers, updateThreadRepo } from "../../../../../packages/core/src/thread-workers.js";
+import { createThreadWorker, detectThreadRepo, listThreadWorkers, updateThreadRepo } from "../../../../../packages/core/src/thread-workers.js";
 import { parseThreadInputCommand } from "../../../../../packages/core/src/thread-commands.js";
 import { ensureDataDirs } from "../../../../../packages/storage/src/paths.js";
+import { codexThreadId, threadRuntimeSummary, threadSummaryPayload } from "../../thread-summary.js";
 import { ensureAttachmentsArray, httpError } from "../../common/http.js";
-
-function codexThreadId(thread: any): string {
-  return String(thread?.executor?.codexThreadId || thread?.codexThreadId || "").trim();
-}
 
 function messageCursor(message: any, index: number): number {
   return Number(message?.cursor || 0) || index + 1;
@@ -178,102 +173,11 @@ function messagePage(thread: any, rawMessages: any[] = [], query: Record<string,
   };
 }
 
-function codexMetadata(thread: any) {
-  const metadata = thread?.executor?.metadata && typeof thread.executor.metadata === "object" ? thread.executor.metadata : {};
-  const tokenUsage = thread?.codexTokenUsage || metadata.codexTokenUsage || metadata.tokenUsage || null;
-  const totalTokenUsage = thread?.codexTotalTokenUsage || metadata.codexTotalTokenUsage || metadata.totalTokenUsage || null;
-  const contextWindow = Number(thread?.codexContextWindow || metadata.codexContextWindow || metadata.contextWindow || 0) || null;
-  const rateLimits = thread?.codexRateLimits || metadata.codexRateLimits || metadata.rateLimits || null;
-  return {
-    codexMode: thread?.codexMode || metadata.codexMode || thread?.desiredCodexMode || null,
-    codexModeLabel: thread?.codexModeLabel || metadata.codexModeLabel || null,
-    codexModeRaw: thread?.codexModeRaw || metadata.codexModeRaw || null,
-    codexModeSource: thread?.codexModeSource || metadata.codexModeSource || null,
-    codexModeUpdatedAt: thread?.codexModeUpdatedAt || metadata.codexModeUpdatedAt || null,
-    desiredCodexMode: thread?.desiredCodexMode || null,
-    desiredCodexModeUpdatedAt: thread?.desiredCodexModeUpdatedAt || null,
-    codexModel: thread?.codexModel || metadata.codexModel || process.env.ORKESTR_DEFAULT_CODEX_MODEL || process.env.OPENAI_MODEL || null,
-    codexModelProvider: thread?.codexModelProvider || metadata.codexModelProvider || "codex",
-    codexReasoningEffort: thread?.codexReasoningEffort || metadata.codexReasoningEffort || process.env.ORKESTR_DEFAULT_CODEX_REASONING || null,
-    codexModelUpdatedAt: thread?.codexModelUpdatedAt || metadata.codexModelUpdatedAt || null,
-    codexContextWindow: contextWindow,
-    codexTokenUsage: tokenUsage,
-    codexTotalTokenUsage: totalTokenUsage,
-    codexRateLimits: rateLimits,
-  };
-}
-
-async function threadRuntimeSummary(thread: any, messages: any[] = []) {
-  const status = await runtimeStatus(thread.id).catch(() => null);
-  const gitState: any = await detectThreadGitState(thread).catch(() => ({}));
-  const metadataTarget = {
-    ...thread,
-    ...gitState,
-    runtime: status?.lease ? { ...(thread.runtime || {}), ...status.lease } : thread.runtime,
-  };
-  const liveCodexMetadata: any = await resolveCodexThreadMetadata(metadataTarget).catch(() => ({}));
-  const codexThread = {
-    ...thread,
-    ...liveCodexMetadata,
-    executor: {
-      ...(thread.executor || {}),
-      codexThreadId: liveCodexMetadata.codexThreadId || thread.executor?.codexThreadId || "",
-      metadata: {
-        ...(thread.executor?.metadata || {}),
-        ...liveCodexMetadata,
-      },
-    },
-  };
-  const state = status?.state || thread.state || "sleeping";
-  const ready = state === "ready";
-  const lastActivityAt = messages.at(-1)?.createdAt || thread.updatedAt || thread.createdAt || null;
-  const pendingQuestion = latestPendingQuestion(messages);
-  const resolvedCodexThreadId = codexThreadId(codexThread);
-  return {
-    ...thread,
-    ...gitState,
-    threadId: resolvedCodexThreadId || thread.id,
-    codexThreadId: resolvedCodexThreadId || null,
-    status: state,
-    state,
-    routeEligible: true,
-    sessionName: status?.sessionName || thread.runtime?.sessionName || thread.executor?.sessionName || null,
-    paneId: status?.paneId || thread.runtime?.paneId || thread.executor?.tmuxTarget || null,
-    tmuxTarget: status?.paneId || thread.runtime?.paneId || thread.executor?.tmuxTarget || null,
-    runtime: status?.lease ? { ...(thread.runtime || {}), ...status.lease, state } : thread.runtime || null,
-    activeRuntimeLeaseId: status?.lease?.id || thread.activeRuntimeLeaseId || null,
-    promptReady: status?.promptReady ?? ready,
-    promptReadyStable: status?.promptReadyStable ?? ready,
-    working: status?.working ?? state === "working",
-    foregroundWorking: status?.foregroundWorking ?? state === "working",
-    typingActive: status?.typingActive ?? state === "working",
-    backgroundWork: status?.backgroundWork ?? false,
-    awaitingInput: !!pendingQuestion,
-    awaitingInputEventId: pendingQuestion?.eventId || null,
-    pendingQuestion,
-    pendingCount: status?.pendingCount ?? 0,
-    runningCount: status?.runningCount ?? 0,
-    historyState: "ready",
-    staleWorking: false,
-    staleWorkingReason: null,
-    staleWorkingSince: null,
-    publicStatus: ready ? "Ready" : state === "sleeping" ? "Sleeping" : state,
-    publicStatusCode: ready ? "ready" : state,
-    hibernated: state === "sleeping",
-    lastActivityAt,
-    threadUpdatedAt: thread.updatedAt || lastActivityAt,
-    inferredThreadId: resolvedCodexThreadId || null,
-    wakePolicy: thread.wakePolicy || "wake-on-message",
-    ...codexMetadata(codexThread),
-  };
-}
-
 @Controller("api/threads")
 export class ThreadsController {
   @Get()
   async list() {
-    const threads = await listThreads();
-    return { threads: await Promise.all(threads.map(async (thread: any) => threadRuntimeSummary(thread, await listThreadMessages(thread.id)))) };
+    return threadSummaryPayload();
   }
 
   @Get("summary")
@@ -364,15 +268,17 @@ export class ThreadsController {
     }
     if (before?.state === "ready" && before?.promptReady === true) {
       const delivered = await deliverPendingThreadInputs(thread.id);
+      const current = (await listThreadMessages(thread.id)).find((item: any) => item.id === message.id) || message;
       return {
         ok: true,
         threadId: codexThreadId(thread) || thread.id,
         orkestrThreadId: thread.id,
-        message,
+        message: current,
         delivered,
-        queued: false,
+        queued: current.state !== "completed",
+        deliveryState: current.deliveryState || current.state,
         observed: true,
-        observedVia: "tmux_send",
+        observedVia: current.observedVia || "pending_delivery",
       };
     }
     requestThreadInputDelivery(thread.id);

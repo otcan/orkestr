@@ -7,10 +7,10 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { startServer } from "../apps/server/src/server.js";
 import { runNextThreadMessage } from "../packages/core/src/executors.js";
-import { runtimeStatus, syncRuntimeLeases, syncRuntimeWindowName, wakeThread } from "../packages/core/src/runtime-leases.js";
+import { deliverPendingThreadInputs, drainAllPendingThreadInputs, runtimeStatus, syncRuntimeLeases, syncRuntimeWindowName, wakeThread } from "../packages/core/src/runtime-leases.js";
 import { parseThreadInputCommand } from "../packages/core/src/thread-commands.js";
 import { createThreadWorker, detectThreadGitState, listThreadWorkers, updateThreadRepo } from "../packages/core/src/thread-workers.js";
-import { appendThreadMessage, createThread, enqueueThreadInput, listThreadMessages, listThreads, updateThread } from "../packages/core/src/threads.js";
+import { appendThreadMessage, createThread, enqueueThreadInput, listThreadMessages, listThreads, updateThread, updateThreadMessage } from "../packages/core/src/threads.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -69,7 +69,11 @@ case "$cmd" in
     exit 0
     ;;
   capture-pane)
-    printf '%s\\n' "\${TMUX_CAPTURE_TEXT:-> }"
+    if [ -n "\${TMUX_CAPTURE_FILE:-}" ] && [ -f "\${TMUX_CAPTURE_FILE:-}" ]; then
+      cat "\${TMUX_CAPTURE_FILE:-}"
+    else
+      printf '%s\\n' "\${TMUX_CAPTURE_TEXT:-› }"
+    fi
     exit 0
     ;;
   *)
@@ -198,6 +202,70 @@ test("runtime status keeps delivered Codex input processing until prompt returns
     restoreEnvValue("TMUX_LOG", priorTmuxLog);
     restoreEnvValue("TMUX_STATE", priorTmuxState);
     restoreEnvValue("TMUX_CAPTURE_TEXT", priorTmuxCaptureText);
+  }
+});
+
+test("thread input delivery waits for runtime acknowledgement before completing", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-delivery-ack-"));
+  const fakeTmux = await createFakeTmux(home);
+  const captureFile = path.join(home, "pane.txt");
+  const priorPath = process.env.PATH;
+  const priorTmuxLog = process.env.TMUX_LOG;
+  const priorTmuxState = process.env.TMUX_STATE;
+  const priorCaptureFile = process.env.TMUX_CAPTURE_FILE;
+  process.env.PATH = `${fakeTmux.bin}:${priorPath || ""}`;
+  process.env.TMUX_LOG = fakeTmux.log;
+  process.env.TMUX_STATE = fakeTmux.state;
+  process.env.TMUX_CAPTURE_FILE = captureFile;
+
+  try {
+    await fs.writeFile(captureFile, "\u203a \n", "utf8");
+    const env = {
+      ORKESTR_HOME: path.join(home, "orkestr-home"),
+      HOME: path.join(home, "runtime-home"),
+      CODEX_HOME: path.join(home, "codex-home"),
+      PATH: process.env.PATH,
+      TMUX_LOG: fakeTmux.log,
+      TMUX_STATE: fakeTmux.state,
+      TMUX_CAPTURE_FILE: captureFile,
+      ORKESTR_DELIVERY_ACK_WAIT_MS: "0",
+      ORKESTR_DELIVERY_ACK_BACKOFF_MS: "10000",
+    };
+    await createThread({ id: "delivery-thread", name: "Delivery Thread" }, env);
+    const input = await enqueueThreadInput("delivery-thread", { text: "hello delivery" }, env);
+
+    assert.deepEqual(await deliverPendingThreadInputs("delivery-thread", env), []);
+    let messages = await listThreadMessages("delivery-thread", env);
+    let status = await runtimeStatus("delivery-thread", env);
+    assert.equal(messages[0].state, "awaiting_ack");
+    assert.equal(messages[0].deliveryState, "awaiting_ack");
+    assert.equal(messages[0].deliveryAttempt, 1);
+    assert.equal(status.pendingCount, 1);
+    assert.equal(status.awaitingAckCount, 1);
+
+    await updateThreadMessage("delivery-thread", input.id, { deliveryNextAttemptAt: new Date(Date.now() - 1000).toISOString() }, env);
+    assert.deepEqual(await deliverPendingThreadInputs("delivery-thread", env), []);
+    messages = await listThreadMessages("delivery-thread", env);
+    assert.equal(messages[0].state, "awaiting_ack");
+    assert.equal(messages[0].deliveryAttempt, 2);
+
+    await fs.writeFile(captureFile, "\u2022 Working (1s)\n", "utf8");
+    await drainAllPendingThreadInputs(env);
+    messages = await listThreadMessages("delivery-thread", env);
+    status = await runtimeStatus("delivery-thread", env);
+    assert.equal(messages[0].state, "completed");
+    assert.equal(messages[0].deliveryState, "delivered");
+    assert.equal(messages[0].observedVia, "runtime_working");
+    assert.equal(status.awaitingAckCount, 0);
+
+    const log = await fs.readFile(fakeTmux.log, "utf8");
+    const submitCount = log.split("\n").filter((line) => line.includes("__CALL__\tsend-keys\t-t\t%42\tC-m")).length;
+    assert.equal(submitCount, 2);
+  } finally {
+    restoreEnvValue("PATH", priorPath);
+    restoreEnvValue("TMUX_LOG", priorTmuxLog);
+    restoreEnvValue("TMUX_STATE", priorTmuxState);
+    restoreEnvValue("TMUX_CAPTURE_FILE", priorCaptureFile);
   }
 });
 

@@ -217,7 +217,10 @@ async function send(argv, ctx) {
     body: { text, source: "cli", parseCommands: true, controlAllowed: true },
   });
   if (json) ctx.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
-  else ctx.stdout.write(`${payload.queued ? "Queued" : "Sent"} ${payload.orkestrThreadId || target}\n`);
+  else {
+    const label = payload.deliveryState === "awaiting_ack" ? "Awaiting ack" : payload.queued ? "Queued" : "Sent";
+    ctx.stdout.write(`${label} ${payload.orkestrThreadId || target}\n`);
+  }
   return 0;
 }
 
