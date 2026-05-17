@@ -15,6 +15,7 @@ import { startCodexDeviceAuth } from "../../../../../packages/connectors/src/cod
 import {
   getLocalWhatsAppBridgeStatus,
   getLocalWhatsAppQrSvg,
+  listLocalWhatsAppChats,
   logoutLocalWhatsAppAccount,
   sendLocalWhatsAppText,
   startLocalWhatsAppAccount,
@@ -71,6 +72,11 @@ export class ConnectorsController {
   @HttpCode(200)
   async whatsappBridgeAccountLogout(@Param("accountId") accountId: string) {
     return { account: await logoutLocalWhatsAppAccount(accountId) };
+  }
+
+  @Get("whatsapp/bridge/accounts/:accountId/chats")
+  async whatsappBridgeAccountChats(@Param("accountId") accountId: string) {
+    return listLocalWhatsAppChats(accountId);
   }
 
   @Get("whatsapp/bridge/qr.svg")

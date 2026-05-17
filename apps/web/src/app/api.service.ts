@@ -384,6 +384,45 @@ export interface ThreadBindingResponse {
   binding: NonNullable<ThreadSummary["binding"]>;
 }
 
+export interface WhatsAppAccount {
+  accountId?: string;
+  id?: string;
+  label?: string;
+  name?: string;
+  state?: string;
+  ready?: boolean;
+  qrUrl?: string;
+  [key: string]: unknown;
+}
+
+export interface WhatsAppChat {
+  id: string;
+  name?: string;
+  isGroup?: boolean;
+  unreadCount?: number;
+  timestamp?: string | null;
+  [key: string]: unknown;
+}
+
+export interface WhatsAppStatusResponse {
+  state?: string;
+  summary?: string;
+  mode?: string;
+  bridgeUrl?: string;
+  qrAvailable?: boolean;
+  qrUrl?: string;
+  accounts?: WhatsAppAccount[];
+  health?: Record<string, unknown> | null;
+  [key: string]: unknown;
+}
+
+export interface WhatsAppChatsResponse {
+  accountId: string;
+  state?: string;
+  ready?: boolean;
+  chats: WhatsAppChat[];
+}
+
 @Injectable({ providedIn: "root" })
 export class ApiService {
   private readonly http = inject(HttpClient);
@@ -454,8 +493,8 @@ export class ApiService {
     return this.http.post<CodexDeviceAuthResponse>(this.api("/connectors/codex/device-auth"), {});
   }
 
-  whatsappStatus(): Observable<Record<string, unknown>> {
-    return this.http.get<Record<string, unknown>>(this.api("/connectors/whatsapp/status"));
+  whatsappStatus(): Observable<WhatsAppStatusResponse> {
+    return this.http.get<WhatsAppStatusResponse>(this.api("/connectors/whatsapp/status"));
   }
 
   startWhatsAppAccount(accountId: string): Observable<Record<string, unknown>> {
@@ -469,6 +508,12 @@ export class ApiService {
     return this.http.post<Record<string, unknown>>(
       this.api(`/connectors/whatsapp/bridge/accounts/${encodeURIComponent(accountId)}/logout`),
       {},
+    );
+  }
+
+  whatsappBridgeChats(accountId: string): Observable<WhatsAppChatsResponse> {
+    return this.http.get<WhatsAppChatsResponse>(
+      this.api(`/connectors/whatsapp/bridge/accounts/${encodeURIComponent(accountId)}/chats`),
     );
   }
 
@@ -554,6 +599,13 @@ export class ApiService {
 
   createThread(body: Record<string, unknown>): Observable<{ thread: ThreadSummary }> {
     return this.http.post<{ thread: ThreadSummary }>(this.api("/threads"), body);
+  }
+
+  deleteThread(id: string, deleteWorkers = false): Observable<{ ok: boolean; deletedThreads: string[]; deletedCount: number; deletedTimers?: string[] }> {
+    const suffix = deleteWorkers ? "?deleteWorkers=true" : "";
+    return this.http.delete<{ ok: boolean; deletedThreads: string[]; deletedCount: number; deletedTimers?: string[] }>(
+      this.api(`/threads/${encodeURIComponent(id)}${suffix}`),
+    );
   }
 
   threadMessages(id: string, limit = 100): Observable<ThreadMessagesResponse> {

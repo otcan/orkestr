@@ -19,6 +19,7 @@ import {
 import { createTimer, deleteTimer, listTimers } from "../../../../../packages/core/src/timers.js";
 import {
   createThread,
+  deleteThread,
   enqueueThreadInput,
   getThread,
   listThreadMessages,
@@ -594,6 +595,22 @@ export class ThreadsController {
     const thread = await getThread(threadId);
     if (!thread) throw httpError("thread_not_found", 404);
     return { thread };
+  }
+
+  @Delete(":threadId")
+  async delete(@Param("threadId") threadId: string, @Query() query: Record<string, unknown> = {}) {
+    const deleteWorkers = optionalBodyBoolean(query, "deleteWorkers", false);
+    const result = await deleteThread(threadId, { deleteWorkers });
+    const deleted = new Set((result.deletedThreads || []).map((id: string) => String(id)));
+    const timers = await listTimers();
+    const deletedTimers: string[] = [];
+    for (const timer of timers) {
+      const target = String(timer.target || timer.threadId || "").trim();
+      if (timer.targetType === "thread" && deleted.has(target)) {
+        if (await deleteTimer(timer.id)) deletedTimers.push(timer.id);
+      }
+    }
+    return { ...result, deletedTimers };
   }
 
   @Put(":threadId/binding")

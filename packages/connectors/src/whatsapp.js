@@ -139,6 +139,7 @@ export async function getWhatsAppStatus(env = process.env, fetchImpl = fetch) {
         summary: "WhatsApp bridge is reachable and paired.",
         bridgeUrl,
         health: health.payload,
+        accounts: Array.isArray(health.payload?.accounts) ? health.payload.accounts : [],
         qrAvailable: false,
       };
     }
@@ -148,6 +149,7 @@ export async function getWhatsAppStatus(env = process.env, fetchImpl = fetch) {
       summary: qrAvailable ? "WhatsApp bridge is reachable; scan the QR code to pair." : "WhatsApp bridge is reachable but not paired.",
       bridgeUrl,
       health: health.payload,
+      accounts: Array.isArray(health.payload?.accounts) ? health.payload.accounts : [],
       qrAvailable,
       qrUrl: qrAvailable ? `${bridgeUrl}/qr.svg` : "",
     };

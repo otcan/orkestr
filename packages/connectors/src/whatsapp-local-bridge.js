@@ -323,6 +323,33 @@ export async function getLocalWhatsAppQrSvg(accountId = "account-1", env = proce
   return fs.readFile(qrPath(normalized, env), "utf8").catch(() => "");
 }
 
+export async function listLocalWhatsAppChats(accountId = "account-1", env = process.env) {
+  const normalized = normalizeAccountId(accountId);
+  const runtime = runtimes.get(normalized);
+  const state = accountStates.get(normalized) || defaultAccountState(normalized);
+  if (!runtime?.client || !state.ready) {
+    return {
+      accountId: normalized,
+      state: state.state || "idle",
+      ready: false,
+      chats: [],
+    };
+  }
+  const chats = await runtime.client.getChats();
+  return {
+    accountId: normalized,
+    state: state.state || "ready",
+    ready: true,
+    chats: chats.map((chat) => ({
+      id: String(chat?.id?._serialized || ""),
+      name: String(chat?.name || chat?.formattedTitle || chat?.id?.user || ""),
+      isGroup: Boolean(chat?.isGroup),
+      unreadCount: Number(chat?.unreadCount || 0),
+      timestamp: chat?.timestamp ? new Date(Number(chat.timestamp) * 1000).toISOString() : null,
+    })).filter((chat) => chat.id),
+  };
+}
+
 export async function sendLocalWhatsAppText({ chatId = "", text = "", accountId = "", env = process.env } = {}) {
   const selectedAccountId = accountId ? normalizeAccountId(accountId) : localWhatsAppAccountIds.find((id) => accountStates.get(id)?.ready);
   const runtime = selectedAccountId ? runtimes.get(selectedAccountId) : null;

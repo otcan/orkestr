@@ -1,4 +1,5 @@
 import path from "node:path";
+import fs from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import { dataPaths, ensureDataDirs } from "../../storage/src/paths.js";
 import { appendEvent, readJson, writeJson } from "../../storage/src/store.js";
@@ -128,6 +129,56 @@ export async function updateThread(threadId, patch = {}, env = process.env) {
   }
   await saveThreads(next, env);
   return updated;
+}
+
+function descendantThreadIds(threads, rootIds) {
+  const deleted = new Set(rootIds);
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const thread of threads) {
+      const parentId = String(thread.parentThreadId || "").trim();
+      const rootThreadId = String(thread.rootThreadId || "").trim();
+      if (!deleted.has(thread.id) && (deleted.has(parentId) || deleted.has(rootThreadId))) {
+        deleted.add(thread.id);
+        changed = true;
+      }
+    }
+  }
+  return deleted;
+}
+
+export async function deleteThread(threadId, options = {}, env = process.env) {
+  const id = normalizeThreadId(threadId);
+  const threads = await listThreads(env);
+  const target = threads.find((thread) => thread.id === id || thread.name === id || thread.bindingName === id);
+  if (!target) {
+    const error = new Error("thread_not_found");
+    error.statusCode = 404;
+    throw error;
+  }
+  const childThreads = threads.filter((thread) => thread.parentThreadId === target.id || thread.rootThreadId === target.id);
+  if (childThreads.length && options.deleteWorkers !== true) {
+    const error = new Error("thread_has_workers");
+    error.statusCode = 409;
+    error.workerCount = childThreads.length;
+    throw error;
+  }
+  const deletedIds = descendantThreadIds(threads, [target.id]);
+  const next = threads.filter((thread) => !deletedIds.has(thread.id));
+  await saveThreads(next, env);
+  const paths = await ensureDataDirs(env);
+  for (const deletedId of deletedIds) {
+    await fs.rm(await messagesPath(deletedId, env), { force: true }).catch(() => {});
+    await fs.rm(path.join(paths.home, "uploads", deletedId), { recursive: true, force: true }).catch(() => {});
+    await fs.rm(path.join(paths.home, "uploads", safeThreadId(deletedId)), { recursive: true, force: true }).catch(() => {});
+    await appendEvent({ type: "thread_deleted", threadId: deletedId, parentThreadId: target.id === deletedId ? null : target.id }, env);
+  }
+  return {
+    ok: true,
+    deletedThreads: [...deletedIds],
+    deletedCount: deletedIds.size,
+  };
 }
 
 export async function listThreadMessages(threadId, env = process.env) {

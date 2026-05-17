@@ -10,7 +10,7 @@ import { runNextThreadMessage } from "../packages/core/src/executors.js";
 import { deliverPendingThreadInputs, drainAllPendingThreadInputs, runtimeStatus, syncRuntimeLeases, syncRuntimeWindowName, wakeThread } from "../packages/core/src/runtime-leases.js";
 import { parseThreadInputCommand } from "../packages/core/src/thread-commands.js";
 import { createThreadWorker, detectThreadGitState, listThreadWorkers, updateThreadRepo } from "../packages/core/src/thread-workers.js";
-import { appendThreadMessage, createThread, enqueueThreadInput, listThreadMessages, listThreads, updateThread, updateThreadMessage } from "../packages/core/src/threads.js";
+import { appendThreadMessage, createThread, deleteThread, enqueueThreadInput, listThreadMessages, listThreads, updateThread, updateThreadMessage } from "../packages/core/src/threads.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -108,6 +108,26 @@ test("threads are the primary routable runtime object", async () => {
   assert.equal(messages.length, 2);
   assert.equal(messages[0].state, "completed");
   assert.equal(messages[1].role, "assistant");
+});
+
+test("threads can be deleted with their workers and stored messages", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-delete-"));
+  const env = { ORKESTR_HOME: home };
+  await createThread({ id: "delete-parent", name: "Delete Parent" }, env);
+  await createThread({ id: "delete-worker", name: "Delete Worker", parentThreadId: "delete-parent", rootThreadId: "delete-parent" }, env);
+  await appendThreadMessage("delete-parent", { role: "assistant", text: "parent message" }, env);
+  await appendThreadMessage("delete-worker", { role: "assistant", text: "worker message" }, env);
+
+  await assert.rejects(() => deleteThread("delete-parent", {}, env), /thread_has_workers/);
+  const result = await deleteThread("delete-parent", { deleteWorkers: true }, env);
+  const threads = await listThreads(env);
+  const parentMessages = await listThreadMessages("delete-parent", env);
+  const workerMessages = await listThreadMessages("delete-worker", env);
+
+  assert.equal(result.deletedCount, 2);
+  assert.deepEqual(threads, []);
+  assert.deepEqual(parentMessages, []);
+  assert.deepEqual(workerMessages, []);
 });
 
 test("threads default to wake-on-message and sleep without a runtime lease", async () => {

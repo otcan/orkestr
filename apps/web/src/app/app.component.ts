@@ -14,6 +14,9 @@ import {
   ThreadMessage,
   ThreadSummary,
   TimerRecord,
+  WhatsAppAccount,
+  WhatsAppChat,
+  WhatsAppStatusResponse,
 } from "./api.service";
 import { appendPendingFiles, messageWithAttachmentPaths, PendingFile, removePendingFile, uploadPendingFiles } from "./thread-uploads";
 
@@ -117,7 +120,13 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   whatsappBindingEnabled = true;
   whatsappAllowOtherPeople = true;
   whatsappMirrorToWhatsApp = true;
+  whatsappStatusDetails: WhatsAppStatusResponse | null = null;
+  whatsappChats: WhatsAppChat[] = [];
+  whatsappChatsLoading = false;
   savingThreadBinding = false;
+  deletingThread = false;
+  deleteThreadConfirm = "";
+  deleteThreadWorkers = false;
   sidebarWorkerTask = "";
   creatingSidebarWorker = false;
   creatingWorkerParentId = "";
@@ -221,17 +230,19 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   async refresh(showBusy = true): Promise<void> {
     if (showBusy) this.busy = true;
     try {
-      const [threadsResult, systemResult, setupResult, timersResult] = await Promise.allSettled([
+      const [threadsResult, systemResult, setupResult, timersResult, whatsappResult] = await Promise.allSettled([
         firstValueFrom(this.api.threads()),
         firstValueFrom(this.api.systemSummary()),
         firstValueFrom(this.api.setupStatus()),
         firstValueFrom(this.api.timers()),
+        firstValueFrom(this.api.whatsappStatus()),
       ]);
       if (threadsResult.status === "rejected") throw threadsResult.reason;
       const payload = threadsResult.value;
       if (systemResult.status === "fulfilled") this.opsSystem = systemResult.value;
       if (setupResult.status === "fulfilled") this.setupStatus = setupResult.value;
       if (timersResult.status === "fulfilled") this.allTimers = timersResult.value.timers || [];
+      if (whatsappResult.status === "fulfilled") this.whatsappStatusDetails = whatsappResult.value;
       this.apiOnline = true;
       this.trackThreadActivity(payload.threads);
       this.threads = [...payload.threads].sort((a, b) => this.activityMs(b) - this.activityMs(a));
@@ -411,7 +422,10 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     if (panel === "timers") await this.loadTimers();
     if (panel === "runtime") await this.loadRuntime();
     if (panel === "raw") await this.loadRaw();
-    if (panel === "settings") this.syncThreadBindingDraft(this.selectedThread(), true);
+    if (panel === "settings") {
+      this.syncThreadBindingDraft(this.selectedThread(), true);
+      await this.refreshWhatsAppSettings();
+    }
     if (panel === "chat") {
       this.queueMessagePaneScrollToBottom();
     }
@@ -859,6 +873,109 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     }
   }
 
+  async refreshWhatsAppSettings(): Promise<void> {
+    try {
+      this.whatsappStatusDetails = await firstValueFrom(this.api.whatsappStatus());
+      await this.loadWhatsAppChats();
+    } catch (error) {
+      this.error = this.errorText(error);
+    }
+  }
+
+  async changeWhatsAppAccount(accountId: string): Promise<void> {
+    this.whatsappOutboundAccountId = accountId;
+    await this.loadWhatsAppChats();
+  }
+
+  async startSelectedWhatsAppAccount(): Promise<void> {
+    const accountId = this.selectedWhatsAppAccountId();
+    if (!accountId || this.busy) return;
+    this.busy = true;
+    try {
+      await firstValueFrom(this.api.startWhatsAppAccount(accountId));
+      await this.refreshWhatsAppSettings();
+    } catch (error) {
+      this.error = this.errorText(error);
+    } finally {
+      this.busy = false;
+      this.renderNow();
+    }
+  }
+
+  async logoutSelectedWhatsAppAccount(): Promise<void> {
+    const accountId = this.selectedWhatsAppAccountId();
+    if (!accountId || this.busy) return;
+    this.busy = true;
+    try {
+      await firstValueFrom(this.api.logoutWhatsAppAccount(accountId));
+      await this.refreshWhatsAppSettings();
+    } catch (error) {
+      this.error = this.errorText(error);
+    } finally {
+      this.busy = false;
+      this.renderNow();
+    }
+  }
+
+  async loadWhatsAppChats(): Promise<void> {
+    const accountId = this.selectedWhatsAppAccountId();
+    if (!accountId || !this.canLoadLocalWhatsAppChats(accountId)) {
+      this.whatsappChats = [];
+      return;
+    }
+    this.whatsappChatsLoading = true;
+    try {
+      const result = await firstValueFrom(this.api.whatsappBridgeChats(accountId));
+      this.whatsappChats = result.chats || [];
+    } catch {
+      this.whatsappChats = [];
+    } finally {
+      this.whatsappChatsLoading = false;
+      this.renderNow();
+    }
+  }
+
+  selectWhatsAppChat(chatId: string): void {
+    this.whatsappChatId = chatId;
+    const chat = this.whatsappChats.find((item) => item.id === chatId);
+    if (chat?.name) this.whatsappDisplayName = chat.name;
+  }
+
+  async deleteSelectedThread(thread: ThreadSummary | null = this.selectedThread()): Promise<void> {
+    if (!thread || this.deletingThread || !this.threadDeleteConfirmMatches(thread)) return;
+    const title = this.threadTitle(thread);
+    const confirmed = typeof globalThis.confirm === "function"
+      ? globalThis.confirm(`Delete "${title}" from Orkestr? This removes stored messages and cannot be undone.`)
+      : true;
+    if (!confirmed) return;
+    this.deletingThread = true;
+    this.busy = true;
+    try {
+      const result = await firstValueFrom(this.api.deleteThread(thread.id, this.deleteThreadWorkers));
+      const deleted = new Set(result.deletedThreads || [thread.id]);
+      this.messageCache.update((cache) => {
+        const next = { ...cache };
+        for (const id of deleted) delete next[id];
+        return next;
+      });
+      this.selectedId = "";
+      this.deleteThreadConfirm = "";
+      this.deleteThreadWorkers = false;
+      this.activePanel = "chat";
+      await this.refresh(false);
+      if (!this.threads.length) {
+        this.threadWizardOpen = true;
+        globalThis.history?.pushState({}, "", "/");
+      }
+    } catch (error) {
+      this.error = this.errorText(error);
+    } finally {
+      this.deletingThread = false;
+      this.busy = false;
+      this.renderNow();
+    }
+  }
+
   async createSidebarWorker(thread: ThreadSummary | null = this.selectedThread()): Promise<void> {
     const parent = this.workerParentThread(thread);
     const task = this.sidebarWorkerTask.trim();
@@ -1160,6 +1277,70 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
       this.whatsappBindingEnabled !== (binding.enabled !== false) ||
       this.whatsappAllowOtherPeople !== (binding.allowOtherPeople !== false) ||
       this.whatsappMirrorToWhatsApp !== (binding.mirrorToWhatsApp !== false);
+  }
+
+  whatsappAccounts(): WhatsAppAccount[] {
+    const status = this.whatsappStatusDetails || {};
+    const health = status.health && typeof status.health === "object" ? status.health as Record<string, unknown> : {};
+    const candidates = [
+      ...(Array.isArray(status.accounts) ? status.accounts : []),
+      ...(Array.isArray(health["accounts"]) ? health["accounts"] as WhatsAppAccount[] : []),
+    ];
+    const seen = new Set<string>();
+    return candidates.filter((account) => {
+      const id = this.whatsappAccountId(account);
+      if (!id || seen.has(id)) return false;
+      seen.add(id);
+      return true;
+    });
+  }
+
+  whatsappAccountId(account: WhatsAppAccount | Record<string, unknown> | null): string {
+    if (!account) return "";
+    return String(account["accountId"] || account["id"] || account["name"] || "").trim();
+  }
+
+  whatsappAccountLabel(account: WhatsAppAccount | Record<string, unknown> | null): string {
+    if (!account) return "";
+    const id = this.whatsappAccountId(account);
+    return String(account["label"] || account["displayName"] || account["name"] || id).trim();
+  }
+
+  whatsappAccountState(account: WhatsAppAccount | Record<string, unknown> | null): string {
+    if (!account) return "";
+    if (account["ready"] === true) return "ready";
+    return String(account["state"] || account["status"] || "").trim();
+  }
+
+  selectedWhatsAppAccountId(): string {
+    const selected = this.whatsappOutboundAccountId.trim();
+    if (selected) return selected;
+    const accounts = this.whatsappAccounts();
+    const ready = accounts.find((account) => account.ready || this.whatsappAccountState(account) === "ready");
+    return this.whatsappAccountId(ready || accounts[0] || null) || "account-1";
+  }
+
+  whatsappAccountQrUrl(): string {
+    const selected = this.selectedWhatsAppAccountId();
+    const account = this.whatsappAccounts().find((item) => this.whatsappAccountId(item) === selected);
+    return String(account?.qrUrl || this.whatsappStatusDetails?.qrUrl || "").trim();
+  }
+
+  whatsappChatLabelFor(chat: WhatsAppChat): string {
+    const name = String(chat.name || chat.id || "").trim();
+    return `${name}${chat.isGroup ? " · group" : ""}`;
+  }
+
+  canLoadLocalWhatsAppChats(accountId = this.selectedWhatsAppAccountId()): boolean {
+    const mode = String(this.whatsappStatusDetails?.mode || "local").toLowerCase();
+    const bridgeUrl = String(this.whatsappStatusDetails?.bridgeUrl || "").trim();
+    return mode === "local" && (!bridgeUrl || bridgeUrl.startsWith("/api/connectors/whatsapp/bridge")) && /^account-\d+$/i.test(accountId);
+  }
+
+  threadDeleteConfirmMatches(thread: ThreadSummary | null): boolean {
+    if (!thread) return false;
+    const confirm = this.deleteThreadConfirm.trim();
+    return Boolean(confirm && (confirm === this.threadTitle(thread) || confirm === thread.id));
   }
 
   whatsappChatLabel(thread: ThreadSummary | null): string {
@@ -1859,6 +2040,8 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     this.whatsappBindingEnabled = binding.enabled !== false;
     this.whatsappAllowOtherPeople = binding.allowOtherPeople !== false;
     this.whatsappMirrorToWhatsApp = binding.mirrorToWhatsApp !== false;
+    this.deleteThreadConfirm = "";
+    this.deleteThreadWorkers = false;
   }
 
   private syncThreadTextState(thread: ThreadSummary | null, force = false): void {
