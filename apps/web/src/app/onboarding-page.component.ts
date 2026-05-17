@@ -1,4 +1,4 @@
-import { Component, EventEmitter, OnDestroy, OnInit, Output, inject } from "@angular/core";
+import { Component, EventEmitter, Input, OnChanges, OnDestroy, OnInit, Output, SimpleChanges, inject } from "@angular/core";
 import { FormsModule } from "@angular/forms";
 import { firstValueFrom } from "rxjs";
 import { ApiService, ConnectorStatus, SetupStatus, ThreadSummary } from "./api.service";
@@ -6,6 +6,7 @@ import { ApiService, ConnectorStatus, SetupStatus, ThreadSummary } from "./api.s
 type ConnectorStep = "openai" | "codex" | "gmail" | "linkedin" | "whatsapp" | "browsers";
 type OnboardingStep = "goal" | "system" | "security" | ConnectorStep | "finish";
 type OnboardingGoalId = "whatsapp-codex" | "virtual-desktop" | "inbox-summary";
+type SetupPageMode = "setup" | "onboarding";
 
 interface OnboardingGoal {
   id: OnboardingGoalId;
@@ -22,11 +23,12 @@ interface OnboardingGoal {
   templateUrl: "./onboarding-page.component.html",
   styleUrls: ["./onboarding-page.component.css"],
 })
-export class OnboardingPageComponent implements OnInit, OnDestroy {
+export class OnboardingPageComponent implements OnInit, OnChanges, OnDestroy {
   private readonly api = inject(ApiService);
   private readonly storageKey = "orkestr:onboarding";
   private poller?: ReturnType<typeof setInterval>;
 
+  @Input() mode: SetupPageMode = "onboarding";
   @Output() skip = new EventEmitter<void>();
   @Output() complete = new EventEmitter<void>();
 
@@ -96,6 +98,10 @@ export class OnboardingPageComponent implements OnInit, OnDestroy {
     this.restoreProgress();
     void this.load();
     this.poller = setInterval(() => void this.load(false), 30_000);
+  }
+
+  ngOnChanges(changes: SimpleChanges): void {
+    if (changes["mode"]) this.ensureActiveStepAvailable();
   }
 
   ngOnDestroy(): void {
@@ -225,12 +231,34 @@ export class OnboardingPageComponent implements OnInit, OnDestroy {
     return this.setup?.setupState === "ready";
   }
 
+  isSetupMode(): boolean {
+    return this.mode === "setup";
+  }
+
+  isOnboardingMode(): boolean {
+    return this.mode === "onboarding";
+  }
+
+  pageTitle(): string {
+    return this.isSetupMode() ? "Setup" : "Choose your first workflow";
+  }
+
+  pageSummary(): string {
+    return this.isSetupMode()
+      ? "Setup stays available after onboarding so you can check security, accounts, runtimes, and local connectors at any time."
+      : "Orkestr runs locally. These steps prepare only the local runtime and accounts needed for the workflow you want to run first.";
+  }
+
+  closeLabel(): string {
+    return this.isSetupMode() ? "Back to cockpit" : "Skip to cockpit";
+  }
+
   activeStepIndex(): number {
-    return Math.max(0, this.activeSteps().findIndex((step) => step.id === this.activeStep));
+    return Math.max(0, this.pageSections().findIndex((step) => step.id === this.activeStep));
   }
 
   activeStepLabel(): string {
-    return this.activeSteps()[this.activeStepIndex()]?.label || "";
+    return this.pageSections()[this.activeStepIndex()]?.label || "";
   }
 
   progressPercent(): number {
@@ -238,7 +266,7 @@ export class OnboardingPageComponent implements OnInit, OnDestroy {
   }
 
   completedStepCount(): number {
-    return this.activeSteps().filter((step) => this.stepDone(step.id)).length;
+    return this.pageSections().filter((step) => this.stepDone(step.id)).length;
   }
 
   isFirstStep(): boolean {
@@ -246,7 +274,7 @@ export class OnboardingPageComponent implements OnInit, OnDestroy {
   }
 
   isLastStep(): boolean {
-    return this.activeStepIndex() === this.activeSteps().length - 1;
+    return this.activeStepIndex() === this.pageSections().length - 1;
   }
 
   activeSteps(): Array<{ id: OnboardingStep; label: string; eyebrow: string }> {
@@ -260,6 +288,18 @@ export class OnboardingPageComponent implements OnInit, OnDestroy {
     ];
   }
 
+  setupSections(): Array<{ id: OnboardingStep; label: string; eyebrow: string }> {
+    return [
+      { id: "system", label: "System", eyebrow: "Runtime" },
+      { id: "security", label: "Security", eyebrow: "Remote access" },
+      ...this.connectorSteps,
+    ];
+  }
+
+  pageSections(): Array<{ id: OnboardingStep; label: string; eyebrow: string }> {
+    return this.isSetupMode() ? this.setupSections() : this.activeSteps();
+  }
+
   activeGoal(): OnboardingGoal {
     return this.goals.find((goal) => goal.id === this.selectedGoal) || this.goals[0];
   }
@@ -270,7 +310,7 @@ export class OnboardingPageComponent implements OnInit, OnDestroy {
 
   selectGoal(goalId: OnboardingGoalId): void {
     this.selectedGoal = goalId;
-    if (!this.activeSteps().some((step) => step.id === this.activeStep)) this.activeStep = "goal";
+    if (!this.pageSections().some((step) => step.id === this.activeStep)) this.activeStep = this.isSetupMode() ? "system" : "goal";
     this.persistProgress();
   }
 
@@ -584,7 +624,7 @@ export class OnboardingPageComponent implements OnInit, OnDestroy {
   }
 
   selectStep(id: OnboardingStep): void {
-    if (!this.activeSteps().some((step) => step.id === id)) return;
+    if (!this.pageSections().some((step) => step.id === id)) return;
     this.activeStep = id;
     this.stepInitialized = true;
     this.persistProgress();
@@ -592,18 +632,22 @@ export class OnboardingPageComponent implements OnInit, OnDestroy {
 
   previousStep(): void {
     const index = this.activeStepIndex();
-    const steps = this.activeSteps();
+    const steps = this.pageSections();
     if (index > 0) this.selectStep(steps[index - 1].id);
   }
 
   nextStep(): void {
     const index = this.activeStepIndex();
-    const steps = this.activeSteps();
+    const steps = this.pageSections();
     if (index < steps.length - 1) this.selectStep(steps[index + 1].id);
     else this.openApp();
   }
 
   openApp(): void {
+    if (this.isSetupMode()) {
+      this.skip.emit();
+      return;
+    }
     if (this.setupReady()) this.complete.emit();
     else this.skip.emit();
   }
@@ -667,9 +711,15 @@ export class OnboardingPageComponent implements OnInit, OnDestroy {
   }
 
   private firstOpenStep(): OnboardingStep {
-    const steps = this.activeSteps();
+    const steps = this.pageSections();
     const storedStep = steps.find((step) => step.id === this.activeStep)?.id;
+    if (this.isSetupMode()) return storedStep || "system";
     return steps.find((step) => !this.stepDone(step.id))?.id || storedStep || "goal";
+  }
+
+  private ensureActiveStepAvailable(): void {
+    if (this.pageSections().some((step) => step.id === this.activeStep)) return;
+    this.activeStep = this.isSetupMode() ? "system" : "goal";
   }
 
   private restoreProgress(): void {
@@ -678,7 +728,7 @@ export class OnboardingPageComponent implements OnInit, OnDestroy {
       if (!raw) return;
       const saved = JSON.parse(raw) as { goal?: OnboardingGoalId; activeStep?: OnboardingStep };
       if (saved.goal && this.goals.some((goal) => goal.id === saved.goal)) this.selectedGoal = saved.goal;
-      if (saved.activeStep && this.activeSteps().some((step) => step.id === saved.activeStep)) {
+      if (saved.activeStep && this.pageSections().some((step) => step.id === saved.activeStep)) {
         this.activeStep = saved.activeStep;
         this.stepInitialized = true;
       }

@@ -19,6 +19,7 @@ import { appendPendingFiles, messageWithAttachmentPaths, PendingFile, removePend
 
 type Panel = "chat" | "history" | "timers" | "attach" | "settings" | "workers" | "runtime" | "raw" | "ops";
 type CodexRateLimitKey = "primary" | "secondary";
+type SetupPageMode = "setup" | "onboarding";
 type PersistedThreadTextField =
   | "draft"
   | "sidebarWorkerTask"
@@ -39,6 +40,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   private readonly cdr = inject(ChangeDetectorRef);
   private readonly popStateHandler = () => {
     this.onboardingActive = this.onboardingFromPath();
+    this.setupPageMode = this.setupPageModeFromPath();
     this.selectedId = this.idFromPath();
     this.activePanel = this.panelFromPath();
     this.toolsView = this.toolsViewFromPath();
@@ -82,6 +84,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   sending = false;
   threadWizardOpen = false;
   onboardingActive = false;
+  setupPageMode: SetupPageMode = "setup";
   activePanel: Panel = "chat";
   toolsView: ToolsView = "system";
   approveText = "Approved. Proceed.";
@@ -180,6 +183,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
 
   ngOnInit(): void {
     this.onboardingActive = this.onboardingFromPath();
+    this.setupPageMode = this.setupPageModeFromPath();
     this.selectedId = this.idFromPath();
     this.activePanel = this.panelFromPath();
     this.toolsView = this.toolsViewFromPath();
@@ -230,6 +234,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
       this.seedReadStateIfNeeded(this.threads);
       if (this.shouldAutoOpenOnboarding()) {
         this.onboardingActive = true;
+        this.setupPageMode = "onboarding";
         this.replaceOnboardingPath();
       }
       if (this.onboardingActive) {
@@ -431,8 +436,19 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     if (this.activePanel === "raw") this.closeRawStream();
     this.threadWizardOpen = false;
     this.onboardingActive = true;
+    this.setupPageMode = "onboarding";
     this.clearOnboardingFlag("skipped");
     this.pushOnboardingPath();
+    this.updateDocumentTitle();
+    this.renderNow();
+  }
+
+  openSetup(): void {
+    if (this.activePanel === "raw") this.closeRawStream();
+    this.threadWizardOpen = false;
+    this.onboardingActive = true;
+    this.setupPageMode = "setup";
+    this.pushSetupPath();
     this.updateDocumentTitle();
     this.renderNow();
   }
@@ -1901,7 +1917,12 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
 
   private onboardingFromPath(): boolean {
     const parts = globalThis.location?.pathname?.split("/").filter(Boolean) || [];
-    return parts[0] === "setup" || (parts[0] === "ng" && parts[1] === "onboarding");
+    return parts[0] === "setup" || parts[0] === "onboarding" || (parts[0] === "ng" && parts[1] === "onboarding");
+  }
+
+  private setupPageModeFromPath(): SetupPageMode {
+    const parts = globalThis.location?.pathname?.split("/").filter(Boolean) || [];
+    return parts[0] === "setup" ? "setup" : "onboarding";
   }
 
   private panelFromPath(): Panel {
@@ -1923,7 +1944,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   private normalizeLegacyRoutePath(): void {
     const parts = globalThis.location?.pathname?.split("/").filter(Boolean) || [];
     if (parts[0] === "ng" && parts[1] === "onboarding") {
-      globalThis.history?.replaceState({}, "", "/setup");
+      globalThis.history?.replaceState({}, "", "/onboarding");
       return;
     }
     if (parts[0] === "ng" && parts[1] === "ops") {
@@ -1953,13 +1974,18 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   }
 
   private pushOnboardingPath(): void {
-    if (globalThis.location?.pathname === "/setup") return;
-    globalThis.history?.pushState({}, "", "/setup");
+    if (globalThis.location?.pathname === "/onboarding") return;
+    globalThis.history?.pushState({}, "", "/onboarding");
   }
 
   private replaceOnboardingPath(): void {
+    if (globalThis.location?.pathname === "/onboarding") return;
+    globalThis.history?.replaceState({}, "", "/onboarding");
+  }
+
+  private pushSetupPath(): void {
     if (globalThis.location?.pathname === "/setup") return;
-    globalThis.history?.replaceState({}, "", "/setup");
+    globalThis.history?.pushState({}, "", "/setup");
   }
 
   private pathForPanel(id: string, panel: Panel): string {
@@ -2184,7 +2210,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
 
   private updateDocumentTitle(): void {
     if (this.onboardingActive) {
-      globalThis.document.title = "Setup · Orkestr";
+      globalThis.document.title = this.setupPageMode === "setup" ? "Setup · Orkestr" : "Onboarding · Orkestr";
       return;
     }
     if (this.activePanel === "ops") {

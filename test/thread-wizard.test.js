@@ -21,6 +21,9 @@ test("main UI exposes a guided first thread generation flow", async () => {
 
   assert.ok(sources.includes("New Coding Agent"));
   assert.ok(sources.includes("Create first coding agent"));
+  assert.ok(sources.includes('placeholder="agent, project, thread"'));
+  assert.ok(sources.includes("sidebar-new-thread"));
+  assert.ok(sources.includes("(click)=\"openSetup()\""));
   assert.ok(sources.includes("Name the coding agent"));
   assert.ok(sources.includes("Select a workspace or clone a repo"));
   assert.ok(sources.includes("Use workspace"));
@@ -36,5 +39,6 @@ test("main UI exposes a guided first thread generation flow", async () => {
   assert.ok(sources.includes("<ork-first-thread-wizard"));
   assert.ok(!sources.includes("What should the agent do?"));
   assert.ok(!sources.includes("How should it run?"));
+  assert.ok(!sources.includes(`<button class="secondary" type="button" [class.active]="activePanel === 'raw'" (click)="openPanel('raw')">Raw</button>`));
   assert.ok(!wizardSources.includes("this.api.sendThreadInput"));
 });

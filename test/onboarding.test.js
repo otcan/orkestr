@@ -25,5 +25,9 @@ test("onboarding focuses the first loop on virtual desktop and WhatsApp", async 
   assert.ok(onboarding.includes("Create first thread"));
   assert.ok(onboarding.includes("Bind WhatsApp chat"));
   assert.ok(onboarding.includes("Send test message"));
+  assert.ok(onboarding.includes('type SetupPageMode = "setup" | "onboarding"'));
+  assert.ok(onboarding.includes("Setup stays available after onboarding"));
+  assert.ok(onboarding.includes("@if (isOnboardingMode())"));
+  assert.ok(onboarding.includes("setupSections()"));
   assert.ok(browsers.includes('slug: "desktop"'));
 });

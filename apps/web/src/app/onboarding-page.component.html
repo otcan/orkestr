@@ -2,14 +2,11 @@
   <section class="onboarding-hero">
     <div>
       <p class="eyebrow">Orkestr setup</p>
-      <h1>Choose your first workflow</h1>
-      <p>
-        Orkestr runs locally. These steps prepare only the local runtime and accounts needed for the workflow
-        you want to run first.
-      </p>
+      <h1>{{ pageTitle() }}</h1>
+      <p>{{ pageSummary() }}</p>
     </div>
     <div class="hero-actions">
-      <button class="secondary" type="button" (click)="skip.emit()">Skip to cockpit</button>
+      <button class="secondary" type="button" (click)="skip.emit()">{{ closeLabel() }}</button>
       <button type="button" (click)="openApp()" [disabled]="busy">
         {{ setupReady() ? "Open Orkestr" : "Open anyway" }}
       </button>
@@ -27,22 +24,34 @@
     <section class="setup-panel">
       <header class="setup-panel-head">
         <div>
-          <p class="eyebrow">{{ setup?.setupState || "checking" }}</p>
+          <p class="eyebrow">{{ isSetupMode() ? "Setup section" : (setup?.setupState || "checking") }}</p>
           <h2>{{ activeStepLabel() }}</h2>
         </div>
         <button class="secondary" type="button" (click)="load()" [disabled]="busy">{{ busy ? "Checking" : "Recheck" }}</button>
       </header>
 
-      <section class="setup-progress" aria-label="Setup progress">
-        <div class="progress-copy">
-          <span>Step {{ activeStepIndex() + 1 }} of {{ activeSteps().length }}</span>
-          <strong>{{ completedStepCount() }} complete</strong>
-        </div>
-        <div class="progress-track">
-          <span [style.width.%]="progressPercent()"></span>
-        </div>
-        <nav class="setup-steps" aria-label="Setup steps">
-          @for (step of activeSteps(); track step.id) {
+      @if (isOnboardingMode()) {
+        <section class="setup-progress" aria-label="Setup progress">
+          <div class="progress-copy">
+            <span>Step {{ activeStepIndex() + 1 }} of {{ activeSteps().length }}</span>
+            <strong>{{ completedStepCount() }} complete</strong>
+          </div>
+          <div class="progress-track">
+            <span [style.width.%]="progressPercent()"></span>
+          </div>
+          <nav class="setup-steps" aria-label="Setup steps">
+            @for (step of activeSteps(); track step.id) {
+              <button type="button" [class.active]="activeStep === step.id" [class.done]="stepDone(step.id)" (click)="selectStep(step.id)">
+                <span>{{ step.eyebrow }}</span>
+                <strong>{{ step.label }}</strong>
+                <em [class]="stepStateClass(step.id)">{{ stepStateLabel(step.id) }}</em>
+              </button>
+            }
+          </nav>
+        </section>
+      } @else {
+        <nav class="setup-steps setup-sections" aria-label="Setup sections">
+          @for (step of setupSections(); track step.id) {
             <button type="button" [class.active]="activeStep === step.id" [class.done]="stepDone(step.id)" (click)="selectStep(step.id)">
               <span>{{ step.eyebrow }}</span>
               <strong>{{ step.label }}</strong>
@@ -50,7 +59,7 @@
             </button>
           }
         </nav>
-      </section>
+      }
 
       @if (activeStep === "goal") {
         <section class="setup-form">
@@ -72,7 +81,9 @@
       @if (activeStep === "system") {
         <section class="setup-form">
           <h3>System check</h3>
-          <p>These checks confirm the local runtime can support {{ activeGoal().label }}.</p>
+          <p>
+            {{ isSetupMode() ? "These checks confirm the local runtime and bundled tools are available." : "These checks confirm the local runtime can support " + activeGoal().label + "." }}
+          </p>
           <div class="check-list">
             @for (check of systemChecks(); track check.label) {
               <div class="check-row">
@@ -298,13 +309,15 @@
         </section>
       }
 
-      <footer class="setup-nav">
-        <button class="secondary" type="button" (click)="previousStep()" [disabled]="busy || isFirstStep()">Back</button>
-        <span>{{ stepStateLabel(activeStep) }}</span>
-        <button type="button" (click)="nextStep()" [disabled]="busy">
-          {{ isLastStep() ? (setupReady() ? "Open Orkestr" : "Open anyway") : "Next" }}
-        </button>
-      </footer>
+      @if (isOnboardingMode()) {
+        <footer class="setup-nav">
+          <button class="secondary" type="button" (click)="previousStep()" [disabled]="busy || isFirstStep()">Back</button>
+          <span>{{ stepStateLabel(activeStep) }}</span>
+          <button type="button" (click)="nextStep()" [disabled]="busy">
+            {{ isLastStep() ? (setupReady() ? "Open Orkestr" : "Open anyway") : "Next" }}
+          </button>
+        </footer>
+      }
     </section>
   </section>
 </main>

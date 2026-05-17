@@ -188,6 +188,10 @@ textarea:focus {
   white-space: nowrap;
 }
 
+.sidebar-new-thread {
+  width: 100%;
+}
+
 .sidebar-create-thread {
   width: 100%;
 }
