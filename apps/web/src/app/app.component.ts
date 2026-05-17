@@ -1202,14 +1202,12 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
       this.threadState(thread),
       thread.publicStatus,
       thread.publicStatusCode,
-      thread.workerStatus,
       this.objectValue(thread.runtime, "state"),
       this.objectValue(thread.runtime, "status"),
       this.objectValue(thread.runtime, "executionState"),
     ].join(" ").toLowerCase();
     return Boolean(
       this.threadLoading(thread) ||
-      this.threadRecentlyActive(thread) ||
       thread.working ||
       thread.typingActive ||
       thread.backgroundWork ||

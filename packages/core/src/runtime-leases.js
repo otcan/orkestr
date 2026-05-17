@@ -193,7 +193,7 @@ async function capturePane(paneId, lines = 80) {
 
 function paneWorking(text) {
   const lines = String(text || "").split("\n").map((line) => line.trim()).filter(Boolean).slice(-12);
-  return lines.some((line) => /(?:•\s*(?:Working|Thinking|Running|Processing)\b|esc to interrupt|ctrl-c to interrupt|press esc to interrupt)/i.test(line));
+  return lines.some((line) => /(?:•\s*(?:Working|Thinking|Running|Processing)\b|preparing (?:a )?response|esc to interrupt|ctrl-c to interrupt|press esc to interrupt)/i.test(line));
 }
 
 function panePromptReady(text) {
@@ -265,9 +265,7 @@ export async function runtimeStatus(threadId, env = process.env) {
   const paneText = await capturePane(paneId).catch(() => "");
   const needsResumeDirectoryConfirmation = paneResumeDirectoryPrompt(paneText);
   const promptReadyCandidate = panePromptReady(paneText);
-  const storedState = String(thread.state || thread.status || "").toLowerCase();
-  const storedWorking = /(?:working|running|processing)/.test(storedState);
-  const working = !promptReadyCandidate && (storedWorking || paneWorking(paneText) || runningCount > 0);
+  const working = !promptReadyCandidate && (paneWorking(paneText) || runningCount > 0);
   const promptReady = promptReadyCandidate && !working && !needsResumeDirectoryConfirmation;
   const recentlyStarted = Date.now() - (Date.parse(lease.startedAt || "") || Date.now()) < 20_000;
   const state = working ? "working" : promptReady ? "ready" : recentlyStarted || pendingCount > 0 ? "waking" : "ready";
