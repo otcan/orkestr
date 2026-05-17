@@ -54,11 +54,8 @@ export async function startServer({ port = 19812, host = "127.0.0.1", openBrowse
   const app = await createApp();
 
   const timer = setInterval(() => {
-    markDueTimers()
-      .then(() => drainAllPendingThreadInputs())
-      .then(() => syncRuntimeAndDeliverWhatsApp())
-      .catch(() => {});
-  }, 30_000);
+    runTimerLoop().catch(() => {});
+  }, timerLoopIntervalMs());
 
   const runtimeMonitor = setInterval(() => {
     syncRuntimeAndDeliverWhatsApp().catch(() => {});
@@ -79,8 +76,22 @@ export async function startServer({ port = 19812, host = "127.0.0.1", openBrowse
 }
 
 function runtimeMonitorIntervalMs() {
-  const parsed = Number(process.env.ORKESTR_RUNTIME_MONITOR_INTERVAL_MS || 30_000);
+  const parsed = Number(process.env.ORKESTR_RUNTIME_MONITOR_INTERVAL_MS || 60_000);
+  return Number.isFinite(parsed) ? Math.max(5000, parsed) : 60_000;
+}
+
+function timerLoopIntervalMs() {
+  const parsed = Number(process.env.ORKESTR_TIMER_LOOP_INTERVAL_MS || 30_000);
   return Number.isFinite(parsed) ? Math.max(5000, parsed) : 30_000;
+}
+
+async function runTimerLoop() {
+  const dueTimers = await markDueTimers();
+  const drained = await drainAllPendingThreadInputs();
+  const deliveredCount = drained.reduce((count: number, result: any) => count + Number(result?.delivered?.length || 0), 0);
+  if (dueTimers.length || deliveredCount > 0) {
+    await syncRuntimeAndDeliverWhatsApp();
+  }
 }
 
 async function syncRuntimeAndDeliverWhatsApp() {
