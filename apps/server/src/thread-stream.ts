@@ -97,8 +97,18 @@ function summaryStreamPath(url: string | undefined): boolean {
 }
 
 function summaryStreamIntervalMs(): number {
-  const parsed = Number(process.env.ORKESTR_SUMMARY_STREAM_INTERVAL_MS || 10_000);
-  return Number.isFinite(parsed) ? Math.max(1000, parsed) : 10_000;
+  const parsed = Number(process.env.ORKESTR_SUMMARY_STREAM_INTERVAL_MS || 30_000);
+  return Number.isFinite(parsed) ? Math.max(5000, parsed) : 30_000;
+}
+
+function rawSnapshotActiveIntervalMs(): number {
+  const parsed = Number(process.env.ORKESTR_RAW_STREAM_ACTIVE_INTERVAL_MS || 750);
+  return Number.isFinite(parsed) ? Math.max(250, parsed) : 750;
+}
+
+function rawSnapshotIdleIntervalMs(): number {
+  const parsed = Number(process.env.ORKESTR_RAW_STREAM_IDLE_INTERVAL_MS || 3000);
+  return Number.isFinite(parsed) ? Math.max(rawSnapshotActiveIntervalMs(), parsed) : 3000;
 }
 
 function stableRuntimeSummary(runtime: unknown): unknown {
@@ -204,17 +214,41 @@ export function attachThreadStreamUpgrade(server: Server): void {
       let lastScreen = "";
       let closed = false;
       let inputQueue = Promise.resolve();
+      let snapshotTimer: NodeJS.Timeout | null = null;
+      let snapshotInFlight = false;
+      let nextSnapshotIntervalMs = rawSnapshotActiveIntervalMs();
+
+      const scheduleSnapshot = (delayMs = nextSnapshotIntervalMs) => {
+        if (closed) return;
+        if (snapshotTimer) clearTimeout(snapshotTimer);
+        snapshotTimer = setTimeout(() => {
+          snapshotTimer = null;
+          void pushSnapshot();
+        }, Math.max(250, delayMs));
+        if (typeof snapshotTimer.unref === "function") snapshotTimer.unref();
+      };
 
       const pushSnapshot = async () => {
         if (closed || ws.readyState !== ws.OPEN) return;
+        if (snapshotInFlight) {
+          scheduleSnapshot(rawSnapshotActiveIntervalMs());
+          return;
+        }
+        snapshotInFlight = true;
         try {
           const screen = await capturePane(paneId);
           if (screen !== lastScreen) {
             lastScreen = screen;
+            nextSnapshotIntervalMs = rawSnapshotActiveIntervalMs();
             wsSend(ws, { type: "visible_screen", data: screen });
+          } else {
+            nextSnapshotIntervalMs = rawSnapshotIdleIntervalMs();
           }
         } catch (error) {
           wsSend(ws, { type: "error", data: error instanceof Error ? error.message : String(error) });
+        } finally {
+          snapshotInFlight = false;
+          scheduleSnapshot();
         }
       };
 
@@ -227,10 +261,6 @@ export function attachThreadStreamUpgrade(server: Server): void {
       });
       wsSend(ws, { type: "input_ready" });
       void pushSnapshot();
-
-      const snapshotTimer = setInterval(() => {
-        void pushSnapshot();
-      }, 500);
       const heartbeatTimer = setInterval(() => {
         wsSend(ws, { type: "heartbeat", ts: Date.now(), sessionAlive: true });
       }, 5000);
@@ -241,9 +271,11 @@ export function attachThreadStreamUpgrade(server: Server): void {
             const payload = JSON.parse(raw.toString("utf8"));
             if (payload?.type === "input" && typeof payload.data === "string") {
               await sendRawInput(paneId, payload.data);
+              nextSnapshotIntervalMs = rawSnapshotActiveIntervalMs();
               await pushSnapshot();
             } else if (payload?.type === "resize") {
               await resizePane(paneId, payload.cols, payload.rows).catch(() => undefined);
+              nextSnapshotIntervalMs = rawSnapshotActiveIntervalMs();
               await pushSnapshot();
             }
           })
@@ -253,12 +285,12 @@ export function attachThreadStreamUpgrade(server: Server): void {
       });
       ws.on("close", () => {
         closed = true;
-        clearInterval(snapshotTimer);
+        if (snapshotTimer) clearTimeout(snapshotTimer);
         clearInterval(heartbeatTimer);
       });
       ws.on("error", () => {
         closed = true;
-        clearInterval(snapshotTimer);
+        if (snapshotTimer) clearTimeout(snapshotTimer);
         clearInterval(heartbeatTimer);
       });
     });

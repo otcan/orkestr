@@ -2,6 +2,12 @@ import { resolveCodexThreadMetadata, runtimeStatus } from "../../../packages/cor
 import { listThreadMessages, listThreads } from "../../../packages/core/src/threads.js";
 import { detectThreadGitState } from "../../../packages/core/src/thread-workers.js";
 
+type ThreadSummaryOptions = {
+  cacheTtlMs?: number;
+};
+
+const threadSummaryCache = new Map<string, { cacheKey: string; expiresAt: number; summary: Record<string, unknown> }>();
+
 export function codexThreadId(thread: any): string {
   return String(thread?.executor?.codexThreadId || thread?.codexThreadId || "").trim();
 }
@@ -70,7 +76,48 @@ function codexMetadata(thread: any) {
   };
 }
 
-export async function threadRuntimeSummary(thread: any, messages: any[] = []) {
+function threadSummaryCacheTtlMs(): number {
+  const parsed = Number(process.env.ORKESTR_THREAD_SUMMARY_CACHE_TTL_MS || 30_000);
+  return Number.isFinite(parsed) ? Math.max(0, parsed) : 30_000;
+}
+
+function threadSummaryCacheKey(thread: any, messages: any[] = []): string {
+  const lastMessage = messages.at(-1) || {};
+  const pendingCounts = messages.reduce((counts: Record<string, number>, message: any) => {
+    const state = String(message?.state || "unknown");
+    counts[state] = (counts[state] || 0) + 1;
+    return counts;
+  }, {});
+  return JSON.stringify({
+    id: thread?.id || null,
+    updatedAt: thread?.updatedAt || null,
+    state: thread?.state || null,
+    activeRuntimeLeaseId: thread?.activeRuntimeLeaseId || null,
+    runtimeState: thread?.runtime?.state || null,
+    paneId: thread?.runtime?.paneId || thread?.executor?.tmuxTarget || null,
+    sessionName: thread?.runtime?.sessionName || thread?.executor?.sessionName || null,
+    repoPath: thread?.repoPath || thread?.worktreePath || null,
+    branchName: thread?.branchName || null,
+    baseCommit: thread?.baseCommit || null,
+    baseBranch: thread?.baseBranch || null,
+    messageCount: messages.length,
+    pendingCounts,
+    lastMessageId: lastMessage?.id || null,
+    lastMessageState: lastMessage?.state || null,
+    lastMessageDeliveryState: lastMessage?.deliveryState || null,
+    lastMessageDeliveryNextAttemptAt: lastMessage?.deliveryNextAttemptAt || null,
+    lastMessageUpdatedAt: lastMessage?.updatedAt || lastMessage?.createdAt || null,
+  });
+}
+
+export async function threadRuntimeSummary(thread: any, messages: any[] = [], options: ThreadSummaryOptions = {}) {
+  const ttlMs = Number(options.cacheTtlMs ?? 0) || 0;
+  const cacheKey = ttlMs > 0 ? threadSummaryCacheKey(thread, messages) : "";
+  const cached = ttlMs > 0 ? threadSummaryCache.get(String(thread?.id || "")) : null;
+  if (cached && cached.cacheKey === cacheKey && cached.expiresAt > Date.now()) {
+    return cached.summary;
+  }
+
   const status = await runtimeStatus(thread.id).catch(() => null);
   const gitState: any = await detectThreadGitState(thread).catch(() => ({}));
   const metadataTarget = {
@@ -97,7 +144,7 @@ export async function threadRuntimeSummary(thread: any, messages: any[] = []) {
   const lastActivityAt = messages.at(-1)?.createdAt || thread.updatedAt || thread.createdAt || null;
   const pendingQuestion = latestPendingQuestion(messages);
   const resolvedCodexThreadId = codexThreadId(codexThread);
-  return {
+  const summary = {
     ...thread,
     ...gitState,
     threadId: resolvedCodexThreadId || thread.id,
@@ -136,12 +183,25 @@ export async function threadRuntimeSummary(thread: any, messages: any[] = []) {
     wakePolicy: thread.wakePolicy || "wake-on-message",
     ...codexMetadata(codexThread),
   };
+  if (ttlMs > 0 && thread?.id) {
+    threadSummaryCache.set(String(thread.id), { cacheKey, expiresAt: Date.now() + ttlMs, summary });
+  }
+  return summary;
 }
 
-export async function threadSummaryPayload() {
+export async function threadSummaryPayload(options: ThreadSummaryOptions = {}) {
+  const cacheTtlMs = Number(options.cacheTtlMs ?? threadSummaryCacheTtlMs()) || 0;
   const threads = await listThreads();
+  const activeThreadIds = new Set(threads.map((thread: any) => String(thread?.id || "")).filter(Boolean));
+  for (const id of threadSummaryCache.keys()) {
+    if (!activeThreadIds.has(id)) threadSummaryCache.delete(id);
+  }
   return {
     generatedAt: new Date().toISOString(),
-    threads: await Promise.all(threads.map(async (thread: any) => threadRuntimeSummary(thread, await listThreadMessages(thread.id)))),
+    threads: await Promise.all(threads.map(async (thread: any) => threadRuntimeSummary(
+      thread,
+      await listThreadMessages(thread.id),
+      { cacheTtlMs },
+    ))),
   };
 }
