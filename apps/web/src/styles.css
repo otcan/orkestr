@@ -34,15 +34,6 @@ body {
   }
 }
 
-@keyframes processing-scan {
-  0% {
-    transform: translateX(-70%);
-  }
-  100% {
-    transform: translateX(70%);
-  }
-}
-
 @keyframes processing-badge-pulse {
   0%,
   100% {
@@ -383,29 +374,25 @@ textarea:focus {
   text-decoration: none;
 }
 
-.thread-item:hover,
-.thread-item.active {
+.thread-item:hover {
   background: rgba(21, 45, 22, 0.42);
 }
 
-.thread-item.processing {
-  border-color: rgba(255, 209, 102, 0.26);
-  background:
-    linear-gradient(90deg, rgba(255, 209, 102, 0.11), transparent 58%),
-    rgba(21, 45, 22, 0.34);
+.thread-item.active {
+  border-color: rgba(126, 247, 142, 0.64);
+  background: rgba(52, 128, 58, 0.46);
+  box-shadow: inset 3px 0 0 #63d471;
 }
 
-.thread-item.processing::after {
-  content: "";
-  position: absolute;
-  right: 10px;
-  bottom: 7px;
-  left: 48px;
-  height: 2px;
-  overflow: hidden;
-  border-radius: 999px;
-  background: linear-gradient(90deg, transparent, rgba(255, 209, 102, 0.9), transparent);
-  animation: processing-scan 1.5s linear infinite;
+.thread-item.processing:not(.active) {
+  border-color: rgba(255, 209, 102, 0.2);
+  background: rgba(255, 209, 102, 0.045);
+  box-shadow: inset 3px 0 0 rgba(255, 209, 102, 0.66);
+}
+
+.thread-item.processing.active {
+  border-color: rgba(126, 247, 142, 0.68);
+  background: rgba(52, 128, 58, 0.46);
 }
 
 .worker-tree {
