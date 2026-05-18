@@ -19,11 +19,18 @@ test("OpenAI reports connected when OPENAI_API_KEY exists", async () => {
   assert.equal(openai.state, "connected");
 });
 
-test("Codex reports connected when the runtime OpenAI key is provided", async () => {
+test("Codex reports partial when the runtime key exists but Codex is not logged in", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-codex-key-"));
   const bin = path.join(home, "bin");
   await fs.mkdir(bin, { recursive: true });
-  await fs.writeFile(path.join(bin, "codex"), "#!/bin/sh\necho codex-cli test\n");
+  await fs.writeFile(
+    path.join(bin, "codex"),
+    [
+      "#!/bin/sh",
+      "if [ \"$1\" = \"login\" ] && [ \"$2\" = \"status\" ]; then echo 'Not logged in'; exit 0; fi",
+      "echo codex-cli test",
+    ].join("\n"),
+  );
   await fs.chmod(path.join(bin, "codex"), 0o755);
   const priorPath = process.env.PATH;
   process.env.PATH = `${bin}${path.delimiter}${priorPath || ""}`;
@@ -31,9 +38,38 @@ test("Codex reports connected when the runtime OpenAI key is provided", async ()
   try {
     const status = await getSetupStatus({ env: { ORKESTR_HOME: home, OPENAI_API_KEY: "test", ORKESTR_DOCKER: "1" }, home });
     const codex = status.connectors.find((connector) => connector.id === "codex");
+    assert.equal(codex.state, "partial");
+    assert.equal(codex.details.authMode, null);
+    assert.equal(codex.details.openaiKeyConfigured, true);
+    assert.match(codex.summary, /not logged in yet/);
+  } finally {
+    if (priorPath === undefined) delete process.env.PATH;
+    else process.env.PATH = priorPath;
+  }
+});
+
+test("Codex reports connected when the CLI login status succeeds", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-codex-status-"));
+  const bin = path.join(home, "bin");
+  await fs.mkdir(bin, { recursive: true });
+  await fs.writeFile(
+    path.join(bin, "codex"),
+    [
+      "#!/bin/sh",
+      "if [ \"$1\" = \"login\" ] && [ \"$2\" = \"status\" ]; then echo 'Logged in using API key'; exit 0; fi",
+      "echo codex-cli test",
+    ].join("\n"),
+  );
+  await fs.chmod(path.join(bin, "codex"), 0o755);
+  const priorPath = process.env.PATH;
+  process.env.PATH = `${bin}${path.delimiter}${priorPath || ""}`;
+
+  try {
+    const status = await getSetupStatus({ env: { ORKESTR_HOME: home, ORKESTR_DOCKER: "1" }, home });
+    const codex = status.connectors.find((connector) => connector.id === "codex");
     assert.equal(codex.state, "connected");
     assert.equal(codex.details.authMode, "api_key");
-    assert.match(codex.summary, /OPENAI_API_KEY/);
+    assert.match(codex.summary, /signed in/);
   } finally {
     if (priorPath === undefined) delete process.env.PATH;
     else process.env.PATH = priorPath;

@@ -155,6 +155,8 @@ function restoreEnvValue(key, value) {
   else process.env[key] = value;
 }
 
+process.env.ORKESTR_CODEX_AUTH_PREFLIGHT ||= "0";
+
 test("threads are the primary routable runtime object", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-threads-"));
   const env = { ORKESTR_HOME: home };
@@ -258,6 +260,58 @@ test("thread wake and sleep lifecycle updates runtime leases and status", async 
     const sleptAgain = await sleepThread("cycle-thread", { reason: "test_sleep_again" }, env);
     assert.equal(sleptAgain.slept, 0);
     assert.equal(sleptAgain.thread.state, "sleeping");
+  } finally {
+    restoreEnvValue("PATH", priorPath);
+    restoreEnvValue("TMUX_LOG", priorTmuxLog);
+    restoreEnvValue("TMUX_STATE", priorTmuxState);
+  }
+});
+
+test("thread wake blocks Codex before the raw login menu opens", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-codex-auth-required-"));
+  const fakeTmux = await createFakeTmux(home);
+  await fs.writeFile(
+    path.join(fakeTmux.bin, "codex"),
+    [
+      "#!/bin/sh",
+      "if [ \"$1\" = \"login\" ] && [ \"$2\" = \"status\" ]; then echo 'Not logged in'; exit 0; fi",
+      "echo raw-codex-started >> \"$TMUX_LOG\"",
+    ].join("\n"),
+    { mode: 0o755 },
+  );
+  const priorPath = process.env.PATH;
+  const priorTmuxLog = process.env.TMUX_LOG;
+  const priorTmuxState = process.env.TMUX_STATE;
+  process.env.PATH = `${fakeTmux.bin}:${priorPath || ""}`;
+  process.env.TMUX_LOG = fakeTmux.log;
+  process.env.TMUX_STATE = fakeTmux.state;
+
+  try {
+    const env = {
+      ORKESTR_HOME: path.join(home, "orkestr-home"),
+      HOME: path.join(home, "runtime-home"),
+      CODEX_HOME: path.join(home, "codex-home"),
+      PATH: process.env.PATH,
+      TMUX_LOG: fakeTmux.log,
+      TMUX_STATE: fakeTmux.state,
+      ORKESTR_CODEX_AUTH_PREFLIGHT: "1",
+    };
+    await createThread({ id: "auth-required-thread", name: "Auth Required Thread" }, env);
+
+    await assert.rejects(
+      () => wakeThread("auth-required-thread", { reason: "test_wake" }, env),
+      (error) => {
+        assert.equal(error.code, "codex_auth_required");
+        assert.equal(error.statusCode, 428);
+        assert.match(error.message, /\/setup\/codex/);
+        return true;
+      },
+    );
+    const log = await fs.readFile(fakeTmux.log, "utf8").catch(() => "");
+    const thread = (await listThreads(env)).find((item) => item.id === "auth-required-thread");
+    assert.doesNotMatch(log, /new-session/);
+    assert.doesNotMatch(log, /raw-codex-started/);
+    assert.equal(thread.state, "sleeping");
   } finally {
     restoreEnvValue("PATH", priorPath);
     restoreEnvValue("TMUX_LOG", priorTmuxLog);

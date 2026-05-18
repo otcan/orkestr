@@ -23,6 +23,8 @@ test("onboarding focuses the first loop on virtual desktop and WhatsApp", async 
   assert.ok(!onboarding.includes("Browser pairing code"));
   assert.ok(onboarding.includes("Virtual Desktop Generation"));
   assert.ok(onboarding.includes("Open Codex sign-in"));
+  assert.ok(onboarding.includes("Connect Codex with API key"));
+  assert.ok(onboarding.includes("loginCodexWithApiKey"));
   assert.ok(onboarding.includes('id: "virtual-desktop"'));
   assert.ok(onboarding.includes("Create first thread"));
   assert.ok(onboarding.includes("Bind WhatsApp chat"));

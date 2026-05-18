@@ -19,6 +19,7 @@ test("main UI exposes a guided first thread generation flow", async () => {
     "apps/web/src/app/first-thread-wizard.component.ts",
     "apps/web/src/app/first-thread-wizard.component.html",
     "apps/server/src/modules/threads/threads.controller.ts",
+    "apps/server/src/modules/connectors/connectors.controller.ts",
   ]);
 
   assert.ok(sources.includes("New Coding Agent"));
@@ -38,6 +39,7 @@ test("main UI exposes a guided first thread generation flow", async () => {
   assert.ok(sources.includes("cloneRepo"));
   assert.ok(sources.includes("this.api.createThread"));
   assert.ok(sources.includes("this.api.wakeThread"));
+  assert.ok(sources.includes('Post("codex/api-key")'));
   assert.ok(sources.includes("git\", [\"clone\""));
   assert.ok(sources.includes("clone_target_not_empty"));
   assert.ok(sources.includes("<ork-first-thread-wizard"));

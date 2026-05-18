@@ -209,6 +209,15 @@ export interface CodexDeviceAuthResponse {
   message?: string;
 }
 
+export interface CodexApiKeyLoginResponse {
+  ok: boolean;
+  state: string;
+  command: string;
+  codexHome: string;
+  authMode: string;
+  message?: string;
+}
+
 export interface AgentTemplate {
   id: string;
   name: string;
@@ -676,6 +685,10 @@ export class ApiService {
 
   startCodexDeviceAuth(): Observable<CodexDeviceAuthResponse> {
     return this.http.post<CodexDeviceAuthResponse>(this.api("/connectors/codex/device-auth"), {});
+  }
+
+  loginCodexWithApiKey(apiKey = ""): Observable<CodexApiKeyLoginResponse> {
+    return this.http.post<CodexApiKeyLoginResponse>(this.api("/connectors/codex/api-key"), { apiKey });
   }
 
   whatsappStatus(): Observable<WhatsAppStatusResponse> {
