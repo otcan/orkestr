@@ -1238,10 +1238,13 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     const baseAhead = this.threadNumberValue(thread, "gitBaseAhead");
     const changedFiles = this.threadNumberValue(thread, "gitChangedFiles");
     const dirtyFiles = this.threadNumberValue(thread, "gitDirtyFiles");
+    const comparison = String(thread.gitComparisonLabel || this.objectValue(thread.runtime, "gitComparisonLabel") || "").trim();
+    const isWorkerParentComparison = Boolean(thread.parentThreadId && comparison === "parent");
     const baseParts: string[] = [];
     if (Number.isFinite(baseAhead) && baseAhead > 0) baseParts.push(`${baseAhead} commit${baseAhead === 1 ? "" : "s"}`);
     if (Number.isFinite(changedFiles) && changedFiles > 0) baseParts.push(`${changedFiles} file${changedFiles === 1 ? "" : "s"}`);
     if (Number.isFinite(dirtyFiles) && dirtyFiles > 0) baseParts.push(`${dirtyFiles} dirty`);
+    if (isWorkerParentComparison && baseParts.length) return `pending merge: ${baseParts.join(", ")}`;
     if (
       Number.isFinite(baseAhead) &&
       Number.isFinite(changedFiles) &&
@@ -1250,10 +1253,9 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
       changedFiles === 0 &&
       dirtyFiles === 0
     ) {
-      return "";
+      return isWorkerParentComparison ? "merged into parent" : "";
     }
     if (baseParts.length) {
-      const comparison = String(thread.gitComparisonLabel || this.objectValue(thread.runtime, "gitComparisonLabel") || "").trim();
       return `diff${comparison ? ` vs ${comparison}` : ""}: ${baseParts.join(", ")}`;
     }
     const ahead = this.threadNumberValue(thread, "gitAhead");
