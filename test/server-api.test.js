@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { startServer } from "../apps/server/src/server.js";
+import { runtimeMonitorIntervalMs, startServer } from "../apps/server/src/server.js";
 
 async function request(baseUrl, route, options = {}) {
   const response = await fetch(`${baseUrl}${route}`, {
@@ -13,6 +13,23 @@ async function request(baseUrl, route, options = {}) {
   assert.ok(response.ok, `${route} returned ${response.status}`);
   return response.json();
 }
+
+test("runtime monitor default keeps Codex reply import responsive", () => {
+  const priorInterval = process.env.ORKESTR_RUNTIME_MONITOR_INTERVAL_MS;
+  try {
+    delete process.env.ORKESTR_RUNTIME_MONITOR_INTERVAL_MS;
+    assert.equal(runtimeMonitorIntervalMs(), 5000);
+
+    process.env.ORKESTR_RUNTIME_MONITOR_INTERVAL_MS = "1";
+    assert.equal(runtimeMonitorIntervalMs(), 5000);
+
+    process.env.ORKESTR_RUNTIME_MONITOR_INTERVAL_MS = "12000";
+    assert.equal(runtimeMonitorIntervalMs(), 12000);
+  } finally {
+    if (priorInterval === undefined) delete process.env.ORKESTR_RUNTIME_MONITOR_INTERVAL_MS;
+    else process.env.ORKESTR_RUNTIME_MONITOR_INTERVAL_MS = priorInterval;
+  }
+});
 
 test("server exposes health, readiness, version, and agent message APIs", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-api-"));

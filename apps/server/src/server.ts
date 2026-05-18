@@ -75,9 +75,9 @@ export async function startServer({ port = 19812, host = "127.0.0.1", openBrowse
   return serverHandle(app, timer, runtimeMonitor);
 }
 
-function runtimeMonitorIntervalMs() {
-  const parsed = Number(process.env.ORKESTR_RUNTIME_MONITOR_INTERVAL_MS || 60_000);
-  return Number.isFinite(parsed) ? Math.max(5000, parsed) : 60_000;
+export function runtimeMonitorIntervalMs() {
+  const parsed = Number(process.env.ORKESTR_RUNTIME_MONITOR_INTERVAL_MS || 5000);
+  return Number.isFinite(parsed) ? Math.max(5000, parsed) : 5000;
 }
 
 function timerLoopIntervalMs() {
