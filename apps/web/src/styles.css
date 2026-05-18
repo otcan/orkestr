@@ -1489,6 +1489,11 @@ ork-first-thread-wizard.first-thread-host {
   color: #edffef;
 }
 
+.panel-tabs .codex-mode-toggle button.active {
+  background: #63d471;
+  color: #061006;
+}
+
 .messages,
 .panel-body {
   min-height: 0;
