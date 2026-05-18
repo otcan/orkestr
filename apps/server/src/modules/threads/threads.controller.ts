@@ -39,6 +39,17 @@ function messageCursor(message: any, index: number): number {
 
 const needInputPhases = new Set(["need_input", "awaiting_input", "question", "request_user_input"]);
 
+function shouldInterruptRuntime(status: Record<string, any> | null | undefined): boolean {
+  if (!status) return false;
+  return Boolean(
+    status.working ||
+    status.foregroundWorking ||
+    status.backgroundWork ||
+    status.typingActive ||
+    Number(status.runningCount || 0) > 0,
+  );
+}
+
 function isNeedInputMessage(message: any): boolean {
   const role = String(message?.role || message?.kind || "assistant").trim().toLowerCase();
   const phase = String(message?.phase || "").trim().toLowerCase();
@@ -489,7 +500,8 @@ export class ThreadsController {
   async interrupt(@Param("threadId") threadId: string, @Body() body: Record<string, unknown> = {}) {
     const result = await wakeThread(threadId, { reason: "interrupt" });
     const paneId = result.status?.paneId || result.lease?.paneId;
-    if (paneId) {
+    const interrupted = shouldInterruptRuntime(result.status as Record<string, any> | null);
+    if (paneId && interrupted) {
       await new Promise((resolve) => execFile("tmux", ["send-keys", "-t", paneId, "Escape"], () => resolve(null)));
       await new Promise((resolve) => execFile("tmux", ["send-keys", "-t", paneId, "C-c"], () => resolve(null)));
     }
@@ -498,7 +510,7 @@ export class ThreadsController {
       requestThreadInputDelivery(result.thread.id);
       return {
         ok: true,
-        interrupted: true,
+        interrupted,
         message,
         queued: true,
         queueItemId: message.id,
@@ -507,7 +519,7 @@ export class ThreadsController {
         runtime: result.status,
       };
     }
-    return { ok: true, interrupted: true, runtime: result.status };
+    return { ok: true, interrupted, runtime: result.status };
   }
 
   @Post(":threadId/approve")
