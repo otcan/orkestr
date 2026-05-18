@@ -268,6 +268,12 @@ async function mergeBase(repoPath, ref) {
     .catch(() => "");
 }
 
+async function headCommit(repoPath) {
+  return await git(repoPath, ["rev-parse", "HEAD"])
+    .then((result) => result.stdout)
+    .catch(() => "");
+}
+
 async function gitComparisonStats(repoPath, baseCommit, label) {
   if (!baseCommit || !(await refExists(repoPath, baseCommit))) return null;
   return {
@@ -278,13 +284,40 @@ async function gitComparisonStats(repoPath, baseCommit, label) {
   };
 }
 
-async function gitBaseComparison(repoPath, thread, branchName) {
+async function parentThreadComparison(repoPath, thread, env = process.env) {
+  const parentId = nonEmptyString(thread?.parentThreadId);
+  if (!parentId) return null;
+  const parent = await getThread(parentId, env).catch(() => null);
+  const parentRepoPath = parent ? await resolveGitRoot(threadCheckoutPath(parent)).catch(() => null) : null;
+  const parentHead = parentRepoPath ? await headCommit(parentRepoPath) : "";
+  const parentBase = parentHead ? await mergeBase(repoPath, parentHead) : "";
+  return await gitComparisonStats(repoPath, parentBase, "parent");
+}
+
+function emptyGitComparison() {
+  return {
+    gitComparisonBase: null,
+    gitComparisonLabel: null,
+    gitBaseAhead: null,
+    gitChangedFiles: null,
+  };
+}
+
+async function gitBaseComparison(repoPath, thread, branchName, env = process.env) {
   const metadata = thread?.executor?.metadata && typeof thread.executor.metadata === "object" ? thread.executor.metadata : {};
   const explicitBaseCommit = nonEmptyString(thread?.baseCommit || metadata.baseCommit);
-  const baseBranches = [...new Set([
+  const rawBaseBranches = [...new Set([
     thread?.baseBranch,
     metadata.baseBranch,
-  ].map(nonEmptyString).filter((ref) => ref && ref !== branchName))];
+  ].map(nonEmptyString).filter(Boolean))];
+  const isWorker = Boolean(nonEmptyString(thread?.parentThreadId));
+  if (isWorker) {
+    return await parentThreadComparison(repoPath, thread, env) ||
+      await gitComparisonStats(repoPath, explicitBaseCommit, "base") ||
+      emptyGitComparison();
+  }
+  if (rawBaseBranches.includes(branchName)) return emptyGitComparison();
+  const baseBranches = rawBaseBranches.filter((ref) => ref !== branchName);
   const branchComparisons = [];
   const baseRefs = [...new Set(baseBranches.flatMap((baseBranch) => [
     baseBranch && !baseBranch.includes("/") ? `origin/${baseBranch}` : "",
@@ -303,12 +336,7 @@ async function gitBaseComparison(repoPath, thread, branchName) {
     })[0];
   }
 
-  return await gitComparisonStats(repoPath, explicitBaseCommit, "base") || {
-    gitComparisonBase: null,
-    gitComparisonLabel: null,
-    gitBaseAhead: null,
-    gitChangedFiles: null,
-  };
+  return await gitComparisonStats(repoPath, explicitBaseCommit, "base") || emptyGitComparison();
 }
 
 function threadCheckoutPath(thread) {
@@ -337,7 +365,7 @@ export async function detectThreadGitState(threadOrId, env = process.env) {
   const aheadBehind = await gitAheadBehind(repoPath, remoteBranch);
   const sourceDirty = await worktreeDirty(repoPath);
   const gitDirtyFiles = await worktreeDirtyFiles(repoPath);
-  const comparison = await gitBaseComparison(repoPath, thread, branchName);
+  const comparison = await gitBaseComparison(repoPath, thread, branchName, env);
   return {
     repoPath,
     repoRemoteUrl: remoteUrl || null,

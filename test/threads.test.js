@@ -521,13 +521,14 @@ test("thread worker git state reports live branch and base deviation", async () 
   const state = await detectThreadGitState(result.worker, env);
 
   assert.equal(state.branchName, result.worker.branchName);
+  assert.equal(state.gitComparisonLabel, "parent");
   assert.equal(state.gitBaseAhead, 1);
   assert.equal(state.gitChangedFiles, 2);
   assert.equal(state.gitDirtyFiles, 1);
   assert.equal(state.gitRemoteMissing, true);
 });
 
-test("thread worker git state falls back to base branch when stored base commit is stale", async () => {
+test("thread worker git state uses parent checkout when stored base commit is stale", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-worker-git-fallback-home-"));
   const repo = await createTempGitRepo("orkestr-thread-worker-git-fallback-repo-");
   const env = { ORKESTR_HOME: home };
@@ -540,7 +541,7 @@ test("thread worker git state falls back to base branch when stored base commit 
 
   const state = await detectThreadGitState({ ...result.worker, baseCommit: head }, env);
 
-  assert.equal(state.gitComparisonLabel, "main");
+  assert.equal(state.gitComparisonLabel, "parent");
   assert.equal(state.gitBaseAhead, 1);
   assert.equal(state.gitChangedFiles, 1);
 });
@@ -558,10 +559,34 @@ test("thread worker git state clears base deviation after branch is merged", asy
 
   const state = await detectThreadGitState({ ...result.worker, baseBranch: result.worker.branchName }, env);
 
-  assert.equal(state.gitComparisonLabel, "main");
+  assert.equal(state.gitComparisonLabel, "parent");
   assert.equal(state.gitBaseAhead, 0);
   assert.equal(state.gitChangedFiles, 0);
   assert.equal(state.gitDirtyFiles, 0);
+});
+
+test("root thread git state ignores stale base commit when on its base branch", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-root-git-base-home-"));
+  const repo = await createTempGitRepo("orkestr-thread-root-git-base-repo-");
+  const env = { ORKESTR_HOME: home };
+  const baseCommit = await execFileAsync("git", ["rev-parse", "HEAD"], { cwd: repo }).then((result) => String(result.stdout).trim());
+  await fs.writeFile(path.join(repo, "root.txt"), "root thread change\n", "utf8");
+  await execFileAsync("git", ["add", "root.txt"], { cwd: repo });
+  await execFileAsync("git", ["commit", "-m", "root change"], { cwd: repo });
+  const thread = await createThread({
+    id: "root-git-state-parent",
+    name: "Root Git State Parent",
+    cwd: repo,
+    baseBranch: "main",
+    baseCommit,
+  }, env);
+
+  const state = await detectThreadGitState(thread, env);
+
+  assert.equal(state.branchName, "main");
+  assert.equal(state.gitComparisonLabel, null);
+  assert.equal(state.gitBaseAhead, null);
+  assert.equal(state.gitChangedFiles, null);
 });
 
 test("thread workers can be created as blank parallel chats", async () => {
