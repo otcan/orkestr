@@ -52,6 +52,10 @@ test("main UI exposes a guided first thread generation flow", async () => {
   assert.ok(sources.includes("(paired)=\"handleBrowserPaired()\""));
   assert.ok(sources.includes("Connect sender"));
   assert.ok(sources.includes("Connect Orkestr account"));
+  assert.ok(sources.includes("connectedWhatsAppAccounts()"));
+  assert.ok(sources.includes("redirectThreadSettingsToWhatsAppSetupIfNeeded"));
+  assert.ok(sources.includes('this.openSetup("whatsapp", true)'));
+  assert.ok(sources.includes("Connect WhatsApp in setup"));
   assert.ok(sources.includes("Create and connect chat"));
   assert.ok(sources.includes("Existing chats are not selected here."));
   assert.ok(sources.includes("Linked sender account"));

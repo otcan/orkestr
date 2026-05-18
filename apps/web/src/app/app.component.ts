@@ -68,6 +68,18 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
       this.renderNow();
       return;
     }
+    if (this.activePanel === "settings") {
+      const selected = this.selectedThread();
+      this.syncThreadMetaDraft(selected, true);
+      this.syncThreadBindingDraft(selected, true);
+      this.syncThreadTextState(selected, true);
+      void this.refreshWhatsAppSettings().then(() => {
+        if (!this.redirectThreadSettingsToWhatsAppSetupIfNeeded(this.selectedThread())) {
+          void this.loadSelectedThread(true);
+        }
+      });
+      return;
+    }
     this.syncThreadTextState(this.selectedThread(), true);
     void this.loadSelectedThread(true);
   };
@@ -522,6 +534,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     if (panel === "settings") {
       this.syncThreadBindingDraft(this.selectedThread(), true);
       await this.refreshWhatsAppSettings();
+      if (this.redirectThreadSettingsToWhatsAppSetupIfNeeded(this.selectedThread())) return;
     }
     if (panel === "chat") {
       this.queueMessagePaneScrollToBottom();
@@ -567,14 +580,15 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     this.renderNow();
   }
 
-  openSetup(section: SetupSection = this.setupSection || "system"): void {
+  openSetup(section: SetupSection = this.setupSection || "system", replace = false): void {
     if (this.pairingRequired) section = "security";
     if (this.activePanel === "raw") this.closeRawStream();
     this.threadWizardOpen = false;
     this.onboardingActive = true;
     this.setupPageMode = "setup";
     this.setupSection = section;
-    this.pushSetupPath(section);
+    if (replace) this.replaceSetupPath(section);
+    else this.pushSetupPath(section);
     this.updateDocumentTitle();
     this.renderNow();
   }
@@ -1797,9 +1811,24 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     });
   }
 
+  connectedWhatsAppAccounts(): WhatsAppAccount[] {
+    return this.whatsappAccounts().filter((account) => this.whatsappAccountConnected(account));
+  }
+
+  hasConnectedWhatsAppAccounts(): boolean {
+    return this.connectedWhatsAppAccounts().length > 0;
+  }
+
   whatsappAccountId(account: WhatsAppAccount | Record<string, unknown> | null): string {
     if (!account) return "";
     return String(account["accountId"] || account["id"] || account["name"] || "").trim();
+  }
+
+  whatsappAccountConnected(account: WhatsAppAccount | Record<string, unknown> | null): boolean {
+    if (!account) return false;
+    if (account["ready"] === true) return true;
+    const state = this.whatsappAccountState(account).toLowerCase();
+    return ["ready", "paired", "connected", "authenticated"].includes(state);
   }
 
   whatsappAccountLabel(account: WhatsAppAccount | Record<string, unknown> | null): string {
@@ -1830,24 +1859,24 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   }
 
   defaultWhatsAppResponderAccountId(): string {
-    const accounts = this.whatsappAccounts();
+    const accounts = this.connectedWhatsAppAccounts();
     const responder = accounts.find((account) => this.whatsappRelayTargetAccountId(account)) ||
       accounts.find((account) => this.whatsappAccountRole(account) === "secondary") ||
-      accounts.find((account) => account.ready || this.whatsappAccountState(account) === "ready") ||
+      accounts.find((account) => this.whatsappAccountConnected(account)) ||
       accounts[0] ||
       null;
-    return this.whatsappAccountId(responder) || "account-1";
+    return this.whatsappAccountId(responder);
   }
 
   selectedWhatsAppAccountId(): string {
-    const accounts = this.whatsappAccounts();
+    const accounts = this.connectedWhatsAppAccounts();
     const selected = this.whatsappOutboundAccountId.trim();
     if (selected && accounts.some((account) => this.whatsappAccountId(account) === selected)) return selected;
     return this.defaultWhatsAppResponderAccountId();
   }
 
   selectedWhatsAppSenderAccountId(): string {
-    const accounts = this.whatsappAccounts();
+    const accounts = this.connectedWhatsAppAccounts();
     const selected = this.whatsappSenderAccountId.trim();
     if (selected && accounts.some((account) => this.whatsappAccountId(account) === selected)) return selected;
     const responderId = this.selectedWhatsAppAccountId();
@@ -1856,41 +1885,41 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     if (relayTarget && accounts.some((account) => this.whatsappAccountId(account) === relayTarget)) return relayTarget;
     const primary = accounts.find((account) => this.whatsappAccountId(account) !== responderId && this.whatsappAccountRole(account) === "primary");
     if (primary) return this.whatsappAccountId(primary);
-    const otherReady = accounts.find((account) => this.whatsappAccountId(account) !== responderId && (account.ready || this.whatsappAccountState(account) === "ready"));
+    const otherReady = accounts.find((account) => this.whatsappAccountId(account) !== responderId && this.whatsappAccountConnected(account));
     if (otherReady) return this.whatsappAccountId(otherReady);
     return responderId;
   }
 
   selectedWhatsAppAccount(): WhatsAppAccount | null {
     const selected = this.selectedWhatsAppAccountId();
-    return this.whatsappAccounts().find((account) => this.whatsappAccountId(account) === selected) || null;
+    return this.connectedWhatsAppAccounts().find((account) => this.whatsappAccountId(account) === selected) || null;
   }
 
   selectedWhatsAppSenderAccount(): WhatsAppAccount | null {
     const selected = this.selectedWhatsAppSenderAccountId();
-    return this.whatsappAccounts().find((account) => this.whatsappAccountId(account) === selected) || null;
+    return this.connectedWhatsAppAccounts().find((account) => this.whatsappAccountId(account) === selected) || null;
   }
 
   selectedWhatsAppAccountLabel(): string {
     const account = this.selectedWhatsAppAccount();
-    return account ? this.whatsappAccountLabel(account) || this.selectedWhatsAppAccountId() : this.selectedWhatsAppAccountId();
+    return account ? this.whatsappAccountLabel(account) || this.selectedWhatsAppAccountId() : "No connected account";
   }
 
   selectedWhatsAppSenderAccountLabel(): string {
     const account = this.selectedWhatsAppSenderAccount();
-    return account ? this.whatsappAccountLabel(account) || this.selectedWhatsAppSenderAccountId() : this.selectedWhatsAppSenderAccountId();
+    return account ? this.whatsappAccountLabel(account) || this.selectedWhatsAppSenderAccountId() : "No connected account";
   }
 
   selectedWhatsAppAccountStateLabel(): string {
     const account = this.selectedWhatsAppAccount();
     const state = account ? this.whatsappAccountState(account) : "";
-    return state || String(this.whatsappStatusDetails?.state || "local").trim();
+    return state || "setup required";
   }
 
   selectedWhatsAppSenderAccountStateLabel(): string {
     const account = this.selectedWhatsAppSenderAccount();
     const state = account ? this.whatsappAccountState(account) : "";
-    return state || String(this.whatsappStatusDetails?.state || "local").trim();
+    return state || "setup required";
   }
 
   whatsappAccountQrUrl(): string {
@@ -1962,6 +1991,13 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
 
   whatsappChatConnected(thread: ThreadSummary | null): boolean {
     return Boolean(String(thread?.binding?.chatId || "").trim());
+  }
+
+  private redirectThreadSettingsToWhatsAppSetupIfNeeded(thread: ThreadSummary | null): boolean {
+    if (this.activePanel !== "settings" || this.onboardingActive || !thread || !this.whatsappStatusDetails) return false;
+    if (this.whatsappChatConnected(thread) || this.hasConnectedWhatsAppAccounts()) return false;
+    this.openSetup("whatsapp", true);
+    return true;
   }
 
   canLoadLocalWhatsAppChats(accountId = this.selectedWhatsAppAccountId()): boolean {
