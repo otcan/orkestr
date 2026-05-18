@@ -745,6 +745,21 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     }
   }
 
+  async stopSelected(): Promise<void> {
+    const thread = this.selectedThread();
+    if (!thread || this.busy) return;
+    this.busy = true;
+    try {
+      await firstValueFrom(this.api.stopThread(thread.id));
+      this.markThreadActive(thread.id, 15_000);
+      await this.refresh(false);
+    } catch (error) {
+      this.error = this.errorText(error);
+    } finally {
+      this.busy = false;
+    }
+  }
+
   async recoverSelected(): Promise<void> {
     const thread = this.selectedThread();
     if (!thread) return;
@@ -2038,13 +2053,28 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     );
   }
 
+  threadAvatarUrl(thread: ThreadSummary | null): string {
+    return this.whatsappAvatarUrl(thread);
+  }
+
   whatsappAvatarLines(thread: ThreadSummary | null): string[] {
     const title = this.whatsappChatLabel(thread) || (thread ? this.threadTitle(thread) : "WhatsApp");
     return this.chatIconLines(title);
   }
 
+  threadAvatarLines(thread: ThreadSummary | null): string[] {
+    const title = thread && this.showWhatsAppChatIcon(thread)
+      ? this.whatsappChatLabel(thread) || this.threadTitle(thread)
+      : thread ? this.threadTitle(thread) : "Orkestr";
+    return this.chatIconLines(title);
+  }
+
   isWhatsAppAvatarPrimaryLine(line: string): boolean {
     return /^W\d+$/i.test(String(line || "").trim());
+  }
+
+  isThreadAvatarPrimaryLine(line: string): boolean {
+    return this.isWhatsAppAvatarPrimaryLine(line);
   }
 
   whatsappChatIconTitle(thread: ThreadSummary | null): string {
@@ -2053,6 +2083,11 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     const chatId = String(binding?.chatId || "").toLowerCase();
     const groupSuffix = binding?.additionalParticipantsEnabled === true || chatId.includes("@g.us") || chatId.includes("g.us") ? " · group" : "";
     return `${label} · WhatsApp chat${groupSuffix}`;
+  }
+
+  threadIconTitle(thread: ThreadSummary | null): string {
+    if (this.showWhatsAppChatIcon(thread)) return this.whatsappChatIconTitle(thread);
+    return `${thread ? this.threadTitle(thread) : "Thread"} · Orkestr thread`;
   }
 
   childWorkers(thread: ThreadSummary | null): ThreadSummary[] {

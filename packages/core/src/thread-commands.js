@@ -1,4 +1,4 @@
-const CONTROL_COMMANDS = new Set(["now", "interrupt", "implement"]);
+const CONTROL_COMMANDS = new Set(["now", "interrupt", "implement", "stop"]);
 
 export function parseThreadInputCommand(input = {}) {
   const text = String(input.text || "");
