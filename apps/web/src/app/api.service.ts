@@ -609,8 +609,8 @@ export class ApiService {
     return this.http.get<{ events: EventRecord[] }>(this.api(`/events?limit=${limit}`));
   }
 
-  browsers(): Observable<{ browsers: BrowserSession[]; sessions?: BrowserSession[] }> {
-    return this.http.get<{ browsers: BrowserSession[]; sessions?: BrowserSession[] }>(this.api("/browsers"));
+  browsers(): Observable<{ browsers: BrowserSession[]; sessions?: BrowserSession[]; source?: string; error?: string; message?: string }> {
+    return this.http.get<{ browsers: BrowserSession[]; sessions?: BrowserSession[]; source?: string; error?: string; message?: string }>(this.api("/browsers"));
   }
 
   runtimeLeases(): Observable<{ leases: Array<Record<string, unknown>>; budget?: Record<string, unknown> }> {
@@ -738,8 +738,8 @@ export class ApiService {
     return this.http.post<ThreadUploadResponse>(this.api(`/threads/${encodeURIComponent(id)}/uploads`), body);
   }
 
-  browserSessions(): Observable<{ sessions: BrowserSession[]; browsers?: BrowserSession[] }> {
-    return this.http.get<{ sessions: BrowserSession[]; browsers?: BrowserSession[] }>(this.api("/browser-sessions"));
+  browserSessions(): Observable<{ sessions: BrowserSession[]; browsers?: BrowserSession[]; source?: string; error?: string; message?: string }> {
+    return this.http.get<{ sessions: BrowserSession[]; browsers?: BrowserSession[]; source?: string; error?: string; message?: string }>(this.api("/browser-sessions"));
   }
 
   browserAction(slug: string, action: string): Observable<{ browser: BrowserSession }> {

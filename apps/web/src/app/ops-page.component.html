@@ -118,9 +118,13 @@
       <div>
         <p class="eyebrow">Desktop management</p>
         <h3>{{ opsBrowsers.length }} desktops</h3>
+        <small>{{ opsBrowserSource || "browserctl" }}</small>
       </div>
       <button class="secondary" type="button" (click)="loadOps()" [disabled]="busy">Reload</button>
     </div>
+    @if (opsBrowserMessage) {
+      <div class="notice">{{ opsBrowserMessage }}</div>
+    }
     <div class="desktop-grid">
       @for (browser of opsBrowsers; track browserSlug(browser) || jsonLine(browser)) {
         <article class="desktop-card">

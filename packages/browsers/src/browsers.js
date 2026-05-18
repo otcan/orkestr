@@ -4,8 +4,46 @@ import net from "node:net";
 import { promisify } from "node:util";
 import { dataPaths, ensureDataDirs } from "../../storage/src/paths.js";
 import { appendEvent, readJson, writeJson } from "../../storage/src/store.js";
+import { isBrowserctlUnavailableError, listManagedDesktopSessions, managedDesktopAction } from "./browserctl.js";
 
 const execFileAsync = promisify(execFile);
+
+function desktopMode(env = process.env) {
+  return String(env.ORKESTR_BROWSER_DESKTOP_MODE || "").trim().toLowerCase();
+}
+
+function profileFallbackAllowed(env = process.env) {
+  const configured = String(env.ORKESTR_BROWSER_PROFILE_FALLBACK || "").trim().toLowerCase();
+  if (["1", "true", "yes"].includes(configured)) return true;
+  if (["0", "false", "no"].includes(configured)) return false;
+  if (desktopMode(env) === "profiles") return true;
+  if (desktopMode(env) === "browserctl") return false;
+  return String(env.ORKESTR_DOCKER || "").trim() !== "1";
+}
+
+function shouldFallbackAfterBrowserctlError(error, env = process.env) {
+  return profileFallbackAllowed(env) && isBrowserctlUnavailableError(error);
+}
+
+export async function listBrowserSessions(env = process.env) {
+  if (desktopMode(env) !== "profiles") {
+    try {
+      return await listManagedDesktopSessions(env);
+    } catch (error) {
+      if (!shouldFallbackAfterBrowserctlError(error, env)) {
+        return {
+          ok: false,
+          source: "browserctl",
+          sessions: [],
+          error: "browser_desktop_system_unavailable",
+          message: error?.message || String(error),
+        };
+      }
+    }
+  }
+  const sessions = await listProfileBrowsers(env);
+  return { ok: true, source: "profiles", sessions };
+}
 
 const browserCatalog = [
   {
@@ -186,12 +224,23 @@ async function publicBrowserRecord(browser, env = process.env) {
   };
 }
 
-export async function listVirtualBrowsers(env = process.env) {
+async function listProfileBrowsers(env = process.env) {
   await ensureDataDirs(env);
   return Promise.all(browserCatalog.map((browser) => publicBrowserRecord(browser, env)));
 }
 
+export async function listVirtualBrowsers(env = process.env) {
+  return (await listBrowserSessions(env)).sessions;
+}
+
 export async function prepareVirtualBrowser(slug, env = process.env) {
+  if (desktopMode(env) !== "profiles") {
+    try {
+      return await managedDesktopAction(slug, "prepare", env);
+    } catch (error) {
+      if (!shouldFallbackAfterBrowserctlError(error, env)) throw error;
+    }
+  }
   const browser = browserBySlug(slug);
   await ensureDataDirs(env);
   const dir = profileDir(browser.slug, env);
@@ -215,6 +264,13 @@ export async function prepareVirtualBrowser(slug, env = process.env) {
 }
 
 export async function openVirtualBrowser(slug, env = process.env) {
+  if (desktopMode(env) !== "profiles") {
+    try {
+      return await managedDesktopAction(slug, "start", env);
+    } catch (error) {
+      if (!shouldFallbackAfterBrowserctlError(error, env)) throw error;
+    }
+  }
   const browser = browserBySlug(slug);
   const prepared = await prepareVirtualBrowser(slug, env);
   const launchDisabled = String(env.ORKESTR_BROWSER_LAUNCH_DISABLED || "").trim() === "1";
@@ -273,6 +329,13 @@ export async function openVirtualBrowser(slug, env = process.env) {
 }
 
 export async function stopVirtualBrowser(slug, env = process.env) {
+  if (desktopMode(env) !== "profiles") {
+    try {
+      return await managedDesktopAction(slug, "stop", env);
+    } catch (error) {
+      if (!shouldFallbackAfterBrowserctlError(error, env)) throw error;
+    }
+  }
   const browser = browserBySlug(slug);
   const dir = profileDir(browser.slug, env);
   const configured = await pathExists(dir);
@@ -313,11 +376,25 @@ export async function stopVirtualBrowser(slug, env = process.env) {
 }
 
 export async function restartVirtualBrowser(slug, env = process.env) {
+  if (desktopMode(env) !== "profiles") {
+    try {
+      return await managedDesktopAction(slug, "restart", env);
+    } catch (error) {
+      if (!shouldFallbackAfterBrowserctlError(error, env)) throw error;
+    }
+  }
   await stopVirtualBrowser(slug, env);
   return openVirtualBrowser(slug, env);
 }
 
 export async function cleanupVirtualBrowser(slug, env = process.env) {
+  if (desktopMode(env) !== "profiles") {
+    try {
+      return await managedDesktopAction(slug, "cleanup", env);
+    } catch (error) {
+      if (!shouldFallbackAfterBrowserctlError(error, env)) throw error;
+    }
+  }
   const browser = browserBySlug(slug);
   const current = await publicBrowserRecord(browser, env);
   if (current.root_pid) {

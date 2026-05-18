@@ -55,6 +55,7 @@ export async function runCodingAgentDemo({ port = Number(process.env.ORKESTR_COD
     ORKESTR_PORT: process.env.ORKESTR_PORT,
     ORKESTR_HOST: process.env.ORKESTR_HOST,
     ORKESTR_BROWSER_LAUNCH_DISABLED: process.env.ORKESTR_BROWSER_LAUNCH_DISABLED,
+    ORKESTR_BROWSER_DESKTOP_MODE: process.env.ORKESTR_BROWSER_DESKTOP_MODE,
     ORKESTR_RECOVER_RUNNING_ON_START: process.env.ORKESTR_RECOVER_RUNNING_ON_START,
   };
   let server = null;
@@ -64,6 +65,7 @@ export async function runCodingAgentDemo({ port = Number(process.env.ORKESTR_COD
     process.env.ORKESTR_PORT = String(port);
     process.env.ORKESTR_HOST = "127.0.0.1";
     process.env.ORKESTR_BROWSER_LAUNCH_DISABLED = "1";
+    process.env.ORKESTR_BROWSER_DESKTOP_MODE = "profiles";
     process.env.ORKESTR_RECOVER_RUNNING_ON_START = "0";
 
     server = await startServer({ port, host: "127.0.0.1" });

@@ -30,6 +30,8 @@ export class OpsPageComponent implements OnInit, OnDestroy {
   opsTimerDoctor: TimerDoctorResponse | null = null;
   opsEvents: EventRecord[] = [];
   opsBrowsers: BrowserSession[] = [];
+  opsBrowserSource = "";
+  opsBrowserMessage = "";
   opsRuntimeLeases: Array<Record<string, unknown>> = [];
   opsExecutors: Array<Record<string, unknown>> = [];
   opsExecutions: Array<Record<string, unknown>> = [];
@@ -82,7 +84,11 @@ export class OpsPageComponent implements OnInit, OnDestroy {
       if (timers.status === "fulfilled") this.opsTimers = timers.value.timers || [];
       if (timerDoctor.status === "fulfilled") this.opsTimerDoctor = timerDoctor.value;
       if (events.status === "fulfilled") this.opsEvents = events.value.events || [];
-      if (browsers.status === "fulfilled") this.opsBrowsers = browsers.value.sessions || browsers.value.browsers || [];
+      if (browsers.status === "fulfilled") {
+        this.opsBrowsers = browsers.value.sessions || browsers.value.browsers || [];
+        this.opsBrowserSource = browsers.value.source || "";
+        this.opsBrowserMessage = browsers.value.message || browsers.value.error || "";
+      }
       if (runtimeLeases.status === "fulfilled") {
         this.opsRuntimeLeases = runtimeLeases.value.leases || [];
         this.opsRuntimeBudget = runtimeLeases.value.budget || null;
