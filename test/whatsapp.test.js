@@ -43,6 +43,29 @@ test("whatsapp status reports paired from health readiness", async () => {
   assert.equal(status.state, "paired");
 });
 
+test("whatsapp status discovers external bridge accounts from dashboard", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-dashboard-"));
+  const env = { ORKESTR_HOME: home };
+  await writeConnectorConfig("whatsapp", { bridgeUrl: "http://wa.local" }, env);
+
+  const status = await getWhatsAppStatus(env, async (url) => {
+    if (url.pathname === "/health") return response({ ok: true, ready: true });
+    if (url.pathname === "/api/dashboard") {
+      return response({
+        ok: true,
+        accounts: [
+          { id: "main", label: "Main account", ready: true, state: "ready" },
+          { id: "openclaw", label: "openclaw", ready: true, state: "ready" },
+        ],
+      });
+    }
+    throw new Error(`unexpected ${url.pathname}`);
+  });
+
+  assert.equal(status.state, "paired");
+  assert.deepEqual(status.accounts.map((account) => account.id), ["main", "openclaw"]);
+});
+
 test("whatsapp status reports qr needed when health is reachable and qr exists", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-qr-"));
   const env = { ORKESTR_HOME: home };

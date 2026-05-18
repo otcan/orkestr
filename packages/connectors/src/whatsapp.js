@@ -51,6 +51,17 @@ function firstAccountError(accounts = []) {
   return accounts.map((account) => account.error).find(Boolean) || "";
 }
 
+async function externalBridgeAccounts(bridgeUrl, healthPayload, fetchImpl) {
+  if (Array.isArray(healthPayload?.accounts)) return healthPayload.accounts;
+  try {
+    const dashboard = await fetchJson(new URL("/api/dashboard", bridgeUrl), fetchImpl);
+    if (dashboard.ok && Array.isArray(dashboard.payload?.accounts)) return dashboard.payload.accounts;
+  } catch {
+    // Older bridges only expose /health; account discovery stays best-effort.
+  }
+  return [];
+}
+
 async function getLocalStatus(env) {
   const health = await getLocalWhatsAppBridgeStatus(env);
   if (hasReadySignal(health)) {
@@ -134,22 +145,24 @@ export async function getWhatsAppStatus(env = process.env, fetchImpl = fetch) {
       };
     }
     if (hasReadySignal(health.payload)) {
+      const accounts = await externalBridgeAccounts(bridgeUrl, health.payload, fetchImpl);
       return {
         state: "paired",
         summary: "WhatsApp bridge is reachable and paired.",
         bridgeUrl,
         health: health.payload,
-        accounts: Array.isArray(health.payload?.accounts) ? health.payload.accounts : [],
+        accounts,
         qrAvailable: false,
       };
     }
     const qrAvailable = await fetchOk(new URL("/qr.svg", bridgeUrl), fetchImpl);
+    const accounts = await externalBridgeAccounts(bridgeUrl, health.payload, fetchImpl);
     return {
       state: qrAvailable ? "qr_needed" : "unpaired",
       summary: qrAvailable ? "WhatsApp bridge is reachable; scan the QR code to pair." : "WhatsApp bridge is reachable but not paired.",
       bridgeUrl,
       health: health.payload,
-      accounts: Array.isArray(health.payload?.accounts) ? health.payload.accounts : [],
+      accounts,
       qrAvailable,
       qrUrl: qrAvailable ? `${bridgeUrl}/qr.svg` : "",
     };
