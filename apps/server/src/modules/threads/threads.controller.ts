@@ -146,6 +146,33 @@ function optionalBodyBoolean(body: Record<string, unknown>, key: string, fallbac
   return value !== false;
 }
 
+function optionalBodyStringArray(body: Record<string, unknown>, key: string, fallback: unknown = []): string[] {
+  const value = hasOwn(body, key) ? body[key] : fallback;
+  if (!Array.isArray(value)) return [];
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const item of value) {
+    const text = String(item || "").trim();
+    const comparable = text.toLowerCase();
+    if (!text || seen.has(comparable)) continue;
+    seen.add(comparable);
+    result.push(text);
+  }
+  return result;
+}
+
+function optionalBodyStringMap(body: Record<string, unknown>, key: string, fallback: unknown = {}): Record<string, string> {
+  const value = hasOwn(body, key) ? body[key] : fallback;
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+  const result: Record<string, string> = {};
+  for (const [rawKey, rawValue] of Object.entries(value as Record<string, unknown>)) {
+    const id = String(rawKey || "").trim();
+    const label = String(rawValue || "").trim();
+    if (id && label) result[id] = label;
+  }
+  return result;
+}
+
 function safeCloneSegment(value: string): string {
   const withoutGitSuffix = value.replace(/\.git$/i, "");
   const tail = withoutGitSuffix.split(/[/:]/).filter(Boolean).at(-1) || "repo";
@@ -647,6 +674,16 @@ export class ThreadsController {
     if (!thread) throw httpError("thread_not_found", 404);
     const current = thread.binding || {};
     const displayName = optionalBodyString(body, "displayName", current.displayName || thread.name || thread.id) || thread.name || thread.id;
+    const additionalParticipantsEnabled = optionalBodyBoolean(body, "additionalParticipantsEnabled", current.additionalParticipantsEnabled === true);
+    const additionalParticipantIds = additionalParticipantsEnabled
+      ? optionalBodyStringArray(body, "additionalParticipantIds", current.additionalParticipantIds || [])
+      : [];
+    const rawAdditionalParticipantLabels = optionalBodyStringMap(body, "additionalParticipantLabels", current.additionalParticipantLabels || {});
+    const additionalParticipantLabels = Object.fromEntries(
+      additionalParticipantIds
+        .map((id) => [id, rawAdditionalParticipantLabels[id]] as const)
+        .filter((entry) => entry[1]),
+    );
     const binding = {
       ...current,
       connector: optionalBodyString(body, "connector", current.connector || "whatsapp") || "whatsapp",
@@ -654,7 +691,9 @@ export class ThreadsController {
       displayName,
       enabled: optionalBodyBoolean(body, "enabled", current.enabled !== false),
       allowOtherPeople: optionalBodyBoolean(body, "allowOtherPeople", current.allowOtherPeople !== false),
-      additionalParticipantsEnabled: optionalBodyBoolean(body, "additionalParticipantsEnabled", current.additionalParticipantsEnabled === true),
+      additionalParticipantsEnabled,
+      additionalParticipantIds,
+      additionalParticipantLabels,
       mirrorToWhatsApp: optionalBodyBoolean(body, "mirrorToWhatsApp", current.mirrorToWhatsApp !== false),
       replyPrefix: optionalBodyString(body, "replyPrefix", current.replyPrefix || "otcanclaw:") || "otcanclaw:",
       senderAccountId: optionalBodyString(body, "senderAccountId", current.senderAccountId || "") || null,

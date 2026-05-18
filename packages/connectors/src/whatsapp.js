@@ -70,7 +70,17 @@ function normalizeParticipant(participant = {}) {
   const id = pickString(participant.id?._serialized, participant.id, participant.user, participant.phoneNumber);
   return {
     id,
-    name: pickString(participant.name, participant.pushname, participant.shortName, participant.label),
+    name: pickString(
+      participant.name,
+      participant.pushname,
+      participant.shortName,
+      participant.label,
+      participant.savedName,
+      participant.contactName,
+      participant.displayName,
+      participant.notifyName,
+      participant.verifiedName,
+    ),
     isAdmin: Boolean(participant.isAdmin),
     isSuperAdmin: Boolean(participant.isSuperAdmin),
   };
@@ -246,6 +256,15 @@ function pickString(...values) {
   return "";
 }
 
+function comparableParticipantId(value) {
+  return pickString(value).toLowerCase();
+}
+
+function participantIdSet(values = []) {
+  if (!Array.isArray(values)) return new Set();
+  return new Set(values.map(comparableParticipantId).filter(Boolean));
+}
+
 function routeAgentId(input, config) {
   const chatId = pickString(input.chatId, input.chat?.id, input.fromChatId);
   const routes = config.routes || config.chatRoutes || {};
@@ -275,12 +294,17 @@ async function routeThread(input, config, env) {
   const thread = threads.find((item) => {
     const binding = item?.binding || {};
     const senderAccountId = pickString(binding.senderAccountId, binding.inboundAccountId);
+    const senderContactId = pickString(binding.senderContactId);
     const responderContactId = pickString(binding.responderContactId);
     if (senderAccountId) {
       if (accountId && accountId !== senderAccountId) return false;
-      const additionalParticipantsEnabled = binding.additionalParticipantsEnabled === true || binding.allowOtherPeopleConfirmed === true;
-      if (!fromMe && !additionalParticipantsEnabled) return false;
-      if (responderContactId && from && from === responderContactId) return false;
+      if (!fromMe) {
+        const additionalParticipantsEnabled = binding.additionalParticipantsEnabled === true || binding.allowOtherPeopleConfirmed === true;
+        if (!additionalParticipantsEnabled) return false;
+        if (senderContactId && comparableParticipantId(from) === comparableParticipantId(senderContactId)) return false;
+        if (responderContactId && comparableParticipantId(from) === comparableParticipantId(responderContactId)) return false;
+        if (!participantIdSet(binding.additionalParticipantIds).has(comparableParticipantId(from))) return false;
+      }
     }
     return binding.enabled !== false &&
       String(binding.connector || "whatsapp") === "whatsapp" &&

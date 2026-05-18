@@ -1902,17 +1902,45 @@ ork-first-thread-wizard.first-thread-host {
   gap: 6px;
 }
 
-.wa-participant-list span {
+.wa-participant-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
   overflow: hidden;
   border: 1px solid rgba(104, 172, 219, 0.12);
   border-radius: 8px;
   background: rgba(3, 9, 12, 0.38);
   color: #d9fbd8;
   padding: 8px 10px;
-  font-family: "IBM Plex Mono", "JetBrains Mono", "SFMono-Regular", Consolas, monospace;
-  font-size: 0.78rem;
+}
+
+.wa-participant-row input {
+  width: auto;
+}
+
+.wa-participant-copy {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.wa-participant-copy strong,
+.wa-participant-copy small {
+  overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.wa-participant-copy strong {
+  color: #d9fbd8;
+  font-size: 0.84rem;
+}
+
+.wa-participant-copy small {
+  color: #91ad8b;
+  font-family: "IBM Plex Mono", "JetBrains Mono", "SFMono-Regular", Consolas, monospace;
+  font-size: 0.74rem;
 }
 
 .settings-advanced {
