@@ -776,6 +776,15 @@ function compactDeliveryText(value) {
   return String(value || "").replace(/\s+/g, " ").trim();
 }
 
+function escapeRegex(value) {
+  return String(value || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function leadingSlashCommand(message) {
+  const match = inputTextForMessage(message).trimStart().match(/^(\/[a-z][a-z0-9_-]*)(?:\b|$)/i);
+  return match ? match[1].toLowerCase() : "";
+}
+
 function paneContainsDeliveryText(paneText, messageText) {
   const expected = compactDeliveryText(messageText);
   if (!expected) return false;
@@ -786,6 +795,12 @@ function paneContainsDeliveryText(paneText, messageText) {
     .filter((line) => /^›(?:\s|$)/.test(line))
     .join(" ");
   return compactDeliveryText(promptText).includes(sample);
+}
+
+function paneRejectedSlashCommand(paneText, command) {
+  if (!command) return false;
+  const pattern = new RegExp(`Unrecognized command ['"]${escapeRegex(command)}['"]`, "i");
+  return pattern.test(String(paneText || ""));
 }
 
 async function rolloutSnapshotForDelivery(thread, lease, env = process.env) {
@@ -820,6 +835,47 @@ async function deliveryAckEvidence(thread, message, status, env = process.env) {
     if (Number(stats?.size || 0) > sentOffset) return { observedVia: "codex_rollout_growth" };
   }
   return null;
+}
+
+async function rejectedCommandDeliveryEvidence(message, status) {
+  if (message?.state !== "awaiting_ack" || !status?.paneId) return null;
+  const command = leadingSlashCommand(message);
+  if (!command) return null;
+  const paneText = await capturePane(status.paneId, 80).catch(() => "");
+  if (!paneRejectedSlashCommand(paneText, command)) return null;
+  return {
+    observedVia: "codex_unrecognized_command",
+    error: `Codex rejected ${command}: Unrecognized command '${command}'.`,
+  };
+}
+
+async function failThreadInputDelivery(thread, message, evidence, status, env = process.env) {
+  if (!evidence) return null;
+  const errorText = evidence.error || "Thread input delivery failed.";
+  await updateThreadMessage(thread.id, message.id, {
+    state: "failed",
+    deliveryState: "failed",
+    deliveryFailedAt: nowIso(),
+    observedVia: evidence.observedVia || "delivery_failed",
+    error: errorText,
+  }, env);
+  await updateThread(thread.id, {
+    state: status?.state || "ready",
+    lastError: errorText,
+  }, env).catch(() => {});
+  await appendEvent({
+    type: "thread_input_delivery_failed",
+    threadId: thread.id,
+    messageId: message.id,
+    paneId: status?.paneId || message.deliveryPaneId || null,
+    observedVia: evidence.observedVia || "delivery_failed",
+    error: errorText,
+  }, env);
+  return message.id;
+}
+
+async function failRejectedThreadInputDelivery(thread, message, status, env = process.env) {
+  return failThreadInputDelivery(thread, message, await rejectedCommandDeliveryEvidence(message, status), status, env);
 }
 
 async function acknowledgeThreadInputDelivery(thread, message, status, env = process.env) {
@@ -857,6 +913,7 @@ async function waitForThreadInputAck(thread, messageId, env = process.env) {
     const status = await runtimeStatus(thread.id, env).catch(() => null);
     const acknowledged = await acknowledgeThreadInputDelivery(thread, message, status, env);
     if (acknowledged) return acknowledged;
+    if (await failRejectedThreadInputDelivery(thread, message, status, env)) return null;
     if (Date.now() >= deadline) break;
     await sleep(Math.min(250, Math.max(25, deadline - Date.now())));
   } while (Date.now() < deadline);
@@ -950,6 +1007,7 @@ export async function deliverPendingThreadInputs(threadId, env = process.env) {
           delivered.push(acknowledged);
           continue;
         }
+        if (await failRejectedThreadInputDelivery(thread, awaitingAck, status, env)) continue;
         const dueInMs = deliveryDueInMs(awaitingAck);
         if (dueInMs > 0) {
           scheduleThreadInputDelivery(thread.id, env, dueInMs);
@@ -988,6 +1046,8 @@ export async function deliverPendingThreadInputs(threadId, env = process.env) {
           delivered.push(acknowledged);
           continue;
         }
+        const current = (await listThreadMessages(thread.id, env)).find((item) => item.id === next.id) || next;
+        if (await failRejectedThreadInputDelivery(thread, current, status, env)) continue;
         await updateThread(thread.id, { state: "working", lastError: null }, env);
         scheduleThreadInputDelivery(thread.id, env, deliveryDueInMs({ deliveryNextAttemptAt: attempt.nextAttemptAt }));
         break;
@@ -1243,6 +1303,7 @@ async function syncRuntimeLeasesOnce(env = process.env) {
         if (awaitingAck) {
           const acknowledged = await acknowledgeThreadInputDelivery(thread, awaitingAck, status, env).catch(() => null);
           if (acknowledged) scheduleThreadInputDelivery(thread.id, env, 0);
+          else await failRejectedThreadInputDelivery(thread, awaitingAck, status, env).catch(() => null);
         }
       }
       const idleSleep = idleSleepDecision({ lease: synced.lease, messages, status }, env);
