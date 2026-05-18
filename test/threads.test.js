@@ -648,6 +648,37 @@ test("thread input delivery sends answers to pending Codex plan questions", asyn
     assert.equal(deliveredAnswer.answeredInputEventId, "need-input-color-size");
     assert.equal(deliveredAnswer.error, null);
     assert.equal(submitCount, 2);
+
+    await appendThreadMessage("plan-answer-thread", {
+      role: "assistant",
+      source: "codex-rollout",
+      phase: "need_input",
+      eventId: "need-input-outcome",
+      text: [
+        "Codex needs input to continue:",
+        "",
+        "1. Outcome: What should the current-workspace plan aim to do?",
+        "   A. Preserve Failure Repro (Recommended): Keep the existing failing test and plan around verifying the failure path.",
+        "   B. Clean Workspace: Plan removal of repro/cache artifacts and return to a clean baseline.",
+        "   C. Add Tiny Project: Plan a minimal project scaffold that builds on the current workspace.",
+        "",
+        "Reply with your choices or a short free-form answer.",
+      ].join("\n"),
+    }, env);
+    const defaultAnswer = await enqueueThreadInput("plan-answer-thread", { text: "default pls" }, env);
+
+    assert.deepEqual(await deliverPendingThreadInputs("plan-answer-thread", env), [defaultAnswer.id]);
+    const messagesAfterDefault = await listThreadMessages("plan-answer-thread", env);
+    const deliveredDefaultAnswer = messagesAfterDefault.find((message) => message.id === defaultAnswer.id);
+    const logAfterDefault = await fs.readFile(fakeTmux.log, "utf8");
+    const submitCountAfterDefault = logAfterDefault.split("\n").filter((line) => line.includes("__CALL__\tsend-keys\t-t\t%42\tC-m")).length;
+
+    assert.equal(deliveredDefaultAnswer.state, "completed");
+    assert.equal(deliveredDefaultAnswer.deliveryState, "delivered");
+    assert.equal(deliveredDefaultAnswer.observedVia, "codex_request_user_input");
+    assert.equal(deliveredDefaultAnswer.answeredInputEventId, "need-input-outcome");
+    assert.equal(deliveredDefaultAnswer.error, null);
+    assert.equal(submitCountAfterDefault, 3);
   } finally {
     restoreEnvValue("PATH", priorPath);
     restoreEnvValue("TMUX_LOG", priorTmuxLog);

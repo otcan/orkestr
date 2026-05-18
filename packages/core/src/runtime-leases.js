@@ -1061,6 +1061,24 @@ function normalizeNeedInputChoice(value) {
     .toLowerCase();
 }
 
+function isDefaultNeedInputChoice(value) {
+  const answer = normalizeNeedInputChoice(value);
+  if (!answer) return false;
+  return [
+    "default",
+    "defaults",
+    "default pls",
+    "default please",
+    "use default",
+    "use defaults",
+    "recommended",
+    "recommended option",
+    "first",
+    "first option",
+    "option a",
+  ].includes(answer) || /^default\b/.test(answer) || /\brecommended\b/.test(answer);
+}
+
 function parseNeedInputQuestions(text) {
   const questions = [];
   let current = null;
@@ -1096,8 +1114,10 @@ function explicitAnswerForQuestion(answerText, question) {
 
 function optionIndexForQuestionAnswer(question, answerText, questionCount) {
   const explicit = explicitAnswerForQuestion(answerText, question);
-  const answer = normalizeNeedInputChoice(explicit || (questionCount === 1 ? answerText : ""));
+  const fallback = isDefaultNeedInputChoice(answerText) || questionCount === 1 ? answerText : "";
+  const answer = normalizeNeedInputChoice(explicit || fallback);
   if (!answer) return null;
+  if (isDefaultNeedInputChoice(answer)) return 0;
   const letter = answer.length === 1 ? answer.toUpperCase() : "";
   for (const [index, option] of question.options.entries()) {
     if (letter && option.letter === letter) return index;
