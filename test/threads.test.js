@@ -795,13 +795,13 @@ test("thread input /implement confirms a visible Codex plan implementation promp
     const response = await fetch(`http://127.0.0.1:${port}/api/threads/implement-plan-thread/input`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ text: "/implement" }),
+      body: JSON.stringify({ text: "/implement", parseCommands: true, controlAllowed: true }),
     });
     const payload = await response.json();
     const log = await fs.readFile(fakeTmux.log, "utf8");
     const messages = await listThreadMessages("implement-plan-thread");
 
-    assert.equal(response.status, 201);
+    assert.equal(response.status, 202);
     assert.equal(payload.ok, true);
     assert.equal(payload.implemented, true);
     assert.equal(payload.reason, "confirmed");
