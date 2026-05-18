@@ -45,7 +45,8 @@ test("main UI exposes a guided first thread generation flow", async () => {
   assert.ok(sources.includes("<ork-pairing-required-page"));
   assert.ok(sources.includes("Pairing Required"));
   assert.ok(sources.includes("ssh root@"));
-  assert.ok(sources.includes("docker exec orkestr orkestr security approve"));
+  assert.ok(sources.includes("orkestr security approve"));
+  assert.ok(!sources.includes("docker exec orkestr orkestr security approve"));
   assert.ok(sources.includes("browser_pairing_required"));
   assert.ok(sources.includes("enterPairingRequired"));
   assert.ok(sources.includes("(paired)=\"handleBrowserPaired()\""));

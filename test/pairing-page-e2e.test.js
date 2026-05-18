@@ -82,7 +82,8 @@ test("pairing required page generates and consumes a challenge in a real browser
     const bodyAfterChallenge = await page.$eval("body", (node) => node.innerText);
     const firstButtonText = await page.$eval("button", (node) => node.textContent.trim());
     assert.match(challengeId, /^[A-Za-z0-9_-]{20,}$/);
-    assert.match(bodyAfterChallenge, new RegExp(`docker exec orkestr orkestr security approve ${challengeId}`));
+    assert.match(bodyAfterChallenge, new RegExp(`orkestr security approve ${challengeId}`));
+    assert.doesNotMatch(bodyAfterChallenge, /docker exec orkestr/);
     assert.equal(firstButtonText, "Generate challenge");
 
     await approvePairingChallenge(challengeId);

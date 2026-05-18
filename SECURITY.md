@@ -27,10 +27,10 @@ Set `ORKESTR_AUTH_REQUIRED=1` to require browser pairing before protected API ac
 
 ```bash
 ssh root@YOUR_SERVER
-docker exec orkestr orkestr security approve CHALLENGE_ID
+orkestr security approve CHALLENGE_ID
 ```
 
-`root` is the default in these instructions because fresh VPS images usually reserve Docker, systemd, and firewall control for root. Hardened installs can use a sudo-capable deploy user and run `sudo docker exec orkestr orkestr security approve CHALLENGE_ID` instead. After approval, Orkestr sets a `HttpOnly`, `SameSite=Lax` session cookie. Use `ORKESTR_COOKIE_SECURE=1` when serving through HTTPS.
+`root` is the default in these instructions because fresh VPS images usually reserve service, install, and firewall control for root. Hardened installs can use a sudo-capable deploy user and run `sudo orkestr security approve CHALLENGE_ID` instead. After approval, Orkestr sets a `HttpOnly`, `SameSite=Lax` session cookie. Use `ORKESTR_COOKIE_SECURE=1` when serving through HTTPS.
 
 ## Secrets
 

@@ -70,12 +70,12 @@ export class PairingRequiredPageComponent implements OnDestroy {
 
   approveCommand(): string {
     const id = this.challenge?.id || "<challenge-id>";
-    return `docker exec orkestr orkestr security approve ${id}`;
+    return `orkestr security approve ${id}`;
   }
 
   sudoApproveCommand(): string {
     const id = this.challenge?.id || "<challenge-id>";
-    return `sudo docker exec orkestr orkestr security approve ${id}`;
+    return `sudo orkestr security approve ${id}`;
   }
 
   challengeStatusClass(): string {
