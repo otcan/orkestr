@@ -479,8 +479,12 @@ test("thread workers create a git worktree-backed child thread without resuming 
   assert.equal(result.worker.workerLabel, "Worker A");
   assert.match(result.worker.branchName, /^orkestr\/Parent-Thread\//);
   assert.equal(result.worker.remoteBranch, `origin/${result.worker.branchName}`);
-  assert.equal(result.worker.gitAhead, null);
-  assert.equal(result.worker.gitBehind, null);
+  assert.equal(result.worker.gitAhead, 0);
+  assert.equal(result.worker.gitBehind, 0);
+  assert.equal(result.worker.gitParentAhead, 0);
+  assert.equal(result.worker.gitParentBehind, 0);
+  assert.equal(result.worker.gitRemoteAhead, null);
+  assert.equal(result.worker.gitRemoteBehind, null);
   assert.equal(result.worker.executor.codexThreadId, "");
   assert.equal(result.worker.executor.metadata.forkedFromCodexThreadId, "parent-codex-id");
   assert.match(result.worker.handoffPrompt, /Role: worker thread\. You are not the parent\/root Orkestr thread/);
@@ -522,10 +526,37 @@ test("thread worker git state reports live branch and base deviation", async () 
 
   assert.equal(state.branchName, result.worker.branchName);
   assert.equal(state.gitComparisonLabel, "parent");
+  assert.equal(state.gitAhead, 1);
+  assert.equal(state.gitBehind, 0);
+  assert.equal(state.gitParentAhead, 1);
+  assert.equal(state.gitParentBehind, 0);
   assert.equal(state.gitBaseAhead, 1);
-  assert.equal(state.gitChangedFiles, 2);
+  assert.equal(state.gitChangedFiles, 1);
+  assert.equal(state.gitParentChangedFiles, 1);
   assert.equal(state.gitDirtyFiles, 1);
   assert.equal(state.gitRemoteMissing, true);
+});
+
+test("thread worker git state reports parent commits as behind", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-worker-git-behind-home-"));
+  const repo = await createTempGitRepo("orkestr-thread-worker-git-behind-repo-");
+  const env = { ORKESTR_HOME: home };
+  const parent = await createThread({ id: "git-behind-parent", name: "Git Behind Parent", cwd: repo }, env);
+  const result = await createThreadWorker(parent.id, { label: "Git Behind Worker", autoRun: false }, env);
+
+  await fs.writeFile(path.join(repo, "parent.txt"), "parent branch change\n", "utf8");
+  await execFileAsync("git", ["add", "parent.txt"], { cwd: repo });
+  await execFileAsync("git", ["commit", "-m", "parent change"], { cwd: repo });
+
+  const state = await detectThreadGitState(result.worker, env);
+
+  assert.equal(state.gitComparisonLabel, "parent");
+  assert.equal(state.gitAhead, 0);
+  assert.equal(state.gitBehind, 1);
+  assert.equal(state.gitParentAhead, 0);
+  assert.equal(state.gitParentBehind, 1);
+  assert.equal(state.gitParentChangedFiles, 1);
+  assert.equal(state.gitDirtyFiles, 0);
 });
 
 test("thread worker git state uses parent checkout when stored base commit is stale", async () => {
@@ -542,6 +573,8 @@ test("thread worker git state uses parent checkout when stored base commit is st
   const state = await detectThreadGitState({ ...result.worker, baseCommit: head }, env);
 
   assert.equal(state.gitComparisonLabel, "parent");
+  assert.equal(state.gitParentAhead, 1);
+  assert.equal(state.gitParentBehind, 0);
   assert.equal(state.gitBaseAhead, 1);
   assert.equal(state.gitChangedFiles, 1);
 });
@@ -560,6 +593,10 @@ test("thread worker git state clears base deviation after branch is merged", asy
   const state = await detectThreadGitState({ ...result.worker, baseBranch: result.worker.branchName }, env);
 
   assert.equal(state.gitComparisonLabel, "parent");
+  assert.equal(state.gitAhead, 0);
+  assert.equal(state.gitBehind, 1);
+  assert.equal(state.gitParentAhead, 0);
+  assert.equal(state.gitParentBehind, 1);
   assert.equal(state.gitBaseAhead, 0);
   assert.equal(state.gitChangedFiles, 0);
   assert.equal(state.gitDirtyFiles, 0);
@@ -612,6 +649,8 @@ test("thread summary cache refreshes git state when HEAD changes", async () => {
     const firstSummary = firstPayload.threads.find((thread) => thread.id === "summary-git-thread");
     assert.equal(firstSummary.gitAhead, 0);
     assert.equal(firstSummary.gitBehind, 0);
+    assert.equal(firstSummary.gitRemoteAhead, 0);
+    assert.equal(firstSummary.gitRemoteBehind, 0);
 
     await fs.writeFile(path.join(repo, "local.txt"), "local change\n", "utf8");
     await execFileAsync("git", ["add", "local.txt"], { cwd: repo });
@@ -621,6 +660,51 @@ test("thread summary cache refreshes git state when HEAD changes", async () => {
     const secondSummary = secondPayload.threads.find((thread) => thread.id === "summary-git-thread");
     assert.equal(secondSummary.gitAhead, 1);
     assert.equal(secondSummary.gitBehind, 0);
+    assert.equal(secondSummary.gitRemoteAhead, 1);
+    assert.equal(secondSummary.gitRemoteBehind, 0);
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+    if (priorHome === undefined) delete process.env.ORKESTR_HOME;
+    else process.env.ORKESTR_HOME = priorHome;
+    if (priorSummaryCacheTtl === undefined) delete process.env.ORKESTR_THREAD_SUMMARY_CACHE_TTL_MS;
+    else process.env.ORKESTR_THREAD_SUMMARY_CACHE_TTL_MS = priorSummaryCacheTtl;
+    if (priorPayloadCacheTtl === undefined) delete process.env.ORKESTR_THREAD_SUMMARY_PAYLOAD_CACHE_TTL_MS;
+    else process.env.ORKESTR_THREAD_SUMMARY_PAYLOAD_CACHE_TTL_MS = priorPayloadCacheTtl;
+  }
+});
+
+test("thread summary cache refreshes worker parent comparison when parent HEAD changes", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-summary-worker-git-home-"));
+  const repo = await createTempGitRepo("orkestr-thread-summary-worker-git-repo-");
+  const env = { ORKESTR_HOME: home };
+  const parent = await createThread({ id: "summary-worker-parent", name: "Summary Worker Parent", cwd: repo }, env);
+  const result = await createThreadWorker(parent.id, { label: "Summary Worker", autoRun: false }, env);
+
+  const priorHome = process.env.ORKESTR_HOME;
+  const priorSummaryCacheTtl = process.env.ORKESTR_THREAD_SUMMARY_CACHE_TTL_MS;
+  const priorPayloadCacheTtl = process.env.ORKESTR_THREAD_SUMMARY_PAYLOAD_CACHE_TTL_MS;
+  process.env.ORKESTR_HOME = home;
+  process.env.ORKESTR_THREAD_SUMMARY_CACHE_TTL_MS = "120000";
+  process.env.ORKESTR_THREAD_SUMMARY_PAYLOAD_CACHE_TTL_MS = "0";
+  const server = await startServer({ port: 0, host: "127.0.0.1" });
+  const { port } = server.address();
+  const baseUrl = `http://127.0.0.1:${port}`;
+  try {
+    const firstPayload = await fetch(`${baseUrl}/api/threads/summary`).then((response) => response.json());
+    const firstSummary = firstPayload.threads.find((thread) => thread.id === result.worker.id);
+    assert.equal(firstSummary.gitParentAhead, 0);
+    assert.equal(firstSummary.gitParentBehind, 0);
+
+    await fs.writeFile(path.join(repo, "parent-cache.txt"), "parent cache change\n", "utf8");
+    await execFileAsync("git", ["add", "parent-cache.txt"], { cwd: repo });
+    await execFileAsync("git", ["commit", "-m", "parent cache change"], { cwd: repo });
+
+    const secondPayload = await fetch(`${baseUrl}/api/threads/summary`).then((response) => response.json());
+    const secondSummary = secondPayload.threads.find((thread) => thread.id === result.worker.id);
+    assert.equal(secondSummary.gitParentAhead, 0);
+    assert.equal(secondSummary.gitParentBehind, 1);
+    assert.equal(secondSummary.gitAhead, 0);
+    assert.equal(secondSummary.gitBehind, 1);
   } finally {
     await new Promise((resolve) => server.close(resolve));
     if (priorHome === undefined) delete process.env.ORKESTR_HOME;
@@ -645,8 +729,12 @@ test("thread workers can be created as blank parallel chats", async () => {
   assert.equal(result.worker.workerLabel, "Blank Worker");
   assert.equal(result.worker.workerStatus, "created");
   assert.equal(result.worker.remoteBranch, `origin/${result.worker.branchName}`);
-  assert.equal(result.worker.gitAhead, null);
-  assert.equal(result.worker.gitBehind, null);
+  assert.equal(result.worker.gitAhead, 0);
+  assert.equal(result.worker.gitBehind, 0);
+  assert.equal(result.worker.gitParentAhead, 0);
+  assert.equal(result.worker.gitParentBehind, 0);
+  assert.equal(result.worker.gitRemoteAhead, null);
+  assert.equal(result.worker.gitRemoteBehind, null);
   assert.match(result.worker.handoffPrompt, /Role: worker thread\. You are not the parent\/root Orkestr thread/);
   assert.match(result.worker.handoffPrompt, /No task was supplied\. Wait for parent\/root instructions before making changes/);
   assert.equal(result.message, null);
@@ -677,6 +765,11 @@ test("thread input commands strip /now before runtime delivery", () => {
     command: "interrupt",
     rawCommand: "now",
     text: "run this immediately",
+  });
+  assert.deepEqual(parseThreadInputCommand({ text: "/now \nI want this handled immediately" }), {
+    command: "interrupt",
+    rawCommand: "now",
+    text: "I want this handled immediately",
   });
   assert.equal(parseThreadInputCommand({ text: "normal message" }).command, null);
 });

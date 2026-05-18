@@ -2298,6 +2298,22 @@ ork-first-thread-wizard.first-thread-host {
   align-items: end;
 }
 
+.composer-actions {
+  display: grid;
+  gap: 8px;
+  min-width: 108px;
+}
+
+.composer-actions button {
+  width: 100%;
+  min-height: 38px;
+}
+
+.send-now-button {
+  font-size: 12px;
+  padding: 0 10px;
+}
+
 .upload-button {
   min-width: 84px;
   padding: 0 12px;
@@ -2402,7 +2418,7 @@ ork-first-thread-wizard.first-thread-host {
     grid-template-columns: auto minmax(0, 1fr);
   }
 
-  .composer-row button[type="submit"] {
+  .composer-actions {
     grid-column: 1 / -1;
   }
 }

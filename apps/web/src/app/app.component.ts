@@ -87,6 +87,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   apiOnline = false;
   busy = false;
   sending = false;
+  sendingNow = false;
   threadWizardOpen = false;
   onboardingActive = false;
   setupPageMode: SetupPageMode = "setup";
@@ -534,7 +535,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
 
   async sendMessage(): Promise<void> {
     const thread = this.selectedThread();
-    if (!thread || this.sending) return;
+    if (!thread || this.sending || this.sendingNow) return;
     const originalText = this.draft.trim();
     if (!originalText && this.pendingFiles.length === 0) return;
     this.sending = true;
@@ -552,6 +553,29 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
       this.error = this.errorText(error);
     } finally {
       this.sending = false;
+    }
+  }
+
+  async sendMessageNow(): Promise<void> {
+    const thread = this.selectedThread();
+    if (!thread || this.sending || this.sendingNow) return;
+    const originalText = this.draft.trim();
+    if (!originalText && this.pendingFiles.length === 0) return;
+    this.sendingNow = true;
+    try {
+      const attachments = await uploadPendingFiles(this.api, thread.id, this.pendingFiles);
+      const text = messageWithAttachmentPaths(originalText, attachments);
+      this.markThreadActive(thread.id, 120_000);
+      await firstValueFrom(this.api.interruptThread(thread.id, text, attachments));
+      this.draft = "";
+      this.clearThreadTextField(thread, "draft");
+      this.pendingFiles = [];
+      this.queueMessagePaneScrollToBottom();
+      await this.refresh(false);
+    } catch (error) {
+      this.error = this.errorText(error);
+    } finally {
+      this.sendingNow = false;
     }
   }
 
@@ -1235,46 +1259,26 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
 
   threadGitDeltaLabel(thread: ThreadSummary | null): string {
     if (!thread) return "";
-    const baseAhead = this.threadNumberValue(thread, "gitBaseAhead");
-    const changedFiles = this.threadNumberValue(thread, "gitChangedFiles");
     const dirtyFiles = this.threadNumberValue(thread, "gitDirtyFiles");
-    const comparison = String(thread.gitComparisonLabel || this.objectValue(thread.runtime, "gitComparisonLabel") || "").trim();
-    const isWorkerParentComparison = Boolean(thread.parentThreadId && comparison === "parent");
-    const changeParts: string[] = [];
-    const localParts: string[] = [];
-    if (Number.isFinite(baseAhead) && baseAhead > 0) changeParts.push(`${baseAhead} commit${baseAhead === 1 ? "" : "s"}`);
-    if (Number.isFinite(changedFiles) && changedFiles > 0) changeParts.push(`${changedFiles} file${changedFiles === 1 ? "" : "s"}`);
-    if (Number.isFinite(dirtyFiles) && dirtyFiles > 0) localParts.push(`${dirtyFiles} file${dirtyFiles === 1 ? "" : "s"}`);
-    if (isWorkerParentComparison && changeParts.length) {
-      const localSuffix = localParts.length ? `, local edits: ${localParts.join(", ")}` : "";
-      return `pending worker changes: ${changeParts.join(", ")}${localSuffix}`;
+    const formatCount = (value: number) => Number.isFinite(value) ? value : 0;
+    const formatComparison = (target: string, ahead: number, behind: number, dirty: number, missing = false) => {
+      if (missing) return `vs ${target}: missing / dirty ${formatCount(dirty)}`;
+      return `vs ${target}: ahead ${formatCount(ahead)} / behind ${formatCount(behind)} / dirty ${formatCount(dirty)}`;
+    };
+    const remoteMissing = this.booleanThreadValue(thread, "gitRemoteMissing");
+    const remoteAhead = this.threadNumberValue(thread, "gitRemoteAhead");
+    const remoteBehind = this.threadNumberValue(thread, "gitRemoteBehind");
+    if (thread.parentThreadId) {
+      const parentAhead = this.threadNumberValue(thread, "gitParentAhead");
+      const parentBehind = this.threadNumberValue(thread, "gitParentBehind");
+      return [
+        formatComparison("parent", parentAhead, parentBehind, dirtyFiles),
+        formatComparison("remote", remoteAhead, remoteBehind, dirtyFiles, remoteMissing),
+      ].join(" · ");
     }
-    if (
-      Number.isFinite(baseAhead) &&
-      Number.isFinite(changedFiles) &&
-      Number.isFinite(dirtyFiles) &&
-      baseAhead === 0 &&
-      changedFiles === 0 &&
-      dirtyFiles === 0
-    ) {
-      return isWorkerParentComparison ? "no pending worker commits" : "";
-    }
-    const labels: string[] = [];
-    if (comparison && changeParts.length) {
-      labels.push(`changes vs ${comparison}: ${changeParts.join(", ")}`);
-    }
-    if (localParts.length) {
-      labels.push(`local edits: ${localParts.join(", ")}`);
-    }
-    const ahead = this.threadNumberValue(thread, "gitAhead");
-    const behind = this.threadNumberValue(thread, "gitBehind");
-    if (Number.isFinite(ahead) && Number.isFinite(behind) && (ahead > 0 || behind > 0)) {
-      const remoteParts: string[] = [];
-      if (ahead > 0) remoteParts.push(`ahead ${ahead}`);
-      if (behind > 0) remoteParts.push(`behind ${behind}`);
-      labels.push(`remote: ${remoteParts.join(", ")}`);
-    }
-    return labels.join(" · ");
+    const ahead = Number.isFinite(remoteAhead) ? remoteAhead : this.threadNumberValue(thread, "gitAhead");
+    const behind = Number.isFinite(remoteBehind) ? remoteBehind : this.threadNumberValue(thread, "gitBehind");
+    return formatComparison("remote", ahead, behind, dirtyFiles, remoteMissing);
   }
 
   threadMetaDirty(thread: ThreadSummary | null = this.selectedThread()): boolean {

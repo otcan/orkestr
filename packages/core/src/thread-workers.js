@@ -212,18 +212,34 @@ async function remoteTrackingBranch(repoPath, branchName) {
   return branchName ? `origin/${branchName}` : "";
 }
 
-async function gitAheadBehind(repoPath, remoteBranch) {
-  if (!remoteBranch) return { gitAhead: null, gitBehind: null };
-  const remoteExists = await refExists(repoPath, remoteBranch);
-  if (!remoteExists) return { gitAhead: null, gitBehind: null };
-  const counts = await git(repoPath, ["rev-list", "--left-right", "--count", `${remoteBranch}...HEAD`])
+async function aheadBehindAgainst(repoPath, ref) {
+  if (!ref) return { ahead: null, behind: null };
+  const exists = await refExists(repoPath, ref);
+  if (!exists) return { ahead: null, behind: null };
+  const counts = await git(repoPath, ["rev-list", "--left-right", "--count", `${ref}...HEAD`])
     .then((result) => result.stdout)
     .catch(() => "");
   const [behind, ahead] = counts.split(/\s+/).map((value) => Number(value));
   return {
-    gitAhead: Number.isFinite(ahead) ? ahead : null,
-    gitBehind: Number.isFinite(behind) ? behind : null,
+    ahead: Number.isFinite(ahead) ? ahead : null,
+    behind: Number.isFinite(behind) ? behind : null,
   };
+}
+
+async function gitAheadBehind(repoPath, remoteBranch) {
+  const counts = await aheadBehindAgainst(repoPath, remoteBranch);
+  return {
+    gitAhead: counts.ahead,
+    gitBehind: counts.behind,
+  };
+}
+
+async function changedFilesAgainst(repoPath, ref) {
+  if (!ref || !(await refExists(repoPath, ref))) return null;
+  const diff = await git(repoPath, ["diff", "--name-only", `${ref}..HEAD`])
+    .then((result) => result.stdout)
+    .catch(() => "");
+  return new Set(diff.split("\n").map(nonEmptyString).filter(Boolean)).size;
 }
 
 async function refExists(repoPath, ref) {
@@ -284,6 +300,27 @@ async function gitComparisonStats(repoPath, baseCommit, label) {
   };
 }
 
+async function parentAheadBehind(repoPath, thread, env = process.env) {
+  const parentId = nonEmptyString(thread?.parentThreadId);
+  if (!parentId) return null;
+  const parent = await getThread(parentId, env).catch(() => null);
+  const parentRepoPath = parent ? await resolveGitRoot(threadCheckoutPath(parent)).catch(() => null) : null;
+  const parentHead = parentRepoPath ? await headCommit(parentRepoPath) : "";
+  if (!parentHead) return null;
+  const counts = await aheadBehindAgainst(repoPath, parentHead);
+  const changedFiles = await changedFilesAgainst(repoPath, parentHead);
+  return {
+    gitParentHead: parentHead,
+    gitParentAhead: counts.ahead,
+    gitParentBehind: counts.behind,
+    gitParentChangedFiles: changedFiles,
+    gitComparisonBase: parentHead,
+    gitComparisonLabel: "parent",
+    gitBaseAhead: counts.ahead,
+    gitChangedFiles: changedFiles,
+  };
+}
+
 async function parentThreadComparison(repoPath, thread, env = process.env) {
   const parentId = nonEmptyString(thread?.parentThreadId);
   if (!parentId) return null;
@@ -300,6 +337,10 @@ function emptyGitComparison() {
     gitComparisonLabel: null,
     gitBaseAhead: null,
     gitChangedFiles: null,
+    gitParentHead: null,
+    gitParentAhead: null,
+    gitParentBehind: null,
+    gitParentChangedFiles: null,
   };
 }
 
@@ -312,7 +353,8 @@ async function gitBaseComparison(repoPath, thread, branchName, env = process.env
   ].map(nonEmptyString).filter(Boolean))];
   const isWorker = Boolean(nonEmptyString(thread?.parentThreadId));
   if (isWorker) {
-    return await parentThreadComparison(repoPath, thread, env) ||
+    return await parentAheadBehind(repoPath, thread, env) ||
+      await parentThreadComparison(repoPath, thread, env) ||
       await gitComparisonStats(repoPath, explicitBaseCommit, "base") ||
       emptyGitComparison();
   }
@@ -363,9 +405,15 @@ export async function detectThreadGitState(threadOrId, env = process.env) {
   const remoteBranch = await remoteTrackingBranch(repoPath, branchName);
   const remoteExists = await refExists(repoPath, remoteBranch);
   const aheadBehind = await gitAheadBehind(repoPath, remoteBranch);
+  const remoteChangedFiles = await changedFilesAgainst(repoPath, remoteBranch);
   const sourceDirty = await worktreeDirty(repoPath);
   const gitDirtyFiles = await worktreeDirtyFiles(repoPath);
   const comparison = await gitBaseComparison(repoPath, thread, branchName, env);
+  const isWorker = Boolean(nonEmptyString(thread?.parentThreadId));
+  const gitRemoteAhead = aheadBehind.gitAhead;
+  const gitRemoteBehind = aheadBehind.gitBehind;
+  const gitAhead = isWorker && Number.isFinite(comparison.gitParentAhead) ? comparison.gitParentAhead : gitRemoteAhead;
+  const gitBehind = isWorker && Number.isFinite(comparison.gitParentBehind) ? comparison.gitParentBehind : gitRemoteBehind;
   return {
     repoPath,
     repoRemoteUrl: remoteUrl || null,
@@ -374,9 +422,13 @@ export async function detectThreadGitState(threadOrId, env = process.env) {
     sourceDirty,
     gitDirtyFiles,
     ...comparison,
+    gitAhead,
+    gitBehind,
+    gitRemoteAhead,
+    gitRemoteBehind,
+    gitRemoteChangedFiles: remoteChangedFiles,
     gitRemoteBranchExists: remoteExists,
     gitRemoteMissing: Boolean(remoteBranch && !remoteExists),
-    ...aheadBehind,
   };
 }
 
@@ -391,6 +443,7 @@ export async function detectThreadRepo(threadId, env = process.env) {
   const remoteUrl = await repoRemoteUrl(repoPath);
   const remoteBranch = await remoteTrackingBranch(repoPath, branchName);
   const aheadBehind = await gitAheadBehind(repoPath, remoteBranch);
+  const remoteChangedFiles = await changedFilesAgainst(repoPath, remoteBranch);
   const remoteExists = await refExists(repoPath, remoteBranch);
   return {
     repoPath,
@@ -403,6 +456,9 @@ export async function detectThreadRepo(threadId, env = process.env) {
     gitDirtyFiles,
     gitBaseAhead: 0,
     gitChangedFiles: gitDirtyFiles,
+    gitRemoteAhead: aheadBehind.gitAhead,
+    gitRemoteBehind: aheadBehind.gitBehind,
+    gitRemoteChangedFiles: remoteChangedFiles,
     gitRemoteBranchExists: remoteExists,
     gitRemoteMissing: Boolean(remoteBranch && !remoteExists),
     ...aheadBehind,
@@ -421,6 +477,9 @@ export async function updateThreadRepo(threadId, input = {}, env = process.env) 
   let sourceDirty = Boolean(input.sourceDirty);
   let gitAhead = optionalNumber(input.gitAhead);
   let gitBehind = optionalNumber(input.gitBehind);
+  let gitRemoteAhead = optionalNumber(input.gitRemoteAhead);
+  let gitRemoteBehind = optionalNumber(input.gitRemoteBehind);
+  let gitRemoteChangedFiles = optionalNumber(input.gitRemoteChangedFiles);
 
   if (shouldDetect && !repoPath) {
     const detected = await detectThreadRepo(thread.id, env);
@@ -432,6 +491,9 @@ export async function updateThreadRepo(threadId, input = {}, env = process.env) 
     sourceDirty = detected.sourceDirty;
     gitAhead ??= detected.gitAhead;
     gitBehind ??= detected.gitBehind;
+    gitRemoteAhead ??= detected.gitRemoteAhead;
+    gitRemoteBehind ??= detected.gitRemoteBehind;
+    gitRemoteChangedFiles ??= detected.gitRemoteChangedFiles;
   }
 
   if (repoPath) {
@@ -444,6 +506,9 @@ export async function updateThreadRepo(threadId, input = {}, env = process.env) 
     const aheadBehind = await gitAheadBehind(repoPath, remoteBranch);
     gitAhead = aheadBehind.gitAhead;
     gitBehind = aheadBehind.gitBehind;
+    gitRemoteAhead = aheadBehind.gitAhead;
+    gitRemoteBehind = aheadBehind.gitBehind;
+    gitRemoteChangedFiles = await changedFilesAgainst(repoPath, remoteBranch);
     baseCommit ||= await git(repoPath, ["rev-parse", "HEAD"]).then((result) => result.stdout).catch(() => "");
     sourceDirty = await worktreeDirty(repoPath);
   } else if (!branchName && !remoteUrl && !remoteBranch) {
@@ -459,6 +524,9 @@ export async function updateThreadRepo(threadId, input = {}, env = process.env) 
     baseCommit: baseCommit || null,
     gitAhead,
     gitBehind,
+    gitRemoteAhead,
+    gitRemoteBehind,
+    gitRemoteChangedFiles,
     sourceDirty,
   };
   const updated = await updateThread(thread.id, patch, env);
@@ -571,7 +639,20 @@ export async function createThreadWorker(parentThreadId, input = {}, env = proce
     await git(repoPath, ["worktree", "add", "-b", branchName, worktreePath, baseCommit]);
     worktreeCreated = true;
     const remoteBranch = nonEmptyString(input.remoteBranch || input.gitRemoteBranch || input.upstreamBranch) || await remoteTrackingBranch(worktreePath, branchName);
-    const aheadBehind = await gitAheadBehind(worktreePath, remoteBranch);
+    const remoteAheadBehind = await gitAheadBehind(worktreePath, remoteBranch);
+    const workerGitState = {
+      gitAhead: 0,
+      gitBehind: 0,
+      gitBaseAhead: 0,
+      gitChangedFiles: 0,
+      gitParentHead: baseCommit,
+      gitParentAhead: 0,
+      gitParentBehind: 0,
+      gitParentChangedFiles: 0,
+      gitRemoteAhead: remoteAheadBehind.gitAhead,
+      gitRemoteBehind: remoteAheadBehind.gitBehind,
+      gitRemoteChangedFiles: await changedFilesAgainst(worktreePath, remoteBranch),
+    };
     const workerIndex = await workerIndexFor(parent.id, env);
     const workerLabel = nonEmptyString(input.label || input.name || input.workerLabel) || `Worker ${workerIndex}`;
     const rootId = rootThreadId(parent);
@@ -586,7 +667,7 @@ export async function createThreadWorker(parentThreadId, input = {}, env = proce
       baseBranch,
       branchName,
       baseCommit,
-      ...aheadBehind,
+      ...workerGitState,
       worktreePath,
       sourceDirty,
       forkedFromCodexThreadId: codexThreadId(parent) || null,
@@ -619,7 +700,7 @@ export async function createThreadWorker(parentThreadId, input = {}, env = proce
       baseBranch,
       branchName,
       baseCommit,
-      ...aheadBehind,
+      ...workerGitState,
       worktreePath,
       sourceDirty,
       forkedFromCodexThreadId: codexThreadId(parent) || null,
@@ -650,7 +731,7 @@ export async function createThreadWorker(parentThreadId, input = {}, env = proce
       repoPath,
       sourceDirty,
     }, env);
-    return { parent, worker: updatedWorker, message, repoPath, worktreePath, branchName, remoteBranch, baseBranch, baseCommit, sourceDirty, ...aheadBehind };
+    return { parent, worker: updatedWorker, message, repoPath, worktreePath, branchName, remoteBranch, baseBranch, baseCommit, sourceDirty, ...workerGitState };
   } catch (error) {
     if (worktreeCreated) {
       await git(repoPath, ["worktree", "remove", "--force", worktreePath]).catch(() => {});

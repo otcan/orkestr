@@ -891,7 +891,18 @@
               (keydown)="handleComposerKeydown($event)"
               placeholder="Message {{ threadTitle(thread) }}"
             ></textarea>
-            <button type="submit" [disabled]="sending || (!draft.trim() && pendingFiles.length === 0)">{{ sending ? "Sending" : "Send" }}</button>
+            <div class="composer-actions">
+              <button type="submit" [disabled]="sending || sendingNow || (!draft.trim() && pendingFiles.length === 0)">{{ sending ? "Sending" : "Send" }}</button>
+              <button
+                class="secondary send-now-button"
+                type="button"
+                title="Interrupt the current run and send this message immediately"
+                (click)="sendMessageNow()"
+                [disabled]="sending || sendingNow || (!draft.trim() && pendingFiles.length === 0)"
+              >
+                {{ sendingNow ? "Sending now" : "Send Now" }}
+              </button>
+            </div>
           </div>
         </form>
       }

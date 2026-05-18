@@ -1,7 +1,7 @@
 import { readFile, stat } from "node:fs/promises";
 import path from "node:path";
 import { resolveCodexThreadMetadata, runtimeStatus } from "../../../packages/core/src/runtime-leases.js";
-import { listThreadMessages, listThreads } from "../../../packages/core/src/threads.js";
+import { getThread, listThreadMessages, listThreads } from "../../../packages/core/src/threads.js";
 import { detectThreadGitState } from "../../../packages/core/src/thread-workers.js";
 
 type ThreadSummaryOptions = {
@@ -181,7 +181,7 @@ async function gitFileToken(filePath: string, includeContents = false): Promise<
   return `${filePath}:${fileStat.mtimeMs}:${fileStat.size}:${contents}`;
 }
 
-async function threadGitCacheFingerprint(thread: any, status: any): Promise<string> {
+async function ownThreadGitCacheFingerprint(thread: any, status: any): Promise<string> {
   const checkoutPath = threadCheckoutPath(thread, status);
   const dirs = await gitDirs(checkoutPath);
   if (!dirs) return "";
@@ -208,6 +208,14 @@ async function threadGitCacheFingerprint(thread: any, status: any): Promise<stri
     headText,
     tokens: tokens.filter(Boolean),
   });
+}
+
+async function threadGitCacheFingerprint(thread: any, status: any): Promise<string> {
+  const own = await ownThreadGitCacheFingerprint(thread, status);
+  const parentId = nonEmptyString(thread?.parentThreadId);
+  const parent = parentId ? await getThread(parentId).catch(() => null) : null;
+  const parentFingerprint = parent ? await ownThreadGitCacheFingerprint(parent, null).catch(() => "") : "";
+  return JSON.stringify({ own, parent: parentFingerprint });
 }
 
 function threadMetadataCacheKey(thread: any, status: any, gitFingerprint = ""): string {

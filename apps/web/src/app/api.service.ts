@@ -266,6 +266,12 @@ export interface ThreadSummary {
   gitBehind?: number | null;
   gitBaseAhead?: number | null;
   gitChangedFiles?: number | null;
+  gitParentAhead?: number | null;
+  gitParentBehind?: number | null;
+  gitParentChangedFiles?: number | null;
+  gitRemoteAhead?: number | null;
+  gitRemoteBehind?: number | null;
+  gitRemoteChangedFiles?: number | null;
   gitDirtyFiles?: number | null;
   gitComparisonBase?: string | null;
   gitComparisonLabel?: string | null;
@@ -387,6 +393,12 @@ export interface ThreadWorkerResponse {
   gitBehind?: number | null;
   gitBaseAhead?: number | null;
   gitChangedFiles?: number | null;
+  gitParentAhead?: number | null;
+  gitParentBehind?: number | null;
+  gitParentChangedFiles?: number | null;
+  gitRemoteAhead?: number | null;
+  gitRemoteBehind?: number | null;
+  gitRemoteChangedFiles?: number | null;
   gitDirtyFiles?: number | null;
   gitComparisonBase?: string | null;
   gitComparisonLabel?: string | null;
@@ -408,6 +420,12 @@ export interface ThreadRepoResponse {
     gitBehind?: number | null;
     gitBaseAhead?: number | null;
     gitChangedFiles?: number | null;
+    gitParentAhead?: number | null;
+    gitParentBehind?: number | null;
+    gitParentChangedFiles?: number | null;
+    gitRemoteAhead?: number | null;
+    gitRemoteBehind?: number | null;
+    gitRemoteChangedFiles?: number | null;
     gitDirtyFiles?: number | null;
     gitComparisonBase?: string | null;
     gitComparisonLabel?: string | null;
@@ -677,7 +695,7 @@ export class ApiService {
   }
 
   sendThreadInput(id: string, text: string, attachments: Array<Record<string, unknown>> = []): Observable<unknown> {
-    const body: Record<string, unknown> = { text };
+    const body: Record<string, unknown> = { text, parseCommands: true, controlAllowed: true };
     if (attachments.length) body["attachments"] = attachments;
     return this.http.post(this.api(`/threads/${encodeURIComponent(id)}/input`), body);
   }
@@ -698,8 +716,10 @@ export class ApiService {
     return this.http.post(this.api(`/threads/${encodeURIComponent(id)}/recover`), {});
   }
 
-  interruptThread(id: string, text = ""): Observable<unknown> {
-    return this.http.post(this.api(`/threads/${encodeURIComponent(id)}/interrupt`), { text });
+  interruptThread(id: string, text = "", attachments: Array<Record<string, unknown>> = []): Observable<unknown> {
+    const body: Record<string, unknown> = { text };
+    if (attachments.length) body["attachments"] = attachments;
+    return this.http.post(this.api(`/threads/${encodeURIComponent(id)}/interrupt`), body);
   }
 
   approveThread(id: string, text = "Approved. Proceed."): Observable<unknown> {
