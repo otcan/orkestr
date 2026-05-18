@@ -40,11 +40,13 @@ function hasReadySignal(payload) {
 }
 
 function configuredBridgeUrl(config = {}, env = process.env) {
+  if (bridgeMode(config, env) !== "external") return "";
   return String(env.WHATSAPP_BRIDGE_URL || config.bridgeUrl || "").trim().replace(/\/+$/, "");
 }
 
 function bridgeMode(config = {}, env = process.env) {
-  return String(env.WHATSAPP_BRIDGE_MODE || config.bridgeMode || "local").trim() || "local";
+  const mode = String(env.WHATSAPP_BRIDGE_MODE || config.bridgeMode || "local").trim().toLowerCase();
+  return mode === "external" ? "external" : "local";
 }
 
 function firstAccountError(accounts = []) {
@@ -205,6 +207,9 @@ function routeAgentId(input, config) {
 
 async function routeThread(input, config, env) {
   const chatId = pickString(input.chatId, input.chat?.id, input.fromChatId);
+  const accountId = pickString(input.accountId);
+  const from = pickString(input.from, input.sender, input.author);
+  const fromMe = input.fromMe === true || input.from_me === true || String(input.fromMe || input.from_me || "").toLowerCase() === "true";
   const routes = config.threadRoutes || config.threads || {};
   const explicit = pickString(
     input.threadId,
@@ -217,6 +222,13 @@ async function routeThread(input, config, env) {
   const threads = await listThreads(env);
   const thread = threads.find((item) => {
     const binding = item?.binding || {};
+    const senderAccountId = pickString(binding.senderAccountId, binding.inboundAccountId);
+    const responderContactId = pickString(binding.responderContactId);
+    if (senderAccountId) {
+      if (accountId && accountId !== senderAccountId) return false;
+      if (!fromMe && binding.allowOtherPeople === false) return false;
+      if (responderContactId && from && from === responderContactId) return false;
+    }
     return binding.enabled !== false &&
       String(binding.connector || "whatsapp") === "whatsapp" &&
       String(binding.chatId || "").trim() === chatId;
@@ -412,7 +424,9 @@ async function deliverWhatsAppRepliesOnce(env = process.env, fetchImpl = fetch) 
 
       const chatId = pickString(message.chatId, parent?.chatId);
       const text = pickString(message.text);
-      const accountId = pickString(message.accountId, parent?.accountId);
+      const accountId = kind === "thread"
+        ? pickString(thread?.binding?.responderAccountId, thread?.binding?.outboundAccountId, message.accountId, parent?.accountId)
+        : pickString(message.accountId, parent?.accountId);
       if (!chatId || !text) {
         skipped.push({ agentId, messageId: message.id, reason: !chatId ? "missing_chat_id" : "missing_text" });
         continue;

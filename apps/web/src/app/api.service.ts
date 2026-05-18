@@ -322,7 +322,13 @@ export interface ThreadSummary {
     enabled?: boolean;
     allowOtherPeople?: boolean;
     mirrorToWhatsApp?: boolean;
+    senderAccountId?: string | null;
+    inboundAccountId?: string | null;
+    responderAccountId?: string | null;
     outboundAccountId?: string | null;
+    senderContactId?: string | null;
+    responderContactId?: string | null;
+    generated?: boolean;
     replyPrefix?: string;
   } | null;
   runtime?: Record<string, unknown> | null;
@@ -492,6 +498,30 @@ export interface WhatsAppChatsResponse {
   chats: WhatsAppChat[];
 }
 
+export interface WhatsAppChatCreateResponse {
+  ok: boolean;
+  chat: WhatsAppChat;
+  senderAccountId?: string;
+  responderAccountId?: string;
+  senderContactId?: string;
+  responderContactId?: string;
+}
+
+export interface WhatsAppParticipant {
+  id: string;
+  name?: string;
+  isAdmin?: boolean;
+  isSuperAdmin?: boolean;
+  [key: string]: unknown;
+}
+
+export interface WhatsAppParticipantsResponse {
+  accountId: string;
+  chatId: string;
+  ready?: boolean;
+  participants: WhatsAppParticipant[];
+}
+
 @Injectable({ providedIn: "root" })
 export class ApiService {
   private readonly http = inject(HttpClient);
@@ -583,6 +613,16 @@ export class ApiService {
   whatsappBridgeChats(accountId: string): Observable<WhatsAppChatsResponse> {
     return this.http.get<WhatsAppChatsResponse>(
       this.api(`/connectors/whatsapp/bridge/accounts/${encodeURIComponent(accountId)}/chats`),
+    );
+  }
+
+  createWhatsAppBridgeChat(body: Record<string, unknown>): Observable<WhatsAppChatCreateResponse> {
+    return this.http.post<WhatsAppChatCreateResponse>(this.api("/connectors/whatsapp/bridge/chats"), body);
+  }
+
+  whatsappBridgeChatParticipants(accountId: string, chatId: string): Observable<WhatsAppParticipantsResponse> {
+    return this.http.get<WhatsAppParticipantsResponse>(
+      this.api(`/connectors/whatsapp/bridge/accounts/${encodeURIComponent(accountId)}/chats/${encodeURIComponent(chatId)}/participants`),
     );
   }
 

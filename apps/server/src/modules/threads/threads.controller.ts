@@ -656,6 +656,11 @@ export class ThreadsController {
       allowOtherPeople: optionalBodyBoolean(body, "allowOtherPeople", current.allowOtherPeople !== false),
       mirrorToWhatsApp: optionalBodyBoolean(body, "mirrorToWhatsApp", current.mirrorToWhatsApp !== false),
       replyPrefix: optionalBodyString(body, "replyPrefix", current.replyPrefix || "otcanclaw:") || "otcanclaw:",
+      senderAccountId: optionalBodyString(body, "senderAccountId", current.senderAccountId || "") || null,
+      responderAccountId: optionalBodyString(body, "responderAccountId", current.responderAccountId || current.outboundAccountId || "") || null,
+      senderContactId: optionalBodyString(body, "senderContactId", current.senderContactId || "") || null,
+      responderContactId: optionalBodyString(body, "responderContactId", current.responderContactId || "") || null,
+      generated: optionalBodyBoolean(body, "generated", current.generated === true),
       outboundAccountId: optionalBodyString(body, "outboundAccountId", current.outboundAccountId || "") || null,
       updatedAt: new Date().toISOString(),
     };

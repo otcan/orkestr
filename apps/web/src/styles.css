@@ -1868,6 +1868,36 @@ ork-first-thread-wizard.first-thread-host {
   gap: 8px;
 }
 
+.wa-danger-copy {
+  margin: 0;
+  border: 1px solid rgba(255, 78, 78, 0.55);
+  border-radius: 8px;
+  background: rgba(91, 7, 7, 0.66);
+  color: #ffd7d0;
+  padding: 10px 12px;
+  font-size: 0.84rem;
+  font-weight: 800;
+  line-height: 1.45;
+}
+
+.wa-participant-list {
+  display: grid;
+  gap: 6px;
+}
+
+.wa-participant-list span {
+  overflow: hidden;
+  border: 1px solid rgba(104, 172, 219, 0.12);
+  border-radius: 8px;
+  background: rgba(3, 9, 12, 0.38);
+  color: #d9fbd8;
+  padding: 8px 10px;
+  font-family: "IBM Plex Mono", "JetBrains Mono", "SFMono-Regular", Consolas, monospace;
+  font-size: 0.78rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .settings-advanced {
   display: grid;
   gap: 10px;

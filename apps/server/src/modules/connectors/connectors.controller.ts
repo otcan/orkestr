@@ -13,8 +13,10 @@ import {
 } from "../../../../../packages/connectors/src/whatsapp.js";
 import { startCodexDeviceAuth } from "../../../../../packages/connectors/src/codex.js";
 import {
+  createLocalWhatsAppChat,
   getLocalWhatsAppBridgeStatus,
   getLocalWhatsAppQrSvg,
+  listLocalWhatsAppChatParticipants,
   listLocalWhatsAppChats,
   logoutLocalWhatsAppAccount,
   sendLocalWhatsAppText,
@@ -77,6 +79,21 @@ export class ConnectorsController {
   @Get("whatsapp/bridge/accounts/:accountId/chats")
   async whatsappBridgeAccountChats(@Param("accountId") accountId: string) {
     return listLocalWhatsAppChats(accountId);
+  }
+
+  @Post("whatsapp/bridge/chats")
+  @HttpCode(200)
+  async whatsappBridgeCreateChat(@Body() body: Record<string, unknown> = {}) {
+    return createLocalWhatsAppChat({
+      name: String(body.name || body.displayName || ""),
+      senderAccountId: String(body.senderAccountId || ""),
+      responderAccountId: String(body.responderAccountId || body.outboundAccountId || ""),
+    });
+  }
+
+  @Get("whatsapp/bridge/accounts/:accountId/chats/:chatId/participants")
+  async whatsappBridgeChatParticipants(@Param("accountId") accountId: string, @Param("chatId") chatId: string) {
+    return listLocalWhatsAppChatParticipants({ accountId, chatId });
   }
 
   @Get("whatsapp/bridge/qr.svg")

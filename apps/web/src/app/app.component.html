@@ -696,7 +696,7 @@
               <div class="panel-title compact-title">
                 <div>
                   <p class="eyebrow">WhatsApp</p>
-                  <h3>Connected chat</h3>
+                  <h3>{{ whatsappChatConnected(thread) ? "Connected WhatsApp chat" : "Create WhatsApp chat" }}</h3>
                 </div>
                 <button class="secondary" type="button" (click)="refreshWhatsAppSettings()" [disabled]="busy || whatsappChatsLoading">
                   {{ whatsappChatsLoading ? "Loading" : "Refresh" }}
@@ -705,7 +705,12 @@
 
               <div class="wa-summary-strip" aria-label="WhatsApp connection summary">
                 <div>
-                  <span>Account</span>
+                  <span>Sender</span>
+                  <strong>{{ selectedWhatsAppSenderAccountLabel() }}</strong>
+                  <small>{{ selectedWhatsAppSenderAccountStateLabel() }}</small>
+                </div>
+                <div>
+                  <span>Responder</span>
                   <strong>{{ selectedWhatsAppAccountLabel() }}</strong>
                   <small>{{ selectedWhatsAppAccountStateLabel() }}</small>
                 </div>
@@ -714,123 +719,163 @@
                   <strong>{{ whatsappChatLabel(thread) }}</strong>
                   <small>{{ thread.binding?.chatId || "No chat id saved" }}</small>
                 </div>
-                <div>
-                  <span>Delivery</span>
-                  <strong>{{ whatsappDeliveryLabel(thread) }}</strong>
-                  <small>{{ whatsappPeopleLabel(thread) }}</small>
-                </div>
               </div>
 
-              <div class="wa-flow">
-                <section class="wa-flow-section">
-                  <div class="wa-section-head">
-                    <span class="wa-step">1</span>
-                    <div>
-                      <h4>Account</h4>
-                      <small>{{ whatsappStatusDetails?.summary || "WhatsApp status not loaded" }}</small>
+              @if (whatsappChatConnected(thread)) {
+                <div class="wa-flow">
+                  <section class="wa-flow-section">
+                    <div class="wa-section-head">
+                      <span class="wa-step">1</span>
+                      <div>
+                        <h4>Connected chat</h4>
+                        <small>{{ whatsappChatDetail(thread) }}</small>
+                      </div>
                     </div>
-                  </div>
-                  <label class="settings-field">
-                    <span>WhatsApp account</span>
-                    <select
-                      name="thread-wa-account-select-{{ thread.id }}"
-                      [ngModel]="selectedWhatsAppAccountId()"
-                      (ngModelChange)="changeWhatsAppAccount($event)"
-                    >
-                      @for (account of whatsappAccounts(); track whatsappAccountId(account)) {
-                        <option [value]="whatsappAccountId(account)">
-                          {{ whatsappAccountLabel(account) }} - {{ whatsappAccountState(account) || "idle" }}
-                        </option>
-                      } @empty {
-                        <option value="account-1">WhatsApp 1 - local</option>
-                      }
-                    </select>
-                  </label>
-                  <div class="settings-actions compact-actions">
-                    <button type="button" (click)="startSelectedWhatsAppAccount()" [disabled]="busy || !canLoadLocalWhatsAppChats()">
-                      Connect WhatsApp
-                    </button>
-                    <button class="secondary" type="button" (click)="logoutSelectedWhatsAppAccount()" [disabled]="busy || !canLoadLocalWhatsAppChats()">
-                      Disconnect
-                    </button>
-                    @if (whatsappAccountQrUrl()) {
-                      <a class="button secondary" [href]="whatsappAccountQrUrl()" target="_blank" rel="noreferrer">Open QR</a>
-                    }
-                  </div>
-                </section>
+                    <div class="settings-facts">
+                      <span>Chat name</span>
+                      <strong>{{ whatsappDisplayName || whatsappChatLabel(thread) }}</strong>
+                      <span>Chat id</span>
+                      <strong>{{ whatsappChatId || thread.binding?.chatId }}</strong>
+                      <span>Sender account</span>
+                      <strong>{{ selectedWhatsAppSenderAccountLabel() }}</strong>
+                      <span>Orkestr account</span>
+                      <strong>{{ selectedWhatsAppAccountLabel() }}</strong>
+                    </div>
+                  </section>
 
-                <section class="wa-flow-section">
-                  <div class="wa-section-head">
-                    <span class="wa-step">2</span>
-                    <div>
-                      <h4>Chat</h4>
-                      <small>{{ whatsappChatDetail(thread) }}</small>
+                  <section class="wa-flow-section">
+                    <div class="wa-section-head">
+                      <span class="wa-step">2</span>
+                      <div>
+                        <h4>People who can message Orkestr</h4>
+                        <small>{{ whatsappPeopleLabel(thread) }}</small>
+                      </div>
                     </div>
-                  </div>
-                  <label class="settings-field">
-                    <span>Known chats</span>
-                    <select
-                      name="thread-wa-chat-select-{{ thread.id }}"
-                      [ngModel]="whatsappChatId"
-                      (ngModelChange)="selectWhatsAppChat($event)"
-                      [disabled]="whatsappChatsLoading || whatsappChats.length === 0"
-                    >
-                      <option value="">Select a paired WhatsApp chat</option>
-                      @for (chat of whatsappChats; track chat.id) {
-                        <option [value]="chat.id">{{ whatsappChatLabelFor(chat) }}</option>
-                      }
-                    </select>
-                  </label>
-                  <label class="settings-field">
-                    <span>Display name</span>
-                    <input name="thread-wa-name-{{ thread.id }}" [(ngModel)]="whatsappDisplayName" placeholder="WhatsApp chat name" />
-                  </label>
-                  <label class="settings-field">
-                    <span>External or unlisted chat id</span>
-                    <input name="thread-wa-chat-{{ thread.id }}" [(ngModel)]="whatsappChatId" placeholder="12025550123@c.us or group@g.us" />
-                  </label>
-                </section>
-
-                <section class="wa-flow-section">
-                  <div class="wa-section-head">
-                    <span class="wa-step">3</span>
-                    <div>
-                      <h4>Delivery</h4>
-                      <small>{{ whatsappDeliveryLabel(thread) }}</small>
-                    </div>
-                  </div>
-                  <div class="wa-toggle-group">
-                    <label class="checkbox-row settings-toggle">
-                      <input name="thread-wa-enabled-{{ thread.id }}" type="checkbox" [(ngModel)]="whatsappBindingEnabled" />
-                      <span>Inbound messages</span>
-                    </label>
+                    <p class="wa-danger-copy">
+                      High risk: anyone enabled here can send instructions to Orkestr through WhatsApp. They may expose private messages, connected accounts, files, browser sessions, or financial information. Only enable this for people you fully trust.
+                    </p>
                     <label class="checkbox-row settings-toggle">
                       <input name="thread-wa-others-{{ thread.id }}" type="checkbox" [(ngModel)]="whatsappAllowOtherPeople" />
-                      <span>Other people allowed</span>
+                      <span>Allow another person in this WhatsApp chat to send instructions</span>
                     </label>
-                    <label class="checkbox-row settings-toggle">
-                      <input name="thread-wa-mirror-{{ thread.id }}" type="checkbox" [(ngModel)]="whatsappMirrorToWhatsApp" />
-                      <span>Mirror replies to WA</span>
-                    </label>
-                  </div>
-                  <details class="settings-advanced">
-                    <summary>Advanced WhatsApp options</summary>
+                    <div class="settings-facts">
+                      <span>Allowed sender</span>
+                      <strong>{{ selectedWhatsAppSenderAccountLabel() }}</strong>
+                      <span>Participants</span>
+                      <strong>{{ whatsappParticipantsLoading ? "Checking" : (whatsappParticipants.length || "Unavailable") }}</strong>
+                    </div>
+                    @if (whatsappParticipants.length > 0) {
+                      <div class="wa-participant-list">
+                        @for (participant of whatsappParticipants; track participant.id) {
+                          <span>{{ whatsappParticipantLabel(participant) }}</span>
+                        }
+                      </div>
+                    } @else if (!whatsappParticipantsLoading) {
+                      <p class="helper">Participant list is unavailable until the selected WhatsApp account is connected and the chat can be inspected.</p>
+                    }
+                    <div class="settings-actions">
+                      <button type="button" (click)="saveThreadBinding(thread)" [disabled]="busy || savingThreadBinding || !threadBindingDirty(thread)">
+                        {{ savingThreadBinding ? "Saving" : "Save access" }}
+                      </button>
+                      <button class="secondary danger-soft" type="button" (click)="detachWhatsAppChat(thread)" [disabled]="busy || detachingWhatsAppChat">
+                        {{ detachingWhatsAppChat ? "Detaching" : "Detach chat" }}
+                      </button>
+                    </div>
+                  </section>
+                </div>
+              } @else {
+                <div class="wa-flow">
+                  <section class="wa-flow-section">
+                    <div class="wa-section-head">
+                      <span class="wa-step">1</span>
+                      <div>
+                        <h4>Sender account</h4>
+                        <small>Select the WhatsApp account whose messages Orkestr should listen to.</small>
+                      </div>
+                    </div>
                     <label class="settings-field">
-                      <span>Reply prefix</span>
-                      <input name="thread-wa-prefix-{{ thread.id }}" [(ngModel)]="whatsappReplyPrefix" placeholder="otcanclaw:" />
+                      <span>Listen to</span>
+                      <select
+                        name="thread-wa-sender-account-select-{{ thread.id }}"
+                        [ngModel]="selectedWhatsAppSenderAccountId()"
+                        (ngModelChange)="changeWhatsAppSenderAccount($event)"
+                      >
+                        @for (account of whatsappAccounts(); track whatsappAccountId(account)) {
+                          <option [value]="whatsappAccountId(account)">
+                            {{ whatsappAccountLabel(account) }} - {{ whatsappAccountState(account) || "idle" }}
+                          </option>
+                        } @empty {
+                          <option value="account-1">WhatsApp 1 - local</option>
+                        }
+                      </select>
                     </label>
+                    <div class="settings-actions compact-actions">
+                      <button type="button" (click)="startWhatsAppAccount(selectedWhatsAppSenderAccountId())" [disabled]="busy || !canLoadLocalWhatsAppChats(selectedWhatsAppSenderAccountId())">
+                        Connect sender
+                      </button>
+                      <button class="secondary" type="button" (click)="logoutWhatsAppAccount(selectedWhatsAppSenderAccountId())" [disabled]="busy || !canLoadLocalWhatsAppChats(selectedWhatsAppSenderAccountId())">
+                        Disconnect sender
+                      </button>
+                    </div>
+                  </section>
+
+                  <section class="wa-flow-section">
+                    <div class="wa-section-head">
+                      <span class="wa-step">2</span>
+                      <div>
+                        <h4>Orkestr account</h4>
+                        <small>Select the WhatsApp account Orkestr should use to answer. If only one account is connected, use the same account.</small>
+                      </div>
+                    </div>
                     <label class="settings-field">
-                      <span>External account id</span>
-                      <input name="thread-wa-account-{{ thread.id }}" [(ngModel)]="whatsappOutboundAccountId" placeholder="optional external or bridge account id" />
+                      <span>Answer as</span>
+                      <select
+                        name="thread-wa-account-select-{{ thread.id }}"
+                        [ngModel]="selectedWhatsAppAccountId()"
+                        (ngModelChange)="changeWhatsAppAccount($event)"
+                      >
+                        @for (account of whatsappAccounts(); track whatsappAccountId(account)) {
+                          <option [value]="whatsappAccountId(account)">
+                            {{ whatsappAccountLabel(account) }} - {{ whatsappAccountState(account) || "idle" }}
+                          </option>
+                        } @empty {
+                          <option value="account-1">WhatsApp 1 - local</option>
+                        }
+                      </select>
                     </label>
-                  </details>
-                  <div class="settings-actions">
-                    <button type="button" (click)="saveThreadBinding(thread)" [disabled]="busy || savingThreadBinding || !threadBindingDirty(thread)">
-                      {{ savingThreadBinding ? "Saving" : "Save WhatsApp" }}
-                    </button>
-                  </div>
-                </section>
-              </div>
+                    <div class="settings-actions compact-actions">
+                      <button type="button" (click)="startSelectedWhatsAppAccount()" [disabled]="busy || !canLoadLocalWhatsAppChats()">
+                        Connect Orkestr account
+                      </button>
+                      <button class="secondary" type="button" (click)="logoutSelectedWhatsAppAccount()" [disabled]="busy || !canLoadLocalWhatsAppChats()">
+                        Disconnect Orkestr account
+                      </button>
+                      @if (whatsappAccountQrUrl()) {
+                        <a class="button secondary" [href]="whatsappAccountQrUrl()" target="_blank" rel="noreferrer">Open QR</a>
+                      }
+                    </div>
+                  </section>
+
+                  <section class="wa-flow-section">
+                    <div class="wa-section-head">
+                      <span class="wa-step">3</span>
+                      <div>
+                        <h4>New chat name</h4>
+                        <small>Orkestr will generate a new WhatsApp chat. Existing chats are not selected here.</small>
+                      </div>
+                    </div>
+                    <label class="settings-field">
+                      <span>Chat name</span>
+                      <input name="thread-wa-name-{{ thread.id }}" [(ngModel)]="whatsappDisplayName" placeholder="otcanClaw-features-Worker-1" />
+                    </label>
+                    <div class="settings-actions">
+                      <button type="button" (click)="createAndConnectWhatsAppChat(thread)" [disabled]="busy || creatingWhatsAppChat || !whatsappDisplayName.trim()">
+                        {{ creatingWhatsAppChat ? "Creating" : "Create and connect chat" }}
+                      </button>
+                    </div>
+                  </section>
+                </div>
+              }
             </section>
 
             <section class="settings-card">

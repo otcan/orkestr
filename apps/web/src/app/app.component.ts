@@ -16,6 +16,7 @@ import {
   TimerRecord,
   WhatsAppAccount,
   WhatsAppChat,
+  WhatsAppParticipant,
   WhatsAppStatusResponse,
 } from "./api.service";
 import { appendPendingFiles, messageWithAttachmentPaths, PendingFile, removePendingFile, uploadPendingFiles } from "./thread-uploads";
@@ -119,14 +120,19 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   whatsappChatId = "";
   whatsappDisplayName = "";
   whatsappReplyPrefix = "otcanclaw:";
+  whatsappSenderAccountId = "";
   whatsappOutboundAccountId = "";
   whatsappBindingEnabled = true;
-  whatsappAllowOtherPeople = true;
+  whatsappAllowOtherPeople = false;
   whatsappMirrorToWhatsApp = true;
   whatsappStatusDetails: WhatsAppStatusResponse | null = null;
   whatsappChats: WhatsAppChat[] = [];
+  whatsappParticipants: WhatsAppParticipant[] = [];
   whatsappChatsLoading = false;
+  whatsappParticipantsLoading = false;
   savingThreadBinding = false;
+  creatingWhatsAppChat = false;
+  detachingWhatsAppChat = false;
   deletingThread = false;
   deleteThreadConfirm = "";
   deleteThreadWorkers = false;
@@ -943,7 +949,9 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
         allowOtherPeople: this.whatsappAllowOtherPeople,
         mirrorToWhatsApp: this.whatsappMirrorToWhatsApp,
         replyPrefix: this.whatsappReplyPrefix.trim() || "otcanclaw:",
-        outboundAccountId: this.whatsappOutboundAccountId.trim(),
+        senderAccountId: this.selectedWhatsAppSenderAccountId(),
+        responderAccountId: this.selectedWhatsAppAccountId(),
+        outboundAccountId: this.selectedWhatsAppAccountId(),
       }));
       if (result.thread) this.replaceThread(result.thread);
       this.syncThreadBindingDraft(result.thread || thread, true);
@@ -960,18 +968,24 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     try {
       this.whatsappStatusDetails = await firstValueFrom(this.api.whatsappStatus());
       await this.loadWhatsAppChats();
+      await this.loadWhatsAppParticipants();
     } catch (error) {
       this.error = this.errorText(error);
     }
   }
 
+  async changeWhatsAppSenderAccount(accountId: string): Promise<void> {
+    this.whatsappSenderAccountId = accountId;
+    await this.loadWhatsAppParticipants();
+  }
+
   async changeWhatsAppAccount(accountId: string): Promise<void> {
     this.whatsappOutboundAccountId = accountId;
     await this.loadWhatsAppChats();
+    await this.loadWhatsAppParticipants();
   }
 
-  async startSelectedWhatsAppAccount(): Promise<void> {
-    const accountId = this.selectedWhatsAppAccountId();
+  async startWhatsAppAccount(accountId: string): Promise<void> {
     if (!accountId || this.busy) return;
     this.busy = true;
     try {
@@ -985,8 +999,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     }
   }
 
-  async logoutSelectedWhatsAppAccount(): Promise<void> {
-    const accountId = this.selectedWhatsAppAccountId();
+  async logoutWhatsAppAccount(accountId: string): Promise<void> {
     if (!accountId || this.busy) return;
     this.busy = true;
     try {
@@ -995,6 +1008,99 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     } catch (error) {
       this.error = this.errorText(error);
     } finally {
+      this.busy = false;
+      this.renderNow();
+    }
+  }
+
+  async startSelectedWhatsAppAccount(): Promise<void> {
+    await this.startWhatsAppAccount(this.selectedWhatsAppAccountId());
+  }
+
+  async logoutSelectedWhatsAppAccount(): Promise<void> {
+    await this.logoutWhatsAppAccount(this.selectedWhatsAppAccountId());
+  }
+
+  async createAndConnectWhatsAppChat(thread: ThreadSummary | null = this.selectedThread()): Promise<void> {
+    if (!thread || this.creatingWhatsAppChat || this.savingThreadBinding) return;
+    const name = this.whatsappDisplayName.trim() || this.threadTitle(thread);
+    if (!name) return;
+    this.creatingWhatsAppChat = true;
+    this.savingThreadBinding = true;
+    this.busy = true;
+    try {
+      const created = await firstValueFrom(this.api.createWhatsAppBridgeChat({
+        name,
+        senderAccountId: this.selectedWhatsAppSenderAccountId(),
+        responderAccountId: this.selectedWhatsAppAccountId(),
+      }));
+      const chatId = String(created.chat?.id || "").trim();
+      if (!chatId) throw new Error("WhatsApp chat was not created.");
+      this.whatsappChatId = chatId;
+      this.whatsappDisplayName = String(created.chat?.name || name).trim();
+      this.whatsappBindingEnabled = true;
+      this.whatsappAllowOtherPeople = false;
+      this.whatsappMirrorToWhatsApp = true;
+      const result = await firstValueFrom(this.api.updateThreadBinding(thread.id, {
+        connector: "whatsapp",
+        chatId,
+        displayName: this.whatsappDisplayName,
+        enabled: true,
+        allowOtherPeople: false,
+        mirrorToWhatsApp: true,
+        replyPrefix: this.whatsappReplyPrefix.trim() || "otcanclaw:",
+        senderAccountId: created.senderAccountId || this.selectedWhatsAppSenderAccountId(),
+        responderAccountId: created.responderAccountId || this.selectedWhatsAppAccountId(),
+        outboundAccountId: created.responderAccountId || this.selectedWhatsAppAccountId(),
+        senderContactId: created.senderContactId || "",
+        responderContactId: created.responderContactId || "",
+        generated: true,
+      }));
+      if (result.thread) this.replaceThread(result.thread);
+      this.syncThreadBindingDraft(result.thread || thread, true);
+      await this.loadWhatsAppChats();
+      await this.loadWhatsAppParticipants();
+    } catch (error) {
+      this.error = this.errorText(error);
+    } finally {
+      this.creatingWhatsAppChat = false;
+      this.savingThreadBinding = false;
+      this.busy = false;
+      this.renderNow();
+    }
+  }
+
+  async detachWhatsAppChat(thread: ThreadSummary | null = this.selectedThread()): Promise<void> {
+    if (!thread || this.detachingWhatsAppChat) return;
+    const confirmed = typeof globalThis.confirm === "function"
+      ? globalThis.confirm("Detach this WhatsApp chat? Orkestr will stop listening and stop sending replies. The WhatsApp chat itself will not be deleted.")
+      : true;
+    if (!confirmed) return;
+    this.detachingWhatsAppChat = true;
+    this.busy = true;
+    try {
+      const result = await firstValueFrom(this.api.updateThreadBinding(thread.id, {
+        connector: "whatsapp",
+        chatId: "",
+        displayName: this.threadTitle(thread),
+        enabled: false,
+        allowOtherPeople: false,
+        mirrorToWhatsApp: false,
+        replyPrefix: this.whatsappReplyPrefix.trim() || "otcanclaw:",
+        senderAccountId: "",
+        responderAccountId: "",
+        outboundAccountId: "",
+        senderContactId: "",
+        responderContactId: "",
+        generated: false,
+      }));
+      if (result.thread) this.replaceThread(result.thread);
+      this.syncThreadBindingDraft(result.thread || thread, true);
+      this.whatsappParticipants = [];
+    } catch (error) {
+      this.error = this.errorText(error);
+    } finally {
+      this.detachingWhatsAppChat = false;
       this.busy = false;
       this.renderNow();
     }
@@ -1014,6 +1120,25 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
       this.whatsappChats = [];
     } finally {
       this.whatsappChatsLoading = false;
+      this.renderNow();
+    }
+  }
+
+  async loadWhatsAppParticipants(): Promise<void> {
+    const accountId = this.selectedWhatsAppSenderAccountId();
+    const chatId = this.whatsappChatId.trim();
+    if (!accountId || !chatId || !this.canLoadLocalWhatsAppChats(accountId)) {
+      this.whatsappParticipants = [];
+      return;
+    }
+    this.whatsappParticipantsLoading = true;
+    try {
+      const result = await firstValueFrom(this.api.whatsappBridgeChatParticipants(accountId, chatId));
+      this.whatsappParticipants = result.participants || [];
+    } catch {
+      this.whatsappParticipants = [];
+    } finally {
+      this.whatsappParticipantsLoading = false;
       this.renderNow();
     }
   }
@@ -1464,12 +1589,16 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   threadBindingDirty(thread: ThreadSummary | null = this.selectedThread()): boolean {
     if (!thread || this.whatsappBindingThreadId !== thread.id) return false;
     const binding = thread.binding || {};
-    return this.whatsappChatId.trim() !== String(binding.chatId || "") ||
+    const chatId = this.whatsappChatId.trim();
+    const accountDirty = Boolean(chatId || binding.chatId) && this.selectedWhatsAppAccountId() !== String(binding.responderAccountId || binding.outboundAccountId || "").trim();
+    const senderDirty = Boolean(chatId || binding.chatId) && this.selectedWhatsAppSenderAccountId() !== String(binding.senderAccountId || binding.inboundAccountId || binding.outboundAccountId || "").trim();
+    return chatId !== String(binding.chatId || "") ||
       this.whatsappDisplayName.trim() !== String(binding.displayName || this.threadTitle(thread)) ||
       this.whatsappReplyPrefix.trim() !== String(binding.replyPrefix || "otcanclaw:") ||
-      this.whatsappOutboundAccountId.trim() !== String(binding.outboundAccountId || "") ||
+      accountDirty ||
+      senderDirty ||
       this.whatsappBindingEnabled !== (binding.enabled !== false) ||
-      this.whatsappAllowOtherPeople !== (binding.allowOtherPeople !== false) ||
+      this.whatsappAllowOtherPeople !== (binding.allowOtherPeople === true) ||
       this.whatsappMirrorToWhatsApp !== (binding.mirrorToWhatsApp !== false);
   }
 
@@ -1507,15 +1636,27 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   }
 
   selectedWhatsAppAccountId(): string {
-    const selected = this.whatsappOutboundAccountId.trim();
-    if (selected) return selected;
     const accounts = this.whatsappAccounts();
+    const selected = this.whatsappOutboundAccountId.trim();
+    if (selected && accounts.some((account) => this.whatsappAccountId(account) === selected)) return selected;
     const ready = accounts.find((account) => account.ready || this.whatsappAccountState(account) === "ready");
     return this.whatsappAccountId(ready || accounts[0] || null) || "account-1";
   }
 
+  selectedWhatsAppSenderAccountId(): string {
+    const accounts = this.whatsappAccounts();
+    const selected = this.whatsappSenderAccountId.trim();
+    if (selected && accounts.some((account) => this.whatsappAccountId(account) === selected)) return selected;
+    return this.selectedWhatsAppAccountId();
+  }
+
   selectedWhatsAppAccount(): WhatsAppAccount | null {
     const selected = this.selectedWhatsAppAccountId();
+    return this.whatsappAccounts().find((account) => this.whatsappAccountId(account) === selected) || null;
+  }
+
+  selectedWhatsAppSenderAccount(): WhatsAppAccount | null {
+    const selected = this.selectedWhatsAppSenderAccountId();
     return this.whatsappAccounts().find((account) => this.whatsappAccountId(account) === selected) || null;
   }
 
@@ -1524,8 +1665,19 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     return account ? this.whatsappAccountLabel(account) || this.selectedWhatsAppAccountId() : this.selectedWhatsAppAccountId();
   }
 
+  selectedWhatsAppSenderAccountLabel(): string {
+    const account = this.selectedWhatsAppSenderAccount();
+    return account ? this.whatsappAccountLabel(account) || this.selectedWhatsAppSenderAccountId() : this.selectedWhatsAppSenderAccountId();
+  }
+
   selectedWhatsAppAccountStateLabel(): string {
     const account = this.selectedWhatsAppAccount();
+    const state = account ? this.whatsappAccountState(account) : "";
+    return state || String(this.whatsappStatusDetails?.state || "local").trim();
+  }
+
+  selectedWhatsAppSenderAccountStateLabel(): string {
+    const account = this.selectedWhatsAppSenderAccount();
     const state = account ? this.whatsappAccountState(account) : "";
     return state || String(this.whatsappStatusDetails?.state || "local").trim();
   }
@@ -1539,6 +1691,16 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   whatsappChatLabelFor(chat: WhatsAppChat): string {
     const name = String(chat.name || chat.id || "").trim();
     return `${name}${chat.isGroup ? " · group" : ""}`;
+  }
+
+  whatsappParticipantLabel(participant: WhatsAppParticipant): string {
+    const name = String(participant.name || "").trim();
+    const id = String(participant.id || "").trim();
+    return name ? `${name} · ${id}` : id;
+  }
+
+  whatsappChatConnected(thread: ThreadSummary | null): boolean {
+    return Boolean(String(thread?.binding?.chatId || "").trim());
   }
 
   canLoadLocalWhatsAppChats(accountId = this.selectedWhatsAppAccountId()): boolean {
@@ -1589,7 +1751,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     const binding = thread.binding || {};
     const allowPeople = this.whatsappBindingThreadId === thread.id
       ? this.whatsappAllowOtherPeople
-      : binding.allowOtherPeople !== false;
+      : binding.allowOtherPeople === true;
     return allowPeople ? "Other people allowed" : "Only selected sender";
   }
 
@@ -2326,9 +2488,10 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     this.whatsappChatId = String(binding.chatId || "");
     this.whatsappDisplayName = String(binding.displayName || this.threadTitle(thread));
     this.whatsappReplyPrefix = String(binding.replyPrefix || "otcanclaw:");
-    this.whatsappOutboundAccountId = String(binding.outboundAccountId || "");
+    this.whatsappSenderAccountId = String(binding.senderAccountId || binding.inboundAccountId || binding.outboundAccountId || "");
+    this.whatsappOutboundAccountId = String(binding.responderAccountId || binding.outboundAccountId || "");
     this.whatsappBindingEnabled = binding.enabled !== false;
-    this.whatsappAllowOtherPeople = binding.allowOtherPeople !== false;
+    this.whatsappAllowOtherPeople = binding.allowOtherPeople === true;
     this.whatsappMirrorToWhatsApp = binding.mirrorToWhatsApp !== false;
     this.deleteThreadConfirm = "";
     this.deleteThreadWorkers = false;

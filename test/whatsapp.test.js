@@ -9,6 +9,7 @@ import { listAgentMessages } from "../packages/core/src/messages.js";
 import { getSetupStatus } from "../packages/core/src/setup.js";
 import { appendThreadMessage, createThread, listThreadMessages } from "../packages/core/src/threads.js";
 import { deliverWhatsAppReplies, getWhatsAppStatus, routeWhatsAppInbound } from "../packages/connectors/src/whatsapp.js";
+import { listLocalWhatsAppChats } from "../packages/connectors/src/whatsapp-local-bridge.js";
 import { writeConnectorConfig } from "../packages/storage/src/config.js";
 
 function response(payload, ok = true, status = 200) {
@@ -30,10 +31,58 @@ test("whatsapp status defaults to the built-in local bridge", async () => {
   assert.equal(status.accounts.length, 2);
 });
 
+test("whatsapp status keeps the integrated local bridge as the default", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-local-first-"));
+  const status = await getWhatsAppStatus(
+    { ORKESTR_HOME: home, WHATSAPP_BRIDGE_URL: "http://wa.local" },
+    async () => {
+      throw new Error("external bridge should not be called in local mode");
+    },
+  );
+
+  assert.equal(status.state, "unpaired");
+  assert.equal(status.mode, "local");
+  assert.equal(status.bridgeUrl, "/api/connectors/whatsapp/bridge");
+  assert.equal(status.accounts.length, 2);
+});
+
+test("local whatsapp known chats include stored thread bindings while bridge is idle", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-known-chats-"));
+  const env = { ORKESTR_HOME: home };
+  await createThread({
+    id: "known-wa-thread",
+    name: "Known WA Thread",
+    binding: {
+      connector: "whatsapp",
+      chatId: "120363000000000000@g.us",
+      displayName: "Known Group",
+      outboundAccountId: "account-1",
+      updatedAt: "2026-05-18T03:00:00.000Z",
+    },
+  }, env);
+  await createThread({
+    id: "legacy-wa-thread",
+    name: "Legacy WA Thread",
+    binding: {
+      connector: "whatsapp",
+      chatId: "120363111111111111@g.us",
+      displayName: "Legacy Group",
+      outboundAccountId: "legacy-account",
+    },
+  }, env);
+
+  const account1 = await listLocalWhatsAppChats("account-1", env);
+  const account2 = await listLocalWhatsAppChats("account-2", env);
+
+  assert.equal(account1.ready, false);
+  assert.deepEqual(account1.chats.map((chat) => chat.name), ["Known Group", "Legacy Group"]);
+  assert.deepEqual(account2.chats.map((chat) => chat.name), ["Legacy Group"]);
+});
+
 test("whatsapp status reports paired from health readiness", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-ready-"));
   const env = { ORKESTR_HOME: home };
-  await writeConnectorConfig("whatsapp", { bridgeUrl: "http://wa.local" }, env);
+  await writeConnectorConfig("whatsapp", { bridgeMode: "external", bridgeUrl: "http://wa.local" }, env);
 
   const status = await getWhatsAppStatus(env, async (url) => {
     assert.equal(url.pathname, "/health");
@@ -46,7 +95,7 @@ test("whatsapp status reports paired from health readiness", async () => {
 test("whatsapp status discovers external bridge accounts from dashboard", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-dashboard-"));
   const env = { ORKESTR_HOME: home };
-  await writeConnectorConfig("whatsapp", { bridgeUrl: "http://wa.local" }, env);
+  await writeConnectorConfig("whatsapp", { bridgeMode: "external", bridgeUrl: "http://wa.local" }, env);
 
   const status = await getWhatsAppStatus(env, async (url) => {
     if (url.pathname === "/health") return response({ ok: true, ready: true });
@@ -69,7 +118,7 @@ test("whatsapp status discovers external bridge accounts from dashboard", async 
 test("whatsapp status reports qr needed when health is reachable and qr exists", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-qr-"));
   const env = { ORKESTR_HOME: home };
-  await writeConnectorConfig("whatsapp", { bridgeUrl: "http://wa.local/" }, env);
+  await writeConnectorConfig("whatsapp", { bridgeMode: "external", bridgeUrl: "http://wa.local/" }, env);
 
   const status = await getWhatsAppStatus(env, async (url) => {
     if (url.pathname === "/health") return response({ ok: true, ready: false });
@@ -83,7 +132,7 @@ test("whatsapp status reports qr needed when health is reachable and qr exists",
 
 test("whatsapp setup status maps unreachable bridge to broken", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-broken-"));
-  const env = { ORKESTR_HOME: home, WHATSAPP_BRIDGE_URL: "http://127.0.0.1:1" };
+  const env = { ORKESTR_HOME: home, WHATSAPP_BRIDGE_MODE: "external", WHATSAPP_BRIDGE_URL: "http://127.0.0.1:1" };
   const setup = await getSetupStatus({ env, home });
   const whatsapp = setup.connectors.find((connector) => connector.id === "whatsapp");
 
@@ -148,7 +197,7 @@ test("whatsapp inbound endpoint accepts direct agent target", async () => {
 test("whatsapp delivery mirrors assistant replies once to the source chat", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-deliver-"));
   const env = { ORKESTR_HOME: home };
-  await writeConnectorConfig("whatsapp", { bridgeUrl: "http://wa.local", apiToken: "secret-token" }, env);
+  await writeConnectorConfig("whatsapp", { bridgeMode: "external", bridgeUrl: "http://wa.local", apiToken: "secret-token" }, env);
   await routeWhatsAppInbound(
     { eventId: "wa-deliver-1", agentId: "agent-deliver", chatId: "chat-1", accountId: "main", text: "status?" },
     env,
@@ -180,6 +229,7 @@ test("whatsapp inbound can route directly to a thread and mirror its reply once"
   const env = { ORKESTR_HOME: home };
   await createThread({ id: "thread-wa", name: "WA Thread", executorId: "noop" }, env);
   await writeConnectorConfig("whatsapp", {
+    bridgeMode: "external",
     bridgeUrl: "http://wa.local",
     threadRoutes: { "chat-thread": "thread-wa" },
   }, env);
@@ -229,10 +279,58 @@ test("whatsapp inbound routes through enabled thread bindings", async () => {
   assert.equal(messages[0].accountId, "bound-account");
 });
 
+test("generated whatsapp bindings listen to the selected sender and answer as the responder", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-generated-binding-"));
+  const env = { ORKESTR_HOME: home };
+  await writeConnectorConfig("whatsapp", { bridgeMode: "external", bridgeUrl: "http://wa.local" }, env);
+  await createThread({
+    id: "generated-thread",
+    name: "Generated Thread",
+    binding: {
+      connector: "whatsapp",
+      chatId: "chat-generated",
+      displayName: "Generated Chat",
+      enabled: true,
+      allowOtherPeople: false,
+      senderAccountId: "account-1",
+      responderAccountId: "account-2",
+      outboundAccountId: "account-2",
+    },
+  }, env);
+
+  await assert.rejects(
+    () => routeWhatsAppInbound({ eventId: "wa-generated-ignored", chatId: "chat-generated", accountId: "account-1", fromMe: false, text: "not selected" }, env),
+    /whatsapp_target_required/,
+  );
+
+  const routed = await routeWhatsAppInbound({ eventId: "wa-generated-routed", chatId: "chat-generated", accountId: "account-1", fromMe: true, text: "selected sender" }, env);
+  await appendThreadMessage("generated-thread", {
+    role: "assistant",
+    source: "codex-rollout",
+    phase: "final_answer",
+    state: "completed",
+    text: "generated reply",
+    parentMessageId: routed.message.id,
+    connector: "whatsapp",
+    chatId: "chat-generated",
+  }, env);
+
+  const calls = [];
+  const delivery = await deliverWhatsAppReplies(env, async (url, options) => {
+    calls.push({ url, body: JSON.parse(options.body) });
+    return response({ ok: true, ids: ["sent-generated"] });
+  });
+
+  assert.equal(routed.threadId, "generated-thread");
+  assert.equal(delivery.delivered.length, 1);
+  assert.equal(calls[0].body.to, "chat-generated");
+  assert.equal(calls[0].body.accountId, "account-2");
+});
+
 test("whatsapp delivery respects thread binding mirroring toggle", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-mirror-toggle-"));
   const env = { ORKESTR_HOME: home };
-  await writeConnectorConfig("whatsapp", { bridgeUrl: "http://wa.local" }, env);
+  await writeConnectorConfig("whatsapp", { bridgeMode: "external", bridgeUrl: "http://wa.local" }, env);
   await createThread({
     id: "mirror-off-thread",
     name: "Mirror Off Thread",
@@ -263,6 +361,7 @@ test("whatsapp delivery skips duplicate live Codex answers for the same chat", a
   const env = { ORKESTR_HOME: home };
   await createThread({ id: "thread-duplicate-wa", name: "Duplicate WA Thread" }, env);
   await writeConnectorConfig("whatsapp", {
+    bridgeMode: "external",
     bridgeUrl: "http://wa.local",
     threadRoutes: { "chat-duplicate": "thread-duplicate-wa" },
   }, env);
