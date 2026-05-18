@@ -120,6 +120,27 @@ function codexMetadata(thread: any) {
   };
 }
 
+function codexModeValue(value: any): string | null {
+  const mode = String(value || "").trim().toLowerCase();
+  return mode === "code" || mode === "plan" ? mode : null;
+}
+
+function codexModeSettleMs(): number {
+  const configured = Number(process.env.ORKESTR_CODEX_MODE_SETTLE_MS || 10000);
+  return Number.isFinite(configured) && configured >= 0 ? configured : 10000;
+}
+
+function recentlyAppliedCodexMode(thread: any, metadata: any): string | null {
+  if (!thread?.codexModeLiveApplied) return null;
+  const mode = codexModeValue(thread?.codexMode || metadata.codexMode);
+  if (!mode) return null;
+  const source = String(thread?.codexModeSource || metadata.codexModeSource || "").trim();
+  if (source !== "orkestr-ui-live" && source !== "runtime-sync-live") return null;
+  const updatedAt = Date.parse(String(thread?.codexModeUpdatedAt || metadata.codexModeUpdatedAt || ""));
+  if (!Number.isFinite(updatedAt)) return null;
+  return Date.now() - updatedAt <= codexModeSettleMs() ? mode : null;
+}
+
 function threadSummaryCacheTtlMs(): number {
   const parsed = Number(process.env.ORKESTR_THREAD_SUMMARY_CACHE_TTL_MS || 120_000);
   return Number.isFinite(parsed) ? Math.max(0, parsed) : 120_000;
@@ -288,8 +309,9 @@ export async function threadRuntimeSummary(thread: any, messages: any[] = [], op
   const pendingQuestion = latestPendingQuestion(messages);
   const resolvedCodexThreadId = codexThreadId(codexThread);
   const metadata = codexMetadata(codexThread);
-  const liveCodexMode = String(status?.codexMode || "").trim().toLowerCase();
+  const liveCodexMode = codexModeValue(status?.codexMode);
   const liveCodexModeSource = String(status?.codexModeSource || "").trim();
+  const appliedCodexMode = recentlyAppliedCodexMode(thread, metadata);
   const summary = {
     ...thread,
     ...gitState,
@@ -329,9 +351,9 @@ export async function threadRuntimeSummary(thread: any, messages: any[] = [], op
     inferredThreadId: resolvedCodexThreadId || null,
     wakePolicy: thread.wakePolicy || "wake-on-message",
     ...metadata,
-    codexMode: liveCodexMode === "code" || liveCodexMode === "plan" ? liveCodexMode : metadata.codexMode,
-    codexModeSource: liveCodexModeSource || metadata.codexModeSource,
-    codexModeLive: liveCodexMode === "code" || liveCodexMode === "plan" ? liveCodexMode : null,
+    codexMode: appliedCodexMode || liveCodexMode || metadata.codexMode,
+    codexModeSource: appliedCodexMode ? metadata.codexModeSource : liveCodexModeSource || metadata.codexModeSource,
+    codexModeLive: appliedCodexMode || liveCodexMode,
   };
   return summary;
 }
