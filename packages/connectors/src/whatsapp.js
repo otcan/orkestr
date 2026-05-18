@@ -372,6 +372,66 @@ function normalizedDeliveryText(value) {
   return String(value || "").replace(/\s+/g, " ").trim();
 }
 
+function formatMarkdownLinksForWhatsApp(value) {
+  return String(value || "").replace(/\[([^\]\n]{1,180})\]\((https?:\/\/[^)\s]+)\)/g, (_match, label, url) => {
+    const cleanLabel = String(label || "").trim();
+    const cleanUrl = String(url || "").trim();
+    return cleanLabel && cleanLabel !== cleanUrl ? `${cleanLabel}: ${cleanUrl}` : cleanUrl;
+  });
+}
+
+function formatMarkdownBoldForWhatsApp(value) {
+  const text = String(value || "");
+  let formatted = "";
+  let index = 0;
+
+  while (index < text.length) {
+    const start = text.indexOf("**", index);
+    if (start === -1) {
+      formatted += text.slice(index);
+      break;
+    }
+
+    const end = text.indexOf("**", start + 2);
+    if (end === -1) {
+      formatted += text.slice(index);
+      break;
+    }
+
+    const body = text.slice(start + 2, end);
+    formatted += text.slice(index, start);
+    formatted += body.trim() ? `*${body}*` : `**${body}**`;
+    index = end + 2;
+  }
+
+  return formatted;
+}
+
+function formatWhatsAppLine(value) {
+  const heading = String(value || "").match(/^(\s*)#{1,6}\s+(.+?)\s*#*\s*$/);
+  const line = heading ? `${heading[1]}${heading[2]}` : String(value || "");
+  const chunks = line.split(/(`[^`]*`)/g);
+  return chunks
+    .map((chunk) => {
+      if (chunk.startsWith("`") && chunk.endsWith("`")) return chunk;
+      return formatMarkdownBoldForWhatsApp(formatMarkdownLinksForWhatsApp(chunk));
+    })
+    .join("");
+}
+
+export function formatWhatsAppOutboundText(value) {
+  const lines = String(value || "").replace(/\r\n/g, "\n").split("\n");
+  let inFence = false;
+  const formatted = lines.map((line) => {
+    if (line.trim().startsWith("```")) {
+      inFence = !inFence;
+      return line;
+    }
+    return inFence ? line : formatWhatsAppLine(line);
+  });
+  return formatted.join("\n").trim();
+}
+
 function deliveryTextKey(chatId, text) {
   return crypto
     .createHash("sha256")
@@ -424,7 +484,7 @@ async function deliverWhatsAppRepliesOnce(env = process.env, fetchImpl = fetch) 
       }
 
       const chatId = pickString(message.chatId, parent?.chatId);
-      const text = pickString(message.text);
+      const text = formatWhatsAppOutboundText(pickString(message.text));
       const accountId = kind === "thread"
         ? pickString(thread?.binding?.responderAccountId, thread?.binding?.outboundAccountId, message.accountId, parent?.accountId)
         : pickString(message.accountId, parent?.accountId);

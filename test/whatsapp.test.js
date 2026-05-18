@@ -8,7 +8,7 @@ import { runNextAgentMessage, runNextThreadMessage } from "../packages/core/src/
 import { listAgentMessages } from "../packages/core/src/messages.js";
 import { getSetupStatus } from "../packages/core/src/setup.js";
 import { appendThreadMessage, createThread, listThreadMessages } from "../packages/core/src/threads.js";
-import { deliverWhatsAppReplies, getWhatsAppStatus, routeWhatsAppInbound } from "../packages/connectors/src/whatsapp.js";
+import { deliverWhatsAppReplies, formatWhatsAppOutboundText, getWhatsAppStatus, routeWhatsAppInbound } from "../packages/connectors/src/whatsapp.js";
 import { listLocalWhatsAppChats } from "../packages/connectors/src/whatsapp-local-bridge.js";
 import { writeConnectorConfig } from "../packages/storage/src/config.js";
 
@@ -253,6 +253,65 @@ test("whatsapp inbound can route directly to a thread and mirror its reply once"
   assert.equal(duplicate.delivered.length, 0);
   assert.equal(calls[0].url.pathname, "/send-text");
   assert.equal(calls[0].body.to, "chat-thread");
+});
+
+test("whatsapp delivery translates markdown into chat-friendly formatting", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-markdown-reply-"));
+  const env = { ORKESTR_HOME: home };
+  await createThread({ id: "thread-wa-markdown", name: "WA Markdown Thread" }, env);
+  await writeConnectorConfig("whatsapp", {
+    bridgeMode: "external",
+    bridgeUrl: "http://wa.local",
+    threadRoutes: { "chat-markdown": "thread-wa-markdown" },
+  }, env);
+
+  const routed = await routeWhatsAppInbound({ eventId: "wa-markdown-1", chatId: "chat-markdown", text: "deploy?" }, env);
+  const markdown = [
+    "### Deploy target",
+    "",
+    "**Deploy latest into the orkestr-vps VM, by pulling/restarting the Docker container there.**",
+    "",
+    "[Tailnet URL](https://orkestr-vps.tail25663.ts.net)",
+    "",
+    "`**literal**` stays code.",
+  ].join("\n");
+  await appendThreadMessage("thread-wa-markdown", {
+    role: "assistant",
+    source: "codex-rollout",
+    phase: "final_answer",
+    state: "completed",
+    text: markdown,
+    parentMessageId: routed.message.id,
+    connector: "whatsapp",
+    chatId: "chat-markdown",
+  }, env);
+
+  const calls = [];
+  const delivery = await deliverWhatsAppReplies(env, async (url, options) => {
+    calls.push({ url, body: JSON.parse(options.body) });
+    return response({ ok: true, ids: ["sent-markdown"] });
+  });
+  const messages = await listThreadMessages("thread-wa-markdown", env);
+
+  assert.equal(delivery.delivered.length, 1);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].body.text, [
+    "Deploy target",
+    "",
+    "*Deploy latest into the orkestr-vps VM, by pulling/restarting the Docker container there.*",
+    "",
+    "Tailnet URL: https://orkestr-vps.tail25663.ts.net",
+    "",
+    "`**literal**` stays code.",
+  ].join("\n"));
+  assert.equal(messages.at(-1).text, markdown);
+});
+
+test("whatsapp outbound formatting preserves fenced code blocks", () => {
+  assert.equal(
+    formatWhatsAppOutboundText("Before **bold**\n\n```\n**not bold**\n```\n\nAfter **bold**"),
+    "Before *bold*\n\n```\n**not bold**\n```\n\nAfter *bold*",
+  );
 });
 
 test("whatsapp inbound routes through enabled thread bindings", async () => {
