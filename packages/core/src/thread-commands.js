@@ -1,4 +1,4 @@
-const INTERRUPT_COMMANDS = new Set(["now", "interrupt"]);
+const CONTROL_COMMANDS = new Set(["now", "interrupt", "implement"]);
 
 export function parseThreadInputCommand(input = {}) {
   const text = String(input.text || "");
@@ -6,7 +6,7 @@ export function parseThreadInputCommand(input = {}) {
   if (!match) return { command: null, text };
 
   const command = match[1].toLowerCase();
-  if (!INTERRUPT_COMMANDS.has(command)) return { command: null, text };
+  if (!CONTROL_COMMANDS.has(command)) return { command: null, text };
 
   return {
     command: command === "now" ? "interrupt" : command,

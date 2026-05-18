@@ -10,6 +10,7 @@ import { runNextThreadMessage } from "../../../../../packages/core/src/executors
 import {
   applyRuntimeCodexMode,
   deliverPendingThreadInputs,
+  implementRuntimePlan,
   requestThreadInputDelivery,
   requestThreadWake,
   runtimeStatus,
@@ -19,6 +20,7 @@ import {
 } from "../../../../../packages/core/src/runtime-leases.js";
 import { createTimer, deleteTimer, listTimers } from "../../../../../packages/core/src/timers.js";
 import {
+  appendThreadMessage,
   createThread,
   deleteThread,
   enqueueThreadInput,
@@ -385,6 +387,35 @@ export class ThreadsController {
         source: body.source || "interrupt",
         parsedCommand: parsedCommand.rawCommand || parsedCommand.command,
       });
+    }
+    if (parsedCommand.command === "implement") {
+      const result = await implementRuntimePlan(thread.id);
+      const implemented = Boolean(result.implemented);
+      const errorText = implemented ? "" : "No active Codex implementation prompt is visible.";
+      const message = await appendThreadMessage(thread.id, {
+        role: "user",
+        source: body.source || "implement_command",
+        text: "/implement",
+        state: implemented ? "completed" : "failed",
+        deliveryState: implemented ? "delivered" : "failed",
+        observedVia: implemented ? "codex_plan_implementation_confirmed" : "codex_plan_implementation_not_ready",
+        runtimeLeaseId: result.status?.lease?.id || null,
+        deliveredAt: implemented ? new Date().toISOString() : "",
+        error: errorText,
+      });
+      return {
+        ok: implemented,
+        implemented,
+        reason: result.reason,
+        threadId: codexThreadId(thread) || thread.id,
+        orkestrThreadId: thread.id,
+        message,
+        queued: false,
+        observed: true,
+        observedVia: message.observedVia,
+        runtime: result.status || null,
+        thread: await threadRuntimeSummary(await getThread(thread.id), await listThreadMessages(thread.id)),
+      };
     }
     const before = await runtimeStatus(thread.id).catch(() => null);
     const message = await enqueueThreadInput(thread.id, body);

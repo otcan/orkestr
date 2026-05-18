@@ -240,6 +240,15 @@ function panePromptReady(text) {
   return lines.some((line) => /^(?:›|>)(?:\s|$)/.test(line) && !/^(?:›|>)\s*\d+[.)]/.test(line));
 }
 
+function panePlanImplementationMenuVisible(text) {
+  return /Implement this plan\?/i.test(String(text || ""));
+}
+
+function panePlanImplementationReady(text) {
+  const body = String(text || "");
+  return panePlanImplementationMenuVisible(body) && /^\s*›\s*1\.\s*Yes,\s*implement this plan\b/im.test(body);
+}
+
 function paneResumeDirectoryPrompt(text) {
   const body = String(text || "");
   return /Choose working directory to resume this session/i.test(body) && /Press enter to continue/i.test(body);
@@ -304,12 +313,16 @@ export async function runtimeStatus(threadId, env = process.env, messagesOverrid
       hibernated: state === "sleeping",
       codexMode: null,
       codexModeSource: null,
+      planImplementationReady: false,
+      planImplementationMenuVisible: false,
     };
   }
 
   const paneId = await resolveLivePaneId(lease, env);
   const paneText = await capturePane(paneId).catch(() => "");
   const codexMode = codexModeFromPaneText(paneText);
+  const planImplementationReady = panePlanImplementationReady(paneText);
+  const planImplementationMenuVisible = panePlanImplementationMenuVisible(paneText);
   const needsResumeDirectoryConfirmation = paneResumeDirectoryPrompt(paneText);
   const paneWorkingCandidate = paneWorking(paneText);
   const promptReadyCandidate = !paneWorkingCandidate && panePromptReady(paneText);
@@ -340,6 +353,8 @@ export async function runtimeStatus(threadId, env = process.env, messagesOverrid
     hibernated: false,
     codexMode,
     codexModeSource: codexMode ? "runtime-pane" : null,
+    planImplementationReady,
+    planImplementationMenuVisible,
   };
 }
 
@@ -767,6 +782,36 @@ export async function applyRuntimeCodexMode(threadId, mode, env = process.env, o
   }
   await execFileAsync("tmux", ["send-keys", "-t", status.paneId, "BTab"]);
   return { applied: true, changed: true, mode: desired, previousMode: beforeMode, paneId: status.paneId };
+}
+
+export async function implementRuntimePlan(threadId, env = process.env) {
+  const status = await runtimeStatus(threadId, env);
+  if (!status?.paneId) {
+    return { implemented: false, reason: "runtime_unavailable", status };
+  }
+  if (!status.planImplementationReady) {
+    return {
+      implemented: false,
+      reason: status.planImplementationMenuVisible ? "implementation_option_not_selected" : "implementation_prompt_not_visible",
+      paneId: status.paneId,
+      status,
+    };
+  }
+  await execFileAsync("tmux", ["send-keys", "-t", status.paneId, "C-m"]);
+  await updateThread(threadId, { state: "working", lastError: null }, env).catch(() => {});
+  await appendEvent({
+    type: "thread_plan_implementation_started",
+    threadId,
+    paneId: status.paneId,
+    observedVia: "codex_plan_implementation_confirmed",
+  }, env).catch(() => {});
+  return {
+    implemented: true,
+    reason: "confirmed",
+    paneId: status.paneId,
+    status,
+    observedVia: "codex_plan_implementation_confirmed",
+  };
 }
 
 function shouldDeferRuntimeDelivery(error) {

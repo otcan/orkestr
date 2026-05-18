@@ -757,6 +757,72 @@ test("codex mode endpoint toggles the attached Codex runtime", async () => {
   }
 });
 
+test("thread input /implement confirms a visible Codex plan implementation prompt", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-implement-plan-"));
+  const fakeTmux = await createFakeTmux(home);
+  const captureFile = path.join(home, "pane.txt");
+  const priorHome = process.env.ORKESTR_HOME;
+  const priorRuntimeHome = process.env.HOME;
+  const priorCodexHome = process.env.CODEX_HOME;
+  const priorPath = process.env.PATH;
+  const priorTmuxLog = process.env.TMUX_LOG;
+  const priorTmuxState = process.env.TMUX_STATE;
+  const priorCaptureFile = process.env.TMUX_CAPTURE_FILE;
+  const priorRecoverOnStart = process.env.ORKESTR_RECOVER_RUNNING_ON_START;
+  process.env.ORKESTR_HOME = path.join(home, "orkestr-home");
+  process.env.HOME = path.join(home, "runtime-home");
+  process.env.CODEX_HOME = path.join(home, "codex-home");
+  process.env.PATH = `${fakeTmux.bin}:${priorPath || ""}`;
+  process.env.TMUX_LOG = fakeTmux.log;
+  process.env.TMUX_STATE = fakeTmux.state;
+  process.env.TMUX_CAPTURE_FILE = captureFile;
+  process.env.ORKESTR_RECOVER_RUNNING_ON_START = "0";
+
+  let server;
+  try {
+    await fs.writeFile(captureFile, [
+      "Implement this plan?",
+      "",
+      "› 1. Yes, implement this plan",
+      "  2. No, keep planning",
+      "",
+      "gpt-5.5 xhigh · /workspace/demo            Plan mode",
+    ].join("\n"), "utf8");
+    await createThread({ id: "implement-plan-thread", name: "Implement Plan Thread" });
+    await wakeThread("implement-plan-thread", { reason: "test" });
+    server = await startServer({ port: 0, host: "127.0.0.1" });
+    const { port } = server.address();
+    const response = await fetch(`http://127.0.0.1:${port}/api/threads/implement-plan-thread/input`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ text: "/implement" }),
+    });
+    const payload = await response.json();
+    const log = await fs.readFile(fakeTmux.log, "utf8");
+    const messages = await listThreadMessages("implement-plan-thread");
+
+    assert.equal(response.status, 201);
+    assert.equal(payload.ok, true);
+    assert.equal(payload.implemented, true);
+    assert.equal(payload.reason, "confirmed");
+    assert.equal(payload.message.state, "completed");
+    assert.equal(payload.message.deliveryState, "delivered");
+    assert.equal(payload.message.observedVia, "codex_plan_implementation_confirmed");
+    assert.equal(messages.at(-1)?.text, "/implement");
+    assert.match(log, /__CALL__\tsend-keys\t-t\t%42\tC-m/);
+  } finally {
+    if (server) await new Promise((resolve) => server.close(resolve));
+    restoreEnvValue("ORKESTR_HOME", priorHome);
+    restoreEnvValue("HOME", priorRuntimeHome);
+    restoreEnvValue("CODEX_HOME", priorCodexHome);
+    restoreEnvValue("PATH", priorPath);
+    restoreEnvValue("TMUX_LOG", priorTmuxLog);
+    restoreEnvValue("TMUX_STATE", priorTmuxState);
+    restoreEnvValue("TMUX_CAPTURE_FILE", priorCaptureFile);
+    restoreEnvValue("ORKESTR_RECOVER_RUNNING_ON_START", priorRecoverOnStart);
+  }
+});
+
 test("thread summary reports live Codex plan mode from the runtime pane", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-codex-mode-summary-"));
   const fakeTmux = await createFakeTmux(home);
@@ -1390,6 +1456,11 @@ test("thread input commands strip /now before runtime delivery", () => {
     command: "interrupt",
     rawCommand: "now",
     text: "I want this handled immediately",
+  });
+  assert.deepEqual(parseThreadInputCommand({ text: "/implement" }), {
+    command: "implement",
+    rawCommand: "implement",
+    text: "",
   });
   assert.equal(parseThreadInputCommand({ text: "normal message" }).command, null);
 });
