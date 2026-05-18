@@ -78,6 +78,39 @@ orkestr security approve <challenge-id>
 orkestr security challenges
 ```
 
+## Continuous VPS Deploys
+
+`.github/workflows/deploy-vps.yml` redeploys the host-native VPS after the `CI`
+workflow succeeds on `main`. It also supports manual `workflow_dispatch`
+redeploys. The workflow keeps private host details out of the repository and
+uses GitHub repository secrets:
+
+```text
+ORKESTR_DEPLOY_HOST
+ORKESTR_DEPLOY_SSH_KEY
+ORKESTR_DEPLOY_ENABLED     set to 1 after the other secrets are ready
+ORKESTR_DEPLOY_USER          optional, defaults to root
+ORKESTR_DEPLOY_PORT          optional, defaults to 22
+ORKESTR_DEPLOY_KNOWN_HOSTS   recommended
+TAILSCALE_OAUTH_CLIENT_ID    optional, for tailnet-only hosts
+TAILSCALE_OAUTH_SECRET       optional, for tailnet-only hosts
+TAILSCALE_TAGS               optional, defaults to tag:ci
+```
+
+The deploy job checks out the commit that passed CI, optionally joins the
+tailnet with `tailscale/github-action`, uploads `scripts/install.sh` over SSH,
+sets `ORKESTR_GIT_REF` to the exact commit, and runs:
+
+```bash
+bash /tmp/orkestr-install-*.sh --systemd
+```
+
+The installer fetches that ref into `/opt/orkestr/app`, runs `npm ci`,
+`npm run build`, prunes dev dependencies, writes the CLI and systemd unit, and
+restarts `orkestr.service`. The existing `/etc/orkestr/orkestr.env` is kept, so
+OpenAI keys, OAuth credentials, Caddy/Tailscale URLs, and private overlay paths
+remain server-local.
+
 ## Local Docker
 
 ```bash

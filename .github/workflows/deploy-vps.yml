@@ -1,0 +1,77 @@
+name: Deploy VPS
+
+on:
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Git branch, tag, or commit to deploy"
+        required: false
+        default: "main"
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: orkestr-host-native-deploy
+  cancel-in-progress: true
+
+env:
+  DEPLOY_REF: ${{ inputs.ref || github.event.workflow_run.head_sha || github.sha }}
+  ORKESTR_DEPLOY_ENABLED: ${{ secrets.ORKESTR_DEPLOY_ENABLED }}
+  ORKESTR_DEPLOY_HOST: ${{ secrets.ORKESTR_DEPLOY_HOST }}
+  ORKESTR_DEPLOY_USER: ${{ secrets.ORKESTR_DEPLOY_USER }}
+  ORKESTR_DEPLOY_PORT: ${{ secrets.ORKESTR_DEPLOY_PORT }}
+  ORKESTR_DEPLOY_SSH_KEY: ${{ secrets.ORKESTR_DEPLOY_SSH_KEY }}
+  ORKESTR_DEPLOY_KNOWN_HOSTS: ${{ secrets.ORKESTR_DEPLOY_KNOWN_HOSTS }}
+  TAILSCALE_OAUTH_CLIENT_ID: ${{ secrets.TAILSCALE_OAUTH_CLIENT_ID }}
+  TAILSCALE_OAUTH_SECRET: ${{ secrets.TAILSCALE_OAUTH_SECRET }}
+  TAILSCALE_TAGS: ${{ secrets.TAILSCALE_TAGS }}
+
+jobs:
+  deploy:
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - name: Check deployment configuration
+        id: deploy_config
+        run: |
+          if [ "${ORKESTR_DEPLOY_ENABLED:-0}" != "1" ]; then
+            echo "VPS deployment is disabled. Set ORKESTR_DEPLOY_ENABLED=1 to enable it."
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if [ -z "${ORKESTR_DEPLOY_HOST:-}" ] || [ -z "${ORKESTR_DEPLOY_SSH_KEY:-}" ]; then
+            echo "ORKESTR_DEPLOY_HOST and ORKESTR_DEPLOY_SSH_KEY are required when deployment is enabled." >&2
+            exit 1
+          fi
+          echo "enabled=true" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@v4
+        if: ${{ steps.deploy_config.outputs.enabled == 'true' }}
+        with:
+          ref: ${{ env.DEPLOY_REF }}
+
+      - name: Validate deployment script
+        if: ${{ steps.deploy_config.outputs.enabled == 'true' }}
+        run: scripts/deploy-vps.sh --check-only
+
+      - name: Connect to Tailscale
+        if: ${{ steps.deploy_config.outputs.enabled == 'true' && env.TAILSCALE_OAUTH_CLIENT_ID != '' && env.TAILSCALE_OAUTH_SECRET != '' }}
+        uses: tailscale/github-action@v4
+        with:
+          oauth-client-id: ${{ secrets.TAILSCALE_OAUTH_CLIENT_ID }}
+          oauth-secret: ${{ secrets.TAILSCALE_OAUTH_SECRET }}
+          tags: ${{ env.TAILSCALE_TAGS || 'tag:ci' }}
+
+      - name: Deploy host-native service
+        if: ${{ steps.deploy_config.outputs.enabled == 'true' }}
+        env:
+          ORKESTR_DEPLOY_REF: ${{ env.DEPLOY_REF }}
+          ORKESTR_DEPLOY_REPO_URL: https://github.com/${{ github.repository }}.git
+        run: scripts/deploy-vps.sh

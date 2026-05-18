@@ -75,6 +75,26 @@ orkestr security approve <challenge-id>
 
 Edit `/etc/orkestr/orkestr.env` for OpenAI, OAuth, Caddy/Tailscale HTTPS, and private overlay settings. Keep the service bound to `127.0.0.1` and put Caddy/Tailscale in front before remote browser access.
 
+### Continuous VPS Deploys
+
+The public repo includes `.github/workflows/deploy-vps.yml` for host-native VPS
+redeploys after CI passes on `main`. The workflow does not contain a hostname,
+private key, or tailnet name. Configure these repository secrets in GitHub:
+
+- `ORKESTR_DEPLOY_HOST`: SSH host, public DNS name, or tailnet DNS name
+- `ORKESTR_DEPLOY_SSH_KEY`: private key for the deploy user
+- `ORKESTR_DEPLOY_ENABLED`: set to `1` after the other deploy secrets are ready
+- `ORKESTR_DEPLOY_USER`: optional, defaults to `root`
+- `ORKESTR_DEPLOY_PORT`: optional, defaults to `22`
+- `ORKESTR_DEPLOY_KNOWN_HOSTS`: recommended pinned SSH host key line
+- `TAILSCALE_OAUTH_CLIENT_ID` and `TAILSCALE_OAUTH_SECRET`: optional, for deploying to a tailnet-only VPS
+- `TAILSCALE_TAGS`: optional, defaults to `tag:ci`
+
+On every successful `main` CI run, GitHub Actions runs
+`scripts/deploy-vps.sh`, uploads the installer over SSH, deploys the exact
+commit that passed CI, rebuilds the app, and restarts `orkestr.service`.
+Manual redeploys are available from the workflow's **Run workflow** button.
+
 Local clone flow:
 
 ```bash

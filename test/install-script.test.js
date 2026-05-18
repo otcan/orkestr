@@ -17,8 +17,13 @@ test("install script exposes a host-native systemd VPS path", async () => {
   assert.match(script, /\/etc\/orkestr\/orkestr\.env/);
   assert.match(script, /\/usr\/local\/bin\/orkestr/);
   assert.match(script, /\$\{service_name\}\.service/);
+  assert.match(script, /ORKESTR_GIT_REF/);
+  assert.match(script, /checkout_git_ref/);
+  assert.match(script, /remote set-url origin "\$repo_url"/);
   assert.match(script, /ORKESTR_AUTH_REQUIRED=\$\{ORKESTR_AUTH_REQUIRED:-1\}/);
   assert.match(script, /npm install -g "@openai\/codex@\$\{ORKESTR_CODEX_VERSION:-0\.130\.0\}"/);
   assert.match(script, /ExecStart=\/usr\/local\/bin\/orkestr serve/);
+  assert.match(script, /systemctl restart "\$\{service_name\}\.service"/);
+  assert.doesNotMatch(script, /systemctl enable --now/);
   assert.doesNotMatch(script, /docker exec orkestr/);
 });

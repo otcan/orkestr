@@ -42,6 +42,7 @@ Never commit:
 - browser profile directories
 - real chat IDs
 - private hostnames
+- VPS deploy keys, known-host material, or tailnet OAuth secrets
 - personal prompts and schedules
 
 If a value cannot be published to the public internet, it does not belong in this repository.

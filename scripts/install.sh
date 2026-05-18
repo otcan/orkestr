@@ -17,6 +17,7 @@ Modes:
 
 Environment:
   ORKESTR_REPO_URL          Git repository to clone. Defaults to https://github.com/otcan/orkestr.git.
+  ORKESTR_GIT_REF           Git branch, tag, or commit to deploy. Defaults to the repository default branch.
   ORKESTR_INSTALL_DIR       Install directory. Defaults to ~/.orkestr-src/orkestr-oss, or /opt/orkestr/app with --systemd.
   ORKESTR_HOME              Data directory. Defaults to /opt/orkestr/data with --systemd.
   ORKESTR_WORKSPACE_DIR     Workspace root. Defaults to /opt/orkestr/workspace with --systemd.
@@ -190,6 +191,15 @@ chrome_path() {
     || true
 }
 
+checkout_git_ref() {
+  if git -C "$repo_dir" fetch origin "$git_ref"; then
+    git -C "$repo_dir" checkout --detach FETCH_HEAD
+    return 0
+  fi
+  git -C "$repo_dir" fetch origin
+  git -C "$repo_dir" checkout --detach "$git_ref"
+}
+
 write_env_file() {
   if [ -f "$env_file" ]; then
     echo "Keeping existing environment file: $env_file"
@@ -275,7 +285,8 @@ PrivateTmp=true
 WantedBy=multi-user.target
 EOF
   systemctl daemon-reload
-  systemctl enable --now "${service_name}.service"
+  systemctl enable "${service_name}.service"
+  systemctl restart "${service_name}.service"
 }
 
 install_systemd_runtime() {
@@ -317,11 +328,23 @@ if [ "$local_mode" -eq 1 ]; then
 else
   need git
   repo_url="${ORKESTR_REPO_URL:-https://github.com/otcan/orkestr.git}"
+  git_ref="${ORKESTR_GIT_REF:-}"
   if [ -d "$repo_dir/.git" ]; then
-    git -C "$repo_dir" pull --ff-only
+    git -C "$repo_dir" remote set-url origin "$repo_url"
+    if [ -n "$git_ref" ]; then
+      git -C "$repo_dir" fetch --prune origin
+      checkout_git_ref
+    else
+      git -C "$repo_dir" pull --ff-only
+    fi
   else
     mkdir -p "$(dirname "$repo_dir")"
-    git clone "$repo_url" "$repo_dir"
+    if [ -n "$git_ref" ]; then
+      git clone --no-checkout "$repo_url" "$repo_dir"
+      checkout_git_ref
+    else
+      git clone "$repo_url" "$repo_dir"
+    fi
   fi
 fi
 
