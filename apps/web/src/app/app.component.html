@@ -290,7 +290,7 @@
           >
             <span class="codex-model-row">
               <strong>{{ codexModelName(thread) }}</strong>
-              <span>{{ codexReasoningEffortLabel(thread) || "effort ?" }}</span>
+              <span>{{ codexReasoningEffortLabel(thread) }}</span>
             </span>
             <span class="codex-meter-row">
               <span class="codex-meter" [class.warn]="codexRateTone(thread, 'primary') === 'warn'" [class.danger]="codexRateTone(thread, 'primary') === 'danger'">

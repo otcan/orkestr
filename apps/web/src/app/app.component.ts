@@ -2517,12 +2517,13 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
       thread?.codexModel ||
       this.objectValue(thread?.runtime, "codexModel") ||
       this.objectValue(thread?.["executor"], "codexModel") ||
-      "Model not synced",
+      "Syncing model",
     );
   }
 
   codexReasoningEffortLabel(thread: ThreadSummary | null): string {
-    return String(thread?.codexReasoningEffort || "").trim();
+    if (!thread) return "";
+    return String(thread.codexReasoningEffort || "default").trim();
   }
 
   codexModelProviderLabel(thread: ThreadSummary | null): string {
@@ -2635,7 +2636,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   codexCapacityTooltip(thread: ThreadSummary | null): string {
     return [
       `Model: ${this.codexModelName(thread)}`,
-      `Reasoning: ${this.codexReasoningEffortLabel(thread) || "unknown"}`,
+      `Reasoning: ${this.codexReasoningEffortLabel(thread) || "default"}`,
       `5h remaining: ${this.codexRateRemainingLabel(thread, "primary")}`,
       `Weekly remaining: ${this.codexRateRemainingLabel(thread, "secondary")}`,
       `Context: ${this.codexContextLabel(thread)}`,
