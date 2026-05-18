@@ -379,42 +379,6 @@
               </div>
             </article>
           }
-
-          @if (mailProvider === "gmail") {
-            <div class="mail-section-title">
-              <div>
-                <strong>Gmail Probe</strong>
-                <small>Load a few recent messages after OAuth succeeds.</small>
-              </div>
-            </div>
-            <div class="mail-probe-bar">
-              <label>
-                <span>Search query</span>
-                <input name="gmail-sample-query" [(ngModel)]="gmailSampleQuery" autocomplete="off" />
-              </label>
-              <button type="button" (click)="loadGmailSample()" [disabled]="gmailSampleLoading">
-                {{ gmailSampleLoading ? "Checking" : "Load sample" }}
-              </button>
-            </div>
-            @if (gmailSampleMessages.length) {
-              <div class="probe-list">
-                @for (message of gmailSampleMessages; track message.id) {
-                  <div class="probe-row">
-                    <span>{{ gmailSampleDate(message) }}</span>
-                    <strong>{{ message.subject || "(no subject)" }}</strong>
-                    <small>{{ message.from || message.snippet || "-" }}</small>
-                  </div>
-                }
-              </div>
-            }
-          } @else {
-            <div class="mail-section-title">
-              <div>
-                <strong>Outlook Probe</strong>
-                <small>Outlook token storage is checked in connector status. Message probing can be added after the first auth path is stable.</small>
-              </div>
-            </div>
-          }
         </section>
       }
 

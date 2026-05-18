@@ -1,7 +1,7 @@
 import { Component, EventEmitter, Input, OnChanges, OnDestroy, OnInit, Output, SimpleChanges, inject } from "@angular/core";
 import { FormsModule } from "@angular/forms";
 import { firstValueFrom } from "rxjs";
-import { ApiService, ConnectorStatus, GmailMessage, OutlookOAuthPollResponse, OutlookOAuthStartResponse, SecurityChallenge, SetupStatus, ThreadSummary } from "./api.service";
+import { ApiService, ConnectorStatus, OutlookOAuthPollResponse, OutlookOAuthStartResponse, SecurityChallenge, SetupStatus, ThreadSummary } from "./api.service";
 
 type ConnectorStep = "openai" | "codex" | "gmail" | "linkedin" | "whatsapp" | "browsers";
 type OnboardingStep = "goal" | "system" | "security" | ConnectorStep | "finish";
@@ -68,9 +68,6 @@ export class OnboardingPageComponent implements OnInit, OnChanges, OnDestroy {
   gmailClientId = "";
   gmailClientSecret = "";
   gmailRedirectUri = this.defaultGmailRedirectUri();
-  gmailSampleQuery = "in:inbox newer_than:7d";
-  gmailSampleMessages: GmailMessage[] = [];
-  gmailSampleLoading = false;
   outlookAccount = "";
   outlookClientId = "";
   outlookTenantId = "common";
@@ -199,25 +196,6 @@ export class OnboardingPageComponent implements OnInit, OnChanges, OnDestroy {
       this.error = this.errorText(error);
     } finally {
       this.busy = false;
-    }
-  }
-
-  async loadGmailSample(): Promise<void> {
-    this.gmailSampleLoading = true;
-    try {
-      const list = await firstValueFrom(this.api.gmailMessages(5, this.gmailSampleQuery));
-      const ids = (list.messages || []).map((message) => message.id).filter(Boolean).slice(0, 5);
-      const details = await Promise.all(ids.map(async (id) => {
-        const result = await firstValueFrom(this.api.gmailMessage(id));
-        return result.message;
-      }));
-      this.gmailSampleMessages = details;
-      this.notice = details.length ? "Loaded recent Gmail messages." : "Gmail connected, but no messages matched this probe.";
-      this.error = "";
-    } catch (error) {
-      this.error = this.errorText(error);
-    } finally {
-      this.gmailSampleLoading = false;
     }
   }
 
@@ -488,14 +466,6 @@ export class OnboardingPageComponent implements OnInit, OnChanges, OnDestroy {
     if (this.mailProviderHasAccounts("outlook")) return this.mailProviderAccountCountLabel("outlook");
     if (!this.outlookClientId.trim()) return "Microsoft app is not configured.";
     return `Tenant ${this.outlookTenantId.trim() || "common"}`;
-  }
-
-  gmailSampleDate(message: GmailMessage): string {
-    const timestamp = Date.parse(String(message.date || ""));
-    if (Number.isFinite(timestamp)) return new Date(timestamp).toLocaleString([], { dateStyle: "short", timeStyle: "short" });
-    const internal = Number(message.internalDate || 0);
-    if (Number.isFinite(internal) && internal > 0) return new Date(internal).toLocaleString([], { dateStyle: "short", timeStyle: "short" });
-    return "-";
   }
 
   stateLabel(id: string): string {
