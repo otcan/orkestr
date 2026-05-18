@@ -33,6 +33,7 @@ export class OnboardingPageComponent implements OnInit, OnChanges, OnDestroy {
   @Output() skip = new EventEmitter<void>();
   @Output() complete = new EventEmitter<void>();
   @Output() setupSectionChange = new EventEmitter<string>();
+  @Output() paired = new EventEmitter<void>();
 
   setup: SetupStatus | null = null;
   busy = false;
@@ -489,6 +490,7 @@ export class OnboardingPageComponent implements OnInit, OnChanges, OnDestroy {
       this.notice = "This browser is paired.";
       this.error = "";
       await this.load(false);
+      this.paired.emit();
     } catch (error) {
       this.error = this.errorText(error);
     } finally {

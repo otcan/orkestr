@@ -51,6 +51,10 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     this.activePanel = this.panelFromPath();
     this.toolsView = this.toolsViewFromPath();
     this.normalizeLegacyRoutePath();
+    if (this.pairingRequired) {
+      this.enterPairingRequired();
+      return;
+    }
     if (this.onboardingActive) {
       this.closeRawStream();
       this.updateDocumentTitle();
@@ -87,6 +91,8 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   error = "";
   apiOnline = false;
   busy = false;
+  appReady = false;
+  pairingRequired = false;
   sending = false;
   sendingNow = false;
   threadWizardOpen = false;
@@ -246,12 +252,26 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
         firstValueFrom(this.api.timers()),
         firstValueFrom(this.api.whatsappStatus()),
       ]);
-      if (threadsResult.status === "rejected") throw threadsResult.reason;
-      const payload = threadsResult.value;
       if (systemResult.status === "fulfilled") this.opsSystem = systemResult.value;
       if (setupResult.status === "fulfilled") this.setupStatus = setupResult.value;
       if (timersResult.status === "fulfilled") this.allTimers = timersResult.value.timers || [];
       if (whatsappResult.status === "fulfilled") this.whatsappStatusDetails = whatsappResult.value;
+      this.appReady = true;
+      if (this.isPairingRequiredFromSetup()) {
+        this.apiOnline = true;
+        this.enterPairingRequired();
+        return;
+      }
+      this.pairingRequired = false;
+      if (threadsResult.status === "rejected") {
+        if (this.isPairingRequiredError(threadsResult.reason)) {
+          this.apiOnline = true;
+          this.enterPairingRequired();
+          return;
+        }
+        throw threadsResult.reason;
+      }
+      const payload = threadsResult.value;
       this.apiOnline = true;
       this.trackThreadActivity(payload.threads);
       this.threads = [...payload.threads].sort((a, b) => this.activityMs(b) - this.activityMs(a));
@@ -277,16 +297,55 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
       await this.loadSelectedThread(false);
       this.updateDocumentTitle();
       this.error = "";
+      this.connectSummaryStream();
     } catch (error) {
       this.apiOnline = false;
       this.error = this.errorText(error);
+      this.appReady = true;
     } finally {
       this.busy = false;
       this.renderNow();
     }
   }
 
+  private isPairingRequiredFromSetup(setup: SetupStatus | null = this.setupStatus): boolean {
+    const security = setup?.security;
+    return Boolean((security?.authEnabled || security?.authRequired) && !security?.paired);
+  }
+
+  private isPairingRequiredError(error: unknown): boolean {
+    const record = error && typeof error === "object" ? error as { error?: unknown; message?: unknown } : null;
+    const body = record?.error;
+    const bodyRecord = body && typeof body === "object" ? body as { error?: unknown; code?: unknown } : null;
+    return (
+      bodyRecord?.error === "browser_pairing_required" ||
+      bodyRecord?.code === "browser_pairing_required" ||
+      String(record?.message || body || error || "").includes("browser_pairing_required")
+    );
+  }
+
+  private enterPairingRequired(setup: SetupStatus | null = this.setupStatus): void {
+    if (setup) this.setupStatus = setup;
+    this.apiOnline = true;
+    this.appReady = true;
+    this.pairingRequired = true;
+    this.onboardingActive = true;
+    this.setupPageMode = "setup";
+    this.setupSection = "security";
+    this.threadWizardOpen = false;
+    this.modelDetailsOpen = false;
+    this.gitDetailsThreadId = "";
+    this.activePanel = "chat";
+    this.error = "";
+    this.closeRawStream();
+    this.disconnectSummaryStream();
+    this.replaceSetupPath("security");
+    this.updateDocumentTitle();
+    this.renderNow();
+  }
+
   private connectSummaryStream(): void {
+    if (!this.appReady || this.pairingRequired) return;
     if (this.destroyed || typeof globalThis.WebSocket === "undefined") {
       this.startFallbackPolling();
       return;
@@ -315,7 +374,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   }
 
   private scheduleSummaryReconnect(): void {
-    if (this.destroyed || this.summaryReconnectTimer) return;
+    if (this.destroyed || this.pairingRequired || !this.appReady || this.summaryReconnectTimer) return;
     this.summaryReconnectTimer = setTimeout(() => {
       this.summaryReconnectTimer = undefined;
       this.connectSummaryStream();
@@ -323,6 +382,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   }
 
   private startFallbackPolling(): void {
+    if (this.pairingRequired || !this.appReady) return;
     if (this.fallbackPoller) return;
     this.fallbackPoller = setInterval(() => void this.refresh(false), 30_000);
   }
@@ -331,6 +391,17 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     if (!this.fallbackPoller) return;
     clearInterval(this.fallbackPoller);
     this.fallbackPoller = undefined;
+  }
+
+  private disconnectSummaryStream(): void {
+    if (this.summaryReconnectTimer) {
+      clearTimeout(this.summaryReconnectTimer);
+      this.summaryReconnectTimer = undefined;
+    }
+    const socket = this.summarySocket;
+    this.summarySocket = undefined;
+    socket?.close();
+    this.stopFallbackPolling();
   }
 
   private async loadSystemSummarySilent(): Promise<void> {
@@ -343,6 +414,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   }
 
   private async handleSummaryStreamMessage(raw: unknown): Promise<void> {
+    if (this.pairingRequired) return;
     let payload: { type?: string; threads?: ThreadSummary[] };
     try {
       payload = JSON.parse(String(raw || "{}"));
@@ -354,12 +426,14 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   }
 
   private async applyThreadSummaryStream(threads: ThreadSummary[]): Promise<void> {
+    if (this.pairingRequired) return;
     if (this.applyingSummary) return;
     this.applyingSummary = true;
     try {
       const previousSelected = this.selectedThread();
       const previousSignature = this.threadReloadSignature(previousSelected);
       this.apiOnline = true;
+      this.appReady = true;
       this.threads = [...threads].sort((a, b) => this.activityMs(b) - this.activityMs(a));
       this.seedReadStateIfNeeded(this.threads);
       if (this.activePanel !== "ops" && !this.selectedId && this.threads.length) {
@@ -390,6 +464,10 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   }
 
   async activateThread(thread: ThreadSummary): Promise<void> {
+    if (this.pairingRequired) {
+      this.enterPairingRequired();
+      return;
+    }
     const nextPanel = this.activePanel === "raw" ? "raw" : "chat";
     this.threadWizardOpen = false;
     this.selectedId = this.threadSlug(thread);
@@ -419,6 +497,10 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   }
 
   async openPanel(panel: Panel): Promise<void> {
+    if (this.pairingRequired) {
+      this.enterPairingRequired();
+      return;
+    }
     if (panel === "ops") {
       this.openTools(this.toolsView);
       return;
@@ -444,6 +526,10 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   }
 
   openTools(view: ToolsView = this.toolsView): void {
+    if (this.pairingRequired) {
+      this.enterPairingRequired();
+      return;
+    }
     if (this.activePanel === "raw") this.closeRawStream();
     this.modelDetailsOpen = false;
     this.gitDetailsThreadId = "";
@@ -463,6 +549,10 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   }
 
   openOnboarding(): void {
+    if (this.pairingRequired) {
+      this.enterPairingRequired();
+      return;
+    }
     if (this.activePanel === "raw") this.closeRawStream();
     this.threadWizardOpen = false;
     this.onboardingActive = true;
@@ -474,6 +564,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   }
 
   openSetup(section: SetupSection = this.setupSection || "system"): void {
+    if (this.pairingRequired) section = "security";
     if (this.activePanel === "raw") this.closeRawStream();
     this.threadWizardOpen = false;
     this.onboardingActive = true;
@@ -489,6 +580,10 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   }
 
   async leaveOnboarding(completed = false): Promise<void> {
+    if (this.pairingRequired) {
+      this.enterPairingRequired();
+      return;
+    }
     if (this.setupPageMode === "setup") {
       this.onboardingActive = false;
       this.threadWizardOpen = false;
@@ -520,7 +615,17 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     await this.refresh(false);
   }
 
+  async handleBrowserPaired(): Promise<void> {
+    this.pairingRequired = false;
+    this.appReady = true;
+    await this.refresh(false);
+  }
+
   openThreadWizard(): void {
+    if (this.pairingRequired) {
+      this.enterPairingRequired();
+      return;
+    }
     if (this.activePanel === "raw") this.closeRawStream();
     this.threadWizardOpen = true;
     this.onboardingActive = false;
@@ -2735,6 +2840,12 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     const next = `/setup/${section}`;
     if (globalThis.location?.pathname === next) return;
     globalThis.history?.pushState({}, "", next);
+  }
+
+  private replaceSetupPath(section: SetupSection = this.setupSection): void {
+    const next = `/setup/${section}`;
+    if (globalThis.location?.pathname === next) return;
+    globalThis.history?.replaceState({}, "", next);
   }
 
   private normalizeSetupSection(value: unknown): SetupSection {

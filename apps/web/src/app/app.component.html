@@ -1,12 +1,13 @@
-@if (onboardingActive) {
+@if (onboardingActive || pairingRequired) {
   <ork-onboarding-page
     [mode]="setupPageMode"
     [setupSection]="setupSection"
     (setupSectionChange)="handleSetupSectionChange($event)"
     (skip)="leaveOnboarding(false)"
     (complete)="leaveOnboarding(true)"
+    (paired)="handleBrowserPaired()"
   ></ork-onboarding-page>
-} @else {
+} @else if (appReady) {
 <main class="app-shell" [class.sidebar-resizing]="sidebarResizing" [style.--sidebar-width.px]="sidebarWidth">
   <aside class="sidebar">
     <div class="brand">

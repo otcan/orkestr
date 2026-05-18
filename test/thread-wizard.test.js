@@ -39,6 +39,10 @@ test("main UI exposes a guided first thread generation flow", async () => {
   assert.ok(sources.includes("git\", [\"clone\""));
   assert.ok(sources.includes("clone_target_not_empty"));
   assert.ok(sources.includes("<ork-first-thread-wizard"));
+  assert.ok(sources.includes("@if (onboardingActive || pairingRequired)"));
+  assert.ok(sources.includes("browser_pairing_required"));
+  assert.ok(sources.includes("enterPairingRequired"));
+  assert.ok(sources.includes("(paired)=\"handleBrowserPaired()\""));
   assert.ok(sources.includes("Connect sender"));
   assert.ok(sources.includes("Connect Orkestr account"));
   assert.ok(sources.includes("Create and connect chat"));
