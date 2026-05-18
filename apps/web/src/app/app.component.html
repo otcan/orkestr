@@ -776,18 +776,46 @@
                       <span>Linked sender account</span>
                       <strong>{{ selectedWhatsAppSenderAccountLabel() }}</strong>
                       @if (whatsappAllowOtherPeople) {
-                        <span>Other participants</span>
-                        <strong>{{ whatsappParticipantsLoading ? "Checking" : (whatsappParticipants.length || "Unavailable") }}</strong>
+                        <span>Allowed participants</span>
+                        <strong>{{ whatsappParticipantsLoading ? "Checking" : whatsappAdditionalParticipantCount(thread) }}</strong>
                       }
                     </div>
                     @if (!whatsappAllowOtherPeople) {
                       <p class="helper">Additional participants are off. Orkestr only listens to the linked sender account.</p>
-                    } @else if (whatsappParticipants.length > 0) {
+                    } @else if (whatsappParticipants.length > 0 || whatsappSavedAdditionalParticipants(thread).length > 0) {
                       <div class="wa-participant-list">
-                        @for (participant of whatsappParticipants; track participant.id) {
-                          <span>{{ whatsappParticipantLabel(participant) }}</span>
+                        @for (participant of whatsappSelectableParticipants(thread); track participant.id) {
+                          <label class="wa-participant-row">
+                            <input
+                              name="thread-wa-participant-{{ thread.id }}-{{ participant.id }}"
+                              type="checkbox"
+                              [ngModel]="whatsappParticipantChecked(participant)"
+                              (ngModelChange)="changeWhatsAppParticipantAccess(participant, $event)"
+                            />
+                            <span class="wa-participant-copy">
+                              <strong>{{ whatsappParticipantName(participant) || "Unknown contact" }}</strong>
+                              <small>{{ whatsappParticipantNumber(participant) }}</small>
+                            </span>
+                          </label>
+                        }
+                        @for (participantId of whatsappSavedAdditionalParticipants(thread); track participantId) {
+                          <label class="wa-participant-row">
+                            <input
+                              name="thread-wa-saved-participant-{{ thread.id }}-{{ participantId }}"
+                              type="checkbox"
+                              [ngModel]="true"
+                              (ngModelChange)="changeWhatsAppParticipantIdAccess(participantId, $event)"
+                            />
+                            <span class="wa-participant-copy">
+                              <strong>{{ whatsappParticipantName(participantId) || "Unknown contact" }}</strong>
+                              <small>{{ whatsappParticipantNumber(participantId) }}</small>
+                            </span>
+                          </label>
                         }
                       </div>
+                      @if (whatsappSelectableParticipants(thread).length === 0 && whatsappSavedAdditionalParticipants(thread).length === 0) {
+                        <p class="helper">No extra participants are available. The linked sender account can already message Orkestr.</p>
+                      }
                     } @else if (!whatsappParticipantsLoading) {
                       <p class="helper">The participant list is unavailable until the selected sender account is connected and the chat can be inspected. Orkestr can still listen to the linked sender account.</p>
                     }

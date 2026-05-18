@@ -134,6 +134,8 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   whatsappStatusDetails: WhatsAppStatusResponse | null = null;
   whatsappChats: WhatsAppChat[] = [];
   whatsappParticipants: WhatsAppParticipant[] = [];
+  whatsappAdditionalParticipantIds: string[] = [];
+  whatsappAdditionalParticipantLabels: Record<string, string> = {};
   whatsappChatsLoading = false;
   whatsappParticipantsLoading = false;
   savingThreadBinding = false;
@@ -1046,6 +1048,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     this.savingThreadBinding = true;
     this.busy = true;
     try {
+      const additionalParticipantIds = this.whatsappAllowOtherPeople ? this.whatsappSelectedAdditionalParticipantIds(thread) : [];
       const result = await firstValueFrom(this.api.updateThreadBinding(thread.id, {
         connector: "whatsapp",
         chatId: this.whatsappChatId.trim(),
@@ -1053,6 +1056,8 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
         enabled: this.whatsappBindingEnabled,
         allowOtherPeople: this.whatsappAllowOtherPeople,
         additionalParticipantsEnabled: this.whatsappAllowOtherPeople,
+        additionalParticipantIds,
+        additionalParticipantLabels: this.whatsappAllowOtherPeople ? this.whatsappSelectedParticipantLabels(thread) : {},
         mirrorToWhatsApp: this.whatsappMirrorToWhatsApp,
         replyPrefix: this.whatsappReplyPrefix.trim() || "otcanclaw:",
         senderAccountId: this.selectedWhatsAppSenderAccountId(),
@@ -1146,6 +1151,8 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
       this.whatsappDisplayName = String(created.chat?.name || name).trim();
       this.whatsappBindingEnabled = true;
       this.whatsappAllowOtherPeople = false;
+      this.whatsappAdditionalParticipantIds = [];
+      this.whatsappAdditionalParticipantLabels = {};
       this.whatsappMirrorToWhatsApp = true;
       const result = await firstValueFrom(this.api.updateThreadBinding(thread.id, {
         connector: "whatsapp",
@@ -1154,6 +1161,8 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
         enabled: true,
         allowOtherPeople: false,
         additionalParticipantsEnabled: false,
+        additionalParticipantIds: [],
+        additionalParticipantLabels: {},
         mirrorToWhatsApp: true,
         replyPrefix: this.whatsappReplyPrefix.trim() || "otcanclaw:",
         senderAccountId: created.senderAccountId || this.selectedWhatsAppSenderAccountId(),
@@ -1193,6 +1202,8 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
         enabled: false,
         allowOtherPeople: false,
         additionalParticipantsEnabled: false,
+        additionalParticipantIds: [],
+        additionalParticipantLabels: {},
         mirrorToWhatsApp: false,
         replyPrefix: this.whatsappReplyPrefix.trim() || "otcanclaw:",
         senderAccountId: "",
@@ -1205,6 +1216,8 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
       if (result.thread) this.replaceThread(result.thread);
       this.syncThreadBindingDraft(result.thread || thread, true);
       this.whatsappParticipants = [];
+      this.whatsappAdditionalParticipantIds = [];
+      this.whatsappAdditionalParticipantLabels = {};
     } catch (error) {
       this.error = this.errorText(error);
     } finally {
@@ -1243,6 +1256,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     try {
       const result = await firstValueFrom(this.api.whatsappBridgeChatParticipants(accountId, chatId));
       this.whatsappParticipants = result.participants || [];
+      this.mergeWhatsAppParticipantLabels();
     } catch {
       this.whatsappParticipants = [];
     } finally {
@@ -1253,7 +1267,34 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
 
   async changeWhatsAppAdditionalParticipants(enabled: boolean): Promise<void> {
     this.whatsappAllowOtherPeople = enabled;
-    if (enabled) await this.loadWhatsAppParticipants();
+    if (!enabled) {
+      this.whatsappAdditionalParticipantIds = [];
+      return;
+    }
+    await this.loadWhatsAppParticipants();
+  }
+
+  changeWhatsAppParticipantAccess(participant: WhatsAppParticipant, enabled: boolean): void {
+    const id = this.whatsappParticipantId(participant);
+    if (!id) return;
+    const next = new Set(this.whatsappAdditionalParticipantIds.map((value) => value.toLowerCase()));
+    if (enabled) {
+      next.add(id.toLowerCase());
+      const name = this.whatsappParticipantName(participant);
+      if (name) this.whatsappAdditionalParticipantLabels[id] = name;
+    } else {
+      next.delete(id.toLowerCase());
+      delete this.whatsappAdditionalParticipantLabels[id];
+    }
+    this.whatsappAdditionalParticipantIds = this.whatsappParticipants
+      .map((item) => this.whatsappParticipantId(item))
+      .concat(this.whatsappAdditionalParticipantIds)
+      .filter((value, index, values) => value && values.findIndex((item) => item.toLowerCase() === value.toLowerCase()) === index)
+      .filter((value) => next.has(value.toLowerCase()));
+  }
+
+  changeWhatsAppParticipantIdAccess(participantId: string, enabled: boolean): void {
+    this.changeWhatsAppParticipantAccess({ id: participantId }, enabled);
   }
 
   selectWhatsAppChat(chatId: string): void {
@@ -1705,6 +1746,10 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     const chatId = this.whatsappChatId.trim();
     const accountDirty = Boolean(chatId || binding.chatId) && this.selectedWhatsAppAccountId() !== String(binding.responderAccountId || binding.outboundAccountId || "").trim();
     const senderDirty = Boolean(chatId || binding.chatId) && this.selectedWhatsAppSenderAccountId() !== String(binding.senderAccountId || binding.inboundAccountId || binding.outboundAccountId || "").trim();
+    const savedParticipantIds = binding.additionalParticipantsEnabled === true
+      ? this.normalizeWhatsAppParticipantIds(binding.additionalParticipantIds).filter((id) => !this.whatsappSystemParticipantIds(thread).has(id.toLowerCase()))
+      : [];
+    const draftParticipantIds = this.whatsappAllowOtherPeople ? this.whatsappSelectedAdditionalParticipantIds(thread) : [];
     return chatId !== String(binding.chatId || "") ||
       this.whatsappDisplayName.trim() !== String(binding.displayName || this.threadTitle(thread)) ||
       this.whatsappReplyPrefix.trim() !== String(binding.replyPrefix || "otcanclaw:") ||
@@ -1712,6 +1757,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
       senderDirty ||
       this.whatsappBindingEnabled !== (binding.enabled !== false) ||
       this.whatsappAllowOtherPeople !== (binding.additionalParticipantsEnabled === true) ||
+      !this.sameWhatsAppParticipantIds(draftParticipantIds, savedParticipantIds) ||
       this.whatsappMirrorToWhatsApp !== (binding.mirrorToWhatsApp !== false);
   }
 
@@ -1839,9 +1885,59 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   }
 
   whatsappParticipantLabel(participant: WhatsAppParticipant): string {
-    const name = String(participant.name || "").trim();
-    const id = String(participant.id || "").trim();
-    return name ? `${name} · ${id}` : id;
+    const name = this.whatsappParticipantName(participant);
+    const number = this.whatsappParticipantNumber(participant);
+    const id = this.whatsappParticipantId(participant);
+    return name ? `${name} · ${number || id}` : number || id;
+  }
+
+  whatsappParticipantId(participant: WhatsAppParticipant | string): string {
+    return String(typeof participant === "string" ? participant : participant.id || "").trim();
+  }
+
+  whatsappParticipantName(participant: WhatsAppParticipant | string): string {
+    const id = this.whatsappParticipantId(participant);
+    const data = typeof participant === "string" ? null : participant;
+    return String(
+      data?.name ||
+      data?.["savedName"] ||
+      data?.["contactName"] ||
+      data?.["displayName"] ||
+      data?.["notifyName"] ||
+      data?.["pushname"] ||
+      data?.["shortName"] ||
+      this.whatsappParticipantSavedLabel(id) ||
+      "",
+    ).trim();
+  }
+
+  whatsappParticipantNumber(participant: WhatsAppParticipant | string): string {
+    const id = this.whatsappParticipantId(participant);
+    const user = id.split("@")[0].replace(/[^\d+]/g, "");
+    if (!user) return id;
+    return user.startsWith("+") ? user : `+${user}`;
+  }
+
+  whatsappSelectableParticipants(thread: ThreadSummary | null = this.selectedThread()): WhatsAppParticipant[] {
+    const systemIds = this.whatsappSystemParticipantIds(thread);
+    return this.whatsappParticipants.filter((participant) => {
+      const id = this.whatsappParticipantId(participant).toLowerCase();
+      return id && !systemIds.has(id);
+    });
+  }
+
+  whatsappParticipantChecked(participant: WhatsAppParticipant | string): boolean {
+    const id = this.whatsappParticipantId(participant).toLowerCase();
+    return Boolean(id && this.whatsappAdditionalParticipantIds.some((value) => value.toLowerCase() === id));
+  }
+
+  whatsappSavedAdditionalParticipants(thread: ThreadSummary | null = this.selectedThread()): string[] {
+    const visible = new Set(this.whatsappSelectableParticipants(thread).map((participant) => this.whatsappParticipantId(participant).toLowerCase()).filter(Boolean));
+    return this.whatsappSelectedAdditionalParticipantIds(thread).filter((id) => id && !visible.has(id.toLowerCase()));
+  }
+
+  whatsappAdditionalParticipantCount(thread: ThreadSummary | null = this.selectedThread()): number {
+    return this.whatsappAllowOtherPeople ? this.whatsappSelectedAdditionalParticipantIds(thread).length : 0;
   }
 
   whatsappChatConnected(thread: ThreadSummary | null): boolean {
@@ -2665,6 +2761,77 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
       .sort((a, b) => this.activityMs(b) - this.activityMs(a));
   }
 
+  private whatsappSystemParticipantIds(thread: ThreadSummary | null): Set<string> {
+    const binding = thread?.binding || {};
+    const ids = [
+      binding.senderContactId,
+      binding.responderContactId,
+      this.whatsappAccountContactId(this.selectedWhatsAppSenderAccountId()),
+      this.whatsappAccountContactId(this.selectedWhatsAppAccountId()),
+    ];
+    return new Set(ids.map((id) => String(id || "").trim().toLowerCase()).filter(Boolean));
+  }
+
+  private whatsappAccountContactId(accountId: string): string {
+    const account = this.whatsappAccounts().find((item) => this.whatsappAccountId(item) === accountId);
+    const raw = String(account?.["phoneNumber"] || account?.["phone"] || account?.["number"] || "").trim();
+    const digits = raw.replace(/\D/g, "");
+    return digits ? `${digits}@c.us` : "";
+  }
+
+  private whatsappParticipantSavedLabel(participantId: string): string {
+    const exact = String(this.whatsappAdditionalParticipantLabels[participantId] || "").trim();
+    if (exact) return exact;
+    const match = Object.entries(this.whatsappAdditionalParticipantLabels)
+      .find(([id]) => id.toLowerCase() === participantId.toLowerCase());
+    return String(match?.[1] || "").trim();
+  }
+
+  private whatsappSelectedParticipantLabels(thread: ThreadSummary | null = this.selectedThread()): Record<string, string> {
+    const labels: Record<string, string> = {};
+    for (const id of this.whatsappSelectedAdditionalParticipantIds(thread)) {
+      const participant = this.whatsappParticipants.find((item) => this.whatsappParticipantId(item).toLowerCase() === id.toLowerCase());
+      const label = participant ? this.whatsappParticipantName(participant) : String(this.whatsappAdditionalParticipantLabels[id] || "").trim();
+      if (label) labels[id] = label;
+    }
+    return labels;
+  }
+
+  private whatsappSelectedAdditionalParticipantIds(thread: ThreadSummary | null = this.selectedThread()): string[] {
+    const systemIds = this.whatsappSystemParticipantIds(thread);
+    return this.whatsappAdditionalParticipantIds.filter((id) => id && !systemIds.has(id.toLowerCase()));
+  }
+
+  private mergeWhatsAppParticipantLabels(): void {
+    const labels = { ...this.whatsappAdditionalParticipantLabels };
+    for (const participant of this.whatsappParticipants) {
+      const id = this.whatsappParticipantId(participant);
+      const name = this.whatsappParticipantName(participant);
+      if (id && name) labels[id] = name;
+    }
+    this.whatsappAdditionalParticipantLabels = labels;
+  }
+
+  private normalizeWhatsAppParticipantIds(values: unknown): string[] {
+    if (!Array.isArray(values)) return [];
+    const seen = new Set<string>();
+    const result: string[] = [];
+    for (const value of values) {
+      const id = String(value || "").trim();
+      const comparable = id.toLowerCase();
+      if (!id || seen.has(comparable)) continue;
+      seen.add(comparable);
+      result.push(id);
+    }
+    return result;
+  }
+
+  private sameWhatsAppParticipantIds(left: string[], right: string[]): boolean {
+    const normalizedLeft = left.map((value) => value.toLowerCase()).sort();
+    const normalizedRight = right.map((value) => value.toLowerCase()).sort();
+    return normalizedLeft.length === normalizedRight.length && normalizedLeft.every((value, index) => value === normalizedRight[index]);
+  }
+
   private syncThreadMetaDraft(thread: ThreadSummary | null, force = false): void {
     if (!thread) return;
     if (!force && this.threadMetaThreadId === thread.id && this.threadMetaDirty(thread)) return;
@@ -2685,6 +2852,12 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     this.whatsappOutboundAccountId = String(binding.responderAccountId || binding.outboundAccountId || "");
     this.whatsappBindingEnabled = binding.enabled !== false;
     this.whatsappAllowOtherPeople = binding.additionalParticipantsEnabled === true;
+    this.whatsappAdditionalParticipantIds = this.whatsappAllowOtherPeople
+      ? this.normalizeWhatsAppParticipantIds(binding.additionalParticipantIds).filter((id) => !this.whatsappSystemParticipantIds(thread).has(id.toLowerCase()))
+      : [];
+    this.whatsappAdditionalParticipantLabels = binding.additionalParticipantLabels && typeof binding.additionalParticipantLabels === "object" && !Array.isArray(binding.additionalParticipantLabels)
+      ? { ...(binding.additionalParticipantLabels as Record<string, string>) }
+      : {};
     this.whatsappMirrorToWhatsApp = binding.mirrorToWhatsApp !== false;
     this.deleteThreadConfirm = "";
     this.deleteThreadWorkers = false;

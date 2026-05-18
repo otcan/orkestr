@@ -128,8 +128,8 @@ test("whatsapp participants are discovered from external bridge chat metadata", 
       isGroup: true,
       groupMetadata: {
         participants: [
-          { id: "491111111111@c.us", isAdmin: true },
-          { id: { _serialized: "492222222222@c.us" }, isSuperAdmin: true },
+          { id: "491111111111@c.us", name: "Saved Main", isAdmin: true },
+          { id: { _serialized: "492222222222@c.us" }, pushname: "Saved Other", isSuperAdmin: true },
         ],
       },
     });
@@ -137,6 +137,7 @@ test("whatsapp participants are discovered from external bridge chat metadata", 
 
   assert.equal(result.ready, true);
   assert.deepEqual(result.participants.map((participant) => participant.id), ["491111111111@c.us", "492222222222@c.us"]);
+  assert.deepEqual(result.participants.map((participant) => participant.name), ["Saved Main", "Saved Other"]);
 });
 
 test("whatsapp status reports qr needed when health is reachable and qr exists", async () => {
@@ -433,27 +434,38 @@ test("legacy allowOtherPeople does not enable additional participants without co
   );
 });
 
-test("confirmed additional participants can route through a generated binding", async () => {
-  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-additional-enabled-"));
+test("additional participants require an explicit selected participant", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-additional-selected-"));
   const env = { ORKESTR_HOME: home };
   await createThread({
-    id: "confirmed-additional-thread",
-    name: "Confirmed Additional Thread",
+    id: "selected-additional-thread",
+    name: "Selected Additional Thread",
     binding: {
       connector: "whatsapp",
-      chatId: "chat-confirmed",
-      displayName: "Confirmed Chat",
+      chatId: "chat-selected",
+      displayName: "Selected Chat",
       enabled: true,
       allowOtherPeople: true,
       additionalParticipantsEnabled: true,
+      additionalParticipantIds: ["491111111111@c.us"],
       senderAccountId: "account-1",
       responderAccountId: "account-2",
+      responderContactId: "492222222222@c.us",
     },
   }, env);
 
-  const routed = await routeWhatsAppInbound({ eventId: "wa-additional-confirmed", chatId: "chat-confirmed", accountId: "account-1", fromMe: false, text: "confirmed allowed" }, env);
+  await assert.rejects(
+    () => routeWhatsAppInbound({ eventId: "wa-additional-rejected", chatId: "chat-selected", accountId: "account-1", from: "493333333333@c.us", fromMe: false, text: "not selected" }, env),
+    /whatsapp_target_required/,
+  );
+  await assert.rejects(
+    () => routeWhatsAppInbound({ eventId: "wa-additional-responder", chatId: "chat-selected", accountId: "account-1", from: "492222222222@c.us", fromMe: false, text: "responder" }, env),
+    /whatsapp_target_required/,
+  );
 
-  assert.equal(routed.threadId, "confirmed-additional-thread");
+  const routed = await routeWhatsAppInbound({ eventId: "wa-additional-selected", chatId: "chat-selected", accountId: "account-1", from: "491111111111@c.us", fromMe: false, text: "selected allowed" }, env);
+
+  assert.equal(routed.threadId, "selected-additional-thread");
 });
 
 test("whatsapp delivery respects thread binding mirroring toggle", async () => {

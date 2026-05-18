@@ -324,6 +324,8 @@ export interface ThreadSummary {
     enabled?: boolean;
     allowOtherPeople?: boolean;
     additionalParticipantsEnabled?: boolean;
+    additionalParticipantIds?: string[];
+    additionalParticipantLabels?: Record<string, string>;
     mirrorToWhatsApp?: boolean;
     senderAccountId?: string | null;
     inboundAccountId?: string | null;
