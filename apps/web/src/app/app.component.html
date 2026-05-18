@@ -793,7 +793,7 @@
                               (ngModelChange)="changeWhatsAppParticipantAccess(participant, $event)"
                             />
                             <span class="wa-participant-copy">
-                              <strong>{{ whatsappParticipantName(participant) || "Saved contact" }}</strong>
+                              <strong>{{ whatsappParticipantName(participant) || "Unknown contact" }}</strong>
                               <small>{{ whatsappParticipantNumber(participant) }}</small>
                             </span>
                           </label>
@@ -807,7 +807,7 @@
                               (ngModelChange)="changeWhatsAppParticipantIdAccess(participantId, $event)"
                             />
                             <span class="wa-participant-copy">
-                              <strong>{{ whatsappParticipantName(participantId) || "Saved contact" }}</strong>
+                              <strong>{{ whatsappParticipantName(participantId) || "Unknown contact" }}</strong>
                               <small>{{ whatsappParticipantNumber(participantId) }}</small>
                             </span>
                           </label>
