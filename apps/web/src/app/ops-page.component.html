@@ -117,8 +117,8 @@
     <div class="panel-title compact-title">
       <div>
         <p class="eyebrow">Desktop management</p>
-        <h3>{{ opsBrowsers.length }} desktops</h3>
-        <small>{{ opsBrowserSource || "browserctl" }}</small>
+        <h3>{{ opsBrowsersLoading && !opsBrowsers.length ? "Loading desktops" : opsBrowsers.length + " desktops" }}</h3>
+        <small>{{ opsBrowsersLoading ? "loading from " + (opsBrowserSource || "browserctl") : (opsBrowserSource || "browserctl") }}</small>
       </div>
       <button class="secondary" type="button" (click)="loadOps()" [disabled]="busy">Reload</button>
     </div>
@@ -187,7 +187,7 @@
           </div>
         </article>
       } @empty {
-        <p class="empty">No desktops registered.</p>
+        <p class="empty">{{ opsBrowsersLoading ? "Loading desktop sessions..." : "No desktops registered." }}</p>
       }
     </div>
   }

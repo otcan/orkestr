@@ -1,5 +1,5 @@
 import { DatePipe } from "@angular/common";
-import { Component, EventEmitter, Input, OnDestroy, OnInit, Output, inject } from "@angular/core";
+import { ChangeDetectorRef, Component, EventEmitter, Input, OnDestroy, OnInit, Output, inject } from "@angular/core";
 import { firstValueFrom } from "rxjs";
 import { Agent, AgentTemplate, ApiService, BrowserSession, ConnectorStatus, EventRecord, SetupStatus, TimerDoctorResponse, TimerRecord } from "./api.service";
 
@@ -12,6 +12,7 @@ export type ToolsView = "system" | "timers" | "desktops" | "models" | "settings"
 })
 export class OpsPageComponent implements OnInit, OnDestroy {
   private readonly api = inject(ApiService);
+  private readonly cdr = inject(ChangeDetectorRef);
   private poller?: ReturnType<typeof setInterval>;
 
   @Input() toolsView: ToolsView = "system";
@@ -30,6 +31,8 @@ export class OpsPageComponent implements OnInit, OnDestroy {
   opsTimerDoctor: TimerDoctorResponse | null = null;
   opsEvents: EventRecord[] = [];
   opsBrowsers: BrowserSession[] = [];
+  opsBrowsersLoading = false;
+  opsBrowsersLoaded = false;
   opsBrowserSource = "";
   opsBrowserMessage = "";
   opsRuntimeLeases: Array<Record<string, unknown>> = [];
@@ -55,6 +58,17 @@ export class OpsPageComponent implements OnInit, OnDestroy {
 
   async loadOps(showBusy = true): Promise<void> {
     if (showBusy) this.busy = true;
+    this.opsBrowsersLoading = true;
+    if (!this.opsBrowsers.length) this.opsBrowserMessage = "";
+    const browsersRequest = firstValueFrom(this.api.browserSessions());
+    browsersRequest
+      .then((payload) => this.applyBrowserSessions(payload))
+      .catch((error) => this.applyBrowserSessionsError(error))
+      .finally(() => {
+        this.opsBrowsersLoading = false;
+        this.opsBrowsersLoaded = true;
+        this.renderNow();
+      });
     try {
       const [version, setup, whatsapp, agents, templates, timers, timerDoctor, events, browsers, runtimeLeases, executors, executions, system, processes, models] = await Promise.allSettled([
         firstValueFrom(this.api.version()),
@@ -65,7 +79,7 @@ export class OpsPageComponent implements OnInit, OnDestroy {
         firstValueFrom(this.api.timers()),
         firstValueFrom(this.api.timerDoctor()),
         firstValueFrom(this.api.events(40)),
-        firstValueFrom(this.api.browserSessions()),
+        browsersRequest,
         firstValueFrom(this.api.runtimeLeases()),
         firstValueFrom(this.api.executors()),
         firstValueFrom(this.api.executions()),
@@ -85,9 +99,9 @@ export class OpsPageComponent implements OnInit, OnDestroy {
       if (timerDoctor.status === "fulfilled") this.opsTimerDoctor = timerDoctor.value;
       if (events.status === "fulfilled") this.opsEvents = events.value.events || [];
       if (browsers.status === "fulfilled") {
-        this.opsBrowsers = browsers.value.sessions || browsers.value.browsers || [];
-        this.opsBrowserSource = browsers.value.source || "";
-        this.opsBrowserMessage = browsers.value.message || browsers.value.error || "";
+        this.applyBrowserSessions(browsers.value);
+      } else {
+        this.applyBrowserSessionsError(browsers.reason);
       }
       if (runtimeLeases.status === "fulfilled") {
         this.opsRuntimeLeases = runtimeLeases.value.leases || [];
@@ -240,8 +254,38 @@ export class OpsPageComponent implements OnInit, OnDestroy {
     return current;
   }
 
+  private applyBrowserSessions(payload: { sessions?: BrowserSession[]; browsers?: BrowserSession[]; source?: string; error?: string; message?: string }): void {
+    this.opsBrowsers = payload.sessions || payload.browsers || [];
+    this.opsBrowserSource = payload.source || "";
+    this.opsBrowserMessage = payload.message || payload.error || "";
+    this.opsBrowsersLoaded = true;
+  }
+
+  private applyBrowserSessionsError(error: unknown): void {
+    this.opsBrowsers = [];
+    this.opsBrowserSource = this.opsBrowserSource || "browserctl";
+    this.opsBrowserMessage = this.errorText(error);
+    this.opsBrowsersLoaded = true;
+  }
+
+  private renderNow(): void {
+    try {
+      this.cdr.detectChanges();
+    } catch {
+      // The component may have been destroyed while a slow browserctl request was in flight.
+    }
+  }
+
   private errorText(error: unknown): string {
-    if (error && typeof error === "object" && "message" in error) return String((error as { message?: unknown }).message);
+    if (error && typeof error === "object") {
+      const record = error as { error?: unknown; message?: unknown; status?: unknown; statusText?: unknown };
+      if (record.error && typeof record.error === "object" && "error" in record.error) {
+        const detail = (record.error as { error?: unknown }).error;
+        if (detail) return String(detail);
+      }
+      if (record.message) return String(record.message);
+      if (record.status) return `HTTP ${record.status}${record.statusText ? ` ${record.statusText}` : ""}`;
+    }
     return String(error || "Unknown error");
   }
 }
