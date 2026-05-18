@@ -7,6 +7,10 @@ import {
   startGmailOAuth as beginGmailOAuth,
 } from "../../../../../packages/connectors/src/gmail.js";
 import {
+  pollOutlookDeviceOAuth,
+  startOutlookDeviceOAuth,
+} from "../../../../../packages/connectors/src/outlook.js";
+import {
   deliverWhatsAppReplies,
   getWhatsAppChatParticipants,
   getWhatsAppStatus,
@@ -46,6 +50,18 @@ export class ConnectorsController {
   @Get("gmail/messages/:id")
   async gmailMessage(@Param("id") id: string) {
     return { message: await getGmailMessage(id) };
+  }
+
+  @Post("outlook/oauth/start")
+  @HttpCode(200)
+  async startOutlookOAuth(@Body() body: Record<string, unknown> = {}) {
+    return startOutlookDeviceOAuth(process.env, { account: String(body.account || "") });
+  }
+
+  @Post("outlook/oauth/poll")
+  @HttpCode(200)
+  async pollOutlookOAuth(@Body() body: Record<string, unknown> = {}) {
+    return pollOutlookDeviceOAuth(String(body.pendingId || ""));
   }
 
   @Get("whatsapp/status")

@@ -9,11 +9,14 @@ function setupState(connectors) {
   const useful = connectors.filter((connector) => ["connected", "partial"].includes(connector.state));
   if (!useful.length) return "incomplete";
   const byId = Object.fromEntries(connectors.map((connector) => [connector.id, connector]));
+  const mailReady =
+    ["connected", "partial"].includes(byId.gmail?.state) ||
+    ["connected", "partial"].includes(byId.outlook?.state);
   const ready =
     byId.openai?.state === "connected" &&
     byId.codex?.state === "connected" &&
     ["connected", "partial"].includes(byId.whatsapp?.state) &&
-    ["connected", "partial"].includes(byId.gmail?.state) &&
+    mailReady &&
     ["connected", "partial"].includes(byId.linkedin?.state);
   return ready ? "ready" : "partial";
 }

@@ -32,7 +32,9 @@ test("onboarding focuses the first loop on virtual desktop and WhatsApp", async 
   assert.ok(onboarding.includes("@if (isOnboardingMode())"));
   assert.ok(onboarding.includes("setupSections()"));
   assert.ok(onboarding.includes("Mail Auth"));
-  assert.ok(onboarding.includes("Add Gmail Login"));
+  assert.ok(onboarding.includes("Connect Gmail"));
+  assert.ok(onboarding.includes("Connect Outlook"));
+  assert.ok(onboarding.includes("Create a Microsoft app registration"));
   assert.ok(onboarding.includes("Gmail Probe"));
   assert.ok(onboarding.includes("setupSectionChange"));
   assert.ok(onboarding.includes("@Output() paired"));

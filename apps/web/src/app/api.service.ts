@@ -145,6 +145,35 @@ export interface GmailOAuthStartResponse {
   redirectUri?: string;
 }
 
+export interface OutlookOAuthStartResponse {
+  ok: boolean;
+  provider: string;
+  state: string;
+  pendingId: string;
+  account?: string;
+  verificationUri?: string;
+  verificationUriComplete?: string;
+  userCode?: string;
+  message?: string;
+  interval?: number;
+  expiresAt?: number;
+  scopes?: string[];
+}
+
+export interface OutlookOAuthPollResponse {
+  ok: boolean;
+  provider?: string;
+  state: string;
+  pendingId?: string;
+  account?: string;
+  verificationUri?: string;
+  verificationUriComplete?: string;
+  userCode?: string;
+  message?: string;
+  interval?: number;
+  expiresAt?: number;
+}
+
 export interface GmailMessageListResponse {
   messages: Array<{ id: string; threadId?: string }>;
   nextPageToken?: string;
@@ -620,6 +649,14 @@ export class ApiService {
   startGmailOAuth(account = ""): Observable<GmailOAuthStartResponse> {
     const suffix = account.trim() ? `?account=${encodeURIComponent(account.trim())}` : "";
     return this.http.get<GmailOAuthStartResponse>(this.api(`/connectors/gmail/oauth/start${suffix}`));
+  }
+
+  startOutlookOAuth(account = ""): Observable<OutlookOAuthStartResponse> {
+    return this.http.post<OutlookOAuthStartResponse>(this.api("/connectors/outlook/oauth/start"), { account });
+  }
+
+  pollOutlookOAuth(pendingId: string): Observable<OutlookOAuthPollResponse> {
+    return this.http.post<OutlookOAuthPollResponse>(this.api("/connectors/outlook/oauth/poll"), { pendingId });
   }
 
   gmailMessages(maxResults = 5, query = ""): Observable<GmailMessageListResponse> {

@@ -11,7 +11,7 @@ import { getWhatsAppStatus } from "./whatsapp.js";
 
 const execFileAsync = promisify(execFile);
 
-export const connectorOrder = ["openai", "codex", "gmail", "linkedin", "whatsapp", "browsers", "timers"];
+export const connectorOrder = ["openai", "codex", "gmail", "outlook", "linkedin", "whatsapp", "browsers", "timers"];
 
 async function pathExists(filePath) {
   try {
@@ -81,9 +81,10 @@ async function overlayConnectorStatus(id, overlay) {
 
 export async function getConnectorStatuses({ env = process.env, home = os.homedir() } = {}) {
   const paths = dataPaths(env);
-  const [openaiConfig, gmailConfig] = await Promise.all([
+  const [openaiConfig, gmailConfig, outlookConfig] = await Promise.all([
     readConnectorConfig("openai", env),
     readConnectorConfig("gmail", env),
+    readConnectorConfig("outlook", env),
   ]);
   const codexHome = defaultCodexHome(env, home);
   const codexAuthPath = path.join(codexHome, "auth.json");
@@ -94,6 +95,8 @@ export async function getConnectorStatuses({ env = process.env, home = os.homedi
   const gmailProfileExists = await pathExists(path.join(paths.browsers, "gmail"));
   const gmailOAuthExists = await pathExists(path.join(paths.secrets, "gmail-token.json"));
   const gmailOAuthError = await readJsonIfExists(path.join(paths.secrets, "gmail-error.json"));
+  const outlookOAuthExists = await pathExists(path.join(paths.secrets, "outlook-token.json"));
+  const outlookOAuthError = await readJsonIfExists(path.join(paths.secrets, "outlook-error.json"));
   const openaiKey = env.OPENAI_API_KEY || openaiConfig.openaiApiKey || "";
   const codexAuthExists = await pathExists(codexAuthPath);
   const codexEnvKey = Boolean(env.OPENAI_API_KEY);
@@ -137,6 +140,17 @@ export async function getConnectorStatuses({ env = process.env, home = os.homedi
         : gmailProfileExists
           ? status("gmail", "Gmail", "partial", "Gmail browser profile exists. OAuth can be added later.")
           : status("gmail", "Gmail", "not_connected", "Connect Gmail OAuth or prepare the Gmail browser."),
+    outlook:
+      outlookOAuthExists
+        ? status("outlook", "Outlook", "connected", "Outlook OAuth token is stored locally.")
+        : outlookOAuthError.message
+          ? status("outlook", "Outlook", "broken", "Outlook OAuth failed. Recheck the Microsoft app registration and restart sign-in.", {
+              error: outlookOAuthError.message,
+              updatedAt: outlookOAuthError.updatedAt,
+            })
+        : outlookConfig.clientId || env.OUTLOOK_OAUTH_CLIENT_ID || env.MICROSOFT_OAUTH_CLIENT_ID
+          ? status("outlook", "Outlook", "partial", "Outlook app registration is configured. Complete Microsoft device sign-in next.")
+          : status("outlook", "Outlook", "not_connected", "Create a Microsoft app registration, paste its client ID, then start Outlook sign-in."),
     linkedin: linkedinProfileExists
       ? status("linkedin", "LinkedIn", "partial", "LinkedIn browser profile exists. Log in through the virtual browser.")
       : status("linkedin", "LinkedIn", "not_connected", "Prepare a LinkedIn virtual browser profile."),

@@ -211,52 +211,117 @@
           <div class="mail-section-title">
             <div>
               <h3>Mail Auth</h3>
-              <small>{{ connector("gmail")?.summary || "Connect a Gmail mailbox for inbox context and scheduled mail workflows." }}</small>
+              <small>{{ mailSummary() }}</small>
             </div>
-            <em [class]="gmailStatusClass()">{{ gmailStatusLabel() }}</em>
+            <em [class]="mailStatusClass()">{{ mailStatusLabel() }}</em>
+          </div>
+
+          <div class="mail-provider-tabs" aria-label="Mail provider">
+            <button type="button" [class.active]="mailProvider === 'gmail'" (click)="mailProvider = 'gmail'">Gmail</button>
+            <button type="button" [class.active]="mailProvider === 'outlook'" (click)="mailProvider = 'outlook'">Outlook</button>
           </div>
 
           <div class="mail-auth-grid">
-            <form class="mail-card auth-form-card" (submit)="submitGmailAuth(); $event.preventDefault()">
-              <strong>Add Gmail Login</strong>
-              <label>
-                <span>Mailbox</span>
-                <input name="gmail-account" type="email" [(ngModel)]="gmailAccount" placeholder="email@example.com" autocomplete="email" />
-              </label>
-              <label>
-                <span>OAuth client ID</span>
-                <input name="gmail-client-id" [(ngModel)]="gmailClientId" autocomplete="off" />
-              </label>
-              <label>
-                <span>OAuth client secret</span>
-                <input name="gmail-client-secret" type="password" [(ngModel)]="gmailClientSecret" autocomplete="off" />
-              </label>
-              <label>
-                <span>Redirect URI</span>
-                <input name="gmail-redirect-uri" [(ngModel)]="gmailRedirectUri" />
-              </label>
-              <button type="submit" [disabled]="busy || !gmailClientId.trim() || !gmailRedirectUri.trim()">
-                {{ busy ? "Starting" : "Start Auth" }}
-              </button>
-              <small>Use a Google OAuth desktop or web client. Orkestr stores tokens under the local Orkestr home, outside public config.</small>
-            </form>
+            <article class="mail-card mail-guide-card">
+              @if (mailProvider === "gmail") {
+                <strong>Create a Google OAuth app</strong>
+                <ol>
+                  <li>Open Google Cloud Console, enable Gmail API, and configure the OAuth consent screen.</li>
+                  <li>Create an OAuth client for a web application.</li>
+                  <li>Add this authorized redirect URI: <code>{{ gmailRedirectUri }}</code></li>
+                  <li>Paste the client ID and secret here, then start auth.</li>
+                </ol>
+                <small>Use your own Google project. Gmail scopes requested: readonly and modify.</small>
+                <a class="oauth-link" href="https://console.cloud.google.com/apis/credentials" target="_blank" rel="noreferrer">Open Google credentials</a>
+              } @else {
+                <strong>Create a Microsoft app registration</strong>
+                <ol>
+                  <li>Open Microsoft Entra app registrations and create an app for your mailbox.</li>
+                  <li>Allow public client flows so device-code sign-in can work.</li>
+                  <li>Add Microsoft Graph delegated permissions for Mail.Read, User.Read, and offline_access.</li>
+                  <li>Paste the application client ID here, then start Outlook sign-in.</li>
+                </ol>
+                <small>Device-code auth does not need a client secret. Tokens stay in the local Orkestr home.</small>
+                <a class="oauth-link" href="https://entra.microsoft.com/#view/Microsoft_AAD_RegisteredApps/ApplicationsListBlade" target="_blank" rel="noreferrer">Open Microsoft app registrations</a>
+              }
+            </article>
+
+            @if (mailProvider === "gmail") {
+              <form class="mail-card auth-form-card" (submit)="submitGmailAuth(); $event.preventDefault()">
+                <strong>Connect Gmail</strong>
+                <label>
+                  <span>Mailbox</span>
+                  <input name="gmail-account" type="email" [(ngModel)]="gmailAccount" placeholder="email@example.com" autocomplete="email" />
+                </label>
+                <label>
+                  <span>OAuth client ID</span>
+                  <input name="gmail-client-id" [(ngModel)]="gmailClientId" autocomplete="off" />
+                </label>
+                <label>
+                  <span>OAuth client secret</span>
+                  <input name="gmail-client-secret" type="password" [(ngModel)]="gmailClientSecret" autocomplete="off" />
+                </label>
+                <label>
+                  <span>Redirect URI</span>
+                  <input name="gmail-redirect-uri" [(ngModel)]="gmailRedirectUri" />
+                </label>
+                <button type="submit" [disabled]="busy || !gmailClientId.trim() || !gmailRedirectUri.trim()">
+                  {{ busy ? "Starting" : "Start Gmail Auth" }}
+                </button>
+                <small>Orkestr stores tokens and client secrets under the local Orkestr home, outside public config.</small>
+              </form>
+            } @else {
+              <form class="mail-card auth-form-card" (submit)="submitOutlookAuth(); $event.preventDefault()">
+                <strong>Connect Outlook</strong>
+                <label>
+                  <span>Mailbox</span>
+                  <input name="outlook-account" type="email" [(ngModel)]="outlookAccount" placeholder="person@example.com" autocomplete="email" />
+                </label>
+                <label>
+                  <span>Application client ID</span>
+                  <input name="outlook-client-id" [(ngModel)]="outlookClientId" autocomplete="off" />
+                </label>
+                <label>
+                  <span>Tenant</span>
+                  <input name="outlook-tenant-id" [(ngModel)]="outlookTenantId" autocomplete="off" placeholder="common" />
+                </label>
+                <label>
+                  <span>Scopes</span>
+                  <input name="outlook-scopes" [(ngModel)]="outlookScopes" autocomplete="off" />
+                </label>
+                <button type="submit" [disabled]="busy || !outlookClientId.trim()">
+                  {{ busy ? "Starting" : "Start Outlook Auth" }}
+                </button>
+                <small>Use tenant common for personal Microsoft accounts and most self-hosted OSS installs.</small>
+              </form>
+            }
 
             <article class="mail-card status-card">
               <div class="mail-card-head">
                 <div>
-                  <strong>{{ gmailAccount || "Gmail mailbox" }}</strong>
-                  <small>{{ gmailConfigSummary() }}</small>
+                  <strong>{{ mailProvider === "gmail" ? (gmailAccount || "Gmail mailbox") : (outlookAccount || "Outlook mailbox") }}</strong>
+                  <small>{{ mailProvider === "gmail" ? gmailConfigSummary() : outlookConfigSummary() }}</small>
                 </div>
-                <em [class]="gmailStatusClass()">{{ gmailStatusLabel() }}</em>
+                <em [class]="mailProvider === 'gmail' ? gmailStatusClass() : outlookStatusClass()">{{ mailProvider === "gmail" ? gmailStatusLabel() : outlookStatusLabel() }}</em>
               </div>
-              <p>{{ connector("gmail")?.summary || "No Gmail status loaded." }}</p>
+              <p>{{ mailProvider === "gmail" ? (connector("gmail")?.summary || "No Gmail status loaded.") : (connector("outlook")?.summary || "No Outlook status loaded.") }}</p>
               <dl>
-                <div><dt>OAuth client</dt><dd>{{ gmailClientId.trim() ? "configured" : "missing" }}</dd></div>
-                <div><dt>Redirect</dt><dd>{{ gmailRedirectUri || "-" }}</dd></div>
-                <div><dt>Scope</dt><dd>gmail.readonly, gmail.modify</dd></div>
+                @if (mailProvider === "gmail") {
+                  <div><dt>OAuth client</dt><dd>{{ gmailClientId.trim() ? "configured" : "missing" }}</dd></div>
+                  <div><dt>Redirect</dt><dd>{{ gmailRedirectUri || "-" }}</dd></div>
+                  <div><dt>Scope</dt><dd>gmail.readonly, gmail.modify</dd></div>
+                } @else {
+                  <div><dt>Application</dt><dd>{{ outlookClientId.trim() ? "configured" : "missing" }}</dd></div>
+                  <div><dt>Tenant</dt><dd>{{ outlookTenantId || "common" }}</dd></div>
+                  <div><dt>Scope</dt><dd>{{ outlookScopes || "offline_access User.Read Mail.Read" }}</dd></div>
+                }
               </dl>
               <div class="button-row">
-                <button type="button" (click)="submitGmailAuth()" [disabled]="busy || !gmailClientId.trim() || !gmailRedirectUri.trim()">Start Auth</button>
+                @if (mailProvider === "gmail") {
+                  <button type="button" (click)="submitGmailAuth()" [disabled]="busy || !gmailClientId.trim() || !gmailRedirectUri.trim()">Start Gmail Auth</button>
+                } @else {
+                  <button type="button" (click)="submitOutlookAuth()" [disabled]="busy || !outlookClientId.trim()">Start Outlook Auth</button>
+                }
                 <button class="secondary" type="button" (click)="load()" [disabled]="busy">Refresh</button>
               </div>
             </article>
@@ -266,30 +331,58 @@
             <a class="oauth-link" [href]="oauthUrl" target="_blank" rel="noreferrer">Open Google sign-in</a>
           }
 
-          <div class="mail-section-title">
-            <div>
-              <strong>Gmail Probe</strong>
-              <small>Load a few recent messages after OAuth succeeds.</small>
-            </div>
-          </div>
-          <div class="mail-probe-bar">
-            <label>
-              <span>Search query</span>
-              <input name="gmail-sample-query" [(ngModel)]="gmailSampleQuery" autocomplete="off" />
-            </label>
-            <button type="button" (click)="loadGmailSample()" [disabled]="gmailSampleLoading">
-              {{ gmailSampleLoading ? "Checking" : "Load sample" }}
-            </button>
-          </div>
-          @if (gmailSampleMessages.length) {
-            <div class="probe-list">
-              @for (message of gmailSampleMessages; track message.id) {
-                <div class="probe-row">
-                  <span>{{ gmailSampleDate(message) }}</span>
-                  <strong>{{ message.subject || "(no subject)" }}</strong>
-                  <small>{{ message.from || message.snippet || "-" }}</small>
+          @if (mailProvider === "outlook" && outlookDevice) {
+            <article class="mail-card outlook-device-card">
+              <div class="mail-card-head">
+                <div>
+                  <strong>Microsoft device sign-in</strong>
+                  <small>{{ outlookDevice.message || "Waiting for Microsoft approval." }}</small>
                 </div>
+                <em [class]="outlookDevice.ok ? 'ready' : 'partial'">{{ outlookDevice.state }}</em>
+              </div>
+              @if (outlookDevice.userCode) {
+                <div class="command-box">Code: {{ outlookDevice.userCode }}</div>
               }
+              <div class="button-row">
+                <button type="button" (click)="openOutlookDevicePage()">Open Microsoft sign-in</button>
+                <button class="secondary" type="button" (click)="pollOutlookOAuth()" [disabled]="busy">Check now</button>
+              </div>
+            </article>
+          }
+
+          @if (mailProvider === "gmail") {
+            <div class="mail-section-title">
+              <div>
+                <strong>Gmail Probe</strong>
+                <small>Load a few recent messages after OAuth succeeds.</small>
+              </div>
+            </div>
+            <div class="mail-probe-bar">
+              <label>
+                <span>Search query</span>
+                <input name="gmail-sample-query" [(ngModel)]="gmailSampleQuery" autocomplete="off" />
+              </label>
+              <button type="button" (click)="loadGmailSample()" [disabled]="gmailSampleLoading">
+                {{ gmailSampleLoading ? "Checking" : "Load sample" }}
+              </button>
+            </div>
+            @if (gmailSampleMessages.length) {
+              <div class="probe-list">
+                @for (message of gmailSampleMessages; track message.id) {
+                  <div class="probe-row">
+                    <span>{{ gmailSampleDate(message) }}</span>
+                    <strong>{{ message.subject || "(no subject)" }}</strong>
+                    <small>{{ message.from || message.snippet || "-" }}</small>
+                  </div>
+                }
+              </div>
+            }
+          } @else {
+            <div class="mail-section-title">
+              <div>
+                <strong>Outlook Probe</strong>
+                <small>Outlook token storage is checked in connector status. Message probing can be added after the first auth path is stable.</small>
+              </div>
             </div>
           }
         </section>
