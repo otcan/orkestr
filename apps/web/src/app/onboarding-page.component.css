@@ -454,6 +454,67 @@
   margin-top: 12px;
 }
 
+.mail-accounts-card {
+  border-color: rgba(101, 198, 222, 0.24);
+}
+
+.mail-account-list {
+  display: grid;
+  gap: 8px;
+}
+
+.mail-account-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.035);
+  padding: 10px;
+}
+
+.mail-account-row > div {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.mail-account-row strong,
+.mail-account-row small {
+  overflow-wrap: anywhere;
+}
+
+.mail-account-row em {
+  border-radius: 999px;
+  color: #d4ffe4;
+  font-size: 0.72rem;
+  font-style: normal;
+  font-weight: 900;
+  padding: 4px 8px;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.mail-account-row em.ready {
+  background: rgba(101, 198, 222, 0.18);
+  color: #aeeeff;
+}
+
+.mail-account-row em.partial {
+  background: rgba(236, 177, 80, 0.18);
+  color: #ffd796;
+}
+
+.mail-account-row em.bad {
+  background: rgba(255, 116, 96, 0.18);
+  color: #ffc8bd;
+}
+
+.mail-account-row em.idle {
+  background: rgba(102, 124, 96, 0.28);
+}
+
 .mail-card-head {
   display: flex;
   align-items: flex-start;

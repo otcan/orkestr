@@ -221,6 +221,29 @@
             <button type="button" [class.active]="mailProvider === 'outlook'" (click)="mailProvider = 'outlook'">Outlook</button>
           </div>
 
+          @if (mailAccountRows().length) {
+            <article class="mail-card mail-accounts-card">
+              <div class="mail-card-head">
+                <div>
+                  <strong>Connected mailboxes</strong>
+                  <small>{{ mailAccountCountLabel() }}</small>
+                </div>
+                <em class="ready">connected</em>
+              </div>
+              <div class="mail-account-list">
+                @for (account of mailAccountRows(); track mailAccountKey(account)) {
+                  <div class="mail-account-row">
+                    <div>
+                      <strong>{{ account.label }}</strong>
+                      <small>{{ account.provider === "gmail" ? "Gmail" : "Outlook" }}{{ account.summary ? " · " + account.summary : "" }}</small>
+                    </div>
+                    <em [class]="mailAccountStateClass(account)">{{ account.state }}</em>
+                  </div>
+                }
+              </div>
+            </article>
+          }
+
           <div class="mail-auth-grid">
             <article class="mail-card mail-guide-card">
               @if (mailProvider === "gmail") {

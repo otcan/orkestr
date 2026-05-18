@@ -9,6 +9,14 @@ type OnboardingGoalId = "whatsapp-codex" | "virtual-desktop" | "inbox-summary";
 type SetupPageMode = "setup" | "onboarding";
 type MailProvider = "gmail" | "outlook";
 
+interface MailAccountRow {
+  provider: MailProvider;
+  label: string;
+  account: string;
+  state: string;
+  summary: string;
+}
+
 interface OnboardingGoal {
   id: OnboardingGoalId;
   label: string;
@@ -345,11 +353,48 @@ export class OnboardingPageComponent implements OnInit, OnChanges, OnDestroy {
       ["connected", "partial"].includes(String(this.connector("outlook")?.state || ""));
   }
 
+  mailAccountRows(provider?: MailProvider): MailAccountRow[] {
+    const providers: MailProvider[] = provider ? [provider] : ["gmail", "outlook"];
+    return providers.flatMap((item) => this.mailAccountRowsFor(item));
+  }
+
+  mailAccountKey(account: MailAccountRow): string {
+    return `${account.provider}:${account.account || account.label}`;
+  }
+
+  mailAccountStateClass(account: MailAccountRow): string {
+    const state = String(account.state || "").toLowerCase();
+    if (state === "connected" || state === "ok") return "ready";
+    if (state === "partial" || state === "configured") return "partial";
+    if (state === "broken" || state === "failed" || state === "error") return "bad";
+    return "idle";
+  }
+
+  mailAccountCountLabel(): string {
+    const accounts = this.mailAccountRows();
+    if (!accounts.length) return "No mailboxes connected";
+    const gmail = accounts.filter((account) => account.provider === "gmail").length;
+    const outlook = accounts.filter((account) => account.provider === "outlook").length;
+    const parts = [];
+    if (gmail) parts.push(`${gmail} Gmail`);
+    if (outlook) parts.push(`${outlook} Outlook`);
+    return parts.join(" · ");
+  }
+
   mailSummary(): string {
+    const accounts = this.mailAccountRows();
+    if (accounts.length) return `${this.mailAccountCountLabel()} connected`;
     const gmail = this.connector("gmail")?.summary;
     const outlook = this.connector("outlook")?.summary;
     if (gmail && outlook) return `Gmail: ${gmail} Outlook: ${outlook}`;
     return gmail || outlook || "Connect Gmail or Outlook with your own OAuth app.";
+  }
+
+  mailSystemState(): string {
+    const count = this.mailAccountRows().length;
+    if (count === 1) return "1 account";
+    if (count > 1) return `${count} accounts`;
+    return this.mailStatusLabel();
   }
 
   gmailConfigSummary(): string {
@@ -522,6 +567,12 @@ export class OnboardingPageComponent implements OnInit, OnChanges, OnDestroy {
         state: this.stateLabel("whatsapp"),
         summary: this.connector("whatsapp")?.summary || "Checking local bridge",
         className: this.stateClass("whatsapp"),
+      },
+      {
+        label: "Mail auth",
+        state: this.mailSystemState(),
+        summary: this.mailSummary(),
+        className: this.mailStatusClass(),
       },
     ];
   }
@@ -951,6 +1002,40 @@ export class OnboardingPageComponent implements OnInit, OnChanges, OnDestroy {
     if (outlook["tenantId"]) this.outlookTenantId = String(outlook["tenantId"]);
     if (outlook["scopes"]) this.outlookScopes = String(outlook["scopes"]);
     this.formHydrated = true;
+  }
+
+  private mailAccountRowsFor(provider: MailProvider): MailAccountRow[] {
+    const connector = this.connector(provider);
+    const details = connector?.details || {};
+    const rows = this.mailRawAccounts(details).map((item, index) => {
+      const record = item && typeof item === "object" && !Array.isArray(item) ? item as Record<string, unknown> : {};
+      return {
+        provider,
+        label: this.mailAccountString(record["label"]) || this.mailAccountString(record["name"]) || this.mailAccountString(record["account"]) || this.mailAccountString(record["email"]) || `${provider} ${index + 1}`,
+        account: this.mailAccountString(record["account"]) || this.mailAccountString(record["email"]) || this.mailAccountString(record["mailbox"]) || "",
+        state: this.mailAccountString(record["state"]) || connector?.state || "connected",
+        summary: this.mailAccountString(record["summary"]) || this.mailAccountString(record["source"]) || this.mailAccountString(record["runtime"]) || this.mailAccountString(record["kind"]) || connector?.summary || "",
+      };
+    }).filter((item) => item.label || item.account);
+    if (rows.length) return rows;
+    const account = this.mailAccountString(details["account"]) || this.mailAccountString(details["email"]) || this.mailAccountString(details["mailbox"]);
+    if (!account) return [];
+    return [{
+      provider,
+      label: account,
+      account,
+      state: connector?.state || "connected",
+      summary: this.mailAccountString(details["runtime"]) || this.mailAccountString(details["kind"]) || connector?.summary || "",
+    }];
+  }
+
+  private mailRawAccounts(details: Record<string, unknown>): unknown[] {
+    const accounts = details["accounts"] || details["mailboxes"];
+    return Array.isArray(accounts) ? accounts : [];
+  }
+
+  private mailAccountString(value: unknown): string {
+    return value === null || value === undefined ? "" : String(value).trim();
   }
 
   private whatsappAccountLabel(accountId: string): string {
