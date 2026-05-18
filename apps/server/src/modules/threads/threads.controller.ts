@@ -407,6 +407,27 @@ export class ThreadsController {
         parsedCommand: parsedCommand.rawCommand || parsedCommand.command,
       });
     }
+    if (parsedCommand.command === "stop") {
+      const result = await sleepThread(thread.id, { reason: "stop_command", kill: true });
+      const message = await appendThreadMessage(thread.id, {
+        role: "user",
+        source: body.source || "stop_command",
+        text: "/stop",
+        state: "completed",
+        deliveryState: "delivered",
+        observedVia: "orkestr_stop_command",
+        deliveredAt: new Date().toISOString(),
+      });
+      return {
+        ok: true,
+        stopped: true,
+        slept: result.slept,
+        threadId: codexThreadId(thread) || thread.id,
+        orkestrThreadId: thread.id,
+        message,
+        thread: await threadRuntimeSummary(result.thread, await listThreadMessages(thread.id)),
+      };
+    }
     if (parsedCommand.command === "implement") {
       const result = await implementRuntimePlan(thread.id);
       const implemented = Boolean(result.implemented);
@@ -542,6 +563,18 @@ export class ThreadsController {
   @HttpCode(200)
   async sleep(@Param("threadId") threadId: string, @Body() body: Record<string, unknown> = {}) {
     return sleepThread(threadId, { reason: body.reason || "manual_sleep", kill: body.kill !== false });
+  }
+
+  @Post(":threadId/stop")
+  @HttpCode(200)
+  async stop(@Param("threadId") threadId: string, @Body() body: Record<string, unknown> = {}) {
+    const result: any = await sleepThread(threadId, { reason: body.reason || "ui_stop", kill: body.kill !== false });
+    return {
+      ok: true,
+      stopped: true,
+      slept: result.slept,
+      thread: await threadRuntimeSummary(result.thread, await listThreadMessages(result.thread.id)),
+    };
   }
 
   @Post(":threadId/attach")

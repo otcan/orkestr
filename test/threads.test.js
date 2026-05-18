@@ -319,6 +319,47 @@ test("thread wake blocks Codex before the raw login menu opens", async () => {
   }
 });
 
+test("queued stop commands kill the active runtime and complete locally", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-stop-command-"));
+  const fakeTmux = await createFakeTmux(home);
+  const priorPath = process.env.PATH;
+  const priorTmuxLog = process.env.TMUX_LOG;
+  const priorTmuxState = process.env.TMUX_STATE;
+  process.env.PATH = `${fakeTmux.bin}:${priorPath || ""}`;
+  process.env.TMUX_LOG = fakeTmux.log;
+  process.env.TMUX_STATE = fakeTmux.state;
+
+  try {
+    const env = {
+      ORKESTR_HOME: path.join(home, "orkestr-home"),
+      HOME: path.join(home, "runtime-home"),
+      CODEX_HOME: path.join(home, "codex-home"),
+      PATH: process.env.PATH,
+      TMUX_LOG: fakeTmux.log,
+      TMUX_STATE: fakeTmux.state,
+    };
+    await createThread({ id: "stop-command-thread", name: "Stop Command Thread" }, env);
+    await wakeThread("stop-command-thread", { reason: "test" }, env);
+    const command = await enqueueThreadInput("stop-command-thread", { text: "/stop", source: "whatsapp_inbound" }, env);
+
+    assert.deepEqual(await deliverPendingThreadInputs("stop-command-thread", env), [command.id]);
+    const status = await runtimeStatus("stop-command-thread", env);
+    const messages = await listThreadMessages("stop-command-thread", env);
+    const stopped = messages.find((message) => message.id === command.id);
+    const log = await fs.readFile(fakeTmux.log, "utf8");
+
+    assert.equal(status.state, "sleeping");
+    assert.equal(stopped.state, "completed");
+    assert.equal(stopped.deliveryState, "delivered");
+    assert.equal(stopped.observedVia, "orkestr_stop_command");
+    assert.match(log, /__CALL__\tkill-session\t-t\torkestr-stop-command-thread/);
+  } finally {
+    restoreEnvValue("PATH", priorPath);
+    restoreEnvValue("TMUX_LOG", priorTmuxLog);
+    restoreEnvValue("TMUX_STATE", priorTmuxState);
+  }
+});
+
 test("runtime sync auto-sleeps stable idle ready runtimes", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-auto-sleep-"));
   const fakeTmux = await createFakeTmux(home);
@@ -1514,6 +1555,11 @@ test("thread input commands strip /now before runtime delivery", () => {
   assert.deepEqual(parseThreadInputCommand({ text: "/implement" }), {
     command: "implement",
     rawCommand: "implement",
+    text: "",
+  });
+  assert.deepEqual(parseThreadInputCommand({ text: "/stop" }), {
+    command: "stop",
+    rawCommand: "stop",
     text: "",
   });
   assert.equal(parseThreadInputCommand({ text: "normal message" }).command, null);

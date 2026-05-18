@@ -15,6 +15,7 @@ import {
   updateThread,
   updateThreadMessage,
 } from "./threads.js";
+import { parseThreadInputCommand } from "./thread-commands.js";
 
 const execFileAsync = promisify(execFile);
 const deliveryLocks = new Set();
@@ -704,6 +705,25 @@ export async function sleepThread(threadId, options = {}, env = process.env) {
   }, env);
   await appendEvent({ type: "runtime_slept", threadId: thread.id, reason: options.reason || "sleep", killed: options.kill !== false }, env);
   return { thread: updated, slept: active.length };
+}
+
+async function completeStopCommand(thread, message, env = process.env) {
+  const stopped = await sleepThread(thread.id, { reason: message.source === "whatsapp_inbound" ? "whatsapp_stop_command" : "stop_command", kill: true }, env);
+  const updated = await updateThreadMessage(thread.id, message.id, {
+    state: "completed",
+    deliveryState: "delivered",
+    observedVia: "orkestr_stop_command",
+    deliveredAt: nowIso(),
+    error: null,
+  }, env);
+  await appendEvent({
+    type: "thread_stop_command",
+    threadId: thread.id,
+    messageId: message.id,
+    source: message.source || null,
+    slept: stopped.slept,
+  }, env).catch(() => {});
+  return updated.id;
 }
 
 function latestMessageActivityMs(messages = []) {
@@ -1437,6 +1457,11 @@ export async function deliverPendingThreadInputs(threadId, env = process.env) {
 
       const next = messages.find((message) => message.role === "user" && ["queued", "pending_delivery", "awaiting_ack"].includes(message.state));
       if (!next) break;
+      const parsedCommand = parseThreadInputCommand({ text: next.text });
+      if (parsedCommand.command === "stop") {
+        delivered.push(await completeStopCommand(thread, next, env));
+        continue;
+      }
       await updateThreadMessage(thread.id, next.id, { state: "pending_delivery", deliveryState: "waking" }, env);
       await updateThread(thread.id, { state: "waking" }, env);
       try {

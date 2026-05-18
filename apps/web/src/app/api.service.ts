@@ -862,6 +862,10 @@ export class ApiService {
     return this.http.post(this.api(`/threads/${encodeURIComponent(id)}/sleep`), { reason: "ui_sleep" });
   }
 
+  stopThread(id: string): Observable<unknown> {
+    return this.http.post(this.api(`/threads/${encodeURIComponent(id)}/stop`), { reason: "ui_stop" });
+  }
+
   resumeThread(id: string): Observable<unknown> {
     return this.http.post(this.api(`/threads/${encodeURIComponent(id)}/resume`), { reason: "ui_resume" });
   }

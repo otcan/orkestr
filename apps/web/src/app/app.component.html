@@ -42,22 +42,18 @@
             (click)="selectThread(thread, $event)"
           >
             <span class="thread-leading">
-              @if (showWhatsAppChatIcon(thread)) {
-                <span class="whatsapp-thread-avatar" [title]="whatsappChatIconTitle(thread)" [attr.aria-label]="whatsappChatIconTitle(thread)">
-                  @if (whatsappAvatarUrl(thread)) {
-                    <img [src]="whatsappAvatarUrl(thread)" [alt]="whatsappChatIconTitle(thread)" />
-                  } @else {
-                    <span class="wa-avatar-lines" aria-hidden="true">
-                      @for (line of whatsappAvatarLines(thread); track $index) {
-                        <span class="wa-avatar-line" [class.primary]="isWhatsAppAvatarPrimaryLine(line)">{{ line }}</span>
-                      }
-                    </span>
-                  }
-                </span>
-                <span class="status-dot avatar-status" [class]="statusClass(thread, true)"></span>
-              } @else {
-                <span class="status-dot" [class]="statusClass(thread, true)"></span>
-              }
+              <span class="whatsapp-thread-avatar" [title]="threadIconTitle(thread)" [attr.aria-label]="threadIconTitle(thread)">
+                @if (threadAvatarUrl(thread)) {
+                  <img [src]="threadAvatarUrl(thread)" [alt]="threadIconTitle(thread)" />
+                } @else {
+                  <span class="wa-avatar-lines" aria-hidden="true">
+                    @for (line of threadAvatarLines(thread); track $index) {
+                      <span class="wa-avatar-line" [class.primary]="isThreadAvatarPrimaryLine(line)">{{ line }}</span>
+                    }
+                  </span>
+                }
+              </span>
+              <span class="status-dot avatar-status" [class]="statusClass(thread, true)"></span>
             </span>
             <span class="thread-text">
               <strong>{{ threadTitle(thread) }}</strong>
@@ -124,22 +120,18 @@
                   (click)="selectThread(worker, $event)"
                 >
                   <span class="thread-leading">
-                    @if (showWhatsAppChatIcon(worker)) {
-                      <span class="whatsapp-thread-avatar" [title]="whatsappChatIconTitle(worker)" [attr.aria-label]="whatsappChatIconTitle(worker)">
-                        @if (whatsappAvatarUrl(worker)) {
-                          <img [src]="whatsappAvatarUrl(worker)" [alt]="whatsappChatIconTitle(worker)" />
-                        } @else {
-                          <span class="wa-avatar-lines" aria-hidden="true">
-                            @for (line of whatsappAvatarLines(worker); track $index) {
-                              <span class="wa-avatar-line" [class.primary]="isWhatsAppAvatarPrimaryLine(line)">{{ line }}</span>
-                            }
-                          </span>
-                        }
-                      </span>
-                      <span class="status-dot avatar-status" [class]="statusClass(worker)"></span>
-                    } @else {
-                      <span class="status-dot" [class]="statusClass(worker)"></span>
-                    }
+                    <span class="whatsapp-thread-avatar" [title]="threadIconTitle(worker)" [attr.aria-label]="threadIconTitle(worker)">
+                      @if (threadAvatarUrl(worker)) {
+                        <img [src]="threadAvatarUrl(worker)" [alt]="threadIconTitle(worker)" />
+                      } @else {
+                        <span class="wa-avatar-lines" aria-hidden="true">
+                          @for (line of threadAvatarLines(worker); track $index) {
+                            <span class="wa-avatar-line" [class.primary]="isThreadAvatarPrimaryLine(line)">{{ line }}</span>
+                          }
+                        </span>
+                      }
+                    </span>
+                    <span class="status-dot avatar-status" [class]="statusClass(worker)"></span>
                   </span>
                   <span class="thread-text">
                     <strong>{{ worker.workerLabel || threadTitle(worker) }}</strong>
@@ -232,19 +224,17 @@
       ></ork-first-thread-wizard>
     } @else if (selectedThread(); as thread) {
       <header class="chat-head">
-        @if (showWhatsAppChatIcon(thread)) {
-          <div class="chat-head-avatar" [title]="whatsappChatIconTitle(thread)" [attr.aria-label]="whatsappChatIconTitle(thread)">
-            @if (whatsappAvatarUrl(thread)) {
-              <img [src]="whatsappAvatarUrl(thread)" [alt]="whatsappChatIconTitle(thread)" />
-            } @else {
-              <span class="wa-avatar-lines" aria-hidden="true">
-                @for (line of whatsappAvatarLines(thread); track $index) {
-                  <span class="wa-avatar-line" [class.primary]="isWhatsAppAvatarPrimaryLine(line)">{{ line }}</span>
-                }
-              </span>
-            }
-          </div>
-        }
+        <div class="chat-head-avatar" [title]="threadIconTitle(thread)" [attr.aria-label]="threadIconTitle(thread)">
+          @if (threadAvatarUrl(thread)) {
+            <img [src]="threadAvatarUrl(thread)" [alt]="threadIconTitle(thread)" />
+          } @else {
+            <span class="wa-avatar-lines" aria-hidden="true">
+              @for (line of threadAvatarLines(thread); track $index) {
+                <span class="wa-avatar-line" [class.primary]="isThreadAvatarPrimaryLine(line)">{{ line }}</span>
+              }
+            </span>
+          }
+        </div>
         <div class="title-block">
           <p class="eyebrow">{{ threadKindLabel(thread) }}</p>
           <h2>{{ threadTitle(thread) }}</h2>
@@ -256,6 +246,13 @@
           </p>
         </div>
         <div class="head-actions cockpit-actions">
+          <button
+            class="danger stop-button"
+            type="button"
+            title="Stop this thread runtime and put it to sleep"
+            (click)="stopSelected()"
+            [disabled]="busy || thread.state === 'sleeping' || thread.status === 'sleeping'"
+          >STOP</button>
           <button class="system-mini-card" type="button" (click)="openTools('system')" title="Open system resources">
             <span>
               <strong>CPU {{ formatPercent(systemCpuPercent()) }}</strong>

@@ -104,6 +104,12 @@ button.danger-soft {
   color: #ffd1c4;
 }
 
+button.danger {
+  border-color: rgba(255, 92, 72, 0.7);
+  background: linear-gradient(180deg, rgba(166, 28, 20, 0.92), rgba(85, 10, 8, 0.92));
+  color: #fff7f2;
+}
+
 input,
 select,
 textarea {
@@ -968,6 +974,14 @@ ork-first-thread-wizard.first-thread-host {
   min-height: 54px;
   padding: 8px 10px;
   text-align: left;
+}
+
+.stop-button {
+  min-width: 74px;
+  min-height: 54px;
+  padding: 8px 14px;
+  font-weight: 950;
+  letter-spacing: 0.04em;
 }
 
 .system-mini-card span {
