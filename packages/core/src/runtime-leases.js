@@ -648,6 +648,23 @@ function hasPendingNeedInput(messages = []) {
   return latestNeedInputMs > latestUserMs;
 }
 
+function isNeedInputMessage(message) {
+  const role = String(message?.role || "").trim().toLowerCase();
+  const phase = String(message?.phase || "").trim().toLowerCase();
+  return role === "assistant" && needInputPhases.has(phase) && String(message?.text || "").trim();
+}
+
+function latestNeedInputBeforeMessage(messages = [], messageId = "") {
+  const index = messages.findIndex((message) => message.id === messageId);
+  if (index <= 0) return null;
+  for (let cursor = index - 1; cursor >= 0; cursor -= 1) {
+    const message = messages[cursor];
+    if (isNeedInputMessage(message)) return message;
+    if (String(message?.role || "").trim().toLowerCase() === "user") return null;
+  }
+  return null;
+}
+
 function runtimeActivityMs(lease, messages = []) {
   return Math.max(
     latestMessageActivityMs(messages),
@@ -699,6 +716,52 @@ async function waitForRuntimeReady(threadId, env = process.env) {
   error.statusCode = 504;
   error.status = last;
   throw error;
+}
+
+function codexModeFromPaneText(text) {
+  const body = String(text || "");
+  if (/\bPlan mode\b/i.test(body)) return "plan";
+  if (/gpt-[^\n]*\s+.\s+/i.test(body) || /\bgpt-[^\n]*(?:low|medium|high|xhigh)\b/i.test(body)) return "code";
+  return null;
+}
+
+function desiredCodexModeValue(thread) {
+  const mode = String(thread?.desiredCodexMode || thread?.codexMode || "").trim().toLowerCase();
+  return mode === "code" || mode === "plan" ? mode : null;
+}
+
+export async function applyRuntimeCodexMode(threadId, mode, env = process.env, options = {}) {
+  const desired = String(mode || "").trim().toLowerCase();
+  if (desired !== "code" && desired !== "plan") {
+    const error = new Error("invalid_codex_mode");
+    error.statusCode = 400;
+    throw error;
+  }
+  const status = await runtimeStatus(threadId, env).catch(() => null);
+  if (!status?.paneId) return { applied: false, changed: false, mode: desired, reason: "runtime_unavailable" };
+  const beforeText = await capturePane(status.paneId, 80).catch(() => "");
+  const beforeMode = codexModeFromPaneText(beforeText);
+  if (beforeMode === desired) {
+    return { applied: true, changed: false, mode: desired, previousMode: beforeMode, paneId: status.paneId };
+  }
+  if (options.requirePromptReady !== false && (!status.promptReady || status.working)) {
+    return {
+      applied: false,
+      changed: false,
+      mode: desired,
+      previousMode: beforeMode || null,
+      paneId: status.paneId,
+      state: status.state,
+      promptReady: Boolean(status.promptReady),
+      working: Boolean(status.working),
+      reason: "runtime_not_ready",
+    };
+  }
+  if (!beforeMode) {
+    return { applied: false, changed: false, mode: desired, previousMode: null, paneId: status.paneId, reason: "runtime_mode_unknown" };
+  }
+  await execFileAsync("tmux", ["send-keys", "-t", status.paneId, "BTab"]);
+  return { applied: true, changed: true, mode: desired, previousMode: beforeMode, paneId: status.paneId };
 }
 
 function shouldDeferRuntimeDelivery(error) {
@@ -989,6 +1052,112 @@ async function waitForThreadInputAck(thread, messageId, env = process.env) {
   return null;
 }
 
+function normalizeNeedInputChoice(value) {
+  return String(value || "")
+    .replace(/\([^)]*\)/g, " ")
+    .replace(/[^a-z0-9]+/gi, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
+}
+
+function parseNeedInputQuestions(text) {
+  const questions = [];
+  let current = null;
+  for (const rawLine of String(text || "").split("\n")) {
+    const line = rawLine.trim();
+    if (!line || /^Codex needs input/i.test(line) || /^Reply with/i.test(line)) continue;
+    const optionMatch = line.match(/^([A-Z])\.\s+(.+?)(?::\s*(.*))?$/);
+    if (optionMatch && current) {
+      current.options.push({
+        letter: optionMatch[1],
+        label: optionMatch[2].trim(),
+        description: String(optionMatch[3] || "").trim(),
+      });
+      continue;
+    }
+    const questionMatch = line.match(/^(?:\d+[.)]\s*)?([^:]{1,80}):\s+(.+)$/);
+    if (!questionMatch) continue;
+    current = {
+      header: questionMatch[1].trim(),
+      question: questionMatch[2].trim(),
+      options: [],
+    };
+    questions.push(current);
+  }
+  return questions.filter((question) => question.options.length);
+}
+
+function explicitAnswerForQuestion(answerText, question) {
+  const headerPattern = escapeRegex(question.header).replace(/\s+/g, "\\s+");
+  const match = String(answerText || "").match(new RegExp(`(?:^|[,;\\n])\\s*${headerPattern}\\s*:\\s*([^,;\\n]+)`, "i"));
+  return match ? match[1].trim() : "";
+}
+
+function optionIndexForQuestionAnswer(question, answerText, questionCount) {
+  const explicit = explicitAnswerForQuestion(answerText, question);
+  const answer = normalizeNeedInputChoice(explicit || (questionCount === 1 ? answerText : ""));
+  if (!answer) return null;
+  const letter = answer.length === 1 ? answer.toUpperCase() : "";
+  for (const [index, option] of question.options.entries()) {
+    if (letter && option.letter === letter) return index;
+    const label = normalizeNeedInputChoice(option.label);
+    const description = normalizeNeedInputChoice(option.description);
+    if (label && (label === answer || label.startsWith(answer) || answer.startsWith(label))) return index;
+    if (description && description.includes(answer)) return index;
+  }
+  return null;
+}
+
+async function sendNeedInputAnswerToPane(thread, message, pendingQuestion, status, env = process.env) {
+  if (!status?.paneId || !pendingQuestion?.text) return null;
+  const questions = parseNeedInputQuestions(pendingQuestion.text);
+  if (!questions.length) return null;
+  const selections = questions.map((question) => optionIndexForQuestionAnswer(question, message.text, questions.length));
+  if (selections.some((selection) => selection === null)) return null;
+  const deliveredAt = nowIso();
+  await updateThreadMessage(thread.id, message.id, {
+    state: "pending_delivery",
+    deliveryState: "answering_need_input",
+    deliveryAttempt: deliveryAttempt(message) + 1,
+    deliveryPaneId: status.paneId,
+    runtimeLeaseId: status.lease?.id || null,
+    answeredInputMessageId: pendingQuestion.id || null,
+    answeredInputEventId: pendingQuestion.eventId || null,
+    error: null,
+  }, env);
+  for (const selection of selections) {
+    for (let step = 0; step < selection; step += 1) {
+      await execFileAsync("tmux", ["send-keys", "-t", status.paneId, "Down"]);
+      await sleep(50);
+    }
+    await execFileAsync("tmux", ["send-keys", "-t", status.paneId, "C-m"]);
+    await sleep(150);
+  }
+  await updateThreadMessage(thread.id, message.id, {
+    state: "completed",
+    deliveryState: "delivered",
+    deliveredAt,
+    observedVia: "codex_request_user_input",
+    deliveryPaneId: status.paneId,
+    runtimeLeaseId: status.lease?.id || null,
+    answeredInputMessageId: pendingQuestion.id || null,
+    answeredInputEventId: pendingQuestion.eventId || null,
+    error: null,
+  }, env);
+  await updateThread(thread.id, { state: "working", lastError: null }, env).catch(() => {});
+  await appendEvent({
+    type: "thread_input_delivered",
+    threadId: thread.id,
+    messageId: message.id,
+    paneId: status.paneId,
+    observedVia: "codex_request_user_input",
+    answeredInputMessageId: pendingQuestion.id || null,
+    answeredInputEventId: pendingQuestion.eventId || null,
+  }, env);
+  return message.id;
+}
+
 async function sendThreadInputToPane(thread, message, status, env = process.env) {
   const attempt = deliveryAttempt(message) + 1;
   const inputText = inputTextForMessage(message);
@@ -1117,7 +1286,26 @@ export async function deliverPendingThreadInputs(threadId, env = process.env) {
       await updateThread(thread.id, { state: "waking" }, env);
       try {
         await wakeThread(thread.id, { reason: next.source || "message" }, env);
-        const status = await waitForRuntimeReady(thread.id, env);
+        const currentMessages = await listThreadMessages(thread.id, env);
+        const currentNext = currentMessages.find((item) => item.id === next.id) || next;
+        const pendingNeedInput = latestNeedInputBeforeMessage(currentMessages, currentNext.id);
+        if (pendingNeedInput) {
+          const needInputStatus = await runtimeStatus(thread.id, env, currentMessages).catch(() => null);
+          const answered = await sendNeedInputAnswerToPane(thread, currentNext, pendingNeedInput, needInputStatus, env);
+          if (answered) {
+            delivered.push(answered);
+            continue;
+          }
+        }
+        let status = await waitForRuntimeReady(thread.id, env);
+        const desiredMode = desiredCodexModeValue(thread);
+        if (desiredMode) {
+          const modeResult = await applyRuntimeCodexMode(thread.id, desiredMode, env).catch(() => null);
+          if (modeResult?.applied && modeResult.changed) {
+            await sleep(150);
+            status = await waitForRuntimeReady(thread.id, env).catch(() => status);
+          }
+        }
         const attempt = await sendThreadInputToPane(thread, next, status, env);
         const acknowledged = await waitForThreadInputAck(thread, next.id, env);
         if (acknowledged) {
@@ -1388,6 +1576,20 @@ async function syncRuntimeLeasesOnce(env = process.env) {
           const acknowledged = await acknowledgeThreadInputDelivery(thread, awaitingAck, status, env).catch(() => null);
           if (acknowledged) scheduleThreadInputDelivery(thread.id, env, 0);
           else await failRejectedThreadInputDelivery(thread, awaitingAck, status, env).catch(() => null);
+        }
+        const desiredMode = desiredCodexModeValue(thread);
+        if (desiredMode && status.promptReady && !status.working) {
+          const modeResult = await applyRuntimeCodexMode(thread.id, desiredMode, env).catch(() => null);
+          if (modeResult?.applied) {
+            await updateThread(thread.id, {
+              codexMode: desiredMode,
+              codexModeSource: modeResult.changed ? "runtime-sync-live" : thread.codexModeSource || "runtime-sync",
+              codexModeLiveApplied: true,
+              codexModeLiveChanged: Boolean(modeResult.changed),
+              codexModeApplyReason: modeResult.reason || null,
+              codexModeUpdatedAt: nowIso(),
+            }, env).catch(() => {});
+          }
         }
       }
       const idleSleep = idleSleepDecision({ lease: leaseForStorage, messages, status }, env);

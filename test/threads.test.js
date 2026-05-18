@@ -574,6 +574,144 @@ test("thread input delivery sends oversized messages through a temp file", async
   }
 });
 
+test("thread input delivery sends answers to pending Codex plan questions", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-plan-answer-delivery-"));
+  const fakeTmux = await createFakeTmux(home);
+  const captureFile = path.join(home, "pane.txt");
+  const priorPath = process.env.PATH;
+  const priorTmuxLog = process.env.TMUX_LOG;
+  const priorTmuxState = process.env.TMUX_STATE;
+  const priorCaptureFile = process.env.TMUX_CAPTURE_FILE;
+  process.env.PATH = `${fakeTmux.bin}:${priorPath || ""}`;
+  process.env.TMUX_LOG = fakeTmux.log;
+  process.env.TMUX_STATE = fakeTmux.state;
+  process.env.TMUX_CAPTURE_FILE = captureFile;
+
+  try {
+    await fs.writeFile(captureFile, [
+      "Question 1/2 (2 unanswered)",
+      "Select one primary color for the plan.",
+      "",
+      "› 1. Blue (Recommended)  Calm, neutral, and broadly compatible.",
+      "  2. Green               Fresh, constructive, and success-oriented.",
+      "  3. Red                 Bold, urgent, and high-attention.",
+      "",
+      "tab to add notes | enter to submit answer | left/right to navigate questions",
+      "esc to interrupt",
+    ].join("\n"), "utf8");
+    const env = {
+      ORKESTR_HOME: path.join(home, "orkestr-home"),
+      HOME: path.join(home, "runtime-home"),
+      CODEX_HOME: path.join(home, "codex-home"),
+      PATH: process.env.PATH,
+      TMUX_LOG: fakeTmux.log,
+      TMUX_STATE: fakeTmux.state,
+      TMUX_CAPTURE_FILE: captureFile,
+      ORKESTR_WAKE_READY_TIMEOUT_MS: "20",
+      ORKESTR_DELIVERY_ACK_WAIT_MS: "0",
+      ORKESTR_DELIVERY_ACK_BACKOFF_MS: "10000",
+    };
+    await createThread({ id: "plan-answer-thread", name: "Plan Answer Thread" }, env);
+    await wakeThread("plan-answer-thread", { reason: "test" }, env);
+    await appendThreadMessage("plan-answer-thread", {
+      role: "assistant",
+      source: "codex-rollout",
+      phase: "need_input",
+      eventId: "need-input-color-size",
+      text: [
+        "Codex needs input to continue:",
+        "",
+        "1. Color: Select one primary color for the plan.",
+        "   A. Blue (Recommended): Calm, neutral, and broadly compatible.",
+        "   B. Green: Fresh, constructive, and success-oriented.",
+        "   C. Red: Bold, urgent, and high-attention.",
+        "",
+        "2. Size: Select one target size for the plan.",
+        "   A. Medium (Recommended): Balanced detail without becoming long.",
+        "   B. Small: Compact and minimal.",
+        "   C. Large: More detailed and expansive.",
+        "",
+        "Reply with your choices or a short free-form answer.",
+      ].join("\n"),
+    }, env);
+    const answer = await enqueueThreadInput("plan-answer-thread", { text: "Color: blue, Size: medium" }, env);
+
+    assert.deepEqual(await deliverPendingThreadInputs("plan-answer-thread", env), [answer.id]);
+    const messages = await listThreadMessages("plan-answer-thread", env);
+    const deliveredAnswer = messages.find((message) => message.id === answer.id);
+    const log = await fs.readFile(fakeTmux.log, "utf8");
+    const submitCount = log.split("\n").filter((line) => line.includes("__CALL__\tsend-keys\t-t\t%42\tC-m")).length;
+
+    assert.equal(deliveredAnswer.state, "completed");
+    assert.equal(deliveredAnswer.deliveryState, "delivered");
+    assert.equal(deliveredAnswer.observedVia, "codex_request_user_input");
+    assert.equal(deliveredAnswer.answeredInputEventId, "need-input-color-size");
+    assert.equal(deliveredAnswer.error, null);
+    assert.equal(submitCount, 2);
+  } finally {
+    restoreEnvValue("PATH", priorPath);
+    restoreEnvValue("TMUX_LOG", priorTmuxLog);
+    restoreEnvValue("TMUX_STATE", priorTmuxState);
+    restoreEnvValue("TMUX_CAPTURE_FILE", priorCaptureFile);
+  }
+});
+
+test("codex mode endpoint toggles the attached Codex runtime", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-codex-mode-live-"));
+  const fakeTmux = await createFakeTmux(home);
+  const captureFile = path.join(home, "pane.txt");
+  const priorHome = process.env.ORKESTR_HOME;
+  const priorRuntimeHome = process.env.HOME;
+  const priorCodexHome = process.env.CODEX_HOME;
+  const priorPath = process.env.PATH;
+  const priorTmuxLog = process.env.TMUX_LOG;
+  const priorTmuxState = process.env.TMUX_STATE;
+  const priorCaptureFile = process.env.TMUX_CAPTURE_FILE;
+  const priorRecoverOnStart = process.env.ORKESTR_RECOVER_RUNNING_ON_START;
+  process.env.ORKESTR_HOME = path.join(home, "orkestr-home");
+  process.env.HOME = path.join(home, "runtime-home");
+  process.env.CODEX_HOME = path.join(home, "codex-home");
+  process.env.PATH = `${fakeTmux.bin}:${priorPath || ""}`;
+  process.env.TMUX_LOG = fakeTmux.log;
+  process.env.TMUX_STATE = fakeTmux.state;
+  process.env.TMUX_CAPTURE_FILE = captureFile;
+  process.env.ORKESTR_RECOVER_RUNNING_ON_START = "0";
+
+  let server;
+  try {
+    await fs.writeFile(captureFile, "› \n\ngpt-5.5 xhigh · /workspace/demo\n", "utf8");
+    await createThread({ id: "codex-mode-thread", name: "Codex Mode Thread" });
+    await wakeThread("codex-mode-thread", { reason: "test" });
+    server = await startServer({ port: 0, host: "127.0.0.1" });
+    const { port } = server.address();
+    const response = await fetch(`http://127.0.0.1:${port}/api/threads/codex-mode-thread/codex-mode`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ mode: "plan" }),
+    });
+    const payload = await response.json();
+    const log = await fs.readFile(fakeTmux.log, "utf8");
+
+    assert.equal(response.status, 200);
+    assert.equal(payload.mode, "plan");
+    assert.equal(payload.applied, true);
+    assert.equal(payload.runtimeMode.changed, true);
+    assert.equal(payload.thread.codexMode, "plan");
+    assert.equal(payload.thread.codexModeLiveApplied, true);
+    assert.match(log, /__CALL__\tsend-keys\t-t\t%42\tBTab/);
+  } finally {
+    if (server) await new Promise((resolve) => server.close(resolve));
+    restoreEnvValue("ORKESTR_HOME", priorHome);
+    restoreEnvValue("HOME", priorRuntimeHome);
+    restoreEnvValue("CODEX_HOME", priorCodexHome);
+    restoreEnvValue("PATH", priorPath);
+    restoreEnvValue("TMUX_LOG", priorTmuxLog);
+    restoreEnvValue("TMUX_STATE", priorTmuxState);
+    restoreEnvValue("TMUX_CAPTURE_FILE", priorCaptureFile);
+    restoreEnvValue("ORKESTR_RECOVER_RUNNING_ON_START", priorRecoverOnStart);
+  }
+});
+
 test("thread input delivery fails when Codex rejects a literal /now command", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-delivery-rejected-command-"));
   const fakeTmux = await createFakeTmux(home);

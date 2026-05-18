@@ -8,6 +8,7 @@ import { AnyFilesInterceptor } from "@nestjs/platform-express";
 import { deliverWhatsAppReplies } from "../../../../../packages/connectors/src/whatsapp.js";
 import { runNextThreadMessage } from "../../../../../packages/core/src/executors.js";
 import {
+  applyRuntimeCodexMode,
   deliverPendingThreadInputs,
   requestThreadInputDelivery,
   requestThreadWake,
@@ -563,17 +564,27 @@ export class ThreadsController {
     const mode = String(body.mode || "").trim().toLowerCase();
     if (mode !== "code" && mode !== "plan") throw httpError("invalid_codex_mode", 400);
     const updatedAt = new Date().toISOString();
+    const runtimeMode = await applyRuntimeCodexMode(thread.id, mode).catch((error: unknown) => ({
+      applied: false,
+      changed: false,
+      mode,
+      reason: error instanceof Error ? error.message : String(error),
+    }));
     const updated: any = await updateThread(thread.id, {
       desiredCodexMode: mode,
       desiredCodexModeUpdatedAt: updatedAt,
       codexMode: mode,
-      codexModeSource: "orkestr-ui",
+      codexModeSource: runtimeMode.applied ? "orkestr-ui-live" : "orkestr-ui",
+      codexModeLiveApplied: Boolean(runtimeMode.applied),
+      codexModeLiveChanged: Boolean(runtimeMode.changed),
+      codexModeApplyReason: runtimeMode.reason || null,
       codexModeUpdatedAt: updatedAt,
     });
     return {
       ok: true,
       mode,
-      applied: true,
+      applied: Boolean(runtimeMode.applied),
+      runtimeMode,
       thread: await threadRuntimeSummary(updated, await listThreadMessages(updated.id || thread.id)),
     };
   }
