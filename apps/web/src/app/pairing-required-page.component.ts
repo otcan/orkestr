@@ -1,4 +1,4 @@
-import { Component, EventEmitter, Input, OnDestroy, Output, inject } from "@angular/core";
+import { ChangeDetectorRef, Component, EventEmitter, Input, OnDestroy, Output, inject } from "@angular/core";
 import { firstValueFrom } from "rxjs";
 import { ApiService, SecurityChallenge, SetupStatus } from "./api.service";
 
@@ -9,7 +9,9 @@ import { ApiService, SecurityChallenge, SetupStatus } from "./api.service";
 })
 export class PairingRequiredPageComponent implements OnDestroy {
   private readonly api = inject(ApiService);
+  private readonly cdr = inject(ChangeDetectorRef);
   private poller?: ReturnType<typeof setInterval>;
+  private destroyed = false;
 
   @Input() setupStatus: SetupStatus | null = null;
   @Output() paired = new EventEmitter<void>();
@@ -20,12 +22,14 @@ export class PairingRequiredPageComponent implements OnDestroy {
   notice = "";
 
   ngOnDestroy(): void {
+    this.destroyed = true;
     this.stopPolling();
   }
 
   async createChallenge(): Promise<void> {
     this.busy = true;
     this.error = "";
+    this.renderNow();
     try {
       const result = await firstValueFrom(this.api.createSecurityChallenge());
       this.challenge = result.challenge || {
@@ -40,6 +44,7 @@ export class PairingRequiredPageComponent implements OnDestroy {
       this.error = this.errorText(error);
     } finally {
       this.busy = false;
+      this.renderNow();
     }
   }
 
@@ -54,6 +59,8 @@ export class PairingRequiredPageComponent implements OnDestroy {
     } catch (error) {
       this.error = this.errorText(error);
       this.stopPolling();
+    } finally {
+      this.renderNow();
     }
   }
 
@@ -90,9 +97,11 @@ export class PairingRequiredPageComponent implements OnDestroy {
     try {
       await firstValueFrom(this.api.pairSecurityBrowser(this.challenge.id));
       this.notice = "Browser paired. Opening Orkestr.";
+      this.renderNow();
       this.paired.emit();
     } catch (error) {
       this.error = this.errorText(error);
+      this.renderNow();
     }
   }
 
@@ -105,6 +114,11 @@ export class PairingRequiredPageComponent implements OnDestroy {
     if (!this.poller) return;
     clearInterval(this.poller);
     this.poller = undefined;
+  }
+
+  private renderNow(): void {
+    if (this.destroyed) return;
+    this.cdr.detectChanges();
   }
 
   private serverHost(): string {
