@@ -654,6 +654,7 @@ export class ThreadsController {
       displayName,
       enabled: optionalBodyBoolean(body, "enabled", current.enabled !== false),
       allowOtherPeople: optionalBodyBoolean(body, "allowOtherPeople", current.allowOtherPeople !== false),
+      additionalParticipantsEnabled: optionalBodyBoolean(body, "additionalParticipantsEnabled", current.additionalParticipantsEnabled === true),
       mirrorToWhatsApp: optionalBodyBoolean(body, "mirrorToWhatsApp", current.mirrorToWhatsApp !== false),
       replyPrefix: optionalBodyString(body, "replyPrefix", current.replyPrefix || "otcanclaw:") || "otcanclaw:",
       senderAccountId: optionalBodyString(body, "senderAccountId", current.senderAccountId || "") || null,

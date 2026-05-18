@@ -764,16 +764,25 @@
                       High risk: when additional participants are enabled, other people in this WhatsApp chat can send instructions to Orkestr. They may expose private messages, connected accounts, files, browser sessions, or financial information. Only enable this for people you fully trust.
                     </p>
                     <label class="checkbox-row settings-toggle">
-                      <input name="thread-wa-others-{{ thread.id }}" type="checkbox" [(ngModel)]="whatsappAllowOtherPeople" />
+                      <input
+                        name="thread-wa-others-{{ thread.id }}"
+                        type="checkbox"
+                        [ngModel]="whatsappAllowOtherPeople"
+                        (ngModelChange)="changeWhatsAppAdditionalParticipants($event)"
+                      />
                       <span>Allow messages from additional chat participants</span>
                     </label>
                     <div class="settings-facts">
                       <span>Linked sender account</span>
                       <strong>{{ selectedWhatsAppSenderAccountLabel() }}</strong>
-                      <span>Other participants</span>
-                      <strong>{{ whatsappParticipantsLoading ? "Checking" : (whatsappParticipants.length || "Unavailable") }}</strong>
+                      @if (whatsappAllowOtherPeople) {
+                        <span>Other participants</span>
+                        <strong>{{ whatsappParticipantsLoading ? "Checking" : (whatsappParticipants.length || "Unavailable") }}</strong>
+                      }
                     </div>
-                    @if (whatsappParticipants.length > 0) {
+                    @if (!whatsappAllowOtherPeople) {
+                      <p class="helper">Additional participants are off. Orkestr only listens to the linked sender account.</p>
+                    } @else if (whatsappParticipants.length > 0) {
                       <div class="wa-participant-list">
                         @for (participant of whatsappParticipants; track participant.id) {
                           <span>{{ whatsappParticipantLabel(participant) }}</span>

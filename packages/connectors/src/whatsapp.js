@@ -9,6 +9,7 @@ import { appendEvent, readJson, writeJson } from "../../storage/src/store.js";
 import {
   getLocalWhatsAppBridgeStatus,
   localWhatsAppBridgeBasePath,
+  listLocalWhatsAppChatParticipants,
   sendLocalWhatsAppText,
 } from "./whatsapp-local-bridge.js";
 
@@ -63,6 +64,27 @@ async function externalBridgeAccounts(bridgeUrl, healthPayload, fetchImpl) {
     // Older bridges only expose /health; account discovery stays best-effort.
   }
   return [];
+}
+
+function normalizeParticipant(participant = {}) {
+  const id = pickString(participant.id?._serialized, participant.id, participant.user, participant.phoneNumber);
+  return {
+    id,
+    name: pickString(participant.name, participant.pushname, participant.shortName, participant.label),
+    isAdmin: Boolean(participant.isAdmin),
+    isSuperAdmin: Boolean(participant.isSuperAdmin),
+  };
+}
+
+function normalizeParticipants(payload = {}) {
+  const participants = Array.isArray(payload.participants)
+    ? payload.participants
+    : Array.isArray(payload.groupMetadata?.participants)
+      ? payload.groupMetadata.participants
+      : Array.isArray(payload.chat?.participants)
+        ? payload.chat.participants
+        : [];
+  return participants.map(normalizeParticipant).filter((participant) => participant.id);
 }
 
 async function getLocalStatus(env) {
@@ -181,6 +203,35 @@ export async function getWhatsAppStatus(env = process.env, fetchImpl = fetch) {
   }
 }
 
+export async function getWhatsAppChatParticipants({ accountId = "account-1", chatId = "" } = {}, env = process.env, fetchImpl = fetch) {
+  const id = pickString(chatId);
+  if (!id) throw badRequest("whatsapp_chat_id_required");
+  const config = await readConnectorConfig("whatsapp", env);
+  const bridgeUrl = configuredBridgeUrl(config, env);
+  if (!bridgeUrl && bridgeMode(config, env) === "local") {
+    return listLocalWhatsAppChatParticipants({ accountId, chatId: id, env });
+  }
+  if (!bridgeUrl) {
+    return { accountId, chatId: id, ready: false, participants: [] };
+  }
+  const response = await fetchImpl(new URL(`/api/chats/${encodeURIComponent(id)}/meta`, bridgeUrl), {
+    signal: AbortSignal.timeout(Number(env.WHATSAPP_PARTICIPANTS_TIMEOUT_MS || 5000)),
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok || payload?.ok === false) {
+    const error = new Error(payload?.error || `whatsapp_chat_participants_failed_${response.status}`);
+    error.statusCode = response.status || 502;
+    throw error;
+  }
+  return {
+    accountId,
+    chatId: id,
+    ready: true,
+    isGroup: Boolean(payload?.isGroup),
+    participants: normalizeParticipants(payload),
+  };
+}
+
 function badRequest(message) {
   const error = new Error(message);
   error.statusCode = 400;
@@ -227,7 +278,8 @@ async function routeThread(input, config, env) {
     const responderContactId = pickString(binding.responderContactId);
     if (senderAccountId) {
       if (accountId && accountId !== senderAccountId) return false;
-      if (!fromMe && binding.allowOtherPeople === false) return false;
+      const additionalParticipantsEnabled = binding.additionalParticipantsEnabled === true || binding.allowOtherPeopleConfirmed === true;
+      if (!fromMe && !additionalParticipantsEnabled) return false;
       if (responderContactId && from && from === responderContactId) return false;
     }
     return binding.enabled !== false &&

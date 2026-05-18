@@ -8,6 +8,7 @@ import {
 } from "../../../../../packages/connectors/src/gmail.js";
 import {
   deliverWhatsAppReplies,
+  getWhatsAppChatParticipants,
   getWhatsAppStatus,
   routeWhatsAppInbound,
 } from "../../../../../packages/connectors/src/whatsapp.js";
@@ -16,7 +17,6 @@ import {
   createLocalWhatsAppChat,
   getLocalWhatsAppBridgeStatus,
   getLocalWhatsAppQrSvg,
-  listLocalWhatsAppChatParticipants,
   listLocalWhatsAppChats,
   logoutLocalWhatsAppAccount,
   sendLocalWhatsAppText,
@@ -93,7 +93,7 @@ export class ConnectorsController {
 
   @Get("whatsapp/bridge/accounts/:accountId/chats/:chatId/participants")
   async whatsappBridgeChatParticipants(@Param("accountId") accountId: string, @Param("chatId") chatId: string) {
-    return listLocalWhatsAppChatParticipants({ accountId, chatId });
+    return getWhatsAppChatParticipants({ accountId, chatId });
   }
 
   @Get("whatsapp/bridge/qr.svg")

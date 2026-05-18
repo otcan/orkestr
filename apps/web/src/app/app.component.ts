@@ -1052,6 +1052,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
         displayName: this.whatsappDisplayName.trim() || this.threadTitle(thread),
         enabled: this.whatsappBindingEnabled,
         allowOtherPeople: this.whatsappAllowOtherPeople,
+        additionalParticipantsEnabled: this.whatsappAllowOtherPeople,
         mirrorToWhatsApp: this.whatsappMirrorToWhatsApp,
         replyPrefix: this.whatsappReplyPrefix.trim() || "otcanclaw:",
         senderAccountId: this.selectedWhatsAppSenderAccountId(),
@@ -1152,6 +1153,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
         displayName: this.whatsappDisplayName,
         enabled: true,
         allowOtherPeople: false,
+        additionalParticipantsEnabled: false,
         mirrorToWhatsApp: true,
         replyPrefix: this.whatsappReplyPrefix.trim() || "otcanclaw:",
         senderAccountId: created.senderAccountId || this.selectedWhatsAppSenderAccountId(),
@@ -1190,6 +1192,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
         displayName: this.threadTitle(thread),
         enabled: false,
         allowOtherPeople: false,
+        additionalParticipantsEnabled: false,
         mirrorToWhatsApp: false,
         replyPrefix: this.whatsappReplyPrefix.trim() || "otcanclaw:",
         senderAccountId: "",
@@ -1232,7 +1235,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   async loadWhatsAppParticipants(): Promise<void> {
     const accountId = this.selectedWhatsAppSenderAccountId();
     const chatId = this.whatsappChatId.trim();
-    if (!accountId || !chatId || !this.canLoadLocalWhatsAppChats(accountId)) {
+    if (!accountId || !chatId) {
       this.whatsappParticipants = [];
       return;
     }
@@ -1246,6 +1249,11 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
       this.whatsappParticipantsLoading = false;
       this.renderNow();
     }
+  }
+
+  async changeWhatsAppAdditionalParticipants(enabled: boolean): Promise<void> {
+    this.whatsappAllowOtherPeople = enabled;
+    if (enabled) await this.loadWhatsAppParticipants();
   }
 
   selectWhatsAppChat(chatId: string): void {
@@ -1703,7 +1711,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
       accountDirty ||
       senderDirty ||
       this.whatsappBindingEnabled !== (binding.enabled !== false) ||
-      this.whatsappAllowOtherPeople !== (binding.allowOtherPeople === true) ||
+      this.whatsappAllowOtherPeople !== (binding.additionalParticipantsEnabled === true) ||
       this.whatsappMirrorToWhatsApp !== (binding.mirrorToWhatsApp !== false);
   }
 
@@ -1888,7 +1896,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     const binding = thread.binding || {};
     const allowPeople = this.whatsappBindingThreadId === thread.id
       ? this.whatsappAllowOtherPeople
-      : binding.allowOtherPeople === true;
+      : binding.additionalParticipantsEnabled === true;
     return allowPeople ? "Additional participants enabled" : "Only the linked sender account";
   }
 
@@ -1927,7 +1935,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     const label = this.whatsappChatLabel(thread);
     const binding = thread?.binding;
     const chatId = String(binding?.chatId || "").toLowerCase();
-    const groupSuffix = binding?.allowOtherPeople !== false || chatId.includes("@g.us") || chatId.includes("g.us") ? " · group" : "";
+    const groupSuffix = binding?.additionalParticipantsEnabled === true || chatId.includes("@g.us") || chatId.includes("g.us") ? " · group" : "";
     return `${label} · WhatsApp chat${groupSuffix}`;
   }
 
@@ -2676,7 +2684,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     this.whatsappSenderAccountId = String(binding.senderAccountId || binding.inboundAccountId || "");
     this.whatsappOutboundAccountId = String(binding.responderAccountId || binding.outboundAccountId || "");
     this.whatsappBindingEnabled = binding.enabled !== false;
-    this.whatsappAllowOtherPeople = binding.allowOtherPeople === true;
+    this.whatsappAllowOtherPeople = binding.additionalParticipantsEnabled === true;
     this.whatsappMirrorToWhatsApp = binding.mirrorToWhatsApp !== false;
     this.deleteThreadConfirm = "";
     this.deleteThreadWorkers = false;

@@ -323,6 +323,7 @@ export interface ThreadSummary {
     profilePicUrl?: string;
     enabled?: boolean;
     allowOtherPeople?: boolean;
+    additionalParticipantsEnabled?: boolean;
     mirrorToWhatsApp?: boolean;
     senderAccountId?: string | null;
     inboundAccountId?: string | null;

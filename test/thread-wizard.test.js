@@ -48,6 +48,8 @@ test("main UI exposes a guided first thread generation flow", async () => {
   assert.ok(sources.includes("Create and connect chat"));
   assert.ok(sources.includes("Existing chats are not selected here."));
   assert.ok(sources.includes("Linked sender account"));
+  assert.ok(sources.includes("Additional participants are off."));
+  assert.ok(sources.includes("Allow messages from additional chat participants"));
   assert.ok(!sources.includes("Allowed sender"));
   assert.ok(sources.includes("Detach chat"));
   assert.ok(sources.includes("Delete thread"));
