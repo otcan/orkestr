@@ -50,3 +50,11 @@ test("main UI exposes a guided first thread generation flow", async () => {
   assert.ok(!sources.includes(`<button class="secondary" type="button" [class.active]="activePanel === 'raw'" (click)="openPanel('raw')">Raw</button>`));
   assert.ok(!wizardSources.includes("this.api.sendThreadInput"));
 });
+
+test("web thread input allows Orkestr control commands", async () => {
+  const apiSource = await fs.readFile("apps/web/src/app/api.service.ts", "utf8");
+  const sendThreadInput = apiSource.slice(apiSource.indexOf("sendThreadInput("), apiSource.indexOf("wakeThread("));
+
+  assert.ok(sendThreadInput.includes("parseCommands: true"));
+  assert.ok(sendThreadInput.includes("controlAllowed: true"));
+});

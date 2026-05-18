@@ -637,7 +637,7 @@ export class ApiService {
   }
 
   sendThreadInput(id: string, text: string, attachments: Array<Record<string, unknown>> = []): Observable<unknown> {
-    const body: Record<string, unknown> = { text };
+    const body: Record<string, unknown> = { text, parseCommands: true, controlAllowed: true };
     if (attachments.length) body["attachments"] = attachments;
     return this.http.post(this.api(`/threads/${encodeURIComponent(id)}/input`), body);
   }

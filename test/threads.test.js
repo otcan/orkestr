@@ -444,6 +444,11 @@ test("thread input commands strip /now before runtime delivery", () => {
     rawCommand: "now",
     text: "run this immediately",
   });
+  assert.deepEqual(parseThreadInputCommand({ text: "/now \nrun this immediately" }), {
+    command: "interrupt",
+    rawCommand: "now",
+    text: "run this immediately",
+  });
   assert.equal(parseThreadInputCommand({ text: "normal message" }).command, null);
 });
 
