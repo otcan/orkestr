@@ -57,6 +57,7 @@ async function externalBridgeAccounts(bridgeUrl, healthPayload, fetchImpl) {
   if (Array.isArray(healthPayload?.accounts)) return healthPayload.accounts;
   try {
     const dashboard = await fetchJson(new URL("/api/dashboard", bridgeUrl), fetchImpl);
+    if (dashboard.ok && Array.isArray(dashboard.accounts)) return dashboard.accounts;
     if (dashboard.ok && Array.isArray(dashboard.payload?.accounts)) return dashboard.payload.accounts;
   } catch {
     // Older bridges only expose /health; account discovery stays best-effort.

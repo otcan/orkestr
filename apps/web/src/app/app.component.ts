@@ -1635,19 +1635,51 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     return String(account["state"] || account["status"] || "").trim();
   }
 
+  whatsappAccountRole(account: WhatsAppAccount | Record<string, unknown> | null): string {
+    if (!account) return "";
+    return String(account["role"] || "").trim().toLowerCase();
+  }
+
+  whatsappRelayTargetAccountId(account: WhatsAppAccount | Record<string, unknown> | null): string {
+    if (!account) return "";
+    return String(account["relayTargetAccountId"] || account["senderAccountId"] || account["inboundAccountId"] || "").trim();
+  }
+
+  whatsappAccountById(accountId: string): WhatsAppAccount | null {
+    const id = String(accountId || "").trim();
+    return this.whatsappAccounts().find((account) => this.whatsappAccountId(account) === id) || null;
+  }
+
+  defaultWhatsAppResponderAccountId(): string {
+    const accounts = this.whatsappAccounts();
+    const responder = accounts.find((account) => this.whatsappRelayTargetAccountId(account)) ||
+      accounts.find((account) => this.whatsappAccountRole(account) === "secondary") ||
+      accounts.find((account) => account.ready || this.whatsappAccountState(account) === "ready") ||
+      accounts[0] ||
+      null;
+    return this.whatsappAccountId(responder) || "account-1";
+  }
+
   selectedWhatsAppAccountId(): string {
     const accounts = this.whatsappAccounts();
     const selected = this.whatsappOutboundAccountId.trim();
     if (selected && accounts.some((account) => this.whatsappAccountId(account) === selected)) return selected;
-    const ready = accounts.find((account) => account.ready || this.whatsappAccountState(account) === "ready");
-    return this.whatsappAccountId(ready || accounts[0] || null) || "account-1";
+    return this.defaultWhatsAppResponderAccountId();
   }
 
   selectedWhatsAppSenderAccountId(): string {
     const accounts = this.whatsappAccounts();
     const selected = this.whatsappSenderAccountId.trim();
     if (selected && accounts.some((account) => this.whatsappAccountId(account) === selected)) return selected;
-    return this.selectedWhatsAppAccountId();
+    const responderId = this.selectedWhatsAppAccountId();
+    const responder = this.whatsappAccountById(responderId);
+    const relayTarget = this.whatsappRelayTargetAccountId(responder);
+    if (relayTarget && accounts.some((account) => this.whatsappAccountId(account) === relayTarget)) return relayTarget;
+    const primary = accounts.find((account) => this.whatsappAccountId(account) !== responderId && this.whatsappAccountRole(account) === "primary");
+    if (primary) return this.whatsappAccountId(primary);
+    const otherReady = accounts.find((account) => this.whatsappAccountId(account) !== responderId && (account.ready || this.whatsappAccountState(account) === "ready"));
+    if (otherReady) return this.whatsappAccountId(otherReady);
+    return responderId;
   }
 
   selectedWhatsAppAccount(): WhatsAppAccount | null {
@@ -2488,7 +2520,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     this.whatsappChatId = String(binding.chatId || "");
     this.whatsappDisplayName = String(binding.displayName || this.threadTitle(thread));
     this.whatsappReplyPrefix = String(binding.replyPrefix || "otcanclaw:");
-    this.whatsappSenderAccountId = String(binding.senderAccountId || binding.inboundAccountId || binding.outboundAccountId || "");
+    this.whatsappSenderAccountId = String(binding.senderAccountId || binding.inboundAccountId || "");
     this.whatsappOutboundAccountId = String(binding.responderAccountId || binding.outboundAccountId || "");
     this.whatsappBindingEnabled = binding.enabled !== false;
     this.whatsappAllowOtherPeople = binding.allowOtherPeople === true;
