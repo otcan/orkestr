@@ -1548,6 +1548,30 @@ ork-first-thread-wizard.first-thread-host {
   text-transform: uppercase;
 }
 
+.message-failure {
+  display: grid;
+  gap: 4px;
+  margin: 0 0 10px;
+  border: 1px solid rgba(255, 167, 132, 0.3);
+  border-radius: 8px;
+  background: rgba(55, 10, 6, 0.44);
+  color: #ffd9ca;
+  padding: 9px 10px;
+  overflow-wrap: anywhere;
+}
+
+.message-failure strong {
+  color: #fff1eb;
+  font-size: 0.74rem;
+  text-transform: uppercase;
+}
+
+.message-failure span {
+  color: #ffd9ca;
+  font-size: 0.86rem;
+  line-height: 1.35;
+}
+
 .assistant-info .message-meta {
   color: #9bd4ff;
   font-size: 0.7rem;

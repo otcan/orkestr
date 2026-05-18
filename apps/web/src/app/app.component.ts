@@ -1812,6 +1812,17 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     return renderMessageTextHtml(this.messageText(message));
   }
 
+  messageDeliveryStateLabel(message: ThreadMessage): string {
+    const state = String(message.deliveryState || message.state || "").trim();
+    if (state === "failed") return "Delivery failed";
+    return state.replace(/_/g, " ");
+  }
+
+  messageFailureDetail(message: ThreadMessage): string {
+    if (String(message.state || "").toLowerCase() !== "failed") return "";
+    return String(message.error || "Orkestr could not confirm this message reached Codex.").trim();
+  }
+
   messagePhase(message: ThreadMessage | null): string {
     return String(message?.phase || "").trim().toLowerCase();
   }

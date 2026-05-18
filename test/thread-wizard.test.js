@@ -58,3 +58,16 @@ test("web thread input allows Orkestr control commands", async () => {
   assert.ok(sendThreadInput.includes("parseCommands: true"));
   assert.ok(sendThreadInput.includes("controlAllowed: true"));
 });
+
+test("chat messages show delivery failure reasons", async () => {
+  const sources = await read([
+    "apps/web/src/app/app.component.ts",
+    "apps/web/src/app/app.component.html",
+    "apps/web/src/styles.css",
+  ]);
+
+  assert.ok(sources.includes("messageFailureDetail(message)"));
+  assert.ok(sources.includes("Not delivered"));
+  assert.ok(sources.includes("Delivery failed"));
+  assert.ok(sources.includes(".message-failure"));
+});

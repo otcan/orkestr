@@ -338,6 +338,7 @@ export interface ThreadMessage {
   createdAt?: string;
   timestamp?: string;
   state?: string;
+  deliveryState?: string;
   phase?: string;
   cursor?: number;
   attachments?: Array<Record<string, unknown>>;
