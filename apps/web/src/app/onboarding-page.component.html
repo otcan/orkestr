@@ -216,11 +216,6 @@
             <em [class]="mailStatusClass()">{{ mailStatusLabel() }}</em>
           </div>
 
-          <div class="mail-provider-tabs" aria-label="Mail provider">
-            <button type="button" [class.active]="mailProvider === 'gmail'" (click)="mailProvider = 'gmail'">Gmail</button>
-            <button type="button" [class.active]="mailProvider === 'outlook'" (click)="mailProvider = 'outlook'">Outlook</button>
-          </div>
-
           @if (mailAccountRows().length) {
             <article class="mail-card mail-accounts-card">
               <div class="mail-card-head">
@@ -243,6 +238,14 @@
               </div>
             </article>
           }
+
+          <div class="mail-provider-switch">
+            <small>Choose which provider to configure next. Existing mailboxes above stay connected.</small>
+            <div class="mail-provider-tabs" aria-label="Mail provider">
+              <button type="button" [class.active]="mailProvider === 'gmail'" (click)="mailProvider = 'gmail'">Gmail</button>
+              <button type="button" [class.active]="mailProvider === 'outlook'" (click)="mailProvider = 'outlook'">Outlook</button>
+            </div>
+          </div>
 
           <div class="mail-auth-grid">
             <article class="mail-card mail-guide-card">
@@ -272,10 +275,7 @@
             @if (mailProvider === "gmail") {
               <form class="mail-card auth-form-card" (submit)="submitGmailAuth(); $event.preventDefault()">
                 <strong>{{ mailProviderActionTitle("gmail") }}</strong>
-                <label>
-                  <span>Mailbox</span>
-                  <input name="gmail-account" type="email" [(ngModel)]="gmailAccount" placeholder="email@example.com" autocomplete="email" />
-                </label>
+                <small class="form-section-note">{{ mailProviderCredentialHint("gmail") }}</small>
                 <label>
                   <span>OAuth client ID</span>
                   <input name="gmail-client-id" [(ngModel)]="gmailClientId" autocomplete="off" />
@@ -288,6 +288,11 @@
                   <span>Redirect URI</span>
                   <input name="gmail-redirect-uri" [(ngModel)]="gmailRedirectUri" />
                 </label>
+                <small class="form-section-note">{{ mailProviderMailboxHint("gmail") }}</small>
+                <label>
+                  <span>Mailbox</span>
+                  <input name="gmail-account" type="email" [(ngModel)]="gmailAccount" placeholder="email@example.com" autocomplete="email" />
+                </label>
                 <button type="submit" [disabled]="busy || !gmailClientId.trim() || !gmailRedirectUri.trim()">
                   {{ busy ? "Starting" : mailProviderAuthButtonLabel("gmail") }}
                 </button>
@@ -296,10 +301,7 @@
             } @else {
               <form class="mail-card auth-form-card" (submit)="submitOutlookAuth(); $event.preventDefault()">
                 <strong>{{ mailProviderActionTitle("outlook") }}</strong>
-                <label>
-                  <span>Mailbox</span>
-                  <input name="outlook-account" type="email" [(ngModel)]="outlookAccount" placeholder="person@example.com" autocomplete="email" />
-                </label>
+                <small class="form-section-note">{{ mailProviderCredentialHint("outlook") }}</small>
                 <label>
                   <span>Application client ID</span>
                   <input name="outlook-client-id" [(ngModel)]="outlookClientId" autocomplete="off" />
@@ -311,6 +313,11 @@
                 <label>
                   <span>Scopes</span>
                   <input name="outlook-scopes" [(ngModel)]="outlookScopes" autocomplete="off" />
+                </label>
+                <small class="form-section-note">{{ mailProviderMailboxHint("outlook") }}</small>
+                <label>
+                  <span>Mailbox</span>
+                  <input name="outlook-account" type="email" [(ngModel)]="outlookAccount" placeholder="person@example.com" autocomplete="email" />
                 </label>
                 <button type="submit" [disabled]="busy || !outlookClientId.trim()">
                   {{ busy ? "Starting" : mailProviderAuthButtonLabel("outlook") }}
