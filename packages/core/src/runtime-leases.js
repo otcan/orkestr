@@ -758,6 +758,11 @@ function submitDelayMs(env = process.env) {
   return Math.max(0, Number(env.ORKESTR_RUNTIME_SUBMIT_DELAY_MS || 250) || 0);
 }
 
+function tmuxInlineCharLimit(env = process.env) {
+  const parsed = Number(env.ORKESTR_TMUX_INLINE_CHAR_LIMIT || 1024);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 1024;
+}
+
 function inputTextForMessage(message) {
   const text = String(message.text || "").trim();
   let body = text;
@@ -773,6 +778,44 @@ function inputTextForMessage(message) {
 
 function deliveryPayloadHash(message) {
   return crypto.createHash("sha256").update(inputTextForMessage(message)).digest("hex");
+}
+
+async function writeLongDeliveryInputFile(thread, message, inputText, env = process.env) {
+  const paths = await ensureDataDirs(env);
+  const threadDir = path.join(paths.home, "tmp", "thread-inputs", safeName(thread.id));
+  await fs.mkdir(threadDir, { recursive: true, mode: 0o700 });
+  const filePath = path.join(threadDir, `${safeName(message.id)}.txt`);
+  await fs.writeFile(filePath, inputText, { encoding: "utf8", mode: 0o600 });
+  return filePath;
+}
+
+async function deliveryInputForMessage(thread, message, inputText, env = process.env) {
+  const bytes = Buffer.byteLength(inputText, "utf8");
+  if (inputText.length <= tmuxInlineCharLimit(env)) {
+    return {
+      text: inputText,
+      mode: "inline",
+      filePath: "",
+      bytes,
+      observedVia: "tmux_send",
+    };
+  }
+  const filePath = await writeLongDeliveryInputFile(thread, message, inputText, env);
+  const checksum = crypto.createHash("sha256").update(inputText).digest("hex");
+  return {
+    text: [
+      "A full user message was written to a local temp file because it is too long for safe tmux inline delivery.",
+      `Read the full message from this local UTF-8 file: ${filePath}`,
+      `Bytes: ${bytes}`,
+      `SHA-256: ${checksum}`,
+      "",
+      "Treat the file contents as the user's message and answer it directly. Do not summarize this wrapper message.",
+    ].join("\n"),
+    mode: "file",
+    filePath,
+    bytes,
+    observedVia: "tmux_send_file",
+  };
 }
 
 function deliveryAttempt(message) {
@@ -949,6 +992,7 @@ async function waitForThreadInputAck(thread, messageId, env = process.env) {
 async function sendThreadInputToPane(thread, message, status, env = process.env) {
   const attempt = deliveryAttempt(message) + 1;
   const inputText = inputTextForMessage(message);
+  const deliveryInput = await deliveryInputForMessage(thread, message, inputText, env);
   const sentAt = nowIso();
   const nextAttemptAt = isoAfter(deliveryRetryBackoffMs(attempt, env));
   const rollout = await rolloutSnapshotForDelivery(thread, status.lease, env);
@@ -962,6 +1006,9 @@ async function sendThreadInputToPane(thread, message, status, env = process.env)
     deliveryNextAttemptAt: nextAttemptAt,
     deliveryPaneId: status.paneId,
     runtimeLeaseId: status.lease?.id || null,
+    deliveryInputMode: deliveryInput.mode,
+    deliveryInputFile: deliveryInput.filePath,
+    deliveryInputBytes: deliveryInput.bytes,
     ...rollout,
     error: null,
   }, env);
@@ -969,9 +1016,9 @@ async function sendThreadInputToPane(thread, message, status, env = process.env)
   let submittedExistingPaste = false;
   if (attempt > 1 && status.paneId) {
     const paneText = await capturePane(status.paneId, 40).catch(() => "");
-    submittedExistingPaste = paneContainsDeliveryText(paneText, inputText);
+    submittedExistingPaste = paneContainsDeliveryText(paneText, deliveryInput.text);
   }
-  if (!submittedExistingPaste) await pasteTmuxText(status.paneId, inputText, env);
+  if (!submittedExistingPaste) await pasteTmuxText(status.paneId, deliveryInput.text, env);
 
   const delayMs = submitDelayMs(env);
   if (delayMs > 0) await sleep(delayMs);
@@ -985,9 +1032,12 @@ async function sendThreadInputToPane(thread, message, status, env = process.env)
     deliveryAttempt: attempt,
     deliveryLastAttemptAt: sentAt,
     deliveryNextAttemptAt: nextAttemptAt,
-    observedVia: submittedExistingPaste ? "tmux_submit_existing_pending_ack" : "tmux_send_pending_ack",
+    observedVia: submittedExistingPaste ? `tmux_submit_existing_${deliveryInput.mode}_pending_ack` : `${deliveryInput.observedVia}_pending_ack`,
     deliveryPaneId: status.paneId,
     runtimeLeaseId: status.lease?.id || null,
+    deliveryInputMode: deliveryInput.mode,
+    deliveryInputFile: deliveryInput.filePath,
+    deliveryInputBytes: deliveryInput.bytes,
     ...rollout,
     error: null,
   }, env);
@@ -998,7 +1048,9 @@ async function sendThreadInputToPane(thread, message, status, env = process.env)
     attempt,
     paneId: status.paneId,
     nextAttemptAt,
-    observedVia: submittedExistingPaste ? "tmux_submit_existing" : "tmux_send",
+    observedVia: submittedExistingPaste ? `tmux_submit_existing_${deliveryInput.mode}` : deliveryInput.observedVia,
+    deliveryInputMode: deliveryInput.mode,
+    deliveryInputFile: deliveryInput.filePath || null,
   }, env);
   return { messageId: message.id, nextAttemptAt };
 }
