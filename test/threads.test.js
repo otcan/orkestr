@@ -1555,6 +1555,28 @@ test("thread summary exposes latest delivery failure details", async () => {
   assert.equal(summary.lastMessageError, "Codex rejected /now.");
 });
 
+test("thread summary treats proposed plan tags as plan messages", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-summary-proposed-plan-home-"));
+  const env = { ORKESTR_HOME: home };
+  const thread = await createThread({ id: "summary-proposed-plan-thread", name: "Summary Proposed Plan Thread" }, env);
+  await appendThreadMessage("summary-proposed-plan-thread", {
+    role: "assistant",
+    phase: "final_answer",
+    text: [
+      "<proposed plan>",
+      "Next should be **real-world launch validation**, not more feature work.",
+      "",
+      "1. Pair the first browser",
+      "</proposed plan>",
+    ].join("\n"),
+  }, env);
+
+  const summary = await threadRuntimeSummary(thread, await listThreadMessages(thread.id, env));
+
+  assert.equal(summary.lastMessagePhase, "plan");
+  assert.equal(summary.planAvailable, true);
+});
+
 test("thread input commands strip /now before runtime delivery", () => {
   assert.deepEqual(parseThreadInputCommand({ text: "/now run this immediately" }), {
     command: "interrupt",

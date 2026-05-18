@@ -7,7 +7,7 @@ import { OnboardingPageComponent } from "./onboarding-page.component";
 import { PairingRequiredPageComponent } from "./pairing-required-page.component";
 import { OpsPageComponent, ToolsView } from "./ops-page.component";
 import { RawTerminalController } from "./raw-terminal.controller";
-import { renderMessageTextHtml } from "./message-renderer";
+import { hasProposedPlanTag, renderMessageTextHtml } from "./message-renderer";
 import {
   ApiService,
   SetupStatus,
@@ -2331,7 +2331,10 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   }
 
   messagePhase(message: ThreadMessage | null): string {
-    return String(message?.phase || "").trim().toLowerCase();
+    const role = String(message?.role || "").trim().toLowerCase();
+    const phase = String(message?.phase || "").trim().toLowerCase();
+    if (role === "assistant" && phase !== "plan" && hasProposedPlanTag(message?.text)) return "plan";
+    return phase;
   }
 
   private latestUnreadThread(thread: ThreadSummary, includeFamily: boolean): ThreadSummary | null {

@@ -1762,6 +1762,16 @@ ork-first-thread-wizard.first-thread-host {
   color: #edffef;
 }
 
+.plan-message-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 12px;
+}
+
+.plan-message-actions .implement-command-button {
+  min-width: 112px;
+}
+
 .message-body {
   margin: 0;
   color: #dcebd8;

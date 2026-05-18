@@ -57,6 +57,11 @@ function latestStoredMessage(messages: any[] = []) {
 }
 
 const needInputPhases = new Set(["need_input", "awaiting_input", "question", "request_user_input"]);
+const proposedPlanTagPattern = /<\/?\s*proposed[\s_-]*plan\s*>/i;
+
+function hasProposedPlanTag(value: any): boolean {
+  return proposedPlanTagPattern.test(String(value || ""));
+}
 
 function isNeedInputMessage(message: any): boolean {
   const role = String(message?.role || message?.kind || "assistant").trim().toLowerCase();
@@ -104,7 +109,9 @@ function latestMessageSummary(messages: any[] = []) {
     };
   }
   const role = String(message?.role || message?.kind || "").trim().toLowerCase() || null;
-  const phase = String(message?.phase || (role === "assistant" ? "final_answer" : "")).trim().toLowerCase() || null;
+  const text = String(message?.text || "");
+  const rawPhase = String(message?.phase || (role === "assistant" ? "final_answer" : "")).trim().toLowerCase() || null;
+  const phase = role === "assistant" && hasProposedPlanTag(text) ? "plan" : rawPhase;
   return {
     lastMessageAt: message?.timestamp || message?.createdAt || null,
     lastMessageRole: role,
@@ -122,7 +129,7 @@ function latestAssistantPlanAvailable(messages: any[] = []): boolean {
     const text = String(message?.text || "").trim();
     if (role !== "assistant" || !text) continue;
     const phase = String(message?.phase || "").trim().toLowerCase();
-    return phase === "plan" || /<proposed_plan>/i.test(text);
+    return phase === "plan" || hasProposedPlanTag(text);
   }
   return false;
 }

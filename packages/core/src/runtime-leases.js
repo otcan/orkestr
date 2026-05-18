@@ -23,6 +23,7 @@ const deliveryTimers = new Map();
 let runtimeSyncInFlight = null;
 const pendingInputStates = new Set(["queued", "pending_delivery", "awaiting_ack"]);
 const needInputPhases = new Set(["need_input", "awaiting_input", "question", "request_user_input"]);
+const proposedPlanTagPattern = /<\/?\s*proposed[\s_-]*plan\s*>/i;
 const deliveryRetryDefaultsMs = [1000, 3000, 8000, 20_000, 60_000];
 const defaultRuntimeIdleSleepMs = 15 * 60 * 1000;
 const defaultRolloutSyncLookbackBytes = 2 * 1024 * 1024;
@@ -131,6 +132,10 @@ function eventId({ threadId = "", timestamp = "", role = "", phase = "", text = 
 
 function normalizedTextKey(value) {
   return String(value || "").replace(/\s+/g, " ").trim();
+}
+
+function hasProposedPlanTag(value) {
+  return proposedPlanTagPattern.test(String(value || ""));
 }
 
 function rolloutMessageEventKey(message) {
@@ -1620,6 +1625,7 @@ function parseAssistantRolloutMessages(body, threadId, baseOffset = 0) {
       phase = "need_input";
     }
     if (!text) continue;
+    if (phase !== "plan" && hasProposedPlanTag(text)) phase = "plan";
     const timestamp = parsed.timestamp || nowIso();
     const message = {
       cursor,

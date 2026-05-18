@@ -574,6 +574,19 @@
                   </div>
                 }
                 <div class="message-body" [innerHTML]="messageTextHtml(message)"></div>
+                @if (messagePhase(message) === 'plan') {
+                  <div class="plan-message-actions">
+                    <button
+                      class="implement-command-button"
+                      type="button"
+                      (click)="implementPlanSelected()"
+                      [disabled]="sending || sendingNow || implementingPlan"
+                      title="Implement the current Codex plan when the implementation prompt is visible"
+                    >
+                      {{ implementingPlan ? "Implementing" : "/implement" }}
+                    </button>
+                  </div>
+                }
                 @if ((message.attachments || []).length > 0) {
                   <div class="attachments">
                     @for (attachment of message.attachments || []; track attachmentLabel(attachment)) {

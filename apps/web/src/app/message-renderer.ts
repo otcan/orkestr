@@ -11,6 +11,17 @@ function escapeAttribute(value: unknown): string {
   return escapeHtml(value).replace(/`/g, "&#96;");
 }
 
+const proposedPlanTagPattern = /<\/?\s*proposed[\s_-]*plan\s*>/gi;
+const proposedPlanTagTestPattern = /<\/?\s*proposed[\s_-]*plan\s*>/i;
+
+export function hasProposedPlanTag(text: string | null | undefined): boolean {
+  return proposedPlanTagTestPattern.test(String(text || ""));
+}
+
+export function stripProposedPlanTags(text: string | null | undefined): string {
+  return String(text || "").replace(proposedPlanTagPattern, "").trim();
+}
+
 function splitUrlSuffix(value: string): { url: string; suffix: string } {
   let url = String(value || "");
   let suffix = "";
@@ -190,7 +201,7 @@ function renderCodeFence(lines: string[]): { html: string; nextIndex: number } {
 }
 
 export function renderMessageTextHtml(text: string | null | undefined): string {
-  const lines = String(text || "").split(/\r?\n/);
+  const lines = stripProposedPlanTags(text).split(/\r?\n/);
   const blocks: string[] = [];
   let paragraph: string[] = [];
   let index = 0;
