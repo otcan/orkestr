@@ -3,31 +3,100 @@ set -euo pipefail
 
 usage() {
   cat <<'USAGE'
-Install Orkestr locally.
+Install Orkestr.
 
 Usage:
   scripts/install.sh [--local] [--serve]
+  scripts/install.sh --systemd [--install-dir DIR] [--data-dir DIR] [--workspace-dir DIR] [--env-file FILE] [--user USER]
+
+Modes:
+  default       Clone/update the repo, install dependencies, build, and print a start command.
+  --local       Use the current checkout instead of cloning.
+  --systemd     Install a host-native VPS service. Requires root.
+  --serve       Start npm after a non-systemd install.
 
 Environment:
-  ORKESTR_REPO_URL      Git repository to clone when not running --local.
-  ORKESTR_INSTALL_DIR   Install directory. Defaults to ~/.orkestr-src/orkestr-oss.
-  ORKESTR_HOST          Bind host. Defaults to 127.0.0.1.
-  ORKESTR_PORT          Bind port. Defaults to 19812.
+  ORKESTR_REPO_URL          Git repository to clone. Defaults to https://github.com/otcan/orkestr.git.
+  ORKESTR_INSTALL_DIR       Install directory. Defaults to ~/.orkestr-src/orkestr-oss, or /opt/orkestr/app with --systemd.
+  ORKESTR_HOME              Data directory. Defaults to /opt/orkestr/data with --systemd.
+  ORKESTR_WORKSPACE_DIR     Workspace root. Defaults to /opt/orkestr/workspace with --systemd.
+  ORKESTR_ENV_FILE          Environment file. Defaults to /etc/orkestr/orkestr.env with --systemd.
+  ORKESTR_RUN_USER          Service user. Defaults to orkestr with --systemd.
+  ORKESTR_HOST              Bind host. Defaults to 127.0.0.1.
+  ORKESTR_PORT              Bind port. Defaults to 19812.
+  ORKESTR_INSTALL_CODEX     Install Codex CLI globally in --systemd mode. Defaults to 1.
+  ORKESTR_CODEX_VERSION     Codex CLI version. Defaults to 0.130.0.
+  ORKESTR_SKIP_SYSTEM_PACKAGES  Skip apt package installation when set to 1.
 USAGE
 }
 
 local_mode=0
 serve=0
-for arg in "$@"; do
-  case "$arg" in
-    --local) local_mode=1 ;;
-    --serve) serve=1 ;;
+systemd=0
+install_dir="${ORKESTR_INSTALL_DIR:-}"
+data_dir="${ORKESTR_HOME:-}"
+workspace_dir="${ORKESTR_WORKSPACE_DIR:-}"
+env_file="${ORKESTR_ENV_FILE:-}"
+run_user="${ORKESTR_RUN_USER:-orkestr}"
+host="${ORKESTR_HOST:-127.0.0.1}"
+port="${ORKESTR_PORT:-19812}"
+
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --local)
+      local_mode=1
+      shift
+      ;;
+    --serve)
+      serve=1
+      shift
+      ;;
+    --systemd|--vps)
+      systemd=1
+      shift
+      ;;
+    --install-dir)
+      install_dir="${2:-}"
+      shift 2
+      ;;
+    --data-dir)
+      data_dir="${2:-}"
+      shift 2
+      ;;
+    --workspace-dir)
+      workspace_dir="${2:-}"
+      shift 2
+      ;;
+    --env-file)
+      env_file="${2:-}"
+      shift 2
+      ;;
+    --user)
+      run_user="${2:-}"
+      shift 2
+      ;;
+    --host)
+      host="${2:-}"
+      shift 2
+      ;;
+    --port)
+      port="${2:-}"
+      shift 2
+      ;;
+    --skip-system-packages)
+      ORKESTR_SKIP_SYSTEM_PACKAGES=1
+      shift
+      ;;
+    --skip-codex)
+      ORKESTR_INSTALL_CODEX=0
+      shift
+      ;;
     --help|-h)
       usage
       exit 0
       ;;
     *)
-      echo "Unknown option: $arg" >&2
+      echo "Unknown option: $1" >&2
       usage >&2
       exit 2
       ;;
@@ -41,16 +110,208 @@ need() {
   fi
 }
 
-need node
-need npm
+have() {
+  command -v "$1" >/dev/null 2>&1
+}
 
-node_major="$(node -p 'Number(process.versions.node.split(".")[0])')"
-if [ "$node_major" -lt 22 ]; then
-  echo "Node.js 22 or newer is required. Found: $(node --version)" >&2
-  exit 1
+run_as_root() {
+  [ "$(id -u)" -eq 0 ]
+}
+
+apt_install() {
+  if [ "${ORKESTR_SKIP_SYSTEM_PACKAGES:-0}" = "1" ]; then
+    return 0
+  fi
+  if ! have apt-get; then
+    echo "Automatic system package install only supports apt-based hosts." >&2
+    echo "Install Node 22, npm, git, tmux, ripgrep, Chromium, and Codex CLI manually, then rerun with ORKESTR_SKIP_SYSTEM_PACKAGES=1." >&2
+    exit 1
+  fi
+  export DEBIAN_FRONTEND=noninteractive
+  apt-get update
+  apt-get install -y --no-install-recommends "$@"
+}
+
+node_major() {
+  node -p 'Number(process.versions.node.split(".")[0])' 2>/dev/null || echo 0
+}
+
+install_node_22() {
+  if [ "${ORKESTR_SKIP_SYSTEM_PACKAGES:-0}" = "1" ]; then
+    return 0
+  fi
+  apt_install ca-certificates curl gnupg
+  mkdir -p /etc/apt/keyrings
+  curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key \
+    | gpg --dearmor -o /etc/apt/keyrings/nodesource.gpg
+  echo "deb [signed-by=/etc/apt/keyrings/nodesource.gpg] https://deb.nodesource.com/node_22.x nodistro main" \
+    > /etc/apt/sources.list.d/nodesource.list
+  apt-get update
+  apt-get install -y --no-install-recommends nodejs
+}
+
+ensure_node() {
+  if [ "$(node_major)" -ge 22 ]; then
+    return 0
+  fi
+  if [ "$systemd" -eq 1 ]; then
+    install_node_22
+  fi
+  if [ "$(node_major)" -lt 22 ]; then
+    echo "Node.js 22 or newer is required. Found: $(node --version 2>/dev/null || echo missing)" >&2
+    exit 1
+  fi
+}
+
+install_system_packages() {
+  if [ "$systemd" -ne 1 ] || [ "${ORKESTR_SKIP_SYSTEM_PACKAGES:-0}" = "1" ]; then
+    return 0
+  fi
+  apt_install ca-certificates curl git openssh-client procps ripgrep tmux
+  if ! have chromium && ! have chromium-browser && ! have google-chrome; then
+    apt_install chromium
+  fi
+}
+
+install_codex() {
+  if [ "$systemd" -ne 1 ] || [ "${ORKESTR_INSTALL_CODEX:-1}" = "0" ]; then
+    return 0
+  fi
+  if have codex; then
+    return 0
+  fi
+  npm install -g "@openai/codex@${ORKESTR_CODEX_VERSION:-0.130.0}"
+}
+
+chrome_path() {
+  command -v chromium 2>/dev/null \
+    || command -v chromium-browser 2>/dev/null \
+    || command -v google-chrome 2>/dev/null \
+    || true
+}
+
+write_env_file() {
+  if [ -f "$env_file" ]; then
+    echo "Keeping existing environment file: $env_file"
+    return 0
+  fi
+  mkdir -p "$(dirname "$env_file")"
+  local chrome
+  chrome="$(chrome_path)"
+  cat > "$env_file" <<EOF
+# Orkestr host-native environment.
+# Edit this file for OpenAI keys, OAuth credentials, Caddy/Tailscale URLs, and private overlay paths.
+ORKESTR_APP_DIR=$repo_dir
+ORKESTR_HOME=$data_dir
+ORKESTR_HOST=$host
+ORKESTR_PORT=$port
+ORKESTR_AUTH_REQUIRED=${ORKESTR_AUTH_REQUIRED:-1}
+ORKESTR_COOKIE_SECURE=${ORKESTR_COOKIE_SECURE:-0}
+ORKESTR_PUBLIC_HTTPS_URL=${ORKESTR_PUBLIC_HTTPS_URL:-}
+ORKESTR_TAILSCALE_HTTPS_NAME=${ORKESTR_TAILSCALE_HTTPS_NAME:-}
+ORKESTR_CADDY_ENABLED=${ORKESTR_CADDY_ENABLED:-0}
+ORKESTR_RUNTIME_WORKSPACE_ROOT=$workspace_dir
+ORKESTR_CODEX_BIN=${ORKESTR_CODEX_BIN:-codex}
+ORKESTR_RUNTIME_CODEX_COMMAND="${ORKESTR_RUNTIME_CODEX_COMMAND:-codex --dangerously-bypass-approvals-and-sandbox}"
+ORKESTR_RUNTIME_SUBMIT_KEYS=${ORKESTR_RUNTIME_SUBMIT_KEYS:-C-m}
+ORKESTR_RUNTIME_SUBMIT_DELAY_MS=${ORKESTR_RUNTIME_SUBMIT_DELAY_MS:-250}
+ORKESTR_WAKE_READY_TIMEOUT_MS=${ORKESTR_WAKE_READY_TIMEOUT_MS:-60000}
+CODEX_HOME=${CODEX_HOME:-$data_dir/codex}
+PUPPETEER_EXECUTABLE_PATH=${PUPPETEER_EXECUTABLE_PATH:-$chrome}
+WA_CHROME_PATH=${WA_CHROME_PATH:-$chrome}
+ORKESTR_CHROME_PATH=${ORKESTR_CHROME_PATH:-$chrome}
+ORKESTR_OVERLAY_DIR=${ORKESTR_OVERLAY_DIR:-/opt/orkestr/overlay}
+WHATSAPP_BRIDGE_MODE=${WHATSAPP_BRIDGE_MODE:-local}
+OPENAI_API_KEY=
+OPENAI_BASE_URL=
+OPENAI_MODEL=
+GMAIL_OAUTH_CLIENT_ID=
+GMAIL_OAUTH_CLIENT_SECRET=
+GMAIL_OAUTH_REDIRECT_URI=
+EOF
+  chmod 0640 "$env_file"
+}
+
+write_cli_wrapper() {
+  cat > /usr/local/bin/orkestr <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+env_file="${ORKESTR_ENV_FILE:-/etc/orkestr/orkestr.env}"
+if [ -r "$env_file" ]; then
+  set -a
+  # shellcheck disable=SC1090
+  . "$env_file"
+  set +a
+fi
+app_dir="${ORKESTR_APP_DIR:-/opt/orkestr/app}"
+exec node "$app_dir/apps/cli/bin/orkestr-oss.js" "$@"
+EOF
+  chmod 0755 /usr/local/bin/orkestr
+}
+
+write_systemd_service() {
+  local service_name group_name
+  service_name="${ORKESTR_SERVICE_NAME:-orkestr}"
+  group_name="$(id -gn "$run_user")"
+  cat > "/etc/systemd/system/${service_name}.service" <<EOF
+[Unit]
+Description=Orkestr host-native service
+Documentation=https://github.com/otcan/orkestr
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=$run_user
+Group=$group_name
+WorkingDirectory=$repo_dir
+EnvironmentFile=-$env_file
+ExecStart=/usr/local/bin/orkestr serve
+Restart=on-failure
+RestartSec=5
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
+EOF
+  systemctl daemon-reload
+  systemctl enable --now "${service_name}.service"
+}
+
+install_systemd_runtime() {
+  if ! run_as_root; then
+    echo "--systemd requires root. Use: curl -fsSL https://raw.githubusercontent.com/otcan/orkestr/main/scripts/install.sh | sudo bash -s -- --systemd" >&2
+    exit 1
+  fi
+  if ! id "$run_user" >/dev/null 2>&1; then
+    useradd --system --home "$data_dir" --shell /usr/sbin/nologin "$run_user"
+  fi
+  mkdir -p "$data_dir" "$workspace_dir" /opt/orkestr/overlay
+  chown -R "$run_user:$(id -gn "$run_user")" "$data_dir" "$workspace_dir" /opt/orkestr/overlay
+  write_env_file
+  chgrp "$(id -gn "$run_user")" "$env_file" || true
+  write_cli_wrapper
+  write_systemd_service
+}
+
+if [ "$systemd" -eq 1 ]; then
+  install_dir="${install_dir:-/opt/orkestr/app}"
+  data_dir="${data_dir:-/opt/orkestr/data}"
+  workspace_dir="${workspace_dir:-/opt/orkestr/workspace}"
+  env_file="${env_file:-/etc/orkestr/orkestr.env}"
+else
+  install_dir="${install_dir:-$HOME/.orkestr-src/orkestr-oss}"
 fi
 
-repo_dir="${ORKESTR_INSTALL_DIR:-$HOME/.orkestr-src/orkestr-oss}"
+install_system_packages
+ensure_node
+need npm
+if [ "$systemd" -ne 1 ]; then
+  need git
+fi
+install_codex
+
+repo_dir="$install_dir"
 if [ "$local_mode" -eq 1 ]; then
   repo_dir="$(pwd)"
 else
@@ -74,8 +335,33 @@ fi
 
 npm run build
 
-export ORKESTR_HOST="${ORKESTR_HOST:-127.0.0.1}"
-export ORKESTR_PORT="${ORKESTR_PORT:-19812}"
+if [ "$systemd" -eq 1 ]; then
+  npm prune --omit=dev
+  install_systemd_runtime
+  cat <<EOF
+
+Orkestr host-native service installed.
+
+Service:
+  systemctl status ${ORKESTR_SERVICE_NAME:-orkestr}
+  journalctl -u ${ORKESTR_SERVICE_NAME:-orkestr} -f
+
+CLI:
+  orkestr --help
+  orkestr security approve <challenge-id>
+
+Config:
+  $env_file
+
+Open locally or through your reverse proxy:
+  http://$host:$port/setup
+
+EOF
+  exit 0
+fi
+
+export ORKESTR_HOST="$host"
+export ORKESTR_PORT="$port"
 
 cat <<EOF
 
@@ -87,6 +373,9 @@ Start:
 
 Open:
   http://$ORKESTR_HOST:$ORKESTR_PORT/setup
+
+For a VPS service install, rerun as root:
+  sudo scripts/install.sh --systemd
 
 EOF
 

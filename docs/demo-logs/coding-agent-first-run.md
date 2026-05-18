@@ -32,5 +32,6 @@ terminal panel if you want to inspect the live Codex session. Host-native
 contributors can still use `npx orkestr-oss wake demo-coding-agent`.
 
 The public dry run proves Orkestr can create the thread, prepare the desktop
-profile, and queue work. The Docker runtime includes Codex; the real-agent
-follow-up requires completing Codex device authorization from the setup page.
+profile, and queue work. Docker local setup and host-native VPS setup both
+include a Codex runtime path; the real-agent follow-up requires completing
+Codex device authorization from the setup page.

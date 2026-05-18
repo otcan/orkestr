@@ -31,7 +31,54 @@ npm run demo:coding-agent
 `npm run check` performs JavaScript syntax checks, compiles the NestJS backend,
 builds Angular, and runs the Node test suite.
 
-## Docker
+## Deployment Paths
+
+Use Docker for local first-run demos and host-native systemd for a VPS.
+
+Docker is intentionally the easiest local path: the image bundles Codex, tmux,
+git, ripgrep, Chromium, and the compiled Orkestr app. It is also useful for
+quick demos and throwaway test environments.
+
+The VPS path should be host-native. Caddy, Tailscale, browser desktops,
+systemd logs, SSH pairing approval, and long-running agent work are host-level
+operations. Running the server directly under systemd keeps those operations
+plain:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/otcan/orkestr/main/scripts/install.sh | sudo bash -s -- --systemd
+```
+
+The installer creates:
+
+```text
+/opt/orkestr/app        cloned Orkestr source and built app
+/opt/orkestr/data       ORKESTR_HOME
+/opt/orkestr/workspace  default agent workspace root
+/etc/orkestr/orkestr.env
+/usr/local/bin/orkestr
+/etc/systemd/system/orkestr.service
+```
+
+The service uses `ORKESTR_HOST=127.0.0.1` by default. For remote access, put a
+host-managed reverse proxy such as Caddy in front, preferably reachable through
+Tailscale HTTPS or a domain you control. Set the public URL and secure cookie
+settings in `/etc/orkestr/orkestr.env`, then restart:
+
+```bash
+sudoedit /etc/orkestr/orkestr.env
+sudo systemctl restart orkestr
+```
+
+Useful VPS commands:
+
+```bash
+systemctl status orkestr
+journalctl -u orkestr -f
+orkestr security approve <challenge-id>
+orkestr security challenges
+```
+
+## Local Docker
 
 ```bash
 cp .env.docker.example .env

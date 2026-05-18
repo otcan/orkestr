@@ -49,6 +49,12 @@ The public API stores thread state, messages, connector status, timers, and brow
 
 Codex execution is intentionally local. The thread runtime wakes a tmux session and starts Codex in the thread workspace. Private deployments can customize launch behavior through environment variables or overlays, but the public repo must not contain private host assumptions.
 
+## Deployment Boundary
+
+Docker is the local/beginner packaging path. A VPS should use the host-native
+systemd installer so Caddy, Tailscale, browser desktops, logs, and pairing
+approval stay on the host where operators expect them.
+
 ## Connector Boundary
 
 The public connector surface contains generic setup and routing code. Real credentials and session state stay outside the repo:

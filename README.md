@@ -22,9 +22,12 @@ Orkestr makes those pieces explicit. The default target is a single developer ru
 
 ## Quickstart
 
-Docker is the preferred first-run path. The image includes the Codex runtime,
-tmux, git, ripgrep, Chromium, and the compiled Orkestr web app, so users do not
-install Codex on the host.
+Orkestr has two supported setup paths:
+
+- **Local or beginner setup:** use Docker Compose. This is the fastest way to try Orkestr because the image includes Codex, tmux, git, ripgrep, Chromium, and the compiled web app.
+- **VPS setup:** use the host-native systemd installer. This is the right shape for a real server because Caddy, Tailscale, browser desktops, service logs, and pairing approval are host-level operations.
+
+### Local Docker
 
 ```bash
 mkdir orkestr && cd orkestr
@@ -45,12 +48,30 @@ code. Runtime state, including Codex auth, is stored in the `orkestr-data`
 Docker volume. Edit `.env` before starting the container to provide OpenAI,
 Tailscale/Caddy, OAuth, workspace, or overlay settings.
 
-Shell install is still available for contributors and operators who prefer a
-host-native runtime:
+### VPS Host-Native
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/otcan/orkestr/main/scripts/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/otcan/orkestr/main/scripts/install.sh | sudo bash -s -- --systemd
 ```
+
+The host-native installer creates:
+
+- `/opt/orkestr/app` for the cloned application
+- `/opt/orkestr/data` for `ORKESTR_HOME`
+- `/opt/orkestr/workspace` for agent workspaces
+- `/etc/orkestr/orkestr.env` for server-local configuration
+- `/usr/local/bin/orkestr` for the CLI
+- `orkestr.service` for systemd
+
+Then use normal server commands:
+
+```bash
+systemctl status orkestr
+journalctl -u orkestr -f
+orkestr security approve <challenge-id>
+```
+
+Edit `/etc/orkestr/orkestr.env` for OpenAI, OAuth, Caddy/Tailscale HTTPS, and private overlay settings. Keep the service bound to `127.0.0.1` and put Caddy/Tailscale in front before remote browser access.
 
 Local clone flow:
 
@@ -100,7 +121,7 @@ npm run demo:coding-agent
 
 That demo starts Orkestr with a temporary local home, creates a coding-agent thread, prepares the virtual desktop profile, queues a repository-review task, and prints the public log. It does not require WhatsApp, Gmail, LinkedIn, or Codex credentials.
 
-For a real Codex run, use the Docker setup flow or see [examples/coding-agent-demo/README.md](examples/coding-agent-demo/README.md).
+For a real Codex run, use the Docker local setup, the host-native VPS setup, or see [examples/coding-agent-demo/README.md](examples/coding-agent-demo/README.md).
 
 Optional real Codex demo mode:
 

@@ -23,7 +23,7 @@ Recommended order:
 
 The `/setup` Secure Access step reports the current bind address, Caddy availability, Tailscale/HTTPS hints, and browser pairing state.
 
-Set `ORKESTR_AUTH_REQUIRED=1` to require browser pairing before protected API access. An unpaired browser can only generate a pairing challenge and poll that challenge. Approve the challenge from trusted host access:
+Set `ORKESTR_AUTH_REQUIRED=1` to require browser pairing before protected API access. The host-native VPS installer enables this by default in `/etc/orkestr/orkestr.env`. An unpaired browser can only generate a pairing challenge and poll that challenge. Approve the challenge from trusted host access:
 
 ```bash
 ssh root@YOUR_SERVER

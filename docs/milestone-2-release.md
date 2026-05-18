@@ -92,7 +92,8 @@ Private overlays must not be copied into the public repo when they contain:
 ## Known Gaps
 
 - Secure remote access onboarding is planned but not complete.
-- The public demo queues a coding-agent task; the Docker runtime includes Codex,
-  and real Codex runs depend on completing setup-page device authorization.
+- The public demo queues a coding-agent task; Docker local setup and host-native
+  VPS setup both provide a Codex runtime path, and real Codex runs depend on
+  completing setup-page device authorization.
 - WhatsApp media mirroring is not included in this milestone; final text replies are covered.
 - The public UI is still a setup workstation, not a full production operations console.
