@@ -924,6 +924,139 @@ ork-first-thread-wizard.first-thread-host {
   text-transform: uppercase;
 }
 
+.workspace-folder-field {
+  gap: 9px;
+}
+
+.workspace-path-box {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+}
+
+.workspace-path-box button {
+  min-width: 88px;
+}
+
+.workspace-folder-browser {
+  display: grid;
+  gap: 10px;
+  border: 1px solid rgba(119, 205, 126, 0.16);
+  border-radius: 8px;
+  background: rgba(2, 7, 3, 0.64);
+  padding: 10px;
+  text-transform: none;
+}
+
+.folder-browser-toolbar {
+  display: grid;
+  grid-template-columns: auto auto minmax(0, 1fr);
+  gap: 8px;
+  align-items: center;
+}
+
+.folder-browser-toolbar button {
+  min-height: 32px;
+  padding: 0 10px;
+}
+
+.folder-browser-toolbar span {
+  overflow: hidden;
+  color: #d9fbd8;
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-size: 0.78rem;
+  font-weight: 800;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.folder-root-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+}
+
+.folder-root-row button {
+  min-height: 30px;
+  border-color: rgba(119, 205, 126, 0.16);
+  background: rgba(4, 10, 5, 0.72);
+  color: #c8edc2;
+  font-size: 0.75rem;
+  padding: 0 9px;
+}
+
+.folder-root-row button.active {
+  border-color: rgba(126, 247, 142, 0.62);
+  background: rgba(52, 128, 58, 0.36);
+}
+
+.folder-entry-list {
+  display: grid;
+  gap: 6px;
+  max-height: 240px;
+  overflow: auto;
+}
+
+.folder-entry-list button {
+  display: grid;
+  grid-template-columns: 16px minmax(92px, 0.32fr) minmax(0, 1fr);
+  gap: 8px;
+  align-items: center;
+  min-height: 36px;
+  border-color: rgba(119, 205, 126, 0.14);
+  background: rgba(4, 10, 5, 0.54);
+  color: #d9fbd8;
+  padding: 7px 9px;
+  text-align: left;
+}
+
+.folder-entry-list button.active {
+  border-color: rgba(126, 247, 142, 0.62);
+  background: rgba(52, 128, 58, 0.32);
+}
+
+.folder-entry-list button > span {
+  width: 12px;
+  height: 10px;
+  border: 1px solid rgba(255, 209, 102, 0.52);
+  border-radius: 2px;
+  background: rgba(255, 209, 102, 0.18);
+}
+
+.folder-entry-list strong,
+.folder-entry-list small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.folder-entry-list strong {
+  color: #edffef;
+  font-size: 0.82rem;
+}
+
+.folder-entry-list small {
+  color: #91ad8b;
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-size: 0.74rem;
+  font-weight: 700;
+}
+
+.folder-browser-state {
+  border: 1px dashed rgba(119, 205, 126, 0.2);
+  border-radius: 8px;
+  color: #91ad8b;
+  font-size: 0.8rem;
+  font-weight: 800;
+  padding: 12px;
+  text-align: center;
+}
+
+.folder-browser-state.error {
+  border-color: rgba(255, 107, 107, 0.36);
+  color: #ffb3b3;
+}
+
 .wizard-review {
   display: grid;
   grid-template-columns: minmax(120px, 0.28fr) minmax(0, 1fr);

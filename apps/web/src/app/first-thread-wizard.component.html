@@ -87,10 +87,54 @@
       </div>
 
       @if (workspaceMode === 'workspace') {
-        <label class="wizard-field">
+        <div class="wizard-field workspace-folder-field">
           <span>Workspace path</span>
-          <input name="first-thread-workspace" [(ngModel)]="workspace" placeholder="/workspace" [disabled]="busy" />
-        </label>
+          <div class="workspace-path-box">
+            <input name="first-thread-workspace" [(ngModel)]="workspace" placeholder="/workspace" [disabled]="busy" />
+            <button class="secondary" type="button" (click)="toggleWorkspaceBrowser()" [disabled]="busy">
+              {{ folderBrowserOpen ? "Hide" : "Browse" }}
+            </button>
+          </div>
+          @if (folderBrowserOpen) {
+            <div class="workspace-folder-browser">
+              <div class="folder-browser-toolbar">
+                <button class="secondary" type="button" (click)="loadWorkspaceFolders(folderParent || '')" [disabled]="folderLoading || !folderParent">
+                  Up
+                </button>
+                <button class="secondary" type="button" (click)="loadWorkspaceFolders(workspace)" [disabled]="folderLoading || !workspace.trim()">
+                  Refresh
+                </button>
+                <span>{{ folderPath || workspace || "Workspace root" }}</span>
+              </div>
+              @if (folderRoots.length > 0) {
+                <div class="folder-root-row">
+                  @for (root of folderRoots; track root.path) {
+                    <button type="button" (click)="browseWorkspaceFolder(root.path)" [class.active]="root.path === folderPath" [disabled]="folderLoading">
+                      {{ root.name }}
+                    </button>
+                  }
+                </div>
+              }
+              @if (folderLoading) {
+                <div class="folder-browser-state">Loading folders</div>
+              } @else if (folderError) {
+                <div class="folder-browser-state error">{{ folderError }}</div>
+              } @else if (folderEntries.length === 0) {
+                <div class="folder-browser-state">No child folders</div>
+              } @else {
+                <div class="folder-entry-list">
+                  @for (folder of folderEntries; track folder.path) {
+                    <button type="button" (click)="browseWorkspaceFolder(folder.path)" [class.active]="folder.path === workspace">
+                      <span aria-hidden="true"></span>
+                      <strong>{{ folder.name }}</strong>
+                      <small>{{ folder.path }}</small>
+                    </button>
+                  }
+                </div>
+              }
+            </div>
+          }
+        </div>
       }
 
       @if (workspaceMode === 'clone') {

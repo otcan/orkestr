@@ -33,8 +33,13 @@ test("runtime monitor default keeps Codex reply import responsive", () => {
 
 test("server exposes health, readiness, version, and agent message APIs", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-api-"));
+  const workspaceRoot = path.join(home, "workspace-root");
+  await fs.mkdir(path.join(workspaceRoot, "alpha"), { recursive: true });
+  await fs.mkdir(path.join(workspaceRoot, "beta"), { recursive: true });
   const priorHome = process.env.ORKESTR_HOME;
+  const priorWorkspaceRoot = process.env.ORKESTR_RUNTIME_WORKSPACE_ROOT;
   process.env.ORKESTR_HOME = home;
+  process.env.ORKESTR_RUNTIME_WORKSPACE_ROOT = workspaceRoot;
   const server = await startServer({ port: 0, host: "127.0.0.1" });
   const { port } = server.address();
   const baseUrl = `http://127.0.0.1:${port}`;
@@ -54,6 +59,7 @@ test("server exposes health, readiness, version, and agent message APIs", async 
     const listed = await request(baseUrl, "/api/agents/coding-agent/messages");
     const system = await request(baseUrl, "/api/system/summary");
     const processes = await request(baseUrl, "/api/system/processes?sort=cpu");
+    const folders = await request(baseUrl, `/api/system/workspace-folders?path=${encodeURIComponent(workspaceRoot)}`);
     const browsers = await request(baseUrl, "/api/browsers");
     const browserSessions = await request(baseUrl, "/api/browser-sessions");
     const preparedBrowser = await request(baseUrl, "/api/browser-sessions/linkedin/prepare", { method: "POST" });
@@ -84,6 +90,9 @@ test("server exposes health, readiness, version, and agent message APIs", async 
     assert.equal(listed.messages[1].role, "assistant");
     assert.ok(system.cpu.count >= 1);
     assert.ok(Array.isArray(processes.processes));
+    assert.equal(folders.path, workspaceRoot);
+    assert.ok(folders.roots.some((root) => root.path === workspaceRoot));
+    assert.deepEqual(folders.entries.map((entry) => entry.name).sort(), ["alpha", "beta"]);
     assert.ok(browsers.browsers.some((browser) => browser.slug === "linkedin"));
     assert.ok(browserSessions.sessions.length >= 3);
     assert.ok(browserSessions.sessions.some((session) => session.slug === "linkedin"));
@@ -97,5 +106,7 @@ test("server exposes health, readiness, version, and agent message APIs", async 
     await new Promise((resolve) => server.close(resolve));
     if (priorHome === undefined) delete process.env.ORKESTR_HOME;
     else process.env.ORKESTR_HOME = priorHome;
+    if (priorWorkspaceRoot === undefined) delete process.env.ORKESTR_RUNTIME_WORKSPACE_ROOT;
+    else process.env.ORKESTR_RUNTIME_WORKSPACE_ROOT = priorWorkspaceRoot;
   }
 });

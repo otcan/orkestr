@@ -1,7 +1,7 @@
 import { Component, EventEmitter, Input, Output, inject } from "@angular/core";
 import { FormsModule } from "@angular/forms";
 import { firstValueFrom } from "rxjs";
-import { ApiService, ThreadSummary } from "./api.service";
+import { ApiService, ThreadSummary, WorkspaceFolderEntry } from "./api.service";
 
 type WizardStepId = "name" | "workspace" | "review";
 type WorkspaceMode = "" | "workspace" | "clone";
@@ -30,6 +30,13 @@ export class FirstThreadWizardComponent {
   workspace = "";
   repoUrl = "";
   cloneTarget = "";
+  folderBrowserOpen = false;
+  folderLoading = false;
+  folderError = "";
+  folderPath = "";
+  folderRoots: WorkspaceFolderEntry[] = [];
+  folderEntries: WorkspaceFolderEntry[] = [];
+  folderParent: string | null = null;
   busy = false;
   error = "";
   creationStage = "";
@@ -48,7 +55,42 @@ export class FirstThreadWizardComponent {
 
   chooseWorkspaceMode(mode: Exclude<WorkspaceMode, "">): void {
     this.workspaceMode = mode;
-    if (mode === "workspace" && !this.workspace.trim()) this.workspace = "/workspace";
+    if (mode === "workspace") {
+      this.folderBrowserOpen = true;
+      void this.loadWorkspaceFolders(this.workspace.trim());
+    }
+  }
+
+  async toggleWorkspaceBrowser(): Promise<void> {
+    if (this.busy) return;
+    this.folderBrowserOpen = !this.folderBrowserOpen;
+    if (this.folderBrowserOpen) await this.loadWorkspaceFolders(this.workspace.trim());
+  }
+
+  async loadWorkspaceFolders(targetPath = ""): Promise<void> {
+    if (this.busy && !this.folderBrowserOpen) return;
+    this.folderLoading = true;
+    this.folderError = "";
+    try {
+      const response = await firstValueFrom(this.api.workspaceFolders(targetPath));
+      this.folderPath = response.path || targetPath;
+      this.folderParent = response.parent || null;
+      this.folderRoots = response.roots || [];
+      this.folderEntries = response.entries || [];
+      if (!response.ok) this.folderError = response.error || "Folder cannot be opened.";
+      if (!this.workspace.trim() && response.ok && response.path) this.workspace = response.path;
+    } catch (error) {
+      this.folderError = this.errorText(error);
+      this.folderEntries = [];
+    } finally {
+      this.folderLoading = false;
+    }
+  }
+
+  async browseWorkspaceFolder(folderPath: string): Promise<void> {
+    if (this.busy) return;
+    this.workspace = folderPath;
+    await this.loadWorkspaceFolders(folderPath);
   }
 
   next(): void {

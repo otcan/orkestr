@@ -52,6 +52,21 @@ export interface BrowserSession {
   leaseOwnerLabel?: string | null;
 }
 
+export interface WorkspaceFolderEntry {
+  name: string;
+  path: string;
+  hidden?: boolean;
+}
+
+export interface WorkspaceFoldersResponse {
+  ok: boolean;
+  error?: string;
+  path: string;
+  parent?: string | null;
+  roots: WorkspaceFolderEntry[];
+  entries: WorkspaceFolderEntry[];
+}
+
 export interface SetupStatus {
   setupState: string;
   home: string;
@@ -795,6 +810,11 @@ export class ApiService {
 
   systemProcesses(sort = "cpu"): Observable<{ count: number; processes: Array<Record<string, unknown>> }> {
     return this.http.get<{ count: number; processes: Array<Record<string, unknown>> }>(this.api(`/system/processes?sort=${encodeURIComponent(sort)}`));
+  }
+
+  workspaceFolders(currentPath = ""): Observable<WorkspaceFoldersResponse> {
+    const query = currentPath ? `?path=${encodeURIComponent(currentPath)}` : "";
+    return this.http.get<WorkspaceFoldersResponse>(this.api(`/system/workspace-folders${query}`));
   }
 
   modelStatus(): Observable<Record<string, unknown>> {
