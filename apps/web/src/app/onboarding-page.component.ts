@@ -1,12 +1,13 @@
 import { Component, EventEmitter, Input, OnChanges, OnDestroy, OnInit, Output, SimpleChanges, inject } from "@angular/core";
 import { FormsModule } from "@angular/forms";
 import { firstValueFrom } from "rxjs";
-import { ApiService, ConnectorStatus, GmailMessage, SecurityChallenge, SetupStatus, ThreadSummary } from "./api.service";
+import { ApiService, ConnectorStatus, GmailMessage, OutlookOAuthPollResponse, OutlookOAuthStartResponse, SecurityChallenge, SetupStatus, ThreadSummary } from "./api.service";
 
 type ConnectorStep = "openai" | "codex" | "gmail" | "linkedin" | "whatsapp" | "browsers";
 type OnboardingStep = "goal" | "system" | "security" | ConnectorStep | "finish";
 type OnboardingGoalId = "whatsapp-codex" | "virtual-desktop" | "inbox-summary";
 type SetupPageMode = "setup" | "onboarding";
+type MailProvider = "gmail" | "outlook";
 
 interface OnboardingGoal {
   id: OnboardingGoalId;
@@ -27,6 +28,7 @@ export class OnboardingPageComponent implements OnInit, OnChanges, OnDestroy {
   private readonly api = inject(ApiService);
   private readonly storageKey = "orkestr:onboarding";
   private poller?: ReturnType<typeof setInterval>;
+  private outlookPoller?: ReturnType<typeof setInterval>;
 
   @Input() mode: SetupPageMode = "onboarding";
   @Input() setupSection = "";
@@ -53,6 +55,7 @@ export class OnboardingPageComponent implements OnInit, OnChanges, OnDestroy {
   codexAuthExpiresAt = "";
 
   openaiApiKey = "";
+  mailProvider: MailProvider = "gmail";
   gmailAccount = "";
   gmailClientId = "";
   gmailClientSecret = "";
@@ -60,6 +63,11 @@ export class OnboardingPageComponent implements OnInit, OnChanges, OnDestroy {
   gmailSampleQuery = "in:inbox newer_than:7d";
   gmailSampleMessages: GmailMessage[] = [];
   gmailSampleLoading = false;
+  outlookAccount = "";
+  outlookClientId = "";
+  outlookTenantId = "common";
+  outlookScopes = "offline_access User.Read Mail.Read";
+  outlookDevice: OutlookOAuthStartResponse | OutlookOAuthPollResponse | null = null;
   private formHydrated = false;
   private stepInitialized = false;
 
@@ -88,7 +96,7 @@ export class OnboardingPageComponent implements OnInit, OnChanges, OnDestroy {
       id: "inbox-summary",
       label: "Inbox summary",
       eyebrow: "Daily brief",
-      summary: "Read Gmail and send a scheduled WhatsApp digest.",
+      summary: "Read Gmail or Outlook and send a scheduled WhatsApp digest.",
       requiredSteps: ["openai", "gmail", "whatsapp"],
     },
   ];
@@ -96,7 +104,7 @@ export class OnboardingPageComponent implements OnInit, OnChanges, OnDestroy {
   readonly connectorSteps: Array<{ id: ConnectorStep; label: string; eyebrow: string }> = [
     { id: "openai", label: "OpenAI", eyebrow: "Model access" },
     { id: "codex", label: "Codex", eyebrow: "Local agent" },
-    { id: "gmail", label: "Gmail", eyebrow: "Inbox" },
+    { id: "gmail", label: "Mail", eyebrow: "Inbox" },
     { id: "linkedin", label: "LinkedIn", eyebrow: "Browser" },
     { id: "whatsapp", label: "WhatsApp", eyebrow: "Messages" },
     { id: "browsers", label: "Desktops", eyebrow: "Browser runtime" },
@@ -117,6 +125,7 @@ export class OnboardingPageComponent implements OnInit, OnChanges, OnDestroy {
 
   ngOnDestroy(): void {
     if (this.poller) clearInterval(this.poller);
+    if (this.outlookPoller) clearInterval(this.outlookPoller);
   }
 
   async load(showBusy = true): Promise<void> {
@@ -204,6 +213,74 @@ export class OnboardingPageComponent implements OnInit, OnChanges, OnDestroy {
     }
   }
 
+  async saveOutlook(): Promise<void> {
+    const clientId = this.outlookClientId.trim();
+    const tenantId = this.outlookTenantId.trim() || "common";
+    const scopes = this.outlookScopes.trim() || "offline_access User.Read Mail.Read";
+    if (!clientId) {
+      this.error = "Outlook needs a Microsoft application client ID.";
+      return;
+    }
+    const body: Record<string, string> = { clientId, tenantId, scopes };
+    if (this.outlookAccount.trim()) body["account"] = this.outlookAccount.trim();
+    await this.saveConnector("outlook", body, "Outlook app registration saved.");
+  }
+
+  async submitOutlookAuth(): Promise<void> {
+    await this.saveOutlook();
+    if (this.error) return;
+    await this.startOutlookOAuth();
+  }
+
+  async startOutlookOAuth(): Promise<void> {
+    this.busy = true;
+    try {
+      const result = await firstValueFrom(this.api.startOutlookOAuth(this.outlookAccount));
+      this.outlookDevice = result;
+      this.notice = "Microsoft sign-in is ready. Enter the device code in the Microsoft page.";
+      this.error = "";
+      this.openOutlookDevicePage();
+      this.startOutlookPolling(Number(result.interval || 5));
+      await this.load(false);
+    } catch (error) {
+      this.error = this.errorText(error);
+    } finally {
+      this.busy = false;
+    }
+  }
+
+  async pollOutlookOAuth(): Promise<void> {
+    const pendingId = this.outlookDevice?.pendingId;
+    if (!pendingId) return;
+    try {
+      const result = await firstValueFrom(this.api.pollOutlookOAuth(pendingId));
+      this.outlookDevice = { ...this.outlookDevice, ...result };
+      if (result.ok) {
+        if (this.outlookPoller) clearInterval(this.outlookPoller);
+        this.outlookPoller = undefined;
+        this.notice = "Outlook sign-in connected.";
+        this.error = "";
+        await this.load(false);
+      }
+    } catch (error) {
+      if (this.outlookPoller) clearInterval(this.outlookPoller);
+      this.outlookPoller = undefined;
+      this.error = this.errorText(error);
+    }
+  }
+
+  openOutlookDevicePage(): void {
+    const url = this.outlookDevice?.verificationUriComplete || this.outlookDevice?.verificationUri;
+    if (url) globalThis.open?.(url, "_blank", "noopener,noreferrer");
+  }
+
+  private startOutlookPolling(intervalSeconds = 5): void {
+    if (this.outlookPoller) clearInterval(this.outlookPoller);
+    const intervalMs = Math.max(5, Number(intervalSeconds) || 5) * 1000;
+    this.outlookPoller = setInterval(() => void this.pollOutlookOAuth(), intervalMs);
+    void this.pollOutlookOAuth();
+  }
+
   async prepareLinkedIn(): Promise<void> {
     await this.browserAction("linkedin", "prepare", "LinkedIn browser profile prepared.");
   }
@@ -239,9 +316,50 @@ export class OnboardingPageComponent implements OnInit, OnChanges, OnDestroy {
     return this.stateClass("gmail");
   }
 
+  outlookStatusLabel(): string {
+    const state = this.connector("outlook")?.state;
+    if (!state) return "not connected";
+    return String(state).replace(/_/g, " ");
+  }
+
+  outlookStatusClass(): string {
+    return this.stateClass("outlook");
+  }
+
+  mailStatusLabel(): string {
+    if (this.connector("gmail")?.state === "connected") return "Gmail connected";
+    if (this.connector("outlook")?.state === "connected") return "Outlook connected";
+    if (this.mailDone()) return "configured";
+    return "not connected";
+  }
+
+  mailStatusClass(): string {
+    if (this.connector("gmail")?.state === "connected" || this.connector("outlook")?.state === "connected") return "ready";
+    if (this.mailDone()) return "partial";
+    if (["broken", "failed"].includes(String(this.connector("gmail")?.state || "")) || ["broken", "failed"].includes(String(this.connector("outlook")?.state || ""))) return "bad";
+    return "idle";
+  }
+
+  mailDone(): boolean {
+    return ["connected", "partial"].includes(String(this.connector("gmail")?.state || "")) ||
+      ["connected", "partial"].includes(String(this.connector("outlook")?.state || ""));
+  }
+
+  mailSummary(): string {
+    const gmail = this.connector("gmail")?.summary;
+    const outlook = this.connector("outlook")?.summary;
+    if (gmail && outlook) return `Gmail: ${gmail} Outlook: ${outlook}`;
+    return gmail || outlook || "Connect Gmail or Outlook with your own OAuth app.";
+  }
+
   gmailConfigSummary(): string {
     if (!this.gmailClientId.trim()) return "OAuth client is not configured.";
     return this.gmailRedirectUri.trim() || this.defaultGmailRedirectUri();
+  }
+
+  outlookConfigSummary(): string {
+    if (!this.outlookClientId.trim()) return "Microsoft app is not configured.";
+    return `Tenant ${this.outlookTenantId.trim() || "common"}`;
   }
 
   gmailSampleDate(message: GmailMessage): string {
@@ -269,6 +387,7 @@ export class OnboardingPageComponent implements OnInit, OnChanges, OnDestroy {
     if (id === "system") return this.setup ? "checked" : "checking";
     if (id === "security") return this.securityStepLabel();
     if (id === "finish") return this.goalRequiredSteps().every((step) => this.stepDone(step)) ? "ready" : "review";
+    if (id === "gmail") return this.mailStatusLabel();
     return this.stateLabel(id);
   }
 
@@ -277,6 +396,7 @@ export class OnboardingPageComponent implements OnInit, OnChanges, OnDestroy {
     if (id === "system") return this.setup ? "ready" : "idle";
     if (id === "security") return this.securityStepClass();
     if (id === "finish") return this.goalRequiredSteps().every((step) => this.stepDone(step)) ? "ready" : "partial";
+    if (id === "gmail") return this.mailStatusClass();
     return this.stateClass(id);
   }
 
@@ -285,6 +405,7 @@ export class OnboardingPageComponent implements OnInit, OnChanges, OnDestroy {
     if (id === "system") return Boolean(this.setup);
     if (id === "security") return this.securityDone();
     if (id === "finish") return this.goalRequiredSteps().every((step) => this.stepDone(step));
+    if (id === "gmail") return this.mailDone();
     const state = this.connector(id)?.state;
     return state === "connected" || state === "partial";
   }
@@ -824,6 +945,11 @@ export class OnboardingPageComponent implements OnInit, OnChanges, OnDestroy {
     if (!this.gmailAccount && gmail["account"]) this.gmailAccount = String(gmail["account"]);
     if (!this.gmailClientId && gmail["clientId"]) this.gmailClientId = String(gmail["clientId"]);
     if (gmail["redirectUri"]) this.gmailRedirectUri = String(gmail["redirectUri"]);
+    const outlook = config["outlook"] || {};
+    if (!this.outlookAccount && outlook["account"]) this.outlookAccount = String(outlook["account"]);
+    if (!this.outlookClientId && outlook["clientId"]) this.outlookClientId = String(outlook["clientId"]);
+    if (outlook["tenantId"]) this.outlookTenantId = String(outlook["tenantId"]);
+    if (outlook["scopes"]) this.outlookScopes = String(outlook["scopes"]);
     this.formHydrated = true;
   }
 

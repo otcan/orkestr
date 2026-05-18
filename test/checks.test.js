@@ -9,7 +9,7 @@ test("setup status includes the V1 connector set", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-checks-"));
   const status = await getSetupStatus({ env: { ORKESTR_HOME: home }, home });
   const ids = status.connectors.map((connector) => connector.id);
-  assert.deepEqual(ids, ["openai", "codex", "gmail", "linkedin", "whatsapp", "browsers", "timers"]);
+  assert.deepEqual(ids, ["openai", "codex", "gmail", "outlook", "linkedin", "whatsapp", "browsers", "timers"]);
 });
 
 test("OpenAI reports connected when OPENAI_API_KEY exists", async () => {

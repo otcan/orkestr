@@ -391,6 +391,30 @@
   gap: 12px;
 }
 
+.mail-provider-tabs {
+  display: inline-grid;
+  grid-template-columns: repeat(2, minmax(110px, 1fr));
+  gap: 4px;
+  width: min(100%, 280px);
+  border: 1px solid rgba(128, 210, 138, 0.2);
+  border-radius: 8px;
+  background: rgba(2, 8, 9, 0.5);
+  padding: 4px;
+}
+
+.mail-provider-tabs button {
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: #d4ffe4;
+  padding: 8px 10px;
+}
+
+.mail-provider-tabs button.active {
+  background: rgba(128, 210, 138, 0.18);
+  color: #ffffff;
+}
+
 .mail-card {
   display: grid;
   align-content: start;
@@ -402,8 +426,32 @@
 }
 
 .mail-card p,
-.mail-card dl {
+.mail-card dl,
+.mail-card ol {
   margin: 0;
+}
+
+.mail-guide-card {
+  grid-column: 1 / -1;
+}
+
+.mail-guide-card ol {
+  display: grid;
+  gap: 7px;
+  padding-left: 20px;
+}
+
+.mail-guide-card code {
+  border: 1px solid rgba(128, 210, 138, 0.18);
+  border-radius: 6px;
+  background: rgba(0, 0, 0, 0.24);
+  color: #eaffef;
+  padding: 2px 5px;
+  overflow-wrap: anywhere;
+}
+
+.outlook-device-card {
+  margin-top: 12px;
 }
 
 .mail-card-head {
