@@ -1244,7 +1244,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     if (Number.isFinite(baseAhead) && baseAhead > 0) baseParts.push(`${baseAhead} commit${baseAhead === 1 ? "" : "s"}`);
     if (Number.isFinite(changedFiles) && changedFiles > 0) baseParts.push(`${changedFiles} file${changedFiles === 1 ? "" : "s"}`);
     if (Number.isFinite(dirtyFiles) && dirtyFiles > 0) baseParts.push(`${dirtyFiles} dirty`);
-    if (isWorkerParentComparison && baseParts.length) return `pending merge: ${baseParts.join(", ")}`;
+    if (isWorkerParentComparison && baseParts.length) return `pending worker changes: ${baseParts.join(", ")}`;
     if (
       Number.isFinite(baseAhead) &&
       Number.isFinite(changedFiles) &&
@@ -1253,7 +1253,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
       changedFiles === 0 &&
       dirtyFiles === 0
     ) {
-      return isWorkerParentComparison ? "merged into parent" : "";
+      return isWorkerParentComparison ? "no pending worker commits" : "";
     }
     if (baseParts.length) {
       return `diff${comparison ? ` vs ${comparison}` : ""}: ${baseParts.join(", ")}`;
