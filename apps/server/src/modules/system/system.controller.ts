@@ -3,10 +3,19 @@ import os from "node:os";
 import path from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { Body, Controller, Get, HttpCode, Post, Query, Req, Res } from "@nestjs/common";
+import { Body, Controller, Get, HttpCode, Param, Post, Query, Req, Res } from "@nestjs/common";
 import { listRuntimeLeases } from "../../../../../packages/core/src/runtime-leases.js";
 import { getSetupStatus } from "../../../../../packages/core/src/setup.js";
-import { createPairingChallenge, pairBrowser, securityStatus, sessionCookieHeader } from "../../../../../packages/core/src/security.js";
+import {
+  approvePairingChallenge,
+  createPairingChallenge,
+  getPairingChallenge,
+  listPairingChallenges,
+  pairBrowser,
+  rejectPairingChallenge,
+  securityStatus,
+  sessionCookieHeader,
+} from "../../../../../packages/core/src/security.js";
 import { publicConfig } from "../../../../../packages/storage/src/config.js";
 import { ensureDataDirs } from "../../../../../packages/storage/src/paths.js";
 import { listEvents } from "../../../../../packages/storage/src/store.js";
@@ -168,11 +177,39 @@ export class SystemController {
     return createPairingChallenge({ request } as any);
   }
 
+  @Post("setup/security/challenges")
+  @HttpCode(200)
+  async setupSecurityChallenges(@Req() request: any) {
+    return createPairingChallenge({ request } as any);
+  }
+
+  @Get("setup/security/challenges")
+  async listSetupSecurityChallenges() {
+    return listPairingChallenges();
+  }
+
+  @Get("setup/security/challenges/:challengeId")
+  async setupSecurityChallengeStatus(@Param("challengeId") challengeId: string) {
+    return { ok: true, challenge: await getPairingChallenge(challengeId) };
+  }
+
+  @Post("setup/security/challenges/:challengeId/approve")
+  @HttpCode(200)
+  async approveSetupSecurityChallenge(@Param("challengeId") challengeId: string) {
+    return approvePairingChallenge(challengeId, { approvedBy: "browser" });
+  }
+
+  @Post("setup/security/challenges/:challengeId/reject")
+  @HttpCode(200)
+  async rejectSetupSecurityChallenge(@Param("challengeId") challengeId: string) {
+    return rejectPairingChallenge(challengeId, { rejectedBy: "browser" });
+  }
+
   @Post("setup/security/pair")
   @HttpCode(200)
   async setupSecurityPair(@Body() body: Record<string, unknown> = {}, @Req() request: any, @Res({ passthrough: true }) response: any) {
     const result = await pairBrowser({
-      code: String(body.code || ""),
+      challengeId: String(body.challengeId || ""),
       userAgent: String(request?.headers?.["user-agent"] || ""),
     } as any);
     response.setHeader("set-cookie", sessionCookieHeader(result.token));

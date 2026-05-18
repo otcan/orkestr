@@ -4,6 +4,7 @@ import { FormsModule } from "@angular/forms";
 import { firstValueFrom } from "rxjs";
 import { FirstThreadWizardComponent } from "./first-thread-wizard.component";
 import { OnboardingPageComponent } from "./onboarding-page.component";
+import { PairingRequiredPageComponent } from "./pairing-required-page.component";
 import { OpsPageComponent, ToolsView } from "./ops-page.component";
 import { RawTerminalController } from "./raw-terminal.controller";
 import { renderMessageTextHtml } from "./message-renderer";
@@ -37,7 +38,7 @@ type PersistedThreadTextField =
 
 @Component({
   selector: "ork-root",
-  imports: [DatePipe, FormsModule, FirstThreadWizardComponent, OpsPageComponent, OnboardingPageComponent],
+  imports: [DatePipe, FormsModule, FirstThreadWizardComponent, OpsPageComponent, OnboardingPageComponent, PairingRequiredPageComponent],
   templateUrl: "./app.component.html",
 })
 export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
@@ -331,7 +332,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     this.apiOnline = true;
     this.appReady = true;
     this.pairingRequired = true;
-    this.onboardingActive = true;
+    this.onboardingActive = false;
     this.setupPageMode = "setup";
     this.setupSection = "security";
     this.threadWizardOpen = false;
@@ -341,7 +342,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     this.error = "";
     this.closeRawStream();
     this.disconnectSummaryStream();
-    this.replaceSetupPath("security");
+    this.replacePairingPath();
     this.updateDocumentTitle();
     this.renderNow();
   }
@@ -620,6 +621,8 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   async handleBrowserPaired(): Promise<void> {
     this.pairingRequired = false;
     this.appReady = true;
+    this.onboardingActive = false;
+    globalThis.history?.replaceState({}, "", "/");
     await this.refresh(false);
   }
 
@@ -3029,6 +3032,12 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     globalThis.history?.replaceState({}, "", next);
   }
 
+  private replacePairingPath(): void {
+    const next = "/setup/pairing";
+    if (globalThis.location?.pathname === next) return;
+    globalThis.history?.replaceState({}, "", next);
+  }
+
   private normalizeSetupSection(value: unknown): SetupSection {
     const section = String(value || "").trim().toLowerCase();
     return ["system", "security", "openai", "codex", "gmail", "linkedin", "whatsapp", "browsers"].includes(section)
@@ -3257,6 +3266,10 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   }
 
   private updateDocumentTitle(): void {
+    if (this.pairingRequired) {
+      globalThis.document.title = "Pairing Required · Orkestr";
+      return;
+    }
     if (this.onboardingActive) {
       globalThis.document.title = this.setupPageMode === "setup" ? "Setup · Orkestr" : "Onboarding · Orkestr";
       return;

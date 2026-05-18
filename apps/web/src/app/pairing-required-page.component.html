@@ -1,0 +1,69 @@
+<main class="pairing-shell">
+  <section class="pairing-panel" aria-label="Pairing Required">
+    <header class="pairing-head">
+      <div>
+        <p class="eyebrow">Orkestr security</p>
+        <h1>Pairing Required</h1>
+      </div>
+      <em [class]="setupStatus?.security?.remoteReady ? 'ready' : 'partial'">
+        {{ setupStatus?.security?.remoteReady ? "remote ready" : "locked" }}
+      </em>
+    </header>
+
+    <p class="pairing-copy">
+      This browser is not paired with the Orkestr server. Generate a challenge here, then approve that exact challenge from an SSH session on the server.
+    </p>
+
+    @if (error) {
+      <div class="pairing-notice error">{{ error }}</div>
+    }
+    @if (notice) {
+      <div class="pairing-notice">{{ notice }}</div>
+    }
+
+    <div class="pairing-actions">
+      <button type="button" (click)="createChallenge()" [disabled]="busy">
+        {{ busy ? "Generating" : "Generate challenge" }}
+      </button>
+      @if (challenge) {
+        <button class="secondary" type="button" (click)="refreshChallenge()" [disabled]="busy">Check approval</button>
+      }
+    </div>
+
+    @if (challenge) {
+      <section class="challenge-box">
+        <div class="challenge-row">
+          <div>
+            <span>Challenge ID</span>
+            <code>{{ challenge.id }}</code>
+          </div>
+          <em [class]="challengeStatusClass()">{{ challenge.status }}</em>
+        </div>
+        <div class="challenge-meta">
+          <span>Expires {{ expiryLabel() }}</span>
+          <span>Server {{ setupStatus?.security?.https?.url || "current host" }}</span>
+        </div>
+      </section>
+
+      <section class="ssh-instructions">
+        <h2>Approve From SSH</h2>
+        <ol>
+          <li>Open a terminal and SSH to the server.</li>
+          <li>Run the approval command inside that SSH session.</li>
+          <li>Return to this tab. It will continue automatically after approval.</li>
+        </ol>
+        <pre>{{ sshCommand() }}</pre>
+        <pre>{{ approveCommand() }}</pre>
+        <p>
+          We use the root user by default because fresh VPS images usually reserve Docker, systemd, and firewall control for root. On a hardened server, use a sudo-capable deploy user instead and run:
+        </p>
+        <pre>{{ sudoApproveCommand() }}</pre>
+      </section>
+    } @else {
+      <section class="empty-challenge">
+        <h2>No Challenge Yet</h2>
+        <p>Generate a challenge to start pairing this browser. Access remains blocked until the server approves it.</p>
+      </section>
+    }
+  </section>
+</main>

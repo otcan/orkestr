@@ -14,6 +14,8 @@ test("main UI exposes a guided first thread generation flow", async () => {
   const sources = await read([
     "apps/web/src/app/app.component.ts",
     "apps/web/src/app/app.component.html",
+    "apps/web/src/app/pairing-required-page.component.ts",
+    "apps/web/src/app/pairing-required-page.component.html",
     "apps/web/src/app/first-thread-wizard.component.ts",
     "apps/web/src/app/first-thread-wizard.component.html",
     "apps/server/src/modules/threads/threads.controller.ts",
@@ -39,7 +41,11 @@ test("main UI exposes a guided first thread generation flow", async () => {
   assert.ok(sources.includes("git\", [\"clone\""));
   assert.ok(sources.includes("clone_target_not_empty"));
   assert.ok(sources.includes("<ork-first-thread-wizard"));
-  assert.ok(sources.includes("@if (onboardingActive || pairingRequired)"));
+  assert.ok(sources.includes("@if (pairingRequired)"));
+  assert.ok(sources.includes("<ork-pairing-required-page"));
+  assert.ok(sources.includes("Pairing Required"));
+  assert.ok(sources.includes("ssh root@"));
+  assert.ok(sources.includes("docker exec orkestr orkestr security approve"));
   assert.ok(sources.includes("browser_pairing_required"));
   assert.ok(sources.includes("enterPairingRequired"));
   assert.ok(sources.includes("(paired)=\"handleBrowserPaired()\""));

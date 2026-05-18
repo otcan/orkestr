@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { startServer } from "../apps/server/src/server.js";
-import { securityStatus } from "../packages/core/src/security.js";
+import { approvePairingChallenge, securityStatus } from "../packages/core/src/security.js";
 
 function saveEnv(keys) {
   return Object.fromEntries(keys.map((key) => [key, process.env[key]]));
@@ -23,10 +23,9 @@ async function json(response) {
 
 test("browser pairing protects API routes when auth is required", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-security-"));
-  const prior = saveEnv(["ORKESTR_HOME", "ORKESTR_AUTH_REQUIRED", "ORKESTR_SECURITY_RETURN_PAIRING_CODE", "ORKESTR_RECOVER_RUNNING_ON_START"]);
+  const prior = saveEnv(["ORKESTR_HOME", "ORKESTR_AUTH_REQUIRED", "ORKESTR_RECOVER_RUNNING_ON_START"]);
   process.env.ORKESTR_HOME = home;
   process.env.ORKESTR_AUTH_REQUIRED = "1";
-  process.env.ORKESTR_SECURITY_RETURN_PAIRING_CODE = "1";
   process.env.ORKESTR_RECOVER_RUNNING_ON_START = "0";
   const server = await startServer({ port: 0, host: "127.0.0.1" });
   const { port } = server.address();
@@ -40,21 +39,31 @@ test("browser pairing protects API routes when auth is required", async () => {
     assert.equal(status.security.authEnabled, true);
     assert.equal(status.security.paired, false);
 
-    const challenge = await json(await fetch(`${baseUrl}/api/setup/security/challenge`, { method: "POST" }));
+    const challenge = await json(await fetch(`${baseUrl}/api/setup/security/challenges`, { method: "POST" }));
     assert.equal(challenge.ok, true);
-    assert.match(challenge.code, /^\d{6}$/);
+    assert.match(challenge.challengeId, /^[A-Za-z0-9_-]{20,}$/);
+    assert.equal(challenge.code, undefined);
 
     const badPair = await fetch(`${baseUrl}/api/setup/security/pair`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ code: "000000" }),
+      body: JSON.stringify({ challengeId: "missing" }),
     });
     assert.equal(badPair.status, 401);
+
+    const unapprovedPair = await fetch(`${baseUrl}/api/setup/security/pair`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ challengeId: challenge.challengeId }),
+    });
+    assert.equal(unapprovedPair.status, 409);
+
+    await approvePairingChallenge(challenge.challengeId);
 
     const pairResponse = await fetch(`${baseUrl}/api/setup/security/pair`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ code: challenge.code }),
+      body: JSON.stringify({ challengeId: challenge.challengeId }),
     });
     assert.equal(pairResponse.status, 200);
     const cookie = pairResponse.headers.get("set-cookie") || "";
@@ -62,6 +71,27 @@ test("browser pairing protects API routes when auth is required", async () => {
 
     const allowed = await fetch(`${baseUrl}/api/threads`, { headers: { cookie } });
     assert.equal(allowed.status, 200);
+
+    const secondChallenge = await json(await fetch(`${baseUrl}/api/setup/security/challenges`, { method: "POST" }));
+    const unpairedList = await fetch(`${baseUrl}/api/setup/security/challenges`);
+    assert.equal(unpairedList.status, 401);
+
+    const pairedList = await json(await fetch(`${baseUrl}/api/setup/security/challenges`, { headers: { cookie } }));
+    assert.ok(pairedList.challenges.some((item) => item.id === secondChallenge.challengeId && item.status === "pending"));
+
+    const approveFromBrowser = await json(await fetch(`${baseUrl}/api/setup/security/challenges/${secondChallenge.challengeId}/approve`, {
+      method: "POST",
+      headers: { cookie },
+    }));
+    assert.equal(approveFromBrowser.challenge.status, "approved");
+
+    const secondPairResponse = await fetch(`${baseUrl}/api/setup/security/pair`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ challengeId: secondChallenge.challengeId }),
+    });
+    assert.equal(secondPairResponse.status, 200);
+    assert.match(secondPairResponse.headers.get("set-cookie") || "", /orkestr_session=/);
   } finally {
     await new Promise((resolve) => server.close(resolve));
     restoreEnv(prior);

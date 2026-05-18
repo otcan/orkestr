@@ -7,6 +7,7 @@ import { appendEvent, readJson, writeSecretJson } from "../../storage/src/store.
 const execFileAsync = promisify(execFile);
 const cookieName = "orkestr_session";
 const challengeTtlMs = 10 * 60 * 1000;
+const challengeAuditTtlMs = 24 * 60 * 60 * 1000;
 const sessionTtlMs = 90 * 24 * 60 * 60 * 1000;
 const commandStatusCache = new Map();
 
@@ -26,12 +27,13 @@ function randomToken(bytes = 32) {
   return crypto.randomBytes(bytes).toString("base64url");
 }
 
-function numericCode() {
-  return String(crypto.randomInt(100000, 999999));
-}
-
 async function readSecurityConfig(env = process.env) {
-  return readJson(secretPath(env), { enabled: false, sessions: [], challenges: [] });
+  const config = await readJson(secretPath(env), { enabled: false, sessions: [], challenges: [] });
+  return {
+    enabled: config.enabled === true,
+    sessions: Array.isArray(config.sessions) ? config.sessions : [],
+    challenges: Array.isArray(config.challenges) ? config.challenges : [],
+  };
 }
 
 async function writeSecurityConfig(config, env = process.env) {
@@ -40,11 +42,58 @@ async function writeSecurityConfig(config, env = process.env) {
   const next = {
     ...config,
     sessions: (config.sessions || []).filter((session) => Date.parse(session.expiresAt || "") > now),
-    challenges: (config.challenges || []).filter((challenge) => Date.parse(challenge.expiresAt || "") > now),
+    challenges: (config.challenges || [])
+      .map((challenge) => normalizeChallenge(challenge, now))
+      .filter((challenge) => keepChallengeInAuditLog(challenge, now)),
     updatedAt: nowIso(),
   };
   await writeSecretJson(secretPath(env), next);
   return next;
+}
+
+function keepChallengeInAuditLog(challenge, now = Date.now()) {
+  if (challenge.status === "pending") return Date.parse(challenge.expiresAt || "") > now;
+  const auditAnchor = Date.parse(challenge.consumedAt || challenge.rejectedAt || challenge.approvedAt || challenge.expiresAt || "");
+  return Number.isFinite(auditAnchor) && auditAnchor + challengeAuditTtlMs > now;
+}
+
+function normalizeChallenge(challenge = {}, now = Date.now()) {
+  const expiresAtMs = Date.parse(challenge.expiresAt || "");
+  const expired = Number.isFinite(expiresAtMs) && expiresAtMs <= now;
+  const status = challenge.status || (challenge.consumedAt ? "consumed" : challenge.rejectedAt ? "rejected" : challenge.approvedAt ? "approved" : "pending");
+  return {
+    ...challenge,
+    status: status === "pending" && expired ? "expired" : status,
+  };
+}
+
+function publicChallenge(challenge = {}, now = Date.now()) {
+  const normalized = normalizeChallenge(challenge, now);
+  return {
+    id: normalized.id,
+    status: normalized.status,
+    createdAt: normalized.createdAt,
+    expiresAt: normalized.expiresAt,
+    requestedUserAgent: normalized.requestedUserAgent || "",
+    requestedIp: normalized.requestedIp || "",
+    approvedAt: normalized.approvedAt || "",
+    approvedBy: normalized.approvedBy || "",
+    rejectedAt: normalized.rejectedAt || "",
+    rejectedBy: normalized.rejectedBy || "",
+    consumedAt: normalized.consumedAt || "",
+  };
+}
+
+function challengeError(message, statusCode = 400) {
+  const error = new Error(message);
+  error.statusCode = statusCode;
+  return error;
+}
+
+function activePendingChallenges(config, now = Date.now()) {
+  return (config.challenges || [])
+    .map((challenge) => normalizeChallenge(challenge, now))
+    .filter((challenge) => challenge.status === "pending" && Date.parse(challenge.expiresAt || "") > now);
 }
 
 function commandStatusCacheTtlMs(env = process.env) {
@@ -119,7 +168,8 @@ export async function securityStatus(env = process.env) {
   const authRequired = String(env.ORKESTR_AUTH_REQUIRED || "").trim() === "1";
   const authEnabled = Boolean(authRequired || config.enabled || (config.sessions || []).length);
   const sessionCount = (config.sessions || []).filter((session) => Date.parse(session.expiresAt || "") > Date.now()).length;
-  const challengeActive = (config.challenges || []).some((challenge) => Date.parse(challenge.expiresAt || "") > Date.now());
+  const pendingChallenges = activePendingChallenges(config);
+  const challengeActive = pendingChallenges.length > 0;
   const bindLocal = isLocalBind(host);
   const externallyLocal = bindLocal || proxyLocalBind;
   const httpsConfigured = httpsUrl.startsWith("https://") || httpsUrl.endsWith(".ts.net");
@@ -138,6 +188,7 @@ export async function securityStatus(env = process.env) {
     paired: sessionCount > 0,
     sessionCount,
     challengeActive,
+    pendingChallengeCount: pendingChallenges.length,
     https: {
       configured: httpsConfigured,
       url: httpsUrl,
@@ -165,12 +216,13 @@ export async function securityStatus(env = process.env) {
 
 export async function createPairingChallenge({ request, env = process.env } = {}) {
   const config = await readSecurityConfig(env);
-  const code = numericCode();
   const challenge = {
-    id: randomToken(10),
-    codeHash: sha256(code),
+    id: randomToken(18),
+    status: "pending",
     createdAt: nowIso(),
     expiresAt: new Date(Date.now() + challengeTtlMs).toISOString(),
+    requestedUserAgent: String(request?.headers?.["user-agent"] || "").slice(0, 240),
+    requestedIp: requestIp(request).slice(0, 80),
   };
   await writeSecurityConfig({
     ...config,
@@ -180,23 +232,88 @@ export async function createPairingChallenge({ request, env = process.env } = {}
   return {
     ok: true,
     challengeId: challenge.id,
+    challenge: publicChallenge(challenge),
     expiresAt: challenge.expiresAt,
-    code: isLocalRequest(request) || String(env.ORKESTR_SECURITY_RETURN_PAIRING_CODE || "") === "1" ? code : "",
   };
 }
 
-export async function pairBrowser({ code, userAgent = "", env = process.env } = {}) {
-  const value = String(code || "").trim();
+export async function listPairingChallenges({ env = process.env, includeExpired = false } = {}) {
   const config = await readSecurityConfig(env);
   const now = Date.now();
-  const challenge = (config.challenges || []).find((item) =>
-    Date.parse(item.expiresAt || "") > now && item.codeHash === sha256(value),
-  );
-  if (!challenge) {
-    const error = new Error("invalid_or_expired_pairing_code");
-    error.statusCode = 401;
-    throw error;
-  }
+  const challenges = (config.challenges || [])
+    .map((challenge) => normalizeChallenge(challenge, now))
+    .filter((challenge) => includeExpired || keepChallengeInAuditLog(challenge, now))
+    .map((challenge) => publicChallenge(challenge, now))
+    .sort((a, b) => Date.parse(b.createdAt || "") - Date.parse(a.createdAt || ""));
+  return { challenges };
+}
+
+export async function getPairingChallenge(challengeId, { env = process.env } = {}) {
+  const id = String(challengeId || "").trim();
+  const config = await readSecurityConfig(env);
+  const challenge = (config.challenges || []).find((item) => item.id === id);
+  if (!challenge) throw challengeError("pairing_challenge_not_found", 404);
+  return publicChallenge(challenge);
+}
+
+export async function approvePairingChallenge(challengeId, { env = process.env, approvedBy = "cli" } = {}) {
+  const id = String(challengeId || "").trim();
+  if (!id) throw challengeError("pairing_challenge_id_required", 400);
+  const config = await readSecurityConfig(env);
+  const now = Date.now();
+  let approved = null;
+  const challenges = (config.challenges || []).map((item) => {
+    const challenge = normalizeChallenge(item, now);
+    if (challenge.id !== id) return challenge;
+    if (challenge.status !== "pending") throw challengeError(`pairing_challenge_${challenge.status}`, 409);
+    approved = {
+      ...challenge,
+      status: "approved",
+      approvedAt: nowIso(),
+      approvedBy: String(approvedBy || "cli").slice(0, 80),
+    };
+    return approved;
+  });
+  if (!approved) throw challengeError("pairing_challenge_not_found", 404);
+  await writeSecurityConfig({ ...config, enabled: true, challenges }, env);
+  await appendEvent({ type: "security_pairing_challenge_approved", challengeId: id, approvedBy }, env).catch(() => {});
+  return { ok: true, challenge: publicChallenge(approved) };
+}
+
+export async function rejectPairingChallenge(challengeId, { env = process.env, rejectedBy = "browser" } = {}) {
+  const id = String(challengeId || "").trim();
+  if (!id) throw challengeError("pairing_challenge_id_required", 400);
+  const config = await readSecurityConfig(env);
+  const now = Date.now();
+  let rejected = null;
+  const challenges = (config.challenges || []).map((item) => {
+    const challenge = normalizeChallenge(item, now);
+    if (challenge.id !== id) return challenge;
+    if (challenge.status !== "pending") throw challengeError(`pairing_challenge_${challenge.status}`, 409);
+    rejected = {
+      ...challenge,
+      status: "rejected",
+      rejectedAt: nowIso(),
+      rejectedBy: String(rejectedBy || "browser").slice(0, 80),
+    };
+    return rejected;
+  });
+  if (!rejected) throw challengeError("pairing_challenge_not_found", 404);
+  await writeSecurityConfig({ ...config, challenges }, env);
+  await appendEvent({ type: "security_pairing_challenge_rejected", challengeId: id, rejectedBy }, env).catch(() => {});
+  return { ok: true, challenge: publicChallenge(rejected) };
+}
+
+export async function pairBrowser({ challengeId, userAgent = "", env = process.env } = {}) {
+  const id = String(challengeId || "").trim();
+  const config = await readSecurityConfig(env);
+  const now = Date.now();
+  const challenges = (config.challenges || []).map((challenge) => normalizeChallenge(challenge, now));
+  const challenge = challenges.find((item) => item.id === id);
+  if (!challenge) throw challengeError("invalid_or_expired_pairing_challenge", 401);
+  if (challenge.status === "pending") throw challengeError("pairing_challenge_not_approved", 409);
+  if (challenge.status !== "approved") throw challengeError(`pairing_challenge_${challenge.status}`, 401);
+  if (Date.parse(challenge.expiresAt || "") <= now) throw challengeError("pairing_challenge_expired", 401);
   const token = randomToken(32);
   const session = {
     id: randomToken(10),
@@ -209,9 +326,13 @@ export async function pairBrowser({ code, userAgent = "", env = process.env } = 
     ...config,
     enabled: true,
     sessions: [...(config.sessions || []), session],
-    challenges: (config.challenges || []).filter((item) => item.id !== challenge.id),
+    challenges: challenges.map((item) => item.id === challenge.id ? {
+      ...item,
+      status: "consumed",
+      consumedAt: nowIso(),
+    } : item),
   }, env);
-  await appendEvent({ type: "security_browser_paired", sessionId: session.id }, env).catch(() => {});
+  await appendEvent({ type: "security_browser_paired", sessionId: session.id, challengeId: challenge.id }, env).catch(() => {});
   return {
     ok: true,
     token,
@@ -234,12 +355,13 @@ export async function verifySecurityToken(token, env = process.env) {
 
 function isAllowedBeforePairing(request) {
   const method = String(request?.method || "GET").toUpperCase();
-  const url = String(request?.url || "");
+  const url = String(request?.url || "").split("?")[0];
   if (!url.startsWith("/api/") && !url.startsWith("/oauth/")) return true;
   if (url.startsWith("/oauth/")) return true;
   if (method === "GET" && ["/api/health", "/api/ready", "/api/version", "/api/setup/status"].some((path) => url.startsWith(path))) return true;
-  if (url.startsWith("/api/setup/security/challenge")) return true;
-  if (url.startsWith("/api/setup/security/pair")) return true;
+  if (method === "POST" && (url === "/api/setup/security/challenge" || url === "/api/setup/security/challenges")) return true;
+  if (method === "GET" && /^\/api\/setup\/security\/challenges\/[^/]+$/.test(url)) return true;
+  if (method === "POST" && url === "/api/setup/security/pair") return true;
   return false;
 }
 

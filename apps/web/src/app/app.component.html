@@ -1,11 +1,15 @@
-@if (onboardingActive || pairingRequired) {
+@if (pairingRequired) {
+  <ork-pairing-required-page
+    [setupStatus]="setupStatus"
+    (paired)="handleBrowserPaired()"
+  ></ork-pairing-required-page>
+} @else if (onboardingActive) {
   <ork-onboarding-page
     [mode]="setupPageMode"
     [setupSection]="setupSection"
     (setupSectionChange)="handleSetupSectionChange($event)"
     (skip)="leaveOnboarding(false)"
     (complete)="leaveOnboarding(true)"
-    (paired)="handleBrowserPaired()"
   ></ork-onboarding-page>
 } @else if (appReady) {
 <main class="app-shell" [class.sidebar-resizing]="sidebarResizing" [style.--sidebar-width.px]="sidebarWidth">

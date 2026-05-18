@@ -1,7 +1,11 @@
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import test from "node:test";
 import { runCli } from "../apps/cli/src/commands.js";
+import { createPairingChallenge, getPairingChallenge } from "../packages/core/src/security.js";
 
 function capture() {
   let text = "";
@@ -111,6 +115,32 @@ test("CLI timer doctor exits nonzero for broken timers", async () => {
   assert.equal(code, 1);
   assert.match(stdout.text(), /Timers: broken/);
   assert.match(stdout.text(), /missing_thread_target/);
+});
+
+test("CLI lists and approves browser pairing challenges from local state", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-cli-security-"));
+  const env = { ...process.env, ORKESTR_HOME: home };
+  const challenge = await createPairingChallenge({ env });
+  const listOut = capture();
+  const approveOut = capture();
+
+  const listCode = await runCli(["security", "challenges", "--json"], {
+    env,
+    stdout: listOut,
+    stderr: capture(),
+  });
+  assert.equal(listCode, 0);
+  assert.match(listOut.text(), new RegExp(challenge.challengeId));
+  assert.match(listOut.text(), /pending/);
+
+  const approveCode = await runCli(["security", "approve", challenge.challengeId], {
+    env,
+    stdout: approveOut,
+    stderr: capture(),
+  });
+  assert.equal(approveCode, 0);
+  assert.match(approveOut.text(), /Approved pairing challenge/);
+  assert.equal((await getPairingChallenge(challenge.challengeId, { env })).status, "approved");
 });
 
 test("CLI sends input with Orkestr command parsing enabled", async () => {

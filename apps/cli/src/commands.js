@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
 import { startServer } from "../../server/src/server.js";
+import { approvePairingChallenge, listPairingChallenges, rejectPairingChallenge } from "../../../packages/core/src/security.js";
 import { defaultApiBase, requestJson } from "./api-client.js";
 import { formatThreadTable, formatTimerDoctor, formatTimerTable, threadName } from "./format.js";
 import { pickThread as defaultPickThread } from "./thread-picker.js";
@@ -26,6 +27,7 @@ export async function runCli(argv = process.argv.slice(2), context = {}) {
     if (command === "list") return list(args, ctx);
     if (command === "doctor") return doctorCommand(args, ctx);
     if (command === "timers" || command === "timer") return timersCommand(args, ctx);
+    if (command === "security") return securityCommand(args, ctx);
     if (command === "thread") return threadCommand(args, ctx);
     if (command === "worker") return workerCommand(args, ctx);
     if (command === "attach") return attach(args, ctx);
@@ -116,6 +118,43 @@ async function runTimerCommand(argv, ctx) {
   });
   if (json) ctx.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
   else ctx.stdout.write(`Ran timer ${timerId}\n`);
+  return 0;
+}
+
+async function securityCommand(argv, ctx) {
+  const subcommand = argv[0]?.startsWith("--") ? "challenges" : argv[0] || "challenges";
+  const rest = subcommand === "challenges" && argv[0]?.startsWith("--") ? argv : argv.slice(1);
+  if (subcommand === "challenges" || subcommand === "list") return listSecurityChallenges(rest, ctx);
+  if (subcommand === "approve") return approveSecurityChallenge(rest, ctx);
+  if (subcommand === "reject") return rejectSecurityChallenge(rest, ctx);
+  throw new Error("Usage: orkestr security [challenges|approve <challenge-id>|reject <challenge-id>] [--json]");
+}
+
+async function listSecurityChallenges(argv, ctx) {
+  const json = argv.includes("--json");
+  const payload = await listPairingChallenges({ env: ctx.env });
+  if (json) ctx.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
+  else ctx.stdout.write(formatSecurityChallengeTable(payload.challenges || []));
+  return 0;
+}
+
+async function approveSecurityChallenge(argv, ctx) {
+  const json = argv.includes("--json");
+  const challengeId = positional(argv)[0];
+  if (!challengeId) throw new Error("Usage: orkestr security approve <challenge-id> [--json]");
+  const payload = await approvePairingChallenge(challengeId, { env: ctx.env, approvedBy: "cli" });
+  if (json) ctx.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
+  else ctx.stdout.write(`Approved pairing challenge ${payload.challenge.id}\n`);
+  return 0;
+}
+
+async function rejectSecurityChallenge(argv, ctx) {
+  const json = argv.includes("--json");
+  const challengeId = positional(argv)[0];
+  if (!challengeId) throw new Error("Usage: orkestr security reject <challenge-id> [--json]");
+  const payload = await rejectPairingChallenge(challengeId, { env: ctx.env, rejectedBy: "cli" });
+  if (json) ctx.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
+  else ctx.stdout.write(`Rejected pairing challenge ${payload.challenge.id}\n`);
   return 0;
 }
 
@@ -249,6 +288,7 @@ function writeUsage(stream) {
   orkestr list [--json] [--api http://127.0.0.1:19812]
   orkestr doctor [timers] [--json]
   orkestr timers [list|doctor|run <timer-id>] [--json]
+  orkestr security [challenges|approve <challenge-id>|reject <challenge-id>] [--json]
   orkestr thread create <name> [--id id] [--cwd path] [--command command] [--executor id] [--json]
   orkestr worker create <parent-thread> [task text] [--task text] [--blank] [--label label] [--repo path] [--branch branch] [--no-wake] [--json]
   orkestr attach [thread-name-or-id] [--print] [--json]
@@ -294,6 +334,23 @@ function positional(argv) {
 function flagValue(argv, flag) {
   const index = argv.indexOf(flag);
   return index >= 0 ? argv[index + 1] : "";
+}
+
+function formatSecurityChallengeTable(challenges) {
+  if (!challenges.length) return "No pairing challenges.\n";
+  const rows = challenges.map((challenge) => {
+    const requester = [challenge.requestedIp, challenge.requestedUserAgent].filter(Boolean).join(" ");
+    return [
+      challenge.id,
+      challenge.status,
+      challenge.expiresAt || "-",
+      requester || "-",
+    ];
+  });
+  const widths = [18, 10, 24, 32].map((minimum, index) => Math.max(minimum, ...rows.map((row) => String(row[index] || "").length)));
+  const header = ["ID", "STATUS", "EXPIRES", "REQUESTER"].map((value, index) => value.padEnd(widths[index])).join("  ");
+  const body = rows.map((row) => row.map((value, index) => String(value || "").padEnd(widths[index])).join("  ")).join("\n");
+  return `${header}\n${body}\n`;
 }
 
 function parseTmuxSession(command = "") {

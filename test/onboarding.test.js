@@ -19,6 +19,8 @@ test("onboarding focuses the first loop on virtual desktop and WhatsApp", async 
   assert.ok(!onboarding.includes("job-search"));
   assert.ok(!onboarding.includes("codex login"));
   assert.ok(!onboarding.includes("CODEX_HOME="));
+  assert.ok(!onboarding.includes("Open anyway"));
+  assert.ok(!onboarding.includes("Browser pairing code"));
   assert.ok(onboarding.includes("Virtual Desktop Generation"));
   assert.ok(onboarding.includes("Open Codex sign-in"));
   assert.ok(onboarding.includes('id: "virtual-desktop"'));
@@ -35,6 +37,8 @@ test("onboarding focuses the first loop on virtual desktop and WhatsApp", async 
   assert.ok(onboarding.includes("setupSectionChange"));
   assert.ok(onboarding.includes("@Output() paired"));
   assert.ok(onboarding.includes("this.paired.emit()"));
+  assert.ok(onboarding.includes("Browser approvals"));
+  assert.ok(onboarding.includes("Approve pending pairing challenges"));
   assert.ok(onboarding.includes('label: "Desktops"'));
   assert.ok(browsers.includes('slug: "desktop"'));
 });

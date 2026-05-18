@@ -75,6 +75,7 @@ export interface SecurityStatus {
   paired?: boolean;
   sessionCount?: number;
   challengeActive?: boolean;
+  pendingChallengeCount?: number;
   remoteReady?: boolean;
   warnings?: string[];
   https?: {
@@ -103,7 +104,30 @@ export interface SecurityChallengeResponse {
   ok: boolean;
   challengeId: string;
   expiresAt: string;
-  code?: string;
+  challenge?: SecurityChallenge;
+}
+
+export interface SecurityChallengeStatusResponse {
+  ok: boolean;
+  challenge: SecurityChallenge;
+}
+
+export interface SecurityChallengeListResponse {
+  challenges: SecurityChallenge[];
+}
+
+export interface SecurityChallenge {
+  id: string;
+  status: string;
+  createdAt: string;
+  expiresAt: string;
+  requestedUserAgent?: string;
+  requestedIp?: string;
+  approvedAt?: string;
+  approvedBy?: string;
+  rejectedAt?: string;
+  rejectedBy?: string;
+  consumedAt?: string;
 }
 
 export interface SecurityPairResponse {
@@ -562,11 +586,27 @@ export class ApiService {
   }
 
   createSecurityChallenge(): Observable<SecurityChallengeResponse> {
-    return this.http.post<SecurityChallengeResponse>(this.api("/setup/security/challenge"), {});
+    return this.http.post<SecurityChallengeResponse>(this.api("/setup/security/challenges"), {});
   }
 
-  pairSecurityBrowser(code: string): Observable<SecurityPairResponse> {
-    return this.http.post<SecurityPairResponse>(this.api("/setup/security/pair"), { code });
+  securityChallenge(challengeId: string): Observable<SecurityChallengeStatusResponse> {
+    return this.http.get<SecurityChallengeStatusResponse>(this.api(`/setup/security/challenges/${encodeURIComponent(challengeId)}`));
+  }
+
+  securityChallenges(): Observable<SecurityChallengeListResponse> {
+    return this.http.get<SecurityChallengeListResponse>(this.api("/setup/security/challenges"));
+  }
+
+  approveSecurityChallenge(challengeId: string): Observable<SecurityChallengeStatusResponse> {
+    return this.http.post<SecurityChallengeStatusResponse>(this.api(`/setup/security/challenges/${encodeURIComponent(challengeId)}/approve`), {});
+  }
+
+  rejectSecurityChallenge(challengeId: string): Observable<SecurityChallengeStatusResponse> {
+    return this.http.post<SecurityChallengeStatusResponse>(this.api(`/setup/security/challenges/${encodeURIComponent(challengeId)}/reject`), {});
+  }
+
+  pairSecurityBrowser(challengeId: string): Observable<SecurityPairResponse> {
+    return this.http.post<SecurityPairResponse>(this.api("/setup/security/pair"), { challengeId });
   }
 
   saveConnectorConfig(id: string, body: Record<string, string>): Observable<ConnectorConfigResponse> {
