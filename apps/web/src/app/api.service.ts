@@ -275,6 +275,10 @@ export interface ThreadSummary {
   sourceDirty?: boolean;
   forkedFromCodexThreadId?: string | null;
   lastActivityAt?: string;
+  lastMessageAt?: string | null;
+  lastMessageRole?: string | null;
+  lastMessagePhase?: string | null;
+  lastMessageState?: string | null;
   threadUpdatedAt?: string;
   updatedAt?: string;
   createdAt?: string;

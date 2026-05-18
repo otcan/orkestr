@@ -70,7 +70,11 @@
             </span>
             <span class="thread-badges">
               @if (isThreadFamilyUnread(thread)) {
-                <span class="new-dot" title="New activity"></span>
+                <span
+                  class="new-dot"
+                  [class.assistant-final]="isThreadUnreadAssistantFinal(thread, true)"
+                  [title]="threadUnreadDotTitle(thread, true)"
+                ></span>
               }
               @if (threadTimerCount(thread) > 0) {
                 <span class="pending timer-count" [title]="threadTimerTooltip(thread)">T {{ threadTimerCount(thread) }}</span>
@@ -132,7 +136,11 @@
                   </span>
                   <span class="thread-badges">
                     @if (isThreadUnread(worker)) {
-                      <span class="new-dot" title="New activity"></span>
+                      <span
+                        class="new-dot"
+                        [class.assistant-final]="isThreadUnreadAssistantFinal(worker)"
+                        [title]="threadUnreadDotTitle(worker)"
+                      ></span>
                     }
                     @if (ownThreadTimerCount(worker) > 0) {
                       <span class="pending timer-count" [title]="threadTimerTooltip(worker)">T {{ ownThreadTimerCount(worker) }}</span>

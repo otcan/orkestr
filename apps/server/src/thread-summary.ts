@@ -69,6 +69,26 @@ function latestPendingQuestion(messages: any[] = []) {
   return null;
 }
 
+function latestMessageSummary(messages: any[] = []) {
+  const message = messages.at(-1);
+  if (!message) {
+    return {
+      lastMessageAt: null,
+      lastMessageRole: null,
+      lastMessagePhase: null,
+      lastMessageState: null,
+    };
+  }
+  const role = String(message?.role || message?.kind || "").trim().toLowerCase() || null;
+  const phase = String(message?.phase || (role === "assistant" ? "final_answer" : "")).trim().toLowerCase() || null;
+  return {
+    lastMessageAt: message?.timestamp || message?.createdAt || null,
+    lastMessageRole: role,
+    lastMessagePhase: phase,
+    lastMessageState: String(message?.state || "").trim().toLowerCase() || null,
+  };
+}
+
 function codexMetadata(thread: any) {
   const metadata = thread?.executor?.metadata && typeof thread.executor.metadata === "object" ? thread.executor.metadata : {};
   const tokenUsage = thread?.codexTokenUsage || metadata.codexTokenUsage || metadata.tokenUsage || null;
@@ -163,7 +183,8 @@ export async function threadRuntimeSummary(thread: any, messages: any[] = [], op
   const state = status?.state || thread.state || "sleeping";
   const ready = state === "ready";
   const awaitingAckCount = status?.awaitingAckCount ?? 0;
-  const lastActivityAt = messages.at(-1)?.createdAt || thread.updatedAt || thread.createdAt || null;
+  const latestMessage = latestMessageSummary(messages);
+  const lastActivityAt = latestMessage.lastMessageAt || thread.updatedAt || thread.createdAt || null;
   const pendingQuestion = latestPendingQuestion(messages);
   const resolvedCodexThreadId = codexThreadId(codexThread);
   const summary = {
@@ -199,6 +220,7 @@ export async function threadRuntimeSummary(thread: any, messages: any[] = [], op
     publicStatus: awaitingAckCount > 0 ? "Awaiting ack" : ready ? "Ready" : state === "sleeping" ? "Sleeping" : state,
     publicStatusCode: awaitingAckCount > 0 ? "awaiting_ack" : ready ? "ready" : state,
     hibernated: state === "sleeping",
+    ...latestMessage,
     lastActivityAt,
     threadUpdatedAt: thread.updatedAt || lastActivityAt,
     inferredThreadId: resolvedCodexThreadId || null,

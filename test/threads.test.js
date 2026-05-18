@@ -858,6 +858,7 @@ test("thread APIs create, queue, run, and list messages", async () => {
       body: JSON.stringify({}),
     });
     const listed = await fetch(`${baseUrl}/api/threads/api-thread/messages`);
+    const summarized = await fetch(`${baseUrl}/api/threads`);
 
     assert.equal(created.status, 201);
     assert.equal(input.status, 202);
@@ -865,6 +866,11 @@ test("thread APIs create, queue, run, and list messages", async () => {
     const payload = await listed.json();
     assert.equal(payload.thread.id, "api-thread");
     assert.equal(payload.messages.length, 2);
+    const summaryPayload = await summarized.json();
+    const summary = summaryPayload.threads.find((thread) => thread.id === "api-thread");
+    assert.equal(summary.lastMessageRole, "assistant");
+    assert.equal(summary.lastMessagePhase, "final_answer");
+    assert.ok(summary.lastMessageAt);
   } finally {
     await new Promise((resolve) => server.close(resolve));
     if (priorHome === undefined) delete process.env.ORKESTR_HOME;

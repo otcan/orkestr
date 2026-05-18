@@ -1567,6 +1567,18 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     return this.isThreadUnread(thread) || this.childWorkers(thread).some((worker) => this.isThreadUnread(worker));
   }
 
+  isThreadUnreadAssistantFinal(thread: ThreadSummary, includeFamily = false): boolean {
+    const unreadThread = this.latestUnreadThread(thread, includeFamily);
+    if (!unreadThread) return false;
+    const messageMs = this.latestThreadMessageMs(unreadThread);
+    if (!messageMs || messageMs <= this.threadReadMs(unreadThread)) return false;
+    return this.latestThreadMessageIsFinalAssistant(unreadThread);
+  }
+
+  threadUnreadDotTitle(thread: ThreadSummary, includeFamily = false): string {
+    return this.isThreadUnreadAssistantFinal(thread, includeFamily) ? "New assistant answer" : "New activity";
+  }
+
   threadTimerCount(thread: ThreadSummary): number {
     return this.familyTimers(thread).length;
   }
@@ -1608,10 +1620,39 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     return String(message?.phase || "").trim().toLowerCase();
   }
 
+  private latestUnreadThread(thread: ThreadSummary, includeFamily: boolean): ThreadSummary | null {
+    const candidates = includeFamily ? [thread, ...this.childWorkers(thread)] : [thread];
+    return candidates
+      .filter((candidate) => this.isThreadUnread(candidate))
+      .sort((a, b) => this.activityMs(b) - this.activityMs(a))[0] || null;
+  }
+
+  private latestCachedThreadMessage(thread: ThreadSummary): ThreadMessage | null {
+    return (this.messageCache()[thread.id] || []).at(-1) || null;
+  }
+
+  private latestThreadMessageMs(thread: ThreadSummary): number {
+    const message = this.latestCachedThreadMessage(thread);
+    const value = message?.timestamp || message?.createdAt || thread.lastMessageAt || "";
+    const ms = Date.parse(String(value));
+    return Number.isFinite(ms) ? ms : 0;
+  }
+
+  private latestThreadMessageIsFinalAssistant(thread: ThreadSummary): boolean {
+    const message = this.latestCachedThreadMessage(thread);
+    const role = String(message?.role || thread.lastMessageRole || "").trim().toLowerCase();
+    const phase = String(message?.phase || thread.lastMessagePhase || (role === "assistant" ? "final_answer" : "")).trim().toLowerCase();
+    return this.isFinalAssistantRolePhase(role, phase);
+  }
+
+  private isFinalAssistantRolePhase(role: string, phase: string): boolean {
+    const normalizedRole = String(role || "").trim().toLowerCase();
+    const normalizedPhase = String(phase || "").trim().toLowerCase();
+    return normalizedRole === "assistant" && (!normalizedPhase || normalizedPhase === "final_answer" || normalizedPhase === "final");
+  }
+
   isFinalAssistantMessage(message: ThreadMessage | null): boolean {
-    if (String(message?.role || "").toLowerCase() !== "assistant") return false;
-    const phase = this.messagePhase(message);
-    return !phase || phase === "final_answer" || phase === "final";
+    return this.isFinalAssistantRolePhase(String(message?.role || ""), this.messagePhase(message));
   }
 
   isInfoAssistantMessage(message: ThreadMessage | null): boolean {
