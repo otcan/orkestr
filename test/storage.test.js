@@ -50,3 +50,32 @@ test("thread registry migrates JSON records into SQLite", async () => {
   assert.ok(await fs.stat(path.join(home, "threads.sqlite")));
   assert.equal((await readJson(path.join(home, "threads.json"), []))[0].state, "ready");
 });
+
+test("thread registry deduplicates visible thread names", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-storage-dedupe-"));
+  const env = { ORKESTR_HOME: home, ORKESTR_THREAD_STORE: "json" };
+
+  await saveThreadRecords([
+    {
+      id: "test-old",
+      name: "TEST",
+      createdAt: "2026-01-01T00:00:00.000Z",
+      executor: { codexThreadId: "019e3c79-6327-78d2-89d7-61bed7b94b71", metadata: { codexModel: "gpt-5.5" } },
+    },
+    {
+      id: "test-new",
+      name: "TEST",
+      createdAt: "2026-01-02T00:00:00.000Z",
+      activeRuntimeLeaseId: "stale-lease",
+      workspace: "/workspace/test-path",
+    },
+  ], env);
+
+  const listed = await listThreadRecords(env);
+  const stored = await readJson(path.join(home, "threads.json"), []);
+
+  assert.equal(listed.length, 1);
+  assert.equal(listed[0].id, "test-old");
+  assert.equal(stored.length, 1);
+  assert.equal(stored[0].id, "test-old");
+});

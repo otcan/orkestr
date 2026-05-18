@@ -48,9 +48,13 @@ export async function createThread(input = {}, env = process.env) {
   const threads = await listThreads(env);
   const requestedId = normalizeThreadId(input.id || input.threadId);
   const name = String(input.name || input.displayName || requestedId || "New Thread").trim();
-  const existing = requestedId
+  const existingByRequestedId = requestedId
     ? threads.find((thread) => thread.id === requestedId || thread.name === requestedId || thread.bindingName === requestedId)
-    : threads.find((thread) => thread.name === name);
+    : null;
+  const existingByName = name
+    ? threads.find((thread) => thread.name === name || thread.bindingName === name)
+    : null;
+  const existing = existingByRequestedId || existingByName;
   if (existing) return existing;
 
   const thread = {

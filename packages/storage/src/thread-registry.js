@@ -9,16 +9,16 @@ export async function listThreadRecords(env = process.env) {
   const db = await openThreadDatabase(env);
   if (!db) {
     const paths = await ensureDataDirs(env);
-    return readJson(paths.threads, []);
+    return dedupeThreadRecords(await readJson(paths.threads, []));
   }
   const rows = db
     .prepare("select data from orkestr_threads order by created_at asc, id asc")
     .all();
-  return rows.map((row) => JSON.parse(row.data));
+  return dedupeThreadRecords(rows.map((row) => JSON.parse(row.data)));
 }
 
 export async function saveThreadRecords(threads, env = process.env) {
-  const records = Array.isArray(threads) ? threads : [];
+  const records = dedupeThreadRecords(Array.isArray(threads) ? threads : []);
   const db = await openThreadDatabase(env);
   if (!db) {
     const paths = await ensureDataDirs(env);
@@ -29,6 +29,57 @@ export async function saveThreadRecords(threads, env = process.env) {
   const paths = await ensureDataDirs(env);
   await writeJson(paths.threads, records);
   return records;
+}
+
+export function dedupeThreadRecords(threads) {
+  if (!Array.isArray(threads) || threads.length < 2) return Array.isArray(threads) ? threads : [];
+  const selected = new Map();
+  threads.forEach((thread, index) => {
+    const key = threadDedupeKey(thread);
+    if (!key) return;
+    const current = selected.get(key);
+    if (!current || compareThreadDedupeCandidate(thread, index, current.thread, current.index) > 0) {
+      selected.set(key, { thread, index });
+    }
+  });
+  return threads.filter((thread, index) => {
+    const key = threadDedupeKey(thread);
+    if (!key) return true;
+    return selected.get(key)?.index === index;
+  });
+}
+
+function threadDedupeKey(thread) {
+  const name = String(thread?.name || thread?.bindingName || thread?.title || "").trim().toLowerCase();
+  if (name) return `name:${name}`;
+  const id = String(thread?.id || "").trim();
+  return id ? `id:${id}` : "";
+}
+
+function compareThreadDedupeCandidate(left, leftIndex, right, rightIndex) {
+  const leftScore = threadDedupeScore(left);
+  const rightScore = threadDedupeScore(right);
+  if (leftScore !== rightScore) return leftScore - rightScore;
+  const leftCreated = Date.parse(String(left?.createdAt || ""));
+  const rightCreated = Date.parse(String(right?.createdAt || ""));
+  if (Number.isFinite(leftCreated) && Number.isFinite(rightCreated) && leftCreated !== rightCreated) {
+    return rightCreated - leftCreated;
+  }
+  if (Number.isFinite(leftCreated) !== Number.isFinite(rightCreated)) {
+    return Number.isFinite(leftCreated) ? 1 : -1;
+  }
+  return rightIndex - leftIndex;
+}
+
+function threadDedupeScore(thread) {
+  const metadata = thread?.executor?.metadata && typeof thread.executor.metadata === "object" ? thread.executor.metadata : {};
+  let score = 0;
+  if (String(thread?.executor?.codexThreadId || thread?.codexThreadId || "").trim()) score += 16;
+  if (String(thread?.codexModel || metadata.codexModel || "").trim()) score += 8;
+  if (String(thread?.codexReasoningEffort || metadata.codexReasoningEffort || "").trim()) score += 4;
+  if (String(thread?.workspace || thread?.cwd || thread?.repoPath || thread?.worktreePath || "").trim()) score += 2;
+  if (String(thread?.activeRuntimeLeaseId || "").trim()) score += 1;
+  return score;
 }
 
 async function openThreadDatabase(env) {

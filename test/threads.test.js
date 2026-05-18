@@ -175,6 +175,20 @@ test("threads are the primary routable runtime object", async () => {
   assert.equal(messages[1].role, "assistant");
 });
 
+test("thread creation reuses an existing visible agent name", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-name-dedupe-"));
+  const env = { ORKESTR_HOME: home };
+
+  const first = await createThread({ id: "test-old", name: "TEST", codexModel: "gpt-5.5" }, env);
+  const second = await createThread({ id: "test-new", name: "TEST", cwd: "/workspace/test-path" }, env);
+  const threads = await listThreads(env);
+
+  assert.equal(second.id, first.id);
+  assert.equal(threads.length, 1);
+  assert.equal(threads[0].id, "test-old");
+  assert.equal(threads[0].codexModel, "gpt-5.5");
+});
+
 test("threads can be deleted with their workers and stored messages", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-delete-"));
   const env = { ORKESTR_HOME: home };
