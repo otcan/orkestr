@@ -58,6 +58,10 @@ COPY examples ./examples
 COPY schemas ./schemas
 COPY --from=build /app/dist ./dist
 
+RUN chmod +x /app/apps/cli/bin/orkestr-oss.js \
+  && ln -sf /app/apps/cli/bin/orkestr-oss.js /usr/local/bin/orkestr \
+  && ln -sf /app/apps/cli/bin/orkestr-oss.js /usr/local/bin/orkestr-oss
+
 RUN mkdir -p /data/codex && chown -R node:node /data /app
 USER node
 

@@ -15,6 +15,8 @@ test("docker image carries the agent runtime instead of requiring host Codex ins
   assert.match(dockerfile, /ripgrep/);
   assert.match(dockerfile, /chromium/);
   assert.match(dockerfile, /CODEX_HOME=\/data\/codex/);
+  assert.match(dockerfile, /ln -sf \/app\/apps\/cli\/bin\/orkestr-oss\.js \/usr\/local\/bin\/orkestr/);
+  assert.match(dockerfile, /ln -sf \/app\/apps\/cli\/bin\/orkestr-oss\.js \/usr\/local\/bin\/orkestr-oss/);
   assert.match(compose, /ghcr\.io\/otcan\/orkestr:latest/);
   assert.match(compose, /ORKESTR_BIND_ADDRESS/);
   assert.match(compose, /ORKESTR_DOCKER_HOST_BIND_ADDRESS/);
