@@ -1592,6 +1592,10 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     return this.isThreadUnreadAssistantFinal(thread, includeFamily) ? "New assistant answer" : "New activity";
   }
 
+  threadUnreadBadgeLabel(thread: ThreadSummary, includeFamily = false): string {
+    return this.isThreadUnreadAssistantFinal(thread, includeFamily) ? "ANSWER" : "UPDATES";
+  }
+
   threadTimerCount(thread: ThreadSummary): number {
     return this.familyTimers(thread).length;
   }

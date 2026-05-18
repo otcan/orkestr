@@ -656,17 +656,14 @@ textarea:focus {
   box-shadow: none;
 }
 
-.new-dot {
-  width: 9px;
-  height: 9px;
-  border-radius: 999px;
+.unread-badge {
   background: #68acdb;
-  box-shadow: 0 0 0 3px rgba(104, 172, 219, 0.18);
+  color: #04111c;
 }
 
-.new-dot.assistant-final {
+.unread-badge.assistant-final {
   background: #8cff9b;
-  box-shadow: 0 0 0 3px rgba(140, 255, 155, 0.16);
+  color: #041008;
 }
 
 .status-dot {
