@@ -9,7 +9,7 @@ import { startServer } from "../apps/server/src/server.js";
 import { runNextThreadMessage } from "../packages/core/src/executors.js";
 import { deliverPendingThreadInputs, drainAllPendingThreadInputs, listRuntimeLeases, runtimeStatus, sleepThread, syncRuntimeLeases, syncRuntimeWindowName, wakeThread } from "../packages/core/src/runtime-leases.js";
 import { parseThreadInputCommand } from "../packages/core/src/thread-commands.js";
-import { createThreadWorker, detectThreadGitState, listThreadWorkers, updateThreadRepo } from "../packages/core/src/thread-workers.js";
+import { createThreadWorker, detectThreadGitState, listThreadWorkers, syncThreadWorkerWithParent, updateThreadRepo } from "../packages/core/src/thread-workers.js";
 import { appendThreadMessage, createThread, deleteThread, enqueueThreadInput, listThreadMessages, listThreads, updateThread, updateThreadMessage } from "../packages/core/src/threads.js";
 
 const execFileAsync = promisify(execFile);
@@ -648,6 +648,49 @@ test("thread worker git state reports parent commits as behind", async () => {
   assert.equal(state.gitParentBehind, 1);
   assert.equal(state.gitParentChangedFiles, 1);
   assert.equal(state.gitDirtyFiles, 0);
+});
+
+test("thread worker direct sync fast-forwards a clean stale worker", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-worker-sync-home-"));
+  const repo = await createTempGitRepo("orkestr-thread-worker-sync-repo-");
+  const env = { ORKESTR_HOME: home };
+  const parent = await createThread({ id: "git-sync-parent", name: "Git Sync Parent", cwd: repo }, env);
+  const result = await createThreadWorker(parent.id, { label: "Git Sync Worker", autoRun: false }, env);
+
+  await fs.writeFile(path.join(repo, "sync-parent.txt"), "parent sync change\n", "utf8");
+  await execFileAsync("git", ["add", "sync-parent.txt"], { cwd: repo });
+  await execFileAsync("git", ["commit", "-m", "parent sync change"], { cwd: repo });
+
+  const before = await detectThreadGitState(result.worker, env);
+  assert.equal(before.gitParentAhead, 0);
+  assert.equal(before.gitParentBehind, 1);
+
+  const synced = await syncThreadWorkerWithParent(result.worker.id, env);
+  const after = await detectThreadGitState(synced.thread, env);
+  const workerHead = await execFileAsync("git", ["rev-parse", "HEAD"], { cwd: result.worker.worktreePath }).then((result) => String(result.stdout).trim());
+  const parentHead = await execFileAsync("git", ["rev-parse", "HEAD"], { cwd: repo }).then((result) => String(result.stdout).trim());
+
+  assert.equal(synced.synced, true);
+  assert.equal(workerHead, parentHead);
+  assert.equal(after.gitParentAhead, 0);
+  assert.equal(after.gitParentBehind, 0);
+});
+
+test("thread worker direct sync rejects local worker changes", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-worker-sync-reject-home-"));
+  const repo = await createTempGitRepo("orkestr-thread-worker-sync-reject-repo-");
+  const env = { ORKESTR_HOME: home };
+  const parent = await createThread({ id: "git-sync-reject-parent", name: "Git Sync Reject Parent", cwd: repo }, env);
+  const result = await createThreadWorker(parent.id, { label: "Git Sync Reject Worker", autoRun: false }, env);
+
+  await fs.writeFile(path.join(result.worker.worktreePath, "worker.txt"), "worker change\n", "utf8");
+  await execFileAsync("git", ["add", "worker.txt"], { cwd: result.worker.worktreePath });
+  await execFileAsync("git", ["commit", "-m", "worker change"], { cwd: result.worker.worktreePath });
+
+  await assert.rejects(
+    () => syncThreadWorkerWithParent(result.worker.id, env),
+    /worker_has_unmerged_commits/,
+  );
 });
 
 test("thread worker git state uses parent checkout when stored base commit is stale", async () => {

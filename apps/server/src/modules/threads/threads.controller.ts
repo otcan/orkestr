@@ -25,7 +25,7 @@ import {
   listThreadMessages,
   updateThread,
 } from "../../../../../packages/core/src/threads.js";
-import { createThreadWorker, detectThreadRepo, listThreadWorkers, updateThreadRepo } from "../../../../../packages/core/src/thread-workers.js";
+import { createThreadWorker, detectThreadRepo, listThreadWorkers, syncThreadWorkerWithParent, updateThreadRepo } from "../../../../../packages/core/src/thread-workers.js";
 import { parseThreadInputCommand } from "../../../../../packages/core/src/thread-commands.js";
 import { ensureDataDirs } from "../../../../../packages/storage/src/paths.js";
 import { codexThreadId, threadRuntimeSummary, threadSummaryPayload } from "../../thread-summary.js";
@@ -302,6 +302,22 @@ export class ThreadsController {
     return {
       ...result,
       detected,
+      thread: await threadRuntimeSummary(result.thread, await listThreadMessages(result.thread.id)),
+    };
+  }
+
+  @Post(":threadId/sync-parent")
+  @HttpCode(200)
+  async syncParent(@Param("threadId") threadId: string) {
+    const thread = await getThread(threadId);
+    if (!thread) throw httpError("thread_not_found", 404);
+    const status = await runtimeStatus(thread.id).catch(() => null);
+    if (status?.working || status?.foregroundWorking || status?.typingActive || Number(status?.runningCount || 0) > 0 || Number(status?.pendingCount || 0) > 0) {
+      throw httpError("thread_is_active", 409);
+    }
+    const result: any = await syncThreadWorkerWithParent(thread.id);
+    return {
+      ...result,
       thread: await threadRuntimeSummary(result.thread, await listThreadMessages(result.thread.id)),
     };
   }

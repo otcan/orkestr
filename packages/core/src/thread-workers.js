@@ -465,6 +465,66 @@ export async function detectThreadRepo(threadId, env = process.env) {
   };
 }
 
+function gitStatePatch(state) {
+  return {
+    repoPath: state.repoPath || null,
+    repoRemoteUrl: state.repoRemoteUrl || null,
+    remoteBranch: state.remoteBranch || null,
+    branchName: state.branchName || null,
+    sourceDirty: Boolean(state.sourceDirty),
+    gitDirtyFiles: state.gitDirtyFiles,
+    gitAhead: state.gitAhead,
+    gitBehind: state.gitBehind,
+    gitBaseAhead: state.gitBaseAhead,
+    gitChangedFiles: state.gitChangedFiles,
+    gitParentHead: state.gitParentHead || null,
+    gitParentAhead: state.gitParentAhead,
+    gitParentBehind: state.gitParentBehind,
+    gitParentChangedFiles: state.gitParentChangedFiles,
+    gitRemoteAhead: state.gitRemoteAhead,
+    gitRemoteBehind: state.gitRemoteBehind,
+    gitRemoteChangedFiles: state.gitRemoteChangedFiles,
+    gitComparisonBase: state.gitComparisonBase || null,
+    gitComparisonLabel: state.gitComparisonLabel || null,
+    gitRemoteBranchExists: state.gitRemoteBranchExists,
+    gitRemoteMissing: state.gitRemoteMissing,
+  };
+}
+
+export async function syncThreadWorkerWithParent(threadId, env = process.env) {
+  const thread = await getThread(threadId, env);
+  if (!thread) throw httpError("thread_not_found", 404);
+  if (!nonEmptyString(thread.parentThreadId)) throw httpError("thread_is_not_worker", 400);
+
+  const state = await detectThreadGitState(thread, env);
+  const repoPath = await resolveGitRoot(threadCheckoutPath(thread)).catch(() => null);
+  if (!repoPath) throw httpError("thread_repo_not_found", 404);
+
+  const dirtyFiles = Number(state.gitDirtyFiles || 0);
+  const parentAhead = Number(state.gitParentAhead || 0);
+  const parentBehind = Number(state.gitParentBehind || 0);
+  const parentHead = nonEmptyString(state.gitParentHead);
+  if (!parentHead) throw httpError("parent_repo_not_found", 404);
+  if (dirtyFiles > 0) throw httpError("worker_has_local_edits", 409, { dirtyFiles });
+  if (parentAhead > 0) throw httpError("worker_has_unmerged_commits", 409, { gitParentAhead: parentAhead });
+  if (parentBehind <= 0) {
+    const updated = await updateThread(thread.id, gitStatePatch(state), env);
+    return { synced: false, reason: "already_synced", thread: updated, gitState: state };
+  }
+
+  await git(repoPath, ["merge", "--ff-only", parentHead]);
+  const nextState = await detectThreadGitState(thread, env);
+  const updated = await updateThread(thread.id, gitStatePatch(nextState), env);
+  await appendEvent({
+    type: "thread_worker_synced_with_parent",
+    threadId: thread.id,
+    parentThreadId: thread.parentThreadId,
+    parentHead,
+    previousBehind: parentBehind,
+  }, env);
+  return { synced: true, thread: updated, gitState: nextState };
+}
+
 export async function updateThreadRepo(threadId, input = {}, env = process.env) {
   const thread = await getThread(threadId, env);
   if (!thread) throw httpError("thread_not_found", 404);
@@ -639,6 +699,7 @@ export async function createThreadWorker(parentThreadId, input = {}, env = proce
     await git(repoPath, ["worktree", "add", "-b", branchName, worktreePath, baseCommit]);
     worktreeCreated = true;
     const remoteBranch = nonEmptyString(input.remoteBranch || input.gitRemoteBranch || input.upstreamBranch) || await remoteTrackingBranch(worktreePath, branchName);
+    const remoteExists = await refExists(worktreePath, remoteBranch);
     const remoteAheadBehind = await gitAheadBehind(worktreePath, remoteBranch);
     const workerGitState = {
       gitAhead: 0,
@@ -652,6 +713,8 @@ export async function createThreadWorker(parentThreadId, input = {}, env = proce
       gitRemoteAhead: remoteAheadBehind.gitAhead,
       gitRemoteBehind: remoteAheadBehind.gitBehind,
       gitRemoteChangedFiles: await changedFilesAgainst(worktreePath, remoteBranch),
+      gitRemoteBranchExists: remoteExists,
+      gitRemoteMissing: Boolean(remoteBranch && !remoteExists),
     };
     const workerIndex = await workerIndexFor(parent.id, env);
     const workerLabel = nonEmptyString(input.label || input.name || input.workerLabel) || `Worker ${workerIndex}`;

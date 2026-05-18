@@ -69,6 +69,18 @@
               }
             </span>
             <span class="thread-badges">
+              @if (threadHasGitInfo(thread)) {
+                <span
+                  class="pending git-badge"
+                  [class.direct-sync]="canDirectSyncThread(thread)"
+                  role="button"
+                  tabindex="0"
+                  [title]="threadGitBadgeTitle(thread)"
+                  (click)="openGitDetails(thread, $event)"
+                  (keydown.enter)="openGitDetails(thread, $event)"
+                  (keydown.space)="openGitDetails(thread, $event)"
+                >{{ syncingThreadId === thread.id ? "..." : threadGitBadgeLabel(thread) }}</span>
+              }
               @if (isThreadFamilyUnread(thread)) {
                 <span
                   class="pending unread-badge"
@@ -135,6 +147,18 @@
                     }
                   </span>
                   <span class="thread-badges">
+                    @if (threadHasGitInfo(worker)) {
+                      <span
+                        class="pending git-badge"
+                        [class.direct-sync]="canDirectSyncThread(worker)"
+                        role="button"
+                        tabindex="0"
+                        [title]="threadGitBadgeTitle(worker)"
+                        (click)="openGitDetails(worker, $event)"
+                        (keydown.enter)="openGitDetails(worker, $event)"
+                        (keydown.space)="openGitDetails(worker, $event)"
+                      >{{ syncingThreadId === worker.id ? "..." : threadGitBadgeLabel(worker) }}</span>
+                    }
                     @if (isThreadUnread(worker)) {
                       <span
                         class="pending unread-badge"
@@ -387,6 +411,119 @@
             </section>
           </div>
         }
+      }
+
+      @if (gitDetailsThread(); as gitThread) {
+        <div class="model-detail-backdrop" (click)="closeGitDetails()">
+          <section class="model-detail-modal git-detail-modal" role="dialog" aria-modal="true" aria-label="Git status details" (click)="$event.stopPropagation()">
+            <header class="model-detail-head">
+              <div>
+                <p class="eyebrow">Git Status</p>
+                <h3>{{ threadTitle(gitThread) }}</h3>
+              </div>
+              <button class="secondary icon-close" type="button" aria-label="Close git details" (click)="closeGitDetails()">×</button>
+            </header>
+
+            <div class="model-detail-meta git-detail-meta">
+              <span>
+                <b>Branch</b>
+                <strong>{{ threadBranchLabel(gitThread) || "No branch" }}</strong>
+              </span>
+              <span>
+                <b>Remote</b>
+                <strong>{{ threadRemoteLabel(gitThread) || "No remote" }}</strong>
+              </span>
+              <span>
+                <b>Remote branch</b>
+                <strong>{{ threadRemoteBranchLabel(gitThread) || "Not set" }}</strong>
+              </span>
+            </div>
+
+            <div class="model-detail-grid git-detail-grid">
+              @if (gitThread.parentThreadId) {
+                <article class="model-detail-card git-detail-card" [class.warn]="gitCount(gitThread, 'gitParentBehind') > 0" [class.danger]="gitCount(gitThread, 'gitParentAhead') > 0 && gitCount(gitThread, 'gitParentBehind') > 0">
+                  <header>
+                    <span>Parent</span>
+                    <strong>{{ gitParentShortLabel(gitThread).replace("Parent: ", "") }}</strong>
+                  </header>
+                  <dl>
+                    <dt>Ahead</dt>
+                    <dd>{{ gitCount(gitThread, "gitParentAhead") }}</dd>
+                    <dt>Behind</dt>
+                    <dd>{{ gitCount(gitThread, "gitParentBehind") }}</dd>
+                    <dt>Files</dt>
+                    <dd>{{ gitFilesChangedLabel(threadNumberValue(gitThread, "gitParentChangedFiles")) }}</dd>
+                    <dt>Parent HEAD</dt>
+                    <dd>{{ objectValue(gitThread, "gitParentHead") || objectValue(gitThread.runtime, "gitParentHead") || "unknown" }}</dd>
+                  </dl>
+                </article>
+              }
+
+              <article class="model-detail-card git-detail-card" [class.warn]="gitCount(gitThread, 'gitRemoteBehind') > 0 || booleanThreadValue(gitThread, 'gitRemoteMissing')" [class.danger]="gitCount(gitThread, 'gitRemoteAhead') > 0 && gitCount(gitThread, 'gitRemoteBehind') > 0">
+                <header>
+                  <span>Remote</span>
+                  <strong>{{ gitRemoteShortLabel(gitThread).replace("Remote: ", "") }}</strong>
+                </header>
+                <dl>
+                  <dt>Ahead</dt>
+                  <dd>{{ gitCount(gitThread, "gitRemoteAhead") }}</dd>
+                  <dt>Behind</dt>
+                  <dd>{{ gitCount(gitThread, "gitRemoteBehind") }}</dd>
+                  <dt>Files</dt>
+                  <dd>{{ gitFilesChangedLabel(threadNumberValue(gitThread, "gitRemoteChangedFiles")) }}</dd>
+                  <dt>State</dt>
+                  <dd>{{ booleanThreadValue(gitThread, "gitRemoteMissing") ? (gitThread.parentThreadId ? "not published" : "not found") : "available" }}</dd>
+                </dl>
+              </article>
+
+              <article class="model-detail-card git-detail-card" [class.warn]="gitDirtyFiles(gitThread) > 0">
+                <header>
+                  <span>Worktree</span>
+                  <strong>{{ gitDirtyLabel(gitThread) }}</strong>
+                </header>
+                <dl>
+                  <dt>Dirty files</dt>
+                  <dd>{{ gitDirtyFiles(gitThread) }}</dd>
+                  <dt>Local repo</dt>
+                  <dd>{{ defaultRepoPath(gitThread) || "unknown" }}</dd>
+                  <dt>Status</dt>
+                  <dd>{{ statusLabel(gitThread) }}</dd>
+                  <dt>Thread</dt>
+                  <dd>{{ gitThread.id }}</dd>
+                </dl>
+              </article>
+            </div>
+
+            <section class="git-risk-section">
+              <p class="eyebrow">Risk</p>
+              <ul>
+                @for (risk of gitRiskLabels(gitThread); track risk) {
+                  <li>{{ risk }}</li>
+                }
+              </ul>
+            </section>
+
+            @if (gitThread.parentThreadId) {
+              <div class="git-sync-actions">
+                @if (canDirectSyncThread(gitThread)) {
+                  <button class="secondary direct-sync-button" type="button" (click)="directSyncThread(gitThread, $event)" [disabled]="busy || syncingThreadId === gitThread.id">
+                    {{ syncingThreadId === gitThread.id ? "Syncing" : "↻ Direct sync" }}
+                  </button>
+                } @else {
+                  <button
+                    class="secondary"
+                    type="button"
+                    (click)="prepareIntelligentSync(gitThread, $event)"
+                    [disabled]="!canPrepareIntelligentSync(gitThread)"
+                    [title]="intelligentSyncDisabledReason(gitThread)"
+                  >
+                    Prepare intelligent sync
+                  </button>
+                }
+              </div>
+            }
+          </section>
+        </div>
       }
 
       @if (error) {

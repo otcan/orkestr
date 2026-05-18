@@ -266,6 +266,7 @@ export interface ThreadSummary {
   gitBehind?: number | null;
   gitBaseAhead?: number | null;
   gitChangedFiles?: number | null;
+  gitParentHead?: string | null;
   gitParentAhead?: number | null;
   gitParentBehind?: number | null;
   gitParentChangedFiles?: number | null;
@@ -393,6 +394,7 @@ export interface ThreadWorkerResponse {
   gitBehind?: number | null;
   gitBaseAhead?: number | null;
   gitChangedFiles?: number | null;
+  gitParentHead?: string | null;
   gitParentAhead?: number | null;
   gitParentBehind?: number | null;
   gitParentChangedFiles?: number | null;
@@ -405,6 +407,13 @@ export interface ThreadWorkerResponse {
   gitRemoteBranchExists?: boolean | null;
   gitRemoteMissing?: boolean | null;
   sourceDirty?: boolean;
+}
+
+export interface ThreadSyncResponse {
+  synced?: boolean;
+  reason?: string;
+  thread?: ThreadSummary;
+  gitState?: Record<string, unknown>;
 }
 
 export interface ThreadRepoResponse {
@@ -420,6 +429,7 @@ export interface ThreadRepoResponse {
     gitBehind?: number | null;
     gitBaseAhead?: number | null;
     gitChangedFiles?: number | null;
+    gitParentHead?: string | null;
     gitParentAhead?: number | null;
     gitParentBehind?: number | null;
     gitParentChangedFiles?: number | null;
@@ -692,6 +702,10 @@ export class ApiService {
 
   detectThreadRepo(id: string): Observable<ThreadRepoResponse> {
     return this.http.post<ThreadRepoResponse>(this.api(`/threads/${encodeURIComponent(id)}/repo/detect`), {});
+  }
+
+  syncThreadWithParent(id: string): Observable<ThreadSyncResponse> {
+    return this.http.post<ThreadSyncResponse>(this.api(`/threads/${encodeURIComponent(id)}/sync-parent`), {});
   }
 
   sendThreadInput(id: string, text: string, attachments: Array<Record<string, unknown>> = []): Observable<unknown> {

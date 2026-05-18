@@ -108,6 +108,8 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   workerRepoPath = "";
   workerBranchName = "";
   workerAutoRun = true;
+  gitDetailsThreadId = "";
+  syncingThreadId = "";
   threadRepoDraft = "";
   threadBranchDraft = "";
   threadMetaThreadId = "";
@@ -387,6 +389,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     this.selectedId = this.threadSlug(thread);
     this.activePanel = nextPanel;
     this.modelDetailsOpen = false;
+    this.gitDetailsThreadId = "";
     this.pushPath(this.selectedId, this.activePanel);
     this.beginThreadLoad(thread.id);
     this.clearThreadPanelState();
@@ -415,6 +418,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
       return;
     }
     this.modelDetailsOpen = false;
+    this.gitDetailsThreadId = "";
     if (this.activePanel === "raw" && panel !== "raw") this.closeRawStream();
     this.activePanel = panel;
     const thread = this.selectedThread();
@@ -436,6 +440,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   openTools(view: ToolsView = this.toolsView): void {
     if (this.activePanel === "raw") this.closeRawStream();
     this.modelDetailsOpen = false;
+    this.gitDetailsThreadId = "";
     this.threadWizardOpen = false;
     this.onboardingActive = false;
     this.toolsView = view;
@@ -670,6 +675,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     event?.preventDefault();
     event?.stopPropagation();
     if (!this.selectedThread()) return;
+    this.gitDetailsThreadId = "";
     this.modelDetailsOpen = true;
     this.renderNow();
   }
@@ -677,6 +683,59 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   closeModelDetails(): void {
     if (!this.modelDetailsOpen) return;
     this.modelDetailsOpen = false;
+    this.renderNow();
+  }
+
+  openGitDetails(thread: ThreadSummary | null, event?: Event): void {
+    event?.preventDefault();
+    event?.stopPropagation();
+    if (!thread) return;
+    this.modelDetailsOpen = false;
+    this.gitDetailsThreadId = thread.id;
+    this.renderNow();
+  }
+
+  closeGitDetails(): void {
+    if (!this.gitDetailsThreadId) return;
+    this.gitDetailsThreadId = "";
+    this.renderNow();
+  }
+
+  gitDetailsThread(): ThreadSummary | null {
+    return this.gitDetailsThreadId ? this.threads.find((thread) => thread.id === this.gitDetailsThreadId) || null : null;
+  }
+
+  async directSyncThread(thread: ThreadSummary | null, event?: Event): Promise<void> {
+    event?.preventDefault();
+    event?.stopPropagation();
+    if (!thread || !this.canDirectSyncThread(thread) || this.syncingThreadId) return;
+    this.syncingThreadId = thread.id;
+    this.busy = true;
+    try {
+      const result = await firstValueFrom(this.api.syncThreadWithParent(thread.id));
+      if (result.thread) this.replaceThread(result.thread);
+      await this.refresh(false);
+    } catch (error) {
+      this.error = this.errorText(error);
+    } finally {
+      this.syncingThreadId = "";
+      this.busy = false;
+      this.renderNow();
+    }
+  }
+
+  async prepareIntelligentSync(thread: ThreadSummary | null, event?: Event): Promise<void> {
+    event?.preventDefault();
+    event?.stopPropagation();
+    if (!thread || !this.canPrepareIntelligentSync(thread)) return;
+    if (this.selectedThread()?.id !== thread.id) {
+      await this.activateThread(thread);
+    }
+    const prompt = this.intelligentSyncPrompt(thread);
+    this.draft = prompt;
+    this.persistThreadTextField("draft", prompt);
+    this.closeGitDetails();
+    this.queueMessagePaneScrollToBottom();
     this.renderNow();
   }
 
@@ -1259,26 +1318,142 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
 
   threadGitDeltaLabel(thread: ThreadSummary | null): string {
     if (!thread) return "";
-    const dirtyFiles = this.threadNumberValue(thread, "gitDirtyFiles");
-    const formatCount = (value: number) => Number.isFinite(value) ? value : 0;
-    const formatComparison = (target: string, ahead: number, behind: number, dirty: number, missing = false) => {
-      if (missing) return `vs ${target}: missing / dirty ${formatCount(dirty)}`;
-      return `vs ${target}: ahead ${formatCount(ahead)} / behind ${formatCount(behind)} / dirty ${formatCount(dirty)}`;
-    };
-    const remoteMissing = this.booleanThreadValue(thread, "gitRemoteMissing");
+    const dirtyLabel = this.gitDirtyLabel(thread);
+    if (thread.parentThreadId) {
+      return [
+        this.gitParentShortLabel(thread),
+        this.gitRemoteShortLabel(thread),
+        dirtyLabel,
+      ].filter(Boolean).join(" · ");
+    }
+    return [this.gitRemoteShortLabel(thread), dirtyLabel].filter(Boolean).join(" · ");
+  }
+
+  gitParentShortLabel(thread: ThreadSummary | null): string {
+    if (!thread?.parentThreadId) return "";
+    return `Parent: ${this.gitAheadBehindPhrase(this.threadNumberValue(thread, "gitParentAhead"), this.threadNumberValue(thread, "gitParentBehind"), "up to date")}`;
+  }
+
+  gitRemoteShortLabel(thread: ThreadSummary | null): string {
+    if (!thread) return "";
+    if (this.booleanThreadValue(thread, "gitRemoteMissing")) return `Remote: ${thread.parentThreadId ? "not published" : "not found"}`;
     const remoteAhead = this.threadNumberValue(thread, "gitRemoteAhead");
     const remoteBehind = this.threadNumberValue(thread, "gitRemoteBehind");
-    if (thread.parentThreadId) {
-      const parentAhead = this.threadNumberValue(thread, "gitParentAhead");
-      const parentBehind = this.threadNumberValue(thread, "gitParentBehind");
-      return [
-        formatComparison("parent", parentAhead, parentBehind, dirtyFiles),
-        formatComparison("remote", remoteAhead, remoteBehind, dirtyFiles, remoteMissing),
-      ].join(" · ");
-    }
     const ahead = Number.isFinite(remoteAhead) ? remoteAhead : this.threadNumberValue(thread, "gitAhead");
     const behind = Number.isFinite(remoteBehind) ? remoteBehind : this.threadNumberValue(thread, "gitBehind");
-    return formatComparison("remote", ahead, behind, dirtyFiles, remoteMissing);
+    return `Remote: ${this.gitAheadBehindPhrase(ahead, behind, "clean")}`;
+  }
+
+  gitDirtyLabel(thread: ThreadSummary | null): string {
+    const dirty = this.gitDirtyFiles(thread);
+    return dirty > 0 ? `Dirty: ${dirty} ${dirty === 1 ? "file" : "files"}` : "Clean";
+  }
+
+  gitParentDetailLabel(thread: ThreadSummary | null): string {
+    if (!thread?.parentThreadId) return "Parent comparison is not used for root threads.";
+    const files = this.threadNumberValue(thread, "gitParentChangedFiles");
+    return `${this.gitParentShortLabel(thread)} · ${this.gitFilesChangedLabel(files)}`;
+  }
+
+  gitRemoteDetailLabel(thread: ThreadSummary | null): string {
+    if (!thread) return "";
+    if (this.booleanThreadValue(thread, "gitRemoteMissing")) {
+      return `${this.gitRemoteShortLabel(thread)} · ${this.threadRemoteBranchLabel(thread) || "No remote branch set"}`;
+    }
+    const files = this.threadNumberValue(thread, "gitRemoteChangedFiles");
+    return `${this.gitRemoteShortLabel(thread)} · ${this.gitFilesChangedLabel(files)}`;
+  }
+
+  gitRiskLabels(thread: ThreadSummary | null): string[] {
+    if (!thread) return [];
+    const risks: string[] = [];
+    const dirty = this.gitDirtyFiles(thread);
+    const parentAhead = this.gitCount(thread, "gitParentAhead");
+    const parentBehind = this.gitCount(thread, "gitParentBehind");
+    const remoteAhead = this.gitCount(thread, "gitRemoteAhead");
+    const remoteBehind = this.gitCount(thread, "gitRemoteBehind");
+    if (thread.parentThreadId && parentBehind > 0) risks.push(`Worker is missing ${parentBehind} parent ${parentBehind === 1 ? "commit" : "commits"}.`);
+    if (thread.parentThreadId && parentAhead > 0) risks.push(`Worker has ${parentAhead} ${parentAhead === 1 ? "commit" : "commits"} not in parent.`);
+    if (dirty > 0) risks.push(`${dirty} local ${dirty === 1 ? "file is" : "files are"} not committed.`);
+    if (this.booleanThreadValue(thread, "gitRemoteMissing")) risks.push(thread.parentThreadId ? "Worker branch is local only." : "Configured remote branch was not found.");
+    if (!this.booleanThreadValue(thread, "gitRemoteMissing") && remoteBehind > 0) risks.push(`Local branch is missing ${remoteBehind} remote ${remoteBehind === 1 ? "commit" : "commits"}.`);
+    if (!this.booleanThreadValue(thread, "gitRemoteMissing") && remoteAhead > 0) risks.push(`${remoteAhead} local ${remoteAhead === 1 ? "commit is" : "commits are"} not pushed.`);
+    return risks.length ? risks : ["No git drift detected."];
+  }
+
+  threadHasGitInfo(thread: ThreadSummary | null): boolean {
+    return Boolean(thread && (this.threadBranchLabel(thread) || this.threadRemoteLabel(thread) || this.defaultRepoPath(thread)));
+  }
+
+  threadGitBadgeLabel(thread: ThreadSummary | null): string {
+    if (this.canDirectSyncThread(thread)) return "↻";
+    if (thread?.parentThreadId && this.gitCount(thread, "gitParentBehind") > 0) return "stale";
+    if (thread?.parentThreadId && this.gitCount(thread, "gitParentAhead") > 0) return "merge";
+    if (this.gitDirtyFiles(thread) > 0) return "dirty";
+    return "git";
+  }
+
+  threadGitBadgeTitle(thread: ThreadSummary | null): string {
+    if (this.canDirectSyncThread(thread)) return "Direct sync is available. Open Git details.";
+    return thread ? this.threadGitDeltaLabel(thread) : "Git details";
+  }
+
+  canDirectSyncThread(thread: ThreadSummary | null): boolean {
+    return Boolean(
+      thread?.parentThreadId &&
+      this.gitCount(thread, "gitParentBehind") > 0 &&
+      this.gitCount(thread, "gitParentAhead") === 0 &&
+      this.gitDirtyFiles(thread) === 0 &&
+      !this.isThreadProcessing(thread),
+    );
+  }
+
+  canPrepareIntelligentSync(thread: ThreadSummary | null): boolean {
+    return Boolean(thread?.parentThreadId && !this.syncingThreadId && this.threadDraftEmpty(thread));
+  }
+
+  intelligentSyncDisabledReason(thread: ThreadSummary | null): string {
+    if (!thread?.parentThreadId) return "Only worker threads can be synced with a parent.";
+    if (!this.threadDraftEmpty(thread)) return "Composer is not empty.";
+    return "";
+  }
+
+  intelligentSyncPrompt(thread: ThreadSummary): string {
+    return [
+      "Sync this worker with its parent.",
+      `Current state: ${this.threadGitDeltaLabel(thread)}.`,
+      "Bring in parent updates, preserve worker-specific changes, inspect conflicts if needed, run focused checks, and report the result.",
+      "Do not push unless explicitly asked.",
+    ].join("\n");
+  }
+
+  private gitAheadBehindPhrase(ahead: number, behind: number, cleanLabel: string): string {
+    const parts: string[] = [];
+    const safeAhead = Number.isFinite(ahead) ? Math.max(0, Math.round(ahead)) : 0;
+    const safeBehind = Number.isFinite(behind) ? Math.max(0, Math.round(behind)) : 0;
+    if (safeAhead > 0) parts.push(`${safeAhead} ahead`);
+    if (safeBehind > 0) parts.push(`${safeBehind} behind`);
+    return parts.length ? parts.join(", ") : cleanLabel;
+  }
+
+  gitFilesChangedLabel(value: number): string {
+    if (!Number.isFinite(value)) return "files unknown";
+    const files = Math.max(0, Math.round(value));
+    return `${files} ${files === 1 ? "file differs" : "files differ"}`;
+  }
+
+  gitDirtyFiles(thread: ThreadSummary | null): number {
+    return this.gitCount(thread, "gitDirtyFiles");
+  }
+
+  gitCount(thread: ThreadSummary | null, key: string): number {
+    const value = this.threadNumberValue(thread, key);
+    return Number.isFinite(value) ? Math.max(0, Math.round(value)) : 0;
+  }
+
+  private threadDraftEmpty(thread: ThreadSummary): boolean {
+    const draft = this.selectedThread()?.id === thread.id ? this.draft : this.readThreadTextField(thread, "draft") || "";
+    return !draft.trim();
   }
 
   threadMetaDirty(thread: ThreadSummary | null = this.selectedThread()): boolean {
@@ -2515,7 +2690,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     return ["ORKESTR", words[0].toUpperCase().slice(0, 11), words.slice(1).join(" ").toUpperCase().slice(0, 11)];
   }
 
-  private threadNumberValue(thread: ThreadSummary | null, key: string): number {
+  threadNumberValue(thread: ThreadSummary | null, key: string): number {
     if (!thread) return Number.NaN;
     const executor = thread["executor"];
     const metadata = executor && typeof executor === "object" ? (executor as Record<string, unknown>)["metadata"] : null;
@@ -2524,7 +2699,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     return Number.isFinite(parsed) ? parsed : Number.NaN;
   }
 
-  private booleanThreadValue(thread: ThreadSummary | null, key: string): boolean {
+  booleanThreadValue(thread: ThreadSummary | null, key: string): boolean {
     if (!thread) return false;
     const executor = thread["executor"];
     const metadata = executor && typeof executor === "object" ? (executor as Record<string, unknown>)["metadata"] : null;

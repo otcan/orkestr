@@ -576,6 +576,26 @@ textarea:focus {
   animation: processing-badge-pulse 1.2s ease-in-out infinite;
 }
 
+.git-badge {
+  cursor: pointer;
+  background: rgba(104, 172, 219, 0.18);
+  color: #cfeeff;
+  text-transform: none;
+}
+
+.git-badge:hover,
+.git-badge:focus-visible {
+  border-color: rgba(104, 172, 219, 0.54);
+  background: rgba(104, 172, 219, 0.3);
+  outline: none;
+}
+
+.git-badge.direct-sync {
+  background: rgba(99, 212, 113, 0.24);
+  color: #cfffca;
+  font-size: 0.85rem;
+}
+
 .whatsapp-thread-avatar,
 .chat-head-avatar {
   display: grid;
@@ -1242,6 +1262,54 @@ ork-first-thread-wizard.first-thread-host {
 .model-detail-card dd {
   text-align: right;
   font-size: 0.76rem;
+}
+
+.git-detail-modal {
+  width: min(860px, calc(100vw - 52px));
+}
+
+.git-detail-meta {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.git-detail-grid {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.git-detail-card header strong {
+  font-size: 0.92rem;
+  line-height: 1.25;
+  text-align: right;
+}
+
+.git-risk-section {
+  display: grid;
+  gap: 8px;
+  border: 1px solid rgba(140, 255, 155, 0.14);
+  border-radius: 8px;
+  background: rgba(99, 212, 113, 0.06);
+  padding: 12px;
+}
+
+.git-risk-section ul {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding-left: 18px;
+  color: #edffef;
+  font-size: 0.84rem;
+  font-weight: 760;
+}
+
+.git-sync-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+.direct-sync-button {
+  border-color: rgba(99, 212, 113, 0.46);
+  color: #cfffca;
 }
 
 .codex-mode-toggle {
