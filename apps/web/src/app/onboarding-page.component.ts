@@ -315,26 +315,33 @@ export class OnboardingPageComponent implements OnInit, OnChanges, OnDestroy {
   }
 
   gmailStatusLabel(): string {
+    if (this.mailProviderHasAccounts("gmail")) return "connected";
     const state = this.connector("gmail")?.state;
     if (!state) return "not connected";
     return String(state).replace(/_/g, " ");
   }
 
   gmailStatusClass(): string {
+    if (this.mailProviderHasAccounts("gmail")) return "ready";
     return this.stateClass("gmail");
   }
 
   outlookStatusLabel(): string {
+    if (this.mailProviderHasAccounts("outlook")) return "connected";
     const state = this.connector("outlook")?.state;
     if (!state) return "not connected";
     return String(state).replace(/_/g, " ");
   }
 
   outlookStatusClass(): string {
+    if (this.mailProviderHasAccounts("outlook")) return "ready";
     return this.stateClass("outlook");
   }
 
   mailStatusLabel(): string {
+    const accounts = this.mailAccountRows();
+    if (accounts.length === 1) return "1 mailbox connected";
+    if (accounts.length > 1) return `${accounts.length} mailboxes connected`;
     if (this.connector("gmail")?.state === "connected") return "Gmail connected";
     if (this.connector("outlook")?.state === "connected") return "Outlook connected";
     if (this.mailDone()) return "configured";
@@ -342,6 +349,7 @@ export class OnboardingPageComponent implements OnInit, OnChanges, OnDestroy {
   }
 
   mailStatusClass(): string {
+    if (this.mailAccountRows().length) return "ready";
     if (this.connector("gmail")?.state === "connected" || this.connector("outlook")?.state === "connected") return "ready";
     if (this.mailDone()) return "partial";
     if (["broken", "failed"].includes(String(this.connector("gmail")?.state || "")) || ["broken", "failed"].includes(String(this.connector("outlook")?.state || ""))) return "bad";
@@ -349,6 +357,7 @@ export class OnboardingPageComponent implements OnInit, OnChanges, OnDestroy {
   }
 
   mailDone(): boolean {
+    if (this.mailAccountRows().length) return true;
     return ["connected", "partial"].includes(String(this.connector("gmail")?.state || "")) ||
       ["connected", "partial"].includes(String(this.connector("outlook")?.state || ""));
   }
@@ -381,6 +390,66 @@ export class OnboardingPageComponent implements OnInit, OnChanges, OnDestroy {
     return parts.join(" · ");
   }
 
+  mailProviderLabel(provider: MailProvider = this.mailProvider): string {
+    return provider === "gmail" ? "Gmail" : "Outlook";
+  }
+
+  mailProviderHasAccounts(provider: MailProvider = this.mailProvider): boolean {
+    return this.mailAccountRows(provider).length > 0;
+  }
+
+  mailProviderAccountCountLabel(provider: MailProvider = this.mailProvider): string {
+    const count = this.mailAccountRows(provider).length;
+    const label = this.mailProviderLabel(provider);
+    if (count === 1) return `1 connected ${label} mailbox`;
+    return `${count} connected ${label} mailboxes`;
+  }
+
+  mailProviderActionTitle(provider: MailProvider = this.mailProvider): string {
+    const label = this.mailProviderLabel(provider);
+    return this.mailProviderHasAccounts(provider) ? `Add another ${label} login` : `Connect ${label}`;
+  }
+
+  mailProviderActionHint(provider: MailProvider = this.mailProvider): string {
+    const label = this.mailProviderLabel(provider);
+    if (this.mailProviderHasAccounts(provider)) {
+      return `${label} is already connected in this runtime. Fill these OAuth fields only when you want to add another mailbox.`;
+    }
+    if (provider === "gmail") return "Orkestr stores tokens and client secrets under the local Orkestr home, outside public config.";
+    return "Use tenant common for personal Microsoft accounts and most self-hosted OSS installs.";
+  }
+
+  mailProviderStatusTitle(provider: MailProvider = this.mailProvider): string {
+    const rows = this.mailAccountRows(provider);
+    if (rows.length === 1) return rows[0]?.label || rows[0]?.account || `${this.mailProviderLabel(provider)} mailbox`;
+    if (rows.length > 1) return `${this.mailProviderLabel(provider)} mailboxes`;
+    return provider === "gmail" ? (this.gmailAccount || "Gmail mailbox") : (this.outlookAccount || "Outlook mailbox");
+  }
+
+  mailProviderSummary(provider: MailProvider = this.mailProvider): string {
+    const rows = this.mailAccountRows(provider);
+    const label = this.mailProviderLabel(provider);
+    if (rows.length) {
+      const names = rows.map((row) => row.account || row.label).filter(Boolean);
+      const shown = names.slice(0, 3).join(", ");
+      const extra = names.length > 3 ? `, +${names.length - 3} more` : "";
+      return `${this.mailProviderAccountCountLabel(provider)} available${shown ? `: ${shown}${extra}` : "."}`;
+    }
+    return this.connector(provider)?.summary || `No ${label} status loaded.`;
+  }
+
+  mailProviderCredentialState(provider: MailProvider = this.mailProvider): string {
+    if (provider === "gmail" && this.gmailClientId.trim()) return "configured";
+    if (provider === "outlook" && this.outlookClientId.trim()) return "configured";
+    if (this.mailProviderHasAccounts(provider)) return "optional";
+    return "missing";
+  }
+
+  mailProviderAuthButtonLabel(provider: MailProvider = this.mailProvider): string {
+    const label = this.mailProviderLabel(provider);
+    return this.mailProviderHasAccounts(provider) ? `Add another ${label} Auth` : `Start ${label} Auth`;
+  }
+
   mailSummary(): string {
     const accounts = this.mailAccountRows();
     if (accounts.length) return `${this.mailAccountCountLabel()} connected`;
@@ -398,11 +467,13 @@ export class OnboardingPageComponent implements OnInit, OnChanges, OnDestroy {
   }
 
   gmailConfigSummary(): string {
+    if (this.mailProviderHasAccounts("gmail")) return this.mailProviderAccountCountLabel("gmail");
     if (!this.gmailClientId.trim()) return "OAuth client is not configured.";
     return this.gmailRedirectUri.trim() || this.defaultGmailRedirectUri();
   }
 
   outlookConfigSummary(): string {
+    if (this.mailProviderHasAccounts("outlook")) return this.mailProviderAccountCountLabel("outlook");
     if (!this.outlookClientId.trim()) return "Microsoft app is not configured.";
     return `Tenant ${this.outlookTenantId.trim() || "common"}`;
   }

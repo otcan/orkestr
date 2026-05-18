@@ -271,7 +271,7 @@
 
             @if (mailProvider === "gmail") {
               <form class="mail-card auth-form-card" (submit)="submitGmailAuth(); $event.preventDefault()">
-                <strong>Connect Gmail</strong>
+                <strong>{{ mailProviderActionTitle("gmail") }}</strong>
                 <label>
                   <span>Mailbox</span>
                   <input name="gmail-account" type="email" [(ngModel)]="gmailAccount" placeholder="email@example.com" autocomplete="email" />
@@ -289,13 +289,13 @@
                   <input name="gmail-redirect-uri" [(ngModel)]="gmailRedirectUri" />
                 </label>
                 <button type="submit" [disabled]="busy || !gmailClientId.trim() || !gmailRedirectUri.trim()">
-                  {{ busy ? "Starting" : "Start Gmail Auth" }}
+                  {{ busy ? "Starting" : mailProviderAuthButtonLabel("gmail") }}
                 </button>
-                <small>Orkestr stores tokens and client secrets under the local Orkestr home, outside public config.</small>
+                <small>{{ mailProviderActionHint("gmail") }}</small>
               </form>
             } @else {
               <form class="mail-card auth-form-card" (submit)="submitOutlookAuth(); $event.preventDefault()">
-                <strong>Connect Outlook</strong>
+                <strong>{{ mailProviderActionTitle("outlook") }}</strong>
                 <label>
                   <span>Mailbox</span>
                   <input name="outlook-account" type="email" [(ngModel)]="outlookAccount" placeholder="person@example.com" autocomplete="email" />
@@ -313,37 +313,37 @@
                   <input name="outlook-scopes" [(ngModel)]="outlookScopes" autocomplete="off" />
                 </label>
                 <button type="submit" [disabled]="busy || !outlookClientId.trim()">
-                  {{ busy ? "Starting" : "Start Outlook Auth" }}
+                  {{ busy ? "Starting" : mailProviderAuthButtonLabel("outlook") }}
                 </button>
-                <small>Use tenant common for personal Microsoft accounts and most self-hosted OSS installs.</small>
+                <small>{{ mailProviderActionHint("outlook") }}</small>
               </form>
             }
 
             <article class="mail-card status-card">
               <div class="mail-card-head">
                 <div>
-                  <strong>{{ mailProvider === "gmail" ? (gmailAccount || "Gmail mailbox") : (outlookAccount || "Outlook mailbox") }}</strong>
+                  <strong>{{ mailProviderStatusTitle(mailProvider) }}</strong>
                   <small>{{ mailProvider === "gmail" ? gmailConfigSummary() : outlookConfigSummary() }}</small>
                 </div>
                 <em [class]="mailProvider === 'gmail' ? gmailStatusClass() : outlookStatusClass()">{{ mailProvider === "gmail" ? gmailStatusLabel() : outlookStatusLabel() }}</em>
               </div>
-              <p>{{ mailProvider === "gmail" ? (connector("gmail")?.summary || "No Gmail status loaded.") : (connector("outlook")?.summary || "No Outlook status loaded.") }}</p>
+              <p>{{ mailProviderSummary(mailProvider) }}</p>
               <dl>
                 @if (mailProvider === "gmail") {
-                  <div><dt>OAuth client</dt><dd>{{ gmailClientId.trim() ? "configured" : "missing" }}</dd></div>
+                  <div><dt>OAuth client</dt><dd>{{ mailProviderCredentialState("gmail") }}</dd></div>
                   <div><dt>Redirect</dt><dd>{{ gmailRedirectUri || "-" }}</dd></div>
                   <div><dt>Scope</dt><dd>gmail.readonly, gmail.modify</dd></div>
                 } @else {
-                  <div><dt>Application</dt><dd>{{ outlookClientId.trim() ? "configured" : "missing" }}</dd></div>
+                  <div><dt>Application</dt><dd>{{ mailProviderCredentialState("outlook") }}</dd></div>
                   <div><dt>Tenant</dt><dd>{{ outlookTenantId || "common" }}</dd></div>
                   <div><dt>Scope</dt><dd>{{ outlookScopes || "offline_access User.Read Mail.Read" }}</dd></div>
                 }
               </dl>
               <div class="button-row">
                 @if (mailProvider === "gmail") {
-                  <button type="button" (click)="submitGmailAuth()" [disabled]="busy || !gmailClientId.trim() || !gmailRedirectUri.trim()">Start Gmail Auth</button>
+                  <button type="button" (click)="submitGmailAuth()" [disabled]="busy || !gmailClientId.trim() || !gmailRedirectUri.trim()">{{ mailProviderAuthButtonLabel("gmail") }}</button>
                 } @else {
-                  <button type="button" (click)="submitOutlookAuth()" [disabled]="busy || !outlookClientId.trim()">Start Outlook Auth</button>
+                  <button type="button" (click)="submitOutlookAuth()" [disabled]="busy || !outlookClientId.trim()">{{ mailProviderAuthButtonLabel("outlook") }}</button>
                 }
                 <button class="secondary" type="button" (click)="load()" [disabled]="busy">Refresh</button>
               </div>
