@@ -48,6 +48,33 @@ set -euo pipefail
 
 cmd="\${1:-}"
 if [ "$#" -gt 0 ]; then shift; fi
+valid_panes="\${TMUX_VALID_PANES:-%42}"
+target_from_args() {
+  local target=""
+  while [ "$#" -gt 0 ]; do
+    if [ "$1" = "-t" ]; then target="\${2:-}"; shift 2; else shift; fi
+  done
+  printf '%s' "$target"
+}
+literal_from_args() {
+  local literal=""
+  while [ "$#" -gt 0 ]; do
+    if [ "$1" = "-l" ]; then literal="\${2:-}"; shift 2; else shift; fi
+  done
+  printf '%s' "$literal"
+}
+pane_exists() {
+  local target="$1"
+  if [ -z "$target" ]; then return 0; fi
+  printf '%s\\n' $valid_panes | grep -Fxq "$target"
+}
+require_pane() {
+  local target="$1"
+  if ! pane_exists "$target"; then
+    printf "can't find pane: %s\\n" "$target" >&2
+    exit 1
+  fi
+}
 case "$cmd" in
   has-session)
     target=""
@@ -77,7 +104,7 @@ case "$cmd" in
     exit 0
     ;;
   list-panes)
-    printf '%%42\\n'
+    printf '%s\\n' $valid_panes
     exit 0
     ;;
   capture-pane)
@@ -85,6 +112,29 @@ case "$cmd" in
       cat "\${TMUX_CAPTURE_FILE:-}"
     else
       printf '%s\\n' "\${TMUX_CAPTURE_TEXT:-› }"
+    fi
+    exit 0
+    ;;
+  load-buffer)
+    file=""
+    while [ "$#" -gt 0 ]; do
+      if [ "$1" = "-b" ]; then shift 2; else file="$1"; shift; fi
+    done
+    if [ -n "\${TMUX_LOADED_BUFFER_CAPTURE:-}" ] && [ -f "$file" ]; then
+      {
+        printf '__BUFFER__\\n'
+        cat "$file"
+        printf '\\n__END_BUFFER__\\n'
+      } >> "$TMUX_LOADED_BUFFER_CAPTURE"
+    fi
+    exit 0
+    ;;
+  send-keys)
+    require_pane "$(target_from_args "$@")"
+    literal="$(literal_from_args "$@")"
+    if [ -n "\${TMUX_SEND_KEYS_LITERAL_MAX:-}" ] && [ -n "$literal" ] && [ "\${#literal}" -gt "\${TMUX_SEND_KEYS_LITERAL_MAX:-0}" ]; then
+      printf 'tmux send-keys literal too long: %s > %s\\n' "\${#literal}" "$TMUX_SEND_KEYS_LITERAL_MAX" >&2
+      exit 1
     fi
     exit 0
     ;;
@@ -453,6 +503,73 @@ test("thread input delivery waits for runtime acknowledgement before completing"
     restoreEnvValue("TMUX_LOG", priorTmuxLog);
     restoreEnvValue("TMUX_STATE", priorTmuxState);
     restoreEnvValue("TMUX_CAPTURE_FILE", priorCaptureFile);
+  }
+});
+
+test("thread input delivery sends oversized messages through a temp file", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-delivery-long-input-"));
+  const fakeTmux = await createFakeTmux(home);
+  const captureFile = path.join(home, "pane.txt");
+  const loadedBufferCapture = path.join(home, "loaded-buffers.txt");
+  const priorPath = process.env.PATH;
+  const priorTmuxLog = process.env.TMUX_LOG;
+  const priorTmuxState = process.env.TMUX_STATE;
+  const priorCaptureFile = process.env.TMUX_CAPTURE_FILE;
+  const priorLoadedBufferCapture = process.env.TMUX_LOADED_BUFFER_CAPTURE;
+  const priorLiteralMax = process.env.TMUX_SEND_KEYS_LITERAL_MAX;
+  process.env.PATH = `${fakeTmux.bin}:${priorPath || ""}`;
+  process.env.TMUX_LOG = fakeTmux.log;
+  process.env.TMUX_STATE = fakeTmux.state;
+  process.env.TMUX_CAPTURE_FILE = captureFile;
+  process.env.TMUX_LOADED_BUFFER_CAPTURE = loadedBufferCapture;
+  process.env.TMUX_SEND_KEYS_LITERAL_MAX = "1024";
+
+  try {
+    await fs.writeFile(captureFile, "\u203a \n", "utf8");
+    const env = {
+      ORKESTR_HOME: path.join(home, "orkestr-home"),
+      HOME: path.join(home, "runtime-home"),
+      CODEX_HOME: path.join(home, "codex-home"),
+      PATH: process.env.PATH,
+      TMUX_LOG: fakeTmux.log,
+      TMUX_STATE: fakeTmux.state,
+      TMUX_CAPTURE_FILE: captureFile,
+      TMUX_LOADED_BUFFER_CAPTURE: loadedBufferCapture,
+      TMUX_SEND_KEYS_LITERAL_MAX: "1024",
+      ORKESTR_TMUX_INLINE_CHAR_LIMIT: "1024",
+      ORKESTR_DELIVERY_ACK_WAIT_MS: "0",
+      ORKESTR_DELIVERY_ACK_BACKOFF_MS: "10000",
+    };
+    const longText = `LONG-DELIVERY-REPRO\n${"x".repeat(1200)}`;
+    await createThread({ id: "long-delivery-thread", name: "Long Delivery Thread" }, env);
+    await enqueueThreadInput("long-delivery-thread", { text: longText }, env);
+
+    assert.deepEqual(await deliverPendingThreadInputs("long-delivery-thread", env), []);
+    const messages = await listThreadMessages("long-delivery-thread", env);
+    const deliveredPrompt = await fs.readFile(loadedBufferCapture, "utf8");
+    const storedLongMessage = await fs.readFile(messages[0].deliveryInputFile, "utf8");
+    const log = await fs.readFile(fakeTmux.log, "utf8");
+
+    assert.equal(messages[0].state, "awaiting_ack");
+    assert.equal(messages[0].deliveryState, "awaiting_ack");
+    assert.equal(messages[0].deliveryInputMode, "file");
+    assert.ok(messages[0].deliveryInputFile.endsWith(".txt"));
+    assert.equal(messages[0].deliveryInputBytes, Buffer.byteLength(longText, "utf8"));
+    assert.equal(storedLongMessage, longText);
+    assert.match(deliveredPrompt, /Read the full message from this local UTF-8 file:/);
+    assert.match(deliveredPrompt, /Treat the file contents as the user's message/);
+    assert.match(deliveredPrompt, new RegExp(messages[0].deliveryInputFile.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+    assert.ok(deliveredPrompt.length < 1024);
+    assert.doesNotMatch(deliveredPrompt, /x{1025}/);
+    assert.match(log, /__CALL__\tpaste-buffer\t-b\torkestr-[0-9a-f]+\t-t\t%42/);
+    assert.match(log, /__CALL__\tsend-keys\t-t\t%42\tC-m/);
+  } finally {
+    restoreEnvValue("PATH", priorPath);
+    restoreEnvValue("TMUX_LOG", priorTmuxLog);
+    restoreEnvValue("TMUX_STATE", priorTmuxState);
+    restoreEnvValue("TMUX_CAPTURE_FILE", priorCaptureFile);
+    restoreEnvValue("TMUX_LOADED_BUFFER_CAPTURE", priorLoadedBufferCapture);
+    restoreEnvValue("TMUX_SEND_KEYS_LITERAL_MAX", priorLiteralMax);
   }
 });
 
