@@ -148,8 +148,14 @@ async function tmuxHasSession(sessionName) {
 }
 
 async function tmuxPaneId(sessionName) {
-  const { stdout } = await execFileAsync("tmux", ["list-panes", "-t", sessionName, "-F", "#{pane_id}"]);
-  return String(stdout || "").trim().split("\n").filter(Boolean)[0] || null;
+  return (await tmuxPaneIds(sessionName))[0] || null;
+}
+
+async function tmuxPaneIds(sessionName) {
+  const target = String(sessionName || "").trim();
+  if (!target) return [];
+  const { stdout } = await execFileAsync("tmux", ["list-panes", "-t", target, "-F", "#{pane_id}"]);
+  return String(stdout || "").trim().split("\n").map((line) => line.trim()).filter(Boolean);
 }
 
 async function renameTmuxWindow(sessionName, windowName) {
@@ -171,6 +177,26 @@ async function saveLeaseWindowName(leaseId, windowName, env = process.env) {
     return { ...lease, windowName };
   });
   if (changed) await saveRuntimeLeases(next, env);
+}
+
+async function saveLeasePaneId(leaseId, paneId, env = process.env) {
+  if (!leaseId || !paneId) return;
+  const leases = await listRuntimeLeases(env);
+  let changed = false;
+  const next = leases.map((lease) => {
+    if (lease.id !== leaseId || lease.paneId === paneId) return lease;
+    changed = true;
+    return { ...lease, paneId };
+  });
+  if (changed) await saveRuntimeLeases(next, env);
+}
+
+async function resolveLivePaneId(lease, env = process.env) {
+  const panes = await tmuxPaneIds(lease?.sessionName).catch(() => []);
+  const storedPaneId = String(lease?.paneId || "").trim();
+  const paneId = storedPaneId && panes.includes(storedPaneId) ? storedPaneId : panes[0] || null;
+  if (paneId && paneId !== storedPaneId) await saveLeasePaneId(lease?.id, paneId, env).catch(() => {});
+  return paneId;
 }
 
 async function refreshTmuxWindowName(thread, lease, env = process.env) {
@@ -279,7 +305,7 @@ export async function runtimeStatus(threadId, env = process.env, messagesOverrid
     };
   }
 
-  const paneId = lease.paneId || await tmuxPaneId(lease.sessionName).catch(() => null);
+  const paneId = await resolveLivePaneId(lease, env);
   const paneText = await capturePane(paneId).catch(() => "");
   const needsResumeDirectoryConfirmation = paneResumeDirectoryPrompt(paneText);
   const paneWorkingCandidate = paneWorking(paneText);
@@ -1345,11 +1371,17 @@ async function syncRuntimeLeasesOnce(env = process.env) {
       continue;
     }
     const synced = await syncLeaseRollout(lease, env).catch(() => ({ lease, appended: 0 }));
+    let leaseForStorage = synced.lease;
     appended += synced.appended || 0;
     const thread = await getThread(lease.threadId, env).catch(() => null);
     const messages = thread ? await listThreadMessages(thread.id, env).catch(() => []) : [];
     const status = await runtimeStatus(lease.threadId, env, messages).catch(() => null);
     if (status) {
+      leaseForStorage = {
+        ...synced.lease,
+        paneId: status.lease?.paneId ?? synced.lease.paneId,
+        windowName: status.lease?.windowName ?? synced.lease.windowName,
+      };
       if (thread) {
         const awaitingAck = messages.find((message) => message.role === "user" && message.state === "awaiting_ack");
         if (awaitingAck) {
@@ -1358,11 +1390,11 @@ async function syncRuntimeLeasesOnce(env = process.env) {
           else await failRejectedThreadInputDelivery(thread, awaitingAck, status, env).catch(() => null);
         }
       }
-      const idleSleep = idleSleepDecision({ lease: synced.lease, messages, status }, env);
+      const idleSleep = idleSleepDecision({ lease: leaseForStorage, messages, status }, env);
       if (thread && idleSleep) {
         const endedAt = nowIso();
         const endedLease = {
-          ...synced.lease,
+          ...leaseForStorage,
           endedAt,
           endReason: idleSleep.reason,
           idleMs: idleSleep.idleMs,
@@ -1396,11 +1428,11 @@ async function syncRuntimeLeasesOnce(env = process.env) {
       }
       await updateThread(lease.threadId, {
         state: status.state,
-        runtime: { ...(status.lease || synced.lease), state: status.state },
+        runtime: { ...leaseForStorage, state: status.state },
       }, env).catch(() => {});
     }
-    next.push(synced.lease);
-    changed = changed || JSON.stringify(synced.lease) !== JSON.stringify(lease);
+    next.push(leaseForStorage);
+    changed = changed || JSON.stringify(leaseForStorage) !== JSON.stringify(lease);
   }
   if (changed) await saveRuntimeLeases(next, env);
   return { leases: next, appended };

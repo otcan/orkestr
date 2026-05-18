@@ -9,6 +9,7 @@ import { startServer } from "../apps/server/src/server.js";
 import { threadRuntimeSummary } from "../apps/server/src/thread-summary.ts";
 import { runNextThreadMessage } from "../packages/core/src/executors.js";
 import { deliverPendingThreadInputs, drainAllPendingThreadInputs, listRuntimeLeases, runtimeStatus, sleepThread, syncRuntimeLeases, syncRuntimeWindowName, wakeThread } from "../packages/core/src/runtime-leases.js";
+import { ensureDataDirs } from "../packages/storage/src/paths.js";
 import { parseThreadInputCommand } from "../packages/core/src/thread-commands.js";
 import { createThreadWorker, detectThreadGitState, listThreadWorkers, syncThreadWorkerWithParent, updateThreadRepo } from "../packages/core/src/thread-workers.js";
 import { appendThreadMessage, createThread, deleteThread, enqueueThreadInput, listThreadMessages, listThreads, updateThread, updateThreadMessage } from "../packages/core/src/threads.js";
@@ -613,6 +614,68 @@ test("thread input delivery fails when Codex rejects a literal /now command", as
     restoreEnvValue("TMUX_LOG", priorTmuxLog);
     restoreEnvValue("TMUX_STATE", priorTmuxState);
     restoreEnvValue("TMUX_CAPTURE_FILE", priorCaptureFile);
+  }
+});
+
+test("thread input delivery refreshes stale tmux pane ids before submitting", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-delivery-stale-pane-"));
+  const fakeTmux = await createFakeTmux(home);
+  const captureFile = path.join(home, "pane.txt");
+  const priorPath = process.env.PATH;
+  const priorTmuxLog = process.env.TMUX_LOG;
+  const priorTmuxState = process.env.TMUX_STATE;
+  const priorCaptureFile = process.env.TMUX_CAPTURE_FILE;
+  const priorValidPanes = process.env.TMUX_VALID_PANES;
+  process.env.PATH = `${fakeTmux.bin}:${priorPath || ""}`;
+  process.env.TMUX_LOG = fakeTmux.log;
+  process.env.TMUX_STATE = fakeTmux.state;
+  process.env.TMUX_CAPTURE_FILE = captureFile;
+  process.env.TMUX_VALID_PANES = "%42";
+
+  try {
+    await fs.writeFile(captureFile, "\u203a \n", "utf8");
+    const env = {
+      ORKESTR_HOME: path.join(home, "orkestr-home"),
+      HOME: path.join(home, "runtime-home"),
+      CODEX_HOME: path.join(home, "codex-home"),
+      PATH: process.env.PATH,
+      TMUX_LOG: fakeTmux.log,
+      TMUX_STATE: fakeTmux.state,
+      TMUX_CAPTURE_FILE: captureFile,
+      TMUX_VALID_PANES: "%42",
+      ORKESTR_DELIVERY_ACK_WAIT_MS: "0",
+      ORKESTR_DELIVERY_ACK_BACKOFF_MS: "10000",
+    };
+    await createThread({ id: "stale-pane-thread", name: "Stale Pane Thread" }, env);
+    await wakeThread("stale-pane-thread", { reason: "test" }, env);
+
+    const paths = await ensureDataDirs(env);
+    const leases = await listRuntimeLeases(env);
+    await fs.writeFile(
+      paths.runtimeLeases,
+      JSON.stringify(leases.map((lease) => lease.threadId === "stale-pane-thread" ? { ...lease, paneId: "%580" } : lease), null, 2),
+      "utf8",
+    );
+    await enqueueThreadInput("stale-pane-thread", { text: "hello after pane replacement" }, env);
+
+    assert.deepEqual(await deliverPendingThreadInputs("stale-pane-thread", env), []);
+    const messages = await listThreadMessages("stale-pane-thread", env);
+    const refreshedLeases = await listRuntimeLeases(env);
+    const log = await fs.readFile(fakeTmux.log, "utf8");
+
+    assert.equal(messages[0].state, "awaiting_ack");
+    assert.equal(messages[0].deliveryState, "awaiting_ack");
+    assert.equal(messages[0].deliveryPaneId, "%42");
+    assert.equal(messages[0].error, null);
+    assert.equal(refreshedLeases.find((lease) => lease.threadId === "stale-pane-thread")?.paneId, "%42");
+    assert.match(log, /__CALL__\tsend-keys\t-t\t%42\tC-m/);
+    assert.doesNotMatch(log, /__CALL__\tsend-keys\t-t\t%580\tC-m/);
+  } finally {
+    restoreEnvValue("PATH", priorPath);
+    restoreEnvValue("TMUX_LOG", priorTmuxLog);
+    restoreEnvValue("TMUX_STATE", priorTmuxState);
+    restoreEnvValue("TMUX_CAPTURE_FILE", priorCaptureFile);
+    restoreEnvValue("TMUX_VALID_PANES", priorValidPanes);
   }
 });
 
