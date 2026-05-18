@@ -540,7 +540,148 @@
             </div>
           </div>
 
-          <div class="settings-grid">
+          <div class="settings-stack">
+            <section class="settings-card wa-settings-card">
+              <div class="panel-title compact-title">
+                <div>
+                  <p class="eyebrow">WhatsApp</p>
+                  <h3>Connected chat</h3>
+                </div>
+                <button class="secondary" type="button" (click)="refreshWhatsAppSettings()" [disabled]="busy || whatsappChatsLoading">
+                  {{ whatsappChatsLoading ? "Loading" : "Refresh" }}
+                </button>
+              </div>
+
+              <div class="wa-summary-strip" aria-label="WhatsApp connection summary">
+                <div>
+                  <span>Account</span>
+                  <strong>{{ selectedWhatsAppAccountLabel() }}</strong>
+                  <small>{{ selectedWhatsAppAccountStateLabel() }}</small>
+                </div>
+                <div>
+                  <span>Chat</span>
+                  <strong>{{ whatsappChatLabel(thread) }}</strong>
+                  <small>{{ thread.binding?.chatId || "No chat id saved" }}</small>
+                </div>
+                <div>
+                  <span>Delivery</span>
+                  <strong>{{ whatsappDeliveryLabel(thread) }}</strong>
+                  <small>{{ whatsappPeopleLabel(thread) }}</small>
+                </div>
+              </div>
+
+              <div class="wa-flow">
+                <section class="wa-flow-section">
+                  <div class="wa-section-head">
+                    <span class="wa-step">1</span>
+                    <div>
+                      <h4>Account</h4>
+                      <small>{{ whatsappStatusDetails?.summary || "WhatsApp status not loaded" }}</small>
+                    </div>
+                  </div>
+                  <label class="settings-field">
+                    <span>WhatsApp account</span>
+                    <select
+                      name="thread-wa-account-select-{{ thread.id }}"
+                      [ngModel]="selectedWhatsAppAccountId()"
+                      (ngModelChange)="changeWhatsAppAccount($event)"
+                    >
+                      @for (account of whatsappAccounts(); track whatsappAccountId(account)) {
+                        <option [value]="whatsappAccountId(account)">
+                          {{ whatsappAccountLabel(account) }} - {{ whatsappAccountState(account) || "idle" }}
+                        </option>
+                      } @empty {
+                        <option value="account-1">WhatsApp 1 - local</option>
+                      }
+                    </select>
+                  </label>
+                  <div class="settings-actions compact-actions">
+                    <button type="button" (click)="startSelectedWhatsAppAccount()" [disabled]="busy || !canLoadLocalWhatsAppChats()">
+                      Connect WhatsApp
+                    </button>
+                    <button class="secondary" type="button" (click)="logoutSelectedWhatsAppAccount()" [disabled]="busy || !canLoadLocalWhatsAppChats()">
+                      Disconnect
+                    </button>
+                    @if (whatsappAccountQrUrl()) {
+                      <a class="button secondary" [href]="whatsappAccountQrUrl()" target="_blank" rel="noreferrer">Open QR</a>
+                    }
+                  </div>
+                </section>
+
+                <section class="wa-flow-section">
+                  <div class="wa-section-head">
+                    <span class="wa-step">2</span>
+                    <div>
+                      <h4>Chat</h4>
+                      <small>{{ whatsappChatDetail(thread) }}</small>
+                    </div>
+                  </div>
+                  <label class="settings-field">
+                    <span>Known chats</span>
+                    <select
+                      name="thread-wa-chat-select-{{ thread.id }}"
+                      [ngModel]="whatsappChatId"
+                      (ngModelChange)="selectWhatsAppChat($event)"
+                      [disabled]="whatsappChatsLoading || whatsappChats.length === 0"
+                    >
+                      <option value="">Select a paired WhatsApp chat</option>
+                      @for (chat of whatsappChats; track chat.id) {
+                        <option [value]="chat.id">{{ whatsappChatLabelFor(chat) }}</option>
+                      }
+                    </select>
+                  </label>
+                  <label class="settings-field">
+                    <span>Display name</span>
+                    <input name="thread-wa-name-{{ thread.id }}" [(ngModel)]="whatsappDisplayName" placeholder="WhatsApp chat name" />
+                  </label>
+                  <label class="settings-field">
+                    <span>External or unlisted chat id</span>
+                    <input name="thread-wa-chat-{{ thread.id }}" [(ngModel)]="whatsappChatId" placeholder="12025550123@c.us or group@g.us" />
+                  </label>
+                </section>
+
+                <section class="wa-flow-section">
+                  <div class="wa-section-head">
+                    <span class="wa-step">3</span>
+                    <div>
+                      <h4>Delivery</h4>
+                      <small>{{ whatsappDeliveryLabel(thread) }}</small>
+                    </div>
+                  </div>
+                  <div class="wa-toggle-group">
+                    <label class="checkbox-row settings-toggle">
+                      <input name="thread-wa-enabled-{{ thread.id }}" type="checkbox" [(ngModel)]="whatsappBindingEnabled" />
+                      <span>Inbound messages</span>
+                    </label>
+                    <label class="checkbox-row settings-toggle">
+                      <input name="thread-wa-others-{{ thread.id }}" type="checkbox" [(ngModel)]="whatsappAllowOtherPeople" />
+                      <span>Other people allowed</span>
+                    </label>
+                    <label class="checkbox-row settings-toggle">
+                      <input name="thread-wa-mirror-{{ thread.id }}" type="checkbox" [(ngModel)]="whatsappMirrorToWhatsApp" />
+                      <span>Mirror replies to WA</span>
+                    </label>
+                  </div>
+                  <details class="settings-advanced">
+                    <summary>Advanced WhatsApp options</summary>
+                    <label class="settings-field">
+                      <span>Reply prefix</span>
+                      <input name="thread-wa-prefix-{{ thread.id }}" [(ngModel)]="whatsappReplyPrefix" placeholder="otcanclaw:" />
+                    </label>
+                    <label class="settings-field">
+                      <span>External account id</span>
+                      <input name="thread-wa-account-{{ thread.id }}" [(ngModel)]="whatsappOutboundAccountId" placeholder="optional external or bridge account id" />
+                    </label>
+                  </details>
+                  <div class="settings-actions">
+                    <button type="button" (click)="saveThreadBinding(thread)" [disabled]="busy || savingThreadBinding || !threadBindingDirty(thread)">
+                      {{ savingThreadBinding ? "Saving" : "Save WhatsApp" }}
+                    </button>
+                  </div>
+                </section>
+              </div>
+            </section>
+
             <section class="settings-card">
               <div class="panel-title compact-title">
                 <div>
@@ -574,109 +715,6 @@
               <div class="settings-actions">
                 <button type="button" (click)="saveThreadRepo(thread)" [disabled]="busy || savingThreadMeta || !threadMetaDirty(thread)">
                   {{ savingThreadMeta ? "Saving" : "Save repo" }}
-                </button>
-              </div>
-            </section>
-
-            <section class="settings-card">
-              <div class="panel-title compact-title">
-                <div>
-                  <p class="eyebrow">WhatsApp</p>
-                  <h3>Connect chat</h3>
-                </div>
-                <button class="secondary" type="button" (click)="refreshWhatsAppSettings()" [disabled]="busy || whatsappChatsLoading">
-                  {{ whatsappChatsLoading ? "Loading" : "Refresh" }}
-                </button>
-              </div>
-              <div class="settings-facts">
-                <span>Bridge</span>
-                <strong>{{ whatsappStatusDetails?.summary || "WhatsApp status not loaded" }}</strong>
-                <span>WA account</span>
-                <strong>{{ selectedWhatsAppAccountId() }}</strong>
-                <span>Connected chat</span>
-                <strong>{{ whatsappChatLabel(thread) }}</strong>
-                <span>Chat id</span>
-                <strong>{{ thread.binding?.chatId || "No chat id" }}</strong>
-                <span>Inbound</span>
-                <strong>{{ thread.binding?.enabled === false ? "Off" : "On" }}</strong>
-                <span>Other people</span>
-                <strong>{{ thread.binding?.allowOtherPeople === false ? "Blocked" : "Allowed" }}</strong>
-                <span>WA mirror</span>
-                <strong>{{ thread.binding?.mirrorToWhatsApp === false ? "Off" : "On" }}</strong>
-              </div>
-              <p class="helper">{{ whatsappChatDetail(thread) }}</p>
-              <label class="settings-field">
-                <span>WhatsApp account</span>
-                <select
-                  name="thread-wa-account-select-{{ thread.id }}"
-                  [ngModel]="selectedWhatsAppAccountId()"
-                  (ngModelChange)="changeWhatsAppAccount($event)"
-                >
-                  @for (account of whatsappAccounts(); track whatsappAccountId(account)) {
-                    <option [value]="whatsappAccountId(account)">
-                      {{ whatsappAccountLabel(account) }} · {{ whatsappAccountState(account) || "idle" }}
-                    </option>
-                  } @empty {
-                    <option value="account-1">WhatsApp 1 · local</option>
-                  }
-                </select>
-              </label>
-              <div class="settings-actions compact-actions">
-                <button type="button" (click)="startSelectedWhatsAppAccount()" [disabled]="busy || !canLoadLocalWhatsAppChats()">
-                  Connect WhatsApp
-                </button>
-                <button class="secondary" type="button" (click)="logoutSelectedWhatsAppAccount()" [disabled]="busy || !canLoadLocalWhatsAppChats()">
-                  Disconnect
-                </button>
-                @if (whatsappAccountQrUrl()) {
-                  <a class="button secondary" [href]="whatsappAccountQrUrl()" target="_blank" rel="noreferrer">Open QR</a>
-                }
-              </div>
-              <label class="settings-field">
-                <span>Known chats</span>
-                <select
-                  name="thread-wa-chat-select-{{ thread.id }}"
-                  [ngModel]="whatsappChatId"
-                  (ngModelChange)="selectWhatsAppChat($event)"
-                  [disabled]="whatsappChatsLoading || whatsappChats.length === 0"
-                >
-                  <option value="">Select a paired WhatsApp chat</option>
-                  @for (chat of whatsappChats; track chat.id) {
-                    <option [value]="chat.id">{{ whatsappChatLabelFor(chat) }}</option>
-                  }
-                </select>
-              </label>
-              <label class="settings-field">
-                <span>Display name</span>
-                <input name="thread-wa-name-{{ thread.id }}" [(ngModel)]="whatsappDisplayName" placeholder="WhatsApp chat name" />
-              </label>
-              <label class="settings-field">
-                <span>External or unlisted chat id</span>
-                <input name="thread-wa-chat-{{ thread.id }}" [(ngModel)]="whatsappChatId" placeholder="12025550123@c.us or group@g.us" />
-              </label>
-              <label class="settings-field">
-                <span>Reply prefix</span>
-                <input name="thread-wa-prefix-{{ thread.id }}" [(ngModel)]="whatsappReplyPrefix" placeholder="otcanclaw:" />
-              </label>
-              <label class="settings-field">
-                <span>External account id</span>
-                <input name="thread-wa-account-{{ thread.id }}" [(ngModel)]="whatsappOutboundAccountId" placeholder="optional external or bridge account id" />
-              </label>
-              <label class="checkbox-row settings-toggle">
-                <input name="thread-wa-enabled-{{ thread.id }}" type="checkbox" [(ngModel)]="whatsappBindingEnabled" />
-                <span>Route WhatsApp messages into this thread</span>
-              </label>
-              <label class="checkbox-row settings-toggle">
-                <input name="thread-wa-others-{{ thread.id }}" type="checkbox" [(ngModel)]="whatsappAllowOtherPeople" />
-                <span>Other people allowed</span>
-              </label>
-              <label class="checkbox-row settings-toggle">
-                <input name="thread-wa-mirror-{{ thread.id }}" type="checkbox" [(ngModel)]="whatsappMirrorToWhatsApp" />
-                <span>Mirror replies to WA</span>
-              </label>
-              <div class="settings-actions">
-                <button type="button" (click)="saveThreadBinding(thread)" [disabled]="busy || savingThreadBinding || !threadBindingDirty(thread)">
-                  {{ savingThreadBinding ? "Saving" : "Save WhatsApp" }}
                 </button>
               </div>
             </section>
