@@ -1784,7 +1784,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     const allowPeople = this.whatsappBindingThreadId === thread.id
       ? this.whatsappAllowOtherPeople
       : binding.allowOtherPeople === true;
-    return allowPeople ? "Other people allowed" : "Only selected sender";
+    return allowPeople ? "Additional participants enabled" : "Only the linked sender account";
   }
 
   showWhatsAppChatIcon(thread: ThreadSummary | null): boolean {

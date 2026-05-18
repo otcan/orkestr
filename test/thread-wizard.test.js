@@ -43,6 +43,8 @@ test("main UI exposes a guided first thread generation flow", async () => {
   assert.ok(sources.includes("Connect Orkestr account"));
   assert.ok(sources.includes("Create and connect chat"));
   assert.ok(sources.includes("Existing chats are not selected here."));
+  assert.ok(sources.includes("Linked sender account"));
+  assert.ok(!sources.includes("Allowed sender"));
   assert.ok(sources.includes("Detach chat"));
   assert.ok(sources.includes("Delete thread"));
   assert.ok(sources.includes("this.api.deleteThread"));

@@ -755,21 +755,21 @@
                     <div class="wa-section-head">
                       <span class="wa-step">2</span>
                       <div>
-                        <h4>People who can message Orkestr</h4>
+                        <h4>Additional WhatsApp participants</h4>
                         <small>{{ whatsappPeopleLabel(thread) }}</small>
                       </div>
                     </div>
                     <p class="wa-danger-copy">
-                      High risk: anyone enabled here can send instructions to Orkestr through WhatsApp. They may expose private messages, connected accounts, files, browser sessions, or financial information. Only enable this for people you fully trust.
+                      High risk: when additional participants are enabled, other people in this WhatsApp chat can send instructions to Orkestr. They may expose private messages, connected accounts, files, browser sessions, or financial information. Only enable this for people you fully trust.
                     </p>
                     <label class="checkbox-row settings-toggle">
                       <input name="thread-wa-others-{{ thread.id }}" type="checkbox" [(ngModel)]="whatsappAllowOtherPeople" />
-                      <span>Allow another person in this WhatsApp chat to send instructions</span>
+                      <span>Allow messages from additional chat participants</span>
                     </label>
                     <div class="settings-facts">
-                      <span>Allowed sender</span>
+                      <span>Linked sender account</span>
                       <strong>{{ selectedWhatsAppSenderAccountLabel() }}</strong>
-                      <span>Participants</span>
+                      <span>Other participants</span>
                       <strong>{{ whatsappParticipantsLoading ? "Checking" : (whatsappParticipants.length || "Unavailable") }}</strong>
                     </div>
                     @if (whatsappParticipants.length > 0) {
@@ -779,7 +779,7 @@
                         }
                       </div>
                     } @else if (!whatsappParticipantsLoading) {
-                      <p class="helper">Participant list is unavailable until the selected WhatsApp account is connected and the chat can be inspected.</p>
+                      <p class="helper">The participant list is unavailable until the selected sender account is connected and the chat can be inspected. Orkestr can still listen to the linked sender account.</p>
                     }
                     <div class="settings-actions">
                       <button type="button" (click)="saveThreadBinding(thread)" [disabled]="busy || savingThreadBinding || !threadBindingDirty(thread)">
