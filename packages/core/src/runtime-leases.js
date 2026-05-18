@@ -1061,24 +1061,6 @@ function normalizeNeedInputChoice(value) {
     .toLowerCase();
 }
 
-function isDefaultNeedInputChoice(value) {
-  const answer = normalizeNeedInputChoice(value);
-  if (!answer) return false;
-  return [
-    "default",
-    "defaults",
-    "default pls",
-    "default please",
-    "use default",
-    "use defaults",
-    "recommended",
-    "recommended option",
-    "first",
-    "first option",
-    "option a",
-  ].includes(answer) || /^default\b/.test(answer) || /\brecommended\b/.test(answer);
-}
-
 function parseNeedInputQuestions(text) {
   const questions = [];
   let current = null;
@@ -1114,10 +1096,9 @@ function explicitAnswerForQuestion(answerText, question) {
 
 function optionIndexForQuestionAnswer(question, answerText, questionCount) {
   const explicit = explicitAnswerForQuestion(answerText, question);
-  const fallback = isDefaultNeedInputChoice(answerText) || questionCount === 1 ? answerText : "";
+  const fallback = questionCount === 1 ? answerText : "";
   const answer = normalizeNeedInputChoice(explicit || fallback);
   if (!answer) return null;
-  if (isDefaultNeedInputChoice(answer)) return 0;
   const letter = answer.length === 1 ? answer.toUpperCase() : "";
   for (const [index, option] of question.options.entries()) {
     if (letter && option.letter === letter) return index;
@@ -1176,6 +1157,46 @@ async function sendNeedInputAnswerToPane(thread, message, pendingQuestion, statu
     answeredInputEventId: pendingQuestion.eventId || null,
   }, env);
   return message.id;
+}
+
+function needInputCancelWaitMs(env = process.env) {
+  const parsed = Number(env.ORKESTR_NEED_INPUT_CANCEL_WAIT_MS ?? 500);
+  return Number.isFinite(parsed) ? Math.max(0, parsed) : 500;
+}
+
+function needInputCancelReadyTimeoutMs(env = process.env) {
+  const parsed = Number(env.ORKESTR_NEED_INPUT_CANCEL_READY_TIMEOUT_MS ?? 2000);
+  return Number.isFinite(parsed) ? Math.max(0, parsed) : 2000;
+}
+
+async function cancelNeedInputForRawDelivery(thread, message, pendingQuestion, status, env = process.env) {
+  if (!status?.paneId) return null;
+  await updateThreadMessage(thread.id, message.id, {
+    state: "pending_delivery",
+    deliveryState: "canceling_need_input",
+    deliveryPaneId: status.paneId,
+    runtimeLeaseId: status.lease?.id || null,
+    canceledInputMessageId: pendingQuestion?.id || null,
+    canceledInputEventId: pendingQuestion?.eventId || null,
+    error: null,
+  }, env);
+  await execFileAsync("tmux", ["send-keys", "-t", status.paneId, "Escape"]);
+  await appendEvent({
+    type: "thread_input_need_input_cancelled",
+    threadId: thread.id,
+    messageId: message.id,
+    paneId: status.paneId,
+    canceledInputMessageId: pendingQuestion?.id || null,
+    canceledInputEventId: pendingQuestion?.eventId || null,
+  }, env);
+  const waitMs = needInputCancelWaitMs(env);
+  if (waitMs > 0) await sleep(waitMs);
+  const readyTimeoutMs = needInputCancelReadyTimeoutMs(env);
+  if (readyTimeoutMs <= 0) return status;
+  return await waitForRuntimeReady(thread.id, {
+    ...env,
+    ORKESTR_WAKE_READY_TIMEOUT_MS: String(readyTimeoutMs),
+  }).catch(() => status);
 }
 
 async function sendThreadInputToPane(thread, message, status, env = process.env) {
@@ -1309,6 +1330,7 @@ export async function deliverPendingThreadInputs(threadId, env = process.env) {
         const currentMessages = await listThreadMessages(thread.id, env);
         const currentNext = currentMessages.find((item) => item.id === next.id) || next;
         const pendingNeedInput = latestNeedInputBeforeMessage(currentMessages, currentNext.id);
+        let status = null;
         if (pendingNeedInput) {
           const needInputStatus = await runtimeStatus(thread.id, env, currentMessages).catch(() => null);
           const answered = await sendNeedInputAnswerToPane(thread, currentNext, pendingNeedInput, needInputStatus, env);
@@ -1316,8 +1338,9 @@ export async function deliverPendingThreadInputs(threadId, env = process.env) {
             delivered.push(answered);
             continue;
           }
+          status = await cancelNeedInputForRawDelivery(thread, currentNext, pendingNeedInput, needInputStatus, env);
         }
-        let status = await waitForRuntimeReady(thread.id, env);
+        if (!status) status = await waitForRuntimeReady(thread.id, env);
         const desiredMode = desiredCodexModeValue(thread);
         if (desiredMode) {
           const modeResult = await applyRuntimeCodexMode(thread.id, desiredMode, env).catch(() => null);
@@ -1326,13 +1349,13 @@ export async function deliverPendingThreadInputs(threadId, env = process.env) {
             status = await waitForRuntimeReady(thread.id, env).catch(() => status);
           }
         }
-        const attempt = await sendThreadInputToPane(thread, next, status, env);
-        const acknowledged = await waitForThreadInputAck(thread, next.id, env);
+        const attempt = await sendThreadInputToPane(thread, currentNext, status, env);
+        const acknowledged = await waitForThreadInputAck(thread, currentNext.id, env);
         if (acknowledged) {
           delivered.push(acknowledged);
           continue;
         }
-        const current = (await listThreadMessages(thread.id, env)).find((item) => item.id === next.id) || next;
+        const current = (await listThreadMessages(thread.id, env)).find((item) => item.id === currentNext.id) || currentNext;
         if (await failRejectedThreadInputDelivery(thread, current, status, env)) continue;
         await updateThread(thread.id, { state: "working", lastError: null }, env);
         scheduleThreadInputDelivery(thread.id, env, deliveryDueInMs({ deliveryNextAttemptAt: attempt.nextAttemptAt }));

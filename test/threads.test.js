@@ -610,6 +610,8 @@ test("thread input delivery sends answers to pending Codex plan questions", asyn
       ORKESTR_WAKE_READY_TIMEOUT_MS: "20",
       ORKESTR_DELIVERY_ACK_WAIT_MS: "0",
       ORKESTR_DELIVERY_ACK_BACKOFF_MS: "10000",
+      ORKESTR_NEED_INPUT_CANCEL_WAIT_MS: "0",
+      ORKESTR_NEED_INPUT_CANCEL_READY_TIMEOUT_MS: "0",
     };
     await createThread({ id: "plan-answer-thread", name: "Plan Answer Thread" }, env);
     await wakeThread("plan-answer-thread", { reason: "test" }, env);
@@ -649,6 +651,16 @@ test("thread input delivery sends answers to pending Codex plan questions", asyn
     assert.equal(deliveredAnswer.error, null);
     assert.equal(submitCount, 2);
 
+    await fs.writeFile(captureFile, [
+      "Question 1/1 (1 unanswered)",
+      "What should the current-workspace plan aim to do?",
+      "",
+      "› 1. Preserve Failure Repro (Recommended)  Keep the existing failing test and plan around verifying the failure path.",
+      "  2. Clean Workspace                       Plan removal of repro/cache artifacts and return to a clean baseline.",
+      "  3. Add Tiny Project                      Plan a minimal project scaffold that builds on the current workspace.",
+      "",
+      "tab to add notes | enter to submit answer | esc to interrupt",
+    ].join("\n"), "utf8");
     await appendThreadMessage("plan-answer-thread", {
       role: "assistant",
       source: "codex-rollout",
@@ -675,10 +687,12 @@ test("thread input delivery sends answers to pending Codex plan questions", asyn
 
     assert.equal(deliveredDefaultAnswer.state, "completed");
     assert.equal(deliveredDefaultAnswer.deliveryState, "delivered");
-    assert.equal(deliveredDefaultAnswer.observedVia, "codex_request_user_input");
-    assert.equal(deliveredDefaultAnswer.answeredInputEventId, "need-input-outcome");
+    assert.equal(deliveredDefaultAnswer.observedVia, "runtime_working");
+    assert.equal(deliveredDefaultAnswer.canceledInputEventId, "need-input-outcome");
     assert.equal(deliveredDefaultAnswer.error, null);
     assert.equal(submitCountAfterDefault, 3);
+    assert.match(logAfterDefault, /__CALL__\tsend-keys\t-t\t%42\tEscape/);
+    assert.match(logAfterDefault, /__CALL__\tpaste-buffer\t-b\torkestr-[0-9a-f]+\t-t\t%42/);
   } finally {
     restoreEnvValue("PATH", priorPath);
     restoreEnvValue("TMUX_LOG", priorTmuxLog);
