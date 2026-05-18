@@ -350,6 +350,7 @@ export interface ThreadSummary {
   threadId?: string;
   codexThreadId?: string | null;
   codexMode?: "code" | "plan" | string | null;
+  codexModeLive?: "code" | "plan" | string | null;
   codexModeLabel?: string | null;
   codexModeSource?: string | null;
   codexReasoningEffort?: string | null;

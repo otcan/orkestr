@@ -287,6 +287,9 @@ export async function threadRuntimeSummary(thread: any, messages: any[] = [], op
   const lastActivityAt = latestMessage.lastMessageAt || thread.updatedAt || thread.createdAt || null;
   const pendingQuestion = latestPendingQuestion(messages);
   const resolvedCodexThreadId = codexThreadId(codexThread);
+  const metadata = codexMetadata(codexThread);
+  const liveCodexMode = String(status?.codexMode || "").trim().toLowerCase();
+  const liveCodexModeSource = String(status?.codexModeSource || "").trim();
   const summary = {
     ...thread,
     ...gitState,
@@ -325,7 +328,10 @@ export async function threadRuntimeSummary(thread: any, messages: any[] = [], op
     threadUpdatedAt: thread.updatedAt || lastActivityAt,
     inferredThreadId: resolvedCodexThreadId || null,
     wakePolicy: thread.wakePolicy || "wake-on-message",
-    ...codexMetadata(codexThread),
+    ...metadata,
+    codexMode: liveCodexMode === "code" || liveCodexMode === "plan" ? liveCodexMode : metadata.codexMode,
+    codexModeSource: liveCodexModeSource || metadata.codexModeSource,
+    codexModeLive: liveCodexMode === "code" || liveCodexMode === "plan" ? liveCodexMode : null,
   };
   return summary;
 }

@@ -2391,6 +2391,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
 
   codexModeValue(thread: ThreadSummary | null): string {
     const mode = String(
+      thread?.codexModeLive ||
       thread?.codexMode ||
       thread?.desiredCodexMode ||
       thread?.codexModeLabel ||

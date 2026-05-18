@@ -302,11 +302,14 @@ export async function runtimeStatus(threadId, env = process.env, messagesOverrid
       runningCount,
       wakePolicy: thread.wakePolicy || "wake-on-message",
       hibernated: state === "sleeping",
+      codexMode: null,
+      codexModeSource: null,
     };
   }
 
   const paneId = await resolveLivePaneId(lease, env);
   const paneText = await capturePane(paneId).catch(() => "");
+  const codexMode = codexModeFromPaneText(paneText);
   const needsResumeDirectoryConfirmation = paneResumeDirectoryPrompt(paneText);
   const paneWorkingCandidate = paneWorking(paneText);
   const promptReadyCandidate = !paneWorkingCandidate && panePromptReady(paneText);
@@ -335,6 +338,8 @@ export async function runtimeStatus(threadId, env = process.env, messagesOverrid
     runningCount,
     wakePolicy: thread.wakePolicy || "wake-on-message",
     hibernated: false,
+    codexMode,
+    codexModeSource: codexMode ? "runtime-pane" : null,
   };
 }
 
