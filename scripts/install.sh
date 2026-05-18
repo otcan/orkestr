@@ -7,12 +7,13 @@ Install Orkestr.
 
 Usage:
   scripts/install.sh [--local] [--serve]
-  scripts/install.sh --systemd [--install-dir DIR] [--data-dir DIR] [--workspace-dir DIR] [--env-file FILE] [--user USER]
+  scripts/install.sh --systemd [--auto-update] [--install-dir DIR] [--data-dir DIR] [--workspace-dir DIR] [--env-file FILE] [--user USER]
 
 Modes:
   default       Clone/update the repo, install dependencies, build, and print a start command.
   --local       Use the current checkout instead of cloning.
   --systemd     Install a host-native VPS service. Requires root.
+  --auto-update Install a host-local update watcher timer in --systemd mode.
   --serve       Start npm after a non-systemd install.
 
 Environment:
@@ -25,6 +26,9 @@ Environment:
   ORKESTR_RUN_USER          Service user. Defaults to orkestr with --systemd.
   ORKESTR_HOST              Bind host. Defaults to 127.0.0.1.
   ORKESTR_PORT              Bind port. Defaults to 19812.
+  ORKESTR_AUTO_UPDATE       Install and enable the update watcher. Defaults to 0.
+  ORKESTR_UPDATE_REF        Git branch, tag, or commit watched by the updater. Defaults to main.
+  ORKESTR_UPDATE_INTERVAL_SECONDS  Update check interval. Defaults to 120.
   ORKESTR_INSTALL_CODEX     Install Codex CLI globally in --systemd mode. Defaults to 1.
   ORKESTR_CODEX_VERSION     Codex CLI version. Defaults to 0.130.0.
   ORKESTR_SKIP_SYSTEM_PACKAGES  Skip apt package installation when set to 1.
@@ -41,6 +45,8 @@ env_file="${ORKESTR_ENV_FILE:-}"
 run_user="${ORKESTR_RUN_USER:-orkestr}"
 host="${ORKESTR_HOST:-127.0.0.1}"
 port="${ORKESTR_PORT:-19812}"
+auto_update="${ORKESTR_AUTO_UPDATE:-0}"
+update_interval_seconds="${ORKESTR_UPDATE_INTERVAL_SECONDS:-120}"
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
@@ -54,6 +60,16 @@ while [ "$#" -gt 0 ]; do
       ;;
     --systemd|--vps)
       systemd=1
+      shift
+      ;;
+    --auto-update)
+      auto_update=1
+      ORKESTR_AUTO_UPDATE=1
+      shift
+      ;;
+    --no-auto-update)
+      auto_update=0
+      ORKESTR_AUTO_UPDATE=0
       shift
       ;;
     --install-dir)
@@ -220,6 +236,9 @@ ORKESTR_COOKIE_SECURE=${ORKESTR_COOKIE_SECURE:-0}
 ORKESTR_PUBLIC_HTTPS_URL=${ORKESTR_PUBLIC_HTTPS_URL:-}
 ORKESTR_TAILSCALE_HTTPS_NAME=${ORKESTR_TAILSCALE_HTTPS_NAME:-}
 ORKESTR_CADDY_ENABLED=${ORKESTR_CADDY_ENABLED:-0}
+ORKESTR_AUTO_UPDATE=${ORKESTR_AUTO_UPDATE:-$auto_update}
+ORKESTR_UPDATE_REF=${ORKESTR_UPDATE_REF:-main}
+ORKESTR_UPDATE_INTERVAL_SECONDS=${ORKESTR_UPDATE_INTERVAL_SECONDS:-$update_interval_seconds}
 ORKESTR_RUNTIME_WORKSPACE_ROOT=$workspace_dir
 ORKESTR_CODEX_BIN=${ORKESTR_CODEX_BIN:-codex}
 ORKESTR_RUNTIME_CODEX_COMMAND="${ORKESTR_RUNTIME_CODEX_COMMAND:-codex --dangerously-bypass-approvals-and-sandbox}"
@@ -259,6 +278,23 @@ EOF
   chmod 0755 /usr/local/bin/orkestr
 }
 
+write_update_wrapper() {
+  cat > /usr/local/bin/orkestr-update <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+env_file="${ORKESTR_ENV_FILE:-/etc/orkestr/orkestr.env}"
+if [ -r "$env_file" ]; then
+  set -a
+  # shellcheck disable=SC1090
+  . "$env_file"
+  set +a
+fi
+app_dir="${ORKESTR_APP_DIR:-/opt/orkestr/app}"
+exec bash "$app_dir/scripts/update-watch.sh" "$@"
+EOF
+  chmod 0755 /usr/local/bin/orkestr-update
+}
+
 write_systemd_service() {
   local service_name group_name
   service_name="${ORKESTR_SERVICE_NAME:-orkestr}"
@@ -289,6 +325,41 @@ EOF
   systemctl restart "${service_name}.service"
 }
 
+write_update_units() {
+  local service_name interval
+  service_name="${ORKESTR_UPDATE_SERVICE_NAME:-orkestr-update}"
+  interval="${ORKESTR_UPDATE_INTERVAL_SECONDS:-$update_interval_seconds}"
+  cat > "/etc/systemd/system/${service_name}.service" <<EOF
+[Unit]
+Description=Orkestr host-native update watcher
+Documentation=https://github.com/otcan/orkestr
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+EnvironmentFile=-$env_file
+ExecStart=/usr/local/bin/orkestr-update
+EOF
+
+  cat > "/etc/systemd/system/${service_name}.timer" <<EOF
+[Unit]
+Description=Run the Orkestr update watcher
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=${interval}s
+AccuracySec=15s
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+EOF
+
+  systemctl daemon-reload
+  systemctl enable --now "${service_name}.timer"
+}
+
 install_systemd_runtime() {
   if ! run_as_root; then
     echo "--systemd requires root. Use: curl -fsSL https://raw.githubusercontent.com/otcan/orkestr/main/scripts/install.sh | sudo bash -s -- --systemd" >&2
@@ -302,7 +373,11 @@ install_systemd_runtime() {
   write_env_file
   chgrp "$(id -gn "$run_user")" "$env_file" || true
   write_cli_wrapper
+  write_update_wrapper
   write_systemd_service
+  if [ "${ORKESTR_AUTO_UPDATE:-$auto_update}" = "1" ]; then
+    write_update_units
+  fi
 }
 
 if [ "$systemd" -eq 1 ]; then
@@ -368,10 +443,12 @@ Orkestr host-native service installed.
 Service:
   systemctl status ${ORKESTR_SERVICE_NAME:-orkestr}
   journalctl -u ${ORKESTR_SERVICE_NAME:-orkestr} -f
+  journalctl -u ${ORKESTR_UPDATE_SERVICE_NAME:-orkestr-update} -f
 
 CLI:
   orkestr --help
   orkestr security approve <challenge-id>
+  orkestr-update
 
 Config:
   $env_file
