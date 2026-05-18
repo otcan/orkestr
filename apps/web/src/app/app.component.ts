@@ -1320,6 +1320,22 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     return this.whatsappAccountId(ready || accounts[0] || null) || "account-1";
   }
 
+  selectedWhatsAppAccount(): WhatsAppAccount | null {
+    const selected = this.selectedWhatsAppAccountId();
+    return this.whatsappAccounts().find((account) => this.whatsappAccountId(account) === selected) || null;
+  }
+
+  selectedWhatsAppAccountLabel(): string {
+    const account = this.selectedWhatsAppAccount();
+    return account ? this.whatsappAccountLabel(account) || this.selectedWhatsAppAccountId() : this.selectedWhatsAppAccountId();
+  }
+
+  selectedWhatsAppAccountStateLabel(): string {
+    const account = this.selectedWhatsAppAccount();
+    const state = account ? this.whatsappAccountState(account) : "";
+    return state || String(this.whatsappStatusDetails?.state || "local").trim();
+  }
+
   whatsappAccountQrUrl(): string {
     const selected = this.selectedWhatsAppAccountId();
     const account = this.whatsappAccounts().find((item) => this.whatsappAccountId(item) === selected);
@@ -1352,11 +1368,35 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
 
   whatsappChatDetail(thread: ThreadSummary | null): string {
     const binding = thread?.binding;
-    const chatId = String(binding?.chatId || "").trim();
-    if (!chatId) return "Add a chat id to route WhatsApp messages into this thread.";
-    const state = binding?.enabled === false ? "inbound off" : "inbound on";
-    const mirror = binding?.mirrorToWhatsApp === false ? "WA mirror off" : "WA mirror on";
+    const isDraft = Boolean(thread && this.whatsappBindingThreadId === thread.id);
+    const chatId = isDraft ? this.whatsappChatId.trim() : String(binding?.chatId || "").trim();
+    if (!chatId) return "No WhatsApp chat selected";
+    const state = (isDraft ? this.whatsappBindingEnabled : binding?.enabled !== false) ? "inbound on" : "inbound off";
+    const mirror = (isDraft ? this.whatsappMirrorToWhatsApp : binding?.mirrorToWhatsApp !== false) ? "WA mirror on" : "WA mirror off";
     return `${chatId} · ${state} · ${mirror}`;
+  }
+
+  whatsappDeliveryLabel(thread: ThreadSummary | null): string {
+    if (!thread) return "No thread";
+    const binding = thread.binding || {};
+    const isDraft = this.whatsappBindingThreadId === thread.id;
+    const chatId = isDraft ? this.whatsappChatId.trim() : String(binding.chatId || "").trim();
+    if (!chatId) return "No chat selected";
+    const inbound = isDraft ? this.whatsappBindingEnabled : binding.enabled !== false;
+    const mirror = isDraft ? this.whatsappMirrorToWhatsApp : binding.mirrorToWhatsApp !== false;
+    if (inbound && mirror) return "Inbound and replies";
+    if (inbound) return "Inbound only";
+    if (mirror) return "Replies only";
+    return "Off";
+  }
+
+  whatsappPeopleLabel(thread: ThreadSummary | null): string {
+    if (!thread) return "No thread";
+    const binding = thread.binding || {};
+    const allowPeople = this.whatsappBindingThreadId === thread.id
+      ? this.whatsappAllowOtherPeople
+      : binding.allowOtherPeople !== false;
+    return allowPeople ? "Other people allowed" : "Only selected sender";
   }
 
   showWhatsAppChatIcon(thread: ThreadSummary | null): boolean {

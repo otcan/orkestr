@@ -1647,10 +1647,10 @@ ork-first-thread-wizard.first-thread-host {
   overflow: auto;
 }
 
-.settings-grid {
+.settings-stack {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
   gap: 14px;
+  width: min(980px, 100%);
 }
 
 .settings-card {
@@ -1666,6 +1666,130 @@ ork-first-thread-wizard.first-thread-host {
 .settings-card.danger-card {
   border-color: rgba(255, 122, 89, 0.34);
   background: rgba(31, 9, 6, 0.58);
+}
+
+.wa-settings-card {
+  gap: 16px;
+}
+
+.wa-summary-strip {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 16px;
+  border-top: 1px solid rgba(104, 172, 219, 0.16);
+  border-bottom: 1px solid rgba(104, 172, 219, 0.16);
+  padding: 12px 0;
+}
+
+.wa-summary-strip div {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.wa-summary-strip span,
+.wa-section-head small {
+  color: #91ad8b;
+  font-size: 0.73rem;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.wa-summary-strip strong {
+  min-width: 0;
+  overflow: hidden;
+  color: #ecffea;
+  font-size: 0.92rem;
+  font-weight: 900;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.wa-summary-strip small {
+  min-width: 0;
+  overflow: hidden;
+  color: #b7d4b2;
+  font-family: "IBM Plex Mono", "JetBrains Mono", "SFMono-Regular", Consolas, monospace;
+  font-size: 0.76rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.wa-flow {
+  display: grid;
+  gap: 14px;
+}
+
+.wa-flow-section {
+  display: grid;
+  gap: 10px;
+  border-top: 1px solid rgba(119, 205, 126, 0.12);
+  padding-top: 14px;
+}
+
+.wa-flow-section:first-child {
+  border-top: 0;
+  padding-top: 0;
+}
+
+.wa-section-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.wa-section-head h4 {
+  margin: 0;
+  color: #ecffea;
+  font-size: 0.98rem;
+}
+
+.wa-section-head small {
+  display: block;
+  margin-top: 2px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  text-transform: none;
+  white-space: nowrap;
+}
+
+.wa-step {
+  display: grid;
+  flex: 0 0 auto;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border: 1px solid rgba(119, 205, 126, 0.28);
+  border-radius: 999px;
+  background: rgba(13, 35, 16, 0.88);
+  color: #d9fbd8;
+  font-size: 0.78rem;
+  font-weight: 900;
+}
+
+.wa-toggle-group {
+  display: grid;
+  gap: 8px;
+}
+
+.settings-advanced {
+  display: grid;
+  gap: 10px;
+  border-top: 1px solid rgba(104, 172, 219, 0.14);
+  padding-top: 10px;
+}
+
+.settings-advanced summary {
+  cursor: pointer;
+  color: #c7e8c5;
+  font-size: 0.82rem;
+  font-weight: 900;
+}
+
+.settings-advanced[open] summary {
+  margin-bottom: 2px;
 }
 
 .compact-title {
@@ -2224,9 +2348,9 @@ ork-first-thread-wizard.first-thread-host {
     max-width: 100%;
   }
 
+  .wa-summary-strip,
   .timer-editor,
   .runtime-actions,
-  .settings-grid,
   .workspace-choice-grid,
   .wizard-review {
     grid-template-columns: 1fr;
