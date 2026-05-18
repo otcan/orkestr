@@ -61,6 +61,7 @@ export class OnboardingPageComponent implements OnInit, OnChanges, OnDestroy {
   codexDeviceCode = "";
   codexAuthUrl = "";
   codexAuthExpiresAt = "";
+  codexApiKey = "";
 
   openaiApiKey = "";
   mailProvider: MailProvider = "gmail";
@@ -791,6 +792,21 @@ export class OnboardingPageComponent implements OnInit, OnChanges, OnDestroy {
       this.codexAuthExpiresAt = result.expiresAt || "";
       if (this.codexAuthUrl) globalThis.open?.(this.codexAuthUrl, "_blank", "noopener,noreferrer");
       this.notice = this.codexDeviceCode ? "Codex sign-in opened. Enter the device code in the browser." : "Codex sign-in started.";
+      this.error = "";
+      await this.load(false);
+    } catch (error) {
+      this.error = this.errorText(error);
+    } finally {
+      this.busy = false;
+    }
+  }
+
+  async connectCodexApiKey(): Promise<void> {
+    this.busy = true;
+    try {
+      const result = await firstValueFrom(this.api.loginCodexWithApiKey(this.codexApiKey));
+      this.codexApiKey = "";
+      this.notice = result.message || "Codex API key login completed.";
       this.error = "";
       await this.load(false);
     } catch (error) {

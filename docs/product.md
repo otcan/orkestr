@@ -8,13 +8,17 @@ Run local coding agents with WhatsApp, browser desktops, timers, and inspectable
 
 1. Install Orkestr.
 2. Open `/setup`.
-3. Open Codex sign-in from the setup page.
+3. Connect Codex from the setup page with device authorization or an API key.
 4. Pair WhatsApp 1 with the built-in local bridge.
 5. Prepare the desktop profile.
 6. Create the first coding thread.
 7. Send a task from the web UI, CLI, or WhatsApp.
 8. Inspect the live Codex session from the web cockpit.
 9. Inspect the result and activity log.
+
+Codex must pass `codex login status` before Orkestr wakes a coding thread. If
+the runtime is not signed in, setup stays in `/setup/codex` rather than exposing
+the raw Codex login menu inside a thread.
 
 ## Default Starter
 

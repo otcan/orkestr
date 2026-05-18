@@ -16,7 +16,7 @@ import {
   getWhatsAppStatus,
   routeWhatsAppInbound,
 } from "../../../../../packages/connectors/src/whatsapp.js";
-import { startCodexDeviceAuth } from "../../../../../packages/connectors/src/codex.js";
+import { loginCodexWithApiKey, startCodexDeviceAuth } from "../../../../../packages/connectors/src/codex.js";
 import {
   createLocalWhatsAppChat,
   getLocalWhatsAppBridgeStatus,
@@ -35,6 +35,19 @@ export class ConnectorsController {
   @HttpCode(200)
   async codexDeviceAuth() {
     return startCodexDeviceAuth();
+  }
+
+  @Post("codex/api-key")
+  @HttpCode(200)
+  async codexApiKey(@Body() body: Record<string, unknown> = {}) {
+    const apiKey = String(body.apiKey || body.openaiApiKey || process.env.OPENAI_API_KEY || "").trim();
+    if (!apiKey) throw httpError("openai_api_key_required", 400);
+    try {
+      return await loginCodexWithApiKey(apiKey);
+    } catch (error) {
+      const statusCode = Number((error as any)?.statusCode || 400) || 400;
+      throw httpError(String((error as Error)?.message || "codex_api_key_login_failed"), statusCode);
+    }
   }
 
   @Get("gmail/oauth/start")

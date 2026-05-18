@@ -105,9 +105,12 @@ The Dockerfile uses a multi-stage build:
   compiled NestJS server with `npm start`.
 
 Runtime data is stored in `ORKESTR_HOME`, which defaults to `/data` in the
-container. `CODEX_HOME` defaults to `/data/codex`, so Codex device auth started
-from the setup UI persists in the same Docker volume. Docker settings are read
-from `.env` by Compose; start from `.env.docker.example` for OpenAI,
+container. `CODEX_HOME` defaults to `/data/codex`, so Codex device auth or
+API-key login started from the setup UI persists in the same Docker volume.
+Orkestr checks the real Codex CLI login status before waking a coding runtime;
+an unconfigured runtime sends the user back to `/setup/codex` instead of
+opening the raw Codex login menu in tmux. Docker settings are read from `.env`
+by Compose; start from `.env.docker.example` for OpenAI,
 Tailscale/Caddy, OAuth, workspace, and overlay settings. Private overlays are
 mounted separately with `ORKESTR_OVERLAY_DIR`; do not bake secrets, WhatsApp
 state, browser profiles, or personal prompts into the public image.

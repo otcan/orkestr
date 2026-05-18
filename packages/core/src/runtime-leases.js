@@ -6,6 +6,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { dataPaths, ensureDataDirs } from "../../storage/src/paths.js";
 import { appendEvent, readJson, writeJson } from "../../storage/src/store.js";
+import { assertCodexAuthenticated } from "../../connectors/src/codex.js";
 import {
   appendThreadMessage,
   getThread,
@@ -562,6 +563,24 @@ function runtimeCommand(thread, env = process.env) {
   return threadId ? `${base} resume ${shellQuote(threadId)}` : base;
 }
 
+function commandUsesCodex(command) {
+  return /(^|[/"'\s])codex(["'\s]|$)/.test(String(command || ""));
+}
+
+async function ensureRuntimeCodexAuthenticated(command, env = process.env) {
+  if (!commandUsesCodex(command)) return;
+  const home = runtimeHome(env);
+  await assertCodexAuthenticated({
+    env: {
+      ...process.env,
+      ...env,
+      HOME: home,
+      CODEX_HOME: env.CODEX_HOME || process.env.CODEX_HOME || defaultCodexHome(env),
+    },
+    home,
+  });
+}
+
 export async function wakeThread(threadId, options = {}, env = process.env) {
   const thread = await getThread(threadId, env);
   if (!thread) {
@@ -585,13 +604,14 @@ export async function wakeThread(threadId, options = {}, env = process.env) {
   const workspace = runtimeWorkspace(thread, env);
   await fs.mkdir(workspace, { recursive: true });
   await ensureCodexWorkspaceTrusted(workspace, env);
+  const command = runtimeCommand(thread, env);
+  await ensureRuntimeCodexAuthenticated(command, env);
   await updateThread(thread.id, {
     state: "waking",
     wakePolicy: thread.wakePolicy || "wake-on-message",
     runtime: { state: "waking", sessionName, workspace, reason: options.reason || "wake" },
   }, env);
 
-  const command = runtimeCommand(thread, env);
   if (!(await tmuxHasSession(sessionName))) {
     await execFileAsync("tmux", ["new-session", "-d", "-s", sessionName, "-c", workspace, command], {
       env: {

@@ -42,10 +42,12 @@ Then open:
 http://127.0.0.1:19812/setup
 ```
 
-In setup, choose the Codex workflow and use **Open Codex sign-in**. Orkestr starts
-Codex device authorization inside the container and shows the one-time browser
-code. Runtime state, including Codex auth, is stored in the `orkestr-data`
-Docker volume. Edit `.env` before starting the container to provide OpenAI,
+In setup, choose the Codex workflow and either use **Open Codex sign-in** for
+device authorization or **Connect Codex with API key**. Orkestr checks
+`codex login status` before starting a coding thread, so a raw Codex login menu
+is treated as setup work instead of being opened inside the agent runtime.
+Runtime state, including Codex auth, is stored in the `orkestr-data` Docker
+volume. Edit `.env` before starting the container to provide OpenAI,
 Tailscale/Caddy, OAuth, workspace, or overlay settings.
 
 ### VPS Host-Native

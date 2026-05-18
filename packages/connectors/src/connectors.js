@@ -6,7 +6,7 @@ import { promisify } from "node:util";
 import { readConnectorConfig } from "../../storage/src/config.js";
 import { dataPaths } from "../../storage/src/paths.js";
 import { readOverlay } from "../../core/src/overlay.js";
-import { defaultCodexHome } from "./codex.js";
+import { codexLoginStatus, defaultCodexHome } from "./codex.js";
 import { getWhatsAppStatus } from "./whatsapp.js";
 
 const execFileAsync = promisify(execFile);
@@ -89,7 +89,8 @@ export async function getConnectorStatuses({ env = process.env, home = os.homedi
   const codexHome = defaultCodexHome(env, home);
   const codexAuthPath = path.join(codexHome, "auth.json");
   const chrome = await firstCommandVersion(["google-chrome", "chrome", "chromium", "chromium-browser"]);
-  const codex = await firstCommandVersion(["codex"]);
+  const codex = await firstCommandVersion([String(env.ORKESTR_CODEX_BIN || "codex").trim() || "codex"]);
+  const codexAuth = codex.command ? await codexLoginStatus({ env, home, timeoutMs: 2500 }) : null;
   const timersExist = await pathExists(paths.timers);
   const linkedinProfileExists = await pathExists(path.join(paths.browsers, "linkedin"));
   const gmailProfileExists = await pathExists(path.join(paths.browsers, "gmail"));
@@ -108,19 +109,23 @@ export async function getConnectorStatuses({ env = process.env, home = os.homedi
       ? status("openai", "OpenAI", "connected", "OpenAI key is configured locally.")
       : status("openai", "OpenAI", "not_connected", "Add an OpenAI API key or connect Codex auth."),
     codex:
-      codex.command && (codexAuthExists || codexEnvKey)
-        ? status("codex", "Codex", "connected", codexAuthExists ? "Codex runtime is installed and signed in." : "Codex runtime is installed and will use OPENAI_API_KEY from the runtime env.", {
+      codex.command && codexAuth?.connected
+        ? status("codex", "Codex", "connected", "Codex runtime is installed and signed in.", {
             command: codex.command,
             version: codex.version,
             codexHome,
-            authMode: codexAuthExists ? "device_auth" : "api_key",
+            authMode: codexAuth.authMode || (codexAuthExists ? "device_auth" : "codex_auth"),
+            statusText: codexAuth.statusText,
             dockerRuntime: String(env.ORKESTR_DOCKER || "").trim() === "1",
           })
         : codex.command
-          ? status("codex", "Codex", "partial", "Codex runtime is installed. Sign in from this setup page.", {
+          ? status("codex", "Codex", "partial", codexEnvKey ? "OpenAI key is configured, but Codex CLI is not logged in yet. Connect Codex from this setup page." : "Codex runtime is installed. Sign in from this setup page.", {
               command: codex.command,
               version: codex.version,
               codexHome,
+              authMode: null,
+              statusText: codexAuth?.statusText || "",
+              openaiKeyConfigured: codexEnvKey,
               dockerRuntime: String(env.ORKESTR_DOCKER || "").trim() === "1",
             })
           : status("codex", "Codex", "not_connected", "Codex runtime is missing. Use the Docker image or install Codex in the Orkestr runtime.", {
