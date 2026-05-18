@@ -343,6 +343,13 @@
   margin: 0;
 }
 
+.mail-section-title > div,
+.mail-card-head > div {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
 .mail-section-title small,
 .mail-card small,
 .probe-row small {
@@ -415,6 +422,18 @@
   color: #ffffff;
 }
 
+.mail-provider-switch {
+  display: grid;
+  gap: 8px;
+  justify-items: start;
+}
+
+.mail-provider-switch small,
+.form-section-note {
+  color: #a9bea4;
+  line-height: 1.45;
+}
+
 .mail-card {
   display: grid;
   align-content: start;
@@ -423,6 +442,10 @@
   border-radius: 8px;
   background: rgba(3, 11, 12, 0.44);
   padding: 14px;
+}
+
+.mail-card > strong {
+  display: block;
 }
 
 .mail-card p,

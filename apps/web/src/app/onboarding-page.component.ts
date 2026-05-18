@@ -419,6 +419,18 @@ export class OnboardingPageComponent implements OnInit, OnChanges, OnDestroy {
     return "Use tenant common for personal Microsoft accounts and most self-hosted OSS installs.";
   }
 
+  mailProviderCredentialHint(provider: MailProvider = this.mailProvider): string {
+    if (provider === "gmail") {
+      return "App credentials identify your Google Cloud OAuth client. They are shared by this Orkestr install and are different from the mailbox you sign in with.";
+    }
+    return "App credentials identify your Microsoft Entra app registration. They are shared by this Orkestr install and are different from the mailbox you sign in with.";
+  }
+
+  mailProviderMailboxHint(provider: MailProvider = this.mailProvider): string {
+    const label = this.mailProviderLabel(provider);
+    return `The mailbox field is optional. Use it to label or target a specific ${label} account; the actual account is chosen during sign-in.`;
+  }
+
   mailProviderStatusTitle(provider: MailProvider = this.mailProvider): string {
     const rows = this.mailAccountRows(provider);
     if (rows.length === 1) return rows[0]?.label || rows[0]?.account || `${this.mailProviderLabel(provider)} mailbox`;

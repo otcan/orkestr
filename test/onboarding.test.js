@@ -36,6 +36,9 @@ test("onboarding focuses the first loop on virtual desktop and WhatsApp", async 
   assert.ok(onboarding.includes("Connect ${label}"));
   assert.ok(onboarding.includes("Add another ${label} login"));
   assert.ok(onboarding.includes("already connected in this runtime"));
+  assert.ok(onboarding.includes("Choose which provider to configure next"));
+  assert.ok(onboarding.includes("App credentials identify your Google Cloud OAuth client"));
+  assert.ok(onboarding.includes("The mailbox field is optional"));
   assert.ok(onboarding.includes("mailProviderSummary(mailProvider)"));
   assert.ok(onboarding.includes("mailProviderCredentialState"));
   assert.ok(onboarding.includes("Create a Microsoft app registration"));
