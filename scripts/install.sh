@@ -426,9 +426,9 @@ fi
 cd "$repo_dir"
 
 if [ -f package-lock.json ]; then
-  npm ci
+  npm ci --include=dev
 else
-  npm install
+  npm install --include=dev
 fi
 
 npm run build

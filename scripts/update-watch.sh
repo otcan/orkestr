@@ -134,9 +134,9 @@ echo "Updating Orkestr from $current_ref to $target_ref."
 checkout_target_ref "$update_ref" "$target_ref"
 
 if [ -f package-lock.json ]; then
-  npm ci
+  npm ci --include=dev
 else
-  npm install
+  npm install --include=dev
 fi
 
 npm run build
