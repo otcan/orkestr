@@ -23,6 +23,7 @@ test("install script exposes a host-native systemd VPS path", async () => {
   assert.match(script, /ORKESTR_AUTO_UPDATE/);
   assert.match(script, /ORKESTR_UPDATE_REF/);
   assert.match(script, /ORKESTR_UPDATE_INTERVAL_SECONDS/);
+  assert.match(script, /sqlite3/);
   assert.match(script, /checkout_git_ref/);
   assert.match(script, /remote set-url origin "\$repo_url"/);
   assert.match(script, /write_update_units/);

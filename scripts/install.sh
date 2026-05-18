@@ -141,7 +141,7 @@ apt_install() {
   fi
   if ! have apt-get; then
     echo "Automatic system package install only supports apt-based hosts." >&2
-    echo "Install Node 22, npm, git, tmux, ripgrep, Chromium, and Codex CLI manually, then rerun with ORKESTR_SKIP_SYSTEM_PACKAGES=1." >&2
+    echo "Install Node 22, npm, git, tmux, ripgrep, sqlite3, Chromium, and Codex CLI manually, then rerun with ORKESTR_SKIP_SYSTEM_PACKAGES=1." >&2
     exit 1
   fi
   export DEBIAN_FRONTEND=noninteractive
@@ -184,7 +184,7 @@ install_system_packages() {
   if [ "$systemd" -ne 1 ] || [ "${ORKESTR_SKIP_SYSTEM_PACKAGES:-0}" = "1" ]; then
     return 0
   fi
-  apt_install ca-certificates curl git openssh-client procps ripgrep tmux
+  apt_install ca-certificates curl git openssh-client procps ripgrep sqlite3 tmux
   if ! have chromium && ! have chromium-browser && ! have google-chrome; then
     apt_install chromium
   fi
