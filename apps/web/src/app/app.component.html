@@ -850,12 +850,12 @@
                         [ngModel]="selectedWhatsAppSenderAccountId()"
                         (ngModelChange)="changeWhatsAppSenderAccount($event)"
                       >
-                        @for (account of whatsappAccounts(); track whatsappAccountId(account)) {
+                        @for (account of connectedWhatsAppAccounts(); track whatsappAccountId(account)) {
                           <option [value]="whatsappAccountId(account)">
                             {{ whatsappAccountLabel(account) }} - {{ whatsappAccountState(account) || "idle" }}
                           </option>
                         } @empty {
-                          <option value="account-1">WhatsApp 1 - local</option>
+                          <option value="">Connect WhatsApp in setup</option>
                         }
                       </select>
                     </label>
@@ -884,12 +884,12 @@
                         [ngModel]="selectedWhatsAppAccountId()"
                         (ngModelChange)="changeWhatsAppAccount($event)"
                       >
-                        @for (account of whatsappAccounts(); track whatsappAccountId(account)) {
+                        @for (account of connectedWhatsAppAccounts(); track whatsappAccountId(account)) {
                           <option [value]="whatsappAccountId(account)">
                             {{ whatsappAccountLabel(account) }} - {{ whatsappAccountState(account) || "idle" }}
                           </option>
                         } @empty {
-                          <option value="account-1">WhatsApp 1 - local</option>
+                          <option value="">Connect WhatsApp in setup</option>
                         }
                       </select>
                     </label>
