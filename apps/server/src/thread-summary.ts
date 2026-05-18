@@ -1,3 +1,5 @@
+import { readFile, stat } from "node:fs/promises";
+import path from "node:path";
 import { resolveCodexThreadMetadata, runtimeStatus } from "../../../packages/core/src/runtime-leases.js";
 import { listThreadMessages, listThreads } from "../../../packages/core/src/threads.js";
 import { detectThreadGitState } from "../../../packages/core/src/thread-workers.js";
@@ -124,7 +126,91 @@ function threadSummaryPayloadCacheTtlMs(): number {
   return Number.isFinite(parsed) ? Math.max(0, parsed) : 5000;
 }
 
-function threadMetadataCacheKey(thread: any, status: any): string {
+function nonEmptyString(value: unknown): string {
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function threadCheckoutPath(thread: any, status: any): string {
+  return nonEmptyString(
+    thread?.worktreePath ||
+    thread?.repoPath ||
+    thread?.runtime?.worktreePath ||
+    thread?.runtime?.repoPath ||
+    status?.lease?.workspace ||
+    thread?.runtime?.workspace ||
+    thread?.cwd ||
+    thread?.workspace,
+  );
+}
+
+async function readSmallText(filePath: string): Promise<string> {
+  return await readFile(filePath, "utf8").then((value) => value.trim()).catch(() => "");
+}
+
+async function gitDirs(checkoutPath: string): Promise<{ gitDir: string; commonGitDir: string } | null> {
+  if (!checkoutPath) return null;
+  const dotGit = path.join(checkoutPath, ".git");
+  const dotGitStat = await stat(dotGit).catch(() => null);
+  if (!dotGitStat) return null;
+
+  let gitDir = "";
+  if (dotGitStat.isDirectory()) {
+    gitDir = dotGit;
+  } else if (dotGitStat.isFile()) {
+    const match = (await readSmallText(dotGit)).match(/^gitdir:\s*(.+)$/i);
+    if (match) gitDir = path.resolve(checkoutPath, match[1]);
+  }
+  if (!gitDir) return null;
+
+  const commonDirText = await readSmallText(path.join(gitDir, "commondir"));
+  const commonGitDir = commonDirText ? path.resolve(gitDir, commonDirText) : gitDir;
+  return { gitDir, commonGitDir };
+}
+
+function fullRefName(ref: string, kind: "head" | "remote"): string {
+  const normalized = nonEmptyString(ref);
+  if (!normalized) return "";
+  if (normalized.startsWith("refs/")) return normalized;
+  return kind === "remote" ? `refs/remotes/${normalized}` : `refs/heads/${normalized}`;
+}
+
+async function gitFileToken(filePath: string, includeContents = false): Promise<string> {
+  const fileStat = await stat(filePath).catch(() => null);
+  if (!fileStat) return "";
+  const contents = includeContents && fileStat.size <= 4096 ? await readSmallText(filePath) : "";
+  return `${filePath}:${fileStat.mtimeMs}:${fileStat.size}:${contents}`;
+}
+
+async function threadGitCacheFingerprint(thread: any, status: any): Promise<string> {
+  const checkoutPath = threadCheckoutPath(thread, status);
+  const dirs = await gitDirs(checkoutPath);
+  if (!dirs) return "";
+
+  const headPath = path.join(dirs.gitDir, "HEAD");
+  const headText = await readSmallText(headPath);
+  const headRef = headText.match(/^ref:\s*(.+)$/)?.[1]?.trim() || "";
+  const branchRef = headRef || fullRefName(nonEmptyString(thread?.branchName), "head");
+  const remoteRef = fullRefName(nonEmptyString(thread?.remoteBranch), "remote");
+  const refPaths = [branchRef, remoteRef]
+    .filter(Boolean)
+    .flatMap((ref) => [path.join(dirs.gitDir, ref), path.join(dirs.commonGitDir, ref)]);
+  const tokenPaths = [
+    headPath,
+    path.join(dirs.gitDir, "index"),
+    path.join(dirs.gitDir, "FETCH_HEAD"),
+    path.join(dirs.gitDir, "ORIG_HEAD"),
+    path.join(dirs.commonGitDir, "packed-refs"),
+    ...refPaths,
+  ];
+  const tokens = await Promise.all([...new Set(tokenPaths)].map((filePath) => gitFileToken(filePath, true)));
+  return JSON.stringify({
+    checkoutPath,
+    headText,
+    tokens: tokens.filter(Boolean),
+  });
+}
+
+function threadMetadataCacheKey(thread: any, status: any, gitFingerprint = ""): string {
   const metadata = thread?.executor?.metadata && typeof thread.executor.metadata === "object" ? thread.executor.metadata : {};
   return JSON.stringify({
     id: thread?.id || null,
@@ -137,11 +223,13 @@ function threadMetadataCacheKey(thread: any, status: any): string {
     baseBranch: thread?.baseBranch || null,
     remoteBranch: thread?.remoteBranch || null,
     executorMetadata: metadata,
+    gitFingerprint,
   });
 }
 
 async function cachedThreadMetadata(thread: any, status: any, ttlMs: number) {
-  const cacheKey = ttlMs > 0 ? threadMetadataCacheKey(thread, status) : "";
+  const gitFingerprint = ttlMs > 0 ? await threadGitCacheFingerprint(thread, status).catch(() => "") : "";
+  const cacheKey = ttlMs > 0 ? threadMetadataCacheKey(thread, status, gitFingerprint) : "";
   const cached = ttlMs > 0 ? threadMetadataCache.get(String(thread?.id || "")) : null;
   if (cached && cached.cacheKey === cacheKey && cached.expiresAt > Date.now()) {
     return { gitState: cached.gitState, liveCodexMetadata: cached.liveCodexMetadata };

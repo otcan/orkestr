@@ -1240,11 +1240,15 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     const dirtyFiles = this.threadNumberValue(thread, "gitDirtyFiles");
     const comparison = String(thread.gitComparisonLabel || this.objectValue(thread.runtime, "gitComparisonLabel") || "").trim();
     const isWorkerParentComparison = Boolean(thread.parentThreadId && comparison === "parent");
-    const baseParts: string[] = [];
-    if (Number.isFinite(baseAhead) && baseAhead > 0) baseParts.push(`${baseAhead} commit${baseAhead === 1 ? "" : "s"}`);
-    if (Number.isFinite(changedFiles) && changedFiles > 0) baseParts.push(`${changedFiles} file${changedFiles === 1 ? "" : "s"}`);
-    if (Number.isFinite(dirtyFiles) && dirtyFiles > 0) baseParts.push(`${dirtyFiles} dirty`);
-    if (isWorkerParentComparison && baseParts.length) return `pending worker changes: ${baseParts.join(", ")}`;
+    const changeParts: string[] = [];
+    const localParts: string[] = [];
+    if (Number.isFinite(baseAhead) && baseAhead > 0) changeParts.push(`${baseAhead} commit${baseAhead === 1 ? "" : "s"}`);
+    if (Number.isFinite(changedFiles) && changedFiles > 0) changeParts.push(`${changedFiles} file${changedFiles === 1 ? "" : "s"}`);
+    if (Number.isFinite(dirtyFiles) && dirtyFiles > 0) localParts.push(`${dirtyFiles} file${dirtyFiles === 1 ? "" : "s"}`);
+    if (isWorkerParentComparison && changeParts.length) {
+      const localSuffix = localParts.length ? `, local edits: ${localParts.join(", ")}` : "";
+      return `pending worker changes: ${changeParts.join(", ")}${localSuffix}`;
+    }
     if (
       Number.isFinite(baseAhead) &&
       Number.isFinite(changedFiles) &&
@@ -1255,13 +1259,22 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     ) {
       return isWorkerParentComparison ? "no pending worker commits" : "";
     }
-    if (baseParts.length) {
-      return `diff${comparison ? ` vs ${comparison}` : ""}: ${baseParts.join(", ")}`;
+    const labels: string[] = [];
+    if (comparison && changeParts.length) {
+      labels.push(`changes vs ${comparison}: ${changeParts.join(", ")}`);
+    }
+    if (localParts.length) {
+      labels.push(`local edits: ${localParts.join(", ")}`);
     }
     const ahead = this.threadNumberValue(thread, "gitAhead");
     const behind = this.threadNumberValue(thread, "gitBehind");
-    if (Number.isFinite(ahead) && Number.isFinite(behind) && (ahead > 0 || behind > 0)) return `ahead ${ahead} behind ${behind}`;
-    return "";
+    if (Number.isFinite(ahead) && Number.isFinite(behind) && (ahead > 0 || behind > 0)) {
+      const remoteParts: string[] = [];
+      if (ahead > 0) remoteParts.push(`ahead ${ahead}`);
+      if (behind > 0) remoteParts.push(`behind ${behind}`);
+      labels.push(`remote: ${remoteParts.join(", ")}`);
+    }
+    return labels.join(" · ");
   }
 
   threadMetaDirty(thread: ThreadSummary | null = this.selectedThread()): boolean {

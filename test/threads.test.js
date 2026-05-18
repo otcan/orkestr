@@ -589,6 +589,49 @@ test("root thread git state ignores stale base commit when on its base branch", 
   assert.equal(state.gitChangedFiles, null);
 });
 
+test("thread summary cache refreshes git state when HEAD changes", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-summary-git-home-"));
+  const remote = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-summary-git-remote-"));
+  const repo = await createTempGitRepo("orkestr-thread-summary-git-repo-");
+  await execFileAsync("git", ["init", "--bare"], { cwd: remote });
+  await execFileAsync("git", ["remote", "add", "origin", remote], { cwd: repo });
+  await execFileAsync("git", ["push", "-u", "origin", "main"], { cwd: repo });
+  await createThread({ id: "summary-git-thread", name: "Summary Git Thread", repoPath: repo }, { ORKESTR_HOME: home });
+
+  const priorHome = process.env.ORKESTR_HOME;
+  const priorSummaryCacheTtl = process.env.ORKESTR_THREAD_SUMMARY_CACHE_TTL_MS;
+  const priorPayloadCacheTtl = process.env.ORKESTR_THREAD_SUMMARY_PAYLOAD_CACHE_TTL_MS;
+  process.env.ORKESTR_HOME = home;
+  process.env.ORKESTR_THREAD_SUMMARY_CACHE_TTL_MS = "120000";
+  process.env.ORKESTR_THREAD_SUMMARY_PAYLOAD_CACHE_TTL_MS = "0";
+  const server = await startServer({ port: 0, host: "127.0.0.1" });
+  const { port } = server.address();
+  const baseUrl = `http://127.0.0.1:${port}`;
+  try {
+    const firstPayload = await fetch(`${baseUrl}/api/threads/summary`).then((response) => response.json());
+    const firstSummary = firstPayload.threads.find((thread) => thread.id === "summary-git-thread");
+    assert.equal(firstSummary.gitAhead, 0);
+    assert.equal(firstSummary.gitBehind, 0);
+
+    await fs.writeFile(path.join(repo, "local.txt"), "local change\n", "utf8");
+    await execFileAsync("git", ["add", "local.txt"], { cwd: repo });
+    await execFileAsync("git", ["commit", "-m", "local change"], { cwd: repo });
+
+    const secondPayload = await fetch(`${baseUrl}/api/threads/summary`).then((response) => response.json());
+    const secondSummary = secondPayload.threads.find((thread) => thread.id === "summary-git-thread");
+    assert.equal(secondSummary.gitAhead, 1);
+    assert.equal(secondSummary.gitBehind, 0);
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+    if (priorHome === undefined) delete process.env.ORKESTR_HOME;
+    else process.env.ORKESTR_HOME = priorHome;
+    if (priorSummaryCacheTtl === undefined) delete process.env.ORKESTR_THREAD_SUMMARY_CACHE_TTL_MS;
+    else process.env.ORKESTR_THREAD_SUMMARY_CACHE_TTL_MS = priorSummaryCacheTtl;
+    if (priorPayloadCacheTtl === undefined) delete process.env.ORKESTR_THREAD_SUMMARY_PAYLOAD_CACHE_TTL_MS;
+    else process.env.ORKESTR_THREAD_SUMMARY_PAYLOAD_CACHE_TTL_MS = priorPayloadCacheTtl;
+  }
+});
+
 test("thread workers can be created as blank parallel chats", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-worker-blank-home-"));
   const repo = await createTempGitRepo("orkestr-thread-worker-blank-repo-");
