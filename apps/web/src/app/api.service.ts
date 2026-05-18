@@ -353,6 +353,9 @@ export interface ThreadSummary {
   codexModeLive?: "code" | "plan" | string | null;
   codexModeLabel?: string | null;
   codexModeSource?: string | null;
+  planAvailable?: boolean;
+  planImplementationReady?: boolean;
+  planImplementationMenuVisible?: boolean;
   codexReasoningEffort?: string | null;
   codexModel?: string | null;
   codexModelProvider?: string | null;

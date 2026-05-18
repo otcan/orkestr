@@ -96,6 +96,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   pairingRequired = false;
   sending = false;
   sendingNow = false;
+  implementingPlan = false;
   threadWizardOpen = false;
   onboardingActive = false;
   setupPageMode: SetupPageMode = "setup";
@@ -656,7 +657,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
 
   async sendMessage(): Promise<void> {
     const thread = this.selectedThread();
-    if (!thread || this.sending || this.sendingNow) return;
+    if (!thread || this.sending || this.sendingNow || this.implementingPlan) return;
     const originalText = this.draft.trim();
     if (!originalText && this.pendingFiles.length === 0) return;
     this.sending = true;
@@ -679,7 +680,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
 
   async sendMessageNow(): Promise<void> {
     const thread = this.selectedThread();
-    if (!thread || this.sending || this.sendingNow) return;
+    if (!thread || this.sending || this.sendingNow || this.implementingPlan) return;
     const originalText = this.draft.trim();
     if (!originalText && this.pendingFiles.length === 0) return;
     this.sendingNow = true;
@@ -697,6 +698,22 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
       this.error = this.errorText(error);
     } finally {
       this.sendingNow = false;
+    }
+  }
+
+  async implementPlanSelected(): Promise<void> {
+    const thread = this.selectedThread();
+    if (!thread || this.sending || this.sendingNow || this.implementingPlan) return;
+    this.implementingPlan = true;
+    try {
+      this.markThreadActive(thread.id, 120_000);
+      await firstValueFrom(this.api.sendThreadInput(thread.id, "/implement"));
+      this.queueMessagePaneScrollToBottom();
+      await this.refresh(false);
+    } catch (error) {
+      this.error = this.errorText(error);
+    } finally {
+      this.implementingPlan = false;
     }
   }
 
@@ -2403,6 +2420,27 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     return "";
   }
 
+  showPlanComposerBanner(thread: ThreadSummary | null): boolean {
+    return Boolean(thread && (
+      this.codexModeValue(thread) === "plan" ||
+      thread.planAvailable ||
+      thread.planImplementationReady
+    ));
+  }
+
+  planComposerHint(thread: ThreadSummary | null): string {
+    if (thread?.planImplementationReady) return "A Codex implementation prompt is ready.";
+    if (thread?.planAvailable) return "A proposed plan is available. Use /implement when Codex shows the implementation prompt.";
+    return "Continue planning, answer choices, or use /implement when Codex asks to implement.";
+  }
+
+  composerPlaceholder(thread: ThreadSummary | null): string {
+    if (this.codexModeValue(thread) === "plan" || thread?.planAvailable) {
+      return "Planning mode: answer choices, continue planning, or type /implement";
+    }
+    return thread ? `Message ${this.threadTitle(thread)}` : "Message";
+  }
+
   codexModelName(thread: ThreadSummary | null): string {
     return String(
       thread?.codexModel ||
@@ -2936,6 +2974,10 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
       thread.nextDeliveryAttemptAt || "",
       String(thread.awaitingInput || ""),
       String(thread.awaitingInputEventId || ""),
+      String(thread.codexModeLive || ""),
+      String(thread.planAvailable || ""),
+      String(thread.planImplementationReady || ""),
+      String(thread.planImplementationMenuVisible || ""),
       JSON.stringify(thread.codexTokenUsage || null),
       JSON.stringify(thread.codexRateLimits || null),
     ].join("|");

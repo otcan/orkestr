@@ -2470,6 +2470,55 @@ ork-first-thread-wizard.first-thread-host {
   align-items: end;
 }
 
+.plan-composer-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  border: 1px solid rgba(240, 109, 82, 0.36);
+  border-radius: 8px;
+  background: rgba(83, 23, 17, 0.34);
+  color: #ffd9ca;
+  padding: 9px 10px;
+  margin-bottom: 10px;
+}
+
+.plan-composer-banner.ready {
+  border-color: rgba(240, 109, 82, 0.56);
+  background: rgba(83, 23, 17, 0.48);
+}
+
+.plan-composer-banner strong,
+.plan-composer-banner span {
+  display: block;
+}
+
+.plan-composer-banner strong {
+  color: #fff0e8;
+  font-size: 0.76rem;
+  font-weight: 900;
+  letter-spacing: 0;
+  text-transform: uppercase;
+}
+
+.plan-composer-banner span {
+  font-size: 0.86rem;
+  line-height: 1.35;
+}
+
+.implement-command-button {
+  min-height: 34px;
+  border-color: rgba(255, 190, 174, 0.5);
+  background: #f06d52;
+  color: #210704;
+  font-weight: 900;
+  white-space: nowrap;
+}
+
+.implement-command-button:disabled {
+  opacity: 0.55;
+}
+
 .composer-actions {
   display: grid;
   gap: 8px;
@@ -2588,6 +2637,11 @@ ork-first-thread-wizard.first-thread-host {
 
   .composer-row {
     grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .plan-composer-banner {
+    align-items: stretch;
+    flex-direction: column;
   }
 
   .composer-actions {

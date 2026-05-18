@@ -115,6 +115,18 @@ function latestMessageSummary(messages: any[] = []) {
   };
 }
 
+function latestAssistantPlanAvailable(messages: any[] = []): boolean {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    const role = String(message?.role || message?.kind || "").trim().toLowerCase();
+    const text = String(message?.text || "").trim();
+    if (role !== "assistant" || !text) continue;
+    const phase = String(message?.phase || "").trim().toLowerCase();
+    return phase === "plan" || /<proposed_plan>/i.test(text);
+  }
+  return false;
+}
+
 function codexMetadata(thread: any) {
   const metadata = thread?.executor?.metadata && typeof thread.executor.metadata === "object" ? thread.executor.metadata : {};
   const tokenUsage = thread?.codexTokenUsage || metadata.codexTokenUsage || metadata.tokenUsage || null;
@@ -325,6 +337,7 @@ export async function threadRuntimeSummary(thread: any, messages: any[] = [], op
   const ready = state === "ready";
   const awaitingAckCount = status?.awaitingAckCount ?? 0;
   const latestMessage = latestMessageSummary(messages);
+  const planAvailable = latestAssistantPlanAvailable(messages);
   const lastActivityAt = latestMessage.lastMessageAt || thread.updatedAt || thread.createdAt || null;
   const pendingQuestion = latestPendingQuestion(messages);
   const resolvedCodexThreadId = codexThreadId(codexThread);
@@ -371,6 +384,9 @@ export async function threadRuntimeSummary(thread: any, messages: any[] = [], op
     inferredThreadId: resolvedCodexThreadId || null,
     wakePolicy: thread.wakePolicy || "wake-on-message",
     ...metadata,
+    planAvailable,
+    planImplementationReady: Boolean(status?.planImplementationReady),
+    planImplementationMenuVisible: Boolean(status?.planImplementationMenuVisible),
     codexMode: appliedCodexMode || liveCodexMode || metadata.codexMode,
     codexModeSource: appliedCodexMode ? metadata.codexModeSource : liveCodexModeSource || metadata.codexModeSource,
     codexModeLive: appliedCodexMode || liveCodexMode,

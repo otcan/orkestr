@@ -422,6 +422,8 @@ export class ThreadsController {
         deliveredAt: implemented ? new Date().toISOString() : "",
         error: errorText,
       });
+      const updatedThread = await getThread(thread.id);
+      const updatedMessages = await listThreadMessages(thread.id);
       return {
         ok: implemented,
         implemented,
@@ -433,7 +435,7 @@ export class ThreadsController {
         observed: true,
         observedVia: message.observedVia,
         runtime: result.status || null,
-        thread: await threadRuntimeSummary(await getThread(thread.id), await listThreadMessages(thread.id)),
+        thread: await threadRuntimeSummary(updatedThread || thread, updatedMessages),
       };
     }
     const before = await runtimeStatus(thread.id).catch(() => null);

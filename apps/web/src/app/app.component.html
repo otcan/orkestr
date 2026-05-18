@@ -1119,6 +1119,23 @@
               }
             </div>
           }
+          @if (showPlanComposerBanner(thread)) {
+            <div class="plan-composer-banner" [class.ready]="thread.planImplementationReady">
+              <div>
+                <strong>Planning mode</strong>
+                <span>{{ planComposerHint(thread) }}</span>
+              </div>
+              <button
+                class="implement-command-button"
+                type="button"
+                (click)="implementPlanSelected()"
+                [disabled]="sending || sendingNow || implementingPlan"
+                title="Implement the current Codex plan when the implementation prompt is visible"
+              >
+                {{ implementingPlan ? "Implementing" : "/implement" }}
+              </button>
+            </div>
+          }
           <div class="composer-row">
             <button class="secondary upload-button" type="button" (click)="composerFilePicker.click()" title="Upload files">Upload</button>
             <textarea
@@ -1127,16 +1144,16 @@
               [(ngModel)]="draft"
               (ngModelChange)="persistThreadTextField('draft', $event)"
               (keydown)="handleComposerKeydown($event)"
-              placeholder="Message {{ threadTitle(thread) }}"
+              [placeholder]="composerPlaceholder(thread)"
             ></textarea>
             <div class="composer-actions">
-              <button type="submit" [disabled]="sending || sendingNow || (!draft.trim() && pendingFiles.length === 0)">{{ sending ? "Sending" : "Send" }}</button>
+              <button type="submit" [disabled]="sending || sendingNow || implementingPlan || (!draft.trim() && pendingFiles.length === 0)">{{ sending ? "Sending" : "Send" }}</button>
               <button
                 class="secondary send-now-button"
                 type="button"
                 title="Interrupt the current run and send this message immediately"
                 (click)="sendMessageNow()"
-                [disabled]="sending || sendingNow || (!draft.trim() && pendingFiles.length === 0)"
+                [disabled]="sending || sendingNow || implementingPlan || (!draft.trim() && pendingFiles.length === 0)"
               >
                 {{ sendingNow ? "Sending now" : "Send Now" }}
               </button>
