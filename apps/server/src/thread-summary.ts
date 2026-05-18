@@ -36,6 +36,26 @@ function messageCursor(message: any, index: number): number {
   return Number(message?.cursor || 0) || index + 1;
 }
 
+function messageTimestampMs(message: any): number {
+  const ms = Date.parse(String(message?.timestamp || message?.createdAt || ""));
+  return Number.isFinite(ms) ? ms : 0;
+}
+
+function compareMessagesByTime(left: { message: any; index: number }, right: { message: any; index: number }): number {
+  const leftMs = messageTimestampMs(left.message);
+  const rightMs = messageTimestampMs(right.message);
+  if (leftMs && rightMs && leftMs !== rightMs) return leftMs - rightMs;
+  if (leftMs !== rightMs) return leftMs - rightMs;
+  return messageCursor(left.message, left.index) - messageCursor(right.message, right.index);
+}
+
+function latestStoredMessage(messages: any[] = []) {
+  return messages
+    .map((message, index) => ({ message, index }))
+    .sort(compareMessagesByTime)
+    .at(-1)?.message || null;
+}
+
 const needInputPhases = new Set(["need_input", "awaiting_input", "question", "request_user_input"]);
 
 function isNeedInputMessage(message: any): boolean {
@@ -72,7 +92,7 @@ function latestPendingQuestion(messages: any[] = []) {
 }
 
 function latestMessageSummary(messages: any[] = []) {
-  const message = messages.at(-1);
+  const message = latestStoredMessage(messages);
   if (!message) {
     return {
       lastMessageAt: null,

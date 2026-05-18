@@ -40,6 +40,24 @@ function messageCursor(message: any, index: number): number {
   return Number(message?.cursor || 0) || index + 1;
 }
 
+function messageTimestampMs(message: any): number {
+  const ms = Date.parse(String(message?.timestamp || message?.createdAt || ""));
+  return Number.isFinite(ms) ? ms : 0;
+}
+
+function chronologicalMessages(messages: any[] = []) {
+  return messages
+    .map((message, index) => ({ message, index }))
+    .sort((left, right) => {
+      const leftMs = messageTimestampMs(left.message);
+      const rightMs = messageTimestampMs(right.message);
+      if (leftMs && rightMs && leftMs !== rightMs) return leftMs - rightMs;
+      if (leftMs !== rightMs) return leftMs - rightMs;
+      return messageCursor(left.message, left.index) - messageCursor(right.message, right.index);
+    })
+    .map(({ message }) => message);
+}
+
 const needInputPhases = new Set(["need_input", "awaiting_input", "question", "request_user_input"]);
 
 function shouldInterruptRuntime(status: Record<string, any> | null | undefined): boolean {
@@ -252,8 +270,9 @@ function messagePage(thread: any, rawMessages: any[] = [], query: Record<string,
   const before = Math.max(0, Number.parseInt(String(query.before || "0"), 10) || 0);
   const requestedLimit = Math.max(0, Number.parseInt(String(query.limit || "0"), 10) || 0);
   const limit = requestedLimit ? Math.min(requestedLimit, 100) : 100;
-  const pendingQuestion = latestPendingQuestion(rawMessages);
-  let messages = dedupeDisplayMessages(rawMessages.map(bridgeMessage).filter((message) => message.text));
+  const orderedMessages = chronologicalMessages(rawMessages);
+  const pendingQuestion = latestPendingQuestion(orderedMessages);
+  let messages = dedupeDisplayMessages(orderedMessages.map(bridgeMessage).filter((message) => message.text));
   if (since > 0) messages = messages.filter((message) => Number(message.cursor || 0) > since);
   if (before > 0) messages = messages.filter((message) => Number(message.cursor || 0) < before);
   messages = messages.slice(-limit);
@@ -636,7 +655,7 @@ export class ThreadsController {
   async history(@Param("threadId") threadId: string) {
     const thread = await getThread(threadId);
     if (!thread) throw httpError("thread_not_found", 404);
-    const messages = await listThreadMessages(thread.id);
+    const messages = chronologicalMessages(await listThreadMessages(thread.id));
     return {
       thread,
       orkestrThreadId: thread.id,

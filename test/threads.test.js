@@ -1661,6 +1661,108 @@ test("thread runtime sync surfaces Codex plan questions as pending input", async
   }
 });
 
+test("thread runtime sync catches recent rollout replies that predate wake cursor", async (t) => {
+  try {
+    await execFileAsync("sqlite3", ["--version"]);
+  } catch {
+    t.skip("sqlite3 unavailable");
+    return;
+  }
+
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-rollout-lookback-"));
+  const fakeTmux = await createFakeTmux(home);
+  const codexHome = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-codex-rollout-lookback-"));
+  const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-codex-lookback-workspace-"));
+  const codexThreadId = "33333333-3333-4333-8333-333333333333";
+  const rolloutPath = path.join(codexHome, "sessions", "rollout-lookback.jsonl");
+  await fs.mkdir(path.dirname(rolloutPath), { recursive: true });
+  const replyText = "Yes, I tried it live on TEST, and this approach works.";
+  await fs.writeFile(rolloutPath, [
+    JSON.stringify({
+      timestamp: "2026-05-18T06:53:36.976Z",
+      type: "event_msg",
+      payload: { type: "agent_message", message: replyText, phase: "final_answer" },
+    }),
+    JSON.stringify({
+      timestamp: "2026-05-18T06:53:36.977Z",
+      type: "response_item",
+      payload: {
+        type: "message",
+        role: "assistant",
+        content: [{ type: "output_text", text: replyText }],
+        phase: "final_answer",
+      },
+    }),
+    "",
+  ].join("\n"), "utf8");
+  const nowMs = Date.now();
+  await execFileAsync("sqlite3", [path.join(codexHome, "state_5.sqlite"), [
+    "create table threads (id text primary key, rollout_path text not null, created_at integer not null, updated_at integer not null, source text not null, model_provider text not null, cwd text not null, title text not null, sandbox_policy text not null, approval_mode text not null, tokens_used integer not null default 0, archived integer not null default 0, model text, reasoning_effort text, created_at_ms integer, updated_at_ms integer);",
+    `insert into threads (id, rollout_path, created_at, updated_at, source, model_provider, cwd, title, sandbox_policy, approval_mode, tokens_used, archived, model, reasoning_effort, created_at_ms, updated_at_ms) values (${sqlQuote(codexThreadId)}, ${sqlQuote(rolloutPath)}, ${Math.floor(nowMs / 1000)}, ${Math.floor(nowMs / 1000)}, 'codex', 'openai', ${sqlQuote(workspace)}, 'Lookback Thread', 'workspace-write', 'never', 0, 0, 'gpt-test-codex', 'medium', ${nowMs}, ${nowMs});`,
+  ].join("\n")]);
+
+  const priorPath = process.env.PATH;
+  const priorTmuxLog = process.env.TMUX_LOG;
+  const priorTmuxState = process.env.TMUX_STATE;
+  process.env.PATH = `${fakeTmux.bin}:${priorPath || ""}`;
+  process.env.TMUX_LOG = fakeTmux.log;
+  process.env.TMUX_STATE = fakeTmux.state;
+
+  try {
+    const env = {
+      ORKESTR_HOME: path.join(home, "orkestr-home"),
+      HOME: path.join(home, "runtime-home"),
+      CODEX_HOME: codexHome,
+      PATH: process.env.PATH,
+      TMUX_LOG: fakeTmux.log,
+      TMUX_STATE: fakeTmux.state,
+      ORKESTR_ROLLOUT_SYNC_LOOKBACK_BYTES: "8192",
+    };
+    await createThread({
+      id: "rollout-lookback-thread",
+      name: "Rollout Lookback Thread",
+      cwd: workspace,
+      executor: { type: "codex", codexThreadId },
+    }, env);
+    const inbound = await appendThreadMessage("rollout-lookback-thread", {
+      role: "user",
+      source: "whatsapp_inbound",
+      connector: "whatsapp",
+      chatId: "120000000000000000@g.us",
+      accountId: "account-1",
+      text: "stop. Can you try this?",
+      createdAt: "2026-05-18T06:52:05.972Z",
+    }, env);
+    await appendThreadMessage("rollout-lookback-thread", {
+      role: "assistant",
+      source: "codex-rollout",
+      phase: "commentary",
+      text: "Newer visible progress.",
+      createdAt: "2026-05-18T07:00:00.000Z",
+    }, env);
+
+    await wakeThread("rollout-lookback-thread", { reason: "test" }, env);
+    await syncRuntimeLeases(env);
+    await syncRuntimeLeases(env);
+    const messages = await listThreadMessages("rollout-lookback-thread", env);
+    const replies = messages.filter((message) => message.role === "assistant" && message.text === replyText);
+    const thread = (await listThreads(env)).find((item) => item.id === "rollout-lookback-thread");
+    const summary = await threadRuntimeSummary(thread, messages);
+
+    assert.equal(replies.length, 1);
+    assert.equal(replies[0].createdAt, "2026-05-18T06:53:36.977Z");
+    assert.equal(replies[0].parentMessageId, inbound.id);
+    assert.equal(replies[0].connector, "whatsapp");
+    assert.equal(replies[0].chatId, "120000000000000000@g.us");
+    assert.equal(summary.lastMessageAt, "2026-05-18T07:00:00.000Z");
+    assert.equal(summary.lastMessagePhase, "commentary");
+  } finally {
+    restoreEnvValue("PATH", priorPath);
+    restoreEnvValue("TMUX_LOG", priorTmuxLog);
+    restoreEnvValue("TMUX_STATE", priorTmuxState);
+  }
+});
+
 test("thread APIs create, queue, run, and list messages", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-api-"));
   const priorHome = process.env.ORKESTR_HOME;

@@ -23,6 +23,7 @@ const pendingInputStates = new Set(["queued", "pending_delivery", "awaiting_ack"
 const needInputPhases = new Set(["need_input", "awaiting_input", "question", "request_user_input"]);
 const deliveryRetryDefaultsMs = [1000, 3000, 8000, 20_000, 60_000];
 const defaultRuntimeIdleSleepMs = 15 * 60 * 1000;
+const defaultRolloutSyncLookbackBytes = 2 * 1024 * 1024;
 
 function nowIso() {
   return new Date().toISOString();
@@ -50,6 +51,12 @@ function runtimeIdleSleepMs(env = process.env) {
   const raw = String(env.ORKESTR_RUNTIME_IDLE_SLEEP_MS ?? "").trim().toLowerCase();
   if (["0", "off", "false", "disabled"].includes(raw)) return 0;
   return positiveNumber(raw) || defaultRuntimeIdleSleepMs;
+}
+
+function rolloutSyncLookbackBytes(env = process.env) {
+  const raw = String(env.ORKESTR_ROLLOUT_SYNC_LOOKBACK_BYTES ?? "").trim().toLowerCase();
+  if (["0", "off", "false", "disabled"].includes(raw)) return 0;
+  return Math.floor(positiveNumber(raw) || defaultRolloutSyncLookbackBytes);
 }
 
 function safeName(value) {
@@ -122,6 +129,29 @@ function eventId({ threadId = "", timestamp = "", role = "", phase = "", text = 
 
 function normalizedTextKey(value) {
   return String(value || "").replace(/\s+/g, " ").trim();
+}
+
+function rolloutMessageEventKey(message) {
+  return [
+    message.eventId || "",
+    message.role,
+    String(message.phase || ""),
+    normalizedTextKey(message.text),
+  ].join("\n");
+}
+
+function rolloutMessageTimestampBucket(message) {
+  const ms = timestampMs(message.timestamp || message.createdAt);
+  return ms > 0 ? Math.floor(ms / 5000) : "";
+}
+
+function rolloutMessageNearTextKey(message) {
+  return [
+    message.role,
+    String(message.phase || ""),
+    normalizedTextKey(message.text),
+    rolloutMessageTimestampBucket(message),
+  ].join("\n");
 }
 
 async function runtimeLeasesPath(env) {
@@ -506,11 +536,18 @@ async function resolveCodexThreadByWorkspace(workspace, startedAt, env = process
   return null;
 }
 
-async function rolloutOffsetForThread(thread) {
+async function rolloutOffsetForThread(thread, env = process.env) {
   const rolloutPath = await resolveCodexRolloutPath(codexThreadId(thread));
   if (!rolloutPath) return { rolloutPath: null, rolloutOffset: 0 };
   const stats = await fs.stat(rolloutPath).catch(() => null);
-  return { rolloutPath, rolloutOffset: stats?.size || 0 };
+  const size = Number(stats?.size || 0) || 0;
+  const lookbackBytes = rolloutSyncLookbackBytes(env);
+  return {
+    rolloutPath,
+    rolloutOffset: Math.max(0, size - lookbackBytes),
+    rolloutOffsetLookbackApplied: lookbackBytes > 0,
+    rolloutOffsetLookbackBytes: lookbackBytes,
+  };
 }
 
 function runtimeWorkspace(thread, env) {
@@ -568,7 +605,12 @@ export async function wakeThread(threadId, options = {}, env = process.env) {
   const windowName = tmuxWindowName(thread);
   await renameTmuxWindow(sessionName, windowName).catch(() => {});
   const paneId = await tmuxPaneId(sessionName).catch(() => null);
-  const { rolloutPath, rolloutOffset } = await rolloutOffsetForThread(thread);
+  const {
+    rolloutPath,
+    rolloutOffset,
+    rolloutOffsetLookbackApplied,
+    rolloutOffsetLookbackBytes,
+  } = await rolloutOffsetForThread(thread, env);
   const lease = {
     id: crypto.randomUUID(),
     threadId: thread.id,
@@ -589,6 +631,8 @@ export async function wakeThread(threadId, options = {}, env = process.env) {
     heartbeatAt: nowIso(),
     rolloutPath,
     rolloutOffset,
+    rolloutOffsetLookbackApplied,
+    rolloutOffsetLookbackBytes,
   };
   const leases = await listRuntimeLeases(env);
   leases.push(lease);
@@ -1554,11 +1598,13 @@ function parseAssistantRolloutMessages(body, threadId, baseOffset = 0) {
   return messages.map(({ sourceFormat, ...message }) => message);
 }
 
-function latestWhatsAppInput(messages = []) {
+function latestWhatsAppInput(messages = [], beforeTimestamp = null) {
+  const beforeMs = beforeTimestamp ? timestampMs(beforeTimestamp) : 0;
   return [...messages].reverse().find((message) =>
     message?.role === "user" &&
     (message.connector === "whatsapp" || message.source === "whatsapp_inbound") &&
-    String(message.chatId || "").trim(),
+    String(message.chatId || "").trim() &&
+    (!beforeMs || timestampMs(message.timestamp || message.createdAt) <= beforeMs + 1000),
   ) || null;
 }
 
@@ -1590,14 +1636,27 @@ async function syncLeaseRollout(lease, env = process.env) {
     if (!rolloutPath) return { lease, appended: 0 };
   }
   const stats = await fs.stat(rolloutPath).catch(() => null);
-  if (!stats || Number(stats.size || 0) <= Number(lease.rolloutOffset || 0)) {
+  if (!stats) {
     return { lease: { ...lease, rolloutPath }, appended: 0 };
   }
-  const start = Math.max(0, Number(lease.rolloutOffset || 0));
+  const size = Number(stats.size || 0) || 0;
+  const savedOffset = Math.max(0, Number(lease.rolloutOffset || 0));
+  const lookbackBytes = rolloutSyncLookbackBytes(env);
+  const scannedLookbackBytes = Number(lease.rolloutOffsetLookbackBytes || 0) || 0;
+  const needsLookbackScan =
+    lookbackBytes > 0 &&
+    !lease.rolloutOffsetLookbackApplied &&
+    (!lease.rolloutLookbackScannedAt || scannedLookbackBytes < lookbackBytes);
+  if (size <= savedOffset && !needsLookbackScan) {
+    return { lease: { ...lease, rolloutPath }, appended: 0 };
+  }
+  const start = needsLookbackScan
+    ? Math.max(0, Math.min(savedOffset, size) - lookbackBytes)
+    : Math.min(savedOffset, size);
   const handle = await fs.open(rolloutPath, "r");
   let body = "";
   try {
-    const buffer = Buffer.alloc(Number(stats.size) - start);
+    const buffer = Buffer.alloc(size - start);
     const { bytesRead } = await handle.read(buffer, 0, buffer.length, start);
     body = buffer.subarray(0, bytesRead).toString("utf8");
   } finally {
@@ -1605,34 +1664,52 @@ async function syncLeaseRollout(lease, env = process.env) {
   }
   const parsed = parseAssistantRolloutMessages(body, lease.threadId, start);
   const existing = await listThreadMessages(lease.threadId, env);
-  const existingKeys = new Set(existing.map((message) => [
-    message.eventId || "",
-    message.role,
-    String(message.phase || ""),
-    String(message.text || "").replace(/\s+/g, " ").trim(),
-  ].join("\n")));
-  const whatsappParent = latestWhatsAppInput(existing);
+  const existingEventKeys = new Set(existing.map(rolloutMessageEventKey));
+  const existingTextKeys = new Set(
+    existing
+      .filter((message) => message.source === "codex-rollout" && message.role === "assistant")
+      .map(rolloutMessageNearTextKey),
+  );
   let appended = 0;
   for (const message of parsed) {
-    const key = [message.eventId || "", message.role, String(message.phase || ""), message.text.replace(/\s+/g, " ").trim()].join("\n");
-    if (existingKeys.has(key)) continue;
+    const eventKey = rolloutMessageEventKey(message);
+    const textKey = rolloutMessageNearTextKey(message);
+    if (existingEventKeys.has(eventKey) || existingTextKeys.has(textKey)) continue;
+    const whatsappParent = latestWhatsAppInput(existing, message.timestamp);
     await appendThreadMessage(lease.threadId, {
       role: "assistant",
       source: message.source,
       text: message.text,
       state: "completed",
       cursor: null,
+      timestamp: message.timestamp,
       phase: message.phase,
       eventId: message.eventId,
       parentMessageId: whatsappParent?.id || null,
       connector: whatsappParent ? "whatsapp" : "",
       chatId: whatsappParent?.chatId || "",
       accountId: whatsappParent?.accountId || "",
-      }, env);
-    existingKeys.add(key);
+    }, env);
+    existingEventKeys.add(eventKey);
+    existingTextKeys.add(textKey);
     appended += 1;
   }
-  return { lease: { ...lease, rolloutPath, rolloutOffset: Number(stats.size || 0), heartbeatAt: nowIso() }, appended };
+  return {
+    lease: {
+      ...lease,
+      rolloutPath,
+      rolloutOffset: Math.max(savedOffset, size),
+      heartbeatAt: nowIso(),
+      ...(needsLookbackScan
+        ? {
+          rolloutLookbackScannedAt: nowIso(),
+          rolloutLookbackScannedFrom: start,
+          rolloutOffsetLookbackBytes: lookbackBytes,
+        }
+        : {}),
+    },
+    appended,
+  };
 }
 
 async function syncRuntimeLeasesOnce(env = process.env) {
