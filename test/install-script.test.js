@@ -17,6 +17,7 @@ test("install script exposes a host-native systemd VPS path", async () => {
   assert.match(script, /\/etc\/orkestr\/orkestr\.env/);
   assert.match(script, /\/usr\/local\/bin\/orkestr/);
   assert.match(script, /\/usr\/local\/bin\/orkestr-update/);
+  assert.match(script, /ORKESTR_RUN_USER=\$run_user/);
   assert.match(script, /\$\{service_name\}\.service/);
   assert.match(script, /--auto-update/);
   assert.match(script, /ORKESTR_GIT_REF/);
@@ -24,6 +25,7 @@ test("install script exposes a host-native systemd VPS path", async () => {
   assert.match(script, /ORKESTR_UPDATE_REF/);
   assert.match(script, /ORKESTR_UPDATE_INTERVAL_SECONDS/);
   assert.match(script, /sqlite3/);
+  assert.match(script, /util-linux/);
   assert.match(script, /checkout_git_ref/);
   assert.match(script, /remote set-url origin "\$repo_url"/);
   assert.match(script, /write_update_units/);
@@ -32,6 +34,8 @@ test("install script exposes a host-native systemd VPS path", async () => {
   assert.match(script, /npm ci --include=dev/);
   assert.match(script, /npm install --include=dev/);
   assert.match(script, /npm install -g "@openai\/codex@\$\{ORKESTR_CODEX_VERSION:-0\.130\.0\}"/);
+  assert.match(script, /runuser -u "\$run_user" --preserve-environment -- node/);
+  assert.match(script, /ORKESTR_CLI_RUN_AS_ROOT/);
   assert.match(script, /ExecStart=\/usr\/local\/bin\/orkestr serve/);
   assert.match(script, /ExecStart=\/usr\/local\/bin\/orkestr-update/);
   assert.match(script, /systemctl restart "\$\{service_name\}\.service"/);

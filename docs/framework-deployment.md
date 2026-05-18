@@ -78,6 +78,11 @@ orkestr security approve <challenge-id>
 orkestr security challenges
 ```
 
+The generated `/usr/local/bin/orkestr` wrapper can be run from a root SSH
+session. It switches to `ORKESTR_RUN_USER` before reading or writing local
+Orkestr state, which keeps `ORKESTR_HOME` owned by the same user that runs
+`orkestr.service`.
+
 ## On-Box Update Watcher
 
 For a personal VPS, prefer a small host-local updater over an external deploy

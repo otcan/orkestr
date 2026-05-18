@@ -141,7 +141,7 @@ apt_install() {
   fi
   if ! have apt-get; then
     echo "Automatic system package install only supports apt-based hosts." >&2
-    echo "Install Node 22, npm, git, tmux, ripgrep, sqlite3, Chromium, and Codex CLI manually, then rerun with ORKESTR_SKIP_SYSTEM_PACKAGES=1." >&2
+    echo "Install Node 22, npm, git, tmux, ripgrep, runuser, sqlite3, Chromium, and Codex CLI manually, then rerun with ORKESTR_SKIP_SYSTEM_PACKAGES=1." >&2
     exit 1
   fi
   export DEBIAN_FRONTEND=noninteractive
@@ -184,7 +184,7 @@ install_system_packages() {
   if [ "$systemd" -ne 1 ] || [ "${ORKESTR_SKIP_SYSTEM_PACKAGES:-0}" = "1" ]; then
     return 0
   fi
-  apt_install ca-certificates curl git openssh-client procps ripgrep sqlite3 tmux
+  apt_install ca-certificates curl git openssh-client procps ripgrep sqlite3 tmux util-linux
   if ! have chromium && ! have chromium-browser && ! have google-chrome; then
     apt_install chromium
   fi
@@ -229,6 +229,7 @@ write_env_file() {
 # Edit this file for OpenAI keys, OAuth credentials, Caddy/Tailscale URLs, and private overlay paths.
 ORKESTR_APP_DIR=$repo_dir
 ORKESTR_HOME=$data_dir
+ORKESTR_RUN_USER=$run_user
 ORKESTR_HOST=$host
 ORKESTR_PORT=$port
 ORKESTR_AUTH_REQUIRED=${ORKESTR_AUTH_REQUIRED:-1}
@@ -273,6 +274,22 @@ if [ -r "$env_file" ]; then
   set +a
 fi
 app_dir="${ORKESTR_APP_DIR:-/opt/orkestr/app}"
+run_user="${ORKESTR_RUN_USER:-}"
+if [ -z "$run_user" ] && command -v systemctl >/dev/null 2>&1; then
+  run_user="$(systemctl show -p User --value "${ORKESTR_SERVICE_NAME:-orkestr}.service" 2>/dev/null || true)"
+fi
+run_user="${run_user:-orkestr}"
+if [ "$(id -u)" -eq 0 ] && [ "${ORKESTR_CLI_RUN_AS_ROOT:-0}" != "1" ] && id "$run_user" >/dev/null 2>&1; then
+  if ! command -v runuser >/dev/null 2>&1; then
+    echo "Missing required command: runuser" >&2
+    exit 1
+  fi
+  run_home="$(getent passwd "$run_user" | cut -d: -f6)"
+  export HOME="${run_home:-${ORKESTR_HOME:-/opt/orkestr/home}}"
+  export USER="$run_user"
+  export LOGNAME="$run_user"
+  exec runuser -u "$run_user" --preserve-environment -- node "$app_dir/apps/cli/bin/orkestr-oss.js" "$@"
+fi
 exec node "$app_dir/apps/cli/bin/orkestr-oss.js" "$@"
 EOF
   chmod 0755 /usr/local/bin/orkestr

@@ -73,6 +73,10 @@ journalctl -u orkestr -f
 orkestr security approve <challenge-id>
 ```
 
+The host CLI is safe to run from a root SSH session. It drops to the
+configured `ORKESTR_RUN_USER` before touching Orkestr state, so files under
+`ORKESTR_HOME` remain writable by `orkestr.service`.
+
 Edit `/etc/orkestr/orkestr.env` for OpenAI, OAuth, Caddy/Tailscale HTTPS, and private overlay settings. Keep the service bound to `127.0.0.1` and put Caddy/Tailscale in front before remote browser access.
 
 ### On-Box Update Watcher
