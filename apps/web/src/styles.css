@@ -411,6 +411,17 @@ textarea:focus {
   background: rgba(52, 128, 58, 0.46);
 }
 
+.thread-item.error:not(.active) {
+  border-color: rgba(240, 109, 82, 0.34);
+  background: rgba(83, 23, 17, 0.18);
+  box-shadow: inset 3px 0 0 rgba(240, 109, 82, 0.76);
+}
+
+.thread-item.error.active {
+  border-color: rgba(240, 109, 82, 0.72);
+  box-shadow: inset 3px 0 0 #f06d52;
+}
+
 .worker-tree {
   display: grid;
   gap: 5px;
@@ -574,6 +585,12 @@ textarea:focus {
   max-width: none;
   text-transform: uppercase;
   animation: processing-badge-pulse 1.2s ease-in-out infinite;
+}
+
+.error-badge {
+  border-color: rgba(240, 109, 82, 0.52);
+  background: rgba(240, 109, 82, 0.9);
+  color: #1a0703;
 }
 
 .git-badge {

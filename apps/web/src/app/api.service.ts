@@ -286,6 +286,8 @@ export interface ThreadSummary {
   lastMessageRole?: string | null;
   lastMessagePhase?: string | null;
   lastMessageState?: string | null;
+  lastMessageDeliveryState?: string | null;
+  lastMessageError?: string | null;
   threadUpdatedAt?: string;
   updatedAt?: string;
   createdAt?: string;

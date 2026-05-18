@@ -74,3 +74,19 @@ test("chat messages show delivery failure reasons", async () => {
   assert.ok(sources.includes("Delivery failed"));
   assert.ok(sources.includes(".message-failure"));
 });
+
+test("sidebar marks latest delivery failures as errors", async () => {
+  const sources = await read([
+    "apps/web/src/app/app.component.ts",
+    "apps/web/src/app/app.component.html",
+    "apps/web/src/styles.css",
+    "apps/server/src/thread-summary.ts",
+  ]);
+
+  assert.ok(sources.includes("lastMessageDeliveryState"));
+  assert.ok(sources.includes("lastMessageError"));
+  assert.ok(sources.includes("isThreadLatestMessageFailed(thread, true)"));
+  assert.ok(sources.includes("ERROR"));
+  assert.ok(sources.includes(".error-badge"));
+  assert.ok(sources.includes(".thread-item.error"));
+});

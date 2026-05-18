@@ -1862,7 +1862,8 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     return thread.parentThreadId ? worktreePath || repoPath : repoPath || worktreePath;
   }
 
-  statusLabel(thread: ThreadSummary): string {
+  statusLabel(thread: ThreadSummary, includeFamily = false): string {
+    if (this.isThreadLatestMessageFailed(thread, includeFamily)) return "Error";
     if (this.isThreadProcessing(thread)) return this.threadProcessingLabel(thread);
     const state = String(thread.publicStatus || thread.status || thread.state || "unknown");
     if (state === "ready") return "Ready";
@@ -1871,7 +1872,8 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     return state.replace(/_/g, " ");
   }
 
-  statusClass(thread: ThreadSummary): string {
+  statusClass(thread: ThreadSummary, includeFamily = false): string {
+    if (this.isThreadLatestMessageFailed(thread, includeFamily)) return "bad";
     if (this.isThreadProcessing(thread)) return "hot";
     const state = String(thread.publicStatusCode || thread.status || thread.state || "").toLowerCase();
     if (state.includes("broken") || state.includes("failed")) return "bad";
@@ -1969,6 +1971,17 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     return this.isThreadUnreadAssistantFinal(thread, includeFamily) ? "ANSWER" : "UPDATES";
   }
 
+  isThreadLatestMessageFailed(thread: ThreadSummary | null, includeFamily = false): boolean {
+    const latest = this.latestMessageThread(thread, includeFamily);
+    return latest ? this.threadOwnLatestMessageFailed(latest) : false;
+  }
+
+  threadFailureTitle(thread: ThreadSummary | null, includeFamily = false): string {
+    const latest = this.latestMessageThread(thread, includeFamily);
+    if (!latest || !this.threadOwnLatestMessageFailed(latest)) return "";
+    return this.threadLatestMessageError(latest) || "Last message was not delivered.";
+  }
+
   threadTimerCount(thread: ThreadSummary): number {
     return this.familyTimers(thread).length;
   }
@@ -2028,21 +2041,56 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
       .sort((a, b) => this.activityMs(b) - this.activityMs(a))[0] || null;
   }
 
+  private latestMessageThread(thread: ThreadSummary | null, includeFamily: boolean): ThreadSummary | null {
+    if (!thread) return null;
+    const candidates = includeFamily ? [thread, ...this.childWorkers(thread)] : [thread];
+    return candidates
+      .filter((candidate) => this.latestThreadMessageMs(candidate) > 0)
+      .sort((a, b) => this.latestThreadMessageMs(b) - this.latestThreadMessageMs(a))[0] || thread;
+  }
+
   private latestCachedThreadMessage(thread: ThreadSummary): ThreadMessage | null {
     return (this.messageCache()[thread.id] || []).at(-1) || null;
   }
 
+  private latestCachedThreadMessageIsCurrent(thread: ThreadSummary, message: ThreadMessage | null): boolean {
+    if (!message) return false;
+    const cachedMs = Date.parse(String(message.timestamp || message.createdAt || ""));
+    const summaryMs = Date.parse(String(thread.lastMessageAt || ""));
+    if (!Number.isFinite(summaryMs)) return true;
+    if (!Number.isFinite(cachedMs)) return false;
+    return cachedMs >= summaryMs;
+  }
+
   private latestThreadMessageMs(thread: ThreadSummary): number {
     const message = this.latestCachedThreadMessage(thread);
-    const value = message?.timestamp || message?.createdAt || thread.lastMessageAt || "";
+    const value = this.latestCachedThreadMessageIsCurrent(thread, message)
+      ? message?.timestamp || message?.createdAt || thread.lastMessageAt || ""
+      : thread.lastMessageAt || "";
     const ms = Date.parse(String(value));
     return Number.isFinite(ms) ? ms : 0;
   }
 
+  private threadOwnLatestMessageFailed(thread: ThreadSummary): boolean {
+    const message = this.latestCachedThreadMessage(thread);
+    if (this.latestCachedThreadMessageIsCurrent(thread, message)) {
+      return String(message?.state || "").toLowerCase() === "failed";
+    }
+    return String(thread.lastMessageState || "").toLowerCase() === "failed" ||
+      String(thread.lastMessageDeliveryState || "").toLowerCase() === "failed";
+  }
+
+  private threadLatestMessageError(thread: ThreadSummary): string {
+    const message = this.latestCachedThreadMessage(thread);
+    if (this.latestCachedThreadMessageIsCurrent(thread, message)) return String(message?.error || "").trim();
+    return String(thread.lastMessageError || "").trim();
+  }
+
   private latestThreadMessageIsFinalAssistant(thread: ThreadSummary): boolean {
     const message = this.latestCachedThreadMessage(thread);
-    const role = String(message?.role || thread.lastMessageRole || "").trim().toLowerCase();
-    const phase = String(message?.phase || thread.lastMessagePhase || (role === "assistant" ? "final_answer" : "")).trim().toLowerCase();
+    const currentMessage = this.latestCachedThreadMessageIsCurrent(thread, message) ? message : null;
+    const role = String(currentMessage?.role || thread.lastMessageRole || "").trim().toLowerCase();
+    const phase = String(currentMessage?.phase || thread.lastMessagePhase || (role === "assistant" ? "final_answer" : "")).trim().toLowerCase();
     return this.isFinalAssistantRolePhase(role, phase);
   }
 
@@ -2589,6 +2637,9 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
       thread.state || "",
       thread.status || "",
       thread.publicStatusCode || "",
+      thread.lastMessageState || "",
+      thread.lastMessageDeliveryState || "",
+      thread.lastMessageError || "",
       thread.pendingCount ?? "",
       thread.runningCount ?? "",
       thread.awaitingAckCount ?? "",

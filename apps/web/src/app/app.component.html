@@ -33,6 +33,7 @@
             [href]="threadUrl(thread)"
             [class.active]="isSelected(thread)"
             [class.processing]="isThreadProcessing(thread)"
+            [class.error]="isThreadLatestMessageFailed(thread, true)"
             (click)="selectThread(thread, $event)"
           >
             <span class="thread-leading">
@@ -48,15 +49,15 @@
                     </span>
                   }
                 </span>
-                <span class="status-dot avatar-status" [class]="statusClass(thread)"></span>
+                <span class="status-dot avatar-status" [class]="statusClass(thread, true)"></span>
               } @else {
-                <span class="status-dot" [class]="statusClass(thread)"></span>
+                <span class="status-dot" [class]="statusClass(thread, true)"></span>
               }
             </span>
             <span class="thread-text">
               <strong>{{ threadTitle(thread) }}</strong>
               <small>
-                {{ statusLabel(thread) }} · {{ activityTime(thread) | date: "MMM d, HH:mm" }}
+                {{ statusLabel(thread, true) }} · {{ activityTime(thread) | date: "MMM d, HH:mm" }}
               </small>
               @if (threadBranchLabel(thread)) {
                 <small class="thread-branch-label">{{ threadBranchLabel(thread) }}</small>
@@ -81,7 +82,10 @@
                   (keydown.space)="openGitDetails(thread, $event)"
                 >{{ syncingThreadId === thread.id ? "..." : threadGitBadgeLabel(thread) }}</span>
               }
-              @if (isThreadFamilyUnread(thread)) {
+              @if (isThreadLatestMessageFailed(thread, true)) {
+                <span class="pending error-badge" [title]="threadFailureTitle(thread, true)">ERROR</span>
+              }
+              @if (isThreadFamilyUnread(thread) && !isThreadLatestMessageFailed(thread, true)) {
                 <span
                   class="pending unread-badge"
                   [class.assistant-final]="isThreadUnreadAssistantFinal(thread, true)"
@@ -111,6 +115,7 @@
                   [href]="threadUrl(worker)"
                   [class.active]="isSelected(worker)"
                   [class.processing]="isThreadProcessing(worker)"
+                  [class.error]="isThreadLatestMessageFailed(worker)"
                   (click)="selectThread(worker, $event)"
                 >
                   <span class="thread-leading">
@@ -159,7 +164,10 @@
                         (keydown.space)="openGitDetails(worker, $event)"
                       >{{ syncingThreadId === worker.id ? "..." : threadGitBadgeLabel(worker) }}</span>
                     }
-                    @if (isThreadUnread(worker)) {
+                    @if (isThreadLatestMessageFailed(worker)) {
+                      <span class="pending error-badge" [title]="threadFailureTitle(worker)">ERROR</span>
+                    }
+                    @if (isThreadUnread(worker) && !isThreadLatestMessageFailed(worker)) {
                       <span
                         class="pending unread-badge"
                         [class.assistant-final]="isThreadUnreadAssistantFinal(worker)"

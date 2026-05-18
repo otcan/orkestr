@@ -6,6 +6,7 @@ import test from "node:test";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { startServer } from "../apps/server/src/server.js";
+import { threadRuntimeSummary } from "../apps/server/src/thread-summary.ts";
 import { runNextThreadMessage } from "../packages/core/src/executors.js";
 import { deliverPendingThreadInputs, drainAllPendingThreadInputs, listRuntimeLeases, runtimeStatus, sleepThread, syncRuntimeLeases, syncRuntimeWindowName, wakeThread } from "../packages/core/src/runtime-leases.js";
 import { parseThreadInputCommand } from "../packages/core/src/thread-commands.js";
@@ -546,6 +547,54 @@ test("runtime monitor fails awaiting inputs when Codex rejects a literal slash c
   }
 });
 
+test("runtime monitor fails awaiting inputs when Codex rejects a punctuated slash command", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-monitor-rejected-punctuation-"));
+  const fakeTmux = await createFakeTmux(home);
+  const captureFile = path.join(home, "pane.txt");
+  const priorPath = process.env.PATH;
+  const priorTmuxLog = process.env.TMUX_LOG;
+  const priorTmuxState = process.env.TMUX_STATE;
+  const priorCaptureFile = process.env.TMUX_CAPTURE_FILE;
+  process.env.PATH = `${fakeTmux.bin}:${priorPath || ""}`;
+  process.env.TMUX_LOG = fakeTmux.log;
+  process.env.TMUX_STATE = fakeTmux.state;
+  process.env.TMUX_CAPTURE_FILE = captureFile;
+
+  try {
+    await fs.writeFile(captureFile, "Unrecognized command '/now?'. Type \"/\" for a list of supported commands.\n\u203a \n", "utf8");
+    const env = {
+      ORKESTR_HOME: path.join(home, "orkestr-home"),
+      HOME: path.join(home, "runtime-home"),
+      CODEX_HOME: path.join(home, "codex-home"),
+      PATH: process.env.PATH,
+      TMUX_LOG: fakeTmux.log,
+      TMUX_STATE: fakeTmux.state,
+      TMUX_CAPTURE_FILE: captureFile,
+    };
+    await createThread({ id: "monitor-rejected-punctuation-thread", name: "Monitor Rejected Punctuation Thread" }, env);
+    await wakeThread("monitor-rejected-punctuation-thread", { reason: "test" }, env);
+    const input = await enqueueThreadInput("monitor-rejected-punctuation-thread", { text: "/now?" }, env);
+    await updateThreadMessage("monitor-rejected-punctuation-thread", input.id, {
+      state: "awaiting_ack",
+      deliveryState: "awaiting_ack",
+      deliveryAttempt: 1,
+      deliveryPaneId: "%42",
+    }, env);
+
+    await syncRuntimeLeases(env);
+    const messages = await listThreadMessages("monitor-rejected-punctuation-thread", env);
+
+    assert.equal(messages[0].state, "failed");
+    assert.equal(messages[0].deliveryState, "failed");
+    assert.match(messages[0].error, /Unrecognized command '\/now\?'/);
+  } finally {
+    restoreEnvValue("PATH", priorPath);
+    restoreEnvValue("TMUX_LOG", priorTmuxLog);
+    restoreEnvValue("TMUX_STATE", priorTmuxState);
+    restoreEnvValue("TMUX_CAPTURE_FILE", priorCaptureFile);
+  }
+});
+
 test("thread workers create a git worktree-backed child thread without resuming the parent Codex thread", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-worker-home-"));
   const repo = await createTempGitRepo();
@@ -892,6 +941,25 @@ test("thread repo metadata can be saved as first-class thread state", async () =
   assert.equal(result.repo.remoteBranch, "origin/main");
   assert.equal(result.repo.branchName, "main");
   assert.match(result.thread.baseCommit, /^[0-9a-f]{40}$/);
+});
+
+test("thread summary exposes latest delivery failure details", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-summary-failure-home-"));
+  const env = { ORKESTR_HOME: home };
+  const thread = await createThread({ id: "summary-failure-thread", name: "Summary Failure Thread" }, env);
+  await appendThreadMessage("summary-failure-thread", {
+    role: "user",
+    text: "/now failed",
+    state: "failed",
+    deliveryState: "failed",
+    error: "Codex rejected /now.",
+  }, env);
+
+  const summary = await threadRuntimeSummary(thread, await listThreadMessages(thread.id, env));
+
+  assert.equal(summary.lastMessageState, "failed");
+  assert.equal(summary.lastMessageDeliveryState, "failed");
+  assert.equal(summary.lastMessageError, "Codex rejected /now.");
 });
 
 test("thread input commands strip /now before runtime delivery", () => {

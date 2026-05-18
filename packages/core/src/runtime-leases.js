@@ -781,7 +781,7 @@ function escapeRegex(value) {
 }
 
 function leadingSlashCommand(message) {
-  const match = inputTextForMessage(message).trimStart().match(/^(\/[a-z][a-z0-9_-]*)(?:\b|$)/i);
+  const match = inputTextForMessage(message).trimStart().match(/^(\/\S+)/);
   return match ? match[1].toLowerCase() : "";
 }
 

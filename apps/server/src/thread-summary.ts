@@ -79,6 +79,8 @@ function latestMessageSummary(messages: any[] = []) {
       lastMessageRole: null,
       lastMessagePhase: null,
       lastMessageState: null,
+      lastMessageDeliveryState: null,
+      lastMessageError: null,
     };
   }
   const role = String(message?.role || message?.kind || "").trim().toLowerCase() || null;
@@ -88,6 +90,8 @@ function latestMessageSummary(messages: any[] = []) {
     lastMessageRole: role,
     lastMessagePhase: phase,
     lastMessageState: String(message?.state || "").trim().toLowerCase() || null,
+    lastMessageDeliveryState: String(message?.deliveryState || "").trim().toLowerCase() || null,
+    lastMessageError: String(message?.error || "").trim() || null,
   };
 }
 
