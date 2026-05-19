@@ -6,6 +6,8 @@ import { appendEvent, readJson, writeJson } from "../../storage/src/store.js";
 import { listThreadRecords, saveThreadRecords } from "../../storage/src/thread-registry.js";
 
 const runningThreadIds = new Set();
+const activeInputStates = new Set(["queued", "pending_delivery", "awaiting_ack", "running"]);
+const whatsappSources = new Set(["whatsapp", "whatsapp_inbound", "whatsapp_client"]);
 
 function safeThreadId(threadId) {
   return String(threadId || "").replace(/[^a-zA-Z0-9_.-]/g, "_") || "default";
@@ -242,13 +244,56 @@ export async function appendThreadMessage(threadId, input, env = process.env) {
   }
   messages.push(message);
   await writeJson(await messagesPath(thread.id, env), messages);
-  const activeInputStates = new Set(["queued", "pending_delivery", "awaiting_ack", "running"]);
   await updateThread(thread.id, { state: activeInputStates.has(message.state) ? message.state : thread.state }, env);
   await appendEvent({ type: `thread_message_${message.state}`, threadId: thread.id, messageId: message.id, source: message.source, role: message.role }, env);
   return message;
 }
 
+function compactInputText(value) {
+  return String(value || "").replace(/\s+/g, " ").trim();
+}
+
+function whatsappOrigin(input = {}) {
+  return String(input.connector || "").trim().toLowerCase() === "whatsapp" ||
+    whatsappSources.has(String(input.source || "").trim().toLowerCase());
+}
+
+function sameOptionalMessageField(existing, input, key) {
+  const left = String(existing?.[key] || "").trim();
+  const right = String(input?.[key] || "").trim();
+  return !left || !right || left === right;
+}
+
+async function activeDuplicateThreadInput(threadId, input, env = process.env) {
+  if (!whatsappOrigin(input)) return null;
+  const text = compactInputText(input.text);
+  const promptFile = String(input.promptFile || "").trim();
+  if (!text && !promptFile) return null;
+  const messages = await listThreadMessages(threadId, env);
+  return [...messages].reverse().find((message) =>
+    message.role === "user" &&
+    activeInputStates.has(message.state) &&
+    whatsappOrigin(message) &&
+    compactInputText(message.text) === text &&
+    String(message.promptFile || "").trim() === promptFile &&
+    sameOptionalMessageField(message, input, "chatId") &&
+    sameOptionalMessageField(message, input, "from") &&
+    sameOptionalMessageField(message, input, "accountId")
+  ) || null;
+}
+
 export async function enqueueThreadInput(threadId, input, env = process.env) {
+  const duplicate = await activeDuplicateThreadInput(threadId, input, env);
+  if (duplicate) {
+    await appendEvent({
+      type: "thread_input_duplicate_suppressed",
+      threadId,
+      messageId: duplicate.id,
+      source: input.source || "",
+      connector: input.connector || "",
+    }, env);
+    return { ...duplicate, duplicate: true, duplicateReason: "active_input" };
+  }
   return appendThreadMessage(threadId, {
     ...input,
     role: "user",

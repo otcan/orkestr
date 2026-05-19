@@ -27,6 +27,7 @@ const proposedPlanOpenTagPattern = /^\s*<\s*proposed[\s_-]*plan\s*>/i;
 const deliveryRetryDefaultsMs = [1000, 3000, 8000, 20_000, 60_000];
 const defaultRuntimeIdleSleepMs = 15 * 60 * 1000;
 const defaultRolloutSyncLookbackBytes = 2 * 1024 * 1024;
+const whatsappSources = new Set(["whatsapp", "whatsapp_inbound", "whatsapp_client"]);
 
 function nowIso() {
   return new Date().toISOString();
@@ -38,6 +39,11 @@ function sleep(ms) {
 
 function isoAfter(ms) {
   return new Date(Date.now() + Math.max(0, ms)).toISOString();
+}
+
+function whatsappOrigin(message = {}) {
+  return String(message.connector || "").trim().toLowerCase() === "whatsapp" ||
+    whatsappSources.has(String(message.source || "").trim().toLowerCase());
 }
 
 function positiveNumber(value) {
@@ -763,7 +769,7 @@ export async function sleepThread(threadId, options = {}, env = process.env) {
 }
 
 async function completeStopCommand(thread, message, env = process.env) {
-  const stopped = await sleepThread(thread.id, { reason: message.source === "whatsapp_inbound" ? "whatsapp_stop_command" : "stop_command", kill: true }, env);
+  const stopped = await sleepThread(thread.id, { reason: whatsappOrigin(message) ? "whatsapp_stop_command" : "stop_command", kill: true }, env);
   const updated = await updateThreadMessage(thread.id, message.id, {
     state: "completed",
     deliveryState: "delivered",
@@ -1026,7 +1032,7 @@ function inputTextForMessage(message) {
   if (message.promptFile) {
     body = text ? `${text}\n\nPrompt file: ${message.promptFile}` : `Run the prompt file: ${message.promptFile}`;
   }
-  if (message.connector === "whatsapp" || message.source === "whatsapp_inbound") {
+  if (whatsappOrigin(message)) {
     const source = String(message.from || message.chatId || "WhatsApp").trim();
     return `[WhatsApp: ${source}]\n\n${body}`;
   }
@@ -1096,6 +1102,11 @@ function deliveryDueInMs(message) {
   const dueMs = Date.parse(message?.deliveryNextAttemptAt || "");
   if (!Number.isFinite(dueMs) || dueMs <= 0) return 0;
   return Math.max(0, dueMs - Date.now());
+}
+
+function staleAckRecoveryAttempts(env = process.env) {
+  const parsed = Number(env.ORKESTR_DELIVERY_STALE_ACK_RECOVERY_ATTEMPTS ?? 3);
+  return Number.isFinite(parsed) ? Math.max(0, parsed) : 3;
 }
 
 function compactDeliveryText(value) {
@@ -1202,6 +1213,41 @@ async function failThreadInputDelivery(thread, message, evidence, status, env = 
 
 async function failRejectedThreadInputDelivery(thread, message, status, env = process.env) {
   return failThreadInputDelivery(thread, message, await rejectedCommandDeliveryEvidence(message, status), status, env);
+}
+
+async function recoverStaleThreadInputAck(thread, message, status, env = process.env) {
+  const threshold = staleAckRecoveryAttempts(env);
+  if (!threshold || deliveryAttempt(message) < threshold) return false;
+  if (!status?.paneId || !status.promptReady || status.working) return false;
+  const paneText = await capturePane(status.paneId, 40).catch(() => "");
+  if (paneContainsDeliveryText(paneText, inputTextForMessage(message))) return false;
+  const rolloutPath = String(
+    message.deliveryRolloutPath ||
+    status?.lease?.rolloutPath ||
+    thread?.codexRolloutPath ||
+    thread?.executor?.metadata?.codexRolloutPath ||
+    "",
+  ).trim();
+  if (rolloutPath) {
+    const stats = await fs.stat(rolloutPath).catch(() => null);
+    const sentOffset = Number(message.deliveryRolloutOffset || 0) || 0;
+    if (Number(stats?.size || 0) > sentOffset) return false;
+  }
+  await updateThreadMessage(thread.id, message.id, {
+    state: "queued",
+    deliveryState: "recovering_stale_ack",
+    deliveryNextAttemptAt: null,
+    error: null,
+  }, env);
+  await appendEvent({
+    type: "thread_input_stale_ack_recovery",
+    threadId: thread.id,
+    messageId: message.id,
+    paneId: status.paneId,
+    attempt: deliveryAttempt(message),
+  }, env);
+  await sleepThread(thread.id, { reason: "stale_delivery_ack", kill: true }, env).catch(() => {});
+  return true;
 }
 
 async function acknowledgeThreadInputDelivery(thread, message, status, env = process.env) {
@@ -1513,6 +1559,7 @@ export async function deliverPendingThreadInputs(threadId, env = process.env) {
           scheduleThreadInputDelivery(thread.id, env, deliveryDueInMs({ deliveryNextAttemptAt: nextAttemptAt }));
           break;
         }
+        if (await recoverStaleThreadInputAck(thread, awaitingAck, status, env)) continue;
       }
 
       const next = messages.find((message) => message.role === "user" && ["queued", "pending_delivery", "awaiting_ack"].includes(message.state));
@@ -1708,7 +1755,7 @@ function latestWhatsAppInput(messages = [], beforeTimestamp = null) {
   const beforeMs = beforeTimestamp ? timestampMs(beforeTimestamp) : 0;
   return [...messages].reverse().find((message) =>
     message?.role === "user" &&
-    (message.connector === "whatsapp" || message.source === "whatsapp_inbound") &&
+    whatsappOrigin(message) &&
     String(message.chatId || "").trim() &&
     (!beforeMs || timestampMs(message.timestamp || message.createdAt) <= beforeMs + 1000),
   ) || null;

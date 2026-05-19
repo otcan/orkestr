@@ -390,6 +390,7 @@ export async function routeWhatsAppInbound(input = {}, env = process.env) {
   const message = threadId
     ? await enqueueThreadInput(threadId, messageInput, env)
     : await enqueueAgentMessage(agentId, messageInput, env);
+  const contentDuplicate = Boolean(message.duplicate);
   const event = {
     eventId,
     agentId: agentId || null,
@@ -399,11 +400,20 @@ export async function routeWhatsAppInbound(input = {}, env = process.env) {
     from,
     receivedAt: pickString(input.timestamp, input.receivedAt) || new Date().toISOString(),
   };
+  if (contentDuplicate) event.duplicateReason = message.duplicateReason || "active_input";
   state.inboundEvents = [...(state.inboundEvents || []), event];
   await writeWhatsAppState(state, env);
-  await appendEvent({ type: "whatsapp_inbound_routed", eventId, agentId: agentId || null, threadId: threadId || null, messageId: message.id, chatId }, env);
+  await appendEvent({
+    type: contentDuplicate ? "whatsapp_inbound_duplicate" : "whatsapp_inbound_routed",
+    eventId,
+    agentId: agentId || null,
+    threadId: threadId || null,
+    messageId: message.id,
+    chatId,
+    duplicateReason: contentDuplicate ? event.duplicateReason : "",
+  }, env);
   return {
-    duplicate: false,
+    duplicate: contentDuplicate,
     event,
     agentId: agentId || null,
     threadId: threadId || null,

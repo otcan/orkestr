@@ -898,6 +898,57 @@ test("thread input delivery waits for runtime acknowledgement before completing"
   }
 });
 
+test("thread input delivery recovers a stale ready awaiting-ack runtime", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-stale-ack-recovery-"));
+  const fakeTmux = await createFakeTmux(home);
+  const captureFile = path.join(home, "pane.txt");
+  const priorPath = process.env.PATH;
+  const priorTmuxLog = process.env.TMUX_LOG;
+  const priorTmuxState = process.env.TMUX_STATE;
+  const priorCaptureFile = process.env.TMUX_CAPTURE_FILE;
+  process.env.PATH = `${fakeTmux.bin}:${priorPath || ""}`;
+  process.env.TMUX_LOG = fakeTmux.log;
+  process.env.TMUX_STATE = fakeTmux.state;
+  process.env.TMUX_CAPTURE_FILE = captureFile;
+
+  try {
+    await fs.writeFile(captureFile, "\u203a \n", "utf8");
+    const env = {
+      ORKESTR_HOME: path.join(home, "orkestr-home"),
+      HOME: path.join(home, "runtime-home"),
+      CODEX_HOME: path.join(home, "codex-home"),
+      PATH: process.env.PATH,
+      TMUX_LOG: fakeTmux.log,
+      TMUX_STATE: fakeTmux.state,
+      TMUX_CAPTURE_FILE: captureFile,
+      ORKESTR_DELIVERY_ACK_WAIT_MS: "0",
+      ORKESTR_DELIVERY_ACK_BACKOFF_MS: "10000",
+      ORKESTR_DELIVERY_STALE_ACK_RECOVERY_ATTEMPTS: "2",
+    };
+    await createThread({ id: "stale-ack-thread", name: "Stale Ack Thread" }, env);
+    const input = await enqueueThreadInput("stale-ack-thread", { text: "hello stale ack" }, env);
+
+    assert.deepEqual(await deliverPendingThreadInputs("stale-ack-thread", env), []);
+    await updateThreadMessage("stale-ack-thread", input.id, { deliveryNextAttemptAt: new Date(Date.now() - 1000).toISOString() }, env);
+    assert.deepEqual(await deliverPendingThreadInputs("stale-ack-thread", env), []);
+    await updateThreadMessage("stale-ack-thread", input.id, { deliveryNextAttemptAt: new Date(Date.now() - 1000).toISOString() }, env);
+    assert.deepEqual(await deliverPendingThreadInputs("stale-ack-thread", env), []);
+
+    const messages = await listThreadMessages("stale-ack-thread", env);
+    const log = await fs.readFile(fakeTmux.log, "utf8");
+
+    assert.equal(messages[0].state, "awaiting_ack");
+    assert.equal(messages[0].deliveryAttempt, 3);
+    assert.match(log, /__CALL__\tkill-session\t-t\torkestr-stale-ack-thread/);
+    assert.match(log, /__CALL__\tnew-session/);
+  } finally {
+    restoreEnvValue("PATH", priorPath);
+    restoreEnvValue("TMUX_LOG", priorTmuxLog);
+    restoreEnvValue("TMUX_STATE", priorTmuxState);
+    restoreEnvValue("TMUX_CAPTURE_FILE", priorCaptureFile);
+  }
+});
+
 test("thread input delivery sends oversized messages through a temp file", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-delivery-long-input-"));
   const fakeTmux = await createFakeTmux(home);

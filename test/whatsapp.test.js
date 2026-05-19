@@ -280,6 +280,25 @@ test("whatsapp inbound can route directly to a thread and mirror its reply once"
   assert.equal(calls[0].body.to, "chat-thread");
 });
 
+test("whatsapp inbound suppresses duplicate active thread inputs by content", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-thread-active-duplicate-"));
+  const env = { ORKESTR_HOME: home };
+  await createThread({ id: "thread-wa-active-duplicate", name: "WA Active Duplicate Thread" }, env);
+  await writeConnectorConfig("whatsapp", {
+    threadRoutes: { "chat-active-duplicate": "thread-wa-active-duplicate" },
+  }, env);
+
+  const first = await routeWhatsAppInbound({ eventId: "wa-active-1", chatId: "chat-active-duplicate", from: "sender-1", text: "same queued work" }, env);
+  const second = await routeWhatsAppInbound({ eventId: "wa-active-2", chatId: "chat-active-duplicate", from: "sender-1", text: "same queued work" }, env);
+  const messages = await listThreadMessages("thread-wa-active-duplicate", env);
+
+  assert.equal(first.duplicate, false);
+  assert.equal(second.duplicate, true);
+  assert.equal(second.event.messageId, first.message.id);
+  assert.equal(messages.length, 1);
+  assert.equal(messages[0].state, "queued");
+});
+
 test("whatsapp delivery translates markdown into chat-friendly formatting", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-markdown-reply-"));
   const env = { ORKESTR_HOME: home };
