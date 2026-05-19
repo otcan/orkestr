@@ -42,6 +42,10 @@ schedules, thread targets, prompt files, stale due timers, and recorded delivery
 errors. `orkestr timers` lists timers, and `orkestr timers run <id>` queues one
 immediately.
 
+Both doctor commands support `--json` for scripts. They exit non-zero only when
+the reported status is `broken`; warnings stay visible but do not block local
+setup.
+
 Attach keeps the backing tmux session name stable, but names the tmux/byobu
 window after the Orkestr thread on wake and attach. The current runtime model is
 one Orkestr thread per tmux session; grouping multiple live thread panes into a
