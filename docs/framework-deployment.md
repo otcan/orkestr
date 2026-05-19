@@ -111,6 +111,20 @@ npm prune --omit=dev
 systemctl restart orkestr.service
 ```
 
+For disposable VPS environments, add this to `/etc/orkestr/orkestr.env`:
+
+```bash
+ORKESTR_RESET_ON_UPDATE=1
+ORKESTR_RESET_OVERLAY=1
+```
+
+With reset enabled, the updater stops `orkestr.service` after a successful
+build, runs `orkestr-reset-state`, and then restarts the service. The reset
+preserves `/etc/orkestr/orkestr.env`, `/opt/orkestr/app`, systemd units,
+Caddy/Tailscale state, and OS packages. It wipes `ORKESTR_HOME`, the runtime
+workspace root, Codex home when it lives under `ORKESTR_HOME`, and the overlay
+only when `ORKESTR_RESET_OVERLAY=1`.
+
 The updater refuses to run when `/opt/orkestr/app` has local tracked changes.
 It keeps the existing `/etc/orkestr/orkestr.env`, so OpenAI keys, OAuth
 credentials, Caddy/Tailscale URLs, and private overlay paths remain
@@ -122,6 +136,7 @@ Useful updater commands:
 systemctl list-timers orkestr-update.timer
 journalctl -u orkestr-update -f
 orkestr-update
+orkestr-reset-state
 ```
 
 ## Local Docker

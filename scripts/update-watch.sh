@@ -15,6 +15,8 @@ Environment:
   ORKESTR_UPDATE_REF           Branch, tag, or commit to follow. Defaults to main.
   ORKESTR_UPDATE_LOCK_FILE     Lock file. Defaults to /var/lock/orkestr-update.lock.
   ORKESTR_SERVICE_NAME         systemd service name. Defaults to orkestr.
+  ORKESTR_RESET_ON_UPDATE      Reset runtime state after a successful build. Defaults to 0.
+  ORKESTR_RESET_OVERLAY        Also reset the overlay directory when reset is enabled. Defaults to 0.
 
 This script is intended to be run by orkestr-update.timer. It leaves the
 existing service running while it fetches, installs dependencies, and builds.
@@ -141,6 +143,11 @@ fi
 
 npm run build
 npm prune --omit=dev
+
+if [ "${ORKESTR_RESET_ON_UPDATE:-0}" = "1" ]; then
+  systemctl stop "${service_name}.service" || true
+  bash "$app_dir/scripts/reset-vps-state.sh" --no-stop-service
+fi
 
 systemctl restart "${service_name}.service"
 systemctl is-active --quiet "${service_name}.service"

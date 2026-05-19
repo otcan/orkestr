@@ -29,6 +29,8 @@ Environment:
   ORKESTR_AUTO_UPDATE       Install and enable the update watcher. Defaults to 0.
   ORKESTR_UPDATE_REF        Git branch, tag, or commit watched by the updater. Defaults to main.
   ORKESTR_UPDATE_INTERVAL_SECONDS  Update check interval. Defaults to 120.
+  ORKESTR_RESET_ON_UPDATE   Reset runtime state after successful updates. Defaults to 0.
+  ORKESTR_RESET_OVERLAY     Also reset ORKESTR_OVERLAY_DIR when reset is enabled. Defaults to 0.
   ORKESTR_INSTALL_CODEX     Install Codex CLI globally in --systemd mode. Defaults to 1.
   ORKESTR_CODEX_VERSION     Codex CLI version. Defaults to 0.130.0.
   ORKESTR_SKIP_SYSTEM_PACKAGES  Skip apt package installation when set to 1.
@@ -240,6 +242,8 @@ ORKESTR_CADDY_ENABLED=${ORKESTR_CADDY_ENABLED:-0}
 ORKESTR_AUTO_UPDATE=${ORKESTR_AUTO_UPDATE:-$auto_update}
 ORKESTR_UPDATE_REF=${ORKESTR_UPDATE_REF:-main}
 ORKESTR_UPDATE_INTERVAL_SECONDS=${ORKESTR_UPDATE_INTERVAL_SECONDS:-$update_interval_seconds}
+ORKESTR_RESET_ON_UPDATE=${ORKESTR_RESET_ON_UPDATE:-0}
+ORKESTR_RESET_OVERLAY=${ORKESTR_RESET_OVERLAY:-0}
 ORKESTR_RUNTIME_WORKSPACE_ROOT=$workspace_dir
 ORKESTR_CODEX_BIN=${ORKESTR_CODEX_BIN:-codex}
 ORKESTR_RUNTIME_CODEX_COMMAND="${ORKESTR_RUNTIME_CODEX_COMMAND:-codex --dangerously-bypass-approvals-and-sandbox}"
@@ -310,6 +314,23 @@ app_dir="${ORKESTR_APP_DIR:-/opt/orkestr/app}"
 exec bash "$app_dir/scripts/update-watch.sh" "$@"
 EOF
   chmod 0755 /usr/local/bin/orkestr-update
+}
+
+write_reset_wrapper() {
+  cat > /usr/local/bin/orkestr-reset-state <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+env_file="${ORKESTR_ENV_FILE:-/etc/orkestr/orkestr.env}"
+if [ -r "$env_file" ]; then
+  set -a
+  # shellcheck disable=SC1090
+  . "$env_file"
+  set +a
+fi
+app_dir="${ORKESTR_APP_DIR:-/opt/orkestr/app}"
+exec bash "$app_dir/scripts/reset-vps-state.sh" "$@"
+EOF
+  chmod 0755 /usr/local/bin/orkestr-reset-state
 }
 
 write_systemd_service() {
@@ -391,6 +412,7 @@ install_systemd_runtime() {
   chgrp "$(id -gn "$run_user")" "$env_file" || true
   write_cli_wrapper
   write_update_wrapper
+  write_reset_wrapper
   write_systemd_service
   if [ "${ORKESTR_AUTO_UPDATE:-$auto_update}" = "1" ]; then
     write_update_units

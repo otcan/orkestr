@@ -92,12 +92,19 @@ minutes, fetches `origin/main`, rebuilds only when the commit changes, and
 restarts `orkestr.service` after a successful build. It keeps
 `/etc/orkestr/orkestr.env` local to the server.
 
+For disposable test VPS deployments, set `ORKESTR_RESET_ON_UPDATE=1` in
+`/etc/orkestr/orkestr.env`. Successful updates will wipe `ORKESTR_HOME` and
+the workspace root before restarting the service, while preserving the env
+file and host proxy setup. Use `ORKESTR_RESET_OVERLAY=1` only when the overlay
+is also disposable. Run `orkestr-reset-state` for a one-time manual reset.
+
 Useful updater commands:
 
 ```bash
 systemctl list-timers orkestr-update.timer
 journalctl -u orkestr-update -f
 orkestr-update
+orkestr-reset-state
 ```
 
 Local clone flow:

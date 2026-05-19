@@ -24,6 +24,9 @@ test("host update watcher replaces external VPS deploy automation", async () => 
   assert.match(watcher, /npm install --include=dev/);
   assert.match(watcher, /npm run build/);
   assert.match(watcher, /npm prune --omit=dev/);
+  assert.match(watcher, /ORKESTR_RESET_ON_UPDATE/);
+  assert.match(watcher, /reset-vps-state\.sh/);
+  assert.match(watcher, /systemctl stop "\$\{service_name\}\.service"/);
   assert.match(watcher, /systemctl restart "\$\{service_name\}\.service"/);
   assert.match(watcher, /Refusing to update/);
   assert.match(install, /\$\{service_name\}\.timer/);
