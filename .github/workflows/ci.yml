@@ -18,7 +18,14 @@ jobs:
           node-version: "22"
           cache: npm
       - run: npm ci
-      - run: npm run check
+      - name: Syntax check
+        run: |
+          find apps packages scripts examples -path '*/node_modules/*' -prune -o \( -name '*.js' -o -name '*.mjs' \) -print |
+            while read -r file; do node --check "$file"; done
+      - name: Build
+        run: npm run build
+      - name: Test
+        run: node --test
       - run: npm run smoke
       - run: npm run demo:coding-agent
       - run: npm run docker:build
