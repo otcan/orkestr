@@ -204,6 +204,31 @@ function validGitRemote(value: string): boolean {
   return /^(https?:\/\/|ssh:\/\/|git@)[^\s]+$/i.test(value);
 }
 
+function runtimeWorkspaceRoot(paths: Awaited<ReturnType<typeof ensureDataDirs>>): string {
+  return path.resolve(String(process.env.ORKESTR_RUNTIME_WORKSPACE_ROOT || process.env.ORKESTR_CLONE_ROOT || paths.workspaces).trim());
+}
+
+function resolveWorkspacePath(value: string, root: string): string {
+  const requested = String(value || "").trim();
+  if (!requested) return "";
+  return path.resolve(path.isAbsolute(requested) ? requested : path.join(root, requested));
+}
+
+function safeWorkFolder(value: string): string {
+  const folder = String(value || "").trim().replace(/^[/\\]+/, "");
+  if (!folder) return "";
+  const normalized = path.normalize(folder);
+  if (normalized === "." || normalized.startsWith("..") || path.isAbsolute(normalized)) {
+    throw httpError("invalid_work_folder", 400);
+  }
+  return normalized;
+}
+
+function workspaceWithWorkFolder(root: string, workFolder: string): string {
+  const folder = safeWorkFolder(workFolder);
+  return folder ? path.join(root, folder) : root;
+}
+
 async function pathExists(filePath: string): Promise<boolean> {
   return Boolean(await fs.stat(filePath).catch(() => null));
 }
@@ -214,14 +239,30 @@ function pathInside(parent: string, candidate: string): boolean {
 }
 
 async function prepareThreadCreateBody(body: Record<string, unknown> = {}): Promise<Record<string, unknown>> {
-  if (!optionalBodyBoolean(body, "cloneRepo", false)) return body;
+  const paths = await ensureDataDirs();
+  const cloneRoot = runtimeWorkspaceRoot(paths);
+  const workFolder = optionalBodyString(body, "workFolder", optionalBodyString(body, "workdirRelativePath", body["workdir"]));
+  if (!optionalBodyBoolean(body, "cloneRepo", false)) {
+    const requestedRepo = optionalBodyString(body, "repoPath");
+    const requestedWorkspace = optionalBodyString(body, "workspace");
+    const requestedCwd = optionalBodyString(body, "cwd");
+    const requestedRoot = requestedRepo || requestedWorkspace || requestedCwd;
+    if (!requestedRoot) return body;
+    const repoRoot = resolveWorkspacePath(requestedRoot, cloneRoot);
+    const cwdRoot = requestedRepo || requestedWorkspace ? repoRoot : cloneRoot;
+    return {
+      ...body,
+      workspace: repoRoot,
+      repoPath: repoRoot,
+      cwd: workFolder ? workspaceWithWorkFolder(repoRoot, workFolder) : resolveWorkspacePath(requestedCwd || repoRoot, cwdRoot),
+      workFolder: safeWorkFolder(workFolder) || null,
+    };
+  }
   const remoteUrl = optionalBodyString(body, "repoRemoteUrl", optionalBodyString(body, "remoteUrl", body["gitRemoteUrl"]));
   if (!remoteUrl) throw httpError("repo_url_required", 400);
   if (!validGitRemote(remoteUrl)) throw httpError("invalid_repo_url", 400);
 
-  const paths = await ensureDataDirs();
   const configuredRoot = String(process.env.ORKESTR_RUNTIME_WORKSPACE_ROOT || "").trim();
-  const cloneRoot = path.resolve(configuredRoot || process.env.ORKESTR_CLONE_ROOT || paths.workspaces);
   const requestedTarget = optionalBodyString(body, "workspace", optionalBodyString(body, "cwd", body["repoPath"]));
   const target = path.resolve(
     requestedTarget
@@ -252,9 +293,10 @@ async function prepareThreadCreateBody(body: Record<string, unknown> = {}): Prom
   return {
     ...body,
     workspace: target,
-    cwd: target,
+    cwd: workspaceWithWorkFolder(target, workFolder),
     repoPath: target,
     repoRemoteUrl: remoteUrl,
+    workFolder: safeWorkFolder(workFolder) || null,
   };
 }
 

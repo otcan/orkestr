@@ -924,6 +924,13 @@ ork-first-thread-wizard.first-thread-host {
   text-transform: uppercase;
 }
 
+.wizard-field .field-error {
+  color: #ff9a9a;
+  font-size: 0.72rem;
+  font-weight: 800;
+  text-transform: none;
+}
+
 .workspace-folder-field {
   gap: 9px;
 }

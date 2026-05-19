@@ -67,6 +67,10 @@ test("server exposes health, readiness, version, and agent message APIs", async 
       method: "POST",
       body: JSON.stringify({ name: "mode-test", codexModel: "gpt-test" }),
     });
+    const relativeWorkspaceThread = await request(baseUrl, "/api/threads", {
+      method: "POST",
+      body: JSON.stringify({ name: "relative-workspace", workspace: "relative-repo", workFolder: "apps/web" }),
+    });
     const mode = await request(baseUrl, `/api/threads/${createdThread.thread.id}/codex-mode`, {
       method: "POST",
       body: JSON.stringify({ mode: "plan" }),
@@ -97,6 +101,9 @@ test("server exposes health, readiness, version, and agent message APIs", async 
     assert.ok(browserSessions.sessions.length >= 3);
     assert.ok(browserSessions.sessions.some((session) => session.slug === "linkedin"));
     assert.equal(preparedBrowser.browser.slug, "linkedin");
+    assert.equal(relativeWorkspaceThread.thread.workspace, path.join(workspaceRoot, "relative-repo"));
+    assert.equal(relativeWorkspaceThread.thread.repoPath, path.join(workspaceRoot, "relative-repo"));
+    assert.equal(relativeWorkspaceThread.thread.cwd, path.join(workspaceRoot, "relative-repo", "apps/web"));
     assert.equal(mode.thread.codexMode, "plan");
     assert.equal(mode.thread.codexModel, "gpt-test");
     assert.equal(upload.attachments[0].filename, "hello.txt");

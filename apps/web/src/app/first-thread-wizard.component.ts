@@ -28,6 +28,7 @@ export class FirstThreadWizardComponent {
   threadName = "";
   workspaceMode: WorkspaceMode = "";
   workspace = "";
+  workFolder = "";
   repoUrl = "";
   cloneTarget = "";
   folderBrowserOpen = false;
@@ -58,6 +59,8 @@ export class FirstThreadWizardComponent {
     if (mode === "workspace") {
       this.folderBrowserOpen = true;
       void this.loadWorkspaceFolders(this.workspace.trim());
+    } else {
+      void this.loadWorkspaceFolders("");
     }
   }
 
@@ -128,6 +131,7 @@ export class FirstThreadWizardComponent {
   }
 
   workspaceReady(): boolean {
+    if (this.workFolderInvalid()) return false;
     if (this.workspaceMode === "workspace") return Boolean(this.workspace.trim());
     if (this.workspaceMode === "clone") return Boolean(this.repoUrl.trim() && this.cloneWorkspacePath());
     return false;
@@ -143,12 +147,33 @@ export class FirstThreadWizardComponent {
     return this.cloneTarget.trim() || this.suggestedCloneTarget();
   }
 
-  finalWorkspacePath(): string {
+  codebasePath(): string {
     return this.workspaceMode === "clone" ? this.cloneWorkspacePath() : this.workspace.trim();
   }
 
+  finalWorkFolder(): string {
+    return this.normalizeWorkFolder(this.workFolder);
+  }
+
+  finalWorkspacePath(): string {
+    const root = this.codebasePath();
+    const folder = this.finalWorkFolder();
+    return folder ? `${root.replace(/\/+$/, "")}/${folder}` : root;
+  }
+
   suggestedCloneTarget(): string {
-    return `/workspace/${this.repoSlug(this.repoUrl)}`;
+    return `${this.defaultWorkspaceRoot().replace(/\/+$/, "")}/${this.repoSlug(this.repoUrl)}`;
+  }
+
+  workFolderInvalid(): boolean {
+    const raw = this.workFolder.trim();
+    if (!raw) return false;
+    const normalized = this.normalizeWorkFolder(raw);
+    return !normalized || normalized.startsWith("../") || normalized.includes("/../") || normalized === "..";
+  }
+
+  workFolderError(): string {
+    return this.workFolderInvalid() ? "Use a relative folder inside the codebase, like apps/web." : "";
   }
 
   async createAndStart(): Promise<void> {
@@ -157,7 +182,9 @@ export class FirstThreadWizardComponent {
     this.error = "";
     try {
       const name = this.agentName();
+      const codebase = this.codebasePath();
       const workspace = this.finalWorkspacePath();
+      const workFolder = this.finalWorkFolder();
       this.creationStage = this.workspaceMode === "clone" ? "Cloning repo" : "Creating agent";
       const response = await firstValueFrom(this.api.createThread({
         id: this.threadId(name),
@@ -168,9 +195,11 @@ export class FirstThreadWizardComponent {
         executorId: "codex",
         codexMode: "code",
         desiredCodexMode: "code",
-        workspace,
+        workspace: codebase,
         cwd: workspace,
-        repoPath: workspace,
+        repoPath: codebase,
+        workFolder,
+        workdirRelativePath: workFolder,
         repoRemoteUrl: this.workspaceMode === "clone" ? this.repoUrl.trim() : "",
         cloneRepo: this.workspaceMode === "clone",
       }));
@@ -196,6 +225,19 @@ export class FirstThreadWizardComponent {
       .replace(/[^a-z0-9_.-]+/g, "-")
       .replace(/^-+|-+$/g, "")
       .slice(0, 48) || "repo";
+  }
+
+  private defaultWorkspaceRoot(): string {
+    return this.folderRoots[0]?.path || "/workspace";
+  }
+
+  private normalizeWorkFolder(value: string): string {
+    return String(value || "")
+      .trim()
+      .replace(/\\/g, "/")
+      .replace(/^\/+/, "")
+      .replace(/\/+/g, "/")
+      .replace(/\/+$/, "");
   }
 
   private threadId(name: string): string {

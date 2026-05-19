@@ -30,9 +30,11 @@ test("main UI exposes a guided first thread generation flow", async () => {
   assert.ok(sources.includes("[setupSection]=\"setupSection\""));
   assert.ok(sources.includes("handleSetupSectionChange"));
   assert.ok(sources.includes("Name the coding agent"));
-  assert.ok(sources.includes("Select a workspace or clone a repo"));
-  assert.ok(sources.includes("Use workspace"));
+  assert.ok(sources.includes("Select a codebase or clone a repo"));
+  assert.ok(sources.includes("Existing codebase"));
   assert.ok(sources.includes("Clone repo"));
+  assert.ok(sources.includes("Start inside subfolder"));
+  assert.ok(sources.includes("workdirRelativePath"));
   assert.ok(sources.includes("Create Agent"));
   assert.ok(sources.includes('type WizardStepId = "name" | "workspace" | "review"'));
   assert.ok(sources.includes("repoRemoteUrl"));

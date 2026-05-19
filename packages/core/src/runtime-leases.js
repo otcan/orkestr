@@ -291,6 +291,11 @@ function paneResumeDirectoryPrompt(text) {
   return /Choose working directory to resume this session/i.test(body) && /Press enter to continue/i.test(body);
 }
 
+function paneCodexUpdatePrompt(text) {
+  const body = String(text || "");
+  return /Update available!/i.test(body) && /\bSkip until next version\b/i.test(body) && /Press enter to continue/i.test(body);
+}
+
 async function activeLeaseForThread(threadId, env = process.env) {
   const leases = await listRuntimeLeases(env);
   const active = [...leases].reverse().find((lease) => lease.threadId === threadId && !lease.endedAt) || null;
@@ -361,14 +366,15 @@ export async function runtimeStatus(threadId, env = process.env, messagesOverrid
   const planImplementationReady = panePlanImplementationReady(paneText);
   const planImplementationMenuVisible = panePlanImplementationMenuVisible(paneText);
   const needsResumeDirectoryConfirmation = paneResumeDirectoryPrompt(paneText);
+  const needsCodexUpdatePromptSkip = paneCodexUpdatePrompt(paneText);
   const paneWorkingCandidate = paneWorking(paneText);
   const promptReadyCandidate = !paneWorkingCandidate && panePromptReady(paneText);
   const working = paneWorkingCandidate || (!promptReadyCandidate && runningCount > 0);
-  const promptReady = promptReadyCandidate && !working && !needsResumeDirectoryConfirmation;
+  const promptReady = promptReadyCandidate && !working && !needsResumeDirectoryConfirmation && !needsCodexUpdatePromptSkip;
   const recentlyStarted = Date.now() - (Date.parse(lease.startedAt || "") || Date.now()) < 20_000;
   const state = working
     ? "working"
-    : needsResumeDirectoryConfirmation
+    : needsResumeDirectoryConfirmation || needsCodexUpdatePromptSkip
       ? "waking"
       : promptReady
         ? "ready"
@@ -384,6 +390,7 @@ export async function runtimeStatus(threadId, env = process.env, messagesOverrid
     promptReady,
     promptReadyStable: promptReady,
     needsResumeDirectoryConfirmation,
+    needsCodexUpdatePromptSkip,
     working,
     foregroundWorking: working,
     typingActive: working,
@@ -566,7 +573,9 @@ async function rolloutOffsetForThread(thread, env = process.env) {
 function runtimeWorkspace(thread, env) {
   const paths = dataPaths(env);
   const explicit = thread.cwd || thread.workspace || thread.executor?.metadata?.cwd || "";
-  return path.resolve(explicit || path.join(env.ORKESTR_RUNTIME_WORKSPACE_ROOT || paths.workspaces, safeName(thread.id)));
+  const root = env.ORKESTR_RUNTIME_WORKSPACE_ROOT || paths.workspaces;
+  if (!explicit) return path.resolve(path.join(root, safeName(thread.id)));
+  return path.resolve(path.isAbsolute(explicit) ? explicit : path.join(root, explicit));
 }
 
 function runtimeCommand(thread, env = process.env) {
@@ -821,6 +830,11 @@ async function waitForRuntimeReady(threadId, env = process.env) {
     last = await runtimeStatus(threadId, env);
     if (last.needsResumeDirectoryConfirmation && last.paneId) {
       await execFileAsync("tmux", ["send-keys", "-t", last.paneId, "C-m"]).catch(() => {});
+      await sleep(1000);
+      continue;
+    }
+    if (last.needsCodexUpdatePromptSkip && last.paneId) {
+      await execFileAsync("tmux", ["send-keys", "-t", last.paneId, "2", "C-m"]).catch(() => {});
       await sleep(1000);
       continue;
     }
@@ -1821,6 +1835,16 @@ async function syncRuntimeLeasesOnce(env = process.env) {
       }
       if (status.needsResumeDirectoryConfirmation && status.paneId) {
         await execFileAsync("tmux", ["send-keys", "-t", status.paneId, "C-m"]).catch(() => {});
+        await updateThread(lease.threadId, {
+          state: "waking",
+          runtime: { ...leaseForStorage, state: "waking" },
+        }, env).catch(() => {});
+        next.push(leaseForStorage);
+        changed = true;
+        continue;
+      }
+      if (status.needsCodexUpdatePromptSkip && status.paneId) {
+        await execFileAsync("tmux", ["send-keys", "-t", status.paneId, "2", "C-m"]).catch(() => {});
         await updateThread(lease.threadId, {
           state: "waking",
           runtime: { ...leaseForStorage, state: "waking" },

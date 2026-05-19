@@ -281,6 +281,39 @@ test("thread wake and sleep lifecycle updates runtime leases and status", async 
   }
 });
 
+test("relative thread workspaces resolve under the runtime workspace root", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-relative-workspace-"));
+  const fakeTmux = await createFakeTmux(home);
+  const workspaceRoot = path.join(home, "workspace-root");
+  const priorPath = process.env.PATH;
+  const priorTmuxLog = process.env.TMUX_LOG;
+  const priorTmuxState = process.env.TMUX_STATE;
+  process.env.PATH = `${fakeTmux.bin}:${priorPath || ""}`;
+  process.env.TMUX_LOG = fakeTmux.log;
+  process.env.TMUX_STATE = fakeTmux.state;
+
+  try {
+    const env = {
+      ORKESTR_HOME: path.join(home, "orkestr-home"),
+      ORKESTR_RUNTIME_WORKSPACE_ROOT: workspaceRoot,
+      HOME: path.join(home, "runtime-home"),
+      CODEX_HOME: path.join(home, "codex-home"),
+      PATH: process.env.PATH,
+      TMUX_LOG: fakeTmux.log,
+      TMUX_STATE: fakeTmux.state,
+    };
+    await createThread({ id: "relative-workspace-thread", name: "Relative Workspace Thread", cwd: "test" }, env);
+    await wakeThread("relative-workspace-thread", { reason: "test" }, env);
+    const leases = await listRuntimeLeases(env);
+
+    assert.equal(leases[0].workspace, path.join(workspaceRoot, "test"));
+  } finally {
+    restoreEnvValue("PATH", priorPath);
+    restoreEnvValue("TMUX_LOG", priorTmuxLog);
+    restoreEnvValue("TMUX_STATE", priorTmuxState);
+  }
+});
+
 test("thread wake blocks Codex before the raw login menu opens", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-codex-auth-required-"));
   const fakeTmux = await createFakeTmux(home);
@@ -459,6 +492,59 @@ test("runtime sync confirms Codex resume directory prompts", async () => {
     assert.equal(status.state, "waking");
     assert.match(log, /__CALL__\tsend-keys\t-t\t%42\tC-m/);
     assert.doesNotMatch(log, /__CALL__\tkill-session\t-t\torkestr-resume-dir-thread/);
+  } finally {
+    restoreEnvValue("PATH", priorPath);
+    restoreEnvValue("TMUX_LOG", priorTmuxLog);
+    restoreEnvValue("TMUX_STATE", priorTmuxState);
+    restoreEnvValue("TMUX_CAPTURE_TEXT", priorTmuxCaptureText);
+  }
+});
+
+test("runtime sync skips Codex update prompts", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-codex-update-prompt-"));
+  const fakeTmux = await createFakeTmux(home);
+  const priorPath = process.env.PATH;
+  const priorTmuxLog = process.env.TMUX_LOG;
+  const priorTmuxState = process.env.TMUX_STATE;
+  const priorTmuxCaptureText = process.env.TMUX_CAPTURE_TEXT;
+  process.env.PATH = `${fakeTmux.bin}:${priorPath || ""}`;
+  process.env.TMUX_LOG = fakeTmux.log;
+  process.env.TMUX_STATE = fakeTmux.state;
+  process.env.TMUX_CAPTURE_TEXT = [
+    "✨ Update available! 0.130.0 -> 0.131.0",
+    "",
+    "› 1. Update now (runs `npm install -g @openai/codex`)",
+    "  2. Skip",
+    "  3. Skip until next version",
+    "",
+    "  Press enter to continue",
+  ].join("\n");
+
+  try {
+    const env = {
+      ORKESTR_HOME: path.join(home, "orkestr-home"),
+      HOME: path.join(home, "runtime-home"),
+      CODEX_HOME: path.join(home, "codex-home"),
+      PATH: process.env.PATH,
+      TMUX_LOG: fakeTmux.log,
+      TMUX_STATE: fakeTmux.state,
+      TMUX_CAPTURE_TEXT: process.env.TMUX_CAPTURE_TEXT,
+      ORKESTR_RUNTIME_IDLE_SLEEP_MS: "1",
+    };
+    await createThread({ id: "codex-update-thread", name: "Codex Update Thread" }, env);
+    await wakeThread("codex-update-thread", { reason: "test_wake" }, env);
+
+    let status = await runtimeStatus("codex-update-thread", env);
+    assert.equal(status.state, "waking");
+    assert.equal(status.needsCodexUpdatePromptSkip, true);
+
+    await syncRuntimeLeases(env);
+
+    status = await runtimeStatus("codex-update-thread", env);
+    const log = await fs.readFile(fakeTmux.log, "utf8");
+    assert.equal(status.state, "waking");
+    assert.match(log, /__CALL__\tsend-keys\t-t\t%42\t2\tC-m/);
+    assert.doesNotMatch(log, /__CALL__\tkill-session\t-t\torkestr-codex-update-thread/);
   } finally {
     restoreEnvValue("PATH", priorPath);
     restoreEnvValue("TMUX_LOG", priorTmuxLog);
