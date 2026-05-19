@@ -197,7 +197,25 @@ function optionalBodyStringMap(body: Record<string, unknown>, key: string, fallb
 function safeCloneSegment(value: string): string {
   const withoutGitSuffix = value.replace(/\.git$/i, "");
   const tail = withoutGitSuffix.split(/[/:]/).filter(Boolean).at(-1) || "repo";
-  return tail.replace(/[^a-zA-Z0-9_.-]/g, "-").replace(/^-+|-+$/g, "").slice(0, 64) || "repo";
+  return safeWorkspaceSegment(tail) || "repo";
+}
+
+function safeWorkspaceSegment(value: string): string {
+  return String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/\.git$/i, "")
+    .replace(/[^a-z0-9_.-]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 64) || "workspace";
+}
+
+function generatedWorkspaceName(body: Record<string, unknown>, remoteUrl = ""): string {
+  const requestedId = optionalBodyString(body, "id", body["threadId"]);
+  const name = optionalBodyString(body, "name", optionalBodyString(body, "title"));
+  const remoteSegment = remoteUrl ? safeCloneSegment(remoteUrl) : "";
+  const base = safeWorkspaceSegment(requestedId || name || remoteSegment || "agent");
+  return requestedId ? base : `${base}-${randomUUID().slice(0, 8)}`;
 }
 
 function validGitRemote(value: string): boolean {
@@ -235,7 +253,27 @@ async function pathExists(filePath: string): Promise<boolean> {
 
 function pathInside(parent: string, candidate: string): boolean {
   const relative = path.relative(parent, candidate);
-  return Boolean(relative && !relative.startsWith("..") && !path.isAbsolute(relative));
+  return !relative || (!relative.startsWith("..") && !path.isAbsolute(relative));
+}
+
+async function availableWorkspacePath(root: string, folderName: string): Promise<string> {
+  const base = safeWorkspaceSegment(folderName);
+  for (let index = 0; index < 100; index += 1) {
+    const candidate = path.join(root, index === 0 ? base : `${base}-${index + 1}`);
+    if (!(await pathExists(candidate))) return candidate;
+  }
+  return path.join(root, `${base}-${randomUUID().slice(0, 8)}`);
+}
+
+async function ensureLocalGitRepo(repoRoot: string): Promise<boolean> {
+  await fs.mkdir(repoRoot, { recursive: true });
+  if (await pathExists(path.join(repoRoot, ".git"))) return false;
+  try {
+    await execFileAsync("git", ["init"], { cwd: repoRoot, timeout: 30_000, maxBuffer: 2 * 1024 * 1024 });
+  } catch {
+    throw httpError("git_init_failed", 500);
+  }
+  return true;
 }
 
 async function prepareThreadCreateBody(body: Record<string, unknown> = {}): Promise<Record<string, unknown>> {
@@ -247,15 +285,25 @@ async function prepareThreadCreateBody(body: Record<string, unknown> = {}): Prom
     const requestedWorkspace = optionalBodyString(body, "workspace");
     const requestedCwd = optionalBodyString(body, "cwd");
     const requestedRoot = requestedRepo || requestedWorkspace || requestedCwd;
-    if (!requestedRoot) return body;
-    const repoRoot = resolveWorkspacePath(requestedRoot, cloneRoot);
+    const generatedWorkspace = !requestedRoot;
+    const repoRoot = generatedWorkspace
+      ? await availableWorkspacePath(cloneRoot, generatedWorkspaceName(body))
+      : resolveWorkspacePath(requestedRoot, cloneRoot);
     const cwdRoot = requestedRepo || requestedWorkspace ? repoRoot : cloneRoot;
+    const initGit = optionalBodyBoolean(body, "initGit", generatedWorkspace || optionalBodyBoolean(body, "autoWorkspace", false));
+    const localGitInitialized = initGit ? await ensureLocalGitRepo(repoRoot) : false;
+    const cwd = workFolder ? workspaceWithWorkFolder(repoRoot, workFolder) : resolveWorkspacePath(requestedCwd || repoRoot, cwdRoot);
+    if (generatedWorkspace || initGit || workFolder) await fs.mkdir(cwd, { recursive: true });
     return {
       ...body,
       workspace: repoRoot,
       repoPath: repoRoot,
-      cwd: workFolder ? workspaceWithWorkFolder(repoRoot, workFolder) : resolveWorkspacePath(requestedCwd || repoRoot, cwdRoot),
+      cwd,
       workFolder: safeWorkFolder(workFolder) || null,
+      workspaceGenerated: generatedWorkspace,
+      workspaceFolderName: path.basename(repoRoot),
+      workspaceSource: generatedWorkspace ? "local" : "existing",
+      localGitInitialized,
     };
   }
   const remoteUrl = optionalBodyString(body, "repoRemoteUrl", optionalBodyString(body, "remoteUrl", body["gitRemoteUrl"]));
@@ -264,11 +312,10 @@ async function prepareThreadCreateBody(body: Record<string, unknown> = {}): Prom
 
   const configuredRoot = String(process.env.ORKESTR_RUNTIME_WORKSPACE_ROOT || "").trim();
   const requestedTarget = optionalBodyString(body, "workspace", optionalBodyString(body, "cwd", body["repoPath"]));
-  const target = path.resolve(
-    requestedTarget
-      ? path.isAbsolute(requestedTarget) ? requestedTarget : path.join(cloneRoot, requestedTarget)
-      : path.join(cloneRoot, safeCloneSegment(remoteUrl)),
-  );
+  const generatedWorkspace = !requestedTarget;
+  const target = requestedTarget
+    ? path.resolve(path.isAbsolute(requestedTarget) ? requestedTarget : path.join(cloneRoot, requestedTarget))
+    : await availableWorkspacePath(cloneRoot, generatedWorkspaceName(body, remoteUrl));
   if (configuredRoot && !pathInside(cloneRoot, target)) throw httpError("clone_target_outside_workspace_root", 400);
 
   let shouldClone = false;
@@ -297,6 +344,10 @@ async function prepareThreadCreateBody(body: Record<string, unknown> = {}): Prom
     repoPath: target,
     repoRemoteUrl: remoteUrl,
     workFolder: safeWorkFolder(workFolder) || null,
+    workspaceGenerated: generatedWorkspace,
+    workspaceFolderName: path.basename(target),
+    workspaceSource: "cloned",
+    localGitInitialized: false,
   };
 }
 

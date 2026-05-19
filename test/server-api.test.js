@@ -101,6 +101,11 @@ test("server exposes health, readiness, version, and agent message APIs", async 
     assert.ok(browserSessions.sessions.length >= 3);
     assert.ok(browserSessions.sessions.some((session) => session.slug === "linkedin"));
     assert.equal(preparedBrowser.browser.slug, "linkedin");
+    assert.equal(createdThread.thread.workspaceGenerated, true);
+    assert.equal(createdThread.thread.workspaceSource, "local");
+    assert.equal(createdThread.thread.localGitInitialized, true);
+    assert.ok(String(createdThread.thread.cwd || "").startsWith(workspaceRoot));
+    assert.ok(await fs.stat(path.join(createdThread.thread.repoPath, ".git")));
     assert.equal(relativeWorkspaceThread.thread.workspace, path.join(workspaceRoot, "relative-repo"));
     assert.equal(relativeWorkspaceThread.thread.repoPath, path.join(workspaceRoot, "relative-repo"));
     assert.equal(relativeWorkspaceThread.thread.cwd, path.join(workspaceRoot, "relative-repo", "apps/web"));

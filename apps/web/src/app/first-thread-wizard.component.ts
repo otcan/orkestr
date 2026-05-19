@@ -1,10 +1,9 @@
 import { Component, EventEmitter, Input, Output, inject } from "@angular/core";
 import { FormsModule } from "@angular/forms";
 import { firstValueFrom } from "rxjs";
-import { ApiService, ThreadSummary, WorkspaceFolderEntry } from "./api.service";
+import { ApiService, ThreadSummary } from "./api.service";
 
-type WizardStepId = "name" | "workspace" | "review";
-type WorkspaceMode = "" | "workspace" | "clone";
+type WizardStepId = "name" | "repository" | "review";
 
 @Component({
   selector: "ork-first-thread-wizard",
@@ -20,27 +19,18 @@ export class FirstThreadWizardComponent {
 
   readonly steps: Array<{ id: WizardStepId; label: string }> = [
     { id: "name", label: "Name" },
-    { id: "workspace", label: "Workspace" },
+    { id: "repository", label: "Repository" },
     { id: "review", label: "Create" },
   ];
 
   stepIndex = 0;
   threadName = "";
-  workspaceMode: WorkspaceMode = "";
-  workspace = "";
-  workFolder = "";
   repoUrl = "";
-  cloneTarget = "";
-  folderBrowserOpen = false;
-  folderLoading = false;
-  folderError = "";
-  folderPath = "";
-  folderRoots: WorkspaceFolderEntry[] = [];
-  folderEntries: WorkspaceFolderEntry[] = [];
-  folderParent: string | null = null;
   busy = false;
   error = "";
   creationStage = "";
+  private draftName = "";
+  private draftThreadId = "";
 
   activeStep(): WizardStepId {
     return this.steps[this.stepIndex]?.id || "name";
@@ -52,48 +42,6 @@ export class FirstThreadWizardComponent {
 
   stepDone(index: number): boolean {
     return index < this.stepIndex;
-  }
-
-  chooseWorkspaceMode(mode: Exclude<WorkspaceMode, "">): void {
-    this.workspaceMode = mode;
-    if (mode === "workspace") {
-      this.folderBrowserOpen = true;
-      void this.loadWorkspaceFolders(this.workspace.trim());
-    } else {
-      void this.loadWorkspaceFolders("");
-    }
-  }
-
-  async toggleWorkspaceBrowser(): Promise<void> {
-    if (this.busy) return;
-    this.folderBrowserOpen = !this.folderBrowserOpen;
-    if (this.folderBrowserOpen) await this.loadWorkspaceFolders(this.workspace.trim());
-  }
-
-  async loadWorkspaceFolders(targetPath = ""): Promise<void> {
-    if (this.busy && !this.folderBrowserOpen) return;
-    this.folderLoading = true;
-    this.folderError = "";
-    try {
-      const response = await firstValueFrom(this.api.workspaceFolders(targetPath));
-      this.folderPath = response.path || targetPath;
-      this.folderParent = response.parent || null;
-      this.folderRoots = response.roots || [];
-      this.folderEntries = response.entries || [];
-      if (!response.ok) this.folderError = response.error || "Folder cannot be opened.";
-      if (!this.workspace.trim() && response.ok && response.path) this.workspace = response.path;
-    } catch (error) {
-      this.folderError = this.errorText(error);
-      this.folderEntries = [];
-    } finally {
-      this.folderLoading = false;
-    }
-  }
-
-  async browseWorkspaceFolder(folderPath: string): Promise<void> {
-    if (this.busy) return;
-    this.workspace = folderPath;
-    await this.loadWorkspaceFolders(folderPath);
   }
 
   next(): void {
@@ -118,62 +66,38 @@ export class FirstThreadWizardComponent {
   canContinue(): boolean {
     const step = this.activeStep();
     if (step === "name") return Boolean(this.agentName());
-    if (step === "workspace") return this.workspaceReady();
+    if (step === "repository") return true;
     return true;
   }
 
   canCreate(): boolean {
-    return Boolean(this.agentName() && this.workspaceReady() && !this.busy);
+    return Boolean(this.agentName() && !this.busy);
   }
 
   agentName(): string {
     return this.threadName.trim();
   }
 
-  workspaceReady(): boolean {
-    if (this.workFolderInvalid()) return false;
-    if (this.workspaceMode === "workspace") return Boolean(this.workspace.trim());
-    if (this.workspaceMode === "clone") return Boolean(this.repoUrl.trim() && this.cloneWorkspacePath());
-    return false;
+  repoUrlValue(): string {
+    return this.repoUrl.trim();
   }
 
-  workspaceModeLabel(): string {
-    if (this.workspaceMode === "clone") return "Clone repo";
-    if (this.workspaceMode === "workspace") return "Existing workspace";
-    return "Not selected";
+  usesRemoteRepo(): boolean {
+    return Boolean(this.repoUrlValue());
   }
 
-  cloneWorkspacePath(): string {
-    return this.cloneTarget.trim() || this.suggestedCloneTarget();
+  codebaseLabel(): string {
+    return this.usesRemoteRepo() ? "Clone Git repository" : "New local git repository";
   }
 
-  codebasePath(): string {
-    return this.workspaceMode === "clone" ? this.cloneWorkspacePath() : this.workspace.trim();
-  }
-
-  finalWorkFolder(): string {
-    return this.normalizeWorkFolder(this.workFolder);
-  }
-
-  finalWorkspacePath(): string {
-    const root = this.codebasePath();
-    const folder = this.finalWorkFolder();
-    return folder ? `${root.replace(/\/+$/, "")}/${folder}` : root;
-  }
-
-  suggestedCloneTarget(): string {
-    return `${this.defaultWorkspaceRoot().replace(/\/+$/, "")}/${this.repoSlug(this.repoUrl)}`;
-  }
-
-  workFolderInvalid(): boolean {
-    const raw = this.workFolder.trim();
-    if (!raw) return false;
-    const normalized = this.normalizeWorkFolder(raw);
-    return !normalized || normalized.startsWith("../") || normalized.includes("/../") || normalized === "..";
-  }
-
-  workFolderError(): string {
-    return this.workFolderInvalid() ? "Use a relative folder inside the codebase, like apps/web." : "";
+  generatedWorkspaceName(): string {
+    const name = this.agentName();
+    if (!name) return "generated automatically";
+    if (name !== this.draftName || !this.draftThreadId) {
+      this.draftName = name;
+      this.draftThreadId = this.threadId(name);
+    }
+    return this.draftThreadId;
   }
 
   async createAndStart(): Promise<void> {
@@ -182,12 +106,11 @@ export class FirstThreadWizardComponent {
     this.error = "";
     try {
       const name = this.agentName();
-      const codebase = this.codebasePath();
-      const workspace = this.finalWorkspacePath();
-      const workFolder = this.finalWorkFolder();
-      this.creationStage = this.workspaceMode === "clone" ? "Cloning repo" : "Creating agent";
+      const repoUrl = this.repoUrlValue();
+      const cloneRepo = Boolean(repoUrl);
+      this.creationStage = cloneRepo ? "Cloning repo" : "Initializing local git repo";
       const response = await firstValueFrom(this.api.createThread({
-        id: this.threadId(name),
+        id: this.generatedWorkspaceName(),
         name,
         title: name,
         bindingName: name,
@@ -195,13 +118,10 @@ export class FirstThreadWizardComponent {
         executorId: "codex",
         codexMode: "code",
         desiredCodexMode: "code",
-        workspace: codebase,
-        cwd: workspace,
-        repoPath: codebase,
-        workFolder,
-        workdirRelativePath: workFolder,
-        repoRemoteUrl: this.workspaceMode === "clone" ? this.repoUrl.trim() : "",
-        cloneRepo: this.workspaceMode === "clone",
+        autoWorkspace: true,
+        initGit: !cloneRepo,
+        repoRemoteUrl: repoUrl,
+        cloneRepo,
       }));
       const thread = response.thread;
       this.creationStage = "Starting Codex";
@@ -213,31 +133,6 @@ export class FirstThreadWizardComponent {
     } finally {
       this.busy = false;
     }
-  }
-
-  private repoSlug(repoUrl: string): string {
-    const raw = String(repoUrl || "").trim();
-    const fallback = this.agentName() || "repo";
-    const withoutGit = raw.replace(/\.git$/i, "");
-    const tail = withoutGit.split(/[/:]/).filter(Boolean).at(-1) || fallback;
-    return tail
-      .toLowerCase()
-      .replace(/[^a-z0-9_.-]+/g, "-")
-      .replace(/^-+|-+$/g, "")
-      .slice(0, 48) || "repo";
-  }
-
-  private defaultWorkspaceRoot(): string {
-    return this.folderRoots[0]?.path || "/workspace";
-  }
-
-  private normalizeWorkFolder(value: string): string {
-    return String(value || "")
-      .trim()
-      .replace(/\\/g, "/")
-      .replace(/^\/+/, "")
-      .replace(/\/+/g, "/")
-      .replace(/\/+$/, "");
   }
 
   private threadId(name: string): string {
