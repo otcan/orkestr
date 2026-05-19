@@ -7,7 +7,7 @@ import { OnboardingPageComponent } from "./onboarding-page.component";
 import { PairingRequiredPageComponent } from "./pairing-required-page.component";
 import { OpsPageComponent, ToolsView } from "./ops-page.component";
 import { RawTerminalController } from "./raw-terminal.controller";
-import { hasProposedPlanTag, renderMessageTextHtml } from "./message-renderer";
+import { hasProposedPlanEnvelope, renderMessageTextHtml } from "./message-renderer";
 import {
   ApiService,
   SetupStatus,
@@ -2333,7 +2333,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   messagePhase(message: ThreadMessage | null): string {
     const role = String(message?.role || "").trim().toLowerCase();
     const phase = String(message?.phase || "").trim().toLowerCase();
-    if (role === "assistant" && phase !== "plan" && hasProposedPlanTag(message?.text)) return "plan";
+    if (role === "assistant" && phase !== "plan" && hasProposedPlanEnvelope(message?.text)) return "plan";
     return phase;
   }
 

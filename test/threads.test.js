@@ -1771,6 +1771,22 @@ test("thread summary treats proposed plan tags as plan messages", async () => {
   assert.equal(summary.planAvailable, true);
 });
 
+test("thread summary keeps inline proposed plan mentions as final answers", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-summary-inline-proposed-plan-home-"));
+  const env = { ORKESTR_HOME: home };
+  const thread = await createThread({ id: "summary-inline-proposed-plan-thread", name: "Summary Inline Proposed Plan Thread" }, env);
+  await appendThreadMessage("summary-inline-proposed-plan-thread", {
+    role: "assistant",
+    phase: "final_answer",
+    text: "Mentioning `<proposed_plan>` inline should not make this message a plan.",
+  }, env);
+
+  const summary = await threadRuntimeSummary(thread, await listThreadMessages(thread.id, env));
+
+  assert.equal(summary.lastMessagePhase, "final_answer");
+  assert.equal(summary.planAvailable, false);
+});
+
 test("thread input commands strip /now before runtime delivery", () => {
   assert.deepEqual(parseThreadInputCommand({ text: "/now run this immediately" }), {
     command: "interrupt",

@@ -11,15 +11,21 @@ function escapeAttribute(value: unknown): string {
   return escapeHtml(value).replace(/`/g, "&#96;");
 }
 
-const proposedPlanTagPattern = /<\/?\s*proposed[\s_-]*plan\s*>/gi;
-const proposedPlanTagTestPattern = /<\/?\s*proposed[\s_-]*plan\s*>/i;
+const proposedPlanOpenTagPattern = /^\s*<\s*proposed[\s_-]*plan\s*>\s*/i;
+const proposedPlanCloseTagPattern = /\s*<\s*\/\s*proposed[\s_-]*plan\s*>\s*$/i;
 
-export function hasProposedPlanTag(text: string | null | undefined): boolean {
-  return proposedPlanTagTestPattern.test(String(text || ""));
+function proposedPlanEnvelopeBody(text: string | null | undefined): string | null {
+  const value = String(text || "");
+  if (!proposedPlanOpenTagPattern.test(value)) return null;
+  return value.replace(proposedPlanOpenTagPattern, "").replace(proposedPlanCloseTagPattern, "").trim();
 }
 
-export function stripProposedPlanTags(text: string | null | undefined): string {
-  return String(text || "").replace(proposedPlanTagPattern, "").trim();
+export function hasProposedPlanEnvelope(text: string | null | undefined): boolean {
+  return proposedPlanEnvelopeBody(text) !== null;
+}
+
+export function stripProposedPlanEnvelope(text: string | null | undefined): string {
+  return proposedPlanEnvelopeBody(text) ?? String(text || "");
 }
 
 function splitUrlSuffix(value: string): { url: string; suffix: string } {
@@ -201,7 +207,7 @@ function renderCodeFence(lines: string[]): { html: string; nextIndex: number } {
 }
 
 export function renderMessageTextHtml(text: string | null | undefined): string {
-  const lines = stripProposedPlanTags(text).split(/\r?\n/);
+  const lines = stripProposedPlanEnvelope(text).split(/\r?\n/);
   const blocks: string[] = [];
   let paragraph: string[] = [];
   let index = 0;

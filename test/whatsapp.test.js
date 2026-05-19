@@ -7,7 +7,7 @@ import { startServer } from "../apps/server/src/server.js";
 import { runNextAgentMessage, runNextThreadMessage } from "../packages/core/src/executors.js";
 import { listAgentMessages } from "../packages/core/src/messages.js";
 import { getSetupStatus } from "../packages/core/src/setup.js";
-import { appendThreadMessage, createThread, listThreadMessages } from "../packages/core/src/threads.js";
+import { appendThreadMessage, createThread, listThreadMessages, updateThreadMessage } from "../packages/core/src/threads.js";
 import { deliverWhatsAppReplies, formatWhatsAppOutboundText, getWhatsAppChatParticipants, getWhatsAppStatus, routeWhatsAppInbound } from "../packages/connectors/src/whatsapp.js";
 import { listLocalWhatsAppChats } from "../packages/connectors/src/whatsapp-local-bridge.js";
 import { writeConnectorConfig } from "../packages/storage/src/config.js";
@@ -339,10 +339,14 @@ test("whatsapp outbound formatting preserves fenced code blocks", () => {
   );
 });
 
-test("whatsapp outbound formatting strips proposed plan wrappers", () => {
+test("whatsapp outbound formatting strips proposed plan envelopes", () => {
   assert.equal(
     formatWhatsAppOutboundText("<proposed_plan>\n# Plan\n\n**Do it**\n</proposed_plan>"),
     "Plan\n\n*Do it*",
+  );
+  assert.equal(
+    formatWhatsAppOutboundText("The literal `<proposed_plan>` tag should remain visible."),
+    "The literal `<proposed_plan>` tag should remain visible.",
   );
 });
 
@@ -374,6 +378,65 @@ test("whatsapp delivery does not mirror proposed plans as final answers", async 
 
   assert.equal(delivery.delivered.length, 0);
   assert.equal(delivery.skipped.length, 0);
+});
+
+test("whatsapp delivery forwards failed WhatsApp-origin thread inputs once", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-failed-input-"));
+  const env = { ORKESTR_HOME: home };
+  await createThread({ id: "thread-wa-failed-input", name: "WA Failed Input Thread" }, env);
+  await writeConnectorConfig("whatsapp", {
+    bridgeMode: "external",
+    bridgeUrl: "http://wa.local",
+    threadRoutes: { "chat-failed-input": "thread-wa-failed-input" },
+  }, env);
+
+  const routed = await routeWhatsAppInbound({ eventId: "wa-failed-input-1", chatId: "chat-failed-input", text: "/now broken" }, env);
+  await updateThreadMessage("thread-wa-failed-input", routed.message.id, {
+    state: "failed",
+    deliveryState: "failed",
+    error: "Command failed: tmux send-keys -t %580 C-m can't find pane: %580",
+  }, env);
+
+  const calls = [];
+  const delivery = await deliverWhatsAppReplies(env, async (url, options) => {
+    calls.push({ url, body: JSON.parse(options.body) });
+    return response({ ok: true, ids: ["sent-failed-input"] });
+  });
+  const duplicate = await deliverWhatsAppReplies(env, async () => {
+    throw new Error("should not resend failed input notice");
+  });
+
+  assert.equal(delivery.delivered.length, 1);
+  assert.equal(delivery.delivered[0].deliveryType, "delivery_error");
+  assert.equal(duplicate.delivered.length, 0);
+  assert.equal(calls[0].body.to, "chat-failed-input");
+  assert.match(calls[0].body.text, /^Delivery failed\n\nYour message could not be delivered to Codex\./);
+  assert.match(calls[0].body.text, /can't find pane: %580/);
+});
+
+test("whatsapp delivery does not forward local failed inputs", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-local-failed-input-"));
+  const env = { ORKESTR_HOME: home };
+  await createThread({ id: "thread-local-failed-input", name: "Local Failed Input Thread" }, env);
+  await writeConnectorConfig("whatsapp", {
+    bridgeMode: "external",
+    bridgeUrl: "http://wa.local",
+  }, env);
+  await appendThreadMessage("thread-local-failed-input", {
+    role: "user",
+    source: "browser",
+    state: "failed",
+    deliveryState: "failed",
+    text: "local failure",
+    error: "local only",
+  }, env);
+
+  const delivery = await deliverWhatsAppReplies(env, async () => {
+    throw new Error("should not send local failures to WhatsApp");
+  });
+
+  assert.equal(delivery.delivered.length, 0);
+  assert.equal(delivery.failed.length, 0);
 });
 
 test("whatsapp inbound routes through enabled thread bindings", async () => {

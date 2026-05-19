@@ -256,15 +256,21 @@ function pickString(...values) {
   return "";
 }
 
-const proposedPlanTagPattern = /<\/?\s*proposed[\s_-]*plan\s*>/gi;
-const proposedPlanTagTestPattern = /<\/?\s*proposed[\s_-]*plan\s*>/i;
+const proposedPlanOpenTagPattern = /^\s*<\s*proposed[\s_-]*plan\s*>\s*/i;
+const proposedPlanCloseTagPattern = /\s*<\s*\/\s*proposed[\s_-]*plan\s*>\s*$/i;
 
-function hasProposedPlanTag(value) {
-  return proposedPlanTagTestPattern.test(String(value || ""));
+function proposedPlanEnvelopeBody(value) {
+  const text = String(value || "");
+  if (!proposedPlanOpenTagPattern.test(text)) return null;
+  return text.replace(proposedPlanOpenTagPattern, "").replace(proposedPlanCloseTagPattern, "").trim();
 }
 
-function stripProposedPlanTags(value) {
-  return String(value || "").replace(proposedPlanTagPattern, "").trim();
+function hasProposedPlanEnvelope(value) {
+  return proposedPlanEnvelopeBody(value) !== null;
+}
+
+function stripProposedPlanEnvelope(value) {
+  return proposedPlanEnvelopeBody(value) ?? String(value || "");
 }
 
 function comparableParticipantId(value) {
@@ -507,7 +513,7 @@ function formatWhatsAppLine(value) {
 }
 
 export function formatWhatsAppOutboundText(value) {
-  const lines = stripProposedPlanTags(value).replace(/\r\n/g, "\n").split("\n");
+  const lines = stripProposedPlanEnvelope(value).replace(/\r\n/g, "\n").split("\n");
   let inFence = false;
   const formatted = lines.map((line) => {
     if (line.trim().startsWith("```")) {
@@ -529,7 +535,7 @@ function deliveryTextKey(chatId, text) {
 function shouldMirrorWhatsAppReply(message) {
   if (message.source === "codex-rollout") {
     const phase = String(message.phase || "final_answer").trim();
-    if (phase === "plan" || hasProposedPlanTag(message.text)) return false;
+    if (phase === "plan" || hasProposedPlanEnvelope(message.text)) return false;
     return !phase || ["final_answer", "need_input", "awaiting_input", "question", "request_user_input"].includes(phase);
   }
   return true;
@@ -538,6 +544,29 @@ function shouldMirrorWhatsAppReply(message) {
 function threadAllowsWhatsAppMirroring(thread) {
   if (!thread?.binding) return true;
   return thread.binding.mirrorToWhatsApp !== false && thread.binding.mirrorReplies !== false;
+}
+
+function isFailedWhatsAppInbound(message) {
+  const role = String(message?.role || "").trim().toLowerCase();
+  const state = String(message?.state || "").trim().toLowerCase();
+  const deliveryState = String(message?.deliveryState || "").trim().toLowerCase();
+  return role === "user" &&
+    (state === "failed" || deliveryState === "failed") &&
+    (message.connector === "whatsapp" || message.source === "whatsapp_inbound") &&
+    Boolean(pickString(message.chatId));
+}
+
+function formatWhatsAppDeliveryFailure(message) {
+  const reason = pickString(message.error, message.deliveryError, "Orkestr could not confirm this message reached Codex.")
+    .replace(/\s+/g, " ")
+    .slice(0, 600)
+    .trim();
+  return [
+    "Delivery failed",
+    "",
+    "Your message could not be delivered to Codex.",
+    `Reason: ${reason || "Unknown error."}`,
+  ].join("\n");
 }
 
 async function deliverWhatsAppRepliesOnce(env = process.env, fetchImpl = fetch) {
@@ -561,6 +590,49 @@ async function deliverWhatsAppRepliesOnce(env = process.env, fetchImpl = fetch) 
   ];
   for (const { agentId, threadId, thread, messages, kind } of messageSets) {
     for (const message of messages) {
+      if (isFailedWhatsAppInbound(message)) {
+        if (deliveredIds.has(message.id)) continue;
+        if (kind === "thread" && !threadAllowsWhatsAppMirroring(thread)) {
+          skipped.push({ agentId, threadId, messageId: message.id, reason: "mirroring_disabled" });
+          continue;
+        }
+        const chatId = pickString(message.chatId);
+        const text = formatWhatsAppDeliveryFailure(message);
+        const accountId = kind === "thread"
+          ? pickString(thread?.binding?.responderAccountId, thread?.binding?.outboundAccountId, message.accountId)
+          : pickString(message.accountId);
+        const textKey = deliveryTextKey(chatId, `${message.id}\n${text}`);
+        if (deliveredTextKeys.has(textKey) || batchTextKeys.has(textKey)) {
+          skipped.push({ agentId, threadId, messageId: message.id, reason: "duplicate_text" });
+          continue;
+        }
+        try {
+          const payload = await sendWhatsAppText({ chatId, text, accountId, config, env, fetchImpl });
+          const delivery = {
+            kind,
+            deliveryType: "delivery_error",
+            agentId: agentId || null,
+            threadId: threadId || null,
+            messageId: message.id,
+            chatId,
+            accountId,
+            textKey,
+            deliveredAt: new Date().toISOString(),
+            bridgeResponse: payload,
+          };
+          outboundDeliveries.push(delivery);
+          deliveredIds.add(message.id);
+          deliveredTextKeys.add(textKey);
+          batchTextKeys.add(textKey);
+          delivered.push(delivery);
+          await appendEvent({ type: "whatsapp_outbound_delivery_error_delivered", agentId: agentId || null, threadId: threadId || null, messageId: message.id, chatId }, env);
+        } catch (error) {
+          const failure = { kind, agentId: agentId || null, threadId: threadId || null, messageId: message.id, chatId, error: error.message || String(error) };
+          failed.push(failure);
+          await appendEvent({ type: "whatsapp_outbound_failed", ...failure }, env);
+        }
+        continue;
+      }
       if (message.role !== "assistant" || message.state !== "completed" || deliveredIds.has(message.id)) continue;
       if (!shouldMirrorWhatsAppReply(message)) continue;
       const parent = messages.find((entry) => entry.id === message.parentMessageId);
