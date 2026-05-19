@@ -6,6 +6,7 @@ import { promisify } from "node:util";
 import { Body, Controller, Get, HttpCode, Param, Post, Query, Req, Res } from "@nestjs/common";
 import { listRuntimeLeases } from "../../../../../packages/core/src/runtime-leases.js";
 import { getSetupStatus } from "../../../../../packages/core/src/setup.js";
+import { systemDoctor } from "../../../../../packages/core/src/system-doctor.js";
 import {
   approvePairingChallenge,
   createPairingChallenge,
@@ -325,6 +326,11 @@ export class SystemController {
   @Get("system/summary")
   async systemSummary() {
     return systemSnapshot();
+  }
+
+  @Get("system/doctor")
+  async systemDoctor() {
+    return systemDoctor();
   }
 
   @Get("system/processes")

@@ -95,6 +95,27 @@ test("CLI doctors timers through the public API", async () => {
   assert.match(stdout.text(), /1 timer checked/);
 });
 
+test("CLI doctors the host system by default", async () => {
+  const stdout = capture();
+  const code = await runCli(["doctor"], {
+    stdout,
+    stderr: capture(),
+    fetchImpl: fakeFetch({
+      "GET /api/system/doctor": {
+        ok: true,
+        status: "ok",
+        summary: "All system checks passed.",
+        counts: { total: 2, ok: 2, warnings: 0, errors: 0 },
+        issues: [],
+      },
+    }),
+  });
+
+  assert.equal(code, 0);
+  assert.match(stdout.text(), /System: ok/);
+  assert.match(stdout.text(), /All system checks passed/);
+});
+
 test("CLI timer doctor exits nonzero for broken timers", async () => {
   const stdout = capture();
   const code = await runCli(["timers", "doctor"], {

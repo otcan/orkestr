@@ -1,7 +1,7 @@
 import { Component, EventEmitter, Input, OnChanges, OnDestroy, OnInit, Output, SimpleChanges, inject } from "@angular/core";
 import { FormsModule } from "@angular/forms";
 import { firstValueFrom } from "rxjs";
-import { ApiService, ConnectorStatus, OutlookOAuthPollResponse, OutlookOAuthStartResponse, SecurityChallenge, SetupStatus, ThreadSummary } from "./api.service";
+import { ApiService, ConnectorStatus, OutlookOAuthPollResponse, OutlookOAuthStartResponse, SecurityChallenge, SetupStatus, SystemDoctorResponse, ThreadSummary } from "./api.service";
 
 type ConnectorStep = "openai" | "codex" | "gmail" | "linkedin" | "whatsapp" | "browsers";
 type OnboardingStep = "goal" | "system" | "security" | ConnectorStep | "finish";
@@ -46,6 +46,7 @@ export class OnboardingPageComponent implements OnInit, OnChanges, OnDestroy {
   @Output() paired = new EventEmitter<void>();
 
   setup: SetupStatus | null = null;
+  doctor: SystemDoctorResponse | null = null;
   busy = false;
   error = "";
   notice = "";
@@ -137,8 +138,14 @@ export class OnboardingPageComponent implements OnInit, OnChanges, OnDestroy {
   async load(showBusy = true): Promise<void> {
     if (showBusy) this.busy = true;
     try {
-      const setup = await firstValueFrom(this.api.setupStatus());
+      const [setupResult, doctorResult] = await Promise.allSettled([
+        firstValueFrom(this.api.setupStatus()),
+        firstValueFrom(this.api.systemDoctor()),
+      ]);
+      if (setupResult.status === "rejected") throw setupResult.reason;
+      const setup = setupResult.value;
       this.setup = setup;
+      this.doctor = doctorResult.status === "fulfilled" ? doctorResult.value : null;
       this.hydrateForms(setup);
       if (setup.security?.paired) await this.loadSecurityChallenges(false);
       else this.securityChallenges = [];
@@ -597,6 +604,15 @@ export class OnboardingPageComponent implements OnInit, OnChanges, OnDestroy {
   }
 
   systemChecks(): Array<{ label: string; state: string; summary: string; className: string }> {
+    const doctorChecks = this.doctor?.checks || [];
+    if (doctorChecks.length) {
+      return doctorChecks.map((check) => ({
+        label: check.label || check.id,
+        state: check.status === "ok" ? "ready" : check.status === "error" ? "needs fix" : "review",
+        summary: [check.summary, check.repair ? `Fix: ${check.repair}` : ""].filter(Boolean).join(" "),
+        className: this.doctorStatusClass(check.status),
+      }));
+    }
     return [
       {
         label: "Local home",
@@ -629,6 +645,13 @@ export class OnboardingPageComponent implements OnInit, OnChanges, OnDestroy {
         className: this.mailStatusClass(),
       },
     ];
+  }
+
+  private doctorStatusClass(status = ""): string {
+    if (status === "ok") return "ready";
+    if (status === "error") return "bad";
+    if (status === "warning") return "partial";
+    return "idle";
   }
 
   securityChecks(): Array<{ label: string; state: string; summary: string; className: string }> {

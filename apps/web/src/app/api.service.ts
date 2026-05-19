@@ -67,6 +67,33 @@ export interface WorkspaceFoldersResponse {
   entries: WorkspaceFolderEntry[];
 }
 
+export interface SystemDoctorCheck {
+  id: string;
+  label: string;
+  status: "ok" | "warning" | "error" | string;
+  summary: string;
+  severity?: string;
+  repair?: string;
+  command?: string;
+  path?: string;
+}
+
+export interface SystemDoctorResponse {
+  ok: boolean;
+  status: string;
+  summary: string;
+  generatedAt: string;
+  counts?: {
+    total?: number;
+    ok?: number;
+    warnings?: number;
+    errors?: number;
+  };
+  checks?: SystemDoctorCheck[];
+  issues?: Array<Record<string, string>>;
+  paths?: Record<string, string>;
+}
+
 export interface SetupStatus {
   setupState: string;
   home: string;
@@ -806,6 +833,10 @@ export class ApiService {
 
   systemSummary(): Observable<Record<string, unknown>> {
     return this.http.get<Record<string, unknown>>(this.api("/system/summary"));
+  }
+
+  systemDoctor(): Observable<SystemDoctorResponse> {
+    return this.http.get<SystemDoctorResponse>(this.api("/system/doctor"));
   }
 
   systemProcesses(sort = "cpu"): Observable<{ count: number; processes: Array<Record<string, unknown>> }> {

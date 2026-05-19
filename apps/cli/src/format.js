@@ -97,6 +97,21 @@ export function formatTimerDoctor(doctor = {}) {
   return lines.join("\n");
 }
 
+export function formatSystemDoctor(doctor = {}) {
+  const counts = doctor.counts || {};
+  const lines = [
+    `System: ${doctor.status || "unknown"}`,
+    doctor.summary || "",
+    `Checks: ${Number(counts.ok || 0)} ok, ${Number(counts.warnings || 0)} warnings, ${Number(counts.errors || 0)} errors`,
+  ].filter(Boolean);
+  const issues = Array.isArray(doctor.issues) ? doctor.issues : [];
+  for (const issue of issues) {
+    lines.push(`${String(issue.severity || "info").toUpperCase()} ${issue.code || "system_issue"}: ${issue.label || "system"}: ${issue.message || ""}`.trim());
+    if (issue.repair) lines.push(`  fix: ${issue.repair}`);
+  }
+  return lines.join("\n");
+}
+
 function compactTimestamp(value) {
   if (!value || value === "-") return "-";
   const date = new Date(value);

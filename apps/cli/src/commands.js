@@ -2,7 +2,7 @@ import { spawn } from "node:child_process";
 import { startServer } from "../../server/src/server.js";
 import { approvePairingChallenge, listPairingChallenges, rejectPairingChallenge } from "../../../packages/core/src/security.js";
 import { defaultApiBase, requestJson } from "./api-client.js";
-import { formatThreadTable, formatTimerDoctor, formatTimerTable, threadName } from "./format.js";
+import { formatSystemDoctor, formatThreadTable, formatTimerDoctor, formatTimerTable, threadName } from "./format.js";
 import { pickThread as defaultPickThread } from "./thread-picker.js";
 
 export async function runCli(argv = process.argv.slice(2), context = {}) {
@@ -77,9 +77,10 @@ async function list(argv, ctx) {
 }
 
 async function doctorCommand(argv, ctx) {
-  const subject = positional(argv)[0] || "timers";
+  const subject = positional(argv)[0] || "system";
+  if (subject === "system" || subject === "host") return doctorSystemCommand(argv, ctx);
   if (subject === "timers" || subject === "timer") return doctorTimersCommand(argv, ctx);
-  throw new Error("Usage: orkestr doctor [timers] [--json]");
+  throw new Error("Usage: orkestr doctor [system|timers] [--json]");
 }
 
 async function timersCommand(argv, ctx) {
@@ -104,6 +105,14 @@ async function doctorTimersCommand(argv, ctx) {
   const payload = await requestJson("/api/timers/doctor", ctx);
   if (json) ctx.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
   else ctx.stdout.write(`${formatTimerDoctor(payload)}\n`);
+  return payload?.ok === false || payload?.status === "broken" ? 1 : 0;
+}
+
+async function doctorSystemCommand(argv, ctx) {
+  const json = argv.includes("--json");
+  const payload = await requestJson("/api/system/doctor", ctx);
+  if (json) ctx.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
+  else ctx.stdout.write(`${formatSystemDoctor(payload)}\n`);
   return payload?.ok === false || payload?.status === "broken" ? 1 : 0;
 }
 
@@ -286,7 +295,7 @@ function writeUsage(stream) {
   stream.write(`Usage:
   orkestr [serve] [--open] [--host 127.0.0.1] [--port 19812]
   orkestr list [--json] [--api http://127.0.0.1:19812]
-  orkestr doctor [timers] [--json]
+  orkestr doctor [system|timers] [--json]
   orkestr timers [list|doctor|run <timer-id>] [--json]
   orkestr security [challenges|approve <challenge-id>|reject <challenge-id>] [--json]
   orkestr thread create <name> [--id id] [--cwd path] [--command command] [--executor id] [--json]

@@ -70,6 +70,7 @@ Then use normal server commands:
 ```bash
 systemctl status orkestr
 journalctl -u orkestr -f
+orkestr doctor
 orkestr security approve <challenge-id>
 ```
 
@@ -103,6 +104,7 @@ Useful updater commands:
 ```bash
 systemctl list-timers orkestr-update.timer
 journalctl -u orkestr-update -f
+orkestr doctor
 orkestr-update
 orkestr-reset-state
 ```
