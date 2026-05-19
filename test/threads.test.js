@@ -547,7 +547,7 @@ test("runtime sync skips Codex update prompts", async () => {
     status = await runtimeStatus("codex-update-thread", env);
     const log = await fs.readFile(fakeTmux.log, "utf8");
     assert.equal(status.state, "waking");
-    assert.match(log, /__CALL__\tsend-keys\t-t\t%42\t2\tC-m/);
+    assert.match(log, /__CALL__\tsend-keys\t-t\t%42\t3\tC-m/);
     assert.doesNotMatch(log, /__CALL__\tkill-session\t-t\torkestr-codex-update-thread/);
   } finally {
     restoreEnvValue("PATH", priorPath);
@@ -598,6 +598,50 @@ test("runtime status ignores stale Codex update prompts in scrollback", async ()
     await wakeThread("codex-update-scrollback-thread", { reason: "test_wake" }, env);
 
     const status = await runtimeStatus("codex-update-scrollback-thread", env);
+
+    assert.equal(status.needsCodexUpdatePromptSkip, false);
+    assert.equal(status.promptReady, true);
+    assert.equal(status.state, "ready");
+  } finally {
+    restoreEnvValue("PATH", priorPath);
+    restoreEnvValue("TMUX_LOG", priorTmuxLog);
+    restoreEnvValue("TMUX_STATE", priorTmuxState);
+    restoreEnvValue("TMUX_CAPTURE_TEXT", priorTmuxCaptureText);
+  }
+});
+
+test("runtime status ignores stale Codex update prompt text above a live input prompt", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-codex-update-stale-near-prompt-"));
+  const fakeTmux = await createFakeTmux(home);
+  const priorPath = process.env.PATH;
+  const priorTmuxLog = process.env.TMUX_LOG;
+  const priorTmuxState = process.env.TMUX_STATE;
+  const priorTmuxCaptureText = process.env.TMUX_CAPTURE_TEXT;
+  process.env.PATH = `${fakeTmux.bin}:${priorPath || ""}`;
+  process.env.TMUX_LOG = fakeTmux.log;
+  process.env.TMUX_STATE = fakeTmux.state;
+  process.env.TMUX_CAPTURE_TEXT = [
+    "✨ Update available! 0.130.0 -> 0.131.0",
+    "  3. Skip until next version",
+    "  Press enter to continue",
+    "›",
+    "  gpt-5.5 xhigh · /workspace/test",
+  ].join("\n");
+
+  try {
+    const env = {
+      ORKESTR_HOME: path.join(home, "orkestr-home"),
+      HOME: path.join(home, "runtime-home"),
+      CODEX_HOME: path.join(home, "codex-home"),
+      PATH: process.env.PATH,
+      TMUX_LOG: fakeTmux.log,
+      TMUX_STATE: fakeTmux.state,
+      TMUX_CAPTURE_TEXT: process.env.TMUX_CAPTURE_TEXT,
+    };
+    await createThread({ id: "codex-update-stale-near-prompt-thread", name: "Codex Update Stale Near Prompt Thread" }, env);
+    await wakeThread("codex-update-stale-near-prompt-thread", { reason: "test_wake" }, env);
+
+    const status = await runtimeStatus("codex-update-stale-near-prompt-thread", env);
 
     assert.equal(status.needsCodexUpdatePromptSkip, false);
     assert.equal(status.promptReady, true);
@@ -738,6 +782,50 @@ test("runtime status keeps delivered Codex input processing until prompt returns
 
     assert.equal(ready.state, "ready");
     assert.equal(ready.working, false);
+  } finally {
+    restoreEnvValue("PATH", priorPath);
+    restoreEnvValue("TMUX_LOG", priorTmuxLog);
+    restoreEnvValue("TMUX_STATE", priorTmuxState);
+    restoreEnvValue("TMUX_CAPTURE_TEXT", priorTmuxCaptureText);
+  }
+});
+
+test("runtime status ignores prose mentioning interrupt keys above a live prompt", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-prose-interrupt-key-"));
+  const fakeTmux = await createFakeTmux(home);
+  const priorPath = process.env.PATH;
+  const priorTmuxLog = process.env.TMUX_LOG;
+  const priorTmuxState = process.env.TMUX_STATE;
+  const priorTmuxCaptureText = process.env.TMUX_CAPTURE_TEXT;
+  process.env.PATH = `${fakeTmux.bin}:${priorPath || ""}`;
+  process.env.TMUX_LOG = fakeTmux.log;
+  process.env.TMUX_STATE = fakeTmux.state;
+  process.env.TMUX_CAPTURE_TEXT = [
+    "The weak spot is that the visible \"Waiting for background terminal ... esc to interrupt\" marker can scroll out.",
+    "",
+    "› Improve documentation in @filename",
+    "",
+    "  gpt-5.5 xhigh · /workspace/test",
+  ].join("\n");
+
+  try {
+    const env = {
+      ORKESTR_HOME: path.join(home, "orkestr-home"),
+      HOME: path.join(home, "runtime-home"),
+      CODEX_HOME: path.join(home, "codex-home"),
+      PATH: process.env.PATH,
+      TMUX_LOG: fakeTmux.log,
+      TMUX_STATE: fakeTmux.state,
+      TMUX_CAPTURE_TEXT: process.env.TMUX_CAPTURE_TEXT,
+    };
+    await createThread({ id: "prose-interrupt-key-thread", name: "Prose Interrupt Key Thread" }, env);
+    await wakeThread("prose-interrupt-key-thread", { reason: "test" }, env);
+
+    const status = await runtimeStatus("prose-interrupt-key-thread", env);
+
+    assert.equal(status.working, false);
+    assert.equal(status.promptReady, true);
+    assert.equal(status.state, "ready");
   } finally {
     restoreEnvValue("PATH", priorPath);
     restoreEnvValue("TMUX_LOG", priorTmuxLog);

@@ -269,12 +269,23 @@ async function capturePane(paneId, lines = 80) {
 
 function paneWorking(text) {
   const lines = String(text || "").split("\n").map((line) => line.trim()).filter(Boolean).slice(-12);
-  return lines.some((line) => /(?:[•◦]\s*(?:Working|Thinking|Running|Processing)\b|preparing (?:a )?response|esc to interrupt|ctrl-c to interrupt|press esc to interrupt)/i.test(line));
+  return paneNeedInputMenuVisible(text) || lines.some((line) => (
+    /^[•◦]\s*(?:Working|Thinking|Running|Processing)\b/i.test(line) ||
+    /^Codex is still preparing (?:a )?response\b/i.test(line) ||
+    /^(?:Waiting for background terminal|Working|Thinking|Running|Processing)\b.*\b(?:esc|ctrl-c) to interrupt\b/i.test(line)
+  ));
 }
 
 function panePromptReady(text) {
   const lines = String(text || "").split("\n").map((line) => line.trim()).filter(Boolean).slice(-8);
   return lines.some((line) => /^(?:›|>)(?:\s|$)/.test(line) && !/^(?:›|>)\s*\d+[.)]/.test(line));
+}
+
+function paneNeedInputMenuVisible(text) {
+  const body = String(text || "");
+  return /^Question\s+\d+\/\d+\s+\(\d+\s+unanswered\)/im.test(body) &&
+    /^\s*(?:›\s*)?\d+\.\s+\S+/im.test(body) &&
+    /\benter to submit answer\b/i.test(body);
 }
 
 function panePlanImplementationMenuVisible(text) {
@@ -291,16 +302,30 @@ function paneResumeDirectoryPrompt(text) {
   return /Choose working directory to resume this session/i.test(body) && /Press enter to continue/i.test(body);
 }
 
-function paneCodexUpdatePrompt(text) {
+function paneCodexUpdatePromptChoice(text) {
   const lines = String(text || "")
     .split("\n")
     .map((line) => line.trim())
     .filter(Boolean)
     .slice(-12);
   const pressIndex = lines.findIndex((line) => /Press enter to continue/i.test(line));
-  if (pressIndex < 0 || pressIndex < lines.length - 3) return false;
-  const body = lines.join("\n");
-  return /Update available!/i.test(body) && /\bSkip until next version\b/i.test(body) && /Press enter to continue/i.test(body);
+  if (pressIndex < 0 || pressIndex !== lines.length - 1) return null;
+  const updateIndex = lines.findIndex((line) => /Update available!/i.test(line));
+  if (updateIndex < 0 || pressIndex - updateIndex > 8) return null;
+  const skipUntilLine = lines
+    .slice(updateIndex, pressIndex)
+    .find((line) => /(?:^|[\s›>])\d+\.\s*Skip until next version\b/i.test(line));
+  const skipMatch = skipUntilLine?.match(/(?:^|[\s›>])(\d+)\.\s*Skip until next version\b/i);
+  if (skipMatch?.[1]) return skipMatch[1];
+  const skipLine = lines
+    .slice(updateIndex, pressIndex)
+    .find((line) => /(?:^|[\s›>])\d+\.\s*Skip\b/i.test(line));
+  const fallbackMatch = skipLine?.match(/(?:^|[\s›>])(\d+)\.\s*Skip\b/i);
+  return fallbackMatch?.[1] || null;
+}
+
+function paneCodexUpdatePrompt(text) {
+  return Boolean(paneCodexUpdatePromptChoice(text));
 }
 
 async function activeLeaseForThread(threadId, env = process.env) {
@@ -373,7 +398,8 @@ export async function runtimeStatus(threadId, env = process.env, messagesOverrid
   const planImplementationReady = panePlanImplementationReady(paneText);
   const planImplementationMenuVisible = panePlanImplementationMenuVisible(paneText);
   const needsResumeDirectoryConfirmation = paneResumeDirectoryPrompt(paneText);
-  const needsCodexUpdatePromptSkip = paneCodexUpdatePrompt(paneText);
+  const codexUpdatePromptChoice = paneCodexUpdatePromptChoice(paneText);
+  const needsCodexUpdatePromptSkip = Boolean(codexUpdatePromptChoice);
   const paneWorkingCandidate = paneWorking(paneText);
   const promptReadyCandidate = !paneWorkingCandidate && panePromptReady(paneText);
   const working = paneWorkingCandidate || (!promptReadyCandidate && runningCount > 0);
@@ -398,6 +424,7 @@ export async function runtimeStatus(threadId, env = process.env, messagesOverrid
     promptReadyStable: promptReady,
     needsResumeDirectoryConfirmation,
     needsCodexUpdatePromptSkip,
+    codexUpdatePromptChoice,
     working,
     foregroundWorking: working,
     typingActive: working,
@@ -842,7 +869,7 @@ async function waitForRuntimeReady(threadId, env = process.env) {
       continue;
     }
     if (last.needsCodexUpdatePromptSkip && last.paneId) {
-      await execFileAsync("tmux", ["send-keys", "-t", last.paneId, "2", "C-m"]).catch(() => {});
+      await execFileAsync("tmux", ["send-keys", "-t", last.paneId, last.codexUpdatePromptChoice || "2", "C-m"]).catch(() => {});
       await sleep(1000);
       continue;
     }
@@ -1852,7 +1879,7 @@ async function syncRuntimeLeasesOnce(env = process.env) {
         continue;
       }
       if (status.needsCodexUpdatePromptSkip && status.paneId) {
-        await execFileAsync("tmux", ["send-keys", "-t", status.paneId, "2", "C-m"]).catch(() => {});
+        await execFileAsync("tmux", ["send-keys", "-t", status.paneId, status.codexUpdatePromptChoice || "2", "C-m"]).catch(() => {});
         await updateThread(lease.threadId, {
           state: "waking",
           runtime: { ...leaseForStorage, state: "waking" },
