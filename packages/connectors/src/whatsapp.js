@@ -256,6 +256,17 @@ function pickString(...values) {
   return "";
 }
 
+const proposedPlanTagPattern = /<\/?\s*proposed[\s_-]*plan\s*>/gi;
+const proposedPlanTagTestPattern = /<\/?\s*proposed[\s_-]*plan\s*>/i;
+
+function hasProposedPlanTag(value) {
+  return proposedPlanTagTestPattern.test(String(value || ""));
+}
+
+function stripProposedPlanTags(value) {
+  return String(value || "").replace(proposedPlanTagPattern, "").trim();
+}
+
 function comparableParticipantId(value) {
   return pickString(value).toLowerCase();
 }
@@ -496,7 +507,7 @@ function formatWhatsAppLine(value) {
 }
 
 export function formatWhatsAppOutboundText(value) {
-  const lines = String(value || "").replace(/\r\n/g, "\n").split("\n");
+  const lines = stripProposedPlanTags(value).replace(/\r\n/g, "\n").split("\n");
   let inFence = false;
   const formatted = lines.map((line) => {
     if (line.trim().startsWith("```")) {
@@ -518,6 +529,7 @@ function deliveryTextKey(chatId, text) {
 function shouldMirrorWhatsAppReply(message) {
   if (message.source === "codex-rollout") {
     const phase = String(message.phase || "final_answer").trim();
+    if (phase === "plan" || hasProposedPlanTag(message.text)) return false;
     return !phase || ["final_answer", "need_input", "awaiting_input", "question", "request_user_input"].includes(phase);
   }
   return true;

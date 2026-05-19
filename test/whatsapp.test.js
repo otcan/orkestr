@@ -339,6 +339,43 @@ test("whatsapp outbound formatting preserves fenced code blocks", () => {
   );
 });
 
+test("whatsapp outbound formatting strips proposed plan wrappers", () => {
+  assert.equal(
+    formatWhatsAppOutboundText("<proposed_plan>\n# Plan\n\n**Do it**\n</proposed_plan>"),
+    "Plan\n\n*Do it*",
+  );
+});
+
+test("whatsapp delivery does not mirror proposed plans as final answers", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-proposed-plan-"));
+  const env = { ORKESTR_HOME: home };
+  await createThread({ id: "thread-wa-proposed-plan", name: "WA Proposed Plan Thread" }, env);
+  await writeConnectorConfig("whatsapp", {
+    bridgeMode: "external",
+    bridgeUrl: "http://wa.local",
+    threadRoutes: { "chat-proposed-plan": "thread-wa-proposed-plan" },
+  }, env);
+
+  const routed = await routeWhatsAppInbound({ eventId: "wa-proposed-plan-1", chatId: "chat-proposed-plan", text: "plan it" }, env);
+  await appendThreadMessage("thread-wa-proposed-plan", {
+    role: "assistant",
+    source: "codex-rollout",
+    phase: "final_answer",
+    state: "completed",
+    text: "<proposed_plan>\n# Plan\n\nDo it\n</proposed_plan>",
+    parentMessageId: routed.message.id,
+    connector: "whatsapp",
+    chatId: "chat-proposed-plan",
+  }, env);
+
+  const delivery = await deliverWhatsAppReplies(env, async () => {
+    throw new Error("should not mirror proposed plan");
+  });
+
+  assert.equal(delivery.delivered.length, 0);
+  assert.equal(delivery.skipped.length, 0);
+});
+
 test("whatsapp inbound routes through enabled thread bindings", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-binding-"));
   const env = { ORKESTR_HOME: home };
