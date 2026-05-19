@@ -292,7 +292,14 @@ function paneResumeDirectoryPrompt(text) {
 }
 
 function paneCodexUpdatePrompt(text) {
-  const body = String(text || "");
+  const lines = String(text || "")
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .slice(-12);
+  const pressIndex = lines.findIndex((line) => /Press enter to continue/i.test(line));
+  if (pressIndex < 0 || pressIndex < lines.length - 3) return false;
+  const body = lines.join("\n");
   return /Update available!/i.test(body) && /\bSkip until next version\b/i.test(body) && /Press enter to continue/i.test(body);
 }
 
@@ -633,16 +640,17 @@ export async function wakeThread(threadId, options = {}, env = process.env) {
     runtime: { state: "waking", sessionName, workspace, reason: options.reason || "wake" },
   }, env);
 
-  if (!(await tmuxHasSession(sessionName))) {
-    await execFileAsync("tmux", ["new-session", "-d", "-s", sessionName, "-c", workspace, command], {
-      env: {
-        ...process.env,
-        ...env,
-        HOME: runtimeHome(env),
-        CODEX_HOME: env.CODEX_HOME || process.env.CODEX_HOME || defaultCodexHome(env),
-      },
-    });
+  if (await tmuxHasSession(sessionName)) {
+    await execFileAsync("tmux", ["kill-session", "-t", sessionName]).catch(() => {});
   }
+  await execFileAsync("tmux", ["new-session", "-d", "-s", sessionName, "-c", workspace, command], {
+    env: {
+      ...process.env,
+      ...env,
+      HOME: runtimeHome(env),
+      CODEX_HOME: env.CODEX_HOME || process.env.CODEX_HOME || defaultCodexHome(env),
+    },
+  });
   const windowName = tmuxWindowName(thread);
   await renameTmuxWindow(sessionName, windowName).catch(() => {});
   const paneId = await tmuxPaneId(sessionName).catch(() => null);

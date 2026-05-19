@@ -303,10 +303,14 @@ test("relative thread workspaces resolve under the runtime workspace root", asyn
       TMUX_STATE: fakeTmux.state,
     };
     await createThread({ id: "relative-workspace-thread", name: "Relative Workspace Thread", cwd: "test" }, env);
+    await fs.writeFile(fakeTmux.state, "orkestr-relative-workspace-thread\n", "utf8");
     await wakeThread("relative-workspace-thread", { reason: "test" }, env);
     const leases = await listRuntimeLeases(env);
+    const log = await fs.readFile(fakeTmux.log, "utf8");
 
     assert.equal(leases[0].workspace, path.join(workspaceRoot, "test"));
+    assert.match(log, /__CALL__\tkill-session\t-t\torkestr-relative-workspace-thread/);
+    assert.match(log, /__CALL__\tnew-session\t-d\t-s\torkestr-relative-workspace-thread\t-c\t/);
   } finally {
     restoreEnvValue("PATH", priorPath);
     restoreEnvValue("TMUX_LOG", priorTmuxLog);
@@ -545,6 +549,59 @@ test("runtime sync skips Codex update prompts", async () => {
     assert.equal(status.state, "waking");
     assert.match(log, /__CALL__\tsend-keys\t-t\t%42\t2\tC-m/);
     assert.doesNotMatch(log, /__CALL__\tkill-session\t-t\torkestr-codex-update-thread/);
+  } finally {
+    restoreEnvValue("PATH", priorPath);
+    restoreEnvValue("TMUX_LOG", priorTmuxLog);
+    restoreEnvValue("TMUX_STATE", priorTmuxState);
+    restoreEnvValue("TMUX_CAPTURE_TEXT", priorTmuxCaptureText);
+  }
+});
+
+test("runtime status ignores stale Codex update prompts in scrollback", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-codex-update-scrollback-"));
+  const fakeTmux = await createFakeTmux(home);
+  const priorPath = process.env.PATH;
+  const priorTmuxLog = process.env.TMUX_LOG;
+  const priorTmuxState = process.env.TMUX_STATE;
+  const priorTmuxCaptureText = process.env.TMUX_CAPTURE_TEXT;
+  process.env.PATH = `${fakeTmux.bin}:${priorPath || ""}`;
+  process.env.TMUX_LOG = fakeTmux.log;
+  process.env.TMUX_STATE = fakeTmux.state;
+  process.env.TMUX_CAPTURE_TEXT = [
+    "✨ Update available! 0.130.0 -> 0.131.0",
+    "› 1. Update now (runs `npm install -g @openai/codex`)",
+    "  2. Skip",
+    "  3. Skip until next version",
+    "  Press enter to continue",
+    "",
+    "╭─────────────────────────────────────────╮",
+    "│ >_ OpenAI Codex (v0.130.0)              │",
+    "╰─────────────────────────────────────────╯",
+    "",
+    "›",
+    "",
+    "  gpt-5.5 default · /workspace/test",
+    "›",
+  ].join("\n");
+
+  try {
+    const env = {
+      ORKESTR_HOME: path.join(home, "orkestr-home"),
+      HOME: path.join(home, "runtime-home"),
+      CODEX_HOME: path.join(home, "codex-home"),
+      PATH: process.env.PATH,
+      TMUX_LOG: fakeTmux.log,
+      TMUX_STATE: fakeTmux.state,
+      TMUX_CAPTURE_TEXT: process.env.TMUX_CAPTURE_TEXT,
+    };
+    await createThread({ id: "codex-update-scrollback-thread", name: "Codex Update Scrollback Thread" }, env);
+    await wakeThread("codex-update-scrollback-thread", { reason: "test_wake" }, env);
+
+    const status = await runtimeStatus("codex-update-scrollback-thread", env);
+
+    assert.equal(status.needsCodexUpdatePromptSkip, false);
+    assert.equal(status.promptReady, true);
+    assert.equal(status.state, "ready");
   } finally {
     restoreEnvValue("PATH", priorPath);
     restoreEnvValue("TMUX_LOG", priorTmuxLog);
