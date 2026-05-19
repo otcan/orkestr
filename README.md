@@ -1,8 +1,8 @@
 # Orkestr
 
-Orkestr is a local-first workstation for running coding agents from your own machine.
+Orkestr is a local-first control plane for running Codex agents from your own machine.
 
-It gives a local Codex session a control plane: setup, WhatsApp routing, virtual browser desktops, timers, logs, and a small web cockpit. It is designed for personal infrastructure first, not hosted multi-user SaaS.
+It turns raw terminal agents into named, controllable work threads: create a Codex instance, give it a workspace, start or sleep it, inspect status, connect WhatsApp or Gmail, attach a virtual desktop, and review logs from one small web cockpit. It is designed for personal infrastructure first, not hosted multi-user SaaS.
 
 > Public alpha. Do not expose Orkestr directly to the public internet. Keep it bound to `127.0.0.1` unless you have put it behind a trusted private network, TLS, and an auth boundary.
 
@@ -19,6 +19,19 @@ Coding agents are useful, but the useful work usually lives outside the chat win
 - logs that explain what happened after the agent wakes up
 
 Orkestr makes those pieces explicit. The default target is a single developer running local agents on a laptop, workstation, or private VPS.
+
+## What Orkestr Lets You Do
+
+- **Run multiple Codex instances:** create named coding agents and worker threads instead of juggling anonymous terminal panes.
+- **Control agent lifecycle:** start, wake, sleep, attach, and inspect ready/working/error status from the web UI or CLI.
+- **Give every agent a real workspace:** clone a repo when you have one, or let Orkestr generate a local git workspace when you do not.
+- **Route WhatsApp into agents:** connect one or two local WhatsApp Web accounts, create or bind a chat, and mirror agent replies back to the conversation.
+- **Connect mail and browser accounts:** configure Gmail OAuth, keep browser-backed Gmail/LinkedIn profiles local, and add private connector overlays without putting credentials in the public repo.
+- **Use virtual desktops:** launch managed Chrome desktop profiles for browser work, login state, and future CDP-backed tasks.
+- **Schedule recurring work:** create timers that wake a thread and send a prompt on a cadence.
+- **Operate the box:** run `orkestr doctor`, watch logs, reset disposable VPS state, and keep a host-native install updated from the server itself.
+
+Dropbox and other file-source bindings are not shipped as public OSS V1 connectors yet. The intended path is the same connector/binding model: keep private credentials in overlays, then bind those sources to an agent without copy-pasting context into chat.
 
 ## Quickstart
 
@@ -197,13 +210,16 @@ More detail: [docs/architecture.md](docs/architecture.md).
 - First-run setup at `/setup`
 - OpenAI and Codex connection checks
 - Docker image with Codex, tmux, git, ripgrep, and Chromium installed
+- Multiple named Codex threads with start, sleep, wake, attach, and status controls
 - Built-in local WhatsApp bridge with two QR-paired account slots
+- WhatsApp chat creation and thread binding
 - Thread-first runtime API for local Codex sessions
 - Virtual browser registry, including a general-purpose virtual desktop
 - Gmail OAuth surface
 - LinkedIn and Gmail browser profiles
 - Timers and manual timer runs
-- CLI for listing, creating, waking, sending to, and attaching threads
+- Host/system doctor for runtime, browser, Codex, Caddy/Tailscale, and writable data paths
+- CLI for listing, creating, waking, sleeping, sending to, and attaching threads
 - Local activity logs and deterministic public demos
 
 ## Security Warning
