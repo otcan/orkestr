@@ -102,12 +102,12 @@ function commandStatusCacheTtlMs(env = process.env) {
 }
 
 async function commandStatus(command, args = ["--version"], env = process.env) {
-  const cacheKey = JSON.stringify([command, args]);
+  const cacheKey = JSON.stringify([command, args, env.PATH || ""]);
   const ttlMs = commandStatusCacheTtlMs(env);
   const cached = ttlMs > 0 ? commandStatusCache.get(cacheKey) : null;
   if (cached && cached.expiresAt > Date.now()) return cached.status;
   try {
-    const { stdout, stderr } = await execFileAsync(command, args, { timeout: 2500 });
+    const { stdout, stderr } = await execFileAsync(command, args, { env: { ...process.env, ...env }, timeout: 2500 });
     const status = {
       installed: true,
       version: String(stdout || stderr || "").split("\n")[0].trim(),
