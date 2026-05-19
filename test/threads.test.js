@@ -416,6 +416,57 @@ test("runtime sync auto-sleeps stable idle ready runtimes", async () => {
   }
 });
 
+test("runtime sync confirms Codex resume directory prompts", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-resume-dir-"));
+  const fakeTmux = await createFakeTmux(home);
+  const priorPath = process.env.PATH;
+  const priorTmuxLog = process.env.TMUX_LOG;
+  const priorTmuxState = process.env.TMUX_STATE;
+  const priorTmuxCaptureText = process.env.TMUX_CAPTURE_TEXT;
+  process.env.PATH = `${fakeTmux.bin}:${priorPath || ""}`;
+  process.env.TMUX_LOG = fakeTmux.log;
+  process.env.TMUX_STATE = fakeTmux.state;
+  process.env.TMUX_CAPTURE_TEXT = [
+    "Choose working directory to resume this session",
+    "",
+    "› 1. Use session directory (/root)",
+    "  2. Use current directory",
+    "  Press enter to continue",
+  ].join("\n");
+
+  try {
+    const env = {
+      ORKESTR_HOME: path.join(home, "orkestr-home"),
+      HOME: path.join(home, "runtime-home"),
+      CODEX_HOME: path.join(home, "codex-home"),
+      PATH: process.env.PATH,
+      TMUX_LOG: fakeTmux.log,
+      TMUX_STATE: fakeTmux.state,
+      TMUX_CAPTURE_TEXT: process.env.TMUX_CAPTURE_TEXT,
+      ORKESTR_RUNTIME_IDLE_SLEEP_MS: "1",
+    };
+    await createThread({ id: "resume-dir-thread", name: "Resume Dir Thread" }, env);
+    await wakeThread("resume-dir-thread", { reason: "test_wake" }, env);
+
+    let status = await runtimeStatus("resume-dir-thread", env);
+    assert.equal(status.state, "waking");
+    assert.equal(status.needsResumeDirectoryConfirmation, true);
+
+    await syncRuntimeLeases(env);
+
+    status = await runtimeStatus("resume-dir-thread", env);
+    const log = await fs.readFile(fakeTmux.log, "utf8");
+    assert.equal(status.state, "waking");
+    assert.match(log, /__CALL__\tsend-keys\t-t\t%42\tC-m/);
+    assert.doesNotMatch(log, /__CALL__\tkill-session\t-t\torkestr-resume-dir-thread/);
+  } finally {
+    restoreEnvValue("PATH", priorPath);
+    restoreEnvValue("TMUX_LOG", priorTmuxLog);
+    restoreEnvValue("TMUX_STATE", priorTmuxState);
+    restoreEnvValue("TMUX_CAPTURE_TEXT", priorTmuxCaptureText);
+  }
+});
+
 test("runtime sync does not auto-sleep pending or working runtimes", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-auto-sleep-guards-"));
   const fakeTmux = await createFakeTmux(home);

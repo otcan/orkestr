@@ -366,7 +366,13 @@ export async function runtimeStatus(threadId, env = process.env, messagesOverrid
   const working = paneWorkingCandidate || (!promptReadyCandidate && runningCount > 0);
   const promptReady = promptReadyCandidate && !working && !needsResumeDirectoryConfirmation;
   const recentlyStarted = Date.now() - (Date.parse(lease.startedAt || "") || Date.now()) < 20_000;
-  const state = working ? "working" : promptReady ? "ready" : recentlyStarted || pendingCount > 0 ? "waking" : "ready";
+  const state = working
+    ? "working"
+    : needsResumeDirectoryConfirmation
+      ? "waking"
+      : promptReady
+        ? "ready"
+        : recentlyStarted || pendingCount > 0 ? "waking" : "ready";
   return {
     state,
     status: state,
@@ -1812,6 +1818,16 @@ async function syncRuntimeLeasesOnce(env = process.env) {
             }, env).catch(() => {});
           }
         }
+      }
+      if (status.needsResumeDirectoryConfirmation && status.paneId) {
+        await execFileAsync("tmux", ["send-keys", "-t", status.paneId, "C-m"]).catch(() => {});
+        await updateThread(lease.threadId, {
+          state: "waking",
+          runtime: { ...leaseForStorage, state: "waking" },
+        }, env).catch(() => {});
+        next.push(leaseForStorage);
+        changed = true;
+        continue;
       }
       const idleSleep = idleSleepDecision({ lease: leaseForStorage, messages, status }, env);
       if (thread && idleSleep) {
