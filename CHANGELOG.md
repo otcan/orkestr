@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.0-alpha.5
+
+- Remove a live-looking tailnet hostname from public WhatsApp test fixtures.
+- Re-run the public launch gate, including privacy scan, full test suite, smoke test, demo, and Docker image build.
+
 ## 0.1.0-alpha.4
 
 - Parse owner `/now` and `/interrupt` commands at the Orkestr thread input boundary so Codex never receives them as literal slash commands.

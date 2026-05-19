@@ -296,7 +296,7 @@ test("whatsapp delivery translates markdown into chat-friendly formatting", asyn
     "",
     "**Deploy latest into the orkestr-vps VM, by pulling/restarting the Docker container there.**",
     "",
-    "[Tailnet URL](https://orkestr-vps.tail25663.ts.net)",
+    "[Demo URL](https://orkestr-demo.example.com)",
     "",
     "`**literal**` stays code.",
   ].join("\n");
@@ -325,7 +325,7 @@ test("whatsapp delivery translates markdown into chat-friendly formatting", asyn
     "",
     "*Deploy latest into the orkestr-vps VM, by pulling/restarting the Docker container there.*",
     "",
-    "Tailnet URL: https://orkestr-vps.tail25663.ts.net",
+    "Demo URL: https://orkestr-demo.example.com",
     "",
     "`**literal**` stays code.",
   ].join("\n"));
