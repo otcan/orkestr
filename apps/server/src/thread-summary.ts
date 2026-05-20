@@ -335,6 +335,7 @@ export async function threadRuntimeSummary(thread: any, messages: any[] = [], op
   const metadata = codexMetadata(codexThread);
   const liveCodexMode = codexModeValue(status?.codexMode);
   const liveCodexModeSource = String(status?.codexModeSource || "").trim();
+  const progress = status?.progress || thread.runtime?.progress || null;
   const summary = {
     ...thread,
     ...gitState,
@@ -361,6 +362,11 @@ export async function threadRuntimeSummary(thread: any, messages: any[] = [], op
     runningCount: status?.runningCount ?? 0,
     awaitingAckCount,
     nextDeliveryAttemptAt: status?.nextDeliveryAttemptAt ?? null,
+    progress,
+    progressSummary: progress?.summary || null,
+    progressStateHint: progress?.stateHint || null,
+    progressTailLines: Array.isArray(progress?.tailLines) ? progress.tailLines : [],
+    progressCapturedAt: progress?.capturedAt || null,
     historyState: "ready",
     staleWorking: false,
     staleWorkingReason: null,

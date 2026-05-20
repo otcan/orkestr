@@ -795,6 +795,46 @@ test("runtime status keeps delivered Codex input processing until prompt returns
   }
 });
 
+test("thread runtime summary exposes lightweight pane progress", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-progress-summary-"));
+  const fakeTmux = await createFakeTmux(home);
+  const priorHome = process.env.ORKESTR_HOME;
+  const priorRuntimeHome = process.env.HOME;
+  const priorCodexHome = process.env.CODEX_HOME;
+  const priorPath = process.env.PATH;
+  const priorTmuxLog = process.env.TMUX_LOG;
+  const priorTmuxState = process.env.TMUX_STATE;
+  const priorTmuxCaptureText = process.env.TMUX_CAPTURE_TEXT;
+  process.env.ORKESTR_HOME = path.join(home, "orkestr-home");
+  process.env.HOME = path.join(home, "runtime-home");
+  process.env.CODEX_HOME = path.join(home, "codex-home");
+  process.env.PATH = `${fakeTmux.bin}:${priorPath || ""}`;
+  process.env.TMUX_LOG = fakeTmux.log;
+  process.env.TMUX_STATE = fakeTmux.state;
+  process.env.TMUX_CAPTURE_TEXT = "◦ Working (2s • esc to interrupt)\n";
+
+  try {
+    await createThread({ id: "progress-summary-thread", name: "Progress Summary Thread" });
+    const woken = await wakeThread("progress-summary-thread", { reason: "test" });
+    const status = await runtimeStatus("progress-summary-thread");
+    const summary = await threadRuntimeSummary(woken.thread, await listThreadMessages("progress-summary-thread"));
+
+    assert.equal(status.progress.summary, "Working");
+    assert.equal(status.progress.stateHint, "working");
+    assert.equal(summary.progressSummary, "Working");
+    assert.equal(summary.progressStateHint, "working");
+    assert.deepEqual(summary.progressTailLines, ["◦ Working (2s • esc to interrupt)"]);
+  } finally {
+    restoreEnvValue("ORKESTR_HOME", priorHome);
+    restoreEnvValue("HOME", priorRuntimeHome);
+    restoreEnvValue("CODEX_HOME", priorCodexHome);
+    restoreEnvValue("PATH", priorPath);
+    restoreEnvValue("TMUX_LOG", priorTmuxLog);
+    restoreEnvValue("TMUX_STATE", priorTmuxState);
+    restoreEnvValue("TMUX_CAPTURE_TEXT", priorTmuxCaptureText);
+  }
+});
+
 test("runtime status ignores prose mentioning interrupt keys above a live prompt", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-prose-interrupt-key-"));
   const fakeTmux = await createFakeTmux(home);

@@ -113,14 +113,18 @@ function rawSnapshotIdleIntervalMs(): number {
 
 function stableRuntimeSummary(runtime: unknown): unknown {
   if (!runtime || typeof runtime !== "object") return runtime || null;
-  const { heartbeatAt, updatedAt, ...stable } = runtime as Record<string, unknown>;
-  return stable;
+  const { heartbeatAt, updatedAt, progress, ...stable } = runtime as Record<string, unknown>;
+  if (!progress || typeof progress !== "object") return stable;
+  const { capturedAt, sampledAtMs, ...stableProgress } = progress as Record<string, unknown>;
+  return { ...stable, progress: stableProgress };
 }
 
 function stableSummaryBody(payload: { threads?: Array<Record<string, unknown>> }): string {
   const threads = (payload.threads || []).map((thread) => {
-    const { updatedAt, threadUpdatedAt, runtime, ...stable } = thread;
-    return { ...stable, runtime: stableRuntimeSummary(runtime) };
+    const { updatedAt, threadUpdatedAt, runtime, progress, progressCapturedAt, ...stable } = thread;
+    if (!progress || typeof progress !== "object") return { ...stable, runtime: stableRuntimeSummary(runtime) };
+    const { capturedAt, sampledAtMs, ...stableProgress } = progress as Record<string, unknown>;
+    return { ...stable, progress: stableProgress, runtime: stableRuntimeSummary(runtime) };
   });
   return JSON.stringify(threads);
 }

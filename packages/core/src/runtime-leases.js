@@ -8,6 +8,7 @@ import { dataPaths, ensureDataDirs } from "../../storage/src/paths.js";
 import { appendEvent, readJson, writeJson } from "../../storage/src/store.js";
 import { ensureRuntimeAgentsFile } from "./agent-context.js";
 import { assertCodexAuthenticated } from "../../connectors/src/codex.js";
+import { publicPaneProgress, samplePaneProgress } from "./pane-progress.js";
 import {
   appendThreadMessage,
   getThread,
@@ -423,11 +424,21 @@ export async function runtimeStatus(threadId, env = process.env, messagesOverrid
       codexModeSource: null,
       planImplementationReady: false,
       planImplementationMenuVisible: false,
+      progress: null,
     };
   }
 
   const paneId = await resolveLivePaneId(lease, env);
-  const paneText = await capturePane(paneId).catch(() => "");
+  const progressSample = await samplePaneProgress({
+    threadId: thread.id,
+    leaseId: lease.id,
+    sessionName: lease.sessionName,
+    paneId,
+    pendingCount,
+    runningCount,
+    awaitingAckCount,
+  }, env).catch(() => null);
+  const paneText = String(progressSample?.paneText || "");
   const codexMode = codexModeFromPaneText(paneText);
   const planImplementationReady = panePlanImplementationReady(paneText);
   const planImplementationMenuVisible = panePlanImplementationMenuVisible(paneText);
@@ -473,6 +484,7 @@ export async function runtimeStatus(threadId, env = process.env, messagesOverrid
     codexModeSource: codexMode ? "runtime-pane" : null,
     planImplementationReady,
     planImplementationMenuVisible,
+    progress: publicPaneProgress(progressSample),
   };
 }
 
@@ -2302,7 +2314,7 @@ async function syncRuntimeLeasesOnce(env = process.env) {
         await execFileAsync("tmux", ["send-keys", "-t", status.paneId, "2", "C-m"]).catch(() => {});
         await updateThread(lease.threadId, {
           state: "waking",
-          runtime: { ...leaseForStorage, state: "waking" },
+          runtime: { ...leaseForStorage, state: "waking", progress: status.progress || null },
         }, env).catch(() => {});
         next.push(leaseForStorage);
         changed = true;
@@ -2312,7 +2324,7 @@ async function syncRuntimeLeasesOnce(env = process.env) {
         await execFileAsync("tmux", ["send-keys", "-t", status.paneId, status.codexUpdatePromptChoice || "2", "C-m"]).catch(() => {});
         await updateThread(lease.threadId, {
           state: "waking",
-          runtime: { ...leaseForStorage, state: "waking" },
+          runtime: { ...leaseForStorage, state: "waking", progress: status.progress || null },
         }, env).catch(() => {});
         next.push(leaseForStorage);
         changed = true;
@@ -2356,7 +2368,7 @@ async function syncRuntimeLeasesOnce(env = process.env) {
       }
       await updateThread(lease.threadId, {
         state: status.state,
-        runtime: { ...leaseForStorage, state: status.state },
+        runtime: { ...leaseForStorage, state: status.state, progress: status.progress || null },
       }, env).catch(() => {});
     }
     next.push(leaseForStorage);
@@ -2364,6 +2376,44 @@ async function syncRuntimeLeasesOnce(env = process.env) {
   }
   if (changed) await saveRuntimeLeases(next, env);
   return { leases: next, appended };
+}
+
+export async function syncPaneProgressForActiveLeases(env = process.env) {
+  const leases = await listRuntimeLeases(env);
+  let sampled = 0;
+  let changed = 0;
+  for (const lease of leases) {
+    if (lease.endedAt) continue;
+    if (!(await tmuxHasSession(lease.sessionName).catch(() => false))) continue;
+    const paneId = await resolveLivePaneId(lease, env).catch(() => lease.paneId || null);
+    if (!paneId) continue;
+    const progress = publicPaneProgress(await samplePaneProgress({
+      threadId: lease.threadId,
+      leaseId: lease.id,
+      sessionName: lease.sessionName,
+      paneId,
+    }, env).catch(() => null));
+    if (!progress) continue;
+    sampled += 1;
+    const thread = await getThread(lease.threadId, env).catch(() => null);
+    if (!thread) continue;
+    const previous = thread.runtime?.progress;
+    const changedProgress = !previous ||
+      previous.tailHash !== progress.tailHash ||
+      previous.summary !== progress.summary ||
+      previous.stateHint !== progress.stateHint;
+    if (!changedProgress) continue;
+    changed += 1;
+    await updateThread(lease.threadId, {
+      runtime: {
+        ...(thread.runtime || {}),
+        ...lease,
+        paneId,
+        progress,
+      },
+    }, env).catch(() => {});
+  }
+  return { sampled, changed };
 }
 
 export async function syncRuntimeLeases(env = process.env) {

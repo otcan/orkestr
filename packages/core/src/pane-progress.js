@@ -1,0 +1,259 @@
+import crypto from "node:crypto";
+import fs from "node:fs/promises";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
+
+const execFileAsync = promisify(execFile);
+const progressCache = new Map();
+const defaultCaptureLines = 80;
+const defaultTailLines = 20;
+
+function positiveNumber(value) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+}
+
+function durationMs(value, fallback) {
+  const raw = String(value ?? "").trim().toLowerCase();
+  if (["0", "off", "false", "disabled"].includes(raw)) return 0;
+  return positiveNumber(raw) ?? fallback;
+}
+
+function nowIso() {
+  return new Date().toISOString();
+}
+
+function normalizedLines(text) {
+  return String(text || "")
+    .split("\n")
+    .map((line) => line.replace(/\s+$/g, ""))
+    .filter((line) => line.trim());
+}
+
+function tailHash(lines) {
+  return crypto.createHash("sha256").update(lines.join("\n")).digest("hex");
+}
+
+export function paneWorkingLine(line) {
+  return (
+    /^[•◦]\s*(?:Working|Thinking|Running|Processing)\b/i.test(line) ||
+    /^Codex is still preparing (?:a )?response\b/i.test(line) ||
+    /^(?:Waiting for background terminal|Working|Thinking|Running|Processing)\b.*\b(?:esc|ctrl-c) to interrupt\b/i.test(line)
+  );
+}
+
+export function panePromptLine(line) {
+  return /^(?:›|>)(?:\s|$)/.test(line) && !/^(?:›|>)\s*\d+[.)]/.test(line);
+}
+
+export function paneNeedInputMenuVisible(text) {
+  const body = String(text || "");
+  return /^Question\s+\d+\/\d+\s+\(\d+\s+unanswered\)/im.test(body) &&
+    /^\s*(?:›\s*)?\d+\.\s+\S+/im.test(body) &&
+    /\benter to submit answer\b/i.test(body);
+}
+
+export function panePlanImplementationMenuVisible(text) {
+  return /Implement this plan\?/i.test(String(text || ""));
+}
+
+export function panePlanImplementationReady(text) {
+  const body = String(text || "");
+  return panePlanImplementationMenuVisible(body) && /^\s*›\s*1\.\s*Yes,\s*implement this plan\b/im.test(body);
+}
+
+export function paneResumeDirectoryPrompt(text) {
+  const body = String(text || "");
+  return /Choose working directory to resume this session/i.test(body) && /Press enter to continue/i.test(body);
+}
+
+export function paneCodexUpdatePromptChoice(text) {
+  const lines = normalizedLines(text).map((line) => line.trim()).slice(-12);
+  const pressIndex = lines.findIndex((line) => /Press enter to continue/i.test(line));
+  if (pressIndex < 0 || pressIndex !== lines.length - 1) return null;
+  const updateIndex = lines.findIndex((line) => /Update available!/i.test(line));
+  if (updateIndex < 0 || pressIndex - updateIndex > 8) return null;
+  const skipUntilLine = lines
+    .slice(updateIndex, pressIndex)
+    .find((line) => /(?:^|[\s›>])\d+\.\s*Skip until next version\b/i.test(line));
+  const skipMatch = skipUntilLine?.match(/(?:^|[\s›>])(\d+)\.\s*Skip until next version\b/i);
+  if (skipMatch?.[1]) return skipMatch[1];
+  const skipLine = lines
+    .slice(updateIndex, pressIndex)
+    .find((line) => /(?:^|[\s›>])\d+\.\s*Skip\b/i.test(line));
+  const fallbackMatch = skipLine?.match(/(?:^|[\s›>])(\d+)\.\s*Skip\b/i);
+  return fallbackMatch?.[1] || null;
+}
+
+export function codexModeFromPaneText(text) {
+  const body = String(text || "");
+  if (/\bPlan mode\b/i.test(body)) return "plan";
+  if (/gpt-[^\n]*\s+.\s+/i.test(body) || /\bgpt-[^\n]*(?:low|medium|high|xhigh)\b/i.test(body)) return "code";
+  return null;
+}
+
+export function paneWorking(text) {
+  const lines = normalizedLines(text).map((line) => line.trim()).slice(-20);
+  if (paneNeedInputMenuVisible(text)) return true;
+  const lastWorkingIndex = lines.findLastIndex(paneWorkingLine);
+  if (lastWorkingIndex < 0) return false;
+  const lastPromptIndex = lines.findLastIndex(panePromptLine);
+  return lastWorkingIndex > lastPromptIndex;
+}
+
+export function panePromptReady(text) {
+  const lines = normalizedLines(text).map((line) => line.trim()).slice(-8);
+  return lines.some(panePromptLine);
+}
+
+function paneHasRecentError(lines) {
+  return lines.slice(-8).some((line) => (
+    /\b(?:delivery failed|not delivered|unrecognized command|can't find pane|command failed|failed to deliver)\b/i.test(line) &&
+    !/failed tests?/i.test(line)
+  ));
+}
+
+function summaryForProgress({ stateHint, codexMode, planImplementationReady, planImplementationMenuVisible }) {
+  if (planImplementationReady || planImplementationMenuVisible) return "Implement plan?";
+  if (stateHint === "error") return "Error";
+  if (stateHint === "awaiting_input") return "Waiting for input";
+  if (stateHint === "planning" || codexMode === "plan") return "Planning";
+  if (stateHint === "working") return "Working";
+  if (stateHint === "ready") return "Ready";
+  return "Starting";
+}
+
+export function paneProgressFromText(text, options = {}) {
+  const tailLineCount = Math.max(1, Math.floor(positiveNumber(options.tailLines) || defaultTailLines));
+  const lines = normalizedLines(text);
+  const tailLines = lines.slice(-tailLineCount);
+  const codexMode = codexModeFromPaneText(text);
+  const planImplementationReady = panePlanImplementationReady(text);
+  const planImplementationMenuVisible = panePlanImplementationMenuVisible(text);
+  const needsResumeDirectoryConfirmation = paneResumeDirectoryPrompt(text);
+  const codexUpdatePromptChoice = paneCodexUpdatePromptChoice(text);
+  const needsCodexUpdatePromptSkip = Boolean(codexUpdatePromptChoice);
+  const working = paneWorking(text);
+  const promptReady = !working && panePromptReady(text);
+  let stateHint = "unknown";
+  if (paneHasRecentError(tailLines)) stateHint = "error";
+  else if (planImplementationReady || planImplementationMenuVisible || codexMode === "plan") stateHint = "planning";
+  else if (needsResumeDirectoryConfirmation || needsCodexUpdatePromptSkip || paneNeedInputMenuVisible(text)) stateHint = "awaiting_input";
+  else if (working) stateHint = "working";
+  else if (promptReady) stateHint = "ready";
+  const summary = summaryForProgress({
+    stateHint,
+    codexMode,
+    planImplementationReady,
+    planImplementationMenuVisible,
+  });
+  return {
+    capturedAt: nowIso(),
+    stateHint,
+    summary,
+    tailLines,
+    tailHash: tailHash(tailLines),
+    promptReady,
+    working,
+    codexMode,
+    planImplementationReady,
+    planImplementationMenuVisible,
+    needsResumeDirectoryConfirmation,
+    needsCodexUpdatePromptSkip,
+    codexUpdatePromptChoice,
+  };
+}
+
+export function publicPaneProgress(progress) {
+  if (!progress || typeof progress !== "object") return null;
+  const { paneText, cacheKey, sampledAtMs, cached, ...safe } = progress;
+  return safe;
+}
+
+function progressCacheTtlMs(progress, env = process.env) {
+  const active = durationMs(env.ORKESTR_PANE_PROGRESS_ACTIVE_MS, 1000);
+  const idle = durationMs(env.ORKESTR_PANE_PROGRESS_IDLE_MS, 5000);
+  const state = String(progress?.stateHint || "").toLowerCase();
+  if (state === "working" || state === "planning" || state === "awaiting_input") return active;
+  return idle;
+}
+
+async function testCaptureFingerprint(env = process.env) {
+  const captureText = env.TMUX_CAPTURE_TEXT ?? process.env.TMUX_CAPTURE_TEXT;
+  if (captureText != null) return `text:${String(captureText)}`;
+  const captureFile = env.TMUX_CAPTURE_FILE ?? process.env.TMUX_CAPTURE_FILE;
+  if (!captureFile) return "";
+  const stats = await fs.stat(String(captureFile)).catch(() => null);
+  if (!stats?.isFile()) return `file:${captureFile}:missing`;
+  return `file:${captureFile}:${stats.size}:${stats.mtimeMs}`;
+}
+
+function cacheIdentity(input = {}, env = process.env, fingerprint = "") {
+  const key = String(input.threadId || input.leaseId || input.paneId || "").trim();
+  return [
+    key || "pane",
+    String(input.paneId || ""),
+    String(input.sessionName || ""),
+    String(input.lines || env.ORKESTR_PANE_PROGRESS_CAPTURE_LINES || ""),
+    String(input.tailLines || env.ORKESTR_PANE_PROGRESS_TAIL_LINES || ""),
+    fingerprint,
+  ].join("|");
+}
+
+async function capturePane(paneId, lines = defaultCaptureLines, env = process.env) {
+  if (!paneId) return "";
+  const captureLines = Math.max(20, Math.floor(positiveNumber(lines) || defaultCaptureLines));
+  const { stdout } = await execFileAsync(
+    "tmux",
+    ["capture-pane", "-t", paneId, "-p", "-J", "-S", `-${captureLines}`],
+    { env: { ...process.env, ...env } },
+  );
+  return String(stdout || "");
+}
+
+export async function samplePaneProgress(input = {}, env = process.env) {
+  const paneId = String(input.paneId || "").trim();
+  const fingerprint = await testCaptureFingerprint(env);
+  const cacheKey = cacheIdentity(input, env, fingerprint);
+  const cached = progressCache.get(cacheKey);
+  if (cached && !input.force) {
+    const ttl = progressCacheTtlMs(cached, env);
+    if (ttl > 0 && cached.sampledAtMs + ttl > Date.now()) {
+      return { ...cached, cached: true };
+    }
+  }
+  const captureLines = Math.floor(positiveNumber(input.lines) || positiveNumber(env.ORKESTR_PANE_PROGRESS_CAPTURE_LINES) || defaultCaptureLines);
+  const tailLines = Math.floor(positiveNumber(input.tailLines) || positiveNumber(env.ORKESTR_PANE_PROGRESS_TAIL_LINES) || defaultTailLines);
+  const paneText = await capturePane(paneId, captureLines, env);
+  const previous = cached || null;
+  const progress = {
+    ...paneProgressFromText(paneText, { tailLines }),
+    threadId: input.threadId || null,
+    leaseId: input.leaseId || null,
+    paneId,
+    sessionName: input.sessionName || null,
+    pendingCount: Number(input.pendingCount || 0),
+    runningCount: Number(input.runningCount || 0),
+    awaitingAckCount: Number(input.awaitingAckCount || 0),
+    paneText,
+    cacheKey,
+    sampledAtMs: Date.now(),
+  };
+  progress.changed = !previous || previous.tailHash !== progress.tailHash || previous.summary !== progress.summary || previous.stateHint !== progress.stateHint;
+  progressCache.set(cacheKey, progress);
+  return { ...progress, cached: false };
+}
+
+export function cachedPaneProgress(input = {}, env = process.env) {
+  const keyPrefix = `${String(input.threadId || input.leaseId || input.paneId || "").trim() || "pane"}|`;
+  for (const progress of progressCache.values()) {
+    if (!String(progress.cacheKey || "").startsWith(keyPrefix)) continue;
+    const ttl = progressCacheTtlMs(progress, env);
+    if (ttl > 0 && progress.sampledAtMs + ttl > Date.now()) return { ...progress, cached: true };
+  }
+  return null;
+}
+
+export function clearPaneProgressCache() {
+  progressCache.clear();
+}
