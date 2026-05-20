@@ -1132,7 +1132,7 @@
           @if (showPlanComposerBanner(thread)) {
             <div class="plan-composer-banner" [class.ready]="thread.planImplementationReady">
               <div>
-                <strong>Planning mode</strong>
+                <strong>{{ planComposerTitle(thread) }}</strong>
                 <span>{{ planComposerHint(thread) }}</span>
               </div>
               <button

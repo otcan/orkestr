@@ -2502,6 +2502,12 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     ));
   }
 
+  planComposerTitle(thread: ThreadSummary | null): string {
+    if (thread?.planImplementationReady) return "Implementation prompt";
+    if (this.codexModeValue(thread) === "plan") return "Planning mode";
+    return "Plan available";
+  }
+
   planComposerHint(thread: ThreadSummary | null): string {
     if (thread?.planImplementationReady) return "A Codex implementation prompt is ready.";
     if (thread?.planAvailable) return "A proposed plan is available. Use /implement when Codex shows the implementation prompt.";
@@ -2509,7 +2515,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   }
 
   composerPlaceholder(thread: ThreadSummary | null): string {
-    if (this.codexModeValue(thread) === "plan" || thread?.planAvailable) {
+    if (this.codexModeValue(thread) === "plan") {
       return "Planning mode: answer choices, continue planning, or type /implement";
     }
     return thread ? `Message ${this.threadTitle(thread)}` : "Message";
