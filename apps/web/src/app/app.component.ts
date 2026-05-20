@@ -2164,6 +2164,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
 
   statusLabel(thread: ThreadSummary, includeFamily = false): string {
     if (this.isThreadLatestMessageFailed(thread, includeFamily)) return "Error";
+    if (this.threadProgressStateHint(thread) === "error") return "Error";
     if (this.isThreadProcessing(thread)) return this.threadProcessingLabel(thread);
     const state = String(thread.publicStatus || thread.status || thread.state || "unknown");
     if (state === "ready") return "Ready";
@@ -2174,6 +2175,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
 
   statusClass(thread: ThreadSummary, includeFamily = false): string {
     if (this.isThreadLatestMessageFailed(thread, includeFamily)) return "bad";
+    if (this.threadProgressStateHint(thread) === "error") return "bad";
     if (this.isThreadProcessing(thread)) return "hot";
     const state = String(thread.publicStatusCode || thread.status || thread.state || "").toLowerCase();
     if (state.includes("broken") || state.includes("failed")) return "bad";
@@ -2186,6 +2188,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   isThreadProcessing(thread: ThreadSummary | null): boolean {
     if (!thread) return false;
     const activeCount = Number(thread.pendingCount || 0) + Number(thread.runningCount || 0);
+    const progressState = this.threadProgressStateHint(thread);
     const state = [
       this.threadState(thread),
       thread.publicStatus,
@@ -2200,13 +2203,38 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
       thread.typingActive ||
       thread.backgroundWork ||
       activeCount > 0 ||
+      progressState === "working" ||
+      progressState === "planning" ||
+      progressState === "awaiting_input" ||
       /(?:working|running|processing|waking|pending)/.test(state),
     );
+  }
+
+  threadProgressStateHint(thread: ThreadSummary | null): string {
+    return String(thread?.progressStateHint || thread?.progress?.stateHint || "").trim().toLowerCase();
+  }
+
+  threadProgressSummary(thread: ThreadSummary | null): string {
+    const summary = String(thread?.progressSummary || thread?.progress?.summary || "").trim();
+    return summary && summary !== "Ready" ? summary : "";
+  }
+
+  threadProgressTailLines(thread: ThreadSummary | null): string[] {
+    const lines = Array.isArray(thread?.progressTailLines)
+      ? thread?.progressTailLines
+      : Array.isArray(thread?.progress?.tailLines) ? thread?.progress?.tailLines : [];
+    return lines.map((line) => String(line || "").trim()).filter(Boolean).slice(-12);
   }
 
   threadProcessingLabel(thread: ThreadSummary | null): string {
     if (!thread) return "Working";
     if (this.threadLoading(thread)) return "Loading";
+    const progressState = this.threadProgressStateHint(thread);
+    const progressSummary = this.threadProgressSummary(thread);
+    if (progressState === "error") return "Error";
+    if (progressState === "awaiting_input") return progressSummary || "Waiting for input";
+    if (progressState === "planning") return progressSummary || "Planning";
+    if (progressState === "working") return progressSummary || "Working";
     if (thread.backgroundWork) return "Background";
     const state = this.threadState(thread);
     if (state.includes("waking")) return "Starting";
@@ -2220,7 +2248,15 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     if (label === "Starting") return "Start";
     if (label === "Queued") return "Queue";
     if (label === "Loading") return "Load";
+    if (label === "Planning" || label === "Implement plan?") return "Plan";
+    if (label === "Waiting for input") return "Input";
+    if (label === "Error") return "Error";
     return "Working";
+  }
+
+  threadProcessingTitle(thread: ThreadSummary | null): string {
+    const tailLines = this.threadProgressTailLines(thread);
+    return tailLines.length ? tailLines.join("\n") : this.threadProcessingLabel(thread);
   }
 
   canWakeThread(thread: ThreadSummary): boolean {

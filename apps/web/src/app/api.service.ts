@@ -352,6 +352,22 @@ export interface ThreadSummary {
   runningCount?: number;
   awaitingAckCount?: number;
   nextDeliveryAttemptAt?: string | null;
+  progress?: {
+    stateHint?: string | null;
+    summary?: string | null;
+    tailLines?: string[];
+    tailHash?: string | null;
+    capturedAt?: string | null;
+    promptReady?: boolean;
+    working?: boolean;
+    codexMode?: string | null;
+    planImplementationReady?: boolean;
+    planImplementationMenuVisible?: boolean;
+  } | null;
+  progressSummary?: string | null;
+  progressStateHint?: string | null;
+  progressTailLines?: string[];
+  progressCapturedAt?: string | null;
   activeRuntimeLeaseId?: string | null;
   hibernated?: boolean;
   lastError?: string | null;

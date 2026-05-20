@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import { NestFactory } from "@nestjs/core";
 import type { INestApplication } from "@nestjs/common";
 import { loadOverlayExecutorAdapters, recoverInterruptedExecutions } from "../../../packages/core/src/executors.js";
-import { drainAllPendingThreadInputs, syncRuntimeLeases } from "../../../packages/core/src/runtime-leases.js";
+import { drainAllPendingThreadInputs, syncPaneProgressForActiveLeases, syncRuntimeLeases } from "../../../packages/core/src/runtime-leases.js";
 import { markDueTimers } from "../../../packages/core/src/timers.js";
 import { deliverWhatsAppReplies } from "../../../packages/connectors/src/whatsapp.js";
 import { ensureDataDirs } from "../../../packages/storage/src/paths.js";
@@ -61,6 +61,10 @@ export async function startServer({ port = 19812, host = "127.0.0.1", openBrowse
     syncRuntimeAndDeliverWhatsApp().catch(() => {});
   }, runtimeMonitorIntervalMs());
 
+  const paneProgressMonitor = setInterval(() => {
+    syncPaneProgressForActiveLeases().catch(() => {});
+  }, paneProgressMonitorIntervalMs());
+
   registerStaticFallback(app);
   await app.init();
   attachThreadStreamUpgrade(app.getHttpServer());
@@ -72,12 +76,17 @@ export async function startServer({ port = 19812, host = "127.0.0.1", openBrowse
     execFile("xdg-open", [url], { timeout: 1000 }, () => {});
   }
 
-  return serverHandle(app, timer, runtimeMonitor);
+  return serverHandle(app, timer, runtimeMonitor, paneProgressMonitor);
 }
 
 export function runtimeMonitorIntervalMs() {
   const parsed = Number(process.env.ORKESTR_RUNTIME_MONITOR_INTERVAL_MS || 5000);
   return Number.isFinite(parsed) ? Math.max(5000, parsed) : 5000;
+}
+
+export function paneProgressMonitorIntervalMs() {
+  const parsed = Number(process.env.ORKESTR_PANE_PROGRESS_INTERVAL_MS || 1000);
+  return Number.isFinite(parsed) ? Math.max(1000, parsed) : 1000;
 }
 
 function timerLoopIntervalMs() {
@@ -102,12 +111,18 @@ async function syncRuntimeAndDeliverWhatsApp() {
   return synced;
 }
 
-export function serverHandle(app: INestApplication, timer?: NodeJS.Timeout, runtimeMonitor?: NodeJS.Timeout) {
+export function serverHandle(
+  app: INestApplication,
+  timer?: NodeJS.Timeout,
+  runtimeMonitor?: NodeJS.Timeout,
+  paneProgressMonitor?: NodeJS.Timeout,
+) {
   return {
     address: () => app.getHttpServer().address(),
     close: (callback?: (error?: Error) => void) => {
       if (timer) clearInterval(timer);
       if (runtimeMonitor) clearInterval(runtimeMonitor);
+      if (paneProgressMonitor) clearInterval(paneProgressMonitor);
       app.close()
         .then(() => callback?.())
         .catch((error) => callback?.(error));

@@ -97,7 +97,7 @@
                 <span class="pending timer-count" [title]="threadTimerTooltip(thread)">T {{ threadTimerCount(thread) }}</span>
               }
               @if (isThreadProcessing(thread)) {
-                <span class="pending processing-count" [title]="threadProcessingLabel(thread)">{{ threadProcessingShortLabel(thread) }}</span>
+                <span class="pending processing-count" [title]="threadProcessingTitle(thread)">{{ threadProcessingShortLabel(thread) }}</span>
               }
               @if (childWorkers(thread).length > 0) {
                 <span class="pending worker-count">{{ childWorkers(thread).length }}</span>
@@ -175,7 +175,7 @@
                       <span class="pending timer-count" [title]="threadTimerTooltip(worker)">T {{ ownThreadTimerCount(worker) }}</span>
                     }
                     @if (isThreadProcessing(worker)) {
-                      <span class="pending processing-count" [title]="threadProcessingLabel(worker)">{{ threadProcessingShortLabel(worker) }}</span>
+                      <span class="pending processing-count" [title]="threadProcessingTitle(worker)">{{ threadProcessingShortLabel(worker) }}</span>
                     }
                     @if ((worker.pendingCount || 0) > 0) {
                       <span class="pending">{{ worker.pendingCount }}</span>
