@@ -35,6 +35,8 @@ export async function runCli(argv = process.argv.slice(2), context = {}) {
     if (command === "send") return send(args, ctx);
     if (command === "wake") return postThreadAction("wake", args, ctx);
     if (command === "sleep") return postThreadAction("sleep", args, ctx);
+    if (command === "reset") return postThreadAction("reset", args, ctx);
+    if (command === "hard-reset" || command === "hard_reset") return postThreadAction("hard-reset", args, ctx);
     ctx.stderr.write(`Unknown command: ${command}\n\n`);
     writeUsage(ctx.stderr);
     return 2;
@@ -294,7 +296,16 @@ async function postThreadAction(action, argv, ctx) {
     body: { source: "cli" },
   });
   if (json) ctx.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
-  else ctx.stdout.write(`${action === "wake" ? "Woke" : "Slept"} ${target}\n`);
+  else {
+    const label = action === "wake"
+      ? "Woke"
+      : action === "sleep"
+        ? "Slept"
+        : action === "hard-reset"
+          ? "Hard reset"
+          : "Reset";
+    ctx.stdout.write(`${label} ${target}\n`);
+  }
   return 0;
 }
 
@@ -317,6 +328,8 @@ function writeUsage(stream) {
   orkestr send <thread-name-or-id> "<message>" [--json]
   orkestr wake <thread-name-or-id> [--json]
   orkestr sleep <thread-name-or-id> [--json]
+  orkestr reset <thread-name-or-id> [--json]
+  orkestr hard-reset <thread-name-or-id> [--json]
 
 Environment:
   ORKESTR_API_BASE   API base URL for commands. Defaults to http://127.0.0.1:19812.

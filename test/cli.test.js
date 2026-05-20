@@ -279,6 +279,36 @@ test("CLI reports inputs waiting for runtime acknowledgement", async () => {
   assert.match(stdout.text(), /Awaiting ack thread-1/);
 });
 
+test("CLI resets and hard-resets threads through the public API", async () => {
+  const resetOut = capture();
+  const hardResetOut = capture();
+  const seen = [];
+  const routes = {
+    "POST /api/threads/Demo/reset": { ok: true, reset: true },
+    "POST /api/threads/Demo/hard-reset": { ok: true, reset: true, hardReset: true },
+  };
+
+  const resetCode = await runCli(["--api", "http://orkestr.test", "reset", "Demo"], {
+    stdout: resetOut,
+    stderr: capture(),
+    fetchImpl: fakeFetch(routes, seen),
+  });
+  const hardResetCode = await runCli(["--api", "http://orkestr.test", "hard-reset", "Demo"], {
+    stdout: hardResetOut,
+    stderr: capture(),
+    fetchImpl: fakeFetch(routes, seen),
+  });
+
+  assert.equal(resetCode, 0);
+  assert.equal(hardResetCode, 0);
+  assert.deepEqual(seen.map((entry) => entry.key), [
+    "POST /api/threads/Demo/reset",
+    "POST /api/threads/Demo/hard-reset",
+  ]);
+  assert.match(resetOut.text(), /Reset Demo/);
+  assert.match(hardResetOut.text(), /Hard reset Demo/);
+});
+
 test("CLI attach can select a thread and print the tmux command", async () => {
   const stdout = capture();
   const selected = { id: "thread-1", name: "Demo", state: "ready" };

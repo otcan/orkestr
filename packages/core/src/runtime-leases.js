@@ -798,6 +798,188 @@ export async function sleepThread(threadId, options = {}, env = process.env) {
   return { thread: updated, slept: active.length };
 }
 
+export async function resetThreadRuntime(threadId, options = {}, env = process.env) {
+  const reason = options.reason || "reset";
+  const slept = await sleepThread(threadId, { reason, kill: options.kill !== false }, env);
+  const woken = await wakeThread(threadId, { reason: options.wakeReason || reason }, env);
+  await appendEvent({
+    type: "thread_runtime_reset",
+    threadId: woken.thread?.id || threadId,
+    reason,
+    slept: slept.slept,
+    leaseId: woken.lease?.id || null,
+  }, env).catch(() => {});
+  return {
+    ok: true,
+    reset: true,
+    slept: slept.slept,
+    thread: woken.thread,
+    lease: woken.lease || null,
+    status: woken.status || null,
+  };
+}
+
+function compactReadyTimeoutMs(env = process.env) {
+  const parsed = Number(env.ORKESTR_COMPACT_READY_TIMEOUT_MS ?? 60_000);
+  return Number.isFinite(parsed) ? Math.max(1_000, parsed) : 60_000;
+}
+
+function checkpointMessageText(message) {
+  const role = String(message?.role || "unknown").trim();
+  const phase = String(message?.phase || "").trim();
+  const stamp = String(message?.timestamp || message?.createdAt || "").trim();
+  const text = String(message?.text || "").trim();
+  const header = [role, phase, stamp].filter(Boolean).join(" ");
+  return [`### ${header || "message"}`, "", text || "(empty)"].join("\n");
+}
+
+async function writeManualContextCheckpoint(threadId, context = {}, env = process.env) {
+  const thread = await getThread(threadId, env);
+  if (!thread) {
+    const error = new Error("thread_not_found");
+    error.statusCode = 404;
+    throw error;
+  }
+  const paths = await ensureDataDirs(env);
+  const messages = await listThreadMessages(thread.id, env).catch(() => []);
+  const status = context.status || await runtimeStatus(thread.id, env).catch(() => null);
+  const now = nowIso();
+  const safeStamp = now.replace(/[:.]/g, "-");
+  const dir = path.join(paths.home, "context-checkpoints", thread.id);
+  const checkpointPath = path.join(dir, `${safeStamp}-hard-reset.md`);
+  const recentMessages = messages.slice(-40);
+  await fs.mkdir(dir, { recursive: true, mode: 0o700 });
+  const content = [
+    `# Manual Context Checkpoint: ${thread.name || thread.id}`,
+    "",
+    `Created: ${now}`,
+    `Thread: ${thread.id}`,
+    `Codex thread: ${thread.codexThreadId || thread.executor?.metadata?.codexThreadId || ""}`,
+    `Reason: ${context.reason || "hard_reset"}`,
+    `Runtime state: ${status?.state || "unknown"}`,
+    `Prompt ready: ${status?.promptReady === true}`,
+    `Working: ${status?.working === true || status?.foregroundWorking === true}`,
+    "",
+    "## Recent Messages",
+    "",
+    ...recentMessages.map(checkpointMessageText),
+    "",
+  ].join("\n");
+  await fs.writeFile(checkpointPath, content, { mode: 0o600 });
+  await appendEvent({
+    type: "thread_manual_context_checkpoint",
+    threadId: thread.id,
+    path: checkpointPath,
+    messageCount: recentMessages.length,
+    reason: context.reason || "hard_reset",
+  }, env).catch(() => {});
+  return {
+    method: "manual_checkpoint",
+    path: checkpointPath,
+    messageCount: recentMessages.length,
+  };
+}
+
+async function compactCodexRuntimeContext(threadId, env = process.env) {
+  const status = await runtimeStatus(threadId, env).catch((error) => ({ error: error instanceof Error ? error.message : String(error) }));
+  if (!status?.paneId) {
+    return {
+      method: "codex_compact",
+      attempted: false,
+      compacted: false,
+      reason: status?.error || "runtime_unavailable",
+      status,
+    };
+  }
+  if (!status.promptReady || status.working || status.foregroundWorking) {
+    return {
+      method: "codex_compact",
+      attempted: false,
+      compacted: false,
+      reason: "runtime_not_ready",
+      status,
+    };
+  }
+  await pasteTmuxText(status.paneId, "/compact", env);
+  await execFileAsync("tmux", ["send-keys", "-t", status.paneId, "C-m"]);
+  const compactedAt = nowIso();
+  const readyStatus = await waitForRuntimeReady(threadId, {
+    ...env,
+    ORKESTR_WAKE_READY_TIMEOUT_MS: String(compactReadyTimeoutMs(env)),
+  }).catch((error) => ({ error: error instanceof Error ? error.message : String(error) }));
+  const paneText = await capturePane(status.paneId, 80).catch(() => "");
+  if (paneRejectedSlashCommand(paneText, "/compact")) {
+    return {
+      method: "codex_compact",
+      attempted: true,
+      compacted: false,
+      reason: "compact_command_rejected",
+      paneId: status.paneId,
+      status: readyStatus,
+    };
+  }
+  if (readyStatus?.error) {
+    return {
+      method: "codex_compact",
+      attempted: true,
+      compacted: false,
+      reason: readyStatus.error,
+      paneId: status.paneId,
+      status: readyStatus,
+    };
+  }
+  await appendEvent({
+    type: "thread_context_compacted",
+    threadId,
+    paneId: status.paneId,
+    method: "codex_compact",
+    compactedAt,
+  }, env).catch(() => {});
+  return {
+    method: "codex_compact",
+    attempted: true,
+    compacted: true,
+    paneId: status.paneId,
+    compactedAt,
+    status: readyStatus,
+  };
+}
+
+export async function hardResetThreadRuntime(threadId, options = {}, env = process.env) {
+  const reason = options.reason || "hard_reset";
+  const compaction = await compactCodexRuntimeContext(threadId, env).catch((error) => ({
+    method: "codex_compact",
+    attempted: true,
+    compacted: false,
+    reason: error instanceof Error ? error.message : String(error),
+  }));
+  const manualCheckpoint = compaction.compacted
+    ? null
+    : await writeManualContextCheckpoint(threadId, { reason, status: compaction.status || null }, env);
+  const reset = await resetThreadRuntime(threadId, { reason, wakeReason: options.wakeReason || reason, kill: true }, env);
+  await appendEvent({
+    type: "thread_runtime_hard_reset",
+    threadId: reset.thread?.id || threadId,
+    reason,
+    compacted: compaction.compacted === true,
+    compactionMethod: compaction.compacted ? compaction.method : manualCheckpoint?.method || compaction.method,
+    manualCheckpointPath: manualCheckpoint?.path || null,
+    slept: reset.slept,
+    leaseId: reset.lease?.id || null,
+  }, env).catch(() => {});
+  return {
+    ok: true,
+    hardReset: true,
+    reset: true,
+    compaction,
+    manualCheckpoint,
+    slept: reset.slept,
+    thread: reset.thread,
+    lease: reset.lease || null,
+    status: reset.status || null,
+  };
+}
+
 async function completeStopCommand(thread, message, env = process.env) {
   const stopped = await sleepThread(thread.id, { reason: whatsappOrigin(message) ? "whatsapp_stop_command" : "stop_command", kill: true }, env);
   const updated = await updateThreadMessage(thread.id, message.id, {
@@ -813,6 +995,34 @@ async function completeStopCommand(thread, message, env = process.env) {
     messageId: message.id,
     source: message.source || null,
     slept: stopped.slept,
+  }, env).catch(() => {});
+  return updated.id;
+}
+
+async function completeResetCommand(thread, message, hard = false, env = process.env) {
+  const result = hard
+    ? await hardResetThreadRuntime(thread.id, { reason: whatsappOrigin(message) ? "whatsapp_hard_reset_command" : "hard_reset_command" }, env)
+    : await resetThreadRuntime(thread.id, { reason: whatsappOrigin(message) ? "whatsapp_reset_command" : "reset_command" }, env);
+  const updated = await updateThreadMessage(thread.id, message.id, {
+    state: "completed",
+    deliveryState: "delivered",
+    observedVia: hard ? "orkestr_hard_reset_command" : "orkestr_reset_command",
+    deliveredAt: nowIso(),
+    error: null,
+    resetSlept: result.slept,
+    compactionMethod: result.compaction?.compacted
+      ? result.compaction?.method
+      : result.manualCheckpoint?.method || result.compaction?.method || null,
+    manualCheckpointPath: result.manualCheckpoint?.path || null,
+  }, env);
+  await appendEvent({
+    type: hard ? "thread_hard_reset_command" : "thread_reset_command",
+    threadId: thread.id,
+    messageId: message.id,
+    source: message.source || null,
+    slept: result.slept,
+    compacted: hard ? result.compaction?.compacted === true : null,
+    manualCheckpointPath: result.manualCheckpoint?.path || null,
   }, env).catch(() => {});
   return updated.id;
 }
@@ -1634,6 +1844,14 @@ export async function deliverPendingThreadInputs(threadId, env = process.env) {
       const parsedCommand = parseThreadInputCommand({ text: next.text });
       if (parsedCommand.command === "stop") {
         delivered.push(await completeStopCommand(thread, next, env));
+        continue;
+      }
+      if (parsedCommand.command === "reset") {
+        delivered.push(await completeResetCommand(thread, next, false, env));
+        continue;
+      }
+      if (parsedCommand.command === "hard_reset") {
+        delivered.push(await completeResetCommand(thread, next, true, env));
         continue;
       }
       await updateThreadMessage(thread.id, next.id, { state: "pending_delivery", deliveryState: "waking" }, env);

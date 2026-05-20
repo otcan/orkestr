@@ -8,7 +8,7 @@ import { promisify } from "node:util";
 import { startServer } from "../apps/server/src/server.js";
 import { threadRuntimeSummary } from "../apps/server/src/thread-summary.ts";
 import { runNextThreadMessage } from "../packages/core/src/executors.js";
-import { deliverPendingThreadInputs, drainAllPendingThreadInputs, listRuntimeLeases, runtimeStatus, sleepThread, syncRuntimeLeases, syncRuntimeWindowName, wakeThread } from "../packages/core/src/runtime-leases.js";
+import { deliverPendingThreadInputs, drainAllPendingThreadInputs, hardResetThreadRuntime, listRuntimeLeases, resetThreadRuntime, runtimeStatus, sleepThread, syncRuntimeLeases, syncRuntimeWindowName, wakeThread } from "../packages/core/src/runtime-leases.js";
 import { ensureDataDirs } from "../packages/storage/src/paths.js";
 import { parseThreadInputCommand } from "../packages/core/src/thread-commands.js";
 import { createThreadWorker, detectThreadGitState, listThreadWorkers, syncThreadWorkerWithParent, updateThreadRepo } from "../packages/core/src/thread-workers.js";
@@ -1331,6 +1331,94 @@ test("thread input delivery sends answers to pending Codex plan questions", asyn
   }
 });
 
+test("thread runtime reset kills and wakes the same thread", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-reset-"));
+  const fakeTmux = await createFakeTmux(home);
+  const priorPath = process.env.PATH;
+  const priorTmuxLog = process.env.TMUX_LOG;
+  const priorTmuxState = process.env.TMUX_STATE;
+  process.env.PATH = `${fakeTmux.bin}:${priorPath || ""}`;
+  process.env.TMUX_LOG = fakeTmux.log;
+  process.env.TMUX_STATE = fakeTmux.state;
+
+  try {
+    const env = {
+      ORKESTR_HOME: path.join(home, "orkestr-home"),
+      HOME: path.join(home, "runtime-home"),
+      CODEX_HOME: path.join(home, "codex-home"),
+      PATH: process.env.PATH,
+      TMUX_LOG: fakeTmux.log,
+      TMUX_STATE: fakeTmux.state,
+    };
+    await createThread({ id: "reset-thread", name: "Reset Thread" }, env);
+    await wakeThread("reset-thread", { reason: "test_wake" }, env);
+
+    const reset = await resetThreadRuntime("reset-thread", { reason: "test_reset" }, env);
+    const status = await runtimeStatus("reset-thread", env);
+    const log = await fs.readFile(fakeTmux.log, "utf8");
+
+    assert.equal(reset.ok, true);
+    assert.equal(reset.reset, true);
+    assert.equal(reset.slept, 1);
+    assert.equal(status.state, "ready");
+    assert.match(log, /__CALL__\tkill-session\t-t\torkestr-reset-thread/);
+  } finally {
+    restoreEnvValue("PATH", priorPath);
+    restoreEnvValue("TMUX_LOG", priorTmuxLog);
+    restoreEnvValue("TMUX_STATE", priorTmuxState);
+  }
+});
+
+test("thread hard reset falls back to a manual context checkpoint when compact is rejected", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-hard-reset-"));
+  const fakeTmux = await createFakeTmux(home);
+  const captureFile = path.join(home, "pane.txt");
+  const priorPath = process.env.PATH;
+  const priorTmuxLog = process.env.TMUX_LOG;
+  const priorTmuxState = process.env.TMUX_STATE;
+  const priorCaptureFile = process.env.TMUX_CAPTURE_FILE;
+  process.env.PATH = `${fakeTmux.bin}:${priorPath || ""}`;
+  process.env.TMUX_LOG = fakeTmux.log;
+  process.env.TMUX_STATE = fakeTmux.state;
+  process.env.TMUX_CAPTURE_FILE = captureFile;
+
+  try {
+    const env = {
+      ORKESTR_HOME: path.join(home, "orkestr-home"),
+      HOME: path.join(home, "runtime-home"),
+      CODEX_HOME: path.join(home, "codex-home"),
+      PATH: process.env.PATH,
+      TMUX_LOG: fakeTmux.log,
+      TMUX_STATE: fakeTmux.state,
+      TMUX_CAPTURE_FILE: captureFile,
+    };
+    await fs.writeFile(captureFile, "Unrecognized command '/compact'\n› \n\ngpt-5.5 xhigh · /workspace/demo\n", "utf8");
+    await createThread({ id: "hard-reset-thread", name: "Hard Reset Thread" }, env);
+    await appendThreadMessage("hard-reset-thread", { role: "user", text: "Important active task", state: "completed" }, env);
+    await appendThreadMessage("hard-reset-thread", { role: "assistant", phase: "final_answer", text: "Important result", state: "completed" }, env);
+    await wakeThread("hard-reset-thread", { reason: "test_wake" }, env);
+
+    const reset = await hardResetThreadRuntime("hard-reset-thread", { reason: "test_hard_reset" }, env);
+    const checkpoint = await fs.readFile(reset.manualCheckpoint.path, "utf8");
+    const log = await fs.readFile(fakeTmux.log, "utf8");
+
+    assert.equal(reset.ok, true);
+    assert.equal(reset.hardReset, true);
+    assert.equal(reset.compaction.attempted, true);
+    assert.equal(reset.compaction.compacted, false);
+    assert.equal(reset.compaction.reason, "compact_command_rejected");
+    assert.equal(reset.manualCheckpoint.method, "manual_checkpoint");
+    assert.match(checkpoint, /Important active task/);
+    assert.match(log, /__CALL__\tpaste-buffer/);
+    assert.match(log, /__CALL__\tkill-session\t-t\torkestr-hard-reset-thread/);
+  } finally {
+    restoreEnvValue("PATH", priorPath);
+    restoreEnvValue("TMUX_LOG", priorTmuxLog);
+    restoreEnvValue("TMUX_STATE", priorTmuxState);
+    restoreEnvValue("TMUX_CAPTURE_FILE", priorCaptureFile);
+  }
+});
+
 test("codex mode endpoint toggles the attached Codex runtime", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-codex-mode-live-"));
   const fakeTmux = await createFakeTmux(home);
@@ -2190,6 +2278,21 @@ test("thread input commands strip /now before runtime delivery", () => {
   assert.deepEqual(parseThreadInputCommand({ text: "/stop" }), {
     command: "stop",
     rawCommand: "stop",
+    text: "",
+  });
+  assert.deepEqual(parseThreadInputCommand({ text: "/reset" }), {
+    command: "reset",
+    rawCommand: "reset",
+    text: "",
+  });
+  assert.deepEqual(parseThreadInputCommand({ text: "/hard_reset" }), {
+    command: "hard_reset",
+    rawCommand: "hard_reset",
+    text: "",
+  });
+  assert.deepEqual(parseThreadInputCommand({ text: "/hard-reset" }), {
+    command: "hard_reset",
+    rawCommand: "hard-reset",
     text: "",
   });
   assert.equal(parseThreadInputCommand({ text: "normal message" }).command, null);
