@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { deliverPendingThreadInputs, wakeThread } from "../packages/core/src/runtime-leases.js";
+import { deliverPendingThreadInputs, sleepThread, wakeThread } from "../packages/core/src/runtime-leases.js";
 import {
   appendThreadMessage,
   createThread,
@@ -160,6 +160,84 @@ test("thread control reset preempts a stale awaiting ack", async () => {
     assert.equal(messages[1].state, "completed");
     assert.equal(messages[1].observedVia, "orkestr_reset_command");
     assert.match(log, /__CALL__\tkill-session\t-t\torkestr-control-preempt-thread/);
+  });
+});
+
+test("sleeping an active runtime appends a pane interruption notice", async () => {
+  await withFakeRuntime(async (env) => {
+    await createThread({ id: "sleep-notice-thread", name: "Sleep Notice" }, env);
+    await wakeThread("sleep-notice-thread", { reason: "test" }, env);
+
+    await sleepThread("sleep-notice-thread", { reason: "ui_stop", kill: true }, env);
+    const messages = await listThreadMessages("sleep-notice-thread", env);
+    const notice = messages.find((message) => message.source === "orkestr_runtime" && message.phase === "runtime_interrupted");
+
+    assert.ok(notice);
+    assert.equal(notice.role, "assistant");
+    assert.match(notice.text, /Codex pane interrupted/);
+    assert.match(notice.text, /stopped from the UI/);
+  });
+});
+
+test("awaiting ack checks do not paste duplicate input into the same ready pane", async () => {
+  await withFakeRuntime(async (env, fakeTmux) => {
+    env.ORKESTR_DELIVERY_STALE_ACK_RECOVERY_ATTEMPTS = "3";
+    await createThread({ id: "ack-no-duplicate-thread", name: "Ack No Duplicate" }, env);
+    await wakeThread("ack-no-duplicate-thread", { reason: "test" }, env);
+    const input = await appendThreadMessage("ack-no-duplicate-thread", {
+      role: "user",
+      text: "do not stack this",
+      state: "awaiting_ack",
+      deliveryState: "awaiting_ack",
+    }, env);
+    await updateThreadMessage("ack-no-duplicate-thread", input.id, {
+      deliveryAttempt: 1,
+      deliveryNextAttemptAt: new Date(Date.now() - 1000).toISOString(),
+    }, env);
+
+    assert.deepEqual(await deliverPendingThreadInputs("ack-no-duplicate-thread", env), []);
+    const messages = await listThreadMessages("ack-no-duplicate-thread", env);
+    const log = await fs.readFile(fakeTmux.log, "utf8");
+    const updated = messages.find((message) => message.id === input.id);
+
+    assert.equal(updated.state, "awaiting_ack");
+    assert.equal(updated.deliveryAttempt, 1);
+    assert.equal(updated.deliveryAckCheckCount, 2);
+    assert.equal(updated.deliveryState, "awaiting_ack_unobserved");
+    assert.doesNotMatch(log, /__CALL__\tload-buffer/);
+    assert.doesNotMatch(log, /__CALL__\tpaste-buffer/);
+  });
+});
+
+test("stale ack recovery appends a WhatsApp-visible pane interruption notice", async () => {
+  await withFakeRuntime(async (env) => {
+    await createThread({ id: "stale-ack-wa-notice-thread", name: "Stale Ack WA Notice" }, env);
+    await wakeThread("stale-ack-wa-notice-thread", { reason: "test" }, env);
+    const input = await appendThreadMessage("stale-ack-wa-notice-thread", {
+      role: "user",
+      source: "whatsapp_inbound",
+      connector: "whatsapp",
+      chatId: "chat-wa-notice",
+      accountId: "account-1",
+      text: "old invisible WhatsApp input",
+      state: "awaiting_ack",
+      deliveryState: "awaiting_ack",
+      createdAt: "2026-05-20T10:00:00.000Z",
+    }, env);
+    await updateThreadMessage("stale-ack-wa-notice-thread", input.id, {
+      deliveryAttempt: 2,
+      deliveryNextAttemptAt: new Date(Date.now() - 1000).toISOString(),
+    }, env);
+
+    assert.deepEqual(await deliverPendingThreadInputs("stale-ack-wa-notice-thread", env), []);
+    const messages = await listThreadMessages("stale-ack-wa-notice-thread", env);
+    const notice = messages.find((message) => message.source === "orkestr_runtime" && message.phase === "runtime_interrupted");
+
+    assert.ok(notice);
+    assert.equal(notice.parentMessageId, input.id);
+    assert.equal(notice.connector, "whatsapp");
+    assert.equal(notice.chatId, "chat-wa-notice");
+    assert.match(notice.text, /could not confirm that the previous input reached Codex/);
   });
 });
 

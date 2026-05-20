@@ -808,13 +808,44 @@ export async function sleepThread(threadId, options = {}, env = process.env) {
   await saveRuntimeLeases(leases.map((lease) => active.some((item) => item.id === lease.id)
     ? { ...lease, endedAt: now, endReason: options.reason || "sleep" }
     : lease), env);
+  const reason = options.reason || "sleep";
   const updated = await updateThread(thread.id, {
     state: "sleeping",
     activeRuntimeLeaseId: null,
-    runtime: { state: "sleeping", endedAt: now, reason: options.reason || "sleep" },
+    runtime: { state: "sleeping", endedAt: now, reason },
   }, env);
-  await appendEvent({ type: "runtime_slept", threadId: thread.id, reason: options.reason || "sleep", killed: options.kill !== false }, env);
-  return { thread: updated, slept: active.length };
+  await appendEvent({ type: "runtime_slept", threadId: thread.id, reason, killed: options.kill !== false }, env);
+  const notice = options.kill !== false && active.length
+    ? await appendRuntimeInterruptionNotice(updated, { reason, sourceMessage: options.sourceMessage || null }, env).catch(() => null)
+    : null;
+  return { thread: updated, slept: active.length, notice };
+}
+
+async function appendRuntimeInterruptionNotice(thread, options = {}, env = process.env) {
+  const messages = await listThreadMessages(thread.id, env).catch(() => []);
+  const explicitParent = options.sourceMessage && whatsappOrigin(options.sourceMessage) ? options.sourceMessage : null;
+  const whatsappParent = explicitParent || latestWhatsAppInput(messages);
+  const reason = String(options.reason || "interrupt").trim() || "interrupt";
+  const notice = await appendThreadMessage(thread.id, {
+    role: "assistant",
+    source: "orkestr_runtime",
+    phase: "runtime_interrupted",
+    text: runtimeInterruptionNoticeText(reason),
+    state: "completed",
+    parentMessageId: whatsappParent?.id || null,
+    connector: whatsappParent ? "whatsapp" : "",
+    chatId: whatsappParent?.chatId || "",
+    accountId: whatsappParent?.accountId || "",
+  }, env);
+  await appendEvent({
+    type: "thread_runtime_interruption_notice",
+    threadId: thread.id,
+    messageId: notice.id,
+    parentMessageId: whatsappParent?.id || null,
+    chatId: whatsappParent?.chatId || null,
+    reason,
+  }, env).catch(() => {});
+  return notice;
 }
 
 export async function resetThreadRuntime(threadId, options = {}, env = process.env) {
@@ -1394,8 +1425,8 @@ function submitDelayMs(env = process.env) {
 }
 
 function tmuxInlineCharLimit(env = process.env) {
-  const parsed = Number(env.ORKESTR_TMUX_INLINE_CHAR_LIMIT || 1024);
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : 1024;
+  const parsed = Number(env.ORKESTR_TMUX_INLINE_CHAR_LIMIT || 800);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 800;
 }
 
 function inputTextForMessage(message) {
@@ -1409,6 +1440,33 @@ function inputTextForMessage(message) {
     return `[WhatsApp: ${source}]\n\n${body}`;
   }
   return body;
+}
+
+function runtimeInterruptionReason(reason) {
+  const key = String(reason || "interrupt").trim();
+  const labels = {
+    stale_delivery_ack: "Orkestr could not confirm that the previous input reached Codex",
+    stop_command: "a stop command was requested",
+    whatsapp_stop_command: "a WhatsApp stop command was requested",
+    reset_command: "a reset was requested",
+    whatsapp_reset_command: "a WhatsApp reset was requested",
+    hard_reset_command: "a hard reset was requested",
+    whatsapp_hard_reset_command: "a WhatsApp hard reset was requested",
+    ui_stop: "the pane was stopped from the UI",
+    manual_sleep: "the pane was put to sleep",
+    hibernate: "the thread was hibernated",
+    interrupt: "an interrupt was requested",
+  };
+  return labels[key] || key.replace(/_/g, " ");
+}
+
+function runtimeInterruptionNoticeText(reason) {
+  return [
+    "Codex pane interrupted",
+    "",
+    `${runtimeInterruptionReason(reason)}. Any in-progress Codex turn may have been stopped.`,
+    "If this came from WhatsApp, wait for the pane to be ready before sending the next instruction.",
+  ].join("\n");
 }
 
 function deliveryPayloadHash(message) {
@@ -1490,6 +1548,14 @@ function staleAckRecoveryCount(message) {
   return Math.max(0, Number(message?.deliveryStaleRecoveryCount || 0) || 0);
 }
 
+function deliveryAckCheckCount(message) {
+  return Math.max(0, Number(message?.deliveryAckCheckCount || 0) || 0);
+}
+
+function staleAckRecoveryProgress(message) {
+  return Math.max(deliveryAttempt(message), deliveryAckCheckCount(message));
+}
+
 function compactDeliveryText(value) {
   return String(value || "").replace(/\s+/g, " ").trim();
 }
@@ -1507,11 +1573,27 @@ function paneContainsDeliveryText(paneText, messageText) {
   const expected = compactDeliveryText(messageText);
   if (!expected) return false;
   const sample = expected.length > 160 ? expected.slice(0, 160) : expected;
-  const promptText = String(paneText || "")
-    .split("\n")
-    .map((line) => line.trim())
-    .filter((line) => /^›(?:\s|$)/.test(line))
-    .join(" ");
+  const lines = String(paneText || "").split("\n");
+  let promptStart = -1;
+  for (let index = lines.length - 1; index >= 0; index -= 1) {
+    if (panePromptLine(lines[index].trim())) {
+      promptStart = index;
+      break;
+    }
+  }
+  const promptText = promptStart >= 0
+    ? lines
+      .slice(promptStart)
+      .map((line, index) => {
+        if (index === 0) return line.replace(/^\s*(?:›|>)\s?/, "");
+        return line;
+      })
+      .filter((line) => !/^\s*gpt-[^\n]*\s+·\s+/i.test(line.trim()))
+      .join(" ")
+    : lines
+      .map((line) => line.trim())
+      .filter((line) => /^›(?:\s|$)/.test(line))
+      .join(" ");
   return compactDeliveryText(promptText).includes(sample);
 }
 
@@ -1545,6 +1627,7 @@ async function deliveryAckEvidence(thread, message, status, env = process.env) {
     if (candidate?.id === message.id) return false;
     if (String(candidate?.role || "").trim().toLowerCase() !== "assistant") return false;
     if (!String(candidate?.text || "").trim()) return false;
+    if (String(candidate?.source || "").trim() === "orkestr_runtime" || String(candidate?.phase || "").trim() === "runtime_interrupted") return false;
     const state = String(candidate?.state || "completed").trim().toLowerCase();
     if (state === "failed" || pendingInputStates.has(state)) return false;
     const candidateCursor = messageCursor(candidate);
@@ -1614,9 +1697,24 @@ async function failRejectedThreadInputDelivery(thread, message, status, env = pr
   return failThreadInputDelivery(thread, message, await rejectedCommandDeliveryEvidence(message, status), status, env);
 }
 
+async function stuckPromptDeliveryEvidence(message, status) {
+  if (message?.state !== "awaiting_ack" || !status?.paneId) return null;
+  const paneText = await capturePane(status.paneId, 80).catch(() => "");
+  if (!paneContainsDeliveryText(paneText, inputTextForMessage(message))) return null;
+  return {
+    observedVia: "input_stuck_at_prompt",
+    error: "Message was pasted into Codex but was not accepted/submitted. Orkestr stopped retrying to avoid duplicate input.",
+  };
+}
+
+async function failStuckPromptThreadInputDelivery(thread, message, status, env = process.env) {
+  return failThreadInputDelivery(thread, message, await stuckPromptDeliveryEvidence(message, status), status, env);
+}
+
 async function recoverStaleThreadInputAck(thread, message, status, env = process.env) {
   const threshold = staleAckRecoveryAttempts(env);
-  if (!threshold || deliveryAttempt(message) < threshold) return false;
+  const recoveryProgress = staleAckRecoveryProgress(message);
+  if (!threshold || recoveryProgress < threshold) return false;
   if (!status?.paneId || !status.promptReady || status.working) return false;
   const paneText = await capturePane(status.paneId, 40).catch(() => "");
   if (paneContainsDeliveryText(paneText, inputTextForMessage(message))) return false;
@@ -1634,7 +1732,7 @@ async function recoverStaleThreadInputAck(thread, message, status, env = process
   }
   const recoveryCount = staleAckRecoveryCount(message);
   const maxRecoveries = staleAckRecoveryMax(env);
-  if (recoveryCount >= maxRecoveries || deliveryAttempt(message) > threshold + maxRecoveries) {
+  if (recoveryCount >= maxRecoveries || recoveryProgress > threshold + maxRecoveries) {
     const errorText = "Thread input was not observed after stale-ack recovery; failing it to unblock later input.";
     await updateThreadMessage(thread.id, message.id, {
       state: "failed",
@@ -1648,7 +1746,7 @@ async function recoverStaleThreadInputAck(thread, message, status, env = process
       threadId: thread.id,
       messageId: message.id,
       paneId: status.paneId,
-      attempt: deliveryAttempt(message),
+      attempt: recoveryProgress,
       recoveryCount,
       maxRecoveries,
     }, env).catch(() => {});
@@ -1666,9 +1764,9 @@ async function recoverStaleThreadInputAck(thread, message, status, env = process
     threadId: thread.id,
     messageId: message.id,
     paneId: status.paneId,
-    attempt: deliveryAttempt(message),
+    attempt: recoveryProgress,
   }, env);
-  await sleepThread(thread.id, { reason: "stale_delivery_ack", kill: true }, env).catch(() => {});
+  await sleepThread(thread.id, { reason: "stale_delivery_ack", kill: true, sourceMessage: message }, env).catch(() => {});
   return true;
 }
 
@@ -1872,6 +1970,7 @@ async function sendThreadInputToPane(thread, message, status, env = process.env)
     state: "pending_delivery",
     deliveryState: attempt > 1 ? "retrying_delivery" : "delivering",
     deliveryAttempt: attempt,
+    deliveryAckCheckCount: 0,
     deliveryPayloadHash: deliveryPayloadHash(message),
     deliveryFirstAttemptAt: message.deliveryFirstAttemptAt || sentAt,
     deliveryLastAttemptAt: sentAt,
@@ -1902,6 +2001,7 @@ async function sendThreadInputToPane(thread, message, status, env = process.env)
     state: "awaiting_ack",
     deliveryState: "awaiting_ack",
     deliveryAttempt: attempt,
+    deliveryAckCheckCount: 0,
     deliveryLastAttemptAt: sentAt,
     deliveryNextAttemptAt: nextAttemptAt,
     observedVia: submittedExistingPaste ? `tmux_submit_existing_${deliveryInput.mode}_pending_ack` : `${deliveryInput.observedVia}_pending_ack`,
@@ -1972,6 +2072,7 @@ export async function deliverPendingThreadInputs(threadId, env = process.env) {
           scheduleThreadInputDelivery(thread.id, env, dueInMs);
           break;
         }
+        if (await failStuckPromptThreadInputDelivery(thread, awaitingAck, status, env)) continue;
         if (!status?.paneId || status.state === "sleeping") {
           await updateThreadMessage(thread.id, awaitingAck.id, {
             state: "queued",
@@ -1991,6 +2092,23 @@ export async function deliverPendingThreadInputs(threadId, env = process.env) {
           break;
         }
         if (await recoverStaleThreadInputAck(thread, awaitingAck, status, env)) continue;
+        const ackCheckCount = staleAckRecoveryProgress(awaitingAck) + 1;
+        const nextAttemptAt = isoAfter(deliveryRetryBackoffMs(ackCheckCount, env));
+        await updateThreadMessage(thread.id, awaitingAck.id, {
+          deliveryState: "awaiting_ack_unobserved",
+          deliveryAckCheckCount: ackCheckCount,
+          deliveryNextAttemptAt: nextAttemptAt,
+        }, env).catch(() => {});
+        await appendEvent({
+          type: "thread_input_ack_unobserved",
+          threadId: thread.id,
+          messageId: awaitingAck.id,
+          paneId: status.paneId,
+          ackCheckCount,
+          nextAttemptAt,
+        }, env).catch(() => {});
+        scheduleThreadInputDelivery(thread.id, env, deliveryDueInMs({ deliveryNextAttemptAt: nextAttemptAt }));
+        break;
       }
 
       const next = messages.find((message) => message.role === "user" && ["queued", "pending_delivery", "awaiting_ack"].includes(message.state));

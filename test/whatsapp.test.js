@@ -433,6 +433,47 @@ test("whatsapp delivery forwards failed WhatsApp-origin thread inputs once", asy
   assert.match(calls[0].body.text, /can't find pane: %580/);
 });
 
+test("whatsapp delivery mirrors pane interruption notices", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-interruption-notice-"));
+  const env = { ORKESTR_HOME: home };
+  await createThread({ id: "thread-wa-interruption-notice", name: "WA Interruption Notice" }, env);
+  await writeConnectorConfig("whatsapp", {
+    bridgeMode: "external",
+    bridgeUrl: "http://wa.local",
+    threadRoutes: { "chat-interruption": "thread-wa-interruption-notice" },
+  }, env);
+  const inbound = await appendThreadMessage("thread-wa-interruption-notice", {
+    role: "user",
+    source: "whatsapp_inbound",
+    connector: "whatsapp",
+    chatId: "chat-interruption",
+    accountId: "account-1",
+    text: "run it",
+    state: "completed",
+  }, env);
+  await appendThreadMessage("thread-wa-interruption-notice", {
+    role: "assistant",
+    source: "orkestr_runtime",
+    phase: "runtime_interrupted",
+    state: "completed",
+    text: "Codex pane interrupted\n\nOrkestr could not confirm the previous input reached Codex.",
+    parentMessageId: inbound.id,
+    connector: "whatsapp",
+    chatId: "chat-interruption",
+    accountId: "account-1",
+  }, env);
+
+  const calls = [];
+  const delivery = await deliverWhatsAppReplies(env, async (url, options) => {
+    calls.push({ url, body: JSON.parse(options.body) });
+    return response({ ok: true, ids: ["sent-interruption"] });
+  });
+
+  assert.equal(delivery.delivered.length, 1);
+  assert.equal(calls[0].body.to, "chat-interruption");
+  assert.match(calls[0].body.text, /^Codex pane interrupted/);
+});
+
 test("whatsapp delivery does not forward local failed inputs", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-local-failed-input-"));
   const env = { ORKESTR_HOME: home };

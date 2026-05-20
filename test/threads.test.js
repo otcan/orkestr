@@ -921,7 +921,9 @@ test("thread input delivery waits for runtime acknowledgement before completing"
     assert.deepEqual(await deliverPendingThreadInputs("delivery-thread", env), []);
     messages = await listThreadMessages("delivery-thread", env);
     assert.equal(messages[0].state, "awaiting_ack");
-    assert.equal(messages[0].deliveryAttempt, 2);
+    assert.equal(messages[0].deliveryAttempt, 1);
+    assert.equal(messages[0].deliveryAckCheckCount, 2);
+    assert.equal(messages[0].deliveryState, "awaiting_ack_unobserved");
 
     await fs.writeFile(captureFile, "\u2022 Working (1s)\n", "utf8");
     await drainAllPendingThreadInputs(env);
@@ -934,7 +936,7 @@ test("thread input delivery waits for runtime acknowledgement before completing"
 
     const log = await fs.readFile(fakeTmux.log, "utf8");
     const submitCount = log.split("\n").filter((line) => line.includes("__CALL__\tsend-keys\t-t\t%42\tC-m")).length;
-    assert.equal(submitCount, 2);
+    assert.equal(submitCount, 1);
   } finally {
     restoreEnvValue("PATH", priorPath);
     restoreEnvValue("TMUX_LOG", priorTmuxLog);
@@ -1014,9 +1016,72 @@ test("thread input delivery recovers a stale ready awaiting-ack runtime", async 
     const log = await fs.readFile(fakeTmux.log, "utf8");
 
     assert.equal(messages[0].state, "awaiting_ack");
-    assert.equal(messages[0].deliveryAttempt, 3);
+    assert.equal(messages[0].deliveryAttempt, 2);
+    assert.equal(messages.some((message) => message.source === "orkestr_runtime" && message.phase === "runtime_interrupted"), true);
     assert.match(log, /__CALL__\tkill-session\t-t\torkestr-stale-ack-thread/);
     assert.match(log, /__CALL__\tnew-session/);
+  } finally {
+    restoreEnvValue("PATH", priorPath);
+    restoreEnvValue("TMUX_LOG", priorTmuxLog);
+    restoreEnvValue("TMUX_STATE", priorTmuxState);
+    restoreEnvValue("TMUX_CAPTURE_FILE", priorCaptureFile);
+  }
+});
+
+test("thread input delivery fails when pasted input stays stuck at the prompt", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-stuck-prompt-"));
+  const fakeTmux = await createFakeTmux(home);
+  const captureFile = path.join(home, "pane.txt");
+  const priorPath = process.env.PATH;
+  const priorTmuxLog = process.env.TMUX_LOG;
+  const priorTmuxState = process.env.TMUX_STATE;
+  const priorCaptureFile = process.env.TMUX_CAPTURE_FILE;
+  process.env.PATH = `${fakeTmux.bin}:${priorPath || ""}`;
+  process.env.TMUX_LOG = fakeTmux.log;
+  process.env.TMUX_STATE = fakeTmux.state;
+  process.env.TMUX_CAPTURE_FILE = captureFile;
+
+  try {
+    const text = [
+      "I don't like the --->",
+      "",
+      "Orkestr",
+      "Can you start working on user documentation instead?",
+    ].join("\n");
+    const promptDraft = text.split("\n").map((line, index) => index === 0 ? `› ${line}` : `  ${line}`).join("\n");
+    await fs.writeFile(captureFile, `${promptDraft}\n  gpt-5.5 xhigh · /workspace/demo\n`, "utf8");
+    const env = {
+      ORKESTR_HOME: path.join(home, "orkestr-home"),
+      HOME: path.join(home, "runtime-home"),
+      CODEX_HOME: path.join(home, "codex-home"),
+      PATH: process.env.PATH,
+      TMUX_LOG: fakeTmux.log,
+      TMUX_STATE: fakeTmux.state,
+      TMUX_CAPTURE_FILE: captureFile,
+      ORKESTR_DELIVERY_ACK_WAIT_MS: "0",
+      ORKESTR_DELIVERY_ACK_BACKOFF_MS: "10000",
+    };
+    await createThread({ id: "stuck-prompt-thread", name: "Stuck Prompt Thread" }, env);
+    await wakeThread("stuck-prompt-thread", { reason: "test" }, env);
+    const input = await appendThreadMessage("stuck-prompt-thread", {
+      role: "user",
+      text,
+      state: "awaiting_ack",
+      deliveryState: "awaiting_ack",
+      deliveryAttempt: 1,
+      deliveryNextAttemptAt: new Date(Date.now() - 1000).toISOString(),
+    }, env);
+
+    assert.deepEqual(await deliverPendingThreadInputs("stuck-prompt-thread", env), []);
+    const messages = await listThreadMessages("stuck-prompt-thread", env);
+    const log = await fs.readFile(fakeTmux.log, "utf8");
+    const failed = messages.find((message) => message.id === input.id);
+
+    assert.equal(failed.state, "failed");
+    assert.equal(failed.deliveryState, "failed");
+    assert.equal(failed.observedVia, "input_stuck_at_prompt");
+    assert.match(failed.error, /pasted into Codex but was not accepted/);
+    assert.doesNotMatch(log, /__CALL__\tsend-keys\t-t\t%42\tC-m/);
   } finally {
     restoreEnvValue("PATH", priorPath);
     restoreEnvValue("TMUX_LOG", priorTmuxLog);
@@ -1174,6 +1239,60 @@ test("runtime status treats a prompt after stale working text as ready", async (
     restoreEnvValue("TMUX_LOG", priorTmuxLog);
     restoreEnvValue("TMUX_STATE", priorTmuxState);
     restoreEnvValue("TMUX_CAPTURE_FILE", priorCaptureFile);
+  }
+});
+
+test("thread input delivery sends near-limit multiline messages through a temp file by default", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-delivery-near-limit-input-"));
+  const fakeTmux = await createFakeTmux(home);
+  const captureFile = path.join(home, "pane.txt");
+  const loadedBufferCapture = path.join(home, "loaded-buffers.txt");
+  const priorPath = process.env.PATH;
+  const priorTmuxLog = process.env.TMUX_LOG;
+  const priorTmuxState = process.env.TMUX_STATE;
+  const priorCaptureFile = process.env.TMUX_CAPTURE_FILE;
+  const priorLoadedBufferCapture = process.env.TMUX_LOADED_BUFFER_CAPTURE;
+  process.env.PATH = `${fakeTmux.bin}:${priorPath || ""}`;
+  process.env.TMUX_LOG = fakeTmux.log;
+  process.env.TMUX_STATE = fakeTmux.state;
+  process.env.TMUX_CAPTURE_FILE = captureFile;
+  process.env.TMUX_LOADED_BUFFER_CAPTURE = loadedBufferCapture;
+
+  try {
+    await fs.writeFile(captureFile, "\u203a \n", "utf8");
+    const env = {
+      ORKESTR_HOME: path.join(home, "orkestr-home"),
+      HOME: path.join(home, "runtime-home"),
+      CODEX_HOME: path.join(home, "codex-home"),
+      PATH: process.env.PATH,
+      TMUX_LOG: fakeTmux.log,
+      TMUX_STATE: fakeTmux.state,
+      TMUX_CAPTURE_FILE: captureFile,
+      TMUX_LOADED_BUFFER_CAPTURE: loadedBufferCapture,
+      ORKESTR_DELIVERY_ACK_WAIT_MS: "0",
+      ORKESTR_DELIVERY_ACK_BACKOFF_MS: "10000",
+    };
+    const nearLimitText = `NEAR-LIMIT-MULTILINE\n${"x".repeat(880)}`;
+    await createThread({ id: "near-limit-delivery-thread", name: "Near Limit Delivery Thread" }, env);
+    await enqueueThreadInput("near-limit-delivery-thread", { text: nearLimitText }, env);
+
+    assert.deepEqual(await deliverPendingThreadInputs("near-limit-delivery-thread", env), []);
+    const messages = await listThreadMessages("near-limit-delivery-thread", env);
+    const deliveredPrompt = await fs.readFile(loadedBufferCapture, "utf8");
+    const storedInput = await fs.readFile(messages[0].deliveryInputFile, "utf8");
+
+    assert.equal(nearLimitText.length, 901);
+    assert.equal(messages[0].deliveryInputMode, "file");
+    assert.equal(messages[0].deliveryInputBytes, Buffer.byteLength(nearLimitText, "utf8"));
+    assert.equal(storedInput, nearLimitText);
+    assert.match(deliveredPrompt, /Read the full message from this local UTF-8 file:/);
+    assert.doesNotMatch(deliveredPrompt, /x{801}/);
+  } finally {
+    restoreEnvValue("PATH", priorPath);
+    restoreEnvValue("TMUX_LOG", priorTmuxLog);
+    restoreEnvValue("TMUX_STATE", priorTmuxState);
+    restoreEnvValue("TMUX_CAPTURE_FILE", priorCaptureFile);
+    restoreEnvValue("TMUX_LOADED_BUFFER_CAPTURE", priorLoadedBufferCapture);
   }
 });
 
