@@ -706,6 +706,30 @@ function runtimeCommand(thread, workspace = "", env = process.env) {
   return threadId ? `${base} resume${workspaceArg} ${shellQuote(threadId)}` : base;
 }
 
+function codexModeSetting(value) {
+  const mode = String(value || "").trim().toLowerCase();
+  return mode === "code" || mode === "plan" ? mode : "";
+}
+
+function desiredCodexModeForWake(thread) {
+  return codexModeSetting(thread?.desiredCodexMode) || codexModeSetting(thread?.codexMode);
+}
+
+function codexModePersistencePatch(mode, source, result = {}) {
+  const desired = codexModeSetting(mode);
+  if (!desired) return {};
+  return {
+    codexMode: desired,
+    codexModeSource: source,
+    codexModeUpdatedAt: nowIso(),
+    desiredCodexMode: null,
+    desiredCodexModeUpdatedAt: null,
+    codexModeLiveApplied: true,
+    codexModeLiveChanged: Boolean(result.changed),
+    codexModeApplyReason: result.reason || null,
+  };
+}
+
 function commandUsesCodex(command) {
   return /(^|[/"'\s])codex(["'\s]|$)/.test(String(command || ""));
 }
@@ -743,6 +767,8 @@ export async function wakeThread(threadId, options = {}, env = process.env) {
   }
 
   const paths = await ensureDataDirs(env);
+  const desiredMode = desiredCodexModeForWake(thread);
+  const desiredModeUpdatedAt = desiredMode ? nowIso() : null;
   const sessionName = `orkestr-${safeName(thread.id).slice(0, 48)}`;
   const workspace = runtimeWorkspace(thread, env);
   await fs.mkdir(workspace, { recursive: true });
@@ -753,6 +779,12 @@ export async function wakeThread(threadId, options = {}, env = process.env) {
   await updateThread(thread.id, {
     state: "waking",
     wakePolicy: thread.wakePolicy || "wake-on-message",
+    ...(desiredMode
+      ? {
+        desiredCodexMode: desiredMode,
+        desiredCodexModeUpdatedAt: desiredModeUpdatedAt,
+      }
+      : {}),
     runtime: { state: "waking", sessionName, workspace, reason: options.reason || "wake" },
   }, env);
 
@@ -806,6 +838,12 @@ export async function wakeThread(threadId, options = {}, env = process.env) {
     state: "ready",
     wakePolicy: thread.wakePolicy || "wake-on-message",
     activeRuntimeLeaseId: lease.id,
+    ...(desiredMode
+      ? {
+        desiredCodexMode: desiredMode,
+        desiredCodexModeUpdatedAt: desiredModeUpdatedAt,
+      }
+      : {}),
     runtime: {
       state: "ready",
       leaseId: lease.id,
@@ -1114,6 +1152,9 @@ async function completeResetCommand(thread, message, hard = false, env = process
 async function completeCodexModeCommand(thread, message, mode, env = process.env) {
   const result = await applyRuntimeCodexMode(thread.id, mode, env);
   const applied = result.applied === true;
+  if (applied) {
+    await updateThread(thread.id, codexModePersistencePatch(mode, "orkestr-command", result), env).catch(() => {});
+  }
   const updated = await updateThreadMessage(thread.id, message.id, {
     state: applied ? "completed" : "failed",
     deliveryState: applied ? "delivered" : "failed",
@@ -1131,6 +1172,46 @@ async function completeCodexModeCommand(thread, message, mode, env = process.env
     reason: result.reason || null,
   }, env).catch(() => {});
   return updated.id;
+}
+
+async function reapplyDesiredCodexMode(thread, status, env = process.env) {
+  const desired = codexModeSetting(thread?.desiredCodexMode);
+  if (!desired || !status?.paneId) return null;
+  if (!status.promptReady || status.working || status.foregroundWorking || status.backgroundWork || status.typingActive) return null;
+  if (status.planImplementationMenuVisible || status.needsResumeDirectoryConfirmation || status.needsCodexUpdatePromptSkip) return null;
+  const liveMode = codexModeSetting(status.codexMode);
+  if (!liveMode) return null;
+  if (liveMode === desired) {
+    await updateThread(thread.id, codexModePersistencePatch(desired, "orkestr-wake-restore", { changed: false }), env).catch(() => {});
+    await appendEvent({
+      type: "thread_codex_mode_restored",
+      threadId: thread.id,
+      mode: desired,
+      changed: false,
+      observedVia: "runtime_mode_already_matched",
+    }, env).catch(() => {});
+    return { applied: true, changed: false, mode: desired, previousMode: liveMode };
+  }
+  const result = await applyRuntimeCodexMode(thread.id, desired, env, { requirePromptReady: true }).catch((error) => ({
+    applied: false,
+    changed: false,
+    mode: desired,
+    previousMode: liveMode,
+    reason: error instanceof Error ? error.message : String(error),
+  }));
+  if (result.applied) {
+    await updateThread(thread.id, codexModePersistencePatch(desired, "orkestr-wake-restore", result), env).catch(() => {});
+  }
+  await appendEvent({
+    type: "thread_codex_mode_restore_attempt",
+    threadId: thread.id,
+    mode: desired,
+    previousMode: liveMode,
+    applied: Boolean(result.applied),
+    changed: Boolean(result.changed),
+    reason: result.reason || null,
+  }, env).catch(() => {});
+  return result;
 }
 
 function immediateThreadCommand(message) {
@@ -2696,7 +2777,7 @@ async function syncRuntimeLeasesOnce(env = process.env) {
     appended += synced.appended || 0;
     const thread = await getThread(lease.threadId, env).catch(() => null);
     const messages = thread ? await listThreadMessages(thread.id, env).catch(() => []) : [];
-    const status = await runtimeStatus(lease.threadId, env, messages).catch(() => null);
+    let status = await runtimeStatus(lease.threadId, env, messages).catch(() => null);
     if (status) {
       leaseForStorage = {
         ...synced.lease,
@@ -2730,6 +2811,11 @@ async function syncRuntimeLeasesOnce(env = process.env) {
         next.push(leaseForStorage);
         changed = true;
         continue;
+      }
+      const restoredMode = thread ? await reapplyDesiredCodexMode(thread, status, env) : null;
+      if (restoredMode?.applied) {
+        status = await runtimeStatus(lease.threadId, env, messages).catch(() => status);
+        changed = true;
       }
       const idleSleep = idleSleepDecision({ lease: leaseForStorage, messages, status }, env);
       if (thread && idleSleep) {

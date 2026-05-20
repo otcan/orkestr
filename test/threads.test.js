@@ -13,7 +13,7 @@ import { applyRuntimeCodexMode, deliverPendingThreadInputs, drainAllPendingThrea
 import { ensureDataDirs } from "../packages/storage/src/paths.js";
 import { parseThreadInputCommand } from "../packages/core/src/thread-commands.js";
 import { createThreadWorker, detectThreadGitState, listThreadWorkers, syncThreadWorkerWithParent, updateThreadRepo } from "../packages/core/src/thread-workers.js";
-import { appendThreadMessage, createThread, deleteThread, enqueueThreadInput, listThreadMessages, listThreads, updateThread, updateThreadMessage } from "../packages/core/src/threads.js";
+import { appendThreadMessage, createThread, deleteThread, enqueueThreadInput, getThread, listThreadMessages, listThreads, updateThread, updateThreadMessage } from "../packages/core/src/threads.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -141,6 +141,9 @@ case "$cmd" in
     for arg in "$@"; do
       if [ "$arg" = "Escape" ] && [ -n "\${TMUX_CAPTURE_AFTER_ESCAPE_FILE:-}" ] && [ -n "\${TMUX_CAPTURE_FILE:-}" ]; then
         cp "\${TMUX_CAPTURE_AFTER_ESCAPE_FILE:-}" "\${TMUX_CAPTURE_FILE:-}"
+      fi
+      if [ "$arg" = "BTab" ] && [ -n "\${TMUX_CAPTURE_AFTER_BTAB_FILE:-}" ] && [ -n "\${TMUX_CAPTURE_FILE:-}" ]; then
+        cp "\${TMUX_CAPTURE_AFTER_BTAB_FILE:-}" "\${TMUX_CAPTURE_FILE:-}"
       fi
       if [ "$arg" = "C-m" ] && [ -n "\${TMUX_CAPTURE_AFTER_ENTER_FILE:-}" ] && [ -n "\${TMUX_CAPTURE_FILE:-}" ]; then
         cp "\${TMUX_CAPTURE_AFTER_ENTER_FILE:-}" "\${TMUX_CAPTURE_FILE:-}"
@@ -1777,6 +1780,142 @@ test("codex mode endpoint toggles the attached Codex runtime", async () => {
     restoreEnvValue("TMUX_STATE", priorTmuxState);
     restoreEnvValue("TMUX_CAPTURE_FILE", priorCaptureFile);
     restoreEnvValue("ORKESTR_RECOVER_RUNNING_ON_START", priorRecoverOnStart);
+  }
+});
+
+test("runtime sync restores persisted Codex plan mode after wake", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-codex-mode-restore-"));
+  const fakeTmux = await createFakeTmux(home);
+  const captureFile = path.join(home, "pane.txt");
+  const afterBtabFile = path.join(home, "pane-after-btab.txt");
+  const priorHome = process.env.ORKESTR_HOME;
+  const priorRuntimeHome = process.env.HOME;
+  const priorCodexHome = process.env.CODEX_HOME;
+  const priorPath = process.env.PATH;
+  const priorTmuxLog = process.env.TMUX_LOG;
+  const priorTmuxState = process.env.TMUX_STATE;
+  const priorCaptureFile = process.env.TMUX_CAPTURE_FILE;
+  const priorAfterBtabFile = process.env.TMUX_CAPTURE_AFTER_BTAB_FILE;
+  const priorIdleSleep = process.env.ORKESTR_RUNTIME_IDLE_SLEEP_MS;
+  process.env.ORKESTR_HOME = path.join(home, "orkestr-home");
+  process.env.HOME = path.join(home, "runtime-home");
+  process.env.CODEX_HOME = path.join(home, "codex-home");
+  process.env.PATH = `${fakeTmux.bin}:${priorPath || ""}`;
+  process.env.TMUX_LOG = fakeTmux.log;
+  process.env.TMUX_STATE = fakeTmux.state;
+  process.env.TMUX_CAPTURE_FILE = captureFile;
+  process.env.TMUX_CAPTURE_AFTER_BTAB_FILE = afterBtabFile;
+  process.env.ORKESTR_RUNTIME_IDLE_SLEEP_MS = "0";
+
+  try {
+    await fs.writeFile(captureFile, "› \n\ngpt-5.5 xhigh · /workspace/demo\n", "utf8");
+    await fs.writeFile(afterBtabFile, "› \n\ngpt-5.5 xhigh · /workspace/demo            Plan mode\n", "utf8");
+    const env = {
+      ORKESTR_HOME: process.env.ORKESTR_HOME,
+      HOME: process.env.HOME,
+      CODEX_HOME: process.env.CODEX_HOME,
+      PATH: process.env.PATH,
+      TMUX_LOG: fakeTmux.log,
+      TMUX_STATE: fakeTmux.state,
+      TMUX_CAPTURE_FILE: captureFile,
+      TMUX_CAPTURE_AFTER_BTAB_FILE: afterBtabFile,
+      ORKESTR_RUNTIME_IDLE_SLEEP_MS: "0",
+    };
+    await createThread({ id: "codex-mode-restore-thread", name: "Codex Mode Restore Thread", codexMode: "plan" }, env);
+    await wakeThread("codex-mode-restore-thread", { reason: "test" }, env);
+    let thread = await getThread("codex-mode-restore-thread", env);
+    let status = await runtimeStatus("codex-mode-restore-thread", env);
+
+    assert.equal(thread.desiredCodexMode, "plan");
+    assert.equal(status.codexMode, "code");
+
+    await syncRuntimeLeases(env);
+    thread = await getThread("codex-mode-restore-thread", env);
+    status = await runtimeStatus("codex-mode-restore-thread", env);
+    const log = await fs.readFile(fakeTmux.log, "utf8");
+
+    assert.equal(thread.codexMode, "plan");
+    assert.equal(thread.desiredCodexMode, null);
+    assert.equal(thread.codexModeSource, "orkestr-wake-restore");
+    assert.equal(status.codexMode, "plan");
+    assert.match(log, /__CALL__\tsend-keys\t-t\t%42\tBTab/);
+  } finally {
+    restoreEnvValue("ORKESTR_HOME", priorHome);
+    restoreEnvValue("HOME", priorRuntimeHome);
+    restoreEnvValue("CODEX_HOME", priorCodexHome);
+    restoreEnvValue("PATH", priorPath);
+    restoreEnvValue("TMUX_LOG", priorTmuxLog);
+    restoreEnvValue("TMUX_STATE", priorTmuxState);
+    restoreEnvValue("TMUX_CAPTURE_FILE", priorCaptureFile);
+    restoreEnvValue("TMUX_CAPTURE_AFTER_BTAB_FILE", priorAfterBtabFile);
+    restoreEnvValue("ORKESTR_RUNTIME_IDLE_SLEEP_MS", priorIdleSleep);
+  }
+});
+
+test("thread /plan command persists Codex mode for future wakes", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-codex-mode-command-persist-"));
+  const fakeTmux = await createFakeTmux(home);
+  const captureFile = path.join(home, "pane.txt");
+  const afterBtabFile = path.join(home, "pane-after-btab.txt");
+  const priorHome = process.env.ORKESTR_HOME;
+  const priorRuntimeHome = process.env.HOME;
+  const priorCodexHome = process.env.CODEX_HOME;
+  const priorPath = process.env.PATH;
+  const priorTmuxLog = process.env.TMUX_LOG;
+  const priorTmuxState = process.env.TMUX_STATE;
+  const priorCaptureFile = process.env.TMUX_CAPTURE_FILE;
+  const priorAfterBtabFile = process.env.TMUX_CAPTURE_AFTER_BTAB_FILE;
+  process.env.ORKESTR_HOME = path.join(home, "orkestr-home");
+  process.env.HOME = path.join(home, "runtime-home");
+  process.env.CODEX_HOME = path.join(home, "codex-home");
+  process.env.PATH = `${fakeTmux.bin}:${priorPath || ""}`;
+  process.env.TMUX_LOG = fakeTmux.log;
+  process.env.TMUX_STATE = fakeTmux.state;
+  process.env.TMUX_CAPTURE_FILE = captureFile;
+  process.env.TMUX_CAPTURE_AFTER_BTAB_FILE = afterBtabFile;
+
+  try {
+    await fs.writeFile(captureFile, "› \n\ngpt-5.5 xhigh · /workspace/demo\n", "utf8");
+    await fs.writeFile(afterBtabFile, "› \n\ngpt-5.5 xhigh · /workspace/demo            Plan mode\n", "utf8");
+    const env = {
+      ORKESTR_HOME: process.env.ORKESTR_HOME,
+      HOME: process.env.HOME,
+      CODEX_HOME: process.env.CODEX_HOME,
+      PATH: process.env.PATH,
+      TMUX_LOG: fakeTmux.log,
+      TMUX_STATE: fakeTmux.state,
+      TMUX_CAPTURE_FILE: captureFile,
+      TMUX_CAPTURE_AFTER_BTAB_FILE: afterBtabFile,
+    };
+    await createThread({ id: "codex-mode-command-persist-thread", name: "Codex Mode Command Persist Thread" }, env);
+    await wakeThread("codex-mode-command-persist-thread", { reason: "test" }, env);
+    await appendThreadMessage("codex-mode-command-persist-thread", {
+      role: "user",
+      source: "cli",
+      text: "/plan",
+      state: "queued",
+    }, env);
+
+    const delivered = await deliverPendingThreadInputs("codex-mode-command-persist-thread", env);
+    const thread = await getThread("codex-mode-command-persist-thread", env);
+    const messages = await listThreadMessages("codex-mode-command-persist-thread", env);
+    const log = await fs.readFile(fakeTmux.log, "utf8");
+
+    assert.equal(delivered.length, 1);
+    assert.equal(thread.codexMode, "plan");
+    assert.equal(thread.desiredCodexMode, null);
+    assert.equal(thread.codexModeSource, "orkestr-command");
+    assert.equal(messages.find((message) => message.text === "/plan").state, "completed");
+    assert.match(log, /__CALL__\tsend-keys\t-t\t%42\tBTab/);
+  } finally {
+    restoreEnvValue("ORKESTR_HOME", priorHome);
+    restoreEnvValue("HOME", priorRuntimeHome);
+    restoreEnvValue("CODEX_HOME", priorCodexHome);
+    restoreEnvValue("PATH", priorPath);
+    restoreEnvValue("TMUX_LOG", priorTmuxLog);
+    restoreEnvValue("TMUX_STATE", priorTmuxState);
+    restoreEnvValue("TMUX_CAPTURE_FILE", priorCaptureFile);
+    restoreEnvValue("TMUX_CAPTURE_AFTER_BTAB_FILE", priorAfterBtabFile);
   }
 });
 
