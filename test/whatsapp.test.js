@@ -433,6 +433,46 @@ test("whatsapp delivery forwards failed WhatsApp-origin thread inputs once", asy
   assert.match(calls[0].body.text, /can't find pane: %580/);
 });
 
+test("whatsapp delivery forwards failed routed inputs using inbound event metadata", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-failed-input-event-"));
+  const env = { ORKESTR_HOME: home };
+  await createThread({ id: "thread-wa-failed-input-event", name: "WA Failed Input Event" }, env);
+  await writeConnectorConfig("whatsapp", {
+    bridgeMode: "external",
+    bridgeUrl: "http://wa.local",
+    threadRoutes: { "chat-failed-input-event": "thread-wa-failed-input-event" },
+  }, env);
+
+  const routed = await routeWhatsAppInbound({
+    eventId: "wa-failed-input-event-1",
+    chatId: "chat-failed-input-event",
+    accountId: "main",
+    text: "hi",
+  }, env);
+  await updateThreadMessage("thread-wa-failed-input-event", routed.message.id, {
+    source: "",
+    connector: "",
+    chatId: "",
+    accountId: "",
+    state: "failed",
+    deliveryState: "failed",
+    error: "Message was pasted into Codex but was not accepted/submitted. Orkestr stopped retrying to avoid duplicate input.",
+  }, env);
+
+  const calls = [];
+  const delivery = await deliverWhatsAppReplies(env, async (url, options) => {
+    calls.push({ url, body: JSON.parse(options.body) });
+    return response({ ok: true, ids: ["sent-failed-input-event"] });
+  });
+
+  assert.equal(delivery.delivered.length, 1);
+  assert.equal(delivery.delivered[0].deliveryType, "delivery_error");
+  assert.equal(calls[0].body.to, "chat-failed-input-event");
+  assert.equal(calls[0].body.accountId, "main");
+  assert.match(calls[0].body.text, /^Delivery failed\n\nYour message could not be delivered to Codex\./);
+  assert.match(calls[0].body.text, /pasted into Codex but was not accepted/);
+});
+
 test("whatsapp delivery mirrors pane interruption notices", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-interruption-notice-"));
   const env = { ORKESTR_HOME: home };

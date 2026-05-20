@@ -8,7 +8,7 @@ import { PairingRequiredPageComponent } from "./pairing-required-page.component"
 import { OpsPageComponent, ToolsView } from "./ops-page.component";
 import { RawTerminalController } from "./raw-terminal.controller";
 import { hasProposedPlanEnvelope, renderMessageTextHtml } from "./message-renderer";
-import { parseSlashCommandDraft, SLASH_COMMANDS, SlashCommandInfo, SlashCommandMatch } from "./slash-commands";
+import { SLASH_COMMANDS, SlashCommandInfo } from "./slash-commands";
 import {
   ApiService,
   SetupStatus,
@@ -126,6 +126,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   timerPrompt = "";
   workerModalOpen = false;
   modelDetailsOpen = false;
+  slashHelpOpen = false;
   creatingWorker = false;
   workerLabel = "Worker 1";
   workerTask = "";
@@ -353,6 +354,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     this.setupSection = "security";
     this.threadWizardOpen = false;
     this.modelDetailsOpen = false;
+    this.slashHelpOpen = false;
     this.gitDetailsThreadId = "";
     this.activePanel = "chat";
     this.error = "";
@@ -492,6 +494,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     this.selectedId = this.threadSlug(thread);
     this.activePanel = nextPanel;
     this.modelDetailsOpen = false;
+    this.slashHelpOpen = false;
     this.gitDetailsThreadId = "";
     this.pushPath(this.selectedId, this.activePanel);
     this.beginThreadLoad(thread.id);
@@ -525,6 +528,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
       return;
     }
     this.modelDetailsOpen = false;
+    this.slashHelpOpen = false;
     this.gitDetailsThreadId = "";
     if (this.activePanel === "raw" && panel !== "raw") this.closeRawStream();
     this.activePanel = panel;
@@ -552,6 +556,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     }
     if (this.activePanel === "raw") this.closeRawStream();
     this.modelDetailsOpen = false;
+    this.slashHelpOpen = false;
     this.gitDetailsThreadId = "";
     this.threadWizardOpen = false;
     this.onboardingActive = false;
@@ -841,6 +846,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     event?.stopPropagation();
     if (!this.selectedThread()) return;
     this.gitDetailsThreadId = "";
+    this.slashHelpOpen = false;
     this.modelDetailsOpen = true;
     this.renderNow();
   }
@@ -856,6 +862,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     event?.stopPropagation();
     if (!thread) return;
     this.modelDetailsOpen = false;
+    this.slashHelpOpen = false;
     this.gitDetailsThreadId = thread.id;
     this.renderNow();
   }
@@ -2487,43 +2494,25 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     return Math.max(2, Math.min(10, this.draft.split("\n").length));
   }
 
-  slashCommandMatch(): SlashCommandMatch | null {
-    return parseSlashCommandDraft(this.draft);
-  }
-
-  slashCommandTitle(match: SlashCommandMatch): string {
-    if (match.info) return match.info.label;
-    if (match.partial) return "Slash commands";
-    return "Unknown command";
-  }
-
-  slashCommandDetail(match: SlashCommandMatch): string {
-    if (match.info) return match.info.detail;
-    if (match.partial) return "Pick a command or keep typing.";
-    return "This is not an Orkestr control command. It will be delivered as text.";
-  }
-
   slashCommandAliasLabel(command: SlashCommandInfo): string {
     return command.aliases.length ? command.aliases.join(", ") : "";
   }
 
-  slashCommandArgumentLabel(match: SlashCommandMatch): string {
-    if (!match.info?.acceptsText || !match.argumentText) return "";
-    if (match.info.command === "/now") return "Interrupt text";
-    return "Text after switch";
+  slashCommandUsage(command: SlashCommandInfo): string {
+    return command.acceptsText ? `${command.command} message` : command.command;
   }
 
-  openSlashCommands(): void {
-    if (!this.draft.trim()) {
-      this.persistThreadTextField("draft", "/");
-    }
-    this.focusComposerSoon();
+  openSlashHelp(): void {
+    this.modelDetailsOpen = false;
+    this.gitDetailsThreadId = "";
+    this.slashHelpOpen = true;
+    this.renderNow();
   }
 
-  chooseSlashCommand(command: SlashCommandInfo): void {
-    const next = command.acceptsText ? `${command.command} ` : command.command;
-    this.persistThreadTextField("draft", next);
-    this.focusComposerSoon();
+  closeSlashHelp(): void {
+    if (!this.slashHelpOpen) return;
+    this.slashHelpOpen = false;
+    this.renderNow();
   }
 
   formatBytes(value: unknown): string {

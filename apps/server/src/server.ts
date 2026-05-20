@@ -5,7 +5,13 @@ import { fileURLToPath } from "node:url";
 import { NestFactory } from "@nestjs/core";
 import type { INestApplication } from "@nestjs/common";
 import { loadOverlayExecutorAdapters, recoverInterruptedExecutions } from "../../../packages/core/src/executors.js";
-import { consumeThreadConnectorDeliverySignalCount, drainAllPendingThreadInputs, syncPaneProgressForActiveLeases, syncRuntimeLeases } from "../../../packages/core/src/runtime-leases.js";
+import {
+  consumeThreadConnectorDeliverySignalCount,
+  drainAllPendingThreadInputs,
+  setThreadInputDeliveryFailureHandler,
+  syncPaneProgressForActiveLeases,
+  syncRuntimeLeases,
+} from "../../../packages/core/src/runtime-leases.js";
 import { markDueTimers } from "../../../packages/core/src/timers.js";
 import { deliverWhatsAppReplies } from "../../../packages/connectors/src/whatsapp.js";
 import { ensureDataDirs } from "../../../packages/storage/src/paths.js";
@@ -64,13 +70,16 @@ export async function startServer({ port = 19812, host = "127.0.0.1", openBrowse
   const paneProgressMonitor = setInterval(() => {
     syncPaneProgressForActiveLeases().catch(() => {});
   }, paneProgressMonitorIntervalMs());
-
-  deliverWhatsAppReplies().catch(() => {});
+  const whatsappDeliveryScheduler = createWhatsAppDeliveryScheduler();
+  const clearDeliveryFailureHandler = setThreadInputDeliveryFailureHandler(() => {
+    whatsappDeliveryScheduler.schedule();
+  });
 
   registerStaticFallback(app);
   await app.init();
   attachThreadStreamUpgrade(app.getHttpServer());
   await app.listen(port, host);
+  whatsappDeliveryScheduler.schedule();
 
   const url = `http://${host}:${port}`;
   console.log(`Orkestr setup wizard: ${url}`);
@@ -78,7 +87,10 @@ export async function startServer({ port = 19812, host = "127.0.0.1", openBrowse
     execFile("xdg-open", [url], { timeout: 1000 }, () => {});
   }
 
-  return serverHandle(app, timer, runtimeMonitor, paneProgressMonitor);
+  return serverHandle(app, timer, runtimeMonitor, paneProgressMonitor, () => {
+    clearDeliveryFailureHandler();
+    whatsappDeliveryScheduler.close();
+  });
 }
 
 export function runtimeMonitorIntervalMs() {
@@ -100,19 +112,37 @@ async function runTimerLoop() {
   const dueTimers = await markDueTimers();
   const drained = await drainAllPendingThreadInputs();
   const deliveredCount = drained.reduce((count: number, result: any) => count + Number(result?.delivered?.length || 0), 0);
-  if (dueTimers.length || drained.length || deliveredCount > 0) {
-    await syncRuntimeAndDeliverWhatsApp();
+  if (dueTimers.length || deliveredCount > 0 || drained.length > 0) {
+    await syncRuntimeAndDeliverWhatsApp({ forceWhatsapp: true });
   }
 }
 
-async function syncRuntimeAndDeliverWhatsApp() {
+async function syncRuntimeAndDeliverWhatsApp(options: { forceWhatsapp?: boolean } = {}) {
   const pendingConnectorDeliveries = consumeThreadConnectorDeliverySignalCount();
   const synced = await syncRuntimeLeases();
   const connectorDeliveries = pendingConnectorDeliveries + consumeThreadConnectorDeliverySignalCount();
-  if ((synced.appended || 0) > 0 || connectorDeliveries > 0) {
+  if (options.forceWhatsapp || (synced.appended || 0) > 0 || connectorDeliveries > 0) {
     await deliverWhatsAppReplies().catch(() => {});
   }
   return synced;
+}
+
+function createWhatsAppDeliveryScheduler() {
+  let timer: NodeJS.Timeout | null = null;
+  return {
+    schedule() {
+      if (timer) return;
+      timer = setTimeout(() => {
+        timer = null;
+        deliverWhatsAppReplies().catch(() => {});
+      }, 0);
+      if (typeof timer.unref === "function") timer.unref();
+    },
+    close() {
+      if (timer) clearTimeout(timer);
+      timer = null;
+    },
+  };
 }
 
 export function serverHandle(
@@ -120,6 +150,7 @@ export function serverHandle(
   timer?: NodeJS.Timeout,
   runtimeMonitor?: NodeJS.Timeout,
   paneProgressMonitor?: NodeJS.Timeout,
+  cleanup?: () => void,
 ) {
   return {
     address: () => app.getHttpServer().address(),
@@ -127,6 +158,7 @@ export function serverHandle(
       if (timer) clearInterval(timer);
       if (runtimeMonitor) clearInterval(runtimeMonitor);
       if (paneProgressMonitor) clearInterval(paneProgressMonitor);
+      cleanup?.();
       app.close()
         .then(() => callback?.())
         .catch((error) => callback?.(error));

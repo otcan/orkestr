@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { deliverPendingThreadInputs, sleepThread, wakeThread } from "../packages/core/src/runtime-leases.js";
+import { deliverPendingThreadInputs, setThreadInputDeliveryFailureHandler, sleepThread, wakeThread } from "../packages/core/src/runtime-leases.js";
 import {
   appendThreadMessage,
   createThread,
@@ -238,6 +238,48 @@ test("stale ack recovery appends a WhatsApp-visible pane interruption notice", a
     assert.equal(notice.connector, "whatsapp");
     assert.equal(notice.chatId, "chat-wa-notice");
     assert.match(notice.text, /could not confirm that the previous input reached Codex/);
+  });
+});
+
+test("failed WhatsApp-origin delivery notifies the delivery failure hook", async () => {
+  await withFakeRuntime(async (env) => {
+    env.ORKESTR_STUCK_PROMPT_FAIL_AFTER_MS = "0";
+    await fs.writeFile(env.TMUX_CAPTURE_FILE, "› [WhatsApp: chat-wa] hi still in prompt\n", "utf8");
+    await createThread({ id: "wa-stuck-prompt-thread", name: "WA Stuck Prompt" }, env);
+    await wakeThread("wa-stuck-prompt-thread", { reason: "test" }, env);
+    const input = await appendThreadMessage("wa-stuck-prompt-thread", {
+      role: "user",
+      source: "whatsapp_inbound",
+      connector: "whatsapp",
+      chatId: "chat-wa",
+      accountId: "main",
+      text: "hi",
+      state: "awaiting_ack",
+      deliveryState: "awaiting_ack",
+      createdAt: "2026-05-20T10:00:00.000Z",
+    }, env);
+    await updateThreadMessage("wa-stuck-prompt-thread", input.id, {
+      deliveryAttempt: 1,
+      deliveryNextAttemptAt: new Date(Date.now() - 1000).toISOString(),
+    }, env);
+
+    let failure = null;
+    const clear = setThreadInputDeliveryFailureHandler((payload) => {
+      failure = payload;
+    });
+    try {
+      assert.deepEqual(await deliverPendingThreadInputs("wa-stuck-prompt-thread", env), []);
+    } finally {
+      clear();
+    }
+
+    const messages = await listThreadMessages("wa-stuck-prompt-thread", env);
+    assert.equal(messages.find((message) => message.id === input.id)?.state, "failed");
+    assert.equal(failure?.threadId, "wa-stuck-prompt-thread");
+    assert.equal(failure?.messageId, input.id);
+    assert.equal(failure?.connector, "whatsapp");
+    assert.equal(failure?.chatId, "chat-wa");
+    assert.match(failure?.reason || "", /pasted into Codex but was not accepted/);
   });
 });
 
