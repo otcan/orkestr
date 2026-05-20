@@ -2530,23 +2530,14 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   }
 
   showPlanComposerBanner(thread: ThreadSummary | null): boolean {
-    return Boolean(thread && (
-      this.codexModeValue(thread) === "plan" ||
-      thread.planAvailable ||
-      thread.planImplementationReady
-    ));
+    return Boolean(thread && this.codexModeValue(thread) === "plan");
   }
 
-  planComposerHint(thread: ThreadSummary | null): string {
-    if (thread?.planImplementationReady) return "A Codex implementation prompt is ready.";
-    if (thread?.planAvailable) return "A proposed plan is available. Use /implement when Codex shows the implementation prompt.";
-    return "Continue planning, answer choices, or use /implement when Codex asks to implement.";
+  planComposerHint(_thread: ThreadSummary | null): string {
+    return "Use /code to switch to coding.";
   }
 
   composerPlaceholder(thread: ThreadSummary | null): string {
-    if (this.codexModeValue(thread) === "plan" || thread?.planAvailable) {
-      return "Planning mode: answer choices, continue planning, or type /implement";
-    }
     return thread ? `Message ${this.threadTitle(thread)}` : "Message";
   }
 

@@ -1135,15 +1135,6 @@
                 <strong>Planning mode</strong>
                 <span>{{ planComposerHint(thread) }}</span>
               </div>
-              <button
-                class="implement-command-button"
-                type="button"
-                (click)="implementPlanSelected()"
-                [disabled]="sending || sendingNow || implementingPlan"
-                title="Implement the current Codex plan when the implementation prompt is visible"
-              >
-                {{ implementingPlan ? "Implementing" : "/implement" }}
-              </button>
             </div>
           }
           <div class="composer-row">
