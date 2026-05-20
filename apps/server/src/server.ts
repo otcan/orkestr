@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import { NestFactory } from "@nestjs/core";
 import type { INestApplication } from "@nestjs/common";
 import { loadOverlayExecutorAdapters, recoverInterruptedExecutions } from "../../../packages/core/src/executors.js";
-import { drainAllPendingThreadInputs, syncPaneProgressForActiveLeases, syncRuntimeLeases } from "../../../packages/core/src/runtime-leases.js";
+import { consumeThreadConnectorDeliverySignalCount, drainAllPendingThreadInputs, syncPaneProgressForActiveLeases, syncRuntimeLeases } from "../../../packages/core/src/runtime-leases.js";
 import { markDueTimers } from "../../../packages/core/src/timers.js";
 import { deliverWhatsAppReplies } from "../../../packages/connectors/src/whatsapp.js";
 import { ensureDataDirs } from "../../../packages/storage/src/paths.js";
@@ -65,6 +65,8 @@ export async function startServer({ port = 19812, host = "127.0.0.1", openBrowse
     syncPaneProgressForActiveLeases().catch(() => {});
   }, paneProgressMonitorIntervalMs());
 
+  deliverWhatsAppReplies().catch(() => {});
+
   registerStaticFallback(app);
   await app.init();
   attachThreadStreamUpgrade(app.getHttpServer());
@@ -98,14 +100,16 @@ async function runTimerLoop() {
   const dueTimers = await markDueTimers();
   const drained = await drainAllPendingThreadInputs();
   const deliveredCount = drained.reduce((count: number, result: any) => count + Number(result?.delivered?.length || 0), 0);
-  if (dueTimers.length || deliveredCount > 0) {
+  if (dueTimers.length || drained.length || deliveredCount > 0) {
     await syncRuntimeAndDeliverWhatsApp();
   }
 }
 
 async function syncRuntimeAndDeliverWhatsApp() {
+  const pendingConnectorDeliveries = consumeThreadConnectorDeliverySignalCount();
   const synced = await syncRuntimeLeases();
-  if ((synced.appended || 0) > 0) {
+  const connectorDeliveries = pendingConnectorDeliveries + consumeThreadConnectorDeliverySignalCount();
+  if ((synced.appended || 0) > 0 || connectorDeliveries > 0) {
     await deliverWhatsAppReplies().catch(() => {});
   }
   return synced;

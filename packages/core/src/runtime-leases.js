@@ -23,6 +23,7 @@ const execFileAsync = promisify(execFile);
 const deliveryLocks = new Set();
 const deliveryTimers = new Map();
 let runtimeSyncInFlight = null;
+let connectorDeliverySignalCount = 0;
 const pendingInputStates = new Set(["queued", "pending_delivery", "awaiting_ack"]);
 const needInputPhases = new Set(["need_input", "awaiting_input", "question", "request_user_input"]);
 const proposedPlanOpenTagPattern = /^\s*<\s*proposed[\s_-]*plan\s*>/i;
@@ -46,6 +47,16 @@ function isoAfter(ms) {
 function whatsappOrigin(message = {}) {
   return String(message.connector || "").trim().toLowerCase() === "whatsapp" ||
     whatsappSources.has(String(message.source || "").trim().toLowerCase());
+}
+
+function markConnectorDeliverySignal(message = {}) {
+  if (whatsappOrigin(message)) connectorDeliverySignalCount += 1;
+}
+
+export function consumeThreadConnectorDeliverySignalCount() {
+  const count = connectorDeliverySignalCount;
+  connectorDeliverySignalCount = 0;
+  return count;
 }
 
 function positiveNumber(value) {
@@ -909,6 +920,7 @@ async function appendRuntimeInterruptionNotice(thread, options = {}, env = proce
     chatId: whatsappParent?.chatId || "",
     accountId: whatsappParent?.accountId || "",
   }, env);
+  markConnectorDeliverySignal(notice);
   await appendEvent({
     type: "thread_runtime_interruption_notice",
     threadId: thread.id,
@@ -1772,6 +1784,30 @@ function deliveryAckWaitMs(env = process.env) {
   return Math.max(0, Number(env.ORKESTR_DELIVERY_ACK_WAIT_MS ?? 2500) || 0);
 }
 
+function stuckPromptFailAfterMs(env = process.env) {
+  const parsed = Number(env.ORKESTR_STUCK_PROMPT_FAIL_AFTER_MS ?? 30_000);
+  return Number.isFinite(parsed) ? Math.max(0, parsed) : 30_000;
+}
+
+function unsentPromptStableMs(env = process.env) {
+  const parsed = Number(env.ORKESTR_UNSENT_PROMPT_STABLE_MS ?? 3000);
+  return Number.isFinite(parsed) ? Math.max(0, parsed) : 3000;
+}
+
+function deliveryFirstAttemptMs(message) {
+  return timestampMs(message?.deliveryFirstAttemptAt) ||
+    timestampMs(message?.deliveryLastAttemptAt) ||
+    messageTimeMs(message);
+}
+
+function stuckPromptFailDueInMs(message, env = process.env) {
+  const failAfterMs = stuckPromptFailAfterMs(env);
+  if (failAfterMs <= 0) return 0;
+  const firstAttemptMs = deliveryFirstAttemptMs(message);
+  if (!firstAttemptMs) return failAfterMs;
+  return Math.max(0, firstAttemptMs + failAfterMs - Date.now());
+}
+
 function deliveryRetryBackoffMs(attempt, env = process.env) {
   const configured = String(env.ORKESTR_DELIVERY_ACK_BACKOFF_MS || "")
     .split(",")
@@ -1822,10 +1858,7 @@ function leadingSlashCommand(message) {
   return match ? match[1].toLowerCase() : "";
 }
 
-function paneContainsDeliveryText(paneText, messageText) {
-  const expected = compactDeliveryText(messageText);
-  if (!expected) return false;
-  const sample = expected.length > 160 ? expected.slice(0, 160) : expected;
+function panePromptBodyText(paneText) {
   const lines = String(paneText || "").split("\n");
   let promptStart = -1;
   for (let index = lines.length - 1; index >= 0; index -= 1) {
@@ -1834,7 +1867,7 @@ function paneContainsDeliveryText(paneText, messageText) {
       break;
     }
   }
-  const promptText = promptStart >= 0
+  return promptStart >= 0
     ? lines
       .slice(promptStart)
       .map((line, index) => {
@@ -1847,7 +1880,47 @@ function paneContainsDeliveryText(paneText, messageText) {
       .map((line) => line.trim())
       .filter((line) => /^›(?:\s|$)/.test(line))
       .join(" ");
+}
+
+function paneContainsDeliveryText(paneText, messageText) {
+  const expected = compactDeliveryText(messageText);
+  if (!expected) return false;
+  const sample = expected.length > 160 ? expected.slice(0, 160) : expected;
+  const promptText = panePromptBodyText(paneText);
   return compactDeliveryText(promptText).includes(sample);
+}
+
+function fileDeliveryPromptTextForMessage(message) {
+  const filePath = String(message?.deliveryInputFile || "").trim();
+  const bytes = Number(message?.deliveryInputBytes || 0) || 0;
+  const hash = String(message?.deliveryPayloadHash || "").trim();
+  if (!filePath || !bytes || !hash) return "";
+  return [
+    "A full user message was written to a local temp file because it is too long for safe tmux inline delivery.",
+    `Read the full message from this local UTF-8 file: ${filePath}`,
+    `Bytes: ${bytes}`,
+    `SHA-256: ${hash}`,
+    "",
+    "Treat the file contents as the user's message and answer it directly. Do not summarize this wrapper message.",
+  ].join("\n");
+}
+
+function deliveryPromptTextForMessage(message) {
+  if (String(message?.deliveryInputMode || "") === "file") {
+    return fileDeliveryPromptTextForMessage(message) || inputTextForMessage(message);
+  }
+  return inputTextForMessage(message);
+}
+
+function paneMatchesDeliveryTextExactly(paneText, messageText) {
+  const expected = compactDeliveryText(messageText);
+  if (!expected) return false;
+  return compactDeliveryText(panePromptBodyText(paneText)) === expected;
+}
+
+function paneMatchesMessageDeliveryPromptExactly(paneText, message) {
+  const expected = deliveryPromptTextForMessage(message);
+  return paneMatchesDeliveryTextExactly(paneText, expected);
 }
 
 function paneContainsMessageDeliveryPrompt(paneText, message) {
@@ -1941,6 +2014,7 @@ async function failThreadInputDelivery(thread, message, evidence, status, env = 
     observedVia: evidence.observedVia || "delivery_failed",
     error: errorText,
   }, env);
+  markConnectorDeliverySignal(message);
   await updateThread(thread.id, {
     state: status?.state || "ready",
     lastError: errorText,
@@ -1960,10 +2034,18 @@ async function failRejectedThreadInputDelivery(thread, message, status, env = pr
   return failThreadInputDelivery(thread, message, await rejectedCommandDeliveryEvidence(message, status), status, env);
 }
 
-async function stuckPromptDeliveryEvidence(message, status) {
+async function stuckPromptDeliveryEvidence(message, status, env = process.env) {
   if (message?.state !== "awaiting_ack" || !status?.paneId) return null;
   const paneText = await capturePane(status.paneId, 80).catch(() => "");
   if (!paneContainsMessageDeliveryPrompt(paneText, message)) return null;
+  const dueInMs = stuckPromptFailDueInMs(message, env);
+  if (dueInMs > 0) {
+    return {
+      deferred: true,
+      dueInMs,
+      observedVia: "input_stuck_at_prompt_pending",
+    };
+  }
   return {
     observedVia: "input_stuck_at_prompt",
     error: "Message was pasted into Codex but was not accepted/submitted. Orkestr stopped retrying to avoid duplicate input.",
@@ -1971,20 +2053,47 @@ async function stuckPromptDeliveryEvidence(message, status) {
 }
 
 async function failStuckPromptThreadInputDelivery(thread, message, status, env = process.env) {
-  return failThreadInputDelivery(thread, message, await stuckPromptDeliveryEvidence(message, status), status, env);
+  const evidence = await stuckPromptDeliveryEvidence(message, status, env);
+  if (!evidence) return null;
+  if (evidence.deferred) {
+    const nextAttemptAt = isoAfter(evidence.dueInMs);
+    await updateThreadMessage(thread.id, message.id, {
+      deliveryState: "awaiting_prompt_submission",
+      deliveryNextAttemptAt: nextAttemptAt,
+      error: null,
+    }, env).catch(() => {});
+    await appendEvent({
+      type: "thread_input_stuck_prompt_deferred",
+      threadId: thread.id,
+      messageId: message.id,
+      paneId: status?.paneId || message.deliveryPaneId || null,
+      dueInMs: evidence.dueInMs,
+      nextAttemptAt,
+    }, env).catch(() => {});
+    scheduleThreadInputDelivery(thread.id, env, evidence.dueInMs);
+    return message.id;
+  }
+  return failThreadInputDelivery(thread, message, evidence, status, env);
 }
 
-async function submitStuckFilePromptDelivery(thread, message, status, env = process.env) {
-  if (message?.state !== "awaiting_ack" || String(message?.deliveryInputMode || "") !== "file" || !status?.paneId) return null;
-  const paneText = await capturePane(status.paneId, 80).catch(() => "");
-  if (!paneContainsMessageDeliveryPrompt(paneText, message)) return null;
+async function submitStableUnsentPromptDelivery(thread, message, status, env = process.env) {
+  if (message?.state !== "awaiting_ack" || !status?.paneId) return null;
+  const beforeText = await capturePane(status.paneId, 80).catch(() => "");
+  if (!paneMatchesMessageDeliveryPromptExactly(beforeText, message)) return null;
+  const beforePromptBody = compactDeliveryText(panePromptBodyText(beforeText));
+  const stableMs = unsentPromptStableMs(env);
+  if (stableMs > 0) await sleep(stableMs);
+  const afterText = await capturePane(status.paneId, 80).catch(() => "");
+  if (compactDeliveryText(panePromptBodyText(afterText)) !== beforePromptBody) return null;
+  if (!paneMatchesMessageDeliveryPromptExactly(afterText, message)) return null;
+
   const attempt = deliveryAttempt(message) + 1;
   const sentAt = nowIso();
   const nextAttemptAt = isoAfter(deliveryRetryBackoffMs(attempt, env));
   const rollout = await rolloutSnapshotForDelivery(thread, status.lease, env);
   await updateThreadMessage(thread.id, message.id, {
     state: "pending_delivery",
-    deliveryState: "submitting_existing_file_prompt",
+    deliveryState: "submitting_unsent_prompt",
     deliveryAttempt: attempt,
     deliveryAckCheckCount: 0,
     deliveryLastAttemptAt: sentAt,
@@ -2004,7 +2113,7 @@ async function submitStuckFilePromptDelivery(thread, message, status, env = proc
     deliveryAckCheckCount: 0,
     deliveryLastAttemptAt: sentAt,
     deliveryNextAttemptAt: nextAttemptAt,
-    observedVia: "tmux_submit_existing_file_pending_ack",
+    observedVia: "tmux_submit_stable_unsent_prompt_pending_ack",
     deliveryPaneId: status.paneId,
     runtimeLeaseId: status.lease?.id || null,
     ...rollout,
@@ -2017,8 +2126,8 @@ async function submitStuckFilePromptDelivery(thread, message, status, env = proc
     attempt,
     paneId: status.paneId,
     nextAttemptAt,
-    observedVia: "tmux_submit_existing_file",
-    deliveryInputMode: "file",
+    observedVia: "tmux_submit_stable_unsent_prompt",
+    deliveryInputMode: message.deliveryInputMode || "inline",
     deliveryInputFile: message.deliveryInputFile || null,
   }, env);
   return message.id;
@@ -2054,6 +2163,7 @@ async function recoverStaleThreadInputAck(thread, message, status, env = process
       observedVia: "stale_ack_recovery_exhausted",
       error: errorText,
     }, env);
+    markConnectorDeliverySignal(message);
     await appendEvent({
       type: "thread_input_stale_ack_recovery_exhausted",
       threadId: thread.id,
@@ -2393,7 +2503,7 @@ export async function deliverPendingThreadInputs(threadId, env = process.env) {
           scheduleThreadInputDelivery(thread.id, env, dueInMs);
           break;
         }
-        if (await submitStuckFilePromptDelivery(thread, awaitingAck, status, env)) continue;
+        if (await submitStableUnsentPromptDelivery(thread, awaitingAck, status, env)) continue;
         if (await failStuckPromptThreadInputDelivery(thread, awaitingAck, status, env)) continue;
         if (!status?.paneId || status.state === "sleeping") {
           await updateThreadMessage(thread.id, awaitingAck.id, {
@@ -2504,6 +2614,7 @@ export async function deliverPendingThreadInputs(threadId, env = process.env) {
           break;
         }
         await updateThreadMessage(thread.id, next.id, { state: "failed", deliveryState: "failed", error: errorText }, env).catch(() => {});
+        markConnectorDeliverySignal(next);
         await updateThread(thread.id, { state: "failed", lastError: errorText }, env).catch(() => {});
         await appendEvent({ type: "thread_input_delivery_failed", threadId: thread.id, messageId: next.id, error: errorText }, env);
         break;

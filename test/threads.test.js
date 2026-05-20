@@ -9,7 +9,7 @@ import { promisify } from "node:util";
 import { startServer } from "../apps/server/src/server.js";
 import { threadRuntimeSummary } from "../apps/server/src/thread-summary.ts";
 import { runNextThreadMessage } from "../packages/core/src/executors.js";
-import { applyRuntimeCodexMode, deliverPendingThreadInputs, drainAllPendingThreadInputs, hardResetThreadRuntime, listRuntimeLeases, resetThreadRuntime, runtimeStatus, sleepThread, syncRuntimeLeases, syncRuntimeWindowName, wakeThread } from "../packages/core/src/runtime-leases.js";
+import { applyRuntimeCodexMode, consumeThreadConnectorDeliverySignalCount, deliverPendingThreadInputs, drainAllPendingThreadInputs, hardResetThreadRuntime, listRuntimeLeases, resetThreadRuntime, runtimeStatus, sleepThread, syncRuntimeLeases, syncRuntimeWindowName, wakeThread } from "../packages/core/src/runtime-leases.js";
 import { ensureDataDirs } from "../packages/storage/src/paths.js";
 import { parseThreadInputCommand } from "../packages/core/src/thread-commands.js";
 import { createThreadWorker, detectThreadGitState, listThreadWorkers, syncThreadWorkerWithParent, updateThreadRepo } from "../packages/core/src/thread-workers.js";
@@ -1086,7 +1086,134 @@ test("thread input delivery recovers a stale ready awaiting-ack runtime", async 
   }
 });
 
-test("thread input delivery fails when pasted input stays stuck at the prompt", async () => {
+test("thread input delivery submits a stable exact unsent prompt", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-stuck-prompt-grace-"));
+  const fakeTmux = await createFakeTmux(home);
+  const captureFile = path.join(home, "pane.txt");
+  const afterEnterFile = path.join(home, "pane-after-enter.txt");
+  const priorPath = process.env.PATH;
+  const priorTmuxLog = process.env.TMUX_LOG;
+  const priorTmuxState = process.env.TMUX_STATE;
+  const priorCaptureFile = process.env.TMUX_CAPTURE_FILE;
+  const priorCaptureAfterEnterFile = process.env.TMUX_CAPTURE_AFTER_ENTER_FILE;
+  process.env.PATH = `${fakeTmux.bin}:${priorPath || ""}`;
+  process.env.TMUX_LOG = fakeTmux.log;
+  process.env.TMUX_STATE = fakeTmux.state;
+  process.env.TMUX_CAPTURE_FILE = captureFile;
+  process.env.TMUX_CAPTURE_AFTER_ENTER_FILE = afterEnterFile;
+
+  try {
+    const text = "fresh stuck prompt should not fail immediately";
+    await fs.writeFile(captureFile, `› ${text}\n  gpt-5.5 xhigh · /workspace/demo\n`, "utf8");
+    await fs.writeFile(afterEnterFile, "\u2022 Working (1s)\n", "utf8");
+    const env = {
+      ORKESTR_HOME: path.join(home, "orkestr-home"),
+      HOME: path.join(home, "runtime-home"),
+      CODEX_HOME: path.join(home, "codex-home"),
+      PATH: process.env.PATH,
+      TMUX_LOG: fakeTmux.log,
+      TMUX_STATE: fakeTmux.state,
+      TMUX_CAPTURE_FILE: captureFile,
+      TMUX_CAPTURE_AFTER_ENTER_FILE: afterEnterFile,
+      ORKESTR_DELIVERY_ACK_WAIT_MS: "0",
+      ORKESTR_DELIVERY_ACK_BACKOFF_MS: "10000",
+      ORKESTR_STUCK_PROMPT_FAIL_AFTER_MS: "30000",
+      ORKESTR_UNSENT_PROMPT_STABLE_MS: "1",
+    };
+    await createThread({ id: "stuck-prompt-grace-thread", name: "Stuck Prompt Grace Thread" }, env);
+    await wakeThread("stuck-prompt-grace-thread", { reason: "test" }, env);
+    const input = await appendThreadMessage("stuck-prompt-grace-thread", {
+      role: "user",
+      text,
+      state: "awaiting_ack",
+      deliveryState: "awaiting_ack",
+      deliveryAttempt: 1,
+      deliveryFirstAttemptAt: new Date().toISOString(),
+      deliveryNextAttemptAt: new Date(Date.now() - 1000).toISOString(),
+    }, env);
+
+    assert.deepEqual(await deliverPendingThreadInputs("stuck-prompt-grace-thread", env), [input.id]);
+    const messages = await listThreadMessages("stuck-prompt-grace-thread", env);
+    const log = await fs.readFile(fakeTmux.log, "utf8");
+    const delivered = messages.find((message) => message.id === input.id);
+
+    assert.equal(delivered.state, "completed");
+    assert.equal(delivered.deliveryState, "delivered");
+    assert.equal(delivered.observedVia, "runtime_working");
+    assert.match(log, /__CALL__\tsend-keys\t-t\t%42\tC-m/);
+  } finally {
+    restoreEnvValue("PATH", priorPath);
+    restoreEnvValue("TMUX_LOG", priorTmuxLog);
+    restoreEnvValue("TMUX_STATE", priorTmuxState);
+    restoreEnvValue("TMUX_CAPTURE_FILE", priorCaptureFile);
+    restoreEnvValue("TMUX_CAPTURE_AFTER_ENTER_FILE", priorCaptureAfterEnterFile);
+  }
+});
+
+test("thread input delivery does not submit an unsent prompt that changes during the stability wait", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-stuck-prompt-changing-"));
+  const fakeTmux = await createFakeTmux(home);
+  const captureFile = path.join(home, "pane.txt");
+  const priorPath = process.env.PATH;
+  const priorTmuxLog = process.env.TMUX_LOG;
+  const priorTmuxState = process.env.TMUX_STATE;
+  const priorCaptureFile = process.env.TMUX_CAPTURE_FILE;
+  process.env.PATH = `${fakeTmux.bin}:${priorPath || ""}`;
+  process.env.TMUX_LOG = fakeTmux.log;
+  process.env.TMUX_STATE = fakeTmux.state;
+  process.env.TMUX_CAPTURE_FILE = captureFile;
+
+  try {
+    const text = "changing prompt should not be submitted";
+    await fs.writeFile(captureFile, `› ${text}\n  gpt-5.5 xhigh · /workspace/demo\n`, "utf8");
+    const env = {
+      ORKESTR_HOME: path.join(home, "orkestr-home"),
+      HOME: path.join(home, "runtime-home"),
+      CODEX_HOME: path.join(home, "codex-home"),
+      PATH: process.env.PATH,
+      TMUX_LOG: fakeTmux.log,
+      TMUX_STATE: fakeTmux.state,
+      TMUX_CAPTURE_FILE: captureFile,
+      ORKESTR_DELIVERY_ACK_WAIT_MS: "0",
+      ORKESTR_DELIVERY_ACK_BACKOFF_MS: "10000",
+      ORKESTR_STUCK_PROMPT_FAIL_AFTER_MS: "30000",
+      ORKESTR_UNSENT_PROMPT_STABLE_MS: "30",
+    };
+    await createThread({ id: "stuck-prompt-changing-thread", name: "Stuck Prompt Changing Thread" }, env);
+    await wakeThread("stuck-prompt-changing-thread", { reason: "test" }, env);
+    const input = await appendThreadMessage("stuck-prompt-changing-thread", {
+      role: "user",
+      text,
+      state: "awaiting_ack",
+      deliveryState: "awaiting_ack",
+      deliveryAttempt: 1,
+      deliveryFirstAttemptAt: new Date().toISOString(),
+      deliveryNextAttemptAt: new Date(Date.now() - 1000).toISOString(),
+    }, env);
+
+    const delivered = deliverPendingThreadInputs("stuck-prompt-changing-thread", env);
+    setTimeout(() => {
+      fs.writeFile(captureFile, `› ${text} plus more typing\n  gpt-5.5 xhigh · /workspace/demo\n`, "utf8").catch(() => {});
+    }, 5);
+
+    assert.deepEqual(await delivered, []);
+    const messages = await listThreadMessages("stuck-prompt-changing-thread", env);
+    const log = await fs.readFile(fakeTmux.log, "utf8");
+    const pending = messages.find((message) => message.id === input.id);
+
+    assert.equal(pending.state, "awaiting_ack");
+    assert.equal(pending.deliveryState, "awaiting_prompt_submission");
+    assert.equal(Date.parse(pending.deliveryNextAttemptAt) > Date.now(), true);
+    assert.doesNotMatch(log, /__CALL__\tsend-keys\t-t\t%42\tC-m/);
+  } finally {
+    restoreEnvValue("PATH", priorPath);
+    restoreEnvValue("TMUX_LOG", priorTmuxLog);
+    restoreEnvValue("TMUX_STATE", priorTmuxState);
+    restoreEnvValue("TMUX_CAPTURE_FILE", priorCaptureFile);
+  }
+});
+
+test("thread input delivery fails when pasted input stays stuck at the prompt past the grace period", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-stuck-prompt-"));
   const fakeTmux = await createFakeTmux(home);
   const captureFile = path.join(home, "pane.txt");
@@ -1106,7 +1233,7 @@ test("thread input delivery fails when pasted input stays stuck at the prompt", 
       "Orkestr",
       "Can you start working on user documentation instead?",
     ].join("\n");
-    const promptDraft = text.split("\n").map((line, index) => index === 0 ? `› ${line}` : `  ${line}`).join("\n");
+    const promptDraft = `${text.split("\n").map((line, index) => index === 0 ? `› ${line}` : `  ${line}`).join("\n")}\n  accidental extra prompt text`;
     await fs.writeFile(captureFile, `${promptDraft}\n  gpt-5.5 xhigh · /workspace/demo\n`, "utf8");
     const env = {
       ORKESTR_HOME: path.join(home, "orkestr-home"),
@@ -1118,6 +1245,7 @@ test("thread input delivery fails when pasted input stays stuck at the prompt", 
       TMUX_CAPTURE_FILE: captureFile,
       ORKESTR_DELIVERY_ACK_WAIT_MS: "0",
       ORKESTR_DELIVERY_ACK_BACKOFF_MS: "10000",
+      ORKESTR_STUCK_PROMPT_FAIL_AFTER_MS: "0",
     };
     await createThread({ id: "stuck-prompt-thread", name: "Stuck Prompt Thread" }, env);
     await wakeThread("stuck-prompt-thread", { reason: "test" }, env);
@@ -1140,6 +1268,73 @@ test("thread input delivery fails when pasted input stays stuck at the prompt", 
     assert.equal(failed.observedVia, "input_stuck_at_prompt");
     assert.match(failed.error, /pasted into Codex but was not accepted/);
     assert.doesNotMatch(log, /__CALL__\tsend-keys\t-t\t%42\tC-m/);
+  } finally {
+    restoreEnvValue("PATH", priorPath);
+    restoreEnvValue("TMUX_LOG", priorTmuxLog);
+    restoreEnvValue("TMUX_STATE", priorTmuxState);
+    restoreEnvValue("TMUX_CAPTURE_FILE", priorCaptureFile);
+  }
+});
+
+test("failed WhatsApp-origin thread delivery raises a connector delivery signal", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-wa-failure-signal-"));
+  const fakeTmux = await createFakeTmux(home);
+  const captureFile = path.join(home, "pane.txt");
+  const priorPath = process.env.PATH;
+  const priorTmuxLog = process.env.TMUX_LOG;
+  const priorTmuxState = process.env.TMUX_STATE;
+  const priorCaptureFile = process.env.TMUX_CAPTURE_FILE;
+  process.env.PATH = `${fakeTmux.bin}:${priorPath || ""}`;
+  process.env.TMUX_LOG = fakeTmux.log;
+  process.env.TMUX_STATE = fakeTmux.state;
+  process.env.TMUX_CAPTURE_FILE = captureFile;
+
+  try {
+    consumeThreadConnectorDeliverySignalCount();
+    const text = "WhatsApp prompt failure should notify";
+    const promptText = [
+      "› [WhatsApp: chat-wa-failure-signal]",
+      "",
+      `  ${text}`,
+      "  extra prompt text",
+      "  gpt-5.5 xhigh · /workspace/demo",
+    ].join("\n");
+    await fs.writeFile(captureFile, promptText, "utf8");
+    const env = {
+      ORKESTR_HOME: path.join(home, "orkestr-home"),
+      HOME: path.join(home, "runtime-home"),
+      CODEX_HOME: path.join(home, "codex-home"),
+      PATH: process.env.PATH,
+      TMUX_LOG: fakeTmux.log,
+      TMUX_STATE: fakeTmux.state,
+      TMUX_CAPTURE_FILE: captureFile,
+      ORKESTR_DELIVERY_ACK_WAIT_MS: "0",
+      ORKESTR_DELIVERY_ACK_BACKOFF_MS: "10000",
+      ORKESTR_STUCK_PROMPT_FAIL_AFTER_MS: "0",
+    };
+    await createThread({ id: "wa-failure-signal-thread", name: "WA Failure Signal Thread" }, env);
+    await wakeThread("wa-failure-signal-thread", { reason: "test" }, env);
+    const input = await appendThreadMessage("wa-failure-signal-thread", {
+      role: "user",
+      source: "whatsapp_inbound",
+      connector: "whatsapp",
+      chatId: "chat-wa-failure-signal",
+      accountId: "account-1",
+      text,
+      state: "awaiting_ack",
+      deliveryState: "awaiting_ack",
+      deliveryAttempt: 1,
+      deliveryNextAttemptAt: new Date(Date.now() - 1000).toISOString(),
+    }, env);
+
+    assert.deepEqual(await deliverPendingThreadInputs("wa-failure-signal-thread", env), []);
+    const messages = await listThreadMessages("wa-failure-signal-thread", env);
+    const failed = messages.find((message) => message.id === input.id);
+
+    assert.equal(failed.state, "failed");
+    assert.equal(failed.observedVia, "input_stuck_at_prompt");
+    assert.equal(consumeThreadConnectorDeliverySignalCount(), 1);
+    assert.equal(consumeThreadConnectorDeliverySignalCount(), 0);
   } finally {
     restoreEnvValue("PATH", priorPath);
     restoreEnvValue("TMUX_LOG", priorTmuxLog);
@@ -1186,6 +1381,7 @@ test("thread input delivery submits an existing pasted temp-file prompt without 
       TMUX_CAPTURE_FILE: captureFile,
       ORKESTR_DELIVERY_ACK_WAIT_MS: "0",
       ORKESTR_DELIVERY_ACK_BACKOFF_MS: "10000",
+      ORKESTR_UNSENT_PROMPT_STABLE_MS: "1",
     };
     await createThread({ id: "stuck-file-prompt-thread", name: "Stuck File Prompt Thread" }, env);
     await wakeThread("stuck-file-prompt-thread", { reason: "test" }, env);
@@ -1213,7 +1409,7 @@ test("thread input delivery submits an existing pasted temp-file prompt without 
     assert.equal(updated.state, "awaiting_ack");
     assert.equal(updated.deliveryState, "awaiting_ack");
     assert.equal(updated.deliveryAttempt, 2);
-    assert.equal(updated.observedVia, "tmux_submit_existing_file_pending_ack");
+    assert.equal(updated.observedVia, "tmux_submit_stable_unsent_prompt_pending_ack");
     assert.match(log, /__CALL__\tsend-keys\t-t\t%42\tC-m/);
     assert.doesNotMatch(log, /__CALL__\tload-buffer/);
     assert.doesNotMatch(log, /__CALL__\tpaste-buffer/);
