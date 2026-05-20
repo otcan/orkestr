@@ -1743,6 +1743,64 @@ test("thread summary reports live Codex plan mode from the runtime pane", async 
   }
 });
 
+test("thread summary ignores stale Plan mode text without a live Codex status line", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-codex-mode-stale-plan-"));
+  const fakeTmux = await createFakeTmux(home);
+  const captureFile = path.join(home, "pane.txt");
+  const priorHome = process.env.ORKESTR_HOME;
+  const priorRuntimeHome = process.env.HOME;
+  const priorCodexHome = process.env.CODEX_HOME;
+  const priorPath = process.env.PATH;
+  const priorTmuxLog = process.env.TMUX_LOG;
+  const priorTmuxState = process.env.TMUX_STATE;
+  const priorCaptureFile = process.env.TMUX_CAPTURE_FILE;
+  const priorRecoverOnStart = process.env.ORKESTR_RECOVER_RUNNING_ON_START;
+  process.env.ORKESTR_HOME = path.join(home, "orkestr-home");
+  process.env.HOME = path.join(home, "runtime-home");
+  process.env.CODEX_HOME = path.join(home, "codex-home");
+  process.env.PATH = `${fakeTmux.bin}:${priorPath || ""}`;
+  process.env.TMUX_LOG = fakeTmux.log;
+  process.env.TMUX_STATE = fakeTmux.state;
+  process.env.TMUX_CAPTURE_FILE = captureFile;
+  process.env.ORKESTR_RECOVER_RUNNING_ON_START = "0";
+
+  try {
+    await fs.writeFile(captureFile, [
+      "Implement this plan?",
+      "",
+      "› 1. Yes, implement this plan",
+      "  2. Yes, clear context and implement",
+      "  3. No, stay in Plan mode",
+      "",
+      "Press enter to continue",
+    ].join("\n"), "utf8");
+    await createThread({
+      id: "codex-mode-stale-plan-thread",
+      name: "Codex Mode Stale Plan Thread",
+      codexMode: "code",
+      desiredCodexMode: "code",
+    });
+    const woken = await wakeThread("codex-mode-stale-plan-thread", { reason: "test" });
+    const status = await runtimeStatus("codex-mode-stale-plan-thread");
+    const summary = await threadRuntimeSummary(woken.thread, await listThreadMessages("codex-mode-stale-plan-thread"));
+
+    assert.equal(status.codexMode, null);
+    assert.equal(status.codexModeSource, null);
+    assert.equal(summary.codexMode, "code");
+    assert.equal(summary.codexModeLive, null);
+    assert.equal(summary.desiredCodexMode, null);
+  } finally {
+    restoreEnvValue("ORKESTR_HOME", priorHome);
+    restoreEnvValue("HOME", priorRuntimeHome);
+    restoreEnvValue("CODEX_HOME", priorCodexHome);
+    restoreEnvValue("PATH", priorPath);
+    restoreEnvValue("TMUX_LOG", priorTmuxLog);
+    restoreEnvValue("TMUX_STATE", priorTmuxState);
+    restoreEnvValue("TMUX_CAPTURE_FILE", priorCaptureFile);
+    restoreEnvValue("ORKESTR_RECOVER_RUNNING_ON_START", priorRecoverOnStart);
+  }
+});
+
 test("thread input delivery fails when Codex rejects a literal /now command", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-delivery-rejected-command-"));
   const fakeTmux = await createFakeTmux(home);
