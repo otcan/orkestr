@@ -2634,6 +2634,12 @@ ork-first-thread-wizard.first-thread-host {
   align-items: end;
 }
 
+.composer-tools {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 8px;
+}
+
 .plan-composer-banner {
   display: flex;
   align-items: center;
@@ -2670,6 +2676,96 @@ ork-first-thread-wizard.first-thread-host {
   line-height: 1.35;
 }
 
+.slash-command-panel {
+  display: grid;
+  gap: 8px;
+  border: 1px solid rgba(119, 205, 126, 0.32);
+  border-radius: 8px;
+  background: rgba(12, 35, 20, 0.56);
+  color: #ddf8df;
+  padding: 9px 10px;
+  margin-bottom: 10px;
+}
+
+.slash-command-panel.unknown {
+  border-color: rgba(240, 109, 82, 0.46);
+  background: rgba(83, 23, 17, 0.34);
+  color: #ffd9ca;
+}
+
+.slash-command-summary {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+}
+
+.slash-command-token {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 52px;
+  min-height: 26px;
+  border: 1px solid rgba(180, 236, 184, 0.44);
+  border-radius: 8px;
+  background: rgba(174, 244, 180, 0.12);
+  color: #f4fff4;
+  font-family: "SFMono-Regular", Consolas, monospace;
+  font-size: 0.82rem;
+  font-weight: 900;
+}
+
+.slash-command-summary strong,
+.slash-command-summary span {
+  display: block;
+}
+
+.slash-command-summary strong {
+  color: #f4fff4;
+  font-size: 0.8rem;
+  font-weight: 900;
+  letter-spacing: 0;
+  text-transform: uppercase;
+}
+
+.slash-command-summary span,
+.slash-command-meta {
+  font-size: 0.84rem;
+  line-height: 1.35;
+}
+
+.slash-command-meta {
+  color: rgba(227, 248, 229, 0.78);
+}
+
+.slash-command-panel.unknown .slash-command-meta {
+  color: rgba(255, 226, 216, 0.8);
+}
+
+.slash-command-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.slash-command-list button {
+  min-height: 28px;
+  border-color: rgba(180, 236, 184, 0.28);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.05);
+  color: #e9f6ea;
+  font-family: "SFMono-Regular", Consolas, monospace;
+  font-size: 0.76rem;
+  font-weight: 800;
+  padding: 0 8px;
+}
+
+.slash-command-list button.active {
+  border-color: rgba(119, 205, 126, 0.72);
+  background: rgba(119, 205, 126, 0.2);
+  color: #ffffff;
+}
+
 .implement-command-button {
   min-height: 34px;
   border-color: rgba(255, 190, 174, 0.5);
@@ -2702,6 +2798,14 @@ ork-first-thread-wizard.first-thread-host {
 .upload-button {
   min-width: 84px;
   padding: 0 12px;
+}
+
+.slash-trigger-button {
+  min-width: 84px;
+  padding: 0 12px;
+  font-family: "SFMono-Regular", Consolas, monospace;
+  font-size: 1rem;
+  font-weight: 900;
 }
 
 .visually-hidden {
