@@ -482,7 +482,11 @@ test("runtime sync confirms Codex resume directory prompts", async () => {
       TMUX_CAPTURE_TEXT: process.env.TMUX_CAPTURE_TEXT,
       ORKESTR_RUNTIME_IDLE_SLEEP_MS: "1",
     };
-    await createThread({ id: "resume-dir-thread", name: "Resume Dir Thread" }, env);
+    await createThread({
+      id: "resume-dir-thread",
+      name: "Resume Dir Thread",
+      executor: { type: "codex", codexThreadId: "codex-resume-thread" },
+    }, env);
     await wakeThread("resume-dir-thread", { reason: "test_wake" }, env);
 
     let status = await runtimeStatus("resume-dir-thread", env);
@@ -494,7 +498,8 @@ test("runtime sync confirms Codex resume directory prompts", async () => {
     status = await runtimeStatus("resume-dir-thread", env);
     const log = await fs.readFile(fakeTmux.log, "utf8");
     assert.equal(status.state, "waking");
-    assert.match(log, /__CALL__\tsend-keys\t-t\t%42\tC-m/);
+    assert.match(log, /resume -C .*resume-dir-thread'? '?codex-resume-thread'?/);
+    assert.match(log, /__CALL__\tsend-keys\t-t\t%42\t2\tC-m/);
     assert.doesNotMatch(log, /__CALL__\tkill-session\t-t\torkestr-resume-dir-thread/);
   } finally {
     restoreEnvValue("PATH", priorPath);
