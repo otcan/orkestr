@@ -1074,7 +1074,6 @@ export class OnboardingPageComponent implements OnInit, OnChanges, OnDestroy {
         wakePolicy: "wake-on-message",
         executorId: "codex",
         codexMode: "code",
-        desiredCodexMode: "code",
       }),
     );
     this.firstThread = response.thread;

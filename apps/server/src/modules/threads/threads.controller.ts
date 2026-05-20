@@ -808,16 +808,19 @@ export class ThreadsController {
       mode,
       reason: error instanceof Error ? error.message : String(error),
     }));
-    const updated: any = await updateThread(thread.id, {
-      desiredCodexMode: mode,
-      desiredCodexModeUpdatedAt: updatedAt,
-      codexMode: mode,
-      codexModeSource: runtimeMode.applied ? "orkestr-ui-live" : "orkestr-ui",
+    const patch: Record<string, unknown> = {
+      desiredCodexMode: null,
+      desiredCodexModeUpdatedAt: null,
       codexModeLiveApplied: Boolean(runtimeMode.applied),
       codexModeLiveChanged: Boolean(runtimeMode.changed),
       codexModeApplyReason: runtimeMode.reason || null,
-      codexModeUpdatedAt: updatedAt,
-    });
+    };
+    if (runtimeMode.applied) {
+      patch.codexMode = mode;
+      patch.codexModeSource = "orkestr-ui-live";
+      patch.codexModeUpdatedAt = updatedAt;
+    }
+    const updated: any = await updateThread(thread.id, patch);
     return {
       ok: true,
       mode,

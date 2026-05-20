@@ -141,13 +141,13 @@ function codexMetadata(thread: any) {
   const contextWindow = Number(thread?.codexContextWindow || metadata.codexContextWindow || metadata.contextWindow || 0) || null;
   const rateLimits = thread?.codexRateLimits || metadata.codexRateLimits || metadata.rateLimits || null;
   return {
-    codexMode: thread?.codexMode || metadata.codexMode || thread?.desiredCodexMode || null,
+    codexMode: thread?.codexMode || metadata.codexMode || null,
     codexModeLabel: thread?.codexModeLabel || metadata.codexModeLabel || null,
     codexModeRaw: thread?.codexModeRaw || metadata.codexModeRaw || null,
     codexModeSource: thread?.codexModeSource || metadata.codexModeSource || null,
     codexModeUpdatedAt: thread?.codexModeUpdatedAt || metadata.codexModeUpdatedAt || null,
-    desiredCodexMode: thread?.desiredCodexMode || null,
-    desiredCodexModeUpdatedAt: thread?.desiredCodexModeUpdatedAt || null,
+    desiredCodexMode: null,
+    desiredCodexModeUpdatedAt: null,
     codexModel: thread?.codexModel || metadata.codexModel || process.env.ORKESTR_DEFAULT_CODEX_MODEL || process.env.OPENAI_MODEL || null,
     codexModelProvider: thread?.codexModelProvider || metadata.codexModelProvider || "codex",
     codexReasoningEffort: thread?.codexReasoningEffort || metadata.codexReasoningEffort || process.env.ORKESTR_DEFAULT_CODEX_REASONING || null,
@@ -162,22 +162,6 @@ function codexMetadata(thread: any) {
 function codexModeValue(value: any): string | null {
   const mode = String(value || "").trim().toLowerCase();
   return mode === "code" || mode === "plan" ? mode : null;
-}
-
-function codexModeSettleMs(): number {
-  const configured = Number(process.env.ORKESTR_CODEX_MODE_SETTLE_MS || 10000);
-  return Number.isFinite(configured) && configured >= 0 ? configured : 10000;
-}
-
-function recentlyAppliedCodexMode(thread: any, metadata: any): string | null {
-  if (!thread?.codexModeLiveApplied) return null;
-  const mode = codexModeValue(thread?.codexMode || metadata.codexMode);
-  if (!mode) return null;
-  const source = String(thread?.codexModeSource || metadata.codexModeSource || "").trim();
-  if (source !== "orkestr-ui-live" && source !== "runtime-sync-live") return null;
-  const updatedAt = Date.parse(String(thread?.codexModeUpdatedAt || metadata.codexModeUpdatedAt || ""));
-  if (!Number.isFinite(updatedAt)) return null;
-  return Date.now() - updatedAt <= codexModeSettleMs() ? mode : null;
 }
 
 function threadSummaryCacheTtlMs(): number {
@@ -351,7 +335,6 @@ export async function threadRuntimeSummary(thread: any, messages: any[] = [], op
   const metadata = codexMetadata(codexThread);
   const liveCodexMode = codexModeValue(status?.codexMode);
   const liveCodexModeSource = String(status?.codexModeSource || "").trim();
-  const appliedCodexMode = recentlyAppliedCodexMode(thread, metadata);
   const summary = {
     ...thread,
     ...gitState,
@@ -394,9 +377,9 @@ export async function threadRuntimeSummary(thread: any, messages: any[] = [], op
     planAvailable,
     planImplementationReady: Boolean(status?.planImplementationReady),
     planImplementationMenuVisible: Boolean(status?.planImplementationMenuVisible),
-    codexMode: appliedCodexMode || liveCodexMode || metadata.codexMode,
-    codexModeSource: appliedCodexMode ? metadata.codexModeSource : liveCodexModeSource || metadata.codexModeSource,
-    codexModeLive: appliedCodexMode || liveCodexMode,
+    codexMode: liveCodexMode || metadata.codexMode,
+    codexModeSource: liveCodexModeSource || metadata.codexModeSource,
+    codexModeLive: liveCodexMode,
   };
   return summary;
 }

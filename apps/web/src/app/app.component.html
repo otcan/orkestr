@@ -275,7 +275,7 @@
         <button type="button" [class.active]="activePanel === 'workers'" (click)="openPanel('workers')">Parallel Work</button>
         <span class="panel-spacer"></span>
         <div class="codex-control-scroll" aria-label="Codex controls">
-          <div class="codex-mode-toggle" title="Requested Codex mode for this Orkestr thread">
+          <div class="codex-mode-toggle" title="Live Codex mode for this Orkestr thread">
             <button type="button" [class.active]="codexModeValue(thread) === 'code'" (click)="switchCodexMode('code')" [disabled]="busy">Code</button>
             <button type="button" [class.active]="codexModeValue(thread) === 'plan'" (click)="switchCodexMode('plan')" [disabled]="busy">Plan</button>
           </div>

@@ -113,7 +113,8 @@ test("server exposes health, readiness, version, and agent message APIs", async 
     assert.equal(relativeWorkspaceThread.thread.workspace, path.join(workspaceRoot, "relative-repo"));
     assert.equal(relativeWorkspaceThread.thread.repoPath, path.join(workspaceRoot, "relative-repo"));
     assert.equal(relativeWorkspaceThread.thread.cwd, path.join(workspaceRoot, "relative-repo", "apps/web"));
-    assert.equal(mode.thread.codexMode, "plan");
+    assert.equal(mode.applied, false);
+    assert.equal(mode.thread.codexMode, null);
     assert.equal(mode.thread.codexModel, "gpt-test");
     assert.equal(upload.attachments[0].filename, "hello.txt");
     assert.equal(upload.attachments[0].mimetype, "text/plain");

@@ -1135,11 +1135,6 @@ function codexModeFromPaneText(text) {
   return null;
 }
 
-function desiredCodexModeValue(thread) {
-  const mode = String(thread?.desiredCodexMode || thread?.codexMode || "").trim().toLowerCase();
-  return mode === "code" || mode === "plan" ? mode : null;
-}
-
 export async function applyRuntimeCodexMode(threadId, mode, env = process.env, options = {}) {
   const desired = String(mode || "").trim().toLowerCase();
   if (desired !== "code" && desired !== "plan") {
@@ -1881,14 +1876,6 @@ export async function deliverPendingThreadInputs(threadId, env = process.env) {
           status = await cancelNeedInputForRawDelivery(thread, currentNext, pendingNeedInput, needInputStatus, env);
         }
         if (!status) status = await waitForRuntimeReady(thread.id, env);
-        const desiredMode = desiredCodexModeValue(thread);
-        if (desiredMode) {
-          const modeResult = await applyRuntimeCodexMode(thread.id, desiredMode, env).catch(() => null);
-          if (modeResult?.applied && modeResult.changed) {
-            await sleep(150);
-            status = await waitForRuntimeReady(thread.id, env).catch(() => status);
-          }
-        }
         const attempt = await sendThreadInputToPane(thread, currentNext, status, env);
         const acknowledged = await waitForThreadInputAck(thread, currentNext.id, env);
         if (acknowledged) {
@@ -2193,20 +2180,6 @@ async function syncRuntimeLeasesOnce(env = process.env) {
           const acknowledged = await acknowledgeThreadInputDelivery(thread, awaitingAck, status, env).catch(() => null);
           if (acknowledged) scheduleThreadInputDelivery(thread.id, env, 0);
           else await failRejectedThreadInputDelivery(thread, awaitingAck, status, env).catch(() => null);
-        }
-        const desiredMode = desiredCodexModeValue(thread);
-        if (desiredMode && status.promptReady && !status.working) {
-          const modeResult = await applyRuntimeCodexMode(thread.id, desiredMode, env).catch(() => null);
-          if (modeResult?.applied) {
-            await updateThread(thread.id, {
-              codexMode: desiredMode,
-              codexModeSource: modeResult.changed ? "runtime-sync-live" : thread.codexModeSource || "runtime-sync",
-              codexModeLiveApplied: true,
-              codexModeLiveChanged: Boolean(modeResult.changed),
-              codexModeApplyReason: modeResult.reason || null,
-              codexModeUpdatedAt: nowIso(),
-            }, env).catch(() => {});
-          }
         }
       }
       if (status.needsResumeDirectoryConfirmation && status.paneId) {

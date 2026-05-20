@@ -1459,7 +1459,9 @@ test("codex mode endpoint toggles the attached Codex runtime", async () => {
     assert.equal(payload.mode, "plan");
     assert.equal(payload.applied, true);
     assert.equal(payload.runtimeMode.changed, true);
-    assert.equal(payload.thread.codexMode, "plan");
+    assert.equal(payload.thread.codexMode, "code");
+    assert.equal(payload.thread.codexModeLive, "code");
+    assert.equal(payload.thread.desiredCodexMode, null);
     assert.equal(payload.thread.codexModeLiveApplied, true);
     assert.match(log, /__CALL__\tsend-keys\t-t\t%42\tBTab/);
   } finally {
@@ -1640,7 +1642,7 @@ test("thread summary reports live Codex plan mode from the runtime pane", async 
     assert.equal(summary.codexMode, "plan");
     assert.equal(summary.codexModeLive, "plan");
     assert.equal(summary.codexModeSource, "runtime-pane");
-    assert.equal(summary.desiredCodexMode, "code");
+    assert.equal(summary.desiredCodexMode, null);
   } finally {
     restoreEnvValue("ORKESTR_HOME", priorHome);
     restoreEnvValue("HOME", priorRuntimeHome);

@@ -117,7 +117,6 @@ export class FirstThreadWizardComponent {
         wakePolicy: "wake-on-message",
         executorId: "codex",
         codexMode: "code",
-        desiredCodexMode: "code",
         autoWorkspace: true,
         initGit: !cloneRepo,
         repoRemoteUrl: repoUrl,

@@ -98,7 +98,7 @@ function publicThread(thread = null) {
     workerLabel: thread.workerLabel || null,
     workerIndex: thread.workerIndex || null,
     codexThreadId: codexThreadId(thread) || null,
-    codexMode: thread.codexMode || thread.desiredCodexMode || null,
+    codexMode: thread.codexMode || null,
   };
 }
 
