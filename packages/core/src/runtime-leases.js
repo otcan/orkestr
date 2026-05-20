@@ -57,6 +57,15 @@ function timestampMs(value) {
   return Number.isFinite(parsed) ? parsed : 0;
 }
 
+function messageCursor(value) {
+  const parsed = Number(value?.cursor || 0);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function messageTimeMs(value) {
+  return Math.max(timestampMs(value?.createdAt), timestampMs(value?.timestamp));
+}
+
 function runtimeIdleSleepMs(env = process.env) {
   const raw = String(env.ORKESTR_RUNTIME_IDLE_SLEEP_MS ?? "").trim().toLowerCase();
   if (["0", "off", "false", "disabled"].includes(raw)) return 0;
@@ -274,18 +283,30 @@ async function capturePane(paneId, lines = 80) {
   return String(stdout || "");
 }
 
-function paneWorking(text) {
-  const lines = String(text || "").split("\n").map((line) => line.trim()).filter(Boolean).slice(-12);
-  return paneNeedInputMenuVisible(text) || lines.some((line) => (
+function paneWorkingLine(line) {
+  return (
     /^[•◦]\s*(?:Working|Thinking|Running|Processing)\b/i.test(line) ||
     /^Codex is still preparing (?:a )?response\b/i.test(line) ||
     /^(?:Waiting for background terminal|Working|Thinking|Running|Processing)\b.*\b(?:esc|ctrl-c) to interrupt\b/i.test(line)
-  ));
+  );
+}
+
+function panePromptLine(line) {
+  return /^(?:›|>)(?:\s|$)/.test(line) && !/^(?:›|>)\s*\d+[.)]/.test(line);
+}
+
+function paneWorking(text) {
+  const lines = String(text || "").split("\n").map((line) => line.trim()).filter(Boolean).slice(-20);
+  if (paneNeedInputMenuVisible(text)) return true;
+  const lastWorkingIndex = lines.findLastIndex(paneWorkingLine);
+  if (lastWorkingIndex < 0) return false;
+  const lastPromptIndex = lines.findLastIndex(panePromptLine);
+  return lastWorkingIndex > lastPromptIndex;
 }
 
 function panePromptReady(text) {
   const lines = String(text || "").split("\n").map((line) => line.trim()).filter(Boolean).slice(-8);
-  return lines.some((line) => /^(?:›|>)(?:\s|$)/.test(line) && !/^(?:›|>)\s*\d+[.)]/.test(line));
+  return lines.some(panePromptLine);
 }
 
 function paneNeedInputMenuVisible(text) {
@@ -1185,6 +1206,24 @@ async function rolloutSnapshotForDelivery(thread, lease, env = process.env) {
 
 async function deliveryAckEvidence(thread, message, status, env = process.env) {
   if (message?.state !== "awaiting_ack") return null;
+  const messages = await listThreadMessages(thread.id, env).catch(() => []);
+  const inputCursor = messageCursor(message);
+  const inputMs = messageTimeMs(message);
+  const assistantAfterInput = messages.find((candidate) => {
+    if (candidate?.id === message.id) return false;
+    if (String(candidate?.role || "").trim().toLowerCase() !== "assistant") return false;
+    if (!String(candidate?.text || "").trim()) return false;
+    const state = String(candidate?.state || "completed").trim().toLowerCase();
+    if (state === "failed" || pendingInputStates.has(state)) return false;
+    const candidateCursor = messageCursor(candidate);
+    if (inputCursor && candidateCursor && candidateCursor <= inputCursor) return false;
+    const candidateMs = messageTimeMs(candidate);
+    if (inputMs && candidateMs && candidateMs <= inputMs) return false;
+    return true;
+  });
+  if (assistantAfterInput) {
+    return { observedVia: "assistant_after_input", observedMessageId: assistantAfterInput.id };
+  }
   if (status?.working || status?.state === "working") return { observedVia: "runtime_working" };
 
   const rolloutPath = String(

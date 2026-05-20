@@ -903,6 +903,37 @@ test("thread input delivery waits for runtime acknowledgement before completing"
   }
 });
 
+test("thread input delivery closes stale ack when history already has an assistant reply", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-history-ack-"));
+  const env = {
+    ORKESTR_HOME: path.join(home, "orkestr-home"),
+    HOME: path.join(home, "runtime-home"),
+    CODEX_HOME: path.join(home, "codex-home"),
+  };
+  await createThread({ id: "history-ack-thread", name: "History Ack Thread" }, env);
+  const input = await appendThreadMessage("history-ack-thread", {
+    role: "user",
+    source: "whatsapp",
+    text: "message that was already handled",
+    state: "awaiting_ack",
+    deliveryState: "awaiting_ack",
+    createdAt: "2026-05-20T04:11:30.704Z",
+  }, env);
+  await appendThreadMessage("history-ack-thread", {
+    role: "assistant",
+    text: "Handled that message.",
+    state: "completed",
+    createdAt: "2026-05-20T04:12:00.000Z",
+  }, env);
+
+  assert.deepEqual(await deliverPendingThreadInputs("history-ack-thread", env), [input.id]);
+  const messages = await listThreadMessages("history-ack-thread", env);
+
+  assert.equal(messages[0].state, "completed");
+  assert.equal(messages[0].deliveryState, "delivered");
+  assert.equal(messages[0].observedVia, "assistant_after_input");
+});
+
 test("thread input delivery recovers a stale ready awaiting-ack runtime", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-stale-ack-recovery-"));
   const fakeTmux = await createFakeTmux(home);
@@ -1049,6 +1080,55 @@ test("thread input delivery treats visible work as active, not stale ack", async
     assert.equal(messages[0].deliveryState, "delivered");
     assert.equal(messages[0].observedVia, "runtime_working");
     assert.doesNotMatch(log, /__CALL__\tkill-session\t-t\torkestr-visible-work-ack-thread/);
+  } finally {
+    restoreEnvValue("PATH", priorPath);
+    restoreEnvValue("TMUX_LOG", priorTmuxLog);
+    restoreEnvValue("TMUX_STATE", priorTmuxState);
+    restoreEnvValue("TMUX_CAPTURE_FILE", priorCaptureFile);
+  }
+});
+
+test("runtime status treats a prompt after stale working text as ready", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-stale-working-prompt-"));
+  const fakeTmux = await createFakeTmux(home);
+  const captureFile = path.join(home, "pane.txt");
+  const priorPath = process.env.PATH;
+  const priorTmuxLog = process.env.TMUX_LOG;
+  const priorTmuxState = process.env.TMUX_STATE;
+  const priorCaptureFile = process.env.TMUX_CAPTURE_FILE;
+  process.env.PATH = `${fakeTmux.bin}:${priorPath || ""}`;
+  process.env.TMUX_LOG = fakeTmux.log;
+  process.env.TMUX_STATE = fakeTmux.state;
+  process.env.TMUX_CAPTURE_FILE = captureFile;
+
+  try {
+    await fs.writeFile(
+      captureFile,
+      [
+        "\u2022 Working (36m 53s \u2022 esc to interrupt)",
+        "",
+        "\u203a Find and fix a bug in @filename",
+        "",
+        "  gpt-5.5 xhigh \u00b7 ~",
+      ].join("\n"),
+      "utf8",
+    );
+    const env = {
+      ORKESTR_HOME: path.join(home, "orkestr-home"),
+      HOME: path.join(home, "runtime-home"),
+      CODEX_HOME: path.join(home, "codex-home"),
+      PATH: process.env.PATH,
+      TMUX_LOG: fakeTmux.log,
+      TMUX_STATE: fakeTmux.state,
+      TMUX_CAPTURE_FILE: captureFile,
+    };
+    await createThread({ id: "stale-working-prompt-thread", name: "Stale Working Prompt Thread" }, env);
+    await wakeThread("stale-working-prompt-thread", { reason: "test_wake" }, env);
+
+    const status = await runtimeStatus("stale-working-prompt-thread", env);
+    assert.equal(status.state, "ready");
+    assert.equal(status.promptReady, true);
+    assert.equal(status.working, false);
   } finally {
     restoreEnvValue("PATH", priorPath);
     restoreEnvValue("TMUX_LOG", priorTmuxLog);
