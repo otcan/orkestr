@@ -1833,6 +1833,94 @@ test("thread input delivery sends answers to pending Codex plan questions", asyn
   }
 });
 
+test("thread input delivery maps numbered WhatsApp answers to Codex plan questions", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-plan-numbered-answer-delivery-"));
+  const fakeTmux = await createFakeTmux(home);
+  const captureFile = path.join(home, "pane.txt");
+  const priorPath = process.env.PATH;
+  const priorTmuxLog = process.env.TMUX_LOG;
+  const priorTmuxState = process.env.TMUX_STATE;
+  const priorCaptureFile = process.env.TMUX_CAPTURE_FILE;
+  process.env.PATH = `${fakeTmux.bin}:${priorPath || ""}`;
+  process.env.TMUX_LOG = fakeTmux.log;
+  process.env.TMUX_STATE = fakeTmux.state;
+  process.env.TMUX_CAPTURE_FILE = captureFile;
+
+  try {
+    await fs.writeFile(captureFile, [
+      "Question 1/3 (3 unanswered)",
+      "What should the first version be?",
+      "",
+      "› 1. Web app (Recommended)  Fastest path to an interactive learner.",
+      "  2. Mobile PWA             Same web foundation, phone-first.",
+      "  3. Course only            Structured explanations first.",
+      "",
+      "tab to add notes | enter to submit answer | left/right to navigate questions",
+      "esc to interrupt",
+    ].join("\n"), "utf8");
+    const env = {
+      ORKESTR_HOME: path.join(home, "orkestr-home"),
+      HOME: path.join(home, "runtime-home"),
+      CODEX_HOME: path.join(home, "codex-home"),
+      PATH: process.env.PATH,
+      TMUX_LOG: fakeTmux.log,
+      TMUX_STATE: fakeTmux.state,
+      TMUX_CAPTURE_FILE: captureFile,
+      ORKESTR_WAKE_READY_TIMEOUT_MS: "20",
+      ORKESTR_DELIVERY_ACK_WAIT_MS: "0",
+      ORKESTR_DELIVERY_ACK_BACKOFF_MS: "10000",
+    };
+    await createThread({ id: "plan-numbered-answer-thread", name: "Plan Numbered Answer Thread" }, env);
+    await wakeThread("plan-numbered-answer-thread", { reason: "test" }, env);
+    await appendThreadMessage("plan-numbered-answer-thread", {
+      role: "assistant",
+      source: "codex-rollout",
+      phase: "need_input",
+      eventId: "need-input-blackjack",
+      text: [
+        "Codex needs input to continue:",
+        "",
+        "1. Platform: What should the first version be?",
+        "   A. Web app (Recommended): Fastest path to an interactive learner.",
+        "   B. Mobile PWA: Same web foundation, phone-first.",
+        "   C. Course only: Structured explanations first.",
+        "",
+        "2. Rules: Which blackjack rules should the strategy lessons target first?",
+        "   A. US S17 (Recommended): Dealer stands on soft 17.",
+        "   B. US H17: Dealer hits soft 17.",
+        "   C. Configurable: Support rule toggles from the start.",
+        "",
+        "3. Learning: How should the learner encounter strategy first?",
+        "   A. Dealer-first path (Recommended): Start with dealer upcard lessons.",
+        "   B. Full chart first: Show the complete basic strategy table early.",
+        "   C. Drills first: Start with repeated hands.",
+        "",
+        "Reply with your choices or a short free-form answer.",
+      ].join("\n"),
+    }, env);
+    const answer = await enqueueThreadInput("plan-numbered-answer-thread", { text: "1- A\n2- A\n3- A" }, env);
+
+    assert.deepEqual(await deliverPendingThreadInputs("plan-numbered-answer-thread", env), [answer.id]);
+    const messages = await listThreadMessages("plan-numbered-answer-thread", env);
+    const deliveredAnswer = messages.find((message) => message.id === answer.id);
+    const log = await fs.readFile(fakeTmux.log, "utf8");
+    const submitCount = log.split("\n").filter((line) => line.includes("__CALL__\tsend-keys\t-t\t%42\tC-m")).length;
+
+    assert.equal(deliveredAnswer.state, "completed");
+    assert.equal(deliveredAnswer.deliveryState, "delivered");
+    assert.equal(deliveredAnswer.observedVia, "codex_request_user_input");
+    assert.equal(deliveredAnswer.answeredInputEventId, "need-input-blackjack");
+    assert.equal(submitCount, 3);
+    assert.doesNotMatch(log, /__CALL__\tsend-keys\t-t\t%42\tEscape/);
+    assert.doesNotMatch(log, /__CALL__\tpaste-buffer/);
+  } finally {
+    restoreEnvValue("PATH", priorPath);
+    restoreEnvValue("TMUX_LOG", priorTmuxLog);
+    restoreEnvValue("TMUX_STATE", priorTmuxState);
+    restoreEnvValue("TMUX_CAPTURE_FILE", priorCaptureFile);
+  }
+});
+
 test("thread runtime reset kills and wakes the same thread", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-reset-"));
   const fakeTmux = await createFakeTmux(home);

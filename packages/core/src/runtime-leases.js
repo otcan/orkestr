@@ -2314,8 +2314,16 @@ function explicitAnswerForQuestion(answerText, question) {
   return match ? match[1].trim() : "";
 }
 
-function optionIndexForQuestionAnswer(question, answerText, questionCount) {
-  const explicit = explicitAnswerForQuestion(answerText, question);
+function explicitNumberedAnswerForQuestion(answerText, questionIndex) {
+  const number = Number(questionIndex) + 1;
+  if (!Number.isFinite(number) || number < 1) return "";
+  const pattern = new RegExp(`(?:^|[\\s,;])${number}\\s*[-:.)]\\s*(.+?)(?=(?:\\s+\\d+\\s*[-:.)])|[,;\\n]|$)`, "i");
+  const match = String(answerText || "").match(pattern);
+  return match ? String(match[1] || "").trim() : "";
+}
+
+function optionIndexForQuestionAnswer(question, answerText, questionCount, questionIndex = null) {
+  const explicit = explicitAnswerForQuestion(answerText, question) || explicitNumberedAnswerForQuestion(answerText, questionIndex);
   const fallback = questionCount === 1 ? answerText : "";
   const answer = normalizeNeedInputChoice(explicit || fallback);
   if (!answer) return null;
@@ -2334,7 +2342,7 @@ async function sendNeedInputAnswerToPane(thread, message, pendingQuestion, statu
   if (!status?.paneId || !pendingQuestion?.text) return null;
   const questions = parseNeedInputQuestions(pendingQuestion.text);
   if (!questions.length) return null;
-  const selections = questions.map((question) => optionIndexForQuestionAnswer(question, message.text, questions.length));
+  const selections = questions.map((question, index) => optionIndexForQuestionAnswer(question, message.text, questions.length, index));
   if (selections.some((selection) => selection === null)) return null;
   const deliveredAt = nowIso();
   await updateThreadMessage(thread.id, message.id, {
