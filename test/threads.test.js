@@ -8,7 +8,7 @@ import { promisify } from "node:util";
 import { startServer } from "../apps/server/src/server.js";
 import { threadRuntimeSummary } from "../apps/server/src/thread-summary.ts";
 import { runNextThreadMessage } from "../packages/core/src/executors.js";
-import { deliverPendingThreadInputs, drainAllPendingThreadInputs, hardResetThreadRuntime, listRuntimeLeases, resetThreadRuntime, runtimeStatus, sleepThread, syncRuntimeLeases, syncRuntimeWindowName, wakeThread } from "../packages/core/src/runtime-leases.js";
+import { applyRuntimeCodexMode, deliverPendingThreadInputs, drainAllPendingThreadInputs, hardResetThreadRuntime, listRuntimeLeases, resetThreadRuntime, runtimeStatus, sleepThread, syncRuntimeLeases, syncRuntimeWindowName, wakeThread } from "../packages/core/src/runtime-leases.js";
 import { ensureDataDirs } from "../packages/storage/src/paths.js";
 import { parseThreadInputCommand } from "../packages/core/src/thread-commands.js";
 import { createThreadWorker, detectThreadGitState, listThreadWorkers, syncThreadWorkerWithParent, updateThreadRepo } from "../packages/core/src/thread-workers.js";
@@ -1514,6 +1514,54 @@ test("codex mode endpoint toggles the attached Codex runtime", async () => {
     restoreEnvValue("TMUX_STATE", priorTmuxState);
     restoreEnvValue("TMUX_CAPTURE_FILE", priorCaptureFile);
     restoreEnvValue("ORKESTR_RECOVER_RUNNING_ON_START", priorRecoverOnStart);
+  }
+});
+
+test("codex mode switch to code closes a visible plan implementation prompt", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-codex-mode-implement-menu-"));
+  const fakeTmux = await createFakeTmux(home);
+  const captureFile = path.join(home, "pane.txt");
+  const priorHome = process.env.ORKESTR_HOME;
+  const priorRuntimeHome = process.env.HOME;
+  const priorCodexHome = process.env.CODEX_HOME;
+  const priorPath = process.env.PATH;
+  const priorTmuxLog = process.env.TMUX_LOG;
+  const priorTmuxState = process.env.TMUX_STATE;
+  const priorCaptureFile = process.env.TMUX_CAPTURE_FILE;
+  process.env.ORKESTR_HOME = path.join(home, "orkestr-home");
+  process.env.HOME = path.join(home, "runtime-home");
+  process.env.CODEX_HOME = path.join(home, "codex-home");
+  process.env.PATH = `${fakeTmux.bin}:${priorPath || ""}`;
+  process.env.TMUX_LOG = fakeTmux.log;
+  process.env.TMUX_STATE = fakeTmux.state;
+  process.env.TMUX_CAPTURE_FILE = captureFile;
+
+  try {
+    await fs.writeFile(captureFile, [
+      "Implement this plan?",
+      "› 1. Yes, implement this plan",
+      "  2. No, keep planning",
+      "",
+      "gpt-5.5 xhigh · /workspace/demo            Plan mode",
+    ].join("\n"), "utf8");
+    await createThread({ id: "codex-mode-implementation-menu-thread", name: "Codex Mode Implementation Menu Thread" });
+    await wakeThread("codex-mode-implementation-menu-thread", { reason: "test" });
+    const result = await applyRuntimeCodexMode("codex-mode-implementation-menu-thread", "code");
+    const log = await fs.readFile(fakeTmux.log, "utf8");
+
+    assert.equal(result.applied, true);
+    assert.equal(result.changed, true);
+    assert.equal(result.reason, "closed_plan_implementation_prompt");
+    assert.match(log, /__CALL__\tsend-keys\t-t\t%42\tEscape/);
+    assert.match(log, /__CALL__\tsend-keys\t-t\t%42\tBTab/);
+  } finally {
+    restoreEnvValue("ORKESTR_HOME", priorHome);
+    restoreEnvValue("HOME", priorRuntimeHome);
+    restoreEnvValue("CODEX_HOME", priorCodexHome);
+    restoreEnvValue("PATH", priorPath);
+    restoreEnvValue("TMUX_LOG", priorTmuxLog);
+    restoreEnvValue("TMUX_STATE", priorTmuxState);
+    restoreEnvValue("TMUX_CAPTURE_FILE", priorCaptureFile);
   }
 });
 

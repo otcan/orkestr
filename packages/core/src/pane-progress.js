@@ -30,6 +30,13 @@ function normalizedLines(text) {
     .filter((line) => line.trim());
 }
 
+function recentPaneText(text, lines = 16) {
+  return String(text || "")
+    .split("\n")
+    .slice(-Math.max(1, lines))
+    .join("\n");
+}
+
 function tailHash(lines) {
   return crypto.createHash("sha256").update(lines.join("\n")).digest("hex");
 }
@@ -54,11 +61,11 @@ export function paneNeedInputMenuVisible(text) {
 }
 
 export function panePlanImplementationMenuVisible(text) {
-  return /Implement this plan\?/i.test(String(text || ""));
+  return /Implement this plan\?/i.test(recentPaneText(text));
 }
 
 export function panePlanImplementationReady(text) {
-  const body = String(text || "");
+  const body = recentPaneText(text);
   return panePlanImplementationMenuVisible(body) && /^\s*›\s*1\.\s*Yes,\s*implement this plan\b/im.test(body);
 }
 
@@ -86,9 +93,14 @@ export function paneCodexUpdatePromptChoice(text) {
 }
 
 export function codexModeFromPaneText(text) {
-  const body = String(text || "");
-  if (/\bPlan mode\b/i.test(body)) return "plan";
-  if (/gpt-[^\n]*\s+.\s+/i.test(body) || /\bgpt-[^\n]*(?:low|medium|high|xhigh)\b/i.test(body)) return "code";
+  const statusLine = normalizedLines(text)
+    .map((line) => line.trim())
+    .slice(-12)
+    .reverse()
+    .find((line) => /\bgpt-[a-z0-9_.-]+/i.test(line) && /\b(?:low|medium|high|xhigh)\b/i.test(line)) || "";
+  if (!statusLine) return null;
+  if (/\bPlan mode\b/i.test(statusLine)) return "plan";
+  if (/\bgpt-[a-z0-9_.-]+/i.test(statusLine)) return "code";
   return null;
 }
 

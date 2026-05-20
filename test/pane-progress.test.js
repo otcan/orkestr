@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { paneProgressFromText } from "../packages/core/src/pane-progress.js";
+import { codexModeFromPaneText, paneProgressFromText } from "../packages/core/src/pane-progress.js";
 
 test("pane progress classifies active Codex work from the pane tail", () => {
   const progress = paneProgressFromText("◦ Working (2s • esc to interrupt)\n", { tailLines: 10 });
@@ -28,6 +28,32 @@ test("pane progress exposes implementation prompts as plan progress", () => {
   assert.equal(progress.stateHint, "planning");
   assert.equal(progress.summary, "Implement plan?");
   assert.equal(progress.planImplementationReady, true);
+});
+
+test("pane progress ignores stale implementation prompts above the live prompt", () => {
+  const progress = paneProgressFromText([
+    "Implement this plan?",
+    "› 1. Yes, implement this plan",
+    "  2. No, keep planning",
+    ...Array.from({ length: 20 }, (_, index) => `old output ${index}`),
+    "Done.",
+    "› ",
+  ].join("\n"), { tailLines: 10 });
+
+  assert.equal(progress.stateHint, "ready");
+  assert.equal(progress.summary, "Ready");
+  assert.equal(progress.planImplementationMenuVisible, false);
+});
+
+test("pane progress reads Codex mode from the latest status line", () => {
+  const text = [
+    "gpt-5.5 xhigh /workspace/demo            Plan mode",
+    ...Array.from({ length: 20 }, (_, index) => `old output ${index}`),
+    "gpt-5.5 xhigh /workspace/demo",
+    "› ",
+  ].join("\n");
+
+  assert.equal(codexModeFromPaneText(text), "code");
 });
 
 test("pane progress keeps only a small stable tail", () => {

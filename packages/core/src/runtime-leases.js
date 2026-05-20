@@ -310,6 +310,13 @@ function panePromptReady(text) {
   return lines.some(panePromptLine);
 }
 
+function recentPaneText(text, lines = 16) {
+  return String(text || "")
+    .split("\n")
+    .slice(-Math.max(1, lines))
+    .join("\n");
+}
+
 function paneNeedInputMenuVisible(text) {
   const body = String(text || "");
   return /^Question\s+\d+\/\d+\s+\(\d+\s+unanswered\)/im.test(body) &&
@@ -318,11 +325,11 @@ function paneNeedInputMenuVisible(text) {
 }
 
 function panePlanImplementationMenuVisible(text) {
-  return /Implement this plan\?/i.test(String(text || ""));
+  return /Implement this plan\?/i.test(recentPaneText(text));
 }
 
 function panePlanImplementationReady(text) {
-  const body = String(text || "");
+  const body = recentPaneText(text);
   return panePlanImplementationMenuVisible(body) && /^\s*›\s*1\.\s*Yes,\s*implement this plan\b/im.test(body);
 }
 
@@ -1211,10 +1218,23 @@ async function waitForRuntimeReady(threadId, env = process.env) {
   throw error;
 }
 
+function codexStatusLineFromPaneText(text) {
+  const lines = String(text || "")
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .slice(-12);
+  return [...lines].reverse().find((line) => (
+    /\bgpt-[a-z0-9_.-]+/i.test(line) &&
+    /\b(?:low|medium|high|xhigh)\b/i.test(line)
+  )) || "";
+}
+
 function codexModeFromPaneText(text) {
-  const body = String(text || "");
-  if (/\bPlan mode\b/i.test(body)) return "plan";
-  if (/gpt-[^\n]*\s+.\s+/i.test(body) || /\bgpt-[^\n]*(?:low|medium|high|xhigh)\b/i.test(body)) return "code";
+  const statusLine = codexStatusLineFromPaneText(text);
+  if (!statusLine) return null;
+  if (/\bPlan mode\b/i.test(statusLine)) return "plan";
+  if (/\bgpt-[a-z0-9_.-]+/i.test(statusLine)) return "code";
   return null;
 }
 
@@ -1231,6 +1251,21 @@ export async function applyRuntimeCodexMode(threadId, mode, env = process.env, o
   const beforeMode = codexModeFromPaneText(beforeText);
   if (beforeMode === desired) {
     return { applied: true, changed: false, mode: desired, previousMode: beforeMode, paneId: status.paneId };
+  }
+  if (desired === "code" && status.planImplementationMenuVisible && !status.working) {
+    await execFileAsync("tmux", ["send-keys", "-t", status.paneId, "Escape"]);
+    await sleep(150);
+    if (beforeMode) {
+      await execFileAsync("tmux", ["send-keys", "-t", status.paneId, "BTab"]);
+    }
+    return {
+      applied: true,
+      changed: Boolean(beforeMode && beforeMode !== desired),
+      mode: desired,
+      previousMode: beforeMode || null,
+      paneId: status.paneId,
+      reason: "closed_plan_implementation_prompt",
+    };
   }
   if (options.requirePromptReady !== false && (!status.promptReady || status.working)) {
     return {
