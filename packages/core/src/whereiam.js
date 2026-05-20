@@ -1,0 +1,220 @@
+import path from "node:path";
+import fs from "node:fs/promises";
+import { ensureDataDirs } from "../../storage/src/paths.js";
+import { listRuntimeLeases } from "./runtime-leases.js";
+import { listThreads } from "./threads.js";
+
+function nowIso() {
+  return new Date().toISOString();
+}
+
+function clean(value) {
+  return String(value || "").trim();
+}
+
+function publicThreadName(thread = {}) {
+  return clean(thread.bindingName || thread.binding?.displayName || thread.name || thread.title || thread.id);
+}
+
+function codexThreadId(thread = {}) {
+  return clean(thread.executor?.codexThreadId || thread.codexThreadId);
+}
+
+function resolvePath(value) {
+  const text = clean(value);
+  if (!text) return "";
+  return path.resolve(text);
+}
+
+async function realOrResolved(value) {
+  const resolved = resolvePath(value);
+  if (!resolved) return "";
+  return fs.realpath(resolved).catch(() => resolved);
+}
+
+function isPathInside(parent, child) {
+  const base = resolvePath(parent);
+  const candidate = resolvePath(child);
+  if (!base || !candidate) return false;
+  if (candidate === base) return true;
+  const relative = path.relative(base, candidate);
+  return Boolean(relative) && !relative.startsWith("..") && !path.isAbsolute(relative);
+}
+
+function addCandidate(candidates, seen, label, value, score) {
+  const resolved = resolvePath(value);
+  if (!resolved || seen.has(`${label}\n${resolved}`)) return;
+  seen.add(`${label}\n${resolved}`);
+  candidates.push({ label, path: resolved, score });
+}
+
+function threadPathCandidates(thread = {}, lease = null) {
+  const candidates = [];
+  const seen = new Set();
+  addCandidate(candidates, seen, "runtime.workspace", lease?.workspace || thread.runtime?.workspace, 120);
+  addCandidate(candidates, seen, "thread.worktreePath", thread.worktreePath || thread.executor?.metadata?.worktreePath, 115);
+  addCandidate(candidates, seen, "thread.cwd", thread.cwd || thread.executor?.metadata?.cwd, 110);
+  addCandidate(candidates, seen, "thread.workspace", thread.workspace, 105);
+  addCandidate(candidates, seen, "thread.repoPath", thread.repoPath || thread.executor?.metadata?.repoPath, 95);
+  return candidates;
+}
+
+function scorePathMatch(candidate, cwd) {
+  if (!candidate.path || !cwd) return null;
+  if (candidate.path === cwd) return { ...candidate, exact: true, score: candidate.score + 50 };
+  if (!isPathInside(candidate.path, cwd)) return null;
+  const depth = path.relative(candidate.path, cwd).split(path.sep).filter(Boolean).length;
+  return { ...candidate, exact: false, score: candidate.score - Math.min(depth, 20) };
+}
+
+function publicLease(lease = null) {
+  if (!lease) return null;
+  return {
+    id: lease.id || null,
+    state: lease.state || null,
+    sessionName: lease.sessionName || null,
+    paneId: lease.paneId || null,
+    windowName: lease.windowName || null,
+    workspace: lease.workspace || null,
+    resourceClass: lease.resourceClass || null,
+    reason: lease.reason || null,
+    startedAt: lease.startedAt || null,
+    heartbeatAt: lease.heartbeatAt || null,
+  };
+}
+
+function publicThread(thread = null) {
+  if (!thread) return null;
+  return {
+    id: thread.id,
+    name: thread.name || null,
+    title: thread.title || null,
+    displayName: publicThreadName(thread),
+    bindingName: thread.bindingName || null,
+    state: thread.state || null,
+    wakePolicy: thread.wakePolicy || null,
+    parentThreadId: thread.parentThreadId || null,
+    rootThreadId: thread.rootThreadId || null,
+    workerLabel: thread.workerLabel || null,
+    workerIndex: thread.workerIndex || null,
+    codexThreadId: codexThreadId(thread) || null,
+    codexMode: thread.codexMode || thread.desiredCodexMode || null,
+  };
+}
+
+function publicWorkspace(thread = null, lease = null, cwd = "") {
+  return {
+    cwd: cwd || null,
+    runtimeWorkspace: lease?.workspace || thread?.runtime?.workspace || thread?.workspace || thread?.cwd || null,
+    threadWorkspace: thread?.workspace || null,
+    threadCwd: thread?.cwd || null,
+    repoPath: thread?.repoPath || thread?.executor?.metadata?.repoPath || lease?.repoPath || null,
+    worktreePath: thread?.worktreePath || thread?.executor?.metadata?.worktreePath || lease?.worktreePath || null,
+    branchName: thread?.branchName || lease?.branchName || null,
+    baseBranch: thread?.baseBranch || lease?.baseBranch || null,
+    remoteBranch: thread?.remoteBranch || null,
+    baseCommit: thread?.baseCommit || lease?.baseCommit || null,
+  };
+}
+
+function commandHints() {
+  return {
+    whereiam: "orkestr whereiam --json",
+    listThreads: "orkestr list",
+    sendThreadInput: "orkestr send <thread-name-or-id> \"<message>\"",
+    timers: "orkestr timers list",
+    timerDoctor: "orkestr doctor timers",
+    browserSessions: "curl \"$ORKESTR_API_BASE/api/browser-sessions\"",
+    desktopLeases: "curl \"$ORKESTR_API_BASE/api/desktops/leases\"",
+    whatsappStatus: "curl \"$ORKESTR_API_BASE/api/connectors/whatsapp/status\"",
+    connectorStatus: "curl \"$ORKESTR_API_BASE/api/setup/status\"",
+  };
+}
+
+function capabilityHints() {
+  return {
+    threads: true,
+    timers: true,
+    virtualBrowsers: true,
+    desktopLeases: true,
+    whatsapp: true,
+    gmail: true,
+  };
+}
+
+function apiBase(env = process.env) {
+  if (env.ORKESTR_API_BASE) return clean(env.ORKESTR_API_BASE).replace(/\/+$/g, "");
+  const host = env.ORKESTR_HOST || "127.0.0.1";
+  const port = env.ORKESTR_PORT || env.PORT || "19812";
+  return `http://${host}:${port}`;
+}
+
+export async function whereAmI(input = {}, env = process.env) {
+  const paths = await ensureDataDirs(env);
+  const rawCwd = clean(input.cwd) || process.cwd();
+  const cwd = await realOrResolved(rawCwd);
+  const requestedThreadId = clean(input.threadId || input.orkestrThreadId);
+  const requestedSessionName = clean(input.sessionName);
+  const requestedPaneId = clean(input.paneId || input.tmuxPaneId);
+  const threads = await listThreads(env);
+  const leases = await listRuntimeLeases(env);
+  const activeLeases = leases.filter((lease) => !lease.endedAt);
+  const leaseByThreadId = new Map(activeLeases.map((lease) => [lease.threadId, lease]));
+
+  let match = null;
+  let matchedBy = "";
+
+  if (requestedThreadId) {
+    const thread = threads.find((item) => [item.id, item.name, item.bindingName].includes(requestedThreadId)) || null;
+    if (thread) {
+      match = { thread, lease: leaseByThreadId.get(thread.id) || null, score: 1000 };
+      matchedBy = "threadId";
+    }
+  }
+
+  if (!match && (requestedSessionName || requestedPaneId)) {
+    const lease = activeLeases.find((item) =>
+      (requestedSessionName && item.sessionName === requestedSessionName) ||
+      (requestedPaneId && item.paneId === requestedPaneId)
+    ) || null;
+    const thread = lease ? threads.find((item) => item.id === lease.threadId) || null : null;
+    if (thread) {
+      match = { thread, lease, score: 900 };
+      matchedBy = requestedPaneId && lease.paneId === requestedPaneId ? "paneId" : "sessionName";
+    }
+  }
+
+  if (!match && cwd) {
+    const scored = [];
+    for (const thread of threads) {
+      const lease = leaseByThreadId.get(thread.id) || null;
+      for (const candidate of threadPathCandidates(thread, lease)) {
+        const candidatePath = await realOrResolved(candidate.path);
+        const pathMatch = scorePathMatch({ ...candidate, path: candidatePath }, cwd);
+        if (pathMatch) scored.push({ thread, lease, match: pathMatch, score: pathMatch.score });
+      }
+    }
+    scored.sort((left, right) => right.score - left.score);
+    if (scored[0]) {
+      match = scored[0];
+      matchedBy = scored[0].match.label;
+    }
+  }
+
+  const thread = match?.thread || null;
+  const lease = match?.lease || null;
+  return {
+    ok: Boolean(thread),
+    matched: Boolean(thread),
+    matchedBy: matchedBy || null,
+    cwd,
+    apiBase: apiBase(env),
+    dataHome: paths.home,
+    thread: publicThread(thread),
+    workspace: publicWorkspace(thread, lease, cwd),
+    runtime: publicLease(lease),
+    capabilities: capabilityHints(),
+    commands: commandHints(),
+    generatedAt: nowIso(),
+  };
+}

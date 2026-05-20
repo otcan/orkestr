@@ -1368,6 +1368,63 @@ test("thread input /implement confirms a visible Codex plan implementation promp
   }
 });
 
+test("thread input delivery confirms visible Codex plan implementation prompt from natural intent", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-natural-implement-plan-"));
+  const fakeTmux = await createFakeTmux(home);
+  const captureFile = path.join(home, "pane.txt");
+  const priorPath = process.env.PATH;
+  const priorTmuxLog = process.env.TMUX_LOG;
+  const priorTmuxState = process.env.TMUX_STATE;
+  const priorCaptureFile = process.env.TMUX_CAPTURE_FILE;
+  process.env.PATH = `${fakeTmux.bin}:${priorPath || ""}`;
+  process.env.TMUX_LOG = fakeTmux.log;
+  process.env.TMUX_STATE = fakeTmux.state;
+  process.env.TMUX_CAPTURE_FILE = captureFile;
+
+  try {
+    await fs.writeFile(captureFile, [
+      "Implement this plan?",
+      "",
+      "› 1. Yes, implement this plan",
+      "  2. No, keep planning",
+      "",
+      "gpt-5.5 xhigh · /workspace/demo            Plan mode",
+    ].join("\n"), "utf8");
+    const env = {
+      ORKESTR_HOME: path.join(home, "orkestr-home"),
+      HOME: path.join(home, "runtime-home"),
+      CODEX_HOME: path.join(home, "codex-home"),
+      PATH: process.env.PATH,
+      TMUX_LOG: fakeTmux.log,
+      TMUX_STATE: fakeTmux.state,
+      TMUX_CAPTURE_FILE: captureFile,
+    };
+    await createThread({ id: "natural-implement-plan-thread", name: "Natural Implement Plan Thread" }, env);
+    await wakeThread("natural-implement-plan-thread", { reason: "test" }, env);
+    const input = await appendThreadMessage("natural-implement-plan-thread", {
+      role: "user",
+      source: "whatsapp",
+      text: "Implement this please.",
+      state: "queued",
+    }, env);
+
+    assert.deepEqual(await deliverPendingThreadInputs("natural-implement-plan-thread", env), [input.id]);
+    const messages = await listThreadMessages("natural-implement-plan-thread", env);
+    const log = await fs.readFile(fakeTmux.log, "utf8");
+
+    assert.equal(messages.at(-1)?.state, "completed");
+    assert.equal(messages.at(-1)?.deliveryState, "delivered");
+    assert.equal(messages.at(-1)?.observedVia, "codex_plan_implementation_confirmed");
+    assert.match(log, /__CALL__\tsend-keys\t-t\t%42\tC-m/);
+    assert.doesNotMatch(log, /Implement this please/);
+  } finally {
+    restoreEnvValue("PATH", priorPath);
+    restoreEnvValue("TMUX_LOG", priorTmuxLog);
+    restoreEnvValue("TMUX_STATE", priorTmuxState);
+    restoreEnvValue("TMUX_CAPTURE_FILE", priorCaptureFile);
+  }
+});
+
 test("thread summary reports live Codex plan mode from the runtime pane", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-codex-mode-summary-"));
   const fakeTmux = await createFakeTmux(home);

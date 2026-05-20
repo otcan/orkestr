@@ -1,12 +1,20 @@
 # Orkestr
 
-Orkestr is a local-first control plane for running Codex agents from your own machine.
+Orkestr is a self-hosted, local-first control plane for running Codex agents from your own machine.
 
 It turns raw terminal agents into named, controllable work threads: create a Codex instance, give it a workspace, start or sleep it, inspect status, connect WhatsApp or Gmail, attach a virtual desktop, and review logs from one small web cockpit. It is designed for personal infrastructure first, not hosted multi-user SaaS.
 
 > Public alpha. Do not expose Orkestr directly to the public internet. Keep it bound to `127.0.0.1` unless you have put it behind a trusted private network, TLS, and an auth boundary.
 
 ![Orkestr demo storyboard](docs/assets/orkestr-demo.gif)
+
+## Why Use Orkestr
+
+- **No OpenAI API credit meter for the default Codex path.** Use your existing Codex login instead of wiring every agent task through paid API calls.
+- **Persistent agents, not simple chat automation.** Orkestr manages real Codex sessions with workspaces, queues, status, recovery, logs, and browser access.
+- **Timers for recurring work.** Agents can wake later, continue a task, check a repository, or run scheduled workflows without reopening an IDE.
+- **Real work surfaces.** Connect WhatsApp, Gmail, LinkedIn browser profiles, virtual desktops, and future local connectors into the same agent control plane.
+- **Local-first by default.** Keep workspaces, runtime state, connector sessions, and private overlays on infrastructure you control.
 
 ## Why This Exists
 

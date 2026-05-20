@@ -6,6 +6,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { dataPaths, ensureDataDirs } from "../../storage/src/paths.js";
 import { appendEvent, readJson, writeJson } from "../../storage/src/store.js";
+import { ensureRuntimeAgentsFile } from "./agent-context.js";
 import { assertCodexAuthenticated } from "../../connectors/src/codex.js";
 import {
   appendThreadMessage,
@@ -301,6 +302,12 @@ function panePlanImplementationMenuVisible(text) {
 function panePlanImplementationReady(text) {
   const body = String(text || "");
   return panePlanImplementationMenuVisible(body) && /^\s*›\s*1\.\s*Yes,\s*implement this plan\b/im.test(body);
+}
+
+function isPlanImplementationIntent(text) {
+  const body = String(text || "").trim();
+  if (!body || body.length > 80) return false;
+  return /^(?:yes[,]?\s*)?(?:please\s+)?implement(?:\s+(?:this|the)(?:\s+plan)?)?(?:\s+please)?[.!?]?$/i.test(body);
 }
 
 function paneResumeDirectoryPrompt(text) {
@@ -664,6 +671,7 @@ export async function wakeThread(threadId, options = {}, env = process.env) {
   const sessionName = `orkestr-${safeName(thread.id).slice(0, 48)}`;
   const workspace = runtimeWorkspace(thread, env);
   await fs.mkdir(workspace, { recursive: true });
+  await ensureRuntimeAgentsFile(workspace, env).catch(() => {});
   await ensureCodexWorkspaceTrusted(workspace, env);
   const command = runtimeCommand(thread, env);
   await ensureRuntimeCodexAuthenticated(command, env);
@@ -962,6 +970,25 @@ export async function implementRuntimePlan(threadId, env = process.env) {
     status,
     observedVia: "codex_plan_implementation_confirmed",
   };
+}
+
+async function completePlanImplementationInput(thread, message, env = process.env) {
+  const result = await implementRuntimePlan(thread.id, env);
+  const implemented = Boolean(result.implemented);
+  const errorText = implemented ? "" : "No active Codex implementation prompt is visible.";
+  const updated = await updateThreadMessage(thread.id, message.id, {
+    state: implemented ? "completed" : "failed",
+    deliveryState: implemented ? "delivered" : "failed",
+    observedVia: implemented ? "codex_plan_implementation_confirmed" : "codex_plan_implementation_not_ready",
+    runtimeLeaseId: result.status?.lease?.id || null,
+    deliveryPaneId: result.paneId || null,
+    deliveredAt: implemented ? nowIso() : "",
+    error: errorText,
+  }, env);
+  if (!implemented) {
+    await updateThread(thread.id, { state: "failed", lastError: errorText }, env).catch(() => {});
+  }
+  return updated.id;
 }
 
 function shouldDeferRuntimeDelivery(error) {
@@ -1575,8 +1602,17 @@ export async function deliverPendingThreadInputs(threadId, env = process.env) {
         await wakeThread(thread.id, { reason: next.source || "message" }, env);
         const currentMessages = await listThreadMessages(thread.id, env);
         const currentNext = currentMessages.find((item) => item.id === next.id) || next;
+        let status = await runtimeStatus(thread.id, env).catch(() => null);
+        if ((parsedCommand.command === "implement" || isPlanImplementationIntent(currentNext.text)) && status?.planImplementationReady) {
+          delivered.push(await completePlanImplementationInput(thread, currentNext, env));
+          continue;
+        }
+        if (parsedCommand.command === "implement") {
+          const attempted = await completePlanImplementationInput(thread, currentNext, env);
+          delivered.push(attempted);
+          continue;
+        }
         const pendingNeedInput = latestNeedInputBeforeMessage(currentMessages, currentNext.id);
-        let status = null;
         if (pendingNeedInput) {
           const needInputStatus = await runtimeStatus(thread.id, env, currentMessages).catch(() => null);
           const answered = await sendNeedInputAnswerToPane(thread, currentNext, pendingNeedInput, needInputStatus, env);

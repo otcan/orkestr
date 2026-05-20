@@ -25,6 +25,7 @@ export async function runCli(argv = process.argv.slice(2), context = {}) {
     if (global.help || command === "help") return writeHelp(ctx);
     if (command === "serve" || command.startsWith("--")) return serve(command.startsWith("--") ? global.argv : args, ctx);
     if (command === "list") return list(args, ctx);
+    if (command === "whereiam" || command === "whereami") return whereiamCommand(args, ctx);
     if (command === "doctor") return doctorCommand(args, ctx);
     if (command === "timers" || command === "timer") return timersCommand(args, ctx);
     if (command === "security") return securityCommand(args, ctx);
@@ -74,6 +75,17 @@ async function list(argv, ctx) {
   if (argv.includes("--json")) ctx.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
   else ctx.stdout.write(`${formatThreadTable(threads)}\n`);
   return 0;
+}
+
+async function whereiamCommand(argv, ctx) {
+  const json = argv.includes("--json");
+  const cwd = flagValue(argv, "--cwd") || ctx.cwd || process.cwd();
+  const params = new URLSearchParams();
+  if (cwd) params.set("cwd", cwd);
+  const payload = await requestJson(`/api/whereiam?${params.toString()}`, ctx);
+  if (json) ctx.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
+  else ctx.stdout.write(`${formatWhereAmI(payload)}\n`);
+  return payload?.ok === false ? 1 : 0;
 }
 
 async function doctorCommand(argv, ctx) {
@@ -295,6 +307,7 @@ function writeUsage(stream) {
   stream.write(`Usage:
   orkestr [serve] [--open] [--host 127.0.0.1] [--port 19812]
   orkestr list [--json] [--api http://127.0.0.1:19812]
+  orkestr whereiam [--cwd path] [--json]
   orkestr doctor [system|timers] [--json]
   orkestr timers [list|doctor|run <timer-id>] [--json]
   orkestr security [challenges|approve <challenge-id>|reject <challenge-id>] [--json]
@@ -308,6 +321,27 @@ function writeUsage(stream) {
 Environment:
   ORKESTR_API_BASE   API base URL for commands. Defaults to http://127.0.0.1:19812.
 `);
+}
+
+function formatWhereAmI(payload = {}) {
+  if (!payload.ok || !payload.thread) {
+    return [
+      "No Orkestr thread matched this directory.",
+      `CWD: ${payload.cwd || process.cwd()}`,
+      "Try: orkestr list",
+    ].join("\n");
+  }
+  const thread = payload.thread || {};
+  const workspace = payload.workspace || {};
+  const runtime = payload.runtime || {};
+  return [
+    `Thread: ${thread.displayName || thread.name || thread.id} (${thread.id})`,
+    `State: ${thread.state || runtime.state || "unknown"}`,
+    `CWD: ${workspace.cwd || payload.cwd || "-"}`,
+    `Runtime workspace: ${workspace.runtimeWorkspace || "-"}`,
+    `Repo: ${workspace.repoPath || workspace.worktreePath || "-"}`,
+    `Runtime: ${runtime.sessionName || "-"}${runtime.paneId ? ` ${runtime.paneId}` : ""}`,
+  ].join("\n");
 }
 
 function positional(argv) {

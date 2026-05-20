@@ -7,6 +7,7 @@ import { Body, Controller, Get, HttpCode, Param, Post, Query, Req, Res } from "@
 import { listRuntimeLeases } from "../../../../../packages/core/src/runtime-leases.js";
 import { getSetupStatus } from "../../../../../packages/core/src/setup.js";
 import { systemDoctor } from "../../../../../packages/core/src/system-doctor.js";
+import { whereAmI } from "../../../../../packages/core/src/whereiam.js";
 import {
   approvePairingChallenge,
   createPairingChallenge,
@@ -316,6 +317,21 @@ export class SystemController {
   @Get("runtime-leases")
   async runtimeLeases() {
     return { leases: await listRuntimeLeases(), budget: { maxLiveThreads: Number(process.env.ORKESTR_MAX_LIVE_THREADS || 20) } };
+  }
+
+  @Get("whereiam")
+  async whereiam(
+    @Query("cwd") cwd = "",
+    @Query("threadId") threadId = "",
+    @Query("sessionName") sessionName = "",
+    @Query("paneId") paneId = "",
+  ) {
+    return whereAmI({
+      cwd: String(cwd || ""),
+      threadId: String(threadId || ""),
+      sessionName: String(sessionName || ""),
+      paneId: String(paneId || ""),
+    });
   }
 
   @Get("system")
