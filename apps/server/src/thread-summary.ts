@@ -96,6 +96,26 @@ function latestPendingQuestion(messages: any[] = []) {
   return null;
 }
 
+function planImplementationPendingQuestion(thread: any, status: any) {
+  if (!status?.planImplementationMenuVisible) return null;
+  return {
+    text: [
+      "Codex is asking what to do with the proposed plan.",
+      "",
+      "1. Implement this plan",
+      "2. Clear context and implement",
+      "3. Stay in Plan mode",
+      "",
+      "Reply with 1, 2, or 3. Use /code to close this prompt and switch to coding.",
+    ].join("\n"),
+    eventId: `codex-plan-implementation:${thread?.id || "thread"}:${status?.paneId || "pane"}`,
+    messageId: null,
+    cursor: null,
+    timestamp: status?.progress?.capturedAt || null,
+    phase: "implementation_choice",
+  };
+}
+
 function latestMessageSummary(messages: any[] = []) {
   const message = latestStoredMessage(messages);
   if (!message) {
@@ -330,7 +350,7 @@ export async function threadRuntimeSummary(thread: any, messages: any[] = [], op
   const latestMessage = latestMessageSummary(messages);
   const planAvailable = latestAssistantPlanAvailable(messages);
   const lastActivityAt = latestMessage.lastMessageAt || thread.updatedAt || thread.createdAt || null;
-  const pendingQuestion = latestPendingQuestion(messages);
+  const pendingQuestion = planImplementationPendingQuestion(thread, status) || latestPendingQuestion(messages);
   const resolvedCodexThreadId = codexThreadId(codexThread);
   const metadata = codexMetadata(codexThread);
   const liveCodexMode = codexModeValue(status?.codexMode);

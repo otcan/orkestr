@@ -328,15 +328,45 @@ function panePlanImplementationMenuVisible(text) {
   return /Implement this plan\?/i.test(recentPaneText(text));
 }
 
+function panePlanImplementationSelectedChoice(text) {
+  const match = recentPaneText(text).match(/^\s*›\s*([123])\.\s+/im);
+  return match?.[1] || null;
+}
+
 function panePlanImplementationReady(text) {
   const body = recentPaneText(text);
-  return panePlanImplementationMenuVisible(body) && /^\s*›\s*1\.\s*Yes,\s*implement this plan\b/im.test(body);
+  return panePlanImplementationMenuVisible(body) && panePlanImplementationSelectedChoice(body) === "1";
 }
 
 function isPlanImplementationIntent(text) {
   const body = String(text || "").trim();
   if (!body || body.length > 80) return false;
   return /^(?:yes[,]?\s*)?(?:please\s+)?implement(?:\s+(?:this|the)(?:\s+plan)?)?(?:\s+please)?[.!?]?$/i.test(body);
+}
+
+function planImplementationChoiceForInput(text) {
+  const raw = String(text || "").trim();
+  const body = raw.toLowerCase();
+  if (!body || body.length > 120) return null;
+  if (body === "1" || body === "/implement" || isPlanImplementationIntent(raw)) return "1";
+  if (
+    body === "2" ||
+    /^(?:yes[,]?\s*)?(?:clear|reset|fresh|new)\b.*\b(?:context|thread)\b.*\bimplement\b/i.test(raw) ||
+    /^(?:implement|code)\b.*\b(?:clear|reset|fresh|new)\b.*\b(?:context|thread)\b/i.test(raw)
+  ) return "2";
+  if (
+    body === "3" ||
+    body === "/plan" ||
+    /^(?:no|nope|cancel|stop|stay|keep planning|do not implement|don't implement|not now)\b/i.test(raw)
+  ) return "3";
+  return null;
+}
+
+function planImplementationChoiceObservedVia(choice) {
+  if (choice === "1") return "codex_plan_implementation_confirmed";
+  if (choice === "2") return "codex_plan_implementation_clear_context_confirmed";
+  if (choice === "3") return "codex_plan_implementation_choice_stay_plan";
+  return "codex_plan_implementation_choice";
 }
 
 function paneResumeDirectoryPrompt(text) {
@@ -431,6 +461,7 @@ export async function runtimeStatus(threadId, env = process.env, messagesOverrid
       codexModeSource: null,
       planImplementationReady: false,
       planImplementationMenuVisible: false,
+      planImplementationSelectedChoice: null,
       progress: null,
     };
   }
@@ -449,6 +480,7 @@ export async function runtimeStatus(threadId, env = process.env, messagesOverrid
   const codexMode = codexModeFromPaneText(paneText);
   const planImplementationReady = panePlanImplementationReady(paneText);
   const planImplementationMenuVisible = panePlanImplementationMenuVisible(paneText);
+  const planImplementationSelectedChoice = planImplementationMenuVisible ? panePlanImplementationSelectedChoice(paneText) : null;
   const needsResumeDirectoryConfirmation = paneResumeDirectoryPrompt(paneText);
   const codexUpdatePromptChoice = paneCodexUpdatePromptChoice(paneText);
   const needsCodexUpdatePromptSkip = Boolean(codexUpdatePromptChoice);
@@ -491,6 +523,7 @@ export async function runtimeStatus(threadId, env = process.env, messagesOverrid
     codexModeSource: codexMode ? "runtime-pane" : null,
     planImplementationReady,
     planImplementationMenuVisible,
+    planImplementationSelectedChoice,
     progress: publicPaneProgress(progressSample),
   };
 }
@@ -1269,6 +1302,71 @@ function codexModeFromPaneText(text) {
   return null;
 }
 
+function planImplementationDismissWaitMs(env = process.env) {
+  const parsed = Number(env.ORKESTR_PLAN_IMPLEMENTATION_DISMISS_WAIT_MS ?? 250);
+  return Number.isFinite(parsed) ? Math.max(0, parsed) : 250;
+}
+
+function planImplementationDismissReadyTimeoutMs(env = process.env) {
+  const parsed = Number(env.ORKESTR_PLAN_IMPLEMENTATION_DISMISS_READY_TIMEOUT_MS ?? 2500);
+  return Number.isFinite(parsed) ? Math.max(0, parsed) : 2500;
+}
+
+function planImplementationDismissMaxEscapes(env = process.env) {
+  const parsed = Number(env.ORKESTR_PLAN_IMPLEMENTATION_DISMISS_MAX_ESCAPES ?? 2);
+  return Number.isFinite(parsed) ? Math.max(1, Math.min(5, Math.floor(parsed))) : 2;
+}
+
+async function dismissPlanImplementationMenu(threadId, status, env = process.env, context = {}) {
+  if (!status?.paneId) return status;
+  let latest = status;
+  let escapes = 0;
+  const maxEscapes = planImplementationDismissMaxEscapes(env);
+  const waitMs = planImplementationDismissWaitMs(env);
+  for (; escapes < maxEscapes && latest?.planImplementationMenuVisible; escapes += 1) {
+    await execFileAsync("tmux", ["send-keys", "-t", latest.paneId, "Escape"]);
+    await appendEvent({
+      type: "thread_plan_implementation_prompt_dismissed",
+      threadId,
+      messageId: context.messageId || null,
+      paneId: latest.paneId,
+      escapeCount: escapes + 1,
+      observedVia: context.observedVia || "codex_plan_implementation_escape",
+      mode: context.mode || null,
+    }, env).catch(() => {});
+    if (waitMs > 0) await sleep(waitMs);
+    latest = await runtimeStatus(threadId, env).catch(() => latest);
+  }
+  if (!latest?.planImplementationMenuVisible) {
+    const readyTimeoutMs = planImplementationDismissReadyTimeoutMs(env);
+    if (readyTimeoutMs > 0) {
+      latest = await waitForRuntimeReady(threadId, {
+        ...env,
+        ORKESTR_WAKE_READY_TIMEOUT_MS: String(readyTimeoutMs),
+      }).catch(() => latest);
+    }
+  }
+  return { ...latest, planImplementationEscapes: escapes };
+}
+
+async function sendPlanImplementationChoice(status, choice) {
+  if (!status?.paneId) return false;
+  const requested = String(choice || "").trim();
+  if (!["1", "2", "3"].includes(requested)) return false;
+  const paneText = await capturePane(status.paneId, 80).catch(() => "");
+  if (!panePlanImplementationMenuVisible(paneText)) return false;
+  const selected = panePlanImplementationSelectedChoice(paneText) || status.planImplementationSelectedChoice || "1";
+  const from = Math.max(1, Number(selected) || 1);
+  const to = Math.max(1, Number(requested) || 1);
+  const direction = to >= from ? "Down" : "Up";
+  for (let index = 0; index < Math.abs(to - from); index += 1) {
+    await execFileAsync("tmux", ["send-keys", "-t", status.paneId, direction]);
+    await sleep(50);
+  }
+  await execFileAsync("tmux", ["send-keys", "-t", status.paneId, "C-m"]);
+  return true;
+}
+
 export async function applyRuntimeCodexMode(threadId, mode, env = process.env, options = {}) {
   const desired = String(mode || "").trim().toLowerCase();
   if (desired !== "code" && desired !== "plan") {
@@ -1280,23 +1378,41 @@ export async function applyRuntimeCodexMode(threadId, mode, env = process.env, o
   if (!status?.paneId) return { applied: false, changed: false, mode: desired, reason: "runtime_unavailable" };
   const beforeText = await capturePane(status.paneId, 80).catch(() => "");
   const beforeMode = codexModeFromPaneText(beforeText);
-  if (beforeMode === desired) {
-    return { applied: true, changed: false, mode: desired, previousMode: beforeMode, paneId: status.paneId };
-  }
-  if (desired === "code" && status.planImplementationMenuVisible && !status.working) {
-    await execFileAsync("tmux", ["send-keys", "-t", status.paneId, "Escape"]);
-    await sleep(150);
-    if (beforeMode) {
-      await execFileAsync("tmux", ["send-keys", "-t", status.paneId, "BTab"]);
+  if (status.planImplementationMenuVisible && !status.working) {
+    const dismissed = await dismissPlanImplementationMenu(threadId, status, env, {
+      observedVia: "orkestr_codex_mode_command",
+      mode: desired,
+    });
+    const afterText = dismissed?.paneId ? await capturePane(dismissed.paneId, 80).catch(() => "") : "";
+    const afterMode = codexModeFromPaneText(afterText) || dismissed?.codexMode || beforeMode || "plan";
+    const needsToggle = afterMode !== desired;
+    if (needsToggle) {
+      if (options.requirePromptReady !== false && (!dismissed?.promptReady || dismissed?.working || dismissed?.planImplementationMenuVisible)) {
+        return {
+          applied: false,
+          changed: false,
+          mode: desired,
+          previousMode: beforeMode || null,
+          paneId: dismissed?.paneId || status.paneId,
+          state: dismissed?.state,
+          promptReady: Boolean(dismissed?.promptReady),
+          working: Boolean(dismissed?.working),
+          reason: "runtime_not_ready",
+        };
+      }
+      await execFileAsync("tmux", ["send-keys", "-t", dismissed.paneId || status.paneId, "BTab"]);
     }
     return {
       applied: true,
-      changed: Boolean(beforeMode && beforeMode !== desired),
+      changed: needsToggle,
       mode: desired,
       previousMode: beforeMode || null,
-      paneId: status.paneId,
+      paneId: dismissed?.paneId || status.paneId,
       reason: "closed_plan_implementation_prompt",
     };
+  }
+  if (beforeMode === desired) {
+    return { applied: true, changed: false, mode: desired, previousMode: beforeMode, paneId: status.paneId };
   }
   if (options.requirePromptReady !== false && (!status.promptReady || status.working)) {
     return {
@@ -1323,15 +1439,22 @@ export async function implementRuntimePlan(threadId, env = process.env) {
   if (!status?.paneId) {
     return { implemented: false, reason: "runtime_unavailable", status };
   }
-  if (!status.planImplementationReady) {
+  if (!status.planImplementationMenuVisible) {
     return {
       implemented: false,
-      reason: status.planImplementationMenuVisible ? "implementation_option_not_selected" : "implementation_prompt_not_visible",
+      reason: "implementation_prompt_not_visible",
       paneId: status.paneId,
       status,
     };
   }
-  await execFileAsync("tmux", ["send-keys", "-t", status.paneId, "C-m"]);
+  if (!await sendPlanImplementationChoice(status, "1")) {
+    return {
+      implemented: false,
+      reason: "implementation_prompt_not_visible",
+      paneId: status.paneId,
+      status,
+    };
+  }
   await updateThread(threadId, { state: "working", lastError: null }, env).catch(() => {});
   await appendEvent({
     type: "thread_plan_implementation_started",
@@ -1367,6 +1490,47 @@ async function completePlanImplementationInput(thread, message, env = process.en
   return updated.id;
 }
 
+async function completePlanImplementationChoiceInput(thread, message, status, choice, env = process.env) {
+  const selectedChoice = String(choice || "").trim();
+  const deliveredAt = nowIso();
+  if (!status?.paneId || !status.planImplementationMenuVisible || !await sendPlanImplementationChoice(status, selectedChoice)) {
+    const errorText = "No active Codex implementation prompt is visible.";
+    const failed = await updateThreadMessage(thread.id, message.id, {
+      state: "failed",
+      deliveryState: "failed",
+      observedVia: "codex_plan_implementation_not_ready",
+      runtimeLeaseId: status?.lease?.id || null,
+      deliveryPaneId: status?.paneId || null,
+      error: errorText,
+    }, env);
+    await updateThread(thread.id, { state: "failed", lastError: errorText }, env).catch(() => {});
+    return failed.id;
+  }
+  const observedVia = planImplementationChoiceObservedVia(selectedChoice);
+  const updated = await updateThreadMessage(thread.id, message.id, {
+    state: "completed",
+    deliveryState: "delivered",
+    observedVia,
+    runtimeLeaseId: status.lease?.id || null,
+    deliveryPaneId: status.paneId,
+    deliveredAt,
+    error: null,
+  }, env);
+  await updateThread(thread.id, {
+    state: selectedChoice === "3" ? "ready" : "working",
+    lastError: null,
+  }, env).catch(() => {});
+  await appendEvent({
+    type: "thread_plan_implementation_choice",
+    threadId: thread.id,
+    messageId: message.id,
+    paneId: status.paneId,
+    choice: selectedChoice,
+    observedVia,
+  }, env);
+  return updated.id;
+}
+
 function shouldDeferRuntimeDelivery(error) {
   if (!error || String(error.message || error) !== "runtime_not_ready") return false;
   const status = error.status || {};
@@ -1374,6 +1538,8 @@ function shouldDeferRuntimeDelivery(error) {
     status.working ||
     status.state === "working" ||
     status.state === "waking" ||
+    status.promptReady === false ||
+    status.planImplementationMenuVisible ||
     status.pendingCount > 0,
   );
 }
@@ -2016,15 +2182,23 @@ async function cancelNeedInputForRawDelivery(thread, message, pendingQuestion, s
   }, env);
   const waitMs = needInputCancelWaitMs(env);
   if (waitMs > 0) await sleep(waitMs);
+  const latest = await runtimeStatus(thread.id, env).catch(() => status);
+  if (latest?.promptReady && !latest.working && !latest.planImplementationMenuVisible) return latest;
   const readyTimeoutMs = needInputCancelReadyTimeoutMs(env);
-  if (readyTimeoutMs <= 0) return status;
+  if (readyTimeoutMs <= 0) return latest || status;
   return await waitForRuntimeReady(thread.id, {
     ...env,
     ORKESTR_WAKE_READY_TIMEOUT_MS: String(readyTimeoutMs),
-  }).catch(() => status);
+  }).catch(() => latest || status);
 }
 
 async function sendThreadInputToPane(thread, message, status, env = process.env) {
+  if (!status?.paneId || status.working || !status.promptReady || status.planImplementationMenuVisible) {
+    const error = new Error("runtime_not_ready");
+    error.statusCode = 504;
+    error.status = status;
+    throw error;
+  }
   const attempt = deliveryAttempt(message) + 1;
   const inputText = inputTextForMessage(message);
   const deliveryInput = await deliveryInputForMessage(thread, message, inputText, env);
@@ -2203,9 +2377,16 @@ export async function deliverPendingThreadInputs(threadId, env = process.env) {
         const currentMessages = await listThreadMessages(thread.id, env);
         const currentNext = currentMessages.find((item) => item.id === next.id) || next;
         let status = await runtimeStatus(thread.id, env).catch(() => null);
-        if ((parsedCommand.command === "implement" || isPlanImplementationIntent(currentNext.text)) && status?.planImplementationReady) {
-          delivered.push(await completePlanImplementationInput(thread, currentNext, env));
-          continue;
+        if (status?.planImplementationMenuVisible) {
+          const choice = parsedCommand.command === "implement" ? "1" : planImplementationChoiceForInput(currentNext.text);
+          if (choice) {
+            delivered.push(await completePlanImplementationChoiceInput(thread, currentNext, status, choice, env));
+            continue;
+          }
+          status = await dismissPlanImplementationMenu(thread.id, status, env, {
+            messageId: currentNext.id,
+            observedVia: "thread_input_delivery",
+          });
         }
         if (parsedCommand.command === "implement") {
           const attempted = await completePlanImplementationInput(thread, currentNext, env);

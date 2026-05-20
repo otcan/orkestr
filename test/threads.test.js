@@ -138,6 +138,14 @@ case "$cmd" in
       printf 'tmux send-keys literal too long: %s > %s\\n' "\${#literal}" "$TMUX_SEND_KEYS_LITERAL_MAX" >&2
       exit 1
     fi
+    for arg in "$@"; do
+      if [ "$arg" = "Escape" ] && [ -n "\${TMUX_CAPTURE_AFTER_ESCAPE_FILE:-}" ] && [ -n "\${TMUX_CAPTURE_FILE:-}" ]; then
+        cp "\${TMUX_CAPTURE_AFTER_ESCAPE_FILE:-}" "\${TMUX_CAPTURE_FILE:-}"
+      fi
+      if [ "$arg" = "C-m" ] && [ -n "\${TMUX_CAPTURE_AFTER_ENTER_FILE:-}" ] && [ -n "\${TMUX_CAPTURE_FILE:-}" ]; then
+        cp "\${TMUX_CAPTURE_AFTER_ENTER_FILE:-}" "\${TMUX_CAPTURE_FILE:-}"
+      fi
+    done
     exit 0
     ;;
   *)
@@ -1445,14 +1453,19 @@ test("thread input delivery sends answers to pending Codex plan questions", asyn
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-plan-answer-delivery-"));
   const fakeTmux = await createFakeTmux(home);
   const captureFile = path.join(home, "pane.txt");
+  const afterEscapeFile = path.join(home, "pane-after-escape.txt");
+  const afterEnterFile = path.join(home, "pane-after-enter.txt");
   const priorPath = process.env.PATH;
   const priorTmuxLog = process.env.TMUX_LOG;
   const priorTmuxState = process.env.TMUX_STATE;
   const priorCaptureFile = process.env.TMUX_CAPTURE_FILE;
+  const priorCaptureAfterEscapeFile = process.env.TMUX_CAPTURE_AFTER_ESCAPE_FILE;
+  const priorCaptureAfterEnterFile = process.env.TMUX_CAPTURE_AFTER_ENTER_FILE;
   process.env.PATH = `${fakeTmux.bin}:${priorPath || ""}`;
   process.env.TMUX_LOG = fakeTmux.log;
   process.env.TMUX_STATE = fakeTmux.state;
   process.env.TMUX_CAPTURE_FILE = captureFile;
+  process.env.TMUX_CAPTURE_AFTER_ESCAPE_FILE = afterEscapeFile;
 
   try {
     await fs.writeFile(captureFile, [
@@ -1474,6 +1487,7 @@ test("thread input delivery sends answers to pending Codex plan questions", asyn
       TMUX_LOG: fakeTmux.log,
       TMUX_STATE: fakeTmux.state,
       TMUX_CAPTURE_FILE: captureFile,
+      TMUX_CAPTURE_AFTER_ESCAPE_FILE: afterEscapeFile,
       ORKESTR_WAKE_READY_TIMEOUT_MS: "20",
       ORKESTR_DELIVERY_ACK_WAIT_MS: "0",
       ORKESTR_DELIVERY_ACK_BACKOFF_MS: "10000",
@@ -1528,6 +1542,7 @@ test("thread input delivery sends answers to pending Codex plan questions", asyn
       "",
       "tab to add notes | enter to submit answer | esc to interrupt",
     ].join("\n"), "utf8");
+    await fs.writeFile(afterEscapeFile, "› \n\ngpt-5.5 xhigh · /workspace/demo            Plan mode\n", "utf8");
     await appendThreadMessage("plan-answer-thread", {
       role: "assistant",
       source: "codex-rollout",
@@ -1545,6 +1560,9 @@ test("thread input delivery sends answers to pending Codex plan questions", asyn
       ].join("\n"),
     }, env);
     const defaultAnswer = await enqueueThreadInput("plan-answer-thread", { text: "default pls" }, env);
+    await fs.writeFile(afterEnterFile, "• Working (1s • esc to interrupt)\n", "utf8");
+    process.env.TMUX_CAPTURE_AFTER_ENTER_FILE = afterEnterFile;
+    env.TMUX_CAPTURE_AFTER_ENTER_FILE = afterEnterFile;
 
     assert.deepEqual(await deliverPendingThreadInputs("plan-answer-thread", env), [defaultAnswer.id]);
     const messagesAfterDefault = await listThreadMessages("plan-answer-thread", env);
@@ -1565,6 +1583,8 @@ test("thread input delivery sends answers to pending Codex plan questions", asyn
     restoreEnvValue("TMUX_LOG", priorTmuxLog);
     restoreEnvValue("TMUX_STATE", priorTmuxState);
     restoreEnvValue("TMUX_CAPTURE_FILE", priorCaptureFile);
+    restoreEnvValue("TMUX_CAPTURE_AFTER_ESCAPE_FILE", priorCaptureAfterEscapeFile);
+    restoreEnvValue("TMUX_CAPTURE_AFTER_ENTER_FILE", priorCaptureAfterEnterFile);
   }
 });
 
@@ -1718,6 +1738,7 @@ test("codex mode switch to code closes a visible plan implementation prompt", as
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-codex-mode-implement-menu-"));
   const fakeTmux = await createFakeTmux(home);
   const captureFile = path.join(home, "pane.txt");
+  const afterEscapeFile = path.join(home, "pane-after-escape.txt");
   const priorHome = process.env.ORKESTR_HOME;
   const priorRuntimeHome = process.env.HOME;
   const priorCodexHome = process.env.CODEX_HOME;
@@ -1725,6 +1746,7 @@ test("codex mode switch to code closes a visible plan implementation prompt", as
   const priorTmuxLog = process.env.TMUX_LOG;
   const priorTmuxState = process.env.TMUX_STATE;
   const priorCaptureFile = process.env.TMUX_CAPTURE_FILE;
+  const priorCaptureAfterEscapeFile = process.env.TMUX_CAPTURE_AFTER_ESCAPE_FILE;
   process.env.ORKESTR_HOME = path.join(home, "orkestr-home");
   process.env.HOME = path.join(home, "runtime-home");
   process.env.CODEX_HOME = path.join(home, "codex-home");
@@ -1732,15 +1754,19 @@ test("codex mode switch to code closes a visible plan implementation prompt", as
   process.env.TMUX_LOG = fakeTmux.log;
   process.env.TMUX_STATE = fakeTmux.state;
   process.env.TMUX_CAPTURE_FILE = captureFile;
+  process.env.TMUX_CAPTURE_AFTER_ESCAPE_FILE = afterEscapeFile;
 
   try {
     await fs.writeFile(captureFile, [
       "Implement this plan?",
       "› 1. Yes, implement this plan",
-      "  2. No, keep planning",
+      "  2. Yes, clear context and implement",
+      "  3. No, stay in Plan mode",
       "",
+      "Press enter to confirm or esc to go back",
       "gpt-5.5 xhigh · /workspace/demo            Plan mode",
     ].join("\n"), "utf8");
+    await fs.writeFile(afterEscapeFile, "› \n\ngpt-5.5 xhigh · /workspace/demo            Plan mode\n", "utf8");
     await createThread({ id: "codex-mode-implementation-menu-thread", name: "Codex Mode Implementation Menu Thread" });
     await wakeThread("codex-mode-implementation-menu-thread", { reason: "test" });
     const result = await applyRuntimeCodexMode("codex-mode-implementation-menu-thread", "code");
@@ -1759,6 +1785,71 @@ test("codex mode switch to code closes a visible plan implementation prompt", as
     restoreEnvValue("TMUX_LOG", priorTmuxLog);
     restoreEnvValue("TMUX_STATE", priorTmuxState);
     restoreEnvValue("TMUX_CAPTURE_FILE", priorCaptureFile);
+    restoreEnvValue("TMUX_CAPTURE_AFTER_ESCAPE_FILE", priorCaptureAfterEscapeFile);
+  }
+});
+
+test("thread input /plan closes a visible Codex plan implementation prompt without switching mode", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-plan-mode-implement-menu-"));
+  const fakeTmux = await createFakeTmux(home);
+  const captureFile = path.join(home, "pane.txt");
+  const afterEscapeFile = path.join(home, "pane-after-escape.txt");
+  const priorPath = process.env.PATH;
+  const priorTmuxLog = process.env.TMUX_LOG;
+  const priorTmuxState = process.env.TMUX_STATE;
+  const priorCaptureFile = process.env.TMUX_CAPTURE_FILE;
+  const priorCaptureAfterEscapeFile = process.env.TMUX_CAPTURE_AFTER_ESCAPE_FILE;
+  process.env.PATH = `${fakeTmux.bin}:${priorPath || ""}`;
+  process.env.TMUX_LOG = fakeTmux.log;
+  process.env.TMUX_STATE = fakeTmux.state;
+  process.env.TMUX_CAPTURE_FILE = captureFile;
+  process.env.TMUX_CAPTURE_AFTER_ESCAPE_FILE = afterEscapeFile;
+
+  try {
+    await fs.writeFile(captureFile, [
+      "Implement this plan?",
+      "› 1. Yes, implement this plan",
+      "  2. Yes, clear context and implement",
+      "  3. No, stay in Plan mode",
+      "",
+      "Press enter to confirm or esc to go back",
+      "gpt-5.5 xhigh · /workspace/demo            Plan mode",
+    ].join("\n"), "utf8");
+    await fs.writeFile(afterEscapeFile, "› \n\ngpt-5.5 xhigh · /workspace/demo            Plan mode\n", "utf8");
+    const env = {
+      ORKESTR_HOME: path.join(home, "orkestr-home"),
+      HOME: path.join(home, "runtime-home"),
+      CODEX_HOME: path.join(home, "codex-home"),
+      PATH: process.env.PATH,
+      TMUX_LOG: fakeTmux.log,
+      TMUX_STATE: fakeTmux.state,
+      TMUX_CAPTURE_FILE: captureFile,
+      TMUX_CAPTURE_AFTER_ESCAPE_FILE: afterEscapeFile,
+    };
+    await createThread({ id: "plan-mode-implementation-menu-thread", name: "Plan Mode Implementation Menu Thread" }, env);
+    await wakeThread("plan-mode-implementation-menu-thread", { reason: "test" }, env);
+    const command = await appendThreadMessage("plan-mode-implementation-menu-thread", {
+      role: "user",
+      source: "whatsapp",
+      text: "/plan",
+      state: "queued",
+    }, env);
+
+    assert.deepEqual(await deliverPendingThreadInputs("plan-mode-implementation-menu-thread", env), [command.id]);
+    const messages = await listThreadMessages("plan-mode-implementation-menu-thread", env);
+    const log = await fs.readFile(fakeTmux.log, "utf8");
+
+    assert.equal(messages.at(-1)?.state, "completed");
+    assert.equal(messages.at(-1)?.deliveryState, "delivered");
+    assert.match(log, /__CALL__\tsend-keys\t-t\t%42\tEscape/);
+    assert.doesNotMatch(log, /__CALL__\tsend-keys\t-t\t%42\tBTab/);
+    assert.doesNotMatch(log, /__CALL__\tpaste-buffer/);
+  } finally {
+    restoreEnvValue("PATH", priorPath);
+    restoreEnvValue("TMUX_LOG", priorTmuxLog);
+    restoreEnvValue("TMUX_STATE", priorTmuxState);
+    restoreEnvValue("TMUX_CAPTURE_FILE", priorCaptureFile);
+    restoreEnvValue("TMUX_CAPTURE_AFTER_ESCAPE_FILE", priorCaptureAfterEscapeFile);
   }
 });
 
@@ -1885,6 +1976,145 @@ test("thread input delivery confirms visible Codex plan implementation prompt fr
   }
 });
 
+test("thread input delivery answers Codex plan implementation prompt with numeric choice", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-plan-choice-"));
+  const fakeTmux = await createFakeTmux(home);
+  const captureFile = path.join(home, "pane.txt");
+  const priorPath = process.env.PATH;
+  const priorTmuxLog = process.env.TMUX_LOG;
+  const priorTmuxState = process.env.TMUX_STATE;
+  const priorCaptureFile = process.env.TMUX_CAPTURE_FILE;
+  process.env.PATH = `${fakeTmux.bin}:${priorPath || ""}`;
+  process.env.TMUX_LOG = fakeTmux.log;
+  process.env.TMUX_STATE = fakeTmux.state;
+  process.env.TMUX_CAPTURE_FILE = captureFile;
+
+  try {
+    await fs.writeFile(captureFile, [
+      "Implement this plan?",
+      "",
+      "› 1. Yes, implement this plan",
+      "  2. Yes, clear context and implement",
+      "  3. No, stay in Plan mode",
+      "",
+      "Press enter to confirm or esc to go back",
+      "gpt-5.5 xhigh · /workspace/demo            Plan mode",
+    ].join("\n"), "utf8");
+    const env = {
+      ORKESTR_HOME: path.join(home, "orkestr-home"),
+      HOME: path.join(home, "runtime-home"),
+      CODEX_HOME: path.join(home, "codex-home"),
+      PATH: process.env.PATH,
+      TMUX_LOG: fakeTmux.log,
+      TMUX_STATE: fakeTmux.state,
+      TMUX_CAPTURE_FILE: captureFile,
+    };
+    await createThread({ id: "plan-choice-thread", name: "Plan Choice Thread" }, env);
+    await wakeThread("plan-choice-thread", { reason: "test" }, env);
+    const input = await appendThreadMessage("plan-choice-thread", {
+      role: "user",
+      source: "whatsapp",
+      text: "3",
+      state: "queued",
+    }, env);
+
+    assert.deepEqual(await deliverPendingThreadInputs("plan-choice-thread", env), [input.id]);
+    const messages = await listThreadMessages("plan-choice-thread", env);
+    const log = await fs.readFile(fakeTmux.log, "utf8");
+
+    assert.equal(messages.at(-1)?.state, "completed");
+    assert.equal(messages.at(-1)?.deliveryState, "delivered");
+    assert.equal(messages.at(-1)?.observedVia, "codex_plan_implementation_choice_stay_plan");
+    assert.match(log, /__CALL__\tsend-keys\t-t\t%42\tDown/);
+    assert.match(log, /__CALL__\tsend-keys\t-t\t%42\tC-m/);
+    assert.doesNotMatch(log, /__CALL__\tpaste-buffer/);
+  } finally {
+    restoreEnvValue("PATH", priorPath);
+    restoreEnvValue("TMUX_LOG", priorTmuxLog);
+    restoreEnvValue("TMUX_STATE", priorTmuxState);
+    restoreEnvValue("TMUX_CAPTURE_FILE", priorCaptureFile);
+  }
+});
+
+test("thread input delivery dismisses Codex plan implementation prompt before normal text", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-plan-menu-normal-input-"));
+  const fakeTmux = await createFakeTmux(home);
+  const captureFile = path.join(home, "pane.txt");
+  const afterEscapeFile = path.join(home, "pane-after-escape.txt");
+  const bufferCapture = path.join(home, "buffers.log");
+  const priorPath = process.env.PATH;
+  const priorTmuxLog = process.env.TMUX_LOG;
+  const priorTmuxState = process.env.TMUX_STATE;
+  const priorCaptureFile = process.env.TMUX_CAPTURE_FILE;
+  const priorCaptureAfterEscapeFile = process.env.TMUX_CAPTURE_AFTER_ESCAPE_FILE;
+  const priorLoadedBufferCapture = process.env.TMUX_LOADED_BUFFER_CAPTURE;
+  process.env.PATH = `${fakeTmux.bin}:${priorPath || ""}`;
+  process.env.TMUX_LOG = fakeTmux.log;
+  process.env.TMUX_STATE = fakeTmux.state;
+  process.env.TMUX_CAPTURE_FILE = captureFile;
+  process.env.TMUX_CAPTURE_AFTER_ESCAPE_FILE = afterEscapeFile;
+  process.env.TMUX_LOADED_BUFFER_CAPTURE = bufferCapture;
+
+  try {
+    await fs.writeFile(captureFile, [
+      "Implement this plan?",
+      "",
+      "› 1. Yes, implement this plan",
+      "  2. Yes, clear context and implement",
+      "  3. No, stay in Plan mode",
+      "",
+      "Press enter to confirm or esc to go back",
+      "gpt-5.5 xhigh · /workspace/demo            Plan mode",
+    ].join("\n"), "utf8");
+    await fs.writeFile(afterEscapeFile, "› \n\ngpt-5.5 xhigh · /workspace/demo            Plan mode\n", "utf8");
+    const env = {
+      ORKESTR_HOME: path.join(home, "orkestr-home"),
+      HOME: path.join(home, "runtime-home"),
+      CODEX_HOME: path.join(home, "codex-home"),
+      PATH: process.env.PATH,
+      TMUX_LOG: fakeTmux.log,
+      TMUX_STATE: fakeTmux.state,
+      TMUX_CAPTURE_FILE: captureFile,
+      TMUX_CAPTURE_AFTER_ESCAPE_FILE: afterEscapeFile,
+      TMUX_LOADED_BUFFER_CAPTURE: bufferCapture,
+      ORKESTR_DELIVERY_ACK_WAIT_MS: "0",
+      ORKESTR_RUNTIME_SUBMIT_DELAY_MS: "0",
+      ORKESTR_PLAN_IMPLEMENTATION_DISMISS_WAIT_MS: "0",
+      ORKESTR_PLAN_IMPLEMENTATION_DISMISS_READY_TIMEOUT_MS: "0",
+    };
+    await createThread({ id: "plan-menu-normal-input-thread", name: "Plan Menu Normal Input Thread" }, env);
+    await wakeThread("plan-menu-normal-input-thread", { reason: "test" }, env);
+    const input = await appendThreadMessage("plan-menu-normal-input-thread", {
+      role: "user",
+      source: "whatsapp",
+      text: "ACK isolation",
+      state: "queued",
+    }, env);
+
+    assert.deepEqual(await deliverPendingThreadInputs("plan-menu-normal-input-thread", env), []);
+    const messages = await listThreadMessages("plan-menu-normal-input-thread", env);
+    const log = await fs.readFile(fakeTmux.log, "utf8");
+    const bufferLog = await fs.readFile(bufferCapture, "utf8");
+    const lines = log.trim().split("\n");
+    const escapeIndex = lines.findIndex((line) => line.includes("\tsend-keys\t-t\t%42\tEscape"));
+    const pasteIndex = lines.findIndex((line) => line.includes("\tpaste-buffer"));
+    const enterIndex = lines.findIndex((line) => line.includes("\tsend-keys\t-t\t%42\tC-m"));
+
+    assert.equal(messages.find((message) => message.id === input.id)?.state, "awaiting_ack");
+    assert.match(bufferLog, /ACK isolation/);
+    assert.ok(escapeIndex >= 0, "Escape should close the implementation prompt");
+    assert.ok(pasteIndex > escapeIndex, "normal input should be pasted only after Escape");
+    assert.ok(enterIndex > pasteIndex, "Enter should submit normal input, not the implementation menu");
+  } finally {
+    restoreEnvValue("PATH", priorPath);
+    restoreEnvValue("TMUX_LOG", priorTmuxLog);
+    restoreEnvValue("TMUX_STATE", priorTmuxState);
+    restoreEnvValue("TMUX_CAPTURE_FILE", priorCaptureFile);
+    restoreEnvValue("TMUX_CAPTURE_AFTER_ESCAPE_FILE", priorCaptureAfterEscapeFile);
+    restoreEnvValue("TMUX_LOADED_BUFFER_CAPTURE", priorLoadedBufferCapture);
+  }
+});
+
 test("thread summary reports live Codex plan mode from the runtime pane", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-codex-mode-summary-"));
   const fakeTmux = await createFakeTmux(home);
@@ -1928,6 +2158,59 @@ test("thread summary reports live Codex plan mode from the runtime pane", async 
     assert.equal(summary.codexModeLive, "plan");
     assert.equal(summary.codexModeSource, "runtime-pane");
     assert.equal(summary.desiredCodexMode, null);
+  } finally {
+    restoreEnvValue("ORKESTR_HOME", priorHome);
+    restoreEnvValue("HOME", priorRuntimeHome);
+    restoreEnvValue("CODEX_HOME", priorCodexHome);
+    restoreEnvValue("PATH", priorPath);
+    restoreEnvValue("TMUX_LOG", priorTmuxLog);
+    restoreEnvValue("TMUX_STATE", priorTmuxState);
+    restoreEnvValue("TMUX_CAPTURE_FILE", priorCaptureFile);
+    restoreEnvValue("ORKESTR_RECOVER_RUNNING_ON_START", priorRecoverOnStart);
+  }
+});
+
+test("thread summary exposes visible Codex plan implementation prompt as a pending question", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-plan-implementation-question-"));
+  const fakeTmux = await createFakeTmux(home);
+  const captureFile = path.join(home, "pane.txt");
+  const priorHome = process.env.ORKESTR_HOME;
+  const priorRuntimeHome = process.env.HOME;
+  const priorCodexHome = process.env.CODEX_HOME;
+  const priorPath = process.env.PATH;
+  const priorTmuxLog = process.env.TMUX_LOG;
+  const priorTmuxState = process.env.TMUX_STATE;
+  const priorCaptureFile = process.env.TMUX_CAPTURE_FILE;
+  const priorRecoverOnStart = process.env.ORKESTR_RECOVER_RUNNING_ON_START;
+  process.env.ORKESTR_HOME = path.join(home, "orkestr-home");
+  process.env.HOME = path.join(home, "runtime-home");
+  process.env.CODEX_HOME = path.join(home, "codex-home");
+  process.env.PATH = `${fakeTmux.bin}:${priorPath || ""}`;
+  process.env.TMUX_LOG = fakeTmux.log;
+  process.env.TMUX_STATE = fakeTmux.state;
+  process.env.TMUX_CAPTURE_FILE = captureFile;
+  process.env.ORKESTR_RECOVER_RUNNING_ON_START = "0";
+
+  try {
+    await fs.writeFile(captureFile, [
+      "Implement this plan?",
+      "",
+      "› 1. Yes, implement this plan",
+      "  2. Yes, clear context and implement",
+      "  3. No, stay in Plan mode",
+      "",
+      "Press enter to confirm or esc to go back",
+      "gpt-5.5 xhigh · /workspace/demo            Plan mode",
+    ].join("\n"), "utf8");
+    await createThread({ id: "plan-implementation-question-thread", name: "Plan Implementation Question Thread" });
+    const woken = await wakeThread("plan-implementation-question-thread", { reason: "test" });
+    const summary = await threadRuntimeSummary(woken.thread, await listThreadMessages("plan-implementation-question-thread"));
+
+    assert.equal(summary.awaitingInput, true);
+    assert.equal(summary.pendingQuestion?.phase, "implementation_choice");
+    assert.match(summary.pendingQuestion?.text || "", /1\. Implement this plan/);
+    assert.match(summary.pendingQuestion?.text || "", /2\. Clear context and implement/);
+    assert.match(summary.pendingQuestion?.text || "", /3\. Stay in Plan mode/);
   } finally {
     restoreEnvValue("ORKESTR_HOME", priorHome);
     restoreEnvValue("HOME", priorRuntimeHome);
