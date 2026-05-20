@@ -1,12 +1,12 @@
 # Orkestr
 
-Orkestr is a self-hosted, local-first control plane for running Codex agents from your own machine.
+Orkestr is a self-hosted agent workstation for running Codex from a browser, CLI, or WhatsApp.
 
-It turns raw terminal agents into named, controllable work threads: create a Codex instance, give it a workspace, start or sleep it, inspect status, connect WhatsApp or Gmail, attach a virtual desktop, and review logs from one small web cockpit. It is designed for personal infrastructure first, not hosted multi-user SaaS.
+It gives you a public-facing web layer for setup, chat, status, pairing, and operations while keeping the actual agent runtime on infrastructure you control. Create named Codex threads, give them workspaces, start or sleep them, inspect status, connect WhatsApp or Gmail, attach virtual desktops, and review logs from one cockpit.
 
 > Public alpha. Do not expose Orkestr directly to the public internet. Keep it bound to `127.0.0.1` unless you have put it behind a trusted private network, TLS, and an auth boundary.
 
-![Orkestr demo storyboard](docs/assets/orkestr-demo.gif)
+Start with the [user guide](docs/user-guide.md), then use the quickstart below when you are ready to install.
 
 ## Why Use Orkestr
 
@@ -186,7 +186,7 @@ Optional real Codex demo mode:
 node scripts/coding-agent-demo.mjs --real-codex --repo "$PWD"
 ```
 
-Regenerate the README demo asset:
+Regenerate the local demo storyboard asset:
 
 ```bash
 npm run demo:record
