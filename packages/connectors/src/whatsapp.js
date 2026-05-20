@@ -398,6 +398,7 @@ export async function routeWhatsAppInbound(input = {}, env = process.env) {
     messageId: message.id,
     chatId,
     from,
+    accountId,
     receivedAt: pickString(input.timestamp, input.receivedAt) || new Date().toISOString(),
   };
   if (contentDuplicate) event.duplicateReason = message.duplicateReason || "active_input";
@@ -556,14 +557,30 @@ function threadAllowsWhatsAppMirroring(thread) {
   return thread.binding.mirrorToWhatsApp !== false && thread.binding.mirrorReplies !== false;
 }
 
-function isFailedWhatsAppInbound(message) {
+function failedWhatsAppDeliveryTarget(message, thread, state) {
   const role = String(message?.role || "").trim().toLowerCase();
-  const state = String(message?.state || "").trim().toLowerCase();
+  const messageState = String(message?.state || "").trim().toLowerCase();
   const deliveryState = String(message?.deliveryState || "").trim().toLowerCase();
-  return role === "user" &&
-    (state === "failed" || deliveryState === "failed") &&
-    (message.connector === "whatsapp" || message.source === "whatsapp_inbound") &&
-    Boolean(pickString(message.chatId));
+  if (role !== "user" || (messageState !== "failed" && deliveryState !== "failed")) return null;
+  const inboundEvent = [...(state?.inboundEvents || [])]
+    .reverse()
+    .find((event) => event.messageId === message.id) || null;
+  const whatsappOrigin =
+    message.connector === "whatsapp" ||
+    message.source === "whatsapp_inbound" ||
+    Boolean(inboundEvent);
+  if (!whatsappOrigin) return null;
+  const chatId = pickString(message.chatId, inboundEvent?.chatId, thread?.binding?.chatId);
+  if (!chatId) return null;
+  return {
+    chatId,
+    accountId: pickString(
+      thread?.binding?.responderAccountId,
+      thread?.binding?.outboundAccountId,
+      message.accountId,
+      inboundEvent?.accountId,
+    ),
+  };
 }
 
 function formatWhatsAppDeliveryFailure(message) {
@@ -600,17 +617,16 @@ async function deliverWhatsAppRepliesOnce(env = process.env, fetchImpl = fetch) 
   ];
   for (const { agentId, threadId, thread, messages, kind } of messageSets) {
     for (const message of messages) {
-      if (isFailedWhatsAppInbound(message)) {
+      const failedDeliveryTarget = failedWhatsAppDeliveryTarget(message, thread, state);
+      if (failedDeliveryTarget) {
         if (deliveredIds.has(message.id)) continue;
         if (kind === "thread" && !threadAllowsWhatsAppMirroring(thread)) {
           skipped.push({ agentId, threadId, messageId: message.id, reason: "mirroring_disabled" });
           continue;
         }
-        const chatId = pickString(message.chatId);
+        const chatId = failedDeliveryTarget.chatId;
         const text = formatWhatsAppDeliveryFailure(message);
-        const accountId = kind === "thread"
-          ? pickString(thread?.binding?.responderAccountId, thread?.binding?.outboundAccountId, message.accountId)
-          : pickString(message.accountId);
+        const accountId = kind === "thread" ? failedDeliveryTarget.accountId : pickString(message.accountId, failedDeliveryTarget.accountId);
         const textKey = deliveryTextKey(chatId, `${message.id}\n${text}`);
         if (deliveredTextKeys.has(textKey) || batchTextKeys.has(textKey)) {
           skipped.push({ agentId, threadId, messageId: message.id, reason: "duplicate_text" });

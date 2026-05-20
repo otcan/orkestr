@@ -1137,39 +1137,10 @@
               </div>
             </div>
           }
-          @if (slashCommandMatch(); as slashCommand) {
-            <div class="slash-command-panel" [class.unknown]="!slashCommand.info && !slashCommand.partial">
-              <div class="slash-command-summary">
-                <span class="slash-command-token">{{ slashCommand.info?.command || slashCommand.raw }}</span>
-                <div>
-                  <strong>{{ slashCommandTitle(slashCommand) }}</strong>
-                  <span>{{ slashCommandDetail(slashCommand) }}</span>
-                </div>
-              </div>
-              @if (slashCommand.info && slashCommandAliasLabel(slashCommand.info)) {
-                <span class="slash-command-meta">Also: {{ slashCommandAliasLabel(slashCommand.info) }}</span>
-              }
-              @if (slashCommandArgumentLabel(slashCommand)) {
-                <span class="slash-command-meta">{{ slashCommandArgumentLabel(slashCommand) }}: {{ slashCommand.argumentText }}</span>
-              }
-              <div class="slash-command-list">
-                @for (command of slashCommands; track command.command) {
-                  <button
-                    type="button"
-                    [class.active]="slashCommand.info?.command === command.command"
-                    (click)="chooseSlashCommand(command)"
-                    [title]="command.detail"
-                  >
-                    {{ command.command }}
-                  </button>
-                }
-              </div>
-            </div>
-          }
           <div class="composer-row">
             <div class="composer-tools">
               <button class="secondary upload-button" type="button" (click)="composerFilePicker.click()" title="Upload files">Upload</button>
-              <button class="secondary slash-trigger-button" type="button" (click)="openSlashCommands()" title="Slash commands" aria-label="Slash commands">/</button>
+              <button class="secondary command-help-button" type="button" (click)="openSlashHelp()" title="Command help" aria-haspopup="dialog" [attr.aria-expanded]="slashHelpOpen">Help</button>
             </div>
             <textarea
               #composerInput
@@ -1203,5 +1174,32 @@
       </section>
     }
   </section>
+  @if (slashHelpOpen) {
+    <div class="command-help-backdrop" (click)="closeSlashHelp()">
+      <section class="command-help-modal" role="dialog" aria-modal="true" aria-label="Command help" (click)="$event.stopPropagation()">
+        <header class="command-help-head">
+          <div>
+            <p class="eyebrow">Command Help</p>
+            <h3>Thread controls</h3>
+          </div>
+          <button class="secondary icon-close" type="button" aria-label="Close command help" (click)="closeSlashHelp()">×</button>
+        </header>
+        <div class="command-help-list">
+          @for (command of slashCommands; track command.command) {
+            <article class="command-help-row">
+              <code>{{ slashCommandUsage(command) }}</code>
+              <div>
+                <strong>{{ command.label }}</strong>
+                <span>{{ command.detail }}</span>
+                @if (slashCommandAliasLabel(command)) {
+                  <small>Also: {{ slashCommandAliasLabel(command) }}</small>
+                }
+              </div>
+            </article>
+          }
+        </div>
+      </section>
+    </div>
+  }
 </main>
 }

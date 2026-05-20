@@ -6,14 +6,6 @@ export type SlashCommandInfo = {
   acceptsText: boolean;
 };
 
-export type SlashCommandMatch = {
-  raw: string;
-  commandToken: string;
-  argumentText: string;
-  info: SlashCommandInfo | null;
-  partial: boolean;
-};
-
 export const SLASH_COMMANDS: SlashCommandInfo[] = [
   {
     command: "/code",
@@ -65,40 +57,3 @@ export const SLASH_COMMANDS: SlashCommandInfo[] = [
     acceptsText: false,
   },
 ];
-
-const slashCommandLookup = new Map<string, SlashCommandInfo>(
-  SLASH_COMMANDS.flatMap((command) => [command.command, ...command.aliases].map((alias) => [alias, command] as const)),
-);
-
-export function parseSlashCommandDraft(value: string): SlashCommandMatch | null {
-  const text = String(value || "").trimStart();
-  if (!text.startsWith("/")) return null;
-  if (text === "/") {
-    return {
-      raw: "/",
-      commandToken: "",
-      argumentText: "",
-      info: null,
-      partial: true,
-    };
-  }
-  const match = text.match(/^\/([a-z][a-z0-9_-]*)(?:\b|$)([\s:.,-]*)([\s\S]*)$/i);
-  if (!match) {
-    return {
-      raw: text.split(/\s+/)[0] || "/",
-      commandToken: text.split(/\s+/)[0]?.toLowerCase() || "",
-      argumentText: "",
-      info: null,
-      partial: false,
-    };
-  }
-  const raw = `/${match[1]}`;
-  const commandToken = raw.toLowerCase();
-  return {
-    raw,
-    commandToken,
-    argumentText: String(match[3] || "").trimStart(),
-    info: slashCommandLookup.get(commandToken) || null,
-    partial: false,
-  };
-}

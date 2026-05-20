@@ -23,6 +23,7 @@ const execFileAsync = promisify(execFile);
 const deliveryLocks = new Set();
 const deliveryTimers = new Map();
 let runtimeSyncInFlight = null;
+let threadInputDeliveryFailureHandler = null;
 const pendingInputStates = new Set(["queued", "pending_delivery", "awaiting_ack"]);
 const needInputPhases = new Set(["need_input", "awaiting_input", "question", "request_user_input"]);
 const proposedPlanOpenTagPattern = /^\s*<\s*proposed[\s_-]*plan\s*>/i;
@@ -46,6 +47,28 @@ function isoAfter(ms) {
 function whatsappOrigin(message = {}) {
   return String(message.connector || "").trim().toLowerCase() === "whatsapp" ||
     whatsappSources.has(String(message.source || "").trim().toLowerCase());
+}
+
+export function setThreadInputDeliveryFailureHandler(handler) {
+  threadInputDeliveryFailureHandler = typeof handler === "function" ? handler : null;
+  return () => {
+    if (threadInputDeliveryFailureHandler === handler) threadInputDeliveryFailureHandler = null;
+  };
+}
+
+function notifyThreadInputDeliveryFailure({ thread, message, reason, observedVia, env = process.env }) {
+  if (!threadInputDeliveryFailureHandler || !thread || !message) return;
+  if (!whatsappOrigin(message) && !String(message.chatId || "").trim()) return;
+  Promise.resolve(threadInputDeliveryFailureHandler({
+    threadId: thread.id,
+    messageId: message.id,
+    reason,
+    observedVia,
+    connector: message.connector || "",
+    chatId: message.chatId || "",
+    accountId: message.accountId || "",
+    env,
+  })).catch(() => {});
 }
 
 function positiveNumber(value) {
@@ -1953,6 +1976,13 @@ async function failThreadInputDelivery(thread, message, evidence, status, env = 
     observedVia: evidence.observedVia || "delivery_failed",
     error: errorText,
   }, env);
+  notifyThreadInputDeliveryFailure({
+    thread,
+    message,
+    reason: errorText,
+    observedVia: evidence.observedVia || "delivery_failed",
+    env,
+  });
   return message.id;
 }
 
@@ -2063,6 +2093,13 @@ async function recoverStaleThreadInputAck(thread, message, status, env = process
       recoveryCount,
       maxRecoveries,
     }, env).catch(() => {});
+    notifyThreadInputDeliveryFailure({
+      thread,
+      message,
+      reason: errorText,
+      observedVia: "stale_ack_recovery_exhausted",
+      env,
+    });
     return true;
   }
   await updateThreadMessage(thread.id, message.id, {
