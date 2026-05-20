@@ -625,10 +625,11 @@ function runtimeWorkspace(thread, env) {
   return path.resolve(path.isAbsolute(explicit) ? explicit : path.join(root, explicit));
 }
 
-function runtimeCommand(thread, env = process.env) {
+function runtimeCommand(thread, workspace = "", env = process.env) {
   const base = String(env.ORKESTR_RUNTIME_CODEX_COMMAND || "codex --dangerously-bypass-approvals-and-sandbox").trim();
   const threadId = codexThreadId(thread);
-  return threadId ? `${base} resume ${shellQuote(threadId)}` : base;
+  const workspaceArg = String(workspace || "").trim() ? ` -C ${shellQuote(workspace)}` : "";
+  return threadId ? `${base} resume${workspaceArg} ${shellQuote(threadId)}` : base;
 }
 
 function commandUsesCodex(command) {
@@ -673,7 +674,7 @@ export async function wakeThread(threadId, options = {}, env = process.env) {
   await fs.mkdir(workspace, { recursive: true });
   await ensureRuntimeAgentsFile(workspace, env).catch(() => {});
   await ensureCodexWorkspaceTrusted(workspace, env);
-  const command = runtimeCommand(thread, env);
+  const command = runtimeCommand(thread, workspace, env);
   await ensureRuntimeCodexAuthenticated(command, env);
   await updateThread(thread.id, {
     state: "waking",
@@ -878,7 +879,7 @@ async function waitForRuntimeReady(threadId, env = process.env) {
   while (Date.now() < deadline) {
     last = await runtimeStatus(threadId, env);
     if (last.needsResumeDirectoryConfirmation && last.paneId) {
-      await execFileAsync("tmux", ["send-keys", "-t", last.paneId, "C-m"]).catch(() => {});
+      await execFileAsync("tmux", ["send-keys", "-t", last.paneId, "2", "C-m"]).catch(() => {});
       await sleep(1000);
       continue;
     }
@@ -1952,7 +1953,7 @@ async function syncRuntimeLeasesOnce(env = process.env) {
         }
       }
       if (status.needsResumeDirectoryConfirmation && status.paneId) {
-        await execFileAsync("tmux", ["send-keys", "-t", status.paneId, "C-m"]).catch(() => {});
+        await execFileAsync("tmux", ["send-keys", "-t", status.paneId, "2", "C-m"]).catch(() => {});
         await updateThread(lease.threadId, {
           state: "waking",
           runtime: { ...leaseForStorage, state: "waking" },
