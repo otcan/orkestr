@@ -8,6 +8,7 @@ import { PairingRequiredPageComponent } from "./pairing-required-page.component"
 import { OpsPageComponent, ToolsView } from "./ops-page.component";
 import { RawTerminalController } from "./raw-terminal.controller";
 import { hasProposedPlanEnvelope, renderMessageTextHtml } from "./message-renderer";
+import { parseSlashCommandDraft, SLASH_COMMANDS, SlashCommandInfo, SlashCommandMatch } from "./slash-commands";
 import {
   ApiService,
   SetupStatus,
@@ -86,11 +87,13 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
 
   @ViewChild("messagePane") private readonly messagePane?: ElementRef<HTMLElement>;
   @ViewChild("rawTerminalHost") private readonly rawTerminalHost?: ElementRef<HTMLElement>;
+  @ViewChild("composerInput") private readonly composerInput?: ElementRef<HTMLTextAreaElement>;
 
   threads: ThreadSummary[] = [];
   readonly messageCache = signal<Record<string, ThreadMessage[]>>({});
   readonly loadingThreadIds = signal<Record<string, boolean>>({});
   readonly activeThreadIds = signal<Record<string, number>>({});
+  readonly slashCommands = SLASH_COMMANDS;
   historyMessages: ThreadMessage[] = [];
   timers: TimerRecord[] = [];
   allTimers: TimerRecord[] = [];
@@ -1519,6 +1522,14 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     this.writeThreadTextField(thread, field, value);
   }
 
+  private focusComposerSoon(): void {
+    globalThis.setTimeout(() => {
+      this.composerInput?.nativeElement.focus();
+      const value = this.composerInput?.nativeElement.value || "";
+      this.composerInput?.nativeElement.setSelectionRange(value.length, value.length);
+    }, 0);
+  }
+
   filteredThreads(): ThreadSummary[] {
     const needle = this.filterText.trim().toLowerCase();
     if (!needle) return this.threads;
@@ -2474,6 +2485,45 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
 
   composerRows(): number {
     return Math.max(2, Math.min(10, this.draft.split("\n").length));
+  }
+
+  slashCommandMatch(): SlashCommandMatch | null {
+    return parseSlashCommandDraft(this.draft);
+  }
+
+  slashCommandTitle(match: SlashCommandMatch): string {
+    if (match.info) return match.info.label;
+    if (match.partial) return "Slash commands";
+    return "Unknown command";
+  }
+
+  slashCommandDetail(match: SlashCommandMatch): string {
+    if (match.info) return match.info.detail;
+    if (match.partial) return "Pick a command or keep typing.";
+    return "This is not an Orkestr control command. It will be delivered as text.";
+  }
+
+  slashCommandAliasLabel(command: SlashCommandInfo): string {
+    return command.aliases.length ? command.aliases.join(", ") : "";
+  }
+
+  slashCommandArgumentLabel(match: SlashCommandMatch): string {
+    if (!match.info?.acceptsText || !match.argumentText) return "";
+    if (match.info.command === "/now") return "Interrupt text";
+    return "Text after switch";
+  }
+
+  openSlashCommands(): void {
+    if (!this.draft.trim()) {
+      this.persistThreadTextField("draft", "/");
+    }
+    this.focusComposerSoon();
+  }
+
+  chooseSlashCommand(command: SlashCommandInfo): void {
+    const next = command.acceptsText ? `${command.command} ` : command.command;
+    this.persistThreadTextField("draft", next);
+    this.focusComposerSoon();
   }
 
   formatBytes(value: unknown): string {

@@ -1137,9 +1137,42 @@
               </div>
             </div>
           }
+          @if (slashCommandMatch(); as slashCommand) {
+            <div class="slash-command-panel" [class.unknown]="!slashCommand.info && !slashCommand.partial">
+              <div class="slash-command-summary">
+                <span class="slash-command-token">{{ slashCommand.info?.command || slashCommand.raw }}</span>
+                <div>
+                  <strong>{{ slashCommandTitle(slashCommand) }}</strong>
+                  <span>{{ slashCommandDetail(slashCommand) }}</span>
+                </div>
+              </div>
+              @if (slashCommand.info && slashCommandAliasLabel(slashCommand.info)) {
+                <span class="slash-command-meta">Also: {{ slashCommandAliasLabel(slashCommand.info) }}</span>
+              }
+              @if (slashCommandArgumentLabel(slashCommand)) {
+                <span class="slash-command-meta">{{ slashCommandArgumentLabel(slashCommand) }}: {{ slashCommand.argumentText }}</span>
+              }
+              <div class="slash-command-list">
+                @for (command of slashCommands; track command.command) {
+                  <button
+                    type="button"
+                    [class.active]="slashCommand.info?.command === command.command"
+                    (click)="chooseSlashCommand(command)"
+                    [title]="command.detail"
+                  >
+                    {{ command.command }}
+                  </button>
+                }
+              </div>
+            </div>
+          }
           <div class="composer-row">
-            <button class="secondary upload-button" type="button" (click)="composerFilePicker.click()" title="Upload files">Upload</button>
+            <div class="composer-tools">
+              <button class="secondary upload-button" type="button" (click)="composerFilePicker.click()" title="Upload files">Upload</button>
+              <button class="secondary slash-trigger-button" type="button" (click)="openSlashCommands()" title="Slash commands" aria-label="Slash commands">/</button>
+            </div>
             <textarea
+              #composerInput
               name="thread-input"
               [rows]="composerRows()"
               [(ngModel)]="draft"
