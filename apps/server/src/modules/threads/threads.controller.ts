@@ -835,7 +835,11 @@ export class ThreadsController {
     const mode = String(body.mode || "").trim().toLowerCase();
     if (mode !== "code" && mode !== "plan") throw httpError("invalid_codex_mode", 400);
     const updatedAt = new Date().toISOString();
-    const runtimeMode = await applyRuntimeCodexMode(thread.id, mode).catch((error: unknown) => ({
+    const runtimeMode = await applyRuntimeCodexMode(thread.id, mode, process.env, {
+      wakeIfUnavailable: true,
+      wakeReason: "codex_mode_command",
+      waitForReady: true,
+    }).catch((error: unknown) => ({
       applied: false,
       changed: false,
       mode,

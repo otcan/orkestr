@@ -8,7 +8,7 @@ import { dataPaths, ensureDataDirs } from "../../storage/src/paths.js";
 import { appendEvent, readJson, writeJson } from "../../storage/src/store.js";
 import { ensureRuntimeAgentsFile } from "./agent-context.js";
 import { assertCodexAuthenticated } from "../../connectors/src/codex.js";
-import { paneBackgroundWork, publicPaneProgress, samplePaneProgress } from "./pane-progress.js";
+import { clearPaneProgressCache, paneBackgroundWork, publicPaneProgress, samplePaneProgress } from "./pane-progress.js";
 import {
   appendThreadMessage,
   getThread,
@@ -31,6 +31,7 @@ const proposedPlanOpenTagPattern = /^\s*<\s*proposed[\s_-]*plan\s*>/i;
 const deliveryRetryDefaultsMs = [1000, 3000, 8000, 20_000, 60_000];
 const defaultRuntimeIdleSleepMs = 15 * 60 * 1000;
 const defaultRolloutSyncLookbackBytes = 2 * 1024 * 1024;
+const defaultWorkingAfterPromptMs = 30 * 60 * 1000;
 const whatsappSources = new Set(["whatsapp", "whatsapp_inbound", "whatsapp_client"]);
 
 function nowIso() {
@@ -326,6 +327,26 @@ function paneWorkingLine(line) {
   );
 }
 
+function paneWorkingLineDurationMs(line) {
+  const match = String(line || "").match(/\(([^)]*)\)/);
+  if (!match) return null;
+  let total = 0;
+  for (const unitMatch of match[1].matchAll(/(\d+(?:\.\d+)?)\s*(h|hr|hrs|hour|hours|m|min|mins|minute|minutes|s|sec|secs|second|seconds)\b/gi)) {
+    const value = Number(unitMatch[1]);
+    if (!Number.isFinite(value)) continue;
+    const unit = unitMatch[2].toLowerCase();
+    if (unit.startsWith("h")) total += value * 60 * 60 * 1000;
+    else if (unit.startsWith("m")) total += value * 60 * 1000;
+    else total += value * 1000;
+  }
+  return total > 0 ? total : null;
+}
+
+function paneWorkingLineStillActiveAfterPrompt(line, distanceFromTail) {
+  const duration = paneWorkingLineDurationMs(line);
+  return duration !== null && duration <= defaultWorkingAfterPromptMs && distanceFromTail <= 6;
+}
+
 function panePromptLine(line) {
   return /^(?:›|>)(?:\s|$)/.test(line) && !/^(?:›|>)\s*\d+[.)]/.test(line);
 }
@@ -336,7 +357,8 @@ function paneWorking(text) {
   const lastWorkingIndex = lines.findLastIndex(paneWorkingLine);
   if (lastWorkingIndex < 0) return false;
   const lastPromptIndex = lines.findLastIndex(panePromptLine);
-  return lastWorkingIndex > lastPromptIndex;
+  if (lastWorkingIndex > lastPromptIndex) return true;
+  return paneWorkingLineStillActiveAfterPrompt(lines[lastWorkingIndex], lines.length - lastWorkingIndex);
 }
 
 function panePromptReady(text) {
@@ -1185,7 +1207,11 @@ async function completeResetCommand(thread, message, hard = false, env = process
 }
 
 async function completeCodexModeCommand(thread, message, mode, env = process.env) {
-  const result = await applyRuntimeCodexMode(thread.id, mode, env);
+  const result = await applyRuntimeCodexMode(thread.id, mode, env, {
+    wakeIfUnavailable: true,
+    wakeReason: message.source || "codex_mode_command",
+    waitForReady: true,
+  });
   const applied = result.applied === true;
   if (applied) {
     await updateThread(thread.id, codexModePersistencePatch(mode, "orkestr-command", result), env).catch(() => {});
@@ -1419,6 +1445,25 @@ function codexModeFromPaneText(text) {
   return null;
 }
 
+function codexModeToggleTimeoutMs(env = process.env) {
+  const parsed = Number(env.ORKESTR_CODEX_MODE_TOGGLE_TIMEOUT_MS ?? 1000);
+  return Number.isFinite(parsed) ? Math.max(0, parsed) : 1000;
+}
+
+async function waitForPaneCodexMode(paneId, desired, env = process.env) {
+  const timeoutMs = codexModeToggleTimeoutMs(env);
+  const deadline = Date.now() + timeoutMs;
+  let observed = null;
+  do {
+    const text = await capturePane(paneId, 80).catch(() => "");
+    observed = codexModeFromPaneText(text);
+    if (observed === desired) return observed;
+    if (timeoutMs <= 0) break;
+    await sleep(50);
+  } while (Date.now() < deadline);
+  return observed;
+}
+
 function planImplementationDismissWaitMs(env = process.env) {
   const parsed = Number(env.ORKESTR_PLAN_IMPLEMENTATION_DISMISS_WAIT_MS ?? 250);
   return Number.isFinite(parsed) ? Math.max(0, parsed) : 250;
@@ -1491,7 +1536,28 @@ export async function applyRuntimeCodexMode(threadId, mode, env = process.env, o
     error.statusCode = 400;
     throw error;
   }
-  const status = await runtimeStatus(threadId, env).catch(() => null);
+  let status = await runtimeStatus(threadId, env).catch(() => null);
+  let wokeRuntime = false;
+  if (!status?.paneId && options.wakeIfUnavailable === true) {
+    const woken = await wakeThread(threadId, { reason: options.wakeReason || "codex_mode_command" }, env).catch(() => null);
+    status = woken?.status || await runtimeStatus(threadId, env).catch(() => null);
+    wokeRuntime = Boolean(status?.paneId);
+  }
+  if (
+    status?.paneId &&
+    options.waitForReady === true &&
+    !status.promptReady &&
+    !status.working &&
+    !status.planImplementationMenuVisible &&
+    !status.needsResumeDirectoryConfirmation &&
+    !status.needsCodexUpdatePromptSkip
+  ) {
+    const timeoutMs = Number(options.readyTimeoutMs || env.ORKESTR_CODEX_MODE_WAKE_READY_TIMEOUT_MS || env.ORKESTR_WAKE_READY_TIMEOUT_MS || 60_000);
+    status = await waitForRuntimeReady(threadId, {
+      ...env,
+      ORKESTR_WAKE_READY_TIMEOUT_MS: String(Number.isFinite(timeoutMs) ? Math.max(0, timeoutMs) : 60_000),
+    }).catch(() => status);
+  }
   if (!status?.paneId) return { applied: false, changed: false, mode: desired, reason: "runtime_unavailable" };
   const beforeText = await capturePane(status.paneId, 80).catch(() => "");
   const beforeMode = codexModeFromPaneText(beforeText);
@@ -1518,6 +1584,8 @@ export async function applyRuntimeCodexMode(threadId, mode, env = process.env, o
         };
       }
       await execFileAsync("tmux", ["send-keys", "-t", dismissed.paneId || status.paneId, "BTab"]);
+      clearPaneProgressCache();
+      await waitForPaneCodexMode(dismissed.paneId || status.paneId, desired, env);
     }
     return {
       applied: true,
@@ -1529,7 +1597,14 @@ export async function applyRuntimeCodexMode(threadId, mode, env = process.env, o
     };
   }
   if (beforeMode === desired) {
-    return { applied: true, changed: false, mode: desired, previousMode: beforeMode, paneId: status.paneId };
+    return {
+      applied: true,
+      changed: false,
+      mode: desired,
+      previousMode: beforeMode,
+      paneId: status.paneId,
+      reason: wokeRuntime ? "woke_runtime_for_mode_command" : undefined,
+    };
   }
   if (options.requirePromptReady !== false && (!status.promptReady || status.working)) {
     return {
@@ -1548,7 +1623,16 @@ export async function applyRuntimeCodexMode(threadId, mode, env = process.env, o
     return { applied: false, changed: false, mode: desired, previousMode: null, paneId: status.paneId, reason: "runtime_mode_unknown" };
   }
   await execFileAsync("tmux", ["send-keys", "-t", status.paneId, "BTab"]);
-  return { applied: true, changed: true, mode: desired, previousMode: beforeMode, paneId: status.paneId };
+  clearPaneProgressCache();
+  await waitForPaneCodexMode(status.paneId, desired, env);
+  return {
+    applied: true,
+    changed: true,
+    mode: desired,
+    previousMode: beforeMode,
+    paneId: status.paneId,
+    reason: wokeRuntime ? "woke_runtime_for_mode_command" : undefined,
+  };
 }
 
 export async function implementRuntimePlan(threadId, env = process.env) {

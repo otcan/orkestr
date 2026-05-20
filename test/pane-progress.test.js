@@ -24,6 +24,20 @@ test("pane progress classifies visible background terminal work", () => {
   assert.equal(progress.promptReady, false);
 });
 
+test("pane progress keeps active foreground work when Codex redraws the prompt line", () => {
+  const progress = paneProgressFromText([
+    "◦ Working (2m 00s • esc to interrupt)",
+    "› Write tests for @filename",
+    "",
+    "  gpt-5.5 xhigh · /workspace/demo",
+  ].join("\n"), { tailLines: 10 });
+
+  assert.equal(progress.stateHint, "working");
+  assert.equal(progress.summary, "Working");
+  assert.equal(progress.working, true);
+  assert.equal(progress.promptReady, false);
+});
+
 test("pane progress classifies a ready prompt", () => {
   const progress = paneProgressFromText("All done.\n› \n", { tailLines: 10 });
 

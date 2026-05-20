@@ -937,6 +937,54 @@ test("runtime status reports visible background terminal work instead of ready",
   }
 });
 
+test("runtime status keeps active foreground work when Codex redraws the prompt line", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-foreground-work-prompt-"));
+  const fakeTmux = await createFakeTmux(home);
+  const priorPath = process.env.PATH;
+  const priorTmuxLog = process.env.TMUX_LOG;
+  const priorTmuxState = process.env.TMUX_STATE;
+  const priorTmuxCaptureText = process.env.TMUX_CAPTURE_TEXT;
+  process.env.PATH = `${fakeTmux.bin}:${priorPath || ""}`;
+  process.env.TMUX_LOG = fakeTmux.log;
+  process.env.TMUX_STATE = fakeTmux.state;
+  process.env.TMUX_CAPTURE_TEXT = [
+    "◦ Working (2m 00s • esc to interrupt)",
+    "› Write tests for @filename",
+    "",
+    "  gpt-5.5 xhigh · /workspace/test",
+  ].join("\n");
+
+  try {
+    const env = {
+      ORKESTR_HOME: path.join(home, "orkestr-home"),
+      HOME: path.join(home, "runtime-home"),
+      CODEX_HOME: path.join(home, "codex-home"),
+      PATH: process.env.PATH,
+      TMUX_LOG: fakeTmux.log,
+      TMUX_STATE: fakeTmux.state,
+      TMUX_CAPTURE_TEXT: process.env.TMUX_CAPTURE_TEXT,
+    };
+    await createThread({ id: "foreground-work-prompt-thread", name: "Foreground Work Prompt Thread" }, env);
+    await wakeThread("foreground-work-prompt-thread", { reason: "test" }, env);
+
+    const status = await runtimeStatus("foreground-work-prompt-thread", env);
+
+    assert.equal(status.state, "working");
+    assert.equal(status.working, true);
+    assert.equal(status.foregroundWorking, true);
+    assert.equal(status.backgroundWork, false);
+    assert.equal(status.typingActive, true);
+    assert.equal(status.promptReady, false);
+    assert.equal(status.progress.summary, "Working");
+    assert.equal(status.progress.stateHint, "working");
+  } finally {
+    restoreEnvValue("PATH", priorPath);
+    restoreEnvValue("TMUX_LOG", priorTmuxLog);
+    restoreEnvValue("TMUX_STATE", priorTmuxState);
+    restoreEnvValue("TMUX_CAPTURE_TEXT", priorTmuxCaptureText);
+  }
+});
+
 test("thread input delivery waits for runtime acknowledgement before completing", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-delivery-ack-"));
   const fakeTmux = await createFakeTmux(home);
@@ -2067,6 +2115,70 @@ test("codex mode endpoint toggles the attached Codex runtime", async () => {
   }
 });
 
+test("thread input /code wakes a sleeping plan runtime through the API", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-codex-mode-api-wake-"));
+  const fakeTmux = await createFakeTmux(home);
+  const captureFile = path.join(home, "pane.txt");
+  const afterBtabFile = path.join(home, "pane-after-btab.txt");
+  const priorHome = process.env.ORKESTR_HOME;
+  const priorRuntimeHome = process.env.HOME;
+  const priorCodexHome = process.env.CODEX_HOME;
+  const priorPath = process.env.PATH;
+  const priorTmuxLog = process.env.TMUX_LOG;
+  const priorTmuxState = process.env.TMUX_STATE;
+  const priorCaptureFile = process.env.TMUX_CAPTURE_FILE;
+  const priorAfterBtabFile = process.env.TMUX_CAPTURE_AFTER_BTAB_FILE;
+  const priorRecoverOnStart = process.env.ORKESTR_RECOVER_RUNNING_ON_START;
+  process.env.ORKESTR_HOME = path.join(home, "orkestr-home");
+  process.env.HOME = path.join(home, "runtime-home");
+  process.env.CODEX_HOME = path.join(home, "codex-home");
+  process.env.PATH = `${fakeTmux.bin}:${priorPath || ""}`;
+  process.env.TMUX_LOG = fakeTmux.log;
+  process.env.TMUX_STATE = fakeTmux.state;
+  process.env.TMUX_CAPTURE_FILE = captureFile;
+  process.env.TMUX_CAPTURE_AFTER_BTAB_FILE = afterBtabFile;
+  process.env.ORKESTR_RECOVER_RUNNING_ON_START = "0";
+
+  let server;
+  try {
+    await fs.writeFile(captureFile, "› \n\ngpt-5.5 xhigh · /workspace/demo            Plan mode\n", "utf8");
+    await fs.writeFile(afterBtabFile, "› \n\ngpt-5.5 xhigh · /workspace/demo\n", "utf8");
+    await createThread({ id: "codex-mode-api-wake-thread", name: "Codex Mode API Wake Thread", codexMode: "plan" });
+    server = await startServer({ port: 0, host: "127.0.0.1" });
+    const { port } = server.address();
+    const response = await fetch(`http://127.0.0.1:${port}/api/threads/codex-mode-api-wake-thread/input`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ text: "/code", source: "test", parseCommands: true }),
+    });
+    const payload = await response.json();
+    const log = await fs.readFile(fakeTmux.log, "utf8").catch(() => "");
+
+    assert.equal(response.status, 202);
+    assert.equal(payload.ok, true, JSON.stringify(payload));
+    assert.equal(payload.commandHandled, true);
+    assert.equal(payload.mode, "code");
+    assert.equal(payload.applied, true);
+    assert.equal(payload.message.state, "completed");
+    assert.equal(payload.message.observedVia, "orkestr_codex_mode_command");
+    assert.equal(payload.thread.codexMode, "code");
+    assert.equal(payload.thread.desiredCodexMode, null);
+    assert.match(log, /__CALL__\tnew-session\t-d\t-s\torkestr-codex-mode-api-wake-thread/, JSON.stringify(payload));
+    assert.match(log, /__CALL__\tsend-keys\t-t\t%42\tBTab/, JSON.stringify(payload));
+  } finally {
+    if (server) await new Promise((resolve) => server.close(resolve));
+    restoreEnvValue("ORKESTR_HOME", priorHome);
+    restoreEnvValue("HOME", priorRuntimeHome);
+    restoreEnvValue("CODEX_HOME", priorCodexHome);
+    restoreEnvValue("PATH", priorPath);
+    restoreEnvValue("TMUX_LOG", priorTmuxLog);
+    restoreEnvValue("TMUX_STATE", priorTmuxState);
+    restoreEnvValue("TMUX_CAPTURE_FILE", priorCaptureFile);
+    restoreEnvValue("TMUX_CAPTURE_AFTER_BTAB_FILE", priorAfterBtabFile);
+    restoreEnvValue("ORKESTR_RECOVER_RUNNING_ON_START", priorRecoverOnStart);
+  }
+});
+
 test("runtime sync restores persisted Codex plan mode after wake", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-codex-mode-restore-"));
   const fakeTmux = await createFakeTmux(home);
@@ -2190,6 +2302,72 @@ test("thread /plan command persists Codex mode for future wakes", async () => {
     assert.equal(thread.desiredCodexMode, null);
     assert.equal(thread.codexModeSource, "orkestr-command");
     assert.equal(messages.find((message) => message.text === "/plan").state, "completed");
+    assert.match(log, /__CALL__\tsend-keys\t-t\t%42\tBTab/);
+  } finally {
+    restoreEnvValue("ORKESTR_HOME", priorHome);
+    restoreEnvValue("HOME", priorRuntimeHome);
+    restoreEnvValue("CODEX_HOME", priorCodexHome);
+    restoreEnvValue("PATH", priorPath);
+    restoreEnvValue("TMUX_LOG", priorTmuxLog);
+    restoreEnvValue("TMUX_STATE", priorTmuxState);
+    restoreEnvValue("TMUX_CAPTURE_FILE", priorCaptureFile);
+    restoreEnvValue("TMUX_CAPTURE_AFTER_BTAB_FILE", priorAfterBtabFile);
+  }
+});
+
+test("thread /code command wakes a sleeping plan runtime before switching mode", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-codex-mode-command-wake-"));
+  const fakeTmux = await createFakeTmux(home);
+  const captureFile = path.join(home, "pane.txt");
+  const afterBtabFile = path.join(home, "pane-after-btab.txt");
+  const priorHome = process.env.ORKESTR_HOME;
+  const priorRuntimeHome = process.env.HOME;
+  const priorCodexHome = process.env.CODEX_HOME;
+  const priorPath = process.env.PATH;
+  const priorTmuxLog = process.env.TMUX_LOG;
+  const priorTmuxState = process.env.TMUX_STATE;
+  const priorCaptureFile = process.env.TMUX_CAPTURE_FILE;
+  const priorAfterBtabFile = process.env.TMUX_CAPTURE_AFTER_BTAB_FILE;
+  process.env.ORKESTR_HOME = path.join(home, "orkestr-home");
+  process.env.HOME = path.join(home, "runtime-home");
+  process.env.CODEX_HOME = path.join(home, "codex-home");
+  process.env.PATH = `${fakeTmux.bin}:${priorPath || ""}`;
+  process.env.TMUX_LOG = fakeTmux.log;
+  process.env.TMUX_STATE = fakeTmux.state;
+  process.env.TMUX_CAPTURE_FILE = captureFile;
+  process.env.TMUX_CAPTURE_AFTER_BTAB_FILE = afterBtabFile;
+
+  try {
+    await fs.writeFile(captureFile, "› \n\ngpt-5.5 xhigh · /workspace/demo            Plan mode\n", "utf8");
+    await fs.writeFile(afterBtabFile, "› \n\ngpt-5.5 xhigh · /workspace/demo\n", "utf8");
+    const env = {
+      ORKESTR_HOME: process.env.ORKESTR_HOME,
+      HOME: process.env.HOME,
+      CODEX_HOME: process.env.CODEX_HOME,
+      PATH: process.env.PATH,
+      TMUX_LOG: fakeTmux.log,
+      TMUX_STATE: fakeTmux.state,
+      TMUX_CAPTURE_FILE: captureFile,
+      TMUX_CAPTURE_AFTER_BTAB_FILE: afterBtabFile,
+    };
+    await createThread({ id: "codex-mode-command-wake-thread", name: "Codex Mode Command Wake Thread", codexMode: "plan" }, env);
+    const command = await appendThreadMessage("codex-mode-command-wake-thread", {
+      role: "user",
+      source: "whatsapp",
+      text: "/code",
+      state: "queued",
+    }, env);
+
+    assert.deepEqual(await deliverPendingThreadInputs("codex-mode-command-wake-thread", env), [command.id]);
+    const thread = await getThread("codex-mode-command-wake-thread", env);
+    const messages = await listThreadMessages("codex-mode-command-wake-thread", env);
+    const log = await fs.readFile(fakeTmux.log, "utf8");
+
+    assert.equal(thread.codexMode, "code");
+    assert.equal(thread.desiredCodexMode, null);
+    assert.equal(messages.find((message) => message.id === command.id)?.state, "completed");
+    assert.equal(messages.find((message) => message.id === command.id)?.observedVia, "orkestr_codex_mode_command");
+    assert.match(log, /__CALL__\tnew-session\t-d\t-s\torkestr-codex-mode-command-wake-thread/);
     assert.match(log, /__CALL__\tsend-keys\t-t\t%42\tBTab/);
   } finally {
     restoreEnvValue("ORKESTR_HOME", priorHome);
