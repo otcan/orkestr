@@ -937,6 +937,54 @@ test("runtime status reports visible background terminal work instead of ready",
   }
 });
 
+test("runtime status keeps active foreground work when Codex redraws the prompt line", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-foreground-work-prompt-"));
+  const fakeTmux = await createFakeTmux(home);
+  const priorPath = process.env.PATH;
+  const priorTmuxLog = process.env.TMUX_LOG;
+  const priorTmuxState = process.env.TMUX_STATE;
+  const priorTmuxCaptureText = process.env.TMUX_CAPTURE_TEXT;
+  process.env.PATH = `${fakeTmux.bin}:${priorPath || ""}`;
+  process.env.TMUX_LOG = fakeTmux.log;
+  process.env.TMUX_STATE = fakeTmux.state;
+  process.env.TMUX_CAPTURE_TEXT = [
+    "◦ Working (2m 00s • esc to interrupt)",
+    "› Write tests for @filename",
+    "",
+    "  gpt-5.5 xhigh · /workspace/test",
+  ].join("\n");
+
+  try {
+    const env = {
+      ORKESTR_HOME: path.join(home, "orkestr-home"),
+      HOME: path.join(home, "runtime-home"),
+      CODEX_HOME: path.join(home, "codex-home"),
+      PATH: process.env.PATH,
+      TMUX_LOG: fakeTmux.log,
+      TMUX_STATE: fakeTmux.state,
+      TMUX_CAPTURE_TEXT: process.env.TMUX_CAPTURE_TEXT,
+    };
+    await createThread({ id: "foreground-work-prompt-thread", name: "Foreground Work Prompt Thread" }, env);
+    await wakeThread("foreground-work-prompt-thread", { reason: "test" }, env);
+
+    const status = await runtimeStatus("foreground-work-prompt-thread", env);
+
+    assert.equal(status.state, "working");
+    assert.equal(status.working, true);
+    assert.equal(status.foregroundWorking, true);
+    assert.equal(status.backgroundWork, false);
+    assert.equal(status.typingActive, true);
+    assert.equal(status.promptReady, false);
+    assert.equal(status.progress.summary, "Working");
+    assert.equal(status.progress.stateHint, "working");
+  } finally {
+    restoreEnvValue("PATH", priorPath);
+    restoreEnvValue("TMUX_LOG", priorTmuxLog);
+    restoreEnvValue("TMUX_STATE", priorTmuxState);
+    restoreEnvValue("TMUX_CAPTURE_TEXT", priorTmuxCaptureText);
+  }
+});
+
 test("thread input delivery waits for runtime acknowledgement before completing", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-delivery-ack-"));
   const fakeTmux = await createFakeTmux(home);

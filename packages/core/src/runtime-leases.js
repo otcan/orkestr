@@ -31,6 +31,7 @@ const proposedPlanOpenTagPattern = /^\s*<\s*proposed[\s_-]*plan\s*>/i;
 const deliveryRetryDefaultsMs = [1000, 3000, 8000, 20_000, 60_000];
 const defaultRuntimeIdleSleepMs = 15 * 60 * 1000;
 const defaultRolloutSyncLookbackBytes = 2 * 1024 * 1024;
+const defaultWorkingAfterPromptMs = 30 * 60 * 1000;
 const whatsappSources = new Set(["whatsapp", "whatsapp_inbound", "whatsapp_client"]);
 
 function nowIso() {
@@ -326,6 +327,26 @@ function paneWorkingLine(line) {
   );
 }
 
+function paneWorkingLineDurationMs(line) {
+  const match = String(line || "").match(/\(([^)]*)\)/);
+  if (!match) return null;
+  let total = 0;
+  for (const unitMatch of match[1].matchAll(/(\d+(?:\.\d+)?)\s*(h|hr|hrs|hour|hours|m|min|mins|minute|minutes|s|sec|secs|second|seconds)\b/gi)) {
+    const value = Number(unitMatch[1]);
+    if (!Number.isFinite(value)) continue;
+    const unit = unitMatch[2].toLowerCase();
+    if (unit.startsWith("h")) total += value * 60 * 60 * 1000;
+    else if (unit.startsWith("m")) total += value * 60 * 1000;
+    else total += value * 1000;
+  }
+  return total > 0 ? total : null;
+}
+
+function paneWorkingLineStillActiveAfterPrompt(line, distanceFromTail) {
+  const duration = paneWorkingLineDurationMs(line);
+  return duration !== null && duration <= defaultWorkingAfterPromptMs && distanceFromTail <= 6;
+}
+
 function panePromptLine(line) {
   return /^(?:›|>)(?:\s|$)/.test(line) && !/^(?:›|>)\s*\d+[.)]/.test(line);
 }
@@ -336,7 +357,8 @@ function paneWorking(text) {
   const lastWorkingIndex = lines.findLastIndex(paneWorkingLine);
   if (lastWorkingIndex < 0) return false;
   const lastPromptIndex = lines.findLastIndex(panePromptLine);
-  return lastWorkingIndex > lastPromptIndex;
+  if (lastWorkingIndex > lastPromptIndex) return true;
+  return paneWorkingLineStillActiveAfterPrompt(lines[lastWorkingIndex], lines.length - lastWorkingIndex);
 }
 
 function panePromptReady(text) {
