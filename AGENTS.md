@@ -17,3 +17,28 @@ Rules:
 - Keep the install path boring: clone/install/start, open setup wizard, connect accounts, create timer.
 - Keep files small and purpose-specific. If a file is approaching 500 lines, split new behavior into a separate module, component, helper, controller, or template when it can be managed cleanly.
 - Do not keep extending already-large files with unrelated UI, backend, routing, or integration logic. Exceed 500 lines only when splitting would create artificial fragmentation or a risky refactor.
+
+## Runtime Orientation for Agents
+
+Orkestr-managed Codex sessions should discover live context dynamically instead
+of relying on static thread or workspace text in this file.
+
+- Run `orkestr whereiam --json` from the current shell to identify the active
+  Orkestr thread, runtime workspace, repository path, branch, tmux session, and
+  safe capability hints.
+- API callers can use `GET /api/whereiam?cwd=<absolute-current-directory>`.
+  A plain HTTP request cannot reveal the caller's working directory, so pass
+  `cwd` explicitly.
+- Use `orkestr list`, `orkestr send <thread> "<message>"`, `orkestr wake
+  <thread>`, and `orkestr sleep <thread>` for thread control.
+- Use `orkestr timers list`, `orkestr timers run <timer-id>`, and `orkestr
+  doctor timers` for timers.
+- Use Orkestr APIs for browser and desktop state: `GET /api/browser-sessions`,
+  `GET /api/desktops/leases`, `POST /api/desktops/:slug/acquire`, heartbeat,
+  and release.
+- Use connector status APIs for Gmail and WhatsApp. Do not read Gmail tokens,
+  WhatsApp session state, browser profiles, or files under `ORKESTR_HOME/secrets`
+  directly.
+- When a browser desktop is needed, acquire the desktop lease first and release
+  it when finished. Do not assume a desktop is free because a profile directory
+  exists.

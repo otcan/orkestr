@@ -31,7 +31,7 @@ function fakeFetch(routes, seen = []) {
     const parsed = new URL(url);
     const method = String(options.method || "GET").toUpperCase();
     const key = `${method} ${parsed.pathname}`;
-    seen.push({ key, body: options.body ? JSON.parse(options.body) : null });
+    seen.push({ key, search: parsed.search, body: options.body ? JSON.parse(options.body) : null });
     const route = routes[key];
     if (!route) return jsonResponse({ error: `missing route: ${key}` }, 404);
     return jsonResponse(typeof route === "function" ? route(seen.at(-1)) : route);
@@ -54,6 +54,30 @@ test("CLI lists threads from the public API", async () => {
   assert.match(stdout.text(), /Demo/);
   assert.match(stdout.text(), /ready/);
   assert.match(stdout.text(), /thread-1/);
+});
+
+test("CLI whereiam sends the current directory to the public API", async () => {
+  const stdout = capture();
+  const seen = [];
+  const cwd = "/workspace/demo";
+  const code = await runCli(["whereiam", "--cwd", cwd], {
+    cwd,
+    stdout,
+    stderr: capture(),
+    fetchImpl: fakeFetch({
+      "GET /api/whereiam": {
+        ok: true,
+        thread: { id: "thread-1", displayName: "Demo", state: "ready" },
+        workspace: { cwd, runtimeWorkspace: "/workspace/demo", repoPath: "/repo/demo" },
+        runtime: { sessionName: "orkestr-demo", paneId: "%42" },
+      },
+    }, seen),
+  });
+
+  assert.equal(code, 0);
+  assert.equal(seen[0].search, `?cwd=${encodeURIComponent(cwd)}`);
+  assert.match(stdout.text(), /Thread: Demo \(thread-1\)/);
+  assert.match(stdout.text(), /Repo: \/repo\/demo/);
 });
 
 test("CLI lists timers from the public API", async () => {
