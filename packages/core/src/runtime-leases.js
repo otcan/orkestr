@@ -1027,6 +1027,77 @@ async function completeResetCommand(thread, message, hard = false, env = process
   return updated.id;
 }
 
+async function completeCodexModeCommand(thread, message, mode, env = process.env) {
+  const result = await applyRuntimeCodexMode(thread.id, mode, env);
+  const applied = result.applied === true;
+  const updated = await updateThreadMessage(thread.id, message.id, {
+    state: applied ? "completed" : "failed",
+    deliveryState: applied ? "delivered" : "failed",
+    observedVia: applied ? "orkestr_codex_mode_command" : "orkestr_codex_mode_not_applied",
+    deliveredAt: applied ? nowIso() : "",
+    error: applied ? null : result.reason || "Codex mode could not be applied.",
+  }, env);
+  await appendEvent({
+    type: "thread_codex_mode_command",
+    threadId: thread.id,
+    messageId: message.id,
+    source: message.source || null,
+    mode,
+    applied,
+    reason: result.reason || null,
+  }, env).catch(() => {});
+  return updated.id;
+}
+
+function immediateThreadCommand(message) {
+  if (!message || message.role !== "user") return null;
+  if (!["queued", "pending_delivery"].includes(String(message.state || ""))) return null;
+  const parsed = parseThreadInputCommand({ text: message.text });
+  if (parsed.command === "stop" || parsed.command === "reset" || parsed.command === "hard_reset") return parsed;
+  if ((parsed.command === "plan" || parsed.command === "code") && !parsed.text) return parsed;
+  return null;
+}
+
+async function completeImmediateThreadCommand(thread, message, parsed, env = process.env) {
+  if (parsed.command === "stop") return completeStopCommand(thread, message, env);
+  if (parsed.command === "reset") return completeResetCommand(thread, message, false, env);
+  if (parsed.command === "hard_reset") return completeResetCommand(thread, message, true, env);
+  if (parsed.command === "plan" || parsed.command === "code") {
+    return completeCodexModeCommand(thread, message, parsed.command, env);
+  }
+  return null;
+}
+
+async function supersedeAwaitingAcksForControlCommand(thread, messages, controlMessage, parsed, env = process.env) {
+  if (!["stop", "reset", "hard_reset"].includes(parsed?.command)) return;
+  const controlCursor = messageCursor(controlMessage);
+  const controlMs = messageTimeMs(controlMessage);
+  const commandLabel = parsed.rawCommand ? `/${parsed.rawCommand}` : `/${parsed.command}`;
+  const errorText = `Superseded by ${commandLabel}.`;
+  for (const message of messages) {
+    if (message?.id === controlMessage.id || message?.role !== "user" || message?.state !== "awaiting_ack") continue;
+    const candidateCursor = messageCursor(message);
+    if (controlCursor && candidateCursor && candidateCursor > controlCursor) continue;
+    const candidateMs = messageTimeMs(message);
+    if (!controlCursor && controlMs && candidateMs && candidateMs > controlMs) continue;
+    await updateThreadMessage(thread.id, message.id, {
+      state: "failed",
+      deliveryState: "superseded",
+      deliveryFailedAt: nowIso(),
+      observedVia: "thread_control_command_superseded_ack",
+      error: errorText,
+    }, env);
+    await appendEvent({
+      type: "thread_input_superseded_by_control_command",
+      threadId: thread.id,
+      messageId: message.id,
+      controlMessageId: controlMessage.id,
+      command: parsed.command,
+      rawCommand: parsed.rawCommand || parsed.command,
+    }, env).catch(() => {});
+  }
+}
+
 function latestMessageActivityMs(messages = []) {
   return messages.reduce((latest, message) => Math.max(
     latest,
@@ -1363,6 +1434,15 @@ function staleAckRecoveryAttempts(env = process.env) {
   return Number.isFinite(parsed) ? Math.max(0, parsed) : 3;
 }
 
+function staleAckRecoveryMax(env = process.env) {
+  const parsed = Number(env.ORKESTR_DELIVERY_STALE_ACK_RECOVERY_MAX ?? 1);
+  return Number.isFinite(parsed) ? Math.max(0, parsed) : 1;
+}
+
+function staleAckRecoveryCount(message) {
+  return Math.max(0, Number(message?.deliveryStaleRecoveryCount || 0) || 0);
+}
+
 function compactDeliveryText(value) {
   return String(value || "").replace(/\s+/g, " ").trim();
 }
@@ -1505,9 +1585,32 @@ async function recoverStaleThreadInputAck(thread, message, status, env = process
     const sentOffset = Number(message.deliveryRolloutOffset || 0) || 0;
     if (Number(stats?.size || 0) > sentOffset) return false;
   }
+  const recoveryCount = staleAckRecoveryCount(message);
+  const maxRecoveries = staleAckRecoveryMax(env);
+  if (recoveryCount >= maxRecoveries || deliveryAttempt(message) > threshold + maxRecoveries) {
+    const errorText = "Thread input was not observed after stale-ack recovery; failing it to unblock later input.";
+    await updateThreadMessage(thread.id, message.id, {
+      state: "failed",
+      deliveryState: "failed",
+      deliveryFailedAt: nowIso(),
+      observedVia: "stale_ack_recovery_exhausted",
+      error: errorText,
+    }, env);
+    await appendEvent({
+      type: "thread_input_stale_ack_recovery_exhausted",
+      threadId: thread.id,
+      messageId: message.id,
+      paneId: status.paneId,
+      attempt: deliveryAttempt(message),
+      recoveryCount,
+      maxRecoveries,
+    }, env).catch(() => {});
+    return true;
+  }
   await updateThreadMessage(thread.id, message.id, {
     state: "queued",
     deliveryState: "recovering_stale_ack",
+    deliveryStaleRecoveryCount: recoveryCount + 1,
     deliveryNextAttemptAt: null,
     error: null,
   }, env);
@@ -1799,6 +1902,15 @@ export async function deliverPendingThreadInputs(threadId, env = process.env) {
   try {
     for (;;) {
       const messages = await listThreadMessages(thread.id, env);
+      const immediate = messages
+        .map((message) => ({ message, parsed: immediateThreadCommand(message) }))
+        .find((item) => item.parsed);
+      if (immediate) {
+        await supersedeAwaitingAcksForControlCommand(thread, messages, immediate.message, immediate.parsed, env);
+        const completed = await completeImmediateThreadCommand(thread, immediate.message, immediate.parsed, env);
+        if (completed) delivered.push(completed);
+        continue;
+      }
       const awaitingAck = messages.find((message) => message.role === "user" && message.state === "awaiting_ack");
       if (awaitingAck) {
         const status = await runtimeStatus(thread.id, env).catch(() => null);
@@ -1847,6 +1959,10 @@ export async function deliverPendingThreadInputs(threadId, env = process.env) {
       }
       if (parsedCommand.command === "hard_reset") {
         delivered.push(await completeResetCommand(thread, next, true, env));
+        continue;
+      }
+      if ((parsedCommand.command === "plan" || parsedCommand.command === "code") && !parsedCommand.text) {
+        delivered.push(await completeCodexModeCommand(thread, next, parsedCommand.command, env));
         continue;
       }
       await updateThreadMessage(thread.id, next.id, { state: "pending_delivery", deliveryState: "waking" }, env);

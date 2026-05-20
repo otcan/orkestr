@@ -2287,6 +2287,11 @@ test("thread input commands strip /now before runtime delivery", () => {
     rawCommand: "reset",
     text: "",
   });
+  assert.deepEqual(parseThreadInputCommand({ text: "/restart" }), {
+    command: "reset",
+    rawCommand: "restart",
+    text: "",
+  });
   assert.deepEqual(parseThreadInputCommand({ text: "/hard_reset" }), {
     command: "hard_reset",
     rawCommand: "hard_reset",
@@ -2295,6 +2300,16 @@ test("thread input commands strip /now before runtime delivery", () => {
   assert.deepEqual(parseThreadInputCommand({ text: "/hard-reset" }), {
     command: "hard_reset",
     rawCommand: "hard-reset",
+    text: "",
+  });
+  assert.deepEqual(parseThreadInputCommand({ text: "/plan write tests" }), {
+    command: "plan",
+    rawCommand: "plan",
+    text: "write tests",
+  });
+  assert.deepEqual(parseThreadInputCommand({ text: "/code" }), {
+    command: "code",
+    rawCommand: "code",
     text: "",
   });
   assert.equal(parseThreadInputCommand({ text: "normal message" }).command, null);

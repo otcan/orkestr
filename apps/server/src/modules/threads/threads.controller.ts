@@ -557,6 +557,39 @@ export class ThreadsController {
         thread: await threadRuntimeSummary((result as any).thread || thread, await listThreadMessages(thread.id)),
       };
     }
+    if (parsedCommand.command === "plan" || parsedCommand.command === "code") {
+      const mode = parsedCommand.command;
+      const modePayload = await this.codexMode(thread.id, { mode });
+      const text = String(parsedCommand.text || "").trim();
+      if (!text) {
+        const message = await appendThreadMessage(thread.id, {
+          role: "user",
+          source: body.source || "codex_mode_command",
+          text: `/${mode}`,
+          state: (modePayload as any).applied ? "completed" : "failed",
+          deliveryState: (modePayload as any).applied ? "delivered" : "failed",
+          observedVia: (modePayload as any).applied ? "orkestr_codex_mode_command" : "orkestr_codex_mode_not_applied",
+          deliveredAt: (modePayload as any).applied ? new Date().toISOString() : "",
+          error: (modePayload as any).applied ? "" : ((modePayload as any).runtimeMode?.reason || "Codex mode could not be applied."),
+        });
+        return {
+          ok: Boolean((modePayload as any).applied),
+          commandHandled: true,
+          mode,
+          applied: Boolean((modePayload as any).applied),
+          message,
+          queued: false,
+          observed: true,
+          observedVia: message.observedVia,
+          replyText: (modePayload as any).applied
+            ? `Codex ${mode} mode requested.`
+            : `Could not switch Codex mode: ${message.error}`,
+          runtimeMode: (modePayload as any).runtimeMode,
+          thread: (modePayload as any).thread,
+        };
+      }
+      body = { ...body, text };
+    }
     if (parsedCommand.command === "implement") {
       const result = await implementRuntimePlan(thread.id);
       const implemented = Boolean(result.implemented);
@@ -954,6 +987,8 @@ export class ThreadsController {
       responderContactId: optionalBodyString(body, "responderContactId", current.responderContactId || "") || null,
       generated: optionalBodyBoolean(body, "generated", current.generated === true),
       outboundAccountId: optionalBodyString(body, "outboundAccountId", current.outboundAccountId || "") || null,
+      ownerAuthorTags: optionalBodyStringArray(body, "ownerAuthorTags", current.ownerAuthorTags || []),
+      trustedOverrideAuthorTags: optionalBodyStringArray(body, "trustedOverrideAuthorTags", current.trustedOverrideAuthorTags || []),
       updatedAt: new Date().toISOString(),
     };
     const updated = await updateThread(thread.id, { binding, bindingName: binding.displayName });
