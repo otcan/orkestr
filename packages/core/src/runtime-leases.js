@@ -8,7 +8,7 @@ import { dataPaths, ensureDataDirs } from "../../storage/src/paths.js";
 import { appendEvent, readJson, writeJson } from "../../storage/src/store.js";
 import { ensureRuntimeAgentsFile } from "./agent-context.js";
 import { assertCodexAuthenticated } from "../../connectors/src/codex.js";
-import { publicPaneProgress, samplePaneProgress } from "./pane-progress.js";
+import { paneBackgroundWork, publicPaneProgress, samplePaneProgress } from "./pane-progress.js";
 import {
   appendThreadMessage,
   getThread,
@@ -484,10 +484,11 @@ export async function runtimeStatus(threadId, env = process.env, messagesOverrid
   const needsResumeDirectoryConfirmation = paneResumeDirectoryPrompt(paneText);
   const codexUpdatePromptChoice = paneCodexUpdatePromptChoice(paneText);
   const needsCodexUpdatePromptSkip = Boolean(codexUpdatePromptChoice);
-  const paneWorkingCandidate = paneWorking(paneText);
-  const promptReadyCandidate = !paneWorkingCandidate && panePromptReady(paneText);
-  const working = paneWorkingCandidate || (!promptReadyCandidate && runningCount > 0);
-  const promptReady = promptReadyCandidate && !working && !needsResumeDirectoryConfirmation && !needsCodexUpdatePromptSkip;
+  const backgroundWork = paneBackgroundWork(paneText) || progressSample?.backgroundWork === true;
+  const foregroundWorking = paneWorking(paneText) && !backgroundWork;
+  const promptReadyCandidate = panePromptReady(paneText);
+  const working = foregroundWorking || backgroundWork || (!promptReadyCandidate && runningCount > 0);
+  const promptReady = promptReadyCandidate && !foregroundWorking && !needsResumeDirectoryConfirmation && !needsCodexUpdatePromptSkip;
   const recentlyStarted = Date.now() - (Date.parse(lease.startedAt || "") || Date.now()) < 20_000;
   const state = working
     ? "working"
@@ -510,9 +511,9 @@ export async function runtimeStatus(threadId, env = process.env, messagesOverrid
     needsCodexUpdatePromptSkip,
     codexUpdatePromptChoice,
     working,
-    foregroundWorking: working,
-    typingActive: working,
-    backgroundWork: false,
+    foregroundWorking,
+    typingActive: foregroundWorking,
+    backgroundWork,
     pendingCount,
     awaitingAckCount,
     nextDeliveryAttemptAt,

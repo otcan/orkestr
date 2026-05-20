@@ -49,6 +49,10 @@ export function paneWorkingLine(line) {
   );
 }
 
+export function paneBackgroundTerminalLine(line) {
+  return /^[•◦]?\s*Waiting for background terminal\b/i.test(String(line || "").trim());
+}
+
 export function panePromptLine(line) {
   return /^(?:›|>)(?:\s|$)/.test(line) && !/^(?:›|>)\s*\d+[.)]/.test(line);
 }
@@ -113,6 +117,14 @@ export function paneWorking(text) {
   return lastWorkingIndex > lastPromptIndex;
 }
 
+export function paneBackgroundWork(text) {
+  const lines = normalizedLines(text).map((line) => line.trim()).slice(-20);
+  const lastBackgroundIndex = lines.findLastIndex(paneBackgroundTerminalLine);
+  if (lastBackgroundIndex < 0) return false;
+  const lastPromptIndex = lines.findLastIndex(panePromptLine);
+  return lastBackgroundIndex > lastPromptIndex || lastBackgroundIndex >= Math.max(0, lines.length - 6);
+}
+
 export function panePromptReady(text) {
   const lines = normalizedLines(text).map((line) => line.trim()).slice(-8);
   return lines.some(panePromptLine);
@@ -145,7 +157,8 @@ export function paneProgressFromText(text, options = {}) {
   const needsResumeDirectoryConfirmation = paneResumeDirectoryPrompt(text);
   const codexUpdatePromptChoice = paneCodexUpdatePromptChoice(text);
   const needsCodexUpdatePromptSkip = Boolean(codexUpdatePromptChoice);
-  const working = paneWorking(text);
+  const backgroundWork = paneBackgroundWork(text);
+  const working = paneWorking(text) || backgroundWork;
   const promptReady = !working && panePromptReady(text);
   let stateHint = "unknown";
   if (paneHasRecentError(tailLines)) stateHint = "error";
@@ -167,6 +180,7 @@ export function paneProgressFromText(text, options = {}) {
     tailHash: tailHash(tailLines),
     promptReady,
     working,
+    backgroundWork,
     codexMode,
     planImplementationReady,
     planImplementationMenuVisible,

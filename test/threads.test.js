@@ -888,6 +888,52 @@ test("runtime status ignores prose mentioning interrupt keys above a live prompt
   }
 });
 
+test("runtime status reports visible background terminal work instead of ready", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-background-terminal-work-"));
+  const fakeTmux = await createFakeTmux(home);
+  const priorPath = process.env.PATH;
+  const priorTmuxLog = process.env.TMUX_LOG;
+  const priorTmuxState = process.env.TMUX_STATE;
+  const priorTmuxCaptureText = process.env.TMUX_CAPTURE_TEXT;
+  process.env.PATH = `${fakeTmux.bin}:${priorPath || ""}`;
+  process.env.TMUX_LOG = fakeTmux.log;
+  process.env.TMUX_STATE = fakeTmux.state;
+  process.env.TMUX_CAPTURE_TEXT = [
+    "◦ Waiting for background terminal (45s • esc to interrupt)",
+    "› Implement {feature}",
+    "",
+    "  gpt-5.5 xhigh · /workspace/test",
+  ].join("\n");
+
+  try {
+    const env = {
+      ORKESTR_HOME: path.join(home, "orkestr-home"),
+      HOME: path.join(home, "runtime-home"),
+      CODEX_HOME: path.join(home, "codex-home"),
+      PATH: process.env.PATH,
+      TMUX_LOG: fakeTmux.log,
+      TMUX_STATE: fakeTmux.state,
+      TMUX_CAPTURE_TEXT: process.env.TMUX_CAPTURE_TEXT,
+    };
+    await createThread({ id: "background-terminal-work-thread", name: "Background Terminal Work Thread" }, env);
+    await wakeThread("background-terminal-work-thread", { reason: "test" }, env);
+
+    const status = await runtimeStatus("background-terminal-work-thread", env);
+
+    assert.equal(status.state, "working");
+    assert.equal(status.working, true);
+    assert.equal(status.backgroundWork, true);
+    assert.equal(status.foregroundWorking, false);
+    assert.equal(status.typingActive, false);
+    assert.equal(status.promptReady, true);
+  } finally {
+    restoreEnvValue("PATH", priorPath);
+    restoreEnvValue("TMUX_LOG", priorTmuxLog);
+    restoreEnvValue("TMUX_STATE", priorTmuxState);
+    restoreEnvValue("TMUX_CAPTURE_TEXT", priorTmuxCaptureText);
+  }
+});
+
 test("thread input delivery waits for runtime acknowledgement before completing", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-delivery-ack-"));
   const fakeTmux = await createFakeTmux(home);

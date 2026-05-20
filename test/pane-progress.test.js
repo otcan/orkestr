@@ -10,6 +10,20 @@ test("pane progress classifies active Codex work from the pane tail", () => {
   assert.equal(progress.working, true);
 });
 
+test("pane progress classifies visible background terminal work", () => {
+  const progress = paneProgressFromText([
+    "◦ Waiting for background terminal (45s • esc to interrupt)",
+    "› Implement {feature}",
+    "",
+    "  gpt-5.5 xhigh · /workspace/demo",
+  ].join("\n"), { tailLines: 10 });
+
+  assert.equal(progress.stateHint, "working");
+  assert.equal(progress.working, true);
+  assert.equal(progress.backgroundWork, true);
+  assert.equal(progress.promptReady, false);
+});
+
 test("pane progress classifies a ready prompt", () => {
   const progress = paneProgressFromText("All done.\n› \n", { tailLines: 10 });
 
