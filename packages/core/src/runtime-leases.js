@@ -1535,8 +1535,8 @@ function deliveryDueInMs(message) {
 }
 
 function staleAckRecoveryAttempts(env = process.env) {
-  const parsed = Number(env.ORKESTR_DELIVERY_STALE_ACK_RECOVERY_ATTEMPTS ?? 3);
-  return Number.isFinite(parsed) ? Math.max(0, parsed) : 3;
+  const parsed = Number(env.ORKESTR_DELIVERY_STALE_ACK_RECOVERY_ATTEMPTS ?? 5);
+  return Number.isFinite(parsed) ? Math.max(0, parsed) : 5;
 }
 
 function staleAckRecoveryMax(env = process.env) {
