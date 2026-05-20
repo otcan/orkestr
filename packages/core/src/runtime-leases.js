@@ -1424,6 +1424,11 @@ function submitDelayMs(env = process.env) {
   return Math.max(0, Number(env.ORKESTR_RUNTIME_SUBMIT_DELAY_MS || 250) || 0);
 }
 
+function fileSubmitDelayMs(env = process.env) {
+  const parsed = Number(env.ORKESTR_TMUX_FILE_SUBMIT_DELAY_MS ?? 750);
+  return Number.isFinite(parsed) ? Math.max(0, parsed) : 750;
+}
+
 function tmuxInlineCharLimit(env = process.env) {
   const parsed = Number(env.ORKESTR_TMUX_INLINE_CHAR_LIMIT || 800);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : 800;
@@ -1597,6 +1602,16 @@ function paneContainsDeliveryText(paneText, messageText) {
   return compactDeliveryText(promptText).includes(sample);
 }
 
+function paneContainsMessageDeliveryPrompt(paneText, message) {
+  if (paneContainsDeliveryText(paneText, inputTextForMessage(message))) return true;
+  if (String(message?.deliveryInputMode || "") !== "file") return false;
+  const hash = String(message?.deliveryPayloadHash || "").trim();
+  const bytes = Number(message?.deliveryInputBytes || 0) || 0;
+  if (!hash || !bytes) return false;
+  const compact = compactDeliveryText(paneText);
+  return compact.includes(`Bytes: ${bytes}`) && compact.includes(`SHA-256: ${hash}`);
+}
+
 function paneRejectedSlashCommand(paneText, command) {
   if (!command) return false;
   const pattern = new RegExp(`Unrecognized command ['"]${escapeRegex(command)}['"]`, "i");
@@ -1700,7 +1715,7 @@ async function failRejectedThreadInputDelivery(thread, message, status, env = pr
 async function stuckPromptDeliveryEvidence(message, status) {
   if (message?.state !== "awaiting_ack" || !status?.paneId) return null;
   const paneText = await capturePane(status.paneId, 80).catch(() => "");
-  if (!paneContainsDeliveryText(paneText, inputTextForMessage(message))) return null;
+  if (!paneContainsMessageDeliveryPrompt(paneText, message)) return null;
   return {
     observedVia: "input_stuck_at_prompt",
     error: "Message was pasted into Codex but was not accepted/submitted. Orkestr stopped retrying to avoid duplicate input.",
@@ -1709,6 +1724,56 @@ async function stuckPromptDeliveryEvidence(message, status) {
 
 async function failStuckPromptThreadInputDelivery(thread, message, status, env = process.env) {
   return failThreadInputDelivery(thread, message, await stuckPromptDeliveryEvidence(message, status), status, env);
+}
+
+async function submitStuckFilePromptDelivery(thread, message, status, env = process.env) {
+  if (message?.state !== "awaiting_ack" || String(message?.deliveryInputMode || "") !== "file" || !status?.paneId) return null;
+  const paneText = await capturePane(status.paneId, 80).catch(() => "");
+  if (!paneContainsMessageDeliveryPrompt(paneText, message)) return null;
+  const attempt = deliveryAttempt(message) + 1;
+  const sentAt = nowIso();
+  const nextAttemptAt = isoAfter(deliveryRetryBackoffMs(attempt, env));
+  const rollout = await rolloutSnapshotForDelivery(thread, status.lease, env);
+  await updateThreadMessage(thread.id, message.id, {
+    state: "pending_delivery",
+    deliveryState: "submitting_existing_file_prompt",
+    deliveryAttempt: attempt,
+    deliveryAckCheckCount: 0,
+    deliveryLastAttemptAt: sentAt,
+    deliveryNextAttemptAt: nextAttemptAt,
+    deliveryPaneId: status.paneId,
+    runtimeLeaseId: status.lease?.id || null,
+    ...rollout,
+    error: null,
+  }, env);
+  for (const key of submitKeys(env)) {
+    await execFileAsync("tmux", ["send-keys", "-t", status.paneId, key]);
+  }
+  await updateThreadMessage(thread.id, message.id, {
+    state: "awaiting_ack",
+    deliveryState: "awaiting_ack",
+    deliveryAttempt: attempt,
+    deliveryAckCheckCount: 0,
+    deliveryLastAttemptAt: sentAt,
+    deliveryNextAttemptAt: nextAttemptAt,
+    observedVia: "tmux_submit_existing_file_pending_ack",
+    deliveryPaneId: status.paneId,
+    runtimeLeaseId: status.lease?.id || null,
+    ...rollout,
+    error: null,
+  }, env);
+  await appendEvent({
+    type: "thread_input_delivery_attempted",
+    threadId: thread.id,
+    messageId: message.id,
+    attempt,
+    paneId: status.paneId,
+    nextAttemptAt,
+    observedVia: "tmux_submit_existing_file",
+    deliveryInputMode: "file",
+    deliveryInputFile: message.deliveryInputFile || null,
+  }, env);
+  return message.id;
 }
 
 async function recoverStaleThreadInputAck(thread, message, status, env = process.env) {
@@ -1991,7 +2056,7 @@ async function sendThreadInputToPane(thread, message, status, env = process.env)
   }
   if (!submittedExistingPaste) await pasteTmuxText(status.paneId, deliveryInput.text, env);
 
-  const delayMs = submitDelayMs(env);
+  const delayMs = deliveryInput.mode === "file" ? Math.max(submitDelayMs(env), fileSubmitDelayMs(env)) : submitDelayMs(env);
   if (delayMs > 0) await sleep(delayMs);
   for (const key of submitKeys(env)) {
     await execFileAsync("tmux", ["send-keys", "-t", status.paneId, key]);
@@ -2072,6 +2137,7 @@ export async function deliverPendingThreadInputs(threadId, env = process.env) {
           scheduleThreadInputDelivery(thread.id, env, dueInMs);
           break;
         }
+        if (await submitStuckFilePromptDelivery(thread, awaitingAck, status, env)) continue;
         if (await failStuckPromptThreadInputDelivery(thread, awaitingAck, status, env)) continue;
         if (!status?.paneId || status.state === "sleeping") {
           await updateThreadMessage(thread.id, awaitingAck.id, {

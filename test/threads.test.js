@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { execFile } from "node:child_process";
+import { createHash } from "node:crypto";
 import { promisify } from "node:util";
 import { startServer } from "../apps/server/src/server.js";
 import { threadRuntimeSummary } from "../apps/server/src/thread-summary.ts";
@@ -1082,6 +1083,83 @@ test("thread input delivery fails when pasted input stays stuck at the prompt", 
     assert.equal(failed.observedVia, "input_stuck_at_prompt");
     assert.match(failed.error, /pasted into Codex but was not accepted/);
     assert.doesNotMatch(log, /__CALL__\tsend-keys\t-t\t%42\tC-m/);
+  } finally {
+    restoreEnvValue("PATH", priorPath);
+    restoreEnvValue("TMUX_LOG", priorTmuxLog);
+    restoreEnvValue("TMUX_STATE", priorTmuxState);
+    restoreEnvValue("TMUX_CAPTURE_FILE", priorCaptureFile);
+  }
+});
+
+test("thread input delivery submits an existing pasted temp-file prompt without repasting", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-stuck-file-prompt-"));
+  const fakeTmux = await createFakeTmux(home);
+  const captureFile = path.join(home, "pane.txt");
+  const priorPath = process.env.PATH;
+  const priorTmuxLog = process.env.TMUX_LOG;
+  const priorTmuxState = process.env.TMUX_STATE;
+  const priorCaptureFile = process.env.TMUX_CAPTURE_FILE;
+  process.env.PATH = `${fakeTmux.bin}:${priorPath || ""}`;
+  process.env.TMUX_LOG = fakeTmux.log;
+  process.env.TMUX_STATE = fakeTmux.state;
+  process.env.TMUX_CAPTURE_FILE = captureFile;
+
+  try {
+    const text = `FILE-PROMPT-RETRY\n${"x".repeat(860)}`;
+    const bytes = Buffer.byteLength(text, "utf8");
+    const checksum = createHash("sha256").update(text).digest("hex");
+    const filePath = path.join(home, "thread-input.txt");
+    const wrapper = [
+      "A full user message was written to a local temp file because it is too long for safe tmux inline delivery.",
+      `Read the full message from this local UTF-8 file: ${filePath}`,
+      `Bytes: ${bytes}`,
+      `SHA-256: ${checksum}`,
+      "",
+      "Treat the file contents as the user's message and answer it directly. Do not summarize this wrapper message.",
+    ].join("\n");
+    const promptDraft = wrapper.split("\n").map((line, index) => index === 0 ? `› ${line}` : `  ${line}`).join("\n");
+    await fs.writeFile(captureFile, `${promptDraft}\n  gpt-5.5 xhigh · /workspace/demo\n`, "utf8");
+    const env = {
+      ORKESTR_HOME: path.join(home, "orkestr-home"),
+      HOME: path.join(home, "runtime-home"),
+      CODEX_HOME: path.join(home, "codex-home"),
+      PATH: process.env.PATH,
+      TMUX_LOG: fakeTmux.log,
+      TMUX_STATE: fakeTmux.state,
+      TMUX_CAPTURE_FILE: captureFile,
+      ORKESTR_DELIVERY_ACK_WAIT_MS: "0",
+      ORKESTR_DELIVERY_ACK_BACKOFF_MS: "10000",
+    };
+    await createThread({ id: "stuck-file-prompt-thread", name: "Stuck File Prompt Thread" }, env);
+    await wakeThread("stuck-file-prompt-thread", { reason: "test" }, env);
+    const input = await appendThreadMessage("stuck-file-prompt-thread", {
+      role: "user",
+      text,
+      state: "awaiting_ack",
+      deliveryState: "awaiting_ack",
+      deliveryNextAttemptAt: new Date(Date.now() - 1000).toISOString(),
+    }, env);
+    await updateThreadMessage("stuck-file-prompt-thread", input.id, {
+      deliveryAttempt: 1,
+      deliveryInputMode: "file",
+      deliveryInputFile: filePath,
+      deliveryInputBytes: bytes,
+      deliveryPayloadHash: checksum,
+      deliveryNextAttemptAt: new Date(Date.now() - 1000).toISOString(),
+    }, env);
+
+    assert.deepEqual(await deliverPendingThreadInputs("stuck-file-prompt-thread", env), []);
+    const messages = await listThreadMessages("stuck-file-prompt-thread", env);
+    const log = await fs.readFile(fakeTmux.log, "utf8");
+    const updated = messages.find((message) => message.id === input.id);
+
+    assert.equal(updated.state, "awaiting_ack");
+    assert.equal(updated.deliveryState, "awaiting_ack");
+    assert.equal(updated.deliveryAttempt, 2);
+    assert.equal(updated.observedVia, "tmux_submit_existing_file_pending_ack");
+    assert.match(log, /__CALL__\tsend-keys\t-t\t%42\tC-m/);
+    assert.doesNotMatch(log, /__CALL__\tload-buffer/);
+    assert.doesNotMatch(log, /__CALL__\tpaste-buffer/);
   } finally {
     restoreEnvValue("PATH", priorPath);
     restoreEnvValue("TMUX_LOG", priorTmuxLog);
