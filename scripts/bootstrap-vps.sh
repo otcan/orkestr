@@ -350,6 +350,25 @@ EOF
 
 restart_orkestr() {
   systemctl restart orkestr.service
+  wait_for_orkestr_http
+}
+
+wait_for_orkestr_http() {
+  local check_host url
+  check_host="$host"
+  if [ "$check_host" = "0.0.0.0" ] || [ "$check_host" = "::" ]; then
+    check_host="127.0.0.1"
+  fi
+  url="http://$check_host:$port/api/version"
+  log "Waiting for Orkestr HTTP endpoint: $url"
+  for _ in $(seq 1 60); do
+    if curl -fsS "$url" >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep 2
+  done
+  systemctl status orkestr.service --no-pager --lines=80 || true
+  die "Orkestr service did not become ready at $url"
 }
 
 run_doctor() {
