@@ -104,6 +104,34 @@
               </div>
             }
           </div>
+
+          @if (googleMarketingConnector(); as marketing) {
+            <section class="mail-card google-marketing-card">
+              <div class="mail-card-head">
+                <div>
+                  <strong>{{ marketing.label || "Google Marketing" }}</strong>
+                  <small>Search Console + GA Admin for SEO Ops</small>
+                </div>
+                <em [class]="stateClass('google-marketing')">{{ stateLabel('google-marketing') }}</em>
+              </div>
+              <p>{{ marketing.summary || "Connect Google Marketing to refresh Search Console and GA data." }}</p>
+              @if (googleMarketingScopeLine()) {
+                <small class="form-section-note">{{ googleMarketingScopeLine() }}</small>
+              }
+              <div class="wizard-review">
+                <dt>Runtime</dt>
+                <dd>{{ connectorDetail('google-marketing', 'kind') || 'overlay connector' }}</dd>
+                <dt>Action</dt>
+                <dd>{{ googleMarketingActionHint() }}</dd>
+              </div>
+              <div class="button-row">
+                <button type="button" (click)="startGoogleMarketingAuth()" [disabled]="busy">
+                  {{ busy ? "Starting" : googleMarketingActionLabel() }}
+                </button>
+                <button class="secondary" type="button" (click)="load()" [disabled]="busy">Refresh status</button>
+              </div>
+            </section>
+          }
         </section>
       }
 

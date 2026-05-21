@@ -1,5 +1,6 @@
-import { Body, Controller, Get, HttpCode, Param, Post, Query, Res } from "@nestjs/common";
+import { Body, Controller, Get, HttpCode, Param, Post, Query, Req, Res } from "@nestjs/common";
 import { getSetupStatus } from "../../../../../packages/core/src/setup.js";
+import { runOverlayConnectorAction } from "../../../../../packages/connectors/src/connectors.js";
 import {
   finishGmailOAuth,
   getGmailMessage,
@@ -183,6 +184,16 @@ export class ConnectorsController {
     if (!connector) throw httpError("unknown_connector", 404);
     return connector;
   }
+
+  @Post(":id/actions/:action")
+  @HttpCode(200)
+  async connectorAction(@Param("id") id: string, @Param("action") action: string, @Body() body: Record<string, unknown> = {}) {
+    try {
+      return await runOverlayConnectorAction(id, action, { env: process.env, input: body });
+    } catch (error) {
+      throw httpError(String((error as Error)?.message || "connector_action_failed"), Number((error as any)?.statusCode || 400));
+    }
+  }
 }
 
 @Controller("oauth")
@@ -196,6 +207,72 @@ export class ConnectorCallbacksController {
       .type("text/html; charset=utf-8")
       .send(`<!doctype html><title>Gmail connected</title><h1>Gmail callback received</h1><p>State: ${escapeHtml(result.state)}</p>`);
   }
+}
+
+@Controller("google-marketing/oauth")
+export class GoogleMarketingCallbacksController {
+  @Get("callback")
+  async googleMarketingCallback(@Query() _query: Record<string, string>, @Req() request: any, @Res() response: any) {
+    const callbackUrl = externalUrlFromRequest(request);
+    let payload: any = null;
+    try {
+      payload = await runOverlayConnectorAction("google-marketing", "finish-oauth", {
+        env: process.env,
+        input: { callbackUrl },
+      });
+    } catch (error) {
+      payload = {
+        ok: false,
+        state: "error",
+        message: String((error as Error)?.message || "Google Marketing OAuth callback failed."),
+      };
+    }
+    const ok = payload?.ok !== false;
+    return response
+      .status(ok ? 200 : 500)
+      .header("cache-control", "no-store")
+      .type("text/html; charset=utf-8")
+      .send(googleMarketingOAuthHtml(payload));
+  }
+}
+
+function externalUrlFromRequest(request: any): string {
+  const headers = request?.headers || {};
+  const proto = String(headers["x-forwarded-proto"] || request?.protocol || "http").split(",")[0].trim();
+  const host = String(headers["x-forwarded-host"] || headers.host || "127.0.0.1").split(",")[0].trim();
+  const url = String(request?.originalUrl || request?.url || "");
+  return `${proto}://${host}${url}`;
+}
+
+function googleMarketingOAuthHtml(payload: Record<string, unknown> = {}): string {
+  const ok = payload.ok !== false;
+  const title = ok ? "Google Marketing auth complete" : "Google Marketing auth failed";
+  const state = ok ? "ok" : String(payload.state || "error");
+  const message = String(payload.message || payload.raw || "");
+  return `<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>${escapeHtml(title)}</title>
+    <style>
+      body { margin: 0; min-height: 100vh; display: grid; place-items: center; background: #061007; color: #eaffdf; font-family: Inter, system-ui, sans-serif; }
+      main { width: min(720px, calc(100% - 32px)); padding: 28px; border: 1px solid rgba(128, 210, 138, .24); border-radius: 24px; background: #0d180f; box-shadow: 0 20px 50px rgba(0,0,0,.28); }
+      .badge { display: inline-flex; padding: 5px 10px; border-radius: 999px; background: ${ok ? "rgba(101,198,222,.18)" : "rgba(255,116,96,.18)"}; color: ${ok ? "#aeeeff" : "#ffc8bd"}; font-weight: 900; text-transform: uppercase; font-size: 12px; }
+      a { display: inline-flex; margin-top: 14px; padding: 10px 14px; border-radius: 999px; color: #061007; background: #a8ffb2; text-decoration: none; font-weight: 800; }
+      p { line-height: 1.5; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <span class="badge">${escapeHtml(state)}</span>
+      <h1>${escapeHtml(title)}</h1>
+      <p>${escapeHtml(message)}</p>
+      <p>Return to System setup to refresh the Google Marketing connector status.</p>
+      <a href="/setup/system">Open System Setup</a>
+    </main>
+  </body>
+</html>`;
 }
 
 function escapeHtml(value: unknown): string {

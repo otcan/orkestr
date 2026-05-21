@@ -224,6 +224,18 @@ export interface OutlookOAuthPollResponse {
   expiresAt?: number;
 }
 
+export interface ConnectorActionResponse {
+  ok?: boolean;
+  connector?: string;
+  action?: string;
+  authorizeUrl?: string;
+  auth_url?: string;
+  url?: string;
+  state?: string;
+  message?: string;
+  raw?: string;
+}
+
 export interface GmailMessageListResponse {
   messages: Array<{ id: string; threadId?: string }>;
   nextPageToken?: string;
@@ -723,6 +735,13 @@ export class ApiService {
 
   testConnector(id: string): Observable<ConnectorStatus> {
     return this.http.post<ConnectorStatus>(this.api(`/connectors/${encodeURIComponent(id)}/test`), {});
+  }
+
+  runConnectorAction(id: string, action: string, body: Record<string, unknown> = {}): Observable<ConnectorActionResponse> {
+    return this.http.post<ConnectorActionResponse>(
+      this.api(`/connectors/${encodeURIComponent(id)}/actions/${encodeURIComponent(action)}`),
+      body,
+    );
   }
 
   startGmailOAuth(account = ""): Observable<GmailOAuthStartResponse> {

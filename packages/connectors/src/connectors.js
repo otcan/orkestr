@@ -51,6 +51,11 @@ function status(id, label, state, summary, details = {}) {
   return { id, label, state, summary, details };
 }
 
+function orderedConnectorIds(overlay) {
+  const overlayIds = Object.keys(overlay?.connectors || {}).filter(Boolean).sort();
+  return [...connectorOrder, ...overlayIds.filter((id) => !connectorOrder.includes(id))];
+}
+
 async function overlayConnectorStatus(id, overlay) {
   const connector = overlay?.connectors?.[id];
   if (!connector || typeof connector !== "object" || Array.isArray(connector)) return null;
@@ -178,10 +183,81 @@ export async function getConnectorStatuses({ env = process.env, home = os.homedi
       : status("timers", "Timers", "not_connected", "Create the first recurring timer."),
   };
 
-  const overlayStatuses = await Promise.all(connectorOrder.map((id) => overlayConnectorStatus(id, overlay)));
+  const orderedIds = orderedConnectorIds(overlay);
+  const overlayStatuses = await Promise.all(orderedIds.map((id) => overlayConnectorStatus(id, overlay)));
   for (const override of overlayStatuses.filter(Boolean)) {
     connectors[override.id] = override;
   }
 
-  return connectorOrder.map((id) => connectors[id]);
+  return orderedIds.map((id) => connectors[id]).filter(Boolean);
+}
+
+function overlayActionError(message, statusCode = 400) {
+  const error = new Error(message);
+  error.statusCode = statusCode;
+  return error;
+}
+
+function expandOverlayActionValue(value, input) {
+  return String(value || "").replace(/\$\{([A-Za-z0-9_]+)\}/g, (_match, key) => {
+    const replacement = input?.[key];
+    return replacement === undefined || replacement === null ? "" : String(replacement);
+  });
+}
+
+function overlayActionCommand(action, input) {
+  const command = Array.isArray(action?.command) ? action.command : [];
+  const expanded = command.map((part) => expandOverlayActionValue(part, input)).filter((part) => part !== "");
+  if (!expanded.length) throw overlayActionError("overlay_connector_action_command_missing", 400);
+  return expanded;
+}
+
+export async function runOverlayConnectorAction(id, actionName, { env = process.env, input = {} } = {}) {
+  const connectorId = String(id || "").trim();
+  const actionId = String(actionName || "").trim();
+  if (!connectorId || !actionId) throw overlayActionError("connector_action_required", 400);
+
+  const overlay = await readOverlay(env);
+  const connector = overlay?.connectors?.[connectorId];
+  const action = connector?.actions?.[actionId];
+  if (!action || typeof action !== "object" || Array.isArray(action)) {
+    throw overlayActionError("overlay_connector_action_not_found", 404);
+  }
+  if (action.type && String(action.type) !== "command-json") {
+    throw overlayActionError("unsupported_overlay_connector_action", 400);
+  }
+
+  const [command, ...args] = overlayActionCommand(action, input);
+  const cwd = action.cwd
+    ? path.resolve(path.dirname(overlay.path), expandOverlayActionValue(action.cwd, input))
+    : path.dirname(overlay.path);
+  const timeout = Math.min(Math.max(Number(action.timeoutMs || 30000), 1000), 120000);
+  let result;
+  try {
+    result = await execFileAsync(command, args, {
+      cwd,
+      env: { ...process.env, ...env },
+      timeout,
+      maxBuffer: 1024 * 1024,
+    });
+  } catch (error) {
+    const detail = String(error?.stderr || error?.stdout || error?.message || "overlay action failed").trim();
+    throw overlayActionError(detail || "overlay_action_failed", 500);
+  }
+
+  const raw = String(result.stdout || "").trim();
+  let payload = {};
+  if (raw) {
+    try {
+      payload = JSON.parse(raw);
+    } catch {
+      payload = { raw };
+    }
+  }
+  return {
+    ok: true,
+    connector: connectorId,
+    action: actionId,
+    ...payload,
+  };
 }
