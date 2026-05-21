@@ -112,6 +112,24 @@ export function formatSystemDoctor(doctor = {}) {
   return lines.join("\n");
 }
 
+export function formatRuntimeResources(doctor = {}) {
+  const counts = doctor.counts || {};
+  const lines = [
+    `Runtime resources: ${doctor.status || "unknown"}`,
+    doctor.summary || "",
+    `Counts: ${Number(counts.activeLeases || 0)} active leases, ${Number(counts.tmuxSessions || 0)} tmux sessions, ${Number(counts.orphanSessions || 0)} orphan sessions, ${Number(counts.tempCodexProcesses || 0)} temp Codex processes`,
+  ].filter(Boolean);
+  const actions = Array.isArray(doctor.actions) ? doctor.actions : [];
+  for (const action of actions) {
+    lines.push(`REPAIRED ${action.action || "resource"}: ${action.sessionName || action.pid || action.threadId || ""}`.trim());
+  }
+  const issues = Array.isArray(doctor.issues) ? doctor.issues : [];
+  for (const issue of issues) {
+    lines.push(`${String(issue.severity || "info").toUpperCase()} ${issue.code || "resource_issue"}: ${issue.sessionName || issue.threadId || issue.pid || "runtime"}: ${issue.message || ""}`.trim());
+  }
+  return lines.join("\n");
+}
+
 function compactTimestamp(value) {
   if (!value || value === "-") return "-";
   const date = new Date(value);

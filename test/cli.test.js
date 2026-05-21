@@ -140,6 +140,30 @@ test("CLI doctors the host system by default", async () => {
   assert.match(stdout.text(), /All system checks passed/);
 });
 
+test("CLI repairs runtime resources through the public API", async () => {
+  const stdout = capture();
+  const seen = [];
+  const code = await runCli(["doctor", "resources", "--repair"], {
+    stdout,
+    stderr: capture(),
+    fetchImpl: fakeFetch({
+      "POST /api/system/resources/repair": {
+        ok: true,
+        status: "ok",
+        summary: "Repaired 1 runtime resource issue(s).",
+        counts: { activeLeases: 0, tmuxSessions: 1, orphanSessions: 1, tempCodexProcesses: 0, issues: 0, repaired: 1 },
+        issues: [],
+        actions: [{ action: "killed_tmux_session", sessionName: "orkestr-mode-test" }],
+      },
+    }, seen),
+  });
+
+  assert.equal(code, 0);
+  assert.equal(seen[0].key, "POST /api/system/resources/repair");
+  assert.match(stdout.text(), /Runtime resources: ok/);
+  assert.match(stdout.text(), /killed_tmux_session/);
+});
+
 test("CLI timer doctor exits nonzero for broken timers", async () => {
   const stdout = capture();
   const code = await runCli(["timers", "doctor"], {

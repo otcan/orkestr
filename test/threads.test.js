@@ -9,7 +9,7 @@ import { promisify } from "node:util";
 import { startServer } from "../apps/server/src/server.js";
 import { threadRuntimeSummary } from "../apps/server/src/thread-summary.ts";
 import { runNextThreadMessage } from "../packages/core/src/executors.js";
-import { applyRuntimeCodexMode, consumeThreadConnectorDeliverySignalCount, deliverPendingThreadInputs, drainAllPendingThreadInputs, hardResetThreadRuntime, listRuntimeLeases, resetThreadRuntime, runtimeStatus, sleepThread, syncRuntimeLeases, syncRuntimeWindowName, wakeThread } from "../packages/core/src/runtime-leases.js";
+import { applyRuntimeCodexMode, consumeThreadConnectorDeliverySignalCount, deliverPendingThreadInputs, doctorRuntimeResources, drainAllPendingThreadInputs, hardResetThreadRuntime, listRuntimeLeases, resetThreadRuntime, runtimeStatus, sleepThread, syncRuntimeLeases, syncRuntimeWindowName, wakeThread } from "../packages/core/src/runtime-leases.js";
 import { ensureDataDirs } from "../packages/storage/src/paths.js";
 import { parseThreadInputCommand } from "../packages/core/src/thread-commands.js";
 import { createThreadWorker, detectThreadGitState, listThreadWorkers, syncThreadWorkerWithParent, updateThreadRepo } from "../packages/core/src/thread-workers.js";
@@ -107,6 +107,17 @@ case "$cmd" in
     ;;
   list-panes)
     printf '%s\\n' $valid_panes
+    exit 0
+    ;;
+  list-sessions)
+    if [ -f "$TMUX_STATE" ]; then
+      created="\${TMUX_SESSION_CREATED:-$(date +%s)}"
+      current_path="\${TMUX_SESSION_PATH:-/tmp/orkestr-api-leak}"
+      while IFS= read -r session; do
+        [ -n "$session" ] || continue
+        printf '%s\\t%s\\t%s\\t%s\\t%s\\n' "$session" "$created" "$current_path" "\${TMUX_SESSION_COMMAND:-codex}" "\${TMUX_SESSION_PANE_PID:-}"
+      done < "$TMUX_STATE"
+    fi
     exit 0
     ;;
   capture-pane)
@@ -293,6 +304,119 @@ test("thread wake and sleep lifecycle updates runtime leases and status", async 
   }
 });
 
+test("temporary test homes use a placeholder runtime command by default", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-test-runtime-command-"));
+  const fakeTmux = await createFakeTmux(home);
+  const priorPath = process.env.PATH;
+  const priorTmuxLog = process.env.TMUX_LOG;
+  const priorTmuxState = process.env.TMUX_STATE;
+  process.env.PATH = `${fakeTmux.bin}:${priorPath || ""}`;
+  process.env.TMUX_LOG = fakeTmux.log;
+  process.env.TMUX_STATE = fakeTmux.state;
+
+  try {
+    const env = {
+      ORKESTR_HOME: path.join(home, "orkestr-home"),
+      HOME: path.join(home, "runtime-home"),
+      CODEX_HOME: path.join(home, "codex-home"),
+      PATH: process.env.PATH,
+      TMUX_LOG: fakeTmux.log,
+      TMUX_STATE: fakeTmux.state,
+    };
+    await createThread({ id: "mode-test", name: "mode-test" }, env);
+    await wakeThread("mode-test", { reason: "test" }, env);
+    const leases = await listRuntimeLeases(env);
+    const log = await fs.readFile(fakeTmux.log, "utf8");
+
+    assert.match(log, /Orkestr test runtime placeholder/);
+    assert.doesNotMatch(log, /codex --dangerously-bypass-approvals-and-sandbox/);
+    assert.equal(leases[0].temporary, true);
+    assert.equal(leases[0].temporaryReason, "mode_test");
+    assert.ok(Number(leases[0].ttlMs || 0) > 0);
+  } finally {
+    restoreEnvValue("PATH", priorPath);
+    restoreEnvValue("TMUX_LOG", priorTmuxLog);
+    restoreEnvValue("TMUX_STATE", priorTmuxState);
+  }
+});
+
+test("runtime sync expires temporary runtimes at their hard TTL", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-temp-ttl-"));
+  const fakeTmux = await createFakeTmux(home);
+  const priorPath = process.env.PATH;
+  const priorTmuxLog = process.env.TMUX_LOG;
+  const priorTmuxState = process.env.TMUX_STATE;
+  process.env.PATH = `${fakeTmux.bin}:${priorPath || ""}`;
+  process.env.TMUX_LOG = fakeTmux.log;
+  process.env.TMUX_STATE = fakeTmux.state;
+
+  try {
+    const env = {
+      ORKESTR_HOME: path.join(home, "orkestr-home"),
+      HOME: path.join(home, "runtime-home"),
+      CODEX_HOME: path.join(home, "codex-home"),
+      PATH: process.env.PATH,
+      TMUX_LOG: fakeTmux.log,
+      TMUX_STATE: fakeTmux.state,
+      ORKESTR_RUNTIME_IDLE_SLEEP_MS: "off",
+      ORKESTR_TEMP_RUNTIME_TTL_MS: "1",
+    };
+    await createThread({ id: "temp-ttl-thread", name: "Temp TTL Thread" }, env);
+    await wakeThread("temp-ttl-thread", { reason: "test" }, env);
+    await new Promise((resolve) => setTimeout(resolve, 5));
+
+    await syncRuntimeLeases(env);
+
+    const status = await runtimeStatus("temp-ttl-thread", env);
+    const leases = await listRuntimeLeases(env);
+    const log = await fs.readFile(fakeTmux.log, "utf8");
+
+    assert.equal(status.state, "sleeping");
+    assert.equal(leases[0].endReason, "temp_runtime_ttl");
+    assert.match(log, /__CALL__\tkill-session\t-t\torkestr-temp-ttl-thread/);
+  } finally {
+    restoreEnvValue("PATH", priorPath);
+    restoreEnvValue("TMUX_LOG", priorTmuxLog);
+    restoreEnvValue("TMUX_STATE", priorTmuxState);
+  }
+});
+
+test("runtime resource doctor repairs orphaned test tmux sessions", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-resource-doctor-"));
+  const fakeTmux = await createFakeTmux(home);
+  const priorPath = process.env.PATH;
+  const priorTmuxLog = process.env.TMUX_LOG;
+  const priorTmuxState = process.env.TMUX_STATE;
+  const priorTmuxSessionPath = process.env.TMUX_SESSION_PATH;
+  process.env.PATH = `${fakeTmux.bin}:${priorPath || ""}`;
+  process.env.TMUX_LOG = fakeTmux.log;
+  process.env.TMUX_STATE = fakeTmux.state;
+  process.env.TMUX_SESSION_PATH = path.join(os.tmpdir(), "orkestr-api-leak");
+  await fs.writeFile(fakeTmux.state, "orkestr-mode-test\n", "utf8");
+
+  try {
+    const env = {
+      ORKESTR_HOME: path.join(home, "orkestr-home"),
+      PATH: process.env.PATH,
+      TMUX_LOG: fakeTmux.log,
+      TMUX_STATE: fakeTmux.state,
+      TMUX_SESSION_PATH: process.env.TMUX_SESSION_PATH,
+    };
+    const doctor = await doctorRuntimeResources({ env, repair: true });
+    const state = await fs.readFile(fakeTmux.state, "utf8").catch(() => "");
+
+    assert.equal(doctor.counts.orphanSessions, 1);
+    assert.ok(doctor.issues.some((issue) => issue.code === "orphan_tmux_session"));
+    assert.ok(doctor.actions.some((action) => action.action === "killed_tmux_session"));
+    assert.doesNotMatch(state, /orkestr-mode-test/);
+  } finally {
+    restoreEnvValue("PATH", priorPath);
+    restoreEnvValue("TMUX_LOG", priorTmuxLog);
+    restoreEnvValue("TMUX_STATE", priorTmuxState);
+    restoreEnvValue("TMUX_SESSION_PATH", priorTmuxSessionPath);
+  }
+});
+
 test("relative thread workspaces resolve under the runtime workspace root", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-relative-workspace-"));
   const fakeTmux = await createFakeTmux(home);
@@ -358,6 +482,7 @@ test("thread wake blocks Codex before the raw login menu opens", async () => {
       TMUX_LOG: fakeTmux.log,
       TMUX_STATE: fakeTmux.state,
       ORKESTR_CODEX_AUTH_PREFLIGHT: "1",
+      ORKESTR_ALLOW_REAL_CODEX_TESTS: "1",
     };
     await createThread({ id: "auth-required-thread", name: "Auth Required Thread" }, env);
 
@@ -493,6 +618,7 @@ test("runtime sync confirms Codex resume directory prompts", async () => {
       TMUX_STATE: fakeTmux.state,
       TMUX_CAPTURE_TEXT: process.env.TMUX_CAPTURE_TEXT,
       ORKESTR_RUNTIME_IDLE_SLEEP_MS: "1",
+      ORKESTR_ALLOW_REAL_CODEX_TESTS: "1",
     };
     await createThread({
       id: "resume-dir-thread",
@@ -2284,7 +2410,12 @@ test("runtime wake does not restore stale persisted Codex plan mode", async () =
       TMUX_CAPTURE_FILE: captureFile,
       ORKESTR_RUNTIME_IDLE_SLEEP_MS: "0",
     };
-    await createThread({ id: "codex-mode-restore-thread", name: "Codex Mode Restore Thread", codexMode: "plan" }, env);
+    await createThread({
+      id: "codex-mode-restore-thread",
+      name: "Codex Mode Restore Thread",
+      codexMode: "plan",
+      desiredCodexMode: "plan",
+    }, env);
     await wakeThread("codex-mode-restore-thread", { reason: "test" }, env);
     let thread = await getThread("codex-mode-restore-thread", env);
     let status = await runtimeStatus("codex-mode-restore-thread", env);

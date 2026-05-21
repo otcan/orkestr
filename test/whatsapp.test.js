@@ -509,6 +509,91 @@ test("whatsapp delivery forwards failed routed inputs using inbound event metada
   assert.match(calls[0].body.text, /pasted into Codex but was not accepted/);
 });
 
+test("whatsapp passive mirror recovers a failed thread input instead of sending a failure notice", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-passive-failed-recover-"));
+  const env = { ORKESTR_HOME: home };
+  await createThread({ id: "thread-wa-passive-failed-recover", name: "WA Passive Failed Recover" }, env);
+  await writeConnectorConfig("whatsapp", {
+    bridgeMode: "external",
+    bridgeUrl: "http://wa.local",
+    threadRoutes: { "chat-passive-failed": "thread-wa-passive-failed-recover" },
+  }, env);
+
+  const routed = await routeWhatsAppInbound({ eventId: "wa-passive-failed-1", chatId: "chat-passive-failed", text: "status?" }, env);
+  await updateThreadMessage("thread-wa-passive-failed-recover", routed.message.id, {
+    state: "failed",
+    deliveryState: "failed",
+    error: "runtime_not_ready",
+  }, env);
+  const reply = await appendThreadMessage("thread-wa-passive-failed-recover", {
+    role: "assistant",
+    source: "codex-rollout",
+    phase: "final_answer",
+    state: "completed",
+    text: "The status is clean.",
+    parentMessageId: routed.message.id,
+    connector: "whatsapp",
+    chatId: "chat-passive-failed",
+  }, env);
+
+  const calls = [];
+  const delivery = await deliverWhatsAppReplies(env, async (url, options) => {
+    calls.push({ url, body: JSON.parse(options.body) });
+    return response({ ok: true, ids: ["sent-passive-failed"] });
+  });
+  const messages = await listThreadMessages("thread-wa-passive-failed-recover", env);
+  const parent = messages.find((entry) => entry.id === routed.message.id);
+
+  assert.equal(delivery.delivered.length, 1);
+  assert.equal(delivery.delivered[0].messageId, reply.id);
+  assert.equal(delivery.skipped.some((item) => item.reason === "assistant_reply_available"), true);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].body.text, "The status is clean.");
+  assert.doesNotMatch(calls[0].body.text, /^Delivery failed/);
+  assert.equal(parent.state, "completed");
+  assert.equal(parent.deliveryState, "delivered");
+  assert.equal(parent.observedVia, "whatsapp_passive_mirror_delivery");
+  assert.equal(parent.passiveMirrorMessageId, reply.id);
+  assert.equal(parent.error, null);
+});
+
+test("whatsapp passive mirror completes a running thread input when the reply is delivered", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-passive-running-complete-"));
+  const env = { ORKESTR_HOME: home };
+  await createThread({ id: "thread-wa-passive-running-complete", name: "WA Passive Running Complete" }, env);
+  await writeConnectorConfig("whatsapp", {
+    bridgeMode: "external",
+    bridgeUrl: "http://wa.local",
+    threadRoutes: { "chat-passive-running": "thread-wa-passive-running-complete" },
+  }, env);
+
+  const routed = await routeWhatsAppInbound({ eventId: "wa-passive-running-1", chatId: "chat-passive-running", text: "what changed?" }, env);
+  await updateThreadMessage("thread-wa-passive-running-complete", routed.message.id, {
+    state: "running",
+    deliveryState: "awaiting_ack",
+  }, env);
+  const reply = await appendThreadMessage("thread-wa-passive-running-complete", {
+    role: "assistant",
+    source: "codex-rollout",
+    phase: "final_answer",
+    state: "completed",
+    text: "It changed successfully.",
+    parentMessageId: routed.message.id,
+    connector: "whatsapp",
+    chatId: "chat-passive-running",
+  }, env);
+
+  const delivery = await deliverWhatsAppReplies(env, async () => response({ ok: true, ids: ["sent-passive-running"] }));
+  const messages = await listThreadMessages("thread-wa-passive-running-complete", env);
+  const parent = messages.find((entry) => entry.id === routed.message.id);
+
+  assert.equal(delivery.delivered.length, 1);
+  assert.equal(delivery.delivered[0].messageId, reply.id);
+  assert.equal(parent.state, "completed");
+  assert.equal(parent.deliveryState, "delivered");
+  assert.equal(parent.passiveMirrorMessageId, reply.id);
+});
+
 test("whatsapp delivery mirrors pane interruption notices", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-interruption-notice-"));
   const env = { ORKESTR_HOME: home };

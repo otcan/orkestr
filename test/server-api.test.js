@@ -59,6 +59,7 @@ test("server exposes health, readiness, version, and agent message APIs", async 
     const listed = await request(baseUrl, "/api/agents/coding-agent/messages");
     const system = await request(baseUrl, "/api/system/summary");
     const doctor = await request(baseUrl, "/api/system/doctor");
+    const resources = await request(baseUrl, "/api/system/resources");
     const processes = await request(baseUrl, "/api/system/processes?sort=cpu");
     const folders = await request(baseUrl, `/api/system/workspace-folders?path=${encodeURIComponent(workspaceRoot)}`);
     const browsers = await request(baseUrl, "/api/browsers");
@@ -97,6 +98,8 @@ test("server exposes health, readiness, version, and agent message APIs", async 
     assert.ok(["ok", "warning", "broken"].includes(doctor.status));
     assert.ok(doctor.checks.some((check) => check.id === "data_home"));
     assert.ok(doctor.checks.some((check) => check.id === "codex"));
+    assert.ok(["ok", "warning", "broken"].includes(resources.status));
+    assert.equal(typeof resources.counts.activeLeases, "number");
     assert.ok(Array.isArray(processes.processes));
     assert.equal(folders.path, workspaceRoot);
     assert.ok(folders.roots.some((root) => root.path === workspaceRoot));

@@ -30,6 +30,7 @@ const needInputPhases = new Set(["need_input", "awaiting_input", "question", "re
 const proposedPlanOpenTagPattern = /^\s*<\s*proposed[\s_-]*plan\s*>/i;
 const deliveryRetryDefaultsMs = [1000, 3000, 8000, 20_000, 60_000];
 const defaultRuntimeIdleSleepMs = 15 * 60 * 1000;
+const defaultTempRuntimeTtlMs = 5 * 60 * 1000;
 const defaultRolloutSyncLookbackBytes = 2 * 1024 * 1024;
 const defaultWorkingAfterPromptMs = 30 * 60 * 1000;
 const whatsappSources = new Set(["whatsapp", "whatsapp_inbound", "whatsapp_client"]);
@@ -88,6 +89,10 @@ function positiveNumber(value) {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
 }
 
+function booleanEnv(value) {
+  return ["1", "true", "yes", "on"].includes(String(value || "").trim().toLowerCase());
+}
+
 function timestampMs(value) {
   const parsed = Date.parse(String(value || ""));
   return Number.isFinite(parsed) ? parsed : 0;
@@ -108,6 +113,18 @@ function runtimeIdleSleepMs(env = process.env) {
   return positiveNumber(raw) || defaultRuntimeIdleSleepMs;
 }
 
+function tempRuntimeTtlMs(env = process.env) {
+  const raw = String(env.ORKESTR_TEMP_RUNTIME_TTL_MS ?? "").trim().toLowerCase();
+  if (["0", "off", "false", "disabled"].includes(raw)) return 0;
+  return positiveNumber(raw) || defaultTempRuntimeTtlMs;
+}
+
+function runtimeLeaseTtlMs(env = process.env) {
+  const raw = String(env.ORKESTR_RUNTIME_LEASE_TTL_MS ?? "").trim().toLowerCase();
+  if (["", "0", "off", "false", "disabled"].includes(raw)) return 0;
+  return positiveNumber(raw) || 0;
+}
+
 function rolloutSyncLookbackBytes(env = process.env) {
   const raw = String(env.ORKESTR_ROLLOUT_SYNC_LOOKBACK_BYTES ?? "").trim().toLowerCase();
   if (["0", "off", "false", "disabled"].includes(raw)) return 0;
@@ -116,6 +133,53 @@ function rolloutSyncLookbackBytes(env = process.env) {
 
 function safeName(value) {
   return String(value || "default").replace(/[^a-zA-Z0-9_.-]/g, "_") || "default";
+}
+
+function pathIsInside(candidate, root) {
+  const resolved = path.resolve(String(candidate || ""));
+  const resolvedRoot = path.resolve(String(root || ""));
+  if (!resolved || !resolvedRoot) return false;
+  const relative = path.relative(resolvedRoot, resolved);
+  return relative === "" || (relative && !relative.startsWith("..") && !path.isAbsolute(relative));
+}
+
+function tempRoot(env = process.env) {
+  return path.resolve(String(env.TMPDIR || env.TEMP || env.TMP || os.tmpdir()));
+}
+
+function pathLooksLikeOrkestrTemp(candidate, env = process.env) {
+  const value = String(candidate || "").trim();
+  if (!value) return false;
+  const resolved = path.resolve(value);
+  const root = tempRoot(env);
+  if (!pathIsInside(resolved, root)) return false;
+  const firstSegment = path.relative(root, resolved).split(path.sep).filter(Boolean)[0] || "";
+  return firstSegment.startsWith("orkestr-");
+}
+
+function allowRealCodexInTests(env = process.env) {
+  return booleanEnv(env.ALLOW_REAL_CODEX_TESTS) || booleanEnv(env.ORKESTR_ALLOW_REAL_CODEX_TESTS);
+}
+
+function testRuntimePlaceholderCommand(env = process.env) {
+  const configured = String(env.ORKESTR_TEST_RUNTIME_COMMAND || env.ORKESTR_TEST_CODEX_COMMAND || "").trim();
+  if (configured) return configured;
+  return `${shellQuote(process.execPath)} -e ${shellQuote("console.log('Orkestr test runtime placeholder');")}`;
+}
+
+function testLikeRuntimeEnvironment(workspace = "", env = process.env) {
+  if (booleanEnv(env.ORKESTR_TEST_RUNTIME)) return true;
+  const paths = dataPaths(env);
+  return pathLooksLikeOrkestrTemp(paths.home, env) || pathLooksLikeOrkestrTemp(workspace, env);
+}
+
+function temporaryRuntimeReason({ thread = {}, workspace = "", command = "" } = {}, env = process.env) {
+  const label = `${thread.id || ""} ${threadName(thread)} ${command}`;
+  if (/\bmode-test\b/i.test(label)) return "mode_test";
+  if (pathLooksLikeOrkestrTemp(workspace, env)) return "temp_workspace";
+  if (pathLooksLikeOrkestrTemp(dataPaths(env).home, env)) return "temp_home";
+  if (testLikeRuntimeEnvironment(workspace, env)) return "test_runtime";
+  return "";
 }
 
 function codexThreadId(thread) {
@@ -245,6 +309,71 @@ async function tmuxPaneIds(sessionName) {
   if (!target) return [];
   const { stdout } = await execFileAsync("tmux", ["list-panes", "-t", target, "-F", "#{pane_id}"]);
   return String(stdout || "").trim().split("\n").map((line) => line.trim()).filter(Boolean);
+}
+
+async function tmuxPaneProcessIds(sessionName) {
+  const target = String(sessionName || "").trim();
+  if (!target) return [];
+  const { stdout } = await execFileAsync("tmux", ["list-panes", "-t", target, "-F", "#{pane_pid}"]);
+  return String(stdout || "")
+    .trim()
+    .split("\n")
+    .map((line) => Number(line.trim()))
+    .filter((pid) => Number.isInteger(pid) && pid > 1 && pid !== process.pid);
+}
+
+async function terminateProcessTreeRoots(pids = [], signal = "SIGTERM") {
+  const terminated = [];
+  for (const pid of [...new Set(pids)]) {
+    try {
+      process.kill(-pid, signal);
+      terminated.push({ pid, signal, target: "process_group" });
+      continue;
+    } catch {
+      // Fall back to the direct pane process. Some tmux pane commands are not
+      // process-group leaders.
+    }
+    try {
+      process.kill(pid, signal);
+      terminated.push({ pid, signal, target: "process" });
+    } catch {
+      // The process may already be gone after tmux killed the pane.
+    }
+  }
+  return terminated;
+}
+
+async function terminateProcessGroupId(pgid, fallbackPid, signal = "SIGTERM") {
+  const terminated = [];
+  const group = Number(pgid) || 0;
+  if (group > 1 && group !== process.pid) {
+    try {
+      process.kill(-group, signal);
+      terminated.push({ pgid: group, signal, target: "process_group" });
+      return terminated;
+    } catch {
+      // Fall back below.
+    }
+  }
+  const pid = Number(fallbackPid) || 0;
+  if (pid > 1 && pid !== process.pid) {
+    try {
+      process.kill(pid, signal);
+      terminated.push({ pid, signal, target: "process" });
+    } catch {
+      // Process may already be gone.
+    }
+  }
+  return terminated;
+}
+
+async function killTmuxSession(sessionName, { killProcessGroup = true } = {}) {
+  const target = String(sessionName || "").trim();
+  if (!target) return { sessionName: target, panePids: [], terminated: [] };
+  const panePids = killProcessGroup ? await tmuxPaneProcessIds(target).catch(() => []) : [];
+  await execFileAsync("tmux", ["kill-session", "-t", target]).catch(() => {});
+  const terminated = killProcessGroup ? await terminateProcessTreeRoots(panePids) : [];
+  return { sessionName: target, panePids, terminated };
 }
 
 async function renameTmuxWindow(sessionName, windowName) {
@@ -756,10 +885,14 @@ function runtimeWorkspace(thread, env) {
 }
 
 function runtimeCommand(thread, workspace = "", env = process.env) {
-  const base = String(env.ORKESTR_RUNTIME_CODEX_COMMAND || "codex --dangerously-bypass-approvals-and-sandbox").trim();
+  const explicit = String(env.ORKESTR_RUNTIME_CODEX_COMMAND || "").trim();
+  const base = explicit ||
+    (testLikeRuntimeEnvironment(workspace, env) && !allowRealCodexInTests(env)
+      ? testRuntimePlaceholderCommand(env)
+      : "codex --dangerously-bypass-approvals-and-sandbox");
   const threadId = codexThreadId(thread);
   const workspaceArg = String(workspace || "").trim() ? ` -C ${shellQuote(workspace)}` : "";
-  return threadId ? `${base} resume${workspaceArg} ${shellQuote(threadId)}` : base;
+  return threadId && commandUsesCodex(base) ? `${base} resume${workspaceArg} ${shellQuote(threadId)}` : base;
 }
 
 function codexModeSetting(value) {
@@ -832,20 +965,18 @@ export async function wakeThread(threadId, options = {}, env = process.env) {
   await ensureCodexWorkspaceTrusted(workspace, env);
   const command = runtimeCommand(thread, workspace, env);
   await ensureRuntimeCodexAuthenticated(command, env);
+  const temporaryReason = temporaryRuntimeReason({ thread, workspace, command }, env);
+  const ttlMs = temporaryReason ? tempRuntimeTtlMs(env) : runtimeLeaseTtlMs(env);
   await updateThread(thread.id, {
     state: "waking",
     wakePolicy: thread.wakePolicy || "wake-on-message",
-    ...(desiredMode
-      ? {
-        desiredCodexMode: desiredMode,
-        desiredCodexModeUpdatedAt: desiredModeUpdatedAt,
-      }
-      : {}),
+    desiredCodexMode: desiredMode || null,
+    desiredCodexModeUpdatedAt: desiredModeUpdatedAt,
     runtime: { state: "waking", sessionName, workspace, reason: options.reason || "wake" },
   }, env);
 
   if (await tmuxHasSession(sessionName)) {
-    await execFileAsync("tmux", ["kill-session", "-t", sessionName]).catch(() => {});
+    await killTmuxSession(sessionName).catch(() => {});
   }
   await execFileAsync("tmux", ["new-session", "-d", "-s", sessionName, "-c", workspace, command], {
     env: {
@@ -878,6 +1009,9 @@ export async function wakeThread(threadId, options = {}, env = process.env) {
     baseCommit: thread.baseCommit || thread.executor?.metadata?.baseCommit || null,
     worktreePath: thread.worktreePath || thread.executor?.metadata?.worktreePath || null,
     command,
+    temporary: Boolean(temporaryReason),
+    temporaryReason: temporaryReason || null,
+    ttlMs: ttlMs || null,
     resourceClass: "light",
     reason: String(options.reason || "wake"),
     startedAt: nowIso(),
@@ -894,12 +1028,8 @@ export async function wakeThread(threadId, options = {}, env = process.env) {
     state: "ready",
     wakePolicy: thread.wakePolicy || "wake-on-message",
     activeRuntimeLeaseId: lease.id,
-    ...(desiredMode
-      ? {
-        desiredCodexMode: desiredMode,
-        desiredCodexModeUpdatedAt: desiredModeUpdatedAt,
-      }
-      : {}),
+    desiredCodexMode: desiredMode || null,
+    desiredCodexModeUpdatedAt: desiredModeUpdatedAt,
     runtime: {
       state: "ready",
       leaseId: lease.id,
@@ -930,7 +1060,7 @@ export async function sleepThread(threadId, options = {}, env = process.env) {
   const active = leases.filter((lease) => lease.threadId === thread.id && !lease.endedAt);
   for (const lease of active) {
     if (options.kill !== false) {
-      await execFileAsync("tmux", ["kill-session", "-t", lease.sessionName]).catch(() => {});
+      await killTmuxSession(lease.sessionName).catch(() => {});
     }
   }
   await saveRuntimeLeases(leases.map((lease) => active.some((item) => item.id === lease.id)
@@ -1505,6 +1635,32 @@ function idleSleepDecision({ lease, messages = [], status }, env = process.env) 
     idleMs,
     idleSleepMs,
     lastActivityAt: new Date(lastActivityMs).toISOString(),
+  };
+}
+
+function runtimeLeaseTemporaryReason(lease = {}, env = process.env) {
+  if (lease.temporaryReason) return String(lease.temporaryReason);
+  if (lease.temporary === true) return "temporary";
+  const label = `${lease.threadId || ""} ${lease.threadName || ""} ${lease.sessionName || ""} ${lease.command || ""}`;
+  if (/\bmode-test\b/i.test(label)) return "mode_test";
+  if (pathLooksLikeOrkestrTemp(lease.workspace, env)) return "temp_workspace";
+  return "";
+}
+
+function runtimeLeaseTtlDecision(lease = {}, env = process.env) {
+  const temporaryReason = runtimeLeaseTemporaryReason(lease, env);
+  const ttlMs = Number(lease.ttlMs || 0) || (temporaryReason ? tempRuntimeTtlMs(env) : runtimeLeaseTtlMs(env));
+  if (!ttlMs) return null;
+  const startedAtMs = timestampMs(lease.startedAt);
+  if (!startedAtMs) return null;
+  const ageMs = Date.now() - startedAtMs;
+  if (ageMs < ttlMs) return null;
+  return {
+    reason: temporaryReason ? "temp_runtime_ttl" : "runtime_ttl",
+    temporaryReason: temporaryReason || null,
+    ttlMs,
+    ageMs,
+    startedAt: new Date(startedAtMs).toISOString(),
   };
 }
 
@@ -3127,6 +3283,7 @@ async function syncLeaseRollout(lease, env = process.env) {
 }
 
 async function syncRuntimeLeasesOnce(env = process.env) {
+  await doctorRuntimeResources({ env, repair: true, automatic: true }).catch(() => null);
   const leases = await listRuntimeLeases(env);
   let changed = false;
   let appended = 0;
@@ -3139,6 +3296,43 @@ async function syncRuntimeLeasesOnce(env = process.env) {
     if (!(await tmuxHasSession(lease.sessionName))) {
       next.push({ ...lease, endedAt: nowIso(), endReason: "tmux_session_missing" });
       await updateThread(lease.threadId, { state: "sleeping", activeRuntimeLeaseId: null }, env).catch(() => {});
+      changed = true;
+      continue;
+    }
+    const ttl = runtimeLeaseTtlDecision(lease, env);
+    if (ttl) {
+      const endedAt = nowIso();
+      await killTmuxSession(lease.sessionName).catch(() => {});
+      next.push({
+        ...lease,
+        endedAt,
+        endReason: ttl.reason,
+        ttlMs: ttl.ttlMs,
+        ageMs: ttl.ageMs,
+        temporaryReason: ttl.temporaryReason || lease.temporaryReason || null,
+      });
+      await updateThread(lease.threadId, {
+        state: "sleeping",
+        activeRuntimeLeaseId: null,
+        runtime: {
+          state: "sleeping",
+          endedAt,
+          reason: ttl.reason,
+          ttlMs: ttl.ttlMs,
+          ageMs: ttl.ageMs,
+          temporaryReason: ttl.temporaryReason,
+        },
+      }, env).catch(() => {});
+      await appendEvent({
+        type: "runtime_slept",
+        threadId: lease.threadId,
+        reason: ttl.reason,
+        killed: true,
+        auto: true,
+        ttlMs: ttl.ttlMs,
+        ageMs: ttl.ageMs,
+        temporaryReason: ttl.temporaryReason,
+      }, env).catch(() => {});
       changed = true;
       continue;
     }
@@ -3197,7 +3391,7 @@ async function syncRuntimeLeasesOnce(env = process.env) {
           idleMs: idleSleep.idleMs,
           lastActivityAt: idleSleep.lastActivityAt,
         };
-        await execFileAsync("tmux", ["kill-session", "-t", endedLease.sessionName]).catch(() => {});
+        await killTmuxSession(endedLease.sessionName).catch(() => {});
         await updateThread(lease.threadId, {
           state: "sleeping",
           activeRuntimeLeaseId: null,
@@ -3271,6 +3465,264 @@ export async function syncPaneProgressForActiveLeases(env = process.env) {
     }, env).catch(() => {});
   }
   return { sampled, changed };
+}
+
+function tmuxSessionAgeMs(session = {}) {
+  const createdAtMs = Number(session.createdAtMs || 0);
+  return createdAtMs > 0 ? Date.now() - createdAtMs : 0;
+}
+
+async function listOrkestrTmuxSessions(env = process.env) {
+  let stdout = "";
+  try {
+    const result = await execFileAsync("tmux", [
+      "list-sessions",
+      "-F",
+      "#{session_name}\t#{session_created}\t#{pane_current_path}\t#{pane_current_command}\t#{pane_pid}",
+    ], { env: { ...process.env, ...env }, maxBuffer: 1024 * 1024 });
+    stdout = result.stdout;
+  } catch (error) {
+    const message = String(error?.stderr || error?.stdout || error?.message || "");
+    if (/no server running|failed to connect|no sessions/i.test(message)) return [];
+    throw error;
+  }
+  return String(stdout || "")
+    .trim()
+    .split("\n")
+    .filter(Boolean)
+    .map((line) => {
+      const [sessionName = "", created = "", currentPath = "", currentCommand = "", panePid = ""] = line.split("\t");
+      const createdSeconds = Number(created);
+      return {
+        sessionName: sessionName.trim(),
+        createdAtMs: Number.isFinite(createdSeconds) && createdSeconds > 0 ? createdSeconds * 1000 : 0,
+        currentPath: currentPath.trim(),
+        currentCommand: currentCommand.trim(),
+        panePid: Number(panePid) || null,
+      };
+    })
+    .filter((session) => session.sessionName.startsWith("orkestr-"));
+}
+
+function parseProcessRows(stdout = "") {
+  return String(stdout || "")
+    .trim()
+    .split("\n")
+    .filter(Boolean)
+    .map((line) => {
+      const parts = line.trim().split(/\s+/);
+      const [pid, ppid, pgid, command, ...args] = parts;
+      return {
+        pid: Number(pid) || 0,
+        ppid: Number(ppid) || 0,
+        pgid: Number(pgid) || 0,
+        command: String(command || ""),
+        args: args.join(" "),
+      };
+    })
+    .filter((row) => row.pid > 1 && row.pid !== process.pid);
+}
+
+async function listCodexRuntimeProcesses(env = process.env) {
+  const { stdout } = await execFileAsync("ps", ["-eo", "pid=,ppid=,pgid=,comm=,args="], {
+    env: { ...process.env, ...env },
+    maxBuffer: 1024 * 1024,
+  });
+  return parseProcessRows(stdout).filter((row) => {
+    const body = `${row.command} ${row.args}`;
+    return /(^|[/\s])codex(?:\s|$)/i.test(body) && (
+      pathLooksLikeOrkestrTemp(body.match(/(?:^|\s)(\/\S*orkestr-[^\s]*)/)?.[1] || "", env) ||
+      /\bmode-test\b/i.test(body)
+    );
+  });
+}
+
+function sessionTemporaryReason(session = {}, env = process.env) {
+  const label = `${session.sessionName || ""} ${session.currentPath || ""} ${session.currentCommand || ""}`;
+  if (/\bmode-test\b/i.test(label)) return "mode_test";
+  if (pathLooksLikeOrkestrTemp(session.currentPath, env)) return "temp_workspace";
+  return "";
+}
+
+function sessionRepairDecision(session = {}, activeSessionNames = new Set(), { repair = false, automatic = false, env = process.env } = {}) {
+  const orphan = !activeSessionNames.has(session.sessionName);
+  const temporaryReason = sessionTemporaryReason(session, env);
+  const ttlMs = temporaryReason ? tempRuntimeTtlMs(env) : 0;
+  const ageMs = tmuxSessionAgeMs(session);
+  const expiredTemp = Boolean(temporaryReason && ttlMs && ageMs >= ttlMs);
+  const repairable = automatic
+    ? Boolean(orphan && expiredTemp)
+    : Boolean(orphan || expiredTemp);
+  return {
+    orphan,
+    temporaryReason: temporaryReason || null,
+    ttlMs,
+    ageMs,
+    expiredTemp,
+    repairable: repair && repairable,
+  };
+}
+
+function resourceSummary(counts) {
+  if (counts.repaired) return `Repaired ${counts.repaired} runtime resource issue(s).`;
+  if (counts.issues) return `${counts.issues} runtime resource issue(s) need attention.`;
+  return "No leaked runtime resources found.";
+}
+
+export async function doctorRuntimeResources({ env = process.env, repair = false, automatic = false } = {}) {
+  const leases = await listRuntimeLeases(env).catch(() => []);
+  const activeLeases = leases.filter((lease) => !lease.endedAt);
+  const activeSessionNames = new Set(activeLeases.map((lease) => String(lease.sessionName || "")).filter(Boolean));
+  const issues = [];
+  const actions = [];
+
+  let tmuxSessions = [];
+  try {
+    tmuxSessions = await listOrkestrTmuxSessions(env);
+  } catch (error) {
+    return {
+      ok: false,
+      status: "broken",
+      summary: `Could not inspect tmux sessions: ${error?.message || String(error)}`,
+      generatedAt: nowIso(),
+      repair,
+      counts: {
+        activeLeases: activeLeases.length,
+        tmuxSessions: 0,
+        orphanSessions: 0,
+        tempSessions: 0,
+        staleLeases: 0,
+        tempCodexProcesses: 0,
+        issues: 1,
+        repaired: 0,
+      },
+      issues: [{ severity: "error", code: "tmux_inspection_failed", message: error?.message || String(error) }],
+      actions,
+    };
+  }
+
+  const liveSessionNames = new Set(tmuxSessions.map((session) => session.sessionName));
+  let nextLeases = leases;
+  for (const lease of activeLeases) {
+    if (liveSessionNames.has(lease.sessionName)) continue;
+    issues.push({
+      severity: "warning",
+      code: "stale_runtime_lease",
+      threadId: lease.threadId,
+      sessionName: lease.sessionName,
+      message: "Runtime lease is active in storage but the tmux session is missing.",
+    });
+    if (repair) {
+      const endedAt = nowIso();
+      nextLeases = nextLeases.map((item) => item.id === lease.id
+        ? { ...item, endedAt, endReason: "resource_doctor_missing_session" }
+        : item);
+      await updateThread(lease.threadId, { state: "sleeping", activeRuntimeLeaseId: null }, env).catch(() => {});
+      actions.push({ action: "ended_stale_lease", threadId: lease.threadId, sessionName: lease.sessionName });
+    }
+  }
+
+  for (const session of tmuxSessions) {
+    const decision = sessionRepairDecision(session, activeSessionNames, { repair, automatic, env });
+    if (decision.orphan) {
+      issues.push({
+        severity: decision.temporaryReason ? "error" : "warning",
+        code: "orphan_tmux_session",
+        sessionName: session.sessionName,
+        currentPath: session.currentPath,
+        temporaryReason: decision.temporaryReason,
+        ageMs: decision.ageMs,
+        message: "tmux session is not present in the active Orkestr lease registry.",
+      });
+    } else if (decision.expiredTemp) {
+      issues.push({
+        severity: "error",
+        code: "expired_temp_runtime",
+        sessionName: session.sessionName,
+        currentPath: session.currentPath,
+        temporaryReason: decision.temporaryReason,
+        ageMs: decision.ageMs,
+        ttlMs: decision.ttlMs,
+        message: "temporary Orkestr runtime exceeded its hard TTL.",
+      });
+    }
+    if (decision.repairable) {
+      const killed = await killTmuxSession(session.sessionName).catch((error) => ({ error: error?.message || String(error) }));
+      actions.push({
+        action: "killed_tmux_session",
+        sessionName: session.sessionName,
+        currentPath: session.currentPath,
+        reason: decision.expiredTemp ? "expired_temp_runtime" : "orphan_tmux_session",
+        killed,
+      });
+    }
+  }
+
+  let tempCodexProcesses = [];
+  try {
+    tempCodexProcesses = await listCodexRuntimeProcesses(env);
+  } catch {
+    tempCodexProcesses = [];
+  }
+  for (const processRow of tempCodexProcesses) {
+    const orphan = processRow.ppid === 1;
+    issues.push({
+      severity: orphan ? "error" : "warning",
+      code: orphan ? "orphan_temp_codex_process" : "temp_codex_process",
+      pid: processRow.pid,
+      ppid: processRow.ppid,
+      pgid: processRow.pgid,
+      message: orphan
+        ? "temporary Codex process is orphaned outside tmux."
+        : "temporary Codex process is still running.",
+    });
+    if (repair && (orphan || !automatic)) {
+      const terminated = await terminateProcessGroupId(processRow.pgid, processRow.pid).catch(() => []);
+      actions.push({ action: "terminated_codex_process", pid: processRow.pid, pgid: processRow.pgid, terminated });
+    }
+  }
+
+  if (repair && actions.some((action) => action.action === "ended_stale_lease")) {
+    await saveRuntimeLeases(nextLeases, env).catch(() => {});
+  }
+
+  const relevantIssues = automatic
+    ? issues.filter((issue) => issue.code === "expired_temp_runtime" || issue.code === "orphan_temp_codex_process")
+    : issues;
+  const counts = {
+    activeLeases: activeLeases.length,
+    tmuxSessions: tmuxSessions.length,
+    orphanSessions: tmuxSessions.filter((session) => !activeSessionNames.has(session.sessionName)).length,
+    tempSessions: tmuxSessions.filter((session) => sessionTemporaryReason(session, env)).length,
+    staleLeases: activeLeases.filter((lease) => !liveSessionNames.has(lease.sessionName)).length,
+    tempCodexProcesses: tempCodexProcesses.length,
+    issues: relevantIssues.length,
+    repaired: actions.length,
+  };
+  const status = relevantIssues.some((issue) => issue.severity === "error") ? "broken" : relevantIssues.length ? "warning" : "ok";
+  return {
+    ok: status === "ok",
+    status,
+    summary: resourceSummary(counts),
+    generatedAt: nowIso(),
+    repair,
+    automatic,
+    counts,
+    leases: activeLeases.map((lease) => ({
+      id: lease.id,
+      threadId: lease.threadId,
+      sessionName: lease.sessionName,
+      workspace: lease.workspace,
+      temporary: Boolean(runtimeLeaseTemporaryReason(lease, env)),
+      temporaryReason: runtimeLeaseTemporaryReason(lease, env) || null,
+      ttlMs: Number(lease.ttlMs || 0) || null,
+      startedAt: lease.startedAt || null,
+    })),
+    tmuxSessions,
+    tempCodexProcesses,
+    issues: relevantIssues,
+    actions,
+  };
 }
 
 export async function syncRuntimeLeases(env = process.env) {

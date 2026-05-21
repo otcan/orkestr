@@ -4,7 +4,7 @@ import path from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { Body, Controller, Get, HttpCode, Param, Post, Query, Req, Res } from "@nestjs/common";
-import { listRuntimeLeases } from "../../../../../packages/core/src/runtime-leases.js";
+import { doctorRuntimeResources, listRuntimeLeases } from "../../../../../packages/core/src/runtime-leases.js";
 import { getSetupStatus } from "../../../../../packages/core/src/setup.js";
 import { systemDoctor } from "../../../../../packages/core/src/system-doctor.js";
 import { whereAmI } from "../../../../../packages/core/src/whereiam.js";
@@ -376,6 +376,17 @@ export class SystemController {
   @Get("system/doctor")
   async systemDoctor() {
     return systemDoctor();
+  }
+
+  @Get("system/resources")
+  async systemResources(@Query("repair") repair = "") {
+    return doctorRuntimeResources({ repair: ["1", "true", "yes"].includes(String(repair || "").toLowerCase()) });
+  }
+
+  @Post("system/resources/repair")
+  @HttpCode(200)
+  async repairSystemResources() {
+    return doctorRuntimeResources({ repair: true });
   }
 
   @Get("system/processes")

@@ -2,7 +2,7 @@ import { spawn } from "node:child_process";
 import { startServer } from "../../server/src/server.js";
 import { approvePairingChallenge, listPairingChallenges, rejectPairingChallenge } from "../../../packages/core/src/security.js";
 import { defaultApiBase, requestJson } from "./api-client.js";
-import { formatSystemDoctor, formatThreadTable, formatTimerDoctor, formatTimerTable, threadName } from "./format.js";
+import { formatRuntimeResources, formatSystemDoctor, formatThreadTable, formatTimerDoctor, formatTimerTable, threadName } from "./format.js";
 import { pickThread as defaultPickThread } from "./thread-picker.js";
 
 export async function runCli(argv = process.argv.slice(2), context = {}) {
@@ -94,7 +94,8 @@ async function doctorCommand(argv, ctx) {
   const subject = positional(argv)[0] || "system";
   if (subject === "system" || subject === "host") return doctorSystemCommand(argv, ctx);
   if (subject === "timers" || subject === "timer") return doctorTimersCommand(argv, ctx);
-  throw new Error("Usage: orkestr doctor [system|timers] [--json]");
+  if (subject === "resources" || subject === "resource" || subject === "runtimes") return doctorResourcesCommand(argv, ctx);
+  throw new Error("Usage: orkestr doctor [system|timers|resources] [--repair] [--json]");
 }
 
 async function timersCommand(argv, ctx) {
@@ -127,6 +128,17 @@ async function doctorSystemCommand(argv, ctx) {
   const payload = await requestJson("/api/system/doctor", ctx);
   if (json) ctx.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
   else ctx.stdout.write(`${formatSystemDoctor(payload)}\n`);
+  return payload?.ok === false || payload?.status === "broken" ? 1 : 0;
+}
+
+async function doctorResourcesCommand(argv, ctx) {
+  const json = argv.includes("--json");
+  const repair = argv.includes("--repair");
+  const payload = repair
+    ? await requestJson("/api/system/resources/repair", { ...ctx, method: "POST", body: {} })
+    : await requestJson("/api/system/resources", ctx);
+  if (json) ctx.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
+  else ctx.stdout.write(`${formatRuntimeResources(payload)}\n`);
   return payload?.ok === false || payload?.status === "broken" ? 1 : 0;
 }
 
@@ -319,7 +331,7 @@ function writeUsage(stream) {
   orkestr [serve] [--open] [--host 127.0.0.1] [--port 19812]
   orkestr list [--json] [--api http://127.0.0.1:19812]
   orkestr whereiam [--cwd path] [--json]
-  orkestr doctor [system|timers] [--json]
+	  orkestr doctor [system|timers|resources] [--repair] [--json]
   orkestr timers [list|doctor|run <timer-id>] [--json]
   orkestr security [challenges|approve <challenge-id>|reject <challenge-id>] [--json]
   orkestr thread create <name> [--id id] [--cwd path] [--command command] [--executor id] [--json]
@@ -374,7 +386,7 @@ function positional(argv) {
     "--repo-path",
     "--task",
   ]);
-  const flagsWithoutValues = new Set(["--blank", "--json", "--no-wake", "--print", "--open"]);
+  const flagsWithoutValues = new Set(["--blank", "--json", "--no-wake", "--print", "--open", "--repair"]);
   for (let index = 0; index < argv.length; index += 1) {
     const value = argv[index];
     if (flagsWithoutValues.has(value)) continue;

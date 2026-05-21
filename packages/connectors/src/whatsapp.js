@@ -1,8 +1,8 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import crypto from "node:crypto";
-import { enqueueAgentMessage } from "../../core/src/messages.js";
-import { enqueueThreadInput, listThreadMessages, listThreads } from "../../core/src/threads.js";
+import { enqueueAgentMessage, updateAgentMessage } from "../../core/src/messages.js";
+import { enqueueThreadInput, listThreadMessages, listThreads, updateThreadMessage } from "../../core/src/threads.js";
 import { dataPaths, ensureDataDirs } from "../../storage/src/paths.js";
 import { readConnectorConfig } from "../../storage/src/config.js";
 import { appendEvent, readJson, writeJson } from "../../storage/src/store.js";
@@ -557,6 +557,102 @@ function threadAllowsWhatsAppMirroring(thread) {
   return thread.binding.mirrorToWhatsApp !== false && thread.binding.mirrorReplies !== false;
 }
 
+function whatsappMessageOrigin(message, state = null) {
+  if (!message) return false;
+  if (message.connector === "whatsapp" || message.source === "whatsapp_inbound" || message.source === "whatsapp_client") return true;
+  return Boolean((state?.inboundEvents || []).some((event) => event.messageId === message.id));
+}
+
+function passiveMirrorCanCompleteParent(parent, reply, chatId, state = null) {
+  if (!parent || parent.role !== "user" || !whatsappMessageOrigin(parent, state)) return false;
+  const parentState = String(parent.state || "").trim().toLowerCase();
+  const parentDeliveryState = String(parent.deliveryState || "").trim().toLowerCase();
+  const recoverableStates = new Set(["queued", "pending_delivery", "awaiting_ack", "running", "failed"]);
+  const recoverableDeliveryStates = new Set([
+    "awaiting_ack",
+    "awaiting_ack_unobserved",
+    "awaiting_runtime_completion",
+    "delivering",
+    "failed",
+    "recovering_stale_ack",
+    "retrying_delivery",
+    "waiting_runtime_ready",
+    "waiting_runtime_start",
+    "waking",
+  ]);
+  if (!recoverableStates.has(parentState) && !recoverableDeliveryStates.has(parentDeliveryState)) return false;
+  const parentChatId = pickString(parent.chatId, reply?.chatId);
+  const replyChatId = pickString(chatId, reply?.chatId, parent.chatId);
+  return !parentChatId || !replyChatId || parentChatId === replyChatId;
+}
+
+function completedAssistantReplyForParent(messages, parent, chatId, state = null) {
+  if (!parent?.id) return null;
+  return messages.find((candidate) =>
+    candidate.role === "assistant" &&
+    candidate.state === "completed" &&
+    candidate.parentMessageId === parent.id &&
+    shouldMirrorWhatsAppReply(candidate) &&
+    passiveMirrorCanCompleteParent(parent, candidate, chatId, state)
+  ) || null;
+}
+
+async function completePassiveMirrorParent({ kind, agentId, threadId, parent, reply, chatId, delivery = null, state, env }) {
+  if (!passiveMirrorCanCompleteParent(parent, reply, chatId, state)) return null;
+  const previousState = parent.state || null;
+  const previousDeliveryState = parent.deliveryState || null;
+  const patch = {
+    state: "completed",
+    deliveryState: "delivered",
+    deliveredAt: delivery?.deliveredAt || new Date().toISOString(),
+    observedVia: "whatsapp_passive_mirror_delivery",
+    passiveMirrorMessageId: reply?.id || null,
+    error: null,
+  };
+  const updated = kind === "thread"
+    ? await updateThreadMessage(threadId, parent.id, patch, env)
+    : await updateAgentMessage(agentId, parent.id, patch, env);
+  Object.assign(parent, updated);
+  await appendEvent({
+    type: "whatsapp_passive_mirror_parent_completed",
+    kind,
+    agentId: agentId || null,
+    threadId: threadId || null,
+    messageId: parent.id,
+    replyMessageId: reply?.id || null,
+    chatId: pickString(chatId, reply?.chatId, parent.chatId),
+    previousState,
+    previousDeliveryState,
+  }, env).catch(() => {});
+  return updated;
+}
+
+async function recoverParentsForAlreadyMirroredReplies(messageSets, deliveredIds, outboundDeliveries, state, env) {
+  const deliveriesByMessageId = new Map((outboundDeliveries || [])
+    .filter((delivery) => delivery?.messageId)
+    .map((delivery) => [delivery.messageId, delivery]));
+  for (const { agentId, threadId, messages, kind } of messageSets) {
+    for (const reply of messages) {
+      if (reply.role !== "assistant" || reply.state !== "completed" || !deliveredIds.has(reply.id)) continue;
+      if (!shouldMirrorWhatsAppReply(reply)) continue;
+      const parent = messages.find((entry) => entry.id === reply.parentMessageId);
+      if (!parent) continue;
+      const delivery = deliveriesByMessageId.get(reply.id) || null;
+      await completePassiveMirrorParent({
+        kind,
+        agentId,
+        threadId,
+        parent,
+        reply,
+        chatId: pickString(reply.chatId, parent.chatId, delivery?.chatId),
+        delivery,
+        state,
+        env,
+      }).catch(() => null);
+    }
+  }
+}
+
 function failedWhatsAppDeliveryTarget(message, thread, state) {
   const role = String(message?.role || "").trim().toLowerCase();
   const messageState = String(message?.state || "").trim().toLowerCase();
@@ -647,6 +743,7 @@ async function deliverWhatsAppRepliesOnce(env = process.env, fetchImpl = fetch) 
     ...(await listMessageSets(env)).map((set) => ({ ...set, kind: "agent" })),
     ...(await listThreadMessageSets(env)).map((set) => ({ ...set, kind: "thread" })),
   ];
+  await recoverParentsForAlreadyMirroredReplies(messageSets, deliveredIds, outboundDeliveries, state, env);
   for (const { agentId, threadId, thread, messages, kind } of messageSets) {
     for (const message of messages) {
       const queuedModeTarget = queuedModeWhatsAppDeliveryTarget(message, thread, state);
@@ -701,6 +798,24 @@ async function deliverWhatsAppRepliesOnce(env = process.env, fetchImpl = fetch) 
           continue;
         }
         const chatId = failedDeliveryTarget.chatId;
+        const completedReply = completedAssistantReplyForParent(messages, message, chatId, state);
+        if (completedReply) {
+          if (deliveredIds.has(completedReply.id)) {
+            await completePassiveMirrorParent({
+              kind,
+              agentId,
+              threadId,
+              parent: message,
+              reply: completedReply,
+              chatId,
+              delivery: outboundDeliveries.find((delivery) => delivery.messageId === completedReply.id) || null,
+              state,
+              env,
+            }).catch(() => null);
+          }
+          skipped.push({ agentId, threadId, messageId: message.id, reason: "assistant_reply_available" });
+          continue;
+        }
         const text = formatWhatsAppDeliveryFailure(message);
         const accountId = kind === "thread" ? failedDeliveryTarget.accountId : pickString(message.accountId, failedDeliveryTarget.accountId);
         const textKey = deliveryTextKey(chatId, `${message.id}\n${text}`);
@@ -779,6 +894,19 @@ async function deliverWhatsAppRepliesOnce(env = process.env, fetchImpl = fetch) 
         deliveredTextKeys.add(textKey);
         batchTextKeys.add(textKey);
         delivered.push(delivery);
+        if (parent) {
+          await completePassiveMirrorParent({
+            kind,
+            agentId,
+            threadId,
+            parent,
+            reply: message,
+            chatId,
+            delivery,
+            state,
+            env,
+          }).catch(() => null);
+        }
         await appendEvent({ type: "whatsapp_outbound_delivered", agentId: agentId || null, threadId: threadId || null, messageId: message.id, chatId }, env);
       } catch (error) {
         const failure = { kind, agentId: agentId || null, threadId: threadId || null, messageId: message.id, chatId, error: error.message || String(error) };
