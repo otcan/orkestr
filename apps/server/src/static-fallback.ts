@@ -16,7 +16,7 @@ export function registerStaticFallback(app: INestApplication): void {
   const expressApp = app.getHttpAdapter().getInstance();
   expressApp.use(async (request: any, response: any, next: () => void) => {
     const url = String(request.url || "");
-    if (url.startsWith("/api/") || url.startsWith("/oauth/")) {
+    if (url.startsWith("/api/") || url.startsWith("/oauth/") || url.startsWith("/google-marketing/oauth/")) {
       return next();
     }
     return serveStaticPath(url || "/", response);

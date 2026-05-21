@@ -4,7 +4,8 @@ import { firstValueFrom } from "rxjs";
 import { ApiService, ConnectorStatus, OutlookOAuthPollResponse, OutlookOAuthStartResponse, SecurityChallenge, SetupStatus, SystemDoctorResponse, ThreadSummary, VersionResponse } from "./api.service";
 
 type ConnectorStep = "openai" | "codex" | "gmail" | "linkedin" | "whatsapp" | "browsers";
-type OnboardingStep = "goal" | "system" | "security" | ConnectorStep | "finish";
+type MarketingStep = "google-marketing";
+type OnboardingStep = "goal" | "system" | "security" | MarketingStep | ConnectorStep | "finish";
 type OnboardingGoalId = "whatsapp-codex" | "virtual-desktop" | "inbox-summary";
 type SetupPageMode = "setup" | "onboarding";
 type MailProvider = "gmail" | "outlook";
@@ -121,6 +122,7 @@ export class OnboardingPageComponent implements OnInit, OnChanges, OnDestroy {
 
   ngOnInit(): void {
     this.restoreProgress();
+    this.applySetupSectionFromInput();
     void this.load();
     this.poller = setInterval(() => void this.load(false), 30_000);
   }
@@ -153,6 +155,7 @@ export class OnboardingPageComponent implements OnInit, OnChanges, OnDestroy {
       this.hydrateForms(setup);
       if (setup.security?.paired) await this.loadSecurityChallenges(false);
       else this.securityChallenges = [];
+      this.applySetupSectionFromInput();
       if (!this.stepInitialized) {
         this.activeStep = this.firstOpenStep();
         this.stepInitialized = true;
@@ -323,17 +326,9 @@ export class OnboardingPageComponent implements OnInit, OnChanges, OnDestroy {
   }
 
   async startGoogleMarketingAuth(): Promise<void> {
-    this.busy = true;
-    try {
-      const result = await firstValueFrom(this.api.runConnectorAction("google-marketing", "start-oauth"));
-      const authUrl = String(result.authorizeUrl || result.auth_url || result.url || "").trim();
-      if (!result.ok || !authUrl) throw new Error(result.message || result.raw || "Google Marketing auth URL was not returned.");
-      globalThis.location.href = authUrl;
-    } catch (error) {
-      this.error = this.errorText(error);
-    } finally {
-      this.busy = false;
-    }
+    this.error = "";
+    this.notice = "Opening Google Marketing authorization.";
+    globalThis.location.href = "/google-marketing/oauth/start";
   }
 
   gmailStatusLabel(): string {
@@ -628,6 +623,7 @@ export class OnboardingPageComponent implements OnInit, OnChanges, OnDestroy {
   setupSections(): Array<{ id: OnboardingStep; label: string; eyebrow: string }> {
     return [
       { id: "system", label: "Connections", eyebrow: "Runtime" },
+      { id: "google-marketing", label: "Google Marketing", eyebrow: "SEO data" },
       { id: "security", label: "Security", eyebrow: "Remote access" },
       ...this.connectorSteps,
     ];
@@ -1217,7 +1213,7 @@ export class OnboardingPageComponent implements OnInit, OnChanges, OnDestroy {
       if (!raw) return;
       const saved = JSON.parse(raw) as { goal?: OnboardingGoalId; activeStep?: OnboardingStep };
       if (saved.goal && this.goals.some((goal) => goal.id === saved.goal)) this.selectedGoal = saved.goal;
-      if (saved.activeStep && this.pageSections().some((step) => step.id === saved.activeStep)) {
+      if (!this.isSetupMode() && saved.activeStep && this.pageSections().some((step) => step.id === saved.activeStep)) {
         this.activeStep = saved.activeStep;
         this.stepInitialized = true;
       }

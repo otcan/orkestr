@@ -91,7 +91,7 @@
         <section class="setup-form">
           <h3>Connections</h3>
           <p>
-            {{ isSetupMode() ? "These checks confirm this self-hosted runtime can reach the tools and connectors Orkestr needs." : "These checks confirm this self-hosted runtime can support " + activeGoal().label + "." }}
+            Review runtime items that need attention. Operational auth surfaces have their own setup sections.
           </p>
           <div class="check-list">
             @for (check of systemChecks(); track check.label) {
@@ -104,34 +104,40 @@
               </div>
             }
           </div>
+        </section>
+      }
 
-          @if (googleMarketingConnector(); as marketing) {
-            <section class="mail-card google-marketing-card">
-              <div class="mail-card-head">
-                <div>
-                  <strong>{{ marketing.label || "Google Marketing" }}</strong>
-                  <small>Search Console + GA Admin for SEO Ops</small>
-                </div>
-                <em [class]="stateClass('google-marketing')">{{ stateLabel('google-marketing') }}</em>
+      @if (activeStep === "google-marketing") {
+        <section class="setup-form">
+          <h3>Google Marketing</h3>
+          <p>
+            Refresh the Search Console and GA Admin consent used by SEO Ops and Magie reporting.
+          </p>
+          <section class="mail-card google-marketing-card">
+            <div class="mail-card-head">
+              <div>
+                <strong>{{ googleMarketingConnector()?.label || "Google Marketing" }}</strong>
+                <small>Search Console + GA Admin for SEO Ops</small>
               </div>
-              <p>{{ marketing.summary || "Connect Google Marketing to refresh Search Console and GA data." }}</p>
-              @if (googleMarketingScopeLine()) {
-                <small class="form-section-note">{{ googleMarketingScopeLine() }}</small>
-              }
-              <div class="wizard-review">
-                <dt>Runtime</dt>
-                <dd>{{ connectorDetail('google-marketing', 'kind') || 'overlay connector' }}</dd>
-                <dt>Action</dt>
-                <dd>{{ googleMarketingActionHint() }}</dd>
-              </div>
-              <div class="button-row">
-                <button type="button" (click)="startGoogleMarketingAuth()" [disabled]="busy">
-                  {{ busy ? "Starting" : googleMarketingActionLabel() }}
-                </button>
-                <button class="secondary" type="button" (click)="load()" [disabled]="busy">Refresh status</button>
-              </div>
-            </section>
-          }
+              <em [class]="stateClass('google-marketing')">{{ stateLabel('google-marketing') }}</em>
+            </div>
+            <p>{{ googleMarketingConnector()?.summary || "Connect Google Marketing to refresh Search Console and GA data." }}</p>
+            @if (googleMarketingScopeLine()) {
+              <small class="form-section-note">{{ googleMarketingScopeLine() }}</small>
+            }
+            <div class="wizard-review">
+              <dt>Runtime</dt>
+              <dd>{{ connectorDetail('google-marketing', 'kind') || 'overlay connector' }}</dd>
+              <dt>Action</dt>
+              <dd>{{ googleMarketingActionHint() }}</dd>
+            </div>
+            <div class="button-row">
+              <button type="button" (click)="startGoogleMarketingAuth()" [disabled]="busy">
+                {{ busy ? "Starting" : googleMarketingActionLabel() }}
+              </button>
+              <button class="secondary" type="button" (click)="load()" [disabled]="busy">Refresh status</button>
+            </div>
+          </section>
         </section>
       }
 

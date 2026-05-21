@@ -213,6 +213,32 @@ export class ConnectorCallbacksController {
 
 @Controller("google-marketing/oauth")
 export class GoogleMarketingCallbacksController {
+  @Get("start")
+  async googleMarketingStart(@Res() response: any) {
+    let payload: any = null;
+    try {
+      payload = await runOverlayConnectorAction("google-marketing", "start-oauth", {
+        env: process.env,
+        input: {},
+      });
+    } catch (error) {
+      payload = {
+        ok: false,
+        state: "error",
+        message: String((error as Error)?.message || "Google Marketing OAuth start failed."),
+      };
+    }
+    const authorizeUrl = String(payload?.authorizeUrl || payload?.auth_url || payload?.url || "").trim();
+    if (payload?.ok !== false && authorizeUrl) {
+      return response.redirect(302, authorizeUrl);
+    }
+    return response
+      .status(500)
+      .header("cache-control", "no-store")
+      .type("text/html; charset=utf-8")
+      .send(googleMarketingOAuthHtml(payload));
+  }
+
   @Get("callback")
   async googleMarketingCallback(@Query() _query: Record<string, string>, @Req() request: any, @Res() response: any) {
     const callbackUrl = externalUrlFromRequest(request);
@@ -270,8 +296,8 @@ function googleMarketingOAuthHtml(payload: Record<string, unknown> = {}): string
       <span class="badge">${escapeHtml(state)}</span>
       <h1>${escapeHtml(title)}</h1>
       <p>${escapeHtml(message)}</p>
-      <p>Return to System setup to refresh the Google Marketing connector status.</p>
-      <a href="/setup/system">Open System Setup</a>
+      <p>Return to Google Marketing setup to refresh the connector status.</p>
+      <a href="/setup/google-marketing">Open Google Marketing Setup</a>
     </main>
   </body>
 </html>`;

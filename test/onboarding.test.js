@@ -32,7 +32,8 @@ test("onboarding focuses the starter setup on virtual desktop and WhatsApp", asy
   assert.ok(onboarding.includes("persistent Codex threads"));
   assert.ok(onboarding.includes("buildStamp()"));
   assert.ok(onboarding.includes("Connections"));
-  assert.ok(onboarding.includes("self-hosted runtime"));
+  assert.ok(onboarding.includes("Review runtime items that need attention"));
+  assert.ok(onboarding.includes("Operational auth surfaces have their own setup sections"));
   assert.ok(onboarding.includes("Codex CLI login"));
   assert.ok(onboarding.includes("Agents should acquire Orkestr desktop leases"));
   assert.ok(onboarding.includes("Codex from WhatsApp"));
@@ -49,6 +50,13 @@ test("onboarding focuses the starter setup on virtual desktop and WhatsApp", asy
   assert.ok(onboarding.includes("Setup stays available after onboarding"));
   assert.ok(onboarding.includes("@if (isOnboardingMode())"));
   assert.ok(onboarding.includes("setupSections()"));
+  assert.ok(onboarding.includes('type MarketingStep = "google-marketing"'));
+  assert.ok(onboarding.includes('id: "google-marketing"'));
+  assert.ok(onboarding.includes("Google Marketing"));
+  assert.ok(onboarding.includes("SEO data"));
+  assert.ok(onboarding.includes("Search Console + GA Admin"));
+  assert.ok(onboarding.includes("startGoogleMarketingAuth()"));
+  assert.ok(onboarding.includes('globalThis.location.href = "/google-marketing/oauth/start"'));
   assert.ok(onboarding.includes("systemDoctor()"));
   assert.ok(onboarding.includes("doctorStatusClass"));
   assert.ok(onboarding.includes("Mail Auth"));
