@@ -77,6 +77,36 @@ same local runtime state.
 
 ### VPS Host-Native
 
+For a fresh VPS, choose **Ubuntu 24.04 LTS Server x64**. Use at least 2 vCPU,
+4 GB RAM, and 60 GB disk; 4 vCPU and 8 GB RAM is more comfortable when browser
+profiles, WhatsApp, and multiple Codex sessions are active.
+
+The easiest fresh-server path is the opinionated bootstrap script:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/otcan/orkestr/main/scripts/bootstrap-vps.sh | sudo bash
+```
+
+It checks the OS and basic resources, installs Tailscale by default, runs the
+host-native systemd installer with auto-update enabled, configures optional
+demo/WhatsApp/domain settings, and prints the setup URL and next commands.
+
+Useful variants:
+
+```bash
+# Disposable demo server with Tailscale installed.
+curl -fsSL https://raw.githubusercontent.com/otcan/orkestr/main/scripts/bootstrap-vps.sh | sudo bash -s -- --demo
+
+# Public HTTPS domain through Caddy.
+curl -fsSL https://raw.githubusercontent.com/otcan/orkestr/main/scripts/bootstrap-vps.sh | sudo bash -s -- --domain orkestr.example.com
+
+# Custom branch or fork.
+curl -fsSL https://raw.githubusercontent.com/otcan/orkestr/main/scripts/bootstrap-vps.sh | sudo bash -s -- --repo https://github.com/you/orkestr.git --ref main
+```
+
+The lower-level installer remains available when you already know the host is
+prepared:
+
 ```bash
 curl -fsSL https://raw.githubusercontent.com/otcan/orkestr/main/scripts/install.sh | sudo bash -s -- --systemd
 ```

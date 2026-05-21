@@ -46,3 +46,35 @@ test("install script exposes a host-native systemd VPS path", async () => {
   assert.doesNotMatch(script, /systemctl enable --now "\$\{service_name\}\.service"/);
   assert.doesNotMatch(script, /docker exec orkestr/);
 });
+
+test("bootstrap script provides an opinionated fresh VPS path", async () => {
+  const script = await fs.readFile("scripts/bootstrap-vps.sh", "utf8");
+
+  await execFileAsync("bash", ["-n", "scripts/bootstrap-vps.sh"]);
+  assert.match(script, /Ubuntu 24\.04 LTS Server x64/);
+  assert.match(script, /https:\/\/github\.com\/otcan\/orkestr\.git/);
+  assert.match(script, /--repo URL/);
+  assert.match(script, /--ref REF/);
+  assert.match(script, /--demo/);
+  assert.match(script, /--with-whatsapp/);
+  assert.match(script, /--tailscale/);
+  assert.match(script, /--no-tailscale/);
+  assert.match(script, /--tailscale-up/);
+  assert.match(script, /--domain DOMAIN/);
+  assert.match(script, /TS_AUTHKEY/);
+  assert.match(script, /tailscale\.com\/install\.sh/);
+  assert.match(script, /tailscale serve --bg 443/);
+  assert.match(script, /tailscale serve --bg --https/);
+  assert.match(script, /apt_install caddy/);
+  assert.match(script, /\/etc\/caddy\/conf\.d\/orkestr\.caddy/);
+  assert.match(script, /caddy validate --config \/etc\/caddy\/Caddyfile/);
+  assert.match(script, /--systemd/);
+  assert.match(script, /--auto-update/);
+  assert.match(script, /--no-auto-update/);
+  assert.match(script, /ORKESTR_RESET_ON_UPDATE=1/);
+  assert.match(script, /ORKESTR_RESET_OVERLAY=1/);
+  assert.match(script, /WHATSAPP_BRIDGE_MODE local/);
+  assert.match(script, /orkestr doctor/);
+  assert.match(script, /systemctl restart orkestr\.service/);
+  assert.doesNotMatch(script, /docker exec orkestr/);
+});

@@ -42,7 +42,72 @@ quick demos and throwaway test environments.
 The VPS path should be host-native. Caddy, Tailscale, browser desktops,
 systemd logs, SSH pairing approval, and long-running agent work are host-level
 operations. Running the server directly under systemd keeps those operations
-plain:
+plain.
+
+### Fresh VPS Bootstrap
+
+Choose **Ubuntu 24.04 LTS Server x64** for the easiest install path. Ubuntu
+26.04 LTS is accepted by the bootstrap script, but 24.04 remains the default
+recommendation because it is the most common stable image across DigitalOcean,
+Hetzner, and similar VPS providers.
+
+Minimum practical size:
+
+```text
+2 vCPU
+4 GB RAM
+60 GB disk
+```
+
+Preferred size for browser-heavy work:
+
+```text
+4 vCPU
+8 GB RAM
+80-120 GB disk
+```
+
+The one-command fresh-server path is:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/otcan/orkestr/main/scripts/bootstrap-vps.sh | sudo bash
+```
+
+By default, `bootstrap-vps.sh`:
+
+- checks OS, CPU architecture, memory, and disk
+- installs Tailscale, but does not force login unless `TS_AUTHKEY` or
+  `--tailscale-up` is provided
+- runs `scripts/install.sh --systemd --auto-update`
+- keeps Orkestr bound to `127.0.0.1`
+- configures Tailscale Serve automatically when Tailscale is already connected
+- optionally configures Caddy when `--domain` is supplied
+- runs `orkestr doctor`
+- prints local, Tailscale, and domain access instructions
+
+Common variants:
+
+```bash
+# Disposable demo host. Runtime state resets after successful updates.
+curl -fsSL https://raw.githubusercontent.com/otcan/orkestr/main/scripts/bootstrap-vps.sh | sudo bash -s -- --demo
+
+# Public HTTPS domain through Caddy.
+curl -fsSL https://raw.githubusercontent.com/otcan/orkestr/main/scripts/bootstrap-vps.sh | sudo bash -s -- --domain orkestr.example.com
+
+# Tailscale unattended setup. Prefer a secret manager; this interactive form avoids shell history.
+read -rsp "Tailscale auth key: " TS_AUTHKEY; echo
+export TS_AUTHKEY
+curl -fsSL https://raw.githubusercontent.com/otcan/orkestr/main/scripts/bootstrap-vps.sh | sudo -E bash
+unset TS_AUTHKEY
+
+# Custom fork, branch, tag, or commit.
+curl -fsSL https://raw.githubusercontent.com/otcan/orkestr/main/scripts/bootstrap-vps.sh | sudo bash -s -- --repo https://github.com/you/orkestr.git --ref main
+```
+
+### Lower-Level Systemd Installer
+
+If the host is already prepared and you do not want the bootstrap checks or
+Tailscale/Caddy helpers, call the lower-level installer directly:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/otcan/orkestr/main/scripts/install.sh | sudo bash -s -- --systemd
