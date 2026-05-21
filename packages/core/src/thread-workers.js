@@ -747,7 +747,7 @@ export async function createThreadWorker(parentThreadId, input = {}, env = proce
       command: parent.command || "",
       runtime: null,
       executor: copyExecutorForWorker(parent, metadata),
-      codexMode: parent.codexMode || null,
+      codexMode: null,
       desiredCodexMode: null,
       codexModel: parent.codexModel || parent.executor?.metadata?.codexModel || null,
       codexModelProvider: parent.codexModelProvider || parent.executor?.metadata?.codexModelProvider || null,

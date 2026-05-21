@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { dataPaths, ensureDataDirs } from "../../storage/src/paths.js";
 import { appendEvent, readJson } from "../../storage/src/store.js";
+import { requestThreadInputDelivery } from "../../core/src/runtime-leases.js";
 import { listThreads } from "../../core/src/threads.js";
 
 export const localWhatsAppAccountIds = ["account-1", "account-2"];
@@ -291,7 +292,7 @@ async function handleInboundMessage(accountId, message, env = process.env, optio
   if (fromMe && outboundMessageTextKeys.has(textKey(accountId, chatId, text))) return;
   try {
     const { routeWhatsAppInbound } = await import("./whatsapp.js");
-    await routeWhatsAppInbound(
+    const routed = await routeWhatsAppInbound(
       {
         eventId,
         chatId,
@@ -303,6 +304,7 @@ async function handleInboundMessage(accountId, message, env = process.env, optio
       },
       env,
     );
+    if (routed.threadId && !routed.duplicate) requestThreadInputDelivery(routed.threadId, env);
   } catch (error) {
     await appendEvent(
       {

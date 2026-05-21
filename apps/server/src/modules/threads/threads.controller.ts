@@ -8,7 +8,7 @@ import { AnyFilesInterceptor } from "@nestjs/platform-express";
 import { deliverWhatsAppReplies } from "../../../../../packages/connectors/src/whatsapp.js";
 import { runNextThreadMessage } from "../../../../../packages/core/src/executors.js";
 import {
-  applyRuntimeCodexMode,
+  completeCodexModeCommand,
   deliverPendingThreadInputs,
   hardResetThreadRuntime,
   implementRuntimePlan,
@@ -399,6 +399,17 @@ function messagePage(thread: any, rawMessages: any[] = [], query: Record<string,
 
 @Controller("api/threads")
 export class ThreadsController {
+  private async applyOrQueueCodexModeCommand(thread: any, mode: "code" | "plan", source = "codex_mode_command") {
+    const message = await appendThreadMessage(thread.id, {
+      role: "user",
+      source,
+      text: `/${mode}`,
+      state: "queued",
+      deliveryState: "codex_mode_command",
+    });
+    return completeCodexModeCommand(thread, message, mode);
+  }
+
   @Get()
   async list() {
     return threadSummaryPayload();
@@ -559,36 +570,50 @@ export class ThreadsController {
     }
     if (parsedCommand.command === "plan" || parsedCommand.command === "code") {
       const mode = parsedCommand.command;
-      const modePayload = await this.codexMode(thread.id, { mode });
       const text = String(parsedCommand.text || "").trim();
-      if (!text) {
-        const message = await appendThreadMessage(thread.id, {
-          role: "user",
-          source: body.source || "codex_mode_command",
-          text: `/${mode}`,
-          state: (modePayload as any).applied ? "completed" : "failed",
-          deliveryState: (modePayload as any).applied ? "delivered" : "failed",
-          observedVia: (modePayload as any).applied ? "orkestr_codex_mode_command" : "orkestr_codex_mode_not_applied",
-          deliveredAt: (modePayload as any).applied ? new Date().toISOString() : "",
-          error: (modePayload as any).applied ? "" : ((modePayload as any).runtimeMode?.reason || "Codex mode could not be applied."),
+      const modeResult: any = await this.applyOrQueueCodexModeCommand(thread, mode as "code" | "plan", String(body.source || "codex_mode_command"));
+      let payloadMessage: any = null;
+      if (text && !modeResult.failed) {
+        payloadMessage = await enqueueThreadInput(thread.id, {
+          ...body,
+          text,
+          source: body.source || "mode_command_payload",
+          parentMessageId: modeResult.message?.id || null,
         });
+        requestThreadInputDelivery(thread.id);
+      }
+      if (!text) {
         return {
-          ok: Boolean((modePayload as any).applied),
+          ok: Boolean(modeResult.applied || modeResult.deferred),
           commandHandled: true,
           mode,
-          applied: Boolean((modePayload as any).applied),
-          message,
-          queued: false,
+          applied: Boolean(modeResult.applied),
+          message: modeResult.message,
+          queued: Boolean(modeResult.deferred),
+          deliveryState: modeResult.message?.deliveryState || modeResult.message?.state || null,
           observed: true,
-          observedVia: message.observedVia,
-          replyText: (modePayload as any).applied
+          observedVia: modeResult.message?.observedVia,
+          replyText: modeResult.applied
             ? `Codex ${mode} mode requested.`
-            : `Could not switch Codex mode: ${message.error}`,
-          runtimeMode: (modePayload as any).runtimeMode,
-          thread: (modePayload as any).thread,
+            : modeResult.deferred
+              ? `Mode switch queued. Orkestr will switch to ${mode} when Codex is ready.`
+              : `Could not switch Codex mode: ${modeResult.message?.error || "Codex mode could not be applied."}`,
+          runtimeMode: modeResult.runtimeMode,
+          thread: await threadRuntimeSummary(await getThread(thread.id) || thread, await listThreadMessages(thread.id)),
         };
       }
-      body = { ...body, text };
+      return {
+        ok: Boolean(modeResult.applied || modeResult.deferred),
+        commandHandled: true,
+        mode,
+        applied: Boolean(modeResult.applied),
+        queued: Boolean(modeResult.deferred || payloadMessage),
+        message: payloadMessage,
+        commandMessage: modeResult.message,
+        deliveryState: modeResult.message?.deliveryState || modeResult.message?.state || null,
+        runtimeMode: modeResult.runtimeMode,
+        thread: await threadRuntimeSummary(await getThread(thread.id) || thread, await listThreadMessages(thread.id)),
+      };
     }
     if (parsedCommand.command === "implement") {
       const result = await implementRuntimePlan(thread.id);
@@ -834,35 +859,15 @@ export class ThreadsController {
     if (!thread) throw httpError("thread_not_found", 404);
     const mode = String(body.mode || "").trim().toLowerCase();
     if (mode !== "code" && mode !== "plan") throw httpError("invalid_codex_mode", 400);
-    const updatedAt = new Date().toISOString();
-    const runtimeMode = await applyRuntimeCodexMode(thread.id, mode, process.env, {
-      wakeIfUnavailable: true,
-      wakeReason: "codex_mode_command",
-      waitForReady: true,
-    }).catch((error: unknown) => ({
-      applied: false,
-      changed: false,
-      mode,
-      reason: error instanceof Error ? error.message : String(error),
-    }));
-    const patch: Record<string, unknown> = {
-      desiredCodexMode: null,
-      desiredCodexModeUpdatedAt: null,
-      codexModeLiveApplied: Boolean(runtimeMode.applied),
-      codexModeLiveChanged: Boolean(runtimeMode.changed),
-      codexModeApplyReason: runtimeMode.reason || null,
-    };
-    if (runtimeMode.applied) {
-      patch.codexMode = mode;
-      patch.codexModeSource = "orkestr-ui-live";
-      patch.codexModeUpdatedAt = updatedAt;
-    }
-    const updated: any = await updateThread(thread.id, patch);
+    const result: any = await this.applyOrQueueCodexModeCommand(thread, mode as "code" | "plan", "codex_mode_button");
+    const updated: any = await getThread(thread.id) || thread;
     return {
       ok: true,
       mode,
-      applied: Boolean(runtimeMode.applied),
-      runtimeMode,
+      applied: Boolean(result.applied),
+      queued: Boolean(result.deferred),
+      message: result.message,
+      runtimeMode: result.runtimeMode,
       thread: await threadRuntimeSummary(updated, await listThreadMessages(updated.id || thread.id)),
     };
   }

@@ -18,6 +18,7 @@ import {
   routeWhatsAppInbound,
 } from "../../../../../packages/connectors/src/whatsapp.js";
 import { loginCodexWithApiKey, startCodexDeviceAuth } from "../../../../../packages/connectors/src/codex.js";
+import { requestThreadInputDelivery } from "../../../../../packages/core/src/runtime-leases.js";
 import {
   createLocalWhatsAppChat,
   getLocalWhatsAppBridgeStatus,
@@ -157,6 +158,7 @@ export class ConnectorsController {
   async whatsappInbound(@Body() body: Record<string, unknown> = {}, @Res() response: any) {
     ensureAttachmentsArray(body);
     const routed = await routeWhatsAppInbound(body);
+    if (routed.threadId && !routed.duplicate) requestThreadInputDelivery(routed.threadId);
     return response
       .status(routed.duplicate ? 200 : 202)
       .header("cache-control", "no-store")

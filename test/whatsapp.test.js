@@ -433,6 +433,42 @@ test("whatsapp delivery forwards failed WhatsApp-origin thread inputs once", asy
   assert.match(calls[0].body.text, /can't find pane: %580/);
 });
 
+test("whatsapp delivery reports queued mode switches without marking the input delivered", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-mode-queued-"));
+  const env = { ORKESTR_HOME: home };
+  await createThread({ id: "thread-wa-mode-queued", name: "WA Mode Queued Thread" }, env);
+  await writeConnectorConfig("whatsapp", {
+    bridgeMode: "external",
+    bridgeUrl: "http://wa.local",
+    threadRoutes: { "chat-mode-queued": "thread-wa-mode-queued" },
+  }, env);
+  const message = await appendThreadMessage("thread-wa-mode-queued", {
+    role: "user",
+    source: "whatsapp_inbound",
+    connector: "whatsapp",
+    chatId: "chat-mode-queued",
+    accountId: "account-1",
+    text: "/code",
+    state: "queued",
+    deliveryState: "waiting_runtime_ready",
+    observedVia: "orkestr_codex_mode_queued",
+  }, env);
+
+  const calls = [];
+  const delivery = await deliverWhatsAppReplies(env, async (url, options) => {
+    calls.push({ url, body: JSON.parse(options.body) });
+    return response({ ok: true, ids: ["sent-mode-queued"] });
+  });
+  const messages = await listThreadMessages("thread-wa-mode-queued", env);
+
+  assert.equal(delivery.delivered.length, 1);
+  assert.equal(delivery.delivered[0].deliveryType, "mode_queued");
+  assert.equal(delivery.delivered[0].sourceMessageId, message.id);
+  assert.equal(calls[0].body.to, "chat-mode-queued");
+  assert.match(calls[0].body.text, /switch to code when Codex is ready/);
+  assert.equal(messages.find((entry) => entry.id === message.id).state, "queued");
+});
+
 test("whatsapp delivery forwards failed routed inputs using inbound event metadata", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-failed-input-event-"));
   const env = { ORKESTR_HOME: home };

@@ -768,7 +768,7 @@ function codexModeSetting(value) {
 }
 
 function desiredCodexModeForWake(thread) {
-  return codexModeSetting(thread?.desiredCodexMode) || codexModeSetting(thread?.codexMode);
+  return "";
 }
 
 function codexModePersistencePatch(mode, source, result = {}) {
@@ -1206,7 +1206,20 @@ async function completeResetCommand(thread, message, hard = false, env = process
   return updated.id;
 }
 
-async function completeCodexModeCommand(thread, message, mode, env = process.env) {
+function codexModeCommandRetryMs(env = process.env) {
+  const parsed = Number(env.ORKESTR_CODEX_MODE_COMMAND_RETRY_MS ?? 5000);
+  return Number.isFinite(parsed) ? Math.max(500, parsed) : 5000;
+}
+
+function shouldDeferCodexModeCommand(result = {}) {
+  return String(result.reason || "").includes("runtime_not_ready") ||
+    result.working === true ||
+    result.promptReady === false ||
+    result.state === "working" ||
+    result.state === "waking";
+}
+
+export async function completeCodexModeCommand(thread, message, mode, env = process.env) {
   const result = await applyRuntimeCodexMode(thread.id, mode, env, {
     wakeIfUnavailable: true,
     wakeReason: message.source || "codex_mode_command",
@@ -1215,6 +1228,38 @@ async function completeCodexModeCommand(thread, message, mode, env = process.env
   const applied = result.applied === true;
   if (applied) {
     await updateThread(thread.id, codexModePersistencePatch(mode, "orkestr-command", result), env).catch(() => {});
+  }
+  if (!applied && shouldDeferCodexModeCommand(result)) {
+    const nextAttemptAt = isoAfter(codexModeCommandRetryMs(env));
+    const updated = await updateThreadMessage(thread.id, message.id, {
+      state: "queued",
+      deliveryState: "waiting_runtime_ready",
+      deliveryNextAttemptAt: nextAttemptAt,
+      observedVia: "orkestr_codex_mode_queued",
+      error: null,
+    }, env);
+    await updateThread(thread.id, {
+      state: result.state || "working",
+      lastError: null,
+    }, env).catch(() => {});
+    await appendEvent({
+      type: "thread_codex_mode_command_deferred",
+      threadId: thread.id,
+      messageId: message.id,
+      source: message.source || null,
+      mode,
+      reason: result.reason || null,
+      nextAttemptAt,
+    }, env).catch(() => {});
+    scheduleThreadInputDelivery(thread.id, env, deliveryDueInMs({ deliveryNextAttemptAt: nextAttemptAt }));
+    return {
+      messageId: updated.id,
+      message: updated,
+      mode,
+      applied: false,
+      deferred: true,
+      runtimeMode: result,
+    };
   }
   const updated = await updateThreadMessage(thread.id, message.id, {
     state: applied ? "completed" : "failed",
@@ -1232,47 +1277,30 @@ async function completeCodexModeCommand(thread, message, mode, env = process.env
     applied,
     reason: result.reason || null,
   }, env).catch(() => {});
-  return updated.id;
+  return {
+    messageId: updated.id,
+    message: updated,
+    mode,
+    applied,
+    failed: !applied,
+    runtimeMode: result,
+  };
 }
 
 async function reapplyDesiredCodexMode(thread, status, env = process.env) {
   const desired = codexModeSetting(thread?.desiredCodexMode);
   if (!desired || !status?.paneId) return null;
-  if (!status.promptReady || status.working || status.foregroundWorking || status.backgroundWork || status.typingActive) return null;
-  if (status.planImplementationMenuVisible || status.needsResumeDirectoryConfirmation || status.needsCodexUpdatePromptSkip) return null;
-  const liveMode = codexModeSetting(status.codexMode);
-  if (!liveMode) return null;
-  if (liveMode === desired) {
-    await updateThread(thread.id, codexModePersistencePatch(desired, "orkestr-wake-restore", { changed: false }), env).catch(() => {});
-    await appendEvent({
-      type: "thread_codex_mode_restored",
-      threadId: thread.id,
-      mode: desired,
-      changed: false,
-      observedVia: "runtime_mode_already_matched",
-    }, env).catch(() => {});
-    return { applied: true, changed: false, mode: desired, previousMode: liveMode };
-  }
-  const result = await applyRuntimeCodexMode(thread.id, desired, env, { requirePromptReady: true }).catch((error) => ({
-    applied: false,
-    changed: false,
-    mode: desired,
-    previousMode: liveMode,
-    reason: error instanceof Error ? error.message : String(error),
-  }));
-  if (result.applied) {
-    await updateThread(thread.id, codexModePersistencePatch(desired, "orkestr-wake-restore", result), env).catch(() => {});
-  }
+  await updateThread(thread.id, {
+    desiredCodexMode: null,
+    desiredCodexModeUpdatedAt: null,
+  }, env).catch(() => {});
   await appendEvent({
-    type: "thread_codex_mode_restore_attempt",
+    type: "thread_codex_mode_desired_ignored",
     threadId: thread.id,
     mode: desired,
-    previousMode: liveMode,
-    applied: Boolean(result.applied),
-    changed: Boolean(result.changed),
-    reason: result.reason || null,
+    reason: "live_mode_is_source_of_truth",
   }, env).catch(() => {});
-  return result;
+  return null;
 }
 
 function immediateThreadCommand(message) {
@@ -1282,6 +1310,86 @@ function immediateThreadCommand(message) {
   if (parsed.command === "stop" || parsed.command === "reset" || parsed.command === "hard_reset") return parsed;
   if ((parsed.command === "plan" || parsed.command === "code") && !parsed.text) return parsed;
   return null;
+}
+
+function codexModeCommandWithText(message) {
+  if (!message || message.role !== "user") return null;
+  if (!["queued", "pending_delivery"].includes(String(message.state || ""))) return null;
+  const parsed = parseThreadInputCommand({ text: message.text });
+  if ((parsed.command === "plan" || parsed.command === "code") && parsed.text) return parsed;
+  return null;
+}
+
+function normalizeCommandCompletion(value) {
+  if (!value) return null;
+  if (typeof value === "string") return { messageId: value };
+  return value;
+}
+
+async function splitCodexModeCommandMessage(thread, message, parsed, env = process.env) {
+  const modeText = `/${parsed.command}`;
+  const payloadText = String(parsed.text || "").trim();
+  if (!payloadText) return null;
+  await updateThreadMessage(thread.id, message.id, {
+    text: modeText,
+    deliveryState: "split_mode_command",
+    error: null,
+  }, env);
+  const payload = await appendThreadMessage(thread.id, {
+    role: "user",
+    source: message.source || "mode_command_payload",
+    connector: message.connector || "",
+    externalId: message.externalId ? `${message.externalId}:payload` : "",
+    chatId: message.chatId || "",
+    from: message.from || "",
+    accountId: message.accountId || "",
+    text: payloadText,
+    promptFile: message.promptFile || "",
+    parentMessageId: message.id,
+    attachments: Array.isArray(message.attachments) ? message.attachments : [],
+    state: "queued",
+    deliveryState: "waiting_mode_command",
+  }, env);
+  await appendEvent({
+    type: "thread_codex_mode_command_split",
+    threadId: thread.id,
+    messageId: message.id,
+    payloadMessageId: payload.id,
+    mode: parsed.command,
+  }, env).catch(() => {});
+  return payload.id;
+}
+
+async function supersedeOlderCodexModeCommands(thread, messages, selected, parsed, env = process.env) {
+  if (!selected || !(parsed?.command === "plan" || parsed?.command === "code")) return;
+  const selectedCursor = messageCursor(selected);
+  const selectedMs = messageTimeMs(selected);
+  const commandLabel = parsed.rawCommand ? `/${parsed.rawCommand}` : `/${parsed.command}`;
+  for (const message of messages) {
+    if (message?.id === selected.id || message?.role !== "user") continue;
+    if (!["queued", "pending_delivery"].includes(String(message.state || ""))) continue;
+    const candidate = immediateThreadCommand(message);
+    if (!(candidate?.command === "plan" || candidate?.command === "code")) continue;
+    const candidateCursor = messageCursor(message);
+    if (selectedCursor && candidateCursor && candidateCursor > selectedCursor) continue;
+    const candidateMs = messageTimeMs(message);
+    if (!selectedCursor && selectedMs && candidateMs && candidateMs > selectedMs) continue;
+    await updateThreadMessage(thread.id, message.id, {
+      state: "failed",
+      deliveryState: "superseded",
+      deliveryFailedAt: nowIso(),
+      observedVia: "thread_codex_mode_command_superseded",
+      error: `Superseded by ${commandLabel}.`,
+    }, env).catch(() => {});
+    await appendEvent({
+      type: "thread_codex_mode_command_superseded",
+      threadId: thread.id,
+      messageId: message.id,
+      supersededByMessageId: selected.id,
+      mode: candidate.command,
+      supersededByMode: parsed.command,
+    }, env).catch(() => {});
+  }
 }
 
 async function completeImmediateThreadCommand(thread, message, parsed, env = process.env) {
@@ -2609,13 +2717,28 @@ export async function deliverPendingThreadInputs(threadId, env = process.env) {
   try {
     for (;;) {
       const messages = await listThreadMessages(thread.id, env);
-      const immediate = messages
-        .map((message) => ({ message, parsed: immediateThreadCommand(message) }))
+      const splitModeCommand = messages
+        .map((message) => ({ message, parsed: codexModeCommandWithText(message) }))
         .find((item) => item.parsed);
+      if (splitModeCommand) {
+        const payloadMessageId = await splitCodexModeCommandMessage(thread, splitModeCommand.message, splitModeCommand.parsed, env);
+        if (payloadMessageId) delivered.push(payloadMessageId);
+        continue;
+      }
+      const immediateCandidates = messages
+        .map((message) => ({ message, parsed: immediateThreadCommand(message) }))
+        .filter((item) => item.parsed);
+      const priorityImmediate = immediateCandidates.find((item) => ["stop", "reset", "hard_reset"].includes(item.parsed.command));
+      const modeImmediate = [...immediateCandidates]
+        .reverse()
+        .find((item) => item.parsed.command === "plan" || item.parsed.command === "code");
+      const immediate = priorityImmediate || modeImmediate || immediateCandidates[0];
       if (immediate) {
         await supersedeAwaitingAcksForControlCommand(thread, messages, immediate.message, immediate.parsed, env);
-        const completed = await completeImmediateThreadCommand(thread, immediate.message, immediate.parsed, env);
-        if (completed) delivered.push(completed);
+        await supersedeOlderCodexModeCommands(thread, messages, immediate.message, immediate.parsed, env);
+        const completed = normalizeCommandCompletion(await completeImmediateThreadCommand(thread, immediate.message, immediate.parsed, env));
+        if (completed?.deferred) break;
+        if (completed?.messageId) delivered.push(completed.messageId);
         continue;
       }
       const awaitingAck = messages.find((message) => message.role === "user" && message.state === "awaiting_ack");
@@ -2675,6 +2798,11 @@ export async function deliverPendingThreadInputs(threadId, env = process.env) {
       const next = messages.find((message) => message.role === "user" && ["queued", "pending_delivery", "awaiting_ack"].includes(message.state));
       if (!next) break;
       const parsedCommand = parseThreadInputCommand({ text: next.text });
+      if ((parsedCommand.command === "plan" || parsedCommand.command === "code") && parsedCommand.text) {
+        const payloadMessageId = await splitCodexModeCommandMessage(thread, next, parsedCommand, env);
+        if (payloadMessageId) delivered.push(payloadMessageId);
+        continue;
+      }
       if (parsedCommand.command === "stop") {
         delivered.push(await completeStopCommand(thread, next, env));
         continue;
@@ -2688,7 +2816,9 @@ export async function deliverPendingThreadInputs(threadId, env = process.env) {
         continue;
       }
       if ((parsedCommand.command === "plan" || parsedCommand.command === "code") && !parsedCommand.text) {
-        delivered.push(await completeCodexModeCommand(thread, next, parsedCommand.command, env));
+        const completed = normalizeCommandCompletion(await completeCodexModeCommand(thread, next, parsedCommand.command, env));
+        if (completed?.deferred) break;
+        if (completed?.messageId) delivered.push(completed.messageId);
         continue;
       }
       await updateThreadMessage(thread.id, next.id, { state: "pending_delivery", deliveryState: "waking" }, env);

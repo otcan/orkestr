@@ -596,6 +596,38 @@ function formatWhatsAppDeliveryFailure(message) {
   ].join("\n");
 }
 
+function queuedModeWhatsAppDeliveryTarget(message, thread, state) {
+  const role = String(message?.role || "").trim().toLowerCase();
+  const messageState = String(message?.state || "").trim().toLowerCase();
+  const deliveryState = String(message?.deliveryState || "").trim().toLowerCase();
+  const mode = String(message?.text || "").trim().match(/^\/(code|coding|plan|planning)\b/i)?.[1]?.toLowerCase();
+  if (role !== "user" || messageState !== "queued" || deliveryState !== "waiting_runtime_ready" || !mode) return null;
+  const inboundEvent = [...(state?.inboundEvents || [])]
+    .reverse()
+    .find((event) => event.messageId === message.id) || null;
+  const whatsappOrigin =
+    message.connector === "whatsapp" ||
+    message.source === "whatsapp_inbound" ||
+    Boolean(inboundEvent);
+  if (!whatsappOrigin) return null;
+  const chatId = pickString(message.chatId, inboundEvent?.chatId, thread?.binding?.chatId);
+  if (!chatId) return null;
+  return {
+    mode: mode === "coding" ? "code" : mode === "planning" ? "plan" : mode,
+    chatId,
+    accountId: pickString(
+      thread?.binding?.responderAccountId,
+      thread?.binding?.outboundAccountId,
+      message.accountId,
+      inboundEvent?.accountId,
+    ),
+  };
+}
+
+function formatWhatsAppModeQueued(mode) {
+  return `Mode switch queued. Orkestr will switch to ${mode} when Codex is ready.`;
+}
+
 async function deliverWhatsAppRepliesOnce(env = process.env, fetchImpl = fetch) {
   const config = await readConnectorConfig("whatsapp", env);
   const bridgeUrl = configuredBridgeUrl(config, env);
@@ -617,6 +649,50 @@ async function deliverWhatsAppRepliesOnce(env = process.env, fetchImpl = fetch) 
   ];
   for (const { agentId, threadId, thread, messages, kind } of messageSets) {
     for (const message of messages) {
+      const queuedModeTarget = queuedModeWhatsAppDeliveryTarget(message, thread, state);
+      if (queuedModeTarget) {
+        const deliveryId = `${message.id}:mode_queued`;
+        if (deliveredIds.has(deliveryId)) continue;
+        if (kind === "thread" && !threadAllowsWhatsAppMirroring(thread)) {
+          skipped.push({ agentId, threadId, messageId: message.id, reason: "mirroring_disabled" });
+          continue;
+        }
+        const chatId = queuedModeTarget.chatId;
+        const text = formatWhatsAppModeQueued(queuedModeTarget.mode);
+        const accountId = kind === "thread" ? queuedModeTarget.accountId : pickString(message.accountId, queuedModeTarget.accountId);
+        const textKey = deliveryTextKey(chatId, `${deliveryId}\n${text}`);
+        if (deliveredTextKeys.has(textKey) || batchTextKeys.has(textKey)) {
+          skipped.push({ agentId, threadId, messageId: message.id, reason: "duplicate_text" });
+          continue;
+        }
+        try {
+          const payload = await sendWhatsAppText({ chatId, text, accountId, config, env, fetchImpl });
+          const delivery = {
+            kind,
+            deliveryType: "mode_queued",
+            agentId: agentId || null,
+            threadId: threadId || null,
+            messageId: deliveryId,
+            sourceMessageId: message.id,
+            chatId,
+            accountId,
+            textKey,
+            deliveredAt: new Date().toISOString(),
+            bridgeResponse: payload,
+          };
+          outboundDeliveries.push(delivery);
+          deliveredIds.add(deliveryId);
+          deliveredTextKeys.add(textKey);
+          batchTextKeys.add(textKey);
+          delivered.push(delivery);
+          await appendEvent({ type: "whatsapp_outbound_mode_queued_delivered", agentId: agentId || null, threadId: threadId || null, messageId: message.id, chatId }, env);
+        } catch (error) {
+          const failure = { kind, agentId: agentId || null, threadId: threadId || null, messageId: message.id, chatId, error: error.message || String(error) };
+          failed.push(failure);
+          await appendEvent({ type: "whatsapp_outbound_failed", ...failure }, env);
+        }
+        continue;
+      }
       const failedDeliveryTarget = failedWhatsAppDeliveryTarget(message, thread, state);
       if (failedDeliveryTarget) {
         if (deliveredIds.has(message.id)) continue;
