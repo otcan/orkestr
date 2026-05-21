@@ -1,4 +1,4 @@
-import { Component, EventEmitter, Input, OnChanges, OnDestroy, OnInit, Output, SimpleChanges, inject } from "@angular/core";
+import { ChangeDetectorRef, Component, EventEmitter, Input, OnChanges, OnDestroy, OnInit, Output, SimpleChanges, inject } from "@angular/core";
 import { FormsModule } from "@angular/forms";
 import { firstValueFrom } from "rxjs";
 import { ApiService, ConnectorStatus, OutlookOAuthPollResponse, OutlookOAuthStartResponse, SecurityChallenge, SetupStatus, SystemDoctorResponse, ThreadSummary, VersionResponse } from "./api.service";
@@ -34,6 +34,7 @@ interface OnboardingGoal {
 })
 export class OnboardingPageComponent implements OnInit, OnChanges, OnDestroy {
   private readonly api = inject(ApiService);
+  private readonly cdr = inject(ChangeDetectorRef);
   private readonly storageKey = "orkestr:onboarding";
   private poller?: ReturnType<typeof setInterval>;
   private outlookPoller?: ReturnType<typeof setInterval>;
@@ -161,6 +162,7 @@ export class OnboardingPageComponent implements OnInit, OnChanges, OnDestroy {
       this.error = this.errorText(error);
     } finally {
       this.busy = false;
+      this.renderNow();
     }
   }
 
@@ -1204,6 +1206,14 @@ export class OnboardingPageComponent implements OnInit, OnChanges, OnDestroy {
       );
     } catch {
       // Storage is optional; onboarding still works without it.
+    }
+  }
+
+  private renderNow(): void {
+    try {
+      this.cdr.detectChanges();
+    } catch {
+      // Change detection may already be running during synchronous tests.
     }
   }
 
