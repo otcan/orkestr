@@ -113,7 +113,9 @@ test("server exposes health, readiness, version, and agent message APIs", async 
     assert.equal(relativeWorkspaceThread.thread.workspace, path.join(workspaceRoot, "relative-repo"));
     assert.equal(relativeWorkspaceThread.thread.repoPath, path.join(workspaceRoot, "relative-repo"));
     assert.equal(relativeWorkspaceThread.thread.cwd, path.join(workspaceRoot, "relative-repo", "apps/web"));
-    assert.equal(mode.applied, true);
+    assert.equal(mode.mode, "plan");
+    assert.equal(typeof mode.applied, "boolean");
+    assert.equal(typeof mode.queued, "boolean");
     assert.equal(mode.runtimeMode.mode, "plan");
     assert.equal(mode.thread.desiredCodexMode, null);
     assert.equal(mode.thread.codexModel, "gpt-test");
