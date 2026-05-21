@@ -104,6 +104,15 @@ curl -fsSL https://raw.githubusercontent.com/otcan/orkestr/main/scripts/bootstra
 curl -fsSL https://raw.githubusercontent.com/otcan/orkestr/main/scripts/bootstrap-vps.sh | sudo bash -s -- --repo https://github.com/you/orkestr.git --ref main
 ```
 
+Installer changes can be tested against a brand-new disposable AWS VPS:
+
+```bash
+npm run smoke:vps:aws
+```
+
+That runner creates a fresh Ubuntu 24.04 EC2 host, runs the bootstrap installer,
+runs the Orkestr smoke test on the VPS, and deletes the temporary AWS resources.
+
 The lower-level installer remains available when you already know the host is
 prepared:
 

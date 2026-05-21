@@ -17,6 +17,7 @@
     "test:ci": "node scripts/ci-test-runner.mjs",
     "web:build": "ng build web",
     "smoke": "node scripts/smoke.mjs",
+    "smoke:vps:aws": "bash scripts/smoke-vps-aws.sh",
     "docker:build": "docker build -t orkestr-oss:test .",
     "install:local": "bash scripts/install.sh --local",
     "demo:coding-agent": "node scripts/coding-agent-demo.mjs",

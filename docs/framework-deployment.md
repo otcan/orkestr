@@ -31,6 +31,19 @@ npm run demo:coding-agent
 `npm run check` performs JavaScript syntax checks, compiles the NestJS backend,
 builds Angular, and runs the Node test suite.
 
+To verify the full fresh-VPS installer path on disposable AWS infrastructure,
+run:
+
+```bash
+npm run smoke:vps:aws
+```
+
+This creates a new Ubuntu 24.04 EC2 instance, allows SSH only from the current
+machine, runs the host-native bootstrap installer, runs `npm run smoke` on the
+new VPS, and then deletes the instance, temporary key pair, and security group.
+It defaults to `t3.medium`, 60 GB root disk, no Tailscale, and no auto-update so
+the check stays isolated and disposable.
+
 ## Deployment Paths
 
 Use Docker for first-run demos and host-native systemd for a VPS.
@@ -102,6 +115,36 @@ unset TS_AUTHKEY
 
 # Custom fork, branch, tag, or commit.
 curl -fsSL https://raw.githubusercontent.com/otcan/orkestr/main/scripts/bootstrap-vps.sh | sudo bash -s -- --repo https://github.com/you/orkestr.git --ref main
+```
+
+### Disposable AWS Installer Smoke
+
+When changing the installer or onboarding docs, test the real fresh-server path
+instead of reusing an existing Orkestr box:
+
+```bash
+npm run smoke:vps:aws
+```
+
+The script requires `aws`, `ssh`, `scp`, `curl`, and `ssh-keygen` on the
+control machine, plus AWS credentials that can create and delete EC2 instances,
+security groups, and key pairs. It does not expose Orkestr publicly; the
+temporary security group only opens SSH from the controller's public IP.
+
+Useful variants:
+
+```bash
+# Test a branch or fork.
+npm run smoke:vps:aws -- --repo https://github.com/you/orkestr.git --ref my-branch
+
+# Test local bootstrap/install script edits while still installing a pushed ref.
+npm run smoke:vps:aws -- --local-bootstrap --ref my-branch
+
+# Keep the VPS after a failure for SSH debugging.
+npm run smoke:vps:aws -- --keep-on-failure
+
+# Exercise Tailscale installation too. Use TS_AUTHKEY for unattended tailscale up.
+npm run smoke:vps:aws -- --tailscale --tailscale-up
 ```
 
 ### Lower-Level Systemd Installer
