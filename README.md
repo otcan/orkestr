@@ -272,6 +272,10 @@ npm run launch:check
 
 Public code must not include credentials, private hostnames, personal browser profiles, WhatsApp IDs, private prompts, or deployment-only paths. See [CONTRIBUTING.md](CONTRIBUTING.md) for the working rules.
 
+## License
+
+Orkestr is released under the MIT License. See [LICENSE](LICENSE).
+
 ## Public/Private Boundary
 
 Generic product code belongs here. Personal deployment code belongs outside this repo and is loaded through `ORKESTR_OVERLAY_DIR`.
