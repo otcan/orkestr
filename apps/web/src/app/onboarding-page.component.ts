@@ -305,6 +305,37 @@ export class OnboardingPageComponent implements OnInit, OnChanges, OnDestroy {
     return value === null || value === undefined ? "" : String(value);
   }
 
+  googleMarketingConnector(): ConnectorStatus | null {
+    return this.connector("google-marketing");
+  }
+
+  googleMarketingActionLabel(): string {
+    return this.connectorDetail("google-marketing", "actionLabel") || "Update Google Marketing Auth";
+  }
+
+  googleMarketingActionHint(): string {
+    return this.connectorDetail("google-marketing", "actionHint") || "Starts the overlay OAuth flow for Search Console and GA Admin.";
+  }
+
+  googleMarketingScopeLine(): string {
+    const scope = this.connectorDetail("google-marketing", "scope");
+    return scope ? `Scopes: ${scope.split(/\s+/).filter(Boolean).join(", ")}` : "";
+  }
+
+  async startGoogleMarketingAuth(): Promise<void> {
+    this.busy = true;
+    try {
+      const result = await firstValueFrom(this.api.runConnectorAction("google-marketing", "start-oauth"));
+      const authUrl = String(result.authorizeUrl || result.auth_url || result.url || "").trim();
+      if (!result.ok || !authUrl) throw new Error(result.message || result.raw || "Google Marketing auth URL was not returned.");
+      globalThis.location.href = authUrl;
+    } catch (error) {
+      this.error = this.errorText(error);
+    } finally {
+      this.busy = false;
+    }
+  }
+
   gmailStatusLabel(): string {
     if (this.mailProviderHasAccounts("gmail")) return "connected";
     const state = this.connector("gmail")?.state;
@@ -1164,7 +1195,7 @@ export class OnboardingPageComponent implements OnInit, OnChanges, OnDestroy {
     const steps = this.pageSections();
     const storedStep = steps.find((step) => step.id === this.activeStep)?.id;
     if (this.isSetupMode()) return storedStep || "system";
-    return steps.find((step) => !this.stepDone(step.id))?.id || storedStep || "goal";
+    return storedStep || "goal";
   }
 
   private ensureActiveStepAvailable(): void {
