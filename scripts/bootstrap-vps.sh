@@ -374,7 +374,21 @@ wait_for_orkestr_http() {
 run_doctor() {
   if have orkestr; then
     log "Running Orkestr doctor"
-    orkestr doctor || true
+    local output status
+    set +e
+    output="$(orkestr doctor 2>&1)"
+    status="$?"
+    set -e
+    if [ "$status" -eq 0 ]; then
+      printf '%s\n' "$output"
+      return 0
+    fi
+    if printf '%s\n' "$output" | grep -q 'browser_pairing_required'; then
+      warn "Orkestr doctor is deferred until browser pairing is approved. Open /setup, create a pairing challenge, approve it with 'orkestr security approve <challenge-id>', then rerun 'orkestr doctor'."
+      return 0
+    fi
+    printf '%s\n' "$output" >&2
+    return 0
   fi
 }
 
