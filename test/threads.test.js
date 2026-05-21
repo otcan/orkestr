@@ -417,6 +417,45 @@ test("runtime resource doctor repairs orphaned test tmux sessions", async () => 
   }
 });
 
+test("runtime resource doctor ignores tmux sessions owned by another Orkestr home", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-resource-scope-"));
+  const otherHome = await fs.mkdtemp(path.join(os.tmpdir(), "external-runtime-home-"));
+  const fakeTmux = await createFakeTmux(home);
+  const priorPath = process.env.PATH;
+  const priorTmuxLog = process.env.TMUX_LOG;
+  const priorTmuxState = process.env.TMUX_STATE;
+  const priorTmuxSessionPath = process.env.TMUX_SESSION_PATH;
+  process.env.PATH = `${fakeTmux.bin}:${priorPath || ""}`;
+  process.env.TMUX_LOG = fakeTmux.log;
+  process.env.TMUX_STATE = fakeTmux.state;
+  process.env.TMUX_SESSION_PATH = path.join(otherHome, "workspaces", "thread");
+  await fs.writeFile(fakeTmux.state, "orkestr-other-home-thread\n", "utf8");
+
+  try {
+    const env = {
+      ORKESTR_HOME: path.join(home, "orkestr-home"),
+      PATH: process.env.PATH,
+      TMUX_LOG: fakeTmux.log,
+      TMUX_STATE: fakeTmux.state,
+      TMUX_SESSION_PATH: process.env.TMUX_SESSION_PATH,
+    };
+    const doctor = await doctorRuntimeResources({ env, repair: true });
+    const state = await fs.readFile(fakeTmux.state, "utf8").catch(() => "");
+
+    assert.equal(doctor.ok, true);
+    assert.equal(doctor.counts.tmuxSessions, 0);
+    assert.equal(doctor.counts.ignoredTmuxSessions, 1);
+    assert.equal(doctor.counts.orphanSessions, 0);
+    assert.equal(doctor.actions.length, 0);
+    assert.match(state, /orkestr-other-home-thread/);
+  } finally {
+    restoreEnvValue("PATH", priorPath);
+    restoreEnvValue("TMUX_LOG", priorTmuxLog);
+    restoreEnvValue("TMUX_STATE", priorTmuxState);
+    restoreEnvValue("TMUX_SESSION_PATH", priorTmuxSessionPath);
+  }
+});
+
 test("relative thread workspaces resolve under the runtime workspace root", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-relative-workspace-"));
   const fakeTmux = await createFakeTmux(home);

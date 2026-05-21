@@ -3544,6 +3544,23 @@ function sessionTemporaryReason(session = {}, env = process.env) {
   return "";
 }
 
+function runtimeInstanceRoots(env = process.env) {
+  const paths = dataPaths(env);
+  const roots = [
+    paths.home,
+    env.ORKESTR_RUNTIME_WORKSPACE_ROOT,
+  ].map((value) => String(value || "").trim()).filter(Boolean);
+  return [...new Set(roots.map((value) => path.resolve(value)))];
+}
+
+function sessionBelongsToRuntimeInstance(session = {}, activeSessionNames = new Set(), env = process.env) {
+  if (activeSessionNames.has(session.sessionName)) return true;
+  if (sessionTemporaryReason(session, env)) return true;
+  const currentPath = String(session.currentPath || "").trim();
+  if (!currentPath) return false;
+  return runtimeInstanceRoots(env).some((root) => pathIsInside(currentPath, root));
+}
+
 function sessionRepairDecision(session = {}, activeSessionNames = new Set(), { repair = false, automatic = false, env = process.env } = {}) {
   const orphan = !activeSessionNames.has(session.sessionName);
   const temporaryReason = sessionTemporaryReason(session, env);
@@ -3576,9 +3593,9 @@ export async function doctorRuntimeResources({ env = process.env, repair = false
   const issues = [];
   const actions = [];
 
-  let tmuxSessions = [];
+  let rawTmuxSessions = [];
   try {
-    tmuxSessions = await listOrkestrTmuxSessions(env);
+    rawTmuxSessions = await listOrkestrTmuxSessions(env);
   } catch (error) {
     return {
       ok: false,
@@ -3600,6 +3617,8 @@ export async function doctorRuntimeResources({ env = process.env, repair = false
       actions,
     };
   }
+  const tmuxSessions = rawTmuxSessions.filter((session) => sessionBelongsToRuntimeInstance(session, activeSessionNames, env));
+  const ignoredTmuxSessions = rawTmuxSessions.filter((session) => !sessionBelongsToRuntimeInstance(session, activeSessionNames, env));
 
   const liveSessionNames = new Set(tmuxSessions.map((session) => session.sessionName));
   let nextLeases = leases;
@@ -3692,6 +3711,7 @@ export async function doctorRuntimeResources({ env = process.env, repair = false
   const counts = {
     activeLeases: activeLeases.length,
     tmuxSessions: tmuxSessions.length,
+    ignoredTmuxSessions: ignoredTmuxSessions.length,
     orphanSessions: tmuxSessions.filter((session) => !activeSessionNames.has(session.sessionName)).length,
     tempSessions: tmuxSessions.filter((session) => sessionTemporaryReason(session, env)).length,
     staleLeases: activeLeases.filter((lease) => !liveSessionNames.has(lease.sessionName)).length,
@@ -3719,6 +3739,7 @@ export async function doctorRuntimeResources({ env = process.env, repair = false
       startedAt: lease.startedAt || null,
     })),
     tmuxSessions,
+    ignoredTmuxSessions,
     tempCodexProcesses,
     issues: relevantIssues,
     actions,
