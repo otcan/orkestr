@@ -53,7 +53,6 @@ export class OnboardingPageComponent implements OnInit, OnChanges, OnDestroy {
   busy = false;
   error = "";
   notice = "";
-  oauthUrl = "";
   activeStep: OnboardingStep = "goal";
   selectedGoal: OnboardingGoalId = "whatsapp-codex";
   firstThread: ThreadSummary | null = null;
@@ -201,18 +200,11 @@ export class OnboardingPageComponent implements OnInit, OnChanges, OnDestroy {
   }
 
   async startGmailOAuth(): Promise<void> {
-    this.busy = true;
-    try {
-      const result = await firstValueFrom(this.api.startGmailOAuth(this.gmailAccount));
-      this.oauthUrl = result.authorizeUrl;
-      globalThis.open?.(result.authorizeUrl, "_blank", "noopener,noreferrer");
-      this.notice = "Google sign-in opened in a new tab.";
-      await this.load(false);
-    } catch (error) {
-      this.error = this.errorText(error);
-    } finally {
-      this.busy = false;
-    }
+    const account = this.gmailAccount.trim();
+    const suffix = account ? `?account=${encodeURIComponent(account)}` : "";
+    this.error = "";
+    this.notice = "Opening Gmail authorization.";
+    globalThis.location.href = `/oauth/gmail/start${suffix}`;
   }
 
   async saveOutlook(): Promise<void> {

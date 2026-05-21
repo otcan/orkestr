@@ -61,6 +61,7 @@ test("onboarding focuses the starter setup on virtual desktop and WhatsApp", asy
   assert.ok(onboarding.includes("doctorStatusClass"));
   assert.ok(onboarding.includes("Mail Auth"));
   assert.ok(onboarding.includes("Connect Gmail"));
+  assert.ok(onboarding.includes("/oauth/gmail/start"));
   assert.ok(onboarding.includes("Connect ${label}"));
   assert.ok(onboarding.includes("Add another ${label} login"));
   assert.ok(onboarding.includes("already connected in this runtime"));

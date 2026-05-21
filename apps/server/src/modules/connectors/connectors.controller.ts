@@ -201,6 +201,69 @@ export class ConnectorsController {
 
 @Controller("oauth")
 export class ConnectorCallbacksController {
+  @Get("gmail/start")
+  async gmailStart(@Query("account") account = "", @Res() response: any) {
+    let payload: any = null;
+    try {
+      payload = await beginGmailOAuth(process.env, { account });
+    } catch (error) {
+      payload = {
+        ok: false,
+        state: "error",
+        message: String((error as Error)?.message || "Gmail OAuth start failed."),
+      };
+    }
+    const authorizeUrl = String(payload?.authorizeUrl || "").trim();
+    if (payload?.ok !== false && authorizeUrl) {
+      const desktopSlug = gmailAuthDesktopSlug(payload);
+      if (desktopSlug) {
+        try {
+          const browser = await openUrlInVirtualBrowser(desktopSlug, authorizeUrl);
+          return response
+            .status(200)
+            .header("cache-control", "no-store")
+            .type("text/html; charset=utf-8")
+            .send(googleOAuthHtml({
+              ok: true,
+              state: "opened",
+              title: "Gmail auth opened",
+              message: `Gmail authorization opened in ${browser.label || desktopSlug}. Finish the Google login in that virtual browser.`,
+              deskUrl: browser.desk_url || browser.url || "",
+              desktopSlug,
+              setupHref: "/setup/gmail",
+              setupLabel: "Open Mail Setup",
+            }));
+        } catch (error) {
+          return response
+            .status(Number((error as any)?.statusCode || 502) || 502)
+            .header("cache-control", "no-store")
+            .type("text/html; charset=utf-8")
+            .send(googleOAuthHtml({
+              ok: false,
+              state: "desktop_error",
+              title: "Gmail auth failed",
+              message: String((error as Error)?.message || "Gmail authorization could not be opened in the virtual browser."),
+              authorizeUrl,
+              desktopSlug,
+              setupHref: "/setup/gmail",
+              setupLabel: "Open Mail Setup",
+            }));
+        }
+      }
+      return response.redirect(302, authorizeUrl);
+    }
+    return response
+      .status(500)
+      .header("cache-control", "no-store")
+      .type("text/html; charset=utf-8")
+      .send(googleOAuthHtml({
+        ...payload,
+        title: "Gmail auth failed",
+        setupHref: "/setup/gmail",
+        setupLabel: "Open Mail Setup",
+      }));
+  }
+
   @Get("gmail/callback")
   async gmailCallback(@Query() query: Record<string, string>, @Res() response: any) {
     const result = await finishGmailOAuth(new URLSearchParams(query));
@@ -304,12 +367,26 @@ function externalUrlFromRequest(request: any): string {
 
 function googleMarketingOAuthHtml(payload: Record<string, unknown> = {}): string {
   const ok = payload.ok !== false;
-  const title = ok ? "Google Marketing auth complete" : "Google Marketing auth failed";
+  return googleOAuthHtml({
+    ...payload,
+    title: ok ? "Google Marketing auth complete" : "Google Marketing auth failed",
+    setupHref: "/setup/google-marketing",
+    setupLabel: "Open Google Marketing Setup",
+    setupReturnText: "Return to Google Marketing setup to refresh the connector status.",
+  });
+}
+
+function googleOAuthHtml(payload: Record<string, unknown> = {}): string {
+  const ok = payload.ok !== false;
+  const title = String(payload.title || (ok ? "Google auth complete" : "Google auth failed"));
   const state = String(payload.state || (ok ? "ok" : "error"));
   const message = String(payload.message || payload.raw || "");
   const deskUrl = String(payload.deskUrl || "").trim();
   const authorizeUrl = String(payload.authorizeUrl || "").trim();
   const desktopSlug = String(payload.desktopSlug || "").trim();
+  const setupHref = String(payload.setupHref || "/setup/gmail").trim();
+  const setupLabel = String(payload.setupLabel || "Open Setup").trim();
+  const setupReturnText = String(payload.setupReturnText || "Return to setup to refresh the connector status.").trim();
   return `<!doctype html>
 <html>
   <head>
@@ -332,8 +409,8 @@ function googleMarketingOAuthHtml(payload: Record<string, unknown> = {}): string
       ${desktopSlug ? `<p>Desktop: ${escapeHtml(desktopSlug)}</p>` : ""}
       ${deskUrl ? `<a href="${escapeHtml(deskUrl)}" target="_blank" rel="noreferrer">Open Virtual Browser</a>` : ""}
       ${authorizeUrl ? `<a href="${escapeHtml(authorizeUrl)}" target="_blank" rel="noreferrer">Open Google Auth Directly</a>` : ""}
-      <p>Return to Google Marketing setup to refresh the connector status.</p>
-      <a href="/setup/google-marketing">Open Google Marketing Setup</a>
+      <p>${escapeHtml(setupReturnText)}</p>
+      <a href="${escapeHtml(setupHref)}">${escapeHtml(setupLabel)}</a>
     </main>
   </body>
 </html>`;
@@ -349,10 +426,18 @@ function escapeHtml(value: unknown): string {
 }
 
 function googleMarketingAuthDesktopSlug(payload: Record<string, unknown> = {}): string {
+  return googleAuthDesktopSlug(payload, "ORKESTR_GOOGLE_MARKETING_AUTH_DESKTOP_SLUG");
+}
+
+function gmailAuthDesktopSlug(payload: Record<string, unknown> = {}): string {
+  return googleAuthDesktopSlug(payload, "ORKESTR_GMAIL_AUTH_DESKTOP_SLUG");
+}
+
+function googleAuthDesktopSlug(payload: Record<string, unknown> = {}, specificEnvName = ""): string {
   return String(
     payload.authDesktopSlug ||
     payload.desktopSlug ||
-    process.env.ORKESTR_GOOGLE_MARKETING_AUTH_DESKTOP_SLUG ||
+    (specificEnvName ? process.env[specificEnvName] : "") ||
     process.env.ORKESTR_GOOGLE_AUTH_DESKTOP_SLUG ||
     "",
   ).trim();

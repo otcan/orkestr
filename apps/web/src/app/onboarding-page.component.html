@@ -408,10 +408,6 @@
             </article>
           </div>
 
-          @if (oauthUrl) {
-            <a class="oauth-link" [href]="oauthUrl" target="_blank" rel="noreferrer">Open Google sign-in</a>
-          }
-
           @if (mailProvider === "outlook" && outlookDevice) {
             <article class="mail-card outlook-device-card">
               <div class="mail-card-head">
