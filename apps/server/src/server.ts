@@ -14,6 +14,7 @@ import {
 } from "../../../packages/core/src/runtime-leases.js";
 import { markDueTimers } from "../../../packages/core/src/timers.js";
 import { deliverWhatsAppReplies } from "../../../packages/connectors/src/whatsapp.js";
+import { stopLocalWhatsAppBridge } from "../../../packages/connectors/src/whatsapp-local-bridge.js";
 import { ensureDataDirs } from "../../../packages/storage/src/paths.js";
 import { authorizeHttpRequest } from "../../../packages/core/src/security.js";
 import { AppModule } from "./app.module.js";
@@ -87,9 +88,10 @@ export async function startServer({ port = 19812, host = "127.0.0.1", openBrowse
     execFile("xdg-open", [url], { timeout: 1000 }, () => {});
   }
 
-  return serverHandle(app, timer, runtimeMonitor, paneProgressMonitor, () => {
+  return serverHandle(app, timer, runtimeMonitor, paneProgressMonitor, async () => {
     clearDeliveryFailureHandler();
     whatsappDeliveryScheduler.close();
+    await stopLocalWhatsAppBridge().catch(() => {});
   });
 }
 
@@ -150,7 +152,7 @@ export function serverHandle(
   timer?: NodeJS.Timeout,
   runtimeMonitor?: NodeJS.Timeout,
   paneProgressMonitor?: NodeJS.Timeout,
-  cleanup?: () => void,
+  cleanup?: () => void | Promise<void>,
 ) {
   return {
     address: () => app.getHttpServer().address(),
@@ -158,8 +160,8 @@ export function serverHandle(
       if (timer) clearInterval(timer);
       if (runtimeMonitor) clearInterval(runtimeMonitor);
       if (paneProgressMonitor) clearInterval(paneProgressMonitor);
-      cleanup?.();
-      app.close()
+      Promise.resolve(cleanup?.())
+        .then(() => app.close())
         .then(() => callback?.())
         .catch((error) => callback?.(error));
     },

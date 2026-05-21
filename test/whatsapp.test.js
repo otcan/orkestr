@@ -8,8 +8,8 @@ import { runNextAgentMessage, runNextThreadMessage } from "../packages/core/src/
 import { listAgentMessages } from "../packages/core/src/messages.js";
 import { getSetupStatus } from "../packages/core/src/setup.js";
 import { appendThreadMessage, createThread, listThreadMessages, updateThreadMessage } from "../packages/core/src/threads.js";
-import { deliverWhatsAppReplies, formatWhatsAppOutboundText, getWhatsAppChatParticipants, getWhatsAppStatus, routeWhatsAppInbound } from "../packages/connectors/src/whatsapp.js";
-import { listLocalWhatsAppChats, startLocalWhatsAppAccount } from "../packages/connectors/src/whatsapp-local-bridge.js";
+import { deliverWhatsAppReplies, formatWhatsAppOutboundText, getWhatsAppChatParticipants, getWhatsAppStatus, mapLocalWhatsAppStatusFromHealth, routeWhatsAppInbound } from "../packages/connectors/src/whatsapp.js";
+import { listLocalWhatsAppChats, reduceLocalWhatsAppBridgeState, startLocalWhatsAppAccount } from "../packages/connectors/src/whatsapp-local-bridge.js";
 import { writeConnectorConfig } from "../packages/storage/src/config.js";
 
 function response(payload, ok = true, status = 200) {
@@ -85,6 +85,28 @@ test("local whatsapp phone pairing validates phone numbers before browser launch
     startLocalWhatsAppAccount("account-1", { ORKESTR_HOME: home }, { phoneNumber: "+++" }),
     /whatsapp_pairing_phone_number_invalid/,
   );
+});
+
+test("local whatsapp status keeps authenticated sessions in a partial setup state", async () => {
+  const health = {
+    ok: true,
+    mode: "local",
+    state: reduceLocalWhatsAppBridgeState([
+      { accountId: "account-1", state: "authenticated", authenticated: true, ready: false },
+      { accountId: "account-2", state: "idle", authenticated: false, ready: false },
+    ]),
+    ready: false,
+    accounts: [
+      { accountId: "account-1", state: "authenticated", authenticated: true, ready: false },
+      { accountId: "account-2", state: "idle", authenticated: false, ready: false },
+    ],
+  };
+
+  const status = mapLocalWhatsAppStatusFromHealth(health);
+
+  assert.equal(health.state, "authenticated");
+  assert.equal(status.state, "authenticating");
+  assert.match(status.summary, /waiting for WhatsApp Web/i);
 });
 
 test("whatsapp status reports paired from health readiness", async () => {

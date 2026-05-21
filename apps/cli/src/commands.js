@@ -67,8 +67,26 @@ function parseGlobalFlags(argv) {
 async function serve(argv, ctx) {
   const port = Number(flagValue(argv, "--port") || ctx.env.PORT || ctx.env.ORKESTR_PORT || 19812);
   const host = flagValue(argv, "--host") || ctx.env.ORKESTR_HOST || "127.0.0.1";
-  await startServer({ port, host, openBrowser: argv.includes("--open") });
-  return 0;
+  const server = await startServer({ port, host, openBrowser: argv.includes("--open") });
+  return waitForServeShutdown(server);
+}
+
+function waitForServeShutdown(server) {
+  return new Promise((resolve) => {
+    let closing = false;
+    const shutdown = () => {
+      if (closing) return;
+      closing = true;
+      const forceExit = setTimeout(() => resolve(0), 10_000);
+      if (typeof forceExit.unref === "function") forceExit.unref();
+      server.close(() => {
+        clearTimeout(forceExit);
+        resolve(0);
+      });
+    };
+    process.once("SIGINT", shutdown);
+    process.once("SIGTERM", shutdown);
+  });
 }
 
 async function list(argv, ctx) {

@@ -114,11 +114,12 @@ async function accountSnapshot(accountId, env = process.env) {
   };
 }
 
-function reduceBridgeState(accounts) {
+export function reduceLocalWhatsAppBridgeState(accounts) {
   if (accounts.some((account) => account.ready)) return "ready";
   if (accounts.some((account) => account.pairingCode || account.state === "pairing_code")) return "pairing_code";
   if (accounts.some((account) => account.qrAvailable)) return "qr_needed";
   if (accounts.some((account) => account.state === "starting")) return "starting";
+  if (accounts.some((account) => account.authenticated || account.state === "authenticated")) return "authenticated";
   if (accounts.some((account) => ["auth_failure", "dependency_missing", "failed"].includes(account.state))) return "failed";
   if (accounts.some((account) => account.state === "disconnected")) return "disconnected";
   return "idle";
@@ -242,7 +243,7 @@ async function knownLocalWhatsAppChats(accountId, env = process.env) {
 
 export async function getLocalWhatsAppBridgeStatus(env = process.env) {
   const accounts = await Promise.all(localWhatsAppAccountIds.map((accountId) => accountSnapshot(accountId, env)));
-  const state = reduceBridgeState(accounts);
+  const state = reduceLocalWhatsAppBridgeState(accounts);
   const qrAccount = accounts.find((account) => account.qrAvailable);
   return {
     ok: true,
@@ -282,6 +283,14 @@ function puppeteerOptions(env = process.env) {
       "--disable-setuid-sandbox",
     ],
   };
+}
+
+function whatsappUserAgent(env = process.env) {
+  return String(
+    env.WA_USER_AGENT ||
+    env.WHATSAPP_USER_AGENT ||
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+  ).trim();
 }
 
 async function clearQr(accountId, env = process.env) {
@@ -369,6 +378,7 @@ export async function startLocalWhatsAppAccount(accountId = "account-1", env = p
   const client = new Client({
     authStrategy: new LocalAuth({ clientId: normalized, dataPath: sessionRoot(env) }),
     puppeteer: puppeteerOptions(env),
+    userAgent: whatsappUserAgent(env),
     ...(pairingPhoneNumber
       ? {
           pairWithPhoneNumber: {
@@ -508,6 +518,29 @@ export async function logoutLocalWhatsAppAccount(accountId = "account-1", env = 
   });
   await appendEvent({ type: "whatsapp_local_logged_out", accountId: normalized }, env);
   return accountSnapshot(normalized, env);
+}
+
+export async function stopLocalWhatsAppBridge(env = process.env) {
+  const entries = [...runtimes.entries()];
+  runtimes.clear();
+  await Promise.all(entries.map(async ([accountId, runtime]) => {
+    if (runtime?.client) {
+      await runtime.client.destroy().catch(() => {});
+    }
+    await clearQr(accountId, env).catch(() => {});
+    setAccountState(accountId, {
+      state: "idle",
+      ready: false,
+      started: false,
+      qrAvailable: false,
+      pairingCode: "",
+      pairingCodeUpdatedAt: null,
+      error: "",
+    });
+  }));
+  if (entries.length > 0) {
+    await appendEvent({ type: "whatsapp_local_bridge_stopped", accounts: entries.map(([accountId]) => accountId) }, env).catch(() => {});
+  }
 }
 
 export async function getLocalWhatsAppQrSvg(accountId = "account-1", env = process.env) {

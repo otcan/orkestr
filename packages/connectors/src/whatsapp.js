@@ -97,8 +97,7 @@ function normalizeParticipants(payload = {}) {
   return participants.map(normalizeParticipant).filter((participant) => participant.id);
 }
 
-async function getLocalStatus(env) {
-  const health = await getLocalWhatsAppBridgeStatus(env);
+export function mapLocalWhatsAppStatusFromHealth(health) {
   if (hasReadySignal(health)) {
     return {
       state: "paired",
@@ -136,6 +135,17 @@ async function getLocalStatus(env) {
       pairingCodeUpdatedAt: codeAccount?.pairingCodeUpdatedAt || null,
     };
   }
+  if (health.state === "authenticated") {
+    return {
+      state: "authenticating",
+      summary: "Built-in WhatsApp bridge is authenticated and waiting for WhatsApp Web to become ready.",
+      mode: "local",
+      bridgeUrl: localWhatsAppBridgeBasePath,
+      health,
+      accounts: health.accounts,
+      qrAvailable: false,
+    };
+  }
   if (health.state === "failed") {
     return {
       state: "unreachable",
@@ -167,6 +177,11 @@ async function getLocalStatus(env) {
     accounts: health.accounts,
     qrAvailable: false,
   };
+}
+
+async function getLocalStatus(env) {
+  const health = await getLocalWhatsAppBridgeStatus(env);
+  return mapLocalWhatsAppStatusFromHealth(health);
 }
 
 export async function getWhatsAppStatus(env = process.env, fetchImpl = fetch) {

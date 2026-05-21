@@ -255,7 +255,7 @@ run_whatsapp_readiness_check() {
     export WA_PAIR_TIMEOUT_SECONDS=$(printf '%q' "$whatsapp_pair_timeout_seconds")
     export WA_PHONE_NUMBER=$(printf '%q' "$whatsapp_phone")
     export WA_CREATE_THREAD_NAME=$(printf '%q' "$create_whatsapp_thread_name")
-    node > /tmp/orkestr-whatsapp-readiness.log 2>&1 <<'NODE'
+    node 2>&1 <<'NODE' | tee /tmp/orkestr-whatsapp-readiness.log
 const { execFileSync } = require('node:child_process');
 
 const baseUrl = 'http://127.0.0.1:19812';
@@ -419,7 +419,7 @@ main().catch((error) => {
   process.exit(1);
 });
 NODE
-    cat /tmp/orkestr-whatsapp-readiness.log"
+    "
 }
 
 cleanup() {

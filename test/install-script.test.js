@@ -106,6 +106,7 @@ test("AWS VPS smoke runner can verify WhatsApp QR readiness", async () => {
   assert.match(script, /api\/connectors\/whatsapp\/bridge\/accounts\/account-1\/start-phone/);
   assert.match(script, /api\/connectors\/whatsapp\/status/);
   assert.match(script, /api\/connectors\/whatsapp\/bridge\/qr\.svg\?accountId=account-1/);
+  assert.match(script, /tee \/tmp\/orkestr-whatsapp-readiness\.log/);
   assert.match(script, /whatsapp_readiness=qr_needed/);
   assert.match(script, /whatsapp_readiness=paired/);
   assert.match(script, /whatsapp_pairing_code=/);

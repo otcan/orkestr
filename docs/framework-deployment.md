@@ -175,6 +175,19 @@ self-chat so the operator can send a message to "Message yourself" in WhatsApp
 and verify inbound routing. Use `--keep` when a human will test the live VPS;
 otherwise the disposable AWS resources are deleted as soon as the smoke exits.
 
+Operational notes from the phone-link smoke:
+
+- Pairing codes rotate. Use the most recent `whatsapp_pairing_code=...` line.
+- The readiness log is streamed through `tee` to both stdout and
+  `/tmp/orkestr-whatsapp-readiness.log`, because this flow requires a human to
+  see the code before the smoke exits.
+- After a code is accepted, the bridge can briefly report `authenticating`.
+  That means WhatsApp accepted the linked device and Orkestr is waiting for
+  WhatsApp Web to finish becoming ready.
+- If the bridge is active during service shutdown, Orkestr destroys the local
+  WhatsApp browser clients before closing the server so `systemctl restart
+  orkestr` does not hang on a stale Chrome/Puppeteer runtime.
+
 ### Lower-Level Systemd Installer
 
 If the host is already prepared and you do not want the bootstrap checks or
