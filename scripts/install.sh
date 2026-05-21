@@ -187,8 +187,51 @@ install_system_packages() {
     return 0
   fi
   apt_install ca-certificates curl git openssh-client procps ripgrep sqlite3 tmux util-linux
-  if ! have chromium && ! have chromium-browser && ! have google-chrome; then
+  install_browser_package
+}
+
+browser_command_is_usable() {
+  local cmd
+  cmd="$1"
+  if ! have "$cmd"; then
+    return 1
+  fi
+  timeout 15 "$cmd" --version >/dev/null 2>&1
+}
+
+have_usable_browser() {
+  browser_command_is_usable google-chrome \
+    || browser_command_is_usable google-chrome-stable \
+    || browser_command_is_usable chromium \
+    || browser_command_is_usable chromium-browser
+}
+
+install_google_chrome() {
+  apt_install ca-certificates curl gnupg
+  mkdir -p /etc/apt/keyrings
+  curl -fsSL https://dl.google.com/linux/linux_signing_key.pub \
+    | gpg --dearmor -o /etc/apt/keyrings/google-chrome.gpg
+  echo "deb [arch=amd64 signed-by=/etc/apt/keyrings/google-chrome.gpg] http://dl.google.com/linux/chrome/deb/ stable main" \
+    > /etc/apt/sources.list.d/google-chrome.list
+  apt-get update
+  apt-get install -y --no-install-recommends google-chrome-stable
+}
+
+install_browser_package() {
+  if have_usable_browser; then
+    return 0
+  fi
+  local arch
+  arch="$(dpkg --print-architecture 2>/dev/null || uname -m)"
+  if [ "$arch" = "amd64" ]; then
+    install_google_chrome
+  else
     apt_install chromium
+  fi
+  if ! have_usable_browser; then
+    echo "A usable Chrome/Chromium browser was not found after installation." >&2
+    echo "Install google-chrome, chromium, or chromium-browser manually and rerun." >&2
+    exit 1
   fi
 }
 
@@ -203,10 +246,17 @@ install_codex() {
 }
 
 chrome_path() {
-  command -v chromium 2>/dev/null \
-    || command -v chromium-browser 2>/dev/null \
-    || command -v google-chrome 2>/dev/null \
-    || true
+  local cmd path
+  for cmd in google-chrome google-chrome-stable chromium chromium-browser; do
+    if browser_command_is_usable "$cmd"; then
+      path="$(command -v "$cmd" 2>/dev/null || true)"
+      if [ -n "$path" ]; then
+        echo "$path"
+        return 0
+      fi
+    fi
+  done
+  true
 }
 
 checkout_git_ref() {
