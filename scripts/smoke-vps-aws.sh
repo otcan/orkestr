@@ -7,7 +7,8 @@ Run Orkestr's installer smoke test on a brand-new disposable AWS EC2 VPS.
 
 The script creates a fresh Ubuntu 24.04 instance, restricts SSH to this
 machine's public IP, runs scripts/bootstrap-vps.sh on the instance, runs
-`npm run smoke` inside /opt/orkestr/app, and deletes the AWS resources.
+`npm run smoke` inside /opt/orkestr/app, optionally verifies WhatsApp QR
+readiness, and deletes the AWS resources.
 
 Requirements:
   aws, ssh, scp, curl, ssh-keygen
@@ -28,6 +29,8 @@ Options:
   --tailscale              Install Tailscale during bootstrap. Default is --no-tailscale.
   --tailscale-up           Run tailscale up during bootstrap. Requires TS_AUTHKEY for unattended runs.
   --auto-update            Install the on-box update timer. Default is --no-auto-update.
+  --with-whatsapp          Start the built-in WhatsApp bridge and wait for QR readiness.
+  --whatsapp-timeout SEC   Seconds to wait for WhatsApp QR readiness. Defaults to 240.
   --keep                   Keep the EC2 instance, key pair, and security group after the run.
   --keep-on-failure        Keep AWS resources only when the smoke fails.
   --help                   Show this help.
@@ -37,6 +40,7 @@ Environment:
   ORKESTR_VPS_SMOKE_ROOT_GB
   ORKESTR_VPS_SMOKE_BOOTSTRAP_URL
   ORKESTR_VPS_SMOKE_SSH_CIDR
+  ORKESTR_VPS_SMOKE_WHATSAPP_TIMEOUT_SECONDS
 USAGE
 }
 
@@ -71,6 +75,8 @@ local_bootstrap=0
 tailscale=0
 tailscale_up=0
 auto_update=0
+with_whatsapp=0
+whatsapp_timeout_seconds="${ORKESTR_VPS_SMOKE_WHATSAPP_TIMEOUT_SECONDS:-240}"
 keep=0
 keep_on_failure=0
 
@@ -130,6 +136,14 @@ while [ "$#" -gt 0 ]; do
       auto_update=0
       shift
       ;;
+    --with-whatsapp)
+      with_whatsapp=1
+      shift
+      ;;
+    --whatsapp-timeout)
+      whatsapp_timeout_seconds="${2:-}"
+      shift 2
+      ;;
     --keep)
       keep=1
       shift
@@ -155,6 +169,7 @@ done
 [ -n "$disk_gb" ] || die "Disk size is required"
 [ -n "$repo_url" ] || die "Repo URL is required"
 [ -n "$git_ref" ] || die "Git ref is required"
+[ -n "$whatsapp_timeout_seconds" ] || die "WhatsApp readiness timeout is required"
 
 if [ -z "$bootstrap_url" ]; then
   bootstrap_url="https://raw.githubusercontent.com/otcan/orkestr/${git_ref}/scripts/bootstrap-vps.sh"
@@ -204,7 +219,116 @@ collect_failure_logs() {
     journalctl -u orkestr --no-pager -n 160
     echo "== bootstrap tail =="
     tail -n 160 /tmp/orkestr-bootstrap.log
+    echo "== whatsapp readiness log =="
+    tail -n 160 /tmp/orkestr-whatsapp-readiness.log
   ' || true
+}
+
+run_whatsapp_readiness_check() {
+  log "Running WhatsApp readiness check"
+  ssh_run "set -euo pipefail
+    export WA_TIMEOUT_SECONDS=$(printf '%q' "$whatsapp_timeout_seconds")
+    node > /tmp/orkestr-whatsapp-readiness.log 2>&1 <<'NODE'
+const { execFileSync } = require('node:child_process');
+
+const baseUrl = 'http://127.0.0.1:19812';
+const timeoutSeconds = Number(process.env.WA_TIMEOUT_SECONDS || 240);
+const deadline = Date.now() + timeoutSeconds * 1000;
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function readJson(path, options = {}) {
+  const response = await fetch(baseUrl + path, options);
+  const text = await response.text();
+  let payload = {};
+  try {
+    payload = text ? JSON.parse(text) : {};
+  } catch {
+    payload = { raw: text };
+  }
+  if (!response.ok) {
+    throw new Error(path + ' failed with HTTP ' + response.status + ': ' + JSON.stringify(payload).slice(0, 500));
+  }
+  return { response, payload };
+}
+
+function requireWhatsAppConnector(setup) {
+  const whatsapp = setup.connectors?.find?.((connector) => connector.id === 'whatsapp');
+  if (!whatsapp) throw new Error('setup status did not include the WhatsApp connector');
+  if (!['not_connected', 'partial', 'connected'].includes(whatsapp.state)) {
+    throw new Error('unexpected initial WhatsApp connector state: ' + whatsapp.state);
+  }
+  console.log('setup_whatsapp_state=' + whatsapp.state);
+}
+
+async function main() {
+  const setup = await readJson('/api/setup/status');
+  requireWhatsAppConnector(setup.payload);
+
+  const challenge = await readJson('/api/setup/security/challenge', { method: 'POST' });
+  const challengeId = String(challenge.payload.challengeId || '').trim();
+  if (!challengeId) throw new Error('pairing challenge did not return challengeId');
+  console.log('pairing_challenge=' + challengeId);
+  execFileSync('sudo', ['orkestr', 'security', 'approve', challengeId], { stdio: 'inherit' });
+
+  const pair = await readJson('/api/setup/security/pair', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ challengeId }),
+  });
+  const setCookie = pair.response.headers.get('set-cookie') || '';
+  const cookie = setCookie.split(';')[0];
+  if (!cookie) throw new Error('pairing did not return a session cookie');
+  console.log('paired_session=' + (pair.payload.session?.id || 'ok'));
+
+  const authHeaders = { cookie };
+  const start = await readJson('/api/connectors/whatsapp/bridge/accounts/account-1/start', {
+    method: 'POST',
+    headers: authHeaders,
+  });
+  console.log('whatsapp_start_state=' + (start.payload.account?.state || 'unknown'));
+
+  let lastState = '';
+  let lastSummary = '';
+  while (Date.now() < deadline) {
+    const status = await readJson('/api/connectors/whatsapp/status', { headers: authHeaders });
+    const state = String(status.payload.state || '');
+    const summary = String(status.payload.summary || '');
+    if (state !== lastState || summary !== lastSummary) {
+      console.log('whatsapp_state=' + state + ' summary=' + summary);
+      lastState = state;
+      lastSummary = summary;
+    }
+    if (state === 'paired') {
+      console.log('whatsapp_readiness=paired');
+      process.exit(0);
+    }
+    if (state === 'qr_needed') {
+      const qr = await fetch(baseUrl + '/api/connectors/whatsapp/bridge/qr.svg?accountId=account-1', { headers: authHeaders });
+      const svg = await qr.text();
+      if (!qr.ok || !svg.includes('<svg')) {
+        throw new Error('WhatsApp reported qr_needed but QR SVG was not available, HTTP ' + qr.status);
+      }
+      console.log('whatsapp_readiness=qr_needed qr_bytes=' + Buffer.byteLength(svg));
+      process.exit(0);
+    }
+    if (['failed', 'unreachable'].includes(state)) {
+      throw new Error('WhatsApp bridge failed before QR readiness: ' + (summary || state));
+    }
+    await sleep(3000);
+  }
+
+  throw new Error('WhatsApp QR readiness timed out after ' + timeoutSeconds + 's; last state=' + (lastState || 'unknown') + ' summary=' + lastSummary);
+}
+
+main().catch((error) => {
+  console.error(error.stack || error.message || String(error));
+  process.exit(1);
+});
+NODE
+    cat /tmp/orkestr-whatsapp-readiness.log"
 }
 
 cleanup() {
@@ -327,6 +451,9 @@ main() {
   else
     bootstrap_args+=(--no-auto-update)
   fi
+  if [ "$with_whatsapp" -eq 1 ]; then
+    bootstrap_args+=(--with-whatsapp)
+  fi
 
   if [ "$local_bootstrap" -eq 1 ]; then
     log "Uploading local bootstrap/install scripts"
@@ -353,6 +480,9 @@ main() {
     cd /opt/orkestr/app
     npm run smoke
   '
+  if [ "$with_whatsapp" -eq 1 ]; then
+    run_whatsapp_readiness_check
+  fi
 
   log "Smoke test passed on fresh VPS: $instance_id"
 }

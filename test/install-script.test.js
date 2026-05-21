@@ -89,3 +89,20 @@ test("bootstrap script provides an opinionated fresh VPS path", async () => {
   assert.match(script, /systemctl restart orkestr\.service/);
   assert.doesNotMatch(script, /docker exec orkestr/);
 });
+
+test("AWS VPS smoke runner can verify WhatsApp QR readiness", async () => {
+  const script = await fs.readFile("scripts/smoke-vps-aws.sh", "utf8");
+  const { stdout } = await execFileAsync("bash", ["scripts/smoke-vps-aws.sh", "--help"]);
+
+  await execFileAsync("bash", ["-n", "scripts/smoke-vps-aws.sh"]);
+  assert.match(stdout, /--with-whatsapp/);
+  assert.match(stdout, /--whatsapp-timeout SEC/);
+  assert.match(script, /bootstrap_args\+=\(--with-whatsapp\)/);
+  assert.match(script, /api\/setup\/security\/challenge/);
+  assert.match(script, /sudo', \['orkestr', 'security', 'approve'/);
+  assert.match(script, /api\/connectors\/whatsapp\/bridge\/accounts\/account-1\/start/);
+  assert.match(script, /api\/connectors\/whatsapp\/status/);
+  assert.match(script, /api\/connectors\/whatsapp\/bridge\/qr\.svg\?accountId=account-1/);
+  assert.match(script, /whatsapp_readiness=qr_needed/);
+  assert.match(script, /whatsapp_readiness=paired/);
+});

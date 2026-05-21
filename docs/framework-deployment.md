@@ -44,6 +44,13 @@ new VPS, and then deletes the instance, temporary key pair, and security group.
 It defaults to `t3.medium`, 60 GB root disk, no Tailscale, and no auto-update so
 the check stays isolated and disposable.
 
+To also verify that the built-in WhatsApp bridge can be started and reaches QR
+readiness on the fresh VPS, add:
+
+```bash
+npm run smoke:vps:aws -- --with-whatsapp
+```
+
 ## Deployment Paths
 
 Use Docker for first-run demos and host-native systemd for a VPS.
@@ -142,6 +149,9 @@ npm run smoke:vps:aws -- --local-bootstrap --ref my-branch
 
 # Keep the VPS after a failure for SSH debugging.
 npm run smoke:vps:aws -- --keep-on-failure
+
+# Start the built-in WhatsApp bridge and wait for QR readiness.
+npm run smoke:vps:aws -- --with-whatsapp
 
 # Exercise Tailscale installation too. Use TS_AUTHKEY for unattended tailscale up.
 npm run smoke:vps:aws -- --tailscale --tailscale-up
