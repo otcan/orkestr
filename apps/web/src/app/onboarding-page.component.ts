@@ -1,7 +1,7 @@
 import { Component, EventEmitter, Input, OnChanges, OnDestroy, OnInit, Output, SimpleChanges, inject } from "@angular/core";
 import { FormsModule } from "@angular/forms";
 import { firstValueFrom } from "rxjs";
-import { ApiService, ConnectorStatus, OutlookOAuthPollResponse, OutlookOAuthStartResponse, SecurityChallenge, SetupStatus, SystemDoctorResponse, ThreadSummary } from "./api.service";
+import { ApiService, ConnectorStatus, OutlookOAuthPollResponse, OutlookOAuthStartResponse, SecurityChallenge, SetupStatus, SystemDoctorResponse, ThreadSummary, VersionResponse } from "./api.service";
 
 type ConnectorStep = "openai" | "codex" | "gmail" | "linkedin" | "whatsapp" | "browsers";
 type OnboardingStep = "goal" | "system" | "security" | ConnectorStep | "finish";
@@ -47,6 +47,7 @@ export class OnboardingPageComponent implements OnInit, OnChanges, OnDestroy {
 
   setup: SetupStatus | null = null;
   doctor: SystemDoctorResponse | null = null;
+  versionInfo: VersionResponse | null = null;
   busy = false;
   error = "";
   notice = "";
@@ -86,24 +87,24 @@ export class OnboardingPageComponent implements OnInit, OnChanges, OnDestroy {
   readonly goals: OnboardingGoal[] = [
     {
       id: "whatsapp-codex",
-      label: "WhatsApp Codex thread",
+      label: "Codex from WhatsApp",
       eyebrow: "Recommended",
-      summary: "Control a local Codex worker from WhatsApp.",
+      summary: "Send work from WhatsApp and mirror Codex replies back to the chat.",
       recommended: true,
       requiredSteps: ["codex", "whatsapp"],
     },
     {
       id: "virtual-desktop",
-      label: "Virtual Desktop Generation",
+      label: "Managed browser desktop",
       eyebrow: "Browser work",
-      summary: "Create a local browser desktop that agents can use for web tasks.",
+      summary: "Prepare a leased Chrome desktop for agent web work and sign-in state.",
       requiredSteps: ["codex", "browsers", "whatsapp"],
     },
     {
       id: "inbox-summary",
-      label: "Inbox summary",
+      label: "Mail summaries",
       eyebrow: "Daily brief",
-      summary: "Read Gmail or Outlook and send a scheduled WhatsApp summary.",
+      summary: "Connect Gmail or Outlook and schedule summaries back to WhatsApp.",
       requiredSteps: ["openai", "gmail", "whatsapp"],
     },
   ];
@@ -138,14 +139,16 @@ export class OnboardingPageComponent implements OnInit, OnChanges, OnDestroy {
   async load(showBusy = true): Promise<void> {
     if (showBusy) this.busy = true;
     try {
-      const [setupResult, doctorResult] = await Promise.allSettled([
+      const [setupResult, doctorResult, versionResult] = await Promise.allSettled([
         firstValueFrom(this.api.setupStatus()),
         firstValueFrom(this.api.systemDoctor()),
+        firstValueFrom(this.api.version()),
       ]);
       if (setupResult.status === "rejected") throw setupResult.reason;
       const setup = setupResult.value;
       this.setup = setup;
       this.doctor = doctorResult.status === "fulfilled" ? doctorResult.value : null;
+      this.versionInfo = versionResult.status === "fulfilled" ? versionResult.value : this.versionInfo;
       this.hydrateForms(setup);
       if (setup.security?.paired) await this.loadSecurityChallenges(false);
       else this.securityChallenges = [];
@@ -529,13 +532,25 @@ export class OnboardingPageComponent implements OnInit, OnChanges, OnDestroy {
   }
 
   pageTitle(): string {
-    return this.isSetupMode() ? "Setup" : "Choose what to add first";
+    return this.isSetupMode() ? "Setup" : "Set up Orkestr";
   }
 
   pageSummary(): string {
     return this.isSetupMode()
       ? "Setup stays available after onboarding so you can check secure access, accounts, runtimes, and connectors at any time."
-      : "Orkestr runs on infrastructure you control. These steps prepare only the runtime and connections needed for the first capability you want to add.";
+      : "Orkestr runs persistent Codex threads, workspaces, WhatsApp, mail, timers, and managed browser desktops on infrastructure you control.";
+  }
+
+  pageEyebrow(): string {
+    return this.isSetupMode() ? "Orkestr setup" : "Self-hosted agent cockpit";
+  }
+
+  buildStamp(): string {
+    if (!this.versionInfo) return "";
+    const version = String(this.versionInfo.version || "").trim();
+    const commit = String(this.versionInfo.commit || "").trim();
+    const branch = String(this.versionInfo.branch || "").trim();
+    return [`v${version || "0.0.0"}`, commit ? commit.slice(0, 7) : "", branch].filter(Boolean).join(" · ");
   }
 
   closeLabel(): string {
@@ -569,7 +584,7 @@ export class OnboardingPageComponent implements OnInit, OnChanges, OnDestroy {
   activeSteps(): Array<{ id: OnboardingStep; label: string; eyebrow: string }> {
     const byId = Object.fromEntries(this.connectorSteps.map((step) => [step.id, step]));
     return [
-      { id: "goal", label: "Choose what to add", eyebrow: "Start here" },
+      { id: "goal", label: "Start with one capability", eyebrow: "Start here" },
       { id: "system", label: "Connections", eyebrow: "Runtime" },
       { id: "security", label: "Secure access", eyebrow: "Remote safety" },
       ...this.goalRequiredSteps().map((id) => byId[id]),
@@ -923,6 +938,10 @@ export class OnboardingPageComponent implements OnInit, OnChanges, OnDestroy {
   }
 
   async prepareFirstLoop(): Promise<void> {
+    await this.prepareStarterThread();
+  }
+
+  async prepareStarterThread(): Promise<void> {
     this.busy = true;
     try {
       const thread = await this.ensureFirstThread();

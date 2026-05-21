@@ -55,6 +55,19 @@
   gap: 10px;
 }
 
+.hero-actions {
+  justify-content: flex-end;
+  min-width: 220px;
+}
+
+.build-stamp {
+  flex-basis: 100%;
+  color: #a9bea4;
+  font-size: 0.72rem;
+  font-weight: 900;
+  text-align: right;
+}
+
 .onboarding-layout {
   display: block;
   min-height: 0;
@@ -727,6 +740,14 @@
   .onboarding-hero,
   .setup-panel-head {
     display: grid;
+  }
+
+  .hero-actions {
+    justify-content: flex-start;
+  }
+
+  .build-stamp {
+    text-align: left;
   }
 
   .setup-steps {

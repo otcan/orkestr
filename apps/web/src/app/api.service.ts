@@ -8,6 +8,14 @@ export interface HealthResponse {
   generatedAt: string;
 }
 
+export interface VersionResponse {
+  name: string;
+  version: string;
+  commit?: string;
+  branch?: string;
+  generatedAt: string;
+}
+
 export interface ConnectorStatus {
   id: string;
   label: string;
@@ -677,8 +685,8 @@ export class ApiService {
     return this.http.get<HealthResponse>(this.api("/health"));
   }
 
-  version(): Observable<Record<string, unknown>> {
-    return this.http.get<Record<string, unknown>>(this.api("/version"));
+  version(): Observable<VersionResponse> {
+    return this.http.get<VersionResponse>(this.api("/version"));
   }
 
   setupStatus(): Observable<SetupStatus> {

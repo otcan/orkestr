@@ -25,6 +25,32 @@ import { listEvents } from "../../../../../packages/storage/src/store.js";
 const execFileAsync = promisify(execFile);
 let lastCpuSample: { idle: number; total: number } | null = null;
 
+async function gitValue(args: string[]): Promise<string> {
+  try {
+    const { stdout } = await execFileAsync("git", args, { cwd: process.cwd(), timeout: 1000 });
+    return String(stdout || "").trim();
+  } catch {
+    return "";
+  }
+}
+
+async function buildMetadata() {
+  const commit = String(
+    process.env.ORKESTR_BUILD_COMMIT ||
+      process.env.GIT_COMMIT ||
+      process.env.SOURCE_VERSION ||
+      process.env.VERCEL_GIT_COMMIT_SHA ||
+      "",
+  ).trim() || await gitValue(["rev-parse", "HEAD"]);
+  const branch = String(
+    process.env.ORKESTR_BUILD_BRANCH ||
+      process.env.GIT_BRANCH ||
+      process.env.VERCEL_GIT_COMMIT_REF ||
+      "",
+  ).trim() || await gitValue(["branch", "--show-current"]);
+  return { commit, branch };
+}
+
 function pct(used: number, total: number): number {
   if (!Number.isFinite(used) || !Number.isFinite(total) || total <= 0) return 0;
   return Math.max(0, Math.min(100, Math.round((used / total) * 1000) / 10));
@@ -231,9 +257,12 @@ export class SystemController {
   @Get("version")
   async version() {
     const pkg = JSON.parse(await fs.readFile(path.resolve(process.cwd(), "package.json"), "utf8"));
+    const build = await buildMetadata();
     return {
       name: pkg.name || "orkestr",
       version: pkg.version || "0.0.0",
+      commit: build.commit,
+      branch: build.branch,
       generatedAt: new Date().toISOString(),
     };
   }

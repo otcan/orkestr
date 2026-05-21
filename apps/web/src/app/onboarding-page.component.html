@@ -1,11 +1,14 @@
 <main class="onboarding-shell">
   <section class="onboarding-hero">
     <div>
-      <p class="eyebrow">Orkestr setup</p>
+      <p class="eyebrow">{{ pageEyebrow() }}</p>
       <h1>{{ pageTitle() }}</h1>
       <p>{{ pageSummary() }}</p>
     </div>
     <div class="hero-actions">
+      @if (buildStamp()) {
+        <small class="build-stamp">{{ buildStamp() }}</small>
+      }
       <button class="secondary" type="button" (click)="skip.emit()">{{ closeLabel() }}</button>
       <button type="button" (click)="openApp()" [disabled]="busy">
         Open Orkestr
@@ -69,8 +72,8 @@
 
       @if (activeStep === "goal") {
         <section class="setup-form">
-          <h3>Pick the first capability</h3>
-          <p>Orkestr will only ask for the runtime and accounts needed for this first capability. You can add more connectors later.</p>
+          <h3>Start with one capability</h3>
+          <p>Connect only what you need now. You can add more accounts, desktops, timers, and threads later from Setup.</p>
           <div class="goal-options">
             @for (goal of goals; track goal.id) {
               <button type="button" [class.active]="selectedGoal === goal.id" (click)="selectGoal(goal.id)">
@@ -474,7 +477,7 @@
             </div>
             <div class="button-row">
               <button type="button" (click)="createFirstThread()" [disabled]="busy">Create first thread</button>
-              <button class="secondary" type="button" (click)="prepareFirstLoop()" [disabled]="busy">Prepare starter thread</button>
+              <button class="secondary" type="button" (click)="prepareStarterThread()" [disabled]="busy">Prepare starter thread</button>
             </div>
             <div class="command-box">
               Thread: {{ firstThread?.name || firstThreadName() }} ({{ firstThread?.id || firstThreadId() }})

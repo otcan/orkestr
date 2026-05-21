@@ -1,7 +1,7 @@
 import { DatePipe } from "@angular/common";
 import { ChangeDetectorRef, Component, EventEmitter, Input, OnDestroy, OnInit, Output, inject } from "@angular/core";
 import { firstValueFrom } from "rxjs";
-import { Agent, AgentTemplate, ApiService, BrowserSession, ConnectorStatus, EventRecord, SetupStatus, TimerDoctorResponse, TimerRecord } from "./api.service";
+import { Agent, AgentTemplate, ApiService, BrowserSession, ConnectorStatus, EventRecord, SetupStatus, TimerDoctorResponse, TimerRecord, VersionResponse } from "./api.service";
 
 export type ToolsView = "system" | "timers" | "desktops" | "models" | "settings" | "connectors";
 
@@ -21,7 +21,7 @@ export class OpsPageComponent implements OnInit, OnDestroy {
   busy = false;
   error = "";
   opsSetup: SetupStatus | null = null;
-  opsVersion: Record<string, unknown> | null = null;
+  opsVersion: VersionResponse | null = null;
   opsWhatsApp: Record<string, unknown> | null = null;
   opsRuntimeBudget: Record<string, unknown> | null = null;
   opsConnectors: ConnectorStatus[] = [];
