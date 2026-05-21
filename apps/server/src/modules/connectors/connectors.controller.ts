@@ -104,6 +104,7 @@ export class ConnectorsController {
         phoneNumber: String(body.phoneNumber || body.phone || ""),
         showNotification: body.showNotification !== false,
         intervalMs: Number(body.intervalMs || 0) || undefined,
+        authReadyTimeoutMs: Number(body.authReadyTimeoutMs || body.authTimeoutMs || 0) || undefined,
       }),
     };
   }
@@ -116,6 +117,7 @@ export class ConnectorsController {
         phoneNumber: String(body.phoneNumber || body.phone || ""),
         showNotification: body.showNotification !== false,
         intervalMs: Number(body.intervalMs || 0) || undefined,
+        authReadyTimeoutMs: Number(body.authReadyTimeoutMs || body.authTimeoutMs || 0) || undefined,
       }),
     };
   }
