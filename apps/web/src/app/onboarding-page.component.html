@@ -69,8 +69,8 @@
 
       @if (activeStep === "goal") {
         <section class="setup-form">
-          <h3>Pick the first workflow</h3>
-          <p>Orkestr will only ask for the accounts needed for this first loop. You can add more connectors later.</p>
+          <h3>Pick the first capability</h3>
+          <p>Orkestr will only ask for the runtime and accounts needed for this first capability. You can add more connectors later.</p>
           <div class="goal-options">
             @for (goal of goals; track goal.id) {
               <button type="button" [class.active]="selectedGoal === goal.id" (click)="selectGoal(goal.id)">
@@ -86,9 +86,9 @@
 
       @if (activeStep === "system") {
         <section class="setup-form">
-          <h3>System check</h3>
+          <h3>Connections</h3>
           <p>
-            {{ isSetupMode() ? "These checks confirm the local runtime and bundled tools are available." : "These checks confirm the local runtime can support " + activeGoal().label + "." }}
+            {{ isSetupMode() ? "These checks confirm this self-hosted runtime can reach the tools and connectors Orkestr needs." : "These checks confirm this self-hosted runtime can support " + activeGoal().label + "." }}
           </p>
           <div class="check-list">
             @for (check of systemChecks(); track check.label) {
@@ -107,7 +107,7 @@
       @if (activeStep === "security") {
         <section class="setup-form">
           <h3>Secure Access</h3>
-          <p>Keep Orkestr local by default. Before remote use, put it behind TLS and pair this browser.</p>
+          <p>Keep Orkestr behind infrastructure you control. Before remote use, put it behind a private network or TLS boundary and pair this browser.</p>
           <div class="check-list">
             @for (check of securityChecks(); track check.label) {
               <div class="check-row">
@@ -168,7 +168,7 @@
       @if (activeStep === "openai") {
         <form class="setup-form" (submit)="saveOpenAI(); $event.preventDefault()">
           <h3>OpenAI</h3>
-          <p>{{ connector("openai")?.summary || "Add an API key for workflows that use OpenAI directly." }}</p>
+          <p>{{ connector("openai")?.summary || "Optional: add an API key for connectors or skills that call OpenAI directly. Normal Codex threads can use the Codex CLI login instead." }}</p>
           <label>
             <span>API key</span>
             <input name="openai-api-key" type="password" [(ngModel)]="openaiApiKey" autocomplete="off" placeholder="sk-..." />
@@ -180,7 +180,7 @@
       @if (activeStep === "codex") {
         <section class="setup-form">
           <h3>Codex Runtime</h3>
-          <p>{{ connector("codex")?.summary || "Codex is included in the Docker runtime. Sign in once from the browser." }}</p>
+          <p>{{ connector("codex")?.summary || "Orkestr runs Codex through the CLI by default, so your Codex login and limits are used for agent sessions. Direct OpenAI API access is optional." }}</p>
           <div class="check-list">
             <div class="check-row">
               <div>
@@ -195,7 +195,7 @@
             <button class="secondary" type="button" (click)="load()" [disabled]="busy">Refresh Codex</button>
           </div>
           <label>
-            <span>OpenAI API key</span>
+            <span>Optional API key</span>
             <input
               type="password"
               name="codex-api-key"
@@ -207,6 +207,7 @@
           <div class="button-row">
             <button type="button" (click)="connectCodexApiKey()" [disabled]="busy">Connect Codex with API key</button>
           </div>
+          <small>Use this only when this runtime should authenticate Codex with an API key instead of the browser sign-in flow.</small>
           @if (codexDeviceCode) {
             <div class="command-box">Device code: {{ codexDeviceCode }}</div>
           }
@@ -409,7 +410,7 @@
       @if (activeStep === "browsers") {
         <section class="setup-form">
           <h3>Desktops</h3>
-          <p>{{ connector("browsers")?.summary || "Prepare local browser desktops for agent-driven web tasks." }}</p>
+          <p>{{ connector("browsers")?.summary || "Prepare managed browser desktops for agent web tasks. Agents should acquire Orkestr desktop leases instead of starting unmanaged Chrome profiles." }}</p>
           <div class="button-row">
             <button type="button" (click)="prepareVirtualDesktop()" [disabled]="busy">Prepare desktop</button>
             <button class="secondary" type="button" (click)="openVirtualDesktop()" [disabled]="busy">Open desktop</button>
@@ -421,12 +422,13 @@
       @if (activeStep === "whatsapp") {
         <section class="setup-form">
           <h3>WhatsApp</h3>
-          <p>{{ connector("whatsapp")?.summary || "Pair one or two WhatsApp accounts with the built-in local bridge." }}</p>
+          <p>{{ connector("whatsapp")?.summary || "Pair one or two WhatsApp accounts with the built-in bridge. The sender account mirrors Orkestr replies; the receiver account is optional for a second login." }}</p>
           <div class="whatsapp-accounts">
             @for (account of whatsappAccounts; track account.id) {
               <article class="whatsapp-account">
                 <div>
                   <strong>{{ account.label }}</strong>
+                  <small>{{ whatsappAccountPurpose(account.id) }}</small>
                   <em [class]="whatsappAccountClass(account.id)">{{ whatsappAccountState(account.id) }}</em>
                   @if (whatsappAccountError(account.id)) {
                     <small>{{ whatsappAccountError(account.id) }}</small>
@@ -451,7 +453,7 @@
         <section class="setup-form">
           <h3>{{ activeGoal().label }}</h3>
           <p>
-            Required connectors for this workflow are listed below. Open Orkestr when they are ready, or open anyway
+            Required connections for this capability are listed below. Open Orkestr when they are ready, or open it
             and finish wiring from the cockpit.
           </p>
           <div class="check-list">
@@ -467,12 +469,12 @@
           </div>
           <div class="first-loop-panel">
             <div>
-              <h4>First loop</h4>
-              <p>Create the starter thread, prepare the runtime for this goal, then bind a WhatsApp chat when you have the chat ID.</p>
+              <h4>Starter thread</h4>
+              <p>Create the starter thread, prepare the runtime for this capability, then bind a WhatsApp chat when you have the chat ID.</p>
             </div>
             <div class="button-row">
               <button type="button" (click)="createFirstThread()" [disabled]="busy">Create first thread</button>
-              <button class="secondary" type="button" (click)="prepareFirstLoop()" [disabled]="busy">Prepare loop</button>
+              <button class="secondary" type="button" (click)="prepareFirstLoop()" [disabled]="busy">Prepare starter thread</button>
             </div>
             <div class="command-box">
               Thread: {{ firstThread?.name || firstThreadName() }} ({{ firstThread?.id || firstThreadId() }})

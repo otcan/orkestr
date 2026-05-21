@@ -33,7 +33,7 @@ builds Angular, and runs the Node test suite.
 
 ## Deployment Paths
 
-Use Docker for local first-run demos and host-native systemd for a VPS.
+Use Docker for first-run demos and host-native systemd for a VPS.
 
 Docker is intentionally the easiest local path: the image bundles Codex, tmux,
 git, ripgrep, Chromium, and the compiled Orkestr app. It is also useful for
@@ -171,10 +171,34 @@ API-key login started from the setup UI persists in the same Docker volume.
 Orkestr checks the real Codex CLI login status before waking a coding runtime;
 an unconfigured runtime sends the user back to `/setup/codex` instead of
 opening the raw Codex login menu in tmux. Docker settings are read from `.env`
-by Compose; start from `.env.docker.example` for OpenAI,
-Tailscale/Caddy, OAuth, workspace, and overlay settings. Private overlays are
-mounted separately with `ORKESTR_OVERLAY_DIR`; do not bake secrets, WhatsApp
-state, browser profiles, or personal prompts into the public image.
+by Compose; start from `.env.docker.example` for optional OpenAI direct API
+access, Tailscale/Caddy, OAuth, workspace, and overlay settings. If a setup UI
+accepts an uploaded or pasted `.env`, treat it as runtime configuration: read
+it explicitly, store it with server-local state, and never commit it. Private
+overlays are mounted separately with `ORKESTR_OVERLAY_DIR`; do not bake
+secrets, WhatsApp state, browser profiles, or personal prompts into the public
+image.
+
+## Tailscale Demo Route
+
+For demos that must not touch a public hostname, run Orkestr on a local port and
+publish only through Tailscale Serve:
+
+```bash
+ORKESTR_HOST=127.0.0.1 ORKESTR_PORT=19813 npm start
+tailscale serve --bg 443 http://127.0.0.1:19813
+```
+
+If another reverse proxy already owns port 443 on the tailnet IP, use a
+dedicated demo port instead:
+
+```bash
+tailscale serve --bg --https 8443 http://127.0.0.1:19813
+```
+
+Use a clean `ORKESTR_HOME` and workspace root for that demo runtime. Do not
+point the route at a personal overlay, personal shadow service, or production
+Orkestr home.
 
 ## Release Checklist
 

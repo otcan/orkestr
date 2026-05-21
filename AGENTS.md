@@ -12,9 +12,11 @@ Rules:
 - Keep real overlays in a private repo. Public examples must use fake IDs, fake hosts, and generic prompts only.
 - Generic code goes in this repo; personal bindings, timers, prompts, browser profiles, deployment files, and secrets belong outside this repo and are loaded through `ORKESTR_OVERLAY_DIR`.
 - V1 scope is only setup UI, OpenAI/Codex, Gmail, LinkedIn virtual browser, WhatsApp, virtual browsers, and timers.
-- Prefer local-first defaults. Do not require a cloud account except user-provided connector credentials.
+- Prefer self-hosted defaults on infrastructure the user controls. Do not require
+  a cloud account except user-provided connector credentials.
 - Do not add enterprise/team/plugin abstractions until the V1 onboarding loop is reliable.
-- Keep the install path boring: clone/install/start, open setup wizard, connect accounts, create timer.
+- Keep the install path boring: clone/install/start, open setup wizard, connect
+  the first capability, create a thread or timer.
 - Keep files small and purpose-specific. If a file is approaching 500 lines, split new behavior into a separate module, component, helper, controller, or template when it can be managed cleanly.
 - Do not keep extending already-large files with unrelated UI, backend, routing, or integration logic. Exceed 500 lines only when splitting would create artificial fragmentation or a risky refactor.
 
@@ -33,6 +35,10 @@ of relying on static thread or workspace text in this file.
   <thread>`, and `orkestr sleep <thread>` for thread control.
 - Use `orkestr timers list`, `orkestr timers run <timer-id>`, and `orkestr
   doctor timers` for timers.
+- Treat the Codex CLI/session as the default agent runtime. A normal Orkestr
+  coding thread should use the user's Codex CLI login and Codex limits. Direct
+  OpenAI API calls are optional connector or skill paths only; do not assume an
+  OpenAI API key is required for a Codex thread.
 - Use Orkestr APIs for browser and desktop state: `GET /api/browser-sessions`,
   `GET /api/desktops/leases`, `POST /api/desktops/:slug/acquire`, heartbeat,
   and release.
@@ -42,3 +48,6 @@ of relying on static thread or workspace text in this file.
 - When a browser desktop is needed, acquire the desktop lease first and release
   it when finished. Do not assume a desktop is free because a profile directory
   exists.
+- Do not launch unmanaged Chrome, create ad hoc browser profiles, or bypass the
+  desktop lease APIs for web work. If a connector needs browser state, use the
+  managed Orkestr browser or desktop surface assigned to that connector.

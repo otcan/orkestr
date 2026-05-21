@@ -12,9 +12,9 @@ Start with the [user guide](docs/user-guide.md), then use the quickstart below w
 
 - **No OpenAI API credit meter for the default Codex path.** Use your existing Codex login instead of wiring every agent task through paid API calls.
 - **Persistent agents, not simple chat automation.** Orkestr manages real Codex sessions with workspaces, queues, status, recovery, logs, and browser access.
-- **Timers for recurring work.** Agents can wake later, continue a task, check a repository, or run scheduled workflows without reopening an IDE.
+- **Timers for recurring work.** Agents can wake later, continue a task, check a repository, or run scheduled prompts without reopening an IDE.
 - **Real work surfaces.** Connect WhatsApp, Gmail, LinkedIn browser profiles, virtual desktops, and future local connectors into the same agent control plane.
-- **Local-first by default.** Keep workspaces, runtime state, connector sessions, and private overlays on infrastructure you control.
+- **User-controlled infrastructure.** Keep workspaces, runtime state, connector sessions, and private overlays on a laptop, workstation, private VPS, or k3s host you control.
 
 ## Why This Exists
 
@@ -26,7 +26,7 @@ Coding agents are useful, but the useful work usually lives outside the chat win
 - recurring tasks that should run without reopening an IDE
 - logs that explain what happened after the agent wakes up
 
-Orkestr makes those pieces explicit. The default target is a single developer running local agents on a laptop, workstation, or private VPS.
+Orkestr makes those pieces explicit. The default target is a single developer running agents on a laptop, workstation, private VPS, or k3s-backed demo host.
 
 ## What Orkestr Lets You Do
 
@@ -63,13 +63,17 @@ Then open:
 http://127.0.0.1:19812/setup
 ```
 
-In setup, choose the Codex workflow and either use **Open Codex sign-in** for
-device authorization or **Connect Codex with API key**. Orkestr checks
-`codex login status` before starting a coding thread, so a raw Codex login menu
-is treated as setup work instead of being opened inside the agent runtime.
-Runtime state, including Codex auth, is stored in the `orkestr-data` Docker
-volume. Edit `.env` before starting the container to provide OpenAI,
-Tailscale/Caddy, OAuth, workspace, or overlay settings.
+In setup, choose what to add first, then connect the required accounts. For
+Codex, use **Open Codex sign-in** for device authorization or **Connect Codex
+with API key** when this runtime should authenticate Codex that way. Orkestr
+checks `codex login status` before starting a coding thread, so a raw Codex
+login menu is treated as setup work instead of being opened inside the agent
+runtime. Runtime state, including Codex auth, is stored in the `orkestr-data`
+Docker volume. Edit `.env` before starting the container to provide optional
+OpenAI direct API access, Tailscale/Caddy settings, OAuth credentials,
+workspace roots, or overlay settings. If you upload or paste an `.env` during
+setup, Orkestr reads that file as runtime configuration and stores it with the
+same local runtime state.
 
 ### VPS Host-Native
 
@@ -99,7 +103,7 @@ The host CLI is safe to run from a root SSH session. It drops to the
 configured `ORKESTR_RUN_USER` before touching Orkestr state, so files under
 `ORKESTR_HOME` remain writable by `orkestr.service`.
 
-Edit `/etc/orkestr/orkestr.env` for OpenAI, OAuth, Caddy/Tailscale HTTPS, and private overlay settings. Keep the service bound to `127.0.0.1` and put Caddy/Tailscale in front before remote browser access.
+Edit `/etc/orkestr/orkestr.env` for optional OpenAI direct API access, OAuth, Caddy/Tailscale HTTPS, and private overlay settings. Keep the service bound to `127.0.0.1` and put Caddy/Tailscale in front before remote browser access.
 
 ### On-Box Update Watcher
 

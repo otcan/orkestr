@@ -11,7 +11,7 @@ async function readSources(paths) {
   return (await Promise.all(paths.map((sourcePath) => fs.readFile(sourcePath, "utf8")))).join("\n");
 }
 
-test("onboarding focuses the first loop on virtual desktop and WhatsApp", async () => {
+test("onboarding focuses the starter setup on virtual desktop and WhatsApp", async () => {
   const onboarding = await readSources(onboardingSources);
   const browsers = await fs.readFile("packages/browsers/src/browsers.js", "utf8");
 
@@ -21,6 +21,15 @@ test("onboarding focuses the first loop on virtual desktop and WhatsApp", async 
   assert.ok(!onboarding.includes("CODEX_HOME="));
   assert.ok(!onboarding.includes("Open anyway"));
   assert.ok(!onboarding.includes("Browser pairing code"));
+  assert.ok(!onboarding.includes("Choose your first workflow"));
+  assert.ok(!onboarding.includes("Pick the first workflow"));
+  assert.ok(!onboarding.includes("System check"));
+  assert.ok(onboarding.includes("Choose what to add first"));
+  assert.ok(onboarding.includes("Pick the first capability"));
+  assert.ok(onboarding.includes("Connections"));
+  assert.ok(onboarding.includes("self-hosted runtime"));
+  assert.ok(onboarding.includes("Codex CLI login"));
+  assert.ok(onboarding.includes("Agents should acquire Orkestr desktop leases"));
   assert.ok(onboarding.includes("Virtual Desktop Generation"));
   assert.ok(onboarding.includes("Open Codex sign-in"));
   assert.ok(onboarding.includes("Connect Codex with API key"));
@@ -56,5 +65,8 @@ test("onboarding focuses the first loop on virtual desktop and WhatsApp", async 
   assert.ok(onboarding.includes("Browser approvals"));
   assert.ok(onboarding.includes("Approve pending pairing challenges"));
   assert.ok(onboarding.includes('label: "Desktops"'));
+  assert.ok(onboarding.includes("WhatsApp sender"));
+  assert.ok(onboarding.includes("WhatsApp receiver"));
+  assert.ok(onboarding.includes("whatsappAccountPurpose"));
   assert.ok(browsers.includes('slug: "desktop"'));
 });

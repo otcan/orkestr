@@ -2,7 +2,7 @@
 
 This guide explains Orkestr as a product, not as a codebase.
 
-Orkestr gives you a web cockpit for local Codex agents. The browser-facing
+Orkestr gives you a web cockpit for self-hosted Codex agents. The browser-facing
 layer can be opened locally or exposed through a protected HTTPS/Tailscale URL.
 The agent runtime, workspaces, browser profiles, connector credentials, logs,
 and private overlays stay on your machine or VPS.
@@ -80,8 +80,10 @@ Virtual desktops are managed Chrome profiles. They are useful when an agent
 needs a logged-in browser surface or when a user wants to inspect the same
 browser state the agent is using.
 
-The desktop system is intentionally local-first. Browser profile directories
-stay under Orkestr-managed data paths or private overlays.
+The desktop system is intentionally managed by Orkestr. Browser profile
+directories stay under Orkestr-managed data paths or private overlays, and
+agents should use the Orkestr desktop lease APIs instead of starting unmanaged
+Chrome profiles.
 
 ### Schedule Work
 
@@ -143,9 +145,10 @@ Do not publish a raw Orkestr API or terminal stream directly to the internet.
 1. Install with Docker for the easiest local path, or use the host-native VPS
    installer for a real server.
 2. Open `/setup`.
-3. Run the system check.
+3. Review Connections.
 4. Configure secure access if the URL is remote.
-5. Connect OpenAI/Codex.
+5. Connect Codex; OpenAI direct API access is optional for connectors or skills
+   that need it.
 6. Pair WhatsApp if you want chat-driven agents.
 7. Connect Gmail or prepare browser profiles if needed.
 8. Create a coding agent.

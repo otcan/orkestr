@@ -79,14 +79,14 @@ export class OnboardingPageComponent implements OnInit, OnChanges, OnDestroy {
   private stepInitialized = false;
 
   readonly whatsappAccounts = [
-    { id: "account-1", label: "WhatsApp 1" },
-    { id: "account-2", label: "WhatsApp 2" },
+    { id: "account-1", label: "WhatsApp sender" },
+    { id: "account-2", label: "WhatsApp receiver" },
   ];
 
   readonly goals: OnboardingGoal[] = [
     {
       id: "whatsapp-codex",
-      label: "WhatsApp Codex worker",
+      label: "WhatsApp Codex thread",
       eyebrow: "Recommended",
       summary: "Control a local Codex worker from WhatsApp.",
       recommended: true,
@@ -103,7 +103,7 @@ export class OnboardingPageComponent implements OnInit, OnChanges, OnDestroy {
       id: "inbox-summary",
       label: "Inbox summary",
       eyebrow: "Daily brief",
-      summary: "Read Gmail or Outlook and send a scheduled WhatsApp digest.",
+      summary: "Read Gmail or Outlook and send a scheduled WhatsApp summary.",
       requiredSteps: ["openai", "gmail", "whatsapp"],
     },
   ];
@@ -529,13 +529,13 @@ export class OnboardingPageComponent implements OnInit, OnChanges, OnDestroy {
   }
 
   pageTitle(): string {
-    return this.isSetupMode() ? "Setup" : "Choose your first workflow";
+    return this.isSetupMode() ? "Setup" : "Choose what to add first";
   }
 
   pageSummary(): string {
     return this.isSetupMode()
-      ? "Setup stays available after onboarding so you can check security, accounts, runtimes, and local connectors at any time."
-      : "Orkestr runs locally. These steps prepare only the local runtime and accounts needed for the workflow you want to run first.";
+      ? "Setup stays available after onboarding so you can check secure access, accounts, runtimes, and connectors at any time."
+      : "Orkestr runs on infrastructure you control. These steps prepare only the runtime and connections needed for the first capability you want to add.";
   }
 
   closeLabel(): string {
@@ -569,17 +569,17 @@ export class OnboardingPageComponent implements OnInit, OnChanges, OnDestroy {
   activeSteps(): Array<{ id: OnboardingStep; label: string; eyebrow: string }> {
     const byId = Object.fromEntries(this.connectorSteps.map((step) => [step.id, step]));
     return [
-      { id: "goal", label: "Choose a goal", eyebrow: "Start here" },
-      { id: "system", label: "System check", eyebrow: "Local machine" },
+      { id: "goal", label: "Choose what to add", eyebrow: "Start here" },
+      { id: "system", label: "Connections", eyebrow: "Runtime" },
       { id: "security", label: "Secure access", eyebrow: "Remote safety" },
       ...this.goalRequiredSteps().map((id) => byId[id]),
-      { id: "finish", label: "Ready to run", eyebrow: "First loop" },
+      { id: "finish", label: "Ready to run", eyebrow: "Starter thread" },
     ];
   }
 
   setupSections(): Array<{ id: OnboardingStep; label: string; eyebrow: string }> {
     return [
-      { id: "system", label: "System", eyebrow: "Runtime" },
+      { id: "system", label: "Connections", eyebrow: "Runtime" },
       { id: "security", label: "Security", eyebrow: "Remote access" },
       ...this.connectorSteps,
     ];
@@ -615,7 +615,7 @@ export class OnboardingPageComponent implements OnInit, OnChanges, OnDestroy {
     }
     return [
       {
-        label: "Local home",
+        label: "Orkestr home",
         state: this.setup?.home ? "ready" : "checking",
         summary: this.setup?.home || "Waiting for Orkestr home",
         className: this.setup?.home ? "ready" : "idle",
@@ -849,6 +849,12 @@ export class OnboardingPageComponent implements OnInit, OnChanges, OnDestroy {
     return String(this.whatsappAccount(id)["state"] || "idle").replace(/_/g, " ");
   }
 
+  whatsappAccountPurpose(id: string): string {
+    return id === "account-1"
+      ? "Default outbound account for replies and test messages."
+      : "Optional second account for receiving or isolating another WhatsApp login.";
+  }
+
   whatsappAccountClass(id: string): string {
     const state = String(this.whatsappAccount(id)["state"] || "").toLowerCase();
     if (state === "ready") return "ready";
@@ -928,9 +934,9 @@ export class OnboardingPageComponent implements OnInit, OnChanges, OnDestroy {
       if (this.goalRequiredSteps().includes("whatsapp")) {
         await firstValueFrom(this.api.saveConnectorConfig("whatsapp", { bridgeMode: "local", maxAccounts: "2" }));
         await firstValueFrom(this.api.startWhatsAppAccount("account-1"));
-        actions.push("WhatsApp 1");
+        actions.push("WhatsApp sender");
       }
-      this.notice = `${thread.name || thread.id} first loop prepared: ${actions.join(", ")}.`;
+      this.notice = `${thread.name || thread.id} starter thread prepared: ${actions.join(", ")}.`;
       this.error = "";
       await this.load(false);
     } catch (error) {
