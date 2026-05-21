@@ -113,7 +113,8 @@ npm run smoke:vps:aws
 That runner creates a fresh Ubuntu 24.04 EC2 host, runs the bootstrap installer,
 runs the Orkestr smoke test on the VPS, and deletes the temporary AWS resources.
 Add `-- --with-whatsapp` to also start the built-in WhatsApp bridge and wait for
-QR readiness on the fresh VPS.
+QR readiness on the fresh VPS. For an interactive phone-code link test, pass
+`-- --with-whatsapp --whatsapp-phone <number> --create-whatsapp-thread "WhatsApp VPS Smoke" --keep`.
 
 The lower-level installer remains available when you already know the host is
 prepared:

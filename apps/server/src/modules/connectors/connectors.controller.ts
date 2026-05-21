@@ -98,8 +98,26 @@ export class ConnectorsController {
 
   @Post("whatsapp/bridge/accounts/:accountId/start")
   @HttpCode(202)
-  async whatsappBridgeAccountStart(@Param("accountId") accountId: string) {
-    return { account: await startLocalWhatsAppAccount(accountId) };
+  async whatsappBridgeAccountStart(@Param("accountId") accountId: string, @Body() body: Record<string, unknown> = {}) {
+    return {
+      account: await startLocalWhatsAppAccount(accountId, process.env, {
+        phoneNumber: String(body.phoneNumber || body.phone || ""),
+        showNotification: body.showNotification !== false,
+        intervalMs: Number(body.intervalMs || 0) || undefined,
+      }),
+    };
+  }
+
+  @Post("whatsapp/bridge/accounts/:accountId/start-phone")
+  @HttpCode(202)
+  async whatsappBridgeAccountStartPhone(@Param("accountId") accountId: string, @Body() body: Record<string, unknown> = {}) {
+    return {
+      account: await startLocalWhatsAppAccount(accountId, process.env, {
+        phoneNumber: String(body.phoneNumber || body.phone || ""),
+        showNotification: body.showNotification !== false,
+        intervalMs: Number(body.intervalMs || 0) || undefined,
+      }),
+    };
   }
 
   @Post("whatsapp/bridge/accounts/:accountId/logout")

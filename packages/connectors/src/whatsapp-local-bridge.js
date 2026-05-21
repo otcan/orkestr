@@ -31,6 +31,16 @@ function accountLabel(accountId) {
   return accountId === "account-2" ? "WhatsApp 2" : "WhatsApp 1";
 }
 
+function normalizePairingPhoneNumber(phoneNumber = "") {
+  return String(phoneNumber || "").replace(/\D+/g, "").trim();
+}
+
+function maskPairingPhoneNumber(phoneNumber = "") {
+  const normalized = normalizePairingPhoneNumber(phoneNumber);
+  if (!normalized) return "";
+  return `${"*".repeat(Math.max(0, normalized.length - 4))}${normalized.slice(-4)}`;
+}
+
 function bridgeRoot(env = process.env) {
   return path.join(dataPaths(env).home, "whatsapp-bridge");
 }
@@ -72,6 +82,9 @@ function defaultAccountState(accountId) {
     started: false,
     qrAvailable: false,
     qrUrl: "",
+    pairingCode: "",
+    pairingCodeUpdatedAt: null,
+    pairingPhoneNumber: "",
     error: "",
     updatedAt: null,
   };
@@ -103,6 +116,7 @@ async function accountSnapshot(accountId, env = process.env) {
 
 function reduceBridgeState(accounts) {
   if (accounts.some((account) => account.ready)) return "ready";
+  if (accounts.some((account) => account.pairingCode || account.state === "pairing_code")) return "pairing_code";
   if (accounts.some((account) => account.qrAvailable)) return "qr_needed";
   if (accounts.some((account) => account.state === "starting")) return "starting";
   if (accounts.some((account) => ["auth_failure", "dependency_missing", "failed"].includes(account.state))) return "failed";
@@ -317,12 +331,26 @@ async function handleInboundMessage(accountId, message, env = process.env, optio
   }
 }
 
-export async function startLocalWhatsAppAccount(accountId = "account-1", env = process.env) {
+export async function startLocalWhatsAppAccount(accountId = "account-1", env = process.env, options = {}) {
   const normalized = normalizeAccountId(accountId);
   if (runtimes.has(normalized)) return accountSnapshot(normalized, env);
 
+  const pairingPhoneNumber = normalizePairingPhoneNumber(options.phoneNumber);
+  if (options.phoneNumber && !pairingPhoneNumber) {
+    const error = new Error("whatsapp_pairing_phone_number_invalid");
+    error.statusCode = 400;
+    throw error;
+  }
   await ensureBridgeDirs(env);
-  setAccountState(normalized, { state: "starting", started: true, ready: false, error: "" });
+  setAccountState(normalized, {
+    state: "starting",
+    started: true,
+    ready: false,
+    pairingCode: "",
+    pairingCodeUpdatedAt: null,
+    pairingPhoneNumber: maskPairingPhoneNumber(pairingPhoneNumber),
+    error: "",
+  });
 
   let dependencies;
   try {
@@ -341,6 +369,15 @@ export async function startLocalWhatsAppAccount(accountId = "account-1", env = p
   const client = new Client({
     authStrategy: new LocalAuth({ clientId: normalized, dataPath: sessionRoot(env) }),
     puppeteer: puppeteerOptions(env),
+    ...(pairingPhoneNumber
+      ? {
+          pairWithPhoneNumber: {
+            phoneNumber: pairingPhoneNumber,
+            showNotification: options.showNotification !== false,
+            intervalMs: Number(options.intervalMs || 180000) || 180000,
+          },
+        }
+      : {}),
   });
 
   client.on("qr", async (qr) => {
@@ -352,6 +389,8 @@ export async function startLocalWhatsAppAccount(accountId = "account-1", env = p
         authenticated: false,
         started: true,
         qrAvailable: true,
+        pairingCode: "",
+        pairingCodeUpdatedAt: null,
         error: "",
       });
       await appendEvent({ type: "whatsapp_local_qr_ready", accountId: normalized }, env);
@@ -361,8 +400,22 @@ export async function startLocalWhatsAppAccount(accountId = "account-1", env = p
     }
   });
 
+  client.on("code", async (code) => {
+    setAccountState(normalized, {
+      state: "pairing_code",
+      ready: false,
+      authenticated: false,
+      started: true,
+      qrAvailable: false,
+      pairingCode: String(code || "").trim(),
+      pairingCodeUpdatedAt: nowIso(),
+      error: "",
+    });
+    await appendEvent({ type: "whatsapp_local_pairing_code_ready", accountId: normalized }, env);
+  });
+
   client.on("authenticated", async () => {
-    setAccountState(normalized, { state: "authenticated", authenticated: true, started: true, error: "" });
+    setAccountState(normalized, { state: "authenticated", authenticated: true, started: true, pairingCode: "", pairingCodeUpdatedAt: null, error: "" });
     await appendEvent({ type: "whatsapp_local_authenticated", accountId: normalized }, env);
   });
 
@@ -374,6 +427,8 @@ export async function startLocalWhatsAppAccount(accountId = "account-1", env = p
       authenticated: true,
       started: true,
       qrAvailable: false,
+      pairingCode: "",
+      pairingCodeUpdatedAt: null,
       error: "",
     });
     await appendEvent({ type: "whatsapp_local_ready", accountId: normalized }, env);
@@ -385,6 +440,8 @@ export async function startLocalWhatsAppAccount(accountId = "account-1", env = p
       ready: false,
       authenticated: false,
       started: false,
+      pairingCode: "",
+      pairingCodeUpdatedAt: null,
       error: String(message || "WhatsApp authentication failed."),
     });
     runtimes.delete(normalized);
@@ -397,6 +454,8 @@ export async function startLocalWhatsAppAccount(accountId = "account-1", env = p
       ready: false,
       authenticated: false,
       started: false,
+      pairingCode: "",
+      pairingCodeUpdatedAt: null,
       error: String(reason || ""),
     });
     runtimes.delete(normalized);
@@ -442,6 +501,9 @@ export async function logoutLocalWhatsAppAccount(accountId = "account-1", env = 
     authenticated: false,
     started: false,
     qrAvailable: false,
+    pairingCode: "",
+    pairingCodeUpdatedAt: null,
+    pairingPhoneNumber: "",
     error: "",
   });
   await appendEvent({ type: "whatsapp_local_logged_out", accountId: normalized }, env);

@@ -153,9 +153,27 @@ npm run smoke:vps:aws -- --keep-on-failure
 # Start the built-in WhatsApp bridge and wait for QR readiness.
 npm run smoke:vps:aws -- --with-whatsapp
 
+# Start phone-number pairing, print the temporary code, wait for approval,
+# and create a self-chat-backed test thread after pairing succeeds.
+npm run smoke:vps:aws -- \
+  --with-whatsapp \
+  --whatsapp-phone +491234567890 \
+  --whatsapp-pair-timeout 600 \
+  --create-whatsapp-thread "WhatsApp VPS Smoke" \
+  --keep
+
 # Exercise Tailscale installation too. Use TS_AUTHKEY for unattended tailscale up.
 npm run smoke:vps:aws -- --tailscale --tailscale-up
 ```
+
+Phone-number pairing is an interactive smoke path. The runner strips non-digits
+from `--whatsapp-phone`, starts account 1 through the built-in bridge, prints
+the temporary pairing code as `whatsapp_pairing_code=...`, and keeps polling
+until the phone approves the linked device. After pairing, the optional
+`--create-whatsapp-thread` step creates a thread bound to the account's
+self-chat so the operator can send a message to "Message yourself" in WhatsApp
+and verify inbound routing. Use `--keep` when a human will test the live VPS;
+otherwise the disposable AWS resources are deleted as soon as the smoke exits.
 
 ### Lower-Level Systemd Installer
 

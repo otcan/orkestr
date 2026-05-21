@@ -9,7 +9,7 @@ import { listAgentMessages } from "../packages/core/src/messages.js";
 import { getSetupStatus } from "../packages/core/src/setup.js";
 import { appendThreadMessage, createThread, listThreadMessages, updateThreadMessage } from "../packages/core/src/threads.js";
 import { deliverWhatsAppReplies, formatWhatsAppOutboundText, getWhatsAppChatParticipants, getWhatsAppStatus, routeWhatsAppInbound } from "../packages/connectors/src/whatsapp.js";
-import { listLocalWhatsAppChats } from "../packages/connectors/src/whatsapp-local-bridge.js";
+import { listLocalWhatsAppChats, startLocalWhatsAppAccount } from "../packages/connectors/src/whatsapp-local-bridge.js";
 import { writeConnectorConfig } from "../packages/storage/src/config.js";
 
 function response(payload, ok = true, status = 200) {
@@ -77,6 +77,14 @@ test("local whatsapp known chats include stored thread bindings while bridge is 
   assert.equal(account1.ready, false);
   assert.deepEqual(account1.chats.map((chat) => chat.name), ["Known Group", "Legacy Group"]);
   assert.deepEqual(account2.chats.map((chat) => chat.name), ["Legacy Group"]);
+});
+
+test("local whatsapp phone pairing validates phone numbers before browser launch", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-phone-invalid-"));
+  await assert.rejects(
+    startLocalWhatsAppAccount("account-1", { ORKESTR_HOME: home }, { phoneNumber: "+++" }),
+    /whatsapp_pairing_phone_number_invalid/,
+  );
 });
 
 test("whatsapp status reports paired from health readiness", async () => {

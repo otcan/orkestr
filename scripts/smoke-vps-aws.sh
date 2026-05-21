@@ -30,7 +30,12 @@ Options:
   --tailscale-up           Run tailscale up during bootstrap. Requires TS_AUTHKEY for unattended runs.
   --auto-update            Install the on-box update timer. Default is --no-auto-update.
   --with-whatsapp          Start the built-in WhatsApp bridge and wait for QR readiness.
+  --whatsapp-phone PHONE   Use WhatsApp phone-number pairing instead of QR. Digits may include +/spaces.
   --whatsapp-timeout SEC   Seconds to wait for WhatsApp QR readiness. Defaults to 240.
+  --whatsapp-pair-timeout SEC
+                            Seconds to wait for phone pairing approval. Defaults to --whatsapp-timeout.
+  --create-whatsapp-thread NAME
+                            After phone pairing succeeds, create a self-chat-backed test thread.
   --keep                   Keep the EC2 instance, key pair, and security group after the run.
   --keep-on-failure        Keep AWS resources only when the smoke fails.
   --help                   Show this help.
@@ -77,6 +82,9 @@ tailscale_up=0
 auto_update=0
 with_whatsapp=0
 whatsapp_timeout_seconds="${ORKESTR_VPS_SMOKE_WHATSAPP_TIMEOUT_SECONDS:-240}"
+whatsapp_phone="${ORKESTR_VPS_SMOKE_WHATSAPP_PHONE:-}"
+whatsapp_pair_timeout_seconds="${ORKESTR_VPS_SMOKE_WHATSAPP_PAIR_TIMEOUT_SECONDS:-}"
+create_whatsapp_thread_name="${ORKESTR_VPS_SMOKE_WHATSAPP_THREAD_NAME:-}"
 keep=0
 keep_on_failure=0
 
@@ -140,8 +148,21 @@ while [ "$#" -gt 0 ]; do
       with_whatsapp=1
       shift
       ;;
+    --whatsapp-phone)
+      with_whatsapp=1
+      whatsapp_phone="${2:-}"
+      shift 2
+      ;;
     --whatsapp-timeout)
       whatsapp_timeout_seconds="${2:-}"
+      shift 2
+      ;;
+    --whatsapp-pair-timeout)
+      whatsapp_pair_timeout_seconds="${2:-}"
+      shift 2
+      ;;
+    --create-whatsapp-thread)
+      create_whatsapp_thread_name="${2:-}"
       shift 2
       ;;
     --keep)
@@ -170,6 +191,9 @@ done
 [ -n "$repo_url" ] || die "Repo URL is required"
 [ -n "$git_ref" ] || die "Git ref is required"
 [ -n "$whatsapp_timeout_seconds" ] || die "WhatsApp readiness timeout is required"
+if [ -z "$whatsapp_pair_timeout_seconds" ]; then
+  whatsapp_pair_timeout_seconds="$whatsapp_timeout_seconds"
+fi
 
 if [ -z "$bootstrap_url" ]; then
   bootstrap_url="https://raw.githubusercontent.com/otcan/orkestr/${git_ref}/scripts/bootstrap-vps.sh"
@@ -228,12 +252,19 @@ run_whatsapp_readiness_check() {
   log "Running WhatsApp readiness check"
   ssh_run "set -euo pipefail
     export WA_TIMEOUT_SECONDS=$(printf '%q' "$whatsapp_timeout_seconds")
+    export WA_PAIR_TIMEOUT_SECONDS=$(printf '%q' "$whatsapp_pair_timeout_seconds")
+    export WA_PHONE_NUMBER=$(printf '%q' "$whatsapp_phone")
+    export WA_CREATE_THREAD_NAME=$(printf '%q' "$create_whatsapp_thread_name")
     node > /tmp/orkestr-whatsapp-readiness.log 2>&1 <<'NODE'
 const { execFileSync } = require('node:child_process');
 
 const baseUrl = 'http://127.0.0.1:19812';
 const timeoutSeconds = Number(process.env.WA_TIMEOUT_SECONDS || 240);
+const pairTimeoutSeconds = Number(process.env.WA_PAIR_TIMEOUT_SECONDS || timeoutSeconds);
+const phoneNumber = String(process.env.WA_PHONE_NUMBER || '').replace(/\D+/g, '');
+const createThreadName = String(process.env.WA_CREATE_THREAD_NAME || '').trim();
 const deadline = Date.now() + timeoutSeconds * 1000;
+const pairDeadline = Date.now() + pairTimeoutSeconds * 1000;
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -254,6 +285,14 @@ async function readJson(path, options = {}) {
   return { response, payload };
 }
 
+async function postJson(path, body, headers = {}) {
+  return readJson(path, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', ...headers },
+    body: JSON.stringify(body || {}),
+  });
+}
+
 function requireWhatsAppConnector(setup) {
   const whatsapp = setup.connectors?.find?.((connector) => connector.id === 'whatsapp');
   if (!whatsapp) throw new Error('setup status did not include the WhatsApp connector');
@@ -261,6 +300,40 @@ function requireWhatsAppConnector(setup) {
     throw new Error('unexpected initial WhatsApp connector state: ' + whatsapp.state);
   }
   console.log('setup_whatsapp_state=' + whatsapp.state);
+}
+
+async function createSelfChatThread(headers) {
+  if (!createThreadName) return;
+  const createdChat = await postJson('/api/connectors/whatsapp/bridge/chats', {
+    name: createThreadName,
+    senderAccountId: 'account-1',
+    responderAccountId: 'account-1',
+  }, headers);
+  const chat = createdChat.payload.chat || {};
+  const chatId = String(chat.id || '').trim();
+  if (!chatId) throw new Error('WhatsApp test chat creation did not return a chat id');
+  const threadId = createThreadName.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 64) || 'whatsapp-phone-test';
+  const thread = await postJson('/api/threads', {
+    id: threadId,
+    name: createThreadName,
+    binding: {
+      connector: 'whatsapp',
+      chatId,
+      displayName: createThreadName,
+      enabled: true,
+      mirrorToWhatsApp: true,
+      senderAccountId: 'account-1',
+      responderAccountId: 'account-1',
+      outboundAccountId: 'account-1',
+      senderContactId: createdChat.payload.senderContactId || '',
+      responderContactId: createdChat.payload.responderContactId || '',
+      generated: true,
+    },
+  }, headers);
+  console.log('whatsapp_test_thread_id=' + (thread.payload.thread?.id || threadId));
+  console.log('whatsapp_test_thread_name=' + createThreadName);
+  console.log('whatsapp_test_chat_id=' + chatId);
+  console.log('whatsapp_test_instruction=send a WhatsApp message to your own chat / Message yourself');
 }
 
 async function main() {
@@ -284,15 +357,16 @@ async function main() {
   console.log('paired_session=' + (pair.payload.session?.id || 'ok'));
 
   const authHeaders = { cookie };
-  const start = await readJson('/api/connectors/whatsapp/bridge/accounts/account-1/start', {
-    method: 'POST',
-    headers: authHeaders,
-  });
+  const startPath = phoneNumber
+    ? '/api/connectors/whatsapp/bridge/accounts/account-1/start-phone'
+    : '/api/connectors/whatsapp/bridge/accounts/account-1/start';
+  const start = await postJson(startPath, phoneNumber ? { phoneNumber } : {}, authHeaders);
   console.log('whatsapp_start_state=' + (start.payload.account?.state || 'unknown'));
 
   let lastState = '';
   let lastSummary = '';
-  while (Date.now() < deadline) {
+  let lastPairingCode = '';
+  while (Date.now() < (phoneNumber ? pairDeadline : deadline)) {
     const status = await readJson('/api/connectors/whatsapp/status', { headers: authHeaders });
     const state = String(status.payload.state || '');
     const summary = String(status.payload.summary || '');
@@ -303,9 +377,23 @@ async function main() {
     }
     if (state === 'paired') {
       console.log('whatsapp_readiness=paired');
+      await createSelfChatThread(authHeaders);
       process.exit(0);
     }
+    if (phoneNumber && state === 'pairing_code') {
+      const code = String(status.payload.pairingCode || '').trim();
+      if (code && code !== lastPairingCode) {
+        console.log('whatsapp_pairing_code=' + code);
+        console.log('whatsapp_pairing_instruction=Open WhatsApp on your phone, go to Linked devices, choose Link with phone number, and enter this code.');
+        lastPairingCode = code;
+      }
+      await sleep(3000);
+      continue;
+    }
     if (state === 'qr_needed') {
+      if (phoneNumber) {
+        throw new Error('WhatsApp fell back to QR mode before phone pairing code was generated');
+      }
       const qr = await fetch(baseUrl + '/api/connectors/whatsapp/bridge/qr.svg?accountId=account-1', { headers: authHeaders });
       const svg = await qr.text();
       if (!qr.ok || !svg.includes('<svg')) {
@@ -320,6 +408,9 @@ async function main() {
     await sleep(3000);
   }
 
+  if (phoneNumber) {
+    throw new Error('WhatsApp phone pairing timed out after ' + pairTimeoutSeconds + 's; last state=' + (lastState || 'unknown') + ' summary=' + lastSummary);
+  }
   throw new Error('WhatsApp QR readiness timed out after ' + timeoutSeconds + 's; last state=' + (lastState || 'unknown') + ' summary=' + lastSummary);
 }
 

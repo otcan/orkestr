@@ -122,6 +122,20 @@ async function getLocalStatus(env) {
       qrUrl: health.qrUrl,
     };
   }
+  if (health.state === "pairing_code") {
+    const codeAccount = health.accounts.find((account) => account.pairingCode);
+    return {
+      state: "pairing_code",
+      summary: "Built-in WhatsApp bridge generated a phone pairing code.",
+      mode: "local",
+      bridgeUrl: localWhatsAppBridgeBasePath,
+      health,
+      accounts: health.accounts,
+      qrAvailable: false,
+      pairingCode: codeAccount?.pairingCode || "",
+      pairingCodeUpdatedAt: codeAccount?.pairingCodeUpdatedAt || null,
+    };
+  }
   if (health.state === "failed") {
     return {
       state: "unreachable",

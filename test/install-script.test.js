@@ -96,13 +96,18 @@ test("AWS VPS smoke runner can verify WhatsApp QR readiness", async () => {
 
   await execFileAsync("bash", ["-n", "scripts/smoke-vps-aws.sh"]);
   assert.match(stdout, /--with-whatsapp/);
+  assert.match(stdout, /--whatsapp-phone PHONE/);
   assert.match(stdout, /--whatsapp-timeout SEC/);
+  assert.match(stdout, /--create-whatsapp-thread NAME/);
   assert.match(script, /bootstrap_args\+=\(--with-whatsapp\)/);
   assert.match(script, /api\/setup\/security\/challenge/);
   assert.match(script, /sudo', \['orkestr', 'security', 'approve'/);
   assert.match(script, /api\/connectors\/whatsapp\/bridge\/accounts\/account-1\/start/);
+  assert.match(script, /api\/connectors\/whatsapp\/bridge\/accounts\/account-1\/start-phone/);
   assert.match(script, /api\/connectors\/whatsapp\/status/);
   assert.match(script, /api\/connectors\/whatsapp\/bridge\/qr\.svg\?accountId=account-1/);
   assert.match(script, /whatsapp_readiness=qr_needed/);
   assert.match(script, /whatsapp_readiness=paired/);
+  assert.match(script, /whatsapp_pairing_code=/);
+  assert.match(script, /api\/connectors\/whatsapp\/bridge\/chats/);
 });
