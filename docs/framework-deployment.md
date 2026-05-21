@@ -184,6 +184,11 @@ Operational notes from the phone-link smoke:
 - After a code is accepted, the bridge can briefly report `authenticating`.
   That means WhatsApp accepted the linked device and Orkestr is waiting for
   WhatsApp Web to finish becoming ready.
+- If `authenticating` does not become `paired` within the auth-ready timeout
+  (`WA_AUTH_READY_TIMEOUT_MS`, default 180 seconds), Orkestr marks the bridge
+  failed, records the latest WhatsApp Web state/loading diagnostics, and
+  destroys the local Chrome client so the VPS does not sit in a CPU-bound
+  half-linked state.
 - If the bridge is active during service shutdown, Orkestr destroys the local
   WhatsApp browser clients before closing the server so `systemctl restart
   orkestr` does not hang on a stale Chrome/Puppeteer runtime.

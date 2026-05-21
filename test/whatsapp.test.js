@@ -109,6 +109,29 @@ test("local whatsapp status keeps authenticated sessions in a partial setup stat
   assert.match(status.summary, /waiting for WhatsApp Web/i);
 });
 
+test("local whatsapp status reports auth-to-ready timeouts as failures", async () => {
+  const error = "WhatsApp authenticated but did not become ready within 180s.";
+  const health = {
+    ok: true,
+    mode: "local",
+    state: reduceLocalWhatsAppBridgeState([
+      { accountId: "account-1", state: "auth_ready_timeout", authenticated: true, ready: false, error },
+      { accountId: "account-2", state: "idle", authenticated: false, ready: false },
+    ]),
+    ready: false,
+    accounts: [
+      { accountId: "account-1", state: "auth_ready_timeout", authenticated: true, ready: false, error },
+      { accountId: "account-2", state: "idle", authenticated: false, ready: false },
+    ],
+  };
+
+  const status = mapLocalWhatsAppStatusFromHealth(health);
+
+  assert.equal(health.state, "failed");
+  assert.equal(status.state, "unreachable");
+  assert.equal(status.summary, error);
+});
+
 test("whatsapp status reports paired from health readiness", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-ready-"));
   const env = { ORKESTR_HOME: home };
