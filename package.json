@@ -14,6 +14,7 @@
     "build": "npm run build:server && npm run web:build",
     "check": "find apps packages scripts examples -path '*/node_modules/*' -prune -o \\( -name '*.js' -o -name '*.mjs' \\) -print | while read -r file; do node --check \"$file\"; done && npm run build && node --test",
     "test": "node --test",
+    "test:ci": "node scripts/ci-test-runner.mjs",
     "web:build": "ng build web",
     "smoke": "node scripts/smoke.mjs",
     "docker:build": "docker build -t orkestr-oss:test .",

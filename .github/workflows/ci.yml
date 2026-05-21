@@ -25,7 +25,7 @@ jobs:
       - name: Build
         run: npm run build
       - name: Test
-        run: node --test --test-concurrency=1
+        run: npm run test:ci
       - run: npm run smoke
       - run: npm run demo:coding-agent
       - run: npm run docker:build
