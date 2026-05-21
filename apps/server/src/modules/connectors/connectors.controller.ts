@@ -1,6 +1,7 @@
 import { Body, Controller, Get, HttpCode, Param, Post, Query, Req, Res } from "@nestjs/common";
 import { getSetupStatus } from "../../../../../packages/core/src/setup.js";
 import { runOverlayConnectorAction } from "../../../../../packages/connectors/src/connectors.js";
+import { openUrlInVirtualBrowser } from "../../../../../packages/browsers/src/browsers.js";
 import {
   finishGmailOAuth,
   getGmailMessage,
@@ -230,6 +231,35 @@ export class GoogleMarketingCallbacksController {
     }
     const authorizeUrl = String(payload?.authorizeUrl || payload?.auth_url || payload?.url || "").trim();
     if (payload?.ok !== false && authorizeUrl) {
+      const desktopSlug = googleMarketingAuthDesktopSlug(payload);
+      if (desktopSlug) {
+        try {
+          const browser = await openUrlInVirtualBrowser(desktopSlug, authorizeUrl);
+          return response
+            .status(200)
+            .header("cache-control", "no-store")
+            .type("text/html; charset=utf-8")
+            .send(googleMarketingOAuthHtml({
+              ok: true,
+              state: "opened",
+              message: `Google Marketing authorization opened in ${browser.label || desktopSlug}. Finish the Google login in that virtual browser.`,
+              deskUrl: browser.desk_url || browser.url || "",
+              desktopSlug,
+            }));
+        } catch (error) {
+          return response
+            .status(Number((error as any)?.statusCode || 502) || 502)
+            .header("cache-control", "no-store")
+            .type("text/html; charset=utf-8")
+            .send(googleMarketingOAuthHtml({
+              ok: false,
+              state: "desktop_error",
+              message: String((error as Error)?.message || "Google Marketing authorization could not be opened in the virtual browser."),
+              authorizeUrl,
+              desktopSlug,
+            }));
+        }
+      }
       return response.redirect(302, authorizeUrl);
     }
     return response
@@ -275,8 +305,11 @@ function externalUrlFromRequest(request: any): string {
 function googleMarketingOAuthHtml(payload: Record<string, unknown> = {}): string {
   const ok = payload.ok !== false;
   const title = ok ? "Google Marketing auth complete" : "Google Marketing auth failed";
-  const state = ok ? "ok" : String(payload.state || "error");
+  const state = String(payload.state || (ok ? "ok" : "error"));
   const message = String(payload.message || payload.raw || "");
+  const deskUrl = String(payload.deskUrl || "").trim();
+  const authorizeUrl = String(payload.authorizeUrl || "").trim();
+  const desktopSlug = String(payload.desktopSlug || "").trim();
   return `<!doctype html>
 <html>
   <head>
@@ -296,6 +329,9 @@ function googleMarketingOAuthHtml(payload: Record<string, unknown> = {}): string
       <span class="badge">${escapeHtml(state)}</span>
       <h1>${escapeHtml(title)}</h1>
       <p>${escapeHtml(message)}</p>
+      ${desktopSlug ? `<p>Desktop: ${escapeHtml(desktopSlug)}</p>` : ""}
+      ${deskUrl ? `<a href="${escapeHtml(deskUrl)}" target="_blank" rel="noreferrer">Open Virtual Browser</a>` : ""}
+      ${authorizeUrl ? `<a href="${escapeHtml(authorizeUrl)}" target="_blank" rel="noreferrer">Open Google Auth Directly</a>` : ""}
       <p>Return to Google Marketing setup to refresh the connector status.</p>
       <a href="/setup/google-marketing">Open Google Marketing Setup</a>
     </main>
@@ -310,4 +346,14 @@ function escapeHtml(value: unknown): string {
     .replaceAll(">", "&gt;")
     .replaceAll('"', "&quot;")
     .replaceAll("'", "&#039;");
+}
+
+function googleMarketingAuthDesktopSlug(payload: Record<string, unknown> = {}): string {
+  return String(
+    payload.authDesktopSlug ||
+    payload.desktopSlug ||
+    process.env.ORKESTR_GOOGLE_MARKETING_AUTH_DESKTOP_SLUG ||
+    process.env.ORKESTR_GOOGLE_AUTH_DESKTOP_SLUG ||
+    "",
+  ).trim();
 }

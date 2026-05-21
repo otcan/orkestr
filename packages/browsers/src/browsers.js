@@ -4,7 +4,7 @@ import net from "node:net";
 import { promisify } from "node:util";
 import { dataPaths, ensureDataDirs } from "../../storage/src/paths.js";
 import { appendEvent, readJson, writeJson } from "../../storage/src/store.js";
-import { isBrowserctlUnavailableError, listManagedDesktopSessions, managedDesktopAction } from "./browserctl.js";
+import { isBrowserctlUnavailableError, listManagedDesktopSessions, managedDesktopAction, managedDesktopOpenUrl } from "./browserctl.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -23,6 +23,29 @@ function profileFallbackAllowed(env = process.env) {
 
 function shouldFallbackAfterBrowserctlError(error, env = process.env) {
   return profileFallbackAllowed(env) && isBrowserctlUnavailableError(error);
+}
+
+function normalizeBrowserOpenUrl(value) {
+  const raw = String(value || "").trim();
+  if (!raw) {
+    const error = new Error("browser_open_url_required");
+    error.statusCode = 400;
+    throw error;
+  }
+  let parsed;
+  try {
+    parsed = new URL(raw);
+  } catch {
+    const error = new Error("browser_open_url_invalid");
+    error.statusCode = 400;
+    throw error;
+  }
+  if (!["http:", "https:"].includes(parsed.protocol)) {
+    const error = new Error("browser_open_url_unsupported_protocol");
+    error.statusCode = 400;
+    throw error;
+  }
+  return parsed.href;
 }
 
 export async function listBrowserSessions(env = process.env) {
@@ -263,7 +286,7 @@ export async function prepareVirtualBrowser(slug, env = process.env) {
   return publicBrowserRecord(browser, env);
 }
 
-export async function openVirtualBrowser(slug, env = process.env) {
+export async function openVirtualBrowser(slug, env = process.env, targetUrl = "") {
   if (desktopMode(env) !== "profiles") {
     try {
       return await managedDesktopAction(slug, "start", env);
@@ -273,6 +296,7 @@ export async function openVirtualBrowser(slug, env = process.env) {
   }
   const browser = browserBySlug(slug);
   const prepared = await prepareVirtualBrowser(slug, env);
+  const startUrl = String(targetUrl || browser.startUrl || "about:blank").trim();
   const launchDisabled = String(env.ORKESTR_BROWSER_LAUNCH_DISABLED || "").trim() === "1";
   const command = launchDisabled ? "" : await chromeCommand(env);
   let launched = false;
@@ -288,7 +312,7 @@ export async function openVirtualBrowser(slug, env = process.env) {
         `--remote-debugging-port=${debugPort}`,
         "--no-first-run",
         "--new-window",
-        browser.startUrl,
+        startUrl,
       ], {
         detached: true,
         stdio: "ignore",
@@ -308,7 +332,7 @@ export async function openVirtualBrowser(slug, env = process.env) {
     type: "desktop",
     profileDir: prepared.profileDir,
     profile_path: prepared.profileDir,
-    startUrl: browser.startUrl,
+    startUrl,
     preparedAt: prepared.preparedAt || openedAt,
     lastOpenedAt: openedAt,
     launchCommand: command || null,
@@ -325,6 +349,22 @@ export async function openVirtualBrowser(slug, env = process.env) {
     pid,
     launchDisabled,
     launchError,
+  };
+}
+
+export async function openUrlInVirtualBrowser(slug, url, env = process.env) {
+  const targetUrl = normalizeBrowserOpenUrl(url);
+  if (desktopMode(env) !== "profiles") {
+    try {
+      return await managedDesktopOpenUrl(slug, targetUrl, env);
+    } catch (error) {
+      if (!shouldFallbackAfterBrowserctlError(error, env)) throw error;
+    }
+  }
+  return {
+    ...(await openVirtualBrowser(slug, env, targetUrl)),
+    action: "open-url",
+    openedUrl: targetUrl,
   };
 }
 

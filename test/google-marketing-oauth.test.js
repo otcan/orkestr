@@ -1,0 +1,112 @@
+import assert from "node:assert/strict";
+import fs from "node:fs/promises";
+import http from "node:http";
+import os from "node:os";
+import path from "node:path";
+import test from "node:test";
+import { startServer } from "../apps/server/src/server.js";
+
+function restoreEnvValue(name, value) {
+  if (value === undefined) delete process.env[name];
+  else process.env[name] = value;
+}
+
+test("Google Marketing OAuth opens in the configured virtual desktop", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-google-marketing-oauth-"));
+  const overlayDir = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-google-marketing-overlay-"));
+  const openedUrls = [];
+  const cdpServer = http.createServer((request, response) => {
+    const requestUrl = String(request.url || "");
+    if (request.method === "PUT" && requestUrl.startsWith("/json/new?")) {
+      const openedUrl = decodeURIComponent(requestUrl.slice("/json/new?".length));
+      openedUrls.push(openedUrl);
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify({ id: "google-auth", type: "page", title: "Google Auth", url: openedUrl }));
+      return;
+    }
+    response.writeHead(404, { "content-type": "application/json" });
+    response.end(JSON.stringify({ ok: false }));
+  });
+  await new Promise((resolve) => cdpServer.listen(0, "127.0.0.1", resolve));
+  const { port: cdpPort } = cdpServer.address();
+  const authorizeUrl = "https://accounts.google.com/o/oauth2/v2/auth?state=desktop-test";
+  const actionScript = path.join(overlayDir, "google-marketing-action.js");
+  await fs.writeFile(
+    actionScript,
+    `#!/usr/bin/env node
+console.log(JSON.stringify({ ok: true, authorizeUrl: ${JSON.stringify(authorizeUrl)} }));
+`,
+  );
+  await fs.chmod(actionScript, 0o755);
+  await fs.writeFile(
+    path.join(overlayDir, "overlay.json"),
+    JSON.stringify(
+      {
+        connectors: {
+          "google-marketing": {
+            label: "Google Marketing",
+            actions: {
+              "start-oauth": {
+                type: "command-json",
+                command: [process.execPath, actionScript],
+              },
+            },
+          },
+        },
+      },
+      null,
+      2,
+    ),
+  );
+  const browserctl = path.join(home, "browserctl.js");
+  await fs.writeFile(browserctl, `#!/usr/bin/env node
+const [command, slug] = process.argv.slice(2);
+const session = {
+  slug: slug || "pa",
+  label: "PA Browser Desk",
+  type: "desktop",
+  status: "active",
+  desk_url: "https://pa.example.invalid/",
+  cdp_url: "http://127.0.0.1:${cdpPort}",
+  owner_service: "pa-browser",
+  control: { start: true, stop: true, restart: true, health: true }
+};
+if (["list", "health", "start", "stop", "restart"].includes(command)) {
+  console.log(JSON.stringify(command === "list" ? { ok: true, sessions: [session] } : { ok: true, session }));
+} else {
+  process.stderr.write("unsupported");
+  process.exit(2);
+}
+`);
+  await fs.chmod(browserctl, 0o755);
+  const priorEnv = {
+    ORKESTR_HOME: process.env.ORKESTR_HOME,
+    ORKESTR_OVERLAY_DIR: process.env.ORKESTR_OVERLAY_DIR,
+    ORKESTR_BROWSERCTL_PATH: process.env.ORKESTR_BROWSERCTL_PATH,
+    ORKESTR_BROWSER_DESKTOP_MODE: process.env.ORKESTR_BROWSER_DESKTOP_MODE,
+    ORKESTR_GOOGLE_MARKETING_AUTH_DESKTOP_SLUG: process.env.ORKESTR_GOOGLE_MARKETING_AUTH_DESKTOP_SLUG,
+    ORKESTR_RECOVER_RUNNING_ON_START: process.env.ORKESTR_RECOVER_RUNNING_ON_START,
+  };
+  process.env.ORKESTR_HOME = home;
+  process.env.ORKESTR_OVERLAY_DIR = overlayDir;
+  process.env.ORKESTR_BROWSERCTL_PATH = browserctl;
+  process.env.ORKESTR_BROWSER_DESKTOP_MODE = "browserctl";
+  process.env.ORKESTR_GOOGLE_MARKETING_AUTH_DESKTOP_SLUG = "pa";
+  process.env.ORKESTR_RECOVER_RUNNING_ON_START = "0";
+  const server = await startServer({ port: 0, host: "127.0.0.1" });
+  const { port } = server.address();
+
+  try {
+    const response = await fetch(`http://127.0.0.1:${port}/google-marketing/oauth/start`, { redirect: "manual" });
+    const html = await response.text();
+
+    assert.equal(response.status, 200);
+    assert.ok(html.includes("Google Marketing authorization opened in PA Browser Desk"));
+    assert.ok(html.includes("Open Virtual Browser"));
+    assert.deepEqual(openedUrls, [authorizeUrl]);
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+    await new Promise((resolve) => cdpServer.close(resolve));
+    for (const [name, value] of Object.entries(priorEnv)) restoreEnvValue(name, value);
+  }
+});

@@ -30,6 +30,25 @@ async function fetchBrowserJson(url, options = {}) {
   return response.json();
 }
 
+function openUrlError(message, statusCode = 400) {
+  const error = new Error(message);
+  error.statusCode = statusCode;
+  return error;
+}
+
+function normalizeOpenUrl(value) {
+  const raw = String(value || "").trim();
+  if (!raw) throw openUrlError("browser_open_url_required", 400);
+  let parsed;
+  try {
+    parsed = new URL(raw);
+  } catch {
+    throw openUrlError("browser_open_url_invalid", 400);
+  }
+  if (!["http:", "https:"].includes(parsed.protocol)) throw openUrlError("browser_open_url_unsupported_protocol", 400);
+  return parsed.href;
+}
+
 async function runBrowserctl(args, env = process.env) {
   const command = browserctlCommand(env);
   try {
@@ -121,6 +140,38 @@ async function remoteDesktopAction(slug, action, env = process.env) {
   return listed?.sessions?.find((item) => item.slug === slug) || null;
 }
 
+async function remoteDesktopOpenUrl(slug, targetUrl, env = process.env) {
+  const base = browserApiBase(env);
+  if (!base) return null;
+  const payload = await fetchBrowserJson(`${base}/api/browser-sessions/${encodeURIComponent(slug)}/open-url`, {
+    method: "POST",
+    body: JSON.stringify({ url: targetUrl }),
+  });
+  const session = payload?.browser || payload?.session || payload?.desktop || null;
+  if (session) {
+    return {
+      ...(await attachDesktopLease(normalizeBrowserctlSession(session), env)),
+      action: "open-url",
+      openedUrl: payload?.openedUrl || targetUrl,
+      ok: payload?.ok !== false,
+    };
+  }
+  return { ok: payload?.ok !== false, action: "open-url", openedUrl: payload?.openedUrl || targetUrl };
+}
+
+async function openCdpPage(cdpUrl, targetUrl) {
+  const base = String(cdpUrl || "").trim().replace(/\/+$/, "");
+  if (!base) throw openUrlError("browser_cdp_url_required", 409);
+  const endpoint = `${base}/json/new?${encodeURIComponent(targetUrl)}`;
+  let response = await fetch(endpoint, { method: "PUT" });
+  if (response.status === 404 || response.status === 405) response = await fetch(endpoint);
+  if (!response.ok) {
+    const body = await response.text().catch(() => "");
+    throw openUrlError(body || `browser CDP returned ${response.status}`, response.status || 502);
+  }
+  return response.json().catch(() => ({}));
+}
+
 export function isBrowserctlUnavailableError(error) {
   return Number(error?.statusCode || 0) === 503;
 }
@@ -154,4 +205,26 @@ export async function managedDesktopAction(slug, action, env = process.env) {
     throw error;
   }
   return { ...(await attachDesktopLease(session, env)), action: normalized, ok: payload?.ok !== false };
+}
+
+export async function managedDesktopOpenUrl(slug, url, env = process.env) {
+  const targetUrl = normalizeOpenUrl(url);
+  const remote = await remoteDesktopOpenUrl(slug, targetUrl, env);
+  if (remote) return remote;
+  const session = await managedDesktopAction(slug, "start", env);
+  const cdpUrl = String(session?.cdp_url || "").trim();
+  if (!cdpUrl) throw openUrlError("browser_cdp_url_required", 409);
+  const page = await openCdpPage(cdpUrl, targetUrl);
+  return {
+    ...session,
+    action: "open-url",
+    openedUrl: targetUrl,
+    cdpPage: {
+      id: page?.id || null,
+      type: page?.type || null,
+      title: page?.title || null,
+      url: page?.url || targetUrl,
+    },
+    ok: true,
+  };
 }

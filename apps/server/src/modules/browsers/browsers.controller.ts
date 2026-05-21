@@ -2,6 +2,7 @@ import { Body, Controller, Get, HttpCode, Param, Post, Query } from "@nestjs/com
 import {
   cleanupVirtualBrowser,
   listBrowserSessions,
+  openUrlInVirtualBrowser,
   openVirtualBrowser,
   prepareVirtualBrowser,
   restartVirtualBrowser,
@@ -92,21 +93,24 @@ export class BrowsersController {
 
   @Post("browsers/:slug/:action")
   @HttpCode(200)
-  async browserAction(@Param("slug") slug: string, @Param("action") action: string) {
-    return this.runAction(slug, action);
+  async browserAction(@Param("slug") slug: string, @Param("action") action: string, @Body() body: Record<string, unknown> = {}) {
+    return this.runAction(slug, action, body);
   }
 
   @Post("browser-sessions/:slug/:action")
   @HttpCode(200)
-  async browserSessionAction(@Param("slug") slug: string, @Param("action") action: string) {
-    return this.runAction(slug, action);
+  async browserSessionAction(@Param("slug") slug: string, @Param("action") action: string, @Body() body: Record<string, unknown> = {}) {
+    return this.runAction(slug, action, body);
   }
 
-  private async runAction(slug: string, action: string) {
+  private async runAction(slug: string, action: string, body: Record<string, unknown> = {}) {
     try {
       const normalized = String(action || "").trim().toLowerCase();
       if (normalized === "prepare") return { browser: await prepareVirtualBrowser(slug) };
       if (normalized === "start" || normalized === "open") return { browser: await openVirtualBrowser(slug) };
+      if (normalized === "open-url" || normalized === "openurl" || normalized === "navigate") {
+        return { browser: await openUrlInVirtualBrowser(slug, String(body.url || body.href || "")) };
+      }
       if (normalized === "stop") return { browser: await stopVirtualBrowser(slug) };
       if (normalized === "restart") return { browser: await restartVirtualBrowser(slug) };
       if (normalized === "cleanup") return { browser: await cleanupVirtualBrowser(slug) };
