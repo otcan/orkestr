@@ -25,6 +25,7 @@ const deliveryTimers = new Map();
 let runtimeSyncInFlight = null;
 let connectorDeliverySignalCount = 0;
 let threadInputDeliveryFailureHandler = null;
+let connectorDeliverySignalHandler = null;
 const pendingInputStates = new Set(["queued", "pending_delivery", "awaiting_ack"]);
 const needInputPhases = new Set(["need_input", "awaiting_input", "question", "request_user_input"]);
 const proposedPlanOpenTagPattern = /^\s*<\s*proposed[\s_-]*plan\s*>/i;
@@ -53,7 +54,18 @@ function whatsappOrigin(message = {}) {
 }
 
 function markConnectorDeliverySignal(message = {}) {
-  if (whatsappOrigin(message)) connectorDeliverySignalCount += 1;
+  if (!whatsappOrigin(message)) return;
+  connectorDeliverySignalCount += 1;
+  if (connectorDeliverySignalHandler) {
+    Promise.resolve(connectorDeliverySignalHandler({
+      type: "thread_connector_delivery_signal",
+      messageId: message.id || null,
+      source: message.source || null,
+      connector: message.connector || null,
+      chatId: message.chatId || null,
+      deliveryState: message.deliveryState || message.state || null,
+    })).catch(() => {});
+  }
 }
 
 export function consumeThreadConnectorDeliverySignalCount() {
@@ -66,6 +78,13 @@ export function setThreadInputDeliveryFailureHandler(handler) {
   threadInputDeliveryFailureHandler = typeof handler === "function" ? handler : null;
   return () => {
     if (threadInputDeliveryFailureHandler === handler) threadInputDeliveryFailureHandler = null;
+  };
+}
+
+export function setThreadConnectorDeliverySignalHandler(handler) {
+  connectorDeliverySignalHandler = typeof handler === "function" ? handler : null;
+  return () => {
+    if (connectorDeliverySignalHandler === handler) connectorDeliverySignalHandler = null;
   };
 }
 
@@ -1368,6 +1387,7 @@ export async function completeCodexModeCommand(thread, message, mode, env = proc
       observedVia: "orkestr_codex_mode_queued",
       error: null,
     }, env);
+    markConnectorDeliverySignal(updated);
     await updateThread(thread.id, {
       state: result.state || "working",
       lastError: null,
@@ -1547,7 +1567,7 @@ async function completeInterruptCommand(thread, message, parsed, env = process.e
     return updated.id;
   }
 
-  await updateThreadMessage(thread.id, message.id, {
+  const updated = await updateThreadMessage(thread.id, message.id, {
     text: payloadText,
     state: "queued",
     deliveryState: "interrupting",
@@ -1556,6 +1576,7 @@ async function completeInterruptCommand(thread, message, parsed, env = process.e
     forceDeliveryAfterInterrupt: true,
     error: null,
   }, env);
+  markConnectorDeliverySignal(updated);
   await appendEvent({
     type: "thread_interrupt_command_payload_queued",
     threadId: thread.id,
@@ -2060,11 +2081,12 @@ function shouldDeferRuntimeDelivery(error) {
 async function deferThreadInputDelivery(thread, message, error, env = process.env) {
   const status = error?.status || {};
   const deliveryState = status.state === "waking" ? "waiting_runtime_start" : "waiting_runtime_ready";
-  await updateThreadMessage(thread.id, message.id, {
+  const updated = await updateThreadMessage(thread.id, message.id, {
     state: "queued",
     deliveryState,
     error: null,
   }, env).catch(() => {});
+  markConnectorDeliverySignal(updated || message);
   await updateThread(thread.id, {
     state: status.state || "working",
     lastError: null,
@@ -2627,13 +2649,14 @@ async function recoverStaleThreadInputAck(thread, message, status, env = process
     });
     return true;
   }
-  await updateThreadMessage(thread.id, message.id, {
+  const updated = await updateThreadMessage(thread.id, message.id, {
     state: "queued",
     deliveryState: "recovering_stale_ack",
     deliveryStaleRecoveryCount: recoveryCount + 1,
     deliveryNextAttemptAt: null,
     error: null,
   }, env);
+  markConnectorDeliverySignal(updated);
   await appendEvent({
     type: "thread_input_stale_ack_recovery",
     threadId: thread.id,
@@ -2857,7 +2880,7 @@ async function sendThreadInputToPane(thread, message, status, env = process.env)
   const sentAt = nowIso();
   const nextAttemptAt = isoAfter(deliveryRetryBackoffMs(attempt, env));
   const rollout = await rolloutSnapshotForDelivery(thread, status.lease, env);
-  await updateThreadMessage(thread.id, message.id, {
+  const pending = await updateThreadMessage(thread.id, message.id, {
     state: "pending_delivery",
     deliveryState: attempt > 1 ? "retrying_delivery" : "delivering",
     deliveryAttempt: attempt,
@@ -2874,6 +2897,7 @@ async function sendThreadInputToPane(thread, message, status, env = process.env)
     ...rollout,
     error: null,
   }, env);
+  if (attempt > 1) markConnectorDeliverySignal(pending);
 
   let submittedExistingPaste = false;
   if (attempt > 1 && status.paneId) {
@@ -2984,20 +3008,22 @@ export async function deliverPendingThreadInputs(threadId, env = process.env) {
         if (await submitStableUnsentPromptDelivery(thread, awaitingAck, status, env)) continue;
         if (await failStuckPromptThreadInputDelivery(thread, awaitingAck, status, env)) continue;
         if (!status?.paneId || status.state === "sleeping") {
-          await updateThreadMessage(thread.id, awaitingAck.id, {
+          const updated = await updateThreadMessage(thread.id, awaitingAck.id, {
             state: "queued",
             deliveryState: "waiting_runtime_start",
             error: null,
           }, env).catch(() => {});
+          markConnectorDeliverySignal(updated || awaitingAck);
           continue;
         }
         if (!status.promptReady || status.working) {
           const attempt = Math.max(1, deliveryAttempt(awaitingAck));
           const nextAttemptAt = isoAfter(deliveryRetryBackoffMs(attempt, env));
-          await updateThreadMessage(thread.id, awaitingAck.id, {
+          const updated = await updateThreadMessage(thread.id, awaitingAck.id, {
             deliveryState: status.working ? "awaiting_runtime_completion" : "waiting_runtime_ready",
             deliveryNextAttemptAt: nextAttemptAt,
           }, env).catch(() => {});
+          markConnectorDeliverySignal(updated || awaitingAck);
           scheduleThreadInputDelivery(thread.id, env, deliveryDueInMs({ deliveryNextAttemptAt: nextAttemptAt }));
           break;
         }

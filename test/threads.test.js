@@ -9,7 +9,7 @@ import { promisify } from "node:util";
 import { startServer } from "../apps/server/src/server.js";
 import { threadRuntimeSummary } from "../apps/server/src/thread-summary.ts";
 import { runNextThreadMessage } from "../packages/core/src/executors.js";
-import { applyRuntimeCodexMode, consumeThreadConnectorDeliverySignalCount, deliverPendingThreadInputs, doctorRuntimeResources, drainAllPendingThreadInputs, hardResetThreadRuntime, listRuntimeLeases, resetThreadRuntime, runtimeStatus, sleepThread, syncRuntimeLeases, syncRuntimeWindowName, wakeThread } from "../packages/core/src/runtime-leases.js";
+import { applyRuntimeCodexMode, consumeThreadConnectorDeliverySignalCount, deliverPendingThreadInputs, doctorRuntimeResources, drainAllPendingThreadInputs, hardResetThreadRuntime, listRuntimeLeases, resetThreadRuntime, runtimeStatus, setThreadConnectorDeliverySignalHandler, sleepThread, syncRuntimeLeases, syncRuntimeWindowName, wakeThread } from "../packages/core/src/runtime-leases.js";
 import { ensureDataDirs } from "../packages/storage/src/paths.js";
 import { parseThreadInputCommand } from "../packages/core/src/thread-commands.js";
 import { createThreadWorker, detectThreadGitState, listThreadWorkers, syncThreadWorkerWithParent, updateThreadRepo } from "../packages/core/src/thread-workers.js";
@@ -2540,6 +2540,67 @@ test("thread input /code queues while Codex is working and applies when ready", 
     restoreEnvValue("TMUX_STATE", priorTmuxState);
     restoreEnvValue("TMUX_CAPTURE_FILE", priorCaptureFile);
     restoreEnvValue("ORKESTR_RECOVER_RUNNING_ON_START", priorRecoverOnStart);
+    restoreEnvValue("ORKESTR_CODEX_MODE_COMMAND_RETRY_MS", priorRetry);
+  }
+});
+
+test("whatsapp codex mode deferral raises a connector delivery signal", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-wa-mode-signal-"));
+  const fakeTmux = await createFakeTmux(home);
+  const captureFile = path.join(home, "pane.txt");
+  const priorPath = process.env.PATH;
+  const priorTmuxLog = process.env.TMUX_LOG;
+  const priorTmuxState = process.env.TMUX_STATE;
+  const priorCaptureFile = process.env.TMUX_CAPTURE_FILE;
+  const priorRetry = process.env.ORKESTR_CODEX_MODE_COMMAND_RETRY_MS;
+  process.env.PATH = `${fakeTmux.bin}:${priorPath || ""}`;
+  process.env.TMUX_LOG = fakeTmux.log;
+  process.env.TMUX_STATE = fakeTmux.state;
+  process.env.TMUX_CAPTURE_FILE = captureFile;
+  process.env.ORKESTR_CODEX_MODE_COMMAND_RETRY_MS = "60000";
+  let scheduled = 0;
+  const clearSignalHandler = setThreadConnectorDeliverySignalHandler(() => {
+    scheduled += 1;
+  });
+
+  try {
+    consumeThreadConnectorDeliverySignalCount();
+    const env = {
+      ORKESTR_HOME: path.join(home, "orkestr-home"),
+      HOME: path.join(home, "runtime-home"),
+      CODEX_HOME: path.join(home, "codex-home"),
+      PATH: process.env.PATH,
+      TMUX_LOG: fakeTmux.log,
+      TMUX_STATE: fakeTmux.state,
+      TMUX_CAPTURE_FILE: captureFile,
+      ORKESTR_CODEX_MODE_COMMAND_RETRY_MS: "60000",
+    };
+    await fs.writeFile(captureFile, "◦ Working (1m • esc to interrupt)\n› \n\ngpt-5.5 xhigh · /workspace/demo            Plan mode\n", "utf8");
+    await createThread({ id: "wa-mode-signal-thread", name: "WA Mode Signal Thread", codexMode: "plan" }, env);
+    await wakeThread("wa-mode-signal-thread", { reason: "test" }, env);
+    await enqueueThreadInput("wa-mode-signal-thread", {
+      text: "/code",
+      source: "whatsapp_inbound",
+      connector: "whatsapp",
+      chatId: "chat-wa-mode-signal",
+    }, env);
+
+    const delivered = await deliverPendingThreadInputs("wa-mode-signal-thread", env);
+    const messages = await listThreadMessages("wa-mode-signal-thread", env);
+    const command = messages.find((message) => message.text === "/code");
+
+    assert.deepEqual(delivered, []);
+    assert.equal(command.state, "queued");
+    assert.equal(command.deliveryState, "waiting_runtime_ready");
+    assert.equal(command.observedVia, "orkestr_codex_mode_queued");
+    assert.equal(consumeThreadConnectorDeliverySignalCount(), 1);
+    assert.equal(scheduled, 1);
+  } finally {
+    clearSignalHandler();
+    restoreEnvValue("PATH", priorPath);
+    restoreEnvValue("TMUX_LOG", priorTmuxLog);
+    restoreEnvValue("TMUX_STATE", priorTmuxState);
+    restoreEnvValue("TMUX_CAPTURE_FILE", priorCaptureFile);
     restoreEnvValue("ORKESTR_CODEX_MODE_COMMAND_RETRY_MS", priorRetry);
   }
 });

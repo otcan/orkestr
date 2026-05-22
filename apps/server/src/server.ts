@@ -8,6 +8,7 @@ import { loadOverlayExecutorAdapters, recoverInterruptedExecutions } from "../..
 import {
   consumeThreadConnectorDeliverySignalCount,
   drainAllPendingThreadInputs,
+  setThreadConnectorDeliverySignalHandler,
   setThreadInputDeliveryFailureHandler,
   syncPaneProgressForActiveLeases,
   syncRuntimeLeases,
@@ -76,6 +77,9 @@ export async function startServer({ port = 19812, host = "127.0.0.1", openBrowse
     syncPaneProgressForActiveLeases().catch(() => {});
   }, paneProgressMonitorIntervalMs());
   const whatsappDeliveryScheduler = createWhatsAppDeliveryScheduler();
+  const clearConnectorDeliverySignalHandler = setThreadConnectorDeliverySignalHandler(() => {
+    whatsappDeliveryScheduler.schedule();
+  });
   const clearDeliveryFailureHandler = setThreadInputDeliveryFailureHandler(() => {
     whatsappDeliveryScheduler.schedule();
   });
@@ -93,6 +97,7 @@ export async function startServer({ port = 19812, host = "127.0.0.1", openBrowse
   }
 
   return serverHandle(app, timer, runtimeMonitor, paneProgressMonitor, async () => {
+    clearConnectorDeliverySignalHandler();
     clearDeliveryFailureHandler();
     whatsappDeliveryScheduler.close();
     await stopLocalWhatsAppBridge().catch(() => {});
