@@ -19,6 +19,8 @@ test("host update watcher replaces external VPS deploy automation", async () => 
   await assert.rejects(fs.stat("scripts/deploy-vps.sh"));
 
   assert.match(watcher, /ORKESTR_UPDATE_REF/);
+  assert.match(watcher, /ORKESTR_RELEASE_DEPLOY/);
+  assert.match(watcher, /deploy-git-release\.sh/);
   assert.match(watcher, /git fetch --prune origin/);
   assert.match(watcher, /npm ci --include=dev/);
   assert.match(watcher, /npm install --include=dev/);
@@ -30,7 +32,11 @@ test("host update watcher replaces external VPS deploy automation", async () => 
   assert.match(watcher, /systemctl restart "\$\{service_name\}\.service"/);
   assert.match(watcher, /Refusing to update/);
   assert.match(install, /\$\{service_name\}\.timer/);
+  assert.match(install, /\/usr\/local\/bin\/orkestr-deploy/);
+  assert.match(install, /ORKESTR_CURRENT_LINK/);
   assert.match(docs, /On-Box Update Watcher/);
+  assert.match(docs, /Versioned Git Releases/);
   assert.match(readme, /On-Box Update Watcher/);
-  assert.doesNotMatch(watcher + install + docs + readme, /ORKESTR_DEPLOY|deploy-vps|GitHub Actions/);
+  assert.match(readme, /Versioned Git Releases/);
+  assert.doesNotMatch(watcher + install + docs + readme, /deploy-vps|GitHub Actions/);
 });

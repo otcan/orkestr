@@ -35,8 +35,10 @@ async function gitValue(args: string[]): Promise<string> {
 }
 
 async function buildMetadata() {
+  const release = await releaseMetadata();
   const commit = String(
     process.env.ORKESTR_BUILD_COMMIT ||
+      release?.git?.commit ||
       process.env.GIT_COMMIT ||
       process.env.SOURCE_VERSION ||
       process.env.VERCEL_GIT_COMMIT_SHA ||
@@ -44,11 +46,46 @@ async function buildMetadata() {
   ).trim() || await gitValue(["rev-parse", "HEAD"]);
   const branch = String(
     process.env.ORKESTR_BUILD_BRANCH ||
+      release?.git?.branch ||
       process.env.GIT_BRANCH ||
       process.env.VERCEL_GIT_COMMIT_REF ||
       "",
   ).trim() || await gitValue(["branch", "--show-current"]);
-  return { commit, branch };
+  const tag = String(process.env.ORKESTR_BUILD_TAG || release?.git?.tag || "").trim() ||
+    await gitValue(["describe", "--tags", "--exact-match", "HEAD"]);
+  const describe = String(process.env.ORKESTR_BUILD_DESCRIBE || release?.git?.describe || "").trim() ||
+    await gitValue(["describe", "--tags", "--always", "--dirty", "--long"]);
+  const dirty = release?.git?.dirty === true
+    ? true
+    : release?.git?.dirty === false
+      ? false
+      : (await gitValue(["status", "--porcelain"])) !== "";
+  return {
+    commit,
+    branch,
+    tag,
+    describe,
+    dirty,
+    channel: String(process.env.ORKESTR_DEPLOY_CHANNEL || release?.channel || "").trim() || null,
+    releaseId: String(release?.releaseId || "").trim() || null,
+    deployedAt: String(release?.deployedAt || "").trim() || null,
+    manifestSchemaVersion: release?.schemaVersion || null,
+  };
+}
+
+async function releaseMetadata() {
+  const candidates = [
+    process.env.ORKESTR_RELEASE_MANIFEST,
+    path.resolve(process.cwd(), "release-manifest.json"),
+  ].filter(Boolean);
+  for (const candidate of candidates) {
+    try {
+      return JSON.parse(await fs.readFile(String(candidate), "utf8"));
+    } catch {
+      // Release manifests are optional for local development.
+    }
+  }
+  return null;
 }
 
 function pct(used: number, total: number): number {
@@ -263,6 +300,13 @@ export class SystemController {
       version: pkg.version || "0.0.0",
       commit: build.commit,
       branch: build.branch,
+      tag: build.tag,
+      describe: build.describe,
+      dirty: build.dirty,
+      channel: build.channel,
+      releaseId: build.releaseId,
+      deployedAt: build.deployedAt,
+      manifestSchemaVersion: build.manifestSchemaVersion,
       generatedAt: new Date().toISOString(),
     };
   }

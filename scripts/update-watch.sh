@@ -15,6 +15,8 @@ Environment:
   ORKESTR_UPDATE_REF           Branch, tag, or commit to follow. Defaults to main.
   ORKESTR_UPDATE_LOCK_FILE     Lock file. Defaults to /var/lock/orkestr-update.lock.
   ORKESTR_SERVICE_NAME         systemd service name. Defaults to orkestr.
+  ORKESTR_RELEASE_DEPLOY       Use scripts/deploy-git-release.sh instead of in-place updates. Defaults to 0.
+  ORKESTR_DEPLOY_CHANNEL       Release deployment channel. Defaults to production.
   ORKESTR_RESET_ON_UPDATE      Reset runtime state after a successful build. Defaults to 0.
   ORKESTR_RESET_OVERLAY        Also reset the overlay directory when reset is enabled. Defaults to 0.
 
@@ -103,16 +105,22 @@ need git
 need npm
 need systemctl
 
-if [ ! -d "$app_dir/.git" ]; then
-  echo "Orkestr app checkout is missing: $app_dir" >&2
-  exit 1
-fi
-
 mkdir -p "$(dirname "$lock_file")"
 exec 9>"$lock_file"
 if ! flock -n 9; then
   echo "Another Orkestr update is already running."
   exit 0
+fi
+
+if [ "${ORKESTR_RELEASE_DEPLOY:-0}" = "1" ]; then
+  script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  channel="${ORKESTR_DEPLOY_CHANNEL:-production}"
+  exec bash "$script_dir/deploy-git-release.sh" install --ref "$update_ref" --channel "$channel"
+fi
+
+if [ ! -d "$app_dir/.git" ]; then
+  echo "Orkestr app checkout is missing: $app_dir" >&2
+  exit 1
 fi
 
 cd "$app_dir"

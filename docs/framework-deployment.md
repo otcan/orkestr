@@ -289,9 +289,55 @@ Useful updater commands:
 ```bash
 systemctl list-timers orkestr-update.timer
 journalctl -u orkestr-update -f
+orkestr-deploy status
 orkestr-update
 orkestr-reset-state
 ```
+
+## Versioned Git Releases
+
+The update watcher can stay in the original in-place mode, but production-like
+VPS installs should use the versioned release path:
+
+```bash
+ORKESTR_RELEASE_DEPLOY=1
+ORKESTR_UPDATE_REF=v0.1.7
+ORKESTR_DEPLOY_CHANNEL=production
+```
+
+With `ORKESTR_RELEASE_DEPLOY=1`, `orkestr-update` delegates to
+`scripts/deploy-git-release.sh`. The deployer:
+
+- fetches git tags and resolves the requested ref to an exact commit
+- requires an exact tag for the `production` channel unless
+  `ORKESTR_DEPLOY_TAGS_ONLY=0`
+- creates a fresh release directory under `/opt/orkestr/releases`
+- runs `npm ci`, `npm run build`, and `npm run smoke`
+- writes `release-manifest.json` into the release
+- backs up `ORKESTR_HOME` under `/opt/orkestr/backups`
+- switches `/opt/orkestr/current` atomically
+- restarts `orkestr.service`
+- verifies `/api/health`
+- appends the result to `/opt/orkestr/deployments.json`
+
+Manual operations:
+
+```bash
+orkestr-deploy install --ref v0.1.7 --channel production
+orkestr-deploy status
+orkestr-deploy rollback
+orkestr-deploy rollback --to v0.1.6
+```
+
+The release manifest is app-code metadata, not secrets. It records the app
+version, requested ref, resolved commit, exact tag if present, describe string,
+channel, release id, service name, and compatibility notes. Server-local
+secrets stay in `/etc/orkestr/orkestr.env`, and mutable data stays in
+`ORKESTR_HOME`.
+
+`/api/version` reports release metadata when the app is launched from a
+release directory or when `ORKESTR_RELEASE_MANIFEST` points to a manifest file.
+Use that endpoint after every deploy and rollback to verify the active version.
 
 ## Local Docker
 
