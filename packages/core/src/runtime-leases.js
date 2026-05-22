@@ -1546,7 +1546,7 @@ async function supersedeOlderCodexModeCommands(thread, messages, selected, parse
 async function completeInterruptCommand(thread, message, parsed, env = process.env) {
   const reason = whatsappOrigin(message) ? "whatsapp_interrupt_command" : "interrupt_command";
   const woken = await wakeThread(thread.id, { reason }, env);
-  const interrupted = await interruptRuntimeStatus(woken.status);
+  const interrupted = await interruptRuntimeStatus(woken.status, env);
   const payloadText = String(parsed.text || "").trim();
   if (!payloadText && !String(message.promptFile || "").trim()) {
     const updated = await updateThreadMessage(thread.id, message.id, {
@@ -1585,7 +1585,7 @@ async function completeInterruptCommand(thread, message, parsed, env = process.e
     interrupted,
   }, env).catch(() => {});
   if (interrupted) {
-    await waitForRuntimeReady(thread.id, env).catch(() => null);
+    await waitForRuntimeReadyAfterInterrupt(thread.id, env).catch(() => null);
   }
   return { interrupted };
 }
@@ -1756,6 +1756,28 @@ async function waitForRuntimeReady(threadId, env = process.env) {
   error.statusCode = 504;
   error.status = last;
   throw error;
+}
+
+function interruptReadyTimeoutMs(env = process.env) {
+  const parsed = Number(env.ORKESTR_INTERRUPT_READY_TIMEOUT_MS ?? 5000);
+  return Number.isFinite(parsed) ? Math.max(0, parsed) : 5000;
+}
+
+function interruptRetryMs(env = process.env) {
+  const parsed = Number(env.ORKESTR_INTERRUPT_DELIVERY_RETRY_MS ?? 2000);
+  return Number.isFinite(parsed) ? Math.max(500, parsed) : 2000;
+}
+
+function interruptSettleMs(env = process.env) {
+  const parsed = Number(env.ORKESTR_INTERRUPT_SETTLE_MS ?? 250);
+  return Number.isFinite(parsed) ? Math.max(0, parsed) : 250;
+}
+
+async function waitForRuntimeReadyAfterInterrupt(threadId, env = process.env) {
+  return waitForRuntimeReady(threadId, {
+    ...env,
+    ORKESTR_WAKE_READY_TIMEOUT_MS: String(interruptReadyTimeoutMs(env)),
+  });
 }
 
 function codexStatusLineFromPaneText(text) {
@@ -2080,10 +2102,14 @@ function shouldDeferRuntimeDelivery(error) {
 
 async function deferThreadInputDelivery(thread, message, error, env = process.env) {
   const status = error?.status || {};
-  const deliveryState = status.state === "waking" ? "waiting_runtime_start" : "waiting_runtime_ready";
+  const forceInterrupt = message.forceDeliveryAfterInterrupt === true;
+  const retryMs = forceInterrupt ? interruptRetryMs(env) : 0;
+  const deliveryState = forceInterrupt ? "interrupting" : status.state === "waking" ? "waiting_runtime_start" : "waiting_runtime_ready";
+  const nextAttemptAt = forceInterrupt ? isoAfter(retryMs) : "";
   const updated = await updateThreadMessage(thread.id, message.id, {
     state: "queued",
     deliveryState,
+    ...(nextAttemptAt ? { deliveryNextAttemptAt: nextAttemptAt } : {}),
     error: null,
   }, env).catch(() => {});
   markConnectorDeliverySignal(updated || message);
@@ -2097,7 +2123,9 @@ async function deferThreadInputDelivery(thread, message, error, env = process.en
     messageId: message.id,
     reason: deliveryState,
     runtimeState: status.state || null,
+    nextAttemptAt: nextAttemptAt || null,
   }, env);
+  if (forceInterrupt) scheduleThreadInputDelivery(thread.id, env, retryMs);
 }
 
 async function pasteTmuxText(paneId, text, env = process.env) {
@@ -2186,11 +2214,14 @@ function runtimeStatusNeedsInterrupt(status = null) {
   );
 }
 
-async function interruptRuntimeStatus(status = null) {
+async function interruptRuntimeStatus(status = null, env = process.env) {
   const paneId = status?.paneId;
   if (!paneId || !runtimeStatusNeedsInterrupt(status)) return false;
   await execFileAsync("tmux", ["send-keys", "-t", paneId, "Escape"]).catch(() => {});
+  await sleep(interruptSettleMs(env));
   await execFileAsync("tmux", ["send-keys", "-t", paneId, "C-c"]).catch(() => {});
+  await sleep(interruptSettleMs(env));
+  await execFileAsync("tmux", ["send-keys", "-t", paneId, "Escape"]).catch(() => {});
   return true;
 }
 
@@ -3108,7 +3139,11 @@ export async function deliverPendingThreadInputs(threadId, env = process.env) {
         }
         if (!status) status = await waitForRuntimeReady(thread.id, env);
         if (currentNext.forceDeliveryAfterInterrupt && (!status?.promptReady || status.working)) {
-          status = await waitForRuntimeReady(thread.id, env).catch(() => status);
+          if (runtimeStatusNeedsInterrupt(status)) {
+            await interruptRuntimeStatus(status, env);
+            await sleep(interruptSettleMs(env));
+          }
+          status = await waitForRuntimeReadyAfterInterrupt(thread.id, env).catch(() => status);
         }
         const attempt = await sendThreadInputToPane(thread, currentNext, status, env);
         const acknowledged = await waitForThreadInputAck(thread, currentNext.id, env);

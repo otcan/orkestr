@@ -1344,6 +1344,68 @@ test("queued /now input strips the command and jumps ahead of stale awaiting ack
   }
 });
 
+test("forced interrupt input stays interrupting while Codex remains busy", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-now-still-busy-"));
+  const fakeTmux = await createFakeTmux(home);
+  const captureFile = path.join(home, "pane.txt");
+  const priorPath = process.env.PATH;
+  const priorTmuxLog = process.env.TMUX_LOG;
+  const priorTmuxState = process.env.TMUX_STATE;
+  const priorCaptureFile = process.env.TMUX_CAPTURE_FILE;
+  process.env.PATH = `${fakeTmux.bin}:${priorPath || ""}`;
+  process.env.TMUX_LOG = fakeTmux.log;
+  process.env.TMUX_STATE = fakeTmux.state;
+  process.env.TMUX_CAPTURE_FILE = captureFile;
+
+  try {
+    await fs.writeFile(captureFile, "◦ Working (1m • esc to interrupt)\n› \n\ngpt-5.5 xhigh · /workspace/demo\n", "utf8");
+    const env = {
+      ORKESTR_HOME: path.join(home, "orkestr-home"),
+      HOME: path.join(home, "runtime-home"),
+      CODEX_HOME: path.join(home, "codex-home"),
+      PATH: process.env.PATH,
+      TMUX_LOG: fakeTmux.log,
+      TMUX_STATE: fakeTmux.state,
+      TMUX_CAPTURE_FILE: captureFile,
+      ORKESTR_INTERRUPT_READY_TIMEOUT_MS: "0",
+      ORKESTR_INTERRUPT_DELIVERY_RETRY_MS: "750",
+      ORKESTR_INTERRUPT_SETTLE_MS: "0",
+    };
+    await createThread({ id: "now-still-busy-thread", name: "Now Still Busy Thread" }, env);
+    await wakeThread("now-still-busy-thread", { reason: "test" }, env);
+    const urgent = await appendThreadMessage("now-still-busy-thread", {
+      role: "user",
+      source: "whatsapp_inbound",
+      connector: "whatsapp",
+      chatId: "chat-now-still-busy",
+      from: "owner",
+      text: "use the +905555154214 number",
+      state: "queued",
+      deliveryState: "interrupting",
+      observedVia: "orkestr_interrupt_command",
+      interruptSent: true,
+      forceDeliveryAfterInterrupt: true,
+    }, env);
+
+    assert.deepEqual(await deliverPendingThreadInputs("now-still-busy-thread", env), []);
+    const messages = await listThreadMessages("now-still-busy-thread", env);
+    const updated = messages.find((message) => message.id === urgent.id);
+    const log = await fs.readFile(fakeTmux.log, "utf8");
+
+    assert.equal(updated.state, "queued");
+    assert.equal(updated.deliveryState, "interrupting");
+    assert.equal(updated.forceDeliveryAfterInterrupt, true);
+    assert.equal(Date.parse(updated.deliveryNextAttemptAt) > Date.now(), true);
+    assert.match(log, /__CALL__\tsend-keys\t-t\t%42\tEscape/);
+    assert.match(log, /__CALL__\tsend-keys\t-t\t%42\tC-c/);
+  } finally {
+    restoreEnvValue("PATH", priorPath);
+    restoreEnvValue("TMUX_LOG", priorTmuxLog);
+    restoreEnvValue("TMUX_STATE", priorTmuxState);
+    restoreEnvValue("TMUX_CAPTURE_FILE", priorCaptureFile);
+  }
+});
+
 test("thread input delivery closes stale ack when history already has an assistant reply", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-history-ack-"));
   const env = {
