@@ -922,6 +922,36 @@ test("whatsapp delivery reports queued runtime inputs without marking the input 
   assert.equal(messages.find((entry) => entry.id === routed.message.id).state, "queued");
 });
 
+test("whatsapp /now inputs report interrupting before normal queue notices", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-now-notice-"));
+  const env = { ORKESTR_HOME: home };
+  await createThread({ id: "thread-wa-now-notice", name: "WA Now Notice Thread" }, env);
+  await writeConnectorConfig("whatsapp", {
+    bridgeMode: "external",
+    bridgeUrl: "http://wa.local",
+    threadRoutes: { "chat-now-notice": "thread-wa-now-notice" },
+  }, env);
+  const routed = await routeWhatsAppInbound({
+    eventId: "wa-now-notice-1",
+    chatId: "chat-now-notice",
+    accountId: "account-1",
+    text: "/now fix the pairing number",
+  }, env);
+
+  const calls = [];
+  const delivery = await deliverWhatsAppReplies(env, async (url, options) => {
+    calls.push({ url, body: JSON.parse(options.body) });
+    return response({ ok: true, ids: ["sent-now-notice"] });
+  });
+
+  assert.equal(routed.message.deliveryState, "interrupting");
+  assert.equal(delivery.delivered.length, 1);
+  assert.equal(delivery.delivered[0].deliveryType, "queue_notice");
+  assert.match(stripDebugFooter(calls[0].body.text), /^Interrupting Codex and queued your message: "fix the pairing number"\./);
+  assert.doesNotMatch(stripDebugFooter(calls[0].body.text), /\/now/);
+  assertDebugFooter(calls[0].body.text, { messageType: "update" });
+});
+
 test("whatsapp delivery reports waking queue notices", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-queue-waking-"));
   const env = { ORKESTR_HOME: home };

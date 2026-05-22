@@ -4,6 +4,7 @@ import crypto from "node:crypto";
 import os from "node:os";
 import { enqueueAgentMessage, updateAgentMessage } from "../../core/src/messages.js";
 import { runtimeStatus } from "../../core/src/runtime-leases.js";
+import { parseThreadInputCommand } from "../../core/src/thread-commands.js";
 import { enqueueThreadInput, listThreadMessages, listThreads, updateThreadMessage } from "../../core/src/threads.js";
 import { dataPaths, ensureDataDirs } from "../../storage/src/paths.js";
 import { readConnectorConfig } from "../../storage/src/config.js";
@@ -751,7 +752,9 @@ function whatsappMessageOrigin(message, state = null) {
   return Boolean((state?.inboundEvents || []).some((event) => event.messageId === message.id));
 }
 
-function initialQueueDeliveryState(status = null) {
+function initialQueueDeliveryState(status = null, message = null) {
+  const parsed = parseThreadInputCommand({ text: message?.text || "" });
+  if (parsed.command === "interrupt") return "interrupting";
   if (!status) return "";
   const state = String(status.state || "").trim().toLowerCase();
   if (state === "working") return "awaiting_runtime_completion";
@@ -762,7 +765,7 @@ function initialQueueDeliveryState(status = null) {
 
 async function annotateInitialThreadQueueNotice(threadId, message, env = process.env) {
   if (!threadId || !message?.id || message.duplicate) return message;
-  const deliveryState = initialQueueDeliveryState(await runtimeStatus(threadId, env).catch(() => null));
+  const deliveryState = initialQueueDeliveryState(await runtimeStatus(threadId, env).catch(() => null), message);
   if (!deliveryState) return message;
   return updateThreadMessage(threadId, message.id, { deliveryState }, env).catch(() => message);
 }
@@ -982,7 +985,9 @@ function queuedInputWhatsAppDeliveryTarget(message, thread, state) {
 
 function queueNoticePreview(message) {
   const text = pickString(message?.text, message?.promptFile ? "message from prompt file" : "message");
-  const normalized = text.replace(/\s+/g, " ").trim();
+  const parsed = parseThreadInputCommand({ text });
+  const previewText = parsed.command === "interrupt" && parsed.text ? parsed.text : text;
+  const normalized = previewText.replace(/\s+/g, " ").trim();
   return normalized.length > 120 ? `${normalized.slice(0, 117)}...` : normalized;
 }
 
