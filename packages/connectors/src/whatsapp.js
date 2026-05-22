@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import crypto from "node:crypto";
+import os from "node:os";
 import { enqueueAgentMessage, updateAgentMessage } from "../../core/src/messages.js";
 import { enqueueThreadInput, listThreadMessages, listThreads, updateThreadMessage } from "../../core/src/threads.js";
 import { dataPaths, ensureDataDirs } from "../../storage/src/paths.js";
@@ -574,6 +575,100 @@ export function formatWhatsAppOutboundText(value) {
   return formatted.join("\n").trim();
 }
 
+function footerEnabled(env = process.env) {
+  const value = String(env.ORKESTR_WHATSAPP_DEBUG_FOOTER ?? "1").trim().toLowerCase();
+  return !["0", "false", "off", "no"].includes(value);
+}
+
+function shortReasoningEffort(value) {
+  const effort = pickString(value).toLowerCase();
+  if (!effort) return "";
+  if (effort === "xhigh" || effort === "extra-high" || effort === "extra_high") return "xh";
+  if (effort === "high") return "h";
+  if (effort === "medium") return "m";
+  if (effort === "low") return "l";
+  return effort.replace(/\s+/g, "-").slice(0, 8);
+}
+
+function codexModelDebugLabel(message = {}, thread = {}, env = process.env) {
+  const metadata = thread?.executor?.metadata && typeof thread.executor.metadata === "object" ? thread.executor.metadata : {};
+  const model = pickString(
+    message.codexModel,
+    message.model,
+    thread.codexModel,
+    metadata.codexModel,
+    env.ORKESTR_DEFAULT_CODEX_MODEL,
+    env.OPENAI_MODEL,
+    "unknown",
+  );
+  const effort = shortReasoningEffort(
+    pickString(
+      message.codexReasoningEffort,
+      message.reasoningEffort,
+      thread.codexReasoningEffort,
+      metadata.codexReasoningEffort,
+      env.ORKESTR_DEFAULT_CODEX_REASONING,
+      env.OPENAI_REASONING_EFFORT,
+    ),
+  );
+  return effort ? `${model}/${effort}` : model;
+}
+
+function codexModeDebugValue(message = {}, thread = {}) {
+  const mode = pickString(
+    message.codexMode,
+    message.codexModeLive,
+    thread.codexModeLive,
+    thread.codexMode,
+    thread.runtime?.codexMode,
+    thread.runtime?.progress?.codexMode,
+  ).toLowerCase();
+  return mode === "plan" ? "plan" : "";
+}
+
+function queueDebugCount(messages = [], currentMessage = null) {
+  const activeParentId = pickString(currentMessage?.parentMessageId);
+  return messages.filter((message) => {
+    if (activeParentId && message?.id === activeParentId) return false;
+    if (String(message?.role || "").toLowerCase() !== "user") return false;
+    const state = String(message?.state || "").toLowerCase();
+    const deliveryState = String(message?.deliveryState || "").toLowerCase();
+    return ["queued", "pending_delivery"].includes(state) ||
+      ["waiting_runtime_ready", "waiting_runtime_start", "retrying_delivery"].includes(deliveryState);
+  }).length;
+}
+
+function cpuDebugPercent() {
+  const cpuCount = os.cpus().length || 1;
+  const percent = Math.round(((os.loadavg()[0] || 0) / cpuCount) * 100);
+  if (!Number.isFinite(percent)) return 0;
+  return Math.max(0, Math.min(999, percent));
+}
+
+function shouldAppendWhatsAppDebugFooter(message = {}, env = process.env) {
+  return footerEnabled(env) && message.source === "codex-rollout";
+}
+
+function whatsappDebugFooter({ message = {}, thread = {}, messages = [], deliveryType = "final", env = process.env } = {}) {
+  const mode = codexModeDebugValue(message, thread);
+  const parts = [
+    `m:${codexModelDebugLabel(message, thread, env)}`,
+    ...(mode ? [`mode:${mode}`] : []),
+    `msg:${deliveryType === "progress" ? "update" : "final"}`,
+    `q:${queueDebugCount(messages, message)}`,
+    `cpu:${cpuDebugPercent()}%`,
+    "help:/help",
+    ...(mode === "plan" ? ["switch:/code"] : []),
+  ];
+  return `dbg: ${parts.join(" · ")}`;
+}
+
+function appendWhatsAppDebugFooter(text, options = {}) {
+  const cleanText = String(text || "").trim();
+  if (!cleanText || !shouldAppendWhatsAppDebugFooter(options.message, options.env)) return cleanText;
+  return `${cleanText}\n\n${whatsappDebugFooter(options)}`;
+}
+
 function deliveryTextKey(chatId, text) {
   return crypto
     .createHash("sha256")
@@ -952,7 +1047,13 @@ async function deliverWhatsAppRepliesOnce(env = process.env, fetchImpl = fetch) 
         const accountId = kind === "thread"
           ? pickString(thread?.binding?.responderAccountId, thread?.binding?.outboundAccountId, message.accountId, parent?.accountId)
           : pickString(message.accountId, parent?.accountId);
-        const text = formatWhatsAppOutboundText(pickString(message.text));
+        const text = appendWhatsAppDebugFooter(formatWhatsAppOutboundText(pickString(message.text)), {
+          message,
+          thread,
+          messages,
+          deliveryType: "progress",
+          env,
+        });
         if (!chatId || !text) {
           skipped.push({ agentId, threadId, messageId: message.id, reason: !chatId ? "missing_chat_id" : "missing_text" });
           continue;
@@ -1008,7 +1109,13 @@ async function deliverWhatsAppRepliesOnce(env = process.env, fetchImpl = fetch) 
       }
 
       const chatId = pickString(message.chatId, parent?.chatId);
-      const text = formatWhatsAppOutboundText(pickString(message.text));
+      const text = appendWhatsAppDebugFooter(formatWhatsAppOutboundText(pickString(message.text)), {
+        message,
+        thread,
+        messages,
+        deliveryType: "final",
+        env,
+      });
       const accountId = kind === "thread"
         ? pickString(thread?.binding?.responderAccountId, thread?.binding?.outboundAccountId, message.accountId, parent?.accountId)
         : pickString(message.accountId, parent?.accountId);

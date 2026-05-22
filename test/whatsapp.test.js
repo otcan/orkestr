@@ -22,6 +22,22 @@ function response(payload, ok = true, status = 200) {
   };
 }
 
+function stripDebugFooter(text) {
+  return String(text || "").replace(/\n\ndbg: .+$/s, "");
+}
+
+function assertDebugFooter(text, { mode = "", messageType = "final", model = "[^·\\n]+" } = {}) {
+  const escapedModel = model.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const pattern = new RegExp(
+    `\\n\\ndbg: m:${model === "[^·\\n]+" ? model : escapedModel}` +
+      (mode ? ` · mode:${mode}` : "") +
+      ` · msg:${messageType} · q:\\d+ · cpu:\\d+% · help:/help` +
+      (mode === "plan" ? " · switch:/code" : "") +
+      "$",
+  );
+  assert.match(text, pattern);
+}
+
 test("whatsapp status defaults to the built-in local bridge", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-empty-"));
   const status = await getWhatsAppStatus({ ORKESTR_HOME: home });
@@ -455,10 +471,12 @@ test("whatsapp delivery mirrors throttled commentary progress before final repli
   assert.equal(throttled.skipped.some((item) => item.reason === "progress_throttled"), true);
   assert.equal(final.delivered.length, 1);
   assert.equal(final.delivered[0].deliveryType || "", "");
-  assert.deepEqual(calls.map((call) => call.body.text), [
+  assert.deepEqual(calls.map((call) => stripDebugFooter(call.body.text)), [
     "I’m checking the repo and running focused tests now.",
     "Done. Tests passed.",
   ]);
+  assertDebugFooter(calls[0].body.text, { messageType: "update" });
+  assertDebugFooter(calls[1].body.text, { messageType: "final" });
 });
 
 test("whatsapp delivery does not backfill commentary progress after a final answer exists", async () => {
@@ -501,7 +519,50 @@ test("whatsapp delivery does not backfill commentary progress after a final answ
 
   assert.equal(delivery.delivered.length, 1);
   assert.equal(delivery.skipped.some((item) => item.reason === "final_reply_available"), true);
-  assert.deepEqual(calls.map((call) => call.body.text), ["Final only."]);
+  assert.deepEqual(calls.map((call) => stripDebugFooter(call.body.text)), ["Final only."]);
+  assertDebugFooter(calls[0].body.text, { messageType: "final" });
+});
+
+test("whatsapp delivery appends compact debug footer for plan-mode Codex updates", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-debug-footer-"));
+  const env = { ORKESTR_HOME: home };
+  await createThread({
+    id: "thread-wa-debug-footer",
+    name: "WA Debug Footer Thread",
+    codexMode: "plan",
+    codexModel: "gpt-5.5",
+    codexReasoningEffort: "xhigh",
+  }, env);
+  await writeConnectorConfig("whatsapp", {
+    bridgeMode: "external",
+    bridgeUrl: "http://wa.local",
+    threadRoutes: { "chat-debug-footer": "thread-wa-debug-footer" },
+  }, env);
+
+  const routed = await routeWhatsAppInbound({ eventId: "wa-debug-footer-1", chatId: "chat-debug-footer", text: "/plan investigate" }, env);
+  await appendThreadMessage("thread-wa-debug-footer", {
+    role: "assistant",
+    source: "codex-rollout",
+    phase: "commentary",
+    state: "completed",
+    text: "I’ll inspect the current routing path.",
+    parentMessageId: routed.message.id,
+    connector: "whatsapp",
+    chatId: "chat-debug-footer",
+  }, env);
+
+  const calls = [];
+  const delivery = await deliverWhatsAppReplies(env, async (url, options) => {
+    calls.push({ url, body: JSON.parse(options.body) });
+    return response({ ok: true, ids: ["sent-debug-footer"] });
+  });
+
+  assert.equal(delivery.delivered.length, 1);
+  assert.equal(stripDebugFooter(calls[0].body.text), "I’ll inspect the current routing path.");
+  assert.match(
+    calls[0].body.text,
+    /\n\ndbg: m:gpt-5\.5\/xh · mode:plan · msg:update · q:0 · cpu:\d+% · help:\/help · switch:\/code$/,
+  );
 });
 
 test("whatsapp inbound suppresses duplicate active thread inputs by content", async () => {
@@ -563,7 +624,7 @@ test("whatsapp delivery translates markdown into chat-friendly formatting", asyn
 
   assert.equal(delivery.delivered.length, 1);
   assert.equal(calls.length, 1);
-  assert.equal(calls[0].body.text, [
+  assert.equal(stripDebugFooter(calls[0].body.text), [
     "Deploy target",
     "",
     "*Deploy latest into the orkestr-vps VM, by pulling/restarting the Docker container there.*",
@@ -572,6 +633,7 @@ test("whatsapp delivery translates markdown into chat-friendly formatting", asyn
     "",
     "`**literal**` stays code.",
   ].join("\n"));
+  assertDebugFooter(calls[0].body.text, { messageType: "final" });
   assert.equal(messages.at(-1).text, markdown);
 });
 
@@ -772,7 +834,8 @@ test("whatsapp passive mirror recovers a failed thread input instead of sending 
   assert.equal(delivery.delivered[0].messageId, reply.id);
   assert.equal(delivery.skipped.some((item) => item.reason === "assistant_reply_available"), true);
   assert.equal(calls.length, 1);
-  assert.equal(calls[0].body.text, "The status is clean.");
+  assert.equal(stripDebugFooter(calls[0].body.text), "The status is clean.");
+  assertDebugFooter(calls[0].body.text, { messageType: "final" });
   assert.doesNotMatch(calls[0].body.text, /^Delivery failed/);
   assert.equal(parent.state, "completed");
   assert.equal(parent.deliveryState, "delivered");
@@ -1108,5 +1171,6 @@ test("whatsapp delivery skips duplicate live Codex answers for the same chat", a
   assert.equal(delivery.delivered.length, 1);
   assert.equal(delivery.skipped.some((item) => item.reason === "duplicate_text"), true);
   assert.equal(calls.length, 1);
-  assert.equal(calls[0].body.text, "same answer");
+  assert.equal(stripDebugFooter(calls[0].body.text), "same answer");
+  assertDebugFooter(calls[0].body.text, { messageType: "final" });
 });
