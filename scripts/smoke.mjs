@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { spawn } from "node:child_process";
@@ -46,6 +47,18 @@ function start(home, port) {
   return child;
 }
 
+function findOpenPort() {
+  return new Promise((resolve, reject) => {
+    const server = net.createServer();
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", () => {
+      const address = server.address();
+      const port = typeof address === "object" && address ? address.port : null;
+      server.close(() => (port ? resolve(port) : reject(new Error("Could not allocate a smoke-test port"))));
+    });
+  });
+}
+
 async function stop(child) {
   if (!child || child.exitCode !== null) return;
   child.kill("SIGTERM");
@@ -53,7 +66,7 @@ async function stop(child) {
 }
 
 const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-smoke-"));
-const port = Number(process.env.ORKESTR_SMOKE_PORT || 19813);
+const port = process.env.ORKESTR_SMOKE_PORT ? Number(process.env.ORKESTR_SMOKE_PORT) : await findOpenPort();
 const baseUrl = `http://127.0.0.1:${port}`;
 let server = null;
 

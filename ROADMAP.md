@@ -16,7 +16,7 @@ Install locally, open setup, pair WhatsApp, prepare a virtual desktop, create a 
 ## Next
 
 - Harden Secure access onboarding with automated Caddyfile generation and deeper Tailscale HTTPS validation.
-- Replace the generated README storyboard with a fake-data WhatsApp chat screenshot or short clip.
+- Add optional short demo clips from disposable fake-data runs.
 - Clearer WhatsApp chat binding flow.
 - Better virtual desktop open/status controls.
 - CLI polish: `orkestr setup`, `orkestr logs`, completions, stable JSON for every command.

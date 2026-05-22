@@ -14,8 +14,8 @@ orkestr doctor timers
 orkestr timers
 orkestr timers run <timer-id>
 orkestr thread create "My Thread" --cwd /path/to/repo
-orkestr worker create otcanClaw-features --task "Investigate this in parallel"
-orkestr worker create otcanClaw-features --blank
+orkestr worker create demo-app --task "Investigate this in parallel"
+orkestr worker create demo-app --blank
 orkestr attach
 orkestr attach <thread-name-or-id>
 orkestr attach <thread-name-or-id> --print

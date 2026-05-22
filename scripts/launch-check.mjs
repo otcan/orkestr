@@ -11,7 +11,7 @@ const requiredFiles = [
   "CONTRIBUTING.md",
   "ROADMAP.md",
   "docs/architecture.md",
-  "docs/assets/orkestr-demo.gif",
+  "docs/assets/orkestr-whatsapp-demo.svg",
   "docs/demo-logs/coding-agent-first-run.md",
   "examples/coding-agent-demo/README.md",
   ".dockerignore",
@@ -39,7 +39,6 @@ const scanSkips = new Set([
   ".git",
   ".angular",
   ".orkestr",
-  "docs/assets/orkestr-demo.gif",
 ]);
 
 function run(command, args, label) {
@@ -65,7 +64,9 @@ async function assertRequiredFiles() {
   for (const file of requiredFiles) {
     const stat = await fs.stat(path.join(repoRoot, file)).catch(() => null);
     if (!stat || !stat.isFile()) throw new Error(`Missing required launch file: ${file}`);
-    if (file.endsWith(".gif") && stat.size > 5 * 1024 * 1024) throw new Error(`${file} is too large for README use`);
+    if (/\.(?:gif|svg)$/.test(file) && stat.size > 5 * 1024 * 1024) {
+      throw new Error(`${file} is too large for README use`);
+    }
     console.log(`ok ${file}`);
   }
 }
@@ -76,7 +77,7 @@ async function walk(dir, files = []) {
     const rel = path.join(dir, entry.name);
     if ([...scanSkips].some((skip) => rel === skip || rel.startsWith(`${skip}/`))) continue;
     if (entry.isDirectory()) await walk(rel, files);
-    else if (/\.(?:js|mjs|ts|html|css|md|json|yml|yaml|sh)$/.test(entry.name)) files.push(rel);
+    else if (/\.(?:js|mjs|ts|html|css|md|json|yml|yaml|sh|svg)$/.test(entry.name)) files.push(rel);
   }
   return files;
 }

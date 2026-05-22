@@ -157,7 +157,7 @@ test("whatsapp status discovers external bridge accounts from dashboard", async 
         ok: true,
         accounts: [
           { id: "main", label: "Main account", ready: true, state: "ready" },
-          { id: "openclaw", label: "openclaw", ready: true, state: "ready" },
+          { id: "assistant", label: "Assistant account", ready: true, state: "ready" },
         ],
       });
     }
@@ -165,7 +165,7 @@ test("whatsapp status discovers external bridge accounts from dashboard", async 
   });
 
   assert.equal(status.state, "paired");
-  assert.deepEqual(status.accounts.map((account) => account.id), ["main", "openclaw"]);
+  assert.deepEqual(status.accounts.map((account) => account.id), ["main", "assistant"]);
 });
 
 test("whatsapp participants are discovered from external bridge chat metadata", async () => {

@@ -203,14 +203,19 @@ threads receive only the context they are allowed to use.
 
 ## Better Demo Asset
 
-The current generated storyboard is not the right first impression for the
-README. The better public asset is a fake-data WhatsApp conversation that shows:
+The README uses a deterministic fake-data WhatsApp conversation asset generated
+by:
+
+```bash
+npm run demo:record
+```
+
+The generated asset is `docs/assets/orkestr-whatsapp-demo.svg`. It shows:
 
 - a user sending a task to an Orkestr-bound chat
 - Orkestr acknowledging the thread
 - Codex completing a concise result
 - the thread status changing from working to ready
 
-That screenshot or short clip should be generated from fake chats only. It must
-not contain a real phone number, contact name, chat ID, hostname, repository, or
-secret.
+Demo screenshots or clips must use fake chats only. They must not contain a real
+phone number, contact name, chat ID, hostname, repository, local path, or secret.

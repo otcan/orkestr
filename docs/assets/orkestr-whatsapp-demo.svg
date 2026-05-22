@@ -1,0 +1,71 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="920" height="720" viewBox="0 0 920 720" role="img" aria-labelledby="title desc">
+  <title id="title">Fake WhatsApp conversation routed through Orkestr</title>
+  <desc id="desc">A fake-data Orkestr demo showing a user task, thread acknowledgement, Codex result, and ready status.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" x2="1" y1="0" y2="1">
+      <stop offset="0%" stop-color="#f2efe6" />
+      <stop offset="100%" stop-color="#d9e6d8" />
+    </linearGradient>
+    <pattern id="dots" width="28" height="28" patternUnits="userSpaceOnUse">
+      <circle cx="4" cy="4" r="1.2" fill="#bcc9bc" opacity="0.45" />
+    </pattern>
+    <filter id="shadow" x="-10%" y="-10%" width="120%" height="120%">
+      <feDropShadow dx="0" dy="14" stdDeviation="18" flood-color="#0f241c" flood-opacity="0.18" />
+    </filter>
+  </defs>
+  <style>
+    .title { font: 700 26px Georgia, serif; fill: #12352b; }
+    .subtle { font: 500 13px Verdana, sans-serif; fill: #5f756a; }
+    .sender { font: 700 13px Verdana, sans-serif; }
+    .message { font: 500 16px Verdana, sans-serif; fill: #1d2c27; }
+    .time { font: 500 11px Verdana, sans-serif; fill: #75827a; }
+    .pill { font: 700 12px Verdana, sans-serif; letter-spacing: 0.4px; }
+  </style>
+  <rect width="920" height="720" fill="#f7f4ed" />
+  <g filter="url(#shadow)">
+    <rect x="32" y="28" width="856" height="664" rx="34" fill="url(#bg)" />
+    <rect x="32" y="104" width="856" height="588" rx="0" fill="url(#dots)" opacity="0.9" />
+  </g>
+  <rect x="32" y="28" width="856" height="88" rx="34" fill="#f8faf4" />
+  <circle cx="82" cy="72" r="26" fill="#1f7d5a" />
+  <text x="82" y="79" text-anchor="middle" font-family="Verdana, sans-serif" font-size="20" font-weight="700" fill="#fff">O</text>
+  <text x="124" y="67" class="title">Demo Team Chat</text>
+  <text x="124" y="91" class="subtle">Fake data only - no real phone, host, chat ID, repo, or secret</text>
+  <g transform="translate(616 53)">
+    <rect x="0" y="0" width="104" height="34" rx="17" fill="#f1c96b" />
+    <text x="52" y="22" text-anchor="middle" class="pill" fill="#4b3510">WORKING</text>
+  </g>
+  <path d="M736 70h34" stroke="#8ca498" stroke-width="3" stroke-linecap="round" />
+  <path d="M764 61l11 9-11 9" fill="none" stroke="#8ca498" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" />
+  <g transform="translate(786 53)">
+    <rect x="0" y="0" width="84" height="34" rx="17" fill="#54b582" />
+    <text x="42" y="22" text-anchor="middle" class="pill" fill="#ffffff">READY</text>
+  </g>
+  
+    <g>
+      <rect x="440" y="160" width="390" height="106" rx="22" fill="#dff8ca" stroke="#b5dfa0" />
+      <text x="462" y="190" class="sender" fill="#426a33">User</text>
+      <text x="462" y="218" class="message"><tspan x="462" dy="0">Review the launch checklist and tell me</tspan><tspan x="462" dy="22">the top blockers.</tspan></text>
+      <text x="778" y="248" class="time">09:41</text>
+    </g>
+    <g>
+      <rect x="54" y="278" width="430" height="106" rx="22" fill="#ffffff" stroke="#d7ded7" />
+      <text x="76" y="308" class="sender" fill="#315a4a">Orkestr</text>
+      <text x="76" y="336" class="message"><tspan x="76" dy="0">Thread demo-launch is awake. Status: working.</tspan><tspan x="76" dy="22">Routed to Codex.</tspan></text>
+      <text x="432" y="366" class="time">09:41</text>
+    </g>
+    <g>
+      <rect x="54" y="396" width="430" height="128" rx="22" fill="#ffffff" stroke="#d7ded7" />
+      <text x="76" y="426" class="sender" fill="#315a4a">Codex</text>
+      <text x="76" y="454" class="message"><tspan x="76" dy="0">Done. Top blockers: setup copy is vague, the</tspan><tspan x="76" dy="22">README asset is stale, and the smoke-test note</tspan><tspan x="76" dy="22">is missing.</tspan></text>
+      <text x="432" y="506" class="time">09:42</text>
+    </g>
+    <g>
+      <rect x="54" y="514" width="430" height="84" rx="22" fill="#ffffff" stroke="#d7ded7" />
+      <text x="76" y="544" class="sender" fill="#315a4a">Orkestr</text>
+      <text x="76" y="572" class="message"><tspan x="76" dy="0">Status: ready. Reply mirrored to this chat.</tspan></text>
+      <text x="432" y="580" class="time">09:42</text>
+    </g>
+  <rect x="54" y="626" width="812" height="42" rx="21" fill="#ffffff" opacity="0.84" />
+  <text x="82" y="652" class="subtle">Orkestr-bound chat: user task -> Codex work -> concise result -> ready status</text>
+</svg>
