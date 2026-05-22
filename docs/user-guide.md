@@ -200,22 +200,3 @@ from a clean Orkestr state while preserving the env file and host proxy config.
 Dropbox and other file-source connectors should use the same connector/binding
 model when added: credentials stay private, the UI shows a clear binding, and
 threads receive only the context they are allowed to use.
-
-## Better Demo Asset
-
-The README uses a deterministic fake-data WhatsApp conversation asset generated
-by:
-
-```bash
-npm run demo:record
-```
-
-The generated asset is `docs/assets/orkestr-whatsapp-demo.svg`. It shows:
-
-- a user sending a task to an Orkestr-bound chat
-- Orkestr acknowledging the thread
-- Codex completing a concise result
-- the thread status changing from working to ready
-
-Demo screenshots or clips must use fake chats only. They must not contain a real
-phone number, contact name, chat ID, hostname, repository, local path, or secret.
