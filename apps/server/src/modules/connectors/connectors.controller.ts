@@ -179,7 +179,10 @@ export class ConnectorsController {
   async whatsappInbound(@Body() body: Record<string, unknown> = {}, @Res() response: any) {
     ensureAttachmentsArray(body);
     const routed = await routeWhatsAppInbound(body);
-    if (routed.threadId && !routed.duplicate) requestThreadInputDelivery(routed.threadId);
+    if (routed.threadId && !routed.duplicate) {
+      await deliverWhatsAppReplies().catch(() => {});
+      requestThreadInputDelivery(routed.threadId);
+    }
     return response
       .status(routed.duplicate ? 200 : 202)
       .header("cache-control", "no-store")

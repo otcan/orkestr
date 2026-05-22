@@ -3,6 +3,7 @@ import path from "node:path";
 import crypto from "node:crypto";
 import os from "node:os";
 import { enqueueAgentMessage, updateAgentMessage } from "../../core/src/messages.js";
+import { runtimeStatus } from "../../core/src/runtime-leases.js";
 import { enqueueThreadInput, listThreadMessages, listThreads, updateThreadMessage } from "../../core/src/threads.js";
 import { dataPaths, ensureDataDirs } from "../../storage/src/paths.js";
 import { readConnectorConfig } from "../../storage/src/config.js";
@@ -426,10 +427,13 @@ export async function routeWhatsAppInbound(input = {}, env = process.env) {
     promptFile,
     attachments: Array.isArray(input.attachments) ? input.attachments : [],
   };
-  const message = threadId
+  let message = threadId
     ? await enqueueThreadInput(threadId, messageInput, env)
     : await enqueueAgentMessage(agentId, messageInput, env);
   const contentDuplicate = Boolean(message.duplicate);
+  if (threadId && !contentDuplicate) {
+    message = await annotateInitialThreadQueueNotice(threadId, message, env);
+  }
   const event = {
     eventId,
     agentId: agentId || null,
@@ -746,6 +750,22 @@ function whatsappMessageOrigin(message, state = null) {
   return Boolean((state?.inboundEvents || []).some((event) => event.messageId === message.id));
 }
 
+function initialQueueDeliveryState(status = null) {
+  if (!status) return "";
+  const state = String(status.state || "").trim().toLowerCase();
+  if (state === "working") return "awaiting_runtime_completion";
+  if (state === "waking" || state === "sleeping" || !status.sessionName) return "waiting_runtime_start";
+  if (status.promptReady === false) return "waiting_runtime_ready";
+  return "";
+}
+
+async function annotateInitialThreadQueueNotice(threadId, message, env = process.env) {
+  if (!threadId || !message?.id || message.duplicate) return message;
+  const deliveryState = initialQueueDeliveryState(await runtimeStatus(threadId, env).catch(() => null));
+  if (!deliveryState) return message;
+  return updateThreadMessage(threadId, message.id, { deliveryState }, env).catch(() => message);
+}
+
 function passiveMirrorCanCompleteParent(parent, reply, chatId, state = null) {
   if (!parent || parent.role !== "user" || !whatsappMessageOrigin(parent, state)) return false;
   const parentState = String(parent.state || "").trim().toLowerCase();
@@ -1053,6 +1073,10 @@ async function deliverWhatsAppRepliesOnce(env = process.env, fetchImpl = fetch) 
           continue;
         }
         const chatId = queuedInputTarget.chatId;
+        if (completedAssistantReplyForParent(messages, message, chatId, state) || latestProgressReplyForParent(messages, message.id)) {
+          skipped.push({ agentId, threadId, messageId: message.id, reason: "assistant_output_available" });
+          continue;
+        }
         const text = appendWhatsAppDebugFooter(formatWhatsAppQueueNotice(message, queuedInputTarget.reason), {
           message,
           thread,

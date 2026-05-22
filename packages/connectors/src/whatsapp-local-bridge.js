@@ -364,7 +364,7 @@ async function handleInboundMessage(accountId, message, env = process.env, optio
   if (fromMe && outboundMessageIds.has(eventId)) return;
   if (fromMe && outboundMessageTextKeys.has(textKey(accountId, chatId, text))) return;
   try {
-    const { routeWhatsAppInbound } = await import("./whatsapp.js");
+    const { deliverWhatsAppReplies, routeWhatsAppInbound } = await import("./whatsapp.js");
     const routed = await routeWhatsAppInbound(
       {
         eventId,
@@ -377,7 +377,10 @@ async function handleInboundMessage(accountId, message, env = process.env, optio
       },
       env,
     );
-    if (routed.threadId && !routed.duplicate) requestThreadInputDelivery(routed.threadId, env);
+    if (routed.threadId && !routed.duplicate) {
+      await deliverWhatsAppReplies(env).catch(() => {});
+      requestThreadInputDelivery(routed.threadId, env);
+    }
   } catch (error) {
     await appendEvent(
       {

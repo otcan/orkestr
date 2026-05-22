@@ -855,10 +855,7 @@ test("whatsapp delivery reports waking queue notices", async () => {
     threadRoutes: { "chat-queue-waking": "thread-wa-queue-waking" },
   }, env);
   const routed = await routeWhatsAppInbound({ eventId: "wa-queue-waking-1", chatId: "chat-queue-waking", text: "wake test" }, env);
-  await updateThreadMessage("thread-wa-queue-waking", routed.message.id, {
-    state: "pending_delivery",
-    deliveryState: "waiting_runtime_start",
-  }, env);
+  assert.equal(routed.message.deliveryState, "waiting_runtime_start");
 
   const calls = [];
   const delivery = await deliverWhatsAppReplies(env, async (url, options) => {
@@ -1167,9 +1164,11 @@ test("generated whatsapp bindings listen to the selected sender and answer as th
 
   assert.equal(routedViaResponder.threadId, "generated-thread");
   assert.equal(routed.threadId, "generated-thread");
-  assert.equal(delivery.delivered.length, 1);
-  assert.equal(calls[0].body.to, "chat-generated");
-  assert.equal(calls[0].body.accountId, "account-2");
+  assert.equal(delivery.delivered.length, 2);
+  assert.equal(delivery.delivered.some((entry) => entry.deliveryType === "queue_notice"), true);
+  assert.equal(calls.every((call) => call.body.to === "chat-generated"), true);
+  assert.equal(calls.every((call) => call.body.accountId === "account-2"), true);
+  assert.equal(calls.some((call) => stripDebugFooter(call.body.text) === "generated reply"), true);
 });
 
 test("legacy allowOtherPeople does not enable additional participants without confirmation", async () => {
