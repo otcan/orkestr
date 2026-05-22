@@ -590,6 +590,47 @@ function shouldMirrorWhatsAppReply(message) {
   return true;
 }
 
+function shouldMirrorWhatsAppProgress(message) {
+  if (message.source !== "codex-rollout") return false;
+  const phase = String(message.phase || "").trim().toLowerCase();
+  return phase === "commentary" && !hasProposedPlanEnvelope(message.text) && Boolean(pickString(message.text));
+}
+
+function progressMirrorIntervalMs(env = process.env) {
+  const value = Number(env.ORKESTR_WHATSAPP_PROGRESS_MIN_INTERVAL_MS || 60_000);
+  return Number.isFinite(value) && value >= 0 ? value : 60_000;
+}
+
+function latestProgressReplyForParent(messages, parentId) {
+  return [...messages]
+    .reverse()
+    .find((candidate) =>
+      candidate.role === "assistant" &&
+      candidate.state === "completed" &&
+      candidate.parentMessageId === parentId &&
+      shouldMirrorWhatsAppProgress(candidate)
+    ) || null;
+}
+
+function completedFinalReplyForParent(messages, parentId) {
+  return messages.find((candidate) =>
+    candidate.role === "assistant" &&
+    candidate.state === "completed" &&
+    candidate.parentMessageId === parentId &&
+    shouldMirrorWhatsAppReply(candidate)
+  ) || null;
+}
+
+function latestProgressDelivery(outboundDeliveries, parentMessageId, chatId) {
+  return [...(outboundDeliveries || [])]
+    .reverse()
+    .find((delivery) =>
+      delivery.deliveryType === "progress" &&
+      delivery.parentMessageId === parentMessageId &&
+      (!chatId || delivery.chatId === chatId)
+    ) || null;
+}
+
 function threadAllowsWhatsAppMirroring(thread) {
   if (!thread?.binding) return true;
   return thread.binding.mirrorToWhatsApp !== false && thread.binding.mirrorReplies !== false;
@@ -889,6 +930,74 @@ async function deliverWhatsAppRepliesOnce(env = process.env, fetchImpl = fetch) 
         continue;
       }
       if (message.role !== "assistant" || message.state !== "completed" || deliveredIds.has(message.id)) continue;
+      if (shouldMirrorWhatsAppProgress(message)) {
+        const parent = messages.find((entry) => entry.id === message.parentMessageId);
+        const whatsappOrigin = parent?.connector === "whatsapp" || parent?.source === "whatsapp_inbound" || message.connector === "whatsapp";
+        if (!whatsappOrigin) continue;
+        if (kind === "thread" && !threadAllowsWhatsAppMirroring(thread)) {
+          skipped.push({ agentId, threadId, messageId: message.id, reason: "mirroring_disabled" });
+          continue;
+        }
+        if (completedFinalReplyForParent(messages, message.parentMessageId)) {
+          skipped.push({ agentId, threadId, messageId: message.id, reason: "final_reply_available" });
+          continue;
+        }
+        const latestProgress = latestProgressReplyForParent(messages, message.parentMessageId);
+        if (latestProgress?.id !== message.id) {
+          skipped.push({ agentId, threadId, messageId: message.id, reason: "superseded_progress" });
+          continue;
+        }
+
+        const chatId = pickString(message.chatId, parent?.chatId);
+        const accountId = kind === "thread"
+          ? pickString(thread?.binding?.responderAccountId, thread?.binding?.outboundAccountId, message.accountId, parent?.accountId)
+          : pickString(message.accountId, parent?.accountId);
+        const text = formatWhatsAppOutboundText(pickString(message.text));
+        if (!chatId || !text) {
+          skipped.push({ agentId, threadId, messageId: message.id, reason: !chatId ? "missing_chat_id" : "missing_text" });
+          continue;
+        }
+
+        const lastProgress = latestProgressDelivery(outboundDeliveries, message.parentMessageId, chatId);
+        const elapsedMs = lastProgress?.deliveredAt ? Date.now() - Date.parse(lastProgress.deliveredAt) : Infinity;
+        if (elapsedMs < progressMirrorIntervalMs(env)) {
+          skipped.push({ agentId, threadId, messageId: message.id, reason: "progress_throttled" });
+          continue;
+        }
+        const textKey = deliveryTextKey(chatId, `progress:${message.id}\n${text}`);
+        if (deliveredTextKeys.has(textKey) || batchTextKeys.has(textKey)) {
+          skipped.push({ agentId, threadId, messageId: message.id, reason: "duplicate_text" });
+          continue;
+        }
+
+        try {
+          const payload = await sendWhatsAppText({ chatId, text, accountId, config, env, fetchImpl });
+          const delivery = {
+            kind,
+            deliveryType: "progress",
+            agentId: agentId || null,
+            threadId: threadId || null,
+            messageId: message.id,
+            parentMessageId: message.parentMessageId,
+            chatId,
+            accountId,
+            textKey,
+            deliveredAt: new Date().toISOString(),
+            bridgeResponse: payload,
+          };
+          outboundDeliveries.push(delivery);
+          deliveredIds.add(message.id);
+          deliveredTextKeys.add(textKey);
+          batchTextKeys.add(textKey);
+          delivered.push(delivery);
+          await appendEvent({ type: "whatsapp_outbound_progress_delivered", agentId: agentId || null, threadId: threadId || null, messageId: message.id, chatId }, env);
+        } catch (error) {
+          const failure = { kind, agentId: agentId || null, threadId: threadId || null, messageId: message.id, chatId, error: error.message || String(error) };
+          failed.push(failure);
+          await appendEvent({ type: "whatsapp_outbound_failed", ...failure }, env);
+        }
+        continue;
+      }
       if (!shouldMirrorWhatsAppReply(message)) continue;
       const parent = messages.find((entry) => entry.id === message.parentMessageId);
       const whatsappOrigin = parent?.connector === "whatsapp" || parent?.source === "whatsapp_inbound" || message.connector === "whatsapp";

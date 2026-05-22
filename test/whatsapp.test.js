@@ -392,6 +392,118 @@ test("whatsapp inbound can route directly to a thread and mirror its reply once"
   assert.equal(calls[0].body.to, "chat-thread");
 });
 
+test("whatsapp delivery mirrors throttled commentary progress before final replies", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-progress-"));
+  const env = { ORKESTR_HOME: home, ORKESTR_WHATSAPP_PROGRESS_MIN_INTERVAL_MS: "60000" };
+  await createThread({ id: "thread-wa-progress", name: "WA Progress Thread" }, env);
+  await writeConnectorConfig("whatsapp", {
+    bridgeMode: "external",
+    bridgeUrl: "http://wa.local",
+    threadRoutes: { "chat-progress": "thread-wa-progress" },
+  }, env);
+
+  const routed = await routeWhatsAppInbound({ eventId: "wa-progress-1", chatId: "chat-progress", text: "do it" }, env);
+  await appendThreadMessage("thread-wa-progress", {
+    role: "assistant",
+    source: "codex-rollout",
+    phase: "commentary",
+    state: "completed",
+    text: "I’m checking the repo and running focused tests now.",
+    parentMessageId: routed.message.id,
+    connector: "whatsapp",
+    chatId: "chat-progress",
+  }, env);
+
+  const calls = [];
+  const progress = await deliverWhatsAppReplies(env, async (url, options) => {
+    calls.push({ url, body: JSON.parse(options.body) });
+    return response({ ok: true, ids: ["sent-progress"] });
+  });
+
+  await appendThreadMessage("thread-wa-progress", {
+    role: "assistant",
+    source: "codex-rollout",
+    phase: "commentary",
+    state: "completed",
+    text: "Focused tests passed; I’m running the full suite.",
+    parentMessageId: routed.message.id,
+    connector: "whatsapp",
+    chatId: "chat-progress",
+  }, env);
+  const throttled = await deliverWhatsAppReplies(env, async () => {
+    throw new Error("progress should be throttled");
+  });
+
+  await appendThreadMessage("thread-wa-progress", {
+    role: "assistant",
+    source: "codex-rollout",
+    phase: "final_answer",
+    state: "completed",
+    text: "Done. Tests passed.",
+    parentMessageId: routed.message.id,
+    connector: "whatsapp",
+    chatId: "chat-progress",
+  }, env);
+  const final = await deliverWhatsAppReplies(env, async (url, options) => {
+    calls.push({ url, body: JSON.parse(options.body) });
+    return response({ ok: true, ids: ["sent-final"] });
+  });
+
+  assert.equal(progress.delivered.length, 1);
+  assert.equal(progress.delivered[0].deliveryType, "progress");
+  assert.equal(throttled.delivered.length, 0);
+  assert.equal(throttled.skipped.some((item) => item.reason === "progress_throttled"), true);
+  assert.equal(final.delivered.length, 1);
+  assert.equal(final.delivered[0].deliveryType || "", "");
+  assert.deepEqual(calls.map((call) => call.body.text), [
+    "I’m checking the repo and running focused tests now.",
+    "Done. Tests passed.",
+  ]);
+});
+
+test("whatsapp delivery does not backfill commentary progress after a final answer exists", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-progress-final-"));
+  const env = { ORKESTR_HOME: home };
+  await createThread({ id: "thread-wa-progress-final", name: "WA Progress Final Thread" }, env);
+  await writeConnectorConfig("whatsapp", {
+    bridgeMode: "external",
+    bridgeUrl: "http://wa.local",
+    threadRoutes: { "chat-progress-final": "thread-wa-progress-final" },
+  }, env);
+
+  const routed = await routeWhatsAppInbound({ eventId: "wa-progress-final-1", chatId: "chat-progress-final", text: "status?" }, env);
+  await appendThreadMessage("thread-wa-progress-final", {
+    role: "assistant",
+    source: "codex-rollout",
+    phase: "commentary",
+    state: "completed",
+    text: "Old progress that should not be backfilled.",
+    parentMessageId: routed.message.id,
+    connector: "whatsapp",
+    chatId: "chat-progress-final",
+  }, env);
+  await appendThreadMessage("thread-wa-progress-final", {
+    role: "assistant",
+    source: "codex-rollout",
+    phase: "final_answer",
+    state: "completed",
+    text: "Final only.",
+    parentMessageId: routed.message.id,
+    connector: "whatsapp",
+    chatId: "chat-progress-final",
+  }, env);
+
+  const calls = [];
+  const delivery = await deliverWhatsAppReplies(env, async (url, options) => {
+    calls.push({ url, body: JSON.parse(options.body) });
+    return response({ ok: true, ids: ["sent-final-only"] });
+  });
+
+  assert.equal(delivery.delivered.length, 1);
+  assert.equal(delivery.skipped.some((item) => item.reason === "final_reply_available"), true);
+  assert.deepEqual(calls.map((call) => call.body.text), ["Final only."]);
+});
+
 test("whatsapp inbound suppresses duplicate active thread inputs by content", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-thread-active-duplicate-"));
   const env = { ORKESTR_HOME: home };
