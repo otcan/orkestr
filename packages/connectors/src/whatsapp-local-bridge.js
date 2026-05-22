@@ -250,6 +250,17 @@ function runtimeIdentity(runtime) {
   return serializedId(runtime?.client?.info?.wid || runtime?.client?.info?.me);
 }
 
+export function localWhatsAppMessageRouteFields(message = {}) {
+  const fromMe = Boolean(message?.fromMe);
+  const remote = serializedId(message?.id?.remote);
+  const chatId = String(fromMe
+    ? (message?.to || remote || message?.from || "")
+    : (message?.from || remote || message?.to || "")
+  ).trim();
+  const from = String(message?.author || message?.from || "").trim();
+  return { chatId, from, fromMe };
+}
+
 function groupIdFromCreateResult(result) {
   return serializedId(result?.gid || result?.id || result?.chatId || result?.groupId);
 }
@@ -474,7 +485,7 @@ async function handleInboundMessage(accountId, message, env = process.env, optio
   if (message?.isStatus) return;
   const text = String(message?.body || "").trim();
   if (!text) return;
-  const chatId = String(message.from || message.id?.remote || "").trim();
+  const { chatId, from, fromMe: routeFromMe } = localWhatsAppMessageRouteFields(message);
   const eventId = String(message.id?._serialized || `${accountId}:${chatId}:${message.timestamp || Date.now()}`).trim();
   if (fromMe && outboundMessageIds.has(eventId)) return;
   if (fromMe && outboundMessageTextKeys.has(textKey(accountId, chatId, text))) return;
@@ -484,9 +495,9 @@ async function handleInboundMessage(accountId, message, env = process.env, optio
       {
         eventId,
         chatId,
-        from: String(message.author || message.from || "").trim(),
+        from,
         accountId,
-        fromMe,
+        fromMe: routeFromMe,
         text,
         timestamp: message.timestamp ? new Date(Number(message.timestamp) * 1000).toISOString() : nowIso(),
       },
@@ -503,8 +514,8 @@ async function handleInboundMessage(accountId, message, env = process.env, optio
         accountId,
         eventId,
         chatId,
-        from: String(message.author || message.from || "").trim(),
-        fromMe,
+        from,
+        fromMe: routeFromMe,
         error: error.message || String(error),
       },
       env,

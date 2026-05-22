@@ -9,7 +9,7 @@ import { listAgentMessages } from "../packages/core/src/messages.js";
 import { getSetupStatus } from "../packages/core/src/setup.js";
 import { appendThreadMessage, createThread, enqueueThreadInput, listThreadMessages, updateThreadMessage } from "../packages/core/src/threads.js";
 import { deliverWhatsAppReplies, formatWhatsAppOutboundText, getWhatsAppChatParticipants, getWhatsAppStatus, mapLocalWhatsAppStatusFromHealth, routeWhatsAppInbound, syncWhatsAppTypingIndicators } from "../packages/connectors/src/whatsapp.js";
-import { listLocalWhatsAppChats, localWhatsAppAccountIdsForEnv, normalizeGroupParticipantIds, reduceLocalWhatsAppBridgeState, startLocalWhatsAppAccount, webCacheRoot } from "../packages/connectors/src/whatsapp-local-bridge.js";
+import { listLocalWhatsAppChats, localWhatsAppAccountIdsForEnv, localWhatsAppMessageRouteFields, normalizeGroupParticipantIds, reduceLocalWhatsAppBridgeState, startLocalWhatsAppAccount, webCacheRoot } from "../packages/connectors/src/whatsapp-local-bridge.js";
 import { writeConnectorConfig } from "../packages/storage/src/config.js";
 
 function response(payload, ok = true, status = 200) {
@@ -105,6 +105,22 @@ test("local whatsapp group participant ids are normalized for created test chats
   assert.deepEqual(
     normalizeGroupParticipantIds("66378837028965@lid, 4917632400662@c.us"),
     ["66378837028965@lid", "4917632400662@c.us"],
+  );
+});
+
+test("local whatsapp message route fields keep own group echoes on the group chat", () => {
+  assert.deepEqual(
+    localWhatsAppMessageRouteFields({
+      fromMe: true,
+      from: "51346837356638@lid",
+      to: "120363424272031669@g.us",
+      id: { remote: "120363424272031669@g.us" },
+    }),
+    {
+      chatId: "120363424272031669@g.us",
+      from: "51346837356638@lid",
+      fromMe: true,
+    },
   );
 });
 
