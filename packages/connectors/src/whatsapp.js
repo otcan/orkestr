@@ -315,6 +315,20 @@ function participantIdSet(values = []) {
   return new Set(values.map(comparableParticipantId).filter(Boolean));
 }
 
+function isWhatsAppGroupChatId(value) {
+  return /@g\.us$/i.test(pickString(value));
+}
+
+function generatedSingleAccountGroupBindingCanTrustGroupBoundary(binding = {}, chatId = "", from = "") {
+  const senderAccountId = pickString(binding.senderAccountId, binding.inboundAccountId);
+  const responderAccountId = pickString(binding.responderAccountId, binding.outboundAccountId);
+  if (!binding.generated || !isWhatsAppGroupChatId(chatId) || !senderAccountId || senderAccountId !== responderAccountId) return false;
+  const senderContactId = pickString(binding.senderContactId);
+  const responderContactId = pickString(binding.responderContactId);
+  if (!senderContactId || !responderContactId || !from) return false;
+  return comparableParticipantId(from) !== comparableParticipantId(responderContactId);
+}
+
 function routeAgentId(input, config) {
   const chatId = pickString(input.chatId, input.chat?.id, input.fromChatId);
   const routes = config.routes || config.chatRoutes || {};
@@ -358,7 +372,8 @@ async function routeThread(input, config, env) {
       if (!fromMe) {
         if (responderContactId && comparableParticipantId(from) === comparableParticipantId(responderContactId)) return false;
         const senderContactMatches = senderContactId && comparableParticipantId(from) === comparableParticipantId(senderContactId);
-        if (!senderContactMatches) {
+        const trustGroupBoundary = generatedSingleAccountGroupBindingCanTrustGroupBoundary(binding, chatId, from);
+        if (!senderContactMatches && !trustGroupBoundary) {
           const additionalParticipantsEnabled = binding.additionalParticipantsEnabled === true || binding.allowOtherPeopleConfirmed === true;
           if (!additionalParticipantsEnabled) return false;
           if (!participantIdSet(binding.additionalParticipantIds).has(comparableParticipantId(from))) return false;

@@ -1294,6 +1294,66 @@ test("generated whatsapp bindings listen to the selected sender and answer as th
   assert.equal(calls.some((call) => stripDebugFooter(call.body.text) === "generated reply"), true);
 });
 
+test("generated single-account whatsapp groups route lid senders through the group boundary", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-generated-lid-group-"));
+  const env = { ORKESTR_HOME: home };
+  await createThread({
+    id: "generated-lid-thread",
+    name: "Generated Lid Thread",
+    binding: {
+      connector: "whatsapp",
+      chatId: "120363424272031669@g.us",
+      displayName: "orkestr",
+      enabled: true,
+      generated: true,
+      allowOtherPeople: false,
+      senderAccountId: "responder",
+      responderAccountId: "responder",
+      outboundAccountId: "responder",
+      senderContactId: "4917632400662@c.us",
+      responderContactId: "905555154214@c.us",
+    },
+  }, env);
+
+  await assert.rejects(
+    () => routeWhatsAppInbound({
+      eventId: "wa-generated-lid-responder",
+      chatId: "120363424272031669@g.us",
+      accountId: "responder",
+      from: "905555154214@c.us",
+      fromMe: false,
+      text: "responder echo",
+    }, env),
+    /whatsapp_target_required/,
+  );
+  await assert.rejects(
+    () => routeWhatsAppInbound({
+      eventId: "wa-generated-lid-wrong-chat",
+      chatId: "120363999999999999@g.us",
+      accountId: "responder",
+      from: "66378837028965@lid",
+      fromMe: false,
+      text: "wrong chat",
+    }, env),
+    /whatsapp_target_required/,
+  );
+
+  const routed = await routeWhatsAppInbound({
+    eventId: "wa-generated-lid-sender",
+    chatId: "120363424272031669@g.us",
+    accountId: "responder",
+    from: "66378837028965@lid",
+    fromMe: false,
+    text: "lid sender",
+  }, env);
+  const messages = await listThreadMessages("generated-lid-thread", env);
+
+  assert.equal(routed.threadId, "generated-lid-thread");
+  assert.equal(messages.length, 1);
+  assert.equal(messages[0].text, "lid sender");
+  assert.equal(messages[0].from, "66378837028965@lid");
+});
+
 test("legacy allowOtherPeople does not enable additional participants without confirmation", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-additional-confirm-"));
   const env = { ORKESTR_HOME: home };

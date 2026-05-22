@@ -501,6 +501,10 @@ async function handleInboundMessage(accountId, message, env = process.env, optio
       {
         type: "whatsapp_local_inbound_failed",
         accountId,
+        eventId,
+        chatId,
+        from: String(message.author || message.from || "").trim(),
+        fromMe,
         error: error.message || String(error),
       },
       env,
