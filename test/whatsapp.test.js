@@ -60,6 +60,20 @@ test("local whatsapp bridge supports configured account ids", async () => {
   assert.deepEqual(status.accounts.map((account) => account.label), ["main", "openclaw"]);
 });
 
+test("local whatsapp bridge maps public account ids to existing LocalAuth client ids", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-configured-client-ids-"));
+  const env = {
+    ORKESTR_HOME: home,
+    ORKESTR_WHATSAPP_ACCOUNT_IDS: "main,openclaw",
+    ORKESTR_WHATSAPP_ACCOUNT_CLIENT_IDS: "main:codex-whatsapp,openclaw:codex-whatsapp-openclaw",
+  };
+
+  const status = await getWhatsAppStatus(env);
+
+  assert.deepEqual(status.accounts.map((account) => account.accountId), ["main", "openclaw"]);
+  assert.deepEqual(status.accounts.map((account) => account.clientId), ["codex-whatsapp", "codex-whatsapp-openclaw"]);
+});
+
 test("local whatsapp known chats include stored thread bindings while bridge is idle", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-known-chats-"));
   const env = { ORKESTR_HOME: home };
