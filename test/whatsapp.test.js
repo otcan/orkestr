@@ -9,7 +9,7 @@ import { listAgentMessages } from "../packages/core/src/messages.js";
 import { getSetupStatus } from "../packages/core/src/setup.js";
 import { appendThreadMessage, createThread, listThreadMessages, updateThreadMessage } from "../packages/core/src/threads.js";
 import { deliverWhatsAppReplies, formatWhatsAppOutboundText, getWhatsAppChatParticipants, getWhatsAppStatus, mapLocalWhatsAppStatusFromHealth, routeWhatsAppInbound } from "../packages/connectors/src/whatsapp.js";
-import { listLocalWhatsAppChats, reduceLocalWhatsAppBridgeState, startLocalWhatsAppAccount } from "../packages/connectors/src/whatsapp-local-bridge.js";
+import { listLocalWhatsAppChats, localWhatsAppAccountIdsForEnv, reduceLocalWhatsAppBridgeState, startLocalWhatsAppAccount } from "../packages/connectors/src/whatsapp-local-bridge.js";
 import { writeConnectorConfig } from "../packages/storage/src/config.js";
 
 function response(payload, ok = true, status = 200) {
@@ -46,6 +46,20 @@ test("whatsapp status keeps the integrated local bridge as the default", async (
   assert.equal(status.accounts.length, 2);
 });
 
+test("local whatsapp bridge supports configured account ids", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-configured-accounts-"));
+  const env = { ORKESTR_HOME: home, ORKESTR_WHATSAPP_ACCOUNT_IDS: "main,openclaw" };
+
+  assert.deepEqual(localWhatsAppAccountIdsForEnv(env), ["main", "openclaw"]);
+
+  const status = await getWhatsAppStatus(env);
+
+  assert.equal(status.state, "unpaired");
+  assert.equal(status.mode, "local");
+  assert.deepEqual(status.accounts.map((account) => account.accountId), ["main", "openclaw"]);
+  assert.deepEqual(status.accounts.map((account) => account.label), ["main", "openclaw"]);
+});
+
 test("local whatsapp known chats include stored thread bindings while bridge is idle", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-known-chats-"));
   const env = { ORKESTR_HOME: home };
@@ -79,10 +93,39 @@ test("local whatsapp known chats include stored thread bindings while bridge is 
   assert.deepEqual(account2.chats.map((chat) => chat.name), ["Legacy Group"]);
 });
 
+test("local whatsapp known chats honor configured responder account ids", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-known-configured-"));
+  const env = { ORKESTR_HOME: home, ORKESTR_WHATSAPP_ACCOUNT_IDS: "main,openclaw" };
+  await createThread({
+    id: "known-openclaw-thread",
+    name: "Known OpenClaw Thread",
+    binding: {
+      connector: "whatsapp",
+      chatId: "120363222222222222@g.us",
+      displayName: "OpenClaw Group",
+      outboundAccountId: "openclaw",
+    },
+  }, env);
+
+  const main = await listLocalWhatsAppChats("main", env);
+  const openclaw = await listLocalWhatsAppChats("openclaw", env);
+
+  assert.deepEqual(main.chats.map((chat) => chat.name), []);
+  assert.deepEqual(openclaw.chats.map((chat) => chat.name), ["OpenClaw Group"]);
+});
+
 test("local whatsapp phone pairing validates phone numbers before browser launch", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-phone-invalid-"));
   await assert.rejects(
     startLocalWhatsAppAccount("account-1", { ORKESTR_HOME: home }, { phoneNumber: "+++" }),
+    /whatsapp_pairing_phone_number_invalid/,
+  );
+});
+
+test("local whatsapp phone pairing accepts configured account ids", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-phone-configured-invalid-"));
+  await assert.rejects(
+    startLocalWhatsAppAccount("openclaw", { ORKESTR_HOME: home, ORKESTR_WHATSAPP_ACCOUNT_IDS: "main,openclaw" }, { phoneNumber: "+++" }),
     /whatsapp_pairing_phone_number_invalid/,
   );
 });
