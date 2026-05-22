@@ -17,9 +17,22 @@ function nowIso() {
   return new Date().toISOString();
 }
 
-function normalizeAccountId(accountId = "account-1") {
-  const normalized = String(accountId || "account-1").trim();
-  if (!localWhatsAppAccountIds.includes(normalized)) {
+function splitAccountList(value) {
+  return String(value || "")
+    .split(/[\s,]+/g)
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+export function localWhatsAppAccountIdsForEnv(env = process.env) {
+  const configured = splitAccountList(env.ORKESTR_WHATSAPP_ACCOUNT_IDS || env.WHATSAPP_LOCAL_ACCOUNT_IDS);
+  return configured.length ? [...new Set(configured)] : localWhatsAppAccountIds;
+}
+
+function normalizeAccountId(accountId = "", env = process.env) {
+  const ids = localWhatsAppAccountIdsForEnv(env);
+  const normalized = String(accountId || ids[0] || "account-1").trim();
+  if (!ids.includes(normalized)) {
     const error = new Error("unknown_whatsapp_account");
     error.statusCode = 404;
     throw error;
@@ -28,6 +41,7 @@ function normalizeAccountId(accountId = "account-1") {
 }
 
 function accountLabel(accountId) {
+  if (!localWhatsAppAccountIds.includes(accountId)) return accountId;
   return accountId === "account-2" ? "WhatsApp 2" : "WhatsApp 1";
 }
 
@@ -133,10 +147,10 @@ function isGroupChatId(chatId) {
   return /@g\.us$/i.test(String(chatId || "").trim());
 }
 
-function localAccountMatches(accountId, selectedAccountId) {
+function localAccountMatches(accountId, selectedAccountId, env = process.env) {
   const account = String(accountId || "").trim();
   if (!account) return true;
-  if (!localWhatsAppAccountIds.includes(account)) return true;
+  if (!localWhatsAppAccountIdsForEnv(env).includes(account)) return true;
   return account === selectedAccountId;
 }
 
@@ -193,7 +207,7 @@ function groupIdFromCreateResult(result) {
 }
 
 async function knownLocalWhatsAppChats(accountId, env = process.env) {
-  const selectedAccountId = normalizeAccountId(accountId);
+  const selectedAccountId = normalizeAccountId(accountId, env);
   const known = new Map();
   const threads = await listThreads(env).catch(() => []);
   for (const thread of threads) {
@@ -203,7 +217,7 @@ async function knownLocalWhatsAppChats(accountId, env = process.env) {
     const accountIds = [binding.senderAccountId, binding.responderAccountId, binding.outboundAccountId]
       .map((candidate) => String(candidate || "").trim())
       .filter(Boolean);
-    if (!chatId || (accountIds.length && !accountIds.some((candidate) => localAccountMatches(candidate, selectedAccountId)))) continue;
+    if (!chatId || (accountIds.length && !accountIds.some((candidate) => localAccountMatches(candidate, selectedAccountId, env)))) continue;
     addChat(known, {
       id: chatId,
       name: String(binding.displayName || thread.bindingName || thread.name || thread.title || chatId).trim(),
@@ -218,7 +232,7 @@ async function knownLocalWhatsAppChats(accountId, env = process.env) {
   const state = await readJson(dataPaths(env).whatsapp, { inboundEvents: [], outboundDeliveries: [] }).catch(() => ({ inboundEvents: [], outboundDeliveries: [] }));
   for (const event of state.inboundEvents || []) {
     const chatId = String(event?.chatId || "").trim();
-    if (!chatId || !localAccountMatches(event.accountId, selectedAccountId)) continue;
+    if (!chatId || !localAccountMatches(event.accountId, selectedAccountId, env)) continue;
     addChat(known, {
       id: chatId,
       name: String(event.chatName || event.displayName || event.chatId || chatId).trim(),
@@ -230,7 +244,7 @@ async function knownLocalWhatsAppChats(accountId, env = process.env) {
   }
   for (const delivery of state.outboundDeliveries || []) {
     const chatId = String(delivery?.chatId || "").trim();
-    if (!chatId || !localAccountMatches(delivery.accountId, selectedAccountId)) continue;
+    if (!chatId || !localAccountMatches(delivery.accountId, selectedAccountId, env)) continue;
     addChat(known, {
       id: chatId,
       name: chatId,
@@ -246,7 +260,8 @@ async function knownLocalWhatsAppChats(accountId, env = process.env) {
 }
 
 export async function getLocalWhatsAppBridgeStatus(env = process.env) {
-  const accounts = await Promise.all(localWhatsAppAccountIds.map((accountId) => accountSnapshot(accountId, env)));
+  const accountIds = localWhatsAppAccountIdsForEnv(env);
+  const accounts = await Promise.all(accountIds.map((accountId) => accountSnapshot(accountId, env)));
   const state = reduceLocalWhatsAppBridgeState(accounts);
   const qrAccount = accounts.find((account) => account.qrAvailable);
   return {
@@ -258,7 +273,7 @@ export async function getLocalWhatsAppBridgeStatus(env = process.env) {
     authenticated: accounts.some((account) => account.authenticated || account.ready),
     qrAvailable: Boolean(qrAccount),
     qrUrl: qrAccount?.qrUrl || "",
-    maxAccounts: localWhatsAppAccountIds.length,
+    maxAccounts: accountIds.length,
     accounts,
   };
 }
@@ -349,8 +364,21 @@ async function handleInboundMessage(accountId, message, env = process.env, optio
   }
 }
 
-export async function startLocalWhatsAppAccount(accountId = "account-1", env = process.env, options = {}) {
-  const normalized = normalizeAccountId(accountId);
+function localWhatsAppAutostartEnabled(env = process.env) {
+  const raw = String(env.ORKESTR_WHATSAPP_AUTOSTART || env.WHATSAPP_LOCAL_AUTOSTART || "").trim().toLowerCase();
+  return ["1", "true", "yes", "on"].includes(raw);
+}
+
+export async function startConfiguredLocalWhatsAppAccounts(env = process.env) {
+  if (!localWhatsAppAutostartEnabled(env)) return { enabled: false, accounts: [] };
+  const accountIds = splitAccountList(env.ORKESTR_WHATSAPP_AUTOSTART_ACCOUNT_IDS || env.WHATSAPP_LOCAL_AUTOSTART_ACCOUNT_IDS);
+  const selected = accountIds.length ? accountIds : localWhatsAppAccountIdsForEnv(env);
+  const accounts = await Promise.all(selected.map((accountId) => startLocalWhatsAppAccount(accountId, env)));
+  return { enabled: true, accounts };
+}
+
+export async function startLocalWhatsAppAccount(accountId = "", env = process.env, options = {}) {
+  const normalized = normalizeAccountId(accountId, env);
   if (runtimes.has(normalized)) return accountSnapshot(normalized, env);
 
   const pairingPhoneNumber = normalizePairingPhoneNumber(options.phoneNumber);
@@ -599,8 +627,8 @@ export async function startLocalWhatsAppAccount(accountId = "account-1", env = p
   return accountSnapshot(normalized, env);
 }
 
-export async function logoutLocalWhatsAppAccount(accountId = "account-1", env = process.env) {
-  const normalized = normalizeAccountId(accountId);
+export async function logoutLocalWhatsAppAccount(accountId = "", env = process.env) {
+  const normalized = normalizeAccountId(accountId, env);
   const runtime = runtimes.get(normalized);
   if (runtime?.client) {
     runtime.clearAuthReadyTimer?.();
@@ -657,13 +685,13 @@ export async function stopLocalWhatsAppBridge(env = process.env) {
   }
 }
 
-export async function getLocalWhatsAppQrSvg(accountId = "account-1", env = process.env) {
-  const normalized = normalizeAccountId(accountId);
+export async function getLocalWhatsAppQrSvg(accountId = "", env = process.env) {
+  const normalized = normalizeAccountId(accountId, env);
   return fs.readFile(qrPath(normalized, env), "utf8").catch(() => "");
 }
 
-export async function listLocalWhatsAppChats(accountId = "account-1", env = process.env) {
-  const normalized = normalizeAccountId(accountId);
+export async function listLocalWhatsAppChats(accountId = "", env = process.env) {
+  const normalized = normalizeAccountId(accountId, env);
   const runtime = runtimes.get(normalized);
   const state = accountStates.get(normalized) || defaultAccountState(normalized);
   const knownChats = await knownLocalWhatsAppChats(normalized, env);
@@ -697,8 +725,8 @@ export async function listLocalWhatsAppChats(accountId = "account-1", env = proc
   };
 }
 
-export async function listLocalWhatsAppChatParticipants({ accountId = "account-1", chatId = "", env = process.env } = {}) {
-  const normalized = normalizeAccountId(accountId);
+export async function listLocalWhatsAppChatParticipants({ accountId = "", chatId = "", env = process.env } = {}) {
+  const normalized = normalizeAccountId(accountId, env);
   const id = String(chatId || "").trim();
   if (!id) {
     const error = new Error("whatsapp_chat_id_required");
@@ -727,15 +755,15 @@ export async function listLocalWhatsAppChatParticipants({ accountId = "account-1
   };
 }
 
-export async function createLocalWhatsAppChat({ name = "", senderAccountId = "account-1", responderAccountId = "", env = process.env } = {}) {
+export async function createLocalWhatsAppChat({ name = "", senderAccountId = "", responderAccountId = "", env = process.env } = {}) {
   const title = String(name || "").trim();
   if (!title) {
     const error = new Error("whatsapp_chat_name_required");
     error.statusCode = 400;
     throw error;
   }
-  const sender = normalizeAccountId(senderAccountId);
-  const responder = normalizeAccountId(responderAccountId || sender);
+  const sender = normalizeAccountId(senderAccountId, env);
+  const responder = normalizeAccountId(responderAccountId || sender, env);
   const responderRuntime = runtimes.get(responder);
   const responderState = accountStates.get(responder) || defaultAccountState(responder);
   if (!responderRuntime?.client || !responderState.ready) {
@@ -795,7 +823,9 @@ export async function createLocalWhatsAppChat({ name = "", senderAccountId = "ac
 }
 
 export async function sendLocalWhatsAppText({ chatId = "", text = "", accountId = "", env = process.env } = {}) {
-  const selectedAccountId = accountId ? normalizeAccountId(accountId) : localWhatsAppAccountIds.find((id) => accountStates.get(id)?.ready);
+  const selectedAccountId = accountId
+    ? normalizeAccountId(accountId, env)
+    : localWhatsAppAccountIdsForEnv(env).find((id) => accountStates.get(id)?.ready);
   const runtime = selectedAccountId ? runtimes.get(selectedAccountId) : null;
   const state = selectedAccountId ? accountStates.get(selectedAccountId) : null;
   if (!runtime?.client || !state?.ready) {

@@ -14,7 +14,10 @@ import {
 } from "../../../packages/core/src/runtime-leases.js";
 import { markDueTimers } from "../../../packages/core/src/timers.js";
 import { deliverWhatsAppReplies } from "../../../packages/connectors/src/whatsapp.js";
-import { stopLocalWhatsAppBridge } from "../../../packages/connectors/src/whatsapp-local-bridge.js";
+import {
+  startConfiguredLocalWhatsAppAccounts,
+  stopLocalWhatsAppBridge,
+} from "../../../packages/connectors/src/whatsapp-local-bridge.js";
 import { ensureDataDirs } from "../../../packages/storage/src/paths.js";
 import { authorizeHttpRequest } from "../../../packages/core/src/security.js";
 import { AppModule } from "./app.module.js";
@@ -58,6 +61,7 @@ export async function startServer({ port = 19812, host = "127.0.0.1", openBrowse
     await recoverInterruptedExecutions();
   }
   await loadOverlayExecutorAdapters();
+  await startConfiguredLocalWhatsAppAccounts().catch(() => {});
   const app = await createApp();
 
   const timer = setInterval(() => {

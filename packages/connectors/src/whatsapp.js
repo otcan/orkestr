@@ -242,7 +242,7 @@ export async function getWhatsAppStatus(env = process.env, fetchImpl = fetch) {
   }
 }
 
-export async function getWhatsAppChatParticipants({ accountId = "account-1", chatId = "" } = {}, env = process.env, fetchImpl = fetch) {
+export async function getWhatsAppChatParticipants({ accountId = "", chatId = "" } = {}, env = process.env, fetchImpl = fetch) {
   const id = pickString(chatId);
   if (!id) throw badRequest("whatsapp_chat_id_required");
   const config = await readConnectorConfig("whatsapp", env);
