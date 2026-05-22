@@ -616,12 +616,11 @@ function codexModelDebugLabel(message = {}, thread = {}, env = process.env) {
 
 function codexModeDebugValue(message = {}, thread = {}) {
   const mode = pickString(
-    message.codexMode,
     message.codexModeLive,
     thread.codexModeLive,
-    thread.codexMode,
-    thread.runtime?.codexMode,
     thread.runtime?.progress?.codexMode,
+    thread.runtime?.codexMode,
+    thread.codexModeSource === "runtime-pane" ? thread.codexMode : "",
   ).toLowerCase();
   return mode === "plan" ? "plan" : "";
 }

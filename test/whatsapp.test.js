@@ -529,7 +529,8 @@ test("whatsapp delivery appends compact debug footer for plan-mode Codex updates
   await createThread({
     id: "thread-wa-debug-footer",
     name: "WA Debug Footer Thread",
-    codexMode: "plan",
+    codexMode: "code",
+    runtime: { progress: { codexMode: "plan" } },
     codexModel: "gpt-5.5",
     codexReasoningEffort: "xhigh",
   }, env);
@@ -563,6 +564,49 @@ test("whatsapp delivery appends compact debug footer for plan-mode Codex updates
     calls[0].body.text,
     /\n\ndbg: m:gpt-5\.5\/xh · mode:plan · msg:update · q:0 · cpu:\d+% · help:\/help · switch:\/code$/,
   );
+});
+
+test("whatsapp debug footer ignores stale stored plan mode when live mode is code", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-debug-footer-stale-mode-"));
+  const env = { ORKESTR_HOME: home };
+  await createThread({
+    id: "thread-wa-debug-footer-stale-mode",
+    name: "WA Debug Footer Stale Mode Thread",
+    codexMode: "plan",
+    codexModeSource: "orkestr-command",
+    runtime: { progress: { codexMode: "code" } },
+    codexModel: "gpt-5.5",
+    codexReasoningEffort: "xhigh",
+  }, env);
+  await writeConnectorConfig("whatsapp", {
+    bridgeMode: "external",
+    bridgeUrl: "http://wa.local",
+    threadRoutes: { "chat-debug-footer-stale-mode": "thread-wa-debug-footer-stale-mode" },
+  }, env);
+
+  const routed = await routeWhatsAppInbound({ eventId: "wa-debug-footer-stale-mode-1", chatId: "chat-debug-footer-stale-mode", text: "status?" }, env);
+  await appendThreadMessage("thread-wa-debug-footer-stale-mode", {
+    role: "assistant",
+    source: "codex-rollout",
+    phase: "commentary",
+    state: "completed",
+    text: "I’ll check it.",
+    parentMessageId: routed.message.id,
+    connector: "whatsapp",
+    chatId: "chat-debug-footer-stale-mode",
+  }, env);
+
+  const calls = [];
+  const delivery = await deliverWhatsAppReplies(env, async (url, options) => {
+    calls.push({ url, body: JSON.parse(options.body) });
+    return response({ ok: true, ids: ["sent-debug-footer-stale-mode"] });
+  });
+
+  assert.equal(delivery.delivered.length, 1);
+  assert.equal(stripDebugFooter(calls[0].body.text), "I’ll check it.");
+  assertDebugFooter(calls[0].body.text, { messageType: "update", model: "gpt-5.5/xh" });
+  assert.doesNotMatch(calls[0].body.text, /mode:plan/);
+  assert.doesNotMatch(calls[0].body.text, /switch:\/code/);
 });
 
 test("whatsapp inbound suppresses duplicate active thread inputs by content", async () => {
