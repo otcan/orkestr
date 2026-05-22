@@ -27,8 +27,8 @@ test("public launch docs expose the minimum launch surface", async () => {
   assert.match(userGuide, /Run Codex Agents/);
   assert.match(contributing, /Pull Request Checklist/);
   assert.match(security, /Do not expose/);
-  assert.match(readme, /orkestr-chat-web-demo\.svg/);
-  assert.match(readme, /fake chat and fake web UI/);
+  assert.match(readme, /orkestr-three-screen-demo\.png/);
+  assert.match(readme, /fake chat, fake web UI,\s+and fake Codex terminal/);
   assert.match(roadmap, /disposable fake-data runs/);
   assert.match(architecture, /Legacy `\/ng\/\*` paths/);
   assert.match(demoLog, /Coding-agent demo passed/);

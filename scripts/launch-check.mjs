@@ -11,7 +11,7 @@ const requiredFiles = [
   "CONTRIBUTING.md",
   "ROADMAP.md",
   "docs/architecture.md",
-  "docs/assets/orkestr-chat-web-demo.svg",
+  "docs/assets/orkestr-three-screen-demo.png",
   "docs/demo-logs/coding-agent-first-run.md",
   "examples/coding-agent-demo/README.md",
   ".dockerignore",
@@ -64,7 +64,7 @@ async function assertRequiredFiles() {
   for (const file of requiredFiles) {
     const stat = await fs.stat(path.join(repoRoot, file)).catch(() => null);
     if (!stat || !stat.isFile()) throw new Error(`Missing required launch file: ${file}`);
-    if (/\.(?:gif|svg)$/.test(file) && stat.size > 5 * 1024 * 1024) {
+    if (/\.(?:gif|png|svg)$/.test(file) && stat.size > 5 * 1024 * 1024) {
       throw new Error(`${file} is too large for README use`);
     }
     console.log(`ok ${file}`);

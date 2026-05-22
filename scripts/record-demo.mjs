@@ -1,44 +1,27 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
+import puppeteer from "puppeteer";
 
+const execFileAsync = promisify(execFile);
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-export const demoAssetPath = path.join(repoRoot, "docs", "assets", "orkestr-chat-web-demo.svg");
+export const demoAssetPath = path.join(repoRoot, "docs", "assets", "orkestr-three-screen-demo.png");
 
-const demoMessages = [
-  {
-    side: "right",
-    sender: "User",
-    time: "09:41",
-    text: "Review the launch checklist and tell me the top blockers.",
-  },
-  {
-    side: "left",
-    sender: "Orkestr",
-    time: "09:41",
-    text: "Thread demo-launch is awake. Status: working. Routed to Codex.",
-  },
-  {
-    side: "left",
-    sender: "Codex",
-    time: "09:42",
-    text: "Done. Top blockers: setup copy is vague, the README asset is stale, and the smoke-test note is missing.",
-  },
-  {
-    side: "left",
-    sender: "Orkestr",
-    time: "09:42",
-    text: "Status: ready. Reply mirrored to this chat.",
-  },
+const chatName = "Demo Team Chat";
+const threadName = "demo-launch";
+const task = "Review the launch checklist and tell me the top blockers.";
+const answer = "Top blockers: setup copy, stale README asset, missing smoke-test note.";
+
+const messages = [
+  { from: "User", side: "right", time: "09:41", text: task },
+  { from: "Orkestr", side: "left", time: "09:41", text: `Thread ${threadName} is awake. Status: working.` },
+  { from: "Codex", side: "left", time: "09:42", text: answer },
+  { from: "Orkestr", side: "left", time: "09:42", text: "Status: ready. Reply mirrored to this chat." },
 ];
 
-const timeline = [
-  { state: "received", label: "WhatsApp task received", detail: "demo-launch" },
-  { state: "working", label: "Codex is working", detail: "checklist review" },
-  { state: "ready", label: "Final answer mirrored", detail: "ready for next task" },
-];
-
-function escapeXml(value) {
+function escapeHtml(value) {
   return String(value)
     .replaceAll("&", "&amp;")
     .replaceAll("<", "&lt;")
@@ -46,173 +29,340 @@ function escapeXml(value) {
     .replaceAll('"', "&quot;");
 }
 
-function wrapText(text, maxChars = 46) {
-  const words = String(text).split(/\s+/);
-  const lines = [];
-  let line = "";
-  for (const word of words) {
-    const next = line ? `${line} ${word}` : word;
-    if (next.length > maxChars && line) {
-      lines.push(line);
-      line = word;
-    } else {
-      line = next;
+function messageBubbles() {
+  return messages
+    .map((message) => `
+      <div class="bubble ${message.side}">
+        <div class="bubble-from">${escapeHtml(message.from)}</div>
+        <div class="bubble-text">${escapeHtml(message.text)}</div>
+        <div class="bubble-time">${escapeHtml(message.time)}</div>
+      </div>
+    `)
+    .join("");
+}
+
+function terminalTranscript() {
+  const lines = [
+    ["$", `orkestr attach ${threadName}`],
+    ["thread", `${chatName} / ${threadName}`],
+    ["incoming", task],
+    ["status", "working"],
+    ["codex", "inspecting launch checklist"],
+    ["final", answer],
+    ["status", "ready"],
+    ["mirror", "sent to fake WhatsApp chat"],
+  ]
+  return lines
+    .map(([label, value]) => `<div><span class="prompt">${escapeHtml(label)}</span> ${escapeHtml(value)}</div>`)
+    .join("");
+}
+
+export function renderDemoHtml() {
+  return `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Fake Orkestr three-screen demo</title>
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      width: 1500px;
+      height: 900px;
+      overflow: hidden;
+      background:
+        radial-gradient(circle at 8% 94%, rgba(171, 214, 145, 0.42), transparent 28%),
+        radial-gradient(circle at 92% 8%, rgba(69, 143, 104, 0.28), transparent 24%),
+        linear-gradient(135deg, #f3f1e7 0%, #d9e9d6 44%, #101c17 100%);
+      color: #12231d;
+      font-family: Verdana, Geneva, sans-serif;
+    }
+    .stage { padding: 48px 54px; }
+    .headline {
+      font-family: Georgia, serif;
+      font-size: 38px;
+      font-weight: 700;
+      margin: 0 0 8px;
+      color: #102f26;
+    }
+    .subhead {
+      font-size: 15px;
+      color: #586f63;
+      margin-bottom: 32px;
+    }
+    .screens {
+      display: grid;
+      grid-template-columns: 370px 520px 430px;
+      gap: 28px;
+      align-items: stretch;
+    }
+    .screen {
+      border-radius: 30px;
+      box-shadow: 0 26px 70px rgba(6, 18, 13, 0.24);
+      overflow: hidden;
+      min-height: 682px;
+      position: relative;
+    }
+    .label {
+      position: absolute;
+      top: 18px;
+      right: 18px;
+      border-radius: 999px;
+      padding: 8px 12px;
+      font-size: 11px;
+      font-weight: 800;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      background: rgba(255, 255, 255, 0.72);
+      color: #204338;
+      z-index: 2;
+    }
+    .phone {
+      background: #f7faf3;
+      border: 10px solid #10231d;
+    }
+    .phone-top {
+      height: 82px;
+      padding: 22px 22px 0;
+      background: #f9fbf4;
+      border-bottom: 1px solid #e3e8df;
+    }
+    .avatar {
+      display: inline-grid;
+      place-items: center;
+      width: 38px;
+      height: 38px;
+      border-radius: 50%;
+      margin-right: 11px;
+      background: #1f7d5a;
+      color: white;
+      font-size: 20px;
+      font-weight: 800;
+      vertical-align: middle;
+    }
+    .chat-title { display: inline-block; vertical-align: middle; }
+    .chat-title strong { display: block; font-size: 17px; }
+    .chat-title span { color: #667a70; font-size: 11px; }
+    .chat-wall {
+      min-height: 502px;
+      padding: 24px 16px;
+      background-color: #eef2e9;
+      background-image: radial-gradient(#c8d5c6 1px, transparent 1px);
+      background-size: 22px 22px;
+    }
+    .bubble {
+      width: 285px;
+      border-radius: 18px;
+      padding: 11px 14px 9px;
+      margin-bottom: 14px;
+      box-shadow: 0 2px 0 rgba(25, 52, 41, 0.07);
+    }
+    .bubble.right { margin-left: auto; background: #dff8ca; border: 1px solid #badfa9; }
+    .bubble.left { background: white; border: 1px solid #dce4dc; }
+    .bubble-from { font-size: 12px; font-weight: 800; color: #315a4a; margin-bottom: 5px; }
+    .bubble-text { font-size: 13px; line-height: 1.35; }
+    .bubble-time { text-align: right; color: #7d8b83; font-size: 10px; margin-top: 4px; }
+    .composer {
+      position: absolute;
+      left: 18px;
+      right: 18px;
+      bottom: 18px;
+      height: 34px;
+      border-radius: 17px;
+      background: white;
+      color: #7d8b83;
+      padding: 9px 18px;
+      font-size: 12px;
+    }
+    .web {
+      background: linear-gradient(135deg, #172720, #07100d);
+      color: #eef8f1;
+    }
+    .web-top, .terminal-top {
+      height: 58px;
+      background: #10221b;
+      padding: 19px 22px;
+      border-bottom: 1px solid rgba(255,255,255,0.08);
+    }
+    .dot {
+      display: inline-block;
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      margin-right: 8px;
+    }
+    .red { background: #f36f5d; } .yellow { background: #f2c14e; } .green { background: #55c984; }
+    .web-body { padding: 28px; }
+    .web-title { font-size: 24px; font-weight: 800; margin-bottom: 6px; }
+    .web-subtitle { color: #91a79a; font-size: 13px; margin-bottom: 22px; }
+    .cards { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-bottom: 20px; }
+    .card {
+      min-height: 86px;
+      border-radius: 18px;
+      padding: 18px;
+      background: #10251e;
+      border: 1px solid #29473b;
+    }
+    .card small { display: block; color: #94a99c; margin-bottom: 10px; }
+    .card strong { font-size: 19px; }
+    .status-card { background: #332b15; border-color: #66531e; }
+    .conversation {
+      border-radius: 22px;
+      background: #091511;
+      border: 1px solid #243c32;
+      padding: 20px;
+      margin-bottom: 18px;
+    }
+    .row {
+      display: grid;
+      grid-template-columns: 76px 1fr 88px;
+      gap: 12px;
+      align-items: center;
+      padding: 12px 0;
+      border-bottom: 1px solid rgba(255,255,255,0.08);
+      font-size: 13px;
+    }
+    .row:last-child { border-bottom: 0; }
+    .badge {
+      display: inline-block;
+      border-radius: 999px;
+      padding: 7px 10px;
+      background: #20362d;
+      color: #d6e6dc;
+      text-align: center;
+      font-size: 11px;
+      font-weight: 800;
+    }
+    .badge.ready { background: #48c78e; color: #062116; }
+    .progress { height: 20px; border-radius: 10px; background: #20362d; overflow: hidden; }
+    .progress span { display: block; width: 91%; height: 100%; background: #48c78e; }
+    .terminal {
+      background: #08100d;
+      color: #d7f7df;
+      border: 1px solid rgba(255,255,255,0.12);
+    }
+    .terminal-title {
+      color: #f3fff6;
+      font-size: 15px;
+      font-weight: 800;
+      margin-left: 10px;
+    }
+    .terminal-body {
+      padding: 24px;
+      font: 18px/1.62 "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+      white-space: pre-wrap;
+    }
+    .prompt { color: #7ee0a3; font-weight: 800; }
+    .terminal-note {
+      position: absolute;
+      left: 24px;
+      right: 24px;
+      bottom: 24px;
+      border-radius: 18px;
+      padding: 18px;
+      background: #10251e;
+      border: 1px solid #29473b;
+      color: #a8c3b1;
+      font-size: 13px;
+      line-height: 1.45;
+    }
+  </style>
+</head>
+<body>
+  <main class="stage">
+    <h1 class="headline">One chat, three synchronized surfaces.</h1>
+    <div class="subhead">Fake data only. No real phone number, hostname, chat ID, repository, local path, or secret.</div>
+    <section class="screens">
+      <section class="screen phone">
+        <div class="label">WhatsApp</div>
+        <div class="phone-top">
+          <span class="avatar">O</span>
+          <span class="chat-title"><strong>${escapeHtml(chatName)}</strong><span>fake WhatsApp chat</span></span>
+        </div>
+        <div class="chat-wall">${messageBubbles()}</div>
+        <div class="composer">Reply to ${escapeHtml(threadName)}...</div>
+      </section>
+      <section class="screen web">
+        <div class="label">Web UI</div>
+        <div class="web-top"><span class="dot red"></span><span class="dot yellow"></span><span class="dot green"></span></div>
+        <div class="web-body">
+          <div class="web-title">${escapeHtml(chatName)}</div>
+          <div class="web-subtitle">Orkestr thread ${escapeHtml(threadName)} mirrors the same conversation.</div>
+          <div class="cards">
+            <div class="card"><small>Thread</small><strong>${escapeHtml(threadName)}</strong></div>
+            <div class="card status-card"><small>Status</small><strong>working -> ready</strong></div>
+            <div class="card"><small>Connector</small><strong>fake WhatsApp</strong></div>
+            <div class="card"><small>Executor</small><strong>Codex thread</strong></div>
+          </div>
+          <div class="conversation">
+            <div class="row"><span class="badge">09:41</span><span>${escapeHtml(task)}</span><span class="badge">received</span></div>
+            <div class="row"><span class="badge">09:41</span><span>Routed into Codex and marked working.</span><span class="badge">working</span></div>
+            <div class="row"><span class="badge">09:42</span><span>${escapeHtml(answer)}</span><span class="badge ready">ready</span></div>
+          </div>
+          <div class="progress"><span></span></div>
+        </div>
+      </section>
+      <section class="screen terminal">
+        <div class="label">Codex</div>
+        <div class="terminal-top"><span class="dot red"></span><span class="dot yellow"></span><span class="dot green"></span><span class="terminal-title">Codex Thread</span></div>
+        <div class="terminal-body">${terminalTranscript()}</div>
+        <div class="terminal-note">Same fake chat, same task, same final result. The terminal is execution detail; Orkestr owns the thread view.</div>
+      </section>
+    </section>
+  </main>
+</body>
+</html>`;
+}
+
+async function commandPath(command) {
+  try {
+    const { stdout } = await execFileAsync("sh", ["-lc", `command -v ${command}`], { timeout: 2000 });
+    return stdout.trim();
+  } catch {
+    return "";
+  }
+}
+
+async function findChrome() {
+  const configured = [
+    process.env.PUPPETEER_EXECUTABLE_PATH,
+    process.env.ORKESTR_CHROME_PATH,
+    process.env.CHROME_PATH,
+  ].filter(Boolean);
+  const paths = [...configured, "/usr/bin/google-chrome", "/usr/bin/chromium", "/usr/bin/chromium-browser"];
+  for (const candidate of paths) {
+    try {
+      await fs.access(candidate);
+      return candidate;
+    } catch {
+      // Try the next known executable path.
     }
   }
-  if (line) lines.push(line);
-  return lines;
-}
-
-function bubble(message, index) {
-  const right = message.side === "right";
-  const width = right ? 286 : 316;
-  const x = right ? 142 : 72;
-  const lines = wrapText(message.text, right ? 30 : 34);
-  const height = 56 + lines.length * 18;
-  const y = 112 + index * 86;
-  const fill = right ? "#dff8ca" : "#ffffff";
-  const stroke = right ? "#b5dfa0" : "#d7ded7";
-  const labelColor = right ? "#426a33" : "#315a4a";
-
-  const textLines = lines
-    .map((line, lineIndex) => (
-      `<tspan x="${x + 18}" dy="${lineIndex === 0 ? 0 : 18}">${escapeXml(line)}</tspan>`
-    ))
-    .join("");
-
-  return `
-    <g>
-      <rect x="${x}" y="${y}" width="${width}" height="${height}" rx="18" fill="${fill}" stroke="${stroke}" />
-      <text x="${x + 18}" y="${y + 27}" class="sender" fill="${labelColor}">${escapeXml(message.sender)}</text>
-      <text x="${x + 18}" y="${y + 51}" class="message small">${textLines}</text>
-      <text x="${x + width - 48}" y="${y + height - 14}" class="time">${escapeXml(message.time)}</text>
-    </g>`;
-}
-
-function timelineItem(item, index) {
-  const y = 318 + index * 72;
-  const color = item.state === "ready" ? "#48c78e" : item.state === "working" ? "#f2c14e" : "#77a6f7";
-  return `
-    <g>
-      <circle cx="352" cy="${y}" r="9" fill="${color}" />
-      <rect x="378" y="${y - 20}" width="170" height="44" rx="12" fill="#111f1a" stroke="#2c493d" />
-      <text x="394" y="${y - 2}" class="web-label">${escapeXml(item.label)}</text>
-      <text x="394" y="${y + 17}" class="web-muted">${escapeXml(item.detail)}</text>
-    </g>`;
-}
-
-export function renderDemoSvg() {
-  return `<svg xmlns="http://www.w3.org/2000/svg" width="1180" height="720" viewBox="0 0 1180 720" role="img" aria-labelledby="title desc">
-  <title id="title">Fake WhatsApp and Orkestr web UI demo</title>
-  <desc id="desc">A fake-data Orkestr demo showing a WhatsApp task, browser cockpit routing, Codex result, and ready status.</desc>
-  <defs>
-    <linearGradient id="page-bg" x1="0" x2="1" y1="0" y2="1">
-      <stop offset="0%" stop-color="#eef4e8" />
-      <stop offset="52%" stop-color="#d7e7d8" />
-      <stop offset="100%" stop-color="#18261f" />
-    </linearGradient>
-    <linearGradient id="web-bg" x1="0" x2="1" y1="0" y2="1">
-      <stop offset="0%" stop-color="#172720" />
-      <stop offset="100%" stop-color="#07100d" />
-    </linearGradient>
-    <pattern id="chat-dots" width="28" height="28" patternUnits="userSpaceOnUse">
-      <circle cx="4" cy="4" r="1.2" fill="#bcc9bc" opacity="0.45" />
-    </pattern>
-    <filter id="shadow" x="-10%" y="-10%" width="120%" height="120%">
-      <feDropShadow dx="0" dy="14" stdDeviation="18" flood-color="#0f241c" flood-opacity="0.18" />
-    </filter>
-  </defs>
-  <style>
-    .title { font: 700 28px Georgia, serif; fill: #12352b; }
-    .subtle { font: 500 13px Verdana, sans-serif; fill: #5f756a; }
-    .sender { font: 700 13px Verdana, sans-serif; }
-    .message { font: 500 16px Verdana, sans-serif; fill: #1d2c27; }
-    .small { font-size: 13px; }
-    .time { font: 500 11px Verdana, sans-serif; fill: #75827a; }
-    .pill { font: 700 12px Verdana, sans-serif; letter-spacing: 0.4px; }
-    .web-title { font: 700 22px Verdana, sans-serif; fill: #f7fff9; }
-    .web-label { font: 700 14px Verdana, sans-serif; fill: #eef8f1; }
-    .web-muted { font: 500 12px Verdana, sans-serif; fill: #95ad9f; }
-    .web-value { font: 700 30px Georgia, serif; fill: #ffffff; }
-    .caption { font: 700 18px Verdana, sans-serif; fill: #16382d; }
-  </style>
-  <rect width="1180" height="720" fill="url(#page-bg)" />
-  <circle cx="110" cy="620" r="170" fill="#c7e2bb" opacity="0.45" />
-  <circle cx="1040" cy="104" r="140" fill="#5aa77e" opacity="0.18" />
-
-  <text x="56" y="64" class="title">Chat asks. Orkestr routes. Codex finishes.</text>
-  <text x="56" y="91" class="subtle">Fake data only - no real phone, host, chat ID, repository, local path, or secret</text>
-
-  <g filter="url(#shadow)" transform="translate(38 122)">
-    <rect x="0" y="0" width="438" height="548" rx="38" fill="#f8faf4" />
-    <rect x="18" y="74" width="402" height="412" fill="#edf2e9" />
-    <rect x="18" y="74" width="402" height="412" fill="url(#chat-dots)" opacity="0.9" />
-    <rect x="18" y="18" width="402" height="72" rx="26" fill="#f8faf4" />
-    <circle cx="58" cy="54" r="23" fill="#1f7d5a" />
-    <text x="58" y="62" text-anchor="middle" font-family="Verdana, sans-serif" font-size="18" font-weight="700" fill="#fff">O</text>
-    <text x="94" y="50" class="caption">Demo Team Chat</text>
-    <text x="94" y="70" class="subtle">Orkestr-bound WhatsApp</text>
-    ${demoMessages.map(bubble).join("")}
-    <rect x="36" y="501" width="366" height="30" rx="15" fill="#ffffff" />
-    <text x="58" y="521" class="subtle">Message mirrored back when thread is ready</text>
-  </g>
-
-  <g filter="url(#shadow)" transform="translate(524 122)">
-    <rect x="0" y="0" width="598" height="548" rx="30" fill="url(#web-bg)" />
-    <rect x="0" y="0" width="598" height="58" rx="30" fill="#10221b" />
-    <circle cx="32" cy="30" r="6" fill="#f36f5d" />
-    <circle cx="54" cy="30" r="6" fill="#f2c14e" />
-    <circle cx="76" cy="30" r="6" fill="#55c984" />
-    <text x="112" y="37" class="web-title">Orkestr Web</text>
-    <text x="430" y="36" class="web-muted">local cockpit</text>
-
-    <rect x="28" y="88" width="166" height="86" rx="18" fill="#16362b" stroke="#315a4a" />
-    <text x="48" y="119" class="web-muted">Thread</text>
-    <text x="48" y="151" class="web-label">demo-launch</text>
-    <rect x="216" y="88" width="166" height="86" rx="18" fill="#3c3217" stroke="#6d5421" />
-    <text x="236" y="119" class="web-muted">Status</text>
-    <text x="236" y="151" class="web-label">working -> ready</text>
-    <rect x="404" y="88" width="166" height="86" rx="18" fill="#13273a" stroke="#294d72" />
-    <text x="424" y="119" class="web-muted">Connector</text>
-    <text x="424" y="151" class="web-label">fake WhatsApp</text>
-
-    <rect x="28" y="204" width="250" height="282" rx="22" fill="#0b1713" stroke="#243c32" />
-    <text x="52" y="238" class="web-label">Conversation</text>
-    <rect x="52" y="262" width="184" height="34" rx="17" fill="#20362d" />
-    <text x="68" y="284" class="web-muted">Task received</text>
-    <rect x="52" y="312" width="204" height="54" rx="17" fill="#172a23" />
-    <text x="68" y="334" class="web-muted">Codex: reviewing checklist</text>
-    <text x="68" y="352" class="web-muted">no files changed</text>
-    <rect x="52" y="386" width="184" height="34" rx="17" fill="#20362d" />
-    <text x="68" y="408" class="web-muted">Reply mirrored</text>
-    <rect x="52" y="440" width="112" height="28" rx="14" fill="#48c78e" />
-    <text x="78" y="459" class="pill" fill="#062116">READY</text>
-
-    <rect x="308" y="204" width="262" height="282" rx="22" fill="#0b1713" stroke="#243c32" />
-    <text x="332" y="238" class="web-label">Thread Timeline</text>
-    <path d="M352 318v144" stroke="#2c493d" stroke-width="3" stroke-linecap="round" />
-    ${timeline.map(timelineItem).join("")}
-
-    <rect x="28" y="506" width="542" height="22" rx="11" fill="#20362d" />
-    <rect x="28" y="506" width="486" height="22" rx="11" fill="#48c78e" />
-    <text x="44" y="522" class="web-muted" fill="#eaffef">status sync: WhatsApp -> Orkestr -> Codex -> WhatsApp</text>
-  </g>
-
-  <g transform="translate(484 350)">
-    <rect x="0" y="0" width="56" height="56" rx="28" fill="#f8faf4" filter="url(#shadow)" />
-    <path d="M18 28h20" stroke="#1f7d5a" stroke-width="4" stroke-linecap="round" />
-    <path d="M32 20l10 8-10 8" fill="none" stroke="#1f7d5a" stroke-width="4" stroke-linecap="round" stroke-linejoin="round" />
-  </g>
-</svg>
-`;
+  for (const command of ["google-chrome", "chromium", "chromium-browser"]) {
+    const found = await commandPath(command);
+    if (found) return found;
+  }
+  throw new Error("Chrome or Chromium is required to render the PNG demo asset");
 }
 
 export async function recordDemo() {
   await fs.mkdir(path.dirname(demoAssetPath), { recursive: true });
-  const svg = renderDemoSvg();
-  await fs.writeFile(demoAssetPath, svg, "utf8");
-  console.log(`Wrote ${path.relative(repoRoot, demoAssetPath)} from deterministic fake chat and web UI data`);
-  return { path: demoAssetPath, bytes: Buffer.byteLength(svg) };
+  const browser = await puppeteer.launch({
+    headless: "new",
+    executablePath: await findChrome(),
+    args: ["--no-sandbox", "--disable-setuid-sandbox"],
+  });
+  try {
+    const page = await browser.newPage();
+    await page.setViewport({ width: 1500, height: 900, deviceScaleFactor: 1 });
+    await page.setContent(renderDemoHtml(), { waitUntil: "networkidle0" });
+    await page.screenshot({ path: demoAssetPath, type: "png" });
+  } finally {
+    await browser.close();
+  }
+  const stat = await fs.stat(demoAssetPath);
+  console.log(`Wrote ${path.relative(repoRoot, demoAssetPath)} from deterministic fake three-screen data`);
+  return { path: demoAssetPath, bytes: stat.size };
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {
