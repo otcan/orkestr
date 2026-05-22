@@ -54,3 +54,13 @@ test("server serves the built Angular UI at root", async () => {
     else process.env.ORKESTR_OVERLAY_DIR = priorOverlay;
   }
 });
+
+test("global shell keeps onboarding footer reachable", async () => {
+  const styles = await fs.readFile("apps/web/src/styles.css", "utf8");
+  const onboardingTemplate = await fs.readFile("apps/web/src/app/onboarding-page.component.html", "utf8");
+  const bodyBlock = styles.match(/body\s*{[^}]*}/)?.[0] || "";
+
+  assert.match(onboardingTemplate, /<footer class="setup-nav">/);
+  assert.doesNotMatch(bodyBlock, /overflow:\s*hidden/);
+  assert.match(styles, /\.app-shell\s*{[^}]*overflow:\s*hidden/s);
+});
