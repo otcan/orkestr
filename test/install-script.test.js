@@ -34,6 +34,8 @@ test("install script exposes a host-native systemd VPS path", async () => {
   assert.match(script, /ORKESTR_RESET_OVERLAY=\$\{ORKESTR_RESET_OVERLAY:-0\}/);
   assert.match(script, /sqlite3/);
   assert.match(script, /util-linux/);
+  assert.match(script, /useradd --system --home "\$data_dir" --shell \/bin\/bash "\$run_user"/);
+  assert.match(script, /usermod --shell \/bin\/bash "\$run_user"/);
   assert.match(script, /install_browser_package/);
   assert.match(script, /install_google_chrome/);
   assert.match(script, /google-chrome-stable/);

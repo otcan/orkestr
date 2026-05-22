@@ -34,6 +34,34 @@ test("codex device auth parses browser URL and reuses an active session", async 
   assert.equal(second.startedAt, first.startedAt);
 });
 
+test("codex status creates missing Codex home before invoking CLI", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-codex-home-create-"));
+  const fakeCodex = path.join(home, "codex");
+  await fs.writeFile(
+    fakeCodex,
+    [
+      "#!/bin/sh",
+      "set -eu",
+      "test -d \"$CODEX_HOME\"",
+      "echo 'Not logged in'",
+    ].join("\n"),
+    { mode: 0o755 },
+  );
+  const codexHome = path.join(home, "missing-codex-home");
+  const env = {
+    ORKESTR_HOME: home,
+    CODEX_HOME: codexHome,
+    ORKESTR_CODEX_BIN: fakeCodex,
+  };
+
+  const status = await codexLoginStatus({ env, home });
+  const stat = await fs.stat(codexHome);
+
+  assert.equal(status.available, true);
+  assert.equal(status.connected, false);
+  assert.equal(stat.isDirectory(), true);
+});
+
 test("codex API key login writes Codex auth through the CLI", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-codex-api-key-"));
   const fakeCodex = path.join(home, "codex");

@@ -1,5 +1,6 @@
 import os from "node:os";
 import path from "node:path";
+import fs from "node:fs";
 import { spawn } from "node:child_process";
 import { ensureDataDirs } from "../../storage/src/paths.js";
 
@@ -26,9 +27,18 @@ export function codexCommand(env = process.env) {
   return String(env.ORKESTR_CODEX_BIN || "codex").trim() || "codex";
 }
 
+function ensureCodexHome(codexHome) {
+  try {
+    fs.mkdirSync(codexHome, { recursive: true, mode: 0o700 });
+  } catch {
+    // Let the Codex CLI surface a concrete configuration error.
+  }
+}
+
 function runCodex(args, { env = process.env, home = os.homedir(), input = "", timeoutMs = 5000 } = {}) {
   const command = codexCommand(env);
   const codexHome = defaultCodexHome(env, home);
+  ensureCodexHome(codexHome);
   return new Promise((resolve) => {
     const child = spawn(command, args, {
       env: {
@@ -186,6 +196,7 @@ function activeSession(codexHome) {
 export async function startCodexDeviceAuth({ env = process.env, home = os.homedir() } = {}) {
   await ensureDataDirs(env);
   const codexHome = defaultCodexHome(env, home);
+  ensureCodexHome(codexHome);
   const current = activeSession(codexHome);
   if (current) return sessionSnapshot(current);
 

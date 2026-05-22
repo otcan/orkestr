@@ -160,6 +160,7 @@ function hasOwn(value: Record<string, unknown>, key: string): boolean {
 }
 
 function optionalBodyString(body: Record<string, unknown>, key: string, fallback: unknown = ""): string {
+  if (hasOwn(body, key) && (body[key] === null || body[key] === undefined)) return "";
   return String(hasOwn(body, key) ? body[key] : fallback || "").trim();
 }
 

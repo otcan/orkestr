@@ -504,7 +504,9 @@ install_systemd_runtime() {
     exit 1
   fi
   if ! id "$run_user" >/dev/null 2>&1; then
-    useradd --system --home "$data_dir" --shell /usr/sbin/nologin "$run_user"
+    useradd --system --home "$data_dir" --shell /bin/bash "$run_user"
+  else
+    usermod --shell /bin/bash "$run_user"
   fi
   mkdir -p "$data_dir" "$workspace_dir" /opt/orkestr/overlay
   chown -R "$run_user:$(id -gn "$run_user")" "$data_dir" "$workspace_dir" /opt/orkestr/overlay
