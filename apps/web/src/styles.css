@@ -7,6 +7,11 @@
   color-scheme: dark;
 }
 
+html {
+  height: 100%;
+  background: #070b07;
+}
+
 * {
   box-sizing: border-box;
 }
@@ -14,6 +19,9 @@
 body {
   margin: 0;
   min-height: 100vh;
+  min-height: 100dvh;
+  height: 100%;
+  overflow: hidden;
   background:
     radial-gradient(circle at top left, rgba(88, 165, 92, 0.18), transparent 30rem),
     linear-gradient(135deg, #050805 0%, #0b130b 58%, #101a12 100%);
@@ -135,11 +143,55 @@ textarea:focus {
   box-shadow: 0 0 0 2px rgba(126, 255, 142, 0.16);
 }
 
+.boot-shell {
+  min-height: 100vh;
+  min-height: 100dvh;
+  display: grid;
+  align-content: center;
+  gap: 12px;
+  padding: 32px;
+  color: #e7f7df;
+  background: #070b07;
+}
+
+.boot-shell h1,
+.boot-shell p {
+  max-width: 720px;
+  margin: 0;
+}
+
+.boot-shell h1 {
+  font-size: 28px;
+}
+
+.boot-shell p {
+  color: #a7c39c;
+}
+
+.boot-shell.boot-error {
+  color: #ffe2e2;
+  background: #140808;
+}
+
+.boot-shell.boot-error p {
+  color: #ffb9b9;
+}
+
+.boot-eyebrow {
+  color: #66e478;
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
 .app-shell {
   display: grid;
   grid-template-columns: var(--sidebar-width, 460px) 8px minmax(0, 1fr);
   height: 100vh;
+  height: 100dvh;
   overflow: hidden;
+  overscroll-behavior: none;
 }
 
 .sidebar {
@@ -352,6 +404,8 @@ textarea:focus {
   gap: 8px;
   min-height: 0;
   overflow: auto;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
   padding-right: 4px;
   scrollbar-color: rgba(113, 218, 126, 0.45) transparent;
   scrollbar-width: thin;
@@ -760,7 +814,27 @@ textarea:focus {
   grid-template-rows: auto auto minmax(0, 1fr) auto;
   min-width: 0;
   min-height: 0;
+  overflow: hidden;
   padding: 20px;
+}
+
+.chat > ork-ops-page {
+  display: block;
+  grid-row: 1 / -1;
+  min-height: 0;
+  height: 100%;
+  overflow-x: hidden;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
+  touch-action: pan-y;
+}
+
+.chat > ork-ops-page > .global-ops-panel {
+  min-height: 100%;
+  height: auto;
+  max-height: none;
+  overflow: visible;
 }
 
 ork-first-thread-wizard.first-thread-host {
@@ -1652,6 +1726,8 @@ ork-first-thread-wizard.first-thread-host {
 .panel-body {
   min-height: 0;
   overflow: auto;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
   border: 1px solid rgba(119, 205, 126, 0.18);
   border-radius: 14px;
   background: rgba(3, 8, 3, 0.66);
@@ -2816,6 +2892,9 @@ ork-first-thread-wizard.first-thread-host {
   .app-shell {
     grid-template-columns: 1fr;
     grid-template-rows: minmax(160px, 32vh) minmax(0, 1fr);
+    grid-template-rows: minmax(150px, min(32dvh, 260px)) minmax(0, 1fr);
+    height: 100dvh;
+    max-height: 100dvh;
   }
 
   .sidebar-resize-handle {
@@ -2829,7 +2908,17 @@ ork-first-thread-wizard.first-thread-host {
   }
 
   .chat {
+    min-height: 0;
+    overflow: hidden;
     padding: 12px;
+  }
+
+  .panel-body,
+  .messages,
+  .thread-list {
+    min-height: 0;
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
   }
 
   .chat-head,
