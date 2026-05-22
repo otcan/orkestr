@@ -1216,6 +1216,80 @@ test("thread input delivery waits for runtime acknowledgement before completing"
   }
 });
 
+test("queued /now input strips the command and jumps ahead of stale awaiting ack", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-now-command-"));
+  const fakeTmux = await createFakeTmux(home);
+  const captureFile = path.join(home, "pane.txt");
+  const loadedBufferCapture = path.join(home, "loaded-buffers.txt");
+  const priorPath = process.env.PATH;
+  const priorTmuxLog = process.env.TMUX_LOG;
+  const priorTmuxState = process.env.TMUX_STATE;
+  const priorCaptureFile = process.env.TMUX_CAPTURE_FILE;
+  const priorLoadedBufferCapture = process.env.TMUX_LOADED_BUFFER_CAPTURE;
+  process.env.PATH = `${fakeTmux.bin}:${priorPath || ""}`;
+  process.env.TMUX_LOG = fakeTmux.log;
+  process.env.TMUX_STATE = fakeTmux.state;
+  process.env.TMUX_CAPTURE_FILE = captureFile;
+  process.env.TMUX_LOADED_BUFFER_CAPTURE = loadedBufferCapture;
+
+  try {
+    await fs.writeFile(captureFile, "\u203a \n", "utf8");
+    const env = {
+      ORKESTR_HOME: path.join(home, "orkestr-home"),
+      HOME: path.join(home, "runtime-home"),
+      CODEX_HOME: path.join(home, "codex-home"),
+      PATH: process.env.PATH,
+      TMUX_LOG: fakeTmux.log,
+      TMUX_STATE: fakeTmux.state,
+      TMUX_CAPTURE_FILE: captureFile,
+      TMUX_LOADED_BUFFER_CAPTURE: loadedBufferCapture,
+      ORKESTR_DELIVERY_ACK_WAIT_MS: "0",
+      ORKESTR_DELIVERY_ACK_BACKOFF_MS: "10000",
+    };
+    await createThread({ id: "now-command-thread", name: "Now Command Thread" }, env);
+    const stale = await appendThreadMessage("now-command-thread", {
+      role: "user",
+      source: "whatsapp_inbound",
+      connector: "whatsapp",
+      chatId: "chat-now",
+      text: "old stuck input",
+      state: "awaiting_ack",
+      deliveryState: "awaiting_ack",
+      deliveryPaneId: "%42",
+    }, env);
+    const urgent = await enqueueThreadInput("now-command-thread", {
+      source: "whatsapp_inbound",
+      connector: "whatsapp",
+      chatId: "chat-now",
+      from: "owner",
+      text: "/now not KDP desk. It's Reddit desk",
+    }, env);
+
+    assert.deepEqual(await deliverPendingThreadInputs("now-command-thread", env), []);
+    const messages = await listThreadMessages("now-command-thread", env);
+    const staleAfter = messages.find((message) => message.id === stale.id);
+    const urgentAfter = messages.find((message) => message.id === urgent.id);
+    const deliveredPrompt = await fs.readFile(loadedBufferCapture, "utf8");
+
+    assert.equal(staleAfter.state, "failed");
+    assert.equal(staleAfter.deliveryState, "superseded");
+    assert.equal(staleAfter.observedVia, "thread_control_command_superseded_ack");
+    assert.match(staleAfter.error, /Superseded by \/now/);
+    assert.equal(urgentAfter.text, "not KDP desk. It's Reddit desk");
+    assert.equal(urgentAfter.state, "awaiting_ack");
+    assert.equal(urgentAfter.deliveryState, "awaiting_ack");
+    assert.equal(urgentAfter.forceDeliveryAfterInterrupt, true);
+    assert.match(deliveredPrompt, /\[WhatsApp: owner\]\n\nnot KDP desk\. It's Reddit desk/);
+    assert.doesNotMatch(deliveredPrompt, /\/now/);
+  } finally {
+    restoreEnvValue("PATH", priorPath);
+    restoreEnvValue("TMUX_LOG", priorTmuxLog);
+    restoreEnvValue("TMUX_STATE", priorTmuxState);
+    restoreEnvValue("TMUX_CAPTURE_FILE", priorCaptureFile);
+    restoreEnvValue("TMUX_LOADED_BUFFER_CAPTURE", priorLoadedBufferCapture);
+  }
+});
+
 test("thread input delivery closes stale ack when history already has an assistant reply", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-history-ack-"));
   const env = {
@@ -3246,7 +3320,7 @@ test("thread summary ignores stale Plan mode text without a live Codex status li
   }
 });
 
-test("thread input delivery fails when Codex rejects a literal /now command", async () => {
+test("thread input delivery fails when Codex rejects an unsupported literal slash command", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-delivery-rejected-command-"));
   const fakeTmux = await createFakeTmux(home);
   const captureFile = path.join(home, "pane.txt");
@@ -3260,7 +3334,7 @@ test("thread input delivery fails when Codex rejects a literal /now command", as
   process.env.TMUX_CAPTURE_FILE = captureFile;
 
   try {
-    await fs.writeFile(captureFile, "Unrecognized command '/now'. Type \"/\" for a list of supported commands.\n\u203a \n", "utf8");
+    await fs.writeFile(captureFile, "Unrecognized command '/unknown'. Type \"/\" for a list of supported commands.\n\u203a \n", "utf8");
     const env = {
       ORKESTR_HOME: path.join(home, "orkestr-home"),
       HOME: path.join(home, "runtime-home"),
@@ -3273,14 +3347,14 @@ test("thread input delivery fails when Codex rejects a literal /now command", as
       ORKESTR_DELIVERY_ACK_BACKOFF_MS: "10000",
     };
     await createThread({ id: "rejected-command-thread", name: "Rejected Command Thread" }, env);
-    await enqueueThreadInput("rejected-command-thread", { text: "/now \nrun this immediately" }, env);
+    await enqueueThreadInput("rejected-command-thread", { text: "/unknown \nrun this immediately" }, env);
 
     assert.deepEqual(await deliverPendingThreadInputs("rejected-command-thread", env), []);
     const messages = await listThreadMessages("rejected-command-thread", env);
 
     assert.equal(messages[0].state, "failed");
     assert.equal(messages[0].deliveryState, "failed");
-    assert.match(messages[0].error, /Unrecognized command '\/now'/);
+    assert.match(messages[0].error, /Unrecognized command '\/unknown'/);
   } finally {
     restoreEnvValue("PATH", priorPath);
     restoreEnvValue("TMUX_LOG", priorTmuxLog);
@@ -4247,6 +4321,66 @@ test("thread APIs create, queue, run, and list messages", async () => {
     await new Promise((resolve) => server.close(resolve));
     if (priorHome === undefined) delete process.env.ORKESTR_HOME;
     else process.env.ORKESTR_HOME = priorHome;
+  }
+});
+
+test("thread interrupt API attempts delivery before returning queued status", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-api-interrupt-"));
+  const fakeTmux = await createFakeTmux(home);
+  const captureFile = path.join(home, "pane.txt");
+  const priorHome = process.env.ORKESTR_HOME;
+  const priorRuntimeHome = process.env.HOME;
+  const priorCodexHome = process.env.CODEX_HOME;
+  const priorPath = process.env.PATH;
+  const priorTmuxLog = process.env.TMUX_LOG;
+  const priorTmuxState = process.env.TMUX_STATE;
+  const priorCaptureFile = process.env.TMUX_CAPTURE_FILE;
+  const priorAckWait = process.env.ORKESTR_DELIVERY_ACK_WAIT_MS;
+  const priorAckBackoff = process.env.ORKESTR_DELIVERY_ACK_BACKOFF_MS;
+  process.env.ORKESTR_HOME = path.join(home, "orkestr-home");
+  process.env.HOME = path.join(home, "runtime-home");
+  process.env.CODEX_HOME = path.join(home, "codex-home");
+  process.env.PATH = `${fakeTmux.bin}:${priorPath || ""}`;
+  process.env.TMUX_LOG = fakeTmux.log;
+  process.env.TMUX_STATE = fakeTmux.state;
+  process.env.TMUX_CAPTURE_FILE = captureFile;
+  process.env.ORKESTR_DELIVERY_ACK_WAIT_MS = "0";
+  process.env.ORKESTR_DELIVERY_ACK_BACKOFF_MS = "10000";
+  await fs.writeFile(captureFile, "\u203a \n", "utf8");
+  const server = await startServer({ port: 0, host: "127.0.0.1" });
+  const { port } = server.address();
+  const baseUrl = `http://127.0.0.1:${port}`;
+  try {
+    await createThread({ id: "api-interrupt-thread", name: "API Interrupt Thread" });
+    const response = await fetch(`${baseUrl}/api/threads/api-interrupt-thread/interrupt`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ text: "not KDP desk. It's Reddit desk", source: "whatsapp" }),
+    });
+    const payload = await response.json();
+    const messages = await listThreadMessages("api-interrupt-thread");
+    const log = await fs.readFile(fakeTmux.log, "utf8");
+
+    assert.equal(response.status, 200);
+    assert.equal(payload.queued, true);
+    assert.equal(payload.deliveryState, "awaiting_ack");
+    assert.equal(payload.observedVia, "tmux_send_pending_ack");
+    assert.equal(payload.message.source, "whatsapp");
+    assert.equal(payload.message.forceDeliveryAfterInterrupt, true);
+    assert.equal(messages[0].text, "not KDP desk. It's Reddit desk");
+    assert.equal(messages[0].state, "awaiting_ack");
+    assert.match(log, /__CALL__\tsend-keys\t-t\t%42\tC-m/);
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+    restoreEnvValue("ORKESTR_HOME", priorHome);
+    restoreEnvValue("HOME", priorRuntimeHome);
+    restoreEnvValue("CODEX_HOME", priorCodexHome);
+    restoreEnvValue("PATH", priorPath);
+    restoreEnvValue("TMUX_LOG", priorTmuxLog);
+    restoreEnvValue("TMUX_STATE", priorTmuxState);
+    restoreEnvValue("TMUX_CAPTURE_FILE", priorCaptureFile);
+    restoreEnvValue("ORKESTR_DELIVERY_ACK_WAIT_MS", priorAckWait);
+    restoreEnvValue("ORKESTR_DELIVERY_ACK_BACKOFF_MS", priorAckBackoff);
   }
 });
 

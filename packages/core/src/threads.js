@@ -234,6 +234,7 @@ export async function appendThreadMessage(threadId, input, env = process.env) {
     const value = String(input[key] || "").trim();
     if (value) message[key] = value;
   }
+  if (input.forceDeliveryAfterInterrupt === true) message.forceDeliveryAfterInterrupt = true;
   if (Array.isArray(input.attachments) && input.attachments.length) {
     message.attachments = input.attachments.map((attachment) => ({ ...attachment }));
   }

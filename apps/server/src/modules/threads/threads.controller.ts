@@ -830,16 +830,26 @@ export class ThreadsController {
       await new Promise((resolve) => execFile("tmux", ["send-keys", "-t", paneId, "C-c"], () => resolve(null)));
     }
     if (String(body.text || "").trim()) {
-      const message = await enqueueThreadInput(result.thread.id, { ...body, source: body.source || "interrupt" });
-      requestThreadInputDelivery(result.thread.id);
+      const message = await enqueueThreadInput(result.thread.id, {
+        ...body,
+        source: body.source || "interrupt",
+        forceDeliveryAfterInterrupt: true,
+      });
+      const delivered = await deliverPendingThreadInputs(result.thread.id);
+      const current = (await listThreadMessages(result.thread.id)).find((item: any) => item.id === message.id) || message;
+      if (current.state === "queued" || current.state === "pending_delivery") requestThreadInputDelivery(result.thread.id);
       return {
         ok: true,
         interrupted,
-        message,
-        queued: true,
-        queueItemId: message.id,
+        message: current,
+        delivered,
+        queued: current.state !== "completed",
+        queueItemId: current.id,
+        deliveryState: current.deliveryState || current.state,
+        observed: true,
+        observedVia: current.observedVia || (current.deliveryState === "awaiting_ack" ? "tmux_send_pending_ack" : "interrupt"),
         reason: "interrupt",
-        state: "waking",
+        state: current.state === "queued" || current.state === "pending_delivery" ? "waking" : current.state,
         runtime: result.status,
       };
     }
