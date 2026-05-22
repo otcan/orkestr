@@ -9,7 +9,7 @@ import { listAgentMessages } from "../packages/core/src/messages.js";
 import { getSetupStatus } from "../packages/core/src/setup.js";
 import { appendThreadMessage, createThread, enqueueThreadInput, listThreadMessages, updateThreadMessage } from "../packages/core/src/threads.js";
 import { deliverWhatsAppReplies, formatWhatsAppOutboundText, getWhatsAppChatParticipants, getWhatsAppStatus, mapLocalWhatsAppStatusFromHealth, routeWhatsAppInbound, syncWhatsAppTypingIndicators } from "../packages/connectors/src/whatsapp.js";
-import { listLocalWhatsAppChats, localWhatsAppAccountIdsForEnv, reduceLocalWhatsAppBridgeState, startLocalWhatsAppAccount } from "../packages/connectors/src/whatsapp-local-bridge.js";
+import { listLocalWhatsAppChats, localWhatsAppAccountIdsForEnv, reduceLocalWhatsAppBridgeState, startLocalWhatsAppAccount, webCacheRoot } from "../packages/connectors/src/whatsapp-local-bridge.js";
 import { writeConnectorConfig } from "../packages/storage/src/config.js";
 
 function response(payload, ok = true, status = 200) {
@@ -90,6 +90,11 @@ test("local whatsapp bridge maps public account ids to existing LocalAuth client
   assert.deepEqual(status.accounts.map((account) => account.accountId), ["main", "openclaw"]);
   assert.deepEqual(status.accounts.map((account) => account.clientId), ["codex-whatsapp", "codex-whatsapp-openclaw"]);
   assert.deepEqual(status.accounts.map((account) => account.sessionRoot), ["/state/main", "/state/openclaw"]);
+});
+
+test("local whatsapp web cache lives under orkestr home", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-web-cache-"));
+  assert.equal(webCacheRoot({ ORKESTR_HOME: home }), path.join(home, "whatsapp-bridge", "web-cache"));
 });
 
 test("local whatsapp known chats include stored thread bindings while bridge is idle", async () => {
