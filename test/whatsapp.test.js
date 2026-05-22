@@ -8,7 +8,7 @@ import { runNextAgentMessage, runNextThreadMessage } from "../packages/core/src/
 import { listAgentMessages } from "../packages/core/src/messages.js";
 import { getSetupStatus } from "../packages/core/src/setup.js";
 import { appendThreadMessage, createThread, enqueueThreadInput, listThreadMessages, updateThreadMessage } from "../packages/core/src/threads.js";
-import { deliverWhatsAppReplies, formatWhatsAppOutboundText, getWhatsAppChatParticipants, getWhatsAppStatus, mapLocalWhatsAppStatusFromHealth, routeWhatsAppInbound } from "../packages/connectors/src/whatsapp.js";
+import { deliverWhatsAppReplies, formatWhatsAppOutboundText, getWhatsAppChatParticipants, getWhatsAppStatus, mapLocalWhatsAppStatusFromHealth, routeWhatsAppInbound, syncWhatsAppTypingIndicators } from "../packages/connectors/src/whatsapp.js";
 import { listLocalWhatsAppChats, localWhatsAppAccountIdsForEnv, reduceLocalWhatsAppBridgeState, startLocalWhatsAppAccount } from "../packages/connectors/src/whatsapp-local-bridge.js";
 import { writeConnectorConfig } from "../packages/storage/src/config.js";
 
@@ -477,6 +477,58 @@ test("whatsapp delivery mirrors throttled commentary progress before final repli
   ]);
   assertDebugFooter(calls[0].body.text, { messageType: "update" });
   assertDebugFooter(calls[1].body.text, { messageType: "final" });
+});
+
+test("whatsapp typing indicators follow active routed thread runtime", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-typing-"));
+  const env = { ORKESTR_HOME: home };
+  await createThread({ id: "thread-wa-typing", name: "WA Typing Thread" }, env);
+  await writeConnectorConfig("whatsapp", {
+    threadRoutes: { "chat-typing": "thread-wa-typing" },
+  }, env);
+
+  const routed = await routeWhatsAppInbound({
+    eventId: "wa-typing-1",
+    chatId: "chat-typing",
+    accountId: "orkestr",
+    text: "work on this",
+  }, env);
+  const captures = [];
+  const working = await syncWhatsAppTypingIndicators(env, {
+    statusImpl: async () => ({ state: "working", working: true, typingActive: true }),
+    syncImpl: async (targets) => {
+      captures.push(targets);
+      return { ok: true, active: targets.length };
+    },
+  });
+
+  await appendThreadMessage("thread-wa-typing", {
+    role: "assistant",
+    source: "codex-rollout",
+    phase: "final_answer",
+    state: "completed",
+    text: "Done.",
+    parentMessageId: routed.message.id,
+    connector: "whatsapp",
+    chatId: "chat-typing",
+  }, env);
+  const completed = await syncWhatsAppTypingIndicators(env, {
+    statusImpl: async () => ({ state: "working", working: true, typingActive: true }),
+    syncImpl: async (targets) => {
+      captures.push(targets);
+      return { ok: true, active: targets.length };
+    },
+  });
+
+  assert.equal(working.active, 1);
+  assert.deepEqual(captures[0], [{
+    threadId: "thread-wa-typing",
+    messageId: routed.message.id,
+    chatId: "chat-typing",
+    accountId: "orkestr",
+  }]);
+  assert.equal(completed.active, 0);
+  assert.deepEqual(captures[1], []);
 });
 
 test("whatsapp delivery does not backfill commentary progress after a final answer exists", async () => {

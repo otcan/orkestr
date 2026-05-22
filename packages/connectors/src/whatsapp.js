@@ -13,6 +13,7 @@ import {
   localWhatsAppBridgeBasePath,
   listLocalWhatsAppChatParticipants,
   sendLocalWhatsAppText,
+  syncLocalWhatsAppTypingTargets,
 } from "./whatsapp-local-bridge.js";
 
 let whatsappDeliveryInFlight = null;
@@ -766,6 +767,49 @@ async function annotateInitialThreadQueueNotice(threadId, message, env = process
   return updateThreadMessage(threadId, message.id, { deliveryState }, env).catch(() => message);
 }
 
+function runtimeTypingActive(status = null) {
+  if (!status) return false;
+  const state = String(status.state || status.status || "").trim().toLowerCase();
+  return status.typingActive === true ||
+    status.foregroundWorking === true ||
+    status.working === true ||
+    status.backgroundWork === true ||
+    state === "working" ||
+    state === "running";
+}
+
+function latestWhatsAppTypingParent(messages = [], thread = null, state = null) {
+  return [...messages].reverse().find((message) => {
+    if (String(message?.role || "").trim().toLowerCase() !== "user") return false;
+    if (!whatsappMessageOrigin(message, state)) return false;
+    const chatId = pickString(message.chatId, thread?.binding?.chatId);
+    if (!chatId) return false;
+    const messageState = String(message.state || "").trim().toLowerCase();
+    if (messageState === "failed") return false;
+    if (completedFinalReplyForParent(messages, message.id)) return false;
+    return true;
+  }) || null;
+}
+
+function whatsappTypingTargetForThread({ thread, messages = [], status = null, state = null } = {}) {
+  if (!threadAllowsWhatsAppMirroring(thread)) return null;
+  if (!runtimeTypingActive(status)) return null;
+  const parent = latestWhatsAppTypingParent(messages, thread, state);
+  if (!parent) return null;
+  const chatId = pickString(parent.chatId, thread?.binding?.chatId);
+  if (!chatId) return null;
+  return {
+    threadId: thread?.id || null,
+    messageId: parent.id || null,
+    chatId,
+    accountId: pickString(
+      thread?.binding?.responderAccountId,
+      thread?.binding?.outboundAccountId,
+      parent.accountId,
+    ),
+  };
+}
+
 function passiveMirrorCanCompleteParent(parent, reply, chatId, state = null) {
   if (!parent || parent.role !== "user" || !whatsappMessageOrigin(parent, state)) return false;
   const parentState = String(parent.state || "").trim().toLowerCase();
@@ -990,6 +1034,21 @@ function queuedModeWhatsAppDeliveryTarget(message, thread, state) {
 
 function formatWhatsAppModeQueued(mode) {
   return `Mode switch queued. Orkestr will switch to ${mode} when Codex is ready.`;
+}
+
+export async function syncWhatsAppTypingIndicators(env = process.env, options = {}) {
+  const config = await readConnectorConfig("whatsapp", env);
+  if (bridgeMode(config, env) !== "local") return { ok: true, active: 0, skipped: "external_bridge" };
+  const state = await readWhatsAppState(env);
+  const statusImpl = options.statusImpl || runtimeStatus;
+  const syncImpl = options.syncImpl || syncLocalWhatsAppTypingTargets;
+  const targets = [];
+  for (const { threadId, thread, messages } of await listThreadMessageSets(env)) {
+    const status = await statusImpl(threadId, env, messages).catch(() => null);
+    const target = whatsappTypingTargetForThread({ thread, messages, status, state });
+    if (target) targets.push(target);
+  }
+  return syncImpl(targets, env);
 }
 
 async function deliverWhatsAppRepliesOnce(env = process.env, fetchImpl = fetch) {

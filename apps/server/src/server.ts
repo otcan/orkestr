@@ -14,7 +14,7 @@ import {
   syncRuntimeLeases,
 } from "../../../packages/core/src/runtime-leases.js";
 import { markDueTimers } from "../../../packages/core/src/timers.js";
-import { deliverWhatsAppReplies } from "../../../packages/connectors/src/whatsapp.js";
+import { deliverWhatsAppReplies, syncWhatsAppTypingIndicators } from "../../../packages/connectors/src/whatsapp.js";
 import {
   startConfiguredLocalWhatsAppAccounts,
   stopLocalWhatsAppBridge,
@@ -131,6 +131,7 @@ async function runTimerLoop() {
 async function syncRuntimeAndDeliverWhatsApp(options: { forceWhatsapp?: boolean } = {}) {
   const pendingConnectorDeliveries = consumeThreadConnectorDeliverySignalCount();
   const synced = await syncRuntimeLeases();
+  await syncWhatsAppTypingIndicators().catch(() => {});
   const connectorDeliveries = pendingConnectorDeliveries + consumeThreadConnectorDeliverySignalCount();
   if (options.forceWhatsapp || (synced.appended || 0) > 0 || connectorDeliveries > 0) {
     await deliverWhatsAppReplies().catch(() => {});

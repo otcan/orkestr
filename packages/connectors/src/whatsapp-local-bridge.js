@@ -12,6 +12,7 @@ const runtimes = new Map();
 const accountStates = new Map();
 const outboundMessageIds = new Set();
 const outboundMessageTextKeys = new Set();
+const typingSessions = new Map();
 
 function nowIso() {
   return new Date().toISOString();
@@ -338,6 +339,91 @@ function whatsappUserAgent(env = process.env) {
   ).trim();
 }
 
+function typingRefreshMs(env = process.env) {
+  const parsed = Number(env.ORKESTR_WHATSAPP_TYPING_REFRESH_MS || env.WA_TYPING_REFRESH_MS || 8000);
+  return Number.isFinite(parsed) ? Math.max(2000, parsed) : 8000;
+}
+
+function typingKey(accountId, chatId) {
+  return `${String(accountId || "").trim()}:${String(chatId || "").trim()}`;
+}
+
+async function sendChatTypingState(runtime, chatId, active) {
+  const chat = await runtime.client.getChatById(chatId);
+  if (active) {
+    await runtime.client.sendPresenceAvailable?.().catch(() => {});
+    await chat.sendStateTyping();
+    return;
+  }
+  await chat.clearState?.();
+}
+
+export async function startLocalWhatsAppTyping({ chatId = "", accountId = "", env = process.env } = {}) {
+  const selectedAccountId = accountId
+    ? normalizeAccountId(accountId, env)
+    : localWhatsAppAccountIdsForEnv(env).find((id) => accountStates.get(id)?.ready);
+  const id = String(chatId || "").trim();
+  const runtime = selectedAccountId ? runtimes.get(selectedAccountId) : null;
+  const state = selectedAccountId ? accountStates.get(selectedAccountId) : null;
+  if (!id || !runtime?.client || !state?.ready) return { ok: false, reason: !id ? "missing_chat_id" : "whatsapp_local_bridge_not_ready" };
+  const key = typingKey(selectedAccountId, id);
+  if (typingSessions.has(key)) return { ok: true, active: true, reused: true, accountId: selectedAccountId, chatId: id };
+
+  await sendChatTypingState(runtime, id, true);
+  const interval = setInterval(() => {
+    sendChatTypingState(runtime, id, true).catch((error) => {
+      appendEvent({ type: "whatsapp_local_typing_refresh_failed", accountId: selectedAccountId, chatId: id, error: error.message || String(error) }, env).catch(() => {});
+    });
+  }, typingRefreshMs(env));
+  if (typeof interval.unref === "function") interval.unref();
+  typingSessions.set(key, { accountId: selectedAccountId, chatId: id, interval });
+  await appendEvent({ type: "whatsapp_local_typing_started", accountId: selectedAccountId, chatId: id }, env).catch(() => {});
+  return { ok: true, active: true, reused: false, accountId: selectedAccountId, chatId: id };
+}
+
+export async function stopLocalWhatsAppTyping({ chatId = "", accountId = "", env = process.env } = {}) {
+  const selectedAccountId = accountId
+    ? normalizeAccountId(accountId, env)
+    : localWhatsAppAccountIdsForEnv(env).find((id) => accountStates.get(id)?.ready);
+  const id = String(chatId || "").trim();
+  if (!selectedAccountId || !id) return { ok: false, reason: "missing_target" };
+  const key = typingKey(selectedAccountId, id);
+  const session = typingSessions.get(key);
+  if (session?.interval) clearInterval(session.interval);
+  typingSessions.delete(key);
+  const runtime = runtimes.get(selectedAccountId);
+  const state = accountStates.get(selectedAccountId);
+  if (runtime?.client && state?.ready) {
+    await sendChatTypingState(runtime, id, false).catch((error) => {
+      appendEvent({ type: "whatsapp_local_typing_clear_failed", accountId: selectedAccountId, chatId: id, error: error.message || String(error) }, env).catch(() => {});
+    });
+  }
+  if (session) await appendEvent({ type: "whatsapp_local_typing_stopped", accountId: selectedAccountId, chatId: id }, env).catch(() => {});
+  return { ok: true, active: false, accountId: selectedAccountId, chatId: id };
+}
+
+export async function syncLocalWhatsAppTypingTargets(targets = [], env = process.env) {
+  const active = new Set();
+  const started = [];
+  const stopped = [];
+  for (const target of targets) {
+    const chatId = String(target?.chatId || "").trim();
+    if (!chatId) continue;
+    const accountId = target?.accountId ? normalizeAccountId(target.accountId, env) : "";
+    const selectedAccountId = accountId || localWhatsAppAccountIdsForEnv(env).find((id) => accountStates.get(id)?.ready) || "";
+    if (!selectedAccountId) continue;
+    active.add(typingKey(selectedAccountId, chatId));
+    const result = await startLocalWhatsAppTyping({ accountId: selectedAccountId, chatId, env }).catch((error) => ({ ok: false, error: error.message || String(error) }));
+    if (result?.ok && !result.reused) started.push(result);
+  }
+  for (const session of [...typingSessions.values()]) {
+    if (active.has(typingKey(session.accountId, session.chatId))) continue;
+    const result = await stopLocalWhatsAppTyping({ accountId: session.accountId, chatId: session.chatId, env });
+    if (result?.ok) stopped.push(result);
+  }
+  return { ok: true, active: active.size, started, stopped };
+}
+
 function authReadyTimeoutMs(env = process.env, options = {}) {
   const parsed = Number(options.authReadyTimeoutMs || env.WA_AUTH_READY_TIMEOUT_MS || env.WHATSAPP_AUTH_READY_TIMEOUT_MS || 180_000);
   return Number.isFinite(parsed) ? Math.max(30_000, parsed) : 180_000;
@@ -658,6 +744,9 @@ export async function startLocalWhatsAppAccount(accountId = "", env = process.en
 
 export async function logoutLocalWhatsAppAccount(accountId = "", env = process.env) {
   const normalized = normalizeAccountId(accountId, env);
+  for (const session of [...typingSessions.values()].filter((item) => item.accountId === normalized)) {
+    await stopLocalWhatsAppTyping({ accountId: session.accountId, chatId: session.chatId, env }).catch(() => {});
+  }
   const runtime = runtimes.get(normalized);
   if (runtime?.client) {
     runtime.clearAuthReadyTimer?.();
@@ -687,6 +776,10 @@ export async function logoutLocalWhatsAppAccount(accountId = "", env = process.e
 
 export async function stopLocalWhatsAppBridge(env = process.env) {
   const entries = [...runtimes.entries()];
+  for (const session of [...typingSessions.values()]) {
+    if (session?.interval) clearInterval(session.interval);
+  }
+  typingSessions.clear();
   runtimes.clear();
   await Promise.all(entries.map(async ([accountId, runtime]) => {
     if (runtime?.client) {
@@ -862,6 +955,7 @@ export async function sendLocalWhatsAppText({ chatId = "", text = "", accountId 
     error.statusCode = 400;
     throw error;
   }
+  await stopLocalWhatsAppTyping({ accountId: selectedAccountId, chatId, env }).catch(() => {});
   rememberOutboundText(selectedAccountId, chatId, text);
   const message = await runtime.client.sendMessage(chatId, text);
   rememberOutboundMessageId(message?.id?._serialized);
