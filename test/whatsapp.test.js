@@ -752,7 +752,80 @@ test("whatsapp delivery reports queued mode switches without marking the input d
   assert.equal(delivery.delivered[0].sourceMessageId, message.id);
   assert.equal(calls[0].body.to, "chat-mode-queued");
   assert.match(calls[0].body.text, /switch to code when Codex is ready/);
+  assertDebugFooter(calls[0].body.text, { messageType: "update" });
   assert.equal(messages.find((entry) => entry.id === message.id).state, "queued");
+});
+
+test("whatsapp delivery reports queued runtime inputs without marking the input delivered", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-queue-notice-"));
+  const env = { ORKESTR_HOME: home };
+  await createThread({
+    id: "thread-wa-queue-notice",
+    name: "WA Queue Notice Thread",
+    codexModel: "gpt-5.5",
+    codexReasoningEffort: "high",
+  }, env);
+  await writeConnectorConfig("whatsapp", {
+    bridgeMode: "external",
+    bridgeUrl: "http://wa.local",
+    threadRoutes: { "chat-queue-notice": "thread-wa-queue-notice" },
+  }, env);
+  const routed = await routeWhatsAppInbound({
+    eventId: "wa-queue-notice-1",
+    chatId: "chat-queue-notice",
+    accountId: "account-1",
+    text: "ship it",
+  }, env);
+  await updateThreadMessage("thread-wa-queue-notice", routed.message.id, {
+    state: "queued",
+    deliveryState: "waiting_runtime_ready",
+  }, env);
+
+  const calls = [];
+  const delivery = await deliverWhatsAppReplies(env, async (url, options) => {
+    calls.push({ url, body: JSON.parse(options.body) });
+    return response({ ok: true, ids: ["sent-queue-notice"] });
+  });
+  const duplicate = await deliverWhatsAppReplies(env, async () => {
+    throw new Error("should not resend queue notice");
+  });
+  const messages = await listThreadMessages("thread-wa-queue-notice", env);
+
+  assert.equal(delivery.delivered.length, 1);
+  assert.equal(delivery.delivered[0].deliveryType, "queue_notice");
+  assert.equal(delivery.delivered[0].sourceMessageId, routed.message.id);
+  assert.equal(duplicate.delivered.length, 0);
+  assert.equal(calls[0].body.to, "chat-queue-notice");
+  assert.match(stripDebugFooter(calls[0].body.text), /^Queued your message while Orkestr prepares this thread: "ship it"\./);
+  assertDebugFooter(calls[0].body.text, { messageType: "update", model: "gpt-5.5/h" });
+  assert.equal(messages.find((entry) => entry.id === routed.message.id).state, "queued");
+});
+
+test("whatsapp delivery reports waking queue notices", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-queue-waking-"));
+  const env = { ORKESTR_HOME: home };
+  await createThread({ id: "thread-wa-queue-waking", name: "WA Queue Waking Thread" }, env);
+  await writeConnectorConfig("whatsapp", {
+    bridgeMode: "external",
+    bridgeUrl: "http://wa.local",
+    threadRoutes: { "chat-queue-waking": "thread-wa-queue-waking" },
+  }, env);
+  const routed = await routeWhatsAppInbound({ eventId: "wa-queue-waking-1", chatId: "chat-queue-waking", text: "wake test" }, env);
+  await updateThreadMessage("thread-wa-queue-waking", routed.message.id, {
+    state: "pending_delivery",
+    deliveryState: "waiting_runtime_start",
+  }, env);
+
+  const calls = [];
+  const delivery = await deliverWhatsAppReplies(env, async (url, options) => {
+    calls.push({ url, body: JSON.parse(options.body) });
+    return response({ ok: true, ids: ["sent-queue-waking"] });
+  });
+
+  assert.equal(delivery.delivered.length, 1);
+  assert.equal(delivery.delivered[0].deliveryType, "queue_notice");
+  assert.match(stripDebugFooter(calls[0].body.text), /^Waking this Orkestr thread and queued your message: "wake test"\./);
+  assertDebugFooter(calls[0].body.text, { messageType: "update" });
 });
 
 test("whatsapp delivery forwards failed routed inputs using inbound event metadata", async () => {
@@ -793,6 +866,7 @@ test("whatsapp delivery forwards failed routed inputs using inbound event metada
   assert.equal(calls[0].body.accountId, "main");
   assert.match(calls[0].body.text, /^Delivery failed\n\nYour message could not be delivered to Codex\./);
   assert.match(calls[0].body.text, /pasted into Codex but was not accepted/);
+  assertDebugFooter(calls[0].body.text, { messageType: "update" });
 });
 
 test("whatsapp passive mirror recovers a failed thread input instead of sending a failure notice", async () => {
@@ -920,6 +994,7 @@ test("whatsapp delivery mirrors pane interruption notices", async () => {
   assert.equal(delivery.delivered.length, 1);
   assert.equal(calls[0].body.to, "chat-interruption");
   assert.match(calls[0].body.text, /^Codex pane interrupted/);
+  assertDebugFooter(calls[0].body.text, { messageType: "update" });
 });
 
 test("whatsapp delivery does not forward local failed inputs", async () => {

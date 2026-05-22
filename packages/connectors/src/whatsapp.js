@@ -627,8 +627,10 @@ function codexModeDebugValue(message = {}, thread = {}) {
 }
 
 function queueDebugCount(messages = [], currentMessage = null) {
+  const activeMessageId = pickString(currentMessage?.id);
   const activeParentId = pickString(currentMessage?.parentMessageId);
   return messages.filter((message) => {
+    if (activeMessageId && message?.id === activeMessageId) return false;
     if (activeParentId && message?.id === activeParentId) return false;
     if (String(message?.role || "").toLowerCase() !== "user") return false;
     const state = String(message?.state || "").toLowerCase();
@@ -645,8 +647,16 @@ function cpuDebugPercent() {
   return Math.max(0, Math.min(999, percent));
 }
 
-function shouldAppendWhatsAppDebugFooter(message = {}, env = process.env) {
-  return footerEnabled(env) && message.source === "codex-rollout";
+function shouldAppendWhatsAppDebugFooter(message = {}, env = process.env, deliveryType = "") {
+  if (!footerEnabled(env)) return false;
+  if (message.source === "codex-rollout" || message.source === "orkestr_runtime") return true;
+  return ["delivery_error", "mode_queued", "queue_notice"].includes(String(deliveryType || "").trim());
+}
+
+function footerMessageType(deliveryType = "") {
+  return ["progress", "queue_notice", "mode_queued", "delivery_error", "router_update"].includes(String(deliveryType || "").trim())
+    ? "update"
+    : "final";
 }
 
 function whatsappDebugFooter({ message = {}, thread = {}, messages = [], deliveryType = "final", env = process.env } = {}) {
@@ -654,7 +664,7 @@ function whatsappDebugFooter({ message = {}, thread = {}, messages = [], deliver
   const parts = [
     `m:${codexModelDebugLabel(message, thread, env)}`,
     ...(mode ? [`mode:${mode}`] : []),
-    `msg:${deliveryType === "progress" ? "update" : "final"}`,
+    `msg:${footerMessageType(deliveryType)}`,
     `q:${queueDebugCount(messages, message)}`,
     `cpu:${cpuDebugPercent()}%`,
     "help:/help",
@@ -665,7 +675,7 @@ function whatsappDebugFooter({ message = {}, thread = {}, messages = [], deliver
 
 function appendWhatsAppDebugFooter(text, options = {}) {
   const cleanText = String(text || "").trim();
-  if (!cleanText || !shouldAppendWhatsAppDebugFooter(options.message, options.env)) return cleanText;
+  if (!cleanText || !shouldAppendWhatsAppDebugFooter(options.message, options.env, options.deliveryType)) return cleanText;
   return `${cleanText}\n\n${whatsappDebugFooter(options)}`;
 }
 
@@ -866,6 +876,71 @@ function formatWhatsAppDeliveryFailure(message) {
   ].join("\n");
 }
 
+function whatsappQueueNoticeOrigin(message, thread, state) {
+  const inboundEvent = [...(state?.inboundEvents || [])]
+    .reverse()
+    .find((event) => event.messageId === message.id) || null;
+  const whatsappOrigin =
+    message.connector === "whatsapp" ||
+    message.source === "whatsapp_inbound" ||
+    Boolean(inboundEvent);
+  if (!whatsappOrigin) return null;
+  const chatId = pickString(message.chatId, inboundEvent?.chatId, thread?.binding?.chatId);
+  if (!chatId) return null;
+  return {
+    chatId,
+    accountId: pickString(
+      thread?.binding?.responderAccountId,
+      thread?.binding?.outboundAccountId,
+      message.accountId,
+      inboundEvent?.accountId,
+    ),
+  };
+}
+
+function queuedInputWhatsAppDeliveryTarget(message, thread, state) {
+  const role = String(message?.role || "").trim().toLowerCase();
+  const messageState = String(message?.state || "").trim().toLowerCase();
+  const deliveryState = String(message?.deliveryState || "").trim().toLowerCase();
+  if (role !== "user") return null;
+  if (!["queued", "pending_delivery"].includes(messageState)) return null;
+  if (![
+    "awaiting_runtime_completion",
+    "interrupting",
+    "recovering_stale_ack",
+    "retrying_delivery",
+    "waiting_runtime_ready",
+    "waiting_runtime_start",
+    "waking",
+  ].includes(deliveryState)) return null;
+  const target = whatsappQueueNoticeOrigin(message, thread, state);
+  return target ? { ...target, reason: deliveryState || messageState } : null;
+}
+
+function queueNoticePreview(message) {
+  const text = pickString(message?.text, message?.promptFile ? "message from prompt file" : "message");
+  const normalized = text.replace(/\s+/g, " ").trim();
+  return normalized.length > 120 ? `${normalized.slice(0, 117)}...` : normalized;
+}
+
+function formatWhatsAppQueueNotice(message, reason = "") {
+  const preview = queueNoticePreview(message);
+  const normalizedReason = String(reason || "").trim().toLowerCase();
+  if (["waiting_runtime_start", "waking"].includes(normalizedReason)) {
+    return `Waking this Orkestr thread and queued your message: "${preview}". It will be delivered automatically once the Codex session is awake.`;
+  }
+  if (normalizedReason === "awaiting_runtime_completion") {
+    return `Queued your latest message while current work is still running: "${preview}". It will be delivered automatically when Codex is ready.`;
+  }
+  if (normalizedReason === "interrupting") {
+    return `Interrupting Codex and queued your message: "${preview}". It will be delivered automatically when the prompt is ready.`;
+  }
+  if (["recovering_stale_ack", "retrying_delivery"].includes(normalizedReason)) {
+    return `Queued your latest message while Orkestr recovers this thread: "${preview}". It will be delivered automatically when the thread is prompt-ready.`;
+  }
+  return `Queued your message while Orkestr prepares this thread: "${preview}". It will be delivered automatically when the Codex session is prompt-ready.`;
+}
+
 function queuedModeWhatsAppDeliveryTarget(message, thread, state) {
   const role = String(message?.role || "").trim().toLowerCase();
   const messageState = String(message?.state || "").trim().toLowerCase();
@@ -929,7 +1004,13 @@ async function deliverWhatsAppRepliesOnce(env = process.env, fetchImpl = fetch) 
           continue;
         }
         const chatId = queuedModeTarget.chatId;
-        const text = formatWhatsAppModeQueued(queuedModeTarget.mode);
+        const text = appendWhatsAppDebugFooter(formatWhatsAppModeQueued(queuedModeTarget.mode), {
+          message,
+          thread,
+          messages,
+          deliveryType: "mode_queued",
+          env,
+        });
         const accountId = kind === "thread" ? queuedModeTarget.accountId : pickString(message.accountId, queuedModeTarget.accountId);
         const textKey = deliveryTextKey(chatId, `${deliveryId}\n${text}`);
         if (deliveredTextKeys.has(textKey) || batchTextKeys.has(textKey)) {
@@ -964,6 +1045,56 @@ async function deliverWhatsAppRepliesOnce(env = process.env, fetchImpl = fetch) 
         }
         continue;
       }
+      const queuedInputTarget = queuedInputWhatsAppDeliveryTarget(message, thread, state);
+      if (queuedInputTarget) {
+        const deliveryId = `${message.id}:queue_notice`;
+        if (deliveredIds.has(deliveryId)) continue;
+        if (kind === "thread" && !threadAllowsWhatsAppMirroring(thread)) {
+          skipped.push({ agentId, threadId, messageId: message.id, reason: "mirroring_disabled" });
+          continue;
+        }
+        const chatId = queuedInputTarget.chatId;
+        const text = appendWhatsAppDebugFooter(formatWhatsAppQueueNotice(message, queuedInputTarget.reason), {
+          message,
+          thread,
+          messages,
+          deliveryType: "queue_notice",
+          env,
+        });
+        const accountId = kind === "thread" ? queuedInputTarget.accountId : pickString(message.accountId, queuedInputTarget.accountId);
+        const textKey = deliveryTextKey(chatId, `${deliveryId}\n${text}`);
+        if (deliveredTextKeys.has(textKey) || batchTextKeys.has(textKey)) {
+          skipped.push({ agentId, threadId, messageId: message.id, reason: "duplicate_text" });
+          continue;
+        }
+        try {
+          const payload = await sendWhatsAppText({ chatId, text, accountId, config, env, fetchImpl });
+          const delivery = {
+            kind,
+            deliveryType: "queue_notice",
+            agentId: agentId || null,
+            threadId: threadId || null,
+            messageId: deliveryId,
+            sourceMessageId: message.id,
+            chatId,
+            accountId,
+            textKey,
+            deliveredAt: new Date().toISOString(),
+            bridgeResponse: payload,
+          };
+          outboundDeliveries.push(delivery);
+          deliveredIds.add(deliveryId);
+          deliveredTextKeys.add(textKey);
+          batchTextKeys.add(textKey);
+          delivered.push(delivery);
+          await appendEvent({ type: "whatsapp_outbound_queue_notice_delivered", agentId: agentId || null, threadId: threadId || null, messageId: message.id, chatId }, env);
+        } catch (error) {
+          const failure = { kind, agentId: agentId || null, threadId: threadId || null, messageId: message.id, chatId, error: error.message || String(error) };
+          failed.push(failure);
+          await appendEvent({ type: "whatsapp_outbound_failed", ...failure }, env);
+        }
+        continue;
+      }
       const failedDeliveryTarget = failedWhatsAppDeliveryTarget(message, thread, state);
       if (failedDeliveryTarget) {
         if (deliveredIds.has(message.id)) continue;
@@ -990,7 +1121,13 @@ async function deliverWhatsAppRepliesOnce(env = process.env, fetchImpl = fetch) 
           skipped.push({ agentId, threadId, messageId: message.id, reason: "assistant_reply_available" });
           continue;
         }
-        const text = formatWhatsAppDeliveryFailure(message);
+        const text = appendWhatsAppDebugFooter(formatWhatsAppDeliveryFailure(message), {
+          message,
+          thread,
+          messages,
+          deliveryType: "delivery_error",
+          env,
+        });
         const accountId = kind === "thread" ? failedDeliveryTarget.accountId : pickString(message.accountId, failedDeliveryTarget.accountId);
         const textKey = deliveryTextKey(chatId, `${message.id}\n${text}`);
         if (deliveredTextKeys.has(textKey) || batchTextKeys.has(textKey)) {
@@ -1113,7 +1250,7 @@ async function deliverWhatsAppRepliesOnce(env = process.env, fetchImpl = fetch) 
         message,
         thread,
         messages,
-        deliveryType: "final",
+        deliveryType: message.source === "orkestr_runtime" ? "router_update" : "final",
         env,
       });
       const accountId = kind === "thread"
