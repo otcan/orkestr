@@ -322,6 +322,13 @@ function routeAgentId(input, config) {
   );
 }
 
+function bindingAccountIds(binding = {}) {
+  return new Set([
+    pickString(binding.senderAccountId, binding.inboundAccountId),
+    pickString(binding.responderAccountId, binding.outboundAccountId),
+  ].filter(Boolean));
+}
+
 async function routeThread(input, config, env) {
   const chatId = pickString(input.chatId, input.chat?.id, input.fromChatId);
   const accountId = pickString(input.accountId);
@@ -343,13 +350,15 @@ async function routeThread(input, config, env) {
     const senderContactId = pickString(binding.senderContactId);
     const responderContactId = pickString(binding.responderContactId);
     if (senderAccountId) {
-      if (accountId && accountId !== senderAccountId) return false;
+      if (accountId && !bindingAccountIds(binding).has(accountId)) return false;
       if (!fromMe) {
-        const additionalParticipantsEnabled = binding.additionalParticipantsEnabled === true || binding.allowOtherPeopleConfirmed === true;
-        if (!additionalParticipantsEnabled) return false;
-        if (senderContactId && comparableParticipantId(from) === comparableParticipantId(senderContactId)) return false;
         if (responderContactId && comparableParticipantId(from) === comparableParticipantId(responderContactId)) return false;
-        if (!participantIdSet(binding.additionalParticipantIds).has(comparableParticipantId(from))) return false;
+        const senderContactMatches = senderContactId && comparableParticipantId(from) === comparableParticipantId(senderContactId);
+        if (!senderContactMatches) {
+          const additionalParticipantsEnabled = binding.additionalParticipantsEnabled === true || binding.allowOtherPeopleConfirmed === true;
+          if (!additionalParticipantsEnabled) return false;
+          if (!participantIdSet(binding.additionalParticipantIds).has(comparableParticipantId(from))) return false;
+        }
       }
     }
     return binding.enabled !== false &&

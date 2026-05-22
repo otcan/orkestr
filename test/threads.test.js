@@ -4240,13 +4240,16 @@ test("thread runtime sync catches recent rollout replies that predate wake curso
       name: "Rollout Lookback Thread",
       cwd: workspace,
       executor: { type: "codex", codexThreadId },
+      binding: {
+        connector: "whatsapp",
+        chatId: "120000000000000000@g.us",
+        displayName: "Rollout Lookback WhatsApp",
+        responderAccountId: "account-1",
+      },
     }, env);
     const inbound = await appendThreadMessage("rollout-lookback-thread", {
       role: "user",
-      source: "whatsapp_inbound",
-      connector: "whatsapp",
-      chatId: "120000000000000000@g.us",
-      accountId: "account-1",
+      source: "whatsapp",
       text: "stop. Can you try this?",
       createdAt: "2026-05-18T06:52:05.972Z",
     }, env);
