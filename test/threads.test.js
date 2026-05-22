@@ -304,6 +304,60 @@ test("thread wake and sleep lifecycle updates runtime leases and status", async 
   }
 });
 
+test("thread attach endpoint wakes a sleeping thread before returning tmux command", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-attach-wake-"));
+  const fakeTmux = await createFakeTmux(home);
+  const priorHome = process.env.ORKESTR_HOME;
+  const priorRuntimeHome = process.env.HOME;
+  const priorCodexHome = process.env.CODEX_HOME;
+  const priorPath = process.env.PATH;
+  const priorTmuxLog = process.env.TMUX_LOG;
+  const priorTmuxState = process.env.TMUX_STATE;
+  const priorRecoverOnStart = process.env.ORKESTR_RECOVER_RUNNING_ON_START;
+  process.env.ORKESTR_HOME = path.join(home, "orkestr-home");
+  process.env.HOME = path.join(home, "runtime-home");
+  process.env.CODEX_HOME = path.join(home, "codex-home");
+  process.env.PATH = `${fakeTmux.bin}:${priorPath || ""}`;
+  process.env.TMUX_LOG = fakeTmux.log;
+  process.env.TMUX_STATE = fakeTmux.state;
+  process.env.ORKESTR_RECOVER_RUNNING_ON_START = "0";
+
+  let server;
+  try {
+    await createThread({ id: "attach-wake-thread", name: "Attach Wake Thread" });
+    assert.equal((await runtimeStatus("attach-wake-thread")).state, "sleeping");
+    server = await startServer({ port: 0, host: "127.0.0.1" });
+    const { port } = server.address();
+
+    const response = await fetch(`http://127.0.0.1:${port}/api/threads/attach-wake-thread/attach`, {
+      method: "POST",
+    });
+    const payload = await response.json();
+    const status = await runtimeStatus("attach-wake-thread");
+    const leases = await listRuntimeLeases();
+    const log = await fs.readFile(fakeTmux.log, "utf8");
+
+    assert.equal(response.status, 200);
+    assert.equal(payload.ok, true);
+    assert.equal(payload.woke, true);
+    assert.equal(payload.runtime.sessionName, "orkestr-attach-wake-thread");
+    assert.equal(payload.attachCommand, "tmux attach-session -t orkestr-attach-wake-thread");
+    assert.equal(status.state, "ready");
+    const attachLease = leases.find((lease) => lease.threadId === "attach-wake-thread");
+    assert.equal(attachLease?.reason, "attach");
+    assert.match(log, /__CALL__\tnew-session\t-d\t-s\torkestr-attach-wake-thread/);
+  } finally {
+    if (server) await new Promise((resolve) => server.close(resolve));
+    restoreEnvValue("ORKESTR_HOME", priorHome);
+    restoreEnvValue("HOME", priorRuntimeHome);
+    restoreEnvValue("CODEX_HOME", priorCodexHome);
+    restoreEnvValue("PATH", priorPath);
+    restoreEnvValue("TMUX_LOG", priorTmuxLog);
+    restoreEnvValue("TMUX_STATE", priorTmuxState);
+    restoreEnvValue("ORKESTR_RECOVER_RUNNING_ON_START", priorRecoverOnStart);
+  }
+});
+
 test("temporary test homes use a placeholder runtime command by default", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-test-runtime-command-"));
   const fakeTmux = await createFakeTmux(home);
