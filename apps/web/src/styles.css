@@ -21,7 +21,7 @@ body {
   min-height: 100vh;
   min-height: 100dvh;
   height: 100%;
-  overflow: hidden;
+  overflow-x: hidden;
   background:
     radial-gradient(circle at top left, rgba(88, 165, 92, 0.18), transparent 30rem),
     linear-gradient(135deg, #050805 0%, #0b130b 58%, #101a12 100%);

@@ -173,10 +173,45 @@ Useful updater commands:
 ```bash
 systemctl list-timers orkestr-update.timer
 journalctl -u orkestr-update -f
+orkestr-deploy status
+orkestr update status
+sudo orkestr update --release --ref v0.1.7 --channel production
 orkestr doctor
 orkestr-update
 orkestr-reset-state
 ```
+
+### Versioned Git Releases
+
+For production-like VPS installs, prefer immutable git tags over a floating
+branch. The release deployer builds each selected ref in a fresh directory,
+writes a `release-manifest.json`, backs up `ORKESTR_HOME`, flips the active
+symlink, restarts the service, and records the result in `deployments.json`:
+
+```bash
+ORKESTR_RELEASE_DEPLOY=1 ORKESTR_UPDATE_REF=v0.1.7 orkestr-update
+# or manually:
+sudo orkestr update --release --ref v0.1.7 --channel production
+orkestr update status
+orkestr update rollback
+orkestr-deploy install --ref v0.1.7 --channel production
+orkestr-deploy status
+orkestr-deploy rollback
+```
+
+Default release layout:
+
+```text
+/opt/orkestr/releases/<release-id>/
+/opt/orkestr/current -> /opt/orkestr/releases/<release-id>
+/opt/orkestr/backups/
+/opt/orkestr/deployments.json
+```
+
+Production release deploys require an exact git tag by default. Staging/demo
+can set `ORKESTR_DEPLOY_TAGS_ONLY=0` to deploy `main` or a specific SHA. The
+running app exposes the active commit, tag/describe string, channel, release
+id, dirty flag, and deployment time from `/api/version`.
 
 Local clone flow:
 

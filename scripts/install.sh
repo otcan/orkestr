@@ -29,6 +29,10 @@ Environment:
   ORKESTR_AUTO_UPDATE       Install and enable the update watcher. Defaults to 0.
   ORKESTR_UPDATE_REF        Git branch, tag, or commit watched by the updater. Defaults to main.
   ORKESTR_UPDATE_INTERVAL_SECONDS  Update check interval. Defaults to 120.
+  ORKESTR_RELEASE_DEPLOY    Use versioned release directories for updates. Defaults to 0.
+  ORKESTR_DEPLOY_CHANNEL    Deployment channel label. Defaults to production for release deploys.
+  ORKESTR_DEPLOY_ROOT       Versioned release root. Defaults to /opt/orkestr.
+  ORKESTR_CURRENT_LINK      Active release symlink. Defaults to /opt/orkestr/current.
   ORKESTR_RESET_ON_UPDATE   Reset runtime state after successful updates. Defaults to 0.
   ORKESTR_RESET_OVERLAY     Also reset ORKESTR_OVERLAY_DIR when reset is enabled. Defaults to 0.
   ORKESTR_INSTALL_CODEX     Install Codex CLI globally in --systemd mode. Defaults to 1.
@@ -292,6 +296,10 @@ ORKESTR_CADDY_ENABLED=${ORKESTR_CADDY_ENABLED:-0}
 ORKESTR_AUTO_UPDATE=${ORKESTR_AUTO_UPDATE:-$auto_update}
 ORKESTR_UPDATE_REF=${ORKESTR_UPDATE_REF:-main}
 ORKESTR_UPDATE_INTERVAL_SECONDS=${ORKESTR_UPDATE_INTERVAL_SECONDS:-$update_interval_seconds}
+ORKESTR_RELEASE_DEPLOY=${ORKESTR_RELEASE_DEPLOY:-0}
+ORKESTR_DEPLOY_CHANNEL=${ORKESTR_DEPLOY_CHANNEL:-production}
+ORKESTR_DEPLOY_ROOT=${ORKESTR_DEPLOY_ROOT:-/opt/orkestr}
+ORKESTR_CURRENT_LINK=${ORKESTR_CURRENT_LINK:-/opt/orkestr/current}
 ORKESTR_RESET_ON_UPDATE=${ORKESTR_RESET_ON_UPDATE:-0}
 ORKESTR_RESET_OVERLAY=${ORKESTR_RESET_OVERLAY:-0}
 ORKESTR_RUNTIME_WORKSPACE_ROOT=$workspace_dir
@@ -328,11 +336,21 @@ if [ -r "$env_file" ]; then
   set +a
 fi
 app_dir="${ORKESTR_APP_DIR:-/opt/orkestr/app}"
+current_link="${ORKESTR_CURRENT_LINK:-/opt/orkestr/current}"
+if [ "${ORKESTR_RELEASE_DEPLOY:-0}" = "1" ] && [ -e "$current_link" ]; then
+  app_dir="$current_link"
+fi
+cd "$app_dir"
 run_user="${ORKESTR_RUN_USER:-}"
 if [ -z "$run_user" ] && command -v systemctl >/dev/null 2>&1; then
   run_user="$(systemctl show -p User --value "${ORKESTR_SERVICE_NAME:-orkestr}.service" 2>/dev/null || true)"
 fi
 run_user="${run_user:-orkestr}"
+case "${1:-}" in
+  update)
+    exec node "$app_dir/apps/cli/bin/orkestr-oss.js" "$@"
+    ;;
+esac
 if [ "$(id -u)" -eq 0 ] && [ "${ORKESTR_CLI_RUN_AS_ROOT:-0}" != "1" ] && id "$run_user" >/dev/null 2>&1; then
   if ! command -v runuser >/dev/null 2>&1; then
     echo "Missing required command: runuser" >&2
@@ -361,9 +379,36 @@ if [ -r "$env_file" ]; then
   set +a
 fi
 app_dir="${ORKESTR_APP_DIR:-/opt/orkestr/app}"
+current_link="${ORKESTR_CURRENT_LINK:-/opt/orkestr/current}"
+if [ "${ORKESTR_RELEASE_DEPLOY:-0}" = "1" ] && [ -e "$current_link" ]; then
+  app_dir="$current_link"
+fi
+cd "$app_dir"
 exec bash "$app_dir/scripts/update-watch.sh" "$@"
 EOF
   chmod 0755 /usr/local/bin/orkestr-update
+}
+
+write_deploy_wrapper() {
+  cat > /usr/local/bin/orkestr-deploy <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+env_file="${ORKESTR_ENV_FILE:-/etc/orkestr/orkestr.env}"
+if [ -r "$env_file" ]; then
+  set -a
+  # shellcheck disable=SC1090
+  . "$env_file"
+  set +a
+fi
+app_dir="${ORKESTR_APP_DIR:-/opt/orkestr/app}"
+current_link="${ORKESTR_CURRENT_LINK:-/opt/orkestr/current}"
+if [ "${ORKESTR_RELEASE_DEPLOY:-0}" = "1" ] && [ -e "$current_link" ]; then
+  app_dir="$current_link"
+fi
+cd "$app_dir"
+exec bash "$app_dir/scripts/deploy-git-release.sh" "$@"
+EOF
+  chmod 0755 /usr/local/bin/orkestr-deploy
 }
 
 write_reset_wrapper() {
@@ -378,6 +423,11 @@ if [ -r "$env_file" ]; then
   set +a
 fi
 app_dir="${ORKESTR_APP_DIR:-/opt/orkestr/app}"
+current_link="${ORKESTR_CURRENT_LINK:-/opt/orkestr/current}"
+if [ "${ORKESTR_RELEASE_DEPLOY:-0}" = "1" ] && [ -e "$current_link" ]; then
+  app_dir="$current_link"
+fi
+cd "$app_dir"
 exec bash "$app_dir/scripts/reset-vps-state.sh" "$@"
 EOF
   chmod 0755 /usr/local/bin/orkestr-reset-state
@@ -462,6 +512,7 @@ install_systemd_runtime() {
   chgrp "$(id -gn "$run_user")" "$env_file" || true
   write_cli_wrapper
   write_update_wrapper
+  write_deploy_wrapper
   write_reset_wrapper
   write_systemd_service
   if [ "${ORKESTR_AUTO_UPDATE:-$auto_update}" = "1" ]; then
@@ -538,6 +589,7 @@ CLI:
   orkestr --help
   orkestr security approve <challenge-id>
   orkestr-update
+  orkestr-deploy status
 
 Config:
   $env_file

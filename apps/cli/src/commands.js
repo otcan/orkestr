@@ -1,4 +1,6 @@
 import { spawn } from "node:child_process";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { startServer } from "../../server/src/server.js";
 import { approvePairingChallenge, listPairingChallenges, rejectPairingChallenge } from "../../../packages/core/src/security.js";
 import { defaultApiBase, requestJson } from "./api-client.js";
@@ -29,6 +31,7 @@ export async function runCli(argv = process.argv.slice(2), context = {}) {
     if (command === "doctor") return doctorCommand(args, ctx);
     if (command === "timers" || command === "timer") return timersCommand(args, ctx);
     if (command === "security") return securityCommand(args, ctx);
+    if (command === "update") return updateCommand(args, ctx);
     if (command === "thread") return threadCommand(args, ctx);
     if (command === "worker") return workerCommand(args, ctx);
     if (command === "attach") return attach(args, ctx);
@@ -181,6 +184,52 @@ async function securityCommand(argv, ctx) {
   if (subcommand === "approve") return approveSecurityChallenge(rest, ctx);
   if (subcommand === "reject") return rejectSecurityChallenge(rest, ctx);
   throw new Error("Usage: orkestr security [challenges|approve <challenge-id>|reject <challenge-id>] [--json]");
+}
+
+async function updateCommand(argv, ctx) {
+  const subcommand = argv[0]?.startsWith("--") ? "install" : argv[0] || "install";
+  const rest = subcommand === "install" && argv[0]?.startsWith("--") ? argv : argv.slice(1);
+  if (subcommand === "status") return updateStatusCommand(rest, ctx);
+  if (subcommand === "rollback") return updateRollbackCommand(rest, ctx);
+  if (subcommand !== "install" && subcommand !== "run") {
+    throw new Error("Usage: orkestr update [--ref ref] [--release|--in-place] [--channel name] [--no-smoke]\n       orkestr update status [--json]\n       orkestr update rollback [--to release-id]");
+  }
+  return updateInstallCommand(rest, ctx);
+}
+
+async function updateInstallCommand(argv, ctx) {
+  const ref = flagValue(argv, "--ref") || flagValue(argv, "--to") || "";
+  const channel = flagValue(argv, "--channel") || "";
+  const release = argv.includes("--release") || ctx.env.ORKESTR_RELEASE_DEPLOY === "1";
+  const inPlace = argv.includes("--in-place");
+  const checkOnly = argv.includes("--check-only");
+  const env = { ...ctx.env };
+  if (ref) {
+    env.ORKESTR_UPDATE_REF = ref;
+    env.ORKESTR_DEPLOY_REF = ref;
+  }
+  if (channel) env.ORKESTR_DEPLOY_CHANNEL = channel;
+  if (release && !inPlace) env.ORKESTR_RELEASE_DEPLOY = "1";
+  if (inPlace) env.ORKESTR_RELEASE_DEPLOY = "0";
+
+  const script = updateScriptPath(release && !inPlace ? "deploy-git-release.sh" : "update-watch.sh");
+  const args = release && !inPlace
+    ? ["install", ...(ref ? ["--ref", ref] : []), ...(channel ? ["--channel", channel] : []), ...(argv.includes("--no-smoke") ? ["--no-smoke"] : []), ...(checkOnly ? ["--check-only"] : [])]
+    : [...(checkOnly ? ["--check-only"] : [])];
+  const label = release && !inPlace ? "versioned release update" : "in-place update";
+  if (!argv.includes("--json")) ctx.stdout.write(`Starting Orkestr ${label}${ref ? ` for ${ref}` : ""}...\n`);
+  return spawnInherited(ctx.spawnImpl, "bash", [script, ...args], { env });
+}
+
+async function updateStatusCommand(argv, ctx) {
+  const script = updateScriptPath("deploy-git-release.sh");
+  return spawnInherited(ctx.spawnImpl, "bash", [script, "status", ...(argv.includes("--json") ? ["--json"] : [])], { env: ctx.env });
+}
+
+async function updateRollbackCommand(argv, ctx) {
+  const script = updateScriptPath("deploy-git-release.sh");
+  const target = flagValue(argv, "--to");
+  return spawnInherited(ctx.spawnImpl, "bash", [script, "rollback", ...(target ? ["--to", target] : [])], { env: ctx.env });
 }
 
 async function listSecurityChallenges(argv, ctx) {
@@ -349,9 +398,12 @@ function writeUsage(stream) {
   orkestr [serve] [--open] [--host 127.0.0.1] [--port 19812]
   orkestr list [--json] [--api http://127.0.0.1:19812]
   orkestr whereiam [--cwd path] [--json]
-	  orkestr doctor [system|timers|resources] [--repair] [--json]
+  orkestr doctor [system|timers|resources] [--repair] [--json]
   orkestr timers [list|doctor|run <timer-id>] [--json]
   orkestr security [challenges|approve <challenge-id>|reject <challenge-id>] [--json]
+  orkestr update [--ref ref] [--release|--in-place] [--channel name] [--no-smoke]
+  orkestr update status [--json]
+  orkestr update rollback [--to release-id]
   orkestr thread create <name> [--id id] [--cwd path] [--command command] [--executor id] [--json]
   orkestr worker create <parent-thread> [task text] [--task text] [--blank] [--label label] [--repo path] [--branch branch] [--no-wake] [--json]
   orkestr attach [thread-name-or-id] [--print] [--json]
@@ -403,8 +455,11 @@ function positional(argv) {
     "--repo",
     "--repo-path",
     "--task",
+    "--ref",
+    "--channel",
+    "--to",
   ]);
-  const flagsWithoutValues = new Set(["--blank", "--json", "--no-wake", "--print", "--open", "--repair"]);
+  const flagsWithoutValues = new Set(["--blank", "--json", "--no-wake", "--print", "--open", "--repair", "--release", "--in-place", "--no-smoke", "--check-only"]);
   for (let index = 0; index < argv.length; index += 1) {
     const value = argv[index];
     if (flagsWithoutValues.has(value)) continue;
@@ -448,9 +503,17 @@ function shellToken(value) {
   return `'${String(value).replaceAll("'", "'\\''")}'`;
 }
 
-async function spawnInherited(spawnImpl, command, args) {
+function repoRoot() {
+  return path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
+}
+
+function updateScriptPath(scriptName) {
+  return path.join(repoRoot(), "scripts", scriptName);
+}
+
+async function spawnInherited(spawnImpl, command, args, options = {}) {
   return new Promise((resolve, reject) => {
-    const child = spawnImpl(command, args, { stdio: "inherit" });
+    const child = spawnImpl(command, args, { stdio: "inherit", ...options });
     child.on("error", reject);
     child.on("exit", (code, signal) => resolve(code ?? (signal ? 128 : 1)));
   });

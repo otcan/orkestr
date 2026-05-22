@@ -1082,7 +1082,7 @@ export async function sleepThread(threadId, options = {}, env = process.env) {
 async function appendRuntimeInterruptionNotice(thread, options = {}, env = process.env) {
   const messages = await listThreadMessages(thread.id, env).catch(() => []);
   const explicitParent = options.sourceMessage && whatsappOrigin(options.sourceMessage) ? options.sourceMessage : null;
-  const whatsappParent = explicitParent || latestWhatsAppInput(messages);
+  const whatsappParent = explicitParent || latestWhatsAppInput(messages, null, thread);
   const reason = String(options.reason || "interrupt").trim() || "interrupt";
   const notice = await appendThreadMessage(thread.id, {
     role: "assistant",
@@ -1092,8 +1092,8 @@ async function appendRuntimeInterruptionNotice(thread, options = {}, env = proce
     state: "completed",
     parentMessageId: whatsappParent?.id || null,
     connector: whatsappParent ? "whatsapp" : "",
-    chatId: whatsappParent?.chatId || "",
-    accountId: whatsappParent?.accountId || "",
+    chatId: whatsappParentChatId(whatsappParent, thread),
+    accountId: whatsappParentAccountId(whatsappParent, thread),
   }, env);
   markConnectorDeliverySignal(notice);
   await appendEvent({
@@ -1101,7 +1101,7 @@ async function appendRuntimeInterruptionNotice(thread, options = {}, env = proce
     threadId: thread.id,
     messageId: notice.id,
     parentMessageId: whatsappParent?.id || null,
-    chatId: whatsappParent?.chatId || null,
+    chatId: whatsappParentChatId(whatsappParent, thread) || null,
     reason,
   }, env).catch(() => {});
   return notice;
@@ -1437,6 +1437,7 @@ function immediateThreadCommand(message) {
   if (!message || message.role !== "user") return null;
   if (!["queued", "pending_delivery"].includes(String(message.state || ""))) return null;
   const parsed = parseThreadInputCommand({ text: message.text });
+  if (parsed.command === "interrupt") return parsed;
   if (parsed.command === "stop" || parsed.command === "reset" || parsed.command === "hard_reset") return parsed;
   if ((parsed.command === "plan" || parsed.command === "code") && !parsed.text) return parsed;
   return null;
@@ -1522,7 +1523,54 @@ async function supersedeOlderCodexModeCommands(thread, messages, selected, parse
   }
 }
 
+async function completeInterruptCommand(thread, message, parsed, env = process.env) {
+  const reason = whatsappOrigin(message) ? "whatsapp_interrupt_command" : "interrupt_command";
+  const woken = await wakeThread(thread.id, { reason }, env);
+  const interrupted = await interruptRuntimeStatus(woken.status);
+  const payloadText = String(parsed.text || "").trim();
+  if (!payloadText && !String(message.promptFile || "").trim()) {
+    const updated = await updateThreadMessage(thread.id, message.id, {
+      state: "completed",
+      deliveryState: "delivered",
+      observedVia: "orkestr_interrupt_command",
+      deliveredAt: nowIso(),
+      interruptSent: interrupted,
+      error: null,
+    }, env);
+    await appendEvent({
+      type: "thread_interrupt_command",
+      threadId: thread.id,
+      messageId: message.id,
+      source: message.source || null,
+      interrupted,
+    }, env).catch(() => {});
+    return updated.id;
+  }
+
+  await updateThreadMessage(thread.id, message.id, {
+    text: payloadText,
+    state: "queued",
+    deliveryState: "interrupting",
+    observedVia: "orkestr_interrupt_command",
+    interruptSent: interrupted,
+    forceDeliveryAfterInterrupt: true,
+    error: null,
+  }, env);
+  await appendEvent({
+    type: "thread_interrupt_command_payload_queued",
+    threadId: thread.id,
+    messageId: message.id,
+    source: message.source || null,
+    interrupted,
+  }, env).catch(() => {});
+  if (interrupted) {
+    await waitForRuntimeReady(thread.id, env).catch(() => null);
+  }
+  return { interrupted };
+}
+
 async function completeImmediateThreadCommand(thread, message, parsed, env = process.env) {
+  if (parsed.command === "interrupt") return completeInterruptCommand(thread, message, parsed, env);
   if (parsed.command === "stop") return completeStopCommand(thread, message, env);
   if (parsed.command === "reset") return completeResetCommand(thread, message, false, env);
   if (parsed.command === "hard_reset") return completeResetCommand(thread, message, true, env);
@@ -1533,7 +1581,7 @@ async function completeImmediateThreadCommand(thread, message, parsed, env = pro
 }
 
 async function supersedeAwaitingAcksForControlCommand(thread, messages, controlMessage, parsed, env = process.env) {
-  if (!["stop", "reset", "hard_reset"].includes(parsed?.command)) return;
+  if (!["interrupt", "stop", "reset", "hard_reset"].includes(parsed?.command)) return;
   const controlCursor = messageCursor(controlMessage);
   const controlMs = messageTimeMs(controlMessage);
   const commandLabel = parsed.rawCommand ? `/${parsed.rawCommand}` : `/${parsed.command}`;
@@ -2103,6 +2151,25 @@ function runtimeInterruptionNoticeText(reason) {
     `${runtimeInterruptionReason(reason)}. Any in-progress Codex turn may have been stopped.`,
     "If this came from WhatsApp, wait for the pane to be ready before sending the next instruction.",
   ].join("\n");
+}
+
+function runtimeStatusNeedsInterrupt(status = null) {
+  if (!status) return false;
+  return Boolean(
+    status.working ||
+    status.foregroundWorking ||
+    status.backgroundWork ||
+    status.typingActive ||
+    Number(status.runningCount || 0) > 0,
+  );
+}
+
+async function interruptRuntimeStatus(status = null) {
+  const paneId = status?.paneId;
+  if (!paneId || !runtimeStatusNeedsInterrupt(status)) return false;
+  await execFileAsync("tmux", ["send-keys", "-t", paneId, "Escape"]).catch(() => {});
+  await execFileAsync("tmux", ["send-keys", "-t", paneId, "C-c"]).catch(() => {});
+  return true;
 }
 
 function deliveryPayloadHash(message) {
@@ -2885,10 +2952,13 @@ export async function deliverPendingThreadInputs(threadId, env = process.env) {
         .map((message) => ({ message, parsed: immediateThreadCommand(message) }))
         .filter((item) => item.parsed);
       const priorityImmediate = immediateCandidates.find((item) => ["stop", "reset", "hard_reset"].includes(item.parsed.command));
+      const interruptImmediate = [...immediateCandidates]
+        .reverse()
+        .find((item) => item.parsed.command === "interrupt");
       const modeImmediate = [...immediateCandidates]
         .reverse()
         .find((item) => item.parsed.command === "plan" || item.parsed.command === "code");
-      const immediate = priorityImmediate || modeImmediate || immediateCandidates[0];
+      const immediate = priorityImmediate || interruptImmediate || modeImmediate || immediateCandidates[0];
       if (immediate) {
         await supersedeAwaitingAcksForControlCommand(thread, messages, immediate.message, immediate.parsed, env);
         await supersedeOlderCodexModeCommands(thread, messages, immediate.message, immediate.parsed, env);
@@ -3011,6 +3081,9 @@ export async function deliverPendingThreadInputs(threadId, env = process.env) {
           status = await cancelNeedInputForRawDelivery(thread, currentNext, pendingNeedInput, needInputStatus, env);
         }
         if (!status) status = await waitForRuntimeReady(thread.id, env);
+        if (currentNext.forceDeliveryAfterInterrupt && (!status?.promptReady || status.working)) {
+          status = await waitForRuntimeReady(thread.id, env).catch(() => status);
+        }
         const attempt = await sendThreadInputToPane(thread, currentNext, status, env);
         const acknowledged = await waitForThreadInputAck(thread, currentNext.id, env);
         if (acknowledged) {
@@ -3168,14 +3241,23 @@ function parseAssistantRolloutMessages(body, threadId, baseOffset = 0) {
   return messages.map(({ sourceFormat, ...message }) => message);
 }
 
-function latestWhatsAppInput(messages = [], beforeTimestamp = null) {
+function latestWhatsAppInput(messages = [], beforeTimestamp = null, thread = null) {
   const beforeMs = beforeTimestamp ? timestampMs(beforeTimestamp) : 0;
   return [...messages].reverse().find((message) =>
     message?.role === "user" &&
     whatsappOrigin(message) &&
-    String(message.chatId || "").trim() &&
+    String(message.chatId || thread?.binding?.chatId || "").trim() &&
     (!beforeMs || timestampMs(message.timestamp || message.createdAt) <= beforeMs + 1000),
   ) || null;
+}
+
+function whatsappParentChatId(parent = null, thread = null) {
+  return String(parent?.chatId || thread?.binding?.chatId || "").trim();
+}
+
+function whatsappParentAccountId(parent = null, thread = null) {
+  const binding = thread?.binding || {};
+  return String(parent?.accountId || binding.responderAccountId || binding.outboundAccountId || "").trim();
 }
 
 async function syncLeaseRollout(lease, env = process.env) {
@@ -3245,7 +3327,7 @@ async function syncLeaseRollout(lease, env = process.env) {
     const eventKey = rolloutMessageEventKey(message);
     const textKey = rolloutMessageNearTextKey(message);
     if (existingEventKeys.has(eventKey) || existingTextKeys.has(textKey)) continue;
-    const whatsappParent = latestWhatsAppInput(existing, message.timestamp);
+    const whatsappParent = latestWhatsAppInput(existing, message.timestamp, thread);
     await appendThreadMessage(lease.threadId, {
       role: "assistant",
       source: message.source,
@@ -3257,8 +3339,8 @@ async function syncLeaseRollout(lease, env = process.env) {
       eventId: message.eventId,
       parentMessageId: whatsappParent?.id || null,
       connector: whatsappParent ? "whatsapp" : "",
-      chatId: whatsappParent?.chatId || "",
-      accountId: whatsappParent?.accountId || "",
+      chatId: whatsappParentChatId(whatsappParent, thread),
+      accountId: whatsappParentAccountId(whatsappParent, thread),
     }, env);
     existingEventKeys.add(eventKey);
     existingTextKeys.add(textKey);

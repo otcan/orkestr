@@ -17,6 +17,7 @@ test("install script exposes a host-native systemd VPS path", async () => {
   assert.match(script, /\/etc\/orkestr\/orkestr\.env/);
   assert.match(script, /\/usr\/local\/bin\/orkestr/);
   assert.match(script, /\/usr\/local\/bin\/orkestr-update/);
+  assert.match(script, /\/usr\/local\/bin\/orkestr-deploy/);
   assert.match(script, /\/usr\/local\/bin\/orkestr-reset-state/);
   assert.match(script, /ORKESTR_RUN_USER=\$run_user/);
   assert.match(script, /\$\{service_name\}\.service/);
@@ -24,6 +25,10 @@ test("install script exposes a host-native systemd VPS path", async () => {
   assert.match(script, /ORKESTR_GIT_REF/);
   assert.match(script, /ORKESTR_AUTO_UPDATE/);
   assert.match(script, /ORKESTR_UPDATE_REF/);
+  assert.match(script, /ORKESTR_RELEASE_DEPLOY/);
+  assert.match(script, /ORKESTR_CURRENT_LINK/);
+  assert.match(script, /ORKESTR_DEPLOY_ROOT/);
+  assert.match(script, /ORKESTR_DEPLOY_CHANNEL/);
   assert.match(script, /ORKESTR_UPDATE_INTERVAL_SECONDS/);
   assert.match(script, /ORKESTR_RESET_ON_UPDATE=\$\{ORKESTR_RESET_ON_UPDATE:-0\}/);
   assert.match(script, /ORKESTR_RESET_OVERLAY=\$\{ORKESTR_RESET_OVERLAY:-0\}/);
@@ -38,6 +43,7 @@ test("install script exposes a host-native systemd VPS path", async () => {
   assert.match(script, /checkout_git_ref/);
   assert.match(script, /remote set-url origin "\$repo_url"/);
   assert.match(script, /write_update_units/);
+  assert.match(script, /write_deploy_wrapper/);
   assert.match(script, /write_reset_wrapper/);
   assert.match(script, /\$\{service_name\}\.timer/);
   assert.match(script, /ORKESTR_AUTH_REQUIRED=\$\{ORKESTR_AUTH_REQUIRED:-1\}/);
@@ -46,6 +52,8 @@ test("install script exposes a host-native systemd VPS path", async () => {
   assert.match(script, /npm install -g "@openai\/codex@\$\{ORKESTR_CODEX_VERSION:-0\.130\.0\}"/);
   assert.match(script, /runuser -u "\$run_user" --preserve-environment -- node/);
   assert.match(script, /ORKESTR_CLI_RUN_AS_ROOT/);
+  assert.match(script, /case "\$\{1:-\}" in/);
+  assert.match(script, /update\)/);
   assert.match(script, /ExecStart=\/usr\/local\/bin\/orkestr serve/);
   assert.match(script, /ExecStart=\/usr\/local\/bin\/orkestr-update/);
   assert.match(script, /systemctl restart "\$\{service_name\}\.service"/);

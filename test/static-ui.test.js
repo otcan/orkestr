@@ -5,6 +5,12 @@ import path from "node:path";
 import test from "node:test";
 import { startServer } from "../apps/server/src/server.js";
 
+function assertAngularShell(html) {
+  assert.match(html, /<ork-root(?:\s|>)/);
+  assert.ok(html.includes("Loading Orkestr"));
+  assert.match(html, /src="main[^"]*\.js"/);
+}
+
 test("server serves the built Angular UI at root", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-static-ui-"));
   const priorHome = process.env.ORKESTR_HOME;
@@ -28,9 +34,9 @@ test("server serves the built Angular UI at root", async () => {
     const googleMarketingStartHtml = await googleMarketingStartResponse.text();
 
     assert.equal(response.status, 200);
-    assert.ok(html.includes("<ork-root></ork-root>"));
+    assertAngularShell(html);
     assert.equal(onboardingResponse.status, 200);
-    assert.ok(onboardingHtml.includes("<ork-root></ork-root>"));
+    assertAngularShell(onboardingHtml);
     assert.equal(setupGmailResponse.status, 200);
     assert.equal(setupGoogleMarketingResponse.status, 200);
     assert.equal(workflowOnboardingResponse.status, 200);
@@ -39,7 +45,7 @@ test("server serves the built Angular UI at root", async () => {
     assert.equal(threadResponse.status, 200);
     assert.equal(googleMarketingStartResponse.status, 500);
     assert.ok(googleMarketingStartHtml.includes("Google Marketing auth failed"));
-    assert.ok(!googleMarketingStartHtml.includes("<ork-root></ork-root>"));
+    assert.doesNotMatch(googleMarketingStartHtml, /<ork-root(?:\s|>)/);
   } finally {
     await new Promise((resolve) => server.close(resolve));
     if (priorHome === undefined) delete process.env.ORKESTR_HOME;
@@ -47,4 +53,14 @@ test("server serves the built Angular UI at root", async () => {
     if (priorOverlay === undefined) delete process.env.ORKESTR_OVERLAY_DIR;
     else process.env.ORKESTR_OVERLAY_DIR = priorOverlay;
   }
+});
+
+test("global shell keeps onboarding footer reachable", async () => {
+  const styles = await fs.readFile("apps/web/src/styles.css", "utf8");
+  const onboardingTemplate = await fs.readFile("apps/web/src/app/onboarding-page.component.html", "utf8");
+  const bodyBlock = styles.match(/body\s*{[^}]*}/)?.[0] || "";
+
+  assert.match(onboardingTemplate, /<footer class="setup-nav">/);
+  assert.doesNotMatch(bodyBlock, /overflow:\s*hidden/);
+  assert.match(styles, /\.app-shell\s*{[^}]*overflow:\s*hidden/s);
 });

@@ -333,6 +333,83 @@ test("CLI resets and hard-resets threads through the public API", async () => {
   assert.match(hardResetOut.text(), /Hard reset Demo/);
 });
 
+test("CLI update can run the versioned release deployer", async () => {
+  const stdout = capture();
+  const spawned = [];
+  const code = await runCli(["update", "--release", "--ref", "v0.1.0-alpha.10", "--channel", "stage", "--no-smoke"], {
+    env: {},
+    stdout,
+    stderr: capture(),
+    spawnImpl(command, args, options) {
+      spawned.push({ command, args, env: options.env });
+      const child = new EventEmitter();
+      queueMicrotask(() => child.emit("exit", 0));
+      return child;
+    },
+  });
+
+  assert.equal(code, 0);
+  assert.equal(spawned.length, 1);
+  assert.equal(spawned[0].command, "bash");
+  assert.match(spawned[0].args[0], /scripts\/deploy-git-release\.sh$/);
+  assert.deepEqual(spawned[0].args.slice(1), ["install", "--ref", "v0.1.0-alpha.10", "--channel", "stage", "--no-smoke"]);
+  assert.equal(spawned[0].env.ORKESTR_RELEASE_DEPLOY, "1");
+  assert.equal(spawned[0].env.ORKESTR_DEPLOY_REF, "v0.1.0-alpha.10");
+  assert.equal(spawned[0].env.ORKESTR_DEPLOY_CHANNEL, "stage");
+  assert.match(stdout.text(), /versioned release update for v0\.1\.0-alpha\.10/);
+});
+
+test("CLI update can run the in-place watcher", async () => {
+  const spawned = [];
+  const code = await runCli(["update", "--in-place", "--ref", "main"], {
+    env: { ORKESTR_RELEASE_DEPLOY: "1" },
+    stdout: capture(),
+    stderr: capture(),
+    spawnImpl(command, args, options) {
+      spawned.push({ command, args, env: options.env });
+      const child = new EventEmitter();
+      queueMicrotask(() => child.emit("exit", 0));
+      return child;
+    },
+  });
+
+  assert.equal(code, 0);
+  assert.equal(spawned[0].command, "bash");
+  assert.match(spawned[0].args[0], /scripts\/update-watch\.sh$/);
+  assert.deepEqual(spawned[0].args.slice(1), []);
+  assert.equal(spawned[0].env.ORKESTR_RELEASE_DEPLOY, "0");
+  assert.equal(spawned[0].env.ORKESTR_UPDATE_REF, "main");
+});
+
+test("CLI update status and rollback forward to the release deployer", async () => {
+  const spawned = [];
+  const spawnImpl = (command, args, options) => {
+    spawned.push({ command, args, env: options.env });
+    const child = new EventEmitter();
+    queueMicrotask(() => child.emit("exit", 0));
+    return child;
+  };
+  const statusCode = await runCli(["update", "status", "--json"], {
+    env: {},
+    stdout: capture(),
+    stderr: capture(),
+    spawnImpl,
+  });
+  const rollbackCode = await runCli(["update", "rollback", "--to", "v0.1.0-alpha.9"], {
+    env: {},
+    stdout: capture(),
+    stderr: capture(),
+    spawnImpl,
+  });
+
+  assert.equal(statusCode, 0);
+  assert.equal(rollbackCode, 0);
+  assert.match(spawned[0].args[0], /scripts\/deploy-git-release\.sh$/);
+  assert.deepEqual(spawned[0].args.slice(1), ["status", "--json"]);
+  assert.match(spawned[1].args[0], /scripts\/deploy-git-release\.sh$/);
+  assert.deepEqual(spawned[1].args.slice(1), ["rollback", "--to", "v0.1.0-alpha.9"]);
+});
+
 test("CLI attach can select a thread and print the tmux command", async () => {
   const stdout = capture();
   const selected = { id: "thread-1", name: "Demo", state: "ready" };

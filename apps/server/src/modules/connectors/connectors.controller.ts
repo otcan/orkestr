@@ -149,7 +149,7 @@ export class ConnectorsController {
   }
 
   @Get("whatsapp/bridge/qr.svg")
-  async whatsappBridgeQr(@Query("accountId") accountId = "account-1", @Res() response: any) {
+  async whatsappBridgeQr(@Query("accountId") accountId = "", @Res() response: any) {
     const svg = await getLocalWhatsAppQrSvg(accountId);
     if (!svg) {
       return response

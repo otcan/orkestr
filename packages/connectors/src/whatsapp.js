@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import crypto from "node:crypto";
+import os from "node:os";
 import { enqueueAgentMessage, updateAgentMessage } from "../../core/src/messages.js";
 import { enqueueThreadInput, listThreadMessages, listThreads, updateThreadMessage } from "../../core/src/threads.js";
 import { dataPaths, ensureDataDirs } from "../../storage/src/paths.js";
@@ -242,7 +243,7 @@ export async function getWhatsAppStatus(env = process.env, fetchImpl = fetch) {
   }
 }
 
-export async function getWhatsAppChatParticipants({ accountId = "account-1", chatId = "" } = {}, env = process.env, fetchImpl = fetch) {
+export async function getWhatsAppChatParticipants({ accountId = "", chatId = "" } = {}, env = process.env, fetchImpl = fetch) {
   const id = pickString(chatId);
   if (!id) throw badRequest("whatsapp_chat_id_required");
   const config = await readConnectorConfig("whatsapp", env);
@@ -322,6 +323,13 @@ function routeAgentId(input, config) {
   );
 }
 
+function bindingAccountIds(binding = {}) {
+  return new Set([
+    pickString(binding.senderAccountId, binding.inboundAccountId),
+    pickString(binding.responderAccountId, binding.outboundAccountId),
+  ].filter(Boolean));
+}
+
 async function routeThread(input, config, env) {
   const chatId = pickString(input.chatId, input.chat?.id, input.fromChatId);
   const accountId = pickString(input.accountId);
@@ -343,13 +351,15 @@ async function routeThread(input, config, env) {
     const senderContactId = pickString(binding.senderContactId);
     const responderContactId = pickString(binding.responderContactId);
     if (senderAccountId) {
-      if (accountId && accountId !== senderAccountId) return false;
+      if (accountId && !bindingAccountIds(binding).has(accountId)) return false;
       if (!fromMe) {
-        const additionalParticipantsEnabled = binding.additionalParticipantsEnabled === true || binding.allowOtherPeopleConfirmed === true;
-        if (!additionalParticipantsEnabled) return false;
-        if (senderContactId && comparableParticipantId(from) === comparableParticipantId(senderContactId)) return false;
         if (responderContactId && comparableParticipantId(from) === comparableParticipantId(responderContactId)) return false;
-        if (!participantIdSet(binding.additionalParticipantIds).has(comparableParticipantId(from))) return false;
+        const senderContactMatches = senderContactId && comparableParticipantId(from) === comparableParticipantId(senderContactId);
+        if (!senderContactMatches) {
+          const additionalParticipantsEnabled = binding.additionalParticipantsEnabled === true || binding.allowOtherPeopleConfirmed === true;
+          if (!additionalParticipantsEnabled) return false;
+          if (!participantIdSet(binding.additionalParticipantIds).has(comparableParticipantId(from))) return false;
+        }
       }
     }
     return binding.enabled !== false &&
@@ -565,6 +575,109 @@ export function formatWhatsAppOutboundText(value) {
   return formatted.join("\n").trim();
 }
 
+function footerEnabled(env = process.env) {
+  const value = String(env.ORKESTR_WHATSAPP_DEBUG_FOOTER ?? "1").trim().toLowerCase();
+  return !["0", "false", "off", "no"].includes(value);
+}
+
+function shortReasoningEffort(value) {
+  const effort = pickString(value).toLowerCase();
+  if (!effort) return "";
+  if (effort === "xhigh" || effort === "extra-high" || effort === "extra_high") return "xh";
+  if (effort === "high") return "h";
+  if (effort === "medium") return "m";
+  if (effort === "low") return "l";
+  return effort.replace(/\s+/g, "-").slice(0, 8);
+}
+
+function codexModelDebugLabel(message = {}, thread = {}, env = process.env) {
+  const metadata = thread?.executor?.metadata && typeof thread.executor.metadata === "object" ? thread.executor.metadata : {};
+  const model = pickString(
+    message.codexModel,
+    message.model,
+    thread.codexModel,
+    metadata.codexModel,
+    env.ORKESTR_DEFAULT_CODEX_MODEL,
+    env.OPENAI_MODEL,
+    "unknown",
+  );
+  const effort = shortReasoningEffort(
+    pickString(
+      message.codexReasoningEffort,
+      message.reasoningEffort,
+      thread.codexReasoningEffort,
+      metadata.codexReasoningEffort,
+      env.ORKESTR_DEFAULT_CODEX_REASONING,
+      env.OPENAI_REASONING_EFFORT,
+    ),
+  );
+  return effort ? `${model}/${effort}` : model;
+}
+
+function codexModeDebugValue(message = {}, thread = {}) {
+  const mode = pickString(
+    message.codexModeLive,
+    thread.codexModeLive,
+    thread.runtime?.progress?.codexMode,
+    thread.runtime?.codexMode,
+    thread.codexModeSource === "runtime-pane" ? thread.codexMode : "",
+  ).toLowerCase();
+  return mode === "plan" ? "plan" : "";
+}
+
+function queueDebugCount(messages = [], currentMessage = null) {
+  const activeMessageId = pickString(currentMessage?.id);
+  const activeParentId = pickString(currentMessage?.parentMessageId);
+  return messages.filter((message) => {
+    if (activeMessageId && message?.id === activeMessageId) return false;
+    if (activeParentId && message?.id === activeParentId) return false;
+    if (String(message?.role || "").toLowerCase() !== "user") return false;
+    const state = String(message?.state || "").toLowerCase();
+    const deliveryState = String(message?.deliveryState || "").toLowerCase();
+    return ["queued", "pending_delivery"].includes(state) ||
+      ["waiting_runtime_ready", "waiting_runtime_start", "retrying_delivery"].includes(deliveryState);
+  }).length;
+}
+
+function cpuDebugPercent() {
+  const cpuCount = os.cpus().length || 1;
+  const percent = Math.round(((os.loadavg()[0] || 0) / cpuCount) * 100);
+  if (!Number.isFinite(percent)) return 0;
+  return Math.max(0, Math.min(999, percent));
+}
+
+function shouldAppendWhatsAppDebugFooter(message = {}, env = process.env, deliveryType = "") {
+  if (!footerEnabled(env)) return false;
+  if (message.source === "codex-rollout" || message.source === "orkestr_runtime") return true;
+  return ["delivery_error", "mode_queued", "queue_notice"].includes(String(deliveryType || "").trim());
+}
+
+function footerMessageType(deliveryType = "") {
+  return ["progress", "queue_notice", "mode_queued", "delivery_error", "router_update"].includes(String(deliveryType || "").trim())
+    ? "update"
+    : "final";
+}
+
+function whatsappDebugFooter({ message = {}, thread = {}, messages = [], deliveryType = "final", env = process.env } = {}) {
+  const mode = codexModeDebugValue(message, thread);
+  const parts = [
+    `m:${codexModelDebugLabel(message, thread, env)}`,
+    ...(mode ? [`mode:${mode}`] : []),
+    `msg:${footerMessageType(deliveryType)}`,
+    `q:${queueDebugCount(messages, message)}`,
+    `cpu:${cpuDebugPercent()}%`,
+    "help:/help",
+    ...(mode === "plan" ? ["switch:/code"] : []),
+  ];
+  return `dbg: ${parts.join(" · ")}`;
+}
+
+function appendWhatsAppDebugFooter(text, options = {}) {
+  const cleanText = String(text || "").trim();
+  if (!cleanText || !shouldAppendWhatsAppDebugFooter(options.message, options.env, options.deliveryType)) return cleanText;
+  return `${cleanText}\n\n${whatsappDebugFooter(options)}`;
+}
+
 function deliveryTextKey(chatId, text) {
   return crypto
     .createHash("sha256")
@@ -579,6 +692,47 @@ function shouldMirrorWhatsAppReply(message) {
     return !phase || ["final_answer", "need_input", "awaiting_input", "question", "request_user_input"].includes(phase);
   }
   return true;
+}
+
+function shouldMirrorWhatsAppProgress(message) {
+  if (message.source !== "codex-rollout") return false;
+  const phase = String(message.phase || "").trim().toLowerCase();
+  return phase === "commentary" && !hasProposedPlanEnvelope(message.text) && Boolean(pickString(message.text));
+}
+
+function progressMirrorIntervalMs(env = process.env) {
+  const value = Number(env.ORKESTR_WHATSAPP_PROGRESS_MIN_INTERVAL_MS || 60_000);
+  return Number.isFinite(value) && value >= 0 ? value : 60_000;
+}
+
+function latestProgressReplyForParent(messages, parentId) {
+  return [...messages]
+    .reverse()
+    .find((candidate) =>
+      candidate.role === "assistant" &&
+      candidate.state === "completed" &&
+      candidate.parentMessageId === parentId &&
+      shouldMirrorWhatsAppProgress(candidate)
+    ) || null;
+}
+
+function completedFinalReplyForParent(messages, parentId) {
+  return messages.find((candidate) =>
+    candidate.role === "assistant" &&
+    candidate.state === "completed" &&
+    candidate.parentMessageId === parentId &&
+    shouldMirrorWhatsAppReply(candidate)
+  ) || null;
+}
+
+function latestProgressDelivery(outboundDeliveries, parentMessageId, chatId) {
+  return [...(outboundDeliveries || [])]
+    .reverse()
+    .find((delivery) =>
+      delivery.deliveryType === "progress" &&
+      delivery.parentMessageId === parentMessageId &&
+      (!chatId || delivery.chatId === chatId)
+    ) || null;
 }
 
 function threadAllowsWhatsAppMirroring(thread) {
@@ -721,6 +875,71 @@ function formatWhatsAppDeliveryFailure(message) {
   ].join("\n");
 }
 
+function whatsappQueueNoticeOrigin(message, thread, state) {
+  const inboundEvent = [...(state?.inboundEvents || [])]
+    .reverse()
+    .find((event) => event.messageId === message.id) || null;
+  const whatsappOrigin =
+    message.connector === "whatsapp" ||
+    message.source === "whatsapp_inbound" ||
+    Boolean(inboundEvent);
+  if (!whatsappOrigin) return null;
+  const chatId = pickString(message.chatId, inboundEvent?.chatId, thread?.binding?.chatId);
+  if (!chatId) return null;
+  return {
+    chatId,
+    accountId: pickString(
+      thread?.binding?.responderAccountId,
+      thread?.binding?.outboundAccountId,
+      message.accountId,
+      inboundEvent?.accountId,
+    ),
+  };
+}
+
+function queuedInputWhatsAppDeliveryTarget(message, thread, state) {
+  const role = String(message?.role || "").trim().toLowerCase();
+  const messageState = String(message?.state || "").trim().toLowerCase();
+  const deliveryState = String(message?.deliveryState || "").trim().toLowerCase();
+  if (role !== "user") return null;
+  if (!["queued", "pending_delivery"].includes(messageState)) return null;
+  if (![
+    "awaiting_runtime_completion",
+    "interrupting",
+    "recovering_stale_ack",
+    "retrying_delivery",
+    "waiting_runtime_ready",
+    "waiting_runtime_start",
+    "waking",
+  ].includes(deliveryState)) return null;
+  const target = whatsappQueueNoticeOrigin(message, thread, state);
+  return target ? { ...target, reason: deliveryState || messageState } : null;
+}
+
+function queueNoticePreview(message) {
+  const text = pickString(message?.text, message?.promptFile ? "message from prompt file" : "message");
+  const normalized = text.replace(/\s+/g, " ").trim();
+  return normalized.length > 120 ? `${normalized.slice(0, 117)}...` : normalized;
+}
+
+function formatWhatsAppQueueNotice(message, reason = "") {
+  const preview = queueNoticePreview(message);
+  const normalizedReason = String(reason || "").trim().toLowerCase();
+  if (["waiting_runtime_start", "waking"].includes(normalizedReason)) {
+    return `Waking this Orkestr thread and queued your message: "${preview}". It will be delivered automatically once the Codex session is awake.`;
+  }
+  if (normalizedReason === "awaiting_runtime_completion") {
+    return `Queued your latest message while current work is still running: "${preview}". It will be delivered automatically when Codex is ready.`;
+  }
+  if (normalizedReason === "interrupting") {
+    return `Interrupting Codex and queued your message: "${preview}". It will be delivered automatically when the prompt is ready.`;
+  }
+  if (["recovering_stale_ack", "retrying_delivery"].includes(normalizedReason)) {
+    return `Queued your latest message while Orkestr recovers this thread: "${preview}". It will be delivered automatically when the thread is prompt-ready.`;
+  }
+  return `Queued your message while Orkestr prepares this thread: "${preview}". It will be delivered automatically when the Codex session is prompt-ready.`;
+}
+
 function queuedModeWhatsAppDeliveryTarget(message, thread, state) {
   const role = String(message?.role || "").trim().toLowerCase();
   const messageState = String(message?.state || "").trim().toLowerCase();
@@ -784,7 +1003,13 @@ async function deliverWhatsAppRepliesOnce(env = process.env, fetchImpl = fetch) 
           continue;
         }
         const chatId = queuedModeTarget.chatId;
-        const text = formatWhatsAppModeQueued(queuedModeTarget.mode);
+        const text = appendWhatsAppDebugFooter(formatWhatsAppModeQueued(queuedModeTarget.mode), {
+          message,
+          thread,
+          messages,
+          deliveryType: "mode_queued",
+          env,
+        });
         const accountId = kind === "thread" ? queuedModeTarget.accountId : pickString(message.accountId, queuedModeTarget.accountId);
         const textKey = deliveryTextKey(chatId, `${deliveryId}\n${text}`);
         if (deliveredTextKeys.has(textKey) || batchTextKeys.has(textKey)) {
@@ -819,6 +1044,56 @@ async function deliverWhatsAppRepliesOnce(env = process.env, fetchImpl = fetch) 
         }
         continue;
       }
+      const queuedInputTarget = queuedInputWhatsAppDeliveryTarget(message, thread, state);
+      if (queuedInputTarget) {
+        const deliveryId = `${message.id}:queue_notice`;
+        if (deliveredIds.has(deliveryId)) continue;
+        if (kind === "thread" && !threadAllowsWhatsAppMirroring(thread)) {
+          skipped.push({ agentId, threadId, messageId: message.id, reason: "mirroring_disabled" });
+          continue;
+        }
+        const chatId = queuedInputTarget.chatId;
+        const text = appendWhatsAppDebugFooter(formatWhatsAppQueueNotice(message, queuedInputTarget.reason), {
+          message,
+          thread,
+          messages,
+          deliveryType: "queue_notice",
+          env,
+        });
+        const accountId = kind === "thread" ? queuedInputTarget.accountId : pickString(message.accountId, queuedInputTarget.accountId);
+        const textKey = deliveryTextKey(chatId, `${deliveryId}\n${text}`);
+        if (deliveredTextKeys.has(textKey) || batchTextKeys.has(textKey)) {
+          skipped.push({ agentId, threadId, messageId: message.id, reason: "duplicate_text" });
+          continue;
+        }
+        try {
+          const payload = await sendWhatsAppText({ chatId, text, accountId, config, env, fetchImpl });
+          const delivery = {
+            kind,
+            deliveryType: "queue_notice",
+            agentId: agentId || null,
+            threadId: threadId || null,
+            messageId: deliveryId,
+            sourceMessageId: message.id,
+            chatId,
+            accountId,
+            textKey,
+            deliveredAt: new Date().toISOString(),
+            bridgeResponse: payload,
+          };
+          outboundDeliveries.push(delivery);
+          deliveredIds.add(deliveryId);
+          deliveredTextKeys.add(textKey);
+          batchTextKeys.add(textKey);
+          delivered.push(delivery);
+          await appendEvent({ type: "whatsapp_outbound_queue_notice_delivered", agentId: agentId || null, threadId: threadId || null, messageId: message.id, chatId }, env);
+        } catch (error) {
+          const failure = { kind, agentId: agentId || null, threadId: threadId || null, messageId: message.id, chatId, error: error.message || String(error) };
+          failed.push(failure);
+          await appendEvent({ type: "whatsapp_outbound_failed", ...failure }, env);
+        }
+        continue;
+      }
       const failedDeliveryTarget = failedWhatsAppDeliveryTarget(message, thread, state);
       if (failedDeliveryTarget) {
         if (deliveredIds.has(message.id)) continue;
@@ -845,7 +1120,13 @@ async function deliverWhatsAppRepliesOnce(env = process.env, fetchImpl = fetch) 
           skipped.push({ agentId, threadId, messageId: message.id, reason: "assistant_reply_available" });
           continue;
         }
-        const text = formatWhatsAppDeliveryFailure(message);
+        const text = appendWhatsAppDebugFooter(formatWhatsAppDeliveryFailure(message), {
+          message,
+          thread,
+          messages,
+          deliveryType: "delivery_error",
+          env,
+        });
         const accountId = kind === "thread" ? failedDeliveryTarget.accountId : pickString(message.accountId, failedDeliveryTarget.accountId);
         const textKey = deliveryTextKey(chatId, `${message.id}\n${text}`);
         if (deliveredTextKeys.has(textKey) || batchTextKeys.has(textKey)) {
@@ -880,6 +1161,80 @@ async function deliverWhatsAppRepliesOnce(env = process.env, fetchImpl = fetch) 
         continue;
       }
       if (message.role !== "assistant" || message.state !== "completed" || deliveredIds.has(message.id)) continue;
+      if (shouldMirrorWhatsAppProgress(message)) {
+        const parent = messages.find((entry) => entry.id === message.parentMessageId);
+        const whatsappOrigin = parent?.connector === "whatsapp" || parent?.source === "whatsapp_inbound" || message.connector === "whatsapp";
+        if (!whatsappOrigin) continue;
+        if (kind === "thread" && !threadAllowsWhatsAppMirroring(thread)) {
+          skipped.push({ agentId, threadId, messageId: message.id, reason: "mirroring_disabled" });
+          continue;
+        }
+        if (completedFinalReplyForParent(messages, message.parentMessageId)) {
+          skipped.push({ agentId, threadId, messageId: message.id, reason: "final_reply_available" });
+          continue;
+        }
+        const latestProgress = latestProgressReplyForParent(messages, message.parentMessageId);
+        if (latestProgress?.id !== message.id) {
+          skipped.push({ agentId, threadId, messageId: message.id, reason: "superseded_progress" });
+          continue;
+        }
+
+        const chatId = pickString(message.chatId, parent?.chatId);
+        const accountId = kind === "thread"
+          ? pickString(thread?.binding?.responderAccountId, thread?.binding?.outboundAccountId, message.accountId, parent?.accountId)
+          : pickString(message.accountId, parent?.accountId);
+        const text = appendWhatsAppDebugFooter(formatWhatsAppOutboundText(pickString(message.text)), {
+          message,
+          thread,
+          messages,
+          deliveryType: "progress",
+          env,
+        });
+        if (!chatId || !text) {
+          skipped.push({ agentId, threadId, messageId: message.id, reason: !chatId ? "missing_chat_id" : "missing_text" });
+          continue;
+        }
+
+        const lastProgress = latestProgressDelivery(outboundDeliveries, message.parentMessageId, chatId);
+        const elapsedMs = lastProgress?.deliveredAt ? Date.now() - Date.parse(lastProgress.deliveredAt) : Infinity;
+        if (elapsedMs < progressMirrorIntervalMs(env)) {
+          skipped.push({ agentId, threadId, messageId: message.id, reason: "progress_throttled" });
+          continue;
+        }
+        const textKey = deliveryTextKey(chatId, `progress:${message.id}\n${text}`);
+        if (deliveredTextKeys.has(textKey) || batchTextKeys.has(textKey)) {
+          skipped.push({ agentId, threadId, messageId: message.id, reason: "duplicate_text" });
+          continue;
+        }
+
+        try {
+          const payload = await sendWhatsAppText({ chatId, text, accountId, config, env, fetchImpl });
+          const delivery = {
+            kind,
+            deliveryType: "progress",
+            agentId: agentId || null,
+            threadId: threadId || null,
+            messageId: message.id,
+            parentMessageId: message.parentMessageId,
+            chatId,
+            accountId,
+            textKey,
+            deliveredAt: new Date().toISOString(),
+            bridgeResponse: payload,
+          };
+          outboundDeliveries.push(delivery);
+          deliveredIds.add(message.id);
+          deliveredTextKeys.add(textKey);
+          batchTextKeys.add(textKey);
+          delivered.push(delivery);
+          await appendEvent({ type: "whatsapp_outbound_progress_delivered", agentId: agentId || null, threadId: threadId || null, messageId: message.id, chatId }, env);
+        } catch (error) {
+          const failure = { kind, agentId: agentId || null, threadId: threadId || null, messageId: message.id, chatId, error: error.message || String(error) };
+          failed.push(failure);
+          await appendEvent({ type: "whatsapp_outbound_failed", ...failure }, env);
+        }
+        continue;
+      }
       if (!shouldMirrorWhatsAppReply(message)) continue;
       const parent = messages.find((entry) => entry.id === message.parentMessageId);
       const whatsappOrigin = parent?.connector === "whatsapp" || parent?.source === "whatsapp_inbound" || message.connector === "whatsapp";
@@ -890,7 +1245,13 @@ async function deliverWhatsAppRepliesOnce(env = process.env, fetchImpl = fetch) 
       }
 
       const chatId = pickString(message.chatId, parent?.chatId);
-      const text = formatWhatsAppOutboundText(pickString(message.text));
+      const text = appendWhatsAppDebugFooter(formatWhatsAppOutboundText(pickString(message.text)), {
+        message,
+        thread,
+        messages,
+        deliveryType: message.source === "orkestr_runtime" ? "router_update" : "final",
+        env,
+      });
       const accountId = kind === "thread"
         ? pickString(thread?.binding?.responderAccountId, thread?.binding?.outboundAccountId, message.accountId, parent?.accountId)
         : pickString(message.accountId, parent?.accountId);
