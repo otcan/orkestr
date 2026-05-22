@@ -28,6 +28,7 @@ test("release deploy script exposes versioned install, status, and rollback", as
   assert.match(script, /health_check/);
   assert.match(script, /ORKESTR_DEPLOY_TAGS_ONLY/);
   assert.match(script, /worktree add --detach/);
+  assert.match(script, /LC_ALL=C tr -c 'A-Za-z0-9\._\+-' '-'/);
   assert.match(manifest, /schemaVersion/);
   assert.match(manifest, /compatibility/);
 });

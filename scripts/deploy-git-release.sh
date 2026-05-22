@@ -115,7 +115,7 @@ json_string() {
 }
 
 sanitize_id() {
-  printf '%s' "$1" | tr -c '[:alnum:]._-+' '-'
+  printf '%s' "$1" | LC_ALL=C tr -c 'A-Za-z0-9._+-' '-'
 }
 
 health_check() {
