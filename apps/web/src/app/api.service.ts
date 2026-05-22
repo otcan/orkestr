@@ -655,6 +655,8 @@ export interface WhatsAppChatCreateResponse {
   senderContactId?: string;
   responderContactId?: string;
   participantIds?: string[];
+  adminParticipantIds?: string[];
+  adminPromotion?: Record<string, unknown> | null;
 }
 
 export interface WhatsAppParticipant {
@@ -808,6 +810,13 @@ export class ApiService {
   whatsappBridgeChatParticipants(accountId: string, chatId: string): Observable<WhatsAppParticipantsResponse> {
     return this.http.get<WhatsAppParticipantsResponse>(
       this.api(`/connectors/whatsapp/bridge/accounts/${encodeURIComponent(accountId)}/chats/${encodeURIComponent(chatId)}/participants`),
+    );
+  }
+
+  promoteWhatsAppBridgeChatAdmins(accountId: string, chatId: string, participantIds: string[]): Observable<Record<string, unknown>> {
+    return this.http.post<Record<string, unknown>>(
+      this.api(`/connectors/whatsapp/bridge/accounts/${encodeURIComponent(accountId)}/chats/${encodeURIComponent(chatId)}/admins`),
+      { participantIds },
     );
   }
 

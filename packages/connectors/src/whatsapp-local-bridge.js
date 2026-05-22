@@ -966,9 +966,9 @@ export async function listLocalWhatsAppChatParticipants({ accountId = "", chatId
 }
 
 /**
- * @param {{ name?: string, senderAccountId?: string, responderAccountId?: string, participantIds?: string[] | string, env?: Record<string, string | undefined> }} [options]
+ * @param {{ name?: string, senderAccountId?: string, responderAccountId?: string, participantIds?: string[] | string, adminParticipantIds?: string[] | string, promoteParticipantsAsAdmins?: boolean, env?: Record<string, string | undefined> }} [options]
  */
-export async function createLocalWhatsAppChat({ name = "", senderAccountId = "", responderAccountId = "", participantIds = [], env = process.env } = {}) {
+export async function createLocalWhatsAppChat({ name = "", senderAccountId = "", responderAccountId = "", participantIds = [], adminParticipantIds = [], promoteParticipantsAsAdmins = false, env = process.env } = {}) {
   const title = String(name || "").trim();
   if (!title) {
     const error = new Error("whatsapp_chat_name_required");
@@ -976,6 +976,7 @@ export async function createLocalWhatsAppChat({ name = "", senderAccountId = "",
     throw error;
   }
   const participants = normalizeGroupParticipantIds(participantIds);
+  const adminParticipants = normalizeGroupParticipantIds(adminParticipantIds);
   const responder = normalizeAccountId(responderAccountId || senderAccountId, env);
   const sender = normalizeAccountId(senderAccountId || (participants.length ? responder : ""), env);
   const responderRuntime = runtimes.get(responder);
@@ -999,7 +1000,7 @@ export async function createLocalWhatsAppChat({ name = "", senderAccountId = "",
   let chatId = "";
   let createdGroup = null;
   if (participants.length) {
-    createdGroup = await responderRuntime.client.createGroup(title, participants);
+    createdGroup = await responderRuntime.client.createGroup(title, participants, { announce: false });
     chatId = groupIdFromCreateResult(createdGroup);
   } else if (sender === responder) {
     chatId = senderContactId;
@@ -1017,6 +1018,19 @@ export async function createLocalWhatsAppChat({ name = "", senderAccountId = "",
     error.statusCode = 502;
     throw error;
   }
+  const promoteIds = normalizeGroupParticipantIds([
+    ...(promoteParticipantsAsAdmins ? participants : []),
+    ...adminParticipants,
+  ]);
+  let adminPromotion = null;
+  if (promoteIds.length && isGroupChatId(chatId)) {
+    adminPromotion = await promoteLocalWhatsAppGroupParticipants({
+      accountId: responder,
+      chatId,
+      participantIds: promoteIds,
+      env,
+    }).catch((error) => ({ ok: false, error: error?.message || String(error), participantIds: promoteIds }));
+  }
   await appendEvent({
     type: "whatsapp_local_chat_created",
     chatId,
@@ -1024,6 +1038,8 @@ export async function createLocalWhatsAppChat({ name = "", senderAccountId = "",
     senderAccountId: sender,
     responderAccountId: responder,
     participantIds: participants,
+    adminParticipantIds: adminParticipants,
+    promotedParticipantIds: promoteIds,
   }, env);
   return {
     ok: true,
@@ -1038,8 +1054,56 @@ export async function createLocalWhatsAppChat({ name = "", senderAccountId = "",
     senderContactId,
     responderContactId,
     participantIds: participants,
+    adminParticipantIds: adminParticipants,
+    adminPromotion,
     bridgeResponse: createdGroup,
   };
+}
+
+/**
+ * @param {{ accountId?: string, chatId?: string, participantIds?: string[] | string, env?: Record<string, string | undefined> }} [options]
+ */
+export async function promoteLocalWhatsAppGroupParticipants({ accountId = "", chatId = "", participantIds = [], env = process.env } = {}) {
+  const normalized = normalizeAccountId(accountId, env);
+  const id = String(chatId || "").trim();
+  const participants = normalizeGroupParticipantIds(participantIds);
+  if (!id) {
+    const error = new Error("whatsapp_chat_id_required");
+    error.statusCode = 400;
+    throw error;
+  }
+  if (!isGroupChatId(id)) {
+    const error = new Error("whatsapp_group_chat_required");
+    error.statusCode = 400;
+    throw error;
+  }
+  if (!participants.length) {
+    const error = new Error("whatsapp_admin_participants_required");
+    error.statusCode = 400;
+    throw error;
+  }
+  const runtime = runtimes.get(normalized);
+  const state = accountStates.get(normalized) || defaultAccountState(normalized);
+  if (!runtime?.client || !state.ready) {
+    const error = new Error("whatsapp_local_bridge_not_ready");
+    error.statusCode = 400;
+    throw error;
+  }
+  const chat = await runtime.client.getChatById(id);
+  if (!chat?.isGroup || typeof chat.promoteParticipants !== "function") {
+    const error = new Error("whatsapp_group_chat_required");
+    error.statusCode = 400;
+    throw error;
+  }
+  const result = await chat.promoteParticipants(participants);
+  await appendEvent({
+    type: "whatsapp_local_group_admins_promoted",
+    accountId: normalized,
+    chatId: id,
+    participantIds: participants,
+    result,
+  }, env).catch(() => {});
+  return { ok: true, accountId: normalized, chatId: id, participantIds: participants, result };
 }
 
 export async function sendLocalWhatsAppText({ chatId = "", text = "", accountId = "", env = process.env } = {}) {

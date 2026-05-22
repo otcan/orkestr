@@ -26,6 +26,7 @@ import {
   getLocalWhatsAppQrSvg,
   listLocalWhatsAppChats,
   logoutLocalWhatsAppAccount,
+  promoteLocalWhatsAppGroupParticipants,
   sendLocalWhatsAppText,
   startLocalWhatsAppAccount,
 } from "../../../../../packages/connectors/src/whatsapp-local-bridge.js";
@@ -45,6 +46,29 @@ function bodyStringArray(body: Record<string, unknown>, key: string): string[] {
     result.push(text);
   }
   return result;
+}
+
+function envStringArray(...keys: string[]): string[] {
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const key of keys) {
+    const values = String(process.env[key] || "").split(/[\s,]+/g);
+    for (const item of values) {
+      const text = String(item || "").trim();
+      const comparable = text.toLowerCase();
+      if (!text || seen.has(comparable)) continue;
+      seen.add(comparable);
+      result.push(text);
+    }
+  }
+  return result;
+}
+
+function optionalBodyBoolean(body: Record<string, unknown>, key: string, fallback = false): boolean {
+  if (!Object.prototype.hasOwnProperty.call(body, key)) return fallback;
+  const value = body[key];
+  if (typeof value === "string") return ["1", "true", "yes", "on"].includes(value.trim().toLowerCase());
+  return value === true;
 }
 
 @Controller("api/connectors")
@@ -151,17 +175,38 @@ export class ConnectorsController {
   @Post("whatsapp/bridge/chats")
   @HttpCode(200)
   async whatsappBridgeCreateChat(@Body() body: Record<string, unknown> = {}) {
+    const requestedParticipants = bodyStringArray(body, "participantIds").concat(bodyStringArray(body, "participants"));
+    const participantIds = requestedParticipants.length
+      ? requestedParticipants
+      : envStringArray(
+        "ORKESTR_WHATSAPP_DEFAULT_GROUP_PARTICIPANTS",
+        "ORKESTR_WHATSAPP_DEFAULT_PARTICIPANT_IDS",
+        "ORKESTR_WHATSAPP_OWNER_CONTACT_IDS",
+      );
+    const promoteParticipantsAsAdmins = optionalBodyBoolean(body, "promoteParticipantsAsAdmins", participantIds.length > 0);
     return createLocalWhatsAppChat({
       name: String(body.name || body.displayName || ""),
       senderAccountId: String(body.senderAccountId || ""),
       responderAccountId: String(body.responderAccountId || body.outboundAccountId || ""),
-      participantIds: bodyStringArray(body, "participantIds").concat(bodyStringArray(body, "participants")),
+      participantIds,
+      adminParticipantIds: bodyStringArray(body, "adminParticipantIds"),
+      promoteParticipantsAsAdmins,
     });
   }
 
   @Get("whatsapp/bridge/accounts/:accountId/chats/:chatId/participants")
   async whatsappBridgeChatParticipants(@Param("accountId") accountId: string, @Param("chatId") chatId: string) {
     return getWhatsAppChatParticipants({ accountId, chatId });
+  }
+
+  @Post("whatsapp/bridge/accounts/:accountId/chats/:chatId/admins")
+  @HttpCode(200)
+  async whatsappBridgePromoteGroupAdmins(@Param("accountId") accountId: string, @Param("chatId") chatId: string, @Body() body: Record<string, unknown> = {}) {
+    return promoteLocalWhatsAppGroupParticipants({
+      accountId,
+      chatId,
+      participantIds: bodyStringArray(body, "participantIds").concat(bodyStringArray(body, "participants")),
+    });
   }
 
   @Get("whatsapp/bridge/qr.svg")
