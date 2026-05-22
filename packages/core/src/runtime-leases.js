@@ -3104,7 +3104,10 @@ export async function deliverPendingThreadInputs(threadId, env = process.env) {
         if (completed?.messageId) delivered.push(completed.messageId);
         continue;
       }
-      await updateThreadMessage(thread.id, next.id, { state: "pending_delivery", deliveryState: "waking" }, env);
+      await updateThreadMessage(thread.id, next.id, {
+        state: "pending_delivery",
+        deliveryState: next.forceDeliveryAfterInterrupt ? "interrupting" : "waking",
+      }, env);
       await updateThread(thread.id, { state: "waking" }, env);
       try {
         await wakeThread(thread.id, { reason: next.source || "message" }, env);
