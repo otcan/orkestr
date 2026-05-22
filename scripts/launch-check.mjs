@@ -11,7 +11,7 @@ const requiredFiles = [
   "CONTRIBUTING.md",
   "ROADMAP.md",
   "docs/architecture.md",
-  "docs/assets/orkestr-whatsapp-demo.svg",
+  "docs/assets/orkestr-chat-web-demo.svg",
   "docs/demo-logs/coding-agent-first-run.md",
   "examples/coding-agent-demo/README.md",
   ".dockerignore",

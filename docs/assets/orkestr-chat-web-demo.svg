@@ -1,108 +1,4 @@
-import fs from "node:fs/promises";
-import path from "node:path";
-import { fileURLToPath } from "node:url";
-
-const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-export const demoAssetPath = path.join(repoRoot, "docs", "assets", "orkestr-chat-web-demo.svg");
-
-const demoMessages = [
-  {
-    side: "right",
-    sender: "User",
-    time: "09:41",
-    text: "Review the launch checklist and tell me the top blockers.",
-  },
-  {
-    side: "left",
-    sender: "Orkestr",
-    time: "09:41",
-    text: "Thread demo-launch is awake. Status: working. Routed to Codex.",
-  },
-  {
-    side: "left",
-    sender: "Codex",
-    time: "09:42",
-    text: "Done. Top blockers: setup copy is vague, the README asset is stale, and the smoke-test note is missing.",
-  },
-  {
-    side: "left",
-    sender: "Orkestr",
-    time: "09:42",
-    text: "Status: ready. Reply mirrored to this chat.",
-  },
-];
-
-const timeline = [
-  { state: "received", label: "WhatsApp task received", detail: "demo-launch" },
-  { state: "working", label: "Codex is working", detail: "checklist review" },
-  { state: "ready", label: "Final answer mirrored", detail: "ready for next task" },
-];
-
-function escapeXml(value) {
-  return String(value)
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;");
-}
-
-function wrapText(text, maxChars = 46) {
-  const words = String(text).split(/\s+/);
-  const lines = [];
-  let line = "";
-  for (const word of words) {
-    const next = line ? `${line} ${word}` : word;
-    if (next.length > maxChars && line) {
-      lines.push(line);
-      line = word;
-    } else {
-      line = next;
-    }
-  }
-  if (line) lines.push(line);
-  return lines;
-}
-
-function bubble(message, index) {
-  const right = message.side === "right";
-  const width = right ? 286 : 316;
-  const x = right ? 142 : 72;
-  const lines = wrapText(message.text, right ? 30 : 34);
-  const height = 56 + lines.length * 18;
-  const y = 112 + index * 86;
-  const fill = right ? "#dff8ca" : "#ffffff";
-  const stroke = right ? "#b5dfa0" : "#d7ded7";
-  const labelColor = right ? "#426a33" : "#315a4a";
-
-  const textLines = lines
-    .map((line, lineIndex) => (
-      `<tspan x="${x + 18}" dy="${lineIndex === 0 ? 0 : 18}">${escapeXml(line)}</tspan>`
-    ))
-    .join("");
-
-  return `
-    <g>
-      <rect x="${x}" y="${y}" width="${width}" height="${height}" rx="18" fill="${fill}" stroke="${stroke}" />
-      <text x="${x + 18}" y="${y + 27}" class="sender" fill="${labelColor}">${escapeXml(message.sender)}</text>
-      <text x="${x + 18}" y="${y + 51}" class="message small">${textLines}</text>
-      <text x="${x + width - 48}" y="${y + height - 14}" class="time">${escapeXml(message.time)}</text>
-    </g>`;
-}
-
-function timelineItem(item, index) {
-  const y = 318 + index * 72;
-  const color = item.state === "ready" ? "#48c78e" : item.state === "working" ? "#f2c14e" : "#77a6f7";
-  return `
-    <g>
-      <circle cx="352" cy="${y}" r="9" fill="${color}" />
-      <rect x="378" y="${y - 20}" width="170" height="44" rx="12" fill="#111f1a" stroke="#2c493d" />
-      <text x="394" y="${y - 2}" class="web-label">${escapeXml(item.label)}</text>
-      <text x="394" y="${y + 17}" class="web-muted">${escapeXml(item.detail)}</text>
-    </g>`;
-}
-
-export function renderDemoSvg() {
-  return `<svg xmlns="http://www.w3.org/2000/svg" width="1180" height="720" viewBox="0 0 1180 720" role="img" aria-labelledby="title desc">
+<svg xmlns="http://www.w3.org/2000/svg" width="1180" height="720" viewBox="0 0 1180 720" role="img" aria-labelledby="title desc">
   <title id="title">Fake WhatsApp and Orkestr web UI demo</title>
   <desc id="desc">A fake-data Orkestr demo showing a WhatsApp task, browser cockpit routing, Codex result, and ready status.</desc>
   <defs>
@@ -152,7 +48,31 @@ export function renderDemoSvg() {
     <text x="58" y="62" text-anchor="middle" font-family="Verdana, sans-serif" font-size="18" font-weight="700" fill="#fff">O</text>
     <text x="94" y="50" class="caption">Demo Team Chat</text>
     <text x="94" y="70" class="subtle">Orkestr-bound WhatsApp</text>
-    ${demoMessages.map(bubble).join("")}
+    
+    <g>
+      <rect x="142" y="112" width="286" height="92" rx="18" fill="#dff8ca" stroke="#b5dfa0" />
+      <text x="160" y="139" class="sender" fill="#426a33">User</text>
+      <text x="160" y="163" class="message small"><tspan x="160" dy="0">Review the launch checklist</tspan><tspan x="160" dy="18">and tell me the top blockers.</tspan></text>
+      <text x="380" y="190" class="time">09:41</text>
+    </g>
+    <g>
+      <rect x="72" y="198" width="316" height="92" rx="18" fill="#ffffff" stroke="#d7ded7" />
+      <text x="90" y="225" class="sender" fill="#315a4a">Orkestr</text>
+      <text x="90" y="249" class="message small"><tspan x="90" dy="0">Thread demo-launch is awake.</tspan><tspan x="90" dy="18">Status: working. Routed to Codex.</tspan></text>
+      <text x="340" y="276" class="time">09:41</text>
+    </g>
+    <g>
+      <rect x="72" y="284" width="316" height="128" rx="18" fill="#ffffff" stroke="#d7ded7" />
+      <text x="90" y="311" class="sender" fill="#315a4a">Codex</text>
+      <text x="90" y="335" class="message small"><tspan x="90" dy="0">Done. Top blockers: setup copy is</tspan><tspan x="90" dy="18">vague, the README asset is stale,</tspan><tspan x="90" dy="18">and the smoke-test note is</tspan><tspan x="90" dy="18">missing.</tspan></text>
+      <text x="340" y="398" class="time">09:42</text>
+    </g>
+    <g>
+      <rect x="72" y="370" width="316" height="92" rx="18" fill="#ffffff" stroke="#d7ded7" />
+      <text x="90" y="397" class="sender" fill="#315a4a">Orkestr</text>
+      <text x="90" y="421" class="message small"><tspan x="90" dy="0">Status: ready. Reply mirrored to</tspan><tspan x="90" dy="18">this chat.</tspan></text>
+      <text x="340" y="448" class="time">09:42</text>
+    </g>
     <rect x="36" y="501" width="366" height="30" rx="15" fill="#ffffff" />
     <text x="58" y="521" class="subtle">Message mirrored back when thread is ready</text>
   </g>
@@ -191,7 +111,25 @@ export function renderDemoSvg() {
     <rect x="308" y="204" width="262" height="282" rx="22" fill="#0b1713" stroke="#243c32" />
     <text x="332" y="238" class="web-label">Thread Timeline</text>
     <path d="M352 318v144" stroke="#2c493d" stroke-width="3" stroke-linecap="round" />
-    ${timeline.map(timelineItem).join("")}
+    
+    <g>
+      <circle cx="352" cy="318" r="9" fill="#77a6f7" />
+      <rect x="378" y="298" width="170" height="44" rx="12" fill="#111f1a" stroke="#2c493d" />
+      <text x="394" y="316" class="web-label">WhatsApp task received</text>
+      <text x="394" y="335" class="web-muted">demo-launch</text>
+    </g>
+    <g>
+      <circle cx="352" cy="390" r="9" fill="#f2c14e" />
+      <rect x="378" y="370" width="170" height="44" rx="12" fill="#111f1a" stroke="#2c493d" />
+      <text x="394" y="388" class="web-label">Codex is working</text>
+      <text x="394" y="407" class="web-muted">checklist review</text>
+    </g>
+    <g>
+      <circle cx="352" cy="462" r="9" fill="#48c78e" />
+      <rect x="378" y="442" width="170" height="44" rx="12" fill="#111f1a" stroke="#2c493d" />
+      <text x="394" y="460" class="web-label">Final answer mirrored</text>
+      <text x="394" y="479" class="web-muted">ready for next task</text>
+    </g>
 
     <rect x="28" y="506" width="542" height="22" rx="11" fill="#20362d" />
     <rect x="28" y="506" width="486" height="22" rx="11" fill="#48c78e" />
@@ -204,17 +142,3 @@ export function renderDemoSvg() {
     <path d="M32 20l10 8-10 8" fill="none" stroke="#1f7d5a" stroke-width="4" stroke-linecap="round" stroke-linejoin="round" />
   </g>
 </svg>
-`;
-}
-
-export async function recordDemo() {
-  await fs.mkdir(path.dirname(demoAssetPath), { recursive: true });
-  const svg = renderDemoSvg();
-  await fs.writeFile(demoAssetPath, svg, "utf8");
-  console.log(`Wrote ${path.relative(repoRoot, demoAssetPath)} from deterministic fake chat and web UI data`);
-  return { path: demoAssetPath, bytes: Buffer.byteLength(svg) };
-}
-
-if (import.meta.url === `file://${process.argv[1]}`) {
-  await recordDemo();
-}

@@ -2,10 +2,13 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { renderDemoSvg } from "../scripts/record-demo.mjs";
 
-test("README demo asset uses a fake WhatsApp conversation", () => {
+test("README demo asset uses fake chat and web UI surfaces", () => {
   const svg = renderDemoSvg();
 
   assert.match(svg, /Demo Team Chat/);
+  assert.match(svg, /Orkestr Web/);
+  assert.match(svg, /Thread Timeline/);
+  assert.match(svg, /fake WhatsApp/);
   assert.match(svg, /Status: working/);
   assert.match(svg, /Status: ready/);
   assert.match(svg, /Codex/);

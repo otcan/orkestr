@@ -6,7 +6,7 @@ It gives you a public-facing web layer for setup, chat, status, pairing, and ope
 
 > Public alpha. Do not expose Orkestr directly to the public internet. Keep it bound to `127.0.0.1` unless you have put it behind a trusted private network, TLS, and an auth boundary.
 
-![Fake WhatsApp conversation showing a task routed through Orkestr into Codex](docs/assets/orkestr-whatsapp-demo.svg)
+![Fake WhatsApp chat and Orkestr web UI showing a task routed into Codex](docs/assets/orkestr-chat-web-demo.svg)
 
 Start with the [user guide](docs/user-guide.md), then use the quickstart below when you are ready to install.
 
@@ -234,15 +234,16 @@ Optional real Codex demo mode:
 node scripts/coding-agent-demo.mjs --real-codex --repo "$PWD"
 ```
 
-Regenerate the public fake WhatsApp demo asset:
+Regenerate the public fake chat and web UI demo asset:
 
 ```bash
 npm run demo:record
 ```
 
-The generated README asset is deterministic and uses fake chat data only. It
-shows a user task, Orkestr thread acknowledgement, a concise Codex result, and
-the status transition from working to ready.
+The generated README asset is deterministic and uses fake chat and fake web UI
+data only. It shows a user task, Orkestr thread acknowledgement, browser
+cockpit status, a concise Codex result, and the transition from working to
+ready.
 
 Public demo logs live in [docs/demo-logs](docs/demo-logs).
 
