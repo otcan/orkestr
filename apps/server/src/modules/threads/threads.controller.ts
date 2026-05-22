@@ -791,15 +791,24 @@ export class ThreadsController {
   @Post(":threadId/attach")
   @HttpCode(200)
   async attach(@Param("threadId") threadId: string) {
-    const thread = await getThread(threadId);
+    let thread = await getThread(threadId);
     if (!thread) throw httpError("thread_not_found", 404);
-    const status = await runtimeStatus(thread.id);
+    let status = await runtimeStatus(thread.id);
+    let wakeResult: Awaited<ReturnType<typeof wakeThread>> | null = null;
+    if (!status.sessionName || status.state === "sleeping") {
+      wakeResult = await wakeThread(thread.id, { reason: "attach" });
+      thread = wakeResult.thread || thread;
+      status = wakeResult.status || await runtimeStatus(thread.id);
+      if (!status.sessionName && wakeResult.lease?.sessionName) {
+        status = { ...status, sessionName: wakeResult.lease.sessionName };
+      }
+    }
     if (!status.sessionName) {
       return {
         ok: false,
         state: status.state,
         thread,
-        message: `Thread is ${status.state}; run orkestr wake ${thread.bindingName || thread.name || thread.id} first.`,
+        message: `Thread is ${status.state}; Orkestr could not start an attachable runtime.`,
       };
     }
     const window = await syncRuntimeWindowName(thread.id).catch(() => null);
@@ -815,6 +824,7 @@ export class ThreadsController {
       state: runtime.state,
       thread,
       runtime,
+      woke: wakeResult ? wakeResult.reused !== true : false,
       attachCommand: `tmux attach-session -t ${runtime.sessionName}`,
     };
   }
