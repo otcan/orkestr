@@ -259,6 +259,27 @@ function whatsappOrigin(input = {}) {
     whatsappSources.has(String(input.source || "").trim().toLowerCase());
 }
 
+function whatsappBindingInputDefaults(thread, input = {}) {
+  if (!whatsappOrigin(input)) return input;
+  const binding = thread?.binding || {};
+  if (String(binding.connector || "whatsapp").trim().toLowerCase() !== "whatsapp") return input;
+  const chatId = String(input.chatId || binding.chatId || "").trim();
+  if (!chatId) return input;
+  return {
+    ...input,
+    connector: String(input.connector || "whatsapp").trim(),
+    chatId,
+    accountId: String(
+      input.accountId ||
+      binding.responderAccountId ||
+      binding.outboundAccountId ||
+      binding.senderAccountId ||
+      binding.inboundAccountId ||
+      "",
+    ).trim(),
+  };
+}
+
 function sameOptionalMessageField(existing, input, key) {
   const left = String(existing?.[key] || "").trim();
   const right = String(input?.[key] || "").trim();
@@ -284,19 +305,21 @@ async function activeDuplicateThreadInput(threadId, input, env = process.env) {
 }
 
 export async function enqueueThreadInput(threadId, input, env = process.env) {
-  const duplicate = await activeDuplicateThreadInput(threadId, input, env);
+  const thread = await getThread(threadId, env);
+  const nextInput = whatsappBindingInputDefaults(thread, input);
+  const duplicate = await activeDuplicateThreadInput(thread?.id || threadId, nextInput, env);
   if (duplicate) {
     await appendEvent({
       type: "thread_input_duplicate_suppressed",
       threadId,
       messageId: duplicate.id,
-      source: input.source || "",
-      connector: input.connector || "",
+      source: nextInput.source || "",
+      connector: nextInput.connector || "",
     }, env);
     return { ...duplicate, duplicate: true, duplicateReason: "active_input" };
   }
-  return appendThreadMessage(threadId, {
-    ...input,
+  return appendThreadMessage(thread?.id || threadId, {
+    ...nextInput,
     role: "user",
     state: "queued",
   }, env);

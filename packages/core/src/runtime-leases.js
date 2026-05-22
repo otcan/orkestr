@@ -1082,7 +1082,7 @@ export async function sleepThread(threadId, options = {}, env = process.env) {
 async function appendRuntimeInterruptionNotice(thread, options = {}, env = process.env) {
   const messages = await listThreadMessages(thread.id, env).catch(() => []);
   const explicitParent = options.sourceMessage && whatsappOrigin(options.sourceMessage) ? options.sourceMessage : null;
-  const whatsappParent = explicitParent || latestWhatsAppInput(messages);
+  const whatsappParent = explicitParent || latestWhatsAppInput(messages, null, thread);
   const reason = String(options.reason || "interrupt").trim() || "interrupt";
   const notice = await appendThreadMessage(thread.id, {
     role: "assistant",
@@ -1092,8 +1092,8 @@ async function appendRuntimeInterruptionNotice(thread, options = {}, env = proce
     state: "completed",
     parentMessageId: whatsappParent?.id || null,
     connector: whatsappParent ? "whatsapp" : "",
-    chatId: whatsappParent?.chatId || "",
-    accountId: whatsappParent?.accountId || "",
+    chatId: whatsappParentChatId(whatsappParent, thread),
+    accountId: whatsappParentAccountId(whatsappParent, thread),
   }, env);
   markConnectorDeliverySignal(notice);
   await appendEvent({
@@ -1101,7 +1101,7 @@ async function appendRuntimeInterruptionNotice(thread, options = {}, env = proce
     threadId: thread.id,
     messageId: notice.id,
     parentMessageId: whatsappParent?.id || null,
-    chatId: whatsappParent?.chatId || null,
+    chatId: whatsappParentChatId(whatsappParent, thread) || null,
     reason,
   }, env).catch(() => {});
   return notice;
@@ -3241,14 +3241,23 @@ function parseAssistantRolloutMessages(body, threadId, baseOffset = 0) {
   return messages.map(({ sourceFormat, ...message }) => message);
 }
 
-function latestWhatsAppInput(messages = [], beforeTimestamp = null) {
+function latestWhatsAppInput(messages = [], beforeTimestamp = null, thread = null) {
   const beforeMs = beforeTimestamp ? timestampMs(beforeTimestamp) : 0;
   return [...messages].reverse().find((message) =>
     message?.role === "user" &&
     whatsappOrigin(message) &&
-    String(message.chatId || "").trim() &&
+    String(message.chatId || thread?.binding?.chatId || "").trim() &&
     (!beforeMs || timestampMs(message.timestamp || message.createdAt) <= beforeMs + 1000),
   ) || null;
+}
+
+function whatsappParentChatId(parent = null, thread = null) {
+  return String(parent?.chatId || thread?.binding?.chatId || "").trim();
+}
+
+function whatsappParentAccountId(parent = null, thread = null) {
+  const binding = thread?.binding || {};
+  return String(parent?.accountId || binding.responderAccountId || binding.outboundAccountId || "").trim();
 }
 
 async function syncLeaseRollout(lease, env = process.env) {
@@ -3318,7 +3327,7 @@ async function syncLeaseRollout(lease, env = process.env) {
     const eventKey = rolloutMessageEventKey(message);
     const textKey = rolloutMessageNearTextKey(message);
     if (existingEventKeys.has(eventKey) || existingTextKeys.has(textKey)) continue;
-    const whatsappParent = latestWhatsAppInput(existing, message.timestamp);
+    const whatsappParent = latestWhatsAppInput(existing, message.timestamp, thread);
     await appendThreadMessage(lease.threadId, {
       role: "assistant",
       source: message.source,
@@ -3330,8 +3339,8 @@ async function syncLeaseRollout(lease, env = process.env) {
       eventId: message.eventId,
       parentMessageId: whatsappParent?.id || null,
       connector: whatsappParent ? "whatsapp" : "",
-      chatId: whatsappParent?.chatId || "",
-      accountId: whatsappParent?.accountId || "",
+      chatId: whatsappParentChatId(whatsappParent, thread),
+      accountId: whatsappParentAccountId(whatsappParent, thread),
     }, env);
     existingEventKeys.add(eventKey);
     existingTextKeys.add(textKey);

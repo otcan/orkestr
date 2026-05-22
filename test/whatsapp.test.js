@@ -7,7 +7,7 @@ import { startServer } from "../apps/server/src/server.js";
 import { runNextAgentMessage, runNextThreadMessage } from "../packages/core/src/executors.js";
 import { listAgentMessages } from "../packages/core/src/messages.js";
 import { getSetupStatus } from "../packages/core/src/setup.js";
-import { appendThreadMessage, createThread, listThreadMessages, updateThreadMessage } from "../packages/core/src/threads.js";
+import { appendThreadMessage, createThread, enqueueThreadInput, listThreadMessages, updateThreadMessage } from "../packages/core/src/threads.js";
 import { deliverWhatsAppReplies, formatWhatsAppOutboundText, getWhatsAppChatParticipants, getWhatsAppStatus, mapLocalWhatsAppStatusFromHealth, routeWhatsAppInbound } from "../packages/connectors/src/whatsapp.js";
 import { listLocalWhatsAppChats, localWhatsAppAccountIdsForEnv, reduceLocalWhatsAppBridgeState, startLocalWhatsAppAccount } from "../packages/connectors/src/whatsapp-local-bridge.js";
 import { writeConnectorConfig } from "../packages/storage/src/config.js";
@@ -796,6 +796,29 @@ test("whatsapp inbound routes through enabled thread bindings", async () => {
   assert.equal(messages[0].accountId, "bound-account");
 });
 
+test("direct whatsapp thread inputs inherit binding delivery metadata", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-direct-binding-"));
+  const env = { ORKESTR_HOME: home };
+  await createThread({
+    id: "direct-wa-thread",
+    name: "Direct WA Thread",
+    binding: {
+      connector: "whatsapp",
+      chatId: "chat-direct",
+      displayName: "Direct Chat",
+      enabled: true,
+      responderAccountId: "openclaw",
+      outboundAccountId: "openclaw",
+    },
+  }, env);
+
+  const message = await enqueueThreadInput("direct-wa-thread", { source: "whatsapp", text: "legacy direct input" }, env);
+
+  assert.equal(message.connector, "whatsapp");
+  assert.equal(message.chatId, "chat-direct");
+  assert.equal(message.accountId, "openclaw");
+});
+
 test("generated whatsapp bindings listen to the selected sender and answer as the responder", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-generated-binding-"));
   const env = { ORKESTR_HOME: home };
@@ -812,6 +835,8 @@ test("generated whatsapp bindings listen to the selected sender and answer as th
       senderAccountId: "account-1",
       responderAccountId: "account-2",
       outboundAccountId: "account-2",
+      senderContactId: "491111111111@c.us",
+      responderContactId: "492222222222@c.us",
     },
   }, env);
 
@@ -820,6 +845,14 @@ test("generated whatsapp bindings listen to the selected sender and answer as th
     /whatsapp_target_required/,
   );
 
+  const routedViaResponder = await routeWhatsAppInbound({
+    eventId: "wa-generated-responder-sees-sender",
+    chatId: "chat-generated",
+    accountId: "account-2",
+    from: "491111111111@c.us",
+    fromMe: false,
+    text: "selected sender via responder",
+  }, env);
   const routed = await routeWhatsAppInbound({ eventId: "wa-generated-routed", chatId: "chat-generated", accountId: "account-1", fromMe: true, text: "selected sender" }, env);
   await appendThreadMessage("generated-thread", {
     role: "assistant",
@@ -838,6 +871,7 @@ test("generated whatsapp bindings listen to the selected sender and answer as th
     return response({ ok: true, ids: ["sent-generated"] });
   });
 
+  assert.equal(routedViaResponder.threadId, "generated-thread");
   assert.equal(routed.threadId, "generated-thread");
   assert.equal(delivery.delivered.length, 1);
   assert.equal(calls[0].body.to, "chat-generated");
