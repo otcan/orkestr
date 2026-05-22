@@ -28,7 +28,8 @@ test("public launch docs expose the minimum launch surface", async () => {
   assert.match(contributing, /Pull Request Checklist/);
   assert.match(security, /Do not expose/);
   assert.match(readme, /orkestr-three-screen-demo\.png/);
-  assert.match(readme, /fake chat, fake web UI,\s+and fake Codex terminal/);
+  assert.match(readme, /WhatsApp source screenshot/);
+  assert.match(readme, /TMUX capture/);
   assert.match(roadmap, /disposable fake-data runs/);
   assert.match(architecture, /Legacy `\/ng\/\*` paths/);
   assert.match(demoLog, /Coding-agent demo passed/);

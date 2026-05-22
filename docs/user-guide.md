@@ -62,8 +62,11 @@ Orkestr includes a local WhatsApp Web bridge with two account slots. You can:
 - bind an existing thread to that chat
 - mirror Orkestr replies back into WhatsApp
 
-For public docs, examples must use fake chat names and fake IDs. Real WhatsApp
-session state belongs under `ORKESTR_HOME`, not in the repo.
+For public docs, prefer fake chat names and fake IDs. If a public proof image
+uses a real WhatsApp screenshot, keep it limited to non-sensitive public output
+and do not include tokens, private chat IDs, phone numbers, local paths, or
+session state. Real WhatsApp session state belongs under `ORKESTR_HOME`, not
+in the repo.
 
 ### Connect Gmail and Browser Profiles
 
