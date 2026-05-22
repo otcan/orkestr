@@ -409,11 +409,19 @@ export async function syncLocalWhatsAppTypingTargets(targets = [], env = process
   for (const target of targets) {
     const chatId = String(target?.chatId || "").trim();
     if (!chatId) continue;
-    const accountId = target?.accountId ? normalizeAccountId(target.accountId, env) : "";
-    const selectedAccountId = accountId || localWhatsAppAccountIdsForEnv(env).find((id) => accountStates.get(id)?.ready) || "";
+    let selectedAccountId = "";
+    if (target?.accountId) {
+      try {
+        selectedAccountId = normalizeAccountId(target.accountId, env);
+      } catch {
+        selectedAccountId = "";
+      }
+    }
+    selectedAccountId ||= localWhatsAppAccountIdsForEnv(env).find((id) => accountStates.get(id)?.ready) || "";
     if (!selectedAccountId) continue;
-    active.add(typingKey(selectedAccountId, chatId));
     const result = await startLocalWhatsAppTyping({ accountId: selectedAccountId, chatId, env }).catch((error) => ({ ok: false, error: error.message || String(error) }));
+    if (!result?.ok) continue;
+    active.add(typingKey(result.accountId || selectedAccountId, chatId));
     if (result?.ok && !result.reused) started.push(result);
   }
   for (const session of [...typingSessions.values()]) {

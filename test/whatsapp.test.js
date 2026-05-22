@@ -531,6 +531,31 @@ test("whatsapp typing indicators follow active routed thread runtime", async () 
   assert.deepEqual(captures[1], []);
 });
 
+test("whatsapp typing sync tolerates stale inbound account ids", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-typing-stale-account-"));
+  const env = {
+    ORKESTR_HOME: home,
+    ORKESTR_WHATSAPP_ACCOUNT_IDS: "sender,responder",
+  };
+  await createThread({ id: "thread-wa-typing-stale-account", name: "WA Typing Stale Account" }, env);
+  await writeConnectorConfig("whatsapp", {
+    threadRoutes: { "chat-typing-stale-account": "thread-wa-typing-stale-account" },
+  }, env);
+
+  await routeWhatsAppInbound({
+    eventId: "wa-typing-stale-account-1",
+    chatId: "chat-typing-stale-account",
+    accountId: "legacy-account",
+    text: "work on this",
+  }, env);
+  const result = await syncWhatsAppTypingIndicators(env, {
+    statusImpl: async () => ({ state: "working", working: true, typingActive: true }),
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.active, 0);
+});
+
 test("whatsapp delivery does not backfill commentary progress after a final answer exists", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-progress-final-"));
   const env = { ORKESTR_HOME: home };
