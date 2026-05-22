@@ -654,6 +654,7 @@ export interface WhatsAppChatCreateResponse {
   responderAccountId?: string;
   senderContactId?: string;
   responderContactId?: string;
+  participantIds?: string[];
 }
 
 export interface WhatsAppParticipant {

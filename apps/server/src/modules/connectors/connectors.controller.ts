@@ -32,6 +32,21 @@ import {
 import { writeConnectorConfig } from "../../../../../packages/storage/src/config.js";
 import { ensureAttachmentsArray, httpError } from "../../common/http.js";
 
+function bodyStringArray(body: Record<string, unknown>, key: string): string[] {
+  const value = body[key];
+  const values = Array.isArray(value) ? value : String(value || "").split(/[\s,]+/g);
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const item of values) {
+    const text = String(item || "").trim();
+    const comparable = text.toLowerCase();
+    if (!text || seen.has(comparable)) continue;
+    seen.add(comparable);
+    result.push(text);
+  }
+  return result;
+}
+
 @Controller("api/connectors")
 export class ConnectorsController {
   @Post("codex/device-auth")
@@ -140,6 +155,7 @@ export class ConnectorsController {
       name: String(body.name || body.displayName || ""),
       senderAccountId: String(body.senderAccountId || ""),
       responderAccountId: String(body.responderAccountId || body.outboundAccountId || ""),
+      participantIds: bodyStringArray(body, "participantIds").concat(bodyStringArray(body, "participants")),
     });
   }
 

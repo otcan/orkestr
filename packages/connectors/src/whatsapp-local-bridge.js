@@ -74,6 +74,22 @@ function normalizePairingPhoneNumber(phoneNumber = "") {
   return String(phoneNumber || "").replace(/\D+/g, "").trim();
 }
 
+export function normalizeGroupParticipantIds(participantIds = []) {
+  const values = Array.isArray(participantIds)
+    ? participantIds
+    : String(participantIds || "").split(/[\s,]+/g);
+  const seen = new Set();
+  const normalized = [];
+  for (const value of values) {
+    const id = String(value || "").trim();
+    const comparable = id.toLowerCase();
+    if (!id || seen.has(comparable)) continue;
+    seen.add(comparable);
+    normalized.push(id);
+  }
+  return normalized;
+}
+
 function maskPairingPhoneNumber(phoneNumber = "") {
   const normalized = normalizePairingPhoneNumber(phoneNumber);
   if (!normalized) return "";
@@ -949,15 +965,19 @@ export async function listLocalWhatsAppChatParticipants({ accountId = "", chatId
   };
 }
 
-export async function createLocalWhatsAppChat({ name = "", senderAccountId = "", responderAccountId = "", env = process.env } = {}) {
+/**
+ * @param {{ name?: string, senderAccountId?: string, responderAccountId?: string, participantIds?: string[] | string, env?: Record<string, string | undefined> }} [options]
+ */
+export async function createLocalWhatsAppChat({ name = "", senderAccountId = "", responderAccountId = "", participantIds = [], env = process.env } = {}) {
   const title = String(name || "").trim();
   if (!title) {
     const error = new Error("whatsapp_chat_name_required");
     error.statusCode = 400;
     throw error;
   }
-  const sender = normalizeAccountId(senderAccountId, env);
-  const responder = normalizeAccountId(responderAccountId || sender, env);
+  const participants = normalizeGroupParticipantIds(participantIds);
+  const responder = normalizeAccountId(responderAccountId || senderAccountId, env);
+  const sender = normalizeAccountId(senderAccountId || (participants.length ? responder : ""), env);
   const responderRuntime = runtimes.get(responder);
   const responderState = accountStates.get(responder) || defaultAccountState(responder);
   if (!responderRuntime?.client || !responderState.ready) {
@@ -969,6 +989,7 @@ export async function createLocalWhatsAppChat({ name = "", senderAccountId = "",
   const senderState = accountStates.get(sender) || defaultAccountState(sender);
   const responderContactId = runtimeIdentity(responderRuntime);
   let senderContactId = sender === responder ? responderContactId : runtimeIdentity(senderRuntime);
+  if (participants.length) senderContactId = participants[0];
   if (!senderContactId) {
     const error = new Error(sender === responder ? "whatsapp_account_identity_unavailable" : "whatsapp_sender_account_not_ready");
     error.statusCode = 400;
@@ -977,7 +998,10 @@ export async function createLocalWhatsAppChat({ name = "", senderAccountId = "",
 
   let chatId = "";
   let createdGroup = null;
-  if (sender === responder) {
+  if (participants.length) {
+    createdGroup = await responderRuntime.client.createGroup(title, participants);
+    chatId = groupIdFromCreateResult(createdGroup);
+  } else if (sender === responder) {
     chatId = senderContactId;
   } else {
     if (!senderState.ready || !senderRuntime?.client) {
@@ -999,6 +1023,7 @@ export async function createLocalWhatsAppChat({ name = "", senderAccountId = "",
     name: title,
     senderAccountId: sender,
     responderAccountId: responder,
+    participantIds: participants,
   }, env);
   return {
     ok: true,
@@ -1012,6 +1037,7 @@ export async function createLocalWhatsAppChat({ name = "", senderAccountId = "",
     responderAccountId: responder,
     senderContactId,
     responderContactId,
+    participantIds: participants,
     bridgeResponse: createdGroup,
   };
 }

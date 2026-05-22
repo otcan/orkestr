@@ -9,7 +9,7 @@ import { listAgentMessages } from "../packages/core/src/messages.js";
 import { getSetupStatus } from "../packages/core/src/setup.js";
 import { appendThreadMessage, createThread, enqueueThreadInput, listThreadMessages, updateThreadMessage } from "../packages/core/src/threads.js";
 import { deliverWhatsAppReplies, formatWhatsAppOutboundText, getWhatsAppChatParticipants, getWhatsAppStatus, mapLocalWhatsAppStatusFromHealth, routeWhatsAppInbound, syncWhatsAppTypingIndicators } from "../packages/connectors/src/whatsapp.js";
-import { listLocalWhatsAppChats, localWhatsAppAccountIdsForEnv, reduceLocalWhatsAppBridgeState, startLocalWhatsAppAccount, webCacheRoot } from "../packages/connectors/src/whatsapp-local-bridge.js";
+import { listLocalWhatsAppChats, localWhatsAppAccountIdsForEnv, normalizeGroupParticipantIds, reduceLocalWhatsAppBridgeState, startLocalWhatsAppAccount, webCacheRoot } from "../packages/connectors/src/whatsapp-local-bridge.js";
 import { writeConnectorConfig } from "../packages/storage/src/config.js";
 
 function response(payload, ok = true, status = 200) {
@@ -95,6 +95,17 @@ test("local whatsapp bridge maps public account ids to existing LocalAuth client
 test("local whatsapp web cache lives under orkestr home", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-web-cache-"));
   assert.equal(webCacheRoot({ ORKESTR_HOME: home }), path.join(home, "whatsapp-bridge", "web-cache"));
+});
+
+test("local whatsapp group participant ids are normalized for created test chats", () => {
+  assert.deepEqual(
+    normalizeGroupParticipantIds(["66378837028965@lid", " 66378837028965@lid ", "4917632400662@c.us"]),
+    ["66378837028965@lid", "4917632400662@c.us"],
+  );
+  assert.deepEqual(
+    normalizeGroupParticipantIds("66378837028965@lid, 4917632400662@c.us"),
+    ["66378837028965@lid", "4917632400662@c.us"],
+  );
 });
 
 test("local whatsapp known chats include stored thread bindings while bridge is idle", async () => {
