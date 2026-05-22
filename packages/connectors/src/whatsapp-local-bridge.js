@@ -41,6 +41,18 @@ function clientIdForAccount(accountId, env = process.env) {
   return accountClientIdMap(env).get(accountId) || accountId;
 }
 
+function accountSessionRootMap(env = process.env) {
+  const pairs = splitAccountList(env.ORKESTR_WHATSAPP_ACCOUNT_SESSION_ROOTS || env.WHATSAPP_LOCAL_ACCOUNT_SESSION_ROOTS);
+  return new Map(pairs.map((pair) => {
+    const [accountId, ...rootParts] = pair.split(":");
+    return [String(accountId || "").trim(), rootParts.join(":").trim()];
+  }).filter(([accountId, root]) => accountId && root));
+}
+
+function sessionRootForAccount(accountId, env = process.env) {
+  return accountSessionRootMap(env).get(accountId) || sessionRoot(env);
+}
+
 function normalizeAccountId(accountId = "", env = process.env) {
   const ids = localWhatsAppAccountIdsForEnv(env);
   const normalized = String(accountId || ids[0] || "account-1").trim();
@@ -139,6 +151,7 @@ async function accountSnapshot(accountId, env = process.env) {
   return {
     ...state,
     clientId: clientIdForAccount(accountId, env),
+    sessionRoot: sessionRootForAccount(accountId, env),
     qrAvailable,
     qrUrl: qrAvailable ? qrUrl(accountId) : "",
     started: Boolean(state.started || runtimes.has(accountId)),
@@ -465,7 +478,7 @@ export async function startLocalWhatsAppAccount(accountId = "", env = process.en
     await client.destroy().catch(() => {});
   };
   const client = new Client({
-    authStrategy: new LocalAuth({ clientId: clientIdForAccount(normalized, env), dataPath: sessionRoot(env) }),
+    authStrategy: new LocalAuth({ clientId: clientIdForAccount(normalized, env), dataPath: sessionRootForAccount(normalized, env) }),
     puppeteer: puppeteerOptions(env),
     userAgent: whatsappUserAgent(env),
     ...(pairingPhoneNumber
