@@ -174,6 +174,8 @@ Useful updater commands:
 systemctl list-timers orkestr-update.timer
 journalctl -u orkestr-update -f
 orkestr-deploy status
+orkestr update status
+sudo orkestr update --release --ref v0.1.7 --channel production
 orkestr doctor
 orkestr-update
 orkestr-reset-state
@@ -189,6 +191,9 @@ symlink, restarts the service, and records the result in `deployments.json`:
 ```bash
 ORKESTR_RELEASE_DEPLOY=1 ORKESTR_UPDATE_REF=v0.1.7 orkestr-update
 # or manually:
+sudo orkestr update --release --ref v0.1.7 --channel production
+orkestr update status
+orkestr update rollback
 orkestr-deploy install --ref v0.1.7 --channel production
 orkestr-deploy status
 orkestr-deploy rollback

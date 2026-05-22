@@ -290,6 +290,8 @@ Useful updater commands:
 systemctl list-timers orkestr-update.timer
 journalctl -u orkestr-update -f
 orkestr-deploy status
+orkestr update status
+sudo orkestr update --release --ref v0.1.7 --channel production
 orkestr-update
 orkestr-reset-state
 ```
@@ -323,6 +325,9 @@ With `ORKESTR_RELEASE_DEPLOY=1`, `orkestr-update` delegates to
 Manual operations:
 
 ```bash
+sudo orkestr update --release --ref v0.1.7 --channel production
+orkestr update status
+orkestr update rollback
 orkestr-deploy install --ref v0.1.7 --channel production
 orkestr-deploy status
 orkestr-deploy rollback

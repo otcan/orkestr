@@ -52,6 +52,8 @@ test("install script exposes a host-native systemd VPS path", async () => {
   assert.match(script, /npm install -g "@openai\/codex@\$\{ORKESTR_CODEX_VERSION:-0\.130\.0\}"/);
   assert.match(script, /runuser -u "\$run_user" --preserve-environment -- node/);
   assert.match(script, /ORKESTR_CLI_RUN_AS_ROOT/);
+  assert.match(script, /case "\$\{1:-\}" in/);
+  assert.match(script, /update\)/);
   assert.match(script, /ExecStart=\/usr\/local\/bin\/orkestr serve/);
   assert.match(script, /ExecStart=\/usr\/local\/bin\/orkestr-update/);
   assert.match(script, /systemctl restart "\$\{service_name\}\.service"/);

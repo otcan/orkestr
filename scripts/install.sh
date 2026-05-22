@@ -346,6 +346,11 @@ if [ -z "$run_user" ] && command -v systemctl >/dev/null 2>&1; then
   run_user="$(systemctl show -p User --value "${ORKESTR_SERVICE_NAME:-orkestr}.service" 2>/dev/null || true)"
 fi
 run_user="${run_user:-orkestr}"
+case "${1:-}" in
+  update)
+    exec node "$app_dir/apps/cli/bin/orkestr-oss.js" "$@"
+    ;;
+esac
 if [ "$(id -u)" -eq 0 ] && [ "${ORKESTR_CLI_RUN_AS_ROOT:-0}" != "1" ] && id "$run_user" >/dev/null 2>&1; then
   if ! command -v runuser >/dev/null 2>&1; then
     echo "Missing required command: runuser" >&2
