@@ -4,7 +4,7 @@ This document is the publish gate for `v0.1.0-alpha.0`.
 
 ## Public Promise
 
-Orkestr alpha is a local-first agent workstation scaffold:
+Orkestr alpha is a self-hosted agent workstation scaffold:
 
 - install locally
 - open the setup UI

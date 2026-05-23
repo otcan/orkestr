@@ -35,7 +35,7 @@
 Initial public alpha baseline.
 
 - NestJS API serving the Angular web app.
-- Local-first setup, connector status, and config persistence.
+- Self-hosted setup, connector status, and config persistence.
 - Thread-first runtime API with wake, sleep, input, history, timers, and file upload endpoints.
 - Agent templates, generic executor boundary, and private overlay loading.
 - Gmail OAuth skeleton and mocked Gmail test coverage.

@@ -1,7 +1,7 @@
 {
   "name": "orkestr-oss",
   "version": "0.1.0-alpha.12",
-  "description": "Local-first personal agent workstation: setup, connectors, virtual browsers, WhatsApp, and timers.",
+  "description": "Self-hosted agent workstation: Codex threads, connectors, virtual browsers, WhatsApp, and timers.",
   "type": "module",
   "bin": {
     "orkestr": "./apps/cli/bin/orkestr-oss.js",

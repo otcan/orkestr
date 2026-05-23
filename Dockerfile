@@ -20,7 +20,7 @@ FROM node:22-bookworm-slim AS runtime
 
 WORKDIR /app
 LABEL org.opencontainers.image.source="https://github.com/otcan/orkestr"
-LABEL org.opencontainers.image.description="Local-first Orkestr agent workstation with Codex runtime"
+LABEL org.opencontainers.image.description="Self-hosted Orkestr agent workstation with Codex runtime"
 LABEL org.opencontainers.image.licenses="MIT"
 ENV NODE_ENV=production
 ENV ORKESTR_HOME=/data

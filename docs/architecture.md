@@ -1,6 +1,6 @@
 # Architecture
 
-Orkestr is a local-first monorepo with a small API server, a web cockpit, a CLI, and reusable packages.
+Orkestr is a self-hosted agent workstation monorepo with a small API server, a web cockpit, a CLI, and reusable packages.
 
 ```mermaid
 flowchart TB
