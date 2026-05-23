@@ -35,12 +35,18 @@ test("host update watcher replaces external VPS deploy automation", async () => 
   assert.match(install, /\/usr\/local\/bin\/orkestr-deploy/);
   assert.match(install, /update\)/);
   assert.match(install, /ORKESTR_CURRENT_LINK/);
+  assert.match(install, /--track-main/);
+  assert.match(install, /ORKESTR_DEPLOY_TAGS_ONLY/);
   assert.match(docs, /On-Box Update Watcher/);
   assert.match(docs, /Versioned Git Releases/);
+  assert.match(docs, /main-<short-commit>/);
+  assert.match(docs, /--track-main/);
   assert.match(docs, /orkestr update status/);
   assert.match(docs, /orkestr update --release/);
   assert.match(readme, /On-Box Update Watcher/);
   assert.match(readme, /Versioned Git Releases/);
+  assert.match(readme, /main-<short-commit>/);
+  assert.match(readme, /--track-main/);
   assert.match(readme, /orkestr update status/);
   assert.match(readme, /orkestr update --release/);
   assert.doesNotMatch(watcher + install + docs + readme, /deploy-vps|GitHub Actions/);

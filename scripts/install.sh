@@ -7,13 +7,15 @@ Install Orkestr.
 
 Usage:
   scripts/install.sh [--local] [--serve] [--profile local-safe|local-trusted]
-  scripts/install.sh --systemd [--auto-update] [--profile vps-safe|vps-trusted] [--install-dir DIR] [--data-dir DIR] [--workspace-dir DIR] [--env-file FILE] [--user USER]
+  scripts/install.sh --systemd [--auto-update] [--track-main|--release-updates] [--profile vps-safe|vps-trusted] [--install-dir DIR] [--data-dir DIR] [--workspace-dir DIR] [--env-file FILE] [--user USER]
 
 Modes:
   default       Clone/update the repo, install dependencies, build, and print a start command.
   --local       Use the current checkout instead of cloning.
   --systemd     Install a host-native VPS service. Requires root.
   --auto-update Install a host-local update watcher timer in --systemd mode.
+  --track-main  Track origin/main with versioned releases. Implies --auto-update, --release-updates, --update-ref main, --channel main, and --allow-untagged-releases.
+  --release-updates Use versioned release directories for updater deploys.
   --serve       Start npm after a non-systemd install.
 
 Environment:
@@ -33,6 +35,7 @@ Environment:
   ORKESTR_UPDATE_INTERVAL_SECONDS  Update check interval. Defaults to 120.
   ORKESTR_RELEASE_DEPLOY    Use versioned release directories for updates. Defaults to 0.
   ORKESTR_DEPLOY_CHANNEL    Deployment channel label. Defaults to production for release deploys.
+  ORKESTR_DEPLOY_TAGS_ONLY  Require exact git tags for versioned deploys. Defaults to 1 for production, 0 otherwise.
   ORKESTR_DEPLOY_ROOT       Versioned release root. Defaults to /opt/orkestr.
   ORKESTR_CURRENT_LINK      Active release symlink. Defaults to /opt/orkestr/current.
   ORKESTR_RESET_ON_UPDATE   Reset runtime state after successful updates. Defaults to 0.
@@ -55,6 +58,11 @@ host="${ORKESTR_HOST:-127.0.0.1}"
 port="${ORKESTR_PORT:-19812}"
 auto_update="${ORKESTR_AUTO_UPDATE:-0}"
 update_interval_seconds="${ORKESTR_UPDATE_INTERVAL_SECONDS:-120}"
+update_ref="${ORKESTR_UPDATE_REF:-main}"
+release_update="${ORKESTR_RELEASE_DEPLOY:-0}"
+deploy_channel="${ORKESTR_DEPLOY_CHANNEL:-production}"
+deploy_tags_only="${ORKESTR_DEPLOY_TAGS_ONLY:-}"
+track_main=0
 install_profile="${ORKESTR_INSTALL_PROFILE:-}"
 
 while [ "$#" -gt 0 ]; do
@@ -79,6 +87,50 @@ while [ "$#" -gt 0 ]; do
     --no-auto-update)
       auto_update=0
       ORKESTR_AUTO_UPDATE=0
+      shift
+      ;;
+    --track-main)
+      track_main=1
+      auto_update=1
+      release_update=1
+      update_ref=main
+      deploy_channel=main
+      deploy_tags_only=0
+      ORKESTR_AUTO_UPDATE=1
+      ORKESTR_RELEASE_DEPLOY=1
+      ORKESTR_UPDATE_REF=main
+      ORKESTR_DEPLOY_CHANNEL=main
+      ORKESTR_DEPLOY_TAGS_ONLY=0
+      shift
+      ;;
+    --release-updates|--versioned-updates)
+      release_update=1
+      ORKESTR_RELEASE_DEPLOY=1
+      shift
+      ;;
+    --in-place-updates)
+      release_update=0
+      ORKESTR_RELEASE_DEPLOY=0
+      shift
+      ;;
+    --update-ref)
+      update_ref="${2:-}"
+      ORKESTR_UPDATE_REF="$update_ref"
+      shift 2
+      ;;
+    --channel)
+      deploy_channel="${2:-}"
+      ORKESTR_DEPLOY_CHANNEL="$deploy_channel"
+      shift 2
+      ;;
+    --allow-untagged-releases)
+      deploy_tags_only=0
+      ORKESTR_DEPLOY_TAGS_ONLY=0
+      shift
+      ;;
+    --require-tagged-releases)
+      deploy_tags_only=1
+      ORKESTR_DEPLOY_TAGS_ONLY=1
       shift
       ;;
     --install-dir)
@@ -133,6 +185,19 @@ while [ "$#" -gt 0 ]; do
       ;;
   esac
 done
+
+if [ "$track_main" -eq 1 ]; then
+  auto_update=1
+  release_update=1
+  update_ref=main
+  deploy_channel=main
+  deploy_tags_only=0
+  ORKESTR_AUTO_UPDATE=1
+  ORKESTR_RELEASE_DEPLOY=1
+  ORKESTR_UPDATE_REF=main
+  ORKESTR_DEPLOY_CHANNEL=main
+  ORKESTR_DEPLOY_TAGS_ONLY=0
+fi
 
 need() {
   if ! command -v "$1" >/dev/null 2>&1; then
@@ -348,10 +413,11 @@ ORKESTR_PUBLIC_HTTPS_URL=${ORKESTR_PUBLIC_HTTPS_URL:-}
 ORKESTR_TAILSCALE_HTTPS_NAME=${ORKESTR_TAILSCALE_HTTPS_NAME:-}
 ORKESTR_CADDY_ENABLED=${ORKESTR_CADDY_ENABLED:-0}
 ORKESTR_AUTO_UPDATE=${ORKESTR_AUTO_UPDATE:-$auto_update}
-ORKESTR_UPDATE_REF=${ORKESTR_UPDATE_REF:-main}
+ORKESTR_UPDATE_REF=${ORKESTR_UPDATE_REF:-$update_ref}
 ORKESTR_UPDATE_INTERVAL_SECONDS=${ORKESTR_UPDATE_INTERVAL_SECONDS:-$update_interval_seconds}
-ORKESTR_RELEASE_DEPLOY=${ORKESTR_RELEASE_DEPLOY:-0}
-ORKESTR_DEPLOY_CHANNEL=${ORKESTR_DEPLOY_CHANNEL:-production}
+ORKESTR_RELEASE_DEPLOY=${ORKESTR_RELEASE_DEPLOY:-$release_update}
+ORKESTR_DEPLOY_CHANNEL=${ORKESTR_DEPLOY_CHANNEL:-$deploy_channel}
+ORKESTR_DEPLOY_TAGS_ONLY=${ORKESTR_DEPLOY_TAGS_ONLY:-$deploy_tags_only}
 ORKESTR_DEPLOY_ROOT=${ORKESTR_DEPLOY_ROOT:-/opt/orkestr}
 ORKESTR_CURRENT_LINK=${ORKESTR_CURRENT_LINK:-/opt/orkestr/current}
 ORKESTR_RESET_ON_UPDATE=${ORKESTR_RESET_ON_UPDATE:-0}

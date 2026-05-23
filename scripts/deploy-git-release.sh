@@ -6,7 +6,7 @@ usage() {
 Deploy Orkestr from an exact git ref into versioned release directories.
 
 Usage:
-  scripts/deploy-git-release.sh install [--ref REF] [--channel NAME] [--no-smoke]
+  scripts/deploy-git-release.sh install [--ref REF] [--channel NAME] [--allow-untagged|--require-tagged] [--no-smoke]
   scripts/deploy-git-release.sh rollback [--to RELEASE_ID]
   scripts/deploy-git-release.sh status [--json]
   scripts/deploy-git-release.sh --check-only
@@ -40,6 +40,7 @@ to_release=""
 json_output=0
 check_only=0
 run_smoke_arg=""
+tags_only_arg=""
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
@@ -69,6 +70,14 @@ while [ "$#" -gt 0 ]; do
       ;;
     --smoke)
       run_smoke_arg=1
+      shift
+      ;;
+    --allow-untagged|--allow-untagged-releases)
+      tags_only_arg=0
+      shift
+      ;;
+    --require-tagged|--require-tagged-releases)
+      tags_only_arg=1
       shift
       ;;
     --check-only)
@@ -257,7 +266,7 @@ install_command() {
   target_ref="$(resolve_target_ref "$deploy_ref")"
   target_tag="$(git -C "$repo_cache" describe --tags --exact-match "$target_ref" 2>/dev/null || true)"
   target_describe="$(git -C "$repo_cache" describe --tags --always --long "$target_ref" 2>/dev/null || echo "$target_ref")"
-  tag_required="${ORKESTR_DEPLOY_TAGS_ONLY:-}"
+  tag_required="${tags_only_arg:-${ORKESTR_DEPLOY_TAGS_ONLY:-}}"
   if [ -z "$tag_required" ]; then
     if [ "$deploy_channel" = "production" ]; then tag_required=1; else tag_required=0; fi
   fi

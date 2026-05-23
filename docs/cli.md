@@ -17,6 +17,7 @@ orkestr security challenges
 orkestr security approve <challenge-id>
 orkestr timers list
 orkestr timers run <timer-id>
+orkestr update --track-main --no-smoke
 orkestr update --release --ref v0.1.0-alpha.10 --channel production
 orkestr update status
 orkestr update rollback
@@ -49,13 +50,15 @@ parallel chat with no first message. Worker creation wakes the new worker by
 default; pass `--no-wake` when scripting tests or preparing a worker offline.
 
 `orkestr update` runs the host-native updater from the installed checkout.
-Without flags it follows the install's configured mode. Use `--release` for the
-versioned release deployer, `--in-place` for the legacy checkout updater,
-`--ref <tag-or-branch>` to choose the git ref, and `--channel <name>` to label a
-release deployment. `orkestr update status --json` and `orkestr update rollback
---to <release-id>` forward to the versioned release deployer. On systemd VPS
-installs, run update operations from a privileged shell, for example `sudo
-orkestr update --release --ref v0.1.0-alpha.10`.
+Without flags it follows the install's configured mode. Use `--track-main` for
+automatic versioned releases from `main`, `--release` for the versioned release
+deployer, `--in-place` for the legacy checkout updater, `--ref <tag-or-branch>`
+to choose the git ref, and `--channel <name>` to label a release deployment.
+`--allow-untagged` allows branch/SHA deploys in versioned mode; production
+deploys otherwise require exact tags by default. `orkestr update status --json`
+and `orkestr update rollback --to <release-id>` forward to the versioned release
+deployer. On systemd VPS installs, run update operations from a privileged
+shell, for example `sudo orkestr update --track-main --no-smoke`.
 
 `orkestr doctor` checks the host runtime through the public API: writable data
 paths, git, tmux, ripgrep, npm, Chromium/Chrome, Codex auth, and remote-access

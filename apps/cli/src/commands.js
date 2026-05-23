@@ -202,17 +202,20 @@ async function updateCommand(argv, ctx) {
   if (subcommand === "status") return updateStatusCommand(rest, ctx);
   if (subcommand === "rollback") return updateRollbackCommand(rest, ctx);
   if (subcommand !== "install" && subcommand !== "run") {
-    throw new Error("Usage: orkestr update [--ref ref] [--release|--in-place] [--channel name] [--no-smoke]\n       orkestr update status [--json]\n       orkestr update rollback [--to release-id]");
+    throw new Error("Usage: orkestr update [--track-main|--ref ref] [--release|--in-place] [--channel name] [--allow-untagged|--require-tagged] [--no-smoke]\n       orkestr update status [--json]\n       orkestr update rollback [--to release-id]");
   }
   return updateInstallCommand(rest, ctx);
 }
 
 async function updateInstallCommand(argv, ctx) {
-  const ref = flagValue(argv, "--ref") || flagValue(argv, "--to") || "";
-  const channel = flagValue(argv, "--channel") || "";
-  const release = argv.includes("--release") || ctx.env.ORKESTR_RELEASE_DEPLOY === "1";
+  const trackMain = argv.includes("--track-main");
+  const ref = flagValue(argv, "--ref") || flagValue(argv, "--to") || (trackMain ? "main" : "");
+  const channel = flagValue(argv, "--channel") || (trackMain ? "main" : "");
+  const release = trackMain || argv.includes("--release") || ctx.env.ORKESTR_RELEASE_DEPLOY === "1";
   const inPlace = argv.includes("--in-place");
   const checkOnly = argv.includes("--check-only");
+  const allowUntagged = trackMain || argv.includes("--allow-untagged") || argv.includes("--allow-untagged-releases");
+  const requireTagged = argv.includes("--require-tagged") || argv.includes("--require-tagged-releases");
   const env = { ...ctx.env };
   if (ref) {
     env.ORKESTR_UPDATE_REF = ref;
@@ -221,10 +224,20 @@ async function updateInstallCommand(argv, ctx) {
   if (channel) env.ORKESTR_DEPLOY_CHANNEL = channel;
   if (release && !inPlace) env.ORKESTR_RELEASE_DEPLOY = "1";
   if (inPlace) env.ORKESTR_RELEASE_DEPLOY = "0";
+  if (allowUntagged) env.ORKESTR_DEPLOY_TAGS_ONLY = "0";
+  if (requireTagged) env.ORKESTR_DEPLOY_TAGS_ONLY = "1";
 
   const script = updateScriptPath(release && !inPlace ? "deploy-git-release.sh" : "update-watch.sh");
   const args = release && !inPlace
-    ? ["install", ...(ref ? ["--ref", ref] : []), ...(channel ? ["--channel", channel] : []), ...(argv.includes("--no-smoke") ? ["--no-smoke"] : []), ...(checkOnly ? ["--check-only"] : [])]
+    ? [
+        "install",
+        ...(ref ? ["--ref", ref] : []),
+        ...(channel ? ["--channel", channel] : []),
+        ...(allowUntagged ? ["--allow-untagged"] : []),
+        ...(requireTagged ? ["--require-tagged"] : []),
+        ...(argv.includes("--no-smoke") ? ["--no-smoke"] : []),
+        ...(checkOnly ? ["--check-only"] : []),
+      ]
     : [...(checkOnly ? ["--check-only"] : [])];
   const label = release && !inPlace ? "versioned release update" : "in-place update";
   if (!argv.includes("--json")) ctx.stdout.write(`Starting Orkestr ${label}${ref ? ` for ${ref}` : ""}...\n`);
@@ -412,7 +425,7 @@ function writeUsage(stream) {
   orkestr doctor [system|timers|resources] [--repair] [--json]
   orkestr timers [list|doctor|run <timer-id>] [--json]
   orkestr security [challenges|approve <challenge-id>|reject <challenge-id>] [--json]
-  orkestr update [--ref ref] [--release|--in-place] [--channel name] [--no-smoke]
+  orkestr update [--track-main|--ref ref] [--release|--in-place] [--channel name] [--allow-untagged|--require-tagged] [--no-smoke]
   orkestr update status [--json]
   orkestr update rollback [--to release-id]
   orkestr thread create <name> [--id id] [--cwd path] [--command command] [--executor id] [--json]
@@ -487,7 +500,23 @@ function positional(argv) {
     "--channel",
     "--to",
   ]);
-  const flagsWithoutValues = new Set(["--blank", "--json", "--no-wake", "--print", "--open", "--repair", "--release", "--in-place", "--no-smoke", "--check-only"]);
+  const flagsWithoutValues = new Set([
+    "--blank",
+    "--json",
+    "--no-wake",
+    "--print",
+    "--open",
+    "--repair",
+    "--release",
+    "--in-place",
+    "--track-main",
+    "--allow-untagged",
+    "--allow-untagged-releases",
+    "--require-tagged",
+    "--require-tagged-releases",
+    "--no-smoke",
+    "--check-only",
+  ]);
   for (let index = 0; index < argv.length; index += 1) {
     const value = argv[index];
     if (flagsWithoutValues.has(value)) continue;

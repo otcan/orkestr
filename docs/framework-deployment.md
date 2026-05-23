@@ -63,7 +63,7 @@ Use these paths for different kinds of work:
 - Trying Orkestr locally: `scripts/install.sh --local --serve`.
 - Running a real personal VPS: `scripts/bootstrap-vps.sh`.
 - Installing on a host you already prepared: `scripts/install.sh --systemd`.
-- Updating a VPS in place: `orkestr-update` or `orkestr update`.
+- Updating a VPS: `orkestr-update` or `orkestr update`.
 - Testing installer or remote-access changes: `npm run smoke:vps:aws`.
 - Publishing a production-like VPS version: versioned git release deploys.
 
@@ -101,7 +101,8 @@ By default, `bootstrap-vps.sh`:
 - checks OS, CPU architecture, memory, and disk
 - installs Tailscale, but does not force login unless `TS_AUTHKEY` or
   `--tailscale-up` is provided
-- runs `scripts/install.sh --systemd --auto-update`
+- runs `scripts/install.sh --systemd --track-main`
+- configures main-tracking versioned releases under `/opt/orkestr/releases`
 - keeps Orkestr bound to `127.0.0.1`
 - configures Tailscale Serve automatically when Tailscale is already connected
 - optionally configures Caddy when `--domain` is supplied
@@ -246,20 +247,30 @@ For a personal VPS, prefer a small host-local updater over an external deploy
 pipeline:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/otcan/orkestr/main/scripts/install.sh | sudo bash -s -- --systemd --auto-update
+curl -fsSL https://raw.githubusercontent.com/otcan/orkestr/main/scripts/install.sh | sudo bash -s -- --systemd --track-main
 ```
 
-`--auto-update` installs:
+`--track-main` installs the updater and configures versioned main tracking:
 
 ```text
 /usr/local/bin/orkestr-update
 /etc/systemd/system/orkestr-update.service
 /etc/systemd/system/orkestr-update.timer
+ORKESTR_RELEASE_DEPLOY=1
+ORKESTR_UPDATE_REF=main
+ORKESTR_DEPLOY_CHANNEL=main
+ORKESTR_DEPLOY_TAGS_ONLY=0
 ```
 
 The timer runs every two minutes by default. Each run fetches the configured
-repo, resolves `ORKESTR_UPDATE_REF` (default: `main`), exits if the checkout is
-already current, and otherwise runs:
+repo, resolves `ORKESTR_UPDATE_REF` (default: `main`), exits if the active
+release is already current, and otherwise builds a release directory named
+`main-<short-commit>`. It then switches `/opt/orkestr/current`, restarts the
+service, and verifies `/api/health`.
+
+The older in-place updater is still available with `--auto-update` and no
+`--release-updates`/`--track-main`. It exits if the checkout is already current
+and otherwise runs:
 
 ```bash
 npm ci
@@ -295,19 +306,37 @@ journalctl -u orkestr-update -f
 orkestr-deploy status
 orkestr update status
 sudo orkestr update --release --ref v0.1.7 --channel production
+sudo orkestr update --track-main --no-smoke
 orkestr-update
 orkestr-reset-state
 ```
 
 ## Versioned Git Releases
 
-The update watcher can stay in the original in-place mode, but production-like
-VPS installs should use the versioned release path:
+The update watcher can stay in the original in-place mode, but VPS installs
+that need rollback should use the versioned release path. For main tracking:
+
+```bash
+ORKESTR_RELEASE_DEPLOY=1
+ORKESTR_UPDATE_REF=main
+ORKESTR_DEPLOY_CHANNEL=main
+ORKESTR_DEPLOY_TAGS_ONLY=0
+```
+
+or:
+
+```bash
+sudo scripts/install.sh --systemd --track-main
+sudo orkestr update --track-main --no-smoke
+```
+
+For strict tagged production releases:
 
 ```bash
 ORKESTR_RELEASE_DEPLOY=1
 ORKESTR_UPDATE_REF=v0.1.7
 ORKESTR_DEPLOY_CHANNEL=production
+ORKESTR_DEPLOY_TAGS_ONLY=1
 ```
 
 With `ORKESTR_RELEASE_DEPLOY=1`, `orkestr-update` delegates to
@@ -328,9 +357,11 @@ With `ORKESTR_RELEASE_DEPLOY=1`, `orkestr-update` delegates to
 Manual operations:
 
 ```bash
+sudo orkestr update --track-main --no-smoke
 sudo orkestr update --release --ref v0.1.7 --channel production
 orkestr update status
 orkestr update rollback
+orkestr-deploy install --ref main --channel main --allow-untagged --no-smoke
 orkestr-deploy install --ref v0.1.7 --channel production
 orkestr-deploy status
 orkestr-deploy rollback

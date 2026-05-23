@@ -96,9 +96,9 @@ curl -fsSL https://raw.githubusercontent.com/otcan/orkestr/main/scripts/bootstra
 ```
 
 It checks the OS and basic resources, installs Tailscale by default, runs the
-host-native systemd installer with auto-update enabled, configures optional
-demo/WhatsApp/domain settings, keeps Orkestr on localhost with browser pairing
-enabled, and prints the setup URL and next commands.
+host-native systemd installer with main-tracking versioned updates enabled,
+configures optional demo/WhatsApp/domain settings, keeps Orkestr on localhost
+with browser pairing enabled, and prints the setup URL and next commands.
 
 Useful variants:
 
@@ -180,13 +180,15 @@ Edit `/etc/orkestr/orkestr.env` for optional OpenAI direct API access, OAuth, Ca
 For a personal VPS, keep deployment on the box:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/otcan/orkestr/main/scripts/install.sh | sudo bash -s -- --systemd --auto-update
+curl -fsSL https://raw.githubusercontent.com/otcan/orkestr/main/scripts/install.sh | sudo bash -s -- --systemd --track-main
 ```
 
 That installs `orkestr-update.timer`. The timer runs `orkestr-update` every two
-minutes, fetches `origin/main`, rebuilds only when the commit changes, and
-restarts `orkestr.service` after a successful build. It keeps
-`/etc/orkestr/orkestr.env` local to the server.
+minutes, fetches `origin/main`, builds a versioned release when the commit
+changes, flips `/opt/orkestr/current`, and restarts `orkestr.service` after a
+successful health check. Main-tracking releases are named
+`main-<short-commit>`. The updater keeps `/etc/orkestr/orkestr.env` local to
+the server.
 
 For disposable test VPS deployments, set `ORKESTR_RESET_ON_UPDATE=1` in
 `/etc/orkestr/orkestr.env`. Successful updates will wipe `ORKESTR_HOME` and
@@ -201,6 +203,7 @@ systemctl list-timers orkestr-update.timer
 journalctl -u orkestr-update -f
 orkestr-deploy status
 orkestr update status
+sudo orkestr update --track-main --no-smoke
 sudo orkestr update --release --ref v0.1.7 --channel production
 orkestr doctor
 orkestr-update
@@ -209,14 +212,17 @@ orkestr-reset-state
 
 ### Versioned Git Releases
 
-For production-like VPS installs, prefer immutable git tags over a floating
-branch. The release deployer builds each selected ref in a fresh directory,
-writes a `release-manifest.json`, backs up `ORKESTR_HOME`, flips the active
-symlink, restarts the service, and records the result in `deployments.json`:
+For personal or demo VPS installs, `--track-main` gives fast versioning without
+manual tags: every new `main` commit becomes a release under
+`/opt/orkestr/releases/main-<short-commit>`, with rollback available through the
+CLI. For stricter production installs, prefer immutable git tags. The release
+deployer builds each selected ref in a fresh directory, writes a
+`release-manifest.json`, backs up `ORKESTR_HOME`, flips the active symlink,
+restarts the service, and records the result in `deployments.json`:
 
 ```bash
-ORKESTR_RELEASE_DEPLOY=1 ORKESTR_UPDATE_REF=v0.1.7 orkestr-update
-# or manually:
+ORKESTR_RELEASE_DEPLOY=1 ORKESTR_UPDATE_REF=main ORKESTR_DEPLOY_CHANNEL=main ORKESTR_DEPLOY_TAGS_ONLY=0 orkestr-update
+sudo orkestr update --track-main --no-smoke
 sudo orkestr update --release --ref v0.1.7 --channel production
 orkestr update status
 orkestr update rollback

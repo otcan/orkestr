@@ -131,7 +131,9 @@ security posture.
 
 For host-native VPS installs, Orkestr can install a systemd service and an
 on-box update watcher. The watcher pulls `origin/main`, rebuilds only when the
-commit changes, and restarts Orkestr after a successful build.
+commit changes, and restarts Orkestr after a successful build. Use
+`scripts/install.sh --systemd --track-main` when you want each `main` commit to
+be installed as a rollbackable release under `/opt/orkestr/releases`.
 
 ## Public Facing Layer
 
@@ -201,6 +203,7 @@ journalctl -u orkestr -f
 orkestr doctor
 orkestr security approve <challenge-id>
 orkestr-update
+orkestr update --track-main --no-smoke
 ```
 
 For disposable test VPS machines, enable reset-on-update so each deploy starts

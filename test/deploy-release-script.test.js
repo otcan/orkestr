@@ -18,6 +18,7 @@ test("release deploy script exposes versioned install, status, and rollback", as
   await execFileAsync("bash", ["scripts/deploy-git-release.sh", "--check-only"]);
 
   assert.match(stdout, /install \[--ref REF\]/);
+  assert.match(stdout, /--allow-untagged\|--require-tagged/);
   assert.match(stdout, /rollback \[--to RELEASE_ID\]/);
   assert.match(script, /ORKESTR_RELEASES_DIR/);
   assert.match(script, /ORKESTR_CURRENT_LINK/);
@@ -27,6 +28,9 @@ test("release deploy script exposes versioned install, status, and rollback", as
   assert.match(script, /backup_state/);
   assert.match(script, /health_check/);
   assert.match(script, /ORKESTR_DEPLOY_TAGS_ONLY/);
+  assert.match(script, /tags_only_arg/);
+  assert.match(script, /--allow-untagged\|--allow-untagged-releases/);
+  assert.match(script, /--require-tagged\|--require-tagged-releases/);
   assert.match(script, /worktree add --detach/);
   assert.match(script, /LC_ALL=C tr -c 'A-Za-z0-9\._\+-' '-'/);
   assert.match(manifest, /schemaVersion/);

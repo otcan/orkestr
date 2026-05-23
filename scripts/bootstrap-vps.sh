@@ -18,6 +18,10 @@ Options:
   --port PORT                Local Orkestr port. Defaults to 19812.
   --host HOST                Local bind host. Defaults to 127.0.0.1.
   --no-auto-update           Do not install the on-box update timer.
+  --track-main               Track main with versioned releases. Default for fresh VPS bootstraps.
+  --in-place-updates         Use the legacy in-place checkout updater instead of versioned releases.
+  --release-updates          Use versioned release directories for updater deploys.
+  --channel NAME             Deployment channel label. Defaults to main for versioned main tracking.
   --demo                     Disposable demo mode: reset Orkestr runtime state after successful updates.
   --with-whatsapp            Prefer the local WhatsApp bridge mode in /etc/orkestr/orkestr.env.
   --tailscale                Install Tailscale and configure serve when connected. Default.
@@ -40,6 +44,10 @@ git_ref="${ORKESTR_GIT_REF:-main}"
 host="${ORKESTR_HOST:-127.0.0.1}"
 port="${ORKESTR_PORT:-19812}"
 auto_update=1
+release_update="${ORKESTR_RELEASE_DEPLOY:-1}"
+deploy_channel="${ORKESTR_DEPLOY_CHANNEL:-main}"
+deploy_tags_only="${ORKESTR_DEPLOY_TAGS_ONLY:-0}"
+track_main=0
 demo=0
 with_whatsapp=0
 tailscale=1
@@ -70,6 +78,35 @@ while [ "$#" -gt 0 ]; do
       ;;
     --no-auto-update)
       auto_update=0
+      shift
+      ;;
+    --track-main)
+      track_main=1
+      auto_update=1
+      release_update=1
+      git_ref=main
+      deploy_channel=main
+      deploy_tags_only=0
+      shift
+      ;;
+    --release-updates|--versioned-updates)
+      release_update=1
+      shift
+      ;;
+    --in-place-updates)
+      release_update=0
+      shift
+      ;;
+    --channel)
+      deploy_channel="${2:-}"
+      shift 2
+      ;;
+    --allow-untagged-releases)
+      deploy_tags_only=0
+      shift
+      ;;
+    --require-tagged-releases)
+      deploy_tags_only=1
       shift
       ;;
     --demo)
@@ -120,6 +157,14 @@ while [ "$#" -gt 0 ]; do
       ;;
   esac
 done
+
+if [ "$track_main" -eq 1 ]; then
+  auto_update=1
+  release_update=1
+  git_ref=main
+  deploy_channel=main
+  deploy_tags_only=0
+fi
 
 log() {
   printf '[orkestr-bootstrap] %s\n' "$*"
@@ -267,6 +312,18 @@ run_install_script() {
   else
     install_args+=(--no-auto-update)
   fi
+  if [ "$release_update" -eq 1 ]; then
+    install_args+=(--release-updates --update-ref "$git_ref" --channel "$deploy_channel")
+    if [ -n "$deploy_tags_only" ]; then
+      if [ "$deploy_tags_only" = "1" ]; then
+        install_args+=(--require-tagged-releases)
+      else
+        install_args+=(--allow-untagged-releases)
+      fi
+    fi
+  else
+    install_args+=(--in-place-updates --update-ref "$git_ref")
+  fi
 
   script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)"
   local_install="$script_dir/install.sh"
@@ -275,6 +332,10 @@ run_install_script() {
   export ORKESTR_HOST="$host"
   export ORKESTR_PORT="$port"
   export ORKESTR_AUTO_UPDATE="$auto_update"
+  export ORKESTR_UPDATE_REF="$git_ref"
+  export ORKESTR_RELEASE_DEPLOY="$release_update"
+  export ORKESTR_DEPLOY_CHANNEL="$deploy_channel"
+  export ORKESTR_DEPLOY_TAGS_ONLY="$deploy_tags_only"
   if [ "$demo" -eq 1 ]; then
     export ORKESTR_RESET_ON_UPDATE=1
     export ORKESTR_RESET_OVERLAY=1
