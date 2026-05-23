@@ -64,6 +64,15 @@ systemd logs, SSH pairing approval, and long-running agent work are host-level
 operations. Running the server directly under systemd keeps those operations
 plain.
 
+Use these paths for different kinds of work:
+
+- Trying Orkestr locally: Docker Compose.
+- Running a real personal VPS: `scripts/bootstrap-vps.sh`.
+- Installing on a host you already prepared: `scripts/install.sh --systemd`.
+- Updating a VPS in place: `orkestr-update` or `orkestr update`.
+- Testing installer or remote-access changes: `npm run smoke:vps:aws`.
+- Publishing a production-like VPS version: versioned git release deploys.
+
 ### Fresh VPS Bootstrap
 
 Choose **Ubuntu 24.04 LTS Server x64** for the easiest install path. Ubuntu
@@ -408,9 +417,12 @@ Orkestr home.
 ## Release Checklist
 
 1. Confirm `git status --short` is clean.
-2. Run `npm run check`.
-3. Run `npm run smoke`.
-4. Run `npm run demo:coding-agent`.
-5. Run `npm run docker:build`.
-6. Review `README.md`, `docs/private-overlay.md`, and this file.
-7. Tag and publish only after the private overlay has been checked for leaks.
+2. Run `npm run launch:check`.
+3. Run `npm run check`.
+4. Run `npm run smoke`.
+5. Run `npm run demo:coding-agent`.
+6. Run `npm run docker:build`.
+7. Run `npm run smoke:vps:aws` for installer, systemd, updater, Caddy,
+   Tailscale, or remote-access changes.
+8. Review `README.md`, `docs/private-overlay.md`, and this file.
+9. Tag and publish only after the private overlay has been checked for leaks.

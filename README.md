@@ -10,6 +10,14 @@ It gives you a public-facing web layer for setup, chat, status, pairing, and ope
 
 Start with the [user guide](docs/user-guide.md), then use the quickstart below when you are ready to install.
 
+## Documentation Map
+
+- [User guide](docs/user-guide.md): product concepts, first-time setup, and common workflows.
+- [Framework and deployment](docs/framework-deployment.md): Docker, VPS bootstrap, updater, versioned releases, and smoke tests.
+- [Security](SECURITY.md): remote-access shape, browser pairing, and secret-handling rules.
+- [Contributing](CONTRIBUTING.md): contributor workflow, automation map, and pull request expectations.
+- [Architecture](docs/architecture.md): package boundaries, runtime boundary, and connector boundary.
+
 ## Why Use Orkestr
 
 - **No OpenAI API credit meter for the default Codex path.** Use your existing Codex login instead of wiring every agent task through paid API calls.
@@ -339,7 +347,7 @@ See [SECURITY.md](SECURITY.md).
 
 Near-term launch work:
 
-- Secure access hardening: smoother Caddy/Tailscale validation, clearer pairing diagnostics, and safer remote-access defaults.
+- Out-of-box secure access hardening: smoother Caddy/Tailscale validation, clearer pairing diagnostics, and safer remote-access defaults.
 - Better setup path naming and legacy `/ng/*` compatibility cleanup.
 - A recorded end-to-end demo video using a disposable local Codex session.
 - More complete browser desktop controls and status.

@@ -8,10 +8,13 @@ directly.
 
 ```bash
 orkestr serve --open
+orkestr whereiam --cwd "$PWD" --json
 orkestr list
 orkestr doctor
 orkestr doctor timers
-orkestr timers
+orkestr security challenges
+orkestr security approve <challenge-id>
+orkestr timers list
 orkestr timers run <timer-id>
 orkestr update --release --ref v0.1.0-alpha.10 --channel production
 orkestr update status
@@ -57,6 +60,10 @@ immediately.
 Both doctor commands support `--json` for scripts. They exit non-zero only when
 the reported status is `broken`; warnings stay visible but do not block local
 setup.
+
+`orkestr security challenges` lists pending browser-pairing challenges.
+`orkestr security approve <challenge-id>` approves a browser from trusted host
+access, usually over SSH on a host-native VPS.
 
 Attach keeps the backing tmux session name stable, but names the tmux/byobu
 window after the Orkestr thread on wake and attach. The current runtime model is

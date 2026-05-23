@@ -9,7 +9,7 @@ Install locally, open setup, pair WhatsApp, prepare a virtual desktop, create a 
 - Clean public launch docs.
 - `/setup` as the first-run setup route.
 - Built-in local WhatsApp bridge with two account slots.
-- Virtual Desktop Generation as a first-class onboarding goal.
+- Virtual desktop preparation as a first-class onboarding goal.
 - Thread-first runtime APIs for local Codex sessions.
 - Deterministic coding-agent demo and public sample logs.
 

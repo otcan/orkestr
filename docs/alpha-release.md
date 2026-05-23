@@ -1,6 +1,8 @@
-# Alpha Release Plan
+# Original Alpha Release Plan
 
-This document is the publish gate for `v0.1.0-alpha.0`.
+This document records the original publish gate for `v0.1.0-alpha.0`. For the
+current release checklist, use [framework-deployment.md](framework-deployment.md)
+and [CONTRIBUTING.md](../CONTRIBUTING.md).
 
 ## Public Promise
 
@@ -9,7 +11,7 @@ Orkestr alpha is a self-hosted agent workstation scaffold:
 - install locally
 - open the setup UI
 - configure connector surfaces
-- create an agent/thread
+- create a named thread
 - route mock WhatsApp-origin work
 - schedule timers
 - keep private credentials and host-specific runtime behavior outside the public repo

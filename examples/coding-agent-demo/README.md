@@ -17,7 +17,7 @@ cp .env.docker.example .env
 docker compose up -d
 ```
 
-Then open `/setup`, choose a Codex workflow, and use **Open Codex sign-in**.
+Then open `/setup`, add Codex, and use **Open Codex sign-in**.
 
 For a host-native development checkout:
 
@@ -58,7 +58,7 @@ npx orkestr-oss attach repo-launch-reviewer
 
 ## Optional Virtual Desktop Step
 
-Open `/setup`, choose `Virtual Desktop Generation`, then prepare the desktop. The desktop profile lives under:
+Open `/setup`, add the virtual desktop, then prepare the desktop. The desktop profile lives under:
 
 ```text
 ORKESTR_HOME/browsers/desktop
