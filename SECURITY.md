@@ -8,8 +8,8 @@ Orkestr is public alpha, single-user software. It can wake local terminal sessio
 - Keep `ORKESTR_HOME` outside the repository.
 - Keep `ORKESTR_OVERLAY_DIR` private.
 - Do not expose `/api/*`, thread streams, terminal routes, or browser controls directly to the internet.
-- Use a private network such as Tailscale before remote access.
-- Put Caddy or another trusted reverse proxy in front before enabling HTTPS access from another machine.
+- Use a private network such as Tailscale, or Caddy/TLS behind a domain you control, before remote access.
+- Keep `ORKESTR_AUTH_REQUIRED=1` for remote installs and approve browsers through the pairing flow.
 
 ## Remote Access
 
@@ -19,9 +19,9 @@ Recommended order:
 2. Join the host to a private tailnet.
 3. Put Caddy in front of Orkestr.
 4. Use a tailnet HTTPS name or a public domain that you control.
-5. Add an auth boundary before exposing browser or terminal controls.
+5. Require browser pairing/auth before exposing browser or terminal controls.
 
-The `/setup` Secure Access step reports the current bind address, Caddy availability, Tailscale/HTTPS hints, and browser pairing state.
+The host-native VPS installer uses this shape by default: localhost bind, browser pairing enabled, and optional Tailscale/Caddy setup. The `/setup` Secure Access step reports the current bind address, Caddy availability, Tailscale/HTTPS hints, and browser pairing state.
 
 Set `ORKESTR_AUTH_REQUIRED=1` to require browser pairing before protected API access. The host-native VPS installer enables this by default in `/etc/orkestr/orkestr.env`. An unpaired browser can only generate a pairing challenge and poll that challenge. Approve the challenge from trusted host access:
 

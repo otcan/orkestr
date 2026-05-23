@@ -15,7 +15,7 @@ Install locally, open setup, pair WhatsApp, prepare a virtual desktop, create a 
 
 ## Next
 
-- Harden Secure access onboarding with automated Caddyfile generation and deeper Tailscale HTTPS validation.
+- Harden secure access onboarding with smoother Caddy/Tailscale validation, clearer pairing diagnostics, and safer remote-access defaults.
 - Add optional short demo clips from disposable fake-data runs.
 - Clearer WhatsApp chat binding flow.
 - Better virtual desktop open/status controls.

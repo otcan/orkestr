@@ -4,7 +4,7 @@ Orkestr is a self-hosted agent workstation for running Codex from a browser, CLI
 
 It gives you a public-facing web layer for setup, chat, status, pairing, and operations while keeping the actual agent runtime on infrastructure you control. Create named Codex threads, give them workspaces, start or sleep them, inspect status, connect WhatsApp or Gmail, attach virtual desktops, and review logs from one cockpit.
 
-> Public alpha. Do not expose Orkestr directly to the public internet. Keep it bound to `127.0.0.1` unless you have put it behind a trusted private network, TLS, and an auth boundary.
+> Public alpha. Remote access is supported through the protected VPS path: keep Orkestr bound to `127.0.0.1`, expose it through Tailscale or Caddy/TLS, and require browser pairing/auth. Do not bind the raw Orkestr service or terminal/API routes directly to the public internet.
 
 ![WhatsApp, TMUX, and Orkestr Web UI showing the same routed proof lines](docs/assets/orkestr-three-screen-demo.png)
 
@@ -147,7 +147,7 @@ The host CLI is safe to run from a root SSH session. It drops to the
 configured `ORKESTR_RUN_USER` before touching Orkestr state, so files under
 `ORKESTR_HOME` remain writable by `orkestr.service`.
 
-Edit `/etc/orkestr/orkestr.env` for optional OpenAI direct API access, OAuth, Caddy/Tailscale HTTPS, and private overlay settings. Keep the service bound to `127.0.0.1` and put Caddy/Tailscale in front before remote browser access.
+Edit `/etc/orkestr/orkestr.env` for optional OpenAI direct API access, OAuth, Caddy/Tailscale HTTPS, and private overlay settings. The host-native installer keeps the service bound to `127.0.0.1`, enables browser pairing by default, and can put Caddy/Tailscale in front for remote browser access.
 
 ### On-Box Update Watcher
 
@@ -318,15 +318,16 @@ More detail: [docs/architecture.md](docs/architecture.md).
 - CLI for listing, creating, waking, sleeping, sending to, and attaching threads
 - Local activity logs and deterministic public demos
 
-## Security Warning
+## Security Model
 
 Orkestr can wake local agents, pass text into terminal sessions, open browser profiles, and store connector credentials under `ORKESTR_HOME`.
 
-Minimum safe defaults:
+The supported remote shape is a protected entrypoint in front of a localhost-bound Orkestr service:
 
 - Keep `ORKESTR_HOST=127.0.0.1`.
-- Do not expose raw `/api/*`, thread streams, or terminal routes to the public internet.
-- Use Tailscale plus Caddy/TLS before remote access.
+- Use Tailscale or Caddy/TLS before remote access.
+- Keep `ORKESTR_AUTH_REQUIRED=1` and approve browsers through the setup pairing flow.
+- Do not expose raw `/api/*`, thread streams, or terminal routes directly to the public internet.
 - Keep real overlays, browser profiles, WhatsApp session state, Gmail tokens, and hostnames out of this public repo.
 - Treat this alpha as single-user software.
 
@@ -336,7 +337,7 @@ See [SECURITY.md](SECURITY.md).
 
 Near-term launch work:
 
-- Secure access onboarding: Caddy/Tailscale HTTPS checks and first-browser pairing.
+- Secure access hardening: smoother Caddy/Tailscale validation, clearer pairing diagnostics, and safer remote-access defaults.
 - Better setup path naming and legacy `/ng/*` compatibility cleanup.
 - A recorded end-to-end demo video using a disposable local Codex session.
 - More complete browser desktop controls and status.

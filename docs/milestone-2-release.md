@@ -91,7 +91,7 @@ Private overlays must not be copied into the public repo when they contain:
 
 ## Known Gaps
 
-- Secure remote access onboarding is planned but not complete.
+- Secure remote access has a baseline path through localhost bind, browser pairing, and optional Tailscale/Caddy; deeper validation and polish remain.
 - The public demo queues a coding-agent task; Docker local setup and host-native
   VPS setup both provide a Codex runtime path, and real Codex runs depend on
   completing setup-page device authorization.
