@@ -81,6 +81,84 @@ test("CLI whereiam sends the current directory to the public API", async () => {
   assert.match(stdout.text(), /Repo: \/repo\/demo/);
 });
 
+test("CLI version prints the active build identity", async () => {
+  const stdout = capture();
+  const code = await runCli(["version"], {
+    stdout,
+    stderr: capture(),
+    fetchImpl: fakeFetch({
+      "GET /api/version": {
+        name: "orkestr-oss",
+        version: "0.1.0-alpha.12",
+        commit: "6fc115b123456789",
+        branch: "main",
+        describe: "main-6fc115b",
+        channel: "main",
+        releaseId: "main-6fc115b",
+        dirty: false,
+      },
+    }),
+  });
+
+  assert.equal(code, 0);
+  assert.match(stdout.text(), /orkestr-oss 0\.1\.0-alpha\.12/);
+  assert.match(stdout.text(), /Release: main-6fc115b/);
+  assert.match(stdout.text(), /Commit: 6fc115b12345/);
+});
+
+test("CLI API failures are reported without an uncaught stack", async () => {
+  const stderr = capture();
+  const code = await runCli(["version"], {
+    stdout: capture(),
+    stderr,
+    fetchImpl: async () => {
+      throw new Error("api down");
+    },
+  });
+
+  assert.equal(code, 1);
+  assert.equal(stderr.text(), "api down\n");
+});
+
+test("CLI status summarizes version, setup, security, connectors, and doctor", async () => {
+  const stdout = capture();
+  const code = await runCli(["--api", "http://orkestr.test", "status"], {
+    stdout,
+    stderr: capture(),
+    fetchImpl: fakeFetch({
+      "GET /api/version": {
+        name: "orkestr-oss",
+        version: "0.1.0-alpha.12",
+        commit: "6fc115b123456789",
+        channel: "main",
+        releaseId: "main-6fc115b",
+        dirty: false,
+      },
+      "GET /api/setup/status": {
+        setupState: "partial",
+        security: { paired: true, remoteReady: true, pendingChallengeCount: 0 },
+        connectors: [
+          { id: "codex", state: "connected" },
+          { id: "whatsapp", state: "partial" },
+        ],
+      },
+      "GET /api/system/doctor": {
+        ok: true,
+        status: "ok",
+        summary: "All system checks passed.",
+        counts: { ok: 3, warnings: 0, errors: 0 },
+      },
+    }),
+  });
+
+  assert.equal(code, 0);
+  assert.match(stdout.text(), /Orkestr: ok/);
+  assert.match(stdout.text(), /URL: http:\/\/orkestr\.test/);
+  assert.match(stdout.text(), /Setup: partial/);
+  assert.match(stdout.text(), /Security: paired=yes remote=ready pending=0/);
+  assert.match(stdout.text(), /codex:connected whatsapp:partial/);
+});
+
 test("CLI prints non-secret runtime settings from local state", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-cli-settings-"));
   const stdout = capture();
@@ -455,6 +533,45 @@ test("CLI update status and rollback forward to the release deployer", async () 
   assert.deepEqual(spawned[0].args.slice(1), ["status", "--json"]);
   assert.match(spawned[1].args[0], /scripts\/deploy-git-release\.sh$/);
   assert.deepEqual(spawned[1].args.slice(1), ["rollback", "--to", "v0.1.0-alpha.9"]);
+});
+
+test("CLI rollback is a short alias for update rollback", async () => {
+  const spawned = [];
+  const code = await runCli(["rollback"], {
+    env: {},
+    stdout: capture(),
+    stderr: capture(),
+    spawnImpl(command, args, options) {
+      spawned.push({ command, args, env: options.env });
+      const child = new EventEmitter();
+      queueMicrotask(() => child.emit("exit", 0));
+      return child;
+    },
+  });
+
+  assert.equal(code, 0);
+  assert.equal(spawned[0].command, "bash");
+  assert.match(spawned[0].args[0], /scripts\/deploy-git-release\.sh$/);
+  assert.deepEqual(spawned[0].args.slice(1), ["rollback"]);
+});
+
+test("CLI logs tails the configured systemd service", async () => {
+  const spawned = [];
+  const code = await runCli(["logs", "--service", "orkestr-stage", "--lines", "50", "--no-follow"], {
+    env: {},
+    stdout: capture(),
+    stderr: capture(),
+    spawnImpl(command, args) {
+      spawned.push({ command, args });
+      const child = new EventEmitter();
+      queueMicrotask(() => child.emit("exit", 0));
+      return child;
+    },
+  });
+
+  assert.equal(code, 0);
+  assert.equal(spawned[0].command, "journalctl");
+  assert.deepEqual(spawned[0].args, ["-u", "orkestr-stage.service", "-n", "50", "--no-pager"]);
 });
 
 test("CLI attach can select a thread and print the tmux command", async () => {

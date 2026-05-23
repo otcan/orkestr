@@ -198,12 +198,13 @@ Do not publish a raw Orkestr API or terminal stream directly to the internet.
 ### VPS Operations
 
 ```bash
-systemctl status orkestr
-journalctl -u orkestr -f
+orkestr status
+orkestr version
+sudo orkestr update
+sudo orkestr rollback
+orkestr logs
 orkestr doctor
 orkestr security approve <challenge-id>
-orkestr-update
-orkestr update --track-main --no-smoke
 ```
 
 For disposable test VPS machines, enable reset-on-update so each deploy starts

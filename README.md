@@ -163,8 +163,8 @@ The host-native installer creates:
 Then use normal server commands:
 
 ```bash
-systemctl status orkestr
-journalctl -u orkestr -f
+orkestr status
+orkestr logs
 orkestr doctor
 orkestr security approve <challenge-id>
 ```
@@ -199,14 +199,24 @@ is also disposable. Run `orkestr-reset-state` for a one-time manual reset.
 Useful updater commands:
 
 ```bash
+orkestr status
+orkestr version
+sudo orkestr update
+sudo orkestr rollback
+orkestr logs
+orkestr doctor
+```
+
+Advanced updater commands:
+
+```bash
 systemctl list-timers orkestr-update.timer
 journalctl -u orkestr-update -f
-orkestr-deploy status
 orkestr update status
 sudo orkestr update --track-main --no-smoke
 sudo orkestr update --release --ref v0.1.7 --channel production
-orkestr doctor
 orkestr-update
+orkestr-deploy status
 orkestr-reset-state
 ```
 
@@ -222,6 +232,8 @@ restarts the service, and records the result in `deployments.json`:
 
 ```bash
 ORKESTR_RELEASE_DEPLOY=1 ORKESTR_UPDATE_REF=main ORKESTR_DEPLOY_CHANNEL=main ORKESTR_DEPLOY_TAGS_ONLY=0 orkestr-update
+sudo orkestr update
+sudo orkestr rollback
 sudo orkestr update --track-main --no-smoke
 sudo orkestr update --release --ref v0.1.7 --channel production
 orkestr update status

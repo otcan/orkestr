@@ -230,8 +230,8 @@ sudo systemctl restart orkestr
 Useful VPS commands:
 
 ```bash
-systemctl status orkestr
-journalctl -u orkestr -f
+orkestr status
+orkestr logs
 orkestr security approve <challenge-id>
 orkestr security challenges
 ```
@@ -301,13 +301,24 @@ server-local.
 Useful updater commands:
 
 ```bash
+orkestr status
+orkestr version
+sudo orkestr update
+sudo orkestr rollback
+orkestr logs
+orkestr doctor
+```
+
+Advanced updater commands:
+
+```bash
 systemctl list-timers orkestr-update.timer
 journalctl -u orkestr-update -f
-orkestr-deploy status
 orkestr update status
-sudo orkestr update --release --ref v0.1.7 --channel production
 sudo orkestr update --track-main --no-smoke
+sudo orkestr update --release --ref v0.1.7 --channel production
 orkestr-update
+orkestr-deploy status
 orkestr-reset-state
 ```
 
@@ -327,7 +338,7 @@ or:
 
 ```bash
 sudo scripts/install.sh --systemd --track-main
-sudo orkestr update --track-main --no-smoke
+sudo orkestr update
 ```
 
 For strict tagged production releases:
@@ -357,6 +368,8 @@ With `ORKESTR_RELEASE_DEPLOY=1`, `orkestr-update` delegates to
 Manual operations:
 
 ```bash
+sudo orkestr update
+sudo orkestr rollback
 sudo orkestr update --track-main --no-smoke
 sudo orkestr update --release --ref v0.1.7 --channel production
 orkestr update status

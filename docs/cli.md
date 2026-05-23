@@ -8,10 +8,24 @@ directly.
 
 ```bash
 orkestr serve --open
+orkestr status
+orkestr version
+orkestr update
+orkestr rollback
+orkestr logs
+orkestr list
+orkestr attach
+orkestr send <thread-name-or-id> "Run the next step"
+orkestr wake <thread-name-or-id>
+orkestr sleep <thread-name-or-id>
+orkestr doctor
+```
+
+Advanced and scripting commands:
+
+```bash
 orkestr whereiam --cwd "$PWD" --json
 orkestr settings --json
-orkestr list
-orkestr doctor
 orkestr doctor timers
 orkestr security challenges
 orkestr security approve <challenge-id>
@@ -24,13 +38,22 @@ orkestr update rollback
 orkestr thread create "My Thread" --cwd /path/to/repo
 orkestr worker create demo-app --task "Investigate this in parallel"
 orkestr worker create demo-app --blank
-orkestr attach
-orkestr attach <thread-name-or-id>
 orkestr attach <thread-name-or-id> --print
-orkestr send <thread-name-or-id> "Run the next step"
-orkestr wake <thread-name-or-id>
-orkestr sleep <thread-name-or-id>
 ```
+
+`orkestr status` is the normal operator entry point. It summarizes the active
+version, setup state, security posture, connector states, and doctor result.
+Use `--json` for automation.
+
+`orkestr version` prints the active app version, release id, commit, ref,
+channel, and deployment timestamp. Use `--json` when a script needs the raw
+`/api/version` payload.
+
+`orkestr update` runs the host-native updater using the install's configured
+mode. New VPS installs default to versioned `main` tracking, so the short
+command is usually enough. `orkestr rollback` rolls back to the previous
+successful versioned release by default. `orkestr logs` tails
+`orkestr.service`; use `--service`, `--lines`, or `--no-follow` when needed.
 
 `orkestr attach` without an argument fetches live threads and asks which thread
 to attach to. This removes the old list-copy-attach workflow.
@@ -49,16 +72,14 @@ parent thread. Pass task text positionally or with `--task`; use `--blank` for a
 parallel chat with no first message. Worker creation wakes the new worker by
 default; pass `--no-wake` when scripting tests or preparing a worker offline.
 
-`orkestr update` runs the host-native updater from the installed checkout.
-Without flags it follows the install's configured mode. Use `--track-main` for
-automatic versioned releases from `main`, `--release` for the versioned release
-deployer, `--in-place` for the legacy checkout updater, `--ref <tag-or-branch>`
-to choose the git ref, and `--channel <name>` to label a release deployment.
-`--allow-untagged` allows branch/SHA deploys in versioned mode; production
-deploys otherwise require exact tags by default. `orkestr update status --json`
-and `orkestr update rollback --to <release-id>` forward to the versioned release
-deployer. On systemd VPS installs, run update operations from a privileged
-shell, for example `sudo orkestr update --track-main --no-smoke`.
+Advanced update flags stay available for explicit deploys. Use `--track-main`
+for automatic versioned releases from `main`, `--release` for the versioned
+release deployer, `--in-place` for the legacy checkout updater, `--ref
+<tag-or-branch>` to choose the git ref, and `--channel <name>` to label a
+release deployment. `--allow-untagged` allows branch/SHA deploys in versioned
+mode; production deploys otherwise require exact tags by default.
+`orkestr update status --json` and `orkestr update rollback --to <release-id>`
+forward to the versioned release deployer.
 
 `orkestr doctor` checks the host runtime through the public API: writable data
 paths, git, tmux, ripgrep, npm, Chromium/Chrome, Codex auth, and remote-access

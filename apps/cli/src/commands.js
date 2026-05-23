@@ -25,23 +25,27 @@ export async function runCli(argv = process.argv.slice(2), context = {}) {
   };
 
   try {
-    if (global.help || command === "help") return writeHelp(ctx);
-    if (command === "serve" || command.startsWith("--")) return serve(command.startsWith("--") ? global.argv : args, ctx);
-    if (command === "list") return list(args, ctx);
-    if (command === "whereiam" || command === "whereami") return whereiamCommand(args, ctx);
-    if (command === "settings") return settingsCommand(args, ctx);
-    if (command === "doctor") return doctorCommand(args, ctx);
-    if (command === "timers" || command === "timer") return timersCommand(args, ctx);
-    if (command === "security") return securityCommand(args, ctx);
-    if (command === "update") return updateCommand(args, ctx);
-    if (command === "thread") return threadCommand(args, ctx);
-    if (command === "worker") return workerCommand(args, ctx);
-    if (command === "attach") return attach(args, ctx);
-    if (command === "send") return send(args, ctx);
-    if (command === "wake") return postThreadAction("wake", args, ctx);
-    if (command === "sleep") return postThreadAction("sleep", args, ctx);
-    if (command === "reset") return postThreadAction("reset", args, ctx);
-    if (command === "hard-reset" || command === "hard_reset") return postThreadAction("hard-reset", args, ctx);
+    if (global.help || command === "help") return await writeHelp(ctx);
+    if (command === "serve" || command.startsWith("--")) return await serve(command.startsWith("--") ? global.argv : args, ctx);
+    if (command === "list") return await list(args, ctx);
+    if (command === "status") return await statusCommand(args, ctx);
+    if (command === "version") return await versionCommand(args, ctx);
+    if (command === "whereiam" || command === "whereami") return await whereiamCommand(args, ctx);
+    if (command === "settings") return await settingsCommand(args, ctx);
+    if (command === "doctor") return await doctorCommand(args, ctx);
+    if (command === "timers" || command === "timer") return await timersCommand(args, ctx);
+    if (command === "security") return await securityCommand(args, ctx);
+    if (command === "update") return await updateCommand(args, ctx);
+    if (command === "rollback") return await updateRollbackCommand(args, ctx);
+    if (command === "logs") return await logsCommand(args, ctx);
+    if (command === "thread") return await threadCommand(args, ctx);
+    if (command === "worker") return await workerCommand(args, ctx);
+    if (command === "attach") return await attach(args, ctx);
+    if (command === "send") return await send(args, ctx);
+    if (command === "wake") return await postThreadAction("wake", args, ctx);
+    if (command === "sleep") return await postThreadAction("sleep", args, ctx);
+    if (command === "reset") return await postThreadAction("reset", args, ctx);
+    if (command === "hard-reset" || command === "hard_reset") return await postThreadAction("hard-reset", args, ctx);
     ctx.stderr.write(`Unknown command: ${command}\n\n`);
     writeUsage(ctx.stderr);
     return 2;
@@ -99,6 +103,39 @@ async function list(argv, ctx) {
   const threads = payload?.threads || [];
   if (argv.includes("--json")) ctx.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
   else ctx.stdout.write(`${formatThreadTable(threads)}\n`);
+  return 0;
+}
+
+async function statusCommand(argv, ctx) {
+  const json = argv.includes("--json");
+  const [version, setup, doctor] = await Promise.all([
+    settleRequest("/api/version", ctx),
+    settleRequest("/api/setup/status", ctx),
+    settleRequest("/api/system/doctor", ctx),
+  ]);
+  const payload = {
+    ok: version.ok && setup.ok && (!doctor.ok || doctor.value?.status !== "broken"),
+    baseUrl: ctx.baseUrl,
+    version: version.value || null,
+    setup: setup.value || null,
+    doctor: doctor.value || null,
+    errors: {
+      version: version.error || null,
+      setup: setup.error || null,
+      doctor: doctor.error || null,
+    },
+    generatedAt: new Date().toISOString(),
+  };
+  if (json) ctx.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
+  else ctx.stdout.write(`${formatStatus(payload)}\n`);
+  return payload.ok ? 0 : 1;
+}
+
+async function versionCommand(argv, ctx) {
+  const json = argv.includes("--json");
+  const payload = await requestJson("/api/version", ctx);
+  if (json) ctx.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
+  else ctx.stdout.write(`${formatVersion(payload)}\n`);
   return 0;
 }
 
@@ -253,6 +290,14 @@ async function updateRollbackCommand(argv, ctx) {
   const script = updateScriptPath("deploy-git-release.sh");
   const target = flagValue(argv, "--to");
   return spawnInherited(ctx.spawnImpl, "bash", [script, "rollback", ...(target ? ["--to", target] : [])], { env: ctx.env });
+}
+
+async function logsCommand(argv, ctx) {
+  const service = serviceUnitName(flagValue(argv, "--service") || ctx.env.ORKESTR_SERVICE_NAME || "orkestr");
+  const lines = flagValue(argv, "--lines") || "100";
+  const args = ["-u", service, "-n", lines, "--no-pager"];
+  if (!argv.includes("--no-follow")) args.push("-f");
+  return spawnInherited(ctx.spawnImpl, "journalctl", args);
 }
 
 async function listSecurityChallenges(argv, ctx) {
@@ -419,17 +464,16 @@ function writeHelp(ctx) {
 function writeUsage(stream) {
   stream.write(`Usage:
   orkestr [serve] [--open] [--host 127.0.0.1] [--port 19812]
+  orkestr status [--json]
+  orkestr version [--json]
+  orkestr update
+  orkestr rollback [--to release-id]
+  orkestr logs [--service orkestr] [--lines 100] [--no-follow]
+  orkestr doctor [system|timers|resources] [--repair] [--json]
+
+Common thread commands:
   orkestr list [--json] [--api http://127.0.0.1:19812]
   orkestr whereiam [--cwd path] [--json]
-  orkestr settings [--json]
-  orkestr doctor [system|timers|resources] [--repair] [--json]
-  orkestr timers [list|doctor|run <timer-id>] [--json]
-  orkestr security [challenges|approve <challenge-id>|reject <challenge-id>] [--json]
-  orkestr update [--track-main|--ref ref] [--release|--in-place] [--channel name] [--allow-untagged|--require-tagged] [--no-smoke]
-  orkestr update status [--json]
-  orkestr update rollback [--to release-id]
-  orkestr thread create <name> [--id id] [--cwd path] [--command command] [--executor id] [--json]
-  orkestr worker create <parent-thread> [task text] [--task text] [--blank] [--label label] [--repo path] [--branch branch] [--no-wake] [--json]
   orkestr attach [thread-name-or-id] [--print] [--json]
   orkestr send <thread-name-or-id> "<message>" [--json]
   orkestr wake <thread-name-or-id> [--json]
@@ -437,9 +481,74 @@ function writeUsage(stream) {
   orkestr reset <thread-name-or-id> [--json]
   orkestr hard-reset <thread-name-or-id> [--json]
 
+Advanced:
+  orkestr update [--track-main|--ref ref] [--release|--in-place] [--channel name] [--allow-untagged|--require-tagged] [--no-smoke]
+  orkestr update status [--json]
+  orkestr update rollback [--to release-id]
+  orkestr settings [--json]
+  orkestr timers [list|doctor|run <timer-id>] [--json]
+  orkestr security [challenges|approve <challenge-id>|reject <challenge-id>] [--json]
+  orkestr thread create <name> [--id id] [--cwd path] [--command command] [--executor id] [--json]
+  orkestr worker create <parent-thread> [task text] [--task text] [--blank] [--label label] [--repo path] [--branch branch] [--no-wake] [--json]
+
 Environment:
   ORKESTR_API_BASE   API base URL for commands. Defaults to http://127.0.0.1:19812.
 `);
+}
+
+async function settleRequest(path, ctx) {
+  try {
+    return { ok: true, value: await requestJson(path, ctx), error: "" };
+  } catch (error) {
+    return { ok: false, value: null, error: error?.message || String(error) };
+  }
+}
+
+function formatStatus(payload = {}) {
+  const version = payload.version || {};
+  const setup = payload.setup || {};
+  const doctor = payload.doctor || {};
+  const security = setup.security || {};
+  const connectors = Array.isArray(setup.connectors) ? setup.connectors : [];
+  const connectorText = connectors.length
+    ? connectors.map((connector) => `${connector.id}:${connector.state || "unknown"}`).join(" ")
+    : "-";
+  const counts = doctor.counts || {};
+  const status = payload.ok ? "ok" : "attention";
+  const release = version.releaseId || version.describe || shortCommit(version.commit) || "-";
+  const versionText = [version.name || "orkestr", version.version || ""].filter(Boolean).join(" ");
+  const lines = [
+    `Orkestr: ${status}`,
+    `URL: ${payload.baseUrl || "-"}`,
+    `Version: ${versionText || "-"} (${release})`,
+    `Channel: ${version.channel || "-"}${version.dirty ? " dirty" : ""}`,
+    `Setup: ${setup.setupState || (payload.errors?.setup ? "unavailable" : "-")}`,
+    `Security: paired=${security.paired ? "yes" : "no"} remote=${security.remoteReady ? "ready" : "not-ready"} pending=${Number(security.pendingChallengeCount || 0)}`,
+    `Connectors: ${connectorText}`,
+    `Doctor: ${doctor.status || (payload.errors?.doctor ? "unavailable" : "-")}${doctor.summary ? ` - ${doctor.summary}` : ""}`,
+  ];
+  if (doctor.counts) lines.push(`Checks: ${Number(counts.ok || 0)} ok, ${Number(counts.warnings || 0)} warnings, ${Number(counts.errors || 0)} errors`);
+  for (const [label, error] of Object.entries(payload.errors || {})) {
+    if (error) lines.push(`${label}: ${error}`);
+  }
+  return lines.join("\n");
+}
+
+function formatVersion(version = {}) {
+  const release = version.releaseId || version.describe || shortCommit(version.commit) || "-";
+  return [
+    `Orkestr: ${[version.name || "orkestr", version.version || ""].filter(Boolean).join(" ")}`,
+    `Release: ${release}`,
+    `Commit: ${shortCommit(version.commit) || "-"}${version.dirty ? " dirty" : ""}`,
+    `Ref: ${version.tag || version.branch || version.describe || "-"}`,
+    `Channel: ${version.channel || "-"}`,
+    `Deployed: ${version.deployedAt || "-"}`,
+  ].join("\n");
+}
+
+function shortCommit(value) {
+  const text = String(value || "");
+  return text.length > 12 ? text.slice(0, 12) : text;
 }
 
 function formatSettings(settings = {}) {
@@ -495,9 +604,11 @@ function positional(argv) {
     "--port",
     "--repo",
     "--repo-path",
+    "--service",
     "--task",
     "--ref",
     "--channel",
+    "--lines",
     "--to",
   ]);
   const flagsWithoutValues = new Set([
@@ -516,6 +627,7 @@ function positional(argv) {
     "--require-tagged-releases",
     "--no-smoke",
     "--check-only",
+    "--no-follow",
   ]);
   for (let index = 0; index < argv.length; index += 1) {
     const value = argv[index];
@@ -558,6 +670,11 @@ function parseTmuxSession(command = "") {
 
 function shellToken(value) {
   return `'${String(value).replaceAll("'", "'\\''")}'`;
+}
+
+function serviceUnitName(value) {
+  const name = String(value || "orkestr").trim() || "orkestr";
+  return name.endsWith(".service") ? name : `${name}.service`;
 }
 
 function repoRoot() {
