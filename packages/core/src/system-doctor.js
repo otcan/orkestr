@@ -131,7 +131,7 @@ async function codexCheck(env, home) {
       return doctorCheck("codex", "Codex CLI", "error", status.message || "Codex CLI is not installed.", {
         command: status.command,
         path: status.codexHome,
-        repair: "Install Codex in the Orkestr runtime or use the Docker image.",
+        repair: "Install Codex in the Orkestr runtime.",
       });
     }
     if (status.connected) {

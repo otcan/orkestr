@@ -36,7 +36,7 @@ test("Codex reports partial when the runtime key exists but Codex is not logged 
   process.env.PATH = `${bin}${path.delimiter}${priorPath || ""}`;
 
   try {
-    const status = await getSetupStatus({ env: { ORKESTR_HOME: home, OPENAI_API_KEY: "test", ORKESTR_DOCKER: "1" }, home });
+    const status = await getSetupStatus({ env: { ORKESTR_HOME: home, OPENAI_API_KEY: "test" }, home });
     const codex = status.connectors.find((connector) => connector.id === "codex");
     assert.equal(codex.state, "partial");
     assert.equal(codex.details.authMode, null);
@@ -65,7 +65,7 @@ test("Codex reports connected when the CLI login status succeeds", async () => {
   process.env.PATH = `${bin}${path.delimiter}${priorPath || ""}`;
 
   try {
-    const status = await getSetupStatus({ env: { ORKESTR_HOME: home, ORKESTR_DOCKER: "1" }, home });
+    const status = await getSetupStatus({ env: { ORKESTR_HOME: home }, home });
     const codex = status.connectors.find((connector) => connector.id === "codex");
     assert.equal(codex.state, "connected");
     assert.equal(codex.details.authMode, "api_key");

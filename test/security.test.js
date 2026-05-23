@@ -98,13 +98,12 @@ test("browser pairing protects API routes when auth is required", async () => {
   }
 });
 
-test("docker localhost publish is treated as a local external bind", async () => {
+test("reverse proxy local publish is treated as a local external bind", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-security-"));
-  const prior = saveEnv(["ORKESTR_HOME", "ORKESTR_HOST", "ORKESTR_DOCKER_HOST_BIND_ADDRESS", "ORKESTR_REVERSE_PROXY_LOCAL_BIND"]);
+  const prior = saveEnv(["ORKESTR_HOME", "ORKESTR_HOST", "ORKESTR_REVERSE_PROXY_LOCAL_BIND"]);
   process.env.ORKESTR_HOME = home;
   process.env.ORKESTR_HOST = "0.0.0.0";
-  process.env.ORKESTR_DOCKER_HOST_BIND_ADDRESS = "127.0.0.1";
-  delete process.env.ORKESTR_REVERSE_PROXY_LOCAL_BIND;
+  process.env.ORKESTR_REVERSE_PROXY_LOCAL_BIND = "1";
 
   try {
     const status = await securityStatus();

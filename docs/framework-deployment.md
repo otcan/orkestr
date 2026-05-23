@@ -6,8 +6,8 @@ Orkestr is split into two deployable layers:
 - Angular web app in `apps/web/src`, built into `dist/web/browser`.
 
 The NestJS process serves both `/api/*` routes and the compiled Angular app.
-The server does not compile Angular at runtime. A local or container deployment
-must run `npm run build` before `npm start`.
+The server does not compile Angular at runtime. A local deployment must run
+`npm run build` before `npm start`.
 
 ## Local Development
 
@@ -53,20 +53,14 @@ npm run smoke:vps:aws -- --with-whatsapp
 
 ## Deployment Paths
 
-Use Docker for first-run demos and host-native systemd for a VPS.
-
-Docker is intentionally the easiest local path: the image bundles Codex, tmux,
-git, ripgrep, Chromium, and the compiled Orkestr app. It is also useful for
-quick demos and throwaway test environments.
-
-The VPS path should be host-native. Caddy, Tailscale, browser desktops,
-systemd logs, SSH pairing approval, and long-running agent work are host-level
-operations. Running the server directly under systemd keeps those operations
-plain.
+Use the local installer for development and the host-native systemd installer
+for a VPS. Caddy, Tailscale, browser desktops, systemd logs, SSH pairing
+approval, and long-running agent work are host-level operations. Running the
+server directly under the host keeps those operations plain.
 
 Use these paths for different kinds of work:
 
-- Trying Orkestr locally: Docker Compose.
+- Trying Orkestr locally: `scripts/install.sh --local --serve`.
 - Running a real personal VPS: `scripts/bootstrap-vps.sh`.
 - Installing on a host you already prepared: `scripts/install.sh --systemd`.
 - Updating a VPS in place: `orkestr-update` or `orkestr update`.
@@ -353,46 +347,6 @@ secrets stay in `/etc/orkestr/orkestr.env`, and mutable data stays in
 release directory or when `ORKESTR_RELEASE_MANIFEST` points to a manifest file.
 Use that endpoint after every deploy and rollback to verify the active version.
 
-## Local Docker
-
-```bash
-cp .env.docker.example .env
-docker compose up -d
-```
-
-The default Compose file runs the published image:
-
-```text
-ghcr.io/otcan/orkestr:latest
-```
-
-For a local source build, layer the build override:
-
-```bash
-docker compose -f docker-compose.yml -f docker-compose.build.yml up --build
-```
-
-The Dockerfile uses a multi-stage build:
-
-- `build` installs all dependencies, compiles the NestJS backend, and compiles Angular.
-- `runtime` installs production dependencies plus Codex, tmux, git, ripgrep,
-  Chromium, and process tools, copies server code and `dist`, and runs the
-  compiled NestJS server with `npm start`.
-
-Runtime data is stored in `ORKESTR_HOME`, which defaults to `/data` in the
-container. `CODEX_HOME` defaults to `/data/codex`, so Codex device auth or
-API-key login started from the setup UI persists in the same Docker volume.
-Orkestr checks the real Codex CLI login status before waking a coding runtime;
-an unconfigured runtime sends the user back to `/setup/codex` instead of
-opening the raw Codex login menu in tmux. Docker settings are read from `.env`
-by Compose; start from `.env.docker.example` for optional OpenAI direct API
-access, Tailscale/Caddy, OAuth, workspace, and overlay settings. If a setup UI
-accepts an uploaded or pasted `.env`, treat it as runtime configuration: read
-it explicitly, store it with server-local state, and never commit it. Private
-overlays are mounted separately with `ORKESTR_OVERLAY_DIR`; do not bake
-secrets, WhatsApp state, browser profiles, or personal prompts into the public
-image.
-
 ## Tailscale Demo Route
 
 For demos that must not touch a public hostname, run Orkestr on a local port and
@@ -421,8 +375,7 @@ Orkestr home.
 3. Run `npm run check`.
 4. Run `npm run smoke`.
 5. Run `npm run demo:coding-agent`.
-6. Run `npm run docker:build`.
-7. Run `npm run smoke:vps:aws` for installer, systemd, updater, Caddy,
+6. Run `npm run smoke:vps:aws` for installer, systemd, updater, Caddy,
    Tailscale, or remote-access changes.
-8. Review `README.md`, `docs/private-overlay.md`, and this file.
-9. Tag and publish only after the private overlay has been checked for leaks.
+7. Review `README.md`, `docs/private-overlay.md`, and this file.
+8. Tag and publish only after the private overlay has been checked for leaks.

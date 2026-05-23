@@ -5,7 +5,7 @@ Milestone 2 turns the scaffold into a usable public baseline for the first Orkes
 1. create a coding-agent thread
 2. prepare the virtual desktop profile
 3. queue repository work
-4. wake the Docker-bundled Codex runtime when the operator is ready
+4. wake the host-native Codex runtime when the operator is ready
 5. persist messages, runtime state, timers, and events
 6. keep private host behavior outside the public repo
 
@@ -31,7 +31,6 @@ npm run launch:check
 npm run check
 npm run smoke
 npm run demo:coding-agent
-npm run docker:build
 ```
 
 Expected result:
@@ -40,7 +39,6 @@ Expected result:
 - `npm run check` passes all unit and end-to-end tests.
 - `npm run smoke` proves persisted timers/messages/events survive restart.
 - `npm run demo:coding-agent` proves the public coding-agent setup loop.
-- `npm run docker:build` proves the production image builds Angular and can start from compiled assets.
 
 ## Manual Demo
 
@@ -92,8 +90,8 @@ Private overlays must not be copied into the public repo when they contain:
 ## Known Gaps
 
 - Secure remote access has an out-of-box baseline path through localhost bind, browser pairing, and optional Tailscale/Caddy, with disposable VPS smoke coverage; deeper validation and polish remain.
-- The public demo queues a coding-agent task; Docker local setup and host-native
-  VPS setup both provide a Codex runtime path, and real Codex runs depend on
-  completing setup-page device authorization.
+- The public demo queues a coding-agent task; local and VPS host-native setup
+  both provide a Codex runtime path, and real Codex runs depend on completing
+  setup-page device authorization.
 - WhatsApp media mirroring is not included in this milestone; final text replies are covered.
 - The public UI is still a setup workstation, not a full production operations console.

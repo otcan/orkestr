@@ -125,7 +125,7 @@ export async function runCodingAgentDemo({ port = Number(process.env.ORKESTR_COD
 
 export async function runRealCodexDemo({ port = Number(process.env.ORKESTR_REAL_CODEX_DEMO_PORT || 19817), repo = process.cwd(), log = true } = {}) {
   const workspace = path.resolve(repo);
-  if (!(await commandOk("codex"))) throw new Error("codex command not found. Use the Docker image or install Codex in the Orkestr runtime before running --real-codex.");
+  if (!(await commandOk("codex"))) throw new Error("codex command not found. Install Codex in the Orkestr runtime before running --real-codex.");
   if (!(await commandOk("tmux", ["-V"]))) throw new Error("tmux command not found. Install tmux before running --real-codex.");
   if (!(await commandOk("git", ["-C", workspace, "rev-parse", "--show-toplevel"]))) {
     throw new Error(`--repo must point to a git repository: ${workspace}`);

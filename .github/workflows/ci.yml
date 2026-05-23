@@ -28,4 +28,3 @@ jobs:
         run: npm run test:ci
       - run: npm run smoke
       - run: npm run demo:coding-agent
-      - run: npm run docker:build

@@ -14,13 +14,7 @@ const requiredFiles = [
   "docs/assets/orkestr-three-screen-demo.png",
   "docs/demo-logs/coding-agent-first-run.md",
   "examples/coding-agent-demo/README.md",
-  ".dockerignore",
-  ".env.docker.example",
-  "Dockerfile",
-  "docker-compose.yml",
-  "docker-compose.build.yml",
   ".github/workflows/ci.yml",
-  ".github/workflows/docker-publish.yml",
   ".github/pull_request_template.md",
 ];
 
@@ -112,7 +106,6 @@ async function main() {
   await run("npm", ["run", "check"], "npm run check");
   await run("npm", ["run", "smoke"], "npm run smoke");
   await run("npm", ["run", "demo:coding-agent"], "npm run demo:coding-agent");
-  await run("npm", ["run", "docker:build"], "npm run docker:build");
   console.log("\nLaunch check passed");
 }
 

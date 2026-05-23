@@ -856,7 +856,7 @@ test("whatsapp delivery translates markdown into chat-friendly formatting", asyn
   const markdown = [
     "### Deploy target",
     "",
-    "**Deploy latest into the orkestr-vps VM, by pulling/restarting the Docker container there.**",
+    "**Deploy latest into the orkestr-vps VM, by pulling and restarting the host service there.**",
     "",
     "[Demo URL](https://orkestr-demo.example.com)",
     "",
@@ -885,7 +885,7 @@ test("whatsapp delivery translates markdown into chat-friendly formatting", asyn
   assert.equal(stripDebugFooter(calls[0].body.text), [
     "Deploy target",
     "",
-    "*Deploy latest into the orkestr-vps VM, by pulling/restarting the Docker container there.*",
+    "*Deploy latest into the orkestr-vps VM, by pulling and restarting the host service there.*",
     "",
     "Demo URL: https://orkestr-demo.example.com",
     "",

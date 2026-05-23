@@ -51,7 +51,7 @@ Codex execution is intentionally local. The thread runtime wakes a tmux session 
 
 ## Deployment Boundary
 
-Docker is the local/beginner packaging path. A VPS should use the host-native
+Local and VPS deployments use host-native processes. A VPS should use the
 systemd installer so Caddy, Tailscale, browser desktops, logs, and pairing
 approval stay on the host where operators expect them.
 

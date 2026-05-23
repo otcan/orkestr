@@ -1,30 +1,21 @@
 # Coding Agent Demo
 
-This is the public, real-agent demo path. The default Docker runtime includes
-Codex and stores its auth under the Orkestr data volume. No credentials, browser
-profiles, WhatsApp IDs, or private hostnames are included here.
+This is the public, real-agent demo path. No credentials, browser profiles,
+WhatsApp IDs, or private hostnames are included here.
 
 ## Prerequisites
 
-- Docker with Compose, or a host-native Orkestr runtime with Node.js 22+ and tmux.
+- A host-native Orkestr runtime with Node.js 22+ and tmux.
 - Codex signed in from the Orkestr setup page.
 - Orkestr running locally.
-
-Start Orkestr with Docker:
-
-```bash
-cp .env.docker.example .env
-docker compose up -d
-```
-
-Then open `/setup`, add Codex, and use **Open Codex sign-in**.
 
 For a host-native development checkout:
 
 ```bash
-npm run build
-ORKESTR_HOST=127.0.0.1 npm start
+./scripts/install.sh --local --serve
 ```
+
+Then open `/setup`, add Codex, and use **Open Codex sign-in**.
 
 ## Create A Coding Thread
 

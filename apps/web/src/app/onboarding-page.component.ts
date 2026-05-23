@@ -693,13 +693,12 @@ export class OnboardingPageComponent implements OnInit, OnChanges, OnDestroy {
   securityChecks(): Array<{ label: string; state: string; summary: string; className: string }> {
     const security = this.setup?.security || {};
     const bindHost = security.bindHost || "127.0.0.1";
-    const dockerHostBind = security.dockerHostBind || "127.0.0.1";
     const bindIsSafe = Boolean(security.externallyLocal || security.bindLocal);
     return [
       {
         label: "Bind address",
         state: security.proxyLocalBind ? "proxied" : security.bindLocal ? "local" : "remote",
-        summary: security.proxyLocalBind ? `Container bind ${bindHost}; host publishes ${dockerHostBind}` : security.bindLocal ? `Bound to ${bindHost}` : `Bound to ${bindHost || "non-local address"}`,
+        summary: security.proxyLocalBind ? `Reverse proxy publishes local Orkestr bind ${bindHost}` : security.bindLocal ? `Bound to ${bindHost}` : `Bound to ${bindHost || "non-local address"}`,
         className: bindIsSafe ? "ready" : "bad",
       },
       {

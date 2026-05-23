@@ -121,7 +121,6 @@ export async function getConnectorStatuses({ env = process.env, home = os.homedi
             codexHome,
             authMode: codexAuth.authMode || (codexAuthExists ? "device_auth" : "codex_auth"),
             statusText: codexAuth.statusText,
-            dockerRuntime: String(env.ORKESTR_DOCKER || "").trim() === "1",
           })
         : codex.command
           ? status("codex", "Codex", "partial", codexEnvKey ? "OpenAI key is configured, but Codex CLI is not logged in yet. Connect Codex from this setup page." : "Codex runtime is installed. Sign in from this setup page.", {
@@ -131,11 +130,9 @@ export async function getConnectorStatuses({ env = process.env, home = os.homedi
               authMode: null,
               statusText: codexAuth?.statusText || "",
               openaiKeyConfigured: codexEnvKey,
-              dockerRuntime: String(env.ORKESTR_DOCKER || "").trim() === "1",
             })
-          : status("codex", "Codex", "not_connected", "Codex runtime is missing. Use the Docker image or install Codex in the Orkestr runtime.", {
+          : status("codex", "Codex", "not_connected", "Codex runtime is missing. Install Codex in the Orkestr runtime.", {
               codexHome,
-              dockerRuntime: String(env.ORKESTR_DOCKER || "").trim() === "1",
             }),
     gmail:
       gmailOAuthExists

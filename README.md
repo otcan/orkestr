@@ -13,7 +13,7 @@ Start with the [user guide](docs/user-guide.md), then use the quickstart below w
 ## Documentation Map
 
 - [User guide](docs/user-guide.md): product concepts, first-time setup, and common workflows.
-- [Framework and deployment](docs/framework-deployment.md): Docker, VPS bootstrap, updater, versioned releases, and smoke tests.
+- [Framework and deployment](docs/framework-deployment.md): local install, VPS bootstrap, updater, versioned releases, and smoke tests.
 - [Security](SECURITY.md): remote-access shape, browser pairing, and secret-handling rules.
 - [Contributing](CONTRIBUTING.md): contributor workflow, automation map, and pull request expectations.
 - [Architecture](docs/architecture.md): package boundaries, runtime boundary, and connector boundary.
@@ -55,16 +55,15 @@ Dropbox and other file-source bindings are not shipped as public OSS V1 connecto
 
 Orkestr has two supported setup paths:
 
-- **Local or beginner setup:** use Docker Compose or the local installer. A meaningful local setup includes Codex and WhatsApp; `local-safe` keeps Codex approvals on and mirrors permission prompts through Orkestr/WhatsApp.
+- **Local or beginner setup:** use the local installer from a checkout. A meaningful local setup includes Codex and WhatsApp; `local-safe` keeps Codex approvals on and mirrors permission prompts through Orkestr/WhatsApp.
 - **VPS setup:** use the host-native systemd installer. This is the right shape for a real server because Caddy, Tailscale, browser desktops, service logs, and pairing approval are host-level operations.
 
-### Local Docker
+### Local Host-Native
 
 ```bash
-mkdir orkestr && cd orkestr
-curl -fsSLO https://raw.githubusercontent.com/otcan/orkestr/main/docker-compose.yml
-curl -fsSLo .env https://raw.githubusercontent.com/otcan/orkestr/main/.env.docker.example
-docker compose up -d
+git clone https://github.com/otcan/orkestr.git
+cd orkestr
+./scripts/install.sh --local --serve
 ```
 
 Then open:
@@ -78,12 +77,11 @@ Codex, use **Open Codex sign-in** for device authorization or **Connect Codex
 with API key** when this runtime should authenticate Codex that way. Orkestr
 checks `codex login status` before starting a coding thread, so a raw Codex
 login menu is treated as setup work instead of being opened inside the agent
-runtime. Runtime state, including Codex auth, is stored in the `orkestr-data`
-Docker volume. Edit `.env` before starting the container to provide optional
-OpenAI direct API access, Tailscale/Caddy settings, OAuth credentials,
-workspace roots, or overlay settings. If you upload or paste an `.env` during
-setup, Orkestr reads that file as runtime configuration and stores it with the
-same local runtime state.
+runtime. Runtime state, including Codex auth, is stored under `ORKESTR_HOME`.
+Use `.env` or the setup UI for optional OpenAI direct API access,
+Tailscale/Caddy settings, OAuth credentials, workspace roots, or overlay
+settings. If you upload or paste an `.env` during setup, Orkestr reads that
+file as runtime configuration and stores it with the same local runtime state.
 
 ### VPS Host-Native
 
@@ -249,13 +247,6 @@ cd orkestr
 ./scripts/install.sh --local --serve
 ```
 
-Local Docker build flow:
-
-```bash
-cp .env.docker.example .env
-docker compose -f docker-compose.yml -f docker-compose.build.yml up --build
-```
-
 Then open:
 
 ```text
@@ -289,7 +280,7 @@ npm run demo:coding-agent
 
 That demo starts Orkestr with a temporary local home, creates a coding-agent thread, prepares the virtual desktop profile, queues a repository-review task, and prints the public log. It does not require WhatsApp, Gmail, LinkedIn, or Codex credentials.
 
-For a real Codex run, use the Docker local setup, the host-native VPS setup, or see [examples/coding-agent-demo/README.md](examples/coding-agent-demo/README.md).
+For a real Codex run, use the local host-native setup, the host-native VPS setup, or see [examples/coding-agent-demo/README.md](examples/coding-agent-demo/README.md).
 
 Optional real Codex demo mode:
 
@@ -333,7 +324,6 @@ More detail: [docs/architecture.md](docs/architecture.md).
 
 - First-run setup at `/setup`
 - OpenAI and Codex connection checks
-- Docker image with Codex, tmux, git, ripgrep, and Chromium installed
 - Multiple named Codex threads with start, sleep, wake, attach, and status controls
 - Built-in local WhatsApp bridge with two QR-paired account slots
 - WhatsApp chat creation and thread binding

@@ -163,8 +163,7 @@ export async function securityStatus(env = process.env) {
   const httpsUrl = String(env.ORKESTR_PUBLIC_HTTPS_URL || env.ORKESTR_HTTPS_URL || env.ORKESTR_TAILSCALE_HTTPS_NAME || "").trim();
   const caddyConfigured = String(env.ORKESTR_CADDY_ENABLED || "").trim() === "1";
   const proxyLocalBindSetting = String(env.ORKESTR_REVERSE_PROXY_LOCAL_BIND || "").trim();
-  const dockerHostBind = String(env.ORKESTR_DOCKER_HOST_BIND_ADDRESS || env.ORKESTR_BIND_ADDRESS || "").trim();
-  const proxyLocalBind = proxyLocalBindSetting === "1" || (proxyLocalBindSetting !== "0" && isLocalBind(dockerHostBind));
+  const proxyLocalBind = proxyLocalBindSetting === "1";
   const authRequired = String(env.ORKESTR_AUTH_REQUIRED || "").trim() === "1";
   const authEnabled = Boolean(authRequired || config.enabled || (config.sessions || []).length);
   const sessionCount = (config.sessions || []).filter((session) => Date.parse(session.expiresAt || "") > Date.now()).length;
@@ -181,7 +180,6 @@ export async function securityStatus(env = process.env) {
     bindHost: host,
     bindLocal,
     proxyLocalBind,
-    dockerHostBind,
     externallyLocal,
     authEnabled,
     authRequired,

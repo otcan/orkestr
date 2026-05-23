@@ -23,7 +23,6 @@ Orkestr alpha is a self-hosted agent workstation scaffold:
 - `npm run check` passes.
 - `npm run smoke` passes.
 - `npm run demo:coding-agent` passes.
-- `npm run docker:build` passes.
 - Privacy scan finds no real hostnames, WhatsApp IDs, tokens, browser profiles, personal prompts, or private deployment paths.
 - `README.md`, `.env.example`, `docs/private-overlay.md`, and `CHANGELOG.md` describe the public/private split.
 
@@ -48,7 +47,6 @@ npm run launch:check
 npm run check
 npm run smoke
 npm run demo:coding-agent
-npm run docker:build
 git status --short
 git tag -a v0.1.0-alpha.0 -m "v0.1.0-alpha.0"
 ```

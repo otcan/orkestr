@@ -37,7 +37,6 @@ server build, the web build, and the Node test suite.
 - `npm run test:ci`: CI test runner with compact failure output.
 - `npm run smoke`: local API/runtime smoke test with a temporary Orkestr home.
 - `npm run demo:coding-agent`: deterministic fake-data demo; no real accounts.
-- `npm run docker:build`: local Docker image build.
 - `npm run launch:check`: public launch gate for docs/privacy/release readiness.
 - `npm run smoke:vps:aws`: creates a disposable Ubuntu VPS, runs the bootstrap
   installer, executes the smoke test on that host, then cleans it up.
@@ -60,7 +59,7 @@ and `scripts/update-watch.sh` for versioned release/update work.
 
 There are two supported install shapes:
 
-- Docker Compose for local/beginner testing.
+- Local host-native install for local/beginner testing.
 - Host-native systemd for VPS installs.
 
 The host-native path should work out of the box for protected remote access:
@@ -112,7 +111,6 @@ reliable.
 - `npm run check` passes.
 - `npm run smoke` passes for runtime/setup changes.
 - `npm run demo:coding-agent` passes for demo or onboarding changes.
-- `npm run docker:build` passes for Docker/runtime dependency changes.
 - `npm run smoke:vps:aws` passes for installer, systemd, updater, Caddy,
   Tailscale, or remote-access changes.
 - README/docs stay free of private details.

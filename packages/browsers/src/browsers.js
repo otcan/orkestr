@@ -18,7 +18,7 @@ function profileFallbackAllowed(env = process.env) {
   if (["0", "false", "no"].includes(configured)) return false;
   if (desktopMode(env) === "profiles") return true;
   if (desktopMode(env) === "browserctl") return false;
-  return String(env.ORKESTR_DOCKER || "").trim() !== "1";
+  return true;
 }
 
 function shouldFallbackAfterBrowserctlError(error, env = process.env) {

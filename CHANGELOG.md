@@ -3,7 +3,7 @@
 ## 0.1.0-alpha.5
 
 - Remove a live-looking tailnet hostname from public WhatsApp test fixtures.
-- Re-run the public launch gate, including privacy scan, full test suite, smoke test, demo, and Docker image build.
+- Re-run the public launch gate, including privacy scan, full test suite, smoke test, and demo.
 
 ## 0.1.0-alpha.4
 

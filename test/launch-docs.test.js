@@ -39,7 +39,7 @@ test("public launch docs expose the minimum launch surface", async () => {
   assert.doesNotMatch(roadmap, /Virtual Desktop Generation/);
   assert.match(architecture, /Legacy `\/ng\/\*` paths/);
   assert.match(demoLog, /Coding-agent demo passed/);
-  assert.match(readme, /Local Docker/);
+  assert.match(readme, /Local Host-Native/);
   assert.match(readme, /VPS Host-Native/);
   assert.match(readme, /sudo bash -s -- --systemd/);
   assert.match(readme, /orkestr security approve <challenge-id>/);

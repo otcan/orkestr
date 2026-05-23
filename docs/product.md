@@ -35,8 +35,7 @@ Run the deterministic public demo:
 npm run demo:coding-agent
 ```
 
-Run the real Codex example from the Docker local setup or the host-native VPS
-setup:
+Run the real Codex example from a local or VPS host-native setup:
 
 ```bash
 npx orkestr-oss thread create "Repo launch reviewer" --id repo-launch-reviewer --cwd "$PWD" --executor codex
@@ -60,7 +59,7 @@ In:
 - Codex CLI runtime handoff
 - timers
 - local activity events
-- Docker local deployment
+- local host-native deployment
 - host-native VPS deployment with systemd
 
 Out:

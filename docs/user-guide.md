@@ -160,8 +160,8 @@ Do not publish a raw Orkestr API or terminal stream directly to the internet.
 
 ## First-Time Setup
 
-1. Install with Docker for the easiest local path, or use the host-native VPS
-   installer for a real server.
+1. Install locally with `scripts/install.sh --local --serve`, or use the
+   host-native VPS installer for a real server.
 2. Open `/setup`.
 3. Review Connections.
 4. Configure secure access if the URL is remote.

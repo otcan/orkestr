@@ -70,7 +70,6 @@ test("install script exposes a host-native systemd VPS path", async () => {
   assert.match(script, /ExecStart=\/usr\/local\/bin\/orkestr-update/);
   assert.match(script, /systemctl restart "\$\{service_name\}\.service"/);
   assert.doesNotMatch(script, /systemctl enable --now "\$\{service_name\}\.service"/);
-  assert.doesNotMatch(script, /docker exec orkestr/);
 });
 
 test("bootstrap script provides an opinionated fresh VPS path", async () => {
@@ -108,7 +107,6 @@ test("bootstrap script provides an opinionated fresh VPS path", async () => {
   assert.match(script, /doctor is deferred until browser pairing/);
   assert.match(script, /orkestr doctor/);
   assert.match(script, /systemctl restart orkestr\.service/);
-  assert.doesNotMatch(script, /docker exec orkestr/);
 });
 
 test("AWS VPS smoke runner can verify WhatsApp QR readiness", async () => {
