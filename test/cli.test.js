@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { runCli } from "../apps/cli/src/commands.js";
+import { writeRuntimeSettings } from "../packages/core/src/runtime-settings.js";
 import { createPairingChallenge, getPairingChallenge } from "../packages/core/src/security.js";
 
 function capture() {
@@ -78,6 +79,25 @@ test("CLI whereiam sends the current directory to the public API", async () => {
   assert.equal(seen[0].search, `?cwd=${encodeURIComponent(cwd)}`);
   assert.match(stdout.text(), /Thread: Demo \(thread-1\)/);
   assert.match(stdout.text(), /Repo: \/repo\/demo/);
+});
+
+test("CLI prints non-secret runtime settings from local state", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-cli-settings-"));
+  const stdout = capture();
+  const env = { ORKESTR_HOME: home };
+  await writeRuntimeSettings({ profile: "local-safe", desktops: { gmailAuth: "gmail" } }, env);
+
+  const code = await runCli(["settings", "--json"], {
+    env,
+    stdout,
+    stderr: capture(),
+  });
+  const payload = JSON.parse(stdout.text());
+
+  assert.equal(code, 0);
+  assert.equal(payload.settings.profile, "local-safe");
+  assert.equal(payload.settings.desktops.gmailAuth, "gmail");
+  assert.equal(payload.settings.codex.permissionPrompts.alwaysApprove.requiresExplicitScope, true);
 });
 
 test("CLI lists timers from the public API", async () => {

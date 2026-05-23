@@ -20,6 +20,16 @@ test("install script exposes a host-native systemd VPS path", async () => {
   assert.match(script, /\/usr\/local\/bin\/orkestr-deploy/);
   assert.match(script, /\/usr\/local\/bin\/orkestr-reset-state/);
   assert.match(script, /ORKESTR_RUN_USER=\$run_user/);
+  assert.match(script, /--profile local-safe\|local-trusted/);
+  assert.match(script, /ORKESTR_INSTALL_PROFILE/);
+  assert.match(script, /ORKESTR_RUNTIME_SETTINGS_FILE/);
+  assert.match(script, /write_runtime_settings_file/);
+  assert.match(script, /codex --sandbox workspace-write --ask-for-approval on-request --no-alt-screen/);
+  assert.match(script, /ORKESTR_GMAIL_AUTH_DESKTOP_SLUG/);
+  assert.match(script, /ORKESTR_MANUAL_INTERVENTION_DESKTOP_SLUG/);
+  assert.match(script, /"approveReplies": \["\/approve", "approve", "approved", "yes", "y", "allow", "go", "proceed"\]/);
+  assert.match(script, /"alwaysApprove"/);
+  assert.match(script, /"requiresExplicitScope": true/);
   assert.match(script, /\$\{service_name\}\.service/);
   assert.match(script, /--auto-update/);
   assert.match(script, /ORKESTR_GIT_REF/);

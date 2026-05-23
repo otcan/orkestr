@@ -9,6 +9,7 @@ directly.
 ```bash
 orkestr serve --open
 orkestr whereiam --cwd "$PWD" --json
+orkestr settings --json
 orkestr list
 orkestr doctor
 orkestr doctor timers
@@ -32,6 +33,12 @@ orkestr sleep <thread-name-or-id>
 
 `orkestr attach` without an argument fetches live threads and asks which thread
 to attach to. This removes the old list-copy-attach workflow.
+
+`orkestr settings --json` prints the non-secret runtime settings contract. It is
+the preferred source for agent-facing choices such as the active Codex sandbox
+and approval mode, the managed desktop to use for manual intervention, the Gmail
+OAuth desktop slug, and WhatsApp sender/responder role names. Secrets and OAuth
+tokens are never returned by this command.
 
 `orkestr thread create` creates a top-level Orkestr thread through the public API.
 Useful flags are `--id`, `--cwd`, `--command`, `--executor`, and `--json`.

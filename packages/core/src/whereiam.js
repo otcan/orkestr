@@ -2,6 +2,7 @@ import path from "node:path";
 import fs from "node:fs/promises";
 import { ensureDataDirs } from "../../storage/src/paths.js";
 import { listRuntimeLeases } from "./runtime-leases.js";
+import { readRuntimeSettings } from "./runtime-settings.js";
 import { listThreads } from "./threads.js";
 
 function nowIso() {
@@ -151,6 +152,7 @@ function apiBase(env = process.env) {
 
 export async function whereAmI(input = {}, env = process.env) {
   const paths = await ensureDataDirs(env);
+  const settings = await readRuntimeSettings(env);
   const rawCwd = clean(input.cwd) || process.cwd();
   const cwd = await realOrResolved(rawCwd);
   const requestedThreadId = clean(input.threadId || input.orkestrThreadId);
@@ -213,6 +215,7 @@ export async function whereAmI(input = {}, env = process.env) {
     thread: publicThread(thread),
     workspace: publicWorkspace(thread, lease, cwd),
     runtime: publicLease(lease),
+    settings,
     capabilities: capabilityHints(),
     commands: commandHints(),
     generatedAt: nowIso(),

@@ -1,5 +1,6 @@
 import { Body, Controller, Get, HttpCode, Param, Post, Query, Req, Res } from "@nestjs/common";
 import { getSetupStatus } from "../../../../../packages/core/src/setup.js";
+import { readRuntimeSettings } from "../../../../../packages/core/src/runtime-settings.js";
 import { runOverlayConnectorAction } from "../../../../../packages/connectors/src/connectors.js";
 import { openUrlInVirtualBrowser } from "../../../../../packages/browsers/src/browsers.js";
 import {
@@ -299,7 +300,7 @@ export class ConnectorCallbacksController {
     }
     const authorizeUrl = String(payload?.authorizeUrl || "").trim();
     if (payload?.ok !== false && authorizeUrl) {
-      const desktopSlug = gmailAuthDesktopSlug(payload);
+      const desktopSlug = await gmailAuthDesktopSlug(payload);
       if (desktopSlug) {
         try {
           const browser = await openUrlInVirtualBrowser(desktopSlug, authorizeUrl);
@@ -378,7 +379,7 @@ export class GoogleMarketingCallbacksController {
     }
     const authorizeUrl = String(payload?.authorizeUrl || payload?.auth_url || payload?.url || "").trim();
     if (payload?.ok !== false && authorizeUrl) {
-      const desktopSlug = googleMarketingAuthDesktopSlug(payload);
+      const desktopSlug = await googleMarketingAuthDesktopSlug(payload);
       if (desktopSlug) {
         try {
           const browser = await openUrlInVirtualBrowser(desktopSlug, authorizeUrl);
@@ -509,19 +510,23 @@ function escapeHtml(value: unknown): string {
     .replaceAll("'", "&#039;");
 }
 
-function googleMarketingAuthDesktopSlug(payload: Record<string, unknown> = {}): string {
+async function googleMarketingAuthDesktopSlug(payload: Record<string, unknown> = {}): Promise<string> {
   return googleAuthDesktopSlug(payload, "ORKESTR_GOOGLE_MARKETING_AUTH_DESKTOP_SLUG");
 }
 
-function gmailAuthDesktopSlug(payload: Record<string, unknown> = {}): string {
-  return googleAuthDesktopSlug(payload, "ORKESTR_GMAIL_AUTH_DESKTOP_SLUG");
+async function gmailAuthDesktopSlug(payload: Record<string, unknown> = {}): Promise<string> {
+  const settings = await readRuntimeSettings().catch(() => ({} as any));
+  return googleAuthDesktopSlug(payload, "ORKESTR_GMAIL_AUTH_DESKTOP_SLUG", String(settings?.connectors?.gmail?.authDesktop || ""));
 }
 
-function googleAuthDesktopSlug(payload: Record<string, unknown> = {}, specificEnvName = ""): string {
+async function googleAuthDesktopSlug(payload: Record<string, unknown> = {}, specificEnvName = "", settingValue = ""): Promise<string> {
+  const settings = settingValue ? null : await readRuntimeSettings().catch(() => ({} as any));
   return String(
     payload.authDesktopSlug ||
     payload.desktopSlug ||
     (specificEnvName ? process.env[specificEnvName] : "") ||
+    settingValue ||
+    settings?.desktops?.gmailAuth ||
     process.env.ORKESTR_GOOGLE_AUTH_DESKTOP_SLUG ||
     "",
   ).trim();

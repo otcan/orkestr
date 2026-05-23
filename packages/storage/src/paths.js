@@ -15,6 +15,7 @@ export function dataPaths(env = process.env) {
     oauth: path.join(home, "oauth"),
     secrets: path.join(home, "secrets"),
     config: path.join(home, "config.json"),
+    runtimeSettings: env.ORKESTR_RUNTIME_SETTINGS_FILE || path.join(home, "runtime-settings.json"),
     agents: path.join(home, "agents.json"),
     threads: path.join(home, "threads.json"),
     threadsDb: path.join(home, "threads.sqlite"),

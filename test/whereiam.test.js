@@ -16,6 +16,7 @@ test("runtime AGENTS.md points agents to dynamic whereiam discovery", async () =
 
   assert.equal(result.written, true);
   assert.match(body, /orkestr whereiam --json/);
+  assert.match(body, /orkestr settings --json/);
   assert.doesNotMatch(body, /Thread:\s+thread-1/);
   assert.doesNotMatch(body, /Workspace:\s+/);
 });
@@ -52,6 +53,8 @@ test("whereAmI resolves the current thread from a nested workspace path", async 
   assert.equal(payload.thread.displayName, "Where I Am");
   assert.equal(payload.workspace.repoPath, repo);
   assert.equal(payload.workspace.branchName, "main");
+  assert.equal(payload.settings.profile, "local-safe");
+  assert.equal(payload.settings.desktops.gmailAuth, "gmail");
   assert.equal(payload.matchedBy, "thread.cwd");
 });
 

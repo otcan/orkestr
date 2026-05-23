@@ -23,6 +23,9 @@ and private overlays stay on your machine or VPS.
   WhatsApp chat feeding one coding thread.
 - **Virtual desktop:** a managed Chrome profile for browser work and login state.
 - **Timer:** a scheduled prompt that wakes a thread later.
+- **Runtime settings:** the non-secret setup contract that tells Orkestr and
+  Codex-aware skills which Codex safety mode, managed desktop, and auth route to
+  use.
 
 ## What You Can Do Today
 
@@ -92,6 +95,11 @@ The desktop system is intentionally managed by Orkestr. Browser profile
 directories stay under Orkestr-managed data paths or private overlays, and
 agents should use the Orkestr desktop lease APIs instead of starting unmanaged
 Chrome profiles.
+
+The installer records the default desktop, Gmail auth desktop, and manual
+intervention desktop in runtime settings. Codex-aware skills should read
+`orkestr whereiam --json` or `orkestr settings --json` instead of guessing which
+browser profile to open.
 
 ### Schedule Work
 

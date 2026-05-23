@@ -6,6 +6,7 @@ import { promisify } from "node:util";
 import { Body, Controller, Get, HttpCode, Param, Post, Query, Req, Res } from "@nestjs/common";
 import { doctorRuntimeResources, listRuntimeLeases } from "../../../../../packages/core/src/runtime-leases.js";
 import { getSetupStatus } from "../../../../../packages/core/src/setup.js";
+import { readRuntimeSettings } from "../../../../../packages/core/src/runtime-settings.js";
 import { systemDoctor } from "../../../../../packages/core/src/system-doctor.js";
 import { whereAmI } from "../../../../../packages/core/src/whereiam.js";
 import {
@@ -326,6 +327,11 @@ export class SystemController {
   @Get("setup/status")
   async setupStatus() {
     return { ...(await getSetupStatus()), config: await publicConfig() };
+  }
+
+  @Get("settings")
+  async settings() {
+    return { settings: await readRuntimeSettings(), generatedAt: new Date().toISOString() };
   }
 
   @Get("setup/security/status")

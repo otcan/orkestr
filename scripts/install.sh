@@ -6,8 +6,8 @@ usage() {
 Install Orkestr.
 
 Usage:
-  scripts/install.sh [--local] [--serve]
-  scripts/install.sh --systemd [--auto-update] [--install-dir DIR] [--data-dir DIR] [--workspace-dir DIR] [--env-file FILE] [--user USER]
+  scripts/install.sh [--local] [--serve] [--profile local-safe|local-trusted]
+  scripts/install.sh --systemd [--auto-update] [--profile vps-safe|vps-trusted] [--install-dir DIR] [--data-dir DIR] [--workspace-dir DIR] [--env-file FILE] [--user USER]
 
 Modes:
   default       Clone/update the repo, install dependencies, build, and print a start command.
@@ -26,6 +26,8 @@ Environment:
   ORKESTR_RUN_USER          Service user. Defaults to orkestr with --systemd.
   ORKESTR_HOST              Bind host. Defaults to 127.0.0.1.
   ORKESTR_PORT              Bind port. Defaults to 19812.
+  ORKESTR_INSTALL_PROFILE   Runtime profile. Defaults to local-safe locally and vps-safe with --systemd.
+  ORKESTR_RUNTIME_SETTINGS_FILE  Non-secret runtime settings file. Defaults to $ORKESTR_HOME/runtime-settings.json.
   ORKESTR_AUTO_UPDATE       Install and enable the update watcher. Defaults to 0.
   ORKESTR_UPDATE_REF        Git branch, tag, or commit watched by the updater. Defaults to main.
   ORKESTR_UPDATE_INTERVAL_SECONDS  Update check interval. Defaults to 120.
@@ -53,6 +55,7 @@ host="${ORKESTR_HOST:-127.0.0.1}"
 port="${ORKESTR_PORT:-19812}"
 auto_update="${ORKESTR_AUTO_UPDATE:-0}"
 update_interval_seconds="${ORKESTR_UPDATE_INTERVAL_SECONDS:-120}"
+install_profile="${ORKESTR_INSTALL_PROFILE:-}"
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
@@ -106,6 +109,11 @@ while [ "$#" -gt 0 ]; do
       port="${2:-}"
       shift 2
       ;;
+    --profile)
+      install_profile="${2:-}"
+      ORKESTR_INSTALL_PROFILE="$install_profile"
+      shift 2
+      ;;
     --skip-system-packages)
       ORKESTR_SKIP_SYSTEM_PACKAGES=1
       shift
@@ -135,6 +143,45 @@ need() {
 
 have() {
   command -v "$1" >/dev/null 2>&1
+}
+
+profile_is_trusted() {
+  case "$1" in
+    local-trusted|vps-trusted|trusted)
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+codex_sandbox_default() {
+  if profile_is_trusted "$install_profile"; then
+    echo "danger-full-access"
+  else
+    echo "workspace-write"
+  fi
+}
+
+codex_approval_default() {
+  if profile_is_trusted "$install_profile"; then
+    echo "never"
+  else
+    echo "on-request"
+  fi
+}
+
+codex_command_default() {
+  if profile_is_trusted "$install_profile"; then
+    echo "codex --dangerously-bypass-approvals-and-sandbox"
+  else
+    echo "codex --sandbox workspace-write --ask-for-approval on-request --no-alt-screen"
+  fi
+}
+
+json_string() {
+  node -e 'process.stdout.write(JSON.stringify(process.argv[1] || ""))' "$1"
 }
 
 run_as_root() {
@@ -280,11 +327,18 @@ write_env_file() {
   mkdir -p "$(dirname "$env_file")"
   local chrome
   chrome="$(chrome_path)"
+  local codex_command codex_sandbox codex_approval runtime_settings_file
+  codex_command="${ORKESTR_RUNTIME_CODEX_COMMAND:-$(codex_command_default)}"
+  codex_sandbox="${ORKESTR_CODEX_SANDBOX:-$(codex_sandbox_default)}"
+  codex_approval="${ORKESTR_CODEX_APPROVAL_POLICY:-$(codex_approval_default)}"
+  runtime_settings_file="${ORKESTR_RUNTIME_SETTINGS_FILE:-$data_dir/runtime-settings.json}"
   cat > "$env_file" <<EOF
 # Orkestr host-native environment.
 # Edit this file for OpenAI keys, OAuth credentials, Caddy/Tailscale URLs, and private overlay paths.
 ORKESTR_APP_DIR=$repo_dir
 ORKESTR_HOME=$data_dir
+ORKESTR_INSTALL_PROFILE=$install_profile
+ORKESTR_RUNTIME_SETTINGS_FILE=$runtime_settings_file
 ORKESTR_RUN_USER=$run_user
 ORKESTR_HOST=$host
 ORKESTR_PORT=$port
@@ -304,7 +358,9 @@ ORKESTR_RESET_ON_UPDATE=${ORKESTR_RESET_ON_UPDATE:-0}
 ORKESTR_RESET_OVERLAY=${ORKESTR_RESET_OVERLAY:-0}
 ORKESTR_RUNTIME_WORKSPACE_ROOT=$workspace_dir
 ORKESTR_CODEX_BIN=${ORKESTR_CODEX_BIN:-codex}
-ORKESTR_RUNTIME_CODEX_COMMAND="${ORKESTR_RUNTIME_CODEX_COMMAND:-codex --dangerously-bypass-approvals-and-sandbox}"
+ORKESTR_CODEX_SANDBOX=$codex_sandbox
+ORKESTR_CODEX_APPROVAL_POLICY=$codex_approval
+ORKESTR_RUNTIME_CODEX_COMMAND="$codex_command"
 ORKESTR_RUNTIME_SUBMIT_KEYS=${ORKESTR_RUNTIME_SUBMIT_KEYS:-C-m}
 ORKESTR_RUNTIME_SUBMIT_DELAY_MS=${ORKESTR_RUNTIME_SUBMIT_DELAY_MS:-250}
 ORKESTR_WAKE_READY_TIMEOUT_MS=${ORKESTR_WAKE_READY_TIMEOUT_MS:-60000}
@@ -312,8 +368,14 @@ CODEX_HOME=${CODEX_HOME:-$data_dir/codex}
 PUPPETEER_EXECUTABLE_PATH=${PUPPETEER_EXECUTABLE_PATH:-$chrome}
 WA_CHROME_PATH=${WA_CHROME_PATH:-$chrome}
 ORKESTR_CHROME_PATH=${ORKESTR_CHROME_PATH:-$chrome}
+ORKESTR_BROWSER_DESKTOP_MODE=${ORKESTR_BROWSER_DESKTOP_MODE:-profiles}
+ORKESTR_DEFAULT_DESKTOP_SLUG=${ORKESTR_DEFAULT_DESKTOP_SLUG:-desktop}
+ORKESTR_GMAIL_AUTH_DESKTOP_SLUG=${ORKESTR_GMAIL_AUTH_DESKTOP_SLUG:-gmail}
+ORKESTR_MANUAL_INTERVENTION_DESKTOP_SLUG=${ORKESTR_MANUAL_INTERVENTION_DESKTOP_SLUG:-desktop}
 ORKESTR_OVERLAY_DIR=${ORKESTR_OVERLAY_DIR:-/opt/orkestr/overlay}
 WHATSAPP_BRIDGE_MODE=${WHATSAPP_BRIDGE_MODE:-local}
+ORKESTR_WHATSAPP_SENDER_ROLE=${ORKESTR_WHATSAPP_SENDER_ROLE:-sender}
+ORKESTR_WHATSAPP_RESPONDER_ROLE=${ORKESTR_WHATSAPP_RESPONDER_ROLE:-responder}
 ORKESTR_WHATSAPP_EXTERNAL_BRIDGE_ENABLED=${ORKESTR_WHATSAPP_EXTERNAL_BRIDGE_ENABLED:-0}
 WHATSAPP_BRIDGE_URL=${WHATSAPP_BRIDGE_URL:-}
 OPENAI_API_KEY=
@@ -324,6 +386,96 @@ GMAIL_OAUTH_CLIENT_SECRET=
 GMAIL_OAUTH_REDIRECT_URI=
 EOF
   chmod 0640 "$env_file"
+}
+
+write_runtime_settings_file() {
+  local runtime_settings_file codex_command codex_sandbox codex_approval desktop_mode default_desktop gmail_desktop manual_desktop wa_sender wa_responder wa_mode gmail_enabled outlook_enabled
+  runtime_settings_file="${ORKESTR_RUNTIME_SETTINGS_FILE:-$data_dir/runtime-settings.json}"
+  codex_command="${ORKESTR_RUNTIME_CODEX_COMMAND:-$(codex_command_default)}"
+  codex_sandbox="${ORKESTR_CODEX_SANDBOX:-$(codex_sandbox_default)}"
+  codex_approval="${ORKESTR_CODEX_APPROVAL_POLICY:-$(codex_approval_default)}"
+  desktop_mode="${ORKESTR_BROWSER_DESKTOP_MODE:-profiles}"
+  default_desktop="${ORKESTR_DEFAULT_DESKTOP_SLUG:-desktop}"
+  gmail_desktop="${ORKESTR_GMAIL_AUTH_DESKTOP_SLUG:-gmail}"
+  manual_desktop="${ORKESTR_MANUAL_INTERVENTION_DESKTOP_SLUG:-desktop}"
+  wa_sender="${ORKESTR_WHATSAPP_SENDER_ROLE:-sender}"
+  wa_responder="${ORKESTR_WHATSAPP_RESPONDER_ROLE:-responder}"
+  wa_mode="${WHATSAPP_BRIDGE_MODE:-local}"
+  gmail_enabled="${ORKESTR_GMAIL_ENABLED:-0}"
+  outlook_enabled="${ORKESTR_OUTLOOK_ENABLED:-0}"
+  if [ -n "${GMAIL_OAUTH_CLIENT_ID:-}" ]; then
+    gmail_enabled=1
+  fi
+  if [ -n "${OUTLOOK_OAUTH_CLIENT_ID:-${MICROSOFT_OAUTH_CLIENT_ID:-}}" ]; then
+    outlook_enabled=1
+  fi
+  mkdir -p "$(dirname "$runtime_settings_file")"
+  cat > "$runtime_settings_file" <<EOF
+{
+  "schemaVersion": 1,
+  "profile": $(json_string "$install_profile"),
+  "generatedBy": "scripts/install.sh",
+  "updatedAt": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+  "codex": {
+    "command": $(json_string "$codex_command"),
+    "sandbox": $(json_string "$codex_sandbox"),
+    "approvalPolicy": $(json_string "$codex_approval"),
+    "bypassApprovalsAndSandbox": $(profile_is_trusted "$install_profile" && echo true || echo false),
+    "permissionPrompts": {
+      "mirrorToWhatsApp": $(profile_is_trusted "$install_profile" && echo false || echo true),
+      "approveReplies": ["/approve", "approve", "approved", "yes", "y", "allow", "go", "proceed"],
+      "denyReplies": ["/deny", "deny", "no", "n", "reject", "stop", "cancel"],
+      "alwaysApprove": {
+        "enabled": false,
+        "requiresExplicitScope": true,
+        "allowedScopes": ["this-thread", "session"]
+      }
+    }
+  },
+  "desktops": {
+    "enabled": true,
+    "mode": $(json_string "$desktop_mode"),
+    "default": $(json_string "$default_desktop"),
+    "gmailAuth": $(json_string "$gmail_desktop"),
+    "manualIntervention": $(json_string "$manual_desktop")
+  },
+  "connectors": {
+    "whatsapp": {
+      "enabled": true,
+      "bridgeMode": $(json_string "$wa_mode"),
+      "senderRole": $(json_string "$wa_sender"),
+      "responderRole": $(json_string "$wa_responder")
+    },
+    "gmail": {
+      "enabled": $([ "$gmail_enabled" = "1" ] && echo true || echo false),
+      "authDesktop": $(json_string "$gmail_desktop"),
+      "needsAuthAction": "gmail.oauth.start"
+    },
+    "outlook": {
+      "enabled": $([ "$outlook_enabled" = "1" ] && echo true || echo false),
+      "needsAuthAction": "outlook.device.start"
+    }
+  },
+  "intervention": {
+    "manualDesktop": $(json_string "$manual_desktop"),
+    "states": {
+      "codex": {
+        "awaitingApproval": "Reply approve or deny in WhatsApp, or use the Orkestr UI approval control."
+      },
+      "gmail": {
+        "needsAuth": "Open the configured Gmail auth desktop and reconnect Gmail OAuth."
+      },
+      "outlook": {
+        "needsDeviceCode": "Start Outlook device sign-in and approve the Microsoft device code."
+      },
+      "desktop": {
+        "needsManualIntervention": $(json_string "Use the $manual_desktop managed desktop for manual browser steps.")
+      }
+    }
+  }
+}
+EOF
+  chmod 0644 "$runtime_settings_file"
 }
 
 write_cli_wrapper() {
@@ -513,6 +665,8 @@ install_systemd_runtime() {
   mkdir -p "$data_dir" "$workspace_dir" /opt/orkestr/overlay
   chown -R "$run_user:$(id -gn "$run_user")" "$data_dir" "$workspace_dir" /opt/orkestr/overlay
   write_env_file
+  write_runtime_settings_file
+  chown "$run_user:$(id -gn "$run_user")" "${ORKESTR_RUNTIME_SETTINGS_FILE:-$data_dir/runtime-settings.json}" || true
   chgrp "$(id -gn "$run_user")" "$env_file" || true
   write_cli_wrapper
   write_update_wrapper
@@ -529,8 +683,12 @@ if [ "$systemd" -eq 1 ]; then
   data_dir="${data_dir:-/opt/orkestr/data}"
   workspace_dir="${workspace_dir:-/opt/orkestr/workspace}"
   env_file="${env_file:-/etc/orkestr/orkestr.env}"
+  install_profile="${install_profile:-vps-safe}"
 else
   install_dir="${install_dir:-$HOME/.orkestr-src/orkestr-oss}"
+  data_dir="${data_dir:-$HOME/.orkestr}"
+  workspace_dir="${workspace_dir:-$data_dir/workspaces}"
+  install_profile="${install_profile:-local-safe}"
 fi
 
 install_system_packages
@@ -607,6 +765,10 @@ fi
 
 export ORKESTR_HOST="$host"
 export ORKESTR_PORT="$port"
+export ORKESTR_HOME="${ORKESTR_HOME:-$data_dir}"
+export ORKESTR_RUNTIME_SETTINGS_FILE="${ORKESTR_RUNTIME_SETTINGS_FILE:-$data_dir/runtime-settings.json}"
+mkdir -p "$data_dir" "$workspace_dir"
+write_runtime_settings_file
 
 cat <<EOF
 
@@ -614,10 +776,13 @@ Orkestr installed.
 
 Start:
   cd $repo_dir
-  ORKESTR_HOST=$ORKESTR_HOST ORKESTR_PORT=$ORKESTR_PORT npm start
+  ORKESTR_HOME=$ORKESTR_HOME ORKESTR_HOST=$ORKESTR_HOST ORKESTR_PORT=$ORKESTR_PORT npm start
 
 Open:
   http://$ORKESTR_HOST:$ORKESTR_PORT/setup
+
+Runtime settings:
+  $ORKESTR_RUNTIME_SETTINGS_FILE
 
 For a VPS service install, rerun as root:
   sudo scripts/install.sh --systemd

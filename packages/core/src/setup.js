@@ -1,6 +1,7 @@
 import { connectorOrder, getConnectorStatuses } from "../../connectors/src/connectors.js";
 import { dataPaths } from "../../storage/src/paths.js";
 import { readOverlay } from "./overlay.js";
+import { readRuntimeSettings } from "./runtime-settings.js";
 import { securityStatus } from "./security.js";
 
 export { connectorOrder };
@@ -26,10 +27,12 @@ export async function getSetupStatus({ env = process.env, home } = {}) {
   const connectors = await getConnectorStatuses({ env, home });
   const overlay = await readOverlay(env);
   const security = await securityStatus(env);
+  const settings = await readRuntimeSettings(env);
   return {
     generatedAt: new Date().toISOString(),
     home: paths.home,
     setupState: setupState(connectors),
+    settings,
     overlay,
     security,
     connectors,

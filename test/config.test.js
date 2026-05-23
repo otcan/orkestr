@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { getSetupStatus } from "../packages/core/src/setup.js";
+import { classifyApprovalReply, readRuntimeSettings, writeRuntimeSettings } from "../packages/core/src/runtime-settings.js";
 import { publicConfig, writeConnectorConfig } from "../packages/storage/src/config.js";
 
 test("connector config is persisted and redacts OpenAI secrets", async () => {
@@ -31,4 +32,52 @@ test("gmail client secrets are stored outside public config", async () => {
   assert.equal(publicRaw.gmail.clientSecret, undefined);
   assert.equal(secretRaw.clientSecret, "super-secret");
   assert.equal(config.gmail.clientSecret, "supe...cret");
+});
+
+test("runtime settings persist non-secret Codex, desktop, and connector routing", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-runtime-settings-"));
+  const env = { ORKESTR_HOME: home };
+
+  await writeRuntimeSettings({
+    profile: "local-safe",
+    codex: {
+      sandbox: "workspace-write",
+      approvalPolicy: "on-request",
+    },
+    desktops: {
+      default: "desktop",
+      gmailAuth: "gmail",
+      manualIntervention: "desktop",
+    },
+    connectors: {
+      gmail: {
+        enabled: true,
+        authDesktop: "gmail",
+      },
+      outlook: {
+        enabled: true,
+      },
+    },
+  }, env);
+
+  const settings = await readRuntimeSettings(env);
+  const raw = JSON.parse(await fs.readFile(path.join(home, "runtime-settings.json"), "utf8"));
+
+  assert.equal(settings.profile, "local-safe");
+  assert.equal(settings.codex.approvalPolicy, "on-request");
+  assert.equal(settings.codex.permissionPrompts.mirrorToWhatsApp, true);
+  assert.equal(settings.desktops.gmailAuth, "gmail");
+  assert.equal(settings.connectors.gmail.authDesktop, "gmail");
+  assert.equal(raw.codex.clientSecret, undefined);
+  assert.equal(raw.connectors.gmail.clientSecret, undefined);
+});
+
+test("approval replies accept slash and natural forms but reject unscoped always approval", () => {
+  assert.deepEqual(classifyApprovalReply("/approve"), { action: "approve", scopedAlways: false });
+  assert.deepEqual(classifyApprovalReply("approve"), { action: "approve", scopedAlways: false });
+  assert.deepEqual(classifyApprovalReply("yes"), { action: "approve", scopedAlways: false });
+  assert.deepEqual(classifyApprovalReply("/deny"), { action: "deny", scopedAlways: false });
+  assert.deepEqual(classifyApprovalReply("no"), { action: "deny", scopedAlways: false });
+  assert.deepEqual(classifyApprovalReply("/approve always this-thread"), { action: "approve", scopedAlways: true });
+  assert.equal(classifyApprovalReply("always approve").error, "always_approval_requires_scope");
 });

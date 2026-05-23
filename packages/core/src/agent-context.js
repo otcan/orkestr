@@ -32,6 +32,9 @@ Use dynamic discovery for live Orkestr context:
 - API callers can use \`GET /api/whereiam?cwd=<absolute-current-directory>\`.
   Pass \`cwd\` explicitly; the API cannot infer a shell's working directory
   from a plain HTTP request.
+- Runtime settings are included in \`orkestr whereiam --json\` and can also be
+  inspected with \`orkestr settings --json\`. Use those settings for managed
+  desktop slugs, Gmail/Outlook auth routes, and permission-routing behavior.
 
 Orkestr capabilities:
 

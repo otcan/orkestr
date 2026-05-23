@@ -908,7 +908,7 @@ function runtimeCommand(thread, workspace = "", env = process.env) {
   const base = explicit ||
     (testLikeRuntimeEnvironment(workspace, env) && !allowRealCodexInTests(env)
       ? testRuntimePlaceholderCommand(env)
-      : "codex --dangerously-bypass-approvals-and-sandbox");
+      : "codex --sandbox workspace-write --ask-for-approval on-request --no-alt-screen");
   const threadId = codexThreadId(thread);
   const workspaceArg = String(workspace || "").trim() ? ` -C ${shellQuote(workspace)}` : "";
   return threadId && commandUsesCodex(base) ? `${base} resume${workspaceArg} ${shellQuote(threadId)}` : base;
