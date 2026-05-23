@@ -38,6 +38,7 @@ function start(home, port) {
       ...process.env,
       ORKESTR_HOME: home,
       ORKESTR_PORT: String(port),
+      ORKESTR_AUTH_REQUIRED: process.env.ORKESTR_SMOKE_AUTH_REQUIRED || "0",
       ORKESTR_BROWSER_LAUNCH_DISABLED: "1",
     },
     stdio: ["ignore", "pipe", "pipe"],
