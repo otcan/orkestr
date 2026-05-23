@@ -29,6 +29,8 @@ orkestr settings --json
 orkestr doctor timers
 orkestr security challenges
 orkestr security approve <challenge-id>
+orkestr security sessions
+orkestr security revoke <session-id|all>
 orkestr timers list
 orkestr timers run <timer-id>
 orkestr update --track-main --no-smoke
@@ -95,6 +97,9 @@ setup.
 `orkestr security challenges` lists pending browser-pairing challenges.
 `orkestr security approve <challenge-id>` approves a browser from trusted host
 access, usually over SSH on a host-native VPS.
+`orkestr security sessions` lists paired browser sessions without exposing
+session tokens. `orkestr security revoke <session-id>` revokes one paired
+browser, and `orkestr security revoke all` clears every paired browser session.
 
 Attach keeps the backing tmux session name stable, but names the tmux/byobu
 window after the Orkestr thread on wake and attach. The current runtime model is

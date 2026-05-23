@@ -99,11 +99,14 @@ test("bootstrap script provides an opinionated fresh VPS path", async () => {
   assert.match(script, /--no-tailscale/);
   assert.match(script, /--tailscale-up/);
   assert.match(script, /--domain DOMAIN/);
+  assert.match(script, /--email EMAIL/);
   assert.match(script, /TS_AUTHKEY/);
+  assert.match(script, /ORKESTR_ACME_EMAIL/);
   assert.match(script, /tailscale\.com\/install\.sh/);
   assert.match(script, /tailscale serve --bg 443/);
   assert.match(script, /tailscale serve --bg --https/);
   assert.match(script, /apt_install caddy/);
+  assert.match(script, /root \\\* \/usr\/share\/caddy/);
   assert.match(script, /\/etc\/caddy\/conf\.d\/orkestr\.caddy/);
   assert.match(script, /caddy validate --config \/etc\/caddy\/Caddyfile/);
   assert.match(script, /--systemd/);
@@ -143,4 +146,22 @@ test("AWS VPS smoke runner can verify WhatsApp QR readiness", async () => {
   assert.match(script, /whatsapp_readiness=paired/);
   assert.match(script, /whatsapp_pairing_code=/);
   assert.match(script, /api\/connectors\/whatsapp\/bridge\/chats/);
+});
+
+test("public domain smoke runner validates Caddy/TLS and browser pairing", async () => {
+  const script = await fs.readFile("scripts/smoke-public-domain.sh", "utf8");
+  const { stdout } = await execFileAsync("bash", ["scripts/smoke-public-domain.sh", "--help"]);
+
+  await execFileAsync("bash", ["-n", "scripts/smoke-public-domain.sh"]);
+  assert.match(stdout, /--domain DOMAIN/);
+  assert.match(stdout, /--host PUBLIC_IP/);
+  assert.match(stdout, /--ssh TARGET/);
+  assert.match(stdout, /--keep-session/);
+  assert.match(script, /curl --resolve "\$domain:80:\$host_ip"/);
+  assert.match(script, /openssl s_client -servername "\$domain"/);
+  assert.match(script, /browser_pairing_required/);
+  assert.match(script, /api\/setup\/security\/challenge/);
+  assert.match(script, /orkestr security approve/);
+  assert.match(script, /api\/setup\/security\/pair/);
+  assert.match(script, /orkestr security revoke/);
 });

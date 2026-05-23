@@ -116,7 +116,7 @@ Common variants:
 curl -fsSL https://raw.githubusercontent.com/otcan/orkestr/main/scripts/bootstrap-vps.sh | sudo bash -s -- --demo
 
 # Public HTTPS domain through Caddy.
-curl -fsSL https://raw.githubusercontent.com/otcan/orkestr/main/scripts/bootstrap-vps.sh | sudo bash -s -- --domain orkestr.example.com
+curl -fsSL https://raw.githubusercontent.com/otcan/orkestr/main/scripts/bootstrap-vps.sh | sudo bash -s -- --domain orkestr.example.com --email admin@example.com
 
 # Tailscale unattended setup. Prefer a secret manager; this interactive form avoids shell history.
 read -rsp "Tailscale auth key: " TS_AUTHKEY; echo
@@ -126,6 +126,37 @@ unset TS_AUTHKEY
 
 # Custom fork, branch, tag, or commit.
 curl -fsSL https://raw.githubusercontent.com/otcan/orkestr/main/scripts/bootstrap-vps.sh | sudo bash -s -- --repo https://github.com/you/orkestr.git --ref main
+```
+
+### Public Domain Smoke
+
+The Caddy path is alpha-ready when it is fronted by a real owned domain. Do not
+use a shared dynamic DNS root such as `sslip.io` for release validation; public
+ACME rate limits apply to the registered domain and can fail unrelated tests.
+
+After setting the domain's A record to the VPS public IP and running
+`bootstrap-vps.sh --domain`, run:
+
+```bash
+npm run smoke:public-domain -- \
+  --domain orkestr.example.com \
+  --host <vps-public-ip> \
+  --ssh root@<vps-public-ip>
+```
+
+The smoke checks public DNS, HTTP-to-HTTPS redirects, the issued certificate,
+the `/setup` page, that raw `19812` is not publicly reachable, that protected
+API routes return `401 browser_pairing_required` before pairing, and that the
+SSH-approved browser-pairing flow can access a protected API route with a
+cookie. By default it revokes the temporary browser session before exiting.
+Pass `--keep-session` only when you want to keep that paired browser.
+
+Useful cleanup commands:
+
+```bash
+orkestr security sessions
+orkestr security revoke <session-id>
+orkestr security revoke all
 ```
 
 ### Disposable AWS Installer Smoke
@@ -234,6 +265,8 @@ orkestr status
 orkestr logs
 orkestr security approve <challenge-id>
 orkestr security challenges
+orkestr security sessions
+orkestr security revoke <session-id|all>
 ```
 
 The generated `/usr/local/bin/orkestr` wrapper can be run from a root SSH

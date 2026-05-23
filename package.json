@@ -17,6 +17,7 @@
     "test:ci": "node scripts/ci-test-runner.mjs",
     "web:build": "ng build web",
     "smoke": "node scripts/smoke.mjs",
+    "smoke:public-domain": "bash scripts/smoke-public-domain.sh",
     "smoke:vps:aws": "bash scripts/smoke-vps-aws.sh",
     "install:local": "bash scripts/install.sh --local",
     "demo:coding-agent": "node scripts/coding-agent-demo.mjs",

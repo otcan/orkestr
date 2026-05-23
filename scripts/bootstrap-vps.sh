@@ -30,11 +30,13 @@ Options:
   --tailscale-hostname NAME  Hostname to pass to tailscale up. Defaults to orkestr.
   --tailscale-https-port N   Tailscale HTTPS port. Defaults to 443.
   --domain DOMAIN            Configure Caddy public HTTPS for this domain.
+  --email EMAIL              ACME account email for Caddy certificate issuance.
   --force                    Continue on non-recommended Ubuntu versions.
   --help                     Show this help.
 
 Environment:
   TS_AUTHKEY                 Optional Tailscale auth key. Prefer setting it interactively, not in shell history.
+  ORKESTR_ACME_EMAIL         Optional ACME account email used by Caddy.
   ORKESTR_INSTALL_SCRIPT_URL Override the installer URL used by this bootstrap script.
 USAGE
 }
@@ -55,6 +57,7 @@ tailscale_up=0
 tailscale_hostname="${ORKESTR_TAILSCALE_HOSTNAME:-orkestr}"
 tailscale_https_port="${ORKESTR_TAILSCALE_HTTPS_PORT:-443}"
 domain="${ORKESTR_DOMAIN:-}"
+acme_email="${ORKESTR_ACME_EMAIL:-}"
 force=0
 env_file="${ORKESTR_ENV_FILE:-/etc/orkestr/orkestr.env}"
 
@@ -140,6 +143,10 @@ while [ "$#" -gt 0 ]; do
       ;;
     --domain)
       domain="${2:-}"
+      shift 2
+      ;;
+    --email|--acme-email)
+      acme_email="${2:-}"
       shift 2
       ;;
     --force)
@@ -393,9 +400,19 @@ configure_caddy() {
   apt_install caddy
   mkdir -p /etc/caddy/conf.d
   if [ ! -s /etc/caddy/Caddyfile ] || grep -q 'root \* /usr/share/caddy' /etc/caddy/Caddyfile; then
-    cat > /etc/caddy/Caddyfile <<'EOF'
+    if [ -n "$acme_email" ]; then
+      cat > /etc/caddy/Caddyfile <<EOF
+{
+  email $acme_email
+}
+
 import /etc/caddy/conf.d/*.caddy
 EOF
+    else
+      cat > /etc/caddy/Caddyfile <<'EOF'
+import /etc/caddy/conf.d/*.caddy
+EOF
+    fi
   elif ! grep -q '^import /etc/caddy/conf\.d/\*\.caddy$' /etc/caddy/Caddyfile; then
     printf '\nimport /etc/caddy/conf.d/*.caddy\n' >> /etc/caddy/Caddyfile
   fi
@@ -411,6 +428,9 @@ EOF
   set_env_value ORKESTR_CADDY_ENABLED 1 "$env_file"
   set_env_value ORKESTR_COOKIE_SECURE 1 "$env_file"
   set_env_value ORKESTR_PUBLIC_HTTPS_URL "https://$domain" "$env_file"
+  if [ -n "$acme_email" ]; then
+    set_env_value ORKESTR_ACME_EMAIL "$acme_email" "$env_file"
+  fi
 }
 
 restart_orkestr() {

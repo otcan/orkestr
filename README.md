@@ -107,11 +107,27 @@ Useful variants:
 curl -fsSL https://raw.githubusercontent.com/otcan/orkestr/main/scripts/bootstrap-vps.sh | sudo bash -s -- --demo
 
 # Public HTTPS domain through Caddy.
-curl -fsSL https://raw.githubusercontent.com/otcan/orkestr/main/scripts/bootstrap-vps.sh | sudo bash -s -- --domain orkestr.example.com
+curl -fsSL https://raw.githubusercontent.com/otcan/orkestr/main/scripts/bootstrap-vps.sh | sudo bash -s -- --domain orkestr.example.com --email admin@example.com
 
 # Custom branch or fork.
 curl -fsSL https://raw.githubusercontent.com/otcan/orkestr/main/scripts/bootstrap-vps.sh | sudo bash -s -- --repo https://github.com/you/orkestr.git --ref main
 ```
+
+For public HTTPS, use a real owned domain or subdomain with an A record pointed
+at the VPS. Avoid shared dynamic DNS roots such as `sslip.io` for release
+validation because ACME certificate rate limits apply to the registered domain.
+After bootstrap, run the public-domain smoke from your controller:
+
+```bash
+npm run smoke:public-domain -- \
+  --domain orkestr.example.com \
+  --host <vps-public-ip> \
+  --ssh root@<vps-public-ip>
+```
+
+The smoke verifies DNS, Caddy HTTPS, certificate issuance, localhost-only
+Orkestr binding, browser-pairing enforcement, paired-cookie access, and cleanup
+of the temporary browser session.
 
 Installer changes can be tested against a brand-new disposable AWS VPS:
 
@@ -167,6 +183,8 @@ orkestr status
 orkestr logs
 orkestr doctor
 orkestr security approve <challenge-id>
+orkestr security sessions
+orkestr security revoke <session-id|all>
 ```
 
 The host CLI is safe to run from a root SSH session. It drops to the

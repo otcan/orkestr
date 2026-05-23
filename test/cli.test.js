@@ -6,7 +6,7 @@ import path from "node:path";
 import test from "node:test";
 import { runCli } from "../apps/cli/src/commands.js";
 import { writeRuntimeSettings } from "../packages/core/src/runtime-settings.js";
-import { createPairingChallenge, getPairingChallenge } from "../packages/core/src/security.js";
+import { approvePairingChallenge, createPairingChallenge, getPairingChallenge, pairBrowser } from "../packages/core/src/security.js";
 
 function capture() {
   let text = "";
@@ -308,6 +308,42 @@ test("CLI lists and approves browser pairing challenges from local state", async
   assert.equal(approveCode, 0);
   assert.match(approveOut.text(), /Approved pairing challenge/);
   assert.equal((await getPairingChallenge(challenge.challengeId, { env })).status, "approved");
+});
+
+test("CLI lists and revokes browser pairing sessions from local state", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-cli-security-sessions-"));
+  const env = { ...process.env, ORKESTR_HOME: home };
+  const challenge = await createPairingChallenge({ env });
+  await approvePairingChallenge(challenge.challengeId, { env });
+  const paired = await pairBrowser({ challengeId: challenge.challengeId, userAgent: "node:test", env });
+
+  const listOut = capture();
+  const listCode = await runCli(["security", "sessions", "--json"], {
+    env,
+    stdout: listOut,
+    stderr: capture(),
+  });
+  const sessionsPayload = JSON.parse(listOut.text());
+  assert.equal(listCode, 0);
+  assert.equal(sessionsPayload.sessions[0].id, paired.session.id);
+  assert.equal(sessionsPayload.sessions[0].tokenHash, undefined);
+
+  const revokeOut = capture();
+  const revokeCode = await runCli(["security", "revoke", paired.session.id], {
+    env,
+    stdout: revokeOut,
+    stderr: capture(),
+  });
+  assert.equal(revokeCode, 0);
+  assert.match(revokeOut.text(), /Revoked 1 browser session/);
+
+  const emptyOut = capture();
+  await runCli(["security", "sessions", "--json"], {
+    env,
+    stdout: emptyOut,
+    stderr: capture(),
+  });
+  assert.deepEqual(JSON.parse(emptyOut.text()).sessions, []);
 });
 
 test("CLI sends input with Orkestr command parsing enabled", async () => {

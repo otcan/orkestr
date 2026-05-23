@@ -14,8 +14,11 @@ import {
   createPairingChallenge,
   getPairingChallenge,
   listPairingChallenges,
+  listSecuritySessions,
   pairBrowser,
   rejectPairingChallenge,
+  revokeAllSecuritySessions,
+  revokeSecuritySession,
   securityStatus,
   sessionCookieHeader,
 } from "../../../../../packages/core/src/security.js";
@@ -356,6 +359,11 @@ export class SystemController {
     return listPairingChallenges();
   }
 
+  @Get("setup/security/sessions")
+  async listSetupSecuritySessions() {
+    return listSecuritySessions();
+  }
+
   @Get("setup/security/challenges/:challengeId")
   async setupSecurityChallengeStatus(@Param("challengeId") challengeId: string) {
     return { ok: true, challenge: await getPairingChallenge(challengeId) };
@@ -371,6 +379,18 @@ export class SystemController {
   @HttpCode(200)
   async rejectSetupSecurityChallenge(@Param("challengeId") challengeId: string) {
     return rejectPairingChallenge(challengeId, { rejectedBy: "browser" });
+  }
+
+  @Post("setup/security/sessions/revoke")
+  @HttpCode(200)
+  async revokeAllSetupSecuritySessions() {
+    return revokeAllSecuritySessions({ revokedBy: "browser" });
+  }
+
+  @Post("setup/security/sessions/:sessionId/revoke")
+  @HttpCode(200)
+  async revokeSetupSecuritySession(@Param("sessionId") sessionId: string) {
+    return revokeSecuritySession(sessionId, { revokedBy: "browser" });
   }
 
   @Post("setup/security/pair")

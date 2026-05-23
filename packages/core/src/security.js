@@ -84,6 +84,15 @@ function publicChallenge(challenge = {}, now = Date.now()) {
   };
 }
 
+function publicSession(session = {}) {
+  return {
+    id: session.id || "",
+    userAgent: session.userAgent || "",
+    createdAt: session.createdAt || "",
+    expiresAt: session.expiresAt || "",
+  };
+}
+
 function challengeError(message, statusCode = 400) {
   const error = new Error(message);
   error.statusCode = statusCode;
@@ -252,6 +261,36 @@ export async function getPairingChallenge(challengeId, { env = process.env } = {
   const challenge = (config.challenges || []).find((item) => item.id === id);
   if (!challenge) throw challengeError("pairing_challenge_not_found", 404);
   return publicChallenge(challenge);
+}
+
+export async function listSecuritySessions({ env = process.env } = {}) {
+  const config = await readSecurityConfig(env);
+  const now = Date.now();
+  const sessions = (config.sessions || [])
+    .filter((session) => Date.parse(session.expiresAt || "") > now)
+    .map(publicSession)
+    .sort((a, b) => Date.parse(b.createdAt || "") - Date.parse(a.createdAt || ""));
+  return { sessions };
+}
+
+export async function revokeSecuritySession(sessionId, { env = process.env, revokedBy = "cli" } = {}) {
+  const id = String(sessionId || "").trim();
+  if (!id) throw challengeError("security_session_id_required", 400);
+  const config = await readSecurityConfig(env);
+  const before = config.sessions || [];
+  const sessions = before.filter((session) => session.id !== id);
+  if (sessions.length === before.length) throw challengeError("security_session_not_found", 404);
+  await writeSecurityConfig({ ...config, sessions }, env);
+  await appendEvent({ type: "security_session_revoked", sessionId: id, revokedBy }, env).catch(() => {});
+  return { ok: true, revoked: [id] };
+}
+
+export async function revokeAllSecuritySessions({ env = process.env, revokedBy = "cli" } = {}) {
+  const config = await readSecurityConfig(env);
+  const revoked = (config.sessions || []).map((session) => session.id).filter(Boolean);
+  await writeSecurityConfig({ ...config, sessions: [] }, env);
+  await appendEvent({ type: "security_sessions_revoked", count: revoked.length, revokedBy }, env).catch(() => {});
+  return { ok: true, revoked };
 }
 
 export async function approvePairingChallenge(challengeId, { env = process.env, approvedBy = "cli" } = {}) {

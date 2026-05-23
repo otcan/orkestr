@@ -2,7 +2,14 @@ import { spawn } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { startServer } from "../../server/src/server.js";
-import { approvePairingChallenge, listPairingChallenges, rejectPairingChallenge } from "../../../packages/core/src/security.js";
+import {
+  approvePairingChallenge,
+  listPairingChallenges,
+  listSecuritySessions,
+  rejectPairingChallenge,
+  revokeAllSecuritySessions,
+  revokeSecuritySession,
+} from "../../../packages/core/src/security.js";
 import { readRuntimeSettings } from "../../../packages/core/src/runtime-settings.js";
 import { defaultApiBase, requestJson } from "./api-client.js";
 import { formatRuntimeResources, formatSystemDoctor, formatThreadTable, formatTimerDoctor, formatTimerTable, threadName } from "./format.js";
@@ -228,9 +235,11 @@ async function securityCommand(argv, ctx) {
   const subcommand = argv[0]?.startsWith("--") ? "challenges" : argv[0] || "challenges";
   const rest = subcommand === "challenges" && argv[0]?.startsWith("--") ? argv : argv.slice(1);
   if (subcommand === "challenges" || subcommand === "list") return listSecurityChallenges(rest, ctx);
+  if (subcommand === "sessions") return listSecuritySessionsCommand(rest, ctx);
   if (subcommand === "approve") return approveSecurityChallenge(rest, ctx);
   if (subcommand === "reject") return rejectSecurityChallenge(rest, ctx);
-  throw new Error("Usage: orkestr security [challenges|approve <challenge-id>|reject <challenge-id>] [--json]");
+  if (subcommand === "revoke" || subcommand === "logout") return revokeSecuritySessionCommand(rest, ctx);
+  throw new Error("Usage: orkestr security [challenges|sessions|approve <challenge-id>|reject <challenge-id>|revoke <session-id|all>] [--json]");
 }
 
 async function updateCommand(argv, ctx) {
@@ -308,6 +317,14 @@ async function listSecurityChallenges(argv, ctx) {
   return 0;
 }
 
+async function listSecuritySessionsCommand(argv, ctx) {
+  const json = argv.includes("--json");
+  const payload = await listSecuritySessions({ env: ctx.env });
+  if (json) ctx.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
+  else ctx.stdout.write(formatSecuritySessionTable(payload.sessions || []));
+  return 0;
+}
+
 async function approveSecurityChallenge(argv, ctx) {
   const json = argv.includes("--json");
   const challengeId = positional(argv)[0];
@@ -325,6 +342,18 @@ async function rejectSecurityChallenge(argv, ctx) {
   const payload = await rejectPairingChallenge(challengeId, { env: ctx.env, rejectedBy: "cli" });
   if (json) ctx.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
   else ctx.stdout.write(`Rejected pairing challenge ${payload.challenge.id}\n`);
+  return 0;
+}
+
+async function revokeSecuritySessionCommand(argv, ctx) {
+  const json = argv.includes("--json");
+  const sessionId = positional(argv)[0];
+  if (!sessionId) throw new Error("Usage: orkestr security revoke <session-id|all> [--json]");
+  const payload = sessionId === "all"
+    ? await revokeAllSecuritySessions({ env: ctx.env, revokedBy: "cli" })
+    : await revokeSecuritySession(sessionId, { env: ctx.env, revokedBy: "cli" });
+  if (json) ctx.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
+  else ctx.stdout.write(`Revoked ${payload.revoked.length} browser session${payload.revoked.length === 1 ? "" : "s"}\n`);
   return 0;
 }
 
@@ -487,7 +516,7 @@ Advanced:
   orkestr update rollback [--to release-id]
   orkestr settings [--json]
   orkestr timers [list|doctor|run <timer-id>] [--json]
-  orkestr security [challenges|approve <challenge-id>|reject <challenge-id>] [--json]
+  orkestr security [challenges|sessions|approve <challenge-id>|reject <challenge-id>|revoke <session-id|all>] [--json]
   orkestr thread create <name> [--id id] [--cwd path] [--command command] [--executor id] [--json]
   orkestr worker create <parent-thread> [task text] [--task text] [--blank] [--label label] [--repo path] [--branch branch] [--no-wake] [--json]
 
@@ -659,6 +688,20 @@ function formatSecurityChallengeTable(challenges) {
   });
   const widths = [18, 10, 24, 32].map((minimum, index) => Math.max(minimum, ...rows.map((row) => String(row[index] || "").length)));
   const header = ["ID", "STATUS", "EXPIRES", "REQUESTER"].map((value, index) => value.padEnd(widths[index])).join("  ");
+  const body = rows.map((row) => row.map((value, index) => String(value || "").padEnd(widths[index])).join("  ")).join("\n");
+  return `${header}\n${body}\n`;
+}
+
+function formatSecuritySessionTable(sessions) {
+  if (!sessions.length) return "No paired browser sessions.\n";
+  const rows = sessions.map((session) => [
+    session.id,
+    session.expiresAt || "-",
+    session.createdAt || "-",
+    session.userAgent || "-",
+  ]);
+  const widths = [14, 24, 24, 32].map((minimum, index) => Math.max(minimum, ...rows.map((row) => String(row[index] || "").length)));
+  const header = ["ID", "EXPIRES", "CREATED", "USER AGENT"].map((value, index) => value.padEnd(widths[index])).join("  ");
   const body = rows.map((row) => row.map((value, index) => String(value || "").padEnd(widths[index])).join("  ")).join("\n");
   return `${header}\n${body}\n`;
 }
