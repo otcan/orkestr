@@ -278,6 +278,10 @@ install_command() {
   release_id="$(sanitize_id "${target_tag:-$deploy_channel-$short_sha}")"
   release_dir="$releases_dir/$release_id"
   previous_release="$(current_release_id)"
+  if [ "$previous_release" = "$release_id" ] && [ -d "$release_dir" ]; then
+    echo "Orkestr already at $release_id ($target_ref)."
+    return 0
+  fi
 
   if [ ! -d "$release_dir/.git" ]; then
     mkdir -p "$releases_dir"
