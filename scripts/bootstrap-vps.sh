@@ -292,6 +292,7 @@ run_install_script() {
 }
 
 configure_runtime_env() {
+  set_env_value ORKESTR_WHATSAPP_EXTERNAL_BRIDGE_ENABLED 0 "$env_file"
   if [ "$demo" -eq 1 ]; then
     set_env_value ORKESTR_RESET_ON_UPDATE 1 "$env_file"
     set_env_value ORKESTR_RESET_OVERLAY 1 "$env_file"

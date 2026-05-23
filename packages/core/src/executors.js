@@ -307,7 +307,7 @@ registerExecutorAdapter({
 registerExecutorAdapter({
   id: "codex",
   label: "Codex CLI",
-  description: "Generic adapter slot for Codex CLI. Private overlays provide host-specific launch/session behavior.",
+  description: "Generic Codex adapter placeholder. Normal Codex work uses the thread runtime.",
   async run() {
     const error = new Error("codex_executor_not_configured");
     error.statusCode = 501;

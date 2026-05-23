@@ -24,11 +24,13 @@ test("docker image carries the agent runtime instead of requiring host Codex ins
   assert.match(compose, /OPENAI_API_KEY/);
   assert.match(compose, /ORKESTR_PUBLIC_HTTPS_URL/);
   assert.match(compose, /CODEX_HOME: \$\{CODEX_HOME:-\/data\/codex\}/);
+  assert.match(compose, /ORKESTR_WHATSAPP_EXTERNAL_BRIDGE_ENABLED/);
   assert.match(buildCompose, /build:/);
   assert.match(envExample, /^OPENAI_API_KEY=/m);
   assert.match(envExample, /^ORKESTR_REVERSE_PROXY_LOCAL_BIND=/m);
   assert.match(envExample, /^ORKESTR_PUBLIC_HTTPS_URL=/m);
   assert.match(envExample, /^ORKESTR_TAILSCALE_HTTPS_NAME=/m);
+  assert.match(envExample, /^ORKESTR_WHATSAPP_EXTERNAL_BRIDGE_ENABLED=0/m);
   assert.match(publishWorkflow, /ghcr\.io/);
   assert.match(publishWorkflow, /docker\/build-push-action/);
   assert.match(ignore, /^\.env$/m);

@@ -4304,7 +4304,7 @@ test("thread runtime sync surfaces Codex plan questions as pending input", async
               question: "What should a brand-new user accomplish first?",
               options: [
                 { label: "Connect accounts", description: "Prioritize connector setup before timers." },
-                { label: "Create timer", description: "Prioritize scheduling the first workflow." },
+                { label: "Create timer", description: "Prioritize scheduling the first recurring task." },
               ],
             },
           ],

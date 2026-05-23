@@ -90,6 +90,7 @@ test("bootstrap script provides an opinionated fresh VPS path", async () => {
   assert.match(script, /ORKESTR_RESET_ON_UPDATE=1/);
   assert.match(script, /ORKESTR_RESET_OVERLAY=1/);
   assert.match(script, /WHATSAPP_BRIDGE_MODE local/);
+  assert.match(script, /ORKESTR_WHATSAPP_EXTERNAL_BRIDGE_ENABLED/);
   assert.match(script, /wait_for_orkestr_http/);
   assert.match(script, /\/api\/version/);
   assert.match(script, /Orkestr service did not become ready/);

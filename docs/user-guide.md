@@ -68,6 +68,11 @@ and do not include tokens, private chat IDs, phone numbers, local paths, or
 session state. Real WhatsApp session state belongs under `ORKESTR_HOME`, not
 in the repo.
 
+The built-in local bridge is the public default. Legacy external WhatsApp bridge
+compatibility is for private host deployments and must be explicitly enabled by
+the operator with `WHATSAPP_BRIDGE_MODE=external` or
+`ORKESTR_WHATSAPP_EXTERNAL_BRIDGE_ENABLED=1`.
+
 ### Connect Gmail and Browser Profiles
 
 Gmail OAuth is part of the public setup surface. Browser-backed Gmail and

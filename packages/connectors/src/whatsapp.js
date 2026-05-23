@@ -49,9 +49,19 @@ function configuredBridgeUrl(config = {}, env = process.env) {
   return String(env.WHATSAPP_BRIDGE_URL || config.bridgeUrl || "").trim().replace(/\/+$/, "");
 }
 
+function truthyEnv(value) {
+  return ["1", "true", "yes", "on"].includes(String(value || "").trim().toLowerCase());
+}
+
+function externalBridgeEnabled(env = process.env) {
+  return String(env.WHATSAPP_BRIDGE_MODE || "").trim().toLowerCase() === "external" ||
+    truthyEnv(env.ORKESTR_WHATSAPP_EXTERNAL_BRIDGE_ENABLED) ||
+    truthyEnv(env.WHATSAPP_EXTERNAL_BRIDGE_ENABLED);
+}
+
 function bridgeMode(config = {}, env = process.env) {
   const mode = String(env.WHATSAPP_BRIDGE_MODE || config.bridgeMode || "local").trim().toLowerCase();
-  return mode === "external" ? "external" : "local";
+  return mode === "external" && externalBridgeEnabled(env) ? "external" : "local";
 }
 
 function firstAccountError(accounts = []) {
