@@ -125,6 +125,8 @@ commit changes, and restarts Orkestr after a successful build.
 Orkestr is not only a localhost UI. It is meant to have a public-facing control
 surface when deployed correctly:
 
+- The host-native VPS installer sets up the protected remote baseline out of
+  the box.
 - Caddy or another reverse proxy terminates TLS.
 - Tailscale can provide private-network access.
 - Browser pairing gates access from new browsers.

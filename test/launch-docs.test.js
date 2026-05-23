@@ -20,13 +20,17 @@ test("public launch docs expose the minimum launch surface", async () => {
   assert.match(readme, /curl -fsSL/);
   assert.match(readme, /docs\/user-guide\.md/);
   assert.match(readme, /flowchart LR/);
-  assert.match(readme, /Security Warning/);
+  assert.match(readme, /Security Model/);
+  assert.match(readme, /out of the box/);
   assert.match(readme, /ROADMAP\.md/);
   assert.match(userGuide, /Public Facing Layer/);
   assert.match(userGuide, /Connect WhatsApp/);
   assert.match(userGuide, /Run Codex Agents/);
   assert.match(contributing, /Pull Request Checklist/);
+  assert.match(contributing, /Automation Map/);
+  assert.match(contributing, /smoke:vps:aws/);
   assert.match(security, /Do not expose/);
+  assert.match(security, /out\s+of\s+the\s+box/);
   assert.match(readme, /orkestr-three-screen-demo\.png/);
   assert.match(readme, /WhatsApp source screenshot/);
   assert.match(readme, /TMUX capture/);

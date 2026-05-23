@@ -4,7 +4,7 @@ Orkestr is a self-hosted agent workstation for running Codex from a browser, CLI
 
 It gives you a public-facing web layer for setup, chat, status, pairing, and operations while keeping the actual agent runtime on infrastructure you control. Create named Codex threads, give them workspaces, start or sleep them, inspect status, connect WhatsApp or Gmail, attach virtual desktops, and review logs from one cockpit.
 
-> Public alpha. Remote access is supported through the protected VPS path: keep Orkestr bound to `127.0.0.1`, expose it through Tailscale or Caddy/TLS, and require browser pairing/auth. Do not bind the raw Orkestr service or terminal/API routes directly to the public internet.
+> Public alpha. The host-native VPS path supports protected remote access out of the box: Orkestr stays bound to `127.0.0.1`, the bootstrap can expose it through Tailscale or Caddy/TLS, and browser pairing/auth gates access. Do not bind the raw Orkestr service or terminal/API routes directly to the public internet.
 
 ![WhatsApp, TMUX, and Orkestr Web UI showing the same routed proof lines](docs/assets/orkestr-three-screen-demo.png)
 
@@ -91,7 +91,8 @@ curl -fsSL https://raw.githubusercontent.com/otcan/orkestr/main/scripts/bootstra
 
 It checks the OS and basic resources, installs Tailscale by default, runs the
 host-native systemd installer with auto-update enabled, configures optional
-demo/WhatsApp/domain settings, and prints the setup URL and next commands.
+demo/WhatsApp/domain settings, keeps Orkestr on localhost with browser pairing
+enabled, and prints the setup URL and next commands.
 
 Useful variants:
 
@@ -113,7 +114,8 @@ npm run smoke:vps:aws
 ```
 
 That runner creates a fresh Ubuntu 24.04 EC2 host, runs the bootstrap installer,
-runs the Orkestr smoke test on the VPS, and deletes the temporary AWS resources.
+runs the Orkestr smoke test on the VPS, verifies the protected host-native
+shape, and deletes the temporary AWS resources.
 Add `-- --with-whatsapp` to also start the built-in WhatsApp bridge and wait for
 QR readiness on the fresh VPS. For an interactive phone-code link test, pass
 `-- --with-whatsapp --whatsapp-phone <number> --create-whatsapp-thread "WhatsApp VPS Smoke" --keep`.
@@ -322,7 +324,7 @@ More detail: [docs/architecture.md](docs/architecture.md).
 
 Orkestr can wake local agents, pass text into terminal sessions, open browser profiles, and store connector credentials under `ORKESTR_HOME`.
 
-The supported remote shape is a protected entrypoint in front of a localhost-bound Orkestr service:
+The supported remote shape is provided by the host-native installer and covered by the VPS smoke path:
 
 - Keep `ORKESTR_HOST=127.0.0.1`.
 - Use Tailscale or Caddy/TLS before remote access.

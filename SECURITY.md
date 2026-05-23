@@ -13,7 +13,8 @@ Orkestr is public alpha, single-user software. It can wake local terminal sessio
 
 ## Remote Access
 
-Recommended order:
+The host-native VPS installer provides the protected remote-access baseline out
+of the box. The expected shape is:
 
 1. Run Orkestr on `127.0.0.1:19812`.
 2. Join the host to a private tailnet.
@@ -21,7 +22,7 @@ Recommended order:
 4. Use a tailnet HTTPS name or a public domain that you control.
 5. Require browser pairing/auth before exposing browser or terminal controls.
 
-The host-native VPS installer uses this shape by default: localhost bind, browser pairing enabled, and optional Tailscale/Caddy setup. The `/setup` Secure Access step reports the current bind address, Caddy availability, Tailscale/HTTPS hints, and browser pairing state.
+This is not only aspirational: `scripts/bootstrap-vps.sh` and `scripts/install.sh --systemd` configure the localhost bind and browser pairing defaults, and `npm run smoke:vps:aws` exercises the fresh-VPS path. The `/setup` Secure Access step reports the current bind address, Caddy availability, Tailscale/HTTPS hints, and browser pairing state.
 
 Set `ORKESTR_AUTH_REQUIRED=1` to require browser pairing before protected API access. The host-native VPS installer enables this by default in `/etc/orkestr/orkestr.env`. An unpaired browser can only generate a pairing challenge and poll that challenge. Approve the challenge from trusted host access:
 
