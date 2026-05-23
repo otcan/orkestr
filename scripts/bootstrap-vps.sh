@@ -392,8 +392,11 @@ configure_caddy() {
   log "Installing and configuring Caddy for https://$domain"
   apt_install caddy
   mkdir -p /etc/caddy/conf.d
-  touch /etc/caddy/Caddyfile
-  if ! grep -q '^import /etc/caddy/conf\.d/\*\.caddy$' /etc/caddy/Caddyfile; then
+  if [ ! -s /etc/caddy/Caddyfile ] || grep -q 'root \* /usr/share/caddy' /etc/caddy/Caddyfile; then
+    cat > /etc/caddy/Caddyfile <<'EOF'
+import /etc/caddy/conf.d/*.caddy
+EOF
+  elif ! grep -q '^import /etc/caddy/conf\.d/\*\.caddy$' /etc/caddy/Caddyfile; then
     printf '\nimport /etc/caddy/conf.d/*.caddy\n' >> /etc/caddy/Caddyfile
   fi
   cat > /etc/caddy/conf.d/orkestr.caddy <<EOF
