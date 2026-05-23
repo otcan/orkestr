@@ -756,6 +756,52 @@ function completedFinalReplyForParent(messages, parentId) {
   ) || null;
 }
 
+function messageTimeMs(message = {}) {
+  const ms = Date.parse(String(message.timestamp || message.createdAt || ""));
+  return Number.isFinite(ms) ? ms : 0;
+}
+
+function completedFinalReplyForTypingParent(messages = [], parent = null, chatId = "") {
+  if (!parent) return null;
+  const direct = completedFinalReplyForParent(messages, parent.id);
+  if (direct) return direct;
+  const parentMs = messageTimeMs(parent);
+  if (!parentMs) return null;
+  return messages.find((candidate) =>
+    candidate.role === "assistant" &&
+    candidate.state === "completed" &&
+    shouldMirrorWhatsAppReply(candidate) &&
+    messageTimeMs(candidate) >= parentMs &&
+    (!chatId || !candidate.chatId || candidate.chatId === chatId)
+  ) || null;
+}
+
+function whatsappTypingCooldownMs(env = process.env) {
+  const parsed = Number(env.ORKESTR_WHATSAPP_TYPING_COOLDOWN_MS || env.WHATSAPP_TYPING_COOLDOWN_MS || 10_000);
+  return Number.isFinite(parsed) ? Math.max(0, parsed) : 10_000;
+}
+
+function latestOutboundDeliveryForTypingParent(state = null, parent = null, chatId = "") {
+  if (!parent || !chatId) return null;
+  const parentMs = messageTimeMs(parent);
+  return [...(state?.outboundDeliveries || [])]
+    .reverse()
+    .find((delivery) => {
+      if (delivery.chatId !== chatId) return false;
+      if (parent.id && delivery.parentMessageId === parent.id) return true;
+      const deliveredMs = Date.parse(String(delivery.deliveredAt || ""));
+      return Number.isFinite(deliveredMs) && (!parentMs || deliveredMs >= parentMs);
+    }) || null;
+}
+
+function typingCooldownActive(state = null, parent = null, chatId = "", env = process.env) {
+  const cooldownMs = whatsappTypingCooldownMs(env);
+  if (!cooldownMs) return false;
+  const delivery = latestOutboundDeliveryForTypingParent(state, parent, chatId);
+  const deliveredMs = Date.parse(String(delivery?.deliveredAt || ""));
+  return Number.isFinite(deliveredMs) && Date.now() - deliveredMs < cooldownMs;
+}
+
 function latestProgressDelivery(outboundDeliveries, parentMessageId, chatId) {
   return [...(outboundDeliveries || [])]
     .reverse()
@@ -814,18 +860,19 @@ function latestWhatsAppTypingParent(messages = [], thread = null, state = null) 
     if (!chatId) return false;
     const messageState = String(message.state || "").trim().toLowerCase();
     if (messageState === "failed") return false;
-    if (completedFinalReplyForParent(messages, message.id)) return false;
+    if (completedFinalReplyForTypingParent(messages, message, chatId)) return false;
     return true;
   }) || null;
 }
 
-function whatsappTypingTargetForThread({ thread, messages = [], status = null, state = null } = {}) {
+function whatsappTypingTargetForThread({ thread, messages = [], status = null, state = null, env = process.env } = {}) {
   if (!threadAllowsWhatsAppMirroring(thread)) return null;
   if (!runtimeTypingActive(status)) return null;
   const parent = latestWhatsAppTypingParent(messages, thread, state);
   if (!parent) return null;
   const chatId = pickString(parent.chatId, thread?.binding?.chatId);
   if (!chatId) return null;
+  if (typingCooldownActive(state, parent, chatId, env)) return null;
   return {
     threadId: thread?.id || null,
     messageId: parent.id || null,
@@ -1075,7 +1122,7 @@ export async function syncWhatsAppTypingIndicators(env = process.env, options = 
   const targets = [];
   for (const { threadId, thread, messages } of await listThreadMessageSets(env)) {
     const status = await statusImpl(threadId, env, messages).catch(() => null);
-    const target = whatsappTypingTargetForThread({ thread, messages, status, state });
+    const target = whatsappTypingTargetForThread({ thread, messages, status, state, env });
     if (target) targets.push(target);
   }
   return syncImpl(targets, env);

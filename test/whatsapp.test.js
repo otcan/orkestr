@@ -606,6 +606,93 @@ test("whatsapp typing sync tolerates stale inbound account ids", async () => {
   assert.equal(result.active, 0);
 });
 
+test("whatsapp typing sync stops when a newer same-chat final lacks a parent id", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-typing-unparented-final-"));
+  const env = {
+    ORKESTR_HOME: home,
+    ORKESTR_WHATSAPP_ACCOUNT_IDS: "responder",
+  };
+  await createThread({ id: "thread-wa-typing-unparented-final", name: "WA Typing Unparented Final" }, env);
+  await writeConnectorConfig("whatsapp", {
+    threadRoutes: { "chat-typing-unparented-final": "thread-wa-typing-unparented-final" },
+  }, env);
+
+  await routeWhatsAppInbound({
+    eventId: "wa-typing-unparented-final-1",
+    chatId: "chat-typing-unparented-final",
+    accountId: "responder",
+    text: "work on this",
+  }, env);
+  await appendThreadMessage("thread-wa-typing-unparented-final", {
+    role: "assistant",
+    source: "codex-rollout",
+    phase: "final_answer",
+    state: "completed",
+    text: "Done.",
+    connector: "whatsapp",
+    chatId: "chat-typing-unparented-final",
+  }, env);
+
+  const captures = [];
+  const result = await syncWhatsAppTypingIndicators(env, {
+    statusImpl: async () => ({ state: "working", working: true, typingActive: true }),
+    syncImpl: async (targets) => {
+      captures.push(targets);
+      return { ok: true, active: targets.length };
+    },
+  });
+
+  assert.equal(result.active, 0);
+  assert.deepEqual(captures[0], []);
+});
+
+test("whatsapp typing sync waits briefly after outbound delivery before restarting typing", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-typing-cooldown-"));
+  const env = {
+    ORKESTR_HOME: home,
+    ORKESTR_WHATSAPP_ACCOUNT_IDS: "responder",
+    ORKESTR_WHATSAPP_TYPING_COOLDOWN_MS: "60000",
+  };
+  await createThread({ id: "thread-wa-typing-cooldown", name: "WA Typing Cooldown" }, env);
+  await writeConnectorConfig("whatsapp", {
+    threadRoutes: { "chat-typing-cooldown": "thread-wa-typing-cooldown" },
+  }, env);
+
+  const routed = await routeWhatsAppInbound({
+    eventId: "wa-typing-cooldown-1",
+    chatId: "chat-typing-cooldown",
+    accountId: "responder",
+    text: "work on this",
+  }, env);
+  await fs.writeFile(path.join(home, "whatsapp.json"), JSON.stringify({
+    outboundDeliveries: [{
+      deliveryType: "progress",
+      messageId: "progress-1",
+      parentMessageId: routed.message.id,
+      chatId: "chat-typing-cooldown",
+      accountId: "responder",
+      deliveredAt: new Date().toISOString(),
+    }],
+  }, null, 2));
+
+  const cooledDown = await syncWhatsAppTypingIndicators(env, {
+    statusImpl: async () => ({ state: "working", working: true, typingActive: true }),
+    syncImpl: async (targets) => ({ ok: true, active: targets.length, targets }),
+  });
+  const noCooldown = await syncWhatsAppTypingIndicators({ ...env, ORKESTR_WHATSAPP_TYPING_COOLDOWN_MS: "0" }, {
+    statusImpl: async () => ({ state: "working", working: true, typingActive: true }),
+    syncImpl: async (targets) => ({ ok: true, active: targets.length, targets }),
+  });
+
+  assert.equal(cooledDown.active, 0);
+  assert.deepEqual(noCooldown.targets, [{
+    threadId: "thread-wa-typing-cooldown",
+    messageId: routed.message.id,
+    chatId: "chat-typing-cooldown",
+    accountId: "responder",
+  }]);
+});
+
 test("whatsapp delivery does not backfill commentary progress after a final answer exists", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-progress-final-"));
   const env = externalBridgeEnv(home);
