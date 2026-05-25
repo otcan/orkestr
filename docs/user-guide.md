@@ -163,7 +163,8 @@ Do not publish a raw Orkestr API or terminal stream directly to the internet.
 ## First-Time Setup
 
 1. Install locally with `scripts/install.sh`, or use the
-   host-native VPS installer for a real server.
+   host-native VPS installer for a real server. Local installs create a user
+   service by default, so Orkestr keeps running after the terminal closes.
 2. Open `/setup`.
 3. Review Connections.
 4. Configure secure access if the URL is remote.
@@ -177,7 +178,18 @@ Do not publish a raw Orkestr API or terminal stream directly to the internet.
 On macOS, local installs intentionally avoid probing or launching the host
 `codex` binary until you opt in. If macOS blocks `codex`, verify the binary
 outside Orkestr first with `codex --version` and `codex login status`, then run
-`ORKESTR_ENABLE_HOST_CODEX=1 scripts/install.sh --local --serve`.
+`ORKESTR_ENABLE_HOST_CODEX=1 scripts/install.sh --local`.
+
+Use the service commands for normal operation:
+
+```bash
+orkestr service status
+orkestr service stop
+orkestr service start
+orkestr service logs
+```
+
+`scripts/install.sh --serve` is only for foreground development.
 
 ## Typical Workflows
 

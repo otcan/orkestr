@@ -610,6 +610,92 @@ test("CLI logs tails the configured systemd service", async () => {
   assert.deepEqual(spawned[0].args, ["-u", "orkestr-stage.service", "-n", "50", "--no-pager"]);
 });
 
+test("CLI service controls default systemd services", async () => {
+  const spawned = [];
+  const code = await runCli(["service", "restart", "--service", "orkestr-stage"], {
+    env: {},
+    stdout: capture(),
+    stderr: capture(),
+    spawnImpl(command, args) {
+      spawned.push({ command, args });
+      const child = new EventEmitter();
+      queueMicrotask(() => child.emit("exit", 0));
+      return child;
+    },
+  });
+
+  assert.equal(code, 0);
+  assert.deepEqual(spawned, [{ command: "systemctl", args: ["restart", "orkestr-stage.service"] }]);
+});
+
+test("CLI service controls local systemd user services", async () => {
+  const spawned = [];
+  const code = await runCli(["service", "status"], {
+    env: { ORKESTR_LOCAL_SERVICE_MANAGER: "systemd-user", ORKESTR_LOCAL_SERVICE_NAME: "orkestr-local" },
+    stdout: capture(),
+    stderr: capture(),
+    spawnImpl(command, args) {
+      spawned.push({ command, args });
+      const child = new EventEmitter();
+      queueMicrotask(() => child.emit("exit", 0));
+      return child;
+    },
+  });
+
+  assert.equal(code, 0);
+  assert.deepEqual(spawned, [{ command: "systemctl", args: ["--user", "status", "orkestr-local.service"] }]);
+});
+
+test("CLI service controls macOS launchd services", async () => {
+  const spawned = [];
+  const code = await runCli(["service", "start"], {
+    env: {
+      HOME: "/Users/demo",
+      ORKESTR_LOCAL_SERVICE_MANAGER: "launchd",
+      ORKESTR_LOCAL_SERVICE_LABEL: "com.orkestr.oss",
+      ORKESTR_LOCAL_SERVICE_FILE: "/Users/demo/Library/LaunchAgents/com.orkestr.oss.plist",
+    },
+    stdout: capture(),
+    stderr: capture(),
+    spawnImpl(command, args) {
+      spawned.push({ command, args });
+      const child = new EventEmitter();
+      queueMicrotask(() => child.emit("exit", 0));
+      return child;
+    },
+  });
+
+  assert.equal(code, 0);
+  assert.equal(spawned[0].command, "sh");
+  assert.match(spawned[0].args[1], /launchctl bootstrap/);
+  assert.match(spawned[0].args[1], /launchctl kickstart -k/);
+  assert.match(spawned[0].args[1], /com\.orkestr\.oss/);
+});
+
+test("CLI service logs tails local service files", async () => {
+  const spawned = [];
+  const code = await runCli(["service", "logs", "--lines", "25", "--no-follow"], {
+    env: {
+      ORKESTR_LOCAL_SERVICE_MANAGER: "launchd",
+      ORKESTR_LOCAL_LOG_DIR: "/Users/demo/.orkestr/logs",
+    },
+    stdout: capture(),
+    stderr: capture(),
+    spawnImpl(command, args) {
+      spawned.push({ command, args });
+      const child = new EventEmitter();
+      queueMicrotask(() => child.emit("exit", 0));
+      return child;
+    },
+  });
+
+  assert.equal(code, 0);
+  assert.deepEqual(spawned, [{
+    command: "tail",
+    args: ["-n", "25", "/Users/demo/.orkestr/logs/orkestr.out.log", "/Users/demo/.orkestr/logs/orkestr.err.log"],
+  }]);
+});
+
 test("CLI attach can select a thread and print the tmux command", async () => {
   const stdout = capture();
   const selected = { id: "thread-1", name: "Demo", state: "ready" };

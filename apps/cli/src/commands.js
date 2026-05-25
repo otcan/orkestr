@@ -42,9 +42,11 @@ export async function runCli(argv = process.argv.slice(2), context = {}) {
     if (command === "doctor") return await doctorCommand(args, ctx);
     if (command === "timers" || command === "timer") return await timersCommand(args, ctx);
     if (command === "security") return await securityCommand(args, ctx);
+    if (command === "service" || command === "services") return await serviceCommand(args, ctx);
+    if (command === "start" || command === "stop" || command === "restart") return await serviceCommand([command, ...args], ctx);
     if (command === "update") return await updateCommand(args, ctx);
     if (command === "rollback") return await updateRollbackCommand(args, ctx);
-    if (command === "logs") return await logsCommand(args, ctx);
+    if (command === "logs") return await serviceCommand(["logs", ...args], ctx);
     if (command === "thread") return await threadCommand(args, ctx);
     if (command === "worker") return await workerCommand(args, ctx);
     if (command === "attach") return await attach(args, ctx);
@@ -301,12 +303,77 @@ async function updateRollbackCommand(argv, ctx) {
   return spawnInherited(ctx.spawnImpl, "bash", [script, "rollback", ...(target ? ["--to", target] : [])], { env: ctx.env });
 }
 
-async function logsCommand(argv, ctx) {
-  const service = serviceUnitName(flagValue(argv, "--service") || ctx.env.ORKESTR_SERVICE_NAME || "orkestr");
+async function serviceCommand(argv, ctx) {
+  const subcommand = argv[0]?.startsWith("--") ? "status" : argv[0] || "status";
+  const rest = subcommand === "status" && argv[0]?.startsWith("--") ? argv : argv.slice(1);
+  if (subcommand === "status") return serviceActionCommand("status", rest, ctx);
+  if (subcommand === "start") return serviceActionCommand("start", rest, ctx);
+  if (subcommand === "stop") return serviceActionCommand("stop", rest, ctx);
+  if (subcommand === "restart") return serviceActionCommand("restart", rest, ctx);
+  if (subcommand === "logs" || subcommand === "log") return serviceLogsCommand(rest, ctx);
+  throw new Error("Usage: orkestr service [status|start|stop|restart|logs] [--service name] [--lines 100] [--no-follow]");
+}
+
+async function serviceActionCommand(action, argv, ctx) {
+  const manager = serviceManager(ctx.env);
+  const service = flagValue(argv, "--service") || "";
+  if (manager === "launchd") {
+    const label = service || ctx.env.ORKESTR_LOCAL_SERVICE_LABEL || "com.orkestr.oss";
+    const target = `${launchdDomain()}/${label}`;
+    const plist = ctx.env.ORKESTR_LOCAL_SERVICE_FILE || path.join(ctx.env.HOME || process.env.HOME || "", "Library", "LaunchAgents", `${label}.plist`);
+    if (action === "status") return spawnInherited(ctx.spawnImpl, "launchctl", ["print", target]);
+    if (action === "stop") return spawnInherited(ctx.spawnImpl, "launchctl", ["bootout", target]);
+    if (action === "start") return spawnInherited(ctx.spawnImpl, "sh", ["-c", `launchctl bootstrap ${shellToken(launchdDomain())} ${shellToken(plist)} 2>/dev/null || true; exec launchctl kickstart -k ${shellToken(target)}`]);
+    return spawnInherited(ctx.spawnImpl, "sh", ["-c", `launchctl bootout ${shellToken(target)} >/dev/null 2>&1 || true; launchctl bootstrap ${shellToken(launchdDomain())} ${shellToken(plist)}; exec launchctl kickstart -k ${shellToken(target)}`]);
+  }
+  if (manager === "systemd-user") {
+    const unit = serviceUnitName(service || ctx.env.ORKESTR_LOCAL_SERVICE_NAME || ctx.env.ORKESTR_SERVICE_NAME || "orkestr");
+    return spawnInherited(ctx.spawnImpl, "systemctl", ["--user", action, unit]);
+  }
+  if (manager === "cron") {
+    return cronServiceAction(action, ctx);
+  }
+  if (manager === "none") throw new Error("No Orkestr service manager is configured for this install.");
+  const unit = serviceUnitName(service || ctx.env.ORKESTR_SERVICE_NAME || "orkestr");
+  return spawnInherited(ctx.spawnImpl, "systemctl", [action, unit]);
+}
+
+async function serviceLogsCommand(argv, ctx) {
+  const manager = serviceManager(ctx.env);
   const lines = flagValue(argv, "--lines") || "100";
-  const args = ["-u", service, "-n", lines, "--no-pager"];
+  if (manager === "launchd" || manager === "cron") {
+    const logDir = ctx.env.ORKESTR_LOCAL_LOG_DIR || path.join(ctx.env.ORKESTR_HOME || ".", "logs");
+    const args = ["-n", lines];
+    if (!argv.includes("--no-follow")) args.push("-f");
+    args.push(path.join(logDir, "orkestr.out.log"), path.join(logDir, "orkestr.err.log"));
+    return spawnInherited(ctx.spawnImpl, "tail", args);
+  }
+  if (manager === "none") throw new Error("No Orkestr service manager is configured for this install.");
+  const service = serviceUnitName(flagValue(argv, "--service") || ctx.env.ORKESTR_LOCAL_SERVICE_NAME || ctx.env.ORKESTR_SERVICE_NAME || "orkestr");
+  const args = manager === "systemd-user"
+    ? ["--user", "-u", service, "-n", lines, "--no-pager"]
+    : ["-u", service, "-n", lines, "--no-pager"];
   if (!argv.includes("--no-follow")) args.push("-f");
   return spawnInherited(ctx.spawnImpl, "journalctl", args);
+}
+
+async function cronServiceAction(action, ctx) {
+  const wrapper = ctx.env.ORKESTR_LOCAL_SERVER_WRAPPER || "";
+  const pidFile = ctx.env.ORKESTR_LOCAL_PID_FILE || path.join(ctx.env.ORKESTR_HOME || ".", "orkestr.pid");
+  const logDir = ctx.env.ORKESTR_LOCAL_LOG_DIR || path.join(ctx.env.ORKESTR_HOME || ".", "logs");
+  const outLog = path.join(logDir, "orkestr.out.log");
+  const errLog = path.join(logDir, "orkestr.err.log");
+  if (!wrapper) throw new Error("ORKESTR_LOCAL_SERVER_WRAPPER is required for cron service control.");
+  if (action === "status") {
+    return spawnInherited(ctx.spawnImpl, "sh", ["-c", `if [ -f ${shellToken(pidFile)} ] && kill -0 "$(cat ${shellToken(pidFile)})" >/dev/null 2>&1; then echo "Orkestr running: $(cat ${shellToken(pidFile)})"; else echo "Orkestr is not running"; exit 3; fi`]);
+  }
+  if (action === "stop") {
+    return spawnInherited(ctx.spawnImpl, "sh", ["-c", `if [ -f ${shellToken(pidFile)} ]; then kill "$(cat ${shellToken(pidFile)})" >/dev/null 2>&1 || true; rm -f ${shellToken(pidFile)}; fi`]);
+  }
+  if (action === "start") {
+    return spawnInherited(ctx.spawnImpl, "sh", ["-c", `mkdir -p ${shellToken(logDir)}; if [ -f ${shellToken(pidFile)} ] && kill -0 "$(cat ${shellToken(pidFile)})" >/dev/null 2>&1; then exit 0; fi; nohup ${shellToken(wrapper)} >> ${shellToken(outLog)} 2>> ${shellToken(errLog)} & echo $! > ${shellToken(pidFile)}`]);
+  }
+  return spawnInherited(ctx.spawnImpl, "sh", ["-c", `if [ -f ${shellToken(pidFile)} ]; then kill "$(cat ${shellToken(pidFile)})" >/dev/null 2>&1 || true; rm -f ${shellToken(pidFile)}; fi; mkdir -p ${shellToken(logDir)}; nohup ${shellToken(wrapper)} >> ${shellToken(outLog)} 2>> ${shellToken(errLog)} & echo $! > ${shellToken(pidFile)}`]);
 }
 
 async function listSecurityChallenges(argv, ctx) {
@@ -495,6 +562,8 @@ function writeUsage(stream) {
   orkestr [serve] [--open] [--host 127.0.0.1] [--port 19812]
   orkestr status [--json]
   orkestr version [--json]
+  orkestr service [status|start|stop|restart|logs] [--service orkestr] [--lines 100] [--no-follow]
+  orkestr start|stop|restart
   orkestr update
   orkestr rollback [--to release-id]
   orkestr logs [--service orkestr] [--lines 100] [--no-follow]
@@ -717,6 +786,17 @@ function shellToken(value) {
 function serviceUnitName(value) {
   const name = String(value || "orkestr").trim() || "orkestr";
   return name.endsWith(".service") ? name : `${name}.service`;
+}
+
+function serviceManager(env = process.env) {
+  const explicit = String(env.ORKESTR_LOCAL_SERVICE_MANAGER || env.ORKESTR_SERVICE_MANAGER || "").trim();
+  if (explicit) return explicit;
+  return "systemd";
+}
+
+function launchdDomain() {
+  const uid = typeof process.getuid === "function" ? process.getuid() : 0;
+  return `gui/${uid}`;
 }
 
 function repoRoot() {

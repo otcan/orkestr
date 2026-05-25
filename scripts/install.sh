@@ -6,11 +6,11 @@ usage() {
 Install Orkestr.
 
 Usage:
-  scripts/install.sh [--local] [--serve|--no-serve] [--profile local-safe|local-trusted] [--enable-host-codex]
+  scripts/install.sh [--local] [--no-start] [--no-service] [--serve] [--profile local-safe|local-trusted] [--enable-host-codex]
   scripts/install.sh --systemd [--auto-update] [--track-main|--release-updates] [--install-dir DIR] [--data-dir DIR] [--workspace-dir DIR] [--env-file FILE] [--user USER]
 
 Modes:
-  default       Use the current checkout when run from one, install dependencies, build, and start Orkestr locally.
+  default       Use the current checkout when run from one, install dependencies, build, install a local service, and start Orkestr.
   --systemd     Install a host-native VPS service. Requires root.
   --auto-update Install a host-local update watcher timer in --systemd mode.
   --track-main  Track origin/main with versioned releases. Implies --auto-update, --release-updates, --update-ref main, --channel main, and --allow-untagged-releases.
@@ -22,13 +22,18 @@ Unattended installs:
 
 Deprecated compatibility flags:
   --local       Force using the current checkout.
-  --serve       Start npm after a non-systemd install.
+  --serve       Dev shortcut: skip local service installation and run npm in the foreground.
+  --no-serve    Alias for --no-start.
   --profile     Legacy alias for choosing Codex safety defaults. Prefer explicit ORKESTR_CODEX_* settings.
   --enable-host-codex  Allow a local macOS install to probe/use a verified host codex binary.
 
 Environment:
   ORKESTR_INSTALL_MODE      local or service. service is equivalent to --systemd.
-  ORKESTR_START_AFTER_INSTALL  Start npm after a local install. Defaults to 1 locally.
+  ORKESTR_INSTALL_LOCAL_SERVICE Install a local user service for non-systemd installs. Defaults to 1 locally.
+  ORKESTR_START_AFTER_INSTALL  Start the installed service after install. Defaults to 1 locally.
+  ORKESTR_LOCAL_SERVICE_NAME  Local Linux service name. Defaults to orkestr.
+  ORKESTR_LOCAL_SERVICE_LABEL Local macOS launchd label. Defaults to com.orkestr.oss.
+  ORKESTR_LOCAL_BIN_DIR      Local CLI wrapper directory. Defaults to ~/.local/bin.
   ORKESTR_REPO_URL          Git repository to clone. Defaults to https://github.com/otcan/orkestr.git.
   ORKESTR_GIT_REF           Git branch, tag, or commit to deploy. Defaults to the repository default branch.
   ORKESTR_INSTALL_DIR       Install directory. Defaults to ~/.orkestr-src/orkestr-oss, or /opt/orkestr/app with --systemd.
@@ -84,7 +89,9 @@ if [ -n "$install_config_file" ]; then
 fi
 
 local_mode=0
-serve="${ORKESTR_START_AFTER_INSTALL:-}"
+foreground_serve=0
+start_after_install="${ORKESTR_START_AFTER_INSTALL:-}"
+local_service="${ORKESTR_INSTALL_LOCAL_SERVICE:-}"
 systemd=0
 install_dir="${ORKESTR_INSTALL_DIR:-}"
 data_dir="${ORKESTR_HOME:-}"
@@ -124,12 +131,21 @@ while [ "$#" -gt 0 ]; do
       shift
       ;;
     --serve)
-      serve=1
+      foreground_serve=1
+      local_service=0
+      ORKESTR_INSTALL_LOCAL_SERVICE=0
+      start_after_install=1
+      ORKESTR_START_AFTER_INSTALL=1
       shift
       ;;
     --no-serve|--no-start)
-      serve=0
+      start_after_install=0
       ORKESTR_START_AFTER_INSTALL=0
+      shift
+      ;;
+    --no-service)
+      local_service=0
+      ORKESTR_INSTALL_LOCAL_SERVICE=0
       shift
       ;;
     --systemd|--vps)
@@ -359,7 +375,7 @@ macOS Codex note:
     codex login status
 
   Then rerun:
-    ORKESTR_ENABLE_HOST_CODEX=1 scripts/install.sh --local --serve
+    ORKESTR_ENABLE_HOST_CODEX=1 scripts/install.sh --local
 
   Advanced users can also set ORKESTR_CODEX_BIN to an explicit verified Codex
   path before running the installer. Set ORKESTR_RUNTIME_CODEX_COMMAND too when
@@ -474,17 +490,23 @@ apply_install_defaults() {
     workspace_dir="${workspace_dir:-$data_dir/workspaces}"
     local_env_file="${local_env_file:-$data_dir/orkestr.env}"
   fi
-  if [ -z "$serve" ]; then
+  if [ -z "$start_after_install" ]; then
+    start_after_install=1
+  fi
+  if [ -z "$local_service" ]; then
     if [ "$systemd" -eq 1 ]; then
-      serve=0
+      local_service=0
     else
-      serve=1
+      local_service=1
     fi
+  fi
+  if [ "$foreground_serve" -eq 1 ]; then
+    local_service=0
   fi
 }
 
 run_install_wizard() {
-  local keep_approvals start_after default_workspace
+  local keep_approvals install_service start_after default_workspace
   echo "Orkestr installer"
   echo "Press Enter to accept the suggested value."
   prompt_default host "Bind host" "$host"
@@ -506,9 +528,19 @@ run_install_wizard() {
     ORKESTR_RUNTIME_CODEX_COMMAND="${ORKESTR_RUNTIME_CODEX_COMMAND:-codex --dangerously-bypass-approvals-and-sandbox}"
   fi
   if [ "$systemd" -ne 1 ]; then
-    prompt_yes_no start_after "Start Orkestr after installing" "$serve"
-    serve="$start_after"
-    ORKESTR_START_AFTER_INSTALL="$serve"
+    prompt_yes_no install_service "Install Orkestr as a user service" "$local_service"
+    local_service="$install_service"
+    ORKESTR_INSTALL_LOCAL_SERVICE="$local_service"
+    if [ "$local_service" = "1" ]; then
+      prompt_yes_no start_after "Start the Orkestr service after installing" "$start_after_install"
+      start_after_install="$start_after"
+      ORKESTR_START_AFTER_INSTALL="$start_after_install"
+    else
+      prompt_yes_no start_after "Start Orkestr in the foreground after installing" "$foreground_serve"
+      foreground_serve="$start_after"
+      start_after_install="$start_after"
+      ORKESTR_START_AFTER_INSTALL="$start_after_install"
+    fi
   fi
 }
 
@@ -716,20 +748,254 @@ EOF
   chmod 0640 "$env_file"
 }
 
+local_service_name() {
+  echo "${ORKESTR_LOCAL_SERVICE_NAME:-orkestr}"
+}
+
+local_service_label() {
+  echo "${ORKESTR_LOCAL_SERVICE_LABEL:-com.orkestr.oss}"
+}
+
+local_log_dir() {
+  echo "${ORKESTR_LOCAL_LOG_DIR:-$data_dir/logs}"
+}
+
+local_pid_file() {
+  echo "${ORKESTR_LOCAL_PID_FILE:-$data_dir/orkestr.pid}"
+}
+
+local_server_wrapper() {
+  echo "${ORKESTR_LOCAL_SERVER_WRAPPER:-$data_dir/bin/orkestr-server}"
+}
+
+local_cli_bin() {
+  local bin_dir
+  bin_dir="${ORKESTR_LOCAL_BIN_DIR:-$HOME/.local/bin}"
+  echo "${ORKESTR_LOCAL_CLI_BIN:-$bin_dir/orkestr}"
+}
+
+local_service_file() {
+  case "$1" in
+    launchd)
+      echo "$HOME/Library/LaunchAgents/$(local_service_label).plist"
+      ;;
+    systemd-user)
+      echo "$HOME/.config/systemd/user/$(local_service_name).service"
+      ;;
+    cron)
+      echo "$data_dir/cron-service"
+      ;;
+    *)
+      echo ""
+      ;;
+  esac
+}
+
+xml_escape() {
+  node -e 'process.stdout.write(String(process.argv[1] || "").replace(/[<>&"]/g, (c) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;", "\"": "&quot;" }[c])))' "$1"
+}
+
+local_service_manager() {
+  if is_macos; then
+    echo "launchd"
+    return 0
+  fi
+  if have systemctl && systemctl --user list-units >/dev/null 2>&1; then
+    echo "systemd-user"
+    return 0
+  fi
+  if have crontab; then
+    echo "cron"
+    return 0
+  fi
+  echo "none"
+}
+
+write_local_server_wrapper() {
+  local wrapper node_bin
+  wrapper="$(local_server_wrapper)"
+  node_bin="$(command -v node)"
+  mkdir -p "$(dirname "$wrapper")" "$(local_log_dir)"
+  cat > "$wrapper" <<EOF
+#!/usr/bin/env bash
+set -euo pipefail
+env_file=$(shell_quote "$local_env_file")
+if [ -r "\$env_file" ]; then
+  set -a
+  # shellcheck disable=SC1090
+  . "\$env_file"
+  set +a
+fi
+cd $(shell_quote "$repo_dir")
+exec $(shell_quote "$node_bin") $(shell_quote "$repo_dir/dist/server/apps/server/src/server.js")
+EOF
+  chmod 0755 "$wrapper"
+}
+
+write_local_cli_wrapper() {
+  local wrapper node_bin
+  wrapper="$(local_cli_bin)"
+  node_bin="$(command -v node)"
+  mkdir -p "$(dirname "$wrapper")"
+  cat > "$wrapper" <<EOF
+#!/usr/bin/env bash
+set -euo pipefail
+env_file=$(shell_quote "$local_env_file")
+if [ -r "\$env_file" ]; then
+  set -a
+  # shellcheck disable=SC1090
+  . "\$env_file"
+  set +a
+fi
+cd $(shell_quote "$repo_dir")
+exec $(shell_quote "$node_bin") $(shell_quote "$repo_dir/apps/cli/bin/orkestr-oss.js") "\$@"
+EOF
+  chmod 0755 "$wrapper"
+}
+
+install_launchd_service() {
+  local plist label domain out_log err_log wrapper
+  plist="$(local_service_file launchd)"
+  label="$(local_service_label)"
+  domain="gui/$(id -u)"
+  out_log="$(local_log_dir)/orkestr.out.log"
+  err_log="$(local_log_dir)/orkestr.err.log"
+  wrapper="$(local_server_wrapper)"
+  mkdir -p "$(dirname "$plist")" "$(local_log_dir)"
+  cat > "$plist" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>$(xml_escape "$label")</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>$(xml_escape "$wrapper")</string>
+  </array>
+  <key>WorkingDirectory</key>
+  <string>$(xml_escape "$repo_dir")</string>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>StandardOutPath</key>
+  <string>$(xml_escape "$out_log")</string>
+  <key>StandardErrorPath</key>
+  <string>$(xml_escape "$err_log")</string>
+</dict>
+</plist>
+EOF
+  launchctl bootout "$domain/$label" >/dev/null 2>&1 || launchctl bootout "$domain" "$plist" >/dev/null 2>&1 || true
+  if [ "$start_after_install" = "1" ]; then
+    launchctl bootstrap "$domain" "$plist"
+    launchctl kickstart -k "$domain/$label"
+  fi
+}
+
+install_systemd_user_service() {
+  local unit unit_file wrapper
+  unit="$(local_service_name).service"
+  unit_file="$(local_service_file systemd-user)"
+  wrapper="$(local_server_wrapper)"
+  mkdir -p "$(dirname "$unit_file")" "$(local_log_dir)"
+  cat > "$unit_file" <<EOF
+[Unit]
+Description=Orkestr local user service
+Documentation=https://github.com/otcan/orkestr
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=$repo_dir
+Environment=ORKESTR_ENV_FILE=$local_env_file
+ExecStart=$wrapper
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target
+EOF
+  systemctl --user daemon-reload
+  systemctl --user enable "$unit"
+  if [ "$start_after_install" = "1" ]; then
+    systemctl --user restart "$unit"
+  fi
+}
+
+install_cron_service() {
+  local wrapper out_log err_log pid_file tmp marker
+  wrapper="$(local_server_wrapper)"
+  out_log="$(local_log_dir)/orkestr.out.log"
+  err_log="$(local_log_dir)/orkestr.err.log"
+  pid_file="$(local_pid_file)"
+  marker="# orkestr local service"
+  tmp="$(mktemp)"
+  mkdir -p "$(local_log_dir)"
+  crontab -l 2>/dev/null | grep -vF "$marker" > "$tmp" || true
+  printf "@reboot %s >> %s 2>> %s %s\n" "$(shell_quote "$wrapper")" "$(shell_quote "$out_log")" "$(shell_quote "$err_log")" "$marker" >> "$tmp"
+  crontab "$tmp"
+  rm -f "$tmp"
+  if [ "$start_after_install" = "1" ]; then
+    if [ -f "$pid_file" ] && kill -0 "$(cat "$pid_file")" >/dev/null 2>&1; then
+      return 0
+    fi
+    nohup "$wrapper" >> "$out_log" 2>> "$err_log" &
+    echo "$!" > "$pid_file"
+  fi
+}
+
+install_local_service() {
+  local manager
+  manager="$1"
+  case "$manager" in
+    launchd)
+      install_launchd_service
+      ;;
+    systemd-user)
+      install_systemd_user_service
+      ;;
+    cron)
+      install_cron_service
+      ;;
+    *)
+      cat >&2 <<EOF
+No supported local service manager was found.
+
+Install systemd user services, launchd, or cron, or rerun:
+  ./scripts/install.sh --no-service --serve
+EOF
+      exit 1
+      ;;
+  esac
+}
+
 write_local_env_file() {
   mkdir -p "$(dirname "$local_env_file")"
   {
     echo "# Orkestr local environment."
-    echo "# Source this file before running npm start from the Orkestr checkout."
+    echo "# Source this file before running Orkestr manually from the checkout."
+    write_env_var ORKESTR_APP_DIR "$repo_dir"
     write_env_var ORKESTR_HOME "$data_dir"
     write_env_var ORKESTR_HOST "$host"
     write_env_var ORKESTR_PORT "$port"
     write_env_var ORKESTR_INSTALL_PROFILE "$install_profile"
+    write_env_var ORKESTR_INSTALL_LOCAL_SERVICE "$local_service"
+    write_env_var ORKESTR_START_AFTER_INSTALL "$start_after_install"
     write_env_var ORKESTR_RUNTIME_SETTINGS_FILE "${ORKESTR_RUNTIME_SETTINGS_FILE:-$data_dir/runtime-settings.json}"
     write_env_var ORKESTR_RUNTIME_WORKSPACE_ROOT "$workspace_dir"
     write_env_var ORKESTR_CODEX_BIN "${ORKESTR_CODEX_BIN:-$(codex_bin_default)}"
     write_env_var ORKESTR_RUNTIME_CODEX_COMMAND "${ORKESTR_RUNTIME_CODEX_COMMAND:-$(codex_command_default)}"
     write_env_var CODEX_HOME "${CODEX_HOME:-$data_dir/codex}"
+    write_env_var ORKESTR_LOCAL_SERVICE_MANAGER "${ORKESTR_LOCAL_SERVICE_MANAGER:-}"
+    write_env_var ORKESTR_LOCAL_SERVICE_NAME "$(local_service_name)"
+    write_env_var ORKESTR_LOCAL_SERVICE_LABEL "$(local_service_label)"
+    write_env_var ORKESTR_LOCAL_SERVICE_FILE "${ORKESTR_LOCAL_SERVICE_FILE:-$(local_service_file "${ORKESTR_LOCAL_SERVICE_MANAGER:-}")}"
+    write_env_var ORKESTR_LOCAL_SERVER_WRAPPER "$(local_server_wrapper)"
+    write_env_var ORKESTR_LOCAL_LOG_DIR "$(local_log_dir)"
+    write_env_var ORKESTR_LOCAL_PID_FILE "$(local_pid_file)"
+    write_env_var ORKESTR_LOCAL_CLI_BIN "$(local_cli_bin)"
   } > "$local_env_file"
   chmod 0600 "$local_env_file"
 }
@@ -1050,11 +1316,20 @@ EOF
     exit 1
   fi
 fi
-serve="$(normalize_bool "$serve")"
-if [ "$serve" != "0" ] && [ "$serve" != "1" ]; then
-  echo "Invalid ORKESTR_START_AFTER_INSTALL value: $serve" >&2
+start_after_install="$(normalize_bool "$start_after_install")"
+if [ "$start_after_install" != "0" ] && [ "$start_after_install" != "1" ]; then
+  echo "Invalid ORKESTR_START_AFTER_INSTALL value: $start_after_install" >&2
   echo "Use 1/0, yes/no, true/false, or on/off." >&2
   exit 2
+fi
+local_service="$(normalize_bool "$local_service")"
+if [ "$local_service" != "0" ] && [ "$local_service" != "1" ]; then
+  echo "Invalid ORKESTR_INSTALL_LOCAL_SERVICE value: $local_service" >&2
+  echo "Use 1/0, yes/no, true/false, or on/off." >&2
+  exit 2
+fi
+if [ "$foreground_serve" -eq 1 ]; then
+  echo "Warning: --serve is a development shortcut. Normal installs use the local service." >&2
 fi
 
 print_macos_codex_notice
@@ -1137,16 +1412,22 @@ export ORKESTR_PORT="$port"
 export ORKESTR_HOME="${ORKESTR_HOME:-$data_dir}"
 export ORKESTR_RUNTIME_SETTINGS_FILE="${ORKESTR_RUNTIME_SETTINGS_FILE:-$data_dir/runtime-settings.json}"
 mkdir -p "$data_dir" "$workspace_dir"
+if [ "$local_service" = "1" ]; then
+  export ORKESTR_LOCAL_SERVICE_MANAGER="${ORKESTR_LOCAL_SERVICE_MANAGER:-$(local_service_manager)}"
+else
+  export ORKESTR_LOCAL_SERVICE_MANAGER="${ORKESTR_LOCAL_SERVICE_MANAGER:-}"
+fi
 write_local_env_file
 write_runtime_settings_file
+write_local_server_wrapper
+write_local_cli_wrapper
+if [ "$local_service" = "1" ]; then
+  install_local_service "$ORKESTR_LOCAL_SERVICE_MANAGER"
+fi
 
 cat <<EOF
 
 Orkestr installed.
-
-Start:
-  cd $repo_dir
-  set -a; . "$local_env_file"; set +a; npm start
 
 Open:
   http://$ORKESTR_HOST:$ORKESTR_PORT/setup
@@ -1157,12 +1438,40 @@ Runtime settings:
 Local env:
   $local_env_file
 
+CLI:
+  $(local_cli_bin) --help
+  $(local_cli_bin) service status
+  $(local_cli_bin) service start
+  $(local_cli_bin) service stop
+  $(local_cli_bin) service logs
+
+EOF
+
+if [ "$local_service" = "1" ]; then
+  cat <<EOF
+Local service:
+  manager: $ORKESTR_LOCAL_SERVICE_MANAGER
+  file: $(local_service_file "$ORKESTR_LOCAL_SERVICE_MANAGER")
+  started: $start_after_install
+
+EOF
+else
+  cat <<EOF
+Manual start:
+  cd $repo_dir
+  set -a; . "$local_env_file"; set +a; npm start
+
+EOF
+fi
+
+cat <<EOF
+
 For a VPS service install, rerun as root:
   sudo scripts/install.sh --systemd
 
 EOF
 
-if [ "$serve" -eq 1 ]; then
+if [ "$foreground_serve" -eq 1 ]; then
   set -a
   # shellcheck disable=SC1090
   . "$local_env_file"

@@ -72,8 +72,23 @@ Then open:
 http://127.0.0.1:19812/setup
 ```
 
-The installer prepares the local runtime and starts Orkestr. In setup, connect
-the required accounts. For
+The installer prepares the local runtime, installs a user service, starts
+Orkestr, and prints service commands. On macOS this uses `launchd`; on Linux it
+uses a user `systemd` unit when available and falls back to cron only when no
+user service manager is available.
+
+```bash
+~/.local/bin/orkestr service status
+~/.local/bin/orkestr service stop
+~/.local/bin/orkestr service start
+~/.local/bin/orkestr service logs
+```
+
+Use `./scripts/install.sh --no-start` to install the service without starting
+it, `./scripts/install.sh --no-service` to skip service installation, or
+`./scripts/install.sh --serve` only for foreground development.
+
+In setup, connect the required accounts. For
 Codex, use **Open Codex sign-in** for device authorization or **Connect Codex
 with API key** when this runtime should authenticate Codex that way. Orkestr
 checks `codex login status` before starting a coding thread, so a raw Codex
@@ -82,7 +97,7 @@ runtime. Runtime state, including Codex auth, is stored under `ORKESTR_HOME`.
 On macOS local installs, the installer does not probe or run the host `codex`
 binary by default because Gatekeeper/XProtect can block npm-distributed native
 binaries. Verify `codex --version` and `codex login status` yourself, then rerun
-with `ORKESTR_ENABLE_HOST_CODEX=1 ./scripts/install.sh --local --serve` to opt
+with `ORKESTR_ENABLE_HOST_CODEX=1 ./scripts/install.sh --local` to opt
 in. The local installer writes `$ORKESTR_HOME/orkestr.env`; source that file
 before manual `npm start` runs so the same safe runtime settings are used.
 Use `.env` or the setup UI for optional OpenAI direct API access,

@@ -60,7 +60,8 @@ server directly under the host keeps those operations plain.
 
 Use these paths for different kinds of work:
 
-- Trying Orkestr locally: `scripts/install.sh`.
+- Trying Orkestr locally: `scripts/install.sh`. This installs a local user
+  service by default: macOS `launchd`, Linux user `systemd`, or cron fallback.
 - Running a real personal VPS: `scripts/bootstrap-vps.sh`.
 - Installing on a host you already prepared: `scripts/install.sh --systemd`.
 - Updating a VPS: `orkestr-update` or `orkestr update`.
