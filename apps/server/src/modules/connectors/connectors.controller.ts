@@ -23,6 +23,7 @@ import { loginCodexWithApiKey, startCodexDeviceAuth } from "../../../../../packa
 import { requestThreadInputDelivery } from "../../../../../packages/core/src/runtime-leases.js";
 import {
   createLocalWhatsAppChat,
+  generateLocalWhatsAppChatPicture,
   getLocalWhatsAppBridgeStatus,
   getLocalWhatsAppQrSvg,
   listLocalWhatsAppChats,
@@ -192,6 +193,17 @@ export class ConnectorsController {
       participantIds,
       adminParticipantIds: bodyStringArray(body, "adminParticipantIds"),
       promoteParticipantsAsAdmins,
+      generatePicture: optionalBodyBoolean(body, "generatePicture", true),
+    });
+  }
+
+  @Post("whatsapp/bridge/chats/:chatId/picture")
+  @HttpCode(200)
+  async whatsappBridgeGenerateChatPicture(@Param("chatId") chatId: string, @Body() body: Record<string, unknown> = {}) {
+    return generateLocalWhatsAppChatPicture({
+      accountId: String(body.accountId || body.responderAccountId || body.outboundAccountId || ""),
+      chatId,
+      title: String(body.title || body.name || ""),
     });
   }
 

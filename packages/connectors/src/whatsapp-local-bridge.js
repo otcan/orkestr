@@ -4,6 +4,7 @@ import { dataPaths, ensureDataDirs } from "../../storage/src/paths.js";
 import { appendEvent, readJson } from "../../storage/src/store.js";
 import { requestThreadInputDelivery } from "../../core/src/runtime-leases.js";
 import { listThreads } from "../../core/src/threads.js";
+import { setGeneratedLocalWhatsAppGroupPicture } from "./whatsapp-chat-picture.js";
 
 export const localWhatsAppAccountIds = ["account-1", "account-2"];
 export const localWhatsAppBridgeBasePath = "/api/connectors/whatsapp/bridge";
@@ -981,9 +982,9 @@ export async function listLocalWhatsAppChatParticipants({ accountId = "", chatId
 }
 
 /**
- * @param {{ name?: string, senderAccountId?: string, responderAccountId?: string, participantIds?: string[] | string, adminParticipantIds?: string[] | string, promoteParticipantsAsAdmins?: boolean, env?: Record<string, string | undefined> }} [options]
+ * @param {{ name?: string, senderAccountId?: string, responderAccountId?: string, participantIds?: string[] | string, adminParticipantIds?: string[] | string, promoteParticipantsAsAdmins?: boolean, generatePicture?: boolean, env?: Record<string, string | undefined> }} [options]
  */
-export async function createLocalWhatsAppChat({ name = "", senderAccountId = "", responderAccountId = "", participantIds = [], adminParticipantIds = [], promoteParticipantsAsAdmins = false, env = process.env } = {}) {
+export async function createLocalWhatsAppChat({ name = "", senderAccountId = "", responderAccountId = "", participantIds = [], adminParticipantIds = [], promoteParticipantsAsAdmins = false, generatePicture = true, env = process.env } = {}) {
   const title = String(name || "").trim();
   if (!title) {
     const error = new Error("whatsapp_chat_name_required");
@@ -1046,6 +1047,29 @@ export async function createLocalWhatsAppChat({ name = "", senderAccountId = "",
       env,
     }).catch((error) => ({ ok: false, error: error?.message || String(error), participantIds: promoteIds }));
   }
+  let picture = null;
+  if (generatePicture && isGroupChatId(chatId)) {
+    try {
+      const dependencies = await loadBridgeDependencies();
+      picture = await setGeneratedLocalWhatsAppGroupPicture({
+        client: responderRuntime.client,
+        MessageMedia: dependencies.whatsapp.MessageMedia,
+        chatId,
+        title,
+        accountId: responder,
+        env,
+      });
+    } catch (error) {
+      picture = { updated: false, error: error?.message || String(error) };
+      await appendEvent({
+        type: "whatsapp_chat_picture_generate_error",
+        chatId,
+        name: title,
+        accountId: responder,
+        error: picture.error,
+      }, env);
+    }
+  }
   await appendEvent({
     type: "whatsapp_local_chat_created",
     chatId,
@@ -1071,8 +1095,43 @@ export async function createLocalWhatsAppChat({ name = "", senderAccountId = "",
     participantIds: participants,
     adminParticipantIds: adminParticipants,
     adminPromotion,
+    picture,
     bridgeResponse: createdGroup,
   };
+}
+
+export async function generateLocalWhatsAppChatPicture({ accountId = "", chatId = "", title = "", env = process.env } = {}) {
+  const normalized = normalizeAccountId(accountId, env);
+  const id = String(chatId || "").trim();
+  if (!id) {
+    const error = new Error("whatsapp_chat_id_required");
+    error.statusCode = 400;
+    throw error;
+  }
+  if (!isGroupChatId(id)) {
+    const error = new Error("whatsapp_group_chat_required");
+    error.statusCode = 400;
+    throw error;
+  }
+  const runtime = runtimes.get(normalized);
+  const state = accountStates.get(normalized) || defaultAccountState(normalized);
+  if (!runtime?.client || !state.ready) {
+    const error = new Error("whatsapp_local_bridge_not_ready");
+    error.statusCode = 400;
+    throw error;
+  }
+  const chat = await runtime.client.getChatById(id);
+  const requestedTitle = String(title || chat?.name || chat?.formattedTitle || id).trim();
+  const dependencies = await loadBridgeDependencies();
+  const picture = await setGeneratedLocalWhatsAppGroupPicture({
+    client: runtime.client,
+    MessageMedia: dependencies.whatsapp.MessageMedia,
+    chatId: id,
+    title: requestedTitle,
+    accountId: normalized,
+    env,
+  });
+  return { ok: Boolean(picture.updated), chatId: id, title: requestedTitle, ...picture };
 }
 
 /**
