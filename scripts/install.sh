@@ -6,7 +6,7 @@ usage() {
 Install Orkestr.
 
 Usage:
-  scripts/install.sh [--local] [--serve] [--profile local-safe|local-trusted]
+  scripts/install.sh [--local] [--serve] [--profile local-safe|local-trusted] [--enable-host-codex]
   scripts/install.sh --systemd [--auto-update] [--track-main|--release-updates] [--profile vps-safe|vps-trusted] [--install-dir DIR] [--data-dir DIR] [--workspace-dir DIR] [--env-file FILE] [--user USER]
 
 Modes:
@@ -41,7 +41,9 @@ Environment:
   ORKESTR_RESET_ON_UPDATE   Reset runtime state after successful updates. Defaults to 0.
   ORKESTR_RESET_OVERLAY     Also reset ORKESTR_OVERLAY_DIR when reset is enabled. Defaults to 0.
   ORKESTR_INSTALL_CODEX     Install Codex CLI globally in --systemd mode. Defaults to 1.
-  ORKESTR_CODEX_VERSION     Codex CLI version. Defaults to 0.130.0.
+  ORKESTR_ENABLE_HOST_CODEX Allow local macOS installs to probe/use the host codex binary. Defaults to 0 on macOS.
+  ORKESTR_CODEX_VERSION     Codex CLI version. Defaults to 0.133.0.
+  ORKESTR_LOCAL_ENV_FILE    Local env file written for non-systemd installs. Defaults to $ORKESTR_HOME/orkestr.env.
   ORKESTR_SKIP_SYSTEM_PACKAGES  Skip apt package installation when set to 1.
 USAGE
 }
@@ -53,6 +55,7 @@ install_dir="${ORKESTR_INSTALL_DIR:-}"
 data_dir="${ORKESTR_HOME:-}"
 workspace_dir="${ORKESTR_WORKSPACE_DIR:-}"
 env_file="${ORKESTR_ENV_FILE:-}"
+local_env_file="${ORKESTR_LOCAL_ENV_FILE:-}"
 run_user="${ORKESTR_RUN_USER:-orkestr}"
 host="${ORKESTR_HOST:-127.0.0.1}"
 port="${ORKESTR_PORT:-19812}"
@@ -174,6 +177,10 @@ while [ "$#" -gt 0 ]; do
       ORKESTR_INSTALL_CODEX=0
       shift
       ;;
+    --enable-host-codex)
+      ORKESTR_ENABLE_HOST_CODEX=1
+      shift
+      ;;
     --help|-h)
       usage
       exit 0
@@ -210,6 +217,10 @@ have() {
   command -v "$1" >/dev/null 2>&1
 }
 
+is_macos() {
+  [ "$(uname -s)" = "Darwin" ]
+}
+
 profile_is_trusted() {
   case "$1" in
     local-trusted|vps-trusted|trusted)
@@ -238,15 +249,82 @@ codex_approval_default() {
 }
 
 codex_command_default() {
-  if profile_is_trusted "$install_profile"; then
-    echo "codex --dangerously-bypass-approvals-and-sandbox"
-  else
-    echo "codex --sandbox workspace-write --ask-for-approval on-request --no-alt-screen"
+  if should_disable_macos_runtime_codex; then
+    echo "__orkestr_codex_disabled_on_macos__"
+    return 0
   fi
+  local codex_bin
+  codex_bin="${ORKESTR_CODEX_BIN:-codex}"
+  if profile_is_trusted "$install_profile"; then
+    echo "$codex_bin --dangerously-bypass-approvals-and-sandbox"
+  else
+    echo "$codex_bin --sandbox workspace-write --ask-for-approval on-request --no-alt-screen"
+  fi
+}
+
+codex_bin_default() {
+  if should_disable_macos_codex_bin; then
+    echo "__orkestr_codex_disabled_on_macos__"
+  else
+    echo "codex"
+  fi
+}
+
+should_disable_macos_codex_bin() {
+  is_macos \
+    && [ "$systemd" -ne 1 ] \
+    && [ "${ORKESTR_ENABLE_HOST_CODEX:-0}" != "1" ] \
+    && [ -z "${ORKESTR_CODEX_BIN:-}" ]
+}
+
+should_disable_macos_runtime_codex() {
+  is_macos \
+    && [ "$systemd" -ne 1 ] \
+    && [ "${ORKESTR_ENABLE_HOST_CODEX:-0}" != "1" ] \
+    && [ -z "${ORKESTR_CODEX_BIN:-}" ] \
+    && [ -z "${ORKESTR_RUNTIME_CODEX_COMMAND:-}" ]
+}
+
+should_disable_macos_host_codex() {
+  should_disable_macos_codex_bin || should_disable_macos_runtime_codex
+}
+
+print_macos_codex_notice() {
+  if ! should_disable_macos_host_codex; then
+    return 0
+  fi
+  cat <<'EOF'
+
+macOS Codex note:
+  Orkestr will not auto-probe or run the host `codex` binary from this install.
+  This avoids macOS Gatekeeper/XProtect prompts from an unverified native binary.
+
+  To use a host-installed Codex binary anyway, first verify it yourself:
+    codex --version
+    codex login status
+
+  Then rerun:
+    ORKESTR_ENABLE_HOST_CODEX=1 scripts/install.sh --local --serve
+
+  Advanced users can also set ORKESTR_CODEX_BIN to an explicit verified Codex
+  path before running the installer. Set ORKESTR_RUNTIME_CODEX_COMMAND too when
+  the runtime needs custom Codex flags.
+
+EOF
 }
 
 json_string() {
   node -e 'process.stdout.write(JSON.stringify(process.argv[1] || ""))' "$1"
+}
+
+shell_quote() {
+  printf "'"
+  printf "%s" "${1:-}" | sed "s/'/'\\\\''/g"
+  printf "'"
+}
+
+write_env_var() {
+  printf "%s=%s\n" "$1" "$(shell_quote "${2:-}")"
 }
 
 run_as_root() {
@@ -355,10 +433,14 @@ install_codex() {
   if [ "$systemd" -ne 1 ] || [ "${ORKESTR_INSTALL_CODEX:-1}" = "0" ]; then
     return 0
   fi
+  if is_macos && [ "${ORKESTR_ENABLE_HOST_CODEX:-0}" != "1" ]; then
+    echo "Refusing to install Codex automatically on macOS. Verify Codex manually, then rerun with ORKESTR_ENABLE_HOST_CODEX=1." >&2
+    exit 1
+  fi
   if have codex; then
     return 0
   fi
-  npm install -g "@openai/codex@${ORKESTR_CODEX_VERSION:-0.130.0}"
+  npm install -g "@openai/codex@${ORKESTR_CODEX_VERSION:-0.133.0}"
 }
 
 chrome_path() {
@@ -423,7 +505,7 @@ ORKESTR_CURRENT_LINK=${ORKESTR_CURRENT_LINK:-/opt/orkestr/current}
 ORKESTR_RESET_ON_UPDATE=${ORKESTR_RESET_ON_UPDATE:-0}
 ORKESTR_RESET_OVERLAY=${ORKESTR_RESET_OVERLAY:-0}
 ORKESTR_RUNTIME_WORKSPACE_ROOT=$workspace_dir
-ORKESTR_CODEX_BIN=${ORKESTR_CODEX_BIN:-codex}
+ORKESTR_CODEX_BIN=${ORKESTR_CODEX_BIN:-$(codex_bin_default)}
 ORKESTR_CODEX_SANDBOX=$codex_sandbox
 ORKESTR_CODEX_APPROVAL_POLICY=$codex_approval
 ORKESTR_RUNTIME_CODEX_COMMAND="$codex_command"
@@ -452,6 +534,24 @@ GMAIL_OAUTH_CLIENT_SECRET=
 GMAIL_OAUTH_REDIRECT_URI=
 EOF
   chmod 0640 "$env_file"
+}
+
+write_local_env_file() {
+  mkdir -p "$(dirname "$local_env_file")"
+  {
+    echo "# Orkestr local environment."
+    echo "# Source this file before running npm start from the Orkestr checkout."
+    write_env_var ORKESTR_HOME "$data_dir"
+    write_env_var ORKESTR_HOST "$host"
+    write_env_var ORKESTR_PORT "$port"
+    write_env_var ORKESTR_INSTALL_PROFILE "$install_profile"
+    write_env_var ORKESTR_RUNTIME_SETTINGS_FILE "${ORKESTR_RUNTIME_SETTINGS_FILE:-$data_dir/runtime-settings.json}"
+    write_env_var ORKESTR_RUNTIME_WORKSPACE_ROOT "$workspace_dir"
+    write_env_var ORKESTR_CODEX_BIN "${ORKESTR_CODEX_BIN:-$(codex_bin_default)}"
+    write_env_var ORKESTR_RUNTIME_CODEX_COMMAND "${ORKESTR_RUNTIME_CODEX_COMMAND:-$(codex_command_default)}"
+    write_env_var CODEX_HOME "${CODEX_HOME:-$data_dir/codex}"
+  } > "$local_env_file"
+  chmod 0600 "$local_env_file"
 }
 
 write_runtime_settings_file() {
@@ -754,9 +854,13 @@ else
   install_dir="${install_dir:-$HOME/.orkestr-src/orkestr-oss}"
   data_dir="${data_dir:-$HOME/.orkestr}"
   workspace_dir="${workspace_dir:-$data_dir/workspaces}"
+  local_env_file="${local_env_file:-$data_dir/orkestr.env}"
   install_profile="${install_profile:-local-safe}"
 fi
 
+print_macos_codex_notice
+export ORKESTR_RUNTIME_CODEX_COMMAND="${ORKESTR_RUNTIME_CODEX_COMMAND:-$(codex_command_default)}"
+export ORKESTR_CODEX_BIN="${ORKESTR_CODEX_BIN:-$(codex_bin_default)}"
 install_system_packages
 ensure_node
 need npm
@@ -834,6 +938,7 @@ export ORKESTR_PORT="$port"
 export ORKESTR_HOME="${ORKESTR_HOME:-$data_dir}"
 export ORKESTR_RUNTIME_SETTINGS_FILE="${ORKESTR_RUNTIME_SETTINGS_FILE:-$data_dir/runtime-settings.json}"
 mkdir -p "$data_dir" "$workspace_dir"
+write_local_env_file
 write_runtime_settings_file
 
 cat <<EOF
@@ -842,7 +947,7 @@ Orkestr installed.
 
 Start:
   cd $repo_dir
-  ORKESTR_HOME=$ORKESTR_HOME ORKESTR_HOST=$ORKESTR_HOST ORKESTR_PORT=$ORKESTR_PORT npm start
+  set -a; . "$local_env_file"; set +a; npm start
 
 Open:
   http://$ORKESTR_HOST:$ORKESTR_PORT/setup
@@ -850,11 +955,18 @@ Open:
 Runtime settings:
   $ORKESTR_RUNTIME_SETTINGS_FILE
 
+Local env:
+  $local_env_file
+
 For a VPS service install, rerun as root:
   sudo scripts/install.sh --systemd
 
 EOF
 
 if [ "$serve" -eq 1 ]; then
+  set -a
+  # shellcheck disable=SC1090
+  . "$local_env_file"
+  set +a
   npm start
 fi

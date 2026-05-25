@@ -3,7 +3,23 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { codexLoginStatus, loginCodexWithApiKey, startCodexDeviceAuth } from "../packages/connectors/src/codex.js";
+import { CODEX_DISABLED_ON_MACOS, codexLoginStatus, loginCodexWithApiKey, startCodexDeviceAuth } from "../packages/connectors/src/codex.js";
+
+test("codex status treats the macOS installer guard as disabled", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-codex-disabled-"));
+  const env = {
+    ORKESTR_HOME: home,
+    CODEX_HOME: path.join(home, "codex-home"),
+    ORKESTR_CODEX_BIN: CODEX_DISABLED_ON_MACOS,
+  };
+
+  const status = await codexLoginStatus({ env, home });
+
+  assert.equal(status.available, false);
+  assert.equal(status.connected, false);
+  assert.equal(status.reason, "codex_disabled_on_macos");
+  assert.match(status.message, /ORKESTR_ENABLE_HOST_CODEX=1/);
+});
 
 test("codex device auth parses browser URL and reuses an active session", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-codex-auth-"));
