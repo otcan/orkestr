@@ -938,6 +938,18 @@ function codexModePersistencePatch(mode, source, result = {}) {
   };
 }
 
+function liveCodexModePatch(thread = {}, status = {}) {
+  const mode = codexModeSetting(status?.codexMode || status?.progress?.codexMode);
+  if (!mode) return {};
+  const source = String(status?.codexModeSource || "runtime-pane").trim() || "runtime-pane";
+  if (thread.codexMode === mode && thread.codexModeSource === source) return {};
+  return {
+    codexMode: mode,
+    codexModeSource: source,
+    codexModeUpdatedAt: nowIso(),
+  };
+}
+
 function commandUsesCodex(command) {
   return /(^|[/"'\s])codex(["'\s]|$)/.test(String(command || ""));
 }
@@ -3565,6 +3577,7 @@ async function syncRuntimeLeasesOnce(env = process.env) {
       }
       await updateThread(lease.threadId, {
         state: status.state,
+        ...liveCodexModePatch(thread, status),
         runtime: { ...leaseForStorage, state: status.state, progress: status.progress || null },
       }, env).catch(() => {});
     }
@@ -3595,13 +3608,18 @@ export async function syncPaneProgressForActiveLeases(env = process.env) {
     const thread = await getThread(lease.threadId, env).catch(() => null);
     if (!thread) continue;
     const previous = thread.runtime?.progress;
+    const codexPatch = liveCodexModePatch(thread, {
+      codexMode: progress.codexMode,
+      codexModeSource: progress.codexMode ? "runtime-pane" : null,
+    });
     const changedProgress = !previous ||
       previous.tailHash !== progress.tailHash ||
       previous.summary !== progress.summary ||
       previous.stateHint !== progress.stateHint;
-    if (!changedProgress) continue;
+    if (!changedProgress && Object.keys(codexPatch).length === 0) continue;
     changed += 1;
     await updateThread(lease.threadId, {
+      ...codexPatch,
       runtime: {
         ...(thread.runtime || {}),
         ...lease,

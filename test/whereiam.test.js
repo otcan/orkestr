@@ -6,7 +6,7 @@ import test from "node:test";
 import { startServer } from "../apps/server/src/server.js";
 import { ensureRuntimeAgentsFile } from "../packages/core/src/agent-context.js";
 import { whereAmI } from "../packages/core/src/whereiam.js";
-import { createThread } from "../packages/core/src/threads.js";
+import { createThread, getThread } from "../packages/core/src/threads.js";
 
 test("runtime AGENTS.md points agents to dynamic whereiam discovery", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-agent-context-home-"));
@@ -56,6 +56,38 @@ test("whereAmI resolves the current thread from a nested workspace path", async 
   assert.equal(payload.settings.profile, undefined);
   assert.equal(payload.settings.desktops.gmailAuth, "gmail");
   assert.equal(payload.matchedBy, "thread.cwd");
+});
+
+test("whereAmI prefers live runtime Codex mode over stale stored mode", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-whereiam-mode-home-"));
+  const repo = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-whereiam-mode-repo-"));
+  const env = { ORKESTR_HOME: home };
+  await createThread({
+    id: "whereiam-mode-thread",
+    name: "Where Mode",
+    cwd: repo,
+    repoPath: repo,
+    codexMode: "plan",
+    codexModeSource: "orkestr-command",
+    runtime: {
+      workspace: repo,
+      progress: {
+        codexMode: "code",
+        stateHint: "ready",
+        summary: "Ready",
+      },
+    },
+  }, env);
+
+  const payload = await whereAmI({ cwd: repo }, env);
+  const stored = await getThread("whereiam-mode-thread", env);
+
+  assert.equal(payload.ok, true);
+  assert.equal(payload.thread.codexMode, "code");
+  assert.equal(payload.thread.codexModeLive, "code");
+  assert.equal(payload.thread.codexModeSource, "runtime-pane");
+  assert.equal(stored.codexMode, "code");
+  assert.equal(stored.codexModeSource, "runtime-pane");
 });
 
 test("GET /api/whereiam resolves thread context from cwd query", async () => {
