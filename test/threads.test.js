@@ -890,6 +890,51 @@ test("runtime status ignores stale Codex update prompt text above a live input p
   }
 });
 
+test("runtime sync persists live Codex code mode over stale stored plan mode", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-runtime-mode-sync-"));
+  const fakeTmux = await createFakeTmux(home);
+  const priorPath = process.env.PATH;
+  const priorTmuxLog = process.env.TMUX_LOG;
+  const priorTmuxState = process.env.TMUX_STATE;
+  const priorTmuxCaptureText = process.env.TMUX_CAPTURE_TEXT;
+  process.env.PATH = `${fakeTmux.bin}:${priorPath || ""}`;
+  process.env.TMUX_LOG = fakeTmux.log;
+  process.env.TMUX_STATE = fakeTmux.state;
+  process.env.TMUX_CAPTURE_TEXT = [
+    "› Write tests",
+    "  gpt-5.5 xhigh · /workspace",
+  ].join("\n");
+
+  try {
+    const env = {
+      ORKESTR_HOME: path.join(home, "orkestr-home"),
+      HOME: path.join(home, "runtime-home"),
+      CODEX_HOME: path.join(home, "codex-home"),
+      PATH: process.env.PATH,
+      TMUX_LOG: fakeTmux.log,
+      TMUX_STATE: fakeTmux.state,
+      TMUX_CAPTURE_TEXT: process.env.TMUX_CAPTURE_TEXT,
+    };
+    await createThread({
+      id: "sync-live-code-mode-thread",
+      name: "Sync Live Code Mode Thread",
+      codexMode: "plan",
+      codexModeSource: "orkestr-command",
+    }, env);
+    await wakeThread("sync-live-code-mode-thread", { reason: "test" }, env);
+    await syncRuntimeLeases(env);
+
+    const thread = await getThread("sync-live-code-mode-thread", env);
+    assert.equal(thread.codexMode, "code");
+    assert.equal(thread.codexModeSource, "runtime-pane");
+  } finally {
+    restoreEnvValue("PATH", priorPath);
+    restoreEnvValue("TMUX_LOG", priorTmuxLog);
+    restoreEnvValue("TMUX_STATE", priorTmuxState);
+    restoreEnvValue("TMUX_CAPTURE_TEXT", priorTmuxCaptureText);
+  }
+});
+
 test("runtime sync does not auto-sleep pending or working runtimes", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-auto-sleep-guards-"));
   const fakeTmux = await createFakeTmux(home);
