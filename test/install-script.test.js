@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import test from "node:test";
 import { promisify } from "node:util";
 
@@ -20,8 +22,17 @@ test("install script exposes a host-native systemd VPS path", async () => {
   assert.match(script, /\/usr\/local\/bin\/orkestr-deploy/);
   assert.match(script, /\/usr\/local\/bin\/orkestr-reset-state/);
   assert.match(script, /ORKESTR_RUN_USER=\$run_user/);
-  assert.match(script, /--profile local-safe\|local-trusted/);
-  assert.match(script, /ORKESTR_INSTALL_PROFILE/);
+  assert.match(script, /scripts\/install\.sh/);
+  assert.match(script, /orkestr\.install\.env/);
+  assert.match(script, /ORKESTR_INSTALL_MODE/);
+  assert.match(script, /ORKESTR_START_AFTER_INSTALL/);
+  assert.match(script, /in_orkestr_checkout/);
+  assert.match(script, /run_install_wizard/);
+  assert.match(script, /Keep Codex approval prompts enabled/);
+  assert.match(script, /ORKESTR_CODEX_SANDBOX/);
+  assert.match(script, /ORKESTR_CODEX_APPROVAL_POLICY/);
+  assert.match(script, /--profile\)/);
+  assert.doesNotMatch(script, /ORKESTR_INSTALL_PROFILE=\$install_profile/);
   assert.match(script, /ORKESTR_RUNTIME_SETTINGS_FILE/);
   assert.match(script, /write_runtime_settings_file/);
   assert.match(script, /codex --sandbox workspace-write --ask-for-approval on-request --no-alt-screen/);
@@ -77,6 +88,20 @@ test("install script exposes a host-native systemd VPS path", async () => {
   assert.match(script, /ExecStart=\/usr\/local\/bin\/orkestr-update/);
   assert.match(script, /systemctl restart "\$\{service_name\}\.service"/);
   assert.doesNotMatch(script, /systemctl enable --now "\$\{service_name\}\.service"/);
+});
+
+test("install script refuses unattended defaults without a config file", async () => {
+  const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-install-no-config-"));
+  const scriptPath = path.resolve("scripts/install.sh");
+  await assert.rejects(
+    execFileAsync("bash", [scriptPath], { cwd, timeout: 5000 }),
+    (error) => {
+      assert.equal(error.code, 1);
+      assert.match(error.stderr, /unattended config file/);
+      assert.match(error.stderr, /orkestr\.install\.env/);
+      return true;
+    },
+  );
 });
 
 test("bootstrap script provides an opinionated fresh VPS path", async () => {

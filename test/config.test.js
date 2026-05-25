@@ -39,7 +39,6 @@ test("runtime settings persist non-secret Codex, desktop, and connector routing"
   const env = { ORKESTR_HOME: home };
 
   await writeRuntimeSettings({
-    profile: "local-safe",
     codex: {
       sandbox: "workspace-write",
       approvalPolicy: "on-request",
@@ -63,13 +62,26 @@ test("runtime settings persist non-secret Codex, desktop, and connector routing"
   const settings = await readRuntimeSettings(env);
   const raw = JSON.parse(await fs.readFile(path.join(home, "runtime-settings.json"), "utf8"));
 
-  assert.equal(settings.profile, "local-safe");
+  assert.equal(settings.profile, undefined);
   assert.equal(settings.codex.approvalPolicy, "on-request");
   assert.equal(settings.codex.permissionPrompts.mirrorToWhatsApp, true);
   assert.equal(settings.desktops.gmailAuth, "gmail");
   assert.equal(settings.connectors.gmail.authDesktop, "gmail");
   assert.equal(raw.codex.clientSecret, undefined);
   assert.equal(raw.connectors.gmail.clientSecret, undefined);
+});
+
+test("legacy runtime profiles still map to Codex safety settings", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-runtime-legacy-profile-"));
+  const env = { ORKESTR_HOME: home, ORKESTR_INSTALL_PROFILE: "local-trusted" };
+
+  const settings = await readRuntimeSettings(env);
+
+  assert.equal(settings.profile, undefined);
+  assert.equal(settings.codex.sandbox, "danger-full-access");
+  assert.equal(settings.codex.approvalPolicy, "never");
+  assert.equal(settings.codex.bypassApprovalsAndSandbox, true);
+  assert.equal(settings.codex.permissionPrompts.mirrorToWhatsApp, false);
 });
 
 test("approval replies accept slash and natural forms but reject unscoped always approval", () => {

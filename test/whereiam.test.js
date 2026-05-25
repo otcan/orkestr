@@ -53,7 +53,7 @@ test("whereAmI resolves the current thread from a nested workspace path", async 
   assert.equal(payload.thread.displayName, "Where I Am");
   assert.equal(payload.workspace.repoPath, repo);
   assert.equal(payload.workspace.branchName, "main");
-  assert.equal(payload.settings.profile, "local-safe");
+  assert.equal(payload.settings.profile, undefined);
   assert.equal(payload.settings.desktops.gmailAuth, "gmail");
   assert.equal(payload.matchedBy, "thread.cwd");
 });

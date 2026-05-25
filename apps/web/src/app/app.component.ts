@@ -298,8 +298,8 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
       this.seedReadStateIfNeeded(this.threads);
       if (this.shouldAutoOpenOnboarding()) {
         this.onboardingActive = true;
-        this.setupPageMode = "onboarding";
-        this.replaceOnboardingPath();
+        this.setupPageMode = "setup";
+        this.replaceSetupPath(this.setupSection || "system");
       }
       if (this.onboardingActive) {
         this.updateDocumentTitle();
@@ -581,9 +581,9 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     if (this.activePanel === "raw") this.closeRawStream();
     this.threadWizardOpen = false;
     this.onboardingActive = true;
-    this.setupPageMode = "onboarding";
+    this.setupPageMode = "setup";
     this.clearOnboardingFlag("skipped");
-    this.pushOnboardingPath();
+    this.pushSetupPath(this.setupSection || "system");
     this.updateDocumentTitle();
     this.renderNow();
   }
@@ -3147,13 +3147,12 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   }
 
   private setupPageModeFromPath(): SetupPageMode {
-    const parts = globalThis.location?.pathname?.split("/").filter(Boolean) || [];
-    return parts[0] === "setup" ? "setup" : "onboarding";
+    return "setup";
   }
 
   private setupSectionFromPath(): SetupSection {
     const parts = globalThis.location?.pathname?.split("/").filter(Boolean) || [];
-    return parts[0] === "setup" ? this.normalizeSetupSection(parts[1]) : this.setupSection;
+    return parts[0] === "setup" ? this.normalizeSetupSection(parts[1]) : "system";
   }
 
   private panelFromPath(): Panel {
@@ -3174,8 +3173,12 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
 
   private normalizeLegacyRoutePath(): void {
     const parts = globalThis.location?.pathname?.split("/").filter(Boolean) || [];
+    if (parts[0] === "onboarding") {
+      globalThis.history?.replaceState({}, "", "/setup");
+      return;
+    }
     if (parts[0] === "ng" && parts[1] === "onboarding") {
-      globalThis.history?.replaceState({}, "", "/onboarding");
+      globalThis.history?.replaceState({}, "", "/setup");
       return;
     }
     if (parts[0] === "ng" && parts[1] === "ops") {
@@ -3205,13 +3208,11 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   }
 
   private pushOnboardingPath(): void {
-    if (globalThis.location?.pathname === "/onboarding") return;
-    globalThis.history?.pushState({}, "", "/onboarding");
+    this.pushSetupPath(this.setupSection || "system");
   }
 
   private replaceOnboardingPath(): void {
-    if (globalThis.location?.pathname === "/onboarding") return;
-    globalThis.history?.replaceState({}, "", "/onboarding");
+    this.replaceSetupPath(this.setupSection || "system");
   }
 
   private pushSetupPath(section: SetupSection = this.setupSection): void {

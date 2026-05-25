@@ -4,6 +4,8 @@ node_modules/
 .env.*
 !.env.example
 !.env.docker.example
+orkestr.install.env
+.orkestr.install.env
 .DS_Store
 coverage/
 dist/

@@ -6,19 +6,28 @@ usage() {
 Install Orkestr.
 
 Usage:
-  scripts/install.sh [--local] [--serve] [--profile local-safe|local-trusted]
-  scripts/install.sh --systemd [--auto-update] [--track-main|--release-updates] [--profile vps-safe|vps-trusted] [--install-dir DIR] [--data-dir DIR] [--workspace-dir DIR] [--env-file FILE] [--user USER]
+  scripts/install.sh
+  scripts/install.sh --systemd [--auto-update] [--track-main|--release-updates] [--install-dir DIR] [--data-dir DIR] [--workspace-dir DIR] [--env-file FILE] [--user USER]
 
 Modes:
-  default       Clone/update the repo, install dependencies, build, and print a start command.
-  --local       Use the current checkout instead of cloning.
+  default       Use the current checkout when run from one, install dependencies, build, and start Orkestr locally.
   --systemd     Install a host-native VPS service. Requires root.
   --auto-update Install a host-local update watcher timer in --systemd mode.
   --track-main  Track origin/main with versioned releases. Implies --auto-update, --release-updates, --update-ref main, --channel main, and --allow-untagged-releases.
   --release-updates Use versioned release directories for updater deploys.
+
+Unattended installs:
+  Create ./orkestr.install.env or ./.orkestr.install.env before running this script.
+  The file is sourced by Bash, so use KEY=value lines with shell quoting when needed.
+
+Deprecated compatibility flags:
+  --local       Force using the current checkout.
   --serve       Start npm after a non-systemd install.
+  --profile     Legacy alias for choosing Codex safety defaults. Prefer explicit ORKESTR_CODEX_* settings.
 
 Environment:
+  ORKESTR_INSTALL_MODE      local or service. service is equivalent to --systemd.
+  ORKESTR_START_AFTER_INSTALL  Start npm after a local install. Defaults to 1 locally.
   ORKESTR_REPO_URL          Git repository to clone. Defaults to https://github.com/otcan/orkestr.git.
   ORKESTR_GIT_REF           Git branch, tag, or commit to deploy. Defaults to the repository default branch.
   ORKESTR_INSTALL_DIR       Install directory. Defaults to ~/.orkestr-src/orkestr-oss, or /opt/orkestr/app with --systemd.
@@ -28,8 +37,10 @@ Environment:
   ORKESTR_RUN_USER          Service user. Defaults to orkestr with --systemd.
   ORKESTR_HOST              Bind host. Defaults to 127.0.0.1.
   ORKESTR_PORT              Bind port. Defaults to 19812.
-  ORKESTR_INSTALL_PROFILE   Runtime profile. Defaults to local-safe locally and vps-safe with --systemd.
   ORKESTR_RUNTIME_SETTINGS_FILE  Non-secret runtime settings file. Defaults to $ORKESTR_HOME/runtime-settings.json.
+  ORKESTR_CODEX_SANDBOX     Codex sandbox setting. Defaults to workspace-write.
+  ORKESTR_CODEX_APPROVAL_POLICY  Codex approval policy. Defaults to on-request.
+  ORKESTR_RUNTIME_CODEX_COMMAND  Codex command used for threads.
   ORKESTR_AUTO_UPDATE       Install and enable the update watcher. Defaults to 0.
   ORKESTR_UPDATE_REF        Git branch, tag, or commit watched by the updater. Defaults to main.
   ORKESTR_UPDATE_INTERVAL_SECONDS  Update check interval. Defaults to 120.
@@ -46,8 +57,31 @@ Environment:
 USAGE
 }
 
+initial_arg_count=$#
+install_config_loaded=0
+install_config_file="${ORKESTR_INSTALL_CONFIG:-}"
+if [ -z "$install_config_file" ]; then
+  for candidate in ./orkestr.install.env ./.orkestr.install.env; do
+    if [ -f "$candidate" ]; then
+      install_config_file="$candidate"
+      break
+    fi
+  done
+fi
+if [ -n "$install_config_file" ]; then
+  if [ ! -r "$install_config_file" ]; then
+    echo "Cannot read Orkestr install config: $install_config_file" >&2
+    exit 1
+  fi
+  set -a
+  # shellcheck disable=SC1090
+  . "$install_config_file"
+  set +a
+  install_config_loaded=1
+fi
+
 local_mode=0
-serve=0
+serve="${ORKESTR_START_AFTER_INSTALL:-}"
 systemd=0
 install_dir="${ORKESTR_INSTALL_DIR:-}"
 data_dir="${ORKESTR_HOME:-}"
@@ -64,6 +98,20 @@ deploy_channel="${ORKESTR_DEPLOY_CHANNEL:-production}"
 deploy_tags_only="${ORKESTR_DEPLOY_TAGS_ONLY:-}"
 track_main=0
 install_profile="${ORKESTR_INSTALL_PROFILE:-}"
+install_mode="${ORKESTR_INSTALL_MODE:-}"
+
+case "$install_mode" in
+  service|systemd|vps)
+    systemd=1
+    ;;
+  local|"")
+    ;;
+  *)
+    echo "Unknown ORKESTR_INSTALL_MODE: $install_mode" >&2
+    echo "Use ORKESTR_INSTALL_MODE=local or ORKESTR_INSTALL_MODE=service." >&2
+    exit 2
+    ;;
+esac
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
@@ -75,8 +123,14 @@ while [ "$#" -gt 0 ]; do
       serve=1
       shift
       ;;
+    --no-serve|--no-start)
+      serve=0
+      ORKESTR_START_AFTER_INSTALL=0
+      shift
+      ;;
     --systemd|--vps)
       systemd=1
+      ORKESTR_INSTALL_MODE=service
       shift
       ;;
     --auto-update)
@@ -245,12 +299,137 @@ codex_command_default() {
   fi
 }
 
+codex_bypasses_approvals() {
+  case "$1" in
+    *--dangerously-bypass-approvals-and-sandbox*)
+      return 0
+      ;;
+  esac
+  [ "$2" = "danger-full-access" ] && [ "$3" = "never" ]
+}
+
 json_string() {
   node -e 'process.stdout.write(JSON.stringify(process.argv[1] || ""))' "$1"
 }
 
 run_as_root() {
   [ "$(id -u)" -eq 0 ]
+}
+
+is_interactive_terminal() {
+  [ -t 0 ] && [ -t 1 ]
+}
+
+in_orkestr_checkout() {
+  [ -d .git ] && [ -f package.json ] && [ -f scripts/install.sh ]
+}
+
+prompt_default() {
+  local var_name label default_value answer
+  var_name="$1"
+  label="$2"
+  default_value="$3"
+  printf "%s [%s]: " "$label" "$default_value"
+  read -r answer
+  if [ -z "$answer" ]; then
+    answer="$default_value"
+  fi
+  printf -v "$var_name" "%s" "$answer"
+}
+
+prompt_yes_no() {
+  local var_name label default_value suffix answer normalized
+  var_name="$1"
+  label="$2"
+  default_value="$3"
+  suffix="[y/N]"
+  if [ "$default_value" = "1" ]; then
+    suffix="[Y/n]"
+  fi
+  while true; do
+    printf "%s %s: " "$label" "$suffix"
+    read -r answer
+    normalized="$(printf "%s" "${answer:-}" | tr '[:upper:]' '[:lower:]')"
+    if [ -z "$normalized" ]; then
+      printf -v "$var_name" "%s" "$default_value"
+      return 0
+    fi
+    case "$normalized" in
+      y|yes)
+        printf -v "$var_name" "1"
+        return 0
+        ;;
+      n|no)
+        printf -v "$var_name" "0"
+        return 0
+        ;;
+    esac
+  done
+}
+
+normalize_bool() {
+  local normalized
+  normalized="$(printf "%s" "${1:-}" | tr '[:upper:]' '[:lower:]')"
+  case "$normalized" in
+    1|true|yes|on)
+      echo 1
+      ;;
+    0|false|no|off)
+      echo 0
+      ;;
+    *)
+      echo "$1"
+      ;;
+  esac
+}
+
+apply_install_defaults() {
+  if [ "$systemd" -eq 1 ]; then
+    install_dir="${install_dir:-/opt/orkestr/app}"
+    data_dir="${data_dir:-/opt/orkestr/data}"
+    workspace_dir="${workspace_dir:-/opt/orkestr/workspace}"
+    env_file="${env_file:-/etc/orkestr/orkestr.env}"
+  else
+    install_dir="${install_dir:-$HOME/.orkestr-src/orkestr-oss}"
+    data_dir="${data_dir:-$HOME/.orkestr}"
+    workspace_dir="${workspace_dir:-$data_dir/workspaces}"
+  fi
+  if [ -z "$serve" ]; then
+    if [ "$systemd" -eq 1 ]; then
+      serve=0
+    else
+      serve=1
+    fi
+  fi
+}
+
+run_install_wizard() {
+  local keep_approvals start_after default_workspace
+  echo "Orkestr installer"
+  echo "Press Enter to accept the suggested value."
+  prompt_default host "Bind host" "$host"
+  prompt_default port "Bind port" "$port"
+  default_workspace="$workspace_dir"
+  prompt_default data_dir "Data directory" "$data_dir"
+  if [ "$workspace_dir" = "$default_workspace" ] && [ "$systemd" -ne 1 ]; then
+    workspace_dir="$data_dir/workspaces"
+  fi
+  prompt_default workspace_dir "Workspace directory" "$workspace_dir"
+  prompt_yes_no keep_approvals "Keep Codex approval prompts enabled" "1"
+  if [ "$keep_approvals" = "1" ]; then
+    ORKESTR_CODEX_SANDBOX="${ORKESTR_CODEX_SANDBOX:-workspace-write}"
+    ORKESTR_CODEX_APPROVAL_POLICY="${ORKESTR_CODEX_APPROVAL_POLICY:-on-request}"
+    ORKESTR_RUNTIME_CODEX_COMMAND="${ORKESTR_RUNTIME_CODEX_COMMAND:-codex --sandbox workspace-write --ask-for-approval on-request --no-alt-screen}"
+  else
+    ORKESTR_CODEX_SANDBOX="${ORKESTR_CODEX_SANDBOX:-danger-full-access}"
+    ORKESTR_CODEX_APPROVAL_POLICY="${ORKESTR_CODEX_APPROVAL_POLICY:-never}"
+    ORKESTR_RUNTIME_CODEX_COMMAND="${ORKESTR_RUNTIME_CODEX_COMMAND:-codex --dangerously-bypass-approvals-and-sandbox}"
+  fi
+  if [ "$systemd" -ne 1 ]; then
+    prompt_yes_no start_after "Start Orkestr after installing" "$serve"
+    serve="$start_after"
+    ORKESTR_START_AFTER_INSTALL="$serve"
+  fi
 }
 
 apt_install() {
@@ -402,7 +581,6 @@ write_env_file() {
 # Edit this file for OpenAI keys, OAuth credentials, Caddy/Tailscale URLs, and private overlay paths.
 ORKESTR_APP_DIR=$repo_dir
 ORKESTR_HOME=$data_dir
-ORKESTR_INSTALL_PROFILE=$install_profile
 ORKESTR_RUNTIME_SETTINGS_FILE=$runtime_settings_file
 ORKESTR_RUN_USER=$run_user
 ORKESTR_HOST=$host
@@ -479,16 +657,20 @@ write_runtime_settings_file() {
   cat > "$runtime_settings_file" <<EOF
 {
   "schemaVersion": 1,
-  "profile": $(json_string "$install_profile"),
   "generatedBy": "scripts/install.sh",
   "updatedAt": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+EOF
+  if [ -n "$install_profile" ]; then
+    printf '  "profile": %s,\n' "$(json_string "$install_profile")" >> "$runtime_settings_file"
+  fi
+  cat >> "$runtime_settings_file" <<EOF
   "codex": {
     "command": $(json_string "$codex_command"),
     "sandbox": $(json_string "$codex_sandbox"),
     "approvalPolicy": $(json_string "$codex_approval"),
-    "bypassApprovalsAndSandbox": $(profile_is_trusted "$install_profile" && echo true || echo false),
+    "bypassApprovalsAndSandbox": $(codex_bypasses_approvals "$codex_command" "$codex_sandbox" "$codex_approval" && echo true || echo false),
     "permissionPrompts": {
-      "mirrorToWhatsApp": $(profile_is_trusted "$install_profile" && echo false || echo true),
+      "mirrorToWhatsApp": $(codex_bypasses_approvals "$codex_command" "$codex_sandbox" "$codex_approval" && echo false || echo true),
       "approveReplies": ["/approve", "approve", "approved", "yes", "y", "allow", "go", "proceed"],
       "denyReplies": ["/deny", "deny", "no", "n", "reject", "stop", "cancel"],
       "alwaysApprove": {
@@ -744,17 +926,33 @@ install_systemd_runtime() {
   fi
 }
 
-if [ "$systemd" -eq 1 ]; then
-  install_dir="${install_dir:-/opt/orkestr/app}"
-  data_dir="${data_dir:-/opt/orkestr/data}"
-  workspace_dir="${workspace_dir:-/opt/orkestr/workspace}"
-  env_file="${env_file:-/etc/orkestr/orkestr.env}"
-  install_profile="${install_profile:-vps-safe}"
-else
-  install_dir="${install_dir:-$HOME/.orkestr-src/orkestr-oss}"
-  data_dir="${data_dir:-$HOME/.orkestr}"
-  workspace_dir="${workspace_dir:-$data_dir/workspaces}"
-  install_profile="${install_profile:-local-safe}"
+if [ "$local_mode" -eq 0 ] && [ "$systemd" -ne 1 ] && in_orkestr_checkout; then
+  local_mode=1
+fi
+
+apply_install_defaults
+
+if [ "$install_config_loaded" -eq 0 ] && [ "$initial_arg_count" -eq 0 ]; then
+  if is_interactive_terminal; then
+    run_install_wizard
+  else
+    cat >&2 <<'EOF'
+Orkestr install needs either an interactive terminal or an unattended config file.
+
+For a normal local setup, run this from a terminal:
+  ./scripts/install.sh
+
+For unattended setup, create ./orkestr.install.env first. Start from:
+  cp orkestr.install.env.example orkestr.install.env
+EOF
+    exit 1
+  fi
+fi
+serve="$(normalize_bool "$serve")"
+if [ "$serve" != "0" ] && [ "$serve" != "1" ]; then
+  echo "Invalid ORKESTR_START_AFTER_INSTALL value: $serve" >&2
+  echo "Use 1/0, yes/no, true/false, or on/off." >&2
+  exit 2
 fi
 
 install_system_packages

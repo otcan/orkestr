@@ -66,7 +66,7 @@ The public connector surface contains generic setup and routing code. Real crede
 
 ## Web Routes
 
-- `/setup` opens first-run onboarding.
+- `/setup` opens the setup dashboard for secure access, accounts, runtimes, and connectors.
 - `/thread/:id` opens a thread.
 - `/ops` opens system tools.
 - Legacy `/ng/*` paths are accepted for compatibility while public docs use clean paths.
