@@ -2712,7 +2712,7 @@ test("whatsapp codex mode deferral raises a connector delivery signal", async ()
   }
 });
 
-test("runtime wake does not restore stale persisted Codex plan mode", async () => {
+test("runtime wake corrects stale persisted Codex plan mode from live pane mode", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-codex-mode-restore-"));
   const fakeTmux = await createFakeTmux(home);
   const captureFile = path.join(home, "pane.txt");
@@ -2763,9 +2763,9 @@ test("runtime wake does not restore stale persisted Codex plan mode", async () =
     status = await runtimeStatus("codex-mode-restore-thread", env);
     const log = await fs.readFile(fakeTmux.log, "utf8");
 
-    assert.equal(thread.codexMode, "plan");
+    assert.equal(thread.codexMode, "code");
     assert.equal(thread.desiredCodexMode, null);
-    assert.notEqual(thread.codexModeSource, "orkestr-wake-restore");
+    assert.equal(thread.codexModeSource, "runtime-pane");
     assert.equal(status.codexMode, "code");
     assert.doesNotMatch(log, /__CALL__\tsend-keys\t-t\t%42\tBTab/);
   } finally {
