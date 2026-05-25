@@ -688,15 +688,18 @@ export async function runtimeStatus(threadId, env = process.env, messagesOverrid
   const needsResumeDirectoryConfirmation = paneResumeDirectoryPrompt(paneText);
   const codexUpdatePromptChoice = paneCodexUpdatePromptChoice(paneText);
   const needsCodexUpdatePromptSkip = Boolean(codexUpdatePromptChoice);
+  const frozen = progressSample?.frozen === true || progressSample?.stateHint === "frozen";
   const backgroundWork = paneBackgroundWork(paneText) || progressSample?.backgroundWork === true;
-  const foregroundWorking = paneWorking(paneText) && !backgroundWork;
+  const foregroundWorking = !frozen && paneWorking(paneText) && !backgroundWork;
   const promptReadyCandidate = panePromptReady(paneText);
-  const working = foregroundWorking || backgroundWork || (!promptReadyCandidate && runningCount > 0);
+  const working = !frozen && (foregroundWorking || backgroundWork || (!promptReadyCandidate && runningCount > 0));
   const promptReady = promptReadyCandidate && !foregroundWorking && !needsResumeDirectoryConfirmation && !needsCodexUpdatePromptSkip;
   const recentlyStarted = Date.now() - (Date.parse(lease.startedAt || "") || Date.now()) < 20_000;
-  const state = working
-    ? "working"
-    : needsResumeDirectoryConfirmation || needsCodexUpdatePromptSkip
+  const state = frozen
+    ? "frozen"
+    : working
+      ? "working"
+      : needsResumeDirectoryConfirmation || needsCodexUpdatePromptSkip
       ? "waking"
       : promptReady
         ? "ready"
@@ -714,6 +717,7 @@ export async function runtimeStatus(threadId, env = process.env, messagesOverrid
     needsResumeDirectoryConfirmation,
     needsCodexUpdatePromptSkip,
     codexUpdatePromptChoice,
+    frozen,
     working,
     foregroundWorking,
     typingActive: foregroundWorking,
