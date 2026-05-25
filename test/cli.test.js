@@ -163,7 +163,7 @@ test("CLI prints non-secret runtime settings from local state", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-cli-settings-"));
   const stdout = capture();
   const env = { ORKESTR_HOME: home };
-  await writeRuntimeSettings({ profile: "local-safe", desktops: { gmailAuth: "gmail" } }, env);
+  await writeRuntimeSettings({ desktops: { gmailAuth: "gmail" } }, env);
 
   const code = await runCli(["settings", "--json"], {
     env,
@@ -173,7 +173,7 @@ test("CLI prints non-secret runtime settings from local state", async () => {
   const payload = JSON.parse(stdout.text());
 
   assert.equal(code, 0);
-  assert.equal(payload.settings.profile, "local-safe");
+  assert.equal(payload.settings.profile, undefined);
   assert.equal(payload.settings.desktops.gmailAuth, "gmail");
   assert.equal(payload.settings.codex.permissionPrompts.alwaysApprove.requiresExplicitScope, true);
 });

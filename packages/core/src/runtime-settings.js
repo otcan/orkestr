@@ -31,18 +31,24 @@ function commandBypassesApprovals(command) {
   return clean(command).includes("--dangerously-bypass-approvals-and-sandbox");
 }
 
-function defaultProfile(env = process.env) {
-  return firstValue(env.ORKESTR_INSTALL_PROFILE, env.ORKESTR_SETUP_PROFILE, env.ORKESTR_PROFILE) ||
-    (commandBypassesApprovals(env.ORKESTR_RUNTIME_CODEX_COMMAND) ? "local-trusted" : "local-safe");
+function legacyProfile(env = process.env) {
+  return firstValue(env.ORKESTR_INSTALL_PROFILE, env.ORKESTR_SETUP_PROFILE, env.ORKESTR_PROFILE);
+}
+
+function profileBypassesApprovals(profile = "") {
+  return ["local-trusted", "vps-trusted", "trusted"].includes(clean(profile).toLowerCase());
 }
 
 function defaultCodexSettings(env = process.env) {
   const command = clean(env.ORKESTR_RUNTIME_CODEX_COMMAND);
-  const yolo = commandBypassesApprovals(command);
+  const legacyYolo = commandBypassesApprovals(command) || profileBypassesApprovals(legacyProfile(env));
+  const sandbox = firstValue(env.ORKESTR_CODEX_SANDBOX, commandFlagValue(command, "--sandbox")) || (legacyYolo ? "danger-full-access" : "workspace-write");
+  const approvalPolicy = firstValue(env.ORKESTR_CODEX_APPROVAL_POLICY, commandFlagValue(command, "--ask-for-approval")) || (legacyYolo ? "never" : "on-request");
+  const yolo = legacyYolo || (sandbox === "danger-full-access" && approvalPolicy === "never");
   return {
     command,
-    sandbox: firstValue(env.ORKESTR_CODEX_SANDBOX, commandFlagValue(command, "--sandbox")) || (yolo ? "danger-full-access" : "workspace-write"),
-    approvalPolicy: firstValue(env.ORKESTR_CODEX_APPROVAL_POLICY, commandFlagValue(command, "--ask-for-approval")) || (yolo ? "never" : "on-request"),
+    sandbox,
+    approvalPolicy,
     bypassApprovalsAndSandbox: yolo,
     permissionPrompts: {
       mirrorToWhatsApp: !yolo,
@@ -129,7 +135,6 @@ function deepMerge(base, patch) {
 export function defaultRuntimeSettings(env = process.env) {
   return {
     schemaVersion: 1,
-    profile: defaultProfile(env),
     generatedBy: "orkestr",
     codex: defaultCodexSettings(env),
     desktops: defaultDesktopSettings(env),

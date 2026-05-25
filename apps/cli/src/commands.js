@@ -585,7 +585,6 @@ function formatSettings(settings = {}) {
   const desktops = settings.desktops || {};
   const connectors = settings.connectors || {};
   return [
-    `Profile: ${settings.profile || "-"}`,
     `Codex: sandbox=${codex.sandbox || "-"} approval=${codex.approvalPolicy || "-"} yolo=${codex.bypassApprovalsAndSandbox ? "yes" : "no"}`,
     `Desktops: mode=${desktops.mode || "-"} default=${desktops.default || "-"} gmail=${desktops.gmailAuth || "-"} manual=${desktops.manualIntervention || "-"}`,
     `WhatsApp: ${connectors.whatsapp?.bridgeMode || "-"} sender=${connectors.whatsapp?.senderRole || "sender"} responder=${connectors.whatsapp?.responderRole || "responder"}`,

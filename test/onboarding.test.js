@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import test from "node:test";
 
 const onboardingSources = [
+  "apps/web/src/app/app.component.ts",
   "apps/web/src/app/onboarding-page.component.ts",
   "apps/web/src/app/onboarding-page.component.html",
 ];
@@ -47,7 +48,8 @@ test("onboarding focuses the starter setup on virtual desktop and WhatsApp", asy
   assert.ok(onboarding.includes("Bind WhatsApp chat"));
   assert.ok(onboarding.includes("Send test message"));
   assert.ok(onboarding.includes('type SetupPageMode = "setup" | "onboarding"'));
-  assert.ok(onboarding.includes("Setup stays available after onboarding"));
+  assert.ok(onboarding.includes("after the installer has prepared the local Orkestr runtime"));
+  assert.ok(onboarding.includes('replaceState({}, "", "/setup")'));
   assert.ok(onboarding.includes("@if (isOnboardingMode())"));
   assert.ok(onboarding.includes("setupSections()"));
   assert.ok(onboarding.includes('type MarketingStep = "google-marketing"'));

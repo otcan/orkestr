@@ -55,7 +55,7 @@ Dropbox and other file-source bindings are not shipped as public OSS V1 connecto
 
 Orkestr has two supported setup paths:
 
-- **Local or beginner setup:** use the local installer from a checkout. A meaningful local setup includes Codex and WhatsApp; `local-safe` keeps Codex approvals on and mirrors permission prompts through Orkestr/WhatsApp.
+- **Local or beginner setup:** use the installer from a checkout. A meaningful local setup includes Codex and WhatsApp; the default Codex settings keep approvals on and mirror permission prompts through Orkestr/WhatsApp.
 - **VPS setup:** use the host-native systemd installer. This is the right shape for a real server because Caddy, Tailscale, browser desktops, service logs, and pairing approval are host-level operations.
 
 ### Local Host-Native
@@ -63,7 +63,7 @@ Orkestr has two supported setup paths:
 ```bash
 git clone https://github.com/otcan/orkestr.git
 cd orkestr
-./scripts/install.sh --local --serve
+./scripts/install.sh
 ```
 
 Then open:
@@ -72,7 +72,8 @@ Then open:
 http://127.0.0.1:19812/setup
 ```
 
-In setup, choose what to add first, then connect the required accounts. For
+The installer prepares the local runtime and starts Orkestr. In setup, connect
+the required accounts. For
 Codex, use **Open Codex sign-in** for device authorization or **Connect Codex
 with API key** when this runtime should authenticate Codex that way. Orkestr
 checks `codex login status` before starting a coding thread, so a raw Codex
@@ -86,8 +87,10 @@ in. The local installer writes `$ORKESTR_HOME/orkestr.env`; source that file
 before manual `npm start` runs so the same safe runtime settings are used.
 Use `.env` or the setup UI for optional OpenAI direct API access,
 Tailscale/Caddy settings, OAuth credentials, workspace roots, or overlay
-settings. If you upload or paste an `.env` during setup, Orkestr reads that
-file as runtime configuration and stores it with the same local runtime state.
+settings. For unattended installs, copy `orkestr.install.env.example` to
+`orkestr.install.env` before running the installer. If you upload or paste an
+`.env` during setup, Orkestr reads that file as runtime configuration and
+stores it with the same local runtime state.
 
 ### VPS Host-Native
 
@@ -155,15 +158,16 @@ prepared:
 curl -fsSL https://raw.githubusercontent.com/otcan/orkestr/main/scripts/install.sh | sudo bash -s -- --systemd
 ```
 
-By default the installer writes a safe profile: `local-safe` for local installs
-and `vps-safe` for systemd installs. Safe profiles start Codex with
-`--sandbox workspace-write --ask-for-approval on-request --no-alt-screen` so
-permission requests can be surfaced in the UI and WhatsApp. Trusted profiles are
-explicit:
+By default the installer writes explicit conservative Codex runtime settings:
+`ORKESTR_CODEX_SANDBOX=workspace-write`,
+`ORKESTR_CODEX_APPROVAL_POLICY=on-request`, and
+`ORKESTR_RUNTIME_CODEX_COMMAND="codex --sandbox workspace-write --ask-for-approval on-request --no-alt-screen"`.
+That lets permission requests surface in the UI and WhatsApp. For unattended
+installs, copy and edit the install config:
 
 ```bash
-scripts/install.sh --local --profile local-trusted
-sudo scripts/install.sh --systemd --profile vps-trusted
+cp orkestr.install.env.example orkestr.install.env
+./scripts/install.sh
 ```
 
 The installer also writes a non-secret runtime settings contract at
@@ -286,7 +290,7 @@ Local clone flow:
 ```bash
 git clone https://github.com/otcan/orkestr.git
 cd orkestr
-./scripts/install.sh --local --serve
+./scripts/install.sh
 ```
 
 Then open:

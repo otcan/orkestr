@@ -557,7 +557,7 @@ export class OnboardingPageComponent implements OnInit, OnChanges, OnDestroy {
 
   pageSummary(): string {
     return this.isSetupMode()
-      ? "Setup stays available after onboarding so you can check secure access, accounts, runtimes, and connectors at any time."
+      ? "Check secure access, accounts, runtimes, and connectors after the installer has prepared the local Orkestr runtime."
       : "Orkestr runs persistent Codex threads, workspaces, WhatsApp, mail, timers, and managed browser desktops on infrastructure you control.";
   }
 

@@ -60,7 +60,7 @@ server directly under the host keeps those operations plain.
 
 Use these paths for different kinds of work:
 
-- Trying Orkestr locally: `scripts/install.sh --local --serve`.
+- Trying Orkestr locally: `scripts/install.sh`.
 - Running a real personal VPS: `scripts/bootstrap-vps.sh`.
 - Installing on a host you already prepared: `scripts/install.sh --systemd`.
 - Updating a VPS: `orkestr-update` or `orkestr update`.
