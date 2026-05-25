@@ -117,11 +117,11 @@ export async function getConnectorStatuses({ env = process.env, home = os.homedi
 
   const connectors = {
     openai: openaiKey
-      ? status("openai", "OpenAI", "connected", "OpenAI key is configured locally.")
-      : status("openai", "OpenAI", "not_connected", "Add an OpenAI API key or connect Codex auth."),
+      ? status("openai", "OpenAI API", "connected", "OpenAI API key is configured for direct API connectors and skills.")
+      : status("openai", "OpenAI API", "not_connected", "Optional for coding agents. Add an OpenAI API key only for connectors or skills that call OpenAI directly."),
     codex:
       codex.command && codexAuth?.connected
-        ? status("codex", "Codex", "connected", "Codex runtime is installed and signed in.", {
+        ? status("codex", "Codex Agent", "connected", "Codex Agent runtime is installed and signed in.", {
             command: codex.command,
             version: codex.version,
             codexHome,
@@ -129,7 +129,7 @@ export async function getConnectorStatuses({ env = process.env, home = os.homedi
             statusText: codexAuth.statusText,
           })
         : codex.command
-          ? status("codex", "Codex", "partial", codexEnvKey ? "OpenAI key is configured, but Codex CLI is not logged in yet. Connect Codex from this setup page." : "Codex runtime is installed. Sign in from this setup page.", {
+          ? status("codex", "Codex Agent", "partial", codexEnvKey ? "OpenAI API key exists, but Codex Agent is not signed in yet. Connect Codex here before creating coding agents." : "Codex Agent runtime is installed. Sign in here before creating coding agents.", {
               command: codex.command,
               version: codex.version,
               codexHome,
@@ -137,9 +137,9 @@ export async function getConnectorStatuses({ env = process.env, home = os.homedi
               statusText: codexAuth?.statusText || "",
               openaiKeyConfigured: codexEnvKey,
             })
-          : status("codex", "Codex", "not_connected", codex.disabled
+          : status("codex", "Codex Agent", "not_connected", codex.disabled
             ? "Codex host binary is disabled for this macOS local install. Verify Codex manually, then rerun the installer with ORKESTR_ENABLE_HOST_CODEX=1."
-            : "Codex runtime is missing. Install Codex in the Orkestr runtime.", {
+            : "Codex Agent runtime is missing. Install Codex in the Orkestr runtime.", {
               codexHome,
               disabled: Boolean(codex.disabled),
               reason: codex.disabled ? "codex_disabled_on_macos" : "codex_missing",

@@ -1,7 +1,7 @@
 import { Component, EventEmitter, Input, Output, inject } from "@angular/core";
 import { FormsModule } from "@angular/forms";
 import { firstValueFrom } from "rxjs";
-import { ApiService, ThreadSummary } from "./api.service";
+import { ApiService, ConnectorStatus, SetupStatus, ThreadSummary } from "./api.service";
 
 type WizardStepId = "name" | "repository" | "review";
 
@@ -14,8 +14,10 @@ export class FirstThreadWizardComponent {
   private readonly api = inject(ApiService);
 
   @Input() canCancel = true;
+  @Input() setupStatus: SetupStatus | null = null;
   @Output() cancel = new EventEmitter<void>();
   @Output() created = new EventEmitter<ThreadSummary>();
+  @Output() setupRequested = new EventEmitter<"codex">();
 
   readonly steps: Array<{ id: WizardStepId; label: string }> = [
     { id: "name", label: "Name" },
@@ -71,7 +73,7 @@ export class FirstThreadWizardComponent {
   }
 
   canCreate(): boolean {
-    return Boolean(this.agentName() && !this.busy);
+    return Boolean(this.agentName() && !this.busy && !this.codexBlocked());
   }
 
   agentName(): string {
@@ -90,6 +92,30 @@ export class FirstThreadWizardComponent {
     return this.usesRemoteRepo() ? "Clone Git repository" : "New local git repository";
   }
 
+  codexConnector(): ConnectorStatus | null {
+    return this.setupStatus?.connectors?.find((connector) => connector.id === "codex") || null;
+  }
+
+  codexReady(): boolean {
+    return this.codexConnector()?.state === "connected";
+  }
+
+  codexBlocked(): boolean {
+    return Boolean(this.setupStatus && !this.codexReady());
+  }
+
+  codexStateLabel(): string {
+    return String(this.codexConnector()?.state || "checking").replace(/_/g, " ");
+  }
+
+  codexSummary(): string {
+    return this.codexConnector()?.summary || "Checking Codex runtime status.";
+  }
+
+  openCodexSetup(): void {
+    this.setupRequested.emit("codex");
+  }
+
   generatedWorkspaceName(): string {
     const name = this.agentName();
     if (!name) return "generated automatically";
@@ -105,10 +131,18 @@ export class FirstThreadWizardComponent {
     this.busy = true;
     this.error = "";
     try {
+      if (!this.codexReady()) {
+        const setup = await firstValueFrom(this.api.setupStatus());
+        this.setupStatus = setup;
+        if (!this.codexReady()) {
+          this.error = "Connect Codex runtime before creating a coding agent. Open Setup -> Codex Agent and sign in.";
+          return;
+        }
+      }
       const name = this.agentName();
       const repoUrl = this.repoUrlValue();
       const cloneRepo = Boolean(repoUrl);
-      this.creationStage = cloneRepo ? "Cloning repo" : "Initializing local git repo";
+      this.creationStage = cloneRepo ? "Cloning repo" : "Creating local git repo";
       const response = await firstValueFrom(this.api.createThread({
         id: this.generatedWorkspaceName(),
         name,
@@ -121,11 +155,11 @@ export class FirstThreadWizardComponent {
         initGit: !cloneRepo,
         repoRemoteUrl: repoUrl,
         cloneRepo,
+        wake: true,
+        reason: "first_thread_created",
       }));
       const thread = response.thread;
-      this.creationStage = "Starting Codex";
-      await firstValueFrom(this.api.wakeThread(thread.id));
-      this.creationStage = "Agent ready";
+      this.creationStage = "Starting Codex in background";
       this.created.emit(thread);
     } catch (error) {
       this.error = this.errorText(error);

@@ -133,12 +133,12 @@ cd orkestr
 ./scripts/install.sh --local
 ```
 
-In setup, connect the required accounts. For
-Codex, use **Open Codex sign-in** for device authorization or **Connect Codex
-with API key** when this runtime should authenticate Codex that way. Orkestr
-checks `codex login status` before starting a coding thread, so a raw Codex
-login menu is treated as setup work instead of being opened inside the agent
-runtime. Runtime state, including Codex auth, is stored under `ORKESTR_HOME`.
+In setup, connect **Codex Agent** before creating coding agents. Use **Open
+Codex sign-in** for device authorization or **Connect Codex with API key** when
+this runtime should authenticate Codex that way. Orkestr checks `codex login
+status` before starting a coding thread, so a raw Codex login menu is treated
+as setup work instead of being opened inside the agent runtime. Runtime state,
+including Codex auth, is stored under `ORKESTR_HOME`.
 On macOS local installs, the installer does not probe or run the host `codex`
 binary by default because Gatekeeper/XProtect can block npm-distributed native
 binaries. Verify `codex --version` and `codex login status` yourself, then rerun
@@ -150,9 +150,11 @@ launchd/systemd can find tools such as `tmux` and Homebrew-installed binaries.
 The one-line script also detaches itself from the `curl | bash` pipe before
 running Homebrew or prompts, so dependency installers cannot consume the rest of
 the script from stdin.
-Use `.env` or the setup UI for optional OpenAI direct API access,
-Tailscale/Caddy settings, OAuth credentials, workspace roots, or overlay
-settings. For configured installs, pass `--config orkestr.install.json`.
+Use `.env` or the setup UI for optional OpenAI API access, Tailscale/Caddy
+settings, OAuth credentials, workspace roots, or overlay settings. The OpenAI
+API key is not required for the default Codex Agent path; it is for connectors
+or skills that call OpenAI directly. For configured installs, pass `--config
+orkestr.install.json`.
 If you upload or paste an
 `.env` during setup, Orkestr reads that file as runtime configuration and
 stores it with the same local runtime state.

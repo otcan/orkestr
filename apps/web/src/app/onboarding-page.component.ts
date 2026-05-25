@@ -111,8 +111,8 @@ export class OnboardingPageComponent implements OnInit, OnChanges, OnDestroy {
   ];
 
   readonly connectorSteps: Array<{ id: ConnectorStep; label: string; eyebrow: string }> = [
-    { id: "openai", label: "OpenAI", eyebrow: "Model access" },
-    { id: "codex", label: "Codex", eyebrow: "Local agent" },
+    { id: "openai", label: "OpenAI API", eyebrow: "Optional API" },
+    { id: "codex", label: "Codex Agent", eyebrow: "Required runtime" },
     { id: "gmail", label: "Mail", eyebrow: "Inbox" },
     { id: "linkedin", label: "LinkedIn", eyebrow: "Browser" },
     { id: "whatsapp", label: "WhatsApp", eyebrow: "Messages" },
@@ -535,12 +535,17 @@ export class OnboardingPageComponent implements OnInit, OnChanges, OnDestroy {
     if (id === "security") return this.securityDone();
     if (id === "finish") return this.goalRequiredSteps().every((step) => this.stepDone(step));
     if (id === "gmail") return this.mailDone();
+    if (id === "codex") return this.agentRuntimeReady();
     const state = this.connector(id)?.state;
     return state === "connected" || state === "partial";
   }
 
   setupReady(): boolean {
     return this.setup?.setupState === "ready";
+  }
+
+  agentRuntimeReady(): boolean {
+    return this.connector("codex")?.state === "connected";
   }
 
   isSetupMode(): boolean {
@@ -574,7 +579,7 @@ export class OnboardingPageComponent implements OnInit, OnChanges, OnDestroy {
   }
 
   closeLabel(): string {
-    return this.isSetupMode() ? "Back to cockpit" : "Skip to cockpit";
+    return this.isSetupMode() ? "Back to cockpit" : "Open cockpit";
   }
 
   activeStepIndex(): number {
@@ -657,7 +662,7 @@ export class OnboardingPageComponent implements OnInit, OnChanges, OnDestroy {
         className: this.setup?.home ? "ready" : "idle",
       },
       {
-        label: "Codex runtime",
+        label: "Codex agent runtime",
         state: this.stateLabel("codex"),
         summary: this.connector("codex")?.summary || "Checking Codex",
         className: this.stateClass("codex"),
@@ -1077,8 +1082,12 @@ export class OnboardingPageComponent implements OnInit, OnChanges, OnDestroy {
       this.skip.emit();
       return;
     }
-    if (this.setupReady()) this.complete.emit();
-    else this.skip.emit();
+    if (!this.agentRuntimeReady()) {
+      this.error = "Connect Codex Agent before opening the cockpit. OpenAI API is optional for coding agents.";
+      this.selectStep("codex");
+      return;
+    }
+    this.complete.emit();
   }
 
   private async saveConnector(id: string, body: Record<string, string>, message: string): Promise<void> {

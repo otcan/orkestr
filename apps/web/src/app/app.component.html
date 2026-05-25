@@ -219,8 +219,10 @@
       <ork-first-thread-wizard
         class="first-thread-host"
         [canCancel]="threads.length > 0"
+        [setupStatus]="setupStatus"
         (cancel)="closeThreadWizard()"
         (created)="handleThreadWizardCreated($event)"
+        (setupRequested)="openSetup($event, true)"
       ></ork-first-thread-wizard>
     } @else if (selectedThread(); as thread) {
       <header class="chat-head">

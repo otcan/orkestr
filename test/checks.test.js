@@ -41,7 +41,7 @@ test("Codex reports partial when the runtime key exists but Codex is not logged 
     assert.equal(codex.state, "partial");
     assert.equal(codex.details.authMode, null);
     assert.equal(codex.details.openaiKeyConfigured, true);
-    assert.match(codex.summary, /not logged in yet/);
+    assert.match(codex.summary, /not signed in yet/);
   } finally {
     if (priorPath === undefined) delete process.env.PATH;
     else process.env.PATH = priorPath;

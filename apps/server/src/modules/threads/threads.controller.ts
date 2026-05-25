@@ -424,7 +424,11 @@ export class ThreadsController {
   @Post()
   async create(@Body() body: Record<string, unknown> = {}) {
     const prepared = await prepareThreadCreateBody(body);
-    return { thread: await createThread({ wakePolicy: "wake-on-message", ...prepared }) };
+    const thread = await createThread({ wakePolicy: "wake-on-message", ...prepared });
+    if (body.wake === true || body.start === true) {
+      requestThreadWake(thread.id, { reason: body.reason || "thread_created" });
+    }
+    return { thread };
   }
 
   @Get(":threadId/workers")

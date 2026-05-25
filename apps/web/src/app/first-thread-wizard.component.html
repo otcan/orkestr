@@ -33,6 +33,14 @@
     <div class="notice error">{{ error }}</div>
   }
 
+  @if (codexBlocked()) {
+    <div class="notice error">
+      <strong>Codex runtime required.</strong>
+      <span>{{ codexSummary() }}</span>
+      <button class="secondary" type="button" (click)="openCodexSetup()" [disabled]="busy">Open Codex setup</button>
+    </div>
+  }
+
   @if (creationStage) {
     <div class="wizard-stage">
       <span></span>
@@ -98,7 +106,7 @@
         <dt>Workspace</dt>
         <dd>Generated automatically as {{ generatedWorkspaceName() }}</dd>
         <dt>Runtime</dt>
-        <dd>Codex</dd>
+        <dd>Codex Agent · {{ codexStateLabel() }}</dd>
       </dl>
     }
 

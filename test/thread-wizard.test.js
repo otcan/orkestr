@@ -40,8 +40,13 @@ test("main UI exposes a guided first thread generation flow", async () => {
   assert.ok(sources.includes('type WizardStepId = "name" | "repository" | "review"'));
   assert.ok(sources.includes("repoRemoteUrl"));
   assert.ok(sources.includes("cloneRepo"));
+  assert.ok(sources.includes("Codex runtime required."));
+  assert.ok(sources.includes("Open Codex setup"));
+  assert.ok(sources.includes("setupRequested"));
+  assert.ok(sources.includes("[setupStatus]=\"setupStatus\""));
   assert.ok(sources.includes("this.api.createThread"));
-  assert.ok(sources.includes("this.api.wakeThread"));
+  assert.ok(sources.includes("wake: true"));
+  assert.ok(sources.includes("requestThreadWake(thread.id"));
   assert.ok(sources.includes('Post("codex/api-key")'));
   assert.ok(sources.includes("git\", [\"clone\""));
   assert.ok(sources.includes("git\", [\"init\""));
@@ -81,6 +86,7 @@ test("main UI exposes a guided first thread generation flow", async () => {
   assert.ok(!sources.includes(`(click)="openPanel('runtime')">Runtime</button>`));
   assert.ok(!sources.includes(`<button class="secondary" type="button" [class.active]="activePanel === 'raw'" (click)="openPanel('raw')">Raw</button>`));
   assert.ok(!wizardSources.includes("this.api.sendThreadInput"));
+  assert.ok(!wizardSources.includes("this.api.wakeThread"));
 });
 
 test("web thread input allows Orkestr control commands", async () => {

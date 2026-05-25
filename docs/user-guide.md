@@ -184,8 +184,9 @@ Do not publish a raw Orkestr API or terminal stream directly to the internet.
 2. Open `/setup`.
 3. Review Connections.
 4. Configure secure access if the URL is remote.
-5. Connect Codex; OpenAI direct API access is optional for connectors or skills
-   that need it.
+5. Connect Codex Agent. OpenAI API access is optional for connectors or skills
+   that call OpenAI directly; it is not required for the default coding-agent
+   path.
 6. Pair WhatsApp if you want chat-driven agents.
 7. Connect Gmail or prepare browser profiles if needed.
 8. Create a coding agent.

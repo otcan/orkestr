@@ -35,7 +35,11 @@ test("onboarding focuses the starter setup on virtual desktop and WhatsApp", asy
   assert.ok(onboarding.includes("Connections"));
   assert.ok(onboarding.includes("Review runtime items that need attention"));
   assert.ok(onboarding.includes("Operational auth surfaces have their own setup sections"));
-  assert.ok(onboarding.includes("Codex CLI login"));
+  assert.ok(onboarding.includes("Codex Agent"));
+  assert.ok(onboarding.includes("Required runtime"));
+  assert.ok(onboarding.includes("OpenAI API"));
+  assert.ok(onboarding.includes("Optional API"));
+  assert.ok(onboarding.includes("Connect Codex Agent before opening the cockpit"));
   assert.ok(onboarding.includes("Agents should acquire Orkestr desktop leases"));
   assert.ok(onboarding.includes("Codex from WhatsApp"));
   assert.ok(onboarding.includes("Managed browser desktop"));
@@ -43,6 +47,7 @@ test("onboarding focuses the starter setup on virtual desktop and WhatsApp", asy
   assert.ok(onboarding.includes("Open Codex sign-in"));
   assert.ok(onboarding.includes("Connect Codex with API key"));
   assert.ok(onboarding.includes("loginCodexWithApiKey"));
+  assert.ok(onboarding.includes("agentRuntimeReady()"));
   assert.ok(onboarding.includes('id: "virtual-desktop"'));
   assert.ok(onboarding.includes("Create first thread"));
   assert.ok(onboarding.includes("Bind WhatsApp chat"));
