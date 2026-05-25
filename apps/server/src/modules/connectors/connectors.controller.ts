@@ -29,6 +29,7 @@ import {
   listLocalWhatsAppChats,
   logoutLocalWhatsAppAccount,
   promoteLocalWhatsAppGroupParticipants,
+  sendLocalWhatsAppMessage,
   sendLocalWhatsAppText,
   startLocalWhatsAppAccount,
 } from "../../../../../packages/connectors/src/whatsapp-local-bridge.js";
@@ -246,6 +247,20 @@ export class ConnectorsController {
       chatId: String(body.to || body.chatId || ""),
       text: String(body.text || ""),
       accountId: String(body.accountId || ""),
+    });
+  }
+
+  @Post("whatsapp/bridge/send-media")
+  @HttpCode(200)
+  async whatsappBridgeSendMedia(@Body() body: Record<string, unknown> = {}) {
+    const paths = Array.isArray(body.paths)
+      ? body.paths.map((value) => String(value || "").trim()).filter(Boolean)
+      : [String(body.path || "").trim()].filter(Boolean);
+    return sendLocalWhatsAppMessage({
+      chatId: String(body.to || body.chatId || ""),
+      text: String(body.text || ""),
+      accountId: String(body.accountId || ""),
+      attachments: paths.map((filePath) => ({ path: filePath })),
     });
   }
 

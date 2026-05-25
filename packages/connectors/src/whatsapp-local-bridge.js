@@ -1180,7 +1180,10 @@ export async function promoteLocalWhatsAppGroupParticipants({ accountId = "", ch
   return { ok: true, accountId: normalized, chatId: id, participantIds: participants, result };
 }
 
-export async function sendLocalWhatsAppText({ chatId = "", text = "", accountId = "", env = process.env } = {}) {
+/**
+ * @param {{ chatId?: string, text?: string, accountId?: string, attachments?: Array<Record<string, unknown>>, env?: Record<string, string | undefined> }} [options]
+ */
+export async function sendLocalWhatsAppMessage({ chatId = "", text = "", accountId = "", attachments = [], env = process.env } = {}) {
   const selectedAccountId = accountId
     ? normalizeAccountId(accountId, env)
     : localWhatsAppAccountIdsForEnv(env).find((id) => accountStates.get(id)?.ready);
@@ -1192,12 +1195,56 @@ export async function sendLocalWhatsAppText({ chatId = "", text = "", accountId 
     throw error;
   }
   await stopLocalWhatsAppTyping({ accountId: selectedAccountId, chatId, env }).catch(() => {});
-  rememberOutboundText(selectedAccountId, chatId, text);
-  const message = await runtime.client.sendMessage(chatId, text);
-  rememberOutboundMessageId(message?.id?._serialized);
+  const sent = [];
+  const cleanText = String(text || "");
+  if (cleanText.trim()) {
+    rememberOutboundText(selectedAccountId, chatId, cleanText);
+    const message = await runtime.client.sendMessage(chatId, cleanText);
+    rememberOutboundMessageId(message?.id?._serialized);
+    sent.push({
+      id: String(message?.id?._serialized || ""),
+      kind: "text",
+    });
+  }
+  const normalizedAttachments = Array.isArray(attachments)
+    ? attachments.map((attachment) => ({
+        ...attachment,
+        path: String(attachment?.path || "").trim(),
+      })).filter((attachment) => attachment.path)
+    : [];
+  if (normalizedAttachments.length) {
+    const dependencies = await loadBridgeDependencies();
+    const MessageMedia = dependencies.whatsapp.MessageMedia;
+    for (const attachment of normalizedAttachments) {
+      await fs.access(attachment.path);
+      const media = MessageMedia.fromFilePath(attachment.path);
+      const message = await runtime.client.sendMessage(chatId, media, {
+        sendMediaAsDocument: true,
+      });
+      rememberOutboundMessageId(message?.id?._serialized);
+      sent.push({
+        id: String(message?.id?._serialized || ""),
+        kind: "attachment",
+        path: attachment.path,
+        filename: attachment.filename || path.basename(attachment.path),
+        mimetype: attachment.mimetype || "",
+      });
+    }
+  }
+  if (!sent.length) {
+    const error = new Error("whatsapp_message_text_or_attachment_required");
+    error.statusCode = 400;
+    throw error;
+  }
   return {
     ok: true,
-    id: String(message?.id?._serialized || ""),
+    id: sent.map((entry) => entry.id).find(Boolean) || "",
+    ids: sent.map((entry) => entry.id).filter(Boolean),
     accountId: selectedAccountId,
+    sent,
   };
+}
+
+export async function sendLocalWhatsAppText(options = {}) {
+  return sendLocalWhatsAppMessage(options);
 }
