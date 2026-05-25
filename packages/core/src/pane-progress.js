@@ -8,6 +8,7 @@ const progressCache = new Map();
 const defaultCaptureLines = 80;
 const defaultTailLines = 20;
 const defaultWorkingAfterPromptMs = 30 * 60 * 1000;
+const defaultFrozenAfterMs = 60 * 1000;
 
 function positiveNumber(value) {
   const parsed = Number(value);
@@ -139,6 +140,15 @@ export function paneWorking(text) {
   return paneWorkingLineStillActiveAfterPrompt(lines[lastWorkingIndex], lines.length - lastWorkingIndex);
 }
 
+export function paneStaleWorkingPrompt(text) {
+  const lines = normalizedLines(text).map((line) => line.trim()).slice(-20);
+  const lastWorkingIndex = lines.findLastIndex(paneWorkingLine);
+  if (lastWorkingIndex < 0) return false;
+  const lastPromptIndex = lines.findLastIndex(panePromptLine);
+  return lastPromptIndex > lastWorkingIndex &&
+    paneWorkingLineStillActiveAfterPrompt(lines[lastWorkingIndex], lines.length - lastWorkingIndex);
+}
+
 export function paneBackgroundWork(text) {
   const lines = normalizedLines(text).map((line) => line.trim()).slice(-20);
   const lastBackgroundIndex = lines.findLastIndex(paneBackgroundTerminalLine);
@@ -162,6 +172,7 @@ function paneHasRecentError(lines) {
 function summaryForProgress({ stateHint, codexMode, planImplementationReady, planImplementationMenuVisible }) {
   if (planImplementationReady || planImplementationMenuVisible) return "Implement plan?";
   if (stateHint === "error") return "Error";
+  if (stateHint === "frozen") return "Frozen";
   if (stateHint === "awaiting_input") return "Waiting for input";
   if (stateHint === "planning" || codexMode === "plan") return "Planning";
   if (stateHint === "working") return "Working";
@@ -181,6 +192,7 @@ export function paneProgressFromText(text, options = {}) {
   const needsCodexUpdatePromptSkip = Boolean(codexUpdatePromptChoice);
   const backgroundWork = paneBackgroundWork(text);
   const working = paneWorking(text) || backgroundWork;
+  const staleWorkingPrompt = paneStaleWorkingPrompt(text);
   const promptReady = !working && panePromptReady(text);
   let stateHint = "unknown";
   if (paneHasRecentError(tailLines)) stateHint = "error";
@@ -203,6 +215,7 @@ export function paneProgressFromText(text, options = {}) {
     promptReady,
     working,
     backgroundWork,
+    staleWorkingPrompt,
     codexMode,
     planImplementationReady,
     planImplementationMenuVisible,
@@ -214,7 +227,7 @@ export function paneProgressFromText(text, options = {}) {
 
 export function publicPaneProgress(progress) {
   if (!progress || typeof progress !== "object") return null;
-  const { paneText, cacheKey, sampledAtMs, cached, ...safe } = progress;
+  const { paneText, cacheKey, sampledAtMs, cached, observedStateHint, observedSummary, ...safe } = progress;
   return safe;
 }
 
@@ -222,7 +235,7 @@ function progressCacheTtlMs(progress, env = process.env) {
   const active = durationMs(env.ORKESTR_PANE_PROGRESS_ACTIVE_MS, 1000);
   const idle = durationMs(env.ORKESTR_PANE_PROGRESS_IDLE_MS, 5000);
   const state = String(progress?.stateHint || "").toLowerCase();
-  if (state === "working" || state === "planning" || state === "awaiting_input") return active;
+  if (state === "working" || state === "planning" || state === "awaiting_input" || state === "frozen") return active;
   return idle;
 }
 
@@ -274,6 +287,7 @@ export async function samplePaneProgress(input = {}, env = process.env) {
   const tailLines = Math.floor(positiveNumber(input.tailLines) || positiveNumber(env.ORKESTR_PANE_PROGRESS_TAIL_LINES) || defaultTailLines);
   const paneText = await capturePane(paneId, captureLines, env);
   const previous = cached || null;
+  const sampledAtMs = Date.now();
   const progress = {
     ...paneProgressFromText(paneText, { tailLines }),
     threadId: input.threadId || null,
@@ -285,9 +299,35 @@ export async function samplePaneProgress(input = {}, env = process.env) {
     awaitingAckCount: Number(input.awaitingAckCount || 0),
     paneText,
     cacheKey,
-    sampledAtMs: Date.now(),
+    sampledAtMs,
   };
-  progress.changed = !previous || previous.tailHash !== progress.tailHash || previous.summary !== progress.summary || previous.stateHint !== progress.stateHint;
+  const observedStateHint = progress.stateHint;
+  const observedSummary = progress.summary;
+  const sameProgress = Boolean(previous) &&
+    previous.tailHash === progress.tailHash &&
+    (previous.observedSummary || previous.summary) === observedSummary &&
+    (previous.observedStateHint || previous.stateHint) === observedStateHint;
+  progress.observedStateHint = observedStateHint;
+  progress.observedSummary = observedSummary;
+  progress.changed = !sameProgress;
+  progress.stableSinceMs = sameProgress
+    ? Number(previous.stableSinceMs || previous.sampledAtMs || sampledAtMs)
+    : sampledAtMs;
+  progress.stableForMs = Math.max(0, sampledAtMs - progress.stableSinceMs);
+  const frozenAfterMs = durationMs(env.ORKESTR_PANE_FROZEN_AFTER_MS, defaultFrozenAfterMs);
+  if (
+    frozenAfterMs > 0 &&
+    progress.stateHint === "working" &&
+    progress.staleWorkingPrompt &&
+    progress.stableForMs >= frozenAfterMs
+  ) {
+    progress.stateHint = "frozen";
+    progress.summary = "Frozen";
+    progress.working = false;
+    progress.frozen = true;
+  } else {
+    progress.frozen = false;
+  }
   progressCache.set(cacheKey, progress);
   return { ...progress, cached: false };
 }

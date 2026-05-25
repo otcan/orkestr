@@ -935,6 +935,59 @@ test("runtime sync persists live Codex code mode over stale stored plan mode", a
   }
 });
 
+test("runtime status identifies a frozen pane without restarting it", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-runtime-frozen-pane-"));
+  const fakeTmux = await createFakeTmux(home);
+  const priorPath = process.env.PATH;
+  const priorTmuxLog = process.env.TMUX_LOG;
+  const priorTmuxState = process.env.TMUX_STATE;
+  const priorTmuxCaptureText = process.env.TMUX_CAPTURE_TEXT;
+  process.env.PATH = `${fakeTmux.bin}:${priorPath || ""}`;
+  process.env.TMUX_LOG = fakeTmux.log;
+  process.env.TMUX_STATE = fakeTmux.state;
+  process.env.TMUX_CAPTURE_TEXT = [
+    "• Edited scripts/install.sh (+10 -3)",
+    "• Working (2m 24s • esc to interrupt)",
+    "› Use /skills to list available skills",
+    "  gpt-5.5 xhigh · /workspace",
+  ].join("\n");
+
+  try {
+    const env = {
+      ORKESTR_HOME: path.join(home, "orkestr-home"),
+      HOME: path.join(home, "runtime-home"),
+      CODEX_HOME: path.join(home, "codex-home"),
+      PATH: process.env.PATH,
+      TMUX_LOG: fakeTmux.log,
+      TMUX_STATE: fakeTmux.state,
+      TMUX_CAPTURE_TEXT: process.env.TMUX_CAPTURE_TEXT,
+      ORKESTR_PANE_PROGRESS_ACTIVE_MS: "0",
+      ORKESTR_PANE_FROZEN_AFTER_MS: "1",
+    };
+    await createThread({ id: "frozen-pane-thread", name: "Frozen Pane Thread" }, env);
+    await wakeThread("frozen-pane-thread", { reason: "test" }, env);
+    await runtimeStatus("frozen-pane-thread", env);
+    await new Promise((resolve) => setTimeout(resolve, 5));
+
+    const status = await runtimeStatus("frozen-pane-thread", env);
+    const log = await fs.readFile(fakeTmux.log, "utf8");
+
+    assert.equal(status.state, "frozen");
+    assert.equal(status.frozen, true);
+    assert.equal(status.working, false);
+    assert.equal(status.progress.stateHint, "frozen");
+    assert.equal(status.progress.summary, "Frozen");
+    assert.equal(status.progress.staleWorkingPrompt, true);
+    assert.doesNotMatch(log, /__CALL__\tkill-session/);
+    assert.doesNotMatch(log, /__CALL__\tsend-keys/);
+  } finally {
+    restoreEnvValue("PATH", priorPath);
+    restoreEnvValue("TMUX_LOG", priorTmuxLog);
+    restoreEnvValue("TMUX_STATE", priorTmuxState);
+    restoreEnvValue("TMUX_CAPTURE_TEXT", priorTmuxCaptureText);
+  }
+});
+
 test("runtime sync does not auto-sleep pending or working runtimes", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-auto-sleep-guards-"));
   const fakeTmux = await createFakeTmux(home);
