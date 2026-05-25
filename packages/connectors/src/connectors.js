@@ -6,7 +6,7 @@ import { promisify } from "node:util";
 import { readConnectorConfig } from "../../storage/src/config.js";
 import { dataPaths } from "../../storage/src/paths.js";
 import { readOverlay } from "../../core/src/overlay.js";
-import { codexLoginStatus, defaultCodexHome } from "./codex.js";
+import { CODEX_DISABLED_ON_MACOS, codexLoginStatus, defaultCodexHome } from "./codex.js";
 import { getWhatsAppStatus } from "./whatsapp.js";
 
 const execFileAsync = promisify(execFile);
@@ -45,6 +45,12 @@ async function firstCommandVersion(commands, args = ["--version"]) {
     if (version) return { command, version };
   }
   return { command: null, version: "" };
+}
+
+function codexBinaryStatus(env = process.env) {
+  const command = String(env.ORKESTR_CODEX_BIN || "codex").trim() || "codex";
+  if (command === CODEX_DISABLED_ON_MACOS) return { command: null, version: "", disabled: true };
+  return null;
 }
 
 function status(id, label, state, summary, details = {}) {
@@ -94,7 +100,7 @@ export async function getConnectorStatuses({ env = process.env, home = os.homedi
   const codexHome = defaultCodexHome(env, home);
   const codexAuthPath = path.join(codexHome, "auth.json");
   const chrome = await firstCommandVersion(["google-chrome", "chrome", "chromium", "chromium-browser"]);
-  const codex = await firstCommandVersion([String(env.ORKESTR_CODEX_BIN || "codex").trim() || "codex"]);
+  const codex = codexBinaryStatus(env) || await firstCommandVersion([String(env.ORKESTR_CODEX_BIN || "codex").trim() || "codex"]);
   const codexAuth = codex.command ? await codexLoginStatus({ env, home, timeoutMs: 2500 }) : null;
   const timersExist = await pathExists(paths.timers);
   const linkedinProfileExists = await pathExists(path.join(paths.browsers, "linkedin"));
@@ -131,8 +137,12 @@ export async function getConnectorStatuses({ env = process.env, home = os.homedi
               statusText: codexAuth?.statusText || "",
               openaiKeyConfigured: codexEnvKey,
             })
-          : status("codex", "Codex", "not_connected", "Codex runtime is missing. Install Codex in the Orkestr runtime.", {
+          : status("codex", "Codex", "not_connected", codex.disabled
+            ? "Codex host binary is disabled for this macOS local install. Verify Codex manually, then rerun the installer with ORKESTR_ENABLE_HOST_CODEX=1."
+            : "Codex runtime is missing. Install Codex in the Orkestr runtime.", {
               codexHome,
+              disabled: Boolean(codex.disabled),
+              reason: codex.disabled ? "codex_disabled_on_macos" : "codex_missing",
             }),
     gmail:
       gmailOAuthExists
