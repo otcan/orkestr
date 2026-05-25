@@ -174,6 +174,11 @@ Do not publish a raw Orkestr API or terminal stream directly to the internet.
 8. Create a coding agent.
 9. Send a first task from the web UI, CLI, or WhatsApp.
 
+On macOS, local installs intentionally avoid probing or launching the host
+`codex` binary until you opt in. If macOS blocks `codex`, verify the binary
+outside Orkestr first with `codex --version` and `codex login status`, then run
+`ORKESTR_ENABLE_HOST_CODEX=1 scripts/install.sh --local --serve`.
+
 ## Typical Workflows
 
 ### Coding Agent From The Web UI

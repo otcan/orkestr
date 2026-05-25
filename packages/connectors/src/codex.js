@@ -6,6 +6,7 @@ import { ensureDataDirs } from "../../storage/src/paths.js";
 
 const deviceAuthTtlMs = 15 * 60 * 1000;
 const authSessions = new Map();
+export const CODEX_DISABLED_ON_MACOS = "__orkestr_codex_disabled_on_macos__";
 
 function nowIso() {
   return new Date().toISOString();
@@ -24,7 +25,8 @@ export function defaultCodexHome(env = process.env, home = os.homedir()) {
 }
 
 export function codexCommand(env = process.env) {
-  return String(env.ORKESTR_CODEX_BIN || "codex").trim() || "codex";
+  const command = String(env.ORKESTR_CODEX_BIN || "codex").trim() || "codex";
+  return command === CODEX_DISABLED_ON_MACOS ? "" : command;
 }
 
 function ensureCodexHome(codexHome) {
@@ -39,6 +41,9 @@ function runCodex(args, { env = process.env, home = os.homedir(), input = "", ti
   const command = codexCommand(env);
   const codexHome = defaultCodexHome(env, home);
   ensureCodexHome(codexHome);
+  if (!command) {
+    return Promise.resolve({ command, codexHome, code: null, signal: null, stdout: "", stderr: "", disabled: true });
+  }
   return new Promise((resolve) => {
     const child = spawn(command, args, {
       env: {
@@ -96,6 +101,7 @@ export async function codexLoginStatus({ env = process.env, home = os.homedir(),
   const result = await runCodex(["login", "status"], { env, home, timeoutMs });
   const output = stripAnsi(`${result.stdout || ""}\n${result.stderr || ""}`).trim();
   const missing = result.error?.code === "ENOENT";
+  const disabled = Boolean(result.disabled);
   const connected = !missing && result.code === 0 && /\blogged\s+in\b/i.test(output) && !/\bnot\s+logged\s+in\b/i.test(output);
   const authMode = connected ? authModeFromStatus(output) : null;
   return {
@@ -105,11 +111,17 @@ export async function codexLoginStatus({ env = process.env, home = os.homedir(),
     codexHome: result.codexHome,
     authMode,
     statusText: output,
-    available: !missing,
+    available: !missing && !disabled,
     timedOut: Boolean(result.timedOut),
     code: result.code,
-    reason: missing ? "codex_missing" : connected ? "logged_in" : result.timedOut ? "status_timeout" : "not_logged_in",
-    message: missing ? "Codex CLI is not installed." : connected ? `Codex is logged in${authMode ? ` using ${authMode}.` : "."}` : output || "Codex is not logged in.",
+    reason: disabled ? "codex_disabled_on_macos" : missing ? "codex_missing" : connected ? "logged_in" : result.timedOut ? "status_timeout" : "not_logged_in",
+    message: disabled
+      ? "Codex host binary is disabled for this macOS local install. Verify Codex manually, then rerun the installer with ORKESTR_ENABLE_HOST_CODEX=1."
+      : missing
+        ? "Codex CLI is not installed."
+        : connected
+          ? `Codex is logged in${authMode ? ` using ${authMode}.` : "."}`
+          : output || "Codex is not logged in.",
   };
 }
 
@@ -122,6 +134,11 @@ export async function loginCodexWithApiKey(apiKey, { env = process.env, home = o
   }
   const result = await runCodex(["login", "--with-api-key"], { env, home, input: key, timeoutMs });
   const output = stripAnsi(`${result.stdout || ""}\n${result.stderr || ""}`).trim();
+  if (result.disabled) {
+    const error = new Error("codex_cli_disabled_on_macos");
+    error.statusCode = 428;
+    throw error;
+  }
   if (result.error?.code === "ENOENT") {
     const error = new Error("codex_cli_missing");
     error.statusCode = 404;
@@ -197,10 +214,15 @@ export async function startCodexDeviceAuth({ env = process.env, home = os.homedi
   await ensureDataDirs(env);
   const codexHome = defaultCodexHome(env, home);
   ensureCodexHome(codexHome);
+  const command = codexCommand(env);
+  if (!command) {
+    const error = new Error("codex_cli_disabled_on_macos");
+    error.statusCode = 428;
+    throw error;
+  }
   const current = activeSession(codexHome);
   if (current) return sessionSnapshot(current);
 
-  const command = codexCommand(env);
   const session = {
     command,
     codexHome,

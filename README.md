@@ -79,6 +79,12 @@ with API key** when this runtime should authenticate Codex that way. Orkestr
 checks `codex login status` before starting a coding thread, so a raw Codex
 login menu is treated as setup work instead of being opened inside the agent
 runtime. Runtime state, including Codex auth, is stored under `ORKESTR_HOME`.
+On macOS local installs, the installer does not probe or run the host `codex`
+binary by default because Gatekeeper/XProtect can block npm-distributed native
+binaries. Verify `codex --version` and `codex login status` yourself, then rerun
+with `ORKESTR_ENABLE_HOST_CODEX=1 ./scripts/install.sh --local --serve` to opt
+in. The local installer writes `$ORKESTR_HOME/orkestr.env`; source that file
+before manual `npm start` runs so the same safe runtime settings are used.
 Use `.env` or the setup UI for optional OpenAI direct API access,
 Tailscale/Caddy settings, OAuth credentials, workspace roots, or overlay
 settings. For unattended installs, copy `orkestr.install.env.example` to
