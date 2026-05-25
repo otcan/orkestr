@@ -23,7 +23,12 @@ test("install script exposes a host-native systemd VPS path", async () => {
   assert.match(script, /\/usr\/local\/bin\/orkestr-reset-state/);
   assert.match(script, /ORKESTR_RUN_USER=\$run_user/);
   assert.match(script, /scripts\/install\.sh/);
-  assert.match(script, /orkestr\.install\.env/);
+  assert.match(script, /orkestr\.install\.json/);
+  assert.match(script, /--config FILE/);
+  assert.match(script, /install_json_config_file/);
+  assert.match(script, /JSON install config requires Node\.js 22/);
+  assert.match(script, /installLocalService: "ORKESTR_INSTALL_LOCAL_SERVICE"/);
+  assert.match(script, /codex: \{/);
   assert.match(script, /ORKESTR_INSTALL_MODE/);
   assert.match(script, /ORKESTR_INSTALL_LOCAL_SERVICE/);
   assert.match(script, /ORKESTR_START_AFTER_INSTALL/);
@@ -120,20 +125,31 @@ test("install script exposes a host-native systemd VPS path", async () => {
   assert.match(script, /ExecStart=\/usr\/local\/bin\/orkestr-update/);
   assert.match(script, /systemctl restart "\$\{service_name\}\.service"/);
   assert.doesNotMatch(script, /systemctl enable --now "\$\{service_name\}\.service"/);
+  assert.doesNotMatch(script, /--yes/);
+  assert.doesNotMatch(script, /ORKESTR_ASSUME_YES/);
+  assert.doesNotMatch(script, /orkestr\.install\.env/);
+  assert.doesNotMatch(script, /ORKESTR_INSTALL_CONFIG/);
+  assert.doesNotMatch(script, /--config-json/);
 });
 
-test("install script refuses unattended defaults without a config file", async () => {
-  const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-install-no-config-"));
+test("install script accepts optional JSON config before help", async () => {
+  const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-install-json-config-"));
   const scriptPath = path.resolve("scripts/install.sh");
-  await assert.rejects(
-    execFileAsync("bash", [scriptPath], { cwd, timeout: 5000 }),
-    (error) => {
-      assert.equal(error.code, 1);
-      assert.match(error.stderr, /unattended config file/);
-      assert.match(error.stderr, /orkestr\.install\.env/);
-      return true;
+  const configPath = path.join(cwd, "orkestr.install.json");
+  await fs.writeFile(configPath, JSON.stringify({
+    host: "127.0.0.1",
+    port: 19813,
+    installLocalService: false,
+    codex: {
+      sandbox: "workspace-write",
+      approvalPolicy: "on-request",
     },
-  );
+  }));
+
+  const { stdout } = await execFileAsync("bash", [scriptPath, "--config", configPath, "--help"], { cwd, timeout: 5000 });
+
+  assert.match(stdout, /--config FILE/);
+  assert.match(stdout, /curl -fsSL https:\/\/raw\.githubusercontent\.com\/otcan\/orkestr\/main\/scripts\/install\.sh \| bash/);
 });
 
 test("bootstrap script provides an opinionated fresh VPS path", async () => {

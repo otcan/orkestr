@@ -1,0 +1,13 @@
+{
+  "host": "127.0.0.1",
+  "port": 19812,
+  "installLocalService": true,
+  "startAfterInstall": true,
+  "localServiceName": "orkestr",
+  "localServiceLabel": "com.orkestr.oss",
+  "codex": {
+    "sandbox": "workspace-write",
+    "approvalPolicy": "on-request",
+    "command": "codex --sandbox workspace-write --ask-for-approval on-request --no-alt-screen"
+  }
+}

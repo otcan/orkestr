@@ -61,9 +61,7 @@ Orkestr has two supported setup paths:
 ### Local Host-Native
 
 ```bash
-git clone https://github.com/otcan/orkestr.git
-cd orkestr
-./scripts/install.sh
+curl -fsSL https://raw.githubusercontent.com/otcan/orkestr/main/scripts/install.sh | bash
 ```
 
 Then open:
@@ -88,6 +86,26 @@ Use `./scripts/install.sh --no-start` to install the service without starting
 it, `./scripts/install.sh --no-service` to skip service installation, or
 `./scripts/install.sh --serve` only for foreground development.
 
+The same one-line command updates an existing local install. It pulls the
+managed checkout under `~/.orkestr-src/orkestr-oss`, rebuilds, refreshes the
+service wrapper, and restarts the local service.
+
+For a configured install, use JSON:
+
+```bash
+curl -fsSLO https://raw.githubusercontent.com/otcan/orkestr/main/orkestr.install.json.example
+cp orkestr.install.json.example orkestr.install.json
+curl -fsSL https://raw.githubusercontent.com/otcan/orkestr/main/scripts/install.sh | bash -s -- --config orkestr.install.json
+```
+
+For source work or pull requests, clone the repo explicitly:
+
+```bash
+git clone https://github.com/otcan/orkestr.git
+cd orkestr
+./scripts/install.sh --local
+```
+
 In setup, connect the required accounts. For
 Codex, use **Open Codex sign-in** for device authorization or **Connect Codex
 with API key** when this runtime should authenticate Codex that way. Orkestr
@@ -102,8 +120,8 @@ in. The local installer writes `$ORKESTR_HOME/orkestr.env`; source that file
 before manual `npm start` runs so the same safe runtime settings are used.
 Use `.env` or the setup UI for optional OpenAI direct API access,
 Tailscale/Caddy settings, OAuth credentials, workspace roots, or overlay
-settings. For unattended installs, copy `orkestr.install.env.example` to
-`orkestr.install.env` before running the installer. If you upload or paste an
+settings. For configured installs, pass `--config orkestr.install.json`.
+If you upload or paste an
 `.env` during setup, Orkestr reads that file as runtime configuration and
 stores it with the same local runtime state.
 
@@ -177,12 +195,13 @@ By default the installer writes explicit conservative Codex runtime settings:
 `ORKESTR_CODEX_SANDBOX=workspace-write`,
 `ORKESTR_CODEX_APPROVAL_POLICY=on-request`, and
 `ORKESTR_RUNTIME_CODEX_COMMAND="codex --sandbox workspace-write --ask-for-approval on-request --no-alt-screen"`.
-That lets permission requests surface in the UI and WhatsApp. For unattended
-installs, copy and edit the install config:
+That lets permission requests surface in the UI and WhatsApp. For configured
+installs, copy and edit the JSON install config:
 
 ```bash
-cp orkestr.install.env.example orkestr.install.env
-./scripts/install.sh
+curl -fsSLO https://raw.githubusercontent.com/otcan/orkestr/main/orkestr.install.json.example
+cp orkestr.install.json.example orkestr.install.json
+./scripts/install.sh --config orkestr.install.json
 ```
 
 The installer also writes a non-secret runtime settings contract at

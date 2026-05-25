@@ -6,19 +6,22 @@ usage() {
 Install Orkestr.
 
 Usage:
-  scripts/install.sh [--local] [--no-start] [--no-service] [--serve] [--profile local-safe|local-trusted] [--enable-host-codex]
+  scripts/install.sh [--config FILE] [--local] [--no-start] [--no-service] [--serve] [--profile local-safe|local-trusted] [--enable-host-codex]
   scripts/install.sh --systemd [--auto-update] [--track-main|--release-updates] [--install-dir DIR] [--data-dir DIR] [--workspace-dir DIR] [--env-file FILE] [--user USER]
 
 Modes:
-  default       Use the current checkout when run from one, install dependencies, build, install a local service, and start Orkestr.
+  default       Clone/update Orkestr when run outside a checkout, use the current checkout when run from one, build, install a local service, and start Orkestr.
   --systemd     Install a host-native VPS service. Requires root.
   --auto-update Install a host-local update watcher timer in --systemd mode.
   --track-main  Track origin/main with versioned releases. Implies --auto-update, --release-updates, --update-ref main, --channel main, and --allow-untagged-releases.
   --release-updates Use versioned release directories for updater deploys.
 
-Unattended installs:
-  Create ./orkestr.install.env or ./.orkestr.install.env before running this script.
-  The file is sourced by Bash, so use KEY=value lines with shell quoting when needed.
+Configured installs:
+  One-line local install or update:
+    curl -fsSL https://raw.githubusercontent.com/otcan/orkestr/main/scripts/install.sh | bash
+
+  Optional JSON config:
+    curl -fsSL https://raw.githubusercontent.com/otcan/orkestr/main/scripts/install.sh | bash -s -- --config orkestr.install.json
 
 Deprecated compatibility flags:
   --local       Force using the current checkout.
@@ -66,26 +69,99 @@ USAGE
 }
 
 initial_arg_count=$#
-install_config_loaded=0
-install_config_file="${ORKESTR_INSTALL_CONFIG:-}"
-if [ -z "$install_config_file" ]; then
-  for candidate in ./orkestr.install.env ./.orkestr.install.env; do
-    if [ -f "$candidate" ]; then
-      install_config_file="$candidate"
-      break
-    fi
-  done
-fi
-if [ -n "$install_config_file" ]; then
-  if [ ! -r "$install_config_file" ]; then
-    echo "Cannot read Orkestr install config: $install_config_file" >&2
+install_json_config_loaded=0
+install_json_config_file=""
+
+for ((arg_index = 1; arg_index <= $#; arg_index += 1)); do
+  arg_value="${!arg_index}"
+  case "$arg_value" in
+    --config)
+      next_index=$((arg_index + 1))
+      if [ "$next_index" -gt "$#" ]; then
+        echo "--config requires a JSON config file path." >&2
+        exit 2
+      fi
+      install_json_config_file="${!next_index}"
+      arg_index="$next_index"
+      ;;
+  esac
+done
+
+if [ -n "$install_json_config_file" ]; then
+  if [ ! -r "$install_json_config_file" ]; then
+    echo "Cannot read Orkestr JSON install config: $install_json_config_file" >&2
+    exit 1
+  fi
+  if ! command -v node >/dev/null 2>&1; then
+    echo "JSON install config requires Node.js 22 or newer on PATH." >&2
     exit 1
   fi
   set -a
-  # shellcheck disable=SC1090
-  . "$install_config_file"
+  eval "$(node - "$install_json_config_file" <<'NODE'
+const fs = require("node:fs");
+const configPath = process.argv[2];
+const raw = JSON.parse(fs.readFileSync(configPath, "utf8"));
+
+function shellQuote(value) {
+  return `'${String(value).replaceAll("'", "'\\''")}'`;
+}
+
+function emit(name, value) {
+  if (!name || value === undefined || value === null) return;
+  if (!/^[A-Z_][A-Z0-9_]*$/.test(name)) return;
+  console.log(`${name}=${shellQuote(typeof value === "boolean" ? (value ? "1" : "0") : value)}`);
+}
+
+const topLevel = {
+  installMode: "ORKESTR_INSTALL_MODE",
+  repoUrl: "ORKESTR_REPO_URL",
+  gitRef: "ORKESTR_GIT_REF",
+  installDir: "ORKESTR_INSTALL_DIR",
+  home: "ORKESTR_HOME",
+  workspaceDir: "ORKESTR_WORKSPACE_DIR",
+  envFile: "ORKESTR_ENV_FILE",
+  localEnvFile: "ORKESTR_LOCAL_ENV_FILE",
+  host: "ORKESTR_HOST",
+  port: "ORKESTR_PORT",
+  installLocalService: "ORKESTR_INSTALL_LOCAL_SERVICE",
+  startAfterInstall: "ORKESTR_START_AFTER_INSTALL",
+  localServiceName: "ORKESTR_LOCAL_SERVICE_NAME",
+  localServiceLabel: "ORKESTR_LOCAL_SERVICE_LABEL",
+  localBinDir: "ORKESTR_LOCAL_BIN_DIR",
+  enableHostCodex: "ORKESTR_ENABLE_HOST_CODEX",
+  skipSystemPackages: "ORKESTR_SKIP_SYSTEM_PACKAGES",
+};
+
+const nested = {
+  codex: {
+    bin: "ORKESTR_CODEX_BIN",
+    sandbox: "ORKESTR_CODEX_SANDBOX",
+    approvalPolicy: "ORKESTR_CODEX_APPROVAL_POLICY",
+    command: "ORKESTR_RUNTIME_CODEX_COMMAND",
+  },
+  update: {
+    auto: "ORKESTR_AUTO_UPDATE",
+    ref: "ORKESTR_UPDATE_REF",
+    intervalSeconds: "ORKESTR_UPDATE_INTERVAL_SECONDS",
+    releaseDeploy: "ORKESTR_RELEASE_DEPLOY",
+    channel: "ORKESTR_DEPLOY_CHANNEL",
+    tagsOnly: "ORKESTR_DEPLOY_TAGS_ONLY",
+  },
+};
+
+for (const [key, value] of Object.entries(raw)) {
+  if (/^[A-Z_][A-Z0-9_]*$/.test(key)) emit(key, value);
+  if (topLevel[key]) emit(topLevel[key], value);
+}
+for (const [section, keys] of Object.entries(nested)) {
+  const value = raw[section];
+  if (!value || typeof value !== "object" || Array.isArray(value)) continue;
+  for (const [key, envName] of Object.entries(keys)) emit(envName, value[key]);
+}
+NODE
+)"
   set +a
-  install_config_loaded=1
+  install_json_config_loaded=1
 fi
 
 local_mode=0
@@ -129,6 +205,13 @@ while [ "$#" -gt 0 ]; do
     --local)
       local_mode=1
       shift
+      ;;
+    --config)
+      if [ -z "${2:-}" ]; then
+        echo "$1 requires a JSON config file path." >&2
+        exit 2
+      fi
+      shift 2
       ;;
     --serve)
       foreground_serve=1
@@ -1300,22 +1383,10 @@ fi
 
 apply_install_defaults
 
-if [ "$install_config_loaded" -eq 0 ] && [ "$initial_arg_count" -eq 0 ]; then
-  if is_interactive_terminal; then
-    run_install_wizard
-  else
-    cat >&2 <<'EOF'
-Orkestr install needs either an interactive terminal or an unattended config file.
-
-For a normal local setup, run this from a terminal:
-  ./scripts/install.sh
-
-For unattended setup, create ./orkestr.install.env first. Start from:
-  cp orkestr.install.env.example orkestr.install.env
-EOF
-    exit 1
-  fi
+if [ "$install_json_config_loaded" -eq 0 ] && [ "$initial_arg_count" -eq 0 ] && is_interactive_terminal; then
+  run_install_wizard
 fi
+
 start_after_install="$(normalize_bool "$start_after_install")"
 if [ "$start_after_install" != "0" ] && [ "$start_after_install" != "1" ]; then
   echo "Invalid ORKESTR_START_AFTER_INSTALL value: $start_after_install" >&2

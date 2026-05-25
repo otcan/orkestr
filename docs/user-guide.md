@@ -162,9 +162,13 @@ Do not publish a raw Orkestr API or terminal stream directly to the internet.
 
 ## First-Time Setup
 
-1. Install locally with `scripts/install.sh`, or use the
-   host-native VPS installer for a real server. Local installs create a user
-   service by default, so Orkestr keeps running after the terminal closes.
+1. Install locally with the one-line installer, or use the host-native VPS
+   installer for a real server. Local installs create a user service by
+   default, so Orkestr keeps running after the terminal closes.
+
+   ```bash
+   curl -fsSL https://raw.githubusercontent.com/otcan/orkestr/main/scripts/install.sh | bash
+   ```
 2. Open `/setup`.
 3. Review Connections.
 4. Configure secure access if the URL is remote.
