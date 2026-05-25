@@ -13,10 +13,11 @@ import {
   getLocalWhatsAppBridgeStatus,
   localWhatsAppBridgeBasePath,
   listLocalWhatsAppChatParticipants,
-  sendLocalWhatsAppText,
+  sendLocalWhatsAppMessage,
   syncLocalWhatsAppTypingTargets,
 } from "./whatsapp-local-bridge.js";
 import { routerUpdateWhatsAppDeliveryTarget } from "./whatsapp-router-updates.js";
+import { attachmentDeliveryKey, prepareWhatsAppTableAttachments } from "./whatsapp-table-attachments.js";
 
 let whatsappDeliveryInFlight = null;
 
@@ -408,7 +409,7 @@ async function writeWhatsAppState(state, env) {
   await writeJson(paths.whatsapp, {
     ...state,
     inboundEvents: (state.inboundEvents || []).slice(-500),
-    outboundDeliveries: (state.outboundDeliveries || []).slice(-500),
+    outboundDeliveries: (state.outboundDeliveries || []).slice(-whatsappOutboundDeliveryRetentionLimit(env)),
     updatedAt: new Date().toISOString(),
   });
 }
@@ -514,22 +515,29 @@ async function listThreadMessageSets(env) {
   return sets;
 }
 
-async function sendWhatsAppText({ chatId, text, accountId, config, env, fetchImpl }) {
+async function sendWhatsAppText({ chatId, text, accountId, attachments = [], config, env, fetchImpl }) {
   const bridgeUrl = configuredBridgeUrl(config, env);
+  const normalizedAttachments = Array.isArray(attachments)
+    ? attachments.map((attachment) => ({
+        ...attachment,
+        path: String(attachment?.path || "").trim(),
+      })).filter((attachment) => attachment.path)
+    : [];
   if (!bridgeUrl && bridgeMode(config, env) === "local") {
-    return sendLocalWhatsAppText({ chatId, text, accountId, env });
+    return sendLocalWhatsAppMessage({ chatId, text, accountId, attachments: normalizedAttachments, env });
   }
   if (!bridgeUrl) throw badRequest("whatsapp_bridge_not_configured");
   const apiToken = pickString(env.WHATSAPP_BRIDGE_TOKEN, env.WA_HTTP_TOKEN, config.apiToken);
   const headers = { "content-type": "application/json" };
   if (apiToken) headers.authorization = `Bearer ${apiToken}`;
-  const response = await fetchImpl(new URL("/send-text", bridgeUrl), {
+  const response = await fetchImpl(new URL(normalizedAttachments.length ? "/send-media" : "/send-text", bridgeUrl), {
     method: "POST",
     headers,
     body: JSON.stringify({
       to: chatId,
       text,
       ...(accountId ? { accountId } : {}),
+      ...(normalizedAttachments.length ? { paths: normalizedAttachments.map((attachment) => attachment.path) } : {}),
     }),
     signal: AbortSignal.timeout(Number(env.WHATSAPP_SEND_TIMEOUT_MS || 10_000)),
   });
@@ -811,6 +819,36 @@ function latestProgressDelivery(outboundDeliveries, parentMessageId, chatId) {
       delivery.parentMessageId === parentMessageId &&
       (!chatId || delivery.chatId === chatId)
     ) || null;
+}
+
+function whatsappOutboundDeliveryRetentionLimit(env = process.env) {
+  const raw = env.ORKESTR_WHATSAPP_OUTBOUND_DELIVERY_RETENTION;
+  const parsed = Number(raw || 5000);
+  const minimum = raw ? 1 : 500;
+  return Number.isFinite(parsed) ? Math.max(minimum, Math.floor(parsed)) : 5000;
+}
+
+function whatsappReplyBackfillWindowMs(env = process.env) {
+  const parsed = Number(env.ORKESTR_WHATSAPP_REPLY_BACKFILL_WINDOW_MS || 24 * 60 * 60 * 1000);
+  return Number.isFinite(parsed) ? Math.max(0, parsed) : 24 * 60 * 60 * 1000;
+}
+
+function oldestOutboundDeliveryMs(outboundDeliveries = []) {
+  return Math.min(
+    ...outboundDeliveries
+      .map((delivery) => Date.parse(String(delivery?.deliveredAt || "")))
+      .filter(Number.isFinite),
+  );
+}
+
+function staleUntrackedWhatsAppReply(message = {}, outboundDeliveries = [], env = process.env) {
+  const messageMs = messageTimeMs(message);
+  if (!messageMs) return false;
+  const backfillWindowMs = whatsappReplyBackfillWindowMs(env);
+  if (backfillWindowMs && Date.now() - messageMs > backfillWindowMs) return true;
+  if (outboundDeliveries.length < whatsappOutboundDeliveryRetentionLimit(env)) return false;
+  const oldestDeliveryMs = oldestOutboundDeliveryMs(outboundDeliveries);
+  return Number.isFinite(oldestDeliveryMs) && messageMs < oldestDeliveryMs;
 }
 
 function threadAllowsWhatsAppMirroring(thread) {
@@ -1396,6 +1434,10 @@ async function deliverWhatsAppRepliesOnce(env = process.env, fetchImpl = fetch) 
         const parent = messages.find((entry) => entry.id === message.parentMessageId);
         const whatsappOrigin = parent?.connector === "whatsapp" || parent?.source === "whatsapp_inbound" || message.connector === "whatsapp";
         if (!whatsappOrigin) continue;
+        if (staleUntrackedWhatsAppReply(message, outboundDeliveries, env)) {
+          skipped.push({ agentId, threadId, messageId: message.id, reason: "stale_untracked_reply" });
+          continue;
+        }
         if (kind === "thread" && !threadAllowsWhatsAppMirroring(thread)) {
           skipped.push({ agentId, threadId, messageId: message.id, reason: "mirroring_disabled" });
           continue;
@@ -1470,13 +1512,22 @@ async function deliverWhatsAppRepliesOnce(env = process.env, fetchImpl = fetch) 
       const parent = messages.find((entry) => entry.id === message.parentMessageId);
       const whatsappOrigin = parent?.connector === "whatsapp" || parent?.source === "whatsapp_inbound" || message.connector === "whatsapp";
       if (!whatsappOrigin) continue;
+      if (staleUntrackedWhatsAppReply(message, outboundDeliveries, env)) {
+        skipped.push({ agentId, threadId, messageId: message.id, reason: "stale_untracked_reply" });
+        continue;
+      }
       if (kind === "thread" && !threadAllowsWhatsAppMirroring(thread)) {
         skipped.push({ agentId, threadId, messageId: message.id, reason: "mirroring_disabled" });
         continue;
       }
 
       const chatId = pickString(message.chatId, parent?.chatId);
-      const text = appendWhatsAppDebugFooter(formatWhatsAppOutboundText(pickString(message.text)), {
+      const preparedOutbound = await prepareWhatsAppTableAttachments(pickString(message.text), {
+        env,
+        messageId: message.id,
+      });
+      const attachments = preparedOutbound.attachments;
+      const text = appendWhatsAppDebugFooter(formatWhatsAppOutboundText(preparedOutbound.text), {
         message,
         thread,
         messages,
@@ -1490,14 +1541,15 @@ async function deliverWhatsAppRepliesOnce(env = process.env, fetchImpl = fetch) 
         skipped.push({ agentId, messageId: message.id, reason: !chatId ? "missing_chat_id" : "missing_text" });
         continue;
       }
-      const textKey = deliveryTextKey(chatId, text);
+      const attachmentKey = attachments.map(attachmentDeliveryKey).filter(Boolean).join("\n");
+      const textKey = deliveryTextKey(chatId, attachmentKey ? `${text}\nattachments:\n${attachmentKey}` : text);
       if (deliveredTextKeys.has(textKey) || batchTextKeys.has(textKey)) {
         skipped.push({ agentId, threadId, messageId: message.id, reason: "duplicate_text" });
         continue;
       }
 
       try {
-        const payload = await sendWhatsAppText({ chatId, text, accountId, config, env, fetchImpl });
+        const payload = await sendWhatsAppText({ chatId, text, accountId, attachments, config, env, fetchImpl });
         const delivery = {
           kind,
           agentId: agentId || null,
@@ -1509,6 +1561,7 @@ async function deliverWhatsAppRepliesOnce(env = process.env, fetchImpl = fetch) 
           textKey,
           deliveredAt: new Date().toISOString(),
           bridgeResponse: payload,
+          attachments,
         };
         outboundDeliveries.push(delivery);
         deliveredIds.add(message.id);

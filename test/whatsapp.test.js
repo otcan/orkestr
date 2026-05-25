@@ -10,6 +10,7 @@ import { getSetupStatus } from "../packages/core/src/setup.js";
 import { appendThreadMessage, createThread, enqueueThreadInput, listThreadMessages, updateThreadMessage } from "../packages/core/src/threads.js";
 import { deliverWhatsAppReplies, formatWhatsAppOutboundText, getWhatsAppChatParticipants, getWhatsAppStatus, mapLocalWhatsAppStatusFromHealth, routeWhatsAppInbound, syncWhatsAppTypingIndicators } from "../packages/connectors/src/whatsapp.js";
 import { listLocalWhatsAppChats, localWhatsAppAccountIdsForEnv, localWhatsAppMessageRouteFields, normalizeGroupParticipantIds, reduceLocalWhatsAppBridgeState, startLocalWhatsAppAccount, webCacheRoot } from "../packages/connectors/src/whatsapp-local-bridge.js";
+import { prepareWhatsAppTableAttachments } from "../packages/connectors/src/whatsapp-table-attachments.js";
 import { writeConnectorConfig } from "../packages/storage/src/config.js";
 
 function response(payload, ok = true, status = 200) {
@@ -893,6 +894,167 @@ test("whatsapp delivery translates markdown into chat-friendly formatting", asyn
   ].join("\n"));
   assertDebugFooter(calls[0].body.text, { messageType: "final" });
   assert.equal(messages.at(-1).text, markdown);
+});
+
+test("whatsapp delivery does not backfill stale untracked final replies", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-stale-reply-"));
+  const env = externalBridgeEnv(home, { ORKESTR_WHATSAPP_REPLY_BACKFILL_WINDOW_MS: "1000" });
+  await createThread({ id: "thread-wa-stale", name: "WA Stale Thread" }, env);
+  await writeConnectorConfig("whatsapp", {
+    bridgeMode: "external",
+    bridgeUrl: "http://wa.local",
+    threadRoutes: { "chat-stale": "thread-wa-stale" },
+  }, env);
+
+  const parent = await appendThreadMessage("thread-wa-stale", {
+    role: "user",
+    source: "whatsapp_inbound",
+    state: "completed",
+    connector: "whatsapp",
+    chatId: "chat-stale",
+    text: "old request",
+    createdAt: new Date(Date.now() - 5000).toISOString(),
+  }, env);
+  const reply = await appendThreadMessage("thread-wa-stale", {
+    role: "assistant",
+    source: "codex-rollout",
+    phase: "final_answer",
+    state: "completed",
+    connector: "whatsapp",
+    chatId: "chat-stale",
+    parentMessageId: parent.id,
+    text: "old answer",
+    createdAt: new Date(Date.now() - 5000).toISOString(),
+  }, env);
+
+  const delivery = await deliverWhatsAppReplies(env, async () => {
+    throw new Error("stale reply should not be sent");
+  });
+
+  assert.equal(delivery.delivered.length, 0);
+  assert.deepEqual(delivery.skipped.find((item) => item.messageId === reply.id)?.reason, "stale_untracked_reply");
+});
+
+test("whatsapp delivery does not replay replies older than retained delivery ledger", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-retention-reply-"));
+  const env = externalBridgeEnv(home, {
+    ORKESTR_WHATSAPP_REPLY_BACKFILL_WINDOW_MS: String(7 * 24 * 60 * 60 * 1000),
+    ORKESTR_WHATSAPP_OUTBOUND_DELIVERY_RETENTION: "2",
+  });
+  await createThread({ id: "thread-wa-retention", name: "WA Retention Thread" }, env);
+  await writeConnectorConfig("whatsapp", {
+    bridgeMode: "external",
+    bridgeUrl: "http://wa.local",
+    threadRoutes: { "chat-retention": "thread-wa-retention" },
+  }, env);
+
+  const oldReplyAt = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+  const oldestRetainedDeliveryAt = new Date(Date.now() - 30 * 60 * 1000).toISOString();
+  const parent = await appendThreadMessage("thread-wa-retention", {
+    role: "user",
+    source: "whatsapp_inbound",
+    state: "completed",
+    connector: "whatsapp",
+    chatId: "chat-retention",
+    text: "retained request",
+    createdAt: oldReplyAt,
+  }, env);
+  const reply = await appendThreadMessage("thread-wa-retention", {
+    role: "assistant",
+    source: "codex-rollout",
+    phase: "final_answer",
+    state: "completed",
+    connector: "whatsapp",
+    chatId: "chat-retention",
+    parentMessageId: parent.id,
+    text: "retained answer",
+    createdAt: oldReplyAt,
+  }, env);
+  await fs.writeFile(path.join(home, "whatsapp.json"), JSON.stringify({
+    inboundEvents: [],
+    outboundDeliveries: [
+      { messageId: "newer-1", chatId: "other-chat", deliveredAt: oldestRetainedDeliveryAt },
+      { messageId: "newer-2", chatId: "other-chat", deliveredAt: new Date().toISOString() },
+    ],
+  }, null, 2));
+
+  const delivery = await deliverWhatsAppReplies(env, async () => {
+    throw new Error("reply older than retained ledger should not be sent");
+  });
+
+  assert.equal(delivery.delivered.length, 0);
+  assert.deepEqual(delivery.skipped.find((item) => item.messageId === reply.id)?.reason, "stale_untracked_reply");
+});
+
+test("whatsapp delivery sends markdown tables as CSV attachments", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-table-reply-"));
+  const env = externalBridgeEnv(home);
+  await createThread({ id: "thread-wa-table", name: "WA Table Thread" }, env);
+  await writeConnectorConfig("whatsapp", {
+    bridgeMode: "external",
+    bridgeUrl: "http://wa.local",
+    threadRoutes: { "chat-table": "thread-wa-table" },
+  }, env);
+
+  const routed = await routeWhatsAppInbound({ eventId: "wa-table-1", chatId: "chat-table", text: "send table" }, env);
+  await appendThreadMessage("thread-wa-table", {
+    role: "assistant",
+    source: "codex-rollout",
+    phase: "final_answer",
+    state: "completed",
+    text: [
+      "Here is the summary:",
+      "",
+      "| Name | Status | Notes |",
+      "| --- | --- | --- |",
+      "| Magie | Ready | **Daily** 09:00 |",
+      "| KDP | Waiting | needs auth |",
+      "",
+      "Done.",
+    ].join("\n"),
+    parentMessageId: routed.message.id,
+    connector: "whatsapp",
+    chatId: "chat-table",
+  }, env);
+
+  const calls = [];
+  const delivery = await deliverWhatsAppReplies(env, async (url, options) => {
+    calls.push({ url, body: JSON.parse(options.body) });
+    return response({ ok: true, ids: ["sent-table-text", "sent-table-csv"] });
+  });
+  const duplicate = await deliverWhatsAppReplies(env, async () => {
+    throw new Error("should not resend table attachment");
+  });
+
+  assert.equal(delivery.delivered.length, 1);
+  assert.equal(duplicate.delivered.length, 0);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].url.pathname, "/send-media");
+  assert.equal(calls[0].body.to, "chat-table");
+  assert.equal(calls[0].body.paths.length, 1);
+  assert.match(stripDebugFooter(calls[0].body.text), /^Here is the summary:\n\nTable attached: orkestr-table-.+\.csv\n\nDone\.$/);
+  const csv = await fs.readFile(calls[0].body.paths[0], "utf8");
+  assert.equal(csv, [
+    "Name,Status,Notes",
+    "Magie,Ready,Daily 09:00",
+    "KDP,Waiting,needs auth",
+    "",
+  ].join("\n"));
+  assert.equal(delivery.delivered[0].attachments.length, 1);
+  assert.equal(delivery.failed.length, 0);
+});
+
+test("whatsapp table attachment detection ignores fenced code blocks", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-table-code-"));
+  const prepared = await prepareWhatsAppTableAttachments([
+    "```",
+    "| Name | Status |",
+    "| --- | --- |",
+    "| Magie | Ready |",
+    "```",
+  ].join("\n"), { env: { ORKESTR_HOME: home }, messageId: "code-table" });
+
+  assert.equal(prepared.attachments.length, 0);
 });
 
 test("whatsapp outbound formatting preserves fenced code blocks", () => {
