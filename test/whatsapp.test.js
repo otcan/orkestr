@@ -1059,6 +1059,56 @@ test("whatsapp delivery reports queued runtime inputs without marking the input 
   assert.equal(messages.find((entry) => entry.id === routed.message.id).state, "queued");
 });
 
+test("whatsapp delivery reports frozen runtime blocks without marking the input delivered", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-frozen-notice-"));
+  const env = externalBridgeEnv(home);
+  await createThread({
+    id: "thread-wa-frozen-notice",
+    name: "WA Frozen Notice Thread",
+    codexModel: "gpt-5.5",
+    codexReasoningEffort: "xhigh",
+  }, env);
+  await writeConnectorConfig("whatsapp", {
+    bridgeMode: "external",
+    bridgeUrl: "http://wa.local",
+    threadRoutes: { "chat-frozen-notice": "thread-wa-frozen-notice" },
+  }, env);
+  const routed = await routeWhatsAppInbound({
+    eventId: "wa-frozen-notice-1",
+    chatId: "chat-frozen-notice",
+    accountId: "account-1",
+    text: "please continue",
+  }, env);
+  await updateThreadMessage("thread-wa-frozen-notice", routed.message.id, {
+    state: "awaiting_ack",
+    deliveryState: "blocked_frozen_runtime",
+    observedVia: "runtime_frozen",
+    error: "Runtime appears frozen; stale-ack recovery is paused until the pane changes or a manual recovery action is requested.",
+  }, env);
+
+  const calls = [];
+  const delivery = await deliverWhatsAppReplies(env, async (url, options) => {
+    calls.push({ url, body: JSON.parse(options.body) });
+    return response({ ok: true, ids: ["sent-frozen-notice"] });
+  });
+  const duplicate = await deliverWhatsAppReplies(env, async () => {
+    throw new Error("should not resend frozen runtime notice");
+  });
+  const messages = await listThreadMessages("thread-wa-frozen-notice", env);
+
+  assert.equal(delivery.delivered.length, 1);
+  assert.equal(delivery.delivered[0].deliveryType, "router_update");
+  assert.equal(delivery.delivered[0].routerUpdateType, "blocked_frozen_runtime");
+  assert.equal(delivery.delivered[0].sourceMessageId, routed.message.id);
+  assert.equal(duplicate.delivered.length, 0);
+  assert.equal(calls[0].body.to, "chat-frozen-notice");
+  assert.match(stripDebugFooter(calls[0].body.text), /^Codex pane looks frozen\.\n\nOrkestr paused automatic recovery and did not restart or resend anything\./);
+  assert.match(stripDebugFooter(calls[0].body.text), /Your message is blocked until the pane changes or you request a manual recovery: "please continue"\./);
+  assertDebugFooter(calls[0].body.text, { messageType: "update", model: "gpt-5.5/xh" });
+  assert.equal(messages.find((entry) => entry.id === routed.message.id).state, "awaiting_ack");
+  assert.equal(messages.find((entry) => entry.id === routed.message.id).deliveryState, "blocked_frozen_runtime");
+});
+
 test("whatsapp /now inputs report interrupting before normal queue notices", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-now-notice-"));
   const env = externalBridgeEnv(home);
