@@ -39,6 +39,19 @@ function fakeFetch(routes, seen = []) {
   };
 }
 
+test("CLI help exposes local service commands promised by the installer", async () => {
+  const stdout = capture();
+  const code = await runCli(["--help"], {
+    stdout,
+    stderr: capture(),
+  });
+
+  assert.equal(code, 0);
+  assert.match(stdout.text(), /orkestr service \[status\|start\|stop\|restart\|logs\]/);
+  assert.match(stdout.text(), /orkestr start\|stop\|restart/);
+  assert.match(stdout.text(), /orkestr logs \[--service orkestr\]/);
+});
+
 test("CLI lists threads from the public API", async () => {
   const stdout = capture();
   const code = await runCli(["--api", "http://orkestr.test", "list"], {

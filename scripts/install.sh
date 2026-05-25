@@ -26,7 +26,7 @@ usage() {
 Install Orkestr.
 
 Usage:
-  scripts/install.sh [--config FILE] [--fresh] [--local] [--no-start] [--no-service] [--serve] [--profile local-safe|local-trusted] [--enable-host-codex]
+  scripts/install.sh [--config FILE] [--fresh] [--advanced] [--local] [--no-start] [--no-service] [--serve] [--profile local-safe|local-trusted] [--enable-host-codex]
   scripts/install.sh --systemd [--auto-update] [--track-main|--release-updates] [--install-dir DIR] [--data-dir DIR] [--workspace-dir DIR] [--env-file FILE] [--user USER]
 
 Modes:
@@ -46,11 +46,12 @@ Configured installs:
   Fresh local reinstall:
     curl -fsSL https://raw.githubusercontent.com/otcan/orkestr/main/scripts/install.sh | bash -s -- --fresh
 
-Deprecated compatibility flags:
+Local and compatibility flags:
   --local       Force using the current checkout.
   --serve       Dev shortcut: skip local service installation and run npm in the foreground.
   --no-serve    Alias for --no-start.
   --profile     Legacy alias for choosing Codex safety defaults. Prefer explicit ORKESTR_CODEX_* settings.
+  --advanced    Ask for local URL, folders, service behavior, and host Codex CLI.
   --enable-host-codex  Allow a local macOS install to probe/use a verified host codex binary.
 
 Environment:
@@ -89,6 +90,7 @@ Environment:
   ORKESTR_LOCAL_ENV_FILE    Local env file written for non-systemd installs. Defaults to $ORKESTR_HOME/orkestr.env.
   ORKESTR_SKIP_SYSTEM_PACKAGES  Skip apt package installation when set to 1.
   ORKESTR_FRESH_INSTALL     Set to 1 to stop the local service and remove local Orkestr state before install.
+  ORKESTR_INSTALL_ADVANCED  Set to 1 to ask advanced local installer questions.
   ORKESTR_NONINTERACTIVE    Set to 1 to skip local installer prompts.
 USAGE
 }
@@ -153,6 +155,7 @@ const topLevel = {
   localServiceName: "ORKESTR_LOCAL_SERVICE_NAME",
   localServiceLabel: "ORKESTR_LOCAL_SERVICE_LABEL",
   localBinDir: "ORKESTR_LOCAL_BIN_DIR",
+  advanced: "ORKESTR_INSTALL_ADVANCED",
   enableHostCodex: "ORKESTR_ENABLE_HOST_CODEX",
   skipSystemPackages: "ORKESTR_SKIP_SYSTEM_PACKAGES",
 };
@@ -200,6 +203,7 @@ workspace_dir="${ORKESTR_WORKSPACE_DIR:-}"
 env_file="${ORKESTR_ENV_FILE:-}"
 local_env_file="${ORKESTR_LOCAL_ENV_FILE:-}"
 fresh_install="${ORKESTR_FRESH_INSTALL:-0}"
+advanced_install="${ORKESTR_INSTALL_ADVANCED:-0}"
 run_user="${ORKESTR_RUN_USER:-orkestr}"
 host="${ORKESTR_HOST:-127.0.0.1}"
 port="${ORKESTR_PORT:-19812}"
@@ -242,6 +246,11 @@ while [ "$#" -gt 0 ]; do
     --fresh)
       fresh_install=1
       ORKESTR_FRESH_INSTALL=1
+      shift
+      ;;
+    --advanced)
+      advanced_install=1
+      ORKESTR_INSTALL_ADVANCED=1
       shift
       ;;
     --serve)
@@ -737,15 +746,19 @@ apply_install_defaults() {
 }
 
 run_install_wizard() {
-  local keep_approvals install_service start_after default_workspace change_advanced
+  local keep_approvals install_service start_after default_workspace
   echo "Orkestr installer"
   echo
   echo "This installs Orkestr locally, keeps it private on this machine, and starts the web UI."
   echo "Default URL: http://$host:$port/setup"
-  echo "Local state and workspaces use safe defaults unless you choose advanced settings."
+  if [ "$advanced_install" = "1" ]; then
+    echo "Advanced mode: the installer will also ask for URL, folder, service, and host Codex settings."
+  else
+    echo "Using safe defaults for local URL, folders, service install, and startup."
+    echo "Run with --advanced to change them."
+  fi
   echo
   echo "Press Enter to accept the suggested answer."
-  configure_codex_interactively
   prompt_yes_no keep_approvals "Ask before Codex runs higher-risk commands" "1"
   if [ "$keep_approvals" = "1" ]; then
     ORKESTR_CODEX_SANDBOX="${ORKESTR_CODEX_SANDBOX:-workspace-write}"
@@ -754,17 +767,18 @@ run_install_wizard() {
     ORKESTR_CODEX_SANDBOX="${ORKESTR_CODEX_SANDBOX:-danger-full-access}"
     ORKESTR_CODEX_APPROVAL_POLICY="${ORKESTR_CODEX_APPROVAL_POLICY:-never}"
   fi
-  prompt_yes_no change_advanced "Change advanced local settings (URL, folders)" "0"
-  if [ "$change_advanced" = "1" ]; then
-    prompt_default host "Private bind host" "$host"
-    prompt_default port "Web UI port" "$port"
-    default_workspace="$workspace_dir"
-    prompt_default data_dir "Data directory" "$data_dir"
-    if [ "$workspace_dir" = "$default_workspace" ] && [ "$systemd" -ne 1 ]; then
-      workspace_dir="$data_dir/workspaces"
-    fi
-    prompt_default workspace_dir "Workspace directory" "$workspace_dir"
+  if [ "$advanced_install" != "1" ]; then
+    return 0
   fi
+  configure_codex_interactively
+  prompt_default host "Private bind host" "$host"
+  prompt_default port "Web UI port" "$port"
+  default_workspace="$workspace_dir"
+  prompt_default data_dir "Data directory" "$data_dir"
+  if [ "$workspace_dir" = "$default_workspace" ] && [ "$systemd" -ne 1 ]; then
+    workspace_dir="$data_dir/workspaces"
+  fi
+  prompt_default workspace_dir "Workspace directory" "$workspace_dir"
   if [ "$systemd" -ne 1 ]; then
     prompt_yes_no install_service "Install Orkestr as a user service" "$local_service"
     local_service="$install_service"
@@ -1650,11 +1664,18 @@ install_systemd_runtime() {
   fi
 }
 
-if [ "$local_mode" -eq 0 ] && [ "$systemd" -ne 1 ] && in_orkestr_checkout; then
+if [ "$local_mode" -eq 0 ] && [ "$systemd" -ne 1 ] && [ "${ORKESTR_INSTALL_REEXECED:-0}" != "1" ] && in_orkestr_checkout; then
   local_mode=1
 fi
 
 apply_install_defaults
+
+advanced_install="$(normalize_bool "$advanced_install")"
+if [ "$advanced_install" != "0" ] && [ "$advanced_install" != "1" ]; then
+  echo "Invalid ORKESTR_INSTALL_ADVANCED value: $advanced_install" >&2
+  echo "Use 1/0, yes/no, true/false, or on/off." >&2
+  exit 2
+fi
 
 if [ "$install_json_config_loaded" -eq 0 ] && [ "${ORKESTR_NONINTERACTIVE:-0}" != "1" ] && [ "$systemd" -ne 1 ] && is_interactive_terminal; then
   run_install_wizard
@@ -1685,7 +1706,6 @@ if [ "$fresh_install" = "1" ]; then
   fresh_reset_local_install
 fi
 
-print_macos_codex_notice
 export ORKESTR_RUNTIME_CODEX_COMMAND="${ORKESTR_RUNTIME_CODEX_COMMAND:-$(codex_command_default)}"
 export ORKESTR_CODEX_BIN="${ORKESTR_CODEX_BIN:-$(codex_bin_default)}"
 install_system_packages

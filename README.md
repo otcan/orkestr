@@ -75,10 +75,10 @@ Orkestr, and prints service commands. On macOS this uses `launchd`; on Linux it
 uses a user `systemd` unit when available and falls back to cron only when no
 user service manager is available.
 When run from a terminal, the one-line installer keeps the happy path short:
-it shows the private local URL, asks whether to use the host Codex CLI, asks
-about Codex approval posture, then installs and starts the local service. Bind
-address, port, and data/workspace paths stay on safe defaults unless you choose
-the advanced local settings prompt.
+it shows the private local URL, asks only whether Codex should ask before
+higher-risk commands, then installs and starts the local service. Bind address,
+port, data/workspace paths, service behavior, and host Codex CLI probing stay
+on safe defaults unless you run with `--advanced`.
 
 ```bash
 ~/.local/bin/orkestr service status
@@ -87,13 +87,18 @@ the advanced local settings prompt.
 ~/.local/bin/orkestr service logs
 ```
 
-Use `./scripts/install.sh --no-start` to install the service without starting
-it, `./scripts/install.sh --no-service` to skip service installation, or
-`./scripts/install.sh --serve` only for foreground development.
+Use `./scripts/install.sh --advanced` to review local URL, folder, service, and
+host Codex settings. Use `./scripts/install.sh --no-start` to install the
+service without starting it, `./scripts/install.sh --no-service` to skip
+service installation, or `./scripts/install.sh --serve` only for foreground
+development.
 
 The same one-line command updates an existing local install. It pulls the
 managed checkout under `~/.orkestr-src/orkestr-oss`, rebuilds, refreshes the
-service wrapper, and restarts the local service.
+service wrapper, and restarts the local service. Even if you run the one-line
+installer from inside another Orkestr checkout, it still uses the managed
+checkout; use `./scripts/install.sh --local` when you intentionally want to
+install from the current working tree.
 
 For a clean reinstall, stop Orkestr and remove local runtime state first:
 

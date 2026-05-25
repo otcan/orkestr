@@ -35,14 +35,19 @@ test("install script exposes a host-native systemd VPS path", async () => {
   assert.match(script, /ORKESTR_LOCAL_SERVICE_NAME/);
   assert.match(script, /ORKESTR_LOCAL_SERVICE_LABEL/);
   assert.match(script, /ORKESTR_LOCAL_BIN_DIR/);
+  assert.match(script, /advanced: "ORKESTR_INSTALL_ADVANCED"/);
   assert.match(script, /in_orkestr_checkout/);
+  assert.match(script, /\[ "\$\{ORKESTR_INSTALL_REEXECED:-0\}" != "1" \] && in_orkestr_checkout/);
   assert.match(script, /run_install_wizard/);
   assert.match(script, /Install Orkestr as a user service/);
   assert.match(script, /Start the Orkestr service after installing/);
   assert.match(script, /This installs Orkestr locally, keeps it private on this machine/);
   assert.match(script, /Default URL: http:\/\/\$host:\$port\/setup/);
+  assert.match(script, /Using safe defaults for local URL, folders, service install, and startup/);
+  assert.match(script, /Run with --advanced to change them/);
   assert.match(script, /Ask before Codex runs higher-risk commands/);
-  assert.match(script, /Change advanced local settings \(URL, folders\)/);
+  assert.match(script, /--advanced/);
+  assert.match(script, /ORKESTR_INSTALL_ADVANCED/);
   assert.match(script, /Private bind host/);
   assert.match(script, /ORKESTR_CODEX_SANDBOX/);
   assert.match(script, /ORKESTR_CODEX_APPROVAL_POLICY/);
@@ -138,6 +143,7 @@ test("install script exposes a host-native systemd VPS path", async () => {
   assert.match(script, /npm install --include=dev/);
   assert.match(script, /Refusing to install Codex automatically on macOS/);
   assert.match(script, /This is not an install error/);
+  assert.doesNotMatch(script, /\nprint_macos_codex_notice\n/);
   assert.match(script, /npm install -g "@openai\/codex@\$\{ORKESTR_CODEX_VERSION:-0\.133\.0\}"/);
   assert.match(script, /runuser -u "\$run_user" --preserve-environment -- node/);
   assert.match(script, /ORKESTR_CLI_RUN_AS_ROOT/);
