@@ -78,9 +78,9 @@
                   role="button"
                   tabindex="0"
                   [title]="threadGitBadgeTitle(thread)"
-                  (click)="openGitDetails(thread, $event)"
-                  (keydown.enter)="openGitDetails(thread, $event)"
-                  (keydown.space)="openGitDetails(thread, $event)"
+                  (click)="handleGitBadgeAction(thread, $event)"
+                  (keydown.enter)="handleGitBadgeAction(thread, $event)"
+                  (keydown.space)="handleGitBadgeAction(thread, $event)"
                 >{{ syncingThreadId === thread.id ? "..." : threadGitBadgeLabel(thread) }}</span>
               }
               @if (isThreadLatestMessageFailed(thread, true)) {
@@ -156,9 +156,9 @@
                         role="button"
                         tabindex="0"
                         [title]="threadGitBadgeTitle(worker)"
-                        (click)="openGitDetails(worker, $event)"
-                        (keydown.enter)="openGitDetails(worker, $event)"
-                        (keydown.space)="openGitDetails(worker, $event)"
+                        (click)="handleGitBadgeAction(worker, $event)"
+                        (keydown.enter)="handleGitBadgeAction(worker, $event)"
+                        (keydown.space)="handleGitBadgeAction(worker, $event)"
                       >{{ syncingThreadId === worker.id ? "..." : threadGitBadgeLabel(worker) }}</span>
                     }
                     @if (isThreadLatestMessageFailed(worker)) {

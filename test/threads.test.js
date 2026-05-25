@@ -12,7 +12,7 @@ import { runNextThreadMessage } from "../packages/core/src/executors.js";
 import { applyRuntimeCodexMode, consumeThreadConnectorDeliverySignalCount, deliverPendingThreadInputs, doctorRuntimeResources, drainAllPendingThreadInputs, hardResetThreadRuntime, listRuntimeLeases, resetThreadRuntime, runtimeStatus, setThreadConnectorDeliverySignalHandler, sleepThread, syncRuntimeLeases, syncRuntimeWindowName, wakeThread } from "../packages/core/src/runtime-leases.js";
 import { ensureDataDirs } from "../packages/storage/src/paths.js";
 import { parseThreadInputCommand } from "../packages/core/src/thread-commands.js";
-import { createThreadWorker, detectThreadGitState, listThreadWorkers, syncThreadWorkerWithParent, updateThreadRepo } from "../packages/core/src/thread-workers.js";
+import { createThreadWorker, detectThreadGitState, listThreadWorkers, refreshThreadGitState, syncThreadWorkerWithParent, updateThreadRepo } from "../packages/core/src/thread-workers.js";
 import { appendThreadMessage, createThread, deleteThread, enqueueThreadInput, getThread, listThreadMessages, listThreads, updateThread, updateThreadMessage } from "../packages/core/src/threads.js";
 
 const execFileAsync = promisify(execFile);
@@ -3828,6 +3828,26 @@ test("thread worker direct sync fast-forwards a clean stale worker", async () =>
   assert.equal(workerHead, parentHead);
   assert.equal(after.gitParentAhead, 0);
   assert.equal(after.gitParentBehind, 0);
+});
+
+test("thread worker git refresh clears stale stored sync state", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-worker-refresh-home-"));
+  const repo = await createTempGitRepo("orkestr-thread-worker-refresh-repo-");
+  const env = { ORKESTR_HOME: home };
+  const parent = await createThread({ id: "git-refresh-parent", name: "Git Refresh Parent", cwd: repo }, env);
+  const result = await createThreadWorker(parent.id, { label: "Git Refresh Worker", autoRun: false }, env);
+
+  await updateThread(result.worker.id, { gitParentAhead: 0, gitParentBehind: 99 }, env);
+  const stale = await getThread(result.worker.id, env);
+  assert.equal(stale.gitParentBehind, 99);
+
+  const refreshed = await refreshThreadGitState(stale.id, env);
+  const stored = await getThread(result.worker.id, env);
+
+  assert.equal(refreshed.gitState.gitParentAhead, 0);
+  assert.equal(refreshed.gitState.gitParentBehind, 0);
+  assert.equal(refreshed.thread.gitParentBehind, 0);
+  assert.equal(stored.gitParentBehind, 0);
 });
 
 test("thread worker direct sync rejects local worker changes", async () => {

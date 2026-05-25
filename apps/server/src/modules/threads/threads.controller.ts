@@ -30,7 +30,7 @@ import {
   listThreadMessages,
   updateThread,
 } from "../../../../../packages/core/src/threads.js";
-import { createThreadWorker, detectThreadRepo, listThreadWorkers, syncThreadWorkerWithParent, updateThreadRepo } from "../../../../../packages/core/src/thread-workers.js";
+import { createThreadWorker, detectThreadRepo, listThreadWorkers, refreshThreadGitState, syncThreadWorkerWithParent, updateThreadRepo } from "../../../../../packages/core/src/thread-workers.js";
 import { parseThreadInputCommand } from "../../../../../packages/core/src/thread-commands.js";
 import { ensureDataDirs } from "../../../../../packages/storage/src/paths.js";
 import { codexThreadId, threadRuntimeSummary, threadSummaryPayload } from "../../thread-summary.js";
@@ -478,11 +478,22 @@ export class ThreadsController {
   async syncParent(@Param("threadId") threadId: string) {
     const thread = await getThread(threadId);
     if (!thread) throw httpError("thread_not_found", 404);
+    const refreshed: any = await refreshThreadGitState(thread.id).catch(() => null);
+    const currentThread = refreshed?.thread || thread;
+    const refreshedParentBehind = Number(refreshed?.gitState?.gitParentBehind ?? NaN);
+    if (Number.isFinite(refreshedParentBehind) && refreshedParentBehind <= 0) {
+      return {
+        synced: false,
+        reason: "already_synced",
+        gitState: refreshed.gitState,
+        thread: await threadRuntimeSummary(currentThread, await listThreadMessages(currentThread.id)),
+      };
+    }
     const status = await runtimeStatus(thread.id).catch(() => null);
     if (status?.working || status?.foregroundWorking || status?.typingActive || Number(status?.runningCount || 0) > 0 || Number(status?.pendingCount || 0) > 0) {
       throw httpError("thread_is_active", 409);
     }
-    const result: any = await syncThreadWorkerWithParent(thread.id);
+    const result: any = await syncThreadWorkerWithParent(currentThread.id);
     return {
       ...result,
       thread: await threadRuntimeSummary(result.thread, await listThreadMessages(result.thread.id)),

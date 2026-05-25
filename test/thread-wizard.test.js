@@ -119,3 +119,16 @@ test("sidebar marks latest delivery failures as errors", async () => {
   assert.ok(sources.includes(".error-badge"));
   assert.ok(sources.includes(".thread-item.error"));
 });
+
+test("git direct sync badge runs sync directly when safe", async () => {
+  const sources = await read([
+    "apps/web/src/app/app.component.ts",
+    "apps/web/src/app/app.component.html",
+  ]);
+
+  assert.ok(sources.includes("handleGitBadgeAction(thread"));
+  assert.ok(sources.includes("handleGitBadgeAction(worker"));
+  assert.ok(sources.includes("this.canDirectSyncThread(thread)"));
+  assert.ok(sources.includes("void this.directSyncThread(thread)"));
+  assert.ok(sources.includes("this.openGitDetails(thread)"));
+});

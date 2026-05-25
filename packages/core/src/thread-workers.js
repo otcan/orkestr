@@ -491,6 +491,15 @@ function gitStatePatch(state) {
   };
 }
 
+export async function refreshThreadGitState(threadOrId, env = process.env) {
+  const thread = typeof threadOrId === "string" ? await getThread(threadOrId, env) : threadOrId;
+  if (!thread) throw httpError("thread_not_found", 404);
+  const state = await detectThreadGitState(thread, env);
+  if (!state?.repoPath) return { thread, gitState: state };
+  const updated = await updateThread(thread.id, gitStatePatch(state), env);
+  return { thread: updated, gitState: state };
+}
+
 export async function syncThreadWorkerWithParent(threadId, env = process.env) {
   const thread = await getThread(threadId, env);
   if (!thread) throw httpError("thread_not_found", 404);

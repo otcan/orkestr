@@ -873,6 +873,17 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     this.renderNow();
   }
 
+  handleGitBadgeAction(thread: ThreadSummary | null, event?: Event): void {
+    event?.preventDefault();
+    event?.stopPropagation();
+    if (!thread) return;
+    if (this.canDirectSyncThread(thread)) {
+      void this.directSyncThread(thread);
+      return;
+    }
+    this.openGitDetails(thread);
+  }
+
   gitDetailsThread(): ThreadSummary | null {
     return this.gitDetailsThreadId ? this.threads.find((thread) => thread.id === this.gitDetailsThreadId) || null : null;
   }
@@ -880,7 +891,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   async directSyncThread(thread: ThreadSummary | null, event?: Event): Promise<void> {
     event?.preventDefault();
     event?.stopPropagation();
-    if (!thread || !this.canDirectSyncThread(thread) || this.syncingThreadId) return;
+    if (!thread || this.busy || !this.canDirectSyncThread(thread) || this.syncingThreadId) return;
     this.syncingThreadId = thread.id;
     this.busy = true;
     try {
@@ -1740,7 +1751,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   }
 
   threadGitBadgeTitle(thread: ThreadSummary | null): string {
-    if (this.canDirectSyncThread(thread)) return "Direct sync is available. Open Git details.";
+    if (this.canDirectSyncThread(thread)) return "Direct sync this worker with its parent.";
     return thread ? this.threadGitDeltaLabel(thread) : "Git details";
   }
 
