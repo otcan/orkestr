@@ -1109,6 +1109,148 @@ test("whatsapp delivery reports frozen runtime blocks without marking the input 
   assert.equal(messages.find((entry) => entry.id === routed.message.id).deliveryState, "blocked_frozen_runtime");
 });
 
+test("whatsapp delivery reports recovery action requests", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-recovery-action-"));
+  const env = externalBridgeEnv(home);
+  await createThread({ id: "thread-wa-recovery-action", name: "WA Recovery Action Thread" }, env);
+  await writeConnectorConfig("whatsapp", {
+    bridgeMode: "external",
+    bridgeUrl: "http://wa.local",
+    threadRoutes: { "chat-recovery-action": "thread-wa-recovery-action" },
+  }, env);
+  const restart = await appendThreadMessage("thread-wa-recovery-action", {
+    role: "user",
+    source: "whatsapp_inbound",
+    connector: "whatsapp",
+    chatId: "chat-recovery-action",
+    accountId: "account-1",
+    text: "/restart",
+    state: "completed",
+    deliveryState: "delivered",
+    observedVia: "orkestr_reset_command",
+  }, env);
+  const now = await appendThreadMessage("thread-wa-recovery-action", {
+    role: "user",
+    source: "whatsapp_inbound",
+    connector: "whatsapp",
+    chatId: "chat-recovery-action",
+    accountId: "account-1",
+    text: "fix the pairing number",
+    state: "queued",
+    deliveryState: "interrupting",
+    observedVia: "orkestr_interrupt_command",
+    forceDeliveryAfterInterrupt: true,
+  }, env);
+
+  const calls = [];
+  const delivery = await deliverWhatsAppReplies(env, async (url, options) => {
+    calls.push({ url, body: JSON.parse(options.body) });
+    return response({ ok: true, ids: [`sent-recovery-action-${calls.length}`] });
+  });
+  const duplicate = await deliverWhatsAppReplies(env, async () => {
+    throw new Error("should not resend recovery action notices");
+  });
+
+  assert.equal(delivery.delivered.length, 2);
+  assert.deepEqual(delivery.delivered.map((entry) => entry.deliveryType), ["router_update", "router_update"]);
+  assert.deepEqual(delivery.delivered.map((entry) => entry.routerUpdateType), ["recovery_action_requested", "recovery_action_requested"]);
+  assert.equal(delivery.delivered[0].sourceMessageId, restart.id);
+  assert.equal(delivery.delivered[1].sourceMessageId, now.id);
+  assert.equal(duplicate.delivered.length, 0);
+  assert.equal(calls.every((call) => call.body.to === "chat-recovery-action"), true);
+  assert.match(stripDebugFooter(calls[0].body.text), /^Restart requested\.\n\nOrkestr stopped the current Codex pane and woke a new one\./);
+  assert.match(stripDebugFooter(calls[1].body.text), /^Interrupt requested\.\n\nOrkestr sent the interrupt to Codex and queued your message for delivery when the prompt is ready: "fix the pairing number"\./);
+  assertDebugFooter(calls[0].body.text, { messageType: "update" });
+  assertDebugFooter(calls[1].body.text, { messageType: "update" });
+});
+
+test("whatsapp delivery reports stale-ack recovery exhaustion as manual action", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-recovery-exhausted-"));
+  const env = externalBridgeEnv(home);
+  await createThread({ id: "thread-wa-recovery-exhausted", name: "WA Recovery Exhausted Thread" }, env);
+  await writeConnectorConfig("whatsapp", {
+    bridgeMode: "external",
+    bridgeUrl: "http://wa.local",
+    threadRoutes: { "chat-recovery-exhausted": "thread-wa-recovery-exhausted" },
+  }, env);
+  const routed = await routeWhatsAppInbound({
+    eventId: "wa-recovery-exhausted-1",
+    chatId: "chat-recovery-exhausted",
+    accountId: "account-1",
+    text: "hi",
+  }, env);
+  await updateThreadMessage("thread-wa-recovery-exhausted", routed.message.id, {
+    state: "failed",
+    deliveryState: "failed",
+    observedVia: "stale_ack_recovery_exhausted",
+    error: "Thread input was not observed after stale-ack recovery; failing it to unblock later input.",
+  }, env);
+
+  const calls = [];
+  const delivery = await deliverWhatsAppReplies(env, async (url, options) => {
+    calls.push({ url, body: JSON.parse(options.body) });
+    return response({ ok: true, ids: ["sent-recovery-exhausted"] });
+  });
+  const duplicate = await deliverWhatsAppReplies(env, async () => {
+    throw new Error("should not resend recovery exhausted notice");
+  });
+
+  assert.equal(delivery.delivered.length, 1);
+  assert.equal(delivery.delivered[0].deliveryType, "router_update");
+  assert.equal(delivery.delivered[0].routerUpdateType, "recovery_exhausted");
+  assert.equal(delivery.delivered[0].sourceMessageId, routed.message.id);
+  assert.equal(duplicate.delivered.length, 0);
+  assert.equal(calls[0].body.to, "chat-recovery-exhausted");
+  assert.match(stripDebugFooter(calls[0].body.text), /^Manual recovery needed\.\n\nOrkestr stopped retrying this message to avoid duplicate input\./);
+  assert.match(stripDebugFooter(calls[0].body.text), /Open the thread or request \/restart, then resend if needed: "hi"\./);
+  assertDebugFooter(calls[0].body.text, { messageType: "update" });
+  assert.equal(delivery.delivered.some((entry) => entry.deliveryType === "delivery_error"), false);
+});
+
+test("whatsapp delivery reports mirror-disabled routed inputs once", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-mirror-disabled-notice-"));
+  const env = externalBridgeEnv(home);
+  await writeConnectorConfig("whatsapp", { bridgeMode: "external", bridgeUrl: "http://wa.local" }, env);
+  await createThread({
+    id: "thread-wa-mirror-disabled-notice",
+    name: "WA Mirror Disabled Notice Thread",
+    binding: {
+      connector: "whatsapp",
+      chatId: "chat-mirror-disabled-notice",
+      displayName: "Mirror Disabled Chat",
+      enabled: true,
+      mirrorToWhatsApp: false,
+      outboundAccountId: "account-1",
+    },
+  }, env);
+  const routed = await routeWhatsAppInbound({
+    eventId: "wa-mirror-disabled-notice-1",
+    chatId: "chat-mirror-disabled-notice",
+    accountId: "account-1",
+    text: "hello",
+  }, env);
+
+  const calls = [];
+  const delivery = await deliverWhatsAppReplies(env, async (url, options) => {
+    calls.push({ url, body: JSON.parse(options.body) });
+    return response({ ok: true, ids: ["sent-mirror-disabled-notice"] });
+  });
+  const duplicate = await deliverWhatsAppReplies(env, async () => {
+    throw new Error("should not resend mirror disabled notice");
+  });
+
+  assert.equal(routed.threadId, "thread-wa-mirror-disabled-notice");
+  assert.equal(delivery.delivered.length, 1);
+  assert.equal(delivery.delivered[0].deliveryType, "router_update");
+  assert.equal(delivery.delivered[0].routerUpdateType, "mirror_disabled");
+  assert.equal(delivery.delivered[0].sourceMessageId, routed.message.id);
+  assert.equal(duplicate.delivered.length, 0);
+  assert.equal(calls[0].body.to, "chat-mirror-disabled-notice");
+  assert.equal(calls[0].body.accountId, "account-1");
+  assert.match(stripDebugFooter(calls[0].body.text), /^Message routed to Orkestr\.\n\nWhatsApp mirroring is disabled for this thread/);
+  assertDebugFooter(calls[0].body.text, { messageType: "update" });
+});
+
 test("whatsapp /now inputs report interrupting before normal queue notices", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-now-notice-"));
   const env = externalBridgeEnv(home);
@@ -1601,14 +1743,20 @@ test("whatsapp delivery respects thread binding mirroring toggle", async () => {
 
   const routed = await routeWhatsAppInbound({ eventId: "wa-mirror-off-1", chatId: "chat-mirror-off", text: "hello" }, env);
   await runNextThreadMessage("mirror-off-thread", {}, env);
-  const delivery = await deliverWhatsAppReplies(env, async () => {
-    throw new Error("should not send when mirroring is disabled");
+  const calls = [];
+  const delivery = await deliverWhatsAppReplies(env, async (url, options) => {
+    calls.push({ url, body: JSON.parse(options.body) });
+    return response({ ok: true, ids: ["sent-mirror-off-router-notice"] });
   });
 
   assert.equal(routed.threadId, "mirror-off-thread");
-  assert.equal(delivery.delivered.length, 0);
+  assert.equal(delivery.delivered.length, 1);
+  assert.equal(delivery.delivered[0].deliveryType, "router_update");
+  assert.equal(delivery.delivered[0].routerUpdateType, "mirror_disabled");
   assert.equal(delivery.failed.length, 0);
   assert.equal(delivery.skipped.some((item) => item.reason === "mirroring_disabled"), true);
+  assert.equal(calls.length, 1);
+  assert.match(stripDebugFooter(calls[0].body.text), /^Message routed to Orkestr\./);
 });
 
 test("whatsapp delivery skips duplicate live Codex answers for the same chat", async () => {

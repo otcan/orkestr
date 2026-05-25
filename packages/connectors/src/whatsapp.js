@@ -16,6 +16,7 @@ import {
   sendLocalWhatsAppText,
   syncLocalWhatsAppTypingTargets,
 } from "./whatsapp-local-bridge.js";
+import { routerUpdateWhatsAppDeliveryTarget } from "./whatsapp-router-updates.js";
 
 let whatsappDeliveryInFlight = null;
 
@@ -980,7 +981,9 @@ function failedWhatsAppDeliveryTarget(message, thread, state) {
   const role = String(message?.role || "").trim().toLowerCase();
   const messageState = String(message?.state || "").trim().toLowerCase();
   const deliveryState = String(message?.deliveryState || "").trim().toLowerCase();
+  const observedVia = String(message?.observedVia || "").trim().toLowerCase();
   if (role !== "user" || (messageState !== "failed" && deliveryState !== "failed")) return null;
+  if (observedVia === "stale_ack_recovery_exhausted") return null;
   const inboundEvent = [...(state?.inboundEvents || [])]
     .reverse()
     .find((event) => event.messageId === message.id) || null;
@@ -1037,13 +1040,6 @@ function whatsappQueueNoticeOrigin(message, thread, state) {
   };
 }
 
-function blockedFrozenRuntimeWhatsAppDeliveryTarget(message, thread, state) {
-  const role = String(message?.role || "").trim().toLowerCase();
-  const deliveryState = String(message?.deliveryState || "").trim().toLowerCase();
-  if (role !== "user" || deliveryState !== "blocked_frozen_runtime") return null;
-  return whatsappQueueNoticeOrigin(message, thread, state);
-}
-
 function queuedInputWhatsAppDeliveryTarget(message, thread, state) {
   const role = String(message?.role || "").trim().toLowerCase();
   const messageState = String(message?.state || "").trim().toLowerCase();
@@ -1087,16 +1083,6 @@ function formatWhatsAppQueueNotice(message, reason = "") {
     return `Queued your latest message while Orkestr recovers this thread: "${preview}". It will be delivered automatically when the thread is prompt-ready.`;
   }
   return `Queued your message while Orkestr prepares this thread: "${preview}". It will be delivered automatically when the Codex session is prompt-ready.`;
-}
-
-function formatWhatsAppBlockedFrozenRuntimeNotice(message) {
-  const preview = queueNoticePreview(message);
-  return [
-    "Codex pane looks frozen.",
-    "",
-    "Orkestr paused automatic recovery and did not restart or resend anything.",
-    `Your message is blocked until the pane changes or you request a manual recovery: "${preview}".`,
-  ].join("\n");
 }
 
 function queuedModeWhatsAppDeliveryTarget(message, thread, state) {
@@ -1168,6 +1154,73 @@ async function deliverWhatsAppRepliesOnce(env = process.env, fetchImpl = fetch) 
   await recoverParentsForAlreadyMirroredReplies(messageSets, deliveredIds, outboundDeliveries, state, env);
   for (const { agentId, threadId, thread, messages, kind } of messageSets) {
     for (const message of messages) {
+      const routerUpdateTarget = routerUpdateWhatsAppDeliveryTarget({
+        message,
+        thread,
+        state,
+        kind,
+        mirroringAllowed: kind !== "thread" || threadAllowsWhatsAppMirroring(thread),
+      });
+      if (routerUpdateTarget) {
+        const deliveryId = `${message.id}:${routerUpdateTarget.routerUpdateType}`;
+        if (deliveredIds.has(deliveryId)) continue;
+        const chatId = routerUpdateTarget.chatId;
+        if (
+          routerUpdateTarget.skipIfAssistantOutput &&
+          (completedAssistantReplyForParent(messages, message, chatId, state) || latestProgressReplyForParent(messages, message.id))
+        ) {
+          skipped.push({ agentId, threadId, messageId: message.id, reason: "assistant_output_available" });
+          continue;
+        }
+        const text = appendWhatsAppDebugFooter(routerUpdateTarget.text, {
+          message,
+          thread,
+          messages,
+          deliveryType: "router_update",
+          env,
+        });
+        const accountId = kind === "thread" ? routerUpdateTarget.accountId : pickString(message.accountId, routerUpdateTarget.accountId);
+        const textKey = deliveryTextKey(chatId, `${deliveryId}\n${text}`);
+        if (deliveredTextKeys.has(textKey) || batchTextKeys.has(textKey)) {
+          skipped.push({ agentId, threadId, messageId: message.id, reason: "duplicate_text" });
+          continue;
+        }
+        try {
+          const payload = await sendWhatsAppText({ chatId, text, accountId, config, env, fetchImpl });
+          const delivery = {
+            kind,
+            deliveryType: "router_update",
+            routerUpdateType: routerUpdateTarget.routerUpdateType,
+            agentId: agentId || null,
+            threadId: threadId || null,
+            messageId: deliveryId,
+            sourceMessageId: message.id,
+            chatId,
+            accountId,
+            textKey,
+            deliveredAt: new Date().toISOString(),
+            bridgeResponse: payload,
+          };
+          outboundDeliveries.push(delivery);
+          deliveredIds.add(deliveryId);
+          deliveredTextKeys.add(textKey);
+          batchTextKeys.add(textKey);
+          delivered.push(delivery);
+          await appendEvent({
+            type: "whatsapp_outbound_router_update_delivered",
+            routerUpdateType: routerUpdateTarget.routerUpdateType,
+            agentId: agentId || null,
+            threadId: threadId || null,
+            messageId: message.id,
+            chatId,
+          }, env);
+        } catch (error) {
+          const failure = { kind, agentId: agentId || null, threadId: threadId || null, messageId: message.id, chatId, error: error.message || String(error) };
+          failed.push(failure);
+          await appendEvent({ type: "whatsapp_outbound_failed", ...failure }, env);
+        }
+        continue;
+      }
       const queuedModeTarget = queuedModeWhatsAppDeliveryTarget(message, thread, state);
       if (queuedModeTarget) {
         const deliveryId = `${message.id}:mode_queued`;
@@ -1265,61 +1318,6 @@ async function deliverWhatsAppRepliesOnce(env = process.env, fetchImpl = fetch) 
           batchTextKeys.add(textKey);
           delivered.push(delivery);
           await appendEvent({ type: "whatsapp_outbound_queue_notice_delivered", agentId: agentId || null, threadId: threadId || null, messageId: message.id, chatId }, env);
-        } catch (error) {
-          const failure = { kind, agentId: agentId || null, threadId: threadId || null, messageId: message.id, chatId, error: error.message || String(error) };
-          failed.push(failure);
-          await appendEvent({ type: "whatsapp_outbound_failed", ...failure }, env);
-        }
-        continue;
-      }
-      const blockedFrozenTarget = blockedFrozenRuntimeWhatsAppDeliveryTarget(message, thread, state);
-      if (blockedFrozenTarget) {
-        const deliveryId = `${message.id}:blocked_frozen_runtime`;
-        if (deliveredIds.has(deliveryId)) continue;
-        if (kind === "thread" && !threadAllowsWhatsAppMirroring(thread)) {
-          skipped.push({ agentId, threadId, messageId: message.id, reason: "mirroring_disabled" });
-          continue;
-        }
-        const chatId = blockedFrozenTarget.chatId;
-        if (completedAssistantReplyForParent(messages, message, chatId, state) || latestProgressReplyForParent(messages, message.id)) {
-          skipped.push({ agentId, threadId, messageId: message.id, reason: "assistant_output_available" });
-          continue;
-        }
-        const text = appendWhatsAppDebugFooter(formatWhatsAppBlockedFrozenRuntimeNotice(message), {
-          message,
-          thread,
-          messages,
-          deliveryType: "router_update",
-          env,
-        });
-        const accountId = kind === "thread" ? blockedFrozenTarget.accountId : pickString(message.accountId, blockedFrozenTarget.accountId);
-        const textKey = deliveryTextKey(chatId, `${deliveryId}\n${text}`);
-        if (deliveredTextKeys.has(textKey) || batchTextKeys.has(textKey)) {
-          skipped.push({ agentId, threadId, messageId: message.id, reason: "duplicate_text" });
-          continue;
-        }
-        try {
-          const payload = await sendWhatsAppText({ chatId, text, accountId, config, env, fetchImpl });
-          const delivery = {
-            kind,
-            deliveryType: "router_update",
-            routerUpdateType: "blocked_frozen_runtime",
-            agentId: agentId || null,
-            threadId: threadId || null,
-            messageId: deliveryId,
-            sourceMessageId: message.id,
-            chatId,
-            accountId,
-            textKey,
-            deliveredAt: new Date().toISOString(),
-            bridgeResponse: payload,
-          };
-          outboundDeliveries.push(delivery);
-          deliveredIds.add(deliveryId);
-          deliveredTextKeys.add(textKey);
-          batchTextKeys.add(textKey);
-          delivered.push(delivery);
-          await appendEvent({ type: "whatsapp_outbound_router_update_delivered", routerUpdateType: "blocked_frozen_runtime", agentId: agentId || null, threadId: threadId || null, messageId: message.id, chatId }, env);
         } catch (error) {
           const failure = { kind, agentId: agentId || null, threadId: threadId || null, messageId: message.id, chatId, error: error.message || String(error) };
           failed.push(failure);
