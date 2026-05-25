@@ -1871,14 +1871,16 @@ ork-first-thread-wizard.first-thread-host {
 .message-body p,
 .message-body ol,
 .message-body ul,
-.message-body pre {
+.message-body pre,
+.message-body .orkestr-message-table-wrap {
   margin: 0 0 0.85em;
 }
 
 .message-body p:last-child,
 .message-body ol:last-child,
 .message-body ul:last-child,
-.message-body pre:last-child {
+.message-body pre:last-child,
+.message-body .orkestr-message-table-wrap:last-child {
   margin-bottom: 0;
 }
 
@@ -1940,6 +1942,49 @@ ork-first-thread-wizard.first-thread-host {
   background: transparent;
   padding: 0;
   white-space: pre;
+}
+
+.orkestr-message-table-wrap {
+  max-width: 100%;
+  overflow-x: auto;
+  border: 1px solid rgba(140, 255, 155, 0.18);
+  border-radius: 8px;
+  background: rgba(2, 8, 3, 0.66);
+}
+
+.orkestr-message-table {
+  width: 100%;
+  min-width: min(560px, 100%);
+  border-collapse: collapse;
+  color: #dfffe2;
+  font-size: 0.92rem;
+}
+
+.orkestr-message-table th,
+.orkestr-message-table td {
+  border-bottom: 1px solid rgba(140, 255, 155, 0.12);
+  padding: 9px 11px;
+  text-align: left;
+  vertical-align: top;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.orkestr-message-table th {
+  background: rgba(80, 145, 86, 0.18);
+  color: #f3fff3;
+  font-size: 0.78rem;
+  font-weight: 900;
+  letter-spacing: 0;
+  text-transform: uppercase;
+}
+
+.orkestr-message-table tr:last-child td {
+  border-bottom: 0;
+}
+
+.orkestr-message-table tbody tr:nth-child(even) td {
+  background: rgba(255, 255, 255, 0.025);
 }
 
 .attachments,

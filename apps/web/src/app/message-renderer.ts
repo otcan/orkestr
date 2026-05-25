@@ -192,6 +192,93 @@ function renderList(lines: string[], ordered: boolean): { html: string; nextInde
   };
 }
 
+const tableSeparatorCellPattern = /^:?-{3,}:?$/;
+
+function parseMarkdownTableRow(line = ""): string[] {
+  const source = String(line || "").trim();
+  if (!source.includes("|")) return [];
+  const cells: string[] = [];
+  let current = "";
+  let escaped = false;
+  for (const char of source) {
+    if (char === "\\" && !escaped) {
+      escaped = true;
+      current += char;
+      continue;
+    }
+    if (char === "|" && !escaped) {
+      cells.push(current);
+      current = "";
+    } else {
+      current += char;
+    }
+    escaped = false;
+  }
+  cells.push(current);
+  if (cells[0]?.trim() === "") cells.shift();
+  if (cells[cells.length - 1]?.trim() === "") cells.pop();
+  return cells.map((cell) => cell.trim());
+}
+
+function isMarkdownTableSeparator(cells: string[], expectedColumns: number): boolean {
+  return cells.length >= 2 &&
+    Math.abs(cells.length - expectedColumns) <= 1 &&
+    cells.every((cell) => tableSeparatorCellPattern.test(String(cell || "").replace(/\s+/g, "")));
+}
+
+function normalizeTableRow(row: string[], columnCount: number): string[] {
+  const normalized = row.slice(0, columnCount);
+  while (normalized.length < columnCount) normalized.push("");
+  return normalized;
+}
+
+function cleanTableCell(cell: string): string {
+  return String(cell || "")
+    .replace(/\\\|/g, "|")
+    .replace(/<br\s*\/?>/gi, "\n")
+    .trim();
+}
+
+function renderTableCell(cell: string, tag: "td" | "th"): string {
+  const content = renderInline(cleanTableCell(cell)).replace(/\n/g, "<br>");
+  return `<${tag}>${content}</${tag}>`;
+}
+
+function renderMarkdownTable(lines: string[]): { html: string; nextIndex: number } {
+  if (lines.length < 2) return { html: "", nextIndex: 0 };
+  const headers = parseMarkdownTableRow(lines[0]);
+  const separator = parseMarkdownTableRow(lines[1]);
+  if (headers.length < 2 || !isMarkdownTableSeparator(separator, headers.length)) {
+    return { html: "", nextIndex: 0 };
+  }
+
+  const columnCount = headers.length;
+  const rows: string[][] = [];
+  let index = 2;
+  while (index < lines.length) {
+    const row = parseMarkdownTableRow(lines[index]);
+    if (row.length < 2) break;
+    rows.push(normalizeTableRow(row, columnCount));
+    index += 1;
+  }
+
+  const headerHtml = normalizeTableRow(headers, columnCount).map((cell) => renderTableCell(cell, "th")).join("");
+  const bodyHtml = rows
+    .map((row) => `<tr>${row.map((cell) => renderTableCell(cell, "td")).join("")}</tr>`)
+    .join("");
+  return {
+    html: [
+      `<div class="orkestr-message-table-wrap">`,
+      `<table class="orkestr-message-table">`,
+      `<thead><tr>${headerHtml}</tr></thead>`,
+      bodyHtml ? `<tbody>${bodyHtml}</tbody>` : "",
+      `</table>`,
+      `</div>`,
+    ].join(""),
+    nextIndex: index,
+  };
+}
+
 function renderCodeFence(lines: string[]): { html: string; nextIndex: number } {
   const codeLines: string[] = [];
   let index = 1;
@@ -231,6 +318,14 @@ export function renderMessageTextHtml(text: string | null | undefined): string {
       const fence = renderCodeFence(lines.slice(index));
       blocks.push(fence.html);
       index += fence.nextIndex;
+      continue;
+    }
+
+    const table = renderMarkdownTable(lines.slice(index));
+    if (table.html) {
+      flushParagraph();
+      blocks.push(table.html);
+      index += table.nextIndex;
       continue;
     }
 
