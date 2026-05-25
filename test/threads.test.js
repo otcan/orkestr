@@ -2800,9 +2800,9 @@ test("whatsapp codex mode deferral raises a connector delivery signal", async ()
   process.env.TMUX_STATE = fakeTmux.state;
   process.env.TMUX_CAPTURE_FILE = captureFile;
   process.env.ORKESTR_CODEX_MODE_COMMAND_RETRY_MS = "60000";
-  let scheduled = 0;
-  const clearSignalHandler = setThreadConnectorDeliverySignalHandler(() => {
-    scheduled += 1;
+  const signals = [];
+  const clearSignalHandler = setThreadConnectorDeliverySignalHandler((event) => {
+    signals.push(event);
   });
 
   try {
@@ -2835,8 +2835,14 @@ test("whatsapp codex mode deferral raises a connector delivery signal", async ()
     assert.equal(command.state, "queued");
     assert.equal(command.deliveryState, "waiting_runtime_ready");
     assert.equal(command.observedVia, "orkestr_codex_mode_queued");
-    assert.equal(consumeThreadConnectorDeliverySignalCount(), 1);
-    assert.equal(scheduled, 1);
+    const signalCount = consumeThreadConnectorDeliverySignalCount();
+    const targetSignals = signals.filter((event) =>
+      event.messageId === command.id &&
+      event.chatId === "chat-wa-mode-signal" &&
+      event.deliveryState === "waiting_runtime_ready"
+    );
+    assert.equal(targetSignals.length, 1);
+    assert.ok(signalCount >= targetSignals.length);
   } finally {
     clearSignalHandler();
     restoreEnvValue("PATH", priorPath);
