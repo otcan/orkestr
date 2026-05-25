@@ -6,7 +6,7 @@ usage() {
 Install Orkestr.
 
 Usage:
-  scripts/install.sh [--config FILE] [--local] [--no-start] [--no-service] [--serve] [--profile local-safe|local-trusted] [--enable-host-codex]
+  scripts/install.sh [--config FILE] [--fresh] [--local] [--no-start] [--no-service] [--serve] [--profile local-safe|local-trusted] [--enable-host-codex]
   scripts/install.sh --systemd [--auto-update] [--track-main|--release-updates] [--install-dir DIR] [--data-dir DIR] [--workspace-dir DIR] [--env-file FILE] [--user USER]
 
 Modes:
@@ -22,6 +22,9 @@ Configured installs:
 
   Optional JSON config:
     curl -fsSL https://raw.githubusercontent.com/otcan/orkestr/main/scripts/install.sh | bash -s -- --config orkestr.install.json
+
+  Fresh local reinstall:
+    curl -fsSL https://raw.githubusercontent.com/otcan/orkestr/main/scripts/install.sh | bash -s -- --fresh
 
 Deprecated compatibility flags:
   --local       Force using the current checkout.
@@ -65,6 +68,7 @@ Environment:
   ORKESTR_CODEX_VERSION     Codex CLI version. Defaults to 0.133.0.
   ORKESTR_LOCAL_ENV_FILE    Local env file written for non-systemd installs. Defaults to $ORKESTR_HOME/orkestr.env.
   ORKESTR_SKIP_SYSTEM_PACKAGES  Skip apt package installation when set to 1.
+  ORKESTR_FRESH_INSTALL     Set to 1 to stop the local service and remove local Orkestr state before install.
 USAGE
 }
 
@@ -174,6 +178,7 @@ data_dir="${ORKESTR_HOME:-}"
 workspace_dir="${ORKESTR_WORKSPACE_DIR:-}"
 env_file="${ORKESTR_ENV_FILE:-}"
 local_env_file="${ORKESTR_LOCAL_ENV_FILE:-}"
+fresh_install="${ORKESTR_FRESH_INSTALL:-0}"
 run_user="${ORKESTR_RUN_USER:-orkestr}"
 host="${ORKESTR_HOST:-127.0.0.1}"
 port="${ORKESTR_PORT:-19812}"
@@ -212,6 +217,11 @@ while [ "$#" -gt 0 ]; do
         exit 2
       fi
       shift 2
+      ;;
+    --fresh)
+      fresh_install=1
+      ORKESTR_FRESH_INSTALL=1
+      shift
       ;;
     --serve)
       foreground_serve=1
@@ -375,6 +385,55 @@ is_macos() {
   [ "$(uname -s)" = "Darwin" ]
 }
 
+prepend_path_once() {
+  local dir current
+  dir="$1"
+  current="${2:-}"
+  [ -n "$dir" ] || {
+    echo "$current"
+    return 0
+  }
+  case ":$current:" in
+    *":$dir:"*) echo "$current" ;;
+    *) echo "$dir${current:+:$current}" ;;
+  esac
+}
+
+local_runtime_path() {
+  local path_value cmd cmd_path dir
+  path_value="${PATH:-/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin}"
+  if is_macos; then
+    for dir in /opt/homebrew/bin /usr/local/bin /opt/homebrew/sbin /usr/local/sbin /usr/bin /bin /usr/sbin /sbin; do
+      if [ -d "$dir" ]; then
+        path_value="$(prepend_path_once "$dir" "$path_value")"
+      fi
+    done
+  fi
+  for cmd in node npm git tmux rg codex google-chrome google-chrome-stable chromium chromium-browser; do
+    cmd_path="$(PATH="$path_value" command -v "$cmd" 2>/dev/null || true)"
+    if [ -n "$cmd_path" ]; then
+      path_value="$(prepend_path_once "$(dirname "$cmd_path")" "$path_value")"
+    fi
+  done
+  echo "$path_value"
+}
+
+brew_command() {
+  if have brew; then
+    command -v brew
+    return 0
+  fi
+  if [ -x /opt/homebrew/bin/brew ]; then
+    echo /opt/homebrew/bin/brew
+    return 0
+  fi
+  if [ -x /usr/local/bin/brew ]; then
+    echo /usr/local/bin/brew
+    return 0
+  fi
+  return 1
+}
+
 profile_is_trusted() {
   case "$1" in
     local-trusted|vps-trusted|trusted)
@@ -450,6 +509,7 @@ print_macos_codex_notice() {
   cat <<'EOF'
 
 macOS Codex note:
+  This is not an install error.
   Orkestr will not auto-probe or run the host `codex` binary from this install.
   This avoids macOS Gatekeeper/XProtect prompts from an unverified native binary.
 
@@ -678,6 +738,48 @@ install_system_packages() {
   fi
   apt_install ca-certificates curl git openssh-client procps ripgrep sqlite3 tmux util-linux
   install_browser_package
+}
+
+install_local_runtime_tools() {
+  if [ "$systemd" -eq 1 ]; then
+    return 0
+  fi
+  export PATH="$(local_runtime_path)"
+  local missing_packages=()
+  if ! have git; then missing_packages+=("git"); fi
+  if ! have tmux; then missing_packages+=("tmux"); fi
+  if ! have rg; then missing_packages+=("ripgrep"); fi
+  if [ "${#missing_packages[@]}" -gt 0 ] && [ "${ORKESTR_SKIP_SYSTEM_PACKAGES:-0}" != "1" ]; then
+    if is_macos; then
+      local brew
+      if brew="$(brew_command)"; then
+        "$brew" install "${missing_packages[@]}"
+        export PATH="$(local_runtime_path)"
+      else
+        cat >&2 <<'EOF'
+Missing local runtime tools and Homebrew was not found.
+
+Install Homebrew, then rerun the installer, or install the tools manually:
+  brew install git tmux ripgrep
+EOF
+        exit 1
+      fi
+    elif have apt-get && have sudo; then
+      sudo apt-get update
+      sudo apt-get install -y git tmux ripgrep
+    fi
+  fi
+  for cmd in git tmux rg; do
+    if ! have "$cmd"; then
+      cat >&2 <<EOF
+Missing required local runtime command: $cmd
+
+Install git, tmux, and ripgrep, then rerun the installer. On macOS:
+  brew install git tmux ripgrep
+EOF
+      exit 1
+    fi
+  done
 }
 
 browser_command_is_usable() {
@@ -1054,11 +1156,78 @@ EOF
   esac
 }
 
+safe_remove_path() {
+  local path
+  path="${1:-}"
+  [ -n "$path" ] || return 0
+  case "$path" in
+    "/"|"$HOME"|"$HOME/"|"/home"|"/Users"|"/root"|"/opt"|"/usr"|"/usr/local")
+      echo "Refusing to remove unsafe path during fresh install: $path" >&2
+      exit 1
+      ;;
+  esac
+  rm -rf "$path"
+}
+
+remove_local_cron_entry() {
+  local tmp marker
+  if ! have crontab; then
+    return 0
+  fi
+  marker="# orkestr local service"
+  tmp="$(mktemp)"
+  crontab -l 2>/dev/null | grep -vF "$marker" > "$tmp" || true
+  crontab "$tmp" 2>/dev/null || true
+  rm -f "$tmp"
+}
+
+stop_local_service_if_present() {
+  local label domain plist unit unit_file pid_file pid
+  label="$(local_service_label)"
+  plist="$(local_service_file launchd)"
+  unit="$(local_service_name).service"
+  unit_file="$(local_service_file systemd-user)"
+  pid_file="$(local_pid_file)"
+  if is_macos && have launchctl; then
+    domain="gui/$(id -u)"
+    launchctl bootout "$domain/$label" >/dev/null 2>&1 || launchctl bootout "$domain" "$plist" >/dev/null 2>&1 || true
+    rm -f "$plist"
+  fi
+  if have systemctl; then
+    systemctl --user disable --now "$unit" >/dev/null 2>&1 || true
+    rm -f "$unit_file"
+    systemctl --user daemon-reload >/dev/null 2>&1 || true
+  fi
+  remove_local_cron_entry
+  if [ -r "$pid_file" ]; then
+    pid="$(cat "$pid_file" 2>/dev/null || true)"
+    if [ -n "$pid" ]; then
+      kill "$pid" >/dev/null 2>&1 || true
+    fi
+    rm -f "$pid_file"
+  fi
+}
+
+fresh_reset_local_install() {
+  if [ "$systemd" -eq 1 ]; then
+    echo "--fresh is only supported for local installs. For VPS resets, use orkestr-reset-state." >&2
+    exit 2
+  fi
+  echo "Fresh local install requested: stopping Orkestr and removing local runtime state."
+  stop_local_service_if_present
+  rm -f "$(local_cli_bin)" "$(local_service_file launchd)" "$(local_service_file systemd-user)" "$(local_service_file cron)"
+  safe_remove_path "$data_dir"
+  if [ "$local_mode" -ne 1 ]; then
+    safe_remove_path "$install_dir"
+  fi
+}
+
 write_local_env_file() {
   mkdir -p "$(dirname "$local_env_file")"
   {
     echo "# Orkestr local environment."
     echo "# Source this file before running Orkestr manually from the checkout."
+    write_env_var PATH "$(local_runtime_path)"
     write_env_var ORKESTR_APP_DIR "$repo_dir"
     write_env_var ORKESTR_HOME "$data_dir"
     write_env_var ORKESTR_HOST "$host"
@@ -1402,6 +1571,15 @@ fi
 if [ "$foreground_serve" -eq 1 ]; then
   echo "Warning: --serve is a development shortcut. Normal installs use the local service." >&2
 fi
+fresh_install="$(normalize_bool "$fresh_install")"
+if [ "$fresh_install" != "0" ] && [ "$fresh_install" != "1" ]; then
+  echo "Invalid ORKESTR_FRESH_INSTALL value: $fresh_install" >&2
+  echo "Use 1/0, yes/no, true/false, or on/off." >&2
+  exit 2
+fi
+if [ "$fresh_install" = "1" ]; then
+  fresh_reset_local_install
+fi
 
 print_macos_codex_notice
 export ORKESTR_RUNTIME_CODEX_COMMAND="${ORKESTR_RUNTIME_CODEX_COMMAND:-$(codex_command_default)}"
@@ -1410,7 +1588,7 @@ install_system_packages
 ensure_node
 need npm
 if [ "$systemd" -ne 1 ]; then
-  need git
+  install_local_runtime_tools
 fi
 install_codex
 

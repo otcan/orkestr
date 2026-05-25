@@ -169,6 +169,12 @@ Do not publish a raw Orkestr API or terminal stream directly to the internet.
    ```bash
    curl -fsSL https://raw.githubusercontent.com/otcan/orkestr/main/scripts/install.sh | bash
    ```
+
+   For a clean local reinstall, use `--fresh`:
+
+   ```bash
+   curl -fsSL https://raw.githubusercontent.com/otcan/orkestr/main/scripts/install.sh | bash -s -- --fresh
+   ```
 2. Open `/setup`.
 3. Review Connections.
 4. Configure secure access if the URL is remote.
@@ -194,6 +200,12 @@ orkestr service logs
 ```
 
 `scripts/install.sh --serve` is only for foreground development.
+
+To uninstall a local Orkestr install:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/otcan/orkestr/main/scripts/uninstall.sh | bash
+```
 
 ## Typical Workflows
 

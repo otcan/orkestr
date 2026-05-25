@@ -48,10 +48,18 @@ test("install script exposes a host-native systemd VPS path", async () => {
   assert.match(script, /--enable-host-codex/);
   assert.match(script, /--no-service/);
   assert.match(script, /--no-start/);
+  assert.match(script, /--fresh/);
+  assert.match(script, /ORKESTR_FRESH_INSTALL/);
+  assert.match(script, /fresh_reset_local_install/);
+  assert.match(script, /safe_remove_path/);
   assert.match(script, /ORKESTR_INSTALL_PROFILE/);
   assert.match(script, /ORKESTR_ENABLE_HOST_CODEX/);
   assert.match(script, /ORKESTR_LOCAL_ENV_FILE/);
   assert.match(script, /ORKESTR_RUNTIME_SETTINGS_FILE/);
+  assert.match(script, /local_runtime_path/);
+  assert.match(script, /write_env_var PATH/);
+  assert.match(script, /install_local_runtime_tools/);
+  assert.match(script, /brew install git tmux ripgrep/);
   assert.match(script, /__orkestr_codex_disabled_on_macos__/);
   assert.match(script, /should_disable_macos_codex_bin/);
   assert.match(script, /should_disable_macos_runtime_codex/);
@@ -116,6 +124,7 @@ test("install script exposes a host-native systemd VPS path", async () => {
   assert.match(script, /npm ci --include=dev/);
   assert.match(script, /npm install --include=dev/);
   assert.match(script, /Refusing to install Codex automatically on macOS/);
+  assert.match(script, /This is not an install error/);
   assert.match(script, /npm install -g "@openai\/codex@\$\{ORKESTR_CODEX_VERSION:-0\.133\.0\}"/);
   assert.match(script, /runuser -u "\$run_user" --preserve-environment -- node/);
   assert.match(script, /ORKESTR_CLI_RUN_AS_ROOT/);
@@ -130,6 +139,22 @@ test("install script exposes a host-native systemd VPS path", async () => {
   assert.doesNotMatch(script, /orkestr\.install\.env/);
   assert.doesNotMatch(script, /ORKESTR_INSTALL_CONFIG/);
   assert.doesNotMatch(script, /--config-json/);
+});
+
+test("uninstall script removes local service wrappers without requiring a clone", async () => {
+  const script = await fs.readFile("scripts/uninstall.sh", "utf8");
+
+  await execFileAsync("bash", ["-n", "scripts/uninstall.sh"]);
+  assert.match(script, /One-line uninstall/);
+  assert.match(script, /raw\.githubusercontent\.com\/otcan\/orkestr\/main\/scripts\/uninstall\.sh/);
+  assert.match(script, /launchctl bootout/);
+  assert.match(script, /systemctl --user disable --now/);
+  assert.match(script, /crontab -l/);
+  assert.match(script, /ORKESTR_LOCAL_CLI_BIN/);
+  assert.match(script, /ORKESTR_LOCAL_SERVER_WRAPPER/);
+  assert.match(script, /safe_remove_path "\$data_dir"/);
+  assert.match(script, /--keep-data/);
+  assert.match(script, /--keep-source/);
 });
 
 test("install script accepts optional JSON config before help", async () => {

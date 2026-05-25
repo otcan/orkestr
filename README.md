@@ -90,6 +90,18 @@ The same one-line command updates an existing local install. It pulls the
 managed checkout under `~/.orkestr-src/orkestr-oss`, rebuilds, refreshes the
 service wrapper, and restarts the local service.
 
+For a clean reinstall, stop Orkestr and remove local runtime state first:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/otcan/orkestr/main/scripts/install.sh | bash -s -- --fresh
+```
+
+To remove a local install:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/otcan/orkestr/main/scripts/uninstall.sh | bash
+```
+
 For a configured install, use JSON:
 
 ```bash
@@ -118,6 +130,8 @@ binaries. Verify `codex --version` and `codex login status` yourself, then rerun
 with `ORKESTR_ENABLE_HOST_CODEX=1 ./scripts/install.sh --local` to opt
 in. The local installer writes `$ORKESTR_HOME/orkestr.env`; source that file
 before manual `npm start` runs so the same safe runtime settings are used.
+On macOS and other local installs, that file includes a service-safe `PATH` so
+launchd/systemd can find tools such as `tmux` and Homebrew-installed binaries.
 Use `.env` or the setup UI for optional OpenAI direct API access,
 Tailscale/Caddy settings, OAuth credentials, workspace roots, or overlay
 settings. For configured installs, pass `--config orkestr.install.json`.
