@@ -1,17 +1,38 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+uninstall_script_url="${ORKESTR_UNINSTALL_SCRIPT_URL:-https://raw.githubusercontent.com/otcan/orkestr/main/scripts/uninstall.sh}"
+if [ -n "${ORKESTR_UNINSTALL_TEMP_FILE:-}" ]; then
+  trap 'rm -f "$ORKESTR_UNINSTALL_TEMP_FILE"' EXIT
+fi
+case "${ORKESTR_UNINSTALL_REEXECED:-0}:$0" in
+  0:bash|0:*/bash|0:sh|0:*/sh|0:-bash)
+    if command -v curl >/dev/null 2>&1; then
+      uninstall_tmp="$(mktemp)"
+      curl -fsSL "$uninstall_script_url" -o "$uninstall_tmp"
+      chmod 0755 "$uninstall_tmp"
+      export ORKESTR_UNINSTALL_REEXECED=1
+      export ORKESTR_UNINSTALL_TEMP_FILE="$uninstall_tmp"
+      if { : </dev/tty; } 2>/dev/null; then
+        exec bash "$uninstall_tmp" "$@" </dev/tty
+      fi
+      exec bash "$uninstall_tmp" "$@" </dev/null
+    fi
+    ;;
+esac
+
 usage() {
   cat <<'USAGE'
 Uninstall local Orkestr.
 
 Usage:
-  scripts/uninstall.sh [--keep-data] [--keep-source]
+  scripts/uninstall.sh [--all] [--keep-data] [--keep-source]
 
 One-line uninstall:
   curl -fsSL https://raw.githubusercontent.com/otcan/orkestr/main/scripts/uninstall.sh | bash
 
 Options:
+  --all          Also remove a source checkout outside ~/.orkestr-src when one is recorded.
   --keep-data    Stop services and remove wrappers, but keep ~/.orkestr.
   --keep-source  Keep the managed checkout under ~/.orkestr-src.
 USAGE
@@ -19,8 +40,13 @@ USAGE
 
 keep_data=0
 keep_source=0
+delete_source=0
 while [ "$#" -gt 0 ]; do
   case "$1" in
+    --all|--delete-source)
+      delete_source=1
+      shift
+      ;;
     --keep-data)
       keep_data=1
       shift
@@ -47,6 +73,40 @@ have() {
 
 is_macos() {
   [ "$(uname -s)" = "Darwin" ]
+}
+
+is_interactive_terminal() {
+  [ -t 0 ] && [ -t 1 ]
+}
+
+prompt_yes_no() {
+  local var_name label default_value suffix answer normalized
+  var_name="$1"
+  label="$2"
+  default_value="$3"
+  suffix="[y/N]"
+  if [ "$default_value" = "1" ]; then
+    suffix="[Y/n]"
+  fi
+  while true; do
+    printf "%s %s: " "$label" "$suffix"
+    read -r answer
+    normalized="$(printf "%s" "${answer:-}" | tr '[:upper:]' '[:lower:]')"
+    if [ -z "$normalized" ]; then
+      printf -v "$var_name" "%s" "$default_value"
+      return 0
+    fi
+    case "$normalized" in
+      y|yes)
+        printf -v "$var_name" "1"
+        return 0
+        ;;
+      n|no)
+        printf -v "$var_name" "0"
+        return 0
+        ;;
+    esac
+  done
 }
 
 safe_remove_path() {
@@ -135,7 +195,20 @@ if [ "$keep_source" = "0" ]; then
       safe_remove_path "$source_dir"
       ;;
     *)
-      echo "Kept source checkout: $source_dir"
+      if [ "$delete_source" = "1" ]; then
+        safe_remove_path "$source_dir"
+      elif is_interactive_terminal; then
+        remove_external_source=0
+        prompt_yes_no remove_external_source "Remove source checkout outside the managed install path: $source_dir" "0"
+        if [ "$remove_external_source" = "1" ]; then
+          safe_remove_path "$source_dir"
+        else
+          echo "Left source checkout in place: $source_dir"
+        fi
+      else
+        echo "Left source checkout in place: $source_dir"
+        echo "Run with --all to remove source checkouts outside ~/.orkestr-src."
+      fi
       ;;
   esac
 else

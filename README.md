@@ -74,6 +74,9 @@ The installer prepares the local runtime, installs a user service, starts
 Orkestr, and prints service commands. On macOS this uses `launchd`; on Linux it
 uses a user `systemd` unit when available and falls back to cron only when no
 user service manager is available.
+When run from a terminal, the one-line installer asks for the bind address,
+data/workspace paths, Codex approval posture, whether to use the host Codex CLI,
+missing runtime tool installation, and service/start choices.
 
 ```bash
 ~/.local/bin/orkestr service status
@@ -101,6 +104,11 @@ To remove a local install:
 ```bash
 curl -fsSL https://raw.githubusercontent.com/otcan/orkestr/main/scripts/uninstall.sh | bash
 ```
+
+The uninstaller removes the local service, CLI wrappers, logs, data directory,
+and the managed checkout under `~/.orkestr-src`. If a previous install points at
+a source checkout outside `~/.orkestr-src`, the uninstaller asks before deleting
+it; pass `--all` only when you really want that checkout removed too.
 
 For a configured install, use JSON:
 
@@ -132,6 +140,9 @@ in. The local installer writes `$ORKESTR_HOME/orkestr.env`; source that file
 before manual `npm start` runs so the same safe runtime settings are used.
 On macOS and other local installs, that file includes a service-safe `PATH` so
 launchd/systemd can find tools such as `tmux` and Homebrew-installed binaries.
+The one-line script also detaches itself from the `curl | bash` pipe before
+running Homebrew or prompts, so dependency installers cannot consume the rest of
+the script from stdin.
 Use `.env` or the setup UI for optional OpenAI direct API access,
 Tailscale/Caddy settings, OAuth credentials, workspace roots, or overlay
 settings. For configured installs, pass `--config orkestr.install.json`.

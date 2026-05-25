@@ -170,6 +170,10 @@ Do not publish a raw Orkestr API or terminal stream directly to the internet.
    curl -fsSL https://raw.githubusercontent.com/otcan/orkestr/main/scripts/install.sh | bash
    ```
 
+   In a terminal, the installer asks for local bind settings, runtime paths,
+   Codex approval behavior, whether to use the host Codex CLI, missing runtime
+   tool installation, and whether to start Orkestr as a local service.
+
    For a clean local reinstall, use `--fresh`:
 
    ```bash
@@ -206,6 +210,9 @@ To uninstall a local Orkestr install:
 ```bash
 curl -fsSL https://raw.githubusercontent.com/otcan/orkestr/main/scripts/uninstall.sh | bash
 ```
+
+Use `--all` only when you also want to remove a source checkout outside the
+managed `~/.orkestr-src` install directory.
 
 ## Typical Workflows
 

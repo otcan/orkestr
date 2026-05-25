@@ -1,6 +1,26 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+install_script_url="${ORKESTR_INSTALL_SCRIPT_URL:-https://raw.githubusercontent.com/otcan/orkestr/main/scripts/install.sh}"
+if [ -n "${ORKESTR_INSTALL_TEMP_FILE:-}" ]; then
+  trap 'rm -f "$ORKESTR_INSTALL_TEMP_FILE"' EXIT
+fi
+case "${ORKESTR_INSTALL_REEXECED:-0}:$0" in
+  0:bash|0:*/bash|0:sh|0:*/sh|0:-bash)
+    if command -v curl >/dev/null 2>&1; then
+      install_tmp="$(mktemp)"
+      curl -fsSL "$install_script_url" -o "$install_tmp"
+      chmod 0755 "$install_tmp"
+      export ORKESTR_INSTALL_REEXECED=1
+      export ORKESTR_INSTALL_TEMP_FILE="$install_tmp"
+      if { : </dev/tty; } 2>/dev/null; then
+        exec bash "$install_tmp" "$@" </dev/tty
+      fi
+      exec bash "$install_tmp" "$@" </dev/null
+    fi
+    ;;
+esac
+
 usage() {
   cat <<'USAGE'
 Install Orkestr.
@@ -69,6 +89,7 @@ Environment:
   ORKESTR_LOCAL_ENV_FILE    Local env file written for non-systemd installs. Defaults to $ORKESTR_HOME/orkestr.env.
   ORKESTR_SKIP_SYSTEM_PACKAGES  Skip apt package installation when set to 1.
   ORKESTR_FRESH_INSTALL     Set to 1 to stop the local service and remove local Orkestr state before install.
+  ORKESTR_NONINTERACTIVE    Set to 1 to skip local installer prompts.
 USAGE
 }
 
@@ -466,12 +487,14 @@ codex_command_default() {
     echo "__orkestr_codex_disabled_on_macos__"
     return 0
   fi
-  local codex_bin
+  local codex_bin sandbox approval
   codex_bin="${ORKESTR_CODEX_BIN:-codex}"
-  if profile_is_trusted "$install_profile"; then
+  sandbox="${ORKESTR_CODEX_SANDBOX:-$(codex_sandbox_default)}"
+  approval="${ORKESTR_CODEX_APPROVAL_POLICY:-$(codex_approval_default)}"
+  if [ "$sandbox" = "danger-full-access" ] && [ "$approval" = "never" ]; then
     echo "$codex_bin --dangerously-bypass-approvals-and-sandbox"
   else
-    echo "$codex_bin --sandbox workspace-write --ask-for-approval on-request --no-alt-screen"
+    echo "$codex_bin --sandbox $sandbox --ask-for-approval $approval --no-alt-screen"
   fi
 }
 
@@ -605,6 +628,71 @@ prompt_yes_no() {
   done
 }
 
+join_words() {
+  local first item
+  first=1
+  for item in "$@"; do
+    if [ "$first" -eq 1 ]; then
+      printf "%s" "$item"
+      first=0
+    else
+      printf " %s" "$item"
+    fi
+  done
+}
+
+run_codex_login_if_requested() {
+  if ! have codex; then
+    return 0
+  fi
+  if codex login status >/dev/null 2>&1; then
+    echo "Codex login: connected"
+    return 0
+  fi
+  local do_login
+  prompt_yes_no do_login "Codex is installed but not logged in. Run codex login now" "0"
+  if [ "$do_login" = "1" ]; then
+    codex login || true
+  fi
+}
+
+configure_codex_interactively() {
+  if [ "$systemd" -eq 1 ] || ! is_interactive_terminal; then
+    return 0
+  fi
+  local use_host_codex default_use
+  default_use=1
+  if is_macos; then
+    default_use=0
+  fi
+  prompt_yes_no use_host_codex "Use this machine's Codex CLI for coding agents" "$default_use"
+  if [ "$use_host_codex" = "1" ]; then
+    ORKESTR_ENABLE_HOST_CODEX=1
+    export ORKESTR_ENABLE_HOST_CODEX
+    if have codex; then
+      ORKESTR_CODEX_BIN="${ORKESTR_CODEX_BIN:-$(command -v codex)}"
+      export ORKESTR_CODEX_BIN
+      if codex --version >/dev/null 2>&1; then
+        echo "Codex CLI: $(codex --version 2>/dev/null | head -1)"
+        run_codex_login_if_requested
+      else
+        cat >&2 <<'EOF'
+Codex CLI exists, but macOS or the shell could not run it.
+Open a terminal and verify it manually with:
+  codex --version
+  codex login status
+Then rerun the installer with Codex enabled.
+EOF
+      fi
+    else
+      echo "Codex CLI was not found. You can connect Codex later from /setup."
+    fi
+  else
+    ORKESTR_ENABLE_HOST_CODEX=0
+    export ORKESTR_ENABLE_HOST_CODEX
+  fi
+}
+
 normalize_bool() {
   local normalized
   normalized="$(printf "%s" "${1:-}" | tr '[:upper:]' '[:lower:]')"
@@ -664,12 +752,11 @@ run_install_wizard() {
   if [ "$keep_approvals" = "1" ]; then
     ORKESTR_CODEX_SANDBOX="${ORKESTR_CODEX_SANDBOX:-workspace-write}"
     ORKESTR_CODEX_APPROVAL_POLICY="${ORKESTR_CODEX_APPROVAL_POLICY:-on-request}"
-    ORKESTR_RUNTIME_CODEX_COMMAND="${ORKESTR_RUNTIME_CODEX_COMMAND:-codex --sandbox workspace-write --ask-for-approval on-request --no-alt-screen}"
   else
     ORKESTR_CODEX_SANDBOX="${ORKESTR_CODEX_SANDBOX:-danger-full-access}"
     ORKESTR_CODEX_APPROVAL_POLICY="${ORKESTR_CODEX_APPROVAL_POLICY:-never}"
-    ORKESTR_RUNTIME_CODEX_COMMAND="${ORKESTR_RUNTIME_CODEX_COMMAND:-codex --dangerously-bypass-approvals-and-sandbox}"
   fi
+  configure_codex_interactively
   if [ "$systemd" -ne 1 ]; then
     prompt_yes_no install_service "Install Orkestr as a user service" "$local_service"
     local_service="$install_service"
@@ -750,10 +837,19 @@ install_local_runtime_tools() {
   if ! have tmux; then missing_packages+=("tmux"); fi
   if ! have rg; then missing_packages+=("ripgrep"); fi
   if [ "${#missing_packages[@]}" -gt 0 ] && [ "${ORKESTR_SKIP_SYSTEM_PACKAGES:-0}" != "1" ]; then
+    local install_missing missing_text
+    missing_text="$(join_words "${missing_packages[@]}")"
+    if is_interactive_terminal; then
+      prompt_yes_no install_missing "Install missing local runtime tools: $missing_text" "1"
+      if [ "$install_missing" != "1" ]; then
+        echo "Install cancelled. Missing tools: $missing_text" >&2
+        exit 1
+      fi
+    fi
     if is_macos; then
       local brew
       if brew="$(brew_command)"; then
-        "$brew" install "${missing_packages[@]}"
+        HOMEBREW_NO_AUTO_UPDATE=1 HOMEBREW_NO_ENV_HINTS=1 "$brew" install "${missing_packages[@]}"
         export PATH="$(local_runtime_path)"
       else
         cat >&2 <<'EOF'
@@ -766,7 +862,7 @@ EOF
       fi
     elif have apt-get && have sudo; then
       sudo apt-get update
-      sudo apt-get install -y git tmux ripgrep
+      sudo apt-get install -y "${missing_packages[@]}"
     fi
   fi
   for cmd in git tmux rg; do
@@ -1552,7 +1648,7 @@ fi
 
 apply_install_defaults
 
-if [ "$install_json_config_loaded" -eq 0 ] && [ "$initial_arg_count" -eq 0 ] && is_interactive_terminal; then
+if [ "$install_json_config_loaded" -eq 0 ] && [ "${ORKESTR_NONINTERACTIVE:-0}" != "1" ] && [ "$systemd" -ne 1 ] && is_interactive_terminal; then
   run_install_wizard
 fi
 

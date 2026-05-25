@@ -50,6 +50,10 @@ test("install script exposes a host-native systemd VPS path", async () => {
   assert.match(script, /--no-start/);
   assert.match(script, /--fresh/);
   assert.match(script, /ORKESTR_FRESH_INSTALL/);
+  assert.match(script, /ORKESTR_INSTALL_REEXECED/);
+  assert.match(script, /ORKESTR_INSTALL_TEMP_FILE/);
+  assert.match(script, /exec bash "\$install_tmp" "\$@" <\/dev\/tty/);
+  assert.match(script, /ORKESTR_NONINTERACTIVE/);
   assert.match(script, /fresh_reset_local_install/);
   assert.match(script, /safe_remove_path/);
   assert.match(script, /ORKESTR_INSTALL_PROFILE/);
@@ -59,7 +63,12 @@ test("install script exposes a host-native systemd VPS path", async () => {
   assert.match(script, /local_runtime_path/);
   assert.match(script, /write_env_var PATH/);
   assert.match(script, /install_local_runtime_tools/);
+  assert.match(script, /Install missing local runtime tools/);
+  assert.match(script, /HOMEBREW_NO_AUTO_UPDATE=1 HOMEBREW_NO_ENV_HINTS=1/);
   assert.match(script, /brew install git tmux ripgrep/);
+  assert.match(script, /Use this machine's Codex CLI for coding agents/);
+  assert.match(script, /codex login status/);
+  assert.match(script, /codex login/);
   assert.match(script, /__orkestr_codex_disabled_on_macos__/);
   assert.match(script, /should_disable_macos_codex_bin/);
   assert.match(script, /should_disable_macos_runtime_codex/);
@@ -79,7 +88,7 @@ test("install script exposes a host-native systemd VPS path", async () => {
   assert.match(script, /ORKESTR_LOCAL_CLI_BIN/);
   assert.match(script, /set -a; \. "\$local_env_file"; set \+a; npm start/);
   assert.match(script, /write_runtime_settings_file/);
-  assert.match(script, /\$codex_bin --sandbox workspace-write --ask-for-approval on-request --no-alt-screen/);
+  assert.match(script, /\$codex_bin --sandbox \$sandbox --ask-for-approval \$approval --no-alt-screen/);
   assert.match(script, /ORKESTR_GMAIL_AUTH_DESKTOP_SLUG/);
   assert.match(script, /ORKESTR_MANUAL_INTERVENTION_DESKTOP_SLUG/);
   assert.match(script, /"approveReplies": \["\/approve", "approve", "approved", "yes", "y", "allow", "go", "proceed"\]/);
@@ -155,6 +164,11 @@ test("uninstall script removes local service wrappers without requiring a clone"
   assert.match(script, /safe_remove_path "\$data_dir"/);
   assert.match(script, /--keep-data/);
   assert.match(script, /--keep-source/);
+  assert.match(script, /--all/);
+  assert.match(script, /ORKESTR_UNINSTALL_REEXECED/);
+  assert.match(script, /exec bash "\$uninstall_tmp" "\$@" <\/dev\/tty/);
+  assert.match(script, /Remove source checkout outside the managed install path/);
+  assert.match(script, /Run with --all to remove source checkouts outside ~\/\.orkestr-src/);
 });
 
 test("install script accepts optional JSON config before help", async () => {
