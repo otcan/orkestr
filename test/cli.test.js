@@ -386,6 +386,70 @@ test("CLI creates threads through the public API", async () => {
   assert.match(stdout.text(), /Created Demo Thread/);
 });
 
+test("CLI creates Orkestr threads with integrated WhatsApp binding", async () => {
+  const stdout = capture();
+  const seen = [];
+  const code = await runCli([
+    "create",
+    "Project Fitness",
+    "--wa-title",
+    "Project Fitness",
+    "--wa-participant",
+    "15551234567@c.us",
+    "--outbound-account",
+    "responder",
+    "--json",
+  ], {
+    stdout,
+    stderr: capture(),
+    fetchImpl: fakeFetch({
+      "POST /api/connectors/whatsapp/bridge/chats": {
+        ok: true,
+        chat: { id: "120363000000000000@g.us", name: "Project Fitness", generated: true },
+        senderContactId: "15551234567@c.us",
+        responderContactId: "15557654321@c.us",
+        responderAccountId: "responder",
+      },
+      "POST /api/threads": { thread: { id: "thread-fitness", name: "Project Fitness", state: "sleeping" } },
+      "PUT /api/threads/thread-fitness/binding": { ok: true, binding: { chatId: "120363000000000000@g.us" } },
+    }, seen),
+  });
+
+  assert.equal(code, 0);
+  assert.equal(seen[0].key, "POST /api/connectors/whatsapp/bridge/chats");
+  assert.deepEqual(seen[0].body, {
+    name: "Project Fitness",
+    participantIds: ["15551234567@c.us"],
+    promoteParticipantsAsAdmins: true,
+    responderAccountId: "responder",
+    outboundAccountId: "responder",
+  });
+  assert.equal(seen[1].key, "POST /api/threads");
+  assert.deepEqual(seen[1].body, { name: "Project Fitness" });
+  assert.equal(seen[2].key, "PUT /api/threads/thread-fitness/binding");
+  assert.equal(seen[2].body.chatId, "120363000000000000@g.us");
+  assert.equal(seen[2].body.generated, true);
+  assert.equal(seen[2].body.senderContactId, "15551234567@c.us");
+  assert.equal(seen[2].body.responderContactId, "15557654321@c.us");
+  assert.match(stdout.text(), /"ok": true/);
+});
+
+test("CLI can create Orkestr threads without WhatsApp", async () => {
+  const stdout = capture();
+  const seen = [];
+  const code = await runCli(["create", "Local Only", "--no-wa"], {
+    stdout,
+    stderr: capture(),
+    fetchImpl: fakeFetch({
+      "POST /api/threads": { thread: { id: "local-only", name: "Local Only", state: "sleeping" } },
+    }, seen),
+  });
+
+  assert.equal(code, 0);
+  assert.deepEqual(seen.map((item) => item.key), ["POST /api/threads"]);
+  assert.match(stdout.text(), /Created Orkestr thread: Local Only/);
+});
+
 test("CLI creates worker threads with task metadata", async () => {
   const stdout = capture();
   const seen = [];

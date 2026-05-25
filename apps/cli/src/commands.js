@@ -12,6 +12,7 @@ import {
 } from "../../../packages/core/src/security.js";
 import { readRuntimeSettings } from "../../../packages/core/src/runtime-settings.js";
 import { defaultApiBase, requestJson } from "./api-client.js";
+import { createCommand } from "./create-command.js";
 import { formatRuntimeResources, formatSystemDoctor, formatThreadTable, formatTimerDoctor, formatTimerTable, threadName } from "./format.js";
 import { pickThread as defaultPickThread } from "./thread-picker.js";
 
@@ -48,6 +49,7 @@ export async function runCli(argv = process.argv.slice(2), context = {}) {
     if (command === "rollback") return await updateRollbackCommand(args, ctx);
     if (command === "logs") return await serviceCommand(["logs", ...args], ctx);
     if (command === "thread") return await threadCommand(args, ctx);
+    if (command === "create") return await createCommand(args, ctx);
     if (command === "worker") return await workerCommand(args, ctx);
     if (command === "attach") return await attach(args, ctx);
     if (command === "send") return await send(args, ctx);
@@ -571,6 +573,7 @@ function writeUsage(stream) {
 
 Common thread commands:
   orkestr list [--json] [--api http://127.0.0.1:19812]
+  orkestr create <name> [--wa-participant jid]... [--no-wa] [--json]
   orkestr whereiam [--cwd path] [--json]
   orkestr attach [thread-name-or-id] [--print] [--json]
   orkestr send <thread-name-or-id> "<message>" [--json]
