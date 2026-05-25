@@ -39,7 +39,11 @@ test("install script exposes a host-native systemd VPS path", async () => {
   assert.match(script, /run_install_wizard/);
   assert.match(script, /Install Orkestr as a user service/);
   assert.match(script, /Start the Orkestr service after installing/);
-  assert.match(script, /Keep Codex approval prompts enabled/);
+  assert.match(script, /This installs Orkestr locally, keeps it private on this machine/);
+  assert.match(script, /Default URL: http:\/\/\$host:\$port\/setup/);
+  assert.match(script, /Ask before Codex runs higher-risk commands/);
+  assert.match(script, /Change advanced local settings \(URL, folders\)/);
+  assert.match(script, /Private bind host/);
   assert.match(script, /ORKESTR_CODEX_SANDBOX/);
   assert.match(script, /ORKESTR_CODEX_APPROVAL_POLICY/);
   assert.match(script, /--profile\)/);

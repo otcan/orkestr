@@ -74,9 +74,11 @@ The installer prepares the local runtime, installs a user service, starts
 Orkestr, and prints service commands. On macOS this uses `launchd`; on Linux it
 uses a user `systemd` unit when available and falls back to cron only when no
 user service manager is available.
-When run from a terminal, the one-line installer asks for the bind address,
-data/workspace paths, Codex approval posture, whether to use the host Codex CLI,
-missing runtime tool installation, and service/start choices.
+When run from a terminal, the one-line installer keeps the happy path short:
+it shows the private local URL, asks whether to use the host Codex CLI, asks
+about Codex approval posture, then installs and starts the local service. Bind
+address, port, and data/workspace paths stay on safe defaults unless you choose
+the advanced local settings prompt.
 
 ```bash
 ~/.local/bin/orkestr service status

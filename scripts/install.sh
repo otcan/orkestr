@@ -737,18 +737,16 @@ apply_install_defaults() {
 }
 
 run_install_wizard() {
-  local keep_approvals install_service start_after default_workspace
+  local keep_approvals install_service start_after default_workspace change_advanced
   echo "Orkestr installer"
-  echo "Press Enter to accept the suggested value."
-  prompt_default host "Bind host" "$host"
-  prompt_default port "Bind port" "$port"
-  default_workspace="$workspace_dir"
-  prompt_default data_dir "Data directory" "$data_dir"
-  if [ "$workspace_dir" = "$default_workspace" ] && [ "$systemd" -ne 1 ]; then
-    workspace_dir="$data_dir/workspaces"
-  fi
-  prompt_default workspace_dir "Workspace directory" "$workspace_dir"
-  prompt_yes_no keep_approvals "Keep Codex approval prompts enabled" "1"
+  echo
+  echo "This installs Orkestr locally, keeps it private on this machine, and starts the web UI."
+  echo "Default URL: http://$host:$port/setup"
+  echo "Local state and workspaces use safe defaults unless you choose advanced settings."
+  echo
+  echo "Press Enter to accept the suggested answer."
+  configure_codex_interactively
+  prompt_yes_no keep_approvals "Ask before Codex runs higher-risk commands" "1"
   if [ "$keep_approvals" = "1" ]; then
     ORKESTR_CODEX_SANDBOX="${ORKESTR_CODEX_SANDBOX:-workspace-write}"
     ORKESTR_CODEX_APPROVAL_POLICY="${ORKESTR_CODEX_APPROVAL_POLICY:-on-request}"
@@ -756,7 +754,17 @@ run_install_wizard() {
     ORKESTR_CODEX_SANDBOX="${ORKESTR_CODEX_SANDBOX:-danger-full-access}"
     ORKESTR_CODEX_APPROVAL_POLICY="${ORKESTR_CODEX_APPROVAL_POLICY:-never}"
   fi
-  configure_codex_interactively
+  prompt_yes_no change_advanced "Change advanced local settings (URL, folders)" "0"
+  if [ "$change_advanced" = "1" ]; then
+    prompt_default host "Private bind host" "$host"
+    prompt_default port "Web UI port" "$port"
+    default_workspace="$workspace_dir"
+    prompt_default data_dir "Data directory" "$data_dir"
+    if [ "$workspace_dir" = "$default_workspace" ] && [ "$systemd" -ne 1 ]; then
+      workspace_dir="$data_dir/workspaces"
+    fi
+    prompt_default workspace_dir "Workspace directory" "$workspace_dir"
+  fi
   if [ "$systemd" -ne 1 ]; then
     prompt_yes_no install_service "Install Orkestr as a user service" "$local_service"
     local_service="$install_service"

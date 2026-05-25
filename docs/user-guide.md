@@ -170,9 +170,11 @@ Do not publish a raw Orkestr API or terminal stream directly to the internet.
    curl -fsSL https://raw.githubusercontent.com/otcan/orkestr/main/scripts/install.sh | bash
    ```
 
-   In a terminal, the installer asks for local bind settings, runtime paths,
-   Codex approval behavior, whether to use the host Codex CLI, missing runtime
-   tool installation, and whether to start Orkestr as a local service.
+   In a terminal, the installer shows the private local URL, asks whether to
+   use the host Codex CLI, asks about Codex approval behavior, installs missing
+   runtime tools when you approve it, and starts Orkestr as a local service.
+   Bind address, port, and runtime paths stay on safe defaults unless you choose
+   the advanced local settings prompt.
 
    For a clean local reinstall, use `--fresh`:
 
