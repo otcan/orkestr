@@ -2567,16 +2567,11 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   }
 
   codexModeValue(thread: ThreadSummary | null): string {
-    const mode = String(
-      thread?.codexModeLive ||
-      thread?.codexMode ||
-      thread?.codexModeLabel ||
-      thread?.codexModeSource ||
-      "",
-    ).toLowerCase();
-    if (mode.includes("plan")) return "plan";
-    if (mode.includes("code")) return "code";
-    return "";
+    const modeValue = (value: unknown): string => {
+      const mode = String(value || "").trim().toLowerCase();
+      return mode === "plan" || mode === "code" ? mode : "";
+    };
+    return modeValue(thread?.codexModeLive) || modeValue(thread?.codexMode);
   }
 
   showPlanComposerBanner(thread: ThreadSummary | null): boolean {

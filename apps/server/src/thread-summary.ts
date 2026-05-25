@@ -184,6 +184,15 @@ function codexModeValue(value: any): string | null {
   return mode === "code" || mode === "plan" ? mode : null;
 }
 
+function persistedCodexMode(metadata: any): { mode: string | null; source: string | null } {
+  const mode = codexModeValue(metadata?.codexMode);
+  const source = String(metadata?.codexModeSource || "").trim() || null;
+  if (mode === "plan" && source === "orkestr-wake-restore") {
+    return { mode: "code", source: null };
+  }
+  return { mode, source: mode ? source : null };
+}
+
 function threadSummaryCacheTtlMs(): number {
   const parsed = Number(process.env.ORKESTR_THREAD_SUMMARY_CACHE_TTL_MS || 120_000);
   return Number.isFinite(parsed) ? Math.max(0, parsed) : 120_000;
@@ -355,6 +364,7 @@ export async function threadRuntimeSummary(thread: any, messages: any[] = [], op
   const metadata = codexMetadata(codexThread);
   const liveCodexMode = codexModeValue(status?.codexMode);
   const liveCodexModeSource = String(status?.codexModeSource || "").trim();
+  const storedCodexMode = persistedCodexMode(metadata);
   const progress = status?.progress || thread.runtime?.progress || null;
   const summary = {
     ...thread,
@@ -403,8 +413,8 @@ export async function threadRuntimeSummary(thread: any, messages: any[] = [], op
     planAvailable,
     planImplementationReady: Boolean(status?.planImplementationReady),
     planImplementationMenuVisible: Boolean(status?.planImplementationMenuVisible),
-    codexMode: liveCodexMode || metadata.codexMode,
-    codexModeSource: liveCodexModeSource || metadata.codexModeSource,
+    codexMode: liveCodexMode || storedCodexMode.mode,
+    codexModeSource: liveCodexModeSource || storedCodexMode.source,
     codexModeLive: liveCodexMode,
   };
   return summary;

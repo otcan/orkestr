@@ -3497,6 +3497,35 @@ test("thread summary ignores stale Plan mode text without a live Codex status li
   }
 });
 
+test("thread summary ignores stale wake-restored persisted plan mode", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-stale-wake-restore-mode-"));
+  const priorHome = process.env.ORKESTR_HOME;
+  process.env.ORKESTR_HOME = path.join(home, "orkestr-home");
+
+  try {
+    await createThread({
+      id: "codex-mode-stale-wake-restore-thread",
+      name: "Codex Mode Stale Wake Restore Thread",
+      state: "sleeping",
+      codexMode: "plan",
+      desiredCodexMode: null,
+    });
+    await updateThread("codex-mode-stale-wake-restore-thread", {
+      codexModeSource: "orkestr-wake-restore",
+      codexModeUpdatedAt: "2026-05-21T08:11:02.986Z",
+    });
+    const thread = await getThread("codex-mode-stale-wake-restore-thread");
+    const summary = await threadRuntimeSummary(thread, await listThreadMessages(thread.id));
+
+    assert.equal(summary.state, "sleeping");
+    assert.equal(summary.codexMode, "code");
+    assert.equal(summary.codexModeLive, null);
+    assert.equal(summary.codexModeSource, null);
+  } finally {
+    restoreEnvValue("ORKESTR_HOME", priorHome);
+  }
+});
+
 test("thread input delivery fails when Codex rejects an unsupported literal slash command", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-delivery-rejected-command-"));
   const fakeTmux = await createFakeTmux(home);
