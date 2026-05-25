@@ -2340,6 +2340,11 @@ function staleAckRecoveryMax(env = process.env) {
   return Number.isFinite(parsed) ? Math.max(0, parsed) : 1;
 }
 
+function frozenRuntimeRecheckMs(env = process.env) {
+  const parsed = Number(env.ORKESTR_FROZEN_RUNTIME_RECHECK_MS ?? 60_000);
+  return Number.isFinite(parsed) ? Math.max(1000, parsed) : 60_000;
+}
+
 function staleAckRecoveryCount(message) {
   return Math.max(0, Number(message?.deliveryStaleRecoveryCount || 0) || 0);
 }
@@ -2651,6 +2656,34 @@ async function recoverStaleThreadInputAck(thread, message, status, env = process
   const threshold = staleAckRecoveryAttempts(env);
   const recoveryProgress = staleAckRecoveryProgress(message);
   if (!threshold || recoveryProgress < threshold) return false;
+  if (status?.frozen || status?.state === "frozen" || status?.progress?.stateHint === "frozen") {
+    const nextAttemptAt = isoAfter(frozenRuntimeRecheckMs(env));
+    const errorText = "Runtime appears frozen; stale-ack recovery is paused until the pane changes or a manual recovery action is requested.";
+    const alreadyBlocked = message.deliveryState === "blocked_frozen_runtime" && message.observedVia === "runtime_frozen";
+    const updated = await updateThreadMessage(thread.id, message.id, {
+      deliveryState: "blocked_frozen_runtime",
+      deliveryNextAttemptAt: nextAttemptAt,
+      observedVia: "runtime_frozen",
+      error: errorText,
+    }, env).catch(() => null);
+    if (!alreadyBlocked) markConnectorDeliverySignal(updated || message);
+    await updateThread(thread.id, {
+      state: "frozen",
+      lastError: errorText,
+    }, env).catch(() => {});
+    if (!alreadyBlocked) {
+      await appendEvent({
+        type: "thread_input_stale_ack_recovery_blocked_frozen_runtime",
+        threadId: thread.id,
+        messageId: message.id,
+        paneId: status?.paneId || message.deliveryPaneId || null,
+        attempt: recoveryProgress,
+        nextAttemptAt,
+      }, env).catch(() => {});
+    }
+    scheduleThreadInputDelivery(thread.id, env, deliveryDueInMs({ deliveryNextAttemptAt: nextAttemptAt }));
+    return true;
+  }
   if (!status?.paneId || !status.promptReady || status.working) return false;
   const paneText = await capturePane(status.paneId, 40).catch(() => "");
   if (paneContainsDeliveryText(paneText, inputTextForMessage(message))) return false;
