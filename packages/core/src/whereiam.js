@@ -1,9 +1,9 @@
 import path from "node:path";
 import fs from "node:fs/promises";
 import { ensureDataDirs } from "../../storage/src/paths.js";
-import { listRuntimeLeases } from "./runtime-leases.js";
+import { listRuntimeLeases, runtimeStatus } from "./runtime-leases.js";
 import { readRuntimeSettings } from "./runtime-settings.js";
-import { listThreads } from "./threads.js";
+import { listThreads, updateThread } from "./threads.js";
 
 function nowIso() {
   return new Date().toISOString();
@@ -19,6 +19,38 @@ function publicThreadName(thread = {}) {
 
 function codexThreadId(thread = {}) {
   return clean(thread.executor?.codexThreadId || thread.codexThreadId);
+}
+
+function codexModeValue(value) {
+  const mode = clean(value).toLowerCase();
+  return mode === "code" || mode === "plan" ? mode : "";
+}
+
+function liveCodexMode(thread = null, status = null) {
+  return codexModeValue(status?.codexMode) ||
+    codexModeValue(status?.progress?.codexMode) ||
+    codexModeValue(thread?.runtime?.progress?.codexMode);
+}
+
+function resolvedCodexMode(thread = null, status = null) {
+  return liveCodexMode(thread, status) || codexModeValue(thread?.codexMode) || null;
+}
+
+function resolvedCodexModeSource(thread = null, status = null) {
+  if (liveCodexMode(thread, status)) return clean(status?.codexModeSource) || "runtime-pane";
+  return clean(thread?.codexModeSource) || null;
+}
+
+async function syncLiveCodexMode(thread = null, status = null, env = process.env) {
+  const mode = liveCodexMode(thread, status);
+  if (!thread?.id || !mode) return thread;
+  const source = resolvedCodexModeSource(thread, status) || "runtime-pane";
+  if (thread.codexMode === mode && thread.codexModeSource === source) return thread;
+  return updateThread(thread.id, {
+    codexMode: mode,
+    codexModeSource: source,
+    codexModeUpdatedAt: nowIso(),
+  }, env).catch(() => thread);
 }
 
 function resolvePath(value) {
@@ -68,24 +100,28 @@ function scorePathMatch(candidate, cwd) {
   return { ...candidate, exact: false, score: candidate.score - Math.min(depth, 20) };
 }
 
-function publicLease(lease = null) {
-  if (!lease) return null;
+function publicRuntime(lease = null, status = null) {
+  if (!lease && !status) return null;
   return {
-    id: lease.id || null,
-    state: lease.state || null,
-    sessionName: lease.sessionName || null,
-    paneId: lease.paneId || null,
-    windowName: lease.windowName || null,
-    workspace: lease.workspace || null,
-    resourceClass: lease.resourceClass || null,
-    reason: lease.reason || null,
-    startedAt: lease.startedAt || null,
-    heartbeatAt: lease.heartbeatAt || null,
+    id: status?.lease?.id || lease?.id || null,
+    state: status?.state || lease?.state || null,
+    sessionName: status?.sessionName || lease?.sessionName || null,
+    paneId: status?.paneId || lease?.paneId || null,
+    windowName: status?.windowName || lease?.windowName || null,
+    workspace: status?.lease?.workspace || lease?.workspace || null,
+    resourceClass: status?.lease?.resourceClass || lease?.resourceClass || null,
+    reason: status?.lease?.reason || lease?.reason || null,
+    startedAt: status?.lease?.startedAt || lease?.startedAt || null,
+    heartbeatAt: status?.lease?.heartbeatAt || lease?.heartbeatAt || null,
+    codexMode: liveCodexMode({ runtime: { progress: status?.progress || null } }, status) || null,
+    codexModeSource: status?.codexModeSource || null,
+    progress: status?.progress || null,
   };
 }
 
-function publicThread(thread = null) {
+function publicThread(thread = null, status = null) {
   if (!thread) return null;
+  const liveMode = liveCodexMode(thread, status) || null;
   return {
     id: thread.id,
     name: thread.name || null,
@@ -99,7 +135,9 @@ function publicThread(thread = null) {
     workerLabel: thread.workerLabel || null,
     workerIndex: thread.workerIndex || null,
     codexThreadId: codexThreadId(thread) || null,
-    codexMode: thread.codexMode || null,
+    codexMode: resolvedCodexMode(thread, status),
+    codexModeSource: resolvedCodexModeSource(thread, status),
+    codexModeLive: liveMode,
   };
 }
 
@@ -203,8 +241,10 @@ export async function whereAmI(input = {}, env = process.env) {
     }
   }
 
-  const thread = match?.thread || null;
+  let thread = match?.thread || null;
   const lease = match?.lease || null;
+  const status = thread ? await runtimeStatus(thread.id, env).catch(() => null) : null;
+  thread = await syncLiveCodexMode(thread, status, env);
   return {
     ok: Boolean(thread),
     matched: Boolean(thread),
@@ -212,9 +252,9 @@ export async function whereAmI(input = {}, env = process.env) {
     cwd,
     apiBase: apiBase(env),
     dataHome: paths.home,
-    thread: publicThread(thread),
+    thread: publicThread(thread, status),
     workspace: publicWorkspace(thread, lease, cwd),
-    runtime: publicLease(lease),
+    runtime: publicRuntime(lease, status),
     settings,
     capabilities: capabilityHints(),
     commands: commandHints(),
