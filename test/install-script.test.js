@@ -92,6 +92,10 @@ test("install script exposes a host-native systemd VPS path", async () => {
   assert.match(script, /write_local_env_file/);
   assert.match(script, /write_local_server_wrapper/);
   assert.match(script, /write_local_cli_wrapper/);
+  assert.match(script, /echo "background"/);
+  assert.match(script, /install_background_service/);
+  assert.match(script, /ORKESTR_ALLOW_MACOS_LAUNCHD/);
+  assert.match(script, /pkill -f "\$\(local_server_wrapper\)"/);
   assert.match(script, /install_local_service/);
   assert.match(script, /install_launchd_service/);
   assert.match(script, /install_systemd_user_service/);

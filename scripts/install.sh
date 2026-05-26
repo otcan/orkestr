@@ -61,6 +61,7 @@ Environment:
   ORKESTR_LOCAL_SERVICE_NAME  Local Linux service name. Defaults to orkestr.
   ORKESTR_LOCAL_SERVICE_LABEL Local macOS launchd label. Defaults to com.orkestr.oss.
   ORKESTR_LOCAL_BIN_DIR      Local CLI wrapper directory. Defaults to ~/.local/bin.
+  ORKESTR_LOCAL_SERVICE_MANAGER Local service backend. Defaults to background on macOS, systemd-user or cron on Linux.
   ORKESTR_REPO_URL          Git repository to clone. Defaults to https://github.com/otcan/orkestr.git.
   ORKESTR_GIT_REF           Git branch, tag, or commit to deploy. Defaults to the repository default branch.
   ORKESTR_INSTALL_DIR       Install directory. Defaults to ~/.orkestr-src/orkestr-oss, or /opt/orkestr/app with --systemd.
@@ -1109,6 +1110,9 @@ local_service_file() {
     cron)
       echo "$data_dir/cron-service"
       ;;
+    background)
+      echo "$data_dir/background-service"
+      ;;
     *)
       echo ""
       ;;
@@ -1121,7 +1125,7 @@ xml_escape() {
 
 local_service_manager() {
   if is_macos; then
-    echo "launchd"
+    echo "background"
     return 0
   fi
   if have systemctl && systemctl --user list-units >/dev/null 2>&1; then
@@ -1270,6 +1274,27 @@ install_cron_service() {
   fi
 }
 
+install_background_service() {
+  local wrapper out_log err_log pid_file marker_file
+  wrapper="$(local_server_wrapper)"
+  out_log="$(local_log_dir)/orkestr.out.log"
+  err_log="$(local_log_dir)/orkestr.err.log"
+  pid_file="$(local_pid_file)"
+  marker_file="$(local_service_file background)"
+  mkdir -p "$(local_log_dir)" "$(dirname "$marker_file")"
+  cat > "$marker_file" <<EOF
+Orkestr local background service.
+Use $(local_cli_bin) service start|stop|restart|status|logs.
+EOF
+  if [ "$start_after_install" = "1" ]; then
+    if [ -f "$pid_file" ] && kill -0 "$(cat "$pid_file")" >/dev/null 2>&1; then
+      return 0
+    fi
+    nohup "$wrapper" >> "$out_log" 2>> "$err_log" &
+    echo "$!" > "$pid_file"
+  fi
+}
+
 install_local_service() {
   local manager
   manager="$1"
@@ -1282,6 +1307,9 @@ install_local_service() {
       ;;
     cron)
       install_cron_service
+      ;;
+    background)
+      install_background_service
       ;;
     *)
       cat >&2 <<EOF
@@ -1327,7 +1355,7 @@ stop_local_service_if_present() {
   unit="$(local_service_name).service"
   unit_file="$(local_service_file systemd-user)"
   pid_file="$(local_pid_file)"
-  if is_macos && have launchctl; then
+  if is_macos && have launchctl && [ "${ORKESTR_ALLOW_MACOS_LAUNCHD:-0}" = "1" ]; then
     domain="gui/$(id -u)"
     launchctl bootout "$domain/$label" >/dev/null 2>&1 || launchctl bootout "$domain" "$plist" >/dev/null 2>&1 || true
     rm -f "$plist"
@@ -1344,6 +1372,9 @@ stop_local_service_if_present() {
       kill "$pid" >/dev/null 2>&1 || true
     fi
     rm -f "$pid_file"
+  fi
+  if is_macos && have pkill; then
+    pkill -f "$(local_server_wrapper)" >/dev/null 2>&1 || true
   fi
 }
 

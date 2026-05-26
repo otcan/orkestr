@@ -749,6 +749,33 @@ test("CLI service controls macOS launchd services", async () => {
   assert.match(spawned[0].args[1], /com\.orkestr\.oss/);
 });
 
+test("CLI service controls local background services without launchctl", async () => {
+  const spawned = [];
+  const code = await runCli(["service", "start"], {
+    env: {
+      ORKESTR_LOCAL_SERVICE_MANAGER: "background",
+      ORKESTR_HOME: "/Users/demo/.orkestr",
+      ORKESTR_LOCAL_SERVER_WRAPPER: "/Users/demo/.orkestr/bin/orkestr-server",
+      ORKESTR_LOCAL_PID_FILE: "/Users/demo/.orkestr/orkestr.pid",
+      ORKESTR_LOCAL_LOG_DIR: "/Users/demo/.orkestr/logs",
+    },
+    stdout: capture(),
+    stderr: capture(),
+    spawnImpl(command, args) {
+      spawned.push({ command, args });
+      const child = new EventEmitter();
+      queueMicrotask(() => child.emit("exit", 0));
+      return child;
+    },
+  });
+
+  assert.equal(code, 0);
+  assert.equal(spawned[0].command, "sh");
+  assert.match(spawned[0].args[1], /nohup/);
+  assert.match(spawned[0].args[1], /orkestr-server/);
+  assert.doesNotMatch(spawned[0].args[1], /launchctl|sudo|osascript/);
+});
+
 test("CLI service logs tails local service files", async () => {
   const spawned = [];
   const code = await runCli(["service", "logs", "--lines", "25", "--no-follow"], {

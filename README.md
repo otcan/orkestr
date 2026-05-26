@@ -152,7 +152,10 @@ The one-line script also detaches itself from the `curl | bash` pipe before
 running Homebrew or prompts, so dependency installers cannot consume the rest of
 the script from stdin. On macOS, it only auto-installs missing local tools when
 the Homebrew prefix is user-writable; otherwise it stops with a manual command
-instead of asking the terminal app for administrator access.
+instead of asking the terminal app for administrator access. The default macOS
+local service is a user-owned background process controlled by `orkestr service`
+commands, not a launchd bootstrap, so the installer does not ask the terminal
+app to administer the computer.
 Use `.env` or the setup UI for optional OpenAI API access, Tailscale/Caddy
 settings, OAuth credentials, workspace roots, or overlay settings. The OpenAI
 API key is not required for the default Codex Agent path; it is for connectors

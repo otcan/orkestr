@@ -332,7 +332,7 @@ async function serviceActionCommand(action, argv, ctx) {
     const unit = serviceUnitName(service || ctx.env.ORKESTR_LOCAL_SERVICE_NAME || ctx.env.ORKESTR_SERVICE_NAME || "orkestr");
     return spawnInherited(ctx.spawnImpl, "systemctl", ["--user", action, unit]);
   }
-  if (manager === "cron") {
+  if (manager === "cron" || manager === "background") {
     return cronServiceAction(action, ctx);
   }
   if (manager === "none") throw new Error("No Orkestr service manager is configured for this install.");
@@ -343,7 +343,7 @@ async function serviceActionCommand(action, argv, ctx) {
 async function serviceLogsCommand(argv, ctx) {
   const manager = serviceManager(ctx.env);
   const lines = flagValue(argv, "--lines") || "100";
-  if (manager === "launchd" || manager === "cron") {
+  if (manager === "launchd" || manager === "cron" || manager === "background") {
     const logDir = ctx.env.ORKESTR_LOCAL_LOG_DIR || path.join(ctx.env.ORKESTR_HOME || ".", "logs");
     const args = ["-n", lines];
     if (!argv.includes("--no-follow")) args.push("-f");
