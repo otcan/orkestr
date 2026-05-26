@@ -820,7 +820,7 @@ run_install_wizard() {
   fi
   echo
   echo "Press Enter to accept the suggested answer."
-  prompt_yes_no yolo_mode "Enable Codex YOLO mode: skip approval prompts and allow full command access" "0"
+  prompt_yes_no yolo_mode "ENABLE YOLO MODE for Codex: skip approval prompts and sandbox limits" "0"
   if [ "$yolo_mode" = "1" ]; then
     ORKESTR_CODEX_SANDBOX="${ORKESTR_CODEX_SANDBOX:-danger-full-access}"
     ORKESTR_CODEX_APPROVAL_POLICY="${ORKESTR_CODEX_APPROVAL_POLICY:-never}"

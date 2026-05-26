@@ -49,7 +49,7 @@ test("install script exposes a host-native systemd VPS path", async () => {
   assert.match(script, /Default URL: http:\/\/\$host:\$port\/setup/);
   assert.match(script, /Using safe defaults for local URL, folders, service install, and startup/);
   assert.match(script, /Run with --advanced to change them/);
-  assert.match(script, /Enable Codex YOLO mode: skip approval prompts and allow full command access/);
+  assert.match(script, /ENABLE YOLO MODE for Codex: skip approval prompts and sandbox limits/);
   assert.match(script, /prompt_yes_no yolo_mode/);
   assert.match(script, /--advanced/);
   assert.match(script, /ORKESTR_INSTALL_ADVANCED/);
