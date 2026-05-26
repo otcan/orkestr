@@ -177,9 +177,6 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   draggingUpload = false;
   rawConnectionState = "idle";
   rawConnectionDetail = "";
-  nativeAttachCopied = false;
-  nativeAttachOpening = false;
-  nativeAttachStatus = "";
   sidebarWidth = 460;
   sidebarResizing = false;
 
@@ -398,15 +395,11 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   }
 
   rawTerminalAvailable(thread: ThreadSummary | null = this.selectedThread()): boolean {
-    return this.embeddedRawTerminalAvailable(thread) || this.nativeTerminalAttachAvailable(thread);
+    return this.embeddedRawTerminalAvailable(thread);
   }
 
   embeddedRawTerminalAvailable(thread: ThreadSummary | null = this.selectedThread()): boolean {
-    return String(thread?.runtimeKind || "").trim() !== "codex-app-server";
-  }
-
-  nativeTerminalAttachAvailable(thread: ThreadSummary | null = this.selectedThread()): boolean {
-    return String(thread?.runtimeKind || "").trim() === "codex-app-server";
+    return Boolean(thread);
   }
 
   codexAgentStateLabel(): string {
@@ -591,9 +584,6 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     this.timers = [];
     this.runtimeDetails = null;
     this.attachDetails = null;
-    this.nativeAttachCopied = false;
-    this.nativeAttachOpening = false;
-    this.nativeAttachStatus = "";
     this.closeRawStream();
     this.shouldStickToBottom = this.activePanel === "chat";
     this.scrollAfterRender = this.activePanel === "chat";
@@ -1076,14 +1066,10 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     if (!thread) return;
     if (!this.rawTerminalAvailable(thread)) {
       this.attachDetails = null;
-      this.nativeAttachCopied = false;
-      this.nativeAttachStatus = "";
       this.closeRawStream();
       this.activePanel = "chat";
       return;
     }
-    this.nativeAttachCopied = false;
-    this.nativeAttachStatus = "";
     this.busy = true;
     try {
       const [attach, runtime] = await Promise.all([
@@ -2960,56 +2946,6 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
 
   runtimeJson(): string {
     return JSON.stringify(this.runtimeDetails || {}, null, 2);
-  }
-
-  nativeAttachCommand(): string {
-    return String(this.attachDetails?.attachCommand || "").trim();
-  }
-
-  nativeAttachCopyLabel(): string {
-    return this.nativeAttachCopied ? "Copied" : "Copy command";
-  }
-
-  nativeAttachOpenLabel(): string {
-    return this.nativeAttachOpening ? "Opening" : "Open Terminal";
-  }
-
-  async openNativeTerminal(): Promise<void> {
-    const thread = this.selectedThread();
-    if (!thread || this.nativeAttachOpening) return;
-    this.nativeAttachOpening = true;
-    this.nativeAttachStatus = "";
-    try {
-      const response = await firstValueFrom(this.api.openThreadTerminal(thread.id));
-      this.attachDetails = response;
-      if (response.ok && response.launched) {
-        this.nativeAttachStatus = "Terminal launch requested on the Orkestr host.";
-        return;
-      }
-      this.nativeAttachStatus = response.message || "Could not open a terminal. Use the command below.";
-    } catch (error) {
-      this.nativeAttachStatus = this.errorText(error) || "Could not open a terminal. Use the command below.";
-    } finally {
-      this.nativeAttachOpening = false;
-      this.renderNow();
-    }
-  }
-
-  async copyNativeAttachCommand(): Promise<void> {
-    const command = this.nativeAttachCommand();
-    if (!command) return;
-    try {
-      const clipboard = globalThis.navigator?.clipboard;
-      if (!clipboard?.writeText) throw new Error("Clipboard is unavailable.");
-      await clipboard.writeText(command);
-      this.nativeAttachCopied = true;
-      setTimeout(() => {
-        this.nativeAttachCopied = false;
-        this.renderNow();
-      }, 1600);
-    } catch (error) {
-      this.error = this.errorText(error) || "Could not copy attach command.";
-    }
   }
 
   runtimeValue(key: string): string {
