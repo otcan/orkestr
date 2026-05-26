@@ -683,6 +683,52 @@ test("runtime sync auto-sleeps stable idle ready runtimes", async () => {
   }
 });
 
+test("runtime sync leaves idle runtimes awake unless idle sleep is enabled", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-auto-sleep-default-off-"));
+  const fakeTmux = await createFakeTmux(home);
+  const priorPath = process.env.PATH;
+  const priorTmuxLog = process.env.TMUX_LOG;
+  const priorTmuxState = process.env.TMUX_STATE;
+  process.env.PATH = `${fakeTmux.bin}:${priorPath || ""}`;
+  process.env.TMUX_LOG = fakeTmux.log;
+  process.env.TMUX_STATE = fakeTmux.state;
+
+  try {
+    const env = {
+      ORKESTR_HOME: path.join(home, "orkestr-home"),
+      HOME: path.join(home, "runtime-home"),
+      CODEX_HOME: path.join(home, "codex-home"),
+      PATH: process.env.PATH,
+      TMUX_LOG: fakeTmux.log,
+      TMUX_STATE: fakeTmux.state,
+      ORKESTR_TEMP_RUNTIME_TTL_MS: "off",
+    };
+    await createThread({ id: "idle-default-off-thread", name: "Idle Default Off Thread" }, env);
+    await wakeThread("idle-default-off-thread", { reason: "test_wake" }, env);
+    const paths = await ensureDataDirs(env);
+    const oldStartedAt = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+    const oldLeases = (await listRuntimeLeases(env)).map((lease) => ({
+      ...lease,
+      startedAt: oldStartedAt,
+    }));
+    await fs.writeFile(paths.runtimeLeases, JSON.stringify(oldLeases, null, 2), "utf8");
+
+    await syncRuntimeLeases(env);
+
+    const status = await runtimeStatus("idle-default-off-thread", env);
+    const leases = await listRuntimeLeases(env);
+    const log = await fs.readFile(fakeTmux.log, "utf8");
+
+    assert.equal(status.state, "ready");
+    assert.equal(leases[0].endedAt, undefined);
+    assert.doesNotMatch(log, /__CALL__\tkill-session\t-t\torkestr-idle-default-off-thread/);
+  } finally {
+    restoreEnvValue("PATH", priorPath);
+    restoreEnvValue("TMUX_LOG", priorTmuxLog);
+    restoreEnvValue("TMUX_STATE", priorTmuxState);
+  }
+});
+
 test("legacy Codex resume threads require app-server migration", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-resume-dir-"));
   const fakeTmux = await createFakeTmux(home);

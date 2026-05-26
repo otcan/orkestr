@@ -793,7 +793,12 @@ export class ThreadsController {
   @Post(":threadId/sleep")
   @HttpCode(200)
   async sleep(@Param("threadId") threadId: string, @Body() body: Record<string, unknown> = {}) {
-    return sleepThread(threadId, { reason: body.reason || "manual_sleep", kill: body.kill !== false });
+    const thread = await getThread(threadId);
+    if (!thread) throw httpError("thread_not_found", 404);
+    return sleepThread(thread.id, {
+      reason: body.reason || "manual_sleep",
+      kill: threadUsesCodexAppServer(thread) ? body.kill === true : body.kill !== false,
+    });
   }
 
   @Post(":threadId/stop")
@@ -1038,7 +1043,12 @@ export class ThreadsController {
   @Post(":threadId/hibernate")
   @HttpCode(200)
   async hibernate(@Param("threadId") threadId: string, @Body() body: Record<string, unknown> = {}) {
-    return sleepThread(threadId, { reason: body.reason || "hibernate", kill: body.force !== false });
+    const thread = await getThread(threadId);
+    if (!thread) throw httpError("thread_not_found", 404);
+    return sleepThread(thread.id, {
+      reason: body.reason || "hibernate",
+      kill: threadUsesCodexAppServer(thread) ? body.force === true : body.force !== false,
+    });
   }
 
   @Post(":threadId/resume")

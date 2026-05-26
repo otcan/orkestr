@@ -112,6 +112,12 @@ orkestr codex migrate
 The `attach` command remains for non-Codex tmux runtimes. Codex threads do not
 use tmux attach after migration.
 
+`orkestr sleep <thread>` parks an idle runtime and is non-interrupting by
+default. To interrupt active Codex work, send `/stop` to the thread or use the
+web UI Stop control. Automatic idle sleep is disabled by default; set
+`ORKESTR_RUNTIME_IDLE_SLEEP_MS` only if a host intentionally wants old tmux
+runtimes to sleep after a fixed idle period.
+
 The API base defaults to `http://127.0.0.1:19812` and can be overridden with:
 
 ```bash

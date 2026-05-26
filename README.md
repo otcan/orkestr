@@ -41,7 +41,7 @@ Orkestr makes those pieces explicit. The default target is a single developer ru
 ## What Orkestr Lets You Do
 
 - **Run multiple Codex instances:** create named coding agents and worker threads instead of juggling anonymous terminal panes.
-- **Control agent lifecycle:** start, wake, sleep, attach, and inspect ready/working/error status from the web UI or CLI.
+- **Control agent lifecycle:** start, wake, sleep idle agents, stop active turns, and inspect ready/working/error status from the web UI or CLI.
 - **Give every agent a real workspace:** clone a repo when you have one, or let Orkestr generate a local git workspace when you do not.
 - **Route WhatsApp into agents:** connect one or two local WhatsApp Web accounts, create or bind a chat, and mirror agent replies back to the conversation.
 - **Connect mail and browser accounts:** configure Gmail OAuth, keep browser-backed Gmail/LinkedIn profiles local, and add private connector overlays without putting credentials in the public repo.
@@ -466,7 +466,7 @@ More detail: [docs/architecture.md](docs/architecture.md).
 
 - First-run setup at `/setup`
 - OpenAI and Codex connection checks
-- Multiple named Codex threads with start, sleep, wake, attach, and status controls
+- Multiple named Codex threads with start, wake, idle sleep, stop, attach, and status controls
 - Built-in local WhatsApp bridge with two QR-paired account slots
 - WhatsApp chat creation and thread binding
 - Thread-first runtime API for local Codex sessions

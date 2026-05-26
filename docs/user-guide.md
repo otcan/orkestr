@@ -43,8 +43,13 @@ Common actions:
 - send a message
 - switch between plan and code mode
 - inspect the structured runtime state and history
-- sleep the runtime when it is idle
+- sleep an idle runtime without interrupting active work
+- stop an active turn when you explicitly want to interrupt it
 - inspect model, effort, context, and rate-limit status when available
+
+Native Codex app-server threads wake lazily when a message, timer, or UI action
+needs them. Orkestr does not auto-sleep threads by default; legacy tmux idle
+sleep is opt-in with `ORKESTR_RUNTIME_IDLE_SLEEP_MS`.
 
 The Codex setup page also lets you import existing Codex app-server threads.
 Imported threads appear as Orkestr threads with their Codex history hydrated

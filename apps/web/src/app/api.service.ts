@@ -1014,7 +1014,7 @@ export class ApiService {
   }
 
   sleepThread(id: string): Observable<unknown> {
-    return this.http.post(this.api(`/threads/${encodeURIComponent(id)}/sleep`), { reason: "ui_sleep" });
+    return this.http.post(this.api(`/threads/${encodeURIComponent(id)}/sleep`), { reason: "ui_sleep", kill: false });
   }
 
   stopThread(id: string): Observable<unknown> {

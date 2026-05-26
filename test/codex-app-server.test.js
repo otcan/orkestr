@@ -8,6 +8,7 @@ import {
   deliverCodexAppServerPendingInputs,
   importCodexAppServerThread,
   listCodexAppServerThreads,
+  sleepCodexAppServerThread,
   startCodexAppServerThread,
   stopCodexAppServerClients,
 } from "../packages/core/src/codex-app-server.js";
@@ -40,7 +41,7 @@ import readline from "node:readline";
 const args = process.argv.slice(2);
 const stateFile = process.env.FAKE_CODEX_STATE;
 function readState() {
-  try { return JSON.parse(fs.readFileSync(stateFile, "utf8")); } catch { return { threads: [] }; }
+  try { return JSON.parse(fs.readFileSync(stateFile, "utf8")); } catch { return { threads: [], calls: [] }; }
 }
 function writeState(state) {
   fs.writeFileSync(stateFile, JSON.stringify(state, null, 2));
@@ -68,6 +69,10 @@ rl.on("line", (line) => {
   const id = message.id;
   const params = message.params || {};
   const state = readState();
+  state.threads ||= [];
+  state.calls ||= [];
+  state.calls.push({ method: message.method || "", params });
+  writeState(state);
   if (message.method === "initialize") return send({ id, result: { userAgent: "fake", platformFamily: "linux", platformOs: "linux" } });
   if (message.method === "initialized") return;
   if (message.method === "thread/start") {
@@ -359,6 +364,53 @@ test("Codex app-server starts threads, delivers input, and imports existing thre
     const importedMessages = await listThreadMessages(imported.thread.id, { ...env, ORKESTR_HOME: path.join(home, "imported-home") });
     assert.equal(imported.imported, true);
     assert.ok(importedMessages.some((message) => message.source === "codex-app-server-import"));
+  } finally {
+    stopCodexAppServerClients();
+  }
+});
+
+test("Codex app-server sleep only interrupts active turns when forced", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-codex-app-server-sleep-"));
+  const fake = await createFakeCodex(home);
+  const env = {
+    ORKESTR_HOME: path.join(home, "orkestr"),
+    HOME: path.join(home, "runtime-home"),
+    PATH: `${fake.bin}${path.delimiter}${process.env.PATH || ""}`,
+    FAKE_CODEX_STATE: fake.stateFile,
+  };
+  try {
+    const thread = await createThread({ id: "app-server-sleep-thread", name: "App Server Sleep Thread", cwd: home, executorId: "codex", executor: { type: "codex" } }, env);
+    const started = await startCodexAppServerThread(thread, env);
+    await updateThread(started.thread.id, {
+      state: "working",
+      runtime: {
+        ...(started.thread.runtime || {}),
+        runtimeKind: "codex-app-server",
+        state: "working",
+        activeTurnId: "active-turn",
+      },
+    }, env);
+
+    const skipped = await sleepCodexAppServerThread(await getThread(started.thread.id, env), { reason: "ui_sleep", kill: false }, env);
+    const stillWorking = await getThread(started.thread.id, env);
+    let rawState = JSON.parse(await fs.readFile(fake.stateFile, "utf8"));
+
+    assert.equal(skipped.skipped, true);
+    assert.equal(skipped.reason, "active_turn");
+    assert.equal(stillWorking.state, "working");
+    assert.equal(stillWorking.runtime.activeTurnId, "active-turn");
+    assert.ok(!rawState.calls.some((call) => call.method === "turn/interrupt"));
+    assert.ok(!rawState.calls.some((call) => call.method === "thread/unsubscribe"));
+
+    const forced = await sleepCodexAppServerThread(stillWorking, { reason: "ui_stop", kill: true }, env);
+    rawState = JSON.parse(await fs.readFile(fake.stateFile, "utf8"));
+    const slept = await getThread(started.thread.id, env);
+
+    assert.equal(forced.skipped, undefined);
+    assert.equal(slept.state, "sleeping");
+    assert.equal(slept.runtime.activeTurnId, null);
+    assert.ok(rawState.calls.some((call) => call.method === "turn/interrupt" && call.params.turnId === "active-turn"));
+    assert.ok(rawState.calls.some((call) => call.method === "thread/unsubscribe"));
   } finally {
     stopCodexAppServerClients();
   }

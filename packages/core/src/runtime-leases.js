@@ -40,7 +40,7 @@ const pendingInputStates = new Set(["queued", "pending_delivery", "awaiting_ack"
 const needInputPhases = new Set(["need_input", "awaiting_input", "question", "request_user_input"]);
 const proposedPlanOpenTagPattern = /^\s*<\s*proposed[\s_-]*plan\s*>/i;
 const deliveryRetryDefaultsMs = [1000, 3000, 8000, 20_000, 60_000];
-const defaultRuntimeIdleSleepMs = 15 * 60 * 1000;
+const defaultRuntimeIdleSleepMs = 0;
 const defaultTempRuntimeTtlMs = 5 * 60 * 1000;
 const defaultRolloutSyncLookbackBytes = 2 * 1024 * 1024;
 const defaultWorkingAfterPromptMs = 30 * 60 * 1000;
@@ -138,6 +138,7 @@ function messageTimeMs(value) {
 
 function runtimeIdleSleepMs(env = process.env) {
   const raw = String(env.ORKESTR_RUNTIME_IDLE_SLEEP_MS ?? "").trim().toLowerCase();
+  if (!raw) return defaultRuntimeIdleSleepMs;
   if (["0", "off", "false", "disabled"].includes(raw)) return 0;
   return positiveNumber(raw) || defaultRuntimeIdleSleepMs;
 }

@@ -130,8 +130,27 @@ export async function sleepCodexAppServerThread(thread, options = {}, env = proc
   const id = codexThreadId(thread);
   const client = id ? await getCodexAppServerClient({ env, home: runtimeHome(env) }).catch(() => null) : null;
   const state = client?.threadStates.get(id) || {};
-  if (options.kill !== false && id && state.activeTurnId) {
-    await client.request("turn/interrupt", { threadId: id, turnId: state.activeTurnId }).catch(() => null);
+  const activeTurnId = clean(state.activeTurnId || thread.runtime?.activeTurnId);
+  const pendingRequest = client?.pendingRequestForThread(thread) || thread.runtime?.pendingRequest || null;
+  if (options.kill === false && (activeTurnId || pendingRequest)) {
+    await appendEvent({
+      type: "codex_app_server_thread_sleep_skipped",
+      threadId: thread.id,
+      codexThreadId: id,
+      reason: options.reason || "sleep",
+      activeTurnId: activeTurnId || null,
+      pendingRequest: pendingRequest?.id || pendingRequest?.requestId || null,
+    }, env).catch(() => {});
+    return {
+      thread,
+      slept: 0,
+      skipped: true,
+      reason: activeTurnId ? "active_turn" : "pending_request",
+      notice: null,
+    };
+  }
+  if (options.kill !== false && id && activeTurnId) {
+    await client.request("turn/interrupt", { threadId: id, turnId: activeTurnId }).catch(() => null);
   }
   if (id && client) await client.request("thread/unsubscribe", { threadId: id }).catch(() => null);
   const updated = await updateThread(thread.id, {
