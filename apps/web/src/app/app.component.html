@@ -1117,11 +1117,6 @@
       @if (activePanel === "raw") {
         <section class="panel-body raw-panel">
           @if (attachDetails?.ok && embeddedRawTerminalAvailable(thread)) {
-            <div class="raw-toolbar">
-              <button class="secondary" type="button" (click)="openPanel('chat')">Back to Chat</button>
-              <button type="button" (click)="reconnectRaw()" [disabled]="busy">Open Browser Terminal</button>
-              <button class="secondary" type="button" (click)="focusRawTerminal()">Focus</button>
-            </div>
             <div #rawTerminalHost class="raw-terminal-host" (click)="focusRawTerminal()" aria-label="Raw terminal"></div>
           } @else {
             <div class="empty-state">
