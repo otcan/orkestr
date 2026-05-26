@@ -2487,7 +2487,8 @@ async function deliveryAckEvidence(thread, message, status, env = process.env) {
   if (assistantAfterInput) {
     return { observedVia: "assistant_after_input", observedMessageId: assistantAfterInput.id };
   }
-  if (status?.working || status?.state === "working") return { observedVia: "runtime_working" };
+  const runtimeWorking = status?.working || status?.state === "working";
+  if (runtimeWorking && status?.progress?.staleWorkingPrompt !== true) return { observedVia: "runtime_working" };
 
   const rolloutPath = String(
     message.deliveryRolloutPath ||

@@ -534,6 +534,17 @@ export interface ThreadUploadResponse {
   attachments: Array<Record<string, unknown>>;
 }
 
+export interface ThreadInputResponse {
+  ok?: boolean;
+  message?: ThreadMessage;
+  queued?: boolean;
+  deliveryState?: string;
+  state?: string;
+  observed?: boolean;
+  observedVia?: string;
+  [key: string]: unknown;
+}
+
 export interface ThreadWorkerResponse {
   parent?: ThreadSummary;
   thread?: ThreadSummary;
@@ -951,10 +962,10 @@ export class ApiService {
     return this.http.post<ThreadSyncResponse>(this.api(`/threads/${encodeURIComponent(id)}/sync-parent`), {});
   }
 
-  sendThreadInput(id: string, text: string, attachments: Array<Record<string, unknown>> = []): Observable<unknown> {
+  sendThreadInput(id: string, text: string, attachments: Array<Record<string, unknown>> = []): Observable<ThreadInputResponse> {
     const body: Record<string, unknown> = { text, parseCommands: true, controlAllowed: true };
     if (attachments.length) body["attachments"] = attachments;
-    return this.http.post(this.api(`/threads/${encodeURIComponent(id)}/input`), body);
+    return this.http.post<ThreadInputResponse>(this.api(`/threads/${encodeURIComponent(id)}/input`), body);
   }
 
   wakeThread(id: string): Observable<unknown> {
@@ -977,10 +988,10 @@ export class ApiService {
     return this.http.post(this.api(`/threads/${encodeURIComponent(id)}/recover`), {});
   }
 
-  interruptThread(id: string, text = "", attachments: Array<Record<string, unknown>> = []): Observable<unknown> {
+  interruptThread(id: string, text = "", attachments: Array<Record<string, unknown>> = []): Observable<ThreadInputResponse> {
     const body: Record<string, unknown> = { text };
     if (attachments.length) body["attachments"] = attachments;
-    return this.http.post(this.api(`/threads/${encodeURIComponent(id)}/interrupt`), body);
+    return this.http.post<ThreadInputResponse>(this.api(`/threads/${encodeURIComponent(id)}/interrupt`), body);
   }
 
   approveThread(id: string, text = "Approved. Proceed."): Observable<unknown> {

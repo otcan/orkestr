@@ -2107,6 +2107,83 @@ test("thread input delivery treats visible work as active, not stale ack", async
   }
 });
 
+test("thread input delivery does not ack stale working prompts as delivered", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-stale-working-ack-"));
+  const fakeTmux = await createFakeTmux(home);
+  const captureFile = path.join(home, "pane.txt");
+  const rolloutPath = path.join(home, "rollout.jsonl");
+  const priorPath = process.env.PATH;
+  const priorTmuxLog = process.env.TMUX_LOG;
+  const priorTmuxState = process.env.TMUX_STATE;
+  const priorCaptureFile = process.env.TMUX_CAPTURE_FILE;
+  process.env.PATH = `${fakeTmux.bin}:${priorPath || ""}`;
+  process.env.TMUX_LOG = fakeTmux.log;
+  process.env.TMUX_STATE = fakeTmux.state;
+  process.env.TMUX_CAPTURE_FILE = captureFile;
+
+  try {
+    await fs.writeFile(
+      captureFile,
+      [
+        "• Working (19s • esc to interrupt)",
+        "",
+        "› Use /skills to list available skills",
+        "  gpt-5.5 xhigh · /workspace",
+      ].join("\n"),
+      "utf8",
+    );
+    await fs.writeFile(rolloutPath, "{\"timestamp\":\"before\"}\n", "utf8");
+    const rolloutStats = await fs.stat(rolloutPath);
+    const env = {
+      ORKESTR_HOME: path.join(home, "orkestr-home"),
+      HOME: path.join(home, "runtime-home"),
+      CODEX_HOME: path.join(home, "codex-home"),
+      PATH: process.env.PATH,
+      TMUX_LOG: fakeTmux.log,
+      TMUX_STATE: fakeTmux.state,
+      TMUX_CAPTURE_FILE: captureFile,
+      ORKESTR_DELIVERY_ACK_WAIT_MS: "0",
+      ORKESTR_DELIVERY_ACK_BACKOFF_MS: "10000",
+      ORKESTR_DELIVERY_STALE_ACK_RECOVERY_ATTEMPTS: "3",
+    };
+    await createThread({ id: "stale-working-ack-thread", name: "Stale Working Ack Thread" }, env);
+    await wakeThread("stale-working-ack-thread", { reason: "test" }, env);
+    const statusBefore = await runtimeStatus("stale-working-ack-thread", env);
+    assert.equal(statusBefore.working, true);
+    assert.equal(statusBefore.progress.staleWorkingPrompt, true);
+
+    const input = await appendThreadMessage("stale-working-ack-thread", {
+      role: "user",
+      text: "I mean, dealer numbers other than 2 as well.",
+      state: "awaiting_ack",
+      deliveryState: "awaiting_ack",
+    }, env);
+    await updateThreadMessage("stale-working-ack-thread", input.id, {
+      deliveryAttempt: 1,
+      deliveryAckCheckCount: 0,
+      deliveryNextAttemptAt: new Date(Date.now() - 1000).toISOString(),
+      deliveryPaneId: statusBefore.paneId,
+      runtimeLeaseId: statusBefore.lease?.id || null,
+      deliveryRolloutPath: rolloutPath,
+      deliveryRolloutOffset: rolloutStats.size,
+    }, env);
+
+    assert.deepEqual(await deliverPendingThreadInputs("stale-working-ack-thread", env), []);
+    const messages = await listThreadMessages("stale-working-ack-thread", env);
+    const updated = messages.find((message) => message.id === input.id);
+
+    assert.equal(updated.state, "awaiting_ack");
+    assert.equal(updated.deliveryState, "awaiting_runtime_completion");
+    assert.notEqual(updated.observedVia, "runtime_working");
+    assert.ok(Date.parse(updated.deliveryNextAttemptAt) > Date.now());
+  } finally {
+    restoreEnvValue("PATH", priorPath);
+    restoreEnvValue("TMUX_LOG", priorTmuxLog);
+    restoreEnvValue("TMUX_STATE", priorTmuxState);
+    restoreEnvValue("TMUX_CAPTURE_FILE", priorCaptureFile);
+  }
+});
+
 test("runtime status treats a prompt after stale working text as ready", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-stale-working-prompt-"));
   const fakeTmux = await createFakeTmux(home);

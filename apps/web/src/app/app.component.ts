@@ -8,6 +8,13 @@ import { PairingRequiredPageComponent } from "./pairing-required-page.component"
 import { OpsPageComponent, ToolsView } from "./ops-page.component";
 import { RawTerminalController } from "./raw-terminal.controller";
 import { hasProposedPlanEnvelope, renderMessageTextHtml } from "./message-renderer";
+import {
+  createOptimisticUserMessage,
+  failOptimisticThreadMessage,
+  mergeServerMessagesWithOptimistic,
+  replaceOptimisticThreadMessage,
+  updateOptimisticThreadMessage,
+} from "./optimistic-thread-messages";
 import { SLASH_COMMANDS, SlashCommandInfo } from "./slash-commands";
 import {
   ApiService,
@@ -726,19 +733,24 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     const originalText = this.draft.trim();
     if (!originalText && this.pendingFiles.length === 0) return;
     if (!this.guardCodexRuntime()) return;
+    const optimisticId = this.appendOptimisticUserMessage(thread.id, originalText, this.pendingFiles);
     this.sending = true;
     try {
       const attachments = await uploadPendingFiles(this.api, thread.id, this.pendingFiles);
       const text = messageWithAttachmentPaths(originalText, attachments);
+      this.updateOptimisticUserMessage(thread.id, optimisticId, { text, attachments });
       this.markThreadActive(thread.id, 120_000);
-      await firstValueFrom(this.api.sendThreadInput(thread.id, text, attachments));
+      const response = await firstValueFrom(this.api.sendThreadInput(thread.id, text, attachments));
+      this.replaceOptimisticUserMessage(thread.id, optimisticId, response.message);
       this.draft = "";
       this.clearThreadTextField(thread, "draft");
       this.pendingFiles = [];
       this.queueMessagePaneScrollToBottom();
       await this.refresh(false);
     } catch (error) {
-      this.error = this.errorText(error);
+      const detail = this.errorText(error);
+      this.error = detail;
+      this.failOptimisticUserMessage(thread.id, optimisticId, detail);
     } finally {
       this.sending = false;
     }
@@ -750,19 +762,24 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     const originalText = this.draft.trim();
     if (!originalText && this.pendingFiles.length === 0) return;
     if (!this.guardCodexRuntime()) return;
+    const optimisticId = this.appendOptimisticUserMessage(thread.id, originalText, this.pendingFiles, "interrupt", "interrupting");
     this.sendingNow = true;
     try {
       const attachments = await uploadPendingFiles(this.api, thread.id, this.pendingFiles);
       const text = messageWithAttachmentPaths(originalText, attachments);
+      this.updateOptimisticUserMessage(thread.id, optimisticId, { text, attachments });
       this.markThreadActive(thread.id, 120_000);
-      await firstValueFrom(this.api.interruptThread(thread.id, text, attachments));
+      const response = await firstValueFrom(this.api.interruptThread(thread.id, text, attachments));
+      this.replaceOptimisticUserMessage(thread.id, optimisticId, response.message);
       this.draft = "";
       this.clearThreadTextField(thread, "draft");
       this.pendingFiles = [];
       this.queueMessagePaneScrollToBottom();
       await this.refresh(false);
     } catch (error) {
-      this.error = this.errorText(error);
+      const detail = this.errorText(error);
+      this.error = detail;
+      this.failOptimisticUserMessage(thread.id, optimisticId, detail);
     } finally {
       this.sendingNow = false;
     }
@@ -772,14 +789,18 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     const thread = this.selectedThread();
     if (!thread || this.sending || this.sendingNow || this.implementingPlan) return;
     if (!this.guardCodexRuntime()) return;
+    const optimisticId = this.appendOptimisticUserMessage(thread.id, "/implement", [], "implement_command");
     this.implementingPlan = true;
     try {
       this.markThreadActive(thread.id, 120_000);
-      await firstValueFrom(this.api.sendThreadInput(thread.id, "/implement"));
+      const response = await firstValueFrom(this.api.sendThreadInput(thread.id, "/implement"));
+      this.replaceOptimisticUserMessage(thread.id, optimisticId, response.message);
       this.queueMessagePaneScrollToBottom();
       await this.refresh(false);
     } catch (error) {
-      this.error = this.errorText(error);
+      const detail = this.errorText(error);
+      this.error = detail;
+      this.failOptimisticUserMessage(thread.id, optimisticId, detail);
     } finally {
       this.implementingPlan = false;
     }
@@ -1638,6 +1659,44 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   selectedMessages(): ThreadMessage[] {
     const thread = this.selectedThread();
     return thread ? this.messageCache()[thread.id] || [] : [];
+  }
+
+  private appendOptimisticUserMessage(
+    threadId: string,
+    text: string,
+    pendingFiles: PendingFile[],
+    source = "ui",
+    deliveryState = "sending",
+  ): string {
+    const message = createOptimisticUserMessage(text, pendingFiles, { source, deliveryState });
+    this.messageCache.update((cache) => ({
+      ...cache,
+      [threadId]: [...(cache[threadId] || []), message],
+    }));
+    this.queueMessagePaneScrollToBottom();
+    this.markThreadActive(threadId, 120_000);
+    return message.id;
+  }
+
+  private updateOptimisticUserMessage(threadId: string, optimisticId: string, patch: Partial<ThreadMessage>): void {
+    this.messageCache.update((cache) => ({
+      ...cache,
+      [threadId]: updateOptimisticThreadMessage(cache[threadId] || [], optimisticId, patch),
+    }));
+  }
+
+  private replaceOptimisticUserMessage(threadId: string, optimisticId: string, serverMessage: ThreadMessage | null | undefined): void {
+    this.messageCache.update((cache) => ({
+      ...cache,
+      [threadId]: replaceOptimisticThreadMessage(cache[threadId] || [], optimisticId, serverMessage),
+    }));
+  }
+
+  private failOptimisticUserMessage(threadId: string, optimisticId: string, detail: string): void {
+    this.messageCache.update((cache) => ({
+      ...cache,
+      [threadId]: failOptimisticThreadMessage(cache[threadId] || [], optimisticId, detail),
+    }));
   }
 
   selectedMessagesLoading(): boolean {
@@ -2852,8 +2911,8 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     try {
       const payload = await firstValueFrom(this.api.threadMessages(threadId, 150));
       if (this.threadLoadTokens.get(threadId) !== loadToken) return;
-      const nextMessages = payload.messages || [];
       const previousMessages = this.messageCache()[threadId] || [];
+      const nextMessages = mergeServerMessagesWithOptimistic(payload.messages || [], previousMessages);
       const previousSignature = previousMessages.map((message) => this.messageKey(message)).join("|");
       const signature = nextMessages.map((message) => this.messageKey(message)).join("|");
       const changed = signature !== previousSignature;

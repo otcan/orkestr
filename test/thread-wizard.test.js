@@ -99,6 +99,24 @@ test("web thread input allows Orkestr control commands", async () => {
   assert.ok(sendThreadInput.includes("controlAllowed: true"));
 });
 
+test("web thread input renders optimistic user messages before server refresh", async () => {
+  const sources = await read([
+    "apps/web/src/app/app.component.ts",
+    "apps/web/src/app/api.service.ts",
+    "apps/web/src/app/optimistic-thread-messages.ts",
+  ]);
+  const sendMessage = sources.slice(sources.indexOf("async sendMessage()"), sources.indexOf("async sendMessageNow()"));
+
+  assert.ok(sources.includes("export interface ThreadInputResponse"));
+  assert.ok(sources.includes("createOptimisticUserMessage"));
+  assert.ok(sources.includes("replaceOptimisticThreadMessage"));
+  assert.ok(sources.includes("failOptimisticThreadMessage"));
+  assert.ok(sources.includes("mergeServerMessagesWithOptimistic"));
+  assert.ok(sendMessage.indexOf("appendOptimisticUserMessage") < sendMessage.indexOf("uploadPendingFiles"));
+  assert.ok(sendMessage.indexOf("appendOptimisticUserMessage") < sendMessage.indexOf("firstValueFrom(this.api.sendThreadInput"));
+  assert.ok(sendMessage.includes("response.message"));
+});
+
 test("chat messages show delivery failure reasons", async () => {
   const sources = await read([
     "apps/web/src/app/app.component.ts",
