@@ -75,10 +75,11 @@ Orkestr, and prints service commands. On macOS this uses `launchd`; on Linux it
 uses a user `systemd` unit when available and falls back to cron only when no
 user service manager is available.
 When run from a terminal, the one-line installer keeps the happy path short:
-it shows the private local URL, asks only whether Codex should ask before
-higher-risk commands, then installs and starts the local service. Bind address,
-port, data/workspace paths, service behavior, and host Codex CLI probing stay
-on safe defaults unless you run with `--advanced`.
+it shows the private local URL, asks only whether to enable Codex YOLO mode
+for command approvals, then installs and starts the local service. Press Enter
+to keep the safer default where Codex asks before higher-risk commands. Bind
+address, port, data/workspace paths, service behavior, and host Codex CLI
+probing stay on safe defaults unless you run with `--advanced`.
 
 ```bash
 ~/.local/bin/orkestr service status

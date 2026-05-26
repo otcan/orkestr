@@ -807,7 +807,7 @@ apply_install_defaults() {
 }
 
 run_install_wizard() {
-  local keep_approvals install_service start_after default_workspace
+  local yolo_mode install_service start_after default_workspace
   echo "Orkestr installer"
   echo
   echo "This installs Orkestr locally, keeps it private on this machine, and starts the web UI."
@@ -820,13 +820,13 @@ run_install_wizard() {
   fi
   echo
   echo "Press Enter to accept the suggested answer."
-  prompt_yes_no keep_approvals "Ask before Codex runs higher-risk commands" "1"
-  if [ "$keep_approvals" = "1" ]; then
-    ORKESTR_CODEX_SANDBOX="${ORKESTR_CODEX_SANDBOX:-workspace-write}"
-    ORKESTR_CODEX_APPROVAL_POLICY="${ORKESTR_CODEX_APPROVAL_POLICY:-on-request}"
-  else
+  prompt_yes_no yolo_mode "Enable Codex YOLO mode: skip approval prompts and allow full command access" "0"
+  if [ "$yolo_mode" = "1" ]; then
     ORKESTR_CODEX_SANDBOX="${ORKESTR_CODEX_SANDBOX:-danger-full-access}"
     ORKESTR_CODEX_APPROVAL_POLICY="${ORKESTR_CODEX_APPROVAL_POLICY:-never}"
+  else
+    ORKESTR_CODEX_SANDBOX="${ORKESTR_CODEX_SANDBOX:-workspace-write}"
+    ORKESTR_CODEX_APPROVAL_POLICY="${ORKESTR_CODEX_APPROVAL_POLICY:-on-request}"
   fi
   if [ "$advanced_install" != "1" ]; then
     return 0

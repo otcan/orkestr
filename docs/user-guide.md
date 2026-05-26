@@ -171,10 +171,11 @@ Do not publish a raw Orkestr API or terminal stream directly to the internet.
    ```
 
    In a terminal, the installer shows the private local URL, asks only whether
-   Codex should ask before higher-risk commands, installs missing runtime tools
-   when you approve it, and starts Orkestr as a local service. Bind address,
-   port, runtime paths, service behavior, and host Codex CLI probing stay on
-   safe defaults unless you run with `--advanced`.
+   to enable Codex YOLO mode for command approvals, installs missing runtime
+   tools when you approve it, and starts Orkestr as a local service. Press
+   Enter to keep the safer default where Codex asks before higher-risk
+   commands. Bind address, port, runtime paths, service behavior, and host
+   Codex CLI probing stay on safe defaults unless you run with `--advanced`.
 
    For a clean local reinstall, use `--fresh`:
 
