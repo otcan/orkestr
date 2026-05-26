@@ -154,6 +154,7 @@ test("web UI exposes native terminal attach for app-server threads", async () =>
   assert.ok(sources.includes("openThreadTerminal"));
   assert.ok(sources.includes("copyNativeAttachCommand"));
   assert.ok(sources.includes('Post(":threadId/attach/open-terminal")'));
+  assert.ok(sources.includes("ok: true,\n        launched: false"));
   assert.ok(sources.includes("attachKind?: string"));
   assert.ok(sources.includes("launched?: boolean"));
   assert.ok(sources.includes("Open Terminal"));

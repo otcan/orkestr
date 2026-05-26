@@ -989,7 +989,7 @@ export class ThreadsController {
     } catch (error: any) {
       return {
         ...attach,
-        ok: false,
+        ok: true,
         launched: false,
         message: error?.message || "Could not open a native terminal on this host.",
       };
