@@ -112,7 +112,10 @@ test("web thread input renders optimistic user messages before server refresh", 
   assert.ok(sources.includes("replaceOptimisticThreadMessage"));
   assert.ok(sources.includes("failOptimisticThreadMessage"));
   assert.ok(sources.includes("mergeServerMessagesWithOptimistic"));
+  assert.ok(sources.includes("clearSubmittedComposer(thread)"));
+  assert.ok(sources.includes("const pendingFiles = [...this.pendingFiles]"));
   assert.ok(sendMessage.indexOf("appendOptimisticUserMessage") < sendMessage.indexOf("uploadPendingFiles"));
+  assert.ok(sendMessage.indexOf("clearSubmittedComposer(thread)") < sendMessage.indexOf("uploadPendingFiles"));
   assert.ok(sendMessage.indexOf("appendOptimisticUserMessage") < sendMessage.indexOf("firstValueFrom(this.api.sendThreadInput"));
   assert.ok(sendMessage.includes("response.message"));
 });

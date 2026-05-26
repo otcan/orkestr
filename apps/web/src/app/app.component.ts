@@ -733,18 +733,17 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     const originalText = this.draft.trim();
     if (!originalText && this.pendingFiles.length === 0) return;
     if (!this.guardCodexRuntime()) return;
-    const optimisticId = this.appendOptimisticUserMessage(thread.id, originalText, this.pendingFiles);
+    const pendingFiles = [...this.pendingFiles];
+    const optimisticId = this.appendOptimisticUserMessage(thread.id, originalText, pendingFiles);
+    this.clearSubmittedComposer(thread);
     this.sending = true;
     try {
-      const attachments = await uploadPendingFiles(this.api, thread.id, this.pendingFiles);
+      const attachments = await uploadPendingFiles(this.api, thread.id, pendingFiles);
       const text = messageWithAttachmentPaths(originalText, attachments);
       this.updateOptimisticUserMessage(thread.id, optimisticId, { text, attachments });
       this.markThreadActive(thread.id, 120_000);
       const response = await firstValueFrom(this.api.sendThreadInput(thread.id, text, attachments));
       this.replaceOptimisticUserMessage(thread.id, optimisticId, response.message);
-      this.draft = "";
-      this.clearThreadTextField(thread, "draft");
-      this.pendingFiles = [];
       this.queueMessagePaneScrollToBottom();
       await this.refresh(false);
     } catch (error) {
@@ -762,18 +761,17 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     const originalText = this.draft.trim();
     if (!originalText && this.pendingFiles.length === 0) return;
     if (!this.guardCodexRuntime()) return;
-    const optimisticId = this.appendOptimisticUserMessage(thread.id, originalText, this.pendingFiles, "interrupt", "interrupting");
+    const pendingFiles = [...this.pendingFiles];
+    const optimisticId = this.appendOptimisticUserMessage(thread.id, originalText, pendingFiles, "interrupt", "interrupting");
+    this.clearSubmittedComposer(thread);
     this.sendingNow = true;
     try {
-      const attachments = await uploadPendingFiles(this.api, thread.id, this.pendingFiles);
+      const attachments = await uploadPendingFiles(this.api, thread.id, pendingFiles);
       const text = messageWithAttachmentPaths(originalText, attachments);
       this.updateOptimisticUserMessage(thread.id, optimisticId, { text, attachments });
       this.markThreadActive(thread.id, 120_000);
       const response = await firstValueFrom(this.api.interruptThread(thread.id, text, attachments));
       this.replaceOptimisticUserMessage(thread.id, optimisticId, response.message);
-      this.draft = "";
-      this.clearThreadTextField(thread, "draft");
-      this.pendingFiles = [];
       this.queueMessagePaneScrollToBottom();
       await this.refresh(false);
     } catch (error) {
@@ -1676,6 +1674,12 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     this.queueMessagePaneScrollToBottom();
     this.markThreadActive(threadId, 120_000);
     return message.id;
+  }
+
+  private clearSubmittedComposer(thread: ThreadSummary): void {
+    this.draft = "";
+    this.clearThreadTextField(thread, "draft");
+    this.pendingFiles = [];
   }
 
   private updateOptimisticUserMessage(threadId: string, optimisticId: string, patch: Partial<ThreadMessage>): void {
