@@ -80,7 +80,8 @@ test("install script exposes a host-native systemd VPS path", async () => {
   assert.match(script, /ORKESTR_ALLOW_MACOS_BREW_INSTALL/);
   assert.match(script, /\$brew" --prefix/);
   assert.match(script, /Missing local runtime tools, but Orkestr will not ask your terminal app for administrator access/);
-  assert.match(script, /let this installer run Homebrew/);
+  assert.match(script, /ORKESTR_ALLOW_MACOS_BREW_INSTALL:-1/);
+  assert.match(script, /force manual tool installation/);
   assert.match(script, /fix the Homebrew/);
   assert.match(script, /Install missing local runtime tools/);
   assert.match(script, /HOMEBREW_NO_AUTO_UPDATE=1 HOMEBREW_NO_ENV_HINTS=1 HOMEBREW_NO_INSTALL_CLEANUP=1/);
@@ -95,6 +96,8 @@ test("install script exposes a host-native systemd VPS path", async () => {
   assert.match(script, /write_local_server_wrapper/);
   assert.match(script, /write_local_cli_wrapper/);
   assert.match(script, /echo "background"/);
+  assert.match(script, /effective_local_service_manager/);
+  assert.match(script, /Ignoring ORKESTR_LOCAL_SERVICE_MANAGER=launchd/);
   assert.match(script, /install_background_service/);
   assert.match(script, /ORKESTR_ALLOW_MACOS_LAUNCHD/);
   assert.match(script, /pkill -f "\$\(local_server_wrapper\)"/);

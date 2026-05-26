@@ -150,12 +150,13 @@ On macOS and other local installs, that file includes a service-safe `PATH` so
 launchd/systemd can find tools such as `tmux` and Homebrew-installed binaries.
 The one-line script also detaches itself from the `curl | bash` pipe before
 running Homebrew or prompts, so dependency installers cannot consume the rest of
-the script from stdin. On macOS, it does not run Homebrew by default; if tools
-such as `tmux` or `ripgrep` are missing, it stops with a manual command instead
-of asking the terminal app for administrator access. The default macOS local
-service is a user-owned background process controlled by `orkestr service`
-commands, not a launchd bootstrap, so the installer does not ask the terminal
-app to administer the computer.
+the script from stdin. On macOS, missing local tools can be installed through
+Homebrew when the Homebrew prefix is writable. The default macOS local service
+is a user-owned background process controlled by `orkestr service` commands,
+not a launchd bootstrap, so the installer does not ask the terminal app to
+administer the computer. If an old shell exported
+`ORKESTR_LOCAL_SERVICE_MANAGER=launchd`, the installer ignores it unless
+`ORKESTR_ALLOW_MACOS_LAUNCHD=1` is also set.
 Use `.env` or the setup UI for optional OpenAI API access, Tailscale/Caddy
 settings, OAuth credentials, workspace roots, or overlay settings. The OpenAI
 API key is not required for the default Codex Agent path; it is for connectors
