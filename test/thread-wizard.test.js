@@ -40,11 +40,16 @@ test("main UI exposes a guided first thread generation flow", async () => {
   assert.ok(sources.includes('type WizardStepId = "name" | "repository" | "review"'));
   assert.ok(sources.includes("repoRemoteUrl"));
   assert.ok(sources.includes("cloneRepo"));
-  assert.ok(sources.includes("Codex sign-in required to run tasks."));
+  assert.ok(sources.includes("Codex Agent required."));
+  assert.ok(sources.includes("codex-required-shell"));
+  assert.ok(sources.includes("Orkestr is locked until the Codex Agent runtime is connected."));
+  assert.ok(sources.includes("Connect Codex Agent before creating, opening, or inspecting workspaces."));
   assert.ok(sources.includes("Connect Codex Agent"));
   assert.ok(sources.includes("setupRequested"));
   assert.ok(sources.includes("[setupStatus]=\"setupStatus\""));
-  assert.ok(sources.includes("Workspace created. Connect Codex Agent before sending tasks."));
+  assert.ok(!sources.includes("Workspace browsing stays available"));
+  assert.ok(!sources.includes("You can create and inspect the workspace now"));
+  assert.ok(!sources.includes("Workspace created. Connect Codex Agent before sending tasks."));
   assert.ok(sources.includes("guardCodexRuntime"));
   assert.ok(sources.includes("this.api.createThread"));
   assert.ok(sources.includes("wake: shouldWake"));

@@ -73,7 +73,7 @@ export class FirstThreadWizardComponent {
   }
 
   canCreate(): boolean {
-    return Boolean(this.agentName() && !this.busy);
+    return Boolean(this.agentName() && this.codexReady() && !this.busy);
   }
 
   agentName(): string {
@@ -119,7 +119,7 @@ export class FirstThreadWizardComponent {
   codexSummary(): string {
     if (this.codexReady()) return this.codexConnector()?.summary || "Codex Agent is connected.";
     const summary = this.codexConnector()?.summary || "Checking Codex Agent status.";
-    return `${summary} You can create and inspect the workspace now; connect Codex Agent before sending tasks.`;
+    return `${summary} Connect Codex Agent before creating or opening workspaces.`;
   }
 
   openCodexSetup(): void {
@@ -147,6 +147,10 @@ export class FirstThreadWizardComponent {
         this.setupStatus = setup;
         shouldWake = this.codexReady();
       }
+      if (!shouldWake) {
+        this.error = this.codexSummary();
+        return;
+      }
       const name = this.agentName();
       const repoUrl = this.repoUrlValue();
       const cloneRepo = Boolean(repoUrl);
@@ -167,7 +171,7 @@ export class FirstThreadWizardComponent {
         reason: "first_thread_created",
       }));
       const thread = response.thread;
-      this.creationStage = shouldWake ? "Starting Codex in background" : "Workspace created. Connect Codex Agent before sending tasks.";
+      this.creationStage = "Starting Codex in background";
       this.created.emit(thread);
     } catch (error) {
       this.error = this.errorText(error);

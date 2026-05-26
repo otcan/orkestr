@@ -291,6 +291,19 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
         return;
       }
       this.pairingRequired = false;
+      if (!this.codexAgentReady() && !this.onboardingActive) {
+        this.apiOnline = true;
+        this.threadWizardOpen = false;
+        this.modelDetailsOpen = false;
+        this.slashHelpOpen = false;
+        this.gitDetailsThreadId = "";
+        this.activePanel = "chat";
+        this.closeRawStream();
+        this.disconnectSummaryStream();
+        this.updateDocumentTitle();
+        this.error = "";
+        return;
+      }
       if (threadsResult.status === "rejected") {
         if (this.isPairingRequiredError(threadsResult.reason)) {
           this.apiOnline = true;
@@ -396,11 +409,11 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   codexAgentSummary(): string {
     if (this.codexAgentReady()) return this.codexConnector()?.summary || "Codex Agent is connected.";
     const summary = this.codexConnector()?.summary || "Checking Codex Agent status.";
-    return `${summary} Workspace browsing stays available; connect Codex Agent before sending tasks.`;
+    return `${summary} Orkestr is locked until the Codex Agent runtime is connected. Connect Codex Agent before creating, opening, or inspecting workspaces.`;
   }
 
   codexRuntimeNoticeTitle(): string {
-    return `Workspace ready · Codex ${this.codexAgentStateLabel()}`;
+    return `Codex Agent ${this.codexAgentStateLabel()}`;
   }
 
   openCodexSetup(): void {
@@ -409,13 +422,13 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
 
   private guardCodexRuntime(): boolean {
     if (this.codexAgentReady()) return true;
-    this.error = "Connect Codex Agent before running tasks. You can still browse this workspace and its repo settings.";
+    this.error = "Connect Codex Agent before opening Orkestr.";
     this.renderNow();
     return false;
   }
 
   private connectSummaryStream(): void {
-    if (!this.appReady || this.pairingRequired) return;
+    if (!this.appReady || this.pairingRequired || !this.codexAgentReady()) return;
     if (this.destroyed || typeof globalThis.WebSocket === "undefined") {
       this.startFallbackPolling();
       return;
@@ -444,7 +457,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   }
 
   private scheduleSummaryReconnect(): void {
-    if (this.destroyed || this.pairingRequired || !this.appReady || this.summaryReconnectTimer) return;
+    if (this.destroyed || this.pairingRequired || !this.appReady || !this.codexAgentReady() || this.summaryReconnectTimer) return;
     this.summaryReconnectTimer = setTimeout(() => {
       this.summaryReconnectTimer = undefined;
       this.connectSummaryStream();
@@ -452,7 +465,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   }
 
   private startFallbackPolling(): void {
-    if (this.pairingRequired || !this.appReady) return;
+    if (this.pairingRequired || !this.appReady || !this.codexAgentReady()) return;
     if (this.fallbackPoller) return;
     this.fallbackPoller = setInterval(() => void this.refresh(false), 30_000);
   }
@@ -475,6 +488,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   }
 
   private async loadSystemSummarySilent(): Promise<void> {
+    if (!this.onboardingActive && !this.pairingRequired && !this.codexAgentReady()) return;
     try {
       this.opsSystem = await firstValueFrom(this.api.systemSummary());
       this.renderNow();
@@ -484,7 +498,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   }
 
   private async handleSummaryStreamMessage(raw: unknown): Promise<void> {
-    if (this.pairingRequired) return;
+    if (this.pairingRequired || !this.codexAgentReady()) return;
     let payload: { type?: string; threads?: ThreadSummary[] };
     try {
       payload = JSON.parse(String(raw || "{}"));
@@ -496,7 +510,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   }
 
   private async applyThreadSummaryStream(threads: ThreadSummary[]): Promise<void> {
-    if (this.pairingRequired) return;
+    if (this.pairingRequired || !this.codexAgentReady()) return;
     if (this.applyingSummary) return;
     this.applyingSummary = true;
     try {
@@ -3585,6 +3599,10 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     }
     if (this.onboardingActive) {
       globalThis.document.title = this.setupPageMode === "setup" ? "Setup · Orkestr" : "Onboarding · Orkestr";
+      return;
+    }
+    if (this.appReady && !this.codexAgentReady()) {
+      globalThis.document.title = "Codex Agent Required · Orkestr";
       return;
     }
     if (this.activePanel === "ops") {

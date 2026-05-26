@@ -35,7 +35,7 @@
 
   @if (codexBlocked()) {
     <div class="notice">
-      <strong>Codex sign-in required to run tasks.</strong>
+      <strong>Codex Agent required.</strong>
       <span>{{ codexSummary() }}</span>
       <button class="secondary" type="button" (click)="openCodexSetup()" [disabled]="busy">Connect Codex Agent</button>
     </div>
