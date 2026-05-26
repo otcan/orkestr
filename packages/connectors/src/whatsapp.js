@@ -691,7 +691,7 @@ function cpuDebugPercent() {
 
 function shouldAppendWhatsAppDebugFooter(message = {}, env = process.env, deliveryType = "") {
   if (!footerEnabled(env)) return false;
-  if (message.source === "codex-rollout" || message.source === "orkestr_runtime") return true;
+  if (codexAssistantSource(message) || message.source === "orkestr_runtime") return true;
   return ["delivery_error", "mode_queued", "queue_notice", "router_update"].includes(String(deliveryType || "").trim());
 }
 
@@ -899,7 +899,10 @@ export function initialQueueDeliveryState(status = null, message = null) {
   const state = String(status.state || "").trim().toLowerCase();
   const runtimeKind = String(status.runtimeKind || status.runtimeState || "").trim().toLowerCase();
   const isCodexAppServer = runtimeKind === "codex-app-server";
+  if (isCodexAppServer && state === "working") return "awaiting_active_turn";
+  if (isCodexAppServer && state === "awaiting_approval") return "awaiting_approval";
   if (state === "working") return "awaiting_runtime_completion";
+  if (isCodexAppServer && (state === "waking" || state === "sleeping")) return "resuming_codex_thread";
   if (state === "waking" || state === "sleeping") return "waiting_runtime_start";
   if (!isCodexAppServer && !status.sessionName) return "waiting_runtime_start";
   if (status.promptReady === false) return "waiting_runtime_ready";
@@ -913,15 +916,47 @@ async function annotateInitialThreadQueueNotice(threadId, message, env = process
   return updateThreadMessage(threadId, message.id, { deliveryState }, env).catch(() => message);
 }
 
+function runtimeKindFromStatus(status = null) {
+  return String(status?.runtimeKind || status?.runtimeState || "").trim().toLowerCase();
+}
+
+function runtimeStateFromStatus(status = null) {
+  return String(status?.state || status?.status || "").trim().toLowerCase();
+}
+
+function runtimeActiveTurnId(status = null) {
+  return String(status?.activeTurnId || status?.turnId || "").trim();
+}
+
 function runtimeTypingActive(status = null) {
   if (!status) return false;
-  const state = String(status.state || status.status || "").trim().toLowerCase();
+  const state = runtimeStateFromStatus(status);
+  if (runtimeKindFromStatus(status) === "codex-app-server") {
+    if (!runtimeActiveTurnId(status)) return false;
+    if (state === "awaiting_approval") return false;
+    return status.typingActive === true ||
+      status.foregroundWorking === true ||
+      status.working === true ||
+      status.backgroundWork === true ||
+      state === "working" ||
+      state === "running";
+  }
   return status.typingActive === true ||
     status.foregroundWorking === true ||
     status.working === true ||
     status.backgroundWork === true ||
     state === "working" ||
     state === "running";
+}
+
+function deferredWhatsAppTypingDeliveryState(message = {}) {
+  const deliveryState = String(message.deliveryState || "").trim().toLowerCase();
+  return [
+    "awaiting_active_turn",
+    "awaiting_approval",
+    "interrupting",
+    "resuming_codex_thread",
+  ].includes(deliveryState);
 }
 
 function latestWhatsAppTypingParent(messages = [], thread = null, state = null) {
@@ -932,6 +967,7 @@ function latestWhatsAppTypingParent(messages = [], thread = null, state = null) 
     if (!chatId) return false;
     const messageState = String(message.state || "").trim().toLowerCase();
     if (messageState === "failed") return false;
+    if (deferredWhatsAppTypingDeliveryState(message)) return false;
     if (completedFinalReplyForTypingParent(messages, message, chatId)) return false;
     return true;
   }) || null;
@@ -1119,8 +1155,11 @@ function queuedInputWhatsAppDeliveryTarget(message, thread, state) {
   if (!["queued", "pending_delivery"].includes(messageState)) return null;
   if (![
     "awaiting_runtime_completion",
+    "awaiting_active_turn",
+    "awaiting_approval",
     "interrupting",
     "recovering_stale_ack",
+    "resuming_codex_thread",
     "retrying_delivery",
     "waiting_runtime_ready",
     "waiting_runtime_start",
@@ -1141,14 +1180,23 @@ function queueNoticePreview(message) {
 function formatWhatsAppQueueNotice(message, reason = "") {
   const preview = queueNoticePreview(message);
   const normalizedReason = String(reason || "").trim().toLowerCase();
+  if (normalizedReason === "awaiting_active_turn") {
+    return `Queued for the next Codex turn: "${preview}".`;
+  }
+  if (normalizedReason === "awaiting_approval") {
+    return `Queued your message while Codex is waiting for approval: "${preview}". Send /approve or /deny to answer the approval request.`;
+  }
+  if (normalizedReason === "resuming_codex_thread") {
+    return `Resuming this Codex thread and queued your message: "${preview}".`;
+  }
   if (["waiting_runtime_start", "waking"].includes(normalizedReason)) {
     return `Waking this Orkestr thread and queued your message: "${preview}". It will be delivered automatically once the Codex session is awake.`;
   }
   if (normalizedReason === "awaiting_runtime_completion") {
-    return `Queued your latest message while current work is still running: "${preview}". It will be delivered automatically when Codex is ready.`;
+    return `Queued your latest message while current work is still running: "${preview}".`;
   }
   if (normalizedReason === "interrupting") {
-    return `Interrupting Codex and queued your message: "${preview}". It will be delivered automatically when the prompt is ready.`;
+    return `Interrupting the current Codex turn and queued your message: "${preview}".`;
   }
   if (["recovering_stale_ack", "retrying_delivery"].includes(normalizedReason)) {
     return `Queued your latest message while Orkestr recovers this thread: "${preview}". It will be delivered automatically when the thread is prompt-ready.`;

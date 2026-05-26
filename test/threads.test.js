@@ -412,7 +412,6 @@ test("runtime sync expires temporary runtimes at their hard TTL", async () => {
       PATH: process.env.PATH,
       TMUX_LOG: fakeTmux.log,
       TMUX_STATE: fakeTmux.state,
-      ORKESTR_RUNTIME_IDLE_SLEEP_MS: "off",
       ORKESTR_TEMP_RUNTIME_TTL_MS: "1",
     };
     await createThread({ id: "temp-ttl-thread", name: "Temp TTL Thread" }, env);
@@ -641,50 +640,8 @@ test("queued stop commands kill the active runtime and complete locally", async 
   }
 });
 
-test("runtime sync auto-sleeps stable idle ready runtimes", async () => {
-  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-auto-sleep-"));
-  const fakeTmux = await createFakeTmux(home);
-  const priorPath = process.env.PATH;
-  const priorTmuxLog = process.env.TMUX_LOG;
-  const priorTmuxState = process.env.TMUX_STATE;
-  process.env.PATH = `${fakeTmux.bin}:${priorPath || ""}`;
-  process.env.TMUX_LOG = fakeTmux.log;
-  process.env.TMUX_STATE = fakeTmux.state;
-
-  try {
-    const env = {
-      ORKESTR_HOME: path.join(home, "orkestr-home"),
-      HOME: path.join(home, "runtime-home"),
-      CODEX_HOME: path.join(home, "codex-home"),
-      PATH: process.env.PATH,
-      TMUX_LOG: fakeTmux.log,
-      TMUX_STATE: fakeTmux.state,
-      ORKESTR_RUNTIME_IDLE_SLEEP_MS: "1",
-    };
-    await createThread({ id: "idle-thread", name: "Idle Thread" }, env);
-    await wakeThread("idle-thread", { reason: "test_wake" }, env);
-    await new Promise((resolve) => setTimeout(resolve, 10));
-
-    await syncRuntimeLeases(env);
-
-    const status = await runtimeStatus("idle-thread", env);
-    const leases = await listRuntimeLeases(env);
-    const log = await fs.readFile(fakeTmux.log, "utf8");
-
-    assert.equal(status.state, "sleeping");
-    assert.equal(status.hibernated, true);
-    assert.equal(leases[0].endReason, "idle_auto_sleep");
-    assert.ok(Number(leases[0].idleMs || 0) >= 1);
-    assert.match(log, /__CALL__\tkill-session\t-t\torkestr-idle-thread/);
-  } finally {
-    restoreEnvValue("PATH", priorPath);
-    restoreEnvValue("TMUX_LOG", priorTmuxLog);
-    restoreEnvValue("TMUX_STATE", priorTmuxState);
-  }
-});
-
-test("runtime sync leaves idle runtimes awake unless idle sleep is enabled", async () => {
-  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-auto-sleep-default-off-"));
+test("runtime sync leaves idle runtimes awake", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-idle-stays-awake-"));
   const fakeTmux = await createFakeTmux(home);
   const priorPath = process.env.PATH;
   const priorTmuxLog = process.env.TMUX_LOG;
@@ -756,7 +713,6 @@ test("legacy Codex resume threads require app-server migration", async () => {
       TMUX_LOG: fakeTmux.log,
       TMUX_STATE: fakeTmux.state,
       TMUX_CAPTURE_TEXT: process.env.TMUX_CAPTURE_TEXT,
-      ORKESTR_RUNTIME_IDLE_SLEEP_MS: "1",
       ORKESTR_ALLOW_REAL_CODEX_TESTS: "1",
     };
     await createThread({
@@ -814,7 +770,6 @@ test("runtime sync skips Codex update prompts", async () => {
       TMUX_LOG: fakeTmux.log,
       TMUX_STATE: fakeTmux.state,
       TMUX_CAPTURE_TEXT: process.env.TMUX_CAPTURE_TEXT,
-      ORKESTR_RUNTIME_IDLE_SLEEP_MS: "1",
     };
     await createThread({ id: "codex-update-thread", name: "Codex Update Thread" }, env);
     await wakeThread("codex-update-thread", { reason: "test_wake" }, env);
@@ -1033,8 +988,8 @@ test("runtime status identifies a frozen pane without restarting it", async () =
   }
 });
 
-test("runtime sync does not auto-sleep pending or working runtimes", async () => {
-  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-auto-sleep-guards-"));
+test("runtime sync keeps pending and working runtimes awake", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-runtime-awake-guards-"));
   const fakeTmux = await createFakeTmux(home);
   const priorPath = process.env.PATH;
   const priorTmuxLog = process.env.TMUX_LOG;
@@ -1052,7 +1007,6 @@ test("runtime sync does not auto-sleep pending or working runtimes", async () =>
       PATH: process.env.PATH,
       TMUX_LOG: fakeTmux.log,
       TMUX_STATE: fakeTmux.state,
-      ORKESTR_RUNTIME_IDLE_SLEEP_MS: "1",
     };
     process.env.TMUX_CAPTURE_TEXT = "› ";
     await createThread({ id: "pending-thread", name: "Pending Thread" }, env);
@@ -2986,7 +2940,6 @@ test("runtime wake corrects stale persisted Codex plan mode from live pane mode"
   const priorTmuxLog = process.env.TMUX_LOG;
   const priorTmuxState = process.env.TMUX_STATE;
   const priorCaptureFile = process.env.TMUX_CAPTURE_FILE;
-  const priorIdleSleep = process.env.ORKESTR_RUNTIME_IDLE_SLEEP_MS;
   process.env.ORKESTR_HOME = path.join(home, "orkestr-home");
   process.env.HOME = path.join(home, "runtime-home");
   process.env.CODEX_HOME = path.join(home, "codex-home");
@@ -2994,7 +2947,6 @@ test("runtime wake corrects stale persisted Codex plan mode from live pane mode"
   process.env.TMUX_LOG = fakeTmux.log;
   process.env.TMUX_STATE = fakeTmux.state;
   process.env.TMUX_CAPTURE_FILE = captureFile;
-  process.env.ORKESTR_RUNTIME_IDLE_SLEEP_MS = "0";
 
   try {
     await fs.writeFile(captureFile, "› \n\ngpt-5.5 xhigh · /workspace/demo\n", "utf8");
@@ -3006,7 +2958,6 @@ test("runtime wake corrects stale persisted Codex plan mode from live pane mode"
       TMUX_LOG: fakeTmux.log,
       TMUX_STATE: fakeTmux.state,
       TMUX_CAPTURE_FILE: captureFile,
-      ORKESTR_RUNTIME_IDLE_SLEEP_MS: "0",
     };
     await createThread({
       id: "codex-mode-restore-thread",
@@ -3039,7 +2990,6 @@ test("runtime wake corrects stale persisted Codex plan mode from live pane mode"
     restoreEnvValue("TMUX_LOG", priorTmuxLog);
     restoreEnvValue("TMUX_STATE", priorTmuxState);
     restoreEnvValue("TMUX_CAPTURE_FILE", priorCaptureFile);
-    restoreEnvValue("ORKESTR_RUNTIME_IDLE_SLEEP_MS", priorIdleSleep);
   }
 });
 

@@ -273,7 +273,7 @@
           <button
             class="danger stop-button"
             type="button"
-            title="Stop this thread runtime and put it to sleep"
+            title="Interrupt the active Codex turn"
             (click)="stopSelected()"
             [disabled]="busy || !codexAgentReady() || thread.state === 'sleeping' || thread.status === 'sleeping'"
           >STOP</button>

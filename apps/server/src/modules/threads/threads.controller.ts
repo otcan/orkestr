@@ -558,7 +558,10 @@ export class ThreadsController {
       });
     }
     if (parsedCommand.command === "stop") {
-      const result = await sleepThread(thread.id, { reason: "stop_command", kill: true });
+      const appServer = threadUsesCodexAppServer(thread);
+      const result = appServer
+        ? { thread, slept: 0, interrupted: await interruptCodexAppServerThread(thread).catch(() => ({ interrupted: false })) }
+        : await sleepThread(thread.id, { reason: "stop_command", kill: true });
       const message = await appendThreadMessage(thread.id, {
         role: "user",
         source: body.source || "stop_command",
@@ -566,11 +569,13 @@ export class ThreadsController {
         state: "completed",
         deliveryState: "delivered",
         observedVia: "orkestr_stop_command",
+        interruptSent: Boolean((result as any).interrupted?.interrupted),
         deliveredAt: new Date().toISOString(),
       });
       return {
         ok: true,
         stopped: true,
+        interrupted: Boolean((result as any).interrupted?.interrupted),
         slept: result.slept,
         threadId: codexThreadId(thread) || thread.id,
         orkestrThreadId: thread.id,
@@ -804,10 +809,15 @@ export class ThreadsController {
   @Post(":threadId/stop")
   @HttpCode(200)
   async stop(@Param("threadId") threadId: string, @Body() body: Record<string, unknown> = {}) {
-    const result: any = await sleepThread(threadId, { reason: body.reason || "ui_stop", kill: body.kill !== false });
+    const target = await getThread(threadId);
+    if (!target) throw httpError("thread_not_found", 404);
+    const result: any = threadUsesCodexAppServer(target)
+      ? { thread: target, slept: 0, interrupted: await interruptCodexAppServerThread(target).catch(() => ({ interrupted: false })) }
+      : await sleepThread(threadId, { reason: body.reason || "ui_stop", kill: body.kill !== false });
     return {
       ok: true,
       stopped: true,
+      interrupted: Boolean(result.interrupted?.interrupted),
       slept: result.slept,
       thread: await threadRuntimeSummary(result.thread, await listThreadMessages(result.thread.id)),
     };

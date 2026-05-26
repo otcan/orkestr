@@ -594,6 +594,96 @@ test("whatsapp typing indicators follow active routed thread runtime", async () 
   assert.deepEqual(captures[1], []);
 });
 
+test("whatsapp typing indicators require an active app-server turn", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-typing-app-server-idle-"));
+  const env = { ORKESTR_HOME: home };
+  await createThread({
+    id: "thread-wa-typing-app-server-idle",
+    name: "WA Typing App Server Idle Thread",
+    runtimeKind: "codex-app-server",
+  }, env);
+  await writeConnectorConfig("whatsapp", {
+    threadRoutes: { "chat-typing-app-server-idle": "thread-wa-typing-app-server-idle" },
+  }, env);
+
+  const routed = await routeWhatsAppInbound({
+    eventId: "wa-typing-app-server-idle-1",
+    chatId: "chat-typing-app-server-idle",
+    accountId: "responder",
+    text: "work on this",
+  }, env);
+  const captures = [];
+  const result = await syncWhatsAppTypingIndicators(env, {
+    statusImpl: async () => ({
+      state: "working",
+      runtimeKind: "codex-app-server",
+      activeTurnId: null,
+      working: true,
+      typingActive: true,
+    }),
+    syncImpl: async (targets) => {
+      captures.push(targets);
+      return { ok: true, active: targets.length, targets };
+    },
+  });
+
+  assert.equal(result.active, 0);
+  assert.equal(routed.message.connector, "whatsapp");
+  assert.deepEqual(captures[0], []);
+});
+
+test("whatsapp typing indicators skip app-server messages queued behind active turns", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-typing-app-server-queued-"));
+  const env = { ORKESTR_HOME: home };
+  await createThread({
+    id: "thread-wa-typing-app-server-queued",
+    name: "WA Typing App Server Queued Thread",
+    runtimeKind: "codex-app-server",
+  }, env);
+  await writeConnectorConfig("whatsapp", {
+    threadRoutes: { "chat-typing-app-server-queued": "thread-wa-typing-app-server-queued" },
+  }, env);
+
+  const activeParent = await appendThreadMessage("thread-wa-typing-app-server-queued", {
+    role: "user",
+    source: "whatsapp_inbound",
+    connector: "whatsapp",
+    chatId: "chat-typing-app-server-queued",
+    accountId: "responder",
+    state: "completed",
+    text: "active turn message",
+  }, env);
+  await appendThreadMessage("thread-wa-typing-app-server-queued", {
+    role: "user",
+    source: "whatsapp_inbound",
+    connector: "whatsapp",
+    chatId: "chat-typing-app-server-queued",
+    accountId: "responder",
+    state: "queued",
+    deliveryState: "awaiting_active_turn",
+    text: "queued next turn message",
+  }, env);
+
+  const result = await syncWhatsAppTypingIndicators(env, {
+    statusImpl: async () => ({
+      state: "working",
+      runtimeKind: "codex-app-server",
+      activeTurnId: "turn-1",
+      working: true,
+      typingActive: true,
+    }),
+    syncImpl: async (targets) => ({ ok: true, active: targets.length, targets }),
+  });
+
+  assert.equal(result.active, 1);
+  assert.deepEqual(result.targets, [{
+    threadId: "thread-wa-typing-app-server-queued",
+    messageId: activeParent.id,
+    chatId: "chat-typing-app-server-queued",
+    accountId: "responder",
+  }]);
+});
+
 test("whatsapp typing sync tolerates stale inbound account ids", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-typing-stale-account-"));
   const env = {
@@ -907,6 +997,45 @@ test("whatsapp delivery appends compact debug footer for plan-mode Codex updates
     calls[0].body.text,
     /\n\ndbg: m:gpt-5\.5\/xh · mode:plan · msg:update · q:0 · cpu:\d+% · help:\/help · switch:\/code$/,
   );
+});
+
+test("whatsapp delivery appends debug footer for app-server final replies", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-debug-footer-app-server-"));
+  const env = externalBridgeEnv(home);
+  await createThread({
+    id: "thread-wa-debug-footer-app-server",
+    name: "WA Debug Footer App Server Thread",
+    runtimeKind: "codex-app-server",
+    codexModel: "gpt-5.5",
+    codexReasoningEffort: "xhigh",
+  }, env);
+  await writeConnectorConfig("whatsapp", {
+    bridgeMode: "external",
+    bridgeUrl: "http://wa.local",
+    threadRoutes: { "chat-debug-footer-app-server": "thread-wa-debug-footer-app-server" },
+  }, env);
+
+  const routed = await routeWhatsAppInbound({ eventId: "wa-debug-footer-app-server-1", chatId: "chat-debug-footer-app-server", text: "status?" }, env);
+  await appendThreadMessage("thread-wa-debug-footer-app-server", {
+    role: "assistant",
+    source: "codex-app-server",
+    phase: "final_answer",
+    state: "completed",
+    text: "Final from app server.",
+    parentMessageId: routed.message.id,
+    connector: "whatsapp",
+    chatId: "chat-debug-footer-app-server",
+  }, env);
+
+  const calls = [];
+  const delivery = await deliverWhatsAppReplies(env, async (url, options) => {
+    calls.push({ url, body: JSON.parse(options.body) });
+    return response({ ok: true, ids: ["sent-debug-footer-app-server"] });
+  });
+
+  assert.equal(delivery.delivered.length, 1);
+  assert.equal(stripDebugFooter(calls[0].body.text), "Final from app server.");
+  assertDebugFooter(calls[0].body.text, { messageType: "final", model: "gpt-5.5/xh" });
 });
 
 test("whatsapp debug footer can be disabled", async () => {
@@ -1484,8 +1613,8 @@ test("whatsapp delivery reports recovery action requests", async () => {
   assert.equal(delivery.delivered[1].sourceMessageId, now.id);
   assert.equal(duplicate.delivered.length, 0);
   assert.equal(calls.every((call) => call.body.to === "chat-recovery-action"), true);
-  assert.match(stripDebugFooter(calls[0].body.text), /^Restart requested\.\n\nOrkestr stopped the current Codex pane and woke a new one\./);
-  assert.match(stripDebugFooter(calls[1].body.text), /^Interrupt requested\.\n\nOrkestr sent the interrupt to Codex and queued your message for delivery when the prompt is ready: "fix the pairing number"\./);
+  assert.match(stripDebugFooter(calls[0].body.text), /^Restart requested\.\n\nOrkestr reset the current Codex runtime and resumed the thread\./);
+  assert.match(stripDebugFooter(calls[1].body.text), /^Interrupt requested\.\n\nOrkestr interrupted the current Codex turn and queued your message for the next turn: "fix the pairing number"\./);
   assertDebugFooter(calls[0].body.text, { messageType: "update" });
   assertDebugFooter(calls[1].body.text, { messageType: "update" });
 });
@@ -1602,7 +1731,7 @@ test("whatsapp /now inputs report interrupting before normal queue notices", asy
   assert.equal(routed.message.deliveryState, "interrupting");
   assert.equal(delivery.delivered.length, 1);
   assert.equal(delivery.delivered[0].deliveryType, "queue_notice");
-  assert.match(stripDebugFooter(calls[0].body.text), /^Interrupting Codex and queued your message: "fix the pairing number"\./);
+  assert.match(stripDebugFooter(calls[0].body.text), /^Interrupting the current Codex turn and queued your message: "fix the pairing number"\./);
   assert.doesNotMatch(stripDebugFooter(calls[0].body.text), /\/now/);
   assertDebugFooter(calls[0].body.text, { messageType: "update" });
 });
@@ -1638,6 +1767,15 @@ test("whatsapp queue notices do not treat app-server threads as missing tmux ses
     sessionName: null,
     promptReady: true,
   }, { text: "send normally" }), "");
+  assert.equal(initialQueueDeliveryState({
+    state: "working",
+    runtimeKind: "codex-app-server",
+    activeTurnId: "turn-1",
+  }, { text: "queue behind the turn" }), "awaiting_active_turn");
+  assert.equal(initialQueueDeliveryState({
+    state: "sleeping",
+    runtimeKind: "codex-app-server",
+  }, { text: "resume app server" }), "resuming_codex_thread");
   assert.equal(initialQueueDeliveryState({
     state: "ready",
     runtimeKind: "codex-tmux",

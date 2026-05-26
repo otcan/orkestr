@@ -107,6 +107,12 @@ rl.on("line", (line) => {
     }
     return send({ id, result: { turnId: params.expectedTurnId } });
   }
+  if (message.method === "turn/interrupt") {
+    const thread = state.threads.find((item) => item.id === params.threadId);
+    if (thread) thread.status = { type: "idle" };
+    writeState(state);
+    return send({ id, result: { interrupted: true, turnId: params.turnId } });
+  }
   if (message.method === "turn/start") {
     const thread = state.threads.find((item) => item.id === params.threadId);
     if (!thread || !thread.loaded) return send({ id, error: { code: -32000, message: "thread not found: " + params.threadId } });
@@ -231,6 +237,11 @@ test("Codex app-server starts threads, delivers input, and imports existing thre
     assert.equal(whatsappReply.executorTransport, "app-server");
     assert.equal(whatsappReply.executorThreadId, startedWhatsApp.thread.executor.codexThreadId);
     assert.equal(whatsappReply.codexThreadId, startedWhatsApp.thread.executor.codexThreadId);
+    for (let attempt = 0; attempt < 10; attempt += 1) {
+      const status = await codexAppServerThreadStatus(await getThread(startedWhatsApp.thread.id, env), env);
+      if (status.state === "ready") break;
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
     await enqueueThreadInput(startedWhatsApp.thread.id, {
       text: "add this too",
       source: "whatsapp_inbound",
@@ -411,6 +422,144 @@ test("Codex app-server sleep only interrupts active turns when forced", async ()
     assert.equal(slept.runtime.activeTurnId, null);
     assert.ok(rawState.calls.some((call) => call.method === "turn/interrupt" && call.params.turnId === "active-turn"));
     assert.ok(rawState.calls.some((call) => call.method === "thread/unsubscribe"));
+  } finally {
+    stopCodexAppServerClients();
+  }
+});
+
+test("Codex app-server queues WhatsApp input behind active turns", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-codex-app-server-wa-queue-"));
+  const fake = await createFakeCodex(home);
+  const env = {
+    ORKESTR_HOME: path.join(home, "orkestr"),
+    HOME: path.join(home, "runtime-home"),
+    PATH: `${fake.bin}${path.delimiter}${process.env.PATH || ""}`,
+    FAKE_CODEX_STATE: fake.stateFile,
+    ORKESTR_CODEX_APP_SERVER_ACTIVE_TURN_RETRY_MS: "60000",
+  };
+  try {
+    const thread = await createThread({ id: "app-server-wa-queue-thread", name: "App Server WA Queue Thread", cwd: home, executorId: "codex", executor: { type: "codex" } }, env);
+    const started = await startCodexAppServerThread(thread, env);
+    await updateThread(started.thread.id, {
+      state: "working",
+      runtime: {
+        ...(started.thread.runtime || {}),
+        runtimeKind: "codex-app-server",
+        state: "working",
+        activeTurnId: "active-turn",
+      },
+    }, env);
+    const input = await enqueueThreadInput(started.thread.id, {
+      text: "queue this behind the current turn",
+      source: "whatsapp_inbound",
+      connector: "whatsapp",
+      chatId: "chat-wa-queue",
+    }, env);
+
+    const delivered = await deliverCodexAppServerPendingInputs(await getThread(started.thread.id, env), env);
+    const messages = await listThreadMessages(started.thread.id, env);
+    const queued = messages.find((message) => message.id === input.id);
+    const rawState = JSON.parse(await fs.readFile(fake.stateFile, "utf8"));
+
+    assert.deepEqual(delivered, []);
+    assert.equal(queued.state, "queued");
+    assert.equal(queued.deliveryState, "awaiting_active_turn");
+    assert.ok(!rawState.calls.some((call) => call.method === "turn/steer"));
+    assert.ok(!rawState.calls.some((call) => call.method === "turn/start"));
+  } finally {
+    stopCodexAppServerClients();
+  }
+});
+
+test("Codex app-server /now interrupts the active turn and starts the next turn", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-codex-app-server-wa-now-"));
+  const fake = await createFakeCodex(home);
+  const env = {
+    ORKESTR_HOME: path.join(home, "orkestr"),
+    HOME: path.join(home, "runtime-home"),
+    PATH: `${fake.bin}${path.delimiter}${process.env.PATH || ""}`,
+    FAKE_CODEX_STATE: fake.stateFile,
+  };
+  try {
+    const thread = await createThread({ id: "app-server-wa-now-thread", name: "App Server WA Now Thread", cwd: home, executorId: "codex", executor: { type: "codex" } }, env);
+    const started = await startCodexAppServerThread(thread, env);
+    await updateThread(started.thread.id, {
+      state: "working",
+      runtime: {
+        ...(started.thread.runtime || {}),
+        runtimeKind: "codex-app-server",
+        state: "working",
+        activeTurnId: "active-turn",
+      },
+    }, env);
+    const input = await enqueueThreadInput(started.thread.id, {
+      text: "/now urgent next turn",
+      source: "whatsapp_inbound",
+      connector: "whatsapp",
+      chatId: "chat-wa-now",
+    }, env);
+
+    const delivered = await deliverCodexAppServerPendingInputs(await getThread(started.thread.id, env), env);
+    const messages = await listThreadMessages(started.thread.id, env);
+    const completed = messages.find((message) => message.id === input.id);
+    const reply = messages.find((message) => message.source === "codex-app-server" && /Reply to: urgent next turn/.test(message.text));
+    const rawState = JSON.parse(await fs.readFile(fake.stateFile, "utf8"));
+
+    assert.deepEqual(delivered, [input.id]);
+    assert.equal(completed.text, "urgent next turn");
+    assert.equal(completed.state, "completed");
+    assert.equal(completed.observedVia, "codex_app_server_turn_start");
+    assert.ok(reply);
+    assert.ok(rawState.calls.some((call) => call.method === "turn/interrupt" && call.params.turnId === "active-turn"));
+    assert.ok(rawState.calls.some((call) => call.method === "turn/start"));
+    assert.ok(!rawState.calls.some((call) => call.method === "turn/steer"));
+  } finally {
+    stopCodexAppServerClients();
+  }
+});
+
+test("Codex app-server /stop interrupts the active turn without sleeping the thread", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-codex-app-server-wa-stop-"));
+  const fake = await createFakeCodex(home);
+  const env = {
+    ORKESTR_HOME: path.join(home, "orkestr"),
+    HOME: path.join(home, "runtime-home"),
+    PATH: `${fake.bin}${path.delimiter}${process.env.PATH || ""}`,
+    FAKE_CODEX_STATE: fake.stateFile,
+  };
+  try {
+    const thread = await createThread({ id: "app-server-wa-stop-thread", name: "App Server WA Stop Thread", cwd: home, executorId: "codex", executor: { type: "codex" } }, env);
+    const started = await startCodexAppServerThread(thread, env);
+    await updateThread(started.thread.id, {
+      state: "working",
+      runtime: {
+        ...(started.thread.runtime || {}),
+        runtimeKind: "codex-app-server",
+        state: "working",
+        activeTurnId: "active-turn",
+      },
+    }, env);
+    const input = await enqueueThreadInput(started.thread.id, {
+      text: "/stop",
+      source: "whatsapp_inbound",
+      connector: "whatsapp",
+      chatId: "chat-wa-stop",
+    }, env);
+
+    const delivered = await deliverCodexAppServerPendingInputs(await getThread(started.thread.id, env), env);
+    const messages = await listThreadMessages(started.thread.id, env);
+    const stopped = await getThread(started.thread.id, env);
+    const completed = messages.find((message) => message.id === input.id);
+    const rawState = JSON.parse(await fs.readFile(fake.stateFile, "utf8"));
+
+    assert.deepEqual(delivered, [input.id]);
+    assert.equal(completed.state, "completed");
+    assert.equal(completed.observedVia, "codex_app_server_stop");
+    assert.equal(completed.interruptSent, true);
+    assert.equal(stopped.state, "ready");
+    assert.equal(stopped.runtime.activeTurnId, null);
+    assert.ok(rawState.calls.some((call) => call.method === "turn/interrupt" && call.params.turnId === "active-turn"));
+    assert.ok(!rawState.calls.some((call) => call.method === "thread/unsubscribe"));
   } finally {
     stopCodexAppServerClients();
   }

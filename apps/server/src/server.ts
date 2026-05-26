@@ -162,7 +162,13 @@ function createWhatsAppDeliveryScheduler() {
     });
   };
   const run = () => {
-    deliverWhatsAppReplies()
+    syncWhatsAppTypingIndicators()
+      .catch(() => {})
+      .then(() => deliverWhatsAppReplies())
+      .then(async (result) => {
+        await syncWhatsAppTypingIndicators().catch(() => {});
+        return result;
+      })
       .then((result) => {
         if (shouldRetry(result)) {
           scheduler.schedule(retryDelayMs);

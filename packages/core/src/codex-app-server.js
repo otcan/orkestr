@@ -26,8 +26,34 @@ import {
   turnStartParams,
   userInputText,
 } from "./codex-app-server-common.js";
-import { getCodexAppServerClient } from "./codex-app-server-client.js";
-import { codexAppServerMessageFields } from "./codex-app-server-whatsapp.js";
+import { getCodexAppServerClient, stopCodexAppServerClients as stopCodexAppServerRuntimeClients } from "./codex-app-server-client.js";
+import { codexAppServerMessageFields, whatsappOrigin } from "./codex-app-server-whatsapp.js";
+import { parseThreadInputCommand } from "./thread-commands.js";
+
+const appServerDeliveryTimers = new Map();
+
+function codexAppServerActiveTurnRetryMs(env = process.env) {
+  const parsed = Number(env.ORKESTR_CODEX_APP_SERVER_ACTIVE_TURN_RETRY_MS || 3000);
+  return Number.isFinite(parsed) ? Math.max(250, parsed) : 3000;
+}
+
+function isoAfter(ms) {
+  return new Date(Date.now() + Math.max(0, ms)).toISOString();
+}
+
+function scheduleCodexAppServerInputDelivery(threadId, env = process.env, delayMs = 0) {
+  const id = clean(threadId);
+  if (!id) return;
+  const current = appServerDeliveryTimers.get(id);
+  if (current) clearTimeout(current);
+  const timer = setTimeout(async () => {
+    appServerDeliveryTimers.delete(id);
+    const thread = await getThread(id, env).catch(() => null);
+    if (thread) await deliverCodexAppServerPendingInputs(thread, env).catch(() => null);
+  }, Math.max(0, Number(delayMs) || 0));
+  timer.unref?.();
+  appServerDeliveryTimers.set(id, timer);
+}
 
 export {
   codexAppServerEnabled,
@@ -40,8 +66,13 @@ export {
   codexAppServerStatus,
   getCodexAppServerClient,
   setCodexAppServerMessageHandler,
-  stopCodexAppServerClients,
 } from "./codex-app-server-client.js";
+
+export function stopCodexAppServerClients() {
+  for (const timer of appServerDeliveryTimers.values()) clearTimeout(timer);
+  appServerDeliveryTimers.clear();
+  return stopCodexAppServerRuntimeClients();
+}
 
 export async function startCodexAppServerThread(thread, env = process.env) {
   if (!codexAppServerEnabled(env)) return null;
@@ -180,9 +211,13 @@ export async function interruptCodexAppServerThread(thread, env = process.env) {
   );
   if (!activeTurnId) return { interrupted: false, reason: "no_active_turn" };
   await client.request("turn/interrupt", { threadId: id, turnId: activeTurnId });
+  client.threadStates.set(id, { ...(client.threadStates.get(id) || {}), activeTurnId: "", status: { type: "idle" } });
+  for (const [requestKey, request] of client.pendingRequests.entries()) {
+    if (request?.threadId === thread.id || request?.codexThreadId === id) client.pendingRequests.delete(requestKey);
+  }
   await updateThread(thread.id, {
     state: "ready",
-    runtime: { ...(thread.runtime || {}), runtimeKind: "codex-app-server", activeTurnId: null, state: "ready" },
+    runtime: { ...(thread.runtime || {}), runtimeKind: "codex-app-server", activeTurnId: null, pendingRequest: null, state: "ready" },
   }, env).catch(() => {});
   return { interrupted: true, turnId: activeTurnId };
 }
@@ -220,10 +255,46 @@ export async function sendCodexAppServerInput(thread, message, env = process.env
     deliveryState: "codex_app_server_sending",
     deliveryLastAttemptAt: nowIso(),
   }, env);
-  const activeTurnId = clean(client.threadStates.get(id)?.activeTurnId || thread.runtime?.activeTurnId);
+  const clientState = client.threadStates.get(id) || {};
+  let activeTurnId = clean(Object.prototype.hasOwnProperty.call(clientState, "activeTurnId")
+    ? clientState.activeTurnId
+    : thread.runtime?.activeTurnId);
   let result;
   let observedVia;
   let deliveryTurnId = activeTurnId;
+  if (activeTurnId && pending.forceDeliveryAfterInterrupt === true) {
+    await client.request("turn/interrupt", { threadId: id, turnId: activeTurnId }).catch(() => null);
+    client.threadStates.set(id, { ...(client.threadStates.get(id) || {}), activeTurnId: "", status: { type: "idle" } });
+    for (const [requestKey, request] of client.pendingRequests.entries()) {
+      if (request?.threadId === thread.id || request?.codexThreadId === id) client.pendingRequests.delete(requestKey);
+    }
+    await updateThread(thread.id, {
+      state: "ready",
+      runtime: { ...(thread.runtime || {}), runtimeKind: "codex-app-server", activeTurnId: null, pendingRequest: null, state: "ready" },
+    }, env).catch(() => {});
+    activeTurnId = "";
+    deliveryTurnId = "";
+  }
+  if (activeTurnId && whatsappOrigin(pending)) {
+    const retryMs = codexAppServerActiveTurnRetryMs(env);
+    const nextAttemptAt = isoAfter(retryMs);
+    await updateThreadMessage(thread.id, pending.id, {
+      state: "queued",
+      deliveryState: "awaiting_active_turn",
+      deliveryNextAttemptAt: nextAttemptAt,
+      error: null,
+    }, env).catch(() => {});
+    await appendEvent({
+      type: "codex_app_server_input_deferred_active_turn",
+      threadId: thread.id,
+      codexThreadId: id,
+      messageId: pending.id,
+      activeTurnId,
+      nextAttemptAt,
+    }, env).catch(() => {});
+    scheduleCodexAppServerInputDelivery(thread.id, env, retryMs);
+    return { message: { ...pending, state: "queued", deliveryState: "awaiting_active_turn" }, result: null, observedVia: "codex_app_server_awaiting_active_turn", deferred: true };
+  }
   if (activeTurnId) {
     client.rememberTurnParent(id, activeTurnId, pending);
     try {
@@ -360,20 +431,48 @@ export async function deliverCodexAppServerPendingInputs(thread, env = process.e
     delivered.push(next.id);
     return delivered;
   }
-  if (text === "/stop") {
-    await interruptCodexAppServerThread(thread, env).catch(() => null);
+  const parsedCommand = parseThreadInputCommand({ text });
+  if (parsedCommand.command === "interrupt") {
+    const interrupted = await interruptCodexAppServerThread(thread, env).catch(() => ({ interrupted: false }));
+    const payloadText = clean(parsedCommand.text);
+    if (!payloadText && !clean(next.promptFile)) {
+      await updateThreadMessage(thread.id, next.id, {
+        state: "completed",
+        deliveryState: "delivered",
+        deliveredAt: nowIso(),
+        observedVia: "codex_app_server_interrupt",
+        interruptSent: Boolean(interrupted?.interrupted),
+        error: null,
+      }, env);
+      delivered.push(next.id);
+      return delivered;
+    }
+    next = await updateThreadMessage(thread.id, next.id, {
+      text: payloadText,
+      state: "queued",
+      deliveryState: "interrupting",
+      observedVia: "codex_app_server_interrupt",
+      interruptSent: Boolean(interrupted?.interrupted),
+      forceDeliveryAfterInterrupt: true,
+      error: null,
+    }, env).catch(() => ({ ...next, text: payloadText, state: "queued", deliveryState: "interrupting", forceDeliveryAfterInterrupt: true }));
+  }
+  if (parsedCommand.command === "stop") {
+    const interrupted = await interruptCodexAppServerThread(thread, env).catch(() => ({ interrupted: false }));
     await updateThreadMessage(thread.id, next.id, {
       state: "completed",
       deliveryState: "delivered",
       deliveredAt: nowIso(),
       observedVia: "codex_app_server_stop",
+      interruptSent: Boolean(interrupted?.interrupted),
+      error: null,
     }, env);
     delivered.push(next.id);
     return delivered;
   }
   try {
     const result = await sendCodexAppServerInput(thread, next, env);
-    delivered.push(result.message.id);
+    if (!result.deferred) delivered.push(result.message.id);
   } catch (error) {
     const errorText = publicError(error);
     await updateThreadMessage(thread.id, next.id, {
@@ -394,8 +493,8 @@ export async function codexAppServerThreadStatus(thread, env = process.env, coun
   const pendingRequest = client?.pendingRequestForThread(thread) || thread.runtime?.pendingRequest || null;
   const codexStatus = state.status || thread.runtime?.codexStatus || null;
   const statusState = appServerStateFromStatus(codexStatus);
-  const activeTurnId = ["ready", "failed", "sleeping"].includes(statusState)
-    ? clean(state.activeTurnId)
+  const activeTurnId = statusState && ["ready", "failed", "sleeping"].includes(statusState)
+    ? ""
     : clean(state.activeTurnId || thread.runtime?.activeTurnId);
   const threadState = clean(thread.state);
   const runtimeState = pendingRequest ? "awaiting_approval" : activeTurnId ? "working" : statusState || (threadState === "sleeping" ? "sleeping" : "ready");

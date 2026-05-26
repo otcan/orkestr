@@ -47,9 +47,9 @@ Common actions:
 - stop an active turn when you explicitly want to interrupt it
 - inspect model, effort, context, and rate-limit status when available
 
-Native Codex app-server threads wake lazily when a message, timer, or UI action
-needs them. Orkestr does not auto-sleep threads by default; legacy tmux idle
-sleep is opt-in with `ORKESTR_RUNTIME_IDLE_SLEEP_MS`.
+Native Codex app-server threads resume lazily when a message, timer, or UI
+action needs them. Orkestr does not auto-sleep Codex threads; active work is a
+Codex turn, and `/stop` interrupts that turn instead of sleeping the thread.
 
 The Codex setup page also lets you import existing Codex app-server threads.
 Imported threads appear as Orkestr threads with their Codex history hydrated

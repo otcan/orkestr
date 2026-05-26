@@ -2450,12 +2450,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     const leaseId = String(thread.activeRuntimeLeaseId || "");
     const reason = String(this.leaseValue("reason") || this.objectValue(thread["runtime"], "reason"));
     if (String(thread.runtimeKind || "").trim() === "codex-app-server") {
-      return state.includes("ready") &&
-        !thread.working &&
-        !thread.typingActive &&
-        !thread.activeTurnId &&
-        Number(thread.pendingCount || 0) === 0 &&
-        Number(thread.awaitingAckCount || 0) === 0;
+      return false;
     }
     if (!thread.activeRuntimeLeaseId && !thread.sessionName) return false;
     if (leaseId.startsWith("adopt-") || reason.includes("adopt_existing")) return false;

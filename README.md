@@ -1,8 +1,10 @@
 # Orkestr
 
-Orkestr is a self-hosted agent workstation for running Codex from a browser, CLI, or WhatsApp.
+Orkestr is a small self-hosted app around Codex.
 
-It gives you a public-facing web layer for setup, chat, status, pairing, and operations while keeping the actual agent runtime on infrastructure you control. Create named Codex threads, give them workspaces, start or sleep them, inspect status, connect WhatsApp or Gmail, attach virtual desktops, and review logs from one cockpit.
+Codex remains the agent. Orkestr gives it a durable home: setup, named threads,
+workspaces, status, interruptions, WhatsApp routing, timers, and basic ops from
+a browser or CLI. The runtime stays on infrastructure you control.
 
 > Public alpha. The host-native VPS path supports protected remote access out of the box: Orkestr stays bound to `127.0.0.1`, the bootstrap can expose it through Tailscale or Caddy/TLS, and browser pairing/auth gates access. Do not bind the raw Orkestr service or terminal/API routes directly to the public internet.
 
@@ -20,42 +22,53 @@ Start with the [user guide](docs/user-guide.md), then use the quickstart below w
 
 ## Why Use Orkestr
 
-- **No OpenAI API credit meter for the default Codex path.** Use your existing Codex login instead of wiring every agent task through paid API calls.
-- **Persistent agents, not simple chat automation.** Orkestr manages real Codex sessions with workspaces, queues, status, recovery, logs, and browser access.
-- **Timers for recurring work.** Agents can wake later, continue a task, check a repository, or run scheduled prompts without reopening an IDE.
-- **Real work surfaces.** Connect WhatsApp, Gmail, LinkedIn browser profiles, virtual desktops, and future local connectors into the same agent control plane.
-- **User-controlled infrastructure.** Keep workspaces, runtime state, connector sessions, and private overlays on a laptop, workstation, private VPS, or k3s host you control.
+Use Orkestr when plain Codex is not enough because the work needs to stay
+reachable after you close a terminal, or because instructions arrive somewhere
+other than the terminal.
 
-## Why This Exists
+- **Keep Codex as Codex.** Orkestr uses your normal Codex login for the default agent path; an OpenAI API key is optional for separate connector or skill flows.
+- **Give Codex persistent threads.** Named threads keep workspace, status, queue, history, and recovery state instead of relying on whichever terminal is open.
+- **Reach Codex from WhatsApp or a browser.** Route a WhatsApp chat into a thread, mirror replies back, and interrupt a running turn when needed.
+- **Schedule simple follow-ups.** Timers can wake a thread later and send a prompt without building a separate automation system.
+- **Keep state local.** Workspaces, connector sessions, browser profiles, and private overlays live on your laptop, workstation, or VPS.
 
-Coding agents are useful, but the useful work usually lives outside the chat window:
+## What Orkestr Adds To Codex
 
-- a repository on disk
-- a browser profile with user-owned login state
-- a WhatsApp thread where the user actually gives instructions
-- recurring tasks that should run without reopening an IDE
-- logs that explain what happened after the agent wakes up
+Codex already edits code, runs commands, reasons through tasks, and manages its
+own model interaction. Orkestr does not replace that. It adds the surrounding
+host pieces:
 
-Orkestr makes those pieces explicit. The default target is a single developer running agents on a laptop, workstation, private VPS, or k3s-backed demo host.
+- install and setup flow for a self-hosted Codex box
+- a web UI for threads, status, raw terminal access, and safe controls
+- named workspaces and worker threads
+- WhatsApp-to-thread routing, including `/now`, `/stop`, `/plan`, and `/code`
+- timers for recurring prompts
+- local logs, health checks, and recovery state
 
-## What Orkestr Lets You Do
+If you only need one interactive Codex session in a terminal, use Codex directly.
+Orkestr is for the point where that session needs a stable address, a UI, a
+WhatsApp route, or a schedule.
 
-- **Run multiple Codex instances:** create named coding agents and worker threads instead of juggling anonymous terminal panes.
-- **Control agent lifecycle:** start, wake, sleep idle agents, stop active turns, and inspect ready/working/error status from the web UI or CLI.
-- **Give every agent a real workspace:** clone a repo when you have one, or let Orkestr generate a local git workspace when you do not.
-- **Route WhatsApp into agents:** connect one or two local WhatsApp Web accounts, create or bind a chat, and mirror agent replies back to the conversation.
-- **Connect mail and browser accounts:** configure Gmail OAuth, keep browser-backed Gmail/LinkedIn profiles local, and add private connector overlays without putting credentials in the public repo.
-- **Use virtual desktops:** launch managed Chrome desktop profiles for browser work, login state, and future CDP-backed tasks.
-- **Schedule recurring work:** create timers that wake a thread and send a prompt on a cadence.
-- **Operate the box:** run `orkestr doctor`, watch logs, reset disposable VPS state, and keep a host-native install updated from the server itself.
+## Current Scope
 
-Dropbox and other file-source bindings are not shipped as public OSS V1 connectors yet. The intended path is the same connector/binding model: keep private credentials in overlays, then bind those sources to an agent without copy-pasting context into chat.
+The public V1 is intentionally narrow:
+
+- install Orkestr locally or on a private VPS
+- connect Codex
+- create and manage Codex threads
+- optionally connect WhatsApp
+- optionally add timers, Gmail setup, and browser desktops
+- keep private credentials and personal bindings outside the OSS repo through `ORKESTR_OVERLAY_DIR`
+
+Orkestr is not trying to be a generic agent marketplace, team product, plugin
+platform, or cloud service. Those abstractions are deliberately out of scope
+until the single-user Codex loop is boring and reliable.
 
 ## Quickstart
 
 Orkestr has two supported setup paths:
 
-- **Local or beginner setup:** use the installer from a checkout. A meaningful local setup includes Codex and WhatsApp; the default Codex settings keep approvals on and mirror permission prompts through Orkestr/WhatsApp.
+- **Local or beginner setup:** use the installer from a checkout. A useful local setup only requires Codex; WhatsApp, timers, Gmail, and browser desktops are optional.
 - **VPS setup:** use the host-native systemd installer. This is the right shape for a real server because Caddy, Tailscale, browser desktops, service logs, and pairing approval are host-level operations.
 
 ### Local Host-Native
@@ -466,7 +479,7 @@ More detail: [docs/architecture.md](docs/architecture.md).
 
 - First-run setup at `/setup`
 - OpenAI and Codex connection checks
-- Multiple named Codex threads with start, wake, idle sleep, stop, attach, and status controls
+- Multiple named Codex threads with start, resume, stop-turn, attach, and status controls
 - Built-in local WhatsApp bridge with two QR-paired account slots
 - WhatsApp chat creation and thread binding
 - Thread-first runtime API for local Codex sessions
@@ -475,7 +488,7 @@ More detail: [docs/architecture.md](docs/architecture.md).
 - LinkedIn and Gmail browser profiles
 - Timers and manual timer runs
 - Host/system doctor for runtime, browser, Codex, Caddy/Tailscale, and writable data paths
-- CLI for listing, creating, waking, sleeping, sending to, and attaching threads
+- CLI for listing, creating, resuming, stopping, sending to, and attaching threads
 - Local activity logs and deterministic public demos
 
 ## Security Model

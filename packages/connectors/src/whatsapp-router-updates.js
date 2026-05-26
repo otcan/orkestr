@@ -123,21 +123,21 @@ function formatWhatsAppRecoveryActionRequested(message, target = {}) {
     return [
       "Stop requested.",
       "",
-      "Orkestr stopped the Codex pane for this thread.",
+      "Orkestr interrupted the current Codex turn for this thread.",
     ].join("\n");
   }
   if (target.action === "restart") {
     return [
       "Restart requested.",
       "",
-      "Orkestr stopped the current Codex pane and woke a new one.",
+      "Orkestr reset the current Codex runtime and resumed the thread.",
     ].join("\n");
   }
   if (target.action === "reset") {
     return [
       "Reset requested.",
       "",
-      "Orkestr stopped the current Codex pane and woke a new one.",
+      "Orkestr reset the current Codex runtime and resumed the thread.",
     ].join("\n");
   }
   if (target.action === "hard_reset") {
@@ -151,13 +151,13 @@ function formatWhatsAppRecoveryActionRequested(message, target = {}) {
     return [
       "Interrupt requested.",
       "",
-      `Orkestr sent the interrupt to Codex and queued your message for delivery when the prompt is ready: "${preview}".`,
+      `Orkestr interrupted the current Codex turn and queued your message for the next turn: "${preview}".`,
     ].join("\n");
   }
   return [
     "Interrupt requested.",
     "",
-    "Orkestr sent the interrupt to Codex.",
+    "Orkestr interrupted the current Codex turn.",
   ].join("\n");
 }
 

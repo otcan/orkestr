@@ -23,6 +23,7 @@ import {
   codexAppServerThreadStatus,
   compactCodexAppServerThread,
   deliverCodexAppServerPendingInputs,
+  interruptCodexAppServerThread,
   resumeCodexAppServerThread,
   sleepCodexAppServerThread,
   threadNeedsCodexAppServerMigration,
@@ -40,7 +41,6 @@ const pendingInputStates = new Set(["queued", "pending_delivery", "awaiting_ack"
 const needInputPhases = new Set(["need_input", "awaiting_input", "question", "request_user_input"]);
 const proposedPlanOpenTagPattern = /^\s*<\s*proposed[\s_-]*plan\s*>/i;
 const deliveryRetryDefaultsMs = [1000, 3000, 8000, 20_000, 60_000];
-const defaultRuntimeIdleSleepMs = 0;
 const defaultTempRuntimeTtlMs = 5 * 60 * 1000;
 const defaultRolloutSyncLookbackBytes = 2 * 1024 * 1024;
 const defaultWorkingAfterPromptMs = 30 * 60 * 1000;
@@ -134,13 +134,6 @@ function messageCursor(value) {
 
 function messageTimeMs(value) {
   return Math.max(timestampMs(value?.createdAt), timestampMs(value?.timestamp));
-}
-
-function runtimeIdleSleepMs(env = process.env) {
-  const raw = String(env.ORKESTR_RUNTIME_IDLE_SLEEP_MS ?? "").trim().toLowerCase();
-  if (!raw) return defaultRuntimeIdleSleepMs;
-  if (["0", "off", "false", "disabled"].includes(raw)) return 0;
-  return positiveNumber(raw) || defaultRuntimeIdleSleepMs;
 }
 
 function tempRuntimeTtlMs(env = process.env) {
@@ -1382,12 +1375,15 @@ export async function hardResetThreadRuntime(threadId, options = {}, env = proce
 }
 
 async function completeStopCommand(thread, message, env = process.env) {
-  const stopped = await sleepThread(thread.id, { reason: whatsappOrigin(message) ? "whatsapp_stop_command" : "stop_command", kill: true }, env);
+  const stopped = threadUsesCodexAppServer(thread, env)
+    ? { slept: 0, interrupted: await interruptCodexAppServerThread(thread, env).catch(() => ({ interrupted: false })) }
+    : await sleepThread(thread.id, { reason: whatsappOrigin(message) ? "whatsapp_stop_command" : "stop_command", kill: true }, env);
   const updated = await updateThreadMessage(thread.id, message.id, {
     state: "completed",
     deliveryState: "delivered",
     observedVia: "orkestr_stop_command",
     deliveredAt: nowIso(),
+    interruptSent: Boolean(stopped.interrupted?.interrupted),
     error: null,
   }, env);
   await appendEvent({
@@ -1396,6 +1392,7 @@ async function completeStopCommand(thread, message, env = process.env) {
     messageId: message.id,
     source: message.source || null,
     slept: stopped.slept,
+    interrupted: Boolean(stopped.interrupted?.interrupted),
   }, env).catch(() => {});
   return updated.id;
 }
@@ -1637,7 +1634,10 @@ async function supersedeOlderCodexModeCommands(thread, messages, selected, parse
 async function completeInterruptCommand(thread, message, parsed, env = process.env) {
   const reason = whatsappOrigin(message) ? "whatsapp_interrupt_command" : "interrupt_command";
   const woken = await wakeThread(thread.id, { reason }, env);
-  const interrupted = await interruptRuntimeStatus(woken.status, env);
+  const appServer = threadUsesCodexAppServer(woken.thread || thread, env);
+  const interrupted = appServer
+    ? Boolean((await interruptCodexAppServerThread(woken.thread || thread, env).catch(() => ({ interrupted: false }))).interrupted)
+    : await interruptRuntimeStatus(woken.status, env);
   const payloadText = String(parsed.text || "").trim();
   if (!payloadText && !String(message.promptFile || "").trim()) {
     const updated = await updateThreadMessage(thread.id, message.id, {
@@ -1722,32 +1722,6 @@ async function supersedeAwaitingAcksForControlCommand(thread, messages, controlM
   }
 }
 
-function latestMessageActivityMs(messages = []) {
-  return messages.reduce((latest, message) => Math.max(
-    latest,
-    timestampMs(message?.createdAt),
-    timestampMs(message?.timestamp),
-    timestampMs(message?.deliveredAt),
-  ), 0);
-}
-
-function hasPendingNeedInput(messages = []) {
-  let latestNeedInputMs = 0;
-  let latestUserMs = 0;
-  for (const message of messages) {
-    const messageMs = Math.max(timestampMs(message?.createdAt), timestampMs(message?.timestamp));
-    if (String(message?.role || "").toLowerCase() === "user") {
-      latestUserMs = Math.max(latestUserMs, messageMs);
-      continue;
-    }
-    const phase = String(message?.phase || "").trim().toLowerCase();
-    if (String(message?.role || "").toLowerCase() === "assistant" && needInputPhases.has(phase) && String(message?.text || "").trim()) {
-      latestNeedInputMs = Math.max(latestNeedInputMs, messageMs);
-    }
-  }
-  return latestNeedInputMs > latestUserMs;
-}
-
 function isNeedInputMessage(message) {
   const role = String(message?.role || "").trim().toLowerCase();
   const phase = String(message?.phase || "").trim().toLowerCase();
@@ -1763,39 +1737,6 @@ function latestNeedInputBeforeMessage(messages = [], messageId = "") {
     if (String(message?.role || "").trim().toLowerCase() === "user") return null;
   }
   return null;
-}
-
-function runtimeActivityMs(lease, messages = []) {
-  return Math.max(
-    latestMessageActivityMs(messages),
-    timestampMs(lease?.startedAt),
-  );
-}
-
-function adoptedRuntimeLease(lease = {}) {
-  return String(lease.id || "").startsWith("adopt-") || String(lease.reason || "").includes("adopt_existing");
-}
-
-function idleSleepDecision({ lease, messages = [], status }, env = process.env) {
-  const idleSleepMs = runtimeIdleSleepMs(env);
-  if (!idleSleepMs || !lease || !status) return null;
-  if (adoptedRuntimeLease(lease)) return null;
-  if (status.state !== "ready" || status.promptReady !== true || status.promptReadyStable !== true) return null;
-  if (status.working || status.foregroundWorking || status.backgroundWork || status.typingActive) return null;
-  if (Number(status.pendingCount || 0) > 0 || Number(status.runningCount || 0) > 0 || Number(status.awaitingAckCount || 0) > 0) return null;
-  if (status.nextDeliveryAttemptAt) return null;
-  if (hasPendingNeedInput(messages)) return null;
-
-  const lastActivityMs = runtimeActivityMs(lease, messages);
-  if (!lastActivityMs) return null;
-  const idleMs = Date.now() - lastActivityMs;
-  if (idleMs < idleSleepMs) return null;
-  return {
-    reason: "idle_auto_sleep",
-    idleMs,
-    idleSleepMs,
-    lastActivityAt: new Date(lastActivityMs).toISOString(),
-  };
 }
 
 function runtimeLeaseTemporaryReason(lease = {}, env = process.env) {
@@ -3796,42 +3737,6 @@ async function syncRuntimeLeasesOnce(env = process.env) {
       if (restoredMode?.applied) {
         status = await runtimeStatus(lease.threadId, env, messages).catch(() => status);
         changed = true;
-      }
-      const idleSleep = idleSleepDecision({ lease: leaseForStorage, messages, status }, env);
-      if (thread && idleSleep) {
-        const endedAt = nowIso();
-        const endedLease = {
-          ...leaseForStorage,
-          endedAt,
-          endReason: idleSleep.reason,
-          idleMs: idleSleep.idleMs,
-          lastActivityAt: idleSleep.lastActivityAt,
-        };
-        await killTmuxSession(endedLease.sessionName).catch(() => {});
-        await updateThread(lease.threadId, {
-          state: "sleeping",
-          activeRuntimeLeaseId: null,
-          runtime: {
-            state: "sleeping",
-            endedAt,
-            reason: idleSleep.reason,
-            idleMs: idleSleep.idleMs,
-            lastActivityAt: idleSleep.lastActivityAt,
-          },
-        }, env).catch(() => {});
-        await appendEvent({
-          type: "runtime_slept",
-          threadId: lease.threadId,
-          reason: idleSleep.reason,
-          killed: true,
-          auto: true,
-          idleMs: idleSleep.idleMs,
-          idleSleepMs: idleSleep.idleSleepMs,
-          lastActivityAt: idleSleep.lastActivityAt,
-        }, env).catch(() => {});
-        next.push(endedLease);
-        changed = true;
-        continue;
       }
       await updateThread(lease.threadId, {
         state: status.state,
