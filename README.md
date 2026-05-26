@@ -150,7 +150,9 @@ On macOS and other local installs, that file includes a service-safe `PATH` so
 launchd/systemd can find tools such as `tmux` and Homebrew-installed binaries.
 The one-line script also detaches itself from the `curl | bash` pipe before
 running Homebrew or prompts, so dependency installers cannot consume the rest of
-the script from stdin.
+the script from stdin. On macOS, it only auto-installs missing local tools when
+the Homebrew prefix is user-writable; otherwise it stops with a manual command
+instead of asking the terminal app for administrator access.
 Use `.env` or the setup UI for optional OpenAI API access, Tailscale/Caddy
 settings, OAuth credentials, workspace roots, or overlay settings. The OpenAI
 API key is not required for the default Codex Agent path; it is for connectors

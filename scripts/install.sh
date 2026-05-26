@@ -465,6 +465,16 @@ brew_command() {
   return 1
 }
 
+homebrew_install_without_admin() {
+  local brew prefix repository
+  brew="$1"
+  prefix="$("$brew" --prefix 2>/dev/null || true)"
+  repository="$("$brew" --repository 2>/dev/null || true)"
+  [ -n "$prefix" ] || return 1
+  [ -w "$prefix" ] || return 1
+  [ -z "$repository" ] || [ -w "$repository" ]
+}
+
 profile_is_trusted() {
   case "$1" in
     local-trusted|vps-trusted|trusted)
@@ -862,28 +872,38 @@ install_local_runtime_tools() {
   if [ "${#missing_packages[@]}" -gt 0 ] && [ "${ORKESTR_SKIP_SYSTEM_PACKAGES:-0}" != "1" ]; then
     local install_missing missing_text
     missing_text="$(join_words "${missing_packages[@]}")"
-    if is_interactive_terminal; then
-      prompt_yes_no install_missing "Install missing local runtime tools: $missing_text" "1"
-      if [ "$install_missing" != "1" ]; then
-        echo "Install cancelled. Missing tools: $missing_text" >&2
-        exit 1
-      fi
-    fi
     if is_macos; then
       local brew
-      if brew="$(brew_command)"; then
+      if brew="$(brew_command)" && homebrew_install_without_admin "$brew"; then
+        if is_interactive_terminal; then
+          prompt_yes_no install_missing "Install missing local runtime tools with Homebrew: $missing_text" "1"
+          if [ "$install_missing" != "1" ]; then
+            echo "Install cancelled. Missing tools: $missing_text" >&2
+            exit 1
+          fi
+        fi
         HOMEBREW_NO_AUTO_UPDATE=1 HOMEBREW_NO_ENV_HINTS=1 "$brew" install "${missing_packages[@]}"
         export PATH="$(local_runtime_path)"
       else
         cat >&2 <<'EOF'
-Missing local runtime tools and Homebrew was not found.
+Missing local runtime tools, but Orkestr will not ask your terminal app for administrator access.
 
-Install Homebrew, then rerun the installer, or install the tools manually:
+Install the tools manually, then rerun the installer:
   brew install git tmux ripgrep
+
+If Homebrew itself asks for administrator access, cancel it and fix the Homebrew
+installation ownership first, or install the tools another way.
 EOF
         exit 1
       fi
     elif have apt-get && have sudo; then
+      if is_interactive_terminal; then
+        prompt_yes_no install_missing "Install missing local runtime tools: $missing_text" "1"
+        if [ "$install_missing" != "1" ]; then
+          echo "Install cancelled. Missing tools: $missing_text" >&2
+          exit 1
+        fi
+      fi
       sudo apt-get update
       sudo apt-get install -y "${missing_packages[@]}"
     fi

@@ -76,6 +76,10 @@ test("install script exposes a host-native systemd VPS path", async () => {
   assert.match(script, /local_runtime_path/);
   assert.match(script, /write_env_var PATH/);
   assert.match(script, /install_local_runtime_tools/);
+  assert.match(script, /homebrew_install_without_admin/);
+  assert.match(script, /\$brew" --prefix/);
+  assert.match(script, /Missing local runtime tools, but Orkestr will not ask your terminal app for administrator access/);
+  assert.match(script, /fix the Homebrew/);
   assert.match(script, /Install missing local runtime tools/);
   assert.match(script, /HOMEBREW_NO_AUTO_UPDATE=1 HOMEBREW_NO_ENV_HINTS=1/);
   assert.match(script, /brew install git tmux ripgrep/);
