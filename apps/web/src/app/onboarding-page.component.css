@@ -613,6 +613,24 @@
   color: #ffd1c4;
 }
 
+.runtime-blocker {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.runtime-blocker > div {
+  display: grid;
+  gap: 4px;
+  min-width: min(100%, 280px);
+}
+
+.runtime-blocker span {
+  line-height: 1.45;
+}
+
 .warning-list {
   display: grid;
   gap: 8px;

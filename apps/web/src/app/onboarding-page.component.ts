@@ -516,7 +516,7 @@ export class OnboardingPageComponent implements OnInit, OnChanges, OnDestroy {
     if (id === "goal") return this.selectedGoal ? "selected" : "choose";
     if (id === "system") return this.setup ? "checked" : "checking";
     if (id === "security") return this.securityStepLabel();
-    if (id === "finish") return this.goalRequiredSteps().every((step) => this.stepDone(step)) ? "ready" : "review";
+    if (id === "finish") return this.requiredConnectorSteps().every((step) => this.stepDone(step)) ? "ready" : "review";
     if (id === "gmail") return this.mailStatusLabel();
     return this.stateLabel(id);
   }
@@ -525,7 +525,7 @@ export class OnboardingPageComponent implements OnInit, OnChanges, OnDestroy {
     if (id === "goal") return this.selectedGoal ? "ready" : "idle";
     if (id === "system") return this.setup ? "ready" : "idle";
     if (id === "security") return this.securityStepClass();
-    if (id === "finish") return this.goalRequiredSteps().every((step) => this.stepDone(step)) ? "ready" : "partial";
+    if (id === "finish") return this.requiredConnectorSteps().every((step) => this.stepDone(step)) ? "ready" : "partial";
     if (id === "gmail") return this.mailStatusClass();
     return this.stateClass(id);
   }
@@ -534,7 +534,7 @@ export class OnboardingPageComponent implements OnInit, OnChanges, OnDestroy {
     if (id === "goal") return Boolean(this.selectedGoal);
     if (id === "system") return Boolean(this.setup);
     if (id === "security") return this.securityDone();
-    if (id === "finish") return this.goalRequiredSteps().every((step) => this.stepDone(step));
+    if (id === "finish") return this.requiredConnectorSteps().every((step) => this.stepDone(step));
     if (id === "gmail") return this.mailDone();
     if (id === "codex") return this.agentRuntimeReady();
     const state = this.connector(id)?.state;
@@ -559,6 +559,21 @@ export class OnboardingPageComponent implements OnInit, OnChanges, OnDestroy {
     if (state === "not_connected" && reason.includes("disabled")) return "disabled";
     if (state === "not_connected") return "runtime unavailable";
     return state.replace(/_/g, " ");
+  }
+
+  canOpenApp(): boolean {
+    return this.agentRuntimeReady();
+  }
+
+  runtimeBlockTitle(): string {
+    return `Codex Agent ${this.agentRuntimeStateLabel()}`;
+  }
+
+  openAppBlockReason(): string {
+    if (this.canOpenApp()) return "";
+    const summary = String(this.connector("codex")?.summary || "").trim();
+    const base = summary || "Codex Agent is required before opening Orkestr.";
+    return `${base} Connect Codex Agent before opening Orkestr.`;
   }
 
   isSetupMode(): boolean {
@@ -625,7 +640,7 @@ export class OnboardingPageComponent implements OnInit, OnChanges, OnDestroy {
       { id: "goal", label: "Start with one capability", eyebrow: "Start here" },
       { id: "system", label: "Connections", eyebrow: "Runtime" },
       { id: "security", label: "Secure access", eyebrow: "Remote safety" },
-      ...this.goalRequiredSteps().map((id) => byId[id]),
+      ...this.requiredConnectorSteps().map((id) => byId[id]),
       { id: "finish", label: "Ready to run", eyebrow: "Starter thread" },
     ];
   }
@@ -649,6 +664,14 @@ export class OnboardingPageComponent implements OnInit, OnChanges, OnDestroy {
 
   goalRequiredSteps(): ConnectorStep[] {
     return this.activeGoal().requiredSteps;
+  }
+
+  requiredConnectorSteps(): ConnectorStep[] {
+    return Array.from(new Set<ConnectorStep>(["codex", ...this.goalRequiredSteps()]));
+  }
+
+  goToCodexSetup(): void {
+    this.selectStep("codex");
   }
 
   selectGoal(goalId: OnboardingGoalId): void {
@@ -1091,6 +1114,12 @@ export class OnboardingPageComponent implements OnInit, OnChanges, OnDestroy {
   }
 
   openApp(): void {
+    if (!this.canOpenApp()) {
+      this.error = this.openAppBlockReason();
+      this.notice = "";
+      this.goToCodexSetup();
+      return;
+    }
     if (this.isSetupMode()) {
       this.skip.emit();
       return;
