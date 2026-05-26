@@ -38,6 +38,15 @@ function restoreEnv(prior) {
   }
 }
 
+async function removeDemoHome(home) {
+  await fs.rm(home, {
+    recursive: true,
+    force: true,
+    maxRetries: 5,
+    retryDelay: 100,
+  });
+}
+
 async function commandOk(command, args = ["--version"], options = {}) {
   try {
     await execFileAsync(command, args, { timeout: 5000, ...options });
@@ -119,7 +128,7 @@ export async function runCodingAgentDemo({ port = Number(process.env.ORKESTR_COD
   } finally {
     if (server) await new Promise((resolve) => server.close(resolve));
     restoreEnv(priorEnv);
-    await fs.rm(home, { recursive: true, force: true });
+    await removeDemoHome(home);
   }
 }
 
