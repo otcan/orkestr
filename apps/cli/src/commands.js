@@ -585,7 +585,7 @@ async function postThreadAction(action, argv, ctx) {
     const label = action === "wake"
       ? "Woke"
       : action === "sleep"
-        ? "Slept"
+        ? "Slept legacy tmux runtime"
         : action === "hard-reset"
           ? "Hard reset"
           : "Reset";
@@ -618,7 +618,6 @@ Common thread commands:
   orkestr attach [thread-name-or-id] [--print] [--json]
   orkestr send <thread-name-or-id> "<message>" [--json]
   orkestr wake <thread-name-or-id> [--json]
-  orkestr sleep <thread-name-or-id> [--json]
   orkestr reset <thread-name-or-id> [--json]
   orkestr hard-reset <thread-name-or-id> [--json]
 
@@ -632,6 +631,7 @@ Advanced:
   orkestr security [challenges|sessions|approve <challenge-id>|reject <challenge-id>|revoke <session-id|all>] [--json]
   orkestr thread create <name> [--id id] [--cwd path] [--command command] [--executor id] [--json]
   orkestr worker create <parent-thread> [task text] [--task text] [--blank] [--label label] [--repo path] [--branch branch] [--no-wake] [--json]
+  orkestr sleep <legacy-tmux-thread-name-or-id> [--json]
 
 Environment:
   ORKESTR_API_BASE   API base URL for commands. Defaults to http://127.0.0.1:19812.

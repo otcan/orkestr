@@ -9,11 +9,11 @@ import {
   getCodexAppServerClient,
   importCodexAppServerThread,
   listCodexAppServerThreads,
-  sleepCodexAppServerThread,
   startCodexAppServerThread,
   stopCodexAppServerClients,
 } from "../packages/core/src/codex-app-server.js";
 import { migrateCodexThreadsToAppServer } from "../packages/core/src/codex-app-server-migration.js";
+import { resetThreadRuntime, sleepThread } from "../packages/core/src/runtime-leases.js";
 import { createThread, enqueueThreadInput, getThread, listThreadMessages, updateThread } from "../packages/core/src/threads.js";
 import { deliverWhatsAppReplies } from "../packages/connectors/src/whatsapp.js";
 import { writeConnectorConfig } from "../packages/storage/src/config.js";
@@ -200,7 +200,7 @@ test("Codex app-server starts threads, delivers input, and imports existing thre
       chatId: "chat-1",
       accountId: "account-1",
     }, env);
-    await deliverCodexAppServerPendingInputs(startedWhatsApp.thread, env);
+    await deliverCodexAppServerPendingInputs(await getThread(startedWhatsApp.thread.id, env), env);
     const whatsappMessages = await listThreadMessages(startedWhatsApp.thread.id, env);
     const whatsappReply = whatsappMessages.find((message) => message.source === "codex-app-server" && /Reply to: whatsapp ping/.test(message.text));
     assert.ok(whatsappReply);
@@ -351,14 +351,15 @@ test("Codex app-server starts threads, delivers input, and imports existing thre
     const imported = await importCodexAppServerThread("thr_001", { id: "imported-thread", name: "Imported Thread" }, { ...env, ORKESTR_HOME: path.join(home, "imported-home") });
     const importedMessages = await listThreadMessages(imported.thread.id, { ...env, ORKESTR_HOME: path.join(home, "imported-home") });
     assert.equal(imported.imported, true);
+    assert.equal(imported.thread.state, "unloaded");
     assert.ok(importedMessages.some((message) => message.source === "codex-app-server-import"));
   } finally {
     stopCodexAppServerClients();
   }
 });
 
-test("Codex app-server sleep only interrupts active turns when forced", async () => {
-  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-codex-app-server-sleep-"));
+test("Codex app-server sleep is rejected and reset interrupts active turns", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-codex-app-server-reset-"));
   const fake = await createFakeCodex(home);
   const env = {
     ORKESTR_HOME: path.join(home, "orkestr"),
@@ -380,26 +381,28 @@ test("Codex app-server sleep only interrupts active turns when forced", async ()
     }, env);
     await markAppServerTurnActive(started.thread, env);
 
-    const skipped = await sleepCodexAppServerThread(await getThread(started.thread.id, env), { reason: "ui_sleep", kill: false }, env);
+    await assert.rejects(
+      () => sleepThread(started.thread.id, { reason: "ui_sleep", kill: false }, env),
+      (error) => error?.message === "codex_app_server_sleep_unsupported_use_stop" && error?.statusCode === 409,
+    );
     const stillWorking = await getThread(started.thread.id, env);
     let rawState = JSON.parse(await fs.readFile(fake.stateFile, "utf8"));
 
-    assert.equal(skipped.skipped, true);
-    assert.equal(skipped.reason, "active_turn");
     assert.equal(stillWorking.state, "working");
     assert.equal(stillWorking.runtime.activeTurnId, "active-turn");
     assert.ok(!rawState.calls.some((call) => call.method === "turn/interrupt"));
     assert.ok(!rawState.calls.some((call) => call.method === "thread/unsubscribe"));
 
-    const forced = await sleepCodexAppServerThread(stillWorking, { reason: "ui_stop", kill: true }, env);
+    const reset = await resetThreadRuntime(stillWorking.id, { reason: "ui_reset", kill: true }, env);
     rawState = JSON.parse(await fs.readFile(fake.stateFile, "utf8"));
-    const slept = await getThread(started.thread.id, env);
+    const resetThread = await getThread(started.thread.id, env);
 
-    assert.equal(forced.skipped, undefined);
-    assert.equal(slept.state, "sleeping");
-    assert.equal(slept.runtime.activeTurnId, null);
+    assert.equal(reset.slept, 0);
+    assert.equal(resetThread.state, "ready");
+    assert.equal(resetThread.runtime.activeTurnId, null);
     assert.ok(rawState.calls.some((call) => call.method === "turn/interrupt" && call.params.turnId === "active-turn"));
-    assert.ok(rawState.calls.some((call) => call.method === "thread/unsubscribe"));
+    assert.ok(rawState.calls.some((call) => call.method === "thread/resume"));
+    assert.ok(!rawState.calls.some((call) => call.method === "thread/unsubscribe"));
   } finally {
     stopCodexAppServerClients();
   }

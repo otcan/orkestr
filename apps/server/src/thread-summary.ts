@@ -423,7 +423,7 @@ export async function threadRuntimeSummary(thread: any, messages: any[] = [], op
     staleWorking: false,
     staleWorkingReason: null,
     staleWorkingSince: null,
-    publicStatus: awaitingAckCount > 0 ? "Awaiting ack" : ready ? "Ready" : state === "sleeping" ? "Sleeping" : state,
+    publicStatus: awaitingAckCount > 0 ? "Awaiting ack" : ready ? "Ready" : state === "sleeping" ? "Sleeping" : state === "unloaded" ? "Unloaded" : state,
     publicStatusCode: awaitingAckCount > 0 ? "awaiting_ack" : ready ? "ready" : state,
     hibernated: state === "sleeping",
     ...latestMessage,

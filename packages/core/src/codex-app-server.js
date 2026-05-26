@@ -156,48 +156,6 @@ export async function resumeCodexAppServerThread(thread, env = process.env) {
   return { thread: updated, codexThread, status: await codexAppServerThreadStatus(updated, env) };
 }
 
-export async function sleepCodexAppServerThread(thread, options = {}, env = process.env) {
-  const id = codexThreadId(thread);
-  const client = id ? await getCodexAppServerClient({ env, home: runtimeHome(env) }).catch(() => null) : null;
-  const state = client?.threadStates.get(id) || {};
-  const activeTurnId = clean(state.activeTurnId || thread.runtime?.activeTurnId);
-  const pendingRequest = client?.pendingRequestForThread(thread) || thread.runtime?.pendingRequest || null;
-  if (options.kill === false && (activeTurnId || pendingRequest)) {
-    await appendEvent({
-      type: "codex_app_server_thread_sleep_skipped",
-      threadId: thread.id,
-      codexThreadId: id,
-      reason: options.reason || "sleep",
-      activeTurnId: activeTurnId || null,
-      pendingRequest: pendingRequest?.id || pendingRequest?.requestId || null,
-    }, env).catch(() => {});
-    return {
-      thread,
-      slept: 0,
-      skipped: true,
-      reason: activeTurnId ? "active_turn" : "pending_request",
-      notice: null,
-    };
-  }
-  if (options.kill !== false && id && activeTurnId) {
-    await client.request("turn/interrupt", { threadId: id, turnId: activeTurnId }).catch(() => null);
-  }
-  if (id && client) await client.request("thread/unsubscribe", { threadId: id }).catch(() => null);
-  const updated = await updateThread(thread.id, {
-    state: "sleeping",
-    runtime: {
-      ...(thread.runtime || {}),
-      runtimeKind: "codex-app-server",
-      state: "sleeping",
-      activeTurnId: null,
-      endedAt: nowIso(),
-      reason: options.reason || "sleep",
-    },
-  }, env);
-  await appendEvent({ type: "codex_app_server_thread_slept", threadId: thread.id, codexThreadId: id, reason: options.reason || "sleep" }, env).catch(() => {});
-  return { thread: updated, slept: id ? 1 : 0, notice: null };
-}
-
 export async function interruptCodexAppServerThread(thread, env = process.env) {
   const id = codexThreadId(thread);
   if (!id) return { interrupted: false, reason: "codex_thread_id_required" };
@@ -248,7 +206,7 @@ export async function sendCodexAppServerInput(thread, message, env = process.env
   const clientStatusState = appServerStateFromStatus(clientState.status);
   let activeTurnId = clean(Object.prototype.hasOwnProperty.call(clientState, "activeTurnId")
     ? clientState.activeTurnId
-    : ["ready", "failed", "sleeping"].includes(clientStatusState)
+    : ["ready", "failed", "unloaded"].includes(clientStatusState)
       ? ""
       : thread.runtime?.activeTurnId);
   let result;
@@ -326,7 +284,7 @@ export async function deliverCodexAppServerPendingInputs(thread, env = process.e
   const id = codexThreadId(thread);
   const statusType = clean(client.threadStates.get(id)?.status?.type);
   const threadState = clean(thread.state);
-  if (id && (!statusType || statusType === "notLoaded" || threadState === "sleeping" || threadState === "failed")) {
+  if (id && (!statusType || statusType === "notLoaded" || threadState === "sleeping" || threadState === "unloaded" || threadState === "failed")) {
     try {
       const resumed = await resumeCodexAppServerThread(thread, env);
       thread = resumed.thread || thread;
@@ -339,7 +297,7 @@ export async function deliverCodexAppServerPendingInputs(thread, env = process.e
         deliveryLastAttemptAt: nowIso(),
         error: errorText,
       }, env).catch(() => {});
-      await updateThread(thread.id, { state: "sleeping", lastError: errorText }, env).catch(() => {});
+      await updateThread(thread.id, { state: "unloaded", lastError: errorText }, env).catch(() => {});
       await appendEvent({ type: "codex_app_server_resume_failed", threadId: thread.id, codexThreadId: id, error: errorText }, env).catch(() => {});
       return delivered;
     }
@@ -431,11 +389,11 @@ export async function codexAppServerThreadStatus(thread, env = process.env, coun
   const pendingRequest = client?.pendingRequestForThread(thread) || thread.runtime?.pendingRequest || null;
   const codexStatus = state.status || thread.runtime?.codexStatus || null;
   const statusState = appServerStateFromStatus(codexStatus);
-  const activeTurnId = statusState && ["ready", "failed", "sleeping"].includes(statusState)
+  const activeTurnId = statusState && ["ready", "failed", "unloaded"].includes(statusState)
     ? ""
     : clean(state.activeTurnId || thread.runtime?.activeTurnId);
   const threadState = clean(thread.state);
-  const runtimeState = pendingRequest ? "awaiting_approval" : activeTurnId ? "working" : statusState || (threadState === "sleeping" ? "sleeping" : "ready");
+  const runtimeState = pendingRequest ? "awaiting_approval" : activeTurnId ? "working" : statusState || (threadState === "sleeping" ? "unloaded" : threadState === "unloaded" ? "unloaded" : "ready");
   return {
     state: runtimeState,
     status: runtimeState,
@@ -461,7 +419,7 @@ export async function codexAppServerThreadStatus(thread, env = process.env, coun
     nextDeliveryAttemptAt: counts.nextDeliveryAttemptAt || null,
     runningCount: counts.runningCount || 0,
     wakePolicy: thread.wakePolicy || "wake-on-message",
-    hibernated: runtimeState === "sleeping",
+    hibernated: false,
     codexMode: thread.codexMode || null,
     codexModeSource: thread.codexModeSource || null,
     planImplementationReady: false,
@@ -508,7 +466,7 @@ export async function importCodexAppServerThread(codexThreadIdValue, input = {},
     id: clean(input.id) || `codex-${id.replace(/[^a-zA-Z0-9_.-]/g, "_")}`,
     name,
     title: name,
-    state: "sleeping",
+    state: "unloaded",
     cwd: codexThread.cwd || input.cwd || "",
     workspace: codexThread.cwd || input.workspace || "",
     executorId: "codex",
@@ -526,6 +484,12 @@ export async function importCodexAppServerThread(codexThreadIdValue, input = {},
       },
     },
     runtimeKind: "codex-app-server",
+    runtime: {
+      runtimeKind: "codex-app-server",
+      state: "unloaded",
+      codexThreadId: id,
+      codexSessionId: clean(codexThread.sessionId || id),
+    },
     codexThreadId: id,
     codexSessionId: clean(codexThread.sessionId || id),
     importedFromCodex: true,

@@ -39,7 +39,8 @@ Use dynamic discovery for live Orkestr context:
 Orkestr capabilities:
 
 - Threads: \`orkestr list\`, \`orkestr send <thread> "<message>"\`,
-  \`orkestr wake <thread>\`, \`orkestr sleep <thread>\`.
+  \`orkestr wake <thread>\`, \`orkestr reset <thread>\`. \`orkestr sleep\` is
+  only for legacy tmux runtimes.
 - Timers: \`orkestr timers list\`, \`orkestr timers run <timer-id>\`,
   \`orkestr doctor timers\`.
 - Browsers/desktops: use \`GET /api/browser-sessions\`,

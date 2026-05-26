@@ -12,7 +12,7 @@ import { codexSessionId, codexThreadId, nowIso } from "./codex-app-server-common
 function migrationPatch(thread, codexId) {
   const sessionId = codexSessionId(thread) || codexId;
   return {
-    state: "sleeping",
+    state: "unloaded",
     runtimeKind: "codex-app-server",
     codexThreadId: codexId,
     codexSessionId: sessionId,
@@ -35,7 +35,7 @@ function migrationPatch(thread, codexId) {
     },
     runtime: {
       ...(thread.runtime || {}),
-      state: "sleeping",
+      state: "unloaded",
       runtimeKind: "codex-app-server",
       codexThreadId: codexId,
       codexSessionId: sessionId,

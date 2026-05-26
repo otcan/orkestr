@@ -902,7 +902,7 @@ export function initialQueueDeliveryState(status = null, message = null) {
   if (isCodexAppServer && state === "working") return "awaiting_active_turn";
   if (isCodexAppServer && state === "awaiting_approval") return "awaiting_approval";
   if (state === "working") return "awaiting_runtime_completion";
-  if (isCodexAppServer && (state === "waking" || state === "sleeping")) return "resuming_codex_thread";
+  if (isCodexAppServer && (state === "waking" || state === "sleeping" || state === "unloaded")) return "resuming_codex_thread";
   if (state === "waking" || state === "sleeping") return "waiting_runtime_start";
   if (!isCodexAppServer && !status.sessionName) return "waiting_runtime_start";
   if (status.promptReady === false) return "waiting_runtime_ready";

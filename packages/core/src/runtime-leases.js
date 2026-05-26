@@ -25,10 +25,22 @@ import {
   deliverCodexAppServerPendingInputs,
   interruptCodexAppServerThread,
   resumeCodexAppServerThread,
-  sleepCodexAppServerThread,
   threadNeedsCodexAppServerMigration,
   threadUsesCodexAppServer,
 } from "./codex-app-server.js";
+import {
+  capturePane,
+  killTmuxSession,
+  pasteTmuxText,
+  renameTmuxWindow,
+  tmuxHasSession,
+  tmuxInlineCharLimit,
+  tmuxNewSession,
+  tmuxPaneId,
+  tmuxPaneIds,
+  tmuxSendKeys,
+  tmuxWindowNameForLabel,
+} from "./tmux-runtime.js";
 
 const execFileAsync = promisify(execFile);
 const deliveryLocks = new Set();
@@ -213,16 +225,8 @@ function threadName(thread) {
   return String(thread?.bindingName || thread?.binding?.displayName || thread?.name || thread?.title || thread?.id || "").trim();
 }
 
-function compactLabel(value) {
-  return String(value || "")
-    .replace(/[\r\n\t]+/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
 function tmuxWindowName(thread) {
-  const label = compactLabel(threadName(thread) || "Orkestr");
-  return Array.from(label).slice(0, 48).join("") || "Orkestr";
+  return tmuxWindowNameForLabel(threadName(thread) || "Orkestr");
 }
 
 function shellQuote(value) {
@@ -314,58 +318,6 @@ export async function listRuntimeLeases(env = process.env) {
   return readJson(await runtimeLeasesPath(env), []);
 }
 
-async function tmuxHasSession(sessionName) {
-  try {
-    await execFileAsync("tmux", ["has-session", "-t", sessionName]);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-async function tmuxPaneId(sessionName) {
-  return (await tmuxPaneIds(sessionName))[0] || null;
-}
-
-async function tmuxPaneIds(sessionName) {
-  const target = String(sessionName || "").trim();
-  if (!target) return [];
-  const { stdout } = await execFileAsync("tmux", ["list-panes", "-t", target, "-F", "#{pane_id}"]);
-  return String(stdout || "").trim().split("\n").map((line) => line.trim()).filter(Boolean);
-}
-
-async function tmuxPaneProcessIds(sessionName) {
-  const target = String(sessionName || "").trim();
-  if (!target) return [];
-  const { stdout } = await execFileAsync("tmux", ["list-panes", "-t", target, "-F", "#{pane_pid}"]);
-  return String(stdout || "")
-    .trim()
-    .split("\n")
-    .map((line) => Number(line.trim()))
-    .filter((pid) => Number.isInteger(pid) && pid > 1 && pid !== process.pid);
-}
-
-async function terminateProcessTreeRoots(pids = [], signal = "SIGTERM") {
-  const terminated = [];
-  for (const pid of [...new Set(pids)]) {
-    try {
-      process.kill(-pid, signal);
-      terminated.push({ pid, signal, target: "process_group" });
-      continue;
-    } catch {
-      // Fall back to the direct pane process. Some tmux pane commands are not
-      // process-group leaders.
-    }
-    try {
-      process.kill(pid, signal);
-      terminated.push({ pid, signal, target: "process" });
-    } catch {
-      // The process may already be gone after tmux killed the pane.
-    }
-  }
-  return terminated;
-}
-
 async function terminateProcessGroupId(pgid, fallbackPid, signal = "SIGTERM") {
   const terminated = [];
   const group = Number(pgid) || 0;
@@ -388,24 +340,6 @@ async function terminateProcessGroupId(pgid, fallbackPid, signal = "SIGTERM") {
     }
   }
   return terminated;
-}
-
-async function killTmuxSession(sessionName, { killProcessGroup = true } = {}) {
-  const target = String(sessionName || "").trim();
-  if (!target) return { sessionName: target, panePids: [], terminated: [] };
-  const panePids = killProcessGroup ? await tmuxPaneProcessIds(target).catch(() => []) : [];
-  await execFileAsync("tmux", ["kill-session", "-t", target]).catch(() => {});
-  const terminated = killProcessGroup ? await terminateProcessTreeRoots(panePids) : [];
-  return { sessionName: target, panePids, terminated };
-}
-
-async function renameTmuxWindow(sessionName, windowName) {
-  const target = String(sessionName || "").trim();
-  const name = compactLabel(windowName);
-  if (!target || !name) return;
-  await execFileAsync("tmux", ["set-window-option", "-t", target, "automatic-rename", "off"]).catch(() => {});
-  await execFileAsync("tmux", ["set-window-option", "-t", target, "allow-rename", "off"]).catch(() => {});
-  await execFileAsync("tmux", ["rename-window", "-t", target, name]);
 }
 
 async function saveLeaseWindowName(leaseId, windowName, env = process.env) {
@@ -463,12 +397,6 @@ export async function syncRuntimeWindowName(threadId, env = process.env) {
   if (!lease) return null;
   const windowName = await refreshTmuxWindowName(thread, lease, env);
   return { sessionName: lease.sessionName, windowName };
-}
-
-async function capturePane(paneId, lines = 80) {
-  if (!paneId) return "";
-  const { stdout } = await execFileAsync("tmux", ["capture-pane", "-t", paneId, "-p", "-S", `-${Math.max(20, lines)}`]);
-  return String(stdout || "");
 }
 
 function paneWorkingLine(line) {
@@ -1056,7 +984,7 @@ export async function wakeThread(threadId, options = {}, env = process.env) {
   if (await tmuxHasSession(sessionName)) {
     await killTmuxSession(sessionName).catch(() => {});
   }
-  await execFileAsync("tmux", ["new-session", "-d", "-s", sessionName, "-c", workspace, command], {
+  await tmuxNewSession(sessionName, workspace, command, {
     env: {
       ...process.env,
       ...env,
@@ -1134,7 +1062,9 @@ export async function sleepThread(threadId, options = {}, env = process.env) {
     throw error;
   }
   if (threadUsesCodexAppServer(thread, env)) {
-    return sleepCodexAppServerThread(thread, options, env);
+    const error = new Error("codex_app_server_sleep_unsupported_use_stop");
+    error.statusCode = 409;
+    throw error;
   }
   const leases = await listRuntimeLeases(env);
   const now = nowIso();
@@ -1190,6 +1120,37 @@ async function appendRuntimeInterruptionNotice(thread, options = {}, env = proce
 
 export async function resetThreadRuntime(threadId, options = {}, env = process.env) {
   const reason = options.reason || "reset";
+  const thread = await getThread(threadId, env);
+  if (!thread) {
+    const error = new Error("thread_not_found");
+    error.statusCode = 404;
+    throw error;
+  }
+  if (threadUsesCodexAppServer(thread, env)) {
+    const interrupted = await interruptCodexAppServerThread(thread, env).catch(() => ({ interrupted: false }));
+    const resumed = await resumeCodexAppServerThread(thread, env).catch(async () => ({ thread: await updateThread(thread.id, {
+      state: "ready",
+      runtime: { ...(thread.runtime || {}), runtimeKind: "codex-app-server", state: "ready", activeTurnId: null, pendingRequest: null },
+    }, env), status: null }));
+    await appendEvent({
+      type: "thread_runtime_reset",
+      threadId: resumed.thread?.id || thread.id,
+      reason,
+      slept: 0,
+      interrupted: Boolean(interrupted?.interrupted),
+      runtimeKind: "codex-app-server",
+      leaseId: null,
+    }, env).catch(() => {});
+    return {
+      ok: true,
+      reset: true,
+      slept: 0,
+      interrupted,
+      thread: resumed.thread,
+      lease: null,
+      status: resumed.status || await runtimeStatus(thread.id, env).catch(() => null),
+    };
+  }
   const slept = await sleepThread(threadId, { reason, kill: options.kill !== false }, env);
   const woken = await wakeThread(threadId, { reason: options.wakeReason || reason }, env);
   await appendEvent({
@@ -1295,7 +1256,7 @@ async function compactCodexRuntimeContext(threadId, env = process.env) {
     };
   }
   await pasteTmuxText(status.paneId, "/compact", env);
-  await execFileAsync("tmux", ["send-keys", "-t", status.paneId, "C-m"]);
+  await tmuxSendKeys(status.paneId, "C-m");
   const compactedAt = nowIso();
   const readyStatus = await waitForRuntimeReady(threadId, {
     ...env,
@@ -1772,12 +1733,12 @@ async function waitForRuntimeReady(threadId, env = process.env) {
   while (Date.now() < deadline) {
     last = await runtimeStatus(threadId, env);
     if (last.needsResumeDirectoryConfirmation && last.paneId) {
-      await execFileAsync("tmux", ["send-keys", "-t", last.paneId, "2", "C-m"]).catch(() => {});
+      await tmuxSendKeys(last.paneId, "2", "C-m").catch(() => {});
       await sleep(1000);
       continue;
     }
     if (last.needsCodexUpdatePromptSkip && last.paneId) {
-      await execFileAsync("tmux", ["send-keys", "-t", last.paneId, last.codexUpdatePromptChoice || "2", "C-m"]).catch(() => {});
+      await tmuxSendKeys(last.paneId, last.codexUpdatePromptChoice || "2", "C-m").catch(() => {});
       await sleep(1000);
       continue;
     }
@@ -1873,7 +1834,7 @@ async function dismissPlanImplementationMenu(threadId, status, env = process.env
   const maxEscapes = planImplementationDismissMaxEscapes(env);
   const waitMs = planImplementationDismissWaitMs(env);
   for (; escapes < maxEscapes && latest?.planImplementationMenuVisible; escapes += 1) {
-    await execFileAsync("tmux", ["send-keys", "-t", latest.paneId, "Escape"]);
+    await tmuxSendKeys(latest.paneId, "Escape");
     await appendEvent({
       type: "thread_plan_implementation_prompt_dismissed",
       threadId,
@@ -1909,10 +1870,10 @@ async function sendPlanImplementationChoice(status, choice) {
   const to = Math.max(1, Number(requested) || 1);
   const direction = to >= from ? "Down" : "Up";
   for (let index = 0; index < Math.abs(to - from); index += 1) {
-    await execFileAsync("tmux", ["send-keys", "-t", status.paneId, direction]);
+    await tmuxSendKeys(status.paneId, direction);
     await sleep(50);
   }
-  await execFileAsync("tmux", ["send-keys", "-t", status.paneId, "C-m"]);
+  await tmuxSendKeys(status.paneId, "C-m");
   return true;
 }
 
@@ -1975,7 +1936,7 @@ export async function applyRuntimeCodexMode(threadId, mode, env = process.env, o
           reason: "runtime_not_ready",
         };
       }
-      await execFileAsync("tmux", ["send-keys", "-t", dismissed.paneId || status.paneId, "BTab"]);
+      await tmuxSendKeys(dismissed.paneId || status.paneId, "BTab");
       clearPaneProgressCache();
       await waitForPaneCodexMode(dismissed.paneId || status.paneId, desired, env);
     }
@@ -2014,7 +1975,7 @@ export async function applyRuntimeCodexMode(threadId, mode, env = process.env, o
   if (!beforeMode) {
     return { applied: false, changed: false, mode: desired, previousMode: null, paneId: status.paneId, reason: "runtime_mode_unknown" };
   }
-  await execFileAsync("tmux", ["send-keys", "-t", status.paneId, "BTab"]);
+  await tmuxSendKeys(status.paneId, "BTab");
   clearPaneProgressCache();
   await waitForPaneCodexMode(status.paneId, desired, env);
   return {
@@ -2165,20 +2126,6 @@ async function deferThreadInputDelivery(thread, message, error, env = process.en
   if (forceInterrupt) scheduleThreadInputDelivery(thread.id, env, retryMs);
 }
 
-async function pasteTmuxText(paneId, text, env = process.env) {
-  const paths = await ensureDataDirs(env);
-  const bufferName = `orkestr-${crypto.randomBytes(8).toString("hex")}`;
-  const pastePath = path.join(paths.home, `${bufferName}.txt`);
-  await fs.writeFile(pastePath, String(text || ""), "utf8");
-  try {
-    await execFileAsync("tmux", ["load-buffer", "-b", bufferName, pastePath]);
-    await execFileAsync("tmux", ["paste-buffer", "-b", bufferName, "-t", paneId]);
-  } finally {
-    await execFileAsync("tmux", ["delete-buffer", "-b", bufferName]).catch(() => {});
-    await fs.unlink(pastePath).catch(() => {});
-  }
-}
-
 function submitKeys(env = process.env) {
   return String(env.ORKESTR_RUNTIME_SUBMIT_KEYS || "C-m")
     .split(",")
@@ -2193,11 +2140,6 @@ function submitDelayMs(env = process.env) {
 function fileSubmitDelayMs(env = process.env) {
   const parsed = Number(env.ORKESTR_TMUX_FILE_SUBMIT_DELAY_MS ?? 750);
   return Number.isFinite(parsed) ? Math.max(0, parsed) : 750;
-}
-
-function tmuxInlineCharLimit(env = process.env) {
-  const parsed = Number(env.ORKESTR_TMUX_INLINE_CHAR_LIMIT || 800);
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : 800;
 }
 
 function inputTextForMessage(message) {
@@ -2254,11 +2196,11 @@ function runtimeStatusNeedsInterrupt(status = null) {
 async function interruptRuntimeStatus(status = null, env = process.env) {
   const paneId = status?.paneId;
   if (!paneId || !runtimeStatusNeedsInterrupt(status)) return false;
-  await execFileAsync("tmux", ["send-keys", "-t", paneId, "Escape"]).catch(() => {});
+  await tmuxSendKeys(paneId, "Escape").catch(() => {});
   await sleep(interruptSettleMs(env));
-  await execFileAsync("tmux", ["send-keys", "-t", paneId, "C-c"]).catch(() => {});
+  await tmuxSendKeys(paneId, "C-c").catch(() => {});
   await sleep(interruptSettleMs(env));
-  await execFileAsync("tmux", ["send-keys", "-t", paneId, "Escape"]).catch(() => {});
+  await tmuxSendKeys(paneId, "Escape").catch(() => {});
   return true;
 }
 
@@ -2645,7 +2587,7 @@ async function submitStableUnsentPromptDelivery(thread, message, status, env = p
     error: null,
   }, env);
   for (const key of submitKeys(env)) {
-    await execFileAsync("tmux", ["send-keys", "-t", status.paneId, key]);
+    await tmuxSendKeys(status.paneId, key);
   }
   await updateThreadMessage(thread.id, message.id, {
     state: "awaiting_ack",
@@ -2897,10 +2839,10 @@ async function sendNeedInputAnswerToPane(thread, message, pendingQuestion, statu
   }, env);
   for (const selection of selections) {
     for (let step = 0; step < selection; step += 1) {
-      await execFileAsync("tmux", ["send-keys", "-t", status.paneId, "Down"]);
+      await tmuxSendKeys(status.paneId, "Down");
       await sleep(50);
     }
-    await execFileAsync("tmux", ["send-keys", "-t", status.paneId, "C-m"]);
+    await tmuxSendKeys(status.paneId, "C-m");
     await sleep(150);
   }
   await updateThreadMessage(thread.id, message.id, {
@@ -2948,7 +2890,7 @@ async function cancelNeedInputForRawDelivery(thread, message, pendingQuestion, s
     canceledInputEventId: pendingQuestion?.eventId || null,
     error: null,
   }, env);
-  await execFileAsync("tmux", ["send-keys", "-t", status.paneId, "Escape"]);
+  await tmuxSendKeys(status.paneId, "Escape");
   await appendEvent({
     type: "thread_input_need_input_cancelled",
     threadId: thread.id,
@@ -3011,7 +2953,7 @@ async function sendThreadInputToPane(thread, message, status, env = process.env)
   const delayMs = deliveryInput.mode === "file" ? Math.max(submitDelayMs(env), fileSubmitDelayMs(env)) : submitDelayMs(env);
   if (delayMs > 0) await sleep(delayMs);
   for (const key of submitKeys(env)) {
-    await execFileAsync("tmux", ["send-keys", "-t", status.paneId, key]);
+    await tmuxSendKeys(status.paneId, key);
   }
 
   await updateThreadMessage(thread.id, message.id, {
@@ -3714,7 +3656,7 @@ async function syncRuntimeLeasesOnce(env = process.env) {
         }
       }
       if (status.needsResumeDirectoryConfirmation && status.paneId) {
-        await execFileAsync("tmux", ["send-keys", "-t", status.paneId, "2", "C-m"]).catch(() => {});
+        await tmuxSendKeys(status.paneId, "2", "C-m").catch(() => {});
         await updateThread(lease.threadId, {
           state: "waking",
           runtime: { ...leaseForStorage, state: "waking", progress: status.progress || null },
@@ -3724,7 +3666,7 @@ async function syncRuntimeLeasesOnce(env = process.env) {
         continue;
       }
       if (status.needsCodexUpdatePromptSkip && status.paneId) {
-        await execFileAsync("tmux", ["send-keys", "-t", status.paneId, status.codexUpdatePromptChoice || "2", "C-m"]).catch(() => {});
+        await tmuxSendKeys(status.paneId, status.codexUpdatePromptChoice || "2", "C-m").catch(() => {});
         await updateThread(lease.threadId, {
           state: "waking",
           runtime: { ...leaseForStorage, state: "waking", progress: status.progress || null },

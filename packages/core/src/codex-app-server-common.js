@@ -116,7 +116,7 @@ export function appServerStateFromStatus(status) {
   }
   if (type === "idle") return "ready";
   if (type === "systemError") return "failed";
-  if (type === "notLoaded") return "sleeping";
+  if (type === "notLoaded") return "unloaded";
   return "";
 }
 
