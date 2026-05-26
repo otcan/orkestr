@@ -1,0 +1,118 @@
+.thread-management-panel {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+}
+
+.management-card {
+  border: 1px solid color-mix(in srgb, currentColor 12%, transparent);
+  border-radius: 8px;
+  padding: 12px;
+}
+
+.management-card header,
+.management-actions,
+.management-links,
+.runtime-meta {
+  align-items: center;
+  display: flex;
+  gap: 8px;
+  justify-content: space-between;
+}
+
+.management-card header span,
+.runtime-meta,
+.context-line,
+.mini-row span,
+.mini-row small {
+  color: var(--muted, #6b7280);
+  font-size: 12px;
+}
+
+.management-card dl {
+  display: grid;
+  gap: 8px;
+  margin: 12px 0;
+}
+
+.management-card dl div,
+.mini-row,
+.capacity-strip {
+  align-items: center;
+  display: grid;
+  gap: 6px;
+}
+
+.management-card dt {
+  color: var(--muted, #6b7280);
+  font-size: 11px;
+  text-transform: uppercase;
+}
+
+.management-card dd {
+  margin: 0;
+}
+
+.management-actions,
+.management-links {
+  flex-wrap: wrap;
+  justify-content: flex-start;
+  margin-top: 12px;
+}
+
+.mini-list {
+  display: grid;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.mini-row {
+  background: transparent;
+  border: 1px solid color-mix(in srgb, currentColor 10%, transparent);
+  border-radius: 8px;
+  color: inherit;
+  justify-items: start;
+  padding: 8px;
+  text-align: left;
+}
+
+.capacity-strip {
+  background: transparent;
+  border: 0;
+  color: inherit;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  padding: 0;
+  width: 100%;
+}
+
+.capacity-strip span {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.capacity-strip i {
+  background: color-mix(in srgb, currentColor 10%, transparent);
+  border-radius: 999px;
+  display: block;
+  height: 6px;
+  overflow: hidden;
+}
+
+.capacity-strip em {
+  background: currentColor;
+  display: block;
+  height: 100%;
+}
+
+.warn {
+  color: #b45309;
+}
+
+.danger {
+  color: #b91c1c;
+}
+
+.ok {
+  color: #047857;
+}

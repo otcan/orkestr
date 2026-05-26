@@ -1,0 +1,135 @@
+<section class="thread-management-panel" aria-label="Thread management">
+  <article class="management-card status-card">
+    <header>
+      <span>Status</span>
+      <strong [class]="statusClass">{{ statusLabel }}</strong>
+    </header>
+    <dl>
+      <div>
+        <dt>Mode</dt>
+        <dd>{{ modeLabel || "code" }}</dd>
+      </div>
+      @if (branchLabel) {
+        <div>
+          <dt>Branch</dt>
+          <dd>{{ branchLabel }}</dd>
+        </div>
+      }
+      @if (gitLabel) {
+        <div>
+          <dt>Git</dt>
+          <dd>{{ gitLabel }}</dd>
+        </div>
+      }
+    </dl>
+    @if (workspaceLabel && !gitLabel) {
+      <p class="context-line">{{ workspaceLabel }}</p>
+    }
+    <div class="management-actions">
+      @if (canWake) {
+        <button class="secondary" type="button" (click)="wake.emit()" [disabled]="busy || !codexReady">Wake</button>
+      }
+      @if (canSleep) {
+        <button class="secondary" type="button" (click)="sleep.emit()" [disabled]="busy || !codexReady">Sleep</button>
+      }
+      @if (canRecover) {
+        <button class="secondary danger-soft" type="button" (click)="recover.emit()" [disabled]="busy || !codexReady">Recover</button>
+      }
+      <button class="danger-soft" type="button" (click)="stop.emit()" [disabled]="busy || !codexReady || !canStop">Stop</button>
+    </div>
+  </article>
+
+  <article class="management-card worker-card">
+    <header>
+      <span>Workers</span>
+      <strong>{{ workers.length }}</strong>
+    </header>
+    <div class="mini-list">
+      @if (parentThread) {
+        <button class="mini-row" type="button" (click)="openThread.emit(parentThread)">
+          <span>Parent</span>
+          <strong>{{ workerTitle(parentThread) }}</strong>
+        </button>
+      }
+      @for (worker of shownWorkers(); track worker.id) {
+        <button class="mini-row" type="button" (click)="openThread.emit(worker)">
+          <span>{{ workerStatus(worker) }}</span>
+          <strong>{{ workerTitle(worker) }}</strong>
+        </button>
+      } @empty {
+        <p>No workers yet.</p>
+      }
+      @if (extraWorkerCount() > 0) {
+        <button class="mini-row" type="button" (click)="openWorkers.emit()">
+          <span>More</span>
+          <strong>+{{ extraWorkerCount() }} workers</strong>
+        </button>
+      }
+    </div>
+    <div class="management-actions">
+      <button type="button" (click)="createWorker.emit()" [disabled]="busy || !codexReady">New worker</button>
+      <button class="secondary" type="button" (click)="openWorkers.emit()">Open workers</button>
+    </div>
+  </article>
+
+  <article class="management-card timer-card">
+    <header>
+      <span>Timers</span>
+      <strong>{{ timers.length }}</strong>
+    </header>
+    <div class="mini-list">
+      @for (timer of shownTimers(); track timer.id) {
+        <button class="mini-row" type="button" (click)="openTimers.emit()">
+          <span>{{ timerCadence(timer) }}</span>
+          <strong>{{ timerTitle(timer) }}</strong>
+          <small>Next {{ timer.nextRunAt | date: "MMM d, HH:mm" }}</small>
+        </button>
+      } @empty {
+        <p>No active timers.</p>
+      }
+      @if (extraTimerCount() > 0) {
+        <button class="mini-row" type="button" (click)="openTimers.emit()">
+          <span>More</span>
+          <strong>+{{ extraTimerCount() }} timers</strong>
+        </button>
+      }
+    </div>
+    <div class="management-actions">
+      <button class="secondary" type="button" (click)="openTimers.emit()">Manage timers</button>
+    </div>
+  </article>
+
+  <article class="management-card runtime-card">
+    <header>
+      <span>Runtime</span>
+      <strong>{{ modelName }}</strong>
+    </header>
+    <div class="runtime-meta">
+      <span>{{ reasoningLabel || "default" }}</span>
+      <span>{{ modeLabel || "code" }}</span>
+    </div>
+    <button class="capacity-strip" type="button" (click)="openModelDetails.emit()" aria-label="Open model capacity details">
+      <span [class]="capacityToneClass(primaryRateTone)">
+        <b>5h</b>
+        <i><em [style.width.%]="meterFill(primaryRateFill)"></em></i>
+        <small>{{ primaryRateLabel }}</small>
+      </span>
+      <span [class]="capacityToneClass(secondaryRateTone)">
+        <b>Week</b>
+        <i><em [style.width.%]="meterFill(secondaryRateFill)"></em></i>
+        <small>{{ secondaryRateLabel }}</small>
+      </span>
+      <span class="context" [class]="capacityToneClass(contextTone)">
+        <b>Ctx</b>
+        <i><em [style.width.%]="meterFill(contextFill)"></em></i>
+        <small>{{ contextLabel }}</small>
+      </span>
+    </button>
+    <div class="management-links">
+      <button class="secondary" type="button" (click)="openRuntime.emit()">Runtime</button>
+      <button class="secondary" type="button" (click)="openDesktops.emit()">Desktops</button>
+      <button class="secondary" type="button" (click)="openSettings.emit()">Settings</button>
+      <button class="secondary" type="button" (click)="openOps.emit()">Ops</button>
+    </div>
+  </article>
+</section>

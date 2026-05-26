@@ -181,6 +181,21 @@ test("thread links do not persist the raw panel", async () => {
   assert.ok(!threadUrl.includes('this.activePanel === "raw" ? "raw" : "chat"'));
 });
 
+test("thread management panel scaffold includes template and styles", async () => {
+  const sources = await read([
+    "apps/web/src/app/thread-management-panel.component.ts",
+    "apps/web/src/app/thread-management-panel.component.html",
+    "apps/web/src/app/thread-management-panel.component.css",
+  ]);
+
+  assert.ok(sources.includes('selector: "ork-thread-management-panel"'));
+  assert.ok(sources.includes('templateUrl: "./thread-management-panel.component.html"'));
+  assert.ok(sources.includes('styleUrls: ["./thread-management-panel.component.css"]'));
+  assert.ok(sources.includes("New worker"));
+  assert.ok(sources.includes("Manage timers"));
+  assert.ok(sources.includes(".thread-management-panel"));
+});
+
 test("sidebar marks latest delivery failures as errors", async () => {
   const sources = await read([
     "apps/web/src/app/app.component.ts",
