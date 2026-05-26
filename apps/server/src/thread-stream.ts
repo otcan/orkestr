@@ -38,6 +38,68 @@ async function tmuxSendKey(paneId: string, key: string): Promise<void> {
   await execFileAsync("tmux", ["send-keys", "-t", paneId, key]);
 }
 
+const RAW_ESCAPE_KEY_MAP: Record<string, string | null> = {
+  "\x1b[A": "Up",
+  "\x1b[B": "Down",
+  "\x1b[C": "Right",
+  "\x1b[D": "Left",
+  "\x1b[H": "Home",
+  "\x1b[F": "End",
+  "\x1bOA": "Up",
+  "\x1bOB": "Down",
+  "\x1bOC": "Right",
+  "\x1bOD": "Left",
+  "\x1bOH": "Home",
+  "\x1bOF": "End",
+  "\x1b[Z": "BTab",
+  "\x1b[1~": "Home",
+  "\x1b[2~": "IC",
+  "\x1b[3~": "DC",
+  "\x1b[4~": "End",
+  "\x1b[5~": "PPage",
+  "\x1b[6~": "NPage",
+  "\x1b[7~": "Home",
+  "\x1b[8~": "End",
+  "\x1b[200~": null,
+  "\x1b[201~": null,
+};
+
+function readRawEscapeSequence(data: string, index: number): string | null {
+  if (data[index] !== "\x1b") return null;
+  const prefix = data.slice(index);
+  if (prefix.startsWith("\x1b[")) {
+    const match = prefix.match(/^\x1b\[[0-9;?]*[@-~]/);
+    return match?.[0] || "\x1b";
+  }
+  if (prefix.startsWith("\x1bO") && prefix.length >= 3) return prefix.slice(0, 3);
+  return "\x1b";
+}
+
+function rawEscapeSequenceKey(sequence: string): string | null | undefined {
+  const mapped = RAW_ESCAPE_KEY_MAP[sequence];
+  if (mapped !== undefined) return mapped;
+  const csi = sequence.match(/^\x1b\[([0-9;?]*)([A-Za-z~])$/);
+  if (!csi) return undefined;
+  const params = csi[1].replace(/^\?/, "").split(";")[0];
+  const final = csi[2];
+  if (final === "A") return "Up";
+  if (final === "B") return "Down";
+  if (final === "C") return "Right";
+  if (final === "D") return "Left";
+  if (final === "H") return "Home";
+  if (final === "F") return "End";
+  if (final === "Z") return "BTab";
+  if (final !== "~") return undefined;
+  if (params === "1" || params === "7") return "Home";
+  if (params === "2") return "IC";
+  if (params === "3") return "DC";
+  if (params === "4" || params === "8") return "End";
+  if (params === "5") return "PPage";
+  if (params === "6") return "NPage";
+  if (params === "200" || params === "201") return null;
+  return undefined;
+}
+
 async function resizePane(paneId: string, cols: unknown, rows: unknown): Promise<void> {
   const parsedWidth = Number(cols);
   const parsedHeight = Number(rows);
@@ -103,6 +165,7 @@ async function ensureAppServerAttachPane(thread: Record<string, any>, cols: unkn
 
 async function sendRawInput(paneId: string, data: string): Promise<void> {
   let literal = "";
+  const input = String(data || "");
   const flushLiteral = async () => {
     if (!literal) return;
     const value = literal;
@@ -110,7 +173,22 @@ async function sendRawInput(paneId: string, data: string): Promise<void> {
     await tmuxSendLiteral(paneId, value);
   };
 
-  for (const char of String(data || "")) {
+  for (let index = 0; index < input.length;) {
+    const sequence = readRawEscapeSequence(input, index);
+    if (sequence) {
+      await flushLiteral();
+      const key = rawEscapeSequenceKey(sequence);
+      if (sequence === "\x1b") {
+        await tmuxSendKey(paneId, "Escape");
+      } else if (key) {
+        await tmuxSendKey(paneId, key);
+      }
+      index += sequence.length;
+      continue;
+    }
+
+    const char = input[index];
+    index += 1;
     if (char === "\r" || char === "\n") {
       await flushLiteral();
       await tmuxSendKey(paneId, "C-m");
