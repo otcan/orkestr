@@ -69,6 +69,10 @@ function chronologicalMessages(messages: any[] = []) {
     .map(({ message }) => message);
 }
 
+function shellQuote(value: string): string {
+  return `'${String(value || "").replace(/'/g, "'\\''")}'`;
+}
+
 const needInputPhases = new Set(["need_input", "awaiting_input", "question", "request_user_input"]);
 
 function shouldInterruptRuntime(status: Record<string, any> | null | undefined): boolean {
@@ -862,14 +866,47 @@ export class ThreadsController {
   async attach(@Param("threadId") threadId: string) {
     let thread = await getThread(threadId);
     if (!thread) throw httpError("thread_not_found", 404);
-    if (threadUsesCodexAppServer(thread) || threadNeedsCodexAppServerMigration(thread)) {
+    if (threadUsesCodexAppServer(thread)) {
+      const wakeResult = await wakeThread(thread.id, { reason: "attach" }).catch((error: Error) => ({
+        error: error.message,
+        thread,
+        status: null,
+      }));
+      if ((wakeResult as any).error) {
+        return {
+          ok: false,
+          thread,
+          runtime: await runtimeStatus(thread.id).catch(() => null),
+          message: (wakeResult as any).error || "Codex app-server attach failed.",
+        };
+      }
+      thread = (wakeResult as any).thread || thread;
+      const codexId = codexThreadId(thread);
+      if (!codexId) {
+        return {
+          ok: false,
+          thread,
+          runtime: (wakeResult as any).status || await runtimeStatus(thread.id).catch(() => null),
+          message: "Codex thread id is missing.",
+        };
+      }
+      const cwd = String(thread.cwd || thread.workspace || thread.repoPath || thread.worktreePath || "/root");
+      const attachCommand = `codex --dangerously-bypass-approvals-and-sandbox resume -C ${shellQuote(cwd)} ${shellQuote(codexId)}`;
+      return {
+        ok: true,
+        state: "ready",
+        thread,
+        runtime: (wakeResult as any).status || await runtimeStatus(thread.id).catch(() => null),
+        attachKind: "codex-app-server",
+        attachCommand,
+      };
+    }
+    if (threadNeedsCodexAppServerMigration(thread)) {
       return {
         ok: false,
         thread,
         runtime: await runtimeStatus(thread.id).catch(() => null),
-        message: threadNeedsCodexAppServerMigration(thread)
-          ? "Run `orkestr codex migrate` on this host before opening this Codex thread."
-          : "Codex app-server threads do not expose raw terminal attach.",
+        message: "Run `orkestr codex migrate` on this host before opening this Codex thread.",
       };
     }
     let status = await runtimeStatus(thread.id);

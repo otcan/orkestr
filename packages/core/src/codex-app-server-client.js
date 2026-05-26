@@ -22,7 +22,7 @@ import {
   threadForCodexThreadId,
   timeoutMs,
 } from "./codex-app-server-common.js";
-import { latestWhatsAppParent, whatsappOrigin, whatsappProjectionFields } from "./codex-app-server-whatsapp.js";
+import { codexAppServerMessageFields, latestWhatsAppParent, whatsappOrigin, whatsappProjectionFields } from "./codex-app-server-whatsapp.js";
 
 const execFileAsync = promisify(execFile);
 const clients = new Map();
@@ -225,6 +225,11 @@ export class CodexAppServerClient {
         codexTurnId: params.turnId || null,
         codexItemId: params.itemId || null,
         codexRequestId: String(message.id),
+        ...codexAppServerMessageFields(codexId, {
+          turnId: params.turnId,
+          itemId: params.itemId,
+          requestId: message.id,
+        }),
         ...whatsappProjectionFields(whatsappParent, thread),
       }, this.env).catch(() => null);
       if (messageRecord) notifyMessageHandler({ thread, message: messageRecord });
@@ -358,6 +363,10 @@ export class CodexAppServerClient {
       codexThreadId: codexId,
       codexTurnId: turnId || null,
       codexItemId: item.id || null,
+      ...codexAppServerMessageFields(codexId, {
+        turnId,
+        itemId: item.id,
+      }),
       timestamp,
       ...whatsappProjectionFields(whatsappParent, thread),
     }, this.env);

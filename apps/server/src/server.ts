@@ -149,13 +149,36 @@ async function syncRuntimeAndDeliverWhatsApp(options: { forceWhatsapp?: boolean 
 
 function createWhatsAppDeliveryScheduler() {
   let timer: NodeJS.Timeout | null = null;
-  return {
-    schedule() {
+  const retryDelayMs = whatsAppDeliveryRetryDelayMs();
+  const shouldRetry = (result: any) => {
+    if (!result || !Array.isArray(result.failed) || !result.failed.length) return false;
+    return result.failed.some((failure: any) => {
+      const reason = String(failure?.error || failure?.reason || failure?.message || "").toLowerCase();
+      return reason.includes("not_ready") ||
+        reason.includes("bridge_not_ready") ||
+        reason.includes("fetch failed") ||
+        reason.includes("econnrefused") ||
+        reason.includes("timeout");
+    });
+  };
+  const run = () => {
+    deliverWhatsAppReplies()
+      .then((result) => {
+        if (shouldRetry(result)) {
+          scheduler.schedule(retryDelayMs);
+        }
+      })
+      .catch(() => {
+        scheduler.schedule(retryDelayMs);
+      });
+  };
+  const scheduler = {
+    schedule(delayMs = 0) {
       if (timer) return;
       timer = setTimeout(() => {
         timer = null;
-        deliverWhatsAppReplies().catch(() => {});
-      }, 0);
+        run();
+      }, Math.max(0, delayMs));
       if (typeof timer.unref === "function") timer.unref();
     },
     close() {
@@ -163,6 +186,12 @@ function createWhatsAppDeliveryScheduler() {
       timer = null;
     },
   };
+  return scheduler;
+}
+
+function whatsAppDeliveryRetryDelayMs() {
+  const parsed = Number(process.env.ORKESTR_WHATSAPP_DELIVERY_RETRY_MS || 10_000);
+  return Number.isFinite(parsed) ? Math.max(1000, parsed) : 10_000;
 }
 
 export function serverHandle(

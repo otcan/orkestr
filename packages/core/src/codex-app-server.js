@@ -9,6 +9,7 @@ import {
   appendOrUpdateEventMessage,
   appServerStateFromStatus,
   clean,
+  codexInputText,
   codexAppServerEnabled,
   codexSessionId,
   codexThreadId,
@@ -26,6 +27,7 @@ import {
   userInputText,
 } from "./codex-app-server-common.js";
 import { getCodexAppServerClient } from "./codex-app-server-client.js";
+import { codexAppServerMessageFields } from "./codex-app-server-whatsapp.js";
 
 export {
   codexAppServerEnabled,
@@ -95,13 +97,29 @@ export async function resumeCodexAppServerThread(thread, env = process.env) {
   const codexThread = result?.thread || {};
   const updated = await updateThread(thread.id, {
     state: "ready",
+    lastError: null,
     runtimeKind: "codex-app-server",
+    codexSessionId: clean(codexThread.sessionId || codexSessionId(thread) || id),
+    executor: {
+      ...(thread.executor || {}),
+      transport: "app-server",
+      codexThreadId: id,
+      codexSessionId: clean(codexThread.sessionId || codexSessionId(thread) || id),
+      metadata: {
+        ...(thread.executor?.metadata || {}),
+        transport: "app-server",
+        runtimeKind: "codex-app-server",
+        codexThreadId: id,
+        codexSessionId: clean(codexThread.sessionId || codexSessionId(thread) || id),
+      },
+    },
     runtime: {
       ...(thread.runtime || {}),
       runtimeKind: "codex-app-server",
       state: "ready",
       codexThreadId: id,
       codexSessionId: clean(codexThread.sessionId || codexSessionId(thread) || id),
+      activeTurnId: null,
       resumedAt: nowIso(),
     },
   }, env);
@@ -135,7 +153,12 @@ export async function interruptCodexAppServerThread(thread, env = process.env) {
   const id = codexThreadId(thread);
   if (!id) return { interrupted: false, reason: "codex_thread_id_required" };
   const client = await getCodexAppServerClient({ env, home: runtimeHome(env) });
-  const activeTurnId = clean(client.threadStates.get(id)?.activeTurnId || thread.runtime?.activeTurnId);
+  const clientState = client.threadStates.get(id);
+  const activeTurnId = clean(
+    clientState && Object.prototype.hasOwnProperty.call(clientState, "activeTurnId")
+      ? clientState.activeTurnId
+      : thread.runtime?.activeTurnId
+  );
   if (!activeTurnId) return { interrupted: false, reason: "no_active_turn" };
   await client.request("turn/interrupt", { threadId: id, turnId: activeTurnId });
   await updateThread(thread.id, {
@@ -148,6 +171,11 @@ export async function interruptCodexAppServerThread(thread, env = process.env) {
 function staleSteerError(error) {
   const text = clean(error?.message || error?.data?.message || error?.data?.error || error);
   return /no\s+active\s+turn/i.test(text) && /steer/i.test(text);
+}
+
+function staleSteerFailureMessage(message = {}) {
+  if (message.role !== "user" || message.state !== "failed") return false;
+  return staleSteerError(message.error || message.deliveryError || message.lastError);
 }
 
 async function startCodexAppServerTurn({ client, thread, id, pending, env, observedVia = "codex_app_server_turn_start" }) {
@@ -183,7 +211,7 @@ export async function sendCodexAppServerInput(thread, message, env = process.env
       result = await client.request("turn/steer", {
         threadId: id,
         expectedTurnId: activeTurnId,
-        input: [{ type: "text", text: clean(message.text), text_elements: [] }],
+        input: [{ type: "text", text: codexInputText(message), text_elements: [] }],
       });
       deliveryTurnId = activeTurnId;
       observedVia = "codex_app_server_turn_steer";
@@ -240,6 +268,9 @@ export async function sendCodexAppServerInput(thread, message, env = process.env
 export async function deliverCodexAppServerPendingInputs(thread, env = process.env) {
   const delivered = [];
   const messages = await listThreadMessages(thread.id, env);
+  const nextQueued = messages.find((message) => message.role === "user" && ["queued", "pending_delivery", "awaiting_ack"].includes(message.state));
+  let next = nextQueued || messages.find(staleSteerFailureMessage);
+  if (!next) return delivered;
   let client;
   try {
     client = await getCodexAppServerClient({ env, home: runtimeHome(env) });
@@ -249,9 +280,43 @@ export async function deliverCodexAppServerPendingInputs(thread, env = process.e
     await appendEvent({ type: "codex_app_server_unavailable", threadId: thread.id, error: errorText }, env).catch(() => {});
     return delivered;
   }
+  const id = codexThreadId(thread);
+  const statusType = clean(client.threadStates.get(id)?.status?.type);
+  const threadState = clean(thread.state);
+  if (id && (!statusType || statusType === "notLoaded" || threadState === "sleeping" || threadState === "failed")) {
+    try {
+      const resumed = await resumeCodexAppServerThread(thread, env);
+      thread = resumed.thread || thread;
+      client = resumed.client || client;
+    } catch (error) {
+      const errorText = publicError(error);
+      await updateThreadMessage(thread.id, next.id, {
+        state: "queued",
+        deliveryState: "waiting_codex_resume",
+        deliveryLastAttemptAt: nowIso(),
+        error: errorText,
+      }, env).catch(() => {});
+      await updateThread(thread.id, { state: "sleeping", lastError: errorText }, env).catch(() => {});
+      await appendEvent({ type: "codex_app_server_resume_failed", threadId: thread.id, codexThreadId: id, error: errorText }, env).catch(() => {});
+      return delivered;
+    }
+  }
+  if (staleSteerFailureMessage(next)) {
+    next = await updateThreadMessage(thread.id, next.id, {
+      state: "queued",
+      deliveryState: "retrying_delivery",
+      deliveryLastAttemptAt: nowIso(),
+      error: null,
+    }, env).catch(() => ({ ...next, state: "queued", deliveryState: "retrying_delivery", error: null }));
+    await updateThread(thread.id, { lastError: null }, env).catch(() => {});
+    await appendEvent({
+      type: "codex_app_server_stale_turn_failed_input_retrying",
+      threadId: thread.id,
+      codexThreadId: id,
+      messageId: next.id,
+    }, env).catch(() => {});
+  }
   const pendingApproval = client.pendingRequestForThread(thread);
-  const next = messages.find((message) => message.role === "user" && ["queued", "pending_delivery", "awaiting_ack"].includes(message.state));
-  if (!next) return delivered;
   const text = clean(next.text);
   if (pendingApproval && /^(\/?approve(?:d)?|yes|y|allow|go|proceed)\b/i.test(text)) {
     const decision = /\bsession\b/i.test(text) ? "acceptForSession" : "accept";
@@ -307,9 +372,12 @@ export async function codexAppServerThreadStatus(thread, env = process.env, coun
   const id = codexThreadId(thread);
   const client = id ? await getCodexAppServerClient({ env, home: runtimeHome(env) }).catch(() => null) : null;
   const state = id && client ? client.threadStates.get(id) || {} : {};
-  const activeTurnId = clean(state.activeTurnId || thread.runtime?.activeTurnId);
   const pendingRequest = client?.pendingRequestForThread(thread) || thread.runtime?.pendingRequest || null;
-  const statusState = appServerStateFromStatus(state.status);
+  const codexStatus = state.status || thread.runtime?.codexStatus || null;
+  const statusState = appServerStateFromStatus(codexStatus);
+  const activeTurnId = ["ready", "failed", "sleeping"].includes(statusState)
+    ? clean(state.activeTurnId)
+    : clean(state.activeTurnId || thread.runtime?.activeTurnId);
   const threadState = clean(thread.state);
   const runtimeState = pendingRequest ? "awaiting_approval" : activeTurnId ? "working" : statusState || (threadState === "sleeping" ? "sleeping" : "ready");
   return {
@@ -319,7 +387,7 @@ export async function codexAppServerThreadStatus(thread, env = process.env, coun
     runtimeKind: "codex-app-server",
     codexThreadId: id || null,
     codexSessionId: codexSessionId(thread) || id || null,
-    codexStatus: state.status || null,
+    codexStatus,
     activeTurnId: activeTurnId || null,
     pendingRequest,
     lease: null,
@@ -430,6 +498,7 @@ export async function hydrateCodexAppServerThreadMessages(thread, codexThread, e
           codexThreadId: codexThread.id,
           codexTurnId: turnId,
           codexItemId: item.id || null,
+          ...codexAppServerMessageFields(codexThread.id, { turnId, itemId: item.id }),
         }, env).catch(() => null);
         count += 1;
       } else if (["agentMessage", "plan", "exitedReviewMode", "contextCompaction"].includes(type)) {
@@ -445,6 +514,7 @@ export async function hydrateCodexAppServerThreadMessages(thread, codexThread, e
           codexThreadId: codexThread.id,
           codexTurnId: turnId,
           codexItemId: item.id || null,
+          ...codexAppServerMessageFields(codexThread.id, { turnId, itemId: item.id }),
         }, env).catch(() => null);
         count += 1;
       }

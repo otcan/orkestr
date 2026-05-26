@@ -45,3 +45,20 @@ export function whatsappProjectionFields(parent = null, thread = null) {
     accountId: whatsappParentAccountId(parent, thread),
   };
 }
+
+export function codexAppServerMessageFields(codexThreadId = "", input = {}) {
+  const turnId = clean(input.turnId || input.codexTurnId);
+  const itemId = clean(input.itemId || input.codexItemId);
+  const requestId = clean(input.requestId || input.codexRequestId);
+  return {
+    originSurface: "codex",
+    originTransport: "codex-app-server",
+    executorKind: "codex",
+    executorTransport: "app-server",
+    executorThreadId: clean(codexThreadId),
+    codexThreadId: clean(codexThreadId),
+    ...(turnId ? { executorTurnId: turnId, codexTurnId: turnId } : {}),
+    ...(itemId ? { executorItemId: itemId, codexItemId: itemId } : {}),
+    ...(requestId ? { executorRequestId: requestId, codexRequestId: requestId } : {}),
+  };
+}

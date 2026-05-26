@@ -146,6 +146,30 @@ export function effortForThread(thread) {
   return clean(thread.codexReasoningEffort || thread.executor?.metadata?.codexReasoningEffort || process.env.ORKESTR_DEFAULT_CODEX_REASONING);
 }
 
+export function codexInputText(message) {
+  const text = clean(message?.text);
+  const attachments = Array.isArray(message?.attachments) ? message.attachments : [];
+  const attachmentLines = attachments
+    .map((attachment, index) => {
+      const filePath = clean(attachment?.path || attachment?.savedPath || attachment?.saved_path);
+      if (!filePath) return "";
+      return [
+        `Attachment ${index + 1}: ${filePath}`,
+        clean(attachment?.filename) ? `filename: ${clean(attachment.filename)}` : "",
+        clean(attachment?.mimetype) ? `mimetype: ${clean(attachment.mimetype)}` : "",
+        clean(attachment?.kind) ? `kind: ${clean(attachment.kind)}` : "",
+      ].filter(Boolean).join("\n");
+    })
+    .filter(Boolean);
+  if (!attachmentLines.length) return text;
+  return [
+    text || "WhatsApp attachment received.",
+    "Attached local file path(s):",
+    ...attachmentLines,
+    "Use the file path(s) above as the source of truth for any attachment content.",
+  ].filter(Boolean).join("\n\n");
+}
+
 export function threadStartParams(thread) {
   const params = {
     cwd: clean(thread.cwd || thread.workspace || thread.repoPath || thread.worktreePath) || null,
@@ -161,7 +185,7 @@ export function threadStartParams(thread) {
 export function turnStartParams(thread, message) {
   const params = {
     threadId: codexThreadId(thread),
-    input: [{ type: "text", text: clean(message.text), text_elements: [] }],
+    input: [{ type: "text", text: codexInputText(message), text_elements: [] }],
     cwd: clean(thread.cwd || thread.workspace || thread.repoPath || thread.worktreePath) || null,
     approvalPolicy: approvalPolicyForThread(thread) || "on-request",
     sandboxPolicy: sandboxPolicyForTurn(thread),
@@ -199,6 +223,7 @@ export async function appendOrUpdateEventMessage(thread, input, env = process.en
 export async function markThreadFromCodexStatus(thread, status, env = process.env) {
   const state = appServerStateFromStatus(status);
   if (!state) return;
+  const activeTurnId = state === "working" ? thread.runtime?.activeTurnId || null : null;
   await updateThread(thread.id, {
     state,
     runtime: {
@@ -206,6 +231,7 @@ export async function markThreadFromCodexStatus(thread, status, env = process.en
       state,
       runtimeKind: "codex-app-server",
       codexStatus: status || null,
+      activeTurnId,
       updatedAt: nowIso(),
     },
   }, env).catch(() => {});

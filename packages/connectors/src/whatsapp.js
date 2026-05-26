@@ -447,6 +447,8 @@ export async function routeWhatsAppInbound(input = {}, env = process.env) {
   const messageInput = {
     role: "user",
     source: "whatsapp_inbound",
+    originSurface: "whatsapp",
+    originTransport: "whatsapp-local-bridge",
     connector: "whatsapp",
     externalId: eventId,
     chatId,
@@ -471,6 +473,7 @@ export async function routeWhatsAppInbound(input = {}, env = process.env) {
     chatId,
     from,
     accountId,
+    attachments: Array.isArray(input.attachments) ? input.attachments : [],
     receivedAt: pickString(input.timestamp, input.receivedAt) || new Date().toISOString(),
   };
   if (contentDuplicate) event.duplicateReason = message.duplicateReason || "active_input";
@@ -769,6 +772,14 @@ function completedFinalReplyForParent(messages, parentId) {
   ) || null;
 }
 
+function completedFinalReplyAfterMessage(messages, parentId, message) {
+  const messageMs = messageTimeMs(message);
+  const final = completedFinalReplyForParent(messages, parentId);
+  if (!final) return null;
+  const finalMs = messageTimeMs(final);
+  return !messageMs || !finalMs || finalMs >= messageMs ? final : null;
+}
+
 function messageTimeMs(message = {}) {
   const ms = Date.parse(String(message.timestamp || message.createdAt || ""));
   return Number.isFinite(ms) ? ms : 0;
@@ -837,6 +848,11 @@ function whatsappReplyBackfillWindowMs(env = process.env) {
   return Number.isFinite(parsed) ? Math.max(0, parsed) : 24 * 60 * 60 * 1000;
 }
 
+function whatsappProgressBackfillWindowMs(env = process.env) {
+  const parsed = Number(env.ORKESTR_WHATSAPP_PROGRESS_BACKFILL_WINDOW_MS || 5 * 60 * 1000);
+  return Number.isFinite(parsed) ? Math.max(0, parsed) : 5 * 60 * 1000;
+}
+
 function oldestOutboundDeliveryMs(outboundDeliveries = []) {
   return Math.min(
     ...outboundDeliveries
@@ -855,6 +871,16 @@ function staleUntrackedWhatsAppReply(message = {}, outboundDeliveries = [], env 
   return Number.isFinite(oldestDeliveryMs) && messageMs < oldestDeliveryMs;
 }
 
+function staleUntrackedWhatsAppProgress(message = {}, outboundDeliveries = [], env = process.env) {
+  const messageMs = messageTimeMs(message);
+  if (!messageMs) return false;
+  const backfillWindowMs = whatsappProgressBackfillWindowMs(env);
+  if (backfillWindowMs && Date.now() - messageMs > backfillWindowMs) return true;
+  if (outboundDeliveries.length < whatsappOutboundDeliveryRetentionLimit(env)) return false;
+  const oldestDeliveryMs = oldestOutboundDeliveryMs(outboundDeliveries);
+  return Number.isFinite(oldestDeliveryMs) && messageMs < oldestDeliveryMs;
+}
+
 function threadAllowsWhatsAppMirroring(thread) {
   if (!thread?.binding) return true;
   return thread.binding.mirrorToWhatsApp !== false && thread.binding.mirrorReplies !== false;
@@ -866,13 +892,16 @@ function whatsappMessageOrigin(message, state = null) {
   return Boolean((state?.inboundEvents || []).some((event) => event.messageId === message.id));
 }
 
-function initialQueueDeliveryState(status = null, message = null) {
+export function initialQueueDeliveryState(status = null, message = null) {
   const parsed = parseThreadInputCommand({ text: message?.text || "" });
   if (parsed.command === "interrupt") return "interrupting";
   if (!status) return "";
   const state = String(status.state || "").trim().toLowerCase();
+  const runtimeKind = String(status.runtimeKind || status.runtimeState || "").trim().toLowerCase();
+  const isCodexAppServer = runtimeKind === "codex-app-server";
   if (state === "working") return "awaiting_runtime_completion";
-  if (state === "waking" || state === "sleeping" || !status.sessionName) return "waiting_runtime_start";
+  if (state === "waking" || state === "sleeping") return "waiting_runtime_start";
+  if (!isCodexAppServer && !status.sessionName) return "waiting_runtime_start";
   if (status.promptReady === false) return "waiting_runtime_ready";
   return "";
 }
@@ -1438,7 +1467,7 @@ async function deliverWhatsAppRepliesOnce(env = process.env, fetchImpl = fetch) 
         const parent = messages.find((entry) => entry.id === message.parentMessageId);
         const whatsappOrigin = parent?.connector === "whatsapp" || parent?.source === "whatsapp_inbound" || message.connector === "whatsapp";
         if (!whatsappOrigin) continue;
-        if (staleUntrackedWhatsAppReply(message, outboundDeliveries, env)) {
+        if (staleUntrackedWhatsAppProgress(message, outboundDeliveries, env)) {
           skipped.push({ agentId, threadId, messageId: message.id, reason: "stale_untracked_reply" });
           continue;
         }
@@ -1446,7 +1475,7 @@ async function deliverWhatsAppRepliesOnce(env = process.env, fetchImpl = fetch) 
           skipped.push({ agentId, threadId, messageId: message.id, reason: "mirroring_disabled" });
           continue;
         }
-        if (completedFinalReplyForParent(messages, message.parentMessageId)) {
+        if (completedFinalReplyAfterMessage(messages, message.parentMessageId, message)) {
           skipped.push({ agentId, threadId, messageId: message.id, reason: "final_reply_available" });
           continue;
         }

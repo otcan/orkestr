@@ -2649,6 +2649,42 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     return new Date(String(message.timestamp || message.createdAt || new Date().toISOString()));
   }
 
+  debugModelLabel(thread: ThreadSummary | null): string {
+    const model = this.codexModelName(thread).replace(/^Syncing model$/i, "unknown");
+    const effort = this.shortReasoningEffort(thread);
+    return effort ? `${model}/${effort}` : model;
+  }
+
+  debugMessageLabel(thread: ThreadSummary | null): string {
+    const message = thread ? this.latestCachedThreadMessage(thread) : null;
+    const role = String(message?.role || thread?.lastMessageRole || "").trim().toLowerCase();
+    const phase = String(this.messagePhase(message) || thread?.lastMessagePhase || "").trim().toLowerCase();
+    if (role === "user") return "user";
+    if (!phase || phase === "final_answer" || phase === "final") return "final";
+    if (phase === "commentary") return "info";
+    return phase.replace(/_/g, "-");
+  }
+
+  debugQueueCount(thread: ThreadSummary | null): number {
+    if (!thread) return 0;
+    return Math.max(0, Number(thread.pendingCount || 0) + Number(thread.awaitingAckCount || 0));
+  }
+
+  debugCpuLabel(): string {
+    const value = this.systemCpuPercent();
+    return Number.isFinite(value) && value > 0 ? `${Math.round(value)}%` : "--";
+  }
+
+  private shortReasoningEffort(thread: ThreadSummary | null): string {
+    const effort = this.codexReasoningEffortLabel(thread).toLowerCase();
+    if (!effort || effort === "default") return "";
+    if (effort === "xhigh") return "xh";
+    if (effort === "high") return "h";
+    if (effort === "medium") return "m";
+    if (effort === "low") return "l";
+    return effort;
+  }
+
   attachmentLabel(attachment: Record<string, unknown>): string {
     return String(attachment["name"] || attachment["filename"] || attachment["path"] || attachment["saved_path"] || "attachment");
   }

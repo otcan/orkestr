@@ -8,6 +8,35 @@ import { listThreadRecords, saveThreadRecords } from "../../storage/src/thread-r
 const runningThreadIds = new Set();
 const activeInputStates = new Set(["queued", "pending_delivery", "awaiting_ack", "running"]);
 const whatsappSources = new Set(["whatsapp", "whatsapp_inbound", "whatsapp_client"]);
+const messageStringFields = [
+  "connector",
+  "externalId",
+  "chatId",
+  "from",
+  "accountId",
+  "phase",
+  "eventId",
+  "deliveryState",
+  "observedVia",
+  "runtimeLeaseId",
+  "deliveredAt",
+  "error",
+  "originSurface",
+  "originTransport",
+  "executorKind",
+  "executorTransport",
+  "executorThreadId",
+  "executorTurnId",
+  "executorItemId",
+  "executorRequestId",
+  "codexThreadId",
+  "codexTurnId",
+  "codexItemId",
+  "codexRequestId",
+  "codexModel",
+  "codexReasoningEffort",
+  "codexModeLive",
+];
 
 function safeThreadId(threadId) {
   return String(threadId || "").replace(/[^a-zA-Z0-9_.-]/g, "_") || "default";
@@ -230,7 +259,7 @@ export async function appendThreadMessage(threadId, input, env = process.env) {
     cursor,
     state: String(input.state || "completed"),
   };
-  for (const key of ["connector", "externalId", "chatId", "from", "accountId", "phase", "eventId", "deliveryState", "observedVia", "runtimeLeaseId", "deliveredAt", "error"]) {
+  for (const key of messageStringFields) {
     const value = String(input[key] || "").trim();
     if (value) message[key] = value;
   }
@@ -268,6 +297,8 @@ function whatsappBindingInputDefaults(thread, input = {}) {
   return {
     ...input,
     connector: String(input.connector || "whatsapp").trim(),
+    originSurface: String(input.originSurface || "whatsapp").trim(),
+    originTransport: String(input.originTransport || "whatsapp-direct").trim(),
     chatId,
     accountId: String(
       input.accountId ||

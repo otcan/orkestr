@@ -109,6 +109,10 @@ function sessionRoot(env = process.env) {
   return path.join(bridgeRoot(env), "sessions");
 }
 
+function inboundMediaRoot(env = process.env) {
+  return path.join(bridgeRoot(env), "inbound-media");
+}
+
 export function webCacheRoot(env = process.env) {
   return path.join(bridgeRoot(env), "web-cache");
 }
@@ -117,6 +121,7 @@ async function ensureBridgeDirs(env = process.env) {
   await ensureDataDirs(env);
   await fs.mkdir(path.join(bridgeRoot(env), "qrs"), { recursive: true });
   await fs.mkdir(sessionRoot(env), { recursive: true });
+  await fs.mkdir(inboundMediaRoot(env), { recursive: true });
   await fs.mkdir(webCacheRoot(env), { recursive: true });
 }
 
@@ -470,6 +475,79 @@ function authReadyTimeoutMs(env = process.env, options = {}) {
   return Number.isFinite(parsed) ? Math.max(30_000, parsed) : 180_000;
 }
 
+function safeFilePart(value = "", fallback = "attachment") {
+  const cleaned = String(value || "")
+    .trim()
+    .replace(/[/\\]+/g, "-")
+    .replace(/[^a-zA-Z0-9._-]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 96);
+  return cleaned || fallback;
+}
+
+function extensionForMime(mimetype = "") {
+  const normalized = String(mimetype || "").toLowerCase();
+  if (normalized.includes("jpeg") || normalized.includes("jpg")) return ".jpg";
+  if (normalized.includes("png")) return ".png";
+  if (normalized.includes("webp")) return ".webp";
+  if (normalized.includes("gif")) return ".gif";
+  if (normalized.includes("pdf")) return ".pdf";
+  if (normalized.includes("ogg")) return ".ogg";
+  if (normalized.includes("mpeg") || normalized.includes("mp3")) return ".mp3";
+  if (normalized.includes("mp4")) return ".mp4";
+  if (normalized.includes("csv")) return ".csv";
+  if (normalized.includes("json")) return ".json";
+  if (normalized.includes("plain")) return ".txt";
+  return ".bin";
+}
+
+async function saveInboundMedia(accountId, message, env = process.env) {
+  if (!message?.hasMedia || typeof message.downloadMedia !== "function") return [];
+  let media = null;
+  try {
+    media = await message.downloadMedia();
+  } catch (error) {
+    await appendEvent({
+      type: "whatsapp_local_inbound_media_download_failed",
+      accountId,
+      eventId: String(message.id?._serialized || ""),
+      error: error.message || String(error),
+    }, env).catch(() => {});
+    return [];
+  }
+  if (!media?.data) return [];
+  const date = new Date().toISOString().slice(0, 10);
+  const outDir = path.join(inboundMediaRoot(env), date);
+  await fs.mkdir(outDir, { recursive: true });
+  const eventId = safeFilePart(String(message.id?._serialized || `${accountId}-${Date.now()}`), "message");
+  const originalName = safeFilePart(media.filename || message._data?.filename || "", "");
+  const ext = path.extname(originalName) || extensionForMime(media.mimetype);
+  const baseName = originalName
+    ? `${eventId}-${originalName}`
+    : `${eventId}-attachment${ext}`;
+  const filePath = path.join(outDir, baseName);
+  await fs.writeFile(filePath, Buffer.from(media.data, "base64"));
+  return [{
+    path: filePath,
+    filename: originalName || path.basename(filePath),
+    mimetype: media.mimetype || "",
+    kind: message.type || "",
+    size: Buffer.byteLength(media.data, "base64"),
+  }];
+}
+
+function attachmentSummaryText(attachments = []) {
+  if (!attachments.length) return "";
+  return [
+    "WhatsApp attachment received.",
+    ...attachments.map((attachment, index) => [
+      `Attachment ${index + 1}: ${attachment.path}`,
+      attachment.filename ? `filename: ${attachment.filename}` : "",
+      attachment.mimetype ? `mimetype: ${attachment.mimetype}` : "",
+    ].filter(Boolean).join("\n")),
+  ].join("\n\n");
+}
+
 async function clearQr(accountId, env = process.env) {
   await fs.unlink(qrPath(accountId, env)).catch(() => {});
 }
@@ -485,11 +563,21 @@ async function handleInboundMessage(accountId, message, env = process.env, optio
   if (options.ownOnly && !fromMe) return;
   if (message?.isStatus) return;
   const text = String(message?.body || "").trim();
-  if (!text) return;
+  const attachments = await saveInboundMedia(accountId, message, env).catch((error) => {
+    void appendEvent({
+      type: "whatsapp_local_inbound_media_save_failed",
+      accountId,
+      eventId: String(message?.id?._serialized || ""),
+      error: error.message || String(error),
+    }, env).catch(() => {});
+    return [];
+  });
+  if (!text && !attachments.length) return;
   const { chatId, from, fromMe: routeFromMe } = localWhatsAppMessageRouteFields(message);
   const eventId = String(message.id?._serialized || `${accountId}:${chatId}:${message.timestamp || Date.now()}`).trim();
   if (fromMe && outboundMessageIds.has(eventId)) return;
   if (fromMe && outboundMessageTextKeys.has(textKey(accountId, chatId, text))) return;
+  const routedText = text || attachmentSummaryText(attachments);
   try {
     const { deliverWhatsAppReplies, routeWhatsAppInbound } = await import("./whatsapp.js");
     const routed = await routeWhatsAppInbound(
@@ -499,7 +587,8 @@ async function handleInboundMessage(accountId, message, env = process.env, optio
         from,
         accountId,
         fromMe: routeFromMe,
-        text,
+        text: routedText,
+        attachments,
         timestamp: message.timestamp ? new Date(Number(message.timestamp) * 1000).toISOString() : nowIso(),
       },
       env,

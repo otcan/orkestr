@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import {
+  codexAppServerThreadStatus,
   deliverCodexAppServerPendingInputs,
   importCodexAppServerThread,
   listCodexAppServerThreads,
@@ -11,7 +12,7 @@ import {
   stopCodexAppServerClients,
 } from "../packages/core/src/codex-app-server.js";
 import { migrateCodexThreadsToAppServer } from "../packages/core/src/codex-app-server-migration.js";
-import { createThread, enqueueThreadInput, getThread, listThreadMessages, updateThread } from "../packages/core/src/threads.js";
+import { createThread, enqueueThreadInput, getThread, listThreadMessages, updateThread, updateThreadMessage } from "../packages/core/src/threads.js";
 import { deliverWhatsAppReplies } from "../packages/connectors/src/whatsapp.js";
 import { writeConnectorConfig } from "../packages/storage/src/config.js";
 
@@ -70,7 +71,7 @@ rl.on("line", (line) => {
   if (message.method === "initialize") return send({ id, result: { userAgent: "fake", platformFamily: "linux", platformOs: "linux" } });
   if (message.method === "initialized") return;
   if (message.method === "thread/start") {
-    const thread = { id: "thr_" + String(state.threads.length + 1).padStart(3, "0"), sessionId: "sess_001", name: "", preview: "", cwd: params.cwd || "", status: { type: "idle" }, turns: [] };
+    const thread = { id: "thr_" + String(state.threads.length + 1).padStart(3, "0"), sessionId: "sess_001", name: "", preview: "", cwd: params.cwd || "", status: { type: "idle" }, loaded: true, turns: [] };
     state.threads.push(thread);
     writeState(state);
     send({ id, result: { thread } });
@@ -83,9 +84,16 @@ rl.on("line", (line) => {
     writeState(state);
     return send({ id, result: {} });
   }
-  if (message.method === "thread/list") return send({ id, result: { data: state.threads.map(({ turns, ...thread }) => thread), nextCursor: null } });
+  if (message.method === "thread/list") return send({ id, result: { data: state.threads.map(({ turns, loaded, ...thread }) => ({ ...thread, status: loaded ? (thread.status || { type: "idle" }) : { type: "notLoaded" } })), nextCursor: null } });
   if (message.method === "thread/read") return send({ id, result: { thread: state.threads.find((item) => item.id === params.threadId) || { id: params.threadId, turns: [] } } });
-  if (message.method === "thread/resume") return send({ id, result: { thread: state.threads.find((item) => item.id === params.threadId) || { id: params.threadId, sessionId: params.threadId } } });
+  if (message.method === "thread/resume") {
+    const thread = state.threads.find((item) => item.id === params.threadId);
+    if (!thread) return send({ id, error: { code: -32000, message: "thread not found: " + params.threadId } });
+    thread.loaded = true;
+    thread.status = { type: "idle" };
+    writeState(state);
+    return send({ id, result: { thread } });
+  }
   if (message.method === "thread/unsubscribe") return send({ id, result: { status: "unsubscribed" } });
   if (message.method === "thread/archive") return send({ id, result: {} });
   if (message.method === "turn/steer") {
@@ -96,20 +104,23 @@ rl.on("line", (line) => {
   }
   if (message.method === "turn/start") {
     const thread = state.threads.find((item) => item.id === params.threadId);
+    if (!thread || !thread.loaded) return send({ id, error: { code: -32000, message: "thread not found: " + params.threadId } });
     const turn = { id: "turn_" + Date.now(), threadId: params.threadId, status: "inProgress", items: [] };
     const text = params.input?.find((item) => item.type === "text")?.text || "";
     const user = { type: "userMessage", id: "user_" + turn.id, content: [{ type: "text", text }] };
     const agent = { type: "agentMessage", id: "agent_" + turn.id, text: "Reply to: " + text, phase: "final_answer" };
-    if (thread) {
-      turn.items = [user, agent];
-      thread.turns.push(turn);
-      writeState(state);
-    }
+    turn.items = [user, agent];
+    thread.turns.push(turn);
+    writeState(state);
     send({ id, result: { turn } });
     send({ method: "turn/started", params: { turn } });
     send({ method: "item/completed", params: { threadId: params.threadId, turnId: turn.id, item: agent } });
     send({ method: "turn/completed", params: { turn: { ...turn, status: "completed" } } });
     return;
+  }
+  if (message.method === "turn/steer") {
+    if (params.expectedTurnId === "stale-turn") return send({ id, error: { code: -32000, message: "no active turn to steer" } });
+    return send({ id, result: { turnId: params.expectedTurnId } });
   }
   send({ id, result: {} });
 });
@@ -142,6 +153,45 @@ test("Codex app-server starts threads, delivers input, and imports existing thre
     assert.equal(delivered.length, 1);
     assert.ok(messages.some((message) => message.source === "codex-app-server" && /Reply to: hello app server/.test(message.text)));
 
+    await updateThread(started.thread.id, {
+      state: "working",
+      runtime: {
+        ...(started.thread.runtime || {}),
+        runtimeKind: "codex-app-server",
+        state: "working",
+        activeTurnId: "stale-turn",
+      },
+    }, env);
+    await enqueueThreadInput(started.thread.id, { text: "recover stale steer" }, env);
+    const staleDelivery = await deliverCodexAppServerPendingInputs(await getThread(started.thread.id, env), env);
+    const staleMessages = await listThreadMessages(started.thread.id, env);
+    assert.equal(staleDelivery.length, 1);
+    assert.ok(staleMessages.some((message) => message.source === "codex-app-server" && /Reply to: recover stale steer/.test(message.text)));
+
+    const failedStale = await enqueueThreadInput(started.thread.id, { text: "recover failed stale steer" }, env);
+    await updateThreadMessage(started.thread.id, failedStale.id, {
+      state: "failed",
+      deliveryState: "failed",
+      error: "no active turn to steer",
+    }, env);
+    await updateThread(started.thread.id, {
+      state: "failed",
+      lastError: "no active turn to steer",
+      runtime: {
+        ...(started.thread.runtime || {}),
+        runtimeKind: "codex-app-server",
+        state: "working",
+        activeTurnId: "stale-turn",
+      },
+    }, env);
+    const failedRetry = await deliverCodexAppServerPendingInputs(await getThread(started.thread.id, env), env);
+    const failedRetryMessages = await listThreadMessages(started.thread.id, env);
+    const recoveredFailed = failedRetryMessages.find((message) => message.id === failedStale.id);
+    assert.equal(failedRetry.length, 1);
+    assert.equal(recoveredFailed.state, "completed");
+    assert.equal(recoveredFailed.error, null);
+    assert.ok(failedRetryMessages.some((message) => message.source === "codex-app-server" && /Reply to: recover failed stale steer/.test(message.text)));
+
     const whatsappThread = await createThread({
       id: "app-server-whatsapp-thread",
       name: "App Server WhatsApp Thread",
@@ -170,17 +220,104 @@ test("Codex app-server starts threads, delivers input, and imports existing thre
     assert.equal(whatsappReply.connector, "whatsapp");
     assert.equal(whatsappReply.chatId, "chat-1");
     assert.equal(whatsappReply.accountId, "account-1");
+    assert.equal(whatsappReply.originSurface, "codex");
+    assert.equal(whatsappReply.originTransport, "codex-app-server");
+    assert.equal(whatsappReply.executorKind, "codex");
+    assert.equal(whatsappReply.executorTransport, "app-server");
+    assert.equal(whatsappReply.executorThreadId, startedWhatsApp.thread.executor.codexThreadId);
+    assert.equal(whatsappReply.codexThreadId, startedWhatsApp.thread.executor.codexThreadId);
+    await enqueueThreadInput(startedWhatsApp.thread.id, {
+      text: "add this too",
+      source: "whatsapp_inbound",
+      connector: "whatsapp",
+      chatId: "chat-1",
+      accountId: "account-1",
+      attachments: [{ path: "/tmp/fitness-label.jpg", filename: "fitness-label.jpg", mimetype: "image/jpeg", kind: "image" }],
+    }, env);
+    await deliverCodexAppServerPendingInputs(startedWhatsApp.thread, env);
+    const attachmentMessages = await listThreadMessages(startedWhatsApp.thread.id, env);
+    assert.ok(attachmentMessages.some((message) =>
+      message.source === "codex-app-server" &&
+      /Reply to: add this too/.test(message.text) &&
+      String(message.text || "").includes("Attachment 1: /tmp/fitness-label.jpg")
+    ));
     await writeConnectorConfig("whatsapp", { bridgeMode: "external", bridgeUrl: "http://wa.local" }, env);
     const whatsappCalls = [];
     const whatsappDelivery = await deliverWhatsAppReplies(env, async (url, options) => {
       whatsappCalls.push({ url, body: JSON.parse(options.body) });
       return response({ ok: true, ids: ["sent-app-server-reply"] });
     });
-    assert.equal(whatsappDelivery.delivered.length, 1);
+    assert.equal(whatsappDelivery.delivered.length, 2);
+    assert.equal(whatsappCalls.length, 2);
     assert.equal(whatsappCalls[0].url.pathname, "/send-text");
     assert.equal(whatsappCalls[0].body.to, "chat-1");
     assert.equal(whatsappCalls[0].body.accountId, "account-1");
-    assert.match(whatsappCalls[0].body.text, /Reply to: whatsapp ping/);
+    assert.ok(whatsappCalls.some((call) => /Reply to: whatsapp ping/.test(call.body.text)));
+    assert.ok(whatsappCalls.some((call) => call.body.text.includes("Attachment 1: /tmp/fitness-label.jpg")));
+
+    const rawState = JSON.parse(await fs.readFile(fake.stateFile, "utf8"));
+    rawState.threads.push({
+      id: "old_cli_001",
+      sessionId: "old_cli_001",
+      name: "Old CLI Thread",
+      preview: "Imported old CLI session",
+      cwd: home,
+      status: { type: "notLoaded" },
+      loaded: false,
+      turns: [],
+    });
+    await fs.writeFile(fake.stateFile, JSON.stringify(rawState, null, 2), "utf8");
+    const sleeping = await createThread({
+      id: "sleeping-app-server-thread",
+      name: "Sleeping App Server Thread",
+      state: "sleeping",
+      cwd: home,
+      executorId: "codex",
+      executor: {
+        type: "codex",
+        transport: "app-server",
+        codexThreadId: "old_cli_001",
+        codexSessionId: "old_cli_001",
+      },
+      runtimeKind: "codex-app-server",
+      codexThreadId: "old_cli_001",
+      codexSessionId: "old_cli_001",
+      runtime: {
+        runtimeKind: "codex-app-server",
+        state: "sleeping",
+      },
+      lastError: "thread not found: old_cli_001",
+    }, env);
+    await enqueueThreadInput(sleeping.id, { text: "resume before send" }, env);
+    const resumedDelivery = await deliverCodexAppServerPendingInputs(sleeping, env);
+    const resumedThread = await getThread(sleeping.id, env);
+    const resumedMessages = await listThreadMessages(sleeping.id, env);
+    assert.equal(resumedDelivery.length, 1);
+    assert.equal(resumedThread.state, "ready");
+    assert.equal(resumedThread.lastError, null);
+    let resumedStatus = null;
+    for (let attempt = 0; attempt < 10; attempt += 1) {
+      resumedStatus = await codexAppServerThreadStatus({
+        ...resumedThread,
+        runtime: { ...(resumedThread.runtime || {}), activeTurnId: "stale-turn" },
+      }, env);
+      if (resumedStatus.state === "ready") break;
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    assert.equal(resumedStatus.state, "ready");
+    assert.equal(resumedStatus.activeTurnId, null);
+    assert.ok(resumedMessages.some((message) => message.source === "codex-app-server" && /Reply to: resume before send/.test(message.text)));
+    stopCodexAppServerClients();
+    const coldStatus = await codexAppServerThreadStatus({
+      ...resumedThread,
+      runtime: {
+        ...(resumedThread.runtime || {}),
+        activeTurnId: "stale-turn",
+        codexStatus: { type: "idle" },
+      },
+    }, env);
+    assert.equal(coldStatus.state, "ready");
+    assert.equal(coldStatus.activeTurnId, null);
 
     const staleThread = await createThread({ id: "app-server-stale-turn-thread", name: "App Server Stale Turn Thread", cwd: home, executorId: "codex", executor: { type: "codex" } }, env);
     const startedStale = await startCodexAppServerThread(staleThread, env);
@@ -192,16 +329,16 @@ test("Codex app-server starts threads, delivers input, and imports existing thre
       ...startedStale.thread,
       runtime: { ...(startedStale.thread.runtime || {}), activeTurnId: "stale-turn", state: "working" },
     }, env);
-    const staleMessages = await listThreadMessages(startedStale.thread.id, env);
-    const staleInput = staleMessages.find((message) => message.role === "user" && /recover stale turn/.test(message.text));
-    const staleReply = staleMessages.find((message) => message.source === "codex-app-server" && /Reply to: recover stale turn/.test(message.text));
+    const staleTurnMessages = await listThreadMessages(startedStale.thread.id, env);
+    const staleInput = staleTurnMessages.find((message) => message.role === "user" && /recover stale turn/.test(message.text));
+    const staleReply = staleTurnMessages.find((message) => message.source === "codex-app-server" && /Reply to: recover stale turn/.test(message.text));
     assert.equal(staleDelivered.length, 1);
     assert.equal(staleInput.state, "completed");
     assert.equal(staleInput.observedVia, "codex_app_server_turn_start_after_stale_steer");
     assert.ok(staleReply);
 
     const listed = await listCodexAppServerThreads({}, env);
-    assert.equal(listed.data.length, 3);
+    assert.equal(listed.data.length, 4);
     await createThread({
       id: "legacy-codex-thread",
       name: "Legacy Codex Thread",

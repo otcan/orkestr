@@ -3460,6 +3460,77 @@ function whatsappParentAccountId(parent = null, thread = null) {
   return String(parent?.accountId || binding.responderAccountId || binding.outboundAccountId || "").trim();
 }
 
+function codexRolloutPathForThread(thread = {}) {
+  return String(
+    thread?.codexRolloutPath ||
+    thread?.executor?.metadata?.codexRolloutPath ||
+    thread?.runtime?.operatorRolloutPath ||
+    "",
+  ).trim();
+}
+
+function shouldSyncDetachedRollout(thread = {}, activeLeaseThreadIds = new Set()) {
+  if (!thread?.id || activeLeaseThreadIds.has(thread.id)) return false;
+  if (!threadUsesCodexAppServer(thread)) return false;
+  if (String(thread?.binding?.connector || "").trim().toLowerCase() !== "whatsapp") return false;
+  return Boolean(codexThreadId(thread) || codexRolloutPathForThread(thread));
+}
+
+async function appendRolloutMessages({ thread, rolloutPath, body, start, initialScan, env }) {
+  const parsed = parseAssistantRolloutMessages(body, thread.id, start);
+  if (!parsed.length) return 0;
+  const existing = await listThreadMessages(thread.id, env);
+  const existingEventKeys = new Set(existing.map(rolloutMessageEventKey));
+  const existingTextKeys = new Set(
+    existing
+      .filter((message) => message.role === "assistant")
+      .map(rolloutMessageNearTextKey),
+  );
+  const latestExistingMs = Math.max(0, ...existing.map(messageTimeMs).filter(Number.isFinite));
+  let appended = 0;
+  const codexId = codexThreadId(thread);
+  for (const message of parsed) {
+    if (initialScan && latestExistingMs && timestampMs(message.timestamp) <= latestExistingMs + 1000) continue;
+    const eventKey = rolloutMessageEventKey(message);
+    const textKey = rolloutMessageNearTextKey(message);
+    if (existingEventKeys.has(eventKey) || existingTextKeys.has(textKey)) continue;
+    const whatsappParent = latestWhatsAppInput(existing, message.timestamp, thread);
+    await appendThreadMessage(thread.id, {
+      role: "assistant",
+      source: message.source,
+      text: message.text,
+      state: "completed",
+      cursor: null,
+      timestamp: message.timestamp,
+      phase: message.phase,
+      eventId: message.eventId,
+      parentMessageId: whatsappParent?.id || null,
+      connector: whatsappParent ? "whatsapp" : "",
+      chatId: whatsappParentChatId(whatsappParent, thread),
+      accountId: whatsappParentAccountId(whatsappParent, thread),
+      originSurface: "codex",
+      originTransport: "codex-rollout",
+      executorKind: "codex",
+      executorTransport: "cli-rollout",
+      executorThreadId: codexId,
+      codexThreadId: codexId,
+    }, env);
+    existingEventKeys.add(eventKey);
+    existingTextKeys.add(textKey);
+    appended += 1;
+  }
+  if (appended > 0) {
+    await appendEvent({
+      type: "detached_codex_rollout_messages_appended",
+      threadId: thread.id,
+      codexThreadId: codexId,
+      rolloutPath,
+      appended,
+    }, env).catch(() => {});
+  }
+  return appended;
+}
+
 async function syncLeaseRollout(lease, env = process.env) {
   const thread = await getThread(lease.threadId, env);
   const codexMetadata = await resolveCodexThreadMetadata(thread, env).catch(() => ({}));
@@ -3519,7 +3590,7 @@ async function syncLeaseRollout(lease, env = process.env) {
   const existingEventKeys = new Set(existing.map(rolloutMessageEventKey));
   const existingTextKeys = new Set(
     existing
-      .filter((message) => message.source === "codex-rollout" && message.role === "assistant")
+      .filter((message) => message.role === "assistant")
       .map(rolloutMessageNearTextKey),
   );
   let appended = 0;
@@ -3562,6 +3633,68 @@ async function syncLeaseRollout(lease, env = process.env) {
     },
     appended,
   };
+}
+
+async function syncDetachedCodexRollouts(activeLeaseThreadIds = new Set(), env = process.env) {
+  const threads = await listThreads(env);
+  let appended = 0;
+  for (const thread of threads) {
+    if (!shouldSyncDetachedRollout(thread, activeLeaseThreadIds)) continue;
+    let rolloutPath = codexRolloutPathForThread(thread);
+    const codexMetadata = rolloutPath ? {} : await resolveCodexThreadMetadata(thread, env).catch(() => ({}));
+    let currentThread = thread;
+    if (Object.keys(codexMetadata).length) {
+      currentThread = await updateThread(thread.id, {
+        ...codexMetadata,
+        executor: {
+          ...(thread.executor || {}),
+          codexThreadId: codexMetadata.codexThreadId || thread?.executor?.codexThreadId || "",
+          metadata: { ...(thread.executor?.metadata || {}), ...codexMetadata },
+        },
+      }, env).catch(() => thread);
+      rolloutPath = codexRolloutPathForThread(currentThread);
+    }
+    rolloutPath = rolloutPath || await resolveCodexRolloutPath(codexThreadId(currentThread));
+    if (!rolloutPath) continue;
+    const stats = await fs.stat(rolloutPath).catch(() => null);
+    if (!stats?.isFile()) continue;
+    const size = Number(stats.size || 0) || 0;
+    const runtime = currentThread.runtime && typeof currentThread.runtime === "object" ? currentThread.runtime : {};
+    const storedPath = String(runtime.operatorRolloutPath || "").trim();
+    const storedOffset = Math.max(0, Number(runtime.operatorRolloutOffset || 0) || 0);
+    const hasStoredOffset = storedPath === rolloutPath && storedOffset > 0;
+    const lookbackBytes = rolloutSyncLookbackBytes(env);
+    const start = hasStoredOffset ? Math.min(storedOffset, size) : Math.max(0, size - lookbackBytes);
+    if (size > start) {
+      const handle = await fs.open(rolloutPath, "r");
+      let body = "";
+      try {
+        const buffer = Buffer.alloc(size - start);
+        const { bytesRead } = await handle.read(buffer, 0, buffer.length, start);
+        body = buffer.subarray(0, bytesRead).toString("utf8");
+      } finally {
+        await handle.close().catch(() => {});
+      }
+      appended += await appendRolloutMessages({
+        thread: currentThread,
+        rolloutPath,
+        body,
+        start,
+        initialScan: !hasStoredOffset,
+        env,
+      }).catch(() => 0);
+    }
+    await updateThread(currentThread.id, {
+      runtime: {
+        ...runtime,
+        runtimeKind: runtime.runtimeKind || currentThread.runtimeKind || "codex-app-server",
+        operatorRolloutPath: rolloutPath,
+        operatorRolloutOffset: size,
+        operatorRolloutSyncedAt: nowIso(),
+      },
+    }, env).catch(() => {});
+  }
+  return { appended };
 }
 
 async function syncRuntimeLeasesOnce(env = process.env) {
@@ -3708,6 +3841,9 @@ async function syncRuntimeLeasesOnce(env = process.env) {
     next.push(leaseForStorage);
     changed = changed || JSON.stringify(leaseForStorage) !== JSON.stringify(lease);
   }
+  const activeLeaseThreadIds = new Set(next.filter((lease) => !lease.endedAt).map((lease) => lease.threadId));
+  const detached = await syncDetachedCodexRollouts(activeLeaseThreadIds, env).catch(() => ({ appended: 0 }));
+  appended += detached.appended || 0;
   if (changed) await saveRuntimeLeases(next, env);
   return { leases: next, appended };
 }
