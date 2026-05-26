@@ -47,6 +47,60 @@ async function removeDemoHome(home) {
   });
 }
 
+async function writeFakeCodexAppServer(home) {
+  const binDir = path.join(home, "bin");
+  await fs.mkdir(binDir, { recursive: true });
+  const command = path.join(binDir, "codex");
+  await fs.writeFile(
+    command,
+    `#!/usr/bin/env node
+const readline = require("node:readline");
+
+const args = process.argv.slice(2);
+if (args.includes("--version")) {
+  console.log("codex fake-app-server 0.0.0");
+  process.exit(0);
+}
+if (args[0] !== "app-server") {
+  console.error("fake Codex only supports app-server for the Orkestr demo");
+  process.exit(2);
+}
+
+const rl = readline.createInterface({ input: process.stdin });
+const respond = (id, result) => {
+  process.stdout.write(JSON.stringify({ id, result }) + "\\n");
+};
+
+rl.on("line", (line) => {
+  let message;
+  try {
+    message = JSON.parse(line);
+  } catch {
+    return;
+  }
+  if (!Object.prototype.hasOwnProperty.call(message, "id")) return;
+  if (message.method === "initialize") {
+    respond(message.id, { serverInfo: { name: "fake-codex", version: "0.0.0" } });
+  } else if (message.method === "thread/start") {
+    respond(message.id, {
+      thread: {
+        id: "demo-codex-thread",
+        sessionId: "demo-codex-session",
+        name: message.params?.name || "Demo Coding Agent",
+      },
+    });
+  } else if (message.method === "thread/name/set") {
+    respond(message.id, { ok: true });
+  } else {
+    respond(message.id, { ok: true });
+  }
+});
+`,
+    { mode: 0o755 },
+  );
+  return command;
+}
+
 async function commandOk(command, args = ["--version"], options = {}) {
   try {
     await execFileAsync(command, args, { timeout: 5000, ...options });
@@ -66,16 +120,21 @@ export async function runCodingAgentDemo({ port = Number(process.env.ORKESTR_COD
     ORKESTR_BROWSER_LAUNCH_DISABLED: process.env.ORKESTR_BROWSER_LAUNCH_DISABLED,
     ORKESTR_BROWSER_DESKTOP_MODE: process.env.ORKESTR_BROWSER_DESKTOP_MODE,
     ORKESTR_RECOVER_RUNNING_ON_START: process.env.ORKESTR_RECOVER_RUNNING_ON_START,
+    ORKESTR_CODEX_BIN: process.env.ORKESTR_CODEX_BIN,
+    CODEX_HOME: process.env.CODEX_HOME,
   };
   let server = null;
 
   try {
+    const fakeCodex = await writeFakeCodexAppServer(home);
     process.env.ORKESTR_HOME = home;
     process.env.ORKESTR_PORT = String(port);
     process.env.ORKESTR_HOST = "127.0.0.1";
     process.env.ORKESTR_BROWSER_LAUNCH_DISABLED = "1";
     process.env.ORKESTR_BROWSER_DESKTOP_MODE = "profiles";
     process.env.ORKESTR_RECOVER_RUNNING_ON_START = "0";
+    process.env.ORKESTR_CODEX_BIN = fakeCodex;
+    process.env.CODEX_HOME = path.join(home, "codex-home");
 
     server = await startServer({ port, host: "127.0.0.1" });
     await waitFor(`${baseUrl}/api/health`);
