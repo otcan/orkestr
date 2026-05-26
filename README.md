@@ -20,7 +20,7 @@ Start with the [user guide](docs/user-guide.md), then use the quickstart below w
 - [Contributing](CONTRIBUTING.md): contributor workflow, automation map, and pull request expectations.
 - [Architecture](docs/architecture.md): package boundaries, runtime boundary, and connector boundary.
 
-## Why Use Orkestr
+## Why This Exists
 
 Use Orkestr when plain Codex is not enough because the work needs to stay
 reachable after you close a terminal, or because instructions arrive somewhere
