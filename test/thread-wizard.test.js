@@ -165,6 +165,17 @@ test("web UI exposes browser terminal attach for app-server threads", async () =
   assert.ok(!webSources.includes("Host Terminal"));
 });
 
+test("thread links do not persist the raw panel", async () => {
+  const source = await fs.readFile("apps/web/src/app/app.component.ts", "utf8");
+  const activateThread = source.slice(source.indexOf("async activateThread("), source.indexOf("private clearThreadPanelState("));
+  const threadUrl = source.slice(source.indexOf("threadUrl("), source.indexOf("rawUrl("));
+
+  assert.ok(activateThread.includes('const nextPanel = "chat"'));
+  assert.ok(!activateThread.includes('this.activePanel === "raw" ? "raw" : "chat"'));
+  assert.ok(threadUrl.includes('this.pathForPanel(this.threadSlug(thread), "chat")'));
+  assert.ok(!threadUrl.includes('this.activePanel === "raw" ? "raw" : "chat"'));
+});
+
 test("sidebar marks latest delivery failures as errors", async () => {
   const sources = await read([
     "apps/web/src/app/app.component.ts",
