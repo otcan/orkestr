@@ -1119,38 +1119,10 @@
           @if (attachDetails?.ok && embeddedRawTerminalAvailable(thread)) {
             <div class="raw-toolbar">
               <button class="secondary" type="button" (click)="openPanel('chat')">Back to Chat</button>
-              <button type="button" (click)="openNativeTerminal()" [disabled]="nativeAttachOpening || busy || !nativeAttachCommand()">
-                {{ nativeAttachOpenLabel() }}
-              </button>
+              <button type="button" (click)="reconnectRaw()" [disabled]="busy">Open Browser Terminal</button>
               <button class="secondary" type="button" (click)="focusRawTerminal()">Focus</button>
-              <button class="secondary" type="button" (click)="reconnectRaw()" [disabled]="busy">Reconnect</button>
             </div>
-            @if (nativeAttachStatus) {
-              <p class="native-terminal-status">{{ nativeAttachStatus }}</p>
-            }
             <div #rawTerminalHost class="raw-terminal-host" (click)="focusRawTerminal()" aria-label="Raw terminal"></div>
-          } @else if (attachDetails?.ok && nativeAttachCommand()) {
-            <div class="native-terminal-card">
-              <div class="panel-title compact-title">
-                <div>
-                  <p class="eyebrow">Native terminal</p>
-                  <h3>Attach to Codex</h3>
-                </div>
-                <div class="inline-actions">
-                  <button class="secondary" type="button" (click)="openPanel('chat')">Back to Chat</button>
-                  <button class="secondary" type="button" (click)="loadRaw()" [disabled]="busy">Refresh</button>
-                  <button type="button" (click)="openNativeTerminal()" [disabled]="nativeAttachOpening || busy">
-                    {{ nativeAttachOpenLabel() }}
-                  </button>
-                  <button class="secondary" type="button" (click)="copyNativeAttachCommand()">{{ nativeAttachCopyLabel() }}</button>
-                </div>
-              </div>
-              <p class="helper">Terminal opens on the Orkestr host. The command remains available as fallback.</p>
-              @if (nativeAttachStatus) {
-                <p class="native-terminal-status">{{ nativeAttachStatus }}</p>
-              }
-              <pre class="native-terminal-command"><code>{{ nativeAttachCommand() }}</code></pre>
-            </div>
           } @else {
             <div class="empty-state">
               <h3>No live terminal</h3>

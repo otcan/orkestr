@@ -138,30 +138,30 @@ test("chat messages show delivery failure reasons", async () => {
   assert.ok(sources.includes(".message-failure"));
 });
 
-test("web UI exposes native terminal attach for app-server threads", async () => {
-  const sources = await read([
+test("web UI exposes browser terminal attach for app-server threads", async () => {
+  const webSources = await read([
     "apps/web/src/app/app.component.ts",
     "apps/web/src/app/app.component.html",
     "apps/web/src/app/api.service.ts",
-    "apps/server/src/modules/threads/threads.controller.ts",
     "apps/web/src/styles.css",
   ]);
+  const serverSources = await read([
+    "apps/server/src/modules/threads/threads.controller.ts",
+    "apps/server/src/thread-stream.ts",
+  ]);
+  const sources = `${webSources}\n${serverSources}`;
 
-  assert.ok(sources.includes("nativeTerminalAttachAvailable"));
   assert.ok(sources.includes("embeddedRawTerminalAvailable"));
-  assert.ok(sources.includes("nativeAttachCommand"));
-  assert.ok(sources.includes("openNativeTerminal"));
-  assert.ok(sources.includes("openThreadTerminal"));
-  assert.ok(sources.includes("copyNativeAttachCommand"));
-  assert.ok(sources.includes('Post(":threadId/attach/open-terminal")'));
-  assert.ok(sources.includes("ok: true,\n        launched: false"));
-  assert.ok(sources.includes("attachKind?: string"));
-  assert.ok(sources.includes("launched?: boolean"));
-  assert.ok(sources.includes("Open Terminal"));
-  assert.ok(sources.includes("Native terminal"));
-  assert.ok(sources.includes("Attach to Codex"));
-  assert.ok(sources.includes(".native-terminal-command"));
-  assert.ok(sources.includes(".native-terminal-status"));
+  assert.ok(!webSources.includes("nativeTerminalAttachAvailable"));
+  assert.ok(sources.includes("ensureAppServerAttachPane"));
+  assert.ok(sources.includes("browserAttachSessionName"));
+  assert.ok(sources.includes("codex-browser-attach"));
+  assert.ok(sources.includes("Open Browser Terminal"));
+  assert.ok(sources.includes("reconnectRaw()"));
+  assert.ok(!webSources.includes("openThreadTerminal"));
+  assert.ok(!webSources.includes("openNativeTerminal"));
+  assert.ok(!webSources.includes("attach/open-terminal"));
+  assert.ok(!webSources.includes("Host Terminal"));
 });
 
 test("sidebar marks latest delivery failures as errors", async () => {

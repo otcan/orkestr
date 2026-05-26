@@ -1054,10 +1054,6 @@ export class ApiService {
     return this.http.post<ThreadAttachResponse>(this.api(`/threads/${encodeURIComponent(id)}/attach`), {});
   }
 
-  openThreadTerminal(id: string): Observable<ThreadAttachResponse> {
-    return this.http.post<ThreadAttachResponse>(this.api(`/threads/${encodeURIComponent(id)}/attach/open-terminal`), {});
-  }
-
   threadHistory(id: string): Observable<ThreadHistoryResponse> {
     return this.http.get<ThreadHistoryResponse>(this.api(`/threads/${encodeURIComponent(id)}/history`));
   }

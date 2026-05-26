@@ -2,8 +2,10 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import type { Server } from "node:http";
 import { WebSocketServer, type WebSocket } from "ws";
-import { runtimeStatus } from "../../../packages/core/src/runtime-leases.js";
+import { runtimeStatus, wakeThread } from "../../../packages/core/src/runtime-leases.js";
 import { getThread } from "../../../packages/core/src/threads.js";
+import { codexThreadId, threadUsesCodexAppServer } from "../../../packages/core/src/codex-app-server-common.js";
+import { shellQuote } from "../../../packages/core/src/native-terminal.js";
 import { threadSummaryPayload } from "./thread-summary.js";
 
 const execFileAsync = promisify(execFile);
@@ -43,6 +45,60 @@ async function resizePane(paneId: string, cols: unknown, rows: unknown): Promise
   const width = Math.max(40, Math.min(400, Math.floor(parsedWidth)));
   const height = Math.max(8, Math.min(120, Math.floor(parsedHeight)));
   await execFileAsync("tmux", ["resize-pane", "-t", paneId, "-x", String(width), "-y", String(height)]);
+}
+
+function safeTmuxName(value: unknown): string {
+  return String(value || "thread").replace(/[^A-Za-z0-9_.-]+/g, "-").replace(/^-+|-+$/g, "") || "thread";
+}
+
+function browserAttachSessionName(threadId: string): string {
+  return `orkestr-browser-attach-${safeTmuxName(threadId).slice(0, 42)}`;
+}
+
+async function tmuxHasSession(sessionName: string): Promise<boolean> {
+  try {
+    await execFileAsync("tmux", ["has-session", "-t", sessionName]);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function tmuxPaneId(sessionName: string): Promise<string> {
+  const { stdout } = await execFileAsync("tmux", ["list-panes", "-t", sessionName, "-F", "#{pane_id}"]);
+  return String(stdout || "").trim().split(/\s+/).filter(Boolean)[0] || "";
+}
+
+async function ensureAppServerAttachPane(thread: Record<string, any>, cols: unknown, rows: unknown): Promise<Record<string, unknown> | null> {
+  if (!threadUsesCodexAppServer(thread)) return null;
+  const wakeResult: any = await wakeThread(String(thread.id), { reason: "browser_attach" }).catch(() => null);
+  const currentThread = wakeResult?.thread || thread;
+  const codexId = codexThreadId(currentThread);
+  if (!codexId) return null;
+
+  const cwd = String(currentThread.cwd || currentThread.workspace || currentThread.repoPath || currentThread.worktreePath || "/root");
+  const sessionName = browserAttachSessionName(String(currentThread.id || thread.id));
+  if (!(await tmuxHasSession(sessionName))) {
+    const attachCommand = `codex --dangerously-bypass-approvals-and-sandbox resume -C ${shellQuote(cwd)} ${shellQuote(codexId)}`;
+    const script = [
+      "clear",
+      `printf ${shellQuote(`Attaching Orkestr thread ${currentThread.name || currentThread.id} to Codex...\\n\\n`)}`,
+      attachCommand,
+      `printf ${shellQuote("\\nCodex attach exited. Press Enter to close this browser terminal.\\n")}`,
+      "read _",
+    ].join("; ");
+    await execFileAsync("tmux", ["new-session", "-d", "-s", sessionName, "-c", cwd, script]);
+  }
+
+  const paneId = await tmuxPaneId(sessionName);
+  if (!paneId) return null;
+  await resizePane(paneId, cols, rows).catch(() => undefined);
+  return {
+    paneId,
+    sessionName,
+    state: "ready",
+    runtimeKind: "codex-browser-attach",
+  };
 }
 
 async function sendRawInput(paneId: string, data: string): Promise<void> {
@@ -206,8 +262,15 @@ export function attachThreadStreamUpgrade(server: Server): void {
       return;
     }
 
-    const status = await runtimeStatus(thread.id).catch(() => null);
-    const paneId = String(status?.paneId || "").trim();
+    let status: Record<string, any> | null = await runtimeStatus(thread.id).catch(() => null);
+    let paneId = String(status?.paneId || "").trim();
+    if (!paneId && threadUsesCodexAppServer(thread)) {
+      const attachStatus = await ensureAppServerAttachPane(thread as Record<string, any>, target.cols, target.rows).catch(() => null);
+      if (attachStatus) {
+        status = { ...(status || {}), ...attachStatus };
+        paneId = String(attachStatus.paneId || "").trim();
+      }
+    }
     if (!paneId) {
       socket.destroy();
       return;
