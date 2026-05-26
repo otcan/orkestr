@@ -78,6 +78,10 @@ test("install script exposes a host-native systemd VPS path", async () => {
   assert.match(script, /install_local_runtime_tools/);
   assert.match(script, /homebrew_install_without_admin/);
   assert.match(script, /ORKESTR_ALLOW_MACOS_BREW_INSTALL/);
+  assert.match(script, /ORKESTR_ALLOW_MACOS_ADMIN/);
+  assert.match(script, /Ignoring inherited ORKESTR_INSTALL_MODE/);
+  assert.match(script, /Refusing to run sudo during a local macOS install/);
+  assert.match(script, /Refusing administrator AppleScript/);
   assert.match(script, /\$brew" --prefix/);
   assert.match(script, /Missing local runtime tools, but Orkestr will not ask your terminal app for administrator access/);
   assert.match(script, /ORKESTR_ALLOW_MACOS_BREW_INSTALL:-0/);

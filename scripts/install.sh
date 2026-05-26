@@ -88,6 +88,7 @@ Environment:
   ORKESTR_INSTALL_CODEX     Install Codex CLI globally in --systemd mode. Defaults to 1.
   ORKESTR_ENABLE_HOST_CODEX Allow local macOS installs to probe/use the host codex binary. Defaults to 0 on macOS.
   ORKESTR_ALLOW_MACOS_BREW_INSTALL Allow local macOS installs to run brew install for missing tools. Defaults to 0.
+  ORKESTR_ALLOW_MACOS_ADMIN Permit local macOS install paths that may request administrator access. Defaults to 0.
   ORKESTR_CODEX_VERSION     Codex CLI version. Defaults to 0.133.0.
   ORKESTR_LOCAL_ENV_FILE    Local env file written for non-systemd installs. Defaults to $ORKESTR_HOME/orkestr.env.
   ORKESTR_SKIP_SYSTEM_PACKAGES  Skip apt package installation when set to 1.
@@ -101,10 +102,15 @@ USAGE
 initial_arg_count=$#
 install_json_config_loaded=0
 install_json_config_file=""
+macos_local_admin_guard=0
+install_arg_systemd=0
 
 for ((arg_index = 1; arg_index <= $#; arg_index += 1)); do
   arg_value="${!arg_index}"
   case "$arg_value" in
+    --systemd|--vps)
+      install_arg_systemd=1
+      ;;
     --config)
       next_index=$((arg_index + 1))
       if [ "$next_index" -gt "$#" ]; then
@@ -390,6 +396,15 @@ while [ "$#" -gt 0 ]; do
   esac
 done
 
+if [ "$(uname -s 2>/dev/null || true)" = "Darwin" ] \
+  && [ "$systemd" -eq 1 ] \
+  && [ "$install_arg_systemd" != "1" ] \
+  && [ "${ORKESTR_ALLOW_MACOS_ADMIN:-0}" != "1" ]; then
+  echo "Ignoring inherited ORKESTR_INSTALL_MODE=$install_mode on macOS. Local Mac installs do not use sudo or --systemd." >&2
+  systemd=0
+  install_mode=local
+fi
+
 if [ "$track_main" -eq 1 ]; then
   auto_update=1
   release_update=1
@@ -597,6 +612,39 @@ write_env_var() {
 
 run_as_root() {
   [ "$(id -u)" -eq 0 ]
+}
+
+enable_macos_local_admin_guard() {
+  macos_local_admin_guard=1
+  ORKESTR_ALLOW_MACOS_BREW_INSTALL=0
+  ORKESTR_ALLOW_MACOS_LAUNCHD=0
+  if [ "${ORKESTR_LOCAL_SERVICE_MANAGER:-}" = "launchd" ]; then
+    ORKESTR_LOCAL_SERVICE_MANAGER=background
+  fi
+  export ORKESTR_ALLOW_MACOS_BREW_INSTALL ORKESTR_ALLOW_MACOS_LAUNCHD ORKESTR_LOCAL_SERVICE_MANAGER
+  export -f sudo osascript
+}
+
+sudo() {
+  if [ "${macos_local_admin_guard:-0}" = "1" ]; then
+    echo "Refusing to run sudo during a local macOS install." >&2
+    return 1
+  fi
+  command sudo "$@"
+}
+
+osascript() {
+  if [ "${macos_local_admin_guard:-0}" = "1" ]; then
+    local joined
+    joined="$*"
+    case "$joined" in
+      *"with administrator privileges"*)
+        echo "Refusing administrator AppleScript during a local macOS install." >&2
+        return 1
+        ;;
+    esac
+  fi
+  command osascript "$@"
 }
 
 is_interactive_terminal() {
@@ -1747,6 +1795,10 @@ fi
 
 if [ "$install_json_config_loaded" -eq 0 ] && [ "${ORKESTR_NONINTERACTIVE:-0}" != "1" ] && [ "$systemd" -ne 1 ] && is_interactive_terminal; then
   run_install_wizard
+fi
+
+if is_macos && [ "$systemd" -ne 1 ] && [ "${ORKESTR_ALLOW_MACOS_ADMIN:-0}" != "1" ]; then
+  enable_macos_local_admin_guard
 fi
 
 start_after_install="$(normalize_bool "$start_after_install")"
