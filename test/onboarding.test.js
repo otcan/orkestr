@@ -54,6 +54,11 @@ test("onboarding focuses the starter setup on virtual desktop and WhatsApp", asy
   assert.ok(onboarding.includes("Connect Codex with API key"));
   assert.ok(onboarding.includes("loginCodexWithApiKey"));
   assert.ok(onboarding.includes("agentRuntimeReady()"));
+  assert.ok(onboarding.includes("codexCommandAvailable()"));
+  assert.ok(onboarding.includes("codexCommandUnavailableHint()"));
+  assert.ok(onboarding.includes("Host Codex is disabled for this macOS local install."));
+  assert.ok(onboarding.includes("[disabled]=\"busy || !codexCommandAvailable()\""));
+  assert.ok(onboarding.includes("[disabled]=\"busy || !codexApiKey.trim() || !codexCommandAvailable()\""));
   assert.ok(onboarding.includes('id: "virtual-desktop"'));
   assert.ok(onboarding.includes("Create first thread"));
   assert.ok(onboarding.includes("Bind WhatsApp chat"));

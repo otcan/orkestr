@@ -79,7 +79,12 @@ export class ConnectorsController {
   @Post("codex/device-auth")
   @HttpCode(200)
   async codexDeviceAuth() {
-    return startCodexDeviceAuth();
+    try {
+      return await startCodexDeviceAuth();
+    } catch (error) {
+      const statusCode = Number((error as any)?.statusCode || 400) || 400;
+      throw httpError(String((error as Error)?.message || "codex_device_auth_failed"), statusCode);
+    }
   }
 
   @Post("codex/api-key")

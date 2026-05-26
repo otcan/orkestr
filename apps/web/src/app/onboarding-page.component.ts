@@ -561,6 +561,46 @@ export class OnboardingPageComponent implements OnInit, OnChanges, OnDestroy {
     return state.replace(/_/g, " ");
   }
 
+  codexRuntimeDetail(): string {
+    const version = this.connectorDetail("codex", "version");
+    if (version) return version;
+    const command = this.connectorDetail("codex", "command");
+    if (command) return command;
+    const reason = this.codexUnavailableReason();
+    if (reason === "codex_disabled_on_macos") return "Host Codex is disabled for this macOS local install.";
+    if (reason === "codex_missing") return "Codex command is not installed in this runtime.";
+    return "Waiting for the bundled Codex command";
+  }
+
+  codexCommandAvailable(): boolean {
+    const connector = this.connector("codex");
+    if (!connector) return false;
+    const details = connector.details || {};
+    if (details["disabled"] === true) return false;
+    if (this.codexUnavailableReason()) return false;
+    return Boolean(this.connectorDetail("codex", "command") || this.connectorDetail("codex", "version") || connector.state === "connected" || connector.state === "partial");
+  }
+
+  codexCommandUnavailableHint(): string {
+    if (this.codexCommandAvailable()) return "";
+    const summary = String(this.connector("codex")?.summary || "").trim();
+    if (this.codexUnavailableReason() === "codex_disabled_on_macos") {
+      return summary || "Codex host binary is disabled for this macOS local install. Verify Codex manually, then rerun the installer with ORKESTR_ENABLE_HOST_CODEX=1.";
+    }
+    if (this.codexUnavailableReason() === "codex_missing") {
+      return summary || "Codex Agent runtime is missing. Install Codex in the Orkestr runtime, then refresh this page.";
+    }
+    return summary || "Codex command is not available yet. Refresh after the runtime is installed.";
+  }
+
+  private codexUnavailableReason(): string {
+    const connector = this.connector("codex");
+    const reason = String(connector?.details?.["reason"] || "").toLowerCase();
+    if (reason === "codex_disabled_on_macos" || reason === "codex_missing") return reason;
+    if (String(connector?.state || "").toLowerCase() === "not_connected" && reason.includes("disabled")) return "codex_disabled_on_macos";
+    return "";
+  }
+
   canOpenApp(): boolean {
     return this.agentRuntimeReady();
   }
@@ -883,6 +923,11 @@ export class OnboardingPageComponent implements OnInit, OnChanges, OnDestroy {
   }
 
   async startCodexDeviceAuth(): Promise<void> {
+    if (!this.codexCommandAvailable()) {
+      this.error = this.codexCommandUnavailableHint();
+      this.notice = "";
+      return;
+    }
     this.busy = true;
     try {
       const result = await firstValueFrom(this.api.startCodexDeviceAuth());
@@ -901,6 +946,11 @@ export class OnboardingPageComponent implements OnInit, OnChanges, OnDestroy {
   }
 
   async connectCodexApiKey(): Promise<void> {
+    if (!this.codexCommandAvailable()) {
+      this.error = this.codexCommandUnavailableHint();
+      this.notice = "";
+      return;
+    }
     this.busy = true;
     try {
       const result = await firstValueFrom(this.api.loginCodexWithApiKey(this.codexApiKey));
@@ -1282,7 +1332,17 @@ export class OnboardingPageComponent implements OnInit, OnChanges, OnDestroy {
   }
 
   private errorText(error: unknown): string {
-    if (error && typeof error === "object" && "message" in error) return String((error as { message?: unknown }).message);
+    if (error && typeof error === "object") {
+      const record = error as { error?: unknown; message?: unknown };
+      const body = record.error;
+      if (typeof body === "string" && body.trim()) return body;
+      if (body && typeof body === "object") {
+        const bodyRecord = body as { message?: unknown; error?: unknown; code?: unknown };
+        const detail = bodyRecord.message || bodyRecord.error || bodyRecord.code;
+        if (detail) return String(detail);
+      }
+      if (record.message) return String(record.message);
+    }
     return String(error || "Unknown error");
   }
 

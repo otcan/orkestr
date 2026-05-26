@@ -21,6 +21,42 @@ test("codex status treats the macOS installer guard as disabled", async () => {
   assert.match(status.message, /ORKESTR_ENABLE_HOST_CODEX=1/);
 });
 
+test("codex device auth explains disabled macOS host Codex", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-codex-device-disabled-"));
+  const env = {
+    ORKESTR_HOME: home,
+    CODEX_HOME: path.join(home, "codex-home"),
+    ORKESTR_CODEX_BIN: CODEX_DISABLED_ON_MACOS,
+  };
+
+  await assert.rejects(
+    startCodexDeviceAuth({ env, home }),
+    (error) => {
+      assert.equal(error.statusCode, 428);
+      assert.match(error.message, /ORKESTR_ENABLE_HOST_CODEX=1/);
+      return true;
+    },
+  );
+});
+
+test("codex API key login explains disabled macOS host Codex", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-codex-api-disabled-"));
+  const env = {
+    ORKESTR_HOME: home,
+    CODEX_HOME: path.join(home, "codex-home"),
+    ORKESTR_CODEX_BIN: CODEX_DISABLED_ON_MACOS,
+  };
+
+  await assert.rejects(
+    loginCodexWithApiKey("sk-test", { env, home }),
+    (error) => {
+      assert.equal(error.statusCode, 428);
+      assert.match(error.message, /ORKESTR_ENABLE_HOST_CODEX=1/);
+      return true;
+    },
+  );
+});
+
 test("codex device auth parses browser URL and reuses an active session", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-codex-auth-"));
   const fakeCodex = path.join(home, "codex");

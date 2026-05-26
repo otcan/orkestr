@@ -135,7 +135,8 @@ export async function loginCodexWithApiKey(apiKey, { env = process.env, home = o
   const result = await runCodex(["login", "--with-api-key"], { env, home, input: key, timeoutMs });
   const output = stripAnsi(`${result.stdout || ""}\n${result.stderr || ""}`).trim();
   if (result.disabled) {
-    const error = new Error("codex_cli_disabled_on_macos");
+    const error = new Error("Codex host binary is disabled for this macOS local install. Verify Codex manually, then rerun the installer with ORKESTR_ENABLE_HOST_CODEX=1.");
+    error.code = "codex_cli_disabled_on_macos";
     error.statusCode = 428;
     throw error;
   }
@@ -216,7 +217,8 @@ export async function startCodexDeviceAuth({ env = process.env, home = os.homedi
   ensureCodexHome(codexHome);
   const command = codexCommand(env);
   if (!command) {
-    const error = new Error("codex_cli_disabled_on_macos");
+    const error = new Error("Codex host binary is disabled for this macOS local install. Verify Codex manually, then rerun the installer with ORKESTR_ENABLE_HOST_CODEX=1.");
+    error.code = "codex_cli_disabled_on_macos";
     error.statusCode = 428;
     throw error;
   }
