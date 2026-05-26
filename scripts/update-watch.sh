@@ -19,6 +19,7 @@ Environment:
   ORKESTR_DEPLOY_CHANNEL       Release deployment channel. Defaults to production.
   ORKESTR_RESET_ON_UPDATE      Reset runtime state after a successful build. Defaults to 0.
   ORKESTR_RESET_OVERLAY        Also reset the overlay directory when reset is enabled. Defaults to 0.
+  ORKESTR_BUILD_WEB_FROM_SOURCE Set to 1 to install dev dependencies and rebuild the Angular web app.
 
 This script is intended to be run by orkestr-update.timer. It leaves the
 existing service running while it fetches, installs dependencies, and builds.
@@ -143,13 +144,8 @@ fi
 echo "Updating Orkestr from $current_ref to $target_ref."
 checkout_target_ref "$update_ref" "$target_ref"
 
-if [ -f package-lock.json ]; then
-  npm ci --include=dev
-else
-  npm install --include=dev
-fi
-
-npm run build
+bash scripts/install-runtime-deps.sh
+npm run build:runtime
 npm prune --omit=dev
 
 if [ "${ORKESTR_RESET_ON_UPDATE:-0}" = "1" ]; then

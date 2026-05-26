@@ -22,9 +22,8 @@ test("host update watcher replaces external VPS deploy automation", async () => 
   assert.match(watcher, /ORKESTR_RELEASE_DEPLOY/);
   assert.match(watcher, /deploy-git-release\.sh/);
   assert.match(watcher, /git fetch --prune origin/);
-  assert.match(watcher, /npm ci --include=dev/);
-  assert.match(watcher, /npm install --include=dev/);
-  assert.match(watcher, /npm run build/);
+  assert.match(watcher, /bash scripts\/install-runtime-deps\.sh/);
+  assert.match(watcher, /npm run build:runtime/);
   assert.match(watcher, /npm prune --omit=dev/);
   assert.match(watcher, /ORKESTR_RESET_ON_UPDATE/);
   assert.match(watcher, /reset-vps-state\.sh/);

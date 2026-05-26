@@ -361,6 +361,10 @@ cd orkestr
 ./scripts/install.sh
 ```
 
+The installer serves the checked-in web bundle from `dist/web/browser`; it does
+not install Angular unless you opt into a source web build with
+`ORKESTR_BUILD_WEB_FROM_SOURCE=1`.
+
 Then open:
 
 ```text
@@ -374,6 +378,9 @@ npm ci
 npm run build
 npm start
 ```
+
+When changing the UI, run `npm run web:build` and commit the updated `dist/web`
+bundle so normal installs can serve it without Angular.
 
 Useful CLI commands:
 

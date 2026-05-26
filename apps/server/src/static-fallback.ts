@@ -51,7 +51,7 @@ async function serveStaticPath(requestUrl: string, response: any) {
         .status(503)
         .header("cache-control", "no-store")
         .type("text/html; charset=utf-8")
-        .send("<!doctype html><title>Orkestr build missing</title><h1>Angular build missing</h1><p>Run <code>npm run web:build</code> before starting the server.</p>");
+        .send("<!doctype html><title>Orkestr web bundle missing</title><h1>Orkestr web bundle missing</h1><p>Run <code>npm run web:verify-static</code> to check the served assets.</p>");
     }
   }
 }

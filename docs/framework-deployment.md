@@ -3,11 +3,13 @@
 Orkestr is split into two deployable layers:
 
 - NestJS API in `apps/server`.
-- Angular web app in `apps/web/src`, built into `dist/web/browser`.
+- Static web app served from `dist/web/browser`.
+- Angular source in `apps/web/src` for contributors who change the UI.
 
-The NestJS process serves both `/api/*` routes and the compiled Angular app.
-The server does not compile Angular at runtime. A local deployment must run
-`npm run build` before `npm start`.
+The NestJS process serves both `/api/*` routes and the checked-in static web
+bundle. Normal installs do not install Angular or build the web app. They install
+runtime Node dependencies, install only the small TypeScript toolchain needed to
+compile the server, verify `dist/web/browser`, and start serving it.
 
 ## Local Development
 
@@ -17,8 +19,8 @@ npm run dev
 ```
 
 `npm run dev` builds the Angular app once and starts the NestJS server with the
-browser-open flag. Re-run `npm run build` after frontend changes before
-refreshing the server-served UI.
+browser-open flag. Re-run `npm run web:build` after frontend changes and commit
+the updated `dist/web` bundle when the served UI should change.
 
 ## Verification
 
@@ -29,7 +31,8 @@ npm run demo:coding-agent
 ```
 
 `npm run check` performs JavaScript syntax checks, compiles the NestJS backend,
-builds Angular, and runs the Node test suite.
+builds the Angular contributor source into the served static bundle, and runs
+the Node test suite.
 
 To verify the full fresh-VPS installer path on disposable AWS infrastructure,
 run:

@@ -8,7 +8,9 @@ orkestr.install.json
 .orkestr.install.json
 .DS_Store
 coverage/
-dist/
+dist/*
+!dist/web/
+!dist/web/**
 .orkestr/
 data/
 secrets/

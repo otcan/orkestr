@@ -12,6 +12,9 @@ test("install script exposes a host-native systemd VPS path", async () => {
   const script = await fs.readFile("scripts/install.sh", "utf8");
 
   await execFileAsync("bash", ["-n", "scripts/install.sh"]);
+  await execFileAsync("bash", ["-n", "scripts/install-runtime-deps.sh"]);
+  await execFileAsync("bash", ["-n", "scripts/build-runtime.sh"]);
+  await execFileAsync("node", ["--check", "scripts/verify-static-web.mjs"]);
   assert.match(script, /--systemd/);
   assert.match(script, /\/opt\/orkestr\/app/);
   assert.match(script, /\/opt\/orkestr\/data/);
@@ -139,8 +142,9 @@ test("install script exposes a host-native systemd VPS path", async () => {
   assert.match(script, /write_reset_wrapper/);
   assert.match(script, /\$\{service_name\}\.timer/);
   assert.match(script, /ORKESTR_AUTH_REQUIRED=\$\{ORKESTR_AUTH_REQUIRED:-1\}/);
-  assert.match(script, /npm ci --include=dev/);
-  assert.match(script, /npm install --include=dev/);
+  assert.match(script, /bash scripts\/install-runtime-deps\.sh/);
+  assert.match(script, /npm run build:runtime/);
+  assert.match(script, /npm prune --omit=dev/);
   assert.match(script, /Refusing to install Codex automatically on macOS/);
   assert.match(script, /This is not an install error/);
   assert.doesNotMatch(script, /\nprint_macos_codex_notice\n/);

@@ -92,6 +92,7 @@ Environment:
   ORKESTR_FRESH_INSTALL     Set to 1 to stop the local service and remove local Orkestr state before install.
   ORKESTR_INSTALL_ADVANCED  Set to 1 to ask advanced local installer questions.
   ORKESTR_NONINTERACTIVE    Set to 1 to skip local installer prompts.
+  ORKESTR_BUILD_WEB_FROM_SOURCE Set to 1 to install dev dependencies and rebuild the Angular web app.
 USAGE
 }
 
@@ -1744,16 +1745,11 @@ fi
 
 cd "$repo_dir"
 
-if [ -f package-lock.json ]; then
-  npm ci --include=dev
-else
-  npm install --include=dev
-fi
-
-npm run build
+bash scripts/install-runtime-deps.sh
+npm run build:runtime
+npm prune --omit=dev
 
 if [ "$systemd" -eq 1 ]; then
-  npm prune --omit=dev
   install_systemd_runtime
   cat <<EOF
 

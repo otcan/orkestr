@@ -24,6 +24,8 @@ test("release deploy script exposes versioned install, status, and rollback", as
   assert.match(script, /ORKESTR_CURRENT_LINK/);
   assert.match(script, /ORKESTR_DEPLOY_HISTORY/);
   assert.match(script, /release-manifest\.json/);
+  assert.match(script, /bash scripts\/install-runtime-deps\.sh/);
+  assert.match(script, /npm --prefix "\$release_dir" run build:runtime/);
   assert.match(script, /npm --prefix "\$release_dir" run smoke/);
   assert.match(script, /backup_state/);
   assert.match(script, /health_check/);

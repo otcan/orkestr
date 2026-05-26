@@ -27,6 +27,7 @@ Environment:
   ORKESTR_DEPLOY_RUN_SMOKE      Run npm smoke before activation. Defaults to 1.
   ORKESTR_DEPLOY_HEALTH_URL     Health URL. Defaults to http://$ORKESTR_HOST:$ORKESTR_PORT/api/health.
   ORKESTR_SERVICE_NAME          systemd service name. Defaults to orkestr.
+  ORKESTR_BUILD_WEB_FROM_SOURCE Set to 1 to install dev dependencies and rebuild the Angular web app.
 
 The app code is versioned. ORKESTR_HOME and /etc/orkestr/orkestr.env stay
 outside release directories and are backed up before activation.
@@ -286,12 +287,8 @@ install_command() {
   if [ ! -d "$release_dir/.git" ]; then
     mkdir -p "$releases_dir"
     git -C "$repo_cache" worktree add --detach "$release_dir" "$target_ref"
-    if [ -f "$release_dir/package-lock.json" ]; then
-      npm --prefix "$release_dir" ci --include=dev
-    else
-      npm --prefix "$release_dir" install --include=dev
-    fi
-    npm --prefix "$release_dir" run build
+    (cd "$release_dir" && bash scripts/install-runtime-deps.sh)
+    npm --prefix "$release_dir" run build:runtime
     deployed_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
     node "$release_dir/scripts/release-manifest.mjs" \
       --cwd "$release_dir" \
