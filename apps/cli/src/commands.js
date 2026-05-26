@@ -43,6 +43,7 @@ export async function runCli(argv = process.argv.slice(2), context = {}) {
     if (command === "doctor") return await doctorCommand(args, ctx);
     if (command === "timers" || command === "timer") return await timersCommand(args, ctx);
     if (command === "security") return await securityCommand(args, ctx);
+    if (command === "codex") return await codexCommand(args, ctx);
     if (command === "service" || command === "services") return await serviceCommand(args, ctx);
     if (command === "start" || command === "stop" || command === "restart") return await serviceCommand([command, ...args], ctx);
     if (command === "update") return await updateCommand(args, ctx);
@@ -244,6 +245,45 @@ async function securityCommand(argv, ctx) {
   if (subcommand === "reject") return rejectSecurityChallenge(rest, ctx);
   if (subcommand === "revoke" || subcommand === "logout") return revokeSecuritySessionCommand(rest, ctx);
   throw new Error("Usage: orkestr security [challenges|sessions|approve <challenge-id>|reject <challenge-id>|revoke <session-id|all>] [--json]");
+}
+
+async function codexCommand(argv, ctx) {
+  const subcommand = argv[0] || "status";
+  const rest = subcommand === "status" && argv[0]?.startsWith("--") ? argv : argv.slice(1);
+  if (subcommand === "status") return codexStatusCommand(rest, ctx);
+  if (subcommand === "migrate") return codexMigrateCommand(rest, ctx);
+  throw new Error("Usage: orkestr codex [status|migrate] [--dry-run] [--json]");
+}
+
+async function codexStatusCommand(argv, ctx) {
+  const json = argv.includes("--json");
+  const payload = await requestJson("/api/codex/app-server/status", ctx);
+  if (json) ctx.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
+  else ctx.stdout.write(`Codex app-server: ${payload.ok ? "ready" : "unavailable"}${payload.error ? ` - ${payload.error}` : ""}\n`);
+  return payload.ok ? 0 : 1;
+}
+
+async function codexMigrateCommand(argv, ctx) {
+  const json = argv.includes("--json");
+  const dryRun = argv.includes("--dry-run") || argv.includes("--check");
+  const payload = await requestJson("/api/codex/migrate", {
+    ...ctx,
+    method: "POST",
+    body: { dryRun },
+  });
+  if (json) ctx.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
+  else {
+    const counts = payload.counts || {};
+    ctx.stdout.write([
+      `Codex migration: ${dryRun ? "dry run" : "applied"}`,
+      `Candidates: ${Number(payload.candidates || 0)}`,
+      `Migrated: ${Number(payload.migrated || 0)}`,
+      `Already app-server: ${Number(counts.already_app_server || 0)}`,
+      `Existing Codex IDs: ${Number(counts.migrated_existing_codex_thread || counts.mark_existing_codex_thread || 0)}`,
+      `New app-server threads: ${Number(counts.created_codex_app_server_thread || counts.create_codex_app_server_thread || 0)}`,
+    ].join("\n") + "\n");
+  }
+  return payload.ok === false ? 1 : 0;
 }
 
 async function updateCommand(argv, ctx) {
@@ -587,6 +627,7 @@ Advanced:
   orkestr update status [--json]
   orkestr update rollback [--to release-id]
   orkestr settings [--json]
+  orkestr codex [status|migrate] [--dry-run] [--json]
   orkestr timers [list|doctor|run <timer-id>] [--json]
   orkestr security [challenges|sessions|approve <challenge-id>|reject <challenge-id>|revoke <session-id|all>] [--json]
   orkestr thread create <name> [--id id] [--cwd path] [--command command] [--executor id] [--json]

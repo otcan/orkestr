@@ -27,9 +27,9 @@ Next real-agent step: open `/setup`, complete Codex sign-in, then wake the demo 
 
 ## Real-Agent Follow-Up
 
-Use the web cockpit to open the demo thread, press **Wake**, then open the raw
-terminal panel if you want to inspect the live Codex session. Host-native
-contributors can still use `npx orkestr-oss wake demo-coding-agent`.
+Use the web cockpit to open the demo thread, press **Wake**, then inspect Codex
+status and history from the thread view. Host-native contributors can still use
+`npx orkestr-oss wake demo-coding-agent`.
 
 The public dry run proves Orkestr can create the thread, prepare the desktop
 profile, and queue work. Local setup and host-native VPS setup both

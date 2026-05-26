@@ -243,6 +243,13 @@
               </div>
               <em [class]="stateClass('codex')">{{ stateLabel("codex") }}</em>
             </div>
+            <div class="check-row">
+              <div>
+                <strong>Codex app-server</strong>
+                <small>{{ codexAppServer?.command || connectorDetail("codex", "command") || "codex" }}</small>
+              </div>
+              <em [class]="codexAppServer?.ok ? 'ready' : 'idle'">{{ codexAppServer?.ok ? "ready" : "unavailable" }}</em>
+            </div>
           </div>
           @if (!codexCommandAvailable()) {
             <div class="command-box">{{ codexCommandUnavailableHint() }}</div>
@@ -288,6 +295,32 @@
           @if (codexAuthExpiresAt) {
             <div class="command-box">Expires: {{ codexAuthExpiresAt }}</div>
           }
+          <div class="connector-panel">
+            <div class="button-row">
+              <label class="inline-field">
+                <span>Import Codex thread</span>
+                <input name="codex-import-search" [(ngModel)]="codexImportSearch" placeholder="Search existing Codex threads" />
+              </label>
+              <button class="secondary" type="button" (click)="loadCodexAppServer()" [disabled]="busy">Search</button>
+            </div>
+            @if (codexStoredThreads.length) {
+              <div class="check-list">
+                @for (thread of codexStoredThreads; track thread.id) {
+                  <div class="check-row">
+                    <div>
+                      <strong>{{ thread.name || thread.preview || thread.id }}</strong>
+                      <small>{{ thread.cwd || thread.id }}</small>
+                    </div>
+                    <button type="button" (click)="importCodexThread(thread)" [disabled]="busy || importingCodexThreadId === thread.id">
+                      {{ importingCodexThreadId === thread.id ? "Importing" : "Import" }}
+                    </button>
+                  </div>
+                }
+              </div>
+            } @else {
+              <small>No importable Codex threads found.</small>
+            }
+          </div>
         </section>
       }
 

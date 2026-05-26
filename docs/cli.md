@@ -84,11 +84,11 @@ mode; production deploys otherwise require exact tags by default.
 forward to the versioned release deployer.
 
 `orkestr doctor` checks the host runtime through the public API: writable data
-paths, git, tmux, ripgrep, npm, Chromium/Chrome, Codex auth, and remote-access
-security posture. `orkestr doctor timers` checks the timer store, enabled
-schedules, thread targets, prompt files, stale due timers, and recorded delivery
-errors. `orkestr timers` lists timers, and `orkestr timers run <id>` queues one
-immediately.
+paths, git, Codex auth/app-server availability, ripgrep, npm, Chromium/Chrome,
+and remote-access security posture. `orkestr doctor
+timers` checks the timer store, enabled schedules, thread targets, prompt files,
+stale due timers, and recorded delivery errors. `orkestr timers` lists timers,
+and `orkestr timers run <id>` queues one immediately.
 
 Both doctor commands support `--json` for scripts. They exit non-zero only when
 the reported status is `broken`; warnings stay visible but do not block local
@@ -101,10 +101,16 @@ access, usually over SSH on a host-native VPS.
 session tokens. `orkestr security revoke <session-id>` revokes one paired
 browser, and `orkestr security revoke all` clears every paired browser session.
 
-Attach keeps the backing tmux session name stable, but names the tmux/byobu
-window after the Orkestr thread on wake and attach. The current runtime model is
-one Orkestr thread per tmux session; grouping multiple live thread panes into a
-single byobu session would need a separate session/window mapping.
+New Codex coding threads use `codex app-server` for structured turns and status.
+Existing pre-app-server Orkestr Codex threads are migrated with:
+
+```bash
+orkestr codex migrate --dry-run
+orkestr codex migrate
+```
+
+The `attach` command remains for non-Codex tmux runtimes. Codex threads do not
+use tmux attach after migration.
 
 The API base defaults to `http://127.0.0.1:19812` and can be overridden with:
 
@@ -121,8 +127,8 @@ orkestr --api http://127.0.0.1:19812 list
   text on stdout for machine-readable commands.
 - Shell integration: completions for Bash/Zsh/Fish, config profiles, and
   aliases for frequently used threads.
-- Attach UX: auto-wake prompt for sleeping threads, raw terminal fallback
-  through WebSocket when local tmux is not available, and clear lease state.
+- Attach UX: auto-wake prompt for sleeping non-Codex threads, WebSocket terminal
+  access when local tmux is not available, and clear lease state.
 - Safety: dry-run mode for destructive commands, confirmation prompts for
   sleep/recover/delete, and explicit `--force` semantics.
 - Observability: `orkestr doctor`, `orkestr logs`, `orkestr events`, and

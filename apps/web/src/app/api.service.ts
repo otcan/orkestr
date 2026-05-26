@@ -24,6 +24,28 @@ export interface ConnectorStatus {
   details?: Record<string, unknown>;
 }
 
+export interface CodexAppServerStatus {
+  ok: boolean;
+  available?: boolean;
+  command?: string;
+  codexHome?: string;
+  runtimeKind?: string;
+  transport?: string;
+  error?: string;
+}
+
+export interface CodexStoredThread {
+  id: string;
+  sessionId?: string;
+  name?: string | null;
+  preview?: string;
+  cwd?: string;
+  status?: Record<string, unknown>;
+  createdAt?: number;
+  updatedAt?: number;
+  [key: string]: unknown;
+}
+
 export interface BrowserSession {
   id?: string;
   slug?: string;
@@ -433,8 +455,14 @@ export interface ThreadSummary {
   sessionName?: string | null;
   paneId?: string | null;
   tmuxTarget?: string | null;
+  runtimeKind?: string | null;
   threadId?: string;
   codexThreadId?: string | null;
+  codexSessionId?: string | null;
+  codexStatus?: Record<string, unknown> | null;
+  activeTurnId?: string | null;
+  importedFromCodex?: boolean;
+  migrationRequired?: boolean;
   codexMode?: "code" | "plan" | string | null;
   codexModeLive?: "code" | "plan" | string | null;
   codexModeLabel?: string | null;
@@ -787,6 +815,19 @@ export class ApiService {
 
   loginCodexWithApiKey(apiKey = ""): Observable<CodexApiKeyLoginResponse> {
     return this.http.post<CodexApiKeyLoginResponse>(this.api("/connectors/codex/api-key"), { apiKey });
+  }
+
+  codexAppServerStatus(): Observable<CodexAppServerStatus> {
+    return this.http.get<CodexAppServerStatus>(this.api("/codex/app-server/status"));
+  }
+
+  codexThreads(search = ""): Observable<{ threads: CodexStoredThread[]; nextCursor?: string | null }> {
+    const query = search.trim() ? `?search=${encodeURIComponent(search.trim())}` : "";
+    return this.http.get<{ threads: CodexStoredThread[]; nextCursor?: string | null }>(this.api(`/codex/threads${query}`));
+  }
+
+  importCodexThread(codexThreadId: string): Observable<{ thread: ThreadSummary; imported: boolean }> {
+    return this.http.post<{ thread: ThreadSummary; imported: boolean }>(this.api("/codex/threads/import"), { codexThreadId });
   }
 
   whatsappStatus(): Observable<WhatsAppStatusResponse> {

@@ -292,7 +292,9 @@
 
       <nav class="panel-tabs" aria-label="Thread panels">
         <button type="button" [class.active]="activePanel === 'chat'" (click)="openPanel('chat')">Chat</button>
-        <button type="button" [class.active]="activePanel === 'raw'" (click)="openPanel('raw')" [disabled]="!codexAgentReady()">Raw</button>
+        @if (rawTerminalAvailable(thread)) {
+          <button type="button" [class.active]="activePanel === 'raw'" (click)="openPanel('raw')" [disabled]="!codexAgentReady()">Raw</button>
+        }
         <button type="button" [class.active]="activePanel === 'history'" (click)="openPanel('history')">History</button>
         <button type="button" [class.active]="activePanel === 'timers'" (click)="openPanel('timers')">Thread Timers</button>
         <button type="button" [class.active]="activePanel === 'settings'" (click)="openPanel('settings')">Settings</button>

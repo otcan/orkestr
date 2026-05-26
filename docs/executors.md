@@ -4,10 +4,10 @@ Executors turn queued thread or agent messages into completed work for the
 generic API and deterministic demos.
 
 Most users should start with Codex threads, not executor adapters. The normal
-Codex path is the thread runtime: Orkestr wakes a tmux-backed Codex CLI session,
-queues text into it, and records history. The executor boundary remains useful
-for tests, demos, and private adapter experiments that should not depend on a
-live Codex session.
+Codex path is the thread runtime: Orkestr talks to `codex app-server`, starts or
+steers turns, records structured status, and imports existing Codex app-server
+history when requested. The executor boundary remains useful for tests, demos,
+and private adapter experiments that should not depend on a live Codex session.
 
 The public repo provides:
 
@@ -19,7 +19,7 @@ The public repo provides:
 
 The public executor interface must stay host-neutral. Do not put private paths,
 WhatsApp bindings, or machine-specific Codex launch commands in public adapter
-examples. The built-in thread runtime owns the public tmux/Codex path.
+examples. The built-in thread runtime owns the public Codex app-server path.
 
 Current API:
 

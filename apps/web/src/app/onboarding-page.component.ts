@@ -1,7 +1,7 @@
 import { ChangeDetectorRef, Component, EventEmitter, Input, OnChanges, OnDestroy, OnInit, Output, SimpleChanges, inject } from "@angular/core";
 import { FormsModule } from "@angular/forms";
 import { firstValueFrom } from "rxjs";
-import { ApiService, ConnectorStatus, OutlookOAuthPollResponse, OutlookOAuthStartResponse, SecurityChallenge, SetupStatus, SystemDoctorResponse, ThreadSummary, VersionResponse } from "./api.service";
+import { ApiService, CodexAppServerStatus, CodexStoredThread, ConnectorStatus, OutlookOAuthPollResponse, OutlookOAuthStartResponse, SecurityChallenge, SetupStatus, SystemDoctorResponse, ThreadSummary, VersionResponse } from "./api.service";
 
 type ConnectorStep = "openai" | "codex" | "gmail" | "linkedin" | "whatsapp" | "browsers";
 type MarketingStep = "google-marketing";
@@ -65,6 +65,10 @@ export class OnboardingPageComponent implements OnInit, OnChanges, OnDestroy {
   codexAuthUrl = "";
   codexAuthExpiresAt = "";
   codexApiKey = "";
+  codexAppServer: CodexAppServerStatus | null = null;
+  codexStoredThreads: CodexStoredThread[] = [];
+  codexImportSearch = "";
+  importingCodexThreadId = "";
 
   openaiApiKey = "";
   mailProvider: MailProvider = "gmail";
@@ -154,6 +158,7 @@ export class OnboardingPageComponent implements OnInit, OnChanges, OnDestroy {
       this.hydrateForms(setup);
       if (setup.security?.paired) await this.loadSecurityChallenges(false);
       else this.securityChallenges = [];
+      if (this.activeStep === "codex") await this.loadCodexAppServer(false);
       this.applySetupSectionFromInput();
       if (!this.stepInitialized) {
         this.activeStep = this.firstOpenStep();
@@ -965,6 +970,44 @@ export class OnboardingPageComponent implements OnInit, OnChanges, OnDestroy {
     }
   }
 
+  async loadCodexAppServer(showBusy = true): Promise<void> {
+    if (showBusy) this.busy = true;
+    try {
+      const [status, threads] = await Promise.all([
+        firstValueFrom(this.api.codexAppServerStatus()),
+        firstValueFrom(this.api.codexThreads(this.codexImportSearch)),
+      ]);
+      this.codexAppServer = status;
+      this.codexStoredThreads = threads.threads || [];
+      this.error = "";
+    } catch (error) {
+      this.error = this.errorText(error);
+    } finally {
+      if (showBusy) this.busy = false;
+      this.renderNow();
+    }
+  }
+
+  async importCodexThread(thread: CodexStoredThread): Promise<void> {
+    const id = String(thread.id || "").trim();
+    if (!id) return;
+    this.importingCodexThreadId = id;
+    this.busy = true;
+    try {
+      const result = await firstValueFrom(this.api.importCodexThread(id));
+      this.notice = result.imported ? "Codex thread imported into Orkestr." : "Codex thread is already in Orkestr.";
+      this.error = "";
+      await this.load(false);
+      await this.loadCodexAppServer(false);
+    } catch (error) {
+      this.error = this.errorText(error);
+    } finally {
+      this.importingCodexThreadId = "";
+      this.busy = false;
+      this.renderNow();
+    }
+  }
+
   whatsappAccount(id: string): Record<string, unknown> {
     const accounts = this.connector("whatsapp")?.details?.["accounts"];
     if (!Array.isArray(accounts)) return {};
@@ -1148,6 +1191,7 @@ export class OnboardingPageComponent implements OnInit, OnChanges, OnDestroy {
     this.stepInitialized = true;
     this.persistProgress();
     if (this.isSetupMode()) this.setupSectionChange.emit(id);
+    if (id === "codex") void this.loadCodexAppServer(false);
   }
 
   previousStep(): void {

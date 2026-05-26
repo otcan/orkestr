@@ -14,6 +14,79 @@ async function request(baseUrl, route, options = {}) {
   return response.json();
 }
 
+async function createFakeCodexAppServer(home) {
+  const bin = path.join(home, "bin");
+  await fs.mkdir(bin, { recursive: true });
+  const codexPath = path.join(bin, "codex");
+  await fs.writeFile(
+    codexPath,
+    `#!/usr/bin/env node
+import readline from "node:readline";
+
+const args = process.argv.slice(2);
+if (args[0] === "--version") {
+  console.log("codex-cli fake");
+  process.exit(0);
+}
+if (args[0] === "login" && args[1] === "status") {
+  console.log("Logged in using API key");
+  process.exit(0);
+}
+if (args[0] === "app-server" && args.includes("--help")) {
+  console.log("Usage: codex app-server [OPTIONS]");
+  process.exit(0);
+}
+if (args[0] !== "app-server") {
+  console.log("codex fake");
+  process.exit(0);
+}
+
+const rl = readline.createInterface({ input: process.stdin });
+let nextThread = 1;
+let nextTurn = 1;
+function send(message) {
+  process.stdout.write(JSON.stringify(message) + "\\n");
+}
+rl.on("line", (line) => {
+  const message = JSON.parse(line);
+  const id = message.id;
+  const method = message.method;
+  const params = message.params || {};
+  if (method === "initialize") return send({ id, result: { userAgent: "fake", platformFamily: "linux", platformOs: "linux" } });
+  if (method === "initialized") return;
+  if (method === "thread/start") {
+    const thread = { id: "codex-fake-" + nextThread++, sessionId: "codex-session-1", name: "", status: { type: "idle" }, cwd: params.cwd || "" };
+    send({ id, result: { thread } });
+    send({ method: "thread/started", params: { thread } });
+    return;
+  }
+  if (method === "thread/name/set") return send({ id, result: {} });
+  if (method === "thread/resume") return send({ id, result: { thread: { id: params.threadId, sessionId: params.threadId, status: { type: "idle" } } } });
+  if (method === "thread/unsubscribe") return send({ id, result: { status: "unsubscribed" } });
+  if (method === "thread/archive") return send({ id, result: {} });
+  if (method === "thread/compact/start") return send({ id, result: {} });
+  if (method === "thread/rollback") return send({ id, result: { thread: { id: params.threadId, turns: [] } } });
+  if (method === "thread/list") return send({ id, result: { data: [], nextCursor: null } });
+  if (method === "thread/read") return send({ id, result: { thread: { id: params.threadId, sessionId: params.threadId, name: "Imported", turns: [] } } });
+  if (method === "turn/start") {
+    const turn = { id: "turn-" + nextTurn++, threadId: params.threadId, status: "inProgress", items: [], error: null };
+    send({ id, result: { turn } });
+    send({ method: "turn/started", params: { turn } });
+    send({ method: "item/completed", params: { threadId: params.threadId, turnId: turn.id, item: { type: "agentMessage", id: "agent-" + turn.id, text: "Fake Codex reply", phase: "final_answer" } } });
+    send({ method: "turn/completed", params: { turn: { ...turn, status: "completed" } } });
+    return;
+  }
+  if (method === "turn/steer") return send({ id, result: { turnId: params.expectedTurnId } });
+  if (method === "turn/interrupt") return send({ id, result: {} });
+  send({ id, result: {} });
+});
+`,
+    "utf8",
+  );
+  await fs.chmod(codexPath, 0o755);
+  return bin;
+}
+
 test("runtime monitor default keeps Codex reply import responsive", () => {
   const priorInterval = process.env.ORKESTR_RUNTIME_MONITOR_INTERVAL_MS;
   try {
@@ -38,8 +111,10 @@ test("server exposes health, readiness, version, and agent message APIs", async 
   await fs.mkdir(path.join(workspaceRoot, "beta"), { recursive: true });
   const priorHome = process.env.ORKESTR_HOME;
   const priorWorkspaceRoot = process.env.ORKESTR_RUNTIME_WORKSPACE_ROOT;
+  const priorPath = process.env.PATH;
   process.env.ORKESTR_HOME = home;
   process.env.ORKESTR_RUNTIME_WORKSPACE_ROOT = workspaceRoot;
+  process.env.PATH = `${await createFakeCodexAppServer(home)}${path.delimiter}${priorPath || ""}`;
   const server = await startServer({ port: 0, host: "127.0.0.1" });
   const { port } = server.address();
   const baseUrl = `http://127.0.0.1:${port}`;
@@ -131,5 +206,7 @@ test("server exposes health, readiness, version, and agent message APIs", async 
     else process.env.ORKESTR_HOME = priorHome;
     if (priorWorkspaceRoot === undefined) delete process.env.ORKESTR_RUNTIME_WORKSPACE_ROOT;
     else process.env.ORKESTR_RUNTIME_WORKSPACE_ROOT = priorWorkspaceRoot;
+    if (priorPath === undefined) delete process.env.PATH;
+    else process.env.PATH = priorPath;
   }
 });

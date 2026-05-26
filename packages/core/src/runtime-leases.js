@@ -18,6 +18,16 @@ import {
   updateThreadMessage,
 } from "./threads.js";
 import { parseThreadInputCommand } from "./thread-commands.js";
+import {
+  archiveCodexAppServerThread,
+  codexAppServerThreadStatus,
+  compactCodexAppServerThread,
+  deliverCodexAppServerPendingInputs,
+  resumeCodexAppServerThread,
+  sleepCodexAppServerThread,
+  threadNeedsCodexAppServerMigration,
+  threadUsesCodexAppServer,
+} from "./codex-app-server.js";
 
 const execFileAsync = promisify(execFile);
 const deliveryLocks = new Set();
@@ -639,6 +649,36 @@ export async function runtimeStatus(threadId, env = process.env, messagesOverrid
     .map((message) => String(message.deliveryNextAttemptAt))
     .sort()[0] || null;
   const runningCount = messages.filter((message) => message.state === "running").length;
+  if (threadUsesCodexAppServer(thread, env)) {
+    return codexAppServerThreadStatus(thread, env, {
+      pendingCount,
+      awaitingAckCount,
+      nextDeliveryAttemptAt,
+      runningCount,
+    });
+  }
+  if (threadNeedsCodexAppServerMigration(thread)) {
+    return {
+      state: "migration_required",
+      status: "migration_required",
+      runtimeState: "migration_required",
+      runtimeKind: "codex-app-server",
+      migrationRequired: true,
+      promptReady: false,
+      promptReadyStable: false,
+      working: false,
+      foregroundWorking: false,
+      typingActive: false,
+      backgroundWork: false,
+      pendingCount,
+      awaitingAckCount,
+      nextDeliveryAttemptAt,
+      runningCount,
+      wakePolicy: thread.wakePolicy || "wake-on-message",
+      hibernated: true,
+      error: "codex_app_server_migration_required",
+    };
+  }
   const lease = await activeLeaseForThread(thread.id, env);
   if (!lease) {
     const state = pendingCount > 0 ? "waking" : "sleeping";
@@ -979,6 +1019,15 @@ export async function wakeThread(threadId, options = {}, env = process.env) {
     error.statusCode = 404;
     throw error;
   }
+  if (threadUsesCodexAppServer(thread, env)) {
+    return resumeCodexAppServerThread(thread, env);
+  }
+  if (threadNeedsCodexAppServerMigration(thread)) {
+    const error = new Error("codex_app_server_migration_required");
+    error.statusCode = 409;
+    error.repair = "Run `orkestr codex migrate` on this host.";
+    throw error;
+  }
   const existing = await activeLeaseForThread(thread.id, env);
   if (existing) {
     const windowName = await refreshTmuxWindowName(thread, existing, env);
@@ -1089,6 +1138,9 @@ export async function sleepThread(threadId, options = {}, env = process.env) {
     const error = new Error("thread_not_found");
     error.statusCode = 404;
     throw error;
+  }
+  if (threadUsesCodexAppServer(thread, env)) {
+    return sleepCodexAppServerThread(thread, options, env);
   }
   const leases = await listRuntimeLeases(env);
   const now = nowIso();
@@ -1225,6 +1277,10 @@ async function writeManualContextCheckpoint(threadId, context = {}, env = proces
 }
 
 async function compactCodexRuntimeContext(threadId, env = process.env) {
+  const thread = await getThread(threadId, env).catch(() => null);
+  if (thread && threadUsesCodexAppServer(thread, env)) {
+    return compactCodexAppServerThread(thread, env);
+  }
   const status = await runtimeStatus(threadId, env).catch((error) => ({ error: error instanceof Error ? error.message : String(error) }));
   if (!status?.paneId) {
     return {
@@ -1385,6 +1441,24 @@ function shouldDeferCodexModeCommand(result = {}) {
 }
 
 export async function completeCodexModeCommand(thread, message, mode, env = process.env) {
+  if (threadUsesCodexAppServer(thread, env)) {
+    const updated = await updateThreadMessage(thread.id, message.id, {
+      state: "completed",
+      deliveryState: "delivered",
+      observedVia: "codex_app_server_mode_recorded",
+      deliveredAt: nowIso(),
+      error: null,
+    }, env);
+    await updateThread(thread.id, codexModePersistencePatch(mode, "orkestr-command", { changed: true, reason: "app-server-local-mode" }), env).catch(() => {});
+    return {
+      messageId: updated.id,
+      message: updated,
+      mode,
+      applied: true,
+      deferred: false,
+      runtimeMode: { mode, source: "orkestr-command", reason: "app-server-local-mode" },
+    };
+  }
   const result = await applyRuntimeCodexMode(thread.id, mode, env, {
     wakeIfUnavailable: true,
     wakeReason: message.source || "codex_mode_command",
@@ -1906,6 +1980,11 @@ export async function applyRuntimeCodexMode(threadId, mode, env = process.env, o
     const error = new Error("invalid_codex_mode");
     error.statusCode = 400;
     throw error;
+  }
+  const thread = await getThread(threadId, env).catch(() => null);
+  if (thread && threadUsesCodexAppServer(thread, env)) {
+    await updateThread(thread.id, codexModePersistencePatch(desired, "orkestr-command", { changed: true, reason: "app-server-local-mode" }), env).catch(() => {});
+    return { applied: true, changed: true, mode: desired, reason: "app-server-local-mode" };
   }
   let status = await runtimeStatus(threadId, env).catch(() => null);
   let wokeRuntime = false;
@@ -3039,6 +3118,13 @@ function scheduleThreadInputDelivery(threadId, env = process.env, delayMs = 0) {
 export async function deliverPendingThreadInputs(threadId, env = process.env) {
   const thread = await getThread(threadId, env);
   if (!thread) return [];
+  if (threadUsesCodexAppServer(thread, env)) {
+    return deliverCodexAppServerPendingInputs(thread, env);
+  }
+  if (threadNeedsCodexAppServerMigration(thread)) {
+    await appendEvent({ type: "thread_input_delivery_blocked", threadId: thread.id, reason: "codex_app_server_migration_required" }, env).catch(() => null);
+    return [];
+  }
   if (deliveryLocks.has(thread.id)) return [];
   deliveryLocks.add(thread.id);
   const delivered = [];

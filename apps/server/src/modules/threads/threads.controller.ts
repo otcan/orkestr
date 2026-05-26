@@ -32,6 +32,15 @@ import {
 } from "../../../../../packages/core/src/threads.js";
 import { createThreadWorker, detectThreadRepo, listThreadWorkers, refreshThreadGitState, syncThreadWorkerWithParent, updateThreadRepo } from "../../../../../packages/core/src/thread-workers.js";
 import { parseThreadInputCommand } from "../../../../../packages/core/src/thread-commands.js";
+import {
+  archiveCodexAppServerThread,
+  compactCodexAppServerThread,
+  interruptCodexAppServerThread,
+  rollbackCodexAppServerThread,
+  startCodexAppServerThread,
+  threadNeedsCodexAppServerMigration,
+  threadUsesCodexAppServer,
+} from "../../../../../packages/core/src/codex-app-server.js";
 import { ensureDataDirs } from "../../../../../packages/storage/src/paths.js";
 import { codexThreadId, threadRuntimeSummary, threadSummaryPayload } from "../../thread-summary.js";
 import { ensureAttachmentsArray, httpError } from "../../common/http.js";
@@ -424,7 +433,22 @@ export class ThreadsController {
   @Post()
   async create(@Body() body: Record<string, unknown> = {}) {
     const prepared = await prepareThreadCreateBody(body);
-    const thread = await createThread({ wakePolicy: "wake-on-message", ...prepared });
+    const preparedExecutor = typeof prepared.executor === "object" && prepared.executor ? prepared.executor as Record<string, unknown> : {};
+    const requestedExecutorId = String(prepared.executorId || preparedExecutor.id || preparedExecutor.type || "codex").trim() || "codex";
+    const usesCodexRuntime = requestedExecutorId === "codex" || String(preparedExecutor.type || "").trim() === "codex";
+    let thread = await createThread({
+      wakePolicy: "wake-on-message",
+      ...(usesCodexRuntime ? {
+        executorId: "codex",
+        executor: { type: "codex", ...preparedExecutor },
+        runtimeKind: "codex-app-server",
+      } : {}),
+      ...prepared,
+    });
+    if (usesCodexRuntime && !threadUsesCodexAppServer(thread)) {
+      const started = await startCodexAppServerThread(thread);
+      if (started?.thread) thread = started.thread;
+    }
     if (body.wake === true || body.start === true) {
       requestThreadWake(thread.id, { reason: body.reason || "thread_created" });
     }
@@ -804,11 +828,50 @@ export class ThreadsController {
     };
   }
 
+  @Post(":threadId/codex/compact")
+  @HttpCode(200)
+  async codexCompact(@Param("threadId") threadId: string) {
+    const thread = await getThread(threadId);
+    if (!thread) throw httpError("thread_not_found", 404);
+    if (!threadUsesCodexAppServer(thread)) throw httpError("codex_app_server_required", 409);
+    const result = await compactCodexAppServerThread(thread);
+    return {
+      ok: true,
+      compacted: true,
+      result,
+      thread: await threadRuntimeSummary(await getThread(thread.id) || thread, await listThreadMessages(thread.id)),
+    };
+  }
+
+  @Post(":threadId/codex/rollback")
+  @HttpCode(200)
+  async codexRollback(@Param("threadId") threadId: string, @Body() body: Record<string, unknown> = {}) {
+    const thread = await getThread(threadId);
+    if (!thread) throw httpError("thread_not_found", 404);
+    if (!threadUsesCodexAppServer(thread)) throw httpError("codex_app_server_required", 409);
+    const result = await rollbackCodexAppServerThread(thread, Number(body.numTurns || body.turns || 1) || 1);
+    return {
+      ok: true,
+      result,
+      thread: await threadRuntimeSummary(await getThread(thread.id) || thread, await listThreadMessages(thread.id)),
+    };
+  }
+
   @Post(":threadId/attach")
   @HttpCode(200)
   async attach(@Param("threadId") threadId: string) {
     let thread = await getThread(threadId);
     if (!thread) throw httpError("thread_not_found", 404);
+    if (threadUsesCodexAppServer(thread) || threadNeedsCodexAppServerMigration(thread)) {
+      return {
+        ok: false,
+        thread,
+        runtime: await runtimeStatus(thread.id).catch(() => null),
+        message: threadNeedsCodexAppServerMigration(thread)
+          ? "Run `orkestr codex migrate` on this host before opening this Codex thread."
+          : "Codex app-server threads do not expose raw terminal attach.",
+      };
+    }
     let status = await runtimeStatus(thread.id);
     let wakeResult: Awaited<ReturnType<typeof wakeThread>> | null = null;
     if (!status.sessionName || status.state === "sleeping") {
@@ -849,6 +912,33 @@ export class ThreadsController {
   @HttpCode(200)
   async interrupt(@Param("threadId") threadId: string, @Body() body: Record<string, unknown> = {}) {
     const result = await wakeThread(threadId, { reason: "interrupt" });
+    if (threadUsesCodexAppServer(result.thread)) {
+      const interrupted = await interruptCodexAppServerThread(result.thread).catch(() => ({ interrupted: false }));
+      if (String(body.text || "").trim()) {
+        const message = await enqueueThreadInput(result.thread.id, {
+          ...body,
+          source: body.source || "interrupt",
+          forceDeliveryAfterInterrupt: true,
+        });
+        const delivered = await deliverPendingThreadInputs(result.thread.id);
+        const current = (await listThreadMessages(result.thread.id)).find((item: any) => item.id === message.id) || message;
+        return {
+          ok: true,
+          interrupted: Boolean((interrupted as any).interrupted),
+          message: current,
+          delivered,
+          queued: current.state !== "completed",
+          queueItemId: current.id,
+          deliveryState: current.deliveryState || current.state,
+          observed: true,
+          observedVia: current.observedVia || "codex_app_server_interrupt",
+          reason: "interrupt",
+          state: current.state,
+          runtime: await runtimeStatus(result.thread.id).catch(() => result.status),
+        };
+      }
+      return { ok: true, interrupted: Boolean((interrupted as any).interrupted), runtime: await runtimeStatus(result.thread.id).catch(() => result.status) };
+    }
     const paneId = result.status?.paneId || result.lease?.paneId;
     const interrupted = shouldInterruptRuntime(result.status as Record<string, any> | null);
     if (paneId && interrupted) {
@@ -985,6 +1075,10 @@ export class ThreadsController {
   @Delete(":threadId")
   async delete(@Param("threadId") threadId: string, @Query() query: Record<string, unknown> = {}) {
     const deleteWorkers = optionalBodyBoolean(query, "deleteWorkers", false);
+    const target = await getThread(threadId);
+    if (target && threadUsesCodexAppServer(target)) {
+      await archiveCodexAppServerThread(target).catch(() => null);
+    }
     const result = await deleteThread(threadId, { deleteWorkers });
     const deleted = new Set((result.deletedThreads || []).map((id: string) => String(id)));
     const timers = await listTimers();

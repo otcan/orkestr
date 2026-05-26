@@ -94,6 +94,33 @@ test("CLI whereiam sends the current directory to the public API", async () => {
   assert.match(stdout.text(), /Repo: \/repo\/demo/);
 });
 
+test("CLI codex migrate calls the migration API", async () => {
+  const stdout = capture();
+  const seen = [];
+  const code = await runCli(["codex", "migrate", "--dry-run"], {
+    stdout,
+    stderr: capture(),
+    fetchImpl: fakeFetch({
+      "POST /api/codex/migrate": {
+        ok: true,
+        dryRun: true,
+        candidates: 2,
+        migrated: 0,
+        counts: {
+          mark_existing_codex_thread: 1,
+          create_codex_app_server_thread: 1,
+        },
+      },
+    }, seen),
+  });
+
+  assert.equal(code, 0);
+  assert.deepEqual(seen.map((entry) => entry.key), ["POST /api/codex/migrate"]);
+  assert.equal(seen[0].body.dryRun, true);
+  assert.match(stdout.text(), /Codex migration: dry run/);
+  assert.match(stdout.text(), /Candidates: 2/);
+});
+
 test("CLI version prints the active build identity", async () => {
   const stdout = capture();
   const code = await runCli(["version"], {

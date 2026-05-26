@@ -57,6 +57,10 @@ function status(id, label, state, summary, details = {}) {
   return { id, label, state, summary, details };
 }
 
+function codexRuntimeKind(env = process.env) {
+  return "app-server";
+}
+
 function orderedConnectorIds(overlay) {
   const overlayIds = Object.keys(overlay?.connectors || {}).filter(Boolean).sort();
   return [...connectorOrder, ...overlayIds.filter((id) => !connectorOrder.includes(id))];
@@ -102,6 +106,9 @@ export async function getConnectorStatuses({ env = process.env, home = os.homedi
   const chrome = await firstCommandVersion(["google-chrome", "chrome", "chromium", "chromium-browser"]);
   const codex = codexBinaryStatus(env) || await firstCommandVersion([String(env.ORKESTR_CODEX_BIN || "codex").trim() || "codex"]);
   const codexAuth = codex.command ? await codexLoginStatus({ env, home, timeoutMs: 2500 }) : null;
+  const codexRuntime = codexRuntimeKind(env);
+  const codexAppServerHelp = codex.command ? await commandVersion(codex.command, ["app-server", "--help"]) : "";
+  const codexAppServerAvailable = Boolean(codexAppServerHelp);
   const timersExist = await pathExists(paths.timers);
   const linkedinProfileExists = await pathExists(path.join(paths.browsers, "linkedin"));
   const gmailProfileExists = await pathExists(path.join(paths.browsers, "gmail"));
@@ -120,19 +127,25 @@ export async function getConnectorStatuses({ env = process.env, home = os.homedi
       ? status("openai", "OpenAI API", "connected", "OpenAI API key is configured for direct API connectors and skills.")
       : status("openai", "OpenAI API", "not_connected", "Optional for coding agents. Add an OpenAI API key only for connectors or skills that call OpenAI directly."),
     codex:
-      codex.command && codexAuth?.connected
-        ? status("codex", "Codex Agent", "connected", "Codex Agent runtime is installed and signed in.", {
+      codex.command && codexAuth?.connected && codexAppServerAvailable
+        ? status("codex", "Codex Agent", "connected", "Codex Agent runtime is installed, signed in, and app-server ready.", {
             command: codex.command,
             version: codex.version,
             codexHome,
+            runtime: codexRuntime,
+            appServer: "available",
             authMode: codexAuth.authMode || (codexAuthExists ? "device_auth" : "codex_auth"),
             statusText: codexAuth.statusText,
           })
         : codex.command
-          ? status("codex", "Codex Agent", "partial", codexEnvKey ? "OpenAI API key exists, but Codex Agent is not signed in yet. Connect Codex here before running coding agents." : "Codex Agent runtime is installed. Sign in here before running coding agents.", {
+          ? status("codex", "Codex Agent", "partial", codexAuth?.connected && !codexAppServerAvailable
+              ? "Codex is signed in, but this Codex CLI does not expose app-server. Update Codex before creating coding agents."
+              : codexEnvKey ? "OpenAI API key exists, but Codex Agent is not signed in yet. Connect Codex here before running coding agents." : "Codex Agent runtime is installed. Sign in here before running coding agents.", {
               command: codex.command,
               version: codex.version,
               codexHome,
+              runtime: codexRuntime,
+              appServer: codexAppServerAvailable ? "available" : "missing",
               authMode: null,
               statusText: codexAuth?.statusText || "",
               openaiKeyConfigured: codexEnvKey,

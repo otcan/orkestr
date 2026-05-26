@@ -683,7 +683,7 @@ test("runtime sync auto-sleeps stable idle ready runtimes", async () => {
   }
 });
 
-test("runtime sync confirms Codex resume directory prompts", async () => {
+test("legacy Codex resume threads require app-server migration", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-resume-dir-"));
   const fakeTmux = await createFakeTmux(home);
   const priorPath = process.env.PATH;
@@ -718,20 +718,19 @@ test("runtime sync confirms Codex resume directory prompts", async () => {
       name: "Resume Dir Thread",
       executor: { type: "codex", codexThreadId: "codex-resume-thread" },
     }, env);
-    await wakeThread("resume-dir-thread", { reason: "test_wake" }, env);
-
-    let status = await runtimeStatus("resume-dir-thread", env);
-    assert.equal(status.state, "waking");
-    assert.equal(status.needsResumeDirectoryConfirmation, true);
+    const status = await runtimeStatus("resume-dir-thread", env);
+    assert.equal(status.state, "migration_required");
+    assert.equal(status.migrationRequired, true);
+    await assert.rejects(
+      () => wakeThread("resume-dir-thread", { reason: "test_wake" }, env),
+      /codex_app_server_migration_required/,
+    );
 
     await syncRuntimeLeases(env);
 
-    status = await runtimeStatus("resume-dir-thread", env);
-    const log = await fs.readFile(fakeTmux.log, "utf8");
-    assert.equal(status.state, "waking");
-    assert.match(log, /resume -C .*resume-dir-thread'? '?codex-resume-thread'?/);
-    assert.match(log, /__CALL__\tsend-keys\t-t\t%42\t2\tC-m/);
-    assert.doesNotMatch(log, /__CALL__\tkill-session\t-t\torkestr-resume-dir-thread/);
+    const log = await fs.readFile(fakeTmux.log, "utf8").catch(() => "");
+    assert.doesNotMatch(log, /resume -C .*resume-dir-thread/);
+    assert.doesNotMatch(log, /__CALL__\tsend-keys\t-t\t%42\t2\tC-m/);
   } finally {
     restoreEnvValue("PATH", priorPath);
     restoreEnvValue("TMUX_LOG", priorTmuxLog);
@@ -4551,7 +4550,7 @@ test("thread runtime summary reads Codex model and limits from live metadata", a
   }
 });
 
-test("thread runtime sync surfaces Codex plan questions as pending input", async (t) => {
+test("thread runtime sync does not scrape legacy Codex plan questions before migration", async (t) => {
   try {
     await execFileAsync("sqlite3", ["--version"]);
   } catch {
@@ -4600,7 +4599,6 @@ test("thread runtime sync surfaces Codex plan questions as pending input", async
       cwd: workspace,
       executor: { type: "codex", codexThreadId },
     }, env);
-    await wakeThread("plan-question-thread", { reason: "test" }, env);
     await fs.appendFile(rolloutPath, `${JSON.stringify({
       timestamp: "2026-05-16T21:23:24.316Z",
       type: "response_item",
@@ -4625,14 +4623,13 @@ test("thread runtime sync surfaces Codex plan questions as pending input", async
     })}\n`, "utf8");
 
     await syncRuntimeLeases(env);
+    const status = await runtimeStatus("plan-question-thread", env);
     const messages = await listThreadMessages("plan-question-thread", env);
     const planQuestion = messages.find((message) => message.phase === "need_input");
 
-    assert.ok(planQuestion);
-    assert.equal(planQuestion.role, "assistant");
-    assert.match(planQuestion.text, /Codex needs input to continue/);
-    assert.match(planQuestion.text, /What should a brand-new user accomplish first\?/);
-    assert.match(planQuestion.text, /A\. Connect accounts: Prioritize connector setup before timers\./);
+    assert.equal(status.state, "migration_required");
+    assert.equal(status.migrationRequired, true);
+    assert.equal(planQuestion, undefined);
 
     server = await startServer({ port: 0, host: "127.0.0.1" });
     const { port } = server.address();
@@ -4641,9 +4638,8 @@ test("thread runtime sync surfaces Codex plan questions as pending input", async
     const payload = await response.json();
 
     assert.equal(response.status, 200);
-    assert.equal(payload.awaitingInput, true);
-    assert.equal(payload.awaitingInputEventId, planQuestion.eventId);
-    assert.equal(payload.pendingQuestion.text, planQuestion.text);
+    assert.equal(payload.awaitingInput, false);
+    assert.equal(payload.pendingQuestion, null);
 
     await appendThreadMessage("plan-question-thread", {
       role: "user",
@@ -4667,7 +4663,7 @@ test("thread runtime sync surfaces Codex plan questions as pending input", async
   }
 });
 
-test("thread runtime sync catches recent rollout replies that predate wake cursor", async (t) => {
+test("thread runtime sync does not scrape legacy rollout replies before migration", async (t) => {
   try {
     await execFileAsync("sqlite3", ["--version"]);
   } catch {
@@ -4750,19 +4746,17 @@ test("thread runtime sync catches recent rollout replies that predate wake curso
       createdAt: "2026-05-18T07:00:00.000Z",
     }, env);
 
-    await wakeThread("rollout-lookback-thread", { reason: "test" }, env);
     await syncRuntimeLeases(env);
     await syncRuntimeLeases(env);
+    const status = await runtimeStatus("rollout-lookback-thread", env);
     const messages = await listThreadMessages("rollout-lookback-thread", env);
     const replies = messages.filter((message) => message.role === "assistant" && message.text === replyText);
     const thread = (await listThreads(env)).find((item) => item.id === "rollout-lookback-thread");
     const summary = await threadRuntimeSummary(thread, messages);
 
-    assert.equal(replies.length, 1);
-    assert.equal(replies[0].createdAt, "2026-05-18T06:53:36.977Z");
-    assert.equal(replies[0].parentMessageId, inbound.id);
-    assert.equal(replies[0].connector, "whatsapp");
-    assert.equal(replies[0].chatId, "120000000000000000@g.us");
+    assert.equal(status.state, "migration_required");
+    assert.equal(status.migrationRequired, true);
+    assert.equal(replies.length, 0);
     assert.equal(summary.lastMessageAt, "2026-05-18T07:00:00.000Z");
     assert.equal(summary.lastMessagePhase, "commentary");
   } finally {

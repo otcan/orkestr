@@ -6,6 +6,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { codexLoginStatus, defaultCodexHome } from "../../connectors/src/codex.js";
 import { dataPaths } from "../../storage/src/paths.js";
+import { codexAppServerStatus } from "./codex-app-server-client.js";
 import { securityStatus } from "./security.js";
 
 const execFileAsync = promisify(execFile);
@@ -135,10 +136,20 @@ async function codexCheck(env, home) {
       });
     }
     if (status.connected) {
+      const appServer = await codexAppServerStatus({ env, home });
+      if (!appServer.ok) {
+        return doctorCheck("codex", "Codex CLI", "error", appServer.error || "Codex app-server is not available.", {
+          command: status.command,
+          path: status.codexHome,
+          authMode: status.authMode || "",
+          repair: "Update Codex until `codex app-server --help` works.",
+        });
+      }
       return doctorCheck("codex", "Codex CLI", "ok", status.message || "Codex is logged in.", {
         command: status.command,
         path: status.codexHome,
         authMode: status.authMode || "",
+        appServer: "available",
       });
     }
     return doctorCheck("codex", "Codex CLI", "warning", status.message || "Codex is not logged in.", {

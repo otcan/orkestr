@@ -138,9 +138,20 @@ In setup, connect **Codex Agent** before running coding agents. You can still
 create and inspect workspaces before Codex is signed in. Use **Open
 Codex sign-in** for device authorization or **Connect Codex with API key** when
 this runtime should authenticate Codex that way. Orkestr checks `codex login
-status` before starting a coding thread, so a raw Codex login menu is treated
-as setup work instead of being opened inside the agent runtime. Runtime state,
-including Codex auth, is stored under `ORKESTR_HOME`.
+status` before starting a coding thread, then controls new coding threads
+through `codex app-server` instead of driving the raw terminal login screen.
+Existing Codex app-server threads can be imported from `/setup/codex`. Older
+Orkestr threads from the pre-app-server runtime must be migrated once on the
+host with `orkestr codex migrate`; Orkestr will not wake them through the old
+tmux/Codex path.
+Runtime state, including Codex auth, is stored under `ORKESTR_HOME`.
+
+For an existing host:
+
+```bash
+orkestr codex migrate --dry-run
+orkestr codex migrate
+```
 On macOS local installs, the installer does not probe or run the host `codex`
 binary by default because Gatekeeper/XProtect can block npm-distributed native
 binaries. Verify `codex --version` and `codex login status` yourself, then rerun
@@ -441,8 +452,8 @@ flowchart LR
   Bridge --> API
   API --> Store[(ORKESTR_HOME data, config, events)]
   API --> Threads[Thread runtime API]
-  Threads --> Tmux[tmux session lease]
-  Tmux --> Codex[Codex CLI]
+  Threads --> AppServer[Codex app-server stdio]
+  AppServer --> Codex[Codex CLI]
   API --> Browsers[Virtual browser profiles]
   Browsers --> Desktop[Local Chrome desktop]
   API --> Timers[Timers]

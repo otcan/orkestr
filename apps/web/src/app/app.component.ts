@@ -394,6 +394,10 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     return this.codexConnector()?.state === "connected";
   }
 
+  rawTerminalAvailable(thread: ThreadSummary | null = this.selectedThread()): boolean {
+    return String(thread?.runtimeKind || "").trim() !== "codex-app-server";
+  }
+
   codexAgentStateLabel(): string {
     const connector = this.codexConnector();
     const state = String(connector?.state || "checking").toLowerCase();
@@ -591,6 +595,12 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
       return;
     }
     if ((panel === "raw" || panel === "runtime") && !this.guardCodexRuntime()) return;
+    if (panel === "raw" && !this.rawTerminalAvailable()) {
+      this.activePanel = "chat";
+      const thread = this.selectedThread();
+      if (thread) this.pushPath(this.threadSlug(thread), "chat");
+      return;
+    }
     this.modelDetailsOpen = false;
     this.slashHelpOpen = false;
     this.gitDetailsThreadId = "";
@@ -1050,6 +1060,12 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   async loadRaw(): Promise<void> {
     const thread = this.selectedThread();
     if (!thread) return;
+    if (!this.rawTerminalAvailable(thread)) {
+      this.attachDetails = null;
+      this.closeRawStream();
+      this.activePanel = "chat";
+      return;
+    }
     this.busy = true;
     try {
       const [attach, runtime] = await Promise.all([

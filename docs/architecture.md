@@ -20,7 +20,7 @@ flowchart TB
 
   subgraph LocalRuntime
     Bridge[Built-in WhatsApp bridge]
-    Tmux[tmux session lease]
+    AppServer[Codex app-server stdio]
     Codex[Codex CLI]
     Chrome[Chrome browser profiles]
   end
@@ -37,7 +37,7 @@ flowchart TB
   API --> Threads
   API --> Timers
   API --> BrowserAPI
-  Threads --> Tmux --> Codex
+  Threads --> AppServer --> Codex
   BrowserAPI --> Chrome
   API --> Home
   API -. optional .-> Overlay
@@ -47,7 +47,14 @@ flowchart TB
 
 The public API stores thread state, messages, connector status, timers, and browser profile metadata under `ORKESTR_HOME`.
 
-Codex execution is intentionally local. The thread runtime wakes a tmux session and starts Codex in the thread workspace. Private deployments can customize launch behavior through environment variables or overlays, but the public repo must not contain private host assumptions.
+Codex execution is intentionally local. New coding threads use the Codex CLI
+app-server over stdio so Orkestr can start turns, receive structured progress,
+mirror approvals, and import existing Codex app-server threads without scraping a
+terminal. Older Orkestr Codex threads must be migrated once with
+`orkestr codex migrate`; Orkestr does not keep a tmux/Codex fallback path for
+Codex execution. Private deployments can customize non-Codex launch behavior
+through environment variables or overlays, but the public repo must not contain
+private host assumptions.
 
 ## Deployment Boundary
 

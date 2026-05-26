@@ -13,8 +13,10 @@ and private overlays stay on your machine or VPS.
   called `Repo reviewer` is a thread.
 - **Workspace:** the folder where the agent works. Orkestr can clone a repo, or
   create a local git workspace when no repo is provided.
-- **Runtime:** the live Codex process behind a thread. Orkestr starts it in tmux
-  so it can survive browser refreshes.
+- **Runtime:** the live Codex process behind a thread. New coding threads use
+  `codex app-server` so Orkestr can control turns, status, approvals, and
+  imported Codex history directly. Older Orkestr Codex threads must be migrated
+  once with `orkestr codex migrate`.
 - **Status:** the current operating state: ready, starting, working, sleeping,
   awaiting input, or failed.
 - **Connector:** an external surface such as WhatsApp, Gmail, a browser profile,
@@ -40,9 +42,27 @@ Common actions:
 - wake or start the thread
 - send a message
 - switch between plan and code mode
-- attach to the underlying terminal
+- inspect the structured runtime state and history
 - sleep the runtime when it is idle
 - inspect model, effort, context, and rate-limit status when available
+
+The Codex setup page also lets you import existing Codex app-server threads.
+Imported threads appear as Orkestr threads with their Codex history hydrated
+into the normal conversation view.
+
+### Migrate Existing Codex Threads
+
+On a host that already ran Orkestr before the app-server cutover, run:
+
+```bash
+orkestr codex migrate --dry-run
+orkestr codex migrate
+```
+
+The migration stops old live Codex tmux leases, rewrites existing Orkestr Codex
+threads to app-server metadata, and creates app-server thread IDs for Codex
+threads that did not have one. After this, Codex threads wake through
+`codex app-server` only.
 
 ### Use Real Workspaces
 
@@ -154,7 +174,7 @@ The safe production shape is:
 Browser or WhatsApp
   -> HTTPS/Tailscale public entry
   -> Orkestr web/API layer
-  -> local tmux/Codex runtimes
+  -> local Codex app-server runtimes
   -> local workspaces and browser profiles
 ```
 

@@ -156,6 +156,7 @@ function latestAssistantPlanAvailable(messages: any[] = []): boolean {
 
 function codexMetadata(thread: any) {
   const metadata = thread?.executor?.metadata && typeof thread.executor.metadata === "object" ? thread.executor.metadata : {};
+  const runtimeKind = String(thread?.runtimeKind || thread?.executor?.transport || metadata.transport || "").trim();
   const tokenUsage = thread?.codexTokenUsage || metadata.codexTokenUsage || metadata.tokenUsage || null;
   const totalTokenUsage = thread?.codexTotalTokenUsage || metadata.codexTotalTokenUsage || metadata.totalTokenUsage || null;
   const contextWindow = Number(thread?.codexContextWindow || metadata.codexContextWindow || metadata.contextWindow || 0) || null;
@@ -176,6 +177,9 @@ function codexMetadata(thread: any) {
     codexTokenUsage: tokenUsage,
     codexTotalTokenUsage: totalTokenUsage,
     codexRateLimits: rateLimits,
+    runtimeKind: runtimeKind === "app-server" || runtimeKind === "codex-app-server" ? "codex-app-server" : runtimeKind === "tmux" ? "migration_required" : null,
+    codexSessionId: thread?.codexSessionId || thread?.executor?.codexSessionId || metadata.codexSessionId || null,
+    importedFromCodex: thread?.importedFromCodex === true || metadata.importedFromCodex === true,
   };
 }
 
@@ -410,6 +414,12 @@ export async function threadRuntimeSummary(thread: any, messages: any[] = [], op
     inferredThreadId: resolvedCodexThreadId || null,
     wakePolicy: thread.wakePolicy || "wake-on-message",
     ...metadata,
+    runtimeKind: metadata.runtimeKind || (resolvedCodexThreadId ? "migration_required" : null),
+    codexSessionId: metadata.codexSessionId || null,
+    codexStatus: status?.codexStatus || thread.runtime?.codexStatus || null,
+    activeTurnId: status?.activeTurnId || thread.runtime?.activeTurnId || null,
+    importedFromCodex: metadata.importedFromCodex,
+    migrationRequired: Boolean(status?.migrationRequired),
     planAvailable,
     planImplementationReady: Boolean(status?.planImplementationReady),
     planImplementationMenuVisible: Boolean(status?.planImplementationMenuVisible),

@@ -14,6 +14,7 @@ import {
   syncRuntimeLeases,
 } from "../../../packages/core/src/runtime-leases.js";
 import { markDueTimers } from "../../../packages/core/src/timers.js";
+import { stopCodexAppServerClients } from "../../../packages/core/src/codex-app-server.js";
 import { deliverWhatsAppReplies, syncWhatsAppTypingIndicators } from "../../../packages/connectors/src/whatsapp.js";
 import {
   startConfiguredLocalWhatsAppAccounts,
@@ -100,6 +101,7 @@ export async function startServer({ port = 19812, host = "127.0.0.1", openBrowse
     clearConnectorDeliverySignalHandler();
     clearDeliveryFailureHandler();
     whatsappDeliveryScheduler.close();
+    stopCodexAppServerClients();
     await stopLocalWhatsAppBridge().catch(() => {});
   });
 }
