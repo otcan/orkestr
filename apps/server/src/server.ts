@@ -14,7 +14,7 @@ import {
   syncRuntimeLeases,
 } from "../../../packages/core/src/runtime-leases.js";
 import { markDueTimers } from "../../../packages/core/src/timers.js";
-import { stopCodexAppServerClients } from "../../../packages/core/src/codex-app-server.js";
+import { setCodexAppServerMessageHandler, stopCodexAppServerClients } from "../../../packages/core/src/codex-app-server.js";
 import { deliverWhatsAppReplies, syncWhatsAppTypingIndicators } from "../../../packages/connectors/src/whatsapp.js";
 import {
   startConfiguredLocalWhatsAppAccounts,
@@ -84,6 +84,11 @@ export async function startServer({ port = 19812, host = "127.0.0.1", openBrowse
   const clearDeliveryFailureHandler = setThreadInputDeliveryFailureHandler(() => {
     whatsappDeliveryScheduler.schedule();
   });
+  const clearCodexAppServerMessageHandler = setCodexAppServerMessageHandler(({ message }: any = {}) => {
+    if (String(message?.connector || "").trim().toLowerCase() === "whatsapp") {
+      whatsappDeliveryScheduler.schedule();
+    }
+  });
 
   registerStaticFallback(app);
   await app.init();
@@ -100,6 +105,7 @@ export async function startServer({ port = 19812, host = "127.0.0.1", openBrowse
   return serverHandle(app, timer, runtimeMonitor, paneProgressMonitor, async () => {
     clearConnectorDeliverySignalHandler();
     clearDeliveryFailureHandler();
+    clearCodexAppServerMessageHandler();
     whatsappDeliveryScheduler.close();
     stopCodexAppServerClients();
     await stopLocalWhatsAppBridge().catch(() => {});

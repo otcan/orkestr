@@ -11,7 +11,7 @@ import {
   stopCodexAppServerClients,
 } from "../packages/core/src/codex-app-server.js";
 import { migrateCodexThreadsToAppServer } from "../packages/core/src/codex-app-server-migration.js";
-import { createThread, enqueueThreadInput, getThread, listThreadMessages } from "../packages/core/src/threads.js";
+import { createThread, enqueueThreadInput, getThread, listThreadMessages, updateThread } from "../packages/core/src/threads.js";
 import { deliverWhatsAppReplies } from "../packages/connectors/src/whatsapp.js";
 import { writeConnectorConfig } from "../packages/storage/src/config.js";
 
@@ -88,6 +88,12 @@ rl.on("line", (line) => {
   if (message.method === "thread/resume") return send({ id, result: { thread: state.threads.find((item) => item.id === params.threadId) || { id: params.threadId, sessionId: params.threadId } } });
   if (message.method === "thread/unsubscribe") return send({ id, result: { status: "unsubscribed" } });
   if (message.method === "thread/archive") return send({ id, result: {} });
+  if (message.method === "turn/steer") {
+    if (params.expectedTurnId === "stale-turn") {
+      return send({ id, error: { code: -32000, message: "no active turn to steer" } });
+    }
+    return send({ id, result: { turnId: params.expectedTurnId } });
+  }
   if (message.method === "turn/start") {
     const thread = state.threads.find((item) => item.id === params.threadId);
     const turn = { id: "turn_" + Date.now(), threadId: params.threadId, status: "inProgress", items: [] };
@@ -176,8 +182,26 @@ test("Codex app-server starts threads, delivers input, and imports existing thre
     assert.equal(whatsappCalls[0].body.accountId, "account-1");
     assert.match(whatsappCalls[0].body.text, /Reply to: whatsapp ping/);
 
+    const staleThread = await createThread({ id: "app-server-stale-turn-thread", name: "App Server Stale Turn Thread", cwd: home, executorId: "codex", executor: { type: "codex" } }, env);
+    const startedStale = await startCodexAppServerThread(staleThread, env);
+    await updateThread(startedStale.thread.id, {
+      runtime: { ...(startedStale.thread.runtime || {}), activeTurnId: "stale-turn", state: "working" },
+    }, env);
+    await enqueueThreadInput(startedStale.thread.id, { text: "recover stale turn" }, env);
+    const staleDelivered = await deliverCodexAppServerPendingInputs({
+      ...startedStale.thread,
+      runtime: { ...(startedStale.thread.runtime || {}), activeTurnId: "stale-turn", state: "working" },
+    }, env);
+    const staleMessages = await listThreadMessages(startedStale.thread.id, env);
+    const staleInput = staleMessages.find((message) => message.role === "user" && /recover stale turn/.test(message.text));
+    const staleReply = staleMessages.find((message) => message.source === "codex-app-server" && /Reply to: recover stale turn/.test(message.text));
+    assert.equal(staleDelivered.length, 1);
+    assert.equal(staleInput.state, "completed");
+    assert.equal(staleInput.observedVia, "codex_app_server_turn_start_after_stale_steer");
+    assert.ok(staleReply);
+
     const listed = await listCodexAppServerThreads({}, env);
-    assert.equal(listed.data.length, 2);
+    assert.equal(listed.data.length, 3);
     await createThread({
       id: "legacy-codex-thread",
       name: "Legacy Codex Thread",

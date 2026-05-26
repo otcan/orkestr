@@ -37,6 +37,7 @@ export {
 export {
   codexAppServerStatus,
   getCodexAppServerClient,
+  setCodexAppServerMessageHandler,
   stopCodexAppServerClients,
 } from "./codex-app-server-client.js";
 
@@ -144,6 +145,25 @@ export async function interruptCodexAppServerThread(thread, env = process.env) {
   return { interrupted: true, turnId: activeTurnId };
 }
 
+function staleSteerError(error) {
+  const text = clean(error?.message || error?.data?.message || error?.data?.error || error);
+  return /no\s+active\s+turn/i.test(text) && /steer/i.test(text);
+}
+
+async function startCodexAppServerTurn({ client, thread, id, pending, env, observedVia = "codex_app_server_turn_start" }) {
+  const result = await client.request("turn/start", turnStartParams(thread, pending));
+  const turnId = clean(result?.turn?.id || result?.turnId);
+  if (turnId) {
+    client.rememberTurnParent(id, turnId, pending);
+    client.threadStates.set(id, { ...(client.threadStates.get(id) || {}), activeTurnId: turnId, status: { type: "active", activeFlags: ["running"] } });
+    await updateThread(thread.id, {
+      state: "working",
+      runtime: { ...(thread.runtime || {}), runtimeKind: "codex-app-server", activeTurnId: turnId, state: "working" },
+    }, env).catch(() => {});
+  }
+  return { result, observedVia, turnId };
+}
+
 export async function sendCodexAppServerInput(thread, message, env = process.env) {
   const id = codexThreadId(thread);
   if (!id) throw new Error("codex_thread_id_required");
@@ -156,30 +176,52 @@ export async function sendCodexAppServerInput(thread, message, env = process.env
   const activeTurnId = clean(client.threadStates.get(id)?.activeTurnId || thread.runtime?.activeTurnId);
   let result;
   let observedVia;
+  let deliveryTurnId = activeTurnId;
   if (activeTurnId) {
     client.rememberTurnParent(id, activeTurnId, pending);
-    result = await client.request("turn/steer", {
-      threadId: id,
-      expectedTurnId: activeTurnId,
-      input: [{ type: "text", text: clean(message.text), text_elements: [] }],
-    });
-    observedVia = "codex_app_server_turn_steer";
-  } else {
-    result = await client.request("turn/start", turnStartParams(thread, message));
-    const turnId = clean(result?.turn?.id);
-    if (turnId) {
-      client.rememberTurnParent(id, turnId, pending);
-      client.threadStates.set(id, { ...(client.threadStates.get(id) || {}), activeTurnId: turnId, status: { type: "active", activeFlags: ["running"] } });
+    try {
+      result = await client.request("turn/steer", {
+        threadId: id,
+        expectedTurnId: activeTurnId,
+        input: [{ type: "text", text: clean(message.text), text_elements: [] }],
+      });
+      deliveryTurnId = activeTurnId;
+      observedVia = "codex_app_server_turn_steer";
+    } catch (error) {
+      if (!staleSteerError(error)) throw error;
+      client.threadStates.set(id, { ...(client.threadStates.get(id) || {}), activeTurnId: "", status: { type: "idle" } });
       await updateThread(thread.id, {
-        state: "working",
-        runtime: { ...(thread.runtime || {}), runtimeKind: "codex-app-server", activeTurnId: turnId, state: "working" },
+        state: "ready",
+        runtime: { ...(thread.runtime || {}), runtimeKind: "codex-app-server", activeTurnId: null, state: "ready" },
       }, env).catch(() => {});
+      await appendEvent({
+        type: "codex_app_server_stale_turn_recovered",
+        threadId: thread.id,
+        codexThreadId: id,
+        staleTurnId: activeTurnId,
+        messageId: pending.id,
+      }, env).catch(() => {});
+      const started = await startCodexAppServerTurn({
+        client,
+        thread: { ...thread, runtime: { ...(thread.runtime || {}), activeTurnId: null } },
+        id,
+        pending,
+        env,
+        observedVia: "codex_app_server_turn_start_after_stale_steer",
+      });
+      result = started.result;
+      observedVia = started.observedVia;
+      deliveryTurnId = started.turnId;
     }
-    observedVia = "codex_app_server_turn_start";
+  } else {
+    const started = await startCodexAppServerTurn({ client, thread, id, pending, env });
+    result = started.result;
+    observedVia = started.observedVia;
+    deliveryTurnId = started.turnId;
   }
   const resultTurn = result?.turn || {};
   for (const item of Array.isArray(resultTurn.items) ? resultTurn.items : []) {
-    const turnId = resultTurn.id || result?.turnId || activeTurnId;
+    const turnId = resultTurn.id || result?.turnId || deliveryTurnId;
     await client.projectItem(item, { threadId: id, turnId, parentMessage: client.turnParent(id, turnId) || pending }, id).catch(() => null);
   }
   const completed = await updateThreadMessage(thread.id, pending.id, {
@@ -188,7 +230,7 @@ export async function sendCodexAppServerInput(thread, message, env = process.env
     deliveredAt: nowIso(),
     observedVia,
     codexThreadId: id,
-    codexTurnId: result?.turn?.id || result?.turnId || activeTurnId || null,
+    codexTurnId: result?.turn?.id || result?.turnId || deliveryTurnId || null,
     error: null,
   }, env);
   await appendEvent({ type: "thread_input_delivered", threadId: thread.id, messageId: message.id, observedVia }, env).catch(() => {});

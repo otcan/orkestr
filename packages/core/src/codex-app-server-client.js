@@ -26,6 +26,12 @@ import { latestWhatsAppParent, whatsappOrigin, whatsappProjectionFields } from "
 
 const execFileAsync = promisify(execFile);
 const clients = new Map();
+let messageHandler = null;
+
+function notifyMessageHandler({ thread, message }) {
+  if (!messageHandler || !message) return;
+  Promise.resolve(messageHandler({ thread, message })).catch(() => {});
+}
 
 export class CodexAppServerClient {
   constructor({ env = process.env, home = os.homedir() } = {}) {
@@ -202,7 +208,7 @@ export class CodexAppServerClient {
     const text = approvalPromptText(message.method, params);
     if (text) {
       const whatsappParent = await latestWhatsAppParent(thread, params.timestamp || nowIso(), this.env);
-      await appendOrUpdateEventMessage(thread, {
+      const messageRecord = await appendOrUpdateEventMessage(thread, {
         role: "assistant",
         source: "codex-app-server",
         phase: message.method === "item/tool/requestUserInput" ? "need_input" : "awaiting_approval",
@@ -221,6 +227,7 @@ export class CodexAppServerClient {
         codexRequestId: String(message.id),
         ...whatsappProjectionFields(whatsappParent, thread),
       }, this.env).catch(() => null);
+      if (messageRecord) notifyMessageHandler({ thread, message: messageRecord });
     }
     await appendEvent({
       type: "codex_app_server_request",
@@ -354,6 +361,7 @@ export class CodexAppServerClient {
       timestamp,
       ...whatsappProjectionFields(whatsappParent, thread),
     }, this.env);
+    notifyMessageHandler({ thread, message });
     await updateThread(thread.id, { state: "ready", lastError: null }, this.env).catch(() => {});
     return message;
   }
@@ -423,6 +431,13 @@ export function stopCodexAppServerClients() {
     client.close();
   }
   clients.clear();
+}
+
+export function setCodexAppServerMessageHandler(handler) {
+  messageHandler = typeof handler === "function" ? handler : null;
+  return () => {
+    if (messageHandler === handler) messageHandler = null;
+  };
 }
 
 export async function codexAppServerStatus({ env = process.env, home = os.homedir() } = {}) {

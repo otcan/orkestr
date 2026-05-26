@@ -725,8 +725,12 @@ function deliveryTextKey(chatId, text) {
     .digest("hex");
 }
 
+function codexAssistantSource(message) {
+  return ["codex-rollout", "codex-app-server"].includes(String(message?.source || "").trim());
+}
+
 function shouldMirrorWhatsAppReply(message) {
-  if (message.source === "codex-rollout") {
+  if (codexAssistantSource(message)) {
     const phase = String(message.phase || "final_answer").trim();
     if (phase === "plan" || hasProposedPlanEnvelope(message.text)) return false;
     return !phase || ["final_answer", "need_input", "awaiting_input", "question", "request_user_input"].includes(phase);
@@ -735,7 +739,7 @@ function shouldMirrorWhatsAppReply(message) {
 }
 
 function shouldMirrorWhatsAppProgress(message) {
-  if (message.source !== "codex-rollout") return false;
+  if (!codexAssistantSource(message)) return false;
   const phase = String(message.phase || "").trim().toLowerCase();
   return phase === "commentary" && !hasProposedPlanEnvelope(message.text) && Boolean(pickString(message.text));
 }
