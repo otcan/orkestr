@@ -156,8 +156,9 @@ test("web UI exposes browser terminal attach for app-server threads", async () =
   assert.ok(sources.includes("ensureAppServerAttachPane"));
   assert.ok(sources.includes("browserAttachSessionName"));
   assert.ok(sources.includes("codex-browser-attach"));
-  assert.ok(sources.includes("Open Browser Terminal"));
-  assert.ok(sources.includes("reconnectRaw()"));
+  assert.ok(!webSources.includes("Open Browser Terminal"));
+  assert.ok(!webSources.includes("raw-toolbar"));
+  assert.ok(webSources.includes("raw-terminal-host"));
   assert.ok(!webSources.includes("openThreadTerminal"));
   assert.ok(!webSources.includes("openNativeTerminal"));
   assert.ok(!webSources.includes("attach/open-terminal"));

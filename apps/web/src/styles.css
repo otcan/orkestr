@@ -2536,70 +2536,10 @@ ork-first-thread-wizard.first-thread-host {
 
 .raw-panel {
   align-content: stretch;
-  grid-template-rows: auto auto minmax(0, 1fr);
-  gap: 8px;
+  grid-template-rows: minmax(0, 1fr);
   min-height: 0;
   overflow: hidden;
   padding: 8px;
-}
-
-.raw-toolbar {
-  display: flex;
-  justify-content: flex-end;
-  gap: 8px;
-}
-
-.raw-toolbar button {
-  min-height: 32px;
-  padding: 6px 10px;
-}
-
-.native-terminal-card {
-  display: grid;
-  align-content: start;
-  gap: 12px;
-  min-height: 0;
-  overflow: auto;
-  border: 1px solid rgba(119, 205, 126, 0.2);
-  border-radius: 10px;
-  background: rgba(8, 17, 8, 0.92);
-  padding: 16px;
-}
-
-.inline-actions {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  justify-content: flex-end;
-  gap: 8px;
-}
-
-.inline-actions button {
-  min-height: 32px;
-  padding: 6px 10px;
-}
-
-.native-terminal-command {
-  margin: 0;
-  overflow: auto;
-  border: 1px solid rgba(104, 172, 219, 0.2);
-  border-radius: 8px;
-  background: #020602;
-  color: #d9fbd8;
-  padding: 12px;
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-}
-
-.native-terminal-status {
-  margin: 0;
-  border: 1px solid rgba(119, 205, 126, 0.18);
-  border-radius: 8px;
-  background: rgba(119, 205, 126, 0.08);
-  color: #bff6c2;
-  font-size: 0.82rem;
-  font-weight: 800;
-  padding: 8px 10px;
 }
 
 .raw-terminal-host {
