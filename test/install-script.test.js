@@ -80,8 +80,8 @@ test("install script exposes a host-native systemd VPS path", async () => {
   assert.match(script, /ORKESTR_ALLOW_MACOS_BREW_INSTALL/);
   assert.match(script, /\$brew" --prefix/);
   assert.match(script, /Missing local runtime tools, but Orkestr will not ask your terminal app for administrator access/);
-  assert.match(script, /ORKESTR_ALLOW_MACOS_BREW_INSTALL:-1/);
-  assert.match(script, /force manual tool installation/);
+  assert.match(script, /ORKESTR_ALLOW_MACOS_BREW_INSTALL:-0/);
+  assert.match(script, /let Orkestr try Homebrew automatically/);
   assert.match(script, /fix the Homebrew/);
   assert.match(script, /Install missing local runtime tools/);
   assert.match(script, /HOMEBREW_NO_AUTO_UPDATE=1 HOMEBREW_NO_ENV_HINTS=1 HOMEBREW_NO_INSTALL_CLEANUP=1/);
@@ -113,6 +113,7 @@ test("install script exposes a host-native systemd VPS path", async () => {
   assert.match(script, /ORKESTR_LOCAL_SERVER_WRAPPER/);
   assert.match(script, /ORKESTR_LOCAL_CLI_BIN/);
   assert.match(script, /set -a; \. "\$local_env_file"; set \+a; npm start/);
+  assert.match(script, /Do not use sudo or --systemd for this/);
   assert.match(script, /write_runtime_settings_file/);
   assert.match(script, /\$codex_bin --sandbox \$sandbox --ask-for-approval \$approval --no-alt-screen/);
   assert.match(script, /ORKESTR_GMAIL_AUTH_DESKTOP_SLUG/);

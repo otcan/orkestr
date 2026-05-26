@@ -149,12 +149,13 @@ before manual `npm start` runs so the same safe runtime settings are used.
 On macOS and other local installs, that file includes a service-safe `PATH` so
 launchd/systemd can find tools such as `tmux` and Homebrew-installed binaries.
 The one-line script also detaches itself from the `curl | bash` pipe before
-running Homebrew or prompts, so dependency installers cannot consume the rest of
-the script from stdin. On macOS, missing local tools can be installed through
-Homebrew when the Homebrew prefix is writable. The default macOS local service
-is a user-owned background process controlled by `orkestr service` commands,
-not a launchd bootstrap, so the installer does not ask the terminal app to
-administer the computer. If an old shell exported
+showing prompts, so interactive steps cannot consume the rest of the script from
+stdin. On macOS, missing local tools are reported with a manual Homebrew command
+by default; set `ORKESTR_ALLOW_MACOS_BREW_INSTALL=1` only when you explicitly
+want Orkestr to try `brew install` for you. The default macOS local service is a
+user-owned background process controlled by `orkestr service` commands, not a
+launchd bootstrap, so the installer does not ask the terminal app to administer
+the computer. If an old shell exported
 `ORKESTR_LOCAL_SERVICE_MANAGER=launchd`, the installer ignores it unless
 `ORKESTR_ALLOW_MACOS_LAUNCHD=1` is also set.
 Use `.env` or the setup UI for optional OpenAI API access, Tailscale/Caddy

@@ -87,7 +87,7 @@ Environment:
   ORKESTR_RESET_OVERLAY     Also reset ORKESTR_OVERLAY_DIR when reset is enabled. Defaults to 0.
   ORKESTR_INSTALL_CODEX     Install Codex CLI globally in --systemd mode. Defaults to 1.
   ORKESTR_ENABLE_HOST_CODEX Allow local macOS installs to probe/use the host codex binary. Defaults to 0 on macOS.
-  ORKESTR_ALLOW_MACOS_BREW_INSTALL Allow local macOS installs to run brew install for missing tools. Defaults to 1.
+  ORKESTR_ALLOW_MACOS_BREW_INSTALL Allow local macOS installs to run brew install for missing tools. Defaults to 0.
   ORKESTR_CODEX_VERSION     Codex CLI version. Defaults to 0.133.0.
   ORKESTR_LOCAL_ENV_FILE    Local env file written for non-systemd installs. Defaults to $ORKESTR_HOME/orkestr.env.
   ORKESTR_SKIP_SYSTEM_PACKAGES  Skip apt package installation when set to 1.
@@ -876,7 +876,7 @@ install_local_runtime_tools() {
     missing_text="$(join_words "${missing_packages[@]}")"
     if is_macos; then
       local brew
-      if [ "${ORKESTR_ALLOW_MACOS_BREW_INSTALL:-1}" = "1" ] && brew="$(brew_command)" && homebrew_install_without_admin "$brew"; then
+      if [ "${ORKESTR_ALLOW_MACOS_BREW_INSTALL:-0}" = "1" ] && brew="$(brew_command)" && homebrew_install_without_admin "$brew"; then
         if is_interactive_terminal; then
           prompt_yes_no install_missing "Install missing local runtime tools with Homebrew: $missing_text" "1"
           if [ "$install_missing" != "1" ]; then
@@ -893,7 +893,7 @@ Missing local runtime tools, but Orkestr will not ask your terminal app for admi
 Install the tools manually, then rerun the installer:
   brew install git tmux ripgrep
 
-Set ORKESTR_ALLOW_MACOS_BREW_INSTALL=0 to force manual tool installation.
+Set ORKESTR_ALLOW_MACOS_BREW_INSTALL=1 to let Orkestr try Homebrew automatically.
 If Homebrew asks for administrator access, cancel it and install the tools
 manually or fix the Homebrew installation ownership first.
 EOF
@@ -1900,12 +1900,21 @@ Manual start:
 EOF
 fi
 
-cat <<EOF
+if is_macos; then
+  cat <<EOF
+
+VPS service installs are for Linux hosts. Do not use sudo or --systemd for this
+local Mac install.
+
+EOF
+else
+  cat <<EOF
 
 For a VPS service install, rerun as root:
   sudo scripts/install.sh --systemd
 
 EOF
+fi
 
 if [ "$foreground_serve" -eq 1 ]; then
   set -a
