@@ -11,6 +11,7 @@ import { hasProposedPlanEnvelope, renderMessageTextHtml } from "./message-render
 import { SLASH_COMMANDS, SlashCommandInfo } from "./slash-commands";
 import {
   ApiService,
+  ConnectorStatus,
   SetupStatus,
   ThreadAttachResponse,
   ThreadMessage,
@@ -365,6 +366,47 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     this.renderNow();
   }
 
+  codexConnector(): ConnectorStatus | null {
+    return this.setupStatus?.connectors?.find((connector) => connector.id === "codex") || null;
+  }
+
+  codexAgentReady(): boolean {
+    return this.codexConnector()?.state === "connected";
+  }
+
+  codexAgentStateLabel(): string {
+    const connector = this.codexConnector();
+    const state = String(connector?.state || "checking").toLowerCase();
+    const reason = String(connector?.details?.["reason"] || "").toLowerCase();
+    if (state === "connected") return "connected";
+    if (state === "partial") return "sign-in required";
+    if (state === "not_connected" && reason === "codex_missing") return "runtime missing";
+    if (state === "not_connected" && reason.includes("disabled")) return "disabled";
+    if (state === "not_connected") return "runtime unavailable";
+    return state.replace(/_/g, " ");
+  }
+
+  codexAgentSummary(): string {
+    if (this.codexAgentReady()) return this.codexConnector()?.summary || "Codex Agent is connected.";
+    const summary = this.codexConnector()?.summary || "Checking Codex Agent status.";
+    return `${summary} Workspace browsing stays available; connect Codex Agent before sending tasks.`;
+  }
+
+  codexRuntimeNoticeTitle(): string {
+    return `Workspace ready · Codex ${this.codexAgentStateLabel()}`;
+  }
+
+  openCodexSetup(): void {
+    this.openSetup("codex", true);
+  }
+
+  private guardCodexRuntime(): boolean {
+    if (this.codexAgentReady()) return true;
+    this.error = "Connect Codex Agent before running tasks. You can still browse this workspace and its repo settings.";
+    this.renderNow();
+    return false;
+  }
+
   private connectSummaryStream(): void {
     if (!this.appReady || this.pairingRequired) return;
     if (this.destroyed || typeof globalThis.WebSocket === "undefined") {
@@ -527,6 +569,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
       this.openTools(this.toolsView);
       return;
     }
+    if ((panel === "raw" || panel === "runtime") && !this.guardCodexRuntime()) return;
     this.modelDetailsOpen = false;
     this.slashHelpOpen = false;
     this.gitDetailsThreadId = "";
@@ -682,6 +725,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     if (!thread || this.sending || this.sendingNow || this.implementingPlan) return;
     const originalText = this.draft.trim();
     if (!originalText && this.pendingFiles.length === 0) return;
+    if (!this.guardCodexRuntime()) return;
     this.sending = true;
     try {
       const attachments = await uploadPendingFiles(this.api, thread.id, this.pendingFiles);
@@ -705,6 +749,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     if (!thread || this.sending || this.sendingNow || this.implementingPlan) return;
     const originalText = this.draft.trim();
     if (!originalText && this.pendingFiles.length === 0) return;
+    if (!this.guardCodexRuntime()) return;
     this.sendingNow = true;
     try {
       const attachments = await uploadPendingFiles(this.api, thread.id, this.pendingFiles);
@@ -726,6 +771,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   async implementPlanSelected(): Promise<void> {
     const thread = this.selectedThread();
     if (!thread || this.sending || this.sendingNow || this.implementingPlan) return;
+    if (!this.guardCodexRuntime()) return;
     this.implementingPlan = true;
     try {
       this.markThreadActive(thread.id, 120_000);
@@ -742,6 +788,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   async wakeSelected(): Promise<void> {
     const thread = this.selectedThread();
     if (!thread) return;
+    if (!this.guardCodexRuntime()) return;
     this.busy = true;
     try {
       await firstValueFrom(this.api.wakeThread(thread.id));
@@ -785,6 +832,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   async recoverSelected(): Promise<void> {
     const thread = this.selectedThread();
     if (!thread) return;
+    if (!this.guardCodexRuntime()) return;
     this.busy = true;
     try {
       await firstValueFrom(this.api.recoverThread(thread.id));
@@ -799,6 +847,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   async approveSelected(): Promise<void> {
     const thread = this.selectedThread();
     if (!thread) return;
+    if (!this.guardCodexRuntime()) return;
     this.busy = true;
     try {
       await firstValueFrom(this.api.approveThread(thread.id, this.approveText.trim() || "Approved. Proceed."));
@@ -813,6 +862,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   async interruptSelected(): Promise<void> {
     const thread = this.selectedThread();
     if (!thread) return;
+    if (!this.guardCodexRuntime()) return;
     this.busy = true;
     try {
       await firstValueFrom(this.api.interruptThread(thread.id, this.interruptText.trim()));
@@ -829,6 +879,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   async switchCodexMode(mode: "code" | "plan"): Promise<void> {
     const thread = this.selectedThread();
     if (!thread) return;
+    if (!this.guardCodexRuntime()) return;
     this.busy = true;
     try {
       const result = await firstValueFrom(this.api.setCodexMode(thread.id, mode));
@@ -1049,12 +1100,15 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     const thread = this.selectedThread();
     const task = this.workerTask.trim();
     if (!thread || this.creatingWorker) return;
+    if (task && this.workerAutoRun && !this.guardCodexRuntime()) return;
+    const shouldWake = this.codexAgentReady();
     this.creatingWorker = true;
     this.busy = true;
     try {
       const body: Record<string, unknown> = {
         label: this.workerLabel.trim() || `Worker ${this.childWorkers(thread).length + 1}`,
-        autoRun: this.workerAutoRun && Boolean(task),
+        autoRun: this.workerAutoRun && Boolean(task) && shouldWake,
+        wake: shouldWake,
       };
       if (task) body["task"] = task;
       if (this.workerRepoPath.trim()) body["repoPath"] = this.workerRepoPath.trim();
@@ -1412,12 +1466,15 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     const parent = this.workerParentThread(thread);
     const task = this.sidebarWorkerTask.trim();
     if (!parent || this.creatingSidebarWorker) return;
+    if (task && !this.guardCodexRuntime()) return;
+    const shouldWake = this.codexAgentReady();
     this.creatingSidebarWorker = true;
     this.creatingWorkerParentId = parent.id;
     this.busy = true;
     try {
       const body: Record<string, unknown> = {
-        autoRun: Boolean(task),
+        autoRun: Boolean(task) && shouldWake,
+        wake: shouldWake,
       };
       if (task) body["task"] = task;
       const repoPath = this.threadMetaThreadId === parent.id ? this.threadRepoDraft.trim() : this.defaultRepoPath(parent);
@@ -1443,6 +1500,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     event?.stopPropagation();
     const root = this.workerParentThread(parent);
     if (!root || this.creatingSidebarWorker) return;
+    const shouldWake = this.codexAgentReady();
     this.creatingSidebarWorker = true;
     this.creatingWorkerParentId = root.id;
     this.busy = true;
@@ -1450,6 +1508,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
       const body: Record<string, unknown> = {
         label: `Worker ${this.childWorkers(root).length + 1}`,
         autoRun: false,
+        wake: shouldWake,
       };
       const repoPath = this.defaultRepoPath(root);
       if (repoPath) body["repoPath"] = repoPath;
@@ -2583,6 +2642,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   }
 
   composerPlaceholder(thread: ThreadSummary | null): string {
+    if (thread && !this.codexAgentReady()) return "Connect Codex Agent to send tasks";
     return thread ? `Message ${this.threadTitle(thread)}` : "Message";
   }
 

@@ -73,7 +73,7 @@ export class FirstThreadWizardComponent {
   }
 
   canCreate(): boolean {
-    return Boolean(this.agentName() && !this.busy && !this.codexBlocked());
+    return Boolean(this.agentName() && !this.busy);
   }
 
   agentName(): string {
@@ -105,11 +105,21 @@ export class FirstThreadWizardComponent {
   }
 
   codexStateLabel(): string {
-    return String(this.codexConnector()?.state || "checking").replace(/_/g, " ");
+    const connector = this.codexConnector();
+    const state = String(connector?.state || "checking").toLowerCase();
+    const reason = String(connector?.details?.["reason"] || "").toLowerCase();
+    if (state === "connected") return "connected";
+    if (state === "partial") return "sign-in required";
+    if (state === "not_connected" && reason === "codex_missing") return "runtime missing";
+    if (state === "not_connected" && reason.includes("disabled")) return "disabled";
+    if (state === "not_connected") return "runtime unavailable";
+    return state.replace(/_/g, " ");
   }
 
   codexSummary(): string {
-    return this.codexConnector()?.summary || "Checking Codex runtime status.";
+    if (this.codexReady()) return this.codexConnector()?.summary || "Codex Agent is connected.";
+    const summary = this.codexConnector()?.summary || "Checking Codex Agent status.";
+    return `${summary} You can create and inspect the workspace now; connect Codex Agent before sending tasks.`;
   }
 
   openCodexSetup(): void {
@@ -131,13 +141,11 @@ export class FirstThreadWizardComponent {
     this.busy = true;
     this.error = "";
     try {
+      let shouldWake = this.codexReady();
       if (!this.codexReady()) {
         const setup = await firstValueFrom(this.api.setupStatus());
         this.setupStatus = setup;
-        if (!this.codexReady()) {
-          this.error = "Connect Codex runtime before creating a coding agent. Open Setup -> Codex Agent and sign in.";
-          return;
-        }
+        shouldWake = this.codexReady();
       }
       const name = this.agentName();
       const repoUrl = this.repoUrlValue();
@@ -155,11 +163,11 @@ export class FirstThreadWizardComponent {
         initGit: !cloneRepo,
         repoRemoteUrl: repoUrl,
         cloneRepo,
-        wake: true,
+        wake: shouldWake,
         reason: "first_thread_created",
       }));
       const thread = response.thread;
-      this.creationStage = "Starting Codex in background";
+      this.creationStage = shouldWake ? "Starting Codex in background" : "Workspace created. Connect Codex Agent before sending tasks.";
       this.created.emit(thread);
     } catch (error) {
       this.error = this.errorText(error);

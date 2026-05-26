@@ -40,12 +40,14 @@ test("main UI exposes a guided first thread generation flow", async () => {
   assert.ok(sources.includes('type WizardStepId = "name" | "repository" | "review"'));
   assert.ok(sources.includes("repoRemoteUrl"));
   assert.ok(sources.includes("cloneRepo"));
-  assert.ok(sources.includes("Codex runtime required."));
-  assert.ok(sources.includes("Open Codex setup"));
+  assert.ok(sources.includes("Codex sign-in required to run tasks."));
+  assert.ok(sources.includes("Connect Codex Agent"));
   assert.ok(sources.includes("setupRequested"));
   assert.ok(sources.includes("[setupStatus]=\"setupStatus\""));
+  assert.ok(sources.includes("Workspace created. Connect Codex Agent before sending tasks."));
+  assert.ok(sources.includes("guardCodexRuntime"));
   assert.ok(sources.includes("this.api.createThread"));
-  assert.ok(sources.includes("wake: true"));
+  assert.ok(sources.includes("wake: shouldWake"));
   assert.ok(sources.includes("requestThreadWake(thread.id"));
   assert.ok(sources.includes('Post("codex/api-key")'));
   assert.ok(sources.includes("git\", [\"clone\""));

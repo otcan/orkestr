@@ -133,7 +133,8 @@ cd orkestr
 ./scripts/install.sh --local
 ```
 
-In setup, connect **Codex Agent** before creating coding agents. Use **Open
+In setup, connect **Codex Agent** before running coding agents. You can still
+create and inspect workspaces before Codex is signed in. Use **Open
 Codex sign-in** for device authorization or **Connect Codex with API key** when
 this runtime should authenticate Codex that way. Orkestr checks `codex login
 status` before starting a coding thread, so a raw Codex login menu is treated

@@ -500,6 +500,7 @@ export class OnboardingPageComponent implements OnInit, OnChanges, OnDestroy {
   }
 
   stateLabel(id: string): string {
+    if (id === "codex") return this.agentRuntimeStateLabel();
     return String(this.connector(id)?.state || "not_connected").replace(/_/g, " ");
   }
 
@@ -546,6 +547,18 @@ export class OnboardingPageComponent implements OnInit, OnChanges, OnDestroy {
 
   agentRuntimeReady(): boolean {
     return this.connector("codex")?.state === "connected";
+  }
+
+  agentRuntimeStateLabel(): string {
+    const connector = this.connector("codex");
+    const state = String(connector?.state || "checking").toLowerCase();
+    const reason = String(connector?.details?.["reason"] || "").toLowerCase();
+    if (state === "connected") return "connected";
+    if (state === "partial") return "sign-in required";
+    if (state === "not_connected" && reason === "codex_missing") return "runtime missing";
+    if (state === "not_connected" && reason.includes("disabled")) return "disabled";
+    if (state === "not_connected") return "runtime unavailable";
+    return state.replace(/_/g, " ");
   }
 
   isSetupMode(): boolean {
@@ -1080,11 +1093,6 @@ export class OnboardingPageComponent implements OnInit, OnChanges, OnDestroy {
   openApp(): void {
     if (this.isSetupMode()) {
       this.skip.emit();
-      return;
-    }
-    if (!this.agentRuntimeReady()) {
-      this.error = "Connect Codex Agent before opening the cockpit. OpenAI API is optional for coding agents.";
-      this.selectStep("codex");
       return;
     }
     this.complete.emit();

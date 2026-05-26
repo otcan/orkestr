@@ -34,10 +34,10 @@
   }
 
   @if (codexBlocked()) {
-    <div class="notice error">
-      <strong>Codex runtime required.</strong>
+    <div class="notice">
+      <strong>Codex sign-in required to run tasks.</strong>
       <span>{{ codexSummary() }}</span>
-      <button class="secondary" type="button" (click)="openCodexSetup()" [disabled]="busy">Open Codex setup</button>
+      <button class="secondary" type="button" (click)="openCodexSetup()" [disabled]="busy">Connect Codex Agent</button>
     </div>
   }
 

@@ -129,7 +129,7 @@ export async function getConnectorStatuses({ env = process.env, home = os.homedi
             statusText: codexAuth.statusText,
           })
         : codex.command
-          ? status("codex", "Codex Agent", "partial", codexEnvKey ? "OpenAI API key exists, but Codex Agent is not signed in yet. Connect Codex here before creating coding agents." : "Codex Agent runtime is installed. Sign in here before creating coding agents.", {
+          ? status("codex", "Codex Agent", "partial", codexEnvKey ? "OpenAI API key exists, but Codex Agent is not signed in yet. Connect Codex here before running coding agents." : "Codex Agent runtime is installed. Sign in here before running coding agents.", {
               command: codex.command,
               version: codex.version,
               codexHome,
