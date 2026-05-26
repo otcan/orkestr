@@ -211,6 +211,23 @@ function nonEmptyString(value: unknown): string {
   return typeof value === "string" ? value.trim() : "";
 }
 
+const transientRuntimeStates = new Set(["pending", "processing", "running", "waking", "working"]);
+
+function hasOpenRuntimeLease(thread: any): boolean {
+  const runtime = thread?.runtime && typeof thread.runtime === "object" ? thread.runtime : {};
+  return Boolean(
+    thread?.activeRuntimeLeaseId ||
+    runtime.activeRuntimeLeaseId ||
+    (runtime.id && !runtime.endedAt && !runtime.ended_at),
+  );
+}
+
+function threadSummaryState(thread: any, status: any): string {
+  const state = nonEmptyString(status?.state) || nonEmptyString(thread?.state) || "sleeping";
+  if (status) return state;
+  return transientRuntimeStates.has(state.toLowerCase()) && !hasOpenRuntimeLease(thread) ? "sleeping" : state;
+}
+
 function threadCheckoutPath(thread: any, status: any): string {
   return nonEmptyString(
     thread?.worktreePath ||
@@ -357,8 +374,9 @@ export async function threadRuntimeSummary(thread: any, messages: any[] = [], op
       },
     },
   };
-  const state = status?.state || thread.state || "sleeping";
+  const state = threadSummaryState(thread, status);
   const ready = state === "ready";
+  const inferredWorking = Boolean(status && state === "working");
   const awaitingAckCount = status?.awaitingAckCount ?? 0;
   const latestMessage = latestMessageSummary(messages);
   const planAvailable = latestAssistantPlanAvailable(messages);
@@ -385,9 +403,9 @@ export async function threadRuntimeSummary(thread: any, messages: any[] = [], op
     activeRuntimeLeaseId: status?.lease?.id || thread.activeRuntimeLeaseId || null,
     promptReady: status?.promptReady ?? ready,
     promptReadyStable: status?.promptReadyStable ?? ready,
-    working: status?.working ?? state === "working",
-    foregroundWorking: status?.foregroundWorking ?? state === "working",
-    typingActive: status?.typingActive ?? state === "working",
+    working: status?.working ?? inferredWorking,
+    foregroundWorking: status?.foregroundWorking ?? inferredWorking,
+    typingActive: status?.typingActive ?? inferredWorking,
     backgroundWork: status?.backgroundWork ?? false,
     awaitingInput: !!pendingQuestion,
     awaitingInputEventId: pendingQuestion?.eventId || null,
