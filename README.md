@@ -248,6 +248,8 @@ npm run smoke:vps:aws
 That runner creates a fresh Ubuntu 24.04 EC2 host, runs the bootstrap installer,
 runs the Orkestr smoke test on the VPS, verifies the protected host-native
 shape, and deletes the temporary AWS resources.
+Add `-- --with-k3s` to preinstall single-node k3s on the VPS before Orkestr,
+then verify k3s is still healthy after the Orkestr smoke.
 Add `-- --with-whatsapp` to also start the built-in WhatsApp bridge and wait for
 QR readiness on the fresh VPS. For an interactive phone-code link test, pass
 `-- --with-whatsapp --whatsapp-phone <number> --create-whatsapp-thread "WhatsApp VPS Smoke" --keep`.

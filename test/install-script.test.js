@@ -281,10 +281,14 @@ test("AWS VPS smoke runner can verify WhatsApp QR readiness", async () => {
 
   await execFileAsync("bash", ["-n", "scripts/smoke-vps-aws.sh"]);
   assert.match(stdout, /--with-whatsapp/);
+  assert.match(stdout, /--with-k3s/);
   assert.match(stdout, /--whatsapp-phone PHONE/);
   assert.match(stdout, /--whatsapp-timeout SEC/);
   assert.match(stdout, /--create-whatsapp-thread NAME/);
   assert.match(script, /bootstrap_args\+=\(--with-whatsapp\)/);
+  assert.match(script, /INSTALL_K3S_EXEC="server --disable traefik"/);
+  assert.match(script, /kubectl get nodes --no-headers/);
+  assert.match(script, /verify_k3s_after_orkestr/);
   assert.match(script, /api\/setup\/security\/challenge/);
   assert.match(script, /sudo', \['orkestr', 'security', 'approve'/);
   assert.match(script, /api\/connectors\/whatsapp\/bridge\/accounts\/account-1\/start/);

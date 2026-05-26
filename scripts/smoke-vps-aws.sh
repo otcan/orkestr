@@ -29,6 +29,7 @@ Options:
   --tailscale              Install Tailscale during bootstrap. Default is --no-tailscale.
   --tailscale-up           Run tailscale up during bootstrap. Requires TS_AUTHKEY for unattended runs.
   --auto-update            Install the on-box update timer. Default is --no-auto-update.
+  --with-k3s               Install single-node k3s before Orkestr and verify it after the smoke.
   --with-whatsapp          Start the built-in WhatsApp bridge and wait for QR readiness.
   --whatsapp-phone PHONE   Use WhatsApp phone-number pairing instead of QR. Digits may include +/spaces.
   --whatsapp-timeout SEC   Seconds to wait for WhatsApp QR readiness. Defaults to 240.
@@ -80,6 +81,7 @@ local_bootstrap=0
 tailscale=0
 tailscale_up=0
 auto_update=0
+with_k3s=0
 with_whatsapp=0
 whatsapp_timeout_seconds="${ORKESTR_VPS_SMOKE_WHATSAPP_TIMEOUT_SECONDS:-240}"
 whatsapp_phone="${ORKESTR_VPS_SMOKE_WHATSAPP_PHONE:-}"
@@ -142,6 +144,10 @@ while [ "$#" -gt 0 ]; do
       ;;
     --no-auto-update)
       auto_update=0
+      shift
+      ;;
+    --with-k3s)
+      with_k3s=1
       shift
       ;;
     --with-whatsapp)
@@ -243,6 +249,10 @@ collect_failure_logs() {
     journalctl -u orkestr --no-pager -n 160
     echo "== bootstrap tail =="
     tail -n 160 /tmp/orkestr-bootstrap.log
+    echo "== systemctl status k3s =="
+    systemctl status k3s --no-pager --lines=80
+    echo "== k3s pods =="
+    k3s kubectl get pods -A
     echo "== whatsapp readiness log =="
     tail -n 160 /tmp/orkestr-whatsapp-readiness.log
   ' || true
@@ -422,6 +432,42 @@ NODE
     "
 }
 
+install_k3s_on_vps() {
+  [ "$with_k3s" -eq 1 ] || return 0
+
+  log "Installing k3s before Orkestr bootstrap"
+  ssh_run 'set -euo pipefail
+    curl -sfL https://get.k3s.io -o /tmp/install-k3s.sh
+    sudo env INSTALL_K3S_EXEC="server --disable traefik" sh /tmp/install-k3s.sh
+    sudo systemctl is-active --quiet k3s
+    for _ in $(seq 1 60); do
+      nodes="$(sudo k3s kubectl get nodes --no-headers 2>/dev/null || true)"
+      if printf "%s\n" "$nodes" | grep -Eq "^[^[:space:]]+[[:space:]]+Ready([[:space:]]|$)"; then
+        break
+      fi
+      sleep 3
+    done
+    nodes="$(sudo k3s kubectl get nodes --no-headers 2>/dev/null || true)"
+    printf "%s\n" "$nodes" | grep -Eq "^[^[:space:]]+[[:space:]]+Ready([[:space:]]|$)" || {
+      sudo systemctl status k3s --no-pager --lines=80
+      sudo journalctl -u k3s --no-pager -n 160
+      exit 1
+    }
+    sudo k3s kubectl get nodes -o wide
+  '
+}
+
+verify_k3s_after_orkestr() {
+  [ "$with_k3s" -eq 1 ] || return 0
+
+  log "Verifying k3s after Orkestr smoke"
+  ssh_run 'set -euo pipefail
+    sudo systemctl is-active --quiet k3s
+    sudo k3s kubectl get nodes --no-headers | grep -Eq "^[^[:space:]]+[[:space:]]+Ready([[:space:]]|$)"
+    sudo k3s kubectl get pods -A
+  '
+}
+
 cleanup() {
   local status
   status="$?"
@@ -528,6 +574,8 @@ main() {
   done
   ssh_run 'set -e; . /etc/os-release; printf "os=%s %s\n" "$NAME" "$VERSION_ID"; printf "kernel=%s\n" "$(uname -r)"; printf "cpu=%s\n" "$(nproc)"; free -h | awk "/Mem:/ {print \"mem=\" \$2}"; df -h / | awk "NR==2 {print \"root_disk=\" \$2}"'
 
+  install_k3s_on_vps
+
   bootstrap_args=(--repo "$repo_url" --ref "$git_ref")
   if [ "$tailscale" -eq 1 ]; then
     bootstrap_args+=(--tailscale)
@@ -574,6 +622,7 @@ main() {
   if [ "$with_whatsapp" -eq 1 ]; then
     run_whatsapp_readiness_check
   fi
+  verify_k3s_after_orkestr
 
   log "Smoke test passed on fresh VPS: $instance_id"
 }
