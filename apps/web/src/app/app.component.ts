@@ -560,7 +560,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
       this.enterPairingRequired();
       return;
     }
-    const nextPanel = this.activePanel === "raw" ? "raw" : "chat";
+    const nextPanel = "chat";
     this.threadWizardOpen = false;
     this.selectedId = this.threadSlug(thread);
     this.activePanel = nextPanel;
@@ -2524,7 +2524,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   }
 
   threadUrl(thread: ThreadSummary): string {
-    return this.pathForPanel(this.threadSlug(thread), this.activePanel === "raw" ? "raw" : "chat");
+    return this.pathForPanel(this.threadSlug(thread), "chat");
   }
 
   rawUrl(thread: ThreadSummary): string {
