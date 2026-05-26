@@ -43,7 +43,6 @@ Common actions:
 - send a message
 - switch between plan and code mode
 - inspect the structured runtime state and history
-- sleep an idle runtime without interrupting active work
 - stop an active turn when you explicitly want to interrupt it
 - inspect model, effort, context, and rate-limit status when available
 

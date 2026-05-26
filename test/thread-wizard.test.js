@@ -138,6 +138,24 @@ test("chat messages show delivery failure reasons", async () => {
   assert.ok(sources.includes(".message-failure"));
 });
 
+test("web UI exposes native terminal attach for app-server threads", async () => {
+  const sources = await read([
+    "apps/web/src/app/app.component.ts",
+    "apps/web/src/app/app.component.html",
+    "apps/web/src/app/api.service.ts",
+    "apps/web/src/styles.css",
+  ]);
+
+  assert.ok(sources.includes("nativeTerminalAttachAvailable"));
+  assert.ok(sources.includes("embeddedRawTerminalAvailable"));
+  assert.ok(sources.includes("nativeAttachCommand"));
+  assert.ok(sources.includes("copyNativeAttachCommand"));
+  assert.ok(sources.includes("attachKind?: string"));
+  assert.ok(sources.includes("Native terminal"));
+  assert.ok(sources.includes("Attach to Codex"));
+  assert.ok(sources.includes(".native-terminal-command"));
+});
+
 test("sidebar marks latest delivery failures as errors", async () => {
   const sources = await read([
     "apps/web/src/app/app.component.ts",

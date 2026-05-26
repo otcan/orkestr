@@ -554,6 +554,7 @@ export interface ThreadAttachResponse {
   state?: string;
   thread?: ThreadSummary;
   runtime?: Record<string, unknown>;
+  attachKind?: string;
   attachCommand?: string;
   message?: string;
 }

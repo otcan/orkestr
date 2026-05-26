@@ -76,7 +76,6 @@ rl.on("line", (line) => {
     send({ method: "turn/completed", params: { turn: { ...turn, status: "completed" } } });
     return;
   }
-  if (method === "turn/steer") return send({ id, result: { turnId: params.expectedTurnId } });
   if (method === "turn/interrupt") return send({ id, result: {} });
   send({ id, result: {} });
 });

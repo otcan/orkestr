@@ -1199,9 +1199,9 @@ function formatWhatsAppQueueNotice(message, reason = "") {
     return `Interrupting the current Codex turn and queued your message: "${preview}".`;
   }
   if (["recovering_stale_ack", "retrying_delivery"].includes(normalizedReason)) {
-    return `Queued your latest message while Orkestr recovers this thread: "${preview}". It will be delivered automatically when the thread is prompt-ready.`;
+    return `Queued your latest message while Orkestr recovers this thread: "${preview}".`;
   }
-  return `Queued your message while Orkestr prepares this thread: "${preview}". It will be delivered automatically when the Codex session is prompt-ready.`;
+  return `Queued your message while Orkestr prepares this thread: "${preview}".`;
 }
 
 function queuedModeWhatsAppDeliveryTarget(message, thread, state) {

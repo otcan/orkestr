@@ -9,7 +9,6 @@ import {
   appendOrUpdateEventMessage,
   appServerStateFromStatus,
   clean,
-  codexInputText,
   codexAppServerEnabled,
   codexSessionId,
   codexThreadId,
@@ -27,7 +26,7 @@ import {
   userInputText,
 } from "./codex-app-server-common.js";
 import { getCodexAppServerClient, stopCodexAppServerClients as stopCodexAppServerRuntimeClients } from "./codex-app-server-client.js";
-import { codexAppServerMessageFields, whatsappOrigin } from "./codex-app-server-whatsapp.js";
+import { codexAppServerMessageFields } from "./codex-app-server-whatsapp.js";
 import { parseThreadInputCommand } from "./thread-commands.js";
 
 const appServerDeliveryTimers = new Map();
@@ -222,16 +221,6 @@ export async function interruptCodexAppServerThread(thread, env = process.env) {
   return { interrupted: true, turnId: activeTurnId };
 }
 
-function staleSteerError(error) {
-  const text = clean(error?.message || error?.data?.message || error?.data?.error || error);
-  return /no\s+active\s+turn/i.test(text) && /steer/i.test(text);
-}
-
-function staleSteerFailureMessage(message = {}) {
-  if (message.role !== "user" || message.state !== "failed") return false;
-  return staleSteerError(message.error || message.deliveryError || message.lastError);
-}
-
 async function startCodexAppServerTurn({ client, thread, id, pending, env, observedVia = "codex_app_server_turn_start" }) {
   const result = await client.request("turn/start", turnStartParams(thread, pending));
   const turnId = clean(result?.turn?.id || result?.turnId);
@@ -256,9 +245,12 @@ export async function sendCodexAppServerInput(thread, message, env = process.env
     deliveryLastAttemptAt: nowIso(),
   }, env);
   const clientState = client.threadStates.get(id) || {};
+  const clientStatusState = appServerStateFromStatus(clientState.status);
   let activeTurnId = clean(Object.prototype.hasOwnProperty.call(clientState, "activeTurnId")
     ? clientState.activeTurnId
-    : thread.runtime?.activeTurnId);
+    : ["ready", "failed", "sleeping"].includes(clientStatusState)
+      ? ""
+      : thread.runtime?.activeTurnId);
   let result;
   let observedVia;
   let deliveryTurnId = activeTurnId;
@@ -275,7 +267,7 @@ export async function sendCodexAppServerInput(thread, message, env = process.env
     activeTurnId = "";
     deliveryTurnId = "";
   }
-  if (activeTurnId && whatsappOrigin(pending)) {
+  if (activeTurnId) {
     const retryMs = codexAppServerActiveTurnRetryMs(env);
     const nextAttemptAt = isoAfter(retryMs);
     await updateThreadMessage(thread.id, pending.id, {
@@ -295,48 +287,10 @@ export async function sendCodexAppServerInput(thread, message, env = process.env
     scheduleCodexAppServerInputDelivery(thread.id, env, retryMs);
     return { message: { ...pending, state: "queued", deliveryState: "awaiting_active_turn" }, result: null, observedVia: "codex_app_server_awaiting_active_turn", deferred: true };
   }
-  if (activeTurnId) {
-    client.rememberTurnParent(id, activeTurnId, pending);
-    try {
-      result = await client.request("turn/steer", {
-        threadId: id,
-        expectedTurnId: activeTurnId,
-        input: [{ type: "text", text: codexInputText(message), text_elements: [] }],
-      });
-      deliveryTurnId = activeTurnId;
-      observedVia = "codex_app_server_turn_steer";
-    } catch (error) {
-      if (!staleSteerError(error)) throw error;
-      client.threadStates.set(id, { ...(client.threadStates.get(id) || {}), activeTurnId: "", status: { type: "idle" } });
-      await updateThread(thread.id, {
-        state: "ready",
-        runtime: { ...(thread.runtime || {}), runtimeKind: "codex-app-server", activeTurnId: null, state: "ready" },
-      }, env).catch(() => {});
-      await appendEvent({
-        type: "codex_app_server_stale_turn_recovered",
-        threadId: thread.id,
-        codexThreadId: id,
-        staleTurnId: activeTurnId,
-        messageId: pending.id,
-      }, env).catch(() => {});
-      const started = await startCodexAppServerTurn({
-        client,
-        thread: { ...thread, runtime: { ...(thread.runtime || {}), activeTurnId: null } },
-        id,
-        pending,
-        env,
-        observedVia: "codex_app_server_turn_start_after_stale_steer",
-      });
-      result = started.result;
-      observedVia = started.observedVia;
-      deliveryTurnId = started.turnId;
-    }
-  } else {
-    const started = await startCodexAppServerTurn({ client, thread, id, pending, env });
-    result = started.result;
-    observedVia = started.observedVia;
-    deliveryTurnId = started.turnId;
-  }
+  const started = await startCodexAppServerTurn({ client, thread, id, pending, env });
+  result = started.result;
+  observedVia = started.observedVia;
+  deliveryTurnId = started.turnId;
   const resultTurn = result?.turn || {};
   for (const item of Array.isArray(resultTurn.items) ? resultTurn.items : []) {
     const turnId = resultTurn.id || result?.turnId || deliveryTurnId;
@@ -358,8 +312,7 @@ export async function sendCodexAppServerInput(thread, message, env = process.env
 export async function deliverCodexAppServerPendingInputs(thread, env = process.env) {
   const delivered = [];
   const messages = await listThreadMessages(thread.id, env);
-  const nextQueued = messages.find((message) => message.role === "user" && ["queued", "pending_delivery", "awaiting_ack"].includes(message.state));
-  let next = nextQueued || messages.find(staleSteerFailureMessage);
+  let next = messages.find((message) => message.role === "user" && ["queued", "pending_delivery", "awaiting_ack"].includes(message.state));
   if (!next) return delivered;
   let client;
   try {
@@ -390,21 +343,6 @@ export async function deliverCodexAppServerPendingInputs(thread, env = process.e
       await appendEvent({ type: "codex_app_server_resume_failed", threadId: thread.id, codexThreadId: id, error: errorText }, env).catch(() => {});
       return delivered;
     }
-  }
-  if (staleSteerFailureMessage(next)) {
-    next = await updateThreadMessage(thread.id, next.id, {
-      state: "queued",
-      deliveryState: "retrying_delivery",
-      deliveryLastAttemptAt: nowIso(),
-      error: null,
-    }, env).catch(() => ({ ...next, state: "queued", deliveryState: "retrying_delivery", error: null }));
-    await updateThread(thread.id, { lastError: null }, env).catch(() => {});
-    await appendEvent({
-      type: "codex_app_server_stale_turn_failed_input_retrying",
-      threadId: thread.id,
-      codexThreadId: id,
-      messageId: next.id,
-    }, env).catch(() => {});
   }
   const pendingApproval = client.pendingRequestForThread(thread);
   const text = clean(next.text);

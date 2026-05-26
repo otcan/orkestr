@@ -2554,6 +2554,43 @@ ork-first-thread-wizard.first-thread-host {
   padding: 6px 10px;
 }
 
+.native-terminal-card {
+  display: grid;
+  align-content: start;
+  gap: 12px;
+  min-height: 0;
+  overflow: auto;
+  border: 1px solid rgba(119, 205, 126, 0.2);
+  border-radius: 10px;
+  background: rgba(8, 17, 8, 0.92);
+  padding: 16px;
+}
+
+.inline-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.inline-actions button {
+  min-height: 32px;
+  padding: 6px 10px;
+}
+
+.native-terminal-command {
+  margin: 0;
+  overflow: auto;
+  border: 1px solid rgba(104, 172, 219, 0.2);
+  border-radius: 8px;
+  background: #020602;
+  color: #d9fbd8;
+  padding: 12px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
 .raw-terminal-host {
   width: 100%;
   height: 100%;

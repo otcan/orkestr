@@ -6,6 +6,7 @@ import test from "node:test";
 import {
   codexAppServerThreadStatus,
   deliverCodexAppServerPendingInputs,
+  getCodexAppServerClient,
   importCodexAppServerThread,
   listCodexAppServerThreads,
   sleepCodexAppServerThread,
@@ -13,7 +14,7 @@ import {
   stopCodexAppServerClients,
 } from "../packages/core/src/codex-app-server.js";
 import { migrateCodexThreadsToAppServer } from "../packages/core/src/codex-app-server-migration.js";
-import { createThread, enqueueThreadInput, getThread, listThreadMessages, updateThread, updateThreadMessage } from "../packages/core/src/threads.js";
+import { createThread, enqueueThreadInput, getThread, listThreadMessages, updateThread } from "../packages/core/src/threads.js";
 import { deliverWhatsAppReplies } from "../packages/connectors/src/whatsapp.js";
 import { writeConnectorConfig } from "../packages/storage/src/config.js";
 
@@ -101,12 +102,6 @@ rl.on("line", (line) => {
   }
   if (message.method === "thread/unsubscribe") return send({ id, result: { status: "unsubscribed" } });
   if (message.method === "thread/archive") return send({ id, result: {} });
-  if (message.method === "turn/steer") {
-    if (params.expectedTurnId === "stale-turn") {
-      return send({ id, error: { code: -32000, message: "no active turn to steer" } });
-    }
-    return send({ id, result: { turnId: params.expectedTurnId } });
-  }
   if (message.method === "turn/interrupt") {
     const thread = state.threads.find((item) => item.id === params.threadId);
     if (thread) thread.status = { type: "idle" };
@@ -129,10 +124,6 @@ rl.on("line", (line) => {
     send({ method: "turn/completed", params: { turn: { ...turn, status: "completed" } } });
     return;
   }
-  if (message.method === "turn/steer") {
-    if (params.expectedTurnId === "stale-turn") return send({ id, error: { code: -32000, message: "no active turn to steer" } });
-    return send({ id, result: { turnId: params.expectedTurnId } });
-  }
   send({ id, result: {} });
 });
 `,
@@ -140,6 +131,16 @@ rl.on("line", (line) => {
   );
   await fs.chmod(codexPath, 0o755);
   return { bin, stateFile };
+}
+
+async function markAppServerTurnActive(thread, env, turnId = "active-turn") {
+  const codexThreadId = thread?.executor?.codexThreadId || thread?.codexThreadId;
+  const client = await getCodexAppServerClient({ env, home: env.HOME });
+  client.threadStates.set(codexThreadId, {
+    ...(client.threadStates.get(codexThreadId) || {}),
+    activeTurnId: turnId,
+    status: { type: "active", activeFlags: ["running"] },
+  });
 }
 
 test("Codex app-server starts threads, delivers input, and imports existing threads", async () => {
@@ -173,35 +174,11 @@ test("Codex app-server starts threads, delivers input, and imports existing thre
         activeTurnId: "stale-turn",
       },
     }, env);
-    await enqueueThreadInput(started.thread.id, { text: "recover stale steer" }, env);
+    await enqueueThreadInput(started.thread.id, { text: "ignore stale persisted active turn" }, env);
     const staleDelivery = await deliverCodexAppServerPendingInputs(await getThread(started.thread.id, env), env);
     const staleMessages = await listThreadMessages(started.thread.id, env);
     assert.equal(staleDelivery.length, 1);
-    assert.ok(staleMessages.some((message) => message.source === "codex-app-server" && /Reply to: recover stale steer/.test(message.text)));
-
-    const failedStale = await enqueueThreadInput(started.thread.id, { text: "recover failed stale steer" }, env);
-    await updateThreadMessage(started.thread.id, failedStale.id, {
-      state: "failed",
-      deliveryState: "failed",
-      error: "no active turn to steer",
-    }, env);
-    await updateThread(started.thread.id, {
-      state: "failed",
-      lastError: "no active turn to steer",
-      runtime: {
-        ...(started.thread.runtime || {}),
-        runtimeKind: "codex-app-server",
-        state: "working",
-        activeTurnId: "stale-turn",
-      },
-    }, env);
-    const failedRetry = await deliverCodexAppServerPendingInputs(await getThread(started.thread.id, env), env);
-    const failedRetryMessages = await listThreadMessages(started.thread.id, env);
-    const recoveredFailed = failedRetryMessages.find((message) => message.id === failedStale.id);
-    assert.equal(failedRetry.length, 1);
-    assert.equal(recoveredFailed.state, "completed");
-    assert.equal(recoveredFailed.error, null);
-    assert.ok(failedRetryMessages.some((message) => message.source === "codex-app-server" && /Reply to: recover failed stale steer/.test(message.text)));
+    assert.ok(staleMessages.some((message) => message.source === "codex-app-server" && /Reply to: ignore stale persisted active turn/.test(message.text)));
 
     const whatsappThread = await createThread({
       id: "app-server-whatsapp-thread",
@@ -312,7 +289,7 @@ test("Codex app-server starts threads, delivers input, and imports existing thre
     assert.equal(resumedThread.state, "ready");
     assert.equal(resumedThread.lastError, null);
     let resumedStatus = null;
-    for (let attempt = 0; attempt < 10; attempt += 1) {
+    for (let attempt = 0; attempt < 50; attempt += 1) {
       resumedStatus = await codexAppServerThreadStatus({
         ...resumedThread,
         runtime: { ...(resumedThread.runtime || {}), activeTurnId: "stale-turn" },
@@ -350,7 +327,7 @@ test("Codex app-server starts threads, delivers input, and imports existing thre
     const staleReply = staleTurnMessages.find((message) => message.source === "codex-app-server" && /Reply to: recover stale turn/.test(message.text));
     assert.equal(staleDelivered.length, 1);
     assert.equal(staleInput.state, "completed");
-    assert.equal(staleInput.observedVia, "codex_app_server_turn_start_after_stale_steer");
+    assert.equal(staleInput.observedVia, "codex_app_server_turn_start");
     assert.ok(staleReply);
 
     const listed = await listCodexAppServerThreads({}, env);
@@ -401,6 +378,7 @@ test("Codex app-server sleep only interrupts active turns when forced", async ()
         activeTurnId: "active-turn",
       },
     }, env);
+    await markAppServerTurnActive(started.thread, env);
 
     const skipped = await sleepCodexAppServerThread(await getThread(started.thread.id, env), { reason: "ui_sleep", kill: false }, env);
     const stillWorking = await getThread(started.thread.id, env);
@@ -449,12 +427,53 @@ test("Codex app-server queues WhatsApp input behind active turns", async () => {
         activeTurnId: "active-turn",
       },
     }, env);
+    await markAppServerTurnActive(started.thread, env);
     const input = await enqueueThreadInput(started.thread.id, {
       text: "queue this behind the current turn",
       source: "whatsapp_inbound",
       connector: "whatsapp",
       chatId: "chat-wa-queue",
     }, env);
+
+    const delivered = await deliverCodexAppServerPendingInputs(await getThread(started.thread.id, env), env);
+    const messages = await listThreadMessages(started.thread.id, env);
+    const queued = messages.find((message) => message.id === input.id);
+    const rawState = JSON.parse(await fs.readFile(fake.stateFile, "utf8"));
+
+    assert.deepEqual(delivered, []);
+    assert.equal(queued.state, "queued");
+    assert.equal(queued.deliveryState, "awaiting_active_turn");
+    assert.ok(!rawState.calls.some((call) => call.method === "turn/steer"));
+    assert.ok(!rawState.calls.some((call) => call.method === "turn/start"));
+  } finally {
+    stopCodexAppServerClients();
+  }
+});
+
+test("Codex app-server queues normal input behind active turns", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-codex-app-server-generic-queue-"));
+  const fake = await createFakeCodex(home);
+  const env = {
+    ORKESTR_HOME: path.join(home, "orkestr"),
+    HOME: path.join(home, "runtime-home"),
+    PATH: `${fake.bin}${path.delimiter}${process.env.PATH || ""}`,
+    FAKE_CODEX_STATE: fake.stateFile,
+    ORKESTR_CODEX_APP_SERVER_ACTIVE_TURN_RETRY_MS: "60000",
+  };
+  try {
+    const thread = await createThread({ id: "app-server-generic-queue-thread", name: "App Server Generic Queue Thread", cwd: home, executorId: "codex", executor: { type: "codex" } }, env);
+    const started = await startCodexAppServerThread(thread, env);
+    await updateThread(started.thread.id, {
+      state: "working",
+      runtime: {
+        ...(started.thread.runtime || {}),
+        runtimeKind: "codex-app-server",
+        state: "working",
+        activeTurnId: "active-turn",
+      },
+    }, env);
+    await markAppServerTurnActive(started.thread, env);
+    const input = await enqueueThreadInput(started.thread.id, { text: "queue normal input behind the turn" }, env);
 
     const delivered = await deliverCodexAppServerPendingInputs(await getThread(started.thread.id, env), env);
     const messages = await listThreadMessages(started.thread.id, env);
@@ -492,6 +511,7 @@ test("Codex app-server /now interrupts the active turn and starts the next turn"
         activeTurnId: "active-turn",
       },
     }, env);
+    await markAppServerTurnActive(started.thread, env);
     const input = await enqueueThreadInput(started.thread.id, {
       text: "/now urgent next turn",
       source: "whatsapp_inbound",
@@ -539,6 +559,7 @@ test("Codex app-server /stop interrupts the active turn without sleeping the thr
         activeTurnId: "active-turn",
       },
     }, env);
+    await markAppServerTurnActive(started.thread, env);
     const input = await enqueueThreadInput(started.thread.id, {
       text: "/stop",
       source: "whatsapp_inbound",

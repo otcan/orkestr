@@ -17,7 +17,6 @@ orkestr list
 orkestr attach
 orkestr send <thread-name-or-id> "Run the next step"
 orkestr wake <thread-name-or-id>
-orkestr sleep <thread-name-or-id>
 orkestr doctor
 ```
 
@@ -41,6 +40,7 @@ orkestr thread create "My Thread" --cwd /path/to/repo
 orkestr worker create demo-app --task "Investigate this in parallel"
 orkestr worker create demo-app --blank
 orkestr attach <thread-name-or-id> --print
+orkestr sleep <legacy-tmux-thread-name-or-id>
 ```
 
 `orkestr status` is the normal operator entry point. It summarizes the active
@@ -113,9 +113,9 @@ The `attach` command remains for non-Codex tmux runtimes. Codex threads do not
 use tmux attach after migration.
 
 `orkestr sleep <thread>` is a legacy tmux runtime control. Native Codex
-app-server threads do not use idle sleep; they resume on demand and active work
-is controlled at the turn level. To interrupt active Codex work, send `/stop` to
-the thread or use the web UI Stop control.
+app-server threads do not use sleep or idle sleep; they resume on demand and
+active work is controlled at the turn level. To interrupt active Codex work,
+send `/stop` to the thread or use the web UI Stop control.
 
 The API base defaults to `http://127.0.0.1:19812` and can be overridden with:
 

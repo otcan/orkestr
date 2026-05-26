@@ -800,9 +800,10 @@ export class ThreadsController {
   async sleep(@Param("threadId") threadId: string, @Body() body: Record<string, unknown> = {}) {
     const thread = await getThread(threadId);
     if (!thread) throw httpError("thread_not_found", 404);
+    if (threadUsesCodexAppServer(thread)) throw httpError("codex_app_server_sleep_unsupported_use_stop", 409);
     return sleepThread(thread.id, {
       reason: body.reason || "manual_sleep",
-      kill: threadUsesCodexAppServer(thread) ? body.kill === true : body.kill !== false,
+      kill: body.kill !== false,
     });
   }
 
@@ -1055,9 +1056,10 @@ export class ThreadsController {
   async hibernate(@Param("threadId") threadId: string, @Body() body: Record<string, unknown> = {}) {
     const thread = await getThread(threadId);
     if (!thread) throw httpError("thread_not_found", 404);
+    if (threadUsesCodexAppServer(thread)) throw httpError("codex_app_server_hibernate_unsupported_use_stop", 409);
     return sleepThread(thread.id, {
       reason: body.reason || "hibernate",
-      kill: threadUsesCodexAppServer(thread) ? body.force === true : body.force !== false,
+      kill: body.force !== false,
     });
   }
 
