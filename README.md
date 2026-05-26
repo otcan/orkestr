@@ -150,10 +150,10 @@ On macOS and other local installs, that file includes a service-safe `PATH` so
 launchd/systemd can find tools such as `tmux` and Homebrew-installed binaries.
 The one-line script also detaches itself from the `curl | bash` pipe before
 running Homebrew or prompts, so dependency installers cannot consume the rest of
-the script from stdin. On macOS, it only auto-installs missing local tools when
-the Homebrew prefix is user-writable; otherwise it stops with a manual command
-instead of asking the terminal app for administrator access. The default macOS
-local service is a user-owned background process controlled by `orkestr service`
+the script from stdin. On macOS, it does not run Homebrew by default; if tools
+such as `tmux` or `ripgrep` are missing, it stops with a manual command instead
+of asking the terminal app for administrator access. The default macOS local
+service is a user-owned background process controlled by `orkestr service`
 commands, not a launchd bootstrap, so the installer does not ask the terminal
 app to administer the computer.
 Use `.env` or the setup UI for optional OpenAI API access, Tailscale/Caddy
