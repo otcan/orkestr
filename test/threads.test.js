@@ -4374,6 +4374,37 @@ test("thread summary exposes latest delivery failure details", async () => {
   assert.equal(summary.lastMessageError, "Codex rejected /now.");
 });
 
+test("thread summary does not infer working from stale stored state without a runtime lease", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-summary-stale-working-home-"));
+  const env = { ORKESTR_HOME: path.join(home, "stored") };
+  const priorHome = process.env.ORKESTR_HOME;
+  const thread = await createThread({
+    id: "summary-stale-working-thread",
+    name: "Summary Stale Working Thread",
+    state: "working",
+    runtime: {
+      id: "ended-runtime-lease",
+      state: "working",
+      endedAt: "2026-01-01T00:00:00.000Z",
+    },
+  }, env);
+  process.env.ORKESTR_HOME = path.join(home, "empty-runtime-home");
+
+  try {
+    const summary = await threadRuntimeSummary(thread, await listThreadMessages(thread.id, env));
+
+    assert.equal(summary.state, "sleeping");
+    assert.equal(summary.status, "sleeping");
+    assert.equal(summary.publicStatus, "Sleeping");
+    assert.equal(summary.publicStatusCode, "sleeping");
+    assert.equal(summary.working, false);
+    assert.equal(summary.foregroundWorking, false);
+    assert.equal(summary.typingActive, false);
+  } finally {
+    restoreEnvValue("ORKESTR_HOME", priorHome);
+  }
+});
+
 test("thread summary treats proposed plan tags as plan messages", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-summary-proposed-plan-home-"));
   const env = { ORKESTR_HOME: home };
