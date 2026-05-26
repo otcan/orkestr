@@ -1402,6 +1402,9 @@ safe_remove_path() {
 
 remove_local_cron_entry() {
   local tmp marker
+  if is_macos; then
+    return 0
+  fi
   if ! have crontab; then
     return 0
   fi
