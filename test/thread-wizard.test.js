@@ -143,17 +143,24 @@ test("web UI exposes native terminal attach for app-server threads", async () =>
     "apps/web/src/app/app.component.ts",
     "apps/web/src/app/app.component.html",
     "apps/web/src/app/api.service.ts",
+    "apps/server/src/modules/threads/threads.controller.ts",
     "apps/web/src/styles.css",
   ]);
 
   assert.ok(sources.includes("nativeTerminalAttachAvailable"));
   assert.ok(sources.includes("embeddedRawTerminalAvailable"));
   assert.ok(sources.includes("nativeAttachCommand"));
+  assert.ok(sources.includes("openNativeTerminal"));
+  assert.ok(sources.includes("openThreadTerminal"));
   assert.ok(sources.includes("copyNativeAttachCommand"));
+  assert.ok(sources.includes('Post(":threadId/attach/open-terminal")'));
   assert.ok(sources.includes("attachKind?: string"));
+  assert.ok(sources.includes("launched?: boolean"));
+  assert.ok(sources.includes("Open Terminal"));
   assert.ok(sources.includes("Native terminal"));
   assert.ok(sources.includes("Attach to Codex"));
   assert.ok(sources.includes(".native-terminal-command"));
+  assert.ok(sources.includes(".native-terminal-status"));
 });
 
 test("sidebar marks latest delivery failures as errors", async () => {

@@ -178,6 +178,8 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   rawConnectionState = "idle";
   rawConnectionDetail = "";
   nativeAttachCopied = false;
+  nativeAttachOpening = false;
+  nativeAttachStatus = "";
   sidebarWidth = 460;
   sidebarResizing = false;
 
@@ -590,6 +592,8 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     this.runtimeDetails = null;
     this.attachDetails = null;
     this.nativeAttachCopied = false;
+    this.nativeAttachOpening = false;
+    this.nativeAttachStatus = "";
     this.closeRawStream();
     this.shouldStickToBottom = this.activePanel === "chat";
     this.scrollAfterRender = this.activePanel === "chat";
@@ -1073,11 +1077,13 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     if (!this.rawTerminalAvailable(thread)) {
       this.attachDetails = null;
       this.nativeAttachCopied = false;
+      this.nativeAttachStatus = "";
       this.closeRawStream();
       this.activePanel = "chat";
       return;
     }
     this.nativeAttachCopied = false;
+    this.nativeAttachStatus = "";
     this.busy = true;
     try {
       const [attach, runtime] = await Promise.all([
@@ -2962,6 +2968,31 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
 
   nativeAttachCopyLabel(): string {
     return this.nativeAttachCopied ? "Copied" : "Copy command";
+  }
+
+  nativeAttachOpenLabel(): string {
+    return this.nativeAttachOpening ? "Opening" : "Open Terminal";
+  }
+
+  async openNativeTerminal(): Promise<void> {
+    const thread = this.selectedThread();
+    if (!thread || this.nativeAttachOpening) return;
+    this.nativeAttachOpening = true;
+    this.nativeAttachStatus = "";
+    try {
+      const response = await firstValueFrom(this.api.openThreadTerminal(thread.id));
+      this.attachDetails = response;
+      if (response.ok && response.launched) {
+        this.nativeAttachStatus = "Terminal launch requested on the Orkestr host.";
+        return;
+      }
+      this.nativeAttachStatus = response.message || "Could not open a terminal. Use the command below.";
+    } catch (error) {
+      this.nativeAttachStatus = this.errorText(error) || "Could not open a terminal. Use the command below.";
+    } finally {
+      this.nativeAttachOpening = false;
+      this.renderNow();
+    }
   }
 
   async copyNativeAttachCommand(): Promise<void> {

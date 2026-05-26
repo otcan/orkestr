@@ -32,6 +32,7 @@ import {
 } from "../../../../../packages/core/src/threads.js";
 import { createThreadWorker, detectThreadRepo, listThreadWorkers, refreshThreadGitState, syncThreadWorkerWithParent, updateThreadRepo } from "../../../../../packages/core/src/thread-workers.js";
 import { parseThreadInputCommand } from "../../../../../packages/core/src/thread-commands.js";
+import { launchNativeTerminal } from "../../../../../packages/core/src/native-terminal.js";
 import {
   archiveCodexAppServerThread,
   compactCodexAppServerThread,
@@ -959,6 +960,40 @@ export class ThreadsController {
       woke: wakeResult ? wakeResult.reused !== true : false,
       attachCommand: `tmux attach-session -t ${runtime.sessionName}`,
     };
+  }
+
+  @Post(":threadId/attach/open-terminal")
+  @HttpCode(200)
+  async openAttachTerminal(@Param("threadId") threadId: string) {
+    const attach: any = await this.attach(threadId);
+    if (!attach?.ok || !attach.attachCommand) {
+      return {
+        ...attach,
+        ok: false,
+        launched: false,
+        message: attach?.message || "No attach command is available for this thread.",
+      };
+    }
+
+    const thread = attach.thread || (await getThread(threadId)) || {};
+    const cwd = String(thread.cwd || thread.workspace || thread.repoPath || thread.worktreePath || "");
+    const title = `Orkestr: ${thread.name || thread.title || thread.id || threadId}`;
+    try {
+      const terminal = await launchNativeTerminal(String(attach.attachCommand), { cwd, title });
+      return {
+        ...attach,
+        ok: true,
+        launched: true,
+        terminal,
+      };
+    } catch (error: any) {
+      return {
+        ...attach,
+        ok: false,
+        launched: false,
+        message: error?.message || "Could not open a native terminal on this host.",
+      };
+    }
   }
 
   @Post(":threadId/interrupt")

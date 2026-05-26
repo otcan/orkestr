@@ -556,6 +556,8 @@ export interface ThreadAttachResponse {
   runtime?: Record<string, unknown>;
   attachKind?: string;
   attachCommand?: string;
+  launched?: boolean;
+  terminal?: Record<string, unknown>;
   message?: string;
 }
 
@@ -1050,6 +1052,10 @@ export class ApiService {
 
   attachThread(id: string): Observable<ThreadAttachResponse> {
     return this.http.post<ThreadAttachResponse>(this.api(`/threads/${encodeURIComponent(id)}/attach`), {});
+  }
+
+  openThreadTerminal(id: string): Observable<ThreadAttachResponse> {
+    return this.http.post<ThreadAttachResponse>(this.api(`/threads/${encodeURIComponent(id)}/attach/open-terminal`), {});
   }
 
   threadHistory(id: string): Observable<ThreadHistoryResponse> {
