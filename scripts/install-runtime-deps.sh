@@ -16,7 +16,11 @@ else
   npm install --omit=dev
 fi
 
-mapfile -t server_build_deps < <(node <<'NODE'
+server_build_deps=()
+while IFS= read -r dep; do
+  [ -n "$dep" ] || continue
+  server_build_deps[${#server_build_deps[@]}]="$dep"
+done < <(node <<'NODE'
 const pkg = JSON.parse(require("node:fs").readFileSync("package.json", "utf8"));
 const dev = pkg.devDependencies || {};
 for (const name of ["typescript", "@types/node", "@types/ws"]) {

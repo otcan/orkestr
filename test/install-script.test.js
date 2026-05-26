@@ -10,6 +10,7 @@ const execFileAsync = promisify(execFile);
 
 test("install script exposes a host-native systemd VPS path", async () => {
   const script = await fs.readFile("scripts/install.sh", "utf8");
+  const runtimeDepsScript = await fs.readFile("scripts/install-runtime-deps.sh", "utf8");
 
   await execFileAsync("bash", ["-n", "scripts/install.sh"]);
   await execFileAsync("bash", ["-n", "scripts/install-runtime-deps.sh"]);
@@ -143,6 +144,9 @@ test("install script exposes a host-native systemd VPS path", async () => {
   assert.match(script, /\$\{service_name\}\.timer/);
   assert.match(script, /ORKESTR_AUTH_REQUIRED=\$\{ORKESTR_AUTH_REQUIRED:-1\}/);
   assert.match(script, /bash scripts\/install-runtime-deps\.sh/);
+  assert.doesNotMatch(runtimeDepsScript, /mapfile|readarray/);
+  assert.match(runtimeDepsScript, /server_build_deps=\(\)/);
+  assert.match(runtimeDepsScript, /while IFS= read -r dep/);
   assert.match(script, /npm run build:runtime/);
   assert.match(script, /npm prune --omit=dev/);
   assert.match(script, /Refusing to install Codex automatically on macOS/);
