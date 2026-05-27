@@ -656,9 +656,10 @@ export async function runtimeStatus(threadId, env = process.env, messagesOverrid
   await recordCodexRuntimeAuthInvalidSignal({ thread, progress }, env).catch(() => {});
   const frozen = progressSample?.frozen === true || progressSample?.stateHint === "frozen";
   const backgroundWork = paneBackgroundWork(paneText) || progressSample?.backgroundWork === true;
-  const foregroundWorking = !frozen && paneWorking(paneText) && !backgroundWork;
+  const staleWorkingPrompt = progressSample?.staleWorkingPrompt === true;
+  const foregroundWorking = !frozen && paneWorking(paneText) && !backgroundWork && !staleWorkingPrompt;
   const promptReadyCandidate = panePromptReady(paneText);
-  const working = !frozen && (foregroundWorking || backgroundWork || (!promptReadyCandidate && runningCount > 0));
+  const working = !frozen && (foregroundWorking || backgroundWork || staleWorkingPrompt || (!promptReadyCandidate && runningCount > 0));
   const promptReady = promptReadyCandidate && !foregroundWorking && !needsResumeDirectoryConfirmation && !needsCodexUpdatePromptSkip;
   const recentlyStarted = Date.now() - (Date.parse(lease.startedAt || "") || Date.now()) < 20_000;
   const state = frozen

@@ -931,22 +931,22 @@ function runtimeActiveTurnId(status = null) {
 function runtimeTypingActive(status = null) {
   if (!status) return false;
   const state = runtimeStateFromStatus(status);
-  if (runtimeKindFromStatus(status) === "codex-app-server") {
+  if (state === "frozen" || status.frozen === true) return false;
+  const isCodexAppServer = runtimeKindFromStatus(status) === "codex-app-server";
+  if (isCodexAppServer) {
     if (!runtimeActiveTurnId(status)) return false;
     if (state === "awaiting_approval") return false;
-    return status.typingActive === true ||
-      status.foregroundWorking === true ||
-      status.working === true ||
-      status.backgroundWork === true ||
-      state === "working" ||
-      state === "running";
   }
-  return status.typingActive === true ||
-    status.foregroundWorking === true ||
-    status.working === true ||
-    status.backgroundWork === true ||
-    state === "working" ||
-    state === "running";
+  const explicitForeground = status.typingActive === true || status.foregroundWorking === true;
+  if (explicitForeground) return true;
+  const hasExplicitForegroundSignal = Object.prototype.hasOwnProperty.call(status, "typingActive") ||
+    Object.prototype.hasOwnProperty.call(status, "foregroundWorking");
+  if (hasExplicitForegroundSignal) return false;
+  if (status.backgroundWork === true || status.progress?.staleWorkingPrompt === true) return false;
+  if (isCodexAppServer) {
+    return status.working === true || state === "working" || state === "running";
+  }
+  return status.working === true || state === "working" || state === "running";
 }
 
 function deferredWhatsAppTypingDeliveryState(message = {}) {

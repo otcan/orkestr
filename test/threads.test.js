@@ -1321,7 +1321,7 @@ test("runtime status reports visible background terminal work instead of ready",
   }
 });
 
-test("runtime status keeps active foreground work when Codex redraws the prompt line", async () => {
+test("runtime status does not treat stale working text above a prompt as typing", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-foreground-work-prompt-"));
   const fakeTmux = await createFakeTmux(home);
   const priorPath = process.env.PATH;
@@ -1355,12 +1355,13 @@ test("runtime status keeps active foreground work when Codex redraws the prompt 
 
     assert.equal(status.state, "working");
     assert.equal(status.working, true);
-    assert.equal(status.foregroundWorking, true);
+    assert.equal(status.foregroundWorking, false);
     assert.equal(status.backgroundWork, false);
-    assert.equal(status.typingActive, true);
-    assert.equal(status.promptReady, false);
+    assert.equal(status.typingActive, false);
+    assert.equal(status.promptReady, true);
     assert.equal(status.progress.summary, "Working");
     assert.equal(status.progress.stateHint, "working");
+    assert.equal(status.progress.staleWorkingPrompt, true);
   } finally {
     restoreEnvValue("PATH", priorPath);
     restoreEnvValue("TMUX_LOG", priorTmuxLog);

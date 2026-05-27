@@ -610,6 +610,74 @@ test("whatsapp typing indicators follow active routed thread runtime", async () 
   assert.deepEqual(captures[1], []);
 });
 
+test("whatsapp typing indicators ignore background-only runtime work", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-typing-background-"));
+  const env = externalBridgeEnv(home);
+  await createThread({ id: "thread-wa-typing-background", name: "WA Typing Background Thread" }, env);
+  await writeConnectorConfig("whatsapp", {
+    threadRoutes: { "chat-typing-background": "thread-wa-typing-background" },
+  }, env);
+
+  await routeWhatsAppInbound({
+    eventId: "wa-typing-background-1",
+    chatId: "chat-typing-background",
+    accountId: "orkestr",
+    text: "work on this",
+  }, env);
+  const captures = [];
+  const result = await syncWhatsAppTypingIndicators(env, {
+    statusImpl: async () => ({
+      state: "working",
+      working: true,
+      backgroundWork: true,
+      foregroundWorking: false,
+      typingActive: false,
+      promptReady: true,
+    }),
+    syncImpl: async (targets) => {
+      captures.push(targets);
+      return { ok: true, active: targets.length };
+    },
+  });
+
+  assert.equal(result.active, 0);
+  assert.deepEqual(captures[0], []);
+});
+
+test("whatsapp typing indicators ignore stale working text after prompt returns", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-typing-stale-working-"));
+  const env = externalBridgeEnv(home);
+  await createThread({ id: "thread-wa-typing-stale-working", name: "WA Typing Stale Working Thread" }, env);
+  await writeConnectorConfig("whatsapp", {
+    threadRoutes: { "chat-typing-stale-working": "thread-wa-typing-stale-working" },
+  }, env);
+
+  await routeWhatsAppInbound({
+    eventId: "wa-typing-stale-working-1",
+    chatId: "chat-typing-stale-working",
+    accountId: "orkestr",
+    text: "work on this",
+  }, env);
+  const captures = [];
+  const result = await syncWhatsAppTypingIndicators(env, {
+    statusImpl: async () => ({
+      state: "working",
+      working: true,
+      foregroundWorking: false,
+      typingActive: false,
+      promptReady: true,
+      progress: { staleWorkingPrompt: true },
+    }),
+    syncImpl: async (targets) => {
+      captures.push(targets);
+      return { ok: true, active: targets.length };
+    },
+  });
+
+  assert.equal(result.active, 0);
+  assert.deepEqual(captures[0], []);
+});
+
 test("whatsapp typing indicators require an active app-server turn", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-typing-app-server-idle-"));
   const env = { ORKESTR_HOME: home };
