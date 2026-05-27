@@ -36,6 +36,16 @@ function staleAppServerRuntime(thread, clientState = null) {
     (persistedStatusState === "failed" || clean(thread?.runtime?.lastTurnStatus).toLowerCase() === "failed");
 }
 
+function staleFinalGraceMs(env = process.env) {
+  const parsed = Number(env.ORKESTR_CODEX_APP_SERVER_STALE_FINAL_GRACE_MS || 120000);
+  return Number.isFinite(parsed) ? Math.max(0, parsed) : 120000;
+}
+
+function timestampMs(value) {
+  const ms = Date.parse(String(value || ""));
+  return Number.isFinite(ms) ? ms : 0;
+}
+
 function deliveredUserMessage(message = {}) {
   if (message?.role !== "user") return false;
   const state = clean(message.state).toLowerCase();
@@ -53,41 +63,66 @@ function assistantMessage(message = {}) {
   return !state || state === "completed";
 }
 
-function latestDeliveredUserWithoutAssistant(messages = []) {
-  for (let index = messages.length - 1; index >= 0; index -= 1) {
-    const message = messages[index];
-    if (assistantMessage(message)) return null;
-    if (deliveredUserMessage(message)) return message;
-  }
-  return null;
+function terminalAssistantMessage(message = {}) {
+  if (!assistantMessage(message)) return false;
+  const phase = clean(message.phase || "final_answer").toLowerCase();
+  if (phase === "final_answer" || phase === "runtime_interrupted") return true;
+  return ["plan", "need_input"].includes(phase);
 }
 
-function staleTurnNoticeText() {
+function latestIncompleteDeliveredTurn(messages = []) {
+  const latestUserIndex = messages.findLastIndex((message) => deliveredUserMessage(message));
+  if (latestUserIndex < 0) return null;
+  const latestUser = messages[latestUserIndex];
+  const afterUser = messages.slice(latestUserIndex + 1).filter((message) => assistantMessage(message));
+  if (afterUser.some((message) => terminalAssistantMessage(message))) return null;
+  const latestAssistant = afterUser.at(-1) || null;
+  return {
+    latestUser,
+    latestAssistant,
+    reason: latestAssistant ? "no_final_answer" : "no_assistant_response",
+    lastActivityMs: timestampMs(latestAssistant?.timestamp || latestAssistant?.createdAt || latestUser.timestamp || latestUser.createdAt),
+  };
+}
+
+function staleTurnNoticeText(reason = "no_assistant_response") {
+  const detail = reason === "no_final_answer"
+    ? "Orkestr found progress updates for this turn, but Codex stopped or went idle before a final answer was recorded."
+    : "Orkestr found a delivered message with no assistant response after the Codex runtime stopped, restarted, or lost the active turn.";
   return [
     "Codex conversation interrupted",
     "",
-    "Orkestr found a delivered message with no assistant response after the Codex runtime stopped, restarted, or lost the active turn.",
+    detail,
     "Send the next instruction normally to continue. Use /now only when you intentionally want to interrupt active work.",
   ].join("\n");
 }
 
-function staleTurnEventId(thread, codexId, message) {
+function staleTurnEventId(thread, codexId, turn) {
+  const message = turn?.latestUser || {};
+  const reason = clean(turn?.reason || "no_assistant_response");
   return threadEventId({
     codexThreadId: codexId,
     turnId: clean(message?.codexTurnId || message?.executorTurnId || thread?.runtime?.activeTurnId || "stale-turn"),
-    itemId: `stale-no-reply:${message?.id || "latest"}`,
-    type: "turn/stale-no-reply",
+    itemId: `stale-${reason}:${message?.id || "latest"}`,
+    type: `turn/stale-${reason}`,
     role: "assistant",
-    text: staleTurnNoticeText(),
+    text: staleTurnNoticeText(reason),
   });
 }
 
-async function appendStaleTurnNotice(thread, messages, latestUser, env = process.env) {
+function noticeWhatsappParent(turn) {
+  if (turn?.latestUser && whatsappOrigin(turn.latestUser)) return turn.latestUser;
+  if (turn?.latestAssistant && whatsappOrigin(turn.latestAssistant)) return turn.latestAssistant;
+  return null;
+}
+
+async function appendStaleTurnNotice(thread, messages, turn, env = process.env) {
   const codexId = codexThreadId(thread);
-  const text = staleTurnNoticeText();
-  const eventId = staleTurnEventId(thread, codexId, latestUser);
+  const latestUser = turn?.latestUser || null;
+  const text = staleTurnNoticeText(turn?.reason);
+  const eventId = staleTurnEventId(thread, codexId, turn);
   const existing = messages.find((message) => message.eventId === eventId);
-  const whatsappParent = whatsappOrigin(latestUser) ? latestUser : null;
+  const whatsappParent = noticeWhatsappParent(turn);
   const notice = await appendOrUpdateEventMessage(thread, {
     role: "assistant",
     source: "orkestr_runtime",
@@ -106,6 +141,17 @@ async function appendStaleTurnNotice(thread, messages, latestUser, env = process
   return { notice, appended: !existing && Boolean(notice?.id) };
 }
 
+function shouldRecoverIncompleteTurn(thread, clientState, turn, env = process.env) {
+  if (!turn) return false;
+  const liveStatusState = appServerStateFromStatus(clientState?.status || null);
+  const liveActiveTurnId = clean(clientState?.activeTurnId);
+  if (liveActiveTurnId || liveStatusState === "working") return false;
+  const threadState = clean(thread?.state).toLowerCase();
+  if (["working", "queued", "pending_delivery", "awaiting_ack"].includes(threadState)) return false;
+  if (!turn.lastActivityMs) return true;
+  return Date.now() - turn.lastActivityMs >= staleFinalGraceMs(env);
+}
+
 export async function recoverStaleCodexAppServerTurns(env = process.env) {
   const threads = await listThreads(env).catch(() => []);
   const appServerThreads = threads.filter((thread) => threadUsesCodexAppServer(thread, env));
@@ -117,12 +163,13 @@ export async function recoverStaleCodexAppServerTurns(env = process.env) {
     const codexId = codexThreadId(thread);
     if (!codexId) continue;
     const clientState = client?.threadStates.has(codexId) ? client.threadStates.get(codexId) : null;
-    if (!staleAppServerRuntime(thread, clientState)) continue;
     const messages = await listThreadMessages(thread.id, env).catch(() => []);
-    const latestUser = latestDeliveredUserWithoutAssistant(messages);
+    const incompleteTurn = latestIncompleteDeliveredTurn(messages);
+    const staleRuntime = staleAppServerRuntime(thread, clientState);
+    if (!staleRuntime && !shouldRecoverIncompleteTurn(thread, clientState, incompleteTurn, env)) continue;
     let notice = null;
-    if (latestUser) {
-      const result = await appendStaleTurnNotice(thread, messages, latestUser, env).catch(() => null);
+    if (incompleteTurn) {
+      const result = await appendStaleTurnNotice(thread, messages, incompleteTurn, env);
       notice = result?.notice || null;
       if (result?.appended) appended += 1;
     }
@@ -145,7 +192,8 @@ export async function recoverStaleCodexAppServerTurns(env = process.env) {
       threadId: thread.id,
       codexThreadId: codexId,
       noticeMessageId: notice?.id || null,
-      latestUserMessageId: latestUser?.id || null,
+      latestUserMessageId: incompleteTurn?.latestUser?.id || null,
+      reason: incompleteTurn?.reason || (staleRuntime ? "stale_runtime" : "incomplete_turn"),
     }, env).catch(() => {});
   }
   return { recovered, appended };

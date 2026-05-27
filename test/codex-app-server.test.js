@@ -643,6 +643,92 @@ test("Codex app-server recovery projects stale WhatsApp turns back to the source
   }
 });
 
+test("Codex app-server recovery reports progress-only turns with no final answer", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-codex-app-server-progress-only-recovery-"));
+  const fake = await createFakeCodex(home);
+  const env = {
+    ORKESTR_HOME: path.join(home, "orkestr"),
+    HOME: path.join(home, "runtime-home"),
+    PATH: `${fake.bin}${path.delimiter}${process.env.PATH || ""}`,
+    FAKE_CODEX_STATE: fake.stateFile,
+    ORKESTR_CODEX_APP_SERVER_STALE_FINAL_GRACE_MS: "0",
+  };
+  try {
+    const thread = await createThread({
+      id: "app-server-progress-only-recovery-thread",
+      name: "App Server Progress Only Recovery Thread",
+      state: "ready",
+      executorId: "codex",
+      executor: {
+        type: "codex",
+        transport: "app-server",
+        codexThreadId: "progress-only-codex-thread",
+        codexSessionId: "progress-only-codex-thread",
+      },
+      runtimeKind: "codex-app-server",
+      codexThreadId: "progress-only-codex-thread",
+      codexSessionId: "progress-only-codex-thread",
+      binding: {
+        connector: "whatsapp",
+        chatId: "chat-progress-only",
+        responderAccountId: "account-progress-only",
+      },
+      runtime: {
+        runtimeKind: "codex-app-server",
+        state: "ready",
+        activeTurnId: null,
+        codexStatus: { type: "idle" },
+        lastTurnStatus: "completed",
+      },
+    }, env);
+    const input = await appendThreadMessage(thread.id, {
+      role: "user",
+      source: "whatsapp",
+      connector: "whatsapp",
+      chatId: "chat-progress-only",
+      accountId: "account-progress-only",
+      text: "Finish this turn.",
+      state: "completed",
+      deliveryState: "delivered",
+      observedVia: "codex_app_server_turn_start",
+      codexThreadId: "progress-only-codex-thread",
+      codexTurnId: "progress-turn",
+    }, env);
+    await appendThreadMessage(thread.id, {
+      role: "assistant",
+      source: "codex-app-server",
+      phase: "commentary",
+      text: "I am still working on it.",
+      state: "completed",
+      parentMessageId: input.id,
+      connector: "whatsapp",
+      chatId: "chat-progress-only",
+      accountId: "account-progress-only",
+      codexThreadId: "progress-only-codex-thread",
+      codexTurnId: "progress-turn",
+    }, env);
+
+    const first = await recoverStaleCodexAppServerTurns(env);
+    const messages = await listThreadMessages(thread.id, env);
+    const notice = messages.find((message) => message.source === "orkestr_runtime" && message.phase === "runtime_interrupted");
+
+    assert.equal(first.recovered, 1);
+    assert.equal(first.appended, 1);
+    assert.equal(notice.parentMessageId, input.id);
+    assert.equal(notice.connector, "whatsapp");
+    assert.equal(notice.chatId, "chat-progress-only");
+    assert.match(notice.text, /progress updates/);
+
+    const second = await recoverStaleCodexAppServerTurns(env);
+    const messagesAfterSecond = await listThreadMessages(thread.id, env);
+    assert.equal(second.recovered, 0);
+    assert.equal(second.appended, 0);
+    assert.equal(messagesAfterSecond.filter((message) => message.source === "orkestr_runtime" && message.phase === "runtime_interrupted").length, 1);
+  } finally {
+    stopCodexAppServerClients();
+  }
+});
+
 test("Codex app-server history sync adopts native turns without duplicating Orkestr inputs", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-codex-app-server-sync-"));
   const fake = await createFakeCodex(home);
