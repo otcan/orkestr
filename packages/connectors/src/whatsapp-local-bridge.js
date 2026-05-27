@@ -618,12 +618,68 @@ function localWhatsAppAutostartEnabled(env = process.env) {
   return ["1", "true", "yes", "on"].includes(raw);
 }
 
+function localWhatsAppAutostartAccountIds(env = process.env) {
+  if (!localWhatsAppAutostartEnabled(env)) return [];
+  const accountIds = splitAccountList(env.ORKESTR_WHATSAPP_AUTOSTART_ACCOUNT_IDS || env.WHATSAPP_LOCAL_AUTOSTART_ACCOUNT_IDS);
+  return accountIds.length ? accountIds : localWhatsAppAccountIdsForEnv(env);
+}
+
 export async function startConfiguredLocalWhatsAppAccounts(env = process.env) {
   if (!localWhatsAppAutostartEnabled(env)) return { enabled: false, accounts: [] };
-  const accountIds = splitAccountList(env.ORKESTR_WHATSAPP_AUTOSTART_ACCOUNT_IDS || env.WHATSAPP_LOCAL_AUTOSTART_ACCOUNT_IDS);
-  const selected = accountIds.length ? accountIds : localWhatsAppAccountIdsForEnv(env);
+  const selected = localWhatsAppAutostartAccountIds(env);
   const accounts = await Promise.all(selected.map((accountId) => startLocalWhatsAppAccount(accountId, env)));
   return { enabled: true, accounts };
+}
+
+const localWhatsAppRecoveryAttempts = new Map();
+const recoverableLocalWhatsAppStates = new Set(["auth_ready_timeout", "disconnected"]);
+
+function localWhatsAppRecoveryCooldownMs(env = process.env) {
+  const parsed = Number(env.ORKESTR_WHATSAPP_AUTO_RECOVER_MS || env.WHATSAPP_LOCAL_AUTO_RECOVER_MS || 60_000);
+  return Number.isFinite(parsed) ? Math.max(5000, parsed) : 60_000;
+}
+
+export function recoverableLocalWhatsAppAccountIds(accounts = [], selectedAccountIds = []) {
+  const selected = new Set(selectedAccountIds.map((accountId) => String(accountId || "").trim()).filter(Boolean));
+  return accounts
+    .filter((account) => {
+      const accountId = String(account?.accountId || "").trim();
+      const state = String(account?.state || "").trim();
+      return accountId &&
+        selected.has(accountId) &&
+        account.ready !== true &&
+        recoverableLocalWhatsAppStates.has(state);
+    })
+    .map((account) => String(account.accountId).trim());
+}
+
+export async function recoverConfiguredLocalWhatsAppAccounts(env = process.env, options = {}) {
+  const selected = localWhatsAppAutostartAccountIds(env);
+  if (!selected.length) return { enabled: false, recovered: [], skipped: [] };
+  const status = options.status || await getLocalWhatsAppBridgeStatus(env);
+  const candidates = recoverableLocalWhatsAppAccountIds(status.accounts || [], selected);
+  const cooldownMs = localWhatsAppRecoveryCooldownMs(env);
+  const nowMs = Number(options.nowMs || Date.now());
+  const recovered = [];
+  const skipped = [];
+  for (const accountId of candidates) {
+    const lastAttemptMs = Number(localWhatsAppRecoveryAttempts.get(accountId) || 0);
+    if (!options.force && lastAttemptMs && nowMs - lastAttemptMs < cooldownMs) {
+      skipped.push({ accountId, reason: "cooldown" });
+      continue;
+    }
+    localWhatsAppRecoveryAttempts.set(accountId, nowMs);
+    await appendEvent({ type: "whatsapp_local_auto_recover_start", accountId }, env).catch(() => {});
+    try {
+      const account = await startLocalWhatsAppAccount(accountId, env, options.startOptions || {});
+      recovered.push({ accountId, state: account.state, ready: account.ready === true });
+      await appendEvent({ type: "whatsapp_local_auto_recover_started", accountId, state: account.state, ready: account.ready === true }, env).catch(() => {});
+    } catch (error) {
+      skipped.push({ accountId, reason: error?.message || String(error) });
+      await appendEvent({ type: "whatsapp_local_auto_recover_failed", accountId, error: error?.message || String(error) }, env).catch(() => {});
+    }
+  }
+  return { enabled: true, recovered, skipped };
 }
 
 export async function startLocalWhatsAppAccount(accountId = "", env = process.env, options = {}) {

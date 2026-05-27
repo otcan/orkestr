@@ -21,6 +21,7 @@ import {
 } from "../../../packages/core/src/codex-app-server.js";
 import { deliverWhatsAppReplies, syncWhatsAppTypingIndicators } from "../../../packages/connectors/src/whatsapp.js";
 import {
+  recoverConfiguredLocalWhatsAppAccounts,
   startConfiguredLocalWhatsAppAccounts,
   stopLocalWhatsAppBridge,
 } from "../../../packages/connectors/src/whatsapp-local-bridge.js";
@@ -165,6 +166,7 @@ async function syncRuntimeAndDeliverWhatsApp(options: { forceWhatsapp?: boolean;
   const pendingConnectorDeliveries = consumeThreadConnectorDeliverySignalCount();
   const synced = await syncRuntimeLeases();
   const recovered = await recoverStaleCodexAppServerTurns(process.env, { noticeCause: options.recoveryCause }).catch(() => ({ recovered: 0, appended: 0 }));
+  await recoverConfiguredLocalWhatsAppAccounts().catch(() => {});
   await syncWhatsAppTypingIndicators().catch(() => {});
   const connectorDeliveries = pendingConnectorDeliveries + consumeThreadConnectorDeliverySignalCount();
   const appended = (synced.appended || 0) + (recovered.appended || 0);

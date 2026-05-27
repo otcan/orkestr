@@ -9,7 +9,7 @@ import { listAgentMessages } from "../packages/core/src/messages.js";
 import { getSetupStatus } from "../packages/core/src/setup.js";
 import { appendThreadMessage, createThread, enqueueThreadInput, listThreadMessages, updateThreadMessage } from "../packages/core/src/threads.js";
 import { deliverWhatsAppReplies, formatWhatsAppOutboundText, getWhatsAppChatParticipants, getWhatsAppStatus, initialQueueDeliveryState, mapLocalWhatsAppStatusFromHealth, routeWhatsAppInbound, syncWhatsAppTypingIndicators } from "../packages/connectors/src/whatsapp.js";
-import { listLocalWhatsAppChats, localWhatsAppAccountIdsForEnv, localWhatsAppMessageRouteFields, normalizeGroupParticipantIds, reduceLocalWhatsAppBridgeState, startLocalWhatsAppAccount, webCacheRoot } from "../packages/connectors/src/whatsapp-local-bridge.js";
+import { listLocalWhatsAppChats, localWhatsAppAccountIdsForEnv, localWhatsAppMessageRouteFields, normalizeGroupParticipantIds, recoverableLocalWhatsAppAccountIds, reduceLocalWhatsAppBridgeState, startLocalWhatsAppAccount, webCacheRoot } from "../packages/connectors/src/whatsapp-local-bridge.js";
 import { prepareWhatsAppTableAttachments } from "../packages/connectors/src/whatsapp-table-attachments.js";
 import { writeConnectorConfig } from "../packages/storage/src/config.js";
 
@@ -261,6 +261,22 @@ test("local whatsapp status reports auth-to-ready timeouts as failures", async (
   assert.equal(health.state, "failed");
   assert.equal(status.state, "unreachable");
   assert.equal(status.summary, error);
+});
+
+test("local whatsapp recovery only targets autostarted stalled accounts", async () => {
+  const accounts = [
+    { accountId: "sender", state: "auth_ready_timeout", ready: false },
+    { accountId: "responder", state: "auth_ready_timeout", ready: false },
+    { accountId: "other", state: "disconnected", ready: false },
+    { accountId: "logged-out", state: "idle", ready: false },
+    { accountId: "broken-auth", state: "auth_failure", ready: false },
+    { accountId: "already-ready", state: "ready", ready: true },
+  ];
+
+  assert.deepEqual(recoverableLocalWhatsAppAccountIds(accounts, ["responder", "other", "logged-out", "broken-auth", "already-ready"]), [
+    "responder",
+    "other",
+  ]);
 });
 
 test("whatsapp status reports paired from health readiness", async () => {
