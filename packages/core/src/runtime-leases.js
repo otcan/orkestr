@@ -30,6 +30,7 @@ import {
   threadUsesCodexAppServer,
 } from "./codex-app-server.js";
 import { appendOrUpdateEventMessage } from "./codex-app-server-common.js";
+import { completeThreadSecurityApproveCommand, threadSecurityApproveChallengeId } from "./security-thread-command.js";
 import {
   capturePane,
   killTmuxSession,
@@ -1533,6 +1534,8 @@ async function reapplyDesiredCodexMode(thread, status, env = process.env) {
 function immediateThreadCommand(message) {
   if (!message || message.role !== "user") return null;
   if (!["queued", "pending_delivery"].includes(String(message.state || ""))) return null;
+  const securityChallengeId = threadSecurityApproveChallengeId(message);
+  if (securityChallengeId) return { command: "security_approve", rawCommand: "security_approve", text: securityChallengeId };
   const parsed = parseThreadInputCommand({ text: message.text });
   if (parsed.command === "interrupt") return parsed;
   if (parsed.command === "stop" || parsed.command === "reset" || parsed.command === "hard_reset") return parsed;
@@ -1671,6 +1674,7 @@ async function completeInterruptCommand(thread, message, parsed, env = process.e
 }
 
 async function completeImmediateThreadCommand(thread, message, parsed, env = process.env) {
+  if (parsed.command === "security_approve") return completeThreadSecurityApproveCommand(thread, message, env);
   if (parsed.command === "interrupt") return completeInterruptCommand(thread, message, parsed, env);
   if (parsed.command === "stop") return completeStopCommand(thread, message, env);
   if (parsed.command === "reset") return completeResetCommand(thread, message, false, env);

@@ -12,6 +12,7 @@ import { runNextThreadMessage } from "../packages/core/src/executors.js";
 import { applyRuntimeCodexMode, consumeThreadConnectorDeliverySignalCount, deliverPendingThreadInputs, doctorRuntimeResources, drainAllPendingThreadInputs, hardResetThreadRuntime, listRuntimeLeases, resetThreadRuntime, runtimeStatus, setThreadConnectorDeliverySignalHandler, sleepThread, syncRuntimeLeases, syncRuntimeWindowName, wakeThread } from "../packages/core/src/runtime-leases.js";
 import { ensureDataDirs } from "../packages/storage/src/paths.js";
 import { parseThreadInputCommand } from "../packages/core/src/thread-commands.js";
+import { createPairingChallenge, getPairingChallenge } from "../packages/core/src/security.js";
 import { createThreadWorker, detectThreadGitState, listThreadWorkers, refreshThreadGitState, syncThreadWorkerWithParent, updateThreadRepo } from "../packages/core/src/thread-workers.js";
 import { appendThreadMessage, createThread, deleteThread, enqueueThreadInput, getThread, listThreadMessages, listThreads, updateThread, updateThreadMessage } from "../packages/core/src/threads.js";
 
@@ -4569,6 +4570,44 @@ test("thread input commands strip /now before runtime delivery", () => {
     text: "",
   });
   assert.equal(parseThreadInputCommand({ text: "normal message" }).command, null);
+});
+
+test("thread input approves Orkestr security challenges locally before Codex delivery", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-security-approve-"));
+  const env = { ORKESTR_HOME: home };
+  const thread = await createThread({
+    id: "thread-security-approve",
+    name: "Thread Security Approve",
+    cwd: home,
+    runtimeKind: "codex-app-server",
+    executor: {
+      id: "codex",
+      type: "codex",
+      codexThreadId: "codex-security-approve-thread",
+      metadata: {
+        transport: "app-server",
+        runtimeKind: "codex-app-server",
+      },
+    },
+  }, env);
+  const challenge = await createPairingChallenge({ env });
+  const input = await enqueueThreadInput(thread.id, {
+    text: `approve challenge: ${challenge.challengeId}`,
+    source: "browser",
+  }, env);
+
+  const delivered = await deliverPendingThreadInputs(thread.id, env);
+  const approved = await getPairingChallenge(challenge.challengeId, { env });
+  const messages = await listThreadMessages(thread.id, env);
+  const user = messages.find((message) => message.id === input.id);
+  const reply = messages.find((message) => message.role === "assistant" && message.parentMessageId === input.id);
+
+  assert.deepEqual(delivered, [input.id]);
+  assert.equal(approved.status, "approved");
+  assert.equal(user.state, "completed");
+  assert.equal(user.deliveryState, "delivered");
+  assert.equal(user.observedVia, "orkestr_security_approve_command");
+  assert.match(reply.text, new RegExp(`Approved pairing challenge ${challenge.challengeId}`));
 });
 
 test("thread runtime summary reads Codex model and limits from live metadata", async (t) => {

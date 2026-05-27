@@ -30,6 +30,7 @@ import { getCodexAppServerClient, stopCodexAppServerClients as stopCodexAppServe
 import { codexAppServerMessageFields } from "./codex-app-server-whatsapp.js";
 import { ensureRuntimeAgentsFile } from "./agent-context.js";
 import { parseThreadInputCommand } from "./thread-commands.js";
+import { completeThreadSecurityApproveCommand } from "./security-thread-command.js";
 
 const appServerDeliveryTimers = new Map();
 const appServerHistorySyncTimes = new Map();
@@ -289,6 +290,11 @@ export async function deliverCodexAppServerPendingInputs(thread, env = process.e
   const messages = await listThreadMessages(thread.id, env);
   let next = messages.find((message) => message.role === "user" && ["queued", "pending_delivery", "awaiting_ack"].includes(message.state));
   if (!next) return delivered;
+  const securityCommand = await completeThreadSecurityApproveCommand(thread, next, env);
+  if (securityCommand?.handled) {
+    delivered.push(next.id);
+    return delivered;
+  }
   let client;
   try {
     client = await getCodexAppServerClient({ env, home: runtimeHome(env) });
