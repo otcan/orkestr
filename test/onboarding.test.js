@@ -74,10 +74,12 @@ test("onboarding focuses the starter setup on virtual desktop and WhatsApp", asy
   assert.ok(onboarding.includes('replaceState({}, "", "/setup")'));
   assert.ok(onboarding.includes("@if (isOnboardingMode())"));
   assert.ok(onboarding.includes("setupSections()"));
+  assert.ok(onboarding.includes('private readonly leanSetupConnectorIds: ConnectorStep[] = ["codex", "whatsapp", "browsers"];'));
+  assert.ok(onboarding.includes('retiredSetupSections = new Set(["google-marketing", "openai", "gmail", "linkedin", "mail", "outlook"])'));
+  assert.ok(onboarding.includes('return ["system", "security", "codex", "whatsapp", "browsers"].includes(section)'));
+  assert.ok(!onboarding.includes('{ id: "google-marketing", label: "Google Marketing", eyebrow: "SEO data" }'));
   assert.ok(onboarding.includes('type MarketingStep = "google-marketing"'));
-  assert.ok(onboarding.includes('id: "google-marketing"'));
   assert.ok(onboarding.includes("Google Marketing"));
-  assert.ok(onboarding.includes("SEO data"));
   assert.ok(onboarding.includes("Search Console + GA Admin"));
   assert.ok(onboarding.includes("startGoogleMarketingAuth()"));
   assert.ok(onboarding.includes('globalThis.location.href = "/google-marketing/oauth/start"'));
