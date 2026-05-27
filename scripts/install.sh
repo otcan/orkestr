@@ -1901,6 +1901,22 @@ if [ "${ORKESTR_RELEASE_DEPLOY:-0}" = "1" ] && [ -e "$current_link" ]; then
   app_dir="$current_link"
 fi
 cd "$app_dir"
+run_user="${ORKESTR_RUN_USER:-}"
+if [ -z "$run_user" ] && command -v systemctl >/dev/null 2>&1; then
+  run_user="$(systemctl show -p User --value "${ORKESTR_SERVICE_NAME:-orkestr}.service" 2>/dev/null || true)"
+fi
+run_user="${run_user:-orkestr}"
+if [ "$(id -u)" -eq 0 ] && [ "${ORKESTR_BROWSERCTL_RUN_AS_ROOT:-0}" != "1" ] && id "$run_user" >/dev/null 2>&1; then
+  if ! command -v runuser >/dev/null 2>&1; then
+    echo "Missing required command: runuser" >&2
+    exit 1
+  fi
+  run_home="$(getent passwd "$run_user" | cut -d: -f6)"
+  export HOME="${run_home:-${ORKESTR_HOME:-/opt/orkestr/home}}"
+  export USER="$run_user"
+  export LOGNAME="$run_user"
+  exec runuser -u "$run_user" --preserve-environment -- node "$app_dir/scripts/browserctl.mjs" "$@"
+fi
 exec node "$app_dir/scripts/browserctl.mjs" "$@"
 EOF
   chmod 0755 /usr/local/bin/orkestr-browserctl
