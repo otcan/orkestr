@@ -53,6 +53,7 @@ async function runBrowserctl(args, env = process.env) {
   const command = browserctlCommand(env);
   try {
     const result = await execFileAsync(command, args, {
+      env: { ...process.env, ...env },
       timeout: Number(env.ORKESTR_BROWSERCTL_TIMEOUT_MS || 45_000),
       maxBuffer: 5 * 1024 * 1024,
     });

@@ -29,6 +29,7 @@ import { ensureDataDirs } from "../../../packages/storage/src/paths.js";
 import { authorizeHttpRequest } from "../../../packages/core/src/security.js";
 import { AppModule } from "./app.module.js";
 import { JsonErrorFilter } from "./common/json-error.filter.js";
+import { attachDesktopProxyUpgrade, registerDesktopProxy } from "./desktop-proxy.js";
 import { registerStaticFallback } from "./static-fallback.js";
 import { attachThreadStreamUpgrade } from "./thread-stream.js";
 
@@ -95,8 +96,10 @@ export async function startServer({ port = 19812, host = "127.0.0.1", openBrowse
     }
   });
 
+  registerDesktopProxy(app);
   registerStaticFallback(app);
   await app.init();
+  attachDesktopProxyUpgrade(app.getHttpServer());
   attachThreadStreamUpgrade(app.getHttpServer());
   await app.listen(port, host);
   whatsappDeliveryScheduler.schedule();

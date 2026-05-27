@@ -17,6 +17,9 @@ Rules:
 - Do not add enterprise/team/plugin abstractions until the V1 onboarding loop is reliable.
 - Keep the install path boring: clone/install/start, open setup wizard, connect
   the first capability, create a thread or timer.
+- Release, tag, merge-to-main, and deploy work must follow
+  `docs/release-train.md`. Worker and parent threads may commit and push their
+  own branches, but deployments must go through the release train.
 - Keep files small and purpose-specific. If a file is approaching 500 lines, split new behavior into a separate module, component, helper, controller, or template when it can be managed cleanly.
 - Do not keep extending already-large files with unrelated UI, backend, routing, or integration logic. Exceed 500 lines only when splitting would create artificial fragmentation or a risky refactor.
 

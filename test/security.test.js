@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { startServer } from "../apps/server/src/server.js";
-import { approvePairingChallenge, securityStatus } from "../packages/core/src/security.js";
+import { approvePairingChallenge, authorizeHttpRequest, securityStatus } from "../packages/core/src/security.js";
 
 function saveEnv(keys) {
   return Object.fromEntries(keys.map((key) => [key, process.env[key]]));
@@ -115,4 +115,27 @@ test("reverse proxy local publish is treated as a local external bind", async ()
   } finally {
     restoreEnv(prior);
   }
+});
+
+test("desktop proxy routes require pairing when auth is enabled", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-security-desktop-"));
+  const env = {
+    ORKESTR_HOME: home,
+    ORKESTR_AUTH_REQUIRED: "1",
+  };
+
+  const blocked = await authorizeHttpRequest({
+    method: "GET",
+    url: "/desktop/linkedin/vnc.html?autoconnect=1",
+    headers: {},
+  }, env);
+  const staticAsset = await authorizeHttpRequest({
+    method: "GET",
+    url: "/assets/logo.svg",
+    headers: {},
+  }, env);
+
+  assert.equal(blocked.ok, false);
+  assert.equal(blocked.error, "browser_pairing_required");
+  assert.equal(staticAsset.ok, true);
 });

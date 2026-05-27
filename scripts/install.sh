@@ -929,6 +929,11 @@ install_system_packages() {
   fi
   apt_install ca-certificates curl git openssh-client procps ripgrep sqlite3 tmux util-linux
   install_browser_package
+  install_desktop_packages
+}
+
+install_desktop_packages() {
+  apt_install dbus-x11 novnc openbox websockify x11vnc xauth xvfb
 }
 
 install_local_runtime_tools() {
@@ -1140,18 +1145,21 @@ checkout_git_ref() {
 }
 
 write_env_file() {
-  if [ -f "$env_file" ]; then
-    echo "Keeping existing environment file: $env_file"
-    return 0
-  fi
-  mkdir -p "$(dirname "$env_file")"
   local chrome
   chrome="$(chrome_path)"
-  local codex_command codex_sandbox codex_approval runtime_settings_file
+  local codex_command codex_sandbox codex_approval runtime_settings_file desktop_mode browserctl_path
   codex_command="${ORKESTR_RUNTIME_CODEX_COMMAND:-$(codex_command_default)}"
   codex_sandbox="${ORKESTR_CODEX_SANDBOX:-$(codex_sandbox_default)}"
   codex_approval="${ORKESTR_CODEX_APPROVAL_POLICY:-$(codex_approval_default)}"
   runtime_settings_file="${ORKESTR_RUNTIME_SETTINGS_FILE:-$data_dir/runtime-settings.json}"
+  desktop_mode="${ORKESTR_BROWSER_DESKTOP_MODE:-browserctl}"
+  browserctl_path="${ORKESTR_BROWSERCTL_PATH:-/usr/local/bin/orkestr-browserctl}"
+  if [ -f "$env_file" ]; then
+    echo "Keeping existing environment file and applying safe defaults: $env_file"
+    migrate_systemd_env_file "$desktop_mode" "$browserctl_path"
+    return 0
+  fi
+  mkdir -p "$(dirname "$env_file")"
   cat > "$env_file" <<EOF
 # Orkestr host-native environment.
 # Edit this file for OpenAI keys, OAuth credentials, Caddy/Tailscale URLs, and private overlay paths.
@@ -1188,7 +1196,8 @@ CODEX_HOME=${CODEX_HOME:-$data_dir/codex}
 PUPPETEER_EXECUTABLE_PATH=${PUPPETEER_EXECUTABLE_PATH:-$chrome}
 WA_CHROME_PATH=${WA_CHROME_PATH:-$chrome}
 ORKESTR_CHROME_PATH=${ORKESTR_CHROME_PATH:-$chrome}
-ORKESTR_BROWSER_DESKTOP_MODE=${ORKESTR_BROWSER_DESKTOP_MODE:-profiles}
+ORKESTR_BROWSER_DESKTOP_MODE=$desktop_mode
+ORKESTR_BROWSERCTL_PATH=$browserctl_path
 ORKESTR_DEFAULT_DESKTOP_SLUG=${ORKESTR_DEFAULT_DESKTOP_SLUG:-desktop}
 ORKESTR_GMAIL_AUTH_DESKTOP_SLUG=${ORKESTR_GMAIL_AUTH_DESKTOP_SLUG:-gmail}
 ORKESTR_MANUAL_INTERVENTION_DESKTOP_SLUG=${ORKESTR_MANUAL_INTERVENTION_DESKTOP_SLUG:-desktop}
@@ -1206,6 +1215,57 @@ GMAIL_OAUTH_CLIENT_SECRET=
 GMAIL_OAUTH_REDIRECT_URI=
 EOF
   chmod 0640 "$env_file"
+}
+
+env_file_value() {
+  local name value
+  name="$1"
+  value="$(sed -n "s/^${name}=//p" "$env_file" 2>/dev/null | tail -1)"
+  value="${value%\"}"
+  value="${value#\"}"
+  value="${value%\'}"
+  value="${value#\'}"
+  printf '%s' "$value"
+}
+
+sed_replacement_value() {
+  printf '%s' "$1" | sed 's/[&|]/\\&/g'
+}
+
+set_env_assignment() {
+  local name value escaped
+  name="$1"
+  value="$2"
+  escaped="$(sed_replacement_value "$value")"
+  if grep -q "^${name}=" "$env_file" 2>/dev/null; then
+    sed -i "s|^${name}=.*|${name}=${escaped}|" "$env_file"
+  else
+    printf '%s=%s\n' "$name" "$value" >> "$env_file"
+  fi
+}
+
+ensure_env_assignment() {
+  local name value
+  name="$1"
+  value="$2"
+  if ! grep -q "^${name}=" "$env_file" 2>/dev/null; then
+    printf '%s=%s\n' "$name" "$value" >> "$env_file"
+  fi
+}
+
+migrate_systemd_env_file() {
+  local desktop_mode browserctl_path current_mode
+  desktop_mode="$1"
+  browserctl_path="$2"
+  current_mode="$(env_file_value ORKESTR_BROWSER_DESKTOP_MODE)"
+  if [ -z "$current_mode" ] || [ "$current_mode" = "profiles" ]; then
+    set_env_assignment ORKESTR_BROWSER_DESKTOP_MODE "$desktop_mode"
+  fi
+  ensure_env_assignment ORKESTR_BROWSERCTL_PATH "$browserctl_path"
+  ensure_env_assignment ORKESTR_DEFAULT_DESKTOP_SLUG "${ORKESTR_DEFAULT_DESKTOP_SLUG:-desktop}"
+  ensure_env_assignment ORKESTR_GMAIL_AUTH_DESKTOP_SLUG "${ORKESTR_GMAIL_AUTH_DESKTOP_SLUG:-gmail}"
+  ensure_env_assignment ORKESTR_MANUAL_INTERVENTION_DESKTOP_SLUG "${ORKESTR_MANUAL_INTERVENTION_DESKTOP_SLUG:-desktop}"
+  chmod 0640 "$env_file" || true
 }
 
 local_service_name() {
@@ -1623,7 +1683,11 @@ write_runtime_settings_file() {
   codex_command="${ORKESTR_RUNTIME_CODEX_COMMAND:-$(codex_command_default)}"
   codex_sandbox="${ORKESTR_CODEX_SANDBOX:-$(codex_sandbox_default)}"
   codex_approval="${ORKESTR_CODEX_APPROVAL_POLICY:-$(codex_approval_default)}"
-  desktop_mode="${ORKESTR_BROWSER_DESKTOP_MODE:-profiles}"
+  if [ "$systemd" -eq 1 ]; then
+    desktop_mode="${ORKESTR_BROWSER_DESKTOP_MODE:-browserctl}"
+  else
+    desktop_mode="${ORKESTR_BROWSER_DESKTOP_MODE:-profiles}"
+  fi
   default_desktop="${ORKESTR_DEFAULT_DESKTOP_SLUG:-desktop}"
   gmail_desktop="${ORKESTR_GMAIL_AUTH_DESKTOP_SLUG:-gmail}"
   manual_desktop="${ORKESTR_MANUAL_INTERVENTION_DESKTOP_SLUG:-desktop}"
@@ -1820,6 +1884,28 @@ EOF
   chmod 0755 /usr/local/bin/orkestr-reset-state
 }
 
+write_browserctl_wrapper() {
+  cat > /usr/local/bin/orkestr-browserctl <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+env_file="${ORKESTR_ENV_FILE:-/etc/orkestr/orkestr.env}"
+if [ -r "$env_file" ]; then
+  set -a
+  # shellcheck disable=SC1090
+  . "$env_file"
+  set +a
+fi
+app_dir="${ORKESTR_APP_DIR:-/opt/orkestr/app}"
+current_link="${ORKESTR_CURRENT_LINK:-/opt/orkestr/current}"
+if [ "${ORKESTR_RELEASE_DEPLOY:-0}" = "1" ] && [ -e "$current_link" ]; then
+  app_dir="$current_link"
+fi
+cd "$app_dir"
+exec node "$app_dir/scripts/browserctl.mjs" "$@"
+EOF
+  chmod 0755 /usr/local/bin/orkestr-browserctl
+}
+
 write_systemd_service() {
   local service_name group_name
   service_name="${ORKESTR_SERVICE_NAME:-orkestr}"
@@ -1848,6 +1934,20 @@ EOF
   systemctl daemon-reload
   systemctl enable "${service_name}.service"
   systemctl restart "${service_name}.service"
+}
+
+run_initial_release_deploy() {
+  if [ "${ORKESTR_RELEASE_DEPLOY:-$release_update}" != "1" ]; then
+    return 0
+  fi
+  local deploy_args
+  deploy_args=(install --ref "${ORKESTR_UPDATE_REF:-$update_ref}" --channel "${ORKESTR_DEPLOY_CHANNEL:-$deploy_channel}")
+  case "${ORKESTR_DEPLOY_TAGS_ONLY:-$deploy_tags_only}" in
+    1) deploy_args+=(--require-tagged-releases) ;;
+    0) deploy_args+=(--allow-untagged-releases) ;;
+  esac
+  echo "Activating initial versioned Orkestr release."
+  /usr/local/bin/orkestr-deploy "${deploy_args[@]}"
 }
 
 write_update_units() {
@@ -1911,7 +2011,9 @@ install_systemd_runtime() {
   write_update_wrapper
   write_deploy_wrapper
   write_reset_wrapper
+  write_browserctl_wrapper
   write_systemd_service
+  run_initial_release_deploy
   if [ "${ORKESTR_AUTO_UPDATE:-$auto_update}" = "1" ]; then
     write_update_units
   fi
