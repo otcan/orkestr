@@ -25,7 +25,11 @@ test("install script exposes a host-native systemd VPS path", async () => {
   assert.match(script, /\/usr\/local\/bin\/orkestr-update/);
   assert.match(script, /\/usr\/local\/bin\/orkestr-deploy/);
   assert.match(script, /\/usr\/local\/bin\/orkestr-reset-state/);
+  assert.match(script, /\/usr\/local\/bin\/orkestr-browserctl/);
   assert.match(script, /ORKESTR_RUN_USER=\$run_user/);
+  assert.match(script, /scripts\/browserctl\.mjs/);
+  assert.match(script, /Keeping existing environment file and applying safe defaults/);
+  assert.match(script, /migrate_systemd_env_file "\$desktop_mode" "\$browserctl_path"/);
   assert.match(script, /scripts\/install\.sh/);
   assert.match(script, /orkestr\.install\.json/);
   assert.match(script, /--config FILE/);
@@ -136,6 +140,12 @@ test("install script exposes a host-native systemd VPS path", async () => {
   assert.match(script, /\$codex_bin --sandbox \$sandbox --ask-for-approval \$approval --no-alt-screen/);
   assert.match(script, /ORKESTR_GMAIL_AUTH_DESKTOP_SLUG/);
   assert.match(script, /ORKESTR_MANUAL_INTERVENTION_DESKTOP_SLUG/);
+  assert.match(script, /ORKESTR_BROWSER_DESKTOP_MODE=\$desktop_mode/);
+  assert.match(script, /ORKESTR_BROWSERCTL_PATH=\$browserctl_path/);
+  assert.match(script, /desktop_mode="\$\{ORKESTR_BROWSER_DESKTOP_MODE:-browserctl\}"/);
+  assert.match(script, /browserctl_path="\$\{ORKESTR_BROWSERCTL_PATH:-\/usr\/local\/bin\/orkestr-browserctl\}"/);
+  assert.match(script, /set_env_assignment ORKESTR_BROWSER_DESKTOP_MODE "\$desktop_mode"/);
+  assert.match(script, /ensure_env_assignment ORKESTR_BROWSERCTL_PATH "\$browserctl_path"/);
   assert.match(script, /"approveReplies": \["\/approve", "approve", "approved", "yes", "y", "allow", "go", "proceed"\]/);
   assert.match(script, /"alwaysApprove"/);
   assert.match(script, /"requiresExplicitScope": true/);
@@ -160,6 +170,8 @@ test("install script exposes a host-native systemd VPS path", async () => {
   assert.match(script, /ORKESTR_RESET_OVERLAY=\$\{ORKESTR_RESET_OVERLAY:-0\}/);
   assert.match(script, /sqlite3/);
   assert.match(script, /util-linux/);
+  assert.match(script, /install_desktop_packages/);
+  assert.match(script, /apt_install dbus-x11 novnc openbox websockify x11vnc xauth xvfb/);
   assert.match(script, /useradd --system --home "\$data_dir" --shell \/bin\/bash "\$run_user"/);
   assert.match(script, /usermod --shell \/bin\/bash "\$run_user"/);
   assert.match(script, /codex_home="\$\{CODEX_HOME:-\$data_dir\/codex\}"/);
@@ -177,6 +189,9 @@ test("install script exposes a host-native systemd VPS path", async () => {
   assert.match(script, /write_update_units/);
   assert.match(script, /write_deploy_wrapper/);
   assert.match(script, /write_reset_wrapper/);
+  assert.match(script, /run_initial_release_deploy/);
+  assert.match(script, /Activating initial versioned Orkestr release/);
+  assert.match(script, /\/usr\/local\/bin\/orkestr-deploy "\$\{deploy_args\[@\]\}"/);
   assert.match(script, /\$\{service_name\}\.timer/);
   assert.match(script, /ORKESTR_AUTH_REQUIRED=\$\{ORKESTR_AUTH_REQUIRED:-1\}/);
   assert.match(script, /bash scripts\/install-runtime-deps\.sh/);

@@ -393,6 +393,7 @@ export async function verifySecurityToken(token, env = process.env) {
 function isAllowedBeforePairing(request) {
   const method = String(request?.method || "GET").toUpperCase();
   const url = String(request?.url || "").split("?")[0];
+  if (url.startsWith("/desktop/")) return false;
   if (!url.startsWith("/api/") && !url.startsWith("/oauth/")) return true;
   if (url.startsWith("/oauth/")) return true;
   if (method === "GET" && ["/api/health", "/api/ready", "/api/version", "/api/setup/status"].some((path) => url.startsWith(path))) return true;
