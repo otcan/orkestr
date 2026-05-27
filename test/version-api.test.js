@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { startServer } from "../apps/server/src/server.js";
+import { createApp } from "../apps/server/src/server.js";
 
 async function request(baseUrl, route) {
   const response = await fetch(`${baseUrl}${route}`);
@@ -11,11 +11,48 @@ async function request(baseUrl, route) {
   return response.json();
 }
 
+const isolatedServerEnvKeys = [
+  "ORKESTR_HOME",
+  "ORKESTR_CODEX_BIN",
+  "ORKESTR_RELEASE_MANIFEST",
+  "ORKESTR_RECOVER_RUNNING_ON_START",
+  "ORKESTR_RUNTIME_MONITOR_INTERVAL_MS",
+  "ORKESTR_PANE_PROGRESS_INTERVAL_MS",
+  "ORKESTR_TIMER_LOOP_INTERVAL_MS",
+  "ORKESTR_WHATSAPP_AUTOSTART",
+  "WHATSAPP_LOCAL_AUTOSTART",
+];
+
+function saveEnv(keys) {
+  return Object.fromEntries(keys.map((key) => [key, process.env[key]]));
+}
+
+function restoreEnv(prior) {
+  for (const [key, value] of Object.entries(prior)) {
+    if (value === undefined) delete process.env[key];
+    else process.env[key] = value;
+  }
+}
+
+function configureIsolatedServerEnv(home, extra = {}) {
+  process.env.ORKESTR_HOME = home;
+  process.env.ORKESTR_CODEX_BIN = "__orkestr_codex_disabled_on_macos__";
+  process.env.ORKESTR_RECOVER_RUNNING_ON_START = "0";
+  process.env.ORKESTR_RUNTIME_MONITOR_INTERVAL_MS = "3600000";
+  process.env.ORKESTR_PANE_PROGRESS_INTERVAL_MS = "3600000";
+  process.env.ORKESTR_TIMER_LOOP_INTERVAL_MS = "3600000";
+  process.env.ORKESTR_WHATSAPP_AUTOSTART = "0";
+  process.env.WHATSAPP_LOCAL_AUTOSTART = "0";
+  for (const [key, value] of Object.entries(extra)) process.env[key] = value;
+}
+
 test("version endpoint exposes package and build identity", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-version-"));
-  const priorHome = process.env.ORKESTR_HOME;
-  process.env.ORKESTR_HOME = home;
-  const server = await startServer({ port: 0, host: "127.0.0.1" });
+  const prior = saveEnv(isolatedServerEnvKeys);
+  configureIsolatedServerEnv(home);
+  const app = await createApp();
+  await app.listen(0, "127.0.0.1");
+  const server = app.getHttpServer();
   const { port } = server.address();
 
   try {
@@ -31,9 +68,8 @@ test("version endpoint exposes package and build identity", async () => {
     assert.ok("channel" in version);
     assert.ok("releaseId" in version);
   } finally {
-    await new Promise((resolve) => server.close(resolve));
-    if (priorHome === undefined) delete process.env.ORKESTR_HOME;
-    else process.env.ORKESTR_HOME = priorHome;
+    await app.close();
+    restoreEnv(prior);
     await fs.rm(home, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   }
 });
@@ -54,11 +90,11 @@ test("version endpoint includes release manifest metadata when present", async (
       dirty: false,
     },
   }), "utf8");
-  const priorHome = process.env.ORKESTR_HOME;
-  const priorManifest = process.env.ORKESTR_RELEASE_MANIFEST;
-  process.env.ORKESTR_HOME = home;
-  process.env.ORKESTR_RELEASE_MANIFEST = manifestPath;
-  const server = await startServer({ port: 0, host: "127.0.0.1" });
+  const prior = saveEnv(isolatedServerEnvKeys);
+  configureIsolatedServerEnv(home, { ORKESTR_RELEASE_MANIFEST: manifestPath });
+  const app = await createApp();
+  await app.listen(0, "127.0.0.1");
+  const server = app.getHttpServer();
   const { port } = server.address();
 
   try {
@@ -73,11 +109,8 @@ test("version endpoint includes release manifest metadata when present", async (
     assert.equal(version.deployedAt, "2026-05-22T09:00:00.000Z");
     assert.equal(version.manifestSchemaVersion, 1);
   } finally {
-    await new Promise((resolve) => server.close(resolve));
-    if (priorHome === undefined) delete process.env.ORKESTR_HOME;
-    else process.env.ORKESTR_HOME = priorHome;
-    if (priorManifest === undefined) delete process.env.ORKESTR_RELEASE_MANIFEST;
-    else process.env.ORKESTR_RELEASE_MANIFEST = priorManifest;
+    await app.close();
+    restoreEnv(prior);
     await fs.rm(home, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   }
 });
