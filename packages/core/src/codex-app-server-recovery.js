@@ -86,7 +86,24 @@ function latestIncompleteDeliveredTurn(messages = []) {
   };
 }
 
-function staleTurnNoticeText(reason = "no_assistant_response") {
+function staleTurnNoticeText(reason = "no_assistant_response", options = {}) {
+  const noticeCause = clean(options.noticeCause || options.cause).toLowerCase();
+  if (noticeCause === "orkestr_restart") {
+    if (reason === "no_final_answer") {
+      return [
+        "Orkestr restarted before Codex finished",
+        "",
+        "Orkestr restarted while Codex was working on this turn. Progress updates before the restart were preserved, but no final answer was recorded.",
+        "Send the next instruction normally to continue.",
+      ].join("\n");
+    }
+    return [
+      "Orkestr restarted before Codex replied",
+      "",
+      "Orkestr restarted after this message reached Codex, before an assistant response was recorded.",
+      "Send the next instruction normally to continue.",
+    ].join("\n");
+  }
   if (reason === "no_final_answer") {
     return [
       "Codex stopped before final answer",
@@ -103,7 +120,7 @@ function staleTurnNoticeText(reason = "no_assistant_response") {
   ].join("\n");
 }
 
-function staleTurnEventId(thread, codexId, turn) {
+function staleTurnEventId(thread, codexId, turn, options = {}) {
   const message = turn?.latestUser || {};
   const reason = clean(turn?.reason || "no_assistant_response");
   return threadEventId({
@@ -112,7 +129,7 @@ function staleTurnEventId(thread, codexId, turn) {
     itemId: `stale-${reason}:${message?.id || "latest"}`,
     type: `turn/stale-${reason}`,
     role: "assistant",
-    text: staleTurnNoticeText(reason),
+    text: staleTurnNoticeText(reason, options),
   });
 }
 
@@ -122,11 +139,11 @@ function noticeWhatsappParent(turn, thread = null) {
   return threadWhatsAppBindingParent(thread);
 }
 
-async function appendStaleTurnNotice(thread, messages, turn, env = process.env) {
+async function appendStaleTurnNotice(thread, messages, turn, env = process.env, options = {}) {
   const codexId = codexThreadId(thread);
   const latestUser = turn?.latestUser || null;
-  const text = staleTurnNoticeText(turn?.reason);
-  const eventId = staleTurnEventId(thread, codexId, turn);
+  const text = staleTurnNoticeText(turn?.reason, options);
+  const eventId = staleTurnEventId(thread, codexId, turn, options);
   const existing = messages.find((message) => message.eventId === eventId);
   const whatsappParent = noticeWhatsappParent(turn, thread);
   const notice = await appendOrUpdateEventMessage(thread, {
@@ -158,7 +175,7 @@ function shouldRecoverIncompleteTurn(thread, clientState, turn, env = process.en
   return Date.now() - turn.lastActivityMs >= staleFinalGraceMs(env);
 }
 
-export async function recoverStaleCodexAppServerTurns(env = process.env) {
+export async function recoverStaleCodexAppServerTurns(env = process.env, options = {}) {
   const threads = await listThreads(env).catch(() => []);
   const appServerThreads = threads.filter((thread) => threadUsesCodexAppServer(thread, env));
   if (!appServerThreads.length) return { recovered: 0, appended: 0 };
@@ -175,7 +192,7 @@ export async function recoverStaleCodexAppServerTurns(env = process.env) {
     if (!staleRuntime && !shouldRecoverIncompleteTurn(thread, clientState, incompleteTurn, env)) continue;
     let notice = null;
     if (incompleteTurn) {
-      const result = await appendStaleTurnNotice(thread, messages, incompleteTurn, env);
+      const result = await appendStaleTurnNotice(thread, messages, incompleteTurn, env, options);
       notice = result?.notice || null;
       if (result?.appended) appended += 1;
     }
@@ -200,6 +217,7 @@ export async function recoverStaleCodexAppServerTurns(env = process.env) {
       noticeMessageId: notice?.id || null,
       latestUserMessageId: incompleteTurn?.latestUser?.id || null,
       reason: incompleteTurn?.reason || (staleRuntime ? "stale_runtime" : "incomplete_turn"),
+      noticeCause: clean(options.noticeCause || options.cause),
     }, env).catch(() => {});
   }
   return { recovered, appended };

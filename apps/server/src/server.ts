@@ -149,7 +149,7 @@ function scheduleStartupRecovery() {
 
 async function recoverAfterStartup() {
   await drainAllPendingThreadInputs().catch(() => []);
-  return syncRuntimeAndDeliverWhatsApp({ forceWhatsapp: true });
+  return syncRuntimeAndDeliverWhatsApp({ forceWhatsapp: true, recoveryCause: "orkestr_restart" });
 }
 
 async function runTimerLoop() {
@@ -161,10 +161,10 @@ async function runTimerLoop() {
   }
 }
 
-async function syncRuntimeAndDeliverWhatsApp(options: { forceWhatsapp?: boolean } = {}) {
+async function syncRuntimeAndDeliverWhatsApp(options: { forceWhatsapp?: boolean; recoveryCause?: string } = {}) {
   const pendingConnectorDeliveries = consumeThreadConnectorDeliverySignalCount();
   const synced = await syncRuntimeLeases();
-  const recovered = await recoverStaleCodexAppServerTurns().catch(() => ({ recovered: 0, appended: 0 }));
+  const recovered = await recoverStaleCodexAppServerTurns(process.env, { noticeCause: options.recoveryCause }).catch(() => ({ recovered: 0, appended: 0 }));
   await syncWhatsAppTypingIndicators().catch(() => {});
   const connectorDeliveries = pendingConnectorDeliveries + consumeThreadConnectorDeliverySignalCount();
   const appended = (synced.appended || 0) + (recovered.appended || 0);

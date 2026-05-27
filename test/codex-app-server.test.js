@@ -638,6 +638,46 @@ test("Codex app-server recovery marks stale delivered turns ready and appends on
     assert.equal(second.recovered, 0);
     assert.equal(second.appended, 0);
     assert.equal(messagesAfterSecond.filter((message) => message.source === "orkestr_runtime" && message.phase === "runtime_interrupted").length, 1);
+
+    const restartThread = await createThread({
+      id: "app-server-restart-recovery-thread",
+      name: "App Server Restart Recovery Thread",
+      state: "working",
+      executorId: "codex",
+      executor: {
+        type: "codex",
+        transport: "app-server",
+        codexThreadId: "restart-recovery-codex-thread",
+        codexSessionId: "restart-recovery-codex-thread",
+      },
+      runtimeKind: "codex-app-server",
+      codexThreadId: "restart-recovery-codex-thread",
+      codexSessionId: "restart-recovery-codex-thread",
+      runtime: {
+        runtimeKind: "codex-app-server",
+        state: "working",
+        activeTurnId: "restart-turn",
+      },
+    }, env);
+    await appendThreadMessage(restartThread.id, {
+      role: "user",
+      source: "manual",
+      text: "This was active during Orkestr restart.",
+      state: "completed",
+      deliveryState: "delivered",
+      observedVia: "codex_app_server_turn_start",
+      codexThreadId: "restart-recovery-codex-thread",
+      codexTurnId: "restart-turn",
+    }, env);
+
+    const restartRecovery = await recoverStaleCodexAppServerTurns(env, { noticeCause: "orkestr_restart" });
+    const restartMessages = await listThreadMessages(restartThread.id, env);
+    const restartNotice = restartMessages.find((message) => message.source === "orkestr_runtime" && message.phase === "runtime_interrupted");
+
+    assert.equal(restartRecovery.recovered, 1);
+    assert.equal(restartRecovery.appended, 1);
+    assert.match(restartNotice.text, /^Orkestr restarted before Codex replied/);
+    assert.match(restartNotice.text, /Orkestr restarted after this message reached Codex/);
   } finally {
     stopCodexAppServerClients();
   }
@@ -835,7 +875,7 @@ test("Codex app-server recovery reports progress-only turns with no final answer
       codexTurnId: "progress-turn",
     }, env);
 
-    const first = await recoverStaleCodexAppServerTurns(env);
+    const first = await recoverStaleCodexAppServerTurns(env, { noticeCause: "orkestr_restart" });
     const messages = await listThreadMessages(thread.id, env);
     const notice = messages.find((message) => message.source === "orkestr_runtime" && message.phase === "runtime_interrupted");
 
@@ -844,8 +884,8 @@ test("Codex app-server recovery reports progress-only turns with no final answer
     assert.equal(notice.parentMessageId, input.id);
     assert.equal(notice.connector, "whatsapp");
     assert.equal(notice.chatId, "chat-progress-only");
-    assert.match(notice.text, /^Codex stopped before final answer/);
-    assert.match(notice.text, /progress updates/);
+    assert.match(notice.text, /^Orkestr restarted before Codex finished/);
+    assert.match(notice.text, /Progress updates before the restart were preserved/);
     assert.doesNotMatch(notice.text, /\/now/);
 
     const second = await recoverStaleCodexAppServerTurns(env);
