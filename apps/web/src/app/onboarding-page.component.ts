@@ -1,7 +1,7 @@
 import { ChangeDetectorRef, Component, EventEmitter, Input, OnChanges, OnDestroy, OnInit, Output, SimpleChanges, inject } from "@angular/core";
 import { FormsModule } from "@angular/forms";
 import { firstValueFrom } from "rxjs";
-import { ApiService, CodexAppServerStatus, CodexStoredThread, ConnectorStatus, OutlookOAuthPollResponse, OutlookOAuthStartResponse, SecurityChallenge, SetupStatus, SystemDoctorResponse, ThreadSummary, VersionResponse } from "./api.service";
+import { ApiService, BrowserSession, CodexAppServerStatus, CodexStoredThread, ConnectorStatus, OutlookOAuthPollResponse, OutlookOAuthStartResponse, SecurityChallenge, SetupStatus, SystemDoctorResponse, ThreadSummary, VersionResponse } from "./api.service";
 
 type ConnectorStep = "openai" | "codex" | "gmail" | "linkedin" | "whatsapp" | "browsers";
 type MarketingStep = "google-marketing";
@@ -9,6 +9,12 @@ type OnboardingStep = "goal" | "system" | "security" | MarketingStep | Connector
 type OnboardingGoalId = "whatsapp-codex" | "virtual-desktop" | "inbox-summary";
 type SetupPageMode = "setup" | "onboarding";
 type MailProvider = "gmail" | "outlook";
+
+interface BrowserActionOptions {
+  openReturnedUrl?: boolean;
+  openedMessage?: string;
+  missingUrlMessage?: string;
+}
 
 interface MailAccountRow {
   provider: MailProvider;
@@ -305,7 +311,11 @@ export class OnboardingPageComponent implements OnInit, OnChanges, OnDestroy {
   }
 
   async openLinkedIn(): Promise<void> {
-    await this.browserAction("linkedin", "start", "LinkedIn browser requested.");
+    await this.browserAction("linkedin", "start", "LinkedIn browser requested.", {
+      openReturnedUrl: true,
+      openedMessage: "LinkedIn browser opened.",
+      missingUrlMessage: "LinkedIn browser started, but no remote desktop URL is configured.",
+    });
   }
 
   async prepareVirtualDesktop(): Promise<void> {
@@ -313,7 +323,11 @@ export class OnboardingPageComponent implements OnInit, OnChanges, OnDestroy {
   }
 
   async openVirtualDesktop(): Promise<void> {
-    await this.browserAction("desktop", "start", "Desktop requested.");
+    await this.browserAction("desktop", "start", "Desktop requested.", {
+      openReturnedUrl: true,
+      openedMessage: "Desktop opened.",
+      missingUrlMessage: "Desktop started, but no remote desktop URL is configured.",
+    });
   }
 
   connector(id: string): ConnectorStatus | null {
@@ -1278,17 +1292,63 @@ export class OnboardingPageComponent implements OnInit, OnChanges, OnDestroy {
     }
   }
 
-  private async browserAction(slug: string, action: string, message: string): Promise<void> {
+  private async browserAction(slug: string, action: string, message: string, options: BrowserActionOptions = {}): Promise<void> {
+    const pendingWindow = options.openReturnedUrl ? this.openPendingWindow() : null;
     this.busy = true;
     try {
-      await firstValueFrom(this.api.browserAction(slug, action));
-      this.notice = message;
+      const response = await firstValueFrom(this.api.browserAction(slug, action));
+      const openUrl = options.openReturnedUrl ? this.browserOpenUrl(response.browser) : "";
+      if (options.openReturnedUrl) {
+        if (openUrl) {
+          this.navigatePendingWindow(pendingWindow, openUrl);
+          this.notice = options.openedMessage || message;
+        } else {
+          this.closePendingWindow(pendingWindow);
+          this.notice = options.missingUrlMessage || message;
+        }
+      } else {
+        this.notice = message;
+      }
       this.error = "";
       await this.load(false);
     } catch (error) {
+      this.closePendingWindow(pendingWindow);
       this.error = this.errorText(error);
     } finally {
       this.busy = false;
+    }
+  }
+
+  private browserOpenUrl(browser?: BrowserSession | null): string {
+    return String(browser?.desk_url || browser?.url || "").trim();
+  }
+
+  private openPendingWindow(): Window | null {
+    const opened = globalThis.open?.("about:blank", "_blank") || null;
+    if (opened) {
+      try {
+        opened.opener = null;
+      } catch {
+        // Some browsers block assigning opener on a newly opened tab.
+      }
+    }
+    return opened;
+  }
+
+  private navigatePendingWindow(opened: Window | null, url: string): void {
+    if (opened) {
+      opened.location.href = url;
+      return;
+    }
+    globalThis.open?.(url, "_blank", "noopener,noreferrer");
+  }
+
+  private closePendingWindow(opened: Window | null): void {
+    if (!opened) return;
+    try {
+      opened.close();
+    } catch {
+      // Closing a blocked or externally controlled tab is best effort.
     }
   }
 
