@@ -111,17 +111,18 @@ rl.on("line", (line) => {
   if (message.method === "turn/start") {
     const thread = state.threads.find((item) => item.id === params.threadId);
     if (!thread || !thread.loaded) return send({ id, error: { code: -32000, message: "thread not found: " + params.threadId } });
+    const requestedStatus = process.env.FAKE_CODEX_TURN_STATUS || "completed";
     const turn = { id: "turn_" + Date.now(), threadId: params.threadId, status: "inProgress", items: [] };
     const text = params.input?.find((item) => item.type === "text")?.text || "";
     const user = { type: "userMessage", id: "user_" + turn.id, content: [{ type: "text", text }] };
     const agent = { type: "agentMessage", id: "agent_" + turn.id, text: "Reply to: " + text, phase: "final_answer" };
-    turn.items = [user, agent];
+    turn.items = requestedStatus === "interrupted" ? [user] : [user, agent];
     thread.turns.push(turn);
     writeState(state);
     send({ id, result: { turn } });
     send({ method: "turn/started", params: { turn } });
-    send({ method: "item/completed", params: { threadId: params.threadId, turnId: turn.id, item: agent } });
-    send({ method: "turn/completed", params: { turn: { ...turn, status: "completed" } } });
+    if (requestedStatus !== "interrupted") send({ method: "item/completed", params: { threadId: params.threadId, turnId: turn.id, item: agent } });
+    send({ method: "turn/completed", params: { turn: { ...turn, status: requestedStatus, error: requestedStatus === "interrupted" ? { message: "Conversation interrupted - tell the model what to do differently." } : null } } });
     return;
   }
   send({ id, result: {} });
@@ -289,13 +290,13 @@ test("Codex app-server starts threads, delivers input, and imports existing thre
     assert.equal(resumedThread.state, "ready");
     assert.equal(resumedThread.lastError, null);
     let resumedStatus = null;
-    for (let attempt = 0; attempt < 50; attempt += 1) {
+    for (let attempt = 0; attempt < 100; attempt += 1) {
       resumedStatus = await codexAppServerThreadStatus({
         ...resumedThread,
         runtime: { ...(resumedThread.runtime || {}), activeTurnId: "stale-turn" },
       }, env);
       if (resumedStatus.state === "ready") break;
-      await new Promise((resolve) => setTimeout(resolve, 10));
+      await new Promise((resolve) => setTimeout(resolve, 20));
     }
     assert.equal(resumedStatus.state, "ready");
     assert.equal(resumedStatus.activeTurnId, null);
@@ -353,6 +354,71 @@ test("Codex app-server starts threads, delivers input, and imports existing thre
     assert.equal(imported.imported, true);
     assert.equal(imported.thread.state, "unloaded");
     assert.ok(importedMessages.some((message) => message.source === "codex-app-server-import"));
+  } finally {
+    stopCodexAppServerClients();
+  }
+});
+
+test("Codex app-server mirrors interrupted turns to the thread and WhatsApp", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-codex-app-server-interrupted-"));
+  const fake = await createFakeCodex(home);
+  const env = {
+    ORKESTR_HOME: path.join(home, "orkestr"),
+    ORKESTR_WHATSAPP_EXTERNAL_BRIDGE_ENABLED: "1",
+    HOME: path.join(home, "runtime-home"),
+    PATH: `${fake.bin}${path.delimiter}${process.env.PATH || ""}`,
+    FAKE_CODEX_STATE: fake.stateFile,
+    FAKE_CODEX_TURN_STATUS: "interrupted",
+  };
+  try {
+    const thread = await createThread({
+      id: "app-server-interrupted-thread",
+      name: "App Server Interrupted Thread",
+      cwd: home,
+      executorId: "codex",
+      executor: { type: "codex" },
+      binding: {
+        connector: "whatsapp",
+        chatId: "chat-interrupted-app-server",
+        responderAccountId: "account-1",
+      },
+    }, env);
+    const started = await startCodexAppServerThread(thread, env);
+    const inbound = await enqueueThreadInput(started.thread.id, {
+      text: "run interrupted work",
+      source: "whatsapp_inbound",
+      connector: "whatsapp",
+      chatId: "chat-interrupted-app-server",
+      accountId: "account-1",
+    }, env);
+
+    await deliverCodexAppServerPendingInputs(started.thread, env);
+    let notice = null;
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      const messages = await listThreadMessages(started.thread.id, env);
+      notice = messages.find((message) => message.source === "orkestr_runtime" && message.phase === "runtime_interrupted");
+      if (notice) break;
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+
+    assert.ok(notice);
+    assert.match(notice.text, /^Codex conversation interrupted/);
+    assert.equal(notice.parentMessageId, inbound.id);
+    assert.equal(notice.connector, "whatsapp");
+    assert.equal(notice.chatId, "chat-interrupted-app-server");
+    assert.equal(notice.accountId, "account-1");
+
+    await writeConnectorConfig("whatsapp", { bridgeMode: "external", bridgeUrl: "http://wa.local" }, env);
+    const calls = [];
+    const delivery = await deliverWhatsAppReplies(env, async (url, options) => {
+      calls.push({ url, body: JSON.parse(options.body) });
+      return response({ ok: true, ids: ["sent-interrupted-app-server"] });
+    });
+
+    assert.equal(delivery.delivered.length, 1);
+    assert.equal(delivery.delivered[0].deliveryType, "router_update");
+    assert.equal(calls[0].body.to, "chat-interrupted-app-server");
+    assert.match(calls[0].body.text, /^Codex conversation interrupted/);
   } finally {
     stopCodexAppServerClients();
   }

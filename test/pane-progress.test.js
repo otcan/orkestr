@@ -46,6 +46,19 @@ test("pane progress classifies a ready prompt", () => {
   assert.equal(progress.promptReady, true);
 });
 
+test("pane progress detects Codex conversation interruption banners", () => {
+  const progress = paneProgressFromText([
+    "■ Conversation interrupted - tell the model what to do differently.",
+    "Something went wrong? Hit /feedback to report the issue.",
+    "› ",
+  ].join("\n"), { tailLines: 10 });
+
+  assert.equal(progress.conversationInterrupted, true);
+  assert.match(progress.conversationInterruptedLine, /Conversation interrupted/);
+  assert.match(progress.conversationInterruptedHash, /^[a-f0-9]{64}$/);
+  assert.equal(progress.promptReady, true);
+});
+
 test("pane progress exposes implementation prompts as plan progress", () => {
   const progress = paneProgressFromText([
     "Implement this plan?",

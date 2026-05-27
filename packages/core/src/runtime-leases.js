@@ -28,6 +28,7 @@ import {
   threadNeedsCodexAppServerMigration,
   threadUsesCodexAppServer,
 } from "./codex-app-server.js";
+import { appendOrUpdateEventMessage } from "./codex-app-server-common.js";
 import {
   capturePane,
   killTmuxSession,
@@ -1095,27 +1096,50 @@ async function appendRuntimeInterruptionNotice(thread, options = {}, env = proce
   const explicitParent = options.sourceMessage && whatsappOrigin(options.sourceMessage) ? options.sourceMessage : null;
   const whatsappParent = explicitParent || latestWhatsAppInput(messages, null, thread);
   const reason = String(options.reason || "interrupt").trim() || "interrupt";
-  const notice = await appendThreadMessage(thread.id, {
+  const existing = options.eventId ? messages.find((message) => message.eventId === options.eventId) : null;
+  const input = {
     role: "assistant",
     source: "orkestr_runtime",
     phase: "runtime_interrupted",
     text: runtimeInterruptionNoticeText(reason),
     state: "completed",
+    eventId: options.eventId || undefined,
     parentMessageId: whatsappParent?.id || null,
     connector: whatsappParent ? "whatsapp" : "",
     chatId: whatsappParentChatId(whatsappParent, thread),
     accountId: whatsappParentAccountId(whatsappParent, thread),
-  }, env);
-  markConnectorDeliverySignal(notice);
-  await appendEvent({
-    type: "thread_runtime_interruption_notice",
-    threadId: thread.id,
-    messageId: notice.id,
-    parentMessageId: whatsappParent?.id || null,
-    chatId: whatsappParentChatId(whatsappParent, thread) || null,
-    reason,
-  }, env).catch(() => {});
+  };
+  const notice = options.eventId
+    ? await appendOrUpdateEventMessage(thread, input, env)
+    : await appendThreadMessage(thread.id, input, env);
+  if (!existing) {
+    markConnectorDeliverySignal(notice);
+    await appendEvent({
+      type: "thread_runtime_interruption_notice",
+      threadId: thread.id,
+      messageId: notice.id,
+      parentMessageId: whatsappParent?.id || null,
+      chatId: whatsappParentChatId(whatsappParent, thread) || null,
+      reason,
+    }, env).catch(() => {});
+  }
   return notice;
+}
+
+async function appendDetectedConversationInterruptionNotice(thread, status, env = process.env) {
+  const progress = status?.progress || {};
+  if (progress.conversationInterrupted !== true) return null;
+  const eventHash = String(progress.conversationInterruptedHash || progress.tailHash || "").trim();
+  const eventId = [
+    "orkestr-runtime",
+    thread.id,
+    "codex-conversation-interrupted",
+    eventHash || "latest",
+  ].join(":");
+  return appendRuntimeInterruptionNotice(thread, {
+    reason: "codex_conversation_interrupted",
+    eventId,
+  }, env).catch(() => null);
 }
 
 export async function resetThreadRuntime(threadId, options = {}, env = process.env) {
@@ -2168,12 +2192,21 @@ function runtimeInterruptionReason(reason) {
     ui_stop: "the pane was stopped from the UI",
     manual_sleep: "the pane was put to sleep",
     hibernate: "the thread was hibernated",
+    codex_conversation_interrupted: "Codex reported that the conversation was interrupted",
     interrupt: "an interrupt was requested",
   };
   return labels[key] || key.replace(/_/g, " ");
 }
 
 function runtimeInterruptionNoticeText(reason) {
+  if (reason === "codex_conversation_interrupted") {
+    return [
+      "Codex conversation interrupted",
+      "",
+      "Codex reported that the active turn was interrupted before it produced a normal reply.",
+      "Send the next instruction normally to continue. Use /now only when you intentionally want to interrupt active work.",
+    ].join("\n");
+  }
   return [
     "Codex pane interrupted",
     "",
@@ -3680,6 +3713,9 @@ async function syncRuntimeLeasesOnce(env = process.env) {
         status = await runtimeStatus(lease.threadId, env, messages).catch(() => status);
         changed = true;
       }
+      if (thread) {
+        await appendDetectedConversationInterruptionNotice(thread, status, env);
+      }
       await updateThread(lease.threadId, {
         state: status.state,
         ...liveCodexModePatch(thread, status),
@@ -3720,6 +3756,7 @@ export async function syncPaneProgressForActiveLeases(env = process.env) {
       codexMode: progress.codexMode,
       codexModeSource: progress.codexMode ? "runtime-pane" : null,
     });
+    await appendDetectedConversationInterruptionNotice(thread, { progress }, env);
     const changedProgress = !previous ||
       previous.tailHash !== progress.tailHash ||
       previous.summary !== progress.summary ||

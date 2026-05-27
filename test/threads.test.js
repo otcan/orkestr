@@ -1163,6 +1163,73 @@ test("thread runtime summary exposes lightweight pane progress", async () => {
   }
 });
 
+test("runtime sync mirrors Codex conversation interruption banners into thread messages", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-conversation-interrupted-"));
+  const fakeTmux = await createFakeTmux(home);
+  const priorPath = process.env.PATH;
+  const priorTmuxLog = process.env.TMUX_LOG;
+  const priorTmuxState = process.env.TMUX_STATE;
+  const priorTmuxCaptureText = process.env.TMUX_CAPTURE_TEXT;
+  process.env.PATH = `${fakeTmux.bin}:${priorPath || ""}`;
+  process.env.TMUX_LOG = fakeTmux.log;
+  process.env.TMUX_STATE = fakeTmux.state;
+  process.env.TMUX_CAPTURE_TEXT = "› \n";
+
+  try {
+    const env = {
+      ORKESTR_HOME: path.join(home, "orkestr-home"),
+      HOME: path.join(home, "runtime-home"),
+      CODEX_HOME: path.join(home, "codex-home"),
+      PATH: process.env.PATH,
+      TMUX_LOG: fakeTmux.log,
+      TMUX_STATE: fakeTmux.state,
+      TMUX_CAPTURE_TEXT: process.env.TMUX_CAPTURE_TEXT,
+    };
+    await createThread({
+      id: "conversation-interrupted-thread",
+      name: "Conversation Interrupted Thread",
+      binding: {
+        connector: "whatsapp",
+        chatId: "chat-conversation-interrupted",
+        responderAccountId: "account-1",
+      },
+    }, env);
+    const inbound = await appendThreadMessage("conversation-interrupted-thread", {
+      role: "user",
+      source: "whatsapp_inbound",
+      connector: "whatsapp",
+      chatId: "chat-conversation-interrupted",
+      accountId: "account-1",
+      text: "keep working",
+      state: "completed",
+    }, env);
+    await wakeThread("conversation-interrupted-thread", { reason: "test" }, env);
+    process.env.TMUX_CAPTURE_TEXT = [
+      "■ Conversation interrupted - tell the model what to do differently.",
+      "Something went wrong? Hit /feedback to report the issue.",
+      "› ",
+    ].join("\n");
+    env.TMUX_CAPTURE_TEXT = process.env.TMUX_CAPTURE_TEXT;
+
+    await syncRuntimeLeases(env);
+    await syncRuntimeLeases(env);
+    const messages = await listThreadMessages("conversation-interrupted-thread", env);
+    const notices = messages.filter((message) => message.source === "orkestr_runtime" && message.phase === "runtime_interrupted");
+
+    assert.equal(notices.length, 1);
+    assert.match(notices[0].text, /^Codex conversation interrupted/);
+    assert.equal(notices[0].parentMessageId, inbound.id);
+    assert.equal(notices[0].connector, "whatsapp");
+    assert.equal(notices[0].chatId, "chat-conversation-interrupted");
+    assert.equal(notices[0].accountId, "account-1");
+  } finally {
+    restoreEnvValue("PATH", priorPath);
+    restoreEnvValue("TMUX_LOG", priorTmuxLog);
+    restoreEnvValue("TMUX_STATE", priorTmuxState);
+    restoreEnvValue("TMUX_CAPTURE_TEXT", priorTmuxCaptureText);
+  }
+});
+
 test("runtime status ignores prose mentioning interrupt keys above a live prompt", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-prose-interrupt-key-"));
   const fakeTmux = await createFakeTmux(home);

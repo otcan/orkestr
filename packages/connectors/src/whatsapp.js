@@ -1608,11 +1608,12 @@ async function deliverWhatsAppRepliesOnce(env = process.env, fetchImpl = fetch) 
         messageId: message.id,
       });
       const attachments = preparedOutbound.attachments;
+      const deliveryType = message.source === "orkestr_runtime" ? "router_update" : "final";
       const text = appendWhatsAppDebugFooter(formatWhatsAppOutboundText(preparedOutbound.text), {
         message,
         thread,
         messages,
-        deliveryType: message.source === "orkestr_runtime" ? "router_update" : "final",
+        deliveryType,
         env,
       });
       const accountId = kind === "thread"
@@ -1633,6 +1634,7 @@ async function deliverWhatsAppRepliesOnce(env = process.env, fetchImpl = fetch) 
         const payload = await sendWhatsAppText({ chatId, text, accountId, attachments, config, env, fetchImpl });
         const delivery = {
           kind,
+          deliveryType,
           agentId: agentId || null,
           threadId: threadId || null,
           messageId: message.id,

@@ -79,6 +79,30 @@ export function panePromptLine(line) {
   return /^(?:›|>)(?:\s|$)/.test(line) && !/^(?:›|>)\s*\d+[.)]/.test(line);
 }
 
+function paneConversationInterruptedLine(line) {
+  const text = String(line || "").trim();
+  return /Conversation interrupted\s*[-–—]\s*tell the model what to do differently/i.test(text) ||
+    /^<turn_aborted>$/i.test(text);
+}
+
+export function paneConversationInterrupted(text) {
+  return normalizedLines(text).map((line) => line.trim()).slice(-20).some(paneConversationInterruptedLine);
+}
+
+function paneConversationInterruptionLine(text) {
+  return normalizedLines(text)
+    .map((line) => line.trim())
+    .slice(-20)
+    .findLast(paneConversationInterruptedLine) || "";
+}
+
+function paneConversationInterruptionHash(text) {
+  const lines = normalizedLines(text).map((line) => line.trim()).slice(-20);
+  const index = lines.findLastIndex(paneConversationInterruptedLine);
+  if (index < 0) return "";
+  return tailHash(lines.slice(index, Math.min(lines.length, index + 4)));
+}
+
 export function paneNeedInputMenuVisible(text) {
   const body = String(text || "");
   return /^Question\s+\d+\/\d+\s+\(\d+\s+unanswered\)/im.test(body) &&
@@ -190,6 +214,7 @@ export function paneProgressFromText(text, options = {}) {
   const needsResumeDirectoryConfirmation = paneResumeDirectoryPrompt(text);
   const codexUpdatePromptChoice = paneCodexUpdatePromptChoice(text);
   const needsCodexUpdatePromptSkip = Boolean(codexUpdatePromptChoice);
+  const conversationInterrupted = paneConversationInterrupted(text);
   const backgroundWork = paneBackgroundWork(text);
   const working = paneWorking(text) || backgroundWork;
   const staleWorkingPrompt = paneStaleWorkingPrompt(text);
@@ -216,6 +241,9 @@ export function paneProgressFromText(text, options = {}) {
     working,
     backgroundWork,
     staleWorkingPrompt,
+    conversationInterrupted,
+    conversationInterruptedLine: conversationInterrupted ? paneConversationInterruptionLine(text) : "",
+    conversationInterruptedHash: conversationInterrupted ? paneConversationInterruptionHash(text) : "",
     codexMode,
     planImplementationReady,
     planImplementationMenuVisible,

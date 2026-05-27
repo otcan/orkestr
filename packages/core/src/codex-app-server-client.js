@@ -33,6 +33,24 @@ function notifyMessageHandler({ thread, message }) {
   Promise.resolve(messageHandler({ thread, message })).catch(() => {});
 }
 
+function codexTurnConversationInterrupted(turn = {}) {
+  const status = clean(turn.status).toLowerCase();
+  if (["interrupted", "aborted", "cancelled", "canceled"].includes(status)) return true;
+  const reason = clean(turn.reason || turn.error?.reason || turn.error?.code).toLowerCase();
+  if (["interrupted", "aborted", "cancelled", "canceled"].includes(reason)) return true;
+  const errorText = publicError(turn.error).toLowerCase();
+  return /conversation interrupted|turn_aborted|\bturn aborted\b|\binterrupted\b|\bcancell?ed\b/.test(errorText);
+}
+
+function codexConversationInterruptionNoticeText() {
+  return [
+    "Codex conversation interrupted",
+    "",
+    "Codex reported that the active turn was interrupted before it produced a normal reply.",
+    "Send the next instruction normally to continue. Use /now only when you intentionally want to interrupt active work.",
+  ].join("\n");
+}
+
 export class CodexAppServerClient {
   constructor({ env = process.env, home = os.homedir() } = {}) {
     this.env = { ...env };
@@ -306,6 +324,37 @@ export class CodexAppServerClient {
               updatedAt: nowIso(),
             },
           }, this.env).catch(() => {});
+          if (codexTurnConversationInterrupted(turn)) {
+            const text = codexConversationInterruptionNoticeText();
+            const whatsappParent = await latestWhatsAppParent(thread, params.timestamp || nowIso(), this.env);
+            const messageRecord = await appendOrUpdateEventMessage(thread, {
+              role: "assistant",
+              source: "orkestr_runtime",
+              phase: "runtime_interrupted",
+              text,
+              state: "completed",
+              eventId: threadEventId({
+                codexThreadId: threadId,
+                turnId,
+                itemId: "conversation-interrupted",
+                type: "turn/interrupted",
+                role: "assistant",
+                text,
+              }),
+              codexThreadId: threadId,
+              codexTurnId: turnId || null,
+              ...codexAppServerMessageFields(threadId, { turnId, itemId: "conversation-interrupted" }),
+              ...whatsappProjectionFields(whatsappParent, thread),
+            }, this.env).catch(() => null);
+            if (messageRecord) notifyMessageHandler({ thread, message: messageRecord });
+            await appendEvent({
+              type: "codex_app_server_conversation_interrupted",
+              threadId: thread.id,
+              codexThreadId: threadId,
+              turnId,
+              messageId: messageRecord?.id || null,
+            }, this.env).catch(() => {});
+          }
         }
       }
       return;
