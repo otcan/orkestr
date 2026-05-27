@@ -4610,6 +4610,54 @@ test("thread input approves Orkestr security challenges locally before Codex del
   assert.match(reply.text, new RegExp(`Approved pairing challenge ${challenge.challengeId}`));
 });
 
+test("thread input approves a pasted Orkestr pairing page locally before Codex delivery", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-security-paste-"));
+  const env = { ORKESTR_HOME: home };
+  const thread = await createThread({
+    id: "thread-security-paste",
+    name: "Thread Security Paste",
+    cwd: home,
+    runtimeKind: "codex-app-server",
+    executor: {
+      id: "codex",
+      type: "codex",
+      codexThreadId: "codex-security-paste-thread",
+      metadata: {
+        transport: "app-server",
+        runtimeKind: "codex-app-server",
+      },
+    },
+  }, env);
+  const challenge = await createPairingChallenge({ env });
+  const input = await enqueueThreadInput(thread.id, {
+    text: [
+      "Orkestr security",
+      "",
+      "Pairing Required",
+      "This browser is not paired with the Orkestr server.",
+      "Challenge ID",
+      challenge.challengeId,
+      "pending",
+      "Approve From SSH",
+      "ssh root@orkestr.crawlerai.de",
+      `orkestr security approve ${challenge.challengeId}`,
+      `sudo orkestr security approve ${challenge.challengeId}`,
+    ].join("\n"),
+    source: "browser",
+  }, env);
+
+  const delivered = await deliverPendingThreadInputs(thread.id, env);
+  const approved = await getPairingChallenge(challenge.challengeId, { env });
+  const messages = await listThreadMessages(thread.id, env);
+  const user = messages.find((message) => message.id === input.id);
+  const reply = messages.find((message) => message.role === "assistant" && message.parentMessageId === input.id);
+
+  assert.deepEqual(delivered, [input.id]);
+  assert.equal(approved.status, "approved");
+  assert.equal(user.observedVia, "orkestr_security_approve_command");
+  assert.match(reply.text, new RegExp(`Approved pairing challenge ${challenge.challengeId}`));
+});
+
 test("thread runtime summary reads Codex model and limits from live metadata", async (t) => {
   try {
     await execFileAsync("sqlite3", ["--version"]);
