@@ -261,6 +261,32 @@ status_command() {
   echo "History: $deploy_history"
 }
 
+runtime_run_user() {
+  local user
+  user="${ORKESTR_RUN_USER:-}"
+  if [ -z "$user" ] && command -v systemctl >/dev/null 2>&1; then
+    user="$(systemctl show -p User --value "${service_name:-orkestr}.service" 2>/dev/null || true)"
+  fi
+  echo "${user:-orkestr}"
+}
+
+repair_runtime_ownership() {
+  if [ "$(id -u)" -ne 0 ]; then
+    return 0
+  fi
+  local run_user run_group runtime_home codex_home
+  run_user="$(runtime_run_user)"
+  if ! id "$run_user" >/dev/null 2>&1; then
+    return 0
+  fi
+  run_group="$(id -gn "$run_user")"
+  runtime_home="${ORKESTR_HOME:-/opt/orkestr/data}"
+  codex_home="${CODEX_HOME:-$runtime_home/codex}"
+  mkdir -p "$codex_home"
+  chown -R "$run_user:$run_group" "$codex_home"
+  chmod 0700 "$codex_home"
+}
+
 install_command() {
   local target_ref target_tag target_describe short_sha tag_required release_dir previous_release backup_path deployed_at
   prepare_repo_cache
@@ -280,6 +306,7 @@ install_command() {
   release_dir="$releases_dir/$release_id"
   previous_release="$(current_release_id)"
   if [ "$previous_release" = "$release_id" ] && [ -d "$release_dir" ]; then
+    repair_runtime_ownership
     echo "Orkestr already at $release_id ($target_ref)."
     return 0
   fi
@@ -308,6 +335,7 @@ install_command() {
     npm --prefix "$release_dir" prune --omit=dev
   fi
 
+  repair_runtime_ownership
   backup_path="$(backup_state)"
   activate_release "$release_dir"
   if restart_and_verify; then
@@ -346,6 +374,7 @@ NODE
   previous_release="$(current_release_id)"
   commit="$(git -C "$release_dir" rev-parse HEAD 2>/dev/null || true)"
   backup_path="$(backup_state)"
+  repair_runtime_ownership
   activate_release "$release_dir"
   if restart_and_verify; then
     write_history_event "rollback" "$target" "$target" "$commit" "$previous_release" "$release_dir" "$backup_path"

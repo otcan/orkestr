@@ -68,6 +68,32 @@ load_env() {
   fi
 }
 
+runtime_run_user() {
+  local user
+  user="${ORKESTR_RUN_USER:-}"
+  if [ -z "$user" ] && command -v systemctl >/dev/null 2>&1; then
+    user="$(systemctl show -p User --value "${ORKESTR_SERVICE_NAME:-orkestr}.service" 2>/dev/null || true)"
+  fi
+  echo "${user:-orkestr}"
+}
+
+repair_runtime_ownership() {
+  if [ "$(id -u)" -ne 0 ]; then
+    return 0
+  fi
+  local run_user run_group runtime_home codex_home
+  run_user="$(runtime_run_user)"
+  if ! id "$run_user" >/dev/null 2>&1; then
+    return 0
+  fi
+  run_group="$(id -gn "$run_user")"
+  runtime_home="${ORKESTR_HOME:-/opt/orkestr/data}"
+  codex_home="${CODEX_HOME:-$runtime_home/codex}"
+  mkdir -p "$codex_home"
+  chown -R "$run_user:$run_group" "$codex_home"
+  chmod 0700 "$codex_home"
+}
+
 resolve_target_ref() {
   local ref
   ref="$1"
@@ -137,6 +163,7 @@ git fetch --prune origin
 target_ref="$(resolve_target_ref "$update_ref")"
 
 if [ "$current_ref" = "$target_ref" ]; then
+  repair_runtime_ownership
   echo "Orkestr is already current at $current_ref."
   exit 0
 fi
@@ -147,6 +174,7 @@ checkout_target_ref "$update_ref" "$target_ref"
 bash scripts/install-runtime-deps.sh
 npm run build:runtime
 npm prune --omit=dev
+repair_runtime_ownership
 
 if [ "${ORKESTR_RESET_ON_UPDATE:-0}" = "1" ]; then
   systemctl stop "${service_name}.service" || true

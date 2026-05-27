@@ -25,6 +25,10 @@ test("host update watcher replaces external VPS deploy automation", async () => 
   assert.match(watcher, /bash scripts\/install-runtime-deps\.sh/);
   assert.match(watcher, /npm run build:runtime/);
   assert.match(watcher, /npm prune --omit=dev/);
+  assert.match(watcher, /repair_runtime_ownership/);
+  assert.match(watcher, /codex_home="\$\{CODEX_HOME:-\$runtime_home\/codex\}"/);
+  assert.match(watcher, /chown -R "\$run_user:\$run_group" "\$codex_home"/);
+  assert.match(watcher, /chmod 0700 "\$codex_home"/);
   assert.match(watcher, /ORKESTR_RESET_ON_UPDATE/);
   assert.match(watcher, /reset-vps-state\.sh/);
   assert.match(watcher, /systemctl stop "\$\{service_name\}\.service"/);

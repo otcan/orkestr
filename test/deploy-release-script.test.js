@@ -29,6 +29,10 @@ test("release deploy script exposes versioned install, status, and rollback", as
   assert.match(script, /npm --prefix "\$release_dir" run smoke/);
   assert.match(script, /backup_state/);
   assert.match(script, /health_check/);
+  assert.match(script, /repair_runtime_ownership/);
+  assert.match(script, /codex_home="\$\{CODEX_HOME:-\$runtime_home\/codex\}"/);
+  assert.match(script, /chown -R "\$run_user:\$run_group" "\$codex_home"/);
+  assert.match(script, /chmod 0700 "\$codex_home"/);
   assert.match(script, /ORKESTR_DEPLOY_TAGS_ONLY/);
   assert.match(script, /tags_only_arg/);
   assert.match(script, /--allow-untagged\|--allow-untagged-releases/);
