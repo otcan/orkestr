@@ -385,15 +385,25 @@ export async function deliverCodexAppServerPendingInputs(thread, env = process.e
 export async function codexAppServerThreadStatus(thread, env = process.env, counts = {}) {
   const id = codexThreadId(thread);
   const client = id ? await getCodexAppServerClient({ env, home: runtimeHome(env) }).catch(() => null) : null;
-  const state = id && client ? client.threadStates.get(id) || {} : {};
+  const hasClientState = Boolean(id && client?.threadStates.has(id));
+  const state = hasClientState ? client.threadStates.get(id) || {} : {};
   const pendingRequest = client?.pendingRequestForThread(thread) || thread.runtime?.pendingRequest || null;
-  const codexStatus = state.status || thread.runtime?.codexStatus || null;
-  const statusState = appServerStateFromStatus(codexStatus);
-  const activeTurnId = statusState && ["ready", "failed", "unloaded"].includes(statusState)
+  const codexStatus = hasClientState ? state.status || null : thread.runtime?.codexStatus || null;
+  const rawStatusState = appServerStateFromStatus(codexStatus);
+  const statusState = hasClientState || rawStatusState !== "working" ? rawStatusState : "";
+  const stateActiveTurnId = hasClientState && Object.prototype.hasOwnProperty.call(state, "activeTurnId")
+    ? clean(state.activeTurnId)
+    : "";
+  const activeTurnId = statusState && ["ready", "failed", "unloaded", "awaiting_approval"].includes(statusState)
     ? ""
-    : clean(state.activeTurnId || thread.runtime?.activeTurnId);
+    : stateActiveTurnId;
   const threadState = clean(thread.state);
-  const runtimeState = pendingRequest ? "awaiting_approval" : activeTurnId ? "working" : statusState || (threadState === "sleeping" ? "unloaded" : threadState === "unloaded" ? "unloaded" : "ready");
+  const fallbackState = threadState === "sleeping" || threadState === "unloaded"
+    ? "unloaded"
+    : threadState === "failed"
+      ? "failed"
+      : "ready";
+  const runtimeState = pendingRequest ? "awaiting_approval" : activeTurnId ? "working" : statusState || fallbackState;
   return {
     state: runtimeState,
     status: runtimeState,

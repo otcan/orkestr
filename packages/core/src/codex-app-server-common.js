@@ -112,7 +112,7 @@ export function appServerStateFromStatus(status) {
     const flags = Array.isArray(status?.activeFlags) ? status.activeFlags : [];
     if (flags.includes("waitingOnApproval")) return "awaiting_approval";
     if (flags.length) return "working";
-    return "working";
+    return "ready";
   }
   if (type === "idle") return "ready";
   if (type === "systemError") return "failed";

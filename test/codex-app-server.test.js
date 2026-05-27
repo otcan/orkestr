@@ -424,6 +424,74 @@ test("Codex app-server mirrors interrupted turns to the thread and WhatsApp", as
   }
 });
 
+test("Codex app-server status ignores stale stored working state without live client state", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-codex-app-server-stale-working-"));
+  const fake = await createFakeCodex(home);
+  const env = {
+    ORKESTR_HOME: path.join(home, "orkestr"),
+    HOME: path.join(home, "runtime-home"),
+    PATH: `${fake.bin}${path.delimiter}${process.env.PATH || ""}`,
+    FAKE_CODEX_STATE: fake.stateFile,
+  };
+  try {
+    const stale = await createThread({
+      id: "app-server-stale-working-status-thread",
+      name: "App Server Stale Working Status Thread",
+      state: "working",
+      executorId: "codex",
+      executor: {
+        type: "codex",
+        transport: "app-server",
+        codexThreadId: "stale-codex-thread",
+        codexSessionId: "stale-codex-thread",
+      },
+      runtimeKind: "codex-app-server",
+      codexThreadId: "stale-codex-thread",
+      codexSessionId: "stale-codex-thread",
+      runtime: {
+        runtimeKind: "codex-app-server",
+        state: "working",
+        activeTurnId: "stale-active-turn",
+        codexStatus: { type: "active", activeFlags: ["running"] },
+        endedAt: "2026-05-26T08:18:17.735Z",
+      },
+    }, env);
+    const staleStatus = await codexAppServerThreadStatus(stale, env);
+
+    assert.equal(staleStatus.state, "ready");
+    assert.equal(staleStatus.working, false);
+    assert.equal(staleStatus.activeTurnId, null);
+
+    const idleActive = await createThread({
+      id: "app-server-active-empty-status-thread",
+      name: "App Server Active Empty Status Thread",
+      state: "working",
+      executorId: "codex",
+      executor: {
+        type: "codex",
+        transport: "app-server",
+        codexThreadId: "empty-active-codex-thread",
+        codexSessionId: "empty-active-codex-thread",
+      },
+      runtimeKind: "codex-app-server",
+      codexThreadId: "empty-active-codex-thread",
+      codexSessionId: "empty-active-codex-thread",
+      runtime: {
+        runtimeKind: "codex-app-server",
+        state: "ready",
+        codexStatus: { type: "active", activeFlags: [] },
+      },
+    }, env);
+    const idleActiveStatus = await codexAppServerThreadStatus(idleActive, env);
+
+    assert.equal(idleActiveStatus.state, "ready");
+    assert.equal(idleActiveStatus.working, false);
+    assert.equal(idleActiveStatus.activeTurnId, null);
+  } finally {
+    stopCodexAppServerClients();
+  }
+});
+
 test("Codex app-server sleep is rejected and reset interrupts active turns", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-codex-app-server-reset-"));
   const fake = await createFakeCodex(home);
