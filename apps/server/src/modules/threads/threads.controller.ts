@@ -159,8 +159,12 @@ function duplicateAdjacentAssistant(previous: any, current: any): boolean {
   return Number.isFinite(previousMs) && Number.isFinite(currentMs) && Math.abs(currentMs - previousMs) <= 5000;
 }
 
-function codexImportDuplicateKey(message: any): string {
-  if (String(message?.source || "") !== "codex-app-server-import") return "";
+function codexAppServerDisplaySource(message: any): boolean {
+  return ["codex-app-server", "codex-app-server-import"].includes(String(message?.source || "").trim());
+}
+
+function codexAppServerDuplicateKey(message: any): string {
+  if (!codexAppServerDisplaySource(message)) return "";
   const text = normalizedMessageText(message?.text);
   const codexThreadId = String(message?.codexThreadId || message?.executorThreadId || "").trim();
   const codexTurnId = String(message?.codexTurnId || message?.executorTurnId || "").trim();
@@ -176,13 +180,13 @@ function codexImportDuplicateKey(message: any): string {
 
 function dedupeDisplayMessages(messages: any[] = []) {
   const deduped: any[] = [];
-  const seenCodexImportKeys = new Set<string>();
+  const seenCodexAppServerKeys = new Set<string>();
   for (const message of messages) {
     if (duplicateAdjacentAssistant(deduped.at(-1), message)) continue;
-    const codexImportKey = codexImportDuplicateKey(message);
-    if (codexImportKey) {
-      if (seenCodexImportKeys.has(codexImportKey)) continue;
-      seenCodexImportKeys.add(codexImportKey);
+    const codexAppServerKey = codexAppServerDuplicateKey(message);
+    if (codexAppServerKey) {
+      if (seenCodexAppServerKeys.has(codexAppServerKey)) continue;
+      seenCodexAppServerKeys.add(codexAppServerKey);
     }
     deduped.push(message);
   }
