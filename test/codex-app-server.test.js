@@ -776,6 +776,11 @@ test("Codex app-server history sync adopts native turns without duplicating Orke
     assert.equal(nativeInput?.codexTurnId, "native-turn-001");
     assert.equal(nativeReply?.source, "codex-app-server-import");
     assert.equal(nativeReply?.codexItemId, "native-agent-001");
+
+    const second = await syncCodexAppServerThreadMessages(started.thread, env, { force: true });
+    assert.equal(second.count, 0);
+    assert.equal(second.created, 0);
+    assert.equal(second.updated, 0);
   } finally {
     stopCodexAppServerClients();
   }
