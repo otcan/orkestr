@@ -159,10 +159,31 @@ function duplicateAdjacentAssistant(previous: any, current: any): boolean {
   return Number.isFinite(previousMs) && Number.isFinite(currentMs) && Math.abs(currentMs - previousMs) <= 5000;
 }
 
+function codexImportDuplicateKey(message: any): string {
+  if (String(message?.source || "") !== "codex-app-server-import") return "";
+  const text = normalizedMessageText(message?.text);
+  const codexThreadId = String(message?.codexThreadId || message?.executorThreadId || "").trim();
+  const codexTurnId = String(message?.codexTurnId || message?.executorTurnId || "").trim();
+  if (!text || !codexThreadId || !codexTurnId) return "";
+  return [
+    codexThreadId,
+    codexTurnId,
+    String(message?.role || ""),
+    String(message?.phase || ""),
+    text,
+  ].join("\n");
+}
+
 function dedupeDisplayMessages(messages: any[] = []) {
   const deduped: any[] = [];
+  const seenCodexImportKeys = new Set<string>();
   for (const message of messages) {
     if (duplicateAdjacentAssistant(deduped.at(-1), message)) continue;
+    const codexImportKey = codexImportDuplicateKey(message);
+    if (codexImportKey) {
+      if (seenCodexImportKeys.has(codexImportKey)) continue;
+      seenCodexImportKeys.add(codexImportKey);
+    }
     deduped.push(message);
   }
   return deduped;

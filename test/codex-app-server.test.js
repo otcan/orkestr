@@ -16,7 +16,7 @@ import {
 } from "../packages/core/src/codex-app-server.js";
 import { migrateCodexThreadsToAppServer } from "../packages/core/src/codex-app-server-migration.js";
 import { resetThreadRuntime, sleepThread } from "../packages/core/src/runtime-leases.js";
-import { appendThreadMessage, createThread, enqueueThreadInput, getThread, listThreadMessages, updateThread } from "../packages/core/src/threads.js";
+import { appendThreadMessage, createThread, enqueueThreadInput, getThread, listThreadMessages, updateThread, updateThreadMessage } from "../packages/core/src/threads.js";
 import { deliverWhatsAppReplies } from "../packages/connectors/src/whatsapp.js";
 import { writeConnectorConfig } from "../packages/storage/src/config.js";
 
@@ -874,12 +874,15 @@ test("Codex app-server history sync adopts native turns without duplicating Orke
 
     const state = JSON.parse(await fs.readFile(fake.stateFile, "utf8"));
     const codexThread = state.threads.find((item) => item.id === started.thread.executor.codexThreadId);
+    const nativeTurnId = "019e014d-2538-7fd2-9506-681dc91be528";
+    const nativeCreatedAt = "2026-05-07T07:18:13.560Z";
     codexThread.turns.push({
-      id: "native-turn-001",
+      id: nativeTurnId,
       threadId: codexThread.id,
       status: "completed",
       items: [
         { type: "userMessage", id: "native-user-001", content: [{ type: "text", text: "hello from native codex" }] },
+        { type: "userMessage", id: "native-user-001-duplicate", content: [{ type: "text", text: "hello from native codex" }] },
         { type: "agentMessage", id: "native-agent-001", text: "native codex reply", phase: "final_answer" },
       ],
     });
@@ -888,17 +891,30 @@ test("Codex app-server history sync adopts native turns without duplicating Orke
     const result = await syncCodexAppServerThreadMessages(started.thread, env, { force: true });
     const afterSync = await listThreadMessages(thread.id, env);
     const orkestrInputs = afterSync.filter((message) => message.role === "user" && /hello from orkestr/.test(message.text));
-    const nativeInput = afterSync.find((message) => message.role === "user" && /hello from native codex/.test(message.text));
+    const nativeInputs = afterSync.filter((message) => message.role === "user" && /hello from native codex/.test(message.text));
+    const nativeInput = nativeInputs[0];
     const nativeReply = afterSync.find((message) => message.role === "assistant" && /native codex reply/.test(message.text));
 
     assert.equal(result.synced, true);
     assert.equal(orkestrInputs.length, 1);
     assert.equal(orkestrInputs[0].source, "manual");
     assert.equal(orkestrInputs[0].codexItemId, "user_" + orkestrInputs[0].codexTurnId);
+    assert.equal(nativeInputs.length, 1);
     assert.equal(nativeInput?.source, "codex-app-server-import");
-    assert.equal(nativeInput?.codexTurnId, "native-turn-001");
+    assert.equal(nativeInput?.codexTurnId, nativeTurnId);
+    assert.equal(nativeInput?.createdAt, nativeCreatedAt);
     assert.equal(nativeReply?.source, "codex-app-server-import");
     assert.equal(nativeReply?.codexItemId, "native-agent-001");
+    assert.equal(nativeReply?.createdAt, nativeCreatedAt);
+
+    await updateThreadMessage(thread.id, nativeReply.id, { createdAt: "2026-05-27T11:54:36.000Z" }, env);
+    const repair = await syncCodexAppServerThreadMessages(started.thread, env, { force: true });
+    const repairedMessages = await listThreadMessages(thread.id, env);
+    const repairedReply = repairedMessages.find((message) => message.id === nativeReply.id);
+
+    assert.equal(repair.synced, true);
+    assert.equal(repair.updated, 1);
+    assert.equal(repairedReply?.createdAt, nativeCreatedAt);
 
     const second = await syncCodexAppServerThreadMessages(started.thread, env, { force: true });
     assert.equal(second.count, 0);

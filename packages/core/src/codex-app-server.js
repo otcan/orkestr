@@ -549,6 +549,79 @@ function compactHistoryText(value) {
   return clean(value).replace(/\s+/g, " ");
 }
 
+const codexHistoryMinMs = Date.UTC(2020, 0, 1);
+const codexHistoryMaxFutureMs = 366 * 24 * 60 * 60 * 1000;
+
+function plausibleCodexHistoryMs(ms) {
+  return Number.isFinite(ms) &&
+    ms >= codexHistoryMinMs &&
+    ms <= Date.now() + codexHistoryMaxFutureMs;
+}
+
+function isoTimestamp(value) {
+  if (value instanceof Date) {
+    const ms = value.getTime();
+    return plausibleCodexHistoryMs(ms) ? new Date(ms).toISOString() : "";
+  }
+  if (typeof value === "number" && Number.isFinite(value)) {
+    const ms = value < 10_000_000_000 ? value * 1000 : value;
+    return plausibleCodexHistoryMs(ms) ? new Date(ms).toISOString() : "";
+  }
+  const text = clean(value);
+  if (!text) return "";
+  if (/^\d+(?:\.\d+)?$/.test(text)) {
+    const numeric = Number(text);
+    const ms = numeric < 10_000_000_000 ? numeric * 1000 : numeric;
+    return plausibleCodexHistoryMs(ms) ? new Date(ms).toISOString() : "";
+  }
+  const ms = Date.parse(text);
+  return plausibleCodexHistoryMs(ms) ? new Date(ms).toISOString() : "";
+}
+
+function uuidV7Timestamp(value) {
+  const hex = clean(value).replace(/-/g, "").toLowerCase();
+  if (!/^[0-9a-f]{32}$/.test(hex) || hex[12] !== "7") return "";
+  const ms = Number.parseInt(hex.slice(0, 12), 16);
+  return plausibleCodexHistoryMs(ms) ? new Date(ms).toISOString() : "";
+}
+
+function codexHistoryTimestamp(turn = {}, item = {}) {
+  const candidates = [
+    item.timestamp,
+    item.createdAt,
+    item.created_at,
+    item.completedAt,
+    item.completed_at,
+    item.startedAt,
+    item.started_at,
+    turn.timestamp,
+    turn.createdAt,
+    turn.created_at,
+    turn.completedAt,
+    turn.completed_at,
+    turn.startedAt,
+    turn.started_at,
+  ];
+  for (const candidate of candidates) {
+    const timestamp = isoTimestamp(candidate);
+    if (timestamp) return timestamp;
+  }
+  return uuidV7Timestamp(item.id) || uuidV7Timestamp(turn.id);
+}
+
+function duplicateUserHistoryMatch(existing = {}, input = {}) {
+  const existingItemId = clean(existing.codexItemId);
+  const inputItemId = clean(input.codexItemId);
+  return clean(input.role) === "user" &&
+    clean(existing.role) === "user" &&
+    existingItemId &&
+    inputItemId &&
+    existingItemId !== inputItemId &&
+    clean(existing.codexThreadId) === clean(input.codexThreadId) &&
+    clean(existing.codexTurnId) === clean(input.codexTurnId) &&
+    compactHistoryText(existing.text) === compactHistoryText(input.text);
+}
+
 function matchingHydratedMessage(messages = [], input = {}) {
   const eventId = clean(input.eventId);
   if (eventId) {
@@ -576,7 +649,6 @@ function matchingHydratedMessage(messages = [], input = {}) {
     clean(message.role) === "user" &&
     clean(message.codexThreadId) === codexId &&
     clean(message.codexTurnId) === turnId &&
-    (!clean(message.codexItemId) || !itemId || clean(message.codexItemId) === itemId) &&
     compactHistoryText(message.text) === text
   ) || null;
 }
@@ -598,11 +670,20 @@ async function upsertHydratedCodexMessage(thread, input, messages, env = process
     messages.push(message);
     return { message, created: true, updated: false, changed: true };
   }
-  const { timestamp, ...patchInput } = input;
+  const { timestamp, createdAt, ...patchInput } = input;
   const patch = {
     ...patchInput,
     state: input.state || existing.state || "completed",
   };
+  const historyCreatedAt = isoTimestamp(createdAt) || isoTimestamp(timestamp);
+  if (historyCreatedAt && (existing.source === "codex-app-server-import" || !clean(existing.createdAt))) {
+    patch.createdAt = historyCreatedAt;
+  }
+  if (duplicateUserHistoryMatch(existing, input)) {
+    delete patch.eventId;
+    delete patch.codexItemId;
+    delete patch.executorItemId;
+  }
   if (existing.source && existing.source !== "codex-app-server-import") patch.source = existing.source;
   if (!hydrationPatchChanged(existing, patch)) {
     return { message: existing, created: false, updated: false, changed: false };
@@ -623,6 +704,7 @@ export async function hydrateCodexAppServerThreadMessages(thread, codexThread, e
     const turnId = clean(turn.id);
     for (const item of Array.isArray(turn.items) ? turn.items : []) {
       const type = clean(item.type);
+      const timestamp = codexHistoryTimestamp(turn, item);
       if (type === "userMessage") {
         const text = itemText(item) || userInputText(item.input);
         if (!text) continue;
@@ -635,6 +717,7 @@ export async function hydrateCodexAppServerThreadMessages(thread, codexThread, e
           codexThreadId: codexThread.id,
           codexTurnId: turnId,
           codexItemId: item.id || null,
+          ...(timestamp ? { timestamp, createdAt: timestamp } : {}),
           ...codexAppServerMessageFields(codexThread.id, { turnId, itemId: item.id }),
         }, messages, env).catch(() => null);
         if (result) {
@@ -655,6 +738,7 @@ export async function hydrateCodexAppServerThreadMessages(thread, codexThread, e
           codexThreadId: codexThread.id,
           codexTurnId: turnId,
           codexItemId: item.id || null,
+          ...(timestamp ? { timestamp, createdAt: timestamp } : {}),
           ...codexAppServerMessageFields(codexThread.id, { turnId, itemId: item.id }),
         }, messages, env).catch(() => null);
         if (result) {
