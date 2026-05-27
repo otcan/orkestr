@@ -32,6 +32,7 @@ import {
 } from "../../../../../packages/core/src/threads.js";
 import { createThreadWorker, detectThreadRepo, listThreadWorkers, refreshThreadGitState, syncThreadWorkerWithParent, updateThreadRepo } from "../../../../../packages/core/src/thread-workers.js";
 import { parseThreadInputCommand } from "../../../../../packages/core/src/thread-commands.js";
+import { codexResumeCommand } from "../../../../../packages/core/src/codex-attach-command.js";
 import { launchNativeTerminal } from "../../../../../packages/core/src/native-terminal.js";
 import {
   archiveCodexAppServerThread,
@@ -39,6 +40,7 @@ import {
   interruptCodexAppServerThread,
   rollbackCodexAppServerThread,
   startCodexAppServerThread,
+  syncCodexAppServerThreadMessages,
   threadNeedsCodexAppServerMigration,
   threadUsesCodexAppServer,
 } from "../../../../../packages/core/src/codex-app-server.js";
@@ -70,8 +72,10 @@ function chronologicalMessages(messages: any[] = []) {
     .map(({ message }) => message);
 }
 
-function shellQuote(value: string): string {
-  return `'${String(value || "").replace(/'/g, "'\\''")}'`;
+async function syncNativeCodexHistory(thread: any, options: Record<string, unknown> = {}) {
+  if (!threadUsesCodexAppServer(thread)) return thread;
+  await syncCodexAppServerThreadMessages(thread, process.env, options).catch(() => null);
+  return await getThread(thread.id) || thread;
 }
 
 const needInputPhases = new Set(["need_input", "awaiting_input", "question", "request_user_input"]);
@@ -535,8 +539,9 @@ export class ThreadsController {
 
   @Get(":threadId/messages")
   async messages(@Param("threadId") threadId: string, @Query() query: Record<string, unknown>) {
-    const thread = await getThread(threadId);
+    let thread = await getThread(threadId);
     if (!thread) throw httpError("thread_not_found", 404);
+    thread = await syncNativeCodexHistory(thread);
     const status = await runtimeStatus(thread.id).catch(() => null);
     return messagePage(thread, await listThreadMessages(thread.id), query, status);
   }
@@ -908,7 +913,7 @@ export class ThreadsController {
         };
       }
       const cwd = String(thread.cwd || thread.workspace || thread.repoPath || thread.worktreePath || "/root");
-      const attachCommand = `codex --dangerously-bypass-approvals-and-sandbox resume -C ${shellQuote(cwd)} ${shellQuote(codexId)}`;
+      const attachCommand = await codexResumeCommand({ cwd, codexThreadId: codexId });
       return {
         ok: true,
         state: "ready",
@@ -1106,8 +1111,9 @@ export class ThreadsController {
 
   @Get(":threadId/history")
   async history(@Param("threadId") threadId: string) {
-    const thread = await getThread(threadId);
+    let thread = await getThread(threadId);
     if (!thread) throw httpError("thread_not_found", 404);
+    thread = await syncNativeCodexHistory(thread, { force: true });
     const messages = chronologicalMessages(await listThreadMessages(thread.id));
     return {
       thread,

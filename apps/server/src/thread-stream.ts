@@ -5,6 +5,7 @@ import { WebSocketServer, type WebSocket } from "ws";
 import { runtimeStatus, wakeThread } from "../../../packages/core/src/runtime-leases.js";
 import { getThread } from "../../../packages/core/src/threads.js";
 import { codexThreadId, threadUsesCodexAppServer } from "../../../packages/core/src/codex-app-server-common.js";
+import { codexResumeCommand } from "../../../packages/core/src/codex-attach-command.js";
 import { shellQuote } from "../../../packages/core/src/native-terminal.js";
 import { killTmuxSession } from "../../../packages/core/src/tmux-runtime.js";
 import { threadSummaryPayload } from "./thread-summary.js";
@@ -145,7 +146,7 @@ async function ensureAppServerAttachPane(thread: Record<string, any>, cols: unkn
     // Browser Raw attach sessions are disposable; restart them so stale Codex resume screens are not replayed.
     await killTmuxSession(sessionName).catch(() => undefined);
   }
-  const attachCommand = `codex --dangerously-bypass-approvals-and-sandbox resume -C ${shellQuote(cwd)} ${shellQuote(codexId)}`;
+  const attachCommand = await codexResumeCommand({ cwd, codexThreadId: codexId });
   const script = [
     "clear",
     `printf ${shellQuote(`Attaching Orkestr thread ${currentThread.name || currentThread.id} to Codex...\\n\\n`)}`,

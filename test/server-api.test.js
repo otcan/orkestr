@@ -10,8 +10,9 @@ async function request(baseUrl, route, options = {}) {
     headers: { "content-type": "application/json" },
     ...options,
   });
-  assert.ok(response.ok, `${route} returned ${response.status}`);
-  return response.json();
+  const text = await response.text();
+  assert.ok(response.ok, `${route} returned ${response.status}: ${text}`);
+  return text ? JSON.parse(text) : {};
 }
 
 async function createFakeCodexAppServer(home) {
@@ -110,10 +111,15 @@ test("server exposes health, readiness, version, and agent message APIs", async 
   await fs.mkdir(path.join(workspaceRoot, "beta"), { recursive: true });
   const priorHome = process.env.ORKESTR_HOME;
   const priorWorkspaceRoot = process.env.ORKESTR_RUNTIME_WORKSPACE_ROOT;
+  const priorCodexBin = process.env.ORKESTR_CODEX_BIN;
+  const priorRuntimeCodexCommand = process.env.ORKESTR_RUNTIME_CODEX_COMMAND;
   const priorPath = process.env.PATH;
   process.env.ORKESTR_HOME = home;
   process.env.ORKESTR_RUNTIME_WORKSPACE_ROOT = workspaceRoot;
-  process.env.PATH = `${await createFakeCodexAppServer(home)}${path.delimiter}${priorPath || ""}`;
+  const fakeCodexBin = await createFakeCodexAppServer(home);
+  process.env.ORKESTR_CODEX_BIN = path.join(fakeCodexBin, "codex");
+  delete process.env.ORKESTR_RUNTIME_CODEX_COMMAND;
+  process.env.PATH = `${fakeCodexBin}${path.delimiter}${priorPath || ""}`;
   const server = await startServer({ port: 0, host: "127.0.0.1" });
   const { port } = server.address();
   const baseUrl = `http://127.0.0.1:${port}`;
@@ -205,6 +211,10 @@ test("server exposes health, readiness, version, and agent message APIs", async 
     else process.env.ORKESTR_HOME = priorHome;
     if (priorWorkspaceRoot === undefined) delete process.env.ORKESTR_RUNTIME_WORKSPACE_ROOT;
     else process.env.ORKESTR_RUNTIME_WORKSPACE_ROOT = priorWorkspaceRoot;
+    if (priorCodexBin === undefined) delete process.env.ORKESTR_CODEX_BIN;
+    else process.env.ORKESTR_CODEX_BIN = priorCodexBin;
+    if (priorRuntimeCodexCommand === undefined) delete process.env.ORKESTR_RUNTIME_CODEX_COMMAND;
+    else process.env.ORKESTR_RUNTIME_CODEX_COMMAND = priorRuntimeCodexCommand;
     if (priorPath === undefined) delete process.env.PATH;
     else process.env.PATH = priorPath;
   }

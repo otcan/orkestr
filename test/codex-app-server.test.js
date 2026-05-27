@@ -12,6 +12,7 @@ import {
   recoverStaleCodexAppServerTurns,
   startCodexAppServerThread,
   stopCodexAppServerClients,
+  syncCodexAppServerThreadMessages,
 } from "../packages/core/src/codex-app-server.js";
 import { migrateCodexThreadsToAppServer } from "../packages/core/src/codex-app-server-migration.js";
 import { resetThreadRuntime, sleepThread } from "../packages/core/src/runtime-leases.js";
@@ -113,7 +114,8 @@ rl.on("line", (line) => {
     const thread = state.threads.find((item) => item.id === params.threadId);
     if (!thread || !thread.loaded) return send({ id, error: { code: -32000, message: "thread not found: " + params.threadId } });
     const requestedStatus = process.env.FAKE_CODEX_TURN_STATUS || "completed";
-    const turn = { id: "turn_" + Date.now(), threadId: params.threadId, status: "inProgress", items: [] };
+    state.nextTurnNumber = (state.nextTurnNumber || 0) + 1;
+    const turn = { id: "turn_" + String(state.nextTurnNumber).padStart(6, "0"), threadId: params.threadId, status: "inProgress", items: [] };
     const text = params.input?.find((item) => item.type === "text")?.text || "";
     const user = { type: "userMessage", id: "user_" + turn.id, content: [{ type: "text", text }] };
     const agent = { type: "agentMessage", id: "agent_" + turn.id, text: "Reply to: " + text, phase: "final_answer" };
@@ -145,6 +147,17 @@ async function markAppServerTurnActive(thread, env, turnId = "active-turn") {
   });
 }
 
+async function waitForAppServerReady(thread, env, attempts = 50) {
+  let status = null;
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    const current = await getThread(thread.id, env).catch(() => null);
+    status = await codexAppServerThreadStatus(current || thread, env);
+    if (status.state === "ready") return status;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  return status;
+}
+
 test("Codex app-server starts threads, delivers input, and imports existing threads", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-codex-app-server-"));
   const fake = await createFakeCodex(home);
@@ -166,6 +179,7 @@ test("Codex app-server starts threads, delivers input, and imports existing thre
     const messages = await listThreadMessages(thread.id, env);
     assert.equal(delivered.length, 1);
     assert.ok(messages.some((message) => message.source === "codex-app-server" && /Reply to: hello app server/.test(message.text)));
+    await waitForAppServerReady(started.thread, env);
 
     await updateThread(started.thread.id, {
       state: "working",
@@ -624,6 +638,58 @@ test("Codex app-server recovery projects stale WhatsApp turns back to the source
     assert.equal(notice.connector, "whatsapp");
     assert.equal(notice.chatId, "chat-stale-wa");
     assert.equal(notice.accountId, "account-stale-wa");
+  } finally {
+    stopCodexAppServerClients();
+  }
+});
+
+test("Codex app-server history sync adopts native turns without duplicating Orkestr inputs", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-codex-app-server-sync-"));
+  const fake = await createFakeCodex(home);
+  const env = {
+    ORKESTR_HOME: path.join(home, "orkestr"),
+    HOME: path.join(home, "runtime-home"),
+    PATH: `${fake.bin}${path.delimiter}${process.env.PATH || ""}`,
+    FAKE_CODEX_STATE: fake.stateFile,
+    ORKESTR_CODEX_APP_SERVER_HISTORY_SYNC_INTERVAL_MS: "0",
+  };
+  try {
+    const thread = await createThread({ id: "app-server-sync-thread", name: "App Server Sync Thread", cwd: home, executorId: "codex", executor: { type: "codex" } }, env);
+    const started = await startCodexAppServerThread(thread, env);
+    await enqueueThreadInput(thread.id, { text: "hello from orkestr" }, env);
+    await deliverCodexAppServerPendingInputs(started.thread, env);
+
+    const beforeSync = await listThreadMessages(thread.id, env);
+    assert.equal(beforeSync.filter((message) => message.role === "user" && /hello from orkestr/.test(message.text)).length, 1);
+    assert.equal(beforeSync.find((message) => message.role === "user" && /hello from orkestr/.test(message.text))?.source, "manual");
+
+    const state = JSON.parse(await fs.readFile(fake.stateFile, "utf8"));
+    const codexThread = state.threads.find((item) => item.id === started.thread.executor.codexThreadId);
+    codexThread.turns.push({
+      id: "native-turn-001",
+      threadId: codexThread.id,
+      status: "completed",
+      items: [
+        { type: "userMessage", id: "native-user-001", content: [{ type: "text", text: "hello from native codex" }] },
+        { type: "agentMessage", id: "native-agent-001", text: "native codex reply", phase: "final_answer" },
+      ],
+    });
+    await fs.writeFile(fake.stateFile, JSON.stringify(state, null, 2));
+
+    const result = await syncCodexAppServerThreadMessages(started.thread, env, { force: true });
+    const afterSync = await listThreadMessages(thread.id, env);
+    const orkestrInputs = afterSync.filter((message) => message.role === "user" && /hello from orkestr/.test(message.text));
+    const nativeInput = afterSync.find((message) => message.role === "user" && /hello from native codex/.test(message.text));
+    const nativeReply = afterSync.find((message) => message.role === "assistant" && /native codex reply/.test(message.text));
+
+    assert.equal(result.synced, true);
+    assert.equal(orkestrInputs.length, 1);
+    assert.equal(orkestrInputs[0].source, "manual");
+    assert.equal(orkestrInputs[0].codexItemId, "user_" + orkestrInputs[0].codexTurnId);
+    assert.equal(nativeInput?.source, "codex-app-server-import");
+    assert.equal(nativeInput?.codexTurnId, "native-turn-001");
+    assert.equal(nativeReply?.source, "codex-app-server-import");
+    assert.equal(nativeReply?.codexItemId, "native-agent-001");
   } finally {
     stopCodexAppServerClients();
   }

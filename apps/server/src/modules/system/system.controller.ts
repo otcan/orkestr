@@ -97,6 +97,14 @@ function pct(used: number, total: number): number {
   return Math.max(0, Math.min(100, Math.round((used / total) * 1000) / 10));
 }
 
+function safeOsUptime(): number {
+  try {
+    return os.uptime();
+  } catch {
+    return 0;
+  }
+}
+
 async function diskStatus() {
   const target = process.cwd() || "/";
   const stats = await fs.statfs(target).catch(() => null);
@@ -108,27 +116,34 @@ async function diskStatus() {
 }
 
 async function processRows(sort = "cpu") {
-  const sortColumn = sort === "rss" || sort === "memory" ? "-rss" : "-pcpu";
-  const { stdout } = await execFileAsync("ps", [
-    "-eo",
-    "pid=,ppid=,user=,pcpu=,pmem=,rss=,comm=,args=",
-    `--sort=${sortColumn}`,
-  ], { maxBuffer: 1024 * 1024 });
-  const rows = String(stdout || "").trim().split("\n").filter(Boolean).map((line) => {
-    const parts = line.trim().split(/\s+/);
-    const [pid, ppid, user, cpu, memory, rss, command, ...args] = parts;
-    return {
-      pid: Number(pid),
-      ppid: Number(ppid),
-      user,
-      cpu: Number(cpu) || 0,
-      memory: Number(memory) || 0,
-      rss: (Number(rss) || 0) * 1024,
-      command,
-      args: args.join(" "),
-    };
-  }).filter((row) => row.command !== "ps" && row.pid !== process.pid).slice(0, 40);
-  return { count: rows.length, processes: rows, generatedAt: new Date().toISOString() };
+  const generatedAt = new Date().toISOString();
+  const args = process.platform === "darwin"
+    ? ["-axo", "pid=,ppid=,user=,pcpu=,pmem=,rss=,comm=,command="]
+    : ["-eo", "pid=,ppid=,user=,pcpu=,pmem=,rss=,comm=,args="];
+  try {
+    const { stdout } = await execFileAsync("ps", args, { maxBuffer: 1024 * 1024 });
+    const rows = String(stdout || "").trim().split("\n").filter(Boolean).map((line) => {
+      const parts = line.trim().split(/\s+/);
+      const [pid, ppid, user, cpu, memory, rss, command, ...commandArgs] = parts;
+      return {
+        pid: Number(pid),
+        ppid: Number(ppid),
+        user,
+        cpu: Number(cpu) || 0,
+        memory: Number(memory) || 0,
+        rss: (Number(rss) || 0) * 1024,
+        command,
+        args: commandArgs.join(" "),
+      };
+    }).filter((row) => row.command !== "ps" && row.pid !== process.pid);
+    rows.sort((left, right) => {
+      if (sort === "rss" || sort === "memory") return right.rss - left.rss;
+      return right.cpu - left.cpu;
+    });
+    return { count: rows.length, processes: rows.slice(0, 40), generatedAt };
+  } catch (error: any) {
+    return { count: 0, processes: [], generatedAt, error: String(error?.message || error || "") };
+  }
 }
 
 async function cpuPercent(fallback: number): Promise<number> {
@@ -161,7 +176,7 @@ async function systemSnapshot() {
     generatedAt: new Date().toISOString(),
     hostname: os.hostname(),
     platform: os.platform(),
-    uptimeSeconds: os.uptime(),
+    uptimeSeconds: safeOsUptime(),
     cpu: {
       count: cpus,
       model: os.cpus()[0]?.model || "unknown",

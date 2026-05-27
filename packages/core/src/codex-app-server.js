@@ -1,5 +1,6 @@
 import { appendEvent } from "../../storage/src/store.js";
 import {
+  appendThreadMessage,
   getThread,
   listThreadMessages,
   updateThread,
@@ -30,6 +31,7 @@ import { codexAppServerMessageFields } from "./codex-app-server-whatsapp.js";
 import { parseThreadInputCommand } from "./thread-commands.js";
 
 const appServerDeliveryTimers = new Map();
+const appServerHistorySyncTimes = new Map();
 
 function codexAppServerActiveTurnRetryMs(env = process.env) {
   const parsed = Number(env.ORKESTR_CODEX_APP_SERVER_ACTIVE_TURN_RETRY_MS || 3000);
@@ -38,6 +40,11 @@ function codexAppServerActiveTurnRetryMs(env = process.env) {
 
 function isoAfter(ms) {
   return new Date(Date.now() + Math.max(0, ms)).toISOString();
+}
+
+function codexAppServerHistorySyncIntervalMs(env = process.env) {
+  const parsed = Number(env.ORKESTR_CODEX_APP_SERVER_HISTORY_SYNC_INTERVAL_MS || 5000);
+  return Number.isFinite(parsed) ? Math.max(0, parsed) : 5000;
 }
 
 function scheduleCodexAppServerInputDelivery(threadId, env = process.env, delayMs = 0) {
@@ -460,6 +467,34 @@ export async function readCodexAppServerThread(codexThreadId, env = process.env,
   return client.request("thread/read", { threadId: clean(codexThreadId), includeTurns });
 }
 
+export async function syncCodexAppServerThreadMessages(thread, env = process.env, options = {}) {
+  const id = codexThreadId(thread);
+  if (!id) return { synced: false, reason: "codex_thread_id_required", count: 0 };
+  if (String(env.ORKESTR_CODEX_APP_SERVER_HISTORY_SYNC || "").trim() === "0") {
+    return { synced: false, reason: "disabled", count: 0 };
+  }
+  const syncKey = `${thread.id || ""}:${id}`;
+  const intervalMs = codexAppServerHistorySyncIntervalMs(env);
+  const nowMs = Date.now();
+  const previousMs = appServerHistorySyncTimes.get(syncKey) || 0;
+  if (!options.force && intervalMs > 0 && previousMs && nowMs - previousMs < intervalMs) {
+    return { synced: false, reason: "throttled", count: 0 };
+  }
+  appServerHistorySyncTimes.set(syncKey, nowMs);
+  const read = await readCodexAppServerThread(id, env, true);
+  const codexThread = read?.thread || {};
+  const result = await hydrateCodexAppServerThreadMessages(thread, codexThread, env);
+  await appendEvent({
+    type: "codex_app_server_thread_history_synced",
+    threadId: thread.id,
+    codexThreadId: id,
+    count: result.count,
+    created: result.created,
+    updated: result.updated,
+  }, env).catch(() => {});
+  return { synced: true, ...result, codexThread };
+}
+
 export async function importCodexAppServerThread(codexThreadIdValue, input = {}, env = process.env) {
   const id = clean(codexThreadIdValue || input.codexThreadId || input.threadId);
   if (!id) {
@@ -510,9 +545,60 @@ export async function importCodexAppServerThread(codexThreadIdValue, input = {},
   return { thread: await getThread(thread.id, env) || thread, imported: true, codexThread };
 }
 
+function compactHistoryText(value) {
+  return clean(value).replace(/\s+/g, " ");
+}
+
+function matchingHydratedMessage(messages = [], input = {}) {
+  const eventId = clean(input.eventId);
+  if (eventId) {
+    const existing = messages.find((message) => clean(message.eventId) === eventId);
+    if (existing) return existing;
+  }
+  const role = clean(input.role);
+  const codexId = clean(input.codexThreadId);
+  const turnId = clean(input.codexTurnId);
+  const itemId = clean(input.codexItemId);
+  if (!role || !codexId || !turnId) return null;
+  if (itemId) {
+    const existing = messages.find((message) =>
+      clean(message.role) === role &&
+      clean(message.codexThreadId) === codexId &&
+      clean(message.codexTurnId) === turnId &&
+      clean(message.codexItemId) === itemId
+    );
+    if (existing) return existing;
+  }
+  if (role !== "user") return null;
+  const text = compactHistoryText(input.text);
+  if (!text) return null;
+  return messages.find((message) =>
+    clean(message.role) === "user" &&
+    clean(message.codexThreadId) === codexId &&
+    clean(message.codexTurnId) === turnId &&
+    (!clean(message.codexItemId) || !itemId || clean(message.codexItemId) === itemId) &&
+    compactHistoryText(message.text) === text
+  ) || null;
+}
+
+async function upsertHydratedCodexMessage(thread, input, env = process.env) {
+  const messages = await listThreadMessages(thread.id, env).catch(() => []);
+  const existing = matchingHydratedMessage(messages, input);
+  if (!existing) return { message: await appendThreadMessage(thread.id, input, env), created: true };
+  const { timestamp, ...patchInput } = input;
+  const patch = {
+    ...patchInput,
+    state: input.state || existing.state || "completed",
+  };
+  if (existing.source && existing.source !== "codex-app-server-import") patch.source = existing.source;
+  return { message: await updateThreadMessage(thread.id, existing.id, patch, env), created: false };
+}
+
 export async function hydrateCodexAppServerThreadMessages(thread, codexThread, env = process.env) {
   const turns = Array.isArray(codexThread?.turns) ? codexThread.turns : [];
   let count = 0;
+  let created = 0;
+  let updated = 0;
   for (const turn of turns) {
     const turnId = clean(turn.id);
     for (const item of Array.isArray(turn.items) ? turn.items : []) {
@@ -520,7 +606,7 @@ export async function hydrateCodexAppServerThreadMessages(thread, codexThread, e
       if (type === "userMessage") {
         const text = itemText(item) || userInputText(item.input);
         if (!text) continue;
-        await appendOrUpdateEventMessage(thread, {
+        const result = await upsertHydratedCodexMessage(thread, {
           role: "user",
           source: "codex-app-server-import",
           text,
@@ -531,11 +617,15 @@ export async function hydrateCodexAppServerThreadMessages(thread, codexThread, e
           codexItemId: item.id || null,
           ...codexAppServerMessageFields(codexThread.id, { turnId, itemId: item.id }),
         }, env).catch(() => null);
-        count += 1;
+        if (result) {
+          count += 1;
+          if (result.created) created += 1;
+          else updated += 1;
+        }
       } else if (["agentMessage", "plan", "exitedReviewMode", "contextCompaction"].includes(type)) {
         const text = type === "contextCompaction" ? "Codex compacted the conversation context." : itemText(item);
         if (!text) continue;
-        await appendOrUpdateEventMessage(thread, {
+        const result = await upsertHydratedCodexMessage(thread, {
           role: "assistant",
           source: "codex-app-server-import",
           phase: itemPhase(item) || "final_answer",
@@ -547,11 +637,15 @@ export async function hydrateCodexAppServerThreadMessages(thread, codexThread, e
           codexItemId: item.id || null,
           ...codexAppServerMessageFields(codexThread.id, { turnId, itemId: item.id }),
         }, env).catch(() => null);
-        count += 1;
+        if (result) {
+          count += 1;
+          if (result.created) created += 1;
+          else updated += 1;
+        }
       }
     }
   }
-  return { count };
+  return { count, created, updated };
 }
 
 export async function compactCodexAppServerThread(thread, env = process.env) {
