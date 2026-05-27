@@ -107,6 +107,9 @@ test("onboarding focuses the starter setup on virtual desktop and WhatsApp", asy
   assert.ok(onboarding.includes("Browser approvals"));
   assert.ok(onboarding.includes("Approve pending pairing challenges"));
   assert.ok(onboarding.includes('label: "Desktops"'));
+  assert.ok(onboarding.includes("openReturnedUrl: true"));
+  assert.ok(onboarding.includes("browserOpenUrl(response.browser)"));
+  assert.ok(onboarding.includes("Desktop started, but no remote desktop URL is configured."));
   assert.ok(onboarding.includes("WhatsApp sender"));
   assert.ok(onboarding.includes("WhatsApp receiver"));
   assert.ok(onboarding.includes("whatsappAccountPurpose"));

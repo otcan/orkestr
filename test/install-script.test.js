@@ -146,6 +146,8 @@ test("install script exposes a host-native systemd VPS path", async () => {
   assert.match(script, /browserctl_path="\$\{ORKESTR_BROWSERCTL_PATH:-\/usr\/local\/bin\/orkestr-browserctl\}"/);
   assert.match(script, /set_env_assignment ORKESTR_BROWSER_DESKTOP_MODE "\$desktop_mode"/);
   assert.match(script, /ensure_env_assignment ORKESTR_BROWSERCTL_PATH "\$browserctl_path"/);
+  assert.match(script, /ORKESTR_BROWSERCTL_RUN_AS_ROOT/);
+  assert.match(script, /runuser -u "\$run_user" --preserve-environment -- node "\$app_dir\/scripts\/browserctl\.mjs"/);
   assert.match(script, /"approveReplies": \["\/approve", "approve", "approved", "yes", "y", "allow", "go", "proceed"\]/);
   assert.match(script, /"alwaysApprove"/);
   assert.match(script, /"requiresExplicitScope": true/);

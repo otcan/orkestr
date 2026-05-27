@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import net from "node:net";
 import { constants as fsConstants } from "node:fs";
-import { spawn } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 
 const catalog = [
   {
@@ -176,11 +176,65 @@ function dryRun() {
   return ["1", "true", "yes"].includes(String(process.env.ORKESTR_BROWSERCTL_DRY_RUN || "").trim().toLowerCase());
 }
 
+function flagEnabled(name) {
+  return ["1", "true", "yes"].includes(String(process.env[name] || "").trim().toLowerCase());
+}
+
+function commandOutput(command, args) {
+  return execFileSync(command, args, { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim();
+}
+
+let runIdentityCache;
+function desktopRunIdentity() {
+  if (runIdentityCache !== undefined) return runIdentityCache;
+  runIdentityCache = null;
+  if (process.getuid?.() !== 0) return runIdentityCache;
+  const user = String(process.env.ORKESTR_BROWSER_RUN_USER || process.env.ORKESTR_RUN_USER || "").trim();
+  if (!user || flagEnabled("ORKESTR_BROWSERCTL_RUN_AS_ROOT")) return runIdentityCache;
+  try {
+    const uid = Number(commandOutput("id", ["-u", user]));
+    const gid = Number(commandOutput("id", ["-g", user]));
+    if (Number.isInteger(uid) && uid > 0 && Number.isInteger(gid) && gid >= 0) {
+      runIdentityCache = {
+        uid,
+        gid,
+        user,
+        home: commandOutput("getent", ["passwd", user]).split(":")[5] || "",
+      };
+    }
+  } catch {
+    runIdentityCache = null;
+  }
+  return runIdentityCache;
+}
+
+async function chownTree(target, uid, gid) {
+  let stat;
+  try {
+    stat = await fs.lstat(target);
+  } catch {
+    return;
+  }
+  if (stat.isDirectory()) {
+    for (const entry of await fs.readdir(target)) {
+      await chownTree(path.join(target, entry), uid, gid);
+    }
+  }
+  await fs.lchown(target, uid, gid).catch(() => {});
+}
+
 async function spawnManaged(command, args, extraEnv = {}) {
+  const identity = desktopRunIdentity();
   const child = spawn(command, args, {
     detached: true,
     stdio: "ignore",
-    env: { ...process.env, ...extraEnv },
+    env: {
+      ...process.env,
+      ...extraEnv,
+      ...(identity?.home ? { HOME: identity.home } : {}),
+      ...(identity?.user ? { USER: identity.user, LOGNAME: identity.user } : {}),
+    },
+    ...(identity ? { uid: identity.uid, gid: identity.gid } : {}),
   });
   child.unref();
   return child.pid || null;
@@ -212,7 +266,7 @@ async function ensurePrepared(slug) {
   await fs.mkdir(runtimeDir(desktop.slug), { recursive: true, mode: 0o700 });
   await fs.mkdir(profileDir(desktop.slug), { recursive: true, mode: 0o700 });
   const prior = await readState(desktop.slug);
-  return writeState(desktop.slug, {
+  const next = await writeState(desktop.slug, {
     slug: desktop.slug,
     label: desktop.label,
     type: "desktop",
@@ -225,6 +279,9 @@ async function ensurePrepared(slug) {
     webPort: prior.webPort || ports.webPort,
     display: prior.display || `:${ports.displayNumber}`,
   });
+  const identity = desktopRunIdentity();
+  if (identity) await chownTree(profileDir(desktop.slug), identity.uid, identity.gid);
+  return next;
 }
 
 async function sessionRecord(value) {
@@ -328,6 +385,9 @@ async function startDesktop(value) {
   if (missing.length) {
     throw Object.assign(new Error(`missing_desktop_runtime: ${missing.join(", ")}`), { statusCode: 503 });
   }
+  if (process.getuid?.() === 0 && !desktopRunIdentity() && !flagEnabled("ORKESTR_CHROME_NO_SANDBOX")) {
+    throw Object.assign(new Error("browserctl_root_requires_run_user_or_explicit_no_sandbox"), { statusCode: 503 });
+  }
 
   try {
     const xvfbPid = await spawnManaged(xvfb, [display, "-screen", "0", "1440x900x24", "-nolisten", "tcp", "-ac"]);
@@ -358,7 +418,7 @@ async function startDesktop(value) {
       "--start-maximized",
       "--new-window",
     ];
-    if (process.getuid?.() === 0 || String(process.env.ORKESTR_CHROME_NO_SANDBOX || "") === "1") {
+    if (flagEnabled("ORKESTR_CHROME_NO_SANDBOX")) {
       chromeArgs.push("--no-sandbox");
     }
     chromeArgs.push(startUrl);

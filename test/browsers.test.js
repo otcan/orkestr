@@ -203,6 +203,7 @@ test("oss browserctl exposes real noVNC desktop sessions in dry run", async () =
 
 test("managed desktop mode can use the bundled oss browserctl script", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-bundled-browserctl-"));
+  const script = await fs.readFile("scripts/browserctl.mjs", "utf8");
   const env = {
     ORKESTR_HOME: home,
     ORKESTR_BROWSER_DESKTOP_MODE: "browserctl",
@@ -220,6 +221,10 @@ test("managed desktop mode can use the bundled oss browserctl script", async () 
   const gmail = payload.sessions.find((session) => session.slug === "gmail");
 
   assert.equal(payload.source, "browserctl");
+  assert.match(script, /ORKESTR_BROWSER_RUN_USER/);
+  assert.match(script, /ORKESTR_RUN_USER/);
+  assert.match(script, /browserctl_root_requires_run_user_or_explicit_no_sandbox/);
+  assert.doesNotMatch(script, /process\.getuid\?\.\(\) === 0 \|\| String\(process\.env\.ORKESTR_CHROME_NO_SANDBOX/);
   assert.equal(prepared.status, "prepared");
   assert.equal(started.status, "running");
   assert.equal(gmail.status, "running");
