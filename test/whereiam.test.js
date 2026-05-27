@@ -17,8 +17,26 @@ test("runtime AGENTS.md points agents to dynamic whereiam discovery", async () =
   assert.equal(result.written, true);
   assert.match(body, /orkestr whereiam --json/);
   assert.match(body, /orkestr settings --json/);
+  assert.match(body, /Orkestr is the host application around this Codex session/);
+  assert.match(body, /orkestr security approve <challenge-id>/);
+  assert.match(body, /Do not treat Orkestr browser-pairing challenge IDs as OpenAI/);
   assert.doesNotMatch(body, /Thread:\s+thread-1/);
   assert.doesNotMatch(body, /Workspace:\s+/);
+});
+
+test("runtime AGENTS.md is written under the configured runtime workspace root", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-agent-context-runtime-home-"));
+  const runtimeRoot = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-agent-context-runtime-root-"));
+  const workspace = path.join(runtimeRoot, "thread-1");
+  const result = await ensureRuntimeAgentsFile(workspace, {
+    ORKESTR_HOME: home,
+    ORKESTR_RUNTIME_WORKSPACE_ROOT: runtimeRoot,
+  });
+  const body = await fs.readFile(path.join(workspace, "AGENTS.md"), "utf8");
+
+  assert.equal(result.written, true);
+  assert.match(body, /orkestr whereiam --json/);
+  assert.match(body, /orkestr security approve <challenge-id>/);
 });
 
 test("runtime AGENTS.md is not written into external repositories by default", async () => {

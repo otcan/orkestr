@@ -7,6 +7,7 @@ import { promisify } from "node:util";
 import { dataPaths, ensureDataDirs } from "../../storage/src/paths.js";
 import { appendEvent, readJson, writeJson } from "../../storage/src/store.js";
 import { ensureRuntimeAgentsFile } from "./agent-context.js";
+import { recordCodexRuntimeAuthInvalidSignal } from "./codex-auth-health.js";
 import { assertCodexAuthenticated } from "../../connectors/src/codex.js";
 import { clearPaneProgressCache, paneBackgroundWork, publicPaneProgress, samplePaneProgress } from "./pane-progress.js";
 import {
@@ -651,6 +652,8 @@ export async function runtimeStatus(threadId, env = process.env, messagesOverrid
   const needsResumeDirectoryConfirmation = paneResumeDirectoryPrompt(paneText);
   const codexUpdatePromptChoice = paneCodexUpdatePromptChoice(paneText);
   const needsCodexUpdatePromptSkip = Boolean(codexUpdatePromptChoice);
+  const progress = publicPaneProgress(progressSample);
+  await recordCodexRuntimeAuthInvalidSignal({ thread, progress }, env).catch(() => {});
   const frozen = progressSample?.frozen === true || progressSample?.stateHint === "frozen";
   const backgroundWork = paneBackgroundWork(paneText) || progressSample?.backgroundWork === true;
   const foregroundWorking = !frozen && paneWorking(paneText) && !backgroundWork;
@@ -696,7 +699,7 @@ export async function runtimeStatus(threadId, env = process.env, messagesOverrid
     planImplementationReady,
     planImplementationMenuVisible,
     planImplementationSelectedChoice,
-    progress: publicPaneProgress(progressSample),
+    progress,
   };
 }
 
@@ -3751,6 +3754,7 @@ export async function syncPaneProgressForActiveLeases(env = process.env) {
     sampled += 1;
     const thread = await getThread(lease.threadId, env).catch(() => null);
     if (!thread) continue;
+    await recordCodexRuntimeAuthInvalidSignal({ thread, progress }, env).catch(() => {});
     const previous = thread.runtime?.progress;
     const codexPatch = liveCodexModePatch(thread, {
       codexMode: progress.codexMode,

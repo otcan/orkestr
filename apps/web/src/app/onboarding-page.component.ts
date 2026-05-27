@@ -123,6 +123,7 @@ export class OnboardingPageComponent implements OnInit, OnChanges, OnDestroy {
     { id: "whatsapp", label: "WhatsApp", eyebrow: "Messages" },
     { id: "browsers", label: "Desktops", eyebrow: "Browser runtime" },
   ];
+  private readonly leanSetupConnectorIds: ConnectorStep[] = ["codex", "whatsapp", "browsers"];
 
   ngOnInit(): void {
     this.restoreProgress();
@@ -710,11 +711,11 @@ export class OnboardingPageComponent implements OnInit, OnChanges, OnDestroy {
   }
 
   setupSections(): Array<{ id: OnboardingStep; label: string; eyebrow: string }> {
+    const setupConnectors = this.connectorSteps.filter((step) => this.leanSetupConnectorIds.includes(step.id));
     return [
       { id: "system", label: "Connections", eyebrow: "Runtime" },
-      { id: "google-marketing", label: "Google Marketing", eyebrow: "SEO data" },
       { id: "security", label: "Security", eyebrow: "Remote access" },
-      ...this.connectorSteps,
+      ...setupConnectors,
     ];
   }
 

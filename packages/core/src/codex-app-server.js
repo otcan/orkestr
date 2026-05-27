@@ -28,6 +28,7 @@ import {
 } from "./codex-app-server-common.js";
 import { getCodexAppServerClient, stopCodexAppServerClients as stopCodexAppServerRuntimeClients } from "./codex-app-server-client.js";
 import { codexAppServerMessageFields } from "./codex-app-server-whatsapp.js";
+import { ensureRuntimeAgentsFile } from "./agent-context.js";
 import { parseThreadInputCommand } from "./thread-commands.js";
 
 const appServerDeliveryTimers = new Map();
@@ -45,6 +46,10 @@ function isoAfter(ms) {
 function codexAppServerHistorySyncIntervalMs(env = process.env) {
   const parsed = Number(env.ORKESTR_CODEX_APP_SERVER_HISTORY_SYNC_INTERVAL_MS || 60000);
   return Number.isFinite(parsed) ? Math.max(0, parsed) : 60000;
+}
+
+function workspaceForThread(thread = {}) {
+  return clean(thread.cwd || thread.workspace || thread.repoPath || thread.worktreePath);
 }
 
 function scheduleCodexAppServerInputDelivery(threadId, env = process.env, delayMs = 0) {
@@ -83,6 +88,8 @@ export function stopCodexAppServerClients() {
 
 export async function startCodexAppServerThread(thread, env = process.env) {
   if (!codexAppServerEnabled(env)) return null;
+  const workspace = workspaceForThread(thread);
+  if (workspace) await ensureRuntimeAgentsFile(workspace, env).catch(() => {});
   const client = await getCodexAppServerClient({ env, home: runtimeHome(env) });
   const result = await client.request("thread/start", threadStartParams(thread));
   const codexThread = result?.thread || {};
@@ -130,6 +137,8 @@ export async function startCodexAppServerThread(thread, env = process.env) {
 export async function resumeCodexAppServerThread(thread, env = process.env) {
   const id = codexThreadId(thread);
   if (!id) throw new Error("codex_thread_id_required");
+  const workspace = workspaceForThread(thread);
+  if (workspace) await ensureRuntimeAgentsFile(workspace, env).catch(() => {});
   const client = await getCodexAppServerClient({ env, home: runtimeHome(env) });
   const result = await client.request("thread/resume", { threadId: id });
   const codexThread = result?.thread || {};

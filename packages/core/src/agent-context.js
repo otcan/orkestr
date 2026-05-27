@@ -15,6 +15,14 @@ function isInside(parent, child) {
   return Boolean(relative) && !relative.startsWith("..") && !path.isAbsolute(relative);
 }
 
+function managedWorkspaceRoots(paths, env = process.env) {
+  return [
+    paths.workspaces,
+    env.ORKESTR_RUNTIME_WORKSPACE_ROOT,
+    env.ORKESTR_CLONE_ROOT,
+  ].map(clean).filter(Boolean).map((item) => path.resolve(item));
+}
+
 async function fileExists(filePath) {
   return fs.stat(filePath).then((stats) => stats.isFile()).catch(() => false);
 }
@@ -22,7 +30,15 @@ async function fileExists(filePath) {
 function runtimeAgentsMarkdown() {
   return `# AGENTS.md
 
+<!-- orkestr-runtime-agents-md:v2 -->
+
 This is an Orkestr-managed runtime workspace.
+
+Orkestr is the host application around this Codex session. It owns threads,
+browser pairing, connector status, timers, managed desktops, WhatsApp/Gmail
+routing, and runtime lifecycle. Treat requests about Orkestr itself as requests
+to inspect or operate the local Orkestr runtime, not as generic product or auth
+questions.
 
 Use dynamic discovery for live Orkestr context:
 
@@ -41,6 +57,12 @@ Orkestr capabilities:
 - Threads: \`orkestr list\`, \`orkestr send <thread> "<message>"\`,
   \`orkestr wake <thread>\`, \`orkestr reset <thread>\`. \`orkestr sleep\` is
   only for legacy tmux runtimes.
+- Browser pairing/security: \`orkestr security challenges\`,
+  \`orkestr security approve <challenge-id>\`, \`orkestr security reject
+  <challenge-id>\`, and \`orkestr security sessions\`. If the user asks to
+  approve an Orkestr/browser pairing challenge and provides the challenge ID,
+  run \`orkestr security approve <challenge-id>\` from this host. Only approve
+  a challenge when the user explicitly asks for that exact challenge.
 - Timers: \`orkestr timers list\`, \`orkestr timers run <timer-id>\`,
   \`orkestr doctor timers\`.
 - Browsers/desktops: use \`GET /api/browser-sessions\`,
@@ -55,6 +77,8 @@ Safety rules:
   storage directly.
 - Do not assume a desktop is free because a profile directory exists; acquire a
   lease first.
+- Do not treat Orkestr browser-pairing challenge IDs as OpenAI, Codex, or
+  third-party auth codes. They are local Orkestr security challenges.
 `;
 }
 
@@ -66,10 +90,20 @@ export async function ensureRuntimeAgentsFile(workspace, env = process.env) {
   const paths = await ensureDataDirs(env);
   const resolvedWorkspace = path.resolve(targetWorkspace);
   const target = path.join(resolvedWorkspace, "AGENTS.md");
-  if (await fileExists(target)) return { written: false, reason: "exists", path: target };
   const allowExternal = clean(env.ORKESTR_RUNTIME_AGENTS_MD).toLowerCase() === "force";
-  if (!allowExternal && !isInside(paths.workspaces, resolvedWorkspace)) {
+  const managed = managedWorkspaceRoots(paths, env).some((root) => isInside(root, resolvedWorkspace));
+  if (!allowExternal && !managed) {
     return { written: false, reason: "external_workspace", path: target };
+  }
+  if (await fileExists(target)) {
+    const existing = await fs.readFile(target, "utf8").catch(() => "");
+    if (!existing.includes("orkestr-runtime-agents-md:") && !existing.includes("This is an Orkestr-managed runtime workspace.")) {
+      return { written: false, reason: "exists", path: target };
+    }
+    const next = runtimeAgentsMarkdown();
+    if (existing === next) return { written: false, reason: "current", path: target };
+    await fs.writeFile(target, next, { encoding: "utf8" });
+    return { written: true, reason: "updated", path: target };
   }
   await fs.mkdir(resolvedWorkspace, { recursive: true });
   await fs.writeFile(target, runtimeAgentsMarkdown(), { encoding: "utf8", flag: "wx" }).catch((error) => {
