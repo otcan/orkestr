@@ -19,6 +19,7 @@ export class OpsPageComponent implements OnInit, OnDestroy {
   @Output() toolsViewChange = new EventEmitter<ToolsView>();
 
   busy = false;
+  activeBrowserActionSlug = "";
   error = "";
   opsSetup: SetupStatus | null = null;
   opsVersion: VersionResponse | null = null;
@@ -123,14 +124,16 @@ export class OpsPageComponent implements OnInit, OnDestroy {
   async browserAction(browser: BrowserSession, action: "prepare" | "start" | "stop" | "restart" | "cleanup"): Promise<void> {
     const slug = this.browserSlug(browser);
     if (!slug) return;
-    this.busy = true;
+    if (this.browserActionBusy(browser)) return;
+    this.activeBrowserActionSlug = slug;
     try {
       await firstValueFrom(this.api.browserAction(slug, action));
       await this.loadOps(false);
     } catch (error) {
       this.error = this.errorText(error);
     } finally {
-      this.busy = false;
+      this.activeBrowserActionSlug = "";
+      this.renderNow();
     }
   }
 
@@ -208,6 +211,11 @@ export class OpsPageComponent implements OnInit, OnDestroy {
   browserOpenUrl(browser: BrowserSession): string {
     if (this.browserStatus(browser) !== "running") return "";
     return String(browser.desk_url || browser.url || "").trim();
+  }
+
+  browserActionBusy(browser: BrowserSession): boolean {
+    const slug = this.browserSlug(browser);
+    return !!slug && this.activeBrowserActionSlug === slug;
   }
 
   canBrowserAction(browser: BrowserSession, action: "prepare" | "start" | "stop" | "restart" | "cleanup"): boolean {

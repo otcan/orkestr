@@ -170,19 +170,19 @@
           </div>
           <div class="desktop-actions">
             @if (canBrowserAction(browser, 'prepare')) {
-              <button type="button" (click)="browserAction(browser, 'prepare')" [disabled]="busy">Prepare</button>
+              <button type="button" (click)="browserAction(browser, 'prepare')" [disabled]="browserActionBusy(browser)">Prepare</button>
             }
             @if (canBrowserAction(browser, 'start')) {
-              <button type="button" (click)="browserAction(browser, 'start')" [disabled]="busy">Start</button>
+              <button type="button" (click)="browserAction(browser, 'start')" [disabled]="browserActionBusy(browser)">Start</button>
             }
             @if (canBrowserAction(browser, 'stop')) {
-              <button type="button" (click)="browserAction(browser, 'stop')" [disabled]="busy">Stop</button>
+              <button type="button" (click)="browserAction(browser, 'stop')" [disabled]="browserActionBusy(browser)">Stop</button>
             }
             @if (canBrowserAction(browser, 'restart')) {
-              <button type="button" (click)="browserAction(browser, 'restart')" [disabled]="busy">Restart</button>
+              <button type="button" (click)="browserAction(browser, 'restart')" [disabled]="browserActionBusy(browser)">Restart</button>
             }
             @if (canBrowserAction(browser, 'cleanup')) {
-              <button class="secondary" type="button" (click)="browserAction(browser, 'cleanup')" [disabled]="busy">Cleanup</button>
+              <button class="secondary" type="button" (click)="browserAction(browser, 'cleanup')" [disabled]="browserActionBusy(browser)">Cleanup</button>
             }
           </div>
         </article>

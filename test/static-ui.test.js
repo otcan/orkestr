@@ -71,6 +71,9 @@ test("ops desktop links are only shown for running desktops", async () => {
 
   assert.match(template, /@if \(browserOpenUrl\(browser\)\)/);
   assert.doesNotMatch(template, /@if \(browser\.desk_url \|\| browser\.url\)/);
+  assert.match(template, /\[disabled\]="browserActionBusy\(browser\)"/);
+  assert.doesNotMatch(template, /browserAction\(browser, 'start'\)" \[disabled\]="busy"/);
   assert.match(component, /browserOpenUrl\(browser: BrowserSession\): string/);
   assert.match(component, /this\.browserStatus\(browser\) !== "running"/);
+  assert.match(component, /activeBrowserActionSlug/);
 });
