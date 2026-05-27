@@ -5,6 +5,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { readConnectorConfig } from "../../storage/src/config.js";
 import { dataPaths } from "../../storage/src/paths.js";
+import { activeCodexRuntimeAuthInvalid } from "../../core/src/codex-auth-health.js";
 import { readOverlay } from "../../core/src/overlay.js";
 import { CODEX_DISABLED_ON_MACOS, codexAppServerProbe, codexLoginStatus, defaultCodexHome } from "./codex.js";
 import { getWhatsAppStatus } from "./whatsapp.js";
@@ -112,6 +113,9 @@ export async function getConnectorStatuses({ env = process.env, home = os.homedi
   const codexAppServerProbeResult = codex.command && codexAuth?.connected && codexAppServerAvailable
     ? await codexAppServerProbe({ env, home, command: codex.command })
     : null;
+  const codexRuntimeAuthInvalid = codex.command && codexAuth?.connected
+    ? await activeCodexRuntimeAuthInvalid({ env, codexAuthPath })
+    : null;
   const timersExist = await pathExists(paths.timers);
   const linkedinProfileExists = await pathExists(path.join(paths.browsers, "linkedin"));
   const gmailProfileExists = await pathExists(path.join(paths.browsers, "gmail"));
@@ -124,6 +128,7 @@ export async function getConnectorStatuses({ env = process.env, home = os.homedi
   const codexEnvKey = Boolean(env.OPENAI_API_KEY);
   const codexAuthInvalid = Boolean(codex.command && codexAuthExists && codexAuth && !codexAuth.connected);
   const codexAppServerInvalid = Boolean(codex.command && codexAuth?.connected && codexAppServerAvailable && codexAppServerProbeResult && !codexAppServerProbeResult.ok);
+  const codexRuntimeInvalid = Boolean(codexRuntimeAuthInvalid);
   const whatsapp = await getWhatsAppStatus(env);
   const overlay = await readOverlay(env);
 
@@ -143,6 +148,22 @@ export async function getConnectorStatuses({ env = process.env, home = os.homedi
             statusText: codexAuth?.statusText || "",
             reason: "codex_auth_invalid",
           })
+        : codexRuntimeInvalid
+          ? status("codex", "Codex Agent", "broken", "Codex login status succeeds, but a live Codex session reported an invalidated auth token. Run Codex login again before running coding agents.", {
+              command: codex.command,
+              version: codex.version,
+              codexHome,
+              runtime: codexRuntime,
+              appServer: codexAppServerAvailable ? "available" : "missing",
+              authMode: codexAuth?.authMode || null,
+              statusText: codexAuth?.statusText || "",
+              reason: codexRuntimeAuthInvalid.reason || "codex_runtime_auth_invalid",
+              detectedAt: codexRuntimeAuthInvalid.detectedAt || null,
+              threadId: codexRuntimeAuthInvalid.threadId || null,
+              threadName: codexRuntimeAuthInvalid.threadName || null,
+              tailHash: codexRuntimeAuthInvalid.tailHash || null,
+              error: codexRuntimeAuthInvalid.summary || "",
+            })
         : codexAppServerInvalid
           ? status("codex", "Codex Agent", "broken", "Codex login status succeeds, but the app-server cannot authenticate. Run Codex login again before running coding agents.", {
               command: codex.command,

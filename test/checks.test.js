@@ -2,7 +2,9 @@ import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { setTimeout as sleep } from "node:timers/promises";
 import test from "node:test";
+import { recordCodexRuntimeAuthInvalidSignal } from "../packages/core/src/codex-auth-health.js";
 import { getSetupStatus } from "../packages/core/src/setup.js";
 
 async function writeFakeCodex(home, lines) {
@@ -128,6 +130,89 @@ test("Codex invalidates connected setup when app-server cannot start after an up
   assert.equal(codex.state, "broken");
   assert.equal(codex.details.reason, "codex_app_server_auth_invalid");
   assert.match(codex.summary, /codex login|sign in again|reconnect/i);
+});
+
+test("Codex invalidates connected setup when a live runtime reports token invalidated", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-codex-runtime-invalid-"));
+  const codexHome = path.join(home, "codex-home");
+  await fs.mkdir(codexHome, { recursive: true });
+  await fs.writeFile(path.join(codexHome, "auth.json"), JSON.stringify({ token: "old" }));
+  await recordCodexRuntimeAuthInvalidSignal({
+    thread: { id: "thread-test", name: "Test" },
+    progress: {
+      codexAuthInvalid: true,
+      codexAuthInvalidReason: "codex_token_invalidated",
+      codexAuthInvalidMessage: "Codex reported an invalidated auth token.",
+      summary: "Codex sign-in expired",
+      tailHash: "hash-test",
+    },
+  }, { ORKESTR_HOME: home });
+  const fakeCodex = await writeFakeCodex(home, [
+    "#!/bin/sh",
+    "if [ \"$1\" = \"--version\" ]; then echo 'codex-cli runtime-invalid-test'; exit 0; fi",
+    "if [ \"$1\" = \"login\" ] && [ \"$2\" = \"status\" ]; then echo 'Logged in using ChatGPT'; exit 0; fi",
+    "if [ \"$1\" = \"app-server\" ] && [ \"$2\" = \"--help\" ]; then echo 'app-server help'; exit 0; fi",
+    "if [ \"$1\" = \"app-server\" ] && [ \"$2\" = \"--listen\" ]; then",
+    "  read line",
+    "  echo '{\"id\":1,\"result\":{\"serverInfo\":{\"name\":\"fake-codex\"}}}'",
+    "  sleep 1",
+    "  exit 0",
+    "fi",
+    "echo unexpected \"$@\" >&2",
+    "exit 2",
+  ]);
+
+  const status = await getSetupStatus({
+    env: { ORKESTR_HOME: home, CODEX_HOME: codexHome, ORKESTR_CODEX_BIN: fakeCodex },
+    home,
+  });
+  const codex = status.connectors.find((connector) => connector.id === "codex");
+
+  assert.equal(codex.state, "broken");
+  assert.equal(codex.details.reason, "codex_token_invalidated");
+  assert.equal(codex.details.threadId, "thread-test");
+  assert.match(codex.summary, /live Codex session|login status succeeds/i);
+});
+
+test("Codex ignores runtime auth-invalid markers after auth is refreshed", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-codex-runtime-refreshed-"));
+  const codexHome = path.join(home, "codex-home");
+  const authPath = path.join(codexHome, "auth.json");
+  await fs.mkdir(codexHome, { recursive: true });
+  await fs.writeFile(authPath, JSON.stringify({ token: "old" }));
+  await recordCodexRuntimeAuthInvalidSignal({
+    thread: { id: "thread-test", name: "Test" },
+    progress: {
+      codexAuthInvalid: true,
+      codexAuthInvalidReason: "codex_token_invalidated",
+      summary: "Codex sign-in expired",
+      tailHash: "hash-test",
+    },
+  }, { ORKESTR_HOME: home });
+  await sleep(20);
+  await fs.writeFile(authPath, JSON.stringify({ token: "new" }));
+  const fakeCodex = await writeFakeCodex(home, [
+    "#!/bin/sh",
+    "if [ \"$1\" = \"--version\" ]; then echo 'codex-cli runtime-refreshed-test'; exit 0; fi",
+    "if [ \"$1\" = \"login\" ] && [ \"$2\" = \"status\" ]; then echo 'Logged in using ChatGPT'; exit 0; fi",
+    "if [ \"$1\" = \"app-server\" ] && [ \"$2\" = \"--help\" ]; then echo 'app-server help'; exit 0; fi",
+    "if [ \"$1\" = \"app-server\" ] && [ \"$2\" = \"--listen\" ]; then",
+    "  read line",
+    "  echo '{\"id\":1,\"result\":{\"serverInfo\":{\"name\":\"fake-codex\"}}}'",
+    "  sleep 1",
+    "  exit 0",
+    "fi",
+    "echo unexpected \"$@\" >&2",
+    "exit 2",
+  ]);
+
+  const status = await getSetupStatus({
+    env: { ORKESTR_HOME: home, CODEX_HOME: codexHome, ORKESTR_CODEX_BIN: fakeCodex },
+    home,
+  });
+  const codex = status.connectors.find((connector) => connector.id === "codex");
+
+  assert.equal(codex.state, "connected");
 });
 
 test("private overlay can provide host-native connector status", async () => {

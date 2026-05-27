@@ -6,6 +6,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { codexLoginStatus, defaultCodexHome } from "../../connectors/src/codex.js";
 import { dataPaths } from "../../storage/src/paths.js";
+import { activeCodexRuntimeAuthInvalid } from "./codex-auth-health.js";
 import { codexAppServerStatus } from "./codex-app-server-client.js";
 import { securityStatus } from "./security.js";
 
@@ -136,6 +137,19 @@ async function codexCheck(env, home) {
       });
     }
     if (status.connected) {
+      const runtimeAuthInvalid = await activeCodexRuntimeAuthInvalid({
+        env,
+        codexAuthPath: path.join(defaultCodexHome(env, home), "auth.json"),
+      });
+      if (runtimeAuthInvalid) {
+        return doctorCheck("codex", "Codex CLI", "error", "A live Codex session reported an invalidated auth token.", {
+          command: status.command,
+          path: status.codexHome,
+          authMode: status.authMode || "",
+          reason: runtimeAuthInvalid.reason || "codex_runtime_auth_invalid",
+          repair: "Run Codex login again from setup before starting coding agents.",
+        });
+      }
       const appServer = await codexAppServerStatus({ env, home });
       if (!appServer.ok) {
         return doctorCheck("codex", "Codex CLI", "error", appServer.error || "Codex app-server is not available.", {

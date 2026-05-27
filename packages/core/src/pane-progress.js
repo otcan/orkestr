@@ -193,7 +193,21 @@ function paneHasRecentError(lines) {
   ));
 }
 
-function summaryForProgress({ stateHint, codexMode, planImplementationReady, planImplementationMenuVisible }) {
+function codexAuthInvalidReason(text) {
+  const body = String(text || "");
+  if (/\btoken_invalidated\b/i.test(body)) return "codex_token_invalidated";
+  if (/authentication token has been invalidated/i.test(body)) return "codex_token_invalidated";
+  if (/MCP client for [`'"]?codex_apps[`'"]?\s+failed to start/i.test(body) && /\b(?:401|auth|token|sign in)\b/i.test(body)) {
+    return "codex_apps_auth_invalid";
+  }
+  if (/MCP startup incomplete\s*\(failed:\s*codex_apps\)/i.test(body) && /\b(?:401|auth|token|sign in)\b/i.test(body)) {
+    return "codex_apps_auth_invalid";
+  }
+  return "";
+}
+
+function summaryForProgress({ stateHint, codexMode, planImplementationReady, planImplementationMenuVisible, codexAuthInvalid }) {
+  if (codexAuthInvalid) return "Codex sign-in expired";
   if (planImplementationReady || planImplementationMenuVisible) return "Implement plan?";
   if (stateHint === "error") return "Error";
   if (stateHint === "frozen") return "Frozen";
@@ -215,12 +229,13 @@ export function paneProgressFromText(text, options = {}) {
   const codexUpdatePromptChoice = paneCodexUpdatePromptChoice(text);
   const needsCodexUpdatePromptSkip = Boolean(codexUpdatePromptChoice);
   const conversationInterrupted = paneConversationInterrupted(text);
+  const codexAuthInvalid = codexAuthInvalidReason(text);
   const backgroundWork = paneBackgroundWork(text);
   const working = paneWorking(text) || backgroundWork;
   const staleWorkingPrompt = paneStaleWorkingPrompt(text);
   const promptReady = !working && panePromptReady(text);
   let stateHint = "unknown";
-  if (paneHasRecentError(tailLines)) stateHint = "error";
+  if (codexAuthInvalid || paneHasRecentError(tailLines)) stateHint = "error";
   else if (planImplementationReady || planImplementationMenuVisible || codexMode === "plan") stateHint = "planning";
   else if (needsResumeDirectoryConfirmation || needsCodexUpdatePromptSkip || paneNeedInputMenuVisible(text)) stateHint = "awaiting_input";
   else if (working) stateHint = "working";
@@ -230,6 +245,7 @@ export function paneProgressFromText(text, options = {}) {
     codexMode,
     planImplementationReady,
     planImplementationMenuVisible,
+    codexAuthInvalid: Boolean(codexAuthInvalid),
   });
   return {
     capturedAt: nowIso(),
@@ -244,6 +260,9 @@ export function paneProgressFromText(text, options = {}) {
     conversationInterrupted,
     conversationInterruptedLine: conversationInterrupted ? paneConversationInterruptionLine(text) : "",
     conversationInterruptedHash: conversationInterrupted ? paneConversationInterruptionHash(text) : "",
+    codexAuthInvalid: Boolean(codexAuthInvalid),
+    codexAuthInvalidReason: codexAuthInvalid,
+    codexAuthInvalidMessage: codexAuthInvalid ? "Codex reported an invalidated auth token. Reconnect Codex before starting coding agents." : "",
     codexMode,
     planImplementationReady,
     planImplementationMenuVisible,

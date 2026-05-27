@@ -115,3 +115,21 @@ test("pane progress marks recent delivery failures as errors", () => {
   assert.equal(progress.stateHint, "error");
   assert.equal(progress.summary, "Error");
 });
+
+test("pane progress marks invalidated codex_apps auth as an auth error", () => {
+  const progress = paneProgressFromText([
+    "› hi",
+    "",
+    "⚠ MCP client for `codex_apps` failed to start: MCP startup failed: handshaking with MCP server failed.",
+    "Unexpected content type: Some(\"text/plain; body: {\\\"error\\\":{\\\"message\\\":\\\"Your authentication token has been invalidated. Please try signing in again.\\\",\\\"code\\\":\\\"token_invalidated\\\"},\\\"status\\\":401}\")",
+    "⚠ MCP startup incomplete (failed: codex_apps)",
+    "› Use /skills to list available skills",
+  ].join("\n"), {
+    tailLines: 12,
+  });
+
+  assert.equal(progress.stateHint, "error");
+  assert.equal(progress.summary, "Codex sign-in expired");
+  assert.equal(progress.codexAuthInvalid, true);
+  assert.equal(progress.codexAuthInvalidReason, "codex_token_invalidated");
+});
