@@ -11,6 +11,8 @@ function clean(value) {
   return String(value || "").trim();
 }
 
+const AUTH_REFRESH_MTIME_SKEW_MS = 10;
+
 export function codexAuthHealthPath(env = process.env) {
   return path.join(dataPaths(env).home, "codex-auth-health.json");
 }
@@ -29,7 +31,7 @@ export async function activeCodexRuntimeAuthInvalid({ env = process.env, codexAu
   const detectedMs = Date.parse(clean(health.detectedAt || health.updatedAt));
   if (codexAuthPath && Number.isFinite(detectedMs) && detectedMs > 0) {
     const authStat = await fs.stat(codexAuthPath).catch(() => null);
-    if (authStat?.mtimeMs > detectedMs) return null;
+    if (authStat?.mtimeMs > detectedMs + AUTH_REFRESH_MTIME_SKEW_MS) return null;
   }
   return health;
 }
