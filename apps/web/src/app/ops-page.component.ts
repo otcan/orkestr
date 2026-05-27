@@ -205,6 +205,11 @@ export class OpsPageComponent implements OnInit, OnDestroy {
     return browser.cdp_ok === false ? "CDP down" : "CDP ready";
   }
 
+  browserOpenUrl(browser: BrowserSession): string {
+    if (this.browserStatus(browser) !== "running") return "";
+    return String(browser.desk_url || browser.url || "").trim();
+  }
+
   canBrowserAction(browser: BrowserSession, action: "prepare" | "start" | "stop" | "restart" | "cleanup"): boolean {
     if (!browser.control) {
       if (action === "prepare" || action === "start") return true;

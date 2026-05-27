@@ -64,3 +64,13 @@ test("global shell keeps onboarding footer reachable", async () => {
   assert.doesNotMatch(bodyBlock, /overflow:\s*hidden/);
   assert.match(styles, /\.app-shell\s*{[^}]*overflow:\s*hidden/s);
 });
+
+test("ops desktop links are only shown for running desktops", async () => {
+  const template = await fs.readFile("apps/web/src/app/ops-page.component.html", "utf8");
+  const component = await fs.readFile("apps/web/src/app/ops-page.component.ts", "utf8");
+
+  assert.match(template, /@if \(browserOpenUrl\(browser\)\)/);
+  assert.doesNotMatch(template, /@if \(browser\.desk_url \|\| browser\.url\)/);
+  assert.match(component, /browserOpenUrl\(browser: BrowserSession\): string/);
+  assert.match(component, /this\.browserStatus\(browser\) !== "running"/);
+});

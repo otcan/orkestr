@@ -161,8 +161,8 @@
             </div>
           }
           <div class="desktop-links">
-            @if (browser.desk_url || browser.url) {
-              <a class="button-link" [href]="browser.desk_url || browser.url || ''" target="_blank" rel="noreferrer">Open Desk</a>
+            @if (browserOpenUrl(browser)) {
+              <a class="button-link" [href]="browserOpenUrl(browser)" target="_blank" rel="noreferrer">Open Desk</a>
             }
             @if (browser.cdp_url) {
               <a class="button-link" [href]="browser.cdp_url + '/json/version'" target="_blank" rel="noreferrer">CDP</a>
