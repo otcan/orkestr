@@ -418,6 +418,7 @@ test("Codex app-server mirrors interrupted turns to the thread and WhatsApp", as
 
     assert.ok(notice);
     assert.match(notice.text, /^Codex conversation interrupted/);
+    assert.doesNotMatch(notice.text, /\/now/);
     assert.equal(notice.parentMessageId, inbound.id);
     assert.equal(notice.connector, "whatsapp");
     assert.equal(notice.chatId, "chat-interrupted-app-server");
@@ -434,6 +435,7 @@ test("Codex app-server mirrors interrupted turns to the thread and WhatsApp", as
     assert.equal(delivery.delivered[0].deliveryType, "router_update");
     assert.equal(calls[0].body.to, "chat-interrupted-app-server");
     assert.match(calls[0].body.text, /^Codex conversation interrupted/);
+    assert.doesNotMatch(calls[0].body.text, /\/now/);
   } finally {
     stopCodexAppServerClients();
   }
@@ -495,6 +497,7 @@ test("Codex app-server mirrors interrupted bound threads without a WhatsApp pare
     assert.equal(delivery.delivered[0].deliveryType, "router_update");
     assert.equal(calls[0].body.to, "chat-bound-interrupted");
     assert.match(calls[0].body.text, /^Codex conversation interrupted/);
+    assert.doesNotMatch(calls[0].body.text, /\/now/);
   } finally {
     stopCodexAppServerClients();
   }
@@ -626,7 +629,8 @@ test("Codex app-server recovery marks stale delivered turns ready and appends on
     assert.equal(notices.length, 1);
     assert.equal(notices[0].parentMessageId, null);
     assert.equal(notices[0].codexTurnId, "stale-turn");
-    assert.match(notices[0].text, /^Codex conversation interrupted/);
+    assert.match(notices[0].text, /^Codex response missing/);
+    assert.doesNotMatch(notices[0].text, /\/now/);
     assert.ok(messages.find((message) => message.id === input.id));
 
     const second = await recoverStaleCodexAppServerTurns(env);
@@ -840,7 +844,9 @@ test("Codex app-server recovery reports progress-only turns with no final answer
     assert.equal(notice.parentMessageId, input.id);
     assert.equal(notice.connector, "whatsapp");
     assert.equal(notice.chatId, "chat-progress-only");
+    assert.match(notice.text, /^Codex stopped before final answer/);
     assert.match(notice.text, /progress updates/);
+    assert.doesNotMatch(notice.text, /\/now/);
 
     const second = await recoverStaleCodexAppServerTurns(env);
     const messagesAfterSecond = await listThreadMessages(thread.id, env);

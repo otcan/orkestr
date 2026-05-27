@@ -87,14 +87,19 @@ function latestIncompleteDeliveredTurn(messages = []) {
 }
 
 function staleTurnNoticeText(reason = "no_assistant_response") {
-  const detail = reason === "no_final_answer"
-    ? "Orkestr found progress updates for this turn, but Codex stopped or went idle before a final answer was recorded."
-    : "Orkestr found a delivered message with no assistant response after the Codex runtime stopped, restarted, or lost the active turn.";
+  if (reason === "no_final_answer") {
+    return [
+      "Codex stopped before final answer",
+      "",
+      "Orkestr found progress updates for this turn, but Codex went idle before a final answer was recorded.",
+      "Send the next instruction normally to continue.",
+    ].join("\n");
+  }
   return [
-    "Codex conversation interrupted",
+    "Codex response missing",
     "",
-    detail,
-    "Send the next instruction normally to continue. Use /now only when you intentionally want to interrupt active work.",
+    "Orkestr found a delivered message with no assistant response after the Codex runtime stopped, restarted, or lost the active turn.",
+    "Send the next instruction normally to continue.",
   ].join("\n");
 }
 

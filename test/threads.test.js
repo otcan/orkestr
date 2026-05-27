@@ -1218,6 +1218,7 @@ test("runtime sync mirrors Codex conversation interruption banners into thread m
 
     assert.equal(notices.length, 1);
     assert.match(notices[0].text, /^Codex conversation interrupted/);
+    assert.doesNotMatch(notices[0].text, /\/now/);
     assert.equal(notices[0].parentMessageId, inbound.id);
     assert.equal(notices[0].connector, "whatsapp");
     assert.equal(notices[0].chatId, "chat-conversation-interrupted");

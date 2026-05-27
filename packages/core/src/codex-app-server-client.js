@@ -53,7 +53,7 @@ function codexConversationInterruptionNoticeText() {
     "Codex conversation interrupted",
     "",
     "Codex reported that the active turn was interrupted before it produced a normal reply.",
-    "Send the next instruction normally to continue. Use /now only when you intentionally want to interrupt active work.",
+    "Send the next instruction normally to continue.",
   ].join("\n");
 }
 
