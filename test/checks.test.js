@@ -5,6 +5,12 @@ import path from "node:path";
 import test from "node:test";
 import { getSetupStatus } from "../packages/core/src/setup.js";
 
+async function writeFakeCodex(home, lines) {
+  const command = path.join(home, "codex");
+  await fs.writeFile(command, lines.join("\n"), { mode: 0o755 });
+  return command;
+}
+
 test("setup status includes the V1 connector set", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-checks-"));
   const status = await getSetupStatus({ env: { ORKESTR_HOME: home }, home });
@@ -50,30 +56,78 @@ test("Codex reports partial when the runtime key exists but Codex is not logged 
 
 test("Codex reports connected when the CLI login status succeeds", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-codex-status-"));
-  const bin = path.join(home, "bin");
-  await fs.mkdir(bin, { recursive: true });
-  await fs.writeFile(
-    path.join(bin, "codex"),
-    [
-      "#!/bin/sh",
-      "if [ \"$1\" = \"login\" ] && [ \"$2\" = \"status\" ]; then echo 'Logged in using API key'; exit 0; fi",
-      "echo codex-cli test",
-    ].join("\n"),
-  );
-  await fs.chmod(path.join(bin, "codex"), 0o755);
-  const priorPath = process.env.PATH;
-  process.env.PATH = `${bin}${path.delimiter}${priorPath || ""}`;
+  const fakeCodex = await writeFakeCodex(home, [
+    "#!/bin/sh",
+    "if [ \"$1\" = \"--version\" ]; then echo 'codex-cli test'; exit 0; fi",
+    "if [ \"$1\" = \"login\" ] && [ \"$2\" = \"status\" ]; then echo 'Logged in using API key'; exit 0; fi",
+    "if [ \"$1\" = \"app-server\" ] && [ \"$2\" = \"--help\" ]; then echo 'app-server help'; exit 0; fi",
+    "if [ \"$1\" = \"app-server\" ] && [ \"$2\" = \"--listen\" ]; then",
+    "  read line",
+    "  echo '{\"id\":1,\"result\":{\"serverInfo\":{\"name\":\"fake-codex\"}}}'",
+    "  sleep 1",
+    "  exit 0",
+    "fi",
+    "echo unexpected \"$@\" >&2",
+    "exit 2",
+  ]);
 
-  try {
-    const status = await getSetupStatus({ env: { ORKESTR_HOME: home }, home });
-    const codex = status.connectors.find((connector) => connector.id === "codex");
-    assert.equal(codex.state, "connected");
-    assert.equal(codex.details.authMode, "api_key");
-    assert.match(codex.summary, /signed in/);
-  } finally {
-    if (priorPath === undefined) delete process.env.PATH;
-    else process.env.PATH = priorPath;
-  }
+  const status = await getSetupStatus({
+    env: { ORKESTR_HOME: home, CODEX_HOME: path.join(home, "codex-home"), ORKESTR_CODEX_BIN: fakeCodex },
+    home,
+  });
+  const codex = status.connectors.find((connector) => connector.id === "codex");
+  assert.equal(codex.state, "connected");
+  assert.equal(codex.details.authMode, "api_key");
+  assert.match(codex.summary, /signed in/);
+});
+
+test("Codex invalidates a stale auth file when CLI login status no longer works", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-codex-stale-auth-"));
+  const codexHome = path.join(home, "codex-home");
+  await fs.mkdir(codexHome, { recursive: true });
+  await fs.writeFile(path.join(codexHome, "auth.json"), JSON.stringify({ token: "stale" }));
+  const fakeCodex = await writeFakeCodex(home, [
+    "#!/bin/sh",
+    "if [ \"$1\" = \"--version\" ]; then echo 'codex-cli test'; exit 0; fi",
+    "if [ \"$1\" = \"login\" ] && [ \"$2\" = \"status\" ]; then echo 'Not logged in: refresh token expired'; exit 1; fi",
+    "if [ \"$1\" = \"app-server\" ] && [ \"$2\" = \"--help\" ]; then echo 'app-server help'; exit 0; fi",
+    "echo unexpected \"$@\" >&2",
+    "exit 2",
+  ]);
+
+  const status = await getSetupStatus({
+    env: { ORKESTR_HOME: home, CODEX_HOME: codexHome, ORKESTR_CODEX_BIN: fakeCodex },
+    home,
+  });
+  const codex = status.connectors.find((connector) => connector.id === "codex");
+
+  assert.equal(codex.state, "broken");
+  assert.equal(codex.details.reason, "codex_auth_invalid");
+  assert.match(codex.summary, /reconnect|sign in again/i);
+});
+
+test("Codex invalidates connected setup when app-server cannot start after an update", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-codex-app-server-invalid-"));
+  const codexHome = path.join(home, "codex-home");
+  const fakeCodex = await writeFakeCodex(home, [
+    "#!/bin/sh",
+    "if [ \"$1\" = \"--version\" ]; then echo 'codex-cli updated-test'; exit 0; fi",
+    "if [ \"$1\" = \"login\" ] && [ \"$2\" = \"status\" ]; then echo 'Logged in using ChatGPT'; exit 0; fi",
+    "if [ \"$1\" = \"app-server\" ] && [ \"$2\" = \"--help\" ]; then echo 'app-server help'; exit 0; fi",
+    "if [ \"$1\" = \"app-server\" ] && [ \"$2\" = \"--listen\" ]; then echo 'Authentication failed. Run codex login again.' >&2; exit 1; fi",
+    "echo unexpected \"$@\" >&2",
+    "exit 2",
+  ]);
+
+  const status = await getSetupStatus({
+    env: { ORKESTR_HOME: home, CODEX_HOME: codexHome, ORKESTR_CODEX_BIN: fakeCodex },
+    home,
+  });
+  const codex = status.connectors.find((connector) => connector.id === "codex");
+
+  assert.equal(codex.state, "broken");
+  assert.equal(codex.details.reason, "codex_app_server_auth_invalid");
+  assert.match(codex.summary, /codex login|sign in again|reconnect/i);
 });
 
 test("private overlay can provide host-native connector status", async () => {

@@ -6,7 +6,7 @@ import { promisify } from "node:util";
 import { readConnectorConfig } from "../../storage/src/config.js";
 import { dataPaths } from "../../storage/src/paths.js";
 import { readOverlay } from "../../core/src/overlay.js";
-import { CODEX_DISABLED_ON_MACOS, codexLoginStatus, defaultCodexHome } from "./codex.js";
+import { CODEX_DISABLED_ON_MACOS, codexAppServerProbe, codexLoginStatus, defaultCodexHome } from "./codex.js";
 import { getWhatsAppStatus } from "./whatsapp.js";
 
 const execFileAsync = promisify(execFile);
@@ -109,6 +109,9 @@ export async function getConnectorStatuses({ env = process.env, home = os.homedi
   const codexRuntime = codexRuntimeKind(env);
   const codexAppServerHelp = codex.command ? await commandVersion(codex.command, ["app-server", "--help"]) : "";
   const codexAppServerAvailable = Boolean(codexAppServerHelp);
+  const codexAppServerProbeResult = codex.command && codexAuth?.connected && codexAppServerAvailable
+    ? await codexAppServerProbe({ env, home, command: codex.command })
+    : null;
   const timersExist = await pathExists(paths.timers);
   const linkedinProfileExists = await pathExists(path.join(paths.browsers, "linkedin"));
   const gmailProfileExists = await pathExists(path.join(paths.browsers, "gmail"));
@@ -119,6 +122,8 @@ export async function getConnectorStatuses({ env = process.env, home = os.homedi
   const openaiKey = env.OPENAI_API_KEY || openaiConfig.openaiApiKey || "";
   const codexAuthExists = await pathExists(codexAuthPath);
   const codexEnvKey = Boolean(env.OPENAI_API_KEY);
+  const codexAuthInvalid = Boolean(codex.command && codexAuthExists && codexAuth && !codexAuth.connected);
+  const codexAppServerInvalid = Boolean(codex.command && codexAuth?.connected && codexAppServerAvailable && codexAppServerProbeResult && !codexAppServerProbeResult.ok);
   const whatsapp = await getWhatsAppStatus(env);
   const overlay = await readOverlay(env);
 
@@ -127,7 +132,30 @@ export async function getConnectorStatuses({ env = process.env, home = os.homedi
       ? status("openai", "OpenAI API", "connected", "OpenAI API key is configured for direct API connectors and skills.")
       : status("openai", "OpenAI API", "not_connected", "Optional for coding agents. Add an OpenAI API key only for connectors or skills that call OpenAI directly."),
     codex:
-      codex.command && codexAuth?.connected && codexAppServerAvailable
+      codexAuthInvalid
+        ? status("codex", "Codex Agent", "broken", "Stored Codex sign-in is no longer valid. Reconnect Codex before running coding agents.", {
+            command: codex.command,
+            version: codex.version,
+            codexHome,
+            runtime: codexRuntime,
+            appServer: codexAppServerAvailable ? "available" : "missing",
+            authMode: null,
+            statusText: codexAuth?.statusText || "",
+            reason: "codex_auth_invalid",
+          })
+        : codexAppServerInvalid
+          ? status("codex", "Codex Agent", "broken", "Codex login status succeeds, but the app-server cannot authenticate. Run Codex login again before running coding agents.", {
+              command: codex.command,
+              version: codex.version,
+              codexHome,
+              runtime: codexRuntime,
+              appServer: "auth_invalid",
+              authMode: codexAuth?.authMode || null,
+              statusText: codexAuth?.statusText || "",
+              reason: codexAppServerProbeResult.reason || "codex_app_server_unavailable",
+              error: codexAppServerProbeResult.error || codexAppServerProbeResult.stderr || "",
+            })
+          : codex.command && codexAuth?.connected && codexAppServerAvailable
         ? status("codex", "Codex Agent", "connected", "Codex Agent runtime is installed, signed in, and app-server ready.", {
             command: codex.command,
             version: codex.version,

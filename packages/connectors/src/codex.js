@@ -29,6 +29,117 @@ export function codexCommand(env = process.env) {
   return command === CODEX_DISABLED_ON_MACOS ? "" : command;
 }
 
+function commandEnv(env = process.env, home = os.homedir(), codexHome = "") {
+  return {
+    ...process.env,
+    ...env,
+    HOME: runtimeHome(env, home),
+    CODEX_HOME: codexHome || defaultCodexHome(env, home),
+  };
+}
+
+function authInvalidText(value) {
+  return /(auth|credential|expired|login|logged\s*in|sign\s*in|token)/i.test(String(value || ""));
+}
+
+export async function codexAppServerProbe({ env = process.env, home = os.homedir(), command = codexCommand(env), timeoutMs = 2500 } = {}) {
+  if (!command) return { ok: false, available: false, reason: "codex_missing", error: "codex_missing" };
+  const codexHome = defaultCodexHome(env, home);
+  ensureCodexHome(codexHome);
+  return await new Promise((resolve) => {
+    let settled = false;
+    let stdout = "";
+    let stderr = "";
+    let child = null;
+    const finish = (result) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      if (child && !child.killed) child.kill("SIGTERM");
+      resolve({
+        ok: Boolean(result.ok),
+        available: result.available !== false,
+        command,
+        codexHome,
+        stdout: stdout.trim(),
+        stderr: stderr.trim(),
+        ...result,
+      });
+    };
+    const timer = setTimeout(() => {
+      finish({ ok: false, timedOut: true, reason: "codex_app_server_timeout", error: stderr || stdout || "codex_app_server_timeout" });
+    }, Math.max(1000, timeoutMs));
+    timer.unref?.();
+
+    try {
+      child = spawn(command, ["app-server", "--listen", "stdio://"], {
+        env: commandEnv(env, home, codexHome),
+        stdio: ["pipe", "pipe", "pipe"],
+      });
+    } catch (error) {
+      finish({
+        ok: false,
+        available: error?.code !== "ENOENT",
+        reason: error?.code === "ENOENT" ? "codex_missing" : "codex_app_server_unavailable",
+        error: error?.message || String(error),
+      });
+      return;
+    }
+
+    child.stdin.on("error", () => {});
+    child.stdout.on("data", (chunk) => {
+      stdout += String(chunk || "");
+      for (const line of stdout.split(/\r?\n/)) {
+        const text = line.trim();
+        if (!text) continue;
+        try {
+          const message = JSON.parse(text);
+          if (message.id === 1 && !message.error) finish({ ok: true, reason: "ok" });
+          if (message.id === 1 && message.error) {
+            const error = message.error.message || "codex_app_server_error";
+            finish({
+              ok: false,
+              reason: authInvalidText(error) ? "codex_app_server_auth_invalid" : "codex_app_server_unavailable",
+              error,
+            });
+          }
+        } catch {
+          // Ignore non-protocol output while waiting for the initialize response.
+        }
+      }
+    });
+    child.stderr.on("data", (chunk) => {
+      stderr += String(chunk || "");
+    });
+    child.on("error", (error) => {
+      finish({
+        ok: false,
+        available: error?.code !== "ENOENT",
+        reason: error?.code === "ENOENT" ? "codex_missing" : "codex_app_server_unavailable",
+        error: error?.message || String(error),
+      });
+    });
+    child.on("close", (code, signal) => {
+      const text = `${stderr}\n${stdout}`.trim();
+      finish({
+        ok: false,
+        code,
+        signal,
+        reason: authInvalidText(text) ? "codex_app_server_auth_invalid" : "codex_app_server_unavailable",
+        error: text || `codex_app_server_closed:${code ?? ""}:${signal ?? ""}`,
+      });
+    });
+    child.stdin.write(`${JSON.stringify({
+      id: 1,
+      method: "initialize",
+      params: {
+        clientInfo: { name: "orkestr_setup_status", version: "0.1.0" },
+        capabilities: { experimentalApi: true },
+      },
+    })}\n`);
+  });
+}
+
 function ensureCodexHome(codexHome) {
   try {
     fs.mkdirSync(codexHome, { recursive: true, mode: 0o700 });
