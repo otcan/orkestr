@@ -21,6 +21,7 @@
     "smoke": "node scripts/smoke.mjs",
     "smoke:public-domain": "bash scripts/smoke-public-domain.sh",
     "smoke:vps:aws": "bash scripts/smoke-vps-aws.sh",
+    "smoke:vps:k3s": "bash scripts/smoke-vps-k3s.sh",
     "install:local": "bash scripts/install.sh",
     "demo:coding-agent": "node scripts/coding-agent-demo.mjs",
     "demo:record": "node scripts/record-demo.mjs",

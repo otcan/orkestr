@@ -255,6 +255,19 @@ Add `-- --with-whatsapp` to also start the built-in WhatsApp bridge and wait for
 QR readiness on the fresh VPS. For an interactive phone-code link test, pass
 `-- --with-whatsapp --whatsapp-phone <number> --create-whatsapp-thread "WhatsApp VPS Smoke" --keep`.
 
+Installer changes can also be tested on an existing k3s host with KubeVirt:
+
+```bash
+npm run smoke:vps:k3s -- --local-bootstrap
+```
+
+That runner creates a disposable Ubuntu VM inside the k3s cluster, runs the same
+host-native bootstrap installer inside the VM, runs the Orkestr smoke test, and
+deletes the temporary namespace. If CDI cannot fetch the Ubuntu cloud image
+directly from inside the cluster, add `-- --cache-image-locally` to cache the VM
+image on the k3s host and serve it through a temporary in-cluster image-server
+pod during import.
+
 The lower-level installer remains available when you already know the host is
 prepared:
 

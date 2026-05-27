@@ -469,8 +469,7 @@ verify_k3s_after_orkestr() {
 }
 
 cleanup() {
-  local status
-  status="$?"
+  local status="$?"
   trap - EXIT
 
   if [ "$status" -ne 0 ]; then

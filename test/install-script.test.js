@@ -313,6 +313,30 @@ test("AWS VPS smoke runner can verify WhatsApp QR readiness", async () => {
   assert.match(script, /api\/connectors\/whatsapp\/bridge\/chats/);
 });
 
+test("k3s VPS smoke runner creates a disposable KubeVirt VM", async () => {
+  const script = await fs.readFile("scripts/smoke-vps-k3s.sh", "utf8");
+  const pkg = JSON.parse(await fs.readFile("package.json", "utf8"));
+  const { stdout } = await execFileAsync("bash", ["scripts/smoke-vps-k3s.sh", "--help"]);
+
+  await execFileAsync("bash", ["-n", "scripts/smoke-vps-k3s.sh"]);
+  assert.equal(pkg.scripts["smoke:vps:k3s"], "bash scripts/smoke-vps-k3s.sh");
+  assert.match(stdout, /--kubeconfig FILE/);
+  assert.match(stdout, /--local-bootstrap/);
+  assert.match(stdout, /--cache-image-locally/);
+  assert.match(stdout, /KubeVirt VM/);
+  assert.match(script, /http:\/\/cloud-images\.ubuntu\.com\/noble\/current/);
+  assert.match(script, /orkestr-image-server/);
+  assert.match(script, /python:3\.12-alpine/);
+  assert.match(script, /VirtualMachine/);
+  assert.match(script, /bridge: \{\}/);
+  assert.match(script, /DataVolume creation/);
+  assert.match(script, /DataVolume import/);
+  assert.match(script, /virtctl ssh/);
+  assert.match(script, /virtctl scp/);
+  assert.match(script, /npm run smoke/);
+  assert.match(script, /kubectl_k3s delete namespace/);
+});
+
 test("public domain smoke runner validates Caddy/TLS and browser pairing", async () => {
   const script = await fs.readFile("scripts/smoke-public-domain.sh", "utf8");
   const { stdout } = await execFileAsync("bash", ["scripts/smoke-public-domain.sh", "--help"]);
