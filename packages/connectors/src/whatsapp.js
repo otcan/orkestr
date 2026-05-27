@@ -968,6 +968,7 @@ function latestWhatsAppTypingParent(messages = [], thread = null, state = null) 
     const messageState = String(message.state || "").trim().toLowerCase();
     if (messageState === "failed") return false;
     if (deferredWhatsAppTypingDeliveryState(message)) return false;
+    if (latestOutboundDeliveryForTypingParent(state, message, chatId)) return false;
     if (completedFinalReplyForTypingParent(messages, message, chatId)) return false;
     return true;
   }) || null;
