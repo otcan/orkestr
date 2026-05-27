@@ -86,10 +86,11 @@ Environment:
   ORKESTR_RESET_ON_UPDATE   Reset runtime state after successful updates. Defaults to 0.
   ORKESTR_RESET_OVERLAY     Also reset ORKESTR_OVERLAY_DIR when reset is enabled. Defaults to 0.
   ORKESTR_INSTALL_CODEX     Install Codex CLI globally in --systemd mode. Defaults to 1.
-  ORKESTR_ENABLE_HOST_CODEX Allow local macOS installs to probe/use the host codex binary. Defaults to 0 on macOS.
+  ORKESTR_ENABLE_HOST_CODEX Allow local macOS installs to prefer a verified host codex binary. Defaults to 0 on macOS.
   ORKESTR_ALLOW_MACOS_BREW_INSTALL Allow local macOS installs to run brew install for missing tools. Defaults to 0.
   ORKESTR_ALLOW_MACOS_ADMIN Permit local macOS install paths that may request administrator access. Defaults to 0.
-  ORKESTR_CODEX_VERSION     Codex CLI version. Defaults to 0.133.0.
+  ORKESTR_CODEX_VERSION     Codex CLI version. Defaults to 0.134.0.
+  ORKESTR_LOCAL_CODEX_PREFIX Local Codex CLI install prefix. Defaults to $ORKESTR_HOME/codex-cli.
   ORKESTR_LOCAL_ENV_FILE    Local env file written for non-systemd installs. Defaults to $ORKESTR_HOME/orkestr.env.
   ORKESTR_SKIP_SYSTEM_PACKAGES  Skip apt package installation when set to 1.
   ORKESTR_FRESH_INSTALL     Set to 1 to stop the local service and remove local Orkestr state before install.
@@ -520,7 +521,7 @@ codex_approval_default() {
 }
 
 codex_command_default() {
-  if should_disable_macos_runtime_codex; then
+  if should_disable_macos_runtime_codex || [ "${ORKESTR_CODEX_BIN:-}" = "__orkestr_codex_disabled_on_macos__" ]; then
     echo "__orkestr_codex_disabled_on_macos__"
     return 0
   fi
@@ -538,24 +539,19 @@ codex_command_default() {
 codex_bin_default() {
   if should_disable_macos_codex_bin; then
     echo "__orkestr_codex_disabled_on_macos__"
+  elif is_macos && [ "$systemd" -ne 1 ]; then
+    local_codex_bin
   else
     echo "codex"
   fi
 }
 
 should_disable_macos_codex_bin() {
-  is_macos \
-    && [ "$systemd" -ne 1 ] \
-    && [ "${ORKESTR_ENABLE_HOST_CODEX:-0}" != "1" ] \
-    && [ -z "${ORKESTR_CODEX_BIN:-}" ]
+  [ "${ORKESTR_CODEX_BIN:-}" = "__orkestr_codex_disabled_on_macos__" ]
 }
 
 should_disable_macos_runtime_codex() {
-  is_macos \
-    && [ "$systemd" -ne 1 ] \
-    && [ "${ORKESTR_ENABLE_HOST_CODEX:-0}" != "1" ] \
-    && [ -z "${ORKESTR_CODEX_BIN:-}" ] \
-    && [ -z "${ORKESTR_RUNTIME_CODEX_COMMAND:-}" ]
+  [ "${ORKESTR_RUNTIME_CODEX_COMMAND:-}" = "__orkestr_codex_disabled_on_macos__" ]
 }
 
 should_disable_macos_host_codex() {
@@ -585,6 +581,31 @@ macOS Codex note:
   the runtime needs custom Codex flags.
 
 EOF
+}
+
+local_codex_prefix() {
+  echo "${ORKESTR_LOCAL_CODEX_PREFIX:-$data_dir/codex-cli}"
+}
+
+local_codex_bin() {
+  echo "${ORKESTR_LOCAL_CODEX_BIN:-$(local_codex_prefix)/node_modules/.bin/codex}"
+}
+
+local_codex_home_default() {
+  echo "${ORKESTR_LOCAL_CODEX_HOME:-$HOME/.codex}"
+}
+
+codex_cli_version() {
+  echo "${ORKESTR_CODEX_VERSION:-0.134.0}"
+}
+
+codex_command_supports_app_server() {
+  local command
+  command="$1"
+  [ -n "$command" ] || return 1
+  [ "$command" != "__orkestr_codex_disabled_on_macos__" ] || return 1
+  "$command" --version >/dev/null 2>&1 || return 1
+  "$command" app-server --help >/dev/null 2>&1 || return 1
 }
 
 codex_bypasses_approvals() {
@@ -1021,14 +1042,78 @@ install_codex() {
   if [ "$systemd" -ne 1 ] || [ "${ORKESTR_INSTALL_CODEX:-1}" = "0" ]; then
     return 0
   fi
-  if is_macos && [ "${ORKESTR_ENABLE_HOST_CODEX:-0}" != "1" ]; then
-    echo "Refusing to install Codex automatically on macOS. Verify Codex manually, then rerun with ORKESTR_ENABLE_HOST_CODEX=1." >&2
-    exit 1
-  fi
-  if have codex; then
+  local command version
+  command="${ORKESTR_CODEX_BIN:-codex}"
+  version="$(codex_cli_version)"
+  if codex_command_supports_app_server "$command"; then
     return 0
   fi
-  npm install -g "@openai/codex@${ORKESTR_CODEX_VERSION:-0.133.0}"
+  if is_macos && [ "${ORKESTR_ALLOW_MACOS_ADMIN:-0}" != "1" ]; then
+    echo "Refusing global Codex install on macOS. Local macOS installs use a private Codex CLI." >&2
+    exit 1
+  fi
+  npm install -g "@openai/codex@$version"
+  hash -r 2>/dev/null || true
+  if codex_command_supports_app_server "$command"; then
+    return 0
+  fi
+  cat >&2 <<EOF
+Codex CLI is still not usable after installation:
+  $command
+
+It must run both:
+  codex --version
+  codex app-server --help
+EOF
+  exit 1
+}
+
+install_local_codex_cli() {
+  if [ "$systemd" -eq 1 ] || ! is_macos || [ "${ORKESTR_INSTALL_CODEX:-1}" = "0" ]; then
+    return 0
+  fi
+  if [ -n "${ORKESTR_CODEX_BIN:-}" ] && [ "$ORKESTR_CODEX_BIN" != "__orkestr_codex_disabled_on_macos__" ]; then
+    if codex_command_supports_app_server "$ORKESTR_CODEX_BIN"; then
+      return 0
+    fi
+    cat >&2 <<EOF
+Configured ORKESTR_CODEX_BIN is not usable for Orkestr:
+  $ORKESTR_CODEX_BIN
+
+It must run both:
+  codex --version
+  codex app-server --help
+EOF
+    exit 1
+  fi
+  if [ "${ORKESTR_ENABLE_HOST_CODEX:-0}" = "1" ] && have codex && codex_command_supports_app_server "$(command -v codex)"; then
+    ORKESTR_CODEX_BIN="$(command -v codex)"
+    export ORKESTR_CODEX_BIN
+    return 0
+  fi
+
+  local prefix bin version
+  prefix="$(local_codex_prefix)"
+  bin="$(local_codex_bin)"
+  version="$(codex_cli_version)"
+  if ! codex_command_supports_app_server "$bin"; then
+    echo "Installing private Codex CLI for Orkestr: @openai/codex@$version"
+    mkdir -p "$prefix"
+    npm install --prefix "$prefix" --omit=dev --no-audit --no-fund "@openai/codex@$version"
+  fi
+  if ! codex_command_supports_app_server "$bin"; then
+    cat >&2 <<EOF
+Private Codex CLI install did not produce a usable app-server runtime:
+  $bin
+
+Try reinstalling with:
+  rm -rf $(shell_quote "$prefix")
+  ORKESTR_CODEX_VERSION=$version scripts/install.sh --local
+EOF
+    exit 1
+  fi
+  ORKESTR_CODEX_BIN="$bin"
+  export ORKESTR_CODEX_BIN
 }
 
 chrome_path() {
@@ -1476,7 +1561,7 @@ write_local_env_file() {
     write_env_var ORKESTR_RUNTIME_WORKSPACE_ROOT "$workspace_dir"
     write_env_var ORKESTR_CODEX_BIN "${ORKESTR_CODEX_BIN:-$(codex_bin_default)}"
     write_env_var ORKESTR_RUNTIME_CODEX_COMMAND "${ORKESTR_RUNTIME_CODEX_COMMAND:-$(codex_command_default)}"
-    write_env_var CODEX_HOME "${CODEX_HOME:-$data_dir/codex}"
+    write_env_var CODEX_HOME "${CODEX_HOME:-$(local_codex_home_default)}"
     write_env_var ORKESTR_LOCAL_SERVICE_MANAGER "${ORKESTR_LOCAL_SERVICE_MANAGER:-}"
     write_env_var ORKESTR_LOCAL_SERVICE_NAME "$(local_service_name)"
     write_env_var ORKESTR_LOCAL_SERVICE_LABEL "$(local_service_label)"
@@ -1829,8 +1914,6 @@ if [ "$fresh_install" = "1" ]; then
   fresh_reset_local_install
 fi
 
-export ORKESTR_RUNTIME_CODEX_COMMAND="${ORKESTR_RUNTIME_CODEX_COMMAND:-$(codex_command_default)}"
-export ORKESTR_CODEX_BIN="${ORKESTR_CODEX_BIN:-$(codex_bin_default)}"
 install_system_packages
 ensure_node
 need npm
@@ -1838,6 +1921,9 @@ if [ "$systemd" -ne 1 ]; then
   install_local_runtime_tools
 fi
 install_codex
+install_local_codex_cli
+export ORKESTR_CODEX_BIN="${ORKESTR_CODEX_BIN:-$(codex_bin_default)}"
+export ORKESTR_RUNTIME_CODEX_COMMAND="${ORKESTR_RUNTIME_CODEX_COMMAND:-$(codex_command_default)}"
 
 repo_dir="$install_dir"
 if [ "$local_mode" -eq 1 ]; then

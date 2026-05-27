@@ -98,6 +98,11 @@ test("install script exposes a host-native systemd VPS path", async () => {
   assert.match(script, /__orkestr_codex_disabled_on_macos__/);
   assert.match(script, /should_disable_macos_codex_bin/);
   assert.match(script, /should_disable_macos_runtime_codex/);
+  assert.match(script, /install_local_codex_cli/);
+  assert.match(script, /Installing private Codex CLI for Orkestr/);
+  assert.match(script, /codex app-server --help/);
+  assert.match(script, /ORKESTR_LOCAL_CODEX_PREFIX/);
+  assert.match(script, /write_env_var CODEX_HOME "\$\{CODEX_HOME:-\$\(local_codex_home_default\)\}"/);
   assert.match(script, /write_local_env_file/);
   assert.match(script, /write_local_server_wrapper/);
   assert.match(script, /write_local_cli_wrapper/);
@@ -169,10 +174,13 @@ test("install script exposes a host-native systemd VPS path", async () => {
   assert.match(runtimeDepsScript, /while IFS= read -r dep/);
   assert.match(script, /npm run build:runtime/);
   assert.match(script, /npm prune --omit=dev/);
-  assert.match(script, /Refusing to install Codex automatically on macOS/);
+  assert.match(script, /Refusing global Codex install on macOS/);
+  assert.match(script, /codex_command_supports_app_server "\$command"/);
+  assert.match(script, /Codex CLI is still not usable after installation/);
   assert.match(script, /This is not an install error/);
   assert.doesNotMatch(script, /\nprint_macos_codex_notice\n/);
-  assert.match(script, /npm install -g "@openai\/codex@\$\{ORKESTR_CODEX_VERSION:-0\.133\.0\}"/);
+  assert.match(script, /npm install -g "@openai\/codex@\$version"/);
+  assert.match(script, /npm install --prefix "\$prefix" --omit=dev --no-audit --no-fund "@openai\/codex@\$version"/);
   assert.match(script, /runuser -u "\$run_user" --preserve-environment -- node/);
   assert.match(script, /ORKESTR_CLI_RUN_AS_ROOT/);
   assert.match(script, /case "\$\{1:-\}" in/);

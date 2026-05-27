@@ -165,12 +165,13 @@ For an existing host:
 orkestr codex migrate --dry-run
 orkestr codex migrate
 ```
-On macOS local installs, the installer does not probe or run the host `codex`
-binary by default because Gatekeeper/XProtect can block npm-distributed native
-binaries. Verify `codex --version` and `codex login status` yourself, then rerun
-with `ORKESTR_ENABLE_HOST_CODEX=1 ./scripts/install.sh --local` to opt
-in. The local installer writes `$ORKESTR_HOME/orkestr.env`; source that file
-before manual `npm start` runs so the same safe runtime settings are used.
+On macOS local installs, the installer avoids the host `codex` binary by default
+and installs a private user-owned Codex CLI under `$ORKESTR_HOME/codex-cli`.
+That avoids broken or quarantined global npm installs while still reusing the
+normal user Codex login from `~/.codex`. Set `ORKESTR_ENABLE_HOST_CODEX=1` only
+when you explicitly want to prefer a verified host Codex binary. The local
+installer writes `$ORKESTR_HOME/orkestr.env`; source that file before manual
+`npm start` runs so the same safe runtime settings are used.
 On macOS and other local installs, that file includes a service-safe `PATH` so
 launchd/systemd can find tools such as `tmux` and Homebrew-installed binaries.
 The one-line script also detaches itself from the `curl | bash` pipe before
@@ -267,6 +268,10 @@ By default the installer writes explicit conservative Codex runtime settings:
 `ORKESTR_RUNTIME_CODEX_COMMAND="codex --sandbox workspace-write --ask-for-approval on-request --no-alt-screen"`.
 That lets permission requests surface in the UI and WhatsApp. For configured
 installs, copy and edit the JSON install config:
+
+The VPS installer installs or updates `@openai/codex` until both
+`codex --version` and `codex app-server --help` work. If `ORKESTR_INSTALL_CODEX=0`
+is set, provide a working Codex CLI yourself before opening setup.
 
 ```bash
 curl -fsSLO https://raw.githubusercontent.com/otcan/orkestr/main/orkestr.install.json.example
