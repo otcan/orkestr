@@ -162,6 +162,10 @@ test("install script exposes a host-native systemd VPS path", async () => {
   assert.match(script, /util-linux/);
   assert.match(script, /useradd --system --home "\$data_dir" --shell \/bin\/bash "\$run_user"/);
   assert.match(script, /usermod --shell \/bin\/bash "\$run_user"/);
+  assert.match(script, /codex_home="\$\{CODEX_HOME:-\$data_dir\/codex\}"/);
+  assert.match(script, /mkdir -p "\$codex_home"/);
+  assert.match(script, /chown -R "\$run_user:\$run_group" "\$codex_home"/);
+  assert.match(script, /chmod 0700 "\$codex_home"/);
   assert.match(script, /install_browser_package/);
   assert.match(script, /install_google_chrome/);
   assert.match(script, /google-chrome-stable/);
@@ -341,6 +345,25 @@ test("k3s VPS smoke runner creates a disposable KubeVirt VM", async () => {
   assert.match(script, /kubectl_k3s delete namespace/);
 });
 
+test("k3s public IP helper routes a provider-routed address to a KubeVirt VM", async () => {
+  const script = await fs.readFile("scripts/k3s-vm-public-ip.sh", "utf8");
+  const pkg = JSON.parse(await fs.readFile("package.json", "utf8"));
+  const { stdout } = await execFileAsync("bash", ["scripts/k3s-vm-public-ip.sh", "--help"]);
+
+  await execFileAsync("bash", ["-n", "scripts/k3s-vm-public-ip.sh"]);
+  assert.equal(pkg.scripts["k3s:public-ip"], "bash scripts/k3s-vm-public-ip.sh");
+  assert.match(stdout, /install-systemd/);
+  assert.match(stdout, /--public-ip IP/);
+  assert.match(stdout, /--namespace NS/);
+  assert.match(stdout, /--vm VM/);
+  assert.match(stdout, /--ports LIST/);
+  assert.match(script, /kubectl_k3s get vmi/);
+  assert.match(script, /DNAT --to-destination/);
+  assert.match(script, /SNAT --to-source/);
+  assert.match(script, /systemctl enable --now/);
+  assert.match(script, /203\.0\.113\.10/);
+});
+
 test("public domain smoke runner validates Caddy/TLS and browser pairing", async () => {
   const script = await fs.readFile("scripts/smoke-public-domain.sh", "utf8");
   const { stdout } = await execFileAsync("bash", ["scripts/smoke-public-domain.sh", "--help"]);
@@ -349,11 +372,16 @@ test("public domain smoke runner validates Caddy/TLS and browser pairing", async
   assert.match(stdout, /--domain DOMAIN/);
   assert.match(stdout, /--host PUBLIC_IP/);
   assert.match(stdout, /--ssh TARGET/);
+  assert.match(stdout, /--ssh-key FILE/);
+  assert.match(stdout, /--known-hosts FILE/);
+  assert.match(stdout, /--ssh-option OPT/);
   assert.match(stdout, /--keep-session/);
   assert.match(script, /curl --resolve "\$domain:80:\$host_ip"/);
   assert.match(script, /openssl s_client -servername "\$domain"/);
   assert.match(script, /browser_pairing_required/);
   assert.match(script, /api\/setup\/security\/challenge/);
+  assert.match(script, /ssh_remote\(\)/);
+  assert.match(script, /UserKnownHostsFile=\$known_hosts/);
   assert.match(script, /orkestr security approve/);
   assert.match(script, /api\/setup\/security\/pair/);
   assert.match(script, /orkestr security revoke/);

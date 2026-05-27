@@ -1886,6 +1886,7 @@ EOF
 }
 
 install_systemd_runtime() {
+  local run_group codex_home
   if ! run_as_root; then
     echo "--systemd requires root. Use: curl -fsSL https://raw.githubusercontent.com/otcan/orkestr/main/scripts/install.sh | sudo bash -s -- --systemd" >&2
     exit 1
@@ -1895,12 +1896,17 @@ install_systemd_runtime() {
   else
     usermod --shell /bin/bash "$run_user"
   fi
+  run_group="$(id -gn "$run_user")"
+  codex_home="${CODEX_HOME:-$data_dir/codex}"
   mkdir -p "$data_dir" "$workspace_dir" /opt/orkestr/overlay
-  chown -R "$run_user:$(id -gn "$run_user")" "$data_dir" "$workspace_dir" /opt/orkestr/overlay
+  chown -R "$run_user:$run_group" "$data_dir" "$workspace_dir" /opt/orkestr/overlay
+  mkdir -p "$codex_home"
+  chown -R "$run_user:$run_group" "$codex_home"
+  chmod 0700 "$codex_home"
   write_env_file
   write_runtime_settings_file
-  chown "$run_user:$(id -gn "$run_user")" "${ORKESTR_RUNTIME_SETTINGS_FILE:-$data_dir/runtime-settings.json}" || true
-  chgrp "$(id -gn "$run_user")" "$env_file" || true
+  chown "$run_user:$run_group" "${ORKESTR_RUNTIME_SETTINGS_FILE:-$data_dir/runtime-settings.json}" || true
+  chgrp "$run_group" "$env_file" || true
   write_cli_wrapper
   write_update_wrapper
   write_deploy_wrapper

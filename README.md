@@ -268,6 +268,24 @@ directly from inside the cluster, add `-- --cache-image-locally` to cache the VM
 image on the k3s host and serve it through a temporary in-cluster image-server
 pod during import.
 
+For a persistent single-node k3s/KubeVirt install that uses a dedicated routed
+public IPv4, keep Orkestr bound to localhost inside the VM, configure public
+HTTPS with `scripts/bootstrap-vps.sh --domain`, and route only the required
+public ports from the k3s host to the VM:
+
+```bash
+npm run k3s:public-ip -- install-systemd \
+  --namespace orkestr-example \
+  --vm orkestr-example \
+  --public-ip 203.0.113.10 \
+  --ports 22,80,443
+```
+
+This helper is for provider-routed `/32` addresses. It reads the VM IP from
+KubeVirt and installs idempotent host DNAT/SNAT rules through a systemd unit, so
+the VM can serve `ssh`, HTTP, and HTTPS on its own public IP while keeping
+Orkestr itself protected behind Caddy and browser pairing.
+
 The lower-level installer remains available when you already know the host is
 prepared:
 

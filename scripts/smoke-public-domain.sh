@@ -14,6 +14,9 @@ Required:
 Options:
   --host PUBLIC_IP           Public host IP. Defaults to the first public A record.
   --ssh TARGET               SSH target used to approve and revoke browser pairing. Defaults to root@PUBLIC_IP.
+  --ssh-key FILE             SSH identity file for --ssh.
+  --known-hosts FILE         SSH known_hosts file for --ssh.
+  --ssh-option OPT           Extra SSH -o option. Can be repeated.
   --port PORT                Raw Orkestr port that must not be publicly reachable. Defaults to 19812.
   --protected-path PATH      Protected API route used for auth checks. Defaults to /api/connectors/whatsapp/status.
   --keep-session             Keep the paired browser session created by this smoke.
@@ -35,6 +38,9 @@ USAGE
 domain=""
 host_ip=""
 ssh_target=""
+ssh_key=""
+known_hosts=""
+ssh_options=()
 port=19812
 protected_path="/api/connectors/whatsapp/status"
 keep_session=0
@@ -53,6 +59,18 @@ while [ "$#" -gt 0 ]; do
       ;;
     --ssh)
       ssh_target="${2:-}"
+      shift 2
+      ;;
+    --ssh-key)
+      ssh_key="${2:-}"
+      shift 2
+      ;;
+    --known-hosts)
+      known_hosts="${2:-}"
+      shift 2
+      ;;
+    --ssh-option)
+      ssh_options+=("-o" "${2:-}")
       shift 2
       ;;
     --port)
@@ -98,6 +116,20 @@ fail() {
 
 need() {
   command -v "$1" >/dev/null 2>&1 || fail "missing required command: $1"
+}
+
+ssh_remote() {
+  local target="$1"
+  shift
+  local args=(-o BatchMode=yes)
+  if [ -n "$ssh_key" ]; then
+    args+=(-i "$ssh_key")
+  fi
+  if [ -n "$known_hosts" ]; then
+    args+=(-o "UserKnownHostsFile=$known_hosts")
+  fi
+  args+=("${ssh_options[@]}")
+  ssh "${args[@]}" "$target" "$@"
 }
 
 json_field() {
@@ -187,7 +219,7 @@ if [ "$skip_pair" -eq 0 ]; then
   [ -n "$challenge_id" ] || fail "pairing challenge did not include a challengeId"
 
   log "approving pairing challenge over SSH"
-  ssh -o BatchMode=yes "$ssh_target" "orkestr security approve '$challenge_id'" >/dev/null
+  ssh_remote "$ssh_target" "orkestr security approve '$challenge_id'" >/dev/null
 
   log "pairing browser cookie over HTTPS"
   pair_json="$(curl --resolve "$domain:443:$host_ip" -fsS -c "$cookie_file" -H 'content-type: application/json' -d "{\"challengeId\":\"$challenge_id\"}" "$base_url/api/setup/security/pair" --max-time 20)"
@@ -204,7 +236,7 @@ if [ "$skip_pair" -eq 0 ]; then
 
   if [ "$keep_session" -eq 0 ]; then
     log "revoking smoke browser session"
-    ssh -o BatchMode=yes "$ssh_target" "orkestr security revoke '$session_id'" >/dev/null
+    ssh_remote "$ssh_target" "orkestr security revoke '$session_id'" >/dev/null
   else
     log "keeping smoke browser session $session_id"
   fi
@@ -212,7 +244,7 @@ fi
 
 if [ "$skip_pair" -eq 0 ]; then
   log "checking remote services"
-  ssh -o BatchMode=yes "$ssh_target" 'systemctl is-active --quiet orkestr && systemctl is-active --quiet caddy'
+  ssh_remote "$ssh_target" 'systemctl is-active --quiet orkestr && systemctl is-active --quiet caddy'
 fi
 
 log "public domain smoke passed"
