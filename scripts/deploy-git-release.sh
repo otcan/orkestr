@@ -240,6 +240,30 @@ activate_release() {
   mv -Tf "$next_link" "$current_link"
 }
 
+env_sed_value() {
+  printf '%s' "$1" | sed 's/[&|]/\\&/g'
+}
+
+set_env_assignment() {
+  local name value escaped
+  name="$1"
+  value="$2"
+  [ -f "$env_file_path" ] || return 0
+  escaped="$(env_sed_value "$value")"
+  if grep -q "^${name}=" "$env_file_path"; then
+    sed -i "s|^${name}=.*|${name}=${escaped}|" "$env_file_path"
+  else
+    printf '%s=%s\n' "$name" "$value" >> "$env_file_path"
+  fi
+}
+
+sync_versioned_env() {
+  [ -f "$env_file_path" ] || return 0
+  set_env_assignment ORKESTR_APP_DIR "$current_link"
+  set_env_assignment ORKESTR_RELEASE_DEPLOY "1"
+  set_env_assignment ORKESTR_CURRENT_LINK "$current_link"
+}
+
 restart_and_verify() {
   systemctl restart "${service_name}.service"
   systemctl is-active --quiet "${service_name}.service"
@@ -338,6 +362,7 @@ install_command() {
   repair_runtime_ownership
   backup_path="$(backup_state)"
   activate_release "$release_dir"
+  sync_versioned_env
   if restart_and_verify; then
     write_history_event "success" "$release_id" "$deploy_ref" "$target_ref" "$previous_release" "$release_dir" "$backup_path"
     echo "Orkestr deployed $release_id ($target_ref)."
@@ -376,6 +401,7 @@ NODE
   backup_path="$(backup_state)"
   repair_runtime_ownership
   activate_release "$release_dir"
+  sync_versioned_env
   if restart_and_verify; then
     write_history_event "rollback" "$target" "$target" "$commit" "$previous_release" "$release_dir" "$backup_path"
     echo "Orkestr rolled back to $target."
@@ -387,6 +413,7 @@ NODE
 
 load_env
 
+env_file_path="${ORKESTR_ENV_FILE:-/etc/orkestr/orkestr.env}"
 deploy_root="${ORKESTR_DEPLOY_ROOT:-/opt/orkestr}"
 releases_dir="${ORKESTR_RELEASES_DIR:-$deploy_root/releases}"
 current_link="${ORKESTR_CURRENT_LINK:-$deploy_root/current}"

@@ -29,6 +29,9 @@ test("release deploy script exposes versioned install, status, and rollback", as
   assert.match(script, /npm --prefix "\$release_dir" run smoke/);
   assert.match(script, /backup_state/);
   assert.match(script, /health_check/);
+  assert.match(script, /sync_versioned_env/);
+  assert.match(script, /set_env_assignment ORKESTR_APP_DIR "\$current_link"/);
+  assert.match(script, /set_env_assignment ORKESTR_RELEASE_DEPLOY "1"/);
   assert.match(script, /repair_runtime_ownership/);
   assert.match(script, /codex_home="\$\{CODEX_HOME:-\$runtime_home\/codex\}"/);
   assert.match(script, /chown -R "\$run_user:\$run_group" "\$codex_home"/);
