@@ -9,12 +9,13 @@ import {
   getCodexAppServerClient,
   importCodexAppServerThread,
   listCodexAppServerThreads,
+  recoverStaleCodexAppServerTurns,
   startCodexAppServerThread,
   stopCodexAppServerClients,
 } from "../packages/core/src/codex-app-server.js";
 import { migrateCodexThreadsToAppServer } from "../packages/core/src/codex-app-server-migration.js";
 import { resetThreadRuntime, sleepThread } from "../packages/core/src/runtime-leases.js";
-import { createThread, enqueueThreadInput, getThread, listThreadMessages, updateThread } from "../packages/core/src/threads.js";
+import { appendThreadMessage, createThread, enqueueThreadInput, getThread, listThreadMessages, updateThread } from "../packages/core/src/threads.js";
 import { deliverWhatsAppReplies } from "../packages/connectors/src/whatsapp.js";
 import { writeConnectorConfig } from "../packages/storage/src/config.js";
 
@@ -487,6 +488,142 @@ test("Codex app-server status ignores stale stored working state without live cl
     assert.equal(idleActiveStatus.state, "ready");
     assert.equal(idleActiveStatus.working, false);
     assert.equal(idleActiveStatus.activeTurnId, null);
+  } finally {
+    stopCodexAppServerClients();
+  }
+});
+
+test("Codex app-server recovery marks stale delivered turns ready and appends one interruption notice", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-codex-app-server-stale-recovery-"));
+  const fake = await createFakeCodex(home);
+  const env = {
+    ORKESTR_HOME: path.join(home, "orkestr"),
+    HOME: path.join(home, "runtime-home"),
+    PATH: `${fake.bin}${path.delimiter}${process.env.PATH || ""}`,
+    FAKE_CODEX_STATE: fake.stateFile,
+  };
+  try {
+    const thread = await createThread({
+      id: "app-server-stale-recovery-thread",
+      name: "App Server Stale Recovery Thread",
+      state: "failed",
+      executorId: "codex",
+      executor: {
+        type: "codex",
+        transport: "app-server",
+        codexThreadId: "stale-recovery-codex-thread",
+        codexSessionId: "stale-recovery-codex-thread",
+      },
+      runtimeKind: "codex-app-server",
+      codexThreadId: "stale-recovery-codex-thread",
+      codexSessionId: "stale-recovery-codex-thread",
+      runtime: {
+        runtimeKind: "codex-app-server",
+        state: "working",
+        activeTurnId: "stale-turn",
+        codexStatus: { type: "systemError" },
+        lastTurnStatus: "failed",
+      },
+    }, env);
+    const input = await appendThreadMessage(thread.id, {
+      role: "user",
+      source: "manual",
+      text: "Please continue this delivered turn.",
+      state: "completed",
+      deliveryState: "delivered",
+      observedVia: "codex_app_server_turn_start",
+      codexThreadId: "stale-recovery-codex-thread",
+      codexTurnId: "stale-turn",
+    }, env);
+
+    const first = await recoverStaleCodexAppServerTurns(env);
+    const after = await getThread(thread.id, env);
+    const messages = await listThreadMessages(thread.id, env);
+    const notices = messages.filter((message) => message.source === "orkestr_runtime" && message.phase === "runtime_interrupted");
+
+    assert.equal(first.recovered, 1);
+    assert.equal(first.appended, 1);
+    assert.equal(after.state, "ready");
+    assert.equal(after.lastError, null);
+    assert.equal(after.runtime.activeTurnId, null);
+    assert.equal(after.runtime.state, "ready");
+    assert.equal(after.runtime.codexStatus.type, "idle");
+    assert.equal(notices.length, 1);
+    assert.equal(notices[0].parentMessageId, null);
+    assert.equal(notices[0].codexTurnId, "stale-turn");
+    assert.match(notices[0].text, /^Codex conversation interrupted/);
+    assert.ok(messages.find((message) => message.id === input.id));
+
+    const second = await recoverStaleCodexAppServerTurns(env);
+    const messagesAfterSecond = await listThreadMessages(thread.id, env);
+    assert.equal(second.recovered, 0);
+    assert.equal(second.appended, 0);
+    assert.equal(messagesAfterSecond.filter((message) => message.source === "orkestr_runtime" && message.phase === "runtime_interrupted").length, 1);
+  } finally {
+    stopCodexAppServerClients();
+  }
+});
+
+test("Codex app-server recovery projects stale WhatsApp turns back to the source chat", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-codex-app-server-stale-wa-recovery-"));
+  const fake = await createFakeCodex(home);
+  const env = {
+    ORKESTR_HOME: path.join(home, "orkestr"),
+    HOME: path.join(home, "runtime-home"),
+    PATH: `${fake.bin}${path.delimiter}${process.env.PATH || ""}`,
+    FAKE_CODEX_STATE: fake.stateFile,
+  };
+  try {
+    const thread = await createThread({
+      id: "app-server-stale-wa-recovery-thread",
+      name: "App Server Stale WA Recovery Thread",
+      state: "working",
+      executorId: "codex",
+      executor: {
+        type: "codex",
+        transport: "app-server",
+        codexThreadId: "stale-wa-recovery-codex-thread",
+        codexSessionId: "stale-wa-recovery-codex-thread",
+      },
+      runtimeKind: "codex-app-server",
+      codexThreadId: "stale-wa-recovery-codex-thread",
+      codexSessionId: "stale-wa-recovery-codex-thread",
+      binding: {
+        connector: "whatsapp",
+        chatId: "chat-stale-wa",
+        responderAccountId: "account-stale-wa",
+      },
+      runtime: {
+        runtimeKind: "codex-app-server",
+        state: "working",
+        activeTurnId: "stale-wa-turn",
+        codexStatus: { type: "active", activeFlags: ["running"] },
+      },
+    }, env);
+    const input = await appendThreadMessage(thread.id, {
+      role: "user",
+      source: "whatsapp",
+      connector: "whatsapp",
+      chatId: "chat-stale-wa",
+      accountId: "account-stale-wa",
+      text: "WhatsApp delivered turn with no reply.",
+      state: "completed",
+      deliveryState: "delivered",
+      observedVia: "codex_app_server_turn_start",
+      codexThreadId: "stale-wa-recovery-codex-thread",
+      codexTurnId: "stale-wa-turn",
+    }, env);
+
+    const result = await recoverStaleCodexAppServerTurns(env);
+    const messages = await listThreadMessages(thread.id, env);
+    const notice = messages.find((message) => message.source === "orkestr_runtime" && message.phase === "runtime_interrupted");
+
+    assert.equal(result.recovered, 1);
+    assert.equal(result.appended, 1);
+    assert.equal(notice.parentMessageId, input.id);
+    assert.equal(notice.connector, "whatsapp");
+    assert.equal(notice.chatId, "chat-stale-wa");
+    assert.equal(notice.accountId, "account-stale-wa");
   } finally {
     stopCodexAppServerClients();
   }

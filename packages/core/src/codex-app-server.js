@@ -66,6 +66,7 @@ export {
   getCodexAppServerClient,
   setCodexAppServerMessageHandler,
 } from "./codex-app-server-client.js";
+export { recoverStaleCodexAppServerTurns } from "./codex-app-server-recovery.js";
 
 export function stopCodexAppServerClients() {
   for (const timer of appServerDeliveryTimers.values()) clearTimeout(timer);

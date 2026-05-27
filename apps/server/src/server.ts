@@ -14,7 +14,11 @@ import {
   syncRuntimeLeases,
 } from "../../../packages/core/src/runtime-leases.js";
 import { markDueTimers } from "../../../packages/core/src/timers.js";
-import { setCodexAppServerMessageHandler, stopCodexAppServerClients } from "../../../packages/core/src/codex-app-server.js";
+import {
+  recoverStaleCodexAppServerTurns,
+  setCodexAppServerMessageHandler,
+  stopCodexAppServerClients,
+} from "../../../packages/core/src/codex-app-server.js";
 import { deliverWhatsAppReplies, syncWhatsAppTypingIndicators } from "../../../packages/connectors/src/whatsapp.js";
 import {
   startConfiguredLocalWhatsAppAccounts,
@@ -139,12 +143,14 @@ async function runTimerLoop() {
 async function syncRuntimeAndDeliverWhatsApp(options: { forceWhatsapp?: boolean } = {}) {
   const pendingConnectorDeliveries = consumeThreadConnectorDeliverySignalCount();
   const synced = await syncRuntimeLeases();
+  const recovered = await recoverStaleCodexAppServerTurns().catch(() => ({ recovered: 0, appended: 0 }));
   await syncWhatsAppTypingIndicators().catch(() => {});
   const connectorDeliveries = pendingConnectorDeliveries + consumeThreadConnectorDeliverySignalCount();
-  if (options.forceWhatsapp || (synced.appended || 0) > 0 || connectorDeliveries > 0) {
+  const appended = (synced.appended || 0) + (recovered.appended || 0);
+  if (options.forceWhatsapp || appended > 0 || connectorDeliveries > 0) {
     await deliverWhatsAppReplies().catch(() => {});
   }
-  return synced;
+  return { ...synced, appended, recoveredAppServerTurns: recovered.recovered || 0 };
 }
 
 function createWhatsAppDeliveryScheduler() {

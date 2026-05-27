@@ -533,7 +533,7 @@ test("whatsapp delivery mirrors throttled commentary progress before final repli
   assert.equal(throttled.delivered.length, 0);
   assert.equal(throttled.skipped.some((item) => item.reason === "progress_throttled"), true);
   assert.equal(final.delivered.length, 1);
-  assert.equal(final.delivered[0].deliveryType || "", "");
+  assert.equal(final.delivered[0].deliveryType, "final");
   assert.deepEqual(calls.map((call) => stripDebugFooter(call.body.text)), [
     "I’m checking the repo and running focused tests now.",
     "Done. Tests passed.",
