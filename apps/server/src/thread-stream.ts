@@ -12,6 +12,7 @@ import { threadSummaryPayload } from "./thread-summary.js";
 
 const execFileAsync = promisify(execFile);
 const attachedServers = new WeakSet<Server>();
+const browserAttachSessions = new Map<string, { clients: number; killTimer: NodeJS.Timeout | null }>();
 
 function wsSend(ws: WebSocket, payload: Record<string, unknown>): void {
   if (ws.readyState === ws.OPEN) {
@@ -133,6 +134,50 @@ async function tmuxPaneId(sessionName: string): Promise<string> {
   return String(stdout || "").trim().split(/\s+/).filter(Boolean)[0] || "";
 }
 
+function rawAttachIdleTtlMs(): number {
+  const parsed = Number(process.env.ORKESTR_RAW_ATTACH_IDLE_TTL_MS || 30_000);
+  return Number.isFinite(parsed) ? Math.max(0, parsed) : 30_000;
+}
+
+function cancelBrowserAttachKill(sessionName: string): void {
+  const state = browserAttachSessions.get(sessionName);
+  if (!state?.killTimer) return;
+  clearTimeout(state.killTimer);
+  state.killTimer = null;
+}
+
+function retainBrowserAttachSession(sessionName: string): void {
+  if (!sessionName) return;
+  const state = browserAttachSessions.get(sessionName) || { clients: 0, killTimer: null };
+  if (state.killTimer) {
+    clearTimeout(state.killTimer);
+    state.killTimer = null;
+  }
+  state.clients += 1;
+  browserAttachSessions.set(sessionName, state);
+}
+
+function releaseBrowserAttachSession(sessionName: string): void {
+  if (!sessionName) return;
+  const state = browserAttachSessions.get(sessionName);
+  if (!state) return;
+  state.clients = Math.max(0, state.clients - 1);
+  if (state.clients > 0 || state.killTimer) return;
+  const killSession = async () => {
+    const current = browserAttachSessions.get(sessionName);
+    if (!current || current.clients > 0) return;
+    browserAttachSessions.delete(sessionName);
+    await killTmuxSession(sessionName).catch(() => undefined);
+  };
+  const ttlMs = rawAttachIdleTtlMs();
+  if (ttlMs <= 0) {
+    void killSession();
+    return;
+  }
+  state.killTimer = setTimeout(() => void killSession(), ttlMs);
+  if (typeof state.killTimer.unref === "function") state.killTimer.unref();
+}
+
 async function ensureAppServerAttachPane(thread: Record<string, any>, cols: unknown, rows: unknown): Promise<Record<string, unknown> | null> {
   if (!threadUsesCodexAppServer(thread)) return null;
   const wakeResult: any = await wakeThread(String(thread.id), { reason: "browser_attach" }).catch(() => null);
@@ -142,6 +187,7 @@ async function ensureAppServerAttachPane(thread: Record<string, any>, cols: unkn
 
   const cwd = String(currentThread.cwd || currentThread.workspace || currentThread.repoPath || currentThread.worktreePath || "/root");
   const sessionName = browserAttachSessionName(String(currentThread.id || thread.id));
+  cancelBrowserAttachKill(sessionName);
   if (await tmuxHasSession(sessionName)) {
     // Browser Raw attach sessions are disposable; restart them so stale Codex resume screens are not replayed.
     await killTmuxSession(sessionName).catch(() => undefined);
@@ -358,6 +404,9 @@ export function attachThreadStreamUpgrade(server: Server): void {
       return;
     }
     await resizePane(paneId, target.cols, target.rows).catch(() => undefined);
+    const browserAttachSessionNameForStream = status?.runtimeKind === "codex-browser-attach"
+      ? String(status.sessionName || "").trim()
+      : "";
 
     wss.handleUpgrade(request, socket, head, (ws) => {
       let lastScreen = "";
@@ -366,6 +415,7 @@ export function attachThreadStreamUpgrade(server: Server): void {
       let snapshotTimer: NodeJS.Timeout | null = null;
       let snapshotInFlight = false;
       let nextSnapshotIntervalMs = rawSnapshotActiveIntervalMs();
+      if (browserAttachSessionNameForStream) retainBrowserAttachSession(browserAttachSessionNameForStream);
 
       const scheduleSnapshot = (delayMs = nextSnapshotIntervalMs) => {
         if (closed) return;
@@ -432,16 +482,15 @@ export function attachThreadStreamUpgrade(server: Server): void {
             wsSend(ws, { type: "error", data: error instanceof Error ? error.message : String(error) });
           });
       });
-      ws.on("close", () => {
+      const closeRawStream = () => {
+        if (closed) return;
         closed = true;
         if (snapshotTimer) clearTimeout(snapshotTimer);
         clearInterval(heartbeatTimer);
-      });
-      ws.on("error", () => {
-        closed = true;
-        if (snapshotTimer) clearTimeout(snapshotTimer);
-        clearInterval(heartbeatTimer);
-      });
+        if (browserAttachSessionNameForStream) releaseBrowserAttachSession(browserAttachSessionNameForStream);
+      };
+      ws.on("close", closeRawStream);
+      ws.on("error", closeRawStream);
     });
   });
 }

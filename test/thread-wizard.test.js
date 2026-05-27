@@ -180,6 +180,20 @@ test("browser raw attach refreshes stale app-server sessions before resume", asy
   assert.ok(!attachPane.includes("if (!(await tmuxHasSession(sessionName)))"));
 });
 
+test("browser raw attach sessions are cleaned up after stream close", async () => {
+  const source = await fs.readFile("apps/server/src/thread-stream.ts", "utf8");
+  const streamUpgrade = source.slice(source.indexOf("wss.handleUpgrade(request, socket, head, (ws) => {"), source.lastIndexOf("});\n  });\n}"));
+
+  assert.ok(source.includes("function rawAttachIdleTtlMs()"));
+  assert.ok(source.includes("ORKESTR_RAW_ATTACH_IDLE_TTL_MS"));
+  assert.ok(source.includes("function retainBrowserAttachSession(sessionName: string)"));
+  assert.ok(source.includes("function releaseBrowserAttachSession(sessionName: string)"));
+  assert.ok(source.includes("cancelBrowserAttachKill(sessionName)"));
+  assert.ok(streamUpgrade.includes('status?.runtimeKind === "codex-browser-attach"'));
+  assert.ok(streamUpgrade.includes("retainBrowserAttachSession(browserAttachSessionNameForStream)"));
+  assert.ok(streamUpgrade.includes("releaseBrowserAttachSession(browserAttachSessionNameForStream)"));
+});
+
 test("thread links do not persist the raw panel", async () => {
   const source = await fs.readFile("apps/web/src/app/app.component.ts", "utf8");
   const activateThread = source.slice(source.indexOf("async activateThread("), source.indexOf("private clearThreadPanelState("));
