@@ -2,6 +2,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import type { Server } from "node:http";
 import { WebSocketServer, type WebSocket } from "ws";
+import { approvePairingChallenge } from "../../../packages/core/src/security.js";
 import { runtimeStatus, wakeThread } from "../../../packages/core/src/runtime-leases.js";
 import { getThread } from "../../../packages/core/src/threads.js";
 import { codexThreadId, threadUsesCodexAppServer } from "../../../packages/core/src/codex-app-server-common.js";
@@ -9,6 +10,7 @@ import { recordCodexRuntimeAuthInvalidSignal } from "../../../packages/core/src/
 import { codexResumeCommand } from "../../../packages/core/src/codex-attach-command.js";
 import { shellQuote } from "../../../packages/core/src/native-terminal.js";
 import { paneProgressFromText } from "../../../packages/core/src/pane-progress.js";
+import { rawControlCommandMayMatch, rawSecurityApproveChallengeId } from "../../../packages/core/src/raw-terminal-commands.js";
 import { killTmuxSession } from "../../../packages/core/src/tmux-runtime.js";
 import { threadSummaryPayload } from "./thread-summary.js";
 
@@ -266,6 +268,81 @@ async function sendRawInput(paneId: string, data: string): Promise<void> {
   await flushLiteral();
 }
 
+function rawTerminalNotice(message: string): string {
+  return `\r\n[Orkestr] ${message}\r\n`;
+}
+
+async function approveRawPairingChallenge(ws: WebSocket, challengeId: string): Promise<void> {
+  try {
+    const result = await approvePairingChallenge(challengeId, { approvedBy: "raw-terminal" });
+    wsSend(ws, {
+      type: "output",
+      data: rawTerminalNotice(`Approved pairing challenge ${result.challenge?.id || challengeId}.`),
+    });
+  } catch (error) {
+    wsSend(ws, {
+      type: "output",
+      data: rawTerminalNotice(`Could not approve pairing challenge ${challengeId}: ${error instanceof Error ? error.message : String(error)}`),
+    });
+  }
+}
+
+async function sendRawInputWithControlInterception(
+  paneId: string,
+  data: string,
+  state: { buffer: string },
+  ws: WebSocket,
+): Promise<void> {
+  const input = String(data || "");
+  const flushBuffer = async (submit = false) => {
+    const buffered = state.buffer;
+    state.buffer = "";
+    if (buffered) await sendRawInput(paneId, buffered);
+    if (submit) await sendRawInput(paneId, "\r");
+  };
+
+  for (let index = 0; index < input.length; index += 1) {
+    const char = input[index];
+    if (!state.buffer && !rawControlCommandMayMatch(char)) {
+      await sendRawInput(paneId, input.slice(index));
+      return;
+    }
+    if (!state.buffer) {
+      state.buffer = char;
+      continue;
+    }
+
+    if (char === "\r" || char === "\n") {
+      const challengeId = rawSecurityApproveChallengeId(state.buffer);
+      if (challengeId) {
+        state.buffer = "";
+        await approveRawPairingChallenge(ws, challengeId);
+      } else {
+        await flushBuffer(true);
+      }
+      continue;
+    }
+
+    if (char === "\x7f" || char === "\b") {
+      state.buffer = state.buffer.slice(0, -1);
+      continue;
+    }
+
+    if (char < " " || char === "\x1b") {
+      await flushBuffer(false);
+      await sendRawInput(paneId, input.slice(index));
+      return;
+    }
+
+    state.buffer += char;
+    if (!rawControlCommandMayMatch(state.buffer)) {
+      await flushBuffer(false);
+      if (index + 1 < input.length) await sendRawInput(paneId, input.slice(index + 1));
+      return;
+    }
+  }
+}
+
 function upgradePath(url: string | undefined): { threadId: string; cols: string | null; rows: string | null } | null {
   const parsed = new URL(url || "/", "http://localhost");
   const match = parsed.pathname.match(/^\/api\/threads\/([^/]+)\/stream$/);
@@ -417,6 +494,7 @@ export function attachThreadStreamUpgrade(server: Server): void {
       let snapshotTimer: NodeJS.Timeout | null = null;
       let snapshotInFlight = false;
       let nextSnapshotIntervalMs = rawSnapshotActiveIntervalMs();
+      const rawControlState = { buffer: "" };
       if (browserAttachSessionNameForStream) retainBrowserAttachSession(browserAttachSessionNameForStream);
 
       const scheduleSnapshot = (delayMs = nextSnapshotIntervalMs) => {
@@ -479,7 +557,7 @@ export function attachThreadStreamUpgrade(server: Server): void {
           .then(async () => {
             const payload = JSON.parse(raw.toString("utf8"));
             if (payload?.type === "input" && typeof payload.data === "string") {
-              await sendRawInput(paneId, payload.data);
+              await sendRawInputWithControlInterception(paneId, payload.data, rawControlState, ws);
               nextSnapshotIntervalMs = rawSnapshotActiveIntervalMs();
               await pushSnapshot();
             } else if (payload?.type === "resize") {
