@@ -6,6 +6,7 @@ import { runtimeStatus, wakeThread } from "../../../packages/core/src/runtime-le
 import { getThread } from "../../../packages/core/src/threads.js";
 import { codexThreadId, threadUsesCodexAppServer } from "../../../packages/core/src/codex-app-server-common.js";
 import { shellQuote } from "../../../packages/core/src/native-terminal.js";
+import { killTmuxSession } from "../../../packages/core/src/tmux-runtime.js";
 import { threadSummaryPayload } from "./thread-summary.js";
 
 const execFileAsync = promisify(execFile);
@@ -140,17 +141,19 @@ async function ensureAppServerAttachPane(thread: Record<string, any>, cols: unkn
 
   const cwd = String(currentThread.cwd || currentThread.workspace || currentThread.repoPath || currentThread.worktreePath || "/root");
   const sessionName = browserAttachSessionName(String(currentThread.id || thread.id));
-  if (!(await tmuxHasSession(sessionName))) {
-    const attachCommand = `codex --dangerously-bypass-approvals-and-sandbox resume -C ${shellQuote(cwd)} ${shellQuote(codexId)}`;
-    const script = [
-      "clear",
-      `printf ${shellQuote(`Attaching Orkestr thread ${currentThread.name || currentThread.id} to Codex...\\n\\n`)}`,
-      attachCommand,
-      `printf ${shellQuote("\\nCodex attach exited. Press Enter to close this browser terminal.\\n")}`,
-      "read _",
-    ].join("; ");
-    await execFileAsync("tmux", ["new-session", "-d", "-s", sessionName, "-c", cwd, script]);
+  if (await tmuxHasSession(sessionName)) {
+    // Browser Raw attach sessions are disposable; restart them so stale Codex resume screens are not replayed.
+    await killTmuxSession(sessionName).catch(() => undefined);
   }
+  const attachCommand = `codex --dangerously-bypass-approvals-and-sandbox resume -C ${shellQuote(cwd)} ${shellQuote(codexId)}`;
+  const script = [
+    "clear",
+    `printf ${shellQuote(`Attaching Orkestr thread ${currentThread.name || currentThread.id} to Codex...\\n\\n`)}`,
+    attachCommand,
+    `printf ${shellQuote("\\nCodex attach exited. Press Enter to close this browser terminal.\\n")}`,
+    "read _",
+  ].join("; ");
+  await execFileAsync("tmux", ["new-session", "-d", "-s", sessionName, "-c", cwd, script]);
 
   const paneId = await tmuxPaneId(sessionName);
   if (!paneId) return null;
