@@ -28,6 +28,21 @@ export async function latestWhatsAppParent(thread, timestamp, env = process.env)
   return latestWhatsAppInput(messages, timestamp, thread);
 }
 
+export function threadWhatsAppBindingParent(thread = null) {
+  const binding = thread?.binding || {};
+  const connector = clean(binding.connector || "whatsapp").toLowerCase();
+  const chatId = clean(binding.chatId);
+  if (connector !== "whatsapp" || !chatId) return null;
+  if (binding.enabled === false || binding.mirrorToWhatsApp === false || binding.mirrorReplies === false) return null;
+  return {
+    id: null,
+    connector: "whatsapp",
+    source: "whatsapp",
+    chatId,
+    accountId: clean(binding.responderAccountId || binding.outboundAccountId),
+  };
+}
+
 function whatsappParentChatId(parent = null, thread = null) {
   return clean(parent?.chatId || thread?.binding?.chatId);
 }

@@ -22,7 +22,13 @@ import {
   threadForCodexThreadId,
   timeoutMs,
 } from "./codex-app-server-common.js";
-import { codexAppServerMessageFields, latestWhatsAppParent, whatsappOrigin, whatsappProjectionFields } from "./codex-app-server-whatsapp.js";
+import {
+  codexAppServerMessageFields,
+  latestWhatsAppParent,
+  threadWhatsAppBindingParent,
+  whatsappOrigin,
+  whatsappProjectionFields,
+} from "./codex-app-server-whatsapp.js";
 
 const execFileAsync = promisify(execFile);
 const clients = new Map();
@@ -326,7 +332,9 @@ export class CodexAppServerClient {
           }, this.env).catch(() => {});
           if (codexTurnConversationInterrupted(turn)) {
             const text = codexConversationInterruptionNoticeText();
-            const whatsappParent = await latestWhatsAppParent(thread, params.timestamp || nowIso(), this.env);
+            const whatsappParent =
+              await latestWhatsAppParent(thread, params.timestamp || nowIso(), this.env) ||
+              threadWhatsAppBindingParent(thread);
             const messageRecord = await appendOrUpdateEventMessage(thread, {
               role: "assistant",
               source: "orkestr_runtime",

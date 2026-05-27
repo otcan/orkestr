@@ -13,6 +13,7 @@ import {
 } from "./codex-app-server-common.js";
 import {
   codexAppServerMessageFields,
+  threadWhatsAppBindingParent,
   whatsappOrigin,
   whatsappProjectionFields,
 } from "./codex-app-server-whatsapp.js";
@@ -37,8 +38,8 @@ function staleAppServerRuntime(thread, clientState = null) {
 }
 
 function staleFinalGraceMs(env = process.env) {
-  const parsed = Number(env.ORKESTR_CODEX_APP_SERVER_STALE_FINAL_GRACE_MS || 120000);
-  return Number.isFinite(parsed) ? Math.max(0, parsed) : 120000;
+  const parsed = Number(env.ORKESTR_CODEX_APP_SERVER_STALE_FINAL_GRACE_MS || 30000);
+  return Number.isFinite(parsed) ? Math.max(0, parsed) : 30000;
 }
 
 function timestampMs(value) {
@@ -110,10 +111,10 @@ function staleTurnEventId(thread, codexId, turn) {
   });
 }
 
-function noticeWhatsappParent(turn) {
+function noticeWhatsappParent(turn, thread = null) {
   if (turn?.latestUser && whatsappOrigin(turn.latestUser)) return turn.latestUser;
   if (turn?.latestAssistant && whatsappOrigin(turn.latestAssistant)) return turn.latestAssistant;
-  return null;
+  return threadWhatsAppBindingParent(thread);
 }
 
 async function appendStaleTurnNotice(thread, messages, turn, env = process.env) {
@@ -122,7 +123,7 @@ async function appendStaleTurnNotice(thread, messages, turn, env = process.env) 
   const text = staleTurnNoticeText(turn?.reason);
   const eventId = staleTurnEventId(thread, codexId, turn);
   const existing = messages.find((message) => message.eventId === eventId);
-  const whatsappParent = noticeWhatsappParent(turn);
+  const whatsappParent = noticeWhatsappParent(turn, thread);
   const notice = await appendOrUpdateEventMessage(thread, {
     role: "assistant",
     source: "orkestr_runtime",
