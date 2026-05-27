@@ -39,6 +39,7 @@ export class OnboardingPageComponent implements OnInit, OnChanges, OnDestroy {
   private readonly storageKey = "orkestr:onboarding";
   private poller?: ReturnType<typeof setInterval>;
   private outlookPoller?: ReturnType<typeof setInterval>;
+  private codexAuthPoller?: ReturnType<typeof setInterval>;
 
   @Input() mode: SetupPageMode = "onboarding";
   @Input() setupSection = "";
@@ -140,6 +141,7 @@ export class OnboardingPageComponent implements OnInit, OnChanges, OnDestroy {
   ngOnDestroy(): void {
     if (this.poller) clearInterval(this.poller);
     if (this.outlookPoller) clearInterval(this.outlookPoller);
+    if (this.codexAuthPoller) clearInterval(this.codexAuthPoller);
   }
 
   async load(showBusy = true): Promise<void> {
@@ -278,6 +280,23 @@ export class OnboardingPageComponent implements OnInit, OnChanges, OnDestroy {
     const intervalMs = Math.max(5, Number(intervalSeconds) || 5) * 1000;
     this.outlookPoller = setInterval(() => void this.pollOutlookOAuth(), intervalMs);
     void this.pollOutlookOAuth();
+  }
+
+  private startCodexAuthPolling(expiresAt = ""): void {
+    if (this.codexAuthPoller) clearInterval(this.codexAuthPoller);
+    const expiresAtMs = Date.parse(expiresAt || "") || Date.now() + 15 * 60_000;
+    const poll = (): void => {
+      if (Date.now() > expiresAtMs) {
+        if (this.codexAuthPoller) clearInterval(this.codexAuthPoller);
+        this.codexAuthPoller = undefined;
+        this.notice = "Codex sign-in expired. Start again.";
+        this.renderNow();
+        return;
+      }
+      void this.pollCodexAuth();
+    };
+    this.codexAuthPoller = setInterval(poll, 5_000);
+    poll();
   }
 
   async prepareLinkedIn(): Promise<void> {
@@ -943,10 +962,34 @@ export class OnboardingPageComponent implements OnInit, OnChanges, OnDestroy {
       this.notice = this.codexDeviceCode ? "Codex sign-in opened. Enter the device code in the browser." : "Codex sign-in started.";
       this.error = "";
       await this.load(false);
+      this.startCodexAuthPolling(this.codexAuthExpiresAt);
     } catch (error) {
       this.error = this.errorText(error);
     } finally {
       this.busy = false;
+    }
+  }
+
+  async pollCodexAuth(): Promise<void> {
+    try {
+      const setup = await firstValueFrom(this.api.setupStatus());
+      this.setup = setup;
+      this.hydrateForms(setup);
+      if (this.connector("codex")?.state !== "connected") return;
+      if (this.codexAuthPoller) clearInterval(this.codexAuthPoller);
+      this.codexAuthPoller = undefined;
+      this.codexDeviceCode = "";
+      this.codexAuthUrl = "";
+      this.codexAuthExpiresAt = "";
+      this.notice = this.isSetupMode() ? "Codex connected. Opening Orkestr." : "Codex connected. Continue setup.";
+      this.error = "";
+      if (this.activeStep === "codex") await this.loadCodexAppServer(false);
+      if (this.isSetupMode()) globalThis.setTimeout(() => this.openApp(), 250);
+      else if (!this.isLastStep()) this.nextStep();
+    } catch (error) {
+      this.error = this.errorText(error);
+    } finally {
+      this.renderNow();
     }
   }
 
