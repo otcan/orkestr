@@ -156,6 +156,7 @@ test("web UI exposes browser terminal attach for app-server threads", async () =
   assert.ok(sources.includes("ensureAppServerAttachPane"));
   assert.ok(sources.includes("browserAttachSessionName"));
   assert.ok(sources.includes("codex-browser-attach"));
+  assert.ok(sources.includes("killTmuxSession(sessionName)"));
   assert.ok(serverSources.includes("RAW_ESCAPE_KEY_MAP"));
   assert.ok(serverSources.includes("\"\\x1b[A\": \"Up\""));
   assert.ok(serverSources.includes("\"\\x1b[B\": \"Down\""));
@@ -168,6 +169,15 @@ test("web UI exposes browser terminal attach for app-server threads", async () =
   assert.ok(!webSources.includes("openNativeTerminal"));
   assert.ok(!webSources.includes("attach/open-terminal"));
   assert.ok(!webSources.includes("Host Terminal"));
+});
+
+test("browser raw attach refreshes stale app-server sessions before resume", async () => {
+  const source = await fs.readFile("apps/server/src/thread-stream.ts", "utf8");
+  const attachPane = source.slice(source.indexOf("async function ensureAppServerAttachPane("), source.indexOf("async function sendRawInput("));
+
+  assert.ok(attachPane.includes("await killTmuxSession(sessionName)"));
+  assert.ok(attachPane.indexOf("await killTmuxSession(sessionName)") < attachPane.indexOf("new-session"));
+  assert.ok(!attachPane.includes("if (!(await tmuxHasSession(sessionName)))"));
 });
 
 test("thread links do not persist the raw panel", async () => {
