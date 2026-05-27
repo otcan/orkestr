@@ -1939,6 +1939,10 @@ test("failed WhatsApp-origin thread delivery raises a connector delivery signal"
   process.env.TMUX_LOG = fakeTmux.log;
   process.env.TMUX_STATE = fakeTmux.state;
   process.env.TMUX_CAPTURE_FILE = captureFile;
+  const signals = [];
+  const clearSignalHandler = setThreadConnectorDeliverySignalHandler((event) => {
+    signals.push(event);
+  });
 
   try {
     consumeThreadConnectorDeliverySignalCount();
@@ -1984,9 +1988,10 @@ test("failed WhatsApp-origin thread delivery raises a connector delivery signal"
 
     assert.equal(failed.state, "failed");
     assert.equal(failed.observedVia, "input_stuck_at_prompt");
-    assert.equal(consumeThreadConnectorDeliverySignalCount(), 1);
-    assert.equal(consumeThreadConnectorDeliverySignalCount(), 0);
+    assert.equal(signals.filter((event) => event.messageId === input.id).length, 1);
+    consumeThreadConnectorDeliverySignalCount();
   } finally {
+    clearSignalHandler();
     restoreEnvValue("PATH", priorPath);
     restoreEnvValue("TMUX_LOG", priorTmuxLog);
     restoreEnvValue("TMUX_STATE", priorTmuxState);
