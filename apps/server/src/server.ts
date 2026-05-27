@@ -99,6 +99,7 @@ export async function startServer({ port = 19812, host = "127.0.0.1", openBrowse
   attachThreadStreamUpgrade(app.getHttpServer());
   await app.listen(port, host);
   whatsappDeliveryScheduler.schedule();
+  const startupRecoveryTimer = scheduleStartupRecovery();
 
   const url = `http://${host}:${port}`;
   console.log(`Orkestr setup wizard: ${url}`);
@@ -110,6 +111,7 @@ export async function startServer({ port = 19812, host = "127.0.0.1", openBrowse
     clearConnectorDeliverySignalHandler();
     clearDeliveryFailureHandler();
     clearCodexAppServerMessageHandler();
+    if (startupRecoveryTimer) clearTimeout(startupRecoveryTimer);
     whatsappDeliveryScheduler.close();
     stopCodexAppServerClients();
     await stopLocalWhatsAppBridge().catch(() => {});
@@ -129,6 +131,25 @@ export function paneProgressMonitorIntervalMs() {
 function timerLoopIntervalMs() {
   const parsed = Number(process.env.ORKESTR_TIMER_LOOP_INTERVAL_MS || 30_000);
   return Number.isFinite(parsed) ? Math.max(5000, parsed) : 30_000;
+}
+
+export function startupRecoveryDelayMs() {
+  const parsed = Number(process.env.ORKESTR_STARTUP_RECOVERY_DELAY_MS || 1000);
+  return Number.isFinite(parsed) ? Math.max(0, parsed) : 1000;
+}
+
+function scheduleStartupRecovery() {
+  if (process.env.ORKESTR_STARTUP_RECOVERY === "0") return null;
+  const timer = setTimeout(() => {
+    recoverAfterStartup().catch(() => {});
+  }, startupRecoveryDelayMs());
+  timer.unref?.();
+  return timer;
+}
+
+async function recoverAfterStartup() {
+  await drainAllPendingThreadInputs().catch(() => []);
+  return syncRuntimeAndDeliverWhatsApp({ forceWhatsapp: true });
 }
 
 async function runTimerLoop() {

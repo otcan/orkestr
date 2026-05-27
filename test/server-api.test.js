@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { runtimeMonitorIntervalMs, startServer } from "../apps/server/src/server.js";
+import { runtimeMonitorIntervalMs, startServer, startupRecoveryDelayMs } from "../apps/server/src/server.js";
 
 async function request(baseUrl, route, options = {}) {
   const response = await fetch(`${baseUrl}${route}`, {
@@ -101,6 +101,23 @@ test("runtime monitor default keeps Codex reply import responsive", () => {
   } finally {
     if (priorInterval === undefined) delete process.env.ORKESTR_RUNTIME_MONITOR_INTERVAL_MS;
     else process.env.ORKESTR_RUNTIME_MONITOR_INTERVAL_MS = priorInterval;
+  }
+});
+
+test("startup recovery delay is enabled by default and bounded", () => {
+  const priorDelay = process.env.ORKESTR_STARTUP_RECOVERY_DELAY_MS;
+  try {
+    delete process.env.ORKESTR_STARTUP_RECOVERY_DELAY_MS;
+    assert.equal(startupRecoveryDelayMs(), 1000);
+
+    process.env.ORKESTR_STARTUP_RECOVERY_DELAY_MS = "-5";
+    assert.equal(startupRecoveryDelayMs(), 0);
+
+    process.env.ORKESTR_STARTUP_RECOVERY_DELAY_MS = "2500";
+    assert.equal(startupRecoveryDelayMs(), 2500);
+  } finally {
+    if (priorDelay === undefined) delete process.env.ORKESTR_STARTUP_RECOVERY_DELAY_MS;
+    else process.env.ORKESTR_STARTUP_RECOVERY_DELAY_MS = priorDelay;
   }
 });
 
