@@ -5,8 +5,10 @@ import { WebSocketServer, type WebSocket } from "ws";
 import { runtimeStatus, wakeThread } from "../../../packages/core/src/runtime-leases.js";
 import { getThread } from "../../../packages/core/src/threads.js";
 import { codexThreadId, threadUsesCodexAppServer } from "../../../packages/core/src/codex-app-server-common.js";
+import { recordCodexRuntimeAuthInvalidSignal } from "../../../packages/core/src/codex-auth-health.js";
 import { codexResumeCommand } from "../../../packages/core/src/codex-attach-command.js";
 import { shellQuote } from "../../../packages/core/src/native-terminal.js";
+import { paneProgressFromText } from "../../../packages/core/src/pane-progress.js";
 import { killTmuxSession } from "../../../packages/core/src/tmux-runtime.js";
 import { threadSummaryPayload } from "./thread-summary.js";
 
@@ -438,6 +440,14 @@ export function attachThreadStreamUpgrade(server: Server): void {
           const screen = await capturePane(paneId);
           if (screen !== lastScreen) {
             lastScreen = screen;
+            const progress = {
+              ...paneProgressFromText(screen, { tailLines: 20 }),
+              paneId,
+              sessionName: status?.sessionName || null,
+            };
+            if (progress.codexAuthInvalid) {
+              await recordCodexRuntimeAuthInvalidSignal({ thread, progress }).catch(() => undefined);
+            }
             nextSnapshotIntervalMs = rawSnapshotActiveIntervalMs();
             wsSend(ws, { type: "visible_screen", data: screen });
           } else {
