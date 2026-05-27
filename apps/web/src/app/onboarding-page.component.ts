@@ -981,11 +981,10 @@ export class OnboardingPageComponent implements OnInit, OnChanges, OnDestroy {
       this.codexDeviceCode = "";
       this.codexAuthUrl = "";
       this.codexAuthExpiresAt = "";
-      this.notice = this.isSetupMode() ? "Codex connected. Opening Orkestr." : "Codex connected. Continue setup.";
+      this.notice = this.isSetupMode() ? "Codex connected. You can open Orkestr when ready." : "Codex connected. Continue setup.";
       this.error = "";
       if (this.activeStep === "codex") await this.loadCodexAppServer(false);
-      if (this.isSetupMode()) globalThis.setTimeout(() => this.openApp(), 250);
-      else if (!this.isLastStep()) this.nextStep();
+      if (!this.isSetupMode() && !this.isLastStep()) this.nextStep();
     } catch (error) {
       this.error = this.errorText(error);
     } finally {
