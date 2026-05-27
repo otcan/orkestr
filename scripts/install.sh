@@ -1228,6 +1228,20 @@ local_server_wrapper() {
   echo "${ORKESTR_LOCAL_SERVER_WRAPPER:-$data_dir/bin/orkestr-server}"
 }
 
+local_app_dir() {
+  if [ -n "${repo_dir:-}" ]; then
+    echo "$repo_dir"
+  elif [ "$local_mode" -eq 1 ]; then
+    pwd
+  else
+    echo "$install_dir"
+  fi
+}
+
+local_server_process_path() {
+  echo "$(local_app_dir)/dist/server/apps/server/src/server.js"
+}
+
 local_cli_bin() {
   local bin_dir
   bin_dir="${ORKESTR_LOCAL_BIN_DIR:-$HOME/.local/bin}"
@@ -1500,6 +1514,17 @@ remove_local_cron_entry() {
   rm -f "$tmp"
 }
 
+stop_local_server_processes() {
+  local wrapper server_js
+  if ! have pkill; then
+    return 0
+  fi
+  wrapper="$(local_server_wrapper)"
+  server_js="$(local_server_process_path)"
+  [ -n "$wrapper" ] && pkill -f "$wrapper" >/dev/null 2>&1 || true
+  [ -n "$server_js" ] && pkill -f "$server_js" >/dev/null 2>&1 || true
+}
+
 stop_local_service_if_present() {
   local label domain plist unit unit_file pid_file pid
   label="$(local_service_label)"
@@ -1525,9 +1550,7 @@ stop_local_service_if_present() {
     fi
     rm -f "$pid_file"
   fi
-  if is_macos && have pkill; then
-    pkill -f "$(local_server_wrapper)" >/dev/null 2>&1 || true
-  fi
+  stop_local_server_processes
 }
 
 fresh_reset_local_install() {

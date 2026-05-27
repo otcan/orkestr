@@ -405,17 +405,18 @@ async function cronServiceAction(action, ctx) {
   const logDir = ctx.env.ORKESTR_LOCAL_LOG_DIR || path.join(ctx.env.ORKESTR_HOME || ".", "logs");
   const outLog = path.join(logDir, "orkestr.out.log");
   const errLog = path.join(logDir, "orkestr.err.log");
+  const stopCommand = localBackgroundStopCommand(ctx.env, pidFile);
   if (!wrapper) throw new Error("ORKESTR_LOCAL_SERVER_WRAPPER is required for cron service control.");
   if (action === "status") {
     return spawnInherited(ctx.spawnImpl, "sh", ["-c", `if [ -f ${shellToken(pidFile)} ] && kill -0 "$(cat ${shellToken(pidFile)})" >/dev/null 2>&1; then echo "Orkestr running: $(cat ${shellToken(pidFile)})"; else echo "Orkestr is not running"; exit 3; fi`]);
   }
   if (action === "stop") {
-    return spawnInherited(ctx.spawnImpl, "sh", ["-c", `if [ -f ${shellToken(pidFile)} ]; then kill "$(cat ${shellToken(pidFile)})" >/dev/null 2>&1 || true; rm -f ${shellToken(pidFile)}; fi`]);
+    return spawnInherited(ctx.spawnImpl, "sh", ["-c", stopCommand]);
   }
   if (action === "start") {
-    return spawnInherited(ctx.spawnImpl, "sh", ["-c", `mkdir -p ${shellToken(logDir)}; if [ -f ${shellToken(pidFile)} ] && kill -0 "$(cat ${shellToken(pidFile)})" >/dev/null 2>&1; then exit 0; fi; nohup ${shellToken(wrapper)} >> ${shellToken(outLog)} 2>> ${shellToken(errLog)} & echo $! > ${shellToken(pidFile)}`]);
+    return spawnInherited(ctx.spawnImpl, "sh", ["-c", `mkdir -p ${shellToken(logDir)}; if [ -f ${shellToken(pidFile)} ] && kill -0 "$(cat ${shellToken(pidFile)})" >/dev/null 2>&1; then exit 0; fi; ${localBackgroundProcessCleanupCommand(ctx.env)}; nohup ${shellToken(wrapper)} >> ${shellToken(outLog)} 2>> ${shellToken(errLog)} & echo $! > ${shellToken(pidFile)}`]);
   }
-  return spawnInherited(ctx.spawnImpl, "sh", ["-c", `if [ -f ${shellToken(pidFile)} ]; then kill "$(cat ${shellToken(pidFile)})" >/dev/null 2>&1 || true; rm -f ${shellToken(pidFile)}; fi; mkdir -p ${shellToken(logDir)}; nohup ${shellToken(wrapper)} >> ${shellToken(outLog)} 2>> ${shellToken(errLog)} & echo $! > ${shellToken(pidFile)}`]);
+  return spawnInherited(ctx.spawnImpl, "sh", ["-c", `${stopCommand}; mkdir -p ${shellToken(logDir)}; nohup ${shellToken(wrapper)} >> ${shellToken(outLog)} 2>> ${shellToken(errLog)} & echo $! > ${shellToken(pidFile)}`]);
 }
 
 async function listSecurityChallenges(argv, ctx) {
@@ -821,6 +822,20 @@ function formatSecuritySessionTable(sessions) {
 function parseTmuxSession(command = "") {
   const match = String(command).match(/tmux\s+attach-session\s+-t\s+(.+)$/);
   return match?.[1]?.trim() || "";
+}
+
+function localBackgroundStopCommand(env, pidFile) {
+  return `if [ -f ${shellToken(pidFile)} ]; then kill "$(cat ${shellToken(pidFile)})" >/dev/null 2>&1 || true; rm -f ${shellToken(pidFile)}; fi; ${localBackgroundProcessCleanupCommand(env)}`;
+}
+
+function localBackgroundProcessCleanupCommand(env = {}) {
+  const appDir = String(env.ORKESTR_APP_DIR || "").trim();
+  const patterns = [
+    String(env.ORKESTR_LOCAL_SERVER_WRAPPER || "").trim(),
+    appDir ? path.join(appDir, "dist/server/apps/server/src/server.js") : "",
+  ].filter(Boolean);
+  if (!patterns.length) return ":";
+  return patterns.map((pattern) => `if command -v pgrep >/dev/null 2>&1; then pgrep -f ${shellToken(pattern)} | while IFS= read -r pid; do [ -n "$pid" ] || continue; [ "$pid" = "$$" ] && continue; kill "$pid" >/dev/null 2>&1 || true; done; fi`).join("; ");
 }
 
 function shellToken(value) {

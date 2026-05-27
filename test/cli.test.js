@@ -781,6 +781,7 @@ test("CLI service controls local background services without launchctl", async (
   const code = await runCli(["service", "start"], {
     env: {
       ORKESTR_LOCAL_SERVICE_MANAGER: "background",
+      ORKESTR_APP_DIR: "/Users/demo/orkestr",
       ORKESTR_HOME: "/Users/demo/.orkestr",
       ORKESTR_LOCAL_SERVER_WRAPPER: "/Users/demo/.orkestr/bin/orkestr-server",
       ORKESTR_LOCAL_PID_FILE: "/Users/demo/.orkestr/orkestr.pid",
@@ -800,6 +801,37 @@ test("CLI service controls local background services without launchctl", async (
   assert.equal(spawned[0].command, "sh");
   assert.match(spawned[0].args[1], /nohup/);
   assert.match(spawned[0].args[1], /orkestr-server/);
+  assert.match(spawned[0].args[1], /dist\/server\/apps\/server\/src\/server\.js/);
+  assert.doesNotMatch(spawned[0].args[1], /launchctl|sudo|osascript/);
+});
+
+test("CLI stop cleans stale local background server processes", async () => {
+  const spawned = [];
+  const code = await runCli(["service", "stop"], {
+    env: {
+      ORKESTR_LOCAL_SERVICE_MANAGER: "background",
+      ORKESTR_APP_DIR: "/Users/demo/orkestr",
+      ORKESTR_HOME: "/Users/demo/.orkestr",
+      ORKESTR_LOCAL_SERVER_WRAPPER: "/Users/demo/.orkestr/bin/orkestr-server",
+      ORKESTR_LOCAL_PID_FILE: "/Users/demo/.orkestr/orkestr.pid",
+      ORKESTR_LOCAL_LOG_DIR: "/Users/demo/.orkestr/logs",
+    },
+    stdout: capture(),
+    stderr: capture(),
+    spawnImpl(command, args) {
+      spawned.push({ command, args });
+      const child = new EventEmitter();
+      queueMicrotask(() => child.emit("exit", 0));
+      return child;
+    },
+  });
+
+  assert.equal(code, 0);
+  assert.equal(spawned[0].command, "sh");
+  assert.match(spawned[0].args[1], /kill "\$\(cat/);
+  assert.match(spawned[0].args[1], /pgrep -f/);
+  assert.match(spawned[0].args[1], /orkestr-server/);
+  assert.match(spawned[0].args[1], /dist\/server\/apps\/server\/src\/server\.js/);
   assert.doesNotMatch(spawned[0].args[1], /launchctl|sudo|osascript/);
 });
 
