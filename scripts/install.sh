@@ -1224,6 +1224,10 @@ local_pid_file() {
   echo "${ORKESTR_LOCAL_PID_FILE:-$data_dir/orkestr.pid}"
 }
 
+local_tmux_session() {
+  echo "${ORKESTR_LOCAL_TMUX_SESSION:-orkestr-service}"
+}
+
 local_server_wrapper() {
   echo "${ORKESTR_LOCAL_SERVER_WRAPPER:-$data_dir/bin/orkestr-server}"
 }
@@ -1425,20 +1429,35 @@ install_cron_service() {
   crontab "$tmp"
   rm -f "$tmp"
   if [ "$start_after_install" = "1" ]; then
-    if [ -f "$pid_file" ] && kill -0 "$(cat "$pid_file")" >/dev/null 2>&1; then
-      return 0
-    fi
-    nohup "$wrapper" >> "$out_log" 2>> "$err_log" &
-    echo "$!" > "$pid_file"
+    start_local_background_process
   fi
 }
 
-install_background_service() {
-  local wrapper out_log err_log pid_file marker_file
+start_local_background_process() {
+  local wrapper out_log err_log pid_file session command
   wrapper="$(local_server_wrapper)"
   out_log="$(local_log_dir)/orkestr.out.log"
   err_log="$(local_log_dir)/orkestr.err.log"
   pid_file="$(local_pid_file)"
+  session="$(local_tmux_session)"
+  mkdir -p "$(local_log_dir)"
+  if [ -f "$pid_file" ] && kill -0 "$(cat "$pid_file")" >/dev/null 2>&1; then
+    return 0
+  fi
+  if have tmux; then
+    tmux kill-session -t "$session" >/dev/null 2>&1 || true
+    command="exec $(shell_quote "$wrapper") >> $(shell_quote "$out_log") 2>> $(shell_quote "$err_log")"
+    if tmux new-session -d -s "$session" "$command"; then
+      tmux display-message -p -t "$session" '#{pane_pid}' > "$pid_file" 2>/dev/null || true
+      return 0
+    fi
+  fi
+  nohup "$wrapper" >> "$out_log" 2>> "$err_log" &
+  echo "$!" > "$pid_file"
+}
+
+install_background_service() {
+  local marker_file
   marker_file="$(local_service_file background)"
   mkdir -p "$(local_log_dir)" "$(dirname "$marker_file")"
   cat > "$marker_file" <<EOF
@@ -1446,11 +1465,7 @@ Orkestr local background service.
 Use $(local_cli_bin) service start|stop|restart|status|logs.
 EOF
   if [ "$start_after_install" = "1" ]; then
-    if [ -f "$pid_file" ] && kill -0 "$(cat "$pid_file")" >/dev/null 2>&1; then
-      return 0
-    fi
-    nohup "$wrapper" >> "$out_log" 2>> "$err_log" &
-    echo "$!" > "$pid_file"
+    start_local_background_process
   fi
 }
 
@@ -1515,7 +1530,11 @@ remove_local_cron_entry() {
 }
 
 stop_local_server_processes() {
-  local wrapper server_js
+  local wrapper server_js session
+  session="$(local_tmux_session)"
+  if have tmux; then
+    tmux kill-session -t "$session" >/dev/null 2>&1 || true
+  fi
   if ! have pkill; then
     return 0
   fi
@@ -1592,6 +1611,7 @@ write_local_env_file() {
     write_env_var ORKESTR_LOCAL_SERVER_WRAPPER "$(local_server_wrapper)"
     write_env_var ORKESTR_LOCAL_LOG_DIR "$(local_log_dir)"
     write_env_var ORKESTR_LOCAL_PID_FILE "$(local_pid_file)"
+    write_env_var ORKESTR_LOCAL_TMUX_SESSION "$(local_tmux_session)"
     write_env_var ORKESTR_LOCAL_CLI_BIN "$(local_cli_bin)"
   } > "$local_env_file"
   chmod 0600 "$local_env_file"

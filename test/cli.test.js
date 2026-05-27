@@ -785,6 +785,7 @@ test("CLI service controls local background services without launchctl", async (
       ORKESTR_HOME: "/Users/demo/.orkestr",
       ORKESTR_LOCAL_SERVER_WRAPPER: "/Users/demo/.orkestr/bin/orkestr-server",
       ORKESTR_LOCAL_PID_FILE: "/Users/demo/.orkestr/orkestr.pid",
+      ORKESTR_LOCAL_TMUX_SESSION: "orkestr-service",
       ORKESTR_LOCAL_LOG_DIR: "/Users/demo/.orkestr/logs",
     },
     stdout: capture(),
@@ -800,8 +801,9 @@ test("CLI service controls local background services without launchctl", async (
   assert.equal(code, 0);
   assert.equal(spawned[0].command, "sh");
   assert.match(spawned[0].args[1], /nohup/);
+  assert.match(spawned[0].args[1], /tmux new-session/);
   assert.match(spawned[0].args[1], /orkestr-server/);
-  assert.match(spawned[0].args[1], /dist\/server\/apps\/server\/src\/server\.js/);
+  assert.match(spawned[0].args[1], /dist\/server\/apps\/server\/src\/server/);
   assert.doesNotMatch(spawned[0].args[1], /launchctl|sudo|osascript/);
 });
 
@@ -814,6 +816,7 @@ test("CLI stop cleans stale local background server processes", async () => {
       ORKESTR_HOME: "/Users/demo/.orkestr",
       ORKESTR_LOCAL_SERVER_WRAPPER: "/Users/demo/.orkestr/bin/orkestr-server",
       ORKESTR_LOCAL_PID_FILE: "/Users/demo/.orkestr/orkestr.pid",
+      ORKESTR_LOCAL_TMUX_SESSION: "orkestr-service",
       ORKESTR_LOCAL_LOG_DIR: "/Users/demo/.orkestr/logs",
     },
     stdout: capture(),
@@ -829,9 +832,9 @@ test("CLI stop cleans stale local background server processes", async () => {
   assert.equal(code, 0);
   assert.equal(spawned[0].command, "sh");
   assert.match(spawned[0].args[1], /kill "\$\(cat/);
+  assert.match(spawned[0].args[1], /tmux kill-session/);
   assert.match(spawned[0].args[1], /pgrep -f/);
-  assert.match(spawned[0].args[1], /orkestr-server/);
-  assert.match(spawned[0].args[1], /dist\/server\/apps\/server\/src\/server\.js/);
+  assert.match(spawned[0].args[1], /dist\/server\/apps\/server\/src\/server/);
   assert.doesNotMatch(spawned[0].args[1], /launchctl|sudo|osascript/);
 });
 

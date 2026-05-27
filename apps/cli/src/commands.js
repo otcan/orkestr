@@ -414,9 +414,9 @@ async function cronServiceAction(action, ctx) {
     return spawnInherited(ctx.spawnImpl, "sh", ["-c", stopCommand]);
   }
   if (action === "start") {
-    return spawnInherited(ctx.spawnImpl, "sh", ["-c", `mkdir -p ${shellToken(logDir)}; if [ -f ${shellToken(pidFile)} ] && kill -0 "$(cat ${shellToken(pidFile)})" >/dev/null 2>&1; then exit 0; fi; ${localBackgroundProcessCleanupCommand(ctx.env)}; nohup ${shellToken(wrapper)} >> ${shellToken(outLog)} 2>> ${shellToken(errLog)} & echo $! > ${shellToken(pidFile)}`]);
+    return spawnInherited(ctx.spawnImpl, "sh", ["-c", `mkdir -p ${shellToken(logDir)}; if [ -f ${shellToken(pidFile)} ] && kill -0 "$(cat ${shellToken(pidFile)})" >/dev/null 2>&1; then exit 0; fi; ${localBackgroundProcessCleanupCommand(ctx.env)}; ${localBackgroundStartProcessCommand(ctx.env, wrapper, outLog, errLog, pidFile)}`]);
   }
-  return spawnInherited(ctx.spawnImpl, "sh", ["-c", `${stopCommand}; mkdir -p ${shellToken(logDir)}; nohup ${shellToken(wrapper)} >> ${shellToken(outLog)} 2>> ${shellToken(errLog)} & echo $! > ${shellToken(pidFile)}`]);
+  return spawnInherited(ctx.spawnImpl, "sh", ["-c", `${stopCommand}; mkdir -p ${shellToken(logDir)}; ${localBackgroundStartProcessCommand(ctx.env, wrapper, outLog, errLog, pidFile)}`]);
 }
 
 async function listSecurityChallenges(argv, ctx) {
@@ -825,17 +825,39 @@ function parseTmuxSession(command = "") {
 }
 
 function localBackgroundStopCommand(env, pidFile) {
-  return `if [ -f ${shellToken(pidFile)} ]; then kill "$(cat ${shellToken(pidFile)})" >/dev/null 2>&1 || true; rm -f ${shellToken(pidFile)}; fi; ${localBackgroundProcessCleanupCommand(env)}`;
+  const tmuxSession = String(env.ORKESTR_LOCAL_TMUX_SESSION || "orkestr-service").trim();
+  const stopTmux = `if command -v tmux >/dev/null 2>&1; then tmux kill-session -t ${shellToken(tmuxSession)} >/dev/null 2>&1 || true; fi`;
+  return `${stopTmux}; if [ -f ${shellToken(pidFile)} ]; then kill "$(cat ${shellToken(pidFile)})" >/dev/null 2>&1 || true; rm -f ${shellToken(pidFile)}; fi; ${localBackgroundProcessCleanupCommand(env)}`;
+}
+
+function localBackgroundStartProcessCommand(env, wrapper, outLog, errLog, pidFile) {
+  const tmuxSession = String(env.ORKESTR_LOCAL_TMUX_SESSION || "orkestr-service").trim();
+  const tmuxCommand = `exec ${shellToken(wrapper)} >> ${shellToken(outLog)} 2>> ${shellToken(errLog)}`;
+  return `if command -v tmux >/dev/null 2>&1; then tmux kill-session -t ${shellToken(tmuxSession)} >/dev/null 2>&1 || true; if tmux new-session -d -s ${shellToken(tmuxSession)} ${shellToken(tmuxCommand)}; then tmux display-message -p -t ${shellToken(tmuxSession)} '#{pane_pid}' > ${shellToken(pidFile)} 2>/dev/null || true; exit 0; fi; fi; nohup ${shellToken(wrapper)} >> ${shellToken(outLog)} 2>> ${shellToken(errLog)} & echo $! > ${shellToken(pidFile)}`;
 }
 
 function localBackgroundProcessCleanupCommand(env = {}) {
   const appDir = String(env.ORKESTR_APP_DIR || "").trim();
   const patterns = [
-    String(env.ORKESTR_LOCAL_SERVER_WRAPPER || "").trim(),
     appDir ? path.join(appDir, "dist/server/apps/server/src/server.js") : "",
-  ].filter(Boolean);
+  ].map(processSearchPattern).filter(Boolean);
   if (!patterns.length) return ":";
   return patterns.map((pattern) => `if command -v pgrep >/dev/null 2>&1; then pgrep -f ${shellToken(pattern)} | while IFS= read -r pid; do [ -n "$pid" ] || continue; [ "$pid" = "$$" ] && continue; kill "$pid" >/dev/null 2>&1 || true; done; fi`).join("; ");
+}
+
+function processSearchPattern(value) {
+  const text = String(value || "").trim();
+  if (!text) return "";
+  if (text.length === 1) return escapeRegex(text);
+  return `[${escapeRegexCharClass(text[0])}]${escapeRegex(text.slice(1))}`;
+}
+
+function escapeRegex(value) {
+  return String(value).replace(/[\\^$.*+?()[\]{}|]/g, "\\$&");
+}
+
+function escapeRegexCharClass(value) {
+  return String(value).replace(/[\\\]^"-]/g, "\\$&");
 }
 
 function shellToken(value) {

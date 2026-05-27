@@ -110,6 +110,10 @@ test("install script exposes a host-native systemd VPS path", async () => {
   assert.match(script, /effective_local_service_manager/);
   assert.match(script, /Ignoring ORKESTR_LOCAL_SERVICE_MANAGER=launchd/);
   assert.match(script, /install_background_service/);
+  assert.match(script, /start_local_background_process/);
+  assert.match(script, /local_tmux_session/);
+  assert.match(script, /tmux new-session -d/);
+  assert.match(script, /ORKESTR_LOCAL_TMUX_SESSION/);
   assert.match(script, /ORKESTR_ALLOW_MACOS_LAUNCHD/);
   assert.match(script, /local_server_process_path/);
   assert.match(script, /stop_local_server_processes/);
