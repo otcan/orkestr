@@ -890,16 +890,29 @@ test("Codex app-server history sync adopts native turns without duplicating Orke
         { type: "userMessage", id: "native-user-001", content: [{ type: "text", text: "hello from native codex" }] },
         { type: "userMessage", id: "native-user-001-duplicate", content: [{ type: "text", text: "hello from native codex" }] },
         { type: "agentMessage", id: "native-agent-001", text: "native codex reply", phase: "final_answer" },
+        { type: "agentMessage", id: "native-agent-import-only", text: "native import-only reply", phase: "final_answer" },
       ],
     });
     await fs.writeFile(fake.stateFile, JSON.stringify(state, null, 2));
 
+    const liveProjectedReply = await appendThreadMessage(thread.id, {
+      role: "assistant",
+      source: "codex-app-server",
+      phase: "final_answer",
+      state: "completed",
+      text: "native codex reply",
+      codexThreadId: codexThread.id,
+      codexTurnId: nativeTurnId,
+      codexItemId: "msg_live_projected_reply",
+    }, env);
     const result = await syncCodexAppServerThreadMessages(started.thread, env, { force: true });
     const afterSync = await listThreadMessages(thread.id, env);
     const orkestrInputs = afterSync.filter((message) => message.role === "user" && /hello from orkestr/.test(message.text));
     const nativeInputs = afterSync.filter((message) => message.role === "user" && /hello from native codex/.test(message.text));
     const nativeInput = nativeInputs[0];
-    const nativeReply = afterSync.find((message) => message.role === "assistant" && /native codex reply/.test(message.text));
+    const nativeReplies = afterSync.filter((message) => message.role === "assistant" && /native codex reply/.test(message.text));
+    const nativeReply = nativeReplies[0];
+    const importOnlyReply = afterSync.find((message) => message.role === "assistant" && /native import-only reply/.test(message.text));
 
     assert.equal(result.synced, true);
     assert.equal(orkestrInputs.length, 1);
@@ -909,14 +922,19 @@ test("Codex app-server history sync adopts native turns without duplicating Orke
     assert.equal(nativeInput?.source, "codex-app-server-import");
     assert.equal(nativeInput?.codexTurnId, nativeTurnId);
     assert.equal(nativeInput?.createdAt, nativeCreatedAt);
-    assert.equal(nativeReply?.source, "codex-app-server-import");
-    assert.equal(nativeReply?.codexItemId, "native-agent-001");
-    assert.equal(nativeReply?.createdAt, nativeCreatedAt);
+    assert.equal(nativeReplies.length, 1);
+    assert.equal(nativeReply?.id, liveProjectedReply.id);
+    assert.equal(nativeReply?.source, "codex-app-server");
+    assert.equal(nativeReply?.codexItemId, "msg_live_projected_reply");
+    assert.notEqual(nativeReply?.createdAt, nativeCreatedAt);
+    assert.equal(importOnlyReply?.source, "codex-app-server-import");
+    assert.equal(importOnlyReply?.codexItemId, "native-agent-import-only");
+    assert.equal(importOnlyReply?.createdAt, nativeCreatedAt);
 
-    await updateThreadMessage(thread.id, nativeReply.id, { createdAt: "2026-05-27T11:54:36.000Z" }, env);
+    await updateThreadMessage(thread.id, importOnlyReply.id, { createdAt: "2026-05-27T11:54:36.000Z" }, env);
     const repair = await syncCodexAppServerThreadMessages(started.thread, env, { force: true });
     const repairedMessages = await listThreadMessages(thread.id, env);
-    const repairedReply = repairedMessages.find((message) => message.id === nativeReply.id);
+    const repairedReply = repairedMessages.find((message) => message.id === importOnlyReply.id);
 
     assert.equal(repair.synced, true);
     assert.equal(repair.updated, 1);

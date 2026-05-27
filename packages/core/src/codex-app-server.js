@@ -618,16 +618,24 @@ function codexHistoryTimestamp(turn = {}, item = {}) {
   return uuidV7Timestamp(item.id) || uuidV7Timestamp(turn.id);
 }
 
-function duplicateUserHistoryMatch(existing = {}, input = {}) {
+function codexAppServerHistorySource(value) {
+  return ["codex-app-server", "codex-app-server-import"].includes(clean(value));
+}
+
+function duplicateHistoryMatch(existing = {}, input = {}) {
   const existingItemId = clean(existing.codexItemId);
   const inputItemId = clean(input.codexItemId);
-  return clean(input.role) === "user" &&
-    clean(existing.role) === "user" &&
+  const role = clean(input.role);
+  const phase = clean(input.phase);
+  return role &&
+    clean(existing.role) === role &&
     existingItemId &&
     inputItemId &&
     existingItemId !== inputItemId &&
+    (role === "user" || codexAppServerHistorySource(existing.source)) &&
     clean(existing.codexThreadId) === clean(input.codexThreadId) &&
     clean(existing.codexTurnId) === clean(input.codexTurnId) &&
+    (role === "user" || clean(existing.phase || "final_answer") === clean(phase || "final_answer")) &&
     compactHistoryText(existing.text) === compactHistoryText(input.text);
 }
 
@@ -651,13 +659,14 @@ function matchingHydratedMessage(messages = [], input = {}) {
     );
     if (existing) return existing;
   }
-  if (role !== "user") return null;
   const text = compactHistoryText(input.text);
   if (!text) return null;
   return messages.find((message) =>
-    clean(message.role) === "user" &&
+    clean(message.role) === role &&
+    (role === "user" || codexAppServerHistorySource(message.source)) &&
     clean(message.codexThreadId) === codexId &&
     clean(message.codexTurnId) === turnId &&
+    (role === "user" || clean(message.phase || "final_answer") === clean(input.phase || "final_answer")) &&
     compactHistoryText(message.text) === text
   ) || null;
 }
@@ -688,7 +697,7 @@ async function upsertHydratedCodexMessage(thread, input, messages, env = process
   if (historyCreatedAt && (existing.source === "codex-app-server-import" || !clean(existing.createdAt))) {
     patch.createdAt = historyCreatedAt;
   }
-  if (duplicateUserHistoryMatch(existing, input)) {
+  if (duplicateHistoryMatch(existing, input)) {
     delete patch.eventId;
     delete patch.codexItemId;
     delete patch.executorItemId;
