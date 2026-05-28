@@ -75,5 +75,25 @@ test("ops desktop links are only shown for running desktops", async () => {
   assert.doesNotMatch(template, /browserAction\(browser, 'start'\)" \[disabled\]="busy"/);
   assert.match(component, /browserOpenUrl\(browser: BrowserSession\): string/);
   assert.match(component, /this\.browserStatus\(browser\) !== "running"/);
+  assert.match(component, /browserMobileUrl\(browser: BrowserSession\): string/);
+  assert.match(template, /browserMobileUrl\(browser\)/);
   assert.match(component, /activeBrowserActionSlug/);
+});
+
+test("mobile desktop shell wraps noVNC with phone-first controls", async () => {
+  const proxy = await fs.readFile("apps/server/src/desktop-proxy.ts", "utf8");
+  const shell = await fs.readFile("apps/server/src/mobile-desktop-shell.ts", "utf8");
+  const sharePage = await fs.readFile("apps/server/src/static-fallback.ts", "utf8");
+
+  assert.match(proxy, /isMobileDesktopRoute/);
+  assert.match(proxy, /serveMobileDesktopShell/);
+  assert.ok(shell.includes('import RFB from "/desktop/${encodedSlug}/core/rfb.js"'));
+  assert.match(shell, /id="touchpad">Touchpad/);
+  assert.match(shell, /id="direct">Tap/);
+  assert.match(shell, /id="keyboard">Keyboard/);
+  assert.match(shell, /id="paste">Paste/);
+  assert.match(shell, /id="ctrlV">Ctrl\+V/);
+  assert.match(shell, /new WheelEvent\("wheel"/);
+  assert.match(sharePage, /desktopDestination/);
+  assert.match(sharePage, /desktop\/.*\/mobile/);
 });

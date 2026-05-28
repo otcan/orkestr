@@ -46,12 +46,13 @@ export class OpsPageComponent implements OnInit, OnDestroy {
   opsModels: Record<string, unknown> | null = null;
   opsUsers: OrkestrUser[] = [];
   selectedUserId = "";
-  userDraftId = "";
+  userDraftEmail = "";
+  userDraftPhone = "";
   userDraftDisplayName = "";
   userDraftRole = "user";
   savingUser = false;
   pairingUserId = "";
-  userEditDraft: Record<string, { displayName: string; role: string; status: string; maxThreads: string }> = {};
+  userEditDraft: Record<string, { displayName: string; email: string; phoneNumber: string; role: string; status: string; maxThreads: string }> = {};
 
   ngOnInit(): void {
     void this.loadOps();
@@ -142,7 +143,7 @@ export class OpsPageComponent implements OnInit, OnDestroy {
     return this.opsUsers.find((user) => user.id === this.selectedUserId) || this.opsUsers[0] || null;
   }
 
-  userDraft(user: OrkestrUser): { displayName: string; role: string; status: string; maxThreads: string } {
+  userDraft(user: OrkestrUser): { displayName: string; email: string; phoneNumber: string; role: string; status: string; maxThreads: string } {
     return this.ensureUserDraft(user);
   }
 
@@ -151,12 +152,14 @@ export class OpsPageComponent implements OnInit, OnDestroy {
     this.savingUser = true;
     try {
       const payload = {
-        id: this.userDraftId.trim(),
-        displayName: this.userDraftDisplayName.trim() || this.userDraftId.trim(),
+        email: this.userDraftEmail.trim(),
+        phoneNumber: this.userDraftPhone.trim(),
+        displayName: this.userDraftDisplayName.trim() || this.userDraftEmail.trim(),
         role: this.userDraftRole,
       };
       const result = await firstValueFrom(this.api.createUser(payload));
-      this.userDraftId = "";
+      this.userDraftEmail = "";
+      this.userDraftPhone = "";
       this.userDraftDisplayName = "";
       this.userDraftRole = "user";
       await this.loadOps(false);
@@ -179,6 +182,8 @@ export class OpsPageComponent implements OnInit, OnDestroy {
       const maxThreads = draft.maxThreads.trim() === "" ? null : Number(draft.maxThreads);
       await firstValueFrom(this.api.updateUser(user.id, {
         displayName: draft.displayName,
+        email: draft.email,
+        phoneNumber: draft.phoneNumber,
         role: draft.role,
         status: draft.status,
         limits: { maxThreads },
@@ -235,6 +240,28 @@ export class OpsPageComponent implements OnInit, OnDestroy {
     this.activeBrowserActionSlug = slug;
     try {
       await firstValueFrom(this.api.browserAction(slug, action));
+      await this.loadOps(false);
+    } catch (error) {
+      this.error = this.errorText(error);
+    } finally {
+      this.activeBrowserActionSlug = "";
+      this.renderNow();
+    }
+  }
+
+  async shareDesktop(browser: BrowserSession): Promise<void> {
+    const slug = this.browserSlug(browser);
+    if (!slug || this.browserActionBusy(browser)) return;
+    this.activeBrowserActionSlug = slug;
+    try {
+      const result = await firstValueFrom(this.api.createDesktopShare(slug));
+      if (navigator?.clipboard && result.url) {
+        await navigator.clipboard.writeText(result.url).catch(() => undefined);
+      }
+      this.error = "";
+      this.notice = result.url
+        ? `Desktop phone link copied: ${result.url}`
+        : "Desktop phone link created.";
       await this.loadOps(false);
     } catch (error) {
       this.error = this.errorText(error);
@@ -306,6 +333,13 @@ export class OpsPageComponent implements OnInit, OnDestroy {
     return String(browser.type || browser.access || "desktop").trim();
   }
 
+  browserOwner(browser: BrowserSession): string {
+    const scope = String(browser.scopeLabel || "").trim();
+    const owner = String(browser.ownerUserId || "").trim();
+    if (scope && owner) return `${scope} · ${owner}`;
+    return scope || owner;
+  }
+
   browserPid(browser: BrowserSession): string {
     return browser.root_pid ? String(browser.root_pid) : "";
   }
@@ -318,6 +352,11 @@ export class OpsPageComponent implements OnInit, OnDestroy {
   browserOpenUrl(browser: BrowserSession): string {
     if (this.browserStatus(browser) !== "running") return "";
     return String(browser.desk_url || browser.url || "").trim();
+  }
+
+  browserMobileUrl(browser: BrowserSession): string {
+    const slug = this.browserSlug(browser);
+    return slug ? `/desktop/${encodeURIComponent(slug)}/mobile` : "";
   }
 
   browserActionBusy(browser: BrowserSession): boolean {
@@ -361,14 +400,21 @@ export class OpsPageComponent implements OnInit, OnDestroy {
     }
   }
 
-  userIdentityLabel(user: OrkestrUser): string {
-    const identities = user.linkedIdentities || [];
-    if (!identities.length) return "No linked identities";
-    return identities.map((identity) => {
-      const provider = String(identity.provider || "identity").toUpperCase();
-      const external = identity.displayName || identity.externalId || identity.accountId || "";
-      return external ? `${provider}: ${external}` : provider;
-    }).join(", ");
+  userAuthLabel(user: OrkestrUser): string {
+    const provider = String(user.authProvider || this.opsSetup?.auth?.provider || "browser_pairing").replace(/_/g, " ");
+    const factors = this.opsSetup?.auth?.login?.requiredFactors || ["email", "phone"];
+    return `${provider} · ${factors.join(" + ")}`;
+  }
+
+  keycloakConfigured(): boolean {
+    return this.opsSetup?.auth?.provider === "keycloak" && this.opsSetup?.auth?.configured === true;
+  }
+
+  authPolicySummary(): string {
+    const auth = this.opsSetup?.auth;
+    if (!auth) return "Email is unique; phone numbers may be shared.";
+    const factors = auth.login?.requiredFactors?.join(" + ") || "email + phone";
+    return `${auth.provider || "auth"} · passwordless · ${factors}`;
   }
 
   userLimitLabel(user: OrkestrUser): string {
@@ -417,12 +463,14 @@ export class OpsPageComponent implements OnInit, OnDestroy {
     for (const user of users) this.ensureUserDraft(user);
   }
 
-  private ensureUserDraft(user: OrkestrUser): { displayName: string; role: string; status: string; maxThreads: string } {
+  private ensureUserDraft(user: OrkestrUser): { displayName: string; email: string; phoneNumber: string; role: string; status: string; maxThreads: string } {
     const existing = this.userEditDraft[user.id];
     if (existing) return existing;
     const maxThreads = user.limits?.maxThreads;
     const draft = {
       displayName: user.displayName || user.id,
+      email: user.email || "",
+      phoneNumber: user.phoneNumber || "",
       role: user.role || "user",
       status: user.status || "active",
       maxThreads: maxThreads === null || maxThreads === undefined ? "" : String(maxThreads),

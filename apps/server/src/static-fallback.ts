@@ -19,8 +19,116 @@ export function registerStaticFallback(app: INestApplication): void {
     if (url.startsWith("/api/") || url.startsWith("/oauth/") || url.startsWith("/google-marketing/oauth/")) {
       return next();
     }
+    if (url.startsWith("/desktop-share/")) {
+      return serveDesktopSharePage(response);
+    }
     return serveStaticPath(url || "/", response);
   });
+}
+
+function serveDesktopSharePage(response: any) {
+  return response
+    .status(200)
+    .header("cache-control", "no-store")
+    .type("text/html; charset=utf-8")
+    .send(`<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Orkestr Desktop Access</title>
+  <style>
+    :root { color-scheme: light dark; font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+    body { margin: 0; min-height: 100vh; display: grid; place-items: center; background: #101418; color: #f6f8fb; }
+    main { width: min(92vw, 520px); padding: 28px; border: 1px solid #2d3743; background: #171d24; border-radius: 8px; box-shadow: 0 18px 60px #0008; }
+    h1 { margin: 0 0 10px; font-size: 24px; letter-spacing: 0; }
+    p { margin: 10px 0; color: #c8d0db; line-height: 1.45; }
+    code { display: block; margin: 18px 0; padding: 16px; border-radius: 6px; background: #0b0f14; color: #9be7c1; font-size: 17px; overflow-wrap: anywhere; user-select: all; }
+    button, a.button { display: inline-flex; align-items: center; justify-content: center; min-height: 42px; padding: 0 16px; border-radius: 6px; border: 1px solid #5b6b7d; background: #e8edf3; color: #111820; font-weight: 700; text-decoration: none; }
+    small { display: block; margin-top: 16px; color: #8f9baa; }
+    .error { color: #ffb4a9; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Orkestr Desktop Access</h1>
+    <p id="summary">Preparing a one-time desktop challenge.</p>
+    <code id="challenge">loading</code>
+    <button id="copy" type="button">Copy challenge</button>
+    <p id="status"></p>
+    <a id="open" class="button" href="#" hidden>Open desktop</a>
+    <small>This link only works for this browser after the challenge is pasted back to the Orkestr chat.</small>
+  </main>
+  <script>
+    const parts = location.pathname.split('/').filter(Boolean);
+    const shareId = parts[parts.length - 1] || '';
+    const subdomain = parts.length > 2 ? parts[1] : '';
+    const key = new URLSearchParams(location.search).get('key') || '';
+    const challenge = document.getElementById('challenge');
+    const statusNode = document.getElementById('status');
+    const summary = document.getElementById('summary');
+    const open = document.getElementById('open');
+    const copy = document.getElementById('copy');
+    const api = (action) => '/api/desktop-shares/' + encodeURIComponent(shareId) + '/' + action + '?key=' + encodeURIComponent(key) + (subdomain ? '&subdomain=' + encodeURIComponent(subdomain) : '');
+    function isPhoneLike() {
+      return /iPhone|iPad|iPod|Android/i.test(navigator.userAgent || '') || (navigator.maxTouchPoints > 1 && Math.min(innerWidth, innerHeight) < 900);
+    }
+    function desktopDestination(value) {
+      if (!isPhoneLike()) return value;
+      const parsed = new URL(value, location.origin);
+      const parts = parsed.pathname.split('/').filter(Boolean);
+      if (parts[0] === 'desktop' && parts[1] && parts[2] === 'vnc.html') {
+        return '/desktop/' + encodeURIComponent(decodeURIComponent(parts[1])) + '/mobile';
+      }
+      return value;
+    }
+    async function json(url) {
+      const response = await fetch(url, { credentials: 'same-origin' });
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok || body.ok === false) throw new Error(body.error || body.message || 'desktop_share_failed');
+      return body;
+    }
+    async function poll() {
+      try {
+        const body = await json(api('status'));
+        if (body.approved && body.desktopUrl) {
+          const desktopUrl = desktopDestination(body.desktopUrl);
+          statusNode.textContent = 'Approved. Opening the desktop.';
+          open.href = desktopUrl;
+          open.hidden = false;
+          location.href = desktopUrl;
+          return;
+        }
+        statusNode.textContent = 'Waiting for approval from chat.';
+        setTimeout(poll, 2000);
+      } catch (error) {
+        statusNode.textContent = error.message || String(error);
+        statusNode.className = 'error';
+      }
+    }
+    async function start() {
+      try {
+        const body = await json(api('open'));
+        const value = body.attempt && body.attempt.challenge ? body.attempt.challenge : '';
+        challenge.textContent = 'orkestr desktop approve ' + value;
+        summary.textContent = 'Copy this challenge and paste it into the Orkestr chat that requested the desktop.';
+        statusNode.textContent = 'Waiting for approval from chat.';
+        poll();
+      } catch (error) {
+        challenge.textContent = 'not available';
+        statusNode.textContent = error.message || String(error);
+        statusNode.className = 'error';
+      }
+    }
+    copy.addEventListener('click', async () => {
+      await navigator.clipboard.writeText(challenge.textContent || '');
+      copy.textContent = 'Copied';
+      setTimeout(() => { copy.textContent = 'Copy challenge'; }, 1200);
+    });
+    start();
+  </script>
+</body>
+</html>`);
 }
 
 async function serveStaticPath(requestUrl: string, response: any) {

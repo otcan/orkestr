@@ -9,7 +9,7 @@ import { createTimerForPrincipal, listTimersForPrincipal } from "../packages/cor
 import { adminPrincipal, userPrincipal } from "../packages/core/src/principal.js";
 import { sanitizeAction } from "../packages/core/src/llm-sanitizer.js";
 import { approvePairingChallenge } from "../packages/core/src/security.js";
-import { createUser, disableUser, findOrCreateExternalUser, listUsers, updateUser, upsertUser } from "../packages/core/src/users.js";
+import { createUser, disableUser, findOrCreateExternalUser, listUsers, readUserPrivateIdentities, updateUser, upsertUser } from "../packages/core/src/users.js";
 import {
   createThread,
   createThreadForPrincipal,
@@ -91,6 +91,8 @@ test("external WhatsApp identities can provision scoped non-admin users", async 
   assert.equal(user.role, "user");
   assert.equal(user.id, "whatsapp-wa-example-15551234567");
   assert.equal(again.id, user.id);
+  assert.equal("linkedIdentities" in user, false);
+  assert.equal((await readUserPrivateIdentities(user.id, env))[0].externalId, "15551234567");
 });
 
 test("admin user management preserves at least one active admin", async () => {
@@ -109,6 +111,27 @@ test("admin user management preserves at least one active admin", async () => {
   assert.equal(disabledDefaultAdmin.status, "disabled");
   assert.equal((await disableUser("alice", env)).status, "disabled");
   await assert.rejects(() => disableUser("ops-admin", env), /last_admin_required/);
+});
+
+test("managed users use unique email and non-unique phone contact fields", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-use-control-contact-"));
+  const env = { ORKESTR_HOME: home };
+
+  const alice = await createUser({ email: "Alice@Example.test", phoneNumber: "+15551234567", role: "user", displayName: "Alice" }, env);
+  const bob = await createUser({ email: "bob@example.test", phoneNumber: "+15551234567", role: "user", displayName: "Bob" }, env);
+
+  assert.equal(alice.id, "alice-example.test");
+  assert.equal(alice.email, "alice@example.test");
+  assert.equal(alice.phoneNumber, "+15551234567");
+  assert.equal(bob.phoneNumber, alice.phoneNumber);
+  await assert.rejects(
+    () => createUser({ email: "missing-phone@example.test", role: "user" }, env),
+    /user_phone_required/,
+  );
+  await assert.rejects(
+    () => createUser({ email: "ALICE@example.test", phoneNumber: "+15559876543", role: "user" }, env),
+    /user_email_already_exists/,
+  );
 });
 
 test("LLM sanitizer is fail-closed when no provider is configured", async () => {
@@ -238,17 +261,18 @@ test("user management API is admin-only and can pair a browser to a managed user
     const created = await read(await fetch(`${baseUrl}/api/users`, {
       method: "POST",
       headers: { "content-type": "application/json", cookie: adminCookie },
-      body: JSON.stringify({ id: "alice", role: "user", displayName: "Alice" }),
+      body: JSON.stringify({ email: "alice@example.test", phoneNumber: "+15551234567", role: "user", displayName: "Alice" }),
     }));
-    assert.equal(created.user.id, "alice");
+    assert.equal(created.user.id, "alice-example.test");
     assert.equal(created.user.role, "user");
+    assert.equal(created.user.email, "alice@example.test");
 
     const userChallenge = await read(await fetch(`${baseUrl}/api/setup/security/challenges`, {
       method: "POST",
       headers: { "content-type": "application/json", cookie: adminCookie },
-      body: JSON.stringify({ userId: "alice" }),
+      body: JSON.stringify({ userId: "alice-example.test" }),
     }));
-    assert.equal(userChallenge.challenge.userId, "alice");
+    assert.equal(userChallenge.challenge.userId, "alice-example.test");
     assert.equal(userChallenge.challenge.role, "user");
     await approvePairingChallenge(userChallenge.challengeId, { env: process.env });
 
@@ -264,7 +288,7 @@ test("user management API is admin-only and can pair a browser to a managed user
     assert.equal(denied.status, 403);
 
     const where = await read(await fetch(`${baseUrl}/api/whereiam`, { headers: { cookie: userCookie } }));
-    assert.equal(where.user.userId, "alice");
+    assert.equal(where.user.userId, "alice-example.test");
     assert.equal(where.user.role, "user");
   } finally {
     await new Promise((resolve) => server.close(resolve));

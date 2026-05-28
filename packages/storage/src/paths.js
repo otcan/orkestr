@@ -41,6 +41,7 @@ export function userDataPaths(userId, env = process.env) {
     workspaces: path.join(root, "workspaces"),
     browsers: path.join(root, "browsers"),
     oauth: path.join(root, "oauth"),
+    identities: path.join(root, "identities.json"),
     timers: path.join(root, "timers.json"),
   };
 }

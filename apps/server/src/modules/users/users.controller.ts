@@ -30,10 +30,12 @@ function userBody(body: Record<string, unknown> = {}) {
   return {
     id: String(body.id || body.userId || "").trim(),
     displayName: String(body.displayName || body.name || "").trim(),
+    email: String(body.email || "").trim(),
+    phoneNumber: String(body.phoneNumber || body.phone || "").trim(),
+    authProvider: String(body.authProvider || "").trim(),
     role: String(body.role || "").trim(),
     status: String(body.status || "").trim(),
     limits,
-    linkedIdentities: Array.isArray(body.linkedIdentities) ? body.linkedIdentities : undefined,
   };
 }
 
@@ -50,7 +52,6 @@ function userSummary(user: any, threads: any[], timers: any[]) {
     resourceSummary: {
       threadCount: ownedThreads.length,
       timerCount: ownedTimers.length,
-      linkedIdentityCount: Array.isArray(user.linkedIdentities) ? user.linkedIdentities.length : 0,
       lastActivityAt: lastActivity,
     },
   };

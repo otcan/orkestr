@@ -1,5 +1,6 @@
 import { dataPaths, ensureDataDirs, userDataPaths } from "../../storage/src/paths.js";
 import { appendEvent, readJson, writeJson } from "../../storage/src/store.js";
+import { authProvider } from "./auth-config.js";
 
 export const adminUserId = "admin";
 const userStatuses = new Set(["active", "disabled"]);
@@ -32,6 +33,14 @@ function normalizeStatus(value = "active") {
   return userStatuses.has(status) ? status : "active";
 }
 
+export function normalizeEmail(value = "") {
+  return String(value || "").trim().toLowerCase();
+}
+
+export function normalizePhoneNumber(value = "") {
+  return String(value || "").trim();
+}
+
 function userError(message, statusCode = 400) {
   const error = new Error(message);
   error.statusCode = statusCode;
@@ -44,8 +53,10 @@ export function defaultAdminUser(env = process.env) {
     id,
     role: "admin",
     displayName: "Admin",
+    email: normalizeEmail(env.ORKESTR_ADMIN_EMAIL || ""),
+    phoneNumber: normalizePhoneNumber(env.ORKESTR_ADMIN_PHONE || ""),
+    authProvider: authProvider(env),
     status: "active",
-    linkedIdentities: [],
     limits: defaultUserLimits("admin"),
     createdAt: nowIso(),
     updatedAt: nowIso(),
@@ -64,15 +75,15 @@ function normalizeIdentity(identity = {}) {
 
 export function normalizeUser(user = {}, env = process.env) {
   const role = normalizeRole(user.role);
-  const id = normalizeUserId(user.id || (role === "admin" ? defaultAdminUser(env).id : ""));
+  const id = normalizeUserId(user.id || user.userId || user.email || (role === "admin" ? defaultAdminUser(env).id : ""));
   return {
     id,
     role,
     displayName: String(user.displayName || user.name || id).trim(),
+    email: normalizeEmail(user.email || ""),
+    phoneNumber: normalizePhoneNumber(user.phoneNumber || user.phone || ""),
+    authProvider: String(user.authProvider || authProvider(env)).trim() || "browser_pairing",
     status: normalizeStatus(user.status),
-    linkedIdentities: Array.isArray(user.linkedIdentities)
-      ? user.linkedIdentities.map(normalizeIdentity).filter((identity) => identity.provider && identity.externalId)
-      : [],
     limits: {
       ...defaultUserLimits(role),
       ...(user.limits && typeof user.limits === "object" ? user.limits : {}),
@@ -88,8 +99,10 @@ export function publicUser(user = {}, env = process.env) {
     id: normalized.id,
     role: normalized.role,
     displayName: normalized.displayName,
+    email: normalized.email,
+    phoneNumber: normalized.phoneNumber,
+    authProvider: normalized.authProvider,
     status: normalized.status,
-    linkedIdentities: normalized.linkedIdentities.map((identity) => ({ ...identity })),
     limits: { ...normalized.limits },
     createdAt: normalized.createdAt,
     updatedAt: normalized.updatedAt,
@@ -122,6 +135,8 @@ export async function getUser(userId, env = process.env) {
 export async function upsertUser(input = {}, env = process.env) {
   const user = normalizeUser(input, env);
   const users = await listUsers(env);
+  assertLoginContactComplete(user);
+  assertEmailUnique(users, user);
   const now = nowIso();
   let existed = false;
   const next = users.map((item) => {
@@ -148,8 +163,8 @@ function assertLastAdminSafe(before, after) {
 }
 
 export async function createUser(input = {}, env = process.env) {
-  const rawId = String(input.id || input.userId || "").trim();
-  if (!rawId) throw userError("user_id_required", 400);
+  const rawId = String(input.id || input.userId || input.email || "").trim();
+  if (!rawId) throw userError("user_email_required", 400);
   const user = normalizeUser({
     ...input,
     id: rawId,
@@ -157,6 +172,8 @@ export async function createUser(input = {}, env = process.env) {
     status: normalizeStatus(input.status || "active"),
   }, env);
   const users = await listUsers(env);
+  assertLoginContactComplete(user);
+  assertEmailUnique(users, user, { allowSameUser: false });
   if (users.some((item) => item.id === user.id)) throw userError("user_already_exists", 409);
   const now = nowIso();
   const next = [...users, normalizeUser({ ...user, createdAt: now, updatedAt: now }, env)];
@@ -176,12 +193,16 @@ export async function updateUser(userId, input = {}, env = process.env) {
   const merged = normalizeUser({
     ...existing,
     displayName: input.displayName ?? input.name ?? existing.displayName,
+    email: input.email === undefined || input.email === null ? existing.email : input.email,
+    phoneNumber: input.phoneNumber === undefined && input.phone === undefined ? existing.phoneNumber : input.phoneNumber ?? input.phone,
+    authProvider: input.authProvider === undefined || input.authProvider === null || input.authProvider === "" ? existing.authProvider : input.authProvider,
     role: input.role === undefined || input.role === null || input.role === "" ? existing.role : input.role,
     status: input.status === undefined || input.status === null || input.status === "" ? existing.status : input.status,
     limits: input.limits && typeof input.limits === "object" ? { ...existing.limits, ...input.limits } : existing.limits,
-    linkedIdentities: Array.isArray(input.linkedIdentities) ? input.linkedIdentities : existing.linkedIdentities,
     updatedAt: now,
   }, env);
+  assertLoginContactComplete(merged);
+  assertEmailUnique(users, merged);
   const next = users.map((user) => user.id === id ? merged : user);
   assertLastAdminSafe(users, next);
   await writeUsersFile(next, env);
@@ -221,11 +242,16 @@ export async function findUserByIdentity({ provider, accountId = "", externalId 
   const normalizedExternalId = String(externalId || "").trim();
   if (!normalizedProvider || !normalizedExternalId) return null;
   const users = await listUsers(env);
-  return users.find((user) => (user.linkedIdentities || []).some((identity) =>
-    identity.provider === normalizedProvider &&
-    identity.externalId === normalizedExternalId &&
-    (!normalizedAccountId || !identity.accountId || identity.accountId === normalizedAccountId)
-  )) || null;
+  for (const user of users) {
+    const identities = await readUserPrivateIdentities(user.id, env);
+    const match = identities.find((identity) =>
+      identity.provider === normalizedProvider &&
+      identity.externalId === normalizedExternalId &&
+      (!normalizedAccountId || !identity.accountId || identity.accountId === normalizedAccountId)
+    );
+    if (match) return user;
+  }
+  return null;
 }
 
 export async function findOrCreateExternalUser(identity = {}, env = process.env) {
@@ -244,13 +270,53 @@ export async function findOrCreateExternalUser(identity = {}, env = process.env)
     id: normalizeUserId(`${normalizedIdentity.provider}-${suffix}`),
     role: "user",
     displayName: normalizedIdentity.displayName || normalizedIdentity.externalId,
-    linkedIdentities: [normalizedIdentity],
   }, env);
   const paths = userDataPaths(user.id, env);
   await ensureDataDirs(env);
+  await addUserPrivateIdentity(user.id, normalizedIdentity, env);
   await appendEvent({ type: "external_user_provisioned", userId: user.id, provider: normalizedIdentity.provider }, env).catch(() => {});
   return {
     ...user,
     dataPaths: paths,
   };
+}
+
+function assertEmailUnique(users = [], candidate = {}, { allowSameUser = true } = {}) {
+  const email = normalizeEmail(candidate.email || "");
+  if (!email) return;
+  const existing = users.find((user) =>
+    normalizeEmail(user.email || "") === email &&
+    (!allowSameUser || user.id !== candidate.id)
+  );
+  if (existing) throw userError("user_email_already_exists", 409);
+}
+
+function assertLoginContactComplete(user = {}) {
+  if (normalizeEmail(user.email || "") && !normalizePhoneNumber(user.phoneNumber || "")) {
+    throw userError("user_phone_required", 400);
+  }
+}
+
+export async function readUserPrivateIdentities(userId, env = process.env) {
+  const paths = userDataPaths(userId, env);
+  const identities = await readJson(paths.identities, []);
+  return Array.isArray(identities)
+    ? identities.map(normalizeIdentity).filter((identity) => identity.provider && identity.externalId)
+    : [];
+}
+
+async function addUserPrivateIdentity(userId, identity = {}, env = process.env) {
+  const normalized = normalizeIdentity(identity);
+  const paths = userDataPaths(userId, env);
+  await ensureDataDirs(env);
+  const identities = await readUserPrivateIdentities(userId, env);
+  const exists = identities.some((item) =>
+    item.provider === normalized.provider &&
+    item.accountId === normalized.accountId &&
+    item.externalId === normalized.externalId
+  );
+  if (exists) return identities;
+  const next = [...identities, normalized];
+  await writeJson(paths.identities, next);
+  return next;
 }

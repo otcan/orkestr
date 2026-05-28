@@ -83,6 +83,20 @@ function desktopUrl(slug) {
   return `/desktop/${encodeURIComponent(slug)}/vnc.html?autoconnect=1&resize=scale&path=${pathValue}`;
 }
 
+function ownerUserId() {
+  return String(process.env.ORKESTR_BROWSER_OWNER_USER_ID || process.env.ORKESTR_ADMIN_USER_ID || "admin").trim() || "admin";
+}
+
+function browserScope() {
+  const scope = String(process.env.ORKESTR_BROWSER_SCOPE || "admin").trim() || "admin";
+  return {
+    ownerUserId: ownerUserId(),
+    scope,
+    scopeLabel: scope === "user" ? "Private user desktop" : "Local admin desktop",
+    personal: scope === "user",
+  };
+}
+
 async function readJson(filePath, fallback = {}) {
   try {
     return JSON.parse(await fs.readFile(filePath, "utf8"));
@@ -270,6 +284,7 @@ async function ensurePrepared(slug) {
     slug: desktop.slug,
     label: desktop.label,
     type: "desktop",
+    ...browserScope(),
     profileDir: profileDir(desktop.slug),
     profile_path: profileDir(desktop.slug),
     startUrl: prior.startUrl || desktop.startUrl,
@@ -308,6 +323,7 @@ async function sessionRecord(value) {
     notes: desktop.purpose,
     type: "desktop",
     access: "desk",
+    ...browserScope(),
     configured: prepared,
     status,
     state: status,
