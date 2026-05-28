@@ -5,7 +5,6 @@ import path from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
-import puppeteer from "puppeteer";
 
 const execFileAsync = promisify(execFile);
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -458,10 +457,23 @@ async function captureTmuxTranscript() {
   }
 }
 
+async function loadPuppeteer() {
+  try {
+    const module = await import("puppeteer");
+    return module.default || module;
+  } catch (error) {
+    const message = error?.code === "ERR_MODULE_NOT_FOUND"
+      ? "Install puppeteer to render the PNG demo asset."
+      : error?.message || String(error);
+    throw new Error(message);
+  }
+}
+
 export async function recordDemo() {
   await fs.mkdir(path.dirname(demoAssetPath), { recursive: true });
   await fs.access(whatsappProofPath);
   const tmuxText = await captureTmuxTranscript();
+  const puppeteer = await loadPuppeteer();
   const browser = await puppeteer.launch({
     headless: "new",
     executablePath: await findChrome(),

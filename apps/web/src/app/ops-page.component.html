@@ -10,6 +10,9 @@
   @if (error) {
     <div class="notice error">{{ error }}</div>
   }
+  @if (notice && !error) {
+    <div class="notice">{{ notice }}</div>
+  }
 
   <nav class="tool-tabs" aria-label="Orkestr tools">
     <button type="button" [class.active]="toolsView === 'system'" (click)="setToolsView('system')">System</button>
@@ -18,6 +21,7 @@
     <button type="button" [class.active]="toolsView === 'models'" (click)="setToolsView('models')">Models</button>
     <button type="button" [class.active]="toolsView === 'settings'" (click)="setToolsView('settings')">Settings</button>
     <button type="button" [class.active]="toolsView === 'connectors'" (click)="setToolsView('connectors')">Connectors</button>
+    <button type="button" [class.active]="toolsView === 'users'" (click)="setToolsView('users')">Users</button>
   </nav>
 
   @if (toolsView === "system") {
@@ -234,6 +238,147 @@
         <p>{{ objectValue(opsWhatsApp, "state") || objectValue(opsWhatsApp, "status") || "unknown" }}</p>
         <small>{{ objectValue(opsWhatsApp, "summary") || objectValue(opsWhatsApp, "accountId") || "bridge status" }}</small>
       </article>
+      <article class="ops-card action-card">
+        <h4>Users</h4>
+        <p>{{ opsUsers.length || 0 }} accounts</p>
+        <small>Manage roles, limits, identities, and browser pairing.</small>
+        <button type="button" (click)="setToolsView('users')">Open Users</button>
+      </article>
+    </div>
+  }
+
+  @if (toolsView === "users") {
+    <div class="user-admin-layout">
+      <section class="user-list-panel">
+        <div class="panel-title compact-title">
+          <div>
+            <p class="eyebrow">Settings / Users</p>
+            <h3>{{ opsUsers.length }} managed users</h3>
+          </div>
+          <button class="secondary" type="button" (click)="loadOps()" [disabled]="busy">Reload</button>
+        </div>
+
+        <form class="user-create-form" (submit)="createUser(); $event.preventDefault()">
+          <label>
+            <span>User id</span>
+            <input name="new-user-id" [(ngModel)]="userDraftId" placeholder="linkedin-client-1" />
+          </label>
+          <label>
+            <span>Name</span>
+            <input name="new-user-name" [(ngModel)]="userDraftDisplayName" placeholder="Client name" />
+          </label>
+          <label>
+            <span>Role</span>
+            <select name="new-user-role" [(ngModel)]="userDraftRole">
+              <option value="user">User</option>
+              <option value="admin">Admin</option>
+            </select>
+          </label>
+          <button type="submit" [disabled]="savingUser || !userDraftId.trim()">{{ savingUser ? "Saving" : "Create user" }}</button>
+        </form>
+
+        <div class="user-list">
+          @for (user of opsUsers; track user.id) {
+            <button
+              class="user-row"
+              type="button"
+              [class.active]="selectedUserId === user.id"
+              (click)="selectUser(user)"
+            >
+              <span>
+                <strong>{{ user.displayName || user.id }}</strong>
+                <small>{{ user.id }}</small>
+              </span>
+              <em [class]="userStatusClass(user)">{{ user.role }} · {{ user.status }}</em>
+            </button>
+          } @empty {
+            <p class="empty">No users loaded.</p>
+          }
+        </div>
+      </section>
+
+      @if (selectedUser(); as user) {
+        <section class="user-detail-panel">
+          <div class="panel-title compact-title">
+            <div>
+              <p class="eyebrow">User Detail</p>
+              <h3>{{ user.displayName || user.id }}</h3>
+            </div>
+            <button class="secondary" type="button" (click)="createUserPairingChallenge(user)" [disabled]="pairingUserId === user.id || user.status === 'disabled'">
+              {{ pairingUserId === user.id ? "Creating" : "Pair browser" }}
+            </button>
+          </div>
+
+          <div class="ops-grid user-metrics">
+            <article class="ops-card">
+              <h4>Threads</h4>
+              <p>{{ userThreadCount(user) }}</p>
+              <small>{{ userLimitLabel(user) }}</small>
+            </article>
+            <article class="ops-card">
+              <h4>Timers</h4>
+              <p>{{ userTimerCount(user) }}</p>
+              <small>Owned scheduled work</small>
+            </article>
+            <article class="ops-card">
+              <h4>Identities</h4>
+              <p>{{ user.linkedIdentities?.length || 0 }}</p>
+              <small>{{ userIdentityLabel(user) }}</small>
+            </article>
+            <article class="ops-card" [class.critical]="user.status === 'disabled'">
+              <h4>Status</h4>
+              <p>{{ user.status }}</p>
+              <small>{{ user.role }}</small>
+            </article>
+          </div>
+
+          <form class="user-edit-form" (submit)="saveUser(user); $event.preventDefault()">
+            <label>
+              <span>Display name</span>
+              <input name="user-display-{{ user.id }}" [(ngModel)]="userEditDraft[user.id].displayName" />
+            </label>
+            <label>
+              <span>Role</span>
+              <select name="user-role-{{ user.id }}" [(ngModel)]="userEditDraft[user.id].role">
+                <option value="user">User</option>
+                <option value="admin">Admin</option>
+              </select>
+            </label>
+            <label>
+              <span>Status</span>
+              <select name="user-status-{{ user.id }}" [(ngModel)]="userEditDraft[user.id].status">
+                <option value="active">Active</option>
+                <option value="disabled">Disabled</option>
+              </select>
+            </label>
+            <label>
+              <span>Max threads</span>
+              <input name="user-max-threads-{{ user.id }}" [(ngModel)]="userEditDraft[user.id].maxThreads" placeholder="blank for unlimited" />
+            </label>
+            <div class="settings-actions">
+              <button type="submit" [disabled]="savingUser">{{ savingUser ? "Saving" : "Save user" }}</button>
+              <button class="secondary danger-soft" type="button" (click)="toggleUserStatus(user)" [disabled]="savingUser">
+                {{ user.status === "disabled" ? "Enable user" : "Disable user" }}
+              </button>
+            </div>
+          </form>
+
+          <section class="user-identities">
+            <h4>Linked identities</h4>
+            <div class="compact-list">
+              @for (identity of user.linkedIdentities || []; track identity.provider + ':' + identity.accountId + ':' + identity.externalId) {
+                <article class="compact-row">
+                  <strong>{{ identity.provider || "identity" }}</strong>
+                  <span>{{ identity.displayName || identity.externalId || identity.accountId }}</span>
+                  <p>{{ identity.accountId || "default account" }}</p>
+                </article>
+              } @empty {
+                <p class="empty">No WhatsApp, Gmail, Outlook, or desktop identity is linked yet.</p>
+              }
+            </div>
+          </section>
+        </section>
+      }
     </div>
   }
 

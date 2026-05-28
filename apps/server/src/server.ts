@@ -45,6 +45,7 @@ export async function createApp(): Promise<INestApplication> {
       const result = await authorizeHttpRequest(request);
       if (result.ok) {
         (request as any).orkestrPrincipal = result.principal;
+        (request as any).orkestrSecuritySession = result.session || null;
         const resourceAuth = await authorizeThreadResourceRequest(request, result.principal);
         if (!resourceAuth.ok) {
           return response

@@ -10,6 +10,8 @@ import { readRuntimeSettings } from "../../../../../packages/core/src/runtime-se
 import { systemDoctor } from "../../../../../packages/core/src/system-doctor.js";
 import { whereAmI } from "../../../../../packages/core/src/whereiam.js";
 import { requestPrincipal } from "../../../../../packages/core/src/principal.js";
+import { isAdminPrincipal } from "../../../../../packages/core/src/policy.js";
+import { getUser } from "../../../../../packages/core/src/users.js";
 import {
   approvePairingChallenge,
   createPairingChallenge,
@@ -28,6 +30,7 @@ import {
 import { publicConfig } from "../../../../../packages/storage/src/config.js";
 import { ensureDataDirs } from "../../../../../packages/storage/src/paths.js";
 import { listEvents } from "../../../../../packages/storage/src/store.js";
+import { httpError } from "../../common/http.js";
 
 const execFileAsync = promisify(execFile);
 let lastCpuSample: { idle: number; total: number } | null = null;
@@ -306,6 +309,18 @@ async function workspaceFolderListing(rawPath = "") {
   };
 }
 
+async function pairingChallengeTarget(body: Record<string, unknown> = {}, request: any) {
+  const userId = String(body.userId || body.targetUserId || "").trim();
+  if (!userId) return {};
+  if (!request?.orkestrSecuritySession || !isAdminPrincipal(requestPrincipal(request))) {
+    throw httpError("admin_pairing_required", 403);
+  }
+  const user = await getUser(userId);
+  if (!user) throw httpError("user_not_found", 404);
+  if (user.status === "disabled") throw httpError("user_disabled", 409);
+  return { userId: user.id, role: user.role };
+}
+
 @Controller("api")
 export class SystemController {
   @Get("health")
@@ -362,14 +377,14 @@ export class SystemController {
 
   @Post("setup/security/challenge")
   @HttpCode(200)
-  async setupSecurityChallenge(@Req() request: any) {
-    return createPairingChallenge({ request } as any);
+  async setupSecurityChallenge(@Req() request: any, @Body() body: Record<string, unknown> = {}) {
+    return createPairingChallenge({ request, ...(await pairingChallengeTarget(body, request)) } as any);
   }
 
   @Post("setup/security/challenges")
   @HttpCode(200)
-  async setupSecurityChallenges(@Req() request: any) {
-    return createPairingChallenge({ request } as any);
+  async setupSecurityChallenges(@Req() request: any, @Body() body: Record<string, unknown> = {}) {
+    return createPairingChallenge({ request, ...(await pairingChallengeTarget(body, request)) } as any);
   }
 
   @Get("setup/security/challenges")

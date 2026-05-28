@@ -3,7 +3,6 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import puppeteer from "puppeteer";
 import { startServer } from "../apps/server/src/server.js";
 import { approvePairingChallenge } from "../packages/core/src/security.js";
 
@@ -38,7 +37,22 @@ async function findChrome() {
   return "";
 }
 
+async function loadPuppeteer(t) {
+  try {
+    const module = await import("puppeteer");
+    return module.default || module;
+  } catch (error) {
+    if (error?.code === "ERR_MODULE_NOT_FOUND") {
+      t.skip("Puppeteer is not installed for browser e2e.");
+      return null;
+    }
+    throw error;
+  }
+}
+
 test("pairing required page generates and consumes a challenge in a real browser", async (t) => {
+  const puppeteer = await loadPuppeteer(t);
+  if (!puppeteer) return;
   const chrome = await findChrome();
   if (!chrome) {
     t.skip("No Chrome or Chromium executable available for browser e2e.");

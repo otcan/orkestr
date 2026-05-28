@@ -8,7 +8,8 @@ import { startServer } from "../apps/server/src/server.js";
 import { createTimerForPrincipal, listTimersForPrincipal } from "../packages/core/src/timers.js";
 import { adminPrincipal, userPrincipal } from "../packages/core/src/principal.js";
 import { sanitizeAction } from "../packages/core/src/llm-sanitizer.js";
-import { findOrCreateExternalUser, listUsers, upsertUser } from "../packages/core/src/users.js";
+import { approvePairingChallenge } from "../packages/core/src/security.js";
+import { createUser, disableUser, findOrCreateExternalUser, listUsers, updateUser, upsertUser } from "../packages/core/src/users.js";
 import {
   createThread,
   createThreadForPrincipal,
@@ -90,6 +91,24 @@ test("external WhatsApp identities can provision scoped non-admin users", async 
   assert.equal(user.role, "user");
   assert.equal(user.id, "whatsapp-wa-example-15551234567");
   assert.equal(again.id, user.id);
+});
+
+test("admin user management preserves at least one active admin", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-use-control-users-"));
+  const env = { ORKESTR_HOME: home };
+
+  const alice = await createUser({ id: "alice", role: "user", displayName: "Alice" }, env);
+  const opsAdmin = await createUser({ id: "ops-admin", role: "admin", displayName: "Ops Admin" }, env);
+  const promoted = await updateUser(alice.id, { role: "admin", limits: { maxThreads: null } }, env);
+  const disabledDefaultAdmin = await disableUser("admin", env);
+
+  assert.equal(alice.role, "user");
+  assert.equal(opsAdmin.role, "admin");
+  assert.equal(promoted.role, "admin");
+  assert.equal(promoted.limits.maxThreads, null);
+  assert.equal(disabledDefaultAdmin.status, "disabled");
+  assert.equal((await disableUser("alice", env)).status, "disabled");
+  await assert.rejects(() => disableUser("ops-admin", env), /last_admin_required/);
 });
 
 test("LLM sanitizer is fail-closed when no provider is configured", async () => {
@@ -185,5 +204,75 @@ test("thread API rejects ambiguous same-name routes across owners", async () => 
     await new Promise((resolve) => server.close(resolve));
     if (priorHome === undefined) delete process.env.ORKESTR_HOME;
     else process.env.ORKESTR_HOME = priorHome;
+  }
+});
+
+test("user management API is admin-only and can pair a browser to a managed user", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-use-control-api-users-"));
+  const priorHome = process.env.ORKESTR_HOME;
+  const priorAuth = process.env.ORKESTR_AUTH_REQUIRED;
+  const priorRecover = process.env.ORKESTR_RECOVER_RUNNING_ON_START;
+  process.env.ORKESTR_HOME = home;
+  process.env.ORKESTR_AUTH_REQUIRED = "1";
+  process.env.ORKESTR_RECOVER_RUNNING_ON_START = "0";
+  const server = await startServer({ port: 0, host: "127.0.0.1" });
+  const { port } = server.address();
+  const baseUrl = `http://127.0.0.1:${port}`;
+
+  async function read(response) {
+    const text = await response.text();
+    return text ? JSON.parse(text) : {};
+  }
+
+  try {
+    const firstChallenge = await read(await fetch(`${baseUrl}/api/setup/security/challenges`, { method: "POST" }));
+    await approvePairingChallenge(firstChallenge.challengeId, { env: process.env });
+    const adminPair = await fetch(`${baseUrl}/api/setup/security/pair`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ challengeId: firstChallenge.challengeId }),
+    });
+    const adminCookie = adminPair.headers.get("set-cookie") || "";
+    assert.equal(adminPair.status, 200);
+
+    const created = await read(await fetch(`${baseUrl}/api/users`, {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie: adminCookie },
+      body: JSON.stringify({ id: "alice", role: "user", displayName: "Alice" }),
+    }));
+    assert.equal(created.user.id, "alice");
+    assert.equal(created.user.role, "user");
+
+    const userChallenge = await read(await fetch(`${baseUrl}/api/setup/security/challenges`, {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie: adminCookie },
+      body: JSON.stringify({ userId: "alice" }),
+    }));
+    assert.equal(userChallenge.challenge.userId, "alice");
+    assert.equal(userChallenge.challenge.role, "user");
+    await approvePairingChallenge(userChallenge.challengeId, { env: process.env });
+
+    const userPair = await fetch(`${baseUrl}/api/setup/security/pair`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ challengeId: userChallenge.challengeId }),
+    });
+    const userCookie = userPair.headers.get("set-cookie") || "";
+    assert.equal(userPair.status, 200);
+
+    const denied = await fetch(`${baseUrl}/api/users`, { headers: { cookie: userCookie } });
+    assert.equal(denied.status, 403);
+
+    const where = await read(await fetch(`${baseUrl}/api/whereiam`, { headers: { cookie: userCookie } }));
+    assert.equal(where.user.userId, "alice");
+    assert.equal(where.user.role, "user");
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+    if (priorHome === undefined) delete process.env.ORKESTR_HOME;
+    else process.env.ORKESTR_HOME = priorHome;
+    if (priorAuth === undefined) delete process.env.ORKESTR_AUTH_REQUIRED;
+    else process.env.ORKESTR_AUTH_REQUIRED = priorAuth;
+    if (priorRecover === undefined) delete process.env.ORKESTR_RECOVER_RUNNING_ON_START;
+    else process.env.ORKESTR_RECOVER_RUNNING_ON_START = priorRecover;
   }
 });

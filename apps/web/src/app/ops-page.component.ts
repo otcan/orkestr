@@ -1,13 +1,14 @@
 import { DatePipe } from "@angular/common";
 import { ChangeDetectorRef, Component, EventEmitter, Input, OnDestroy, OnInit, Output, inject } from "@angular/core";
+import { FormsModule } from "@angular/forms";
 import { firstValueFrom } from "rxjs";
-import { Agent, AgentTemplate, ApiService, BrowserSession, ConnectorStatus, EventRecord, SetupStatus, TimerDoctorResponse, TimerRecord, VersionResponse } from "./api.service";
+import { Agent, AgentTemplate, ApiService, BrowserSession, ConnectorStatus, EventRecord, OrkestrUser, SetupStatus, TimerDoctorResponse, TimerRecord, VersionResponse } from "./api.service";
 
-export type ToolsView = "system" | "timers" | "desktops" | "models" | "settings" | "connectors";
+export type ToolsView = "system" | "timers" | "desktops" | "models" | "settings" | "connectors" | "users";
 
 @Component({
   selector: "ork-ops-page",
-  imports: [DatePipe],
+  imports: [DatePipe, FormsModule],
   templateUrl: "./ops-page.component.html",
 })
 export class OpsPageComponent implements OnInit, OnDestroy {
@@ -21,6 +22,7 @@ export class OpsPageComponent implements OnInit, OnDestroy {
   busy = false;
   activeBrowserActionSlug = "";
   error = "";
+  notice = "";
   opsSetup: SetupStatus | null = null;
   opsVersion: VersionResponse | null = null;
   opsWhatsApp: Record<string, unknown> | null = null;
@@ -42,6 +44,14 @@ export class OpsPageComponent implements OnInit, OnDestroy {
   opsSystem: Record<string, unknown> | null = null;
   opsProcesses: Array<Record<string, unknown>> = [];
   opsModels: Record<string, unknown> | null = null;
+  opsUsers: OrkestrUser[] = [];
+  selectedUserId = "";
+  userDraftId = "";
+  userDraftDisplayName = "";
+  userDraftRole = "user";
+  savingUser = false;
+  pairingUserId = "";
+  userEditDraft: Record<string, { displayName: string; role: string; status: string; maxThreads: string }> = {};
 
   ngOnInit(): void {
     void this.loadOps();
@@ -71,7 +81,7 @@ export class OpsPageComponent implements OnInit, OnDestroy {
         this.renderNow();
       });
     try {
-      const [version, setup, whatsapp, agents, templates, timers, timerDoctor, events, browsers, runtimeLeases, executors, executions, system, processes, models] = await Promise.allSettled([
+      const [version, setup, whatsapp, agents, templates, timers, timerDoctor, events, browsers, runtimeLeases, executors, executions, system, processes, models, users] = await Promise.allSettled([
         firstValueFrom(this.api.version()),
         firstValueFrom(this.api.setupStatus()),
         firstValueFrom(this.api.whatsappStatus()),
@@ -87,6 +97,7 @@ export class OpsPageComponent implements OnInit, OnDestroy {
         firstValueFrom(this.api.systemSummary()),
         firstValueFrom(this.api.systemProcesses("cpu")),
         firstValueFrom(this.api.modelStatus()),
+        firstValueFrom(this.api.users()),
       ]);
       if (version.status === "fulfilled") this.opsVersion = version.value;
       if (setup.status === "fulfilled") {
@@ -113,11 +124,107 @@ export class OpsPageComponent implements OnInit, OnDestroy {
       if (system.status === "fulfilled") this.opsSystem = system.value;
       if (processes.status === "fulfilled") this.opsProcesses = processes.value.processes || [];
       if (models.status === "fulfilled") this.opsModels = models.value;
+      if (users.status === "fulfilled") this.applyUsers(users.value.users || []);
       this.error = "";
     } catch (error) {
       this.error = this.errorText(error);
     } finally {
       this.busy = false;
+    }
+  }
+
+  selectUser(user: OrkestrUser): void {
+    this.selectedUserId = user.id;
+    this.ensureUserDraft(user);
+  }
+
+  selectedUser(): OrkestrUser | null {
+    return this.opsUsers.find((user) => user.id === this.selectedUserId) || this.opsUsers[0] || null;
+  }
+
+  userDraft(user: OrkestrUser): { displayName: string; role: string; status: string; maxThreads: string } {
+    return this.ensureUserDraft(user);
+  }
+
+  async createUser(): Promise<void> {
+    if (this.savingUser) return;
+    this.savingUser = true;
+    try {
+      const payload = {
+        id: this.userDraftId.trim(),
+        displayName: this.userDraftDisplayName.trim() || this.userDraftId.trim(),
+        role: this.userDraftRole,
+      };
+      const result = await firstValueFrom(this.api.createUser(payload));
+      this.userDraftId = "";
+      this.userDraftDisplayName = "";
+      this.userDraftRole = "user";
+      await this.loadOps(false);
+      if (result.user?.id) this.selectedUserId = result.user.id;
+      this.error = "";
+      this.notice = "User created.";
+    } catch (error) {
+      this.error = this.errorText(error);
+    } finally {
+      this.savingUser = false;
+      this.renderNow();
+    }
+  }
+
+  async saveUser(user: OrkestrUser): Promise<void> {
+    const draft = this.ensureUserDraft(user);
+    if (this.savingUser) return;
+    this.savingUser = true;
+    try {
+      const maxThreads = draft.maxThreads.trim() === "" ? null : Number(draft.maxThreads);
+      await firstValueFrom(this.api.updateUser(user.id, {
+        displayName: draft.displayName,
+        role: draft.role,
+        status: draft.status,
+        limits: { maxThreads },
+      }));
+      await this.loadOps(false);
+      this.selectedUserId = user.id;
+      this.error = "";
+      this.notice = "User saved.";
+    } catch (error) {
+      this.error = this.errorText(error);
+    } finally {
+      this.savingUser = false;
+      this.renderNow();
+    }
+  }
+
+  async toggleUserStatus(user: OrkestrUser): Promise<void> {
+    if (this.savingUser) return;
+    this.savingUser = true;
+    try {
+      if (user.status === "disabled") await firstValueFrom(this.api.enableUser(user.id));
+      else await firstValueFrom(this.api.disableUser(user.id));
+      await this.loadOps(false);
+      this.selectedUserId = user.id;
+      this.error = "";
+      this.notice = user.status === "disabled" ? "User enabled." : "User disabled.";
+    } catch (error) {
+      this.error = this.errorText(error);
+    } finally {
+      this.savingUser = false;
+      this.renderNow();
+    }
+  }
+
+  async createUserPairingChallenge(user: OrkestrUser): Promise<void> {
+    if (this.pairingUserId) return;
+    this.pairingUserId = user.id;
+    try {
+      const result = await firstValueFrom(this.api.createSecurityChallengeForUser(user.id));
+      this.error = "";
+      this.notice = `Pairing challenge for ${user.displayName || user.id}: ${result.challengeId}`;
+    } catch (error) {
+      this.error = this.errorText(error);
+    } finally {
+      this.pairingUserId = "";
+      this.renderNow();
     }
   }
 
@@ -254,6 +361,34 @@ export class OpsPageComponent implements OnInit, OnDestroy {
     }
   }
 
+  userIdentityLabel(user: OrkestrUser): string {
+    const identities = user.linkedIdentities || [];
+    if (!identities.length) return "No linked identities";
+    return identities.map((identity) => {
+      const provider = String(identity.provider || "identity").toUpperCase();
+      const external = identity.displayName || identity.externalId || identity.accountId || "";
+      return external ? `${provider}: ${external}` : provider;
+    }).join(", ");
+  }
+
+  userLimitLabel(user: OrkestrUser): string {
+    const maxThreads = user.limits?.maxThreads;
+    if (maxThreads === null || maxThreads === undefined) return "Unlimited threads";
+    return `${maxThreads} thread${maxThreads === 1 ? "" : "s"}`;
+  }
+
+  userThreadCount(user: OrkestrUser): number {
+    return Number(user.resourceSummary?.threadCount || 0);
+  }
+
+  userTimerCount(user: OrkestrUser): number {
+    return Number(user.resourceSummary?.timerCount || 0);
+  }
+
+  userStatusClass(user: OrkestrUser): string {
+    return user.status === "disabled" ? "bad" : "ready";
+  }
+
   eventKey(event: EventRecord): string {
     return `${event.ts || ""}:${event.type}:${this.jsonLine(event).slice(0, 120)}`;
   }
@@ -272,6 +407,28 @@ export class OpsPageComponent implements OnInit, OnDestroy {
     this.opsBrowserSource = payload.source || "";
     this.opsBrowserMessage = payload.message || payload.error || "";
     this.opsBrowsersLoaded = true;
+  }
+
+  private applyUsers(users: OrkestrUser[]): void {
+    this.opsUsers = users;
+    if (!this.selectedUserId || !users.some((user) => user.id === this.selectedUserId)) {
+      this.selectedUserId = users[0]?.id || "";
+    }
+    for (const user of users) this.ensureUserDraft(user);
+  }
+
+  private ensureUserDraft(user: OrkestrUser): { displayName: string; role: string; status: string; maxThreads: string } {
+    const existing = this.userEditDraft[user.id];
+    if (existing) return existing;
+    const maxThreads = user.limits?.maxThreads;
+    const draft = {
+      displayName: user.displayName || user.id,
+      role: user.role || "user",
+      status: user.status || "active",
+      maxThreads: maxThreads === null || maxThreads === undefined ? "" : String(maxThreads),
+    };
+    this.userEditDraft[user.id] = draft;
+    return draft;
   }
 
   private applyBrowserSessionsError(error: unknown): void {
