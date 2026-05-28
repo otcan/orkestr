@@ -87,8 +87,11 @@ function publicChallenge(challenge = {}, now = Date.now()) {
 function publicSession(session = {}) {
   return {
     id: session.id || "",
+    challengeId: session.challengeId || "",
     userAgent: session.userAgent || "",
     createdAt: session.createdAt || "",
+    lastAccessedAt: session.lastAccessedAt || session.createdAt || "",
+    lastIp: session.lastIp || "",
     expiresAt: session.expiresAt || "",
   };
 }
@@ -293,6 +296,22 @@ export async function revokeAllSecuritySessions({ env = process.env, revokedBy =
   return { ok: true, revoked };
 }
 
+export async function setSecurityPairingEnabled(enabled, { env = process.env, updatedBy = "cli" } = {}) {
+  const config = await readSecurityConfig(env);
+  const nextEnabled = enabled === true;
+  await writeSecurityConfig({
+    ...config,
+    enabled: nextEnabled,
+    sessions: nextEnabled ? config.sessions || [] : [],
+    challenges: nextEnabled ? config.challenges || [] : [],
+  }, env);
+  await appendEvent({
+    type: nextEnabled ? "security_pairing_enabled" : "security_pairing_disabled",
+    updatedBy,
+  }, env).catch(() => {});
+  return { ok: true, security: await securityStatus(env) };
+}
+
 export async function approvePairingChallenge(challengeId, { env = process.env, approvedBy = "cli" } = {}) {
   const id = String(challengeId || "").trim();
   if (!id) throw challengeError("pairing_challenge_id_required", 400);
@@ -341,7 +360,49 @@ export async function rejectPairingChallenge(challengeId, { env = process.env, r
   return { ok: true, challenge: publicChallenge(rejected) };
 }
 
-export async function pairBrowser({ challengeId, userAgent = "", env = process.env } = {}) {
+export async function deletePairingChallenge(challengeId, { env = process.env, deletedBy = "browser" } = {}) {
+  const id = String(challengeId || "").trim();
+  if (!id) throw challengeError("pairing_challenge_id_required", 400);
+  const config = await readSecurityConfig(env);
+  const before = config.challenges || [];
+  const challenges = before.filter((challenge) => challenge.id !== id);
+  if (challenges.length === before.length) throw challengeError("pairing_challenge_not_found", 404);
+  await writeSecurityConfig({ ...config, challenges }, env);
+  await appendEvent({ type: "security_pairing_challenge_deleted", challengeId: id, deletedBy }, env).catch(() => {});
+  return { ok: true, deleted: id };
+}
+
+function sessionAccessTouchIntervalMs(env = process.env) {
+  const parsed = Number(env.ORKESTR_SECURITY_SESSION_TOUCH_INTERVAL_MS || 5 * 60 * 1000);
+  return Number.isFinite(parsed) ? Math.max(0, parsed) : 5 * 60 * 1000;
+}
+
+async function touchSecuritySession(config, session, { env = process.env, request = null } = {}) {
+  if (!session?.id) return;
+  const now = Date.now();
+  const intervalMs = sessionAccessTouchIntervalMs(env);
+  const lastMs = Date.parse(session.lastAccessedAt || session.createdAt || "");
+  const ip = requestIp(request).slice(0, 80);
+  const userAgent = String(request?.headers?.["user-agent"] || session.userAgent || "").slice(0, 240);
+  if (
+    intervalMs > 0 &&
+    Number.isFinite(lastMs) &&
+    now - lastMs < intervalMs &&
+    (!ip || session.lastIp === ip)
+  ) return;
+  const touched = {
+    ...session,
+    userAgent,
+    lastAccessedAt: nowIso(),
+    lastIp: ip || session.lastIp || "",
+  };
+  await writeSecurityConfig({
+    ...config,
+    sessions: (config.sessions || []).map((item) => item.id === session.id ? touched : item),
+  }, env);
+}
+
+export async function pairBrowser({ challengeId, userAgent = "", ip = "", env = process.env } = {}) {
   const id = String(challengeId || "").trim();
   const config = await readSecurityConfig(env);
   const now = Date.now();
@@ -352,11 +413,15 @@ export async function pairBrowser({ challengeId, userAgent = "", env = process.e
   if (challenge.status !== "approved") throw challengeError(`pairing_challenge_${challenge.status}`, 401);
   if (Date.parse(challenge.expiresAt || "") <= now) throw challengeError("pairing_challenge_expired", 401);
   const token = randomToken(32);
+  const createdAt = nowIso();
   const session = {
     id: randomToken(10),
+    challengeId: challenge.id,
     tokenHash: sha256(token),
     userAgent: String(userAgent || "").slice(0, 240),
-    createdAt: nowIso(),
+    createdAt,
+    lastAccessedAt: createdAt,
+    lastIp: String(ip || "").slice(0, 80),
     expiresAt: new Date(Date.now() + sessionTtlMs).toISOString(),
   };
   await writeSecurityConfig({
@@ -380,14 +445,18 @@ export async function pairBrowser({ challengeId, userAgent = "", env = process.e
   };
 }
 
-export async function verifySecurityToken(token, env = process.env) {
+export async function verifySecurityToken(token, env = process.env, options = {}) {
   const value = String(token || "").trim();
   if (!value) return false;
   const config = await readSecurityConfig(env);
   const now = Date.now();
-  return (config.sessions || []).some((session) =>
-    Date.parse(session.expiresAt || "") > now && session.tokenHash === sha256(value),
+  const hash = sha256(value);
+  const session = (config.sessions || []).find((item) =>
+    Date.parse(item.expiresAt || "") > now && item.tokenHash === hash,
   );
+  if (!session) return false;
+  if (options?.touch !== false) await touchSecuritySession(config, session, { env, request: options?.request }).catch(() => {});
+  return true;
 }
 
 function isAllowedBeforePairing(request) {
@@ -408,7 +477,7 @@ export async function authorizeHttpRequest(request, env = process.env) {
   if (!status.authEnabled) return { ok: true, status };
   if (isAllowedBeforePairing(request)) return { ok: true, status };
   const token = cookieValue(request?.headers?.cookie || "");
-  if (await verifySecurityToken(token, env)) return { ok: true, status };
+  if (await verifySecurityToken(token, env, { request })) return { ok: true, status };
   return {
     ok: false,
     status,

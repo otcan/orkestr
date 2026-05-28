@@ -187,6 +187,10 @@ export interface SecurityChallengeListResponse {
   challenges: SecurityChallenge[];
 }
 
+export interface SecuritySessionListResponse {
+  sessions: SecuritySession[];
+}
+
 export interface SecurityChallenge {
   id: string;
   status: string;
@@ -199,6 +203,16 @@ export interface SecurityChallenge {
   rejectedAt?: string;
   rejectedBy?: string;
   consumedAt?: string;
+}
+
+export interface SecuritySession {
+  id: string;
+  challengeId?: string;
+  userAgent?: string;
+  createdAt?: string;
+  lastAccessedAt?: string;
+  lastIp?: string;
+  expiresAt?: string;
 }
 
 export interface SecurityPairResponse {
@@ -767,6 +781,26 @@ export class ApiService {
 
   rejectSecurityChallenge(challengeId: string): Observable<SecurityChallengeStatusResponse> {
     return this.http.post<SecurityChallengeStatusResponse>(this.api(`/setup/security/challenges/${encodeURIComponent(challengeId)}/reject`), {});
+  }
+
+  deleteSecurityChallenge(challengeId: string): Observable<{ ok: boolean; deleted: string }> {
+    return this.http.delete<{ ok: boolean; deleted: string }>(this.api(`/setup/security/challenges/${encodeURIComponent(challengeId)}`));
+  }
+
+  setSecurityPairingEnabled(enabled: boolean): Observable<{ ok: boolean; security: SecurityStatus }> {
+    return this.http.post<{ ok: boolean; security: SecurityStatus }>(this.api("/setup/security/enabled"), { enabled });
+  }
+
+  securitySessions(): Observable<SecuritySessionListResponse> {
+    return this.http.get<SecuritySessionListResponse>(this.api("/setup/security/sessions"));
+  }
+
+  revokeSecuritySession(sessionId: string): Observable<{ ok: boolean; revoked: string[] }> {
+    return this.http.post<{ ok: boolean; revoked: string[] }>(this.api(`/setup/security/sessions/${encodeURIComponent(sessionId)}/revoke`), {});
+  }
+
+  revokeAllSecuritySessions(): Observable<{ ok: boolean; revoked: string[] }> {
+    return this.http.post<{ ok: boolean; revoked: string[] }>(this.api("/setup/security/sessions/revoke"), {});
   }
 
   pairSecurityBrowser(challengeId: string): Observable<SecurityPairResponse> {

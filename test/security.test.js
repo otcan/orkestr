@@ -92,6 +92,32 @@ test("browser pairing protects API routes when auth is required", async () => {
     });
     assert.equal(secondPairResponse.status, 200);
     assert.match(secondPairResponse.headers.get("set-cookie") || "", /orkestr_session=/);
+
+    const sessions = await json(await fetch(`${baseUrl}/api/setup/security/sessions`, { headers: { cookie } }));
+    assert.ok(sessions.sessions.length >= 1);
+    assert.ok(sessions.sessions[0].id);
+    assert.ok(sessions.sessions[0].lastAccessedAt);
+    assert.ok("lastIp" in sessions.sessions[0]);
+
+    const deleteChallenge = await json(await fetch(`${baseUrl}/api/setup/security/challenges/${secondChallenge.challengeId}`, {
+      method: "DELETE",
+      headers: { cookie },
+    }));
+    assert.equal(deleteChallenge.deleted, secondChallenge.challengeId);
+    const afterDelete = await json(await fetch(`${baseUrl}/api/setup/security/challenges`, { headers: { cookie } }));
+    assert.equal(afterDelete.challenges.some((item) => item.id === secondChallenge.challengeId), false);
+
+    const disabled = await json(await fetch(`${baseUrl}/api/setup/security/enabled`, {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie },
+      body: JSON.stringify({ enabled: false }),
+    }));
+    assert.equal(disabled.ok, true);
+    assert.equal(disabled.security.paired, false);
+    assert.equal(disabled.security.authEnabled, true);
+
+    const revokedCookieList = await fetch(`${baseUrl}/api/setup/security/sessions`, { headers: { cookie } });
+    assert.equal(revokedCookieList.status, 401);
   } finally {
     await new Promise((resolve) => server.close(resolve));
     restoreEnv(prior);

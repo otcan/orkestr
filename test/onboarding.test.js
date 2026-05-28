@@ -6,6 +6,8 @@ const onboardingSources = [
   "apps/web/src/app/app.component.ts",
   "apps/web/src/app/onboarding-page.component.ts",
   "apps/web/src/app/onboarding-page.component.html",
+  "apps/web/src/app/security-challenges-panel.component.html",
+  "apps/web/src/app/security-challenges-panel.component.ts",
 ];
 
 async function readSources(paths) {
@@ -103,9 +105,11 @@ test("onboarding focuses the starter setup on virtual desktop and WhatsApp", asy
   assert.ok(!onboarding.includes("Search query"));
   assert.ok(onboarding.includes("setupSectionChange"));
   assert.ok(onboarding.includes("@Output() paired"));
-  assert.ok(onboarding.includes("this.paired.emit()"));
   assert.ok(onboarding.includes("Browser approvals"));
   assert.ok(onboarding.includes("Approve pending pairing challenges"));
+  assert.ok(onboarding.includes("Paired browsers"));
+  assert.ok(onboarding.includes("Approved and closed challenges"));
+  assert.ok(onboarding.includes("Turn off pairing"));
   assert.ok(onboarding.includes('label: "Desktops"'));
   assert.ok(onboarding.includes("openReturnedUrl: true"));
   assert.ok(onboarding.includes("browserOpenUrl(response.browser)"));

@@ -1,0 +1,110 @@
+<section class="security-panel">
+  <header class="security-panel-head">
+    <div>
+      <h3>Browser approvals</h3>
+      <small>Approve pending pairing challenges and review paired browser sessions.</small>
+    </div>
+    <div class="panel-actions">
+      <button class="secondary" type="button" (click)="load()" [disabled]="busy || !hasPairedAccess()">Refresh</button>
+      <button class="danger" type="button" (click)="disablePairing()" [disabled]="busy || security?.authRequired">
+        Turn off pairing
+      </button>
+    </div>
+  </header>
+
+  @if (security?.authRequired) {
+    <p class="helper">Browser pairing is required by the host environment. Revoke individual sessions instead of turning it off.</p>
+  }
+
+  @if (error) {
+    <div class="panel-notice error">{{ error }}</div>
+  }
+  @if (notice) {
+    <div class="panel-notice">{{ notice }}</div>
+  }
+
+  <div class="security-grid">
+    <section class="security-column">
+      <div class="column-title">
+        <h4>Pending challenges</h4>
+        <small>{{ pendingChallenges().length }} waiting</small>
+      </div>
+      @if (pendingChallenges().length) {
+        <div class="security-list">
+          @for (challenge of pendingChallenges(); track challenge.id) {
+            <article class="security-row">
+              <div>
+                <strong>{{ challenge.id }}</strong>
+                <small>{{ requester(challenge) }}</small>
+                <small>Expires {{ challenge.expiresAt | date:'short' }}</small>
+              </div>
+              <div class="row-actions">
+                <button type="button" (click)="approve(challenge)" [disabled]="busy">Approve</button>
+                <button class="secondary" type="button" (click)="reject(challenge)" [disabled]="busy">Reject</button>
+                <button class="ghost-danger" type="button" (click)="deleteChallenge(challenge)" [disabled]="busy">Delete</button>
+              </div>
+            </article>
+          }
+        </div>
+      } @else {
+        <p class="empty">No pending browser challenges.</p>
+      }
+    </section>
+
+    <section class="security-column">
+      <div class="column-title">
+        <h4>Paired browsers</h4>
+        <small>{{ sessions.length }} active</small>
+      </div>
+      @if (sessions.length) {
+        <div class="security-list">
+          @for (session of sessions; track session.id) {
+            <article class="security-row">
+              <div>
+                <strong>{{ sessionLabel(session) }}</strong>
+                <small>Last access {{ session.lastAccessedAt | date:'short' }}</small>
+                <small>IP {{ session.lastIp || "unknown" }} · expires {{ session.expiresAt | date:'short' }}</small>
+                @if (session.challengeId) {
+                  <small>Challenge {{ session.challengeId }}</small>
+                }
+              </div>
+              <div class="row-actions">
+                <button class="secondary" type="button" (click)="revokeSession(session)" [disabled]="busy">Revoke</button>
+              </div>
+            </article>
+          }
+        </div>
+        <div class="panel-actions">
+          <button class="danger" type="button" (click)="revokeAllSessions()" [disabled]="busy">Revoke all browsers</button>
+        </div>
+      } @else {
+        <p class="empty">No paired browser sessions.</p>
+      }
+    </section>
+  </div>
+
+  <section class="security-column history">
+    <div class="column-title">
+      <h4>Approved and closed challenges</h4>
+      <small>{{ completedChallenges().length }} retained</small>
+    </div>
+    @if (completedChallenges().length) {
+      <div class="security-list compact">
+        @for (challenge of completedChallenges(); track challenge.id) {
+          <article class="security-row">
+            <div>
+              <strong>{{ challenge.id }}</strong>
+              <small>{{ challenge.status }} · {{ challengeTimestamp(challenge) | date:'short' }}</small>
+              <small>{{ requester(challenge) }}</small>
+            </div>
+            <div class="row-actions">
+              <button class="ghost-danger" type="button" (click)="deleteChallenge(challenge)" [disabled]="busy">Delete</button>
+            </div>
+          </article>
+        }
+      </div>
+    } @else {
+      <p class="empty">No approved, consumed, rejected, or expired challenges are retained.</p>
+    }
+  </section>
+</section>

@@ -1,7 +1,8 @@
 import { ChangeDetectorRef, Component, EventEmitter, Input, OnChanges, OnDestroy, OnInit, Output, SimpleChanges, inject } from "@angular/core";
 import { FormsModule } from "@angular/forms";
 import { firstValueFrom } from "rxjs";
-import { ApiService, BrowserSession, CodexAppServerStatus, CodexStoredThread, ConnectorStatus, OutlookOAuthPollResponse, OutlookOAuthStartResponse, SecurityChallenge, SetupStatus, SystemDoctorResponse, ThreadSummary, VersionResponse } from "./api.service";
+import { ApiService, BrowserSession, CodexAppServerStatus, CodexStoredThread, ConnectorStatus, OutlookOAuthPollResponse, OutlookOAuthStartResponse, SetupStatus, SystemDoctorResponse, ThreadSummary, VersionResponse } from "./api.service";
+import { SecurityChallengesPanelComponent } from "./security-challenges-panel.component";
 
 type ConnectorStep = "openai" | "codex" | "gmail" | "linkedin" | "whatsapp" | "browsers";
 type MarketingStep = "google-marketing";
@@ -35,7 +36,7 @@ interface OnboardingGoal {
 
 @Component({
   selector: "ork-onboarding-page",
-  imports: [FormsModule],
+  imports: [FormsModule, SecurityChallengesPanelComponent],
   templateUrl: "./onboarding-page.component.html",
   styleUrls: ["./onboarding-page.component.css"],
 })
@@ -66,8 +67,6 @@ export class OnboardingPageComponent implements OnInit, OnChanges, OnDestroy {
   whatsappChatId = "";
   whatsappChatName = "";
   testMessage = "Hello from Orkestr onboarding.";
-  securityPairingCode = "";
-  securityChallenges: SecurityChallenge[] = [];
   codexDeviceCode = "";
   codexAuthUrl = "";
   codexAuthExpiresAt = "";
@@ -165,8 +164,6 @@ export class OnboardingPageComponent implements OnInit, OnChanges, OnDestroy {
       this.doctor = doctorResult.status === "fulfilled" ? doctorResult.value : null;
       this.versionInfo = versionResult.status === "fulfilled" ? versionResult.value : this.versionInfo;
       this.hydrateForms(setup);
-      if (setup.security?.paired) await this.loadSecurityChallenges(false);
-      else this.securityChallenges = [];
       if (this.activeStep === "codex") await this.loadCodexAppServer(false);
       this.applySetupSectionFromInput();
       if (!this.stepInitialized) {
@@ -867,98 +864,6 @@ export class OnboardingPageComponent implements OnInit, OnChanges, OnDestroy {
     if (security.remoteReady || security.externallyLocal || security.bindLocal) return "ready";
     if (security.authEnabled || security.https?.configured || security.caddy?.installed) return "partial";
     return "bad";
-  }
-
-  async createSecurityChallenge(): Promise<void> {
-    this.busy = true;
-    try {
-      const result = await firstValueFrom(this.api.createSecurityChallenge());
-      this.notice = `Pairing challenge ${result.challengeId} generated. Approve it from SSH or an already paired browser.`;
-      this.error = "";
-      await this.loadSecurityChallenges(false);
-    } catch (error) {
-      this.error = this.errorText(error);
-    } finally {
-      this.busy = false;
-    }
-  }
-
-  async loadSecurityChallenges(showBusy = true): Promise<void> {
-    if (!this.setup?.security?.paired) return;
-    if (showBusy) this.busy = true;
-    try {
-      const result = await firstValueFrom(this.api.securityChallenges());
-      this.securityChallenges = result.challenges || [];
-      this.error = "";
-    } catch (error) {
-      this.error = this.errorText(error);
-    } finally {
-      if (showBusy) this.busy = false;
-    }
-  }
-
-  async approveSecurityChallenge(challenge: SecurityChallenge): Promise<void> {
-    if (!challenge.id) return;
-    this.busy = true;
-    try {
-      await firstValueFrom(this.api.approveSecurityChallenge(challenge.id));
-      this.notice = `Approved pairing challenge ${challenge.id}.`;
-      this.error = "";
-      await this.loadSecurityChallenges(false);
-    } catch (error) {
-      this.error = this.errorText(error);
-    } finally {
-      this.busy = false;
-    }
-  }
-
-  async rejectSecurityChallenge(challenge: SecurityChallenge): Promise<void> {
-    if (!challenge.id) return;
-    this.busy = true;
-    try {
-      await firstValueFrom(this.api.rejectSecurityChallenge(challenge.id));
-      this.notice = `Rejected pairing challenge ${challenge.id}.`;
-      this.error = "";
-      await this.loadSecurityChallenges(false);
-    } catch (error) {
-      this.error = this.errorText(error);
-    } finally {
-      this.busy = false;
-    }
-  }
-
-  pendingSecurityChallenges(): SecurityChallenge[] {
-    return this.securityChallenges.filter((challenge) => challenge.status === "pending");
-  }
-
-  challengeTime(value: string | undefined): string {
-    const timestamp = Date.parse(String(value || ""));
-    return Number.isFinite(timestamp) ? new Date(timestamp).toLocaleString([], { dateStyle: "short", timeStyle: "short" }) : "unknown";
-  }
-
-  challengeRequester(challenge: SecurityChallenge): string {
-    return [challenge.requestedIp, challenge.requestedUserAgent].filter(Boolean).join(" - ") || "unknown browser";
-  }
-
-  async pairSecurityBrowser(): Promise<void> {
-    const challengeId = this.securityPairingCode.trim();
-    if (!challengeId) {
-      this.error = "Enter the browser pairing challenge ID.";
-      return;
-    }
-    this.busy = true;
-    try {
-      await firstValueFrom(this.api.pairSecurityBrowser(challengeId));
-      this.securityPairingCode = "";
-      this.notice = "This browser is paired.";
-      this.error = "";
-      await this.load(false);
-      this.paired.emit();
-    } catch (error) {
-      this.error = this.errorText(error);
-    } finally {
-      this.busy = false;
-    }
   }
 
   async startCodexDeviceAuth(): Promise<void> {
