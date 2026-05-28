@@ -196,6 +196,8 @@ export interface SecurityChallenge {
   status: string;
   createdAt: string;
   expiresAt: string;
+  userId?: string;
+  role?: string;
   requestedUserAgent?: string;
   requestedIp?: string;
   approvedAt?: string;
@@ -208,6 +210,8 @@ export interface SecurityChallenge {
 export interface SecuritySession {
   id: string;
   challengeId?: string;
+  userId?: string;
+  role?: string;
   userAgent?: string;
   createdAt?: string;
   lastAccessedAt?: string;
@@ -729,6 +733,42 @@ export interface WhatsAppParticipantsResponse {
   participants: WhatsAppParticipant[];
 }
 
+export interface OrkestrUser {
+  id: string;
+  role: "admin" | "user" | string;
+  displayName: string;
+  status: "active" | "disabled" | string;
+  linkedIdentities?: Array<{
+    provider?: string;
+    accountId?: string;
+    externalId?: string;
+    displayName?: string;
+    linkedAt?: string;
+  }>;
+  limits?: {
+    maxThreads?: number | null;
+    [key: string]: unknown;
+  };
+  resourceSummary?: {
+    threadCount?: number;
+    timerCount?: number;
+    linkedIdentityCount?: number;
+    lastActivityAt?: string;
+  };
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+export interface UsersResponse {
+  users: OrkestrUser[];
+  generatedAt?: string;
+}
+
+export interface UserResponse {
+  ok?: boolean;
+  user: OrkestrUser;
+}
+
 @Injectable({ providedIn: "root" })
 export class ApiService {
   private readonly http = inject(HttpClient);
@@ -763,8 +803,32 @@ export class ApiService {
     return this.http.get<SetupStatus>(this.api("/setup/status"));
   }
 
+  users(): Observable<UsersResponse> {
+    return this.http.get<UsersResponse>(this.api("/users"));
+  }
+
+  createUser(body: Record<string, unknown>): Observable<UserResponse> {
+    return this.http.post<UserResponse>(this.api("/users"), body);
+  }
+
+  updateUser(id: string, body: Record<string, unknown>): Observable<UserResponse> {
+    return this.http.patch<UserResponse>(this.api(`/users/${encodeURIComponent(id)}`), body);
+  }
+
+  enableUser(id: string): Observable<UserResponse> {
+    return this.http.post<UserResponse>(this.api(`/users/${encodeURIComponent(id)}/enable`), {});
+  }
+
+  disableUser(id: string): Observable<UserResponse> {
+    return this.http.post<UserResponse>(this.api(`/users/${encodeURIComponent(id)}/disable`), {});
+  }
+
   createSecurityChallenge(): Observable<SecurityChallengeResponse> {
     return this.http.post<SecurityChallengeResponse>(this.api("/setup/security/challenges"), {});
+  }
+
+  createSecurityChallengeForUser(userId: string): Observable<SecurityChallengeResponse> {
+    return this.http.post<SecurityChallengeResponse>(this.api("/setup/security/challenges"), { userId });
   }
 
   securityChallenge(challengeId: string): Observable<SecurityChallengeStatusResponse> {

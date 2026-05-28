@@ -4,7 +4,7 @@ import { promisify } from "node:util";
 import { dataPaths, ensureDataDirs } from "../../storage/src/paths.js";
 import { appendEvent, readJson, writeSecretJson } from "../../storage/src/store.js";
 import { adminPrincipal, principalFromSecuritySession } from "./principal.js";
-import { defaultAdminUser, normalizeUserId } from "./users.js";
+import { defaultAdminUser, getUser, normalizeUserId } from "./users.js";
 
 const execFileAsync = promisify(execFile);
 const cookieName = "orkestr_session";
@@ -78,6 +78,8 @@ function publicChallenge(challenge = {}, now = Date.now()) {
     expiresAt: normalized.expiresAt,
     requestedUserAgent: normalized.requestedUserAgent || "",
     requestedIp: normalized.requestedIp || "",
+    userId: normalized.userId || "",
+    role: normalized.role || "",
     approvedAt: normalized.approvedAt || "",
     approvedBy: normalized.approvedBy || "",
     rejectedAt: normalized.rejectedAt || "",
@@ -228,8 +230,10 @@ export async function securityStatus(env = process.env) {
   };
 }
 
-export async function createPairingChallenge({ request, env = process.env } = {}) {
+export async function createPairingChallenge({ request, env = process.env, userId = "", role = "" } = {}) {
   const config = await readSecurityConfig(env);
+  const normalizedRole = String(role || "").trim().toLowerCase() === "user" ? "user" : "admin";
+  const normalizedUserId = userId ? normalizeUserId(userId) : "";
   const challenge = {
     id: randomToken(18),
     status: "pending",
@@ -237,12 +241,14 @@ export async function createPairingChallenge({ request, env = process.env } = {}
     expiresAt: new Date(Date.now() + challengeTtlMs).toISOString(),
     requestedUserAgent: String(request?.headers?.["user-agent"] || "").slice(0, 240),
     requestedIp: requestIp(request).slice(0, 80),
+    userId: normalizedUserId,
+    role: normalizedUserId ? normalizedRole : "",
   };
   await writeSecurityConfig({
     ...config,
     challenges: [...(config.challenges || []), challenge],
   }, env);
-  await appendEvent({ type: "security_pairing_challenge_created", challengeId: challenge.id }, env).catch(() => {});
+  await appendEvent({ type: "security_pairing_challenge_created", challengeId: challenge.id, userId: challenge.userId || null, role: challenge.role || null }, env).catch(() => {});
   return {
     ok: true,
     challengeId: challenge.id,
@@ -489,10 +495,26 @@ function isAllowedBeforePairing(request) {
 export async function authorizeHttpRequest(request, env = process.env) {
   const status = await securityStatus(env);
   if (!status.authEnabled) return { ok: true, status, principal: adminPrincipal(defaultAdminUser(env)) };
-  if (isAllowedBeforePairing(request)) return { ok: true, status, principal: adminPrincipal(defaultAdminUser(env)) };
   const token = cookieValue(request?.headers?.cookie || "");
   const session = await securitySessionForToken(token, env, { request });
-  if (session) return { ok: true, status, principal: principalFromSecuritySession(session, env), session };
+  if (session) {
+    const user = await getUser(session.userId, env);
+    if (user?.status === "disabled") {
+      return {
+        ok: false,
+        status,
+        statusCode: 403,
+        error: "user_disabled",
+      };
+    }
+    const principal = principalFromSecuritySession({
+      ...session,
+      role: user?.role || session.role,
+      displayName: user?.displayName || session.displayName,
+    }, env);
+    return { ok: true, status, principal, session };
+  }
+  if (isAllowedBeforePairing(request)) return { ok: true, status, principal: adminPrincipal(defaultAdminUser(env)) };
   return {
     ok: false,
     status,

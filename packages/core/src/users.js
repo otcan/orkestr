@@ -2,6 +2,7 @@ import { dataPaths, ensureDataDirs, userDataPaths } from "../../storage/src/path
 import { appendEvent, readJson, writeJson } from "../../storage/src/store.js";
 
 export const adminUserId = "admin";
+const userStatuses = new Set(["active", "disabled"]);
 
 function nowIso() {
   return new Date().toISOString();
@@ -20,6 +21,21 @@ export function defaultUserLimits(role = "user") {
   return {
     maxThreads: role === "admin" ? null : 1,
   };
+}
+
+function normalizeRole(value = "user") {
+  return String(value || "").trim().toLowerCase() === "admin" ? "admin" : "user";
+}
+
+function normalizeStatus(value = "active") {
+  const status = String(value || "active").trim().toLowerCase();
+  return userStatuses.has(status) ? status : "active";
+}
+
+function userError(message, statusCode = 400) {
+  const error = new Error(message);
+  error.statusCode = statusCode;
+  return error;
 }
 
 export function defaultAdminUser(env = process.env) {
@@ -47,13 +63,13 @@ function normalizeIdentity(identity = {}) {
 }
 
 export function normalizeUser(user = {}, env = process.env) {
-  const role = String(user.role || "").trim().toLowerCase() === "admin" ? "admin" : "user";
+  const role = normalizeRole(user.role);
   const id = normalizeUserId(user.id || (role === "admin" ? defaultAdminUser(env).id : ""));
   return {
     id,
     role,
     displayName: String(user.displayName || user.name || id).trim(),
-    status: String(user.status || "active").trim().toLowerCase(),
+    status: normalizeStatus(user.status),
     linkedIdentities: Array.isArray(user.linkedIdentities)
       ? user.linkedIdentities.map(normalizeIdentity).filter((identity) => identity.provider && identity.externalId)
       : [],
@@ -63,6 +79,20 @@ export function normalizeUser(user = {}, env = process.env) {
     },
     createdAt: String(user.createdAt || "").trim() || nowIso(),
     updatedAt: String(user.updatedAt || "").trim() || nowIso(),
+  };
+}
+
+export function publicUser(user = {}, env = process.env) {
+  const normalized = normalizeUser(user, env);
+  return {
+    id: normalized.id,
+    role: normalized.role,
+    displayName: normalized.displayName,
+    status: normalized.status,
+    linkedIdentities: normalized.linkedIdentities.map((identity) => ({ ...identity })),
+    limits: { ...normalized.limits },
+    createdAt: normalized.createdAt,
+    updatedAt: normalized.updatedAt,
   };
 }
 
@@ -103,6 +133,86 @@ export async function upsertUser(input = {}, env = process.env) {
   await writeUsersFile(next, env);
   await appendEvent({ type: existed ? "user_updated" : "user_created", userId: user.id, role: user.role }, env).catch(() => {});
   return (await getUser(user.id, env)) || user;
+}
+
+function activeAdminUsers(users = []) {
+  return users.filter((user) => user.role === "admin" && user.status !== "disabled");
+}
+
+function assertLastAdminSafe(before, after) {
+  const beforeAdmins = activeAdminUsers(before);
+  const afterAdmins = activeAdminUsers(after);
+  if (beforeAdmins.length > 0 && afterAdmins.length === 0) {
+    throw userError("last_admin_required", 409);
+  }
+}
+
+export async function createUser(input = {}, env = process.env) {
+  const rawId = String(input.id || input.userId || "").trim();
+  if (!rawId) throw userError("user_id_required", 400);
+  const user = normalizeUser({
+    ...input,
+    id: rawId,
+    role: normalizeRole(input.role || "user"),
+    status: normalizeStatus(input.status || "active"),
+  }, env);
+  const users = await listUsers(env);
+  if (users.some((item) => item.id === user.id)) throw userError("user_already_exists", 409);
+  const now = nowIso();
+  const next = [...users, normalizeUser({ ...user, createdAt: now, updatedAt: now }, env)];
+  assertLastAdminSafe(users, next);
+  await writeUsersFile(next, env);
+  await appendEvent({ type: "user_created", userId: user.id, role: user.role }, env).catch(() => {});
+  return (await getUser(user.id, env)) || user;
+}
+
+export async function updateUser(userId, input = {}, env = process.env) {
+  const id = normalizeUserId(userId);
+  if (!id) throw userError("user_id_required", 400);
+  const users = await listUsers(env);
+  const existing = users.find((item) => item.id === id);
+  if (!existing) throw userError("user_not_found", 404);
+  const now = nowIso();
+  const merged = normalizeUser({
+    ...existing,
+    displayName: input.displayName ?? input.name ?? existing.displayName,
+    role: input.role === undefined || input.role === null || input.role === "" ? existing.role : input.role,
+    status: input.status === undefined || input.status === null || input.status === "" ? existing.status : input.status,
+    limits: input.limits && typeof input.limits === "object" ? { ...existing.limits, ...input.limits } : existing.limits,
+    linkedIdentities: Array.isArray(input.linkedIdentities) ? input.linkedIdentities : existing.linkedIdentities,
+    updatedAt: now,
+  }, env);
+  const next = users.map((user) => user.id === id ? merged : user);
+  assertLastAdminSafe(users, next);
+  await writeUsersFile(next, env);
+  await appendEvent({ type: "user_updated", userId: id, role: merged.role, status: merged.status }, env).catch(() => {});
+  return (await getUser(id, env)) || merged;
+}
+
+export async function setUserStatus(userId, status, env = process.env) {
+  return updateUser(userId, { status: normalizeStatus(status) }, env);
+}
+
+export async function disableUser(userId, env = process.env) {
+  return setUserStatus(userId, "disabled", env);
+}
+
+export async function enableUser(userId, env = process.env) {
+  return setUserStatus(userId, "active", env);
+}
+
+export async function updateUserLimits(userId, limits = {}, env = process.env) {
+  const nextLimits = {};
+  if (Object.prototype.hasOwnProperty.call(limits || {}, "maxThreads")) {
+    const raw = limits.maxThreads;
+    if (raw === null || raw === "" || raw === undefined) nextLimits.maxThreads = null;
+    else {
+      const parsed = Number(raw);
+      if (!Number.isFinite(parsed) || parsed < 0) throw userError("invalid_max_threads", 400);
+      nextLimits.maxThreads = Math.floor(parsed);
+    }
+  }
+  return updateUser(userId, { limits: nextLimits }, env);
 }
 
 export async function findUserByIdentity({ provider, accountId = "", externalId = "" } = {}, env = process.env) {
