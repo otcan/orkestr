@@ -6,7 +6,7 @@ usage() {
 Deploy Orkestr from an exact git ref into versioned release directories.
 
 Usage:
-  scripts/deploy-git-release.sh install [--ref REF] [--channel NAME] [--allow-untagged|--require-tagged] [--no-smoke]
+  scripts/deploy-git-release.sh install [--ref REF] [--channel NAME] [--allow-untagged|--require-tagged] [--no-smoke] [--no-backup]
   scripts/deploy-git-release.sh rollback [--to RELEASE_ID]
   scripts/deploy-git-release.sh status [--json]
   scripts/deploy-git-release.sh --check-only
@@ -25,6 +25,7 @@ Environment:
   ORKESTR_DEPLOY_BACKUP_DIR     State backup directory. Defaults to $ORKESTR_DEPLOY_ROOT/backups.
   ORKESTR_DEPLOY_LOCK_FILE      Lock file. Defaults to /var/lock/orkestr-deploy.lock.
   ORKESTR_DEPLOY_RUN_SMOKE      Run npm smoke before activation. Defaults to 1.
+  ORKESTR_DEPLOY_BACKUP_STATE   Back up ORKESTR_HOME before activation. Defaults to 1.
   ORKESTR_DEPLOY_HEALTH_URL     Health URL. Defaults to http://$ORKESTR_HOST:$ORKESTR_PORT/api/health.
   ORKESTR_SERVICE_NAME          systemd service name. Defaults to orkestr.
   ORKESTR_BUILD_WEB_FROM_SOURCE Set to 1 to install dev dependencies and rebuild the Angular web app.
@@ -42,6 +43,7 @@ json_output=0
 check_only=0
 run_smoke_arg=""
 tags_only_arg=""
+backup_state_arg=""
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
@@ -79,6 +81,10 @@ while [ "$#" -gt 0 ]; do
       ;;
     --require-tagged|--require-tagged-releases)
       tags_only_arg=1
+      shift
+      ;;
+    --no-backup)
+      backup_state_arg=0
       shift
       ;;
     --check-only)
@@ -214,6 +220,10 @@ prepare_repo_cache() {
 
 backup_state() {
   local stamp target backup_name data_dir
+  if [ "$run_backup" != "1" ]; then
+    echo ""
+    return 0
+  fi
   data_dir="${ORKESTR_HOME:-}"
   if [ -z "$data_dir" ] || [ ! -d "$data_dir" ]; then
     echo ""
@@ -335,7 +345,7 @@ install_command() {
     return 0
   fi
 
-  if [ ! -d "$release_dir/.git" ]; then
+  if [ ! -e "$release_dir/.git" ]; then
     mkdir -p "$releases_dir"
     git -C "$repo_cache" worktree add --detach "$release_dir" "$target_ref"
     (cd "$release_dir" && bash scripts/install-runtime-deps.sh)
@@ -428,6 +438,7 @@ host="${ORKESTR_HOST:-127.0.0.1}"
 port="${ORKESTR_PORT:-19812}"
 health_url="${ORKESTR_DEPLOY_HEALTH_URL:-http://$host:$port/api/health}"
 run_smoke="${run_smoke_arg:-${ORKESTR_DEPLOY_RUN_SMOKE:-1}}"
+run_backup="${backup_state_arg:-${ORKESTR_DEPLOY_BACKUP_STATE:-1}}"
 lock_file="${ORKESTR_DEPLOY_LOCK_FILE:-/var/lock/orkestr-deploy.lock}"
 release_id=""
 

@@ -19,6 +19,7 @@ test("release deploy script exposes versioned install, status, and rollback", as
 
   assert.match(stdout, /install \[--ref REF\]/);
   assert.match(stdout, /--allow-untagged\|--require-tagged/);
+  assert.match(stdout, /--no-backup/);
   assert.match(stdout, /rollback \[--to RELEASE_ID\]/);
   assert.match(script, /ORKESTR_RELEASES_DIR/);
   assert.match(script, /ORKESTR_CURRENT_LINK/);
@@ -28,6 +29,8 @@ test("release deploy script exposes versioned install, status, and rollback", as
   assert.match(script, /npm --prefix "\$release_dir" run build:runtime/);
   assert.match(script, /npm --prefix "\$release_dir" run smoke/);
   assert.match(script, /backup_state/);
+  assert.match(script, /ORKESTR_DEPLOY_BACKUP_STATE/);
+  assert.match(script, /backup_state_arg/);
   assert.match(script, /health_check/);
   assert.match(script, /sync_versioned_env/);
   assert.match(script, /set_env_assignment ORKESTR_APP_DIR "\$current_link"/);
@@ -40,6 +43,7 @@ test("release deploy script exposes versioned install, status, and rollback", as
   assert.match(script, /tags_only_arg/);
   assert.match(script, /--allow-untagged\|--allow-untagged-releases/);
   assert.match(script, /--require-tagged\|--require-tagged-releases/);
+  assert.match(script, /if \[ ! -e "\$release_dir\/\.git" \]/);
   assert.match(script, /worktree add --detach/);
   assert.match(script, /LC_ALL=C tr -c 'A-Za-z0-9\._\+-' '-'/);
   assert.match(manifest, /schemaVersion/);
