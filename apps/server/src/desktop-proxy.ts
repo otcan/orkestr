@@ -35,7 +35,15 @@ function parseDesktopUrl(rawUrl: string | undefined): { slug: string; path: stri
 }
 
 function sessionWebPort(session: Record<string, any>): number {
-  const parsed = Number(session.web_port || session.webPort || session.novnc_port || session.noVncPort || 0);
+  const parsed = Number(session.web_port || session.webPort || session.novnc_port || session.noVncPort || portFromEndpoint(session.upstream));
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : 0;
+}
+
+function portFromEndpoint(value: unknown): number {
+  const text = String(value || "").trim();
+  if (!text) return 0;
+  const match = text.match(/(?::|:\/\/[^/:]+:)(\d{2,5})(?:\/|$)/);
+  const parsed = Number(match?.[1] || 0);
   return Number.isInteger(parsed) && parsed > 0 ? parsed : 0;
 }
 

@@ -30,7 +30,7 @@ import {
   threadUsesCodexAppServer,
 } from "./codex-app-server.js";
 import { appendOrUpdateEventMessage } from "./codex-app-server-common.js";
-import { completeThreadSecurityApproveCommand, threadDesktopShareApproveChallenge, threadDesktopShareRequestSlug, threadSecurityApproveChallengeId } from "./security-thread-command.js";
+import { completeThreadSecurityApproveCommand, threadSecurityApproveChallengeId } from "./security-thread-command.js";
 import {
   capturePane,
   killTmuxSession,
@@ -1534,8 +1534,6 @@ async function reapplyDesiredCodexMode(thread, status, env = process.env) {
 function immediateThreadCommand(message) {
   if (!message || message.role !== "user") return null;
   if (!["queued", "pending_delivery"].includes(String(message.state || ""))) return null;
-  if (threadDesktopShareApproveChallenge(message)) return { command: "desktop_share_approve", rawCommand: "desktop_share_approve", text: threadDesktopShareApproveChallenge(message) };
-  if (threadDesktopShareRequestSlug(message)) return { command: "desktop_share_request", rawCommand: "desktop_share_request", text: threadDesktopShareRequestSlug(message) };
   const securityChallengeId = threadSecurityApproveChallengeId(message);
   if (securityChallengeId) return { command: "security_approve", rawCommand: "security_approve", text: securityChallengeId };
   const parsed = parseThreadInputCommand({ text: message.text });
@@ -1676,7 +1674,6 @@ async function completeInterruptCommand(thread, message, parsed, env = process.e
 }
 
 async function completeImmediateThreadCommand(thread, message, parsed, env = process.env) {
-  if (parsed.command === "desktop_share_approve" || parsed.command === "desktop_share_request") return completeThreadSecurityApproveCommand(thread, message, env);
   if (parsed.command === "security_approve") return completeThreadSecurityApproveCommand(thread, message, env);
   if (parsed.command === "interrupt") return completeInterruptCommand(thread, message, parsed, env);
   if (parsed.command === "stop") return completeStopCommand(thread, message, env);

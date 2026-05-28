@@ -19,6 +19,8 @@ test("runtime AGENTS.md points agents to dynamic whereiam discovery", async () =
   assert.match(body, /orkestr settings --json/);
   assert.match(body, /Orkestr is the host application around this Codex session/);
   assert.match(body, /orkestr security approve <challenge-id>/);
+  assert.match(body, /orkestr desktop share \[slug\]/);
+  assert.match(body, /orkestr desktop approve <challenge-id>/);
   assert.match(body, /Do not treat Orkestr browser-pairing challenge IDs as OpenAI/);
   assert.doesNotMatch(body, /Thread:\s+thread-1/);
   assert.doesNotMatch(body, /Workspace:\s+/);

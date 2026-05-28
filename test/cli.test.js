@@ -5,6 +5,8 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { runCli } from "../apps/cli/src/commands.js";
+import { createDesktopShare, desktopShareStatus, openDesktopShare } from "../packages/core/src/desktop-shares.js";
+import { userPrincipal } from "../packages/core/src/principal.js";
 import { writeRuntimeSettings } from "../packages/core/src/runtime-settings.js";
 import { approvePairingChallenge, createPairingChallenge, getPairingChallenge, pairBrowser } from "../packages/core/src/security.js";
 
@@ -119,6 +121,65 @@ test("CLI codex migrate calls the migration API", async () => {
   assert.equal(seen[0].body.dryRun, true);
   assert.match(stdout.text(), /Codex migration: dry run/);
   assert.match(stdout.text(), /Candidates: 2/);
+});
+
+test("CLI desktop share chooses the configured desktop and calls the public API", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-cli-desktop-share-"));
+  const env = { ORKESTR_HOME: home };
+  await writeRuntimeSettings({ desktops: { manualIntervention: "linkedin", default: "desktop" } }, env);
+  const stdout = capture();
+  const seen = [];
+
+  const code = await runCli(["--api", "http://orkestr.test", "desktop", "share"], {
+    env,
+    stdout,
+    stderr: capture(),
+    fetchImpl: fakeFetch({
+      "GET /api/browser-sessions": {
+        ok: true,
+        sessions: [{ slug: "linkedin", label: "LinkedIn" }],
+      },
+      "POST /api/desktops/linkedin/share": {
+        url: "https://desktop.example.test/desktop-share/share-1?key=secret",
+        share: { desktopSlug: "linkedin", label: "LinkedIn" },
+      },
+    }, seen),
+  });
+
+  assert.equal(code, 0);
+  assert.deepEqual(seen.map((entry) => entry.key), ["GET /api/browser-sessions", "POST /api/desktops/linkedin/share"]);
+  assert.equal(seen[1].body.start, true);
+  assert.match(stdout.text(), /Desktop link for LinkedIn/);
+  assert.match(stdout.text(), /desktop-share\/share-1/);
+});
+
+test("CLI desktop approve approves a pasted mobile desktop challenge", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-cli-desktop-approve-"));
+  const env = { ORKESTR_HOME: home };
+  const principal = userPrincipal({ id: "alice", role: "user" });
+  const created = await createDesktopShare({ desktopSlug: "linkedin", principal, env });
+  const parsed = new URL(created.url);
+  const shareId = parsed.pathname.split("/").filter(Boolean).at(-1);
+  const key = parsed.searchParams.get("key");
+  const opened = await openDesktopShare({ shareId, key, subdomain: created.subdomain, env });
+  const stdout = capture();
+
+  const code = await runCli(["desktop", "approve", opened.attempt.challenge], {
+    env,
+    stdout,
+    stderr: capture(),
+  });
+  const ready = await desktopShareStatus({
+    shareId,
+    key,
+    subdomain: created.subdomain,
+    browserToken: opened.cookie.value.split(":")[1],
+    env,
+  });
+
+  assert.equal(code, 0);
+  assert.equal(ready.approved, true);
+  assert.match(stdout.text(), /Approved desktop access for linkedin/);
 });
 
 test("CLI version prints the active build identity", async () => {

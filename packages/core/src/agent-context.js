@@ -71,6 +71,12 @@ Orkestr capabilities:
   \`orkestr doctor timers\`.
 - Browsers/desktops: use \`GET /api/browser-sessions\`,
   \`GET /api/desktops/leases\`, and the desktop acquire/heartbeat/release APIs.
+  If the user sends \`/desktop\`, \`/browser\`, or asks for a phone/mobile
+  desktop link, treat it as an agent-side Orkestr desktop skill request: run
+  \`orkestr desktop share [slug]\`, send the generated URL, then approve the
+  pasted \`desk-...\` challenge with \`orkestr desktop approve <challenge-id>\`.
+  Choose the manual/default desktop from \`orkestr whereiam --json\` when the
+  user does not name a slug.
 - WhatsApp and Gmail: use connector status APIs and Orkestr routing. Do not
   read connector session files or tokens directly.
 

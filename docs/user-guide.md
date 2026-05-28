@@ -125,6 +125,11 @@ intervention desktop in runtime settings. Codex-aware skills should read
 `orkestr whereiam --json` or `orkestr settings --json` instead of guessing which
 browser profile to open.
 
+For chat-driven desktop access, `/desktop` is handled by the Codex agent as an
+Orkestr desktop skill request. The agent creates the temporary phone link with
+`orkestr desktop share`, then approves the pasted `desk-...` challenge with
+`orkestr desktop approve`.
+
 ### Schedule Work
 
 Timers can wake a thread and send a prompt on a cadence. Use them for recurring
