@@ -14,6 +14,7 @@ const accountStates = new Map();
 const outboundMessageIds = new Set();
 const outboundMessageTextKeys = new Set();
 const typingSessions = new Map();
+const typingClearRetryTimers = new Map();
 
 function nowIso() {
   return new Date().toISOString();
@@ -433,8 +434,23 @@ function typingRefreshMs(env = process.env) {
   return Number.isFinite(parsed) ? Math.max(2000, parsed) : 8000;
 }
 
+export function localWhatsAppTypingClearRetryDelaysMs(env = process.env) {
+  const raw = String(env.ORKESTR_WHATSAPP_TYPING_CLEAR_RETRY_MS || env.WA_TYPING_CLEAR_RETRY_MS || "750,2500,8000").trim();
+  if (!raw || raw === "0" || raw.toLowerCase() === "off") return [];
+  const delays = raw
+    .split(/[\s,]+/)
+    .map((item) => Number(item))
+    .filter((item) => Number.isFinite(item) && item >= 0 && item <= 60_000);
+  return [...new Set(delays)];
+}
+
 function typingKey(accountId, chatId) {
   return `${String(accountId || "").trim()}:${String(chatId || "").trim()}`;
+}
+
+function clearTypingClearRetryTimers(key) {
+  for (const timer of typingClearRetryTimers.get(key) || []) clearTimeout(timer);
+  typingClearRetryTimers.delete(key);
 }
 
 async function sendChatTypingState(runtime, chatId, active) {
@@ -447,6 +463,35 @@ async function sendChatTypingState(runtime, chatId, active) {
   await chat.clearState?.();
 }
 
+function scheduleTypingClearRetries({ accountId = "", chatId = "", env = process.env } = {}) {
+  const selectedAccountId = String(accountId || "").trim();
+  const id = String(chatId || "").trim();
+  if (!selectedAccountId || !id) return;
+  const key = typingKey(selectedAccountId, id);
+  const delays = localWhatsAppTypingClearRetryDelaysMs(env);
+  clearTypingClearRetryTimers(key);
+  if (!delays.length) return;
+  const timers = delays.map((delayMs) => {
+    const timer = setTimeout(() => {
+      const remaining = (typingClearRetryTimers.get(key) || []).filter((item) => item !== timer);
+      if (remaining.length) typingClearRetryTimers.set(key, remaining);
+      else typingClearRetryTimers.delete(key);
+      if (typingSessions.has(key)) return;
+      const runtime = runtimes.get(selectedAccountId);
+      const state = accountStates.get(selectedAccountId);
+      if (!runtime?.client || !state?.ready) return;
+      sendChatTypingState(runtime, id, false)
+        .then(() => appendEvent({ type: "whatsapp_local_typing_clear_retry", accountId: selectedAccountId, chatId: id, delayMs }, env).catch(() => {}))
+        .catch((error) => {
+          appendEvent({ type: "whatsapp_local_typing_clear_retry_failed", accountId: selectedAccountId, chatId: id, delayMs, error: error.message || String(error) }, env).catch(() => {});
+        });
+    }, delayMs);
+    if (typeof timer.unref === "function") timer.unref();
+    return timer;
+  });
+  typingClearRetryTimers.set(key, timers);
+}
+
 export async function startLocalWhatsAppTyping({ chatId = "", accountId = "", env = process.env } = {}) {
   const selectedAccountId = accountId
     ? normalizeAccountId(accountId, env)
@@ -457,6 +502,7 @@ export async function startLocalWhatsAppTyping({ chatId = "", accountId = "", en
   if (!id || !runtime?.client || !state?.ready) return { ok: false, reason: !id ? "missing_chat_id" : "whatsapp_local_bridge_not_ready" };
   const key = typingKey(selectedAccountId, id);
   if (typingSessions.has(key)) return { ok: true, active: true, reused: true, accountId: selectedAccountId, chatId: id };
+  clearTypingClearRetryTimers(key);
 
   await sendChatTypingState(runtime, id, true);
   const interval = setInterval(() => {
@@ -486,6 +532,7 @@ export async function stopLocalWhatsAppTyping({ chatId = "", accountId = "", env
     await sendChatTypingState(runtime, id, false).catch((error) => {
       appendEvent({ type: "whatsapp_local_typing_clear_failed", accountId: selectedAccountId, chatId: id, error: error.message || String(error) }, env).catch(() => {});
     });
+    scheduleTypingClearRetries({ accountId: selectedAccountId, chatId: id, env });
   }
   if (session) await appendEvent({ type: "whatsapp_local_typing_stopped", accountId: selectedAccountId, chatId: id }, env).catch(() => {});
   return { ok: true, active: false, accountId: selectedAccountId, chatId: id };
@@ -1059,6 +1106,9 @@ export async function logoutLocalWhatsAppAccount(accountId = "", env = process.e
   for (const session of [...typingSessions.values()].filter((item) => item.accountId === normalized)) {
     await stopLocalWhatsAppTyping({ accountId: session.accountId, chatId: session.chatId, env }).catch(() => {});
   }
+  for (const key of [...typingClearRetryTimers.keys()].filter((item) => item.startsWith(`${normalized}:`))) {
+    clearTypingClearRetryTimers(key);
+  }
   const runtime = runtimes.get(normalized);
   if (runtime?.client) {
     runtime.clearAuthReadyTimer?.();
@@ -1092,6 +1142,7 @@ export async function stopLocalWhatsAppBridge(env = process.env) {
     if (session?.interval) clearInterval(session.interval);
   }
   typingSessions.clear();
+  for (const key of [...typingClearRetryTimers.keys()]) clearTypingClearRetryTimers(key);
   runtimes.clear();
   await Promise.all(entries.map(async ([accountId, runtime]) => {
     if (runtime?.client) {
