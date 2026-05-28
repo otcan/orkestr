@@ -4,7 +4,9 @@ import type { INestApplication } from "@nestjs/common";
 import type { IncomingMessage, Server } from "node:http";
 import type { Duplex } from "node:stream";
 import { listBrowserSessions } from "../../../packages/browsers/src/browsers.js";
+import { requestPrincipal } from "../../../packages/core/src/principal.js";
 import { authorizeHttpRequest } from "../../../packages/core/src/security.js";
+import { isMobileDesktopRoute, serveMobileDesktopShell } from "./mobile-desktop-shell.js";
 
 type DesktopTarget = {
   slug: string;
@@ -37,12 +39,17 @@ function sessionWebPort(session: Record<string, any>): number {
   return Number.isInteger(parsed) && parsed > 0 ? parsed : 0;
 }
 
-async function desktopTarget(rawUrl: string | undefined): Promise<DesktopTarget | null> {
+function principalCacheKey(principal: any, slug: string): string {
+  return `${String(principal?.userId || "admin")}:${String(principal?.role || "admin")}:${slug}`;
+}
+
+async function desktopTarget(rawUrl: string | undefined, principal: any): Promise<DesktopTarget | null> {
   const request = parseDesktopUrl(rawUrl);
   if (!request) return null;
-  const cached = targetCache.get(request.slug);
+  const cacheKey = principalCacheKey(principal, request.slug);
+  const cached = targetCache.get(cacheKey);
   if (cached && cached.expiresAt > Date.now()) return { ...request, port: cached.port };
-  const payload = await listBrowserSessions();
+  const payload = await listBrowserSessions(process.env, { principal });
   const session = (payload.sessions || []).find((item: any) => String(item.slug || "") === request.slug);
   const port = session ? sessionWebPort(session) : 0;
   const status = String(session?.status || session?.state || "").toLowerCase();
@@ -53,7 +60,7 @@ async function desktopTarget(rawUrl: string | undefined): Promise<DesktopTarget 
     throw error;
   }
   const ttlMs = targetCacheTtlMs();
-  if (ttlMs > 0) targetCache.set(request.slug, { port, expiresAt: Date.now() + ttlMs });
+  if (ttlMs > 0) targetCache.set(cacheKey, { port, expiresAt: Date.now() + ttlMs });
   return { slug: request.slug, port, path: request.path };
 }
 
@@ -68,9 +75,15 @@ function sendJson(response: any, statusCode: number, payload: Record<string, unk
 }
 
 async function proxyDesktopHttp(request: any, response: any): Promise<void> {
+  const mobileRoute = isMobileDesktopRoute(request.originalUrl || request.url);
+  if (mobileRoute) {
+    serveMobileDesktopShell(response, mobileRoute.slug);
+    return;
+  }
+
   let target: DesktopTarget | null = null;
   try {
-    target = await desktopTarget(request.originalUrl || request.url);
+    target = await desktopTarget(request.originalUrl || request.url, requestPrincipal(request));
   } catch (error) {
     sendJson(response, Number((error as any)?.statusCode || 502), {
       ok: false,
@@ -140,7 +153,7 @@ export function registerDesktopProxy(app: INestApplication): void {
 export function attachDesktopProxyUpgrade(server: Server): void {
   server.on("upgrade", async (request: IncomingMessage, socket: Duplex, head: Buffer) => {
     if (!parseDesktopUrl(request.url)) return;
-    const auth = await authorizeHttpRequest(request).catch((error) => ({
+    const auth: any = await authorizeHttpRequest(request).catch((error) => ({
       ok: false,
       statusCode: 500,
       error: error instanceof Error ? error.message : String(error),
@@ -152,7 +165,7 @@ export function attachDesktopProxyUpgrade(server: Server): void {
 
     let target: DesktopTarget | null = null;
     try {
-      target = await desktopTarget(request.url);
+      target = await desktopTarget(request.url, auth.principal);
     } catch (error) {
       writeUpgradeError(socket, Number((error as any)?.statusCode || 502), error instanceof Error ? error.message : String(error));
       return;

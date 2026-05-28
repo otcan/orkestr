@@ -3,6 +3,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { dataPaths, ensureDataDirs } from "../../storage/src/paths.js";
 import { appendEvent, readJson, writeSecretJson } from "../../storage/src/store.js";
+import { authorizeDesktopShareHttpRequest } from "./desktop-shares.js";
 import { adminPrincipal, principalFromSecuritySession } from "./principal.js";
 import { defaultAdminUser, getUser, normalizeUserId } from "./users.js";
 
@@ -485,6 +486,7 @@ function isAllowedBeforePairing(request) {
   if (url.startsWith("/desktop/")) return false;
   if (!url.startsWith("/api/") && !url.startsWith("/oauth/")) return true;
   if (url.startsWith("/oauth/")) return true;
+  if (method === "GET" && /^\/api\/desktop-shares\/[^/]+\/(?:open|status)$/.test(url)) return true;
   if (method === "GET" && ["/api/health", "/api/ready", "/api/version", "/api/setup/status"].some((path) => url.startsWith(path))) return true;
   if (method === "POST" && (url === "/api/setup/security/challenge" || url === "/api/setup/security/challenges")) return true;
   if (method === "GET" && /^\/api\/setup\/security\/challenges\/[^/]+$/.test(url)) return true;
@@ -494,6 +496,17 @@ function isAllowedBeforePairing(request) {
 
 export async function authorizeHttpRequest(request, env = process.env) {
   const status = await securityStatus(env);
+  const shareAuth = String(request?.url || "").startsWith("/desktop/")
+    ? await authorizeDesktopShareHttpRequest(request, env).catch((error) => ({
+        ok: false,
+        statusCode: error?.statusCode || 401,
+        error: error?.message || String(error),
+      }))
+    : null;
+  if (shareAuth?.ok) return { ok: true, status, principal: shareAuth.principal, desktopShare: shareAuth.share };
+  if (shareAuth && Number(shareAuth.statusCode || 0) >= 400) {
+    return { ok: false, status, statusCode: shareAuth.statusCode, error: shareAuth.error || "desktop_share_forbidden" };
+  }
   if (!status.authEnabled) return { ok: true, status, principal: adminPrincipal(defaultAdminUser(env)) };
   const token = cookieValue(request?.headers?.cookie || "");
   const session = await securitySessionForToken(token, env, { request });

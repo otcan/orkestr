@@ -1,5 +1,8 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
+import { userDataPaths } from "../../storage/src/paths.js";
+import { isAdminPrincipal } from "../../core/src/policy.js";
+import { normalizeUserId } from "../../core/src/users.js";
 import { activeDesktopLeaseStatus, publicDesktopLeases } from "./desktop-leases.js";
 
 const execFileAsync = promisify(execFile);
@@ -14,6 +17,63 @@ function browserApiBase(env = process.env) {
 
 function browserSessionsUrl(env = process.env) {
   return String(env.ORKESTR_BROWSER_SESSIONS_URL || "").trim();
+}
+
+function numberEnv(env, name, fallback) {
+  const parsed = Number(env[name] || fallback);
+  return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : fallback;
+}
+
+function stableHash(text) {
+  let hash = 0;
+  for (const char of String(text || "")) {
+    hash = ((hash << 5) - hash + char.charCodeAt(0)) | 0;
+  }
+  return Math.abs(hash);
+}
+
+function browserctlScope(env = process.env, options = {}) {
+  const principal = options?.principal || null;
+  const personal = Boolean(principal?.userId && !isAdminPrincipal(principal));
+  const ownerUserId = normalizeUserId(
+    personal
+      ? principal.userId
+      : options?.ownerUserId || env.ORKESTR_ADMIN_USER_ID || "admin",
+  );
+  return {
+    ownerUserId,
+    personal,
+    scope: personal ? "user" : "admin",
+    scopeLabel: personal ? "Private user desktop" : "Local admin desktop",
+    home: personal ? userDataPaths(ownerUserId, env).root : env.ORKESTR_HOME,
+    portOffset: personal ? (stableHash(ownerUserId) % 1000) * 16 : 0,
+  };
+}
+
+function scopedBrowserctlEnv(env = process.env, options = {}) {
+  const scope = browserctlScope(env, options);
+  if (!scope.personal) return { ...env, ORKESTR_BROWSER_OWNER_USER_ID: scope.ownerUserId };
+  return {
+    ...env,
+    ORKESTR_HOME: scope.home,
+    ORKESTR_BROWSER_OWNER_USER_ID: scope.ownerUserId,
+    ORKESTR_BROWSER_SCOPE: scope.scope,
+    ORKESTR_BROWSER_DEBUG_PORT_BASE: String(numberEnv(env, "ORKESTR_BROWSER_DEBUG_PORT_BASE", 9222) + scope.portOffset),
+    ORKESTR_DESKTOP_WEB_PORT_BASE: String(numberEnv(env, "ORKESTR_DESKTOP_WEB_PORT_BASE", 6080) + scope.portOffset),
+    ORKESTR_DESKTOP_VNC_PORT_BASE: String(numberEnv(env, "ORKESTR_DESKTOP_VNC_PORT_BASE", 5901) + scope.portOffset),
+    ORKESTR_DESKTOP_DISPLAY_BASE: String(numberEnv(env, "ORKESTR_DESKTOP_DISPLAY_BASE", 90) + scope.portOffset),
+  };
+}
+
+function tagSessionScope(session, env = process.env, options = {}) {
+  const scope = browserctlScope(env, options);
+  return {
+    ...session,
+    ownerUserId: session.ownerUserId || session.owner_user_id || scope.ownerUserId,
+    scope: session.scope || scope.scope,
+    scopeLabel: session.scopeLabel || scope.scopeLabel,
+    personal: session.personal ?? scope.personal,
+  };
 }
 
 async function fetchBrowserJson(url, options = {}) {
@@ -87,13 +147,14 @@ function normalizeBrowserctlSession(session) {
   };
 }
 
-async function attachDesktopLeases(sessions, env = process.env) {
-  const leases = await publicDesktopLeases({}, env).catch(() => []);
-  const leaseBySlug = new Map(leases.map((lease) => [lease.desktopSlug, lease]));
+async function attachDesktopLeases(sessions, env = process.env, options = {}) {
+  const leases = await publicDesktopLeases({ principal: options?.principal }, env).catch(() => []);
+  const leaseByKey = new Map(leases.map((lease) => [`${lease.desktopSlug}:${lease.ownerUserId || ""}`, lease]));
   return sessions.map((session) => {
-    const lease = leaseBySlug.get(String(session.slug || "")) || null;
+    const scoped = tagSessionScope(session, env, options);
+    const lease = leaseByKey.get(`${String(scoped.slug || "")}:${scoped.ownerUserId || ""}`) || null;
     return {
-      ...session,
+      ...scoped,
       lease,
       leased: !!lease,
       leaseOwnerThreadId: lease?.threadId || null,
@@ -102,10 +163,11 @@ async function attachDesktopLeases(sessions, env = process.env) {
   });
 }
 
-async function attachDesktopLease(session, env = process.env) {
-  const lease = await activeDesktopLeaseStatus(session.slug, env).catch(() => null);
+async function attachDesktopLease(session, env = process.env, options = {}) {
+  const scoped = tagSessionScope(session, env, options);
+  const lease = await activeDesktopLeaseStatus(scoped.slug, env, { principal: options?.principal, ownerUserId: scoped.ownerUserId }).catch(() => null);
   return {
-    ...session,
+    ...scoped,
     lease,
     leased: !!lease,
     leaseOwnerThreadId: lease?.threadId || null,
@@ -113,7 +175,7 @@ async function attachDesktopLease(session, env = process.env) {
   };
 }
 
-async function listRemoteDesktopSessions(env = process.env) {
+async function listRemoteDesktopSessions(env = process.env, options = {}) {
   const explicitUrl = browserSessionsUrl(env);
   const base = browserApiBase(env);
   if (!explicitUrl && !base) return null;
@@ -123,11 +185,11 @@ async function listRemoteDesktopSessions(env = process.env) {
     ...payload,
     ok: payload?.ok !== false,
     source: payload?.source || "remote-browser-api",
-    sessions: await attachDesktopLeases(sessions, env),
+    sessions: await attachDesktopLeases(sessions, env, options),
   };
 }
 
-async function remoteDesktopAction(slug, action, env = process.env) {
+async function remoteDesktopAction(slug, action, env = process.env, options = {}) {
   const base = browserApiBase(env);
   if (!base) return null;
   const normalized = action === "open" ? "start" : action === "prepare" ? "health" : action;
@@ -136,12 +198,12 @@ async function remoteDesktopAction(slug, action, env = process.env) {
     body: "{}",
   });
   const session = payload?.browser || payload?.session || payload?.desktop || null;
-  if (session) return { ...(await attachDesktopLease(normalizeBrowserctlSession(session), env)), action: normalized, ok: payload?.ok !== false };
-  const listed = await listRemoteDesktopSessions(env);
+  if (session) return { ...(await attachDesktopLease(normalizeBrowserctlSession(session), env, options)), action: normalized, ok: payload?.ok !== false };
+  const listed = await listRemoteDesktopSessions(env, options);
   return listed?.sessions?.find((item) => item.slug === slug) || null;
 }
 
-async function remoteDesktopOpenUrl(slug, targetUrl, env = process.env) {
+async function remoteDesktopOpenUrl(slug, targetUrl, env = process.env, options = {}) {
   const base = browserApiBase(env);
   if (!base) return null;
   const payload = await fetchBrowserJson(`${base}/api/browser-sessions/${encodeURIComponent(slug)}/open-url`, {
@@ -151,7 +213,7 @@ async function remoteDesktopOpenUrl(slug, targetUrl, env = process.env) {
   const session = payload?.browser || payload?.session || payload?.desktop || null;
   if (session) {
     return {
-      ...(await attachDesktopLease(normalizeBrowserctlSession(session), env)),
+      ...(await attachDesktopLease(normalizeBrowserctlSession(session), env, options)),
       action: "open-url",
       openedUrl: payload?.openedUrl || targetUrl,
       ok: payload?.ok !== false,
@@ -177,42 +239,42 @@ export function isBrowserctlUnavailableError(error) {
   return Number(error?.statusCode || 0) === 503;
 }
 
-export async function listManagedDesktopSessions(env = process.env) {
-  const remote = await listRemoteDesktopSessions(env);
+export async function listManagedDesktopSessions(env = process.env, options = {}) {
+  const remote = await listRemoteDesktopSessions(env, options);
   if (remote) return remote;
-  const payload = await runBrowserctl(["list", "--json"], env);
+  const payload = await runBrowserctl(["list", "--json"], scopedBrowserctlEnv(env, options));
   const sessions = Array.isArray(payload?.sessions) ? payload.sessions.map(normalizeBrowserctlSession) : [];
   return {
     ...payload,
     ok: payload?.ok !== false,
     source: "browserctl",
-    sessions: await attachDesktopLeases(sessions, env),
+    sessions: await attachDesktopLeases(sessions, env, options),
   };
 }
 
-export async function managedDesktopAction(slug, action, env = process.env) {
+export async function managedDesktopAction(slug, action, env = process.env, options = {}) {
   const normalized = action === "open" ? "start" : action === "prepare" ? "health" : action;
-  const remote = await remoteDesktopAction(slug, normalized, env);
+  const remote = await remoteDesktopAction(slug, normalized, env, options);
   if (remote) return remote;
   const args = [normalized, slug];
   if (normalized === "cleanup") args.push("--safe");
-  const payload = await runBrowserctl(args, env);
+  const payload = await runBrowserctl(args, scopedBrowserctlEnv(env, options));
   const session = payload?.session
     ? normalizeBrowserctlSession(payload.session)
-    : (await listManagedDesktopSessions(env)).sessions.find((item) => item.slug === slug);
+    : (await listManagedDesktopSessions(env, options)).sessions.find((item) => item.slug === slug);
   if (!session) {
     const error = new Error("browser_session_not_found");
     error.statusCode = 404;
     throw error;
   }
-  return { ...(await attachDesktopLease(session, env)), action: normalized, ok: payload?.ok !== false };
+  return { ...(await attachDesktopLease(session, env, options)), action: normalized, ok: payload?.ok !== false };
 }
 
-export async function managedDesktopOpenUrl(slug, url, env = process.env) {
+export async function managedDesktopOpenUrl(slug, url, env = process.env, options = {}) {
   const targetUrl = normalizeOpenUrl(url);
-  const remote = await remoteDesktopOpenUrl(slug, targetUrl, env);
+  const remote = await remoteDesktopOpenUrl(slug, targetUrl, env, options);
   if (remote) return remote;
-  const session = await managedDesktopAction(slug, "start", env);
+  const session = await managedDesktopAction(slug, "start", env, options);
   const cdpUrl = String(session?.cdp_url || "").trim();
   if (!cdpUrl) throw openUrlError("browser_cdp_url_required", 409);
   const page = await openCdpPage(cdpUrl, targetUrl);

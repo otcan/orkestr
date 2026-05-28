@@ -2,8 +2,10 @@ import fs from "node:fs/promises";
 import { execFile, spawn } from "node:child_process";
 import net from "node:net";
 import { promisify } from "node:util";
-import { dataPaths, ensureDataDirs } from "../../storage/src/paths.js";
+import { dataPaths, ensureDataDirs, userDataPaths } from "../../storage/src/paths.js";
 import { appendEvent, readJson, writeJson } from "../../storage/src/store.js";
+import { isAdminPrincipal } from "../../core/src/policy.js";
+import { normalizeUserId } from "../../core/src/users.js";
 import { isBrowserctlUnavailableError, listManagedDesktopSessions, managedDesktopAction, managedDesktopOpenUrl } from "./browserctl.js";
 
 const execFileAsync = promisify(execFile);
@@ -48,10 +50,10 @@ function normalizeBrowserOpenUrl(value) {
   return parsed.href;
 }
 
-export async function listBrowserSessions(env = process.env) {
+export async function listBrowserSessions(env = process.env, options = {}) {
   if (desktopMode(env) !== "profiles") {
     try {
-      return await listManagedDesktopSessions(env);
+      return await listManagedDesktopSessions(env, options);
     } catch (error) {
       if (!shouldFallbackAfterBrowserctlError(error, env)) {
         return {
@@ -64,7 +66,7 @@ export async function listBrowserSessions(env = process.env) {
       }
     }
   }
-  const sessions = await listProfileBrowsers(env);
+  const sessions = await listProfileBrowsers(env, options);
   return { ok: true, source: "profiles", sessions };
 }
 
@@ -127,18 +129,44 @@ async function chromeCommand(env = process.env) {
   return "google-chrome";
 }
 
-function profileDir(slug, env = process.env) {
-  return `${dataPaths(env).browsers}/${slug}`;
+function stableHash(text) {
+  let hash = 0;
+  for (const char of String(text || "")) {
+    hash = ((hash << 5) - hash + char.charCodeAt(0)) | 0;
+  }
+  return Math.abs(hash);
+}
+
+export function browserScope(options = {}, env = process.env) {
+  const principal = options?.principal || null;
+  const personal = Boolean(principal?.userId && !isAdminPrincipal(principal));
+  const ownerUserId = normalizeUserId(
+    personal
+      ? principal.userId
+      : options?.ownerUserId || env.ORKESTR_ADMIN_USER_ID || "admin",
+  );
+  return {
+    ownerUserId,
+    personal,
+    scope: personal ? "user" : "admin",
+    scopeLabel: personal ? "Private user desktop" : "Local admin desktop",
+    root: personal ? userDataPaths(ownerUserId, env).browsers : dataPaths(env).browsers,
+    portOffset: personal ? (stableHash(ownerUserId) % 1000) * 16 : 0,
+  };
+}
+
+function profileDir(slug, env = process.env, options = {}) {
+  return `${browserScope(options, env).root}/${slug}`;
 }
 
 function browserIndex(slug) {
   return Math.max(0, browserCatalog.findIndex((browser) => browser.slug === slug));
 }
 
-function debugPortForSlug(slug, env = process.env) {
+function debugPortForSlug(slug, env = process.env, options = {}) {
   const base = Number(env.ORKESTR_BROWSER_DEBUG_PORT_BASE || 9222);
   const safeBase = Number.isFinite(base) && base > 0 ? base : 9222;
-  return safeBase + browserIndex(slug);
+  return safeBase + browserScope(options, env).portOffset + browserIndex(slug);
 }
 
 function isPidRunning(pid) {
@@ -190,23 +218,24 @@ async function isTcpPortOpen(port) {
   });
 }
 
-async function readBrowserMetadata(slug, env = process.env) {
-  return readJson(`${profileDir(slug, env)}/browser.json`, {});
+async function readBrowserMetadata(slug, env = process.env, options = {}) {
+  return readJson(`${profileDir(slug, env, options)}/browser.json`, {});
 }
 
-async function writeBrowserMetadata(slug, metadata, env = process.env) {
-  await writeJson(`${profileDir(slug, env)}/browser.json`, metadata);
+async function writeBrowserMetadata(slug, metadata, env = process.env, options = {}) {
+  await writeJson(`${profileDir(slug, env, options)}/browser.json`, metadata);
 }
 
-async function publicBrowserRecord(browser, env = process.env) {
-  const dir = profileDir(browser.slug, env);
-  const metadata = await readBrowserMetadata(browser.slug, env);
+async function publicBrowserRecord(browser, env = process.env, options = {}) {
+  const scope = browserScope(options, env);
+  const dir = profileDir(browser.slug, env, options);
+  const metadata = await readBrowserMetadata(browser.slug, env, options);
   const configured = await pathExists(dir);
   const savedPid = Number(metadata.rootPid || metadata.pid || 0) || null;
   const detectedPid = savedPid && isPidRunning(savedPid) ? savedPid : configured ? await findBrowserPidByProfile(dir) : null;
   const rootPid = detectedPid || null;
   const running = !!rootPid;
-  const debugPort = Number(metadata.debugPort || debugPortForSlug(browser.slug, env));
+  const debugPort = Number(metadata.debugPort || debugPortForSlug(browser.slug, env, options));
   const cdpUrl = configured && (running || metadata.lastOpenedAt) && debugPort ? `http://127.0.0.1:${debugPort}` : null;
   const cdpOk = running && debugPort ? await isTcpPortOpen(debugPort) : false;
   const status = running ? "running" : configured ? "prepared" : "not_prepared";
@@ -215,6 +244,10 @@ async function publicBrowserRecord(browser, env = process.env) {
     id: browser.slug,
     type: "desktop",
     access: "local",
+    ownerUserId: scope.ownerUserId,
+    scope: scope.scope,
+    scopeLabel: scope.scopeLabel,
+    personal: scope.personal,
     profileDir: dir,
     profile: dir,
     profile_path: dir,
@@ -247,55 +280,58 @@ async function publicBrowserRecord(browser, env = process.env) {
   };
 }
 
-async function listProfileBrowsers(env = process.env) {
+async function listProfileBrowsers(env = process.env, options = {}) {
   await ensureDataDirs(env);
-  return Promise.all(browserCatalog.map((browser) => publicBrowserRecord(browser, env)));
+  return Promise.all(browserCatalog.map((browser) => publicBrowserRecord(browser, env, options)));
 }
 
-export async function listVirtualBrowsers(env = process.env) {
-  return (await listBrowserSessions(env)).sessions;
+export async function listVirtualBrowsers(env = process.env, options = {}) {
+  return (await listBrowserSessions(env, options)).sessions;
 }
 
-export async function prepareVirtualBrowser(slug, env = process.env) {
+export async function prepareVirtualBrowser(slug, env = process.env, options = {}) {
   if (desktopMode(env) !== "profiles") {
     try {
-      return await managedDesktopAction(slug, "prepare", env);
+      return await managedDesktopAction(slug, "prepare", env, options);
     } catch (error) {
       if (!shouldFallbackAfterBrowserctlError(error, env)) throw error;
     }
   }
   const browser = browserBySlug(slug);
   await ensureDataDirs(env);
-  const dir = profileDir(browser.slug, env);
+  const scope = browserScope(options, env);
+  const dir = profileDir(browser.slug, env, options);
   await fs.mkdir(dir, { recursive: true, mode: 0o700 });
-  const prior = await readBrowserMetadata(browser.slug, env);
+  const prior = await readBrowserMetadata(browser.slug, env, options);
   const preparedAt = prior.preparedAt || new Date().toISOString();
   await writeBrowserMetadata(browser.slug, {
     ...prior,
     slug: browser.slug,
     label: browser.label,
     type: "desktop",
+    ownerUserId: scope.ownerUserId,
+    scope: scope.scope,
     profileDir: dir,
     profile_path: dir,
     startUrl: browser.startUrl,
-    debugPort: prior.debugPort || debugPortForSlug(browser.slug, env),
+    debugPort: prior.debugPort || debugPortForSlug(browser.slug, env, options),
     preparedAt,
     updatedAt: new Date().toISOString(),
-  }, env);
-  await appendEvent({ type: "browser_prepared", browser: browser.slug, slug: browser.slug, profileDir: dir }, env);
-  return publicBrowserRecord(browser, env);
+  }, env, options);
+  await appendEvent({ type: "browser_prepared", browser: browser.slug, slug: browser.slug, profileDir: dir, ownerUserId: scope.ownerUserId }, env);
+  return publicBrowserRecord(browser, env, options);
 }
 
-export async function openVirtualBrowser(slug, env = process.env, targetUrl = "") {
+export async function openVirtualBrowser(slug, env = process.env, targetUrl = "", options = {}) {
   if (desktopMode(env) !== "profiles") {
     try {
-      return await managedDesktopAction(slug, "start", env);
+      return await managedDesktopAction(slug, "start", env, options);
     } catch (error) {
       if (!shouldFallbackAfterBrowserctlError(error, env)) throw error;
     }
   }
   const browser = browserBySlug(slug);
-  const prepared = await prepareVirtualBrowser(slug, env);
+  const prepared = await prepareVirtualBrowser(slug, env, options);
   const startUrl = String(targetUrl || browser.startUrl || "about:blank").trim();
   const launchDisabled = String(env.ORKESTR_BROWSER_LAUNCH_DISABLED || "").trim() === "1";
   const command = launchDisabled ? "" : await chromeCommand(env);
@@ -305,7 +341,7 @@ export async function openVirtualBrowser(slug, env = process.env, targetUrl = ""
 
   if (!launchDisabled && command) {
     try {
-      const debugPort = prepared.debugPort || debugPortForSlug(browser.slug, env);
+      const debugPort = prepared.debugPort || debugPortForSlug(browser.slug, env, options);
       const child = spawn(command, [
         `--user-data-dir=${prepared.profileDir}`,
         "--remote-debugging-address=127.0.0.1",
@@ -340,11 +376,13 @@ export async function openVirtualBrowser(slug, env = process.env, targetUrl = ""
     launchError: launchError || null,
     rootPid: pid,
     pid,
-    debugPort: prepared.debugPort || debugPortForSlug(browser.slug, env),
-  }, env);
+    ownerUserId: prepared.ownerUserId,
+    scope: prepared.scope,
+    debugPort: prepared.debugPort || debugPortForSlug(browser.slug, env, options),
+  }, env, options);
   await appendEvent({ type: "browser_open_requested", browser: browser.slug, slug: browser.slug, launched, pid, profileDir: prepared.profileDir }, env);
   return {
-    ...(await publicBrowserRecord(browser, env)),
+    ...(await publicBrowserRecord(browser, env, options)),
     launched,
     pid,
     launchDisabled,
@@ -352,34 +390,34 @@ export async function openVirtualBrowser(slug, env = process.env, targetUrl = ""
   };
 }
 
-export async function openUrlInVirtualBrowser(slug, url, env = process.env) {
+export async function openUrlInVirtualBrowser(slug, url, env = process.env, options = {}) {
   const targetUrl = normalizeBrowserOpenUrl(url);
   if (desktopMode(env) !== "profiles") {
     try {
-      return await managedDesktopOpenUrl(slug, targetUrl, env);
+      return await managedDesktopOpenUrl(slug, targetUrl, env, options);
     } catch (error) {
       if (!shouldFallbackAfterBrowserctlError(error, env)) throw error;
     }
   }
   return {
-    ...(await openVirtualBrowser(slug, env, targetUrl)),
+    ...(await openVirtualBrowser(slug, env, targetUrl, options)),
     action: "open-url",
     openedUrl: targetUrl,
   };
 }
 
-export async function stopVirtualBrowser(slug, env = process.env) {
+export async function stopVirtualBrowser(slug, env = process.env, options = {}) {
   if (desktopMode(env) !== "profiles") {
     try {
-      return await managedDesktopAction(slug, "stop", env);
+      return await managedDesktopAction(slug, "stop", env, options);
     } catch (error) {
       if (!shouldFallbackAfterBrowserctlError(error, env)) throw error;
     }
   }
   const browser = browserBySlug(slug);
-  const dir = profileDir(browser.slug, env);
+  const dir = profileDir(browser.slug, env, options);
   const configured = await pathExists(dir);
-  const metadata = await readBrowserMetadata(browser.slug, env);
+  const metadata = await readBrowserMetadata(browser.slug, env, options);
   const savedPid = Number(metadata.rootPid || metadata.pid || 0) || null;
   const pid = savedPid && isPidRunning(savedPid) ? savedPid : configured ? await findBrowserPidByProfile(dir) : null;
   let stopped = false;
@@ -405,49 +443,49 @@ export async function stopVirtualBrowser(slug, env = process.env) {
       stoppedAt: new Date().toISOString(),
       stopError: stopError || null,
       updatedAt: new Date().toISOString(),
-    }, env);
+    }, env, options);
   }
   await appendEvent({ type: "browser_stop_requested", browser: browser.slug, slug: browser.slug, stopped, pid, stopError }, env);
   return {
-    ...(await publicBrowserRecord(browser, env)),
+    ...(await publicBrowserRecord(browser, env, options)),
     stopped,
     stopError,
   };
 }
 
-export async function restartVirtualBrowser(slug, env = process.env) {
+export async function restartVirtualBrowser(slug, env = process.env, options = {}) {
   if (desktopMode(env) !== "profiles") {
     try {
-      return await managedDesktopAction(slug, "restart", env);
+      return await managedDesktopAction(slug, "restart", env, options);
     } catch (error) {
       if (!shouldFallbackAfterBrowserctlError(error, env)) throw error;
     }
   }
-  await stopVirtualBrowser(slug, env);
-  return openVirtualBrowser(slug, env);
+  await stopVirtualBrowser(slug, env, options);
+  return openVirtualBrowser(slug, env, "", options);
 }
 
-export async function cleanupVirtualBrowser(slug, env = process.env) {
+export async function cleanupVirtualBrowser(slug, env = process.env, options = {}) {
   if (desktopMode(env) !== "profiles") {
     try {
-      return await managedDesktopAction(slug, "cleanup", env);
+      return await managedDesktopAction(slug, "cleanup", env, options);
     } catch (error) {
       if (!shouldFallbackAfterBrowserctlError(error, env)) throw error;
     }
   }
   const browser = browserBySlug(slug);
-  const current = await publicBrowserRecord(browser, env);
+  const current = await publicBrowserRecord(browser, env, options);
   if (current.root_pid) {
     const error = new Error("browser_running");
     error.statusCode = 409;
     throw error;
   }
-  const dir = profileDir(browser.slug, env);
+  const dir = profileDir(browser.slug, env, options);
   const existed = await pathExists(dir);
   if (existed) await fs.rm(dir, { recursive: true, force: true });
   await appendEvent({ type: "browser_cleanup_requested", browser: browser.slug, slug: browser.slug, profileDir: dir, existed }, env);
   return {
-    ...(await publicBrowserRecord(browser, env)),
+    ...(await publicBrowserRecord(browser, env, options)),
     cleaned: existed,
   };
 }

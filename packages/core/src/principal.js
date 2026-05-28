@@ -29,7 +29,7 @@ export function userPrincipal(user = {}) {
     role,
     source: String(user.source || "session").trim() || "session",
     displayName: String(user.displayName || user.name || user.id || "").trim(),
-    identities: Array.isArray(user.linkedIdentities) ? user.linkedIdentities.map((identity) => ({ ...identity })) : [],
+    identities: [],
   };
 }
 

@@ -683,7 +683,7 @@ export class OnboardingPageComponent implements OnInit, OnChanges, OnDestroy {
   }
 
   closeLabel(): string {
-    return this.isSetupMode() ? "Back to cockpit" : "Open cockpit";
+    return this.isSetupMode() ? "Back to Orkestr" : "Open Orkestr";
   }
 
   activeStepIndex(): number {

@@ -15,7 +15,8 @@ import {
   prepareVirtualBrowser,
   stopVirtualBrowser,
 } from "../packages/browsers/src/browsers.js";
-import { acquireDesktopLease } from "../packages/browsers/src/desktop-leases.js";
+import { acquireDesktopLease, activeDesktopLeaseStatus, publicDesktopLeases } from "../packages/browsers/src/desktop-leases.js";
+import { userPrincipal } from "../packages/core/src/principal.js";
 import { listEvents } from "../packages/storage/src/store.js";
 
 const execFileAsync = promisify(execFile);
@@ -51,6 +52,55 @@ test("virtual browser management exposes stop and cleanup actions", async () => 
   assert.equal(cleaned.cleaned, true);
   assert.equal(desktop.configured, false);
   assert.equal(desktop.status, "not_prepared");
+});
+
+test("profile desktops are isolated per non-admin user", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-user-browsers-"));
+  const env = { ORKESTR_HOME: home, ORKESTR_BROWSER_LAUNCH_DISABLED: "1", ORKESTR_BROWSER_DESKTOP_MODE: "profiles" };
+  const alice = userPrincipal({ id: "alice", role: "user" });
+  const bob = userPrincipal({ id: "bob", role: "user" });
+
+  const alicePrepared = await prepareVirtualBrowser("linkedin", env, { principal: alice });
+  const bobInitial = await listBrowserSessions(env, { principal: bob });
+  const bobPrepared = await prepareVirtualBrowser("linkedin", env, { principal: bob });
+  const aliceListed = await listBrowserSessions(env, { principal: alice });
+
+  assert.equal(alicePrepared.ownerUserId, "alice");
+  assert.equal(alicePrepared.scope, "user");
+  assert.equal(alicePrepared.profileDir, path.join(home, "users", "alice", "browsers", "linkedin"));
+  assert.equal(bobInitial.sessions.find((browser) => browser.slug === "linkedin").configured, false);
+  assert.equal(bobPrepared.ownerUserId, "bob");
+  assert.equal(bobPrepared.profileDir, path.join(home, "users", "bob", "browsers", "linkedin"));
+  assert.notEqual(alicePrepared.profileDir, bobPrepared.profileDir);
+  assert.notEqual(alicePrepared.debugPort, bobPrepared.debugPort);
+  assert.equal(aliceListed.sessions.find((browser) => browser.slug === "linkedin").configured, true);
+});
+
+test("desktop leases conflict only inside the same user scope", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-user-leases-"));
+  const env = {
+    ORKESTR_HOME: home,
+    ORKESTR_DESKTOP_LEASE_FILE: path.join(home, "desktop-leases.json"),
+  };
+  const alice = userPrincipal({ id: "alice", role: "user" });
+  const bob = userPrincipal({ id: "bob", role: "user" });
+
+  const aliceLease = await acquireDesktopLease("linkedin", { threadId: "alice-thread", threadName: "Alice" }, env, { principal: alice });
+  const bobLease = await acquireDesktopLease("linkedin", { threadId: "bob-thread", threadName: "Bob" }, env, { principal: bob });
+  const conflict = await acquireDesktopLease("linkedin", { threadId: "alice-other" }, env, { principal: alice });
+  const aliceStatus = await activeDesktopLeaseStatus("linkedin", env, { principal: alice });
+  const bobStatus = await activeDesktopLeaseStatus("linkedin", env, { principal: bob });
+  const aliceLeases = await publicDesktopLeases({ principal: alice }, env);
+
+  assert.equal(aliceLease.ok, true);
+  assert.equal(aliceLease.lease.ownerUserId, "alice");
+  assert.equal(bobLease.ok, true);
+  assert.equal(bobLease.lease.ownerUserId, "bob");
+  assert.equal(conflict.ok, false);
+  assert.equal(conflict.lease.threadId, "alice-thread");
+  assert.equal(aliceStatus.threadId, "alice-thread");
+  assert.equal(bobStatus.threadId, "bob-thread");
+  assert.deepEqual(aliceLeases.map((lease) => lease.ownerUserId), ["alice"]);
 });
 
 test("managed desktop sessions come from browserctl and include leases", async () => {
@@ -231,4 +281,34 @@ test("managed desktop mode can use the bundled oss browserctl script", async () 
   assert.match(gmail.desk_url, /^\/desktop\/gmail\/vnc\.html\?/);
   assert.equal(gmail.web_port, 17082);
   assert.equal(gmail.cdp_url, "http://127.0.0.1:20324");
+});
+
+test("managed browserctl desktops use separate homes and ports per user", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-browserctl-users-"));
+  const env = {
+    ORKESTR_HOME: home,
+    ORKESTR_BROWSER_DESKTOP_MODE: "browserctl",
+    ORKESTR_BROWSERCTL_PATH: path.resolve("scripts/browserctl.mjs"),
+    ORKESTR_BROWSERCTL_DRY_RUN: "1",
+    ORKESTR_BROWSER_DEBUG_PORT_BASE: "22322",
+    ORKESTR_DESKTOP_WEB_PORT_BASE: "19080",
+    ORKESTR_DESKTOP_VNC_PORT_BASE: "18901",
+    ORKESTR_DESKTOP_DISPLAY_BASE: "220",
+  };
+  const alice = userPrincipal({ id: "alice", role: "user" });
+  const bob = userPrincipal({ id: "bob", role: "user" });
+
+  const aliceStarted = await openVirtualBrowser("linkedin", env, "", { principal: alice });
+  const bobStarted = await openVirtualBrowser("linkedin", env, "", { principal: bob });
+  const alicePayload = await listBrowserSessions(env, { principal: alice });
+  const bobPayload = await listBrowserSessions(env, { principal: bob });
+
+  assert.equal(aliceStarted.ownerUserId, "alice");
+  assert.equal(bobStarted.ownerUserId, "bob");
+  assert.equal(aliceStarted.profile_path, path.join(home, "users", "alice", "browsers", "linkedin"));
+  assert.equal(bobStarted.profile_path, path.join(home, "users", "bob", "browsers", "linkedin"));
+  assert.notEqual(aliceStarted.debugPort, bobStarted.debugPort);
+  assert.notEqual(aliceStarted.web_port, bobStarted.web_port);
+  assert.equal(alicePayload.sessions.find((session) => session.slug === "linkedin").ownerUserId, "alice");
+  assert.equal(bobPayload.sessions.find((session) => session.slug === "linkedin").ownerUserId, "bob");
 });

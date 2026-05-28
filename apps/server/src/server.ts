@@ -101,7 +101,7 @@ async function ambiguousThreadRoute(threadId: string) {
 }
 
 function threadIdFromApiRequest(request: any) {
-  const url = String(request?.url || "").split("?")[0];
+  const url = String(request?.originalUrl || request?.url || "").split("?")[0];
   const parts = url.split("/").filter(Boolean);
   if (parts[0] !== "api" || parts[1] !== "threads") return "";
   let id = "";

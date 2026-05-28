@@ -61,6 +61,10 @@ export interface BrowserSession {
   cdp_url?: string | null;
   cdp_ok?: boolean | null;
   owner_service?: string | null;
+  ownerUserId?: string | null;
+  scope?: string | null;
+  scopeLabel?: string | null;
+  personal?: boolean;
   root_pid?: number | null;
   uptime?: string | null;
   profileDir?: string;
@@ -80,6 +84,20 @@ export interface BrowserSession {
   leased?: boolean;
   leaseOwnerThreadId?: string | null;
   leaseOwnerLabel?: string | null;
+}
+
+export interface DesktopShareResponse {
+  ok: boolean;
+  url: string;
+  subdomain?: string;
+  wildcardSubdomainConfigured?: boolean;
+  share?: {
+    id?: string;
+    desktopSlug?: string;
+    ownerUserId?: string;
+    status?: string;
+    expiresAt?: string;
+  };
 }
 
 export interface WorkspaceFolderEntry {
@@ -129,11 +147,47 @@ export interface SetupStatus {
   home: string;
   connectors: ConnectorStatus[];
   config?: Record<string, Record<string, string>>;
+  auth?: AuthStatus;
   overlay?: {
     configured?: boolean;
     valid?: boolean;
   };
   security?: SecurityStatus;
+}
+
+export interface AuthStatus {
+  provider?: string;
+  configured?: boolean;
+  summary?: string;
+  login?: {
+    passwordless?: boolean;
+    emailRequired?: boolean;
+    emailUnique?: boolean;
+    phoneRequired?: boolean;
+    phoneUnique?: boolean;
+    requiredFactors?: string[];
+  };
+  keycloak?: {
+    issuer?: string;
+    realm?: string;
+    clientId?: string;
+    accountUrl?: string;
+    adminUrl?: string;
+    requiredActions?: string[];
+  };
+  mail?: {
+    provider?: string;
+    configured?: boolean;
+    host?: string;
+    user?: string;
+    from?: string;
+    note?: string;
+  };
+  storage?: {
+    genericIdentityLinks?: boolean;
+    perUserHome?: boolean;
+    note?: string;
+  };
 }
 
 export interface SecurityStatus {
@@ -737,14 +791,10 @@ export interface OrkestrUser {
   id: string;
   role: "admin" | "user" | string;
   displayName: string;
+  email?: string;
+  phoneNumber?: string;
+  authProvider?: string;
   status: "active" | "disabled" | string;
-  linkedIdentities?: Array<{
-    provider?: string;
-    accountId?: string;
-    externalId?: string;
-    displayName?: string;
-    linkedAt?: string;
-  }>;
   limits?: {
     maxThreads?: number | null;
     [key: string]: unknown;
@@ -752,7 +802,6 @@ export interface OrkestrUser {
   resourceSummary?: {
     threadCount?: number;
     timerCount?: number;
-    linkedIdentityCount?: number;
     lastActivityAt?: string;
   };
   createdAt?: string;
@@ -1182,5 +1231,9 @@ export class ApiService {
 
   browserAction(slug: string, action: string, body: Record<string, unknown> = {}): Observable<{ browser: BrowserSession }> {
     return this.http.post<{ browser: BrowserSession }>(this.api(`/browser-sessions/${encodeURIComponent(slug)}/${encodeURIComponent(action)}`), body);
+  }
+
+  createDesktopShare(slug: string): Observable<DesktopShareResponse> {
+    return this.http.post<DesktopShareResponse>(this.api(`/desktops/${encodeURIComponent(slug)}/share`), {});
   }
 }
