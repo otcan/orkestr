@@ -57,6 +57,7 @@ function serveDesktopSharePage(response: any) {
     <button id="copy" type="button">Copy challenge</button>
     <p id="status"></p>
     <a id="open" class="button" href="#" hidden>Open desktop</a>
+    <a id="mobile" class="button" href="#" hidden>Mobile controls</a>
     <small>This link only works for this browser after the challenge is pasted back to the Orkestr chat.</small>
   </main>
   <script>
@@ -68,13 +69,10 @@ function serveDesktopSharePage(response: any) {
     const statusNode = document.getElementById('status');
     const summary = document.getElementById('summary');
     const open = document.getElementById('open');
+    const mobile = document.getElementById('mobile');
     const copy = document.getElementById('copy');
     const api = (action) => '/api/desktop-shares/' + encodeURIComponent(shareId) + '/' + action + '?key=' + encodeURIComponent(key) + (subdomain ? '&subdomain=' + encodeURIComponent(subdomain) : '');
-    function isPhoneLike() {
-      return /iPhone|iPad|iPod|Android/i.test(navigator.userAgent || '') || (navigator.maxTouchPoints > 1 && Math.min(innerWidth, innerHeight) < 900);
-    }
-    function desktopDestination(value) {
-      if (!isPhoneLike()) return value;
+    function mobileDestination(value) {
       const parsed = new URL(value, location.origin);
       const parts = parsed.pathname.split('/').filter(Boolean);
       if (parts[0] === 'desktop' && parts[1] && parts[2] === 'vnc.html') {
@@ -92,10 +90,15 @@ function serveDesktopSharePage(response: any) {
       try {
         const body = await json(api('status'));
         if (body.approved && body.desktopUrl) {
-          const desktopUrl = desktopDestination(body.desktopUrl);
+          const desktopUrl = body.desktopUrl;
           statusNode.textContent = 'Approved. Opening the desktop.';
           open.href = desktopUrl;
           open.hidden = false;
+          const mobileUrl = mobileDestination(body.desktopUrl);
+          if (mobileUrl !== desktopUrl) {
+            mobile.href = mobileUrl;
+            mobile.hidden = false;
+          }
           location.href = desktopUrl;
           return;
         }

@@ -95,6 +95,8 @@ test("mobile desktop shell wraps noVNC with phone-first controls", async () => {
   assert.match(shell, /id="paste">Paste/);
   assert.match(shell, /id="ctrlV">Ctrl\+V/);
   assert.match(shell, /new WheelEvent\("wheel"/);
-  assert.match(sharePage, /desktopDestination/);
+  assert.match(sharePage, /mobileDestination/);
+  assert.match(sharePage, /id="mobile"/);
+  assert.match(sharePage, /const desktopUrl = body\.desktopUrl/);
   assert.match(sharePage, /desktop\/.*\/mobile/);
 });
