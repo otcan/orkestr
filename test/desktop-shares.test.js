@@ -64,7 +64,7 @@ test("desktop shares require a random subdomain, link key, and per-browser chat 
   assert.equal(pending.approved, false);
   assert.equal(approved.share.desktopSlug, "linkedin");
   assert.equal(ready.approved, true);
-  assert.equal(ready.desktopUrl, "/desktop/linkedin/vnc.html?autoconnect=1&resize=scale");
+  assert.equal(ready.desktopUrl, "/desktop/linkedin/vnc.html?autoconnect=1&resize=scale&path=desktop/linkedin/websockify");
   assert.equal(auth.principal.userId, "alice");
   await assert.rejects(() => authorizeDesktopShareHttpRequest({
     url: "/desktop/gmail/vnc.html",

@@ -208,7 +208,7 @@ function assertShareSubdomain(share, subdomain = "") {
 
 function desktopUrlForShare(share) {
   const slug = encodeURIComponent(share.desktopSlug);
-  return `/desktop/${slug}/vnc.html?autoconnect=1&resize=scale`;
+  return `/desktop/${slug}/vnc.html?autoconnect=1&resize=scale&path=desktop/${slug}/websockify`;
 }
 
 export function desktopShareCookieName() {
