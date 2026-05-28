@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { appendEvent } from "../../storage/src/store.js";
 import {
   appendThreadMessage,
@@ -38,12 +39,30 @@ const appServerDeliveryLocks = new Set();
 const pendingInputStates = new Set(["queued", "pending_delivery", "awaiting_ack"]);
 
 function codexAppServerActiveTurnRetryMs(env = process.env) {
-  const parsed = Number(env.ORKESTR_CODEX_APP_SERVER_ACTIVE_TURN_RETRY_MS || 3000);
-  return Number.isFinite(parsed) ? Math.max(250, parsed) : 3000;
+  const parsed = Number(env.ORKESTR_CODEX_APP_SERVER_ACTIVE_TURN_RETRY_MS || 15000);
+  return Number.isFinite(parsed) ? Math.max(250, parsed) : 15000;
 }
 
 function isoAfter(ms) {
   return new Date(Date.now() + Math.max(0, ms)).toISOString();
+}
+
+function codexAppServerInputClaimStaleMs(env = process.env) {
+  const parsed = Number(env.ORKESTR_CODEX_APP_SERVER_INPUT_CLAIM_STALE_MS || 30000);
+  return Number.isFinite(parsed) ? Math.max(1000, parsed) : 30000;
+}
+
+function timestampMs(value) {
+  const ms = Date.parse(String(value || ""));
+  return Number.isFinite(ms) ? ms : 0;
+}
+
+function recentDeliveryClaim(message = {}, env = process.env) {
+  const state = clean(message.state).toLowerCase();
+  const deliveryState = clean(message.deliveryState).toLowerCase();
+  if (state !== "pending_delivery" && deliveryState !== "codex_app_server_sending") return false;
+  const lastAttemptMs = timestampMs(message.deliveryLastAttemptAt || message.updatedAt || message.createdAt);
+  return Boolean(lastAttemptMs && Date.now() - lastAttemptMs < codexAppServerInputClaimStaleMs(env));
 }
 
 function codexAppServerHistorySyncIntervalMs(env = process.env) {
@@ -202,8 +221,12 @@ export async function interruptCodexAppServerThread(thread, env = process.env) {
 async function startCodexAppServerTurn({ client, thread, id, pending, env, observedVia = "codex_app_server_turn_start" }) {
   const result = await client.request("turn/start", turnStartParams(thread, pending));
   const turnId = clean(result?.turn?.id || result?.turnId);
-  if (turnId) {
-    client.rememberTurnParent(id, turnId, pending);
+  const status = clean(result?.turn?.status || result?.status).toLowerCase();
+  const terminalResult = ["completed", "failed", "interrupted", "aborted", "cancelled", "canceled"].includes(status);
+  const completedKey = turnId && client.turnParentKey ? client.turnParentKey(id, turnId) : "";
+  const alreadyCompleted = Boolean(completedKey && client.completedTurns?.has(completedKey));
+  if (turnId) client.rememberTurnParent(id, turnId, pending);
+  if (turnId && !terminalResult && !alreadyCompleted) {
     client.threadStates.set(id, { ...(client.threadStates.get(id) || {}), activeTurnId: turnId, status: { type: "active", activeFlags: ["running"] } });
     await updateThread(thread.id, {
       state: "working",
@@ -226,11 +249,37 @@ async function claimCodexAppServerPendingInput(thread, message, env = process.en
     }, env).catch(() => {});
     return null;
   }
-  return updateThreadMessage(thread.id, current.id, {
+  if (recentDeliveryClaim(current, env)) {
+    await appendEvent({
+      type: "codex_app_server_input_claim_busy",
+      threadId: thread.id,
+      messageId: current.id,
+      state: clean(current.state),
+      deliveryState: clean(current.deliveryState),
+      deliveryLastAttemptAt: clean(current.deliveryLastAttemptAt),
+    }, env).catch(() => {});
+    return null;
+  }
+  const deliveryClaimId = randomUUID();
+  await updateThreadMessage(thread.id, current.id, {
     state: "pending_delivery",
     deliveryState: "codex_app_server_sending",
     deliveryLastAttemptAt: nowIso(),
+    deliveryClaimId,
   }, env);
+  const claimedMessages = await listThreadMessages(thread.id, env).catch(() => []);
+  const claimed = claimedMessages.find((item) => item.id === current.id);
+  if (clean(claimed?.deliveryClaimId) !== deliveryClaimId || clean(claimed?.deliveryState) !== "codex_app_server_sending") {
+    await appendEvent({
+      type: "codex_app_server_input_claim_lost",
+      threadId: thread.id,
+      messageId: current.id,
+      state: clean(claimed?.state),
+      deliveryState: clean(claimed?.deliveryState),
+    }, env).catch(() => {});
+    return null;
+  }
+  return claimed;
 }
 
 export async function sendCodexAppServerInput(thread, message, env = process.env) {
@@ -271,6 +320,7 @@ export async function sendCodexAppServerInput(thread, message, env = process.env
       state: "queued",
       deliveryState: "awaiting_active_turn",
       deliveryNextAttemptAt: nextAttemptAt,
+      deliveryClaimId: null,
       error: null,
     }, env).catch(() => {});
     await appendEvent({
@@ -298,6 +348,7 @@ export async function sendCodexAppServerInput(thread, message, env = process.env
     deliveryState: "delivered",
     deliveredAt: nowIso(),
     observedVia,
+    deliveryClaimId: null,
     codexThreadId: id,
     codexTurnId: result?.turn?.id || result?.turnId || deliveryTurnId || null,
     error: null,
@@ -434,6 +485,7 @@ async function deliverCodexAppServerPendingInputsUnlocked(thread, env = process.
     await updateThreadMessage(thread.id, next.id, {
       state: "failed",
       deliveryState: "failed",
+      deliveryClaimId: null,
       error: errorText,
     }, env).catch(() => {});
     await updateThread(thread.id, { state: "failed", lastError: errorText }, env).catch(() => {});

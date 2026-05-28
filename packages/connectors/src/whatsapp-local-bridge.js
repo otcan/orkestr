@@ -71,6 +71,57 @@ function accountLabel(accountId) {
   return accountId === "account-2" ? "WhatsApp 2" : "WhatsApp 1";
 }
 
+function wait(ms) {
+  return new Promise((resolve) => setTimeout(resolve, Math.max(0, Number(ms || 0))));
+}
+
+export function transientLocalWhatsAppSendError(error) {
+  const message = String(error?.message || error || "");
+  return /Promise was collected|Runtime\.callFunctionOn|Execution context was destroyed|Target closed/i.test(message);
+}
+
+function serializedMessageId(message = {}) {
+  return String(message?.id?._serialized || message?.id || "");
+}
+
+function sentMessageText(message = {}) {
+  return String(message?.body || message?.text || message?.caption || "");
+}
+
+async function recentOwnTextMessage(client, chatId, text) {
+  if (!client || !chatId || !String(text || "")) return null;
+  const chat = await client.getChatById(chatId).catch(() => null);
+  if (!chat || typeof chat.fetchMessages !== "function") return null;
+  const messages = await chat.fetchMessages({ limit: 20 }).catch(() => []);
+  return [...(Array.isArray(messages) ? messages : [])].reverse().find((message) =>
+    Boolean(message?.fromMe) && sentMessageText(message) === text
+  ) || null;
+}
+
+export async function sendWhatsAppTextWithConfirmation({
+  client,
+  chatId = "",
+  text = "",
+  maxAttempts = 2,
+  retryDelayMs = 500,
+} = {}) {
+  let lastError = null;
+  const attempts = Math.max(1, Number(maxAttempts || 1));
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    try {
+      return await client.sendMessage(chatId, text);
+    } catch (error) {
+      lastError = error;
+      if (!transientLocalWhatsAppSendError(error)) throw error;
+      const confirmed = await recentOwnTextMessage(client, chatId, text);
+      if (confirmed) return confirmed;
+      if (attempt >= attempts) throw error;
+      await wait(retryDelayMs);
+    }
+  }
+  throw lastError || new Error("whatsapp_send_failed");
+}
+
 function normalizePairingPhoneNumber(phoneNumber = "") {
   return String(phoneNumber || "").replace(/\D+/g, "").trim();
 }
@@ -1344,10 +1395,14 @@ export async function sendLocalWhatsAppMessage({ chatId = "", text = "", account
   const cleanText = String(text || "");
   if (cleanText.trim()) {
     rememberOutboundText(selectedAccountId, chatId, cleanText);
-    const message = await runtime.client.sendMessage(chatId, cleanText);
-    rememberOutboundMessageId(message?.id?._serialized);
+    const message = await sendWhatsAppTextWithConfirmation({
+      client: runtime.client,
+      chatId,
+      text: cleanText,
+    });
+    rememberOutboundMessageId(serializedMessageId(message));
     sent.push({
-      id: String(message?.id?._serialized || ""),
+      id: serializedMessageId(message),
       kind: "text",
     });
   }

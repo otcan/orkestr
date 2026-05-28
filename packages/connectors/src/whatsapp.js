@@ -886,6 +886,15 @@ function threadAllowsWhatsAppMirroring(thread) {
   return thread.binding.mirrorToWhatsApp !== false && thread.binding.mirrorReplies !== false;
 }
 
+function boundThreadWhatsAppAssistantOrigin({ message = {}, thread = null, kind = "" } = {}) {
+  if (kind !== "thread" || !threadAllowsWhatsAppMirroring(thread)) return false;
+  const binding = thread?.binding || {};
+  if (String(binding.connector || "whatsapp").trim().toLowerCase() !== "whatsapp") return false;
+  const bindingChatId = pickString(binding.chatId);
+  const messageChatId = pickString(message.chatId, bindingChatId);
+  return Boolean(bindingChatId && messageChatId === bindingChatId);
+}
+
 function whatsappMessageOrigin(message, state = null) {
   if (!message) return false;
   if (message.connector === "whatsapp" || message.source === "whatsapp_inbound" || message.source === "whatsapp_client") return true;
@@ -1514,7 +1523,11 @@ async function deliverWhatsAppRepliesOnce(env = process.env, fetchImpl = fetch) 
       if (message.role !== "assistant" || message.state !== "completed" || deliveredIds.has(message.id)) continue;
       if (shouldMirrorWhatsAppProgress(message)) {
         const parent = messages.find((entry) => entry.id === message.parentMessageId);
-        const whatsappOrigin = parent?.connector === "whatsapp" || parent?.source === "whatsapp_inbound" || message.connector === "whatsapp";
+        const whatsappOrigin =
+          parent?.connector === "whatsapp" ||
+          parent?.source === "whatsapp_inbound" ||
+          message.connector === "whatsapp" ||
+          boundThreadWhatsAppAssistantOrigin({ message, thread, kind });
         if (!whatsappOrigin) continue;
         if (staleUntrackedWhatsAppProgress(message, outboundDeliveries, env)) {
           skipped.push({ agentId, threadId, messageId: message.id, reason: "stale_untracked_reply" });
@@ -1592,7 +1605,11 @@ async function deliverWhatsAppRepliesOnce(env = process.env, fetchImpl = fetch) 
       }
       if (!shouldMirrorWhatsAppReply(message)) continue;
       const parent = messages.find((entry) => entry.id === message.parentMessageId);
-      const whatsappOrigin = parent?.connector === "whatsapp" || parent?.source === "whatsapp_inbound" || message.connector === "whatsapp";
+      const whatsappOrigin =
+        parent?.connector === "whatsapp" ||
+        parent?.source === "whatsapp_inbound" ||
+        message.connector === "whatsapp" ||
+        boundThreadWhatsAppAssistantOrigin({ message, thread, kind });
       if (!whatsappOrigin) continue;
       if (staleUntrackedWhatsAppReply(message, outboundDeliveries, env)) {
         skipped.push({ agentId, threadId, messageId: message.id, reason: "stale_untracked_reply" });

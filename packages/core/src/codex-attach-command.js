@@ -22,6 +22,17 @@ function commandFlagValue(command, flag) {
   return clean(tokens[index + 1] || "").replace(/^["']|["']$/g, "");
 }
 
+function commandHasFlag(command, flag) {
+  const tokens = clean(command).match(/(?:[^\s"']+|"[^"]*"|'[^']*')+/g) || [];
+  return tokens.includes(flag);
+}
+
+function commandWithSkipGitRepoCheck(command) {
+  const base = clean(command);
+  if (!base || commandHasFlag(base, "--skip-git-repo-check")) return base;
+  return `${base} --skip-git-repo-check`;
+}
+
 function commandFromBin(bin, settings = {}, env = process.env) {
   const executable = clean(bin);
   if (!executable || executable === CODEX_DISABLED_ON_MACOS) return "";
@@ -49,7 +60,7 @@ export async function codexResumeCommand(options = {}) {
   const { cwd, codexThreadId, env = process.env } = options;
   const id = clean(codexThreadId);
   if (!id) throw new Error("codex_thread_id_required");
-  const command = await codexRuntimeCommand(env);
+  const command = commandWithSkipGitRepoCheck(await codexRuntimeCommand(env));
   if (!command) throw new Error("codex_runtime_command_disabled");
   const workspace = clean(cwd);
   const workspaceArg = workspace ? ` -C ${shellQuote(workspace)}` : "";
