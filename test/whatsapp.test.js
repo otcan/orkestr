@@ -268,14 +268,19 @@ test("local whatsapp recovery only targets autostarted stalled accounts", async 
     { accountId: "sender", state: "auth_ready_timeout", ready: false },
     { accountId: "responder", state: "auth_ready_timeout", ready: false },
     { accountId: "other", state: "disconnected", ready: false },
+    { accountId: "target-closed", state: "failed", ready: false, error: "Protocol error (Runtime.addBinding): Target closed" },
+    { accountId: "profile-locked", state: "failed", ready: false, error: "The browser is already running for /tmp/profile. Use a different `userDataDir`." },
     { accountId: "logged-out", state: "idle", ready: false },
     { accountId: "broken-auth", state: "auth_failure", ready: false },
+    { accountId: "hard-failed", state: "failed", ready: false, error: "unexpected permanent connector error" },
     { accountId: "already-ready", state: "ready", ready: true },
   ];
 
-  assert.deepEqual(recoverableLocalWhatsAppAccountIds(accounts, ["responder", "other", "logged-out", "broken-auth", "already-ready"]), [
+  assert.deepEqual(recoverableLocalWhatsAppAccountIds(accounts, ["responder", "other", "target-closed", "profile-locked", "logged-out", "broken-auth", "hard-failed", "already-ready"]), [
     "responder",
     "other",
+    "target-closed",
+    "profile-locked",
   ]);
 });
 

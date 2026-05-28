@@ -634,6 +634,17 @@ export async function startConfiguredLocalWhatsAppAccounts(env = process.env) {
 const localWhatsAppRecoveryAttempts = new Map();
 const recoverableLocalWhatsAppStates = new Set(["auth_ready_timeout", "disconnected"]);
 
+function recoverableLocalWhatsAppFailure(account = {}) {
+  const state = String(account?.state || "").trim();
+  if (recoverableLocalWhatsAppStates.has(state)) return true;
+  if (state !== "failed") return false;
+  const error = String(account?.error || "").toLowerCase();
+  return error.includes("target closed") ||
+    error.includes("runtime.addbinding") ||
+    error.includes("browser is already running") ||
+    error.includes("userdatadir");
+}
+
 function localWhatsAppRecoveryCooldownMs(env = process.env) {
   const parsed = Number(env.ORKESTR_WHATSAPP_AUTO_RECOVER_MS || env.WHATSAPP_LOCAL_AUTO_RECOVER_MS || 60_000);
   return Number.isFinite(parsed) ? Math.max(5000, parsed) : 60_000;
@@ -644,11 +655,10 @@ export function recoverableLocalWhatsAppAccountIds(accounts = [], selectedAccoun
   return accounts
     .filter((account) => {
       const accountId = String(account?.accountId || "").trim();
-      const state = String(account?.state || "").trim();
       return accountId &&
         selected.has(accountId) &&
         account.ready !== true &&
-        recoverableLocalWhatsAppStates.has(state);
+        recoverableLocalWhatsAppFailure(account);
     })
     .map((account) => String(account.accountId).trim());
 }
@@ -976,6 +986,8 @@ export async function startLocalWhatsAppAccount(accountId = "", env = process.en
 
   const initializePromise = client.initialize().catch(async (error) => {
     clearAuthReadyTimer();
+    clearReadyFallbackTimer();
+    await client.destroy().catch(() => {});
     setAccountState(normalized, {
       state: "failed",
       ready: false,
