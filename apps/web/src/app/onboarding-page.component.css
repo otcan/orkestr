@@ -644,38 +644,6 @@
   padding: 10px 12px;
 }
 
-.challenge-admin,
-.challenge-list {
-  display: grid;
-  gap: 12px;
-}
-
-.challenge-card {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  gap: 12px;
-  align-items: center;
-  border: 1px solid rgba(128, 210, 138, 0.18);
-  border-radius: 8px;
-  background: rgba(3, 11, 12, 0.44);
-  padding: 12px;
-}
-
-.challenge-card > div:first-child {
-  display: grid;
-  gap: 4px;
-  min-width: 0;
-}
-
-.challenge-card strong,
-.challenge-card small {
-  overflow-wrap: anywhere;
-}
-
-.challenge-card small {
-  color: #a9bea4;
-}
-
 .qr-panel {
   display: grid;
   place-items: start;

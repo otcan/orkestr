@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { Body, Controller, Get, HttpCode, Param, Post, Query, Req, Res } from "@nestjs/common";
+import { Body, Controller, Delete, Get, HttpCode, Param, Post, Query, Req, Res } from "@nestjs/common";
 import { doctorRuntimeResources, listRuntimeLeases } from "../../../../../packages/core/src/runtime-leases.js";
 import { getSetupStatus } from "../../../../../packages/core/src/setup.js";
 import { readRuntimeSettings } from "../../../../../packages/core/src/runtime-settings.js";
@@ -12,6 +12,7 @@ import { whereAmI } from "../../../../../packages/core/src/whereiam.js";
 import {
   approvePairingChallenge,
   createPairingChallenge,
+  deletePairingChallenge,
   getPairingChallenge,
   listPairingChallenges,
   listSecuritySessions,
@@ -21,6 +22,7 @@ import {
   revokeSecuritySession,
   securityStatus,
   sessionCookieHeader,
+  setSecurityPairingEnabled,
 } from "../../../../../packages/core/src/security.js";
 import { publicConfig } from "../../../../../packages/storage/src/config.js";
 import { ensureDataDirs } from "../../../../../packages/storage/src/paths.js";
@@ -396,6 +398,17 @@ export class SystemController {
     return rejectPairingChallenge(challengeId, { rejectedBy: "browser" });
   }
 
+  @Delete("setup/security/challenges/:challengeId")
+  async deleteSetupSecurityChallenge(@Param("challengeId") challengeId: string) {
+    return deletePairingChallenge(challengeId, { deletedBy: "browser" });
+  }
+
+  @Post("setup/security/enabled")
+  @HttpCode(200)
+  async setSetupSecurityEnabled(@Body() body: Record<string, unknown> = {}) {
+    return setSecurityPairingEnabled(body.enabled === true, { updatedBy: "browser" });
+  }
+
   @Post("setup/security/sessions/revoke")
   @HttpCode(200)
   async revokeAllSetupSecuritySessions() {
@@ -414,6 +427,7 @@ export class SystemController {
     const result = await pairBrowser({
       challengeId: String(body.challengeId || ""),
       userAgent: String(request?.headers?.["user-agent"] || ""),
+      ip: String(request?.ip || request?.socket?.remoteAddress || request?.connection?.remoteAddress || "").replace(/^::ffff:/, ""),
     } as any);
     response.setHeader("set-cookie", sessionCookieHeader(result.token));
     return {

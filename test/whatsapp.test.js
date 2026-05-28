@@ -9,7 +9,7 @@ import { listAgentMessages } from "../packages/core/src/messages.js";
 import { getSetupStatus } from "../packages/core/src/setup.js";
 import { appendThreadMessage, createThread, enqueueThreadInput, listThreadMessages, updateThreadMessage } from "../packages/core/src/threads.js";
 import { deliverWhatsAppReplies, formatWhatsAppOutboundText, getWhatsAppChatParticipants, getWhatsAppStatus, initialQueueDeliveryState, mapLocalWhatsAppStatusFromHealth, routeWhatsAppInbound, syncWhatsAppTypingIndicators } from "../packages/connectors/src/whatsapp.js";
-import { listLocalWhatsAppChats, localWhatsAppAccountIdsForEnv, localWhatsAppMessageRouteFields, normalizeGroupParticipantIds, recoverableLocalWhatsAppAccountIds, reduceLocalWhatsAppBridgeState, startLocalWhatsAppAccount, webCacheRoot } from "../packages/connectors/src/whatsapp-local-bridge.js";
+import { listLocalWhatsAppChats, localWhatsAppAccountIdsForEnv, localWhatsAppMessageRouteFields, normalizeGroupParticipantIds, recoverableLocalWhatsAppAccountIds, reduceLocalWhatsAppBridgeState, sendWhatsAppTextWithConfirmation, startLocalWhatsAppAccount, webCacheRoot } from "../packages/connectors/src/whatsapp-local-bridge.js";
 import { prepareWhatsAppTableAttachments } from "../packages/connectors/src/whatsapp-table-attachments.js";
 import { writeConnectorConfig } from "../packages/storage/src/config.js";
 
@@ -130,6 +130,64 @@ test("local whatsapp group participant ids are normalized for created test chats
     normalizeGroupParticipantIds("66378837028965@lid, 4917632400662@c.us"),
     ["66378837028965@lid", "4917632400662@c.us"],
   );
+});
+
+test("local whatsapp send confirms transient text sends from recent own messages", async () => {
+  const client = {
+    async sendMessage() {
+      throw new Error("Protocol error (Runtime.callFunctionOn): Promise was collected");
+    },
+    async getChatById(chatId) {
+      assert.equal(chatId, "chat-confirmed");
+      return {
+        async fetchMessages() {
+          return [
+            { fromMe: false, body: "hello" },
+            { fromMe: true, body: "hello", id: { _serialized: "sent-confirmed" } },
+          ];
+        },
+      };
+    },
+  };
+
+  const sent = await sendWhatsAppTextWithConfirmation({
+    client,
+    chatId: "chat-confirmed",
+    text: "hello",
+    retryDelayMs: 0,
+  });
+
+  assert.equal(sent.id._serialized, "sent-confirmed");
+});
+
+test("local whatsapp send retries transient text sends when not confirmed", async () => {
+  let attempts = 0;
+  const client = {
+    async sendMessage() {
+      attempts += 1;
+      if (attempts === 1) {
+        throw new Error("Protocol error (Runtime.callFunctionOn): Promise was collected");
+      }
+      return { id: { _serialized: "sent-retry" } };
+    },
+    async getChatById() {
+      return {
+        async fetchMessages() {
+          return [];
+        },
+      };
+    },
+  };
+
+  const sent = await sendWhatsAppTextWithConfirmation({
+    client,
+    chatId: "chat-retry",
+    text: "retry me",
+    retryDelayMs: 0,
+  });
+
+  assert.equal(attempts, 2);
+  assert.equal(sent.id._serialized, "sent-retry");
 });
 
 test("local whatsapp message route fields keep own group echoes on the group chat", () => {
@@ -490,6 +548,43 @@ test("whatsapp inbound can route directly to a thread and mirror its reply once"
   assert.equal(duplicate.delivered.length, 0);
   assert.equal(calls[0].url.pathname, "/send-text");
   assert.equal(calls[0].body.to, "chat-thread");
+});
+
+test("whatsapp delivery mirrors bound thread replies that only carry the binding chat id", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-bound-orphan-"));
+  const env = externalBridgeEnv(home);
+  await writeConnectorConfig("whatsapp", { bridgeMode: "external", bridgeUrl: "http://wa.local" }, env);
+  await createThread({
+    id: "thread-bound-orphan",
+    name: "Bound Orphan Reply Thread",
+    binding: {
+      connector: "whatsapp",
+      chatId: "chat-bound-orphan",
+      responderAccountId: "account-bound",
+      mirrorToWhatsApp: true,
+    },
+  }, env);
+  await appendThreadMessage("thread-bound-orphan", {
+    role: "assistant",
+    source: "codex-app-server",
+    phase: "final_answer",
+    text: "This reply already has the bound chat id but no parent.",
+    state: "completed",
+    chatId: "chat-bound-orphan",
+    accountId: "account-bound",
+  }, env);
+
+  const calls = [];
+  const delivery = await deliverWhatsAppReplies(env, async (url, options) => {
+    calls.push({ url, body: JSON.parse(options.body) });
+    return response({ ok: true, ids: ["sent-bound-orphan"] });
+  });
+
+  assert.equal(delivery.delivered.length, 1);
+  assert.equal(delivery.delivered[0].deliveryType, "final");
+  assert.equal(calls[0].body.to, "chat-bound-orphan");
+  assert.equal(calls[0].body.accountId, "account-bound");
+  assert.match(calls[0].body.text, /bound chat id but no parent/);
 });
 
 test("whatsapp delivery mirrors throttled commentary progress before final replies", async () => {

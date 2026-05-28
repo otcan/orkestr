@@ -67,6 +67,7 @@ export class CodexAppServerClient {
     this.pending = new Map();
     this.threadStates = new Map();
     this.turnParents = new Map();
+    this.completedTurns = new Set();
     this.pendingRequests = new Map();
     this.started = false;
     this.closed = false;
@@ -231,7 +232,9 @@ export class CodexAppServerClient {
     }, this.env).catch(() => {});
     const text = approvalPromptText(message.method, params);
     if (text) {
-      const whatsappParent = await latestWhatsAppParent(thread, params.timestamp || nowIso(), this.env);
+      const whatsappParent =
+        await latestWhatsAppParent(thread, params.timestamp || nowIso(), this.env) ||
+        threadWhatsAppBindingParent(thread);
       const messageRecord = await appendOrUpdateEventMessage(thread, {
         role: "assistant",
         source: "codex-app-server",
@@ -313,6 +316,14 @@ export class CodexAppServerClient {
       const turnId = clean(turn.id);
       const status = clean(turn.status || "completed");
       if (threadId) {
+        const completedKey = this.turnParentKey(threadId, turnId);
+        if (completedKey) {
+          this.completedTurns.add(completedKey);
+          while (this.completedTurns.size > 500) {
+            const oldest = this.completedTurns.keys().next().value;
+            this.completedTurns.delete(oldest);
+          }
+        }
         const state = this.threadStates.get(threadId) || {};
         this.threadStates.set(threadId, { ...state, activeTurnId: "", status: { type: status === "failed" ? "systemError" : "idle" } });
         const thread = await threadForCodexThreadId(threadId, this.env);
@@ -401,8 +412,13 @@ export class CodexAppServerClient {
     const phase = itemPhase(item) || "final_answer";
     const timestamp = params.timestamp || nowIso();
     const turnId = clean(params.turnId || item.turnId);
+    const rememberedParent = this.turnParent(codexId, turnId);
     const explicitParent = params.parentMessage && whatsappOrigin(params.parentMessage) ? params.parentMessage : null;
-    const whatsappParent = explicitParent || this.turnParent(codexId, turnId) || await latestWhatsAppParent(thread, timestamp, this.env);
+    const whatsappParent =
+      explicitParent ||
+      (rememberedParent && whatsappOrigin(rememberedParent) ? rememberedParent : null) ||
+      await latestWhatsAppParent(thread, timestamp, this.env) ||
+      threadWhatsAppBindingParent(thread);
     const message = await appendOrUpdateEventMessage(thread, {
       role: "assistant",
       source: "codex-app-server",

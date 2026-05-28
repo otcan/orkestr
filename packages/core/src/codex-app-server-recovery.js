@@ -42,9 +42,61 @@ function staleFinalGraceMs(env = process.env) {
   return Number.isFinite(parsed) ? Math.max(0, parsed) : 30000;
 }
 
+function staleRecoveryLookbackMs(env = process.env) {
+  const fallback = 24 * 60 * 60 * 1000;
+  const parsed = Number(env.ORKESTR_CODEX_APP_SERVER_STALE_RECOVERY_LOOKBACK_MS || fallback);
+  return Number.isFinite(parsed) ? Math.max(0, parsed) : fallback;
+}
+
 function timestampMs(value) {
   const ms = Date.parse(String(value || ""));
   return Number.isFinite(ms) ? ms : 0;
+}
+
+function messageActivityMs(message = {}) {
+  const item = message || {};
+  return Math.max(
+    timestampMs(item.timestamp),
+    timestampMs(item.deliveredAt),
+    timestampMs(item.deliveryLastAttemptAt),
+    timestampMs(item.createdAt),
+  );
+}
+
+function activeTurnFromCodexThread(codexThread = {}) {
+  const turns = Array.isArray(codexThread.turns) ? codexThread.turns : [];
+  for (let index = turns.length - 1; index >= 0; index -= 1) {
+    const turn = turns[index] || {};
+    const status = clean(turn.status).toLowerCase();
+    if (["active", "inprogress", "in_progress", "running", "started"].includes(status)) {
+      return clean(turn.id);
+    }
+  }
+  return "";
+}
+
+async function readLiveCodexThreadState(client, codexId) {
+  if (!client || !codexId) return null;
+  const read = await client.request("thread/read", { threadId: codexId, includeTurns: true }).catch(() => null);
+  const codexThread = read?.thread || null;
+  if (!codexThread || !clean(codexThread.id || codexThread.threadId || codexId)) return null;
+  const status = codexThread.status || null;
+  const activeTurnId = clean(codexThread.activeTurnId || codexThread.currentTurnId || activeTurnFromCodexThread(codexThread));
+  const effectiveStatus = activeTurnId && appServerStateFromStatus(status) !== "working"
+    ? { type: "active", activeFlags: ["running"] }
+    : status;
+  if (!effectiveStatus && !activeTurnId) return null;
+  const state = {
+    status: effectiveStatus,
+    activeTurnId,
+    thread: codexThread,
+  };
+  client.threadStates.set(codexId, state);
+  return state;
+}
+
+function messageTurnId(message = {}) {
+  return clean(message.codexTurnId || message.executorTurnId);
 }
 
 function deliveredUserMessage(message = {}) {
@@ -54,8 +106,7 @@ function deliveredUserMessage(message = {}) {
   const deliveryState = clean(message.deliveryState).toLowerCase();
   const observedVia = clean(message.observedVia).toLowerCase();
   return deliveryState === "delivered" ||
-    observedVia.startsWith("codex_app_server") ||
-    Boolean(clean(message.codexTurnId || message.executorTurnId));
+    observedVia.startsWith("codex_app_server");
 }
 
 function assistantMessage(message = {}) {
@@ -71,19 +122,34 @@ function terminalAssistantMessage(message = {}) {
   return ["plan", "need_input"].includes(phase);
 }
 
-function latestIncompleteDeliveredTurn(messages = []) {
-  const latestUserIndex = messages.findLastIndex((message) => deliveredUserMessage(message));
-  if (latestUserIndex < 0) return null;
-  const latestUser = messages[latestUserIndex];
-  const afterUser = messages.slice(latestUserIndex + 1).filter((message) => assistantMessage(message));
+function latestByStorageOrder(messages = []) {
+  return messages.at(-1) || null;
+}
+
+function deliveredTurnState(messages = [], latestUser = {}, latestUserIndex = -1) {
+  const turnId = messageTurnId(latestUser);
+  const sameTurnAssistants = turnId
+    ? messages.filter((message) => assistantMessage(message) && messageTurnId(message) === turnId)
+    : [];
+  const afterUser = turnId ? sameTurnAssistants : messages.slice(latestUserIndex + 1).filter((message) => assistantMessage(message));
   if (afterUser.some((message) => terminalAssistantMessage(message))) return null;
-  const latestAssistant = afterUser.at(-1) || null;
+  const latestAssistant = latestByStorageOrder(afterUser);
   return {
     latestUser,
     latestAssistant,
     reason: latestAssistant ? "no_final_answer" : "no_assistant_response",
-    lastActivityMs: timestampMs(latestAssistant?.timestamp || latestAssistant?.createdAt || latestUser.timestamp || latestUser.createdAt),
+    lastActivityMs: Math.max(messageActivityMs(latestAssistant), messageActivityMs(latestUser)),
   };
+}
+
+function latestIncompleteDeliveredTurn(messages = []) {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const latestUser = messages[index];
+    if (!deliveredUserMessage(latestUser)) continue;
+    const turn = deliveredTurnState(messages, latestUser, index);
+    if (turn) return turn;
+  }
+  return null;
 }
 
 function staleTurnNoticeText(reason = "no_assistant_response", options = {}) {
@@ -164,6 +230,19 @@ async function appendStaleTurnNotice(thread, messages, turn, env = process.env, 
   return { notice, appended: !existing && Boolean(notice?.id) };
 }
 
+function incompleteTurnMatchesRuntimeTurn(thread, turn) {
+  const runtimeTurnId = clean(thread?.runtime?.activeTurnId);
+  return Boolean(runtimeTurnId && runtimeTurnId === messageTurnId(turn?.latestUser));
+}
+
+function recentEnoughForStaleRecovery(turn, env = process.env) {
+  const lookbackMs = staleRecoveryLookbackMs(env);
+  if (lookbackMs <= 0) return true;
+  const lastActivityMs = Number(turn?.lastActivityMs || 0);
+  if (!lastActivityMs) return true;
+  return Date.now() - lastActivityMs <= lookbackMs;
+}
+
 function shouldRecoverIncompleteTurn(thread, clientState, turn, env = process.env) {
   if (!turn) return false;
   const liveStatusState = appServerStateFromStatus(clientState?.status || null);
@@ -171,6 +250,7 @@ function shouldRecoverIncompleteTurn(thread, clientState, turn, env = process.en
   if (liveActiveTurnId || liveStatusState === "working") return false;
   const threadState = clean(thread?.state).toLowerCase();
   if (["working", "queued", "pending_delivery", "awaiting_ack"].includes(threadState)) return false;
+  if (!incompleteTurnMatchesRuntimeTurn(thread, turn) && !recentEnoughForStaleRecovery(turn, env)) return false;
   if (!turn.lastActivityMs) return true;
   return Date.now() - turn.lastActivityMs >= staleFinalGraceMs(env);
 }
@@ -185,14 +265,26 @@ export async function recoverStaleCodexAppServerTurns(env = process.env, options
   for (const thread of appServerThreads) {
     const codexId = codexThreadId(thread);
     if (!codexId) continue;
-    const clientState = client?.threadStates.has(codexId) ? client.threadStates.get(codexId) : null;
+    let clientState = client?.threadStates.has(codexId) ? client.threadStates.get(codexId) : null;
     const messages = await listThreadMessages(thread.id, env).catch(() => []);
     const incompleteTurn = latestIncompleteDeliveredTurn(messages);
-    const staleRuntime = staleAppServerRuntime(thread, clientState);
-    if (!staleRuntime && !shouldRecoverIncompleteTurn(thread, clientState, incompleteTurn, env)) continue;
+    let staleRuntime = staleAppServerRuntime(thread, clientState);
+    let shouldRecoverTurn = shouldRecoverIncompleteTurn(thread, clientState, incompleteTurn, env);
+    if ((staleRuntime || shouldRecoverTurn) && client) {
+      const liveReadState = await readLiveCodexThreadState(client, codexId);
+      if (liveReadState) {
+        clientState = liveReadState;
+        staleRuntime = staleAppServerRuntime(thread, clientState);
+        shouldRecoverTurn = shouldRecoverIncompleteTurn(thread, clientState, incompleteTurn, env);
+      }
+    }
+    const noticeTurn = shouldRecoverTurn || incompleteTurnMatchesRuntimeTurn(thread, incompleteTurn)
+      ? incompleteTurn
+      : null;
+    if (!staleRuntime && !shouldRecoverTurn) continue;
     let notice = null;
-    if (incompleteTurn) {
-      const result = await appendStaleTurnNotice(thread, messages, incompleteTurn, env, options);
+    if (noticeTurn) {
+      const result = await appendStaleTurnNotice(thread, messages, noticeTurn, env, options);
       notice = result?.notice || null;
       if (result?.appended) appended += 1;
     }
@@ -215,8 +307,8 @@ export async function recoverStaleCodexAppServerTurns(env = process.env, options
       threadId: thread.id,
       codexThreadId: codexId,
       noticeMessageId: notice?.id || null,
-      latestUserMessageId: incompleteTurn?.latestUser?.id || null,
-      reason: incompleteTurn?.reason || (staleRuntime ? "stale_runtime" : "incomplete_turn"),
+      latestUserMessageId: noticeTurn?.latestUser?.id || null,
+      reason: noticeTurn?.reason || (staleRuntime ? "stale_runtime" : "incomplete_turn"),
       noticeCause: clean(options.noticeCause || options.cause),
     }, env).catch(() => {});
   }
