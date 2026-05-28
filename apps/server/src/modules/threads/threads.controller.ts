@@ -481,7 +481,7 @@ export class ThreadsController {
       } : {}),
       ...prepared,
     }, principal);
-    if (usesCodexRuntime && !threadUsesCodexAppServer(thread)) {
+    if (usesCodexRuntime && !codexThreadId(thread)) {
       const started = await startCodexAppServerThread(thread);
       if (started?.thread) thread = started.thread;
     }

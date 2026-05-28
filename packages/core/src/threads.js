@@ -120,6 +120,9 @@ export async function createThread(input = {}, env = process.env) {
     : null;
   const existing = existingByRequestedId || existingByName;
   if (existing) return existing;
+  const runtimeKind = String(input.runtimeKind || input.runtime?.runtimeKind || input.executor?.metadata?.runtimeKind || "").trim();
+  const codexThreadId = String(input.codexThreadId || input.executor?.codexThreadId || input.executor?.metadata?.codexThreadId || "").trim();
+  const codexSessionId = String(input.codexSessionId || input.executor?.codexSessionId || input.executor?.metadata?.codexSessionId || "").trim();
 
   const thread = {
     id: requestedId || randomUUID(),
@@ -132,10 +135,14 @@ export async function createThread(input = {}, env = process.env) {
     workspace: String(input.workspace || input.cwd || input.projectRoot || "").trim(),
     command: String(input.cmd || input.command || "").trim(),
     runtime: input.runtime && typeof input.runtime === "object" ? { ...input.runtime } : null,
+    runtimeKind: runtimeKind || null,
+    codexThreadId: codexThreadId || null,
+    codexSessionId: codexSessionId || null,
     executor: {
       id: String(input.executorId || input.executor?.id || "").trim(),
       type: String(input.executor?.type || "generic").trim(),
-      codexThreadId: String(input.codexThreadId || input.executor?.codexThreadId || "").trim(),
+      codexThreadId,
+      codexSessionId,
       metadata: input.executor?.metadata && typeof input.executor.metadata === "object" ? input.executor.metadata : {},
     },
     binding: input.binding && typeof input.binding === "object" ? { ...input.binding } : null,

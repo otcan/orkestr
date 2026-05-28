@@ -170,6 +170,7 @@ test("server exposes health, readiness, version, and agent message APIs", async 
       method: "POST",
       body: JSON.stringify({ name: "relative-workspace", workspace: "relative-repo", workFolder: "apps/web" }),
     });
+    const createdThreadDetail = await request(baseUrl, `/api/threads/${createdThread.thread.id}`);
     const mode = await request(baseUrl, `/api/threads/${createdThread.thread.id}/codex-mode`, {
       method: "POST",
       body: JSON.stringify({ mode: "plan" }),
@@ -208,6 +209,8 @@ test("server exposes health, readiness, version, and agent message APIs", async 
     assert.equal(createdThread.thread.workspaceGenerated, true);
     assert.equal(createdThread.thread.workspaceSource, "local");
     assert.equal(createdThread.thread.localGitInitialized, true);
+    assert.ok(createdThread.thread.executor.codexThreadId);
+    assert.equal(createdThreadDetail.thread.executor.codexThreadId, createdThread.thread.executor.codexThreadId);
     assert.ok(String(createdThread.thread.cwd || "").startsWith(workspaceRoot));
     assert.ok(await fs.stat(path.join(createdThread.thread.repoPath, ".git")));
     assert.equal(relativeWorkspaceThread.thread.workspace, path.join(workspaceRoot, "relative-repo"));
