@@ -1,5 +1,6 @@
 import { requestJson } from "./api-client.js";
 import { threadName } from "./format.js";
+import { applyWhatsAppChatNamePrefix, defaultWhatsAppReplyPrefix } from "../../../packages/core/src/whatsapp-defaults.js";
 
 const CREATE_USAGE = "Usage: orkestr create <name> [--prompt text] [--cwd path] [--command command] [--executor id] [--wa-title title] [--wa-participant jid]... [--chat-id jid] [--outbound-account id] [--reply-prefix text] [--no-wa] [--no-wa-admin] [--json]";
 
@@ -11,8 +12,10 @@ export async function createCommand(argv, ctx) {
   const noWhatsApp = argv.includes("--no-wa");
   const outboundAccountId = firstFlagValue(argv, ["--outbound-account", "--responder-account"]);
   const senderAccountId = firstFlagValue(argv, ["--sender-account", "--inbound-account"]);
-  const displayName = firstFlagValue(argv, ["--wa-title", "--title"]) || name;
-  const replyPrefix = firstFlagValue(argv, ["--reply-prefix"]) || "otcanclaw:";
+  const explicitDisplayName = firstFlagValue(argv, ["--wa-title", "--title"]);
+  const displayName = explicitDisplayName || (noWhatsApp ? name : applyWhatsAppChatNamePrefix(name));
+  const createName = !noWhatsApp && !explicitDisplayName ? displayName : name;
+  const replyPrefix = firstFlagValue(argv, ["--reply-prefix"]) || defaultWhatsAppReplyPrefix();
   const explicitChatId = firstFlagValue(argv, ["--chat-id"]);
 
   let whatsappGroup = null;
@@ -32,7 +35,7 @@ export async function createCommand(argv, ctx) {
   const threadPayload = await requestJson("/api/threads", {
     ...ctx,
     method: "POST",
-    body: threadCreateBody(argv, name),
+    body: threadCreateBody(argv, createName),
   });
   const thread = threadPayload?.thread || threadPayload;
   const threadId = String(thread?.id || "").trim();

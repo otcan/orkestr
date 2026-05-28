@@ -35,6 +35,7 @@ import { createThreadWorker, detectThreadRepo, listThreadWorkers, refreshThreadG
 import { parseThreadInputCommand } from "../../../../../packages/core/src/thread-commands.js";
 import { codexResumeCommand } from "../../../../../packages/core/src/codex-attach-command.js";
 import { launchNativeTerminal } from "../../../../../packages/core/src/native-terminal.js";
+import { defaultWhatsAppReplyPrefix } from "../../../../../packages/core/src/whatsapp-defaults.js";
 import {
   archiveCodexAppServerThread,
   compactCodexAppServerThread,
@@ -1248,7 +1249,7 @@ export class ThreadsController {
       additionalParticipantIds,
       additionalParticipantLabels,
       mirrorToWhatsApp: optionalBodyBoolean(body, "mirrorToWhatsApp", current.mirrorToWhatsApp !== false),
-      replyPrefix: optionalBodyString(body, "replyPrefix", current.replyPrefix || "otcanclaw:") || "otcanclaw:",
+      replyPrefix: optionalBodyString(body, "replyPrefix", current.replyPrefix || defaultWhatsAppReplyPrefix()) || defaultWhatsAppReplyPrefix(),
       senderAccountId: optionalBodyString(body, "senderAccountId", current.senderAccountId || "") || null,
       responderAccountId: optionalBodyString(body, "responderAccountId", current.responderAccountId || current.outboundAccountId || "") || null,
       senderContactId: optionalBodyString(body, "senderContactId", current.senderContactId || "") || null,

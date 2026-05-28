@@ -147,6 +147,10 @@ export interface SetupStatus {
   home: string;
   connectors: ConnectorStatus[];
   config?: Record<string, Record<string, string>>;
+  whatsappDefaults?: {
+    chatNamePrefix?: string;
+    replyPrefix?: string;
+  };
   auth?: AuthStatus;
   overlay?: {
     configured?: boolean;

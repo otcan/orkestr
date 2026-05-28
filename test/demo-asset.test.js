@@ -10,7 +10,7 @@ test("README demo asset shows the same proof lines across WhatsApp, TMUX, and We
   assert.match(html, /TMUX Capture/);
   assert.match(html, /Orkestr Web UI/);
   assert.match(html, /same lines/);
-  assert.match(html, /otcanclaw: The PNG is on GitHub now\./);
+  assert.match(html, /orkestr: The PNG is on GitHub now\./);
   assert.match(html, /https:\/\/github\.com\/otcan\/orkestr\/blob\/main\/docs\/assets\/orkestr-three-screen-demo\.png/);
   assert.match(html, /https:\/\/raw\.githubusercontent\.com\/otcan\/orkestr\/main\/docs\/assets\/orkestr-three-screen-demo\.png/);
   assert.match(html, /raw URL returns HTTP 200 with content-type: image\/png/);
