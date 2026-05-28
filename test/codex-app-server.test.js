@@ -374,6 +374,37 @@ test("Codex app-server starts threads, delivers input, and imports existing thre
   }
 });
 
+test("Codex app-server ignores overlapping delivery attempts for the same queued input", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-codex-app-server-delivery-lock-"));
+  const fake = await createFakeCodex(home);
+  const env = {
+    ORKESTR_HOME: path.join(home, "orkestr"),
+    HOME: path.join(home, "runtime-home"),
+    PATH: `${fake.bin}${path.delimiter}${process.env.PATH || ""}`,
+    FAKE_CODEX_STATE: fake.stateFile,
+  };
+  try {
+    const thread = await createThread({ id: "app-server-delivery-lock-thread", name: "Delivery Lock Thread", cwd: home, executorId: "codex", executor: { type: "codex" } }, env);
+    const started = await startCodexAppServerThread(thread, env);
+    const input = await enqueueThreadInput(thread.id, { text: "deliver once" }, env);
+
+    const results = await Promise.all([
+      deliverCodexAppServerPendingInputs(started.thread, env),
+      deliverCodexAppServerPendingInputs(started.thread, env),
+    ]);
+    const state = JSON.parse(await fs.readFile(fake.stateFile, "utf8"));
+    const messages = await listThreadMessages(thread.id, env);
+    const deliveredMessage = messages.find((message) => message.id === input.id);
+
+    assert.deepEqual(results.flat(), [input.id]);
+    assert.equal(state.calls.filter((call) => call.method === "turn/start").length, 1);
+    assert.equal(deliveredMessage.state, "completed");
+    assert.equal(deliveredMessage.deliveryState, "delivered");
+  } finally {
+    stopCodexAppServerClients();
+  }
+});
+
 test("Codex app-server mirrors interrupted turns to the thread and WhatsApp", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-codex-app-server-interrupted-"));
   const fake = await createFakeCodex(home);
@@ -678,6 +709,91 @@ test("Codex app-server recovery marks stale delivered turns ready and appends on
     assert.equal(restartRecovery.appended, 1);
     assert.match(restartNotice.text, /^Orkestr restarted before Codex replied/);
     assert.match(restartNotice.text, /Orkestr restarted after this message reached Codex/);
+  } finally {
+    stopCodexAppServerClients();
+  }
+});
+
+test("Codex app-server recovery ignores delayed imported user rows for completed turns", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-codex-app-server-import-race-"));
+  const fake = await createFakeCodex(home);
+  const env = {
+    ORKESTR_HOME: path.join(home, "orkestr"),
+    HOME: path.join(home, "runtime-home"),
+    PATH: `${fake.bin}${path.delimiter}${process.env.PATH || ""}`,
+    FAKE_CODEX_STATE: fake.stateFile,
+    ORKESTR_CODEX_APP_SERVER_STALE_FINAL_GRACE_MS: "0",
+  };
+  try {
+    const thread = await createThread({
+      id: "app-server-import-race-thread",
+      name: "App Server Import Race Thread",
+      state: "ready",
+      executorId: "codex",
+      executor: {
+        type: "codex",
+        transport: "app-server",
+        codexThreadId: "import-race-codex-thread",
+        codexSessionId: "import-race-codex-thread",
+      },
+      runtimeKind: "codex-app-server",
+      codexThreadId: "import-race-codex-thread",
+      codexSessionId: "import-race-codex-thread",
+      runtime: {
+        runtimeKind: "codex-app-server",
+        state: "ready",
+        activeTurnId: null,
+        codexStatus: { type: "idle" },
+      },
+    }, env);
+    await appendThreadMessage(thread.id, {
+      role: "user",
+      source: "manual",
+      text: "Delivered question.",
+      state: "completed",
+      deliveryState: "delivered",
+      observedVia: "codex_app_server_turn_start",
+      codexThreadId: "import-race-codex-thread",
+      codexTurnId: "live-turn",
+      createdAt: "2026-01-01T00:00:00.000Z",
+    }, env);
+    await appendThreadMessage(thread.id, {
+      role: "assistant",
+      source: "codex-app-server",
+      phase: "final_answer",
+      text: "Delivered answer.",
+      state: "completed",
+      codexThreadId: "import-race-codex-thread",
+      codexTurnId: "live-turn",
+      createdAt: "2026-01-01T00:00:01.000Z",
+    }, env);
+    await appendThreadMessage(thread.id, {
+      role: "assistant",
+      source: "codex-app-server",
+      phase: "final_answer",
+      text: "Imported answer already exists.",
+      state: "completed",
+      codexThreadId: "import-race-codex-thread",
+      codexTurnId: "imported-turn",
+      createdAt: "2026-01-01T00:00:03.000Z",
+    }, env);
+    await appendThreadMessage(thread.id, {
+      role: "user",
+      source: "codex-app-server-import",
+      text: "Imported question arrived late.",
+      state: "completed",
+      codexThreadId: "import-race-codex-thread",
+      codexTurnId: "imported-turn",
+      createdAt: "2026-01-01T00:00:02.000Z",
+    }, env);
+
+    const result = await recoverStaleCodexAppServerTurns(env);
+    const messages = await listThreadMessages(thread.id, env);
+    const notices = messages.filter((message) => message.source === "orkestr_runtime" && message.phase === "runtime_interrupted");
+
+    assert.equal(result.recovered, 0);
+    assert.equal(result.appended, 0);
+    assert.equal(notices.length, 0);
   } finally {
     stopCodexAppServerClients();
   }

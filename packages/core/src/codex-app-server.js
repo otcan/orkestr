@@ -34,6 +34,8 @@ import { completeThreadSecurityApproveCommand } from "./security-thread-command.
 
 const appServerDeliveryTimers = new Map();
 const appServerHistorySyncTimes = new Map();
+const appServerDeliveryLocks = new Set();
+const pendingInputStates = new Set(["queued", "pending_delivery", "awaiting_ack"]);
 
 function codexAppServerActiveTurnRetryMs(env = process.env) {
   const parsed = Number(env.ORKESTR_CODEX_APP_SERVER_ACTIVE_TURN_RETRY_MS || 3000);
@@ -211,15 +213,34 @@ async function startCodexAppServerTurn({ client, thread, id, pending, env, obser
   return { result, observedVia, turnId };
 }
 
-export async function sendCodexAppServerInput(thread, message, env = process.env) {
-  const id = codexThreadId(thread);
-  if (!id) throw new Error("codex_thread_id_required");
-  const client = await getCodexAppServerClient({ env, home: runtimeHome(env) });
-  const pending = await updateThreadMessage(thread.id, message.id, {
+async function claimCodexAppServerPendingInput(thread, message, env = process.env) {
+  const messages = await listThreadMessages(thread.id, env).catch(() => []);
+  const current = messages.find((item) => item.id === message.id);
+  if (!current || current.role !== "user" || !pendingInputStates.has(clean(current.state))) {
+    await appendEvent({
+      type: "codex_app_server_input_stale_claim_ignored",
+      threadId: thread.id,
+      messageId: message.id,
+      state: clean(current?.state),
+      deliveryState: clean(current?.deliveryState),
+    }, env).catch(() => {});
+    return null;
+  }
+  return updateThreadMessage(thread.id, current.id, {
     state: "pending_delivery",
     deliveryState: "codex_app_server_sending",
     deliveryLastAttemptAt: nowIso(),
   }, env);
+}
+
+export async function sendCodexAppServerInput(thread, message, env = process.env) {
+  const id = codexThreadId(thread);
+  if (!id) throw new Error("codex_thread_id_required");
+  const client = await getCodexAppServerClient({ env, home: runtimeHome(env) });
+  const pending = await claimCodexAppServerPendingInput(thread, message, env);
+  if (!pending) {
+    return { message, result: null, observedVia: "codex_app_server_stale_claim", skipped: true };
+  }
   const clientState = client.threadStates.get(id) || {};
   const clientStatusState = appServerStateFromStatus(clientState.status);
   let activeTurnId = clean(Object.prototype.hasOwnProperty.call(clientState, "activeTurnId")
@@ -286,9 +307,24 @@ export async function sendCodexAppServerInput(thread, message, env = process.env
 }
 
 export async function deliverCodexAppServerPendingInputs(thread, env = process.env) {
+  const lockKey = clean(thread?.id);
+  if (!lockKey) return [];
+  if (appServerDeliveryLocks.has(lockKey)) {
+    await appendEvent({ type: "codex_app_server_input_delivery_in_flight", threadId: lockKey }, env).catch(() => {});
+    return [];
+  }
+  appServerDeliveryLocks.add(lockKey);
+  try {
+    return await deliverCodexAppServerPendingInputsUnlocked(thread, env);
+  } finally {
+    appServerDeliveryLocks.delete(lockKey);
+  }
+}
+
+async function deliverCodexAppServerPendingInputsUnlocked(thread, env = process.env) {
   const delivered = [];
   const messages = await listThreadMessages(thread.id, env);
-  let next = messages.find((message) => message.role === "user" && ["queued", "pending_delivery", "awaiting_ack"].includes(message.state));
+  let next = messages.find((message) => message.role === "user" && pendingInputStates.has(message.state));
   if (!next) return delivered;
   const securityCommand = await completeThreadSecurityApproveCommand(thread, next, env);
   if (securityCommand?.handled) {
@@ -391,6 +427,7 @@ export async function deliverCodexAppServerPendingInputs(thread, env = process.e
   }
   try {
     const result = await sendCodexAppServerInput(thread, next, env);
+    if (result.skipped) return delivered;
     if (!result.deferred) delivered.push(result.message.id);
   } catch (error) {
     const errorText = publicError(error);

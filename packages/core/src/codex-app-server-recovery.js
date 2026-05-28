@@ -47,6 +47,10 @@ function timestampMs(value) {
   return Number.isFinite(ms) ? ms : 0;
 }
 
+function messageTurnId(message = {}) {
+  return clean(message.codexTurnId || message.executorTurnId);
+}
+
 function deliveredUserMessage(message = {}) {
   if (message?.role !== "user") return false;
   const state = clean(message.state).toLowerCase();
@@ -54,8 +58,7 @@ function deliveredUserMessage(message = {}) {
   const deliveryState = clean(message.deliveryState).toLowerCase();
   const observedVia = clean(message.observedVia).toLowerCase();
   return deliveryState === "delivered" ||
-    observedVia.startsWith("codex_app_server") ||
-    Boolean(clean(message.codexTurnId || message.executorTurnId));
+    observedVia.startsWith("codex_app_server");
 }
 
 function assistantMessage(message = {}) {
@@ -71,19 +74,34 @@ function terminalAssistantMessage(message = {}) {
   return ["plan", "need_input"].includes(phase);
 }
 
-function latestIncompleteDeliveredTurn(messages = []) {
-  const latestUserIndex = messages.findLastIndex((message) => deliveredUserMessage(message));
-  if (latestUserIndex < 0) return null;
-  const latestUser = messages[latestUserIndex];
-  const afterUser = messages.slice(latestUserIndex + 1).filter((message) => assistantMessage(message));
+function latestByStorageOrder(messages = []) {
+  return messages.at(-1) || null;
+}
+
+function deliveredTurnState(messages = [], latestUser = {}, latestUserIndex = -1) {
+  const turnId = messageTurnId(latestUser);
+  const sameTurnAssistants = turnId
+    ? messages.filter((message) => assistantMessage(message) && messageTurnId(message) === turnId)
+    : [];
+  const afterUser = turnId ? sameTurnAssistants : messages.slice(latestUserIndex + 1).filter((message) => assistantMessage(message));
   if (afterUser.some((message) => terminalAssistantMessage(message))) return null;
-  const latestAssistant = afterUser.at(-1) || null;
+  const latestAssistant = latestByStorageOrder(afterUser);
   return {
     latestUser,
     latestAssistant,
     reason: latestAssistant ? "no_final_answer" : "no_assistant_response",
     lastActivityMs: timestampMs(latestAssistant?.timestamp || latestAssistant?.createdAt || latestUser.timestamp || latestUser.createdAt),
   };
+}
+
+function latestIncompleteDeliveredTurn(messages = []) {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const latestUser = messages[index];
+    if (!deliveredUserMessage(latestUser)) continue;
+    const turn = deliveredTurnState(messages, latestUser, index);
+    if (turn) return turn;
+  }
+  return null;
 }
 
 function staleTurnNoticeText(reason = "no_assistant_response", options = {}) {
