@@ -27,6 +27,7 @@ import {
 } from "../../../packages/connectors/src/whatsapp-local-bridge.js";
 import { ensureDataDirs } from "../../../packages/storage/src/paths.js";
 import { authorizeHttpRequest } from "../../../packages/core/src/security.js";
+import { getThreadForPrincipal, listThreads } from "../../../packages/core/src/threads.js";
 import { AppModule } from "./app.module.js";
 import { JsonErrorFilter } from "./common/json-error.filter.js";
 import { attachDesktopProxyUpgrade, registerDesktopProxy } from "./desktop-proxy.js";
@@ -42,7 +43,17 @@ export async function createApp(): Promise<INestApplication> {
   app.use(async (request, response, next) => {
     try {
       const result = await authorizeHttpRequest(request);
-      if (result.ok) return next();
+      if (result.ok) {
+        (request as any).orkestrPrincipal = result.principal;
+        const resourceAuth = await authorizeThreadResourceRequest(request, result.principal);
+        if (!resourceAuth.ok) {
+          return response
+            .status(resourceAuth.statusCode || 403)
+            .type("application/json")
+            .send(JSON.stringify({ ok: false, error: resourceAuth.error || "forbidden" }));
+        }
+        return next();
+      }
       return response
         .status(result.statusCode || 401)
         .type("application/json")
@@ -61,6 +72,45 @@ export async function createApp(): Promise<INestApplication> {
   });
   app.useGlobalFilters(new JsonErrorFilter());
   return app;
+}
+
+async function authorizeThreadResourceRequest(request: any, principal: any) {
+  const threadId = threadIdFromApiRequest(request);
+  if (!threadId) return { ok: true };
+  try {
+    const ambiguity = await ambiguousThreadRoute(threadId);
+    if (ambiguity) return { ok: false, statusCode: 409, error: "ambiguous_thread_name_use_id" };
+    const thread = await getThreadForPrincipal(threadId, principal);
+    if (!thread) return { ok: false, statusCode: 404, error: "thread_not_found" };
+    return { ok: true };
+  } catch (error: any) {
+    return {
+      ok: false,
+      statusCode: error?.statusCode || 403,
+      error: error?.message || "forbidden",
+    };
+  }
+}
+
+async function ambiguousThreadRoute(threadId: string) {
+  const threads = await listThreads().catch(() => []);
+  const matches = threads.filter((thread: any) => thread.id === threadId || thread.name === threadId || thread.bindingName === threadId);
+  if (matches.length < 2) return false;
+  return !matches.some((thread: any) => thread.id === threadId);
+}
+
+function threadIdFromApiRequest(request: any) {
+  const url = String(request?.url || "").split("?")[0];
+  const parts = url.split("/").filter(Boolean);
+  if (parts[0] !== "api" || parts[1] !== "threads") return "";
+  let id = "";
+  try {
+    id = parts[2] ? decodeURIComponent(parts[2]) : "";
+  } catch {
+    id = parts[2] || "";
+  }
+  if (!id || id === "summary") return "";
+  return id;
 }
 
 export async function startServer({ port = 19812, host = "127.0.0.1", openBrowser = false } = {}) {

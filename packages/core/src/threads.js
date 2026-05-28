@@ -4,6 +4,9 @@ import { randomUUID } from "node:crypto";
 import { dataPaths, ensureDataDirs } from "../../storage/src/paths.js";
 import { appendEvent, readJson, writeJson } from "../../storage/src/store.js";
 import { listThreadRecords, saveThreadRecords } from "../../storage/src/thread-registry.js";
+import { assertSanitizedAction } from "./llm-sanitizer.js";
+import { assertResourceAccess, assertThreadLimit, filterResourcesForPrincipal, isAdminPrincipal, resourceOwnerUserId } from "./policy.js";
+import { adminUserId, getUser, normalizeUserId } from "./users.js";
 
 const runningThreadIds = new Set();
 const activeInputStates = new Set(["queued", "pending_delivery", "awaiting_ack", "running"]);
@@ -65,10 +68,36 @@ export async function listThreads(env = process.env) {
   return listThreadRecords(env);
 }
 
+export async function listThreadsForPrincipal(principal, env = process.env) {
+  return filterResourcesForPrincipal(await listThreads(env), principal, env);
+}
+
 export async function getThread(threadId, env = process.env) {
   const id = normalizeThreadId(threadId);
   const threads = await listThreads(env);
-  return threads.find((thread) => thread.id === id || thread.name === id || thread.bindingName === id) || null;
+  return threads.find((thread) => thread.id === id) ||
+    threads.find((thread) => thread.name === id) ||
+    threads.find((thread) => thread.bindingName === id) ||
+    null;
+}
+
+export async function getThreadForPrincipal(threadId, principal, env = process.env) {
+  const id = normalizeThreadId(threadId);
+  const matches = (await listThreads(env))
+    .filter((thread) => thread.id === id || thread.name === id || thread.bindingName === id)
+    .sort((left, right) => Number(right.id === id) - Number(left.id === id));
+  if (!matches.length) return null;
+  const accessible = matches.find((thread) => {
+    try {
+      assertResourceAccess(principal, thread, "thread_access", env);
+      return true;
+    } catch {
+      return false;
+    }
+  });
+  if (accessible) return accessible;
+  assertResourceAccess(principal, matches[0], "thread_access", env);
+  return null;
 }
 
 async function saveThreads(threads, env) {
@@ -79,17 +108,22 @@ export async function createThread(input = {}, env = process.env) {
   const threads = await listThreads(env);
   const requestedId = normalizeThreadId(input.id || input.threadId);
   const name = String(input.name || input.displayName || requestedId || "New Thread").trim();
+  const ownerUserId = normalizeUserId(input.ownerUserId || input.userId || env.ORKESTR_ADMIN_USER_ID || adminUserId);
   const existingByRequestedId = requestedId
-    ? threads.find((thread) => thread.id === requestedId || thread.name === requestedId || thread.bindingName === requestedId)
+    ? threads.find((thread) =>
+        resourceOwnerUserId(thread, env) === ownerUserId &&
+        (thread.id === requestedId || thread.name === requestedId || thread.bindingName === requestedId)
+      )
     : null;
   const existingByName = name
-    ? threads.find((thread) => thread.name === name || thread.bindingName === name)
+    ? threads.find((thread) => resourceOwnerUserId(thread, env) === ownerUserId && (thread.name === name || thread.bindingName === name))
     : null;
   const existing = existingByRequestedId || existingByName;
   if (existing) return existing;
 
   const thread = {
     id: requestedId || randomUUID(),
+    ownerUserId,
     name,
     title: String(input.title || name).trim(),
     state: String(input.state || "sleeping").trim(),
@@ -152,8 +186,33 @@ export async function createThread(input = {}, env = process.env) {
   };
   threads.push(thread);
   await saveThreads(threads, env);
-  await appendEvent({ type: "thread_created", threadId: thread.id, name: thread.name }, env);
+  await appendEvent({ type: "thread_created", threadId: thread.id, name: thread.name, ownerUserId: thread.ownerUserId }, env);
   return thread;
+}
+
+export async function createThreadForPrincipal(input = {}, principal, env = process.env) {
+  const ownerUserId = isAdminPrincipal(principal)
+    ? normalizeUserId(input.ownerUserId || input.userId || env.ORKESTR_ADMIN_USER_ID || adminUserId)
+    : normalizeUserId(principal?.userId);
+  const requestedId = normalizeThreadId(input.id || input.threadId);
+  const name = String(input.name || input.displayName || requestedId || "New Thread").trim();
+  const threads = await listThreads(env);
+  const existing = threads.find((thread) =>
+    resourceOwnerUserId(thread, env) === ownerUserId &&
+    (
+      (requestedId && (thread.id === requestedId || thread.name === requestedId || thread.bindingName === requestedId)) ||
+      (name && (thread.name === name || thread.bindingName === name))
+    )
+  );
+  if (existing) return existing;
+  if (!isAdminPrincipal(principal)) {
+    const user = await getUser(principal?.userId, env);
+    assertThreadLimit(principal, threads, user);
+  }
+  return createThread({
+    ...input,
+    ownerUserId,
+  }, env);
 }
 
 export async function updateThread(threadId, patch = {}, env = process.env) {
@@ -230,10 +289,20 @@ export async function deleteThread(threadId, options = {}, env = process.env) {
   };
 }
 
+export async function deleteThreadForPrincipal(threadId, principal, options = {}, env = process.env) {
+  const target = await getThreadForPrincipal(threadId, principal, env);
+  return deleteThread(target.id, options, env);
+}
+
 export async function listThreadMessages(threadId, env = process.env) {
   const thread = await getThread(threadId, env);
   const id = thread?.id || normalizeThreadId(threadId);
   return readJson(await messagesPath(id, env), []);
+}
+
+export async function listThreadMessagesForPrincipal(threadId, principal, env = process.env) {
+  const thread = await getThreadForPrincipal(threadId, principal, env);
+  return listThreadMessages(thread.id, env);
 }
 
 export async function appendThreadMessage(threadId, input, env = process.env) {
@@ -249,6 +318,7 @@ export async function appendThreadMessage(threadId, input, env = process.env) {
     Math.max(0, ...messages.map((message) => Number(message.cursor || 0)).filter(Number.isFinite)) + 1;
   const message = {
     id: randomUUID(),
+    ownerUserId: normalizeUserId(input.ownerUserId || thread.ownerUserId || env.ORKESTR_ADMIN_USER_ID || adminUserId),
     role: String(input.role || "assistant"),
     source: String(input.source || "manual"),
     text: String(input.text || "").trim(),
@@ -275,7 +345,7 @@ export async function appendThreadMessage(threadId, input, env = process.env) {
   messages.push(message);
   await writeJson(await messagesPath(thread.id, env), messages);
   await updateThread(thread.id, { state: activeInputStates.has(message.state) ? message.state : thread.state }, env);
-  await appendEvent({ type: `thread_message_${message.state}`, threadId: thread.id, messageId: message.id, source: message.source, role: message.role }, env);
+  await appendEvent({ type: `thread_message_${message.state}`, threadId: thread.id, messageId: message.id, source: message.source, role: message.role, ownerUserId: message.ownerUserId }, env);
   return message;
 }
 
@@ -354,6 +424,28 @@ export async function enqueueThreadInput(threadId, input, env = process.env) {
     role: "user",
     state: "queued",
   }, env);
+}
+
+export async function enqueueThreadInputForPrincipal(threadId, input, principal, env = process.env) {
+  const thread = await getThreadForPrincipal(threadId, principal, env);
+  if (!isAdminPrincipal(principal)) {
+    await assertSanitizedAction({
+      action: "thread.input",
+      principal,
+      resource: { type: "thread", id: thread.id, ownerUserId: thread.ownerUserId },
+      input: {
+        text: String(input?.text || "").slice(0, 8000),
+        promptFile: String(input?.promptFile || ""),
+        attachments: Array.isArray(input?.attachments) ? input.attachments.map((attachment) => ({
+          name: attachment?.name || attachment?.filename || "",
+          mimetype: attachment?.mimetype || attachment?.type || "",
+          size: attachment?.size || null,
+        })) : [],
+        source: input?.source || "",
+      },
+    }, env);
+  }
+  return enqueueThreadInput(thread.id, { ...input, ownerUserId: thread.ownerUserId }, env);
 }
 
 export async function updateThreadMessage(threadId, messageId, patch, env = process.env) {

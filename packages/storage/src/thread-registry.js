@@ -50,10 +50,11 @@ export function dedupeThreadRecords(threads) {
 }
 
 function threadDedupeKey(thread) {
+  const owner = String(thread?.ownerUserId || thread?.userId || "admin").trim().toLowerCase() || "admin";
   const name = String(thread?.name || thread?.bindingName || thread?.title || "").trim().toLowerCase();
-  if (name) return `name:${name}`;
+  if (name) return `owner:${owner}:name:${name}`;
   const id = String(thread?.id || "").trim();
-  return id ? `id:${id}` : "";
+  return id ? `owner:${owner}:id:${id}` : "";
 }
 
 function compareThreadDedupeCandidate(left, leftIndex, right, rightIndex) {

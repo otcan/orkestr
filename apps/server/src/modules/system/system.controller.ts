@@ -9,6 +9,7 @@ import { getSetupStatus } from "../../../../../packages/core/src/setup.js";
 import { readRuntimeSettings } from "../../../../../packages/core/src/runtime-settings.js";
 import { systemDoctor } from "../../../../../packages/core/src/system-doctor.js";
 import { whereAmI } from "../../../../../packages/core/src/whereiam.js";
+import { requestPrincipal } from "../../../../../packages/core/src/principal.js";
 import {
   approvePairingChallenge,
   createPairingChallenge,
@@ -449,6 +450,7 @@ export class SystemController {
 
   @Get("whereiam")
   async whereiam(
+    @Req() request: any,
     @Query("cwd") cwd = "",
     @Query("threadId") threadId = "",
     @Query("sessionName") sessionName = "",
@@ -459,6 +461,7 @@ export class SystemController {
       threadId: String(threadId || ""),
       sessionName: String(sessionName || ""),
       paneId: String(paneId || ""),
+      principal: requestPrincipal(request),
     });
   }
 

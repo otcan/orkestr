@@ -1,11 +1,12 @@
-import { Body, Controller, Delete, Get, HttpCode, Param, Post } from "@nestjs/common";
-import { createTimer, deleteTimer, doctorTimers, listTimers, runTimerNow } from "../../../../../packages/core/src/timers.js";
+import { Body, Controller, Delete, Get, HttpCode, Param, Post, Req } from "@nestjs/common";
+import { createTimerForPrincipal, deleteTimerForPrincipal, doctorTimers, listTimersForPrincipal, runTimerNowForPrincipal } from "../../../../../packages/core/src/timers.js";
+import { requestPrincipal } from "../../../../../packages/core/src/principal.js";
 
 @Controller("api/timers")
 export class TimersController {
   @Get()
-  async list() {
-    return { timers: await listTimers() };
+  async list(@Req() request: any) {
+    return { timers: await listTimersForPrincipal(requestPrincipal(request)) };
   }
 
   @Get("doctor")
@@ -14,18 +15,18 @@ export class TimersController {
   }
 
   @Post()
-  async create(@Body() body: Record<string, unknown> = {}) {
-    return { timer: await createTimer(body) };
+  async create(@Req() request: any, @Body() body: Record<string, unknown> = {}) {
+    return { timer: await createTimerForPrincipal(body, requestPrincipal(request)) };
   }
 
   @Delete(":timerId")
-  async delete(@Param("timerId") timerId: string) {
-    return { ok: await deleteTimer(timerId) };
+  async delete(@Req() request: any, @Param("timerId") timerId: string) {
+    return { ok: await deleteTimerForPrincipal(timerId, requestPrincipal(request)) };
   }
 
   @Post(":timerId/run")
   @HttpCode(200)
-  async run(@Param("timerId") timerId: string) {
-    return { event: await runTimerNow(timerId) };
+  async run(@Req() request: any, @Param("timerId") timerId: string) {
+    return { event: await runTimerNowForPrincipal(timerId, requestPrincipal(request)) };
   }
 }

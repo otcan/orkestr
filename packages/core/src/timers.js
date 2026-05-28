@@ -2,8 +2,11 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import { dataPaths, ensureDataDirs } from "../../storage/src/paths.js";
 import { appendEvent, readJson, writeJson } from "../../storage/src/store.js";
+import { assertSanitizedAction } from "./llm-sanitizer.js";
 import { enqueueAgentMessage } from "./messages.js";
-import { enqueueThreadInput, listThreads } from "./threads.js";
+import { enqueueThreadInput, getThreadForPrincipal, listThreads } from "./threads.js";
+import { assertResourceAccess, filterResourcesForPrincipal, isAdminPrincipal } from "./policy.js";
+import { adminUserId, normalizeUserId } from "./users.js";
 
 const hourMs = 60 * 60 * 1000;
 const dayMs = 24 * hourMs;
@@ -59,7 +62,7 @@ export function nextRunAt(timer, from = new Date()) {
   return next.toISOString();
 }
 
-export function normalizeStoredTimer(timer, now = new Date()) {
+export function normalizeStoredTimer(timer, now = new Date(), env = process.env) {
   const status = String(timer.status || timer.legacy?.status || "").trim().toLowerCase();
   const repeat = timer.repeat && typeof timer.repeat === "object" ? timer.repeat : timer.legacy?.repeat || null;
   const repeatLabel = String(repeat?.label || repeat?.type || "").trim().toLowerCase();
@@ -80,6 +83,7 @@ export function normalizeStoredTimer(timer, now = new Date()) {
   const normalized = {
     ...timer,
     id: String(timer.id || randomUUID()).trim(),
+    ownerUserId: normalizeUserId(timer.ownerUserId || timer.userId || env.ORKESTR_ADMIN_USER_ID || adminUserId),
     label: String(timer.label || repeatLabel || "Recurring agent task").trim(),
     targetType: String(timer.targetType || (timer.threadId ? "thread" : "agent")).trim(),
     target: String(timer.target || timer.threadId || timer.agentId || "coding-agent").trim(),
@@ -101,7 +105,11 @@ export function normalizeStoredTimer(timer, now = new Date()) {
 export async function listTimers(env = process.env) {
   const paths = await ensureDataDirs(env);
   const timers = await readJson(paths.timers, []);
-  return timers.map((timer) => normalizeStoredTimer(timer));
+  return timers.map((timer) => normalizeStoredTimer(timer, new Date(), env));
+}
+
+export async function listTimersForPrincipal(principal, env = process.env) {
+  return filterResourcesForPrincipal(await listTimers(env), principal, env);
 }
 
 async function fileExists(filePath) {
@@ -252,6 +260,7 @@ export async function createTimer(input, env = process.env) {
   }
   const timer = {
     id: randomUUID(),
+    ownerUserId: normalizeUserId(input.ownerUserId || input.userId || env.ORKESTR_ADMIN_USER_ID || adminUserId),
     label: String(input.label || "Recurring agent task").trim(),
     targetType: String(input.targetType || (input.threadId ? "thread" : "agent")).trim(),
     target: String(input.target || input.threadId || input.agentId || "coding-agent").trim(),
@@ -266,8 +275,37 @@ export async function createTimer(input, env = process.env) {
   timer.nextRunAt = nextRunAt(timer);
   timers.push(timer);
   await writeJson(paths.timers, timers);
-  await appendEvent({ type: "timer_created", timerId: timer.id, label: timer.label, target: timer.target }, env);
+  await appendEvent({ type: "timer_created", timerId: timer.id, label: timer.label, target: timer.target, ownerUserId: timer.ownerUserId }, env);
   return timer;
+}
+
+export async function createTimerForPrincipal(input, principal, env = process.env) {
+  const targetType = String(input?.targetType || (input?.threadId ? "thread" : "agent")).trim().toLowerCase();
+  const target = String(input?.target || input?.threadId || input?.agentId || "").trim();
+  if (targetType === "thread" && target) {
+    await getThreadForPrincipal(target, principal, env);
+  }
+  if (!isAdminPrincipal(principal)) {
+    await assertSanitizedAction({
+      action: "timer.create",
+      principal,
+      resource: { type: "timer", ownerUserId: principal?.userId || "" },
+      input: {
+        label: input?.label || "",
+        targetType: input?.targetType || "",
+        target: input?.target || input?.threadId || input?.agentId || "",
+        cadence: input?.cadence || "",
+        prompt: String(input?.prompt || "").slice(0, 8000),
+        promptFile: input?.promptFile || "",
+      },
+    }, env);
+  }
+  return createTimer({
+    ...input,
+    ownerUserId: isAdminPrincipal(principal)
+      ? normalizeUserId(input.ownerUserId || input.userId || env.ORKESTR_ADMIN_USER_ID || adminUserId)
+      : normalizeUserId(principal?.userId),
+  }, env);
 }
 
 async function enqueueTimerMessage(timer, source, env) {
@@ -275,6 +313,7 @@ async function enqueueTimerMessage(timer, source, env) {
     source,
     text: timer.prompt,
     promptFile: timer.promptFile || "",
+    ownerUserId: timer.ownerUserId,
   };
   return timer.targetType === "thread"
     ? enqueueThreadInput(timer.target, input, env)
@@ -290,6 +329,13 @@ export async function deleteTimer(id, env = process.env) {
     await appendEvent({ type: "timer_deleted", timerId: id }, env);
   }
   return timers.length !== next.length;
+}
+
+export async function deleteTimerForPrincipal(id, principal, env = process.env) {
+  const timer = (await listTimers(env)).find((entry) => entry.id === id);
+  if (!timer) return false;
+  assertResourceAccess(principal, timer, "timer_delete", env);
+  return deleteTimer(id, env);
 }
 
 export async function runTimerNow(id, env = process.env, now = new Date()) {
@@ -312,6 +358,7 @@ export async function runTimerNow(id, env = process.env, now = new Date()) {
     {
       type: "timer_manual_run",
       timerId: timer.id,
+      ownerUserId: timer.ownerUserId,
       target: timer.target,
       messageId: message.id,
       label: timer.label,
@@ -320,6 +367,28 @@ export async function runTimerNow(id, env = process.env, now = new Date()) {
     },
     env,
   );
+}
+
+export async function runTimerNowForPrincipal(id, principal, env = process.env, now = new Date()) {
+  const timer = (await listTimers(env)).find((entry) => entry.id === id);
+  if (!timer) {
+    const error = new Error("timer_not_found");
+    error.statusCode = 404;
+    throw error;
+  }
+  assertResourceAccess(principal, timer, "timer_run", env);
+  if (!isAdminPrincipal(principal)) {
+    await assertSanitizedAction({
+      action: "timer.run",
+      principal,
+      resource: { type: "timer", id: timer.id, ownerUserId: timer.ownerUserId, target: timer.target, targetType: timer.targetType },
+      input: {
+        prompt: String(timer.prompt || "").slice(0, 8000),
+        promptFile: timer.promptFile || "",
+      },
+    }, env);
+  }
+  return runTimerNow(id, env, now);
 }
 
 export async function markDueTimers(env = process.env, now = new Date()) {
@@ -350,6 +419,7 @@ export async function markDueTimers(env = process.env, now = new Date()) {
           ts: now.toISOString(),
           type: "timer_due",
           timerId: timer.id,
+          ownerUserId: timer.ownerUserId,
           target: timer.target,
           targetType: timer.targetType || "agent",
           messageId: message.id,
@@ -370,6 +440,7 @@ export async function markDueTimers(env = process.env, now = new Date()) {
           ts: now.toISOString(),
           type: "timer_due_failed",
           timerId: timer.id,
+          ownerUserId: timer.ownerUserId,
           target: timer.target,
           targetType: timer.targetType || "agent",
           label: timer.label,

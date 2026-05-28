@@ -17,6 +17,8 @@ export function dataPaths(env = process.env) {
     config: path.join(home, "config.json"),
     runtimeSettings: env.ORKESTR_RUNTIME_SETTINGS_FILE || path.join(home, "runtime-settings.json"),
     agents: path.join(home, "agents.json"),
+    users: path.join(home, "users.json"),
+    userDataRoot: path.join(home, "users"),
     threads: path.join(home, "threads.json"),
     threadsDb: path.join(home, "threads.sqlite"),
     threadMessages: path.join(home, "thread-messages"),
@@ -29,9 +31,24 @@ export function dataPaths(env = process.env) {
   };
 }
 
+export function userDataPaths(userId, env = process.env) {
+  const home = appHome(env);
+  const safeUserId = String(userId || "admin").replace(/[^a-zA-Z0-9_.-]/g, "_") || "admin";
+  const root = path.join(home, "users", safeUserId);
+  return {
+    root,
+    files: path.join(root, "files"),
+    workspaces: path.join(root, "workspaces"),
+    browsers: path.join(root, "browsers"),
+    oauth: path.join(root, "oauth"),
+    timers: path.join(root, "timers.json"),
+  };
+}
+
 export async function ensureDataDirs(env = process.env) {
   const paths = dataPaths(env);
   await fs.mkdir(paths.home, { recursive: true });
+  await fs.mkdir(paths.userDataRoot, { recursive: true });
   await fs.mkdir(paths.browsers, { recursive: true });
   await fs.mkdir(paths.messages, { recursive: true });
   await fs.mkdir(paths.threadMessages, { recursive: true });

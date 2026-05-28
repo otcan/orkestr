@@ -1,12 +1,13 @@
 import { readFile, stat } from "node:fs/promises";
 import path from "node:path";
 import { resolveCodexThreadMetadata, runtimeStatus } from "../../../packages/core/src/runtime-leases.js";
-import { getThread, listThreadMessages, listThreads } from "../../../packages/core/src/threads.js";
+import { getThread, listThreadMessages, listThreads, listThreadsForPrincipal } from "../../../packages/core/src/threads.js";
 import { detectThreadGitState } from "../../../packages/core/src/thread-workers.js";
 
 type ThreadSummaryOptions = {
   cacheTtlMs?: number;
   payloadCacheTtlMs?: number;
+  principal?: Record<string, any> | null;
 };
 
 const threadMetadataCache = new Map<string, {
@@ -451,7 +452,8 @@ export async function threadRuntimeSummary(thread: any, messages: any[] = [], op
 export async function threadSummaryPayload(options: ThreadSummaryOptions = {}) {
   const cacheTtlMs = Number(options.cacheTtlMs ?? threadSummaryCacheTtlMs()) || 0;
   const payloadCacheTtlMs = Number(options.payloadCacheTtlMs ?? threadSummaryPayloadCacheTtlMs()) || 0;
-  const payloadCacheKey = JSON.stringify({ cacheTtlMs });
+  const principal = options.principal || null;
+  const payloadCacheKey = JSON.stringify({ cacheTtlMs, userId: principal?.userId || "admin", role: principal?.role || "admin" });
   const now = Date.now();
   if (
     payloadCacheTtlMs > 0 &&
@@ -469,7 +471,7 @@ export async function threadSummaryPayload(options: ThreadSummaryOptions = {}) {
     return threadSummaryPayloadCache.inFlight;
   }
   const computePayload = (async () => {
-    const threads = await listThreads();
+    const threads = principal ? await listThreadsForPrincipal(principal) : await listThreads();
     const activeThreadIds = new Set(threads.map((thread: any) => String(thread?.id || "")).filter(Boolean));
     for (const id of threadMetadataCache.keys()) {
       if (!activeThreadIds.has(id)) threadMetadataCache.delete(id);

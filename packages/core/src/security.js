@@ -3,6 +3,8 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { dataPaths, ensureDataDirs } from "../../storage/src/paths.js";
 import { appendEvent, readJson, writeSecretJson } from "../../storage/src/store.js";
+import { adminPrincipal, principalFromSecuritySession } from "./principal.js";
+import { defaultAdminUser, normalizeUserId } from "./users.js";
 
 const execFileAsync = promisify(execFile);
 const cookieName = "orkestr_session";
@@ -88,6 +90,8 @@ function publicSession(session = {}) {
   return {
     id: session.id || "",
     challengeId: session.challengeId || "",
+    userId: session.userId || "",
+    role: session.role || "",
     userAgent: session.userAgent || "",
     createdAt: session.createdAt || "",
     lastAccessedAt: session.lastAccessedAt || session.createdAt || "",
@@ -418,6 +422,8 @@ export async function pairBrowser({ challengeId, userAgent = "", ip = "", env = 
     id: randomToken(10),
     challengeId: challenge.id,
     tokenHash: sha256(token),
+    userId: normalizeUserId(challenge.userId || defaultAdminUser(env).id),
+    role: String(challenge.role || "admin").trim().toLowerCase() === "user" ? "user" : "admin",
     userAgent: String(userAgent || "").slice(0, 240),
     createdAt,
     lastAccessedAt: createdAt,
@@ -446,17 +452,25 @@ export async function pairBrowser({ challengeId, userAgent = "", ip = "", env = 
 }
 
 export async function verifySecurityToken(token, env = process.env, options = {}) {
+  return Boolean(await securitySessionForToken(token, env, options));
+}
+
+export async function securitySessionForToken(token, env = process.env, options = {}) {
   const value = String(token || "").trim();
-  if (!value) return false;
+  if (!value) return null;
   const config = await readSecurityConfig(env);
   const now = Date.now();
   const hash = sha256(value);
   const session = (config.sessions || []).find((item) =>
     Date.parse(item.expiresAt || "") > now && item.tokenHash === hash,
   );
-  if (!session) return false;
+  if (!session) return null;
   if (options?.touch !== false) await touchSecuritySession(config, session, { env, request: options?.request }).catch(() => {});
-  return true;
+  return {
+    ...session,
+    userId: normalizeUserId(session.userId || defaultAdminUser(env).id),
+    role: String(session.role || "admin").trim().toLowerCase() === "user" ? "user" : "admin",
+  };
 }
 
 function isAllowedBeforePairing(request) {
@@ -474,10 +488,11 @@ function isAllowedBeforePairing(request) {
 
 export async function authorizeHttpRequest(request, env = process.env) {
   const status = await securityStatus(env);
-  if (!status.authEnabled) return { ok: true, status };
-  if (isAllowedBeforePairing(request)) return { ok: true, status };
+  if (!status.authEnabled) return { ok: true, status, principal: adminPrincipal(defaultAdminUser(env)) };
+  if (isAllowedBeforePairing(request)) return { ok: true, status, principal: adminPrincipal(defaultAdminUser(env)) };
   const token = cookieValue(request?.headers?.cookie || "");
-  if (await verifySecurityToken(token, env, { request })) return { ok: true, status };
+  const session = await securitySessionForToken(token, env, { request });
+  if (session) return { ok: true, status, principal: principalFromSecuritySession(session, env), session };
   return {
     ok: false,
     status,

@@ -3,7 +3,7 @@ import path from "node:path";
 import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { promisify } from "node:util";
-import { Body, Controller, Delete, Get, HttpCode, Param, Post, Put, Query, UploadedFiles, UseInterceptors } from "@nestjs/common";
+import { Body, Controller, Delete, Get, HttpCode, Param, Post, Put, Query, Req, UploadedFiles, UseInterceptors } from "@nestjs/common";
 import { AnyFilesInterceptor } from "@nestjs/platform-express";
 import { deliverWhatsAppReplies } from "../../../../../packages/connectors/src/whatsapp.js";
 import { runNextThreadMessage } from "../../../../../packages/core/src/executors.js";
@@ -20,16 +20,17 @@ import {
   syncRuntimeWindowName,
   wakeThread,
 } from "../../../../../packages/core/src/runtime-leases.js";
-import { createTimer, deleteTimer, listTimers } from "../../../../../packages/core/src/timers.js";
+import { createTimerForPrincipal, deleteTimerForPrincipal, listTimersForPrincipal } from "../../../../../packages/core/src/timers.js";
 import {
   appendThreadMessage,
-  createThread,
-  deleteThread,
-  enqueueThreadInput,
+  createThreadForPrincipal,
+  deleteThreadForPrincipal,
+  enqueueThreadInputForPrincipal,
   getThread,
   listThreadMessages,
   updateThread,
 } from "../../../../../packages/core/src/threads.js";
+import { requestPrincipal } from "../../../../../packages/core/src/principal.js";
 import { createThreadWorker, detectThreadRepo, listThreadWorkers, refreshThreadGitState, syncThreadWorkerWithParent, updateThreadRepo } from "../../../../../packages/core/src/thread-workers.js";
 import { parseThreadInputCommand } from "../../../../../packages/core/src/thread-commands.js";
 import { codexResumeCommand } from "../../../../../packages/core/src/codex-attach-command.js";
@@ -455,22 +456,23 @@ export class ThreadsController {
   }
 
   @Get()
-  async list() {
-    return threadSummaryPayload();
+  async list(@Req() request: any) {
+    return threadSummaryPayload({ principal: requestPrincipal(request) });
   }
 
   @Get("summary")
-  async summary() {
-    return this.list();
+  async summary(@Req() request: any) {
+    return this.list(request);
   }
 
   @Post()
-  async create(@Body() body: Record<string, unknown> = {}) {
+  async create(@Req() request: any, @Body() body: Record<string, unknown> = {}) {
+    const principal = requestPrincipal(request);
     const prepared = await prepareThreadCreateBody(body);
     const preparedExecutor = typeof prepared.executor === "object" && prepared.executor ? prepared.executor as Record<string, unknown> : {};
     const requestedExecutorId = String(prepared.executorId || preparedExecutor.id || preparedExecutor.type || "codex").trim() || "codex";
     const usesCodexRuntime = requestedExecutorId === "codex" || String(preparedExecutor.type || "").trim() === "codex";
-    let thread = await createThread({
+    let thread = await createThreadForPrincipal({
       wakePolicy: "wake-on-message",
       ...(usesCodexRuntime ? {
         executorId: "codex",
@@ -478,7 +480,7 @@ export class ThreadsController {
         runtimeKind: "codex-app-server",
       } : {}),
       ...prepared,
-    });
+    }, principal);
     if (usesCodexRuntime && !threadUsesCodexAppServer(thread)) {
       const started = await startCodexAppServerThread(thread);
       if (started?.thread) thread = started.thread;
@@ -573,15 +575,16 @@ export class ThreadsController {
 
   @Post(":threadId/input")
   @HttpCode(202)
-  async input(@Param("threadId") threadId: string, @Body() body: Record<string, unknown> = {}) {
+  async input(@Req() request: any, @Param("threadId") threadId: string, @Body() body: Record<string, unknown> = {}) {
     ensureAttachmentsArray(body);
+    const principal = requestPrincipal(request);
     const thread = await getThread(threadId);
     if (!thread) throw httpError("thread_not_found", 404);
     const parsedCommand = body.parseCommands === true || body.controlAllowed === true || body.originOwner === true
       ? parseThreadInputCommand(body)
       : { command: null, text: String(body.text || "") };
     if (parsedCommand.command === "interrupt") {
-      return this.interrupt(thread.id, {
+      return this.interrupt(request, thread.id, {
         ...body,
         text: parsedCommand.text,
         source: body.source || "interrupt",
@@ -654,12 +657,12 @@ export class ThreadsController {
       const modeResult: any = await this.applyOrQueueCodexModeCommand(thread, mode as "code" | "plan", String(body.source || "codex_mode_command"));
       let payloadMessage: any = null;
       if (text && !modeResult.failed) {
-        payloadMessage = await enqueueThreadInput(thread.id, {
+        payloadMessage = await enqueueThreadInputForPrincipal(thread.id, {
           ...body,
           text,
           source: body.source || "mode_command_payload",
           parentMessageId: modeResult.message?.id || null,
-        });
+        }, principal);
         requestThreadInputDelivery(thread.id);
       }
       if (!text) {
@@ -727,7 +730,7 @@ export class ThreadsController {
       };
     }
     const before = await runtimeStatus(thread.id).catch(() => null);
-    const message = await enqueueThreadInput(thread.id, body);
+    const message = await enqueueThreadInputForPrincipal(thread.id, body, principal);
     if (body.autoRun === false) {
       return { ok: true, threadId: codexThreadId(thread) || thread.id, orkestrThreadId: thread.id, message, queued: true, reason: "auto_run_disabled", observed: true };
     }
@@ -1028,16 +1031,17 @@ export class ThreadsController {
 
   @Post(":threadId/interrupt")
   @HttpCode(200)
-  async interrupt(@Param("threadId") threadId: string, @Body() body: Record<string, unknown> = {}) {
+  async interrupt(@Req() request: any, @Param("threadId") threadId: string, @Body() body: Record<string, unknown> = {}) {
+    const principal = requestPrincipal(request);
     const result = await wakeThread(threadId, { reason: "interrupt" });
     if (threadUsesCodexAppServer(result.thread)) {
       const interrupted = await interruptCodexAppServerThread(result.thread).catch(() => ({ interrupted: false }));
       if (String(body.text || "").trim()) {
-        const message = await enqueueThreadInput(result.thread.id, {
+        const message = await enqueueThreadInputForPrincipal(result.thread.id, {
           ...body,
           source: body.source || "interrupt",
           forceDeliveryAfterInterrupt: true,
-        });
+        }, principal);
         const delivered = await deliverPendingThreadInputs(result.thread.id);
         const current = (await listThreadMessages(result.thread.id)).find((item: any) => item.id === message.id) || message;
         return {
@@ -1064,11 +1068,11 @@ export class ThreadsController {
       await new Promise((resolve) => execFile("tmux", ["send-keys", "-t", paneId, "C-c"], () => resolve(null)));
     }
     if (String(body.text || "").trim()) {
-      const message = await enqueueThreadInput(result.thread.id, {
+      const message = await enqueueThreadInputForPrincipal(result.thread.id, {
         ...body,
         source: body.source || "interrupt",
         forceDeliveryAfterInterrupt: true,
-      });
+      }, principal);
       const delivered = await deliverPendingThreadInputs(result.thread.id);
       const current = (await listThreadMessages(result.thread.id)).find((item: any) => item.id === message.id) || message;
       if (current.state === "queued" || current.state === "pending_delivery") requestThreadInputDelivery(result.thread.id);
@@ -1092,8 +1096,8 @@ export class ThreadsController {
 
   @Post(":threadId/approve")
   @HttpCode(202)
-  async approve(@Param("threadId") threadId: string, @Body() body: Record<string, unknown> = {}) {
-    return this.input(threadId, { ...body, text: String(body.text || "Approved. Proceed."), source: body.source || "approval" });
+  async approve(@Req() request: any, @Param("threadId") threadId: string, @Body() body: Record<string, unknown> = {}) {
+    return this.input(request, threadId, { ...body, text: String(body.text || "Approved. Proceed."), source: body.source || "approval" });
   }
 
   @Post(":threadId/codex-mode")
@@ -1168,26 +1172,26 @@ export class ThreadsController {
   }
 
   @Get(":threadId/timers")
-  async timers(@Param("threadId") threadId: string) {
+  async timers(@Req() request: any, @Param("threadId") threadId: string) {
     const thread = await getThread(threadId);
     if (!thread) throw httpError("thread_not_found", 404);
-    const timers = (await listTimers()).filter((timer) => timer.targetType === "thread" && timer.target === thread.id);
+    const timers = (await listTimersForPrincipal(requestPrincipal(request))).filter((timer) => timer.targetType === "thread" && timer.target === thread.id);
     return { thread, timers };
   }
 
   @Post(":threadId/timers")
-  async createTimer(@Param("threadId") threadId: string, @Body() body: Record<string, unknown> = {}) {
+  async createTimer(@Req() request: any, @Param("threadId") threadId: string, @Body() body: Record<string, unknown> = {}) {
     const thread = await getThread(threadId);
     if (!thread) throw httpError("thread_not_found", 404);
-    const timer = await createTimer({ ...body, targetType: "thread", target: thread.id });
+    const timer = await createTimerForPrincipal({ ...body, targetType: "thread", target: thread.id }, requestPrincipal(request));
     return { timer };
   }
 
   @Delete(":threadId/timers/:timerId")
-  async deleteTimer(@Param("threadId") threadId: string, @Param("timerId") timerId: string) {
+  async deleteTimer(@Req() request: any, @Param("threadId") threadId: string, @Param("timerId") timerId: string) {
     const thread = await getThread(threadId);
     if (!thread) throw httpError("thread_not_found", 404);
-    return { ok: await deleteTimer(timerId) };
+    return { ok: await deleteTimerForPrincipal(timerId, requestPrincipal(request)) };
   }
 
   @Get(":threadId")
@@ -1198,20 +1202,20 @@ export class ThreadsController {
   }
 
   @Delete(":threadId")
-  async delete(@Param("threadId") threadId: string, @Query() query: Record<string, unknown> = {}) {
+  async delete(@Req() request: any, @Param("threadId") threadId: string, @Query() query: Record<string, unknown> = {}) {
     const deleteWorkers = optionalBodyBoolean(query, "deleteWorkers", false);
     const target = await getThread(threadId);
     if (target && threadUsesCodexAppServer(target)) {
       await archiveCodexAppServerThread(target).catch(() => null);
     }
-    const result = await deleteThread(threadId, { deleteWorkers });
+    const result = await deleteThreadForPrincipal(threadId, requestPrincipal(request), { deleteWorkers });
     const deleted = new Set((result.deletedThreads || []).map((id: string) => String(id)));
-    const timers = await listTimers();
+    const timers = await listTimersForPrincipal(requestPrincipal(request));
     const deletedTimers: string[] = [];
     for (const timer of timers) {
       const target = String(timer.target || timer.threadId || "").trim();
       if (timer.targetType === "thread" && deleted.has(target)) {
-        if (await deleteTimer(timer.id)) deletedTimers.push(timer.id);
+        if (await deleteTimerForPrincipal(timer.id, requestPrincipal(request))) deletedTimers.push(timer.id);
       }
     }
     return { ...result, deletedTimers };

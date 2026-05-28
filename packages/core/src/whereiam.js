@@ -1,9 +1,11 @@
 import path from "node:path";
 import fs from "node:fs/promises";
 import { ensureDataDirs } from "../../storage/src/paths.js";
+import { publicPrincipal } from "./principal.js";
 import { listRuntimeLeases, runtimeStatus } from "./runtime-leases.js";
 import { readRuntimeSettings } from "./runtime-settings.js";
-import { listThreads, updateThread } from "./threads.js";
+import { listThreads, listThreadsForPrincipal, updateThread } from "./threads.js";
+import { adminUserId, normalizeUserId } from "./users.js";
 
 function nowIso() {
   return new Date().toISOString();
@@ -196,7 +198,8 @@ export async function whereAmI(input = {}, env = process.env) {
   const requestedThreadId = clean(input.threadId || input.orkestrThreadId);
   const requestedSessionName = clean(input.sessionName);
   const requestedPaneId = clean(input.paneId || input.tmuxPaneId);
-  const threads = await listThreads(env);
+  const principal = input.principal || null;
+  const threads = principal ? await listThreadsForPrincipal(principal, env) : await listThreads(env);
   const leases = await listRuntimeLeases(env);
   const activeLeases = leases.filter((lease) => !lease.endedAt);
   const leaseByThreadId = new Map(activeLeases.map((lease) => [lease.threadId, lease]));
@@ -253,6 +256,19 @@ export async function whereAmI(input = {}, env = process.env) {
     apiBase: apiBase(env),
     dataHome: paths.home,
     thread: publicThread(thread, status),
+    user: publicPrincipal(principal) || {
+      kind: "user",
+      userId: normalizeUserId(thread?.ownerUserId || env.ORKESTR_ADMIN_USER_ID || adminUserId),
+      role: "admin",
+      source: "thread-owner",
+      displayName: null,
+    },
+    tenancy: {
+      ownerUserId: normalizeUserId(thread?.ownerUserId || env.ORKESTR_ADMIN_USER_ID || adminUserId),
+      scoped: Boolean(principal && String(principal.role || "").toLowerCase() !== "admin"),
+      sanitizerRequired: true,
+      sanitizerFallback: false,
+    },
     workspace: publicWorkspace(thread, lease, cwd),
     runtime: publicRuntime(lease, status),
     settings,

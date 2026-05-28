@@ -746,6 +746,7 @@ export async function createThreadWorker(parentThreadId, input = {}, env = proce
     };
     const workerInput = {
       id: workerId,
+      ownerUserId: parent.ownerUserId || input.ownerUserId || null,
       name: nonEmptyString(input.displayName || input.threadName) || workerTitle(parent, workerLabel),
       title: nonEmptyString(input.title) || workerTitle(parent, workerLabel),
       bindingName: nonEmptyString(input.bindingName) || `${safeSegment(parent.bindingName || parent.name || parent.id, "thread")}-${safeSegment(workerLabel, "worker")}`,
