@@ -1,5 +1,6 @@
 import os from "node:os";
 import { codexCommand, defaultCodexHome } from "../../connectors/src/codex.js";
+import { codexAppServerSocket, codexAppServerTransport } from "../../connectors/src/codex-app-server-transport.js";
 import {
   appendThreadMessage,
   listThreadMessages,
@@ -28,6 +29,8 @@ export function clientKey(env = process.env, home = os.homedir()) {
     command: codexCommand(env),
     home: runtimeHome(env, home),
     codexHome: defaultCodexHome(env, home),
+    appServerTransport: codexAppServerTransport(env),
+    appServerSocket: codexAppServerSocket(env),
     path: env.PATH || process.env.PATH || "",
     orkestrHome: env.ORKESTR_HOME || process.env.ORKESTR_HOME || "",
   });

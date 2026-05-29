@@ -10,7 +10,7 @@ test("deploy active-work checker treats live and queued thread work as active", 
   const active = summarizeActiveThreads({
     threads: [
       { id: "idle", name: "Idle", state: "ready", pendingCount: 0 },
-      { id: "working", name: "Working", state: "working" },
+      { id: "working", name: "Working", state: "working", runtimeKind: "codex-app-server", codexAppServerTransport: "proxy" },
       { id: "queued", name: "Queued", state: "ready", pendingCount: 1 },
       { id: "typing", name: "Typing", typingActive: true },
       { id: "answered", name: "Answered", state: "answer", runningCount: 0 },
@@ -18,7 +18,11 @@ test("deploy active-work checker treats live and queued thread work as active", 
   });
 
   assert.deepEqual(active.map((thread) => thread.id), ["working", "queued", "typing"]);
+  assert.equal(active[0].runtimeKind, "codex-app-server");
+  assert.equal(active[0].codexAppServerTransport, "proxy");
   assert.match(formatActiveThreads({ active }), /Working state=working/);
+  assert.match(formatActiveThreads({ active }), /runtime=codex-app-server/);
+  assert.match(formatActiveThreads({ active }), /appServer=proxy/);
   assert.match(formatActiveThreads({ active }), /Queued state=ready pending=1/);
 });
 

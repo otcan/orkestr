@@ -3,6 +3,11 @@ import path from "node:path";
 import fs from "node:fs";
 import { spawn } from "node:child_process";
 import { ensureDataDirs } from "../../storage/src/paths.js";
+import {
+  codexAppServerClientArgs,
+  codexAppServerSocket,
+  codexAppServerTransport,
+} from "./codex-app-server-transport.js";
 
 const deviceAuthTtlMs = 15 * 60 * 1000;
 const authSessions = new Map();
@@ -61,6 +66,8 @@ export async function codexAppServerProbe({ env = process.env, home = os.homedir
         available: result.available !== false,
         command,
         codexHome,
+        transport: codexAppServerTransport(env),
+        socket: codexAppServerSocket(env) || null,
         stdout: stdout.trim(),
         stderr: stderr.trim(),
         ...result,
@@ -72,7 +79,7 @@ export async function codexAppServerProbe({ env = process.env, home = os.homedir
     timer.unref?.();
 
     try {
-      child = spawn(command, ["app-server", "--listen", "stdio://"], {
+      child = spawn(command, codexAppServerClientArgs(env), {
         env: commandEnv(env, home, codexHome),
         stdio: ["pipe", "pipe", "pipe"],
       });

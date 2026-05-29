@@ -80,9 +80,11 @@ release deployer, `--in-place` for the legacy checkout updater, `--ref
 <tag-or-branch>` to choose the git ref, and `--channel <name>` to label a
 release deployment. `--allow-untagged` allows branch/SHA deploys in versioned
 mode; production deploys otherwise require exact tags by default. Versioned
-deploys are no-interrupt by default: use `--wait-active` to wait for running or
-queued thread work before the service restart, and reserve `--allow-interrupt`
-for an intentional restart over active Codex work.
+deploys are no-interrupt by default. On host-native installs, active Codex
+app-server turns keep running in the separate Codex runtime service while the
+UI/API service restarts. Use `--wait-active` to wait for unsafe legacy runtime
+work, and reserve `--allow-interrupt` for an intentional restart over unsafe
+active work.
 `orkestr update status --json` and `orkestr update rollback --to <release-id>`
 forward to the versioned release deployer.
 

@@ -14,6 +14,22 @@ function threadState(thread = {}) {
   return String(thread.state || thread.publicStatusCode || thread.runtimeState || "").trim();
 }
 
+function threadRuntimeKind(thread = {}) {
+  return String(thread.runtimeKind || thread.executorTransport || thread.transport || thread.runtime?.runtimeKind || "").trim();
+}
+
+function threadCodexAppServerTransport(thread = {}) {
+  return String(
+    thread.codexAppServerTransport ||
+    thread.appServerTransport ||
+    thread.runtime?.codexAppServerTransport ||
+    thread.runtime?.appServerTransport ||
+    thread.runtime?.appServer?.transport ||
+    thread.executor?.metadata?.codexAppServerTransport ||
+    "",
+  ).trim();
+}
+
 function isActiveThread(thread = {}) {
   const state = threadState(thread).toLowerCase();
   return Boolean(
@@ -43,6 +59,8 @@ export function summarizeActiveThreads(payload) {
       id: String(thread.id || thread.threadId || "").trim(),
       name: threadName(thread),
       state: threadState(thread),
+      runtimeKind: threadRuntimeKind(thread),
+      codexAppServerTransport: threadCodexAppServerTransport(thread),
       pendingCount: number(thread.pendingCount),
       runningCount: number(thread.runningCount),
       awaitingAckCount: number(thread.awaitingAckCount),
@@ -58,6 +76,8 @@ export function formatActiveThreads(report = {}) {
       const parts = [
         thread.name || thread.id || "unknown",
         thread.state ? `state=${thread.state}` : "",
+        thread.runtimeKind ? `runtime=${thread.runtimeKind}` : "",
+        thread.codexAppServerTransport ? `appServer=${thread.codexAppServerTransport}` : "",
         thread.pendingCount ? `pending=${thread.pendingCount}` : "",
         thread.runningCount ? `running=${thread.runningCount}` : "",
         thread.awaitingAckCount ? `awaitingAck=${thread.awaitingAckCount}` : "",

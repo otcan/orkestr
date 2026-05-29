@@ -28,6 +28,7 @@ import {
   userInputText,
 } from "./codex-app-server-common.js";
 import { getCodexAppServerClient, stopCodexAppServerClients as stopCodexAppServerRuntimeClients } from "./codex-app-server-client.js";
+import { codexAppServerSocket, codexAppServerTransport } from "../../connectors/src/codex-app-server-transport.js";
 import { codexAppServerMessageFields } from "./codex-app-server-whatsapp.js";
 import { ensureRuntimeAgentsFile } from "./agent-context.js";
 import { parseThreadInputCommand } from "./thread-commands.js";
@@ -521,6 +522,8 @@ export async function codexAppServerThreadStatus(thread, env = process.env, coun
     status: runtimeState,
     runtimeState: "codex-app-server",
     runtimeKind: "codex-app-server",
+    codexAppServerTransport: client?.transport || codexAppServerTransport(env),
+    codexAppServerSocket: client?.socket || codexAppServerSocket(env) || null,
     codexThreadId: id || null,
     codexSessionId: codexSessionId(thread) || id || null,
     codexStatus,

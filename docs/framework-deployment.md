@@ -293,6 +293,8 @@ curl -fsSL https://raw.githubusercontent.com/otcan/orkestr/main/scripts/install.
 /usr/local/bin/orkestr-update
 /etc/systemd/system/orkestr-update.service
 /etc/systemd/system/orkestr-update.timer
+/usr/local/bin/orkestr-codex-app-server
+/etc/systemd/system/orkestr-codex.service
 ORKESTR_RELEASE_DEPLOY=1
 ORKESTR_UPDATE_REF=main
 ORKESTR_DEPLOY_CHANNEL=main
@@ -397,8 +399,12 @@ With `ORKESTR_RELEASE_DEPLOY=1`, `orkestr-update` delegates to
 - runs `npm ci`, `npm run build`, and `npm run smoke`
 - writes `release-manifest.json` into the release
 - backs up `ORKESTR_HOME` under `/opt/orkestr/backups`
-- checks `/api/threads?scope=all` and refuses to restart while thread work is
-  active unless `--wait-active` or `--allow-interrupt` is used
+- keeps Codex app-server in a separate systemd service and connects through a
+  local Unix-socket proxy, so active Codex turns survive UI/API restarts
+- checks `/api/threads?scope=all` and refuses to restart only when unsafe
+  in-process or legacy runtime work is active. First-time split migrations still
+  wait for active work to become idle before the external Codex service is
+  enabled.
 - switches `/opt/orkestr/current` atomically
 - stops and starts `orkestr.service` with a short delivery drain marker so new
   inputs queue instead of being delivered during the restart window

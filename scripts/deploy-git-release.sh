@@ -33,6 +33,9 @@ Environment:
   ORKESTR_DEPLOY_ACTIVE_TIMEOUT_SECONDS  Max wait with --wait-active. Defaults to 900.
   ORKESTR_DEPLOY_ACTIVE_CHECK_URL Thread summary URL. Defaults to http://$ORKESTR_HOST:$ORKESTR_PORT/api/threads?scope=all.
   ORKESTR_DEPLOY_DRAIN_FILE     Drain marker file. Defaults to $ORKESTR_HOME/deploy-drain.json.
+  ORKESTR_CODEX_APP_SERVER_MODE If external/proxy/daemon, active codex-app-server turns are restart-safe.
+  ORKESTR_CODEX_APP_SERVER_SOCKET  Unix socket for the external Codex app-server.
+  ORKESTR_CODEX_APP_SERVER_SERVICE_NAME  External Codex app-server systemd unit. Defaults to $ORKESTR_SERVICE_NAME-codex.
   ORKESTR_SERVICE_NAME          systemd service name. Defaults to orkestr.
   ORKESTR_BUILD_WEB_FROM_SOURCE Set to 1 to install dev dependencies and rebuild the Angular web app.
 
@@ -327,6 +330,10 @@ active_thread_hard_count() {
   node -e 'const report = JSON.parse(process.argv[1] || "{}"); const states = new Set(["working","processing","running","waking"]); const active = Array.isArray(report.active) ? report.active : []; const count = active.filter((thread) => Boolean(thread.activeTurnId) || Number(thread.runningCount || 0) > 0 || Number(thread.awaitingAckCount || 0) > 0 || states.has(String(thread.state || "").toLowerCase())).length; process.stdout.write(String(count));' "$1"
 }
 
+active_thread_unsafe_count() {
+  node -e 'const report = JSON.parse(process.argv[1] || "{}"); const active = Array.isArray(report.active) ? report.active : []; const restartSafe = (thread) => String(thread.runtimeKind || "").toLowerCase() === "codex-app-server" && String(thread.codexAppServerTransport || thread.appServerTransport || "").toLowerCase() === "proxy"; const unsafe = active.filter((thread) => !restartSafe(thread)); process.stdout.write(String(unsafe.length));' "$1"
+}
+
 active_report_unavailable() {
   node -e 'const report = JSON.parse(process.argv[1] || "{}"); process.stdout.write(report.unavailable ? "1" : "0");' "$1"
 }
@@ -339,6 +346,138 @@ service_is_active() {
   systemctl is-active --quiet "${service_name}.service" >/dev/null 2>&1
 }
 
+codex_app_server_socket_default() {
+  echo "${ORKESTR_CODEX_APP_SERVER_SOCKET:-${ORKESTR_HOME:-$deploy_root/data}/run/codex-app-server.sock}"
+}
+
+codex_command_supports_external_app_server() {
+  local command
+  command="${1:-codex}"
+  "$command" app-server --help >/dev/null 2>&1 || return 1
+  "$command" app-server proxy --help >/dev/null 2>&1 || return 1
+}
+
+codex_app_server_service_is_active() {
+  systemctl is-active --quiet "${codex_app_server_service_name}.service" >/dev/null 2>&1
+}
+
+codex_app_server_external_enabled() {
+  case "$codex_app_server_mode" in
+    external|proxy|daemon)
+      codex_app_server_service_is_active
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+target_release_supports_external_codex_app_server() {
+  local release_dir
+  release_dir="$1"
+  [ -f "$release_dir/packages/connectors/src/codex-app-server-transport.js" ] || return 1
+  grep -q "codexAppServerClientArgs" "$release_dir/packages/core/src/codex-app-server-client.js" 2>/dev/null || return 1
+}
+
+write_codex_app_server_wrapper() {
+  cat > /usr/local/bin/orkestr-codex-app-server <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+env_file="${ORKESTR_ENV_FILE:-/etc/orkestr/orkestr.env}"
+if [ -r "$env_file" ]; then
+  set -a
+  # shellcheck disable=SC1090
+  . "$env_file"
+  set +a
+fi
+socket="${ORKESTR_CODEX_APP_SERVER_SOCKET:-${ORKESTR_HOME:-/opt/orkestr/data}/run/codex-app-server.sock}"
+codex_bin="${ORKESTR_CODEX_BIN:-codex}"
+mkdir -p "$(dirname "$socket")"
+rm -f "$socket"
+umask 077
+exec "$codex_bin" app-server --listen "unix://$socket"
+EOF
+  chmod 0755 /usr/local/bin/orkestr-codex-app-server
+}
+
+write_codex_app_server_systemd_service() {
+  local run_user run_group workdir
+  run_user="$(runtime_run_user)"
+  if ! id "$run_user" >/dev/null 2>&1; then
+    echo "Cannot configure external Codex app-server: run user does not exist: $run_user" >&2
+    return 1
+  fi
+  run_group="$(id -gn "$run_user")"
+  workdir="$current_link"
+  [ -d "$workdir" ] || workdir="$deploy_root"
+  cat > "/etc/systemd/system/${codex_app_server_service_name}.service" <<EOF
+[Unit]
+Description=Orkestr Codex app-server runtime
+Documentation=https://github.com/otcan/orkestr
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=$run_user
+Group=$run_group
+WorkingDirectory=$workdir
+EnvironmentFile=-$env_file_path
+ExecStart=/usr/local/bin/orkestr-codex-app-server
+Restart=on-failure
+RestartSec=3
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
+EOF
+  systemctl daemon-reload
+  systemctl enable "${codex_app_server_service_name}.service"
+  systemctl restart "${codex_app_server_service_name}.service"
+}
+
+ensure_codex_app_server_split_for_target() {
+  local release_dir command socket mode_external_requested
+  release_dir="$1"
+  target_release_supports_external_codex_app_server "$release_dir" || return 0
+  mode_external_requested=0
+  case "$codex_app_server_mode" in
+    external|proxy|daemon) mode_external_requested=1 ;;
+  esac
+  if [ "$mode_external_requested" = "1" ] && codex_app_server_service_is_active; then
+    return 0
+  fi
+  if [ "$(id -u)" -ne 0 ]; then
+    if [ "$mode_external_requested" = "1" ]; then
+      echo "External Codex app-server is configured but ${codex_app_server_service_name}.service is not active." >&2
+      echo "Run deploy as root so it can repair the Codex runtime service, or start that service first." >&2
+      exit 75
+    fi
+    echo "Skipping external Codex app-server setup because deploy is not running as root." >&2
+    return 0
+  fi
+  command="${ORKESTR_CODEX_BIN:-codex}"
+  if ! codex_command_supports_external_app_server "$command"; then
+    if [ "$mode_external_requested" = "1" ]; then
+      echo "External Codex app-server is configured, but Codex does not support app-server proxy." >&2
+      echo "Update Codex or set ORKESTR_CODEX_BIN to a compatible Codex CLI before deploying." >&2
+      exit 75
+    fi
+    echo "Codex does not support app-server proxy; keeping conservative in-process deploy behavior." >&2
+    return 0
+  fi
+  [ -f "$env_file_path" ] || { mkdir -p "$(dirname "$env_file_path")"; touch "$env_file_path"; chmod 0640 "$env_file_path" || true; }
+  socket="$(codex_app_server_socket_default)"
+  set_env_assignment ORKESTR_CODEX_APP_SERVER_MODE external
+  set_env_assignment ORKESTR_CODEX_APP_SERVER_SOCKET "$socket"
+  set_env_assignment ORKESTR_CODEX_APP_SERVER_SERVICE_NAME "$codex_app_server_service_name"
+  mkdir -p "$(dirname "$socket")"
+  write_codex_app_server_wrapper
+  write_codex_app_server_systemd_service
+  codex_app_server_mode="external"
+  echo "External Codex app-server ready: ${codex_app_server_service_name}.service ($socket)."
+}
+
 print_active_thread_report() {
   node - "$1" "${2:-all}" <<'NODE'
 const report = JSON.parse(process.argv[2] || "{}");
@@ -348,7 +487,14 @@ const hardActive = (thread) => Boolean(thread.activeTurnId) ||
   Number(thread.runningCount || 0) > 0 ||
   Number(thread.awaitingAckCount || 0) > 0 ||
   hardStates.has(String(thread.state || "").toLowerCase());
-const active = (Array.isArray(report.active) ? report.active : []).filter((thread) => mode === "hard" ? hardActive(thread) : true);
+const restartSafe = (thread) => String(thread.runtimeKind || "").toLowerCase() === "codex-app-server" &&
+  String(thread.codexAppServerTransport || thread.appServerTransport || "").toLowerCase() === "proxy";
+const restartUnsafe = (thread) => !restartSafe(thread);
+const active = (Array.isArray(report.active) ? report.active : []).filter((thread) => {
+  if (mode === "hard") return hardActive(thread);
+  if (mode === "unsafe") return restartUnsafe(thread);
+  return true;
+});
 if (!active.length) {
   console.error("  - no active threads");
   process.exit(0);
@@ -357,6 +503,8 @@ for (const thread of active) {
   const parts = [
     thread.name || thread.id || "unknown",
     thread.state ? `state=${thread.state}` : "",
+    thread.runtimeKind ? `runtime=${thread.runtimeKind}` : "",
+    thread.codexAppServerTransport ? `appServer=${thread.codexAppServerTransport}` : "",
     Number(thread.pendingCount || 0) ? `pending=${thread.pendingCount}` : "",
     Number(thread.runningCount || 0) ? `running=${thread.runningCount}` : "",
     Number(thread.awaitingAckCount || 0) ? `awaitingAck=${thread.awaitingAckCount}` : "",
@@ -428,7 +576,9 @@ deploy_guard_active_work() {
       return 0
     fi
 
-    if [ "$mode" = "hard" ]; then
+    if [ "$mode" = "unsafe" ]; then
+      count="$(active_thread_unsafe_count "$report")"
+    elif [ "$mode" = "hard" ]; then
       count="$(active_thread_hard_count "$report")"
     else
       count="$(active_thread_count "$report")"
@@ -455,6 +605,20 @@ deploy_guard_active_work() {
     echo "Waiting for active Orkestr thread work before deploy restart ($count active)." >&2
     sleep 5
   done
+}
+
+deploy_guard_before_restart() {
+  local target_release_dir
+  target_release_dir="${1:-}"
+  if [ -n "$target_release_dir" ] && target_release_supports_external_codex_app_server "$target_release_dir" && codex_app_server_external_enabled; then
+    begin_deploy_drain
+    deploy_guard_active_work unsafe
+    echo "No-interrupt deploy guard: external Codex app-server is active; codex-app-server turns may continue during the UI restart."
+    return 0
+  fi
+  deploy_guard_active_work
+  begin_deploy_drain
+  deploy_guard_active_work hard
 }
 
 restart_and_verify() {
@@ -559,9 +723,8 @@ install_command() {
   fi
 
   repair_runtime_ownership
-  deploy_guard_active_work
-  begin_deploy_drain
-  deploy_guard_active_work hard
+  deploy_guard_before_restart "$release_dir"
+  ensure_codex_app_server_split_for_target "$release_dir"
   backup_path="$(backup_state)"
   activate_release "$release_dir"
   sync_versioned_env
@@ -601,9 +764,8 @@ NODE
   previous_release="$(current_release_id)"
   commit="$(git -C "$release_dir" rev-parse HEAD 2>/dev/null || true)"
   repair_runtime_ownership
-  deploy_guard_active_work
-  begin_deploy_drain
-  deploy_guard_active_work hard
+  deploy_guard_before_restart "$release_dir"
+  ensure_codex_app_server_split_for_target "$release_dir"
   backup_path="$(backup_state)"
   activate_release "$release_dir"
   sync_versioned_env
@@ -629,6 +791,9 @@ repo_url="${ORKESTR_REPO_URL:-https://github.com/otcan/orkestr.git}"
 deploy_ref="${ref_arg:-${ORKESTR_DEPLOY_REF:-${ORKESTR_UPDATE_REF:-main}}}"
 deploy_channel="${channel_arg:-${ORKESTR_DEPLOY_CHANNEL:-production}}"
 service_name="${ORKESTR_SERVICE_NAME:-orkestr}"
+codex_app_server_mode="$(printf '%s' "${ORKESTR_CODEX_APP_SERVER_MODE:-stdio}" | LC_ALL=C tr '[:upper:]' '[:lower:]')"
+codex_app_server_socket="${ORKESTR_CODEX_APP_SERVER_SOCKET:-}"
+codex_app_server_service_name="${ORKESTR_CODEX_APP_SERVER_SERVICE_NAME:-${service_name}-codex}"
 host="${ORKESTR_HOST:-127.0.0.1}"
 port="${ORKESTR_PORT:-19812}"
 health_url="${ORKESTR_DEPLOY_HEALTH_URL:-http://$host:$port/api/health}"

@@ -51,6 +51,18 @@ test("release deploy script exposes versioned install, status, and rollback", as
   assert.match(script, /begin_deploy_drain/);
   assert.match(script, /service_is_active/);
   assert.match(script, /active_thread_hard_count/);
+  assert.match(script, /active_thread_unsafe_count/);
+  assert.match(script, /codex_app_server_external_enabled/);
+  assert.match(script, /ORKESTR_CODEX_APP_SERVER_SOCKET/);
+  assert.match(script, /target_release_supports_external_codex_app_server/);
+  assert.match(script, /ensure_codex_app_server_split_for_target/);
+  assert.match(script, /\/usr\/local\/bin\/orkestr-codex-app-server/);
+  assert.match(script, /ExecStart=\/usr\/local\/bin\/orkestr-codex-app-server/);
+  assert.match(script, /codexAppServerTransport/);
+  assert.match(script, /appServerTransport/);
+  assert.match(script, /deploy_guard_before_restart/);
+  assert.match(script, /ORKESTR_CODEX_APP_SERVER_MODE/);
+  assert.match(script, /ORKESTR_CODEX_APP_SERVER_SERVICE_NAME/);
   assert.match(script, /tags_only_arg/);
   assert.match(script, /--allow-untagged\|--allow-untagged-releases/);
   assert.match(script, /--require-tagged\|--require-tagged-releases/);

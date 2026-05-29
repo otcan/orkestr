@@ -62,6 +62,9 @@ if (args[0] === "app-server" && args.includes("--help")) {
   process.exit(0);
 }
 if (args[0] !== "app-server") process.exit(0);
+const initialState = readState();
+initialState.argv = args;
+writeState(initialState);
 
 const rl = readline.createInterface({ input: process.stdin });
 function send(message) {
@@ -157,6 +160,35 @@ async function waitForAppServerReady(thread, env, attempts = 50) {
   }
   return status;
 }
+
+test("Codex app-server client can use an external proxy socket", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-codex-app-server-proxy-"));
+  const fake = await createFakeCodex(home);
+  const socket = path.join(home, "run", "codex.sock");
+  const env = {
+    ORKESTR_HOME: path.join(home, "orkestr"),
+    ORKESTR_CODEX_APP_SERVER_MODE: "external",
+    ORKESTR_CODEX_APP_SERVER_SOCKET: socket,
+    HOME: path.join(home, "runtime-home"),
+    PATH: `${fake.bin}${path.delimiter}${process.env.PATH || ""}`,
+    FAKE_CODEX_STATE: fake.stateFile,
+  };
+
+  try {
+    const client = await getCodexAppServerClient({ env, home: env.HOME });
+    assert.equal(client.transport, "proxy");
+    assert.equal(client.socket, socket);
+    const thread = await createThread({ id: "proxy-thread", name: "Proxy Thread", cwd: home, executorId: "codex", executor: { type: "codex" } }, env);
+    const started = await startCodexAppServerThread(thread, env);
+    const status = await codexAppServerThreadStatus(started.thread, env);
+    assert.equal(status.codexAppServerTransport, "proxy");
+    assert.equal(status.codexAppServerSocket, socket);
+    const state = JSON.parse(await fs.readFile(fake.stateFile, "utf8"));
+    assert.deepEqual(state.argv, ["app-server", "proxy", "--sock", socket]);
+  } finally {
+    stopCodexAppServerClients();
+  }
+});
 
 test("Codex app-server starts threads, delivers input, and imports existing threads", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-codex-app-server-"));

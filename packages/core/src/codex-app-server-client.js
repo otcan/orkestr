@@ -4,6 +4,11 @@ import { spawn, execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { appendEvent } from "../../storage/src/store.js";
 import { codexCommand, defaultCodexHome } from "../../connectors/src/codex.js";
+import {
+  codexAppServerClientArgs,
+  codexAppServerSocket,
+  codexAppServerTransport,
+} from "../../connectors/src/codex-app-server-transport.js";
 import { updateThread } from "./threads.js";
 import {
   appendOrUpdateEventMessage,
@@ -63,6 +68,8 @@ export class CodexAppServerClient {
     this.home = home;
     this.command = codexCommand(env);
     this.codexHome = defaultCodexHome(env, home);
+    this.transport = codexAppServerTransport(env);
+    this.socket = codexAppServerSocket(env);
     this.nextId = 1;
     this.pending = new Map();
     this.threadStates = new Map();
@@ -77,7 +84,7 @@ export class CodexAppServerClient {
   async start() {
     if (this.started) return this;
     if (!this.command) throw new Error("codex_app_server_unavailable");
-    this.proc = spawn(this.command, ["app-server", "--listen", "stdio://"], {
+    this.proc = spawn(this.command, codexAppServerClientArgs(this.env), {
       env: commandEnv(this.env, this.home),
       stdio: ["pipe", "pipe", "pipe"],
     });
@@ -538,7 +545,8 @@ export async function codexAppServerStatus({ env = process.env, home = os.homedi
       available: true,
       command,
       codexHome: defaultCodexHome(env, home),
-      transport: "stdio",
+      transport: codexAppServerTransport(env),
+      socket: codexAppServerSocket(env) || null,
       versionText: clean(result.stdout || result.stderr),
     };
   } catch (error) {

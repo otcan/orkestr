@@ -194,11 +194,17 @@ Use the versioned deployer:
 orkestr update --release --ref <tag-or-main-or-sha> --channel <channel>
 ```
 
-Versioned deploys are no-interrupt by default. The deployer checks
-`/api/threads?scope=all` before the service restart and refuses to continue when
-Codex work is active, queued, or awaiting delivery. Use `--wait-active` to wait
-for active work to finish, or `--allow-interrupt` only when the user explicitly
-accepts interrupting running threads.
+Versioned deploys are no-interrupt by default. On current host-native installs,
+Codex app-server runs as its own service and Orkestr talks to it through a short
+proxy connection, so UI/API restarts do not stop active Codex turns. The deployer
+still writes a drain marker before restart so new UI, WA, and timer inputs queue
+instead of starting new turns during the deploy window. A Codex turn is treated
+as restart-safe only when `/api/threads?scope=all` reports both
+`runtime=codex-app-server` and `appServer=proxy`. First-time migrations from the
+old in-process app-server remain conservative and wait until active work is idle
+before enabling the separate Codex service. Use `--wait-active` to wait, or
+`--allow-interrupt` only when the user explicitly accepts interrupting unsafe
+running threads.
 
 For public/stable production, prefer an exact tag. For dogfood/main tracking,
 `main` or a specific commit is acceptable and should produce a release id like

@@ -183,6 +183,7 @@ export async function getConnectorStatuses({ env = process.env, home = os.homedi
             codexHome,
             runtime: codexRuntime,
             appServer: "available",
+            appServerProbe: codexAppServerProbeResult || null,
             authMode: codexAuth.authMode || (codexAuthExists ? "device_auth" : "codex_auth"),
             statusText: codexAuth.statusText,
           })

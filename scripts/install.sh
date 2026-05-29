@@ -91,6 +91,9 @@ Environment:
   ORKESTR_ALLOW_MACOS_ADMIN Permit local macOS install paths that may request administrator access. Defaults to 0.
   ORKESTR_CODEX_VERSION     Codex CLI version. Defaults to 0.134.0.
   ORKESTR_LOCAL_CODEX_PREFIX Local Codex CLI install prefix. Defaults to $ORKESTR_HOME/codex-cli.
+  ORKESTR_CODEX_APP_SERVER_MODE  Codex app-server transport. Defaults to external in --systemd mode.
+  ORKESTR_CODEX_APP_SERVER_SOCKET Unix socket for external Codex app-server.
+  ORKESTR_CODEX_APP_SERVER_SERVICE_NAME  systemd unit name for the external Codex runtime.
   ORKESTR_LOCAL_ENV_FILE    Local env file written for non-systemd installs. Defaults to $ORKESTR_HOME/orkestr.env.
   ORKESTR_SKIP_SYSTEM_PACKAGES  Skip apt package installation when set to 1.
   ORKESTR_FRESH_INSTALL     Set to 1 to stop the local service and remove local Orkestr state before install.
@@ -595,6 +598,18 @@ local_codex_home_default() {
   echo "${ORKESTR_LOCAL_CODEX_HOME:-$HOME/.codex}"
 }
 
+codex_app_server_socket_default() {
+  echo "${ORKESTR_CODEX_APP_SERVER_SOCKET:-$data_dir/run/codex-app-server.sock}"
+}
+
+systemd_service_name() {
+  echo "${ORKESTR_SERVICE_NAME:-orkestr}"
+}
+
+codex_app_server_service_name() {
+  echo "${ORKESTR_CODEX_APP_SERVER_SERVICE_NAME:-$(systemd_service_name)-codex}"
+}
+
 codex_cli_version() {
   echo "${ORKESTR_CODEX_VERSION:-0.134.0}"
 }
@@ -606,6 +621,13 @@ codex_command_supports_app_server() {
   [ "$command" != "__orkestr_codex_disabled_on_macos__" ] || return 1
   "$command" --version >/dev/null 2>&1 || return 1
   "$command" app-server --help >/dev/null 2>&1 || return 1
+}
+
+codex_command_supports_external_app_server() {
+  local command
+  command="$1"
+  codex_command_supports_app_server "$command" || return 1
+  "$command" app-server proxy --help >/dev/null 2>&1 || return 1
 }
 
 codex_bypasses_approvals() {
@@ -1147,10 +1169,13 @@ checkout_git_ref() {
 write_env_file() {
   local chrome
   chrome="$(chrome_path)"
-  local codex_command codex_sandbox codex_approval runtime_settings_file desktop_mode browserctl_path
+  local codex_command codex_sandbox codex_approval codex_app_server_mode codex_app_server_socket codex_app_server_service runtime_settings_file desktop_mode browserctl_path
   codex_command="${ORKESTR_RUNTIME_CODEX_COMMAND:-$(codex_command_default)}"
   codex_sandbox="${ORKESTR_CODEX_SANDBOX:-$(codex_sandbox_default)}"
   codex_approval="${ORKESTR_CODEX_APPROVAL_POLICY:-$(codex_approval_default)}"
+  codex_app_server_mode="${ORKESTR_CODEX_APP_SERVER_MODE:-external}"
+  codex_app_server_socket="$(codex_app_server_socket_default)"
+  codex_app_server_service="$(codex_app_server_service_name)"
   runtime_settings_file="${ORKESTR_RUNTIME_SETTINGS_FILE:-$data_dir/runtime-settings.json}"
   desktop_mode="${ORKESTR_BROWSER_DESKTOP_MODE:-browserctl}"
   browserctl_path="${ORKESTR_BROWSERCTL_PATH:-/usr/local/bin/orkestr-browserctl}"
@@ -1189,6 +1214,9 @@ ORKESTR_CODEX_BIN=${ORKESTR_CODEX_BIN:-$(codex_bin_default)}
 ORKESTR_CODEX_SANDBOX=$codex_sandbox
 ORKESTR_CODEX_APPROVAL_POLICY=$codex_approval
 ORKESTR_RUNTIME_CODEX_COMMAND="$codex_command"
+ORKESTR_CODEX_APP_SERVER_MODE=$codex_app_server_mode
+ORKESTR_CODEX_APP_SERVER_SOCKET=$codex_app_server_socket
+ORKESTR_CODEX_APP_SERVER_SERVICE_NAME=$codex_app_server_service
 ORKESTR_RUNTIME_SUBMIT_KEYS=${ORKESTR_RUNTIME_SUBMIT_KEYS:-C-m}
 ORKESTR_RUNTIME_SUBMIT_DELAY_MS=${ORKESTR_RUNTIME_SUBMIT_DELAY_MS:-250}
 ORKESTR_WAKE_READY_TIMEOUT_MS=${ORKESTR_WAKE_READY_TIMEOUT_MS:-60000}
@@ -1265,6 +1293,9 @@ migrate_systemd_env_file() {
   ensure_env_assignment ORKESTR_DEFAULT_DESKTOP_SLUG "${ORKESTR_DEFAULT_DESKTOP_SLUG:-desktop}"
   ensure_env_assignment ORKESTR_GMAIL_AUTH_DESKTOP_SLUG "${ORKESTR_GMAIL_AUTH_DESKTOP_SLUG:-gmail}"
   ensure_env_assignment ORKESTR_MANUAL_INTERVENTION_DESKTOP_SLUG "${ORKESTR_MANUAL_INTERVENTION_DESKTOP_SLUG:-desktop}"
+  ensure_env_assignment ORKESTR_CODEX_APP_SERVER_MODE "${ORKESTR_CODEX_APP_SERVER_MODE:-external}"
+  ensure_env_assignment ORKESTR_CODEX_APP_SERVER_SOCKET "$(codex_app_server_socket_default)"
+  ensure_env_assignment ORKESTR_CODEX_APP_SERVER_SERVICE_NAME "$(codex_app_server_service_name)"
   chmod 0640 "$env_file" || true
 }
 
@@ -1678,11 +1709,14 @@ write_local_env_file() {
 }
 
 write_runtime_settings_file() {
-  local runtime_settings_file codex_command codex_sandbox codex_approval desktop_mode default_desktop gmail_desktop manual_desktop wa_sender wa_responder wa_mode gmail_enabled outlook_enabled
+  local runtime_settings_file codex_command codex_sandbox codex_approval codex_app_server_mode codex_app_server_socket codex_app_server_service desktop_mode default_desktop gmail_desktop manual_desktop wa_sender wa_responder wa_mode gmail_enabled outlook_enabled
   runtime_settings_file="${ORKESTR_RUNTIME_SETTINGS_FILE:-$data_dir/runtime-settings.json}"
   codex_command="${ORKESTR_RUNTIME_CODEX_COMMAND:-$(codex_command_default)}"
   codex_sandbox="${ORKESTR_CODEX_SANDBOX:-$(codex_sandbox_default)}"
   codex_approval="${ORKESTR_CODEX_APPROVAL_POLICY:-$(codex_approval_default)}"
+  codex_app_server_mode="${ORKESTR_CODEX_APP_SERVER_MODE:-$([ "$systemd" -eq 1 ] && echo external || echo stdio)}"
+  codex_app_server_socket="$(codex_app_server_socket_default)"
+  codex_app_server_service="$(codex_app_server_service_name)"
   if [ "$systemd" -eq 1 ]; then
     desktop_mode="${ORKESTR_BROWSER_DESKTOP_MODE:-browserctl}"
   else
@@ -1717,6 +1751,11 @@ EOF
     "command": $(json_string "$codex_command"),
     "sandbox": $(json_string "$codex_sandbox"),
     "approvalPolicy": $(json_string "$codex_approval"),
+    "appServer": {
+      "mode": $(json_string "$codex_app_server_mode"),
+      "socket": $(json_string "$codex_app_server_socket"),
+      "serviceName": $(json_string "$codex_app_server_service")
+    },
     "bypassApprovalsAndSandbox": $(codex_bypasses_approvals "$codex_command" "$codex_sandbox" "$codex_approval" && echo true || echo false),
     "permissionPrompts": {
       "mirrorToWhatsApp": $(codex_bypasses_approvals "$codex_command" "$codex_sandbox" "$codex_approval" && echo false || echo true),
@@ -1922,16 +1961,68 @@ EOF
   chmod 0755 /usr/local/bin/orkestr-browserctl
 }
 
-write_systemd_service() {
+write_codex_app_server_wrapper() {
+  cat > /usr/local/bin/orkestr-codex-app-server <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+env_file="${ORKESTR_ENV_FILE:-/etc/orkestr/orkestr.env}"
+if [ -r "$env_file" ]; then
+  set -a
+  # shellcheck disable=SC1090
+  . "$env_file"
+  set +a
+fi
+socket="${ORKESTR_CODEX_APP_SERVER_SOCKET:-${ORKESTR_HOME:-/opt/orkestr/data}/run/codex-app-server.sock}"
+codex_bin="${ORKESTR_CODEX_BIN:-codex}"
+mkdir -p "$(dirname "$socket")"
+rm -f "$socket"
+umask 077
+exec "$codex_bin" app-server --listen "unix://$socket"
+EOF
+  chmod 0755 /usr/local/bin/orkestr-codex-app-server
+}
+
+write_systemd_codex_app_server_service() {
   local service_name group_name
-  service_name="${ORKESTR_SERVICE_NAME:-orkestr}"
+  service_name="$(codex_app_server_service_name)"
+  group_name="$(id -gn "$run_user")"
+  cat > "/etc/systemd/system/${service_name}.service" <<EOF
+[Unit]
+Description=Orkestr Codex app-server runtime
+Documentation=https://github.com/otcan/orkestr
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=$run_user
+Group=$group_name
+WorkingDirectory=$repo_dir
+EnvironmentFile=-$env_file
+ExecStart=/usr/local/bin/orkestr-codex-app-server
+Restart=on-failure
+RestartSec=3
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
+EOF
+  systemctl daemon-reload
+  systemctl enable "${service_name}.service"
+  systemctl restart "${service_name}.service"
+}
+
+write_systemd_service() {
+  local service_name group_name codex_service_name
+  service_name="$(systemd_service_name)"
+  codex_service_name="$(codex_app_server_service_name)"
   group_name="$(id -gn "$run_user")"
   cat > "/etc/systemd/system/${service_name}.service" <<EOF
 [Unit]
 Description=Orkestr host-native service
 Documentation=https://github.com/otcan/orkestr
-After=network-online.target
-Wants=network-online.target
+After=network-online.target ${codex_service_name}.service
+Wants=network-online.target ${codex_service_name}.service
 
 [Service]
 Type=simple
@@ -2014,7 +2105,18 @@ install_systemd_runtime() {
   fi
   run_group="$(id -gn "$run_user")"
   codex_home="${CODEX_HOME:-$data_dir/codex}"
-  mkdir -p "$data_dir" "$workspace_dir" /opt/orkestr/overlay
+  if ! codex_command_supports_external_app_server "${ORKESTR_CODEX_BIN:-$(codex_bin_default)}"; then
+    cat >&2 <<EOF
+Codex CLI does not support the durable external app-server runtime.
+
+It must run:
+  codex app-server proxy --help
+
+Update Codex or set ORKESTR_CODEX_BIN to a newer Codex CLI before installing.
+EOF
+    exit 1
+  fi
+  mkdir -p "$data_dir" "$data_dir/run" "$workspace_dir" /opt/orkestr/overlay
   chown -R "$run_user:$run_group" "$data_dir" "$workspace_dir" /opt/orkestr/overlay
   mkdir -p "$codex_home"
   chown -R "$run_user:$run_group" "$codex_home"
@@ -2028,6 +2130,8 @@ install_systemd_runtime() {
   write_deploy_wrapper
   write_reset_wrapper
   write_browserctl_wrapper
+  write_codex_app_server_wrapper
+  write_systemd_codex_app_server_service
   write_systemd_service
   run_initial_release_deploy
   if [ "${ORKESTR_AUTO_UPDATE:-$auto_update}" = "1" ]; then

@@ -83,6 +83,39 @@ test("Codex reports connected when the CLI login status succeeds", async () => {
   assert.match(codex.summary, /signed in/);
 });
 
+test("Codex status can probe an external app-server proxy socket", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-codex-proxy-status-"));
+  const fakeCodex = await writeFakeCodex(home, [
+    "#!/bin/sh",
+    "if [ \"$1\" = \"--version\" ]; then echo 'codex-cli proxy-test'; exit 0; fi",
+    "if [ \"$1\" = \"login\" ] && [ \"$2\" = \"status\" ]; then echo 'Logged in using API key'; exit 0; fi",
+    "if [ \"$1\" = \"app-server\" ] && [ \"$2\" = \"--help\" ]; then echo 'app-server help'; exit 0; fi",
+    "if [ \"$1\" = \"app-server\" ] && [ \"$2\" = \"proxy\" ]; then",
+    "  read line",
+    "  echo '{\"id\":1,\"result\":{\"serverInfo\":{\"name\":\"fake-codex-proxy\"}}}'",
+    "  sleep 1",
+    "  exit 0",
+    "fi",
+    "echo unexpected \"$@\" >&2",
+    "exit 2",
+  ]);
+
+  const status = await getSetupStatus({
+    env: {
+      ORKESTR_HOME: home,
+      CODEX_HOME: path.join(home, "codex-home"),
+      ORKESTR_CODEX_BIN: fakeCodex,
+      ORKESTR_CODEX_APP_SERVER_MODE: "external",
+      ORKESTR_CODEX_APP_SERVER_SOCKET: path.join(home, "run", "codex.sock"),
+    },
+    home,
+  });
+  const codex = status.connectors.find((connector) => connector.id === "codex");
+  assert.equal(codex.state, "connected");
+  assert.equal(codex.details.appServerProbe.transport, "proxy");
+  assert.match(codex.summary, /signed in/);
+});
+
 test("Codex invalidates a stale auth file when CLI login status no longer works", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-codex-stale-auth-"));
   const codexHome = path.join(home, "codex-home");

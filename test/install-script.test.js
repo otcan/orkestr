@@ -26,6 +26,7 @@ test("install script exposes a host-native systemd VPS path", async () => {
   assert.match(script, /\/usr\/local\/bin\/orkestr-deploy/);
   assert.match(script, /\/usr\/local\/bin\/orkestr-reset-state/);
   assert.match(script, /\/usr\/local\/bin\/orkestr-browserctl/);
+  assert.match(script, /\/usr\/local\/bin\/orkestr-codex-app-server/);
   assert.match(script, /ORKESTR_RUN_USER=\$run_user/);
   assert.match(script, /scripts\/browserctl\.mjs/);
   assert.match(script, /Keeping existing environment file and applying safe defaults/);
@@ -60,6 +61,9 @@ test("install script exposes a host-native systemd VPS path", async () => {
   assert.match(script, /Private bind host/);
   assert.match(script, /ORKESTR_CODEX_SANDBOX/);
   assert.match(script, /ORKESTR_CODEX_APPROVAL_POLICY/);
+  assert.match(script, /ORKESTR_CODEX_APP_SERVER_MODE/);
+  assert.match(script, /ORKESTR_CODEX_APP_SERVER_SOCKET/);
+  assert.match(script, /ORKESTR_CODEX_APP_SERVER_SERVICE_NAME/);
   assert.match(script, /--profile\)/);
   assert.doesNotMatch(script, /ORKESTR_INSTALL_PROFILE=\$install_profile/);
   assert.match(script, /--profile local-safe\|local-trusted/);
@@ -105,6 +109,7 @@ test("install script exposes a host-native systemd VPS path", async () => {
   assert.match(script, /install_local_codex_cli/);
   assert.match(script, /Installing private Codex CLI for Orkestr/);
   assert.match(script, /codex app-server --help/);
+  assert.match(script, /codex app-server proxy --help/);
   assert.match(script, /ORKESTR_LOCAL_CODEX_PREFIX/);
   assert.match(script, /write_env_var CODEX_HOME "\$\{CODEX_HOME:-\$\(local_codex_home_default\)\}"/);
   assert.match(script, /write_local_env_file/);
@@ -191,6 +196,11 @@ test("install script exposes a host-native systemd VPS path", async () => {
   assert.match(script, /write_update_units/);
   assert.match(script, /write_deploy_wrapper/);
   assert.match(script, /write_reset_wrapper/);
+  assert.match(script, /write_codex_app_server_wrapper/);
+  assert.match(script, /write_systemd_codex_app_server_service/);
+  assert.match(script, /ExecStart=\/usr\/local\/bin\/orkestr-codex-app-server/);
+  assert.match(script, /Wants=network-online\.target \$\{codex_service_name\}\.service/);
+  assert.match(script, /After=network-online\.target \$\{codex_service_name\}\.service/);
   assert.match(script, /run_initial_release_deploy/);
   assert.match(script, /Activating initial versioned Orkestr release/);
   assert.match(script, /\/usr\/local\/bin\/orkestr-deploy "\$\{deploy_args\[@\]\}"/);

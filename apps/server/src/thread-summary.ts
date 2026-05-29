@@ -449,6 +449,8 @@ export async function threadRuntimeSummary(thread: any, messages: any[] = [], op
     wakePolicy: thread.wakePolicy || "wake-on-message",
     ...metadata,
     runtimeKind: metadata.runtimeKind || (resolvedCodexThreadId ? "migration_required" : null),
+    codexAppServerTransport: status?.codexAppServerTransport || null,
+    codexAppServerSocket: status?.codexAppServerSocket || null,
     codexSessionId: metadata.codexSessionId || null,
     codexStatus: status?.codexStatus || thread.runtime?.codexStatus || null,
     activeTurnId: status?.activeTurnId || thread.runtime?.activeTurnId || null,
