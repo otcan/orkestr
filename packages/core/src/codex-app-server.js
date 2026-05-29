@@ -80,24 +80,31 @@ function workspaceForThread(thread = {}) {
   return clean(thread.cwd || thread.workspace || thread.repoPath || thread.worktreePath);
 }
 
-function freshStartRuntime(thread = {}, { codexId = "", codexSessionId: sessionId = "", contained = false } = {}) {
-  const runtime = { ...(thread.runtime || {}) };
-  if (contained) {
-    for (const key of [
-      "operatorRolloutPath",
-      "operatorRolloutOffset",
-      "operatorRolloutSyncedAt",
-      "operatorRolloutSyncError",
-      "activeTurnId",
-      "pendingRequest",
-      "lastTurnId",
-      "lastTurnStatus",
-      "progress",
-      "recoveredAt",
-    ]) {
-      delete runtime[key];
-    }
+function containedRuntimeBase(runtime = {}) {
+  const next = { ...(runtime || {}) };
+  for (const key of [
+    "operatorRolloutPath",
+    "operatorRolloutOffset",
+    "operatorRolloutSyncedAt",
+    "operatorRolloutSyncError",
+    "activeTurnId",
+    "pendingRequest",
+    "lastTurnId",
+    "lastTurnStatus",
+    "progress",
+    "recoveredAt",
+  ]) {
+    delete next[key];
   }
+  return next;
+}
+
+function runtimeBase(thread = {}, contained = false) {
+  return contained ? containedRuntimeBase(thread.runtime) : { ...(thread.runtime || {}) };
+}
+
+function freshStartRuntime(thread = {}, { codexId = "", codexSessionId: sessionId = "", contained = false } = {}) {
+  const runtime = runtimeBase(thread, contained);
   return {
     ...runtime,
     runtimeKind: "codex-app-server",
@@ -105,6 +112,20 @@ function freshStartRuntime(thread = {}, { codexId = "", codexSessionId: sessionI
     codexThreadId: codexId,
     codexSessionId: sessionId,
     startedAt: nowIso(),
+  };
+}
+
+function resumeRuntime(thread = {}, { codexId = "", codexSessionId: sessionId = "", contained = false } = {}) {
+  const runtime = { ...(thread.runtime || {}) };
+  const base = contained ? containedRuntimeBase(runtime) : runtime;
+  return {
+    ...base,
+    runtimeKind: "codex-app-server",
+    state: "ready",
+    codexThreadId: codexId,
+    codexSessionId: sessionId,
+    activeTurnId: null,
+    resumedAt: nowIso(),
   };
 }
 
@@ -221,6 +242,7 @@ export async function resumeCodexAppServerThread(thread, env = process.env) {
   const runtimeEnv = codexRuntimeEnvForThread(thread, env);
   const client = await getCodexAppServerClient({ env: runtimeEnv, home: runtimeHome(runtimeEnv) });
   const developerInstructions = containedUserDeveloperInstructions(thread, runtimeEnv);
+  const containedMetadata = containedCodexRuntimeMetadata(thread, env) || {};
   const result = await client.request("thread/resume", {
     threadId: id,
     ...(developerInstructions ? { developerInstructions } : {}),
@@ -242,17 +264,14 @@ export async function resumeCodexAppServerThread(thread, env = process.env) {
         runtimeKind: "codex-app-server",
         codexThreadId: id,
         codexSessionId: clean(codexThread.sessionId || codexSessionId(thread) || id),
+        ...containedMetadata,
       },
     },
-    runtime: {
-      ...(thread.runtime || {}),
-      runtimeKind: "codex-app-server",
-      state: "ready",
-      codexThreadId: id,
+    runtime: resumeRuntime(thread, {
+      codexId: id,
       codexSessionId: clean(codexThread.sessionId || codexSessionId(thread) || id),
-      activeTurnId: null,
-      resumedAt: nowIso(),
-    },
+      contained: containedMetadata.containedCodexIsolated === true,
+    }),
   }, env);
   return { thread: updated, codexThread, client, status: await codexAppServerThreadStatus(updated, env) };
 }

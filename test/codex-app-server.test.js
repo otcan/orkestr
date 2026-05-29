@@ -442,6 +442,34 @@ test("Codex app-server rehomes existing contained threads away from shared runti
     assert.equal(resumed.thread.runtime.lastTurnStatus, undefined);
     assert.equal(resumed.thread.runtime.progress, undefined);
     assert.equal(resumed.thread.runtime.recoveredAt, undefined);
+
+    const contaminated = await updateThread(resumed.thread.id, {
+      runtime: {
+        ...(resumed.thread.runtime || {}),
+        operatorRolloutPath: "/root/.codex/sessions/stale-after-rehome.jsonl",
+        operatorRolloutOffset: 456,
+        operatorRolloutSyncedAt: "2026-05-29T12:02:00.000Z",
+        activeTurnId: "old-current-turn",
+        pendingRequest: { requestId: "old-current-request" },
+        lastTurnId: "old-current-turn",
+        lastTurnStatus: "completed",
+        progress: { summary: "stale contained progress" },
+        recoveredAt: "2026-05-29T12:03:00.000Z",
+      },
+    }, env);
+    const resumedAgain = await resumeCodexAppServerThread(contaminated, env);
+    const stateAfterCurrentResume = JSON.parse(await fs.readFile(fake.stateFile, "utf8"));
+
+    assert.equal(stateAfterCurrentResume.calls.some((call) => call.method === "thread/resume"), true);
+    assert.equal(resumedAgain.thread.runtime.operatorRolloutPath, undefined);
+    assert.equal(resumedAgain.thread.runtime.operatorRolloutOffset, undefined);
+    assert.equal(resumedAgain.thread.runtime.operatorRolloutSyncedAt, undefined);
+    assert.equal(resumedAgain.thread.runtime.activeTurnId, null);
+    assert.equal(resumedAgain.thread.runtime.pendingRequest, undefined);
+    assert.equal(resumedAgain.thread.runtime.lastTurnId, undefined);
+    assert.equal(resumedAgain.thread.runtime.lastTurnStatus, undefined);
+    assert.equal(resumedAgain.thread.runtime.progress, undefined);
+    assert.equal(resumedAgain.thread.runtime.recoveredAt, undefined);
   } finally {
     stopCodexAppServerClients();
   }
