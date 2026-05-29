@@ -294,9 +294,20 @@ async function updateCommand(argv, ctx) {
   if (subcommand === "status") return updateStatusCommand(rest, ctx);
   if (subcommand === "rollback") return updateRollbackCommand(rest, ctx);
   if (subcommand !== "install" && subcommand !== "run") {
-    throw new Error("Usage: orkestr update [--track-main|--ref ref] [--release|--in-place] [--channel name] [--allow-untagged|--require-tagged] [--no-smoke]\n       orkestr update status [--json]\n       orkestr update rollback [--to release-id]");
+    throw new Error("Usage: orkestr update [--track-main|--ref ref] [--release|--in-place] [--channel name] [--allow-untagged|--require-tagged] [--no-smoke] [--wait-active] [--active-timeout seconds|--allow-interrupt]\n       orkestr update status [--json]\n       orkestr update rollback [--to release-id]");
   }
   return updateInstallCommand(rest, ctx);
+}
+
+function deployGuardArgs(argv) {
+  const activeTimeout = flagValue(argv, "--active-timeout");
+  return [
+    ...(argv.includes("--no-interrupt") ? ["--no-interrupt"] : []),
+    ...(argv.includes("--allow-interrupt") ? ["--allow-interrupt"] : []),
+    ...(argv.includes("--wait-active") ? ["--wait-active"] : []),
+    ...(argv.includes("--no-wait-active") ? ["--no-wait-active"] : []),
+    ...(activeTimeout ? ["--active-timeout", activeTimeout] : []),
+  ];
 }
 
 async function updateInstallCommand(argv, ctx) {
@@ -328,6 +339,7 @@ async function updateInstallCommand(argv, ctx) {
         ...(allowUntagged ? ["--allow-untagged"] : []),
         ...(requireTagged ? ["--require-tagged"] : []),
         ...(argv.includes("--no-smoke") ? ["--no-smoke"] : []),
+        ...deployGuardArgs(argv),
         ...(checkOnly ? ["--check-only"] : []),
       ]
     : [...(checkOnly ? ["--check-only"] : [])];
@@ -344,7 +356,7 @@ async function updateStatusCommand(argv, ctx) {
 async function updateRollbackCommand(argv, ctx) {
   const script = updateScriptPath("deploy-git-release.sh");
   const target = flagValue(argv, "--to");
-  return spawnInherited(ctx.spawnImpl, "bash", [script, "rollback", ...(target ? ["--to", target] : [])], { env: ctx.env });
+  return spawnInherited(ctx.spawnImpl, "bash", [script, "rollback", ...(target ? ["--to", target] : []), ...deployGuardArgs(argv)], { env: ctx.env });
 }
 
 async function serviceCommand(argv, ctx) {
@@ -625,7 +637,7 @@ Common thread commands:
   orkestr hard-reset <thread-name-or-id> [--json]
 
 Advanced:
-  orkestr update [--track-main|--ref ref] [--release|--in-place] [--channel name] [--allow-untagged|--require-tagged] [--no-smoke]
+  orkestr update [--track-main|--ref ref] [--release|--in-place] [--channel name] [--allow-untagged|--require-tagged] [--no-smoke] [--wait-active] [--active-timeout seconds|--allow-interrupt]
   orkestr update status [--json]
   orkestr update rollback [--to release-id]
   orkestr settings [--json]
@@ -755,6 +767,7 @@ function positional(argv) {
     "--channel",
     "--lines",
     "--to",
+    "--active-timeout",
   ]);
   const flagsWithoutValues = new Set([
     "--blank",
@@ -771,6 +784,10 @@ function positional(argv) {
     "--require-tagged",
     "--require-tagged-releases",
     "--no-smoke",
+    "--no-interrupt",
+    "--allow-interrupt",
+    "--wait-active",
+    "--no-wait-active",
     "--check-only",
     "--no-follow",
   ]);

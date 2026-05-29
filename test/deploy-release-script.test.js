@@ -20,6 +20,9 @@ test("release deploy script exposes versioned install, status, and rollback", as
   assert.match(stdout, /install \[--ref REF\]/);
   assert.match(stdout, /--allow-untagged\|--require-tagged/);
   assert.match(stdout, /--no-backup/);
+  assert.match(stdout, /--no-interrupt\|--allow-interrupt/);
+  assert.match(stdout, /--wait-active/);
+  assert.match(stdout, /--active-timeout SECONDS/);
   assert.match(stdout, /rollback \[--to RELEASE_ID\]/);
   assert.match(script, /ORKESTR_RELEASES_DIR/);
   assert.match(script, /ORKESTR_CURRENT_LINK/);
@@ -40,6 +43,14 @@ test("release deploy script exposes versioned install, status, and rollback", as
   assert.match(script, /chown -R "\$run_user:\$run_group" "\$codex_home"/);
   assert.match(script, /chmod 0700 "\$codex_home"/);
   assert.match(script, /ORKESTR_DEPLOY_TAGS_ONLY/);
+  assert.match(script, /ORKESTR_DEPLOY_NO_INTERRUPT/);
+  assert.match(script, /ORKESTR_DEPLOY_WAIT_ACTIVE/);
+  assert.match(script, /ORKESTR_DEPLOY_ACTIVE_CHECK_URL/);
+  assert.match(script, /ORKESTR_DEPLOY_DRAIN_FILE/);
+  assert.match(script, /deploy_guard_active_work/);
+  assert.match(script, /begin_deploy_drain/);
+  assert.match(script, /service_is_active/);
+  assert.match(script, /active_thread_hard_count/);
   assert.match(script, /tags_only_arg/);
   assert.match(script, /--allow-untagged\|--allow-untagged-releases/);
   assert.match(script, /--require-tagged\|--require-tagged-releases/);

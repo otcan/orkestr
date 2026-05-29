@@ -1110,8 +1110,9 @@ export class ApiService {
     return this.http.get<Record<string, unknown>>(this.api("/models/status"));
   }
 
-  threads(): Observable<{ threads: ThreadSummary[] }> {
-    return this.http.get<{ threads: ThreadSummary[] }>(this.api("/threads"));
+  threads(options: { includeAllUsers?: boolean } = {}): Observable<{ threads: ThreadSummary[] }> {
+    const query = options.includeAllUsers ? "?includeAllUsers=true" : "";
+    return this.http.get<{ threads: ThreadSummary[] }>(this.api(`/threads${query}`));
   }
 
   createThread(body: Record<string, unknown>): Observable<{ thread: ThreadSummary }> {
