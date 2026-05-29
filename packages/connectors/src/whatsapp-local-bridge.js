@@ -13,6 +13,7 @@ const runtimes = new Map();
 const accountStates = new Map();
 const outboundMessageIds = new Set();
 const outboundMessageTextKeys = new Set();
+const inboundFailureNoticeKeys = new Set();
 const typingSessions = new Map();
 const typingClearRetryTimers = new Map();
 
@@ -296,6 +297,21 @@ function rememberOutboundText(accountId, chatId, text) {
     const [oldest] = outboundMessageTextKeys;
     outboundMessageTextKeys.delete(oldest);
   }
+}
+
+function rememberInboundFailureNotice(accountId, eventId) {
+  const key = `${String(accountId || "").trim()}:${String(eventId || "").trim()}`;
+  if (!key.endsWith(":")) inboundFailureNoticeKeys.add(key);
+  if (inboundFailureNoticeKeys.size > 500) {
+    const [oldest] = inboundFailureNoticeKeys;
+    inboundFailureNoticeKeys.delete(oldest);
+  }
+  return key;
+}
+
+function hasInboundFailureNotice(accountId, eventId) {
+  const key = `${String(accountId || "").trim()}:${String(eventId || "").trim()}`;
+  return Boolean(key.trim() && inboundFailureNoticeKeys.has(key));
 }
 
 function serializedId(value) {
@@ -646,6 +662,57 @@ function attachmentSummaryText(attachments = []) {
   ].join("\n\n");
 }
 
+function inboundRoutingFailureNoticeText(error) {
+  const reason = String(error?.message || error || "routing_failed").trim();
+  if (reason === "llm_sanitizer_unconfigured") {
+    return "Orkestr could not accept your message because the isolated-user LLM sanitizer is not configured. Ask the admin to connect the sanitizer, then resend.";
+  }
+  if (reason.startsWith("llm_sanitizer")) {
+    return `Orkestr could not accept your message because the isolated-user LLM sanitizer blocked or could not verify it: ${reason}.`;
+  }
+  if (reason === "whatsapp_target_required") {
+    return "Orkestr could not route your message because this WhatsApp chat is not connected to a thread.";
+  }
+  return `Orkestr could not route your message: ${reason}.`;
+}
+
+async function sendInboundRoutingFailureNotice({ accountId = "", chatId = "", eventId = "", error = null, client = null, env = process.env } = {}) {
+  const selectedAccountId = String(accountId || "").trim();
+  const id = String(chatId || "").trim();
+  const sourceEventId = String(eventId || "").trim();
+  if (!selectedAccountId || !id || !sourceEventId) return { sent: false, reason: "missing_target" };
+  if (hasInboundFailureNotice(selectedAccountId, sourceEventId)) return { sent: false, reason: "already_notified" };
+  const text = inboundRoutingFailureNoticeText(error);
+  rememberInboundFailureNotice(selectedAccountId, sourceEventId);
+  try {
+    if (client) {
+      rememberOutboundText(selectedAccountId, id, text);
+      const message = await sendWhatsAppTextWithConfirmation({ client, chatId: id, text });
+      rememberOutboundMessageId(serializedMessageId(message));
+    } else {
+      await sendLocalWhatsAppText({ accountId: selectedAccountId, chatId: id, text, env });
+    }
+    await appendEvent({
+      type: "whatsapp_local_inbound_failure_notice_delivered",
+      accountId: selectedAccountId,
+      eventId: sourceEventId,
+      chatId: id,
+      reason: String(error?.message || error || ""),
+    }, env).catch(() => {});
+    return { sent: true };
+  } catch (noticeError) {
+    await appendEvent({
+      type: "whatsapp_local_inbound_failure_notice_failed",
+      accountId: selectedAccountId,
+      eventId: sourceEventId,
+      chatId: id,
+      reason: String(error?.message || error || ""),
+      error: noticeError?.message || String(noticeError),
+    }, env).catch(() => {});
+    return { sent: false, reason: noticeError?.message || String(noticeError) };
+  }
+}
+
 async function clearQr(accountId, env = process.env) {
   await fs.unlink(qrPath(accountId, env)).catch(() => {});
 }
@@ -697,6 +764,14 @@ async function handleInboundMessage(accountId, message, env = process.env, optio
     }
     return { routed, eventId, chatId, from, fromMe: routeFromMe };
   } catch (error) {
+    const notice = await sendInboundRoutingFailureNotice({
+      accountId,
+      chatId,
+      eventId,
+      error,
+      client: options.client || null,
+      env,
+    }).catch((noticeError) => ({ sent: false, reason: noticeError?.message || String(noticeError) }));
     await appendEvent(
       {
         type: "whatsapp_local_inbound_failed",
@@ -706,10 +781,11 @@ async function handleInboundMessage(accountId, message, env = process.env, optio
         from,
         fromMe: routeFromMe,
         error: error.message || String(error),
+        noticeSent: notice?.sent === true,
       },
       env,
     );
-    return { error: error.message || String(error), eventId, chatId, from, fromMe: routeFromMe };
+    return { error: error.message || String(error), eventId, chatId, from, fromMe: routeFromMe, noticeSent: notice?.sent === true };
   }
 }
 
@@ -745,11 +821,12 @@ async function recoverLocalWhatsAppChatMessagesWithClient({ accountId = "", chat
       skipped.push({ eventId, reason: "from_me" });
       continue;
     }
-    const result = await handleInboundMessage(normalized, message, env);
+    const result = await handleInboundMessage(normalized, message, env, { client });
     if (result?.routed?.threadId && !result.routed.duplicate) routed.push({ eventId, threadId: result.routed.threadId, messageId: result.routed.messageId });
-    else skipped.push({ eventId, reason: result?.routed?.duplicate ? "duplicate" : result?.skipped || result?.error || "not_routed" });
+    else skipped.push({ eventId, reason: result?.routed?.duplicate ? "duplicate" : result?.skipped || result?.error || "not_routed", noticeSent: result?.noticeSent === true });
   }
-  if (markSeen && routed.length && typeof chat.sendSeen === "function") await chat.sendSeen().catch(() => {});
+  const notifiedFailures = skipped.filter((entry) => entry.noticeSent === true).length;
+  if (markSeen && (routed.length || notifiedFailures) && typeof chat.sendSeen === "function") await chat.sendSeen().catch(() => {});
   await appendEvent({
     type: "whatsapp_local_chat_recovered",
     accountId: normalized,
@@ -1264,11 +1341,11 @@ export async function startLocalWhatsAppAccount(accountId = "", env = process.en
   });
 
   client.on("message", (message) => {
-    void handleInboundMessage(normalized, message, env);
+    void handleInboundMessage(normalized, message, env, { client });
   });
 
   client.on("message_create", (message) => {
-    void handleInboundMessage(normalized, message, env, { ownOnly: true });
+    void handleInboundMessage(normalized, message, env, { ownOnly: true, client });
   });
 
   const initializePromise = client.initialize().catch(async (error) => {

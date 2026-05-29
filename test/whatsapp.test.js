@@ -129,6 +129,76 @@ test("local whatsapp bridge supports configured account ids", async () => {
   assert.deepEqual(status.accounts.map((account) => account.label), ["main", "openclaw"]);
 });
 
+test("local whatsapp recovery notifies chat when tenant sanitizer blocks inbound", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-sanitizer-notice-"));
+  const chatId = "120363423847331215@g.us";
+  const env = {
+    ORKESTR_HOME: home,
+    ORKESTR_WHATSAPP_ACCOUNT_IDS: "responder",
+  };
+  await createThread({
+    id: "otcantest",
+    name: "otcantest",
+    ownerUserId: "otcan",
+    binding: {
+      connector: "whatsapp",
+      chatId,
+      enabled: true,
+      responderAccountId: "responder",
+      outboundAccountId: "responder",
+      allowOtherPeople: true,
+    },
+  }, env);
+
+  const sent = [];
+  let seen = 0;
+  const inboundMessage = {
+    id: { _serialized: `false_${chatId}_MSG_4917632400662@c.us` },
+    from: chatId,
+    author: "4917632400662@c.us",
+    fromMe: false,
+    body: "hi",
+    timestamp: 1780070400,
+  };
+  const chat = {
+    id: { _serialized: chatId },
+    unreadCount: 1,
+    async fetchMessages() {
+      return [inboundMessage];
+    },
+    async sendSeen() {
+      seen += 1;
+    },
+  };
+  const client = {
+    async getChats() {
+      return [chat];
+    },
+    async sendMessage(to, text) {
+      sent.push({ to, text });
+      return { id: { _serialized: `true_${chatId}_NOTICE` }, body: text };
+    },
+  };
+
+  const result = await recoverUnreadLocalWhatsAppMessages(env, {
+    force: true,
+    accountIds: ["responder"],
+    accountStates: new Map([["responder", { ready: true, state: "ready" }]]),
+    clients: new Map([["responder", client]]),
+    chatsByAccount: new Map([["responder", [chat]]]),
+  });
+  const messages = await listThreadMessages("otcantest", env);
+
+  assert.equal(result.routed, 0);
+  assert.equal(result.recovered[0].skipped[0].reason, "llm_sanitizer_unconfigured");
+  assert.equal(result.recovered[0].skipped[0].noticeSent, true);
+  assert.equal(messages.length, 0);
+  assert.equal(seen, 1);
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0].to, chatId);
+  assert.match(sent[0].text, /LLM sanitizer is not configured/);
+});
+
 test("local whatsapp bridge maps public account ids to existing LocalAuth client ids", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-configured-client-ids-"));
   const env = {

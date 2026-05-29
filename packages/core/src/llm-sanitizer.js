@@ -29,6 +29,7 @@ function normalizeDecision(value = {}) {
     reason,
     model: String(value.model || value.provider || "").trim() || null,
     raw: value,
+    unavailable: value.unavailable === true,
   };
 }
 

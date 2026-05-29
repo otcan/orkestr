@@ -278,6 +278,33 @@ test("LLM sanitizer is fail-closed when no provider is configured", async () => 
   assert.equal(decision.reason, "llm_sanitizer_unconfigured");
 });
 
+test("LLM sanitizer command preserves unavailable decisions", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-sanitizer-unavailable-"));
+  const script = path.join(home, "unavailable-sanitizer.mjs");
+  await fs.writeFile(
+    script,
+    [
+      "console.log(JSON.stringify({ allow: false, reason: 'llm_sanitizer_model_down', unavailable: true, model: 'test-llm' }));",
+      "",
+    ].join("\n"),
+    "utf8",
+  );
+  const decision = await sanitizeAction({
+    action: "thread.input",
+    principal: { role: "user", userId: "alice" },
+    resource: { type: "thread", id: "thread-1", ownerUserId: "alice" },
+    input: { text: "hello" },
+  }, {
+    ORKESTR_HOME: home,
+    ORKESTR_LLM_SANITIZER_COMMAND_JSON: JSON.stringify([process.execPath, script]),
+  });
+
+  assert.equal(decision.allow, false);
+  assert.equal(decision.unavailable, true);
+  assert.equal(decision.reason, "llm_sanitizer_model_down");
+  assert.equal(decision.model, "test-llm");
+});
+
 test("non-admin thread input must pass the LLM sanitizer", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-use-control-input-"));
   const env = await allowSanitizerEnv(home);
