@@ -700,6 +700,7 @@ try {
 } catch (error) {
   console.error(`Post-deploy worker sync skipped: ${error?.stack || error?.message || String(error)}`);
 }
+process.exit(0);
 NODE
 }
 
