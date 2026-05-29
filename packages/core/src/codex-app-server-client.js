@@ -77,38 +77,48 @@ export class CodexAppServerClient {
     this.completedTurns = new Set();
     this.pendingRequests = new Map();
     this.started = false;
+    this.startPromise = null;
     this.closed = false;
     this.stderr = "";
   }
 
   async start() {
     if (this.started) return this;
-    if (!this.command) throw new Error("codex_app_server_unavailable");
-    this.proc = spawn(this.command, codexAppServerClientArgs(this.env), {
-      env: commandEnv(this.env, this.home),
-      stdio: ["pipe", "pipe", "pipe"],
-    });
-    this.proc.on("error", (error) => this.rejectAll(error));
-    this.proc.on("close", (code, signal) => {
-      this.closed = true;
-      this.rejectAll(new Error(`codex_app_server_closed:${code ?? ""}:${signal ?? ""}`));
-    });
-    this.proc.stderr.on("data", (chunk) => {
-      this.stderr = `${this.stderr}${String(chunk || "")}`.slice(-8192);
-    });
-    this.rl = readline.createInterface({ input: this.proc.stdout });
-    this.rl.on("line", (line) => this.handleLine(line));
-    await this.request("initialize", {
-      clientInfo: {
-        name: "orkestr_oss",
-        title: "Orkestr OSS",
-        version: "0.1.0",
-      },
-      capabilities: { experimentalApi: true },
-    });
-    this.notify("initialized", {});
-    this.started = true;
-    return this;
+    if (this.startPromise) return this.startPromise;
+    this.startPromise = (async () => {
+      if (!this.command) throw new Error("codex_app_server_unavailable");
+      this.proc = spawn(this.command, codexAppServerClientArgs(this.env), {
+        env: commandEnv(this.env, this.home),
+        stdio: ["pipe", "pipe", "pipe"],
+      });
+      this.proc.on("error", (error) => this.rejectAll(error));
+      this.proc.on("close", (code, signal) => {
+        this.closed = true;
+        this.rejectAll(new Error(`codex_app_server_closed:${code ?? ""}:${signal ?? ""}`));
+      });
+      this.proc.stderr.on("data", (chunk) => {
+        this.stderr = `${this.stderr}${String(chunk || "")}`.slice(-8192);
+      });
+      this.rl = readline.createInterface({ input: this.proc.stdout });
+      this.rl.on("line", (line) => this.handleLine(line));
+      await this.request("initialize", {
+        clientInfo: {
+          name: "orkestr_oss",
+          title: "Orkestr OSS",
+          version: "0.1.0",
+        },
+        capabilities: { experimentalApi: true },
+      });
+      this.notify("initialized", {});
+      this.started = true;
+      return this;
+    })();
+    try {
+      return await this.startPromise;
+    } catch (error) {
+      this.startPromise = null;
+      throw error;
+    }
   }
 
   request(method, params = {}, options = {}) {
@@ -494,6 +504,7 @@ export class CodexAppServerClient {
 
   close() {
     this.closed = true;
+    this.startPromise = null;
     this.rl?.close();
     this.proc?.kill("SIGTERM");
     this.rejectAll(new Error("codex_app_server_closed"));

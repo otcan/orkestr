@@ -64,6 +64,7 @@ if (args[0] === "app-server" && args.includes("--help")) {
 if (args[0] !== "app-server") process.exit(0);
 const initialState = readState();
 initialState.argv = args;
+initialState.spawnCount = (initialState.spawnCount || 0) + 1;
 writeState(initialState);
 
 const rl = readline.createInterface({ input: process.stdin });
@@ -185,6 +186,26 @@ test("Codex app-server client can use an external proxy socket", async () => {
     assert.equal(status.codexAppServerSocket, socket);
     const state = JSON.parse(await fs.readFile(fake.stateFile, "utf8"));
     assert.deepEqual(state.argv, ["app-server", "proxy", "--sock", socket]);
+  } finally {
+    stopCodexAppServerClients();
+  }
+});
+
+test("Codex app-server client starts once when shared concurrently", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-codex-app-server-concurrent-"));
+  const fake = await createFakeCodex(home);
+  const env = {
+    ORKESTR_HOME: path.join(home, "orkestr"),
+    HOME: path.join(home, "runtime-home"),
+    PATH: `${fake.bin}${path.delimiter}${process.env.PATH || ""}`,
+    FAKE_CODEX_STATE: fake.stateFile,
+  };
+
+  try {
+    const clients = await Promise.all(Array.from({ length: 20 }, () => getCodexAppServerClient({ env, home: env.HOME })));
+    assert.equal(new Set(clients).size, 1);
+    const state = JSON.parse(await fs.readFile(fake.stateFile, "utf8"));
+    assert.equal(state.spawnCount, 1);
   } finally {
     stopCodexAppServerClients();
   }
