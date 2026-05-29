@@ -7,7 +7,7 @@ import { startServer } from "../apps/server/src/server.js";
 import { runNextAgentMessage, runNextThreadMessage } from "../packages/core/src/executors.js";
 import { listAgentMessages } from "../packages/core/src/messages.js";
 import { getSetupStatus } from "../packages/core/src/setup.js";
-import { appendThreadMessage, createThread, enqueueThreadInput, listThreadMessages, updateThreadMessage } from "../packages/core/src/threads.js";
+import { appendThreadMessage, createThread, enqueueThreadInput, getThread, listThreadMessages, listThreads, updateThreadMessage } from "../packages/core/src/threads.js";
 import { deliverWhatsAppReplies, formatWhatsAppOutboundText, getWhatsAppChatParticipants, getWhatsAppStatus, initialQueueDeliveryState, mapLocalWhatsAppStatusFromHealth, routeWhatsAppInbound, syncWhatsAppTypingIndicators } from "../packages/connectors/src/whatsapp.js";
 import { listLocalWhatsAppChats, localWhatsAppAccountIdsForEnv, localWhatsAppMessageRouteFields, localWhatsAppTypingClearRetryDelaysMs, normalizeGroupParticipantIds, recoverableLocalWhatsAppAccountIds, reduceLocalWhatsAppBridgeState, sendWhatsAppTextWithConfirmation, startLocalWhatsAppAccount, webCacheRoot } from "../packages/connectors/src/whatsapp-local-bridge.js";
 import { prepareWhatsAppTableAttachments } from "../packages/connectors/src/whatsapp-table-attachments.js";
@@ -46,6 +46,28 @@ function externalBridgeEnv(home, extra = {}) {
     ORKESTR_WHATSAPP_DEBUG_FOOTER: "1",
     ...extra,
   };
+}
+
+async function externalBridgeEnvWithAllowingSanitizer(home, extra = {}) {
+  const script = path.join(home, "allow-sanitizer.mjs");
+  await fs.writeFile(
+    script,
+    [
+      "let input = '';",
+      "process.stdin.setEncoding('utf8');",
+      "process.stdin.on('data', (chunk) => { input += chunk; });",
+      "process.stdin.on('end', () => {",
+      "  JSON.parse(input);",
+      "  console.log(JSON.stringify({ allow: true, reason: 'test-allow', model: 'test-llm' }));",
+      "});",
+      "",
+    ].join("\n"),
+    "utf8",
+  );
+  return externalBridgeEnv(home, {
+    ORKESTR_LLM_SANITIZER_COMMAND_JSON: JSON.stringify([process.execPath, script]),
+    ...extra,
+  });
 }
 
 test("whatsapp status defaults to the built-in local bridge", async () => {
@@ -555,6 +577,57 @@ test("whatsapp inbound can route directly to a thread and mirror its reply once"
   assert.equal(duplicate.delivered.length, 0);
   assert.equal(calls[0].url.pathname, "/send-text");
   assert.equal(calls[0].body.to, "chat-thread");
+});
+
+test("whatsapp inbound can auto-provision a scoped user thread", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-auto-user-thread-"));
+  const env = await externalBridgeEnvWithAllowingSanitizer(home, {
+    ORKESTR_WHATSAPP_AUTO_PROVISION_USERS: "1",
+  });
+  await writeConnectorConfig("whatsapp", {
+    bridgeMode: "external",
+    bridgeUrl: "http://wa.local",
+    autoProvisionUsers: true,
+  }, env);
+
+  const routed = await routeWhatsAppInbound({
+    eventId: "wa-auto-user-1",
+    chatId: "chat-auto-user",
+    accountId: "main",
+    from: "491234567890@c.us",
+    chatName: "otcantest",
+    senderName: "Otcan Test",
+    text: "hello from the user",
+  }, env);
+  const thread = await getThread(routed.threadId, env);
+  const messages = await listThreadMessages(routed.threadId, env);
+
+  assert.equal(routed.autoProvisioned, true);
+  assert.equal(routed.createdThread, true);
+  assert.equal(thread.ownerUserId, routed.userId);
+  assert.equal(thread.binding.chatId, "chat-auto-user");
+  assert.equal(thread.binding.displayName, "otcantest");
+  assert.equal(thread.binding.generated, true);
+  assert.equal(thread.binding.senderContactId, "491234567890@c.us");
+  assert.equal(thread.binding.outboundAccountId, "main");
+  assert.equal(messages.length, 1);
+  assert.equal(messages[0].ownerUserId, thread.ownerUserId);
+  assert.equal(messages[0].state, "queued");
+
+  const routedAgain = await routeWhatsAppInbound({
+    eventId: "wa-auto-user-2",
+    chatId: "chat-auto-user",
+    accountId: "main",
+    from: "491234567890@c.us",
+    text: "second message",
+  }, env);
+  const messagesAfter = await listThreadMessages(routed.threadId, env);
+  const threads = await listThreads(env);
+
+  assert.equal(routedAgain.threadId, routed.threadId);
+  assert.equal(routedAgain.autoProvisioned, false);
+  assert.equal(messagesAfter.length, 2);
+  assert.deepEqual(threads.map((entry) => entry.id), [routed.threadId]);
 });
 
 test("whatsapp delivery mirrors bound thread replies that only carry the binding chat id", async () => {
@@ -2319,6 +2392,42 @@ test("generated whatsapp bindings listen to the selected sender and answer as th
   assert.equal(calls.every((call) => call.body.to === "chat-generated"), true);
   assert.equal(calls.every((call) => call.body.accountId === "account-2"), true);
   assert.equal(calls.some((call) => stripDebugFooter(call.body.text) === "generated reply"), true);
+});
+
+test("whatsapp auto-provision does not bypass existing binding participant restrictions", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-auto-binding-boundary-"));
+  const env = await externalBridgeEnvWithAllowingSanitizer(home, {
+    ORKESTR_WHATSAPP_AUTO_PROVISION_USERS: "1",
+  });
+  await createThread({
+    id: "restricted-generated-thread",
+    name: "Restricted Generated Thread",
+    binding: {
+      connector: "whatsapp",
+      chatId: "chat-auto-restricted",
+      displayName: "Restricted Chat",
+      enabled: true,
+      generated: true,
+      allowOtherPeople: false,
+      senderAccountId: "account-1",
+      responderAccountId: "account-1",
+      outboundAccountId: "account-1",
+      senderContactId: "491111111111@c.us",
+    },
+  }, env);
+
+  await assert.rejects(
+    () => routeWhatsAppInbound({
+      eventId: "wa-auto-restricted-rejected",
+      chatId: "chat-auto-restricted",
+      accountId: "account-1",
+      from: "493333333333@c.us",
+      text: "should not create a separate user thread",
+    }, env),
+    /whatsapp_target_required/,
+  );
+
+  assert.deepEqual((await listThreads(env)).map((thread) => thread.id), ["restricted-generated-thread"]);
 });
 
 test("generated single-account whatsapp groups route lid senders through the group boundary", async () => {

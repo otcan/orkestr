@@ -9,7 +9,7 @@ import { promisify } from "node:util";
 import { startServer } from "../apps/server/src/server.js";
 import { threadRuntimeSummary } from "../apps/server/src/thread-summary.ts";
 import { runNextThreadMessage } from "../packages/core/src/executors.js";
-import { applyRuntimeCodexMode, consumeThreadConnectorDeliverySignalCount, deliverPendingThreadInputs, doctorRuntimeResources, drainAllPendingThreadInputs, hardResetThreadRuntime, listRuntimeLeases, resetThreadRuntime, runtimeStatus, setThreadConnectorDeliverySignalHandler, sleepThread, syncRuntimeLeases, syncRuntimeWindowName, wakeThread } from "../packages/core/src/runtime-leases.js";
+import { applyRuntimeCodexMode, consumeThreadConnectorDeliverySignalCount, deliverPendingThreadInputs, doctorRuntimeResources, drainAllPendingThreadInputs, hardResetThreadRuntime, listRuntimeLeases, resetThreadRuntime, resolveCodexThreadMetadata, runtimeStatus, setThreadConnectorDeliverySignalHandler, sleepThread, syncRuntimeLeases, syncRuntimeWindowName, wakeThread } from "../packages/core/src/runtime-leases.js";
 import { ensureDataDirs } from "../packages/storage/src/paths.js";
 import { parseThreadInputCommand } from "../packages/core/src/thread-commands.js";
 import { createPairingChallenge, getPairingChallenge } from "../packages/core/src/security.js";
@@ -3772,6 +3772,86 @@ test("thread summary exposes visible Codex plan implementation prompt as a pendi
   }
 });
 
+test("thread summary ignores stale need_input questions when messages are out of storage order", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-stale-need-input-summary-"));
+  const priorHome = process.env.ORKESTR_HOME;
+  process.env.ORKESTR_HOME = path.join(home, "orkestr-home");
+
+  try {
+    await createThread({ id: "stale-need-input-summary-thread", name: "Stale Need Input Summary Thread" });
+    const thread = await getThread("stale-need-input-summary-thread");
+    const messages = [
+      {
+        id: "answered-user-message",
+        role: "user",
+        text: "A",
+        cursor: 2,
+        createdAt: "2026-05-20T10:01:00.000Z",
+      },
+      {
+        id: "old-need-input-question",
+        role: "assistant",
+        source: "codex-rollout",
+        phase: "need_input",
+        eventId: "old-need-input-question",
+        text: [
+          "Codex needs input to continue:",
+          "",
+          "1. Priority: Which option should we use?",
+          "   A. First (Recommended): Use the first option.",
+          "   B. Second: Use the second option.",
+          "",
+          "Reply with your choices or a short free-form answer.",
+        ].join("\n"),
+        cursor: 1,
+        createdAt: "2026-05-20T10:00:00.000Z",
+      },
+    ];
+
+    const summary = await threadRuntimeSummary(thread, messages, { cacheTtlMs: 0 });
+
+    assert.equal(summary.awaitingInput, false);
+    assert.equal(summary.pendingQuestion, null);
+  } finally {
+    restoreEnvValue("ORKESTR_HOME", priorHome);
+  }
+});
+
+test("thread summary ignores corrupt Codex model and reasoning metadata", async () => {
+  const priorDefaultModel = process.env.ORKESTR_DEFAULT_CODEX_MODEL;
+  const priorOpenAiModel = process.env.OPENAI_MODEL;
+  const priorReasoning = process.env.ORKESTR_DEFAULT_CODEX_REASONING;
+  delete process.env.ORKESTR_DEFAULT_CODEX_MODEL;
+  delete process.env.OPENAI_MODEL;
+  delete process.env.ORKESTR_DEFAULT_CODEX_REASONING;
+
+  try {
+    const summary = await threadRuntimeSummary({
+      id: "corrupt-codex-metadata-summary-thread",
+      name: "Corrupt Codex Metadata Summary Thread",
+      codexModel: "openai",
+      codexModelProvider: "/root/.codex/sessions/2026/05/29/rollout.jsonl",
+      codexReasoningEffort: "0",
+      executor: {
+        type: "codex",
+        metadata: {
+          codexModel: "/root/.codex/sessions/2026/05/29/rollout.jsonl",
+          codexModelProvider: "/root/.codex/sessions/2026/05/29/rollout.jsonl",
+          codexReasoningEffort: "0",
+        },
+      },
+    }, [], { cacheTtlMs: 0 });
+
+    assert.equal(summary.codexModel, null);
+    assert.equal(summary.codexReasoningEffort, null);
+    assert.equal(summary.codexModelProvider, "codex");
+  } finally {
+    restoreEnvValue("ORKESTR_DEFAULT_CODEX_MODEL", priorDefaultModel);
+    restoreEnvValue("OPENAI_MODEL", priorOpenAiModel);
+    restoreEnvValue("ORKESTR_DEFAULT_CODEX_REASONING", priorReasoning);
+  }
+});
+
 test("thread summary ignores stale Plan mode text without a live Codex status line", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-codex-mode-stale-plan-"));
   const fakeTmux = await createFakeTmux(home);
@@ -4736,6 +4816,41 @@ test("thread runtime summary reads Codex model and limits from live metadata", a
     if (priorCodexHome === undefined) delete process.env.CODEX_HOME;
     else process.env.CODEX_HOME = priorCodexHome;
   }
+});
+
+test("Codex thread metadata keeps empty SQLite fields aligned", async (t) => {
+  try {
+    await execFileAsync("sqlite3", ["--version"]);
+  } catch {
+    t.skip("sqlite3 unavailable");
+    return;
+  }
+
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-empty-metadata-"));
+  const codexHome = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-codex-empty-metadata-"));
+  const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-codex-empty-workspace-"));
+  const codexThreadId = "33333333-3333-4333-8333-333333333333";
+  const rolloutPath = path.join(codexHome, "sessions", "rollout-empty-metadata.jsonl");
+  await fs.mkdir(path.dirname(rolloutPath), { recursive: true });
+  await fs.writeFile(rolloutPath, "", "utf8");
+  const nowMs = Date.now();
+  await execFileAsync("sqlite3", [path.join(codexHome, "state_5.sqlite"), [
+    "create table threads (id text primary key, rollout_path text not null, created_at integer not null, updated_at integer not null, source text not null, model_provider text not null, cwd text not null, title text not null, sandbox_policy text not null, approval_mode text not null, tokens_used integer not null default 0, archived integer not null default 0, model text, reasoning_effort text, created_at_ms integer, updated_at_ms integer);",
+    `insert into threads (id, rollout_path, created_at, updated_at, source, model_provider, cwd, title, sandbox_policy, approval_mode, tokens_used, archived, model, reasoning_effort, created_at_ms, updated_at_ms) values (${sqlQuote(codexThreadId)}, ${sqlQuote(rolloutPath)}, ${Math.floor(nowMs / 1000)}, ${Math.floor(nowMs / 1000)}, 'codex', 'openai', ${sqlQuote(workspace)}, 'Empty Metadata Thread', 'workspace-write', 'never', 0, 0, null, null, ${nowMs}, ${nowMs});`,
+  ].join("\n")]);
+
+  const metadata = await resolveCodexThreadMetadata(codexThreadId, {
+    ORKESTR_HOME: path.join(home, "orkestr"),
+    CODEX_HOME: codexHome,
+    HOME: home,
+  });
+
+  assert.equal(metadata.codexThreadId, codexThreadId);
+  assert.equal(metadata.codexModel, undefined);
+  assert.equal(metadata.codexReasoningEffort, undefined);
+  assert.equal(metadata.codexModelProvider, "openai");
+  assert.equal(metadata.codexTokenUsage, undefined);
+  assert.equal(metadata.codexRolloutPath, rolloutPath);
 });
 
 test("thread runtime sync does not scrape legacy Codex plan questions before migration", async (t) => {

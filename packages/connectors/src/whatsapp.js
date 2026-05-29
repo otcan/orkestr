@@ -3,9 +3,12 @@ import path from "node:path";
 import crypto from "node:crypto";
 import os from "node:os";
 import { enqueueAgentMessage, updateAgentMessage } from "../../core/src/messages.js";
+import { resourceOwnerUserId } from "../../core/src/policy.js";
+import { adminPrincipal, userPrincipal } from "../../core/src/principal.js";
 import { runtimeStatus } from "../../core/src/runtime-leases.js";
 import { parseThreadInputCommand } from "../../core/src/thread-commands.js";
-import { enqueueThreadInput, listThreadMessages, listThreads, updateThreadMessage } from "../../core/src/threads.js";
+import { createThreadForPrincipal, enqueueThreadInputForPrincipal, listThreadMessages, listThreads, listThreadsForPrincipal, updateThread, updateThreadMessage } from "../../core/src/threads.js";
+import { adminUserId, findOrCreateExternalUser, normalizeUserId } from "../../core/src/users.js";
 import { dataPaths, ensureDataDirs } from "../../storage/src/paths.js";
 import { readConnectorConfig } from "../../storage/src/config.js";
 import { appendEvent, readJson, writeJson } from "../../storage/src/store.js";
@@ -359,6 +362,122 @@ function bindingAccountIds(binding = {}) {
   ].filter(Boolean));
 }
 
+function whatsappAutoProvisionUsers(config = {}, env = process.env) {
+  return truthyEnv(env.ORKESTR_WHATSAPP_AUTO_PROVISION_USERS) ||
+    truthyEnv(env.WHATSAPP_AUTO_PROVISION_USERS) ||
+    truthyEnv(config.autoProvisionUsers) ||
+    truthyEnv(config.autoProvisionUserChats);
+}
+
+function whatsappDisplayName(input = {}, fallback = "") {
+  return pickString(
+    input.displayName,
+    input.chatName,
+    input.chat?.name,
+    input.senderName,
+    input.pushName,
+    input.notifyName,
+    input.contactName,
+    fallback,
+  );
+}
+
+async function chatHasConfiguredThreadBinding({ chatId = "", accountId = "" } = {}, env = process.env) {
+  if (!chatId) return false;
+  const threads = await listThreads(env);
+  return threads.some((thread) => {
+    const binding = thread?.binding || {};
+    if (binding.enabled === false) return false;
+    if (String(binding.connector || "whatsapp").trim().toLowerCase() !== "whatsapp") return false;
+    if (pickString(binding.chatId) !== chatId) return false;
+    const accounts = bindingAccountIds(binding);
+    return !accountId || accounts.size === 0 || accounts.has(accountId);
+  });
+}
+
+function principalForThread(thread = {}, env = process.env) {
+  const ownerUserId = resourceOwnerUserId(thread, env);
+  const adminId = normalizeUserId(env.ORKESTR_ADMIN_USER_ID || adminUserId);
+  if (ownerUserId === adminId) return adminPrincipal({ id: adminId, displayName: "Admin" });
+  return userPrincipal({ id: ownerUserId, role: "user", displayName: ownerUserId, source: "whatsapp-owner" });
+}
+
+function whatsappAutoThreadBinding({ chatId = "", accountId = "", from = "", displayName = "" } = {}) {
+  return {
+    connector: "whatsapp",
+    chatId,
+    displayName,
+    enabled: true,
+    generated: true,
+    allowOtherPeople: false,
+    additionalParticipantsEnabled: false,
+    additionalParticipantIds: [],
+    mirrorToWhatsApp: true,
+    senderAccountId: accountId || null,
+    responderAccountId: accountId || null,
+    outboundAccountId: accountId || null,
+    senderContactId: from || null,
+    updatedAt: new Date().toISOString(),
+  };
+}
+
+async function routeAutoProvisionedThread(input = {}, config = {}, env = process.env) {
+  if (!whatsappAutoProvisionUsers(config, env)) return { threadId: "", binding: null };
+  const chatId = pickString(input.chatId, input.chat?.id, input.fromChatId);
+  const accountId = pickString(input.accountId);
+  const from = pickString(input.from, input.sender, input.author);
+  const fromMe = input.fromMe === true || input.from_me === true || String(input.fromMe || input.from_me || "").toLowerCase() === "true";
+  const externalId = pickString(input.externalUserId, input.senderId, input.participantId, from, !isWhatsAppGroupChatId(chatId) ? chatId : "");
+  if (!chatId || !externalId || fromMe) return { threadId: "", binding: null };
+  if (await chatHasConfiguredThreadBinding({ chatId, accountId }, env)) return { threadId: "", binding: null };
+
+  const displayName = whatsappDisplayName(input, externalId);
+  const user = await findOrCreateExternalUser({
+    provider: "whatsapp",
+    accountId,
+    externalId,
+    displayName,
+  }, env);
+  const principal = userPrincipal({ ...user, source: "whatsapp" });
+  const ownedThreads = await listThreadsForPrincipal(principal, env);
+  const existing = ownedThreads.find((thread) => pickString(thread?.binding?.chatId) === chatId) || ownedThreads[0] || null;
+  let thread = existing;
+  const bindingDisplayName = whatsappDisplayName(input, existing?.binding?.displayName || existing?.name || displayName);
+  const binding = whatsappAutoThreadBinding({ chatId, accountId, from: externalId, displayName: bindingDisplayName });
+  if (!thread) {
+    thread = await createThreadForPrincipal({
+      id: `wa-${user.id}`,
+      name: bindingDisplayName,
+      title: bindingDisplayName,
+      wakePolicy: "wake-on-message",
+      executorId: "codex",
+      executor: { type: "codex" },
+      runtimeKind: "codex-app-server",
+      binding,
+      bindingName: binding.displayName,
+    }, principal, env);
+  } else if (!pickString(thread?.binding?.chatId)) {
+    thread = await updateThread(thread.id, { binding, bindingName: binding.displayName }, env);
+  }
+
+  await appendEvent({
+    type: "whatsapp_user_thread_auto_provisioned",
+    threadId: thread.id,
+    ownerUserId: resourceOwnerUserId(thread, env),
+    chatId,
+    accountId,
+    externalId,
+    created: !existing,
+  }, env).catch(() => {});
+  return {
+    threadId: thread.id,
+    binding: thread.binding || binding,
+    user,
+    autoProvisioned: true,
+    createdThread: !existing,
+  };
+}
+
 async function routeThread(input, config, env) {
   const chatId = pickString(input.chatId, input.chat?.id, input.fromChatId);
   const accountId = pickString(input.accountId);
@@ -432,7 +551,8 @@ export async function routeWhatsAppInbound(input = {}, env = process.env) {
     };
   }
 
-  const threadRoute = await routeThread(input, config, env);
+  let threadRoute = await routeThread(input, config, env);
+  if (!threadRoute.threadId) threadRoute = await routeAutoProvisionedThread(input, config, env);
   const threadId = threadRoute.threadId;
   const agentId = threadId ? "" : routeAgentId(input, config);
   if (!threadId && !agentId) throw badRequest("whatsapp_target_required");
@@ -458,8 +578,9 @@ export async function routeWhatsAppInbound(input = {}, env = process.env) {
     promptFile,
     attachments: Array.isArray(input.attachments) ? input.attachments : [],
   };
+  const thread = threadId ? (await listThreads(env)).find((item) => item.id === threadId || item.name === threadId || item.bindingName === threadId) : null;
   let message = threadId
-    ? await enqueueThreadInput(threadId, messageInput, env)
+    ? await enqueueThreadInputForPrincipal(threadId, messageInput, principalForThread(thread, env), env)
     : await enqueueAgentMessage(agentId, messageInput, env);
   const contentDuplicate = Boolean(message.duplicate);
   if (threadId && !contentDuplicate) {
@@ -493,6 +614,10 @@ export async function routeWhatsAppInbound(input = {}, env = process.env) {
     event,
     agentId: agentId || null,
     threadId: threadId || null,
+    ownerUserId: thread ? resourceOwnerUserId(thread, env) : null,
+    autoProvisioned: threadRoute.autoProvisioned === true,
+    createdThread: threadRoute.createdThread === true,
+    userId: threadRoute.user?.id || null,
     message,
   };
 }

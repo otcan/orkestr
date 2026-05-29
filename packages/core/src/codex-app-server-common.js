@@ -141,12 +141,40 @@ export function approvalPolicyForThread(thread) {
   return clean(thread.codexApprovalPolicy || thread.executor?.metadata?.codexApprovalPolicy || process.env.ORKESTR_CODEX_APPROVAL_POLICY || "on-request");
 }
 
+const codexReasoningEfforts = new Set(["none", "minimal", "low", "medium", "high", "xhigh"]);
+
+export function normalizeCodexModel(value) {
+  const model = clean(value);
+  if (!model) return "";
+  const lower = model.toLowerCase();
+  if (/^\d+$/.test(lower)) return "";
+  if (lower === "openai" || lower === "azure" || lower === "openrouter") return "";
+  if (model.startsWith("/") || lower.endsWith(".jsonl")) return "";
+  return model;
+}
+
+export function normalizeReasoningEffort(value) {
+  const effort = clean(value).toLowerCase().replace(/[\s_-]+/g, "");
+  if (!effort) return "";
+  if (effort === "xhigh" || effort === "extrahigh") return "xhigh";
+  return codexReasoningEfforts.has(effort) ? effort : "";
+}
+
 export function modelForThread(thread) {
-  return clean(thread.codexModel || thread.executor?.metadata?.codexModel || process.env.ORKESTR_DEFAULT_CODEX_MODEL || process.env.OPENAI_MODEL);
+  return [
+    thread.codexModel,
+    thread.executor?.metadata?.codexModel,
+    process.env.ORKESTR_DEFAULT_CODEX_MODEL,
+    process.env.OPENAI_MODEL,
+  ].map(normalizeCodexModel).find(Boolean) || "";
 }
 
 export function effortForThread(thread) {
-  return clean(thread.codexReasoningEffort || thread.executor?.metadata?.codexReasoningEffort || process.env.ORKESTR_DEFAULT_CODEX_REASONING);
+  return [
+    thread.codexReasoningEffort,
+    thread.executor?.metadata?.codexReasoningEffort,
+    process.env.ORKESTR_DEFAULT_CODEX_REASONING,
+  ].map(normalizeReasoningEffort).find(Boolean) || "";
 }
 
 export function codexInputText(message) {

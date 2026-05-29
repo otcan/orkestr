@@ -1,5 +1,6 @@
 import { readFile, stat } from "node:fs/promises";
 import path from "node:path";
+import { normalizeCodexModel, normalizeReasoningEffort } from "../../../packages/core/src/codex-app-server-common.js";
 import { resolveCodexThreadMetadata, runtimeStatus } from "../../../packages/core/src/runtime-leases.js";
 import { isAdminPrincipal, resourceOwnerUserId } from "../../../packages/core/src/policy.js";
 import { adminPrincipal } from "../../../packages/core/src/principal.js";
@@ -59,6 +60,13 @@ function latestStoredMessage(messages: any[] = []) {
     .map((message, index) => ({ message, index }))
     .sort(compareMessagesByTime)
     .at(-1)?.message || null;
+}
+
+function chronologicalMessages(messages: any[] = []) {
+  return messages
+    .map((message, index) => ({ message, index }))
+    .sort(compareMessagesByTime)
+    .map(({ message }) => message);
 }
 
 const needInputPhases = new Set(["need_input", "awaiting_input", "question", "request_user_input"]);
@@ -166,6 +174,9 @@ function codexMetadata(thread: any) {
   const totalTokenUsage = thread?.codexTotalTokenUsage || metadata.codexTotalTokenUsage || metadata.totalTokenUsage || null;
   const contextWindow = Number(thread?.codexContextWindow || metadata.codexContextWindow || metadata.contextWindow || 0) || null;
   const rateLimits = thread?.codexRateLimits || metadata.codexRateLimits || metadata.rateLimits || null;
+  const provider = [thread?.codexModelProvider, metadata.codexModelProvider]
+    .map((value) => String(value || "").trim())
+    .find((value) => value && !value.startsWith("/") && !value.toLowerCase().endsWith(".jsonl"));
   return {
     codexMode: thread?.codexMode || metadata.codexMode || null,
     codexModeLabel: thread?.codexModeLabel || metadata.codexModeLabel || null,
@@ -174,9 +185,9 @@ function codexMetadata(thread: any) {
     codexModeUpdatedAt: thread?.codexModeUpdatedAt || metadata.codexModeUpdatedAt || null,
     desiredCodexMode: null,
     desiredCodexModeUpdatedAt: null,
-    codexModel: thread?.codexModel || metadata.codexModel || process.env.ORKESTR_DEFAULT_CODEX_MODEL || process.env.OPENAI_MODEL || null,
-    codexModelProvider: thread?.codexModelProvider || metadata.codexModelProvider || "codex",
-    codexReasoningEffort: thread?.codexReasoningEffort || metadata.codexReasoningEffort || process.env.ORKESTR_DEFAULT_CODEX_REASONING || null,
+    codexModel: [thread?.codexModel, metadata.codexModel, process.env.ORKESTR_DEFAULT_CODEX_MODEL, process.env.OPENAI_MODEL].map(normalizeCodexModel).find(Boolean) || null,
+    codexModelProvider: provider || "codex",
+    codexReasoningEffort: [thread?.codexReasoningEffort, metadata.codexReasoningEffort, process.env.ORKESTR_DEFAULT_CODEX_REASONING].map(normalizeReasoningEffort).find(Boolean) || null,
     codexModelUpdatedAt: thread?.codexModelUpdatedAt || metadata.codexModelUpdatedAt || null,
     codexContextWindow: contextWindow,
     codexTokenUsage: tokenUsage,
@@ -378,6 +389,7 @@ export async function threadRuntimeSummary(thread: any, messages: any[] = [], op
   const ttlMs = Number(options.cacheTtlMs ?? 0) || 0;
   const status = await runtimeStatus(thread.id, process.env, messages).catch(() => null);
   const { gitState, liveCodexMetadata } = await cachedThreadMetadata(thread, status, ttlMs);
+  const orderedMessages = chronologicalMessages(messages);
   const codexThread = {
     ...thread,
     ...liveCodexMetadata,
@@ -394,10 +406,10 @@ export async function threadRuntimeSummary(thread: any, messages: any[] = [], op
   const ready = state === "ready";
   const inferredWorking = Boolean(status && state === "working");
   const awaitingAckCount = status?.awaitingAckCount ?? 0;
-  const latestMessage = latestMessageSummary(messages);
-  const planAvailable = latestAssistantPlanAvailable(messages);
+  const latestMessage = latestMessageSummary(orderedMessages);
+  const planAvailable = latestAssistantPlanAvailable(orderedMessages);
   const lastActivityAt = latestMessage.lastMessageAt || thread.updatedAt || thread.createdAt || null;
-  const pendingQuestion = planImplementationPendingQuestion(thread, status) || latestPendingQuestion(messages);
+  const pendingQuestion = planImplementationPendingQuestion(thread, status) || latestPendingQuestion(orderedMessages);
   const resolvedCodexThreadId = codexThreadId(codexThread);
   const metadata = codexMetadata(codexThread);
   const liveCodexMode = codexModeValue(status?.codexMode);
