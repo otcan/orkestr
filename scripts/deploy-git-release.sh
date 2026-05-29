@@ -7,7 +7,7 @@ usage() {
 Deploy Orkestr from an exact git ref into versioned release directories.
 
 Usage:
-  scripts/deploy-git-release.sh install [--ref REF] [--channel NAME] [--allow-untagged|--require-tagged] [--no-smoke] [--no-backup] [--no-interrupt|--allow-interrupt] [--wait-active] [--active-timeout SECONDS]
+  scripts/deploy-git-release.sh install [--ref REF] [--channel NAME] [--allow-untagged|--require-tagged] [--no-smoke] [--no-backup] [--sync-workers|--no-sync-workers] [--no-interrupt|--allow-interrupt] [--wait-active] [--active-timeout SECONDS]
   scripts/deploy-git-release.sh rollback [--to RELEASE_ID] [--no-interrupt|--allow-interrupt] [--wait-active] [--active-timeout SECONDS]
   scripts/deploy-git-release.sh status [--json]
   scripts/deploy-git-release.sh --check-only
@@ -27,6 +27,7 @@ Environment:
   ORKESTR_DEPLOY_LOCK_FILE      Lock file. Defaults to /var/lock/orkestr-deploy.lock.
   ORKESTR_DEPLOY_RUN_SMOKE      Run npm smoke before activation. Defaults to 1.
   ORKESTR_DEPLOY_BACKUP_STATE   Back up ORKESTR_HOME before activation. Defaults to 1.
+  ORKESTR_DEPLOY_SYNC_WORKERS   Fast-forward and push safe stale worker branches after deploy. Defaults to 1.
   ORKESTR_DEPLOY_HEALTH_URL     Health URL. Defaults to http://$ORKESTR_HOST:$ORKESTR_PORT/api/health.
   ORKESTR_DEPLOY_NO_INTERRUPT   Refuse to restart while thread work is active. Defaults to 1.
   ORKESTR_DEPLOY_WAIT_ACTIVE    Wait for active thread work before restart. Defaults to 0.
@@ -53,6 +54,7 @@ check_only=0
 run_smoke_arg=""
 tags_only_arg=""
 backup_state_arg=""
+sync_workers_arg=""
 no_interrupt_arg=""
 wait_active_arg=""
 active_timeout_arg=""
@@ -97,6 +99,14 @@ while [ "$#" -gt 0 ]; do
       ;;
     --no-backup)
       backup_state_arg=0
+      shift
+      ;;
+    --sync-workers)
+      sync_workers_arg=1
+      shift
+      ;;
+    --no-sync-workers)
+      sync_workers_arg=0
       shift
       ;;
     --no-interrupt)
@@ -654,6 +664,45 @@ restart_and_verify() {
   health_check "$health_url" 40
 }
 
+sync_safe_workers_after_deploy() {
+  local release_dir
+  release_dir="$1"
+  if [ "$sync_workers" != "1" ]; then
+    echo "Post-deploy worker sync disabled."
+    return 0
+  fi
+  if [ ! -f "$release_dir/packages/core/src/thread-workers.js" ]; then
+    echo "Post-deploy worker sync skipped: target release does not expose thread worker helpers."
+    return 0
+  fi
+  node --input-type=module - "$release_dir" <<'NODE'
+import path from "node:path";
+import { pathToFileURL } from "node:url";
+
+const releaseDir = process.argv[2];
+try {
+  const moduleUrl = pathToFileURL(path.join(releaseDir, "packages/core/src/thread-workers.js")).href;
+  const { syncSafeThreadWorkersWithParents } = await import(moduleUrl);
+  const result = await syncSafeThreadWorkersWithParents({ push: true }, process.env);
+  console.log(`Post-deploy worker sync: scanned ${result.scanned}, synced ${result.synced}, pushed ${result.pushed}, skipped ${result.skipped}.`);
+  for (const item of result.results || []) {
+    if (!item.synced && item.reason === "already_synced") continue;
+    const name = item.name || item.threadId || "worker";
+    const detail = [
+      item.reason || (item.synced ? "synced" : "skipped"),
+      item.gitParentBehind === null || item.gitParentBehind === undefined ? "" : `parentBehind=${item.gitParentBehind}`,
+      item.gitParentAhead === null || item.gitParentAhead === undefined ? "" : `parentAhead=${item.gitParentAhead}`,
+      item.gitDirtyFiles === null || item.gitDirtyFiles === undefined ? "" : `dirty=${item.gitDirtyFiles}`,
+      item.error ? `error=${item.error}` : "",
+    ].filter(Boolean).join(" ");
+    console.log(`Post-deploy worker ${item.synced ? "synced" : "skipped"}: ${name}${detail ? ` (${detail})` : ""}`);
+  }
+} catch (error) {
+  console.error(`Post-deploy worker sync skipped: ${error?.stack || error?.message || String(error)}`);
+}
+NODE
+}
+
 status_command() {
   local active
   active="$(current_release_id)"
@@ -756,6 +805,7 @@ install_command() {
   activate_release "$release_dir"
   sync_versioned_env
   if restart_and_verify; then
+    sync_safe_workers_after_deploy "$release_dir"
     write_history_event "success" "$release_id" "$deploy_ref" "$target_ref" "$previous_release" "$release_dir" "$backup_path"
     echo "Orkestr deployed $release_id ($target_ref)."
   else
@@ -826,6 +876,7 @@ port="${ORKESTR_PORT:-19812}"
 health_url="${ORKESTR_DEPLOY_HEALTH_URL:-http://$host:$port/api/health}"
 run_smoke="${run_smoke_arg:-${ORKESTR_DEPLOY_RUN_SMOKE:-1}}"
 run_backup="${backup_state_arg:-${ORKESTR_DEPLOY_BACKUP_STATE:-1}}"
+sync_workers="$(bool_value "${sync_workers_arg:-${ORKESTR_DEPLOY_SYNC_WORKERS:-1}}")"
 lock_file="${ORKESTR_DEPLOY_LOCK_FILE:-/var/lock/orkestr-deploy.lock}"
 no_interrupt="$(bool_value "${no_interrupt_arg:-${ORKESTR_DEPLOY_NO_INTERRUPT:-1}}")"
 wait_active="$(bool_value "${wait_active_arg:-${ORKESTR_DEPLOY_WAIT_ACTIVE:-0}}")"
@@ -844,6 +895,10 @@ esac
 case "$wait_active" in
   0|1) ;;
   *) echo "ORKESTR_DEPLOY_WAIT_ACTIVE must be 0 or 1." >&2; exit 2 ;;
+esac
+case "$sync_workers" in
+  0|1) ;;
+  *) echo "ORKESTR_DEPLOY_SYNC_WORKERS must be 0 or 1." >&2; exit 2 ;;
 esac
 case "$active_timeout_seconds" in
   ''|*[!0-9]*) echo "ORKESTR_DEPLOY_ACTIVE_TIMEOUT_SECONDS must be a non-negative integer." >&2; exit 2 ;;

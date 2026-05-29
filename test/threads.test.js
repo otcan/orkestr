@@ -13,7 +13,7 @@ import { applyRuntimeCodexMode, consumeThreadConnectorDeliverySignalCount, deliv
 import { ensureDataDirs } from "../packages/storage/src/paths.js";
 import { parseThreadInputCommand } from "../packages/core/src/thread-commands.js";
 import { createPairingChallenge, getPairingChallenge } from "../packages/core/src/security.js";
-import { createThreadWorker, detectThreadGitState, listThreadWorkers, refreshThreadGitState, syncThreadWorkerWithParent, updateThreadRepo } from "../packages/core/src/thread-workers.js";
+import { createThreadWorker, detectThreadGitState, listThreadWorkers, refreshThreadGitState, syncSafeThreadWorkersWithParents, syncThreadWorkerWithParent, updateThreadRepo } from "../packages/core/src/thread-workers.js";
 import { appendThreadMessage, createThread, deleteThread, enqueueThreadInput, getThread, listThreadMessages, listThreads, updateThread, updateThreadMessage } from "../packages/core/src/threads.js";
 
 const execFileAsync = promisify(execFile);
@@ -4270,6 +4270,59 @@ test("thread worker direct sync fast-forwards a clean stale worker", async () =>
   assert.equal(workerHead, parentHead);
   assert.equal(after.gitParentAhead, 0);
   assert.equal(after.gitParentBehind, 0);
+});
+
+test("release-train worker sync fast-forwards and pushes safe stale workers", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-worker-release-sync-home-"));
+  const repo = await createTempGitRepo("orkestr-thread-worker-release-sync-repo-");
+  const remote = path.join(await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-worker-release-sync-remote-")), "origin.git");
+  const env = { ORKESTR_HOME: home };
+  await execFileAsync("git", ["init", "--bare", remote]);
+  await execFileAsync("git", ["remote", "add", "origin", remote], { cwd: repo });
+  await execFileAsync("git", ["push", "-u", "origin", "main"], { cwd: repo });
+  const parent = await createThread({ id: "release-sync-parent", name: "Release Sync Parent", cwd: repo }, env);
+  const result = await createThreadWorker(parent.id, { label: "Release Sync Worker", autoRun: false }, env);
+
+  await fs.writeFile(path.join(repo, "release-sync-parent.txt"), "parent sync change\n", "utf8");
+  await execFileAsync("git", ["add", "release-sync-parent.txt"], { cwd: repo });
+  await execFileAsync("git", ["commit", "-m", "parent release sync change"], { cwd: repo });
+  await execFileAsync("git", ["push", "origin", "main"], { cwd: repo });
+
+  const summary = await syncSafeThreadWorkersWithParents({ push: true }, env);
+  const workerHead = await execFileAsync("git", ["rev-parse", "HEAD"], { cwd: result.worker.worktreePath }).then((result) => String(result.stdout).trim());
+  const parentHead = await execFileAsync("git", ["rev-parse", "HEAD"], { cwd: repo }).then((result) => String(result.stdout).trim());
+  const remoteWorkerHead = await execFileAsync("git", ["rev-parse", `origin/${result.worker.branchName}`], { cwd: result.worker.worktreePath }).then((result) => String(result.stdout).trim());
+
+  assert.equal(summary.scanned, 1);
+  assert.equal(summary.synced, 1);
+  assert.equal(summary.pushed, 1);
+  assert.equal(summary.results[0].reason, "synced_and_pushed");
+  assert.equal(workerHead, parentHead);
+  assert.equal(remoteWorkerHead, parentHead);
+  assert.equal((await detectThreadGitState(result.worker, env)).gitParentBehind, 0);
+});
+
+test("release-train worker sync skips active stale workers", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-worker-release-active-home-"));
+  const repo = await createTempGitRepo("orkestr-thread-worker-release-active-repo-");
+  const env = { ORKESTR_HOME: home };
+  const parent = await createThread({ id: "release-active-parent", name: "Release Active Parent", cwd: repo }, env);
+  const result = await createThreadWorker(parent.id, { label: "Release Active Worker", autoRun: false }, env);
+  await enqueueThreadInput(result.worker.id, { text: "pending worker work" }, env);
+
+  await fs.writeFile(path.join(repo, "release-active-parent.txt"), "parent sync change\n", "utf8");
+  await execFileAsync("git", ["add", "release-active-parent.txt"], { cwd: repo });
+  await execFileAsync("git", ["commit", "-m", "parent active sync change"], { cwd: repo });
+
+  const summary = await syncSafeThreadWorkersWithParents({ push: false }, env);
+  const workerHead = await execFileAsync("git", ["rev-parse", "HEAD"], { cwd: result.worker.worktreePath }).then((result) => String(result.stdout).trim());
+  const parentHead = await execFileAsync("git", ["rev-parse", "HEAD"], { cwd: repo }).then((result) => String(result.stdout).trim());
+
+  assert.equal(summary.scanned, 1);
+  assert.equal(summary.synced, 0);
+  assert.equal(summary.skipped, 1);
+  assert.equal(summary.results[0].reason, "thread_is_active");
+  assert.notEqual(workerHead, parentHead);
 });
 
 test("thread worker git refresh clears stale stored sync state", async () => {

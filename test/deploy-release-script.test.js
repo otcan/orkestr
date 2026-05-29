@@ -20,6 +20,7 @@ test("release deploy script exposes versioned install, status, and rollback", as
   assert.match(stdout, /install \[--ref REF\]/);
   assert.match(stdout, /--allow-untagged\|--require-tagged/);
   assert.match(stdout, /--no-backup/);
+  assert.match(stdout, /--sync-workers\|--no-sync-workers/);
   assert.match(stdout, /--no-interrupt\|--allow-interrupt/);
   assert.match(stdout, /--wait-active/);
   assert.match(stdout, /--active-timeout SECONDS/);
@@ -33,6 +34,10 @@ test("release deploy script exposes versioned install, status, and rollback", as
   assert.match(script, /npm --prefix "\$release_dir" run smoke/);
   assert.match(script, /backup_state/);
   assert.match(script, /ORKESTR_DEPLOY_BACKUP_STATE/);
+  assert.match(script, /ORKESTR_DEPLOY_SYNC_WORKERS/);
+  assert.match(script, /sync_safe_workers_after_deploy/);
+  assert.match(script, /syncSafeThreadWorkersWithParents/);
+  assert.match(script, /Post-deploy worker sync/);
   assert.match(script, /backup_state_arg/);
   assert.match(script, /health_check/);
   assert.match(script, /sync_versioned_env/);

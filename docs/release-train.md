@@ -225,12 +225,19 @@ deployment time, and rollback target if available.
 
 After main is released:
 
+- The versioned deployer runs a post-deploy safe worker sync by default
+  (`ORKESTR_DEPLOY_SYNC_WORKERS=1`).
 - Fast-forward workers that are ancestors of the released parent or `main`.
+- Skip active workers, workers with local edits, and workers with unique
+  unmerged commits.
 - Do not rewrite workers that still have unique unmerged commits.
 - For non-fast-forward workers, report the exact missing commits and leave them
   active for the next train.
 - Push worker fast-forwards only when they are clean and the update is truly a
   fast-forward.
+- Disable this deploy-time pass with `--no-sync-workers` or
+  `ORKESTR_DEPLOY_SYNC_WORKERS=0` when intentionally keeping worker branches
+  pinned for investigation.
 
 This keeps workers current without hiding unfinished work.
 
