@@ -19,6 +19,7 @@ import {
 } from "../packages/core/src/codex-app-server.js";
 import { migrateCodexThreadsToAppServer } from "../packages/core/src/codex-app-server-migration.js";
 import { resetThreadRuntime, sleepThread } from "../packages/core/src/runtime-leases.js";
+import { effortForThread, modelForThread, turnStartParams } from "../packages/core/src/codex-app-server-common.js";
 import { appendThreadMessage, createThread, enqueueThreadInput, getThread, listThreadMessages, updateThread, updateThreadMessage } from "../packages/core/src/threads.js";
 import { deliverWhatsAppReplies } from "../packages/connectors/src/whatsapp.js";
 import { writeConnectorConfig } from "../packages/storage/src/config.js";
@@ -208,7 +209,49 @@ async function waitForAppServerReady(thread, env, attempts = 50) {
   return status;
 }
 
-test("Codex app-server client can use an external websocket socket", async () => {
+test("Codex app-server turn params ignore corrupt model and reasoning metadata", () => {
+  const previousModel = process.env.ORKESTR_DEFAULT_CODEX_MODEL;
+  const previousReasoning = process.env.ORKESTR_DEFAULT_CODEX_REASONING;
+  try {
+    delete process.env.ORKESTR_DEFAULT_CODEX_MODEL;
+    delete process.env.ORKESTR_DEFAULT_CODEX_REASONING;
+    const thread = {
+      id: "corrupt-metadata-thread",
+      codexThreadId: "codex-thread-1",
+      cwd: "/tmp/orkestr-workspace",
+      codexModel: "openai",
+      codexReasoningEffort: "0",
+      executor: {
+        metadata: {
+          codexModel: "/root/.codex/sessions/2026/05/29/rollout.jsonl",
+          codexReasoningEffort: "0",
+        },
+      },
+    };
+
+    assert.equal(modelForThread(thread), "");
+    assert.equal(effortForThread(thread), "");
+    assert.equal(turnStartParams(thread, { text: "hello" }).model, undefined);
+    assert.equal(turnStartParams(thread, { text: "hello" }).effort, undefined);
+
+    const valid = {
+      ...thread,
+      codexModel: "gpt-5.5",
+      codexReasoningEffort: "extra-high",
+    };
+    assert.equal(modelForThread(valid), "gpt-5.5");
+    assert.equal(effortForThread(valid), "xhigh");
+    assert.equal(turnStartParams(valid, { text: "hello" }).model, "gpt-5.5");
+    assert.equal(turnStartParams(valid, { text: "hello" }).effort, "xhigh");
+  } finally {
+    if (previousModel === undefined) delete process.env.ORKESTR_DEFAULT_CODEX_MODEL;
+    else process.env.ORKESTR_DEFAULT_CODEX_MODEL = previousModel;
+    if (previousReasoning === undefined) delete process.env.ORKESTR_DEFAULT_CODEX_REASONING;
+    else process.env.ORKESTR_DEFAULT_CODEX_REASONING = previousReasoning;
+  }
+});
+
+test("Codex app-server client can use an external proxy socket", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-codex-app-server-proxy-"));
   const fake = await createFakeCodex(home);
   const socket = path.join(home, "run", "codex.sock");

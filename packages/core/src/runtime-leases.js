@@ -30,7 +30,7 @@ import {
   threadNeedsCodexAppServerMigration,
   threadUsesCodexAppServer,
 } from "./codex-app-server.js";
-import { appendOrUpdateEventMessage } from "./codex-app-server-common.js";
+import { appendOrUpdateEventMessage, normalizeCodexModel, normalizeReasoningEffort } from "./codex-app-server-common.js";
 import { completeThreadSecurityApproveCommand, threadSecurityApproveChallengeId } from "./security-thread-command.js";
 import {
   capturePane,
@@ -798,7 +798,8 @@ async function resolveCodexThreadMetadataById(id, env = process.env) {
         "limit 1;",
       ].join(" ");
       const { stdout } = await execFileAsync("sqlite3", ["-readonly", "-separator", "\t", dbPath, query]);
-      const [model, reasoningEffort, modelProvider, tokensUsed, rolloutPath] = String(stdout || "").trim().split("\t");
+      const row = String(stdout || "").split(/\r?\n/).find((line) => line.length) || "";
+      const [model, reasoningEffort, modelProvider, tokensUsed, rolloutPath] = row.split("\t");
       const normalizedRolloutPath = rolloutPath && path.isAbsolute(rolloutPath) ? rolloutPath : rolloutPath ? path.resolve(home, rolloutPath) : "";
       const metadata = { codexThreadId: id };
       if (model) metadata.codexModel = model;
@@ -827,6 +828,29 @@ export async function resolveCodexThreadMetadata(threadOrId, env = process.env) 
   const discovered = await resolveCodexThreadByWorkspace(workspace, startedAt, env);
   if (!discovered?.codexThreadId) return {};
   return resolveCodexThreadMetadataById(discovered.codexThreadId, env);
+}
+
+function codexMetadataUpdatePatch(thread = {}, codexMetadata = {}) {
+  const executorMetadata = { ...(thread?.executor?.metadata || {}), ...codexMetadata };
+  if (!normalizeCodexModel(executorMetadata.codexModel)) delete executorMetadata.codexModel;
+  if (!normalizeReasoningEffort(executorMetadata.codexReasoningEffort)) delete executorMetadata.codexReasoningEffort;
+  const provider = String(executorMetadata.codexModelProvider || "").trim();
+  if (provider.startsWith("/") || provider.toLowerCase().endsWith(".jsonl")) delete executorMetadata.codexModelProvider;
+  const patch = {
+    ...codexMetadata,
+    executor: {
+      ...(thread?.executor || {}),
+      codexThreadId: codexMetadata.codexThreadId || thread?.executor?.codexThreadId || "",
+      metadata: executorMetadata,
+    },
+  };
+  if (!codexMetadata.codexModel && thread?.codexModel && !normalizeCodexModel(thread.codexModel)) patch.codexModel = null;
+  if (!codexMetadata.codexReasoningEffort && thread?.codexReasoningEffort && !normalizeReasoningEffort(thread.codexReasoningEffort)) patch.codexReasoningEffort = null;
+  const threadProvider = String(thread?.codexModelProvider || "").trim();
+  if (!codexMetadata.codexModelProvider && threadProvider && (threadProvider.startsWith("/") || threadProvider.toLowerCase().endsWith(".jsonl"))) {
+    patch.codexModelProvider = null;
+  }
+  return patch;
 }
 
 async function resolveCodexThreadByWorkspace(workspace, startedAt, env = process.env) {
@@ -3482,14 +3506,7 @@ async function syncLeaseRollout(lease, env = process.env) {
   const thread = await getThread(lease.threadId, env);
   const codexMetadata = await resolveCodexThreadMetadata(thread, env).catch(() => ({}));
   if (Object.keys(codexMetadata).length) {
-    await updateThread(lease.threadId, {
-      ...codexMetadata,
-      executor: {
-        ...(thread?.executor || {}),
-        codexThreadId: codexMetadata.codexThreadId || thread?.executor?.codexThreadId || "",
-        metadata: { ...(thread?.executor?.metadata || {}), ...codexMetadata },
-      },
-    }, env).catch(() => {});
+    await updateThread(lease.threadId, codexMetadataUpdatePatch(thread, codexMetadata), env).catch(() => {});
   }
   let rolloutPath = lease.rolloutPath;
   if (!rolloutPath) {
@@ -3591,14 +3608,7 @@ async function syncDetachedCodexRollouts(activeLeaseThreadIds = new Set(), env =
     const codexMetadata = rolloutPath ? {} : await resolveCodexThreadMetadata(thread, env).catch(() => ({}));
     let currentThread = thread;
     if (Object.keys(codexMetadata).length) {
-      currentThread = await updateThread(thread.id, {
-        ...codexMetadata,
-        executor: {
-          ...(thread.executor || {}),
-          codexThreadId: codexMetadata.codexThreadId || thread?.executor?.codexThreadId || "",
-          metadata: { ...(thread.executor?.metadata || {}), ...codexMetadata },
-        },
-      }, env).catch(() => thread);
+      currentThread = await updateThread(thread.id, codexMetadataUpdatePatch(thread, codexMetadata), env).catch(() => thread);
       rolloutPath = codexRolloutPathForThread(currentThread);
     }
     rolloutPath = rolloutPath || await resolveCodexRolloutPath(codexThreadId(currentThread));

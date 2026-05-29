@@ -22,6 +22,7 @@ import {
 import { deliverWhatsAppReplies, syncWhatsAppTypingIndicators } from "../../../packages/connectors/src/whatsapp.js";
 import {
   recoverConfiguredLocalWhatsAppAccounts,
+  recoverUnreadLocalWhatsAppMessages,
   startConfiguredLocalWhatsAppAccounts,
   stopLocalWhatsAppBridge,
 } from "../../../packages/connectors/src/whatsapp-local-bridge.js";
@@ -221,10 +222,11 @@ async function syncRuntimeAndDeliverWhatsApp(options: { forceWhatsapp?: boolean;
   const synced = await syncRuntimeLeases();
   const recovered = await recoverStaleCodexAppServerTurns(process.env, { noticeCause: options.recoveryCause }).catch(() => ({ recovered: 0, appended: 0 }));
   await recoverConfiguredLocalWhatsAppAccounts().catch(() => {});
+  const unreadRecovery = await recoverUnreadLocalWhatsAppMessages().catch(() => ({ routed: 0 }));
   await syncWhatsAppTypingIndicators().catch(() => {});
   const connectorDeliveries = pendingConnectorDeliveries + consumeThreadConnectorDeliverySignalCount();
   const appended = (synced.appended || 0) + (recovered.appended || 0);
-  if (options.forceWhatsapp || appended > 0 || connectorDeliveries > 0) {
+  if (options.forceWhatsapp || appended > 0 || connectorDeliveries > 0 || Number(unreadRecovery.routed || 0) > 0) {
     await deliverWhatsAppReplies().catch(() => {});
   }
   return { ...synced, appended, recoveredAppServerTurns: recovered.recovered || 0 };
