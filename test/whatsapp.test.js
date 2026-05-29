@@ -9,7 +9,7 @@ import { listAgentMessages } from "../packages/core/src/messages.js";
 import { getSetupStatus } from "../packages/core/src/setup.js";
 import { appendThreadMessage, createThread, enqueueThreadInput, getThread, listThreadMessages, listThreads, updateThreadMessage } from "../packages/core/src/threads.js";
 import { deliverWhatsAppReplies, formatWhatsAppOutboundText, getWhatsAppChatParticipants, getWhatsAppStatus, initialQueueDeliveryState, mapLocalWhatsAppStatusFromHealth, routeWhatsAppInbound, syncWhatsAppTypingIndicators } from "../packages/connectors/src/whatsapp.js";
-import { listLocalWhatsAppChats, localWhatsAppAccountIdsForEnv, localWhatsAppMessageRouteFields, localWhatsAppTypingClearRetryDelaysMs, normalizeGroupParticipantIds, recoverableLocalWhatsAppAccountIds, reduceLocalWhatsAppBridgeState, sendWhatsAppTextWithConfirmation, startLocalWhatsAppAccount, webCacheRoot } from "../packages/connectors/src/whatsapp-local-bridge.js";
+import { listLocalWhatsAppChats, localWhatsAppAccountIdsForEnv, localWhatsAppMessageRouteFields, localWhatsAppTypingClearRetryDelaysMs, localWhatsAppUnreadRecoveryBoundChats, localWhatsAppUnreadRecoveryIntervalMs, normalizeGroupParticipantIds, recoverUnreadLocalWhatsAppMessages, recoverableLocalWhatsAppAccountIds, reduceLocalWhatsAppBridgeState, sendWhatsAppTextWithConfirmation, startLocalWhatsAppAccount, webCacheRoot } from "../packages/connectors/src/whatsapp-local-bridge.js";
 import { prepareWhatsAppTableAttachments } from "../packages/connectors/src/whatsapp-table-attachments.js";
 import { writeConnectorConfig } from "../packages/storage/src/config.js";
 
@@ -287,6 +287,113 @@ test("local whatsapp known chats honor configured responder account ids", async 
 
   assert.deepEqual(main.chats.map((chat) => chat.name), []);
   assert.deepEqual(openclaw.chats.map((chat) => chat.name), ["OpenClaw Group"]);
+});
+
+test("local whatsapp unread recovery only scans bound chats for the selected account", () => {
+  const env = { ORKESTR_WHATSAPP_ACCOUNT_IDS: "main,openclaw" };
+  const threads = [
+    {
+      id: "main-thread",
+      binding: {
+        connector: "whatsapp",
+        chatId: "main-chat@g.us",
+        responderAccountId: "main",
+      },
+    },
+    {
+      id: "openclaw-thread",
+      binding: {
+        connector: "whatsapp",
+        chatId: "openclaw-chat@g.us",
+        outboundAccountId: "openclaw",
+      },
+    },
+    {
+      id: "disabled-thread",
+      binding: {
+        connector: "whatsapp",
+        chatId: "disabled-chat@g.us",
+        responderAccountId: "main",
+        enabled: false,
+      },
+    },
+  ];
+
+  assert.deepEqual(localWhatsAppUnreadRecoveryBoundChats(threads, "main", env), [
+    { chatId: "main-chat@g.us", threadId: "main-thread", accountId: "main" },
+  ]);
+  assert.deepEqual(localWhatsAppUnreadRecoveryBoundChats(threads, "openclaw", env), [
+    { chatId: "openclaw-chat@g.us", threadId: "openclaw-thread", accountId: "openclaw" },
+  ]);
+  assert.equal(localWhatsAppUnreadRecoveryIntervalMs({ ORKESTR_WHATSAPP_UNREAD_RECOVERY_MS: "5" }), 10000);
+});
+
+test("local whatsapp unread recovery routes missed unread messages", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-unread-recovery-"));
+  const env = { ORKESTR_HOME: home, ORKESTR_WHATSAPP_ACCOUNT_IDS: "responder" };
+  const chatId = "120363000000000000@g.us";
+  let sentSeen = false;
+  let getChatByIdCalls = 0;
+  const message = {
+    id: { _serialized: "missed-message-1", remote: chatId },
+    fromMe: false,
+    from: chatId,
+    author: "491111111111@c.us",
+    body: "missed hello",
+    timestamp: 1_780_000_000,
+  };
+  const chat = {
+    id: { _serialized: chatId },
+    unreadCount: 1,
+    async fetchMessages() {
+      return [message];
+    },
+    async sendSeen() {
+      sentSeen = true;
+    },
+  };
+  const client = {
+    async getChats() {
+      return [
+        chat,
+        { id: { _serialized: "unbound@g.us" }, unreadCount: 5 },
+      ];
+    },
+    async getChatById() {
+      getChatByIdCalls += 1;
+      throw new Error("recover should reuse the chat object from getChats");
+    },
+  };
+  const thread = await createThread({
+    id: "fitness-thread",
+    name: "Fitness",
+    binding: {
+      connector: "whatsapp",
+      chatId,
+      displayName: "Fitness",
+      responderAccountId: "responder",
+      outboundAccountId: "responder",
+      enabled: true,
+    },
+  }, env);
+
+  const result = await recoverUnreadLocalWhatsAppMessages(env, {
+    force: true,
+    accountIds: ["responder"],
+    clients: new Map([["responder", client]]),
+    accountStates: new Map([["responder", { state: "ready", ready: true }]]),
+    threads: [thread],
+    limit: 20,
+  });
+  const messages = await listThreadMessages("fitness-thread", env);
+
+  assert.equal(result.routed, 1);
+  assert.equal(result.recovered.length, 1);
+  assert.equal(result.recovered[0].chatId, chatId);
+  assert.equal(messages.at(-1).text, "missed hello");
+  assert.equal(messages.at(-1).source, "whatsapp_inbound");
+  assert.equal(sentSeen, true);
+  assert.equal(getChatByIdCalls, 0);
 });
 
 test("local whatsapp phone pairing validates phone numbers before browser launch", async () => {

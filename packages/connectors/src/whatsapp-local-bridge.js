@@ -714,6 +714,10 @@ async function handleInboundMessage(accountId, message, env = process.env, optio
 }
 
 export async function recoverLocalWhatsAppChatMessages({ accountId = "", chatId = "", limit = 20, unreadOnly = true, markSeen = true } = {}, env = process.env) {
+  return recoverLocalWhatsAppChatMessagesWithClient({ accountId, chatId, limit, unreadOnly, markSeen }, env);
+}
+
+async function recoverLocalWhatsAppChatMessagesWithClient({ accountId = "", chatId = "", limit = 20, unreadOnly = true, markSeen = true } = {}, env = process.env, options = {}) {
   const normalized = normalizeAccountId(accountId, env);
   const id = String(chatId || "").trim();
   if (!id) {
@@ -721,12 +725,12 @@ export async function recoverLocalWhatsAppChatMessages({ accountId = "", chatId 
     error.statusCode = 400;
     throw error;
   }
-  const runtime = runtimes.get(normalized);
-  const state = accountStates.get(normalized) || defaultAccountState(normalized);
-  if (!runtime?.client || !state.ready) {
+  const client = options.client || runtimes.get(normalized)?.client;
+  const state = options.state || accountStates.get(normalized) || defaultAccountState(normalized);
+  if (!client || !state.ready) {
     return { ok: false, accountId: normalized, chatId: id, ready: false, state: state.state || "idle", routed: [], skipped: [] };
   }
-  const chat = await runtime.client.getChatById(id);
+  const chat = options.chat || await client.getChatById(id);
   const fetchLimit = Math.max(1, Math.min(100, Number(limit || 20) || 20));
   const messages = await chat.fetchMessages({ limit: fetchLimit });
   const unreadCount = Number(chat?.unreadCount || 0) || 0;
@@ -760,6 +764,140 @@ export async function recoverLocalWhatsAppChatMessages({ accountId = "", chatId 
   return { ok: true, accountId: normalized, chatId: id, unreadCount, fetched: messages.length, candidates: candidates.length, routed, skipped };
 }
 
+function localWhatsAppUnreadRecoveryEnabled(env = process.env) {
+  const raw = String(env.ORKESTR_WHATSAPP_UNREAD_RECOVERY || env.WHATSAPP_LOCAL_UNREAD_RECOVERY || "1").trim().toLowerCase();
+  return !["0", "false", "no", "off"].includes(raw);
+}
+
+export function localWhatsAppUnreadRecoveryIntervalMs(env = process.env) {
+  const parsed = Number(env.ORKESTR_WHATSAPP_UNREAD_RECOVERY_MS || env.WHATSAPP_LOCAL_UNREAD_RECOVERY_MS || 30_000);
+  return Number.isFinite(parsed) ? Math.max(10_000, parsed) : 30_000;
+}
+
+function localWhatsAppUnreadRecoveryFetchLimit(env = process.env) {
+  const parsed = Number(env.ORKESTR_WHATSAPP_UNREAD_RECOVERY_FETCH_LIMIT || env.WHATSAPP_LOCAL_UNREAD_RECOVERY_FETCH_LIMIT || 20);
+  return Number.isFinite(parsed) ? Math.max(1, Math.min(100, parsed)) : 20;
+}
+
+function localWhatsAppUnreadRecoveryMaxChats(env = process.env) {
+  const parsed = Number(env.ORKESTR_WHATSAPP_UNREAD_RECOVERY_MAX_CHATS || env.WHATSAPP_LOCAL_UNREAD_RECOVERY_MAX_CHATS || 10);
+  return Number.isFinite(parsed) ? Math.max(1, Math.min(100, parsed)) : 10;
+}
+
+function bindingAccountIds(binding = {}) {
+  return [binding.senderAccountId, binding.responderAccountId, binding.outboundAccountId]
+    .map((candidate) => String(candidate || "").trim())
+    .filter(Boolean);
+}
+
+export function localWhatsAppUnreadRecoveryBoundChats(threads = [], accountId = "", env = process.env) {
+  const selectedAccountId = normalizeAccountId(accountId, env);
+  const byChatId = new Map();
+  for (const thread of Array.isArray(threads) ? threads : []) {
+    const binding = thread?.binding || {};
+    if (String(binding.connector || "whatsapp").trim().toLowerCase() !== "whatsapp") continue;
+    if (binding.enabled === false) continue;
+    const chatId = String(binding.chatId || "").trim();
+    if (!chatId) continue;
+    const accounts = bindingAccountIds(binding);
+    if (accounts.length && !accounts.some((candidate) => localAccountMatches(candidate, selectedAccountId, env))) continue;
+    byChatId.set(chatId, {
+      chatId,
+      threadId: String(thread?.id || "").trim(),
+      accountId: selectedAccountId,
+    });
+  }
+  return [...byChatId.values()];
+}
+
+function optionMapLookup(collection, key) {
+  if (!collection) return undefined;
+  if (collection instanceof Map) return collection.get(key);
+  return collection[key];
+}
+
+async function recoverUnreadLocalWhatsAppMessagesOnce(env = process.env, options = {}) {
+  const accountIds = options.accountIds || localWhatsAppAccountIdsForEnv(env);
+  const threads = options.threads || await listThreads(env).catch(() => []);
+  const maxChats = localWhatsAppUnreadRecoveryMaxChats(env);
+  const limit = Number(options.limit || localWhatsAppUnreadRecoveryFetchLimit(env));
+  const checked = [];
+  const recovered = [];
+  const skipped = [];
+  const failed = [];
+  for (const accountId of accountIds) {
+    const normalized = normalizeAccountId(accountId, env);
+    const state = optionMapLookup(options.accountStates, normalized) || accountStates.get(normalized) || defaultAccountState(normalized);
+    const client = optionMapLookup(options.clients, normalized) || optionMapLookup(options.runtimes, normalized)?.client || runtimes.get(normalized)?.client;
+    const boundChats = localWhatsAppUnreadRecoveryBoundChats(threads, normalized, env);
+    checked.push({ accountId: normalized, boundChats: boundChats.length, ready: Boolean(client && state.ready) });
+    if (!boundChats.length) continue;
+    if (!client || !state.ready) {
+      skipped.push({ accountId: normalized, reason: "not_ready" });
+      continue;
+    }
+    let chats = [];
+    try {
+      chats = optionMapLookup(options.chatsByAccount, normalized) || await client.getChats();
+    } catch (error) {
+      failed.push({ accountId: normalized, reason: "list_chats_failed", error: error?.message || String(error) });
+      continue;
+    }
+    const boundIds = new Set(boundChats.map((chat) => chat.chatId));
+    const unreadChats = (Array.isArray(chats) ? chats : [])
+      .map((chat) => ({
+        chat,
+        chatId: String(chat?.id?._serialized || chat?.id || "").trim(),
+        unreadCount: Number(chat?.unreadCount || 0) || 0,
+      }))
+      .filter((entry) => entry.chatId && boundIds.has(entry.chatId) && entry.unreadCount > 0)
+      .slice(0, maxChats);
+    if (!unreadChats.length) continue;
+    for (const entry of unreadChats) {
+      try {
+        const result = await recoverLocalWhatsAppChatMessagesWithClient({
+          accountId: normalized,
+          chatId: entry.chatId,
+          limit,
+          unreadOnly: true,
+          markSeen: true,
+        }, env, { client, state, chat: entry.chat });
+        recovered.push(result);
+      } catch (error) {
+        failed.push({ accountId: normalized, chatId: entry.chatId, error: error?.message || String(error) });
+      }
+    }
+  }
+  const routed = recovered.reduce((count, result) => count + Number(result?.routed?.length || 0), 0);
+  if (recovered.length || failed.length) {
+    await appendEvent({
+      type: "whatsapp_local_unread_recovery_checked",
+      checked: checked.length,
+      recovered: recovered.length,
+      routed,
+      failed: failed.length,
+    }, env).catch(() => {});
+  }
+  return { enabled: true, checked, recovered, routed, skipped, failed };
+}
+
+export async function recoverUnreadLocalWhatsAppMessages(env = process.env, options = {}) {
+  if (!localWhatsAppUnreadRecoveryEnabled(env) && !options.force) {
+    return { enabled: false, checked: [], recovered: [], routed: 0, skipped: [], failed: [] };
+  }
+  const nowMs = Number(options.nowMs || Date.now());
+  const intervalMs = localWhatsAppUnreadRecoveryIntervalMs(env);
+  if (!options.force && localWhatsAppUnreadRecoveryLastRunMs && nowMs - localWhatsAppUnreadRecoveryLastRunMs < intervalMs) {
+    return { enabled: true, checked: [], recovered: [], routed: 0, skipped: [{ reason: "cooldown", intervalMs }], failed: [] };
+  }
+  if (localWhatsAppUnreadRecoveryInFlight) return localWhatsAppUnreadRecoveryInFlight;
+  localWhatsAppUnreadRecoveryLastRunMs = nowMs;
+  localWhatsAppUnreadRecoveryInFlight = recoverUnreadLocalWhatsAppMessagesOnce(env, options).finally(() => {
+    localWhatsAppUnreadRecoveryInFlight = null;
+  });
+  return localWhatsAppUnreadRecoveryInFlight;
+}
+
 function localWhatsAppAutostartEnabled(env = process.env) {
   const raw = String(env.ORKESTR_WHATSAPP_AUTOSTART || env.WHATSAPP_LOCAL_AUTOSTART || "").trim().toLowerCase();
   return ["1", "true", "yes", "on"].includes(raw);
@@ -780,6 +918,8 @@ export async function startConfiguredLocalWhatsAppAccounts(env = process.env) {
 
 const localWhatsAppRecoveryAttempts = new Map();
 const recoverableLocalWhatsAppStates = new Set(["auth_ready_timeout", "disconnected"]);
+let localWhatsAppUnreadRecoveryInFlight = null;
+let localWhatsAppUnreadRecoveryLastRunMs = 0;
 
 function recoverableLocalWhatsAppFailure(account = {}) {
   const state = String(account?.state || "").trim();
