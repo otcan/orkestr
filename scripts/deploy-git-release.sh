@@ -331,7 +331,7 @@ active_thread_hard_count() {
 }
 
 active_thread_unsafe_count() {
-  node -e 'const report = JSON.parse(process.argv[1] || "{}"); const active = Array.isArray(report.active) ? report.active : []; const restartSafe = (thread) => String(thread.runtimeKind || "").toLowerCase() === "codex-app-server" && String(thread.codexAppServerTransport || thread.appServerTransport || "").toLowerCase() === "proxy"; const unsafe = active.filter((thread) => !restartSafe(thread)); process.stdout.write(String(unsafe.length));' "$1"
+  node -e 'const report = JSON.parse(process.argv[1] || "{}"); const active = Array.isArray(report.active) ? report.active : []; const safeTransports = new Set(["proxy", "websocket"]); const restartSafe = (thread) => String(thread.runtimeKind || "").toLowerCase() === "codex-app-server" && safeTransports.has(String(thread.codexAppServerTransport || thread.appServerTransport || "").toLowerCase()); const unsafe = active.filter((thread) => !restartSafe(thread)); process.stdout.write(String(unsafe.length));' "$1"
 }
 
 active_report_unavailable() {
@@ -507,8 +507,9 @@ const hardActive = (thread) => Boolean(thread.activeTurnId) ||
   Number(thread.runningCount || 0) > 0 ||
   Number(thread.awaitingAckCount || 0) > 0 ||
   hardStates.has(String(thread.state || "").toLowerCase());
+const safeTransports = new Set(["proxy", "websocket"]);
 const restartSafe = (thread) => String(thread.runtimeKind || "").toLowerCase() === "codex-app-server" &&
-  String(thread.codexAppServerTransport || thread.appServerTransport || "").toLowerCase() === "proxy";
+  safeTransports.has(String(thread.codexAppServerTransport || thread.appServerTransport || "").toLowerCase());
 const restartUnsafe = (thread) => !restartSafe(thread);
 const active = (Array.isArray(report.active) ? report.active : []).filter((thread) => {
   if (mode === "hard") return hardActive(thread);

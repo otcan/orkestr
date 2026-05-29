@@ -200,7 +200,7 @@ proxy connection, so UI/API restarts do not stop active Codex turns. The deploye
 still writes a drain marker before restart so new UI, WA, and timer inputs queue
 instead of starting new turns during the deploy window. A Codex turn is treated
 as restart-safe only when `/api/threads?scope=all` reports both
-`runtime=codex-app-server` and `appServer=proxy`. First-time migrations from the
+`runtime=codex-app-server` and `appServer=websocket` or `appServer=proxy`. First-time migrations from the
 old in-process app-server remain conservative and wait until active work is idle
 before enabling the separate Codex service. Use `--wait-active` to wait, or
 `--allow-interrupt` only when the user explicitly accepts interrupting unsafe

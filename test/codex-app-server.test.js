@@ -1,8 +1,11 @@
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
+import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
+import { once } from "node:events";
+import { WebSocketServer } from "ws";
 import {
   codexAppServerThreadStatus,
   deliverCodexAppServerPendingInputs,
@@ -141,6 +144,49 @@ rl.on("line", (line) => {
   return { bin, stateFile };
 }
 
+async function createFakeCodexWebSocketServer(socketPath) {
+  await fs.rm(socketPath, { force: true }).catch(() => {});
+  await fs.mkdir(path.dirname(socketPath), { recursive: true });
+  const state = { threads: [], calls: [] };
+  const server = http.createServer();
+  const wss = new WebSocketServer({ server });
+  const send = (ws, message) => ws.send(JSON.stringify(message));
+  wss.on("connection", (ws) => {
+    ws.on("message", (raw) => {
+      const message = JSON.parse(String(raw || ""));
+      const id = message.id;
+      const params = message.params || {};
+      state.calls.push({ method: message.method || "", params });
+      if (message.method === "initialize") return send(ws, { id, result: { userAgent: "fake", platformFamily: "linux", platformOs: "linux" } });
+      if (message.method === "initialized") return;
+      if (message.method === "thread/start") {
+        const thread = { id: "thr_" + String(state.threads.length + 1).padStart(3, "0"), sessionId: "sess_001", name: "", preview: "", cwd: params.cwd || "", status: { type: "idle" }, loaded: true, turns: [] };
+        state.threads.push(thread);
+        send(ws, { id, result: { thread } });
+        send(ws, { method: "thread/started", params: { thread } });
+        return;
+      }
+      if (message.method === "thread/name/set") {
+        const thread = state.threads.find((item) => item.id === params.threadId);
+        if (thread) thread.name = params.name;
+        return send(ws, { id, result: {} });
+      }
+      return send(ws, { id, result: {} });
+    });
+  });
+  server.listen(socketPath);
+  await once(server, "listening");
+  return {
+    state,
+    async close() {
+      for (const client of wss.clients) client.close();
+      await new Promise((resolve) => wss.close(resolve));
+      await new Promise((resolve) => server.close(resolve));
+      await fs.rm(socketPath, { force: true }).catch(() => {});
+    },
+  };
+}
+
 async function markAppServerTurnActive(thread, env, turnId = "active-turn") {
   const codexThreadId = thread?.executor?.codexThreadId || thread?.codexThreadId;
   const client = await getCodexAppServerClient({ env, home: env.HOME });
@@ -162,10 +208,11 @@ async function waitForAppServerReady(thread, env, attempts = 50) {
   return status;
 }
 
-test("Codex app-server client can use an external proxy socket", async () => {
+test("Codex app-server client can use an external websocket socket", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-codex-app-server-proxy-"));
   const fake = await createFakeCodex(home);
   const socket = path.join(home, "run", "codex.sock");
+  const server = await createFakeCodexWebSocketServer(socket);
   const env = {
     ORKESTR_HOME: path.join(home, "orkestr"),
     ORKESTR_CODEX_APP_SERVER_MODE: "external",
@@ -177,17 +224,17 @@ test("Codex app-server client can use an external proxy socket", async () => {
 
   try {
     const client = await getCodexAppServerClient({ env, home: env.HOME });
-    assert.equal(client.transport, "proxy");
+    assert.equal(client.transport, "websocket");
     assert.equal(client.socket, socket);
     const thread = await createThread({ id: "proxy-thread", name: "Proxy Thread", cwd: home, executorId: "codex", executor: { type: "codex" } }, env);
     const started = await startCodexAppServerThread(thread, env);
     const status = await codexAppServerThreadStatus(started.thread, env);
-    assert.equal(status.codexAppServerTransport, "proxy");
+    assert.equal(status.codexAppServerTransport, "websocket");
     assert.equal(status.codexAppServerSocket, socket);
-    const state = JSON.parse(await fs.readFile(fake.stateFile, "utf8"));
-    assert.deepEqual(state.argv, ["app-server", "proxy", "--sock", socket]);
+    assert.deepEqual(server.state.calls.map((call) => call.method), ["initialize", "initialized", "thread/start", "thread/name/set"]);
   } finally {
     stopCodexAppServerClients();
+    await server.close();
   }
 });
 
