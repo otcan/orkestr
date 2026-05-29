@@ -170,6 +170,54 @@ function cookieValue(header, name = cookieName) {
   return "";
 }
 
+function bearerToken(header) {
+  const raw = String(header || "").trim();
+  const match = raw.match(/^Bearer\s+(.+)$/i);
+  return match ? match[1].trim() : "";
+}
+
+function splitSecretList(value) {
+  return String(value || "")
+    .split(/[\s,]+/g)
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function timingSafeSecretEqual(a, b) {
+  const left = String(a || "");
+  const right = String(b || "");
+  if (!left || !right) return false;
+  return crypto.timingSafeEqual(Buffer.from(sha256(left)), Buffer.from(sha256(right)));
+}
+
+function whatsappInboundTokens(env = process.env) {
+  return [
+    ...splitSecretList(env.ORKESTR_WHATSAPP_INBOUND_TOKEN),
+    ...splitSecretList(env.WHATSAPP_INBOUND_TOKEN),
+    ...splitSecretList(env.ORKESTR_WHATSAPP_INBOUND_TOKENS),
+    ...splitSecretList(env.WHATSAPP_INBOUND_TOKENS),
+  ];
+}
+
+function isWhatsAppInboundRequest(request) {
+  const method = String(request?.method || "GET").toUpperCase();
+  const url = String(request?.url || "").split("?")[0];
+  return method === "POST" && url === "/api/connectors/whatsapp/inbound";
+}
+
+function authorizeWhatsAppInboundRequest(request, env = process.env) {
+  if (!isWhatsAppInboundRequest(request)) return null;
+  const token = bearerToken(request?.headers?.authorization || request?.headers?.Authorization || "");
+  if (!token) return null;
+  const matched = whatsappInboundTokens(env).some((candidate) => timingSafeSecretEqual(token, candidate));
+  if (!matched) return null;
+  return {
+    ok: true,
+    principal: adminPrincipal(defaultAdminUser(env)),
+    machineAuth: "whatsapp_inbound",
+  };
+}
+
 export function securityCookieName() {
   return cookieName;
 }
@@ -507,6 +555,8 @@ export async function authorizeHttpRequest(request, env = process.env) {
   if (shareAuth && Number(shareAuth.statusCode || 0) >= 400) {
     return { ok: false, status, statusCode: shareAuth.statusCode, error: shareAuth.error || "desktop_share_forbidden" };
   }
+  const whatsappInboundAuth = authorizeWhatsAppInboundRequest(request, env);
+  if (whatsappInboundAuth?.ok) return { ok: true, status, principal: whatsappInboundAuth.principal, machineAuth: whatsappInboundAuth.machineAuth };
   if (!status.authEnabled) return { ok: true, status, principal: adminPrincipal(defaultAdminUser(env)) };
   const token = cookieValue(request?.headers?.cookie || "");
   const session = await securitySessionForToken(token, env, { request });
