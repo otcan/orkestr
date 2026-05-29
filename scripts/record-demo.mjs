@@ -12,7 +12,7 @@ export const demoAssetPath = path.join(repoRoot, "docs", "assets", "orkestr-thre
 export const whatsappProofPath = path.join(repoRoot, "docs", "assets", "whatsapp-github-proof.jpeg");
 
 const proofLines = [
-  "otcanclaw: The PNG is on GitHub now.",
+  "orkestr: The PNG is on GitHub now.",
   "",
   "Direct file:",
   "https://github.com/otcan/orkestr/blob/main/docs/assets/orkestr-three-screen-demo.png",
@@ -46,8 +46,8 @@ function whatsappImageDataUri() {
 
 function terminalTranscriptText() {
   return [
-    "$ tmux capture-pane -t otcanClaw-orkestr:features",
-    "thread otcanClaw-orkestr / otcanClaw-features",
+    "$ tmux capture-pane -t acme-ops:features",
+    "thread acme-ops / acme-features",
     "source WhatsApp routed reply",
     "",
     ...proofLines,
@@ -362,7 +362,7 @@ export function renderDemoHtml({ tmuxText = terminalTranscriptText() } = {}) {
       <section class="panel">
         <div class="panel-head"><span class="panel-title">TMUX Capture</span><span class="panel-kicker">same lines</span></div>
         <div class="terminal">
-          <div class="terminal-bar"><span class="dot red"></span><span class="dot yellow"></span><span class="dot green"></span><span>tmux · otcanClaw-features</span></div>
+          <div class="terminal-bar"><span class="dot red"></span><span class="dot yellow"></span><span class="dot green"></span><span>tmux · acme-features</span></div>
           <pre class="tmux-pre">${preLines(tmuxText)}</pre>
         </div>
       </section>
@@ -373,15 +373,15 @@ export function renderDemoHtml({ tmuxText = terminalTranscriptText() } = {}) {
             <div class="brand">Orkestr</div>
             <h2>Threads</h2>
             <div class="search">agent, repo, thread</div>
-            <div class="thread active"><span class="avatar">O</span><span><strong>otcanClaw-orkestr</strong><small>Ready · GitHub proof</small></span></div>
-            <div class="thread"><span class="avatar">F</span><span><strong>otcanClaw-features</strong><small>Working · docs asset</small></span></div>
+            <div class="thread active"><span class="avatar">O</span><span><strong>acme-ops</strong><small>Ready · GitHub proof</small></span></div>
+            <div class="thread"><span class="avatar">F</span><span><strong>acme-features</strong><small>Working · docs asset</small></span></div>
             <div class="thread"><span class="avatar">V</span><span><strong>VPS Smoke</strong><small>Ready · WhatsApp</small></span></div>
           </aside>
           <section class="chat">
             <header class="chat-head">
               <div>
                 <div class="brand">WhatsApp-bound thread</div>
-                <h2>otcanClaw-orkestr</h2>
+                <h2>acme-ops</h2>
                 <span class="pill">main</span><span class="pill">Web UI</span><span class="pill mode">Code</span>
               </div>
               <span class="pill">CPU 18%</span>
@@ -396,7 +396,7 @@ export function renderDemoHtml({ tmuxText = terminalTranscriptText() } = {}) {
                 <pre>${webProof}</pre>
               </article>
             </section>
-            <div class="composer"><span class="input">Send a message to otcanClaw-orkestr</span><span class="send">Send</span></div>
+            <div class="composer"><span class="input">Send a message to acme-ops</span><span class="send">Send</span></div>
           </section>
         </div>
       </section>

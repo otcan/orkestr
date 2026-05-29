@@ -5,6 +5,7 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { dataPaths } from "../../storage/src/paths.js";
 import { appendEvent } from "../../storage/src/store.js";
+import { stripWhatsAppChatNamePrefix } from "../../core/src/whatsapp-defaults.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -141,8 +142,7 @@ function chatIconLines(title) {
 }
 
 function splitChatIconWords(title) {
-  const cleaned = String(title || "")
-    .replace(/^otcanclaw[-_\s]*/i, "")
+  const cleaned = stripWhatsAppChatNamePrefix(title)
     .replace(/personalized/gi, "personal")
     .replace(/metabolimics/gi, "metabolomics")
     .replace(/[^a-zA-Z0-9]+/g, " ")

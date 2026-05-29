@@ -959,7 +959,7 @@
                     </div>
                     <label class="settings-field">
                       <span>Chat name</span>
-                      <input name="thread-wa-name-{{ thread.id }}" [(ngModel)]="whatsappDisplayName" placeholder="otcanClaw-features-Worker-1" />
+                      <input name="thread-wa-name-{{ thread.id }}" [(ngModel)]="whatsappDisplayName" [placeholder]="whatsappChatNamePlaceholder()" />
                     </label>
                     <div class="settings-actions">
                       <button type="button" (click)="createAndConnectWhatsAppChat(thread)" [disabled]="busy || creatingWhatsAppChat || !whatsappDisplayName.trim()">

@@ -12,6 +12,7 @@ import { whereAmI } from "../../../../../packages/core/src/whereiam.js";
 import { requestPrincipal } from "../../../../../packages/core/src/principal.js";
 import { isAdminPrincipal } from "../../../../../packages/core/src/policy.js";
 import { getUser } from "../../../../../packages/core/src/users.js";
+import { configuredWhatsAppChatNamePrefix, defaultWhatsAppReplyPrefix } from "../../../../../packages/core/src/whatsapp-defaults.js";
 import {
   approvePairingChallenge,
   createPairingChallenge,
@@ -362,7 +363,14 @@ export class SystemController {
 
   @Get("setup/status")
   async setupStatus() {
-    return { ...(await getSetupStatus()), config: await publicConfig() };
+    return {
+      ...(await getSetupStatus()),
+      config: await publicConfig(),
+      whatsappDefaults: {
+        chatNamePrefix: configuredWhatsAppChatNamePrefix(),
+        replyPrefix: defaultWhatsAppReplyPrefix(),
+      },
+    };
   }
 
   @Get("settings")

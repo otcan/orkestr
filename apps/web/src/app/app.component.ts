@@ -45,6 +45,8 @@ type PersistedThreadTextField =
   | "approveText"
   | "interruptText";
 
+const DEFAULT_WHATSAPP_REPLY_PREFIX = "orkestr:";
+
 @Component({
   selector: "ork-root",
   imports: [DatePipe, FormsModule, FirstThreadWizardComponent, OpsPageComponent, OnboardingPageComponent, PairingRequiredPageComponent],
@@ -151,7 +153,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   whatsappBindingThreadId = "";
   whatsappChatId = "";
   whatsappDisplayName = "";
-  whatsappReplyPrefix = "otcanclaw:";
+  whatsappReplyPrefix = DEFAULT_WHATSAPP_REPLY_PREFIX;
   whatsappSenderAccountId = "";
   whatsappOutboundAccountId = "";
   whatsappBindingEnabled = true;
@@ -1220,6 +1222,29 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     }
   }
 
+  whatsappChatNamePlaceholder(): string {
+    const prefix = this.whatsappChatNamePrefix();
+    return prefix ? `${prefix}-features-worker-1` : "team-features-worker-1";
+  }
+
+  private defaultWhatsAppReplyPrefix(): string {
+    return String(this.setupStatus?.whatsappDefaults?.replyPrefix || DEFAULT_WHATSAPP_REPLY_PREFIX).trim() || DEFAULT_WHATSAPP_REPLY_PREFIX;
+  }
+
+  private whatsappChatNamePrefix(): string {
+    return String(this.setupStatus?.whatsappDefaults?.chatNamePrefix || "").trim().replace(/-+$/g, "");
+  }
+
+  private withWhatsAppChatNamePrefix(name: string): string {
+    const cleanName = String(name || "").trim();
+    const prefix = this.whatsappChatNamePrefix();
+    if (!cleanName || !prefix) return cleanName;
+    const lowerName = cleanName.toLowerCase();
+    const lowerPrefix = prefix.toLowerCase();
+    if (lowerName === lowerPrefix || lowerName.startsWith(`${lowerPrefix}-`)) return cleanName;
+    return `${prefix}-${cleanName}`;
+  }
+
   async saveThreadBinding(thread: ThreadSummary | null = this.selectedThread()): Promise<void> {
     if (!thread || this.savingThreadBinding) return;
     this.savingThreadBinding = true;
@@ -1236,7 +1261,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
         additionalParticipantIds,
         additionalParticipantLabels: this.whatsappAllowOtherPeople ? this.whatsappSelectedParticipantLabels(thread) : {},
         mirrorToWhatsApp: this.whatsappMirrorToWhatsApp,
-        replyPrefix: this.whatsappReplyPrefix.trim() || "otcanclaw:",
+        replyPrefix: this.whatsappReplyPrefix.trim() || this.defaultWhatsAppReplyPrefix(),
         senderAccountId: this.selectedWhatsAppSenderAccountId(),
         responderAccountId: this.selectedWhatsAppAccountId(),
         outboundAccountId: this.selectedWhatsAppAccountId(),
@@ -1311,7 +1336,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
 
   async createAndConnectWhatsAppChat(thread: ThreadSummary | null = this.selectedThread()): Promise<void> {
     if (!thread || this.creatingWhatsAppChat || this.savingThreadBinding) return;
-    const name = this.whatsappDisplayName.trim() || this.threadTitle(thread);
+    const name = this.withWhatsAppChatNamePrefix(this.whatsappDisplayName.trim() || this.threadTitle(thread));
     if (!name) return;
     this.creatingWhatsAppChat = true;
     this.savingThreadBinding = true;
@@ -1341,7 +1366,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
         additionalParticipantIds: [],
         additionalParticipantLabels: {},
         mirrorToWhatsApp: true,
-        replyPrefix: this.whatsappReplyPrefix.trim() || "otcanclaw:",
+        replyPrefix: this.whatsappReplyPrefix.trim() || this.defaultWhatsAppReplyPrefix(),
         senderAccountId: created.senderAccountId || this.selectedWhatsAppSenderAccountId(),
         responderAccountId: created.responderAccountId || this.selectedWhatsAppAccountId(),
         outboundAccountId: created.responderAccountId || this.selectedWhatsAppAccountId(),
@@ -1382,7 +1407,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
         additionalParticipantIds: [],
         additionalParticipantLabels: {},
         mirrorToWhatsApp: false,
-        replyPrefix: this.whatsappReplyPrefix.trim() || "otcanclaw:",
+        replyPrefix: this.whatsappReplyPrefix.trim() || this.defaultWhatsAppReplyPrefix(),
         senderAccountId: "",
         responderAccountId: "",
         outboundAccountId: "",
@@ -1986,7 +2011,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     const draftParticipantIds = this.whatsappAllowOtherPeople ? this.whatsappSelectedAdditionalParticipantIds(thread) : [];
     return chatId !== String(binding.chatId || "") ||
       this.whatsappDisplayName.trim() !== String(binding.displayName || this.threadTitle(thread)) ||
-      this.whatsappReplyPrefix.trim() !== String(binding.replyPrefix || "otcanclaw:") ||
+      this.whatsappReplyPrefix.trim() !== String(binding.replyPrefix || this.defaultWhatsAppReplyPrefix()) ||
       accountDirty ||
       senderDirty ||
       this.whatsappBindingEnabled !== (binding.enabled !== false) ||
@@ -3231,7 +3256,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     this.whatsappBindingThreadId = thread.id;
     this.whatsappChatId = String(binding.chatId || "");
     this.whatsappDisplayName = String(binding.displayName || this.threadTitle(thread));
-    this.whatsappReplyPrefix = String(binding.replyPrefix || "otcanclaw:");
+    this.whatsappReplyPrefix = String(binding.replyPrefix || this.defaultWhatsAppReplyPrefix());
     this.whatsappSenderAccountId = String(binding.senderAccountId || binding.inboundAccountId || "");
     this.whatsappOutboundAccountId = String(binding.responderAccountId || binding.outboundAccountId || "");
     this.whatsappBindingEnabled = binding.enabled !== false;
@@ -3615,7 +3640,6 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
 
   private splitChatIconWords(title: string): string[] {
     const cleaned = String(title || "")
-      .replace(/^otcanclaw[-_\s]*/i, "")
       .replace(/personalized/gi, "personal")
       .replace(/metabolimics/gi, "metabolomics")
       .replace(/[^a-zA-Z0-9]+/g, " ")

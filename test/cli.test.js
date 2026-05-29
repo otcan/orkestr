@@ -535,6 +535,47 @@ test("CLI creates Orkestr threads with integrated WhatsApp binding", async () =>
   assert.match(stdout.text(), /"ok": true/);
 });
 
+test("CLI applies configured WhatsApp chat-name and reply prefixes", async () => {
+  const previousNamePrefix = process.env.ORKESTR_WHATSAPP_CHAT_NAME_PREFIX;
+  const previousReplyPrefix = process.env.ORKESTR_WHATSAPP_REPLY_PREFIX;
+  process.env.ORKESTR_WHATSAPP_CHAT_NAME_PREFIX = "acme";
+  process.env.ORKESTR_WHATSAPP_REPLY_PREFIX = "agent:";
+
+  try {
+    const stdout = capture();
+    const seen = [];
+    const code = await runCli([
+      "create",
+      "easylab",
+      "--wa-participant",
+      "15551234567@c.us",
+      "--json",
+    ], {
+      stdout,
+      stderr: capture(),
+      fetchImpl: fakeFetch({
+        "POST /api/connectors/whatsapp/bridge/chats": {
+          ok: true,
+          chat: { id: "120363000000000001@g.us", name: "acme-easylab", generated: true },
+        },
+        "POST /api/threads": { thread: { id: "thread-easylab", name: "acme-easylab", state: "sleeping" } },
+        "PUT /api/threads/thread-easylab/binding": { ok: true, binding: { chatId: "120363000000000001@g.us" } },
+      }, seen),
+    });
+
+    assert.equal(code, 0);
+    assert.equal(seen[0].body.name, "acme-easylab");
+    assert.deepEqual(seen[1].body, { name: "acme-easylab" });
+    assert.equal(seen[2].body.displayName, "acme-easylab");
+    assert.equal(seen[2].body.replyPrefix, "agent:");
+  } finally {
+    if (previousNamePrefix === undefined) delete process.env.ORKESTR_WHATSAPP_CHAT_NAME_PREFIX;
+    else process.env.ORKESTR_WHATSAPP_CHAT_NAME_PREFIX = previousNamePrefix;
+    if (previousReplyPrefix === undefined) delete process.env.ORKESTR_WHATSAPP_REPLY_PREFIX;
+    else process.env.ORKESTR_WHATSAPP_REPLY_PREFIX = previousReplyPrefix;
+  }
+});
+
 test("CLI can create Orkestr threads without WhatsApp", async () => {
   const stdout = capture();
   const seen = [];
