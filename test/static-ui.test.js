@@ -68,7 +68,10 @@ test("global shell keeps onboarding footer reachable", async () => {
 test("ops desktop links are only shown for running desktops", async () => {
   const template = await fs.readFile("apps/web/src/app/ops-page.component.html", "utf8");
   const component = await fs.readFile("apps/web/src/app/ops-page.component.ts", "utf8");
+  const appTemplate = await fs.readFile("apps/web/src/app/app.component.html", "utf8");
 
+  assert.match(appTemplate, />DESKTOPS<\/button>/);
+  assert.match(appTemplate, /\(click\)="openTools\('desktops'\)"/);
   assert.match(template, /@if \(browserOpenUrl\(browser\)\)/);
   assert.doesNotMatch(template, /@if \(browser\.desk_url \|\| browser\.url\)/);
   assert.match(template, /\[disabled\]="browserActionBusy\(browser\)"/);

@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { startServer } from "../apps/server/src/server.js";
-import { approvePairingChallenge, authorizeHttpRequest, securityStatus } from "../packages/core/src/security.js";
+import { approvePairingChallenge, authorizeHttpRequest, createPairingChallenge, pairBrowser, securityStatus } from "../packages/core/src/security.js";
 
 function saveEnv(keys) {
   return Object.fromEntries(keys.map((key) => [key, process.env[key]]));
@@ -164,4 +164,31 @@ test("desktop proxy routes require pairing when auth is enabled", async () => {
   assert.equal(blocked.ok, false);
   assert.equal(blocked.error, "browser_pairing_required");
   assert.equal(staticAsset.ok, true);
+});
+
+test("paired browser sessions can open desktop routes without desktop-share challenge", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-security-desktop-session-"));
+  const env = {
+    ORKESTR_HOME: home,
+    ORKESTR_AUTH_REQUIRED: "1",
+  };
+  const challenge = await createPairingChallenge({ env });
+  await approvePairingChallenge(challenge.challengeId, { env });
+  const paired = await pairBrowser({ challengeId: challenge.challengeId, env });
+
+  const allowed = await authorizeHttpRequest({
+    method: "GET",
+    url: "/desktop/linkedin/vnc.html?autoconnect=1&resize=scale&path=desktop/linkedin/websockify",
+    headers: { cookie: `orkestr_session=${encodeURIComponent(paired.token)}` },
+  }, env);
+  const stillBlockedWithoutSession = await authorizeHttpRequest({
+    method: "GET",
+    url: "/desktop/linkedin/vnc.html?autoconnect=1&resize=scale&path=desktop/linkedin/websockify",
+    headers: {},
+  }, env);
+
+  assert.equal(allowed.ok, true);
+  assert.equal(allowed.principal.userId, "admin");
+  assert.equal(stillBlockedWithoutSession.ok, false);
+  assert.equal(stillBlockedWithoutSession.error, "browser_pairing_required");
 });
