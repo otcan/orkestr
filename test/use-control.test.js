@@ -73,6 +73,36 @@ test("non-admin users are limited to one owned thread and cannot read another ow
   assert.deepEqual((await listThreadsForPrincipal(adminPrincipal(), env)).map((thread) => thread.id).sort(), ["alice-thread", "bob-thread"]);
 });
 
+test("non-admin thread creation cannot request root-trusted Codex access", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-use-control-codex-profile-"));
+  const env = { ORKESTR_HOME: home };
+  const alice = userPrincipal(await upsertUser({ id: "alice", role: "user", displayName: "Alice" }, env));
+
+  const thread = await createThreadForPrincipal({
+    id: "alice-thread",
+    name: "Main",
+    codexSandbox: "danger-full-access",
+    codexApprovalPolicy: "never",
+    securityProfile: "trusted-root",
+    executor: {
+      type: "codex",
+      metadata: {
+        codexSandbox: "danger-full-access",
+        codexApprovalPolicy: "never",
+        securityProfile: "trusted-root",
+      },
+    },
+  }, alice, env);
+
+  assert.equal(thread.ownerUserId, "alice");
+  assert.equal(thread.securityProfile, "external-user");
+  assert.equal(thread.codexSandbox, "workspace-write");
+  assert.equal(thread.codexApprovalPolicy, "on-request");
+  assert.equal(thread.executor.metadata.securityProfile, "external-user");
+  assert.equal(thread.executor.metadata.codexSandbox, "workspace-write");
+  assert.equal(thread.executor.metadata.codexApprovalPolicy, "on-request");
+});
+
 test("admin chat summary hides tenant-owned WhatsApp-only threads by default", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-use-control-chat-scope-"));
   const priorHome = process.env.ORKESTR_HOME;
@@ -110,6 +140,61 @@ test("admin chat summary hides tenant-owned WhatsApp-only threads by default", a
     assert.deepEqual(defaultPayload.threads.map((thread) => thread.id), ["admin-main"]);
     assert.equal(allResponse.status, 200);
     assert.deepEqual(allPayload.threads.map((thread) => thread.id).sort(), ["admin-main", "otcantest"]);
+  } finally {
+    if (server) await new Promise((resolve) => server.close(resolve));
+    if (priorHome === undefined) delete process.env.ORKESTR_HOME;
+    else process.env.ORKESTR_HOME = priorHome;
+    if (priorRecover === undefined) delete process.env.ORKESTR_RECOVER_RUNNING_ON_START;
+    else process.env.ORKESTR_RECOVER_RUNNING_ON_START = priorRecover;
+  }
+});
+
+test("generated WhatsApp binding persists restricted Codex defaults for tenant threads", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-use-control-binding-codex-profile-"));
+  const priorHome = process.env.ORKESTR_HOME;
+  const priorRecover = process.env.ORKESTR_RECOVER_RUNNING_ON_START;
+  process.env.ORKESTR_HOME = home;
+  process.env.ORKESTR_RECOVER_RUNNING_ON_START = "0";
+
+  let server;
+  try {
+    await createThread({
+      id: "otcantest",
+      name: "otcantest",
+      ownerUserId: "otcan",
+      codexSandbox: "danger-full-access",
+      codexApprovalPolicy: "never",
+      securityProfile: "trusted-root",
+      executor: {
+        type: "codex",
+        metadata: {
+          codexSandbox: "danger-full-access",
+          codexApprovalPolicy: "never",
+          securityProfile: "trusted-root",
+        },
+      },
+    }, process.env);
+
+    server = await startServer({ port: 0, host: "127.0.0.1" });
+    const { port } = server.address();
+    const response = await fetch(`http://127.0.0.1:${port}/api/threads/otcantest/binding`, {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        chatId: "120363423847331215@g.us",
+        displayName: "otcantest",
+        generated: true,
+      }),
+    });
+    const payload = await response.json();
+
+    assert.equal(response.status, 200);
+    assert.equal(payload.thread.securityProfile, "generated-whatsapp");
+    assert.equal(payload.thread.codexSandbox, "workspace-write");
+    assert.equal(payload.thread.codexApprovalPolicy, "on-request");
+    assert.equal(payload.thread.executor.metadata.securityProfile, "generated-whatsapp");
+    assert.equal(payload.thread.executor.metadata.codexSandbox, "workspace-write");
+    assert.equal(payload.thread.executor.metadata.codexApprovalPolicy, "on-request");
   } finally {
     if (server) await new Promise((resolve) => server.close(resolve));
     if (priorHome === undefined) delete process.env.ORKESTR_HOME;

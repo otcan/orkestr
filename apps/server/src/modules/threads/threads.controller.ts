@@ -250,6 +250,47 @@ function optionalBodyStringMap(body: Record<string, unknown>, key: string, fallb
   return result;
 }
 
+function adminUserIdFromEnv(): string {
+  return String(process.env.ORKESTR_ADMIN_USER_ID || "admin").trim().toLowerCase() || "admin";
+}
+
+function restrictedApprovalPolicy(thread: any): string {
+  const requested = String(thread?.codexApprovalPolicy || thread?.executor?.metadata?.codexApprovalPolicy || "on-request").trim() || "on-request";
+  return requested === "never" ? "on-request" : requested;
+}
+
+function threadSecurityProfile(thread: any): string {
+  return String(thread?.securityProfile || thread?.executor?.metadata?.securityProfile || "").trim();
+}
+
+function restrictedSecurityProfile(thread: any): string {
+  const requested = threadSecurityProfile(thread);
+  if (["demo-isolated", "quarantined-demo", "external-user", "private-user", "generated-whatsapp"].includes(requested.toLowerCase())) return requested;
+  return "generated-whatsapp";
+}
+
+function generatedWhatsAppBindingCodexPatch(thread: any, binding: Record<string, unknown>): Record<string, unknown> {
+  if (binding.generated !== true) return {};
+  const ownerUserId = String(thread?.ownerUserId || thread?.userId || "").trim().toLowerCase();
+  if (!ownerUserId || ownerUserId === adminUserIdFromEnv()) return {};
+  const securityProfile = restrictedSecurityProfile(thread);
+  const codexApprovalPolicy = restrictedApprovalPolicy(thread);
+  return {
+    securityProfile,
+    codexSandbox: "workspace-write",
+    codexApprovalPolicy,
+    executor: {
+      ...(thread.executor || {}),
+      metadata: {
+        ...(thread.executor?.metadata || {}),
+        securityProfile,
+        codexSandbox: "workspace-write",
+        codexApprovalPolicy,
+      },
+    },
+  };
+}
+
 function safeCloneSegment(value: string): string {
   const withoutGitSuffix = value.replace(/\.git$/i, "");
   const tail = withoutGitSuffix.split(/[/:]/).filter(Boolean).at(-1) || "repo";
@@ -1271,7 +1312,11 @@ export class ThreadsController {
       trustedOverrideAuthorTags: optionalBodyStringArray(body, "trustedOverrideAuthorTags", current.trustedOverrideAuthorTags || []),
       updatedAt: new Date().toISOString(),
     };
-    const updated = await updateThread(thread.id, { binding, bindingName: binding.displayName });
+    const updated = await updateThread(thread.id, {
+      ...generatedWhatsAppBindingCodexPatch(thread, binding),
+      binding,
+      bindingName: binding.displayName,
+    });
     return { ok: true, thread: updated, binding };
   }
 }

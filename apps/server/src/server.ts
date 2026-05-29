@@ -298,8 +298,17 @@ export function serverHandle(
       if (timer) clearInterval(timer);
       if (runtimeMonitor) clearInterval(runtimeMonitor);
       if (paneProgressMonitor) clearInterval(paneProgressMonitor);
+      const httpServer = app.getHttpServer();
       Promise.resolve(cleanup?.())
+        .then(() => {
+          httpServer.closeIdleConnections?.();
+          httpServer.closeAllConnections?.();
+        })
         .then(() => app.close())
+        .then(() => {
+          httpServer.closeIdleConnections?.();
+          httpServer.closeAllConnections?.();
+        })
         .then(() => callback?.())
         .catch((error) => callback?.(error));
     },

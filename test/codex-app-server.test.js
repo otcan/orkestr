@@ -19,7 +19,7 @@ import {
 } from "../packages/core/src/codex-app-server.js";
 import { migrateCodexThreadsToAppServer } from "../packages/core/src/codex-app-server-migration.js";
 import { resetThreadRuntime, sleepThread } from "../packages/core/src/runtime-leases.js";
-import { effortForThread, modelForThread, turnStartParams } from "../packages/core/src/codex-app-server-common.js";
+import { effortForThread, modelForThread, threadStartParams, turnStartParams } from "../packages/core/src/codex-app-server-common.js";
 import { appendThreadMessage, createThread, enqueueThreadInput, getThread, listThreadMessages, updateThread, updateThreadMessage } from "../packages/core/src/threads.js";
 import { deliverWhatsAppReplies } from "../packages/connectors/src/whatsapp.js";
 import { writeConnectorConfig } from "../packages/storage/src/config.js";
@@ -248,6 +248,55 @@ test("Codex app-server turn params ignore corrupt model and reasoning metadata",
     else process.env.ORKESTR_DEFAULT_CODEX_MODEL = previousModel;
     if (previousReasoning === undefined) delete process.env.ORKESTR_DEFAULT_CODEX_REASONING;
     else process.env.ORKESTR_DEFAULT_CODEX_REASONING = previousReasoning;
+  }
+});
+
+test("Codex app-server clamps non-admin threads away from root danger access", () => {
+  const previousSandbox = process.env.ORKESTR_CODEX_SANDBOX;
+  const previousApproval = process.env.ORKESTR_CODEX_APPROVAL_POLICY;
+  const previousAdmin = process.env.ORKESTR_ADMIN_USER_ID;
+  try {
+    process.env.ORKESTR_CODEX_SANDBOX = "danger-full-access";
+    process.env.ORKESTR_CODEX_APPROVAL_POLICY = "never";
+    process.env.ORKESTR_ADMIN_USER_ID = "admin";
+
+    const restrictedThread = {
+      id: "otcantest",
+      ownerUserId: "otcan",
+      cwd: "/tmp/otcantest-workspace",
+      codexSandbox: "danger-full-access",
+      codexApprovalPolicy: "never",
+      executor: {
+        metadata: {
+          codexSandbox: "danger-full-access",
+          codexApprovalPolicy: "never",
+        },
+      },
+    };
+
+    assert.equal(threadStartParams(restrictedThread).sandbox, "workspace-write");
+    assert.equal(threadStartParams(restrictedThread).approvalPolicy, "on-request");
+    assert.equal(turnStartParams(restrictedThread, { text: "hello" }).sandboxPolicy.type, "workspaceWrite");
+    assert.deepEqual(turnStartParams(restrictedThread, { text: "hello" }).sandboxPolicy.writableRoots, ["/tmp/otcantest-workspace"]);
+    assert.equal(turnStartParams(restrictedThread, { text: "hello" }).approvalPolicy, "on-request");
+
+    const trustedThread = {
+      ...restrictedThread,
+      id: "trusted-root",
+      ownerUserId: "admin",
+      securityProfile: "trusted-root",
+    };
+
+    assert.equal(threadStartParams(trustedThread).sandbox, "danger-full-access");
+    assert.equal(threadStartParams(trustedThread).approvalPolicy, "never");
+    assert.deepEqual(turnStartParams(trustedThread, { text: "hello" }).sandboxPolicy, { type: "dangerFullAccess" });
+  } finally {
+    if (previousSandbox === undefined) delete process.env.ORKESTR_CODEX_SANDBOX;
+    else process.env.ORKESTR_CODEX_SANDBOX = previousSandbox;
+    if (previousApproval === undefined) delete process.env.ORKESTR_CODEX_APPROVAL_POLICY;
+    else process.env.ORKESTR_CODEX_APPROVAL_POLICY = previousApproval;
+    if (previousAdmin === undefined) delete process.env.ORKESTR_ADMIN_USER_ID;
+    else process.env.ORKESTR_ADMIN_USER_ID = previousAdmin;
   }
 });
 
