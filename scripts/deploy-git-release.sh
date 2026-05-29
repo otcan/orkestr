@@ -749,14 +749,17 @@ repair_runtime_ownership() {
   if [ "$(id -u)" -ne 0 ]; then
     return 0
   fi
-  local run_user run_group runtime_home codex_home
+  local run_user run_group runtime_home runtime_run_dir codex_home
   run_user="$(runtime_run_user)"
   if ! id "$run_user" >/dev/null 2>&1; then
     return 0
   fi
   run_group="$(id -gn "$run_user")"
   runtime_home="${ORKESTR_HOME:-/opt/orkestr/data}"
+  runtime_run_dir="$(dirname "$(codex_app_server_socket_default)")"
   codex_home="${CODEX_HOME:-$runtime_home/codex}"
+  mkdir -p "$runtime_home" "$runtime_run_dir"
+  chown "$run_user:$run_group" "$runtime_home" "$runtime_run_dir"
   mkdir -p "$codex_home"
   chown -R "$run_user:$run_group" "$codex_home"
   chmod 0700 "$codex_home"
