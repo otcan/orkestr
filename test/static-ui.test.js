@@ -83,6 +83,13 @@ test("ops desktop links are only shown for running desktops", async () => {
   assert.doesNotMatch(component, /return String\(browser\.desk_url \|\| browser\.url \|\| ""\)\.trim\(\)/);
   assert.match(template, />Open Desktop<\/a>/);
   assert.match(template, />Share Link<\/button>/);
+  assert.match(template, />Threads<\/strong>/);
+  assert.match(template, /desktopThreads\(browser\)/);
+  assert.match(component, /desktopThreads\(browser: BrowserSession\)/);
+  assert.match(component, /desktopThreadHref\(thread: Record<string, unknown>\)/);
+  assert.doesNotMatch(template, /pid \{\{ browserPid/);
+  assert.doesNotMatch(template, /CDP \{\{ browser\.debugPort/);
+  assert.doesNotMatch(template, /browserOwner\(browser\)/);
   assert.doesNotMatch(template, />Open Desk<\/a>/);
   assert.doesNotMatch(template, />Mobile<\/a>/);
   assert.doesNotMatch(template, />CDP<\/a>/);

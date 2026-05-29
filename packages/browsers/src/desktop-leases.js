@@ -2,8 +2,8 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { dataPaths } from "../../storage/src/paths.js";
-import { listThreads } from "../../core/src/threads.js";
-import { isAdminPrincipal } from "../../core/src/policy.js";
+import { listThreads, listThreadsForPrincipal } from "../../core/src/threads.js";
+import { isAdminPrincipal, resourceOwnerUserId } from "../../core/src/policy.js";
 import { normalizeUserId } from "../../core/src/users.js";
 
 const VALID_MODES = new Set(["exclusive", "viewOnly", "sharedRead"]);
@@ -235,6 +235,119 @@ function filterLeasesForPrincipal(leases = [], principal = null, env = process.e
   if (!principal || isAdminPrincipal(principal)) return leases;
   const ownerUserId = ownerUserIdForPrincipal(principal, env);
   return leases.filter((lease) => lease.ownerUserId === ownerUserId);
+}
+
+function firstObject(...values) {
+  return values.find((value) => value && typeof value === "object" && !Array.isArray(value)) || {};
+}
+
+function desktopSlugCandidates(thread = {}) {
+  const runtime = firstObject(thread.runtime);
+  const binding = firstObject(thread.binding);
+  const executor = firstObject(thread.executor);
+  const metadata = firstObject(executor.metadata);
+  const values = [
+    thread.desktopSlug,
+    thread.browserSlug,
+    thread.managedDesktopSlug,
+    thread.manualInterventionDesktopSlug,
+    thread.defaultDesktopSlug,
+    runtime.desktopSlug,
+    runtime.browserSlug,
+    binding.desktopSlug,
+    binding.browserSlug,
+    metadata.desktopSlug,
+    metadata.browserSlug,
+    metadata.managedDesktopSlug,
+    metadata.manualInterventionDesktopSlug,
+    metadata.defaultDesktopSlug,
+  ];
+  return new Set(values.map(normalizeDesktopSlug).filter(Boolean));
+}
+
+function desktopThreadSearchText(thread = {}) {
+  const binding = firstObject(thread.binding);
+  const executor = firstObject(thread.executor);
+  const metadata = firstObject(executor.metadata);
+  return [
+    thread.id,
+    thread.name,
+    thread.title,
+    thread.bindingName,
+    thread.workerLabel,
+    binding.displayName,
+    binding.chatName,
+    binding.name,
+    metadata.purpose,
+    metadata.label,
+    metadata.title,
+  ].filter(Boolean).join(" ").toLowerCase();
+}
+
+function threadMatchesDesktopSlug(thread, slug) {
+  const normalized = normalizeDesktopSlug(slug);
+  if (!normalized) return false;
+  if (desktopSlugCandidates(thread).has(normalized)) return true;
+  if (normalized === "desktop") return false;
+  return desktopThreadSearchText(thread).includes(normalized);
+}
+
+function activityMs(thread = {}) {
+  const candidates = [thread.lastActivityAt, thread.threadUpdatedAt, thread.updatedAt, thread.createdAt];
+  for (const value of candidates) {
+    const parsed = Date.parse(String(value || ""));
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return 0;
+}
+
+function publicDesktopThread(thread = {}) {
+  return {
+    id: String(thread.id || "").trim(),
+    name: String(thread.name || "").trim(),
+    title: String(thread.title || thread.name || thread.id || "").trim(),
+    bindingName: String(thread.bindingName || "").trim(),
+    ownerUserId: normalizeUserId(thread.ownerUserId || "admin"),
+    state: String(thread.state || "").trim(),
+    status: String(thread.status || thread.state || "").trim(),
+    lastActivityAt: thread.lastActivityAt || thread.threadUpdatedAt || thread.updatedAt || thread.createdAt || null,
+    updatedAt: thread.updatedAt || null,
+    codexModeLive: thread.codexModeLive || thread.desiredCodexMode || thread.codexMode || null,
+  };
+}
+
+async function visibleThreadsForDesktopContext(principal = null, env = process.env) {
+  if (!principal || isAdminPrincipal(principal)) return listThreads(env).catch(() => []);
+  return listThreadsForPrincipal(principal, env).catch(() => []);
+}
+
+export async function attachDesktopStateToSessions(sessions = [], env = process.env, options = {}) {
+  const scopedSessions = Array.isArray(sessions) ? sessions : [];
+  const [leases, threads] = await Promise.all([
+    publicDesktopLeases({ principal: options?.principal }, env).catch(() => []),
+    visibleThreadsForDesktopContext(options?.principal, env),
+  ]);
+  const leaseByKey = new Map(leases.map((lease) => [`${lease.desktopSlug}:${lease.ownerUserId || ""}`, lease]));
+  return scopedSessions.map((session) => {
+    const slug = normalizeDesktopSlug(session?.slug || session?.id);
+    const ownerUserId = normalizeUserId(session?.ownerUserId || options?.ownerUserId || env.ORKESTR_ADMIN_USER_ID || "admin");
+    const lease = leaseByKey.get(`${slug}:${ownerUserId}`) || null;
+    const relatedThreads = threads
+      .filter((thread) => resourceOwnerUserId(thread, env) === ownerUserId)
+      .filter((thread) => threadMatchesDesktopSlug(thread, slug) || (lease && thread.id === lease.threadId))
+      .sort((left, right) => activityMs(right) - activityMs(left))
+      .slice(0, 8)
+      .map(publicDesktopThread);
+    return {
+      ...session,
+      lease,
+      leased: !!lease,
+      leaseOwnerThreadId: lease?.threadId || null,
+      leaseOwnerLabel: lease?.ownerThreadLabel || null,
+      relatedThreads,
+      relatedThreadCount: relatedThreads.length,
+    };
+  });
 }
 
 export function publicDesktopLease(lease, threadsById = new Map(), nowMs = Date.now(), env = process.env) {

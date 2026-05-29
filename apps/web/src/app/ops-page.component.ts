@@ -362,6 +362,23 @@ export class OpsPageComponent implements OnInit, OnDestroy {
     return `/desktop/${encodedSlug}/vnc.html?autoconnect=1&resize=scale&path=desktop/${encodedSlug}/websockify`;
   }
 
+  desktopThreads(browser: BrowserSession): Array<Record<string, unknown>> {
+    return Array.isArray(browser.relatedThreads) ? browser.relatedThreads : [];
+  }
+
+  desktopThreadLabel(thread: Record<string, unknown>): string {
+    return String(thread["title"] || thread["name"] || thread["bindingName"] || thread["id"] || "Thread").trim();
+  }
+
+  desktopThreadState(thread: Record<string, unknown>): string {
+    return String(thread["status"] || thread["state"] || "ready").trim();
+  }
+
+  desktopThreadHref(thread: Record<string, unknown>): string {
+    const id = String(thread["id"] || thread["name"] || thread["bindingName"] || "").trim();
+    return id ? `/thread/${encodeURIComponent(id)}` : "/ops/desktops";
+  }
+
   browserActionBusy(browser: BrowserSession): boolean {
     const slug = this.browserSlug(browser);
     return !!slug && this.activeBrowserActionSlug === slug;

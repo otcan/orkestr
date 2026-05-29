@@ -3,7 +3,7 @@ import { promisify } from "node:util";
 import { userDataPaths } from "../../storage/src/paths.js";
 import { isAdminPrincipal } from "../../core/src/policy.js";
 import { normalizeUserId } from "../../core/src/users.js";
-import { activeDesktopLeaseStatus, publicDesktopLeases } from "./desktop-leases.js";
+import { activeDesktopLeaseStatus, attachDesktopStateToSessions } from "./desktop-leases.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -148,31 +148,20 @@ function normalizeBrowserctlSession(session) {
 }
 
 async function attachDesktopLeases(sessions, env = process.env, options = {}) {
-  const leases = await publicDesktopLeases({ principal: options?.principal }, env).catch(() => []);
-  const leaseByKey = new Map(leases.map((lease) => [`${lease.desktopSlug}:${lease.ownerUserId || ""}`, lease]));
-  return sessions.map((session) => {
-    const scoped = tagSessionScope(session, env, options);
-    const lease = leaseByKey.get(`${String(scoped.slug || "")}:${scoped.ownerUserId || ""}`) || null;
-    return {
-      ...scoped,
-      lease,
-      leased: !!lease,
-      leaseOwnerThreadId: lease?.threadId || null,
-      leaseOwnerLabel: lease?.ownerThreadLabel || null,
-    };
-  });
+  return attachDesktopStateToSessions(sessions.map((session) => tagSessionScope(session, env, options)), env, options);
 }
 
 async function attachDesktopLease(session, env = process.env, options = {}) {
   const scoped = tagSessionScope(session, env, options);
   const lease = await activeDesktopLeaseStatus(scoped.slug, env, { principal: options?.principal, ownerUserId: scoped.ownerUserId }).catch(() => null);
-  return {
+  const [decorated] = await attachDesktopStateToSessions([{
     ...scoped,
     lease,
     leased: !!lease,
     leaseOwnerThreadId: lease?.threadId || null,
     leaseOwnerLabel: lease?.ownerThreadLabel || null,
-  };
+  }], env, options);
+  return decorated || scoped;
 }
 
 async function listRemoteDesktopSessions(env = process.env, options = {}) {

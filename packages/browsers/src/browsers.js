@@ -6,6 +6,7 @@ import { dataPaths, ensureDataDirs, userDataPaths } from "../../storage/src/path
 import { appendEvent, readJson, writeJson } from "../../storage/src/store.js";
 import { isAdminPrincipal } from "../../core/src/policy.js";
 import { normalizeUserId } from "../../core/src/users.js";
+import { attachDesktopStateToSessions } from "./desktop-leases.js";
 import { isBrowserctlUnavailableError, listManagedDesktopSessions, managedDesktopAction, managedDesktopOpenUrl } from "./browserctl.js";
 
 const execFileAsync = promisify(execFile);
@@ -282,7 +283,8 @@ async function publicBrowserRecord(browser, env = process.env, options = {}) {
 
 async function listProfileBrowsers(env = process.env, options = {}) {
   await ensureDataDirs(env);
-  return Promise.all(browserCatalog.map((browser) => publicBrowserRecord(browser, env, options)));
+  const sessions = await Promise.all(browserCatalog.map((browser) => publicBrowserRecord(browser, env, options)));
+  return attachDesktopStateToSessions(sessions, env, options);
 }
 
 export async function listVirtualBrowsers(env = process.env, options = {}) {

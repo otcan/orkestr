@@ -17,6 +17,7 @@ import {
 } from "../packages/browsers/src/browsers.js";
 import { acquireDesktopLease, activeDesktopLeaseStatus, publicDesktopLeases } from "../packages/browsers/src/desktop-leases.js";
 import { userPrincipal } from "../packages/core/src/principal.js";
+import { createThread } from "../packages/core/src/threads.js";
 import { listEvents } from "../packages/storage/src/store.js";
 
 const execFileAsync = promisify(execFile);
@@ -148,6 +149,36 @@ if (command === "list") {
   assert.equal(pa.leaseOwnerLabel, "Thread A");
   assert.equal(started.action, "start");
   assert.equal(started.source, "browserctl");
+});
+
+test("managed desktop sessions include related threads without an active lease", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-browserctl-threads-"));
+  const browserctl = path.join(home, "browserctl.js");
+  await fs.writeFile(browserctl, `#!/usr/bin/env node
+const session = {
+  slug: "linkedin",
+  label: "LinkedIn",
+  type: "desktop",
+  status: "active",
+  desk_url: "https://linkedin.example.invalid/",
+  control: { start: true, stop: true, restart: true, health: true }
+};
+console.log(JSON.stringify({ ok: true, sessions: [session] }));
+`);
+  await fs.chmod(browserctl, 0o755);
+  const env = {
+    ORKESTR_HOME: home,
+    ORKESTR_BROWSERCTL_PATH: browserctl,
+    ORKESTR_DESKTOP_LEASE_FILE: path.join(home, "desktop-leases.json"),
+  };
+
+  await createThread({ id: "crawlerai-linkedin", name: "Crawlerai LinkedIn", title: "Crawlerai-Linkedin", state: "ready" }, env);
+  const payload = await listBrowserSessions(env);
+  const linkedin = payload.sessions.find((session) => session.slug === "linkedin");
+
+  assert.equal(linkedin.lease, null);
+  assert.deepEqual(linkedin.relatedThreads.map((thread) => thread.id), ["crawlerai-linkedin"]);
+  assert.equal(linkedin.relatedThreads[0].title, "Crawlerai-Linkedin");
 });
 
 test("managed desktop sessions can open a requested URL through CDP", async () => {

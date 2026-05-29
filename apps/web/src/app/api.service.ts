@@ -84,6 +84,8 @@ export interface BrowserSession {
   leased?: boolean;
   leaseOwnerThreadId?: string | null;
   leaseOwnerLabel?: string | null;
+  relatedThreads?: Array<Record<string, unknown>>;
+  relatedThreadCount?: number;
 }
 
 export interface DesktopShareResponse {

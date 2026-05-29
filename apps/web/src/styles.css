@@ -2728,7 +2728,7 @@ ork-first-thread-wizard.first-thread-host {
 .desktop-pills,
 .desktop-meta,
 .desktop-lease,
-.desktop-links,
+.desktop-threads,
 .desktop-actions {
   display: flex;
   flex-wrap: wrap;
@@ -2787,6 +2787,50 @@ ork-first-thread-wizard.first-thread-host {
 }
 
 .desktop-links .button-link {
+  min-height: 34px;
+}
+
+.desktop-threads {
+  display: grid;
+  gap: 7px;
+  border: 1px solid rgba(119, 205, 126, 0.14);
+  border-radius: 8px;
+  background: rgba(5, 13, 7, 0.5);
+  padding: 10px;
+}
+
+.desktop-threads strong {
+  color: #c6ffcd;
+  font-size: 0.78rem;
+}
+
+.desktop-thread-link {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  align-items: center;
+  min-height: 32px;
+  border: 1px solid rgba(119, 205, 126, 0.18);
+  border-radius: 7px;
+  color: #dfffe1;
+  background: rgba(11, 26, 11, 0.74);
+  padding: 6px 9px;
+  text-decoration: none;
+}
+
+.desktop-thread-link span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.desktop-thread-link small {
+  flex: 0 0 auto;
+  color: #91ad8b;
+}
+
+.desktop-actions .button-link {
   min-height: 34px;
 }
 

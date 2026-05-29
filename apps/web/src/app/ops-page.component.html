@@ -143,23 +143,6 @@
             </div>
           </div>
           <p>{{ browserSummary(browser) }}</p>
-          <div class="desktop-meta">
-            @if (browserPid(browser)) {
-              <span>pid {{ browserPid(browser) }}</span>
-            }
-            @if (browser.debugPort) {
-              <span>CDP {{ browser.debugPort }}</span>
-            }
-            @if (browserCdpLabel(browser)) {
-              <span>{{ browserCdpLabel(browser) }}</span>
-            }
-            @if (browser.safe_cleanup) {
-              <span>safe cleanup</span>
-            }
-            @if (browserOwner(browser)) {
-              <span>{{ browserOwner(browser) }}</span>
-            }
-          </div>
           @if (browser.lease) {
             <div class="desktop-lease" [class.stale]="objectValue(browser.lease, 'stale') === 'true'" [class.stealable]="objectValue(browser.lease, 'stealable') === 'true'">
               <strong>{{ objectValue(browser.lease, 'stale') === 'true' ? 'Lease stale' : 'Leased' }}</strong>
@@ -167,12 +150,21 @@
               <small>{{ objectValue(browser.lease, 'mode') || 'exclusive' }}</small>
             </div>
           }
-          <div class="desktop-links">
-            @if (browserOpenUrl(browser)) {
-              <a class="button-link" [href]="browserOpenUrl(browser)" target="_blank" rel="noreferrer">Open Desktop</a>
+          <div class="desktop-threads">
+            <strong>Threads</strong>
+            @for (thread of desktopThreads(browser); track objectValue(thread, 'id') || jsonLine(thread)) {
+              <a [href]="desktopThreadHref(thread)" class="desktop-thread-link">
+                <span>{{ desktopThreadLabel(thread) }}</span>
+                <small>{{ desktopThreadState(thread) }}</small>
+              </a>
+            } @empty {
+              <small>No thread bound yet.</small>
             }
           </div>
           <div class="desktop-actions">
+            @if (browserOpenUrl(browser)) {
+              <a class="button-link" [href]="browserOpenUrl(browser)" target="_blank" rel="noreferrer">Open Desktop</a>
+            }
             @if (shouldShowBrowserAction(browser, 'prepare')) {
               <button type="button" (click)="browserAction(browser, 'prepare')" [disabled]="browserActionBusy(browser)">Prepare</button>
             }
