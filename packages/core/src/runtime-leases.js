@@ -32,6 +32,7 @@ import {
 } from "./codex-app-server.js";
 import { appendOrUpdateEventMessage, normalizeCodexModel, normalizeReasoningEffort } from "./codex-app-server-common.js";
 import { completeThreadSecurityApproveCommand, threadSecurityApproveChallengeId } from "./security-thread-command.js";
+import { threadUsesContainedUserPolicy } from "./tenant-policy.js";
 import {
   capturePane,
   killTmuxSession,
@@ -3443,6 +3444,7 @@ function codexRolloutPathForThread(thread = {}) {
 function shouldSyncDetachedRollout(thread = {}, activeLeaseThreadIds = new Set()) {
   if (!thread?.id || activeLeaseThreadIds.has(thread.id)) return false;
   if (!threadUsesCodexAppServer(thread)) return false;
+  if (threadUsesContainedUserPolicy(thread)) return false;
   if (String(thread?.binding?.connector || "").trim().toLowerCase() !== "whatsapp") return false;
   return Boolean(codexThreadId(thread) || codexRolloutPathForThread(thread));
 }

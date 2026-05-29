@@ -99,3 +99,59 @@ test("detached app-server WhatsApp threads project direct Codex rollout replies"
   assert.equal(second.appended, 0);
   assert.equal(afterSecond.filter((message) => message.text === "Projected reply").length, 1);
 });
+
+test("detached rollout sync ignores contained app-server WhatsApp threads", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-contained-rollout-"));
+  const rolloutPath = path.join(home, "rollout.jsonl");
+  const env = {
+    ORKESTR_HOME: path.join(home, "orkestr"),
+    ORKESTR_ROLLOUT_SYNC_LOOKBACK_BYTES: "8192",
+  };
+  await fs.mkdir(path.dirname(rolloutPath), { recursive: true });
+  await createThread({
+    id: "contained-detached-rollout-thread",
+    name: "Contained Detached Rollout Thread",
+    state: "ready",
+    ownerUserId: "otcan",
+    securityProfile: "private-user",
+    executorId: "codex",
+    executor: {
+      type: "codex",
+      transport: "app-server",
+      codexThreadId: "22222222-2222-4222-8222-222222222222",
+      metadata: {
+        runtimeKind: "codex-app-server",
+        codexRolloutPath: rolloutPath,
+      },
+    },
+    runtime: {
+      runtimeKind: "codex-app-server",
+      state: "ready",
+    },
+    binding: {
+      connector: "whatsapp",
+      chatId: "chat-2",
+      responderAccountId: "responder",
+      outboundAccountId: "responder",
+    },
+  }, env);
+  await fs.writeFile(rolloutPath, JSON.stringify({
+    timestamp: "2026-05-26T14:00:03.000Z",
+    type: "response_item",
+    payload: {
+      type: "message",
+      role: "assistant",
+      phase: "final_answer",
+      content: [{ type: "output_text", text: "Should not project" }],
+    },
+  }) + "\n", "utf8");
+
+  const result = await syncRuntimeLeases(env);
+  const messages = await listThreadMessages("contained-detached-rollout-thread", env);
+  const stored = await getThread("contained-detached-rollout-thread", env);
+
+  assert.equal(result.appended, 0);
+  assert.equal(messages.some((message) => message.text === "Should not project"), false);
+  assert.equal(stored.runtime.operatorRolloutPath, undefined);
+  assert.equal(stored.runtime.operatorRolloutOffset, undefined);
+});
