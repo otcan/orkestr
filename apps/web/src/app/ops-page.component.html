@@ -139,7 +139,7 @@
             </div>
             <div class="desktop-pills">
               <span>{{ browserType(browser) }}</span>
-              <span [class.live]="browserStatus(browser) === 'running'">{{ browserStatus(browser) }}</span>
+              <span [class.live]="browserIsRunning(browser)">{{ browserStatus(browser) }}</span>
             </div>
           </div>
           <p>{{ browserSummary(browser) }}</p>

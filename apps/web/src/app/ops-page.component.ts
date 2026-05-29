@@ -329,6 +329,10 @@ export class OpsPageComponent implements OnInit, OnDestroy {
     return String(browser.status || browser.state || "unknown").trim();
   }
 
+  browserIsRunning(browser: BrowserSession): boolean {
+    return ["active", "running"].includes(this.browserStatus(browser));
+  }
+
   browserType(browser: BrowserSession): string {
     return String(browser.type || browser.access || "desktop").trim();
   }
@@ -350,8 +354,12 @@ export class OpsPageComponent implements OnInit, OnDestroy {
   }
 
   browserOpenUrl(browser: BrowserSession): string {
-    if (this.browserStatus(browser) !== "running") return "";
-    return String(browser.desk_url || browser.url || "").trim();
+    if (!this.browserIsRunning(browser)) return "";
+    const slug = this.browserSlug(browser);
+    if (!slug) return "";
+    if (!String(browser.desk_url || browser.url || "").trim() && this.browserType(browser) !== "desktop") return "";
+    const encodedSlug = encodeURIComponent(slug);
+    return `/desktop/${encodedSlug}/vnc.html?autoconnect=1&resize=scale&path=desktop/${encodedSlug}/websockify`;
   }
 
   browserMobileUrl(browser: BrowserSession): string {
@@ -368,8 +376,8 @@ export class OpsPageComponent implements OnInit, OnDestroy {
     if (!browser.control) {
       if (action === "prepare" || action === "start") return true;
       if (action === "restart") return !!browser.configured;
-      if (action === "stop") return this.browserStatus(browser) === "running";
-      if (action === "cleanup") return !!browser.configured && this.browserStatus(browser) !== "running";
+      if (action === "stop") return this.browserIsRunning(browser);
+      if (action === "cleanup") return !!browser.configured && !this.browserIsRunning(browser);
     }
     return browser.control?.[action] === true;
   }

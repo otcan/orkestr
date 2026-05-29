@@ -74,9 +74,13 @@ test("ops desktop links are only shown for running desktops", async () => {
   assert.match(template, /\[disabled\]="browserActionBusy\(browser\)"/);
   assert.doesNotMatch(template, /browserAction\(browser, 'start'\)" \[disabled\]="busy"/);
   assert.match(component, /browserOpenUrl\(browser: BrowserSession\): string/);
-  assert.match(component, /this\.browserStatus\(browser\) !== "running"/);
+  assert.match(component, /browserIsRunning\(browser: BrowserSession\): boolean/);
+  assert.match(component, /"active", "running"/);
+  assert.match(component, /\/desktop\/\$\{encodedSlug\}\/vnc\.html\?autoconnect=1&resize=scale&path=desktop\/\$\{encodedSlug\}\/websockify/);
+  assert.doesNotMatch(component, /return String\(browser\.desk_url \|\| browser\.url \|\| ""\)\.trim\(\)/);
   assert.match(component, /browserMobileUrl\(browser: BrowserSession\): string/);
   assert.match(template, /browserMobileUrl\(browser\)/);
+  assert.match(template, /\[class\.live\]="browserIsRunning\(browser\)"/);
   assert.match(component, /activeBrowserActionSlug/);
 });
 
