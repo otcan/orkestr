@@ -394,6 +394,20 @@ test("Codex app-server rehomes existing contained threads away from shared runti
       workspace,
       runtimeKind: "codex-app-server",
       codexThreadId: "old-shared-thread",
+      runtime: {
+        runtimeKind: "codex-app-server",
+        state: "working",
+        codexThreadId: "old-shared-thread",
+        operatorRolloutPath: "/root/.codex/sessions/stale-rollout.jsonl",
+        operatorRolloutOffset: 1234,
+        operatorRolloutSyncedAt: "2026-05-29T12:00:00.000Z",
+        activeTurnId: "old-turn",
+        pendingRequest: { requestId: "old-request" },
+        lastTurnId: "old-turn",
+        lastTurnStatus: "failed",
+        progress: { summary: "old progress" },
+        recoveredAt: "2026-05-29T12:01:00.000Z",
+      },
       executorId: "codex",
       executor: {
         type: "codex",
@@ -419,6 +433,15 @@ test("Codex app-server rehomes existing contained threads away from shared runti
     assert.equal(state.env.CODEX_HOME, isolatedPaths.codexHome);
     assert.equal(state.env.ORKESTR_CODEX_APP_SERVER_MODE, "stdio");
     assert.equal(state.env.ORKESTR_CODEX_APP_SERVER_SOCKET, "");
+    assert.equal(resumed.thread.runtime.operatorRolloutPath, undefined);
+    assert.equal(resumed.thread.runtime.operatorRolloutOffset, undefined);
+    assert.equal(resumed.thread.runtime.operatorRolloutSyncedAt, undefined);
+    assert.equal(resumed.thread.runtime.activeTurnId, undefined);
+    assert.equal(resumed.thread.runtime.pendingRequest, undefined);
+    assert.equal(resumed.thread.runtime.lastTurnId, undefined);
+    assert.equal(resumed.thread.runtime.lastTurnStatus, undefined);
+    assert.equal(resumed.thread.runtime.progress, undefined);
+    assert.equal(resumed.thread.runtime.recoveredAt, undefined);
   } finally {
     stopCodexAppServerClients();
   }

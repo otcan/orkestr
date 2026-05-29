@@ -80,6 +80,34 @@ function workspaceForThread(thread = {}) {
   return clean(thread.cwd || thread.workspace || thread.repoPath || thread.worktreePath);
 }
 
+function freshStartRuntime(thread = {}, { codexId = "", codexSessionId: sessionId = "", contained = false } = {}) {
+  const runtime = { ...(thread.runtime || {}) };
+  if (contained) {
+    for (const key of [
+      "operatorRolloutPath",
+      "operatorRolloutOffset",
+      "operatorRolloutSyncedAt",
+      "operatorRolloutSyncError",
+      "activeTurnId",
+      "pendingRequest",
+      "lastTurnId",
+      "lastTurnStatus",
+      "progress",
+      "recoveredAt",
+    ]) {
+      delete runtime[key];
+    }
+  }
+  return {
+    ...runtime,
+    runtimeKind: "codex-app-server",
+    state: "ready",
+    codexThreadId: codexId,
+    codexSessionId: sessionId,
+    startedAt: nowIso(),
+  };
+}
+
 function scheduleCodexAppServerInputDelivery(threadId, env = process.env, delayMs = 0) {
   const id = clean(threadId);
   if (!id) return;
@@ -156,14 +184,11 @@ export async function startCodexAppServerThread(thread, env = process.env) {
         ...containedMetadata,
       },
     },
-    runtime: {
-      ...(thread.runtime || {}),
-      runtimeKind: "codex-app-server",
-      state: "ready",
-      codexThreadId: codexId,
+    runtime: freshStartRuntime(thread, {
+      codexId,
       codexSessionId: clean(codexThread.sessionId || codexId),
-      startedAt: nowIso(),
-    },
+      contained: containedMetadata.containedCodexIsolated === true,
+    }),
   }, env);
   await appendEvent({ type: "codex_app_server_thread_started", threadId: thread.id, codexThreadId: codexId }, env).catch(() => {});
   return { thread: updated, codexThread, client };
