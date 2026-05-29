@@ -535,6 +535,51 @@ test("CLI creates Orkestr threads with integrated WhatsApp binding", async () =>
   assert.match(stdout.text(), /"ok": true/);
 });
 
+test("CLI binds an existing thread to a generated WhatsApp group", async () => {
+  const stdout = capture();
+  const seen = [];
+  const code = await runCli([
+    "whatsapp",
+    "bind-thread",
+    "crawlerai-linkedin",
+    "--name",
+    "Crawlerai-Linkedin",
+    "--wa-participant",
+    "4917632400662@c.us",
+    "--outbound-account",
+    "account-1",
+    "--json",
+  ], {
+    stdout,
+    stderr: capture(),
+    fetchImpl: fakeFetch({
+      "POST /api/connectors/whatsapp/thread-groups": {
+        ok: true,
+        created: true,
+        chat: { id: "120363000000000002@g.us", name: "Crawlerai-Linkedin" },
+        thread: { id: "crawlerai-linkedin" },
+        binding: { displayName: "Crawlerai-Linkedin", chatId: "120363000000000002@g.us" },
+      },
+    }, seen),
+  });
+
+  assert.equal(code, 0);
+  assert.deepEqual(seen.map((entry) => entry.key), ["POST /api/connectors/whatsapp/thread-groups"]);
+  assert.deepEqual(seen[0].body, {
+    threadId: "crawlerai-linkedin",
+    name: "Crawlerai-Linkedin",
+    participantIds: ["4917632400662@c.us"],
+    adminParticipantIds: [],
+    promoteParticipantsAsAdmins: true,
+    generatePicture: true,
+    mirrorToWhatsApp: true,
+    forceNew: false,
+    responderAccountId: "account-1",
+    outboundAccountId: "account-1",
+  });
+  assert.match(stdout.text(), /Crawlerai-Linkedin/);
+});
+
 test("CLI applies configured WhatsApp chat-name and reply prefixes", async () => {
   const previousNamePrefix = process.env.ORKESTR_WHATSAPP_CHAT_NAME_PREFIX;
   const previousReplyPrefix = process.env.ORKESTR_WHATSAPP_REPLY_PREFIX;

@@ -19,8 +19,11 @@ import {
   getWhatsAppStatus,
   routeWhatsAppInbound,
 } from "../../../../../packages/connectors/src/whatsapp.js";
+import { createAndBindWhatsAppThreadGroup } from "../../../../../packages/connectors/src/whatsapp-thread-groups.js";
 import { loginCodexWithApiKey, startCodexDeviceAuth } from "../../../../../packages/connectors/src/codex.js";
 import { requestThreadInputDelivery } from "../../../../../packages/core/src/runtime-leases.js";
+import { getThreadForPrincipal } from "../../../../../packages/core/src/threads.js";
+import { requestPrincipal } from "../../../../../packages/core/src/principal.js";
 import {
   createLocalWhatsAppChat,
   generateLocalWhatsAppChatPicture,
@@ -201,6 +204,36 @@ export class ConnectorsController {
       adminParticipantIds: bodyStringArray(body, "adminParticipantIds"),
       promoteParticipantsAsAdmins,
       generatePicture: optionalBodyBoolean(body, "generatePicture", true),
+    });
+  }
+
+  @Post("whatsapp/thread-groups")
+  @HttpCode(200)
+  async whatsappThreadGroup(@Req() request: any, @Body() body: Record<string, unknown> = {}) {
+    const threadId = String(body.threadId || body.thread || body.target || "").trim();
+    if (!threadId) throw httpError("thread_id_required", 400);
+    const thread = await getThreadForPrincipal(threadId, requestPrincipal(request));
+    if (!thread) throw httpError("thread_not_found", 404);
+    const requestedParticipants = bodyStringArray(body, "participantIds").concat(bodyStringArray(body, "participants"));
+    const participantIds = requestedParticipants.length
+      ? requestedParticipants
+      : envStringArray(
+        "ORKESTR_WHATSAPP_DEFAULT_GROUP_PARTICIPANTS",
+        "ORKESTR_WHATSAPP_DEFAULT_PARTICIPANT_IDS",
+        "ORKESTR_WHATSAPP_OWNER_CONTACT_IDS",
+      );
+    return createAndBindWhatsAppThreadGroup(thread, {
+      name: String(body.name || body.displayName || ""),
+      senderAccountId: String(body.senderAccountId || ""),
+      responderAccountId: String(body.responderAccountId || body.outboundAccountId || ""),
+      outboundAccountId: String(body.outboundAccountId || ""),
+      participantIds,
+      adminParticipantIds: bodyStringArray(body, "adminParticipantIds"),
+      promoteParticipantsAsAdmins: optionalBodyBoolean(body, "promoteParticipantsAsAdmins", participantIds.length > 0),
+      generatePicture: optionalBodyBoolean(body, "generatePicture", true),
+      mirrorToWhatsApp: optionalBodyBoolean(body, "mirrorToWhatsApp", true),
+      replyPrefix: String(body.replyPrefix || ""),
+      forceNew: optionalBodyBoolean(body, "forceNew", false),
     });
   }
 

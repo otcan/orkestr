@@ -10,6 +10,7 @@ import { getSetupStatus } from "../packages/core/src/setup.js";
 import { appendThreadMessage, createThread, enqueueThreadInput, getThread, listThreadMessages, listThreads, updateThreadMessage } from "../packages/core/src/threads.js";
 import { deliverWhatsAppReplies, formatWhatsAppOutboundText, getWhatsAppChatParticipants, getWhatsAppStatus, initialQueueDeliveryState, mapLocalWhatsAppStatusFromHealth, routeWhatsAppInbound, syncWhatsAppTypingIndicators } from "../packages/connectors/src/whatsapp.js";
 import { listLocalWhatsAppChats, localWhatsAppAccountIdsForEnv, localWhatsAppMessageRouteFields, localWhatsAppReadyFallbackEligible, localWhatsAppTypingClearRetryDelaysMs, localWhatsAppUnreadRecoveryBoundChats, localWhatsAppUnreadRecoveryIntervalMs, normalizeGroupParticipantIds, recoverUnreadLocalWhatsAppMessages, recoverableLocalWhatsAppAccountIds, reduceLocalWhatsAppBridgeState, sendWhatsAppTextWithConfirmation, startLocalWhatsAppAccount, webCacheRoot } from "../packages/connectors/src/whatsapp-local-bridge.js";
+import { createAndBindWhatsAppThreadGroup } from "../packages/connectors/src/whatsapp-thread-groups.js";
 import { prepareWhatsAppTableAttachments } from "../packages/connectors/src/whatsapp-table-attachments.js";
 import { writeConnectorConfig } from "../packages/storage/src/config.js";
 
@@ -238,6 +239,47 @@ test("local whatsapp group participant ids are normalized for created test chats
     normalizeGroupParticipantIds("66378837028965@lid, 4917632400662@c.us"),
     ["66378837028965@lid", "4917632400662@c.us"],
   );
+});
+
+test("whatsapp thread group creation binds an existing thread idempotently", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-thread-group-"));
+  const env = { ORKESTR_HOME: home };
+  const thread = await createThread({ id: "crawlerai-linkedin", name: "Crawlerai LinkedIn" }, env);
+  const createCalls = [];
+
+  const created = await createAndBindWhatsAppThreadGroup(thread, {
+    name: "Crawlerai-Linkedin",
+    participantIds: ["4917632400662@c.us"],
+    responderAccountId: "account-1",
+    mirrorToWhatsApp: true,
+  }, env, {
+    async createChat(options) {
+      createCalls.push(options);
+      return {
+        ok: true,
+        chat: { id: "120363000000000002@g.us", name: options.name, generated: true },
+        senderAccountId: "account-1",
+        responderAccountId: "account-1",
+        senderContactId: "4917632400662@c.us",
+        responderContactId: "4917000000000@c.us",
+      };
+    },
+  });
+  const updated = await getThread("crawlerai-linkedin", env);
+  const reused = await createAndBindWhatsAppThreadGroup(updated, { name: "Crawlerai-Linkedin" }, env, {
+    async createChat() {
+      throw new Error("existing binding should be reused");
+    },
+  });
+
+  assert.equal(created.created, true);
+  assert.equal(created.binding.chatId, "120363000000000002@g.us");
+  assert.equal(updated.binding.displayName, "Crawlerai-Linkedin");
+  assert.equal(updated.binding.mirrorToWhatsApp, true);
+  assert.equal(updated.binding.responderAccountId, "account-1");
+  assert.deepEqual(createCalls.map((call) => call.participantIds), [["4917632400662@c.us"]]);
+  assert.equal(reused.reused, true);
+  assert.equal(reused.binding.chatId, "120363000000000002@g.us");
 });
 
 test("local whatsapp send confirms transient text sends from recent own messages", async () => {

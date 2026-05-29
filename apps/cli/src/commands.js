@@ -42,6 +42,7 @@ export async function runCli(argv = process.argv.slice(2), context = {}) {
     if (command === "whereiam" || command === "whereami") return await whereiamCommand(args, ctx);
     if (command === "settings") return await settingsCommand(args, ctx);
     if (command === "doctor") return await doctorCommand(args, ctx);
+    if (command === "whatsapp" || command === "wa") return await whatsappCommand(args, ctx);
     if (command === "timers" || command === "timer") return await timersCommand(args, ctx);
     if (command === "security") return await securityCommand(args, ctx);
     if (command === "desktop" || command === "desktops") return await desktopCommand(args, ctx);
@@ -187,6 +188,53 @@ async function timersCommand(argv, ctx) {
   if (subcommand === "doctor") return doctorTimersCommand(rest, ctx);
   if (subcommand === "run") return runTimerCommand(rest, ctx);
   throw new Error("Usage: orkestr timers [list|doctor|run <timer-id>] [--json]");
+}
+
+async function whatsappCommand(argv, ctx) {
+  const subcommand = argv[0] || "";
+  const rest = argv.slice(1);
+  if (subcommand === "bind-thread" || subcommand === "thread-group") return whatsappBindThreadCommand(rest, ctx);
+  throw new Error("Usage: orkestr whatsapp bind-thread <thread> --name <group name> [--wa-participant jid]... [--sender-account id] [--outbound-account id] [--force-new] [--json]");
+}
+
+async function whatsappBindThreadCommand(argv, ctx) {
+  const json = argv.includes("--json");
+  const threadId = positional(argv)[0];
+  const name = flagValue(argv, "--name") || flagValue(argv, "--wa-title") || flagValue(argv, "--title");
+  if (!threadId || !name) {
+    throw new Error("Usage: orkestr whatsapp bind-thread <thread> --name <group name> [--wa-participant jid]... [--sender-account id] [--outbound-account id] [--force-new] [--json]");
+  }
+  const body = {
+    threadId,
+    name,
+    participantIds: repeatedFlagValues(argv, ["--wa-participant", "--participant"]),
+    adminParticipantIds: repeatedFlagValues(argv, ["--wa-admin", "--admin-participant"]),
+    promoteParticipantsAsAdmins: !argv.includes("--no-wa-admin") && !argv.includes("--no-admin"),
+    generatePicture: !argv.includes("--no-picture"),
+    mirrorToWhatsApp: !argv.includes("--no-mirror"),
+    forceNew: argv.includes("--force-new"),
+  };
+  const senderAccountId = flagValue(argv, "--sender-account") || flagValue(argv, "--inbound-account");
+  const responderAccountId = flagValue(argv, "--outbound-account") || flagValue(argv, "--responder-account");
+  const replyPrefix = flagValue(argv, "--reply-prefix");
+  if (senderAccountId) body.senderAccountId = senderAccountId;
+  if (responderAccountId) {
+    body.responderAccountId = responderAccountId;
+    body.outboundAccountId = responderAccountId;
+  }
+  if (replyPrefix) body.replyPrefix = replyPrefix;
+  const payload = await requestJson("/api/connectors/whatsapp/thread-groups", {
+    ...ctx,
+    method: "POST",
+    body,
+  });
+  if (json) ctx.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
+  else {
+    const chat = payload.chat || {};
+    ctx.stdout.write(`${payload.reused ? "Reused" : "Created"} WhatsApp chat: ${chat.name || name}\t${chat.id || payload.binding?.chatId || "unbound"}\n`);
+    ctx.stdout.write(`Thread binding: ${payload.binding?.displayName || name}\t${payload.thread?.id || threadId}\n`);
+  }
+  return 0;
 }
 
 async function listTimersCommand(argv, ctx) {
@@ -642,6 +690,7 @@ Advanced:
   orkestr update rollback [--to release-id]
   orkestr settings [--json]
   orkestr codex [status|migrate] [--dry-run] [--json]
+  orkestr whatsapp bind-thread <thread> --name <group name> [--wa-participant jid]... [--json]
   orkestr timers [list|doctor|run <timer-id>] [--json]
   orkestr security [challenges|sessions|approve <challenge-id>|reject <challenge-id>|revoke <session-id|all>] [--json]
   orkestr desktop [share [slug]|approve <challenge-id>] [--json]
@@ -758,20 +807,37 @@ function positional(argv) {
     "--host",
     "--id",
     "--label",
+    "--name",
     "--port",
     "--repo",
     "--repo-path",
+    "--reply-prefix",
+    "--responder-account",
     "--service",
+    "--sender-account",
     "--task",
+    "--title",
     "--ref",
     "--channel",
     "--lines",
     "--to",
     "--active-timeout",
+    "--wa-admin",
+    "--admin-participant",
+    "--wa-participant",
+    "--participant",
+    "--wa-title",
+    "--outbound-account",
+    "--inbound-account",
   ]);
   const flagsWithoutValues = new Set([
     "--blank",
+    "--force-new",
     "--json",
+    "--no-admin",
+    "--no-mirror",
+    "--no-picture",
+    "--no-wa-admin",
     "--no-wake",
     "--print",
     "--open",
@@ -806,6 +872,14 @@ function positional(argv) {
 function flagValue(argv, flag) {
   const index = argv.indexOf(flag);
   return index >= 0 ? argv[index + 1] : "";
+}
+
+function repeatedFlagValues(argv, flags) {
+  const values = [];
+  for (let index = 0; index < argv.length; index += 1) {
+    if (flags.includes(argv[index])) values.push(argv[index + 1] || "");
+  }
+  return values.map((value) => String(value || "").trim()).filter(Boolean);
 }
 
 function formatSecurityChallengeTable(challenges) {
