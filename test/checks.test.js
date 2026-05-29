@@ -193,6 +193,37 @@ test("Codex invalidates connected setup when app-server cannot start after an up
   assert.match(codex.summary, /codex login|sign in again|reconnect/i);
 });
 
+test("Codex reports external app-server outage separately from login failure", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-codex-app-server-unavailable-"));
+  const codexHome = path.join(home, "codex-home");
+  const fakeCodex = await writeFakeCodex(home, [
+    "#!/bin/sh",
+    "if [ \"$1\" = \"--version\" ]; then echo 'codex-cli websocket-test'; exit 0; fi",
+    "if [ \"$1\" = \"login\" ] && [ \"$2\" = \"status\" ]; then echo 'Logged in using ChatGPT'; exit 0; fi",
+    "if [ \"$1\" = \"app-server\" ] && [ \"$2\" = \"--help\" ]; then echo 'app-server help'; exit 0; fi",
+    "echo unexpected \"$@\" >&2",
+    "exit 2",
+  ]);
+
+  const status = await getSetupStatus({
+    env: {
+      ORKESTR_HOME: home,
+      CODEX_HOME: codexHome,
+      ORKESTR_CODEX_BIN: fakeCodex,
+      ORKESTR_CODEX_APP_SERVER_MODE: "external",
+      ORKESTR_CODEX_APP_SERVER_SOCKET: path.join(home, "run", "missing-codex.sock"),
+    },
+    home,
+  });
+  const codex = status.connectors.find((connector) => connector.id === "codex");
+
+  assert.equal(codex.state, "broken");
+  assert.equal(codex.details.appServer, "unavailable");
+  assert.equal(codex.details.reason, "codex_app_server_unavailable");
+  assert.match(codex.summary, /app-server is not reachable|repair/i);
+  assert.doesNotMatch(codex.summary, /cannot authenticate|run codex login/i);
+});
+
 test("Codex invalidates connected setup when a live runtime reports token invalidated", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-codex-runtime-invalid-"));
   const codexHome = path.join(home, "codex-home");

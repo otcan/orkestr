@@ -127,7 +127,9 @@ export async function getConnectorStatuses({ env = process.env, home = os.homedi
   const codexAuthExists = await pathExists(codexAuthPath);
   const codexEnvKey = Boolean(env.OPENAI_API_KEY);
   const codexAuthInvalid = Boolean(codex.command && codexAuthExists && codexAuth && !codexAuth.connected);
-  const codexAppServerInvalid = Boolean(codex.command && codexAuth?.connected && codexAppServerAvailable && codexAppServerProbeResult && !codexAppServerProbeResult.ok);
+  const codexAppServerFailed = Boolean(codex.command && codexAuth?.connected && codexAppServerAvailable && codexAppServerProbeResult && !codexAppServerProbeResult.ok);
+  const codexAppServerAuthInvalid = codexAppServerFailed && codexAppServerProbeResult?.reason === "codex_app_server_auth_invalid";
+  const codexAppServerUnavailable = codexAppServerFailed && !codexAppServerAuthInvalid;
   const codexRuntimeInvalid = Boolean(codexRuntimeAuthInvalid);
   const whatsapp = await getWhatsAppStatus(env);
   const overlay = await readOverlay(env);
@@ -164,7 +166,7 @@ export async function getConnectorStatuses({ env = process.env, home = os.homedi
               tailHash: codexRuntimeAuthInvalid.tailHash || null,
               error: codexRuntimeAuthInvalid.summary || "",
             })
-        : codexAppServerInvalid
+        : codexAppServerAuthInvalid
           ? status("codex", "Codex Agent", "broken", "Codex login status succeeds, but the app-server cannot authenticate. Run Codex login again before running coding agents.", {
               command: codex.command,
               version: codex.version,
@@ -176,6 +178,18 @@ export async function getConnectorStatuses({ env = process.env, home = os.homedi
               reason: codexAppServerProbeResult.reason || "codex_app_server_unavailable",
               error: codexAppServerProbeResult.error || codexAppServerProbeResult.stderr || "",
             })
+          : codexAppServerUnavailable
+            ? status("codex", "Codex Agent", "broken", "Codex login status succeeds, but the Codex app-server is not reachable. Start or repair the Orkestr Codex app-server service before running coding agents.", {
+                command: codex.command,
+                version: codex.version,
+                codexHome,
+                runtime: codexRuntime,
+                appServer: "unavailable",
+                authMode: codexAuth?.authMode || null,
+                statusText: codexAuth?.statusText || "",
+                reason: codexAppServerProbeResult.reason || "codex_app_server_unavailable",
+                error: codexAppServerProbeResult.error || codexAppServerProbeResult.stderr || "",
+              })
           : codex.command && codexAuth?.connected && codexAppServerAvailable
         ? status("codex", "Codex Agent", "connected", "Codex Agent runtime is installed, signed in, and app-server ready.", {
             command: codex.command,
