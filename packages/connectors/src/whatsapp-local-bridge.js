@@ -658,8 +658,8 @@ async function writeQr(accountId, qr, qrcode, env = process.env) {
 
 async function handleInboundMessage(accountId, message, env = process.env, options = {}) {
   const fromMe = Boolean(message?.fromMe);
-  if (options.ownOnly && !fromMe) return;
-  if (message?.isStatus) return;
+  if (options.ownOnly && !fromMe) return { skipped: "not_own_message" };
+  if (message?.isStatus) return { skipped: "status_message" };
   const text = String(message?.body || "").trim();
   const attachments = await saveInboundMedia(accountId, message, env).catch((error) => {
     void appendEvent({
@@ -670,11 +670,11 @@ async function handleInboundMessage(accountId, message, env = process.env, optio
     }, env).catch(() => {});
     return [];
   });
-  if (!text && !attachments.length) return;
+  if (!text && !attachments.length) return { skipped: "empty_message" };
   const { chatId, from, fromMe: routeFromMe } = localWhatsAppMessageRouteFields(message);
   const eventId = String(message.id?._serialized || `${accountId}:${chatId}:${message.timestamp || Date.now()}`).trim();
-  if (fromMe && outboundMessageIds.has(eventId)) return;
-  if (fromMe && outboundMessageTextKeys.has(textKey(accountId, chatId, text))) return;
+  if (fromMe && outboundMessageIds.has(eventId)) return { skipped: "outbound_echo_id", eventId, chatId };
+  if (fromMe && outboundMessageTextKeys.has(textKey(accountId, chatId, text))) return { skipped: "outbound_echo_text", eventId, chatId };
   const routedText = text || attachmentSummaryText(attachments);
   try {
     const { deliverWhatsAppReplies, routeWhatsAppInbound } = await import("./whatsapp.js");
@@ -695,6 +695,7 @@ async function handleInboundMessage(accountId, message, env = process.env, optio
       await deliverWhatsAppReplies(env).catch(() => {});
       requestThreadInputDelivery(routed.threadId, env);
     }
+    return { routed, eventId, chatId, from, fromMe: routeFromMe };
   } catch (error) {
     await appendEvent(
       {
@@ -708,7 +709,55 @@ async function handleInboundMessage(accountId, message, env = process.env, optio
       },
       env,
     );
+    return { error: error.message || String(error), eventId, chatId, from, fromMe: routeFromMe };
   }
+}
+
+export async function recoverLocalWhatsAppChatMessages({ accountId = "", chatId = "", limit = 20, unreadOnly = true, markSeen = true } = {}, env = process.env) {
+  const normalized = normalizeAccountId(accountId, env);
+  const id = String(chatId || "").trim();
+  if (!id) {
+    const error = new Error("whatsapp_chat_id_required");
+    error.statusCode = 400;
+    throw error;
+  }
+  const runtime = runtimes.get(normalized);
+  const state = accountStates.get(normalized) || defaultAccountState(normalized);
+  if (!runtime?.client || !state.ready) {
+    return { ok: false, accountId: normalized, chatId: id, ready: false, state: state.state || "idle", routed: [], skipped: [] };
+  }
+  const chat = await runtime.client.getChatById(id);
+  const fetchLimit = Math.max(1, Math.min(100, Number(limit || 20) || 20));
+  const messages = await chat.fetchMessages({ limit: fetchLimit });
+  const unreadCount = Number(chat?.unreadCount || 0) || 0;
+  const candidates = unreadOnly && unreadCount > 0
+    ? messages.slice(-Math.min(unreadCount, messages.length))
+    : messages;
+  const routed = [];
+  const skipped = [];
+  for (const message of candidates) {
+    const eventId = String(message?.id?._serialized || "").trim();
+    if (message?.fromMe) {
+      skipped.push({ eventId, reason: "from_me" });
+      continue;
+    }
+    const result = await handleInboundMessage(normalized, message, env);
+    if (result?.routed?.threadId && !result.routed.duplicate) routed.push({ eventId, threadId: result.routed.threadId, messageId: result.routed.messageId });
+    else skipped.push({ eventId, reason: result?.routed?.duplicate ? "duplicate" : result?.skipped || result?.error || "not_routed" });
+  }
+  if (markSeen && routed.length && typeof chat.sendSeen === "function") await chat.sendSeen().catch(() => {});
+  await appendEvent({
+    type: "whatsapp_local_chat_recovered",
+    accountId: normalized,
+    chatId: id,
+    unreadOnly: unreadOnly !== false,
+    unreadCount,
+    fetched: messages.length,
+    candidates: candidates.length,
+    routed: routed.length,
+    skipped: skipped.length,
+  }, env).catch(() => {});
+  return { ok: true, accountId: normalized, chatId: id, unreadCount, fetched: messages.length, candidates: candidates.length, routed, skipped };
 }
 
 function localWhatsAppAutostartEnabled(env = process.env) {

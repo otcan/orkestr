@@ -29,6 +29,7 @@ import {
   listLocalWhatsAppChats,
   logoutLocalWhatsAppAccount,
   promoteLocalWhatsAppGroupParticipants,
+  recoverLocalWhatsAppChatMessages,
   sendLocalWhatsAppMessage,
   sendLocalWhatsAppText,
   startLocalWhatsAppAccount,
@@ -216,6 +217,18 @@ export class ConnectorsController {
   @Get("whatsapp/bridge/accounts/:accountId/chats/:chatId/participants")
   async whatsappBridgeChatParticipants(@Param("accountId") accountId: string, @Param("chatId") chatId: string) {
     return getWhatsAppChatParticipants({ accountId, chatId });
+  }
+
+  @Post("whatsapp/bridge/accounts/:accountId/chats/:chatId/recover")
+  @HttpCode(200)
+  async whatsappBridgeRecoverChat(@Param("accountId") accountId: string, @Param("chatId") chatId: string, @Body() body: Record<string, unknown> = {}) {
+    return recoverLocalWhatsAppChatMessages({
+      accountId,
+      chatId,
+      limit: Number(body.limit || 20) || 20,
+      unreadOnly: body.unreadOnly !== false,
+      markSeen: body.markSeen !== false,
+    });
   }
 
   @Post("whatsapp/bridge/accounts/:accountId/chats/:chatId/admins")
