@@ -436,6 +436,22 @@ EOF
   systemctl restart "${codex_app_server_service_name}.service"
 }
 
+write_codex_app_server_main_service_dropin() {
+  local dropin_dir socket escaped_socket escaped_service
+  socket="$(codex_app_server_socket_default)"
+  escaped_socket="$(printf '%s' "$socket" | sed 's/\\/\\\\/g; s/"/\\"/g')"
+  escaped_service="$(printf '%s' "$codex_app_server_service_name" | sed 's/\\/\\\\/g; s/"/\\"/g')"
+  dropin_dir="/etc/systemd/system/${service_name}.service.d"
+  mkdir -p "$dropin_dir"
+  cat > "$dropin_dir/60-codex-app-server.conf" <<EOF
+[Service]
+Environment=ORKESTR_CODEX_APP_SERVER_MODE=external
+Environment="ORKESTR_CODEX_APP_SERVER_SOCKET=$escaped_socket"
+Environment="ORKESTR_CODEX_APP_SERVER_SERVICE_NAME=$escaped_service"
+EOF
+  systemctl daemon-reload
+}
+
 ensure_codex_app_server_split_for_target() {
   local release_dir command socket mode_external_requested
   release_dir="$1"
@@ -474,6 +490,7 @@ ensure_codex_app_server_split_for_target() {
   mkdir -p "$(dirname "$socket")"
   write_codex_app_server_wrapper
   write_codex_app_server_systemd_service
+  write_codex_app_server_main_service_dropin
   codex_app_server_mode="external"
   echo "External Codex app-server ready: ${codex_app_server_service_name}.service ($socket)."
 }

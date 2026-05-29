@@ -59,6 +59,9 @@ test("release deploy script exposes versioned install, status, and rollback", as
   assert.match(script, /ORKESTR_CODEX_APP_SERVER_SOCKET/);
   assert.match(script, /target_release_supports_external_codex_app_server/);
   assert.match(script, /ensure_codex_app_server_split_for_target/);
+  assert.match(script, /write_codex_app_server_main_service_dropin/);
+  assert.match(script, /60-codex-app-server\.conf/);
+  assert.match(script, /Environment=ORKESTR_CODEX_APP_SERVER_MODE=external/);
   assert.match(script, /\/usr\/local\/bin\/orkestr-codex-app-server/);
   assert.match(script, /ExecStart=\/usr\/local\/bin\/orkestr-codex-app-server/);
   assert.match(script, /codexAppServerTransport/);
