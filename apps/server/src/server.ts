@@ -150,26 +150,27 @@ function threadIdFromApiRequest(request: any) {
 }
 
 export async function startServer({ port = 19812, host = "127.0.0.1", openBrowser = false } = {}) {
-  await ensureDataDirs();
-  if (process.env.ORKESTR_RECOVER_RUNNING_ON_START !== "0") {
-    await recoverInterruptedExecutions();
+  const serverEnv = { ...process.env };
+  await ensureDataDirs(serverEnv);
+  if (serverEnv.ORKESTR_RECOVER_RUNNING_ON_START !== "0") {
+    await recoverInterruptedExecutions(serverEnv);
   }
-  await loadOverlayExecutorAdapters();
-  await startConfiguredLocalWhatsAppAccounts().catch(() => {});
+  await loadOverlayExecutorAdapters(serverEnv);
+  await startConfiguredLocalWhatsAppAccounts(serverEnv).catch(() => {});
   const app = await createApp();
 
   const timer = setInterval(() => {
-    runTimerLoop().catch(() => {});
+    runTimerLoop(serverEnv).catch(() => {});
   }, timerLoopIntervalMs());
 
   const runtimeMonitor = setInterval(() => {
-    syncRuntimeAndDeliverWhatsApp().catch(() => {});
+    syncRuntimeAndDeliverWhatsApp(serverEnv).catch(() => {});
   }, runtimeMonitorIntervalMs());
 
   const paneProgressMonitor = setInterval(() => {
-    syncPaneProgressForActiveLeases().catch(() => {});
+    syncPaneProgressForActiveLeases(serverEnv).catch(() => {});
   }, paneProgressMonitorIntervalMs());
-  const whatsappDeliveryScheduler = createWhatsAppDeliveryScheduler();
+  const whatsappDeliveryScheduler = createWhatsAppDeliveryScheduler(serverEnv);
   const clearConnectorDeliverySignalHandler = setThreadConnectorDeliverySignalHandler(() => {
     whatsappDeliveryScheduler.schedule();
   });
@@ -189,7 +190,7 @@ export async function startServer({ port = 19812, host = "127.0.0.1", openBrowse
   attachThreadStreamUpgrade(app.getHttpServer());
   await app.listen(port, host);
   whatsappDeliveryScheduler.schedule();
-  const startupRecoveryTimer = scheduleStartupRecovery();
+  const startupRecoveryTimer = scheduleStartupRecovery(serverEnv);
 
   const url = `http://${host}:${port}`;
   console.log(`Orkestr setup wizard: ${url}`);
@@ -204,7 +205,7 @@ export async function startServer({ port = 19812, host = "127.0.0.1", openBrowse
     if (startupRecoveryTimer) clearTimeout(startupRecoveryTimer);
     whatsappDeliveryScheduler.close();
     stopCodexAppServerClients();
-    await stopLocalWhatsAppBridge().catch(() => {});
+    await stopLocalWhatsAppBridge(serverEnv).catch(() => {});
   });
 }
 
@@ -228,45 +229,45 @@ export function startupRecoveryDelayMs() {
   return Number.isFinite(parsed) ? Math.max(0, parsed) : 1000;
 }
 
-function scheduleStartupRecovery() {
-  if (process.env.ORKESTR_STARTUP_RECOVERY === "0") return null;
+function scheduleStartupRecovery(env = process.env) {
+  if (env.ORKESTR_STARTUP_RECOVERY === "0") return null;
   const timer = setTimeout(() => {
-    recoverAfterStartup().catch(() => {});
+    recoverAfterStartup(env).catch(() => {});
   }, startupRecoveryDelayMs());
   timer.unref?.();
   return timer;
 }
 
-async function recoverAfterStartup() {
-  await drainAllPendingThreadInputs().catch(() => []);
-  return syncRuntimeAndDeliverWhatsApp({ forceWhatsapp: true, recoveryCause: "orkestr_restart" });
+async function recoverAfterStartup(env = process.env) {
+  await drainAllPendingThreadInputs(env).catch(() => []);
+  return syncRuntimeAndDeliverWhatsApp(env, { forceWhatsapp: true, recoveryCause: "orkestr_restart" });
 }
 
-async function runTimerLoop() {
-  const dueTimers = await markDueTimers();
-  const drained = await drainAllPendingThreadInputs();
+async function runTimerLoop(env = process.env) {
+  const dueTimers = await markDueTimers(env);
+  const drained = await drainAllPendingThreadInputs(env);
   const deliveredCount = drained.reduce((count: number, result: any) => count + Number(result?.delivered?.length || 0), 0);
   if (dueTimers.length || deliveredCount > 0 || drained.length > 0) {
-    await syncRuntimeAndDeliverWhatsApp({ forceWhatsapp: true });
+    await syncRuntimeAndDeliverWhatsApp(env, { forceWhatsapp: true });
   }
 }
 
-async function syncRuntimeAndDeliverWhatsApp(options: { forceWhatsapp?: boolean; recoveryCause?: string } = {}) {
+async function syncRuntimeAndDeliverWhatsApp(env = process.env, options: { forceWhatsapp?: boolean; recoveryCause?: string } = {}) {
   const pendingConnectorDeliveries = consumeThreadConnectorDeliverySignalCount();
-  const synced = await syncRuntimeLeases();
-  const recovered = await recoverStaleCodexAppServerTurns(process.env, { noticeCause: options.recoveryCause }).catch(() => ({ recovered: 0, appended: 0 }));
-  await recoverConfiguredLocalWhatsAppAccounts().catch(() => {});
-  const unreadRecovery = await recoverUnreadLocalWhatsAppMessages().catch(() => ({ routed: 0 }));
-  await syncWhatsAppTypingIndicators().catch(() => {});
+  const synced = await syncRuntimeLeases(env);
+  const recovered = await recoverStaleCodexAppServerTurns(env, { noticeCause: options.recoveryCause }).catch(() => ({ recovered: 0, appended: 0 }));
+  await recoverConfiguredLocalWhatsAppAccounts(env).catch(() => {});
+  const unreadRecovery = await recoverUnreadLocalWhatsAppMessages(env).catch(() => ({ routed: 0 }));
+  await syncWhatsAppTypingIndicators(env).catch(() => {});
   const connectorDeliveries = pendingConnectorDeliveries + consumeThreadConnectorDeliverySignalCount();
   const appended = (synced.appended || 0) + (recovered.appended || 0);
   if (options.forceWhatsapp || appended > 0 || connectorDeliveries > 0 || Number(unreadRecovery.routed || 0) > 0) {
-    await deliverWhatsAppReplies().catch(() => {});
+    await deliverWhatsAppReplies(env).catch(() => {});
   }
   return { ...synced, appended, recoveredAppServerTurns: recovered.recovered || 0 };
 }
 
-function createWhatsAppDeliveryScheduler() {
+function createWhatsAppDeliveryScheduler(env = process.env) {
   let timer: NodeJS.Timeout | null = null;
   const retryDelayMs = whatsAppDeliveryRetryDelayMs();
   const shouldRetry = (result: any) => {
@@ -281,11 +282,11 @@ function createWhatsAppDeliveryScheduler() {
     });
   };
   const run = () => {
-    syncWhatsAppTypingIndicators()
+    syncWhatsAppTypingIndicators(env)
       .catch(() => {})
-      .then(() => deliverWhatsAppReplies())
+      .then(() => deliverWhatsAppReplies(env))
       .then(async (result) => {
-        await syncWhatsAppTypingIndicators().catch(() => {});
+        await syncWhatsAppTypingIndicators(env).catch(() => {});
         return result;
       })
       .then((result) => {

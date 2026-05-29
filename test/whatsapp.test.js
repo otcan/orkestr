@@ -2,8 +2,9 @@ import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import test from "node:test";
+import test, { afterEach } from "node:test";
 import { startServer } from "../apps/server/src/server.js";
+import { stopCodexAppServerClients } from "../packages/core/src/codex-app-server-client.js";
 import { runNextAgentMessage, runNextThreadMessage } from "../packages/core/src/executors.js";
 import { listAgentMessages } from "../packages/core/src/messages.js";
 import { getSetupStatus } from "../packages/core/src/setup.js";
@@ -13,6 +14,10 @@ import { forwardLocalWhatsAppInbound, listLocalWhatsAppChats, localWhatsAppAccou
 import { createAndBindWhatsAppThreadGroup } from "../packages/connectors/src/whatsapp-thread-groups.js";
 import { prepareWhatsAppTableAttachments } from "../packages/connectors/src/whatsapp-table-attachments.js";
 import { writeConnectorConfig } from "../packages/storage/src/config.js";
+
+afterEach(() => {
+  stopCodexAppServerClients();
+});
 
 function response(payload, ok = true, status = 200) {
   return {
@@ -873,6 +878,58 @@ test("whatsapp inbound endpoint accepts direct agent target", async () => {
     await new Promise((resolve) => server.close(resolve));
     if (priorHome === undefined) delete process.env.ORKESTR_HOME;
     else process.env.ORKESTR_HOME = priorHome;
+  }
+});
+
+test("whatsapp inbound endpoint accepts bridge token when browser pairing is required", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-token-api-"));
+  const priorHome = process.env.ORKESTR_HOME;
+  const priorAuth = process.env.ORKESTR_AUTH_REQUIRED;
+  const priorInboundToken = process.env.ORKESTR_WHATSAPP_INBOUND_TOKEN;
+  process.env.ORKESTR_HOME = home;
+  process.env.ORKESTR_AUTH_REQUIRED = "1";
+  process.env.ORKESTR_WHATSAPP_INBOUND_TOKEN = "bridge-inbound-secret";
+  const server = await startServer({ port: 0, host: "127.0.0.1" });
+  const { port } = server.address();
+  const baseUrl = `http://127.0.0.1:${port}`;
+  try {
+    const blocked = await fetch(`${baseUrl}/api/connectors/whatsapp/inbound`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ eventId: "wa-token-blocked", agentId: "agent-token-api", text: "blocked" }),
+    });
+    const blockedPayload = await blocked.json();
+    const accepted = await fetch(`${baseUrl}/api/connectors/whatsapp/inbound`, {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: "Bearer bridge-inbound-secret" },
+      body: JSON.stringify({
+        eventId: "wa-token-accepted",
+        agentId: "agent-token-api",
+        chatId: "bridge-chat@g.us",
+        from: "491700000000@c.us",
+        text: "token routed",
+      }),
+    });
+    const payload = await accepted.json();
+    const messages = await listAgentMessages("agent-token-api", { ORKESTR_HOME: home });
+
+    assert.equal(blocked.status, 401);
+    assert.equal(blockedPayload.error, "browser_pairing_required");
+    assert.equal(accepted.status, 202);
+    assert.equal(payload.agentId, "agent-token-api");
+    assert.equal(payload.duplicate, false);
+    assert.equal(messages.length, 1);
+    assert.equal(messages[0].source, "whatsapp_inbound");
+    assert.equal(messages[0].chatId, "bridge-chat@g.us");
+    assert.equal(messages[0].text, "token routed");
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+    if (priorHome === undefined) delete process.env.ORKESTR_HOME;
+    else process.env.ORKESTR_HOME = priorHome;
+    if (priorAuth === undefined) delete process.env.ORKESTR_AUTH_REQUIRED;
+    else process.env.ORKESTR_AUTH_REQUIRED = priorAuth;
+    if (priorInboundToken === undefined) delete process.env.ORKESTR_WHATSAPP_INBOUND_TOKEN;
+    else process.env.ORKESTR_WHATSAPP_INBOUND_TOKEN = priorInboundToken;
   }
 });
 

@@ -602,7 +602,17 @@ export class CodexAppServerClient {
     this.closed = true;
     this.startPromise = null;
     this.rl?.close();
-    this.proc?.kill("SIGTERM");
+    const proc = this.proc;
+    if (proc && proc.exitCode === null && proc.signalCode === null) {
+      proc.kill("SIGTERM");
+      const killTimer = setTimeout(() => {
+        if (proc.exitCode === null && proc.signalCode === null) {
+          proc.kill("SIGKILL");
+        }
+      }, 1000);
+      killTimer.unref?.();
+      proc.once("close", () => clearTimeout(killTimer));
+    }
     this.ws?.close();
     this.rejectAll(new Error("codex_app_server_closed"));
   }
