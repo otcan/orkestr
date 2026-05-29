@@ -9,7 +9,7 @@ import { listAgentMessages } from "../packages/core/src/messages.js";
 import { getSetupStatus } from "../packages/core/src/setup.js";
 import { appendThreadMessage, createThread, enqueueThreadInput, getThread, listThreadMessages, listThreads, updateThreadMessage } from "../packages/core/src/threads.js";
 import { deliverWhatsAppReplies, formatWhatsAppOutboundText, getWhatsAppChatParticipants, getWhatsAppStatus, initialQueueDeliveryState, mapLocalWhatsAppStatusFromHealth, routeWhatsAppInbound, syncWhatsAppTypingIndicators } from "../packages/connectors/src/whatsapp.js";
-import { forwardLocalWhatsAppInbound, listLocalWhatsAppChats, localWhatsAppAccountIdsForEnv, localWhatsAppInboundForwardTarget, localWhatsAppMessageRouteFields, localWhatsAppReadyFallbackEligible, localWhatsAppTypingClearRetryDelaysMs, localWhatsAppUnreadRecoveryBoundChats, localWhatsAppUnreadRecoveryIntervalMs, normalizeGroupParticipantIds, recoverUnreadLocalWhatsAppMessages, recoverableLocalWhatsAppAccountIds, reduceLocalWhatsAppBridgeState, sendWhatsAppTextWithConfirmation, startLocalWhatsAppAccount, webCacheRoot } from "../packages/connectors/src/whatsapp-local-bridge.js";
+import { forwardLocalWhatsAppInbound, listLocalWhatsAppChats, localWhatsAppAccountIdsForEnv, localWhatsAppConnectedPageReadyFallbackEligible, localWhatsAppInboundForwardTarget, localWhatsAppMessageRouteFields, localWhatsAppReadyFallbackEligible, localWhatsAppTypingClearRetryDelaysMs, localWhatsAppUnreadRecoveryBoundChats, localWhatsAppUnreadRecoveryIntervalMs, normalizeGroupParticipantIds, recoverUnreadLocalWhatsAppMessages, recoverableLocalWhatsAppAccountIds, reduceLocalWhatsAppBridgeState, sendWhatsAppTextWithConfirmation, startLocalWhatsAppAccount, webCacheRoot } from "../packages/connectors/src/whatsapp-local-bridge.js";
 import { createAndBindWhatsAppThreadGroup } from "../packages/connectors/src/whatsapp-thread-groups.js";
 import { prepareWhatsAppTableAttachments } from "../packages/connectors/src/whatsapp-table-attachments.js";
 import { writeConnectorConfig } from "../packages/storage/src/config.js";
@@ -109,6 +109,14 @@ test("local whatsapp ready fallback accepts the WhatsApp 99 percent startup stal
   assert.equal(localWhatsAppReadyFallbackEligible({ authenticated: true, ready: true, loadingPercent: 99, loadingMessage: "WhatsApp" }), false);
   assert.equal(localWhatsAppReadyFallbackEligible({ authenticated: false, ready: false, loadingPercent: 99, loadingMessage: "WhatsApp" }), false);
   assert.equal(localWhatsAppReadyFallbackEligible({ authenticated: true, ready: false, loadingPercent: 99, loadingMessage: "Loading" }), false);
+});
+
+test("local whatsapp ready fallback accepts an already connected page after restart", () => {
+  assert.equal(localWhatsAppConnectedPageReadyFallbackEligible({ ready: false, state: "starting" }, { hasSynced: "function", appState: "CONNECTED" }), true);
+  assert.equal(localWhatsAppConnectedPageReadyFallbackEligible({ ready: false, state: "starting" }, { hasSynced: true, appState: "connected" }), true);
+  assert.equal(localWhatsAppConnectedPageReadyFallbackEligible({ ready: true, state: "ready" }, { hasSynced: "function", appState: "CONNECTED" }), false);
+  assert.equal(localWhatsAppConnectedPageReadyFallbackEligible({ ready: false, state: "starting" }, { hasSynced: "undefined", appState: "CONNECTED" }), false);
+  assert.equal(localWhatsAppConnectedPageReadyFallbackEligible({ ready: false, state: "starting" }, { hasSynced: "function", appState: "OPENING" }), false);
 });
 
 test("stored external whatsapp bridge config is ignored unless the host opts in", async () => {

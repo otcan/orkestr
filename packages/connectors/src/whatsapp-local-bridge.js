@@ -653,6 +653,24 @@ export function localWhatsAppReadyFallbackEligible(state = {}) {
   return percent >= 99 && message === "whatsapp";
 }
 
+export function localWhatsAppConnectedPageReadyFallbackEligible(state = {}, page = {}) {
+  if (state.ready) return false;
+  const hasSynced = page.hasSynced === true || page.hasSynced === "function";
+  if (!hasSynced) return false;
+  const appState = String(page.appState || page.waState || "").trim().toUpperCase();
+  return appState === "CONNECTED";
+}
+
+function connectedPageReadyFallbackDelayMs(env = process.env) {
+  const parsed = Number(env.ORKESTR_WHATSAPP_CONNECTED_READY_FALLBACK_MS || env.WHATSAPP_CONNECTED_READY_FALLBACK_MS || 15_000);
+  return Number.isFinite(parsed) ? Math.max(1000, parsed) : 15_000;
+}
+
+function connectedPageReadyFallbackAttempts(env = process.env) {
+  const parsed = Number(env.ORKESTR_WHATSAPP_CONNECTED_READY_FALLBACK_ATTEMPTS || env.WHATSAPP_CONNECTED_READY_FALLBACK_ATTEMPTS || 8);
+  return Number.isFinite(parsed) ? Math.max(0, Math.min(24, Math.floor(parsed))) : 8;
+}
+
 function safeFilePart(value = "", fallback = "attachment") {
   const cleaned = String(value || "")
     .trim()
@@ -1196,23 +1214,41 @@ export async function startLocalWhatsAppAccount(accountId = "", env = process.en
   };
   let readyFallbackTriggered = false;
   let readyFallbackTimer = null;
+  let connectedPageReadyFallbackTimer = null;
+  let connectedPageReadyFallbackCount = 0;
   const clearReadyFallbackTimer = () => {
     if (!readyFallbackTimer) return;
     clearTimeout(readyFallbackTimer);
     readyFallbackTimer = null;
   };
-  const triggerReadyFallback = async (reason) => {
+  const clearConnectedPageReadyFallbackTimer = () => {
+    if (!connectedPageReadyFallbackTimer) return;
+    clearTimeout(connectedPageReadyFallbackTimer);
+    connectedPageReadyFallbackTimer = null;
+  };
+  const triggerReadyFallback = async (reason, options = {}) => {
     const state = accountStates.get(normalized) || defaultAccountState(normalized);
-    if (readyFallbackTriggered || state.ready || !state.authenticated) return;
+    if (readyFallbackTriggered || state.ready) return;
+    const allowConnectedPage = options.allowConnectedPage === true;
+    if (!state.authenticated && !allowConnectedPage) return;
     readyFallbackTriggered = true;
     try {
-      const result = await client.pupPage?.evaluate(async () => {
+      const result = await client.pupPage?.evaluate(async ({ allowConnectedPage }) => {
+        const page = {
+          hasSynced: typeof window.onAppStateHasSyncedEvent,
+          title: document.title,
+          wwebjs: typeof window.WWebJS,
+          appState: window.AuthStore?.AppState?.state || window.Store?.AppState?.state || "",
+        };
         if (typeof window.onAppStateHasSyncedEvent !== "function") {
-          return { ok: false, reason: "callback_missing", title: document.title, wwebjs: typeof window.WWebJS };
+          return { ok: false, reason: "callback_missing", ...page };
+        }
+        if (allowConnectedPage && String(page.appState || "").trim().toUpperCase() !== "CONNECTED") {
+          return { ok: false, reason: "page_not_connected", ...page };
         }
         await window.onAppStateHasSyncedEvent();
-        return { ok: true, title: document.title, wwebjs: typeof window.WWebJS };
-      });
+        return { ok: true, ...page };
+      }, { allowConnectedPage });
       await appendEvent({
         type: "whatsapp_local_ready_fallback_triggered",
         accountId: normalized,
@@ -1220,6 +1256,7 @@ export async function startLocalWhatsAppAccount(accountId = "", env = process.en
         ok: result?.ok === true,
         fallbackReason: String(result?.reason || ""),
         wwebjs: String(result?.wwebjs || ""),
+        appState: String(result?.appState || ""),
       }, env).catch(() => {});
       if (result?.ok !== true) readyFallbackTriggered = false;
     } catch (error) {
@@ -1242,6 +1279,25 @@ export async function startLocalWhatsAppAccount(accountId = "", env = process.en
       void triggerReadyFallback(reason);
     }, 3000);
     if (typeof readyFallbackTimer.unref === "function") readyFallbackTimer.unref();
+  };
+  const scheduleConnectedPageReadyFallback = (reason) => {
+    const state = accountStates.get(normalized) || defaultAccountState(normalized);
+    if (readyFallbackTriggered || state.ready) return;
+    if (connectedPageReadyFallbackTimer) return;
+    const maxAttempts = connectedPageReadyFallbackAttempts(env);
+    if (!maxAttempts || connectedPageReadyFallbackCount >= maxAttempts) return;
+    connectedPageReadyFallbackTimer = setTimeout(async () => {
+      connectedPageReadyFallbackTimer = null;
+      const current = accountStates.get(normalized) || defaultAccountState(normalized);
+      if (readyFallbackTriggered || current.ready || !runtimes.has(normalized)) return;
+      connectedPageReadyFallbackCount += 1;
+      await triggerReadyFallback(reason, { allowConnectedPage: true });
+      const latest = accountStates.get(normalized) || defaultAccountState(normalized);
+      if (!latest.ready && !readyFallbackTriggered && runtimes.has(normalized)) {
+        scheduleConnectedPageReadyFallback(reason);
+      }
+    }, connectedPageReadyFallbackDelayMs(env));
+    if (typeof connectedPageReadyFallbackTimer.unref === "function") connectedPageReadyFallbackTimer.unref();
   };
   const client = new Client({
     authStrategy: new LocalAuth({ clientId: clientIdForAccount(normalized, env), dataPath: sessionRootForAccount(normalized, env) }),
@@ -1314,6 +1370,7 @@ export async function startLocalWhatsAppAccount(accountId = "", env = process.en
   client.on("ready", async () => {
     clearAuthReadyTimer();
     clearReadyFallbackTimer();
+    clearConnectedPageReadyFallbackTimer();
     await clearQr(normalized, env);
     setAccountState(normalized, {
       state: "ready",
@@ -1333,6 +1390,7 @@ export async function startLocalWhatsAppAccount(accountId = "", env = process.en
   client.on("auth_failure", async (message) => {
     clearAuthReadyTimer();
     clearReadyFallbackTimer();
+    clearConnectedPageReadyFallbackTimer();
     setAccountState(normalized, {
       state: "auth_failure",
       ready: false,
@@ -1349,6 +1407,7 @@ export async function startLocalWhatsAppAccount(accountId = "", env = process.en
   client.on("disconnected", async (reason) => {
     clearAuthReadyTimer();
     clearReadyFallbackTimer();
+    clearConnectedPageReadyFallbackTimer();
     const current = accountStates.get(normalized) || defaultAccountState(normalized);
     if (["auth_failure", "auth_ready_timeout", "failed"].includes(current.state)) {
       runtimes.delete(normalized);
@@ -1390,6 +1449,7 @@ export async function startLocalWhatsAppAccount(accountId = "", env = process.en
   client.on("error", async (error) => {
     clearAuthReadyTimer();
     clearReadyFallbackTimer();
+    clearConnectedPageReadyFallbackTimer();
     setAccountState(normalized, {
       state: "failed",
       ready: false,
@@ -1415,6 +1475,7 @@ export async function startLocalWhatsAppAccount(accountId = "", env = process.en
   const initializePromise = client.initialize().catch(async (error) => {
     clearAuthReadyTimer();
     clearReadyFallbackTimer();
+    clearConnectedPageReadyFallbackTimer();
     await client.destroy().catch(() => {});
     setAccountState(normalized, {
       state: "failed",
@@ -1427,6 +1488,7 @@ export async function startLocalWhatsAppAccount(accountId = "", env = process.en
     await appendEvent({ type: "whatsapp_local_start_failed", accountId: normalized, error: error.message || String(error) }, env);
   });
   runtimes.set(normalized, { client, initializePromise, clearAuthReadyTimer });
+  scheduleConnectedPageReadyFallback("startup_connected_page");
   await appendEvent({ type: "whatsapp_local_start_requested", accountId: normalized }, env);
   return accountSnapshot(normalized, env);
 }
