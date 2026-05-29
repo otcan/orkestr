@@ -19,12 +19,30 @@ test("codex resume attach uses the configured runtime command", async () => {
 
   assert.equal(
     command,
-    "/opt/orkestr/codex-cli/node_modules/.bin/codex --sandbox workspace-write --ask-for-approval on-request --no-alt-screen --skip-git-repo-check resume -C '/work/repo' 'thread-123'"
+    "/opt/orkestr/codex-cli/node_modules/.bin/codex --sandbox workspace-write --ask-for-approval on-request --no-alt-screen resume -C '/work/repo' 'thread-123'"
   );
 });
 
-test("codex resume attach does not duplicate skip git repo check", async () => {
+test("codex resume attach strips legacy skip git repo check by default", async () => {
   const env = {
+    ORKESTR_RUNTIME_CODEX_COMMAND: "/opt/orkestr/codex-cli/node_modules/.bin/codex --skip-git-repo-check --sandbox workspace-write --ask-for-approval on-request --no-alt-screen",
+  };
+
+  const command = await codexResumeCommand({
+    cwd: "/work/repo",
+    codexThreadId: "thread-123",
+    env,
+  });
+
+  assert.equal(
+    command,
+    "/opt/orkestr/codex-cli/node_modules/.bin/codex --sandbox workspace-write --ask-for-approval on-request --no-alt-screen resume -C '/work/repo' 'thread-123'"
+  );
+});
+
+test("codex resume attach can keep legacy skip git repo check when opted in", async () => {
+  const env = {
+    ORKESTR_CODEX_KEEP_LEGACY_SKIP_GIT_REPO_CHECK: "1",
     ORKESTR_RUNTIME_CODEX_COMMAND: "/opt/orkestr/codex-cli/node_modules/.bin/codex --skip-git-repo-check --sandbox workspace-write --ask-for-approval on-request --no-alt-screen",
   };
 
@@ -67,7 +85,7 @@ test("codex resume attach can read the persisted runtime command", async () => {
 
   assert.equal(
     command,
-    "/home/user/.orkestr/codex-cli/node_modules/.bin/codex --sandbox workspace-write --ask-for-approval on-request --no-alt-screen --skip-git-repo-check resume -C '/repo/with space' 'abc'\\''def'"
+    "/home/user/.orkestr/codex-cli/node_modules/.bin/codex --sandbox workspace-write --ask-for-approval on-request --no-alt-screen resume -C '/repo/with space' 'abc'\\''def'"
   );
 });
 

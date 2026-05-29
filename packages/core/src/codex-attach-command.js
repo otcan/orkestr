@@ -15,22 +15,21 @@ function firstValue(...values) {
   return "";
 }
 
+function commandTokens(command) {
+  return clean(command).match(/(?:[^\s"']+|"[^"]*"|'[^']*')+/g) || [];
+}
+
 function commandFlagValue(command, flag) {
-  const tokens = clean(command).match(/(?:[^\s"']+|"[^"]*"|'[^']*')+/g) || [];
+  const tokens = commandTokens(command);
   const index = tokens.indexOf(flag);
   if (index < 0) return "";
   return clean(tokens[index + 1] || "").replace(/^["']|["']$/g, "");
 }
 
-function commandHasFlag(command, flag) {
-  const tokens = clean(command).match(/(?:[^\s"']+|"[^"]*"|'[^']*')+/g) || [];
-  return tokens.includes(flag);
-}
-
-function commandWithSkipGitRepoCheck(command) {
+function commandWithoutLegacySkipGitRepoCheck(command, env = process.env) {
   const base = clean(command);
-  if (!base || commandHasFlag(base, "--skip-git-repo-check")) return base;
-  return `${base} --skip-git-repo-check`;
+  if (!base || clean(env.ORKESTR_CODEX_KEEP_LEGACY_SKIP_GIT_REPO_CHECK) === "1") return base;
+  return commandTokens(base).filter((token) => token !== "--skip-git-repo-check").join(" ");
 }
 
 function commandFromBin(bin, settings = {}, env = process.env) {
@@ -60,7 +59,7 @@ export async function codexResumeCommand(options = {}) {
   const { cwd, codexThreadId, env = process.env } = options;
   const id = clean(codexThreadId);
   if (!id) throw new Error("codex_thread_id_required");
-  const command = commandWithSkipGitRepoCheck(await codexRuntimeCommand(env));
+  const command = commandWithoutLegacySkipGitRepoCheck(await codexRuntimeCommand(env), env);
   if (!command) throw new Error("codex_runtime_command_disabled");
   const workspace = clean(cwd);
   const workspaceArg = workspace ? ` -C ${shellQuote(workspace)}` : "";
