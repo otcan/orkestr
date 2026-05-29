@@ -9,7 +9,7 @@ import { listAgentMessages } from "../packages/core/src/messages.js";
 import { getSetupStatus } from "../packages/core/src/setup.js";
 import { appendThreadMessage, createThread, enqueueThreadInput, getThread, listThreadMessages, listThreads, updateThreadMessage } from "../packages/core/src/threads.js";
 import { deliverWhatsAppReplies, formatWhatsAppOutboundText, getWhatsAppChatParticipants, getWhatsAppStatus, initialQueueDeliveryState, mapLocalWhatsAppStatusFromHealth, routeWhatsAppInbound, syncWhatsAppTypingIndicators } from "../packages/connectors/src/whatsapp.js";
-import { listLocalWhatsAppChats, localWhatsAppAccountIdsForEnv, localWhatsAppMessageRouteFields, localWhatsAppReadyFallbackEligible, localWhatsAppTypingClearRetryDelaysMs, localWhatsAppUnreadRecoveryBoundChats, localWhatsAppUnreadRecoveryIntervalMs, normalizeGroupParticipantIds, recoverUnreadLocalWhatsAppMessages, recoverableLocalWhatsAppAccountIds, reduceLocalWhatsAppBridgeState, sendWhatsAppTextWithConfirmation, startLocalWhatsAppAccount, webCacheRoot } from "../packages/connectors/src/whatsapp-local-bridge.js";
+import { forwardLocalWhatsAppInbound, listLocalWhatsAppChats, localWhatsAppAccountIdsForEnv, localWhatsAppInboundForwardTarget, localWhatsAppMessageRouteFields, localWhatsAppReadyFallbackEligible, localWhatsAppTypingClearRetryDelaysMs, localWhatsAppUnreadRecoveryBoundChats, localWhatsAppUnreadRecoveryIntervalMs, normalizeGroupParticipantIds, recoverUnreadLocalWhatsAppMessages, recoverableLocalWhatsAppAccountIds, reduceLocalWhatsAppBridgeState, sendWhatsAppTextWithConfirmation, startLocalWhatsAppAccount, webCacheRoot } from "../packages/connectors/src/whatsapp-local-bridge.js";
 import { createAndBindWhatsAppThreadGroup } from "../packages/connectors/src/whatsapp-thread-groups.js";
 import { prepareWhatsAppTableAttachments } from "../packages/connectors/src/whatsapp-table-attachments.js";
 import { writeConnectorConfig } from "../packages/storage/src/config.js";
@@ -137,6 +137,41 @@ test("local whatsapp bridge supports configured account ids", async () => {
   assert.equal(status.mode, "local");
   assert.deepEqual(status.accounts.map((account) => account.accountId), ["main", "openclaw"]);
   assert.deepEqual(status.accounts.map((account) => account.label), ["main", "openclaw"]);
+});
+
+test("local whatsapp inbound forwarding posts mapped chats", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-forward-"));
+  const env = {
+    ORKESTR_HOME: home,
+    ORKESTR_WHATSAPP_INBOUND_FORWARD_MAP_JSON: JSON.stringify({
+      "chat-forward@g.us": "https://remote.example/api/connectors/whatsapp/inbound",
+    }),
+    ORKESTR_WHATSAPP_INBOUND_FORWARD_TOKEN: "forward-secret",
+  };
+  const calls = [];
+
+  const forwarded = await forwardLocalWhatsAppInbound({
+    eventId: "event-forward-1",
+    chatId: "chat-forward@g.us",
+    from: "491111111111@c.us",
+    accountId: "responder",
+    text: "hello",
+  }, env, async (url, options) => {
+    calls.push({ url, options, body: JSON.parse(options.body) });
+    return response({ ok: true, threadId: "thread-forward", messageId: "message-forward" }, true, 202);
+  });
+  const skipped = await forwardLocalWhatsAppInbound({ eventId: "event-skip", chatId: "other@g.us", text: "skip" }, env, async () => {
+    throw new Error("unmapped chats should not be forwarded");
+  });
+
+  assert.equal(localWhatsAppInboundForwardTarget({ chatId: "chat-forward@g.us" }, env), "https://remote.example/api/connectors/whatsapp/inbound");
+  assert.equal(forwarded.forwarded, true);
+  assert.equal(forwarded.payload.threadId, "thread-forward");
+  assert.equal(skipped, null);
+  assert.equal(calls.length, 1);
+  assert.equal(String(calls[0].url), "https://remote.example/api/connectors/whatsapp/inbound");
+  assert.equal(calls[0].options.headers.authorization, "Bearer forward-secret");
+  assert.equal(calls[0].body.chatId, "chat-forward@g.us");
 });
 
 test("local whatsapp recovery notifies chat when tenant sanitizer blocks inbound", async () => {

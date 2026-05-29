@@ -73,6 +73,62 @@ function accountLabel(accountId) {
   return accountId === "account-2" ? "WhatsApp 2" : "WhatsApp 1";
 }
 
+function readJsonEnvMap(value) {
+  const text = String(value || "").trim();
+  if (!text) return {};
+  try {
+    const parsed = JSON.parse(text);
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+export function localWhatsAppInboundForwardTarget({ chatId = "" } = {}, env = process.env) {
+  const id = String(chatId || "").trim();
+  if (!id) return "";
+  const targets = readJsonEnvMap(env.ORKESTR_WHATSAPP_INBOUND_FORWARD_MAP_JSON || env.WHATSAPP_INBOUND_FORWARD_MAP_JSON);
+  return String(targets[id] || "").trim();
+}
+
+function localWhatsAppInboundForwardToken({ chatId = "" } = {}, env = process.env) {
+  const tokens = readJsonEnvMap(env.ORKESTR_WHATSAPP_INBOUND_FORWARD_TOKEN_MAP_JSON || env.WHATSAPP_INBOUND_FORWARD_TOKEN_MAP_JSON);
+  return String(tokens[String(chatId || "").trim()] || env.ORKESTR_WHATSAPP_INBOUND_FORWARD_TOKEN || env.WHATSAPP_INBOUND_FORWARD_TOKEN || "").trim();
+}
+
+export async function forwardLocalWhatsAppInbound(input = {}, env = process.env, fetchImpl = fetch) {
+  const chatId = String(input.chatId || input.chat?.id || input.fromChatId || "").trim();
+  const target = localWhatsAppInboundForwardTarget({ chatId }, env);
+  if (!target) return null;
+  const headers = { "content-type": "application/json" };
+  const token = localWhatsAppInboundForwardToken({ chatId }, env);
+  if (token) headers.authorization = `Bearer ${token}`;
+  const response = await fetchImpl(target, {
+    method: "POST",
+    headers,
+    body: JSON.stringify(input),
+    signal: AbortSignal.timeout(Number(env.WHATSAPP_INBOUND_FORWARD_TIMEOUT_MS || 10_000)),
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok || payload?.ok === false) {
+    const error = new Error(payload?.error || `whatsapp_inbound_forward_failed_${response.status}`);
+    error.statusCode = response.status || 502;
+    error.payload = payload;
+    throw error;
+  }
+  await appendEvent({
+    type: "whatsapp_local_inbound_forwarded",
+    chatId,
+    eventId: String(input.eventId || input.id || input.messageId || ""),
+    target,
+    status: response.status,
+    threadId: payload.threadId || null,
+    agentId: payload.agentId || null,
+    messageId: payload.messageId || null,
+  }, env).catch(() => {});
+  return { forwarded: true, target, payload };
+}
+
 function wait(ms) {
   return new Promise((resolve) => setTimeout(resolve, Math.max(0, Number(ms || 0))));
 }
@@ -751,21 +807,21 @@ async function handleInboundMessage(accountId, message, env = process.env, optio
   if (fromMe && outboundMessageIds.has(eventId)) return { skipped: "outbound_echo_id", eventId, chatId };
   if (fromMe && outboundMessageTextKeys.has(textKey(accountId, chatId, text))) return { skipped: "outbound_echo_text", eventId, chatId };
   const routedText = text || attachmentSummaryText(attachments);
+  const inbound = {
+    eventId,
+    chatId,
+    from,
+    accountId,
+    fromMe: routeFromMe,
+    text: routedText,
+    attachments,
+    timestamp: message.timestamp ? new Date(Number(message.timestamp) * 1000).toISOString() : nowIso(),
+  };
   try {
+    const forwarded = await forwardLocalWhatsAppInbound(inbound, env);
+    if (forwarded) return { routed: forwarded.payload, forwarded: true, eventId, chatId, from, fromMe: routeFromMe };
     const { deliverWhatsAppReplies, routeWhatsAppInbound } = await import("./whatsapp.js");
-    const routed = await routeWhatsAppInbound(
-      {
-        eventId,
-        chatId,
-        from,
-        accountId,
-        fromMe: routeFromMe,
-        text: routedText,
-        attachments,
-        timestamp: message.timestamp ? new Date(Number(message.timestamp) * 1000).toISOString() : nowIso(),
-      },
-      env,
-    );
+    const routed = await routeWhatsAppInbound(inbound, env);
     if (routed.threadId && !routed.duplicate) {
       await deliverWhatsAppReplies(env).catch(() => {});
       requestThreadInputDelivery(routed.threadId, env);
