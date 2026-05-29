@@ -282,6 +282,52 @@ test("whatsapp thread group creation binds an existing thread idempotently", asy
   assert.equal(reused.binding.chatId, "120363000000000002@g.us");
 });
 
+test("whatsapp thread group creation can use an external bridge", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-thread-group-external-"));
+  const env = externalBridgeEnv(home);
+  await createThread({ id: "thread-external-group", name: "Crawlerai Linkedin", executorId: "noop" }, env);
+  await writeConnectorConfig("whatsapp", {
+    bridgeMode: "external",
+    bridgeUrl: "http://parent.local/bridge",
+    apiToken: "secret-token",
+  }, env);
+
+  const calls = [];
+  const result = await createAndBindWhatsAppThreadGroup(
+    await getThread("thread-external-group", env),
+    {
+      name: "Crawlerai-Linkedin",
+      senderAccountId: "sender",
+      responderAccountId: "responder",
+      participantIds: ["491111111111@c.us"],
+      mirrorToWhatsApp: true,
+    },
+    env,
+    {
+      async fetchImpl(url, options) {
+        calls.push({ url, options, body: JSON.parse(options.body) });
+        return response({
+          ok: true,
+          chat: { id: "group-1@g.us", name: "Crawlerai-Linkedin", isGroup: true, generated: true },
+          senderAccountId: "sender",
+          responderAccountId: "responder",
+          senderContactId: "491111111111@c.us",
+          responderContactId: "492222222222@c.us",
+        });
+      },
+    },
+  );
+
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].url.pathname, "/bridge/chats");
+  assert.equal(calls[0].options.headers.authorization, "Bearer secret-token");
+  assert.equal(calls[0].body.name, "Crawlerai-Linkedin");
+  assert.deepEqual(calls[0].body.participantIds, ["491111111111@c.us"]);
+  assert.equal(result.created, true);
+  assert.equal(result.binding.chatId, "group-1@g.us");
+  assert.equal(result.binding.responderAccountId, "responder");
+});
+
 test("local whatsapp send confirms transient text sends from recent own messages", async () => {
   const client = {
     async sendMessage() {
@@ -635,6 +681,30 @@ test("whatsapp status discovers external bridge accounts from dashboard", async 
   assert.deepEqual(status.accounts.map((account) => account.id), ["main", "assistant"]);
 });
 
+test("whatsapp external bridge preserves path prefixes", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-path-"));
+  const env = externalBridgeEnv(home);
+  await writeConnectorConfig("whatsapp", {
+    bridgeMode: "external",
+    bridgeUrl: "http://parent.local/api/connectors/whatsapp/bridge",
+    apiToken: "secret-token",
+  }, env);
+
+  const status = await getWhatsAppStatus(env, async (url, options) => {
+    assert.equal(url.pathname, "/api/connectors/whatsapp/bridge/health");
+    assert.equal(options.headers.authorization, "Bearer secret-token");
+    return response({
+      ok: true,
+      ready: true,
+      accounts: [{ id: "responder", label: "Responder", ready: true, state: "ready" }],
+    });
+  });
+
+  assert.equal(status.state, "paired");
+  assert.equal(status.bridgeUrl, "http://parent.local/api/connectors/whatsapp/bridge");
+  assert.deepEqual(status.accounts.map((account) => account.id), ["responder"]);
+});
+
 test("whatsapp participants are discovered from external bridge chat metadata", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-participants-"));
   const env = externalBridgeEnv(home);
@@ -658,6 +728,30 @@ test("whatsapp participants are discovered from external bridge chat metadata", 
   assert.equal(result.ready, true);
   assert.deepEqual(result.participants.map((participant) => participant.id), ["491111111111@c.us", "492222222222@c.us"]);
   assert.deepEqual(result.participants.map((participant) => participant.name), ["Saved Main", "Saved Other"]);
+});
+
+test("whatsapp external bridge delivery preserves path prefixes", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-path-deliver-"));
+  const env = externalBridgeEnv(home);
+  await writeConnectorConfig("whatsapp", {
+    bridgeMode: "external",
+    bridgeUrl: "http://parent.local/api/connectors/whatsapp/bridge",
+  }, env);
+  await routeWhatsAppInbound(
+    { eventId: "wa-path-deliver-1", agentId: "agent-path-deliver", chatId: "chat-1", accountId: "responder", text: "status?" },
+    env,
+  );
+  await runNextAgentMessage("agent-path-deliver", { executorId: "noop" }, env);
+
+  const calls = [];
+  const delivery = await deliverWhatsAppReplies(env, async (url, options) => {
+    calls.push({ url, body: JSON.parse(options.body) });
+    return response({ ok: true, ids: ["sent-path"] });
+  });
+
+  assert.equal(delivery.delivered.length, 1);
+  assert.equal(calls[0].url.pathname, "/api/connectors/whatsapp/bridge/send-text");
+  assert.equal(calls[0].body.accountId, "responder");
 });
 
 test("whatsapp status reports qr needed when health is reachable and qr exists", async () => {

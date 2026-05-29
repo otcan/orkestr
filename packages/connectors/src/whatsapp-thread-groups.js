@@ -1,5 +1,7 @@
 import { defaultWhatsAppReplyPrefix } from "../../core/src/whatsapp-defaults.js";
 import { updateThread } from "../../core/src/threads.js";
+import { readConnectorConfig } from "../../storage/src/config.js";
+import { configuredWhatsAppBridgeUrl, whatsappBridgeEndpointUrl } from "./whatsapp.js";
 import { createLocalWhatsAppChat, normalizeGroupParticipantIds } from "./whatsapp-local-bridge.js";
 
 function clean(value) {
@@ -43,6 +45,37 @@ function threadGroupBinding(thread = {}, group = {}, options = {}) {
   };
 }
 
+async function createExternalWhatsAppChat(options = {}, env = process.env, fetchImpl = fetch) {
+  const bridgeUrl = await configuredWhatsAppBridgeUrl(env);
+  if (!bridgeUrl) return null;
+  const config = await readConnectorConfig("whatsapp", env);
+  const apiToken = clean(env.WHATSAPP_BRIDGE_TOKEN || env.WA_HTTP_TOKEN || config.apiToken);
+  const headers = { "content-type": "application/json" };
+  if (apiToken) headers.authorization = `Bearer ${apiToken}`;
+  const response = await fetchImpl(whatsappBridgeEndpointUrl(bridgeUrl, "/chats"), {
+    method: "POST",
+    headers,
+    body: JSON.stringify({
+      name: clean(options.name),
+      senderAccountId: clean(options.senderAccountId),
+      responderAccountId: clean(options.responderAccountId),
+      participantIds: normalizeGroupParticipantIds(options.participantIds || []),
+      adminParticipantIds: normalizeGroupParticipantIds(options.adminParticipantIds || []),
+      promoteParticipantsAsAdmins: optionalBoolean(options.promoteParticipantsAsAdmins, false),
+      generatePicture: optionalBoolean(options.generatePicture, true),
+    }),
+    signal: AbortSignal.timeout(Number(env.WHATSAPP_CHAT_CREATE_TIMEOUT_MS || 30_000)),
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok || payload?.ok === false) {
+    const error = new Error(payload?.error || `whatsapp_chat_create_failed_${response.status}`);
+    error.statusCode = response.status || 502;
+    error.payload = payload;
+    throw error;
+  }
+  return payload;
+}
+
 export async function createAndBindWhatsAppThreadGroup(thread, options = {}, env = process.env, dependencies = {}) {
   if (!thread?.id) {
     const error = new Error("thread_not_found");
@@ -70,7 +103,7 @@ export async function createAndBindWhatsAppThreadGroup(thread, options = {}, env
     };
   }
   const participantIds = normalizeGroupParticipantIds(options.participantIds || options.participants || []);
-  const createChat = dependencies.createChat || createLocalWhatsAppChat;
+  const createChat = dependencies.createChat || (await configuredWhatsAppBridgeUrl(env) ? async (input) => createExternalWhatsAppChat(input, env, dependencies.fetchImpl || fetch) : createLocalWhatsAppChat);
   const group = await createChat({
     name: displayName,
     senderAccountId: clean(options.senderAccountId || current.senderAccountId || ""),

@@ -25,15 +25,15 @@ import { attachmentDeliveryKey, prepareWhatsAppTableAttachments } from "./whatsa
 
 let whatsappDeliveryInFlight = null;
 
-async function fetchJson(url, fetchImpl) {
-  const response = await fetchImpl(url, { signal: AbortSignal.timeout(2000) });
+async function fetchJson(url, fetchImpl, options = {}) {
+  const response = await fetchImpl(url, { ...options, signal: AbortSignal.timeout(2000) });
   const payload = await response.json().catch(() => ({}));
   return { ok: response.ok, status: response.status, payload };
 }
 
-async function fetchOk(url, fetchImpl) {
+async function fetchOk(url, fetchImpl, options = {}) {
   try {
-    const response = await fetchImpl(url, { signal: AbortSignal.timeout(2000) });
+    const response = await fetchImpl(url, { ...options, signal: AbortSignal.timeout(2000) });
     return response.ok;
   } catch {
     return false;
@@ -55,6 +55,22 @@ function configuredBridgeUrl(config = {}, env = process.env) {
   return String(env.WHATSAPP_BRIDGE_URL || config.bridgeUrl || "").trim().replace(/\/+$/, "");
 }
 
+export function whatsappBridgeEndpointUrl(bridgeUrl, endpointPath) {
+  const base = String(bridgeUrl || "").trim().replace(/\/+$/, "");
+  const endpoint = String(endpointPath || "").trim().replace(/^\/+/, "");
+  return new URL(`${base}/${endpoint}`);
+}
+
+export async function configuredWhatsAppBridgeUrl(env = process.env) {
+  const config = await readConnectorConfig("whatsapp", env);
+  return configuredBridgeUrl(config, env);
+}
+
+function bridgeAuthHeaders(config = {}, env = process.env) {
+  const apiToken = pickString(env.WHATSAPP_BRIDGE_TOKEN, env.WA_HTTP_TOKEN, config.apiToken);
+  return apiToken ? { authorization: `Bearer ${apiToken}` } : {};
+}
+
 function truthyEnv(value) {
   return ["1", "true", "yes", "on"].includes(String(value || "").trim().toLowerCase());
 }
@@ -74,10 +90,10 @@ function firstAccountError(accounts = []) {
   return accounts.map((account) => account.error).find(Boolean) || "";
 }
 
-async function externalBridgeAccounts(bridgeUrl, healthPayload, fetchImpl) {
+async function externalBridgeAccounts(bridgeUrl, healthPayload, fetchImpl, headers = {}) {
   if (Array.isArray(healthPayload?.accounts)) return healthPayload.accounts;
   try {
-    const dashboard = await fetchJson(new URL("/api/dashboard", bridgeUrl), fetchImpl);
+    const dashboard = await fetchJson(whatsappBridgeEndpointUrl(bridgeUrl, "/api/dashboard"), fetchImpl, { headers });
     if (dashboard.ok && Array.isArray(dashboard.accounts)) return dashboard.accounts;
     if (dashboard.ok && Array.isArray(dashboard.payload?.accounts)) return dashboard.payload.accounts;
   } catch {
@@ -217,8 +233,9 @@ export async function getWhatsAppStatus(env = process.env, fetchImpl = fetch) {
       qrAvailable: false,
     };
   }
+  const headers = bridgeAuthHeaders(config, env);
   try {
-    const health = await fetchJson(new URL("/health", bridgeUrl), fetchImpl);
+    const health = await fetchJson(whatsappBridgeEndpointUrl(bridgeUrl, "/health"), fetchImpl, { headers });
     if (!health.ok) {
       return {
         state: "failed",
@@ -229,7 +246,7 @@ export async function getWhatsAppStatus(env = process.env, fetchImpl = fetch) {
       };
     }
     if (hasReadySignal(health.payload)) {
-      const accounts = await externalBridgeAccounts(bridgeUrl, health.payload, fetchImpl);
+      const accounts = await externalBridgeAccounts(bridgeUrl, health.payload, fetchImpl, headers);
       return {
         state: "paired",
         summary: "WhatsApp bridge is reachable and paired.",
@@ -239,8 +256,8 @@ export async function getWhatsAppStatus(env = process.env, fetchImpl = fetch) {
         qrAvailable: false,
       };
     }
-    const qrAvailable = await fetchOk(new URL("/qr.svg", bridgeUrl), fetchImpl);
-    const accounts = await externalBridgeAccounts(bridgeUrl, health.payload, fetchImpl);
+    const qrAvailable = await fetchOk(whatsappBridgeEndpointUrl(bridgeUrl, "/qr.svg"), fetchImpl, { headers });
+    const accounts = await externalBridgeAccounts(bridgeUrl, health.payload, fetchImpl, headers);
     return {
       state: qrAvailable ? "qr_needed" : "unpaired",
       summary: qrAvailable ? "WhatsApp bridge is reachable; scan the QR code to pair." : "WhatsApp bridge is reachable but not paired.",
@@ -273,7 +290,10 @@ export async function getWhatsAppChatParticipants({ accountId = "", chatId = "" 
   if (!bridgeUrl) {
     return { accountId, chatId: id, ready: false, participants: [] };
   }
-  const response = await fetchImpl(new URL(`/api/chats/${encodeURIComponent(id)}/meta`, bridgeUrl), {
+  const metaUrl = whatsappBridgeEndpointUrl(bridgeUrl, `/api/chats/${encodeURIComponent(id)}/meta`);
+  if (accountId) metaUrl.searchParams.set("accountId", accountId);
+  const response = await fetchImpl(metaUrl, {
+    headers: bridgeAuthHeaders(config, env),
     signal: AbortSignal.timeout(Number(env.WHATSAPP_PARTICIPANTS_TIMEOUT_MS || 5000)),
   });
   const payload = await response.json().catch(() => ({}));
@@ -656,10 +676,8 @@ async function sendWhatsAppText({ chatId, text, accountId, attachments = [], con
     return sendLocalWhatsAppMessage({ chatId, text, accountId, attachments: normalizedAttachments, env });
   }
   if (!bridgeUrl) throw badRequest("whatsapp_bridge_not_configured");
-  const apiToken = pickString(env.WHATSAPP_BRIDGE_TOKEN, env.WA_HTTP_TOKEN, config.apiToken);
-  const headers = { "content-type": "application/json" };
-  if (apiToken) headers.authorization = `Bearer ${apiToken}`;
-  const response = await fetchImpl(new URL(normalizedAttachments.length ? "/send-media" : "/send-text", bridgeUrl), {
+  const headers = { "content-type": "application/json", ...bridgeAuthHeaders(config, env) };
+  const response = await fetchImpl(whatsappBridgeEndpointUrl(bridgeUrl, normalizedAttachments.length ? "/send-media" : "/send-text"), {
     method: "POST",
     headers,
     body: JSON.stringify({
