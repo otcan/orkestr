@@ -589,6 +589,14 @@ function authReadyTimeoutMs(env = process.env, options = {}) {
   return Number.isFinite(parsed) ? Math.max(30_000, parsed) : 180_000;
 }
 
+export function localWhatsAppReadyFallbackEligible(state = {}) {
+  if (state.ready || !state.authenticated) return false;
+  const percent = Number(state.loadingPercent ?? 0);
+  if (percent >= 100) return true;
+  const message = String(state.loadingMessage || "").trim().toLowerCase();
+  return percent >= 99 && message === "whatsapp";
+}
+
 function safeFilePart(value = "", fallback = "attachment") {
   const cleaned = String(value || "")
     .trim()
@@ -1171,7 +1179,7 @@ export async function startLocalWhatsAppAccount(accountId = "", env = process.en
   const scheduleReadyFallback = (reason) => {
     const state = accountStates.get(normalized) || defaultAccountState(normalized);
     if (readyFallbackTriggered || state.ready || !state.authenticated) return;
-    if (Number(state.loadingPercent ?? 0) < 100) return;
+    if (!localWhatsAppReadyFallbackEligible(state)) return;
     clearReadyFallbackTimer();
     readyFallbackTimer = setTimeout(() => {
       readyFallbackTimer = null;

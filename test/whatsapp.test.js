@@ -9,7 +9,7 @@ import { listAgentMessages } from "../packages/core/src/messages.js";
 import { getSetupStatus } from "../packages/core/src/setup.js";
 import { appendThreadMessage, createThread, enqueueThreadInput, getThread, listThreadMessages, listThreads, updateThreadMessage } from "../packages/core/src/threads.js";
 import { deliverWhatsAppReplies, formatWhatsAppOutboundText, getWhatsAppChatParticipants, getWhatsAppStatus, initialQueueDeliveryState, mapLocalWhatsAppStatusFromHealth, routeWhatsAppInbound, syncWhatsAppTypingIndicators } from "../packages/connectors/src/whatsapp.js";
-import { listLocalWhatsAppChats, localWhatsAppAccountIdsForEnv, localWhatsAppMessageRouteFields, localWhatsAppTypingClearRetryDelaysMs, localWhatsAppUnreadRecoveryBoundChats, localWhatsAppUnreadRecoveryIntervalMs, normalizeGroupParticipantIds, recoverUnreadLocalWhatsAppMessages, recoverableLocalWhatsAppAccountIds, reduceLocalWhatsAppBridgeState, sendWhatsAppTextWithConfirmation, startLocalWhatsAppAccount, webCacheRoot } from "../packages/connectors/src/whatsapp-local-bridge.js";
+import { listLocalWhatsAppChats, localWhatsAppAccountIdsForEnv, localWhatsAppMessageRouteFields, localWhatsAppReadyFallbackEligible, localWhatsAppTypingClearRetryDelaysMs, localWhatsAppUnreadRecoveryBoundChats, localWhatsAppUnreadRecoveryIntervalMs, normalizeGroupParticipantIds, recoverUnreadLocalWhatsAppMessages, recoverableLocalWhatsAppAccountIds, reduceLocalWhatsAppBridgeState, sendWhatsAppTextWithConfirmation, startLocalWhatsAppAccount, webCacheRoot } from "../packages/connectors/src/whatsapp-local-bridge.js";
 import { prepareWhatsAppTableAttachments } from "../packages/connectors/src/whatsapp-table-attachments.js";
 import { writeConnectorConfig } from "../packages/storage/src/config.js";
 
@@ -99,6 +99,15 @@ test("local whatsapp typing clear retries are conservative and configurable", ()
   assert.deepEqual(localWhatsAppTypingClearRetryDelaysMs({ ORKESTR_WHATSAPP_TYPING_CLEAR_RETRY_MS: "100 250,250 0" }), [100, 250, 0]);
   assert.deepEqual(localWhatsAppTypingClearRetryDelaysMs({ WA_TYPING_CLEAR_RETRY_MS: "off" }), []);
   assert.deepEqual(localWhatsAppTypingClearRetryDelaysMs({ WA_TYPING_CLEAR_RETRY_MS: "-1 nope 70000 300" }), [300]);
+});
+
+test("local whatsapp ready fallback accepts the WhatsApp 99 percent startup stall", () => {
+  assert.equal(localWhatsAppReadyFallbackEligible({ authenticated: true, ready: false, loadingPercent: 99, loadingMessage: "WhatsApp" }), true);
+  assert.equal(localWhatsAppReadyFallbackEligible({ authenticated: true, ready: false, loadingPercent: 100, loadingMessage: "WhatsApp" }), true);
+  assert.equal(localWhatsAppReadyFallbackEligible({ authenticated: true, ready: false, loadingPercent: 98, loadingMessage: "WhatsApp" }), false);
+  assert.equal(localWhatsAppReadyFallbackEligible({ authenticated: true, ready: true, loadingPercent: 99, loadingMessage: "WhatsApp" }), false);
+  assert.equal(localWhatsAppReadyFallbackEligible({ authenticated: false, ready: false, loadingPercent: 99, loadingMessage: "WhatsApp" }), false);
+  assert.equal(localWhatsAppReadyFallbackEligible({ authenticated: true, ready: false, loadingPercent: 99, loadingMessage: "Loading" }), false);
 });
 
 test("stored external whatsapp bridge config is ignored unless the host opts in", async () => {
