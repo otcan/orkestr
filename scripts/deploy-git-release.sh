@@ -1,13 +1,14 @@
 #!/usr/bin/env bash
 set -euo pipefail
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 usage() {
   cat <<'USAGE'
 Deploy Orkestr from an exact git ref into versioned release directories.
 
 Usage:
-  scripts/deploy-git-release.sh install [--ref REF] [--channel NAME] [--allow-untagged|--require-tagged] [--no-smoke] [--no-backup]
-  scripts/deploy-git-release.sh rollback [--to RELEASE_ID]
+  scripts/deploy-git-release.sh install [--ref REF] [--channel NAME] [--allow-untagged|--require-tagged] [--no-smoke] [--no-backup] [--no-interrupt|--allow-interrupt] [--wait-active] [--active-timeout SECONDS]
+  scripts/deploy-git-release.sh rollback [--to RELEASE_ID] [--no-interrupt|--allow-interrupt] [--wait-active] [--active-timeout SECONDS]
   scripts/deploy-git-release.sh status [--json]
   scripts/deploy-git-release.sh --check-only
 
@@ -27,6 +28,11 @@ Environment:
   ORKESTR_DEPLOY_RUN_SMOKE      Run npm smoke before activation. Defaults to 1.
   ORKESTR_DEPLOY_BACKUP_STATE   Back up ORKESTR_HOME before activation. Defaults to 1.
   ORKESTR_DEPLOY_HEALTH_URL     Health URL. Defaults to http://$ORKESTR_HOST:$ORKESTR_PORT/api/health.
+  ORKESTR_DEPLOY_NO_INTERRUPT   Refuse to restart while thread work is active. Defaults to 1.
+  ORKESTR_DEPLOY_WAIT_ACTIVE    Wait for active thread work before restart. Defaults to 0.
+  ORKESTR_DEPLOY_ACTIVE_TIMEOUT_SECONDS  Max wait with --wait-active. Defaults to 900.
+  ORKESTR_DEPLOY_ACTIVE_CHECK_URL Thread summary URL. Defaults to http://$ORKESTR_HOST:$ORKESTR_PORT/api/threads?scope=all.
+  ORKESTR_DEPLOY_DRAIN_FILE     Drain marker file. Defaults to $ORKESTR_HOME/deploy-drain.json.
   ORKESTR_SERVICE_NAME          systemd service name. Defaults to orkestr.
   ORKESTR_BUILD_WEB_FROM_SOURCE Set to 1 to install dev dependencies and rebuild the Angular web app.
 
@@ -44,6 +50,9 @@ check_only=0
 run_smoke_arg=""
 tags_only_arg=""
 backup_state_arg=""
+no_interrupt_arg=""
+wait_active_arg=""
+active_timeout_arg=""
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
@@ -86,6 +95,26 @@ while [ "$#" -gt 0 ]; do
     --no-backup)
       backup_state_arg=0
       shift
+      ;;
+    --no-interrupt)
+      no_interrupt_arg=1
+      shift
+      ;;
+    --allow-interrupt)
+      no_interrupt_arg=0
+      shift
+      ;;
+    --wait-active)
+      wait_active_arg=1
+      shift
+      ;;
+    --no-wait-active)
+      wait_active_arg=0
+      shift
+      ;;
+    --active-timeout)
+      active_timeout_arg="${2:-}"
+      shift 2
       ;;
     --check-only)
       check_only=1
@@ -132,6 +161,14 @@ json_string() {
 
 sanitize_id() {
   printf '%s' "$1" | LC_ALL=C tr -c 'A-Za-z0-9._+-' '-'
+}
+
+bool_value() {
+  case "$(printf '%s' "${1:-}" | LC_ALL=C tr '[:upper:]' '[:lower:]')" in
+    1|true|yes|on) echo 1 ;;
+    0|false|no|off) echo 0 ;;
+    *) echo "${1:-}" ;;
+  esac
 }
 
 health_check() {
@@ -274,8 +311,160 @@ sync_versioned_env() {
   set_env_assignment ORKESTR_CURRENT_LINK "$current_link"
 }
 
+active_thread_report() {
+  if [ ! -f "$script_dir/deploy-active-work-check.mjs" ]; then
+    printf '{"ok":false,"unavailable":true,"active":[],"error":"missing_active_work_checker"}\n'
+    return 0
+  fi
+  node "$script_dir/deploy-active-work-check.mjs" --url "$active_check_url" --timeout-ms "$active_check_timeout_ms"
+}
+
+active_thread_count() {
+  node -e 'const report = JSON.parse(process.argv[1] || "{}"); process.stdout.write(String(Array.isArray(report.active) ? report.active.length : 0));' "$1"
+}
+
+active_thread_hard_count() {
+  node -e 'const report = JSON.parse(process.argv[1] || "{}"); const states = new Set(["working","processing","running","waking"]); const active = Array.isArray(report.active) ? report.active : []; const count = active.filter((thread) => Boolean(thread.activeTurnId) || Number(thread.runningCount || 0) > 0 || Number(thread.awaitingAckCount || 0) > 0 || states.has(String(thread.state || "").toLowerCase())).length; process.stdout.write(String(count));' "$1"
+}
+
+active_report_unavailable() {
+  node -e 'const report = JSON.parse(process.argv[1] || "{}"); process.stdout.write(report.unavailable ? "1" : "0");' "$1"
+}
+
+active_report_error() {
+  node -e 'const report = JSON.parse(process.argv[1] || "{}"); process.stdout.write(String(report.error || ""));' "$1"
+}
+
+service_is_active() {
+  systemctl is-active --quiet "${service_name}.service" >/dev/null 2>&1
+}
+
+print_active_thread_report() {
+  node - "$1" "${2:-all}" <<'NODE'
+const report = JSON.parse(process.argv[2] || "{}");
+const mode = process.argv[3] || "all";
+const hardStates = new Set(["working", "processing", "running", "waking"]);
+const hardActive = (thread) => Boolean(thread.activeTurnId) ||
+  Number(thread.runningCount || 0) > 0 ||
+  Number(thread.awaitingAckCount || 0) > 0 ||
+  hardStates.has(String(thread.state || "").toLowerCase());
+const active = (Array.isArray(report.active) ? report.active : []).filter((thread) => mode === "hard" ? hardActive(thread) : true);
+if (!active.length) {
+  console.error("  - no active threads");
+  process.exit(0);
+}
+for (const thread of active) {
+  const parts = [
+    thread.name || thread.id || "unknown",
+    thread.state ? `state=${thread.state}` : "",
+    Number(thread.pendingCount || 0) ? `pending=${thread.pendingCount}` : "",
+    Number(thread.runningCount || 0) ? `running=${thread.runningCount}` : "",
+    Number(thread.awaitingAckCount || 0) ? `awaitingAck=${thread.awaitingAckCount}` : "",
+    thread.activeTurnId ? `turn=${thread.activeTurnId}` : "",
+  ].filter(Boolean);
+  console.error(`  - ${parts.join(" ")}`);
+}
+NODE
+}
+
+begin_deploy_drain() {
+  if [ "$no_interrupt" != "1" ] || [ -z "$deploy_drain_file" ]; then
+    return 0
+  fi
+  mkdir -p "$(dirname "$deploy_drain_file")"
+  node - "$deploy_drain_file" "$release_id" "$deploy_ref" "$service_name" "$deploy_drain_ttl_seconds" <<'NODE'
+const fs = require("node:fs");
+const [file, releaseId, ref, serviceName, ttlSeconds] = process.argv.slice(2);
+const ttlMs = Math.max(60, Number(ttlSeconds) || 1800) * 1000;
+const marker = {
+  state: "draining",
+  reason: "deploy",
+  releaseId: releaseId || null,
+  ref: ref || null,
+  serviceName: serviceName || null,
+  startedAt: new Date().toISOString(),
+  expiresAt: new Date(Date.now() + ttlMs).toISOString(),
+};
+fs.writeFileSync(file, `${JSON.stringify(marker, null, 2)}\n`, { mode: 0o600 });
+NODE
+  deploy_drain_started=1
+}
+
+clear_deploy_drain() {
+  if [ -n "$deploy_drain_file" ] && [ -e "$deploy_drain_file" ]; then
+    rm -f "$deploy_drain_file"
+  fi
+  deploy_drain_started=0
+}
+
+cleanup_deploy_drain_on_exit() {
+  if [ "${deploy_drain_started:-0}" = "1" ]; then
+    clear_deploy_drain
+  fi
+}
+
+deploy_guard_active_work() {
+  local mode
+  mode="${1:-all}"
+  if [ "$no_interrupt" != "1" ]; then
+    echo "No-interrupt deploy guard disabled by --allow-interrupt."
+    return 0
+  fi
+
+  local start deadline report count unavailable error now
+  start="$(date +%s)"
+  deadline=$((start + active_timeout_seconds))
+  while true; do
+    report="$(active_thread_report)"
+    unavailable="$(active_report_unavailable "$report")"
+    if [ "$unavailable" = "1" ]; then
+      error="$(active_report_error "$report")"
+      if service_is_active; then
+        echo "Refusing no-interrupt deploy: active thread state is unavailable${error:+: $error}." >&2
+        echo "Use --allow-interrupt to restart anyway, or fix ORKESTR_DEPLOY_ACTIVE_CHECK_URL." >&2
+        exit 75
+      fi
+      echo "No-interrupt deploy guard could not read active thread state; continuing${error:+: $error}." >&2
+      return 0
+    fi
+
+    if [ "$mode" = "hard" ]; then
+      count="$(active_thread_hard_count "$report")"
+    else
+      count="$(active_thread_count "$report")"
+    fi
+    if [ "$count" -eq 0 ]; then
+      return 0
+    fi
+
+    if [ "$wait_active" != "1" ]; then
+      echo "Refusing no-interrupt deploy: active Orkestr thread work is running." >&2
+      print_active_thread_report "$report" "$mode"
+      echo "Use --wait-active to wait, or --allow-interrupt to restart anyway." >&2
+      exit 75
+    fi
+
+    now="$(date +%s)"
+    if [ "$now" -ge "$deadline" ]; then
+      echo "Timed out waiting for active Orkestr thread work before deploy restart." >&2
+      print_active_thread_report "$report" "$mode"
+      echo "Use a larger --active-timeout, or --allow-interrupt to restart anyway." >&2
+      exit 75
+    fi
+
+    echo "Waiting for active Orkestr thread work before deploy restart ($count active)." >&2
+    sleep 5
+  done
+}
+
 restart_and_verify() {
-  systemctl restart "${service_name}.service"
+  if [ "$no_interrupt" = "1" ] && [ "$deploy_drain_started" = "1" ]; then
+    systemctl stop "${service_name}.service"
+    clear_deploy_drain
+    systemctl start "${service_name}.service"
+  else
+    systemctl restart "${service_name}.service"
+  fi
   systemctl is-active --quiet "${service_name}.service"
   health_check "$health_url" 40
 }
@@ -370,6 +559,9 @@ install_command() {
   fi
 
   repair_runtime_ownership
+  deploy_guard_active_work
+  begin_deploy_drain
+  deploy_guard_active_work hard
   backup_path="$(backup_state)"
   activate_release "$release_dir"
   sync_versioned_env
@@ -408,8 +600,11 @@ NODE
   fi
   previous_release="$(current_release_id)"
   commit="$(git -C "$release_dir" rev-parse HEAD 2>/dev/null || true)"
-  backup_path="$(backup_state)"
   repair_runtime_ownership
+  deploy_guard_active_work
+  begin_deploy_drain
+  deploy_guard_active_work hard
+  backup_path="$(backup_state)"
   activate_release "$release_dir"
   sync_versioned_env
   if restart_and_verify; then
@@ -440,7 +635,35 @@ health_url="${ORKESTR_DEPLOY_HEALTH_URL:-http://$host:$port/api/health}"
 run_smoke="${run_smoke_arg:-${ORKESTR_DEPLOY_RUN_SMOKE:-1}}"
 run_backup="${backup_state_arg:-${ORKESTR_DEPLOY_BACKUP_STATE:-1}}"
 lock_file="${ORKESTR_DEPLOY_LOCK_FILE:-/var/lock/orkestr-deploy.lock}"
+no_interrupt="$(bool_value "${no_interrupt_arg:-${ORKESTR_DEPLOY_NO_INTERRUPT:-1}}")"
+wait_active="$(bool_value "${wait_active_arg:-${ORKESTR_DEPLOY_WAIT_ACTIVE:-0}}")"
+active_timeout_seconds="${active_timeout_arg:-${ORKESTR_DEPLOY_ACTIVE_TIMEOUT_SECONDS:-900}}"
+active_check_url="${ORKESTR_DEPLOY_ACTIVE_CHECK_URL:-http://$host:$port/api/threads?scope=all}"
+active_check_timeout_ms="${ORKESTR_DEPLOY_ACTIVE_CHECK_TIMEOUT_MS:-3000}"
+deploy_drain_file="${ORKESTR_DEPLOY_DRAIN_FILE:-${ORKESTR_HOME:-$deploy_root/data}/deploy-drain.json}"
+deploy_drain_ttl_seconds="${ORKESTR_DEPLOY_DRAIN_TTL_SECONDS:-1800}"
+deploy_drain_started=0
 release_id=""
+
+case "$no_interrupt" in
+  0|1) ;;
+  *) echo "ORKESTR_DEPLOY_NO_INTERRUPT must be 0 or 1." >&2; exit 2 ;;
+esac
+case "$wait_active" in
+  0|1) ;;
+  *) echo "ORKESTR_DEPLOY_WAIT_ACTIVE must be 0 or 1." >&2; exit 2 ;;
+esac
+case "$active_timeout_seconds" in
+  ''|*[!0-9]*) echo "ORKESTR_DEPLOY_ACTIVE_TIMEOUT_SECONDS must be a non-negative integer." >&2; exit 2 ;;
+esac
+case "$active_check_timeout_ms" in
+  ''|*[!0-9]*) echo "ORKESTR_DEPLOY_ACTIVE_CHECK_TIMEOUT_MS must be a positive integer." >&2; exit 2 ;;
+esac
+case "$deploy_drain_ttl_seconds" in
+  ''|*[!0-9]*) echo "ORKESTR_DEPLOY_DRAIN_TTL_SECONDS must be a positive integer." >&2; exit 2 ;;
+esac
+
+trap cleanup_deploy_drain_on_exit EXIT
 
 need git
 need npm

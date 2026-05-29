@@ -8,6 +8,7 @@ import { dataPaths, ensureDataDirs } from "../../storage/src/paths.js";
 import { appendEvent, readJson, writeJson } from "../../storage/src/store.js";
 import { ensureRuntimeAgentsFile } from "./agent-context.js";
 import { recordCodexRuntimeAuthInvalidSignal } from "./codex-auth-health.js";
+import { deployDrainActiveSync } from "./deploy-drain.js";
 import { assertCodexAuthenticated } from "../../connectors/src/codex.js";
 import { clearPaneProgressCache, paneBackgroundWork, publicPaneProgress, samplePaneProgress } from "./pane-progress.js";
 import {
@@ -3030,6 +3031,12 @@ async function sendThreadInputToPane(thread, message, status, env = process.env)
 function scheduleThreadInputDelivery(threadId, env = process.env, delayMs = 0) {
   const id = String(threadId || "").trim();
   if (!id) return;
+  if (deployDrainActiveSync(env)) {
+    setImmediate(() => {
+      void appendEvent({ type: "thread_input_delivery_deferred", threadId: id, reason: "deploy_draining" }, env).catch(() => {});
+    });
+    return;
+  }
   const current = deliveryTimers.get(id);
   if (current) clearTimeout(current);
   const timer = setTimeout(() => {
@@ -3041,6 +3048,10 @@ function scheduleThreadInputDelivery(threadId, env = process.env, delayMs = 0) {
 }
 
 export async function deliverPendingThreadInputs(threadId, env = process.env) {
+  if (deployDrainActiveSync(env)) {
+    await appendEvent({ type: "thread_input_delivery_deferred", threadId, reason: "deploy_draining" }, env).catch(() => {});
+    return [];
+  }
   const thread = await getThread(threadId, env);
   if (!thread) return [];
   if (threadUsesCodexAppServer(thread, env)) {
@@ -3244,6 +3255,17 @@ export function requestThreadInputDelivery(threadId, env = process.env, delayMs 
 }
 
 export function requestThreadWake(threadId, options = {}, env = process.env) {
+  if (deployDrainActiveSync(env)) {
+    setImmediate(() => {
+      void appendEvent({
+        type: "runtime_wake_deferred",
+        threadId,
+        reason: options.reason || "wake",
+        deferredReason: "deploy_draining",
+      }, env).catch(() => {});
+    });
+    return;
+  }
   setImmediate(() => {
     void wakeThread(threadId, options, env).catch(async (error) => {
       const errorText = error instanceof Error ? error.message : String(error);

@@ -699,6 +699,45 @@ test("CLI update can run the versioned release deployer", async () => {
   assert.match(stdout.text(), /versioned release update for v0\.1\.0-alpha\.10/);
 });
 
+test("CLI update forwards no-interrupt deploy guard flags", async () => {
+  const spawned = [];
+  const code = await runCli([
+    "update",
+    "--release",
+    "--ref",
+    "main",
+    "--allow-untagged",
+    "--wait-active",
+    "--active-timeout",
+    "30",
+    "--no-smoke",
+  ], {
+    env: {},
+    stdout: capture(),
+    stderr: capture(),
+    spawnImpl(command, args, options) {
+      spawned.push({ command, args, env: options.env });
+      const child = new EventEmitter();
+      queueMicrotask(() => child.emit("exit", 0));
+      return child;
+    },
+  });
+
+  assert.equal(code, 0);
+  assert.equal(spawned.length, 1);
+  assert.match(spawned[0].args[0], /scripts\/deploy-git-release\.sh$/);
+  assert.deepEqual(spawned[0].args.slice(1), [
+    "install",
+    "--ref",
+    "main",
+    "--allow-untagged",
+    "--no-smoke",
+    "--wait-active",
+    "--active-timeout",
+    "30",
+  ]);
+});
+
 test("CLI update can track main as versioned releases", async () => {
   const stdout = capture();
   const spawned = [];
@@ -775,6 +814,26 @@ test("CLI update status and rollback forward to the release deployer", async () 
   assert.deepEqual(spawned[0].args.slice(1), ["status", "--json"]);
   assert.match(spawned[1].args[0], /scripts\/deploy-git-release\.sh$/);
   assert.deepEqual(spawned[1].args.slice(1), ["rollback", "--to", "v0.1.0-alpha.9"]);
+});
+
+test("CLI update rollback can intentionally bypass the no-interrupt guard", async () => {
+  const spawned = [];
+  const code = await runCli(["update", "rollback", "--to", "v0.1.0-alpha.9", "--allow-interrupt"], {
+    env: {},
+    stdout: capture(),
+    stderr: capture(),
+    spawnImpl(command, args, options) {
+      spawned.push({ command, args, env: options.env });
+      const child = new EventEmitter();
+      queueMicrotask(() => child.emit("exit", 0));
+      return child;
+    },
+  });
+
+  assert.equal(code, 0);
+  assert.equal(spawned[0].command, "bash");
+  assert.match(spawned[0].args[0], /scripts\/deploy-git-release\.sh$/);
+  assert.deepEqual(spawned[0].args.slice(1), ["rollback", "--to", "v0.1.0-alpha.9", "--allow-interrupt"]);
 });
 
 test("CLI rollback is a short alias for update rollback", async () => {

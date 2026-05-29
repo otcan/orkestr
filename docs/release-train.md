@@ -194,6 +194,12 @@ Use the versioned deployer:
 orkestr update --release --ref <tag-or-main-or-sha> --channel <channel>
 ```
 
+Versioned deploys are no-interrupt by default. The deployer checks
+`/api/threads?scope=all` before the service restart and refuses to continue when
+Codex work is active, queued, or awaiting delivery. Use `--wait-active` to wait
+for active work to finish, or `--allow-interrupt` only when the user explicitly
+accepts interrupting running threads.
+
 For public/stable production, prefer an exact tag. For dogfood/main tracking,
 `main` or a specific commit is acceptable and should produce a release id like
 `main-<short-commit>`.

@@ -397,8 +397,11 @@ With `ORKESTR_RELEASE_DEPLOY=1`, `orkestr-update` delegates to
 - runs `npm ci`, `npm run build`, and `npm run smoke`
 - writes `release-manifest.json` into the release
 - backs up `ORKESTR_HOME` under `/opt/orkestr/backups`
+- checks `/api/threads?scope=all` and refuses to restart while thread work is
+  active unless `--wait-active` or `--allow-interrupt` is used
 - switches `/opt/orkestr/current` atomically
-- restarts `orkestr.service`
+- stops and starts `orkestr.service` with a short delivery drain marker so new
+  inputs queue instead of being delivered during the restart window
 - verifies `/api/health`
 - appends the result to `/opt/orkestr/deployments.json`
 
@@ -408,10 +411,12 @@ Manual operations:
 sudo orkestr update
 sudo orkestr rollback
 sudo orkestr update --track-main --no-smoke
+sudo orkestr update --track-main --no-smoke --wait-active
 sudo orkestr update --release --ref v0.1.7 --channel production
 orkestr update status
 orkestr update rollback
 orkestr-deploy install --ref main --channel main --allow-untagged --no-smoke
+orkestr-deploy install --ref main --channel main --allow-untagged --no-smoke --wait-active
 orkestr-deploy install --ref v0.1.7 --channel production
 orkestr-deploy status
 orkestr-deploy rollback
