@@ -17,11 +17,18 @@ export function codexAppServerUsesProxy(env = process.env) {
 }
 
 export function codexAppServerClientArgs(env = process.env) {
+  if (codexAppServerTransport(env) === "websocket") return ["app-server", "--listen", "stdio://"];
   if (!codexAppServerUsesProxy(env)) return ["app-server", "--listen", "stdio://"];
   const socket = codexAppServerSocket(env);
   return ["app-server", "proxy", ...(socket ? ["--sock", socket] : [])];
 }
 
 export function codexAppServerTransport(env = process.env) {
+  if (codexAppServerSocket(env)) return "websocket";
   return codexAppServerUsesProxy(env) ? "proxy" : "stdio";
+}
+
+export function codexAppServerWebSocketUrl(env = process.env) {
+  const socket = codexAppServerSocket(env);
+  return socket ? `ws+unix://${socket}:/` : "";
 }

@@ -54,9 +54,23 @@ async function runCommandSanitizer(payload, env = process.env) {
     });
     let stdout = "";
     let stderr = "";
+    let settled = false;
+    const finish = (decision) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      child.unref?.();
+      child.stdin.unref?.();
+      child.stdout.unref?.();
+      child.stderr.unref?.();
+      child.stdin.destroy();
+      child.stdout.destroy();
+      child.stderr.destroy();
+      resolve(decision);
+    };
     const timer = setTimeout(() => {
       child.kill("SIGKILL");
-      resolve(unavailable("llm_sanitizer_timeout"));
+      finish(unavailable("llm_sanitizer_timeout"));
     }, timeoutMs);
     child.stdout.setEncoding("utf8");
     child.stderr.setEncoding("utf8");
@@ -67,19 +81,17 @@ async function runCommandSanitizer(payload, env = process.env) {
       stderr += chunk;
     });
     child.on("error", (error) => {
-      clearTimeout(timer);
-      resolve(unavailable(error?.code === "ENOENT" ? "llm_sanitizer_command_missing" : error?.message || String(error)));
+      finish(unavailable(error?.code === "ENOENT" ? "llm_sanitizer_command_missing" : error?.message || String(error)));
     });
     child.on("close", (code) => {
-      clearTimeout(timer);
       if (code !== 0) {
-        resolve(normalizeDecision({ allow: false, reason: stderr.trim() || `llm_sanitizer_exit_${code}` }));
+        finish(normalizeDecision({ allow: false, reason: stderr.trim() || `llm_sanitizer_exit_${code}` }));
         return;
       }
       try {
-        resolve(normalizeDecision(JSON.parse(stdout || "{}")));
+        finish(normalizeDecision(JSON.parse(stdout || "{}")));
       } catch {
-        resolve(unavailable("llm_sanitizer_invalid_json"));
+        finish(unavailable("llm_sanitizer_invalid_json"));
       }
     });
     child.stdin.end(`${JSON.stringify(payload)}\n`);

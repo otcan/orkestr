@@ -1,8 +1,11 @@
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
+import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
+import { once } from "node:events";
+import { WebSocketServer } from "ws";
 import {
   codexAppServerThreadStatus,
   deliverCodexAppServerPendingInputs,
@@ -16,7 +19,7 @@ import {
 } from "../packages/core/src/codex-app-server.js";
 import { migrateCodexThreadsToAppServer } from "../packages/core/src/codex-app-server-migration.js";
 import { resetThreadRuntime, sleepThread } from "../packages/core/src/runtime-leases.js";
-import { effortForThread, modelForThread, turnStartParams } from "../packages/core/src/codex-app-server-common.js";
+import { effortForThread, modelForThread, threadStartParams, turnStartParams } from "../packages/core/src/codex-app-server-common.js";
 import { appendThreadMessage, createThread, enqueueThreadInput, getThread, listThreadMessages, updateThread, updateThreadMessage } from "../packages/core/src/threads.js";
 import { deliverWhatsAppReplies } from "../packages/connectors/src/whatsapp.js";
 import { writeConnectorConfig } from "../packages/storage/src/config.js";
@@ -65,6 +68,7 @@ if (args[0] === "app-server" && args.includes("--help")) {
 if (args[0] !== "app-server") process.exit(0);
 const initialState = readState();
 initialState.argv = args;
+initialState.spawnCount = (initialState.spawnCount || 0) + 1;
 writeState(initialState);
 
 const rl = readline.createInterface({ input: process.stdin });
@@ -141,6 +145,49 @@ rl.on("line", (line) => {
   return { bin, stateFile };
 }
 
+async function createFakeCodexWebSocketServer(socketPath) {
+  await fs.rm(socketPath, { force: true }).catch(() => {});
+  await fs.mkdir(path.dirname(socketPath), { recursive: true });
+  const state = { threads: [], calls: [] };
+  const server = http.createServer();
+  const wss = new WebSocketServer({ server });
+  const send = (ws, message) => ws.send(JSON.stringify(message));
+  wss.on("connection", (ws) => {
+    ws.on("message", (raw) => {
+      const message = JSON.parse(String(raw || ""));
+      const id = message.id;
+      const params = message.params || {};
+      state.calls.push({ method: message.method || "", params });
+      if (message.method === "initialize") return send(ws, { id, result: { userAgent: "fake", platformFamily: "linux", platformOs: "linux" } });
+      if (message.method === "initialized") return;
+      if (message.method === "thread/start") {
+        const thread = { id: "thr_" + String(state.threads.length + 1).padStart(3, "0"), sessionId: "sess_001", name: "", preview: "", cwd: params.cwd || "", status: { type: "idle" }, loaded: true, turns: [] };
+        state.threads.push(thread);
+        send(ws, { id, result: { thread } });
+        send(ws, { method: "thread/started", params: { thread } });
+        return;
+      }
+      if (message.method === "thread/name/set") {
+        const thread = state.threads.find((item) => item.id === params.threadId);
+        if (thread) thread.name = params.name;
+        return send(ws, { id, result: {} });
+      }
+      return send(ws, { id, result: {} });
+    });
+  });
+  server.listen(socketPath);
+  await once(server, "listening");
+  return {
+    state,
+    async close() {
+      for (const client of wss.clients) client.close();
+      await new Promise((resolve) => wss.close(resolve));
+      await new Promise((resolve) => server.close(resolve));
+      await fs.rm(socketPath, { force: true }).catch(() => {});
+    },
+  };
+}
+
 async function markAppServerTurnActive(thread, env, turnId = "active-turn") {
   const codexThreadId = thread?.executor?.codexThreadId || thread?.codexThreadId;
   const client = await getCodexAppServerClient({ env, home: env.HOME });
@@ -204,10 +251,60 @@ test("Codex app-server turn params ignore corrupt model and reasoning metadata",
   }
 });
 
+test("Codex app-server clamps non-admin threads away from root danger access", () => {
+  const previousSandbox = process.env.ORKESTR_CODEX_SANDBOX;
+  const previousApproval = process.env.ORKESTR_CODEX_APPROVAL_POLICY;
+  const previousAdmin = process.env.ORKESTR_ADMIN_USER_ID;
+  try {
+    process.env.ORKESTR_CODEX_SANDBOX = "danger-full-access";
+    process.env.ORKESTR_CODEX_APPROVAL_POLICY = "never";
+    process.env.ORKESTR_ADMIN_USER_ID = "admin";
+
+    const restrictedThread = {
+      id: "otcantest",
+      ownerUserId: "otcan",
+      cwd: "/tmp/otcantest-workspace",
+      codexSandbox: "danger-full-access",
+      codexApprovalPolicy: "never",
+      executor: {
+        metadata: {
+          codexSandbox: "danger-full-access",
+          codexApprovalPolicy: "never",
+        },
+      },
+    };
+
+    assert.equal(threadStartParams(restrictedThread).sandbox, "workspace-write");
+    assert.equal(threadStartParams(restrictedThread).approvalPolicy, "on-request");
+    assert.equal(turnStartParams(restrictedThread, { text: "hello" }).sandboxPolicy.type, "workspaceWrite");
+    assert.deepEqual(turnStartParams(restrictedThread, { text: "hello" }).sandboxPolicy.writableRoots, ["/tmp/otcantest-workspace"]);
+    assert.equal(turnStartParams(restrictedThread, { text: "hello" }).approvalPolicy, "on-request");
+
+    const trustedThread = {
+      ...restrictedThread,
+      id: "trusted-root",
+      ownerUserId: "admin",
+      securityProfile: "trusted-root",
+    };
+
+    assert.equal(threadStartParams(trustedThread).sandbox, "danger-full-access");
+    assert.equal(threadStartParams(trustedThread).approvalPolicy, "never");
+    assert.deepEqual(turnStartParams(trustedThread, { text: "hello" }).sandboxPolicy, { type: "dangerFullAccess" });
+  } finally {
+    if (previousSandbox === undefined) delete process.env.ORKESTR_CODEX_SANDBOX;
+    else process.env.ORKESTR_CODEX_SANDBOX = previousSandbox;
+    if (previousApproval === undefined) delete process.env.ORKESTR_CODEX_APPROVAL_POLICY;
+    else process.env.ORKESTR_CODEX_APPROVAL_POLICY = previousApproval;
+    if (previousAdmin === undefined) delete process.env.ORKESTR_ADMIN_USER_ID;
+    else process.env.ORKESTR_ADMIN_USER_ID = previousAdmin;
+  }
+});
+
 test("Codex app-server client can use an external proxy socket", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-codex-app-server-proxy-"));
   const fake = await createFakeCodex(home);
   const socket = path.join(home, "run", "codex.sock");
+  const server = await createFakeCodexWebSocketServer(socket);
   const env = {
     ORKESTR_HOME: path.join(home, "orkestr"),
     ORKESTR_CODEX_APP_SERVER_MODE: "external",
@@ -219,15 +316,35 @@ test("Codex app-server client can use an external proxy socket", async () => {
 
   try {
     const client = await getCodexAppServerClient({ env, home: env.HOME });
-    assert.equal(client.transport, "proxy");
+    assert.equal(client.transport, "websocket");
     assert.equal(client.socket, socket);
     const thread = await createThread({ id: "proxy-thread", name: "Proxy Thread", cwd: home, executorId: "codex", executor: { type: "codex" } }, env);
     const started = await startCodexAppServerThread(thread, env);
     const status = await codexAppServerThreadStatus(started.thread, env);
-    assert.equal(status.codexAppServerTransport, "proxy");
+    assert.equal(status.codexAppServerTransport, "websocket");
     assert.equal(status.codexAppServerSocket, socket);
+    assert.deepEqual(server.state.calls.map((call) => call.method), ["initialize", "initialized", "thread/start", "thread/name/set"]);
+  } finally {
+    stopCodexAppServerClients();
+    await server.close();
+  }
+});
+
+test("Codex app-server client starts once when shared concurrently", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-codex-app-server-concurrent-"));
+  const fake = await createFakeCodex(home);
+  const env = {
+    ORKESTR_HOME: path.join(home, "orkestr"),
+    HOME: path.join(home, "runtime-home"),
+    PATH: `${fake.bin}${path.delimiter}${process.env.PATH || ""}`,
+    FAKE_CODEX_STATE: fake.stateFile,
+  };
+
+  try {
+    const clients = await Promise.all(Array.from({ length: 20 }, () => getCodexAppServerClient({ env, home: env.HOME })));
+    assert.equal(new Set(clients).size, 1);
     const state = JSON.parse(await fs.readFile(fake.stateFile, "utf8"));
-    assert.deepEqual(state.argv, ["app-server", "proxy", "--sock", socket]);
+    assert.equal(state.spawnCount, 1);
   } finally {
     stopCodexAppServerClients();
   }
@@ -1031,6 +1148,70 @@ test("Codex app-server recovery ignores delayed imported user rows for completed
   }
 });
 
+test("Codex app-server recovery treats parent-linked final answers as completed turns", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-codex-app-server-parent-final-"));
+  const fake = await createFakeCodex(home);
+  const env = {
+    ORKESTR_HOME: path.join(home, "orkestr"),
+    HOME: path.join(home, "runtime-home"),
+    PATH: `${fake.bin}${path.delimiter}${process.env.PATH || ""}`,
+    FAKE_CODEX_STATE: fake.stateFile,
+    ORKESTR_CODEX_APP_SERVER_STALE_FINAL_GRACE_MS: "0",
+  };
+  try {
+    const thread = await createThread({
+      id: "app-server-parent-final-thread",
+      name: "App Server Parent Final Thread",
+      state: "ready",
+      executorId: "codex",
+      executor: {
+        type: "codex",
+        transport: "app-server",
+        codexThreadId: "parent-final-codex-thread",
+        codexSessionId: "parent-final-codex-thread",
+      },
+      runtimeKind: "codex-app-server",
+      codexThreadId: "parent-final-codex-thread",
+      codexSessionId: "parent-final-codex-thread",
+      runtime: {
+        runtimeKind: "codex-app-server",
+        state: "ready",
+        activeTurnId: null,
+        codexStatus: { type: "idle" },
+      },
+    }, env);
+    const input = await appendThreadMessage(thread.id, {
+      role: "user",
+      source: "manual",
+      text: "Delivered question with imported parent final.",
+      state: "completed",
+      deliveryState: "delivered",
+      observedVia: "codex_app_server_turn_start",
+      codexThreadId: "parent-final-codex-thread",
+      codexTurnId: "parent-final-turn",
+    }, env);
+    await appendThreadMessage(thread.id, {
+      role: "assistant",
+      source: "codex-rollout",
+      phase: "final_answer",
+      text: "This final was imported without a turn id.",
+      state: "completed",
+      parentMessageId: input.id,
+      codexThreadId: "parent-final-codex-thread",
+    }, env);
+
+    const result = await recoverStaleCodexAppServerTurns(env);
+    const messages = await listThreadMessages(thread.id, env);
+    const notices = messages.filter((message) => message.source === "orkestr_runtime" && message.phase === "runtime_interrupted");
+
+    assert.equal(result.recovered, 0);
+    assert.equal(result.appended, 0);
+    assert.equal(notices.length, 0);
+  } finally {
+    stopCodexAppServerClients();
+  }
+});
+
 test("Codex app-server recovery ignores old historical progress-only turns", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-codex-app-server-old-history-"));
   const fake = await createFakeCodex(home);
@@ -1509,6 +1690,60 @@ test("Codex app-server queues WhatsApp input behind active turns", async () => {
     assert.equal(queued.deliveryState, "awaiting_active_turn");
     assert.ok(!rawState.calls.some((call) => call.method === "turn/steer"));
     assert.ok(!rawState.calls.some((call) => call.method === "turn/start"));
+  } finally {
+    stopCodexAppServerClients();
+  }
+});
+
+test("Codex app-server delivers queued input when live status cleared a stale active turn", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-codex-app-server-stale-active-delivery-"));
+  const fake = await createFakeCodex(home);
+  const env = {
+    ORKESTR_HOME: path.join(home, "orkestr"),
+    HOME: path.join(home, "runtime-home"),
+    PATH: `${fake.bin}${path.delimiter}${process.env.PATH || ""}`,
+    FAKE_CODEX_STATE: fake.stateFile,
+    ORKESTR_CODEX_APP_SERVER_ACTIVE_TURN_RETRY_MS: "60000",
+  };
+  try {
+    const thread = await createThread({ id: "app-server-stale-active-delivery-thread", name: "App Server Stale Active Delivery Thread", cwd: home, executorId: "codex", executor: { type: "codex" } }, env);
+    const started = await startCodexAppServerThread(thread, env);
+    const codexThreadId = started.thread.executor.codexThreadId;
+    const client = await getCodexAppServerClient({ env, home: env.HOME });
+    client.threadStates.set(codexThreadId, {
+      ...(client.threadStates.get(codexThreadId) || {}),
+      activeTurnId: "stale-completed-turn",
+      status: { type: "idle" },
+    });
+    await updateThread(started.thread.id, {
+      state: "ready",
+      runtime: {
+        ...(started.thread.runtime || {}),
+        runtimeKind: "codex-app-server",
+        state: "ready",
+        activeTurnId: "stale-completed-turn",
+        codexStatus: { type: "idle" },
+      },
+    }, env);
+    const input = await enqueueThreadInput(started.thread.id, {
+      text: "deliver after stale active turn",
+      source: "whatsapp_inbound",
+      connector: "whatsapp",
+      chatId: "chat-wa-stale",
+    }, env);
+
+    const delivered = await deliverCodexAppServerPendingInputs(await getThread(started.thread.id, env), env);
+    const messages = await listThreadMessages(started.thread.id, env);
+    const completed = messages.find((message) => message.id === input.id);
+    const reply = messages.find((message) => message.parentMessageId === input.id && /Reply to: deliver after stale active turn/.test(message.text));
+    const rawState = JSON.parse(await fs.readFile(fake.stateFile, "utf8"));
+
+    assert.deepEqual(delivered, [input.id]);
+    assert.equal(completed.state, "completed");
+    assert.equal(completed.deliveryState, "delivered");
+    assert.ok(reply);
+    assert.ok(rawState.calls.some((call) => call.method === "turn/start"));
+    assert.ok(!rawState.calls.some((call) => call.method === "turn/interrupt"));
   } finally {
     stopCodexAppServerClients();
   }

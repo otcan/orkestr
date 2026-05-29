@@ -7,7 +7,7 @@ usage() {
 Deploy Orkestr from an exact git ref into versioned release directories.
 
 Usage:
-  scripts/deploy-git-release.sh install [--ref REF] [--channel NAME] [--allow-untagged|--require-tagged] [--no-smoke] [--no-backup] [--no-interrupt|--allow-interrupt] [--wait-active] [--active-timeout SECONDS]
+  scripts/deploy-git-release.sh install [--ref REF] [--channel NAME] [--allow-untagged|--require-tagged] [--no-smoke] [--no-backup] [--sync-workers|--no-sync-workers] [--no-interrupt|--allow-interrupt] [--wait-active] [--active-timeout SECONDS]
   scripts/deploy-git-release.sh rollback [--to RELEASE_ID] [--no-interrupt|--allow-interrupt] [--wait-active] [--active-timeout SECONDS]
   scripts/deploy-git-release.sh status [--json]
   scripts/deploy-git-release.sh --check-only
@@ -27,6 +27,8 @@ Environment:
   ORKESTR_DEPLOY_LOCK_FILE      Lock file. Defaults to /var/lock/orkestr-deploy.lock.
   ORKESTR_DEPLOY_RUN_SMOKE      Run npm smoke before activation. Defaults to 1.
   ORKESTR_DEPLOY_BACKUP_STATE   Back up ORKESTR_HOME before activation. Defaults to 1.
+  ORKESTR_DEPLOY_BACKUP_EXCLUDES Space-separated paths under ORKESTR_HOME to omit from backups. Defaults to live runtime/session dirs.
+  ORKESTR_DEPLOY_SYNC_WORKERS   Fast-forward and push safe stale worker branches after deploy. Defaults to 1.
   ORKESTR_DEPLOY_HEALTH_URL     Health URL. Defaults to http://$ORKESTR_HOST:$ORKESTR_PORT/api/health.
   ORKESTR_DEPLOY_NO_INTERRUPT   Refuse to restart while thread work is active. Defaults to 1.
   ORKESTR_DEPLOY_WAIT_ACTIVE    Wait for active thread work before restart. Defaults to 0.
@@ -53,6 +55,7 @@ check_only=0
 run_smoke_arg=""
 tags_only_arg=""
 backup_state_arg=""
+sync_workers_arg=""
 no_interrupt_arg=""
 wait_active_arg=""
 active_timeout_arg=""
@@ -97,6 +100,14 @@ while [ "$#" -gt 0 ]; do
       ;;
     --no-backup)
       backup_state_arg=0
+      shift
+      ;;
+    --sync-workers)
+      sync_workers_arg=1
+      shift
+      ;;
+    --no-sync-workers)
+      sync_workers_arg=0
       shift
       ;;
     --no-interrupt)
@@ -259,7 +270,7 @@ prepare_repo_cache() {
 }
 
 backup_state() {
-  local stamp target backup_name data_dir
+  local stamp target backup_name data_dir data_base data_parent exclude tar_args
   if [ "$run_backup" != "1" ]; then
     echo ""
     return 0
@@ -273,7 +284,17 @@ backup_state() {
   stamp="$(date -u +%Y%m%dT%H%M%SZ)"
   target="$(sanitize_id "$release_id")"
   backup_name="$backup_dir/${stamp}-${target}-state.tar.gz"
-  tar -C "$(dirname "$data_dir")" -czf "$backup_name" "$(basename "$data_dir")"
+  data_parent="$(dirname "$data_dir")"
+  data_base="$(basename "$data_dir")"
+  tar_args=(-C "$data_parent" -czf "$backup_name")
+  for exclude in $backup_excludes; do
+    [ -n "$exclude" ] || continue
+    case "$exclude" in
+      /*) tar_args+=(--exclude="$exclude") ;;
+      *) tar_args+=(--exclude="$data_base/$exclude") ;;
+    esac
+  done
+  tar "${tar_args[@]}" "$data_base"
   echo "$backup_name"
 }
 
@@ -331,7 +352,7 @@ active_thread_hard_count() {
 }
 
 active_thread_unsafe_count() {
-  node -e 'const report = JSON.parse(process.argv[1] || "{}"); const active = Array.isArray(report.active) ? report.active : []; const restartSafe = (thread) => String(thread.runtimeKind || "").toLowerCase() === "codex-app-server" && String(thread.codexAppServerTransport || thread.appServerTransport || "").toLowerCase() === "proxy"; const unsafe = active.filter((thread) => !restartSafe(thread)); process.stdout.write(String(unsafe.length));' "$1"
+  node -e 'const report = JSON.parse(process.argv[1] || "{}"); const active = Array.isArray(report.active) ? report.active : []; const safeTransports = new Set(["proxy", "websocket"]); const restartSafe = (thread) => String(thread.runtimeKind || "").toLowerCase() === "codex-app-server" && safeTransports.has(String(thread.codexAppServerTransport || thread.appServerTransport || "").toLowerCase()); const unsafe = active.filter((thread) => !restartSafe(thread)); process.stdout.write(String(unsafe.length));' "$1"
 }
 
 active_report_unavailable() {
@@ -436,6 +457,22 @@ EOF
   systemctl restart "${codex_app_server_service_name}.service"
 }
 
+write_codex_app_server_main_service_dropin() {
+  local dropin_dir socket escaped_socket escaped_service
+  socket="$(codex_app_server_socket_default)"
+  escaped_socket="$(printf '%s' "$socket" | sed 's/\\/\\\\/g; s/"/\\"/g')"
+  escaped_service="$(printf '%s' "$codex_app_server_service_name" | sed 's/\\/\\\\/g; s/"/\\"/g')"
+  dropin_dir="/etc/systemd/system/${service_name}.service.d"
+  mkdir -p "$dropin_dir"
+  cat > "$dropin_dir/60-codex-app-server.conf" <<EOF
+[Service]
+Environment=ORKESTR_CODEX_APP_SERVER_MODE=external
+Environment="ORKESTR_CODEX_APP_SERVER_SOCKET=$escaped_socket"
+Environment="ORKESTR_CODEX_APP_SERVER_SERVICE_NAME=$escaped_service"
+EOF
+  systemctl daemon-reload
+}
+
 ensure_codex_app_server_split_for_target() {
   local release_dir command socket mode_external_requested
   release_dir="$1"
@@ -445,6 +482,9 @@ ensure_codex_app_server_split_for_target() {
     external|proxy|daemon) mode_external_requested=1 ;;
   esac
   if [ "$mode_external_requested" = "1" ] && codex_app_server_service_is_active; then
+    if [ "$(id -u)" -eq 0 ]; then
+      write_codex_app_server_main_service_dropin
+    fi
     return 0
   fi
   if [ "$(id -u)" -ne 0 ]; then
@@ -474,6 +514,7 @@ ensure_codex_app_server_split_for_target() {
   mkdir -p "$(dirname "$socket")"
   write_codex_app_server_wrapper
   write_codex_app_server_systemd_service
+  write_codex_app_server_main_service_dropin
   codex_app_server_mode="external"
   echo "External Codex app-server ready: ${codex_app_server_service_name}.service ($socket)."
 }
@@ -487,8 +528,9 @@ const hardActive = (thread) => Boolean(thread.activeTurnId) ||
   Number(thread.runningCount || 0) > 0 ||
   Number(thread.awaitingAckCount || 0) > 0 ||
   hardStates.has(String(thread.state || "").toLowerCase());
+const safeTransports = new Set(["proxy", "websocket"]);
 const restartSafe = (thread) => String(thread.runtimeKind || "").toLowerCase() === "codex-app-server" &&
-  String(thread.codexAppServerTransport || thread.appServerTransport || "").toLowerCase() === "proxy";
+  safeTransports.has(String(thread.codexAppServerTransport || thread.appServerTransport || "").toLowerCase());
 const restartUnsafe = (thread) => !restartSafe(thread);
 const active = (Array.isArray(report.active) ? report.active : []).filter((thread) => {
   if (mode === "hard") return hardActive(thread);
@@ -633,6 +675,46 @@ restart_and_verify() {
   health_check "$health_url" 40
 }
 
+sync_safe_workers_after_deploy() {
+  local release_dir
+  release_dir="$1"
+  if [ "$sync_workers" != "1" ]; then
+    echo "Post-deploy worker sync disabled."
+    return 0
+  fi
+  if [ ! -f "$release_dir/packages/core/src/thread-workers.js" ]; then
+    echo "Post-deploy worker sync skipped: target release does not expose thread worker helpers."
+    return 0
+  fi
+  node --input-type=module - "$release_dir" <<'NODE'
+import path from "node:path";
+import { pathToFileURL } from "node:url";
+
+const releaseDir = process.argv[2];
+try {
+  const moduleUrl = pathToFileURL(path.join(releaseDir, "packages/core/src/thread-workers.js")).href;
+  const { syncSafeThreadWorkersWithParents } = await import(moduleUrl);
+  const result = await syncSafeThreadWorkersWithParents({ push: true }, process.env);
+  console.log(`Post-deploy worker sync: scanned ${result.scanned}, synced ${result.synced}, pushed ${result.pushed}, skipped ${result.skipped}.`);
+  for (const item of result.results || []) {
+    if (!item.synced && item.reason === "already_synced") continue;
+    const name = item.name || item.threadId || "worker";
+    const detail = [
+      item.reason || (item.synced ? "synced" : "skipped"),
+      item.gitParentBehind === null || item.gitParentBehind === undefined ? "" : `parentBehind=${item.gitParentBehind}`,
+      item.gitParentAhead === null || item.gitParentAhead === undefined ? "" : `parentAhead=${item.gitParentAhead}`,
+      item.gitDirtyFiles === null || item.gitDirtyFiles === undefined ? "" : `dirty=${item.gitDirtyFiles}`,
+      item.error ? `error=${item.error}` : "",
+    ].filter(Boolean).join(" ");
+    console.log(`Post-deploy worker ${item.synced ? "synced" : "skipped"}: ${name}${detail ? ` (${detail})` : ""}`);
+  }
+} catch (error) {
+  console.error(`Post-deploy worker sync skipped: ${error?.stack || error?.message || String(error)}`);
+}
+process.exit(0);
+NODE
+}
+
 status_command() {
   local active
   active="$(current_release_id)"
@@ -735,6 +817,7 @@ install_command() {
   activate_release "$release_dir"
   sync_versioned_env
   if restart_and_verify; then
+    sync_safe_workers_after_deploy "$release_dir"
     write_history_event "success" "$release_id" "$deploy_ref" "$target_ref" "$previous_release" "$release_dir" "$backup_path"
     echo "Orkestr deployed $release_id ($target_ref)."
   else
@@ -805,6 +888,8 @@ port="${ORKESTR_PORT:-19812}"
 health_url="${ORKESTR_DEPLOY_HEALTH_URL:-http://$host:$port/api/health}"
 run_smoke="${run_smoke_arg:-${ORKESTR_DEPLOY_RUN_SMOKE:-1}}"
 run_backup="${backup_state_arg:-${ORKESTR_DEPLOY_BACKUP_STATE:-1}}"
+backup_excludes="${ORKESTR_DEPLOY_BACKUP_EXCLUDES:-run tmp whatsapp-bridge/sessions}"
+sync_workers="$(bool_value "${sync_workers_arg:-${ORKESTR_DEPLOY_SYNC_WORKERS:-1}}")"
 lock_file="${ORKESTR_DEPLOY_LOCK_FILE:-/var/lock/orkestr-deploy.lock}"
 no_interrupt="$(bool_value "${no_interrupt_arg:-${ORKESTR_DEPLOY_NO_INTERRUPT:-1}}")"
 wait_active="$(bool_value "${wait_active_arg:-${ORKESTR_DEPLOY_WAIT_ACTIVE:-0}}")"
@@ -823,6 +908,10 @@ esac
 case "$wait_active" in
   0|1) ;;
   *) echo "ORKESTR_DEPLOY_WAIT_ACTIVE must be 0 or 1." >&2; exit 2 ;;
+esac
+case "$sync_workers" in
+  0|1) ;;
+  *) echo "ORKESTR_DEPLOY_SYNC_WORKERS must be 0 or 1." >&2; exit 2 ;;
 esac
 case "$active_timeout_seconds" in
   ''|*[!0-9]*) echo "ORKESTR_DEPLOY_ACTIVE_TIMEOUT_SECONDS must be a non-negative integer." >&2; exit 2 ;;

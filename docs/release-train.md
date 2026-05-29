@@ -200,7 +200,7 @@ proxy connection, so UI/API restarts do not stop active Codex turns. The deploye
 still writes a drain marker before restart so new UI, WA, and timer inputs queue
 instead of starting new turns during the deploy window. A Codex turn is treated
 as restart-safe only when `/api/threads?scope=all` reports both
-`runtime=codex-app-server` and `appServer=proxy`. First-time migrations from the
+`runtime=codex-app-server` and `appServer=websocket` or `appServer=proxy`. First-time migrations from the
 old in-process app-server remain conservative and wait until active work is idle
 before enabling the separate Codex service. Use `--wait-active` to wait, or
 `--allow-interrupt` only when the user explicitly accepts interrupting unsafe
@@ -225,12 +225,19 @@ deployment time, and rollback target if available.
 
 After main is released:
 
+- The versioned deployer runs a post-deploy safe worker sync by default
+  (`ORKESTR_DEPLOY_SYNC_WORKERS=1`).
 - Fast-forward workers that are ancestors of the released parent or `main`.
+- Skip active workers, workers with local edits, and workers with unique
+  unmerged commits.
 - Do not rewrite workers that still have unique unmerged commits.
 - For non-fast-forward workers, report the exact missing commits and leave them
   active for the next train.
 - Push worker fast-forwards only when they are clean and the update is truly a
   fast-forward.
+- Disable this deploy-time pass with `--no-sync-workers` or
+  `ORKESTR_DEPLOY_SYNC_WORKERS=0` when intentionally keeping worker branches
+  pinned for investigation.
 
 This keeps workers current without hiding unfinished work.
 

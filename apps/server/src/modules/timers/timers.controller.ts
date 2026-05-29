@@ -1,5 +1,5 @@
 import { Body, Controller, Delete, Get, HttpCode, Param, Post, Req } from "@nestjs/common";
-import { createTimerForPrincipal, deleteTimerForPrincipal, doctorTimers, listTimersForPrincipal, runTimerNowForPrincipal } from "../../../../../packages/core/src/timers.js";
+import { createTimerForPrincipal, deleteTimerForPrincipal, doctorTimersForPrincipal, listTimersForPrincipal, runTimerNowForPrincipal } from "../../../../../packages/core/src/timers.js";
 import { requestPrincipal } from "../../../../../packages/core/src/principal.js";
 
 @Controller("api/timers")
@@ -10,8 +10,8 @@ export class TimersController {
   }
 
   @Get("doctor")
-  async doctor() {
-    return doctorTimers();
+  async doctor(@Req() request: any) {
+    return doctorTimersForPrincipal(requestPrincipal(request));
   }
 
   @Post()

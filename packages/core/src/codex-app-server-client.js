@@ -2,12 +2,14 @@ import readline from "node:readline";
 import os from "node:os";
 import { spawn, execFile } from "node:child_process";
 import { promisify } from "node:util";
+import WebSocket from "ws";
 import { appendEvent } from "../../storage/src/store.js";
 import { codexCommand, defaultCodexHome } from "../../connectors/src/codex.js";
 import {
   codexAppServerClientArgs,
   codexAppServerSocket,
   codexAppServerTransport,
+  codexAppServerWebSocketUrl,
 } from "../../connectors/src/codex-app-server-transport.js";
 import { updateThread } from "./threads.js";
 import {
@@ -77,13 +79,42 @@ export class CodexAppServerClient {
     this.completedTurns = new Set();
     this.pendingRequests = new Map();
     this.started = false;
+    this.startPromise = null;
     this.closed = false;
     this.stderr = "";
   }
 
   async start() {
     if (this.started) return this;
-    if (!this.command) throw new Error("codex_app_server_unavailable");
+    if (this.startPromise) return this.startPromise;
+    this.startPromise = (async () => {
+      if (!this.command) throw new Error("codex_app_server_unavailable");
+      if (this.transport === "websocket" && this.socket) {
+        await this.startWebSocket();
+      } else {
+        await this.startProcess();
+      }
+      await this.request("initialize", {
+        clientInfo: {
+          name: "orkestr_oss",
+          title: "Orkestr OSS",
+          version: "0.1.0",
+        },
+        capabilities: { experimentalApi: true },
+      });
+      this.notify("initialized", {});
+      this.started = true;
+      return this;
+    })();
+    try {
+      return await this.startPromise;
+    } catch (error) {
+      this.startPromise = null;
+      throw error;
+    }
+  }
+
+  async startProcess() {
     this.proc = spawn(this.command, codexAppServerClientArgs(this.env), {
       env: commandEnv(this.env, this.home),
       stdio: ["pipe", "pipe", "pipe"],
@@ -98,17 +129,46 @@ export class CodexAppServerClient {
     });
     this.rl = readline.createInterface({ input: this.proc.stdout });
     this.rl.on("line", (line) => this.handleLine(line));
-    await this.request("initialize", {
-      clientInfo: {
-        name: "orkestr_oss",
-        title: "Orkestr OSS",
-        version: "0.1.0",
-      },
-      capabilities: { experimentalApi: true },
+  }
+
+  async startWebSocket() {
+    const url = codexAppServerWebSocketUrl(this.env);
+    if (!url) throw new Error("codex_app_server_socket_required");
+    this.ws = new WebSocket(url, { perMessageDeflate: false });
+    await new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        this.ws?.terminate();
+        reject(new Error("codex_app_server_websocket_timeout"));
+      }, timeoutMs(this.env));
+      timer.unref?.();
+      const cleanup = () => {
+        clearTimeout(timer);
+        this.ws?.off("open", onOpen);
+        this.ws?.off("error", onError);
+        this.ws?.off("close", onClose);
+      };
+      const onOpen = () => {
+        cleanup();
+        resolve();
+      };
+      const onError = (error) => {
+        cleanup();
+        reject(error);
+      };
+      const onClose = (code, reason) => {
+        cleanup();
+        reject(new Error(`codex_app_server_websocket_closed:${code}:${String(reason || "")}`));
+      };
+      this.ws.once("open", onOpen);
+      this.ws.once("error", onError);
+      this.ws.once("close", onClose);
     });
-    this.notify("initialized", {});
-    this.started = true;
-    return this;
+    this.ws.on("message", (chunk) => this.handleLine(String(chunk || "")));
+    this.ws.on("error", (error) => this.rejectAll(error));
+    this.ws.on("close", (code, reason) => {
+      this.closed = true;
+      this.rejectAll(new Error(`codex_app_server_closed:${code ?? ""}:${String(reason || "")}`));
+    });
   }
 
   request(method, params = {}, options = {}) {
@@ -141,7 +201,11 @@ export class CodexAppServerClient {
 
   write(payload, onError = null) {
     try {
-      this.proc.stdin.write(`${JSON.stringify(payload)}\n`);
+      const text = JSON.stringify(payload);
+      if (this.ws) this.ws.send(text, (error) => {
+        if (error && onError) onError(error);
+      });
+      else this.proc.stdin.write(`${text}\n`);
     } catch (error) {
       if (onError) onError(error);
     }
@@ -494,8 +558,10 @@ export class CodexAppServerClient {
 
   close() {
     this.closed = true;
+    this.startPromise = null;
     this.rl?.close();
     this.proc?.kill("SIGTERM");
+    this.ws?.close();
     this.rejectAll(new Error("codex_app_server_closed"));
   }
 }

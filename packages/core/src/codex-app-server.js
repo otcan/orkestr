@@ -293,11 +293,32 @@ export async function sendCodexAppServerInput(thread, message, env = process.env
   }
   const clientState = client.threadStates.get(id) || {};
   const clientStatusState = appServerStateFromStatus(clientState.status);
-  let activeTurnId = clean(Object.prototype.hasOwnProperty.call(clientState, "activeTurnId")
-    ? clientState.activeTurnId
-    : ["ready", "failed", "unloaded"].includes(clientStatusState)
-      ? ""
-      : thread.runtime?.activeTurnId);
+  const statusClearsActiveTurn = ["ready", "failed", "unloaded", "awaiting_approval"].includes(clientStatusState);
+  if (statusClearsActiveTurn && clean(clientState.activeTurnId)) {
+    client.threadStates.set(id, { ...clientState, activeTurnId: "" });
+    await updateThread(thread.id, {
+      state: clientStatusState === "ready" ? "ready" : clientStatusState,
+      runtime: {
+        ...(thread.runtime || {}),
+        runtimeKind: "codex-app-server",
+        state: clientStatusState === "ready" ? "ready" : clientStatusState,
+        activeTurnId: null,
+        pendingRequest: clientStatusState === "awaiting_approval" ? thread.runtime?.pendingRequest || null : null,
+        codexStatus: clientState.status || thread.runtime?.codexStatus || null,
+      },
+    }, env).catch(() => {});
+    await appendEvent({
+      type: "codex_app_server_stale_active_turn_cleared_before_delivery",
+      threadId: thread.id,
+      codexThreadId: id,
+      messageId: pending.id,
+      activeTurnId: clean(clientState.activeTurnId),
+      status: clientStatusState,
+    }, env).catch(() => {});
+  }
+  let activeTurnId = statusClearsActiveTurn
+    ? ""
+    : clean(Object.prototype.hasOwnProperty.call(clientState, "activeTurnId") ? clientState.activeTurnId : thread.runtime?.activeTurnId);
   let result;
   let observedVia;
   let deliveryTurnId = activeTurnId;

@@ -2,11 +2,13 @@ import os from "node:os";
 import path from "node:path";
 import fs from "node:fs";
 import { spawn } from "node:child_process";
+import WebSocket from "ws";
 import { ensureDataDirs } from "../../storage/src/paths.js";
 import {
   codexAppServerClientArgs,
   codexAppServerSocket,
   codexAppServerTransport,
+  codexAppServerWebSocketUrl,
 } from "./codex-app-server-transport.js";
 
 const deviceAuthTtlMs = 15 * 60 * 1000;
@@ -51,6 +53,9 @@ export async function codexAppServerProbe({ env = process.env, home = os.homedir
   if (!command) return { ok: false, available: false, reason: "codex_missing", error: "codex_missing" };
   const codexHome = defaultCodexHome(env, home);
   ensureCodexHome(codexHome);
+  if (codexAppServerTransport(env) === "websocket" && codexAppServerSocket(env)) {
+    return await codexAppServerWebSocketProbe({ env, command, codexHome, timeoutMs });
+  }
   return await new Promise((resolve) => {
     let settled = false;
     let stdout = "";
@@ -144,6 +149,99 @@ export async function codexAppServerProbe({ env = process.env, home = os.homedir
         capabilities: { experimentalApi: true },
       },
     })}\n`);
+  });
+}
+
+async function codexAppServerWebSocketProbe({ env = process.env, command = codexCommand(env), codexHome = defaultCodexHome(env), timeoutMs = 2500 } = {}) {
+  const transport = codexAppServerTransport(env);
+  const socket = codexAppServerSocket(env) || null;
+  const url = codexAppServerWebSocketUrl(env);
+  return await new Promise((resolve) => {
+    let settled = false;
+    let ws = null;
+    const finish = (result) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      try {
+        ws?.close();
+      } catch {
+        // Best effort cleanup for setup/status probes.
+      }
+      resolve({
+        ok: Boolean(result.ok),
+        available: result.available !== false,
+        command,
+        codexHome,
+        transport,
+        socket,
+        stdout: "",
+        stderr: "",
+        ...result,
+      });
+    };
+    const timer = setTimeout(() => {
+      finish({ ok: false, timedOut: true, reason: "codex_app_server_timeout", error: "codex_app_server_timeout" });
+    }, Math.max(1000, timeoutMs));
+    timer.unref?.();
+
+    try {
+      ws = new WebSocket(url, { perMessageDeflate: false });
+    } catch (error) {
+      finish({
+        ok: false,
+        available: true,
+        reason: "codex_app_server_unavailable",
+        error: error?.message || String(error),
+      });
+      return;
+    }
+    ws.on("open", () => {
+      ws.send(JSON.stringify({
+        id: 1,
+        method: "initialize",
+        params: {
+          clientInfo: { name: "orkestr_setup_status", version: "0.1.0" },
+          capabilities: { experimentalApi: true },
+        },
+      }), (error) => {
+        if (error) finish({ ok: false, reason: "codex_app_server_unavailable", error: error.message || String(error) });
+      });
+    });
+    ws.on("message", (chunk) => {
+      const text = String(chunk || "").trim();
+      if (!text) return;
+      try {
+        const message = JSON.parse(text);
+        if (message.id === 1 && !message.error) finish({ ok: true, reason: "ok" });
+        if (message.id === 1 && message.error) {
+          const error = message.error.message || "codex_app_server_error";
+          finish({
+            ok: false,
+            reason: authInvalidText(error) ? "codex_app_server_auth_invalid" : "codex_app_server_unavailable",
+            error,
+          });
+        }
+      } catch {
+        // Ignore non-protocol output while waiting for the initialize response.
+      }
+    });
+    ws.on("error", (error) => {
+      finish({
+        ok: false,
+        available: true,
+        reason: "codex_app_server_unavailable",
+        error: error?.message || String(error),
+      });
+    });
+    ws.on("close", (code, reason) => {
+      finish({
+        ok: false,
+        code,
+        reason: "codex_app_server_unavailable",
+        error: `codex_app_server_closed:${code ?? ""}:${String(reason || "")}`,
+      });
+    });
   });
 }
 

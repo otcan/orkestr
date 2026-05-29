@@ -5,7 +5,7 @@ import path from "node:path";
 import test from "node:test";
 import { pathToFileURL } from "node:url";
 import { startServer } from "../apps/server/src/server.js";
-import { createTimerForPrincipal, listTimersForPrincipal } from "../packages/core/src/timers.js";
+import { createTimer, createTimerForPrincipal, doctorTimersForPrincipal, listTimersForPrincipal } from "../packages/core/src/timers.js";
 import { adminPrincipal, userPrincipal } from "../packages/core/src/principal.js";
 import { sanitizeAction } from "../packages/core/src/llm-sanitizer.js";
 import { approvePairingChallenge } from "../packages/core/src/security.js";
@@ -73,6 +73,36 @@ test("non-admin users are limited to one owned thread and cannot read another ow
   assert.deepEqual((await listThreadsForPrincipal(adminPrincipal(), env)).map((thread) => thread.id).sort(), ["alice-thread", "bob-thread"]);
 });
 
+test("non-admin thread creation cannot request root-trusted Codex access", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-use-control-codex-profile-"));
+  const env = { ORKESTR_HOME: home };
+  const alice = userPrincipal(await upsertUser({ id: "alice", role: "user", displayName: "Alice" }, env));
+
+  const thread = await createThreadForPrincipal({
+    id: "alice-thread",
+    name: "Main",
+    codexSandbox: "danger-full-access",
+    codexApprovalPolicy: "never",
+    securityProfile: "trusted-root",
+    executor: {
+      type: "codex",
+      metadata: {
+        codexSandbox: "danger-full-access",
+        codexApprovalPolicy: "never",
+        securityProfile: "trusted-root",
+      },
+    },
+  }, alice, env);
+
+  assert.equal(thread.ownerUserId, "alice");
+  assert.equal(thread.securityProfile, "external-user");
+  assert.equal(thread.codexSandbox, "workspace-write");
+  assert.equal(thread.codexApprovalPolicy, "on-request");
+  assert.equal(thread.executor.metadata.securityProfile, "external-user");
+  assert.equal(thread.executor.metadata.codexSandbox, "workspace-write");
+  assert.equal(thread.executor.metadata.codexApprovalPolicy, "on-request");
+});
+
 test("admin chat summary hides tenant-owned WhatsApp-only threads by default", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-use-control-chat-scope-"));
   const priorHome = process.env.ORKESTR_HOME;
@@ -110,6 +140,61 @@ test("admin chat summary hides tenant-owned WhatsApp-only threads by default", a
     assert.deepEqual(defaultPayload.threads.map((thread) => thread.id), ["admin-main"]);
     assert.equal(allResponse.status, 200);
     assert.deepEqual(allPayload.threads.map((thread) => thread.id).sort(), ["admin-main", "otcantest"]);
+  } finally {
+    if (server) await new Promise((resolve) => server.close(resolve));
+    if (priorHome === undefined) delete process.env.ORKESTR_HOME;
+    else process.env.ORKESTR_HOME = priorHome;
+    if (priorRecover === undefined) delete process.env.ORKESTR_RECOVER_RUNNING_ON_START;
+    else process.env.ORKESTR_RECOVER_RUNNING_ON_START = priorRecover;
+  }
+});
+
+test("generated WhatsApp binding persists restricted Codex defaults for tenant threads", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-use-control-binding-codex-profile-"));
+  const priorHome = process.env.ORKESTR_HOME;
+  const priorRecover = process.env.ORKESTR_RECOVER_RUNNING_ON_START;
+  process.env.ORKESTR_HOME = home;
+  process.env.ORKESTR_RECOVER_RUNNING_ON_START = "0";
+
+  let server;
+  try {
+    await createThread({
+      id: "otcantest",
+      name: "otcantest",
+      ownerUserId: "otcan",
+      codexSandbox: "danger-full-access",
+      codexApprovalPolicy: "never",
+      securityProfile: "trusted-root",
+      executor: {
+        type: "codex",
+        metadata: {
+          codexSandbox: "danger-full-access",
+          codexApprovalPolicy: "never",
+          securityProfile: "trusted-root",
+        },
+      },
+    }, process.env);
+
+    server = await startServer({ port: 0, host: "127.0.0.1" });
+    const { port } = server.address();
+    const response = await fetch(`http://127.0.0.1:${port}/api/threads/otcantest/binding`, {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        chatId: "120363423847331215@g.us",
+        displayName: "otcantest",
+        generated: true,
+      }),
+    });
+    const payload = await response.json();
+
+    assert.equal(response.status, 200);
+    assert.equal(payload.thread.securityProfile, "generated-whatsapp");
+    assert.equal(payload.thread.codexSandbox, "workspace-write");
+    assert.equal(payload.thread.codexApprovalPolicy, "on-request");
+    assert.equal(payload.thread.executor.metadata.securityProfile, "generated-whatsapp");
+    assert.equal(payload.thread.executor.metadata.codexSandbox, "workspace-write");
+    assert.equal(payload.thread.executor.metadata.codexApprovalPolicy, "on-request");
   } finally {
     if (server) await new Promise((resolve) => server.close(resolve));
     if (priorHome === undefined) delete process.env.ORKESTR_HOME;
@@ -237,6 +322,35 @@ test("non-admin timer creation is scoped and sanitizer-gated", async () => {
   assert.deepEqual((await listTimersForPrincipal(alice, env)).map((entry) => entry.id), [timer.id]);
 });
 
+test("non-admin timer doctor only reports owned timers", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-use-control-timer-doctor-"));
+  const env = { ORKESTR_HOME: home };
+  const alice = userPrincipal(await upsertUser({ id: "alice", role: "user" }, env));
+  await upsertUser({ id: "bob", role: "user" }, env);
+  await createThread({ id: "alice-thread", name: "Alice", ownerUserId: "alice" }, env);
+  await createThread({ id: "bob-thread", name: "Bob", ownerUserId: "bob" }, env);
+  await createTimer({
+    label: "Alice missing thread",
+    ownerUserId: "alice",
+    targetType: "thread",
+    target: "alice-missing",
+    prompt: "Alice work.",
+  }, env);
+  await createTimer({
+    label: "Bob missing thread",
+    ownerUserId: "bob",
+    targetType: "thread",
+    target: "bob-missing",
+    prompt: "Bob work.",
+  }, env);
+
+  const aliceDoctor = await doctorTimersForPrincipal(alice, env, new Date("2026-05-15T10:00:00.000Z"));
+  const adminDoctor = await doctorTimersForPrincipal(adminPrincipal(), env, new Date("2026-05-15T10:00:00.000Z"));
+
+  assert.deepEqual(aliceDoctor.issues.map((issue) => issue.timerLabel), ["Alice missing thread"]);
+  assert.deepEqual(adminDoctor.issues.map((issue) => issue.timerLabel).sort(), ["Alice missing thread", "Bob missing thread"]);
+});
+
 test("sanitizer command JSON form accepts paths with spaces", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr sanitizer spaced "));
   const env = await allowSanitizerEnv(home);
@@ -332,6 +446,13 @@ test("user management API is admin-only and can pair a browser to a managed user
 
     const denied = await fetch(`${baseUrl}/api/users`, { headers: { cookie: userCookie } });
     assert.equal(denied.status, 403);
+
+    const deniedConnectorResponse = await fetch(`${baseUrl}/api/connectors/whatsapp/status`, {
+      headers: { cookie: userCookie, connection: "close" },
+    });
+    const deniedConnector = await read(deniedConnectorResponse);
+    assert.equal(deniedConnectorResponse.status, 403);
+    assert.equal(deniedConnector.error, "connector_admin_required");
 
     const where = await read(await fetch(`${baseUrl}/api/whereiam`, { headers: { cookie: userCookie } }));
     assert.equal(where.user.userId, "alice-example.test");

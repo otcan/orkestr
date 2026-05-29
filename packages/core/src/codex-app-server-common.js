@@ -109,6 +109,29 @@ export function publicError(error) {
   return clean(error.message || error.stderr || error.stdout || String(error));
 }
 
+function adminUserId(env = process.env) {
+  return clean(env.ORKESTR_ADMIN_USER_ID || "admin").toLowerCase() || "admin";
+}
+
+function ownerUserId(thread = {}) {
+  return clean(thread.ownerUserId || thread.userId || "").toLowerCase();
+}
+
+export function threadUsesRestrictedCodexPolicy(thread = {}, env = process.env) {
+  const owner = ownerUserId(thread);
+  if (owner && owner !== adminUserId(env)) return true;
+  const profile = clean(thread.securityProfile || thread.executor?.metadata?.securityProfile).toLowerCase();
+  if (["trusted-root", "root-trusted"].includes(profile)) return false;
+  if (["demo-isolated", "quarantined-demo", "external-user", "private-user", "generated-whatsapp"].includes(profile)) return true;
+  return false;
+}
+
+export function codexSandboxForThread(thread = {}, env = process.env) {
+  const requested = clean(thread.codexSandbox || thread.executor?.metadata?.codexSandbox || env.ORKESTR_CODEX_SANDBOX || "workspace-write") || "workspace-write";
+  if (threadUsesRestrictedCodexPolicy(thread, env) && requested === "danger-full-access") return "workspace-write";
+  return requested;
+}
+
 export function appServerStateFromStatus(status) {
   const type = clean(status?.type);
   if (type === "active") {
@@ -125,7 +148,7 @@ export function appServerStateFromStatus(status) {
 
 export function sandboxPolicyForTurn(thread) {
   const workspace = clean(thread.cwd || thread.workspace || thread.repoPath || thread.worktreePath);
-  const sandbox = clean(thread.codexSandbox || thread.executor?.metadata?.codexSandbox || process.env.ORKESTR_CODEX_SANDBOX || "workspace-write");
+  const sandbox = codexSandboxForThread(thread);
   if (sandbox === "danger-full-access") return { type: "dangerFullAccess" };
   if (sandbox === "read-only" || sandbox === "readOnly") return { type: "readOnly", networkAccess: false };
   return {
@@ -138,7 +161,9 @@ export function sandboxPolicyForTurn(thread) {
 }
 
 export function approvalPolicyForThread(thread) {
-  return clean(thread.codexApprovalPolicy || thread.executor?.metadata?.codexApprovalPolicy || process.env.ORKESTR_CODEX_APPROVAL_POLICY || "on-request");
+  const requested = clean(thread.codexApprovalPolicy || thread.executor?.metadata?.codexApprovalPolicy || process.env.ORKESTR_CODEX_APPROVAL_POLICY || "on-request") || "on-request";
+  if (threadUsesRestrictedCodexPolicy(thread) && requested === "never") return "on-request";
+  return requested;
 }
 
 const codexReasoningEfforts = new Set(["none", "minimal", "low", "medium", "high", "xhigh"]);
@@ -205,7 +230,7 @@ export function threadStartParams(thread) {
   const params = {
     cwd: clean(thread.cwd || thread.workspace || thread.repoPath || thread.worktreePath) || null,
     approvalPolicy: approvalPolicyForThread(thread) || "on-request",
-    sandbox: clean(thread.codexSandbox || thread.executor?.metadata?.codexSandbox || process.env.ORKESTR_CODEX_SANDBOX || "workspace-write"),
+    sandbox: codexSandboxForThread(thread),
     serviceName: "orkestr_oss",
   };
   const model = modelForThread(thread);

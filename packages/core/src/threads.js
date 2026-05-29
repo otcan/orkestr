@@ -59,6 +59,17 @@ function optionalNumber(value) {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
+function restrictedCodexApprovalPolicy(input = {}) {
+  const requested = String(input.codexApprovalPolicy || input.executor?.metadata?.codexApprovalPolicy || "on-request").trim() || "on-request";
+  return requested === "never" ? "on-request" : requested;
+}
+
+function restrictedCodexSecurityProfile(input = {}) {
+  const requested = String(input.securityProfile || input.executor?.metadata?.securityProfile || "").trim();
+  if (["demo-isolated", "quarantined-demo", "external-user", "private-user", "generated-whatsapp"].includes(requested.toLowerCase())) return requested;
+  return "external-user";
+}
+
 async function messagesPath(threadId, env) {
   const paths = await ensureDataDirs(env);
   return path.join(paths.threadMessages, `${safeThreadId(threadId)}.json`);
@@ -147,6 +158,9 @@ export async function createThread(input = {}, env = process.env) {
     },
     binding: input.binding && typeof input.binding === "object" ? { ...input.binding } : null,
     bindingName: String(input.bindingName || input.binding?.displayName || "").trim(),
+    securityProfile: String(input.securityProfile || input.executor?.metadata?.securityProfile || "").trim() || null,
+    codexSandbox: String(input.codexSandbox || input.executor?.metadata?.codexSandbox || "").trim() || null,
+    codexApprovalPolicy: String(input.codexApprovalPolicy || input.executor?.metadata?.codexApprovalPolicy || "").trim() || null,
     codexMode: input.codexMode || null,
     desiredCodexMode: input.desiredCodexMode || null,
     codexModel: input.codexModel || input.executor?.metadata?.codexModel || null,
@@ -216,8 +230,25 @@ export async function createThreadForPrincipal(input = {}, principal, env = proc
     const user = await getUser(principal?.userId, env);
     assertThreadLimit(principal, threads, user);
   }
+  const restrictedApprovalPolicy = restrictedCodexApprovalPolicy(input);
+  const restrictedSecurityProfile = restrictedCodexSecurityProfile(input);
+  const restrictedCodexDefaults = isAdminPrincipal(principal) ? {} : {
+    securityProfile: restrictedSecurityProfile,
+    codexSandbox: "workspace-write",
+    codexApprovalPolicy: restrictedApprovalPolicy,
+    executor: {
+      ...(input.executor || {}),
+      metadata: {
+        ...(input.executor?.metadata || {}),
+        securityProfile: restrictedSecurityProfile,
+        codexSandbox: "workspace-write",
+        codexApprovalPolicy: restrictedApprovalPolicy,
+      },
+    },
+  };
   return createThread({
     ...input,
+    ...restrictedCodexDefaults,
     ownerUserId,
   }, env);
 }

@@ -6,6 +6,7 @@ import { promisify } from "node:util";
 import { dataPaths, ensureDataDirs } from "../../storage/src/paths.js";
 import { appendEvent } from "../../storage/src/store.js";
 import { createThread, enqueueThreadInput, getThread, listThreadMessages, listThreads, updateThread } from "./threads.js";
+import { runtimeStatus } from "./runtime-leases.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -532,6 +533,185 @@ export async function syncThreadWorkerWithParent(threadId, env = process.env) {
     previousBehind: parentBehind,
   }, env);
   return { synced: true, thread: updated, gitState: nextState };
+}
+
+function workerSortKey(thread) {
+  return [
+    String(thread.rootThreadId || thread.parentThreadId || ""),
+    String(thread.parentThreadId || ""),
+    String(Number(thread.workerIndex || 0)).padStart(6, "0"),
+    threadDisplayName(thread),
+    String(thread.id || ""),
+  ].join("\u0000");
+}
+
+function workerSyncActive(status = null) {
+  return Boolean(
+    status?.working ||
+    status?.foregroundWorking ||
+    status?.typingActive ||
+    Number(status?.runningCount || 0) > 0 ||
+    Number(status?.pendingCount || 0) > 0 ||
+    Number(status?.awaitingAckCount || 0) > 0
+  );
+}
+
+function workerSyncResult(thread, fields = {}) {
+  return {
+    threadId: thread?.id || null,
+    name: threadDisplayName(thread),
+    parentThreadId: thread?.parentThreadId || null,
+    branchName: thread?.branchName || null,
+    remoteBranch: thread?.remoteBranch || null,
+    synced: false,
+    pushed: false,
+    skipped: false,
+    reason: "",
+    gitParentAhead: null,
+    gitParentBehind: null,
+    gitDirtyFiles: null,
+    gitRemoteAhead: null,
+    gitRemoteBehind: null,
+    ...fields,
+  };
+}
+
+function workerSyncStateFields(state = {}) {
+  return {
+    gitParentAhead: state.gitParentAhead,
+    gitParentBehind: state.gitParentBehind,
+    gitDirtyFiles: state.gitDirtyFiles,
+    gitRemoteAhead: state.gitRemoteAhead,
+    gitRemoteBehind: state.gitRemoteBehind,
+  };
+}
+
+async function pushWorkerBranch(thread, state = {}, env = process.env) {
+  const repoPath = await resolveGitRoot(threadCheckoutPath(thread)).catch(() => null);
+  if (!repoPath) return { pushed: false, reason: "thread_repo_not_found" };
+  const branchName = nonEmptyString(state.branchName || thread.branchName || await currentBranch(repoPath));
+  const remoteBranch = nonEmptyString(state.remoteBranch || thread.remoteBranch || await remoteTrackingBranch(repoPath, branchName));
+  if (!branchName || branchName === "HEAD" || branchName === "detached") return { pushed: false, reason: "worker_branch_unknown" };
+  if (!remoteBranch.startsWith("origin/")) return { pushed: false, reason: "worker_remote_not_origin" };
+  await git(repoPath, ["push", "origin", `HEAD:${remoteBranch.slice("origin/".length)}`]);
+  const nextState = await detectThreadGitState(thread, env);
+  const updated = await updateThread(thread.id, gitStatePatch(nextState), env);
+  return { pushed: true, thread: updated, gitState: nextState };
+}
+
+export async function syncSafeThreadWorkersWithParents(input = {}, env = process.env) {
+  const push = input.push !== false;
+  const includeActive = input.includeActive === true;
+  const parentThreadId = nonEmptyString(input.parentThreadId || input.parent || input.threadId);
+  const rootThreadId = nonEmptyString(input.rootThreadId || input.root);
+  const threads = await listThreads(env);
+  const workers = threads
+    .filter((thread) => nonEmptyString(thread.parentThreadId))
+    .filter((thread) => !parentThreadId || thread.parentThreadId === parentThreadId)
+    .filter((thread) => !rootThreadId || thread.rootThreadId === rootThreadId || thread.parentThreadId === rootThreadId)
+    .sort((left, right) => workerSortKey(left).localeCompare(workerSortKey(right)));
+  const results = [];
+
+  for (const worker of workers) {
+    let current = worker;
+    let state = {};
+    try {
+      const refreshed = await refreshThreadGitState(worker.id, env);
+      current = refreshed.thread || worker;
+      state = refreshed.gitState || {};
+    } catch (error) {
+      results.push(workerSyncResult(worker, {
+        skipped: true,
+        reason: "refresh_failed",
+        error: error?.message || String(error),
+      }));
+      continue;
+    }
+
+    const stateFields = workerSyncStateFields(state);
+    const parentAhead = Number(state.gitParentAhead || 0);
+    const parentBehind = Number(state.gitParentBehind || 0);
+    const dirtyFiles = Number(state.gitDirtyFiles || 0);
+    const remoteBehind = Number(state.gitRemoteBehind || 0);
+    if (parentBehind <= 0) {
+      results.push(workerSyncResult(current, { ...stateFields, skipped: true, reason: "already_synced" }));
+      continue;
+    }
+    if (dirtyFiles > 0) {
+      results.push(workerSyncResult(current, { ...stateFields, skipped: true, reason: "worker_has_local_edits" }));
+      continue;
+    }
+    if (remoteBehind > 0) {
+      results.push(workerSyncResult(current, { ...stateFields, skipped: true, reason: "worker_remote_has_new_commits" }));
+      continue;
+    }
+    if (parentAhead > 0) {
+      results.push(workerSyncResult(current, { ...stateFields, skipped: true, reason: "worker_has_unmerged_commits" }));
+      continue;
+    }
+    if (!includeActive) {
+      let status = null;
+      try {
+        status = await runtimeStatus(current.id, env);
+      } catch (error) {
+        results.push(workerSyncResult(current, {
+          ...stateFields,
+          skipped: true,
+          reason: "status_unavailable",
+          error: error?.message || String(error),
+        }));
+        continue;
+      }
+      if (workerSyncActive(status)) {
+        results.push(workerSyncResult(current, { ...stateFields, skipped: true, reason: "thread_is_active" }));
+        continue;
+      }
+    }
+
+    try {
+      const synced = await syncThreadWorkerWithParent(current.id, env);
+      current = synced.thread || current;
+      state = synced.gitState || state;
+      let pushResult = { pushed: false, reason: push ? "" : "push_disabled" };
+      if (push && synced.synced) {
+        try {
+          pushResult = await pushWorkerBranch(current, state, env);
+          current = pushResult.thread || current;
+          state = pushResult.gitState || state;
+        } catch (error) {
+          pushResult = {
+            pushed: false,
+            reason: "push_failed",
+            error: error?.message || String(error),
+          };
+        }
+      }
+      results.push(workerSyncResult(current, {
+        ...workerSyncStateFields(state),
+        synced: Boolean(synced.synced),
+        pushed: Boolean(pushResult.pushed),
+        reason: pushResult.pushed ? "synced_and_pushed" : (synced.synced ? pushResult.reason || "synced" : synced.reason || "already_synced"),
+        error: pushResult.error || null,
+      }));
+    } catch (error) {
+      results.push(workerSyncResult(current, {
+        ...stateFields,
+        skipped: true,
+        reason: error?.message || "sync_failed",
+        error: error?.message || String(error),
+      }));
+    }
+  }
+
+  return {
+    ok: true,
+    scanned: workers.length,
+    synced: results.filter((result) => result.synced).length,
+    pushed: results.filter((result) => result.pushed).length,
+    skipped: results.filter((result) => result.skipped).length,
+    pushFailed: results.filter((result) => result.reason === "push_failed").length,
+    results,
+  };
 }
 
 export async function updateThreadRepo(threadId, input = {}, env = process.env) {

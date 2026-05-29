@@ -20,6 +20,7 @@ test("release deploy script exposes versioned install, status, and rollback", as
   assert.match(stdout, /install \[--ref REF\]/);
   assert.match(stdout, /--allow-untagged\|--require-tagged/);
   assert.match(stdout, /--no-backup/);
+  assert.match(stdout, /--sync-workers\|--no-sync-workers/);
   assert.match(stdout, /--no-interrupt\|--allow-interrupt/);
   assert.match(stdout, /--wait-active/);
   assert.match(stdout, /--active-timeout SECONDS/);
@@ -33,6 +34,13 @@ test("release deploy script exposes versioned install, status, and rollback", as
   assert.match(script, /npm --prefix "\$release_dir" run smoke/);
   assert.match(script, /backup_state/);
   assert.match(script, /ORKESTR_DEPLOY_BACKUP_STATE/);
+  assert.match(script, /ORKESTR_DEPLOY_BACKUP_EXCLUDES/);
+  assert.match(script, /backup_excludes="\$\{ORKESTR_DEPLOY_BACKUP_EXCLUDES:-run tmp whatsapp-bridge\/sessions\}"/);
+  assert.match(script, /--exclude="\$data_base\/\$exclude"/);
+  assert.match(script, /ORKESTR_DEPLOY_SYNC_WORKERS/);
+  assert.match(script, /sync_safe_workers_after_deploy/);
+  assert.match(script, /syncSafeThreadWorkersWithParents/);
+  assert.match(script, /Post-deploy worker sync/);
   assert.match(script, /backup_state_arg/);
   assert.match(script, /health_check/);
   assert.match(script, /sync_versioned_env/);
@@ -59,6 +67,9 @@ test("release deploy script exposes versioned install, status, and rollback", as
   assert.match(script, /ORKESTR_CODEX_APP_SERVER_SOCKET/);
   assert.match(script, /target_release_supports_external_codex_app_server/);
   assert.match(script, /ensure_codex_app_server_split_for_target/);
+  assert.match(script, /write_codex_app_server_main_service_dropin/);
+  assert.match(script, /60-codex-app-server\.conf/);
+  assert.match(script, /Environment=ORKESTR_CODEX_APP_SERVER_MODE=external/);
   assert.match(script, /\/usr\/local\/bin\/orkestr-codex-app-server/);
   assert.match(script, /ExecStart=\/usr\/local\/bin\/orkestr-codex-app-server/);
   assert.match(script, /codexAppServerTransport/);

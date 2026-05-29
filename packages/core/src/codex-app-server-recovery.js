@@ -126,10 +126,16 @@ function latestByStorageOrder(messages = []) {
   return messages.at(-1) || null;
 }
 
+function assistantBelongsToDeliveredTurn(message = {}, latestUser = {}, turnId = "") {
+  if (!assistantMessage(message)) return false;
+  if (turnId && messageTurnId(message) === turnId) return true;
+  return Boolean(latestUser?.id && message.parentMessageId === latestUser.id);
+}
+
 function deliveredTurnState(messages = [], latestUser = {}, latestUserIndex = -1) {
   const turnId = messageTurnId(latestUser);
   const sameTurnAssistants = turnId
-    ? messages.filter((message) => assistantMessage(message) && messageTurnId(message) === turnId)
+    ? messages.filter((message) => assistantBelongsToDeliveredTurn(message, latestUser, turnId))
     : [];
   const afterUser = turnId ? sameTurnAssistants : messages.slice(latestUserIndex + 1).filter((message) => assistantMessage(message));
   if (afterUser.some((message) => terminalAssistantMessage(message))) return null;
@@ -150,6 +156,16 @@ function latestIncompleteDeliveredTurn(messages = []) {
     if (turn) return turn;
   }
   return null;
+}
+
+function refreshedTurnState(messages = [], originalTurn = null) {
+  const latestUserId = clean(originalTurn?.latestUser?.id);
+  if (!latestUserId) return null;
+  const latestUserIndex = messages.findIndex((message) => message.id === latestUserId);
+  if (latestUserIndex < 0) return null;
+  const latestUser = messages[latestUserIndex];
+  if (!deliveredUserMessage(latestUser)) return null;
+  return deliveredTurnState(messages, latestUser, latestUserIndex);
 }
 
 function staleTurnNoticeText(reason = "no_assistant_response", options = {}) {
@@ -283,8 +299,14 @@ export async function recoverStaleCodexAppServerTurns(env = process.env, options
       : null;
     if (!staleRuntime && !shouldRecoverTurn) continue;
     let notice = null;
+    let noticeMessages = messages;
+    let freshNoticeTurn = noticeTurn;
     if (noticeTurn) {
-      const result = await appendStaleTurnNotice(thread, messages, noticeTurn, env, options);
+      noticeMessages = await listThreadMessages(thread.id, env).catch(() => messages);
+      freshNoticeTurn = refreshedTurnState(noticeMessages, noticeTurn);
+    }
+    if (freshNoticeTurn) {
+      const result = await appendStaleTurnNotice(thread, noticeMessages, freshNoticeTurn, env, options);
       notice = result?.notice || null;
       if (result?.appended) appended += 1;
     }
@@ -307,8 +329,8 @@ export async function recoverStaleCodexAppServerTurns(env = process.env, options
       threadId: thread.id,
       codexThreadId: codexId,
       noticeMessageId: notice?.id || null,
-      latestUserMessageId: noticeTurn?.latestUser?.id || null,
-      reason: noticeTurn?.reason || (staleRuntime ? "stale_runtime" : "incomplete_turn"),
+      latestUserMessageId: freshNoticeTurn?.latestUser?.id || noticeTurn?.latestUser?.id || null,
+      reason: freshNoticeTurn?.reason || noticeTurn?.reason || (staleRuntime ? "stale_runtime" : "incomplete_turn"),
       noticeCause: clean(options.noticeCause || options.cause),
     }, env).catch(() => {});
   }
