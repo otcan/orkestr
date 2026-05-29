@@ -649,12 +649,18 @@ status_command() {
 }
 
 runtime_run_user() {
-  local user
+  local user main_pid
   user="${ORKESTR_RUN_USER:-}"
   if [ -z "$user" ] && command -v systemctl >/dev/null 2>&1; then
     user="$(systemctl show -p User --value "${service_name:-orkestr}.service" 2>/dev/null || true)"
+    if [ -z "$user" ]; then
+      main_pid="$(systemctl show -p MainPID --value "${service_name:-orkestr}.service" 2>/dev/null || true)"
+      if [ -n "$main_pid" ] && [ "$main_pid" != "0" ] && command -v ps >/dev/null 2>&1; then
+        user="$(ps -o user= -p "$main_pid" 2>/dev/null | awk '{print $1}' || true)"
+      fi
+    fi
   fi
-  echo "${user:-orkestr}"
+  echo "${user:-root}"
 }
 
 repair_runtime_ownership() {
