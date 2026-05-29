@@ -461,6 +461,9 @@ ensure_codex_app_server_split_for_target() {
     external|proxy|daemon) mode_external_requested=1 ;;
   esac
   if [ "$mode_external_requested" = "1" ] && codex_app_server_service_is_active; then
+    if [ "$(id -u)" -eq 0 ]; then
+      write_codex_app_server_main_service_dropin
+    fi
     return 0
   fi
   if [ "$(id -u)" -ne 0 ]; then
