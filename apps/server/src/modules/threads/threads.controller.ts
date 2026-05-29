@@ -215,6 +215,14 @@ function optionalBodyBoolean(body: Record<string, unknown>, key: string, fallbac
   return value !== false;
 }
 
+function includeAllUserThreadsQuery(query: Record<string, unknown> = {}): boolean {
+  const scope = String(query.scope || query.threadScope || "").trim().toLowerCase();
+  if (["all", "all-users", "all_users", "admin-all"].includes(scope)) return true;
+  return optionalBodyBoolean(query, "includeAllUsers", false) ||
+    optionalBodyBoolean(query, "allUsers", false) ||
+    optionalBodyBoolean(query, "includeAllUserThreads", false);
+}
+
 function optionalBodyStringArray(body: Record<string, unknown>, key: string, fallback: unknown = []): string[] {
   const value = hasOwn(body, key) ? body[key] : fallback;
   if (!Array.isArray(value)) return [];
@@ -457,13 +465,16 @@ export class ThreadsController {
   }
 
   @Get()
-  async list(@Req() request: any) {
-    return threadSummaryPayload({ principal: requestPrincipal(request) });
+  async list(@Req() request: any, @Query() query: Record<string, unknown> = {}) {
+    return threadSummaryPayload({
+      principal: requestPrincipal(request),
+      includeAllUserThreads: includeAllUserThreadsQuery(query),
+    });
   }
 
   @Get("summary")
-  async summary(@Req() request: any) {
-    return this.list(request);
+  async summary(@Req() request: any, @Query() query: Record<string, unknown> = {}) {
+    return this.list(request, query);
   }
 
   @Post()

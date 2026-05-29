@@ -73,6 +73,52 @@ test("non-admin users are limited to one owned thread and cannot read another ow
   assert.deepEqual((await listThreadsForPrincipal(adminPrincipal(), env)).map((thread) => thread.id).sort(), ["alice-thread", "bob-thread"]);
 });
 
+test("admin chat summary hides tenant-owned WhatsApp-only threads by default", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-use-control-chat-scope-"));
+  const priorHome = process.env.ORKESTR_HOME;
+  const priorRecover = process.env.ORKESTR_RECOVER_RUNNING_ON_START;
+  process.env.ORKESTR_HOME = home;
+  process.env.ORKESTR_RECOVER_RUNNING_ON_START = "0";
+
+  let server;
+  try {
+    await upsertUser({ id: "otcan", role: "user", displayName: "otcan" }, process.env);
+    await createThread({ id: "admin-main", name: "Admin Main", ownerUserId: "admin" }, process.env);
+    await createThread({
+      id: "otcantest",
+      name: "otcantest",
+      ownerUserId: "otcan",
+      binding: {
+        connector: "whatsapp",
+        chatId: "120363423847331215@g.us",
+        displayName: "otcantest",
+        generated: true,
+        mirrorToWhatsApp: true,
+      },
+    }, process.env);
+
+    server = await startServer({ port: 0, host: "127.0.0.1" });
+    const { port } = server.address();
+    const baseUrl = `http://127.0.0.1:${port}`;
+
+    const defaultResponse = await fetch(`${baseUrl}/api/threads`);
+    const defaultPayload = await defaultResponse.json();
+    const allResponse = await fetch(`${baseUrl}/api/threads?scope=all`);
+    const allPayload = await allResponse.json();
+
+    assert.equal(defaultResponse.status, 200);
+    assert.deepEqual(defaultPayload.threads.map((thread) => thread.id), ["admin-main"]);
+    assert.equal(allResponse.status, 200);
+    assert.deepEqual(allPayload.threads.map((thread) => thread.id).sort(), ["admin-main", "otcantest"]);
+  } finally {
+    if (server) await new Promise((resolve) => server.close(resolve));
+    if (priorHome === undefined) delete process.env.ORKESTR_HOME;
+    else process.env.ORKESTR_HOME = priorHome;
+    if (priorRecover === undefined) delete process.env.ORKESTR_RECOVER_RUNNING_ON_START;
+    else process.env.ORKESTR_RECOVER_RUNNING_ON_START = priorRecover;
+  }
+});
+
 test("external WhatsApp identities can provision scoped non-admin users", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-use-control-wa-"));
   const env = { ORKESTR_HOME: home };

@@ -1,12 +1,16 @@
 import { readFile, stat } from "node:fs/promises";
 import path from "node:path";
 import { resolveCodexThreadMetadata, runtimeStatus } from "../../../packages/core/src/runtime-leases.js";
+import { isAdminPrincipal, resourceOwnerUserId } from "../../../packages/core/src/policy.js";
+import { adminPrincipal } from "../../../packages/core/src/principal.js";
 import { getThread, listThreadMessages, listThreads, listThreadsForPrincipal } from "../../../packages/core/src/threads.js";
 import { detectThreadGitState } from "../../../packages/core/src/thread-workers.js";
+import { defaultAdminUser, normalizeUserId } from "../../../packages/core/src/users.js";
 
 type ThreadSummaryOptions = {
   cacheTtlMs?: number;
   payloadCacheTtlMs?: number;
+  includeAllUserThreads?: boolean;
   principal?: Record<string, any> | null;
 };
 
@@ -206,6 +210,17 @@ function threadSummaryCacheTtlMs(): number {
 function threadSummaryPayloadCacheTtlMs(): number {
   const parsed = Number(process.env.ORKESTR_THREAD_SUMMARY_PAYLOAD_CACHE_TTL_MS || 5000);
   return Number.isFinite(parsed) ? Math.max(0, parsed) : 5000;
+}
+
+async function listThreadSummaryScope(principal: Record<string, any> | null, includeAllUserThreads: boolean) {
+  const effectivePrincipal = principal || adminPrincipal(defaultAdminUser());
+  if (includeAllUserThreads || !isAdminPrincipal(effectivePrincipal)) {
+    return listThreadsForPrincipal(effectivePrincipal);
+  }
+
+  const ownerUserId = normalizeUserId(effectivePrincipal.userId || defaultAdminUser().id);
+  const threads = await listThreads();
+  return threads.filter((thread: any) => resourceOwnerUserId(thread) === ownerUserId);
 }
 
 function nonEmptyString(value: unknown): string {
@@ -453,7 +468,15 @@ export async function threadSummaryPayload(options: ThreadSummaryOptions = {}) {
   const cacheTtlMs = Number(options.cacheTtlMs ?? threadSummaryCacheTtlMs()) || 0;
   const payloadCacheTtlMs = Number(options.payloadCacheTtlMs ?? threadSummaryPayloadCacheTtlMs()) || 0;
   const principal = options.principal || null;
-  const payloadCacheKey = JSON.stringify({ cacheTtlMs, userId: principal?.userId || "admin", role: principal?.role || "admin" });
+  const includeAllUserThreads = options.includeAllUserThreads === true;
+  const effectivePrincipal = principal || adminPrincipal(defaultAdminUser());
+  const payloadCacheKey = JSON.stringify({
+    cacheTtlMs,
+    home: process.env.ORKESTR_HOME || "",
+    includeAllUserThreads,
+    userId: effectivePrincipal?.userId || "admin",
+    role: effectivePrincipal?.role || "admin",
+  });
   const now = Date.now();
   if (
     payloadCacheTtlMs > 0 &&
@@ -471,7 +494,7 @@ export async function threadSummaryPayload(options: ThreadSummaryOptions = {}) {
     return threadSummaryPayloadCache.inFlight;
   }
   const computePayload = (async () => {
-    const threads = principal ? await listThreadsForPrincipal(principal) : await listThreads();
+    const threads = await listThreadSummaryScope(effectivePrincipal, includeAllUserThreads);
     const activeThreadIds = new Set(threads.map((thread: any) => String(thread?.id || "")).filter(Boolean));
     for (const id of threadMetadataCache.keys()) {
       if (!activeThreadIds.has(id)) threadMetadataCache.delete(id);
