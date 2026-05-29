@@ -81,8 +81,14 @@ test("ops desktop links are only shown for running desktops", async () => {
   assert.match(component, /"active", "running"/);
   assert.match(component, /\/desktop\/\$\{encodedSlug\}\/vnc\.html\?autoconnect=1&resize=scale&path=desktop\/\$\{encodedSlug\}\/websockify/);
   assert.doesNotMatch(component, /return String\(browser\.desk_url \|\| browser\.url \|\| ""\)\.trim\(\)/);
-  assert.match(component, /browserMobileUrl\(browser: BrowserSession\): string/);
-  assert.match(template, /browserMobileUrl\(browser\)/);
+  assert.match(template, />Open Desktop<\/a>/);
+  assert.match(template, />Share Link<\/button>/);
+  assert.doesNotMatch(template, />Open Desk<\/a>/);
+  assert.doesNotMatch(template, />Mobile<\/a>/);
+  assert.doesNotMatch(template, />CDP<\/a>/);
+  assert.doesNotMatch(component, /browserMobileUrl\(browser: BrowserSession\): string/);
+  assert.match(component, /shouldShowBrowserAction\(browser: BrowserSession/);
+  assert.match(component, /action === "restart"\) return running/);
   assert.match(template, /\[class\.live\]="browserIsRunning\(browser\)"/);
   assert.match(component, /activeBrowserActionSlug/);
 });

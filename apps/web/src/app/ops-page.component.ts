@@ -260,8 +260,8 @@ export class OpsPageComponent implements OnInit, OnDestroy {
       }
       this.error = "";
       this.notice = result.url
-        ? `Desktop phone link copied: ${result.url}`
-        : "Desktop phone link created.";
+        ? `Desktop share link copied: ${result.url}`
+        : "Desktop share link created.";
       await this.loadOps(false);
     } catch (error) {
       this.error = this.errorText(error);
@@ -362,14 +362,19 @@ export class OpsPageComponent implements OnInit, OnDestroy {
     return `/desktop/${encodedSlug}/vnc.html?autoconnect=1&resize=scale&path=desktop/${encodedSlug}/websockify`;
   }
 
-  browserMobileUrl(browser: BrowserSession): string {
-    const slug = this.browserSlug(browser);
-    return slug ? `/desktop/${encodeURIComponent(slug)}/mobile` : "";
-  }
-
   browserActionBusy(browser: BrowserSession): boolean {
     const slug = this.browserSlug(browser);
     return !!slug && this.activeBrowserActionSlug === slug;
+  }
+
+  shouldShowBrowserAction(browser: BrowserSession, action: "prepare" | "start" | "stop" | "restart" | "cleanup"): boolean {
+    if (!this.canBrowserAction(browser, action)) return false;
+    const running = this.browserIsRunning(browser);
+    if (action === "restart") return running;
+    if (action === "start") return !running;
+    if (action === "prepare") return !running && !browser.configured && !browser.preparedAt;
+    if (action === "cleanup") return !running && (browser.configured === true || Boolean(browser.preparedAt));
+    return false;
   }
 
   canBrowserAction(browser: BrowserSession, action: "prepare" | "start" | "stop" | "restart" | "cleanup"): boolean {
