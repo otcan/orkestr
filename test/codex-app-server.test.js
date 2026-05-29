@@ -1539,6 +1539,60 @@ test("Codex app-server queues WhatsApp input behind active turns", async () => {
   }
 });
 
+test("Codex app-server delivers queued input when live status cleared a stale active turn", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-codex-app-server-stale-active-delivery-"));
+  const fake = await createFakeCodex(home);
+  const env = {
+    ORKESTR_HOME: path.join(home, "orkestr"),
+    HOME: path.join(home, "runtime-home"),
+    PATH: `${fake.bin}${path.delimiter}${process.env.PATH || ""}`,
+    FAKE_CODEX_STATE: fake.stateFile,
+    ORKESTR_CODEX_APP_SERVER_ACTIVE_TURN_RETRY_MS: "60000",
+  };
+  try {
+    const thread = await createThread({ id: "app-server-stale-active-delivery-thread", name: "App Server Stale Active Delivery Thread", cwd: home, executorId: "codex", executor: { type: "codex" } }, env);
+    const started = await startCodexAppServerThread(thread, env);
+    const codexThreadId = started.thread.executor.codexThreadId;
+    const client = await getCodexAppServerClient({ env, home: env.HOME });
+    client.threadStates.set(codexThreadId, {
+      ...(client.threadStates.get(codexThreadId) || {}),
+      activeTurnId: "stale-completed-turn",
+      status: { type: "idle" },
+    });
+    await updateThread(started.thread.id, {
+      state: "ready",
+      runtime: {
+        ...(started.thread.runtime || {}),
+        runtimeKind: "codex-app-server",
+        state: "ready",
+        activeTurnId: "stale-completed-turn",
+        codexStatus: { type: "idle" },
+      },
+    }, env);
+    const input = await enqueueThreadInput(started.thread.id, {
+      text: "deliver after stale active turn",
+      source: "whatsapp_inbound",
+      connector: "whatsapp",
+      chatId: "chat-wa-stale",
+    }, env);
+
+    const delivered = await deliverCodexAppServerPendingInputs(await getThread(started.thread.id, env), env);
+    const messages = await listThreadMessages(started.thread.id, env);
+    const completed = messages.find((message) => message.id === input.id);
+    const reply = messages.find((message) => message.parentMessageId === input.id && /Reply to: deliver after stale active turn/.test(message.text));
+    const rawState = JSON.parse(await fs.readFile(fake.stateFile, "utf8"));
+
+    assert.deepEqual(delivered, [input.id]);
+    assert.equal(completed.state, "completed");
+    assert.equal(completed.deliveryState, "delivered");
+    assert.ok(reply);
+    assert.ok(rawState.calls.some((call) => call.method === "turn/start"));
+    assert.ok(!rawState.calls.some((call) => call.method === "turn/interrupt"));
+  } finally {
+    stopCodexAppServerClients();
+  }
+});
+
 test("Codex app-server queues normal input behind active turns", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-codex-app-server-generic-queue-"));
   const fake = await createFakeCodex(home);
