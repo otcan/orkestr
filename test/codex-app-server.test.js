@@ -1099,6 +1099,70 @@ test("Codex app-server recovery ignores delayed imported user rows for completed
   }
 });
 
+test("Codex app-server recovery treats parent-linked final answers as completed turns", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-codex-app-server-parent-final-"));
+  const fake = await createFakeCodex(home);
+  const env = {
+    ORKESTR_HOME: path.join(home, "orkestr"),
+    HOME: path.join(home, "runtime-home"),
+    PATH: `${fake.bin}${path.delimiter}${process.env.PATH || ""}`,
+    FAKE_CODEX_STATE: fake.stateFile,
+    ORKESTR_CODEX_APP_SERVER_STALE_FINAL_GRACE_MS: "0",
+  };
+  try {
+    const thread = await createThread({
+      id: "app-server-parent-final-thread",
+      name: "App Server Parent Final Thread",
+      state: "ready",
+      executorId: "codex",
+      executor: {
+        type: "codex",
+        transport: "app-server",
+        codexThreadId: "parent-final-codex-thread",
+        codexSessionId: "parent-final-codex-thread",
+      },
+      runtimeKind: "codex-app-server",
+      codexThreadId: "parent-final-codex-thread",
+      codexSessionId: "parent-final-codex-thread",
+      runtime: {
+        runtimeKind: "codex-app-server",
+        state: "ready",
+        activeTurnId: null,
+        codexStatus: { type: "idle" },
+      },
+    }, env);
+    const input = await appendThreadMessage(thread.id, {
+      role: "user",
+      source: "manual",
+      text: "Delivered question with imported parent final.",
+      state: "completed",
+      deliveryState: "delivered",
+      observedVia: "codex_app_server_turn_start",
+      codexThreadId: "parent-final-codex-thread",
+      codexTurnId: "parent-final-turn",
+    }, env);
+    await appendThreadMessage(thread.id, {
+      role: "assistant",
+      source: "codex-rollout",
+      phase: "final_answer",
+      text: "This final was imported without a turn id.",
+      state: "completed",
+      parentMessageId: input.id,
+      codexThreadId: "parent-final-codex-thread",
+    }, env);
+
+    const result = await recoverStaleCodexAppServerTurns(env);
+    const messages = await listThreadMessages(thread.id, env);
+    const notices = messages.filter((message) => message.source === "orkestr_runtime" && message.phase === "runtime_interrupted");
+
+    assert.equal(result.recovered, 0);
+    assert.equal(result.appended, 0);
+    assert.equal(notices.length, 0);
+  } finally {
+    stopCodexAppServerClients();
+  }
+});
+
 test("Codex app-server recovery ignores old historical progress-only turns", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-codex-app-server-old-history-"));
   const fake = await createFakeCodex(home);
