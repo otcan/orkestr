@@ -878,6 +878,7 @@ export class ThreadsController {
   @HttpCode(200)
   async wake(@Param("threadId") threadId: string, @Body() body: Record<string, unknown> = {}) {
     const result = await wakeThread(threadId, { reason: body.reason || "manual_wake" });
+    if (!result) throw httpError("thread_wake_failed", 500);
     requestThreadInputDelivery(result.thread.id);
     return result;
   }
@@ -1016,6 +1017,7 @@ export class ThreadsController {
     let wakeResult: Awaited<ReturnType<typeof wakeThread>> | null = null;
     if (!status.sessionName || status.state === "sleeping") {
       wakeResult = await wakeThread(thread.id, { reason: "attach" });
+      if (!wakeResult) throw httpError("thread_wake_failed", 500);
       thread = wakeResult.thread || thread;
       status = wakeResult.status || await runtimeStatus(thread.id);
       if (!status.sessionName && wakeResult.lease?.sessionName) {
@@ -1087,6 +1089,7 @@ export class ThreadsController {
   async interrupt(@Req() request: any, @Param("threadId") threadId: string, @Body() body: Record<string, unknown> = {}) {
     const principal = requestPrincipal(request);
     const result = await wakeThread(threadId, { reason: "interrupt" });
+    if (!result) throw httpError("thread_wake_failed", 500);
     if (threadUsesCodexAppServer(result.thread)) {
       const interrupted = await interruptCodexAppServerThread(result.thread).catch(() => ({ interrupted: false }));
       if (String(body.text || "").trim()) {

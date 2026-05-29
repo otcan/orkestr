@@ -127,6 +127,10 @@ test("whereAmI exposes server-owned contained user runtime policy metadata", asy
   assert.equal(payload.tenancy.runtimePolicy.path, containedUserPolicyPath(env));
   assert.equal(payload.tenancy.runtimePolicy.writableByWorkspace, false);
   assert.equal(payload.tenancy.runtimePolicy.injectedAs, "developerInstructions");
+  assert.equal(payload.capabilities.gmail, false);
+  assert.equal(payload.capabilities.linkedin, false);
+  assert.equal(payload.capabilities.hostSkills, false);
+  assert.equal(payload.capabilities.privateOperatorData, false);
 });
 
 test("whereAmI prefers live runtime Codex mode over stale stored mode", async () => {

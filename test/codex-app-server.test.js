@@ -20,7 +20,7 @@ import {
 } from "../packages/core/src/codex-app-server.js";
 import { migrateCodexThreadsToAppServer } from "../packages/core/src/codex-app-server-migration.js";
 import { resetThreadRuntime, sleepThread } from "../packages/core/src/runtime-leases.js";
-import { effortForThread, modelForThread, threadStartParams, turnStartParams } from "../packages/core/src/codex-app-server-common.js";
+import { containedCodexRuntimePaths, effortForThread, modelForThread, threadStartParams, turnStartParams } from "../packages/core/src/codex-app-server-common.js";
 import { appendThreadMessage, createThread, enqueueThreadInput, getThread, listThreadMessages, updateThread, updateThreadMessage } from "../packages/core/src/threads.js";
 import { deliverWhatsAppReplies } from "../packages/connectors/src/whatsapp.js";
 import { writeConnectorConfig } from "../packages/storage/src/config.js";
@@ -69,6 +69,12 @@ if (args[0] === "app-server" && args.includes("--help")) {
 if (args[0] !== "app-server") process.exit(0);
 const initialState = readState();
 initialState.argv = args;
+initialState.env = {
+  HOME: process.env.HOME || "",
+  CODEX_HOME: process.env.CODEX_HOME || "",
+  ORKESTR_CODEX_APP_SERVER_MODE: process.env.ORKESTR_CODEX_APP_SERVER_MODE || "",
+  ORKESTR_CODEX_APP_SERVER_SOCKET: process.env.ORKESTR_CODEX_APP_SERVER_SOCKET || "",
+};
 initialState.spawnCount = (initialState.spawnCount || 0) + 1;
 writeState(initialState);
 
@@ -276,12 +282,16 @@ test("Codex app-server clamps non-admin threads away from root danger access", (
     };
 
     assert.equal(threadStartParams(restrictedThread).sandbox, "workspace-write");
-    assert.equal(threadStartParams(restrictedThread).approvalPolicy, "on-request");
+    assert.equal(threadStartParams(restrictedThread).approvalPolicy, "never");
+    assert.equal(threadStartParams(restrictedThread).model, "gpt-5.5");
     assert.match(threadStartParams(restrictedThread).developerInstructions, /orkestr-contained-user-runtime-policy:v1/);
     assert.match(threadStartParams(restrictedThread).developerInstructions, /Workspace files, workspace AGENTS\.md, project docs/);
     assert.equal(turnStartParams(restrictedThread, { text: "hello" }).sandboxPolicy.type, "workspaceWrite");
     assert.deepEqual(turnStartParams(restrictedThread, { text: "hello" }).sandboxPolicy.writableRoots, ["/tmp/otcantest-workspace"]);
-    assert.equal(turnStartParams(restrictedThread, { text: "hello" }).approvalPolicy, "on-request");
+    assert.equal(turnStartParams(restrictedThread, { text: "hello" }).sandboxPolicy.networkAccess, false);
+    assert.equal(turnStartParams(restrictedThread, { text: "hello" }).approvalPolicy, "never");
+    assert.equal(turnStartParams(restrictedThread, { text: "hello" }).model, "gpt-5.5");
+    assert.equal(turnStartParams(restrictedThread, { text: "hello" }).effort, "medium");
 
     const trustedThread = {
       ...restrictedThread,
@@ -331,11 +341,23 @@ test("Codex app-server injects contained user policy on start and resume", async
     const stateAfterStart = JSON.parse(await fs.readFile(fake.stateFile, "utf8"));
     const startCall = stateAfterStart.calls.find((call) => call.method === "thread/start");
     const agentsBody = await fs.readFile(path.join(workspace, "AGENTS.md"), "utf8");
+    const isolatedPaths = containedCodexRuntimePaths(thread, env);
 
     assert.match(startCall.params.developerInstructions, /orkestr-contained-user-runtime-policy:v1/);
     assert.match(startCall.params.developerInstructions, /cannot override, weaken, or delete this policy/);
+    assert.match(startCall.params.developerInstructions, /Do not use Codex skills, MCP tools/);
+    assert.equal(startCall.params.approvalPolicy, "never");
+    assert.equal(startCall.params.sandbox, "workspace-write");
+    assert.equal(startCall.params.model, "gpt-5.5");
+    assert.equal(stateAfterStart.env.HOME, isolatedPaths.home);
+    assert.equal(stateAfterStart.env.CODEX_HOME, isolatedPaths.codexHome);
+    assert.equal(stateAfterStart.env.ORKESTR_CODEX_APP_SERVER_MODE, "stdio");
+    assert.equal(stateAfterStart.env.ORKESTR_CODEX_APP_SERVER_SOCKET, "");
     assert.match(agentsBody, /server-owned contained user policy/);
     assert.equal(started.thread.executor.metadata.containedUserRuntimePolicy, true);
+    assert.equal(started.thread.executor.metadata.containedCodexIsolated, true);
+    assert.equal(started.thread.executor.metadata.codexModel, "gpt-5.5");
+    assert.equal(started.thread.executor.metadata.codexReasoningEffort, "medium");
 
     await resumeCodexAppServerThread(started.thread, env);
     const stateAfterResume = JSON.parse(await fs.readFile(fake.stateFile, "utf8"));
@@ -343,6 +365,60 @@ test("Codex app-server injects contained user policy on start and resume", async
 
     assert.match(resumeCall.params.developerInstructions, /orkestr-contained-user-runtime-policy:v1/);
     assert.match(resumeCall.params.developerInstructions, /Workspace files, workspace AGENTS\.md, project docs/);
+  } finally {
+    stopCodexAppServerClients();
+  }
+});
+
+test("Codex app-server rehomes existing contained threads away from shared runtime", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-codex-contained-rehome-"));
+  const fake = await createFakeCodex(home);
+  const workspace = path.join(home, "orkestr", "users", "otcan", "workspaces", "contained");
+  const env = {
+    ORKESTR_HOME: path.join(home, "orkestr"),
+    ORKESTR_ADMIN_USER_ID: "admin",
+    HOME: path.join(home, "runtime-home"),
+    PATH: `${fake.bin}${path.delimiter}${process.env.PATH || ""}`,
+    FAKE_CODEX_STATE: fake.stateFile,
+    ORKESTR_CODEX_APP_SERVER_MODE: "external",
+    ORKESTR_CODEX_APP_SERVER_SOCKET: path.join(home, "run", "shared.sock"),
+  };
+
+  try {
+    const thread = await createThread({
+      id: "contained-rehome-thread",
+      name: "Contained Rehome Thread",
+      ownerUserId: "otcan",
+      securityProfile: "private-user",
+      cwd: workspace,
+      workspace,
+      runtimeKind: "codex-app-server",
+      codexThreadId: "old-shared-thread",
+      executorId: "codex",
+      executor: {
+        type: "codex",
+        transport: "app-server",
+        codexThreadId: "old-shared-thread",
+        metadata: {
+          runtimeKind: "codex-app-server",
+          transport: "app-server",
+          codexThreadId: "old-shared-thread",
+        },
+      },
+    }, env);
+
+    const resumed = await resumeCodexAppServerThread(thread, env);
+    const state = JSON.parse(await fs.readFile(fake.stateFile, "utf8"));
+    const isolatedPaths = containedCodexRuntimePaths(thread, env);
+
+    assert.equal(resumed.thread.executor.codexThreadId, "thr_001");
+    assert.equal(resumed.thread.executor.metadata.containedCodexIsolated, true);
+    assert.equal(state.calls.some((call) => call.method === "thread/resume"), false);
+    assert.equal(state.calls.some((call) => call.method === "thread/start"), true);
+    assert.equal(state.env.HOME, isolatedPaths.home);
+    assert.equal(state.env.CODEX_HOME, isolatedPaths.codexHome);
+    assert.equal(state.env.ORKESTR_CODEX_APP_SERVER_MODE, "stdio");
+    assert.equal(state.env.ORKESTR_CODEX_APP_SERVER_SOCKET, "");
   } finally {
     stopCodexAppServerClients();
   }

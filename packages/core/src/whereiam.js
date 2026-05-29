@@ -173,7 +173,22 @@ function commandHints() {
   };
 }
 
-function capabilityHints() {
+function capabilityHints(thread = null, env = process.env) {
+  if (threadUsesContainedUserPolicy(thread || {}, env)) {
+    return {
+      threads: true,
+      timers: true,
+      virtualBrowsers: true,
+      desktopLeases: true,
+      whatsapp: Boolean(thread?.binding?.connector === "whatsapp" || thread?.binding?.chatId),
+      gmail: false,
+      outlook: false,
+      linkedin: false,
+      hostSkills: false,
+      globalConnectorAccounts: false,
+      privateOperatorData: false,
+    };
+  }
   return {
     threads: true,
     timers: true,
@@ -285,7 +300,7 @@ export async function whereAmI(input = {}, env = process.env) {
     workspace: publicWorkspace(thread, lease, cwd),
     runtime: publicRuntime(lease, status),
     settings,
-    capabilities: capabilityHints(),
+    capabilities: capabilityHints(thread, env),
     commands: commandHints(),
     generatedAt: nowIso(),
   };

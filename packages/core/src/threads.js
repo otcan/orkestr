@@ -470,7 +470,20 @@ export async function enqueueThreadInputForPrincipal(threadId, input, principal,
     await assertSanitizedAction({
       action: "thread.input",
       principal,
-      resource: { type: "thread", id: thread.id, ownerUserId: thread.ownerUserId },
+      resource: {
+        type: "thread",
+        id: thread.id,
+        ownerUserId: thread.ownerUserId,
+        capabilities: {
+          whatsapp: Boolean(thread.binding?.connector === "whatsapp" || thread.binding?.chatId),
+          gmail: false,
+          outlook: false,
+          linkedin: false,
+          hostSkills: false,
+          globalConnectorAccounts: false,
+          privateOperatorData: false,
+        },
+      },
       input: {
         text: String(input?.text || "").slice(0, 8000),
         promptFile: String(input?.promptFile || ""),

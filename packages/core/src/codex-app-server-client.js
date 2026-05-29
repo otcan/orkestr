@@ -27,6 +27,7 @@ import {
   runtimeHome,
   threadEventId,
   threadForCodexThreadId,
+  threadUsesRestrictedCodexPolicy,
   timeoutMs,
 } from "./codex-app-server-common.js";
 import {
@@ -291,6 +292,47 @@ export class CodexAppServerClient {
     this.pendingRequests.set(String(message.id), request);
     if (!thread) {
       this.rejectServerRequest(message.id, "No Orkestr thread is mapped to this Codex request.");
+      return;
+    }
+    if (threadUsesRestrictedCodexPolicy(thread, this.env)) {
+      this.rejectServerRequest(message.id, "Blocked by Orkestr tenant isolation for this contained user.");
+      await appendOrUpdateEventMessage(thread, {
+        role: "assistant",
+        source: "orkestr_runtime",
+        phase: "runtime_interrupted",
+        text: "Blocked by tenant isolation.\n\nThis contained user cannot approve host-level tool access or use private operator resources. Connect the needed capability for this user in Orkestr, then retry.",
+        state: "completed",
+        eventId: threadEventId({
+          codexThreadId: codexId,
+          turnId: params.turnId,
+          itemId: params.itemId || message.id,
+          type: "contained-user-request-blocked",
+          role: "assistant",
+          text: message.method,
+        }),
+        codexTurnId: params.turnId || null,
+        codexItemId: params.itemId || null,
+        codexRequestId: String(message.id),
+        ...codexAppServerMessageFields(codexId, {
+          turnId: params.turnId,
+          itemId: params.itemId || message.id,
+          requestId: message.id,
+        }),
+        ...whatsappProjectionFields(
+          await latestWhatsAppParent(thread, params.timestamp || nowIso(), this.env) ||
+            threadWhatsAppBindingParent(thread),
+          thread,
+        ),
+      }, this.env).then((messageRecord) => {
+        if (messageRecord) notifyMessageHandler({ thread, message: messageRecord });
+      }).catch(() => null);
+      await appendEvent({
+        type: "codex_app_server_request_blocked_tenant_isolation",
+        threadId: thread.id,
+        codexThreadId: codexId,
+        method: message.method,
+        requestId: String(message.id),
+      }, this.env).catch(() => {});
       return;
     }
     await updateThread(thread.id, {

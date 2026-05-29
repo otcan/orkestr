@@ -12,8 +12,12 @@ import {
   appServerStateFromStatus,
   clean,
   codexAppServerEnabled,
+  codexRuntimeEnvForThread,
   codexSessionId,
   codexThreadId,
+  containedCodexRuntimeIsCurrent,
+  containedCodexRuntimeMetadata,
+  ensureContainedCodexRuntimeHome,
   effortForThread,
   itemPhase,
   itemText,
@@ -114,8 +118,11 @@ export async function startCodexAppServerThread(thread, env = process.env) {
   if (!codexAppServerEnabled(env)) return null;
   const workspace = workspaceForThread(thread);
   if (workspace) await ensureRuntimeAgentsFile(workspace, env, { thread }).catch(() => {});
-  const client = await getCodexAppServerClient({ env, home: runtimeHome(env) });
-  const startParams = threadStartParams(thread, env);
+  await ensureContainedCodexRuntimeHome(thread, env);
+  const runtimeEnv = codexRuntimeEnvForThread(thread, env);
+  const client = await getCodexAppServerClient({ env: runtimeEnv, home: runtimeHome(runtimeEnv) });
+  const startParams = threadStartParams(thread, runtimeEnv);
+  const containedMetadata = containedCodexRuntimeMetadata(thread, env) || {};
   const result = await client.request("thread/start", startParams);
   const codexThread = result?.thread || {};
   const codexId = clean(codexThread.id || codexThread.threadId);
@@ -140,11 +147,13 @@ export async function startCodexAppServerThread(thread, env = process.env) {
         transport: "app-server",
         codexThreadId: codexId,
         codexSessionId: clean(codexThread.sessionId || codexId),
-        codexModel: modelForThread(thread) || codexThread.model || null,
+        codexModel: modelForThread(thread, runtimeEnv) || codexThread.model || null,
+        codexReasoningEffort: effortForThread(thread, runtimeEnv) || null,
         codexModelProvider: codexThread.modelProvider || "openai",
         codexSandbox: startParams.sandbox,
         codexApprovalPolicy: startParams.approvalPolicy,
         containedUserRuntimePolicy: Boolean(startParams.developerInstructions),
+        ...containedMetadata,
       },
     },
     runtime: {
@@ -161,12 +170,32 @@ export async function startCodexAppServerThread(thread, env = process.env) {
 }
 
 export async function resumeCodexAppServerThread(thread, env = process.env) {
+  if (!containedCodexRuntimeIsCurrent(thread, env)) {
+    const freshThread = {
+      ...thread,
+      codexThreadId: null,
+      codexSessionId: null,
+      executor: {
+        ...(thread.executor || {}),
+        codexThreadId: null,
+        codexSessionId: null,
+        metadata: {
+          ...(thread.executor?.metadata || {}),
+          codexThreadId: null,
+          codexSessionId: null,
+        },
+      },
+    };
+    return startCodexAppServerThread(freshThread, env);
+  }
   const id = codexThreadId(thread);
   if (!id) throw new Error("codex_thread_id_required");
   const workspace = workspaceForThread(thread);
   if (workspace) await ensureRuntimeAgentsFile(workspace, env, { thread }).catch(() => {});
-  const client = await getCodexAppServerClient({ env, home: runtimeHome(env) });
-  const developerInstructions = containedUserDeveloperInstructions(thread, env);
+  await ensureContainedCodexRuntimeHome(thread, env);
+  const runtimeEnv = codexRuntimeEnvForThread(thread, env);
+  const client = await getCodexAppServerClient({ env: runtimeEnv, home: runtimeHome(runtimeEnv) });
+  const developerInstructions = containedUserDeveloperInstructions(thread, runtimeEnv);
   const result = await client.request("thread/resume", {
     threadId: id,
     ...(developerInstructions ? { developerInstructions } : {}),
@@ -200,13 +229,15 @@ export async function resumeCodexAppServerThread(thread, env = process.env) {
       resumedAt: nowIso(),
     },
   }, env);
-  return { thread: updated, codexThread, status: await codexAppServerThreadStatus(updated, env) };
+  return { thread: updated, codexThread, client, status: await codexAppServerThreadStatus(updated, env) };
 }
 
 export async function interruptCodexAppServerThread(thread, env = process.env) {
   const id = codexThreadId(thread);
   if (!id) return { interrupted: false, reason: "codex_thread_id_required" };
-  const client = await getCodexAppServerClient({ env, home: runtimeHome(env) });
+  await ensureContainedCodexRuntimeHome(thread, env);
+  const runtimeEnv = codexRuntimeEnvForThread(thread, env);
+  const client = await getCodexAppServerClient({ env: runtimeEnv, home: runtimeHome(runtimeEnv) });
   const clientState = client.threadStates.get(id);
   const activeTurnId = clean(
     clientState && Object.prototype.hasOwnProperty.call(clientState, "activeTurnId")
@@ -226,8 +257,8 @@ export async function interruptCodexAppServerThread(thread, env = process.env) {
   return { interrupted: true, turnId: activeTurnId };
 }
 
-async function startCodexAppServerTurn({ client, thread, id, pending, env, observedVia = "codex_app_server_turn_start" }) {
-  const result = await client.request("turn/start", turnStartParams(thread, pending, env));
+async function startCodexAppServerTurn({ client, thread, id, pending, env, runtimeEnv = env, observedVia = "codex_app_server_turn_start" }) {
+  const result = await client.request("turn/start", turnStartParams(thread, pending, runtimeEnv));
   const turnId = clean(result?.turn?.id || result?.turnId);
   const status = clean(result?.turn?.status || result?.status).toLowerCase();
   const terminalResult = ["completed", "failed", "interrupted", "aborted", "cancelled", "canceled"].includes(status);
@@ -291,9 +322,15 @@ async function claimCodexAppServerPendingInput(thread, message, env = process.en
 }
 
 export async function sendCodexAppServerInput(thread, message, env = process.env) {
+  if (!containedCodexRuntimeIsCurrent(thread, env)) {
+    const restarted = await resumeCodexAppServerThread(thread, env);
+    thread = restarted.thread || thread;
+  }
   const id = codexThreadId(thread);
   if (!id) throw new Error("codex_thread_id_required");
-  const client = await getCodexAppServerClient({ env, home: runtimeHome(env) });
+  await ensureContainedCodexRuntimeHome(thread, env);
+  const runtimeEnv = codexRuntimeEnvForThread(thread, env);
+  const client = await getCodexAppServerClient({ env: runtimeEnv, home: runtimeHome(runtimeEnv) });
   const pending = await claimCodexAppServerPendingInput(thread, message, env);
   if (!pending) {
     return { message, result: null, observedVia: "codex_app_server_stale_claim", skipped: true };
@@ -363,7 +400,7 @@ export async function sendCodexAppServerInput(thread, message, env = process.env
     scheduleCodexAppServerInputDelivery(thread.id, env, retryMs);
     return { message: { ...pending, state: "queued", deliveryState: "awaiting_active_turn" }, result: null, observedVia: "codex_app_server_awaiting_active_turn", deferred: true };
   }
-  const started = await startCodexAppServerTurn({ client, thread, id, pending, env });
+  const started = await startCodexAppServerTurn({ client, thread, id, pending, env, runtimeEnv });
   result = started.result;
   observedVia = started.observedVia;
   deliveryTurnId = started.turnId;
@@ -412,8 +449,11 @@ async function deliverCodexAppServerPendingInputsUnlocked(thread, env = process.
     return delivered;
   }
   let client;
+  let runtimeEnv = env;
   try {
-    client = await getCodexAppServerClient({ env, home: runtimeHome(env) });
+    await ensureContainedCodexRuntimeHome(thread, env);
+    runtimeEnv = codexRuntimeEnvForThread(thread, env);
+    client = await getCodexAppServerClient({ env: runtimeEnv, home: runtimeHome(runtimeEnv) });
   } catch (error) {
     const errorText = publicError(error);
     await updateThread(thread.id, { state: "failed", lastError: errorText }, env).catch(() => {});
@@ -525,7 +565,9 @@ async function deliverCodexAppServerPendingInputsUnlocked(thread, env = process.
 
 export async function codexAppServerThreadStatus(thread, env = process.env, counts = {}) {
   const id = codexThreadId(thread);
-  const client = id ? await getCodexAppServerClient({ env, home: runtimeHome(env) }).catch(() => null) : null;
+  await ensureContainedCodexRuntimeHome(thread, env);
+  const runtimeEnv = codexRuntimeEnvForThread(thread, env);
+  const client = id ? await getCodexAppServerClient({ env: runtimeEnv, home: runtimeHome(runtimeEnv) }).catch(() => null) : null;
   const hasClientState = Boolean(id && client?.threadStates.has(id));
   const state = hasClientState ? client.threadStates.get(id) || {} : {};
   const pendingRequest = client?.pendingRequestForThread(thread) || thread.runtime?.pendingRequest || null;
@@ -550,8 +592,8 @@ export async function codexAppServerThreadStatus(thread, env = process.env, coun
     status: runtimeState,
     runtimeState: "codex-app-server",
     runtimeKind: "codex-app-server",
-    codexAppServerTransport: client?.transport || codexAppServerTransport(env),
-    codexAppServerSocket: client?.socket || codexAppServerSocket(env) || null,
+    codexAppServerTransport: client?.transport || codexAppServerTransport(runtimeEnv),
+    codexAppServerSocket: client?.socket || codexAppServerSocket(runtimeEnv) || null,
     codexThreadId: id || null,
     codexSessionId: codexSessionId(thread) || id || null,
     codexStatus,
@@ -616,7 +658,9 @@ export async function syncCodexAppServerThreadMessages(thread, env = process.env
     return { synced: false, reason: "throttled", count: 0 };
   }
   appServerHistorySyncTimes.set(syncKey, nowMs);
-  const read = await readCodexAppServerThread(id, env, true);
+  await ensureContainedCodexRuntimeHome(thread, env);
+  const runtimeEnv = codexRuntimeEnvForThread(thread, env);
+  const read = await readCodexAppServerThread(id, runtimeEnv, true);
   const codexThread = read?.thread || {};
   const result = await hydrateCodexAppServerThreadMessages(thread, codexThread, env);
   await appendEvent({

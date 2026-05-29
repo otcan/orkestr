@@ -17,6 +17,14 @@ export function containedUserPolicyPath(env = process.env) {
   return path.join(appHome(env), "policies", "contained-user-runtime.md");
 }
 
+export function containedUserCodexModel() {
+  return "gpt-5.5";
+}
+
+export function containedUserCodexReasoningEffort() {
+  return "medium";
+}
+
 export function threadRequiresTenantIsolation(thread = {}, env = process.env) {
   const owner = ownerUserId(thread);
   if (owner && owner !== adminUserId(env)) return true;
@@ -79,6 +87,24 @@ accounts, inspect other users' chats, or reuse another user's browser profile.
 
 Acquire a desktop lease through Orkestr before browser work and release it when
 finished. Do not launch unmanaged Chrome.
+
+## Host Skills And Private Operator State
+
+Do not use Codex skills, MCP tools, local skill files, private operator
+directories, root/user home files, or browser tabs that are not explicitly
+exposed by \`orkestr whereiam --json\` for the current contained user. This
+includes host Gmail, Outlook, LinkedIn, HubSpot, Dropbox, GoDaddy, WhatsApp,
+and automation skills under paths such as \`/root/.codex\`,
+\`/home/openclaw/.codex-ops\`, or another operator home.
+
+If the user asks to check Gmail, Outlook, LinkedIn, browser profiles, files, or
+any other connector and \`orkestr whereiam --json\` does not show that connector
+as available for this contained user, do not attempt a host fallback. Answer
+that the connector is not connected for this user and ask them to connect it in
+Orkestr.
+
+Never request approval to escape this user's workspace, read host skill
+instructions, inspect admin connector state, or use an operator browser tab.
 
 ## Sanitizer
 

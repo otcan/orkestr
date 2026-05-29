@@ -1,7 +1,12 @@
 import os from "node:os";
+import fs from "node:fs/promises";
+import path from "node:path";
 import { codexCommand, defaultCodexHome } from "../../connectors/src/codex.js";
 import { codexAppServerSocket, codexAppServerTransport } from "../../connectors/src/codex-app-server-transport.js";
+import { userDataPaths } from "../../storage/src/paths.js";
 import {
+  containedUserCodexModel,
+  containedUserCodexReasoningEffort,
   containedUserDeveloperInstructions,
   threadRequiresTenantIsolation,
 } from "./tenant-policy.js";
@@ -26,6 +31,88 @@ export function clean(value) {
 
 export function runtimeHome(env = process.env, home = os.homedir()) {
   return clean(env.HOME || process.env.HOME || home || os.homedir());
+}
+
+function falsey(value) {
+  return ["0", "false", "off", "no"].includes(clean(value).toLowerCase());
+}
+
+function safeOwnerUserId(thread = {}, env = process.env) {
+  return clean(thread.ownerUserId || thread.userId || env.ORKESTR_ADMIN_USER_ID || "admin").replace(/[^a-zA-Z0-9_.-]/g, "_") || "admin";
+}
+
+export function containedCodexRuntimePaths(thread = {}, env = process.env) {
+  const root = userDataPaths(safeOwnerUserId(thread, env), env).root;
+  return {
+    home: path.join(root, "runtime-home"),
+    codexHome: path.join(root, "codex"),
+  };
+}
+
+export function containedCodexRuntimeEnabled(thread = {}, env = process.env) {
+  if (!threadUsesRestrictedCodexPolicy(thread, env)) return false;
+  return !falsey(env.ORKESTR_CONTAINED_CODEX_ISOLATED_HOME);
+}
+
+export function codexRuntimeEnvForThread(thread = {}, env = process.env) {
+  if (!containedCodexRuntimeEnabled(thread, env)) return { ...env };
+  const paths = containedCodexRuntimePaths(thread, env);
+  return {
+    ...env,
+    HOME: paths.home,
+    CODEX_HOME: paths.codexHome,
+    ORKESTR_CODEX_APP_SERVER_MODE: clean(env.ORKESTR_CONTAINED_CODEX_APP_SERVER_MODE || "stdio") || "stdio",
+    ORKESTR_CODEX_APP_SERVER_SOCKET: "",
+    ORKESTR_CODEX_SANDBOX: "workspace-write",
+    ORKESTR_CODEX_APPROVAL_POLICY: "never",
+    XDG_CONFIG_HOME: path.join(paths.home, ".config"),
+    XDG_CACHE_HOME: path.join(paths.home, ".cache"),
+    XDG_DATA_HOME: path.join(paths.home, ".local", "share"),
+  };
+}
+
+export function containedCodexRuntimeMetadata(thread = {}, env = process.env) {
+  if (!containedCodexRuntimeEnabled(thread, env)) return null;
+  const paths = containedCodexRuntimePaths(thread, env);
+  return {
+    containedCodexIsolated: true,
+    codexRuntimeHome: paths.home,
+    codexHome: paths.codexHome,
+  };
+}
+
+async function copyFileIfExists(source, target, mode = 0o600) {
+  if (!source || !target || path.resolve(source) === path.resolve(target)) return false;
+  try {
+    await fs.mkdir(path.dirname(target), { recursive: true, mode: 0o700 });
+    await fs.copyFile(source, target);
+    await fs.chmod(target, mode).catch(() => {});
+    return true;
+  } catch (error) {
+    if (error?.code === "ENOENT") return false;
+    throw error;
+  }
+}
+
+export async function ensureContainedCodexRuntimeHome(thread = {}, env = process.env) {
+  if (!containedCodexRuntimeEnabled(thread, env)) return { isolated: false };
+  const paths = containedCodexRuntimePaths(thread, env);
+  await fs.mkdir(paths.home, { recursive: true, mode: 0o700 });
+  await fs.mkdir(paths.codexHome, { recursive: true, mode: 0o700 });
+  if (!falsey(env.ORKESTR_CONTAINED_CODEX_COPY_AUTH)) {
+    const sourceCodexHome = defaultCodexHome(env, runtimeHome(env));
+    await copyFileIfExists(path.join(sourceCodexHome, "auth.json"), path.join(paths.codexHome, "auth.json"), 0o600);
+  }
+  return { isolated: true, ...paths };
+}
+
+export function containedCodexRuntimeIsCurrent(thread = {}, env = process.env) {
+  if (!containedCodexRuntimeEnabled(thread, env)) return true;
+  const metadata = thread.executor?.metadata || {};
+  const paths = containedCodexRuntimePaths(thread, env);
+  return metadata.containedCodexIsolated === true &&
+    clean(metadata.codexRuntimeHome) === paths.home &&
+    clean(metadata.codexHome) === paths.codexHome;
 }
 
 export function clientKey(env = process.env, home = os.homedir()) {
@@ -118,8 +205,8 @@ export function threadUsesRestrictedCodexPolicy(thread = {}, env = process.env) 
 }
 
 export function codexSandboxForThread(thread = {}, env = process.env) {
+  if (threadUsesRestrictedCodexPolicy(thread, env)) return "workspace-write";
   const requested = clean(thread.codexSandbox || thread.executor?.metadata?.codexSandbox || env.ORKESTR_CODEX_SANDBOX || "workspace-write") || "workspace-write";
-  if (threadUsesRestrictedCodexPolicy(thread, env) && requested === "danger-full-access") return "workspace-write";
   return requested;
 }
 
@@ -142,18 +229,19 @@ export function sandboxPolicyForTurn(thread, env = process.env) {
   const sandbox = codexSandboxForThread(thread, env);
   if (sandbox === "danger-full-access") return { type: "dangerFullAccess" };
   if (sandbox === "read-only" || sandbox === "readOnly") return { type: "readOnly", networkAccess: false };
+  const restricted = threadUsesRestrictedCodexPolicy(thread, env);
   return {
     type: "workspaceWrite",
     writableRoots: workspace ? [workspace] : [],
-    networkAccess: true,
+    networkAccess: !restricted,
     excludeTmpdirEnvVar: false,
     excludeSlashTmp: false,
   };
 }
 
 export function approvalPolicyForThread(thread, env = process.env) {
+  if (threadUsesRestrictedCodexPolicy(thread, env)) return "never";
   const requested = clean(thread.codexApprovalPolicy || thread.executor?.metadata?.codexApprovalPolicy || env.ORKESTR_CODEX_APPROVAL_POLICY || "on-request") || "on-request";
-  if (threadUsesRestrictedCodexPolicy(thread, env) && requested === "never") return "on-request";
   return requested;
 }
 
@@ -176,7 +264,8 @@ export function normalizeReasoningEffort(value) {
   return codexReasoningEfforts.has(effort) ? effort : "";
 }
 
-export function modelForThread(thread) {
+export function modelForThread(thread, env = process.env) {
+  if (threadUsesRestrictedCodexPolicy(thread, env)) return containedUserCodexModel();
   return [
     thread.codexModel,
     thread.executor?.metadata?.codexModel,
@@ -185,7 +274,8 @@ export function modelForThread(thread) {
   ].map(normalizeCodexModel).find(Boolean) || "";
 }
 
-export function effortForThread(thread) {
+export function effortForThread(thread, env = process.env) {
+  if (threadUsesRestrictedCodexPolicy(thread, env)) return containedUserCodexReasoningEffort();
   return [
     thread.codexReasoningEffort,
     thread.executor?.metadata?.codexReasoningEffort,
@@ -226,7 +316,7 @@ export function threadStartParams(thread, env = process.env) {
   };
   const developerInstructions = containedUserDeveloperInstructions(thread, env);
   if (developerInstructions) params.developerInstructions = developerInstructions;
-  const model = modelForThread(thread);
+  const model = modelForThread(thread, env);
   if (model) params.model = model;
   return params;
 }
@@ -239,8 +329,8 @@ export function turnStartParams(thread, message, env = process.env) {
     approvalPolicy: approvalPolicyForThread(thread, env) || "on-request",
     sandboxPolicy: sandboxPolicyForTurn(thread, env),
   };
-  const model = modelForThread(thread);
-  const effort = effortForThread(thread);
+  const model = modelForThread(thread, env);
+  const effort = effortForThread(thread, env);
   if (model) params.model = model;
   if (effort) params.effort = effort;
   return params;

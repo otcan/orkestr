@@ -6,6 +6,7 @@ import { enqueueAgentMessage, updateAgentMessage } from "../../core/src/messages
 import { resourceOwnerUserId } from "../../core/src/policy.js";
 import { adminPrincipal, userPrincipal } from "../../core/src/principal.js";
 import { runtimeStatus } from "../../core/src/runtime-leases.js";
+import { threadRequiresTenantIsolation } from "../../core/src/tenant-policy.js";
 import { parseThreadInputCommand } from "../../core/src/thread-commands.js";
 import { createThreadForPrincipal, enqueueThreadInputForPrincipal, listThreadMessages, listThreads, listThreadsForPrincipal, updateThread, updateThreadMessage } from "../../core/src/threads.js";
 import { adminUserId, findOrCreateExternalUser, normalizeUserId } from "../../core/src/users.js";
@@ -814,8 +815,9 @@ function cpuDebugPercent() {
   return Math.max(0, Math.min(999, percent));
 }
 
-function shouldAppendWhatsAppDebugFooter(message = {}, env = process.env, deliveryType = "") {
+function shouldAppendWhatsAppDebugFooter(message = {}, env = process.env, deliveryType = "", thread = null) {
   if (!footerEnabled(env)) return false;
+  if (thread && threadRequiresTenantIsolation(thread, env)) return false;
   if (codexAssistantSource(message) || message.source === "orkestr_runtime") return true;
   return ["delivery_error", "mode_queued", "queue_notice", "router_update"].includes(String(deliveryType || "").trim());
 }
@@ -842,7 +844,7 @@ function whatsappDebugFooter({ message = {}, thread = {}, messages = [], deliver
 
 function appendWhatsAppDebugFooter(text, options = {}) {
   const cleanText = String(text || "").trim();
-  if (!cleanText || !shouldAppendWhatsAppDebugFooter(options.message, options.env, options.deliveryType)) return cleanText;
+  if (!cleanText || !shouldAppendWhatsAppDebugFooter(options.message, options.env, options.deliveryType, options.thread)) return cleanText;
   return `${cleanText}\n\n${whatsappDebugFooter(options)}`;
 }
 
@@ -1288,6 +1290,8 @@ function queuedInputWhatsAppDeliveryTarget(message, thread, state) {
   const deliveryState = String(message?.deliveryState || "").trim().toLowerCase();
   if (role !== "user") return null;
   if (!["queued", "pending_delivery"].includes(messageState)) return null;
+  const runtimeKind = String(thread?.runtimeKind || thread?.runtime?.runtimeKind || thread?.executor?.metadata?.runtimeKind || "").trim().toLowerCase();
+  if (runtimeKind === "codex-app-server" && deliveryState === "awaiting_active_turn") return null;
   if (![
     "awaiting_runtime_completion",
     "awaiting_active_turn",

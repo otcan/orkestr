@@ -1564,6 +1564,47 @@ test("whatsapp debug footer can be disabled", async () => {
   assert.equal(calls[0].body.text, "I’ll check it.");
 });
 
+test("whatsapp delivery suppresses debug footer for contained user threads", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-debug-footer-contained-"));
+  const env = await externalBridgeEnvWithAllowingSanitizer(home);
+  await createThread({
+    id: "thread-wa-debug-footer-contained",
+    name: "WA Debug Footer Contained Thread",
+    ownerUserId: "otcan",
+    securityProfile: "private-user",
+    runtimeKind: "codex-app-server",
+    codexModel: "gpt-5.5",
+    codexReasoningEffort: "xhigh",
+  }, env);
+  await writeConnectorConfig("whatsapp", {
+    bridgeMode: "external",
+    bridgeUrl: "http://wa.local",
+    threadRoutes: { "chat-debug-footer-contained": "thread-wa-debug-footer-contained" },
+  }, env);
+
+  const routed = await routeWhatsAppInbound({ eventId: "wa-debug-footer-contained-1", chatId: "chat-debug-footer-contained", text: "status?" }, env);
+  await appendThreadMessage("thread-wa-debug-footer-contained", {
+    role: "assistant",
+    source: "codex-app-server",
+    phase: "commentary",
+    state: "completed",
+    text: "Contained progress update.",
+    parentMessageId: routed.message.id,
+    connector: "whatsapp",
+    chatId: "chat-debug-footer-contained",
+  }, env);
+
+  const calls = [];
+  const delivery = await deliverWhatsAppReplies(env, async (url, options) => {
+    calls.push({ url, body: JSON.parse(options.body) });
+    return response({ ok: true, ids: ["sent-debug-footer-contained"] });
+  });
+
+  assert.equal(delivery.delivered.length, 1);
+  assert.equal(calls[0].body.text, "Contained progress update.");
+  assert.doesNotMatch(calls[0].body.text, /dbg:/);
+});
+
 test("whatsapp debug footer ignores stale stored plan mode when live mode is code", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-debug-footer-stale-mode-"));
   const env = externalBridgeEnv(home);
@@ -2272,6 +2313,37 @@ test("whatsapp queue notices do not treat app-server threads as missing tmux ses
     sessionName: null,
     promptReady: true,
   }, { text: "wake tmux" }), "waiting_runtime_start");
+});
+
+test("whatsapp delivery suppresses app-server active-turn queue notices", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-app-server-active-queue-silent-"));
+  const env = externalBridgeEnv(home);
+  await createThread({
+    id: "thread-wa-app-server-active-queue-silent",
+    name: "WA App Server Active Queue Silent Thread",
+    runtimeKind: "codex-app-server",
+  }, env);
+  await writeConnectorConfig("whatsapp", {
+    bridgeMode: "external",
+    bridgeUrl: "http://wa.local",
+    threadRoutes: { "chat-app-server-active-queue-silent": "thread-wa-app-server-active-queue-silent" },
+  }, env);
+  const routed = await routeWhatsAppInbound({
+    eventId: "wa-app-server-active-queue-silent-1",
+    chatId: "chat-app-server-active-queue-silent",
+    text: "queue behind app server turn",
+  }, env);
+  await updateThreadMessage("thread-wa-app-server-active-queue-silent", routed.message.id, {
+    state: "queued",
+    deliveryState: "awaiting_active_turn",
+  }, env);
+
+  const delivery = await deliverWhatsAppReplies(env, async () => {
+    throw new Error("app-server active-turn queue notice should not be sent");
+  });
+
+  assert.equal(delivery.delivered.length, 0);
+  assert.equal(delivery.skipped.some((item) => item.messageId === routed.message.id), false);
 });
 
 test("whatsapp delivery forwards failed routed inputs using inbound event metadata", async () => {
