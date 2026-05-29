@@ -5,7 +5,7 @@ import path from "node:path";
 import test from "node:test";
 import { pathToFileURL } from "node:url";
 import { startServer } from "../apps/server/src/server.js";
-import { createTimerForPrincipal, listTimersForPrincipal } from "../packages/core/src/timers.js";
+import { createTimer, createTimerForPrincipal, doctorTimersForPrincipal, listTimersForPrincipal } from "../packages/core/src/timers.js";
 import { adminPrincipal, userPrincipal } from "../packages/core/src/principal.js";
 import { sanitizeAction } from "../packages/core/src/llm-sanitizer.js";
 import { approvePairingChallenge } from "../packages/core/src/security.js";
@@ -322,6 +322,35 @@ test("non-admin timer creation is scoped and sanitizer-gated", async () => {
   assert.deepEqual((await listTimersForPrincipal(alice, env)).map((entry) => entry.id), [timer.id]);
 });
 
+test("non-admin timer doctor only reports owned timers", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-use-control-timer-doctor-"));
+  const env = { ORKESTR_HOME: home };
+  const alice = userPrincipal(await upsertUser({ id: "alice", role: "user" }, env));
+  await upsertUser({ id: "bob", role: "user" }, env);
+  await createThread({ id: "alice-thread", name: "Alice", ownerUserId: "alice" }, env);
+  await createThread({ id: "bob-thread", name: "Bob", ownerUserId: "bob" }, env);
+  await createTimer({
+    label: "Alice missing thread",
+    ownerUserId: "alice",
+    targetType: "thread",
+    target: "alice-missing",
+    prompt: "Alice work.",
+  }, env);
+  await createTimer({
+    label: "Bob missing thread",
+    ownerUserId: "bob",
+    targetType: "thread",
+    target: "bob-missing",
+    prompt: "Bob work.",
+  }, env);
+
+  const aliceDoctor = await doctorTimersForPrincipal(alice, env, new Date("2026-05-15T10:00:00.000Z"));
+  const adminDoctor = await doctorTimersForPrincipal(adminPrincipal(), env, new Date("2026-05-15T10:00:00.000Z"));
+
+  assert.deepEqual(aliceDoctor.issues.map((issue) => issue.timerLabel), ["Alice missing thread"]);
+  assert.deepEqual(adminDoctor.issues.map((issue) => issue.timerLabel).sort(), ["Alice missing thread", "Bob missing thread"]);
+});
+
 test("sanitizer command JSON form accepts paths with spaces", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr sanitizer spaced "));
   const env = await allowSanitizerEnv(home);
@@ -417,6 +446,13 @@ test("user management API is admin-only and can pair a browser to a managed user
 
     const denied = await fetch(`${baseUrl}/api/users`, { headers: { cookie: userCookie } });
     assert.equal(denied.status, 403);
+
+    const deniedConnectorResponse = await fetch(`${baseUrl}/api/connectors/whatsapp/status`, {
+      headers: { cookie: userCookie, connection: "close" },
+    });
+    const deniedConnector = await read(deniedConnectorResponse);
+    assert.equal(deniedConnectorResponse.status, 403);
+    assert.equal(deniedConnector.error, "connector_admin_required");
 
     const where = await read(await fetch(`${baseUrl}/api/whereiam`, { headers: { cookie: userCookie } }));
     assert.equal(where.user.userId, "alice-example.test");

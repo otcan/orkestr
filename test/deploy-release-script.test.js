@@ -34,6 +34,9 @@ test("release deploy script exposes versioned install, status, and rollback", as
   assert.match(script, /npm --prefix "\$release_dir" run smoke/);
   assert.match(script, /backup_state/);
   assert.match(script, /ORKESTR_DEPLOY_BACKUP_STATE/);
+  assert.match(script, /ORKESTR_DEPLOY_BACKUP_EXCLUDES/);
+  assert.match(script, /backup_excludes="\$\{ORKESTR_DEPLOY_BACKUP_EXCLUDES:-run tmp whatsapp-bridge\/sessions\}"/);
+  assert.match(script, /--exclude="\$data_base\/\$exclude"/);
   assert.match(script, /ORKESTR_DEPLOY_SYNC_WORKERS/);
   assert.match(script, /sync_safe_workers_after_deploy/);
   assert.match(script, /syncSafeThreadWorkersWithParents/);

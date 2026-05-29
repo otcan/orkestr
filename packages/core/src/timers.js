@@ -4,7 +4,7 @@ import { dataPaths, ensureDataDirs } from "../../storage/src/paths.js";
 import { appendEvent, readJson, writeJson } from "../../storage/src/store.js";
 import { assertSanitizedAction } from "./llm-sanitizer.js";
 import { enqueueAgentMessage } from "./messages.js";
-import { enqueueThreadInput, getThreadForPrincipal, listThreads } from "./threads.js";
+import { enqueueThreadInput, getThreadForPrincipal, listThreads, listThreadsForPrincipal } from "./threads.js";
 import { assertResourceAccess, filterResourcesForPrincipal, isAdminPrincipal } from "./policy.js";
 import { adminUserId, normalizeUserId } from "./users.js";
 
@@ -141,7 +141,7 @@ function timerStatusFromIssues(issues) {
   return "ok";
 }
 
-export async function doctorTimers(env = process.env, now = new Date()) {
+export async function doctorTimers(env = process.env, now = new Date(), options = {}) {
   const paths = await ensureDataDirs(env);
   const issues = [];
   let storeExists = true;
@@ -159,16 +159,22 @@ export async function doctorTimers(env = process.env, now = new Date()) {
   }
 
   let timers = [];
-  try {
-    timers = await listTimers(env);
-  } catch (error) {
-    issues.push(timerIssue(null, "error", "timer_store_invalid", "Timer store is not valid JSON.", {
-      path: paths.timers,
-      error: error?.message || String(error),
-    }));
+  if (Array.isArray(options.timers)) {
+    timers = options.timers.map((timer) => normalizeStoredTimer(timer, now, env));
+  } else {
+    try {
+      timers = await listTimers(env);
+    } catch (error) {
+      issues.push(timerIssue(null, "error", "timer_store_invalid", "Timer store is not valid JSON.", {
+        path: paths.timers,
+        error: error?.message || String(error),
+      }));
+    }
   }
 
-  const threads = await listThreads(env).catch(() => []);
+  const threads = Array.isArray(options.threads)
+    ? options.threads
+    : await listThreads(env).catch(() => []);
   const threadKeys = new Set(threads.flatMap((thread) => [thread.id, thread.name, thread.bindingName].filter(Boolean).map(String)));
   const nowMs = now.getTime();
 
@@ -246,6 +252,14 @@ export async function doctorTimers(env = process.env, now = new Date()) {
     counts,
     issues,
   };
+}
+
+export async function doctorTimersForPrincipal(principal, env = process.env, now = new Date()) {
+  if (isAdminPrincipal(principal)) return doctorTimers(env, now);
+  return doctorTimers(env, now, {
+    timers: await listTimersForPrincipal(principal, env),
+    threads: await listThreadsForPrincipal(principal, env),
+  });
 }
 
 export async function createTimer(input, env = process.env) {

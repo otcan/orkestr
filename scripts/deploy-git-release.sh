@@ -27,6 +27,7 @@ Environment:
   ORKESTR_DEPLOY_LOCK_FILE      Lock file. Defaults to /var/lock/orkestr-deploy.lock.
   ORKESTR_DEPLOY_RUN_SMOKE      Run npm smoke before activation. Defaults to 1.
   ORKESTR_DEPLOY_BACKUP_STATE   Back up ORKESTR_HOME before activation. Defaults to 1.
+  ORKESTR_DEPLOY_BACKUP_EXCLUDES Space-separated paths under ORKESTR_HOME to omit from backups. Defaults to live runtime/session dirs.
   ORKESTR_DEPLOY_SYNC_WORKERS   Fast-forward and push safe stale worker branches after deploy. Defaults to 1.
   ORKESTR_DEPLOY_HEALTH_URL     Health URL. Defaults to http://$ORKESTR_HOST:$ORKESTR_PORT/api/health.
   ORKESTR_DEPLOY_NO_INTERRUPT   Refuse to restart while thread work is active. Defaults to 1.
@@ -269,7 +270,7 @@ prepare_repo_cache() {
 }
 
 backup_state() {
-  local stamp target backup_name data_dir
+  local stamp target backup_name data_dir data_base data_parent exclude tar_args
   if [ "$run_backup" != "1" ]; then
     echo ""
     return 0
@@ -283,7 +284,17 @@ backup_state() {
   stamp="$(date -u +%Y%m%dT%H%M%SZ)"
   target="$(sanitize_id "$release_id")"
   backup_name="$backup_dir/${stamp}-${target}-state.tar.gz"
-  tar -C "$(dirname "$data_dir")" -czf "$backup_name" "$(basename "$data_dir")"
+  data_parent="$(dirname "$data_dir")"
+  data_base="$(basename "$data_dir")"
+  tar_args=(-C "$data_parent" -czf "$backup_name")
+  for exclude in $backup_excludes; do
+    [ -n "$exclude" ] || continue
+    case "$exclude" in
+      /*) tar_args+=(--exclude="$exclude") ;;
+      *) tar_args+=(--exclude="$data_base/$exclude") ;;
+    esac
+  done
+  tar "${tar_args[@]}" "$data_base"
   echo "$backup_name"
 }
 
@@ -877,6 +888,7 @@ port="${ORKESTR_PORT:-19812}"
 health_url="${ORKESTR_DEPLOY_HEALTH_URL:-http://$host:$port/api/health}"
 run_smoke="${run_smoke_arg:-${ORKESTR_DEPLOY_RUN_SMOKE:-1}}"
 run_backup="${backup_state_arg:-${ORKESTR_DEPLOY_BACKUP_STATE:-1}}"
+backup_excludes="${ORKESTR_DEPLOY_BACKUP_EXCLUDES:-run tmp whatsapp-bridge/sessions}"
 sync_workers="$(bool_value "${sync_workers_arg:-${ORKESTR_DEPLOY_SYNC_WORKERS:-1}}")"
 lock_file="${ORKESTR_DEPLOY_LOCK_FILE:-/var/lock/orkestr-deploy.lock}"
 no_interrupt="$(bool_value "${no_interrupt_arg:-${ORKESTR_DEPLOY_NO_INTERRUPT:-1}}")"

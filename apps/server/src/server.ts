@@ -29,6 +29,7 @@ import {
 import { ensureDataDirs } from "../../../packages/storage/src/paths.js";
 import { authorizeHttpRequest } from "../../../packages/core/src/security.js";
 import { getThreadForPrincipal, listThreads } from "../../../packages/core/src/threads.js";
+import { isAdminPrincipal } from "../../../packages/core/src/policy.js";
 import { AppModule } from "./app.module.js";
 import { JsonErrorFilter } from "./common/json-error.filter.js";
 import { attachDesktopProxyUpgrade, registerDesktopProxy } from "./desktop-proxy.js";
@@ -54,6 +55,13 @@ export async function createApp(): Promise<INestApplication> {
             .type("application/json")
             .send(JSON.stringify({ ok: false, error: resourceAuth.error || "forbidden" }));
         }
+        const connectorAuth = authorizeConnectorResourceRequest(request, result.principal);
+        if (!connectorAuth.ok) {
+          return response
+            .status(connectorAuth.statusCode || 403)
+            .type("application/json")
+            .send(JSON.stringify({ ok: false, error: connectorAuth.error || "forbidden" }));
+        }
         return next();
       }
       return response
@@ -74,6 +82,32 @@ export async function createApp(): Promise<INestApplication> {
   });
   app.useGlobalFilters(new JsonErrorFilter());
   return app;
+}
+
+function authorizeConnectorResourceRequest(request: any, principal: any) {
+  const route = connectorRouteFromApiRequest(request);
+  if (!route) return { ok: true };
+  if (isPublicConnectorRoute(route)) return { ok: true };
+  if (isAdminPrincipal(principal)) return { ok: true };
+  return { ok: false, statusCode: 403, error: "connector_admin_required" };
+}
+
+function connectorRouteFromApiRequest(request: any) {
+  const url = String(request?.originalUrl || request?.url || "").split("?")[0];
+  const parts = url.split("/").filter(Boolean);
+  if (parts[0] !== "api" || parts[1] !== "connectors") return null;
+  return {
+    method: String(request?.method || "GET").toUpperCase(),
+    connector: String(parts[2] || "").trim().toLowerCase(),
+    action: parts.slice(3).map((part) => String(part || "").trim().toLowerCase()),
+  };
+}
+
+function isPublicConnectorRoute(route: { method: string; connector: string; action: string[] }) {
+  return route.method === "POST" &&
+    route.connector === "whatsapp" &&
+    route.action.length === 1 &&
+    route.action[0] === "inbound";
 }
 
 async function authorizeThreadResourceRequest(request: any, principal: any) {
