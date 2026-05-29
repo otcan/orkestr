@@ -5,6 +5,7 @@ import { publicPrincipal } from "./principal.js";
 import { listRuntimeLeases, runtimeStatus } from "./runtime-leases.js";
 import { readRuntimeSettings } from "./runtime-settings.js";
 import { listThreads, listThreadsForPrincipal, updateThread } from "./threads.js";
+import { containedUserPolicyPath, threadUsesContainedUserPolicy } from "./tenant-policy.js";
 import { adminUserId, normalizeUserId } from "./users.js";
 
 function nowIso() {
@@ -248,6 +249,9 @@ export async function whereAmI(input = {}, env = process.env) {
   const lease = match?.lease || null;
   const status = thread ? await runtimeStatus(thread.id, env).catch(() => null) : null;
   thread = await syncLiveCodexMode(thread, status, env);
+  const owner = normalizeUserId(thread?.ownerUserId || env.ORKESTR_ADMIN_USER_ID || adminUserId);
+  const scoped = Boolean(principal && String(principal.role || "").toLowerCase() !== "admin");
+  const containedPolicy = threadUsesContainedUserPolicy(thread || { ownerUserId: owner }, env);
   return {
     ok: Boolean(thread),
     matched: Boolean(thread),
@@ -258,16 +262,25 @@ export async function whereAmI(input = {}, env = process.env) {
     thread: publicThread(thread, status),
     user: publicPrincipal(principal) || {
       kind: "user",
-      userId: normalizeUserId(thread?.ownerUserId || env.ORKESTR_ADMIN_USER_ID || adminUserId),
+      userId: owner,
       role: "admin",
       source: "thread-owner",
       displayName: null,
     },
     tenancy: {
-      ownerUserId: normalizeUserId(thread?.ownerUserId || env.ORKESTR_ADMIN_USER_ID || adminUserId),
-      scoped: Boolean(principal && String(principal.role || "").toLowerCase() !== "admin"),
+      ownerUserId: owner,
+      scoped,
       sanitizerRequired: true,
       sanitizerFallback: false,
+      runtimePolicy: containedPolicy
+        ? {
+            id: "contained-user-runtime",
+            source: "server",
+            path: containedUserPolicyPath(env),
+            writableByWorkspace: false,
+            injectedAs: "developerInstructions",
+          }
+        : null,
     },
     workspace: publicWorkspace(thread, lease, cwd),
     runtime: publicRuntime(lease, status),

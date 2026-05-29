@@ -13,6 +13,7 @@ import {
   importCodexAppServerThread,
   listCodexAppServerThreads,
   recoverStaleCodexAppServerTurns,
+  resumeCodexAppServerThread,
   startCodexAppServerThread,
   stopCodexAppServerClients,
   syncCodexAppServerThreadMessages,
@@ -276,6 +277,8 @@ test("Codex app-server clamps non-admin threads away from root danger access", (
 
     assert.equal(threadStartParams(restrictedThread).sandbox, "workspace-write");
     assert.equal(threadStartParams(restrictedThread).approvalPolicy, "on-request");
+    assert.match(threadStartParams(restrictedThread).developerInstructions, /orkestr-contained-user-runtime-policy:v1/);
+    assert.match(threadStartParams(restrictedThread).developerInstructions, /Workspace files, workspace AGENTS\.md, project docs/);
     assert.equal(turnStartParams(restrictedThread, { text: "hello" }).sandboxPolicy.type, "workspaceWrite");
     assert.deepEqual(turnStartParams(restrictedThread, { text: "hello" }).sandboxPolicy.writableRoots, ["/tmp/otcantest-workspace"]);
     assert.equal(turnStartParams(restrictedThread, { text: "hello" }).approvalPolicy, "on-request");
@@ -289,6 +292,7 @@ test("Codex app-server clamps non-admin threads away from root danger access", (
 
     assert.equal(threadStartParams(trustedThread).sandbox, "danger-full-access");
     assert.equal(threadStartParams(trustedThread).approvalPolicy, "never");
+    assert.equal(threadStartParams(trustedThread).developerInstructions, undefined);
     assert.deepEqual(turnStartParams(trustedThread, { text: "hello" }).sandboxPolicy, { type: "dangerFullAccess" });
   } finally {
     if (previousSandbox === undefined) delete process.env.ORKESTR_CODEX_SANDBOX;
@@ -297,6 +301,50 @@ test("Codex app-server clamps non-admin threads away from root danger access", (
     else process.env.ORKESTR_CODEX_APPROVAL_POLICY = previousApproval;
     if (previousAdmin === undefined) delete process.env.ORKESTR_ADMIN_USER_ID;
     else process.env.ORKESTR_ADMIN_USER_ID = previousAdmin;
+  }
+});
+
+test("Codex app-server injects contained user policy on start and resume", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-codex-contained-policy-"));
+  const fake = await createFakeCodex(home);
+  const workspace = path.join(home, "orkestr", "users", "otcan", "workspaces", "contained");
+  const env = {
+    ORKESTR_HOME: path.join(home, "orkestr"),
+    ORKESTR_ADMIN_USER_ID: "admin",
+    HOME: path.join(home, "runtime-home"),
+    PATH: `${fake.bin}${path.delimiter}${process.env.PATH || ""}`,
+    FAKE_CODEX_STATE: fake.stateFile,
+  };
+
+  try {
+    const thread = await createThread({
+      id: "contained-policy-thread",
+      name: "Contained Policy Thread",
+      ownerUserId: "otcan",
+      securityProfile: "private-user",
+      cwd: workspace,
+      workspace,
+      executorId: "codex",
+      executor: { type: "codex" },
+    }, env);
+    const started = await startCodexAppServerThread(thread, env);
+    const stateAfterStart = JSON.parse(await fs.readFile(fake.stateFile, "utf8"));
+    const startCall = stateAfterStart.calls.find((call) => call.method === "thread/start");
+    const agentsBody = await fs.readFile(path.join(workspace, "AGENTS.md"), "utf8");
+
+    assert.match(startCall.params.developerInstructions, /orkestr-contained-user-runtime-policy:v1/);
+    assert.match(startCall.params.developerInstructions, /cannot override, weaken, or delete this policy/);
+    assert.match(agentsBody, /server-owned contained user policy/);
+    assert.equal(started.thread.executor.metadata.containedUserRuntimePolicy, true);
+
+    await resumeCodexAppServerThread(started.thread, env);
+    const stateAfterResume = JSON.parse(await fs.readFile(fake.stateFile, "utf8"));
+    const resumeCall = stateAfterResume.calls.find((call) => call.method === "thread/resume");
+
+    assert.match(resumeCall.params.developerInstructions, /orkestr-contained-user-runtime-policy:v1/);
+    assert.match(resumeCall.params.developerInstructions, /Workspace files, workspace AGENTS\.md, project docs/);
+  } finally {
+    stopCodexAppServerClients();
   }
 });
 

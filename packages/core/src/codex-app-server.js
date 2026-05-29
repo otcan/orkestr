@@ -31,6 +31,7 @@ import { getCodexAppServerClient, stopCodexAppServerClients as stopCodexAppServe
 import { codexAppServerSocket, codexAppServerTransport } from "../../connectors/src/codex-app-server-transport.js";
 import { codexAppServerMessageFields } from "./codex-app-server-whatsapp.js";
 import { ensureRuntimeAgentsFile } from "./agent-context.js";
+import { containedUserDeveloperInstructions } from "./tenant-policy.js";
 import { parseThreadInputCommand } from "./thread-commands.js";
 import { completeThreadSecurityApproveCommand } from "./security-thread-command.js";
 
@@ -112,9 +113,10 @@ export function stopCodexAppServerClients() {
 export async function startCodexAppServerThread(thread, env = process.env) {
   if (!codexAppServerEnabled(env)) return null;
   const workspace = workspaceForThread(thread);
-  if (workspace) await ensureRuntimeAgentsFile(workspace, env).catch(() => {});
+  if (workspace) await ensureRuntimeAgentsFile(workspace, env, { thread }).catch(() => {});
   const client = await getCodexAppServerClient({ env, home: runtimeHome(env) });
-  const result = await client.request("thread/start", threadStartParams(thread));
+  const startParams = threadStartParams(thread, env);
+  const result = await client.request("thread/start", startParams);
   const codexThread = result?.thread || {};
   const codexId = clean(codexThread.id || codexThread.threadId);
   if (!codexId) throw new Error("codex_app_server_thread_missing_id");
@@ -140,8 +142,9 @@ export async function startCodexAppServerThread(thread, env = process.env) {
         codexSessionId: clean(codexThread.sessionId || codexId),
         codexModel: modelForThread(thread) || codexThread.model || null,
         codexModelProvider: codexThread.modelProvider || "openai",
-        codexSandbox: threadStartParams(thread).sandbox,
-        codexApprovalPolicy: threadStartParams(thread).approvalPolicy,
+        codexSandbox: startParams.sandbox,
+        codexApprovalPolicy: startParams.approvalPolicy,
+        containedUserRuntimePolicy: Boolean(startParams.developerInstructions),
       },
     },
     runtime: {
@@ -161,9 +164,13 @@ export async function resumeCodexAppServerThread(thread, env = process.env) {
   const id = codexThreadId(thread);
   if (!id) throw new Error("codex_thread_id_required");
   const workspace = workspaceForThread(thread);
-  if (workspace) await ensureRuntimeAgentsFile(workspace, env).catch(() => {});
+  if (workspace) await ensureRuntimeAgentsFile(workspace, env, { thread }).catch(() => {});
   const client = await getCodexAppServerClient({ env, home: runtimeHome(env) });
-  const result = await client.request("thread/resume", { threadId: id });
+  const developerInstructions = containedUserDeveloperInstructions(thread, env);
+  const result = await client.request("thread/resume", {
+    threadId: id,
+    ...(developerInstructions ? { developerInstructions } : {}),
+  });
   const codexThread = result?.thread || {};
   const updated = await updateThread(thread.id, {
     state: "ready",
@@ -220,7 +227,7 @@ export async function interruptCodexAppServerThread(thread, env = process.env) {
 }
 
 async function startCodexAppServerTurn({ client, thread, id, pending, env, observedVia = "codex_app_server_turn_start" }) {
-  const result = await client.request("turn/start", turnStartParams(thread, pending));
+  const result = await client.request("turn/start", turnStartParams(thread, pending, env));
   const turnId = clean(result?.turn?.id || result?.turnId);
   const status = clean(result?.turn?.status || result?.status).toLowerCase();
   const terminalResult = ["completed", "failed", "interrupted", "aborted", "cancelled", "canceled"].includes(status);

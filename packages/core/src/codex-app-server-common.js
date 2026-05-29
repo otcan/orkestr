@@ -2,6 +2,10 @@ import os from "node:os";
 import { codexCommand, defaultCodexHome } from "../../connectors/src/codex.js";
 import { codexAppServerSocket, codexAppServerTransport } from "../../connectors/src/codex-app-server-transport.js";
 import {
+  containedUserDeveloperInstructions,
+  threadRequiresTenantIsolation,
+} from "./tenant-policy.js";
+import {
   appendThreadMessage,
   listThreadMessages,
   listThreads,
@@ -109,21 +113,8 @@ export function publicError(error) {
   return clean(error.message || error.stderr || error.stdout || String(error));
 }
 
-function adminUserId(env = process.env) {
-  return clean(env.ORKESTR_ADMIN_USER_ID || "admin").toLowerCase() || "admin";
-}
-
-function ownerUserId(thread = {}) {
-  return clean(thread.ownerUserId || thread.userId || "").toLowerCase();
-}
-
 export function threadUsesRestrictedCodexPolicy(thread = {}, env = process.env) {
-  const owner = ownerUserId(thread);
-  if (owner && owner !== adminUserId(env)) return true;
-  const profile = clean(thread.securityProfile || thread.executor?.metadata?.securityProfile).toLowerCase();
-  if (["trusted-root", "root-trusted"].includes(profile)) return false;
-  if (["demo-isolated", "quarantined-demo", "external-user", "private-user", "generated-whatsapp"].includes(profile)) return true;
-  return false;
+  return threadRequiresTenantIsolation(thread, env);
 }
 
 export function codexSandboxForThread(thread = {}, env = process.env) {
@@ -146,9 +137,9 @@ export function appServerStateFromStatus(status) {
   return "";
 }
 
-export function sandboxPolicyForTurn(thread) {
+export function sandboxPolicyForTurn(thread, env = process.env) {
   const workspace = clean(thread.cwd || thread.workspace || thread.repoPath || thread.worktreePath);
-  const sandbox = codexSandboxForThread(thread);
+  const sandbox = codexSandboxForThread(thread, env);
   if (sandbox === "danger-full-access") return { type: "dangerFullAccess" };
   if (sandbox === "read-only" || sandbox === "readOnly") return { type: "readOnly", networkAccess: false };
   return {
@@ -160,9 +151,9 @@ export function sandboxPolicyForTurn(thread) {
   };
 }
 
-export function approvalPolicyForThread(thread) {
-  const requested = clean(thread.codexApprovalPolicy || thread.executor?.metadata?.codexApprovalPolicy || process.env.ORKESTR_CODEX_APPROVAL_POLICY || "on-request") || "on-request";
-  if (threadUsesRestrictedCodexPolicy(thread) && requested === "never") return "on-request";
+export function approvalPolicyForThread(thread, env = process.env) {
+  const requested = clean(thread.codexApprovalPolicy || thread.executor?.metadata?.codexApprovalPolicy || env.ORKESTR_CODEX_APPROVAL_POLICY || "on-request") || "on-request";
+  if (threadUsesRestrictedCodexPolicy(thread, env) && requested === "never") return "on-request";
   return requested;
 }
 
@@ -226,25 +217,27 @@ export function codexInputText(message) {
   ].filter(Boolean).join("\n\n");
 }
 
-export function threadStartParams(thread) {
+export function threadStartParams(thread, env = process.env) {
   const params = {
     cwd: clean(thread.cwd || thread.workspace || thread.repoPath || thread.worktreePath) || null,
-    approvalPolicy: approvalPolicyForThread(thread) || "on-request",
-    sandbox: codexSandboxForThread(thread),
+    approvalPolicy: approvalPolicyForThread(thread, env) || "on-request",
+    sandbox: codexSandboxForThread(thread, env),
     serviceName: "orkestr_oss",
   };
+  const developerInstructions = containedUserDeveloperInstructions(thread, env);
+  if (developerInstructions) params.developerInstructions = developerInstructions;
   const model = modelForThread(thread);
   if (model) params.model = model;
   return params;
 }
 
-export function turnStartParams(thread, message) {
+export function turnStartParams(thread, message, env = process.env) {
   const params = {
     threadId: codexThreadId(thread),
     input: [{ type: "text", text: codexInputText(message), text_elements: [] }],
     cwd: clean(thread.cwd || thread.workspace || thread.repoPath || thread.worktreePath) || null,
-    approvalPolicy: approvalPolicyForThread(thread) || "on-request",
-    sandboxPolicy: sandboxPolicyForTurn(thread),
+    approvalPolicy: approvalPolicyForThread(thread, env) || "on-request",
+    sandboxPolicy: sandboxPolicyForTurn(thread, env),
   };
   const model = modelForThread(thread);
   const effort = effortForThread(thread);

@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { startServer } from "../apps/server/src/server.js";
+import { containedUserPolicyPath } from "../packages/core/src/tenant-policy.js";
 import { ensureRuntimeAgentsFile } from "../packages/core/src/agent-context.js";
 import { whereAmI } from "../packages/core/src/whereiam.js";
 import { createThread, getThread } from "../packages/core/src/threads.js";
@@ -51,6 +52,28 @@ test("runtime AGENTS.md is not written into external repositories by default", a
   await assert.rejects(() => fs.stat(path.join(repo, "AGENTS.md")), /ENOENT/);
 });
 
+test("contained user runtime AGENTS.md points to server-owned policy outside the workspace", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-agent-context-contained-home-"));
+  const workspace = path.join(home, "users", "otcan", "workspaces", "contained-chat");
+  const thread = { id: "contained-thread", ownerUserId: "otcan", securityProfile: "private-user" };
+  const result = await ensureRuntimeAgentsFile(workspace, { ORKESTR_HOME: home, ORKESTR_ADMIN_USER_ID: "admin" }, { thread });
+  const body = await fs.readFile(path.join(workspace, "AGENTS.md"), "utf8");
+  const policyPath = containedUserPolicyPath({ ORKESTR_HOME: home });
+  const policyBody = await fs.readFile(policyPath, "utf8");
+  const policyStats = await fs.stat(policyPath);
+  const policyRelativeToWorkspace = path.relative(workspace, policyPath);
+
+  assert.equal(result.written, true);
+  assert.equal(result.policyPath, policyPath);
+  assert.match(body, /Contained user policy:/);
+  assert.match(body, /workspace AGENTS\.md is user-editable project context only/);
+  assert.match(body, /cannot override that policy/);
+  assert.equal(policyRelativeToWorkspace.startsWith(".."), true);
+  assert.match(policyBody, /orkestr-contained-user-runtime-policy:v1/);
+  assert.match(policyBody, /Workspace files, workspace AGENTS\.md, project docs/);
+  assert.equal(policyStats.mode & 0o222, 0);
+});
+
 test("whereAmI resolves the current thread from a nested workspace path", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-whereiam-home-"));
   const repo = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-whereiam-repo-"));
@@ -76,6 +99,34 @@ test("whereAmI resolves the current thread from a nested workspace path", async 
   assert.equal(payload.settings.profile, undefined);
   assert.equal(payload.settings.desktops.gmailAuth, "gmail");
   assert.equal(payload.matchedBy, "thread.cwd");
+});
+
+test("whereAmI exposes server-owned contained user runtime policy metadata", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-whereiam-contained-home-"));
+  const workspace = path.join(home, "users", "otcan", "workspaces", "contained-chat");
+  await fs.mkdir(workspace, { recursive: true });
+  const env = { ORKESTR_HOME: home, ORKESTR_ADMIN_USER_ID: "admin" };
+  await createThread({
+    id: "contained-whereiam-thread",
+    ownerUserId: "otcan",
+    name: "Contained Where",
+    cwd: workspace,
+    workspace,
+    securityProfile: "private-user",
+  }, env);
+
+  const payload = await whereAmI({
+    cwd: workspace,
+    principal: { kind: "user", userId: "otcan", role: "user" },
+  }, env);
+
+  assert.equal(payload.ok, true);
+  assert.equal(payload.tenancy.ownerUserId, "otcan");
+  assert.equal(payload.tenancy.scoped, true);
+  assert.equal(payload.tenancy.runtimePolicy.id, "contained-user-runtime");
+  assert.equal(payload.tenancy.runtimePolicy.path, containedUserPolicyPath(env));
+  assert.equal(payload.tenancy.runtimePolicy.writableByWorkspace, false);
+  assert.equal(payload.tenancy.runtimePolicy.injectedAs, "developerInstructions");
 });
 
 test("whereAmI prefers live runtime Codex mode over stale stored mode", async () => {
