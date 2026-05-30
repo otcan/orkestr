@@ -653,6 +653,7 @@ test("user management API is admin-only and can pair a browser to a managed user
     });
     const userCookie = userPair.headers.get("set-cookie") || "";
     assert.equal(userPair.status, 200);
+    await createThread({ id: "alice-existing", name: "Alice Existing", ownerUserId: "alice-example.test" }, process.env);
 
     const denied = await fetch(`${baseUrl}/api/users`, { headers: { cookie: userCookie } });
     assert.equal(denied.status, 403);
@@ -673,6 +674,31 @@ test("user management API is admin-only and can pair a browser to a managed user
     assert.equal(deniedDesktopResponse.status, 403);
     assert.equal(deniedDesktop.error, "llm_sanitizer_unconfigured");
 
+    const deniedThreadCreateResponse = await fetch(`${baseUrl}/api/threads`, {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie: userCookie },
+      body: JSON.stringify({ name: "Alice Workspace", executorId: "noop" }),
+    });
+    const deniedThreadCreate = await read(deniedThreadCreateResponse);
+    assert.equal(deniedThreadCreateResponse.status, 403);
+    assert.equal(deniedThreadCreate.error, "llm_sanitizer_unconfigured");
+
+    const deniedWakeResponse = await fetch(`${baseUrl}/api/threads/alice-existing/wake`, {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie: userCookie },
+      body: JSON.stringify({ reason: "test wake sanitizer" }),
+    });
+    const deniedWake = await read(deniedWakeResponse);
+    assert.equal(deniedWakeResponse.status, 403);
+    assert.equal(deniedWake.error, "llm_sanitizer_unconfigured");
+
+    const deniedWorkersResponse = await fetch(`${baseUrl}/api/threads/alice-existing/workers`, {
+      headers: { cookie: userCookie },
+    });
+    const deniedWorkers = await read(deniedWorkersResponse);
+    assert.equal(deniedWorkersResponse.status, 403);
+    assert.equal(deniedWorkers.error, "thread_workers_admin_required");
+
     const where = await read(await fetch(`${baseUrl}/api/whereiam`, { headers: { cookie: userCookie } }));
     assert.equal(where.user.userId, "alice-example.test");
     assert.equal(where.user.role, "user");
@@ -689,20 +715,12 @@ test("user management API is admin-only and can pair a browser to a managed user
     const files = await read(await fetch(`${baseUrl}/api/files?path=${encodeURIComponent(path.join(userPaths.files, "uploads"))}`, {
       headers: { cookie: userCookie },
     }));
-    const createdThread = await read(await fetch(`${baseUrl}/api/threads`, {
-      method: "POST",
-      headers: { "content-type": "application/json", cookie: userCookie },
-      body: JSON.stringify({ name: "Alice Workspace", executorId: "noop" }),
-    }));
 
     assert.deepEqual(workspaceFolders.roots.map((root) => root.path), [userPaths.workspaces]);
     assert.deepEqual(workspaceFolders.entries.map((entry) => entry.name), ["visible-project"]);
     assert.equal(forbiddenFolders.ok, false);
     assert.equal(forbiddenFolders.error, "workspace_path_forbidden");
     assert.deepEqual(files.entries.map((entry) => entry.name), ["readme.txt"]);
-    assert.equal(createdThread.thread.ownerUserId, "alice-example.test");
-    assert.ok(String(createdThread.thread.workspace || "").startsWith(userPaths.workspaces));
-    assert.ok(String(createdThread.thread.cwd || "").startsWith(userPaths.workspaces));
   } finally {
     await new Promise((resolve) => server.close(resolve));
     if (priorHome === undefined) delete process.env.ORKESTR_HOME;
