@@ -422,6 +422,66 @@
           </section>
 
           <section class="user-identities">
+            <h4>Mail accounts</h4>
+            <form class="user-create-form" (submit)="linkMailIdentity(user); $event.preventDefault()">
+              <label>
+                <span>Provider</span>
+                <select name="mail-identity-provider-{{ user.id }}" [(ngModel)]="mailIdentityProvider">
+                  <option value="gmail">Gmail</option>
+                  <option value="outlook">Outlook</option>
+                </select>
+              </label>
+              <label>
+                <span>Mailbox</span>
+                <input name="mail-identity-account-{{ user.id }}" type="email" [(ngModel)]="mailIdentityAccount" [placeholder]="user.email || 'person@example.com'" />
+              </label>
+              <label>
+                <span>Label</span>
+                <input name="mail-identity-name-{{ user.id }}" [(ngModel)]="mailIdentityDisplayName" placeholder="Work mailbox" />
+              </label>
+              <label class="checkbox-row">
+                <input name="mail-identity-migrate-{{ user.id }}" type="checkbox" [(ngModel)]="mailIdentityMigrate" />
+                <span>Migrate if already assigned</span>
+              </label>
+              <button type="submit" [disabled]="mailIdentityBusy || !mailIdentityAccount.trim()">
+                {{ mailIdentityBusy ? "Saving" : "Assign mailbox" }}
+              </button>
+              <button class="secondary" type="button" (click)="startUserMailOAuth(user)" [disabled]="mailOauthBusy || !(mailIdentityAccount.trim() || user.email)">
+                {{ mailOauthBusy ? "Starting" : "Start sign-in" }}
+              </button>
+            </form>
+
+            @if (mailOutlookDevice) {
+              <article class="compact-row mail-device-row">
+                <strong>Outlook device sign-in</strong>
+                <span>{{ mailOutlookDevice.state }}</span>
+                <p>{{ mailOutlookDevice.userCode || mailOutlookDevice.message || mailOutlookDevice.account }}</p>
+                <div class="settings-actions">
+                  <button class="secondary" type="button" (click)="openOutlookDevicePage(mailOutlookDevice)">Open Microsoft sign-in</button>
+                  <button type="button" (click)="pollUserOutlookOAuth()" [disabled]="mailOauthBusy || !mailOutlookDevice.pendingId">Check now</button>
+                </div>
+              </article>
+            }
+
+            <div class="compact-list">
+              @for (identity of selectedUserMailIdentities(user); track mailIdentitySummary(identity)) {
+                <article class="compact-row">
+                  <strong>{{ mailIdentityLabel(identity) }}</strong>
+                  <span>{{ mailProviderLabel(identity.provider) }}</span>
+                  <p>{{ mailIdentitySummary(identity) }}</p>
+                  <div class="settings-actions">
+                    <button class="secondary danger-soft" type="button" (click)="unlinkMailIdentity(user, identity)" [disabled]="mailIdentityBusy">
+                      Detach mailbox
+                    </button>
+                  </div>
+                </article>
+              } @empty {
+                <p class="empty">No Gmail or Outlook accounts assigned to this user.</p>
+              }
+            </div>
+          </section>
+
+          <section class="user-identities">
             <h4>Authentication policy</h4>
             <div class="compact-list">
               <article class="compact-row">

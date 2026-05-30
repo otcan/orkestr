@@ -1,4 +1,6 @@
 import { Body, Controller, Get, HttpCode, Param, Patch, Post, Req } from "@nestjs/common";
+import { startGmailOAuth as beginGmailOAuth } from "../../../../../packages/connectors/src/gmail.js";
+import { startOutlookDeviceOAuth } from "../../../../../packages/connectors/src/outlook.js";
 import { isAdminPrincipal, resourceOwnerUserId } from "../../../../../packages/core/src/policy.js";
 import { requestPrincipal } from "../../../../../packages/core/src/principal.js";
 import { listThreads } from "../../../../../packages/core/src/threads.js";
@@ -79,6 +81,23 @@ function whatsappIdentityBody(body: Record<string, unknown> = {}) {
     displayName: String(body.displayName || body.name || "").trim(),
     source: "manual",
   };
+}
+
+function mailIdentityBody(provider: "gmail" | "outlook", body: Record<string, unknown> = {}) {
+  const account = String(body.account || body.email || body.externalId || body.accountId || "").trim().toLowerCase();
+  return {
+    provider,
+    accountId: account,
+    externalId: account,
+    displayName: String(body.displayName || body.name || account).trim(),
+    source: "manual",
+  };
+}
+
+function identityProvider(provider: string): "gmail" | "outlook" {
+  const normalized = String(provider || "").trim().toLowerCase();
+  if (normalized === "gmail" || normalized === "outlook") return normalized;
+  throw httpError("unsupported_mail_identity_provider", 400);
 }
 
 function requestedUserId(value: string, request: any) {
@@ -187,6 +206,69 @@ export class UsersController {
       actorUserId: principal.userId || "admin",
     });
     return { ok: true, userId: requested, identities };
+  }
+
+  @Post(":userId/identities/:provider")
+  @HttpCode(200)
+  async linkMailIdentity(@Req() request: any, @Param("userId") userId: string, @Param("provider") provider: string, @Body() body: Record<string, unknown> = {}) {
+    assertAdminRequest(request);
+    const principal = requestPrincipal(request);
+    const requested = requestedUserId(userId, request);
+    const normalizedProvider = identityProvider(provider);
+    const identities = await linkUserPrivateIdentity(requested, mailIdentityBody(normalizedProvider, body), {
+      actorUserId: principal.userId || "admin",
+      migrate: body.migrate === true,
+    });
+    return { ok: true, userId: requested, identities };
+  }
+
+  @Post(":userId/identities/:provider/unlink")
+  @HttpCode(200)
+  async unlinkMailIdentity(@Req() request: any, @Param("userId") userId: string, @Param("provider") provider: string, @Body() body: Record<string, unknown> = {}) {
+    assertAdminRequest(request);
+    const principal = requestPrincipal(request);
+    const requested = requestedUserId(userId, request);
+    const normalizedProvider = identityProvider(provider);
+    const identities = await unlinkUserPrivateIdentity(requested, mailIdentityBody(normalizedProvider, body), {
+      actorUserId: principal.userId || "admin",
+    });
+    return { ok: true, userId: requested, identities };
+  }
+
+  @Post(":userId/connectors/gmail/oauth/start")
+  @HttpCode(200)
+  async startUserGmailOAuth(@Req() request: any, @Param("userId") userId: string, @Body() body: Record<string, unknown> = {}) {
+    assertAdminRequest(request);
+    const principal = requestPrincipal(request);
+    const requested = requestedUserId(userId, request);
+    const account = String(body.account || body.email || "").trim().toLowerCase();
+    let identities = await readUserPrivateIdentities(requested);
+    if (account) {
+      identities = await linkUserPrivateIdentity(requested, mailIdentityBody("gmail", { ...body, account }), {
+        actorUserId: principal.userId || "admin",
+        migrate: body.migrate === true,
+      });
+    }
+    const oauth = await beginGmailOAuth(process.env, { userId: requested, account });
+    return { ok: true, userId: requested, identities, ...oauth };
+  }
+
+  @Post(":userId/connectors/outlook/oauth/start")
+  @HttpCode(200)
+  async startUserOutlookOAuth(@Req() request: any, @Param("userId") userId: string, @Body() body: Record<string, unknown> = {}) {
+    assertAdminRequest(request);
+    const principal = requestPrincipal(request);
+    const requested = requestedUserId(userId, request);
+    const account = String(body.account || body.email || "").trim().toLowerCase();
+    let identities = await readUserPrivateIdentities(requested);
+    if (account) {
+      identities = await linkUserPrivateIdentity(requested, mailIdentityBody("outlook", { ...body, account }), {
+        actorUserId: principal.userId || "admin",
+        migrate: body.migrate === true,
+      });
+    }
+    const oauth = await startOutlookDeviceOAuth(process.env, { userId: requested, account });
+    return { ...oauth, ok: oauth.ok !== false, userId: requested, identities };
   }
 
   @Patch(":userId/skills/:skillId")

@@ -2,9 +2,10 @@ import { DatePipe } from "@angular/common";
 import { ChangeDetectorRef, Component, EventEmitter, Input, OnDestroy, OnInit, Output, inject } from "@angular/core";
 import { FormsModule } from "@angular/forms";
 import { firstValueFrom } from "rxjs";
-import { Agent, AgentTemplate, ApiService, BrowserSession, ConnectorStatus, EventRecord, OrkestrUser, SecurityChallenge, SecuritySession, SetupStatus, TimerDoctorResponse, TimerRecord, UserIdentity, VersionResponse } from "./api.service";
+import { Agent, AgentTemplate, ApiService, BrowserSession, ConnectorStatus, EventRecord, OrkestrUser, OutlookOAuthPollResponse, SecurityChallenge, SecuritySession, SetupStatus, TimerDoctorResponse, TimerRecord, UserIdentity, UserOutlookOAuthStartResponse, VersionResponse } from "./api.service";
 
 export type ToolsView = "system" | "timers" | "desktops" | "models" | "settings" | "connectors" | "users";
+type MailIdentityProvider = "gmail" | "outlook";
 
 @Component({
   selector: "ork-ops-page",
@@ -63,6 +64,13 @@ export class OpsPageComponent implements OnInit, OnDestroy {
   identityDraftChatId = "";
   identityDraftDisplayName = "";
   identityDraftMigrate = false;
+  mailIdentityBusy = false;
+  mailOauthBusy = false;
+  mailIdentityProvider: MailIdentityProvider = "gmail";
+  mailIdentityAccount = "";
+  mailIdentityDisplayName = "";
+  mailIdentityMigrate = false;
+  mailOutlookDevice: UserOutlookOAuthStartResponse | OutlookOAuthPollResponse | null = null;
   userEditDraft: Record<string, { displayName: string; email: string; phoneNumber: string; role: string; status: string; maxThreads: string }> = {};
 
   ngOnInit(): void {
@@ -340,6 +348,109 @@ export class OpsPageComponent implements OnInit, OnDestroy {
     }
   }
 
+  async linkMailIdentity(user: OrkestrUser): Promise<void> {
+    if (this.mailIdentityBusy) return;
+    this.mailIdentityBusy = true;
+    try {
+      const result = await firstValueFrom(this.api.linkMailIdentity(user.id, this.mailIdentityProvider, {
+        account: this.mailIdentityAccount.trim(),
+        displayName: this.mailIdentityDisplayName.trim(),
+        migrate: this.mailIdentityMigrate,
+      }));
+      this.opsUserIdentities = result.identities || [];
+      this.opsUserIdentitiesUserId = user.id;
+      this.mailIdentityAccount = "";
+      this.mailIdentityDisplayName = "";
+      this.mailIdentityMigrate = false;
+      this.error = "";
+      this.notice = "Mail account assigned.";
+    } catch (error) {
+      this.error = this.errorText(error);
+    } finally {
+      this.mailIdentityBusy = false;
+      this.renderNow();
+    }
+  }
+
+  async unlinkMailIdentity(user: OrkestrUser, identity: UserIdentity): Promise<void> {
+    if (this.mailIdentityBusy) return;
+    this.mailIdentityBusy = true;
+    try {
+      const result = await firstValueFrom(this.api.unlinkMailIdentity(user.id, identity.provider, {
+        account: identity.externalId || identity.accountId || "",
+      }));
+      this.opsUserIdentities = result.identities || [];
+      this.opsUserIdentitiesUserId = user.id;
+      this.error = "";
+      this.notice = "Mail account detached.";
+    } catch (error) {
+      this.error = this.errorText(error);
+    } finally {
+      this.mailIdentityBusy = false;
+      this.renderNow();
+    }
+  }
+
+  async startUserMailOAuth(user: OrkestrUser): Promise<void> {
+    if (this.mailOauthBusy) return;
+    this.mailOauthBusy = true;
+    const body = {
+      account: this.mailIdentityAccount.trim() || user.email || "",
+      displayName: this.mailIdentityDisplayName.trim(),
+      migrate: this.mailIdentityMigrate,
+    };
+    try {
+      if (this.mailIdentityProvider === "gmail") {
+        const result = await firstValueFrom(this.api.startUserGmailOAuth(user.id, body));
+        if (result.identities) {
+          this.opsUserIdentities = result.identities;
+          this.opsUserIdentitiesUserId = user.id;
+        }
+        if (result.authorizeUrl) window.open(result.authorizeUrl, "_blank", "noopener,noreferrer");
+        this.error = "";
+        this.notice = "Gmail sign-in started.";
+      } else {
+        const result = await firstValueFrom(this.api.startUserOutlookOAuth(user.id, body));
+        this.mailOutlookDevice = result;
+        if (result.identities) {
+          this.opsUserIdentities = result.identities;
+          this.opsUserIdentitiesUserId = user.id;
+        }
+        this.openOutlookDevicePage(result);
+        this.error = "";
+        this.notice = "Outlook sign-in started.";
+      }
+    } catch (error) {
+      this.error = this.errorText(error);
+    } finally {
+      this.mailOauthBusy = false;
+      this.renderNow();
+    }
+  }
+
+  async pollUserOutlookOAuth(): Promise<void> {
+    const pendingId = String(this.mailOutlookDevice?.pendingId || "").trim();
+    if (!pendingId || this.mailOauthBusy) return;
+    this.mailOauthBusy = true;
+    try {
+      const result = await firstValueFrom(this.api.pollOutlookOAuth(pendingId));
+      this.mailOutlookDevice = result;
+      this.error = "";
+      this.notice = result.state === "connected" ? "Outlook sign-in connected." : result.message || "Waiting for Outlook sign-in.";
+    } catch (error) {
+      this.error = this.errorText(error);
+    } finally {
+      this.mailOauthBusy = false;
+      this.renderNow();
+    }
+  }
+
+  openOutlookDevicePage(device: UserOutlookOAuthStartResponse | OutlookOAuthPollResponse | null = this.mailOutlookDevice): void {
+    const url = String(device?.verificationUriComplete || device?.verificationUri || "").trim();
+    if (!url) return;
+    window.open(url, "_blank", "noopener,noreferrer");
+  }
+
   async browserAction(browser: BrowserSession, action: "prepare" | "start" | "stop" | "restart" | "cleanup"): Promise<void> {
     const slug = this.browserSlug(browser);
     if (!slug) return;
@@ -581,6 +692,27 @@ export class OpsPageComponent implements OnInit, OnDestroy {
   selectedUserWhatsAppIdentities(user: OrkestrUser): UserIdentity[] {
     if (this.opsUserIdentitiesUserId !== user.id) return [];
     return this.opsUserIdentities.filter((identity) => identity.provider === "whatsapp");
+  }
+
+  selectedUserMailIdentities(user: OrkestrUser): UserIdentity[] {
+    if (this.opsUserIdentitiesUserId !== user.id) return [];
+    return this.opsUserIdentities.filter((identity) => identity.provider === "gmail" || identity.provider === "outlook");
+  }
+
+  mailProviderLabel(provider: string): string {
+    return provider === "outlook" ? "Outlook" : "Gmail";
+  }
+
+  mailIdentityLabel(identity: UserIdentity): string {
+    return String(identity.displayName || identity.externalId || identity.accountId || `${this.mailProviderLabel(identity.provider)} account`).trim();
+  }
+
+  mailIdentitySummary(identity: UserIdentity): string {
+    return [
+      this.mailProviderLabel(identity.provider),
+      identity.externalId || identity.accountId || "",
+      identity.source === "auto" ? "auto-provisioned" : "manual",
+    ].filter(Boolean).join(" · ");
   }
 
   whatsappAccountOptions(): Array<{ id: string; label: string }> {

@@ -7,6 +7,7 @@ import { pathToFileURL } from "node:url";
 import WebSocket from "ws";
 import { startServer } from "../apps/server/src/server.js";
 import { userDataPaths } from "../packages/storage/src/paths.js";
+import { writeConnectorConfig } from "../packages/storage/src/config.js";
 import { appendEvent } from "../packages/storage/src/store.js";
 import { listEventsForPrincipal } from "../packages/core/src/audit-events.js";
 import {
@@ -859,6 +860,61 @@ test("user management API is admin-only and can pair a browser to a managed user
       body: JSON.stringify({ accountId: "main", externalId: "491234567890@c.us" }),
     }));
     assert.deepEqual(unlinkedWhatsApp.identities, []);
+
+    const linkedChatOnlyWhatsApp = await read(await fetch(`${baseUrl}/api/users/alice-example.test/identities/whatsapp`, {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie: adminCookie },
+      body: JSON.stringify({ accountId: "main", chatId: "chat-only@g.us", displayName: "Alice Group" }),
+    }));
+    assert.equal(linkedChatOnlyWhatsApp.identities[0].chatId, "chat-only@g.us");
+
+    const linkedGmail = await read(await fetch(`${baseUrl}/api/users/alice-example.test/identities/gmail`, {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie: adminCookie },
+      body: JSON.stringify({ account: "Alice@Example.Test", displayName: "Alice Gmail" }),
+    }));
+    const gmailIdentity = linkedGmail.identities.find((identity) => identity.provider === "gmail");
+    assert.equal(gmailIdentity.externalId, "alice@example.test");
+    assert.equal(gmailIdentity.source, "manual");
+
+    const duplicateGmailResponse = await fetch(`${baseUrl}/api/users/bob-example.test/identities/gmail`, {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie: adminCookie },
+      body: JSON.stringify({ account: "alice@example.test" }),
+    });
+    const duplicateGmail = await read(duplicateGmailResponse);
+    assert.equal(duplicateGmailResponse.status, 409);
+    assert.equal(duplicateGmail.error, "gmail_identity_already_assigned");
+
+    const linkedOutlook = await read(await fetch(`${baseUrl}/api/users/alice-example.test/identities/outlook`, {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie: adminCookie },
+      body: JSON.stringify({ account: "alice@outlook.example", displayName: "Alice Outlook" }),
+    }));
+    assert.ok(linkedOutlook.identities.some((identity) => identity.provider === "outlook" && identity.externalId === "alice@outlook.example"));
+
+    const unlinkedOutlook = await read(await fetch(`${baseUrl}/api/users/alice-example.test/identities/outlook/unlink`, {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie: adminCookie },
+      body: JSON.stringify({ account: "alice@outlook.example" }),
+    }));
+    assert.equal(unlinkedOutlook.identities.some((identity) => identity.provider === "outlook"), false);
+
+    await writeConnectorConfig("gmail", {
+      clientId: "gmail-client",
+      redirectUri: `${baseUrl}/oauth/gmail/callback`,
+    }, process.env);
+    const userGmailOAuth = await read(await fetch(`${baseUrl}/api/users/alice-example.test/connectors/gmail/oauth/start`, {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie: adminCookie },
+      body: JSON.stringify({ account: "alice-oauth@example.test" }),
+    }));
+    assert.equal(userGmailOAuth.userId, "alice-example.test");
+    assert.match(userGmailOAuth.authorizeUrl, /accounts\.google\.com/);
+    assert.ok(userGmailOAuth.identities.some((identity) => identity.provider === "gmail" && identity.externalId === "alice-oauth@example.test"));
+    const aliceGmailState = JSON.parse(await fs.readFile(path.join(userDataPaths("alice-example.test", process.env).oauth, "gmail-state.json"), "utf8"));
+    assert.equal(aliceGmailState.userId, "alice-example.test");
+    assert.equal(aliceGmailState.account, "alice-oauth@example.test");
 
     const adminSkills = await read(await fetch(`${baseUrl}/api/users/alice-example.test/skills`, { headers: { cookie: adminCookie } }));
     assert.ok(adminSkills.skills.some((skill) => skill.id === "learning"));

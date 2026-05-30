@@ -392,6 +392,17 @@ export interface OutlookOAuthPollResponse {
   expiresAt?: number;
 }
 
+export interface UserGmailOAuthStartResponse extends GmailOAuthStartResponse {
+  ok?: boolean;
+  userId?: string;
+  identities?: UserIdentity[];
+}
+
+export interface UserOutlookOAuthStartResponse extends OutlookOAuthStartResponse {
+  userId?: string;
+  identities?: UserIdentity[];
+}
+
 export interface ConnectorActionResponse {
   ok?: boolean;
   connector?: string;
@@ -989,6 +1000,34 @@ export class ApiService {
 
   unlinkWhatsAppIdentity(id: string, body: Record<string, unknown>): Observable<UserIdentitiesResponse> {
     return this.http.post<UserIdentitiesResponse>(this.api(`/users/${encodeURIComponent(id)}/identities/whatsapp/unlink`), body);
+  }
+
+  linkMailIdentity(id: string, provider: "gmail" | "outlook" | string, body: Record<string, unknown>): Observable<UserIdentitiesResponse> {
+    return this.http.post<UserIdentitiesResponse>(
+      this.api(`/users/${encodeURIComponent(id)}/identities/${encodeURIComponent(provider)}`),
+      body,
+    );
+  }
+
+  unlinkMailIdentity(id: string, provider: "gmail" | "outlook" | string, body: Record<string, unknown>): Observable<UserIdentitiesResponse> {
+    return this.http.post<UserIdentitiesResponse>(
+      this.api(`/users/${encodeURIComponent(id)}/identities/${encodeURIComponent(provider)}/unlink`),
+      body,
+    );
+  }
+
+  startUserGmailOAuth(id: string, body: Record<string, unknown> = {}): Observable<UserGmailOAuthStartResponse> {
+    return this.http.post<UserGmailOAuthStartResponse>(
+      this.api(`/users/${encodeURIComponent(id)}/connectors/gmail/oauth/start`),
+      body,
+    );
+  }
+
+  startUserOutlookOAuth(id: string, body: Record<string, unknown> = {}): Observable<UserOutlookOAuthStartResponse> {
+    return this.http.post<UserOutlookOAuthStartResponse>(
+      this.api(`/users/${encodeURIComponent(id)}/connectors/outlook/oauth/start`),
+      body,
+    );
   }
 
   createSecurityChallenge(): Observable<SecurityChallengeResponse> {

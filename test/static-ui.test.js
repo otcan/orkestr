@@ -172,6 +172,32 @@ test("ops users page exposes WhatsApp identity binding controls", async () => {
   assert.match(template, /\(click\)="unlinkWhatsAppIdentity\(user, identity\)"/);
 });
 
+test("ops users page exposes Gmail and Outlook account assignment controls", async () => {
+  const template = await fs.readFile("apps/web/src/app/ops-page.component.html", "utf8");
+  const component = await fs.readFile("apps/web/src/app/ops-page.component.ts", "utf8");
+  const api = await fs.readFile("apps/web/src/app/api.service.ts", "utf8");
+  const usersController = await fs.readFile("apps/server/src/modules/users/users.controller.ts", "utf8");
+
+  assert.match(api, /linkMailIdentity\(id: string, provider: "gmail" \| "outlook" \| string, body: Record<string, unknown>\)/);
+  assert.match(api, /unlinkMailIdentity\(id: string, provider: "gmail" \| "outlook" \| string, body: Record<string, unknown>\)/);
+  assert.match(api, /startUserGmailOAuth\(id: string, body: Record<string, unknown> = \{\}\)/);
+  assert.match(api, /startUserOutlookOAuth\(id: string, body: Record<string, unknown> = \{\}\)/);
+  assert.match(usersController, /@Post\(":userId\/identities\/:provider"\)/);
+  assert.match(usersController, /@Post\(":userId\/connectors\/gmail\/oauth\/start"\)/);
+  assert.match(usersController, /@Post\(":userId\/connectors\/outlook\/oauth\/start"\)/);
+  assert.match(component, /mailIdentityProvider: MailIdentityProvider = "gmail"/);
+  assert.match(component, /linkMailIdentity\(user: OrkestrUser\)/);
+  assert.match(component, /unlinkMailIdentity\(user: OrkestrUser, identity: UserIdentity\)/);
+  assert.match(component, /startUserMailOAuth\(user: OrkestrUser\)/);
+  assert.match(component, /selectedUserMailIdentities\(user: OrkestrUser\): UserIdentity\[\]/);
+  assert.match(template, /Mail accounts/);
+  assert.match(template, /mail-identity-provider-/);
+  assert.match(template, /mail-identity-account-/);
+  assert.match(template, /\(submit\)="linkMailIdentity\(user\); \$event\.preventDefault\(\)"/);
+  assert.match(template, /\(click\)="startUserMailOAuth\(user\)"/);
+  assert.match(template, /\(click\)="unlinkMailIdentity\(user, identity\)"/);
+});
+
 test("thread settings exposes detailed repo metadata editing", async () => {
   const template = await fs.readFile("apps/web/src/app/app.component.html", "utf8");
   const component = await fs.readFile("apps/web/src/app/app.component.ts", "utf8");

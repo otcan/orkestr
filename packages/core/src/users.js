@@ -306,7 +306,7 @@ export async function readUserPrivateIdentities(userId, env = process.env) {
   const paths = userDataPaths(userId, env);
   const identities = await readJson(paths.identities, []);
   return Array.isArray(identities)
-    ? identities.map(normalizeIdentity).filter((identity) => identity.provider && identity.externalId)
+    ? identities.map(normalizeIdentity).filter((identity) => identity.provider && (identity.externalId || identity.chatId))
     : [];
 }
 
@@ -326,7 +326,7 @@ export async function linkUserPrivateIdentity(userId, identity = {}, { env = pro
     if (other.status === "disabled") continue;
     conflicts.push(other);
   }
-  if (conflicts.length && !migrate) throw userError("whatsapp_identity_already_assigned", 409);
+  if (conflicts.length && !migrate) throw userError(identityConflictError(normalized.provider), 409);
   for (const conflict of conflicts) {
     await removeUserPrivateIdentities(conflict.id, (item) => identityConflicts(item, normalized), env);
     await appendEvent({
@@ -414,4 +414,9 @@ function identityConflicts(left = {}, right = {}) {
   if (left.provider !== right.provider) return false;
   if (left.accountId && right.accountId && left.accountId !== right.accountId) return false;
   return Boolean((left.externalId && right.externalId && left.externalId === right.externalId) || (left.chatId && right.chatId && left.chatId === right.chatId));
+}
+
+function identityConflictError(provider = "") {
+  const normalizedProvider = String(provider || "").trim().toLowerCase();
+  return `${normalizedProvider || "external"}_identity_already_assigned`;
 }
