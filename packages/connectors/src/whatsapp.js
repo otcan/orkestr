@@ -437,6 +437,7 @@ function shouldUseApiAgentForWhatsAppThread(thread = {}, env = process.env) {
 async function ensureApiAgentWhatsAppThread(thread = null, env = process.env) {
   if (!thread || !shouldUseApiAgentForWhatsAppThread(thread, env)) return thread;
   if (threadUsesApiAgent(thread, env)) return thread;
+  const metadata = thread.executor?.metadata || {};
   return updateThread(thread.id, {
     runtimeKind: "api-agent",
     runtime: null,
@@ -454,9 +455,13 @@ async function ensureApiAgentWhatsAppThread(thread = null, env = process.env) {
       codexThreadId: null,
       codexSessionId: null,
       metadata: {
-        ...(thread.executor?.metadata || {}),
         transport: "api-agent",
         runtimeKind: "api-agent",
+        securityProfile: metadata.securityProfile || thread.securityProfile || "generated-whatsapp",
+        codexSandbox: "workspace-write",
+        codexApprovalPolicy: "on-request",
+        containedUserRuntimePolicy: metadata.containedUserRuntimePolicy === true || thread.ownerUserId ? true : undefined,
+        containedCodexIsolated: metadata.containedCodexIsolated === true ? true : undefined,
         codexThreadId: null,
         codexSessionId: null,
         codexTokenUsage: null,

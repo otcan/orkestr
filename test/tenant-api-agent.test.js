@@ -196,6 +196,9 @@ test("WhatsApp routing cleans mixed tenant Codex runtime state before enqueueing
       metadata: {
         runtimeKind: "api-agent",
         transport: "app-server",
+        codexModel: "gpt-5.5",
+        codexModelProvider: "openai",
+        codexApprovalPolicy: "never",
         codexThreadId: "codex-thread-stale",
         codexSessionId: "codex-session-stale",
       },
@@ -233,6 +236,9 @@ test("WhatsApp routing cleans mixed tenant Codex runtime state before enqueueing
   assert.equal(thread.executor.codexSessionId, null);
   assert.equal(thread.executor.metadata.runtimeKind, "api-agent");
   assert.equal(thread.executor.metadata.transport, "api-agent");
+  assert.equal(thread.executor.metadata.codexModel, undefined);
+  assert.equal(thread.executor.metadata.codexModelProvider, undefined);
+  assert.equal(thread.executor.metadata.codexApprovalPolicy, "on-request");
   assert.equal(thread.executor.metadata.codexThreadId, null);
   assert.equal(threadUsesApiAgent(thread, env), true);
   assert.equal(messages[0].state, "queued");
