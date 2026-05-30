@@ -137,7 +137,8 @@ function serveDesktopSharePage(response: any) {
 async function serveStaticPath(requestUrl: string, response: any) {
   const url = new URL(requestUrl, "http://localhost");
   const requested = decodeURIComponent(url.pathname === "/" ? "/index.html" : url.pathname);
-  const safePath = path.normalize(requested).replace(/^(\.\.[/\\])+/, "");
+  const assetPath = requested === "/favicon.ico" ? "/favicon.svg" : requested;
+  const safePath = path.normalize(assetPath).replace(/^(\.\.[/\\])+/, "");
   const filePath = path.join(publicDir, safePath);
   const target = filePath.startsWith(publicDir) ? filePath : path.join(publicDir, "index.html");
   const ext = path.extname(target);

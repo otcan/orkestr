@@ -3,7 +3,7 @@ import path from "node:path";
 
 const root = process.cwd();
 const webRoot = path.join(root, "dist", "web", "browser");
-const required = ["index.html", "main.js", "polyfills.js", "styles.css"];
+const required = ["index.html", "main.js", "polyfills.js", "styles.css", "favicon.svg"];
 const missing = required.filter((file) => !fs.existsSync(path.join(webRoot, file)));
 
 if (missing.length) {

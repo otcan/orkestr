@@ -30,6 +30,10 @@ test("server serves the built Angular UI at root", async () => {
     const legacyOnboardingResponse = await fetch(`http://127.0.0.1:${port}/ng/onboarding`);
     const opsResponse = await fetch(`http://127.0.0.1:${port}/ops`);
     const threadResponse = await fetch(`http://127.0.0.1:${port}/thread/demo`);
+    const faviconSvgResponse = await fetch(`http://127.0.0.1:${port}/favicon.svg`);
+    const faviconSvg = await faviconSvgResponse.text();
+    const faviconIcoResponse = await fetch(`http://127.0.0.1:${port}/favicon.ico`);
+    const faviconIco = await faviconIcoResponse.text();
     const googleMarketingStartResponse = await fetch(`http://127.0.0.1:${port}/google-marketing/oauth/start`, { redirect: "manual" });
     const googleMarketingStartHtml = await googleMarketingStartResponse.text();
 
@@ -44,6 +48,13 @@ test("server serves the built Angular UI at root", async () => {
     assert.equal(legacyOnboardingResponse.status, 200);
     assert.equal(opsResponse.status, 200);
     assert.equal(threadResponse.status, 200);
+    assert.equal(faviconSvgResponse.status, 200);
+    assert.match(faviconSvgResponse.headers.get("content-type") || "", /image\/svg\+xml/);
+    assert.match(faviconSvg, /aria-label="Orkestr"/);
+    assert.equal(faviconIcoResponse.status, 200);
+    assert.match(faviconIcoResponse.headers.get("content-type") || "", /image\/svg\+xml/);
+    assert.match(faviconIco, /aria-label="Orkestr"/);
+    assert.doesNotMatch(faviconIco, /<ork-root(?:\s|>)/);
     assert.equal(googleMarketingStartResponse.status, 500);
     assert.ok(googleMarketingStartHtml.includes("Google Marketing auth failed"));
     assert.doesNotMatch(googleMarketingStartHtml, /<ork-root(?:\s|>)/);
