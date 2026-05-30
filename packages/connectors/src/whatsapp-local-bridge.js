@@ -265,6 +265,9 @@ function defaultAccountState(accountId) {
     loadingMessage: "",
     waState: "",
     error: "",
+    lastRecoveryReason: "",
+    lastRecoveryAt: null,
+    recoveredChromeLocks: 0,
     updatedAt: null,
   };
 }
@@ -1081,6 +1084,48 @@ const localWhatsAppChromeLockFiles = new Set(["SingletonCookie", "SingletonLock"
 let localWhatsAppUnreadRecoveryInFlight = null;
 let localWhatsAppUnreadRecoveryLastRunMs = 0;
 
+function chromeLockPidFromText(value = "") {
+  const matches = String(value || "").match(/\b[1-9]\d{1,9}\b/g) || [];
+  for (const match of matches.reverse()) {
+    const pid = Number(match);
+    if (Number.isInteger(pid) && pid > 1) return pid;
+  }
+  return null;
+}
+
+function pidAlive(pid) {
+  if (!Number.isInteger(pid) || pid <= 1) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return error?.code === "EPERM";
+  }
+}
+
+async function chromeLockPid(filePath) {
+  const stats = await fs.lstat(filePath).catch(() => null);
+  if (!stats) return null;
+  const candidates = [];
+  if (stats.isSymbolicLink()) {
+    candidates.push(await fs.readlink(filePath).catch(() => ""));
+  }
+  if (stats.isFile() && stats.size <= 1024) {
+    candidates.push(await fs.readFile(filePath, "utf8").catch(() => ""));
+  }
+  for (const candidate of candidates) {
+    const pid = chromeLockPidFromText(candidate);
+    if (pid) return pid;
+  }
+  return null;
+}
+
+async function moveStaleChromeLock(filePath, index, nowMs) {
+  const destination = `${filePath}.orkestr-stale-${nowMs}-${index}`;
+  await fs.rename(filePath, destination);
+  return destination;
+}
+
 function recoverableLocalWhatsAppFailure(account = {}) {
   const state = String(account?.state || "").trim();
   if (recoverableLocalWhatsAppStates.has(state)) return true;
@@ -1120,19 +1165,41 @@ export async function cleanupLocalWhatsAppChromeLocks(accountId = "", env = proc
     if (entry.isDirectory()) candidates.add(path.join(root, entry.name));
   }
   const removed = [];
+  const moved = [];
+  const stalePids = new Set();
+  const nowMs = Date.now();
   for (const dir of candidates) {
     const entries = await fs.readdir(dir, { withFileTypes: true }).catch(() => []);
-    for (const entry of entries) {
-      if (!localWhatsAppChromeLockFiles.has(entry.name)) continue;
-      const filePath = path.join(dir, entry.name);
-      await fs.rm(filePath, { force: true }).catch(() => {});
-      removed.push(filePath);
+    const lockPaths = entries
+      .filter((entry) => localWhatsAppChromeLockFiles.has(entry.name))
+      .map((entry) => path.join(dir, entry.name));
+    const staleLocks = [];
+    for (const filePath of lockPaths) {
+      const pid = await chromeLockPid(filePath);
+      if (!pid || pidAlive(pid)) continue;
+      staleLocks.push({ filePath, pid });
+      stalePids.add(pid);
+    }
+    if (!staleLocks.length) continue;
+    for (const filePath of lockPaths) {
+      try {
+        const destination = await moveStaleChromeLock(filePath, moved.length + 1, nowMs);
+        removed.push(filePath);
+        moved.push({ from: filePath, to: destination });
+      } catch {
+        // If Chrome already removed the marker between scan and rename, there is nothing left to recover.
+      }
     }
   }
   if (removed.length) {
-    await appendEvent({ type: "whatsapp_local_chrome_locks_removed", accountId: normalized, count: removed.length }, env).catch(() => {});
+    await appendEvent({
+      type: "whatsapp_local_chrome_locks_moved",
+      accountId: normalized,
+      count: removed.length,
+      stalePids: [...stalePids],
+    }, env).catch(() => {});
   }
-  return { accountId: normalized, removed };
+  return { accountId: normalized, removed, moved, stalePids: [...stalePids] };
 }
 
 export async function restartRecoverableLocalWhatsAppAccount(accountId = "", env = process.env, options = {}) {
@@ -1218,6 +1285,7 @@ export async function startLocalWhatsAppAccount(accountId = "", env = process.en
     throw error;
   }
   await ensureBridgeDirs(env);
+  const staleLockCleanup = await cleanupLocalWhatsAppChromeLocks(normalized, env);
   setAccountState(normalized, {
     state: "starting",
     started: true,
@@ -1226,6 +1294,13 @@ export async function startLocalWhatsAppAccount(accountId = "", env = process.en
     pairingCodeUpdatedAt: null,
     pairingPhoneNumber: maskPairingPhoneNumber(pairingPhoneNumber),
     error: "",
+    ...(staleLockCleanup.moved.length
+      ? {
+          lastRecoveryReason: "stale_lock_recovered",
+          lastRecoveryAt: nowIso(),
+          recoveredChromeLocks: staleLockCleanup.moved.length,
+        }
+      : {}),
   });
 
   let dependencies;

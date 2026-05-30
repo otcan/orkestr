@@ -725,7 +725,7 @@ test("local whatsapp recovery resets recoverable accounts before restarting", as
   assert.deepEqual(result.skipped, []);
 });
 
-test("local whatsapp chrome lock cleanup only removes singleton lock files", async () => {
+test("local whatsapp chrome lock cleanup moves only dead-pid singleton markers", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-lock-cleanup-"));
   const env = {
     ORKESTR_HOME: home,
@@ -733,17 +733,26 @@ test("local whatsapp chrome lock cleanup only removes singleton lock files", asy
     ORKESTR_WHATSAPP_ACCOUNT_CLIENT_IDS: "responder:codex-whatsapp-responder",
   };
   const sessionDir = path.join(home, "whatsapp-bridge", "sessions", "session-codex-whatsapp-responder");
+  const activeSessionDir = path.join(home, "whatsapp-bridge", "sessions", "session-active");
   await fs.mkdir(sessionDir, { recursive: true });
-  await fs.writeFile(path.join(sessionDir, "SingletonLock"), "stale", "utf8");
+  await fs.mkdir(activeSessionDir, { recursive: true });
+  await fs.writeFile(path.join(sessionDir, "SingletonLock"), "chrome-lock-99999999", "utf8");
   await fs.writeFile(path.join(sessionDir, "SingletonCookie"), "stale", "utf8");
   await fs.writeFile(path.join(sessionDir, "Local State"), "keep", "utf8");
+  await fs.writeFile(path.join(activeSessionDir, "SingletonLock"), `chrome-lock-${process.pid}`, "utf8");
+  await fs.writeFile(path.join(activeSessionDir, "SingletonCookie"), "keep-active", "utf8");
 
   const result = await cleanupLocalWhatsAppChromeLocks("responder", env);
 
   assert.equal(result.removed.length, 2);
+  assert.equal(result.moved.length, 2);
+  assert.deepEqual(result.stalePids, [99999999]);
   await assert.rejects(fs.access(path.join(sessionDir, "SingletonLock")));
   await assert.rejects(fs.access(path.join(sessionDir, "SingletonCookie")));
+  assert.ok(result.moved.every((item) => item.to.includes(".orkestr-stale-")));
   assert.equal(await fs.readFile(path.join(sessionDir, "Local State"), "utf8"), "keep");
+  assert.equal(await fs.readFile(path.join(activeSessionDir, "SingletonLock"), "utf8"), `chrome-lock-${process.pid}`);
+  assert.equal(await fs.readFile(path.join(activeSessionDir, "SingletonCookie"), "utf8"), "keep-active");
 });
 
 test("whatsapp status reports paired from health readiness", async () => {
