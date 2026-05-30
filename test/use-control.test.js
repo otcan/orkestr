@@ -178,6 +178,7 @@ test("non-admin workspace and file browsing stays inside per-user roots", async 
   const aliceFiles = await listFilesForPrincipal(path.join(alicePaths.files, "notes"), alice, env);
   const bobProbe = await listWorkspaceFoldersForPrincipal(bobPaths.workspaces, alice, env);
   const adminFolders = await listWorkspaceFoldersForPrincipal(alicePaths.workspaces, adminPrincipal(), env);
+  const adminFiles = await listFilesForPrincipal("", adminPrincipal(), env);
 
   assert.equal(aliceRoot, alicePaths.workspaces);
   assert.equal(aliceWorkspacePath, path.join(alicePaths.workspaces, "project-a"));
@@ -187,6 +188,8 @@ test("non-admin workspace and file browsing stays inside per-user roots", async 
   assert.equal(bobProbe.ok, false);
   assert.equal(bobProbe.error, "workspace_path_forbidden");
   assert.ok(adminFolders.roots.some((root) => root.path === path.join(home, "workspaces")));
+  assert.equal(adminFiles.ok, true);
+  assert.ok(adminFiles.roots.some((root) => root.path === path.join(home, "files")));
   await assert.rejects(() => resolveWorkspacePathForPrincipal(bobPaths.workspaces, alice, env), /workspace_path_forbidden/);
 });
 

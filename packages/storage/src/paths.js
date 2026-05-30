@@ -11,6 +11,7 @@ export function dataPaths(env = process.env) {
   return {
     home,
     browsers: path.join(home, "browsers"),
+    files: path.join(home, "files"),
     messages: path.join(home, "messages"),
     oauth: path.join(home, "oauth"),
     secrets: path.join(home, "secrets"),
@@ -54,6 +55,7 @@ export async function ensureDataDirs(env = process.env) {
   await fs.mkdir(paths.home, { recursive: true });
   await fs.mkdir(paths.userDataRoot, { recursive: true });
   await fs.mkdir(paths.browsers, { recursive: true });
+  await fs.mkdir(paths.files, { recursive: true });
   await fs.mkdir(paths.messages, { recursive: true });
   await fs.mkdir(paths.threadMessages, { recursive: true });
   await fs.mkdir(paths.workspaces, { recursive: true });
