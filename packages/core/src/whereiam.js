@@ -5,7 +5,7 @@ import { publicPrincipal } from "./principal.js";
 import { listRuntimeLeases, runtimeStatus } from "./runtime-leases.js";
 import { readRuntimeSettings } from "./runtime-settings.js";
 import { listThreads, listThreadsForPrincipal, updateThread } from "./threads.js";
-import { containedUserPolicyPath, threadUsesContainedUserPolicy } from "./tenant-policy.js";
+import { containedUserPolicyPath, tenantIsolationBoundary, threadUsesContainedUserPolicy } from "./tenant-policy.js";
 import { adminUserId, normalizeUserId } from "./users.js";
 
 function nowIso() {
@@ -287,6 +287,7 @@ export async function whereAmI(input = {}, env = process.env) {
       scoped,
       sanitizerRequired: true,
       sanitizerFallback: false,
+      isolationBoundary: tenantIsolationBoundary(thread || { ownerUserId: owner }, env),
       runtimePolicy: containedPolicy
         ? {
             id: "contained-user-runtime",

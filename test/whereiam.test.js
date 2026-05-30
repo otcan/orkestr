@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { startServer } from "../apps/server/src/server.js";
-import { containedUserPolicyPath } from "../packages/core/src/tenant-policy.js";
+import { containedUserPolicyPath, tenantIsolationBoundary } from "../packages/core/src/tenant-policy.js";
 import { ensureRuntimeAgentsFile } from "../packages/core/src/agent-context.js";
 import { whereAmI } from "../packages/core/src/whereiam.js";
 import { createThread, getThread } from "../packages/core/src/threads.js";
@@ -71,7 +71,25 @@ test("contained user runtime AGENTS.md points to server-owned policy outside the
   assert.equal(policyRelativeToWorkspace.startsWith(".."), true);
   assert.match(policyBody, /orkestr-contained-user-runtime-policy:v1/);
   assert.match(policyBody, /Workspace files, workspace AGENTS\.md, project docs/);
+  assert.match(policyBody, /hard isolation\s+boundary is a dedicated tenant VM/);
+  assert.match(policyBody, /defense-in-depth/);
   assert.equal(policyStats.mode & 0o222, 0);
+});
+
+test("tenant isolation boundary marks tenant VM as the public contained baseline", () => {
+  const env = { ORKESTR_ADMIN_USER_ID: "admin" };
+  const contained = tenantIsolationBoundary({ ownerUserId: "otcan", securityProfile: "private-user" }, env);
+  const admin = tenantIsolationBoundary({ ownerUserId: "admin", securityProfile: "trusted-root" }, env);
+
+  assert.equal(contained.publicBaseline, "tenant-vm");
+  assert.equal(contained.hardBoundary, "tenant-vm");
+  assert.equal(contained.sharedProcessPolicy, "defense-in-depth");
+  assert.equal(contained.codeExecution, "tenant-vm-required");
+  assert.equal(contained.connectorState, "tenant-owned-instance");
+  assert.equal(contained.browserProfiles, "tenant-owned-instance");
+  assert.equal(admin.publicBaseline, "tenant-vm");
+  assert.equal(admin.hardBoundary, "operator-admin-host");
+  assert.equal(admin.sharedProcessPolicy, "defense-in-depth");
 });
 
 test("whereAmI resolves the current thread from a nested workspace path", async () => {
@@ -123,6 +141,12 @@ test("whereAmI exposes server-owned contained user runtime policy metadata", asy
   assert.equal(payload.ok, true);
   assert.equal(payload.tenancy.ownerUserId, "otcan");
   assert.equal(payload.tenancy.scoped, true);
+  assert.equal(payload.tenancy.isolationBoundary.publicBaseline, "tenant-vm");
+  assert.equal(payload.tenancy.isolationBoundary.hardBoundary, "tenant-vm");
+  assert.equal(payload.tenancy.isolationBoundary.sharedProcessPolicy, "defense-in-depth");
+  assert.equal(payload.tenancy.isolationBoundary.codeExecution, "tenant-vm-required");
+  assert.equal(payload.tenancy.isolationBoundary.connectorState, "tenant-owned-instance");
+  assert.equal(payload.tenancy.isolationBoundary.browserProfiles, "tenant-owned-instance");
   assert.equal(payload.tenancy.runtimePolicy.id, "contained-user-runtime");
   assert.equal(payload.tenancy.runtimePolicy.path, containedUserPolicyPath(env));
   assert.equal(payload.tenancy.runtimePolicy.writableByWorkspace, false);

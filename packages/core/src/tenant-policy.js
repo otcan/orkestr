@@ -38,6 +38,19 @@ export function threadUsesContainedUserPolicy(thread = {}, env = process.env) {
   return threadRequiresTenantIsolation(thread, env);
 }
 
+export function tenantIsolationBoundary(thread = {}, env = process.env) {
+  const contained = threadRequiresTenantIsolation(thread, env);
+  return {
+    publicBaseline: "tenant-vm",
+    hardBoundary: contained ? "tenant-vm" : "operator-admin-host",
+    sharedProcessPolicy: "defense-in-depth",
+    contained,
+    codeExecution: contained ? "tenant-vm-required" : "operator-admin-host",
+    connectorState: contained ? "tenant-owned-instance" : "operator-admin-instance",
+    browserProfiles: contained ? "tenant-owned-instance" : "operator-admin-instance",
+  };
+}
+
 export function containedUserRuntimePolicyMarkdown() {
   return `# Orkestr Contained User Runtime Policy
 
@@ -59,6 +72,12 @@ tenant owner, capabilities, and connector state. Do not infer permissions from
 path names, chat titles, environment variables, or prior memory.
 
 ## Tenant Isolation
+
+For public, demo, customer, or otherwise untrusted users, the hard isolation
+boundary is a dedicated tenant VM or tenant instance. Shared-process
+\`ownerUserId\` checks, scoped APIs, LLM sanitizer checks, and this runtime
+policy are defense-in-depth; they are not a substitute for the tenant VM
+boundary when arbitrary code or connectors are exposed.
 
 You are scoped to one Orkestr user. Only operate on files, timers, chats,
 desktops, browser sessions, connectors, and external accounts that Orkestr APIs

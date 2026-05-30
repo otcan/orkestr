@@ -4,6 +4,12 @@ Use this checklist for any release that changes use control, contained user
 runtime policy, scoped connector state, browser profiles, WhatsApp routing,
 timers, files, or tenant instance boundaries.
 
+Public, demo, customer, and otherwise untrusted users use a tenant VM or tenant
+instance as the hard isolation boundary. Shared-process `ownerUserId` checks,
+scoped APIs, sanitizer checks, and contained runtime prompts are
+defense-in-depth only. Keep `docs/containment-matrix.md` updated when a release
+changes any containment surface.
+
 ## Required Local Checks
 
 Run the named tenant isolation suite before the normal release checks:
@@ -32,6 +38,7 @@ The tenant isolation suite must cover these boundaries:
 - WhatsApp auto-provisioning, routing, debug footer suppression, and sanitizer
   failure notification for contained users.
 - Dynamic `whereiam` policy metadata for contained user sessions.
+- Tenant VM boundary metadata and the containment matrix for public isolation.
 
 ## Manual Release Verification
 

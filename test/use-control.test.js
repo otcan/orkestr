@@ -203,6 +203,22 @@ test("non-admin thread creation cannot request root-trusted Codex access", async
   assert.equal(thread.executor.metadata.codexApprovalPolicy, "on-request");
 });
 
+test("non-admin creation helpers fail closed without an explicit owner principal", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-use-control-owner-required-"));
+  const env = await allowSanitizerEnv(home);
+
+  await assert.rejects(
+    () => createThreadForPrincipal({ id: "missing-owner-thread", name: "Missing Owner" }, { role: "user" }, env),
+    /thread_owner_required/,
+  );
+  await assert.rejects(
+    () => createTimerForPrincipal({ label: "Missing Owner Timer", prompt: "hello" }, { role: "user" }, env),
+    /timer_owner_required/,
+  );
+  assert.deepEqual((await listThreadsForPrincipal(adminPrincipal(), env)).map((thread) => thread.id), []);
+  assert.deepEqual((await listTimers(env)).map((timer) => timer.id), []);
+});
+
 test("admin chat summary hides tenant-owned WhatsApp-only threads by default", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-use-control-chat-scope-"));
   const priorHome = process.env.ORKESTR_HOME;

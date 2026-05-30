@@ -6,7 +6,7 @@ import { assertSanitizedAction } from "./llm-sanitizer.js";
 import { enqueueAgentMessage } from "./messages.js";
 import { principalForUserId, userPrincipal } from "./principal.js";
 import { enqueueThreadInput, getThreadForPrincipal, listThreads, listThreadsForPrincipal } from "./threads.js";
-import { assertResourceAccess, filterResourcesForPrincipal, isAdminPrincipal } from "./policy.js";
+import { assertResourceAccess, filterResourcesForPrincipal, isAdminPrincipal, policyError } from "./policy.js";
 import { adminUserId, normalizeUserId } from "./users.js";
 
 const hourMs = 60 * 60 * 1000;
@@ -333,6 +333,9 @@ export async function createTimer(input, env = process.env) {
 }
 
 export async function createTimerForPrincipal(input, principal, env = process.env) {
+  if (!isAdminPrincipal(principal) && !String(principal?.userId || "").trim()) {
+    throw policyError("timer_owner_required", 403);
+  }
   const targetType = String(input?.targetType || (input?.threadId ? "thread" : "agent")).trim().toLowerCase();
   const target = String(input?.target || input?.threadId || input?.agentId || "").trim();
   if (targetType === "thread" && target) {

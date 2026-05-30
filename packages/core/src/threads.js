@@ -5,7 +5,7 @@ import { dataPaths, ensureDataDirs } from "../../storage/src/paths.js";
 import { appendEvent, readJson, writeJson } from "../../storage/src/store.js";
 import { listThreadRecords, saveThreadRecords } from "../../storage/src/thread-registry.js";
 import { assertSanitizedAction } from "./llm-sanitizer.js";
-import { assertResourceAccess, assertThreadLimit, filterResourcesForPrincipal, isAdminPrincipal, resourceOwnerUserId } from "./policy.js";
+import { assertResourceAccess, assertThreadLimit, filterResourcesForPrincipal, isAdminPrincipal, policyError, resourceOwnerUserId } from "./policy.js";
 import { adminUserId, getUser, normalizeUserId } from "./users.js";
 
 const runningThreadIds = new Set();
@@ -212,6 +212,9 @@ export async function createThread(input = {}, env = process.env) {
 }
 
 export async function createThreadForPrincipal(input = {}, principal, env = process.env) {
+  if (!isAdminPrincipal(principal) && !String(principal?.userId || "").trim()) {
+    throw policyError("thread_owner_required", 403);
+  }
   const ownerUserId = isAdminPrincipal(principal)
     ? normalizeUserId(input.ownerUserId || input.userId || env.ORKESTR_ADMIN_USER_ID || adminUserId)
     : normalizeUserId(principal?.userId);

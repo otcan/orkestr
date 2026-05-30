@@ -10,6 +10,7 @@ test("tenant isolation release suite is named and wired into the release train",
   const pkg = await readJson("package.json");
   const releaseTrain = await fs.readFile("docs/release-train.md", "utf8");
   const checklist = await fs.readFile("docs/tenant-isolation-release-checklist.md", "utf8");
+  const containmentMatrix = await fs.readFile("docs/containment-matrix.md", "utf8");
   const command = pkg.scripts?.["test:tenant-isolation"] || "";
 
   assert.match(command, /test\/use-control\.test\.js/);
@@ -29,6 +30,16 @@ test("tenant isolation release suite is named and wired into the release train",
   assert.match(checklist, /Contained user Codex runtime policy/);
   assert.match(checklist, /WhatsApp auto-provisioning/);
   assert.match(checklist, /whereiam/);
+  assert.match(checklist, /tenant VM or tenant/);
+  assert.match(checklist, /defense-in-depth/);
+  assert.match(checklist, /containment matrix/);
   assert.match(checklist, /No new runtime interruption notice/);
   assert.doesNotMatch(checklist, /orkestr\.app\.ops|crawlerai\.de|@g\.us|gmail\.com/);
+  assert.match(containmentMatrix, /public isolation baseline is a dedicated tenant VM/);
+  assert.match(containmentMatrix, /Shared-process checks are defense-in-depth only/);
+  assert.match(containmentMatrix, /Fail-closed rule/);
+  assert.match(containmentMatrix, /whereiam/);
+  assert.match(containmentMatrix, /Code execution and Codex runtime/);
+  assert.match(containmentMatrix, /Release regression/);
+  assert.doesNotMatch(containmentMatrix, /orkestr\.app\.ops|crawlerai\.de|@g\.us|gmail\.com/);
 });
