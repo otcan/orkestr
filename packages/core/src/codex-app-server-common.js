@@ -285,6 +285,12 @@ export function effortForThread(thread, env = process.env) {
 
 export function codexInputText(message) {
   const text = clean(message?.text);
+  const promptFile = clean(message?.promptFile);
+  const body = promptFile
+    ? text
+      ? `${text}\n\nPrompt file: ${promptFile}`
+      : `Run the prompt file: ${promptFile}`
+    : text;
   const attachments = Array.isArray(message?.attachments) ? message.attachments : [];
   const attachmentLines = attachments
     .map((attachment, index) => {
@@ -298,9 +304,9 @@ export function codexInputText(message) {
       ].filter(Boolean).join("\n");
     })
     .filter(Boolean);
-  if (!attachmentLines.length) return text;
+  if (!attachmentLines.length) return body;
   return [
-    text || "WhatsApp attachment received.",
+    body || "WhatsApp attachment received.",
     "Attached local file path(s):",
     ...attachmentLines,
     "Use the file path(s) above as the source of truth for any attachment content.",

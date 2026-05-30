@@ -258,6 +258,19 @@ test("Codex app-server turn params ignore corrupt model and reasoning metadata",
   }
 });
 
+test("Codex app-server turn params include prompt file inputs", () => {
+  const thread = { codexThreadId: "codex-thread-1", cwd: "/tmp/orkestr-workspace" };
+
+  assert.equal(
+    turnStartParams(thread, { text: "", promptFile: "/tmp/magie-daily.md" }).input[0].text,
+    "Run the prompt file: /tmp/magie-daily.md",
+  );
+  assert.equal(
+    turnStartParams(thread, { text: "Run daily checker", promptFile: "/tmp/magie-daily.md" }).input[0].text,
+    "Run daily checker\n\nPrompt file: /tmp/magie-daily.md",
+  );
+});
+
 test("Codex app-server clamps non-admin threads away from root danger access", () => {
   const previousSandbox = process.env.ORKESTR_CODEX_SANDBOX;
   const previousApproval = process.env.ORKESTR_CODEX_APPROVAL_POLICY;
