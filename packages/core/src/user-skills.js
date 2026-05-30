@@ -1,6 +1,7 @@
 import { userDataPaths } from "../../storage/src/paths.js";
 import { appendEvent, readJson, writeJson } from "../../storage/src/store.js";
 import { assertOwnerAccess, isAdminPrincipal } from "./policy.js";
+import { getTenantVmForOwner } from "./tenant-vm-registry.js";
 import { getUser, normalizeUserId } from "./users.js";
 
 const skillDefinitions = [
@@ -207,4 +208,111 @@ export async function setUserSkillForPrincipal(userId, skillId, patch = {}, prin
   assertOwnerAccess(principal, target.id, "user_skills_update", env);
   if (!isAdminPrincipal(principal) && patch.enabled === undefined) throw skillError("skill_enabled_required", 400);
   return setUserSkill(target.id, skillId, patch, env);
+}
+
+function defaultSkillSnapshot(userId) {
+  const skills = builtinUserSkillDefinitions().map((definition) => publicSkill(definition));
+  const skillEnabled = Object.fromEntries(skills.map((skill) => [skill.id, skill.enabled === true]));
+  return {
+    userId: normalizeUserId(userId),
+    source: "user-skill-defaults",
+    userFound: false,
+    skills,
+    skillEnabled,
+    enabledSkills: skills.filter((skill) => skill.enabled).map((skill) => skill.id),
+    disabledSkills: skills.filter((skill) => !skill.enabled).map((skill) => skill.id),
+  };
+}
+
+export async function userSkillCapabilitySnapshot(userId, env = process.env) {
+  const id = normalizeUserId(userId);
+  try {
+    const listed = await listUserSkills(id, env);
+    const skillEnabled = Object.fromEntries(listed.skills.map((skill) => [skill.id, skill.enabled === true]));
+    return {
+      userId: listed.userId,
+      source: "user-skill-registry",
+      userFound: true,
+      skills: listed.skills,
+      skillEnabled,
+      enabledSkills: listed.skills.filter((skill) => skill.enabled).map((skill) => skill.id),
+      disabledSkills: listed.skills.filter((skill) => !skill.enabled).map((skill) => skill.id),
+    };
+  } catch (error) {
+    if (error?.statusCode !== 404 && error?.message !== "user_not_found") throw error;
+    return defaultSkillSnapshot(id);
+  }
+}
+
+function threadHasWhatsAppBinding(thread = {}) {
+  return Boolean(thread?.binding?.connector === "whatsapp" || thread?.binding?.chatId || thread?.binding?.waChatId);
+}
+
+function tenantCapabilitySet(tenantVm = null) {
+  return new Set(Array.isArray(tenantVm?.capabilities) ? tenantVm.capabilities.map((item) => clean(item).toLowerCase()).filter(Boolean) : []);
+}
+
+function tenantConnectorState(tenantVm = null) {
+  const capabilities = tenantCapabilitySet(tenantVm);
+  const connectors = tenantVm?.connectors && typeof tenantVm.connectors === "object" ? tenantVm.connectors : {};
+  return {
+    whatsapp: Boolean(
+      capabilities.has("whatsapp") ||
+      connectors.whatsappRouteEnabled === true ||
+      clean(connectors.whatsappChatId) ||
+      clean(connectors.whatsappChatName) ||
+      clean(connectors.whatsappAccountId)
+    ),
+    gmail: Boolean(capabilities.has("gmail") || clean(connectors.gmailAccountId)),
+    outlook: Boolean(capabilities.has("outlook") || clean(connectors.outlookAccountId)),
+    linkedin: Boolean(capabilities.has("desks") || capabilities.has("linkedin") || clean(connectors.linkedinDesktopSlug)),
+  };
+}
+
+function publicSkillList(skills = []) {
+  return skills.map((skill) => ({
+    id: skill.id,
+    label: skill.label,
+    category: skill.category,
+    enabled: skill.enabled === true,
+    scopes: Array.isArray(skill.scopes) ? [...skill.scopes] : [],
+    requiresConnector: clean(skill.requiresConnector),
+    requiresDesktop: clean(skill.requiresDesktop),
+  }));
+}
+
+export async function userScopedCapabilityHints({ userId = "", thread = null } = {}, env = process.env) {
+  const owner = normalizeUserId(userId || thread?.ownerUserId || thread?.userId || env.ORKESTR_ADMIN_USER_ID || "admin");
+  const snapshot = await userSkillCapabilitySnapshot(owner, env);
+  const tenantVm = await getTenantVmForOwner(owner, env).catch(() => null);
+  const scopedConnectors = tenantConnectorState(tenantVm);
+  const enabled = (skillId) => snapshot.skillEnabled[skillId] === true;
+  const whatsappAvailable = threadHasWhatsAppBinding(thread || {}) || scopedConnectors.whatsapp;
+  const linkedinAvailable = scopedConnectors.linkedin;
+
+  return {
+    threads: true,
+    whereiam: enabled("whereiam"),
+    files: enabled("files"),
+    timers: enabled("timers"),
+    virtualBrowsers: enabled("linkedin") && linkedinAvailable,
+    desktopLeases: enabled("linkedin") && linkedinAvailable,
+    whatsapp: enabled("whatsapp") && whatsappAvailable,
+    gmail: enabled("gmail") && scopedConnectors.gmail,
+    outlook: enabled("outlook") && scopedConnectors.outlook,
+    linkedin: enabled("linkedin") && linkedinAvailable,
+    learning: enabled("learning"),
+    hostSkills: false,
+    globalConnectorAccounts: false,
+    privateOperatorData: false,
+    skillRegistry: {
+      userId: snapshot.userId,
+      source: snapshot.source,
+      userFound: snapshot.userFound,
+    },
+    enabledSkills: [...snapshot.enabledSkills],
+    disabledSkills: [...snapshot.disabledSkills],
+    skills: publicSkillList(snapshot.skills),
+    scopedConnectors,
+  };
 }

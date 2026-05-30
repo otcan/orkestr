@@ -71,6 +71,15 @@ API response as the source of truth for the current user, thread, workspace,
 tenant owner, capabilities, and connector state. Do not infer permissions from
 path names, chat titles, environment variables, or prior memory.
 
+## Allowed Orkestr Skills
+
+For contained users, \`orkestr whereiam --json\` includes
+\`capabilities.enabledSkills\`, \`capabilities.disabledSkills\`, and connector
+availability derived from the user's Orkestr skill registry and tenant-scoped
+instance state. Only use skills listed as enabled there. A missing, disabled,
+or unavailable skill is blocked even if a host-level Codex skill, browser tab,
+token, MCP server, or environment variable exists on the operator machine.
+
 ## Tenant Isolation
 
 For public, demo, customer, or otherwise untrusted users, the hard isolation

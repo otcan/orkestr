@@ -45,7 +45,7 @@ authorization.
 | Codex host control | `GET /api/codex/*`, import, migrate | Admin only | control-plane guard |
 | Agents and executors | `/api/agents`, `/api/executors`, `/api/executions` | Admin only | control-plane guard |
 | Runtime leases and host system | runtime leases, system/processes/resources/doctor/settings | Admin only | control-plane guard |
-| Agent context | `GET /api/whereiam` | Owner-scoped | `whereAmI` with principal and denied capability hints |
+| Agent context | `GET /api/whereiam` | Owner-scoped | `whereAmI` with principal, user skill registry capability hints, and denied host capabilities |
 
 ## Test Expectations
 

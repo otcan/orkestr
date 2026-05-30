@@ -8,6 +8,10 @@ import { containedUserPolicyPath, tenantIsolationBoundary } from "../packages/co
 import { ensureRuntimeAgentsFile } from "../packages/core/src/agent-context.js";
 import { whereAmI } from "../packages/core/src/whereiam.js";
 import { createThread, getThread } from "../packages/core/src/threads.js";
+import { createTenantVm } from "../packages/core/src/tenant-vm-registry.js";
+import { userPrincipal } from "../packages/core/src/principal.js";
+import { setUserSkillForPrincipal } from "../packages/core/src/user-skills.js";
+import { upsertUser } from "../packages/core/src/users.js";
 
 test("runtime AGENTS.md points agents to dynamic whereiam discovery", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-agent-context-home-"));
@@ -22,6 +26,7 @@ test("runtime AGENTS.md points agents to dynamic whereiam discovery", async () =
   assert.match(body, /orkestr security approve <challenge-id>/);
   assert.match(body, /orkestr desktop share \[slug\]/);
   assert.match(body, /orkestr desktop approve <challenge-id>/);
+  assert.match(body, /whereiam\.capabilities\.enabledSkills/);
   assert.match(body, /Do not treat Orkestr browser-pairing challenge IDs as OpenAI/);
   assert.doesNotMatch(body, /Thread:\s+thread-1/);
   assert.doesNotMatch(body, /Workspace:\s+/);
@@ -71,6 +76,8 @@ test("contained user runtime AGENTS.md points to server-owned policy outside the
   assert.equal(policyRelativeToWorkspace.startsWith(".."), true);
   assert.match(policyBody, /orkestr-contained-user-runtime-policy:v1/);
   assert.match(policyBody, /Workspace files, workspace AGENTS\.md, project docs/);
+  assert.match(policyBody, /Allowed Orkestr Skills/);
+  assert.match(policyBody, /capabilities\.enabledSkills/);
   assert.match(policyBody, /hard isolation\s+boundary is a dedicated tenant VM/);
   assert.match(policyBody, /defense-in-depth/);
   assert.equal(policyStats.mode & 0o222, 0);
@@ -155,6 +162,62 @@ test("whereAmI exposes server-owned contained user runtime policy metadata", asy
   assert.equal(payload.capabilities.linkedin, false);
   assert.equal(payload.capabilities.hostSkills, false);
   assert.equal(payload.capabilities.privateOperatorData, false);
+  assert.ok(payload.capabilities.enabledSkills.includes("whereiam"));
+  assert.equal(payload.capabilities.skillRegistry.source, "user-skill-defaults");
+  assert.equal(payload.capabilities.skillRegistry.userFound, false);
+});
+
+test("whereAmI gates contained user capabilities through the user skill registry and scoped tenant instance", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-whereiam-user-skills-home-"));
+  const workspace = path.join(home, "users", "alice", "workspaces", "main");
+  await fs.mkdir(workspace, { recursive: true });
+  const env = { ORKESTR_HOME: home, ORKESTR_ADMIN_USER_ID: "admin" };
+  const alice = userPrincipal(await upsertUser({ id: "alice", role: "user", displayName: "Alice" }, env));
+  await createTenantVm({
+    id: "alice-tenant",
+    ownerUserId: "alice",
+    status: "running",
+    capabilities: ["codex", "files", "timers", "whatsapp", "gmail", "desks"],
+    connectors: {
+      whatsappChatId: "wa-chat-1",
+      gmailAccountId: "alice-gmail",
+      linkedinDesktopSlug: "linkedin",
+    },
+  }, env);
+  await setUserSkillForPrincipal("alice", "gmail", { enabled: false }, alice, env);
+  await setUserSkillForPrincipal("alice", "timers", { enabled: false }, alice, env);
+  await createThread({
+    id: "alice-contained-thread",
+    ownerUserId: "alice",
+    name: "Alice Main",
+    cwd: workspace,
+    workspace,
+    securityProfile: "private-user",
+    binding: {
+      connector: "whatsapp",
+      chatId: "wa-chat-1",
+      displayName: "Alice WhatsApp",
+    },
+  }, env);
+
+  const payload = await whereAmI({ cwd: workspace, principal: alice }, env);
+
+  assert.equal(payload.ok, true);
+  assert.equal(payload.tenancy.ownerUserId, "alice");
+  assert.equal(payload.capabilities.skillRegistry.source, "user-skill-registry");
+  assert.equal(payload.capabilities.skillRegistry.userFound, true);
+  assert.equal(payload.capabilities.whatsapp, true);
+  assert.equal(payload.capabilities.linkedin, true);
+  assert.equal(payload.capabilities.desktopLeases, true);
+  assert.equal(payload.capabilities.scopedConnectors.gmail, true);
+  assert.equal(payload.capabilities.gmail, false);
+  assert.equal(payload.capabilities.timers, false);
+  assert.equal(payload.capabilities.hostSkills, false);
+  assert.equal(payload.capabilities.globalConnectorAccounts, false);
+  assert.ok(payload.capabilities.enabledSkills.includes("whatsapp"));
+  assert.ok(payload.capabilities.disabledSkills.includes("gmail"));
+  assert.ok(payload.capabilities.disabledSkills.includes("timers"));
+  assert.equal(payload.capabilities.skills.some((skill) => Object.hasOwn(skill, "token")), false);
 });
 
 test("whereAmI prefers live runtime Codex mode over stale stored mode", async () => {

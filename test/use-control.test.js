@@ -21,6 +21,7 @@ import { sanitizeAction } from "../packages/core/src/llm-sanitizer.js";
 import { approvePairingChallenge } from "../packages/core/src/security.js";
 import { createUser, disableUser, findOrCreateExternalUser, listUsers, readUserPrivateIdentities, updateUser, upsertUser } from "../packages/core/src/users.js";
 import { listUserSkillsForPrincipal, setUserSkillForPrincipal } from "../packages/core/src/user-skills.js";
+import { createTenantVm } from "../packages/core/src/tenant-vm-registry.js";
 import {
   createThread,
   createThreadForPrincipal,
@@ -453,6 +454,59 @@ test("user skill registry is scoped per owner and stores public skill toggles", 
   await assert.rejects(() => listUserSkillsForPrincipal("bob", alice, env), /user_skills_access_forbidden/);
   await assert.rejects(() => setUserSkillForPrincipal("bob", "timers", { enabled: false }, alice, env), /user_skills_update_forbidden/);
   assert.ok((await listUserSkillsForPrincipal("bob", bob, env)).skills.some((skill) => skill.id === "timers"));
+});
+
+test("non-admin thread input sanitizer receives user skill guarded capabilities", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-use-control-skill-sanitizer-"));
+  const captureFile = path.join(home, "sanitizer-payload.json");
+  const script = path.join(home, "capture-sanitizer.mjs");
+  await fs.writeFile(
+    script,
+    [
+      "import fs from 'node:fs';",
+      "let input = '';",
+      "process.stdin.setEncoding('utf8');",
+      "process.stdin.on('data', (chunk) => { input += chunk; });",
+      "process.stdin.on('end', () => {",
+      `  fs.writeFileSync(${JSON.stringify(captureFile)}, input);`,
+      "  const payload = JSON.parse(input);",
+      "  const caps = payload.resource?.capabilities || {};",
+      "  const ok = caps.whatsapp === true && caps.gmail === false && caps.scopedConnectors?.gmail === true && caps.hostSkills === false && Array.isArray(caps.disabledSkills) && caps.disabledSkills.includes('gmail');",
+      "  console.log(JSON.stringify({ allow: ok, reason: ok ? 'skill-caps-ok' : 'skill-caps-mismatch', model: 'test-llm' }));",
+      "});",
+      "",
+    ].join("\n"),
+    "utf8",
+  );
+  const env = {
+    ORKESTR_HOME: home,
+    ORKESTR_LLM_SANITIZER_COMMAND_JSON: JSON.stringify([process.execPath, script]),
+  };
+  const alice = userPrincipal(await upsertUser({ id: "alice", role: "user", displayName: "Alice" }, env));
+  await createTenantVm({
+    id: "alice-tenant",
+    ownerUserId: "alice",
+    status: "running",
+    capabilities: ["codex", "whatsapp", "gmail"],
+    connectors: { whatsappChatId: "wa-1", gmailAccountId: "alice-gmail" },
+  }, env);
+  await setUserSkillForPrincipal("alice", "gmail", { enabled: false }, alice, env);
+  await createThreadForPrincipal({
+    id: "alice-thread",
+    name: "Main",
+    binding: { connector: "whatsapp", chatId: "wa-1" },
+  }, alice, env);
+
+  const message = await enqueueThreadInputForPrincipal("alice-thread", { text: "Check my Gmail", source: "whatsapp" }, alice, env);
+  const captured = JSON.parse(await fs.readFile(captureFile, "utf8"));
+
+  assert.equal(message.state, "queued");
+  assert.equal(captured.resource.capabilities.whatsapp, true);
+  assert.equal(captured.resource.capabilities.gmail, false);
+  assert.equal(captured.resource.capabilities.scopedConnectors.gmail, true);
+  assert.equal(captured.resource.capabilities.hostSkills, false);
+  assert.ok(captured.resource.capabilities.disabledSkills.includes("gmail"));
+  assert.ok(captured.resource.capabilities.enabledSkills.includes("whatsapp"));
 });
 
 test("LLM sanitizer is fail-closed when no provider is configured", async () => {

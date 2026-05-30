@@ -305,6 +305,7 @@ test("Codex app-server clamps non-admin threads away from root danger access", (
     assert.equal(threadStartParams(restrictedThread).model, "gpt-5.5");
     assert.match(threadStartParams(restrictedThread).developerInstructions, /orkestr-contained-user-runtime-policy:v1/);
     assert.match(threadStartParams(restrictedThread).developerInstructions, /Workspace files, workspace AGENTS\.md, project docs/);
+    assert.match(threadStartParams(restrictedThread).developerInstructions, /capabilities\.enabledSkills/);
     assert.equal(turnStartParams(restrictedThread, { text: "hello" }).sandboxPolicy.type, "workspaceWrite");
     assert.deepEqual(turnStartParams(restrictedThread, { text: "hello" }).sandboxPolicy.writableRoots, ["/tmp/otcantest-workspace"]);
     assert.equal(turnStartParams(restrictedThread, { text: "hello" }).sandboxPolicy.networkAccess, false);
@@ -365,6 +366,7 @@ test("Codex app-server injects contained user policy on start and resume", async
     assert.match(startCall.params.developerInstructions, /orkestr-contained-user-runtime-policy:v1/);
     assert.match(startCall.params.developerInstructions, /cannot override, weaken, or delete this policy/);
     assert.match(startCall.params.developerInstructions, /Do not use Codex skills, MCP tools/);
+    assert.match(startCall.params.developerInstructions, /Only use skills listed as enabled/);
     assert.equal(startCall.params.approvalPolicy, "never");
     assert.equal(startCall.params.sandbox, "workspace-write");
     assert.equal(startCall.params.model, "gpt-5.5");

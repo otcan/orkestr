@@ -6,6 +6,7 @@ import { appendEvent, readJson, writeJson } from "../../storage/src/store.js";
 import { listThreadRecords, saveThreadRecords } from "../../storage/src/thread-registry.js";
 import { assertSanitizedAction } from "./llm-sanitizer.js";
 import { assertResourceAccess, assertThreadLimit, filterResourcesForPrincipal, isAdminPrincipal, policyError, resourceOwnerUserId } from "./policy.js";
+import { userScopedCapabilityHints } from "./user-skills.js";
 import { adminUserId, getUser, normalizeUserId } from "./users.js";
 
 const runningThreadIds = new Set();
@@ -470,6 +471,7 @@ export async function enqueueThreadInput(threadId, input, env = process.env) {
 export async function enqueueThreadInputForPrincipal(threadId, input, principal, env = process.env) {
   const thread = await getThreadForPrincipal(threadId, principal, env);
   if (!isAdminPrincipal(principal)) {
+    const capabilities = await userScopedCapabilityHints({ userId: thread.ownerUserId, thread }, env);
     await assertSanitizedAction({
       action: "thread.input",
       principal,
@@ -477,15 +479,7 @@ export async function enqueueThreadInputForPrincipal(threadId, input, principal,
         type: "thread",
         id: thread.id,
         ownerUserId: thread.ownerUserId,
-        capabilities: {
-          whatsapp: Boolean(thread.binding?.connector === "whatsapp" || thread.binding?.chatId),
-          gmail: false,
-          outlook: false,
-          linkedin: false,
-          hostSkills: false,
-          globalConnectorAccounts: false,
-          privateOperatorData: false,
-        },
+        capabilities,
       },
       input: {
         text: String(input?.text || "").slice(0, 8000),

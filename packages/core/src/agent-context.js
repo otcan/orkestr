@@ -80,6 +80,9 @@ Use dynamic discovery for live Orkestr context:
   owner as the only user whose files, timers, connectors, desktops, and chat
   messages this runtime may operate on unless an Orkestr API explicitly returns
   a broader admin-scoped view.
+- For contained users, \`whereiam.capabilities.enabledSkills\` is the allowed
+  Orkestr skill list. Do not use disabled or missing capabilities through host
+  fallbacks.
 
 Orkestr capabilities:
 

@@ -18,6 +18,9 @@ state, browser profiles, or user files.
   unclear, or denied, the action is blocked.
 - Runtime rule: `orkestr whereiam --json` is the source of truth for contained
   agents. Static `AGENTS.md` text cannot grant more access than `whereiam`.
+- Skill rule: contained agents may only use skills listed in
+  `whereiam.capabilities.enabledSkills`, and connector booleans must come from
+  user-scoped tenant instance state instead of host accounts.
 
 ## Matrix
 
@@ -26,8 +29,8 @@ state, browser profiles, or user files.
 | Threads and messages | Tenant VM or tenant instance | `ownerUserId` on thread and message records, scoped list/get/delete/input APIs, one-thread default limit for non-admin users | Non-admin cannot see, enqueue to, delete, or duplicate another owner's thread |
 | Files, uploads, temp files, and artifacts | Tenant VM filesystem | Per-user workspace roots, path traversal denial, no direct reads from global secrets or overlays | Non-admin file browser stays inside owned workspace and files roots |
 | Code execution and Codex runtime | Tenant VM runtime | Workspace-write sandbox, on-request approvals, contained developer policy, host-skill denial | Non-admin thread creation cannot request root-trusted or danger-full-access runtime |
-| `whereiam` and agent context | Tenant VM runtime metadata | Server-owned contained policy path, denied capability hints, no admin paths for contained users | Contained `whereiam` reports tenant VM boundary, denied host skills, and policy metadata |
-| Connectors | Tenant-owned instance state | Per-user Gmail/Outlook tokens, scoped setup status, no global connector account listing | User A cannot read User B connector status, token state, or connector errors |
+| `whereiam` and agent context | Tenant VM runtime metadata | Server-owned contained policy path, user skill registry capability hints, no admin paths for contained users | Contained `whereiam` reports tenant VM boundary, denied host skills, enabled/disabled skill lists, and policy metadata |
+| Connectors | Tenant-owned instance state | Per-user Gmail/Outlook tokens, scoped setup status, user skill registry gates connector use, no global connector account listing | User A cannot read User B connector status, token state, connector errors, or disabled connector skills |
 | WhatsApp routing | Tenant-owned WhatsApp account or generated group | External identity maps to one user, debug footer suppression for users, sanitizer failure notification | Generated WA user gets scoped thread and cannot appear in default admin chat list |
 | Browser desktops | Tenant-owned browser profile | Per-user browser profile roots, desktop lease ownership, share links scoped to owner | User A cannot list, lease, restart, or share User B desktop |
 | Timers | Tenant VM scheduler state | Timer `ownerUserId`, scoped doctor/list/run/delete APIs, sanitizer gate for prompt execution | Non-admin timer create/run fails closed without sanitizer and cannot target other owner |

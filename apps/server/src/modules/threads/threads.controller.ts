@@ -33,6 +33,7 @@ import {
 import { requestPrincipal } from "../../../../../packages/core/src/principal.js";
 import { assertSanitizedAction } from "../../../../../packages/core/src/llm-sanitizer.js";
 import { isAdminPrincipal } from "../../../../../packages/core/src/policy.js";
+import { userScopedCapabilityHints } from "../../../../../packages/core/src/user-skills.js";
 import { createThreadWorker, detectThreadRepo, listThreadWorkers, refreshThreadGitState, syncThreadWorkerWithParent, updateThreadRepo } from "../../../../../packages/core/src/thread-workers.js";
 import { parseThreadInputCommand } from "../../../../../packages/core/src/thread-commands.js";
 import { codexResumeCommand } from "../../../../../packages/core/src/codex-attach-command.js";
@@ -544,6 +545,10 @@ function messagePage(thread: any, rawMessages: any[] = [], query: Record<string,
 export class ThreadsController {
   private async assertThreadSanitized(action: string, principal: any, thread: any, input: Record<string, unknown> = {}) {
     if (isAdminPrincipal(principal)) return null;
+    const capabilities = await userScopedCapabilityHints({
+      userId: thread?.ownerUserId || principal?.userId || "",
+      thread,
+    }, process.env);
     return assertSanitizedAction({
       action,
       principal,
@@ -554,15 +559,7 @@ export class ThreadsController {
         state: thread?.state || "",
         parentThreadId: thread?.parentThreadId || null,
         rootThreadId: thread?.rootThreadId || null,
-        capabilities: {
-          whatsapp: Boolean(thread?.binding?.connector === "whatsapp" || thread?.binding?.chatId),
-          gmail: false,
-          outlook: false,
-          linkedin: false,
-          hostSkills: false,
-          globalConnectorAccounts: false,
-          privateOperatorData: false,
-        },
+        capabilities,
       },
       input: sanitizedThreadActionInput(input),
     }, process.env);

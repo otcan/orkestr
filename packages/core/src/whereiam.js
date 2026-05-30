@@ -7,6 +7,7 @@ import { readRuntimeSettings } from "./runtime-settings.js";
 import { listThreads, listThreadsForPrincipal, updateThread } from "./threads.js";
 import { containedUserPolicyPath, tenantIsolationBoundary, threadUsesContainedUserPolicy } from "./tenant-policy.js";
 import { adminUserId, normalizeUserId } from "./users.js";
+import { builtinUserSkillDefinitions, userScopedCapabilityHints } from "./user-skills.js";
 
 function nowIso() {
   return new Date().toISOString();
@@ -173,29 +174,43 @@ function commandHints() {
   };
 }
 
-function capabilityHints(thread = null, env = process.env) {
-  if (threadUsesContainedUserPolicy(thread || {}, env)) {
-    return {
-      threads: true,
-      timers: true,
-      virtualBrowsers: true,
-      desktopLeases: true,
-      whatsapp: Boolean(thread?.binding?.connector === "whatsapp" || thread?.binding?.chatId),
-      gmail: false,
-      outlook: false,
-      linkedin: false,
-      hostSkills: false,
-      globalConnectorAccounts: false,
-      privateOperatorData: false,
-    };
+async function capabilityHints(thread = null, options = {}, env = process.env) {
+  const ownerUserId = normalizeUserId(options.ownerUserId || thread?.ownerUserId || thread?.userId || env.ORKESTR_ADMIN_USER_ID || adminUserId);
+  if (threadUsesContainedUserPolicy(thread || { ownerUserId }, env)) {
+    return userScopedCapabilityHints({ userId: ownerUserId, thread: thread || { ownerUserId } }, env);
   }
+  const enabledSkills = builtinUserSkillDefinitions().map((definition) => definition.id);
   return {
     threads: true,
+    whereiam: true,
+    files: true,
     timers: true,
     virtualBrowsers: true,
     desktopLeases: true,
     whatsapp: true,
     gmail: true,
+    outlook: true,
+    linkedin: true,
+    learning: true,
+    hostSkills: true,
+    globalConnectorAccounts: true,
+    privateOperatorData: true,
+    skillRegistry: {
+      userId: ownerUserId,
+      source: "admin-defaults",
+      userFound: true,
+    },
+    enabledSkills,
+    disabledSkills: [],
+    skills: builtinUserSkillDefinitions().map((skill) => ({
+      id: skill.id,
+      label: skill.label,
+      category: skill.category,
+      enabled: true,
+      scopes: [...skill.scopes],
+      requiresConnector: clean(skill.requiresConnector),
+      requiresDesktop: clean(skill.requiresDesktop),
+    })),
   };
 }
 
@@ -264,7 +279,8 @@ export async function whereAmI(input = {}, env = process.env) {
   const lease = match?.lease || null;
   const status = thread ? await runtimeStatus(thread.id, env).catch(() => null) : null;
   thread = await syncLiveCodexMode(thread, status, env);
-  const owner = normalizeUserId(thread?.ownerUserId || env.ORKESTR_ADMIN_USER_ID || adminUserId);
+  const principalIsUser = principal && String(principal.role || "").toLowerCase() !== "admin";
+  const owner = normalizeUserId(thread?.ownerUserId || (principalIsUser ? principal.userId : "") || env.ORKESTR_ADMIN_USER_ID || adminUserId);
   const scoped = Boolean(principal && String(principal.role || "").toLowerCase() !== "admin");
   const containedPolicy = threadUsesContainedUserPolicy(thread || { ownerUserId: owner }, env);
   return {
@@ -301,7 +317,7 @@ export async function whereAmI(input = {}, env = process.env) {
     workspace: publicWorkspace(thread, lease, cwd),
     runtime: publicRuntime(lease, status),
     settings,
-    capabilities: capabilityHints(thread, env),
+    capabilities: await capabilityHints(thread || { ownerUserId: owner }, { ownerUserId: owner }, env),
     commands: commandHints(),
     generatedAt: nowIso(),
   };
