@@ -22,14 +22,18 @@ function parseCommand(env = process.env) {
 }
 
 function normalizeDecision(value = {}) {
-  const allow = value.allow === true || String(value.decision || value.result || "").trim().toLowerCase() === "allow";
+  const unavailable = value.unavailable === true;
+  const explicitAllow = value.allow === true;
+  const explicitDeny = value.allow === false;
+  const textDecision = String(value.decision || value.result || "").trim().toLowerCase();
+  const allow = !unavailable && (explicitAllow || (!explicitDeny && textDecision === "allow"));
   const reason = String(value.reason || value.message || (allow ? "allowed" : "denied")).trim();
   return {
     allow,
     reason,
     model: String(value.model || value.provider || "").trim() || null,
     raw: value,
-    unavailable: value.unavailable === true,
+    unavailable,
   };
 }
 
@@ -44,7 +48,12 @@ function unavailable(reason) {
 }
 
 async function runCommandSanitizer(payload, env = process.env) {
-  const command = parseCommand(env);
+  let command = [];
+  try {
+    command = parseCommand(env);
+  } catch {
+    return unavailable("llm_sanitizer_command_invalid");
+  }
   if (!command.length) return unavailable("llm_sanitizer_unconfigured");
   const [file, ...args] = command;
   const timeoutMs = sanitizerTimeoutMs(env);
