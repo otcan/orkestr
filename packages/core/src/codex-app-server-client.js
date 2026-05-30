@@ -37,6 +37,7 @@ import {
   whatsappOrigin,
   whatsappProjectionFields,
 } from "./codex-app-server-whatsapp.js";
+import { requestUserInputAnswers } from "./codex-app-server-user-input.js";
 
 const execFileAsync = promisify(execFile);
 const clients = new Map();
@@ -569,13 +570,13 @@ export class CodexAppServerClient {
     return null;
   }
 
-  async answerPendingRequest(thread, decision = "accept") {
+  async answerPendingRequest(thread, decision = "accept", options = {}) {
     const request = this.pendingRequestForThread(thread);
     if (!request) return null;
     if (request.method === "item/commandExecution/requestApproval" || request.method === "item/fileChange/requestApproval") {
       this.respond(request.requestId, { decision });
     } else if (request.method === "item/tool/requestUserInput") {
-      this.respond(request.requestId, { answers: {} });
+      this.respond(request.requestId, { answers: requestUserInputAnswers(request, options.text || "") });
     } else {
       this.respond(request.requestId, { decision });
     }

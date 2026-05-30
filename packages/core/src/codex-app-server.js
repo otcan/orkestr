@@ -527,6 +527,17 @@ async function deliverCodexAppServerPendingInputsUnlocked(thread, env = process.
   }
   const pendingApproval = client.pendingRequestForThread(thread);
   const text = clean(next.text);
+  if (pendingApproval?.method === "item/tool/requestUserInput") {
+    await client.answerPendingRequest(thread, "answer", { text });
+    await updateThreadMessage(thread.id, next.id, {
+      state: "completed",
+      deliveryState: "delivered",
+      deliveredAt: nowIso(),
+      observedVia: "codex_app_server_user_input",
+    }, env);
+    delivered.push(next.id);
+    return delivered;
+  }
   if (pendingApproval && /^(\/?approve(?:d)?|yes|y|allow|go|proceed)\b/i.test(text)) {
     const decision = /\bsession\b/i.test(text) ? "acceptForSession" : "accept";
     await client.answerPendingRequest(thread, decision);

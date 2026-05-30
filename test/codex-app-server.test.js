@@ -822,6 +822,65 @@ test("Codex app-server does not reclaim a recent cross-process delivery claim", 
   }
 });
 
+test("Codex app-server sends short chat replies to pending user-input requests", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-codex-app-server-user-input-"));
+  const fake = await createFakeCodex(home);
+  const env = {
+    ORKESTR_HOME: path.join(home, "orkestr"),
+    HOME: path.join(home, "runtime-home"),
+    PATH: `${fake.bin}${path.delimiter}${process.env.PATH || ""}`,
+    FAKE_CODEX_STATE: fake.stateFile,
+  };
+  try {
+    const thread = await createThread({ id: "app-server-user-input-thread", name: "User Input Thread", cwd: home, executorId: "codex", executor: { type: "codex" } }, env);
+    const started = await startCodexAppServerThread(thread, env);
+    const codexId = started.thread.executor.codexThreadId;
+    const client = await getCodexAppServerClient({ env, home: env.HOME });
+    const responses = [];
+    client.respond = (id, result) => responses.push({ id, result });
+    const request = {
+      requestId: "ask-continue",
+      method: "item/tool/requestUserInput",
+      threadId: started.thread.id,
+      codexThreadId: codexId,
+      params: {
+        questions: [
+          {
+            id: "nextAction",
+            question: "Continue with the LinkedIn send?",
+            options: [{ label: "Go" }, { label: "Stop" }],
+          },
+        ],
+      },
+    };
+    client.pendingRequests.set(request.requestId, request);
+    await updateThread(started.thread.id, {
+      state: "awaiting_approval",
+      runtime: {
+        ...(started.thread.runtime || {}),
+        runtimeKind: "codex-app-server",
+        state: "awaiting_approval",
+        pendingRequest: request,
+      },
+    }, env);
+    const input = await enqueueThreadInput(started.thread.id, { text: "go", source: "manual" }, env);
+
+    const delivered = await deliverCodexAppServerPendingInputs(await getThread(started.thread.id, env), env);
+    const messages = await listThreadMessages(started.thread.id, env);
+    const completed = messages.find((message) => message.id === input.id);
+    const rawState = JSON.parse(await fs.readFile(fake.stateFile, "utf8"));
+
+    assert.deepEqual(delivered, [input.id]);
+    assert.deepEqual(responses, [{ id: "ask-continue", result: { answers: { nextAction: "Go" } } }]);
+    assert.equal(completed.state, "completed");
+    assert.equal(completed.deliveryState, "delivered");
+    assert.equal(completed.observedVia, "codex_app_server_user_input");
+    assert.ok(!rawState.calls.some((call) => call.method === "turn/start"));
+  } finally {
+    stopCodexAppServerClients();
+  }
+});
+
 test("Codex app-server mirrors interrupted turns to the thread and WhatsApp", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-codex-app-server-interrupted-"));
   const fake = await createFakeCodex(home);
