@@ -89,6 +89,7 @@ function authorizeConnectorResourceRequest(request: any, principal: any) {
   if (!route) return { ok: true };
   if (isPublicConnectorRoute(route)) return { ok: true };
   if (isAdminPrincipal(principal)) return { ok: true };
+  if (isUserConnectorRoute(route)) return { ok: true };
   return { ok: false, statusCode: 403, error: "connector_admin_required" };
 }
 
@@ -108,6 +109,19 @@ function isPublicConnectorRoute(route: { method: string; connector: string; acti
     route.connector === "whatsapp" &&
     route.action.length === 1 &&
     route.action[0] === "inbound";
+}
+
+function isUserConnectorRoute(route: { method: string; connector: string; action: string[] }) {
+  if (route.connector === "gmail") {
+    if (route.method === "GET" && route.action.length === 2 && route.action[0] === "oauth" && route.action[1] === "start") return true;
+    if (route.method === "GET" && route.action[0] === "messages" && route.action.length <= 2) return true;
+    if (route.method === "POST" && route.action.length === 1 && route.action[0] === "test") return true;
+  }
+  if (route.connector === "outlook") {
+    if (route.method === "POST" && route.action.length === 2 && route.action[0] === "oauth" && ["start", "poll"].includes(route.action[1])) return true;
+    if (route.method === "POST" && route.action.length === 1 && route.action[0] === "test") return true;
+  }
+  return false;
 }
 
 async function authorizeThreadResourceRequest(request: any, principal: any) {

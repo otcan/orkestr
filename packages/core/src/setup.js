@@ -23,9 +23,9 @@ function setupState(connectors) {
   return ready ? "ready" : "partial";
 }
 
-export async function getSetupStatus({ env = process.env, home } = {}) {
+export async function getSetupStatus({ env = process.env, home, principal = null } = {}) {
   const paths = dataPaths(env);
-  const connectors = await getConnectorStatuses({ env, home });
+  const connectors = await getConnectorStatuses({ env, home, principal });
   const overlay = await readOverlay(env);
   const security = await securityStatus(env);
   const auth = publicAuthStatus(env);

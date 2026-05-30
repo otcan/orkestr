@@ -9,6 +9,7 @@ import { activeCodexRuntimeAuthInvalid } from "../../core/src/codex-auth-health.
 import { readOverlay } from "../../core/src/overlay.js";
 import { CODEX_DISABLED_ON_MACOS, codexAppServerProbe, codexLoginStatus, defaultCodexHome } from "./codex.js";
 import { getWhatsAppStatus } from "./whatsapp.js";
+import { connectorFile, connectorScopePaths } from "./connector-storage.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -95,8 +96,9 @@ async function overlayConnectorStatus(id, overlay) {
   );
 }
 
-export async function getConnectorStatuses({ env = process.env, home = os.homedir() } = {}) {
+export async function getConnectorStatuses({ env = process.env, home = os.homedir(), principal = null } = {}) {
   const paths = dataPaths(env);
+  const scopedPaths = await connectorScopePaths(env, { principal });
   const [openaiConfig, gmailConfig, outlookConfig] = await Promise.all([
     readConnectorConfig("openai", env),
     readConnectorConfig("gmail", env),
@@ -119,10 +121,10 @@ export async function getConnectorStatuses({ env = process.env, home = os.homedi
   const timersExist = await pathExists(paths.timers);
   const linkedinProfileExists = await pathExists(path.join(paths.browsers, "linkedin"));
   const gmailProfileExists = await pathExists(path.join(paths.browsers, "gmail"));
-  const gmailOAuthExists = await pathExists(path.join(paths.secrets, "gmail-token.json"));
-  const gmailOAuthError = await readJsonIfExists(path.join(paths.secrets, "gmail-error.json"));
-  const outlookOAuthExists = await pathExists(path.join(paths.secrets, "outlook-token.json"));
-  const outlookOAuthError = await readJsonIfExists(path.join(paths.secrets, "outlook-error.json"));
+  const gmailOAuthExists = await pathExists(connectorFile(scopedPaths, "secrets", "gmail-token.json"));
+  const gmailOAuthError = await readJsonIfExists(connectorFile(scopedPaths, "secrets", "gmail-error.json"));
+  const outlookOAuthExists = await pathExists(connectorFile(scopedPaths, "secrets", "outlook-token.json"));
+  const outlookOAuthError = await readJsonIfExists(connectorFile(scopedPaths, "secrets", "outlook-error.json"));
   const openaiKey = env.OPENAI_API_KEY || openaiConfig.openaiApiKey || "";
   const codexAuthExists = await pathExists(codexAuthPath);
   const codexEnvKey = Boolean(env.OPENAI_API_KEY);

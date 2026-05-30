@@ -14,8 +14,10 @@ import {
   refreshGmailAccessToken,
   startGmailOAuth,
 } from "../packages/connectors/src/gmail.js";
+import { userPrincipal } from "../packages/core/src/principal.js";
 import { getSetupStatus } from "../packages/core/src/setup.js";
 import { writeConnectorConfig } from "../packages/storage/src/config.js";
+import { userDataPaths } from "../packages/storage/src/paths.js";
 
 function jsonResponse(payload, ok = true, status = 200) {
   return {
@@ -97,6 +99,62 @@ test("gmail callback validates state and exchanges tokens", async () => {
   assert.equal((await readGmailToken(env)).accessToken, "access-callback");
 });
 
+test("gmail callback rejects unknown OAuth state", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-gmail-unknown-state-"));
+  const env = { ORKESTR_HOME: home };
+  await writeConnectorConfig("gmail", {
+    clientId: "client-id",
+    clientSecret: "client-secret",
+    redirectUri: "http://localhost/callback",
+  }, env);
+
+  await assert.rejects(
+    () => finishGmailOAuth(new URLSearchParams({ code: "callback-code", state: "unknown-state" }), env, async () => jsonResponse({})),
+    /gmail_oauth_state_mismatch/,
+  );
+});
+
+test("gmail oauth stores non-admin user tokens outside global secrets", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-gmail-user-oauth-"));
+  const env = { ORKESTR_HOME: home };
+  const alice = userPrincipal({ id: "alice" });
+  const bob = userPrincipal({ id: "bob" });
+  await writeConnectorConfig("gmail", {
+    clientId: "client-id",
+    clientSecret: "client-secret",
+    redirectUri: "http://localhost/callback",
+  }, env);
+
+  const started = await startGmailOAuth(env, { account: "alice@example.com", principal: alice });
+  const alicePaths = userDataPaths("alice", env);
+  const savedState = JSON.parse(await fs.readFile(path.join(alicePaths.oauth, "gmail-state.json"), "utf8"));
+  const result = await finishGmailOAuth(
+    new URLSearchParams({ code: "alice-code", state: started.state }),
+    env,
+    async () =>
+      jsonResponse({
+        access_token: "alice-access",
+        refresh_token: "alice-refresh",
+        expires_in: 3600,
+        scope: "gmail",
+      }),
+  );
+
+  assert.equal(savedState.userId, "alice");
+  assert.equal(result.userId, "alice");
+  assert.equal((await readGmailToken(env, { principal: alice })).accessToken, "alice-access");
+  assert.deepEqual(await readGmailToken(env), {});
+  assert.deepEqual(await readGmailToken(env, { principal: bob }), {});
+
+  let status = await getSetupStatus({ env, home, principal: alice });
+  let gmail = status.connectors.find((connector) => connector.id === "gmail");
+  assert.equal(gmail.state, "connected");
+
+  status = await getSetupStatus({ env, home, principal: bob });
+  gmail = status.connectors.find((connector) => connector.id === "gmail");
+  assert.equal(gmail.state, "partial");
+});
+
 test("expired gmail tokens refresh with the stored refresh token", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-gmail-refresh-"));
   const env = { ORKESTR_HOME: home };
@@ -176,6 +234,38 @@ test("gmail message list uses stored access token", async () => {
       resultSizeEstimate: 1,
     });
   });
+
+  assert.equal(result.messages[0].id, "m1");
+});
+
+test("gmail message list reads the scoped user access token", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-gmail-user-list-"));
+  const env = { ORKESTR_HOME: home };
+  const alice = userPrincipal({ id: "alice" });
+  await writeConnectorConfig("gmail", {
+    clientId: "client-id",
+    clientSecret: "client-secret",
+    redirectUri: "http://localhost/callback",
+  }, env);
+  await exchangeGmailCode(
+    "code-123",
+    env,
+    async () =>
+      jsonResponse({
+        access_token: "alice-access-list",
+        refresh_token: "alice-refresh-list",
+        expires_in: 3600,
+      }),
+    { principal: alice },
+  );
+
+  const result = await listGmailMessages({ maxResults: 1 }, env, async (_url, options) => {
+    assert.equal(options.headers.authorization, "Bearer alice-access-list");
+    return jsonResponse({
+      messages: [{ id: "m1", threadId: "t1" }],
+      resultSizeEstimate: 1,
+    });
+  }, { principal: alice });
 
   assert.equal(result.messages[0].id, "m1");
 });

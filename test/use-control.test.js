@@ -665,6 +665,14 @@ test("user management API is admin-only and can pair a browser to a managed user
     assert.equal(deniedConnectorResponse.status, 403);
     assert.equal(deniedConnector.error, "connector_admin_required");
 
+    const userGmailStatusResponse = await fetch(`${baseUrl}/api/connectors/gmail/test`, {
+      method: "POST",
+      headers: { cookie: userCookie, connection: "close" },
+    });
+    const userGmailStatus = await read(userGmailStatusResponse);
+    assert.equal(userGmailStatusResponse.status, 200);
+    assert.equal(userGmailStatus.id, "gmail");
+
     const deniedDesktopResponse = await fetch(`${baseUrl}/api/browsers/linkedin/prepare`, {
       method: "POST",
       headers: { "content-type": "application/json", cookie: userCookie },

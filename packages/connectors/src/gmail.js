@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { readConnectorConfig } from "../../storage/src/config.js";
-import { ensureDataDirs } from "../../storage/src/paths.js";
 import { appendEvent, readJson, writeJson, writeSecretJson } from "../../storage/src/store.js";
+import { connectorFile, connectorScopePaths, listConnectorScopePaths } from "./connector-storage.js";
 
 const tokenUrl = "https://oauth2.googleapis.com/token";
 const gmailApiBase = "https://gmail.googleapis.com/gmail/v1/users/me";
@@ -41,8 +41,8 @@ async function requestToken(params, fetchImpl = fetch) {
   return payload;
 }
 
-async function saveTokenPayload(payload, env, prior = {}) {
-  const paths = await ensureDataDirs(env);
+async function saveTokenPayload(payload, env, prior = {}, options = {}) {
+  const scope = await connectorScopePaths(env, options);
   const accessToken = String(payload.access_token || "").trim();
   if (!accessToken) {
     const error = new Error("gmail_token_missing_access_token");
@@ -58,33 +58,34 @@ async function saveTokenPayload(payload, env, prior = {}) {
     expiresAt: nowSeconds() + Math.max(1, expiresIn),
     updatedAt: new Date().toISOString(),
   };
-  await writeSecretJson(`${paths.secrets}/gmail-token.json`, token);
+  await writeSecretJson(connectorFile(scope, "secrets", "gmail-token.json"), token);
   return token;
 }
 
-async function saveOAuthError(error, env) {
-  const paths = await ensureDataDirs(env);
-  await writeSecretJson(`${paths.secrets}/gmail-error.json`, {
+async function saveOAuthError(error, env, options = {}) {
+  const scope = await connectorScopePaths(env, options);
+  await writeSecretJson(connectorFile(scope, "secrets", "gmail-error.json"), {
     message: error.message || String(error),
     statusCode: error.statusCode || 500,
     updatedAt: new Date().toISOString(),
   });
 }
 
-export async function readGmailToken(env = process.env) {
-  const paths = await ensureDataDirs(env);
-  return readJson(`${paths.secrets}/gmail-token.json`, {});
+export async function readGmailToken(env = process.env, options = {}) {
+  const scope = await connectorScopePaths(env, options);
+  return readJson(connectorFile(scope, "secrets", "gmail-token.json"), {});
 }
 
 export async function startGmailOAuth(env = process.env, options = {}) {
   const config = await readConnectorConfig("gmail", env);
   const { clientId, redirectUri } = requireOAuthConfig(config);
-  const paths = await ensureDataDirs(env);
+  const scope = await connectorScopePaths(env, options);
   const state = randomUUID();
   const account = String(options.account || config.account || "").trim();
-  await writeJson(`${paths.oauth}/gmail-state.json`, {
+  await writeJson(connectorFile(scope, "oauth", "gmail-state.json"), {
     state,
     account,
+    userId: scope.userId || "",
     createdAt: new Date().toISOString(),
   });
   const url = new URL("https://accounts.google.com/o/oauth2/v2/auth");
@@ -96,11 +97,11 @@ export async function startGmailOAuth(env = process.env, options = {}) {
   url.searchParams.set("scope", gmailScopes.join(" "));
   url.searchParams.set("state", state);
   if (account) url.searchParams.set("login_hint", account);
-  await appendEvent({ type: "gmail_oauth_started" }, env);
+  await appendEvent({ type: "gmail_oauth_started", userId: scope.userId || undefined }, env);
   return { authorizeUrl: url.toString(), state, redirectUri, account };
 }
 
-export async function exchangeGmailCode(code, env = process.env, fetchImpl = fetch) {
+export async function exchangeGmailCode(code, env = process.env, fetchImpl = fetch, options = {}) {
   const config = await readConnectorConfig("gmail", env);
   const { clientId, clientSecret, redirectUri } = requireOAuthConfig(config);
   if (!clientSecret) {
@@ -119,19 +120,20 @@ export async function exchangeGmailCode(code, env = process.env, fetchImpl = fet
       },
       fetchImpl,
     );
-    const token = await saveTokenPayload(payload, env);
-    await appendEvent({ type: "gmail_oauth_token_exchanged" }, env);
+    const token = await saveTokenPayload(payload, env, {}, options);
+    const scope = await connectorScopePaths(env, options);
+    await appendEvent({ type: "gmail_oauth_token_exchanged", userId: scope.userId || undefined }, env);
     return token;
   } catch (error) {
-    await saveOAuthError(error, env);
+    await saveOAuthError(error, env, options);
     throw error;
   }
 }
 
-export async function refreshGmailAccessToken(env = process.env, fetchImpl = fetch) {
+export async function refreshGmailAccessToken(env = process.env, fetchImpl = fetch, options = {}) {
   const config = await readConnectorConfig("gmail", env);
   const { clientId, clientSecret } = requireOAuthConfig(config);
-  const prior = await readGmailToken(env);
+  const prior = await readGmailToken(env, options);
   const refreshToken = String(prior.refreshToken || "").trim();
   if (!clientSecret || !refreshToken) {
     const error = new Error("gmail_refresh_config_required");
@@ -148,26 +150,47 @@ export async function refreshGmailAccessToken(env = process.env, fetchImpl = fet
       },
       fetchImpl,
     );
-    const token = await saveTokenPayload(payload, env, prior);
-    await appendEvent({ type: "gmail_oauth_token_refreshed" }, env);
+    const token = await saveTokenPayload(payload, env, prior, options);
+    const scope = await connectorScopePaths(env, options);
+    await appendEvent({ type: "gmail_oauth_token_refreshed", userId: scope.userId || undefined }, env);
     return token;
   } catch (error) {
-    await saveOAuthError(error, env);
+    await saveOAuthError(error, env, options);
     throw error;
   }
 }
 
-export async function getGmailAccessToken(env = process.env, fetchImpl = fetch) {
-  const token = await readGmailToken(env);
+export async function getGmailAccessToken(env = process.env, fetchImpl = fetch, options = {}) {
+  const token = await readGmailToken(env, options);
   if (token.accessToken && Number(token.expiresAt || 0) - 120 > nowSeconds()) {
     return token.accessToken;
   }
-  const refreshed = await refreshGmailAccessToken(env, fetchImpl);
+  const refreshed = await refreshGmailAccessToken(env, fetchImpl, options);
   return refreshed.accessToken;
 }
 
+async function findOAuthState(state, env = process.env) {
+  let sawSavedState = false;
+  for (const scope of await listConnectorScopePaths(env)) {
+    const savedState = await readJson(connectorFile(scope, "oauth", "gmail-state.json"), {});
+    if (!savedState.state) continue;
+    sawSavedState = true;
+    if (!state || state === savedState.state) {
+      return {
+        savedState,
+        scopeOptions: scope.userId ? { userId: scope.userId } : {},
+      };
+    }
+  }
+  if (sawSavedState || state) {
+    const error = new Error("gmail_oauth_state_mismatch");
+    error.statusCode = 400;
+    throw error;
+  }
+  return { savedState: {}, scopeOptions: {} };
+}
+
 export async function finishGmailOAuth(query, env = process.env, fetchImpl = fetch) {
-  const paths = await ensureDataDirs(env);
   const code = String(query.get("code") || "").trim();
   const state = String(query.get("state") || "").trim();
   if (!code) {
@@ -175,17 +198,13 @@ export async function finishGmailOAuth(query, env = process.env, fetchImpl = fet
     error.statusCode = 400;
     throw error;
   }
-  const savedState = await readJson(`${paths.oauth}/gmail-state.json`, {});
-  if (savedState.state && state !== savedState.state) {
-    const error = new Error("gmail_oauth_state_mismatch");
-    error.statusCode = 400;
-    throw error;
-  }
-  const token = await exchangeGmailCode(code, env, fetchImpl);
+  const { savedState, scopeOptions } = await findOAuthState(state, env);
+  const token = await exchangeGmailCode(code, env, fetchImpl, scopeOptions);
   return {
     ok: true,
     state,
     account: savedState.account || "",
+    userId: savedState.userId || "",
     scope: token.scope,
     expiresAt: token.expiresAt,
     receivedAt: new Date().toISOString(),
@@ -229,9 +248,9 @@ export function normalizeGmailMessage(message) {
   };
 }
 
-async function gmailApiGet(path, params, env, fetchImpl) {
-  const accessToken = await getGmailAccessToken(env, fetchImpl);
-  const url = new URL(`${gmailApiBase}${path}`);
+async function gmailApiGet(resourcePath, params, env, fetchImpl, options = {}) {
+  const accessToken = await getGmailAccessToken(env, fetchImpl, options);
+  const url = new URL(`${gmailApiBase}${resourcePath}`);
   for (const [key, value] of Object.entries(params || {})) {
     if (value !== undefined && value !== null && String(value) !== "") {
       url.searchParams.set(key, String(value));
@@ -252,7 +271,7 @@ async function gmailApiGet(path, params, env, fetchImpl) {
   return payload;
 }
 
-export async function listGmailMessages({ maxResults = 10, query = "" } = {}, env = process.env, fetchImpl = fetch) {
+export async function listGmailMessages({ maxResults = 10, query = "" } = {}, env = process.env, fetchImpl = fetch, options = {}) {
   const payload = await gmailApiGet(
     "/messages",
     {
@@ -261,6 +280,7 @@ export async function listGmailMessages({ maxResults = 10, query = "" } = {}, en
     },
     env,
     fetchImpl,
+    options,
   );
   return {
     messages: Array.isArray(payload.messages) ? payload.messages : [],
@@ -269,13 +289,13 @@ export async function listGmailMessages({ maxResults = 10, query = "" } = {}, en
   };
 }
 
-export async function getGmailMessage(messageId, env = process.env, fetchImpl = fetch) {
+export async function getGmailMessage(messageId, env = process.env, fetchImpl = fetch, options = {}) {
   const id = String(messageId || "").trim();
   if (!id) {
     const error = new Error("gmail_message_id_required");
     error.statusCode = 400;
     throw error;
   }
-  const payload = await gmailApiGet(`/messages/${encodeURIComponent(id)}`, { format: "full" }, env, fetchImpl);
+  const payload = await gmailApiGet(`/messages/${encodeURIComponent(id)}`, { format: "full" }, env, fetchImpl, options);
   return normalizeGmailMessage(payload);
 }

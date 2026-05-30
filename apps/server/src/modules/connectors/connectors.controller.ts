@@ -105,30 +105,37 @@ export class ConnectorsController {
   }
 
   @Get("gmail/oauth/start")
-  async startGmailOAuth(@Query("account") account = "") {
-    return beginGmailOAuth(process.env, { account });
+  async startGmailOAuth(@Req() request: any, @Query("account") account = "") {
+    return beginGmailOAuth(process.env, { account, principal: requestPrincipal(request) });
   }
 
   @Get("gmail/messages")
-  async gmailMessages(@Query("maxResults") maxResults = "10", @Query("q") query = "") {
-    return listGmailMessages({ maxResults: Number(maxResults || 10), query });
+  async gmailMessages(@Req() request: any, @Query("maxResults") maxResults = "10", @Query("q") query = "") {
+    return listGmailMessages({ maxResults: Number(maxResults || 10), query }, process.env, fetch, {
+      principal: requestPrincipal(request),
+    });
   }
 
   @Get("gmail/messages/:id")
-  async gmailMessage(@Param("id") id: string) {
-    return { message: await getGmailMessage(id) };
+  async gmailMessage(@Req() request: any, @Param("id") id: string) {
+    return { message: await getGmailMessage(id, process.env, fetch, { principal: requestPrincipal(request) }) };
   }
 
   @Post("outlook/oauth/start")
   @HttpCode(200)
-  async startOutlookOAuth(@Body() body: Record<string, unknown> = {}) {
-    return startOutlookDeviceOAuth(process.env, { account: String(body.account || "") });
+  async startOutlookOAuth(@Req() request: any, @Body() body: Record<string, unknown> = {}) {
+    return startOutlookDeviceOAuth(process.env, {
+      account: String(body.account || ""),
+      principal: requestPrincipal(request),
+    });
   }
 
   @Post("outlook/oauth/poll")
   @HttpCode(200)
-  async pollOutlookOAuth(@Body() body: Record<string, unknown> = {}) {
-    return pollOutlookDeviceOAuth(String(body.pendingId || ""));
+  async pollOutlookOAuth(@Req() request: any, @Body() body: Record<string, unknown> = {}) {
+    return pollOutlookDeviceOAuth(String(body.pendingId || ""), process.env, fetch, {
+      principal: requestPrincipal(request),
+    });
   }
 
   @Get("whatsapp/status")
@@ -344,8 +351,8 @@ export class ConnectorsController {
 
   @Post(":id/test")
   @HttpCode(200)
-  async testConnector(@Param("id") id: string) {
-    const status = await getSetupStatus();
+  async testConnector(@Req() request: any, @Param("id") id: string) {
+    const status = await getSetupStatus({ principal: requestPrincipal(request) });
     const connector = status.connectors.find((item) => item.id === id);
     if (!connector) throw httpError("unknown_connector", 404);
     return connector;

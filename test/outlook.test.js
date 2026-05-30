@@ -3,9 +3,11 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
+import { userPrincipal } from "../packages/core/src/principal.js";
 import { getSetupStatus } from "../packages/core/src/setup.js";
 import { pollOutlookDeviceOAuth, readOutlookToken, startOutlookDeviceOAuth } from "../packages/connectors/src/outlook.js";
 import { writeConnectorConfig } from "../packages/storage/src/config.js";
+import { userDataPaths } from "../packages/storage/src/paths.js";
 
 function jsonResponse(payload, ok = true, status = 200) {
   return {
@@ -87,6 +89,60 @@ test("outlook device auth poll stores token after approval", async () => {
   assert.equal(polled.state, "connected");
   assert.equal(token.accessToken, "access-1");
   assert.equal(token.refreshToken, "refresh-1");
+});
+
+test("outlook device auth is scoped to the non-admin user", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-outlook-user-"));
+  const env = { ORKESTR_HOME: home };
+  const alice = userPrincipal({ id: "alice" });
+  const bob = userPrincipal({ id: "bob" });
+  await writeConnectorConfig("outlook", { clientId: "client-id", tenantId: "organizations" }, env);
+
+  const started = await startOutlookDeviceOAuth(env, { account: "alice@example.com", principal: alice }, async () =>
+    jsonResponse({
+      device_code: "device-code",
+      user_code: "ABCD-EFGH",
+      verification_uri: "https://microsoft.com/devicelogin",
+      interval: 5,
+      expires_in: 900,
+    }),
+  );
+  const alicePaths = userDataPaths("alice", env);
+  const pending = JSON.parse(await fs.readFile(path.join(alicePaths.secrets, "outlook-device-pending.json"), "utf8"));
+  assert.equal(pending.userId, "alice");
+
+  await assert.rejects(
+    () => pollOutlookDeviceOAuth(started.pendingId, env, async () => jsonResponse({}), { principal: bob }),
+    /outlook_oauth_pending_not_found/,
+  );
+
+  const polled = await pollOutlookDeviceOAuth(
+    started.pendingId,
+    env,
+    async () =>
+      jsonResponse({
+        access_token: "alice-access",
+        refresh_token: "alice-refresh",
+        expires_in: 3600,
+        scope: "Mail.Read User.Read",
+        token_type: "Bearer",
+      }),
+    { principal: alice },
+  );
+  const token = await readOutlookToken(env, { principal: alice });
+
+  assert.equal(polled.ok, true);
+  assert.equal(token.accessToken, "alice-access");
+  assert.deepEqual(await readOutlookToken(env), {});
+  assert.deepEqual(await readOutlookToken(env, { principal: bob }), {});
+
+  let status = await getSetupStatus({ env, home, principal: alice });
+  let outlook = status.connectors.find((connector) => connector.id === "outlook");
+  assert.equal(outlook.state, "connected");
+
+  status = await getSetupStatus({ env, home, principal: bob });
+  outlook = status.connectors.find((connector) => connector.id === "outlook");
+  assert.equal(outlook.state, "partial");
 });
 
 test("outlook setup status reflects configured and connected states", async () => {

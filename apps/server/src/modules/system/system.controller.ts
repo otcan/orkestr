@@ -284,7 +284,7 @@ export class SystemController {
   @Get("setup/status")
   async setupStatus(@Req() request: any) {
     const status = {
-      ...(await getSetupStatus()),
+      ...(await getSetupStatus({ principal: requestPrincipal(request) })),
       config: await publicConfig(),
       whatsappDefaults: {
         chatNamePrefix: configuredWhatsAppChatNamePrefix(),
