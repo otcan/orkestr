@@ -211,7 +211,6 @@ test("WhatsApp routing cleans mixed tenant Codex runtime state before enqueueing
       mirrorToWhatsApp: true,
     },
   }, env);
-
   const routed = await routeWhatsAppInbound({
     eventId: "mixed-api-agent-1",
     chatId: "chat-mixed",
@@ -292,6 +291,15 @@ test("WhatsApp routing cleans stale api-agent tmux runtime metadata before enque
       mirrorToWhatsApp: true,
     },
   }, env);
+  await fs.writeFile(path.join(home, "runtime-leases.json"), JSON.stringify([
+    {
+      id: "stale-runtime-lease",
+      threadId: "otcantest",
+      sessionName: "orkestr-otcantest",
+      paneId: "%1030",
+      reason: "whatsapp_inbound",
+    },
+  ], null, 2) + "\n", "utf8");
 
   const routed = await routeWhatsAppInbound({
     eventId: "stale-api-agent-1",
@@ -301,6 +309,7 @@ test("WhatsApp routing cleans stale api-agent tmux runtime metadata before enque
     text: "hello",
   }, env);
   const thread = await getThread("otcantest", env);
+  const leases = JSON.parse(await fs.readFile(path.join(home, "runtime-leases.json"), "utf8"));
 
   assert.equal(routed.threadId, "otcantest");
   assert.equal(thread.runtimeKind, "api-agent");
@@ -315,6 +324,8 @@ test("WhatsApp routing cleans stale api-agent tmux runtime metadata before enque
   assert.equal(thread.executor.metadata.codexThreadId, null);
   assert.equal(thread.executor.metadata.codexSessionId, null);
   assert.equal(thread.executor.metadata.codexTokenUsage, null);
+  assert.equal(leases[0].endedAt && typeof leases[0].endedAt === "string", true);
+  assert.equal(leases[0].endReason, "api_agent_thread_normalized");
   assert.equal(threadUsesApiAgent(thread, env), true);
 });
 

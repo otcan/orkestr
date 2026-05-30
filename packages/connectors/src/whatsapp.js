@@ -5,7 +5,7 @@ import os from "node:os";
 import { enqueueAgentMessage, updateAgentMessage } from "../../core/src/messages.js";
 import { resourceOwnerUserId } from "../../core/src/policy.js";
 import { adminPrincipal, userPrincipal } from "../../core/src/principal.js";
-import { runtimeStatus } from "../../core/src/runtime-leases.js";
+import { clearRuntimeLeasesForThread, runtimeStatus } from "../../core/src/runtime-leases.js";
 import { processApiAgentThreadInput, threadUsesApiAgent } from "../../core/src/tenant-api-agent.js";
 import { threadRequiresTenantIsolation } from "../../core/src/tenant-policy.js";
 import { parseThreadInputCommand } from "../../core/src/thread-commands.js";
@@ -438,6 +438,7 @@ async function ensureApiAgentWhatsAppThread(thread = null, env = process.env) {
   if (!thread || !shouldUseApiAgentForWhatsAppThread(thread, env)) return thread;
   if (threadUsesApiAgent(thread, env) && !apiAgentWhatsAppThreadNeedsNormalization(thread, env)) return thread;
   const metadata = thread.executor?.metadata || {};
+  await clearRuntimeLeasesForThread(thread.id, { reason: "api_agent_thread_normalized" }, env).catch(() => null);
   return updateThread(thread.id, {
     runtimeKind: "api-agent",
     runtime: null,

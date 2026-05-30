@@ -324,6 +324,25 @@ export async function listRuntimeLeases(env = process.env) {
   return readJson(await runtimeLeasesPath(env), []);
 }
 
+export async function clearRuntimeLeasesForThread(threadId, options = {}, env = process.env) {
+  const id = String(threadId || "").trim();
+  if (!id) return { cleared: 0 };
+  const leases = await listRuntimeLeases(env);
+  const now = nowIso();
+  const reason = String(options.reason || "runtime_cleared").trim() || "runtime_cleared";
+  let cleared = 0;
+  const next = leases.map((lease) => {
+    if (lease.threadId !== id || lease.endedAt) return lease;
+    cleared += 1;
+    return { ...lease, endedAt: now, endReason: reason };
+  });
+  if (cleared) {
+    await saveRuntimeLeases(next, env);
+    await appendEvent({ type: "runtime_leases_cleared", threadId: id, reason, count: cleared }, env).catch(() => null);
+  }
+  return { cleared };
+}
+
 async function terminateProcessGroupId(pgid, fallbackPid, signal = "SIGTERM") {
   const terminated = [];
   const group = Number(pgid) || 0;
