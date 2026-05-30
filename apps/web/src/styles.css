@@ -2440,6 +2440,39 @@ ork-first-thread-wizard.first-thread-host {
   gap: 5px;
 }
 
+.audit-filters {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.audit-filters label {
+  display: grid;
+  gap: 6px;
+}
+
+.audit-filters span {
+  color: #91ad8b;
+  font-size: 0.75rem;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.audit-row small {
+  color: #789071;
+  font-size: 0.78rem;
+  overflow-wrap: anywhere;
+}
+
+.compact-row span.ready {
+  color: #8cff9b;
+}
+
+.compact-row span.bad {
+  color: #ff9b88;
+}
+
 .timer-row {
   display: flex;
   justify-content: space-between;

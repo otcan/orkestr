@@ -2,7 +2,7 @@
   <div class="panel-title">
     <div>
       <p class="eyebrow">Orkestr Ops</p>
-      <h3>System, resources, models, settings, desktops, users</h3>
+      <h3>System, resources, models, settings, desktops, users, audit</h3>
     </div>
     <button class="secondary" type="button" (click)="loadOps()" [disabled]="busy">Reload</button>
   </div>
@@ -22,6 +22,7 @@
     <button type="button" [class.active]="toolsView === 'settings'" (click)="setToolsView('settings')">Overview</button>
     <button type="button" [class.active]="toolsView === 'connectors'" (click)="setToolsView('connectors')">Connectors</button>
     <button type="button" [class.active]="toolsView === 'users'" (click)="setToolsView('users')">Users</button>
+    <button type="button" [class.active]="toolsView === 'audit'" (click)="setToolsView('audit')">Audit</button>
   </nav>
 
   @if (toolsView === "system") {
@@ -627,17 +628,63 @@
           }
         </div>
       </section>
+    </div>
+  }
+
+  @if (toolsView === "audit") {
+    <div class="ops-columns audit-view">
       <section>
-        <h4>Events</h4>
-        <div class="compact-list">
-          @for (event of opsEvents; track eventKey(event)) {
-            <article class="compact-row">
-              <strong>{{ event.type }}</strong>
-              <span>{{ event.ts | date: "MMM d, HH:mm:ss" }}</span>
-              <p>{{ jsonLine(event) }}</p>
+        <h4>Audit</h4>
+        <div class="audit-filters">
+          <label>
+            <span>User</span>
+            <select name="audit-user-filter" [(ngModel)]="auditUserFilter">
+              <option value="">All users</option>
+              @for (user of auditUserOptions(); track user) {
+                <option [value]="user">{{ user }}</option>
+              }
+            </select>
+          </label>
+          <label>
+            <span>Resource</span>
+            <select name="audit-resource-filter" [(ngModel)]="auditResourceFilter">
+              <option value="">All resources</option>
+              @for (resource of auditResourceOptions(); track resource) {
+                <option [value]="resource">{{ resource }}</option>
+              }
+            </select>
+          </label>
+          <label>
+            <span>Connector</span>
+            <select name="audit-connector-filter" [(ngModel)]="auditConnectorFilter">
+              <option value="">All connectors</option>
+              @for (connector of auditConnectorOptions(); track connector) {
+                <option [value]="connector">{{ connector }}</option>
+              }
+            </select>
+          </label>
+          <label>
+            <span>Outcome</span>
+            <select name="audit-outcome-filter" [(ngModel)]="auditOutcomeFilter">
+              <option value="">All outcomes</option>
+              @for (outcome of auditOutcomeOptions(); track outcome) {
+                <option [value]="outcome">{{ outcome }}</option>
+              }
+            </select>
+          </label>
+        </div>
+        <div class="compact-list audit-events">
+          @for (event of filteredAuditEvents(); track eventKey(event)) {
+            <article class="compact-row audit-row">
+              <strong>{{ auditEventTitle(event) }}</strong>
+              <span [class.ready]="auditOutcomeClass(event) === 'ready'" [class.bad]="auditOutcomeClass(event) === 'bad'">
+                {{ event.outcome || "unknown" }} · {{ event.ts | date: "MMM d, HH:mm:ss" }}
+              </span>
+              <p>{{ auditEventMeta(event) }}</p>
+              <small>{{ jsonLine(event) }}</small>
             </article>
           } @empty {
-            <p class="empty">No events loaded.</p>
+            <p class="empty">No audit events match.</p>
           }
         </div>
       </section>

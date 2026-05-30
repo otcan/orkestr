@@ -232,7 +232,7 @@ export async function createThreadForPrincipal(input = {}, principal, env = proc
   if (existing) return existing;
   if (!isAdminPrincipal(principal)) {
     const user = await getUser(principal?.userId, env);
-    assertThreadLimit(principal, threads, user);
+    assertThreadLimit(principal, threads, user, env);
   }
   const restrictedApprovalPolicy = restrictedCodexApprovalPolicy(input);
   const restrictedSecurityProfile = restrictedCodexSecurityProfile(input);

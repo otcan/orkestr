@@ -552,6 +552,13 @@ export interface TimerDoctorResponse {
 export interface EventRecord {
   ts?: string;
   type: string;
+  actorUserId?: string;
+  ownerUserId?: string;
+  resourceType?: string;
+  action?: string;
+  outcome?: string;
+  connector?: string;
+  reason?: string;
   [key: string]: unknown;
 }
 
@@ -1297,8 +1304,12 @@ export class ApiService {
     return this.http.delete(this.api(`/timers/${encodeURIComponent(id)}`));
   }
 
-  events(limit = 50): Observable<{ events: EventRecord[] }> {
-    return this.http.get<{ events: EventRecord[] }>(this.api(`/events?limit=${limit}`));
+  events(limit = 50, filters: Record<string, string> = {}): Observable<{ events: EventRecord[] }> {
+    const params = new URLSearchParams({ limit: String(limit) });
+    for (const [key, value] of Object.entries(filters)) {
+      if (String(value || "").trim()) params.set(key, String(value).trim());
+    }
+    return this.http.get<{ events: EventRecord[] }>(this.api(`/events?${params.toString()}`));
   }
 
   browsers(): Observable<{ browsers: BrowserSession[]; sessions?: BrowserSession[]; source?: string; error?: string; message?: string }> {

@@ -1,3 +1,4 @@
+import { appendEvent } from "../../storage/src/store.js";
 import { adminUserId, defaultUserLimits, normalizeUserId } from "./users.js";
 
 export function isAdminPrincipal(principal = {}) {
@@ -23,6 +24,16 @@ export function canAccessOwner(principal = {}, ownerUserId = "", env = process.e
 
 export function assertOwnerAccess(principal = {}, ownerUserId = "", action = "access", env = process.env) {
   if (canAccessOwner(principal, ownerUserId, env)) return true;
+  const owner = normalizeUserId(ownerUserId || env.ORKESTR_ADMIN_USER_ID || adminUserId);
+  void appendEvent({
+    type: "policy_denied",
+    actorUserId: principal?.userId || "",
+    ownerUserId: owner,
+    resourceType: "owner",
+    action,
+    outcome: "blocked",
+    reason: `${action}_forbidden`,
+  }, env).catch(() => {});
   throw policyError(`${action}_forbidden`, 403);
 }
 
@@ -37,12 +48,21 @@ export function maxThreadsForPrincipal(principal = {}, user = null) {
   return Number.isFinite(value) ? Math.max(0, value) : 1;
 }
 
-export function assertThreadLimit(principal = {}, threads = [], user = null) {
+export function assertThreadLimit(principal = {}, threads = [], user = null, env = process.env) {
   const limit = maxThreadsForPrincipal(principal, user);
   if (limit === null) return true;
   const ownerUserId = principal?.userId ? normalizeUserId(principal.userId) : "";
   const ownedThreads = threads.filter((thread) => resourceOwnerUserId(thread) === ownerUserId && !thread.deletedAt);
   if (ownedThreads.length < limit) return true;
+  void appendEvent({
+    type: "policy_denied",
+    actorUserId: ownerUserId,
+    ownerUserId,
+    resourceType: "thread",
+    action: "thread.create",
+    outcome: "blocked",
+    reason: "thread_limit_reached",
+  }, env).catch(() => {});
   throw policyError("thread_limit_reached", 403);
 }
 

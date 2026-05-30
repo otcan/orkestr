@@ -141,6 +141,14 @@ test("non-admin audit events are scoped to owned resources", async () => {
   await createThreadForPrincipal({ id: "alice-thread", name: "Alice Main" }, alice, env);
   await createThreadForPrincipal({ id: "bob-thread", name: "Bob Main" }, bob, env);
   await appendEvent({ type: "alice_thread_event", threadId: "alice-thread" }, env);
+  await appendEvent({
+    type: "thread_message_completed",
+    actorUserId: "alice",
+    threadId: "alice-thread",
+    connector: "gmail",
+    text: "sensitive message body",
+    prompt: "sensitive prompt",
+  }, env);
   await appendEvent({ type: "bob_owner_event", ownerUserId: "bob" }, env);
   await appendEvent({ type: "global_event" }, env);
 
@@ -148,7 +156,7 @@ test("non-admin audit events are scoped to owned resources", async () => {
   const bobEvents = await listEventsForPrincipal(bob, env);
   const adminEvents = await listEventsForPrincipal(adminPrincipal(), env);
 
-  assert.deepEqual(aliceEvents.map((event) => event.type), ["user_created", "thread_created", "alice_thread_event"]);
+  assert.deepEqual(aliceEvents.map((event) => event.type), ["user_created", "thread_created", "alice_thread_event", "thread_message_completed"]);
   assert.deepEqual(bobEvents.map((event) => event.type), ["user_created", "thread_created", "bob_owner_event"]);
   assert.deepEqual(adminEvents.map((event) => event.type), [
     "user_created",
@@ -156,9 +164,26 @@ test("non-admin audit events are scoped to owned resources", async () => {
     "thread_created",
     "thread_created",
     "alice_thread_event",
+    "thread_message_completed",
     "bob_owner_event",
     "global_event",
   ]);
+
+  const filtered = await listEventsForPrincipal(adminPrincipal(), env, 20, {
+    user: "alice",
+    resource: "thread",
+    connector: "gmail",
+    outcome: "allowed",
+  });
+  const messageEvent = filtered.find((event) => event.type === "thread_message_completed");
+  assert.equal(messageEvent.ownerUserId, "alice");
+  assert.equal(messageEvent.actorUserId, "alice");
+  assert.equal(messageEvent.resourceType, "thread");
+  assert.equal(messageEvent.action, "thread.message.completed");
+  assert.equal(messageEvent.outcome, "allowed");
+  assert.equal(messageEvent.connector, "gmail");
+  assert.equal(messageEvent.text, "[redacted]");
+  assert.equal(messageEvent.prompt, "[redacted]");
 });
 
 test("non-admin workspace and file browsing stays inside per-user roots", async () => {
@@ -562,10 +587,22 @@ test("non-admin thread input must pass the LLM sanitizer", async () => {
 
   const message = await enqueueThreadInputForPrincipal("alice-thread", { text: "safe work item" }, alice, env);
   const messages = await listThreadMessages("alice-thread", env);
+  const auditEvents = await listEventsForPrincipal(adminPrincipal(), env, 20, {
+    user: "alice",
+    resource: "thread",
+    outcome: "allowed",
+  });
+  const sanitizerEvent = auditEvents.find((event) => event.type === "policy_sanitizer_decision" && event.action === "thread.input");
 
   assert.equal(message.state, "queued");
   assert.equal(message.ownerUserId, "alice");
   assert.equal(messages.length, 1);
+  assert.equal(sanitizerEvent.ownerUserId, "alice");
+  assert.equal(sanitizerEvent.actorUserId, "alice");
+  assert.equal(sanitizerEvent.resourceType, "thread");
+  assert.equal(sanitizerEvent.outcome, "allowed");
+  assert.equal(sanitizerEvent.model, "test-llm");
+  assert.equal("input" in sanitizerEvent, false);
 });
 
 test("non-admin timer creation is scoped and sanitizer-gated", async () => {

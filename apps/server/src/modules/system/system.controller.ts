@@ -416,8 +416,22 @@ export class SystemController {
   }
 
   @Get("events")
-  async events(@Req() request: any, @Query("limit") limit = "100") {
-    return { events: await listEventsForPrincipal(requestPrincipal(request), process.env, Number(limit || 100)) };
+  async events(
+    @Req() request: any,
+    @Query("limit") limit = "100",
+    @Query("user") user = "",
+    @Query("resource") resource = "",
+    @Query("connector") connector = "",
+    @Query("outcome") outcome = "",
+  ) {
+    return {
+      events: await listEventsForPrincipal(requestPrincipal(request), process.env, Number(limit || 100), {
+        user,
+        resource,
+        connector,
+        outcome,
+      }),
+    };
   }
 
   @Get("runtime-leases")

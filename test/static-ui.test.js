@@ -157,6 +157,36 @@ test("ops users page exposes targeted browser pairing and revocation", async () 
   assert.match(securityComponent, /sessionTarget\(session: SecuritySession\): string/);
 });
 
+test("ops audit view exposes normalized filterable events", async () => {
+  const template = await fs.readFile("apps/web/src/app/ops-page.component.html", "utf8");
+  const component = await fs.readFile("apps/web/src/app/ops-page.component.ts", "utf8");
+  const appComponent = await fs.readFile("apps/web/src/app/app.component.ts", "utf8");
+  const api = await fs.readFile("apps/web/src/app/api.service.ts", "utf8");
+  const auditEvents = await fs.readFile("packages/core/src/audit-events.js", "utf8");
+  const sanitizer = await fs.readFile("packages/core/src/llm-sanitizer.js", "utf8");
+  const systemController = await fs.readFile("apps/server/src/modules/system/system.controller.ts", "utf8");
+  const styles = await fs.readFile("apps/web/src/styles.css", "utf8");
+
+  assert.match(component, /export type ToolsView = .*"audit"/);
+  assert.match(appComponent, /"connectors", "users", "audit"/);
+  assert.match(template, /\[class\.active\]="toolsView === 'audit'"/);
+  assert.match(template, /setToolsView\('audit'\)">Audit<\/button>/);
+  assert.match(template, /@if \(toolsView === "audit"\)/);
+  assert.match(template, /name="audit-user-filter"/);
+  assert.match(template, /name="audit-resource-filter"/);
+  assert.match(template, /name="audit-connector-filter"/);
+  assert.match(template, /name="audit-outcome-filter"/);
+  assert.match(component, /filteredAuditEvents\(\): EventRecord\[\]/);
+  assert.match(component, /auditEventMeta\(event: EventRecord\): string/);
+  assert.match(api, /events\(limit = 50, filters: Record<string, string> = \{\}\)/);
+  assert.match(systemController, /@Query\("connector"\) connector = ""/);
+  assert.match(auditEvents, /normalizeAuditEvent\(event = \{\}/);
+  assert.match(auditEvents, /sensitiveAuditKey/);
+  assert.match(sanitizer, /type: "policy_sanitizer_decision"/);
+  assert.match(styles, /\.audit-filters/);
+  assert.match(styles, /\.audit-row small/);
+});
+
 test("ops users page exposes WhatsApp identity binding controls", async () => {
   const template = await fs.readFile("apps/web/src/app/ops-page.component.html", "utf8");
   const component = await fs.readFile("apps/web/src/app/ops-page.component.ts", "utf8");

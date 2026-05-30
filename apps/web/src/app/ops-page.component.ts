@@ -4,7 +4,7 @@ import { FormsModule } from "@angular/forms";
 import { firstValueFrom } from "rxjs";
 import { Agent, AgentTemplate, ApiService, BrowserSession, ConnectorStatus, DesktopLeaseRecord, EventRecord, OrkestrUser, OutlookOAuthPollResponse, SecurityChallenge, SecuritySession, SetupStatus, TimerDoctorResponse, TimerRecord, UserIdentity, UserOutlookOAuthStartResponse, UserSkill, VersionResponse } from "./api.service";
 
-export type ToolsView = "system" | "timers" | "desktops" | "models" | "settings" | "connectors" | "users";
+export type ToolsView = "system" | "timers" | "desktops" | "models" | "settings" | "connectors" | "users" | "audit";
 type MailIdentityProvider = "gmail" | "outlook";
 
 @Component({
@@ -76,6 +76,10 @@ export class OpsPageComponent implements OnInit, OnDestroy {
   mailIdentityDisplayName = "";
   mailIdentityMigrate = false;
   mailOutlookDevice: UserOutlookOAuthStartResponse | OutlookOAuthPollResponse | null = null;
+  auditUserFilter = "";
+  auditResourceFilter = "";
+  auditConnectorFilter = "";
+  auditOutcomeFilter = "";
   userEditDraft: Record<string, { displayName: string; email: string; phoneNumber: string; role: string; status: string; maxThreads: string }> = {};
 
   ngOnInit(): void {
@@ -114,7 +118,7 @@ export class OpsPageComponent implements OnInit, OnDestroy {
         firstValueFrom(this.api.agentTemplates()),
         firstValueFrom(this.api.timers()),
         firstValueFrom(this.api.timerDoctor()),
-        firstValueFrom(this.api.events(40)),
+        firstValueFrom(this.api.events(120)),
         browsersRequest,
         firstValueFrom(this.api.desktopLeases()),
         firstValueFrom(this.api.runtimeLeases()),
@@ -738,6 +742,61 @@ export class OpsPageComponent implements OnInit, OnDestroy {
     } catch {
       return String(value || "");
     }
+  }
+
+  filteredAuditEvents(): EventRecord[] {
+    return this.opsEvents.filter((event) => {
+      const user = this.auditUserFilter.trim();
+      const resource = this.auditResourceFilter.trim();
+      const connector = this.auditConnectorFilter.trim();
+      const outcome = this.auditOutcomeFilter.trim();
+      if (user && event.actorUserId !== user && event.ownerUserId !== user && String(event["userId"] || "") !== user) return false;
+      if (resource && event.resourceType !== resource) return false;
+      if (connector && event.connector !== connector) return false;
+      if (outcome && event.outcome !== outcome) return false;
+      return true;
+    });
+  }
+
+  auditUserOptions(): string[] {
+    return this.uniqueAuditOptions(this.opsEvents.flatMap((event) => [event.actorUserId, event.ownerUserId, String(event["userId"] || "")]));
+  }
+
+  auditResourceOptions(): string[] {
+    return this.uniqueAuditOptions(this.opsEvents.map((event) => event.resourceType));
+  }
+
+  auditConnectorOptions(): string[] {
+    return this.uniqueAuditOptions(this.opsEvents.map((event) => event.connector));
+  }
+
+  auditOutcomeOptions(): string[] {
+    return this.uniqueAuditOptions(this.opsEvents.map((event) => event.outcome));
+  }
+
+  auditEventTitle(event: EventRecord): string {
+    return String(event.action || event.type || "event").replace(/\./g, " ");
+  }
+
+  auditEventMeta(event: EventRecord): string {
+    return [
+      event.ownerUserId ? `owner ${event.ownerUserId}` : "",
+      event.actorUserId ? `actor ${event.actorUserId}` : "",
+      event.resourceType ? `resource ${event.resourceType}` : "",
+      event.connector ? `connector ${event.connector}` : "",
+      event.reason ? `reason ${event.reason}` : "",
+    ].filter(Boolean).join(" · ");
+  }
+
+  auditOutcomeClass(event: EventRecord): string {
+    const outcome = String(event.outcome || "").toLowerCase();
+    if (outcome === "allowed" || outcome === "completed" || outcome === "success") return "ready";
+    if (outcome === "blocked" || outcome === "failed" || outcome === "error") return "bad";
+    return "";
+  }
+
+  private uniqueAuditOptions(values: Array<unknown>): string[] {
+    return [...new Set(values.map((value) => String(value || "").trim()).filter(Boolean))].sort();
   }
 
   userAuthLabel(user: OrkestrUser): string {

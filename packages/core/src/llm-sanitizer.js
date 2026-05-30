@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { appendEvent } from "../../storage/src/store.js";
 
 function nowIso() {
   return new Date().toISOString();
@@ -153,9 +154,27 @@ export async function sanitizeAction(request = {}, env = process.env) {
 
 export async function assertSanitizedAction(request = {}, env = process.env) {
   const decision = await sanitizeAction(request, env);
+  await appendSanitizerAudit(request, decision, env);
   if (decision.allow === true) return decision;
   const error = new Error(decision.reason || "llm_sanitizer_denied");
   error.statusCode = 403;
   error.sanitizer = decision;
   throw error;
+}
+
+async function appendSanitizerAudit(request = {}, decision = {}, env = process.env) {
+  const principal = request.principal && typeof request.principal === "object" ? request.principal : {};
+  const resource = request.resource && typeof request.resource === "object" ? request.resource : {};
+  await appendEvent({
+    type: "policy_sanitizer_decision",
+    actorUserId: principal.userId || "",
+    ownerUserId: resource.ownerUserId || resource.userId || principal.userId || "",
+    resourceType: resource.type || "system",
+    resourceId: resource.id || resource.threadId || resource.timerId || "",
+    action: String(request.action || "sanitizer.check"),
+    outcome: decision.allow === true ? "allowed" : "blocked",
+    reason: decision.reason || "",
+    model: decision.model || null,
+    unavailable: decision.unavailable === true,
+  }, env).catch(() => {});
 }
