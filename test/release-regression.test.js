@@ -163,6 +163,12 @@ test("release regression execute mode verifies submitted chat input is visible",
 test("release regression can record protected APIs as skipped for public targets", async () => {
   const artifactDir = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-release-regression-"));
   const routes = healthyRoutes({
+    "/api/setup/status": {
+      setupState: "partial",
+      redacted: true,
+      security: { authRequired: true, paired: false },
+      connectors: [],
+    },
     "/api/threads?scope=all": { status: 403, payload: { error: "pairing_required" } },
     "/api/connectors/whatsapp/status": { status: 403, payload: { error: "pairing_required" } },
     "/api/browser-sessions": { status: 403, payload: { error: "pairing_required" } },
@@ -182,6 +188,7 @@ test("release regression can record protected APIs as skipped for public targets
   });
 
   assert.equal(summary.ok, true);
+  assert.equal(summary.targets[0].scenarios.find((item) => item.name === "setup-connectors").reason, "auth_required");
   assert.equal(summary.targets[0].scenarios.find((item) => item.name === "thread-summary").reason, "auth_required");
   assert.equal(summary.targets[0].scenarios.find((item) => item.name === "whatsapp-readiness").status, "skip");
 });

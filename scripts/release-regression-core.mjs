@@ -259,6 +259,14 @@ async function checkSetup(target, options, artifacts, deps) {
     const setup = await requestJson(target, "/api/setup/status", options, deps);
     const byId = connectorsById(setup.payload);
     const missing = requiredSetupConnectors.filter((id) => !byId.has(id));
+    const redactedByAuth = setup.payload?.redacted === true &&
+      setup.payload?.security?.authRequired === true &&
+      setup.payload?.security?.paired === false;
+    if (missing.length && options.allowAuthBlocked && redactedByAuth) {
+      return scenarioSkip("setup-connectors", "auth_required", {
+        setupState: setup.payload?.setupState || setup.payload?.state || null,
+      });
+    }
     if (missing.length) throw new Error(`setup status missing connectors: ${missing.join(", ")}`);
     return scenarioPass("setup-connectors", {
       setupState: setup.payload?.setupState || setup.payload?.state || null,
