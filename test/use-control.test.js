@@ -664,6 +664,15 @@ test("user management API is admin-only and can pair a browser to a managed user
     assert.equal(deniedConnectorResponse.status, 403);
     assert.equal(deniedConnector.error, "connector_admin_required");
 
+    const deniedDesktopResponse = await fetch(`${baseUrl}/api/browsers/linkedin/prepare`, {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie: userCookie },
+      body: JSON.stringify({ reason: "test desktop sanitizer" }),
+    });
+    const deniedDesktop = await read(deniedDesktopResponse);
+    assert.equal(deniedDesktopResponse.status, 403);
+    assert.equal(deniedDesktop.error, "llm_sanitizer_unconfigured");
+
     const where = await read(await fetch(`${baseUrl}/api/whereiam`, { headers: { cookie: userCookie } }));
     assert.equal(where.user.userId, "alice-example.test");
     assert.equal(where.user.role, "user");

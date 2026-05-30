@@ -23,8 +23,9 @@ import {
   desktopShareSubdomainFromHost,
   openDesktopShare,
 } from "../../../../../packages/core/src/desktop-shares.js";
+import { assertSanitizedAction } from "../../../../../packages/core/src/llm-sanitizer.js";
 import { requestPrincipal } from "../../../../../packages/core/src/principal.js";
-import { resourceOwnerUserId } from "../../../../../packages/core/src/policy.js";
+import { isAdminPrincipal, resourceOwnerUserId } from "../../../../../packages/core/src/policy.js";
 import { getThreadForPrincipal } from "../../../../../packages/core/src/threads.js";
 import { httpError } from "../../common/http.js";
 
@@ -70,6 +71,7 @@ export class BrowsersController {
   async acquireDesktop(@Req() request: any, @Param("slug") slug: string, @Body() body: Record<string, unknown> = {}) {
     const principal = requestPrincipal(request);
     const ownerUserId = await this.ownerUserIdFromLeaseBody(body, principal);
+    await this.assertDesktopSanitized("acquire", principal, slug, { ...body, ownerUserId });
     const result = await acquireDesktopLease(slug, { ...body, ownerUserId }, process.env, { principal });
     if (!result.ok) throw httpError("desktop_leased", 409);
     return result;
@@ -116,6 +118,7 @@ export class BrowsersController {
   @HttpCode(201)
   async shareDesktop(@Req() request: any, @Param("slug") slug: string, @Body() body: Record<string, unknown> = {}) {
     const principal = requestPrincipal(request);
+    await this.assertDesktopSanitized("share", principal, slug, body);
     const browser = body.start === false
       ? null
       : await openVirtualBrowser(slug, process.env, "", { principal }).catch(() => null);
@@ -195,6 +198,7 @@ export class BrowsersController {
     const principal = requestPrincipal(request);
     try {
       const normalized = String(action || "").trim().toLowerCase();
+      await this.assertDesktopSanitized(normalized || "action", principal, slug, body);
       if (normalized === "prepare") return { browser: await prepareVirtualBrowser(slug, process.env, { principal }) };
       if (normalized === "start" || normalized === "open") return { browser: await openVirtualBrowser(slug, process.env, "", { principal }) };
       if (normalized === "open-url" || normalized === "openurl" || normalized === "navigate") {
@@ -209,5 +213,22 @@ export class BrowsersController {
       if (statusCode) throw httpError(String((error as Error)?.message || "browser_action_failed"), statusCode);
       throw error;
     }
+  }
+
+  private async assertDesktopSanitized(action: string, principal: any, slug: string, input: Record<string, unknown> = {}) {
+    if (isAdminPrincipal(principal)) return null;
+    return assertSanitizedAction({
+      action: `desktop.${String(action || "action").trim().toLowerCase() || "action"}`,
+      principal,
+      resource: {
+        type: "desktop",
+        id: normalizeDesktopSlug(slug),
+        ownerUserId: String(principal?.userId || "").trim(),
+      },
+      input: {
+        slug: normalizeDesktopSlug(slug),
+        ...input,
+      },
+    }, process.env);
   }
 }
