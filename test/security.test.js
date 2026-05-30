@@ -5,6 +5,7 @@ import path from "node:path";
 import test from "node:test";
 import { startServer } from "../apps/server/src/server.js";
 import { approvePairingChallenge, authorizeHttpRequest, createPairingChallenge, pairBrowser, securityStatus } from "../packages/core/src/security.js";
+import { writeConnectorConfig } from "../packages/storage/src/config.js";
 
 function saveEnv(keys) {
   return Object.fromEntries(keys.map((key) => [key, process.env[key]]));
@@ -23,10 +24,29 @@ async function json(response) {
 
 test("browser pairing protects API routes when auth is required", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-security-"));
-  const prior = saveEnv(["ORKESTR_HOME", "ORKESTR_AUTH_REQUIRED", "ORKESTR_RECOVER_RUNNING_ON_START"]);
+  const codexHome = path.join(home, "private-codex-home");
+  const bridgeUrl = "http://127.0.0.1:9/private-wa-bridge";
+  const prior = saveEnv([
+    "ORKESTR_HOME",
+    "ORKESTR_AUTH_REQUIRED",
+    "ORKESTR_RECOVER_RUNNING_ON_START",
+    "ORKESTR_CODEX_BIN",
+    "CODEX_HOME",
+    "WHATSAPP_BRIDGE_MODE",
+    "ORKESTR_WHATSAPP_EXTERNAL_BRIDGE_ENABLED",
+    "WHATSAPP_BRIDGE_URL",
+    "ORKESTR_PUBLIC_HTTPS_URL",
+  ]);
   process.env.ORKESTR_HOME = home;
   process.env.ORKESTR_AUTH_REQUIRED = "1";
   process.env.ORKESTR_RECOVER_RUNNING_ON_START = "0";
+  process.env.ORKESTR_CODEX_BIN = "__orkestr_codex_disabled_on_macos__";
+  process.env.CODEX_HOME = codexHome;
+  process.env.WHATSAPP_BRIDGE_MODE = "external";
+  process.env.ORKESTR_WHATSAPP_EXTERNAL_BRIDGE_ENABLED = "1";
+  process.env.WHATSAPP_BRIDGE_URL = bridgeUrl;
+  process.env.ORKESTR_PUBLIC_HTTPS_URL = "https://orkestr-private.example.test";
+  await writeConnectorConfig("whatsapp", { bridgeMode: "external", bridgeUrl }, process.env);
   const server = await startServer({ port: 0, host: "127.0.0.1" });
   const { port } = server.address();
   const baseUrl = `http://127.0.0.1:${port}`;
@@ -36,8 +56,21 @@ test("browser pairing protects API routes when auth is required", async () => {
     assert.equal(blocked.status, 401);
 
     const status = await json(await fetch(`${baseUrl}/api/setup/status`));
+    const statusText = JSON.stringify(status);
     assert.equal(status.security.authEnabled, true);
     assert.equal(status.security.paired, false);
+    assert.equal(status.redacted, true);
+    assert.equal(status.home, "");
+    assert.deepEqual(status.connectors, []);
+    assert.deepEqual(status.config, {});
+    assert.equal(status.security.bindHost, undefined);
+    assert.equal(status.security.sessionCount, undefined);
+    assert.equal(status.security.https.url, undefined);
+    assert.equal(status.auth.keycloak, undefined);
+    assert.equal(statusText.includes(home), false);
+    assert.equal(statusText.includes(codexHome), false);
+    assert.equal(statusText.includes(bridgeUrl), false);
+    assert.equal(statusText.includes("sessionRoot"), false);
 
     const challenge = await json(await fetch(`${baseUrl}/api/setup/security/challenges`, { method: "POST" }));
     assert.equal(challenge.ok, true);
@@ -71,6 +104,12 @@ test("browser pairing protects API routes when auth is required", async () => {
 
     const allowed = await fetch(`${baseUrl}/api/threads`, { headers: { cookie } });
     assert.equal(allowed.status, 200);
+    const pairedStatus = await json(await fetch(`${baseUrl}/api/setup/status`, { headers: { cookie } }));
+    const pairedStatusText = JSON.stringify(pairedStatus);
+    assert.notEqual(pairedStatus.redacted, true);
+    assert.equal(pairedStatus.home, home);
+    assert.ok(pairedStatusText.includes(codexHome));
+    assert.ok(pairedStatusText.includes(bridgeUrl));
 
     const secondChallenge = await json(await fetch(`${baseUrl}/api/setup/security/challenges`, { method: "POST" }));
     const unpairedList = await fetch(`${baseUrl}/api/setup/security/challenges`);

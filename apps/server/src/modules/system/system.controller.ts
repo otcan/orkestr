@@ -5,7 +5,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { Body, Controller, Delete, Get, HttpCode, Param, Post, Query, Req, Res } from "@nestjs/common";
 import { doctorRuntimeResources, listRuntimeLeases } from "../../../../../packages/core/src/runtime-leases.js";
-import { getSetupStatus } from "../../../../../packages/core/src/setup.js";
+import { getSetupStatus, publicSetupStatus } from "../../../../../packages/core/src/setup.js";
 import { readRuntimeSettings } from "../../../../../packages/core/src/runtime-settings.js";
 import { systemDoctor } from "../../../../../packages/core/src/system-doctor.js";
 import { whereAmI } from "../../../../../packages/core/src/whereiam.js";
@@ -322,6 +322,12 @@ async function pairingChallengeTarget(body: Record<string, unknown> = {}, reques
   return { userId: user.id, role: user.role };
 }
 
+function shouldRedactSetupStatus(request: any, status: any): boolean {
+  if (!status?.security?.authEnabled) return false;
+  if (!request?.orkestrSecuritySession) return true;
+  return !isAdminPrincipal(requestPrincipal(request));
+}
+
 @Controller("api")
 export class SystemController {
   @Get("health")
@@ -362,8 +368,8 @@ export class SystemController {
   }
 
   @Get("setup/status")
-  async setupStatus() {
-    return {
+  async setupStatus(@Req() request: any) {
+    const status = {
       ...(await getSetupStatus()),
       config: await publicConfig(),
       whatsappDefaults: {
@@ -371,6 +377,7 @@ export class SystemController {
         replyPrefix: defaultWhatsAppReplyPrefix(),
       },
     };
+    return shouldRedactSetupStatus(request, status) ? publicSetupStatus(status) : status;
   }
 
   @Get("settings")
