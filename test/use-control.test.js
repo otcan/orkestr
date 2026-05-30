@@ -5,8 +5,15 @@ import path from "node:path";
 import test from "node:test";
 import { pathToFileURL } from "node:url";
 import { startServer } from "../apps/server/src/server.js";
+import { userDataPaths } from "../packages/storage/src/paths.js";
 import { appendEvent } from "../packages/storage/src/store.js";
 import { listEventsForPrincipal } from "../packages/core/src/audit-events.js";
+import {
+  listFilesForPrincipal,
+  listWorkspaceFoldersForPrincipal,
+  resolveWorkspacePathForPrincipal,
+  workspaceRootForPrincipal,
+} from "../packages/core/src/workspace-files.js";
 import { createTimer, createTimerForPrincipal, doctorTimersForPrincipal, listTimers, listTimersForPrincipal, markDueTimers } from "../packages/core/src/timers.js";
 import { adminPrincipal, userPrincipal } from "../packages/core/src/principal.js";
 import { sanitizeAction } from "../packages/core/src/llm-sanitizer.js";
@@ -101,6 +108,69 @@ test("non-admin audit events are scoped to owned resources", async () => {
     "bob_owner_event",
     "global_event",
   ]);
+});
+
+test("non-admin workspace and file browsing stays inside per-user roots", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-use-control-files-"));
+  const env = { ORKESTR_HOME: home };
+  const alice = userPrincipal(await upsertUser({ id: "alice", role: "user", displayName: "Alice" }, env));
+  const bob = userPrincipal(await upsertUser({ id: "bob", role: "user", displayName: "Bob" }, env));
+  const alicePaths = userDataPaths("alice", env);
+  const bobPaths = userDataPaths("bob", env);
+  await fs.mkdir(path.join(alicePaths.workspaces, "project-a"), { recursive: true });
+  await fs.mkdir(path.join(alicePaths.files, "notes"), { recursive: true });
+  await fs.writeFile(path.join(alicePaths.files, "notes", "todo.txt"), "hello", "utf8");
+  await fs.mkdir(path.join(bobPaths.workspaces, "project-b"), { recursive: true });
+
+  const aliceRoot = await workspaceRootForPrincipal(alice, env);
+  const aliceWorkspacePath = await resolveWorkspacePathForPrincipal("project-a", alice, env);
+  const aliceFolders = await listWorkspaceFoldersForPrincipal("", alice, env);
+  const aliceFiles = await listFilesForPrincipal(path.join(alicePaths.files, "notes"), alice, env);
+  const bobProbe = await listWorkspaceFoldersForPrincipal(bobPaths.workspaces, alice, env);
+  const adminFolders = await listWorkspaceFoldersForPrincipal(alicePaths.workspaces, adminPrincipal(), env);
+
+  assert.equal(aliceRoot, alicePaths.workspaces);
+  assert.equal(aliceWorkspacePath, path.join(alicePaths.workspaces, "project-a"));
+  assert.deepEqual(aliceFolders.roots.map((root) => root.path), [alicePaths.workspaces]);
+  assert.deepEqual(aliceFolders.entries.map((entry) => entry.name), ["project-a"]);
+  assert.deepEqual(aliceFiles.entries.map((entry) => entry.name), ["todo.txt"]);
+  assert.equal(bobProbe.ok, false);
+  assert.equal(bobProbe.error, "workspace_path_forbidden");
+  assert.ok(adminFolders.roots.some((root) => root.path === path.join(home, "workspaces")));
+  await assert.rejects(() => resolveWorkspacePathForPrincipal(bobPaths.workspaces, alice, env), /workspace_path_forbidden/);
+});
+
+test("admin-created user threads use the target user's workspace root", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-use-control-admin-user-workspace-"));
+  const priorHome = process.env.ORKESTR_HOME;
+  const priorRecover = process.env.ORKESTR_RECOVER_RUNNING_ON_START;
+  process.env.ORKESTR_HOME = home;
+  process.env.ORKESTR_RECOVER_RUNNING_ON_START = "0";
+  let server;
+
+  try {
+    await upsertUser({ id: "alice", role: "user", displayName: "Alice" }, process.env);
+    server = await startServer({ port: 0, host: "127.0.0.1" });
+    const { port } = server.address();
+    const response = await fetch(`http://127.0.0.1:${port}/api/threads`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ name: "Alice Admin Created", ownerUserId: "alice", executorId: "noop" }),
+    });
+    const payload = await response.json();
+    const alicePaths = userDataPaths("alice", process.env);
+
+    assert.equal(response.status, 201);
+    assert.equal(payload.thread.ownerUserId, "alice");
+    assert.ok(String(payload.thread.workspace || "").startsWith(alicePaths.workspaces));
+    assert.ok(String(payload.thread.cwd || "").startsWith(alicePaths.workspaces));
+  } finally {
+    if (server) await new Promise((resolve) => server.close(resolve));
+    if (priorHome === undefined) delete process.env.ORKESTR_HOME;
+    else process.env.ORKESTR_HOME = priorHome;
+    if (priorRecover === undefined) delete process.env.ORKESTR_RECOVER_RUNNING_ON_START;
+    else process.env.ORKESTR_RECOVER_RUNNING_ON_START = priorRecover;
+  }
 });
 
 test("non-admin thread creation cannot request root-trusted Codex access", async () => {
@@ -597,6 +667,33 @@ test("user management API is admin-only and can pair a browser to a managed user
     const where = await read(await fetch(`${baseUrl}/api/whereiam`, { headers: { cookie: userCookie } }));
     assert.equal(where.user.userId, "alice-example.test");
     assert.equal(where.user.role, "user");
+
+    const userPaths = userDataPaths("alice-example.test", process.env);
+    await fs.mkdir(path.join(userPaths.workspaces, "visible-project"), { recursive: true });
+    await fs.mkdir(path.join(userPaths.files, "uploads"), { recursive: true });
+    await fs.writeFile(path.join(userPaths.files, "uploads", "readme.txt"), "scoped", "utf8");
+
+    const workspaceFolders = await read(await fetch(`${baseUrl}/api/system/workspace-folders`, { headers: { cookie: userCookie } }));
+    const forbiddenFolders = await read(await fetch(`${baseUrl}/api/system/workspace-folders?path=${encodeURIComponent(home)}`, {
+      headers: { cookie: userCookie },
+    }));
+    const files = await read(await fetch(`${baseUrl}/api/files?path=${encodeURIComponent(path.join(userPaths.files, "uploads"))}`, {
+      headers: { cookie: userCookie },
+    }));
+    const createdThread = await read(await fetch(`${baseUrl}/api/threads`, {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie: userCookie },
+      body: JSON.stringify({ name: "Alice Workspace", executorId: "noop" }),
+    }));
+
+    assert.deepEqual(workspaceFolders.roots.map((root) => root.path), [userPaths.workspaces]);
+    assert.deepEqual(workspaceFolders.entries.map((entry) => entry.name), ["visible-project"]);
+    assert.equal(forbiddenFolders.ok, false);
+    assert.equal(forbiddenFolders.error, "workspace_path_forbidden");
+    assert.deepEqual(files.entries.map((entry) => entry.name), ["readme.txt"]);
+    assert.equal(createdThread.thread.ownerUserId, "alice-example.test");
+    assert.ok(String(createdThread.thread.workspace || "").startsWith(userPaths.workspaces));
+    assert.ok(String(createdThread.thread.cwd || "").startsWith(userPaths.workspaces));
   } finally {
     await new Promise((resolve) => server.close(resolve));
     if (priorHome === undefined) delete process.env.ORKESTR_HOME;

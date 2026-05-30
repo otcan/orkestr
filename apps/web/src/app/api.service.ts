@@ -106,6 +106,10 @@ export interface WorkspaceFolderEntry {
   name: string;
   path: string;
   hidden?: boolean;
+  type?: string;
+  directory?: boolean;
+  size?: number | null;
+  modifiedAt?: string | null;
 }
 
 export interface WorkspaceFoldersResponse {
@@ -116,6 +120,8 @@ export interface WorkspaceFoldersResponse {
   roots: WorkspaceFolderEntry[];
   entries: WorkspaceFolderEntry[];
 }
+
+export interface FileBrowserResponse extends WorkspaceFoldersResponse {}
 
 export interface SystemDoctorCheck {
   id: string;
@@ -1106,6 +1112,11 @@ export class ApiService {
   workspaceFolders(currentPath = ""): Observable<WorkspaceFoldersResponse> {
     const query = currentPath ? `?path=${encodeURIComponent(currentPath)}` : "";
     return this.http.get<WorkspaceFoldersResponse>(this.api(`/system/workspace-folders${query}`));
+  }
+
+  files(currentPath = ""): Observable<FileBrowserResponse> {
+    const query = currentPath ? `?path=${encodeURIComponent(currentPath)}` : "";
+    return this.http.get<FileBrowserResponse>(this.api(`/files${query}`));
   }
 
   modelStatus(): Observable<Record<string, unknown>> {

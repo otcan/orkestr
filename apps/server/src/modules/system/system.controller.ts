@@ -10,6 +10,7 @@ import { readRuntimeSettings } from "../../../../../packages/core/src/runtime-se
 import { systemDoctor } from "../../../../../packages/core/src/system-doctor.js";
 import { whereAmI } from "../../../../../packages/core/src/whereiam.js";
 import { listEventsForPrincipal } from "../../../../../packages/core/src/audit-events.js";
+import { listFilesForPrincipal, listWorkspaceFoldersForPrincipal } from "../../../../../packages/core/src/workspace-files.js";
 import { requestPrincipal } from "../../../../../packages/core/src/principal.js";
 import { isAdminPrincipal } from "../../../../../packages/core/src/policy.js";
 import { getUser } from "../../../../../packages/core/src/users.js";
@@ -220,93 +221,6 @@ async function systemSnapshot() {
       heapUsed: processMemory.heapUsed,
       heapTotal: processMemory.heapTotal,
     },
-  };
-}
-
-async function directoryExists(candidate: string): Promise<boolean> {
-  return Boolean(await fs.stat(candidate).then((stats) => stats.isDirectory()).catch(() => false));
-}
-
-function uniqueResolvedPaths(values: string[]): string[] {
-  const seen = new Set<string>();
-  const result: string[] = [];
-  for (const value of values) {
-    const resolved = path.resolve(String(value || "").trim());
-    if (!resolved || seen.has(resolved)) continue;
-    seen.add(resolved);
-    result.push(resolved);
-  }
-  return result;
-}
-
-function rootLabel(root: string, pathsHome: string): string {
-  if (root === path.join(pathsHome, "workspaces")) return "Orkestr workspaces";
-  if (root === process.env.ORKESTR_RUNTIME_WORKSPACE_ROOT) return "Runtime workspace root";
-  if (root === process.env.ORKESTR_CLONE_ROOT) return "Clone root";
-  if (root === process.cwd()) return "Orkestr checkout";
-  if (root === path.dirname(process.cwd())) return "Checkout parent";
-  return root;
-}
-
-async function workspaceFolderRoots() {
-  const paths = await ensureDataDirs();
-  const candidates = uniqueResolvedPaths([
-    process.env.ORKESTR_RUNTIME_WORKSPACE_ROOT || "",
-    process.env.ORKESTR_CLONE_ROOT || "",
-    paths.workspaces,
-    "/workspace",
-    "/workspaces",
-    path.dirname(process.cwd()),
-    process.cwd(),
-  ]);
-  const roots: Array<{ name: string; path: string }> = [];
-  for (const candidate of candidates) {
-    if (await directoryExists(candidate)) {
-      roots.push({ name: rootLabel(candidate, paths.home), path: candidate });
-    }
-  }
-  return roots.length ? roots : [{ name: "Orkestr workspaces", path: paths.workspaces }];
-}
-
-async function workspaceFolderListing(rawPath = "") {
-  const roots = await workspaceFolderRoots();
-  const requestedPath = String(rawPath || "").trim();
-  let currentPath = path.resolve(requestedPath || roots[0]?.path || process.cwd());
-  if (!(await directoryExists(currentPath))) {
-    return {
-      ok: false,
-      error: "directory_not_found",
-      path: currentPath,
-      parent: path.dirname(currentPath),
-      roots,
-      entries: [],
-    };
-  }
-
-  let entries: Array<{ name: string; path: string; hidden: boolean }> = [];
-  let error = "";
-  try {
-    const rows = await fs.readdir(currentPath, { withFileTypes: true });
-    entries = rows
-      .filter((entry) => entry.isDirectory())
-      .map((entry) => ({
-        name: entry.name,
-        path: path.join(currentPath, entry.name),
-        hidden: entry.name.startsWith("."),
-      }))
-      .sort((a, b) => Number(a.hidden) - Number(b.hidden) || a.name.localeCompare(b.name))
-      .slice(0, 200);
-  } catch (readError) {
-    error = String((readError as Error)?.message || readError || "directory_unreadable");
-  }
-
-  return {
-    ok: !error,
-    error,
-    path: currentPath,
-    parent: currentPath === path.dirname(currentPath) ? null : path.dirname(currentPath),
-    roots,
-    entries,
   };
 }
 
@@ -527,8 +441,18 @@ export class SystemController {
   }
 
   @Get("system/workspace-folders")
-  async workspaceFolders(@Query("path") currentPath = "") {
-    return workspaceFolderListing(String(currentPath || ""));
+  async workspaceFolders(@Req() request: any, @Query("path") currentPath = "") {
+    return listWorkspaceFoldersForPrincipal(String(currentPath || ""), requestPrincipal(request), process.env);
+  }
+
+  @Get("files")
+  async files(@Req() request: any, @Query("path") currentPath = "") {
+    return listFilesForPrincipal(String(currentPath || ""), requestPrincipal(request), process.env);
+  }
+
+  @Get("system/files")
+  async systemFiles(@Req() request: any, @Query("path") currentPath = "") {
+    return listFilesForPrincipal(String(currentPath || ""), requestPrincipal(request), process.env);
   }
 
   private async dataDirReady() {

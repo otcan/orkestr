@@ -37,6 +37,7 @@ import { codexResumeCommand } from "../../../../../packages/core/src/codex-attac
 import { launchNativeTerminal } from "../../../../../packages/core/src/native-terminal.js";
 import { defaultWhatsAppReplyPrefix } from "../../../../../packages/core/src/whatsapp-defaults.js";
 import { visibleThreadMessages } from "../../../../../packages/core/src/thread-message-visibility.js";
+import { resolveWorkspacePathForPrincipal, workspacePrincipalForOwner, workspaceRootForPrincipal } from "../../../../../packages/core/src/workspace-files.js";
 import {
   archiveCodexAppServerThread,
   compactCodexAppServerThread,
@@ -326,16 +327,6 @@ function validGitRemote(value: string): boolean {
   return /^(https?:\/\/|ssh:\/\/|git@)[^\s]+$/i.test(value);
 }
 
-function runtimeWorkspaceRoot(paths: Awaited<ReturnType<typeof ensureDataDirs>>): string {
-  return path.resolve(String(process.env.ORKESTR_RUNTIME_WORKSPACE_ROOT || process.env.ORKESTR_CLONE_ROOT || paths.workspaces).trim());
-}
-
-function resolveWorkspacePath(value: string, root: string): string {
-  const requested = String(value || "").trim();
-  if (!requested) return "";
-  return path.resolve(path.isAbsolute(requested) ? requested : path.join(root, requested));
-}
-
 function safeWorkFolder(value: string): string {
   const folder = String(value || "").trim().replace(/^[/\\]+/, "");
   if (!folder) return "";
@@ -380,9 +371,11 @@ async function ensureLocalGitRepo(repoRoot: string): Promise<boolean> {
   return true;
 }
 
-async function prepareThreadCreateBody(body: Record<string, unknown> = {}): Promise<Record<string, unknown>> {
-  const paths = await ensureDataDirs();
-  const cloneRoot = runtimeWorkspaceRoot(paths);
+async function prepareThreadCreateBody(body: Record<string, unknown> = {}, principal: any = null): Promise<Record<string, unknown>> {
+  const effectivePrincipal = principal || requestPrincipal(null);
+  const ownerHint = optionalBodyString(body, "ownerUserId", body["userId"]);
+  const workspacePrincipal = workspacePrincipalForOwner(effectivePrincipal, ownerHint, process.env);
+  const cloneRoot = await workspaceRootForPrincipal(workspacePrincipal, process.env);
   const workFolder = optionalBodyString(body, "workFolder", optionalBodyString(body, "workdirRelativePath", body["workdir"]));
   if (!optionalBodyBoolean(body, "cloneRepo", false)) {
     const requestedRepo = optionalBodyString(body, "repoPath");
@@ -392,11 +385,13 @@ async function prepareThreadCreateBody(body: Record<string, unknown> = {}): Prom
     const generatedWorkspace = !requestedRoot;
     const repoRoot = generatedWorkspace
       ? await availableWorkspacePath(cloneRoot, generatedWorkspaceName(body))
-      : resolveWorkspacePath(requestedRoot, cloneRoot);
+      : await resolveWorkspacePathForPrincipal(requestedRoot, workspacePrincipal, process.env, cloneRoot);
     const cwdRoot = requestedRepo || requestedWorkspace ? repoRoot : cloneRoot;
     const initGit = optionalBodyBoolean(body, "initGit", generatedWorkspace || optionalBodyBoolean(body, "autoWorkspace", false));
     const localGitInitialized = initGit ? await ensureLocalGitRepo(repoRoot) : false;
-    const cwd = workFolder ? workspaceWithWorkFolder(repoRoot, workFolder) : resolveWorkspacePath(requestedCwd || repoRoot, cwdRoot);
+    const cwd = workFolder
+      ? await resolveWorkspacePathForPrincipal(workspaceWithWorkFolder(repoRoot, workFolder), workspacePrincipal, process.env, cloneRoot)
+      : await resolveWorkspacePathForPrincipal(requestedCwd || repoRoot, workspacePrincipal, process.env, cwdRoot);
     if (generatedWorkspace || initGit || workFolder) await fs.mkdir(cwd, { recursive: true });
     return {
       ...body,
@@ -418,7 +413,7 @@ async function prepareThreadCreateBody(body: Record<string, unknown> = {}): Prom
   const requestedTarget = optionalBodyString(body, "workspace", optionalBodyString(body, "cwd", body["repoPath"]));
   const generatedWorkspace = !requestedTarget;
   const target = requestedTarget
-    ? path.resolve(path.isAbsolute(requestedTarget) ? requestedTarget : path.join(cloneRoot, requestedTarget))
+    ? await resolveWorkspacePathForPrincipal(requestedTarget, workspacePrincipal, process.env, cloneRoot)
     : await availableWorkspacePath(cloneRoot, generatedWorkspaceName(body, remoteUrl));
   if (configuredRoot && !pathInside(cloneRoot, target)) throw httpError("clone_target_outside_workspace_root", 400);
 
@@ -528,7 +523,7 @@ export class ThreadsController {
   @Post()
   async create(@Req() request: any, @Body() body: Record<string, unknown> = {}) {
     const principal = requestPrincipal(request);
-    const prepared = await prepareThreadCreateBody(body);
+    const prepared = await prepareThreadCreateBody(body, principal);
     const preparedExecutor = typeof prepared.executor === "object" && prepared.executor ? prepared.executor as Record<string, unknown> : {};
     const requestedExecutorId = String(prepared.executorId || preparedExecutor.id || preparedExecutor.type || "codex").trim() || "codex";
     const usesCodexRuntime = requestedExecutorId === "codex" || String(preparedExecutor.type || "").trim() === "codex";
