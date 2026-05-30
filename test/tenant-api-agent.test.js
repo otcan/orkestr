@@ -246,6 +246,78 @@ test("WhatsApp routing cleans mixed tenant Codex runtime state before enqueueing
   assert.equal(initialQueueDeliveryState({ runtimeKind: "api-agent", state: "queued" }, messages[0]), "");
 });
 
+test("WhatsApp routing cleans stale api-agent tmux runtime metadata before enqueueing", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-api-agent-stale-runtime-"));
+  const env = await allowSanitizerEnv(home, { ORKESTR_WHATSAPP_API_AGENT_AUTORUN: "0" });
+  await writeConnectorConfig("whatsapp", {
+    bridgeMode: "external",
+    bridgeUrl: "http://wa.local",
+  }, env);
+  await createThread({
+    id: "otcantest",
+    ownerUserId: "otcan",
+    name: "otcantest",
+    runtimeKind: "api-agent",
+    runtime: {
+      runtimeKind: "codex-tmux",
+      sessionName: "orkestr-otcantest",
+      paneId: "%1030",
+      state: "ready",
+    },
+    codexThreadId: "stale-codex-thread",
+    codexSessionId: "stale-codex-session",
+    codexTokenUsage: { total: { totalTokens: 1000 } },
+    executorId: "api-agent",
+    executor: {
+      id: "api-agent",
+      type: "api-agent",
+      transport: "api-agent",
+      codexThreadId: "stale-codex-thread",
+      codexSessionId: "stale-codex-session",
+      sessionName: "orkestr-otcantest",
+      tmuxTarget: "%1030",
+      metadata: {
+        runtimeKind: "api-agent",
+        transport: "api-agent",
+        codexThreadId: "stale-codex-thread",
+        codexSessionId: "stale-codex-session",
+        codexTokenUsage: { total: { totalTokens: 1000 } },
+      },
+    },
+    binding: {
+      connector: "whatsapp",
+      chatId: "chat-stale-api-agent",
+      displayName: "otcantest",
+      generated: true,
+      mirrorToWhatsApp: true,
+    },
+  }, env);
+
+  const routed = await routeWhatsAppInbound({
+    eventId: "stale-api-agent-1",
+    chatId: "chat-stale-api-agent",
+    accountId: "wa-1",
+    from: "491234567890@c.us",
+    text: "hello",
+  }, env);
+  const thread = await getThread("otcantest", env);
+
+  assert.equal(routed.threadId, "otcantest");
+  assert.equal(thread.runtimeKind, "api-agent");
+  assert.equal(thread.runtime, null);
+  assert.equal(thread.codexThreadId, null);
+  assert.equal(thread.codexSessionId, null);
+  assert.equal(thread.codexTokenUsage, null);
+  assert.equal(thread.executor.codexThreadId, null);
+  assert.equal(thread.executor.codexSessionId, null);
+  assert.equal(thread.executor.sessionName, null);
+  assert.equal(thread.executor.tmuxTarget, null);
+  assert.equal(thread.executor.metadata.codexThreadId, null);
+  assert.equal(thread.executor.metadata.codexSessionId, null);
+  assert.equal(thread.executor.metadata.codexTokenUsage, null);
+  assert.equal(threadUsesApiAgent(thread, env), true);
+});
+
 test("tenant api-agent fails closed when credit budget is exhausted", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-api-agent-budget-"));
   const env = await allowSanitizerEnv(home, { ORKESTR_API_AGENT_DAILY_BUDGET_USD: "0" });

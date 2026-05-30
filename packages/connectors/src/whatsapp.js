@@ -436,7 +436,7 @@ function shouldUseApiAgentForWhatsAppThread(thread = {}, env = process.env) {
 
 async function ensureApiAgentWhatsAppThread(thread = null, env = process.env) {
   if (!thread || !shouldUseApiAgentForWhatsAppThread(thread, env)) return thread;
-  if (threadUsesApiAgent(thread, env)) return thread;
+  if (threadUsesApiAgent(thread, env) && !apiAgentWhatsAppThreadNeedsNormalization(thread, env)) return thread;
   const metadata = thread.executor?.metadata || {};
   return updateThread(thread.id, {
     runtimeKind: "api-agent",
@@ -454,6 +454,9 @@ async function ensureApiAgentWhatsAppThread(thread = null, env = process.env) {
       transport: "api-agent",
       codexThreadId: null,
       codexSessionId: null,
+      sessionName: null,
+      tmuxTarget: null,
+      paneId: null,
       metadata: {
         transport: "api-agent",
         runtimeKind: "api-agent",
@@ -469,6 +472,34 @@ async function ensureApiAgentWhatsAppThread(thread = null, env = process.env) {
       },
     },
   }, env).catch(() => thread);
+}
+
+function apiAgentWhatsAppThreadNeedsNormalization(thread = {}, env = process.env) {
+  if (!threadUsesApiAgent(thread, env)) return true;
+  const executor = thread.executor || {};
+  const metadata = executor.metadata || {};
+  return Boolean(
+    thread.runtime ||
+      thread.codexThreadId ||
+      thread.codexSessionId ||
+      thread.codexMode ||
+      thread.desiredCodexMode ||
+      thread.codexTokenUsage ||
+      thread.codexRateLimits ||
+      executor.type !== "api-agent" ||
+      executor.transport !== "api-agent" ||
+      executor.codexThreadId ||
+      executor.codexSessionId ||
+      executor.sessionName ||
+      executor.tmuxTarget ||
+      executor.paneId ||
+      metadata.transport !== "api-agent" ||
+      metadata.runtimeKind !== "api-agent" ||
+      metadata.codexThreadId ||
+      metadata.codexSessionId ||
+      metadata.codexTokenUsage ||
+      metadata.codexRateLimits
+  );
 }
 
 function whatsappApiAgentAutoRun(env = process.env) {
