@@ -33,6 +33,7 @@ import {
 import { appendOrUpdateEventMessage, normalizeCodexModel, normalizeReasoningEffort } from "./codex-app-server-common.js";
 import { completeThreadSecurityApproveCommand, threadSecurityApproveChallengeId } from "./security-thread-command.js";
 import { threadUsesContainedUserPolicy } from "./tenant-policy.js";
+import { apiAgentRuntimeStatus, threadUsesApiAgent } from "./tenant-api-agent.js";
 import {
   capturePane,
   killTmuxSession,
@@ -576,6 +577,9 @@ export async function runtimeStatus(threadId, env = process.env, messagesOverrid
     .map((message) => String(message.deliveryNextAttemptAt))
     .sort()[0] || null;
   const runningCount = messages.filter((message) => message.state === "running").length;
+  if (threadUsesApiAgent(thread, env)) {
+    return apiAgentRuntimeStatus(thread, messages, env);
+  }
   if (threadUsesCodexAppServer(thread, env)) {
     return codexAppServerThreadStatus(thread, env, {
       pendingCount,

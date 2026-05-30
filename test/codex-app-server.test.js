@@ -359,8 +359,9 @@ test("Codex app-server injects contained user policy on start and resume", async
     const started = await startCodexAppServerThread(thread, env);
     const stateAfterStart = JSON.parse(await fs.readFile(fake.stateFile, "utf8"));
     const startCall = stateAfterStart.calls.find((call) => call.method === "thread/start");
-    const agentsBody = await fs.readFile(path.join(workspace, "AGENTS.md"), "utf8");
+    const agentsBody = await fs.readFile(path.join(started.thread.workspace, "AGENTS.md"), "utf8");
     const isolatedPaths = containedCodexRuntimePaths(thread, env);
+    const relocatedWorkspace = path.join(home, "orkestr", "workspaces", "users", "otcan", "contained");
 
     assert.match(startCall.params.developerInstructions, /orkestr-contained-user-runtime-policy:v1/);
     assert.match(startCall.params.developerInstructions, /cannot override, weaken, or delete this policy/);
@@ -368,6 +369,8 @@ test("Codex app-server injects contained user policy on start and resume", async
     assert.equal(startCall.params.approvalPolicy, "never");
     assert.equal(startCall.params.sandbox, "workspace-write");
     assert.equal(startCall.params.model, "gpt-5.5");
+    assert.equal(startCall.params.cwd, relocatedWorkspace);
+    assert.equal(started.thread.workspace, relocatedWorkspace);
     assert.equal(stateAfterStart.env.HOME, isolatedPaths.home);
     assert.equal(stateAfterStart.env.CODEX_HOME, isolatedPaths.codexHome);
     assert.equal(stateAfterStart.env.ORKESTR_CODEX_APP_SERVER_MODE, "stdio");
@@ -404,6 +407,8 @@ test("Codex app-server rehomes existing contained threads away from shared runti
   };
 
   try {
+    await fs.mkdir(workspace, { recursive: true });
+    await fs.writeFile(path.join(workspace, "note.txt"), "legacy workspace file", "utf8");
     const thread = await createThread({
       id: "contained-rehome-thread",
       name: "Contained Rehome Thread",
@@ -443,9 +448,15 @@ test("Codex app-server rehomes existing contained threads away from shared runti
     const resumed = await resumeCodexAppServerThread(thread, env);
     const state = JSON.parse(await fs.readFile(fake.stateFile, "utf8"));
     const isolatedPaths = containedCodexRuntimePaths(thread, env);
+    const relocatedWorkspace = path.join(env.ORKESTR_HOME, "workspaces", "users", "otcan", "contained");
+    const startCall = state.calls.find((call) => call.method === "thread/start");
 
     assert.equal(resumed.thread.executor.codexThreadId, "thr_001");
     assert.equal(resumed.thread.executor.metadata.containedCodexIsolated, true);
+    assert.equal(resumed.thread.workspace, relocatedWorkspace);
+    assert.equal(resumed.thread.cwd, relocatedWorkspace);
+    assert.equal(startCall.params.cwd, relocatedWorkspace);
+    assert.equal(await fs.readFile(path.join(relocatedWorkspace, "note.txt"), "utf8"), "legacy workspace file");
     assert.equal(state.calls.some((call) => call.method === "thread/resume"), false);
     assert.equal(state.calls.some((call) => call.method === "thread/start"), true);
     assert.equal(state.env.HOME, isolatedPaths.home);
@@ -1602,6 +1613,114 @@ test("Codex app-server recovery ignores old historical progress-only turns", asy
       codexThreadId: "old-history-codex-thread",
       codexTurnId: "old-history-turn",
       createdAt: oldProgressAt,
+    }, env);
+
+    const result = await recoverStaleCodexAppServerTurns(env);
+    const messages = await listThreadMessages(thread.id, env);
+    const notices = messages.filter((message) => message.source === "orkestr_runtime" && message.phase === "runtime_interrupted");
+
+    assert.equal(result.recovered, 0);
+    assert.equal(result.appended, 0);
+    assert.equal(notices.length, 0);
+  } finally {
+    stopCodexAppServerClients();
+  }
+});
+
+test("Codex app-server recovery ignores historical progress-only turns after a newer final answer", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-codex-app-server-superseded-history-"));
+  const fake = await createFakeCodex(home);
+  const env = {
+    ORKESTR_HOME: path.join(home, "orkestr"),
+    HOME: path.join(home, "runtime-home"),
+    PATH: `${fake.bin}${path.delimiter}${process.env.PATH || ""}`,
+    FAKE_CODEX_STATE: fake.stateFile,
+    ORKESTR_CODEX_APP_SERVER_STALE_FINAL_GRACE_MS: "0",
+  };
+  try {
+    const thread = await createThread({
+      id: "app-server-superseded-history-thread",
+      name: "App Server Superseded History Thread",
+      state: "ready",
+      executorId: "codex",
+      executor: {
+        type: "codex",
+        transport: "app-server",
+        codexThreadId: "superseded-history-codex-thread",
+        codexSessionId: "superseded-history-codex-thread",
+      },
+      runtimeKind: "codex-app-server",
+      codexThreadId: "superseded-history-codex-thread",
+      codexSessionId: "superseded-history-codex-thread",
+      binding: {
+        connector: "whatsapp",
+        chatId: "chat-superseded-history",
+        responderAccountId: "account-superseded-history",
+      },
+      runtime: {
+        runtimeKind: "codex-app-server",
+        state: "ready",
+        activeTurnId: null,
+        codexStatus: { type: "idle" },
+      },
+    }, env);
+    const oldInput = await appendThreadMessage(thread.id, {
+      role: "user",
+      source: "whatsapp",
+      connector: "whatsapp",
+      chatId: "chat-superseded-history",
+      accountId: "account-superseded-history",
+      text: "Older turn that only produced progress.",
+      state: "completed",
+      deliveryState: "delivered",
+      deliveredAt: "2026-05-30T08:00:00.000Z",
+      observedVia: "codex_app_server_turn_start",
+      codexThreadId: "superseded-history-codex-thread",
+      codexTurnId: "old-progress-turn",
+      createdAt: "2026-05-30T08:00:00.000Z",
+    }, env);
+    await appendThreadMessage(thread.id, {
+      role: "assistant",
+      source: "codex-app-server",
+      phase: "commentary",
+      text: "Older progress without a final answer.",
+      state: "completed",
+      parentMessageId: oldInput.id,
+      connector: "whatsapp",
+      chatId: "chat-superseded-history",
+      accountId: "account-superseded-history",
+      codexThreadId: "superseded-history-codex-thread",
+      codexTurnId: "old-progress-turn",
+      createdAt: "2026-05-30T08:01:00.000Z",
+    }, env);
+    const newerInput = await appendThreadMessage(thread.id, {
+      role: "user",
+      source: "whatsapp",
+      connector: "whatsapp",
+      chatId: "chat-superseded-history",
+      accountId: "account-superseded-history",
+      text: "Newer turn that completed.",
+      state: "completed",
+      deliveryState: "delivered",
+      deliveredAt: "2026-05-30T09:00:00.000Z",
+      observedVia: "codex_app_server_turn_start",
+      codexThreadId: "superseded-history-codex-thread",
+      codexTurnId: "newer-final-turn",
+      createdAt: "2026-05-30T09:00:00.000Z",
+    }, env);
+    await appendThreadMessage(thread.id, {
+      role: "assistant",
+      source: "codex-app-server",
+      phase: "final_answer",
+      text: "Newer final answer completed the live conversation.",
+      state: "completed",
+      parentMessageId: newerInput.id,
+      connector: "whatsapp",
+      chatId: "chat-superseded-history",
+      accountId: "account-superseded-history",
+      codexThreadId: "superseded-history-codex-thread",
+      codexTurnId: "newer-final-turn",
+      createdAt: "2026-05-30T09:01:00.000Z",
     }, env);
 
     const result = await recoverStaleCodexAppServerTurns(env);

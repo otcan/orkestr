@@ -2135,6 +2135,34 @@ ork-first-thread-wizard.first-thread-host {
   gap: 16px;
 }
 
+.usage-settings-card {
+  border-color: rgba(104, 172, 219, 0.2);
+}
+
+.usage-model-list {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px 12px;
+  border-top: 1px solid rgba(104, 172, 219, 0.14);
+  padding-top: 10px;
+}
+
+.usage-model-list span {
+  min-width: 0;
+  overflow: hidden;
+  color: #b7d4b2;
+  font-family: "IBM Plex Mono", "JetBrains Mono", "SFMono-Regular", Consolas, monospace;
+  font-size: 0.78rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.usage-model-list strong {
+  color: #ecffea;
+  font-family: "IBM Plex Mono", "JetBrains Mono", "SFMono-Regular", Consolas, monospace;
+  font-size: 0.8rem;
+}
+
 .wa-summary-strip {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));

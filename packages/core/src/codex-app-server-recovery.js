@@ -83,15 +83,45 @@ function latestByStorageOrder(messages = []) {
   return messages.at(-1) || null;
 }
 
+function sameTurnMessage(message = {}, userMessage = {}) {
+  const turnId = messageTurnId(userMessage);
+  if (turnId && messageTurnId(message) === turnId) return true;
+  return Boolean(userMessage?.id && message?.parentMessageId === userMessage.id);
+}
+
+function runtimeRecoveryMessage(message = {}) {
+  return clean(message?.source).toLowerCase() === "orkestr_runtime" ||
+    clean(message?.phase).toLowerCase() === "runtime_interrupted";
+}
+
+function newerTerminalAssistantAfterTurn(messages = [], latestUser = {}, latestUserIndex = -1, lastActivityMs = 0) {
+  const baselineMs = Number(lastActivityMs || messageActivityMs(latestUser) || 0);
+  for (let index = 0; index < messages.length; index += 1) {
+    const message = messages[index];
+    if (!terminalAssistantMessage(message)) continue;
+    if (runtimeRecoveryMessage(message)) continue;
+    if (sameTurnMessage(message, latestUser)) continue;
+    const candidateMs = messageActivityMs(message);
+    if (baselineMs && candidateMs) {
+      if (candidateMs > baselineMs) return true;
+      continue;
+    }
+    if (index > latestUserIndex) return true;
+  }
+  return false;
+}
+
 function deliveredTurnState(messages = [], latestUser = {}, latestUserIndex = -1) {
   const assistants = assistantMessagesForDeliveredTurn(messages, latestUser, latestUserIndex);
   if (assistants.some((message) => terminalAssistantMessage(message))) return null;
   const latestAssistant = latestByStorageOrder(assistants);
+  const lastActivityMs = Math.max(messageActivityMs(latestAssistant), messageActivityMs(latestUser));
+  if (newerTerminalAssistantAfterTurn(messages, latestUser, latestUserIndex, lastActivityMs)) return null;
   return {
     latestUser,
     latestAssistant,
     reason: latestAssistant ? "no_final_answer" : "no_assistant_response",
-    lastActivityMs: Math.max(messageActivityMs(latestAssistant), messageActivityMs(latestUser)),
+    lastActivityMs,
   };
 }
 

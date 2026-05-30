@@ -971,6 +971,41 @@
               }
             </section>
 
+            <section class="settings-card usage-settings-card">
+              <div class="panel-title compact-title">
+                <div>
+                  <p class="eyebrow">Credit Usage</p>
+                  <h3>Tenant API agent</h3>
+                </div>
+                <button class="secondary" type="button" (click)="loadCreditUsage(thread)" [disabled]="busy || creditUsageLoading">
+                  {{ creditUsageLoading ? "Loading" : "Refresh" }}
+                </button>
+              </div>
+              <div class="settings-facts">
+                <span>Owner</span>
+                <strong>{{ threadOwnerUserId(thread) || "Admin" }}</strong>
+                <span>Today</span>
+                <strong>{{ formatUsd(creditUsage?.todayUsd) }}</strong>
+                <span>This month</span>
+                <strong>{{ formatUsd(creditUsage?.monthUsd) }}</strong>
+                <span>Budget</span>
+                <strong>{{ creditBudgetLabel() }}</strong>
+              </div>
+              @if (creditUsageModelRows().length > 0) {
+                <div class="usage-model-list">
+                  @for (row of creditUsageModelRows(); track row.model) {
+                    <span>{{ row.model }}</span>
+                    <strong>{{ formatUsd(row.cost) }}</strong>
+                  }
+                </div>
+              } @else {
+                <p class="helper">No API-agent usage has been recorded for this tenant yet.</p>
+              }
+              @if (creditUsage?.remainingDailyUsd !== null && creditUsage?.remainingDailyUsd !== undefined) {
+                <p class="helper">Daily remaining: {{ formatUsd(creditUsage?.remainingDailyUsd) }}</p>
+              }
+            </section>
+
             <section class="settings-card">
               <div class="panel-title compact-title">
                 <div>

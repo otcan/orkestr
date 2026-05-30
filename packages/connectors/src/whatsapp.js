@@ -423,6 +423,34 @@ function principalForThread(thread = {}, env = process.env) {
   return userPrincipal({ id: ownerUserId, role: "user", displayName: ownerUserId, source: "whatsapp-owner" });
 }
 
+function shouldUseApiAgentForWhatsAppThread(thread = {}, env = process.env) {
+  const owner = resourceOwnerUserId(thread, env);
+  const adminId = normalizeUserId(env.ORKESTR_ADMIN_USER_ID || adminUserId);
+  if (!owner || owner === adminId) return false;
+  const binding = thread?.binding || {};
+  if (String(binding.connector || "whatsapp").trim().toLowerCase() !== "whatsapp" && !binding.chatId) return false;
+  if (String(env.ORKESTR_TENANT_WHATSAPP_API_AGENT || "1").trim().toLowerCase() === "0") return false;
+  return true;
+}
+
+async function ensureApiAgentWhatsAppThread(thread = null, env = process.env) {
+  if (!thread || !shouldUseApiAgentForWhatsAppThread(thread, env)) return thread;
+  const runtimeKind = String(thread.runtimeKind || thread.runtime?.runtimeKind || thread.executor?.metadata?.runtimeKind || "").trim().toLowerCase();
+  if (runtimeKind === "api-agent") return thread;
+  return updateThread(thread.id, {
+    runtimeKind: "api-agent",
+    executorId: "api-agent",
+    executor: {
+      ...(thread.executor || {}),
+      type: "api-agent",
+      metadata: {
+        ...(thread.executor?.metadata || {}),
+        runtimeKind: "api-agent",
+      },
+    },
+  }, env).catch(() => thread);
+}
+
 function whatsappAutoThreadBinding({ chatId = "", accountId = "", from = "", displayName = "" } = {}) {
   return {
     connector: "whatsapp",
@@ -471,9 +499,9 @@ async function routeAutoProvisionedThread(input = {}, config = {}, env = process
       name: bindingDisplayName,
       title: bindingDisplayName,
       wakePolicy: "wake-on-message",
-      executorId: "codex",
-      executor: { type: "codex" },
-      runtimeKind: "codex-app-server",
+      executorId: "api-agent",
+      executor: { type: "api-agent", metadata: { runtimeKind: "api-agent" } },
+      runtimeKind: "api-agent",
       binding,
       bindingName: binding.displayName,
     }, principal, env);
@@ -599,7 +627,8 @@ export async function routeWhatsAppInbound(input = {}, env = process.env) {
     promptFile,
     attachments: Array.isArray(input.attachments) ? input.attachments : [],
   };
-  const thread = threadId ? (await listThreads(env)).find((item) => item.id === threadId || item.name === threadId || item.bindingName === threadId) : null;
+  let thread = threadId ? (await listThreads(env)).find((item) => item.id === threadId || item.name === threadId || item.bindingName === threadId) : null;
+  thread = await ensureApiAgentWhatsAppThread(thread, env);
   let message = threadId
     ? await enqueueThreadInputForPrincipal(threadId, messageInput, principalForThread(thread, env), env)
     : await enqueueAgentMessage(agentId, messageInput, env);

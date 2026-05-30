@@ -1,6 +1,7 @@
 import { Body, Controller, Get, HttpCode, Param, Patch, Post, Req } from "@nestjs/common";
 import { isAdminPrincipal, resourceOwnerUserId } from "../../../../../packages/core/src/policy.js";
 import { requestPrincipal } from "../../../../../packages/core/src/principal.js";
+import { creditUsageSummary, listCreditUsageRecords, summarizeCreditUsage } from "../../../../../packages/core/src/credit-usage.js";
 import { listThreads } from "../../../../../packages/core/src/threads.js";
 import { listTimers } from "../../../../../packages/core/src/timers.js";
 import {
@@ -18,6 +19,13 @@ import { httpError } from "../../common/http.js";
 function assertAdminRequest(request: any): void {
   if (isAdminPrincipal(requestPrincipal(request))) return;
   throw httpError("admin_required", 403);
+}
+
+function assertSelfOrAdmin(request: any, userId: string): void {
+  const principal = requestPrincipal(request);
+  if (isAdminPrincipal(principal)) return;
+  if (String(principal?.userId || "").trim().toLowerCase() === String(userId || "").trim().toLowerCase()) return;
+  throw httpError("user_usage_forbidden", 403);
 }
 
 function userBody(body: Record<string, unknown> = {}) {
@@ -78,6 +86,26 @@ export class UsersController {
     return { ok: true, user: userSummary(user, threads, timers) };
   }
 
+  @Get("me/credit-usage")
+  async myCreditUsage(@Req() request: any) {
+    const principal = requestPrincipal(request);
+    const userId = String(principal?.userId || "").trim();
+    if (!userId) throw httpError("user_required", 403);
+    return { usage: await creditUsageSummary({ tenantId: userId }) };
+  }
+
+  @Get("credit-usage")
+  async creditUsage(@Req() request: any) {
+    assertAdminRequest(request);
+    const records = await listCreditUsageRecords();
+    const tenantIds = [...new Set(records.map((record: any) => String(record.tenantId || "").trim()).filter(Boolean))].sort();
+    return {
+      generatedAt: new Date().toISOString(),
+      tenants: tenantIds.map((tenantId) => summarizeCreditUsage(records, { tenantId })),
+      total: summarizeCreditUsage(records),
+    };
+  }
+
   @Get(":userId")
   async get(@Req() request: any, @Param("userId") userId: string) {
     assertAdminRequest(request);
@@ -85,6 +113,12 @@ export class UsersController {
     if (!user) throw httpError("user_not_found", 404);
     const [threads, timers] = await Promise.all([listThreads(), listTimers()]);
     return { user: userSummary(user, threads, timers) };
+  }
+
+  @Get(":userId/credit-usage")
+  async userCreditUsage(@Req() request: any, @Param("userId") userId: string) {
+    assertSelfOrAdmin(request, userId);
+    return { usage: await creditUsageSummary({ tenantId: userId }) };
   }
 
   @Patch(":userId")

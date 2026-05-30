@@ -1296,6 +1296,7 @@ migrate_systemd_env_file() {
   ensure_env_assignment ORKESTR_CODEX_APP_SERVER_MODE "${ORKESTR_CODEX_APP_SERVER_MODE:-external}"
   ensure_env_assignment ORKESTR_CODEX_APP_SERVER_SOCKET "$(codex_app_server_socket_default)"
   ensure_env_assignment ORKESTR_CODEX_APP_SERVER_SERVICE_NAME "$(codex_app_server_service_name)"
+  ensure_env_assignment ORKESTR_RUNTIME_WORKSPACE_ROOT "$workspace_dir"
   chmod 0640 "$env_file" || true
 }
 

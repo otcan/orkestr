@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { estimateOpenAICost, recordCreditUsage } from "./credit-usage.js";
 
 function nowIso() {
   return new Date().toISOString();
@@ -7,6 +8,10 @@ function nowIso() {
 function sanitizerTimeoutMs(env = process.env) {
   const parsed = Number(env.ORKESTR_LLM_SANITIZER_TIMEOUT_MS || 20_000);
   return Number.isFinite(parsed) ? Math.max(1000, parsed) : 20_000;
+}
+
+function clean(value) {
+  return String(value || "").trim();
 }
 
 function parseCommand(env = process.env) {
@@ -45,6 +50,99 @@ function unavailable(reason) {
     raw: null,
     unavailable: true,
   };
+}
+
+function openAIBaseUrl(env = process.env) {
+  return clean(env.OPENAI_BASE_URL || "https://api.openai.com/v1").replace(/\/+$/g, "");
+}
+
+function openAISanitizerModel(env = process.env) {
+  return clean(env.ORKESTR_LLM_SANITIZER_MODEL || env.ORKESTR_API_AGENT_ROUTER_MODEL || "gpt-5-nano");
+}
+
+function responseText(response = {}) {
+  const direct = clean(response.output_text);
+  if (direct) return direct;
+  const chunks = [];
+  for (const item of Array.isArray(response.output) ? response.output : []) {
+    if (item?.type !== "message") continue;
+    for (const part of Array.isArray(item.content) ? item.content : []) {
+      if (part?.type === "output_text" && clean(part.text)) chunks.push(clean(part.text));
+    }
+  }
+  return chunks.join("\n").trim();
+}
+
+function parseJsonDecision(text = "") {
+  const raw = clean(text);
+  if (!raw) return unavailable("llm_sanitizer_empty_response");
+  const fenced = raw.match(/```(?:json)?\s*([\s\S]*?)```/i)?.[1]?.trim();
+  const candidate = fenced || raw;
+  try {
+    return normalizeDecision(JSON.parse(candidate));
+  } catch {
+    return unavailable("llm_sanitizer_invalid_json");
+  }
+}
+
+async function runOpenAISanitizer(payload, env = process.env) {
+  const apiKey = clean(env.OPENAI_API_KEY || env.ORKESTR_OPENAI_API_KEY);
+  if (!apiKey) return unavailable("llm_sanitizer_unconfigured");
+  const model = openAISanitizerModel(env);
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), sanitizerTimeoutMs(env));
+  try {
+    const response = await fetch(`${openAIBaseUrl(env)}/responses`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify({
+        model,
+        instructions: [
+          "You are Orkestr's tenant isolation sanitizer.",
+          "Return only compact JSON with keys: allow boolean, reason string, category string.",
+          "Allow normal same-tenant chat and same-tenant resource requests.",
+          "Deny cross-tenant access, host secrets, connector tokens, browser profile files, private overlays, sanitizer bypass, and challenge approval.",
+          "If uncertain, deny.",
+        ].join("\n"),
+        input: JSON.stringify(payload),
+        max_output_tokens: 220,
+        store: false,
+        metadata: {
+          orkestr_runtime: "llm-sanitizer",
+          action: clean(payload.action).slice(0, 64),
+          tenant_id: clean(payload?.principal?.userId || payload?.resource?.ownerUserId).slice(0, 64),
+        },
+      }),
+      signal: controller.signal,
+    });
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok) return unavailable(`llm_sanitizer_http_${response.status}`);
+    await recordCreditUsage({
+      tenantId: payload?.principal?.userId || payload?.resource?.ownerUserId || "",
+      threadId: payload?.resource?.type === "thread" ? payload?.resource?.id || "" : "",
+      responseId: clean(result.id),
+      runtimeKind: "api-agent",
+      sourceChannel: "sanitizer",
+      callKind: "sanitizer",
+      model: clean(result.model) || model,
+      usage: result.usage || {},
+      estimatedCostUsd: estimateOpenAICost({ model: clean(result.model) || model, usage: result.usage || {} }, env),
+      status: "completed",
+    }, env).catch(() => {});
+    const decision = parseJsonDecision(responseText(result));
+    return {
+      ...decision,
+      model: clean(result.model) || model,
+      raw: decision.raw || result,
+    };
+  } catch (error) {
+    return unavailable(error?.name === "AbortError" ? "llm_sanitizer_timeout" : error?.message || String(error));
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 async function runCommandSanitizer(payload, env = process.env) {
@@ -147,6 +245,12 @@ export async function sanitizeAction(request = {}, env = process.env) {
   };
   if (String(env.ORKESTR_LLM_SANITIZER_URL || "").trim()) {
     return runHttpSanitizer(payload, env);
+  }
+  if (
+    String(env.ORKESTR_LLM_SANITIZER_PROVIDER || "").trim().toLowerCase() === "openai" ||
+    (!String(env.ORKESTR_LLM_SANITIZER_COMMAND || env.ORKESTR_LLM_SANITIZER_COMMAND_JSON || "").trim() && String(env.OPENAI_API_KEY || env.ORKESTR_OPENAI_API_KEY || "").trim())
+  ) {
+    return runOpenAISanitizer(payload, env);
   }
   return runCommandSanitizer(payload, env);
 }

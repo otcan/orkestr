@@ -462,6 +462,7 @@ export interface EventRecord {
 
 export interface ThreadSummary {
   id: string;
+  ownerUserId?: string;
   name?: string;
   title?: string;
   bindingName?: string;
@@ -830,6 +831,53 @@ export interface UserResponse {
   user: OrkestrUser;
 }
 
+export interface CreditUsageRecord {
+  id: string;
+  tenantId?: string;
+  threadId?: string;
+  messageId?: string;
+  responseId?: string;
+  runtimeKind?: string;
+  sourceChannel?: string;
+  callKind?: string;
+  model?: string;
+  inputTokens?: number;
+  outputTokens?: number;
+  cachedInputTokens?: number;
+  estimatedCostUsd?: number;
+  status?: string;
+  error?: string;
+  createdAt?: string;
+}
+
+export interface CreditUsageSummary {
+  tenantId?: string | null;
+  totalUsd?: number;
+  todayUsd?: number;
+  monthUsd?: number;
+  remainingDailyUsd?: number | null;
+  remainingMonthlyUsd?: number | null;
+  budget?: {
+    dailyUsd?: number | null;
+    monthlyUsd?: number | null;
+    warningUsd?: number | null;
+  };
+  byModel?: Record<string, number>;
+  count?: number;
+  recent?: CreditUsageRecord[];
+  generatedAt?: string;
+}
+
+export interface CreditUsageResponse {
+  usage: CreditUsageSummary;
+}
+
+export interface AdminCreditUsageResponse {
+  generatedAt?: string;
+  tenants: CreditUsageSummary[];
+  total: CreditUsageSummary;
+}
+
 @Injectable({ providedIn: "root" })
 export class ApiService {
   private readonly http = inject(HttpClient);
@@ -882,6 +930,18 @@ export class ApiService {
 
   disableUser(id: string): Observable<UserResponse> {
     return this.http.post<UserResponse>(this.api(`/users/${encodeURIComponent(id)}/disable`), {});
+  }
+
+  creditUsage(): Observable<AdminCreditUsageResponse> {
+    return this.http.get<AdminCreditUsageResponse>(this.api("/users/credit-usage"));
+  }
+
+  userCreditUsage(id: string): Observable<CreditUsageResponse> {
+    return this.http.get<CreditUsageResponse>(this.api(`/users/${encodeURIComponent(id)}/credit-usage`));
+  }
+
+  myCreditUsage(): Observable<CreditUsageResponse> {
+    return this.http.get<CreditUsageResponse>(this.api("/users/me/credit-usage"));
   }
 
   createSecurityChallenge(): Observable<SecurityChallengeResponse> {

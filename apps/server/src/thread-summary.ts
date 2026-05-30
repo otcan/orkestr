@@ -171,6 +171,28 @@ function latestAssistantPlanAvailable(messages: any[] = []): boolean {
 function codexMetadata(thread: any) {
   const metadata = thread?.executor?.metadata && typeof thread.executor.metadata === "object" ? thread.executor.metadata : {};
   const runtimeKind = String(thread?.runtimeKind || thread?.executor?.transport || metadata.transport || "").trim();
+  if (runtimeKind === "api-agent" || metadata.runtimeKind === "api-agent") {
+    return {
+      codexMode: null,
+      codexModeLabel: null,
+      codexModeRaw: null,
+      codexModeSource: null,
+      codexModeUpdatedAt: null,
+      desiredCodexMode: null,
+      desiredCodexModeUpdatedAt: null,
+      codexModel: thread?.apiAgentModel || process.env.ORKESTR_API_AGENT_MODEL || "gpt-5-mini",
+      codexModelProvider: "openai-api",
+      codexReasoningEffort: null,
+      codexModelUpdatedAt: null,
+      codexContextWindow: null,
+      codexTokenUsage: null,
+      codexTotalTokenUsage: null,
+      codexRateLimits: null,
+      runtimeKind: "api-agent",
+      codexSessionId: null,
+      importedFromCodex: false,
+    };
+  }
   const tokenUsage = thread?.codexTokenUsage || metadata.codexTokenUsage || metadata.tokenUsage || null;
   const totalTokenUsage = thread?.codexTotalTokenUsage || metadata.codexTotalTokenUsage || metadata.totalTokenUsage || null;
   const contextWindow = Number(thread?.codexContextWindow || metadata.codexContextWindow || metadata.contextWindow || 0) || null;

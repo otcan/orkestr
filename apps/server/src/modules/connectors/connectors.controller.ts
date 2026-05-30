@@ -22,7 +22,8 @@ import {
 import { createAndBindWhatsAppThreadGroup } from "../../../../../packages/connectors/src/whatsapp-thread-groups.js";
 import { loginCodexWithApiKey, startCodexDeviceAuth } from "../../../../../packages/connectors/src/codex.js";
 import { requestThreadInputDelivery } from "../../../../../packages/core/src/runtime-leases.js";
-import { getThreadForPrincipal } from "../../../../../packages/core/src/threads.js";
+import { getThread, getThreadForPrincipal } from "../../../../../packages/core/src/threads.js";
+import { processApiAgentThreadInput, threadUsesApiAgent } from "../../../../../packages/core/src/tenant-api-agent.js";
 import { requestPrincipal } from "../../../../../packages/core/src/principal.js";
 import {
   createLocalWhatsAppChat,
@@ -320,6 +321,16 @@ export class ConnectorsController {
     ensureAttachmentsArray(body);
     const routed = await routeWhatsAppInbound(body);
     if (routed.threadId && !routed.duplicate) {
+      const thread = await getThread(String(routed.threadId || ""));
+      if (threadUsesApiAgent(thread || {})) {
+        await processApiAgentThreadInput(thread.id).catch(() => null);
+        await deliverWhatsAppReplies().catch(() => {});
+        return response
+          .status(202)
+          .header("cache-control", "no-store")
+          .type("application/json; charset=utf-8")
+          .send({ ...routed, runtimeKind: "api-agent" });
+      }
       await deliverWhatsAppReplies().catch(() => {});
       requestThreadInputDelivery(routed.threadId);
     }

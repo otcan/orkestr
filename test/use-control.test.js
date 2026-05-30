@@ -17,6 +17,7 @@ import {
 import { createTimer, createTimerForPrincipal, doctorTimersForPrincipal, listTimers, listTimersForPrincipal, markDueTimers } from "../packages/core/src/timers.js";
 import { adminPrincipal, userPrincipal } from "../packages/core/src/principal.js";
 import { sanitizeAction } from "../packages/core/src/llm-sanitizer.js";
+import { recordCreditUsage } from "../packages/core/src/credit-usage.js";
 import { approvePairingChallenge } from "../packages/core/src/security.js";
 import { createUser, disableUser, findOrCreateExternalUser, listUsers, readUserPrivateIdentities, updateUser, upsertUser } from "../packages/core/src/users.js";
 import {
@@ -112,39 +113,59 @@ test("non-admin audit events are scoped to owned resources", async () => {
 
 test("non-admin workspace and file browsing stays inside per-user roots", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-use-control-files-"));
-  const env = { ORKESTR_HOME: home };
+  const runtimeWorkspaceRoot = path.join(home, "runtime-workspaces");
+  const env = { ORKESTR_HOME: home, ORKESTR_RUNTIME_WORKSPACE_ROOT: runtimeWorkspaceRoot };
   const alice = userPrincipal(await upsertUser({ id: "alice", role: "user", displayName: "Alice" }, env));
   const bob = userPrincipal(await upsertUser({ id: "bob", role: "user", displayName: "Bob" }, env));
   const alicePaths = userDataPaths("alice", env);
   const bobPaths = userDataPaths("bob", env);
-  await fs.mkdir(path.join(alicePaths.workspaces, "project-a"), { recursive: true });
+  const aliceWorkspaceRoot = path.join(runtimeWorkspaceRoot, "users", "alice");
+  const bobWorkspaceRoot = path.join(runtimeWorkspaceRoot, "users", "bob");
+  await fs.mkdir(path.join(aliceWorkspaceRoot, "project-a"), { recursive: true });
   await fs.mkdir(path.join(alicePaths.files, "notes"), { recursive: true });
   await fs.writeFile(path.join(alicePaths.files, "notes", "todo.txt"), "hello", "utf8");
-  await fs.mkdir(path.join(bobPaths.workspaces, "project-b"), { recursive: true });
+  await fs.mkdir(path.join(bobWorkspaceRoot, "project-b"), { recursive: true });
 
   const aliceRoot = await workspaceRootForPrincipal(alice, env);
   const aliceWorkspacePath = await resolveWorkspacePathForPrincipal("project-a", alice, env);
   const aliceFolders = await listWorkspaceFoldersForPrincipal("", alice, env);
   const aliceFiles = await listFilesForPrincipal(path.join(alicePaths.files, "notes"), alice, env);
-  const bobProbe = await listWorkspaceFoldersForPrincipal(bobPaths.workspaces, alice, env);
-  const adminFolders = await listWorkspaceFoldersForPrincipal(alicePaths.workspaces, adminPrincipal(), env);
+  const bobProbe = await listWorkspaceFoldersForPrincipal(bobWorkspaceRoot, alice, env);
+  const adminFolders = await listWorkspaceFoldersForPrincipal(aliceWorkspaceRoot, adminPrincipal(), env);
 
-  assert.equal(aliceRoot, alicePaths.workspaces);
-  assert.equal(aliceWorkspacePath, path.join(alicePaths.workspaces, "project-a"));
-  assert.deepEqual(aliceFolders.roots.map((root) => root.path), [alicePaths.workspaces]);
+  assert.equal(aliceRoot, aliceWorkspaceRoot);
+  assert.equal(aliceWorkspacePath, path.join(aliceWorkspaceRoot, "project-a"));
+  assert.deepEqual(aliceFolders.roots.map((root) => root.path), [aliceWorkspaceRoot]);
   assert.deepEqual(aliceFolders.entries.map((entry) => entry.name), ["project-a"]);
   assert.deepEqual(aliceFiles.entries.map((entry) => entry.name), ["todo.txt"]);
   assert.equal(bobProbe.ok, false);
   assert.equal(bobProbe.error, "workspace_path_forbidden");
-  assert.ok(adminFolders.roots.some((root) => root.path === path.join(home, "workspaces")));
-  await assert.rejects(() => resolveWorkspacePathForPrincipal(bobPaths.workspaces, alice, env), /workspace_path_forbidden/);
+  assert.ok(adminFolders.roots.some((root) => root.path === runtimeWorkspaceRoot));
+  assert.notEqual(aliceRoot, alicePaths.workspaces);
+  assert.notEqual(bobWorkspaceRoot, bobPaths.workspaces);
+  await assert.rejects(() => resolveWorkspacePathForPrincipal(bobWorkspaceRoot, alice, env), /workspace_path_forbidden/);
+});
+
+test("non-admin workspaces fall back to deploy workspace root outside ORKESTR_HOME", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-use-control-deploy-workspace-"));
+  const deployRoot = path.join(home, "deploy");
+  const env = { ORKESTR_HOME: path.join(home, "private-home"), ORKESTR_DEPLOY_ROOT: deployRoot };
+  const alice = userPrincipal(await upsertUser({ id: "alice", role: "user", displayName: "Alice" }, env));
+
+  const root = await workspaceRootForPrincipal(alice, env);
+
+  assert.equal(root, path.join(deployRoot, "workspace", "users", "alice"));
+  assert.equal(root.startsWith(env.ORKESTR_HOME), false);
 });
 
 test("admin-created user threads use the target user's workspace root", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-use-control-admin-user-workspace-"));
+  const runtimeWorkspaceRoot = path.join(home, "runtime-workspaces");
   const priorHome = process.env.ORKESTR_HOME;
+  const priorWorkspaceRoot = process.env.ORKESTR_RUNTIME_WORKSPACE_ROOT;
   const priorRecover = process.env.ORKESTR_RECOVER_RUNNING_ON_START;
   process.env.ORKESTR_HOME = home;
+  process.env.ORKESTR_RUNTIME_WORKSPACE_ROOT = runtimeWorkspaceRoot;
   process.env.ORKESTR_RECOVER_RUNNING_ON_START = "0";
   let server;
 
@@ -158,16 +179,18 @@ test("admin-created user threads use the target user's workspace root", async ()
       body: JSON.stringify({ name: "Alice Admin Created", ownerUserId: "alice", executorId: "noop" }),
     });
     const payload = await response.json();
-    const alicePaths = userDataPaths("alice", process.env);
+    const aliceWorkspaceRoot = path.join(runtimeWorkspaceRoot, "users", "alice");
 
     assert.equal(response.status, 201);
     assert.equal(payload.thread.ownerUserId, "alice");
-    assert.ok(String(payload.thread.workspace || "").startsWith(alicePaths.workspaces));
-    assert.ok(String(payload.thread.cwd || "").startsWith(alicePaths.workspaces));
+    assert.ok(String(payload.thread.workspace || "").startsWith(aliceWorkspaceRoot));
+    assert.ok(String(payload.thread.cwd || "").startsWith(aliceWorkspaceRoot));
   } finally {
     if (server) await new Promise((resolve) => server.close(resolve));
     if (priorHome === undefined) delete process.env.ORKESTR_HOME;
     else process.env.ORKESTR_HOME = priorHome;
+    if (priorWorkspaceRoot === undefined) delete process.env.ORKESTR_RUNTIME_WORKSPACE_ROOT;
+    else process.env.ORKESTR_RUNTIME_WORKSPACE_ROOT = priorWorkspaceRoot;
     if (priorRecover === undefined) delete process.env.ORKESTR_RECOVER_RUNNING_ON_START;
     else process.env.ORKESTR_RECOVER_RUNNING_ON_START = priorRecover;
   }
@@ -602,10 +625,13 @@ test("thread API rejects ambiguous same-name routes across owners", async () => 
 
 test("user management API is admin-only and can pair a browser to a managed user", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-use-control-api-users-"));
+  const runtimeWorkspaceRoot = path.join(home, "runtime-workspaces");
   const priorHome = process.env.ORKESTR_HOME;
+  const priorWorkspaceRoot = process.env.ORKESTR_RUNTIME_WORKSPACE_ROOT;
   const priorAuth = process.env.ORKESTR_AUTH_REQUIRED;
   const priorRecover = process.env.ORKESTR_RECOVER_RUNNING_ON_START;
   process.env.ORKESTR_HOME = home;
+  process.env.ORKESTR_RUNTIME_WORKSPACE_ROOT = runtimeWorkspaceRoot;
   process.env.ORKESTR_AUTH_REQUIRED = "1";
   process.env.ORKESTR_RECOVER_RUNNING_ON_START = "0";
   const server = await startServer({ port: 0, host: "127.0.0.1" });
@@ -654,6 +680,14 @@ test("user management API is admin-only and can pair a browser to a managed user
     const userCookie = userPair.headers.get("set-cookie") || "";
     assert.equal(userPair.status, 200);
     await createThread({ id: "alice-existing", name: "Alice Existing", ownerUserId: "alice-example.test" }, process.env);
+    await recordCreditUsage({
+      tenantId: "alice-example.test",
+      threadId: "alice-existing",
+      messageId: "message-1",
+      responseId: "resp-usage-1",
+      model: "gpt-5-mini",
+      usage: { input_tokens: 1000, output_tokens: 25 },
+    }, process.env);
 
     const denied = await fetch(`${baseUrl}/api/users`, { headers: { cookie: userCookie } });
     assert.equal(denied.status, 403);
@@ -702,9 +736,19 @@ test("user management API is admin-only and can pair a browser to a managed user
     const where = await read(await fetch(`${baseUrl}/api/whereiam`, { headers: { cookie: userCookie } }));
     assert.equal(where.user.userId, "alice-example.test");
     assert.equal(where.user.role, "user");
+    const adminUsage = await read(await fetch(`${baseUrl}/api/users/credit-usage`, { headers: { cookie: adminCookie } }));
+    const userUsage = await read(await fetch(`${baseUrl}/api/users/me/credit-usage`, { headers: { cookie: userCookie } }));
+    const scopedUsage = await read(await fetch(`${baseUrl}/api/users/alice-example.test/credit-usage`, { headers: { cookie: userCookie } }));
+    const forbiddenUsage = await fetch(`${baseUrl}/api/users/admin/credit-usage`, { headers: { cookie: userCookie } });
+    assert.equal(adminUsage.tenants.some((usage) => usage.tenantId === "alice-example.test"), true);
+    assert.equal(userUsage.usage.tenantId, "alice-example.test");
+    assert.equal(userUsage.usage.count, 1);
+    assert.equal(scopedUsage.usage.count, 1);
+    assert.equal(forbiddenUsage.status, 403);
 
     const userPaths = userDataPaths("alice-example.test", process.env);
-    await fs.mkdir(path.join(userPaths.workspaces, "visible-project"), { recursive: true });
+    const userWorkspaceRoot = path.join(runtimeWorkspaceRoot, "users", "alice-example.test");
+    await fs.mkdir(path.join(userWorkspaceRoot, "visible-project"), { recursive: true });
     await fs.mkdir(path.join(userPaths.files, "uploads"), { recursive: true });
     await fs.writeFile(path.join(userPaths.files, "uploads", "readme.txt"), "scoped", "utf8");
 
@@ -716,7 +760,7 @@ test("user management API is admin-only and can pair a browser to a managed user
       headers: { cookie: userCookie },
     }));
 
-    assert.deepEqual(workspaceFolders.roots.map((root) => root.path), [userPaths.workspaces]);
+    assert.deepEqual(workspaceFolders.roots.map((root) => root.path), [userWorkspaceRoot]);
     assert.deepEqual(workspaceFolders.entries.map((entry) => entry.name), ["visible-project"]);
     assert.equal(forbiddenFolders.ok, false);
     assert.equal(forbiddenFolders.error, "workspace_path_forbidden");
@@ -725,6 +769,8 @@ test("user management API is admin-only and can pair a browser to a managed user
     await new Promise((resolve) => server.close(resolve));
     if (priorHome === undefined) delete process.env.ORKESTR_HOME;
     else process.env.ORKESTR_HOME = priorHome;
+    if (priorWorkspaceRoot === undefined) delete process.env.ORKESTR_RUNTIME_WORKSPACE_ROOT;
+    else process.env.ORKESTR_RUNTIME_WORKSPACE_ROOT = priorWorkspaceRoot;
     if (priorAuth === undefined) delete process.env.ORKESTR_AUTH_REQUIRED;
     else process.env.ORKESTR_AUTH_REQUIRED = priorAuth;
     if (priorRecover === undefined) delete process.env.ORKESTR_RECOVER_RUNNING_ON_START;
