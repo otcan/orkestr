@@ -16,6 +16,7 @@ test("tenant isolation release suite is named and wired into the release train",
 
   assert.match(command, /test\/use-control\.test\.js/);
   assert.match(command, /test\/security\.test\.js/);
+  assert.match(command, /test\/checks\.test\.js/);
   assert.match(command, /test\/gmail\.test\.js/);
   assert.match(command, /test\/outlook\.test\.js/);
   assert.match(command, /test\/browsers\.test\.js/);

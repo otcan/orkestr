@@ -22,17 +22,20 @@ export async function connectorScopePaths(env = process.env, options = {}) {
       global: true,
       userId: "",
       root: paths.home,
+      browsers: paths.browsers,
       oauth: paths.oauth,
       secrets: paths.secrets,
     };
   }
   const userPaths = userDataPaths(userId, env);
+  await fs.mkdir(userPaths.browsers, { recursive: true });
   await fs.mkdir(userPaths.oauth, { recursive: true });
   await fs.mkdir(userPaths.secrets, { recursive: true, mode: 0o700 });
   return {
     global: false,
     userId,
     root: userPaths.root,
+    browsers: userPaths.browsers,
     oauth: userPaths.oauth,
     secrets: userPaths.secrets,
   };
@@ -53,6 +56,7 @@ export async function listConnectorScopePaths(env = process.env, options = {}) {
       global: false,
       userId: entry.name,
       root: userPaths.root,
+      browsers: userPaths.browsers,
       oauth: userPaths.oauth,
       secrets: userPaths.secrets,
     });

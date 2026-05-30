@@ -8,7 +8,9 @@ import { setTimeout as sleep } from "node:timers/promises";
 import test from "node:test";
 import { WebSocketServer } from "ws";
 import { recordCodexRuntimeAuthInvalidSignal } from "../packages/core/src/codex-auth-health.js";
+import { userPrincipal } from "../packages/core/src/principal.js";
 import { getSetupStatus } from "../packages/core/src/setup.js";
+import { userDataPaths } from "../packages/storage/src/paths.js";
 
 async function writeFakeCodex(home, lines) {
   const command = path.join(home, "codex");
@@ -53,6 +55,37 @@ test("OpenAI reports connected when OPENAI_API_KEY exists", async () => {
   const status = await getSetupStatus({ env: { ORKESTR_HOME: home, OPENAI_API_KEY: "test" }, home });
   const openai = status.connectors.find((connector) => connector.id === "openai");
   assert.equal(openai.state, "connected");
+});
+
+test("connector status uses scoped browser profile roots for non-admin users", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-connector-profile-scope-"));
+  const env = { ORKESTR_HOME: home };
+  const alice = userPrincipal({ id: "alice", role: "user" });
+  const bob = userPrincipal({ id: "bob", role: "user" });
+  const alicePaths = userDataPaths("alice", env);
+
+  await fs.mkdir(path.join(home, "browsers", "gmail"), { recursive: true });
+  await fs.mkdir(path.join(home, "browsers", "linkedin"), { recursive: true });
+  await fs.mkdir(path.join(alicePaths.browsers, "gmail"), { recursive: true });
+  await fs.mkdir(path.join(alicePaths.browsers, "linkedin"), { recursive: true });
+
+  const adminStatus = await getSetupStatus({ env, home });
+  const adminGmail = adminStatus.connectors.find((connector) => connector.id === "gmail");
+  const adminLinkedIn = adminStatus.connectors.find((connector) => connector.id === "linkedin");
+  assert.equal(adminGmail.state, "partial");
+  assert.equal(adminLinkedIn.state, "partial");
+
+  const aliceStatus = await getSetupStatus({ env, home, principal: alice });
+  const aliceGmail = aliceStatus.connectors.find((connector) => connector.id === "gmail");
+  const aliceLinkedIn = aliceStatus.connectors.find((connector) => connector.id === "linkedin");
+  assert.equal(aliceGmail.state, "partial");
+  assert.equal(aliceLinkedIn.state, "partial");
+
+  const bobStatus = await getSetupStatus({ env, home, principal: bob });
+  const bobGmail = bobStatus.connectors.find((connector) => connector.id === "gmail");
+  const bobLinkedIn = bobStatus.connectors.find((connector) => connector.id === "linkedin");
+  assert.equal(bobGmail.state, "not_connected");
+  assert.equal(bobLinkedIn.state, "not_connected");
 });
 
 test("Codex reports partial when the runtime key exists but Codex is not logged in", async () => {

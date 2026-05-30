@@ -119,8 +119,8 @@ export async function getConnectorStatuses({ env = process.env, home = os.homedi
     ? await activeCodexRuntimeAuthInvalid({ env, codexAuthPath })
     : null;
   const timersExist = await pathExists(paths.timers);
-  const linkedinProfileExists = await pathExists(path.join(paths.browsers, "linkedin"));
-  const gmailProfileExists = await pathExists(path.join(paths.browsers, "gmail"));
+  const linkedinProfileExists = await pathExists(connectorFile(scopedPaths, "browsers", "linkedin"));
+  const gmailProfileExists = await pathExists(connectorFile(scopedPaths, "browsers", "gmail"));
   const gmailOAuthExists = await pathExists(connectorFile(scopedPaths, "secrets", "gmail-token.json"));
   const gmailOAuthError = await readJsonIfExists(connectorFile(scopedPaths, "secrets", "gmail-error.json"));
   const outlookOAuthExists = await pathExists(connectorFile(scopedPaths, "secrets", "outlook-token.json"));

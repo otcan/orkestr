@@ -64,11 +64,15 @@ approval stay on the host where operators expect them.
 
 ## Connector Boundary
 
-The public connector surface contains generic setup and routing code. Real credentials and session state stay outside the repo:
+The public connector surface contains generic setup and routing code. Real
+credentials and session state stay outside the repo:
 
-- Gmail tokens go under `ORKESTR_HOME/secrets`.
-- WhatsApp Web session data stays under `ORKESTR_HOME`.
-- Browser profiles stay under `ORKESTR_HOME/browsers`.
+- Admin connector tokens go under `ORKESTR_HOME/secrets`; non-admin Gmail and
+  Outlook tokens go under `ORKESTR_HOME/users/<user-id>/secrets`.
+- WhatsApp Web session data stays under the tenant instance home. Generated
+  user routing stores only scoped identity metadata for the user.
+- Admin browser profiles stay under `ORKESTR_HOME/browsers`; non-admin browser
+  profiles stay under `ORKESTR_HOME/users/<user-id>/browsers`.
 - Host-specific bindings live in private overlays.
 
 ## Web Routes
