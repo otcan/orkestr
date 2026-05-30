@@ -130,6 +130,9 @@ The release train owns tests. Run the checks appropriate to the changed surface:
 - server/build changes: `npm run build:server`
 - web/UI changes: `npm run web:build`
 - runtime/install/deploy changes: targeted Node tests plus shell syntax checks
+- tenant isolation, use-control, scoped connector, browser profile, or contained
+  user runtime changes: `npm run test:tenant-isolation` and the
+  [tenant isolation release checklist](tenant-isolation-release-checklist.md)
 - broad release train: `npm run build` and `node --test` or the repo's CI runner
 - smoke-sensitive deploy changes: `npm run smoke`
 
