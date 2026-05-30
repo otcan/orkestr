@@ -721,7 +721,8 @@ export async function updateThreadRepo(threadId, input = {}, env = process.env) 
   let repoPath = nonEmptyString(input.repoPath || input.projectRoot || input.cwd);
   let remoteUrl = nonEmptyString(input.repoRemoteUrl || input.remoteUrl || input.gitRemoteUrl);
   let remoteBranch = nonEmptyString(input.remoteBranch || input.gitRemoteBranch || input.upstreamBranch);
-  let branchName = nonEmptyString(input.branchName || input.branch || input.baseBranch);
+  let branchName = nonEmptyString(input.branchName || input.branch);
+  let baseBranch = nonEmptyString(input.baseBranch || input.targetBranch);
   let baseCommit = nonEmptyString(input.baseCommit);
   let sourceDirty = Boolean(input.sourceDirty);
   let gitAhead = optionalNumber(input.gitAhead);
@@ -736,6 +737,7 @@ export async function updateThreadRepo(threadId, input = {}, env = process.env) 
     remoteUrl ||= detected.repoRemoteUrl;
     remoteBranch ||= detected.remoteBranch;
     branchName ||= detected.branchName;
+    baseBranch ||= detected.baseBranch;
     baseCommit ||= detected.baseCommit;
     sourceDirty = detected.sourceDirty;
     gitAhead ??= detected.gitAhead;
@@ -769,7 +771,7 @@ export async function updateThreadRepo(threadId, input = {}, env = process.env) 
     repoRemoteUrl: remoteUrl || null,
     remoteBranch: remoteBranch || null,
     branchName: branchName || null,
-    baseBranch: branchName || null,
+    baseBranch: baseBranch || branchName || null,
     baseCommit: baseCommit || null,
     gitAhead,
     gitBehind,

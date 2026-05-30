@@ -4551,15 +4551,22 @@ test("thread repo metadata can be saved as first-class thread state", async () =
   const env = { ORKESTR_HOME: home };
   await createThread({ id: "repo-thread", name: "Repo Thread" }, env);
 
-  const result = await updateThreadRepo("repo-thread", { repoPath: repo, branchName: "main" }, env);
+  const result = await updateThreadRepo("repo-thread", {
+    repoPath: repo,
+    branchName: "feature/thread-settings",
+    remoteBranch: "origin/feature/thread-settings",
+    baseBranch: "main",
+  }, env);
 
   assert.equal(result.thread.repoPath, repo);
   assert.equal(result.thread.repoRemoteUrl, "git@github.com:otcan/orkestr.git");
-  assert.equal(result.thread.remoteBranch, "origin/main");
-  assert.equal(result.thread.branchName, "main");
+  assert.equal(result.thread.remoteBranch, "origin/feature/thread-settings");
+  assert.equal(result.thread.branchName, "feature/thread-settings");
+  assert.equal(result.thread.baseBranch, "main");
   assert.equal(result.repo.repoRemoteUrl, "git@github.com:otcan/orkestr.git");
-  assert.equal(result.repo.remoteBranch, "origin/main");
-  assert.equal(result.repo.branchName, "main");
+  assert.equal(result.repo.remoteBranch, "origin/feature/thread-settings");
+  assert.equal(result.repo.branchName, "feature/thread-settings");
+  assert.equal(result.repo.baseBranch, "main");
   assert.match(result.thread.baseCommit, /^[0-9a-f]{40}$/);
 });
 

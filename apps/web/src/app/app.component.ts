@@ -147,6 +147,9 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   syncingThreadId = "";
   threadRepoDraft = "";
   threadBranchDraft = "";
+  threadRemoteUrlDraft = "";
+  threadRemoteBranchDraft = "";
+  threadBaseBranchDraft = "";
   threadMetaThreadId = "";
   savingThreadMeta = false;
   detectingThreadRepo = false;
@@ -1192,7 +1195,10 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     try {
       const result = await firstValueFrom(this.api.updateThreadRepo(thread.id, {
         repoPath: this.threadRepoDraft.trim(),
+        repoRemoteUrl: this.threadRemoteUrlDraft.trim(),
         branchName: this.threadBranchDraft.trim(),
+        remoteBranch: this.threadRemoteBranchDraft.trim(),
+        baseBranch: this.threadBaseBranchDraft.trim(),
       }));
       if (result.thread) this.replaceThread(result.thread);
       this.syncThreadMetaDraft(result.thread || thread, true);
@@ -1854,6 +1860,18 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     return branch && this.threadRemoteUrl(thread) ? `origin/${branch}` : "";
   }
 
+  threadBaseBranchLabel(thread: ThreadSummary | null): string {
+    if (!thread) return "";
+    const executor = thread["executor"];
+    const metadata = executor && typeof executor === "object" ? (executor as Record<string, unknown>)["metadata"] : null;
+    return String(
+      thread.baseBranch ||
+      this.objectValue(thread.runtime, "baseBranch") ||
+      this.objectValue(metadata, "baseBranch") ||
+      "",
+    ).trim();
+  }
+
   threadGitDeltaLabel(thread: ThreadSummary | null): string {
     if (!thread) return "";
     const dirtyLabel = this.gitDirtyLabel(thread);
@@ -1996,7 +2014,11 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
 
   threadMetaDirty(thread: ThreadSummary | null = this.selectedThread()): boolean {
     if (!thread || this.threadMetaThreadId !== thread.id) return false;
-    return this.threadRepoDraft.trim() !== this.defaultRepoPath(thread) || this.threadBranchDraft.trim() !== this.threadBranchLabel(thread);
+    return this.threadRepoDraft.trim() !== this.defaultRepoPath(thread) ||
+      this.threadRemoteUrlDraft.trim() !== this.threadRemoteUrl(thread) ||
+      this.threadBranchDraft.trim() !== this.threadBranchLabel(thread) ||
+      this.threadRemoteBranchDraft.trim() !== this.threadRemoteBranchLabel(thread) ||
+      this.threadBaseBranchDraft.trim() !== this.threadBaseBranchLabel(thread);
   }
 
   threadBindingDirty(thread: ThreadSummary | null = this.selectedThread()): boolean {
@@ -3251,7 +3273,10 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     if (!force && this.threadMetaThreadId === thread.id && this.threadMetaDirty(thread)) return;
     this.threadMetaThreadId = thread.id;
     this.threadRepoDraft = this.defaultRepoPath(thread);
+    this.threadRemoteUrlDraft = this.threadRemoteUrl(thread);
     this.threadBranchDraft = this.threadBranchLabel(thread);
+    this.threadRemoteBranchDraft = this.threadRemoteBranchLabel(thread);
+    this.threadBaseBranchDraft = this.threadBaseBranchLabel(thread);
   }
 
   private syncThreadBindingDraft(thread: ThreadSummary | null, force = false): void {

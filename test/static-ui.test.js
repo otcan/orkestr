@@ -122,6 +122,22 @@ test("ops desktop links are only shown for running desktops", async () => {
   assert.match(component, /activeBrowserActionSlug/);
 });
 
+test("thread settings exposes detailed repo metadata editing", async () => {
+  const template = await fs.readFile("apps/web/src/app/app.component.html", "utf8");
+  const component = await fs.readFile("apps/web/src/app/app.component.ts", "utf8");
+
+  assert.match(template, /thread-settings-remote-url-/);
+  assert.match(template, /thread-settings-remote-branch-/);
+  assert.match(template, /thread-settings-base-branch-/);
+  assert.match(template, /Working branch/);
+  assert.match(component, /threadRemoteUrlDraft/);
+  assert.match(component, /threadRemoteBranchDraft/);
+  assert.match(component, /threadBaseBranchDraft/);
+  assert.match(component, /repoRemoteUrl: this\.threadRemoteUrlDraft\.trim\(\)/);
+  assert.match(component, /remoteBranch: this\.threadRemoteBranchDraft\.trim\(\)/);
+  assert.match(component, /baseBranch: this\.threadBaseBranchDraft\.trim\(\)/);
+});
+
 test("mobile desktop shell wraps noVNC with phone-first controls", async () => {
   const proxy = await fs.readFile("apps/server/src/desktop-proxy.ts", "utf8");
   const shell = await fs.readFile("apps/server/src/mobile-desktop-shell.ts", "utf8");

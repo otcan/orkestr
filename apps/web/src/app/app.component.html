@@ -988,6 +988,8 @@
                 <strong>{{ defaultRepoPath(thread) || "No repo set" }}</strong>
                 <span>Remote branch</span>
                 <strong>{{ threadRemoteBranchLabel(thread) || "No remote branch" }}</strong>
+                <span>Base branch</span>
+                <strong>{{ threadBaseBranchLabel(thread) || "No base branch" }}</strong>
                 <span>Git</span>
                 <strong>{{ threadGitDeltaLabel(thread) || "No git delta" }}</strong>
                 <span>Branch</span>
@@ -998,8 +1000,20 @@
                 <input name="thread-settings-repo-{{ thread.id }}" [(ngModel)]="threadRepoDraft" placeholder="/path/to/git/repo" />
               </label>
               <label class="settings-field">
-                <span>Branch</span>
+                <span>Remote URL</span>
+                <input name="thread-settings-remote-url-{{ thread.id }}" [(ngModel)]="threadRemoteUrlDraft" placeholder="git@github.com:org/repo.git" />
+              </label>
+              <label class="settings-field">
+                <span>Working branch</span>
                 <input name="thread-settings-branch-{{ thread.id }}" [(ngModel)]="threadBranchDraft" placeholder="main" />
+              </label>
+              <label class="settings-field">
+                <span>Remote branch</span>
+                <input name="thread-settings-remote-branch-{{ thread.id }}" [(ngModel)]="threadRemoteBranchDraft" placeholder="origin/main" />
+              </label>
+              <label class="settings-field">
+                <span>Base branch</span>
+                <input name="thread-settings-base-branch-{{ thread.id }}" [(ngModel)]="threadBaseBranchDraft" placeholder="main" />
               </label>
               <div class="settings-actions">
                 <button type="button" (click)="saveThreadRepo(thread)" [disabled]="busy || savingThreadMeta || !threadMetaDirty(thread)">
