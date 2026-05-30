@@ -2,7 +2,7 @@
   <div class="panel-title">
     <div>
       <p class="eyebrow">Orkestr Ops</p>
-      <h3>System, resources, models, settings, desktops</h3>
+      <h3>System, resources, models, settings, desktops, users</h3>
     </div>
     <button class="secondary" type="button" (click)="loadOps()" [disabled]="busy">Reload</button>
   </div>
@@ -21,7 +21,7 @@
     <button type="button" [class.active]="toolsView === 'models'" (click)="setToolsView('models')">Models</button>
     <button type="button" [class.active]="toolsView === 'settings'" (click)="setToolsView('settings')">Overview</button>
     <button type="button" [class.active]="toolsView === 'connectors'" (click)="setToolsView('connectors')">Connectors</button>
-    <button type="button" [class.active]="toolsView === 'users'" (click)="setToolsView('users')">Access</button>
+    <button type="button" [class.active]="toolsView === 'users'" (click)="setToolsView('users')">Users</button>
   </nav>
 
   @if (toolsView === "system") {
@@ -234,10 +234,10 @@
         <small>{{ objectValue(opsWhatsApp, "summary") || objectValue(opsWhatsApp, "accountId") || "bridge status" }}</small>
       </article>
       <article class="ops-card action-card">
-        <h4>Access</h4>
+        <h4>Users</h4>
         <p>{{ opsUsers.length || 0 }} accounts</p>
         <small>{{ authPolicySummary() }}</small>
-        <button type="button" (click)="setToolsView('users')">Open Access</button>
+        <button type="button" (click)="setToolsView('users')">Manage users</button>
       </article>
     </div>
   }
@@ -247,7 +247,7 @@
       <section class="user-list-panel">
         <div class="panel-title compact-title">
           <div>
-            <p class="eyebrow">Access</p>
+            <p class="eyebrow">Users</p>
             <h3>{{ opsUsers.length }} local user records</h3>
           </div>
           <button class="secondary" type="button" (click)="loadOps()" [disabled]="busy">Reload</button>
