@@ -10,6 +10,8 @@ import { readRuntimeSettings } from "../../../../../packages/core/src/runtime-se
 import { systemDoctor } from "../../../../../packages/core/src/system-doctor.js";
 import { whereAmI } from "../../../../../packages/core/src/whereiam.js";
 import { listEventsForPrincipal } from "../../../../../packages/core/src/audit-events.js";
+import { createStateBackup, stateBackupStatus, stateRestorePlan } from "../../../../../packages/core/src/state-backups.js";
+import { migrateCodexThreadsToAppServer } from "../../../../../packages/core/src/codex-app-server-migration.js";
 import { listFilesForPrincipal, listWorkspaceFoldersForPrincipal } from "../../../../../packages/core/src/workspace-files.js";
 import { requestPrincipal } from "../../../../../packages/core/src/principal.js";
 import { isAdminPrincipal } from "../../../../../packages/core/src/policy.js";
@@ -292,6 +294,33 @@ export class SystemController {
       },
     };
     return shouldRedactSetupStatus(request, status) ? publicSetupStatus(status) : status;
+  }
+
+  @Get("setup/backup/status")
+  async setupBackupStatus() {
+    const [status, codexMigration] = await Promise.all([
+      stateBackupStatus(),
+      migrateCodexThreadsToAppServer({ dryRun: true }).catch((error: any) => ({
+        ok: false,
+        error: error?.message || String(error),
+      })),
+    ]);
+    return { ...status, migration: { ...status.migration, codexAppServer: { ...status.migration.codexAppServer, dryRun: codexMigration } } };
+  }
+
+  @Post("setup/backup/create")
+  @HttpCode(200)
+  async createSetupBackup(@Body() body: Record<string, unknown> = {}) {
+    return createStateBackup({ label: String(body.label || "") });
+  }
+
+  @Post("setup/backup/restore-plan")
+  @HttpCode(200)
+  async setupBackupRestorePlan(@Body() body: Record<string, unknown> = {}) {
+    return stateRestorePlan({
+      backupPath: String(body.backupPath || body.path || body.name || ""),
+      serviceName: String(body.serviceName || ""),
+    });
   }
 
   @Get("settings")

@@ -167,6 +167,63 @@ export interface SetupStatus {
   security?: SecurityStatus;
 }
 
+export interface StateBackupRecord {
+  name: string;
+  path: string;
+  size: number;
+  createdAt?: string;
+  modifiedAt?: string;
+}
+
+export interface CodexMigrationResponse {
+  ok?: boolean;
+  dryRun?: boolean;
+  migrated?: number;
+  counts?: Record<string, number>;
+  actions?: Array<Record<string, unknown>>;
+  error?: string;
+  [key: string]: unknown;
+}
+
+export interface BackupStatusResponse {
+  ok: boolean;
+  home: string;
+  backupDir: string;
+  backupCount: number;
+  latestBackup?: StateBackupRecord | null;
+  backups: StateBackupRecord[];
+  excludes?: string[];
+  restoreSupported?: string;
+  migration?: {
+    codexAppServer?: {
+      available?: boolean;
+      dryRunSupported?: boolean;
+      apiPath?: string;
+      command?: string;
+      dryRun?: CodexMigrationResponse;
+    };
+  };
+  generatedAt?: string;
+}
+
+export interface BackupCreateResponse {
+  ok: boolean;
+  backup: StateBackupRecord;
+  warning?: string;
+  status: BackupStatusResponse;
+}
+
+export interface BackupRestorePlanResponse {
+  ok: boolean;
+  executable: boolean;
+  reason?: string;
+  backup: StateBackupRecord;
+  home: string;
+  serviceName: string;
+  commands: string[];
+  generatedAt?: string;
+}
+
 export interface AuthStatus {
   provider?: string;
   configured?: boolean;
@@ -870,6 +927,18 @@ export class ApiService {
     return this.http.get<SetupStatus>(this.api("/setup/status"));
   }
 
+  backupStatus(): Observable<BackupStatusResponse> {
+    return this.http.get<BackupStatusResponse>(this.api("/setup/backup/status"));
+  }
+
+  createBackup(label = ""): Observable<BackupCreateResponse> {
+    return this.http.post<BackupCreateResponse>(this.api("/setup/backup/create"), { label });
+  }
+
+  backupRestorePlan(backupPath: string): Observable<BackupRestorePlanResponse> {
+    return this.http.post<BackupRestorePlanResponse>(this.api("/setup/backup/restore-plan"), { backupPath });
+  }
+
   users(): Observable<UsersResponse> {
     return this.http.get<UsersResponse>(this.api("/users"));
   }
@@ -996,6 +1065,10 @@ export class ApiService {
 
   importCodexThread(codexThreadId: string): Observable<{ thread: ThreadSummary; imported: boolean }> {
     return this.http.post<{ thread: ThreadSummary; imported: boolean }>(this.api("/codex/threads/import"), { codexThreadId });
+  }
+
+  migrateCodexThreads(dryRun = false): Observable<CodexMigrationResponse> {
+    return this.http.post<CodexMigrationResponse>(this.api("/codex/migrate"), { dryRun });
   }
 
   whatsappStatus(): Observable<WhatsAppStatusResponse> {

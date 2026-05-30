@@ -186,6 +186,65 @@
         </section>
       }
 
+      @if (activeStep === "maintenance") {
+        <section class="setup-form">
+          <h3>Backup, Restore, Migration</h3>
+          <p>Keep an operator backup before upgrades or migration work. Browser restore is plan-only so the running server is not replaced underneath this page.</p>
+          <div class="check-list">
+            <div class="check-row">
+              <div>
+                <strong>State backups</strong>
+                <small>{{ backupSummary() }}</small>
+              </div>
+              <em [class]="backupStatus?.latestBackup ? 'ready' : 'partial'">{{ maintenanceStepLabel() }}</em>
+            </div>
+            <div class="check-row">
+              <div>
+                <strong>Codex migration</strong>
+                <small>{{ migrationSummary() }}</small>
+              </div>
+              <em [class]="migrationStateClass()">{{ migrationStateClass() === "ready" ? "ready" : migrationStateClass() === "bad" ? "error" : "review" }}</em>
+            </div>
+          </div>
+          <div class="button-row">
+            <button type="button" (click)="createBackup()" [disabled]="busy">{{ busy ? "Working" : "Create backup" }}</button>
+            <button class="secondary" type="button" (click)="loadBackupStatus()" [disabled]="busy">Refresh</button>
+          </div>
+
+          @if (backupStatus?.backups?.length) {
+            <div class="check-list">
+              @for (backup of backupStatus?.backups || []; track backup.path) {
+                <div class="check-row">
+                  <div>
+                    <strong>{{ backup.name }}</strong>
+                    <small>{{ backupDateLabel(backup) }} · {{ backupSizeLabel(backup) }}</small>
+                  </div>
+                  <button class="secondary" type="button" (click)="prepareRestorePlan(backup.path)" [disabled]="busy">Restore plan</button>
+                </div>
+              }
+            </div>
+          }
+
+          <label>
+            <span>Backup path</span>
+            <input name="restore-backup-path" [(ngModel)]="restoreBackupPath" autocomplete="off" placeholder="Select a backup or paste a backup path" />
+          </label>
+          <div class="button-row">
+            <button class="secondary" type="button" (click)="prepareRestorePlan()" [disabled]="busy || !restoreBackupPath.trim()">Prepare restore commands</button>
+            <button class="secondary" type="button" (click)="runCodexMigration(true)" [disabled]="busy">Check Codex migration</button>
+            <button type="button" (click)="runCodexMigration(false)" [disabled]="busy">Run Codex migration</button>
+          </div>
+
+          @if (restorePlan?.commands?.length) {
+            <div class="command-box">
+              @for (command of restorePlan?.commands || []; track command) {
+                <div>{{ command }}</div>
+              }
+            </div>
+          }
+        </section>
+      }
+
       @if (activeStep === "openai") {
         <form class="setup-form" (submit)="saveOpenAI(); $event.preventDefault()">
           <h3>OpenAI API</h3>

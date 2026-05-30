@@ -1,12 +1,13 @@
 import { ChangeDetectorRef, Component, EventEmitter, Input, OnChanges, OnDestroy, OnInit, Output, SimpleChanges, inject } from "@angular/core";
 import { FormsModule } from "@angular/forms";
 import { firstValueFrom } from "rxjs";
-import { ApiService, BrowserSession, CodexAppServerStatus, CodexStoredThread, ConnectorStatus, OutlookOAuthPollResponse, OutlookOAuthStartResponse, SetupStatus, SystemDoctorResponse, ThreadSummary, VersionResponse } from "./api.service";
+import { ApiService, BackupRestorePlanResponse, BackupStatusResponse, BrowserSession, CodexAppServerStatus, CodexMigrationResponse, CodexStoredThread, ConnectorStatus, OutlookOAuthPollResponse, OutlookOAuthStartResponse, SetupStatus, StateBackupRecord, SystemDoctorResponse, ThreadSummary, VersionResponse } from "./api.service";
 import { SecurityChallengesPanelComponent } from "./security-challenges-panel.component";
 
 type ConnectorStep = "openai" | "codex" | "gmail" | "linkedin" | "whatsapp" | "browsers";
 type MarketingStep = "google-marketing";
-type OnboardingStep = "goal" | "system" | "security" | MarketingStep | ConnectorStep | "finish";
+type MaintenanceStep = "maintenance";
+type OnboardingStep = "goal" | "system" | "security" | MaintenanceStep | MarketingStep | ConnectorStep | "finish";
 type OnboardingGoalId = "whatsapp-codex" | "virtual-desktop" | "inbox-summary";
 type SetupPageMode = "setup" | "onboarding";
 type MailProvider = "gmail" | "outlook";
@@ -75,6 +76,10 @@ export class OnboardingPageComponent implements OnInit, OnChanges, OnDestroy {
   codexStoredThreads: CodexStoredThread[] = [];
   codexImportSearch = "";
   importingCodexThreadId = "";
+  backupStatus: BackupStatusResponse | null = null;
+  restoreBackupPath = "";
+  restorePlan: BackupRestorePlanResponse | null = null;
+  migrationResult: CodexMigrationResponse | null = null;
 
   openaiApiKey = "";
   mailProvider: MailProvider = "gmail";
@@ -163,6 +168,7 @@ export class OnboardingPageComponent implements OnInit, OnChanges, OnDestroy {
       this.setup = setup;
       this.doctor = doctorResult.status === "fulfilled" ? doctorResult.value : null;
       this.versionInfo = versionResult.status === "fulfilled" ? versionResult.value : this.versionInfo;
+      if (this.activeStep === "maintenance") await this.loadBackupStatus(false);
       this.hydrateForms(setup);
       if (this.activeStep === "codex") await this.loadCodexAppServer(false);
       this.applySetupSectionFromInput();
@@ -552,6 +558,7 @@ export class OnboardingPageComponent implements OnInit, OnChanges, OnDestroy {
     if (id === "goal") return this.selectedGoal ? "selected" : "choose";
     if (id === "system") return this.setup ? "checked" : "checking";
     if (id === "security") return this.securityStepLabel();
+    if (id === "maintenance") return this.maintenanceStepLabel();
     if (id === "finish") return this.requiredConnectorSteps().every((step) => this.stepDone(step)) ? "ready" : "review";
     if (id === "gmail") return this.mailStatusLabel();
     return this.stateLabel(id);
@@ -561,6 +568,7 @@ export class OnboardingPageComponent implements OnInit, OnChanges, OnDestroy {
     if (id === "goal") return this.selectedGoal ? "ready" : "idle";
     if (id === "system") return this.setup ? "ready" : "idle";
     if (id === "security") return this.securityStepClass();
+    if (id === "maintenance") return this.backupStatus?.latestBackup ? "ready" : "partial";
     if (id === "finish") return this.requiredConnectorSteps().every((step) => this.stepDone(step)) ? "ready" : "partial";
     if (id === "gmail") return this.mailStatusClass();
     return this.stateClass(id);
@@ -570,6 +578,7 @@ export class OnboardingPageComponent implements OnInit, OnChanges, OnDestroy {
     if (id === "goal") return Boolean(this.selectedGoal);
     if (id === "system") return Boolean(this.setup);
     if (id === "security") return this.securityDone();
+    if (id === "maintenance") return Boolean(this.backupStatus?.latestBackup);
     if (id === "finish") return this.requiredConnectorSteps().every((step) => this.stepDone(step));
     if (id === "gmail") return this.mailDone();
     if (id === "codex") return this.agentRuntimeReady();
@@ -726,6 +735,7 @@ export class OnboardingPageComponent implements OnInit, OnChanges, OnDestroy {
     return [
       { id: "system", label: "Connections", eyebrow: "Runtime" },
       { id: "security", label: "Security", eyebrow: "Remote access" },
+      { id: "maintenance", label: "Maintenance", eyebrow: "Backups" },
       ...setupConnectors,
     ];
   }
@@ -870,6 +880,116 @@ export class OnboardingPageComponent implements OnInit, OnChanges, OnDestroy {
     if (security.remoteReady || security.externallyLocal || security.bindLocal) return "ready";
     if (security.authEnabled || security.https?.configured || security.caddy?.installed) return "partial";
     return "bad";
+  }
+
+  maintenanceStepLabel(): string {
+    if (!this.backupStatus) return "check";
+    const count = Number(this.backupStatus.backupCount || 0);
+    if (count === 1) return "1 backup";
+    if (count > 1) return `${count} backups`;
+    return "no backup";
+  }
+
+  backupSummary(): string {
+    if (!this.backupStatus) return "Backup status has not been loaded yet.";
+    const latest = this.backupStatus.latestBackup;
+    if (!latest) return `No backups found in ${this.backupStatus.backupDir}.`;
+    return `${latest.name} in ${this.backupStatus.backupDir}`;
+  }
+
+  backupSizeLabel(backup: StateBackupRecord | null | undefined): string {
+    const size = Number(backup?.size || 0);
+    if (!size) return "-";
+    if (size >= 1024 * 1024 * 1024) return `${(size / (1024 * 1024 * 1024)).toFixed(1)} GB`;
+    if (size >= 1024 * 1024) return `${(size / (1024 * 1024)).toFixed(1)} MB`;
+    if (size >= 1024) return `${(size / 1024).toFixed(1)} KB`;
+    return `${size} B`;
+  }
+
+  backupDateLabel(backup: StateBackupRecord | null | undefined): string {
+    return backup?.modifiedAt || backup?.createdAt || "";
+  }
+
+  migrationSummary(): string {
+    const dryRun = this.backupStatus?.migration?.codexAppServer?.dryRun || this.migrationResult;
+    if (!dryRun) return "Codex migration status has not been checked yet.";
+    if (dryRun.error) return String(dryRun.error);
+    const migrated = Number(dryRun.migrated ?? dryRun.counts?.["migrated"] ?? dryRun.counts?.["migrated_existing_codex_thread"] ?? 0);
+    if (dryRun.dryRun) return migrated ? `${migrated} Codex thread migration candidate` : "No Codex thread migration needed.";
+    return migrated ? `${migrated} Codex thread migrated.` : "Codex migration completed.";
+  }
+
+  migrationStateClass(): string {
+    const dryRun = this.backupStatus?.migration?.codexAppServer?.dryRun || this.migrationResult;
+    if (!dryRun) return "idle";
+    if (dryRun.error) return "bad";
+    const migrated = Number(dryRun.migrated ?? dryRun.counts?.["migrated"] ?? dryRun.counts?.["migrated_existing_codex_thread"] ?? 0);
+    return migrated ? "partial" : "ready";
+  }
+
+  async loadBackupStatus(showBusy = true): Promise<void> {
+    if (showBusy) this.busy = true;
+    try {
+      this.backupStatus = await firstValueFrom(this.api.backupStatus());
+      this.restoreBackupPath ||= this.backupStatus.latestBackup?.path || "";
+      this.error = "";
+    } catch (error) {
+      this.error = this.errorText(error);
+    } finally {
+      if (showBusy) this.busy = false;
+      this.renderNow();
+    }
+  }
+
+  async createBackup(): Promise<void> {
+    this.busy = true;
+    try {
+      const result = await firstValueFrom(this.api.createBackup("setup"));
+      this.backupStatus = result.status;
+      this.restoreBackupPath = result.backup.path;
+      this.notice = `Backup created: ${result.backup.name}`;
+      this.error = "";
+    } catch (error) {
+      this.error = this.errorText(error);
+    } finally {
+      this.busy = false;
+      this.renderNow();
+    }
+  }
+
+  async prepareRestorePlan(backupPath = this.restoreBackupPath): Promise<void> {
+    const selected = backupPath.trim();
+    if (!selected) {
+      this.error = "Select a backup before preparing restore commands.";
+      return;
+    }
+    this.busy = true;
+    try {
+      this.restorePlan = await firstValueFrom(this.api.backupRestorePlan(selected));
+      this.restoreBackupPath = selected;
+      this.notice = "Restore plan prepared.";
+      this.error = "";
+    } catch (error) {
+      this.error = this.errorText(error);
+    } finally {
+      this.busy = false;
+      this.renderNow();
+    }
+  }
+
+  async runCodexMigration(dryRun = false): Promise<void> {
+    this.busy = true;
+    try {
+      this.migrationResult = await firstValueFrom(this.api.migrateCodexThreads(dryRun));
+      this.notice = dryRun ? "Codex migration dry run completed." : "Codex migration completed.";
+      this.error = "";
+      await this.loadBackupStatus(false);
+    } catch (error) {
+      this.error = this.errorText(error);
+    } finally {
+      this.busy = false;
+      this.renderNow();
+    }
   }
 
   async startCodexDeviceAuth(): Promise<void> {
@@ -1160,6 +1280,7 @@ export class OnboardingPageComponent implements OnInit, OnChanges, OnDestroy {
     this.persistProgress();
     if (this.isSetupMode()) this.setupSectionChange.emit(id);
     if (id === "codex") void this.loadCodexAppServer(false);
+    if (id === "maintenance") void this.loadBackupStatus(false);
   }
 
   previousStep(): void {

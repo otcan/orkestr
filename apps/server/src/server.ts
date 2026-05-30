@@ -183,6 +183,9 @@ function authorizeControlPlaneRequest(request: any, principal: any) {
     if (bootstrapChallenge || challengeStatus || pair || status) return { ok: true };
     return { ok: false, statusCode: 403, error: "control_plane_admin_required" };
   }
+  if (surface === "setup" && second === "backup") {
+    return { ok: false, statusCode: 403, error: "control_plane_admin_required" };
+  }
   return { ok: true };
 }
 

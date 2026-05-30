@@ -834,6 +834,7 @@ test("user management API is admin-only and can pair a browser to a managed user
       "/api/runtime-leases",
       "/api/settings",
       "/api/system/processes",
+      "/api/setup/backup/status",
       "/api/setup/security/sessions",
     ]) {
       const response = await fetch(`${baseUrl}${route}`, { headers: { cookie: userCookie } });

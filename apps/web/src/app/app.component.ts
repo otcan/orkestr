@@ -34,7 +34,7 @@ import { appendPendingFiles, messageWithAttachmentPaths, PendingFile, removePend
 type Panel = "chat" | "history" | "timers" | "attach" | "settings" | "workers" | "runtime" | "raw" | "ops";
 type CodexRateLimitKey = "primary" | "secondary";
 type SetupPageMode = "setup" | "onboarding";
-type SetupSection = "system" | "security" | "codex" | "whatsapp" | "browsers";
+type SetupSection = "system" | "security" | "maintenance" | "codex" | "whatsapp" | "browsers";
 type PersistedThreadTextField =
   | "draft"
   | "sidebarWorkerTask"
@@ -3486,7 +3486,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
 
   private normalizeSetupSection(value: unknown): SetupSection {
     const section = String(value || "").trim().toLowerCase();
-    return ["system", "security", "codex", "whatsapp", "browsers"].includes(section)
+    return ["system", "security", "maintenance", "codex", "whatsapp", "browsers"].includes(section)
       ? section as SetupSection
       : "system";
   }

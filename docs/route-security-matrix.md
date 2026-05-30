@@ -26,6 +26,7 @@ authorization.
 | --- | --- | --- | --- |
 | Health and version | `GET /api/health`, `GET /api/ready`, `GET /api/version` | Public bootstrap | `authorizeHttpRequest` before pairing |
 | Setup status | `GET /api/setup/status` | Public bootstrap, redacted when unpaired or non-admin | `publicSetupStatus` |
+| Setup backup and restore planning | `GET/POST /api/setup/backup/*` | Admin only | control-plane route guard and state backup helpers |
 | Browser pairing bootstrap | `POST /api/setup/security/challenge`, `GET /api/setup/security/challenges/:id`, `POST /api/setup/security/pair` | Public bootstrap | Pairing challenge state and expiry |
 | Browser pairing administration | challenge list, approve, reject, delete, sessions, enable, revoke | Admin only | control-plane route guard |
 | Threads list and summary | `GET /api/threads`, `GET /api/threads/summary` | Owner-scoped, admin can request all | `threadSummaryPayload` with principal |
