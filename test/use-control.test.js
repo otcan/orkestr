@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { pathToFileURL } from "node:url";
+import WebSocket from "ws";
 import { startServer } from "../apps/server/src/server.js";
 import { userDataPaths } from "../packages/storage/src/paths.js";
 import { appendEvent } from "../packages/storage/src/store.js";
@@ -48,6 +49,52 @@ async function allowSanitizerEnv(home) {
     ORKESTR_HOME: home,
     ORKESTR_LLM_SANITIZER_COMMAND_JSON: JSON.stringify([process.execPath, script]),
   };
+}
+
+async function readWebSocketMessage(url, cookie, predicate) {
+  return new Promise((resolve, reject) => {
+    const ws = new WebSocket(url, cookie ? { headers: { cookie } } : {});
+    const timer = setTimeout(() => {
+      ws.close();
+      reject(new Error("websocket_message_timeout"));
+    }, 3000);
+    const done = (error, payload) => {
+      clearTimeout(timer);
+      ws.close();
+      error ? reject(error) : resolve(payload);
+    };
+    ws.on("message", (raw) => {
+      let payload;
+      try {
+        payload = JSON.parse(raw.toString("utf8"));
+      } catch (error) {
+        done(error);
+        return;
+      }
+      if (!predicate || predicate(payload)) done(null, payload);
+    });
+    ws.on("unexpected-response", (_request, response) => {
+      done(new Error(`websocket_unexpected_status:${response.statusCode}`));
+    });
+    ws.on("error", (error) => done(error));
+  });
+}
+
+async function rejectedWebSocketStatus(url, cookie) {
+  return new Promise((resolve, reject) => {
+    const ws = new WebSocket(url, cookie ? { headers: { cookie } } : {});
+    const timer = setTimeout(() => {
+      ws.close();
+      reject(new Error("websocket_rejection_timeout"));
+    }, 3000);
+    const done = (error, statusCode) => {
+      clearTimeout(timer);
+      error ? reject(error) : resolve(statusCode);
+    };
+    ws.on("unexpected-response", (_request, response) => done(null, response.statusCode));
+    ws.on("open", () => done(new Error("websocket_opened_unexpectedly")));
+    ws.on("error", (error) => done(error));
+  });
 }
 
 test("use control keeps a default admin user for existing installs", async () => {
@@ -670,9 +717,24 @@ test("user management API is admin-only and can pair a browser to a managed user
     const userCookie = userPair.headers.get("set-cookie") || "";
     assert.equal(userPair.status, 200);
     await createThread({ id: "alice-existing", name: "Alice Existing", ownerUserId: "alice-example.test" }, process.env);
+    await createThread({ id: "bob-hidden", name: "Bob Hidden", ownerUserId: "bob-example.test" }, process.env);
 
     const denied = await fetch(`${baseUrl}/api/users`, { headers: { cookie: userCookie } });
     assert.equal(denied.status, 403);
+
+    for (const route of [
+      "/api/codex/threads",
+      "/api/executions",
+      "/api/runtime-leases",
+      "/api/settings",
+      "/api/system/processes",
+      "/api/setup/security/sessions",
+    ]) {
+      const response = await fetch(`${baseUrl}${route}`, { headers: { cookie: userCookie } });
+      const payload = await read(response);
+      assert.equal(response.status, 403, route);
+      assert.equal(payload.error, "control_plane_admin_required", route);
+    }
 
     const deniedConnectorResponse = await fetch(`${baseUrl}/api/connectors/whatsapp/status`, {
       headers: { cookie: userCookie, connection: "close" },
@@ -722,6 +784,17 @@ test("user management API is admin-only and can pair a browser to a managed user
     const deniedWorkers = await read(deniedWorkersResponse);
     assert.equal(deniedWorkersResponse.status, 403);
     assert.equal(deniedWorkers.error, "thread_workers_admin_required");
+
+    const unauthenticatedSummaryStatus = await rejectedWebSocketStatus(`ws://127.0.0.1:${port}/api/threads/summary/stream`, "");
+    assert.equal(unauthenticatedSummaryStatus, 401);
+    const summary = await readWebSocketMessage(
+      `ws://127.0.0.1:${port}/api/threads/summary/stream`,
+      userCookie,
+      (payload) => payload.type === "threads_summary",
+    );
+    assert.deepEqual(summary.threads.map((thread) => thread.id), ["alice-existing"]);
+    const rawStreamStatus = await rejectedWebSocketStatus(`ws://127.0.0.1:${port}/api/threads/alice-existing/stream`, userCookie);
+    assert.equal(rawStreamStatus, 403);
 
     const where = await read(await fetch(`${baseUrl}/api/whereiam`, { headers: { cookie: userCookie } }));
     assert.equal(where.user.userId, "alice-example.test");

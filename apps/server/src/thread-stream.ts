@@ -1,10 +1,13 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import type { Server } from "node:http";
+import type { IncomingMessage } from "node:http";
+import type { Duplex } from "node:stream";
 import { WebSocketServer, type WebSocket } from "ws";
-import { approvePairingChallenge } from "../../../packages/core/src/security.js";
+import { approvePairingChallenge, authorizeHttpRequest } from "../../../packages/core/src/security.js";
 import { runtimeStatus, wakeThread } from "../../../packages/core/src/runtime-leases.js";
-import { getThread } from "../../../packages/core/src/threads.js";
+import { getThreadForPrincipal } from "../../../packages/core/src/threads.js";
+import { isAdminPrincipal } from "../../../packages/core/src/policy.js";
 import { codexThreadId, threadUsesCodexAppServer } from "../../../packages/core/src/codex-app-server-common.js";
 import { recordCodexRuntimeAuthInvalidSignal } from "../../../packages/core/src/codex-auth-health.js";
 import { codexResumeCommand } from "../../../packages/core/src/codex-attach-command.js";
@@ -17,6 +20,11 @@ import { threadSummaryPayload } from "./thread-summary.js";
 const execFileAsync = promisify(execFile);
 const attachedServers = new WeakSet<Server>();
 const browserAttachSessions = new Map<string, { clients: number; killTimer: NodeJS.Timeout | null }>();
+
+type SummaryClient = {
+  principal: Record<string, unknown>;
+  lastSummaryBody: string;
+};
 
 function wsSend(ws: WebSocket, payload: Record<string, unknown>): void {
   if (ws.readyState === ws.OPEN) {
@@ -392,29 +400,54 @@ function stableSummaryBody(payload: { threads?: Array<Record<string, unknown>> }
   return JSON.stringify(threads);
 }
 
+function writeUpgradeError(socket: Duplex, statusCode: number, error: string): void {
+  const statusText = statusCode === 403 ? "Forbidden" : statusCode === 404 ? "Not Found" : "Unauthorized";
+  const body = JSON.stringify({ ok: false, error });
+  socket.write([
+    `HTTP/1.1 ${statusCode} ${statusText}`,
+    "content-type: application/json; charset=utf-8",
+    `content-length: ${Buffer.byteLength(body)}`,
+    "connection: close",
+    "",
+    body,
+  ].join("\r\n"));
+  socket.destroy();
+}
+
+async function authorizeUpgradeRequest(request: IncomingMessage, socket: Duplex): Promise<Record<string, any> | null> {
+  const result: any = await authorizeHttpRequest(request).catch((error) => ({
+    ok: false,
+    statusCode: Number(error?.statusCode || 500) || 500,
+    error: error?.message || "unauthorized",
+  }));
+  if (result.ok) return result.principal || {};
+  writeUpgradeError(socket, Number(result.statusCode || 401) || 401, String(result.error || "browser_pairing_required"));
+  return null;
+}
+
 export function attachThreadStreamUpgrade(server: Server): void {
   if (attachedServers.has(server)) return;
   attachedServers.add(server);
 
   const wss = new WebSocketServer({ noServer: true });
-  const summaryClients = new Set<WebSocket>();
+  const summaryClients = new Map<WebSocket, SummaryClient>();
   let summaryTimer: NodeJS.Timeout | null = null;
   let summaryInFlight = false;
-  let lastSummaryBody = "";
 
   const pushThreadSummary = async (force = false) => {
     if (!summaryClients.size || summaryInFlight) return;
     summaryInFlight = true;
     try {
-      const payload = await threadSummaryPayload();
-      const stableBody = stableSummaryBody(payload);
-      if (!force && stableBody === lastSummaryBody) return;
-      lastSummaryBody = stableBody;
-      const message = { type: "threads_summary", ...payload };
-      for (const client of summaryClients) wsSend(client, message);
+      for (const [client, state] of summaryClients.entries()) {
+        const payload = await threadSummaryPayload({ principal: state.principal });
+        const stableBody = stableSummaryBody(payload);
+        if (!force && stableBody === state.lastSummaryBody) continue;
+        state.lastSummaryBody = stableBody;
+        wsSend(client, { type: "threads_summary", ...payload });
+      }
     } catch (error) {
       const message = { type: "error", data: error instanceof Error ? error.message : String(error) };
-      for (const client of summaryClients) wsSend(client, message);
+      for (const client of summaryClients.keys()) wsSend(client, message);
     } finally {
       summaryInFlight = false;
     }
@@ -436,8 +469,10 @@ export function attachThreadStreamUpgrade(server: Server): void {
 
   server.on("upgrade", async (request, socket, head) => {
     if (summaryStreamPath(request.url)) {
+      const principal = await authorizeUpgradeRequest(request, socket);
+      if (!principal) return;
       wss.handleUpgrade(request, socket, head, (ws) => {
-        summaryClients.add(ws);
+        summaryClients.set(ws, { principal, lastSummaryBody: "" });
         ensureSummaryTimer();
         wsSend(ws, {
           type: "transport_ready",
@@ -463,9 +498,16 @@ export function attachThreadStreamUpgrade(server: Server): void {
     const target = upgradePath(request.url);
     if (!target) return;
 
-    const thread = await getThread(target.threadId).catch(() => null);
+    const principal = await authorizeUpgradeRequest(request, socket);
+    if (!principal) return;
+    if (!isAdminPrincipal(principal)) {
+      writeUpgradeError(socket, 403, "raw_terminal_admin_required");
+      return;
+    }
+
+    const thread = await getThreadForPrincipal(target.threadId, principal).catch(() => null);
     if (!thread) {
-      socket.destroy();
+      writeUpgradeError(socket, 404, "thread_not_found");
       return;
     }
 

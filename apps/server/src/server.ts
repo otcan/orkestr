@@ -62,6 +62,13 @@ export async function createApp(): Promise<INestApplication> {
             .type("application/json")
             .send(JSON.stringify({ ok: false, error: connectorAuth.error || "forbidden" }));
         }
+        const controlPlaneAuth = authorizeControlPlaneRequest(request, result.principal);
+        if (!controlPlaneAuth.ok) {
+          return response
+            .status(controlPlaneAuth.statusCode || 403)
+            .type("application/json")
+            .send(JSON.stringify({ ok: false, error: controlPlaneAuth.error || "forbidden" }));
+        }
         return next();
       }
       return response
@@ -122,6 +129,56 @@ function isUserConnectorRoute(route: { method: string; connector: string; action
     if (route.method === "POST" && route.action.length === 1 && route.action[0] === "test") return true;
   }
   return false;
+}
+
+function routePartsFromApiRequest(request: any) {
+  const url = String(request?.originalUrl || request?.url || "").split("?")[0];
+  return url.split("/").filter(Boolean).map((part) => {
+    try {
+      return decodeURIComponent(part).trim();
+    } catch {
+      return String(part || "").trim();
+    }
+  });
+}
+
+function authorizeControlPlaneRequest(request: any, principal: any) {
+  if (isAdminPrincipal(principal)) return { ok: true };
+  const method = String(request?.method || "GET").toUpperCase();
+  const parts = routePartsFromApiRequest(request);
+  if (parts[0] !== "api") return { ok: true };
+  const [surface, second, third, fourth] = parts.slice(1).map((part) => part.toLowerCase());
+
+  if (surface === "codex") return { ok: false, statusCode: 403, error: "control_plane_admin_required" };
+  if (surface === "users") return { ok: false, statusCode: 403, error: "control_plane_admin_required" };
+  if (surface === "agents" || surface === "executors" || surface === "executions") {
+    return { ok: false, statusCode: 403, error: "control_plane_admin_required" };
+  }
+  if (surface === "runtime-leases") return { ok: false, statusCode: 403, error: "control_plane_admin_required" };
+  if (surface === "settings") return { ok: false, statusCode: 403, error: "control_plane_admin_required" };
+  if (surface === "system" && !["workspace-folders", "files"].includes(second || "")) {
+    return { ok: false, statusCode: 403, error: "control_plane_admin_required" };
+  }
+  if (surface === "setup" && second === "security") {
+    const bootstrapChallenge =
+      method === "POST" &&
+      third &&
+      ["challenge", "challenges"].includes(third) &&
+      !fourth;
+    const challengeStatus =
+      method === "GET" &&
+      third === "challenges" &&
+      Boolean(fourth);
+    const pair =
+      method === "POST" &&
+      third === "pair";
+    const status =
+      method === "GET" &&
+      third === "status";
+    if (bootstrapChallenge || challengeStatus || pair || status) return { ok: true };
+    return { ok: false, statusCode: 403, error: "control_plane_admin_required" };
+  }
+  return { ok: true };
 }
 
 async function authorizeThreadResourceRequest(request: any, principal: any) {

@@ -7,8 +7,9 @@ timers, files, or tenant instance boundaries.
 Public, demo, customer, and otherwise untrusted users use a tenant VM or tenant
 instance as the hard isolation boundary. Shared-process `ownerUserId` checks,
 scoped APIs, sanitizer checks, and contained runtime prompts are
-defense-in-depth only. Keep `docs/containment-matrix.md` updated when a release
-changes any containment surface.
+defense-in-depth only. Keep `docs/containment-matrix.md` and
+`docs/route-security-matrix.md` updated when a release changes any containment
+surface or route ownership rule.
 
 ## Required Local Checks
 
@@ -39,6 +40,8 @@ The tenant isolation suite must cover these boundaries:
   failure notification for contained users.
 - Dynamic `whereiam` policy metadata for contained user sessions.
 - Tenant VM boundary metadata and the containment matrix for public isolation.
+- Route ownership across REST and WebSocket surfaces, including summary streams,
+  raw terminal access, and control-plane admin-only routes.
 
 ## Manual Release Verification
 

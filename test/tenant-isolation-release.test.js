@@ -11,9 +11,11 @@ test("tenant isolation release suite is named and wired into the release train",
   const releaseTrain = await fs.readFile("docs/release-train.md", "utf8");
   const checklist = await fs.readFile("docs/tenant-isolation-release-checklist.md", "utf8");
   const containmentMatrix = await fs.readFile("docs/containment-matrix.md", "utf8");
+  const routeSecurityMatrix = await fs.readFile("docs/route-security-matrix.md", "utf8");
   const command = pkg.scripts?.["test:tenant-isolation"] || "";
 
   assert.match(command, /test\/use-control\.test\.js/);
+  assert.match(command, /test\/security\.test\.js/);
   assert.match(command, /test\/gmail\.test\.js/);
   assert.match(command, /test\/outlook\.test\.js/);
   assert.match(command, /test\/browsers\.test\.js/);
@@ -33,6 +35,8 @@ test("tenant isolation release suite is named and wired into the release train",
   assert.match(checklist, /tenant VM or tenant/);
   assert.match(checklist, /defense-in-depth/);
   assert.match(checklist, /containment matrix/);
+  assert.match(checklist, /route ownership/);
+  assert.match(checklist, /WebSocket/);
   assert.match(checklist, /No new runtime interruption notice/);
   assert.doesNotMatch(checklist, /orkestr\.app\.ops|crawlerai\.de|@g\.us|gmail\.com/);
   assert.match(containmentMatrix, /public isolation baseline is a dedicated tenant VM/);
@@ -42,4 +46,10 @@ test("tenant isolation release suite is named and wired into the release train",
   assert.match(containmentMatrix, /Code execution and Codex runtime/);
   assert.match(containmentMatrix, /Release regression/);
   assert.doesNotMatch(containmentMatrix, /orkestr\.app\.ops|crawlerai\.de|@g\.us|gmail\.com/);
+  assert.match(routeSecurityMatrix, /Route Security Matrix/);
+  assert.match(routeSecurityMatrix, /Thread summary WebSocket/);
+  assert.match(routeSecurityMatrix, /Thread raw terminal/);
+  assert.match(routeSecurityMatrix, /Control-plane routes require admin/);
+  assert.match(routeSecurityMatrix, /control_plane_admin_required/);
+  assert.doesNotMatch(routeSecurityMatrix, /orkestr\.app\.ops|crawlerai\.de|@g\.us|gmail\.com/);
 });
