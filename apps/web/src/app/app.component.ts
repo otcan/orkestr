@@ -8,6 +8,7 @@ import { OnboardingPageComponent } from "./onboarding-page.component";
 import { PairingRequiredPageComponent } from "./pairing-required-page.component";
 import { OpsPageComponent, ToolsView } from "./ops-page.component";
 import { RawTerminalController } from "./raw-terminal.controller";
+import { UserTimersPageComponent } from "./user-timers-page.component";
 import { hasProposedPlanEnvelope, renderMessageTextHtml } from "./message-renderer";
 import {
   createOptimisticUserMessage,
@@ -33,7 +34,7 @@ import {
 } from "./api.service";
 import { appendPendingFiles, messageWithAttachmentPaths, PendingFile, removePendingFile, uploadPendingFiles } from "./thread-uploads";
 
-type Panel = "chat" | "history" | "timers" | "attach" | "settings" | "workers" | "runtime" | "raw" | "ops" | "files";
+type Panel = "chat" | "history" | "timers" | "attach" | "settings" | "workers" | "runtime" | "raw" | "ops" | "files" | "userTimers";
 type CodexRateLimitKey = "primary" | "secondary";
 type SetupPageMode = "setup" | "onboarding";
 type SetupSection = "system" | "security" | "maintenance" | "codex" | "whatsapp" | "browsers";
@@ -51,7 +52,7 @@ const DEFAULT_WHATSAPP_REPLY_PREFIX = "orkestr:";
 
 @Component({
   selector: "ork-root",
-  imports: [DatePipe, FormsModule, FirstThreadWizardComponent, FilesPageComponent, OpsPageComponent, OnboardingPageComponent, PairingRequiredPageComponent],
+  imports: [DatePipe, FormsModule, FirstThreadWizardComponent, FilesPageComponent, OpsPageComponent, OnboardingPageComponent, PairingRequiredPageComponent, UserTimersPageComponent],
   templateUrl: "./app.component.html",
 })
 export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
@@ -75,7 +76,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
       this.renderNow();
       return;
     }
-    if (this.activePanel === "ops" || this.activePanel === "files") {
+    if (this.activePanel === "ops" || this.activePanel === "files" || this.activePanel === "userTimers") {
       this.closeRawStream();
       this.updateDocumentTitle();
       this.renderNow();
@@ -338,7 +339,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
         this.error = "";
         return;
       }
-      if (this.activePanel !== "ops" && this.activePanel !== "files" && !this.selectedId && this.threads.length) {
+      if (this.activePanel !== "ops" && this.activePanel !== "files" && this.activePanel !== "userTimers" && !this.selectedId && this.threads.length) {
         this.selectedId = this.threadSlug(this.threads[0]);
         this.replacePath(this.selectedId, this.activePanel);
       }
@@ -480,7 +481,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
 
   panelAllowedForCurrentUser(panel: Panel): boolean {
     if (this.isAdminMode()) return true;
-    return ["chat", "history", "timers", "files"].includes(panel);
+    return ["chat", "history", "timers", "files", "userTimers"].includes(panel);
   }
 
   rawTerminalAvailable(thread: ThreadSummary | null = this.selectedThread()): boolean {
@@ -617,7 +618,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
       this.appReady = true;
       this.threads = [...threads].sort((a, b) => this.activityMs(b) - this.activityMs(a));
       this.seedReadStateIfNeeded(this.threads);
-      if (this.activePanel !== "ops" && this.activePanel !== "files" && !this.selectedId && this.threads.length) {
+      if (this.activePanel !== "ops" && this.activePanel !== "files" && this.activePanel !== "userTimers" && !this.selectedId && this.threads.length) {
         this.selectedId = this.threadSlug(this.threads[0]);
         this.replacePath(this.selectedId, this.activePanel);
       }
@@ -716,6 +717,18 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
       if (this.activePanel === "raw") this.closeRawStream();
       this.activePanel = "files";
       this.pushPath("", "files");
+      this.updateDocumentTitle();
+      this.renderNow();
+      return;
+    }
+    if (panel === "userTimers") {
+      this.modelDetailsOpen = false;
+      this.slashHelpOpen = false;
+      this.gitDetailsThreadId = "";
+      this.threadWizardOpen = false;
+      if (this.activePanel === "raw") this.closeRawStream();
+      this.activePanel = "userTimers";
+      this.pushPath("", "userTimers");
       this.updateDocumentTitle();
       this.renderNow();
       return;
@@ -3175,7 +3188,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   }
 
   private async loadSelectedThread(forceBottom: boolean): Promise<void> {
-    if (this.activePanel === "ops" || this.activePanel === "files") return;
+    if (this.activePanel === "ops" || this.activePanel === "files" || this.activePanel === "userTimers") return;
     const thread = this.selectedThread();
     if (!thread) return;
     const threadId = thread.id;
@@ -3549,6 +3562,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     const parts = globalThis.location?.pathname?.split("/").filter(Boolean) || [];
     if (parts[0] === "ops" || (parts[0] === "ng" && parts[1] === "ops")) return "ops";
     if (parts[0] === "files" || (parts[0] === "ng" && parts[1] === "files")) return "files";
+    if (parts[0] === "timers" || (parts[0] === "ng" && parts[1] === "timers")) return "userTimers";
     const threadIndex = parts.indexOf("thread");
     const panel = String(parts[threadIndex + 2] || "");
     return ["history", "timers", "attach", "settings", "workers", "runtime", "raw", "ops", "files"].includes(panel) ? panel as Panel : "chat";
@@ -3584,6 +3598,10 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     }
     if (parts[0] === "ng" && parts[1] === "files") {
       globalThis.history?.replaceState({}, "", "/files");
+      return;
+    }
+    if (parts[0] === "ng" && parts[1] === "timers") {
+      globalThis.history?.replaceState({}, "", "/timers");
       return;
     }
     if (parts[0] === "ng" && parts[1] === "thread" && parts[2]) {
@@ -3643,6 +3661,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   private pathForPanel(id: string, panel: Panel): string {
     if (panel === "ops") return this.opsPath(this.toolsView);
     if (panel === "files") return "/files";
+    if (panel === "userTimers") return "/timers";
     const suffix = panel === "chat" ? "" : `/${panel}`;
     return `/thread/${encodeURIComponent(id)}${suffix}`;
   }
@@ -3880,6 +3899,10 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     }
     if (this.activePanel === "files") {
       globalThis.document.title = "Files · Orkestr";
+      return;
+    }
+    if (this.activePanel === "userTimers") {
+      globalThis.document.title = "Timers · Orkestr";
       return;
     }
     const thread = this.selectedThread();

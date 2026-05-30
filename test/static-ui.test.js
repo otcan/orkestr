@@ -30,6 +30,7 @@ test("server serves the built Angular UI at root", async () => {
     const legacyOnboardingResponse = await fetch(`http://127.0.0.1:${port}/ng/onboarding`);
     const opsResponse = await fetch(`http://127.0.0.1:${port}/ops`);
     const filesResponse = await fetch(`http://127.0.0.1:${port}/files`);
+    const timersResponse = await fetch(`http://127.0.0.1:${port}/timers`);
     const threadResponse = await fetch(`http://127.0.0.1:${port}/thread/demo`);
     const faviconSvgResponse = await fetch(`http://127.0.0.1:${port}/favicon.svg`);
     const faviconSvg = await faviconSvgResponse.text();
@@ -49,6 +50,7 @@ test("server serves the built Angular UI at root", async () => {
     assert.equal(legacyOnboardingResponse.status, 200);
     assert.equal(opsResponse.status, 200);
     assert.equal(filesResponse.status, 200);
+    assert.equal(timersResponse.status, 200);
     assert.equal(threadResponse.status, 200);
     assert.equal(faviconSvgResponse.status, 200);
     assert.match(faviconSvgResponse.headers.get("content-type") || "", /image\/svg\+xml/);
@@ -232,7 +234,7 @@ test("web shell switches to a constrained non-admin user mode", async () => {
   assert.match(component, /uiRuntimeReady\(\): boolean/);
   assert.match(component, /return this\.isUserMode\(\) \|\| this\.codexAgentReady\(\)/);
   assert.match(component, /panelAllowedForCurrentUser\(panel: Panel\): boolean/);
-  assert.match(component, /\["chat", "history", "timers", "files"\]\.includes\(panel\)/);
+  assert.match(component, /\["chat", "history", "timers", "files", "userTimers"\]\.includes\(panel\)/);
   assert.match(component, /normalizeUserModeView\(\)/);
   assert.match(component, /This user account is limited to one chat\./);
   assert.match(template, /\[class\.user-mode\]="isUserMode\(\)"/);
@@ -244,6 +246,38 @@ test("web shell switches to a constrained non-admin user mode", async () => {
   assert.match(template, /@if \(isAdminMode\(\)\) \{\s*<div class="codex-control-scroll"/s);
   assert.match(template, /\[disabled\]="!threadInputReady\(\)"/);
   assert.match(styles, /\.user-mode-card/);
+});
+
+test("web shell exposes a user timer management page", async () => {
+  const template = await fs.readFile("apps/web/src/app/app.component.html", "utf8");
+  const component = await fs.readFile("apps/web/src/app/app.component.ts", "utf8");
+  const timersComponent = await fs.readFile("apps/web/src/app/user-timers-page.component.ts", "utf8");
+  const timersTemplate = await fs.readFile("apps/web/src/app/user-timers-page.component.html", "utf8");
+  const api = await fs.readFile("apps/web/src/app/api.service.ts", "utf8");
+  const styles = await fs.readFile("apps/web/src/styles.css", "utf8");
+
+  assert.match(component, /import \{ UserTimersPageComponent \} from "\.\/user-timers-page\.component"/);
+  assert.match(component, /type Panel = .*"userTimers"/);
+  assert.match(component, /parts\[0\] === "timers"/);
+  assert.match(component, /parts\[0\] === "ng" && parts\[1\] === "timers"/);
+  assert.match(component, /this\.activePanel !== "ops" && this\.activePanel !== "files" && this\.activePanel !== "userTimers"/);
+  assert.match(component, /panel === "userTimers"\) return "\/timers"/);
+  assert.match(component, /globalThis\.document\.title = "Timers · Orkestr"/);
+  assert.match(template, /<ork-user-timers-page><\/ork-user-timers-page>/);
+  assert.match(template, /\(click\)="openPanel\('userTimers'\)"/);
+  assert.match(timersComponent, /selector: "ork-user-timers-page"/);
+  assert.match(timersComponent, /this\.api\.threads\(\)/);
+  assert.match(timersComponent, /this\.api\.timers\(\)/);
+  assert.match(timersComponent, /this\.api\.createTimer\(body\)/);
+  assert.match(timersComponent, /this\.api\.runTimer\(timer\.id\)/);
+  assert.match(timersComponent, /this\.api\.deleteTimer\(timer\.id\)/);
+  assert.match(timersComponent, /targetType: "thread"/);
+  assert.match(timersTemplate, /name="user-timer-target"/);
+  assert.match(api, /createTimer\(body: Record<string, string>\)/);
+  assert.match(api, /deleteTimer\(id: string\)/);
+  assert.match(api, /runTimer\(id: string\)/);
+  assert.match(styles, /\.user-timer-editor/);
+  assert.match(styles, /\.timer-actions/);
 });
 
 test("web shell exposes a user-scoped files page", async () => {

@@ -1,0 +1,53 @@
+<section class="panel-body user-timers-page">
+  <div class="panel-title">
+    <div>
+      <p class="eyebrow">Timers</p>
+      <h3>{{ timers.length }} scheduled</h3>
+    </div>
+    <button class="secondary" type="button" (click)="load()" [disabled]="busy">Reload</button>
+  </div>
+
+  @if (error) {
+    <div class="notice error">{{ error }}</div>
+  } @else if (notice) {
+    <div class="notice">{{ notice }}</div>
+  }
+
+  <form class="timer-editor user-timer-editor" (submit)="createTimer(); $event.preventDefault()">
+    <select name="user-timer-target" [(ngModel)]="targetThreadId">
+      @for (thread of threads; track thread.id) {
+        <option [value]="thread.id">{{ thread.name || thread.id }}</option>
+      }
+    </select>
+    <input name="user-timer-label" [(ngModel)]="timerLabel" placeholder="Label" />
+    <select name="user-timer-cadence" [(ngModel)]="timerCadence">
+      <option value="once">Once</option>
+      <option value="daily">Daily</option>
+      <option value="weekly">Weekly</option>
+      <option value="interval">Interval</option>
+    </select>
+    <input name="user-timer-time" [(ngModel)]="timerTime" placeholder="09:00 or every 2h" />
+    <textarea name="user-timer-prompt" rows="3" [(ngModel)]="timerPrompt" placeholder="Timer instruction"></textarea>
+    <button type="submit" [disabled]="busy || !timerPrompt.trim() || !targetThreadId">Add timer</button>
+  </form>
+
+  <div class="compact-list">
+    @for (timer of timers; track timer.id) {
+      <article class="timer-row">
+        <div>
+          <strong>{{ timer.label }}</strong>
+          <p>{{ targetLabel(timer) }} | {{ timer.cadence }} {{ timerTimeLabel(timer) }} | next {{ timer.nextRunAt | date: "MMM d, HH:mm" }}</p>
+          @if (timer.promptFile) {
+            <small>{{ timer.promptFile }}</small>
+          }
+        </div>
+        <div class="timer-actions">
+          <button class="secondary" type="button" (click)="runTimer(timer)" [disabled]="busy">Run now</button>
+          <button class="secondary danger-soft" type="button" (click)="deleteTimer(timer)" [disabled]="busy">Delete</button>
+        </div>
+      </article>
+    } @empty {
+      <p class="empty">No timers scheduled.</p>
+    }
+  </div>
+</section>
