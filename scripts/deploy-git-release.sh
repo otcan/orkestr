@@ -579,6 +579,7 @@ const marker = {
 fs.writeFileSync(file, `${JSON.stringify(marker, null, 2)}\n`, { mode: 0o600 });
 NODE
   deploy_drain_started=1
+  echo "Deploy drain active: new inputs will queue while ${service_name}.service restarts."
 }
 
 clear_deploy_drain() {
@@ -657,6 +658,7 @@ deploy_guard_before_restart() {
     begin_deploy_drain
     deploy_guard_active_work unsafe
     echo "No-interrupt deploy guard: external Codex app-server is active; codex-app-server turns may continue during the UI restart."
+    echo "No-interrupt deploy preservation: restarting only the UI/API service process; runtime children and browser desktops are preserved by systemd KillMode=process."
     return 0
   fi
   deploy_guard_active_work
@@ -668,13 +670,16 @@ restart_and_verify() {
   configure_service_shutdown_timeout
   if [ "$no_interrupt" = "1" ] && [ "$deploy_drain_started" = "1" ]; then
     systemctl stop "${service_name}.service"
-    clear_deploy_drain
     systemctl start "${service_name}.service"
   else
     systemctl restart "${service_name}.service"
   fi
   systemctl is-active --quiet "${service_name}.service"
   health_check "$health_url" 40
+  if [ "$deploy_drain_started" = "1" ]; then
+    clear_deploy_drain
+    echo "Deploy drain cleared after ${service_name}.service passed health checks."
+  fi
 }
 
 configure_service_shutdown_timeout() {
@@ -693,6 +698,7 @@ configure_service_shutdown_timeout() {
   cat > "$dropin_dir/50-shutdown-timeout.conf" <<EOF
 [Service]
 TimeoutStopSec=$timeout
+KillMode=process
 EOF
   systemctl daemon-reload
 }

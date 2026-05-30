@@ -204,8 +204,13 @@ Versioned deploys are no-interrupt by default. On current host-native installs,
 Codex app-server runs as its own service and Orkestr talks to it through a short
 proxy connection, so UI/API restarts do not stop active Codex turns. The deployer
 still writes a drain marker before restart so new UI, WA, and timer inputs queue
-instead of starting new turns during the deploy window. A Codex turn is treated
-as restart-safe only when `/api/threads?scope=all` reports both
+instead of starting new turns during the deploy window. The drain marker stays
+active until the new UI/API process passes health checks; startup recovery
+defers while that marker is active so continuing Codex app-server turns are not
+misclassified as restart interruptions. The systemd unit uses `KillMode=process`
+so the release restart targets the UI/API process and does not SIGTERM
+browserctl-managed desktop processes that live in the service cgroup. A Codex
+turn is treated as restart-safe only when `/api/threads?scope=all` reports both
 `runtime=codex-app-server` and `appServer=websocket` or `appServer=proxy`. First-time migrations from the
 old in-process app-server remain conservative and wait until active work is idle
 before enabling the separate Codex service. Use `--wait-active` to wait, or

@@ -19,6 +19,7 @@ import {
   setCodexAppServerMessageHandler,
   stopCodexAppServerClients,
 } from "../../../packages/core/src/codex-app-server.js";
+import { deployDrainActiveSync } from "../../../packages/core/src/deploy-drain.js";
 import { deliverWhatsAppReplies, syncWhatsAppTypingIndicators } from "../../../packages/connectors/src/whatsapp.js";
 import {
   recoverConfiguredLocalWhatsAppAccounts,
@@ -309,7 +310,10 @@ function scheduleStartupRecovery(env = process.env) {
   return timer;
 }
 
-async function recoverAfterStartup(env = process.env) {
+export async function recoverAfterStartup(env = process.env) {
+  if (deployDrainActiveSync(env)) {
+    return { deferred: true, reason: "deploy_draining" };
+  }
   await drainAllPendingThreadInputs(env).catch(() => []);
   return syncRuntimeAndDeliverWhatsApp(env, { forceWhatsapp: true, recoveryCause: "orkestr_restart" });
 }

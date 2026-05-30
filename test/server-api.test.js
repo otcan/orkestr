@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { runtimeMonitorIntervalMs, startServer, startupRecoveryDelayMs } from "../apps/server/src/server.js";
+import { recoverAfterStartup, runtimeMonitorIntervalMs, startServer, startupRecoveryDelayMs } from "../apps/server/src/server.js";
 
 async function request(baseUrl, route, options = {}) {
   const response = await fetch(`${baseUrl}${route}`, {
@@ -119,6 +119,18 @@ test("startup recovery delay is enabled by default and bounded", () => {
     if (priorDelay === undefined) delete process.env.ORKESTR_STARTUP_RECOVERY_DELAY_MS;
     else process.env.ORKESTR_STARTUP_RECOVERY_DELAY_MS = priorDelay;
   }
+});
+
+test("startup recovery defers while a no-interrupt deploy drain is active", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-startup-drain-"));
+  await fs.writeFile(path.join(home, "deploy-drain.json"), JSON.stringify({
+    state: "draining",
+    reason: "deploy",
+    expiresAt: new Date(Date.now() + 60_000).toISOString(),
+  }));
+
+  const result = await recoverAfterStartup({ ...process.env, ORKESTR_HOME: home });
+  assert.deepEqual(result, { deferred: true, reason: "deploy_draining" });
 });
 
 test("server exposes health, readiness, version, and agent message APIs", async () => {
