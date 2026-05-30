@@ -546,14 +546,249 @@ async function readWhatsAppState(env) {
   return readJson(paths.whatsapp, { inboundEvents: [] });
 }
 
+function mergeByKey(existing = [], next = [], keyFn = () => "") {
+  const merged = new Map();
+  for (const item of [...(existing || []), ...(next || [])]) {
+    const key = keyFn(item);
+    if (!key) continue;
+    merged.set(key, item);
+  }
+  return [...merged.values()];
+}
+
+function outboundDeliveryKey(delivery = {}) {
+  return [
+    pickString(delivery.kind),
+    pickString(delivery.deliveryType),
+    pickString(delivery.chatId),
+    pickString(delivery.accountId),
+    pickString(delivery.messageId),
+    pickString(delivery.textKey),
+  ].join("|");
+}
+
+function outboundDeliveryClaimTtlMs(env = process.env) {
+  const parsed = Number(env.ORKESTR_WHATSAPP_OUTBOUND_CLAIM_TTL_MS || env.WHATSAPP_OUTBOUND_CLAIM_TTL_MS || 120_000);
+  return Number.isFinite(parsed) ? Math.max(5_000, Math.floor(parsed)) : 120_000;
+}
+
+function outboundDeliveryClaimRetentionLimit(env = process.env) {
+  return Math.max(500, whatsappOutboundDeliveryRetentionLimit(env));
+}
+
+function outboundDeliveryClaimExpired(claim = {}, nowMs = Date.now(), env = process.env) {
+  const status = String(claim.status || "claimed").trim().toLowerCase();
+  const ttlMs = outboundDeliveryClaimTtlMs(env);
+  const expiresAtMs = Date.parse(String(claim.expiresAt || ""));
+  if (Number.isFinite(expiresAtMs)) return expiresAtMs <= nowMs;
+  const baseMs = Date.parse(String(claim.updatedAt || claim.claimedAt || claim.deliveredAt || claim.failedAt || ""));
+  if (!Number.isFinite(baseMs)) return status === "claimed";
+  const retentionMs = status === "claimed" ? ttlMs : Math.max(ttlMs, 60_000);
+  return nowMs - baseMs > retentionMs;
+}
+
+function pruneOutboundDeliveryClaims(claims = [], env = process.env) {
+  const nowMs = Date.now();
+  return (claims || [])
+    .filter((claim) => pickString(claim.claimKey) && !outboundDeliveryClaimExpired(claim, nowMs, env))
+    .slice(-outboundDeliveryClaimRetentionLimit(env));
+}
+
+function mergeWhatsAppState(existing = {}, next = {}, env = process.env) {
+  return {
+    ...existing,
+    ...next,
+    inboundEvents: mergeByKey(existing.inboundEvents, next.inboundEvents, (event) => pickString(event.eventId)).slice(-500),
+    outboundDeliveries: mergeByKey(existing.outboundDeliveries, next.outboundDeliveries, outboundDeliveryKey)
+      .slice(-whatsappOutboundDeliveryRetentionLimit(env)),
+    outboundDeliveryClaims: pruneOutboundDeliveryClaims(
+      mergeByKey(existing.outboundDeliveryClaims, next.outboundDeliveryClaims, (claim) => pickString(claim.claimKey)),
+      env,
+    ),
+    updatedAt: new Date().toISOString(),
+  };
+}
+
 async function writeWhatsAppState(state, env) {
   const paths = dataPaths(env);
-  await writeJson(paths.whatsapp, {
-    ...state,
-    inboundEvents: (state.inboundEvents || []).slice(-500),
-    outboundDeliveries: (state.outboundDeliveries || []).slice(-whatsappOutboundDeliveryRetentionLimit(env)),
-    updatedAt: new Date().toISOString(),
-  });
+  const existing = await readJson(paths.whatsapp, { inboundEvents: [], outboundDeliveries: [], outboundDeliveryClaims: [] }).catch(() => ({}));
+  await writeJson(paths.whatsapp, mergeWhatsAppState(existing, state, env));
+}
+
+function outboundDeliveryClaimKey({ accountId = "", chatId = "", textKey = "" } = {}) {
+  return crypto
+    .createHash("sha256")
+    .update(`${pickString(accountId)}\n${pickString(chatId)}\n${pickString(textKey)}`)
+    .digest("hex");
+}
+
+async function outboundDeliveryClaimDir(env = process.env) {
+  const paths = await ensureDataDirs(env);
+  const dir = path.join(paths.home, "whatsapp-delivery-claims");
+  await fs.mkdir(dir, { recursive: true });
+  return dir;
+}
+
+async function readOutboundDeliveryClaimFile(filePath) {
+  const raw = await fs.readFile(filePath, "utf8").catch(() => "");
+  if (!raw) return {};
+  try {
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function upsertOutboundDeliveryClaim(state, claim) {
+  state.outboundDeliveryClaims = mergeByKey(
+    state.outboundDeliveryClaims || [],
+    [claim],
+    (item) => pickString(item.claimKey),
+  );
+}
+
+async function acquireOutboundDeliveryClaim({
+  state,
+  kind,
+  deliveryType,
+  agentId,
+  threadId,
+  messageId,
+  sourceMessageId,
+  chatId,
+  accountId,
+  textKey,
+} = {}, env = process.env) {
+  const claimKey = outboundDeliveryClaimKey({ accountId, chatId, textKey });
+  if (!claimKey || !textKey || !chatId) return { acquired: false, reason: "missing_delivery_claim_key" };
+  const dir = await outboundDeliveryClaimDir(env);
+  const filePath = path.join(dir, `${claimKey}.json`);
+  const ttlMs = outboundDeliveryClaimTtlMs(env);
+  const now = Date.now();
+  const nowIso = new Date(now).toISOString();
+  const claim = {
+    claimKey,
+    kind,
+    deliveryType,
+    agentId: agentId || null,
+    threadId: threadId || null,
+    messageId,
+    sourceMessageId: sourceMessageId || null,
+    chatId,
+    accountId,
+    textKey,
+    status: "claimed",
+    claimedAt: nowIso,
+    updatedAt: nowIso,
+    expiresAt: new Date(now + ttlMs).toISOString(),
+    pid: process.pid,
+  };
+
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    let handle = null;
+    try {
+      handle = await fs.open(filePath, "wx");
+      await handle.writeFile(JSON.stringify(claim, null, 2) + "\n", "utf8");
+      await handle.close();
+      upsertOutboundDeliveryClaim(state, claim);
+      await writeWhatsAppState(state, env);
+      return { acquired: true, claim, filePath };
+    } catch (error) {
+      if (handle) await handle.close().catch(() => {});
+      if (error?.code !== "EEXIST") throw error;
+      const existing = await readOutboundDeliveryClaimFile(filePath);
+      if (outboundDeliveryClaimExpired(existing, now, env)) {
+        await fs.unlink(filePath).catch(() => {});
+        continue;
+      }
+      return { acquired: false, reason: "delivery_claim_active", claim: existing, filePath };
+    }
+  }
+  return { acquired: false, reason: "delivery_claim_active", filePath };
+}
+
+async function finishOutboundDeliveryClaim({ state, claim, filePath, status, error = "", delivery = null } = {}, env = process.env) {
+  if (!claim?.claimKey) return;
+  const nowIso = new Date().toISOString();
+  const updated = {
+    ...claim,
+    status,
+    updatedAt: nowIso,
+    ...(status === "delivered" ? { deliveredAt: delivery?.deliveredAt || nowIso } : {}),
+    ...(status === "failed" ? { failedAt: nowIso, error: String(error || "").slice(0, 500) } : {}),
+  };
+  upsertOutboundDeliveryClaim(state, updated);
+  await writeWhatsAppState(state, env);
+  if (status === "delivered" && filePath) await fs.unlink(filePath).catch(() => {});
+}
+
+async function sendClaimedWhatsAppText({
+  state,
+  outboundDeliveries,
+  deliveredIds,
+  deliveredTextKeys,
+  batchTextKeys,
+  kind,
+  deliveryType,
+  routerUpdateType,
+  agentId,
+  threadId,
+  messageId,
+  sourceMessageId,
+  parentMessageId,
+  chatId,
+  accountId,
+  textKey,
+  text,
+  attachments,
+  config,
+  env,
+  fetchImpl,
+} = {}) {
+  const claimResult = await acquireOutboundDeliveryClaim({
+    state,
+    kind,
+    deliveryType,
+    agentId,
+    threadId,
+    messageId,
+    sourceMessageId,
+    chatId,
+    accountId,
+    textKey,
+  }, env);
+  if (!claimResult.acquired) return { skipped: { reason: claimResult.reason || "delivery_claim_active" } };
+
+  try {
+    const payload = await sendWhatsAppText({ chatId, text, accountId, attachments, config, env, fetchImpl });
+    const delivery = {
+      kind,
+      deliveryType,
+      ...(routerUpdateType ? { routerUpdateType } : {}),
+      agentId: agentId || null,
+      threadId: threadId || null,
+      messageId,
+      ...(sourceMessageId ? { sourceMessageId } : {}),
+      ...(parentMessageId ? { parentMessageId } : {}),
+      chatId,
+      accountId,
+      textKey,
+      deliveredAt: new Date().toISOString(),
+      bridgeResponse: payload,
+      ...(attachments ? { attachments } : {}),
+    };
+    outboundDeliveries.push(delivery);
+    state.outboundDeliveries = outboundDeliveries;
+    deliveredIds.add(messageId);
+    deliveredTextKeys.add(textKey);
+    batchTextKeys.add(textKey);
+    await finishOutboundDeliveryClaim({ state, claim: claimResult.claim, filePath: claimResult.filePath, status: "delivered", delivery }, env);
+    return { delivery };
+  } catch (error) {
+    await finishOutboundDeliveryClaim({ state, claim: claimResult.claim, filePath: claimResult.filePath, status: "failed", error: error.message || String(error) }, env).catch(() => {});
+    return { failure: { error } };
+  }
 }
 
 export async function routeWhatsAppInbound(input = {}, env = process.env) {
@@ -1463,27 +1698,33 @@ async function deliverWhatsAppRepliesOnce(env = process.env, fetchImpl = fetch) 
           skipped.push({ agentId, threadId, messageId: message.id, reason: "duplicate_text" });
           continue;
         }
-        try {
-          const payload = await sendWhatsAppText({ chatId, text, accountId, config, env, fetchImpl });
-          const delivery = {
-            kind,
-            deliveryType: "router_update",
-            routerUpdateType: routerUpdateTarget.routerUpdateType,
-            agentId: agentId || null,
-            threadId: threadId || null,
-            messageId: deliveryId,
-            sourceMessageId: message.id,
-            chatId,
-            accountId,
-            textKey,
-            deliveredAt: new Date().toISOString(),
-            bridgeResponse: payload,
-          };
-          outboundDeliveries.push(delivery);
-          deliveredIds.add(deliveryId);
-          deliveredTextKeys.add(textKey);
-          batchTextKeys.add(textKey);
-          delivered.push(delivery);
+        const result = await sendClaimedWhatsAppText({
+          state,
+          outboundDeliveries,
+          deliveredIds,
+          deliveredTextKeys,
+          batchTextKeys,
+          kind,
+          deliveryType: "router_update",
+          routerUpdateType: routerUpdateTarget.routerUpdateType,
+          agentId,
+          threadId,
+          messageId: deliveryId,
+          sourceMessageId: message.id,
+          chatId,
+          accountId,
+          textKey,
+          text,
+          config,
+          env,
+          fetchImpl,
+        });
+        if (result.skipped) {
+          skipped.push({ agentId, threadId, messageId: message.id, reason: result.skipped.reason });
+          continue;
+        }
+        if (result.delivery) {
+          delivered.push(result.delivery);
           await appendEvent({
             type: "whatsapp_outbound_router_update_delivered",
             routerUpdateType: routerUpdateTarget.routerUpdateType,
@@ -1492,7 +1733,8 @@ async function deliverWhatsAppRepliesOnce(env = process.env, fetchImpl = fetch) 
             messageId: message.id,
             chatId,
           }, env);
-        } catch (error) {
+        } else if (result.failure) {
+          const error = result.failure.error;
           const failure = { kind, agentId: agentId || null, threadId: threadId || null, messageId: message.id, chatId, error: error.message || String(error) };
           failed.push(failure);
           await appendEvent({ type: "whatsapp_outbound_failed", ...failure }, env);
@@ -1521,28 +1763,35 @@ async function deliverWhatsAppRepliesOnce(env = process.env, fetchImpl = fetch) 
           skipped.push({ agentId, threadId, messageId: message.id, reason: "duplicate_text" });
           continue;
         }
-        try {
-          const payload = await sendWhatsAppText({ chatId, text, accountId, config, env, fetchImpl });
-          const delivery = {
-            kind,
-            deliveryType: "mode_queued",
-            agentId: agentId || null,
-            threadId: threadId || null,
-            messageId: deliveryId,
-            sourceMessageId: message.id,
-            chatId,
-            accountId,
-            textKey,
-            deliveredAt: new Date().toISOString(),
-            bridgeResponse: payload,
-          };
-          outboundDeliveries.push(delivery);
-          deliveredIds.add(deliveryId);
-          deliveredTextKeys.add(textKey);
-          batchTextKeys.add(textKey);
-          delivered.push(delivery);
+        const result = await sendClaimedWhatsAppText({
+          state,
+          outboundDeliveries,
+          deliveredIds,
+          deliveredTextKeys,
+          batchTextKeys,
+          kind,
+          deliveryType: "mode_queued",
+          agentId,
+          threadId,
+          messageId: deliveryId,
+          sourceMessageId: message.id,
+          chatId,
+          accountId,
+          textKey,
+          text,
+          config,
+          env,
+          fetchImpl,
+        });
+        if (result.skipped) {
+          skipped.push({ agentId, threadId, messageId: message.id, reason: result.skipped.reason });
+          continue;
+        }
+        if (result.delivery) {
+          delivered.push(result.delivery);
           await appendEvent({ type: "whatsapp_outbound_mode_queued_delivered", agentId: agentId || null, threadId: threadId || null, messageId: message.id, chatId }, env);
-        } catch (error) {
+        } else if (result.failure) {
+          const error = result.failure.error;
           const failure = { kind, agentId: agentId || null, threadId: threadId || null, messageId: message.id, chatId, error: error.message || String(error) };
           failed.push(failure);
           await appendEvent({ type: "whatsapp_outbound_failed", ...failure }, env);
@@ -1575,28 +1824,35 @@ async function deliverWhatsAppRepliesOnce(env = process.env, fetchImpl = fetch) 
           skipped.push({ agentId, threadId, messageId: message.id, reason: "duplicate_text" });
           continue;
         }
-        try {
-          const payload = await sendWhatsAppText({ chatId, text, accountId, config, env, fetchImpl });
-          const delivery = {
-            kind,
-            deliveryType: "queue_notice",
-            agentId: agentId || null,
-            threadId: threadId || null,
-            messageId: deliveryId,
-            sourceMessageId: message.id,
-            chatId,
-            accountId,
-            textKey,
-            deliveredAt: new Date().toISOString(),
-            bridgeResponse: payload,
-          };
-          outboundDeliveries.push(delivery);
-          deliveredIds.add(deliveryId);
-          deliveredTextKeys.add(textKey);
-          batchTextKeys.add(textKey);
-          delivered.push(delivery);
+        const result = await sendClaimedWhatsAppText({
+          state,
+          outboundDeliveries,
+          deliveredIds,
+          deliveredTextKeys,
+          batchTextKeys,
+          kind,
+          deliveryType: "queue_notice",
+          agentId,
+          threadId,
+          messageId: deliveryId,
+          sourceMessageId: message.id,
+          chatId,
+          accountId,
+          textKey,
+          text,
+          config,
+          env,
+          fetchImpl,
+        });
+        if (result.skipped) {
+          skipped.push({ agentId, threadId, messageId: message.id, reason: result.skipped.reason });
+          continue;
+        }
+        if (result.delivery) {
+          delivered.push(result.delivery);
           await appendEvent({ type: "whatsapp_outbound_queue_notice_delivered", agentId: agentId || null, threadId: threadId || null, messageId: message.id, chatId }, env);
-        } catch (error) {
+        } else if (result.failure) {
+          const error = result.failure.error;
           const failure = { kind, agentId: agentId || null, threadId: threadId || null, messageId: message.id, chatId, error: error.message || String(error) };
           failed.push(failure);
           await appendEvent({ type: "whatsapp_outbound_failed", ...failure }, env);
@@ -1642,27 +1898,34 @@ async function deliverWhatsAppRepliesOnce(env = process.env, fetchImpl = fetch) 
           skipped.push({ agentId, threadId, messageId: message.id, reason: "duplicate_text" });
           continue;
         }
-        try {
-          const payload = await sendWhatsAppText({ chatId, text, accountId, config, env, fetchImpl });
-          const delivery = {
-            kind,
-            deliveryType: "delivery_error",
-            agentId: agentId || null,
-            threadId: threadId || null,
-            messageId: message.id,
-            chatId,
-            accountId,
-            textKey,
-            deliveredAt: new Date().toISOString(),
-            bridgeResponse: payload,
-          };
-          outboundDeliveries.push(delivery);
-          deliveredIds.add(message.id);
-          deliveredTextKeys.add(textKey);
-          batchTextKeys.add(textKey);
-          delivered.push(delivery);
+        const result = await sendClaimedWhatsAppText({
+          state,
+          outboundDeliveries,
+          deliveredIds,
+          deliveredTextKeys,
+          batchTextKeys,
+          kind,
+          deliveryType: "delivery_error",
+          agentId,
+          threadId,
+          messageId: message.id,
+          chatId,
+          accountId,
+          textKey,
+          text,
+          config,
+          env,
+          fetchImpl,
+        });
+        if (result.skipped) {
+          skipped.push({ agentId, threadId, messageId: message.id, reason: result.skipped.reason });
+          continue;
+        }
+        if (result.delivery) {
+          delivered.push(result.delivery);
           await appendEvent({ type: "whatsapp_outbound_delivery_error_delivered", agentId: agentId || null, threadId: threadId || null, messageId: message.id, chatId }, env);
-        } catch (error) {
+        } else if (result.failure) {
+          const error = result.failure.error;
           const failure = { kind, agentId: agentId || null, threadId: threadId || null, messageId: message.id, chatId, error: error.message || String(error) };
           failed.push(failure);
           await appendEvent({ type: "whatsapp_outbound_failed", ...failure }, env);
@@ -1724,28 +1987,35 @@ async function deliverWhatsAppRepliesOnce(env = process.env, fetchImpl = fetch) 
           continue;
         }
 
-        try {
-          const payload = await sendWhatsAppText({ chatId, text, accountId, config, env, fetchImpl });
-          const delivery = {
-            kind,
-            deliveryType: "progress",
-            agentId: agentId || null,
-            threadId: threadId || null,
-            messageId: message.id,
-            parentMessageId: message.parentMessageId,
-            chatId,
-            accountId,
-            textKey,
-            deliveredAt: new Date().toISOString(),
-            bridgeResponse: payload,
-          };
-          outboundDeliveries.push(delivery);
-          deliveredIds.add(message.id);
-          deliveredTextKeys.add(textKey);
-          batchTextKeys.add(textKey);
-          delivered.push(delivery);
+        const result = await sendClaimedWhatsAppText({
+          state,
+          outboundDeliveries,
+          deliveredIds,
+          deliveredTextKeys,
+          batchTextKeys,
+          kind,
+          deliveryType: "progress",
+          agentId,
+          threadId,
+          messageId: message.id,
+          parentMessageId: message.parentMessageId,
+          chatId,
+          accountId,
+          textKey,
+          text,
+          config,
+          env,
+          fetchImpl,
+        });
+        if (result.skipped) {
+          skipped.push({ agentId, threadId, messageId: message.id, reason: result.skipped.reason });
+          continue;
+        }
+        if (result.delivery) {
+          delivered.push(result.delivery);
           await appendEvent({ type: "whatsapp_outbound_progress_delivered", agentId: agentId || null, threadId: threadId || null, messageId: message.id, chatId }, env);
-        } catch (error) {
+        } else if (result.failure) {
+          const error = result.failure.error;
           const failure = { kind, agentId: agentId || null, threadId: threadId || null, messageId: message.id, chatId, error: error.message || String(error) };
           failed.push(failure);
           await appendEvent({ type: "whatsapp_outbound_failed", ...failure }, env);
@@ -1797,26 +2067,33 @@ async function deliverWhatsAppRepliesOnce(env = process.env, fetchImpl = fetch) 
         continue;
       }
 
-      try {
-        const payload = await sendWhatsAppText({ chatId, text, accountId, attachments, config, env, fetchImpl });
-        const delivery = {
-          kind,
-          deliveryType,
-          agentId: agentId || null,
-          threadId: threadId || null,
-          messageId: message.id,
-          parentMessageId: message.parentMessageId,
-          chatId,
-          accountId,
-          textKey,
-          deliveredAt: new Date().toISOString(),
-          bridgeResponse: payload,
-          attachments,
-        };
-        outboundDeliveries.push(delivery);
-        deliveredIds.add(message.id);
-        deliveredTextKeys.add(textKey);
-        batchTextKeys.add(textKey);
+      const result = await sendClaimedWhatsAppText({
+        state,
+        outboundDeliveries,
+        deliveredIds,
+        deliveredTextKeys,
+        batchTextKeys,
+        kind,
+        deliveryType,
+        agentId,
+        threadId,
+        messageId: message.id,
+        parentMessageId: message.parentMessageId,
+        chatId,
+        accountId,
+        textKey,
+        text,
+        attachments,
+        config,
+        env,
+        fetchImpl,
+      });
+      if (result.skipped) {
+        skipped.push({ agentId, threadId, messageId: message.id, reason: result.skipped.reason });
+        continue;
+      }
+      if (result.delivery) {
+        const delivery = result.delivery;
         delivered.push(delivery);
         if (parent) {
           await completePassiveMirrorParent({
@@ -1832,7 +2109,8 @@ async function deliverWhatsAppRepliesOnce(env = process.env, fetchImpl = fetch) 
           }).catch(() => null);
         }
         await appendEvent({ type: "whatsapp_outbound_delivered", agentId: agentId || null, threadId: threadId || null, messageId: message.id, chatId }, env);
-      } catch (error) {
+      } else if (result.failure) {
+        const error = result.failure.error;
         const failure = { kind, agentId: agentId || null, threadId: threadId || null, messageId: message.id, chatId, error: error.message || String(error) };
         failed.push(failure);
         await appendEvent({ type: "whatsapp_outbound_failed", ...failure }, env);

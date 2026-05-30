@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -32,6 +33,49 @@ function response(payload, ok = true, status = 200) {
 
 function stripDebugFooter(text) {
   return String(text || "").replace(/\n\ndbg: .+$/s, "");
+}
+
+function testNormalizedDeliveryText(value) {
+  return String(value || "").replace(/\s+/g, " ").trim();
+}
+
+function testDeliveryTextKey(chatId, text) {
+  return crypto
+    .createHash("sha256")
+    .update(`${String(chatId || "").trim()}\n${testNormalizedDeliveryText(text)}`)
+    .digest("hex");
+}
+
+function testDeliveryClaimKey({ accountId = "", chatId = "", textKey = "" } = {}) {
+  return crypto
+    .createHash("sha256")
+    .update(`${String(accountId || "").trim()}\n${String(chatId || "").trim()}\n${String(textKey || "").trim()}`)
+    .digest("hex");
+}
+
+async function writeTestDeliveryClaim(home, { accountId, chatId, textKey, claimedAt, expiresAt } = {}) {
+  const claimKey = testDeliveryClaimKey({ accountId, chatId, textKey });
+  const dir = path.join(home, "whatsapp-delivery-claims");
+  await fs.mkdir(dir, { recursive: true });
+  const filePath = path.join(dir, `${claimKey}.json`);
+  await fs.writeFile(
+    filePath,
+    JSON.stringify({
+      claimKey,
+      kind: "thread",
+      deliveryType: "final",
+      chatId,
+      accountId,
+      textKey,
+      status: "claimed",
+      claimedAt,
+      updatedAt: claimedAt,
+      expiresAt,
+      pid: 12345,
+    }, null, 2) + "\n",
+    "utf8",
+  );
+  return { claimKey, filePath };
 }
 
 function assertDebugFooter(text, { mode = "", messageType = "final", model = "[^·\\n]+" } = {}) {
@@ -1024,6 +1068,79 @@ test("whatsapp delivery mirrors assistant replies once to the source chat", asyn
   assert.equal(calls[0].body.to, "chat-1");
   assert.equal(calls[0].body.accountId, "main");
   assert.match(calls[0].body.text, /No-op executor received/);
+});
+
+test("whatsapp delivery skips outbound replies while an active persisted claim exists", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-claim-active-"));
+  const env = externalBridgeEnv(home, {
+    ORKESTR_WHATSAPP_DEBUG_FOOTER: "0",
+    ORKESTR_WHATSAPP_OUTBOUND_CLAIM_TTL_MS: "60000",
+  });
+  await writeConnectorConfig("whatsapp", { bridgeMode: "external", bridgeUrl: "http://wa.local" }, env);
+  await routeWhatsAppInbound(
+    { eventId: "wa-claim-active-1", agentId: "agent-claim-active", chatId: "chat-claim-active", accountId: "main", text: "status?" },
+    env,
+  );
+  await runNextAgentMessage("agent-claim-active", { executorId: "noop" }, env);
+
+  const text = "No-op executor received 7 characters.";
+  const textKey = testDeliveryTextKey("chat-claim-active", text);
+  const now = Date.now();
+  await writeTestDeliveryClaim(home, {
+    accountId: "main",
+    chatId: "chat-claim-active",
+    textKey,
+    claimedAt: new Date(now).toISOString(),
+    expiresAt: new Date(now + 60_000).toISOString(),
+  });
+
+  const delivery = await deliverWhatsAppReplies(env, async () => {
+    throw new Error("active delivery claim should block duplicate send");
+  });
+
+  assert.equal(delivery.delivered.length, 0);
+  assert.equal(delivery.failed.length, 0);
+  assert.equal(delivery.skipped.some((item) => item.reason === "delivery_claim_active"), true);
+});
+
+test("whatsapp delivery expires stale outbound claims before sending", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-claim-stale-"));
+  const env = externalBridgeEnv(home, {
+    ORKESTR_WHATSAPP_DEBUG_FOOTER: "0",
+    ORKESTR_WHATSAPP_OUTBOUND_CLAIM_TTL_MS: "5000",
+  });
+  await writeConnectorConfig("whatsapp", { bridgeMode: "external", bridgeUrl: "http://wa.local" }, env);
+  await routeWhatsAppInbound(
+    { eventId: "wa-claim-stale-1", agentId: "agent-claim-stale", chatId: "chat-claim-stale", accountId: "main", text: "status?" },
+    env,
+  );
+  await runNextAgentMessage("agent-claim-stale", { executorId: "noop" }, env);
+
+  const text = "No-op executor received 7 characters.";
+  const textKey = testDeliveryTextKey("chat-claim-stale", text);
+  const old = Date.now() - 60_000;
+  const { filePath } = await writeTestDeliveryClaim(home, {
+    accountId: "main",
+    chatId: "chat-claim-stale",
+    textKey,
+    claimedAt: new Date(old).toISOString(),
+    expiresAt: new Date(old + 1_000).toISOString(),
+  });
+
+  const calls = [];
+  const delivery = await deliverWhatsAppReplies(env, async (url, options) => {
+    calls.push({ url, body: JSON.parse(options.body) });
+    return response({ ok: true, ids: ["sent-after-stale-claim"] });
+  });
+  const state = JSON.parse(await fs.readFile(path.join(home, "whatsapp.json"), "utf8"));
+
+  assert.equal(delivery.delivered.length, 1);
+  assert.equal(delivery.failed.length, 0);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].body.to, "chat-claim-stale");
+  assert.equal(calls[0].body.text, text);
+  await assert.rejects(fs.stat(filePath), /ENOENT/);
+  assert.equal(state.outboundDeliveries.some((item) => item.textKey === textKey), true);
 });
 
 test("whatsapp inbound can route directly to a thread and mirror its reply once", async () => {
