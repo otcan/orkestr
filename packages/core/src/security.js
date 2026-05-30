@@ -354,10 +354,17 @@ export async function revokeSecuritySession(sessionId, { env = process.env, revo
   if (!id) throw challengeError("security_session_id_required", 400);
   const config = await readSecurityConfig(env);
   const before = config.sessions || [];
+  const revokedSession = before.find((session) => session.id === id) || null;
   const sessions = before.filter((session) => session.id !== id);
   if (sessions.length === before.length) throw challengeError("security_session_not_found", 404);
   await writeSecurityConfig({ ...config, sessions }, env);
-  await appendEvent({ type: "security_session_revoked", sessionId: id, revokedBy }, env).catch(() => {});
+  await appendEvent({
+    type: "security_session_revoked",
+    sessionId: id,
+    userId: revokedSession?.userId || null,
+    role: revokedSession?.role || null,
+    revokedBy,
+  }, env).catch(() => {});
   return { ok: true, revoked: [id] };
 }
 
@@ -509,7 +516,13 @@ export async function pairBrowser({ challengeId, userAgent = "", ip = "", env = 
       consumedAt: nowIso(),
     } : item),
   }, env);
-  await appendEvent({ type: "security_browser_paired", sessionId: session.id, challengeId: challenge.id }, env).catch(() => {});
+  await appendEvent({
+    type: "security_browser_paired",
+    sessionId: session.id,
+    challengeId: challenge.id,
+    userId: session.userId,
+    role: session.role,
+  }, env).catch(() => {});
   return {
     ok: true,
     token,

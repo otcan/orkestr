@@ -122,6 +122,31 @@ test("ops desktop links are only shown for running desktops", async () => {
   assert.match(component, /activeBrowserActionSlug/);
 });
 
+test("ops users page exposes targeted browser pairing and revocation", async () => {
+  const template = await fs.readFile("apps/web/src/app/ops-page.component.html", "utf8");
+  const component = await fs.readFile("apps/web/src/app/ops-page.component.ts", "utf8");
+  const securityPanel = await fs.readFile("apps/web/src/app/security-challenges-panel.component.html", "utf8");
+  const securityComponent = await fs.readFile("apps/web/src/app/security-challenges-panel.component.ts", "utf8");
+
+  assert.match(component, /SecurityChallenge, SecuritySession/);
+  assert.match(component, /opsSecurityChallenges: SecurityChallenge\[\] = \[\]/);
+  assert.match(component, /opsSecuritySessions: SecuritySession\[\] = \[\]/);
+  assert.match(component, /firstValueFrom\(this\.api\.securitySessions\(\)\)/);
+  assert.match(component, /createSecurityChallengeForUser\(user\.id\)/);
+  assert.match(component, /revokeUserSession\(session: SecuritySession\)/);
+  assert.match(component, /userBrowserSessions\(user: OrkestrUser\): SecuritySession\[\]/);
+  assert.match(component, /userBrowserChallenges\(user: OrkestrUser\): SecurityChallenge\[\]/);
+  assert.match(template, /Browser access/);
+  assert.match(template, /userBrowserChallenges\(user\)/);
+  assert.match(template, /orkestr security approve \{\{ challenge\.id \}\}/);
+  assert.match(template, /userBrowserSessions\(user\)/);
+  assert.match(template, /\(click\)="revokeUserSession\(session\)"/);
+  assert.match(securityPanel, /Target \{\{ challengeTarget\(challenge\) \}\}/);
+  assert.match(securityPanel, /Assigned to \{\{ sessionTarget\(session\) \}\}/);
+  assert.match(securityComponent, /challengeTarget\(challenge: SecurityChallenge\): string/);
+  assert.match(securityComponent, /sessionTarget\(session: SecuritySession\): string/);
+});
+
 test("thread settings exposes detailed repo metadata editing", async () => {
   const template = await fs.readFile("apps/web/src/app/app.component.html", "utf8");
   const component = await fs.readFile("apps/web/src/app/app.component.ts", "utf8");

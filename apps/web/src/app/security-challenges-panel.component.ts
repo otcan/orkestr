@@ -99,12 +99,20 @@ export class SecurityChallengesPanelComponent implements OnInit, OnChanges {
     return [challenge.requestedIp, challenge.requestedUserAgent].filter(Boolean).join(" - ") || "unknown browser";
   }
 
+  challengeTarget(challenge: SecurityChallenge): string {
+    return challenge.userId ? `${challenge.userId} · ${challenge.role || "user"}` : "admin browser";
+  }
+
   challengeTimestamp(challenge: SecurityChallenge): string {
     return challenge.consumedAt || challenge.approvedAt || challenge.rejectedAt || challenge.expiresAt || challenge.createdAt || "";
   }
 
   sessionLabel(session: SecuritySession): string {
     return session.userAgent || session.id || "paired browser";
+  }
+
+  sessionTarget(session: SecuritySession): string {
+    return session.userId ? `${session.userId} · ${session.role || "user"}` : "admin";
   }
 
   private async withAction(message: string, action: () => Promise<void>): Promise<void> {

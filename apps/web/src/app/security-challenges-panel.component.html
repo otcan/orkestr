@@ -35,6 +35,7 @@
             <article class="security-row">
               <div>
                 <strong>{{ challenge.id }}</strong>
+                <small>Target {{ challengeTarget(challenge) }}</small>
                 <small>{{ requester(challenge) }}</small>
                 <small>Expires {{ challenge.expiresAt | date:'short' }}</small>
               </div>
@@ -62,6 +63,7 @@
             <article class="security-row">
               <div>
                 <strong>{{ sessionLabel(session) }}</strong>
+                <small>Assigned to {{ sessionTarget(session) }}</small>
                 <small>Last access {{ session.lastAccessedAt | date:'short' }}</small>
                 <small>IP {{ session.lastIp || "unknown" }} · expires {{ session.expiresAt | date:'short' }}</small>
                 @if (session.challengeId) {
@@ -94,6 +96,7 @@
           <article class="security-row">
             <div>
               <strong>{{ challenge.id }}</strong>
+              <small>Target {{ challengeTarget(challenge) }}</small>
               <small>{{ challenge.status }} · {{ challengeTimestamp(challenge) | date:'short' }}</small>
               <small>{{ requester(challenge) }}</small>
             </div>

@@ -744,6 +744,44 @@ test("thread API rejects ambiguous same-name routes across owners", async () => 
   }
 });
 
+test("fresh local admin can create a user-targeted browser pairing challenge", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-use-control-local-pairing-"));
+  const priorHome = process.env.ORKESTR_HOME;
+  const priorAuth = process.env.ORKESTR_AUTH_REQUIRED;
+  const priorRecover = process.env.ORKESTR_RECOVER_RUNNING_ON_START;
+  process.env.ORKESTR_HOME = home;
+  delete process.env.ORKESTR_AUTH_REQUIRED;
+  process.env.ORKESTR_RECOVER_RUNNING_ON_START = "0";
+  await createUser({ email: "alice@example.test", phoneNumber: "+15551234567", role: "user", displayName: "Alice" }, process.env);
+  const server = await startServer({ port: 0, host: "127.0.0.1" });
+  const { port } = server.address();
+  const baseUrl = `http://127.0.0.1:${port}`;
+
+  async function read(response) {
+    const text = await response.text();
+    return text ? JSON.parse(text) : {};
+  }
+
+  try {
+    const challenge = await read(await fetch(`${baseUrl}/api/setup/security/challenges`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ userId: "alice-example.test" }),
+    }));
+    assert.equal(challenge.ok, true);
+    assert.equal(challenge.challenge.userId, "alice-example.test");
+    assert.equal(challenge.challenge.role, "user");
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+    if (priorHome === undefined) delete process.env.ORKESTR_HOME;
+    else process.env.ORKESTR_HOME = priorHome;
+    if (priorAuth === undefined) delete process.env.ORKESTR_AUTH_REQUIRED;
+    else process.env.ORKESTR_AUTH_REQUIRED = priorAuth;
+    if (priorRecover === undefined) delete process.env.ORKESTR_RECOVER_RUNNING_ON_START;
+    else process.env.ORKESTR_RECOVER_RUNNING_ON_START = priorRecover;
+  }
+});
+
 test("user management API is admin-only and can pair a browser to a managed user", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-use-control-api-users-"));
   const priorHome = process.env.ORKESTR_HOME;
@@ -808,6 +846,10 @@ test("user management API is admin-only and can pair a browser to a managed user
     });
     const userCookie = userPair.headers.get("set-cookie") || "";
     assert.equal(userPair.status, 200);
+    const adminSessions = await read(await fetch(`${baseUrl}/api/setup/security/sessions`, { headers: { cookie: adminCookie } }));
+    const userSession = adminSessions.sessions.find((session) => session.userId === "alice-example.test");
+    assert.ok(userSession, JSON.stringify(adminSessions));
+    assert.equal(userSession.role, "user");
     await createThread({ id: "alice-existing", name: "Alice Existing", ownerUserId: "alice-example.test" }, process.env);
     await createThread({ id: "bob-hidden", name: "Bob Hidden", ownerUserId: "bob-example.test" }, process.env);
 
@@ -819,6 +861,15 @@ test("user management API is admin-only and can pair a browser to a managed user
 
     const denied = await fetch(`${baseUrl}/api/users`, { headers: { cookie: userCookie } });
     assert.equal(denied.status, 403);
+
+    const deniedTargetChallengeResponse = await fetch(`${baseUrl}/api/setup/security/challenges`, {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie: userCookie },
+      body: JSON.stringify({ userId: "bob-example.test" }),
+    });
+    const deniedTargetChallenge = await read(deniedTargetChallengeResponse);
+    assert.equal(deniedTargetChallengeResponse.status, 403);
+    assert.equal(deniedTargetChallenge.error, "admin_pairing_required");
 
     const selfSkills = await read(await fetch(`${baseUrl}/api/users/me/skills`, { headers: { cookie: userCookie } }));
     assert.equal(selfSkills.userId, "alice-example.test");
@@ -931,6 +982,14 @@ test("user management API is admin-only and can pair a browser to a managed user
     assert.equal(forbiddenFolders.ok, false);
     assert.equal(forbiddenFolders.error, "workspace_path_forbidden");
     assert.deepEqual(files.entries.map((entry) => entry.name), ["readme.txt"]);
+
+    const revokedUserSession = await read(await fetch(`${baseUrl}/api/setup/security/sessions/${userSession.id}/revoke`, {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie: adminCookie },
+    }));
+    assert.deepEqual(revokedUserSession.revoked, [userSession.id]);
+    const afterRevoke = await fetch(`${baseUrl}/api/users/me`, { headers: { cookie: userCookie } });
+    assert.equal(afterRevoke.status, 401);
   } finally {
     await new Promise((resolve) => server.close(resolve));
     if (priorHome === undefined) delete process.env.ORKESTR_HOME;

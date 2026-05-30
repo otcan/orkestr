@@ -2,7 +2,7 @@ import { DatePipe } from "@angular/common";
 import { ChangeDetectorRef, Component, EventEmitter, Input, OnDestroy, OnInit, Output, inject } from "@angular/core";
 import { FormsModule } from "@angular/forms";
 import { firstValueFrom } from "rxjs";
-import { Agent, AgentTemplate, ApiService, BrowserSession, ConnectorStatus, EventRecord, OrkestrUser, SetupStatus, TimerDoctorResponse, TimerRecord, VersionResponse } from "./api.service";
+import { Agent, AgentTemplate, ApiService, BrowserSession, ConnectorStatus, EventRecord, OrkestrUser, SecurityChallenge, SecuritySession, SetupStatus, TimerDoctorResponse, TimerRecord, VersionResponse } from "./api.service";
 
 export type ToolsView = "system" | "timers" | "desktops" | "models" | "settings" | "connectors" | "users";
 
@@ -45,6 +45,8 @@ export class OpsPageComponent implements OnInit, OnDestroy {
   opsProcesses: Array<Record<string, unknown>> = [];
   opsModels: Record<string, unknown> | null = null;
   opsUsers: OrkestrUser[] = [];
+  opsSecurityChallenges: SecurityChallenge[] = [];
+  opsSecuritySessions: SecuritySession[] = [];
   selectedUserId = "";
   userDraftEmail = "";
   userDraftPhone = "";
@@ -52,6 +54,7 @@ export class OpsPageComponent implements OnInit, OnDestroy {
   userDraftRole = "user";
   savingUser = false;
   pairingUserId = "";
+  revokingSessionId = "";
   userEditDraft: Record<string, { displayName: string; email: string; phoneNumber: string; role: string; status: string; maxThreads: string }> = {};
 
   ngOnInit(): void {
@@ -82,7 +85,7 @@ export class OpsPageComponent implements OnInit, OnDestroy {
         this.renderNow();
       });
     try {
-      const [version, setup, whatsapp, agents, templates, timers, timerDoctor, events, browsers, runtimeLeases, executors, executions, system, processes, models, users] = await Promise.allSettled([
+      const [version, setup, whatsapp, agents, templates, timers, timerDoctor, events, browsers, runtimeLeases, executors, executions, system, processes, models, users, securityChallenges, securitySessions] = await Promise.allSettled([
         firstValueFrom(this.api.version()),
         firstValueFrom(this.api.setupStatus()),
         firstValueFrom(this.api.whatsappStatus()),
@@ -99,6 +102,8 @@ export class OpsPageComponent implements OnInit, OnDestroy {
         firstValueFrom(this.api.systemProcesses("cpu")),
         firstValueFrom(this.api.modelStatus()),
         firstValueFrom(this.api.users()),
+        firstValueFrom(this.api.securityChallenges()),
+        firstValueFrom(this.api.securitySessions()),
       ]);
       if (version.status === "fulfilled") this.opsVersion = version.value;
       if (setup.status === "fulfilled") {
@@ -126,6 +131,8 @@ export class OpsPageComponent implements OnInit, OnDestroy {
       if (processes.status === "fulfilled") this.opsProcesses = processes.value.processes || [];
       if (models.status === "fulfilled") this.opsModels = models.value;
       if (users.status === "fulfilled") this.applyUsers(users.value.users || []);
+      if (securityChallenges.status === "fulfilled") this.opsSecurityChallenges = securityChallenges.value.challenges || [];
+      if (securitySessions.status === "fulfilled") this.opsSecuritySessions = securitySessions.value.sessions || [];
       this.error = "";
     } catch (error) {
       this.error = this.errorText(error);
@@ -223,12 +230,30 @@ export class OpsPageComponent implements OnInit, OnDestroy {
     this.pairingUserId = user.id;
     try {
       const result = await firstValueFrom(this.api.createSecurityChallengeForUser(user.id));
+      await this.loadOps(false);
+      this.selectedUserId = user.id;
       this.error = "";
-      this.notice = `Pairing challenge for ${user.displayName || user.id}: ${result.challengeId}`;
+      this.notice = `Pairing challenge for ${user.displayName || user.id}: ${result.challengeId}. Approve with: orkestr security approve ${result.challengeId}`;
     } catch (error) {
       this.error = this.errorText(error);
     } finally {
       this.pairingUserId = "";
+      this.renderNow();
+    }
+  }
+
+  async revokeUserSession(session: SecuritySession): Promise<void> {
+    if (this.revokingSessionId) return;
+    this.revokingSessionId = session.id;
+    try {
+      await firstValueFrom(this.api.revokeSecuritySession(session.id));
+      await this.loadOps(false);
+      this.error = "";
+      this.notice = "Browser session revoked.";
+    } catch (error) {
+      this.error = this.errorText(error);
+    } finally {
+      this.revokingSessionId = "";
       this.renderNow();
     }
   }
@@ -469,6 +494,28 @@ export class OpsPageComponent implements OnInit, OnDestroy {
 
   userStatusClass(user: OrkestrUser): string {
     return user.status === "disabled" ? "bad" : "ready";
+  }
+
+  userBrowserSessions(user: OrkestrUser): SecuritySession[] {
+    return this.opsSecuritySessions.filter((session) => session.userId === user.id);
+  }
+
+  userBrowserChallenges(user: OrkestrUser): SecurityChallenge[] {
+    return this.opsSecurityChallenges.filter((challenge) =>
+      challenge.userId === user.id &&
+      ["pending", "approved"].includes(String(challenge.status || "")),
+    );
+  }
+
+  sessionSummary(session: SecuritySession): string {
+    const last = session.lastAccessedAt ? `last ${new Date(session.lastAccessedAt).toLocaleString()}` : "never used";
+    const ip = session.lastIp ? ` · ${session.lastIp}` : "";
+    return `${last}${ip}`;
+  }
+
+  challengeSummary(challenge: SecurityChallenge): string {
+    const expires = challenge.expiresAt ? `expires ${new Date(challenge.expiresAt).toLocaleString()}` : "no expiry";
+    return `${challenge.status || "pending"} · ${expires}`;
   }
 
   eventKey(event: EventRecord): string {

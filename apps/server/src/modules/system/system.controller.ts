@@ -229,7 +229,10 @@ async function systemSnapshot() {
 async function pairingChallengeTarget(body: Record<string, unknown> = {}, request: any) {
   const userId = String(body.userId || body.targetUserId || "").trim();
   if (!userId) return {};
-  if (!request?.orkestrSecuritySession || !isAdminPrincipal(requestPrincipal(request))) {
+  const principal = requestPrincipal(request);
+  const status = await securityStatus();
+  const trustedAdminContext = isAdminPrincipal(principal) && (request?.orkestrSecuritySession || !status.authEnabled);
+  if (!trustedAdminContext) {
     throw httpError("admin_pairing_required", 403);
   }
   const user = await getUser(userId);

@@ -395,6 +395,44 @@
               </article>
             </div>
           </section>
+
+          <section class="user-identities">
+            <h4>Browser access</h4>
+            <div class="compact-list">
+              @for (challenge of userBrowserChallenges(user); track challenge.id) {
+                <article class="compact-row">
+                  <strong>Pending pairing challenge</strong>
+                  <span>{{ challenge.id }}</span>
+                  <p>{{ challengeSummary(challenge) }} · approve with <code>orkestr security approve {{ challenge.id }}</code></p>
+                </article>
+              } @empty {
+                <article class="compact-row">
+                  <strong>No pending browser challenge</strong>
+                  <span>ready</span>
+                  <p>Create a user pairing challenge when this person needs to pair a browser.</p>
+                </article>
+              }
+
+              @for (session of userBrowserSessions(user); track session.id) {
+                <article class="compact-row">
+                  <strong>{{ session.userAgent || "Paired browser" }}</strong>
+                  <span>{{ session.role || user.role }} · {{ session.id }}</span>
+                  <p>{{ sessionSummary(session) }}</p>
+                  <div class="settings-actions">
+                    <button class="secondary danger-soft" type="button" (click)="revokeUserSession(session)" [disabled]="revokingSessionId === session.id">
+                      {{ revokingSessionId === session.id ? "Revoking" : "Revoke browser" }}
+                    </button>
+                  </div>
+                </article>
+              } @empty {
+                <article class="compact-row">
+                  <strong>No paired browser</strong>
+                  <span>{{ user.authProvider || "browser_pairing" }}</span>
+                  <p>This user does not currently have a browser session assigned.</p>
+                </article>
+              }
+            </div>
+          </section>
         </section>
       }
     </div>
