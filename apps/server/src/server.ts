@@ -151,7 +151,10 @@ function authorizeControlPlaneRequest(request: any, principal: any) {
   const [surface, second, third, fourth] = parts.slice(1).map((part) => part.toLowerCase());
 
   if (surface === "codex") return { ok: false, statusCode: 403, error: "control_plane_admin_required" };
-  if (surface === "users") return { ok: false, statusCode: 403, error: "control_plane_admin_required" };
+  if (surface === "users") {
+    if ((second === "me" && third === "skills") || third === "skills") return { ok: true };
+    return { ok: false, statusCode: 403, error: "control_plane_admin_required" };
+  }
   if (surface === "tenant-vms") return { ok: false, statusCode: 403, error: "control_plane_admin_required" };
   if (surface === "agents" || surface === "executors" || surface === "executions") {
     return { ok: false, statusCode: 403, error: "control_plane_admin_required" };

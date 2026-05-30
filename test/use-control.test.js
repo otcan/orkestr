@@ -20,6 +20,7 @@ import { adminPrincipal, userPrincipal } from "../packages/core/src/principal.js
 import { sanitizeAction } from "../packages/core/src/llm-sanitizer.js";
 import { approvePairingChallenge } from "../packages/core/src/security.js";
 import { createUser, disableUser, findOrCreateExternalUser, listUsers, readUserPrivateIdentities, updateUser, upsertUser } from "../packages/core/src/users.js";
+import { listUserSkillsForPrincipal, setUserSkillForPrincipal } from "../packages/core/src/user-skills.js";
 import {
   createThread,
   createThreadForPrincipal,
@@ -428,6 +429,32 @@ test("managed users use unique email and non-unique phone contact fields", async
   );
 });
 
+test("user skill registry is scoped per owner and stores public skill toggles", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-use-control-skills-"));
+  const env = { ORKESTR_HOME: home };
+  const alice = userPrincipal(await upsertUser({ id: "alice", role: "user", displayName: "Alice" }, env));
+  const bob = userPrincipal(await upsertUser({ id: "bob", role: "user", displayName: "Bob" }, env));
+
+  const initial = await listUserSkillsForPrincipal("alice", alice, env);
+  assert.ok(initial.skills.some((skill) => skill.id === "gmail" && skill.enabled));
+  assert.ok(initial.skills.some((skill) => skill.id === "learning" && skill.scopes.includes("own_workspace")));
+  assert.equal(initial.skills.some((skill) => Object.hasOwn(skill, "token")), false);
+
+  const disabled = await setUserSkillForPrincipal("alice", "gmail", { enabled: false }, alice, env);
+  const after = await listUserSkillsForPrincipal("alice", adminPrincipal(), env);
+  const file = await fs.readFile(userDataPaths("alice", env).skills, "utf8");
+
+  assert.equal(disabled.skill.id, "gmail");
+  assert.equal(disabled.skill.enabled, false);
+  assert.equal(after.skills.find((skill) => skill.id === "gmail").enabled, false);
+  assert.match(file, /"gmail"/);
+  assert.equal(file.includes("secret"), false);
+  assert.equal(file.includes("token"), false);
+  await assert.rejects(() => listUserSkillsForPrincipal("bob", alice, env), /user_skills_access_forbidden/);
+  await assert.rejects(() => setUserSkillForPrincipal("bob", "timers", { enabled: false }, alice, env), /user_skills_update_forbidden/);
+  assert.ok((await listUserSkillsForPrincipal("bob", bob, env)).skills.some((skill) => skill.id === "timers"));
+});
+
 test("LLM sanitizer is fail-closed when no provider is configured", async () => {
   const decision = await sanitizeAction({
     action: "thread.input",
@@ -699,6 +726,17 @@ test("user management API is admin-only and can pair a browser to a managed user
     assert.equal(created.user.id, "alice-example.test");
     assert.equal(created.user.role, "user");
     assert.equal(created.user.email, "alice@example.test");
+    await createUser({ email: "bob@example.test", phoneNumber: "+15557654321", role: "user", displayName: "Bob" }, process.env);
+
+    const adminSkills = await read(await fetch(`${baseUrl}/api/users/alice-example.test/skills`, { headers: { cookie: adminCookie } }));
+    assert.ok(adminSkills.skills.some((skill) => skill.id === "learning"));
+    const disabledSkill = await read(await fetch(`${baseUrl}/api/users/alice-example.test/skills/linkedin`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json", cookie: adminCookie },
+      body: JSON.stringify({ enabled: false }),
+    }));
+    assert.equal(disabledSkill.skill.id, "linkedin");
+    assert.equal(disabledSkill.skill.enabled, false);
 
     const userChallenge = await read(await fetch(`${baseUrl}/api/setup/security/challenges`, {
       method: "POST",
@@ -721,6 +759,20 @@ test("user management API is admin-only and can pair a browser to a managed user
 
     const denied = await fetch(`${baseUrl}/api/users`, { headers: { cookie: userCookie } });
     assert.equal(denied.status, 403);
+
+    const selfSkills = await read(await fetch(`${baseUrl}/api/users/me/skills`, { headers: { cookie: userCookie } }));
+    assert.equal(selfSkills.userId, "alice-example.test");
+    assert.equal(selfSkills.skills.find((skill) => skill.id === "linkedin").enabled, false);
+    const selfSkillUpdate = await read(await fetch(`${baseUrl}/api/users/me/skills/learning`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json", cookie: userCookie },
+      body: JSON.stringify({ enabled: false }),
+    }));
+    assert.equal(selfSkillUpdate.skill.enabled, false);
+    const crossSkillsResponse = await fetch(`${baseUrl}/api/users/bob-example.test/skills`, { headers: { cookie: userCookie } });
+    const crossSkills = await read(crossSkillsResponse);
+    assert.equal(crossSkillsResponse.status, 403);
+    assert.equal(crossSkills.error, "user_skills_access_forbidden");
 
     for (const route of [
       "/api/codex/threads",

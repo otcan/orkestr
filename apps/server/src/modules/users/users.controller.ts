@@ -13,6 +13,10 @@ import {
   updateUser,
   updateUserLimits,
 } from "../../../../../packages/core/src/users.js";
+import {
+  listUserSkillsForPrincipal,
+  setUserSkillForPrincipal,
+} from "../../../../../packages/core/src/user-skills.js";
 import { httpError } from "../../common/http.js";
 
 function assertAdminRequest(request: any): void {
@@ -57,6 +61,21 @@ function userSummary(user: any, threads: any[], timers: any[]) {
   };
 }
 
+function skillBody(body: Record<string, unknown> = {}) {
+  const output: Record<string, unknown> = {};
+  if (body.enabled !== undefined) output.enabled = body.enabled;
+  return output;
+}
+
+function requestedUserId(value: string, request: any) {
+  if (String(value || "").trim().toLowerCase() === "me") {
+    const principal = requestPrincipal(request);
+    if (!principal?.userId) throw httpError("user_required", 403);
+    return principal.userId;
+  }
+  return String(value || "").trim();
+}
+
 @Controller("api/users")
 export class UsersController {
   @Get()
@@ -76,6 +95,30 @@ export class UsersController {
     const user = await createUser(userBody(body));
     const [threads, timers] = await Promise.all([listThreads(), listTimers()]);
     return { ok: true, user: userSummary(user, threads, timers) };
+  }
+
+  @Get("me/skills")
+  async mySkills(@Req() request: any) {
+    const principal = requestPrincipal(request);
+    return listUserSkillsForPrincipal(principal.userId, principal);
+  }
+
+  @Patch("me/skills/:skillId")
+  async updateMySkill(@Req() request: any, @Param("skillId") skillId: string, @Body() body: Record<string, unknown> = {}) {
+    const principal = requestPrincipal(request);
+    return setUserSkillForPrincipal(principal.userId, skillId, skillBody(body), principal);
+  }
+
+  @Get(":userId/skills")
+  async skills(@Req() request: any, @Param("userId") userId: string) {
+    const principal = requestPrincipal(request);
+    return listUserSkillsForPrincipal(requestedUserId(userId, request), principal);
+  }
+
+  @Patch(":userId/skills/:skillId")
+  async updateSkill(@Req() request: any, @Param("userId") userId: string, @Param("skillId") skillId: string, @Body() body: Record<string, unknown> = {}) {
+    const principal = requestPrincipal(request);
+    return setUserSkillForPrincipal(requestedUserId(userId, request), skillId, skillBody(body), principal);
   }
 
   @Get(":userId")
