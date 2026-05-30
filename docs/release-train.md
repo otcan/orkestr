@@ -135,6 +135,9 @@ The release train owns tests. Run the checks appropriate to the changed surface:
   [tenant isolation release checklist](tenant-isolation-release-checklist.md)
 - broad release train: `npm run build` and `node --test` or the repo's CI runner
 - smoke-sensitive deploy changes: `npm run smoke`
+- attended deploy/regression changes: `npm run release:regression -- --target
+  local=http://127.0.0.1:$ORKESTR_PORT`, adding `--execute --thread <test-id>`
+  only when a real test chat is intentionally allowed
 
 If tests fail, fix clear failures inside the release train. Escalate only when
 the failure implies a product decision or contradicts a worker's intent.
