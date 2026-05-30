@@ -2,7 +2,7 @@ import { DatePipe } from "@angular/common";
 import { ChangeDetectorRef, Component, EventEmitter, Input, OnDestroy, OnInit, Output, inject } from "@angular/core";
 import { FormsModule } from "@angular/forms";
 import { firstValueFrom } from "rxjs";
-import { Agent, AgentTemplate, ApiService, BrowserSession, ConnectorStatus, DesktopLeaseRecord, EventRecord, OrkestrUser, OutlookOAuthPollResponse, SecurityChallenge, SecuritySession, SetupStatus, TimerDoctorResponse, TimerRecord, UserIdentity, UserOutlookOAuthStartResponse, VersionResponse } from "./api.service";
+import { Agent, AgentTemplate, ApiService, BrowserSession, ConnectorStatus, DesktopLeaseRecord, EventRecord, OrkestrUser, OutlookOAuthPollResponse, SecurityChallenge, SecuritySession, SetupStatus, TimerDoctorResponse, TimerRecord, UserIdentity, UserOutlookOAuthStartResponse, UserSkill, VersionResponse } from "./api.service";
 
 export type ToolsView = "system" | "timers" | "desktops" | "models" | "settings" | "connectors" | "users";
 type MailIdentityProvider = "gmail" | "outlook";
@@ -52,6 +52,9 @@ export class OpsPageComponent implements OnInit, OnDestroy {
   opsSecuritySessions: SecuritySession[] = [];
   opsUserIdentities: UserIdentity[] = [];
   opsUserIdentitiesUserId = "";
+  opsUserSkills: UserSkill[] = [];
+  opsUserSkillsUserId = "";
+  skillBusyId = "";
   selectedUserId = "";
   userDraftEmail = "";
   userDraftPhone = "";
@@ -153,6 +156,7 @@ export class OpsPageComponent implements OnInit, OnDestroy {
       if (users.status === "fulfilled") {
         this.applyUsers(users.value.users || []);
         await this.loadSelectedUserIdentities(false);
+        await this.loadSelectedUserSkills(false);
       }
       if (securityChallenges.status === "fulfilled") this.opsSecurityChallenges = securityChallenges.value.challenges || [];
       if (securitySessions.status === "fulfilled") this.opsSecuritySessions = securitySessions.value.sessions || [];
@@ -168,6 +172,7 @@ export class OpsPageComponent implements OnInit, OnDestroy {
     this.selectedUserId = user.id;
     this.ensureUserDraft(user);
     void this.loadSelectedUserIdentities(false);
+    void this.loadSelectedUserSkills(false);
   }
 
   selectedUser(): OrkestrUser | null {
@@ -196,6 +201,7 @@ export class OpsPageComponent implements OnInit, OnDestroy {
       await this.loadOps(false);
       if (result.user?.id) this.selectedUserId = result.user.id;
       await this.loadSelectedUserIdentities(false);
+      await this.loadSelectedUserSkills(false);
       this.error = "";
       this.notice = "User created.";
     } catch (error) {
@@ -283,6 +289,23 @@ export class OpsPageComponent implements OnInit, OnDestroy {
     }
   }
 
+  async toggleUserSkill(user: OrkestrUser, skill: UserSkill): Promise<void> {
+    if (!user.id || !skill.id || this.skillBusyId) return;
+    this.skillBusyId = `${user.id}:${skill.id}`;
+    try {
+      const result = await firstValueFrom(this.api.updateUserSkill(user.id, skill.id, !skill.enabled));
+      this.opsUserSkills = this.opsUserSkills.map((item) => item.id === skill.id ? result.skill : item);
+      this.opsUserSkillsUserId = result.userId || user.id;
+      this.error = "";
+      this.notice = `${skill.label || skill.id} ${result.skill.enabled ? "enabled" : "disabled"}.`;
+    } catch (error) {
+      this.error = this.errorText(error);
+    } finally {
+      this.skillBusyId = "";
+      this.renderNow();
+    }
+  }
+
   async loadSelectedUserIdentities(showBusy = true): Promise<void> {
     const user = this.selectedUser();
     if (!user?.id) {
@@ -300,6 +323,27 @@ export class OpsPageComponent implements OnInit, OnDestroy {
       this.error = this.errorText(error);
     } finally {
       if (showBusy) this.identityBusy = false;
+      this.renderNow();
+    }
+  }
+
+  async loadSelectedUserSkills(showBusy = true): Promise<void> {
+    const user = this.selectedUser();
+    if (!user) {
+      this.opsUserSkills = [];
+      this.opsUserSkillsUserId = "";
+      return;
+    }
+    if (showBusy) this.busy = true;
+    try {
+      const payload = await firstValueFrom(this.api.userSkills(user.id));
+      this.opsUserSkills = payload.skills || [];
+      this.opsUserSkillsUserId = payload.userId || user.id;
+      this.error = "";
+    } catch (error) {
+      this.error = this.errorText(error);
+    } finally {
+      if (showBusy) this.busy = false;
       this.renderNow();
     }
   }
@@ -725,6 +769,27 @@ export class OpsPageComponent implements OnInit, OnDestroy {
 
   userTimerCount(user: OrkestrUser): number {
     return Number(user.resourceSummary?.timerCount || 0);
+  }
+
+  selectedUserSkills(user: OrkestrUser): UserSkill[] {
+    if (this.opsUserSkillsUserId !== user.id) return [];
+    return this.opsUserSkills;
+  }
+
+  userSkillRequirementLabel(skill: UserSkill): string {
+    const parts = [
+      skill.requiresConnector ? `${skill.requiresConnector} connector` : "",
+      skill.requiresDesktop ? `${skill.requiresDesktop} desktop` : "",
+    ].filter(Boolean);
+    return parts.join(" · ") || "No connector required";
+  }
+
+  userSkillScopeLabel(skill: UserSkill): string {
+    return (skill.scopes || []).join(" · ") || "own account";
+  }
+
+  userSkillBusy(user: OrkestrUser, skill: UserSkill): boolean {
+    return this.skillBusyId === `${user.id}:${skill.id}`;
   }
 
   userStatusClass(user: OrkestrUser): string {

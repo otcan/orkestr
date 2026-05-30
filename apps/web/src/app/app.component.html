@@ -54,6 +54,9 @@
         <button class="secondary user-files-button" type="button" [class.active]="activePanel === 'userTimers'" (click)="openPanel('userTimers')">
           Timers
         </button>
+        <button class="secondary user-files-button" type="button" [class.active]="activePanel === 'userSkills'" (click)="openPanel('userSkills')">
+          Skills
+        </button>
         <button class="secondary user-files-button" type="button" [class.active]="activePanel === 'files'" (click)="openPanel('files')">
           Files
         </button>
@@ -259,6 +262,8 @@
       <ork-user-timers-page></ork-user-timers-page>
     } @else if (activePanel === "userDesk") {
       <ork-user-desk-page></ork-user-desk-page>
+    } @else if (activePanel === "userSkills") {
+      <ork-user-skills-page></ork-user-skills-page>
     } @else if ((threadWizardOpen || !threads.length) && canCreateThreadFromSidebar()) {
       <ork-first-thread-wizard
         class="first-thread-host"

@@ -1,0 +1,43 @@
+<section class="panel-body user-skills-page">
+  <div class="panel-title">
+    <div>
+      <p class="eyebrow">Skills</p>
+      <h3>{{ enabledSkills().length }} enabled</h3>
+    </div>
+    <button class="secondary" type="button" (click)="load()" [disabled]="busy">Reload</button>
+  </div>
+
+  @if (error) {
+    <div class="notice error">{{ error }}</div>
+  } @else if (notice) {
+    <div class="notice">{{ notice }}</div>
+  }
+
+  <div class="skills-grid">
+    @for (skill of enabledSkills(); track skill.id) {
+      <article class="skill-card">
+        <div class="desktop-head">
+          <div>
+            <h4>{{ skill.label || skill.id }}</h4>
+            <small>{{ skill.category }}</small>
+          </div>
+          <div class="desktop-pills">
+            <span class="live">Enabled</span>
+          </div>
+        </div>
+        <p>{{ skill.summary }}</p>
+        <div class="skill-meta">
+          <span>{{ requirementLabel(skill) }}</span>
+          <span>{{ scopeLabel(skill) }}</span>
+        </div>
+        <div class="settings-actions">
+          <button class="secondary danger-soft" type="button" (click)="disableSkill(skill)" [disabled]="skillBusy(skill)">
+            Disable
+          </button>
+        </div>
+      </article>
+    } @empty {
+      <p class="empty">{{ busy ? "Loading skills..." : "No skills enabled." }}</p>
+    }
+  </div>
+</section>

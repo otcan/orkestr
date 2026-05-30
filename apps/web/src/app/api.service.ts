@@ -941,6 +941,25 @@ export interface UserIdentitiesResponse {
   identities: UserIdentity[];
 }
 
+export interface UserSkill {
+  id: string;
+  label: string;
+  category: string;
+  summary?: string;
+  enabled: boolean;
+  enabledByDefault?: boolean;
+  scopes?: string[];
+  requiresConnector?: string;
+  requiresDesktop?: string;
+  updatedAt?: string;
+}
+
+export interface UserSkillsResponse {
+  userId: string;
+  skills: UserSkill[];
+  generatedAt?: string;
+}
+
 @Injectable({ providedIn: "root" })
 export class ApiService {
   private readonly http = inject(HttpClient);
@@ -1034,6 +1053,28 @@ export class ApiService {
     return this.http.post<UserIdentitiesResponse>(
       this.api(`/users/${encodeURIComponent(id)}/identities/${encodeURIComponent(provider)}/unlink`),
       body,
+    );
+  }
+
+  currentUserSkills(): Observable<UserSkillsResponse> {
+    return this.http.get<UserSkillsResponse>(this.api("/users/me/skills"));
+  }
+
+  userSkills(id: string): Observable<UserSkillsResponse> {
+    return this.http.get<UserSkillsResponse>(this.api(`/users/${encodeURIComponent(id)}/skills`));
+  }
+
+  updateCurrentUserSkill(skillId: string, enabled: boolean): Observable<{ ok: boolean; userId: string; skill: UserSkill }> {
+    return this.http.patch<{ ok: boolean; userId: string; skill: UserSkill }>(
+      this.api(`/users/me/skills/${encodeURIComponent(skillId)}`),
+      { enabled },
+    );
+  }
+
+  updateUserSkill(id: string, skillId: string, enabled: boolean): Observable<{ ok: boolean; userId: string; skill: UserSkill }> {
+    return this.http.patch<{ ok: boolean; userId: string; skill: UserSkill }>(
+      this.api(`/users/${encodeURIComponent(id)}/skills/${encodeURIComponent(skillId)}`),
+      { enabled },
     );
   }
 

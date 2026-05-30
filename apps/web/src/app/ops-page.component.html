@@ -510,6 +510,26 @@
           </section>
 
           <section class="user-identities">
+            <h4>Skills</h4>
+            <div class="compact-list">
+              @for (skill of selectedUserSkills(user); track skill.id) {
+                <article class="compact-row">
+                  <strong>{{ skill.label || skill.id }}</strong>
+                  <span>{{ skill.enabled ? "enabled" : "disabled" }} · {{ skill.category }}</span>
+                  <p>{{ userSkillRequirementLabel(skill) }} · {{ userSkillScopeLabel(skill) }}</p>
+                  <div class="settings-actions">
+                    <button class="secondary" type="button" (click)="toggleUserSkill(user, skill)" [disabled]="userSkillBusy(user, skill)">
+                      {{ skill.enabled ? "Disable" : "Enable" }}
+                    </button>
+                  </div>
+                </article>
+              } @empty {
+                <p class="empty">No skill settings loaded for this user.</p>
+              }
+            </div>
+          </section>
+
+          <section class="user-identities">
             <h4>Authentication policy</h4>
             <div class="compact-list">
               <article class="compact-row">

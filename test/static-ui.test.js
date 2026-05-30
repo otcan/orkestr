@@ -32,6 +32,7 @@ test("server serves the built Angular UI at root", async () => {
     const filesResponse = await fetch(`http://127.0.0.1:${port}/files`);
     const timersResponse = await fetch(`http://127.0.0.1:${port}/timers`);
     const deskResponse = await fetch(`http://127.0.0.1:${port}/desk`);
+    const skillsResponse = await fetch(`http://127.0.0.1:${port}/skills`);
     const threadResponse = await fetch(`http://127.0.0.1:${port}/thread/demo`);
     const faviconSvgResponse = await fetch(`http://127.0.0.1:${port}/favicon.svg`);
     const faviconSvg = await faviconSvgResponse.text();
@@ -53,6 +54,7 @@ test("server serves the built Angular UI at root", async () => {
     assert.equal(filesResponse.status, 200);
     assert.equal(timersResponse.status, 200);
     assert.equal(deskResponse.status, 200);
+    assert.equal(skillsResponse.status, 200);
     assert.equal(threadResponse.status, 200);
     assert.equal(faviconSvgResponse.status, 200);
     assert.match(faviconSvgResponse.headers.get("content-type") || "", /image\/svg\+xml/);
@@ -236,7 +238,7 @@ test("web shell switches to a constrained non-admin user mode", async () => {
   assert.match(component, /uiRuntimeReady\(\): boolean/);
   assert.match(component, /return this\.isUserMode\(\) \|\| this\.codexAgentReady\(\)/);
   assert.match(component, /panelAllowedForCurrentUser\(panel: Panel\): boolean/);
-  assert.match(component, /\["chat", "history", "timers", "files", "userTimers", "userDesk"\]\.includes\(panel\)/);
+  assert.match(component, /\["chat", "history", "timers", "files", "userTimers", "userDesk", "userSkills"\]\.includes\(panel\)/);
   assert.match(component, /normalizeUserModeView\(\)/);
   assert.match(component, /This user account is limited to one chat\./);
   assert.match(template, /\[class\.user-mode\]="isUserMode\(\)"/);
@@ -318,6 +320,43 @@ test("web shell exposes a user desktop desk page", async () => {
   assert.match(opsTemplate, /Desktop leases/);
   assert.match(styles, /\.user-desk-grid/);
   assert.match(styles, /\.desktop-lease-list/);
+});
+
+test("web shell exposes a user skills management page", async () => {
+  const template = await fs.readFile("apps/web/src/app/app.component.html", "utf8");
+  const component = await fs.readFile("apps/web/src/app/app.component.ts", "utf8");
+  const skillsComponent = await fs.readFile("apps/web/src/app/user-skills-page.component.ts", "utf8");
+  const skillsTemplate = await fs.readFile("apps/web/src/app/user-skills-page.component.html", "utf8");
+  const opsComponent = await fs.readFile("apps/web/src/app/ops-page.component.ts", "utf8");
+  const opsTemplate = await fs.readFile("apps/web/src/app/ops-page.component.html", "utf8");
+  const api = await fs.readFile("apps/web/src/app/api.service.ts", "utf8");
+  const styles = await fs.readFile("apps/web/src/styles.css", "utf8");
+
+  assert.match(component, /import \{ UserSkillsPageComponent \} from "\.\/user-skills-page\.component"/);
+  assert.match(component, /type Panel = .*"userSkills"/);
+  assert.match(component, /parts\[0\] === "skills"/);
+  assert.match(component, /parts\[0\] === "ng" && parts\[1\] === "skills"/);
+  assert.match(component, /panel === "userSkills"\) return "\/skills"/);
+  assert.match(component, /globalThis\.document\.title = "Skills · Orkestr"/);
+  assert.match(template, /<ork-user-skills-page><\/ork-user-skills-page>/);
+  assert.match(template, /\(click\)="openPanel\('userSkills'\)"/);
+  assert.match(skillsComponent, /selector: "ork-user-skills-page"/);
+  assert.match(skillsComponent, /this\.api\.currentUserSkills\(\)/);
+  assert.match(skillsComponent, /enabledSkills\(\): UserSkill\[\]/);
+  assert.match(skillsComponent, /this\.skills\.filter\(\(skill\) => skill\.enabled === true\)/);
+  assert.match(skillsComponent, /this\.api\.updateCurrentUserSkill\(skill\.id, false\)/);
+  assert.match(skillsTemplate, /@for \(skill of enabledSkills\(\); track skill\.id\)/);
+  assert.match(api, /interface UserSkill/);
+  assert.match(api, /currentUserSkills\(\)/);
+  assert.match(api, /userSkills\(id: string\)/);
+  assert.match(api, /updateUserSkill\(id: string, skillId: string, enabled: boolean\)/);
+  assert.match(opsComponent, /opsUserSkills: UserSkill\[\] = \[\]/);
+  assert.match(opsComponent, /loadSelectedUserSkills\(false\)/);
+  assert.match(opsComponent, /toggleUserSkill\(user: OrkestrUser, skill: UserSkill\)/);
+  assert.match(opsTemplate, /<h4>Skills<\/h4>/);
+  assert.match(opsTemplate, /toggleUserSkill\(user, skill\)/);
+  assert.match(styles, /\.skills-grid/);
+  assert.match(styles, /\.skill-card/);
 });
 
 test("web shell exposes a user-scoped files page", async () => {
