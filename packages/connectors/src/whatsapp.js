@@ -6,6 +6,7 @@ import { enqueueAgentMessage, updateAgentMessage } from "../../core/src/messages
 import { resourceOwnerUserId } from "../../core/src/policy.js";
 import { adminPrincipal, userPrincipal } from "../../core/src/principal.js";
 import { runtimeStatus } from "../../core/src/runtime-leases.js";
+import { processApiAgentThreadInput, threadUsesApiAgent } from "../../core/src/tenant-api-agent.js";
 import { threadRequiresTenantIsolation } from "../../core/src/tenant-policy.js";
 import { parseThreadInputCommand } from "../../core/src/thread-commands.js";
 import { createThreadForPrincipal, enqueueThreadInputForPrincipal, listThreadMessages, listThreads, listThreadsForPrincipal, updateThread, updateThreadMessage } from "../../core/src/threads.js";
@@ -435,20 +436,50 @@ function shouldUseApiAgentForWhatsAppThread(thread = {}, env = process.env) {
 
 async function ensureApiAgentWhatsAppThread(thread = null, env = process.env) {
   if (!thread || !shouldUseApiAgentForWhatsAppThread(thread, env)) return thread;
-  const runtimeKind = String(thread.runtimeKind || thread.runtime?.runtimeKind || thread.executor?.metadata?.runtimeKind || "").trim().toLowerCase();
-  if (runtimeKind === "api-agent") return thread;
+  if (threadUsesApiAgent(thread, env)) return thread;
   return updateThread(thread.id, {
     runtimeKind: "api-agent",
+    runtime: null,
+    codexThreadId: null,
+    codexSessionId: null,
+    codexMode: null,
+    desiredCodexMode: null,
+    codexTokenUsage: null,
+    codexRateLimits: null,
     executorId: "api-agent",
     executor: {
-      ...(thread.executor || {}),
+      id: "api-agent",
       type: "api-agent",
+      transport: "api-agent",
+      codexThreadId: null,
+      codexSessionId: null,
       metadata: {
         ...(thread.executor?.metadata || {}),
+        transport: "api-agent",
         runtimeKind: "api-agent",
+        codexThreadId: null,
+        codexSessionId: null,
+        codexTokenUsage: null,
+        codexRateLimits: null,
       },
     },
   }, env).catch(() => thread);
+}
+
+function whatsappApiAgentAutoRun(env = process.env) {
+  return String(env.ORKESTR_WHATSAPP_API_AGENT_AUTORUN || "1").trim().toLowerCase() !== "0";
+}
+
+function kickWhatsAppApiAgentThread(thread, env = process.env) {
+  if (!thread?.id || !threadUsesApiAgent(thread, env) || !whatsappApiAgentAutoRun(env)) return;
+  void processApiAgentThreadInput(thread.id, env)
+    .then(() => deliverWhatsAppReplies(env).catch(() => null))
+    .catch((error) => appendEvent({
+      type: "whatsapp_api_agent_autorun_failed",
+      threadId: thread.id,
+      ownerUserId: resourceOwnerUserId(thread, env),
+      error: error?.message || String(error),
+    }, env).catch(() => null));
 }
 
 function whatsappAutoThreadBinding({ chatId = "", accountId = "", from = "", displayName = "" } = {}) {
@@ -896,6 +927,7 @@ export async function routeWhatsAppInbound(input = {}, env = process.env) {
     chatId,
     duplicateReason: contentDuplicate ? event.duplicateReason : "",
   }, env);
+  if (thread && !contentDuplicate) kickWhatsAppApiAgentThread(thread, env);
   return {
     duplicate: contentDuplicate,
     event,
@@ -1318,6 +1350,7 @@ export function initialQueueDeliveryState(status = null, message = null) {
   if (!status) return "";
   const state = String(status.state || "").trim().toLowerCase();
   const runtimeKind = String(status.runtimeKind || status.runtimeState || "").trim().toLowerCase();
+  if (runtimeKind === "api-agent") return "";
   const isCodexAppServer = runtimeKind === "codex-app-server";
   if (isCodexAppServer && state === "working") return "awaiting_active_turn";
   if (isCodexAppServer && state === "awaiting_approval") return "awaiting_approval";
