@@ -39,6 +39,12 @@ import { parseThreadInputCommand } from "../../../../../packages/core/src/thread
 import { codexResumeCommand } from "../../../../../packages/core/src/codex-attach-command.js";
 import { launchNativeTerminal } from "../../../../../packages/core/src/native-terminal.js";
 import { defaultWhatsAppReplyPrefix } from "../../../../../packages/core/src/whatsapp-defaults.js";
+import {
+  API_AGENT_RUNTIME_KIND,
+  defaultTenantThreadRuntime,
+  processApiAgentThreadInput,
+  threadUsesApiAgent,
+} from "../../../../../packages/core/src/tenant-api-agent.js";
 import { visibleThreadMessages } from "../../../../../packages/core/src/thread-message-visibility.js";
 import { resolveWorkspacePathForPrincipal, workspacePrincipalForOwner, workspaceRootForPrincipal } from "../../../../../packages/core/src/workspace-files.js";
 import {
@@ -605,13 +611,23 @@ export class ThreadsController {
     const prepared = await prepareThreadCreateBody(body, principal);
     const preparedExecutor = typeof prepared.executor === "object" && prepared.executor ? prepared.executor as Record<string, unknown> : {};
     const requestedExecutorId = String(prepared.executorId || preparedExecutor.id || preparedExecutor.type || "codex").trim() || "codex";
-    const usesCodexRuntime = requestedExecutorId === "codex" || String(preparedExecutor.type || "").trim() === "codex";
+    const defaultRuntime = defaultTenantThreadRuntime(prepared, principal, process.env);
+    const usesApiAgentRuntime = String(prepared.runtimeKind || defaultRuntime || "").trim() === API_AGENT_RUNTIME_KIND;
+    const usesCodexRuntime = !usesApiAgentRuntime && (requestedExecutorId === "codex" || String(preparedExecutor.type || "").trim() === "codex");
     let thread = await createThreadForPrincipal({
       wakePolicy: "wake-on-message",
       ...(usesCodexRuntime ? {
         executorId: "codex",
         executor: { type: "codex", ...preparedExecutor },
         runtimeKind: "codex-app-server",
+      } : usesApiAgentRuntime ? {
+        executorId: API_AGENT_RUNTIME_KIND,
+        executor: {
+          type: API_AGENT_RUNTIME_KIND,
+          ...preparedExecutor,
+          metadata: { ...(preparedExecutor as any).metadata, runtimeKind: API_AGENT_RUNTIME_KIND },
+        },
+        runtimeKind: API_AGENT_RUNTIME_KIND,
       } : {}),
       ...prepared,
     }, principal);
@@ -874,6 +890,25 @@ export class ThreadsController {
     }
     const before = await runtimeStatus(thread.id).catch(() => null);
     const message = await enqueueThreadInputForPrincipal(thread.id, body, principal);
+    if (threadUsesApiAgent(thread)) {
+      if (body.autoRun === false) {
+        return { ok: true, threadId: thread.id, orkestrThreadId: thread.id, message, queued: true, reason: "auto_run_disabled", observed: true };
+      }
+      const processed: any = await processApiAgentThreadInput(thread.id);
+      await deliverWhatsAppReplies().catch(() => {});
+      const current = (await listThreadMessages(thread.id)).find((item: any) => item.id === message.id) || message;
+      return {
+        ok: processed?.ok !== false,
+        threadId: thread.id,
+        orkestrThreadId: thread.id,
+        message: current,
+        assistant: processed?.assistant || null,
+        queued: false,
+        deliveryState: current.deliveryState || current.state,
+        observed: true,
+        observedVia: current.observedVia || "api_agent_response",
+      };
+    }
     if (body.autoRun === false) {
       return { ok: true, threadId: codexThreadId(thread) || thread.id, orkestrThreadId: thread.id, message, queued: true, reason: "auto_run_disabled", observed: true };
     }

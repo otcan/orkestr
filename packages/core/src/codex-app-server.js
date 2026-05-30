@@ -28,6 +28,7 @@ import {
   threadEventId,
   threadForCodexThreadId,
   threadStartParams,
+  threadUsesRestrictedCodexPolicy,
   turnStartParams,
   userInputText,
 } from "./codex-app-server-common.js";
@@ -37,6 +38,7 @@ import { codexAppServerSocket, codexAppServerTransport } from "../../connectors/
 import { codexAppServerMessageFields } from "./codex-app-server-whatsapp.js";
 import { ensureRuntimeAgentsFile } from "./agent-context.js";
 import { containedUserDeveloperInstructions } from "./tenant-policy.js";
+import { relocateLegacyUserWorkspace } from "./workspace-files.js";
 import { parseThreadInputCommand } from "./thread-commands.js";
 import { completeThreadSecurityApproveCommand } from "./security-thread-command.js";
 
@@ -166,6 +168,19 @@ export function stopCodexAppServerClients() {
 
 export async function startCodexAppServerThread(thread, env = process.env) {
   if (!codexAppServerEnabled(env)) return null;
+  if (threadUsesRestrictedCodexPolicy(thread, env)) {
+    const relocation = await relocateLegacyUserWorkspace(thread, env).catch(() => null);
+    if (relocation?.relocated && relocation.patch) {
+      thread = await updateThread(thread.id, relocation.patch, env);
+      await appendEvent({
+        type: "contained_thread_workspace_relocated",
+        threadId: thread.id,
+        ownerUserId: thread.ownerUserId || null,
+        previousWorkspace: relocation.previousWorkspace,
+        workspace: relocation.workspace,
+      }, env).catch(() => {});
+    }
+  }
   const workspace = workspaceForThread(thread);
   if (workspace) await ensureRuntimeAgentsFile(workspace, env, { thread }).catch(() => {});
   await ensureContainedCodexRuntimeHome(thread, env);
@@ -217,6 +232,34 @@ export async function startCodexAppServerThread(thread, env = process.env) {
 }
 
 export async function resumeCodexAppServerThread(thread, env = process.env) {
+  if (threadUsesRestrictedCodexPolicy(thread, env)) {
+    const relocation = await relocateLegacyUserWorkspace(thread, env).catch(() => null);
+    if (relocation?.relocated && relocation.patch) {
+      const relocated = await updateThread(thread.id, {
+        ...relocation.patch,
+        codexThreadId: null,
+        codexSessionId: null,
+        executor: {
+          ...(relocation.patch.executor || thread.executor || {}),
+          codexThreadId: null,
+          codexSessionId: null,
+          metadata: {
+            ...(relocation.patch.executor?.metadata || thread.executor?.metadata || {}),
+            codexThreadId: null,
+            codexSessionId: null,
+          },
+        },
+      }, env);
+      await appendEvent({
+        type: "contained_thread_workspace_relocated",
+        threadId: relocated.id,
+        ownerUserId: relocated.ownerUserId || null,
+        previousWorkspace: relocation.previousWorkspace,
+        workspace: relocation.workspace,
+      }, env).catch(() => {});
+      return startCodexAppServerThread(relocated, env);
+    }
+  }
   if (!containedCodexRuntimeIsCurrent(thread, env)) {
     const freshThread = {
       ...thread,

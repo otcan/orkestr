@@ -24,6 +24,7 @@ import { SLASH_COMMANDS, SlashCommandInfo } from "./slash-commands";
 import {
   ApiService,
   ConnectorStatus,
+  CreditUsageSummary,
   SetupStatus,
   ThreadAttachResponse,
   ThreadMessage,
@@ -91,6 +92,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
       this.syncThreadBindingDraft(selected, true);
       this.syncThreadTextState(selected, true);
       void this.refreshWhatsAppSettings().then(() => {
+        void this.loadCreditUsage(this.selectedThread());
         if (!this.redirectThreadSettingsToWhatsAppSetupIfNeeded(this.selectedThread())) {
           void this.loadSelectedThread(true);
         }
@@ -182,6 +184,8 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   deletingThread = false;
   deleteThreadConfirm = "";
   deleteThreadWorkers = false;
+  creditUsage: CreditUsageSummary | null = null;
+  creditUsageLoading = false;
   sidebarWorkerTask = "";
   creatingSidebarWorker = false;
   creatingWorkerParentId = "";
@@ -802,6 +806,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     if (panel === "settings") {
       this.syncThreadBindingDraft(this.selectedThread(), true);
       await this.refreshWhatsAppSettings();
+      await this.loadCreditUsage();
       if (this.redirectThreadSettingsToWhatsAppSetupIfNeeded(this.selectedThread())) return;
     }
     if (panel === "chat") {
@@ -1498,6 +1503,24 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     }
   }
 
+  async loadCreditUsage(thread: ThreadSummary | null = this.selectedThread()): Promise<void> {
+    const ownerUserId = this.threadOwnerUserId(thread);
+    if (!ownerUserId) {
+      this.creditUsage = null;
+      return;
+    }
+    this.creditUsageLoading = true;
+    try {
+      this.creditUsage = (await firstValueFrom(this.api.userCreditUsage(ownerUserId))).usage || null;
+    } catch (error) {
+      this.creditUsage = null;
+      this.error = this.errorText(error);
+    } finally {
+      this.creditUsageLoading = false;
+      this.renderNow();
+    }
+  }
+
   async changeWhatsAppSenderAccount(accountId: string): Promise<void> {
     this.whatsappSenderAccountId = accountId;
     await this.loadWhatsAppParticipants();
@@ -1989,6 +2012,10 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
 
   threadTitle(thread: ThreadSummary): string {
     return String(thread.bindingName || thread.name || thread.title || thread.id);
+  }
+
+  threadOwnerUserId(thread: ThreadSummary | null): string {
+    return String(thread?.ownerUserId || thread?.["userId"] || "").trim();
   }
 
   threadKindLabel(thread: ThreadSummary): string {
@@ -2985,6 +3012,27 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     if (bytes < 1024 * 1024) return `${Math.round(bytes / 102.4) / 10} KB`;
     if (bytes < 1024 * 1024 * 1024) return `${Math.round(bytes / 1024 / 102.4) / 10} MB`;
     return `${Math.round(bytes / 1024 / 1024 / 102.4) / 10} GB`;
+  }
+
+  formatUsd(value: unknown): string {
+    const amount = Number(value);
+    if (!Number.isFinite(amount)) return "--";
+    if (Math.abs(amount) < 0.01) return `$${amount.toFixed(4)}`;
+    return `$${amount.toFixed(2)}`;
+  }
+
+  creditBudgetLabel(usage: CreditUsageSummary | null = this.creditUsage): string {
+    if (!usage?.budget) return "No budget configured";
+    const daily = usage.budget.dailyUsd === null || usage.budget.dailyUsd === undefined ? "" : `daily ${this.formatUsd(usage.budget.dailyUsd)}`;
+    const monthly = usage.budget.monthlyUsd === null || usage.budget.monthlyUsd === undefined ? "" : `monthly ${this.formatUsd(usage.budget.monthlyUsd)}`;
+    return [daily, monthly].filter(Boolean).join(" · ") || "No budget configured";
+  }
+
+  creditUsageModelRows(usage: CreditUsageSummary | null = this.creditUsage): Array<{ model: string; cost: number }> {
+    return Object.entries(usage?.byModel || {})
+      .map(([model, cost]) => ({ model, cost: Number(cost || 0) }))
+      .sort((left, right) => right.cost - left.cost)
+      .slice(0, 5);
   }
 
   formatPercent(value: unknown): string {

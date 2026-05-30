@@ -22,6 +22,10 @@ async function directoryExists(candidate) {
   return Boolean(await fs.stat(candidate).then((stats) => stats.isDirectory()).catch(() => false));
 }
 
+async function pathExists(candidate) {
+  return Boolean(await fs.stat(candidate).catch(() => null));
+}
+
 function pathInside(parent, candidate) {
   const relative = path.relative(path.resolve(parent), path.resolve(candidate));
   return !relative || (!relative.startsWith("..") && !path.isAbsolute(relative));
@@ -34,6 +38,10 @@ function insideAnyRoot(candidate, roots = []) {
 function ownerUserIdForPrincipal(principal = {}, env = process.env) {
   if (isAdminPrincipal(principal)) return normalizeUserId(env.ORKESTR_ADMIN_USER_ID || adminUserId);
   return normalizeUserId(principal?.userId || "");
+}
+
+function safeUserPathSegment(userId = "") {
+  return normalizeUserId(userId || "").replace(/[^a-zA-Z0-9_.-]/g, "_") || "user";
 }
 
 export function workspacePrincipalForOwner(principal = {}, ownerUserId = "", env = process.env) {
@@ -56,12 +64,32 @@ async function ensureUserRoots(userId, env = process.env) {
   const paths = userDataPaths(userId, env);
   await fs.mkdir(paths.root, { recursive: true, mode: 0o700 });
   await fs.mkdir(paths.files, { recursive: true });
-  await fs.mkdir(paths.workspaces, { recursive: true });
   return paths;
 }
 
+function deployedWorkspaceRoot(env = process.env) {
+  const deployRoot = String(env.ORKESTR_DEPLOY_ROOT || "").trim();
+  if (deployRoot) return path.join(path.resolve(deployRoot), "workspace");
+  const current = path.resolve(process.cwd());
+  return pathInside("/opt/orkestr/releases", current) || current === "/opt/orkestr/current"
+    ? "/opt/orkestr/workspace"
+    : "";
+}
+
 function defaultRuntimeWorkspaceRoot(paths, env = process.env) {
-  return path.resolve(String(env.ORKESTR_RUNTIME_WORKSPACE_ROOT || env.ORKESTR_CLONE_ROOT || paths.workspaces).trim());
+  return path.resolve(String(
+    env.ORKESTR_RUNTIME_WORKSPACE_ROOT ||
+    env.ORKESTR_CLONE_ROOT ||
+    deployedWorkspaceRoot(env) ||
+    paths.workspaces
+  ).trim());
+}
+
+async function ensureUserWorkspaceRoot(userId, env = process.env) {
+  const paths = await ensureDataDirs(env);
+  const root = path.join(defaultRuntimeWorkspaceRoot(paths, env), "users", safeUserPathSegment(userId));
+  await fs.mkdir(root, { recursive: true, mode: 0o755 });
+  return root;
 }
 
 function rootLabel(root, pathsHome, env = process.env) {
@@ -78,19 +106,71 @@ export async function workspaceRootForPrincipal(principal = {}, env = process.en
   if (!isAdminPrincipal(principal)) {
     const userId = ownerUserIdForPrincipal(principal, env);
     if (!userId) throw policyError("workspace_owner_required", 403);
-    return (await ensureUserRoots(userId, env)).workspaces;
+    await ensureUserRoots(userId, env);
+    return ensureUserWorkspaceRoot(userId, env);
   }
   const paths = await ensureDataDirs(env);
   await fs.mkdir(paths.workspaces, { recursive: true });
   return defaultRuntimeWorkspaceRoot(paths, env);
 }
 
+export async function relocateLegacyUserWorkspace(thread = {}, env = process.env) {
+  const userId = ownerUserIdForPrincipal({ userId: thread.ownerUserId || thread.userId, role: "user" }, env);
+  if (!userId) return { thread, relocated: false };
+  const legacyRoot = path.resolve(userDataPaths(userId, env).workspaces);
+  const currentWorkspace = path.resolve(String(thread.workspace || thread.cwd || thread.repoPath || "").trim() || legacyRoot);
+  if (!pathInside(legacyRoot, currentWorkspace)) return { thread, relocated: false };
+  const preferredRoot = await ensureUserWorkspaceRoot(userId, env);
+  if (pathInside(preferredRoot, currentWorkspace)) return { thread, relocated: false };
+  const relativeWorkspace = path.relative(legacyRoot, currentWorkspace) || safeUserPathSegment(thread.name || thread.id || "workspace");
+  const nextWorkspace = path.join(preferredRoot, relativeWorkspace);
+  if (!(await pathExists(nextWorkspace))) {
+    await fs.mkdir(path.dirname(nextWorkspace), { recursive: true, mode: 0o755 });
+    if (await directoryExists(currentWorkspace)) {
+      await fs.cp(currentWorkspace, nextWorkspace, { recursive: true, errorOnExist: false, force: false });
+    } else {
+      await fs.mkdir(nextWorkspace, { recursive: true, mode: 0o755 });
+    }
+  }
+  const relocatePath = (value) => {
+    const resolved = path.resolve(String(value || "").trim() || currentWorkspace);
+    if (!pathInside(currentWorkspace, resolved)) return value || null;
+    const relative = path.relative(currentWorkspace, resolved);
+    return relative ? path.join(nextWorkspace, relative) : nextWorkspace;
+  };
+  const patch = {
+    workspace: nextWorkspace,
+    cwd: relocatePath(thread.cwd || currentWorkspace),
+    repoPath: thread.repoPath ? relocatePath(thread.repoPath) : nextWorkspace,
+    workspaceFolderName: path.basename(nextWorkspace),
+    workspaceSource: thread.workspaceSource || "relocated",
+    executor: {
+      ...(thread.executor || {}),
+      metadata: {
+        ...(thread.executor?.metadata || {}),
+        cwd: relocatePath(thread.executor?.metadata?.cwd || thread.cwd || currentWorkspace),
+        repoPath: thread.executor?.metadata?.repoPath ? relocatePath(thread.executor.metadata.repoPath) : nextWorkspace,
+      },
+    },
+  };
+  return {
+    thread: {
+      ...thread,
+      ...patch,
+    },
+    patch,
+    relocated: true,
+    previousWorkspace: currentWorkspace,
+    workspace: nextWorkspace,
+  };
+}
+
 export async function workspaceFolderRootsForPrincipal(principal = {}, env = process.env) {
   if (!isAdminPrincipal(principal)) {
     const userId = ownerUserIdForPrincipal(principal, env);
     if (!userId) throw policyError("workspace_owner_required", 403);
-    const paths = await ensureUserRoots(userId, env);
-    return [{ name: "My workspaces", path: paths.workspaces }];
+    await ensureUserRoots(userId, env);
+    return [{ name: "My workspaces", path: await ensureUserWorkspaceRoot(userId, env) }];
   }
 
   const paths = await ensureDataDirs(env);
@@ -117,7 +197,7 @@ export async function fileBrowserRootsForPrincipal(principal = {}, env = process
     const paths = await ensureUserRoots(userId, env);
     return [
       { name: "My files", path: paths.files },
-      { name: "My workspaces", path: paths.workspaces },
+      { name: "My workspaces", path: await ensureUserWorkspaceRoot(userId, env) },
     ];
   }
 
