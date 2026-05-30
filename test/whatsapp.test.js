@@ -50,6 +50,7 @@ function externalBridgeEnv(home, extra = {}) {
     ORKESTR_HOME: home,
     ORKESTR_WHATSAPP_EXTERNAL_BRIDGE_ENABLED: "1",
     ORKESTR_WHATSAPP_DEBUG_FOOTER: "1",
+    ORKESTR_WHATSAPP_API_AGENT_AUTORUN: "0",
     ...extra,
   };
 }

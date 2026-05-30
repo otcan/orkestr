@@ -9,7 +9,7 @@ import { runTenantApiAgentTool } from "../packages/core/src/tenant-api-agent-too
 import { userPrincipal } from "../packages/core/src/principal.js";
 import { createThread, enqueueThreadInputForPrincipal, getThread, listThreadMessages } from "../packages/core/src/threads.js";
 import { listFilesForPrincipal } from "../packages/core/src/workspace-files.js";
-import { routeWhatsAppInbound } from "../packages/connectors/src/whatsapp.js";
+import { initialQueueDeliveryState, routeWhatsAppInbound } from "../packages/connectors/src/whatsapp.js";
 import { writeConnectorConfig } from "../packages/storage/src/config.js";
 
 function response(payload, ok = true, status = 200) {
@@ -163,6 +163,81 @@ test("WhatsApp auto-provisioned tenant threads default to api-agent runtime", as
   assert.equal(thread.runtimeKind, "api-agent");
   assert.equal(thread.executor.type, "api-agent");
   assert.equal(threadUsesApiAgent(thread, env), true);
+});
+
+test("WhatsApp routing cleans mixed tenant Codex runtime state before enqueueing", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-api-agent-mixed-"));
+  const env = await allowSanitizerEnv(home, { ORKESTR_WHATSAPP_API_AGENT_AUTORUN: "0" });
+  await writeConnectorConfig("whatsapp", {
+    bridgeMode: "external",
+    bridgeUrl: "http://wa.local",
+  }, env);
+  await createThread({
+    id: "otcantest",
+    ownerUserId: "otcan",
+    name: "otcantest",
+    runtimeKind: "codex-app-server",
+    codexThreadId: "codex-thread-stale",
+    codexSessionId: "codex-session-stale",
+    codexTokenUsage: { total: { totalTokens: 1000 } },
+    runtime: {
+      runtimeKind: "codex-app-server",
+      state: "ready",
+      codexThreadId: "codex-thread-stale",
+      codexSessionId: "codex-session-stale",
+    },
+    executorId: "api-agent",
+    executor: {
+      id: "codex",
+      type: "codex",
+      transport: "app-server",
+      codexThreadId: "codex-thread-stale",
+      codexSessionId: "codex-session-stale",
+      metadata: {
+        runtimeKind: "api-agent",
+        transport: "app-server",
+        codexThreadId: "codex-thread-stale",
+        codexSessionId: "codex-session-stale",
+      },
+    },
+    binding: {
+      connector: "whatsapp",
+      chatId: "chat-mixed",
+      displayName: "otcantest",
+      generated: true,
+      mirrorToWhatsApp: true,
+    },
+  }, env);
+
+  const routed = await routeWhatsAppInbound({
+    eventId: "mixed-api-agent-1",
+    chatId: "chat-mixed",
+    accountId: "wa-1",
+    from: "491234567890@c.us",
+    text: "hello",
+  }, env);
+  const thread = await getThread("otcantest", env);
+  const messages = await listThreadMessages("otcantest", env);
+
+  assert.equal(routed.threadId, "otcantest");
+  assert.equal(thread.runtimeKind, "api-agent");
+  assert.equal(thread.runtime, null);
+  assert.equal(thread.codexThreadId, null);
+  assert.equal(thread.codexSessionId, null);
+  assert.equal(thread.codexTokenUsage, null);
+  assert.equal(thread.executorId, "api-agent");
+  assert.equal(thread.executor.id, "api-agent");
+  assert.equal(thread.executor.type, "api-agent");
+  assert.equal(thread.executor.transport, "api-agent");
+  assert.equal(thread.executor.codexThreadId, null);
+  assert.equal(thread.executor.codexSessionId, null);
+  assert.equal(thread.executor.metadata.runtimeKind, "api-agent");
+  assert.equal(thread.executor.metadata.transport, "api-agent");
+  assert.equal(thread.executor.metadata.codexThreadId, null);
+  assert.equal(threadUsesApiAgent(thread, env), true);
+  assert.equal(messages[0].state, "queued");
+  assert.equal(messages[0].deliveryState || "", "");
+  assert.equal(initialQueueDeliveryState({ runtimeKind: "api-agent", state: "queued" }, messages[0]), "");
 });
 
 test("tenant api-agent fails closed when credit budget is exhausted", async () => {
