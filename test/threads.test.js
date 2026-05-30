@@ -5166,6 +5166,85 @@ test("thread APIs create, queue, run, and list messages", async () => {
   }
 });
 
+test("thread APIs suppress runtime interruption notices superseded by final answers", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-api-superseded-notice-"));
+  const priorHome = process.env.ORKESTR_HOME;
+  process.env.ORKESTR_HOME = home;
+  const server = await startServer({ port: 0, host: "127.0.0.1" });
+  const { port } = server.address();
+  const baseUrl = `http://127.0.0.1:${port}`;
+  try {
+    await createThread({
+      id: "superseded-notice-thread",
+      name: "Superseded Notice Thread",
+      state: "ready",
+      executorId: "codex",
+      executor: {
+        type: "codex",
+        transport: "app-server",
+        codexThreadId: "superseded-codex-thread",
+        codexSessionId: "superseded-codex-thread",
+      },
+      runtimeKind: "codex-app-server",
+      codexThreadId: "superseded-codex-thread",
+      codexSessionId: "superseded-codex-thread",
+      runtime: {
+        runtimeKind: "codex-app-server",
+        state: "ready",
+        codexStatus: { type: "idle" },
+      },
+    });
+    await appendThreadMessage("superseded-notice-thread", {
+      role: "user",
+      source: "manual",
+      text: "Please finish this.",
+      state: "completed",
+      deliveryState: "delivered",
+      observedVia: "codex_app_server_turn_start",
+      codexThreadId: "superseded-codex-thread",
+      codexTurnId: "superseded-turn",
+      createdAt: "2026-05-30T09:00:00.000Z",
+    });
+    await appendThreadMessage("superseded-notice-thread", {
+      role: "assistant",
+      source: "codex-app-server-import",
+      phase: "final_answer",
+      text: "Finished successfully.",
+      state: "completed",
+      codexThreadId: "superseded-codex-thread",
+      codexTurnId: "superseded-turn",
+      createdAt: "2026-05-30T09:01:00.000Z",
+    });
+    await appendThreadMessage("superseded-notice-thread", {
+      role: "assistant",
+      source: "orkestr_runtime",
+      phase: "runtime_interrupted",
+      text: "Orkestr restarted before Codex finished\n\nThis notice is stale.",
+      state: "completed",
+      codexThreadId: "superseded-codex-thread",
+      codexTurnId: "superseded-turn",
+      createdAt: "2026-05-30T09:02:00.000Z",
+    });
+
+    const listed = await fetch(`${baseUrl}/api/threads/superseded-notice-thread/messages`);
+    const summarized = await fetch(`${baseUrl}/api/threads`);
+    const payload = await listed.json();
+    const summaryPayload = await summarized.json();
+    const summary = summaryPayload.threads.find((thread) => thread.id === "superseded-notice-thread");
+
+    assert.equal(listed.status, 200);
+    assert.equal(payload.messages.some((message) => message.phase === "runtime_interrupted"), false);
+    assert.equal(payload.messages.at(-1)?.text, "Finished successfully.");
+    assert.equal(summary.lastMessageRole, "assistant");
+    assert.equal(summary.lastMessagePhase, "final_answer");
+    assert.equal(summary.lastMessageAt, "2026-05-30T09:01:00.000Z");
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+    if (priorHome === undefined) delete process.env.ORKESTR_HOME;
+    else process.env.ORKESTR_HOME = priorHome;
+  }
+});
+
 test("thread interrupt API attempts delivery before returning queued status", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-api-interrupt-"));
   const fakeTmux = await createFakeTmux(home);

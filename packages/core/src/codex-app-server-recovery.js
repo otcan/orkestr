@@ -17,6 +17,11 @@ import {
   whatsappOrigin,
   whatsappProjectionFields,
 } from "./codex-app-server-whatsapp.js";
+import {
+  assistantMessagesForDeliveredTurn,
+  messageTurnId,
+  terminalAssistantMessage,
+} from "./thread-message-visibility.js";
 
 function runtimeStatusState(thread) {
   return appServerStateFromStatus(thread?.runtime?.codexStatus || null);
@@ -95,10 +100,6 @@ async function readLiveCodexThreadState(client, codexId) {
   return state;
 }
 
-function messageTurnId(message = {}) {
-  return clean(message.codexTurnId || message.executorTurnId);
-}
-
 function deliveredUserMessage(message = {}) {
   if (message?.role !== "user") return false;
   const state = clean(message.state).toLowerCase();
@@ -109,37 +110,14 @@ function deliveredUserMessage(message = {}) {
     observedVia.startsWith("codex_app_server");
 }
 
-function assistantMessage(message = {}) {
-  if (message?.role !== "assistant") return false;
-  const state = clean(message.state).toLowerCase();
-  return !state || state === "completed";
-}
-
-function terminalAssistantMessage(message = {}) {
-  if (!assistantMessage(message)) return false;
-  const phase = clean(message.phase || "final_answer").toLowerCase();
-  if (phase === "final_answer" || phase === "runtime_interrupted") return true;
-  return ["plan", "need_input"].includes(phase);
-}
-
 function latestByStorageOrder(messages = []) {
   return messages.at(-1) || null;
 }
 
-function assistantBelongsToDeliveredTurn(message = {}, latestUser = {}, turnId = "") {
-  if (!assistantMessage(message)) return false;
-  if (turnId && messageTurnId(message) === turnId) return true;
-  return Boolean(latestUser?.id && message.parentMessageId === latestUser.id);
-}
-
 function deliveredTurnState(messages = [], latestUser = {}, latestUserIndex = -1) {
-  const turnId = messageTurnId(latestUser);
-  const sameTurnAssistants = turnId
-    ? messages.filter((message) => assistantBelongsToDeliveredTurn(message, latestUser, turnId))
-    : [];
-  const afterUser = turnId ? sameTurnAssistants : messages.slice(latestUserIndex + 1).filter((message) => assistantMessage(message));
-  if (afterUser.some((message) => terminalAssistantMessage(message))) return null;
-  const latestAssistant = latestByStorageOrder(afterUser);
+  const assistants = assistantMessagesForDeliveredTurn(messages, latestUser, latestUserIndex);
+  if (assistants.some((message) => terminalAssistantMessage(message))) return null;
+  const latestAssistant = latestByStorageOrder(assistants);
   return {
     latestUser,
     latestAssistant,

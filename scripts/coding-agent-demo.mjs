@@ -120,6 +120,7 @@ export async function runCodingAgentDemo({ port = Number(process.env.ORKESTR_COD
     ORKESTR_BROWSER_LAUNCH_DISABLED: process.env.ORKESTR_BROWSER_LAUNCH_DISABLED,
     ORKESTR_BROWSER_DESKTOP_MODE: process.env.ORKESTR_BROWSER_DESKTOP_MODE,
     ORKESTR_RECOVER_RUNNING_ON_START: process.env.ORKESTR_RECOVER_RUNNING_ON_START,
+    ORKESTR_THREAD_STORE: process.env.ORKESTR_THREAD_STORE,
     ORKESTR_CODEX_BIN: process.env.ORKESTR_CODEX_BIN,
     CODEX_HOME: process.env.CODEX_HOME,
   };
@@ -133,6 +134,7 @@ export async function runCodingAgentDemo({ port = Number(process.env.ORKESTR_COD
     process.env.ORKESTR_BROWSER_LAUNCH_DISABLED = "1";
     process.env.ORKESTR_BROWSER_DESKTOP_MODE = "profiles";
     process.env.ORKESTR_RECOVER_RUNNING_ON_START = "0";
+    process.env.ORKESTR_THREAD_STORE = "json";
     process.env.ORKESTR_CODEX_BIN = fakeCodex;
     process.env.CODEX_HOME = path.join(home, "codex-home");
 

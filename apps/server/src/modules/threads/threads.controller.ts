@@ -36,6 +36,7 @@ import { parseThreadInputCommand } from "../../../../../packages/core/src/thread
 import { codexResumeCommand } from "../../../../../packages/core/src/codex-attach-command.js";
 import { launchNativeTerminal } from "../../../../../packages/core/src/native-terminal.js";
 import { defaultWhatsAppReplyPrefix } from "../../../../../packages/core/src/whatsapp-defaults.js";
+import { visibleThreadMessages } from "../../../../../packages/core/src/thread-message-visibility.js";
 import {
   archiveCodexAppServerThread,
   compactCodexAppServerThread,
@@ -460,7 +461,7 @@ function messagePage(thread: any, rawMessages: any[] = [], query: Record<string,
   const before = Math.max(0, Number.parseInt(String(query.before || "0"), 10) || 0);
   const requestedLimit = Math.max(0, Number.parseInt(String(query.limit || "0"), 10) || 0);
   const limit = requestedLimit ? Math.min(requestedLimit, 100) : 100;
-  const orderedMessages = chronologicalMessages(rawMessages);
+  const orderedMessages = visibleThreadMessages(chronologicalMessages(rawMessages));
   const pendingQuestion = latestPendingQuestion(orderedMessages);
   let messages = dedupeDisplayMessages(orderedMessages.map(bridgeMessage).filter((message) => message.text));
   if (since > 0) messages = messages.filter((message) => Number(message.cursor || 0) > since);

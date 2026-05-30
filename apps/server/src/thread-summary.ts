@@ -7,6 +7,7 @@ import { adminPrincipal } from "../../../packages/core/src/principal.js";
 import { getThread, listThreadMessages, listThreads, listThreadsForPrincipal } from "../../../packages/core/src/threads.js";
 import { detectThreadGitState } from "../../../packages/core/src/thread-workers.js";
 import { defaultAdminUser, normalizeUserId } from "../../../packages/core/src/users.js";
+import { visibleThreadMessages } from "../../../packages/core/src/thread-message-visibility.js";
 
 type ThreadSummaryOptions = {
   cacheTtlMs?: number;
@@ -130,7 +131,7 @@ function planImplementationPendingQuestion(thread: any, status: any) {
 }
 
 function latestMessageSummary(messages: any[] = []) {
-  const message = latestStoredMessage(messages);
+  const message = latestStoredMessage(visibleThreadMessages(messages));
   if (!message) {
     return {
       lastMessageAt: null,

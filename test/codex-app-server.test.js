@@ -1200,6 +1200,75 @@ test("Codex app-server recovery asks app-server before marking an active turn in
   }
 });
 
+test("Codex app-server recovery treats unscoped rollout final answers as completed turns", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-codex-app-server-rollout-final-recovery-"));
+  const fake = await createFakeCodex(home);
+  const env = {
+    ORKESTR_HOME: path.join(home, "orkestr"),
+    HOME: path.join(home, "runtime-home"),
+    PATH: `${fake.bin}${path.delimiter}${process.env.PATH || ""}`,
+    FAKE_CODEX_STATE: fake.stateFile,
+    ORKESTR_CODEX_APP_SERVER_STALE_FINAL_GRACE_MS: "0",
+  };
+  try {
+    const thread = await createThread({
+      id: "app-server-rollout-final-recovery-thread",
+      name: "Rollout Final Recovery Thread",
+      state: "ready",
+      executorId: "codex",
+      executor: {
+        type: "codex",
+        transport: "app-server",
+        codexThreadId: "rollout-final-codex-thread",
+        codexSessionId: "rollout-final-codex-thread",
+      },
+      runtimeKind: "codex-app-server",
+      codexThreadId: "rollout-final-codex-thread",
+      codexSessionId: "rollout-final-codex-thread",
+      runtime: {
+        runtimeKind: "codex-app-server",
+        state: "ready",
+        activeTurnId: null,
+        codexStatus: { type: "idle" },
+      },
+    }, env);
+    const input = await appendThreadMessage(thread.id, {
+      role: "user",
+      source: "manual",
+      text: "Run the crawler cleanup.",
+      state: "completed",
+      deliveryState: "delivered",
+      observedVia: "codex_app_server_turn_start",
+      codexThreadId: "rollout-final-codex-thread",
+      codexTurnId: "rollout-turn",
+    }, env);
+    await appendThreadMessage(thread.id, {
+      role: "assistant",
+      source: "codex-rollout",
+      phase: "commentary",
+      text: "I am still checking the rendered pages.",
+      state: "completed",
+    }, env);
+    await appendThreadMessage(thread.id, {
+      role: "assistant",
+      source: "codex-rollout",
+      phase: "final_answer",
+      text: "Done. The crawler pages now render cleanly.",
+      state: "completed",
+    }, env);
+
+    const result = await recoverStaleCodexAppServerTurns(env, { noticeCause: "orkestr_restart" });
+    const messages = await listThreadMessages(thread.id, env);
+
+    assert.equal(result.recovered, 0);
+    assert.equal(result.appended, 0);
+    assert.equal(messages.some((message) => message.source === "orkestr_runtime" && message.phase === "runtime_interrupted"), false);
+    assert.ok(messages.find((message) => message.id === input.id));
+  } finally {
+    stopCodexAppServerClients();
+  }
+});
+
 test("Codex app-server recovery marks stale delivered turns ready and appends one interruption notice", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-codex-app-server-stale-recovery-"));
   const fake = await createFakeCodex(home);
