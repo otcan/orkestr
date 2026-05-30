@@ -131,6 +131,23 @@ test("tenant VM registry API is admin-only and returns public-safe records", asy
     const listed = await read(await fetch(`${baseUrl}/api/tenant-vms`, { headers: { cookie: adminCookie } }));
     assert.deepEqual(listed.tenantVms.map((tenantVm) => tenantVm.id), ["alice-tenant"]);
 
+    const provisioned = await read(await fetch(`${baseUrl}/api/tenant-vms/alice-tenant/provision`, {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie: adminCookie },
+      body: JSON.stringify({
+        dryRun: true,
+        repoUrl: "https://github.com/example/orkestr.git",
+        sshPublicKeys: [
+          "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEPublicTenantProvisioningApiTestKeyOnly alice@example.test",
+        ],
+      }),
+    }));
+    assert.equal(provisioned.dryRun, true);
+    assert.equal(provisioned.tenantVm.id, "alice-tenant");
+    assert.equal(provisioned.namespace, "tenant-a");
+    assert.match(provisioned.manifest, /"kind": "VirtualMachine"/);
+    assert.deepEqual(provisioned.commands.apply, ["kubectl", "apply", "-f", "-"]);
+
     await createUser({
       email: "alice@example.test",
       phoneNumber: "+15551234567",
@@ -155,6 +172,15 @@ test("tenant VM registry API is admin-only and returns public-safe records", asy
     const deniedPayload = await read(denied);
     assert.equal(denied.status, 403);
     assert.equal(deniedPayload.error, "control_plane_admin_required");
+
+    const deniedProvision = await fetch(`${baseUrl}/api/tenant-vms/alice-tenant/provision`, {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie: userCookie },
+      body: JSON.stringify({ dryRun: true }),
+    });
+    const deniedProvisionPayload = await read(deniedProvision);
+    assert.equal(deniedProvision.status, 403);
+    assert.equal(deniedProvisionPayload.error, "control_plane_admin_required");
   } finally {
     await new Promise((resolve) => server.close(resolve));
     if (priorHome === undefined) delete process.env.ORKESTR_HOME;

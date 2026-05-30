@@ -8,6 +8,7 @@ import {
   setTenantVmStatus,
   updateTenantVm,
 } from "../../../../../packages/core/src/tenant-vm-registry.js";
+import { provisionTenantVm } from "../../../../../packages/core/src/tenant-vm-provisioning.js";
 import { isAdminPrincipal } from "../../../../../packages/core/src/policy.js";
 import { requestPrincipal } from "../../../../../packages/core/src/principal.js";
 import { httpError } from "../../common/http.js";
@@ -33,6 +34,38 @@ function tenantVmBody(body: Record<string, unknown> = {}) {
   }
   if (body.labels && typeof body.labels === "object") output.labels = body.labels;
   if (body.lastError !== undefined || body.error !== undefined) output.lastError = String(body.lastError || body.error || "").trim();
+  return output;
+}
+
+function tenantVmProvisionBody(body: Record<string, unknown> = {}) {
+  const output: Record<string, unknown> = {};
+  for (const key of [
+    "imageUrl",
+    "storageClass",
+    "repoUrl",
+    "gitRef",
+    "bootstrapUrl",
+    "domain",
+    "acmeEmail",
+    "email",
+    "namespace",
+    "vmName",
+    "kubeconfig",
+    "publicIp",
+    "publicIpPorts",
+    "ports",
+    "channel",
+  ]) {
+    if (body[key] !== undefined) output[key] = String(body[key] || "").trim();
+  }
+  if (body.sshPublicKeys !== undefined || body.sshKeys !== undefined) {
+    const values = body.sshPublicKeys ?? body.sshKeys;
+    output.sshPublicKeys = Array.isArray(values) ? values : String(values || "").split("\n");
+  }
+  if (body.execute !== undefined) output.execute = body.execute === true || body.execute === "true";
+  if (body.dryRun !== undefined) output.dryRun = body.dryRun !== false && body.dryRun !== "false";
+  if (body.withWhatsapp !== undefined) output.withWhatsapp = body.withWhatsapp === true || body.withWhatsapp === "true";
+  if (body.noTailscale !== undefined) output.noTailscale = body.noTailscale !== false && body.noTailscale !== "false";
   return output;
 }
 
@@ -78,6 +111,13 @@ export class TenantVmsController {
       { lastError: String(body.lastError || body.error || "").trim() },
     );
     return { ok: true, tenantVm: publicTenantVm(tenantVm) };
+  }
+
+  @Post(":tenantVmId/provision")
+  @HttpCode(200)
+  async provision(@Req() request: any, @Param("tenantVmId") tenantVmId: string, @Body() body: Record<string, unknown> = {}) {
+    assertAdminRequest(request);
+    return provisionTenantVm(tenantVmId, tenantVmProvisionBody(body));
   }
 
   @Delete(":tenantVmId")
