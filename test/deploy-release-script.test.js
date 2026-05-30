@@ -77,6 +77,8 @@ test("release deploy script exposes versioned install, status, and rollback", as
   assert.match(script, /appServerTransport/);
   assert.match(script, /deploy_guard_before_restart/);
   assert.match(script, /configure_service_shutdown_timeout/);
+  assert.match(script, /45-direct-node\.conf/);
+  assert.match(script, /ExecStart=\$node_bin dist\/server\/apps\/server\/src\/server\.js/);
   assert.match(script, /50-shutdown-timeout\.conf/);
   assert.match(script, /TimeoutStopSec=\$timeout/);
   assert.match(script, /KillMode=process/);

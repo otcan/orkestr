@@ -686,15 +686,22 @@ configure_service_shutdown_timeout() {
   if [ "$(id -u)" -ne 0 ]; then
     return 0
   fi
-  local timeout dropin_dir
+  local timeout dropin_dir node_bin
   timeout="${ORKESTR_SERVICE_TIMEOUT_STOP_SEC:-15s}"
   case "$timeout" in
     ""|*[!0123456789smhd.]*)
       timeout="15s"
       ;;
   esac
+  node_bin="$(command -v node || true)"
+  node_bin="${node_bin:-/usr/bin/node}"
   dropin_dir="/etc/systemd/system/${service_name}.service.d"
   mkdir -p "$dropin_dir"
+  cat > "$dropin_dir/45-direct-node.conf" <<EOF
+[Service]
+ExecStart=
+ExecStart=$node_bin dist/server/apps/server/src/server.js
+EOF
   cat > "$dropin_dir/50-shutdown-timeout.conf" <<EOF
 [Service]
 TimeoutStopSec=$timeout

@@ -207,8 +207,10 @@ still writes a drain marker before restart so new UI, WA, and timer inputs queue
 instead of starting new turns during the deploy window. The drain marker stays
 active until the new UI/API process passes health checks; startup recovery
 defers while that marker is active so continuing Codex app-server turns are not
-misclassified as restart interruptions. The systemd unit uses `KillMode=process`
-so the release restart targets the UI/API process and does not SIGTERM
+misclassified as restart interruptions. The deployer also writes a versioned
+systemd drop-in that makes the API `node` process the service main process; this
+avoids `npm start` wrapper orphans. The systemd unit uses `KillMode=process` so
+the release restart targets that UI/API process and does not SIGTERM
 browserctl-managed desktop processes that live in the service cgroup. A Codex
 turn is treated as restart-safe only when `/api/threads?scope=all` reports both
 `runtime=codex-app-server` and `appServer=websocket` or `appServer=proxy`. First-time migrations from the
