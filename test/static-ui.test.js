@@ -138,6 +138,36 @@ test("thread settings exposes detailed repo metadata editing", async () => {
   assert.match(component, /baseBranch: this\.threadBaseBranchDraft\.trim\(\)/);
 });
 
+test("web shell switches to a constrained non-admin user mode", async () => {
+  const template = await fs.readFile("apps/web/src/app/app.component.html", "utf8");
+  const component = await fs.readFile("apps/web/src/app/app.component.ts", "utf8");
+  const api = await fs.readFile("apps/web/src/app/api.service.ts", "utf8");
+  const usersController = await fs.readFile("apps/server/src/modules/users/users.controller.ts", "utf8");
+  const styles = await fs.readFile("apps/web/src/styles.css", "utf8");
+
+  assert.match(api, /currentUser\(\): Observable<UserResponse>/);
+  assert.match(usersController, /@Get\("me"\)/);
+  assert.match(component, /currentUser: OrkestrUser \| null = null/);
+  assert.match(component, /firstValueFrom\(this\.api\.currentUser\(\)\)/);
+  assert.match(component, /shouldShowCodexRequiredShell\(\): boolean/);
+  assert.match(component, /this\.appReady && this\.isAdminMode\(\) && !this\.codexAgentReady\(\)/);
+  assert.match(component, /uiRuntimeReady\(\): boolean/);
+  assert.match(component, /return this\.isUserMode\(\) \|\| this\.codexAgentReady\(\)/);
+  assert.match(component, /panelAllowedForCurrentUser\(panel: Panel\): boolean/);
+  assert.match(component, /\["chat", "history", "timers"\]\.includes\(panel\)/);
+  assert.match(component, /normalizeUserModeView\(\)/);
+  assert.match(component, /This user account is limited to one chat\./);
+  assert.match(template, /\[class\.user-mode\]="isUserMode\(\)"/);
+  assert.match(template, /class="user-mode-card"/);
+  assert.match(template, /\[placeholder\]="sidebarSearchPlaceholder\(\)"/);
+  assert.match(template, /@if \(isAdminMode\(\) && visibleChildWorkers\(thread\)\.length > 0\)/);
+  assert.match(template, /@if \(activePanel === "settings" && isAdminMode\(\)\)/);
+  assert.match(template, /@if \(activePanel === "workers" && isAdminMode\(\)\)/);
+  assert.match(template, /@if \(isAdminMode\(\)\) \{\s*<div class="codex-control-scroll"/s);
+  assert.match(template, /\[disabled\]="!threadInputReady\(\)"/);
+  assert.match(styles, /\.user-mode-card/);
+});
+
 test("mobile desktop shell wraps noVNC with phone-first controls", async () => {
   const proxy = await fs.readFile("apps/server/src/desktop-proxy.ts", "utf8");
   const shell = await fs.readFile("apps/server/src/mobile-desktop-shell.ts", "utf8");

@@ -811,6 +811,12 @@ test("user management API is admin-only and can pair a browser to a managed user
     await createThread({ id: "alice-existing", name: "Alice Existing", ownerUserId: "alice-example.test" }, process.env);
     await createThread({ id: "bob-hidden", name: "Bob Hidden", ownerUserId: "bob-example.test" }, process.env);
 
+    const currentUser = await read(await fetch(`${baseUrl}/api/users/me`, { headers: { cookie: userCookie } }));
+    assert.ok(currentUser.user, JSON.stringify(currentUser));
+    assert.equal(currentUser.user.id, "alice-example.test");
+    assert.equal(currentUser.user.role, "user");
+    assert.equal(currentUser.user.resourceSummary.threadCount, 1);
+
     const denied = await fetch(`${baseUrl}/api/users`, { headers: { cookie: userCookie } });
     assert.equal(denied.status, 403);
 

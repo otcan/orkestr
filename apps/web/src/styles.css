@@ -303,6 +303,37 @@ textarea:focus {
   gap: 8px;
 }
 
+.user-mode-card {
+  display: grid;
+  gap: 4px;
+  border: 1px solid rgba(119, 205, 126, 0.16);
+  border-radius: 8px;
+  background: rgba(11, 24, 13, 0.72);
+  padding: 10px 12px;
+}
+
+.user-mode-card strong,
+.user-mode-card span,
+.user-mode-card small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.user-mode-card strong {
+  color: #f0fff2;
+}
+
+.user-mode-card span {
+  color: #9bb996;
+  font-size: 0.85rem;
+}
+
+.user-mode-card small {
+  color: #8cff9b;
+  font-weight: 800;
+}
+
 .setup-shortcut {
   min-height: 32px;
   padding: 6px 10px;

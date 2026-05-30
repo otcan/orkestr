@@ -24,6 +24,7 @@ import {
   ThreadMessage,
   ThreadSummary,
   TimerRecord,
+  OrkestrUser,
   WhatsAppAccount,
   WhatsAppChat,
   WhatsAppParticipant,
@@ -111,6 +112,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   attachDetails: ThreadAttachResponse | null = null;
   opsSystem: Record<string, unknown> | null = null;
   setupStatus: SetupStatus | null = null;
+  currentUser: OrkestrUser | null = null;
   selectedId = "";
   filterText = "";
   draft = "";
@@ -278,17 +280,19 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   async refresh(showBusy = true): Promise<void> {
     if (showBusy) this.busy = true;
     try {
-      const [threadsResult, systemResult, setupResult, timersResult, whatsappResult] = await Promise.allSettled([
+      const [threadsResult, systemResult, setupResult, timersResult, whatsappResult, userResult] = await Promise.allSettled([
         firstValueFrom(this.api.threads()),
         firstValueFrom(this.api.systemSummary()),
         firstValueFrom(this.api.setupStatus()),
         firstValueFrom(this.api.timers()),
         firstValueFrom(this.api.whatsappStatus()),
+        firstValueFrom(this.api.currentUser()),
       ]);
       if (systemResult.status === "fulfilled") this.opsSystem = systemResult.value;
       if (setupResult.status === "fulfilled") this.setupStatus = setupResult.value;
       if (timersResult.status === "fulfilled") this.allTimers = timersResult.value.timers || [];
       if (whatsappResult.status === "fulfilled") this.whatsappStatusDetails = whatsappResult.value;
+      if (userResult.status === "fulfilled") this.currentUser = userResult.value.user;
       this.appReady = true;
       if (this.isPairingRequiredFromSetup()) {
         this.apiOnline = true;
@@ -296,7 +300,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
         return;
       }
       this.pairingRequired = false;
-      if (!this.codexAgentReady() && !this.onboardingActive) {
+      if (!this.uiRuntimeReady() && !this.onboardingActive) {
         this.apiOnline = true;
         this.threadWizardOpen = false;
         this.modelDetailsOpen = false;
@@ -322,6 +326,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
       this.trackThreadActivity(payload.threads);
       this.threads = [...payload.threads].sort((a, b) => this.activityMs(b) - this.activityMs(a));
       this.seedReadStateIfNeeded(this.threads);
+      this.normalizeUserModeView();
       if (this.shouldAutoOpenOnboarding()) {
         this.onboardingActive = true;
         this.setupPageMode = "setup";
@@ -399,8 +404,86 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     return this.codexConnector()?.state === "connected";
   }
 
+  isAdminMode(): boolean {
+    return String(this.currentUser?.role || "admin").trim().toLowerCase() === "admin";
+  }
+
+  isUserMode(): boolean {
+    return !this.isAdminMode();
+  }
+
+  uiRuntimeReady(): boolean {
+    return this.isUserMode() || this.codexAgentReady();
+  }
+
+  threadInputReady(): boolean {
+    return this.isUserMode() || this.codexAgentReady();
+  }
+
+  shouldShowCodexRequiredShell(): boolean {
+    return this.appReady && this.isAdminMode() && !this.codexAgentReady();
+  }
+
+  shouldShowCodexNotice(): boolean {
+    return this.isAdminMode() && !this.codexAgentReady();
+  }
+
+  currentUserDisplayName(): string {
+    return String(this.currentUser?.displayName || this.currentUser?.id || "User");
+  }
+
+  currentUserContactLabel(): string {
+    return String(this.currentUser?.email || this.currentUser?.phoneNumber || this.currentUser?.id || "paired browser");
+  }
+
+  sidebarTitle(): string {
+    return this.isUserMode() ? "My chat" : "Threads";
+  }
+
+  sidebarEyebrow(): string {
+    return this.isUserMode() ? "Orkestr user" : "Orkestr";
+  }
+
+  sidebarSearchPlaceholder(): string {
+    return this.isUserMode() ? "search my chat" : "agent, project, thread";
+  }
+
+  newThreadButtonLabel(): string {
+    return this.isUserMode() ? "New chat" : "New Coding Agent";
+  }
+
+  emptyThreadTitle(): string {
+    return this.isUserMode() ? "No chat assigned" : "No thread selected";
+  }
+
+  emptyThreadBody(): string {
+    return this.isUserMode()
+      ? "This user account does not have a chat yet."
+      : "Select a thread from the left sidebar or create a new coding agent.";
+  }
+
+  userThreadLimitLabel(): string {
+    const max = this.currentUser?.limits?.maxThreads;
+    const count = this.threads.filter((thread) => !thread.parentThreadId).length;
+    if (max === null || max === undefined) return `${count} chats`;
+    return `${count}/${max} chats`;
+  }
+
+  canCreateThreadFromSidebar(): boolean {
+    if (this.isAdminMode()) return true;
+    const max = this.currentUser?.limits?.maxThreads;
+    if (max === null || max === undefined) return false;
+    const count = this.threads.filter((thread) => !thread.parentThreadId).length;
+    return count < Number(max || 0);
+  }
+
+  panelAllowedForCurrentUser(panel: Panel): boolean {
+    if (this.isAdminMode()) return true;
+    return ["chat", "history", "timers"].includes(panel);
+  }
+
   rawTerminalAvailable(thread: ThreadSummary | null = this.selectedThread()): boolean {
-    return this.embeddedRawTerminalAvailable(thread);
+    return this.isAdminMode() && this.embeddedRawTerminalAvailable(thread);
   }
 
   embeddedRawTerminalAvailable(thread: ThreadSummary | null = this.selectedThread()): boolean {
@@ -434,14 +517,14 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   }
 
   private guardCodexRuntime(): boolean {
-    if (this.codexAgentReady()) return true;
+    if (this.threadInputReady()) return true;
     this.error = "Connect Codex Agent before opening Orkestr.";
     this.renderNow();
     return false;
   }
 
   private connectSummaryStream(): void {
-    if (!this.appReady || this.pairingRequired || !this.codexAgentReady()) return;
+    if (!this.appReady || this.pairingRequired || !this.uiRuntimeReady()) return;
     if (this.destroyed || typeof globalThis.WebSocket === "undefined") {
       this.startFallbackPolling();
       return;
@@ -470,7 +553,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   }
 
   private scheduleSummaryReconnect(): void {
-    if (this.destroyed || this.pairingRequired || !this.appReady || !this.codexAgentReady() || this.summaryReconnectTimer) return;
+    if (this.destroyed || this.pairingRequired || !this.appReady || !this.uiRuntimeReady() || this.summaryReconnectTimer) return;
     this.summaryReconnectTimer = setTimeout(() => {
       this.summaryReconnectTimer = undefined;
       this.connectSummaryStream();
@@ -478,7 +561,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   }
 
   private startFallbackPolling(): void {
-    if (this.pairingRequired || !this.appReady || !this.codexAgentReady()) return;
+    if (this.pairingRequired || !this.appReady || !this.uiRuntimeReady()) return;
     if (this.fallbackPoller) return;
     this.fallbackPoller = setInterval(() => void this.refresh(false), 30_000);
   }
@@ -501,7 +584,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   }
 
   private async loadSystemSummarySilent(): Promise<void> {
-    if (!this.onboardingActive && !this.pairingRequired && !this.codexAgentReady()) return;
+    if (!this.onboardingActive && !this.pairingRequired && !this.uiRuntimeReady()) return;
     try {
       this.opsSystem = await firstValueFrom(this.api.systemSummary());
       this.renderNow();
@@ -511,7 +594,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   }
 
   private async handleSummaryStreamMessage(raw: unknown): Promise<void> {
-    if (this.pairingRequired || !this.codexAgentReady()) return;
+    if (this.pairingRequired || !this.uiRuntimeReady()) return;
     let payload: { type?: string; threads?: ThreadSummary[] };
     try {
       payload = JSON.parse(String(raw || "{}"));
@@ -523,7 +606,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   }
 
   private async applyThreadSummaryStream(threads: ThreadSummary[]): Promise<void> {
-    if (this.pairingRequired || !this.codexAgentReady()) return;
+    if (this.pairingRequired || !this.uiRuntimeReady()) return;
     if (this.applyingSummary) return;
     this.applyingSummary = true;
     try {
@@ -594,9 +677,30 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     this.scrollAfterRender = this.activePanel === "chat";
   }
 
+  private normalizeUserModeView(): void {
+    if (!this.isUserMode()) return;
+    if (this.activePanel === "raw") this.closeRawStream();
+    this.modelDetailsOpen = false;
+    this.gitDetailsThreadId = "";
+    this.onboardingActive = false;
+    if (!this.canCreateThreadFromSidebar()) this.threadWizardOpen = false;
+    if (this.activePanel === "ops" || !this.panelAllowedForCurrentUser(this.activePanel)) {
+      this.activePanel = "chat";
+      const thread = this.selectedThread();
+      if (thread) this.replacePath(this.threadSlug(thread), "chat");
+    }
+  }
+
   async openPanel(panel: Panel): Promise<void> {
     if (this.pairingRequired) {
       this.enterPairingRequired();
+      return;
+    }
+    if (!this.panelAllowedForCurrentUser(panel)) {
+      this.activePanel = "chat";
+      const thread = this.selectedThread();
+      if (thread) this.replacePath(this.threadSlug(thread), "chat");
+      this.renderNow();
       return;
     }
     if (panel === "ops") {
@@ -637,6 +741,13 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
       this.enterPairingRequired();
       return;
     }
+    if (this.isUserMode()) {
+      this.activePanel = "chat";
+      const thread = this.selectedThread();
+      if (thread) this.replacePath(this.threadSlug(thread), "chat");
+      this.renderNow();
+      return;
+    }
     if (this.activePanel === "raw") this.closeRawStream();
     this.modelDetailsOpen = false;
     this.slashHelpOpen = false;
@@ -661,6 +772,13 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
       this.enterPairingRequired();
       return;
     }
+    if (this.isUserMode()) {
+      this.activePanel = "chat";
+      const thread = this.selectedThread();
+      if (thread) this.replacePath(this.threadSlug(thread), "chat");
+      this.renderNow();
+      return;
+    }
     if (this.activePanel === "raw") this.closeRawStream();
     this.threadWizardOpen = false;
     this.onboardingActive = true;
@@ -673,6 +791,14 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
 
   openSetup(section: SetupSection = this.setupSection || "system", replace = false): void {
     if (this.pairingRequired) section = "security";
+    if (!this.pairingRequired && this.isUserMode()) {
+      this.activePanel = "chat";
+      this.onboardingActive = false;
+      const thread = this.selectedThread();
+      if (thread) this.replacePath(this.threadSlug(thread), "chat");
+      this.renderNow();
+      return;
+    }
     if (this.activePanel === "raw") this.closeRawStream();
     this.threadWizardOpen = false;
     this.onboardingActive = true;
@@ -735,6 +861,11 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   openThreadWizard(): void {
     if (this.pairingRequired) {
       this.enterPairingRequired();
+      return;
+    }
+    if (!this.canCreateThreadFromSidebar()) {
+      this.error = "This user account is limited to one chat.";
+      this.renderNow();
       return;
     }
     if (this.activePanel === "raw") this.closeRawStream();
@@ -2830,7 +2961,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   }
 
   composerPlaceholder(thread: ThreadSummary | null): string {
-    if (thread && !this.codexAgentReady()) return "Connect Codex Agent to send tasks";
+    if (thread && !this.threadInputReady()) return "Connect Codex Agent to send tasks";
     return thread ? `Message ${this.threadTitle(thread)}` : "Message";
   }
 
@@ -3508,6 +3639,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   }
 
   private shouldAutoOpenOnboarding(): boolean {
+    if (this.isUserMode()) return false;
     if (this.onboardingActive || !this.setupStatus || this.setupStatus.setupState === "ready") return false;
     if (this.readOnboardingFlag("skipped") || this.readOnboardingFlag("completed")) return false;
     const parts = globalThis.location?.pathname?.split("/").filter(Boolean) || [];
@@ -3719,7 +3851,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
       globalThis.document.title = this.setupPageMode === "setup" ? "Setup · Orkestr" : "Onboarding · Orkestr";
       return;
     }
-    if (this.appReady && !this.codexAgentReady()) {
+    if (this.shouldShowCodexRequiredShell()) {
       globalThis.document.title = "Codex Agent Required · Orkestr";
       return;
     }

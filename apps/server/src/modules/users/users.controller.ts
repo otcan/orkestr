@@ -97,6 +97,28 @@ export class UsersController {
     return { ok: true, user: userSummary(user, threads, timers) };
   }
 
+  @Get("me")
+  async me(@Req() request: any) {
+    const principal = requestPrincipal(request);
+    if (!principal?.userId) throw httpError("user_required", 403);
+    const [user, threads, timers] = await Promise.all([
+      getUser(principal.userId),
+      listThreads(),
+      listTimers(),
+    ]);
+    const fallback = {
+      id: principal.userId,
+      role: principal.role || "user",
+      displayName: principal.displayName || principal.userId,
+      email: "",
+      phoneNumber: "",
+      authProvider: principal.source || "browser_pairing",
+      status: "active",
+      limits: { maxThreads: principal.role === "admin" ? null : 1 },
+    };
+    return { ok: true, user: userSummary(user || fallback, threads, timers) };
+  }
+
   @Get("me/skills")
   async mySkills(@Req() request: any) {
     const principal = requestPrincipal(request);
@@ -123,8 +145,10 @@ export class UsersController {
 
   @Get(":userId")
   async get(@Req() request: any, @Param("userId") userId: string) {
-    assertAdminRequest(request);
-    const user = await getUser(userId);
+    const principal = requestPrincipal(request);
+    const requested = requestedUserId(userId, request);
+    if (!isAdminPrincipal(principal) && requested !== principal.userId) assertAdminRequest(request);
+    const user = await getUser(requested);
     if (!user) throw httpError("user_not_found", 404);
     const [threads, timers] = await Promise.all([listThreads(), listTimers()]);
     return { user: userSummary(user, threads, timers) };

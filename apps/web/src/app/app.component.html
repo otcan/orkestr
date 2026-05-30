@@ -11,7 +11,7 @@
     (skip)="leaveOnboarding(false)"
     (complete)="leaveOnboarding(true)"
   ></ork-onboarding-page>
-} @else if (appReady && !codexAgentReady()) {
+} @else if (shouldShowCodexRequiredShell()) {
 <main class="codex-required-shell">
   <section class="codex-required-panel" aria-labelledby="codex-required-title">
     <p class="eyebrow">Required runtime</p>
@@ -31,23 +31,33 @@
   </section>
 </main>
 } @else if (appReady) {
-<main class="app-shell" [class.sidebar-resizing]="sidebarResizing" [style.--sidebar-width.px]="sidebarWidth">
+<main class="app-shell" [class.sidebar-resizing]="sidebarResizing" [class.user-mode]="isUserMode()" [style.--sidebar-width.px]="sidebarWidth">
   <aside class="sidebar">
     <div class="brand">
       <div>
-        <p class="eyebrow">Orkestr</p>
-        <h1>Threads</h1>
+        <p class="eyebrow">{{ sidebarEyebrow() }}</p>
+        <h1>{{ sidebarTitle() }}</h1>
       </div>
       <div class="brand-actions">
         <span class="health" [class.ok]="apiOnline">{{ apiOnline ? "online" : "loading" }}</span>
       </div>
     </div>
 
+    @if (isUserMode()) {
+      <section class="user-mode-card">
+        <strong>{{ currentUserDisplayName() }}</strong>
+        <span>{{ currentUserContactLabel() }}</span>
+        <small>{{ userThreadLimitLabel() }}</small>
+      </section>
+    }
+
     <label class="search">
       <span>Search</span>
-      <input name="thread-search" [(ngModel)]="filterText" placeholder="agent, project, thread" />
+      <input name="thread-search" [(ngModel)]="filterText" [placeholder]="sidebarSearchPlaceholder()" />
     </label>
-    <button class="new-thread-button sidebar-new-thread" type="button" (click)="openThreadWizard()">New Coding Agent</button>
+    @if (canCreateThreadFromSidebar()) {
+      <button class="new-thread-button sidebar-new-thread" type="button" (click)="openThreadWizard()">{{ newThreadButtonLabel() }}</button>
+    }
 
     <nav class="thread-list" aria-label="Orkestr threads">
       @for (thread of threadTreeRoots(); track thread.id) {
@@ -118,7 +128,7 @@
               @if (isThreadProcessing(thread)) {
                 <span class="pending processing-count" [title]="threadProcessingTitle(thread)">{{ threadProcessingShortLabel(thread) }}</span>
               }
-              @if (childWorkers(thread).length > 0) {
+              @if (isAdminMode() && childWorkers(thread).length > 0) {
                 <span class="pending worker-count">{{ childWorkers(thread).length }}</span>
               }
               @if ((thread.pendingCount || 0) > 0) {
@@ -127,7 +137,7 @@
             </span>
           </a>
 
-          @if (visibleChildWorkers(thread).length > 0) {
+          @if (isAdminMode() && visibleChildWorkers(thread).length > 0) {
             <div class="worker-tree" aria-label="Worker threads">
               @for (worker of visibleChildWorkers(thread); track worker.id) {
                 <a
@@ -205,7 +215,7 @@
             </div>
           }
 
-          @if (isThreadFamilyActive(thread)) {
+          @if (isAdminMode() && isThreadFamilyActive(thread)) {
             <div class="worker-tree-actions">
               <button type="button" (click)="createLeftMenuWorker(thread, $event)" [disabled]="busy || creatingSidebarWorker">
                 {{ creatingWorkerParentId === thread.id ? "Creating worker" : "New worker" }}
@@ -217,8 +227,8 @@
         <p class="empty">No matching threads.</p>
       }
     </nav>
-    @if (!threads.length) {
-      <button class="sidebar-create-thread" type="button" (click)="openThreadWizard()">Create first coding agent</button>
+    @if (!threads.length && canCreateThreadFromSidebar()) {
+      <button class="sidebar-create-thread" type="button" (click)="openThreadWizard()">{{ isUserMode() ? "Create first chat" : "Create first coding agent" }}</button>
     }
   </aside>
 
@@ -234,7 +244,7 @@
   <section class="chat">
     @if (activePanel === "ops") {
       <ork-ops-page [toolsView]="toolsView" (toolsViewChange)="setToolsView($event)"></ork-ops-page>
-    } @else if (threadWizardOpen || !threads.length) {
+    } @else if ((threadWizardOpen || !threads.length) && canCreateThreadFromSidebar()) {
       <ork-first-thread-wizard
         class="first-thread-host"
         [canCancel]="threads.length > 0"
@@ -264,7 +274,7 @@
             @if (threadBranchLabel(thread)) {
               <span class="branch-pill">{{ threadBranchLabel(thread) }}</span>
             }
-            @if (!codexAgentReady()) {
+            @if (shouldShowCodexNotice()) {
               <span class="branch-pill">{{ codexRuntimeNoticeTitle() }}</span>
             }
           </p>
@@ -275,30 +285,35 @@
             type="button"
             title="Interrupt the active Codex turn"
             (click)="stopSelected()"
-            [disabled]="busy || !codexAgentReady() || thread.state === 'sleeping' || thread.status === 'sleeping'"
+            [disabled]="busy || !threadInputReady() || thread.state === 'sleeping' || thread.status === 'sleeping'"
           >STOP</button>
-          <button class="system-mini-card" type="button" (click)="openTools('system')" title="Open system resources">
-            <span>
-              <strong>CPU {{ formatPercent(systemCpuPercent()) }}</strong>
-              <em>RAM {{ formatPercent(systemMemoryPercent()) }}</em>
-            </span>
-            <b>Load {{ systemLoadLabel() }}</b>
-          </button>
-          <button class="secondary" type="button" (click)="openTools('desktops')">DESKTOPS</button>
-          <button class="secondary" type="button" (click)="openTools('settings')">Manage</button>
+          @if (isAdminMode()) {
+            <button class="system-mini-card" type="button" (click)="openTools('system')" title="Open system resources">
+              <span>
+                <strong>CPU {{ formatPercent(systemCpuPercent()) }}</strong>
+                <em>RAM {{ formatPercent(systemMemoryPercent()) }}</em>
+              </span>
+              <b>Load {{ systemLoadLabel() }}</b>
+            </button>
+            <button class="secondary" type="button" (click)="openTools('desktops')">DESKTOPS</button>
+            <button class="secondary" type="button" (click)="openTools('settings')">Manage</button>
+          }
         </div>
       </header>
 
       <nav class="panel-tabs" aria-label="Thread panels">
         <button type="button" [class.active]="activePanel === 'chat'" (click)="openPanel('chat')">Chat</button>
-        @if (rawTerminalAvailable(thread)) {
+        @if (isAdminMode() && rawTerminalAvailable(thread)) {
           <button type="button" [class.active]="activePanel === 'raw'" (click)="openPanel('raw')" [disabled]="!codexAgentReady()">Raw</button>
         }
         <button type="button" [class.active]="activePanel === 'history'" (click)="openPanel('history')">History</button>
         <button type="button" [class.active]="activePanel === 'timers'" (click)="openPanel('timers')">Thread Timers</button>
-        <button type="button" [class.active]="activePanel === 'settings'" (click)="openPanel('settings')">Settings</button>
-        <button type="button" [class.active]="activePanel === 'workers'" (click)="openPanel('workers')">Parallel Work</button>
+        @if (isAdminMode()) {
+          <button type="button" [class.active]="activePanel === 'settings'" (click)="openPanel('settings')">Settings</button>
+          <button type="button" [class.active]="activePanel === 'workers'" (click)="openPanel('workers')">Parallel Work</button>
+        }
         <span class="panel-spacer"></span>
+        @if (isAdminMode()) {
         <div class="codex-control-scroll" aria-label="Codex controls">
           <div class="codex-mode-toggle" title="Live Codex mode for this Orkestr thread">
             <button type="button" [class.active]="codexModeValue(thread) === 'code'" (click)="switchCodexMode('code')" [disabled]="busy || !codexAgentReady()">Code</button>
@@ -345,6 +360,7 @@
             <button class="secondary danger-soft" type="button" (click)="recoverSelected()" [disabled]="busy || !codexAgentReady()">Recover</button>
           }
         </div>
+        }
       </nav>
 
       @if (modelDetailsOpen) {
@@ -565,7 +581,7 @@
         <div class="notice error">{{ error }}</div>
       }
 
-      @if (!codexAgentReady()) {
+      @if (shouldShowCodexNotice()) {
         <div class="notice">
           <strong>{{ codexRuntimeNoticeTitle() }}</strong>
           <span>{{ codexAgentSummary() }}</span>
@@ -613,7 +629,7 @@
                       class="implement-command-button"
                       type="button"
                       (click)="implementPlanSelected()"
-                      [disabled]="sending || sendingNow || implementingPlan || !codexAgentReady()"
+                      [disabled]="sending || sendingNow || implementingPlan || !threadInputReady()"
                       title="Implement the current Codex plan when the implementation prompt is visible"
                     >
                       {{ implementingPlan ? "Implementing" : "/implement" }}
@@ -707,7 +723,7 @@
         </section>
       }
 
-      @if (activePanel === "attach") {
+      @if (activePanel === "attach" && isAdminMode()) {
         <section
           class="panel-body drop-zone"
           [class.dragging]="draggingUpload"
@@ -738,7 +754,7 @@
         </section>
       }
 
-      @if (activePanel === "settings") {
+      @if (activePanel === "settings" && isAdminMode()) {
         <section class="panel-body thread-settings-panel">
           <div class="panel-title">
             <div>
@@ -1060,7 +1076,7 @@
         </section>
       }
 
-      @if (activePanel === "workers") {
+      @if (activePanel === "workers" && isAdminMode()) {
         <section class="panel-body thread-settings-panel">
           <div class="panel-title">
             <div>
@@ -1108,7 +1124,7 @@
         </section>
       }
 
-      @if (activePanel === "runtime") {
+      @if (activePanel === "runtime" && isAdminMode()) {
         <section class="panel-body">
           <div class="panel-title">
             <div>
@@ -1127,7 +1143,7 @@
         </section>
       }
 
-      @if (activePanel === "raw") {
+      @if (activePanel === "raw" && isAdminMode()) {
         <section class="panel-body raw-panel">
           @if (attachDetails?.ok && embeddedRawTerminalAvailable(thread)) {
             <div #rawTerminalHost class="raw-terminal-host" (click)="focusRawTerminal()" aria-label="Raw terminal"></div>
@@ -1182,7 +1198,9 @@
           <div class="composer-row">
             <div class="composer-tools">
               <button class="secondary upload-button" type="button" (click)="composerFilePicker.click()" title="Upload files">Upload</button>
-              <button class="secondary command-help-button" type="button" (click)="openSlashHelp()" title="Command help" aria-haspopup="dialog" [attr.aria-expanded]="slashHelpOpen">Help</button>
+              @if (isAdminMode()) {
+                <button class="secondary command-help-button" type="button" (click)="openSlashHelp()" title="Command help" aria-haspopup="dialog" [attr.aria-expanded]="slashHelpOpen">Help</button>
+              }
             </div>
             <textarea
               #composerInput
@@ -1192,28 +1210,32 @@
               (ngModelChange)="persistThreadTextField('draft', $event)"
               (keydown)="handleComposerKeydown($event)"
               [placeholder]="composerPlaceholder(thread)"
-              [disabled]="!codexAgentReady()"
+              [disabled]="!threadInputReady()"
             ></textarea>
             <div class="composer-actions">
-              <button type="submit" [disabled]="sending || sendingNow || implementingPlan || !codexAgentReady() || (!draft.trim() && pendingFiles.length === 0)">{{ sending ? "Sending" : "Send" }}</button>
-              <button
-                class="secondary send-now-button"
-                type="button"
-                title="Interrupt the current run and send this message immediately"
-                (click)="sendMessageNow()"
-                [disabled]="sending || sendingNow || implementingPlan || !codexAgentReady() || (!draft.trim() && pendingFiles.length === 0)"
-              >
-                {{ sendingNow ? "Sending now" : "Send Now" }}
-              </button>
+              <button type="submit" [disabled]="sending || sendingNow || implementingPlan || !threadInputReady() || (!draft.trim() && pendingFiles.length === 0)">{{ sending ? "Sending" : "Send" }}</button>
+              @if (isAdminMode()) {
+                <button
+                  class="secondary send-now-button"
+                  type="button"
+                  title="Interrupt the current run and send this message immediately"
+                  (click)="sendMessageNow()"
+                  [disabled]="sending || sendingNow || implementingPlan || !threadInputReady() || (!draft.trim() && pendingFiles.length === 0)"
+                >
+                  {{ sendingNow ? "Sending now" : "Send Now" }}
+                </button>
+              }
             </div>
           </div>
         </form>
       }
     } @else {
       <section class="empty-state full">
-        <h2>No thread selected</h2>
-        <p>Select a thread from the left sidebar or create a new coding agent.</p>
-        <button type="button" (click)="openThreadWizard()">New Coding Agent</button>
+        <h2>{{ emptyThreadTitle() }}</h2>
+        <p>{{ emptyThreadBody() }}</p>
+        @if (canCreateThreadFromSidebar()) {
+          <button type="button" (click)="openThreadWizard()">{{ newThreadButtonLabel() }}</button>
+        }
       </section>
     }
   </section>

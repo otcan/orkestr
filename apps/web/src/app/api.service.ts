@@ -943,6 +943,10 @@ export class ApiService {
     return this.http.get<UsersResponse>(this.api("/users"));
   }
 
+  currentUser(): Observable<UserResponse> {
+    return this.http.get<UserResponse>(this.api("/users/me"));
+  }
+
   createUser(body: Record<string, unknown>): Observable<UserResponse> {
     return this.http.post<UserResponse>(this.api("/users"), body);
   }

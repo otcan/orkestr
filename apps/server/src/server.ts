@@ -152,7 +152,8 @@ function authorizeControlPlaneRequest(request: any, principal: any) {
 
   if (surface === "codex") return { ok: false, statusCode: 403, error: "control_plane_admin_required" };
   if (surface === "users") {
-    if ((second === "me" && third === "skills") || third === "skills") return { ok: true };
+    if (second === "me" && (!third || third === "skills")) return { ok: true };
+    if (third === "skills") return { ok: true };
     return { ok: false, statusCode: 403, error: "control_plane_admin_required" };
   }
   if (surface === "tenant-vms") return { ok: false, statusCode: 403, error: "control_plane_admin_required" };
