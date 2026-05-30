@@ -147,6 +147,31 @@ test("ops users page exposes targeted browser pairing and revocation", async () 
   assert.match(securityComponent, /sessionTarget\(session: SecuritySession\): string/);
 });
 
+test("ops users page exposes WhatsApp identity binding controls", async () => {
+  const template = await fs.readFile("apps/web/src/app/ops-page.component.html", "utf8");
+  const component = await fs.readFile("apps/web/src/app/ops-page.component.ts", "utf8");
+  const api = await fs.readFile("apps/web/src/app/api.service.ts", "utf8");
+  const usersController = await fs.readFile("apps/server/src/modules/users/users.controller.ts", "utf8");
+
+  assert.match(api, /export interface UserIdentity/);
+  assert.match(api, /userIdentities\(id: string\): Observable<UserIdentitiesResponse>/);
+  assert.match(api, /linkWhatsAppIdentity\(id: string, body: Record<string, unknown>\)/);
+  assert.match(api, /unlinkWhatsAppIdentity\(id: string, body: Record<string, unknown>\)/);
+  assert.match(usersController, /@Post\(":userId\/identities\/whatsapp"\)/);
+  assert.match(usersController, /@Post\(":userId\/identities\/whatsapp\/unlink"\)/);
+  assert.match(component, /opsUserIdentities: UserIdentity\[\] = \[\]/);
+  assert.match(component, /loadSelectedUserIdentities\(showBusy = true\)/);
+  assert.match(component, /linkWhatsAppIdentity\(user: OrkestrUser\)/);
+  assert.match(component, /unlinkWhatsAppIdentity\(user: OrkestrUser, identity: UserIdentity\)/);
+  assert.match(component, /selectedUserWhatsAppIdentities\(user: OrkestrUser\): UserIdentity\[\]/);
+  assert.match(component, /whatsappIdentitySource\(identity: UserIdentity\): string/);
+  assert.match(template, /WhatsApp identities/);
+  assert.match(template, /wa-identity-sender-/);
+  assert.match(template, /wa-identity-chat-/);
+  assert.match(template, /\(submit\)="linkWhatsAppIdentity\(user\); \$event\.preventDefault\(\)"/);
+  assert.match(template, /\(click\)="unlinkWhatsAppIdentity\(user, identity\)"/);
+});
+
 test("thread settings exposes detailed repo metadata editing", async () => {
   const template = await fs.readFile("apps/web/src/app/app.component.html", "utf8");
   const component = await fs.readFile("apps/web/src/app/app.component.ts", "utf8");

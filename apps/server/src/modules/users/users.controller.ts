@@ -8,8 +8,11 @@ import {
   disableUser,
   enableUser,
   getUser,
+  linkUserPrivateIdentity,
   listUsers,
   publicUser,
+  readUserPrivateIdentities,
+  unlinkUserPrivateIdentity,
   updateUser,
   updateUserLimits,
 } from "../../../../../packages/core/src/users.js";
@@ -65,6 +68,17 @@ function skillBody(body: Record<string, unknown> = {}) {
   const output: Record<string, unknown> = {};
   if (body.enabled !== undefined) output.enabled = body.enabled;
   return output;
+}
+
+function whatsappIdentityBody(body: Record<string, unknown> = {}) {
+  return {
+    provider: "whatsapp",
+    accountId: String(body.accountId || body.whatsappAccountId || "").trim(),
+    externalId: String(body.externalId || body.senderId || body.participantId || "").trim(),
+    chatId: String(body.chatId || body.waChatId || body.whatsappChatId || "").trim(),
+    displayName: String(body.displayName || body.name || "").trim(),
+    source: "manual",
+  };
 }
 
 function requestedUserId(value: string, request: any) {
@@ -135,6 +149,44 @@ export class UsersController {
   async skills(@Req() request: any, @Param("userId") userId: string) {
     const principal = requestPrincipal(request);
     return listUserSkillsForPrincipal(requestedUserId(userId, request), principal);
+  }
+
+  @Get(":userId/identities")
+  async identities(@Req() request: any, @Param("userId") userId: string) {
+    assertAdminRequest(request);
+    const requested = requestedUserId(userId, request);
+    const user = await getUser(requested);
+    if (!user) throw httpError("user_not_found", 404);
+    return {
+      ok: true,
+      userId: user.id,
+      identities: await readUserPrivateIdentities(user.id),
+    };
+  }
+
+  @Post(":userId/identities/whatsapp")
+  @HttpCode(200)
+  async linkWhatsAppIdentity(@Req() request: any, @Param("userId") userId: string, @Body() body: Record<string, unknown> = {}) {
+    assertAdminRequest(request);
+    const principal = requestPrincipal(request);
+    const requested = requestedUserId(userId, request);
+    const identities = await linkUserPrivateIdentity(requested, whatsappIdentityBody(body), {
+      actorUserId: principal.userId || "admin",
+      migrate: body.migrate === true,
+    });
+    return { ok: true, userId: requested, identities };
+  }
+
+  @Post(":userId/identities/whatsapp/unlink")
+  @HttpCode(200)
+  async unlinkWhatsAppIdentity(@Req() request: any, @Param("userId") userId: string, @Body() body: Record<string, unknown> = {}) {
+    assertAdminRequest(request);
+    const principal = requestPrincipal(request);
+    const requested = requestedUserId(userId, request);
+    const identities = await unlinkUserPrivateIdentity(requested, whatsappIdentityBody(body), {
+      actorUserId: principal.userId || "admin",
+    });
+    return { ok: true, userId: requested, identities };
   }
 
   @Patch(":userId/skills/:skillId")

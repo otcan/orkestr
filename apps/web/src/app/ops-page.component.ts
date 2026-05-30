@@ -2,7 +2,7 @@ import { DatePipe } from "@angular/common";
 import { ChangeDetectorRef, Component, EventEmitter, Input, OnDestroy, OnInit, Output, inject } from "@angular/core";
 import { FormsModule } from "@angular/forms";
 import { firstValueFrom } from "rxjs";
-import { Agent, AgentTemplate, ApiService, BrowserSession, ConnectorStatus, EventRecord, OrkestrUser, SecurityChallenge, SecuritySession, SetupStatus, TimerDoctorResponse, TimerRecord, VersionResponse } from "./api.service";
+import { Agent, AgentTemplate, ApiService, BrowserSession, ConnectorStatus, EventRecord, OrkestrUser, SecurityChallenge, SecuritySession, SetupStatus, TimerDoctorResponse, TimerRecord, UserIdentity, VersionResponse } from "./api.service";
 
 export type ToolsView = "system" | "timers" | "desktops" | "models" | "settings" | "connectors" | "users";
 
@@ -47,6 +47,8 @@ export class OpsPageComponent implements OnInit, OnDestroy {
   opsUsers: OrkestrUser[] = [];
   opsSecurityChallenges: SecurityChallenge[] = [];
   opsSecuritySessions: SecuritySession[] = [];
+  opsUserIdentities: UserIdentity[] = [];
+  opsUserIdentitiesUserId = "";
   selectedUserId = "";
   userDraftEmail = "";
   userDraftPhone = "";
@@ -55,6 +57,12 @@ export class OpsPageComponent implements OnInit, OnDestroy {
   savingUser = false;
   pairingUserId = "";
   revokingSessionId = "";
+  identityBusy = false;
+  identityDraftAccountId = "";
+  identityDraftExternalId = "";
+  identityDraftChatId = "";
+  identityDraftDisplayName = "";
+  identityDraftMigrate = false;
   userEditDraft: Record<string, { displayName: string; email: string; phoneNumber: string; role: string; status: string; maxThreads: string }> = {};
 
   ngOnInit(): void {
@@ -130,7 +138,10 @@ export class OpsPageComponent implements OnInit, OnDestroy {
       if (system.status === "fulfilled") this.opsSystem = system.value;
       if (processes.status === "fulfilled") this.opsProcesses = processes.value.processes || [];
       if (models.status === "fulfilled") this.opsModels = models.value;
-      if (users.status === "fulfilled") this.applyUsers(users.value.users || []);
+      if (users.status === "fulfilled") {
+        this.applyUsers(users.value.users || []);
+        await this.loadSelectedUserIdentities(false);
+      }
       if (securityChallenges.status === "fulfilled") this.opsSecurityChallenges = securityChallenges.value.challenges || [];
       if (securitySessions.status === "fulfilled") this.opsSecuritySessions = securitySessions.value.sessions || [];
       this.error = "";
@@ -144,6 +155,7 @@ export class OpsPageComponent implements OnInit, OnDestroy {
   selectUser(user: OrkestrUser): void {
     this.selectedUserId = user.id;
     this.ensureUserDraft(user);
+    void this.loadSelectedUserIdentities(false);
   }
 
   selectedUser(): OrkestrUser | null {
@@ -171,6 +183,7 @@ export class OpsPageComponent implements OnInit, OnDestroy {
       this.userDraftRole = "user";
       await this.loadOps(false);
       if (result.user?.id) this.selectedUserId = result.user.id;
+      await this.loadSelectedUserIdentities(false);
       this.error = "";
       this.notice = "User created.";
     } catch (error) {
@@ -254,6 +267,75 @@ export class OpsPageComponent implements OnInit, OnDestroy {
       this.error = this.errorText(error);
     } finally {
       this.revokingSessionId = "";
+      this.renderNow();
+    }
+  }
+
+  async loadSelectedUserIdentities(showBusy = true): Promise<void> {
+    const user = this.selectedUser();
+    if (!user?.id) {
+      this.opsUserIdentities = [];
+      this.opsUserIdentitiesUserId = "";
+      return;
+    }
+    if (showBusy) this.identityBusy = true;
+    try {
+      const result = await firstValueFrom(this.api.userIdentities(user.id));
+      this.opsUserIdentities = result.identities || [];
+      this.opsUserIdentitiesUserId = user.id;
+      this.error = "";
+    } catch (error) {
+      this.error = this.errorText(error);
+    } finally {
+      if (showBusy) this.identityBusy = false;
+      this.renderNow();
+    }
+  }
+
+  async linkWhatsAppIdentity(user: OrkestrUser): Promise<void> {
+    if (this.identityBusy) return;
+    this.identityBusy = true;
+    try {
+      const result = await firstValueFrom(this.api.linkWhatsAppIdentity(user.id, {
+        accountId: this.identityDraftAccountId.trim(),
+        externalId: this.identityDraftExternalId.trim(),
+        chatId: this.identityDraftChatId.trim(),
+        displayName: this.identityDraftDisplayName.trim(),
+        migrate: this.identityDraftMigrate,
+      }));
+      this.opsUserIdentities = result.identities || [];
+      this.opsUserIdentitiesUserId = user.id;
+      this.identityDraftExternalId = "";
+      this.identityDraftChatId = "";
+      this.identityDraftDisplayName = "";
+      this.identityDraftMigrate = false;
+      this.error = "";
+      this.notice = "WhatsApp identity linked.";
+    } catch (error) {
+      this.error = this.errorText(error);
+    } finally {
+      this.identityBusy = false;
+      this.renderNow();
+    }
+  }
+
+  async unlinkWhatsAppIdentity(user: OrkestrUser, identity: UserIdentity): Promise<void> {
+    if (this.identityBusy) return;
+    this.identityBusy = true;
+    try {
+      const result = await firstValueFrom(this.api.unlinkWhatsAppIdentity(user.id, {
+        accountId: identity.accountId || "",
+        externalId: identity.externalId || "",
+        chatId: identity.chatId || "",
+      }));
+      this.opsUserIdentities = result.identities || [];
+      this.opsUserIdentitiesUserId = user.id;
+      this.error = "";
+      this.notice = "WhatsApp identity detached.";
+    } catch (error) {
+      this.error = this.errorText(error);
+    } finally {
+      this.identityBusy = false;
       this.renderNow();
     }
   }
@@ -494,6 +576,37 @@ export class OpsPageComponent implements OnInit, OnDestroy {
 
   userStatusClass(user: OrkestrUser): string {
     return user.status === "disabled" ? "bad" : "ready";
+  }
+
+  selectedUserWhatsAppIdentities(user: OrkestrUser): UserIdentity[] {
+    if (this.opsUserIdentitiesUserId !== user.id) return [];
+    return this.opsUserIdentities.filter((identity) => identity.provider === "whatsapp");
+  }
+
+  whatsappAccountOptions(): Array<{ id: string; label: string }> {
+    const accounts = Array.isArray(this.opsWhatsApp?.["accounts"]) ? this.opsWhatsApp?.["accounts"] as Array<Record<string, unknown>> : [];
+    return accounts
+      .map((account) => ({
+        id: String(account["accountId"] || account["id"] || "").trim(),
+        label: String(account["label"] || account["name"] || account["accountId"] || account["id"] || "").trim(),
+      }))
+      .filter((account) => account.id);
+  }
+
+  whatsappIdentityLabel(identity: UserIdentity): string {
+    return String(identity.displayName || identity.externalId || identity.chatId || "WhatsApp identity").trim();
+  }
+
+  whatsappIdentitySummary(identity: UserIdentity): string {
+    return [
+      identity.accountId ? `account ${identity.accountId}` : "",
+      identity.externalId ? `sender ${identity.externalId}` : "",
+      identity.chatId ? `chat ${identity.chatId}` : "",
+    ].filter(Boolean).join(" · ") || "no ids saved";
+  }
+
+  whatsappIdentitySource(identity: UserIdentity): string {
+    return identity.source === "auto" ? "auto-provisioned" : "manual";
   }
 
   userBrowserSessions(user: OrkestrUser): SecuritySession[] {

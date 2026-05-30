@@ -64,11 +64,14 @@ export function defaultAdminUser(env = process.env) {
 }
 
 function normalizeIdentity(identity = {}) {
+  const source = String(identity.source || identity.assignmentSource || (identity.autoProvisioned ? "auto" : "")).trim().toLowerCase();
   return {
     provider: String(identity.provider || "").trim().toLowerCase(),
     accountId: String(identity.accountId || "").trim(),
-    externalId: String(identity.externalId || identity.chatId || identity.email || "").trim(),
+    externalId: String(identity.externalId || identity.senderId || identity.participantId || identity.email || "").trim(),
+    chatId: String(identity.chatId || identity.waChatId || identity.whatsappChatId || "").trim(),
     displayName: String(identity.displayName || "").trim(),
+    source: source === "manual" || source === "auto" ? source : "",
     linkedAt: String(identity.linkedAt || "").trim() || nowIso(),
   };
 }
@@ -236,18 +239,20 @@ export async function updateUserLimits(userId, limits = {}, env = process.env) {
   return updateUser(userId, { limits: nextLimits }, env);
 }
 
-export async function findUserByIdentity({ provider, accountId = "", externalId = "" } = {}, env = process.env) {
+export async function findUserByIdentity(identity = {}, env = process.env) {
+  const { provider, accountId = "", externalId = "" } = identity;
   const normalizedProvider = String(provider || "").trim().toLowerCase();
   const normalizedAccountId = String(accountId || "").trim();
   const normalizedExternalId = String(externalId || "").trim();
-  if (!normalizedProvider || !normalizedExternalId) return null;
+  const normalizedChatId = String(identity.chatId || identity.waChatId || identity.whatsappChatId || "").trim();
+  if (!normalizedProvider || (!normalizedExternalId && !normalizedChatId)) return null;
   const users = await listUsers(env);
   for (const user of users) {
     const identities = await readUserPrivateIdentities(user.id, env);
     const match = identities.find((identity) =>
       identity.provider === normalizedProvider &&
-      identity.externalId === normalizedExternalId &&
-      (!normalizedAccountId || !identity.accountId || identity.accountId === normalizedAccountId)
+      identityAccountCompatible(identity, normalizedAccountId) &&
+      identityRouteMatches(identity, { externalId: normalizedExternalId, chatId: normalizedChatId })
     );
     if (match) return user;
   }
@@ -273,7 +278,7 @@ export async function findOrCreateExternalUser(identity = {}, env = process.env)
   }, env);
   const paths = userDataPaths(user.id, env);
   await ensureDataDirs(env);
-  await addUserPrivateIdentity(user.id, normalizedIdentity, env);
+  await addUserPrivateIdentity(user.id, { ...normalizedIdentity, source: normalizedIdentity.source || "auto" }, env);
   await appendEvent({ type: "external_user_provisioned", userId: user.id, provider: normalizedIdentity.provider }, env).catch(() => {});
   return {
     ...user,
@@ -305,18 +310,108 @@ export async function readUserPrivateIdentities(userId, env = process.env) {
     : [];
 }
 
+export async function linkUserPrivateIdentity(userId, identity = {}, { env = process.env, actorUserId = "system", migrate = false } = {}) {
+  const user = await getUser(userId, env);
+  if (!user) throw userError("user_not_found", 404);
+  const normalized = normalizeIdentity({ ...identity, source: identity.source || "manual" });
+  if (!normalized.provider || (!normalized.externalId && !normalized.chatId)) {
+    throw userError("external_identity_required", 400);
+  }
+  const users = await listUsers(env);
+  const conflicts = [];
+  for (const other of users) {
+    const identities = await readUserPrivateIdentities(other.id, env);
+    if (!identities.some((item) => identityConflicts(item, normalized))) continue;
+    if (other.id === user.id) continue;
+    if (other.status === "disabled") continue;
+    conflicts.push(other);
+  }
+  if (conflicts.length && !migrate) throw userError("whatsapp_identity_already_assigned", 409);
+  for (const conflict of conflicts) {
+    await removeUserPrivateIdentities(conflict.id, (item) => identityConflicts(item, normalized), env);
+    await appendEvent({
+      type: "user_identity_migrated",
+      provider: normalized.provider,
+      fromUserId: conflict.id,
+      toUserId: user.id,
+      actorUserId,
+    }, env).catch(() => {});
+  }
+  await removeUserPrivateIdentities(user.id, (item) => identityConflicts(item, normalized), env);
+  await addUserPrivateIdentity(user.id, normalized, env);
+  await appendEvent({
+    type: "user_identity_linked",
+    userId: user.id,
+    provider: normalized.provider,
+    accountId: normalized.accountId || null,
+    externalId: normalized.externalId || null,
+    chatId: normalized.chatId || null,
+    source: normalized.source || "manual",
+    actorUserId,
+  }, env).catch(() => {});
+  return readUserPrivateIdentities(user.id, env);
+}
+
+export async function unlinkUserPrivateIdentity(userId, identity = {}, { env = process.env, actorUserId = "system" } = {}) {
+  const user = await getUser(userId, env);
+  if (!user) throw userError("user_not_found", 404);
+  const normalized = normalizeIdentity(identity);
+  const removed = await removeUserPrivateIdentities(user.id, (item) => identityConflicts(item, normalized), env);
+  if (!removed.length) throw userError("user_identity_not_found", 404);
+  await appendEvent({
+    type: "user_identity_unlinked",
+    userId: user.id,
+    provider: normalized.provider,
+    accountId: normalized.accountId || null,
+    externalId: normalized.externalId || null,
+    chatId: normalized.chatId || null,
+    actorUserId,
+  }, env).catch(() => {});
+  return readUserPrivateIdentities(user.id, env);
+}
+
 async function addUserPrivateIdentity(userId, identity = {}, env = process.env) {
   const normalized = normalizeIdentity(identity);
   const paths = userDataPaths(userId, env);
   await ensureDataDirs(env);
   const identities = await readUserPrivateIdentities(userId, env);
-  const exists = identities.some((item) =>
-    item.provider === normalized.provider &&
-    item.accountId === normalized.accountId &&
-    item.externalId === normalized.externalId
-  );
-  if (exists) return identities;
-  const next = [...identities, normalized];
+  let replaced = false;
+  const next = identities.map((item) => {
+    const matches = item.provider === normalized.provider &&
+      item.accountId === normalized.accountId &&
+      item.externalId === normalized.externalId &&
+      item.chatId === normalized.chatId;
+    if (!matches) return item;
+    replaced = true;
+    return { ...item, ...normalized, source: normalized.source || item.source, linkedAt: item.linkedAt || normalized.linkedAt };
+  });
+  if (!replaced) next.push(normalized);
   await writeJson(paths.identities, next);
   return next;
+}
+
+async function removeUserPrivateIdentities(userId, predicate, env = process.env) {
+  const paths = userDataPaths(userId, env);
+  await ensureDataDirs(env);
+  const identities = await readUserPrivateIdentities(userId, env);
+  const removed = identities.filter(predicate);
+  if (!removed.length) return [];
+  await writeJson(paths.identities, identities.filter((identity) => !predicate(identity)));
+  return removed;
+}
+
+function identityAccountCompatible(identity = {}, accountId = "") {
+  return !accountId || !identity.accountId || identity.accountId === accountId;
+}
+
+function identityRouteMatches(identity = {}, route = {}) {
+  const externalId = String(route.externalId || "").trim();
+  const chatId = String(route.chatId || "").trim();
+  return Boolean((externalId && identity.externalId === externalId) || (chatId && identity.chatId === chatId));
+}
+
+function identityConflicts(left = {}, right = {}) {
+  if (left.provider !== right.provider) return false;
+  if (left.accountId && right.accountId && left.accountId !== right.accountId) return false;
+  return Boolean((left.externalId && right.externalId && left.externalId === right.externalId) || (left.chatId && right.chatId && left.chatId === right.chatId));
 }

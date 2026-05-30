@@ -883,6 +883,16 @@ export interface OrkestrUser {
   updatedAt?: string;
 }
 
+export interface UserIdentity {
+  provider: string;
+  accountId?: string;
+  externalId?: string;
+  chatId?: string;
+  displayName?: string;
+  source?: "manual" | "auto" | string;
+  linkedAt?: string;
+}
+
 export interface UsersResponse {
   users: OrkestrUser[];
   generatedAt?: string;
@@ -891,6 +901,12 @@ export interface UsersResponse {
 export interface UserResponse {
   ok?: boolean;
   user: OrkestrUser;
+}
+
+export interface UserIdentitiesResponse {
+  ok?: boolean;
+  userId: string;
+  identities: UserIdentity[];
 }
 
 @Injectable({ providedIn: "root" })
@@ -961,6 +977,18 @@ export class ApiService {
 
   disableUser(id: string): Observable<UserResponse> {
     return this.http.post<UserResponse>(this.api(`/users/${encodeURIComponent(id)}/disable`), {});
+  }
+
+  userIdentities(id: string): Observable<UserIdentitiesResponse> {
+    return this.http.get<UserIdentitiesResponse>(this.api(`/users/${encodeURIComponent(id)}/identities`));
+  }
+
+  linkWhatsAppIdentity(id: string, body: Record<string, unknown>): Observable<UserIdentitiesResponse> {
+    return this.http.post<UserIdentitiesResponse>(this.api(`/users/${encodeURIComponent(id)}/identities/whatsapp`), body);
+  }
+
+  unlinkWhatsAppIdentity(id: string, body: Record<string, unknown>): Observable<UserIdentitiesResponse> {
+    return this.http.post<UserIdentitiesResponse>(this.api(`/users/${encodeURIComponent(id)}/identities/whatsapp/unlink`), body);
   }
 
   createSecurityChallenge(): Observable<SecurityChallengeResponse> {

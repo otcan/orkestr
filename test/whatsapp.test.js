@@ -9,6 +9,7 @@ import { runNextAgentMessage, runNextThreadMessage } from "../packages/core/src/
 import { listAgentMessages } from "../packages/core/src/messages.js";
 import { getSetupStatus } from "../packages/core/src/setup.js";
 import { appendThreadMessage, createThread, enqueueThreadInput, getThread, listThreadMessages, listThreads, updateThreadMessage } from "../packages/core/src/threads.js";
+import { createUser, linkUserPrivateIdentity } from "../packages/core/src/users.js";
 import { deliverWhatsAppReplies, formatWhatsAppOutboundText, getWhatsAppChatParticipants, getWhatsAppStatus, initialQueueDeliveryState, mapLocalWhatsAppStatusFromHealth, routeWhatsAppInbound, syncWhatsAppTypingIndicators } from "../packages/connectors/src/whatsapp.js";
 import { cleanupLocalWhatsAppChromeLocks, forwardLocalWhatsAppInbound, listLocalWhatsAppChats, localWhatsAppAccountIdsForEnv, localWhatsAppConnectedPageReadyFallbackEligible, localWhatsAppInboundForwardTarget, localWhatsAppMessageRouteFields, localWhatsAppReadyFallbackEligible, localWhatsAppTypingClearRetryDelaysMs, localWhatsAppUnreadRecoveryBoundChats, localWhatsAppUnreadRecoveryIntervalMs, normalizeGroupParticipantIds, recoverConfiguredLocalWhatsAppAccounts, recoverUnreadLocalWhatsAppMessages, recoverableLocalWhatsAppAccountIds, reduceLocalWhatsAppBridgeState, sendWhatsAppTextWithConfirmation, startLocalWhatsAppAccount, webCacheRoot } from "../packages/connectors/src/whatsapp-local-bridge.js";
 import { createAndBindWhatsAppThreadGroup } from "../packages/connectors/src/whatsapp-thread-groups.js";
@@ -1112,6 +1113,46 @@ test("whatsapp inbound can auto-provision a scoped user thread", async () => {
   assert.equal(routedAgain.autoProvisioned, false);
   assert.equal(messagesAfter.length, 2);
   assert.deepEqual(threads.map((entry) => entry.id), [routed.threadId]);
+});
+
+test("whatsapp inbound uses manually linked user identities before provisioning", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-manual-user-thread-"));
+  const env = await externalBridgeEnvWithAllowingSanitizer(home, {
+    ORKESTR_WHATSAPP_AUTO_PROVISION_USERS: "1",
+  });
+  await writeConnectorConfig("whatsapp", {
+    bridgeMode: "external",
+    bridgeUrl: "http://wa.local",
+    autoProvisionUsers: true,
+  }, env);
+  const user = await createUser({ id: "alice", role: "user", displayName: "Alice" }, env);
+  await linkUserPrivateIdentity(user.id, {
+    provider: "whatsapp",
+    accountId: "main",
+    externalId: "491111111111@c.us",
+    chatId: "manual-alice-chat@g.us",
+    displayName: "Alice WA",
+    source: "manual",
+  }, { env, actorUserId: "admin" });
+
+  const routed = await routeWhatsAppInbound({
+    eventId: "wa-manual-user-1",
+    chatId: "manual-alice-chat@g.us",
+    accountId: "main",
+    from: "491111111111@c.us",
+    chatName: "Alice Chat",
+    text: "hello from manually linked whatsapp",
+  }, env);
+  const thread = await getThread(routed.threadId, env);
+  const messages = await listThreadMessages(routed.threadId, env);
+  const users = await listThreads(env);
+
+  assert.equal(routed.autoProvisioned, true);
+  assert.equal(routed.userId, "alice");
+  assert.equal(thread.ownerUserId, "alice");
+  assert.equal(thread.binding.chatId, "manual-alice-chat@g.us");
+  assert.equal(messages[0].ownerUserId, "alice");
+  assert.deepEqual(users.map((entry) => entry.ownerUserId), ["alice"]);
 });
 
 test("whatsapp delivery mirrors bound thread replies that only carry the binding chat id", async () => {

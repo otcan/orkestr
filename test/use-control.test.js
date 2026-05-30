@@ -820,6 +820,46 @@ test("user management API is admin-only and can pair a browser to a managed user
     assert.equal(created.user.email, "alice@example.test");
     await createUser({ email: "bob@example.test", phoneNumber: "+15557654321", role: "user", displayName: "Bob" }, process.env);
 
+    const linkedWhatsApp = await read(await fetch(`${baseUrl}/api/users/alice-example.test/identities/whatsapp`, {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie: adminCookie },
+      body: JSON.stringify({
+        accountId: "main",
+        externalId: "491234567890@c.us",
+        chatId: "manual-chat@g.us",
+        displayName: "Alice WhatsApp",
+      }),
+    }));
+    assert.equal(linkedWhatsApp.identities[0].provider, "whatsapp");
+    assert.equal(linkedWhatsApp.identities[0].source, "manual");
+    assert.equal(linkedWhatsApp.identities[0].externalId, "491234567890@c.us");
+    assert.equal(linkedWhatsApp.identities[0].chatId, "manual-chat@g.us");
+
+    const duplicateWhatsAppResponse = await fetch(`${baseUrl}/api/users/bob-example.test/identities/whatsapp`, {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie: adminCookie },
+      body: JSON.stringify({ accountId: "main", externalId: "491234567890@c.us" }),
+    });
+    const duplicateWhatsApp = await read(duplicateWhatsAppResponse);
+    assert.equal(duplicateWhatsAppResponse.status, 409);
+    assert.equal(duplicateWhatsApp.error, "whatsapp_identity_already_assigned");
+
+    const migratedWhatsApp = await read(await fetch(`${baseUrl}/api/users/bob-example.test/identities/whatsapp`, {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie: adminCookie },
+      body: JSON.stringify({ accountId: "main", externalId: "491234567890@c.us", migrate: true }),
+    }));
+    assert.equal(migratedWhatsApp.userId, "bob-example.test");
+    assert.equal(migratedWhatsApp.identities[0].externalId, "491234567890@c.us");
+    const aliceIdentitiesAfterMigration = await read(await fetch(`${baseUrl}/api/users/alice-example.test/identities`, { headers: { cookie: adminCookie } }));
+    assert.deepEqual(aliceIdentitiesAfterMigration.identities, []);
+    const unlinkedWhatsApp = await read(await fetch(`${baseUrl}/api/users/bob-example.test/identities/whatsapp/unlink`, {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie: adminCookie },
+      body: JSON.stringify({ accountId: "main", externalId: "491234567890@c.us" }),
+    }));
+    assert.deepEqual(unlinkedWhatsApp.identities, []);
+
     const adminSkills = await read(await fetch(`${baseUrl}/api/users/alice-example.test/skills`, { headers: { cookie: adminCookie } }));
     assert.ok(adminSkills.skills.some((skill) => skill.id === "learning"));
     const disabledSkill = await read(await fetch(`${baseUrl}/api/users/alice-example.test/skills/linkedin`, {

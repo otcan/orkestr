@@ -457,7 +457,9 @@ async function routeAutoProvisionedThread(input = {}, config = {}, env = process
     provider: "whatsapp",
     accountId,
     externalId,
+    chatId,
     displayName,
+    source: "auto",
   }, env);
   const principal = userPrincipal({ ...user, source: "whatsapp" });
   const ownedThreads = await listThreadsForPrincipal(principal, env);

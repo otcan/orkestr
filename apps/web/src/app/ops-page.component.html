@@ -371,6 +371,57 @@
           </form>
 
           <section class="user-identities">
+            <h4>WhatsApp identities</h4>
+            <form class="user-create-form" (submit)="linkWhatsAppIdentity(user); $event.preventDefault()">
+              <label>
+                <span>WA account</span>
+                <select name="wa-identity-account-{{ user.id }}" [(ngModel)]="identityDraftAccountId">
+                  <option value="">Any account</option>
+                  @for (account of whatsappAccountOptions(); track account.id) {
+                    <option [value]="account.id">{{ account.label || account.id }}</option>
+                  }
+                </select>
+              </label>
+              <label>
+                <span>Sender ID</span>
+                <input name="wa-identity-sender-{{ user.id }}" [(ngModel)]="identityDraftExternalId" placeholder="491234567890@c.us" />
+              </label>
+              <label>
+                <span>Chat ID</span>
+                <input name="wa-identity-chat-{{ user.id }}" [(ngModel)]="identityDraftChatId" placeholder="120363...@g.us" />
+              </label>
+              <label>
+                <span>Label</span>
+                <input name="wa-identity-name-{{ user.id }}" [(ngModel)]="identityDraftDisplayName" placeholder="WhatsApp contact" />
+              </label>
+              <label class="checkbox-row">
+                <input name="wa-identity-migrate-{{ user.id }}" type="checkbox" [(ngModel)]="identityDraftMigrate" />
+                <span>Migrate if already assigned</span>
+              </label>
+              <button type="submit" [disabled]="identityBusy || (!identityDraftExternalId.trim() && !identityDraftChatId.trim())">
+                {{ identityBusy ? "Saving" : "Link WhatsApp" }}
+              </button>
+            </form>
+
+            <div class="compact-list">
+              @for (identity of selectedUserWhatsAppIdentities(user); track whatsappIdentitySummary(identity)) {
+                <article class="compact-row">
+                  <strong>{{ whatsappIdentityLabel(identity) }}</strong>
+                  <span>{{ whatsappIdentitySource(identity) }}</span>
+                  <p>{{ whatsappIdentitySummary(identity) }}</p>
+                  <div class="settings-actions">
+                    <button class="secondary danger-soft" type="button" (click)="unlinkWhatsAppIdentity(user, identity)" [disabled]="identityBusy">
+                      Detach WhatsApp
+                    </button>
+                  </div>
+                </article>
+              } @empty {
+                <p class="empty">No WhatsApp identities linked to this user.</p>
+              }
+            </div>
+          </section>
+
+          <section class="user-identities">
             <h4>Authentication policy</h4>
             <div class="compact-list">
               <article class="compact-row">
