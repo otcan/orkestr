@@ -23,6 +23,7 @@ test("tenant isolation release suite is named and wired into the release train",
   assert.match(command, /test\/codex-app-server\.test\.js/);
   assert.match(command, /test\/whatsapp\.test\.js/);
   assert.match(command, /test\/whereiam\.test\.js/);
+  assert.match(command, /test\/tenant-vm-registry\.test\.js/);
   assert.match(releaseTrain, /npm run test:tenant-isolation/);
   assert.match(releaseTrain, /tenant isolation release checklist/);
   assert.match(checklist, /Non-admin thread visibility/);

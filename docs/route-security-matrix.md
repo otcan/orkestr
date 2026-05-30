@@ -40,6 +40,7 @@ authorization.
 | WhatsApp inbound | `POST /api/connectors/whatsapp/inbound` | Machine-token bootstrap or paired admin/user route target | inbound machine auth and router ownership |
 | WhatsApp bridge administration | accounts, chats, QR, send, recover, deliver, config, overlay actions | Admin only | connector route guard |
 | Users | `GET/POST/PATCH /api/users` | Admin only | users controller and control-plane guard |
+| Tenant VM registry | `GET/POST/PATCH/DELETE /api/tenant-vms` | Admin only | tenant VM registry controller and control-plane guard |
 | Codex host control | `GET /api/codex/*`, import, migrate | Admin only | control-plane guard |
 | Agents and executors | `/api/agents`, `/api/executors`, `/api/executions` | Admin only | control-plane guard |
 | Runtime leases and host system | runtime leases, system/processes/resources/doctor/settings | Admin only | control-plane guard |

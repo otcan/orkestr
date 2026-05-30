@@ -6,6 +6,7 @@ import { ConnectorsModule } from "./modules/connectors/connectors.module.js";
 import { SystemModule } from "./modules/system/system.module.js";
 import { ThreadsModule } from "./modules/threads/threads.module.js";
 import { TimersModule } from "./modules/timers/timers.module.js";
+import { TenantVmsModule } from "./modules/tenant-vms/tenant-vms.module.js";
 import { UsersModule } from "./modules/users/users.module.js";
 
 @Module({
@@ -17,6 +18,7 @@ import { UsersModule } from "./modules/users/users.module.js";
     AgentsModule,
     ThreadsModule,
     TimersModule,
+    TenantVmsModule,
     UsersModule,
   ],
 })
