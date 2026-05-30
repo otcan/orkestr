@@ -77,6 +77,14 @@ test("global shell keeps onboarding footer reachable", async () => {
   assert.match(styles, /\.app-shell\s*{[^}]*overflow:\s*hidden/s);
 });
 
+test("thread sidebar treats runtime interruption messages as errors", async () => {
+  const component = await fs.readFile("apps/web/src/app/app.component.ts", "utf8");
+
+  assert.match(component, /this\.messagePhase\(message\) === "runtime_interrupted"/);
+  assert.match(component, /thread\.lastMessagePhase \|\| ""\)\.toLowerCase\(\) === "runtime_interrupted"/);
+  assert.match(component, /Codex conversation was interrupted\./);
+});
+
 test("ops desktop links are only shown for running desktops", async () => {
   const template = await fs.readFile("apps/web/src/app/ops-page.component.html", "utf8");
   const component = await fs.readFile("apps/web/src/app/ops-page.component.ts", "utf8");

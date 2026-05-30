@@ -22,6 +22,7 @@ import {
   messageTurnId,
   terminalAssistantMessage,
 } from "./thread-message-visibility.js";
+import { readLiveCodexThreadState } from "./codex-app-server-live-state.js";
 
 function runtimeStatusState(thread) {
   return appServerStateFromStatus(thread?.runtime?.codexStatus || null);
@@ -66,38 +67,6 @@ function messageActivityMs(message = {}) {
     timestampMs(item.deliveryLastAttemptAt),
     timestampMs(item.createdAt),
   );
-}
-
-function activeTurnFromCodexThread(codexThread = {}) {
-  const turns = Array.isArray(codexThread.turns) ? codexThread.turns : [];
-  for (let index = turns.length - 1; index >= 0; index -= 1) {
-    const turn = turns[index] || {};
-    const status = clean(turn.status).toLowerCase();
-    if (["active", "inprogress", "in_progress", "running", "started"].includes(status)) {
-      return clean(turn.id);
-    }
-  }
-  return "";
-}
-
-async function readLiveCodexThreadState(client, codexId) {
-  if (!client || !codexId) return null;
-  const read = await client.request("thread/read", { threadId: codexId, includeTurns: true }).catch(() => null);
-  const codexThread = read?.thread || null;
-  if (!codexThread || !clean(codexThread.id || codexThread.threadId || codexId)) return null;
-  const status = codexThread.status || null;
-  const activeTurnId = clean(codexThread.activeTurnId || codexThread.currentTurnId || activeTurnFromCodexThread(codexThread));
-  const effectiveStatus = activeTurnId && appServerStateFromStatus(status) !== "working"
-    ? { type: "active", activeFlags: ["running"] }
-    : status;
-  if (!effectiveStatus && !activeTurnId) return null;
-  const state = {
-    status: effectiveStatus,
-    activeTurnId,
-    thread: codexThread,
-  };
-  client.threadStates.set(codexId, state);
-  return state;
 }
 
 function deliveredUserMessage(message = {}) {

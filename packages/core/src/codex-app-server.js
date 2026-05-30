@@ -32,6 +32,7 @@ import {
   userInputText,
 } from "./codex-app-server-common.js";
 import { getCodexAppServerClient, stopCodexAppServerClients as stopCodexAppServerRuntimeClients } from "./codex-app-server-client.js";
+import { readLiveCodexThreadState } from "./codex-app-server-live-state.js";
 import { codexAppServerSocket, codexAppServerTransport } from "../../connectors/src/codex-app-server-transport.js";
 import { codexAppServerMessageFields } from "./codex-app-server-whatsapp.js";
 import { ensureRuntimeAgentsFile } from "./agent-context.js";
@@ -379,8 +380,19 @@ export async function sendCodexAppServerInput(thread, message, env = process.env
   if (!pending) {
     return { message, result: null, observedVia: "codex_app_server_stale_claim", skipped: true };
   }
-  const clientState = client.threadStates.get(id) || {};
-  const clientStatusState = appServerStateFromStatus(clientState.status);
+  let clientState = client.threadStates.get(id) || {};
+  let clientStatusState = appServerStateFromStatus(clientState.status);
+  const persistedActiveTurnId = clean(thread.runtime?.activeTurnId);
+  const stateActiveTurnId = clean(Object.prototype.hasOwnProperty.call(clientState, "activeTurnId") ? clientState.activeTurnId : "");
+  const statusLooksActive = clean(clientState.status?.type || thread.runtime?.codexStatus?.type).toLowerCase() === "active";
+  const threadLooksWorking = [thread.state, thread.runtime?.state].map((value) => clean(value).toLowerCase()).includes("working");
+  if (!stateActiveTurnId && !persistedActiveTurnId && (statusLooksActive || threadLooksWorking)) {
+    const liveState = await readLiveCodexThreadState(client, id);
+    if (liveState) {
+      clientState = liveState;
+      clientStatusState = appServerStateFromStatus(clientState.status);
+    }
+  }
   const statusClearsActiveTurn = ["ready", "failed", "unloaded", "awaiting_approval"].includes(clientStatusState);
   if (statusClearsActiveTurn && clean(clientState.activeTurnId)) {
     client.threadStates.set(id, { ...clientState, activeTurnId: "" });
@@ -623,8 +635,20 @@ export async function codexAppServerThreadStatus(thread, env = process.env, coun
   await ensureContainedCodexRuntimeHome(thread, env);
   const runtimeEnv = codexRuntimeEnvForThread(thread, env);
   const client = id ? await getCodexAppServerClient({ env: runtimeEnv, home: runtimeHome(runtimeEnv) }).catch(() => null) : null;
-  const hasClientState = Boolean(id && client?.threadStates.has(id));
-  const state = hasClientState ? client.threadStates.get(id) || {} : {};
+  let hasClientState = Boolean(id && client?.threadStates.has(id));
+  let state = hasClientState ? client.threadStates.get(id) || {} : {};
+  const stateActiveTurnIdBeforeRead = hasClientState && Object.prototype.hasOwnProperty.call(state, "activeTurnId")
+    ? clean(state.activeTurnId)
+    : "";
+  const statusLooksActive = clean(state.status?.type || thread.runtime?.codexStatus?.type).toLowerCase() === "active";
+  const threadLooksWorking = [thread.state, thread.runtime?.state].map((value) => clean(value).toLowerCase()).includes("working");
+  if (id && client && !stateActiveTurnIdBeforeRead && (statusLooksActive || threadLooksWorking)) {
+    const liveState = await readLiveCodexThreadState(client, id);
+    if (liveState) {
+      hasClientState = true;
+      state = liveState;
+    }
+  }
   const pendingRequest = client?.pendingRequestForThread(thread) || thread.runtime?.pendingRequest || null;
   const codexStatus = hasClientState ? state.status || null : thread.runtime?.codexStatus || null;
   const rawStatusState = appServerStateFromStatus(codexStatus);

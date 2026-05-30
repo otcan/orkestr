@@ -142,6 +142,9 @@ rl.on("line", (line) => {
     send({ id, result: { turn } });
     send({ method: "turn/started", params: { turn } });
     if (requestedStatus !== "interrupted") send({ method: "item/completed", params: { threadId: params.threadId, turnId: turn.id, item: agent } });
+    turn.status = requestedStatus;
+    thread.status = { type: "idle" };
+    writeState(state);
     send({ method: "turn/completed", params: { turn: { ...turn, status: requestedStatus, error: requestedStatus === "interrupted" ? { message: "Conversation interrupted - tell the model what to do differently." } : null } } });
     return;
   }
@@ -2102,6 +2105,67 @@ test("Codex app-server queues normal input behind active turns", async () => {
     assert.equal(queued.deliveryState, "awaiting_active_turn");
     assert.ok(!rawState.calls.some((call) => call.method === "turn/steer"));
     assert.ok(!rawState.calls.some((call) => call.method === "turn/start"));
+  } finally {
+    stopCodexAppServerClients();
+  }
+});
+
+test("Codex app-server reads live active turns before delivering queued input", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-codex-app-server-live-active-delivery-"));
+  const fake = await createFakeCodex(home);
+  const env = {
+    ORKESTR_HOME: path.join(home, "orkestr"),
+    HOME: path.join(home, "runtime-home"),
+    PATH: `${fake.bin}${path.delimiter}${process.env.PATH || ""}`,
+    FAKE_CODEX_STATE: fake.stateFile,
+    ORKESTR_CODEX_APP_SERVER_ACTIVE_TURN_RETRY_MS: "60000",
+  };
+  try {
+    const thread = await createThread({ id: "app-server-live-active-delivery-thread", name: "App Server Live Active Delivery Thread", cwd: home, executorId: "codex", executor: { type: "codex" } }, env);
+    const started = await startCodexAppServerThread(thread, env);
+    const codexId = started.thread.executor.codexThreadId;
+    const rawState = JSON.parse(await fs.readFile(fake.stateFile, "utf8"));
+    const codexThread = rawState.threads.find((item) => item.id === codexId);
+    codexThread.status = { type: "active", activeFlags: [] };
+    codexThread.turns.push({
+      id: "live-empty-flags-turn",
+      threadId: codexId,
+      status: "inProgress",
+      items: [
+        { type: "userMessage", id: "user_live_empty_flags", content: [{ type: "text", text: "Still working." }] },
+      ],
+    });
+    await fs.writeFile(fake.stateFile, JSON.stringify(rawState, null, 2));
+    await updateThread(started.thread.id, {
+      state: "working",
+      runtime: {
+        ...(started.thread.runtime || {}),
+        runtimeKind: "codex-app-server",
+        state: "working",
+        activeTurnId: null,
+        codexStatus: { type: "active", activeFlags: [] },
+      },
+    }, env);
+    const client = await getCodexAppServerClient({ env, home: env.HOME });
+    client.threadStates.delete(codexId);
+    const input = await enqueueThreadInput(started.thread.id, { text: "do not interrupt the live turn" }, env);
+
+    const delivered = await deliverCodexAppServerPendingInputs(await getThread(started.thread.id, env), env);
+    const messages = await listThreadMessages(started.thread.id, env);
+    const queued = messages.find((message) => message.id === input.id);
+    const status = await codexAppServerThreadStatus(await getThread(started.thread.id, env), env);
+    const rawStateAfter = JSON.parse(await fs.readFile(fake.stateFile, "utf8"));
+    const deliveryTurnStarts = rawStateAfter.calls.filter((call) =>
+      call.method === "turn/start" && call.params?.input?.some((item) => item.text === "do not interrupt the live turn")
+    );
+
+    assert.deepEqual(delivered, []);
+    assert.equal(queued.state, "queued");
+    assert.equal(queued.deliveryState, "awaiting_active_turn");
+    assert.equal(status.state, "working");
+    assert.equal(status.activeTurnId, "live-empty-flags-turn");
+    assert.equal(rawStateAfter.calls.some((call) => call.method === "thread/read" && call.params?.threadId === codexId), true);
+    assert.equal(deliveryTurnStarts.length, 0);
   } finally {
     stopCodexAppServerClients();
   }
