@@ -151,10 +151,16 @@ function normalizedMessageText(value: unknown): string {
   return String(value || "").replace(/\s+/g, " ").trim();
 }
 
+const liveCodexDisplaySources = new Set(["codex-rollout", "codex-app-server", "codex-app-server-import"]);
+
+function liveCodexDisplaySource(message: any): boolean {
+  return liveCodexDisplaySources.has(String(message?.source || "").trim());
+}
+
 function duplicateAdjacentAssistant(previous: any, current: any): boolean {
   if (!previous || !current) return false;
   if (previous.role !== "assistant" || current.role !== "assistant") return false;
-  if (previous.source !== "codex-rollout" || current.source !== "codex-rollout") return false;
+  if (!liveCodexDisplaySource(previous) || !liveCodexDisplaySource(current)) return false;
   if (String(previous.phase || "") !== String(current.phase || "")) return false;
   if (!normalizedMessageText(current.text) || normalizedMessageText(previous.text) !== normalizedMessageText(current.text)) return false;
   const previousMs = Date.parse(String(previous.timestamp || previous.createdAt || ""));

@@ -5323,6 +5323,13 @@ test("thread message API hides adjacent duplicate rollout assistant records", as
     }, { ORKESTR_HOME: home });
     await appendThreadMessage("duplicate-api-thread", {
       role: "assistant",
+      source: "codex-app-server-import",
+      phase: "final_answer",
+      text: "same final answer",
+      createdAt: "2026-05-16T10:00:00.250Z",
+    }, { ORKESTR_HOME: home });
+    await appendThreadMessage("duplicate-api-thread", {
+      role: "assistant",
       source: "codex-rollout",
       phase: "final_answer",
       text: "same final answer",
