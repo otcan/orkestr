@@ -3,6 +3,7 @@ import path from "node:path";
 import { dataPaths, ensureDataDirs } from "../../storage/src/paths.js";
 import { appendEvent, readJson } from "../../storage/src/store.js";
 import { requestThreadInputDelivery } from "../../core/src/runtime-leases.js";
+import { tenantWhatsAppInboundForwardRoute } from "../../core/src/tenant-whatsapp-routing.js";
 import { listThreads } from "../../core/src/threads.js";
 import { setGeneratedLocalWhatsAppGroupPicture } from "./whatsapp-chat-picture.js";
 
@@ -98,10 +99,11 @@ function localWhatsAppInboundForwardToken({ chatId = "" } = {}, env = process.en
 
 export async function forwardLocalWhatsAppInbound(input = {}, env = process.env, fetchImpl = fetch) {
   const chatId = String(input.chatId || input.chat?.id || input.fromChatId || "").trim();
-  const target = localWhatsAppInboundForwardTarget({ chatId }, env);
+  const tenantRoute = await tenantWhatsAppInboundForwardRoute(input, env);
+  const target = tenantRoute?.target || localWhatsAppInboundForwardTarget({ chatId }, env);
   if (!target) return null;
   const headers = { "content-type": "application/json" };
-  const token = localWhatsAppInboundForwardToken({ chatId }, env);
+  const token = tenantRoute?.token || localWhatsAppInboundForwardToken({ chatId }, env);
   if (token) headers.authorization = `Bearer ${token}`;
   const response = await fetchImpl(target, {
     method: "POST",
@@ -121,6 +123,7 @@ export async function forwardLocalWhatsAppInbound(input = {}, env = process.env,
     chatId,
     eventId: String(input.eventId || input.id || input.messageId || ""),
     target,
+    tenantVmId: tenantRoute?.tenantVmId || null,
     status: response.status,
     threadId: payload.threadId || null,
     agentId: payload.agentId || null,

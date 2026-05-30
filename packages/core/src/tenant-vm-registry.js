@@ -98,7 +98,9 @@ function normalizeConnectors(connectors = {}) {
   const source = connectors && typeof connectors === "object" && !Array.isArray(connectors) ? connectors : {};
   return {
     whatsappChatName: clean(source.whatsappChatName || source.waChatName || ""),
+    whatsappChatId: clean(source.whatsappChatId || source.waChatId || ""),
     whatsappAccountId: clean(source.whatsappAccountId || source.waAccountId || ""),
+    whatsappRouteEnabled: source.whatsappRouteEnabled === true || source.waRouteEnabled === true,
     gmailAccountId: clean(source.gmailAccountId || ""),
     outlookAccountId: clean(source.outlookAccountId || ""),
     linkedinDesktopSlug: clean(source.linkedinDesktopSlug || source.linkedin || "linkedin"),

@@ -9,6 +9,7 @@ import {
   updateTenantVm,
 } from "../../../../../packages/core/src/tenant-vm-registry.js";
 import { provisionTenantVm } from "../../../../../packages/core/src/tenant-vm-provisioning.js";
+import { configureTenantWhatsAppRoute, disableTenantWhatsAppRoute, listTenantWhatsAppRoutes } from "../../../../../packages/core/src/tenant-whatsapp-routing.js";
 import { isAdminPrincipal } from "../../../../../packages/core/src/policy.js";
 import { requestPrincipal } from "../../../../../packages/core/src/principal.js";
 import { httpError } from "../../common/http.js";
@@ -69,13 +70,30 @@ function tenantVmProvisionBody(body: Record<string, unknown> = {}) {
   return output;
 }
 
+function tenantVmWhatsAppRouteBody(body: Record<string, unknown> = {}) {
+  const output: Record<string, unknown> = {};
+  for (const key of ["chatId", "whatsappChatId", "waChatId", "chatName", "displayName", "accountId", "whatsappAccountId", "token"]) {
+    if (body[key] !== undefined) output[key] = String(body[key] || "").trim();
+  }
+  if (body.enabled !== undefined) output.enabled = body.enabled;
+  if (body.resetToken !== undefined) output.resetToken = body.resetToken;
+  return output;
+}
+
 @Controller("api/tenant-vms")
 export class TenantVmsController {
   @Get()
   async list(@Req() request: any) {
     assertAdminRequest(request);
     const tenantVms = await listTenantVms();
-    return { tenantVms: tenantVms.map((vm) => publicTenantVm(vm)), generatedAt: new Date().toISOString() };
+    const whatsappRoutes = Object.fromEntries((await listTenantWhatsAppRoutes()).map((route) => [route.tenantVmId, route]));
+    return {
+      tenantVms: tenantVms.map((vm) => ({
+        ...publicTenantVm(vm),
+        whatsappRoute: whatsappRoutes[vm.id] || null,
+      })),
+      generatedAt: new Date().toISOString(),
+    };
   }
 
   @Post()
@@ -118,6 +136,19 @@ export class TenantVmsController {
   async provision(@Req() request: any, @Param("tenantVmId") tenantVmId: string, @Body() body: Record<string, unknown> = {}) {
     assertAdminRequest(request);
     return provisionTenantVm(tenantVmId, tenantVmProvisionBody(body));
+  }
+
+  @Post(":tenantVmId/whatsapp-route")
+  @HttpCode(200)
+  async configureWhatsAppRoute(@Req() request: any, @Param("tenantVmId") tenantVmId: string, @Body() body: Record<string, unknown> = {}) {
+    assertAdminRequest(request);
+    return configureTenantWhatsAppRoute(tenantVmId, tenantVmWhatsAppRouteBody(body));
+  }
+
+  @Delete(":tenantVmId/whatsapp-route")
+  async disableWhatsAppRoute(@Req() request: any, @Param("tenantVmId") tenantVmId: string) {
+    assertAdminRequest(request);
+    return disableTenantWhatsAppRoute(tenantVmId);
   }
 
   @Delete(":tenantVmId")

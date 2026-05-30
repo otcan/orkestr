@@ -131,6 +131,21 @@ test("tenant VM registry API is admin-only and returns public-safe records", asy
     const listed = await read(await fetch(`${baseUrl}/api/tenant-vms`, { headers: { cookie: adminCookie } }));
     assert.deepEqual(listed.tenantVms.map((tenantVm) => tenantVm.id), ["alice-tenant"]);
 
+    const whatsappRoute = await read(await fetch(`${baseUrl}/api/tenant-vms/alice-tenant/whatsapp-route`, {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie: adminCookie },
+      body: JSON.stringify({
+        chatId: "120363000000000000@g.us",
+        accountId: "responder",
+      }),
+    }));
+    assert.equal(whatsappRoute.route.target, "https://alice.example.test/api/connectors/whatsapp/inbound");
+    assert.match(whatsappRoute.route.token, /^owt_/);
+    const listedWithRoute = await read(await fetch(`${baseUrl}/api/tenant-vms`, { headers: { cookie: adminCookie } }));
+    assert.equal(listedWithRoute.tenantVms[0].whatsappRoute.token, undefined);
+    assert.equal(listedWithRoute.tenantVms[0].whatsappRoute.tokenConfigured, true);
+    assert.equal(listedWithRoute.tenantVms[0].whatsappRoute.chatId, "120363000000000000@g.us");
+
     const provisioned = await read(await fetch(`${baseUrl}/api/tenant-vms/alice-tenant/provision`, {
       method: "POST",
       headers: { "content-type": "application/json", cookie: adminCookie },
@@ -181,6 +196,15 @@ test("tenant VM registry API is admin-only and returns public-safe records", asy
     const deniedProvisionPayload = await read(deniedProvision);
     assert.equal(deniedProvision.status, 403);
     assert.equal(deniedProvisionPayload.error, "control_plane_admin_required");
+
+    const deniedRoute = await fetch(`${baseUrl}/api/tenant-vms/alice-tenant/whatsapp-route`, {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie: userCookie },
+      body: JSON.stringify({ chatId: "blocked@g.us" }),
+    });
+    const deniedRoutePayload = await read(deniedRoute);
+    assert.equal(deniedRoute.status, 403);
+    assert.equal(deniedRoutePayload.error, "control_plane_admin_required");
   } finally {
     await new Promise((resolve) => server.close(resolve));
     if (priorHome === undefined) delete process.env.ORKESTR_HOME;
