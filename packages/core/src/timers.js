@@ -4,6 +4,7 @@ import { dataPaths, ensureDataDirs } from "../../storage/src/paths.js";
 import { appendEvent, readJson, writeJson } from "../../storage/src/store.js";
 import { assertSanitizedAction } from "./llm-sanitizer.js";
 import { enqueueAgentMessage } from "./messages.js";
+import { principalForUserId, userPrincipal } from "./principal.js";
 import { enqueueThreadInput, getThreadForPrincipal, listThreads, listThreadsForPrincipal } from "./threads.js";
 import { assertResourceAccess, filterResourcesForPrincipal, isAdminPrincipal } from "./policy.js";
 import { adminUserId, normalizeUserId } from "./users.js";
@@ -43,6 +44,44 @@ function clockFromIso(value, fallback = "09:00") {
   const date = new Date(value || "");
   if (Number.isNaN(date.getTime())) return fallback;
   return `${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
+}
+
+function timerOwnerUserId(timer, env = process.env) {
+  return normalizeUserId(timer?.ownerUserId || timer?.userId || env.ORKESTR_ADMIN_USER_ID || adminUserId);
+}
+
+function timerOwnerIsAdmin(timer, env = process.env) {
+  return timerOwnerUserId(timer, env) === normalizeUserId(env.ORKESTR_ADMIN_USER_ID || adminUserId);
+}
+
+async function principalForTimerOwner(timer, env = process.env) {
+  const ownerUserId = timerOwnerUserId(timer, env);
+  return await principalForUserId(ownerUserId, env) ||
+    userPrincipal({ id: ownerUserId, role: "user", source: "timer-owner", displayName: ownerUserId });
+}
+
+async function assertTimerExecutionSanitized(timer, source, env = process.env, principal = null) {
+  if (timerOwnerIsAdmin(timer, env)) return null;
+  const ownerPrincipal = principal && !isAdminPrincipal(principal) ? principal : await principalForTimerOwner(timer, env);
+  return assertSanitizedAction({
+    action: "timer.execute",
+    principal: ownerPrincipal,
+    resource: {
+      type: "timer",
+      id: timer.id,
+      ownerUserId: timerOwnerUserId(timer, env),
+      target: timer.target,
+      targetType: timer.targetType || "agent",
+    },
+    input: {
+      source,
+      label: timer.label || "",
+      target: timer.target || "",
+      targetType: timer.targetType || "",
+      prompt: String(timer.prompt || "").slice(0, 8000),
+      promptFile: timer.promptFile || "",
+    },
+  }, env);
 }
 
 export function nextRunAt(timer, from = new Date()) {
@@ -322,7 +361,8 @@ export async function createTimerForPrincipal(input, principal, env = process.en
   }, env);
 }
 
-async function enqueueTimerMessage(timer, source, env) {
+async function enqueueTimerMessage(timer, source, env, principal = null) {
+  await assertTimerExecutionSanitized(timer, source, env, principal);
   const input = {
     source,
     text: timer.prompt,
@@ -352,7 +392,7 @@ export async function deleteTimerForPrincipal(id, principal, env = process.env) 
   return deleteTimer(id, env);
 }
 
-export async function runTimerNow(id, env = process.env, now = new Date()) {
+export async function runTimerNow(id, env = process.env, now = new Date(), options = {}) {
   const paths = dataPaths(env);
   const timers = await listTimers(env);
   const timer = timers.find((entry) => entry.id === id);
@@ -361,7 +401,7 @@ export async function runTimerNow(id, env = process.env, now = new Date()) {
     error.statusCode = 404;
     throw error;
   }
-  const message = await enqueueTimerMessage(timer, "timer_manual_run", env);
+  const message = await enqueueTimerMessage(timer, "timer_manual_run", env, options.principal || null);
   timer.lastRunAt = now.toISOString();
   timer.nextRunAt = timer.cadence === "once" ? null : nextRunAt(timer, now);
   if (timer.cadence === "once") timer.enabled = false;
@@ -391,18 +431,7 @@ export async function runTimerNowForPrincipal(id, principal, env = process.env, 
     throw error;
   }
   assertResourceAccess(principal, timer, "timer_run", env);
-  if (!isAdminPrincipal(principal)) {
-    await assertSanitizedAction({
-      action: "timer.run",
-      principal,
-      resource: { type: "timer", id: timer.id, ownerUserId: timer.ownerUserId, target: timer.target, targetType: timer.targetType },
-      input: {
-        prompt: String(timer.prompt || "").slice(0, 8000),
-        promptFile: timer.promptFile || "",
-      },
-    }, env);
-  }
-  return runTimerNow(id, env, now);
+  return runTimerNow(id, env, now, { principal });
 }
 
 export async function markDueTimers(env = process.env, now = new Date()) {

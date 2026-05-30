@@ -5,7 +5,7 @@ import path from "node:path";
 import test from "node:test";
 import { pathToFileURL } from "node:url";
 import { startServer } from "../apps/server/src/server.js";
-import { createTimer, createTimerForPrincipal, doctorTimersForPrincipal, listTimersForPrincipal } from "../packages/core/src/timers.js";
+import { createTimer, createTimerForPrincipal, doctorTimersForPrincipal, listTimers, listTimersForPrincipal, markDueTimers } from "../packages/core/src/timers.js";
 import { adminPrincipal, userPrincipal } from "../packages/core/src/principal.js";
 import { sanitizeAction } from "../packages/core/src/llm-sanitizer.js";
 import { approvePairingChallenge } from "../packages/core/src/security.js";
@@ -347,6 +347,89 @@ test("non-admin timer creation is scoped and sanitizer-gated", async () => {
 
   assert.equal(timer.ownerUserId, "alice");
   assert.deepEqual((await listTimersForPrincipal(alice, env)).map((entry) => entry.id), [timer.id]);
+});
+
+test("non-admin due timer execution must pass the LLM sanitizer", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-use-control-due-timer-"));
+  const payloadLog = path.join(home, "sanitizer-payloads.jsonl");
+  const script = path.join(home, "capture-sanitizer.mjs");
+  await fs.writeFile(
+    script,
+    [
+      "import fs from 'node:fs';",
+      "let input = '';",
+      "process.stdin.setEncoding('utf8');",
+      "process.stdin.on('data', (chunk) => { input += chunk; });",
+      "process.stdin.on('end', () => {",
+      `  fs.appendFileSync(${JSON.stringify(payloadLog)}, input.trim() + '\\n');`,
+      "  console.log(JSON.stringify({ allow: true, reason: 'test-allow', model: 'test-llm' }));",
+      "});",
+      "",
+    ].join("\n"),
+    "utf8",
+  );
+  const env = {
+    ORKESTR_HOME: home,
+    ORKESTR_LLM_SANITIZER_COMMAND_JSON: JSON.stringify([process.execPath, script]),
+  };
+  const alice = userPrincipal(await upsertUser({ id: "alice", role: "user" }, env));
+  await createThreadForPrincipal({ id: "alice-thread", name: "Main" }, alice, env);
+  const timer = await createTimerForPrincipal({
+    label: "Due",
+    targetType: "thread",
+    target: "alice-thread",
+    prompt: "Run due timer safely",
+    cadence: "interval",
+    every: "1h",
+  }, alice, env);
+  const timers = await listTimers(env);
+  timers[0].nextRunAt = "2020-01-01T00:00:00.000Z";
+  await fs.writeFile(path.join(home, "timers.json"), `${JSON.stringify(timers, null, 2)}\n`);
+
+  const due = await markDueTimers(env, new Date("2026-05-15T10:00:00Z"));
+  const messages = await listThreadMessages("alice-thread", env);
+  const payloads = (await fs.readFile(payloadLog, "utf8"))
+    .trim()
+    .split("\n")
+    .filter(Boolean)
+    .map((line) => JSON.parse(line));
+
+  assert.equal(due.length, 1);
+  assert.equal(messages[0].source, "timer_due");
+  assert.ok(payloads.some((payload) =>
+    payload.action === "timer.execute" &&
+    payload.principal.userId === "alice" &&
+    payload.resource.id === timer.id &&
+    payload.input.source === "timer_due"
+  ));
+});
+
+test("non-admin due timer execution fails closed when sanitizer is unavailable", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-use-control-due-timer-block-"));
+  const env = { ORKESTR_HOME: home };
+  await upsertUser({ id: "alice", role: "user" }, env);
+  await createThread({ id: "alice-thread", name: "Alice", ownerUserId: "alice" }, env);
+  await createTimer({
+    label: "Blocked due",
+    ownerUserId: "alice",
+    targetType: "thread",
+    target: "alice-thread",
+    prompt: "Run due timer",
+    cadence: "interval",
+    every: "1h",
+  }, env);
+  const timers = await listTimers(env);
+  timers[0].nextRunAt = "2020-01-01T00:00:00.000Z";
+  await fs.writeFile(path.join(home, "timers.json"), `${JSON.stringify(timers, null, 2)}\n`);
+
+  const due = await markDueTimers(env, new Date("2026-05-15T10:00:00Z"));
+  const after = await listTimers(env);
+  const messages = await listThreadMessages("alice-thread", env);
+
+  assert.deepEqual(due, []);
+  assert.equal(messages.length, 0);
+  assert.equal(after[0].lastError, "llm_sanitizer_unconfigured");
+  assert.equal(after[0].lastErrorAt, "2026-05-15T10:00:00.000Z");
 });
 
 test("non-admin timer doctor only reports owned timers", async () => {
