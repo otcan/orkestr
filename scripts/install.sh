@@ -2013,9 +2013,10 @@ EOF
 }
 
 write_systemd_service() {
-  local service_name group_name codex_service_name
+  local service_name group_name codex_service_name timeout_stop_sec
   service_name="$(systemd_service_name)"
   codex_service_name="$(codex_app_server_service_name)"
+  timeout_stop_sec="${ORKESTR_SERVICE_TIMEOUT_STOP_SEC:-15s}"
   group_name="$(id -gn "$run_user")"
   cat > "/etc/systemd/system/${service_name}.service" <<EOF
 [Unit]
@@ -2033,6 +2034,7 @@ EnvironmentFile=-$env_file
 ExecStart=/usr/local/bin/orkestr serve
 Restart=on-failure
 RestartSec=5
+TimeoutStopSec=$timeout_stop_sec
 PrivateTmp=true
 
 [Install]

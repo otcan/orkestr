@@ -101,7 +101,10 @@ function waitForServeShutdown(server) {
     const shutdown = () => {
       if (closing) return;
       closing = true;
-      const forceExit = setTimeout(() => resolve(0), 10_000);
+      const forceExit = setTimeout(() => {
+        resolve(0);
+        process.exit(0);
+      }, serveShutdownTimeoutMs());
       if (typeof forceExit.unref === "function") forceExit.unref();
       server.close(() => {
         clearTimeout(forceExit);
@@ -111,6 +114,11 @@ function waitForServeShutdown(server) {
     process.once("SIGINT", shutdown);
     process.once("SIGTERM", shutdown);
   });
+}
+
+function serveShutdownTimeoutMs(env = process.env) {
+  const parsed = Number(env.ORKESTR_SERVE_SHUTDOWN_TIMEOUT_MS || 10_000);
+  return Number.isFinite(parsed) ? Math.max(1000, parsed) : 10_000;
 }
 
 async function list(argv, ctx) {

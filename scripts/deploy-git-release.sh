@@ -39,6 +39,7 @@ Environment:
   ORKESTR_CODEX_APP_SERVER_SOCKET  Unix socket for the external Codex app-server.
   ORKESTR_CODEX_APP_SERVER_SERVICE_NAME  External Codex app-server systemd unit. Defaults to $ORKESTR_SERVICE_NAME-codex.
   ORKESTR_SERVICE_NAME          systemd service name. Defaults to orkestr.
+  ORKESTR_SERVICE_TIMEOUT_STOP_SEC systemd stop timeout for Orkestr. Defaults to 15s.
   ORKESTR_BUILD_WEB_FROM_SOURCE Set to 1 to install dev dependencies and rebuild the Angular web app.
 
 The app code is versioned. ORKESTR_HOME and /etc/orkestr/orkestr.env stay
@@ -664,6 +665,7 @@ deploy_guard_before_restart() {
 }
 
 restart_and_verify() {
+  configure_service_shutdown_timeout
   if [ "$no_interrupt" = "1" ] && [ "$deploy_drain_started" = "1" ]; then
     systemctl stop "${service_name}.service"
     clear_deploy_drain
@@ -673,6 +675,26 @@ restart_and_verify() {
   fi
   systemctl is-active --quiet "${service_name}.service"
   health_check "$health_url" 40
+}
+
+configure_service_shutdown_timeout() {
+  if [ "$(id -u)" -ne 0 ]; then
+    return 0
+  fi
+  local timeout dropin_dir
+  timeout="${ORKESTR_SERVICE_TIMEOUT_STOP_SEC:-15s}"
+  case "$timeout" in
+    ""|*[!0123456789smhd.]*)
+      timeout="15s"
+      ;;
+  esac
+  dropin_dir="/etc/systemd/system/${service_name}.service.d"
+  mkdir -p "$dropin_dir"
+  cat > "$dropin_dir/50-shutdown-timeout.conf" <<EOF
+[Service]
+TimeoutStopSec=$timeout
+EOF
+  systemctl daemon-reload
 }
 
 sync_safe_workers_after_deploy() {

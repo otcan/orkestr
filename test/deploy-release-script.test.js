@@ -58,6 +58,7 @@ test("release deploy script exposes versioned install, status, and rollback", as
   assert.match(script, /ORKESTR_DEPLOY_WAIT_ACTIVE/);
   assert.match(script, /ORKESTR_DEPLOY_ACTIVE_CHECK_URL/);
   assert.match(script, /ORKESTR_DEPLOY_DRAIN_FILE/);
+  assert.match(script, /ORKESTR_SERVICE_TIMEOUT_STOP_SEC/);
   assert.match(script, /deploy_guard_active_work/);
   assert.match(script, /begin_deploy_drain/);
   assert.match(script, /service_is_active/);
@@ -75,6 +76,9 @@ test("release deploy script exposes versioned install, status, and rollback", as
   assert.match(script, /codexAppServerTransport/);
   assert.match(script, /appServerTransport/);
   assert.match(script, /deploy_guard_before_restart/);
+  assert.match(script, /configure_service_shutdown_timeout/);
+  assert.match(script, /50-shutdown-timeout\.conf/);
+  assert.match(script, /TimeoutStopSec=\$timeout/);
   assert.match(script, /ORKESTR_CODEX_APP_SERVER_MODE/);
   assert.match(script, /ORKESTR_CODEX_APP_SERVER_SERVICE_NAME/);
   assert.match(script, /tags_only_arg/);

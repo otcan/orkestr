@@ -54,6 +54,13 @@ test("CLI help exposes local service commands promised by the installer", async 
   assert.match(stdout.text(), /orkestr logs \[--service orkestr\]/);
 });
 
+test("CLI serve shutdown has a bounded force-exit fallback", async () => {
+  const source = await fs.readFile("apps/cli/src/commands.js", "utf8");
+
+  assert.match(source, /ORKESTR_SERVE_SHUTDOWN_TIMEOUT_MS/);
+  assert.match(source, /process\.exit\(0\)/);
+});
+
 test("CLI lists threads from the public API", async () => {
   const stdout = capture();
   const code = await runCli(["--api", "http://orkestr.test", "list"], {
