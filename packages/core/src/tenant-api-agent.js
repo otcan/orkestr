@@ -7,6 +7,7 @@ import { startCodexAppServerThread, threadUsesCodexAppServer } from "./codex-app
 import { tenantApiAgentToolDefinitions, runTenantApiAgentTool } from "./tenant-api-agent-tools.js";
 import { threadRequiresTenantIsolation } from "./tenant-policy.js";
 import { appendThreadMessage, getThread, listThreadMessages, updateThread, updateThreadMessage } from "./threads.js";
+import { userScopedCapabilityHints } from "./user-skills.js";
 import { adminUserId, normalizeUserId } from "./users.js";
 
 export const API_AGENT_RUNTIME_KIND = "api-agent";
@@ -155,35 +156,81 @@ function sourceChannelForMessage(message = {}) {
   return clean(message.connector || message.originSurface || message.source || "");
 }
 
-function tenantContext(thread = {}, messages = [], env = process.env) {
+function publicTenantCapabilities(capabilities = {}) {
+  const scopedConnectors = capabilities.scopedConnectors && typeof capabilities.scopedConnectors === "object" ? capabilities.scopedConnectors : {};
+  return {
+    files: capabilities.files === true,
+    timers: capabilities.timers === true,
+    desktops: capabilities.desktopLeases === true || capabilities.virtualBrowsers === true,
+    whatsapp: capabilities.whatsapp === true,
+    gmail: capabilities.gmail === true,
+    outlook: capabilities.outlook === true,
+    linkedin: capabilities.linkedin === true,
+    learning: capabilities.learning === true,
+    codexEscalation: true,
+    hostSkills: false,
+    globalConnectorAccounts: false,
+    privateOperatorData: false,
+    enabledSkills: Array.isArray(capabilities.enabledSkills) ? [...capabilities.enabledSkills] : [],
+    disabledSkills: Array.isArray(capabilities.disabledSkills) ? [...capabilities.disabledSkills] : [],
+    scopedConnectors: {
+      whatsapp: scopedConnectors.whatsapp === true || capabilities.whatsapp === true,
+      gmail: scopedConnectors.gmail === true || capabilities.gmail === true,
+      outlook: scopedConnectors.outlook === true || capabilities.outlook === true,
+      linkedin: scopedConnectors.linkedin === true || capabilities.linkedin === true,
+    },
+  };
+}
+
+async function scopedCapabilitiesForThread(thread = {}, env = process.env) {
+  try {
+    return await userScopedCapabilityHints({ userId: threadOwnerUserId(thread, env), thread }, env);
+  } catch {
+    return {
+      files: false,
+      timers: false,
+      virtualBrowsers: false,
+      desktopLeases: false,
+      whatsapp: Boolean(thread.binding?.connector === "whatsapp" || thread.binding?.chatId),
+      gmail: false,
+      outlook: false,
+      linkedin: false,
+      learning: false,
+      enabledSkills: [],
+      disabledSkills: [],
+      scopedConnectors: {
+        whatsapp: Boolean(thread.binding?.connector === "whatsapp" || thread.binding?.chatId),
+        gmail: false,
+        outlook: false,
+        linkedin: false,
+      },
+    };
+  }
+}
+
+async function tenantContext(thread = {}, messages = [], env = process.env) {
   const ownerUserId = threadOwnerUserId(thread, env);
+  const capabilities = await scopedCapabilitiesForThread(thread, env);
   return {
     tenantId: ownerUserId,
     threadId: thread.id || null,
     threadName: thread.bindingName || thread.name || thread.title || thread.id || null,
     sourceChannel: thread.binding?.connector === "whatsapp" || thread.binding?.chatId ? "whatsapp" : "web",
     runtimeKind: API_AGENT_RUNTIME_KIND,
-    capabilities: {
-      files: true,
-      timers: true,
-      desktops: true,
-      whatsapp: Boolean(thread.binding?.connector === "whatsapp" || thread.binding?.chatId),
-      gmail: false,
-      outlook: false,
-      linkedin: false,
-      codexEscalation: true,
-    },
+    capabilities: publicTenantCapabilities(capabilities),
     recentMessageCount: Math.min(20, messages.length),
   };
 }
 
-export function buildTenantApiAgentInstructions(thread = {}, messages = [], env = process.env) {
-  const context = tenantContext(thread, messages, env);
+export async function buildTenantApiAgentInstructions(thread = {}, messages = [], env = process.env) {
+  const context = await tenantContext(thread, messages, env);
   return [
     "You are the user-facing assistant for one Orkestr tenant chat.",
     "Be natural, concise, and helpful. Do not expose Orkestr internals, Codex runtime details, queues, tmux, shell paths, debug strings, or implementation wording unless the user explicitly asks about Orkestr operations.",
     "You are scoped to the tenant in the JSON context below. Do not claim access to files, Gmail, Outlook, LinkedIn, WhatsApp accounts, browser desktops, timers, or other chats unless the provided Orkestr tools or context show them for this tenant.",
     "Use the provided Orkestr tools for tenant-scoped resources. If a connector or permission is missing, say what needs to be connected in Orkestr.",
+    "When asked what you can do, list only capabilities that are true in the Tenant context JSON. Do not mention unavailable capabilities as if they are connected.",
+    "If asked for the WhatsApp number, WhatsApp account, connector ID, backend account, or controlled identity, do not reveal phone numbers, session IDs, account IDs, tokens, or connector internals. If WhatsApp is enabled, say you are connected to this chat through Orkestr and exact account details are admin-only.",
     "Never approve security, auth, browser-pairing, connector, or SSH challenges. Tell the user to use the trusted Orkestr UI or SSH command shown by Orkestr.",
     "If the user asks for code/workspace execution, ask them to send the same task with /codex to explicitly escalate to a contained Codex worker.",
     "",
@@ -251,10 +298,14 @@ async function recordResponseUsage({ response, thread, message, callKind, status
 }
 
 function userSafeApiAgentError(error) {
-  const code = clean(error?.message || error);
+  const code = clean(error?.sanitizer?.reason || error?.message || error);
+  const lowered = lower(code);
   if (code.includes("budget_exceeded")) return "I can't answer right now because this chat has reached its OpenAI usage budget. Ask an admin to raise the limit or try again later.";
   if (code.includes("openai_api_key_required")) return "This chat is not connected to the OpenAI API yet. Ask an admin to configure the API-agent key in Orkestr.";
-  if (code.includes("sanitizer")) return "I couldn't safely verify this request, so I did not run it. Please try a simpler request or ask an admin to check the sanitizer setup.";
+  if (lowered.includes("whatsapp") || lowered.includes("connector") || lowered.includes("account identity") || lowered.includes("capability")) {
+    return "I can use this WhatsApp chat, but I can't expose backend WhatsApp account or connector identity from here. Ask the Orkestr admin to check connector settings.";
+  }
+  if (code.includes("sanitizer") || error?.sanitizer) return "I couldn't safely verify this request, so I did not run it. Please try a simpler request or ask an admin to check the sanitizer setup.";
   return "I couldn't complete this request right now. Please try again in a moment.";
 }
 
@@ -301,7 +352,7 @@ async function handleCodexEscalation(thread, message, env = process.env) {
 async function runTenantApiAgentResponse({ thread, messages, message, env, fetchImpl }) {
   const model = apiAgentModel(env);
   const principal = tenantPrincipalForThread(thread, env);
-  const instructions = buildTenantApiAgentInstructions(thread, messages, env);
+  const instructions = await buildTenantApiAgentInstructions(thread, messages, env);
   const input = messages
     .filter((item) => clean(item.text || item.promptFile))
     .slice(-20)
@@ -342,6 +393,7 @@ async function runTenantApiAgentResponse({ thread, messages, message, env, fetch
           type: "thread",
           id: thread.id,
           ownerUserId: threadOwnerUserId(thread, env),
+          capabilities: await scopedCapabilitiesForThread(thread, env),
         },
         input: { tool: call.name, args },
       }, env);
@@ -418,6 +470,7 @@ async function processNextApiAgentMessage(thread, env = process.env, options = {
   }
   const principal = tenantPrincipalForThread(thread, env);
   if (!isAdminPrincipal(principal)) {
+    const capabilities = await scopedCapabilitiesForThread(thread, env);
     await assertSanitizedAction({
       action: "api-agent.input",
       principal,
@@ -425,6 +478,7 @@ async function processNextApiAgentMessage(thread, env = process.env, options = {
         type: "thread",
         id: thread.id,
         ownerUserId: threadOwnerUserId(thread, env),
+        capabilities,
       },
       input: {
         text: clean(message.text).slice(0, 8000),

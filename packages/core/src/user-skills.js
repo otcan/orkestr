@@ -285,9 +285,14 @@ export async function userScopedCapabilityHints({ userId = "", thread = null } =
   const owner = normalizeUserId(userId || thread?.ownerUserId || thread?.userId || env.ORKESTR_ADMIN_USER_ID || "admin");
   const snapshot = await userSkillCapabilitySnapshot(owner, env);
   const tenantVm = await getTenantVmForOwner(owner, env).catch(() => null);
-  const scopedConnectors = tenantConnectorState(tenantVm);
+  const tenantConnectors = tenantConnectorState(tenantVm);
+  const hasThreadWhatsAppBinding = threadHasWhatsAppBinding(thread || {});
+  const scopedConnectors = {
+    ...tenantConnectors,
+    whatsapp: tenantConnectors.whatsapp || hasThreadWhatsAppBinding,
+  };
   const enabled = (skillId) => snapshot.skillEnabled[skillId] === true;
-  const whatsappAvailable = threadHasWhatsAppBinding(thread || {}) || scopedConnectors.whatsapp;
+  const whatsappAvailable = scopedConnectors.whatsapp;
   const linkedinAvailable = scopedConnectors.linkedin;
 
   return {
