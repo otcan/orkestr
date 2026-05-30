@@ -2246,6 +2246,53 @@ test("whatsapp inbound suppresses duplicate active thread inputs by content", as
   assert.equal(messages[0].state, "queued");
 });
 
+test("whatsapp duplicate active tenant input is suppressed before sanitizer reruns", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-tenant-duplicate-before-sanitizer-"));
+  const countFile = path.join(home, "sanitizer-count.txt");
+  const script = path.join(home, "single-sanitizer.mjs");
+  await fs.writeFile(
+    script,
+    [
+      "import fs from 'node:fs';",
+      `const countFile = ${JSON.stringify(countFile)};`,
+      "let input = '';",
+      "process.stdin.setEncoding('utf8');",
+      "process.stdin.on('data', (chunk) => { input += chunk; });",
+      "process.stdin.on('end', () => {",
+      "  JSON.parse(input);",
+      "  const current = Number(fs.existsSync(countFile) ? fs.readFileSync(countFile, 'utf8') : '0');",
+      "  fs.writeFileSync(countFile, String(current + 1));",
+      "  console.log(JSON.stringify({ allow: current === 0, reason: current === 0 ? 'first-input-ok' : 'sanitizer-ran-for-duplicate', model: 'test-llm' }));",
+      "});",
+      "",
+    ].join("\n"),
+    "utf8",
+  );
+  const env = externalBridgeEnv(home, {
+    ORKESTR_LLM_SANITIZER_COMMAND_JSON: JSON.stringify([process.execPath, script]),
+  });
+  await createThread({
+    id: "thread-wa-tenant-active-duplicate",
+    name: "Tenant WA Active Duplicate Thread",
+    ownerUserId: "otcan",
+    binding: { connector: "whatsapp", chatId: "chat-tenant-active-duplicate" },
+  }, env);
+  await writeConnectorConfig("whatsapp", {
+    threadRoutes: { "chat-tenant-active-duplicate": "thread-wa-tenant-active-duplicate" },
+  }, env);
+
+  const first = await routeWhatsAppInbound({ eventId: "wa-tenant-active-1", chatId: "chat-tenant-active-duplicate", from: "sender-1", text: "same queued tenant work" }, env);
+  const second = await routeWhatsAppInbound({ eventId: "wa-tenant-active-2", chatId: "chat-tenant-active-duplicate", from: "sender-1", text: "same queued tenant work" }, env);
+  const messages = await listThreadMessages("thread-wa-tenant-active-duplicate", env);
+  const sanitizerRuns = Number(await fs.readFile(countFile, "utf8"));
+
+  assert.equal(first.duplicate, false);
+  assert.equal(second.duplicate, true);
+  assert.equal(second.event.messageId, first.message.id);
+  assert.equal(messages.length, 1);
+  assert.equal(sanitizerRuns, 1);
+});
+
 test("whatsapp delivery translates markdown into chat-friendly formatting", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-markdown-reply-"));
   const env = externalBridgeEnv(home);

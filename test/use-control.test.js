@@ -22,7 +22,7 @@ import { sanitizeAction } from "../packages/core/src/llm-sanitizer.js";
 import { recordCreditUsage } from "../packages/core/src/credit-usage.js";
 import { approvePairingChallenge } from "../packages/core/src/security.js";
 import { createUser, disableUser, findOrCreateExternalUser, listUsers, readUserPrivateIdentities, updateUser, upsertUser } from "../packages/core/src/users.js";
-import { listUserSkillsForPrincipal, setUserSkillForPrincipal } from "../packages/core/src/user-skills.js";
+import { listUserSkillsForPrincipal, setUserSkillForPrincipal, userScopedCapabilityHints } from "../packages/core/src/user-skills.js";
 import { createTenantVm } from "../packages/core/src/tenant-vm-registry.js";
 import { acquireDesktopLease } from "../packages/browsers/src/desktop-leases.js";
 import {
@@ -560,6 +560,24 @@ test("non-admin thread input sanitizer receives user skill guarded capabilities"
   assert.equal(captured.resource.capabilities.hostSkills, false);
   assert.ok(captured.resource.capabilities.disabledSkills.includes("gmail"));
   assert.ok(captured.resource.capabilities.enabledSkills.includes("whatsapp"));
+});
+
+test("WhatsApp-bound tenant thread exposes scoped WhatsApp capability without tenant VM connector state", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-use-control-wa-thread-caps-"));
+  const env = { ORKESTR_HOME: home };
+  const alice = userPrincipal(await upsertUser({ id: "alice", role: "user", displayName: "Alice" }, env));
+  const thread = await createThreadForPrincipal({
+    id: "alice-wa-thread",
+    name: "Alice WA",
+    binding: { connector: "whatsapp", chatId: "chat-alice" },
+  }, alice, env);
+
+  const capabilities = await userScopedCapabilityHints({ userId: "alice", thread }, env);
+
+  assert.equal(capabilities.whatsapp, true);
+  assert.equal(capabilities.scopedConnectors.whatsapp, true);
+  assert.equal(capabilities.gmail, false);
+  assert.equal(capabilities.linkedin, false);
 });
 
 test("LLM sanitizer is fail-closed when no provider is configured", async () => {

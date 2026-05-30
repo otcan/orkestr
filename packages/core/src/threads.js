@@ -470,6 +470,18 @@ export async function enqueueThreadInput(threadId, input, env = process.env) {
 
 export async function enqueueThreadInputForPrincipal(threadId, input, principal, env = process.env) {
   const thread = await getThreadForPrincipal(threadId, principal, env);
+  const nextInput = whatsappBindingInputDefaults(thread, { ...input, ownerUserId: thread.ownerUserId });
+  const duplicate = await activeDuplicateThreadInput(thread.id, nextInput, env);
+  if (duplicate) {
+    await appendEvent({
+      type: "thread_input_duplicate_suppressed",
+      threadId: thread.id,
+      messageId: duplicate.id,
+      source: nextInput.source || "",
+      connector: nextInput.connector || "",
+    }, env);
+    return { ...duplicate, duplicate: true, duplicateReason: "active_input" };
+  }
   if (!isAdminPrincipal(principal)) {
     const capabilities = await userScopedCapabilityHints({ userId: thread.ownerUserId, thread }, env);
     await assertSanitizedAction({
@@ -482,18 +494,22 @@ export async function enqueueThreadInputForPrincipal(threadId, input, principal,
         capabilities,
       },
       input: {
-        text: String(input?.text || "").slice(0, 8000),
-        promptFile: String(input?.promptFile || ""),
-        attachments: Array.isArray(input?.attachments) ? input.attachments.map((attachment) => ({
+        text: String(nextInput?.text || "").slice(0, 8000),
+        promptFile: String(nextInput?.promptFile || ""),
+        attachments: Array.isArray(nextInput?.attachments) ? nextInput.attachments.map((attachment) => ({
           name: attachment?.name || attachment?.filename || "",
           mimetype: attachment?.mimetype || attachment?.type || "",
           size: attachment?.size || null,
         })) : [],
-        source: input?.source || "",
+        source: nextInput?.source || "",
       },
     }, env);
   }
-  return enqueueThreadInput(thread.id, { ...input, ownerUserId: thread.ownerUserId }, env);
+  return appendThreadMessage(thread.id, {
+    ...nextInput,
+    role: "user",
+    state: "queued",
+  }, env);
 }
 
 export async function updateThreadMessage(threadId, messageId, patch, env = process.env) {

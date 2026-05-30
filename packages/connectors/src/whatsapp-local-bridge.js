@@ -753,8 +753,12 @@ function attachmentSummaryText(attachments = []) {
 
 function inboundRoutingFailureNoticeText(error) {
   const reason = String(error?.message || error || "routing_failed").trim();
+  const lowered = reason.toLowerCase();
   if (reason === "llm_sanitizer_unconfigured") {
     return "Orkestr could not accept your message because the isolated-user LLM sanitizer is not configured. Ask the admin to connect the sanitizer, then resend.";
+  }
+  if (lowered.includes("whatsapp") || lowered.includes("connector") || lowered.includes("capability") || lowered.includes("account identity")) {
+    return "I can't safely handle that request in this chat. Ask the Orkestr admin to enable the needed capability, or rephrase it without requesting private connector/account details.";
   }
   if (reason.startsWith("llm_sanitizer")) {
     return `Orkestr could not accept your message because the isolated-user LLM sanitizer blocked or could not verify it: ${reason}.`;

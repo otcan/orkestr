@@ -61,6 +61,8 @@ function promptFor(payload) {
     "- Allow ordinary conversation and harmless requests inside the requesting user's own thread/workspace.",
     "- Allow greetings, status questions, and normal task requests when principal.userId equals resource.ownerUserId.",
     "- Do not deny only because the source is WhatsApp or because tenant-scoped IDs are present.",
+    "- Allow questions about the current chat's available skills/capabilities when principal.userId equals resource.ownerUserId.",
+    "- Allow questions about whether the current chat is connected through WhatsApp when resource.capabilities.whatsapp is true. If the user asks for the exact WhatsApp number/account/connector identity, route it so the assistant can answer safely without exposing backend phone numbers, account IDs, tokens, session IDs, or connector internals.",
     "",
     "Deny only when the requested user text asks to:",
     "- read, write, route, summarize, or expose another user's data",

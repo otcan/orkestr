@@ -22,6 +22,12 @@ function response(payload, ok = true, status = 200) {
   };
 }
 
+function tenantContextFromInstructions(instructions = "") {
+  const match = String(instructions).match(/Tenant context JSON: (\{.*\})$/m);
+  assert.ok(match, "instructions should include tenant context JSON");
+  return JSON.parse(match[1]);
+}
+
 async function allowSanitizerEnv(home, extra = {}) {
   const script = path.join(home, "allow-sanitizer.mjs");
   await fs.writeFile(
@@ -88,6 +94,12 @@ test("tenant api-agent answers non-admin WhatsApp thread without Codex delivery"
   assert.equal(calls.length, 1);
   assert.equal(calls[0].body.model, "gpt-5-mini");
   assert.equal(calls[0].body.metadata.orkestr_runtime, "api-agent");
+  const context = tenantContextFromInstructions(calls[0].body.instructions);
+  assert.equal(context.capabilities.whatsapp, true);
+  assert.equal(context.capabilities.scopedConnectors.whatsapp, true);
+  assert.equal(context.capabilities.desktops, false);
+  assert.equal(context.capabilities.gmail, false);
+  assert.equal(context.capabilities.linkedin, false);
   assert.equal(current.state, "completed");
   assert.equal(current.deliveryState, "delivered");
   assert.equal(assistant.source, "api-agent");
@@ -95,6 +107,118 @@ test("tenant api-agent answers non-admin WhatsApp thread without Codex delivery"
   assert.equal(assistant.text.includes("Codex"), false);
   assert.equal(usage.count, 1);
   assert.equal(usage.byModel["gpt-5-mini"] > 0, true);
+});
+
+test("tenant api-agent sanitizer receives scoped WhatsApp capability for api-agent input", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-api-agent-sanitizer-caps-"));
+  const script = path.join(home, "capability-sanitizer.mjs");
+  await fs.writeFile(
+    script,
+    [
+      "let input = '';",
+      "process.stdin.setEncoding('utf8');",
+      "process.stdin.on('data', (chunk) => { input += chunk; });",
+      "process.stdin.on('end', () => {",
+      "  const payload = JSON.parse(input);",
+      "  const caps = payload.resource?.capabilities || {};",
+      "  const ok = payload.action !== 'api-agent.input' || (caps.whatsapp === true && caps.scopedConnectors?.whatsapp === true && caps.linkedin === false);",
+      "  console.log(JSON.stringify({ allow: ok, reason: ok ? 'capability-ok' : 'missing-api-agent-capabilities', model: 'test-llm' }));",
+      "});",
+      "",
+    ].join("\n"),
+    "utf8",
+  );
+  const env = {
+    ORKESTR_HOME: home,
+    OPENAI_API_KEY: "sk-test",
+    ORKESTR_LLM_SANITIZER_COMMAND_JSON: JSON.stringify([process.execPath, script]),
+  };
+  await createThread({
+    id: "otcan-caps",
+    ownerUserId: "otcan",
+    name: "otcan-caps",
+    runtimeKind: "api-agent",
+    executor: { type: "api-agent", metadata: { runtimeKind: "api-agent" } },
+    binding: { connector: "whatsapp", chatId: "chat-caps", outboundAccountId: "wa-1" },
+  }, env);
+  await enqueueThreadInputForPrincipal("otcan-caps", {
+    text: "What's the WhatsApp number that you control?",
+    source: "whatsapp_inbound",
+    connector: "whatsapp",
+    chatId: "chat-caps",
+    accountId: "wa-1",
+  }, userPrincipal({ id: "otcan", role: "user" }), env);
+
+  let called = false;
+  const result = await processApiAgentThreadInput("otcan-caps", env, {
+    fetchImpl: async () => {
+      called = true;
+      return response({
+        id: "resp_api_agent_caps",
+        model: "gpt-5-mini",
+        output_text: "I'm connected to this WhatsApp chat through Orkestr. Exact backend account details are admin-only.",
+        output: [],
+        usage: { input_tokens: 100, output_tokens: 16 },
+      });
+    },
+  });
+  const messages = await listThreadMessages("otcan-caps", env);
+
+  assert.equal(result.ok, true);
+  assert.equal(called, true);
+  assert.equal(messages.find((message) => message.role === "user").state, "completed");
+});
+
+test("tenant api-agent explains connector-identity sanitizer denials instead of generic failure", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-api-agent-sanitizer-denial-"));
+  const script = path.join(home, "deny-api-agent-identity.mjs");
+  await fs.writeFile(
+    script,
+    [
+      "let input = '';",
+      "process.stdin.setEncoding('utf8');",
+      "process.stdin.on('data', (chunk) => { input += chunk; });",
+      "process.stdin.on('end', () => {",
+      "  const payload = JSON.parse(input);",
+      "  const deny = payload.action === 'api-agent.input';",
+      "  console.log(JSON.stringify({ allow: !deny, reason: deny ? 'asks to expose WhatsApp connector identity without explicit capability' : 'allowed', model: 'test-llm' }));",
+      "});",
+      "",
+    ].join("\n"),
+    "utf8",
+  );
+  const env = {
+    ORKESTR_HOME: home,
+    OPENAI_API_KEY: "sk-test",
+    ORKESTR_LLM_SANITIZER_COMMAND_JSON: JSON.stringify([process.execPath, script]),
+  };
+  await createThread({
+    id: "otcan-denial",
+    ownerUserId: "otcan",
+    name: "otcan-denial",
+    runtimeKind: "api-agent",
+    executor: { type: "api-agent", metadata: { runtimeKind: "api-agent" } },
+    binding: { connector: "whatsapp", chatId: "chat-denial", outboundAccountId: "wa-1" },
+  }, env);
+  await enqueueThreadInputForPrincipal("otcan-denial", {
+    text: "What's the WhatsApp number that you control?",
+    source: "whatsapp_inbound",
+    connector: "whatsapp",
+    chatId: "chat-denial",
+    accountId: "wa-1",
+  }, userPrincipal({ id: "otcan", role: "user" }), env);
+
+  const result = await processApiAgentThreadInput("otcan-denial", env, {
+    fetchImpl: async () => {
+      throw new Error("openai should not be called when sanitizer blocks");
+    },
+  });
+  const messages = await listThreadMessages("otcan-denial", env);
+  const assistant = messages.find((message) => message.role === "assistant");
+
+  assert.equal(result.ok, false);
+  assert.match(assistant.text, /I can use this WhatsApp chat/i);
+  assert.match(assistant.text, /can't expose backend WhatsApp account or connector identity/i);
 });
 
 test("tenant api-agent drains queued tenant messages while it owns the lock", async () => {
