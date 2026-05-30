@@ -8,14 +8,16 @@ import { startServer } from "../apps/server/src/server.js";
 import { stopCodexAppServerClients } from "../packages/core/src/codex-app-server-client.js";
 import { runNextAgentMessage, runNextThreadMessage } from "../packages/core/src/executors.js";
 import { listAgentMessages } from "../packages/core/src/messages.js";
+import { deliverPendingThreadInputs, listRuntimeLeases } from "../packages/core/src/runtime-leases.js";
 import { getSetupStatus } from "../packages/core/src/setup.js";
 import { appendThreadMessage, createThread, enqueueThreadInput, getThread, listThreadMessages, listThreads, updateThreadMessage } from "../packages/core/src/threads.js";
 import { createUser, linkUserPrivateIdentity } from "../packages/core/src/users.js";
 import { deliverWhatsAppReplies, formatWhatsAppOutboundText, getWhatsAppChatParticipants, getWhatsAppStatus, initialQueueDeliveryState, mapLocalWhatsAppStatusFromHealth, routeWhatsAppInbound, syncWhatsAppTypingIndicators } from "../packages/connectors/src/whatsapp.js";
-import { cleanupLocalWhatsAppChromeLocks, forwardLocalWhatsAppInbound, listLocalWhatsAppChats, localWhatsAppAccountIdsForEnv, localWhatsAppConnectedPageReadyFallbackEligible, localWhatsAppInboundForwardTarget, localWhatsAppMessageRouteFields, localWhatsAppReadyFallbackEligible, localWhatsAppTypingClearRetryDelaysMs, localWhatsAppUnreadRecoveryBoundChats, localWhatsAppUnreadRecoveryIntervalMs, normalizeGroupParticipantIds, recoverConfiguredLocalWhatsAppAccounts, recoverUnreadLocalWhatsAppMessages, recoverableLocalWhatsAppAccountIds, reduceLocalWhatsAppBridgeState, sendWhatsAppTextWithConfirmation, startLocalWhatsAppAccount, webCacheRoot } from "../packages/connectors/src/whatsapp-local-bridge.js";
+import { cleanupLocalWhatsAppChromeLocks, forwardLocalWhatsAppInbound, handleInboundMessage, listLocalWhatsAppChats, localWhatsAppAccountIdsForEnv, localWhatsAppConnectedPageReadyFallbackEligible, localWhatsAppInboundForwardTarget, localWhatsAppMessageRouteFields, localWhatsAppReadyFallbackEligible, localWhatsAppTypingClearRetryDelaysMs, localWhatsAppUnreadRecoveryBoundChats, localWhatsAppUnreadRecoveryIntervalMs, normalizeGroupParticipantIds, recoverConfiguredLocalWhatsAppAccounts, recoverUnreadLocalWhatsAppMessages, recoverableLocalWhatsAppAccountIds, reduceLocalWhatsAppBridgeState, sendWhatsAppTextWithConfirmation, startLocalWhatsAppAccount, webCacheRoot } from "../packages/connectors/src/whatsapp-local-bridge.js";
 import { createAndBindWhatsAppThreadGroup } from "../packages/connectors/src/whatsapp-thread-groups.js";
 import { prepareWhatsAppTableAttachments } from "../packages/connectors/src/whatsapp-table-attachments.js";
 import { writeConnectorConfig } from "../packages/storage/src/config.js";
+import { listEvents } from "../packages/storage/src/store.js";
 
 afterEach(() => {
   stopCodexAppServerClients();
@@ -1231,6 +1233,126 @@ test("whatsapp inbound can auto-provision a scoped user thread", async () => {
   assert.equal(routedAgain.autoProvisioned, false);
   assert.equal(messagesAfter.length, 2);
   assert.deepEqual(threads.map((entry) => entry.id), [routed.threadId]);
+});
+
+test("local whatsapp bridge runs api-agent tenant chats without waking legacy runtime", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-api-agent-local-"));
+  const chatId = "120363423847331215@g.us";
+  const env = await externalBridgeEnvWithAllowingSanitizer(home, {
+    OPENAI_API_KEY: "sk-test",
+    ORKESTR_WHATSAPP_API_AGENT_AUTORUN: "1",
+    ORKESTR_WHATSAPP_DEBUG_FOOTER: "0",
+  });
+  await writeConnectorConfig("whatsapp", { bridgeMode: "external", bridgeUrl: "http://wa.local" }, env);
+  await createThread({
+    id: "otcantest",
+    name: "otcantest",
+    ownerUserId: "otcan",
+    runtimeKind: "api-agent",
+    executorId: "api-agent",
+    executor: {
+      id: "api-agent",
+      type: "api-agent",
+      transport: "api-agent",
+      metadata: { runtimeKind: "api-agent", transport: "api-agent" },
+    },
+    binding: {
+      connector: "whatsapp",
+      chatId,
+      displayName: "otcantest",
+      enabled: true,
+      generated: true,
+      allowOtherPeople: false,
+      mirrorToWhatsApp: true,
+      senderAccountId: "responder",
+      responderAccountId: "responder",
+      outboundAccountId: "responder",
+      senderContactId: "66378837028965@lid",
+      responderContactId: "4917000000000@c.us",
+    },
+  }, env);
+
+  const originalFetch = globalThis.fetch;
+  const calls = [];
+  globalThis.fetch = async (url, options = {}) => {
+    const entry = {
+      url: String(url),
+      body: options.body ? JSON.parse(String(options.body)) : null,
+    };
+    calls.push(entry);
+    if (entry.url.endsWith("/responses")) {
+      return response({
+        id: "resp_local_bridge_api_agent",
+        model: "gpt-5-mini",
+        output_text: "Hi! How can I help you today?",
+        output: [],
+        usage: { input_tokens: 120, output_tokens: 8 },
+      });
+    }
+    if (entry.url.endsWith("/send-text")) {
+      return response({ ok: true, ids: ["sent-local-api-agent"] });
+    }
+    throw new Error(`unexpected fetch ${entry.url}`);
+  };
+
+  let routed;
+  try {
+    routed = await handleInboundMessage("responder", {
+      id: { _serialized: `false_${chatId}_3AB09B996787296175FB_66378837028965@lid`, remote: chatId },
+      from: chatId,
+      author: "66378837028965@lid",
+      fromMe: false,
+      body: "Hi",
+      timestamp: 1_780_000_000,
+    }, env);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+  await new Promise((resolve) => setTimeout(resolve, 20));
+
+  const messages = await listThreadMessages("otcantest", env);
+  const events = await listEvents(env, 50);
+  const user = messages.find((message) => message.role === "user");
+  const assistant = messages.find((message) => message.role === "assistant");
+
+  assert.equal(routed.routed.runtimeKind, "api-agent");
+  assert.equal(messages.length, 2);
+  assert.equal(user.text, "Hi");
+  assert.equal(user.state, "completed");
+  assert.equal(user.deliveryState, "delivered");
+  assert.equal(user.observedVia, "api_agent_response");
+  assert.equal(assistant.source, "api-agent");
+  assert.equal(assistant.text, "Hi! How can I help you today?");
+  assert.deepEqual((await listRuntimeLeases(env)).map((lease) => lease.threadId), []);
+  assert.equal(events.some((event) => event.type === "runtime_woken" && event.threadId === "otcantest"), false);
+  assert.equal(events.some((event) => event.type === "thread_input_delivery_deferred" && event.threadId === "otcantest"), false);
+  assert.equal(events.some((event) => event.type === "thread_input_delivery_skipped" && event.threadId === "otcantest"), false);
+  assert.equal(calls.some((call) => call.url.endsWith("/responses")), true);
+  assert.equal(calls.some((call) => call.url.endsWith("/send-text") && call.body?.to === chatId), true);
+});
+
+test("api-agent thread pending delivery skips legacy runtime wakeups", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-api-agent-delivery-skip-"));
+  const env = { ORKESTR_HOME: home };
+  await createThread({
+    id: "api-agent-skip",
+    name: "API Agent Skip",
+    ownerUserId: "otcan",
+    runtimeKind: "api-agent",
+    executorId: "api-agent",
+    executor: { type: "api-agent", metadata: { runtimeKind: "api-agent" } },
+    binding: { connector: "whatsapp", chatId: "chat-api-agent-skip" },
+  }, env);
+  await enqueueThreadInput("api-agent-skip", { source: "whatsapp_inbound", text: "hi" }, env);
+
+  const delivered = await deliverPendingThreadInputs("api-agent-skip", env);
+  const messages = await listThreadMessages("api-agent-skip", env);
+  const events = await listEvents(env, 20);
+
+  assert.deepEqual(delivered, []);
+  assert.equal(messages[0].state, "queued");
+  assert.deepEqual((await listRuntimeLeases(env)).map((lease) => lease.threadId), []);
+  assert.equal(events.some((event) => event.type === "thread_input_delivery_skipped" && event.reason === "api_agent_thread"), true);
 });
 
 test("whatsapp inbound uses manually linked user identities before provisioning", async () => {

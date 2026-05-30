@@ -3,8 +3,9 @@ import path from "node:path";
 import { dataPaths, ensureDataDirs } from "../../storage/src/paths.js";
 import { appendEvent, readJson } from "../../storage/src/store.js";
 import { requestThreadInputDelivery } from "../../core/src/runtime-leases.js";
+import { processApiAgentThreadInput, threadUsesApiAgent } from "../../core/src/tenant-api-agent.js";
 import { tenantWhatsAppInboundForwardRoute } from "../../core/src/tenant-whatsapp-routing.js";
-import { listThreads } from "../../core/src/threads.js";
+import { getThread, listThreads } from "../../core/src/threads.js";
 import { setGeneratedLocalWhatsAppGroupPicture } from "./whatsapp-chat-picture.js";
 
 export const localWhatsAppAccountIds = ["account-1", "account-2"];
@@ -811,7 +812,11 @@ async function writeQr(accountId, qr, qrcode, env = process.env) {
   await fs.writeFile(qrPath(accountId, env), svg);
 }
 
-async function handleInboundMessage(accountId, message, env = process.env, options = {}) {
+function localWhatsAppApiAgentAutoRun(env = process.env) {
+  return String(env.ORKESTR_WHATSAPP_API_AGENT_AUTORUN || "1").trim().toLowerCase() !== "0";
+}
+
+export async function handleInboundMessage(accountId, message, env = process.env, options = {}) {
   const fromMe = Boolean(message?.fromMe);
   if (options.ownOnly && !fromMe) return { skipped: "not_own_message" };
   if (message?.isStatus) return { skipped: "status_message" };
@@ -845,8 +850,14 @@ async function handleInboundMessage(accountId, message, env = process.env, optio
     const forwarded = await forwardLocalWhatsAppInbound(inbound, env);
     if (forwarded) return { routed: forwarded.payload, forwarded: true, eventId, chatId, from, fromMe: routeFromMe };
     const { deliverWhatsAppReplies, routeWhatsAppInbound } = await import("./whatsapp.js");
-    const routed = await routeWhatsAppInbound(inbound, env);
+    const routed = await routeWhatsAppInbound({ ...inbound, deferApiAgentAutoRun: true }, env);
     if (routed.threadId && !routed.duplicate) {
+      const thread = await getThread(routed.threadId, env).catch(() => null);
+      if (threadUsesApiAgent(thread || {}, env)) {
+        if (localWhatsAppApiAgentAutoRun(env)) await processApiAgentThreadInput(thread.id, env).catch(() => null);
+        await deliverWhatsAppReplies(env).catch(() => {});
+        return { routed: { ...routed, runtimeKind: "api-agent" }, eventId, chatId, from, fromMe: routeFromMe };
+      }
       await deliverWhatsAppReplies(env).catch(() => {});
       requestThreadInputDelivery(routed.threadId, env);
     }

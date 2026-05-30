@@ -932,7 +932,7 @@ export async function routeWhatsAppInbound(input = {}, env = process.env) {
     chatId,
     duplicateReason: contentDuplicate ? event.duplicateReason : "",
   }, env);
-  if (thread && !contentDuplicate) kickWhatsAppApiAgentThread(thread, env);
+  if (thread && !contentDuplicate && input.deferApiAgentAutoRun !== true) kickWhatsAppApiAgentThread(thread, env);
   return {
     duplicate: contentDuplicate,
     event,

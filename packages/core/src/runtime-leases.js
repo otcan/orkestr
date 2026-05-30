@@ -3083,6 +3083,10 @@ export async function deliverPendingThreadInputs(threadId, env = process.env) {
   }
   const thread = await getThread(threadId, env);
   if (!thread) return [];
+  if (threadUsesApiAgent(thread, env)) {
+    await appendEvent({ type: "thread_input_delivery_skipped", threadId: thread.id, reason: "api_agent_thread" }, env).catch(() => null);
+    return [];
+  }
   if (threadUsesCodexAppServer(thread, env)) {
     return deliverCodexAppServerPendingInputs(thread, env);
   }
