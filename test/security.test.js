@@ -182,6 +182,26 @@ test("reverse proxy local publish is treated as a local external bind", async ()
   }
 });
 
+test("security status reports optional mTLS without exposing the CA path", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-security-mtls-"));
+  const status = await securityStatus({
+    ...process.env,
+    ORKESTR_HOME: home,
+    ORKESTR_CADDY_ENABLED: "1",
+    ORKESTR_PUBLIC_HTTPS_URL: "https://orkestr.example.test",
+    ORKESTR_MTLS_ENABLED: "1",
+    ORKESTR_MTLS_CA_CERT: "/etc/orkestr/client-ca.pem",
+    ORKESTR_MTLS_MODE: "verify_if_given",
+  });
+
+  assert.equal(status.mtls.enabled, true);
+  assert.equal(status.mtls.configured, true);
+  assert.equal(status.mtls.caConfigured, true);
+  assert.equal(status.mtls.mode, "verify_if_given");
+  assert.equal(status.mtls.caCert, undefined);
+  assert.equal(JSON.stringify(status).includes("/etc/orkestr/client-ca.pem"), false);
+});
+
 test("desktop proxy routes require pairing when auth is enabled", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-security-desktop-"));
   const env = {

@@ -19,6 +19,9 @@ Options:
   --ssh-option OPT           Extra SSH -o option. Can be repeated.
   --port PORT                Raw Orkestr port that must not be publicly reachable. Defaults to 19812.
   --protected-path PATH      Protected API route used for auth checks. Defaults to /api/connectors/whatsapp/status.
+  --mtls-client-cert FILE    Client certificate for mTLS-protected Caddy sites.
+  --mtls-client-key FILE     Client private key for --mtls-client-cert when stored separately.
+  --expect-mtls              Verify HTTPS without a client certificate does not reach /setup.
   --keep-session             Keep the paired browser session created by this smoke.
   --skip-pair                Skip pairing-cookie checks. Not recommended for release validation.
   --skip-dns-check           Do not require public DNS to resolve DOMAIN to --host.
@@ -28,6 +31,7 @@ The smoke verifies:
   - public DNS points DOMAIN at the host
   - http://DOMAIN/setup redirects to https://DOMAIN/setup
   - https://DOMAIN/setup returns 200 with a valid certificate
+  - optional Caddy mTLS rejects a no-certificate HTTPS request when --expect-mtls is used
   - raw Orkestr port is not reachable publicly
   - protected API routes return 401 before pairing
   - browser pairing works through HTTPS after SSH approval
@@ -43,6 +47,9 @@ known_hosts=""
 ssh_options=()
 port=19812
 protected_path="/api/connectors/whatsapp/status"
+mtls_client_cert=""
+mtls_client_key=""
+expect_mtls=0
 keep_session=0
 skip_pair=0
 skip_dns_check=0
@@ -80,6 +87,18 @@ while [ "$#" -gt 0 ]; do
     --protected-path)
       protected_path="${2:-}"
       shift 2
+      ;;
+    --mtls-client-cert)
+      mtls_client_cert="${2:-}"
+      shift 2
+      ;;
+    --mtls-client-key)
+      mtls_client_key="${2:-}"
+      shift 2
+      ;;
+    --expect-mtls)
+      expect_mtls=1
+      shift
       ;;
     --keep-session)
       keep_session=1
@@ -176,10 +195,30 @@ if [ "$skip_pair" -eq 0 ]; then
   ssh_target="${ssh_target:-root@$host_ip}"
 fi
 
+curl_tls_args=()
+openssl_tls_args=()
+if [ -n "$mtls_client_cert" ]; then
+  [ -r "$mtls_client_cert" ] || fail "--mtls-client-cert is not readable: $mtls_client_cert"
+  curl_tls_args+=(--cert "$mtls_client_cert")
+  openssl_tls_args+=(-cert "$mtls_client_cert")
+fi
+if [ -n "$mtls_client_key" ]; then
+  [ -r "$mtls_client_key" ] || fail "--mtls-client-key is not readable: $mtls_client_key"
+  curl_tls_args+=(--key "$mtls_client_key")
+  openssl_tls_args+=(-key "$mtls_client_key")
+fi
+if [ "$expect_mtls" -eq 1 ] && [ -z "$mtls_client_cert" ]; then
+  fail "--expect-mtls requires --mtls-client-cert so the positive HTTPS checks can pass"
+fi
+
 base_url="https://$domain"
 work_dir="$(mktemp -d /tmp/orkestr-public-smoke.XXXXXX)"
 cookie_file="$work_dir/cookie.txt"
 trap 'rm -rf "$work_dir"' EXIT
+
+curl_https() {
+  curl --resolve "$domain:443:$host_ip" "${curl_tls_args[@]}" "$@"
+}
 
 log "domain=$domain host=$host_ip"
 
@@ -188,13 +227,19 @@ http_code="$(curl --resolve "$domain:80:$host_ip" -sS -o "$work_dir/http-body" -
 expect_http_code "HTTP redirect" "308" "$http_code"
 grep -Fi "Location: https://$domain/setup" "$work_dir/http-headers" >/dev/null || fail "HTTP redirect location did not point to HTTPS /setup"
 
+if [ "$expect_mtls" -eq 1 ]; then
+  log "checking mTLS rejects HTTPS without a client certificate"
+  mtls_no_cert_code="$(curl --resolve "$domain:443:$host_ip" -sS -o "$work_dir/mtls-no-cert.html" -w '%{http_code}' "$base_url/setup" --max-time 20 || true)"
+  [ "$mtls_no_cert_code" != "200" ] || fail "mTLS site accepted /setup without a client certificate"
+fi
+
 log "checking HTTPS setup page"
-https_code="$(curl --resolve "$domain:443:$host_ip" -sS -o "$work_dir/setup.html" -D "$work_dir/https-headers" -w '%{http_code}' "$base_url/setup" --max-time 30)"
+https_code="$(curl_https -sS -o "$work_dir/setup.html" -D "$work_dir/https-headers" -w '%{http_code}' "$base_url/setup" --max-time 30)"
 expect_http_code "HTTPS setup" "200" "$https_code"
 grep -Fi "server: Caddy" "$work_dir/https-headers" >/dev/null || fail "HTTPS response did not come through Caddy"
 
 log "checking certificate"
-cert_text="$(echo | openssl s_client -servername "$domain" -connect "$host_ip:443" 2>/dev/null | openssl x509 -noout -subject -issuer -dates)"
+cert_text="$(echo | openssl s_client "${openssl_tls_args[@]}" -servername "$domain" -connect "$host_ip:443" 2>/dev/null | openssl x509 -noout -subject -issuer -dates)"
 printf '%s\n' "$cert_text" | grep -F "CN = $domain" >/dev/null || fail "certificate subject does not match $domain"
 printf '%s\n' "$cert_text" | grep -Ei 'issuer=.*(Let.s Encrypt|ZeroSSL|Caddy)' >/dev/null || fail "certificate issuer was not recognized"
 
@@ -208,13 +253,13 @@ if [ "$direct_status" -eq 0 ] && [ "$direct_code" != "000" ]; then
 fi
 
 log "checking protected API rejects unpaired/no-cookie requests"
-unauth_code="$(curl --resolve "$domain:443:$host_ip" -sS -o "$work_dir/unauth.json" -w '%{http_code}' "$base_url$protected_path" --max-time 20 || true)"
+unauth_code="$(curl_https -sS -o "$work_dir/unauth.json" -w '%{http_code}' "$base_url$protected_path" --max-time 20 || true)"
 expect_http_code "protected no-cookie route" "401" "$unauth_code"
 grep -F "browser_pairing_required" "$work_dir/unauth.json" >/dev/null || fail "protected no-cookie route did not report browser_pairing_required"
 
 if [ "$skip_pair" -eq 0 ]; then
   log "creating pairing challenge"
-  challenge_json="$(curl --resolve "$domain:443:$host_ip" -fsS -X POST "$base_url/api/setup/security/challenge" --max-time 20)"
+  challenge_json="$(curl_https -fsS -X POST "$base_url/api/setup/security/challenge" --max-time 20)"
   challenge_id="$(printf '%s' "$challenge_json" | json_field "j.challengeId || j.payload?.challengeId")"
   [ -n "$challenge_id" ] || fail "pairing challenge did not include a challengeId"
 
@@ -222,16 +267,16 @@ if [ "$skip_pair" -eq 0 ]; then
   ssh_remote "$ssh_target" "orkestr security approve '$challenge_id'" >/dev/null
 
   log "pairing browser cookie over HTTPS"
-  pair_json="$(curl --resolve "$domain:443:$host_ip" -fsS -c "$cookie_file" -H 'content-type: application/json' -d "{\"challengeId\":\"$challenge_id\"}" "$base_url/api/setup/security/pair" --max-time 20)"
+  pair_json="$(curl_https -fsS -c "$cookie_file" -H 'content-type: application/json' -d "{\"challengeId\":\"$challenge_id\"}" "$base_url/api/setup/security/pair" --max-time 20)"
   session_id="$(printf '%s' "$pair_json" | json_field "j.session?.id || j.payload?.session?.id")"
   [ -n "$session_id" ] || fail "pairing response did not include a session id"
 
   log "checking protected API works with paired cookie"
-  paired_code="$(curl --resolve "$domain:443:$host_ip" -sS -b "$cookie_file" -o "$work_dir/paired.json" -w '%{http_code}' "$base_url$protected_path" --max-time 20)"
+  paired_code="$(curl_https -sS -b "$cookie_file" -o "$work_dir/paired.json" -w '%{http_code}' "$base_url$protected_path" --max-time 20)"
   expect_http_code "protected paired route" "200" "$paired_code"
 
   log "checking no-cookie requests remain blocked after pairing"
-  post_pair_unauth_code="$(curl --resolve "$domain:443:$host_ip" -sS -o "$work_dir/post-pair-unauth.json" -w '%{http_code}' "$base_url$protected_path" --max-time 20 || true)"
+  post_pair_unauth_code="$(curl_https -sS -o "$work_dir/post-pair-unauth.json" -w '%{http_code}' "$base_url$protected_path" --max-time 20 || true)"
   expect_http_code "protected no-cookie route after pairing" "401" "$post_pair_unauth_code"
 
   if [ "$keep_session" -eq 0 ]; then

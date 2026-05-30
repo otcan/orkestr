@@ -31,6 +31,8 @@ Options:
   --tailscale-https-port N   Tailscale HTTPS port. Defaults to 443.
   --domain DOMAIN            Configure Caddy public HTTPS for this domain.
   --email EMAIL              ACME account email for Caddy certificate issuance.
+  --mtls-ca FILE             Optional client CA certificate for Caddy mTLS.
+  --mtls-mode MODE           Caddy client auth mode. Defaults to require_and_verify.
   --force                    Continue on non-recommended Ubuntu versions.
   --help                     Show this help.
 
@@ -58,6 +60,8 @@ tailscale_hostname="${ORKESTR_TAILSCALE_HOSTNAME:-orkestr}"
 tailscale_https_port="${ORKESTR_TAILSCALE_HTTPS_PORT:-443}"
 domain="${ORKESTR_DOMAIN:-}"
 acme_email="${ORKESTR_ACME_EMAIL:-}"
+mtls_ca="${ORKESTR_MTLS_CA_CERT:-}"
+mtls_mode="${ORKESTR_MTLS_MODE:-require_and_verify}"
 force=0
 env_file="${ORKESTR_ENV_FILE:-/etc/orkestr/orkestr.env}"
 
@@ -147,6 +151,14 @@ while [ "$#" -gt 0 ]; do
       ;;
     --email|--acme-email)
       acme_email="${2:-}"
+      shift 2
+      ;;
+    --mtls-ca|--client-ca)
+      mtls_ca="${2:-}"
+      shift 2
+      ;;
+    --mtls-mode)
+      mtls_mode="${2:-}"
       shift 2
       ;;
     --force)
@@ -399,6 +411,16 @@ configure_caddy() {
   log "Installing and configuring Caddy for https://$domain"
   apt_install caddy
   mkdir -p /etc/caddy/conf.d
+  if [ -n "$mtls_ca" ]; then
+    [ -r "$mtls_ca" ] || die "--mtls-ca file is not readable: $mtls_ca"
+    case "$mtls_mode" in
+      require_and_verify|verify_if_given)
+        ;;
+      *)
+        die "--mtls-mode must be one of: require_and_verify, verify_if_given"
+        ;;
+    esac
+  fi
   if [ ! -s /etc/caddy/Caddyfile ] || grep -q 'root \* /usr/share/caddy' /etc/caddy/Caddyfile; then
     if [ -n "$acme_email" ]; then
       cat > /etc/caddy/Caddyfile <<EOF
@@ -416,18 +438,42 @@ EOF
   elif ! grep -q '^import /etc/caddy/conf\.d/\*\.caddy$' /etc/caddy/Caddyfile; then
     printf '\nimport /etc/caddy/conf.d/*.caddy\n' >> /etc/caddy/Caddyfile
   fi
-  cat > /etc/caddy/conf.d/orkestr.caddy <<EOF
+  if [ -n "$mtls_ca" ]; then
+    cat > /etc/caddy/conf.d/orkestr.caddy <<EOF
+$domain {
+  encode zstd gzip
+  tls {
+    client_auth {
+      mode $mtls_mode
+      trusted_ca_cert_file $mtls_ca
+    }
+  }
+  reverse_proxy 127.0.0.1:$port
+}
+EOF
+  else
+    cat > /etc/caddy/conf.d/orkestr.caddy <<EOF
 $domain {
   encode zstd gzip
   reverse_proxy 127.0.0.1:$port
 }
 EOF
+  fi
   caddy validate --config /etc/caddy/Caddyfile
   systemctl enable --now caddy
   systemctl reload caddy || systemctl restart caddy
   set_env_value ORKESTR_CADDY_ENABLED 1 "$env_file"
   set_env_value ORKESTR_COOKIE_SECURE 1 "$env_file"
   set_env_value ORKESTR_PUBLIC_HTTPS_URL "https://$domain" "$env_file"
+  if [ -n "$mtls_ca" ]; then
+    set_env_value ORKESTR_MTLS_ENABLED 1 "$env_file"
+    set_env_value ORKESTR_MTLS_CA_CERT "$mtls_ca" "$env_file"
+    set_env_value ORKESTR_MTLS_MODE "$mtls_mode" "$env_file"
+  else
+    set_env_value ORKESTR_MTLS_ENABLED 0 "$env_file"
+    set_env_value ORKESTR_MTLS_CA_CERT "" "$env_file"
+    set_env_value ORKESTR_MTLS_MODE "$mtls_mode" "$env_file"
+  fi
   if [ -n "$acme_email" ]; then
     set_env_value ORKESTR_ACME_EMAIL "$acme_email" "$env_file"
   fi
@@ -478,7 +524,7 @@ run_doctor() {
 }
 
 print_summary() {
-  local tailscale_status domain_url
+  local tailscale_status domain_url mtls_status
   tailscale_status="not installed"
   if have tailscale; then
     if tailscale_connected; then
@@ -490,6 +536,10 @@ print_summary() {
   domain_url=""
   if [ -n "$domain" ]; then
     domain_url="https://$domain/setup"
+  fi
+  mtls_status="disabled"
+  if [ -n "$mtls_ca" ]; then
+    mtls_status="enabled ($mtls_mode)"
   fi
   cat <<EOF
 
@@ -515,6 +565,7 @@ Access:
   Local: http://127.0.0.1:$port/setup
   Tailscale: $tailscale_status
   Domain: ${domain_url:-not configured}
+  mTLS: $mtls_status
 
 EOF
 }

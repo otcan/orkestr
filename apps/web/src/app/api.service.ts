@@ -225,6 +225,12 @@ export interface SecurityStatus {
     version?: string;
     error?: string;
   };
+  mtls?: {
+    enabled?: boolean;
+    configured?: boolean;
+    mode?: string;
+    caConfigured?: boolean;
+  };
   tailscale?: {
     installed?: boolean;
     configured?: boolean;

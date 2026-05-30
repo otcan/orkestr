@@ -825,6 +825,12 @@ export class OnboardingPageComponent implements OnInit, OnChanges, OnDestroy {
         className: security.caddy?.installed ? "ready" : "idle",
       },
       {
+        label: "Client mTLS",
+        state: security.mtls?.configured ? "enabled" : security.https?.configured || security.caddy?.installed ? "optional" : "needs HTTPS",
+        summary: security.mtls?.configured ? `Caddy verifies client certificates (${security.mtls?.mode || "require_and_verify"})` : "Optional client-certificate layer for public domains",
+        className: security.mtls?.configured ? "ready" : security.https?.configured || security.caddy?.installed ? "partial" : "idle",
+      },
+      {
         label: "Tailscale HTTPS",
         state: security.https?.configured ? "configured" : security.tailscale?.installed ? "available" : "missing",
         summary: security.https?.url || security.tailscale?.version || security.tailscale?.error || "Use Tailscale and HTTPS for remote access",

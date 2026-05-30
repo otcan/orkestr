@@ -122,6 +122,9 @@ curl -fsSL https://raw.githubusercontent.com/otcan/orkestr/main/scripts/bootstra
 # Public HTTPS domain through Caddy.
 curl -fsSL https://raw.githubusercontent.com/otcan/orkestr/main/scripts/bootstrap-vps.sh | sudo bash -s -- --domain orkestr.example.com --email admin@example.com
 
+# Public HTTPS domain with Caddy client-certificate verification.
+curl -fsSL https://raw.githubusercontent.com/otcan/orkestr/main/scripts/bootstrap-vps.sh | sudo bash -s -- --domain orkestr.example.com --email admin@example.com --mtls-ca /etc/orkestr/client-ca.pem
+
 # Tailscale unattended setup. Prefer a secret manager; this interactive form avoids shell history.
 read -rsp "Tailscale auth key: " TS_AUTHKEY; echo
 export TS_AUTHKEY
@@ -154,6 +157,21 @@ API routes return `401 browser_pairing_required` before pairing, and that the
 SSH-approved browser-pairing flow can access a protected API route with a
 cookie. By default it revokes the temporary browser session before exiting.
 Pass `--keep-session` only when you want to keep that paired browser.
+
+When the Caddy site is protected with mTLS, pass the client certificate used by
+the operator browser. The smoke first confirms that `/setup` is not reachable
+without a client certificate, then repeats the normal HTTPS and browser-pairing
+checks with the certificate:
+
+```bash
+npm run smoke:public-domain -- \
+  --domain orkestr.example.com \
+  --host <vps-public-ip> \
+  --ssh root@<vps-public-ip> \
+  --expect-mtls \
+  --mtls-client-cert ./operator-client.pem \
+  --mtls-client-key ./operator-client-key.pem
+```
 
 Useful cleanup commands:
 

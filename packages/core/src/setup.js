@@ -76,6 +76,12 @@ function publicSetupSecurityStatus(security = {}) {
     https: {
       configured: Boolean(security?.https?.configured),
     },
+    mtls: {
+      enabled: Boolean(security?.mtls?.enabled),
+      configured: Boolean(security?.mtls?.configured),
+      mode: String(security?.mtls?.mode || ""),
+      caConfigured: Boolean(security?.mtls?.caConfigured),
+    },
   };
 }
 

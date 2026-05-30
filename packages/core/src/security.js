@@ -30,6 +30,10 @@ function randomToken(bytes = 32) {
   return crypto.randomBytes(bytes).toString("base64url");
 }
 
+function envFlag(value) {
+  return ["1", "true", "yes", "on"].includes(String(value || "").trim().toLowerCase());
+}
+
 async function readSecurityConfig(env = process.env) {
   const config = await readJson(secretPath(env), { enabled: false, sessions: [], challenges: [] });
   return {
@@ -229,6 +233,9 @@ export async function securityStatus(env = process.env) {
   const tailscale = await commandStatus("tailscale", ["status", "--json"], env);
   const httpsUrl = String(env.ORKESTR_PUBLIC_HTTPS_URL || env.ORKESTR_HTTPS_URL || env.ORKESTR_TAILSCALE_HTTPS_NAME || "").trim();
   const caddyConfigured = String(env.ORKESTR_CADDY_ENABLED || "").trim() === "1";
+  const mtlsCaCert = String(env.ORKESTR_MTLS_CA_CERT || "").trim();
+  const mtlsMode = String(env.ORKESTR_MTLS_MODE || "require_and_verify").trim() || "require_and_verify";
+  const mtlsEnabled = envFlag(env.ORKESTR_MTLS_ENABLED) || Boolean(mtlsCaCert);
   const proxyLocalBindSetting = String(env.ORKESTR_REVERSE_PROXY_LOCAL_BIND || "").trim();
   const proxyLocalBind = proxyLocalBindSetting === "1";
   const authRequired = String(env.ORKESTR_AUTH_REQUIRED || "").trim() === "1";
@@ -264,6 +271,12 @@ export async function securityStatus(env = process.env) {
       version: caddy.version || (caddyConfigured ? "host-managed" : ""),
       error: caddy.installed || caddyConfigured ? "" : caddy.error || "",
     },
+    mtls: {
+      enabled: mtlsEnabled,
+      configured: mtlsEnabled && Boolean(mtlsCaCert),
+      mode: mtlsMode,
+      caConfigured: Boolean(mtlsCaCert),
+    },
     tailscale: {
       installed: tailscale.installed,
       configured: tailscaleConfigured,
@@ -275,6 +288,7 @@ export async function securityStatus(env = process.env) {
       ...(!externallyLocal ? ["Orkestr is not bound to localhost. Put it behind TLS and browser pairing before remote use."] : []),
       ...(!authEnabled && !externallyLocal ? ["Browser pairing is not enabled for a non-local bind."] : []),
       ...(!httpsConfigured && !externallyLocal ? ["HTTPS is not configured for remote access."] : []),
+      ...(mtlsEnabled && !mtlsCaCert ? ["mTLS is enabled, but no client CA certificate is configured."] : []),
     ],
   };
 }
