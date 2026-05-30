@@ -8,6 +8,7 @@ import { OnboardingPageComponent } from "./onboarding-page.component";
 import { PairingRequiredPageComponent } from "./pairing-required-page.component";
 import { OpsPageComponent, ToolsView } from "./ops-page.component";
 import { RawTerminalController } from "./raw-terminal.controller";
+import { UserConnectorsPageComponent } from "./user-connectors-page.component";
 import { UserDeskPageComponent } from "./user-desk-page.component";
 import { UserSkillsPageComponent } from "./user-skills-page.component";
 import { UserTimersPageComponent } from "./user-timers-page.component";
@@ -36,7 +37,7 @@ import {
 } from "./api.service";
 import { appendPendingFiles, messageWithAttachmentPaths, PendingFile, removePendingFile, uploadPendingFiles } from "./thread-uploads";
 
-type Panel = "chat" | "history" | "timers" | "attach" | "settings" | "workers" | "runtime" | "raw" | "ops" | "files" | "userTimers" | "userDesk" | "userSkills";
+type Panel = "chat" | "history" | "timers" | "attach" | "settings" | "workers" | "runtime" | "raw" | "ops" | "files" | "userTimers" | "userDesk" | "userConnectors" | "userSkills";
 type CodexRateLimitKey = "primary" | "secondary";
 type SetupPageMode = "setup" | "onboarding";
 type SetupSection = "system" | "security" | "maintenance" | "codex" | "whatsapp" | "browsers";
@@ -54,7 +55,7 @@ const DEFAULT_WHATSAPP_REPLY_PREFIX = "orkestr:";
 
 @Component({
   selector: "ork-root",
-  imports: [DatePipe, FormsModule, FirstThreadWizardComponent, FilesPageComponent, OpsPageComponent, OnboardingPageComponent, PairingRequiredPageComponent, UserDeskPageComponent, UserSkillsPageComponent, UserTimersPageComponent],
+  imports: [DatePipe, FormsModule, FirstThreadWizardComponent, FilesPageComponent, OpsPageComponent, OnboardingPageComponent, PairingRequiredPageComponent, UserConnectorsPageComponent, UserDeskPageComponent, UserSkillsPageComponent, UserTimersPageComponent],
   templateUrl: "./app.component.html",
 })
 export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
@@ -78,7 +79,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
       this.renderNow();
       return;
     }
-    if (this.activePanel === "ops" || this.activePanel === "files" || this.activePanel === "userTimers" || this.activePanel === "userDesk" || this.activePanel === "userSkills") {
+    if (this.isRouteLevelUserPanel(this.activePanel)) {
       this.closeRawStream();
       this.updateDocumentTitle();
       this.renderNow();
@@ -341,7 +342,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
         this.error = "";
         return;
       }
-      if (this.activePanel !== "ops" && this.activePanel !== "files" && this.activePanel !== "userTimers" && this.activePanel !== "userDesk" && this.activePanel !== "userSkills" && !this.selectedId && this.threads.length) {
+      if (!this.isRouteLevelUserPanel(this.activePanel) && !this.selectedId && this.threads.length) {
         this.selectedId = this.threadSlug(this.threads[0]);
         this.replacePath(this.selectedId, this.activePanel);
       }
@@ -483,7 +484,16 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
 
   panelAllowedForCurrentUser(panel: Panel): boolean {
     if (this.isAdminMode()) return true;
-    return ["chat", "history", "timers", "files", "userTimers", "userDesk", "userSkills"].includes(panel);
+    return ["chat", "history", "timers", "files", "userTimers", "userDesk", "userConnectors", "userSkills"].includes(panel);
+  }
+
+  isUserNavPanelActive(panel: Panel): boolean {
+    if (panel === "chat") return ["chat", "history", "timers"].includes(this.activePanel);
+    return this.activePanel === panel;
+  }
+
+  private isRouteLevelUserPanel(panel: Panel): boolean {
+    return ["ops", "files", "userTimers", "userDesk", "userConnectors", "userSkills"].includes(panel);
   }
 
   rawTerminalAvailable(thread: ThreadSummary | null = this.selectedThread()): boolean {
@@ -620,7 +630,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
       this.appReady = true;
       this.threads = [...threads].sort((a, b) => this.activityMs(b) - this.activityMs(a));
       this.seedReadStateIfNeeded(this.threads);
-      if (this.activePanel !== "ops" && this.activePanel !== "files" && this.activePanel !== "userTimers" && this.activePanel !== "userDesk" && this.activePanel !== "userSkills" && !this.selectedId && this.threads.length) {
+      if (!this.isRouteLevelUserPanel(this.activePanel) && !this.selectedId && this.threads.length) {
         this.selectedId = this.threadSlug(this.threads[0]);
         this.replacePath(this.selectedId, this.activePanel);
       }
@@ -743,6 +753,18 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
       if (this.activePanel === "raw") this.closeRawStream();
       this.activePanel = "userDesk";
       this.pushPath("", "userDesk");
+      this.updateDocumentTitle();
+      this.renderNow();
+      return;
+    }
+    if (panel === "userConnectors") {
+      this.modelDetailsOpen = false;
+      this.slashHelpOpen = false;
+      this.gitDetailsThreadId = "";
+      this.threadWizardOpen = false;
+      if (this.activePanel === "raw") this.closeRawStream();
+      this.activePanel = "userConnectors";
+      this.pushPath("", "userConnectors");
       this.updateDocumentTitle();
       this.renderNow();
       return;
@@ -3214,7 +3236,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   }
 
   private async loadSelectedThread(forceBottom: boolean): Promise<void> {
-    if (this.activePanel === "ops" || this.activePanel === "files" || this.activePanel === "userTimers" || this.activePanel === "userDesk" || this.activePanel === "userSkills") return;
+    if (this.isRouteLevelUserPanel(this.activePanel)) return;
     const thread = this.selectedThread();
     if (!thread) return;
     const threadId = thread.id;
@@ -3590,6 +3612,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     if (parts[0] === "files" || (parts[0] === "ng" && parts[1] === "files")) return "files";
     if (parts[0] === "timers" || (parts[0] === "ng" && parts[1] === "timers")) return "userTimers";
     if (parts[0] === "desk" || (parts[0] === "ng" && parts[1] === "desk")) return "userDesk";
+    if (parts[0] === "connectors" || (parts[0] === "ng" && parts[1] === "connectors")) return "userConnectors";
     if (parts[0] === "skills" || (parts[0] === "ng" && parts[1] === "skills")) return "userSkills";
     const threadIndex = parts.indexOf("thread");
     const panel = String(parts[threadIndex + 2] || "");
@@ -3634,6 +3657,10 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     }
     if (parts[0] === "ng" && parts[1] === "desk") {
       globalThis.history?.replaceState({}, "", "/desk");
+      return;
+    }
+    if (parts[0] === "ng" && parts[1] === "connectors") {
+      globalThis.history?.replaceState({}, "", "/connectors");
       return;
     }
     if (parts[0] === "ng" && parts[1] === "skills") {
@@ -3699,6 +3726,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     if (panel === "files") return "/files";
     if (panel === "userTimers") return "/timers";
     if (panel === "userDesk") return "/desk";
+    if (panel === "userConnectors") return "/connectors";
     if (panel === "userSkills") return "/skills";
     const suffix = panel === "chat" ? "" : `/${panel}`;
     return `/thread/${encodeURIComponent(id)}${suffix}`;
@@ -3945,6 +3973,10 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     }
     if (this.activePanel === "userDesk") {
       globalThis.document.title = "Desk · Orkestr";
+      return;
+    }
+    if (this.activePanel === "userConnectors") {
+      globalThis.document.title = "Connectors · Orkestr";
       return;
     }
     if (this.activePanel === "userSkills") {

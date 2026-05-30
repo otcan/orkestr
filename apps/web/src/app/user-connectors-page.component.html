@@ -1,0 +1,77 @@
+<section class="panel-body user-connectors-page">
+  <div class="panel-title">
+    <div>
+      <p class="eyebrow">Connectors</p>
+      <h3>{{ currentUserLabel() }}</h3>
+    </div>
+    <button class="secondary" type="button" (click)="load()" [disabled]="busy">Reload</button>
+  </div>
+
+  @if (error) {
+    <div class="notice error">{{ error }}</div>
+  } @else if (notice) {
+    <div class="notice">{{ notice }}</div>
+  }
+
+  <div class="connector-grid user-connector-grid">
+    @for (connector of userConnectors(); track connector.id) {
+      <article class="connector-card user-connector-card">
+        <div class="desktop-head">
+          <div>
+            <h4>{{ connector.label || connectorLabel(connector.id) }}</h4>
+            <small>{{ connectorSummary(connector.id) }}</small>
+          </div>
+          <div class="desktop-pills">
+            <span [class.live]="connectorTone(connector) === 'live'" [class.ready]="connectorTone(connector) === 'ready'" [class.bad]="connectorTone(connector) === 'bad'">
+              {{ connectorState(connector) }}
+            </span>
+          </div>
+        </div>
+        <p>{{ connector.summary || connectorSummary(connector.id) }}</p>
+
+        @if (connector.id === "gmail") {
+          <form class="connector-action" (submit)="startGmail(); $event.preventDefault()">
+            <label>
+              <span>Gmail account</span>
+              <input name="user-gmail-account" [(ngModel)]="gmailAccount" placeholder="name@example.com" autocomplete="email" />
+            </label>
+            <button type="submit" [disabled]="actionDisabled('gmail')">
+              {{ actionBusy === "gmail" ? "Starting" : "Connect Gmail" }}
+            </button>
+          </form>
+          @if (gmailAuth?.authorizeUrl) {
+            <a class="button-link" [href]="gmailAuth?.authorizeUrl" target="_blank" rel="noreferrer">Open Gmail sign-in</a>
+          }
+        }
+
+        @if (connector.id === "outlook") {
+          <form class="connector-action" (submit)="startOutlook(); $event.preventDefault()">
+            <label>
+              <span>Outlook account</span>
+              <input name="user-outlook-account" [(ngModel)]="outlookAccount" placeholder="name@example.com" autocomplete="email" />
+            </label>
+            <button type="submit" [disabled]="actionDisabled('outlook')">
+              {{ actionBusy === "outlook" ? "Starting" : "Connect Outlook" }}
+            </button>
+          </form>
+          @if (outlookAuth?.userCode || outlookAuth?.verificationUriComplete || outlookAuth?.verificationUri) {
+            <div class="connector-device-code">
+              @if (outlookAuth?.userCode) {
+                <strong>{{ outlookAuth?.userCode }}</strong>
+              }
+              @if (outlookAuth?.verificationUriComplete || outlookAuth?.verificationUri) {
+                <a [href]="outlookAuth?.verificationUriComplete || outlookAuth?.verificationUri" target="_blank" rel="noreferrer">Open Microsoft sign-in</a>
+              }
+            </div>
+          }
+        }
+
+        @if (connector.id === "linkedin" || connector.id === "browsers") {
+          <a class="button-link" href="/desk">Open Desk</a>
+        }
+      </article>
+    } @empty {
+      <p class="empty">{{ busy ? "Loading connectors..." : "No connectors available." }}</p>
+    }
+  </div>
+</section>

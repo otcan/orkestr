@@ -334,6 +334,18 @@ textarea:focus {
   font-weight: 800;
 }
 
+.user-mode-nav {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.user-mode-nav button {
+  min-height: 36px;
+  border-radius: 8px;
+  padding: 8px 10px;
+}
+
 .setup-shortcut {
   min-height: 32px;
   padding: 6px 10px;
@@ -2484,6 +2496,14 @@ ork-first-thread-wizard.first-thread-host {
   margin-top: 14px;
 }
 
+.user-connector-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 14px;
+  margin-top: 14px;
+}
+
+.connector-card,
 .skill-card {
   display: flex;
   flex-direction: column;
@@ -2492,6 +2512,41 @@ ork-first-thread-wizard.first-thread-host {
   border: 1px solid var(--line);
   border-radius: 8px;
   background: var(--panel);
+}
+
+.connector-action {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: end;
+}
+
+.connector-action label {
+  display: grid;
+  gap: 6px;
+}
+
+.connector-action span {
+  color: #91ad8b;
+  font-size: 0.75rem;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.connector-device-code {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  border: 1px solid rgba(119, 205, 126, 0.16);
+  border-radius: 8px;
+  background: rgba(5, 11, 5, 0.58);
+  padding: 10px;
+}
+
+.connector-device-code strong {
+  color: #f0fff2;
+  font-size: 1.1rem;
 }
 
 .skill-meta {
@@ -2841,6 +2896,18 @@ ork-first-thread-wizard.first-thread-host {
   border-color: rgba(103, 245, 128, 0.38);
   background: rgba(31, 80, 38, 0.5);
   color: #c6ffcd;
+}
+
+.desktop-pills .ready {
+  border-color: rgba(245, 210, 111, 0.4);
+  background: rgba(95, 73, 20, 0.42);
+  color: #fde68a;
+}
+
+.desktop-pills .bad {
+  border-color: rgba(248, 113, 113, 0.45);
+  background: rgba(127, 29, 29, 0.3);
+  color: #fecaca;
 }
 
 .desktop-meta {

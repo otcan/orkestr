@@ -32,6 +32,7 @@ test("server serves the built Angular UI at root", async () => {
     const filesResponse = await fetch(`http://127.0.0.1:${port}/files`);
     const timersResponse = await fetch(`http://127.0.0.1:${port}/timers`);
     const deskResponse = await fetch(`http://127.0.0.1:${port}/desk`);
+    const connectorsResponse = await fetch(`http://127.0.0.1:${port}/connectors`);
     const skillsResponse = await fetch(`http://127.0.0.1:${port}/skills`);
     const threadResponse = await fetch(`http://127.0.0.1:${port}/thread/demo`);
     const faviconSvgResponse = await fetch(`http://127.0.0.1:${port}/favicon.svg`);
@@ -54,6 +55,7 @@ test("server serves the built Angular UI at root", async () => {
     assert.equal(filesResponse.status, 200);
     assert.equal(timersResponse.status, 200);
     assert.equal(deskResponse.status, 200);
+    assert.equal(connectorsResponse.status, 200);
     assert.equal(skillsResponse.status, 200);
     assert.equal(threadResponse.status, 200);
     assert.equal(faviconSvgResponse.status, 200);
@@ -238,11 +240,20 @@ test("web shell switches to a constrained non-admin user mode", async () => {
   assert.match(component, /uiRuntimeReady\(\): boolean/);
   assert.match(component, /return this\.isUserMode\(\) \|\| this\.codexAgentReady\(\)/);
   assert.match(component, /panelAllowedForCurrentUser\(panel: Panel\): boolean/);
-  assert.match(component, /\["chat", "history", "timers", "files", "userTimers", "userDesk", "userSkills"\]\.includes\(panel\)/);
+  assert.match(component, /\["chat", "history", "timers", "files", "userTimers", "userDesk", "userConnectors", "userSkills"\]\.includes\(panel\)/);
   assert.match(component, /normalizeUserModeView\(\)/);
+  assert.match(component, /isUserNavPanelActive\(panel: Panel\): boolean/);
+  assert.match(component, /isRouteLevelUserPanel\(panel: Panel\): boolean/);
   assert.match(component, /This user account is limited to one chat\./);
   assert.match(template, /\[class\.user-mode\]="isUserMode\(\)"/);
   assert.match(template, /class="user-mode-card"/);
+  assert.match(template, /class="user-mode-nav"/);
+  assert.match(template, /\(click\)="openPanel\('chat'\)">Chat<\/button>/);
+  assert.match(template, /\(click\)="openPanel\('files'\)">Files<\/button>/);
+  assert.match(template, /\(click\)="openPanel\('userTimers'\)">Timers<\/button>/);
+  assert.match(template, /\(click\)="openPanel\('userDesk'\)">Desk<\/button>/);
+  assert.match(template, /\(click\)="openPanel\('userConnectors'\)">Connectors<\/button>/);
+  assert.match(template, /\(click\)="openPanel\('userSkills'\)">Skills<\/button>/);
   assert.match(template, /\[placeholder\]="sidebarSearchPlaceholder\(\)"/);
   assert.match(template, /@if \(isAdminMode\(\) && visibleChildWorkers\(thread\)\.length > 0\)/);
   assert.match(template, /@if \(activePanel === "settings" && isAdminMode\(\)\)/);
@@ -250,6 +261,7 @@ test("web shell switches to a constrained non-admin user mode", async () => {
   assert.match(template, /@if \(isAdminMode\(\)\) \{\s*<div class="codex-control-scroll"/s);
   assert.match(template, /\[disabled\]="!threadInputReady\(\)"/);
   assert.match(styles, /\.user-mode-card/);
+  assert.match(styles, /\.user-mode-nav/);
 });
 
 test("web shell exposes a user timer management page", async () => {
@@ -264,7 +276,7 @@ test("web shell exposes a user timer management page", async () => {
   assert.match(component, /type Panel = .*"userTimers"/);
   assert.match(component, /parts\[0\] === "timers"/);
   assert.match(component, /parts\[0\] === "ng" && parts\[1\] === "timers"/);
-  assert.match(component, /this\.activePanel !== "ops" && this\.activePanel !== "files" && this\.activePanel !== "userTimers"/);
+  assert.match(component, /!this\.isRouteLevelUserPanel\(this\.activePanel\) && !this\.selectedId && this\.threads\.length/);
   assert.match(component, /panel === "userTimers"\) return "\/timers"/);
   assert.match(component, /globalThis\.document\.title = "Timers · Orkestr"/);
   assert.match(template, /<ork-user-timers-page><\/ork-user-timers-page>/);
@@ -322,6 +334,41 @@ test("web shell exposes a user desktop desk page", async () => {
   assert.match(styles, /\.desktop-lease-list/);
 });
 
+test("web shell exposes a user connector management page", async () => {
+  const template = await fs.readFile("apps/web/src/app/app.component.html", "utf8");
+  const component = await fs.readFile("apps/web/src/app/app.component.ts", "utf8");
+  const connectorsComponent = await fs.readFile("apps/web/src/app/user-connectors-page.component.ts", "utf8");
+  const connectorsTemplate = await fs.readFile("apps/web/src/app/user-connectors-page.component.html", "utf8");
+  const api = await fs.readFile("apps/web/src/app/api.service.ts", "utf8");
+  const styles = await fs.readFile("apps/web/src/styles.css", "utf8");
+
+  assert.match(component, /import \{ UserConnectorsPageComponent \} from "\.\/user-connectors-page\.component"/);
+  assert.match(component, /type Panel = .*"userConnectors"/);
+  assert.match(component, /parts\[0\] === "connectors"/);
+  assert.match(component, /parts\[0\] === "ng" && parts\[1\] === "connectors"/);
+  assert.match(component, /panel === "userConnectors"\) return "\/connectors"/);
+  assert.match(component, /globalThis\.document\.title = "Connectors · Orkestr"/);
+  assert.match(template, /<ork-user-connectors-page><\/ork-user-connectors-page>/);
+  assert.match(template, /\(click\)="openPanel\('userConnectors'\)"/);
+  assert.match(connectorsComponent, /selector: "ork-user-connectors-page"/);
+  assert.match(connectorsComponent, /imports: \[FormsModule\]/);
+  assert.match(connectorsComponent, /this\.api\.setupStatus\(\)/);
+  assert.match(connectorsComponent, /this\.api\.currentUser\(\)/);
+  assert.match(connectorsComponent, /this\.api\.startGmailOAuth\(this\.gmailAccount\)/);
+  assert.match(connectorsComponent, /this\.api\.startOutlookOAuth\(this\.outlookAccount\)/);
+  assert.match(connectorsComponent, /private readonly connectorOrder = \["whatsapp", "gmail", "outlook", "linkedin", "browsers"\]/);
+  assert.match(connectorsTemplate, /name="user-gmail-account"/);
+  assert.match(connectorsTemplate, /name="user-outlook-account"/);
+  assert.match(connectorsTemplate, /Open Gmail sign-in/);
+  assert.match(connectorsTemplate, /Open Microsoft sign-in/);
+  assert.match(connectorsTemplate, /href="\/desk"/);
+  assert.match(api, /startGmailOAuth\(account = ""\)/);
+  assert.match(api, /startOutlookOAuth\(account = ""\)/);
+  assert.match(styles, /\.user-connector-grid/);
+  assert.match(styles, /\.connector-action/);
+  assert.match(styles, /\.connector-device-code/);
+});
+
 test("web shell exposes a user skills management page", async () => {
   const template = await fs.readFile("apps/web/src/app/app.component.html", "utf8");
   const component = await fs.readFile("apps/web/src/app/app.component.ts", "utf8");
@@ -372,7 +419,7 @@ test("web shell exposes a user-scoped files page", async () => {
   assert.match(component, /type Panel = .*"files"/);
   assert.match(component, /parts\[0\] === "files"/);
   assert.match(component, /parts\[0\] === "ng" && parts\[1\] === "files"/);
-  assert.match(component, /this\.activePanel !== "ops" && this\.activePanel !== "files"/);
+  assert.match(component, /!this\.isRouteLevelUserPanel\(this\.activePanel\) && !this\.selectedId && this\.threads\.length/);
   assert.match(component, /panel === "files"\) return "\/files"/);
   assert.match(component, /globalThis\.document\.title = "Files · Orkestr"/);
   assert.match(template, /<ork-files-page><\/ork-files-page>/);
