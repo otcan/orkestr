@@ -88,9 +88,15 @@ function normalizeBootstrap(bootstrap = {}) {
   const source = bootstrap && typeof bootstrap === "object" && !Array.isArray(bootstrap) ? bootstrap : {};
   return {
     firstThreadName: clean(source.firstThreadName || source.threadName || ""),
+    firstThreadId: clean(source.firstThreadId || source.threadId || ""),
     workspacePath: clean(source.workspacePath || ""),
+    filesRoot: clean(source.filesRoot || ""),
     codexModel: clean(source.codexModel || ""),
     codexReasoningEffort: clean(source.codexReasoningEffort || ""),
+    codexMode: clean(source.codexMode || ""),
+    autoWakeFirstThread: source.autoWakeFirstThread !== false,
+    desks: normalizeStringList(source.desks || []),
+    skills: normalizeStringList(source.skills || source.learningSkills || []),
   };
 }
 

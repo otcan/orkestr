@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { tenantBootstrapProfileJson, buildTenantBootstrapProfile } from "./tenant-bootstrap-profile.js";
 import { getTenantVm, publicTenantVm, setTenantVmStatus } from "./tenant-vm-registry.js";
 
 const defaultImageUrl = "https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-amd64.img";
@@ -69,6 +70,17 @@ function commandList(...items) {
   return items.flat().filter(Boolean);
 }
 
+function tenantBootstrapProfilePath(input, env) {
+  const value = clean(input.tenantBootstrapProfilePath || input.bootstrapProfilePath || env.ORKESTR_TENANT_BOOTSTRAP_PROFILE_PATH);
+  if (!value) return "/etc/orkestr/tenant-bootstrap-profile.json";
+  if (!value.startsWith("/") || /[\0\r\n]/.test(value)) {
+    const error = new Error("tenant_bootstrap_profile_path_invalid");
+    error.statusCode = 400;
+    throw error;
+  }
+  return value;
+}
+
 function bootstrapArgs(vm, input, env) {
   const repoUrl = safePublicUrl(input.repoUrl || env.ORKESTR_PUBLIC_REPO_URL, defaultRepoUrl, "repo_url");
   const gitRef = clean(input.gitRef || env.ORKESTR_PUBLIC_GIT_REF || "main");
@@ -79,6 +91,7 @@ function bootstrapArgs(vm, input, env) {
   if (domain) args.push("--domain", domain);
   if (acmeEmail) args.push("--email", acmeEmail);
   if (vm.capabilities.includes("whatsapp") || input.withWhatsapp === true) args.push("--with-whatsapp");
+  args.push("--tenant-bootstrap-profile", tenantBootstrapProfilePath(input, env));
   if (input.noTailscale !== false) args.push("--no-tailscale");
   return args;
 }
@@ -87,6 +100,8 @@ function cloudInitUserData(vm, input, env) {
   const vmName = safeName(vm.kubevirt.vmName || vm.id);
   const keys = sshPublicKeys(input.sshPublicKeys || input.sshKeys || []);
   const bootstrapUrl = safePublicUrl(input.bootstrapUrl || env.ORKESTR_BOOTSTRAP_VPS_URL, defaultBootstrapUrl, "bootstrap_url");
+  const profilePath = tenantBootstrapProfilePath(input, env);
+  const profileB64 = Buffer.from(tenantBootstrapProfileJson(vm, input, env), "utf8").toString("base64");
   const args = bootstrapArgs(vm, input, env).map(singleQuote).join(" ");
   const bootstrapCommand = `curl -fsSL ${singleQuote(bootstrapUrl)} | bash -s -- ${args}`;
   const sshLines = keys.length
@@ -107,6 +122,12 @@ function cloudInitUserData(vm, input, env) {
     "    sudo: ALL=(ALL) NOPASSWD:ALL",
     "    lock_passwd: true",
     ...sshLines,
+    "write_files:",
+    `  - path: ${profilePath}`,
+    "    owner: root:root",
+    "    permissions: '0644'",
+    "    encoding: b64",
+    `    content: ${profileB64}`,
     "package_update: true",
     "packages:",
     "  - ca-certificates",
@@ -209,6 +230,8 @@ export function buildTenantVmProvisioningPlan(vm, input = {}, env = process.env)
   return {
     namespace,
     vmName,
+    bootstrapProfilePath: tenantBootstrapProfilePath(input, env),
+    bootstrapProfile: buildTenantBootstrapProfile(vm, input, env),
     manifestObject,
     manifest: `${JSON.stringify(manifestObject, null, 2)}\n`,
     commands: {
@@ -274,6 +297,8 @@ export async function provisionTenantVm(tenantVmId, input = {}, env = process.en
     tenantVm: publicTenantVm(vm),
     namespace: plan.namespace,
     vmName: plan.vmName,
+    bootstrapProfilePath: plan.bootstrapProfilePath,
+    bootstrapProfile: plan.bootstrapProfile,
     manifest: plan.manifest,
     commands: plan.commands,
   };

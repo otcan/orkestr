@@ -24,6 +24,8 @@ Options:
   --channel NAME             Deployment channel label. Defaults to main for versioned main tracking.
   --demo                     Disposable demo mode: reset Orkestr runtime state after successful updates.
   --with-whatsapp            Prefer the local WhatsApp bridge mode in /etc/orkestr/orkestr.env.
+  --tenant-bootstrap-profile FILE
+                             Persist a public-safe tenant bootstrap profile path in Orkestr env.
   --tailscale                Install Tailscale and configure serve when connected. Default.
   --no-tailscale             Skip Tailscale install and serve setup.
   --tailscale-up             Run tailscale up if the node is not connected. Use TS_AUTHKEY for unattended setup.
@@ -39,6 +41,8 @@ Options:
 Environment:
   TS_AUTHKEY                 Optional Tailscale auth key. Prefer setting it interactively, not in shell history.
   ORKESTR_ACME_EMAIL         Optional ACME account email used by Caddy.
+  ORKESTR_TENANT_BOOTSTRAP_PROFILE
+                             Optional public-safe tenant bootstrap profile JSON path.
   ORKESTR_INSTALL_SCRIPT_URL Override the installer URL used by this bootstrap script.
 USAGE
 }
@@ -54,6 +58,7 @@ deploy_tags_only="${ORKESTR_DEPLOY_TAGS_ONLY:-0}"
 track_main=0
 demo=0
 with_whatsapp=0
+tenant_bootstrap_profile="${ORKESTR_TENANT_BOOTSTRAP_PROFILE:-}"
 tailscale=1
 tailscale_up=0
 tailscale_hostname="${ORKESTR_TAILSCALE_HOSTNAME:-orkestr}"
@@ -123,6 +128,10 @@ while [ "$#" -gt 0 ]; do
     --with-whatsapp)
       with_whatsapp=1
       shift
+      ;;
+    --tenant-bootstrap-profile)
+      tenant_bootstrap_profile="${2:-}"
+      shift 2
       ;;
     --tailscale)
       tailscale=1
@@ -379,6 +388,12 @@ configure_runtime_env() {
   fi
   if [ "$with_whatsapp" -eq 1 ]; then
     set_env_value WHATSAPP_BRIDGE_MODE local "$env_file"
+  fi
+  if [ -n "$tenant_bootstrap_profile" ]; then
+    if [ ! -r "$tenant_bootstrap_profile" ]; then
+      warn "Tenant bootstrap profile is not readable yet: $tenant_bootstrap_profile"
+    fi
+    set_env_value ORKESTR_TENANT_BOOTSTRAP_PROFILE "$tenant_bootstrap_profile" "$env_file"
   fi
 }
 

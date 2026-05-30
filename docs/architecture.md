@@ -62,6 +62,16 @@ Local and VPS deployments use host-native processes. A VPS should use the
 systemd installer so Caddy, Tailscale, browser desktops, logs, and pairing
 approval stay on the host where operators expect them.
 
+## Tenant Instance Bootstrap
+
+The control plane provisions public-user isolation as a tenant VM baseline. The
+KubeVirt cloud-init plan writes a public-safe tenant bootstrap profile before it
+runs the normal VPS bootstrap script. That profile describes only non-secret
+defaults for the tenant's first Codex chat, workspace root, desktop surfaces,
+enabled skills, connector labels, and containment policy. Connector credentials,
+browser sessions, WhatsApp state, and user files are created inside the tenant
+instance after setup; they are not embedded in the profile or KubeVirt manifest.
+
 ## Connector Boundary
 
 The public connector surface contains generic setup and routing code. Real

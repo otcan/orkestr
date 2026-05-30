@@ -17,7 +17,8 @@ test("tenant VM provisioning builds a public-safe KubeVirt plan", async () => {
     resources: { vcpus: 2, memoryMiB: 8192, diskGiB: 100 },
     endpoint: { domain: "alice.example.test", baseUrl: "https://alice.example.test", publicIp: "203.0.113.10" },
     kubevirt: { namespace: "tenant-a", vmName: "alice-vm", storageClass: "local-path" },
-    capabilities: ["codex", "desks", "whatsapp"],
+    bootstrap: { firstThreadName: "Alice Launch", skills: ["salesnav"], desks: ["linkedin"] },
+    capabilities: ["codex", "desks", "files", "timers", "whatsapp"],
   }, env);
 
   const plan = buildTenantVmProvisioningPlan(tenantVm, {
@@ -28,16 +29,31 @@ test("tenant VM provisioning builds a public-safe KubeVirt plan", async () => {
   const manifest = JSON.parse(plan.manifest);
   const vm = manifest.items.find((item) => item.kind === "VirtualMachine");
   const userData = vm.spec.template.spec.volumes.find((volume) => volume.name === "cloudinitdisk").cloudInitNoCloud.userData;
+  const profile = JSON.parse(Buffer.from(userData.match(/content: ([A-Za-z0-9+/=]+)/)[1], "base64").toString("utf8"));
 
   assert.equal(plan.namespace, "tenant-a");
   assert.equal(plan.vmName, "alice-vm");
+  assert.equal(plan.bootstrapProfilePath, "/etc/orkestr/tenant-bootstrap-profile.json");
+  assert.equal(plan.bootstrapProfile.firstChat.name, "Alice Launch");
+  assert.equal(plan.bootstrapProfile.codex.model, "gpt-5.5");
+  assert.equal(plan.bootstrapProfile.codex.reasoningEffort, "medium");
+  assert.equal(plan.bootstrapProfile.policy.singleThreadLimit, true);
+  assert.deepEqual(plan.bootstrapProfile.desks.map((desk) => desk.slug), ["linkedin"]);
+  assert.ok(plan.bootstrapProfile.skills.includes("learning"));
+  assert.ok(plan.bootstrapProfile.skills.includes("whatsapp"));
+  assert.ok(plan.bootstrapProfile.skills.includes("salesnav"));
+  assert.equal(plan.bootstrapProfile.connectors.whatsapp.chatId, undefined);
+  assert.deepEqual(profile, plan.bootstrapProfile);
   assert.equal(vm.spec.template.spec.domain.cpu.cores, 2);
   assert.equal(vm.spec.template.spec.domain.resources.requests.memory, "8192Mi");
   assert.equal(vm.spec.dataVolumeTemplates[0].spec.pvc.resources.requests.storage, "100Gi");
   assert.match(vm.spec.dataVolumeTemplates[0].spec.source.http.url, /noble-server-cloudimg-amd64\.img/);
   assert.match(userData, /bootstrap-vps\.sh/);
+  assert.match(userData, /write_files:/);
+  assert.match(userData, /\/etc\/orkestr\/tenant-bootstrap-profile\.json/);
   assert.match(userData, /--domain' 'alice\.example\.test/);
   assert.match(userData, /--with-whatsapp/);
+  assert.match(userData, /--tenant-bootstrap-profile' '\/etc\/orkestr\/tenant-bootstrap-profile\.json/);
   assert.match(userData, /ssh-ed25519/);
   assert.deepEqual(plan.commands.apply, ["kubectl", "apply", "-f", "-"]);
   assert.deepEqual(plan.commands.publicIpRoute.slice(0, 7), [
@@ -79,6 +95,7 @@ test("tenant VM provisioning execute path applies manifest and updates registry 
 
   assert.equal(result.dryRun, false);
   assert.equal(result.tenantVm.status, "provisioning");
+  assert.equal(result.bootstrapProfile.firstChat.name, "bob");
   assert.equal(calls.length, 1);
   assert.equal(calls[0].command, "kubectl");
   assert.deepEqual(calls[0].args, ["apply", "-f", "-"]);

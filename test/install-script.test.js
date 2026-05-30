@@ -290,6 +290,7 @@ test("bootstrap script provides an opinionated fresh VPS path", async () => {
   assert.match(script, /--ref REF/);
   assert.match(script, /--demo/);
   assert.match(script, /--with-whatsapp/);
+  assert.match(script, /--tenant-bootstrap-profile FILE/);
   assert.match(script, /--track-main/);
   assert.match(script, /--in-place-updates/);
   assert.match(script, /--release-updates/);
@@ -305,6 +306,7 @@ test("bootstrap script provides an opinionated fresh VPS path", async () => {
   assert.match(script, /--mtls-mode MODE/);
   assert.match(script, /TS_AUTHKEY/);
   assert.match(script, /ORKESTR_ACME_EMAIL/);
+  assert.match(script, /ORKESTR_TENANT_BOOTSTRAP_PROFILE/);
   assert.match(script, /ORKESTR_MTLS_CA_CERT/);
   assert.match(script, /ORKESTR_MTLS_MODE/);
   assert.match(script, /tailscale\.com\/install\.sh/);
@@ -322,6 +324,7 @@ test("bootstrap script provides an opinionated fresh VPS path", async () => {
   assert.match(script, /ORKESTR_RESET_ON_UPDATE=1/);
   assert.match(script, /ORKESTR_RESET_OVERLAY=1/);
   assert.match(script, /WHATSAPP_BRIDGE_MODE local/);
+  assert.match(script, /set_env_value ORKESTR_TENANT_BOOTSTRAP_PROFILE "\$tenant_bootstrap_profile"/);
   assert.match(script, /ORKESTR_WHATSAPP_EXTERNAL_BRIDGE_ENABLED/);
   assert.match(script, /wait_for_orkestr_http/);
   assert.match(script, /\/api\/version/);

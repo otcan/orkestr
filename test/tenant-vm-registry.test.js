@@ -32,7 +32,13 @@ test("tenant VM registry keeps one active tenant instance per owner", async () =
     resources: { vcpus: 2, memoryMiB: 8192, diskGiB: 100 },
     endpoint: { domain: "tenant.example.test", baseUrl: "https://tenant.example.test", publicIp: "192.0.2.10" },
     kubevirt: { namespace: "orkestr-tenants", vmName: "otcan-vm" },
-    bootstrap: { firstThreadName: "otcantest" },
+    bootstrap: {
+      firstThreadName: "otcantest",
+      firstThreadId: "otcantest",
+      workspacePath: "/opt/orkestr/workspace/otcantest",
+      skills: ["learning", "linkedin"],
+      desks: ["linkedin"],
+    },
     connectors: { whatsappChatName: "otcantest" },
   }, env);
 
@@ -43,6 +49,10 @@ test("tenant VM registry keeps one active tenant instance per owner", async () =
   assert.equal(vm.endpoint.domain, "tenant.example.test");
   assert.equal(vm.kubevirt.vmName, "otcan-vm");
   assert.equal(vm.bootstrap.firstThreadName, "otcantest");
+  assert.equal(vm.bootstrap.firstThreadId, "otcantest");
+  assert.equal(vm.bootstrap.workspacePath, "/opt/orkestr/workspace/otcantest");
+  assert.deepEqual(vm.bootstrap.skills, ["learning", "linkedin"]);
+  assert.deepEqual(vm.bootstrap.desks, ["linkedin"]);
   assert.equal(vm.connectors.whatsappChatName, "otcantest");
 
   await assert.rejects(
@@ -160,6 +170,9 @@ test("tenant VM registry API is admin-only and returns public-safe records", asy
     assert.equal(provisioned.dryRun, true);
     assert.equal(provisioned.tenantVm.id, "alice-tenant");
     assert.equal(provisioned.namespace, "tenant-a");
+    assert.equal(provisioned.bootstrapProfile.firstChat.name, "alice-wa");
+    assert.equal(provisioned.bootstrapProfile.codex.model, "gpt-5.5");
+    assert.equal(provisioned.bootstrapProfile.policy.sanitizerRequired, true);
     assert.match(provisioned.manifest, /"kind": "VirtualMachine"/);
     assert.deepEqual(provisioned.commands.apply, ["kubectl", "apply", "-f", "-"]);
 
