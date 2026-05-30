@@ -52,7 +52,9 @@ function readState() {
   try { return JSON.parse(fs.readFileSync(stateFile, "utf8")); } catch { return { threads: [], calls: [] }; }
 }
 function writeState(state) {
-  fs.writeFileSync(stateFile, JSON.stringify(state, null, 2));
+  const tmp = stateFile + "." + process.pid + ".tmp";
+  fs.writeFileSync(tmp, JSON.stringify(state, null, 2));
+  fs.renameSync(tmp, stateFile);
 }
 if (args[0] === "--version") {
   console.log("codex-cli fake");

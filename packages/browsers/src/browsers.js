@@ -54,7 +54,8 @@ function normalizeBrowserOpenUrl(value) {
 export async function listBrowserSessions(env = process.env, options = {}) {
   if (desktopMode(env) !== "profiles") {
     try {
-      return await listManagedDesktopSessions(env, options);
+      const payload = await listManagedDesktopSessions(env, options);
+      return { ...payload, sessions: filterVisibleBrowserSessions(payload.sessions || [], env) };
     } catch (error) {
       if (!shouldFallbackAfterBrowserctlError(error, env)) {
         return {
@@ -91,6 +92,27 @@ const browserCatalog = [
     startUrl: "https://mail.google.com/",
   },
 ];
+
+function configuredVisibleBrowserSlugs(env = process.env) {
+  const raw = String(env.ORKESTR_BROWSER_VISIBLE_SLUGS || env.ORKESTR_OPS_DESKTOP_SLUGS || "").trim();
+  if (!raw) return null;
+  const slugs = raw
+    .split(/[\s,]+/g)
+    .map((slug) => slug.trim())
+    .filter(Boolean);
+  return slugs.length ? new Set(slugs) : null;
+}
+
+export function filterVisibleBrowserSessions(sessions = [], env = process.env) {
+  const visible = configuredVisibleBrowserSlugs(env);
+  if (!visible) return sessions;
+  return sessions.filter((session) => visible.has(String(session?.slug || session?.id || "").trim()));
+}
+
+function visibleBrowserCatalog(env = process.env) {
+  const visible = configuredVisibleBrowserSlugs(env);
+  return visible ? browserCatalog.filter((browser) => visible.has(browser.slug)) : browserCatalog;
+}
 
 function browserBySlug(slug) {
   const id = String(slug || "").trim();
@@ -283,7 +305,7 @@ async function publicBrowserRecord(browser, env = process.env, options = {}) {
 
 async function listProfileBrowsers(env = process.env, options = {}) {
   await ensureDataDirs(env);
-  const sessions = await Promise.all(browserCatalog.map((browser) => publicBrowserRecord(browser, env, options)));
+  const sessions = await Promise.all(visibleBrowserCatalog(env).map((browser) => publicBrowserRecord(browser, env, options)));
   return attachDesktopStateToSessions(sessions, env, options);
 }
 

@@ -10,7 +10,7 @@ import { listAgentMessages } from "../packages/core/src/messages.js";
 import { getSetupStatus } from "../packages/core/src/setup.js";
 import { appendThreadMessage, createThread, enqueueThreadInput, getThread, listThreadMessages, listThreads, updateThreadMessage } from "../packages/core/src/threads.js";
 import { deliverWhatsAppReplies, formatWhatsAppOutboundText, getWhatsAppChatParticipants, getWhatsAppStatus, initialQueueDeliveryState, mapLocalWhatsAppStatusFromHealth, routeWhatsAppInbound, syncWhatsAppTypingIndicators } from "../packages/connectors/src/whatsapp.js";
-import { forwardLocalWhatsAppInbound, listLocalWhatsAppChats, localWhatsAppAccountIdsForEnv, localWhatsAppConnectedPageReadyFallbackEligible, localWhatsAppInboundForwardTarget, localWhatsAppMessageRouteFields, localWhatsAppReadyFallbackEligible, localWhatsAppTypingClearRetryDelaysMs, localWhatsAppUnreadRecoveryBoundChats, localWhatsAppUnreadRecoveryIntervalMs, normalizeGroupParticipantIds, recoverUnreadLocalWhatsAppMessages, recoverableLocalWhatsAppAccountIds, reduceLocalWhatsAppBridgeState, sendWhatsAppTextWithConfirmation, startLocalWhatsAppAccount, webCacheRoot } from "../packages/connectors/src/whatsapp-local-bridge.js";
+import { cleanupLocalWhatsAppChromeLocks, forwardLocalWhatsAppInbound, listLocalWhatsAppChats, localWhatsAppAccountIdsForEnv, localWhatsAppConnectedPageReadyFallbackEligible, localWhatsAppInboundForwardTarget, localWhatsAppMessageRouteFields, localWhatsAppReadyFallbackEligible, localWhatsAppTypingClearRetryDelaysMs, localWhatsAppUnreadRecoveryBoundChats, localWhatsAppUnreadRecoveryIntervalMs, normalizeGroupParticipantIds, recoverConfiguredLocalWhatsAppAccounts, recoverUnreadLocalWhatsAppMessages, recoverableLocalWhatsAppAccountIds, reduceLocalWhatsAppBridgeState, sendWhatsAppTextWithConfirmation, startLocalWhatsAppAccount, webCacheRoot } from "../packages/connectors/src/whatsapp-local-bridge.js";
 import { createAndBindWhatsAppThreadGroup } from "../packages/connectors/src/whatsapp-thread-groups.js";
 import { prepareWhatsAppTableAttachments } from "../packages/connectors/src/whatsapp-table-attachments.js";
 import { writeConnectorConfig } from "../packages/storage/src/config.js";
@@ -691,6 +691,59 @@ test("local whatsapp recovery only targets autostarted stalled accounts", async 
     "target-closed",
     "profile-locked",
   ]);
+});
+
+test("local whatsapp recovery resets recoverable accounts before restarting", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-recover-reset-"));
+  const env = {
+    ORKESTR_HOME: home,
+    ORKESTR_WHATSAPP_ACCOUNT_IDS: "responder,other",
+    ORKESTR_WHATSAPP_AUTOSTART: "1",
+    ORKESTR_WHATSAPP_AUTOSTART_ACCOUNT_IDS: "responder,other",
+  };
+  const calls = [];
+
+  const result = await recoverConfiguredLocalWhatsAppAccounts(env, {
+    nowMs: 1000,
+    status: {
+      accounts: [
+        { accountId: "responder", state: "failed", ready: false, error: "The browser is already running for /tmp/profile. Use a different userDataDir." },
+        { accountId: "other", state: "ready", ready: true },
+      ],
+    },
+    async restartAccount(accountId) {
+      calls.push(["restart", accountId]);
+    },
+    async startAccount(accountId) {
+      calls.push(["start", accountId]);
+      return { accountId, state: "starting", ready: false };
+    },
+  });
+
+  assert.deepEqual(calls, [["restart", "responder"], ["start", "responder"]]);
+  assert.deepEqual(result.recovered, [{ accountId: "responder", state: "starting", ready: false }]);
+  assert.deepEqual(result.skipped, []);
+});
+
+test("local whatsapp chrome lock cleanup only removes singleton lock files", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-lock-cleanup-"));
+  const env = {
+    ORKESTR_HOME: home,
+    ORKESTR_WHATSAPP_ACCOUNT_IDS: "responder",
+    ORKESTR_WHATSAPP_ACCOUNT_CLIENT_IDS: "responder:codex-whatsapp-responder",
+  };
+  const sessionDir = path.join(home, "whatsapp-bridge", "sessions", "session-codex-whatsapp-responder");
+  await fs.mkdir(sessionDir, { recursive: true });
+  await fs.writeFile(path.join(sessionDir, "SingletonLock"), "stale", "utf8");
+  await fs.writeFile(path.join(sessionDir, "SingletonCookie"), "stale", "utf8");
+  await fs.writeFile(path.join(sessionDir, "Local State"), "keep", "utf8");
+
+  const result = await cleanupLocalWhatsAppChromeLocks("responder", env);
+
+  assert.equal(result.removed.length, 2);
+  await assert.rejects(fs.access(path.join(sessionDir, "SingletonLock")));
+  await assert.rejects(fs.access(path.join(sessionDir, "SingletonCookie")));
+  assert.equal(await fs.readFile(path.join(sessionDir, "Local State"), "utf8"), "keep");
 });
 
 test("whatsapp status reports paired from health readiness", async () => {

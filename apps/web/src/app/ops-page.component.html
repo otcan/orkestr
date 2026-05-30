@@ -163,7 +163,7 @@
           </div>
           <div class="desktop-actions">
             @if (browserOpenUrl(browser)) {
-              <a class="button-link" [href]="browserOpenUrl(browser)" target="_blank" rel="noreferrer">Open Desktop</a>
+              <button type="button" (click)="openBrowserDesktop(browser)" [disabled]="browserActionBusy(browser)">Open Desktop</button>
             }
             @if (shouldShowBrowserAction(browser, 'prepare')) {
               <button type="button" (click)="browserAction(browser, 'prepare')" [disabled]="browserActionBusy(browser)">Prepare</button>

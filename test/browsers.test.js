@@ -55,6 +55,23 @@ test("virtual browser management exposes stop and cleanup actions", async () => 
   assert.equal(desktop.status, "not_prepared");
 });
 
+test("visible browser slugs can limit the ops desktop list", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-visible-browsers-"));
+  const env = {
+    ORKESTR_HOME: home,
+    ORKESTR_BROWSER_LAUNCH_DISABLED: "1",
+    ORKESTR_BROWSER_DESKTOP_MODE: "profiles",
+    ORKESTR_OPS_DESKTOP_SLUGS: "linkedin",
+  };
+
+  await prepareVirtualBrowser("desktop", env);
+  await prepareVirtualBrowser("linkedin", env);
+  const payload = await listBrowserSessions(env);
+
+  assert.deepEqual(payload.sessions.map((browser) => browser.slug), ["linkedin"]);
+  assert.equal(payload.sessions[0].configured, true);
+});
+
 test("profile desktops are isolated per non-admin user", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-user-browsers-"));
   const env = { ORKESTR_HOME: home, ORKESTR_BROWSER_LAUNCH_DISABLED: "1", ORKESTR_BROWSER_DESKTOP_MODE: "profiles" };

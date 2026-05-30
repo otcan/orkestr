@@ -14,6 +14,13 @@
             "browser": "apps/web/src/main.ts",
             "index": "apps/web/src/index.html",
             "outputPath": "dist/web",
+            "assets": [
+              {
+                "glob": "**/*",
+                "input": "apps/web/public",
+                "output": "/"
+              }
+            ],
             "polyfills": ["zone.js"],
             "styles": ["apps/web/src/styles.css"],
             "tsConfig": "apps/web/tsconfig.app.json"

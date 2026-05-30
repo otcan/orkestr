@@ -271,6 +271,12 @@ export class OpsPageComponent implements OnInit, OnDestroy {
     }
   }
 
+  openBrowserDesktop(browser: BrowserSession): void {
+    const url = this.browserOpenUrl(browser);
+    if (!url) return;
+    window.open(url, "_blank", "noopener,noreferrer");
+  }
+
   formatBytes(value: unknown): string {
     const bytes = Number(value || 0);
     if (!Number.isFinite(bytes) || bytes <= 0) return "0 B";

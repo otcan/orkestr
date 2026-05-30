@@ -35,6 +35,7 @@ test("server serves the built Angular UI at root", async () => {
 
     assert.equal(response.status, 200);
     assertAngularShell(html);
+    assert.match(html, /rel="icon" type="image\/svg\+xml" href="\/favicon\.svg"/);
     assert.equal(onboardingResponse.status, 200);
     assertAngularShell(onboardingHtml);
     assert.equal(setupGmailResponse.status, 200);
@@ -77,11 +78,13 @@ test("ops desktop links are only shown for running desktops", async () => {
   assert.match(template, /\[disabled\]="browserActionBusy\(browser\)"/);
   assert.doesNotMatch(template, /browserAction\(browser, 'start'\)" \[disabled\]="busy"/);
   assert.match(component, /browserOpenUrl\(browser: BrowserSession\): string/);
+  assert.match(component, /openBrowserDesktop\(browser: BrowserSession\): void/);
   assert.match(component, /browserIsRunning\(browser: BrowserSession\): boolean/);
   assert.match(component, /"active", "running"/);
   assert.match(component, /\/desktop\/\$\{encodedSlug\}\/vnc\.html\?autoconnect=1&resize=scale&path=desktop\/\$\{encodedSlug\}\/websockify/);
   assert.doesNotMatch(component, /return String\(browser\.desk_url \|\| browser\.url \|\| ""\)\.trim\(\)/);
-  assert.match(template, />Open Desktop<\/a>/);
+  assert.match(template, /\(click\)="openBrowserDesktop\(browser\)"/);
+  assert.match(template, />Open Desktop<\/button>/);
   assert.match(template, />Share Link<\/button>/);
   assert.match(template, />Threads<\/strong>/);
   assert.match(template, /desktopThreads\(browser\)/);

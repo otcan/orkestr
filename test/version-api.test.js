@@ -14,6 +14,7 @@ async function request(baseUrl, route) {
 const isolatedServerEnvKeys = [
   "ORKESTR_HOME",
   "ORKESTR_CODEX_BIN",
+  "ORKESTR_DEPLOY_CHANNEL",
   "ORKESTR_RELEASE_MANIFEST",
   "ORKESTR_RECOVER_RUNNING_ON_START",
   "ORKESTR_RUNTIME_MONITOR_INTERVAL_MS",
@@ -35,6 +36,7 @@ function restoreEnv(prior) {
 }
 
 function configureIsolatedServerEnv(home, extra = {}) {
+  for (const key of isolatedServerEnvKeys) delete process.env[key];
   process.env.ORKESTR_HOME = home;
   process.env.ORKESTR_CODEX_BIN = "__orkestr_codex_disabled_on_macos__";
   process.env.ORKESTR_RECOVER_RUNNING_ON_START = "0";

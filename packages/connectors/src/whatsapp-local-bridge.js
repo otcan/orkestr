@@ -1077,6 +1077,7 @@ export async function startConfiguredLocalWhatsAppAccounts(env = process.env) {
 
 const localWhatsAppRecoveryAttempts = new Map();
 const recoverableLocalWhatsAppStates = new Set(["auth_ready_timeout", "disconnected"]);
+const localWhatsAppChromeLockFiles = new Set(["SingletonCookie", "SingletonLock", "SingletonSocket"]);
 let localWhatsAppUnreadRecoveryInFlight = null;
 let localWhatsAppUnreadRecoveryLastRunMs = 0;
 
@@ -1109,6 +1110,71 @@ export function recoverableLocalWhatsAppAccountIds(accounts = [], selectedAccoun
     .map((account) => String(account.accountId).trim());
 }
 
+export async function cleanupLocalWhatsAppChromeLocks(accountId = "", env = process.env) {
+  const normalized = normalizeAccountId(accountId, env);
+  const root = sessionRootForAccount(normalized, env);
+  const clientId = clientIdForAccount(normalized, env);
+  const candidates = new Set([root, path.join(root, `session-${clientId}`)]);
+  const firstLevel = await fs.readdir(root, { withFileTypes: true }).catch(() => []);
+  for (const entry of firstLevel) {
+    if (entry.isDirectory()) candidates.add(path.join(root, entry.name));
+  }
+  const removed = [];
+  for (const dir of candidates) {
+    const entries = await fs.readdir(dir, { withFileTypes: true }).catch(() => []);
+    for (const entry of entries) {
+      if (!localWhatsAppChromeLockFiles.has(entry.name)) continue;
+      const filePath = path.join(dir, entry.name);
+      await fs.rm(filePath, { force: true }).catch(() => {});
+      removed.push(filePath);
+    }
+  }
+  if (removed.length) {
+    await appendEvent({ type: "whatsapp_local_chrome_locks_removed", accountId: normalized, count: removed.length }, env).catch(() => {});
+  }
+  return { accountId: normalized, removed };
+}
+
+export async function restartRecoverableLocalWhatsAppAccount(accountId = "", env = process.env, options = {}) {
+  const normalized = normalizeAccountId(accountId, env);
+  const runtime = runtimes.get(normalized);
+  if (runtime?.client) {
+    runtime.clearAuthReadyTimer?.();
+    await runtime.client.destroy().catch(() => {});
+  }
+  runtimes.delete(normalized);
+  for (const key of [...typingClearRetryTimers.keys()].filter((item) => item.startsWith(`${normalized}:`))) {
+    clearTypingClearRetryTimers(key);
+  }
+  for (const session of [...typingSessions.values()].filter((item) => item.accountId === normalized)) {
+    if (session?.interval) clearInterval(session.interval);
+    typingSessions.delete(typingKey(session.accountId, session.chatId));
+  }
+  const cleanup = await cleanupLocalWhatsAppChromeLocks(normalized, env);
+  setAccountState(normalized, {
+    state: "idle",
+    ready: false,
+    authenticated: false,
+    started: false,
+    qrAvailable: false,
+    pairingCode: "",
+    pairingCodeUpdatedAt: null,
+    authenticatedAt: null,
+    loadingPercent: null,
+    loadingMessage: "",
+    waState: "",
+    error: "",
+  });
+  await appendEvent({
+    type: "whatsapp_local_auto_recover_reset",
+    accountId: normalized,
+    reason: String(options.reason || "auto_recover"),
+    hadRuntime: Boolean(runtime?.client),
+    removedChromeLocks: cleanup.removed.length,
+  }, env).catch(() => {});
+  return { accountId: normalized, hadRuntime: Boolean(runtime?.client), removedChromeLocks: cleanup.removed.length };
+}
+
 export async function recoverConfiguredLocalWhatsAppAccounts(env = process.env, options = {}) {
   const selected = localWhatsAppAutostartAccountIds(env);
   if (!selected.length) return { enabled: false, recovered: [], skipped: [] };
@@ -1127,7 +1193,10 @@ export async function recoverConfiguredLocalWhatsAppAccounts(env = process.env, 
     localWhatsAppRecoveryAttempts.set(accountId, nowMs);
     await appendEvent({ type: "whatsapp_local_auto_recover_start", accountId }, env).catch(() => {});
     try {
-      const account = await startLocalWhatsAppAccount(accountId, env, options.startOptions || {});
+      const restartAccount = options.restartAccount || restartRecoverableLocalWhatsAppAccount;
+      const startAccount = options.startAccount || startLocalWhatsAppAccount;
+      await restartAccount(accountId, env, { reason: "auto_recover" });
+      const account = await startAccount(accountId, env, options.startOptions || {});
       recovered.push({ accountId, state: account.state, ready: account.ready === true });
       await appendEvent({ type: "whatsapp_local_auto_recover_started", accountId, state: account.state, ready: account.ready === true }, env).catch(() => {});
     } catch (error) {
