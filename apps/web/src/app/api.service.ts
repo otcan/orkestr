@@ -1269,6 +1269,21 @@ export class ApiService {
     return this.http.get<FileBrowserResponse>(this.api(`/files${query}`));
   }
 
+  createFileFolder(currentPath: string, name: string): Observable<FileBrowserResponse> {
+    return this.http.post<FileBrowserResponse>(this.api("/files/folders"), { path: currentPath, name });
+  }
+
+  uploadFiles(currentPath: string, files: File[]): Observable<FileBrowserResponse & { files?: Array<Record<string, unknown>> }> {
+    const body = new FormData();
+    body.append("path", currentPath || "");
+    for (const file of files) body.append("files", file, file.name);
+    return this.http.post<FileBrowserResponse & { files?: Array<Record<string, unknown>> }>(this.api("/files/uploads"), body);
+  }
+
+  deleteFile(path: string): Observable<FileBrowserResponse> {
+    return this.http.delete<FileBrowserResponse>(this.api(`/files?path=${encodeURIComponent(path)}`));
+  }
+
   modelStatus(): Observable<Record<string, unknown>> {
     return this.http.get<Record<string, unknown>>(this.api("/models/status"));
   }

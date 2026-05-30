@@ -234,3 +234,65 @@ export async function listFilesForPrincipal(rawPath = "", principal = {}, env = 
     };
   }
 }
+
+async function resolveFilePathForPrincipal(rawPath = "", principal = {}, env = process.env) {
+  const roots = await fileBrowserRootsForPrincipal(principal, env);
+  const requestedPath = String(rawPath || "").trim();
+  const resolved = path.resolve(requestedPath || roots[0]?.path || dataPaths(env).files);
+  if (!insideAnyRoot(resolved, roots)) return { ok: false, error: "file_path_forbidden", path: resolved, roots };
+  return { ok: true, error: "", path: resolved, roots };
+}
+
+function safeFileName(value = "", fallback = "upload") {
+  return path.basename(String(value || "").trim()).replace(/[^\w .@()+\-=]/g, "_").replace(/^\.+$/, "") || fallback;
+}
+
+export async function createFolderForPrincipal(rawPath = "", folderName = "", principal = {}, env = process.env) {
+  const resolved = await resolveFilePathForPrincipal(rawPath, principal, env);
+  if (!resolved.ok) return { ok: false, error: resolved.error, path: resolved.path, parent: null, roots: resolved.roots, entries: [] };
+  const currentPath = resolved.path;
+  if (!(await directoryExists(currentPath))) {
+    return { ok: false, error: "directory_not_found", path: currentPath, parent: safeParent(currentPath, resolved.roots), roots: resolved.roots, entries: [] };
+  }
+  const name = safeFileName(folderName, "");
+  if (!name) return { ok: false, error: "folder_name_required", path: currentPath, parent: safeParent(currentPath, resolved.roots), roots: resolved.roots, entries: [] };
+  const target = path.join(currentPath, name);
+  if (!insideAnyRoot(target, resolved.roots)) {
+    return { ok: false, error: "file_path_forbidden", path: currentPath, parent: safeParent(currentPath, resolved.roots), roots: resolved.roots, entries: [] };
+  }
+  await fs.mkdir(target, { recursive: false });
+  return listFilesForPrincipal(currentPath, principal, env);
+}
+
+export async function saveFilesForPrincipal(rawPath = "", files = [], principal = {}, env = process.env) {
+  const resolved = await resolveFilePathForPrincipal(rawPath, principal, env);
+  if (!resolved.ok) return { ok: false, error: resolved.error, path: resolved.path, parent: null, roots: resolved.roots, entries: [], files: [] };
+  const currentPath = resolved.path;
+  if (!(await directoryExists(currentPath))) {
+    return { ok: false, error: "directory_not_found", path: currentPath, parent: safeParent(currentPath, resolved.roots), roots: resolved.roots, entries: [], files: [] };
+  }
+  const saved = [];
+  for (const [index, file] of Array.from(files || []).entries()) {
+    const name = safeFileName(file.originalname || file.name || "", `upload-${index + 1}`);
+    const target = path.join(currentPath, name);
+    if (!insideAnyRoot(target, resolved.roots)) continue;
+    const buffer = file.buffer || file.data || Buffer.from(String(file.content || ""), "utf8");
+    await fs.writeFile(target, buffer);
+    saved.push({ name, path: target, size: Buffer.byteLength(buffer) });
+  }
+  const listing = await listFilesForPrincipal(currentPath, principal, env);
+  return { ...listing, files: saved };
+}
+
+export async function deleteFileForPrincipal(rawPath = "", principal = {}, env = process.env) {
+  const resolved = await resolveFilePathForPrincipal(rawPath, principal, env);
+  if (!resolved.ok) return { ok: false, error: resolved.error, path: resolved.path, parent: null, roots: resolved.roots, entries: [] };
+  const target = resolved.path;
+  if (resolved.roots.some((root) => path.resolve(root.path) === target)) {
+    return { ok: false, error: "file_root_delete_forbidden", path: target, parent: null, roots: resolved.roots, entries: [] };
+  }
+  const parent = safeParent(target, resolved.roots);
+  if (!parent) return { ok: false, error: "file_path_forbidden", path: target, parent: null, roots: resolved.roots, entries: [] };
+  await fs.rm(target, { recursive: true, force: false });
+  return listFilesForPrincipal(parent, principal, env);
+}

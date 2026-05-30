@@ -48,6 +48,9 @@
         <strong>{{ currentUserDisplayName() }}</strong>
         <span>{{ currentUserContactLabel() }}</span>
         <small>{{ userThreadLimitLabel() }}</small>
+        <button class="secondary user-files-button" type="button" [class.active]="activePanel === 'files'" (click)="openPanel('files')">
+          Files
+        </button>
       </section>
     }
 
@@ -244,6 +247,8 @@
   <section class="chat">
     @if (activePanel === "ops") {
       <ork-ops-page [toolsView]="toolsView" (toolsViewChange)="setToolsView($event)"></ork-ops-page>
+    } @else if (activePanel === "files") {
+      <ork-files-page></ork-files-page>
     } @else if ((threadWizardOpen || !threads.length) && canCreateThreadFromSidebar()) {
       <ork-first-thread-wizard
         class="first-thread-host"
@@ -308,6 +313,9 @@
         }
         <button type="button" [class.active]="activePanel === 'history'" (click)="openPanel('history')">History</button>
         <button type="button" [class.active]="activePanel === 'timers'" (click)="openPanel('timers')">Thread Timers</button>
+        @if (isUserMode()) {
+          <button type="button" (click)="openPanel('files')">Files</button>
+        }
         @if (isAdminMode()) {
           <button type="button" [class.active]="activePanel === 'settings'" (click)="openPanel('settings')">Settings</button>
           <button type="button" [class.active]="activePanel === 'workers'" (click)="openPanel('workers')">Parallel Work</button>

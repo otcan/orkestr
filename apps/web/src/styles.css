@@ -3184,6 +3184,137 @@ ork-first-thread-wizard.first-thread-host {
   color: #8cff9b;
 }
 
+.user-files-button {
+  justify-self: start;
+  margin-top: 6px;
+}
+
+.user-files-button.active {
+  border-color: rgba(55, 114, 255, 0.38);
+  background: rgba(55, 114, 255, 0.12);
+  color: #eff5ff;
+}
+
+.files-page {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  min-height: 100%;
+  padding: 24px;
+  overflow: auto;
+}
+
+.files-head,
+.file-root-row,
+.file-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.files-head {
+  justify-content: space-between;
+}
+
+.files-head h2 {
+  margin: 0;
+  color: #f3fff4;
+  font-size: 1.35rem;
+  line-height: 1.2;
+}
+
+.file-root-row,
+.file-toolbar {
+  flex-wrap: wrap;
+}
+
+.file-root-row button.active {
+  border-color: rgba(119, 205, 126, 0.42);
+  background: rgba(119, 205, 126, 0.14);
+  color: #f2fff4;
+}
+
+.file-toolbar code {
+  flex: 1 1 260px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  border: 1px solid rgba(119, 205, 126, 0.18);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.045);
+  padding: 9px 10px;
+  color: #dff7e1;
+  font-size: 0.78rem;
+}
+
+.file-toolbar form {
+  display: flex;
+  gap: 8px;
+  min-width: min(100%, 280px);
+}
+
+.file-toolbar input {
+  min-width: 0;
+}
+
+.file-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.file-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 10px;
+  border: 1px solid rgba(119, 205, 126, 0.16);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.035);
+  padding: 10px;
+}
+
+.file-open {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+  border: 0;
+  background: transparent;
+  padding: 0;
+  text-align: left;
+}
+
+.file-open:disabled {
+  cursor: default;
+  opacity: 1;
+}
+
+.file-open strong,
+.file-open span,
+.file-row small {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.file-open strong {
+  color: #f6fff6;
+  font-size: 0.9rem;
+}
+
+.file-open span,
+.file-row small {
+  color: #a8bca5;
+  font-size: 0.78rem;
+}
+
+.file-row.directory .file-open strong::before {
+  content: "/ ";
+  color: #7cff8e;
+}
+
 .visually-hidden {
   position: absolute;
   width: 1px;
@@ -3318,5 +3449,28 @@ ork-first-thread-wizard.first-thread-host {
   .command-help-row {
     grid-template-columns: 1fr;
     gap: 6px;
+  }
+
+  .files-page {
+    padding: 14px;
+  }
+
+  .files-head,
+  .file-toolbar form {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .file-row {
+    grid-template-columns: 1fr;
+    align-items: stretch;
+  }
+
+  .file-toolbar {
+    align-items: stretch;
+  }
+
+  .file-toolbar code {
+    flex-basis: 100%;
   }
 }

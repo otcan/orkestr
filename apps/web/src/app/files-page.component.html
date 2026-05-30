@@ -1,0 +1,62 @@
+<section class="files-page">
+  <header class="files-head">
+    <div>
+      <p class="eyebrow">Files</p>
+      <h2>My files</h2>
+      <p class="subline">
+        <span class="status-pill">{{ busy ? "loading" : "ready" }}</span>
+      </p>
+    </div>
+    <button class="secondary" type="button" (click)="loadFiles()" [disabled]="busy">Reload</button>
+  </header>
+
+  @if (error) {
+    <div class="notice error">{{ error }}</div>
+  } @else if (notice) {
+    <div class="notice">{{ notice }}</div>
+  }
+
+  <nav class="file-root-row" aria-label="File roots">
+    @for (root of roots; track root.path) {
+      <button type="button" [class.active]="currentPath === root.path" (click)="openPath(root.path)">
+        {{ root.name }}
+      </button>
+    }
+  </nav>
+
+  <div class="file-toolbar">
+    <button class="secondary" type="button" (click)="openPath(parentPath || '')" [disabled]="!parentPath">Up</button>
+    <code>{{ currentPath }}</code>
+    <form (submit)="createFolder(); $event.preventDefault()">
+      <input name="new-folder" [(ngModel)]="newFolderName" placeholder="New folder" />
+      <button type="submit" [disabled]="busy || !newFolderName.trim()">Create</button>
+    </form>
+    <button class="secondary" type="button" (click)="filePicker.click()" [disabled]="uploadBusy">
+      {{ uploadBusy ? "Uploading" : "Upload" }}
+    </button>
+    <input
+      #filePicker
+      class="visually-hidden"
+      type="file"
+      multiple
+      (change)="uploadSelected(filePicker.files); filePicker.value = ''"
+    />
+  </div>
+
+  <div class="file-list">
+    @for (entry of entries; track entry.path) {
+      <article class="file-row" [class.directory]="entry.directory">
+        <button type="button" class="file-open" (click)="openEntry(entry)" [disabled]="!entry.directory">
+          <strong>{{ entry.name }}</strong>
+          <span>{{ entryKind(entry) }}{{ formatBytes(entry.size) ? " | " + formatBytes(entry.size) : "" }}</span>
+        </button>
+        <small>{{ entry.modifiedAt | date: "MMM d, HH:mm" }}</small>
+        <button class="secondary danger-soft" type="button" (click)="deleteEntry(entry)" [disabled]="deletingPath === entry.path">
+          {{ deletingPath === entry.path ? "Deleting" : "Delete" }}
+        </button>
+      </article>
+    } @empty {
+      <p class="empty">No files here.</p>
+    }
+  </div>
+</section>

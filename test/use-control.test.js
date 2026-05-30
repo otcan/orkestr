@@ -1079,6 +1079,40 @@ test("user management API is admin-only and can pair a browser to a managed user
     assert.equal(forbiddenFolders.error, "workspace_path_forbidden");
     assert.deepEqual(files.entries.map((entry) => entry.name), ["readme.txt"]);
 
+    const createdFolder = await read(await fetch(`${baseUrl}/api/files/folders`, {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie: userCookie },
+      body: JSON.stringify({ path: userPaths.files, name: "docs" }),
+    }));
+    assert.equal(createdFolder.ok, true);
+    assert.ok(createdFolder.entries.some((entry) => entry.name === "docs" && entry.directory));
+
+    const uploadBody = new FormData();
+    uploadBody.append("path", path.join(userPaths.files, "docs"));
+    uploadBody.append("files", new Blob(["uploaded"], { type: "text/plain" }), "note.txt");
+    const uploaded = await read(await fetch(`${baseUrl}/api/files/uploads`, {
+      method: "POST",
+      headers: { cookie: userCookie },
+      body: uploadBody,
+    }));
+    assert.equal(uploaded.ok, true);
+    assert.deepEqual(uploaded.files.map((entry) => entry.name), ["note.txt"]);
+    assert.deepEqual(uploaded.entries.map((entry) => entry.name), ["note.txt"]);
+
+    const deletedUpload = await read(await fetch(`${baseUrl}/api/files?path=${encodeURIComponent(path.join(userPaths.files, "docs", "note.txt"))}`, {
+      method: "DELETE",
+      headers: { cookie: userCookie },
+    }));
+    assert.equal(deletedUpload.ok, true);
+    assert.deepEqual(deletedUpload.entries.map((entry) => entry.name), []);
+
+    const forbiddenDelete = await read(await fetch(`${baseUrl}/api/files?path=${encodeURIComponent(path.join(home, "users.json"))}`, {
+      method: "DELETE",
+      headers: { cookie: userCookie },
+    }));
+    assert.equal(forbiddenDelete.ok, false);
+    assert.equal(forbiddenDelete.error, "file_path_forbidden");
+
     const revokedUserSession = await read(await fetch(`${baseUrl}/api/setup/security/sessions/${userSession.id}/revoke`, {
       method: "POST",
       headers: { "content-type": "application/json", cookie: adminCookie },

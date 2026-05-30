@@ -3,7 +3,8 @@ import os from "node:os";
 import path from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { Body, Controller, Delete, Get, HttpCode, Param, Post, Query, Req, Res } from "@nestjs/common";
+import { Body, Controller, Delete, Get, HttpCode, Param, Post, Query, Req, Res, UploadedFiles, UseInterceptors } from "@nestjs/common";
+import { AnyFilesInterceptor } from "@nestjs/platform-express";
 import { doctorRuntimeResources, listRuntimeLeases } from "../../../../../packages/core/src/runtime-leases.js";
 import { getSetupStatus, publicSetupStatus } from "../../../../../packages/core/src/setup.js";
 import { readRuntimeSettings } from "../../../../../packages/core/src/runtime-settings.js";
@@ -12,7 +13,7 @@ import { whereAmI } from "../../../../../packages/core/src/whereiam.js";
 import { listEventsForPrincipal } from "../../../../../packages/core/src/audit-events.js";
 import { createStateBackup, stateBackupStatus, stateRestorePlan } from "../../../../../packages/core/src/state-backups.js";
 import { migrateCodexThreadsToAppServer } from "../../../../../packages/core/src/codex-app-server-migration.js";
-import { listFilesForPrincipal, listWorkspaceFoldersForPrincipal } from "../../../../../packages/core/src/workspace-files.js";
+import { createFolderForPrincipal, deleteFileForPrincipal, listFilesForPrincipal, listWorkspaceFoldersForPrincipal, saveFilesForPrincipal } from "../../../../../packages/core/src/workspace-files.js";
 import { requestPrincipal } from "../../../../../packages/core/src/principal.js";
 import { isAdminPrincipal } from "../../../../../packages/core/src/policy.js";
 import { getUser } from "../../../../../packages/core/src/users.js";
@@ -480,6 +481,34 @@ export class SystemController {
   @Get("files")
   async files(@Req() request: any, @Query("path") currentPath = "") {
     return listFilesForPrincipal(String(currentPath || ""), requestPrincipal(request), process.env);
+  }
+
+  @Post("files/folders")
+  @HttpCode(200)
+  async createFolder(@Req() request: any, @Body() body: Record<string, unknown> = {}) {
+    return createFolderForPrincipal(
+      String(body.path || body.currentPath || ""),
+      String(body.name || body.folderName || ""),
+      requestPrincipal(request),
+      process.env,
+    );
+  }
+
+  @Post("files/uploads")
+  @HttpCode(200)
+  @UseInterceptors(AnyFilesInterceptor({ limits: { fileSize: 25 * 1024 * 1024, files: 20 } }))
+  async uploadFiles(@Req() request: any, @UploadedFiles() uploadedFiles: any[] = [], @Body() body: Record<string, unknown> = {}) {
+    return saveFilesForPrincipal(
+      String(body.path || body.currentPath || ""),
+      uploadedFiles,
+      requestPrincipal(request),
+      process.env,
+    );
+  }
+
+  @Delete("files")
+  async deleteFile(@Req() request: any, @Query("path") currentPath = "") {
+    return deleteFileForPrincipal(String(currentPath || ""), requestPrincipal(request), process.env);
   }
 
   @Get("system/files")

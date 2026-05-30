@@ -29,6 +29,7 @@ test("server serves the built Angular UI at root", async () => {
     const workflowOnboardingResponse = await fetch(`http://127.0.0.1:${port}/onboarding`);
     const legacyOnboardingResponse = await fetch(`http://127.0.0.1:${port}/ng/onboarding`);
     const opsResponse = await fetch(`http://127.0.0.1:${port}/ops`);
+    const filesResponse = await fetch(`http://127.0.0.1:${port}/files`);
     const threadResponse = await fetch(`http://127.0.0.1:${port}/thread/demo`);
     const faviconSvgResponse = await fetch(`http://127.0.0.1:${port}/favicon.svg`);
     const faviconSvg = await faviconSvgResponse.text();
@@ -47,6 +48,7 @@ test("server serves the built Angular UI at root", async () => {
     assert.equal(workflowOnboardingResponse.status, 200);
     assert.equal(legacyOnboardingResponse.status, 200);
     assert.equal(opsResponse.status, 200);
+    assert.equal(filesResponse.status, 200);
     assert.equal(threadResponse.status, 200);
     assert.equal(faviconSvgResponse.status, 200);
     assert.match(faviconSvgResponse.headers.get("content-type") || "", /image\/svg\+xml/);
@@ -230,7 +232,7 @@ test("web shell switches to a constrained non-admin user mode", async () => {
   assert.match(component, /uiRuntimeReady\(\): boolean/);
   assert.match(component, /return this\.isUserMode\(\) \|\| this\.codexAgentReady\(\)/);
   assert.match(component, /panelAllowedForCurrentUser\(panel: Panel\): boolean/);
-  assert.match(component, /\["chat", "history", "timers"\]\.includes\(panel\)/);
+  assert.match(component, /\["chat", "history", "timers", "files"\]\.includes\(panel\)/);
   assert.match(component, /normalizeUserModeView\(\)/);
   assert.match(component, /This user account is limited to one chat\./);
   assert.match(template, /\[class\.user-mode\]="isUserMode\(\)"/);
@@ -242,6 +244,41 @@ test("web shell switches to a constrained non-admin user mode", async () => {
   assert.match(template, /@if \(isAdminMode\(\)\) \{\s*<div class="codex-control-scroll"/s);
   assert.match(template, /\[disabled\]="!threadInputReady\(\)"/);
   assert.match(styles, /\.user-mode-card/);
+});
+
+test("web shell exposes a user-scoped files page", async () => {
+  const template = await fs.readFile("apps/web/src/app/app.component.html", "utf8");
+  const component = await fs.readFile("apps/web/src/app/app.component.ts", "utf8");
+  const filesComponent = await fs.readFile("apps/web/src/app/files-page.component.ts", "utf8");
+  const filesTemplate = await fs.readFile("apps/web/src/app/files-page.component.html", "utf8");
+  const api = await fs.readFile("apps/web/src/app/api.service.ts", "utf8");
+  const controller = await fs.readFile("apps/server/src/modules/system/system.controller.ts", "utf8");
+  const styles = await fs.readFile("apps/web/src/styles.css", "utf8");
+
+  assert.match(component, /import \{ FilesPageComponent \} from "\.\/files-page\.component"/);
+  assert.match(component, /type Panel = .*"files"/);
+  assert.match(component, /parts\[0\] === "files"/);
+  assert.match(component, /parts\[0\] === "ng" && parts\[1\] === "files"/);
+  assert.match(component, /this\.activePanel !== "ops" && this\.activePanel !== "files"/);
+  assert.match(component, /panel === "files"\) return "\/files"/);
+  assert.match(component, /globalThis\.document\.title = "Files · Orkestr"/);
+  assert.match(template, /<ork-files-page><\/ork-files-page>/);
+  assert.match(template, /\(click\)="openPanel\('files'\)"/);
+  assert.match(filesComponent, /selector: "ork-files-page"/);
+  assert.match(filesComponent, /this\.api\.files\(path\)/);
+  assert.match(filesComponent, /this\.api\.createFileFolder\(this\.currentPath, name\)/);
+  assert.match(filesComponent, /this\.api\.uploadFiles\(this\.currentPath, selected\)/);
+  assert.match(filesComponent, /this\.api\.deleteFile\(entry\.path\)/);
+  assert.match(filesTemplate, /type="file"/);
+  assert.match(filesTemplate, /\[class\.active\]="currentPath === root\.path"/);
+  assert.match(api, /createFileFolder\(currentPath: string, name: string\)/);
+  assert.match(api, /uploadFiles\(currentPath: string, files: File\[\]\)/);
+  assert.match(api, /deleteFile\(path: string\)/);
+  assert.match(controller, /@Post\("files\/folders"\)/);
+  assert.match(controller, /@Post\("files\/uploads"\)/);
+  assert.match(controller, /@Delete\("files"\)/);
+  assert.match(styles, /\.files-page/);
+  assert.match(styles, /\.file-row/);
 });
 
 test("mobile desktop shell wraps noVNC with phone-first controls", async () => {
