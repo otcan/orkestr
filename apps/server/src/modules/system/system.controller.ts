@@ -9,6 +9,7 @@ import { getSetupStatus, publicSetupStatus } from "../../../../../packages/core/
 import { readRuntimeSettings } from "../../../../../packages/core/src/runtime-settings.js";
 import { systemDoctor } from "../../../../../packages/core/src/system-doctor.js";
 import { whereAmI } from "../../../../../packages/core/src/whereiam.js";
+import { listEventsForPrincipal } from "../../../../../packages/core/src/audit-events.js";
 import { requestPrincipal } from "../../../../../packages/core/src/principal.js";
 import { isAdminPrincipal } from "../../../../../packages/core/src/policy.js";
 import { getUser } from "../../../../../packages/core/src/users.js";
@@ -30,7 +31,6 @@ import {
 } from "../../../../../packages/core/src/security.js";
 import { publicConfig } from "../../../../../packages/storage/src/config.js";
 import { ensureDataDirs } from "../../../../../packages/storage/src/paths.js";
-import { listEvents } from "../../../../../packages/storage/src/store.js";
 import { httpError } from "../../common/http.js";
 
 const execFileAsync = promisify(execFile);
@@ -469,8 +469,8 @@ export class SystemController {
   }
 
   @Get("events")
-  async events(@Query("limit") limit = "100") {
-    return { events: await listEvents(process.env, Number(limit || 100)) };
+  async events(@Req() request: any, @Query("limit") limit = "100") {
+    return { events: await listEventsForPrincipal(requestPrincipal(request), process.env, Number(limit || 100)) };
   }
 
   @Get("runtime-leases")

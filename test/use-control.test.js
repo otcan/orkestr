@@ -5,6 +5,8 @@ import path from "node:path";
 import test from "node:test";
 import { pathToFileURL } from "node:url";
 import { startServer } from "../apps/server/src/server.js";
+import { appendEvent } from "../packages/storage/src/store.js";
+import { listEventsForPrincipal } from "../packages/core/src/audit-events.js";
 import { createTimer, createTimerForPrincipal, doctorTimersForPrincipal, listTimers, listTimersForPrincipal, markDueTimers } from "../packages/core/src/timers.js";
 import { adminPrincipal, userPrincipal } from "../packages/core/src/principal.js";
 import { sanitizeAction } from "../packages/core/src/llm-sanitizer.js";
@@ -71,6 +73,34 @@ test("non-admin users are limited to one owned thread and cannot read another ow
   assert.equal(duplicate.id, first.id);
   assert.deepEqual((await listThreadsForPrincipal(alice, env)).map((thread) => thread.id), ["alice-thread"]);
   assert.deepEqual((await listThreadsForPrincipal(adminPrincipal(), env)).map((thread) => thread.id).sort(), ["alice-thread", "bob-thread"]);
+});
+
+test("non-admin audit events are scoped to owned resources", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-use-control-events-"));
+  const env = { ORKESTR_HOME: home };
+  const alice = userPrincipal(await upsertUser({ id: "alice", role: "user", displayName: "Alice" }, env));
+  const bob = userPrincipal(await upsertUser({ id: "bob", role: "user", displayName: "Bob" }, env));
+  await createThreadForPrincipal({ id: "alice-thread", name: "Alice Main" }, alice, env);
+  await createThreadForPrincipal({ id: "bob-thread", name: "Bob Main" }, bob, env);
+  await appendEvent({ type: "alice_thread_event", threadId: "alice-thread" }, env);
+  await appendEvent({ type: "bob_owner_event", ownerUserId: "bob" }, env);
+  await appendEvent({ type: "global_event" }, env);
+
+  const aliceEvents = await listEventsForPrincipal(alice, env);
+  const bobEvents = await listEventsForPrincipal(bob, env);
+  const adminEvents = await listEventsForPrincipal(adminPrincipal(), env);
+
+  assert.deepEqual(aliceEvents.map((event) => event.type), ["user_created", "thread_created", "alice_thread_event"]);
+  assert.deepEqual(bobEvents.map((event) => event.type), ["user_created", "thread_created", "bob_owner_event"]);
+  assert.deepEqual(adminEvents.map((event) => event.type), [
+    "user_created",
+    "user_created",
+    "thread_created",
+    "thread_created",
+    "alice_thread_event",
+    "bob_owner_event",
+    "global_event",
+  ]);
 });
 
 test("non-admin thread creation cannot request root-trusted Codex access", async () => {
