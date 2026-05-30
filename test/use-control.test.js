@@ -23,6 +23,7 @@ import { approvePairingChallenge } from "../packages/core/src/security.js";
 import { createUser, disableUser, findOrCreateExternalUser, listUsers, readUserPrivateIdentities, updateUser, upsertUser } from "../packages/core/src/users.js";
 import { listUserSkillsForPrincipal, setUserSkillForPrincipal } from "../packages/core/src/user-skills.js";
 import { createTenantVm } from "../packages/core/src/tenant-vm-registry.js";
+import { acquireDesktopLease } from "../packages/browsers/src/desktop-leases.js";
 import {
   createThread,
   createThreadForPrincipal,
@@ -951,6 +952,12 @@ test("user management API is admin-only and can pair a browser to a managed user
     assert.equal(userSession.role, "user");
     await createThread({ id: "alice-existing", name: "Alice Existing", ownerUserId: "alice-example.test" }, process.env);
     await createThread({ id: "bob-hidden", name: "Bob Hidden", ownerUserId: "bob-example.test" }, process.env);
+    await acquireDesktopLease("linkedin", { threadId: "alice-existing", threadName: "Alice Existing" }, process.env, {
+      principal: userPrincipal({ id: "alice-example.test", role: "user" }),
+    });
+    await acquireDesktopLease("gmail", { threadId: "bob-hidden", threadName: "Bob Hidden" }, process.env, {
+      principal: userPrincipal({ id: "bob-example.test", role: "user" }),
+    });
 
     const currentUser = await read(await fetch(`${baseUrl}/api/users/me`, { headers: { cookie: userCookie } }));
     assert.ok(currentUser.user, JSON.stringify(currentUser));
@@ -1013,6 +1020,36 @@ test("user management API is admin-only and can pair a browser to a managed user
     const userGmailStatus = await read(userGmailStatusResponse);
     assert.equal(userGmailStatusResponse.status, 200);
     assert.equal(userGmailStatus.id, "gmail");
+
+    const userBrowsers = await read(await fetch(`${baseUrl}/api/browser-sessions`, { headers: { cookie: userCookie } }));
+    assert.equal(userBrowsers.ok, true);
+    assert.ok(userBrowsers.sessions.length > 0);
+    assert.ok(userBrowsers.sessions.every((session) => session.ownerUserId === "alice-example.test"));
+    const userDesktopLeases = await read(await fetch(`${baseUrl}/api/desktops/leases`, { headers: { cookie: userCookie } }));
+    assert.deepEqual(userDesktopLeases.desktopLeases.map((lease) => lease.ownerUserId), ["alice-example.test"]);
+    assert.deepEqual(userDesktopLeases.desktopLeases.map((lease) => lease.desktopSlug), ["linkedin"]);
+    const adminDesktopLeases = await read(await fetch(`${baseUrl}/api/desktops/leases`, { headers: { cookie: adminCookie } }));
+    assert.deepEqual(
+      adminDesktopLeases.desktopLeases.map((lease) => `${lease.ownerUserId}:${lease.desktopSlug}`).sort(),
+      ["alice-example.test:linkedin", "bob-example.test:gmail"],
+    );
+    const deniedBobReleaseResponse = await fetch(`${baseUrl}/api/desktops/gmail/release`, {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie: userCookie },
+      body: JSON.stringify({ force: true, ownerUserId: "bob-example.test", reason: "cross_user_release_attempt" }),
+    });
+    const deniedBobRelease = await read(deniedBobReleaseResponse);
+    assert.equal(deniedBobReleaseResponse.status, 404);
+    assert.equal(deniedBobRelease.error, "lease_not_found");
+    const bobLeaseStillVisibleToAdmin = await read(await fetch(`${baseUrl}/api/desktops/leases`, { headers: { cookie: adminCookie } }));
+    assert.ok(bobLeaseStillVisibleToAdmin.desktopLeases.some((lease) => lease.ownerUserId === "bob-example.test" && lease.desktopSlug === "gmail"));
+    const adminReleaseBob = await read(await fetch(`${baseUrl}/api/desktops/gmail/release`, {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie: adminCookie },
+      body: JSON.stringify({ force: true, ownerUserId: "bob-example.test", reason: "admin_test_release" }),
+    }));
+    assert.equal(adminReleaseBob.ok, true);
+    assert.equal(adminReleaseBob.lease.ownerUserId, "bob-example.test");
 
     const deniedDesktopResponse = await fetch(`${baseUrl}/api/browsers/linkedin/prepare`, {
       method: "POST",

@@ -102,6 +102,27 @@ export interface DesktopShareResponse {
   };
 }
 
+export interface DesktopLeaseRecord {
+  id?: string;
+  desktopSlug?: string;
+  ownerUserId?: string;
+  threadId?: string;
+  threadName?: string | null;
+  mode?: string;
+  purpose?: string | null;
+  active?: boolean;
+  stale?: boolean;
+  expired?: boolean;
+  stealable?: boolean;
+  heartbeatAt?: string | null;
+  acquiredAt?: string | null;
+  expiresAt?: string | null;
+  releasedAt?: string | null;
+  ownerThreadLabel?: string | null;
+  ownerThreadState?: string | null;
+  [key: string]: unknown;
+}
+
 export interface WorkspaceFolderEntry {
   name: string;
   path: string;
@@ -1414,6 +1435,19 @@ export class ApiService {
 
   browserAction(slug: string, action: string, body: Record<string, unknown> = {}): Observable<{ browser: BrowserSession }> {
     return this.http.post<{ browser: BrowserSession }>(this.api(`/browser-sessions/${encodeURIComponent(slug)}/${encodeURIComponent(action)}`), body);
+  }
+
+  desktopLeases(includeReleased = false): Observable<{ ok: boolean; desktopLeases: DesktopLeaseRecord[]; staleAfterMs?: number; generatedAt?: string }> {
+    const query = includeReleased ? "?include=released" : "";
+    return this.http.get<{ ok: boolean; desktopLeases: DesktopLeaseRecord[]; staleAfterMs?: number; generatedAt?: string }>(this.api(`/desktops/leases${query}`));
+  }
+
+  acquireDesktopLease(slug: string, body: Record<string, unknown>): Observable<{ ok: boolean; lease?: DesktopLeaseRecord }> {
+    return this.http.post<{ ok: boolean; lease?: DesktopLeaseRecord }>(this.api(`/desktops/${encodeURIComponent(slug)}/acquire`), body);
+  }
+
+  releaseDesktopLease(slug: string, body: Record<string, unknown>): Observable<{ ok: boolean; lease?: DesktopLeaseRecord | null }> {
+    return this.http.post<{ ok: boolean; lease?: DesktopLeaseRecord | null }>(this.api(`/desktops/${encodeURIComponent(slug)}/release`), body);
   }
 
   createDesktopShare(slug: string): Observable<DesktopShareResponse> {

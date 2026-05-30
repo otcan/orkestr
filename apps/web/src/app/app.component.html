@@ -48,6 +48,9 @@
         <strong>{{ currentUserDisplayName() }}</strong>
         <span>{{ currentUserContactLabel() }}</span>
         <small>{{ userThreadLimitLabel() }}</small>
+        <button class="secondary user-files-button" type="button" [class.active]="activePanel === 'userDesk'" (click)="openPanel('userDesk')">
+          Desk
+        </button>
         <button class="secondary user-files-button" type="button" [class.active]="activePanel === 'userTimers'" (click)="openPanel('userTimers')">
           Timers
         </button>
@@ -254,6 +257,8 @@
       <ork-files-page></ork-files-page>
     } @else if (activePanel === "userTimers") {
       <ork-user-timers-page></ork-user-timers-page>
+    } @else if (activePanel === "userDesk") {
+      <ork-user-desk-page></ork-user-desk-page>
     } @else if ((threadWizardOpen || !threads.length) && canCreateThreadFromSidebar()) {
       <ork-first-thread-wizard
         class="first-thread-host"

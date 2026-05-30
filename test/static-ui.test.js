@@ -31,6 +31,7 @@ test("server serves the built Angular UI at root", async () => {
     const opsResponse = await fetch(`http://127.0.0.1:${port}/ops`);
     const filesResponse = await fetch(`http://127.0.0.1:${port}/files`);
     const timersResponse = await fetch(`http://127.0.0.1:${port}/timers`);
+    const deskResponse = await fetch(`http://127.0.0.1:${port}/desk`);
     const threadResponse = await fetch(`http://127.0.0.1:${port}/thread/demo`);
     const faviconSvgResponse = await fetch(`http://127.0.0.1:${port}/favicon.svg`);
     const faviconSvg = await faviconSvgResponse.text();
@@ -51,6 +52,7 @@ test("server serves the built Angular UI at root", async () => {
     assert.equal(opsResponse.status, 200);
     assert.equal(filesResponse.status, 200);
     assert.equal(timersResponse.status, 200);
+    assert.equal(deskResponse.status, 200);
     assert.equal(threadResponse.status, 200);
     assert.equal(faviconSvgResponse.status, 200);
     assert.match(faviconSvgResponse.headers.get("content-type") || "", /image\/svg\+xml/);
@@ -234,7 +236,7 @@ test("web shell switches to a constrained non-admin user mode", async () => {
   assert.match(component, /uiRuntimeReady\(\): boolean/);
   assert.match(component, /return this\.isUserMode\(\) \|\| this\.codexAgentReady\(\)/);
   assert.match(component, /panelAllowedForCurrentUser\(panel: Panel\): boolean/);
-  assert.match(component, /\["chat", "history", "timers", "files", "userTimers"\]\.includes\(panel\)/);
+  assert.match(component, /\["chat", "history", "timers", "files", "userTimers", "userDesk"\]\.includes\(panel\)/);
   assert.match(component, /normalizeUserModeView\(\)/);
   assert.match(component, /This user account is limited to one chat\./);
   assert.match(template, /\[class\.user-mode\]="isUserMode\(\)"/);
@@ -278,6 +280,44 @@ test("web shell exposes a user timer management page", async () => {
   assert.match(api, /runTimer\(id: string\)/);
   assert.match(styles, /\.user-timer-editor/);
   assert.match(styles, /\.timer-actions/);
+});
+
+test("web shell exposes a user desktop desk page", async () => {
+  const template = await fs.readFile("apps/web/src/app/app.component.html", "utf8");
+  const component = await fs.readFile("apps/web/src/app/app.component.ts", "utf8");
+  const deskComponent = await fs.readFile("apps/web/src/app/user-desk-page.component.ts", "utf8");
+  const deskTemplate = await fs.readFile("apps/web/src/app/user-desk-page.component.html", "utf8");
+  const opsComponent = await fs.readFile("apps/web/src/app/ops-page.component.ts", "utf8");
+  const opsTemplate = await fs.readFile("apps/web/src/app/ops-page.component.html", "utf8");
+  const api = await fs.readFile("apps/web/src/app/api.service.ts", "utf8");
+  const styles = await fs.readFile("apps/web/src/styles.css", "utf8");
+
+  assert.match(component, /import \{ UserDeskPageComponent \} from "\.\/user-desk-page\.component"/);
+  assert.match(component, /type Panel = .*"userDesk"/);
+  assert.match(component, /parts\[0\] === "desk"/);
+  assert.match(component, /parts\[0\] === "ng" && parts\[1\] === "desk"/);
+  assert.match(component, /panel === "userDesk"\) return "\/desk"/);
+  assert.match(component, /globalThis\.document\.title = "Desk · Orkestr"/);
+  assert.match(template, /<ork-user-desk-page><\/ork-user-desk-page>/);
+  assert.match(template, /\(click\)="openPanel\('userDesk'\)"/);
+  assert.match(deskComponent, /selector: "ork-user-desk-page"/);
+  assert.match(deskComponent, /this\.api\.browserSessions\(\)/);
+  assert.match(deskComponent, /this\.api\.desktopLeases\(\)/);
+  assert.match(deskComponent, /this\.api\.acquireDesktopLease\(slug/);
+  assert.match(deskComponent, /this\.api\.releaseDesktopLease\(slug/);
+  assert.match(deskComponent, /this\.api\.createDesktopShare\(slug\)/);
+  assert.match(deskTemplate, /Open Desktop/);
+  assert.match(deskTemplate, /Reserve/);
+  assert.match(api, /interface DesktopLeaseRecord/);
+  assert.match(api, /desktopLeases\(includeReleased = false\)/);
+  assert.match(api, /acquireDesktopLease\(slug: string/);
+  assert.match(api, /releaseDesktopLease\(slug: string/);
+  assert.match(opsComponent, /opsDesktopLeases: DesktopLeaseRecord\[\] = \[\]/);
+  assert.match(opsComponent, /firstValueFrom\(this\.api\.desktopLeases\(\)\)/);
+  assert.match(opsComponent, /forceReleaseDesktopLease\(lease: DesktopLeaseRecord\)/);
+  assert.match(opsTemplate, /Desktop leases/);
+  assert.match(styles, /\.user-desk-grid/);
+  assert.match(styles, /\.desktop-lease-list/);
 });
 
 test("web shell exposes a user-scoped files page", async () => {

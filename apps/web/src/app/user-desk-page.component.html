@@ -1,0 +1,71 @@
+<section class="panel-body user-desk-page">
+  <div class="panel-title">
+    <div>
+      <p class="eyebrow">Desk</p>
+      <h3>{{ browsers.length }} desktops</h3>
+    </div>
+    <button class="secondary" type="button" (click)="load()" [disabled]="busy">Reload</button>
+  </div>
+
+  @if (error) {
+    <div class="notice error">{{ error }}</div>
+  } @else if (notice) {
+    <div class="notice">{{ notice }}</div>
+  }
+
+  @if (shareUrl) {
+    <div class="notice">
+      <a [href]="shareUrl" target="_blank" rel="noreferrer">{{ shareUrl }}</a>
+    </div>
+  }
+
+  <div class="desktop-grid user-desk-grid">
+    @for (browser of browsers; track browserSlug(browser)) {
+      <article class="desktop-card user-desk-card">
+        <div class="desktop-head">
+          <div>
+            <h4>{{ browserLabel(browser) }}</h4>
+            <small>{{ browser.scopeLabel || "Private desktop" }}</small>
+          </div>
+          <div class="desktop-pills">
+            <span [class.live]="browserRunning(browser)">{{ browserStatus(browser) }}</span>
+            <span [class.live]="leaseClass(browserLease(browser)) === 'live'" [class.bad]="leaseClass(browserLease(browser)) === 'bad'">
+              {{ leaseLabel(browserLease(browser)) }}
+            </span>
+          </div>
+        </div>
+        <p>{{ browserSummary(browser) }}</p>
+        @if (browserLease(browser)) {
+          <div class="desktop-lease" [class.stale]="browserLease(browser)?.stale || browserLease(browser)?.expired">
+            <strong>{{ browserLease(browser)?.stale || browserLease(browser)?.expired ? "Needs release" : "Reserved" }}</strong>
+            <span>{{ leaseLabel(browserLease(browser)) }}</span>
+            <small>Heartbeat {{ browserLease(browser)?.heartbeatAt | date: "MMM d, HH:mm" }}</small>
+          </div>
+        }
+        <div class="desktop-actions user-desk-actions">
+          @if (browserOpenUrl(browser)) {
+            <a class="button-link" [href]="browserOpenUrl(browser)" target="_blank" rel="noreferrer">Open Desktop</a>
+          }
+          @if (!browserLease(browser) && primaryThread()) {
+            <button type="button" (click)="acquireDesk(browser)" [disabled]="actionBusy(browser)">Reserve</button>
+          }
+          @if (browserLease(browser)) {
+            <button class="secondary" type="button" (click)="releaseDesk(browser)" [disabled]="actionBusy(browser)">Release</button>
+          }
+          @if (canPrepare(browser)) {
+            <button class="secondary" type="button" (click)="browserAction(browser, 'prepare')" [disabled]="actionBusy(browser)">Prepare</button>
+          }
+          @if (canStart(browser)) {
+            <button class="secondary" type="button" (click)="browserAction(browser, 'start')" [disabled]="actionBusy(browser)">Start</button>
+          } @else {
+            <button class="secondary" type="button" (click)="browserAction(browser, 'restart')" [disabled]="actionBusy(browser)">Restart</button>
+            <button class="secondary" type="button" (click)="browserAction(browser, 'stop')" [disabled]="actionBusy(browser)">Stop</button>
+            <button class="secondary" type="button" (click)="shareDesktop(browser)" [disabled]="actionBusy(browser)">Share Link</button>
+          }
+        </div>
+      </article>
+    } @empty {
+      <p class="empty">{{ busy ? "Loading desktops..." : "No desktops registered." }}</p>
+    }
+  </div>
+</section>

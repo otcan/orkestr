@@ -2,7 +2,7 @@ import { DatePipe } from "@angular/common";
 import { ChangeDetectorRef, Component, EventEmitter, Input, OnDestroy, OnInit, Output, inject } from "@angular/core";
 import { FormsModule } from "@angular/forms";
 import { firstValueFrom } from "rxjs";
-import { Agent, AgentTemplate, ApiService, BrowserSession, ConnectorStatus, EventRecord, OrkestrUser, OutlookOAuthPollResponse, SecurityChallenge, SecuritySession, SetupStatus, TimerDoctorResponse, TimerRecord, UserIdentity, UserOutlookOAuthStartResponse, VersionResponse } from "./api.service";
+import { Agent, AgentTemplate, ApiService, BrowserSession, ConnectorStatus, DesktopLeaseRecord, EventRecord, OrkestrUser, OutlookOAuthPollResponse, SecurityChallenge, SecuritySession, SetupStatus, TimerDoctorResponse, TimerRecord, UserIdentity, UserOutlookOAuthStartResponse, VersionResponse } from "./api.service";
 
 export type ToolsView = "system" | "timers" | "desktops" | "models" | "settings" | "connectors" | "users";
 type MailIdentityProvider = "gmail" | "outlook";
@@ -39,6 +39,8 @@ export class OpsPageComponent implements OnInit, OnDestroy {
   opsBrowsersLoaded = false;
   opsBrowserSource = "";
   opsBrowserMessage = "";
+  opsDesktopLeases: DesktopLeaseRecord[] = [];
+  activeDesktopLeaseId = "";
   opsRuntimeLeases: Array<Record<string, unknown>> = [];
   opsExecutors: Array<Record<string, unknown>> = [];
   opsExecutions: Array<Record<string, unknown>> = [];
@@ -101,7 +103,7 @@ export class OpsPageComponent implements OnInit, OnDestroy {
         this.renderNow();
       });
     try {
-      const [version, setup, whatsapp, agents, templates, timers, timerDoctor, events, browsers, runtimeLeases, executors, executions, system, processes, models, users, securityChallenges, securitySessions] = await Promise.allSettled([
+      const [version, setup, whatsapp, agents, templates, timers, timerDoctor, events, browsers, desktopLeases, runtimeLeases, executors, executions, system, processes, models, users, securityChallenges, securitySessions] = await Promise.allSettled([
         firstValueFrom(this.api.version()),
         firstValueFrom(this.api.setupStatus()),
         firstValueFrom(this.api.whatsappStatus()),
@@ -111,6 +113,7 @@ export class OpsPageComponent implements OnInit, OnDestroy {
         firstValueFrom(this.api.timerDoctor()),
         firstValueFrom(this.api.events(40)),
         browsersRequest,
+        firstValueFrom(this.api.desktopLeases()),
         firstValueFrom(this.api.runtimeLeases()),
         firstValueFrom(this.api.executors()),
         firstValueFrom(this.api.executions()),
@@ -137,6 +140,7 @@ export class OpsPageComponent implements OnInit, OnDestroy {
       } else {
         this.applyBrowserSessionsError(browsers.reason);
       }
+      if (desktopLeases.status === "fulfilled") this.opsDesktopLeases = desktopLeases.value.desktopLeases || [];
       if (runtimeLeases.status === "fulfilled") {
         this.opsRuntimeLeases = runtimeLeases.value.leases || [];
         this.opsRuntimeBudget = runtimeLeases.value.budget || null;
@@ -489,6 +493,29 @@ export class OpsPageComponent implements OnInit, OnDestroy {
     }
   }
 
+  async forceReleaseDesktopLease(lease: DesktopLeaseRecord): Promise<void> {
+    const slug = String(lease.desktopSlug || "").trim();
+    const ownerUserId = String(lease.ownerUserId || "").trim();
+    const id = String(lease.id || `${slug}:${ownerUserId}`).trim();
+    if (!slug || !ownerUserId || this.activeDesktopLeaseId) return;
+    this.activeDesktopLeaseId = id;
+    try {
+      await firstValueFrom(this.api.releaseDesktopLease(slug, {
+        force: true,
+        ownerUserId,
+        reason: "admin_force_released",
+      }));
+      this.error = "";
+      this.notice = `${this.desktopLeaseLabel(lease)} released.`;
+      await this.loadOps(false);
+    } catch (error) {
+      this.error = this.errorText(error);
+    } finally {
+      this.activeDesktopLeaseId = "";
+      this.renderNow();
+    }
+  }
+
   openBrowserDesktop(browser: BrowserSession): void {
     const url = this.browserOpenUrl(browser);
     if (!url) return;
@@ -601,6 +628,21 @@ export class OpsPageComponent implements OnInit, OnDestroy {
   desktopThreadHref(thread: Record<string, unknown>): string {
     const id = String(thread["id"] || thread["name"] || thread["bindingName"] || "").trim();
     return id ? `/thread/${encodeURIComponent(id)}` : "/ops/desktops";
+  }
+
+  desktopLeaseLabel(lease: DesktopLeaseRecord): string {
+    const desktop = String(lease.desktopSlug || "desktop").trim();
+    const owner = String(lease.ownerUserId || "admin").trim();
+    return `${desktop} · ${owner}`;
+  }
+
+  desktopLeaseThreadLabel(lease: DesktopLeaseRecord): string {
+    return String(lease.ownerThreadLabel || lease.threadName || lease.threadId || "No thread").trim();
+  }
+
+  desktopLeaseBusy(lease: DesktopLeaseRecord): boolean {
+    const id = String(lease.id || `${lease.desktopSlug || ""}:${lease.ownerUserId || ""}`).trim();
+    return !!id && this.activeDesktopLeaseId === id;
   }
 
   browserActionBusy(browser: BrowserSession): boolean {

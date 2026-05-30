@@ -189,6 +189,34 @@
         <p class="empty">{{ opsBrowsersLoading ? "Loading desktop sessions..." : "No desktops registered." }}</p>
       }
     </div>
+    <div class="desktop-lease-list">
+      <div class="panel-title compact-title">
+        <div>
+          <p class="eyebrow">Desktop leases</p>
+          <h3>{{ opsDesktopLeases.length }} active</h3>
+        </div>
+      </div>
+      <div class="compact-list">
+        @for (lease of opsDesktopLeases; track lease.id || desktopLeaseLabel(lease)) {
+          <article class="timer-row">
+            <div>
+              <strong>{{ desktopLeaseLabel(lease) }}</strong>
+              <p>{{ desktopLeaseThreadLabel(lease) }} | {{ lease.mode || "exclusive" }} | heartbeat {{ lease.heartbeatAt | date: "MMM d, HH:mm" }}</p>
+              @if (lease.stale || lease.expired) {
+                <small>Stale or expired</small>
+              }
+            </div>
+            <div class="timer-actions">
+              <button class="secondary danger-soft" type="button" (click)="forceReleaseDesktopLease(lease)" [disabled]="desktopLeaseBusy(lease)">
+                Release
+              </button>
+            </div>
+          </article>
+        } @empty {
+          <p class="empty">No active desktop leases.</p>
+        }
+      </div>
+    </div>
   }
 
   @if (toolsView === "models") {

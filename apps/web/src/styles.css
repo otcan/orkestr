@@ -2461,6 +2461,22 @@ ork-first-thread-wizard.first-thread-host {
   gap: 8px;
 }
 
+.user-desk-grid {
+  margin-top: 14px;
+}
+
+.user-desk-card {
+  min-height: 260px;
+}
+
+.user-desk-actions {
+  align-items: center;
+}
+
+.desktop-lease-list {
+  margin-top: 22px;
+}
+
 .drop-zone.dragging,
 .composer.dragging {
   outline: 3px dashed rgba(126, 157, 92, 0.8);
