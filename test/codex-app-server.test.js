@@ -11,6 +11,7 @@ import {
   deliverCodexAppServerPendingInputs,
   getCodexAppServerClient,
   importCodexAppServerThread,
+  interruptCodexAppServerThread,
   listCodexAppServerThreads,
   recoverStaleCodexAppServerTurns,
   resumeCodexAppServerThread,
@@ -2166,6 +2167,63 @@ test("Codex app-server reads live active turns before delivering queued input", 
     assert.equal(status.activeTurnId, "live-empty-flags-turn");
     assert.equal(rawStateAfter.calls.some((call) => call.method === "thread/read" && call.params?.threadId === codexId), true);
     assert.equal(deliveryTurnStarts.length, 0);
+  } finally {
+    stopCodexAppServerClients();
+  }
+});
+
+test("Codex app-server interrupt reads live active turns before reporting no active turn", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-codex-app-server-live-active-interrupt-"));
+  const fake = await createFakeCodex(home);
+  const env = {
+    ORKESTR_HOME: path.join(home, "orkestr"),
+    HOME: path.join(home, "runtime-home"),
+    PATH: `${fake.bin}${path.delimiter}${process.env.PATH || ""}`,
+    FAKE_CODEX_STATE: fake.stateFile,
+  };
+  try {
+    const thread = await createThread({ id: "app-server-live-active-interrupt-thread", name: "App Server Live Active Interrupt Thread", cwd: home, executorId: "codex", executor: { type: "codex" } }, env);
+    const started = await startCodexAppServerThread(thread, env);
+    const codexId = started.thread.executor.codexThreadId;
+    const rawState = JSON.parse(await fs.readFile(fake.stateFile, "utf8"));
+    const codexThread = rawState.threads.find((item) => item.id === codexId);
+    codexThread.status = { type: "active", activeFlags: [] };
+    codexThread.turns.push({
+      id: "live-empty-flags-interrupt-turn",
+      threadId: codexId,
+      status: "inProgress",
+      items: [
+        { type: "userMessage", id: "user_live_empty_flags_interrupt", content: [{ type: "text", text: "Still working." }] },
+      ],
+    });
+    await fs.writeFile(fake.stateFile, JSON.stringify(rawState, null, 2));
+    await updateThread(started.thread.id, {
+      state: "working",
+      runtime: {
+        ...(started.thread.runtime || {}),
+        runtimeKind: "codex-app-server",
+        state: "working",
+        activeTurnId: null,
+        codexStatus: { type: "active", activeFlags: [] },
+      },
+    }, env);
+    const client = await getCodexAppServerClient({ env, home: env.HOME });
+    client.threadStates.delete(codexId);
+
+    const result = await interruptCodexAppServerThread(await getThread(started.thread.id, env), env);
+    const interruptedThread = await getThread(started.thread.id, env);
+    const rawStateAfter = JSON.parse(await fs.readFile(fake.stateFile, "utf8"));
+
+    assert.equal(result.interrupted, true);
+    assert.equal(result.turnId, "live-empty-flags-interrupt-turn");
+    assert.equal(interruptedThread.state, "ready");
+    assert.equal(interruptedThread.runtime.activeTurnId, null);
+    assert.equal(rawStateAfter.calls.some((call) => call.method === "thread/read" && call.params?.threadId === codexId), true);
+    assert.equal(rawStateAfter.calls.some((call) =>
+      call.method === "turn/interrupt" &&
+      call.params?.threadId === codexId &&
+      call.params?.turnId === "live-empty-flags-interrupt-turn"
+    ), true);
   } finally {
     stopCodexAppServerClients();
   }

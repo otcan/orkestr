@@ -283,12 +283,19 @@ export async function interruptCodexAppServerThread(thread, env = process.env) {
   await ensureContainedCodexRuntimeHome(thread, env);
   const runtimeEnv = codexRuntimeEnvForThread(thread, env);
   const client = await getCodexAppServerClient({ env: runtimeEnv, home: runtimeHome(runtimeEnv) });
-  const clientState = client.threadStates.get(id);
-  const activeTurnId = clean(
+  let clientState = client.threadStates.get(id);
+  let activeTurnId = clean(
     clientState && Object.prototype.hasOwnProperty.call(clientState, "activeTurnId")
       ? clientState.activeTurnId
       : thread.runtime?.activeTurnId
   );
+  if (!activeTurnId) {
+    const liveState = await readLiveCodexThreadState(client, id);
+    if (liveState) {
+      clientState = liveState;
+      activeTurnId = clean(liveState.activeTurnId);
+    }
+  }
   if (!activeTurnId) return { interrupted: false, reason: "no_active_turn" };
   await client.request("turn/interrupt", { threadId: id, turnId: activeTurnId });
   client.threadStates.set(id, { ...(client.threadStates.get(id) || {}), activeTurnId: "", status: { type: "idle" } });
