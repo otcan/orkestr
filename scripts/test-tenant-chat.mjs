@@ -4,8 +4,8 @@ const DEFAULT_API_BASE = "http://127.0.0.1:18912";
 const CASES = {
   "gmail-missing": {
     text: "Can you check my gmail?",
-    require: [/gmail/i, /(not connected|not enabled|isn.t connected|can.t access|cannot access)/i],
-    reject: [/safely handle/i, /private connector/i, /account identity/i, /couldn.t complete this request/i, /Orkestr UI/i],
+    require: [/gmail/i, /(sign.?in|connect|authorize|oauth|not available)/i],
+    reject: [/safely handle/i, /private connector/i, /account identity/i, /couldn.t complete this request/i, /Orkestr UI/i, /Orkestr admin/i, /Orkestr administrator/i],
   },
   "whatsapp-identity": {
     text: "What is the WhatsApp number that you control?",

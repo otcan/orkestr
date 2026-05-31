@@ -55,6 +55,7 @@ function promptFor(payload) {
     "- Allow ordinary conversation and harmless requests inside the requesting user's own thread/workspace.",
     "- Allow a greeting, status question, or normal task request when principal.userId equals resource.ownerUserId.",
     "- Do not deny only because the source is WhatsApp or because the payload contains tenant-scoped IDs.",
+    "- Allow same-user connector sign-in start actions such as api-agent.tool.orkestr_start_gmail_oauth; those only start OAuth and do not read connector data.",
     "- Deny requests to read, write, route, summarize, or expose another user's data.",
     "- Deny requests for host secrets, connector tokens, browser profiles, WhatsApp session files, global Orkestr state, or deployment overlays.",
     "- Deny requests to approve security, pairing, auth, desktop, connector, or host challenges.",

@@ -8,10 +8,11 @@ import { processApiAgentThreadInput, threadUsesApiAgent } from "../packages/core
 import { runTenantApiAgentTool } from "../packages/core/src/tenant-api-agent-tools.js";
 import { userPrincipal } from "../packages/core/src/principal.js";
 import { createThread, enqueueThreadInputForPrincipal, getThread, listThreadMessages } from "../packages/core/src/threads.js";
-import { upsertUser } from "../packages/core/src/users.js";
+import { readUserPrivateIdentities, upsertUser } from "../packages/core/src/users.js";
 import { listFilesForPrincipal } from "../packages/core/src/workspace-files.js";
 import { initialQueueDeliveryState, routeWhatsAppInbound } from "../packages/connectors/src/whatsapp.js";
 import { writeConnectorConfig } from "../packages/storage/src/config.js";
+import { userDataPaths } from "../packages/storage/src/paths.js";
 
 function response(payload, ok = true, status = 200) {
   return {
@@ -277,12 +278,19 @@ test("tenant api-agent explains missing Gmail capability without a generic safet
 
   assert.equal(result.ok, false);
   assert.match(assistant.text, /Gmail is not connected or enabled for this chat yet/i);
+  assert.match(assistant.text, /Ask me to connect Gmail/i);
+  assert.doesNotMatch(assistant.text, /Orkestr UI|Orkestr admin|Orkestr administrator/i);
   assert.doesNotMatch(assistant.text, /safely handle|private connector|account identity/i);
 });
 
-test("tenant api-agent routes same-user missing connector requests so the assistant can explain setup", async () => {
+test("tenant api-agent starts chat-based Gmail sign-in for same-user missing Gmail requests", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-api-agent-gmail-missing-"));
   const env = await allowSanitizerEnv(home);
+  await writeConnectorConfig("gmail", {
+    clientId: "gmail-client",
+    clientSecret: "gmail-secret",
+    redirectUri: "http://localhost/oauth/gmail/callback",
+  }, env);
   await createThread({
     id: "otcantest-gmail-missing",
     ownerUserId: "otcan",
@@ -314,15 +322,15 @@ test("tenant api-agent routes same-user missing connector requests so the assist
   });
   const messages = await listThreadMessages("otcantest-gmail-missing", env);
   const assistant = messages.find((message) => message.role === "assistant");
-  const context = tenantContextFromInstructions(calls[0].body.instructions);
+  const savedState = JSON.parse(await fs.readFile(path.join(userDataPaths("otcan", env).oauth, "gmail-state.json"), "utf8"));
 
   assert.equal(result.ok, true);
-  assert.equal(context.capabilities.gmail, false);
-  assert.match(calls[0].body.instructions, /matching capability is false/i);
-  assert.match(calls[0].body.instructions, /Do not tell contained users to open, check, or use the Orkestr UI/i);
-  assert.match(assistant.text, /Gmail is not connected or enabled for this chat yet/i);
-  assert.match(assistant.text, /Ask the Orkestr admin to connect or enable Gmail for this chat/i);
-  assert.doesNotMatch(assistant.text, /Orkestr UI/i);
+  assert.equal(calls.length, 0);
+  assert.equal(result.results[0].gmailOAuthStarted, true);
+  assert.equal(savedState.userId, "otcan");
+  assert.match(assistant.text, /I started the Gmail sign-in flow/i);
+  assert.match(assistant.text, /https:\/\/accounts\.google\.com\/o\/oauth2\/v2\/auth/i);
+  assert.doesNotMatch(assistant.text, /Orkestr UI|Orkestr admin|Orkestr administrator/i);
   assert.doesNotMatch(assistant.text, /checked/i);
 });
 
@@ -676,6 +684,32 @@ test("tenant api-agent creates user skills through sanitized chat tools", async 
   assert.equal(sanitizerActions.includes("thread.input"), true);
   assert.equal(sanitizerActions.includes("api-agent.input"), true);
   assert.equal(sanitizerActions.includes("api-agent.tool.orkestr_create_skill"), true);
+});
+
+test("tenant api-agent tool starts user-scoped Gmail OAuth and links the requested account", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-api-agent-gmail-tool-"));
+  const env = { ORKESTR_HOME: home };
+  await upsertUser({ id: "otcan", role: "user", displayName: "Otcan" }, env);
+  await writeConnectorConfig("gmail", {
+    clientId: "gmail-client",
+    clientSecret: "gmail-secret",
+    redirectUri: "http://localhost/oauth/gmail/callback",
+  }, env);
+  const principal = userPrincipal({ id: "otcan", role: "user" });
+
+  const started = await runTenantApiAgentTool("orkestr_start_gmail_oauth", {
+    account: "Otcan@Example.Test",
+  }, { principal }, env);
+  const savedState = JSON.parse(await fs.readFile(path.join(userDataPaths("otcan", env).oauth, "gmail-state.json"), "utf8"));
+  const identities = await readUserPrivateIdentities("otcan", env);
+
+  assert.equal(started.ok, true);
+  assert.equal(started.userId, "otcan");
+  assert.equal(started.account, "otcan@example.test");
+  assert.match(started.authorizeUrl, /https:\/\/accounts\.google\.com\/o\/oauth2\/v2\/auth/);
+  assert.equal(savedState.userId, "otcan");
+  assert.equal(savedState.account, "otcan@example.test");
+  assert.equal(identities.some((identity) => identity.provider === "gmail" && identity.externalId === "otcan@example.test"), true);
 });
 
 test("tenant api-agent tool gateway stays inside scoped file roots", async () => {

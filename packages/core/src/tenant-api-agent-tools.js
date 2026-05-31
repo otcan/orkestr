@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { startGmailOAuth } from "../../connectors/src/gmail.js";
 import { listTimersForPrincipal } from "./timers.js";
 import { whereAmI } from "./whereiam.js";
 import {
@@ -10,6 +11,7 @@ import {
   searchUserSkillsForPrincipal,
   setUserSkillForPrincipal,
 } from "./user-skills.js";
+import { linkUserPrivateIdentity, readUserPrivateIdentities } from "./users.js";
 import { fileBrowserRootsForPrincipal, listFilesForPrincipal } from "./workspace-files.js";
 
 function clean(value) {
@@ -54,6 +56,35 @@ function skillPatchFromArgs(args = {}) {
   if (clean(args.instructions)) patch.instructions = clean(args.instructions);
   if (args.enabled !== undefined) patch.enabled = args.enabled === true || args.enabled === "true";
   return patch;
+}
+
+export async function startGmailOAuthForPrincipal(args = {}, principal = {}, env = process.env) {
+  const userId = principalUserId(principal);
+  const account = clean(args.account || args.email).toLowerCase();
+  let identities = await readUserPrivateIdentities(userId, env).catch(() => []);
+  if (account) {
+    identities = await linkUserPrivateIdentity(userId, {
+      provider: "gmail",
+      accountId: account,
+      externalId: account,
+      displayName: clean(args.displayName || args.name || account),
+      source: "chat",
+    }, {
+      env,
+      actorUserId: userId,
+      migrate: args.migrate === true,
+    });
+  }
+  const oauth = await startGmailOAuth(env, { principal, account });
+  return {
+    ok: true,
+    connector: "gmail",
+    userId,
+    account,
+    authorizeUrl: oauth.authorizeUrl,
+    redirectUri: oauth.redirectUri,
+    identities,
+  };
 }
 
 export function tenantApiAgentToolDefinitions() {
@@ -202,6 +233,20 @@ export function tenantApiAgentToolDefinitions() {
     },
     {
       type: "function",
+      name: "orkestr_start_gmail_oauth",
+      description: "Start a user-scoped Gmail sign-in flow for this chat. Use when the user asks to connect, sign in to, or use Gmail but Gmail is not connected yet. This only returns a Google sign-in link; it does not read Gmail data.",
+      parameters: {
+        type: "object",
+        properties: {
+          account: { type: "string", description: "Optional Gmail email address or login hint. Use an empty string if unknown." },
+        },
+        required: ["account"],
+        additionalProperties: false,
+      },
+      strict: true,
+    },
+    {
+      type: "function",
       name: "orkestr_list_timers",
       description: "List timers visible to this tenant.",
       parameters: {
@@ -241,6 +286,9 @@ export async function runTenantApiAgentTool(name = "", args = {}, context = {}, 
   }
   if (tool === "orkestr_delete_skill") {
     return deleteUserSkillForPrincipal(principalUserId(principal), args.skillId, principal, env);
+  }
+  if (tool === "orkestr_start_gmail_oauth") {
+    return startGmailOAuthForPrincipal(args, principal, env);
   }
   if (tool === "orkestr_list_files") {
     return listFilesForPrincipal(clean(args.path), principal, env);

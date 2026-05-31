@@ -4,7 +4,7 @@ import { isAdminPrincipal } from "./policy.js";
 import { adminPrincipal, userPrincipal } from "./principal.js";
 import { assertCreditBudget, estimateOpenAICost, recordCreditUsage } from "./credit-usage.js";
 import { startCodexAppServerThread, threadUsesCodexAppServer } from "./codex-app-server.js";
-import { tenantApiAgentToolDefinitions, runTenantApiAgentTool } from "./tenant-api-agent-tools.js";
+import { tenantApiAgentToolDefinitions, runTenantApiAgentTool, startGmailOAuthForPrincipal } from "./tenant-api-agent-tools.js";
 import { threadRequiresTenantIsolation } from "./tenant-policy.js";
 import { appendThreadMessage, getThread, listThreadMessages, updateThread, updateThreadMessage } from "./threads.js";
 import { userScopedCapabilityHints } from "./user-skills.js";
@@ -143,7 +143,7 @@ function responseText(response = {}) {
 
 function normalizeTenantApiAgentText(text = "") {
   const original = clean(text);
-  if (!/Orkestr UI/i.test(original)) return original;
+  if (!/(Orkestr UI|Orkestr admin|Orkestr administrator)/i.test(original)) return original;
   const setupTarget = /gmail/i.test(original)
     ? "Gmail"
     : /outlook/i.test(original)
@@ -151,11 +151,13 @@ function normalizeTenantApiAgentText(text = "") {
       : /(linkedin|desktop|browser)/i.test(original)
         ? "the managed desktop"
         : "";
-  const replacement = setupTarget
-    ? `Ask the Orkestr admin to connect or enable ${setupTarget} for this chat.`
-    : "Ask the Orkestr admin to handle that setup.";
+  const replacement = setupTarget === "Gmail"
+    ? "You can connect Gmail from this chat. Ask me to connect Gmail and I will send a Google sign-in link."
+    : setupTarget
+      ? `${setupTarget} is not connected or enabled for this chat yet.`
+      : "That setup is not available from this chat yet.";
   return original
-    .replace(/(^|[.!?]\s+)[^.!?]*Orkestr UI[^.!?]*[.!?]?/gi, (_match, prefix = "") => `${prefix}${replacement}`)
+    .replace(/(^|[.!?]\s+)[^.!?]*(?:Orkestr UI|Orkestr admin|Orkestr administrator)[^.!?]*[.!?]?/gi, (_match, prefix = "") => `${prefix}${replacement}`)
     .replace(/\s+/g, " ")
     .trim();
 }
@@ -280,9 +282,10 @@ export async function buildTenantApiAgentInstructions(thread = {}, messages = []
     "You are the user-facing assistant for one Orkestr tenant chat.",
     "Be natural, concise, and helpful. Do not expose Orkestr internals, Codex runtime details, queues, tmux, shell paths, debug strings, or implementation wording unless the user explicitly asks about Orkestr operations.",
     "You are scoped to the tenant in the JSON context below. Do not claim access to files, Gmail, Outlook, LinkedIn, WhatsApp accounts, browser desktops, timers, or other chats unless the provided Orkestr tools or context show them for this tenant.",
-    "Use the provided Orkestr tools for tenant-scoped resources. If a connector or permission is missing, say what the Orkestr admin needs to connect or enable for this chat.",
+    "Use the provided Orkestr tools for tenant-scoped resources. If Gmail is missing and the user asks to connect, sign in to, check, read, or use Gmail, call orkestr_start_gmail_oauth and give the user the returned Google sign-in link.",
+    "If another connector or permission is missing, say plainly what is unavailable in this chat. Do not frame normal user connector setup as an admin task unless host-level app credentials are missing.",
     "If the user asks to use Gmail, Outlook, LinkedIn, files, or a browser desktop and the matching capability is false in the Tenant context JSON, say plainly that it is not connected or enabled for this chat yet. Do not imply that you checked it.",
-    "Do not tell contained users to open, check, or use the Orkestr UI for connector setup. This chat is the user surface; unavailable connector setup is an admin action.",
+    "Do not tell contained users to open, check, or use the Orkestr UI for connector setup. This chat is the user surface; Gmail setup should happen through the Gmail sign-in link you provide in chat.",
     "When asked what you can do or what skills you have, list only capabilities that are true in the Tenant context JSON and skills whose enabled field is true. Do not treat registryEnabled as availability; registryEnabled only means the user has not disabled the skill.",
     "Skills are unique per user and are described by the skill records in the Tenant context. Do not force provider categories, goals, or attachment models onto them; preserve the user's wording.",
     "Users manage skills through chat. When they ask to list, view, search, create, update, enable, disable, or delete skills, use the Orkestr skill tools.",
@@ -359,7 +362,8 @@ function userSafeApiAgentError(error) {
   const lowered = lower(code);
   if (code.includes("budget_exceeded")) return "I can't answer right now because this chat has reached its OpenAI usage budget. Ask an admin to raise the limit or try again later.";
   if (code.includes("openai_api_key_required")) return "This chat is not connected to the OpenAI API yet. Ask an admin to configure the API-agent key in Orkestr.";
-  if (lowered.includes("gmail")) return "Gmail is not connected or enabled for this chat yet. Ask the Orkestr admin to connect Gmail for this user, then resend.";
+  if (lowered.includes("gmail_oauth_config_required")) return "Gmail sign-in is not available on this Orkestr installation yet because the Gmail app credentials are not configured.";
+  if (lowered.includes("gmail")) return "Gmail is not connected or enabled for this chat yet. Ask me to connect Gmail and I will send a Google sign-in link.";
   if (lowered.includes("outlook")) return "Outlook is not connected or enabled for this chat yet. Ask the Orkestr admin to connect Outlook for this user, then resend.";
   if (lowered.includes("linkedin") || lowered.includes("desktop")) return "The managed desktop is not connected or enabled for this chat yet. Ask the Orkestr admin to enable the desktop for this user, then resend.";
   if (lowered.includes("whatsapp") || lowered.includes("connector") || lowered.includes("account identity") || lowered.includes("capability")) {
@@ -367,6 +371,89 @@ function userSafeApiAgentError(error) {
   }
   if (code.includes("sanitizer") || error?.sanitizer) return "I couldn't safely verify this request, so I did not run it. Please try a simpler request or ask an admin to check the sanitizer setup.";
   return "I couldn't complete this request right now. Please try again in a moment.";
+}
+
+function extractEmail(text = "") {
+  return clean(text.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i)?.[0]).toLowerCase();
+}
+
+function requestsGmailUse(text = "") {
+  const raw = clean(text);
+  if (!/\bgmail\b/i.test(raw)) return false;
+  return /\b(check|read|search|summari[sz]e|open|connect|sign\s*in|login|log\s*in|setup|set\s*up|enable|use|inbox|mail|email|oauth|authorize|auth)\b/i.test(raw);
+}
+
+function gmailOAuthStartedText(result = {}) {
+  const account = clean(result.account);
+  const link = clean(result.authorizeUrl);
+  return [
+    `Gmail is not connected for this chat yet. I started the Gmail sign-in flow${account ? ` for ${account}` : ""}.`,
+    "",
+    "Open this Google sign-in link and finish the connection, then send your Gmail request again:",
+    link,
+  ].join("\n").trim();
+}
+
+function gmailOAuthUnavailableText(error) {
+  const message = clean(error?.message || error);
+  if (message.includes("gmail_oauth_config_required") || message.includes("gmail_client_secret_required")) {
+    return "Gmail sign-in is not available on this Orkestr installation yet because the Gmail app credentials are not configured.";
+  }
+  return "I could not start Gmail sign-in from this chat right now. Please try again in a moment.";
+}
+
+async function maybeHandleMissingGmailOnboarding(thread, message, capabilities = {}, principal = {}, env = process.env) {
+  if (capabilities.gmail === true || !requestsGmailUse(message.text)) return null;
+  await updateThreadMessage(thread.id, message.id, {
+    state: "running",
+    deliveryState: "gmail_oauth_starting",
+    observedVia: "api_agent_gmail_oauth",
+    deliveredAt: nowIso(),
+  }, env);
+  await updateThread(thread.id, { state: "working" }, env).catch(() => {});
+  let text = "";
+  let started = true;
+  try {
+    const result = await startGmailOAuthForPrincipal({ account: extractEmail(message.text) }, principal, env);
+    text = gmailOAuthStartedText(result);
+    await appendEvent({
+      type: "api_agent_gmail_oauth_started",
+      threadId: thread.id,
+      messageId: message.id,
+      ownerUserId: threadOwnerUserId(thread, env),
+      account: result.account || "",
+    }, env).catch(() => {});
+  } catch (error) {
+    started = false;
+    text = gmailOAuthUnavailableText(error);
+    await appendEvent({
+      type: "api_agent_gmail_oauth_start_failed",
+      threadId: thread.id,
+      messageId: message.id,
+      ownerUserId: threadOwnerUserId(thread, env),
+      error: clean(error?.message || error),
+    }, env).catch(() => {});
+  }
+  const current = await updateThreadMessage(thread.id, message.id, {
+    state: "completed",
+    deliveryState: started ? "gmail_oauth_started" : "gmail_oauth_unavailable",
+    observedVia: "api_agent_gmail_oauth",
+    deliveredAt: nowIso(),
+    error: null,
+  }, env);
+  const assistant = await appendThreadMessage(thread.id, {
+    role: "assistant",
+    source: "api-agent",
+    phase: "final_answer",
+    text,
+    parentMessageId: message.id,
+    state: "completed",
+    connector: message.connector,
+    chatId: message.chatId,
+    accountId: message.accountId,
+  }, env);
+  await updateThread(thread.id, { state: "ready" }, env).catch(() => {});
+  return { ok: true, processed: true, message: current, assistant, gmailOAuthStarted: started, gmailOAuthUnavailable: !started };
 }
 
 function explicitCodexEscalation(text = "") {
@@ -546,6 +633,8 @@ async function processNextApiAgentMessage(thread, env = process.env, options = {
         connector: message.connector || "",
       },
     }, env);
+    const onboarding = await maybeHandleMissingGmailOnboarding(thread, message, capabilities, principal, env);
+    if (onboarding) return onboarding;
   }
   await assertCreditBudget(threadOwnerUserId(thread, env), apiAgentBudgetPreflightUsd(env), env);
   await updateThreadMessage(thread.id, message.id, {

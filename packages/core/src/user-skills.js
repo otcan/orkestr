@@ -1,3 +1,5 @@
+import fs from "node:fs/promises";
+import path from "node:path";
 import { userDataPaths } from "../../storage/src/paths.js";
 import { appendEvent, readJson, writeJson } from "../../storage/src/store.js";
 import { assertOwnerAccess, isAdminPrincipal } from "./policy.js";
@@ -489,6 +491,21 @@ function tenantConnectorState(tenantVm = null) {
   };
 }
 
+async function userConnectorTokenExists(userId = "", connector = "", env = process.env) {
+  const tokenFile = connector === "gmail"
+    ? "gmail-token.json"
+    : connector === "outlook"
+      ? "outlook-token.json"
+      : "";
+  if (!tokenFile) return false;
+  try {
+    await fs.access(path.join(userDataPaths(userId, env).secrets, tokenFile));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function configuredVisibleDesktopSlugs(env = process.env) {
   const raw = clean(env.ORKESTR_BROWSER_VISIBLE_SLUGS || env.ORKESTR_OPS_DESKTOP_SLUGS);
   if (!raw) return null;
@@ -530,10 +547,16 @@ export async function userScopedCapabilityHints({ userId = "", thread = null } =
   const snapshot = await userSkillCapabilitySnapshot(owner, env);
   const tenantVm = await getTenantVmForOwner(owner, env).catch(() => null);
   const tenantConnectors = tenantConnectorState(tenantVm);
+  const [gmailToken, outlookToken] = await Promise.all([
+    userConnectorTokenExists(owner, "gmail", env),
+    userConnectorTokenExists(owner, "outlook", env),
+  ]);
   const hasThreadWhatsAppBinding = threadHasWhatsAppBinding(thread || {});
   const scopedConnectors = {
     ...tenantConnectors,
     whatsapp: tenantConnectors.whatsapp || hasThreadWhatsAppBinding,
+    gmail: tenantConnectors.gmail || gmailToken,
+    outlook: tenantConnectors.outlook || outlookToken,
   };
   const enabled = (skillId) => snapshot.skillEnabled[skillId] === true;
   const whatsappAvailable = scopedConnectors.whatsapp;
