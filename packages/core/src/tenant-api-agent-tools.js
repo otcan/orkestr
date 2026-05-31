@@ -1,7 +1,10 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { startGmailOAuth } from "../../connectors/src/gmail.js";
-import { startOutlookDeviceOAuth } from "../../connectors/src/outlook.js";
+import {
+  connectorAuthStatus,
+  disconnectConnectorAuth,
+  startConnectorAuth as beginConnectorAuth,
+} from "../../connectors/src/connector-auth.js";
 import { listTimersForPrincipal } from "./timers.js";
 import { whereAmI } from "./whereiam.js";
 import {
@@ -80,35 +83,9 @@ async function linkConnectorIdentity(provider = "", account = "", principal = {}
 async function startConnectorAuth(args = {}, principal = {}, env = process.env, fetchImpl = fetch) {
   const provider = clean(args.provider).toLowerCase();
   const account = clean(args.account).toLowerCase();
-  if (provider === "gmail") {
-    const identities = await linkConnectorIdentity(provider, account, principal, env, args);
-    const oauth = await startGmailOAuth(env, { principal, account });
-    return {
-      ok: true,
-      provider,
-      state: "authorization_url_ready",
-      account: oauth.account || account,
-      authorizeUrl: oauth.authorizeUrl,
-      redirectUri: oauth.redirectUri,
-      identities,
-      message: "Open the Gmail sign-in link and finish Google authorization.",
-    };
-  }
-  if (provider === "outlook") {
-    const identities = await linkConnectorIdentity(provider, account, principal, env, args);
-    const oauth = await startOutlookDeviceOAuth(env, { principal, account }, fetchImpl);
-    return {
-      ...oauth,
-      ok: oauth.ok !== false,
-      provider,
-      state: oauth.state || "device_code_pending",
-      identities,
-      message: oauth.message || "Open the Microsoft sign-in link and enter the device code.",
-    };
-  }
-  const error = new Error("unsupported_connector_auth_provider");
-  error.statusCode = 400;
-  throw error;
+  const identities = await linkConnectorIdentity(provider, account, principal, env, args);
+  const oauth = await beginConnectorAuth(args, principal, env, fetchImpl);
+  return { ...oauth, identities };
 }
 
 export function tenantApiAgentToolDefinitions() {
@@ -269,12 +246,42 @@ export function tenantApiAgentToolDefinitions() {
     {
       type: "function",
       name: "orkestr_start_connector_auth",
-      description: "Start a tenant-scoped Gmail or Outlook sign-in using the parent Orkestr connector app. Use this when the user asks to connect, sign in, or log in to Gmail or Outlook.",
+      description: "Start tenant-scoped Gmail, Outlook, Jira, or Shopify sign-in using the parent Orkestr connector app. Use this when the user asks to connect, sign in, or log in to one of these connectors.",
       parameters: {
         type: "object",
         properties: {
-          provider: { type: "string", enum: ["gmail", "outlook"], description: "Connector provider to sign in." },
+          provider: { type: "string", enum: ["gmail", "outlook", "jira", "shopify"], description: "Connector provider to sign in." },
           account: { type: "string", description: "Optional email/account hint, or empty string if the user did not provide one." },
+          shop: { type: "string", description: "Shopify shop domain/name for Shopify sign-in, or empty string for other providers." },
+        },
+        required: ["provider", "account", "shop"],
+        additionalProperties: false,
+      },
+      strict: true,
+    },
+    {
+      type: "function",
+      name: "orkestr_connector_status",
+      description: "Return safe connection state for a tenant connector without reading connector data or exposing tokens.",
+      parameters: {
+        type: "object",
+        properties: {
+          provider: { type: "string", enum: ["gmail", "outlook", "jira", "shopify", "whatsapp"], description: "Connector provider to inspect." },
+        },
+        required: ["provider"],
+        additionalProperties: false,
+      },
+      strict: true,
+    },
+    {
+      type: "function",
+      name: "orkestr_disconnect_connector",
+      description: "Disconnect this user's scoped connector token or pending OAuth state. This does not alter parent app credentials.",
+      parameters: {
+        type: "object",
+        properties: {
+          provider: { type: "string", enum: ["gmail", "outlook", "jira", "shopify"], description: "Connector provider to disconnect." },
+          account: { type: "string", description: "Optional account hint for user-facing confirmation, or empty string." },
         },
         required: ["provider", "account"],
         additionalProperties: false,
@@ -346,6 +353,12 @@ export async function runTenantApiAgentTool(name = "", args = {}, context = {}, 
   }
   if (tool === "orkestr_start_connector_auth") {
     return startConnectorAuth(args, principal, env, context.fetchImpl || fetch);
+  }
+  if (tool === "orkestr_connector_status") {
+    return connectorAuthStatus(args.provider, env, { principal });
+  }
+  if (tool === "orkestr_disconnect_connector") {
+    return disconnectConnectorAuth(args, principal, env);
   }
   const error = new Error("api_agent_tool_not_allowed");
   error.statusCode = 403;

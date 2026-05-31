@@ -1,5 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { connectorAuthStatus } from "../../connectors/src/connector-auth.js";
+import { parentConnectorProvider } from "../../connectors/src/parent-connector-apps.js";
 import { userDataPaths } from "../../storage/src/paths.js";
 import { appendEvent, readJson, writeJson } from "../../storage/src/store.js";
 import { assertOwnerAccess, isAdminPrincipal } from "./policy.js";
@@ -487,16 +489,14 @@ function tenantConnectorState(tenantVm = null) {
     ),
     gmail: Boolean(capabilities.has("gmail") || clean(connectors.gmailAccountId)),
     outlook: Boolean(capabilities.has("outlook") || clean(connectors.outlookAccountId)),
+    jira: Boolean(capabilities.has("jira") || clean(connectors.jiraAccountId)),
+    shopify: Boolean(capabilities.has("shopify") || clean(connectors.shopifyAccountId)),
     linkedin: Boolean(capabilities.has("desks") || capabilities.has("linkedin") || clean(connectors.linkedinDesktopSlug)),
   };
 }
 
 async function userConnectorTokenExists(userId = "", connector = "", env = process.env) {
-  const tokenFile = connector === "gmail"
-    ? "gmail-token.json"
-    : connector === "outlook"
-      ? "outlook-token.json"
-      : "";
+  const tokenFile = parentConnectorProvider(connector)?.tokenFile || "";
   if (!tokenFile) return false;
   try {
     await fs.access(path.join(userDataPaths(userId, env).secrets, tokenFile));
@@ -547,16 +547,34 @@ export async function userScopedCapabilityHints({ userId = "", thread = null } =
   const snapshot = await userSkillCapabilitySnapshot(owner, env);
   const tenantVm = await getTenantVmForOwner(owner, env).catch(() => null);
   const tenantConnectors = tenantConnectorState(tenantVm);
-  const [gmailToken, outlookToken] = await Promise.all([
+  const [gmailToken, outlookToken, jiraToken, shopifyToken] = await Promise.all([
     userConnectorTokenExists(owner, "gmail", env),
     userConnectorTokenExists(owner, "outlook", env),
+    userConnectorTokenExists(owner, "jira", env),
+    userConnectorTokenExists(owner, "shopify", env),
   ]);
+  const connectorAuth = Object.fromEntries(await Promise.all(
+    ["whatsapp", "gmail", "outlook", "jira", "shopify"].map(async (provider) => {
+      const status = await connectorAuthStatus(provider, env, { principal: { userId: owner, role: "user" } }).catch(() => null);
+      return [provider, status ? {
+        provider,
+        state: status.state || "unknown",
+        connected: status.connected === true,
+        pending: status.pending === true,
+        parentAppConfigured: status.parentConnector?.parentAppConfigured === true,
+        parentAppPartiallyConfigured: status.parentConnector?.parentAppPartiallyConfigured === true,
+        userConnectionRequired: status.userConnectionRequired === true,
+      } : { provider, state: "unknown", connected: false }];
+    }),
+  ));
   const hasThreadWhatsAppBinding = threadHasWhatsAppBinding(thread || {});
   const scopedConnectors = {
     ...tenantConnectors,
     whatsapp: tenantConnectors.whatsapp || hasThreadWhatsAppBinding,
     gmail: tenantConnectors.gmail || gmailToken,
     outlook: tenantConnectors.outlook || outlookToken,
+    jira: tenantConnectors.jira || jiraToken,
+    shopify: tenantConnectors.shopify || shopifyToken,
   };
   const enabled = (skillId) => snapshot.skillEnabled[skillId] === true;
   const whatsappAvailable = scopedConnectors.whatsapp;
@@ -586,5 +604,6 @@ export async function userScopedCapabilityHints({ userId = "", thread = null } =
     disabledSkills: [...snapshot.disabledSkills],
     skills: publicSkillList(snapshot.skills),
     scopedConnectors,
+    connectorAuth,
   };
 }

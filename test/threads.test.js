@@ -199,6 +199,34 @@ test("threads are the primary routable runtime object", async () => {
   assert.equal(messages[1].role, "assistant");
 });
 
+test("thread message mutations do not overwrite concurrent appends", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-message-mutations-"));
+  const env = { ORKESTR_HOME: home };
+  await createThread({ id: "mutation-thread", name: "Mutation Thread", executorId: "noop" }, env);
+  const input = await appendThreadMessage("mutation-thread", {
+    role: "user",
+    text: "deliver me",
+    state: "pending_delivery",
+    deliveryState: "sending",
+  }, env);
+
+  await Promise.all([
+    updateThreadMessage("mutation-thread", input.id, { state: "completed", deliveryState: "delivered" }, env),
+    ...Array.from({ length: 12 }, (_, index) => appendThreadMessage("mutation-thread", {
+      role: "assistant",
+      text: `assistant ${index}`,
+      state: "completed",
+    }, env)),
+  ]);
+
+  const messages = await listThreadMessages("mutation-thread", env);
+  const updatedInput = messages.find((message) => message.id === input.id);
+  assert.equal(updatedInput.state, "completed");
+  assert.equal(updatedInput.deliveryState, "delivered");
+  assert.equal(messages.filter((message) => message.role === "assistant").length, 12);
+  assert.equal(new Set(messages.map((message) => message.cursor)).size, messages.length);
+});
+
 test("thread creation reuses an existing visible agent name", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-name-dedupe-"));
   const env = { ORKESTR_HOME: home };

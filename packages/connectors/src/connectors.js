@@ -10,11 +10,12 @@ import { readOverlay } from "../../core/src/overlay.js";
 import { CODEX_DISABLED_ON_MACOS, codexAppServerProbe, codexLoginStatus, defaultCodexHome } from "./codex.js";
 import { getWhatsAppStatus } from "./whatsapp.js";
 import { connectorFile, connectorScopePaths } from "./connector-storage.js";
+import { connectorAuthStatus } from "./connector-auth.js";
 import { parentConnectorAppStatus } from "./parent-connector-apps.js";
 
 const execFileAsync = promisify(execFile);
 
-export const connectorOrder = ["openai", "codex", "gmail", "outlook", "linkedin", "whatsapp", "browsers", "timers"];
+export const connectorOrder = ["openai", "codex", "gmail", "outlook", "jira", "shopify", "linkedin", "whatsapp", "browsers", "timers"];
 
 async function pathExists(filePath) {
   try {
@@ -22,14 +23,6 @@ async function pathExists(filePath) {
     return true;
   } catch {
     return false;
-  }
-}
-
-async function readJsonIfExists(filePath) {
-  try {
-    return JSON.parse(await fs.readFile(filePath, "utf8"));
-  } catch {
-    return {};
   }
 }
 
@@ -48,6 +41,30 @@ async function firstCommandVersion(commands, args = ["--version"]) {
     if (version) return { command, version };
   }
   return { command: null, version: "" };
+}
+
+function oauthConnectorSetupStatus(auth = {}, label = "", summaries = {}) {
+  const parent = auth.parentConnector || {};
+  if (auth.connected || auth.state === "connected") {
+    return status(auth.provider, label || parent.label || auth.provider, "connected", summaries.connected || `User ${label || auth.provider} OAuth token is stored locally.`, { parentConnector: parent });
+  }
+  if (auth.state === "broken" || auth.error) {
+    return status(auth.provider, label || parent.label || auth.provider, "broken", summaries.broken || `${label || auth.provider} OAuth failed. Restart sign-in after fixing the parent app config.`, {
+      parentConnector: parent,
+      error: auth.error || "",
+      updatedAt: auth.updatedAt || null,
+    });
+  }
+  if (auth.pending || auth.state === "pending" || auth.state === "authorization_url_ready") {
+    return status(auth.provider, label || parent.label || auth.provider, "partial", summaries.pending || `${label || auth.provider} sign-in is in progress.`, { parentConnector: parent });
+  }
+  if (parent.parentAppConfigured) {
+    return status(auth.provider, label || parent.label || auth.provider, "partial", summaries.ready || `Parent ${label || auth.provider} app is configured. Connect this user's account from chat.`, { parentConnector: parent });
+  }
+  if (parent.parentAppPartiallyConfigured) {
+    return status(auth.provider, label || parent.label || auth.provider, "partial", summaries.partial || `Parent ${label || auth.provider} app can start sign-in, but is missing callback or token credentials.`, { parentConnector: parent });
+  }
+  return status(auth.provider, label || parent.label || auth.provider, "not_connected", summaries.missing || `Configure the parent ${label || auth.provider} app once; users can then connect from chat.`, { parentConnector: parent });
 }
 
 function codexBinaryStatus(env = process.env) {
@@ -100,10 +117,8 @@ async function overlayConnectorStatus(id, overlay) {
 export async function getConnectorStatuses({ env = process.env, home = os.homedir(), principal = null } = {}) {
   const paths = dataPaths(env);
   const scopedPaths = await connectorScopePaths(env, { principal });
-  const [openaiConfig, gmailStoredConfig, outlookStoredConfig, whatsappConfig] = await Promise.all([
+  const [openaiConfig, whatsappConfig] = await Promise.all([
     readConnectorConfig("openai", env),
-    readConnectorConfig("gmail", env),
-    readConnectorConfig("outlook", env),
     readConnectorConfig("whatsapp", env),
   ]);
   const codexHome = defaultCodexHome(env, home);
@@ -123,10 +138,6 @@ export async function getConnectorStatuses({ env = process.env, home = os.homedi
   const timersExist = await pathExists(paths.timers);
   const linkedinProfileExists = await pathExists(connectorFile(scopedPaths, "browsers", "linkedin"));
   const gmailProfileExists = await pathExists(connectorFile(scopedPaths, "browsers", "gmail"));
-  const gmailOAuthExists = await pathExists(connectorFile(scopedPaths, "secrets", "gmail-token.json"));
-  const gmailOAuthError = await readJsonIfExists(connectorFile(scopedPaths, "secrets", "gmail-error.json"));
-  const outlookOAuthExists = await pathExists(connectorFile(scopedPaths, "secrets", "outlook-token.json"));
-  const outlookOAuthError = await readJsonIfExists(connectorFile(scopedPaths, "secrets", "outlook-error.json"));
   const openaiKey = env.OPENAI_API_KEY || openaiConfig.openaiApiKey || "";
   const codexAuthExists = await pathExists(codexAuthPath);
   const codexEnvKey = Boolean(env.OPENAI_API_KEY);
@@ -137,8 +148,12 @@ export async function getConnectorStatuses({ env = process.env, home = os.homedi
   const codexRuntimeInvalid = Boolean(codexRuntimeAuthInvalid);
   const whatsapp = await getWhatsAppStatus(env);
   const parentWhatsApp = parentConnectorAppStatus({ provider: "whatsapp", config: whatsappConfig, env, runtimeStatus: whatsapp });
-  const parentGmail = parentConnectorAppStatus({ provider: "gmail", config: gmailStoredConfig, env });
-  const parentOutlook = parentConnectorAppStatus({ provider: "outlook", config: outlookStoredConfig, env });
+  const [gmailAuth, outlookAuth, jiraAuth, shopifyAuth] = await Promise.all([
+    connectorAuthStatus("gmail", env, { principal }),
+    connectorAuthStatus("outlook", env, { principal }),
+    connectorAuthStatus("jira", env, { principal }),
+    connectorAuthStatus("shopify", env, { principal }),
+  ]);
   const overlay = await readOverlay(env);
 
   const connectors = {
@@ -228,34 +243,35 @@ export async function getConnectorStatuses({ env = process.env, home = os.homedi
               disabled: Boolean(codex.disabled),
               reason: codex.disabled ? "codex_disabled_on_macos" : "codex_missing",
             }),
-    gmail:
-      gmailOAuthExists
-        ? status("gmail", "Gmail", "connected", "User Gmail OAuth token is stored locally.", { parentConnector: parentGmail })
-        : gmailOAuthError.message
-          ? status("gmail", "Gmail", "broken", "Gmail OAuth failed. Restart Gmail sign-in from chat after fixing the parent app config.", {
-              parentConnector: parentGmail,
-              error: gmailOAuthError.message,
-              updatedAt: gmailOAuthError.updatedAt,
-            })
-        : parentGmail.parentAppConfigured
-          ? status("gmail", "Gmail", "partial", "Parent Gmail app is configured. Connect this user's Gmail from chat.", { parentConnector: parentGmail })
-        : parentGmail.parentAppPartiallyConfigured
-          ? status("gmail", "Gmail", "partial", "Parent Gmail app can start sign-in, but is missing required callback credentials.", { parentConnector: parentGmail })
-        : gmailProfileExists
-          ? status("gmail", "Gmail", "partial", "Gmail browser profile exists. OAuth can be added from chat after the parent app is configured.", { parentConnector: parentGmail })
-          : status("gmail", "Gmail", "not_connected", "Configure the parent Gmail app once; users can then connect Gmail from chat.", { parentConnector: parentGmail }),
-    outlook:
-      outlookOAuthExists
-        ? status("outlook", "Outlook", "connected", "User Outlook OAuth token is stored locally.", { parentConnector: parentOutlook })
-        : outlookOAuthError.message
-          ? status("outlook", "Outlook", "broken", "Outlook OAuth failed. Restart Outlook sign-in from chat after fixing the parent app config.", {
-              parentConnector: parentOutlook,
-              error: outlookOAuthError.message,
-              updatedAt: outlookOAuthError.updatedAt,
-            })
-        : parentOutlook.parentAppConfigured
-          ? status("outlook", "Outlook", "partial", "Parent Outlook app is configured. Connect this user's Outlook from chat.", { parentConnector: parentOutlook })
-          : status("outlook", "Outlook", "not_connected", "Configure the parent Outlook app once; users can then connect Outlook from chat.", { parentConnector: parentOutlook }),
+    gmail: gmailProfileExists && gmailAuth.state === "parent_config_missing"
+      ? status("gmail", "Gmail", "partial", "Gmail browser profile exists. OAuth can be added from chat after the parent app is configured.", { parentConnector: gmailAuth.parentConnector })
+      : oauthConnectorSetupStatus(gmailAuth, "Gmail", {
+          connected: "User Gmail OAuth token is stored locally.",
+          broken: "Gmail OAuth failed. Restart Gmail sign-in from chat after fixing the parent app config.",
+          pending: "Gmail sign-in is in progress. Finish the Google authorization link from chat.",
+          ready: "Parent Gmail app is configured. Connect this user's Gmail from chat.",
+          partial: "Parent Gmail app can start sign-in, but is missing required callback credentials.",
+          missing: "Configure the parent Gmail app once; users can then connect Gmail from chat.",
+        }),
+    outlook: oauthConnectorSetupStatus(outlookAuth, "Outlook", {
+      connected: "User Outlook OAuth token is stored locally.",
+      broken: "Outlook OAuth failed. Restart Outlook sign-in from chat after fixing the parent app config.",
+      pending: "Outlook device sign-in is waiting for user approval.",
+      ready: "Parent Outlook app is configured. Connect this user's Outlook from chat.",
+      missing: "Configure the parent Outlook app once; users can then connect Outlook from chat.",
+    }),
+    jira: oauthConnectorSetupStatus(jiraAuth, "Jira", {
+      connected: "User Jira OAuth token is stored locally.",
+      pending: "Jira sign-in is in progress. Finish Atlassian authorization from chat.",
+      ready: "Parent Jira app is configured. Connect this user's Jira account from chat.",
+      missing: "Configure the parent Jira app once; users can then connect Jira from chat.",
+    }),
+    shopify: oauthConnectorSetupStatus(shopifyAuth, "Shopify", {
+      connected: "User Shopify OAuth token is stored locally.",
+      pending: "Shopify sign-in is in progress. Finish store authorization from chat.",
+      ready: "Parent Shopify app is configured. Connect this user's Shopify store from chat.",
+      missing: "Configure the parent Shopify app once; users can then connect Shopify from chat.",
+    }),
     linkedin: linkedinProfileExists
       ? status("linkedin", "LinkedIn", "partial", "LinkedIn browser profile exists. Log in through the virtual browser.")
       : status("linkedin", "LinkedIn", "not_connected", "Prepare a LinkedIn virtual browser profile."),

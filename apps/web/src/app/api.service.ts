@@ -580,6 +580,22 @@ export interface ThreadSummary {
   runningCount?: number;
   awaitingAckCount?: number;
   nextDeliveryAttemptAt?: string | null;
+  turnLifecycle?: {
+    state?: string;
+    active?: boolean;
+    running?: boolean;
+    queued?: boolean;
+    awaitingApproval?: boolean;
+    terminal?: boolean;
+    typingActive?: boolean;
+    sidebarWorking?: boolean;
+    activeTurnId?: string | null;
+    activeMessageId?: string | null;
+    pendingCount?: number;
+    runningCount?: number;
+    awaitingAckCount?: number;
+    updatedAt?: string;
+  } | null;
   progress?: {
     stateHint?: string | null;
     summary?: string | null;

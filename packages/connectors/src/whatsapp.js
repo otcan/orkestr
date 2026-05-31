@@ -1427,6 +1427,11 @@ function runtimeActiveTurnId(status = null) {
 
 function runtimeTypingActive(status = null) {
   if (!status) return false;
+  const lifecycle = status.turnLifecycle && typeof status.turnLifecycle === "object" ? status.turnLifecycle : null;
+  if (lifecycle) {
+    if (lifecycle.awaitingApproval === true || lifecycle.queued === true) return false;
+    if (Object.prototype.hasOwnProperty.call(lifecycle, "typingActive")) return lifecycle.typingActive === true;
+  }
   const state = runtimeStateFromStatus(status);
   if (state === "frozen" || status.frozen === true) return false;
   const isCodexAppServer = runtimeKindFromStatus(status) === "codex-app-server";

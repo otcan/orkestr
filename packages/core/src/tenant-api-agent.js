@@ -9,6 +9,7 @@ import { threadRequiresTenantIsolation } from "./tenant-policy.js";
 import { appendThreadMessage, getThread, listThreadMessages, updateThread, updateThreadMessage } from "./threads.js";
 import { userScopedCapabilityHints } from "./user-skills.js";
 import { adminUserId, normalizeUserId } from "./users.js";
+import { appendTurnLifecycleEvent, turnLifecycleFromRuntimeStatus } from "./turn-lifecycle.js";
 
 export const API_AGENT_RUNTIME_KIND = "api-agent";
 
@@ -69,7 +70,7 @@ export function apiAgentRuntimeStatus(thread = {}, messages = [], env = process.
   const pending = pendingApiAgentMessages(messages);
   const running = pending.filter((message) => lower(message.state) === "running");
   const state = running.length ? "working" : pending.length ? "queued" : "ready";
-  return {
+  const status = {
     state,
     status: state,
     runtimeState: state,
@@ -101,6 +102,10 @@ export function apiAgentRuntimeStatus(thread = {}, messages = [], env = process.
           capturedAt: nowIso(),
         }
       : null,
+  };
+  return {
+    ...status,
+    turnLifecycle: turnLifecycleFromRuntimeStatus(status, messages),
   };
 }
 
@@ -210,6 +215,7 @@ function publicSkillContext(skills = [], capabilities = {}, scopedConnectors = {
 
 function publicTenantCapabilities(capabilities = {}) {
   const scopedConnectors = capabilities.scopedConnectors && typeof capabilities.scopedConnectors === "object" ? capabilities.scopedConnectors : {};
+  const connectorAuth = capabilities.connectorAuth && typeof capabilities.connectorAuth === "object" ? capabilities.connectorAuth : {};
   const skills = publicSkillContext(capabilities.skills, capabilities, scopedConnectors);
   return {
     files: capabilities.files === true,
@@ -231,8 +237,21 @@ function publicTenantCapabilities(capabilities = {}) {
       whatsapp: scopedConnectors.whatsapp === true || capabilities.whatsapp === true,
       gmail: scopedConnectors.gmail === true,
       outlook: scopedConnectors.outlook === true,
+      jira: scopedConnectors.jira === true,
+      shopify: scopedConnectors.shopify === true,
       linkedin: scopedConnectors.linkedin === true,
     },
+    connectorAuth: Object.fromEntries(["whatsapp", "gmail", "outlook", "jira", "shopify"].map((provider) => {
+      const status = connectorAuth[provider] && typeof connectorAuth[provider] === "object" ? connectorAuth[provider] : {};
+      return [provider, {
+        state: clean(status.state || "unknown"),
+        connected: status.connected === true,
+        pending: status.pending === true,
+        parentAppConfigured: status.parentAppConfigured === true,
+        parentAppPartiallyConfigured: status.parentAppPartiallyConfigured === true,
+        userConnectionRequired: status.userConnectionRequired === true,
+      }];
+    })),
   };
 }
 
@@ -256,6 +275,8 @@ async function scopedCapabilitiesForThread(thread = {}, env = process.env) {
         whatsapp: Boolean(thread.binding?.connector === "whatsapp" || thread.binding?.chatId),
         gmail: false,
         outlook: false,
+        jira: false,
+        shopify: false,
         linkedin: false,
       },
     };
@@ -282,10 +303,10 @@ export async function buildTenantApiAgentInstructions(thread = {}, messages = []
     "You are the user-facing assistant for one Orkestr tenant chat.",
     "Be natural, concise, and helpful. Do not expose Orkestr internals, Codex runtime details, queues, tmux, shell paths, debug strings, or implementation wording unless the user explicitly asks about Orkestr operations.",
     "You are scoped to the tenant in the JSON context below. Do not claim access to files, Gmail, Outlook, LinkedIn, WhatsApp accounts, browser desktops, timers, or other chats unless the provided Orkestr tools or context show them for this tenant.",
-    "Use the provided Orkestr tools for tenant-scoped resources. If the user asks to connect, sign in, or log in to Gmail or Outlook, use orkestr_start_connector_auth and give the returned sign-in instructions.",
+    "Use the provided Orkestr tools for tenant-scoped resources. If the user asks to connect, sign in, check, or disconnect Gmail, Outlook, Jira, or Shopify, use the connector status/auth/disconnect tools and give the returned sign-in instructions.",
     "If another connector or permission is missing, say plainly what is unavailable in this chat. Do not frame normal user connector setup as an admin task unless host-level app credentials are missing.",
     "If the user asks to use Gmail, Outlook, LinkedIn, files, or a browser desktop and the matching capability is false in the Tenant context JSON, say plainly that it is not connected or enabled for this chat yet. Do not imply that you checked it.",
-    "Do not tell contained users to open, check, or use the Orkestr UI for connector setup. This chat is the user surface; Gmail and Outlook setup should happen through the sign-in instructions you provide in chat.",
+    "Do not tell contained users to open, check, or use the Orkestr UI for connector setup. This chat is the user surface; connector setup should happen through the sign-in instructions you provide in chat when parent app credentials exist.",
     "When asked what you can do or what skills you have, list only capabilities that are true in the Tenant context JSON and skills whose enabled field is true. Do not treat registryEnabled as availability; registryEnabled only means the user has not disabled the skill.",
     "Skills are unique per user and are described by the skill records in the Tenant context. Do not force provider categories, goals, or attachment models onto them; preserve the user's wording.",
     "Users manage skills through chat. When they ask to list, view, search, create, update, enable, disable, or delete skills, use the Orkestr skill tools.",
@@ -364,7 +385,7 @@ function userSafeApiAgentError(error) {
   if (code.includes("openai_api_key_required")) return "This chat is not connected to the OpenAI API yet. Ask an admin to configure the API-agent key in Orkestr.";
   if (lowered.includes("gmail_oauth_config_required")) return "Gmail sign-in is not available on this Orkestr installation yet because the Gmail app credentials are not configured.";
   if (lowered.includes("gmail")) return "Gmail is not connected or enabled for this chat yet. Ask me to connect Gmail and I will send a Google sign-in link.";
-  if (lowered.includes("outlook")) return "Outlook is not connected or enabled for this chat yet. Ask the Orkestr admin to connect Outlook for this user, then resend.";
+  if (lowered.includes("outlook")) return "Outlook is not connected or enabled for this chat yet. Ask me to connect Outlook and I will send Microsoft sign-in instructions.";
   if (lowered.includes("linkedin") || lowered.includes("desktop")) return "The managed desktop is not connected or enabled for this chat yet. Ask the Orkestr admin to enable the desktop for this user, then resend.";
   if (lowered.includes("whatsapp") || lowered.includes("connector") || lowered.includes("account identity") || lowered.includes("capability")) {
     return "I can use this WhatsApp chat, but I can't expose backend WhatsApp account or connector identity from here. Ask the Orkestr admin to check connector settings.";
@@ -498,6 +519,14 @@ async function failApiAgentMessage(thread, error, env = process.env) {
     observedVia: "api_agent_error",
     error: clean(error?.message || error),
   }, env).catch(() => null);
+  await appendTurnLifecycleEvent("failed", {
+    threadId: thread.id,
+    messageId: message.id,
+    runtimeKind: API_AGENT_RUNTIME_KIND,
+    state: "failed",
+    source: "api-agent",
+    reason: clean(error?.message || error),
+  }, env).catch(() => null);
   const assistant = await appendThreadMessage(thread.id, {
     role: "assistant",
     source: "api-agent",
@@ -559,6 +588,13 @@ async function processNextApiAgentMessage(thread, env = process.env, options = {
     deliveredAt: nowIso(),
   }, env);
   await updateThread(thread.id, { state: "working" }, env).catch(() => {});
+  await appendTurnLifecycleEvent("started", {
+    threadId: thread.id,
+    messageId: message.id,
+    runtimeKind: API_AGENT_RUNTIME_KIND,
+    state: "running",
+    source: "api-agent",
+  }, env).catch(() => {});
   const latestMessages = await listThreadMessages(thread.id, env);
   const result = await runTenantApiAgentResponse({
     thread,
@@ -587,6 +623,13 @@ async function processNextApiAgentMessage(thread, env = process.env, options = {
     accountId: message.accountId,
   }, env);
   await updateThread(thread.id, { state: "ready" }, env).catch(() => {});
+  await appendTurnLifecycleEvent("completed", {
+    threadId: thread.id,
+    messageId: message.id,
+    runtimeKind: API_AGENT_RUNTIME_KIND,
+    state: "completed",
+    source: "api-agent",
+  }, env).catch(() => {});
   await appendEvent({ type: "api_agent_response_completed", threadId: thread.id, messageId: message.id, assistantMessageId: assistant.id, ownerUserId: threadOwnerUserId(thread, env) }, env).catch(() => {});
   return { ok: true, processed: true, message: current, assistant, response: result.response };
 }

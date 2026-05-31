@@ -1244,6 +1244,17 @@ OPENAI_MODEL=
 GMAIL_OAUTH_CLIENT_ID=
 GMAIL_OAUTH_CLIENT_SECRET=
 GMAIL_OAUTH_REDIRECT_URI=
+OUTLOOK_OAUTH_CLIENT_ID=
+OUTLOOK_OAUTH_TENANT_ID=common
+OUTLOOK_OAUTH_SCOPES="offline_access User.Read Mail.Read"
+JIRA_OAUTH_CLIENT_ID=
+JIRA_OAUTH_CLIENT_SECRET=
+JIRA_OAUTH_REDIRECT_URI=
+JIRA_OAUTH_SCOPES="read:jira-user read:jira-work offline_access"
+SHOPIFY_OAUTH_CLIENT_ID=
+SHOPIFY_OAUTH_CLIENT_SECRET=
+SHOPIFY_OAUTH_REDIRECT_URI=
+SHOPIFY_OAUTH_SCOPES="read_products,read_orders"
 EOF
   chmod 0640 "$env_file"
 }
@@ -1734,11 +1745,19 @@ write_runtime_settings_file() {
   wa_mode="${WHATSAPP_BRIDGE_MODE:-local}"
   gmail_enabled="${ORKESTR_GMAIL_ENABLED:-0}"
   outlook_enabled="${ORKESTR_OUTLOOK_ENABLED:-0}"
+  jira_enabled="${ORKESTR_JIRA_ENABLED:-0}"
+  shopify_enabled="${ORKESTR_SHOPIFY_ENABLED:-0}"
   if [ -n "${GMAIL_OAUTH_CLIENT_ID:-}" ]; then
     gmail_enabled=1
   fi
   if [ -n "${OUTLOOK_OAUTH_CLIENT_ID:-${MICROSOFT_OAUTH_CLIENT_ID:-}}" ]; then
     outlook_enabled=1
+  fi
+  if [ -n "${JIRA_OAUTH_CLIENT_ID:-${ATLASSIAN_OAUTH_CLIENT_ID:-}}" ]; then
+    jira_enabled=1
+  fi
+  if [ -n "${SHOPIFY_OAUTH_CLIENT_ID:-${SHOPIFY_CLIENT_ID:-${SHOPIFY_API_KEY:-}}}" ]; then
+    shopify_enabled=1
   fi
   mkdir -p "$(dirname "$runtime_settings_file")"
   cat > "$runtime_settings_file" <<EOF
@@ -1794,6 +1813,14 @@ EOF
     "outlook": {
       "enabled": $([ "$outlook_enabled" = "1" ] && echo true || echo false),
       "needsAuthAction": "outlook.device.start"
+    },
+    "jira": {
+      "enabled": $([ "$jira_enabled" = "1" ] && echo true || echo false),
+      "needsAuthAction": "jira.oauth.start"
+    },
+    "shopify": {
+      "enabled": $([ "$shopify_enabled" = "1" ] && echo true || echo false),
+      "needsAuthAction": "shopify.oauth.start"
     }
   },
   "intervention": {

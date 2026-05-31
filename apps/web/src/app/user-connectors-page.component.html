@@ -66,6 +66,10 @@
           }
         }
 
+        @if (connector.id === "jira" || connector.id === "shopify") {
+          <p class="connector-hint">Ask this chat to connect {{ connector.label || connectorLabel(connector.id) }}.</p>
+        }
+
         @if (connector.id === "linkedin" || connector.id === "browsers") {
           <a class="button-link" href="/desk">Open Desk</a>
         }

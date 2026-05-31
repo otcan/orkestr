@@ -429,7 +429,7 @@ async function cachedThreadMetadata(thread: any, status: any, ttlMs: number) {
 
 export async function threadRuntimeSummary(thread: any, messages: any[] = [], options: ThreadSummaryOptions = {}) {
   const ttlMs = Number(options.cacheTtlMs ?? 0) || 0;
-  const status = await runtimeStatus(thread.id, process.env, messages).catch(() => null);
+  const status: any = await runtimeStatus(thread.id, process.env, messages).catch(() => null);
   const { gitState, liveCodexMetadata } = await cachedThreadMetadata(thread, status, ttlMs);
   const orderedMessages = chronologicalMessages(messages);
   const codexThread = {
@@ -459,6 +459,7 @@ export async function threadRuntimeSummary(thread: any, messages: any[] = [], op
   const storedCodexMode = persistedCodexMode(metadata);
   const progress = status?.progress || thread.runtime?.progress || null;
   const runtime = threadSummaryRuntimeSnapshot(thread, status, state);
+  const turnLifecycle = status?.turnLifecycle || runtime?.turnLifecycle || null;
   const codexStatus = hasOwnKey(status, "codexStatus") ? status?.codexStatus || null : thread.runtime?.codexStatus || null;
   const activeTurnId = hasOwnKey(status, "activeTurnId") ? status?.activeTurnId || null : thread.runtime?.activeTurnId || null;
   const summary = {
@@ -473,6 +474,7 @@ export async function threadRuntimeSummary(thread: any, messages: any[] = [], op
     paneId: status?.paneId || thread.runtime?.paneId || thread.executor?.tmuxTarget || null,
     tmuxTarget: status?.paneId || thread.runtime?.paneId || thread.executor?.tmuxTarget || null,
     runtime,
+    turnLifecycle,
     activeRuntimeLeaseId: status?.lease?.id || thread.activeRuntimeLeaseId || null,
     promptReady: status?.promptReady ?? ready,
     promptReadyStable: status?.promptReadyStable ?? ready,

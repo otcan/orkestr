@@ -10,7 +10,7 @@ import { ApiService, ConnectorStatus, GmailOAuthStartResponse, OrkestrUser, Outl
 })
 export class UserConnectorsPageComponent implements OnInit {
   private readonly api = inject(ApiService);
-  private readonly connectorOrder = ["whatsapp", "gmail", "outlook", "linkedin", "browsers"];
+  private readonly connectorOrder = ["whatsapp", "gmail", "outlook", "jira", "shopify", "linkedin", "browsers"];
 
   busy = false;
   actionBusy = "";
@@ -65,6 +65,8 @@ export class UserConnectorsPageComponent implements OnInit {
       whatsapp: "WhatsApp Chat",
       gmail: "Gmail",
       outlook: "Outlook",
+      jira: "Jira",
+      shopify: "Shopify",
       linkedin: "Managed Desktop",
       browsers: "Desktops",
     };
@@ -76,6 +78,8 @@ export class UserConnectorsPageComponent implements OnInit {
       whatsapp: "Messages arrive through your assigned chat.",
       gmail: "Connect the Gmail account assigned to this user.",
       outlook: "Connect the Outlook account assigned to this user.",
+      jira: "Connect Jira from chat when the parent Atlassian app is configured.",
+      shopify: "Connect a Shopify store from chat when the parent app is configured.",
       linkedin: "Use the private browser desk for web logins and managed browsing.",
       browsers: "Managed browser desktops for this account.",
     };

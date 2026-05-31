@@ -115,6 +115,6 @@ test("setup connector statuses expose parent-managed connector metadata", async 
   assert.equal(byId.gmail.state, "partial");
   assert.equal(byId.gmail.details.parentConnector.parentAppConfigured, true);
   assert.equal(byId.outlook.details.parentConnector.parentAppConfigured, true);
-  assert.equal(byId.jira, undefined);
-  assert.equal(byId.shopify, undefined);
+  assert.equal(byId.jira.details.parentConnector.parentManaged, true);
+  assert.equal(byId.shopify.details.parentConnector.parentManaged, true);
 });

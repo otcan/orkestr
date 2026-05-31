@@ -1671,6 +1671,86 @@ test("whatsapp typing indicators require an active app-server turn", async () =>
   assert.deepEqual(captures[0], []);
 });
 
+test("whatsapp typing indicators follow explicit turn lifecycle over raw runtime booleans", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-typing-lifecycle-"));
+  const env = { ORKESTR_HOME: home };
+  await createThread({
+    id: "thread-wa-typing-lifecycle",
+    name: "WA Typing Lifecycle Thread",
+    runtimeKind: "codex-app-server",
+  }, env);
+  await writeConnectorConfig("whatsapp", {
+    threadRoutes: { "chat-typing-lifecycle": "thread-wa-typing-lifecycle" },
+  }, env);
+  await routeWhatsAppInbound({
+    eventId: "wa-typing-lifecycle-1",
+    chatId: "chat-typing-lifecycle",
+    accountId: "responder",
+    text: "work on this",
+  }, env);
+
+  const result = await syncWhatsAppTypingIndicators(env, {
+    statusImpl: async () => ({
+      state: "working",
+      runtimeKind: "codex-app-server",
+      activeTurnId: "turn-queued",
+      working: true,
+      typingActive: true,
+      turnLifecycle: {
+        state: "queued",
+        queued: true,
+        running: false,
+        awaitingApproval: false,
+        typingActive: false,
+      },
+    }),
+    syncImpl: async (targets) => ({ ok: true, active: targets.length, targets }),
+  });
+
+  assert.equal(result.active, 0);
+  assert.deepEqual(result.targets, []);
+});
+
+test("whatsapp typing indicators suppress approval turns from lifecycle", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-typing-lifecycle-approval-"));
+  const env = { ORKESTR_HOME: home };
+  await createThread({
+    id: "thread-wa-typing-lifecycle-approval",
+    name: "WA Typing Lifecycle Approval Thread",
+    runtimeKind: "codex-app-server",
+  }, env);
+  await writeConnectorConfig("whatsapp", {
+    threadRoutes: { "chat-typing-lifecycle-approval": "thread-wa-typing-lifecycle-approval" },
+  }, env);
+  await routeWhatsAppInbound({
+    eventId: "wa-typing-lifecycle-approval-1",
+    chatId: "chat-typing-lifecycle-approval",
+    accountId: "responder",
+    text: "work on this",
+  }, env);
+
+  const result = await syncWhatsAppTypingIndicators(env, {
+    statusImpl: async () => ({
+      state: "awaiting_approval",
+      runtimeKind: "codex-app-server",
+      activeTurnId: "turn-approval",
+      working: true,
+      typingActive: true,
+      turnLifecycle: {
+        state: "awaiting_approval",
+        queued: false,
+        running: false,
+        awaitingApproval: true,
+        typingActive: false,
+      },
+    }),
+    syncImpl: async (targets) => ({ ok: true, active: targets.length, targets }),
+  });
+
+  assert.equal(result.active, 0);
+  assert.deepEqual(result.targets, []);
+});
+
 test("whatsapp typing indicators skip app-server messages queued behind active turns", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-typing-app-server-queued-"));
   const env = { ORKESTR_HOME: home };

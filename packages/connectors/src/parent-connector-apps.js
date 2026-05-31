@@ -82,7 +82,12 @@ const providerDefinitions = {
       clientId: ["JIRA_OAUTH_CLIENT_ID", "ATLASSIAN_OAUTH_CLIENT_ID", "ATLASSIAN_CLIENT_ID"],
       clientSecret: ["JIRA_OAUTH_CLIENT_SECRET", "ATLASSIAN_OAUTH_CLIENT_SECRET", "ATLASSIAN_CLIENT_SECRET"],
       redirectUri: ["JIRA_OAUTH_REDIRECT_URI", "ATLASSIAN_OAUTH_REDIRECT_URI"],
+      scopes: ["JIRA_OAUTH_SCOPES", "ATLASSIAN_OAUTH_SCOPES"],
+      authorizeUrl: ["JIRA_OAUTH_AUTHORIZE_URL", "ATLASSIAN_OAUTH_AUTHORIZE_URL"],
+      tokenUrl: ["JIRA_OAUTH_TOKEN_URL", "ATLASSIAN_OAUTH_TOKEN_URL"],
+      audience: ["JIRA_OAUTH_AUDIENCE", "ATLASSIAN_OAUTH_AUDIENCE"],
     },
+    defaultRedirectPath: "/oauth/jira/callback",
     summary: "Parent Orkestr owns the Atlassian OAuth app; users connect their own Jira account from chat.",
   },
   shopify: {
@@ -99,7 +104,10 @@ const providerDefinitions = {
       clientId: ["SHOPIFY_OAUTH_CLIENT_ID", "SHOPIFY_CLIENT_ID", "SHOPIFY_API_KEY"],
       clientSecret: ["SHOPIFY_OAUTH_CLIENT_SECRET", "SHOPIFY_CLIENT_SECRET", "SHOPIFY_API_SECRET"],
       redirectUri: ["SHOPIFY_OAUTH_REDIRECT_URI", "SHOPIFY_REDIRECT_URI"],
+      scopes: ["SHOPIFY_OAUTH_SCOPES", "SHOPIFY_SCOPES"],
+      shop: ["SHOPIFY_SHOP", "SHOPIFY_STORE", "SHOPIFY_STORE_DOMAIN"],
     },
+    defaultRedirectPath: "/oauth/shopify/callback",
     summary: "Parent Orkestr owns the Shopify connector app; users connect their own Shopify account from chat.",
   },
 };

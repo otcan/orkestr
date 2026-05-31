@@ -11,7 +11,7 @@ import {
   codexAppServerTransport,
   codexAppServerWebSocketUrl,
 } from "../../connectors/src/codex-app-server-transport.js";
-import { updateThread } from "./threads.js";
+import { listThreadMessages, updateThread, updateThreadMessage } from "./threads.js";
 import {
   appendOrUpdateEventMessage,
   approvalPromptText,
@@ -38,6 +38,7 @@ import {
   whatsappProjectionFields,
 } from "./codex-app-server-whatsapp.js";
 import { requestUserInputAnswers } from "./codex-app-server-user-input.js";
+import { appendTurnLifecycleEvent } from "./turn-lifecycle.js";
 
 const execFileAsync = promisify(execFile);
 const clients = new Map();
@@ -80,6 +81,7 @@ export class CodexAppServerClient {
     this.turnParents = new Map();
     this.completedTurns = new Set();
     this.pendingRequests = new Map();
+    this.pendingNotifications = new Set();
     this.started = false;
     this.startPromise = null;
     this.closed = false;
@@ -241,9 +243,25 @@ export class CodexAppServerClient {
       void this.handleServerRequest(message);
       return;
     }
-    if (message.method) {
-      void this.handleNotification(message);
-    }
+    if (message.method) this.trackNotification(message);
+  }
+
+  trackNotification(message) {
+    const pending = this.handleNotification(message).catch((error) => appendEvent({
+      type: "codex_app_server_notification_failed",
+      method: message?.method || "",
+      error: publicError(error),
+    }, this.env).catch(() => {}));
+    this.pendingNotifications.add(pending);
+    void pending.finally(() => {
+      this.pendingNotifications.delete(pending);
+    }).catch(() => {});
+  }
+
+  async drainNotifications() {
+    const pending = [...this.pendingNotifications];
+    if (!pending.length) return;
+    await Promise.allSettled(pending);
   }
 
   rejectAll(error) {
@@ -262,7 +280,7 @@ export class CodexAppServerClient {
 
   rememberTurnParent(codexId, turnId, message = null) {
     const key = this.turnParentKey(codexId, turnId);
-    if (!key || !message || !whatsappOrigin(message)) return null;
+    if (!key || !message) return null;
     this.turnParents.set(key, { ...message });
     while (this.turnParents.size > 200) {
       const oldest = this.turnParents.keys().next().value;
@@ -344,6 +362,14 @@ export class CodexAppServerClient {
         pendingRequest: request,
       },
     }, this.env).catch(() => {});
+    await appendTurnLifecycleEvent("awaiting_approval", {
+      threadId: thread.id,
+      runtimeKind: "codex-app-server",
+      turnId: params.turnId,
+      state: "awaiting_approval",
+      source: "codex-app-server",
+      reason: message.method,
+    }, this.env).catch(() => {});
     const text = approvalPromptText(message.method, params);
     if (text) {
       const whatsappParent =
@@ -420,6 +446,13 @@ export class CodexAppServerClient {
               updatedAt: nowIso(),
             },
           }, this.env).catch(() => {});
+          await appendTurnLifecycleEvent("started", {
+            threadId: thread.id,
+            runtimeKind: "codex-app-server",
+            turnId,
+            state: "running",
+            source: "codex-app-server",
+          }, this.env).catch(() => {});
         }
       }
       return;
@@ -454,6 +487,14 @@ export class CodexAppServerClient {
               state: status === "failed" ? "failed" : "ready",
               updatedAt: nowIso(),
             },
+          }, this.env).catch(() => {});
+          await appendTurnLifecycleEvent(codexTurnConversationInterrupted(turn) ? "interrupted" : status === "failed" ? "failed" : "completed", {
+            threadId: thread.id,
+            runtimeKind: "codex-app-server",
+            turnId,
+            state: codexTurnConversationInterrupted(turn) ? "interrupted" : status === "failed" ? "failed" : "completed",
+            source: "codex-app-server",
+            reason: publicError(turn.error),
           }, this.env).catch(() => {});
           if (codexTurnConversationInterrupted(turn)) {
             const text = codexConversationInterruptionNoticeText();
@@ -567,6 +608,33 @@ export class CodexAppServerClient {
         this.completedTurns.delete(oldest);
       }
       this.threadStates.set(codexId, { ...(this.threadStates.get(codexId) || {}), activeTurnId: "", status: { type: "idle" } });
+    }
+    let deliveredParent = rememberedParent;
+    if (finalAnswer && !deliveredParent?.id) {
+      const messages = await listThreadMessages(thread.id, this.env).catch(() => []);
+      deliveredParent = [...messages].reverse().find((item) =>
+        clean(item.role).toLowerCase() === "user" &&
+        (clean(item.deliveryState) === "codex_app_server_sending" || clean(item.state) === "pending_delivery")
+      ) || null;
+    }
+    if (finalAnswer && deliveredParent?.id) {
+      await updateThreadMessage(thread.id, deliveredParent.id, {
+        state: "completed",
+        deliveryState: "delivered",
+        deliveredAt: timestamp,
+        observedVia: "codex_app_server_final_answer",
+        deliveryClaimId: null,
+        codexThreadId: codexId,
+        codexTurnId: turnId || null,
+        error: null,
+      }, this.env).catch((error) => appendEvent({
+        type: "codex_app_server_parent_delivery_update_failed",
+        threadId: thread.id,
+        codexThreadId: codexId,
+        turnId,
+        messageId: deliveredParent.id,
+        error: publicError(error),
+      }, this.env).catch(() => {}));
     }
     await updateThread(thread.id, {
       state: "ready",

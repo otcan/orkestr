@@ -2638,6 +2638,8 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
 
   isThreadProcessing(thread: ThreadSummary | null): boolean {
     if (!thread) return false;
+    if (thread.turnLifecycle?.sidebarWorking === true) return true;
+    if (thread.turnLifecycle?.terminal === true && !thread.working && !thread.typingActive) return false;
     const activeCount = Number(thread.pendingCount || 0) + Number(thread.runningCount || 0);
     const progressState = this.threadProgressStateHint(thread);
     const state = [
@@ -2680,6 +2682,11 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   threadProcessingLabel(thread: ThreadSummary | null): string {
     if (!thread) return "Working";
     if (this.threadLoading(thread)) return "Loading";
+    const lifecycleState = String(thread.turnLifecycle?.state || "").toLowerCase();
+    if (thread.turnLifecycle?.awaitingApproval) return "Waiting for approval";
+    if (lifecycleState === "queued") return "Queued";
+    if (lifecycleState === "waking") return "Starting";
+    if (lifecycleState === "running") return "Working";
     const progressState = this.threadProgressStateHint(thread);
     const progressSummary = this.threadProgressSummary(thread);
     if (progressState === "error") return "Error";

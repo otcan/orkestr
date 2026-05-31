@@ -34,6 +34,7 @@ import { appendOrUpdateEventMessage, normalizeCodexModel, normalizeReasoningEffo
 import { completeThreadSecurityApproveCommand, threadSecurityApproveChallengeId } from "./security-thread-command.js";
 import { threadUsesContainedUserPolicy } from "./tenant-policy.js";
 import { apiAgentRuntimeStatus, threadUsesApiAgent } from "./tenant-api-agent.js";
+import { turnLifecycleFromRuntimeStatus } from "./turn-lifecycle.js";
 import {
   capturePane,
   killTmuxSession,
@@ -608,7 +609,7 @@ export async function runtimeStatus(threadId, env = process.env, messagesOverrid
     });
   }
   if (threadNeedsCodexAppServerMigration(thread)) {
-    return {
+    const status = {
       state: "migration_required",
       status: "migration_required",
       runtimeState: "migration_required",
@@ -628,11 +629,12 @@ export async function runtimeStatus(threadId, env = process.env, messagesOverrid
       hibernated: true,
       error: "codex_app_server_migration_required",
     };
+    return { ...status, turnLifecycle: turnLifecycleFromRuntimeStatus(status, messages) };
   }
   const lease = await activeLeaseForThread(thread.id, env);
   if (!lease) {
     const state = pendingCount > 0 ? "waking" : "sleeping";
-    return {
+    const status = {
       state,
       status: state,
       runtimeState: "none",
@@ -658,6 +660,7 @@ export async function runtimeStatus(threadId, env = process.env, messagesOverrid
       planImplementationSelectedChoice: null,
       progress: null,
     };
+    return { ...status, turnLifecycle: turnLifecycleFromRuntimeStatus(status, messages) };
   }
 
   const paneId = await resolveLivePaneId(lease, env);
@@ -697,7 +700,7 @@ export async function runtimeStatus(threadId, env = process.env, messagesOverrid
       : promptReady
         ? "ready"
         : recentlyStarted || pendingCount > 0 ? "waking" : "ready";
-  return {
+  const status = {
     state,
     status: state,
     runtimeState: "live",
@@ -728,6 +731,7 @@ export async function runtimeStatus(threadId, env = process.env, messagesOverrid
     planImplementationSelectedChoice,
     progress,
   };
+  return { ...status, turnLifecycle: turnLifecycleFromRuntimeStatus(status, messages) };
 }
 
 async function resolveCodexRolloutPath(threadId) {

@@ -895,3 +895,83 @@ test("tenant connector auth tool starts Outlook device auth from parent app conf
   assert.equal(pending.account, "person@example.com");
   assert.equal(identities.some((identity) => identity.provider === "outlook" && identity.externalId === "person@example.com"), true);
 });
+
+test("tenant connector auth tools start Jira and Shopify authorization from parent app config", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-api-agent-generic-oauth-tool-"));
+  const env = await allowSanitizerEnv(home, {
+    JIRA_OAUTH_CLIENT_ID: "jira-client-env",
+    JIRA_OAUTH_CLIENT_SECRET: "jira-secret-env",
+    JIRA_OAUTH_REDIRECT_URI: "https://example.test/oauth/jira/callback",
+    SHOPIFY_OAUTH_CLIENT_ID: "shopify-client-env",
+    SHOPIFY_OAUTH_CLIENT_SECRET: "shopify-secret-env",
+    SHOPIFY_OAUTH_REDIRECT_URI: "https://example.test/oauth/shopify/callback",
+  });
+  await upsertUser({ id: "otcan", role: "user", displayName: "Otcan" }, env);
+  const principal = userPrincipal({ id: "otcan", role: "user" });
+
+  const jira = await runTenantApiAgentTool("orkestr_start_connector_auth", {
+    provider: "jira",
+    account: "person@example.com",
+    shop: "",
+  }, { principal, thread: { id: "otcan" } }, env);
+  const shopify = await runTenantApiAgentTool("orkestr_start_connector_auth", {
+    provider: "shopify",
+    account: "",
+    shop: "demo-store",
+  }, { principal, thread: { id: "otcan" } }, env);
+  const jiraUrl = new URL(jira.authorizeUrl);
+  const shopifyUrl = new URL(shopify.authorizeUrl);
+  const jiraState = JSON.parse(await fs.readFile(path.join(userDataPaths("otcan", env).oauth, "jira-state.json"), "utf8"));
+  const shopifyState = JSON.parse(await fs.readFile(path.join(userDataPaths("otcan", env).oauth, "shopify-state.json"), "utf8"));
+  const identities = await readUserPrivateIdentities("otcan", env);
+
+  assert.equal(jira.ok, true);
+  assert.equal(jira.provider, "jira");
+  assert.equal(jiraUrl.origin, "https://auth.atlassian.com");
+  assert.equal(jiraUrl.searchParams.get("client_id"), "jira-client-env");
+  assert.equal(jiraUrl.searchParams.get("redirect_uri"), "https://example.test/oauth/jira/callback");
+  assert.equal(jiraState.userId, "otcan");
+  assert.equal(jiraState.account, "person@example.com");
+  assert.equal(identities.some((identity) => identity.provider === "jira" && identity.externalId === "person@example.com"), true);
+
+  assert.equal(shopify.ok, true);
+  assert.equal(shopify.provider, "shopify");
+  assert.equal(shopify.shop, "demo-store.myshopify.com");
+  assert.equal(shopifyUrl.origin, "https://demo-store.myshopify.com");
+  assert.equal(shopifyUrl.searchParams.get("client_id"), "shopify-client-env");
+  assert.equal(shopifyState.userId, "otcan");
+  assert.equal(shopifyState.shop, "demo-store.myshopify.com");
+});
+
+test("tenant connector status and disconnect tools are user-scoped", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-api-agent-connector-status-"));
+  const env = await allowSanitizerEnv(home, {
+    GMAIL_OAUTH_CLIENT_ID: "gmail-client-env",
+    GMAIL_OAUTH_CLIENT_SECRET: "gmail-secret-env",
+    GMAIL_OAUTH_REDIRECT_URI: "https://example.test/oauth/gmail/callback",
+  });
+  await upsertUser({ id: "otcan", role: "user", displayName: "Otcan" }, env);
+  const principal = userPrincipal({ id: "otcan", role: "user" });
+  const paths = userDataPaths("otcan", env);
+  await fs.mkdir(paths.secrets, { recursive: true });
+  await fs.writeFile(path.join(paths.secrets, "gmail-token.json"), JSON.stringify({ accessToken: "user-token" }), "utf8");
+
+  const connected = await runTenantApiAgentTool("orkestr_connector_status", {
+    provider: "gmail",
+  }, { principal }, env);
+  const disconnected = await runTenantApiAgentTool("orkestr_disconnect_connector", {
+    provider: "gmail",
+    account: "",
+  }, { principal }, env);
+  const after = await runTenantApiAgentTool("orkestr_connector_status", {
+    provider: "gmail",
+  }, { principal }, env);
+
+  assert.equal(connected.connected, true);
+  assert.equal(connected.state, "connected");
+  assert.equal(JSON.stringify(connected).includes("user-token"), false);
+  assert.equal(disconnected.ok, true);
+  assert.equal(disconnected.status.connected, false);
+  assert.equal(after.connected, false);
+  assert.equal(after.state, "not_connected");
+});

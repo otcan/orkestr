@@ -41,6 +41,7 @@ import { containedUserDeveloperInstructions } from "./tenant-policy.js";
 import { relocateLegacyUserWorkspace } from "./workspace-files.js";
 import { parseThreadInputCommand } from "./thread-commands.js";
 import { completeThreadSecurityApproveCommand } from "./security-thread-command.js";
+import { appendTurnLifecycleEvent, turnLifecycleFromRuntimeStatus } from "./turn-lifecycle.js";
 
 const appServerDeliveryTimers = new Map();
 const appServerHistorySyncTimes = new Map();
@@ -354,6 +355,13 @@ export async function interruptCodexAppServerThread(thread, env = process.env) {
     state: "ready",
     runtime: { ...(thread.runtime || {}), runtimeKind: "codex-app-server", activeTurnId: null, pendingRequest: null, state: "ready" },
   }, env).catch(() => {});
+  await appendTurnLifecycleEvent("interrupted", {
+    threadId: thread.id,
+    runtimeKind: "codex-app-server",
+    turnId: activeTurnId,
+    state: "interrupted",
+    source: "codex-app-server",
+  }, env).catch(() => {});
   return { interrupted: true, turnId: activeTurnId };
 }
 
@@ -365,12 +373,21 @@ async function startCodexAppServerTurn({ client, thread, id, pending, env, runti
   const completedKey = turnId && client.turnParentKey ? client.turnParentKey(id, turnId) : "";
   if (turnId) client.rememberTurnParent(id, turnId, pending);
   await new Promise((resolve) => setImmediate(resolve));
+  await client.drainNotifications?.();
   const alreadyCompleted = Boolean(completedKey && client.completedTurns?.has(completedKey));
   if (turnId && !terminalResult && !alreadyCompleted) {
     client.threadStates.set(id, { ...(client.threadStates.get(id) || {}), activeTurnId: turnId, status: { type: "active", activeFlags: ["running"] } });
     await updateThread(thread.id, {
       state: "working",
       runtime: { ...(thread.runtime || {}), runtimeKind: "codex-app-server", activeTurnId: turnId, state: "working" },
+    }, env).catch(() => {});
+    await appendTurnLifecycleEvent("started", {
+      threadId: thread.id,
+      messageId: pending.id,
+      runtimeKind: "codex-app-server",
+      turnId,
+      state: "running",
+      source: "codex-app-server",
     }, env).catch(() => {});
   }
   return { result, observedVia, turnId };
@@ -726,7 +743,7 @@ export async function codexAppServerThreadStatus(thread, env = process.env, coun
   const codexStatus = activeTurnId && clean(rawCodexStatus?.type).toLowerCase() === "idle"
     ? { ...rawCodexStatus, type: "active", activeFlags: ["running"] }
     : rawCodexStatus;
-  return {
+  const status = {
     state: runtimeState,
     status: runtimeState,
     runtimeState: "codex-app-server",
@@ -760,6 +777,10 @@ export async function codexAppServerThreadStatus(thread, env = process.env, coun
     planImplementationMenuVisible: false,
     planImplementationSelectedChoice: null,
     progress: null,
+  };
+  return {
+    ...status,
+    turnLifecycle: turnLifecycleFromRuntimeStatus(status),
   };
 }
 

@@ -10,6 +10,7 @@ import { userScopedCapabilityHints } from "./user-skills.js";
 import { adminUserId, getUser, normalizeUserId } from "./users.js";
 
 const runningThreadIds = new Set();
+const messageMutationQueues = new Map();
 const activeInputStates = new Set(["queued", "pending_delivery", "awaiting_ack", "running"]);
 const whatsappSources = new Set(["whatsapp", "whatsapp_inbound", "whatsapp_client"]);
 const messageStringFields = [
@@ -74,6 +75,15 @@ function restrictedCodexSecurityProfile(input = {}) {
 async function messagesPath(threadId, env) {
   const paths = await ensureDataDirs(env);
   return path.join(paths.threadMessages, `${safeThreadId(threadId)}.json`);
+}
+
+async function enqueueMessageMutation(filePath, operation) {
+  const previous = messageMutationQueues.get(filePath) || Promise.resolve();
+  const next = previous.then(operation, operation);
+  messageMutationQueues.set(filePath, next.finally(() => {
+    if (messageMutationQueues.get(filePath) === next) messageMutationQueues.delete(filePath);
+  }));
+  return next;
 }
 
 export async function listThreads(env = process.env) {
@@ -354,38 +364,42 @@ export async function appendThreadMessage(threadId, input, env = process.env) {
     error.statusCode = 404;
     throw error;
   }
-  const messages = await listThreadMessages(thread.id, env);
-  const cursor =
-    Number(input.cursor || 0) ||
-    Math.max(0, ...messages.map((message) => Number(message.cursor || 0)).filter(Number.isFinite)) + 1;
-  const message = {
-    id: randomUUID(),
-    ownerUserId: normalizeUserId(input.ownerUserId || thread.ownerUserId || env.ORKESTR_ADMIN_USER_ID || adminUserId),
-    role: String(input.role || "assistant"),
-    source: String(input.source || "manual"),
-    text: String(input.text || "").trim(),
-    promptFile: String(input.promptFile || "").trim(),
-    parentMessageId: String(input.parentMessageId || "").trim() || null,
-    executionId: String(input.executionId || "").trim() || null,
-    createdAt: String(input.timestamp || input.createdAt || "").trim() || nowIso(),
-    cursor,
-    state: String(input.state || "completed"),
-  };
-  for (const key of messageStringFields) {
-    const value = String(input[key] || "").trim();
-    if (value) message[key] = value;
-  }
-  if (input.forceDeliveryAfterInterrupt === true) message.forceDeliveryAfterInterrupt = true;
-  if (Array.isArray(input.attachments) && input.attachments.length) {
-    message.attachments = input.attachments.map((attachment) => ({ ...attachment }));
-  }
-  if (!message.text && !message.promptFile) {
-    const error = new Error("message_text_required");
-    error.statusCode = 400;
-    throw error;
-  }
-  messages.push(message);
-  await writeJson(await messagesPath(thread.id, env), messages);
+  const filePath = await messagesPath(thread.id, env);
+  const message = await enqueueMessageMutation(filePath, async () => {
+    const messages = await readJson(filePath, []);
+    const cursor =
+      Number(input.cursor || 0) ||
+      Math.max(0, ...messages.map((item) => Number(item.cursor || 0)).filter(Number.isFinite)) + 1;
+    const nextMessage = {
+      id: randomUUID(),
+      ownerUserId: normalizeUserId(input.ownerUserId || thread.ownerUserId || env.ORKESTR_ADMIN_USER_ID || adminUserId),
+      role: String(input.role || "assistant"),
+      source: String(input.source || "manual"),
+      text: String(input.text || "").trim(),
+      promptFile: String(input.promptFile || "").trim(),
+      parentMessageId: String(input.parentMessageId || "").trim() || null,
+      executionId: String(input.executionId || "").trim() || null,
+      createdAt: String(input.timestamp || input.createdAt || "").trim() || nowIso(),
+      cursor,
+      state: String(input.state || "completed"),
+    };
+    for (const key of messageStringFields) {
+      const value = String(input[key] || "").trim();
+      if (value) nextMessage[key] = value;
+    }
+    if (input.forceDeliveryAfterInterrupt === true) nextMessage.forceDeliveryAfterInterrupt = true;
+    if (Array.isArray(input.attachments) && input.attachments.length) {
+      nextMessage.attachments = input.attachments.map((attachment) => ({ ...attachment }));
+    }
+    if (!nextMessage.text && !nextMessage.promptFile) {
+      const error = new Error("message_text_required");
+      error.statusCode = 400;
+      throw error;
+    }
+    messages.push(nextMessage);
+    await writeJson(filePath, messages);
+    return nextMessage;
+  });
   await updateThread(thread.id, { state: activeInputStates.has(message.state) ? message.state : thread.state }, env);
   await appendEvent({ type: `thread_message_${message.state}`, threadId: thread.id, messageId: message.id, source: message.source, role: message.role, ownerUserId: message.ownerUserId }, env);
   return message;
@@ -520,24 +534,26 @@ export async function updateThreadMessage(threadId, messageId, patch, env = proc
     throw error;
   }
   const filePath = await messagesPath(thread.id, env);
-  const messages = await listThreadMessages(thread.id, env);
-  let updated = null;
-  const next = messages.map((message) => {
-    if (message.id !== messageId) return message;
-    updated = {
-      ...message,
-      ...patch,
-      updatedAt: nowIso(),
-    };
+  return enqueueMessageMutation(filePath, async () => {
+    const messages = await readJson(filePath, []);
+    let updated = null;
+    const next = messages.map((message) => {
+      if (message.id !== messageId) return message;
+      updated = {
+        ...message,
+        ...patch,
+        updatedAt: nowIso(),
+      };
+      return updated;
+    });
+    if (!updated) {
+      const error = new Error("message_not_found");
+      error.statusCode = 404;
+      throw error;
+    }
+    await writeJson(filePath, next);
     return updated;
   });
-  if (!updated) {
-    const error = new Error("message_not_found");
-    error.statusCode = 404;
-    throw error;
-  }
-  await writeJson(filePath, next);
-  return updated;
 }
 
 export async function nextQueuedThreadMessage(threadId, env = process.env) {

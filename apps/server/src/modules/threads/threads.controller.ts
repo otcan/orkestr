@@ -868,7 +868,7 @@ export class ThreadsController {
         state: implemented ? "completed" : "failed",
         deliveryState: implemented ? "delivered" : "failed",
         observedVia: implemented ? "codex_plan_implementation_confirmed" : "codex_plan_implementation_not_ready",
-        runtimeLeaseId: result.status?.lease?.id || null,
+        runtimeLeaseId: (result.status as any)?.lease?.id || null,
         deliveredAt: implemented ? new Date().toISOString() : "",
         error: errorText,
       });
@@ -1158,7 +1158,7 @@ export class ThreadsController {
         message: "Run `orkestr codex migrate` on this host before opening this Codex thread.",
       };
     }
-    let status = await runtimeStatus(thread.id);
+    let status: any = await runtimeStatus(thread.id);
     let wakeResult: Awaited<ReturnType<typeof wakeThread>> | null = null;
     if (!status.sessionName || status.state === "sleeping") {
       wakeResult = await wakeThread(thread.id, { reason: "attach" });

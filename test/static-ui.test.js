@@ -386,7 +386,7 @@ test("web shell exposes a user connector management page", async () => {
   assert.match(connectorsComponent, /this\.api\.currentUser\(\)/);
   assert.match(connectorsComponent, /this\.api\.startGmailOAuth\(this\.gmailAccount\)/);
   assert.match(connectorsComponent, /this\.api\.startOutlookOAuth\(this\.outlookAccount\)/);
-  assert.match(connectorsComponent, /private readonly connectorOrder = \["whatsapp", "gmail", "outlook", "linkedin", "browsers"\]/);
+  assert.match(connectorsComponent, /private readonly connectorOrder = \["whatsapp", "gmail", "outlook", "jira", "shopify", "linkedin", "browsers"\]/);
   assert.match(connectorsTemplate, /name="user-gmail-account"/);
   assert.match(connectorsTemplate, /name="user-outlook-account"/);
   assert.match(connectorsTemplate, /Open Gmail sign-in/);
