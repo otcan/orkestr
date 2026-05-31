@@ -280,7 +280,7 @@ test("tenant api-agent explains missing Gmail capability without a generic safet
   assert.doesNotMatch(assistant.text, /safely handle|private connector|account identity/i);
 });
 
-test("tenant api-agent routes same-user missing connector requests so the assistant can explain setup", async () => {
+test("tenant api-agent answers same-user missing connector requests deterministically", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-api-agent-gmail-missing-"));
   const env = await allowSanitizerEnv(home);
   await createThread({
@@ -314,12 +314,12 @@ test("tenant api-agent routes same-user missing connector requests so the assist
   });
   const messages = await listThreadMessages("otcantest-gmail-missing", env);
   const assistant = messages.find((message) => message.role === "assistant");
-  const context = tenantContextFromInstructions(calls[0].body.instructions);
 
   assert.equal(result.ok, true);
-  assert.equal(context.capabilities.gmail, false);
-  assert.match(calls[0].body.instructions, /matching capability is false/i);
+  assert.equal(result.missingCapability, true);
+  assert.equal(calls.length, 0);
   assert.match(assistant.text, /Gmail is not connected or enabled for this chat yet/i);
+  assert.match(assistant.text, /connect Gmail from this chat/i);
   assert.doesNotMatch(assistant.text, /checked/i);
 });
 

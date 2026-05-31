@@ -1,8 +1,8 @@
 import fs from "node:fs/promises";
 import { randomUUID } from "node:crypto";
-import { readConnectorConfig } from "../../storage/src/config.js";
 import { appendEvent, readJson, writeSecretJson } from "../../storage/src/store.js";
 import { connectorFile, connectorScopePaths, listConnectorScopePaths } from "./connector-storage.js";
+import { readParentConnectorRuntimeConfig } from "./parent-connector-apps.js";
 
 const defaultScopes = ["offline_access", "User.Read", "Mail.Read"];
 
@@ -61,13 +61,7 @@ export async function readOutlookToken(env = process.env, options = {}) {
 }
 
 export async function startOutlookDeviceOAuth(env = process.env, options = {}, fetchImpl = fetch) {
-  const storedConfig = await readConnectorConfig("outlook", env);
-  const config = {
-    ...storedConfig,
-    clientId: storedConfig.clientId || env.OUTLOOK_OAUTH_CLIENT_ID || env.MICROSOFT_OAUTH_CLIENT_ID || "",
-    tenantId: storedConfig.tenantId || env.OUTLOOK_OAUTH_TENANT_ID || env.MICROSOFT_OAUTH_TENANT_ID || "common",
-    scopes: storedConfig.scopes || env.OUTLOOK_OAUTH_SCOPES || "",
-  };
+  const config = await readParentConnectorRuntimeConfig("outlook", env);
   const { clientId, tenantId, scopes } = requireOutlookConfig(config);
   const account = String(options.account || config.account || "").trim();
   const scope = await connectorScopePaths(env, options);

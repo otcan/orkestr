@@ -5,6 +5,7 @@ import { adminPrincipal, userPrincipal } from "./principal.js";
 import { assertCreditBudget, estimateOpenAICost, recordCreditUsage } from "./credit-usage.js";
 import { startCodexAppServerThread, threadUsesCodexAppServer } from "./codex-app-server.js";
 import { tenantApiAgentToolDefinitions, runTenantApiAgentTool } from "./tenant-api-agent-tools.js";
+import { missingTenantCapabilityReply } from "./tenant-api-agent-capabilities.js";
 import { threadRequiresTenantIsolation } from "./tenant-policy.js";
 import { appendThreadMessage, getThread, listThreadMessages, updateThread, updateThreadMessage } from "./threads.js";
 import { userScopedCapabilityHints } from "./user-skills.js";
@@ -389,6 +390,42 @@ async function handleCodexEscalation(thread, message, env = process.env) {
   return { escalated: true, thread: updated };
 }
 
+async function completeMissingCapabilityMessage(thread, message, text, env = process.env) {
+  const current = await updateThreadMessage(thread.id, message.id, {
+    state: "completed",
+    deliveryState: "missing_capability",
+    observedVia: "api_agent_missing_capability",
+    deliveredAt: nowIso(),
+    error: null,
+  }, env);
+  const assistant = await appendThreadMessage(thread.id, {
+    role: "assistant",
+    source: "api-agent",
+    phase: "final_answer",
+    text,
+    parentMessageId: message.id,
+    state: "completed",
+    connector: message.connector,
+    chatId: message.chatId,
+    accountId: message.accountId,
+  }, env);
+  await recordCreditUsage({
+    tenantId: threadOwnerUserId(thread, env),
+    threadId: thread.id,
+    messageId: message.id,
+    runtimeKind: API_AGENT_RUNTIME_KIND,
+    sourceChannel: sourceChannelForMessage(message),
+    callKind: "assistant_missing_capability",
+    model: apiAgentModel(env),
+    status: "blocked",
+    error: "missing_capability",
+    estimatedCostUsd: 0,
+  }, env).catch(() => null);
+  await updateThread(thread.id, { state: "ready" }, env).catch(() => {});
+  await appendEvent({ type: "api_agent_missing_capability_replied", threadId: thread.id, messageId: message.id, assistantMessageId: assistant.id, ownerUserId: threadOwnerUserId(thread, env) }, env).catch(() => {});
+  return { ok: true, processed: true, missingCapability: true, message: current, assistant };
+}
+
 async function runTenantApiAgentResponse({ thread, messages, message, env, fetchImpl }) {
   const model = apiAgentModel(env);
   const principal = tenantPrincipalForThread(thread, env);
@@ -509,8 +546,9 @@ async function processNextApiAgentMessage(thread, env = process.env, options = {
     return handleCodexEscalation(thread, message, env);
   }
   const principal = tenantPrincipalForThread(thread, env);
+  let capabilities = null;
   if (!isAdminPrincipal(principal)) {
-    const capabilities = await scopedCapabilitiesForThread(thread, env);
+    capabilities = await scopedCapabilitiesForThread(thread, env);
     await assertSanitizedAction({
       action: "api-agent.input",
       principal,
@@ -526,6 +564,8 @@ async function processNextApiAgentMessage(thread, env = process.env, options = {
         connector: message.connector || "",
       },
     }, env);
+    const missingReply = missingTenantCapabilityReply(message.text, capabilities);
+    if (missingReply) return completeMissingCapabilityMessage(thread, message, missingReply, env);
   }
   await assertCreditBudget(threadOwnerUserId(thread, env), apiAgentBudgetPreflightUsd(env), env);
   await updateThreadMessage(thread.id, message.id, {
@@ -582,7 +622,7 @@ export async function processApiAgentThreadInput(threadId, env = process.env, op
     for (let index = 0; index < apiAgentBatchLimit(env); index += 1) {
       const result = await processNextApiAgentMessage(thread, env, options);
       if (result.processed) results.push(result);
-      if (!result.processed || result.ok === false || result.escalated) {
+      if (!result.processed || result.ok === false || result.escalated || result.missingCapability) {
         return results.length ? { ...result, results, processedCount: results.length } : result;
       }
     }

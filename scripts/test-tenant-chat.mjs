@@ -1,10 +1,16 @@
 #!/usr/bin/env node
+if (process.env.NODE_TEST_CONTEXT && process.env.ORKESTR_TENANT_CHAT_E2E !== "1") {
+  console.log("TAP version 13");
+  console.log("1..0 # SKIP live tenant chat e2e is opt-in; run node scripts/test-tenant-chat.mjs directly or set ORKESTR_TENANT_CHAT_E2E=1");
+  process.exit(0);
+}
+
 const DEFAULT_API_BASE = "http://127.0.0.1:18912";
 
 const CASES = {
   "gmail-missing": {
     text: "Can you check my gmail?",
-    require: [/gmail/i, /(not connected|not enabled|isn.t connected|can.t access|cannot access)/i],
+    require: [/gmail/i, /(not connected|not enabled|not available|isn.t connected|can.t access|cannot access)/i],
     reject: [/safely handle/i, /private connector/i, /account identity/i, /couldn.t complete this request/i],
   },
   "whatsapp-identity": {
