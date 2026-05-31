@@ -47,6 +47,15 @@ const appServerHistorySyncTimes = new Map();
 const appServerDeliveryLocks = new Set();
 const pendingInputStates = new Set(["queued", "pending_delivery", "awaiting_ack"]);
 
+function withInternalClient(result, client) {
+  Object.defineProperty(result, "client", {
+    value: client,
+    enumerable: false,
+    configurable: true,
+  });
+  return result;
+}
+
 function codexAppServerActiveTurnRetryMs(env = process.env) {
   const parsed = Number(env.ORKESTR_CODEX_APP_SERVER_ACTIVE_TURN_RETRY_MS || 15000);
   return Number.isFinite(parsed) ? Math.max(250, parsed) : 15000;
@@ -228,7 +237,7 @@ export async function startCodexAppServerThread(thread, env = process.env) {
     }),
   }, env);
   await appendEvent({ type: "codex_app_server_thread_started", threadId: thread.id, codexThreadId: codexId }, env).catch(() => {});
-  return { thread: updated, codexThread, client };
+  return withInternalClient({ thread: updated, codexThread }, client);
 }
 
 export async function resumeCodexAppServerThread(thread, env = process.env) {
@@ -317,7 +326,7 @@ export async function resumeCodexAppServerThread(thread, env = process.env) {
       contained: containedMetadata.containedCodexIsolated === true,
     }),
   }, env);
-  return { thread: updated, codexThread, client, status: await codexAppServerThreadStatus(updated, env) };
+  return withInternalClient({ thread: updated, codexThread, status: await codexAppServerThreadStatus(updated, env) }, client);
 }
 
 export async function interruptCodexAppServerThread(thread, env = process.env) {

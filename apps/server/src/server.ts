@@ -359,6 +359,9 @@ function createWhatsAppDeliveryScheduler(env = process.env) {
       const reason = String(failure?.error || failure?.reason || failure?.message || "").toLowerCase();
       return reason.includes("not_ready") ||
         reason.includes("bridge_not_ready") ||
+        reason.includes("detached frame") ||
+        reason.includes("target closed") ||
+        reason.includes("session closed") ||
         reason.includes("fetch failed") ||
         reason.includes("econnrefused") ||
         reason.includes("timeout");
