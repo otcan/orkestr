@@ -171,6 +171,15 @@ function responseFunctionCalls(response = {}) {
   return (Array.isArray(response.output) ? response.output : []).filter((item) => item?.type === "function_call" && clean(item.name));
 }
 
+function responseFunctionCallInputItems(response = {}) {
+  return responseFunctionCalls(response).map((item) => ({
+    type: "function_call",
+    name: item.name,
+    arguments: item.arguments || "{}",
+    call_id: item.call_id,
+  }));
+}
+
 function messageInputItem(message = {}) {
   return {
     role: lower(message.role) === "assistant" ? "assistant" : "user",
@@ -466,7 +475,7 @@ async function runTenantApiAgentResponse({ thread, messages, message, env, fetch
   const calls = responseFunctionCalls(first);
   if (!calls.length) return { response: first, text: responseText(first) };
 
-  const toolInput = [...input, ...(Array.isArray(first.output) ? first.output : [])];
+  const toolInput = [...input, ...responseFunctionCallInputItems(first)];
   for (const call of calls.slice(0, 3)) {
     let output = {};
     try {

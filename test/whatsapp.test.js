@@ -48,6 +48,11 @@ function testDeliveryTextKey(chatId, text) {
     .digest("hex");
 }
 
+function testFinalDeliveryTextKey(chatId, message, text) {
+  const turnKey = String(message?.parentMessageId || message?.id || "").trim();
+  return testDeliveryTextKey(chatId, `${turnKey}\n${text}`);
+}
+
 function testDeliveryClaimKey({ accountId = "", chatId = "", textKey = "" } = {}) {
   return crypto
     .createHash("sha256")
@@ -1087,7 +1092,8 @@ test("whatsapp delivery skips outbound replies while an active persisted claim e
   await runNextAgentMessage("agent-claim-active", { executorId: "noop" }, env);
 
   const text = "No-op executor received 7 characters.";
-  const textKey = testDeliveryTextKey("chat-claim-active", text);
+  const reply = (await listAgentMessages("agent-claim-active", env)).find((message) => message.role === "assistant");
+  const textKey = testFinalDeliveryTextKey("chat-claim-active", reply, text);
   const now = Date.now();
   await writeTestDeliveryClaim(home, {
     accountId: "main",
@@ -1120,7 +1126,8 @@ test("whatsapp delivery expires stale outbound claims before sending", async () 
   await runNextAgentMessage("agent-claim-stale", { executorId: "noop" }, env);
 
   const text = "No-op executor received 7 characters.";
-  const textKey = testDeliveryTextKey("chat-claim-stale", text);
+  const reply = (await listAgentMessages("agent-claim-stale", env)).find((message) => message.role === "assistant");
+  const textKey = testFinalDeliveryTextKey("chat-claim-stale", reply, text);
   const old = Date.now() - 60_000;
   const { filePath } = await writeTestDeliveryClaim(home, {
     accountId: "main",

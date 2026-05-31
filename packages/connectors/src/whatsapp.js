@@ -2172,7 +2172,8 @@ async function deliverWhatsAppRepliesOnce(env = process.env, fetchImpl = fetch) 
         continue;
       }
       const attachmentKey = attachments.map(attachmentDeliveryKey).filter(Boolean).join("\n");
-      const textKey = deliveryTextKey(chatId, attachmentKey ? `${text}\nattachments:\n${attachmentKey}` : text);
+      const replyTurnKey = pickString(message.parentMessageId, message.id);
+      const textKey = deliveryTextKey(chatId, attachmentKey ? `${replyTurnKey}\n${text}\nattachments:\n${attachmentKey}` : `${replyTurnKey}\n${text}`);
       if (deliveredTextKeys.has(textKey) || batchTextKeys.has(textKey)) {
         skipped.push({ agentId, threadId, messageId: message.id, reason: "duplicate_text" });
         continue;
