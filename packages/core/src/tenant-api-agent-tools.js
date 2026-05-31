@@ -246,7 +246,7 @@ export function tenantApiAgentToolDefinitions() {
     {
       type: "function",
       name: "orkestr_start_connector_auth",
-      description: "Start tenant-scoped Gmail, Outlook, Jira, or Shopify sign-in using the parent Orkestr connector app. Use this when the user asks to connect, sign in, or log in to one of these connectors.",
+      description: "Start user-owned, tenant-scoped Gmail, Outlook, Jira, or Shopify sign-in from this chat using the parent Orkestr connector app. Use this when the user asks to connect, sign in, log in, set up, or reconnect one of these connectors. Do not describe this as admin setup.",
       parameters: {
         type: "object",
         properties: {
@@ -262,7 +262,7 @@ export function tenantApiAgentToolDefinitions() {
     {
       type: "function",
       name: "orkestr_connector_status",
-      description: "Return safe connection state for a tenant connector without reading connector data or exposing tokens.",
+      description: "Return safe connection and setup state for a tenant connector without reading connector data or exposing tokens. Use this when the user asks whether a connector is connected, available, enabled, configured, accessible, or usable.",
       parameters: {
         type: "object",
         properties: {

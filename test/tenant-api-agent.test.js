@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { recordCreditUsage, creditUsageSummary } from "../packages/core/src/credit-usage.js";
-import { processApiAgentThreadInput, threadUsesApiAgent } from "../packages/core/src/tenant-api-agent.js";
+import { buildTenantApiAgentInstructions, processApiAgentThreadInput, threadUsesApiAgent } from "../packages/core/src/tenant-api-agent.js";
 import { runTenantApiAgentTool } from "../packages/core/src/tenant-api-agent-tools.js";
 import { userPrincipal } from "../packages/core/src/principal.js";
 import { appendThreadMessage, createThread, enqueueThreadInputForPrincipal, getThread, listThreadMessages } from "../packages/core/src/threads.js";
@@ -283,8 +283,29 @@ test("tenant api-agent explains missing Gmail capability without a generic safet
   assert.doesNotMatch(assistant.text, /safely handle|private connector|account identity/i);
 });
 
-test("tenant api-agent routes missing connector requests through OpenAI", async () => {
-  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-api-agent-gmail-missing-"));
+test("tenant api-agent prompt treats connector setup as user-owned", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-api-agent-setup-prompt-"));
+  const env = await allowSanitizerEnv(home);
+  await createThread({
+    id: "otcantest-setup-prompt",
+    ownerUserId: "otcan",
+    name: "otcantest",
+    runtimeKind: "api-agent",
+    executor: { type: "api-agent", metadata: { runtimeKind: "api-agent" } },
+    binding: { connector: "whatsapp", chatId: "chat-otcan", outboundAccountId: "wa-1" },
+  }, env);
+
+  const thread = await getThread("otcantest-setup-prompt", env);
+  const instructions = await buildTenantApiAgentInstructions(thread, [], env);
+
+  assert.match(instructions, /Connector setup is user-owned by default/i);
+  assert.match(instructions, /you can help set it up here/i);
+  assert.match(instructions, /do not offer an admin note/i);
+  assert.doesNotMatch(instructions, /unless host-level app credentials are missing/i);
+});
+
+test("tenant api-agent routes missing Gmail status through OpenAI with user-owned setup guidance", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-api-agent-gmail-status-"));
   const env = await allowSanitizerEnv(home);
   await writeConnectorConfig("gmail", {
     clientId: "gmail-client",
@@ -300,7 +321,7 @@ test("tenant api-agent routes missing connector requests through OpenAI", async 
     binding: { connector: "whatsapp", chatId: "chat-otcan", outboundAccountId: "wa-1" },
   }, env);
   await enqueueThreadInputForPrincipal("otcantest-gmail-missing", {
-    text: "Can you check my gmail?",
+    text: "Do you have access to my Gmail?",
     source: "whatsapp_inbound",
     connector: "whatsapp",
     chatId: "chat-otcan",
@@ -311,12 +332,30 @@ test("tenant api-agent routes missing connector requests through OpenAI", async 
   const result = await processApiAgentThreadInput("otcantest-gmail-missing", env, {
     fetchImpl: async (url, options) => {
       calls.push({ url: String(url), body: JSON.parse(options.body) });
+      if (calls.length === 1) {
+        return response({
+          id: "resp_api_agent_gmail_status_1",
+          model: "gpt-5-mini",
+          output_text: "",
+          output: [{
+            type: "function_call",
+            name: "orkestr_connector_status",
+            call_id: "call_gmail_status",
+            arguments: JSON.stringify({ provider: "gmail" }),
+          }],
+          usage: { input_tokens: 180, output_tokens: 10 },
+        });
+      }
+      const toolOutput = JSON.parse(calls[1].body.input.at(-1).output);
+      assert.equal(toolOutput.provider, "gmail");
+      assert.equal(toolOutput.state, "not_connected");
+      assert.equal(toolOutput.parentConnector.parentAppConfigured, true);
       return response({
-        id: "resp_api_agent_gmail_missing",
+        id: "resp_api_agent_gmail_status_2",
         model: "gpt-5-mini",
-        output_text: "Gmail is not connected or enabled for this chat yet. I can start Gmail sign-in if you want to connect it.",
+        output_text: "Not yet. Gmail is not connected for this chat. I can help you set it up here if you ask me to connect Gmail.",
         output: [],
-        usage: { input_tokens: 140, output_tokens: 18 },
+        usage: { input_tokens: 220, output_tokens: 18 },
       });
     },
   });
@@ -324,15 +363,15 @@ test("tenant api-agent routes missing connector requests through OpenAI", async 
   const assistant = messages.find((message) => message.role === "assistant");
 
   assert.equal(result.ok, true);
-  assert.equal(calls.length, 1);
-  assert.equal(calls[0].body.tools.some((tool) => tool.name === "orkestr_start_connector_auth"), true);
-  assert.match(assistant.text, /Gmail is not connected or enabled for this chat yet/i);
-  assert.match(assistant.text, /start Gmail sign-in/i);
-  assert.doesNotMatch(assistant.text, /Orkestr UI|Orkestr admin|Orkestr administrator/i);
-  assert.doesNotMatch(assistant.text, /checked/i);
+  assert.equal(calls.length, 2);
+  assert.equal(calls[0].body.tools.some((tool) => tool.name === "orkestr_connector_status"), true);
+  assert.match(calls[0].body.instructions, /Connector setup is user-owned by default/i);
+  assert.match(assistant.text, /not connected for this chat/i);
+  assert.match(assistant.text, /set it up here/i);
+  assert.doesNotMatch(assistant.text, /Orkestr UI|Orkestr admin|Orkestr administrator|admin note|send your admin/i);
 });
 
-test("tenant api-agent starts Gmail auth deterministically from a connector follow-up", async () => {
+test("tenant api-agent lets OpenAI start Gmail auth from a connector follow-up", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-api-agent-gmail-followup-auth-"));
   const env = await allowSanitizerEnv(home, {
     GMAIL_OAUTH_CLIENT_ID: "gmail-client-env",
@@ -369,8 +408,30 @@ test("tenant api-agent starts Gmail auth deterministically from a connector foll
   }, userPrincipal({ id: "otcan", role: "user" }), env);
 
   const result = await processApiAgentThreadInput("otcantest-gmail-followup-auth", env, {
-    fetchImpl: async () => {
-      throw new Error("openai should not be called for deterministic Gmail auth follow-up");
+    fetchImpl: async (_url, options) => {
+      const body = JSON.parse(options.body);
+      if (body.input.some((item) => item.type === "function_call_output")) {
+        const toolOutput = JSON.parse(body.input.at(-1).output);
+        return response({
+          id: "resp_gmail_followup_auth_2",
+          model: "gpt-5-mini",
+          output_text: `Open this Gmail sign-in link: ${toolOutput.authorizeUrl}`,
+          output: [],
+          usage: { input_tokens: 220, output_tokens: 8 },
+        });
+      }
+      return response({
+        id: "resp_gmail_followup_auth_1",
+        model: "gpt-5-mini",
+        output_text: "",
+        output: [{
+          type: "function_call",
+          name: "orkestr_start_connector_auth",
+          call_id: "call_gmail_followup_auth",
+          arguments: JSON.stringify({ provider: "gmail", account: "", shop: "" }),
+        }],
+        usage: { input_tokens: 180, output_tokens: 12 },
+      });
     },
   });
   const messages = await listThreadMessages("otcantest-gmail-followup-auth", env);
@@ -385,7 +446,7 @@ test("tenant api-agent starts Gmail auth deterministically from a connector foll
   assert.equal(savedState.userId, "otcan");
 });
 
-test("tenant api-agent gives one clear Gmail config blocker for auth follow-up", async () => {
+test("tenant api-agent lets OpenAI explain missing Gmail app config without admin-note language", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-api-agent-gmail-followup-config-"));
   const env = await allowSanitizerEnv(home);
   await upsertUser({ id: "otcan", role: "user", displayName: "Otcan" }, env);
@@ -418,16 +479,40 @@ test("tenant api-agent gives one clear Gmail config blocker for auth follow-up",
   }, userPrincipal({ id: "otcan", role: "user" }), env);
 
   const result = await processApiAgentThreadInput("otcantest-gmail-followup-config", env, {
-    fetchImpl: async () => {
-      throw new Error("openai should not be called for deterministic Gmail config blocker");
+    fetchImpl: async (_url, options) => {
+      const body = JSON.parse(options.body);
+      if (body.input.some((item) => item.type === "function_call_output")) {
+        const toolOutput = JSON.parse(body.input.at(-1).output);
+        assert.equal(toolOutput.ok, false);
+        assert.equal(toolOutput.error, "gmail_oauth_config_required");
+        return response({
+          id: "resp_gmail_followup_config_2",
+          model: "gpt-5-mini",
+          output_text: "Gmail setup is not available on this Orkestr installation yet.",
+          output: [],
+          usage: { input_tokens: 220, output_tokens: 8 },
+        });
+      }
+      return response({
+        id: "resp_gmail_followup_config_1",
+        model: "gpt-5-mini",
+        output_text: "",
+        output: [{
+          type: "function_call",
+          name: "orkestr_start_connector_auth",
+          call_id: "call_gmail_followup_config",
+          arguments: JSON.stringify({ provider: "gmail", account: "", shop: "" }),
+        }],
+        usage: { input_tokens: 180, output_tokens: 12 },
+      });
     },
   });
   const messages = await listThreadMessages("otcantest-gmail-followup-config", env);
   const assistant = messages.filter((message) => message.role === "assistant").at(-1);
 
   assert.equal(result.ok, true);
-  assert.equal(assistant.text, "Gmail sign-in is not available on this Orkestr installation yet because the Gmail app credentials are not configured.");
-  assert.doesNotMatch(assistant.text, /Ask me to connect Gmail|platform level|not right now/i);
+  assert.equal(assistant.text, "Gmail setup is not available on this Orkestr installation yet.");
+  assert.doesNotMatch(assistant.text, /Ask me to connect Gmail|platform level|not right now|admin note|send your admin/i);
 });
 
 test("tenant api-agent drains queued tenant messages while it owns the lock", async () => {
@@ -782,7 +867,7 @@ test("tenant api-agent creates user skills through sanitized chat tools", async 
   assert.equal(sanitizerActions.includes("api-agent.tool.orkestr_create_skill"), true);
 });
 
-test("tenant api-agent starts explicit Gmail sign-in without an OpenAI round trip", async () => {
+test("tenant api-agent lets OpenAI initiate explicit Gmail sign-in with connector auth tool", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-api-agent-gmail-auth-flow-"));
   const sanitizerLog = path.join(home, "auth-tool-sanitizer.jsonl");
   const script = path.join(home, "auth-tool-sanitizer.mjs");
@@ -830,7 +915,32 @@ test("tenant api-agent starts explicit Gmail sign-in without an OpenAI round tri
   const result = await processApiAgentThreadInput("gmail-auth-chat", env, {
     fetchImpl: async (_url, options) => {
       calls.push(JSON.parse(options.body));
-      throw new Error("openai should not be called for explicit Gmail sign-in");
+      if (calls.length === 1) {
+        return response({
+          id: "resp_gmail_auth_tool_1",
+          model: "gpt-5-mini",
+          output_text: "",
+          output: [{
+            type: "function_call",
+            name: "orkestr_start_connector_auth",
+            call_id: "call_gmail_auth",
+            arguments: JSON.stringify({
+              provider: "gmail",
+              account: "person@example.com",
+              shop: "",
+            }),
+          }],
+          usage: { input_tokens: 180, output_tokens: 12 },
+        });
+      }
+      const toolOutput = JSON.parse(calls[1].input.at(-1).output);
+      return response({
+        id: "resp_gmail_auth_tool_2",
+        model: "gpt-5-mini",
+        output_text: `Open this Gmail sign-in link: ${toolOutput.authorizeUrl}`,
+        output: [],
+        usage: { input_tokens: 220, output_tokens: 8 },
+      });
     },
   });
   const messages = await listThreadMessages("gmail-auth-chat", env);
@@ -843,9 +953,11 @@ test("tenant api-agent starts explicit Gmail sign-in without an OpenAI round tri
     .map((line) => JSON.parse(line).action);
 
   assert.equal(result.ok, true);
-  assert.equal(result.processedCount, 1);
-  assert.equal(calls.length, 0);
+  assert.equal(calls.length, 2);
+  assert.equal(calls[0].tools.some((tool) => tool.name === "orkestr_start_connector_auth"), true);
+  assert.match(calls[0].instructions, /Connector setup is user-owned by default/i);
   assert.match(assistant.text, /accounts\.google\.com/i);
+  assert.doesNotMatch(assistant.text, /admin note|send your admin/i);
   assert.equal(savedState.userId, "otcan");
   assert.equal(savedState.account, "person@example.com");
   assert.equal(identities.some((identity) => identity.provider === "gmail" && identity.externalId === "person@example.com"), true);

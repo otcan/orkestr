@@ -58,11 +58,13 @@ test("LLM sanitizer prompts route same-user missing connector requests without g
   assert.match(codexPrompt, /allow a same-user request to use Gmail, Outlook, LinkedIn, files, browser desktops, or another connector even when the capability is false/i);
   assert.match(codexPrompt, /start a user-scoped connector sign-in flow/i);
   assert.match(codexPrompt, /Allow same-user api-agent\.tool\.orkestr_start_connector_auth/i);
+  assert.match(codexPrompt, /Allow same-user api-agent\.tool\.orkestr_connector_status/i);
   assert.match(codexPrompt, /This input routing step does not grant data access/i);
   assert.match(codexPrompt, /execute a tool or perform actual data access/i);
   assert.match(openAiPrompt, /allow same-user requests to use a connector even when that capability is missing/i);
   assert.match(openAiPrompt, /start a user-scoped connector sign-in flow/i);
   assert.match(openAiPrompt, /Allow same-user api-agent\.tool\.orkestr_start_connector_auth/i);
+  assert.match(openAiPrompt, /Allow same-user api-agent\.tool\.orkestr_connector_status/i);
   assert.match(openAiPrompt, /Do not treat this as permission for connector data access/i);
   assert.match(openAiPrompt, /Deny tool execution or actual connector data access/i);
 });

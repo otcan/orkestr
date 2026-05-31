@@ -4,11 +4,6 @@ import { isAdminPrincipal } from "./policy.js";
 import { adminPrincipal, userPrincipal } from "./principal.js";
 import { assertCreditBudget, estimateOpenAICost, recordCreditUsage } from "./credit-usage.js";
 import { startCodexAppServerThread, threadUsesCodexAppServer } from "./codex-app-server.js";
-import {
-  connectorAuthRequestFromMessages,
-  formatConnectorAuthError,
-  formatConnectorAuthResult,
-} from "./tenant-api-agent-connector-intents.js";
 import { tenantApiAgentToolDefinitions, runTenantApiAgentTool } from "./tenant-api-agent-tools.js";
 import { threadRequiresTenantIsolation } from "./tenant-policy.js";
 import { appendThreadMessage, getThread, listThreadMessages, updateThread, updateThreadMessage } from "./threads.js";
@@ -153,13 +148,6 @@ function responseText(response = {}) {
 
 function normalizeTenantApiAgentText(text = "") {
   const original = clean(text);
-  if (
-    /gmail/i.test(original) &&
-    /(?:platform|installation|app credentials|oauth)/i.test(original) &&
-    /(?:not configured|required|missing|not available)/i.test(original)
-  ) {
-    return "Gmail sign-in is not available on this Orkestr installation yet because the Gmail app credentials are not configured.";
-  }
   if (!/(Orkestr UI|Orkestr admin|Orkestr administrator)/i.test(original)) return original;
   const setupTarget = /gmail/i.test(original)
     ? "Gmail"
@@ -324,9 +312,11 @@ export async function buildTenantApiAgentInstructions(thread = {}, messages = []
     "You are the user-facing assistant for one Orkestr tenant chat.",
     "Be natural, concise, and helpful. Do not expose Orkestr internals, Codex runtime details, queues, tmux, shell paths, debug strings, or implementation wording unless the user explicitly asks about Orkestr operations.",
     "You are scoped to the tenant in the JSON context below. Do not claim access to files, Gmail, Outlook, LinkedIn, WhatsApp accounts, browser desktops, timers, or other chats unless the provided Orkestr tools or context show them for this tenant.",
-    "Use the provided Orkestr tools for tenant-scoped resources. If the user asks to connect, sign in, check, or disconnect Gmail, Outlook, Jira, or Shopify, use the connector status/auth/disconnect tools and give the returned sign-in instructions.",
-    "If another connector or permission is missing, say plainly what is unavailable in this chat. Do not frame normal user connector setup as an admin task unless host-level app credentials are missing.",
-    "If the user asks to use Gmail, Outlook, LinkedIn, files, or a browser desktop and the matching capability is false in the Tenant context JSON, say plainly that it is not connected or enabled for this chat yet. Do not imply that you checked it.",
+    "Use the provided Orkestr tools for tenant-scoped resources. If the user asks whether Gmail, Outlook, Jira, Shopify, or WhatsApp is connected, available, enabled, or accessible, use the connector status tool before answering.",
+    "If the user asks to connect, sign in, log in, set up, disconnect, or reconnect Gmail, Outlook, Jira, or Shopify, use the connector auth/disconnect tools and give the returned sign-in instructions.",
+    "Connector setup is user-owned by default. When a connector is not connected or a matching capability is false, say that it is not connected for this chat yet and that you can help set it up here.",
+    "Only say setup is unavailable on this Orkestr installation if a tool or Tenant context explicitly reports missing parent app/platform configuration. Even then, do not offer an admin note or tell the user to contact an admin unless the user explicitly asks how to escalate setup.",
+    "If the user asks to use Gmail, Outlook, LinkedIn, files, or a browser desktop and the matching capability is false in the Tenant context JSON, say plainly that it is not connected or enabled for this chat yet. Do not imply that you checked it unless you used a tool.",
     "Do not tell contained users to open, check, or use the Orkestr UI for connector setup. This chat is the user surface; connector setup should happen through the sign-in instructions you provide in chat when parent app credentials exist.",
     "When asked what you can do or what skills you have, list only capabilities that are true in the Tenant context JSON and skills whose enabled field is true. Do not treat registryEnabled as availability; registryEnabled only means the user has not disabled the skill.",
     "Skills are unique per user and are described by the skill records in the Tenant context. Do not force provider categories, goals, or attachment models onto them; preserve the user's wording.",
@@ -453,49 +443,6 @@ async function handleCodexEscalation(thread, message, env = process.env) {
   await startCodexAppServerThread(updated, env).catch(() => null);
   await appendEvent({ type: "api_agent_codex_escalated", threadId: thread.id, messageId: message.id, ownerUserId: threadOwnerUserId(thread, env) }, env).catch(() => {});
   return { escalated: true, thread: updated };
-}
-
-async function maybeRunConnectorAuthRequest({
-  thread,
-  messages,
-  message,
-  principal,
-  capabilities,
-  env = process.env,
-  fetchImpl = fetch,
-}) {
-  const request = connectorAuthRequestFromMessages(message, messages);
-  if (!request) return null;
-  const args = {
-    provider: request.provider,
-    account: request.account || "",
-    shop: request.shop || "",
-  };
-  try {
-    await assertSanitizedAction({
-      action: "api-agent.tool.orkestr_start_connector_auth",
-      principal,
-      resource: {
-        type: "thread",
-        id: thread.id,
-        ownerUserId: threadOwnerUserId(thread, env),
-        capabilities,
-      },
-      input: { tool: "orkestr_start_connector_auth", args },
-    }, env);
-    const result = await runTenantApiAgentTool("orkestr_start_connector_auth", args, { principal, thread, fetchImpl }, env);
-    return {
-      provider: request.provider,
-      result,
-      text: formatConnectorAuthResult(request.provider, result),
-    };
-  } catch (error) {
-    return {
-      provider: request.provider,
-      error,
-      text: error?.sanitizer ? userSafeApiAgentError(error) : formatConnectorAuthError(request.provider, error),
-    };
-  }
 }
 
 async function runTenantApiAgentResponse({ thread, messages, message, env, fetchImpl }) {
@@ -698,27 +645,6 @@ async function processNextApiAgentMessage(thread, env = process.env, options = {
     source: "api-agent",
   }, env).catch(() => {});
   const latestMessages = await listThreadMessages(thread.id, env);
-  const connectorAuth = await maybeRunConnectorAuthRequest({
-    thread,
-    messages: latestMessages,
-    message,
-    principal,
-    capabilities,
-    env,
-    fetchImpl: options.fetchImpl || fetch,
-  });
-  if (connectorAuth) {
-    return completeApiAgentMessage(thread, message, connectorAuth.text, env, {
-      observedVia: "api_agent_connector_auth",
-      eventType: "api_agent_connector_auth_completed",
-      event: {
-        provider: connectorAuth.provider,
-        state: connectorAuth.result?.state || "",
-        ok: connectorAuth.error ? false : true,
-        error: clean(connectorAuth.error?.message || ""),
-      },
-    });
-  }
   const result = await runTenantApiAgentResponse({
     thread,
     messages: latestMessages,
