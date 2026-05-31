@@ -2180,6 +2180,63 @@ test("Codex app-server history sync adopts native turns without duplicating Orke
   }
 });
 
+test("Codex app-server history sync clears active turns when the final answer is imported", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-codex-app-server-sync-complete-"));
+  const fake = await createFakeCodex(home);
+  const env = {
+    ORKESTR_HOME: path.join(home, "orkestr"),
+    HOME: path.join(home, "runtime-home"),
+    PATH: `${fake.bin}${path.delimiter}${process.env.PATH || ""}`,
+    FAKE_CODEX_STATE: fake.stateFile,
+    ORKESTR_CODEX_APP_SERVER_HISTORY_SYNC_INTERVAL_MS: "0",
+  };
+  try {
+    const thread = await createThread({ id: "app-server-sync-complete-thread", name: "Sync Complete Thread", cwd: home, executorId: "codex", executor: { type: "codex" } }, env);
+    const started = await startCodexAppServerThread(thread, env);
+    const codexId = started.thread.executor.codexThreadId;
+    const activeTurnId = "019e0151-8a98-7cd4-af9c-254e13705e67";
+    await updateThread(started.thread.id, {
+      state: "working",
+      runtime: {
+        ...(started.thread.runtime || {}),
+        runtimeKind: "codex-app-server",
+        state: "working",
+        activeTurnId,
+        codexStatus: { type: "active", activeFlags: ["running"] },
+      },
+    }, env);
+
+    const state = JSON.parse(await fs.readFile(fake.stateFile, "utf8"));
+    const codexThread = state.threads.find((item) => item.id === codexId);
+    codexThread.turns.push({
+      id: activeTurnId,
+      threadId: codexId,
+      status: "inProgress",
+      items: [
+        { type: "userMessage", id: "sync-complete-user", content: [{ type: "text", text: "finish from native history" }] },
+        { type: "agentMessage", id: "sync-complete-agent", text: "history imported final", phase: "final_answer" },
+      ],
+    });
+    await fs.writeFile(fake.stateFile, JSON.stringify(state, null, 2));
+
+    const result = await syncCodexAppServerThreadMessages(await getThread(started.thread.id, env), env, { force: true });
+    const updated = await getThread(started.thread.id, env);
+    const messages = await listThreadMessages(started.thread.id, env);
+    const final = messages.find((message) => message.text === "history imported final");
+
+    assert.equal(result.completedTurnId, activeTurnId);
+    assert.equal(updated.state, "ready");
+    assert.equal(updated.runtime.state, "ready");
+    assert.equal(updated.runtime.activeTurnId, null);
+    assert.equal(updated.runtime.lastTurnId, activeTurnId);
+    assert.equal(updated.runtime.lastTurnStatus, "completed");
+    assert.equal(final?.source, "codex-app-server-import");
+    assert.equal(final?.codexTurnId, activeTurnId);
+  } finally {
+    stopCodexAppServerClients();
+  }
+});
+
 test("Codex app-server sleep is rejected and reset interrupts active turns", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-codex-app-server-reset-"));
   const fake = await createFakeCodex(home);

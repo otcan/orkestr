@@ -1025,6 +1025,59 @@ function codexAppServerHistorySource(value) {
   return ["codex-app-server", "codex-app-server-import"].includes(clean(value));
 }
 
+function completedCodexTurnStatus(value) {
+  return clean(value).toLowerCase() === "completed";
+}
+
+function finalAnswerHistoryItem(item = {}) {
+  const type = clean(item.type);
+  if (!["agentMessage", "plan", "exitedReviewMode", "contextCompaction"].includes(type)) return false;
+  return clean(itemPhase(item) || "final_answer").toLowerCase() === "final_answer";
+}
+
+function latestCompletedHistoryTurnId(turns = []) {
+  for (const turn of [...turns].reverse()) {
+    const turnId = clean(turn?.id);
+    if (!turnId) continue;
+    if (completedCodexTurnStatus(turn?.status)) return turnId;
+    if ((Array.isArray(turn?.items) ? turn.items : []).some(finalAnswerHistoryItem)) return turnId;
+  }
+  return "";
+}
+
+async function reconcileHydratedCodexTurnCompletion(thread, completedTurnId, env = process.env) {
+  const turnId = clean(completedTurnId);
+  if (!turnId) return false;
+  const activeTurnId = clean(thread?.runtime?.activeTurnId);
+  const threadLooksWorking =
+    clean(thread?.state).toLowerCase() === "working" ||
+    clean(thread?.runtime?.state).toLowerCase() === "working";
+  if (activeTurnId && activeTurnId !== turnId) return false;
+  if (!activeTurnId && !threadLooksWorking) return false;
+  await updateThread(thread.id, {
+    state: "ready",
+    lastError: null,
+    runtime: {
+      ...(thread.runtime || {}),
+      runtimeKind: "codex-app-server",
+      activeTurnId: null,
+      lastTurnId: turnId,
+      lastTurnStatus: "completed",
+      state: "ready",
+      codexStatus: { type: "idle" },
+      updatedAt: nowIso(),
+    },
+  }, env).catch(() => {});
+  await appendTurnLifecycleEvent("completed", {
+    threadId: thread.id,
+    runtimeKind: "codex-app-server",
+    turnId,
+    state: "completed",
+    source: "codex-app-server-history",
+  }, env).catch(() => {});
+  return true;
+}
+
 function duplicateHistoryMatch(existing = {}, input = {}) {
   const existingItemId = clean(existing.codexItemId);
   const inputItemId = clean(input.codexItemId);
@@ -1121,6 +1174,7 @@ export async function hydrateCodexAppServerThreadMessages(thread, codexThread, e
   let count = 0;
   let created = 0;
   let updated = 0;
+  const completedTurnId = latestCompletedHistoryTurnId(turns);
   for (const turn of turns) {
     const turnId = clean(turn.id);
     for (const item of Array.isArray(turn.items) ? turn.items : []) {
@@ -1170,7 +1224,8 @@ export async function hydrateCodexAppServerThreadMessages(thread, codexThread, e
       }
     }
   }
-  return { count, created, updated };
+  const completed = await reconcileHydratedCodexTurnCompletion(thread, completedTurnId, env);
+  return { count, created, updated, completedTurnId: completed ? completedTurnId : null };
 }
 
 export async function compactCodexAppServerThread(thread, env = process.env) {

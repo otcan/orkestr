@@ -34,7 +34,7 @@ import { appendOrUpdateEventMessage, normalizeCodexModel, normalizeReasoningEffo
 import { completeThreadSecurityApproveCommand, threadSecurityApproveChallengeId } from "./security-thread-command.js";
 import { threadUsesContainedUserPolicy } from "./tenant-policy.js";
 import { apiAgentRuntimeStatus, threadUsesApiAgent } from "./tenant-api-agent.js";
-import { turnLifecycleFromRuntimeStatus } from "./turn-lifecycle.js";
+import { appendTurnLifecycleEvent, turnLifecycleFromRuntimeStatus } from "./turn-lifecycle.js";
 import {
   capturePane,
   killTmuxSession,
@@ -3482,7 +3482,7 @@ function shouldSyncDetachedRollout(thread = {}, activeLeaseThreadIds = new Set()
 
 async function appendRolloutMessages({ thread, rolloutPath, body, start, initialScan, env }) {
   const parsed = parseAssistantRolloutMessages(body, thread.id, start);
-  if (!parsed.length) return 0;
+  if (!parsed.length) return { appended: 0, completedTurnId: null };
   const existing = await listThreadMessages(thread.id, env);
   const existingEventKeys = new Set(existing.map(rolloutMessageEventKey));
   const existingTextKeys = new Set(
@@ -3492,6 +3492,7 @@ async function appendRolloutMessages({ thread, rolloutPath, body, start, initial
   );
   const latestExistingMs = Math.max(0, ...existing.map(messageTimeMs).filter(Number.isFinite));
   let appended = 0;
+  let completedTurnId = "";
   const codexId = codexThreadId(thread);
   for (const message of parsed) {
     if (initialScan && latestExistingMs && timestampMs(message.timestamp) <= latestExistingMs + 1000) continue;
@@ -3499,6 +3500,7 @@ async function appendRolloutMessages({ thread, rolloutPath, body, start, initial
     const textKey = rolloutMessageNearTextKey(message);
     if (existingEventKeys.has(eventKey) || existingTextKeys.has(textKey)) continue;
     const whatsappParent = latestWhatsAppInput(existing, message.timestamp, thread);
+    const parentTurnId = String(whatsappParent?.codexTurnId || whatsappParent?.executorTurnId || "").trim();
     await appendThreadMessage(thread.id, {
       role: "assistant",
       source: message.source,
@@ -3518,10 +3520,15 @@ async function appendRolloutMessages({ thread, rolloutPath, body, start, initial
       executorTransport: "cli-rollout",
       executorThreadId: codexId,
       codexThreadId: codexId,
+      codexTurnId: parentTurnId || null,
+      executorTurnId: parentTurnId || null,
     }, env);
     existingEventKeys.add(eventKey);
     existingTextKeys.add(textKey);
     appended += 1;
+    if (String(message.phase || "final_answer").trim().toLowerCase() === "final_answer" && parentTurnId) {
+      completedTurnId = parentTurnId;
+    }
   }
   if (appended > 0) {
     await appendEvent({
@@ -3532,7 +3539,39 @@ async function appendRolloutMessages({ thread, rolloutPath, body, start, initial
       appended,
     }, env).catch(() => {});
   }
-  return appended;
+  return { appended, completedTurnId: completedTurnId || null };
+}
+
+async function reconcileDetachedRolloutCompletion(thread, runtime, completedTurnId, env = process.env) {
+  const turnId = String(completedTurnId || "").trim();
+  if (!turnId) return null;
+  const activeTurnId = String(runtime?.activeTurnId || "").trim();
+  const threadLooksWorking =
+    String(thread?.state || "").trim().toLowerCase() === "working" ||
+    String(runtime?.state || "").trim().toLowerCase() === "working";
+  if (activeTurnId && activeTurnId !== turnId) return null;
+  if (!activeTurnId && !threadLooksWorking) return null;
+  await appendTurnLifecycleEvent("completed", {
+    threadId: thread.id,
+    runtimeKind: "codex-app-server",
+    turnId,
+    state: "completed",
+    source: "codex-rollout",
+  }, env).catch(() => {});
+  return {
+    state: "ready",
+    lastError: null,
+    runtime: {
+      ...runtime,
+      runtimeKind: runtime.runtimeKind || thread.runtimeKind || "codex-app-server",
+      state: "ready",
+      activeTurnId: null,
+      lastTurnId: turnId,
+      lastTurnStatus: "completed",
+      codexStatus: { type: "idle" },
+      updatedAt: nowIso(),
+    },
+  };
 }
 
 async function syncLeaseRollout(lease, env = process.env) {
@@ -3655,6 +3694,7 @@ async function syncDetachedCodexRollouts(activeLeaseThreadIds = new Set(), env =
     const hasStoredOffset = storedPath === rolloutPath && storedOffset > 0;
     const lookbackBytes = rolloutSyncLookbackBytes(env);
     const start = hasStoredOffset ? Math.min(storedOffset, size) : Math.max(0, size - lookbackBytes);
+    let completedTurnId = "";
     if (size > start) {
       const handle = await fs.open(rolloutPath, "r");
       let body = "";
@@ -3665,18 +3705,22 @@ async function syncDetachedCodexRollouts(activeLeaseThreadIds = new Set(), env =
       } finally {
         await handle.close().catch(() => {});
       }
-      appended += await appendRolloutMessages({
+      const projected = await appendRolloutMessages({
         thread: currentThread,
         rolloutPath,
         body,
         start,
         initialScan: !hasStoredOffset,
         env,
-      }).catch(() => 0);
+      }).catch(() => ({ appended: 0, completedTurnId: null }));
+      appended += Number(projected?.appended || 0) || 0;
+      completedTurnId = String(projected?.completedTurnId || "").trim();
     }
+    const completionPatch = await reconcileDetachedRolloutCompletion(currentThread, runtime, completedTurnId, env);
     await updateThread(currentThread.id, {
+      ...(completionPatch || {}),
       runtime: {
-        ...runtime,
+        ...(completionPatch?.runtime || runtime),
         runtimeKind: runtime.runtimeKind || currentThread.runtimeKind || "codex-app-server",
         operatorRolloutPath: rolloutPath,
         operatorRolloutOffset: size,
