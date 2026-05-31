@@ -699,6 +699,7 @@ configure_service_shutdown_timeout() {
   mkdir -p "$dropin_dir"
   cat > "$dropin_dir/45-direct-node.conf" <<EOF
 [Service]
+WorkingDirectory=$current_link
 ExecStart=
 ExecStart=$node_bin dist/server/apps/server/src/server.js
 EOF
