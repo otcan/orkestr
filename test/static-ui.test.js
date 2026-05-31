@@ -420,9 +420,12 @@ test("web shell exposes a user skills management page", async () => {
   assert.match(skillsComponent, /selector: "ork-user-skills-page"/);
   assert.match(skillsComponent, /this\.api\.currentUserSkills\(\)/);
   assert.match(skillsComponent, /enabledSkills\(\): UserSkill\[\]/);
+  assert.match(skillsComponent, /disabledSkills\(\): UserSkill\[\]/);
   assert.match(skillsComponent, /this\.skills\.filter\(\(skill\) => skill\.enabled === true\)/);
-  assert.match(skillsComponent, /this\.api\.updateCurrentUserSkill\(skill\.id, false\)/);
-  assert.match(skillsTemplate, /@for \(skill of enabledSkills\(\); track skill\.id\)/);
+  assert.match(skillsComponent, /this\.api\.updateCurrentUserSkill\(skill\.id, enabled\)/);
+  assert.match(skillsTemplate, /@for \(skill of skills; track skill\.id\)/);
+  assert.match(skillsTemplate, /\(click\)="updateSkill\(skill, true\)"/);
+  assert.match(skillsTemplate, /\(click\)="updateSkill\(skill, false\)"/);
   assert.match(api, /interface UserSkill/);
   assert.match(api, /currentUserSkills\(\)/);
   assert.match(api, /userSkills\(id: string\)/);

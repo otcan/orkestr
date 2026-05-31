@@ -577,7 +577,9 @@ test("WhatsApp-bound tenant thread exposes scoped WhatsApp capability without te
   assert.equal(capabilities.whatsapp, true);
   assert.equal(capabilities.scopedConnectors.whatsapp, true);
   assert.equal(capabilities.gmail, false);
-  assert.equal(capabilities.linkedin, false);
+  assert.equal(capabilities.linkedin, true);
+  assert.equal(capabilities.desktopLeases, true);
+  assert.equal(capabilities.scopedConnectors.linkedin, false);
 });
 
 test("LLM sanitizer is fail-closed when no provider is configured", async () => {
@@ -1075,6 +1077,12 @@ test("user management API is admin-only and can pair a browser to a managed user
       body: JSON.stringify({ enabled: false }),
     }));
     assert.equal(selfSkillUpdate.skill.enabled, false);
+    const selfLinkedInEnable = await read(await fetch(`${baseUrl}/api/users/me/skills/linkedin`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json", cookie: userCookie },
+      body: JSON.stringify({ enabled: true }),
+    }));
+    assert.equal(selfLinkedInEnable.skill.enabled, true);
     const crossSkillsResponse = await fetch(`${baseUrl}/api/users/bob-example.test/skills`, { headers: { cookie: userCookie } });
     const crossSkills = await read(crossSkillsResponse);
     assert.equal(crossSkillsResponse.status, 403);

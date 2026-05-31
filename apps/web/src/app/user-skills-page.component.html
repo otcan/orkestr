@@ -14,7 +14,7 @@
   }
 
   <div class="skills-grid">
-    @for (skill of enabledSkills(); track skill.id) {
+    @for (skill of skills; track skill.id) {
       <article class="skill-card">
         <div class="desktop-head">
           <div>
@@ -22,7 +22,7 @@
             <small>{{ skill.category }}</small>
           </div>
           <div class="desktop-pills">
-            <span class="live">Enabled</span>
+            <span [class]="skillStateClass(skill)">{{ skillStateLabel(skill) }}</span>
           </div>
         </div>
         <p>{{ skill.summary }}</p>
@@ -31,13 +31,19 @@
           <span>{{ scopeLabel(skill) }}</span>
         </div>
         <div class="settings-actions">
-          <button class="secondary danger-soft" type="button" (click)="disableSkill(skill)" [disabled]="skillBusy(skill)">
-            Disable
-          </button>
+          @if (skill.enabled) {
+            <button class="secondary danger-soft" type="button" (click)="updateSkill(skill, false)" [disabled]="skillBusy(skill)">
+              Disable
+            </button>
+          } @else {
+            <button class="primary" type="button" (click)="updateSkill(skill, true)" [disabled]="skillBusy(skill)">
+              Enable
+            </button>
+          }
         </div>
       </article>
     } @empty {
-      <p class="empty">{{ busy ? "Loading skills..." : "No skills enabled." }}</p>
+      <p class="empty">{{ busy ? "Loading skills..." : "No skills available." }}</p>
     }
   </div>
 </section>

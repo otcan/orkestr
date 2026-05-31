@@ -269,6 +269,23 @@ function tenantConnectorState(tenantVm = null) {
   };
 }
 
+function configuredVisibleDesktopSlugs(env = process.env) {
+  const raw = clean(env.ORKESTR_BROWSER_VISIBLE_SLUGS || env.ORKESTR_OPS_DESKTOP_SLUGS);
+  if (!raw) return null;
+  const slugs = raw.split(/[\s,]+/g).map((slug) => clean(slug)).filter(Boolean);
+  return slugs.length ? new Set(slugs) : null;
+}
+
+function userDesktopSkillAvailable(skillId = "", snapshot = {}, env = process.env) {
+  if (snapshot.userFound !== true) return false;
+  const enabled = clean(env.ORKESTR_USER_DESKTOPS_ENABLED).toLowerCase();
+  if (["0", "false", "no"].includes(enabled)) return false;
+  const visible = configuredVisibleDesktopSlugs(env);
+  if (!visible) return true;
+  if (skillId === "linkedin") return visible.has("linkedin");
+  return visible.has(skillId);
+}
+
 function publicSkillList(skills = []) {
   return skills.map((skill) => ({
     id: skill.id,
@@ -293,7 +310,7 @@ export async function userScopedCapabilityHints({ userId = "", thread = null } =
   };
   const enabled = (skillId) => snapshot.skillEnabled[skillId] === true;
   const whatsappAvailable = scopedConnectors.whatsapp;
-  const linkedinAvailable = scopedConnectors.linkedin;
+  const linkedinAvailable = scopedConnectors.linkedin || userDesktopSkillAvailable("linkedin", snapshot, env);
 
   return {
     threads: true,

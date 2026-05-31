@@ -175,9 +175,9 @@ function publicTenantCapabilities(capabilities = {}) {
     disabledSkills: Array.isArray(capabilities.disabledSkills) ? [...capabilities.disabledSkills] : [],
     scopedConnectors: {
       whatsapp: scopedConnectors.whatsapp === true || capabilities.whatsapp === true,
-      gmail: scopedConnectors.gmail === true || capabilities.gmail === true,
-      outlook: scopedConnectors.outlook === true || capabilities.outlook === true,
-      linkedin: scopedConnectors.linkedin === true || capabilities.linkedin === true,
+      gmail: scopedConnectors.gmail === true,
+      outlook: scopedConnectors.outlook === true,
+      linkedin: scopedConnectors.linkedin === true,
     },
   };
 }

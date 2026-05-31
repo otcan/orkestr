@@ -36,14 +36,18 @@ export class UserSkillsPageComponent implements OnInit {
     return this.skills.filter((skill) => skill.enabled === true);
   }
 
-  async disableSkill(skill: UserSkill): Promise<void> {
+  disabledSkills(): UserSkill[] {
+    return this.skills.filter((skill) => skill.enabled !== true);
+  }
+
+  async updateSkill(skill: UserSkill, enabled: boolean): Promise<void> {
     if (!skill.id || this.busy) return;
     this.busy = true;
     this.activeSkillId = skill.id;
     try {
-      await firstValueFrom(this.api.updateCurrentUserSkill(skill.id, false));
-      this.skills = this.skills.map((item) => item.id === skill.id ? { ...item, enabled: false } : item);
-      this.notice = `${skill.label || skill.id} disabled.`;
+      const payload = await firstValueFrom(this.api.updateCurrentUserSkill(skill.id, enabled));
+      this.skills = this.skills.map((item) => item.id === skill.id ? { ...item, ...(payload.skill || {}), enabled } : item);
+      this.notice = `${skill.label || skill.id} ${enabled ? "enabled" : "disabled"}.`;
       this.error = "";
     } catch (error) {
       this.error = this.errorText(error);
@@ -67,6 +71,14 @@ export class UserSkillsPageComponent implements OnInit {
 
   skillBusy(skill: UserSkill): boolean {
     return this.busy && (!this.activeSkillId || this.activeSkillId === skill.id);
+  }
+
+  skillStateLabel(skill: UserSkill): string {
+    return skill.enabled ? "Enabled" : "Available";
+  }
+
+  skillStateClass(skill: UserSkill): string {
+    return skill.enabled ? "live" : "ready";
   }
 
   private errorText(error: unknown): string {
