@@ -1197,7 +1197,7 @@ ORKESTR_PORT=$port
 ORKESTR_AUTH_REQUIRED=${ORKESTR_AUTH_REQUIRED:-1}
 ORKESTR_COOKIE_SECURE=${ORKESTR_COOKIE_SECURE:-0}
 ORKESTR_PUBLIC_HTTPS_URL=${ORKESTR_PUBLIC_HTTPS_URL:-}
-# Public OAuth broker base for external users, for example https://connect.orkestr.app.
+# Public OAuth broker base for external users, for example https://connect.example.com.
 # When set, OAuth callbacks use this public base instead of the private Orkestr UI URL.
 ORKESTR_CONNECT_PUBLIC_URL=${ORKESTR_CONNECT_PUBLIC_URL:-}
 ORKESTR_TAILSCALE_HTTPS_NAME=${ORKESTR_TAILSCALE_HTTPS_NAME:-}

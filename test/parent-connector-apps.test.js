@@ -105,10 +105,10 @@ test("OAuth public broker base overrides stale persisted connector redirects", (
     clientSecret: "gmail-secret",
     redirectUri: "https://private.example.test/oauth/gmail/callback",
   }, {
-    ORKESTR_CONNECT_PUBLIC_URL: "https://connect.orkestr.app/",
+    ORKESTR_CONNECT_PUBLIC_URL: "https://connect.example.com/",
   });
 
-  assert.equal(runtime.redirectUri, "https://connect.orkestr.app/oauth/gmail/callback");
+  assert.equal(runtime.redirectUri, "https://connect.example.com/oauth/gmail/callback");
 });
 
 test("provider-specific OAuth redirect env wins over the public broker base", () => {
@@ -117,7 +117,7 @@ test("provider-specific OAuth redirect env wins over the public broker base", ()
     clientSecret: "gmail-secret",
     redirectUri: "https://private.example.test/oauth/gmail/callback",
   }, {
-    ORKESTR_CONNECT_PUBLIC_URL: "https://connect.orkestr.app/",
+    ORKESTR_CONNECT_PUBLIC_URL: "https://connect.example.com/",
     GMAIL_OAUTH_REDIRECT_URI: "https://gmail.example.test/oauth/gmail/callback",
   });
 

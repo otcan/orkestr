@@ -107,10 +107,10 @@ LinkedIn profiles are managed as local virtual browser profiles.
 
 For contained or external users, use a public OAuth broker callback instead of
 the private Orkestr UI hostname. Set `ORKESTR_CONNECT_PUBLIC_URL`, for example
-`https://connect.orkestr.app`, and register this Google redirect URI:
+`https://connect.example.com`, and register this Google redirect URI:
 
 ```text
-https://connect.orkestr.app/oauth/gmail/callback
+https://connect.example.com/oauth/gmail/callback
 ```
 
 The callback endpoint only completes the OAuth exchange. User tokens are still
