@@ -117,6 +117,58 @@ test("tenant api-agent answers non-admin WhatsApp thread without Codex delivery"
   assert.equal(usage.byModel["gpt-5-mini"] > 0, true);
 });
 
+test("tenant api-agent retries stale running messages after a restart", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-api-agent-stale-running-"));
+  const env = await allowSanitizerEnv(home, { ORKESTR_API_AGENT_STALE_RUNNING_MS: "1000" });
+  await createThread({
+    id: "otcantest-stale",
+    ownerUserId: "otcan",
+    name: "otcantest-stale",
+    runtimeKind: "api-agent",
+    executorId: "api-agent",
+    executor: { type: "api-agent", metadata: { runtimeKind: "api-agent" } },
+    binding: { connector: "whatsapp", chatId: "chat-otcan", outboundAccountId: "wa-1" },
+  }, env);
+  const input = await appendThreadMessage("otcantest-stale", {
+    role: "user",
+    source: "whatsapp_inbound",
+    connector: "whatsapp",
+    chatId: "chat-otcan",
+    accountId: "wa-1",
+    text: "What is done?",
+    state: "running",
+    deliveryState: "api_agent_running",
+    observedVia: "api_agent",
+    createdAt: "2026-01-01T00:00:00.000Z",
+    updatedAt: "2026-01-01T00:00:00.000Z",
+  }, env);
+  const calls = [];
+  const result = await processApiAgentThreadInput("otcantest-stale", env, {
+    fetchImpl: async (url, options) => {
+      calls.push({ url: String(url), body: JSON.parse(options.body) });
+      return response({
+        id: "resp_api_agent_stale",
+        model: "gpt-5-mini",
+        output_text: "The previous turn was interrupted before I could answer.",
+        output: [],
+      });
+    },
+  });
+  const messages = await listThreadMessages("otcantest-stale", env);
+  const current = messages.find((message) => message.id === input.id);
+  const assistant = messages.find((message) => message.role === "assistant");
+
+  assert.equal(result.ok, true);
+  assert.equal(calls.length, 1);
+  assert.equal(current.state, "completed");
+  assert.equal(current.deliveryState, "delivered");
+  assert.equal(current.observedVia, "api_agent_response");
+  assert.equal(current.staleDeliveryState, "api_agent_running");
+  assert.equal(current.staleObservedVia, "api_agent");
+  assert.equal(assistant.parentMessageId, input.id);
+  assert.equal(assistant.text, "The previous turn was interrupted before I could answer.");
+});
+
 test("tenant api-agent sanitizer receives scoped WhatsApp capability for api-agent input", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-api-agent-sanitizer-caps-"));
   const script = path.join(home, "capability-sanitizer.mjs");

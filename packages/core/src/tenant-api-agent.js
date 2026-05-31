@@ -516,6 +516,58 @@ function apiAgentBatchLimit(env = process.env) {
   return Number.isFinite(parsed) ? Math.max(1, Math.min(25, Math.floor(parsed))) : 5;
 }
 
+function apiAgentStaleRunningMs(env = process.env) {
+  const parsed = Number(env.ORKESTR_API_AGENT_STALE_RUNNING_MS || 120_000);
+  return Number.isFinite(parsed) ? Math.max(1_000, Math.floor(parsed)) : 120_000;
+}
+
+function messageTimestampMs(message = {}) {
+  const value = message.updatedAt || message.deliveredAt || message.createdAt;
+  const parsed = Date.parse(String(value || ""));
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function staleApiAgentRunningMessage(messages = [], env = process.env) {
+  const threshold = apiAgentStaleRunningMs(env);
+  const now = Date.now();
+  return messages.find((message) => {
+    if (lower(message.role) !== "user" || lower(message.state) !== "running") return false;
+    const deliveryState = lower(message.deliveryState);
+    const observedVia = lower(message.observedVia);
+    if (deliveryState !== "api_agent_running" && observedVia !== "api_agent") return false;
+    const startedAt = messageTimestampMs(message);
+    return !startedAt || now - startedAt >= threshold;
+  }) || null;
+}
+
+async function recoverStaleApiAgentMessage(thread, messages, env = process.env) {
+  const stale = staleApiAgentRunningMessage(messages, env);
+  if (!stale) return null;
+  const recovered = await updateThreadMessage(thread.id, stale.id, {
+    state: "queued",
+    deliveryState: "api_agent_retrying_stale",
+    observedVia: "api_agent_stale_recovery",
+    staleDeliveryState: stale.deliveryState || "",
+    staleObservedVia: stale.observedVia || "",
+    staleRecoveredAt: nowIso(),
+  }, env);
+  await appendTurnLifecycleEvent("queued", {
+    threadId: thread.id,
+    messageId: stale.id,
+    runtimeKind: API_AGENT_RUNTIME_KIND,
+    state: "queued",
+    source: "api-agent",
+    reason: "stale_running_recovery",
+  }, env).catch(() => {});
+  await appendEvent({
+    type: "api_agent_stale_running_recovered",
+    threadId: thread.id,
+    messageId: stale.id,
+    ownerUserId: threadOwnerUserId(thread, env),
+  }, env).catch(() => {});
+  return recovered;
+}
+
 async function failApiAgentMessage(thread, error, env = process.env) {
   const messages = await listThreadMessages(thread.id, env).catch(() => []);
   const message = messages.find((item) => lower(item.role) === "user" && lower(item.state) === "running") ||
@@ -605,7 +657,8 @@ async function completeApiAgentMessage(thread, message, text, env = process.env,
 
 async function processNextApiAgentMessage(thread, env = process.env, options = {}) {
   const messages = await listThreadMessages(thread.id, env);
-  const message = messages.find((item) => lower(item.role) === "user" && ["queued", "pending_delivery"].includes(lower(item.state || "queued")));
+  const message = messages.find((item) => lower(item.role) === "user" && ["queued", "pending_delivery"].includes(lower(item.state || "queued"))) ||
+    await recoverStaleApiAgentMessage(thread, messages, env);
   if (!message) return { ok: true, processed: false, reason: "no_queued_message" };
   if (explicitCodexEscalation(message.text)) {
     return handleCodexEscalation(thread, message, env);
