@@ -118,9 +118,12 @@ export function parentConnectorProvider(id) {
 export function parentConnectorRuntimeConfig(providerId, config = {}, env = process.env) {
   const definition = parentConnectorProvider(providerId);
   if (!definition) return { ...(config || {}) };
-  const runtimeConfig = { ...(definition.defaults || {}), ...(config || {}) };
+  const runtimeConfig = { ...(config || {}) };
   for (const [key, envKeys] of Object.entries(definition.envMappings || {})) {
     runtimeConfig[key] = clean(runtimeConfig[key]) || firstEnv(env, envKeys);
+  }
+  for (const [key, value] of Object.entries(definition.defaults || {})) {
+    runtimeConfig[key] = clean(runtimeConfig[key]) || value;
   }
   return runtimeConfig;
 }

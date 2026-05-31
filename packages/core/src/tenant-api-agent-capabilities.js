@@ -6,8 +6,13 @@ function lower(value) {
   return clean(value).toLowerCase();
 }
 
+function asksToConnect(value = "") {
+  return /\b(connect|sign in|signin|log in|login|authorize|authenticate|link)\b/.test(value);
+}
+
 export function missingTenantCapabilityReply(text = "", capabilities = {}) {
   const value = lower(text);
+  if (asksToConnect(value)) return "";
   if (/\bgmail\b|google mail/.test(value) && capabilities.gmail !== true) {
     return "Gmail is not connected or enabled for this chat yet. You can ask to connect Gmail from this chat after the parent Gmail app is configured.";
   }

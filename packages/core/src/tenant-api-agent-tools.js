@@ -1,5 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { startGmailOAuth } from "../../connectors/src/gmail.js";
+import { startOutlookDeviceOAuth } from "../../connectors/src/outlook.js";
 import { listTimersForPrincipal } from "./timers.js";
 import { whereAmI } from "./whereiam.js";
 import {
@@ -54,6 +56,36 @@ function skillPatchFromArgs(args = {}) {
   if (clean(args.instructions)) patch.instructions = clean(args.instructions);
   if (args.enabled !== undefined) patch.enabled = args.enabled === true || args.enabled === "true";
   return patch;
+}
+
+async function startConnectorAuth(args = {}, principal = {}, env = process.env, fetchImpl = fetch) {
+  const provider = clean(args.provider).toLowerCase();
+  const account = clean(args.account).toLowerCase();
+  if (provider === "gmail") {
+    const oauth = await startGmailOAuth(env, { principal, account });
+    return {
+      ok: true,
+      provider,
+      state: "authorization_url_ready",
+      account: oauth.account || account,
+      authorizeUrl: oauth.authorizeUrl,
+      redirectUri: oauth.redirectUri,
+      message: "Open the Gmail sign-in link and finish Google authorization.",
+    };
+  }
+  if (provider === "outlook") {
+    const oauth = await startOutlookDeviceOAuth(env, { principal, account }, fetchImpl);
+    return {
+      ...oauth,
+      ok: oauth.ok !== false,
+      provider,
+      state: oauth.state || "device_code_pending",
+      message: oauth.message || "Open the Microsoft sign-in link and enter the device code.",
+    };
+  }
+  const error = new Error("unsupported_connector_auth_provider");
+  error.statusCode = 400;
+  throw error;
 }
 
 export function tenantApiAgentToolDefinitions() {
@@ -211,6 +243,21 @@ export function tenantApiAgentToolDefinitions() {
       },
       strict: true,
     },
+    {
+      type: "function",
+      name: "orkestr_start_connector_auth",
+      description: "Start a tenant-scoped Gmail or Outlook sign-in using the parent Orkestr connector app. Use this when the user asks to connect, sign in, or log in to Gmail or Outlook.",
+      parameters: {
+        type: "object",
+        properties: {
+          provider: { type: "string", enum: ["gmail", "outlook"], description: "Connector provider to sign in." },
+          account: { type: "string", description: "Optional email/account hint, or empty string if the user did not provide one." },
+        },
+        required: ["provider", "account"],
+        additionalProperties: false,
+      },
+      strict: true,
+    },
   ];
 }
 
@@ -273,6 +320,9 @@ export async function runTenantApiAgentTool(name = "", args = {}, context = {}, 
   }
   if (tool === "orkestr_list_timers") {
     return { timers: await listTimersForPrincipal(principal, env) };
+  }
+  if (tool === "orkestr_start_connector_auth") {
+    return startConnectorAuth(args, principal, env, context.fetchImpl || fetch);
   }
   const error = new Error("api_agent_tool_not_allowed");
   error.statusCode = 403;

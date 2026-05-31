@@ -12,6 +12,7 @@ import { upsertUser } from "../packages/core/src/users.js";
 import { listFilesForPrincipal } from "../packages/core/src/workspace-files.js";
 import { initialQueueDeliveryState, routeWhatsAppInbound } from "../packages/connectors/src/whatsapp.js";
 import { writeConnectorConfig } from "../packages/storage/src/config.js";
+import { userDataPaths } from "../packages/storage/src/paths.js";
 
 function response(payload, ok = true, status = 200) {
   return {
@@ -723,4 +724,66 @@ test("tenant api-agent records manual usage summaries", async () => {
   assert.equal(summary.count, 1);
   assert.equal(summary.byModel["gpt-5-nano"] > 0, true);
   assert.equal(summary.recent[0].responseId, "resp-1");
+});
+
+test("tenant connector auth tool starts Gmail OAuth from parent app config", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-api-agent-gmail-auth-tool-"));
+  const env = await allowSanitizerEnv(home, {
+    GMAIL_OAUTH_CLIENT_ID: "gmail-client-env",
+    GMAIL_OAUTH_CLIENT_SECRET: "gmail-secret-env",
+    GMAIL_OAUTH_REDIRECT_URI: "https://example.test/oauth/gmail/callback",
+  });
+  const principal = userPrincipal({ id: "otcan", role: "user" });
+
+  const result = await runTenantApiAgentTool("orkestr_start_connector_auth", {
+    provider: "gmail",
+    account: "person@example.com",
+  }, { principal, thread: { id: "otcan" } }, env);
+  const authorizeUrl = new URL(result.authorizeUrl);
+  const savedState = JSON.parse(await fs.readFile(path.join(userDataPaths("otcan", env).oauth, "gmail-state.json"), "utf8"));
+
+  assert.equal(result.ok, true);
+  assert.equal(result.provider, "gmail");
+  assert.equal(authorizeUrl.searchParams.get("client_id"), "gmail-client-env");
+  assert.equal(authorizeUrl.searchParams.get("login_hint"), "person@example.com");
+  assert.equal(savedState.userId, "otcan");
+  assert.equal(savedState.account, "person@example.com");
+});
+
+test("tenant connector auth tool starts Outlook device auth from parent app config", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-api-agent-outlook-auth-tool-"));
+  const env = await allowSanitizerEnv(home, {
+    MICROSOFT_OAUTH_CLIENT_ID: "microsoft-client-env",
+    MICROSOFT_OAUTH_TENANT_ID: "organizations",
+  });
+  const principal = userPrincipal({ id: "otcan", role: "user" });
+
+  const result = await runTenantApiAgentTool("orkestr_start_connector_auth", {
+    provider: "outlook",
+    account: "person@example.com",
+  }, {
+    principal,
+    thread: { id: "otcan" },
+    fetchImpl: async (url, options) => {
+      const requestUrl = new URL(String(url));
+      const body = new URLSearchParams(options.body);
+      assert.equal(requestUrl.pathname, "/organizations/oauth2/v2.0/devicecode");
+      assert.equal(body.get("client_id"), "microsoft-client-env");
+      return response({
+        device_code: "device-code",
+        user_code: "ABCD-EFGH",
+        verification_uri: "https://microsoft.com/devicelogin",
+        verification_uri_complete: "https://microsoft.com/devicelogin?code=ABCD-EFGH",
+        interval: 5,
+        expires_in: 900,
+      });
+    },
+  }, env);
+  const pending = JSON.parse(await fs.readFile(path.join(userDataPaths("otcan", env).secrets, "outlook-device-pending.json"), "utf8"));
+
+  assert.equal(result.ok, true);
+  assert.equal(result.provider, "outlook");
+  assert.equal(result.userCode, "ABCD-EFGH");
+  assert.equal(pending.userId, "otcan");
+  assert.equal(pending.account, "person@example.com");
 });
