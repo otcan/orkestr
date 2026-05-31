@@ -773,6 +773,94 @@ test("Codex app-server starts threads, delivers input, and imports existing thre
   }
 });
 
+test("Codex app-server records bare mode commands locally", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-codex-app-server-mode-command-"));
+  const fake = await createFakeCodex(home);
+  const env = {
+    ORKESTR_HOME: path.join(home, "orkestr"),
+    HOME: path.join(home, "runtime-home"),
+    PATH: `${fake.bin}${path.delimiter}${process.env.PATH || ""}`,
+    FAKE_CODEX_STATE: fake.stateFile,
+  };
+  try {
+    const thread = await createThread({ id: "app-server-mode-command-thread", name: "Mode Command Thread", cwd: home, executorId: "codex", executor: { type: "codex" } }, env);
+    const started = await startCodexAppServerThread(thread, env);
+    const planInput = await enqueueThreadInput(started.thread.id, { text: "/plan", source: "whatsapp_inbound", connector: "whatsapp", chatId: "chat-mode" }, env);
+
+    const planDelivered = await deliverCodexAppServerPendingInputs(await getThread(started.thread.id, env), env);
+    const afterPlan = await getThread(started.thread.id, env);
+    const planMessages = await listThreadMessages(started.thread.id, env);
+    const completedPlan = planMessages.find((message) => message.id === planInput.id);
+    let rawState = JSON.parse(await fs.readFile(fake.stateFile, "utf8"));
+
+    assert.deepEqual(planDelivered, [planInput.id]);
+    assert.equal(afterPlan.codexMode, "plan");
+    assert.equal(afterPlan.codexModeSource, "orkestr-command");
+    assert.equal(completedPlan.state, "completed");
+    assert.equal(completedPlan.deliveryState, "delivered");
+    assert.equal(completedPlan.observedVia, "codex_app_server_mode_recorded");
+    assert.ok(!rawState.calls.some((call) => call.method === "turn/start"));
+
+    const codeInput = await enqueueThreadInput(started.thread.id, { text: "/code", source: "whatsapp_inbound", connector: "whatsapp", chatId: "chat-mode" }, env);
+    const codeDelivered = await deliverCodexAppServerPendingInputs(await getThread(started.thread.id, env), env);
+    const afterCode = await getThread(started.thread.id, env);
+    const codeMessages = await listThreadMessages(started.thread.id, env);
+    const completedCode = codeMessages.find((message) => message.id === codeInput.id);
+    rawState = JSON.parse(await fs.readFile(fake.stateFile, "utf8"));
+
+    assert.deepEqual(codeDelivered, [codeInput.id]);
+    assert.equal(afterCode.codexMode, "code");
+    assert.equal(afterCode.codexModeSource, "orkestr-command");
+    assert.equal(completedCode.state, "completed");
+    assert.equal(completedCode.deliveryState, "delivered");
+    assert.equal(completedCode.observedVia, "codex_app_server_mode_recorded");
+    assert.ok(!rawState.calls.some((call) => call.method === "turn/start"));
+  } finally {
+    stopCodexAppServerClients();
+  }
+});
+
+test("Codex app-server strips mode commands before sending payload turns", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-codex-app-server-mode-payload-"));
+  const fake = await createFakeCodex(home);
+  const env = {
+    ORKESTR_HOME: path.join(home, "orkestr"),
+    HOME: path.join(home, "runtime-home"),
+    PATH: `${fake.bin}${path.delimiter}${process.env.PATH || ""}`,
+    FAKE_CODEX_STATE: fake.stateFile,
+  };
+  try {
+    const thread = await createThread({ id: "app-server-mode-payload-thread", name: "Mode Payload Thread", cwd: home, executorId: "codex", executor: { type: "codex" } }, env);
+    const started = await startCodexAppServerThread(thread, env);
+    const input = await enqueueThreadInput(started.thread.id, {
+      text: "/plan write the migration steps",
+      source: "whatsapp_inbound",
+      connector: "whatsapp",
+      chatId: "chat-mode-payload",
+    }, env);
+
+    const delivered = await deliverCodexAppServerPendingInputs(await getThread(started.thread.id, env), env);
+    const afterDelivery = await getThread(started.thread.id, env);
+    const messages = await listThreadMessages(started.thread.id, env);
+    const completed = messages.find((message) => message.id === input.id);
+    const reply = messages.find((message) => message.source === "codex-app-server" && /Reply to: write the migration steps/.test(message.text));
+    const rawState = JSON.parse(await fs.readFile(fake.stateFile, "utf8"));
+    const turnStart = rawState.calls.find((call) => call.method === "turn/start");
+
+    assert.deepEqual(delivered, [input.id]);
+    assert.equal(afterDelivery.codexMode, "plan");
+    assert.equal(afterDelivery.codexModeSource, "orkestr-command");
+    assert.equal(completed.text, "write the migration steps");
+    assert.equal(completed.state, "completed");
+    assert.equal(completed.deliveryState, "delivered");
+    assert.equal(completed.observedVia, "codex_app_server_turn_start");
+    assert.ok(reply);
+    assert.equal(turnStart.params.input.find((item) => item.type === "text").text, "write the migration steps");
+  } finally {
+    stopCodexAppServerClients();
+  }
+});
+
 test("Codex app-server ignores overlapping delivery attempts for the same queued input", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-codex-app-server-delivery-lock-"));
   const fake = await createFakeCodex(home);

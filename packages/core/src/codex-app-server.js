@@ -84,6 +84,63 @@ function recentDeliveryClaim(message = {}, env = process.env) {
   return Boolean(lastAttemptMs && Date.now() - lastAttemptMs < codexAppServerInputClaimStaleMs(env));
 }
 
+function codexModeSetting(value) {
+  const mode = clean(value).toLowerCase();
+  return mode === "plan" || mode === "code" ? mode : "";
+}
+
+function codexAppServerModePatch(mode, reason = "app-server-local-mode") {
+  const desired = codexModeSetting(mode);
+  if (!desired) return {};
+  return {
+    codexMode: desired,
+    codexModeSource: "orkestr-command",
+    codexModeUpdatedAt: nowIso(),
+    desiredCodexMode: null,
+    desiredCodexModeUpdatedAt: null,
+    codexModeLiveApplied: true,
+    codexModeLiveChanged: true,
+    codexModeApplyReason: reason,
+  };
+}
+
+async function recordCodexAppServerModeCommand(thread, message, mode, env = process.env) {
+  const desired = codexModeSetting(mode);
+  if (!desired) return null;
+  await updateThread(thread.id, codexAppServerModePatch(desired), env).catch(() => {});
+  await appendEvent({
+    type: "thread_codex_mode_command",
+    threadId: thread.id,
+    messageId: message.id,
+    source: message.source || null,
+    mode: desired,
+    applied: true,
+    reason: "app-server-local-mode",
+    observedVia: "codex_app_server_mode_recorded",
+  }, env).catch(() => {});
+  return desired;
+}
+
+async function completeCodexAppServerModeCommand(thread, message, mode, env = process.env) {
+  const desired = await recordCodexAppServerModeCommand(thread, message, mode, env);
+  if (!desired) return null;
+  const updated = await updateThreadMessage(thread.id, message.id, {
+    state: "completed",
+    deliveryState: "delivered",
+    observedVia: "codex_app_server_mode_recorded",
+    deliveredAt: nowIso(),
+    error: null,
+  }, env);
+  return {
+    messageId: updated.id,
+    message: updated,
+    mode: desired,
+    applied: true,
+    deferred: false,
+    runtimeMode: { mode: desired, source: "orkestr-command", reason: "app-server-local-mode" },
+  };
+}
+
 function codexAppServerHistorySyncIntervalMs(env = process.env) {
   const parsed = Number(env.ORKESTR_CODEX_APP_SERVER_HISTORY_SYNC_INTERVAL_MS || 60000);
   return Number.isFinite(parsed) ? Math.max(0, parsed) : 60000;
@@ -647,6 +704,22 @@ async function deliverCodexAppServerPendingInputsUnlocked(thread, env = process.
     return delivered;
   }
   const parsedCommand = parseThreadInputCommand({ text });
+  if (parsedCommand.command === "plan" || parsedCommand.command === "code") {
+    const payloadText = clean(parsedCommand.text);
+    if (!payloadText && !clean(next.promptFile)) {
+      const completed = await completeCodexAppServerModeCommand(thread, next, parsedCommand.command, env);
+      if (completed?.messageId) delivered.push(completed.messageId);
+      return delivered;
+    }
+    await recordCodexAppServerModeCommand(thread, next, parsedCommand.command, env);
+    next = await updateThreadMessage(thread.id, next.id, {
+      text: payloadText,
+      state: "queued",
+      deliveryState: "mode_recorded",
+      observedVia: "codex_app_server_mode_recorded",
+      error: null,
+    }, env).catch(() => ({ ...next, text: payloadText, state: "queued", deliveryState: "mode_recorded" }));
+  }
   if (parsedCommand.command === "interrupt") {
     const interrupted = await interruptCodexAppServerThread(thread, env).catch(() => ({ interrupted: false }));
     const payloadText = clean(parsedCommand.text);
