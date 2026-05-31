@@ -1247,6 +1247,7 @@ export class ThreadsController {
         }, principal);
         const delivered = await deliverPendingThreadInputs(thread.id);
         const current = (await listThreadMessages(thread.id)).find((item: any) => item.id === message.id) || message;
+        if (current.state === "queued" || current.state === "pending_delivery") requestThreadInputDelivery(thread.id);
         return {
           ok: true,
           interrupted: Boolean((interrupted as any).interrupted),

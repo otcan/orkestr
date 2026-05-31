@@ -17,6 +17,16 @@ async function request(baseUrl, route, options = {}) {
   return text ? JSON.parse(text) : {};
 }
 
+async function waitForMessage(threadId, predicate, { attempts = 20, intervalMs = 50 } = {}) {
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    const messages = await listThreadMessages(threadId);
+    const message = messages.find(predicate);
+    if (message) return message;
+    await new Promise((resolve) => setTimeout(resolve, intervalMs));
+  }
+  return null;
+}
+
 async function createFakeCodexAppServer(home) {
   const bin = path.join(home, "bin");
   await fs.mkdir(bin, { recursive: true });
@@ -325,18 +335,21 @@ test("thread interrupt API interrupts persisted app-server active turn before re
     const calls = callsRaw.trim().split("\n").filter(Boolean).map((line) => JSON.parse(line));
     const interruptIndex = calls.findIndex((call) => call.method === "turn/interrupt");
     const startIndex = calls.findIndex((call) => call.method === "turn/start");
+    const completedMessage = await waitForMessage(started.thread.id, (message) =>
+      message.text === "replace the active work" && message.state === "completed"
+    );
     const messages = await listThreadMessages(started.thread.id);
     const interruptedThread = await getThread(started.thread.id);
 
     assert.equal(payload.interrupted, true);
     assert.equal(payload.message.text, "replace the active work");
-    assert.equal(payload.message.state, "completed");
-    assert.equal(payload.message.deliveryState, "delivered");
+    assert.ok(["completed", "pending_delivery"].includes(payload.message.state));
     assert.ok(interruptIndex >= 0, callsRaw);
     assert.ok(startIndex >= 0, callsRaw);
     assert.ok(interruptIndex < startIndex, callsRaw);
     assert.equal(calls[interruptIndex].params.turnId, "active-turn");
-    assert.ok(messages.some((message) => message.text === "replace the active work" && message.state === "completed"));
+    assert.ok(completedMessage, JSON.stringify(messages, null, 2));
+    assert.equal(completedMessage.deliveryState, "delivered");
     assert.equal(interruptedThread.runtime.activeTurnId, null);
   } finally {
     stopCodexAppServerClients();
