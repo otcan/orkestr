@@ -706,12 +706,13 @@ export async function codexAppServerThreadStatus(thread, env = process.env, coun
     }
   }
   const pendingRequest = client?.pendingRequestForThread(thread) || thread.runtime?.pendingRequest || null;
-  const codexStatus = hasClientState ? state.status || null : thread.runtime?.codexStatus || null;
-  const rawStatusState = appServerStateFromStatus(codexStatus);
-  const statusState = hasClientState || rawStatusState !== "working" ? rawStatusState : "";
+  const rawCodexStatus = hasClientState ? state.status || null : thread.runtime?.codexStatus || null;
   const stateActiveTurnId = hasClientState && Object.prototype.hasOwnProperty.call(state, "activeTurnId")
     ? clean(state.activeTurnId)
     : "";
+  const knownActiveTurnWithIdleStatus = Boolean(stateActiveTurnId && appServerStateFromStatus(rawCodexStatus) === "ready" && clean(rawCodexStatus?.type).toLowerCase() === "idle");
+  const rawStatusState = knownActiveTurnWithIdleStatus ? "working" : appServerStateFromStatus(rawCodexStatus);
+  const statusState = hasClientState || rawStatusState !== "working" ? rawStatusState : "";
   const activeTurnId = statusState && ["ready", "failed", "unloaded", "awaiting_approval"].includes(statusState)
     ? ""
     : stateActiveTurnId;
@@ -722,6 +723,9 @@ export async function codexAppServerThreadStatus(thread, env = process.env, coun
       ? "failed"
       : "ready";
   const runtimeState = pendingRequest ? "awaiting_approval" : activeTurnId ? "working" : statusState || fallbackState;
+  const codexStatus = activeTurnId && clean(rawCodexStatus?.type).toLowerCase() === "idle"
+    ? { ...rawCodexStatus, type: "active", activeFlags: ["running"] }
+    : rawCodexStatus;
   return {
     state: runtimeState,
     status: runtimeState,

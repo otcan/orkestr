@@ -1154,6 +1154,55 @@ test("Codex app-server status ignores stale stored working state without live cl
   }
 });
 
+test("Codex app-server status does not report idle while an active turn is known", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-codex-app-server-idle-active-turn-"));
+  const fake = await createFakeCodex(home);
+  const env = {
+    ORKESTR_HOME: path.join(home, "orkestr"),
+    HOME: path.join(home, "runtime-home"),
+    PATH: `${fake.bin}${path.delimiter}${process.env.PATH || ""}`,
+    FAKE_CODEX_STATE: fake.stateFile,
+  };
+  try {
+    const thread = await createThread({
+      id: "app-server-idle-active-turn-thread",
+      name: "App Server Idle Active Turn Thread",
+      state: "working",
+      executorId: "codex",
+      executor: {
+        type: "codex",
+        transport: "app-server",
+        codexThreadId: "idle-active-codex-thread",
+        codexSessionId: "idle-active-codex-thread",
+      },
+      runtimeKind: "codex-app-server",
+      codexThreadId: "idle-active-codex-thread",
+      codexSessionId: "idle-active-codex-thread",
+      runtime: {
+        runtimeKind: "codex-app-server",
+        state: "working",
+        activeTurnId: "known-active-turn",
+        codexStatus: { type: "idle" },
+      },
+    }, env);
+    const client = await getCodexAppServerClient({ env, home: env.HOME });
+    client.threadStates.set("idle-active-codex-thread", {
+      activeTurnId: "known-active-turn",
+      status: { type: "idle" },
+    });
+
+    const status = await codexAppServerThreadStatus(thread, env);
+
+    assert.equal(status.state, "working");
+    assert.equal(status.working, true);
+    assert.equal(status.activeTurnId, "known-active-turn");
+    assert.equal(status.codexStatus.type, "active");
+    assert.deepEqual(status.codexStatus.activeFlags, ["running"]);
+  } finally {
+    stopCodexAppServerClients();
+  }
+});
+
 test("Codex app-server recovery asks app-server before marking an active turn interrupted", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-codex-app-server-live-recovery-"));
   const fake = await createFakeCodex(home);
