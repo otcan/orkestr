@@ -4,6 +4,11 @@ import { isAdminPrincipal } from "./policy.js";
 import { adminPrincipal, userPrincipal } from "./principal.js";
 import { assertCreditBudget, estimateOpenAICost, recordCreditUsage } from "./credit-usage.js";
 import { startCodexAppServerThread, threadUsesCodexAppServer } from "./codex-app-server.js";
+import {
+  connectorAuthRequestFromMessages,
+  formatConnectorAuthError,
+  formatConnectorAuthResult,
+} from "./tenant-api-agent-connector-intents.js";
 import { tenantApiAgentToolDefinitions, runTenantApiAgentTool } from "./tenant-api-agent-tools.js";
 import { threadRequiresTenantIsolation } from "./tenant-policy.js";
 import { appendThreadMessage, getThread, listThreadMessages, updateThread, updateThreadMessage } from "./threads.js";
@@ -148,6 +153,13 @@ function responseText(response = {}) {
 
 function normalizeTenantApiAgentText(text = "") {
   const original = clean(text);
+  if (
+    /gmail/i.test(original) &&
+    /(?:platform|installation|app credentials|oauth)/i.test(original) &&
+    /(?:not configured|required|missing|not available)/i.test(original)
+  ) {
+    return "Gmail sign-in is not available on this Orkestr installation yet because the Gmail app credentials are not configured.";
+  }
   if (!/(Orkestr UI|Orkestr admin|Orkestr administrator)/i.test(original)) return original;
   const setupTarget = /gmail/i.test(original)
     ? "Gmail"
@@ -443,6 +455,49 @@ async function handleCodexEscalation(thread, message, env = process.env) {
   return { escalated: true, thread: updated };
 }
 
+async function maybeRunConnectorAuthRequest({
+  thread,
+  messages,
+  message,
+  principal,
+  capabilities,
+  env = process.env,
+  fetchImpl = fetch,
+}) {
+  const request = connectorAuthRequestFromMessages(message, messages);
+  if (!request) return null;
+  const args = {
+    provider: request.provider,
+    account: request.account || "",
+    shop: request.shop || "",
+  };
+  try {
+    await assertSanitizedAction({
+      action: "api-agent.tool.orkestr_start_connector_auth",
+      principal,
+      resource: {
+        type: "thread",
+        id: thread.id,
+        ownerUserId: threadOwnerUserId(thread, env),
+        capabilities,
+      },
+      input: { tool: "orkestr_start_connector_auth", args },
+    }, env);
+    const result = await runTenantApiAgentTool("orkestr_start_connector_auth", args, { principal, thread, fetchImpl }, env);
+    return {
+      provider: request.provider,
+      result,
+      text: formatConnectorAuthResult(request.provider, result),
+    };
+  } catch (error) {
+    return {
+      provider: request.provider,
+      error,
+      text: error?.sanitizer ? userSafeApiAgentError(error) : formatConnectorAuthError(request.provider, error),
+    };
+  }
+}
+
 async function runTenantApiAgentResponse({ thread, messages, message, env, fetchImpl }) {
   const model = apiAgentModel(env);
   const principal = tenantPrincipalForThread(thread, env);
@@ -563,6 +618,44 @@ async function failApiAgentMessage(thread, error, env = process.env) {
   return { ok: false, error: clean(error?.message || error), message, assistant };
 }
 
+async function completeApiAgentMessage(thread, message, text, env = process.env, options = {}) {
+  const current = await updateThreadMessage(thread.id, message.id, {
+    state: "completed",
+    deliveryState: "delivered",
+    observedVia: options.observedVia || "api_agent_response",
+    deliveredAt: nowIso(),
+    error: null,
+  }, env);
+  const assistant = await appendThreadMessage(thread.id, {
+    role: "assistant",
+    source: "api-agent",
+    phase: "final_answer",
+    text,
+    parentMessageId: message.id,
+    state: "completed",
+    connector: message.connector,
+    chatId: message.chatId,
+    accountId: message.accountId,
+  }, env);
+  await updateThread(thread.id, { state: "ready" }, env).catch(() => {});
+  await appendTurnLifecycleEvent("completed", {
+    threadId: thread.id,
+    messageId: message.id,
+    runtimeKind: API_AGENT_RUNTIME_KIND,
+    state: "completed",
+    source: "api-agent",
+  }, env).catch(() => {});
+  await appendEvent({
+    type: options.eventType || "api_agent_response_completed",
+    threadId: thread.id,
+    messageId: message.id,
+    assistantMessageId: assistant.id,
+    ownerUserId: threadOwnerUserId(thread, env),
+    ...(options.event || {}),
+  }, env).catch(() => {});
+  return { ok: true, processed: true, message: current, assistant, response: options.response || null };
+}
+
 async function processNextApiAgentMessage(thread, env = process.env, options = {}) {
   const messages = await listThreadMessages(thread.id, env);
   const message = messages.find((item) => lower(item.role) === "user" && ["queued", "pending_delivery"].includes(lower(item.state || "queued")));
@@ -571,8 +664,8 @@ async function processNextApiAgentMessage(thread, env = process.env, options = {
     return handleCodexEscalation(thread, message, env);
   }
   const principal = tenantPrincipalForThread(thread, env);
+  const capabilities = await scopedCapabilitiesForThread(thread, env);
   if (!isAdminPrincipal(principal)) {
-    const capabilities = await scopedCapabilitiesForThread(thread, env);
     await assertSanitizedAction({
       action: "api-agent.input",
       principal,
@@ -605,6 +698,27 @@ async function processNextApiAgentMessage(thread, env = process.env, options = {
     source: "api-agent",
   }, env).catch(() => {});
   const latestMessages = await listThreadMessages(thread.id, env);
+  const connectorAuth = await maybeRunConnectorAuthRequest({
+    thread,
+    messages: latestMessages,
+    message,
+    principal,
+    capabilities,
+    env,
+    fetchImpl: options.fetchImpl || fetch,
+  });
+  if (connectorAuth) {
+    return completeApiAgentMessage(thread, message, connectorAuth.text, env, {
+      observedVia: "api_agent_connector_auth",
+      eventType: "api_agent_connector_auth_completed",
+      event: {
+        provider: connectorAuth.provider,
+        state: connectorAuth.result?.state || "",
+        ok: connectorAuth.error ? false : true,
+        error: clean(connectorAuth.error?.message || ""),
+      },
+    });
+  }
   const result = await runTenantApiAgentResponse({
     thread,
     messages: latestMessages,
@@ -613,34 +727,7 @@ async function processNextApiAgentMessage(thread, env = process.env, options = {
     fetchImpl: options.fetchImpl || fetch,
   });
   const text = normalizeTenantApiAgentText(clean(result.text) || "Done.");
-  const current = await updateThreadMessage(thread.id, message.id, {
-    state: "completed",
-    deliveryState: "delivered",
-    observedVia: "api_agent_response",
-    deliveredAt: nowIso(),
-    error: null,
-  }, env);
-  const assistant = await appendThreadMessage(thread.id, {
-    role: "assistant",
-    source: "api-agent",
-    phase: "final_answer",
-    text,
-    parentMessageId: message.id,
-    state: "completed",
-    connector: message.connector,
-    chatId: message.chatId,
-    accountId: message.accountId,
-  }, env);
-  await updateThread(thread.id, { state: "ready" }, env).catch(() => {});
-  await appendTurnLifecycleEvent("completed", {
-    threadId: thread.id,
-    messageId: message.id,
-    runtimeKind: API_AGENT_RUNTIME_KIND,
-    state: "completed",
-    source: "api-agent",
-  }, env).catch(() => {});
-  await appendEvent({ type: "api_agent_response_completed", threadId: thread.id, messageId: message.id, assistantMessageId: assistant.id, ownerUserId: threadOwnerUserId(thread, env) }, env).catch(() => {});
-  return { ok: true, processed: true, message: current, assistant, response: result.response };
+  return completeApiAgentMessage(thread, message, text, env, { response: result.response });
 }
 
 export async function processApiAgentThreadInput(threadId, env = process.env, options = {}) {
