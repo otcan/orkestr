@@ -49,6 +49,23 @@ test("gmail oauth start builds an authorize URL and saves state", async () => {
   assert.equal(state.account, "person@example.com");
 });
 
+test("gmail oauth start can use service env app credentials", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-gmail-env-start-"));
+  const env = {
+    ORKESTR_HOME: home,
+    GMAIL_OAUTH_CLIENT_ID: "env-client-id",
+    GMAIL_OAUTH_CLIENT_SECRET: "env-client-secret",
+    ORKESTR_PUBLIC_HTTPS_URL: "https://orkestr.example.test/",
+  };
+
+  const started = await startGmailOAuth(env, { account: "person@example.com" });
+  const url = new URL(started.authorizeUrl);
+
+  assert.equal(url.searchParams.get("client_id"), "env-client-id");
+  assert.equal(url.searchParams.get("redirect_uri"), "https://orkestr.example.test/oauth/gmail/callback");
+  assert.equal(started.redirectUri, "https://orkestr.example.test/oauth/gmail/callback");
+});
+
 test("gmail authorization code is exchanged and stored securely", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-gmail-exchange-"));
   const env = { ORKESTR_HOME: home };

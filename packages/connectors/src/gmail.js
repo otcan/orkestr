@@ -26,6 +26,21 @@ function requireOAuthConfig(config) {
   return { clientId, clientSecret, redirectUri };
 }
 
+function publicRedirectUri(env = process.env) {
+  const base = String(env.ORKESTR_PUBLIC_HTTPS_URL || env.ORKESTR_PUBLIC_URL || env.ORKESTR_BASE_URL || "").trim().replace(/\/+$/, "");
+  return base ? `${base}/oauth/gmail/callback` : "";
+}
+
+async function readGmailOAuthConfig(env = process.env) {
+  const config = await readConnectorConfig("gmail", env);
+  return {
+    ...config,
+    clientId: String(config.clientId || env.GMAIL_OAUTH_CLIENT_ID || env.GOOGLE_OAUTH_CLIENT_ID || "").trim(),
+    clientSecret: String(config.clientSecret || env.GMAIL_OAUTH_CLIENT_SECRET || env.GOOGLE_OAUTH_CLIENT_SECRET || "").trim(),
+    redirectUri: String(config.redirectUri || env.GMAIL_OAUTH_REDIRECT_URI || env.GOOGLE_OAUTH_REDIRECT_URI || publicRedirectUri(env)).trim(),
+  };
+}
+
 async function requestToken(params, fetchImpl = fetch) {
   const response = await fetchImpl(tokenUrl, {
     method: "POST",
@@ -77,7 +92,7 @@ export async function readGmailToken(env = process.env, options = {}) {
 }
 
 export async function startGmailOAuth(env = process.env, options = {}) {
-  const config = await readConnectorConfig("gmail", env);
+  const config = await readGmailOAuthConfig(env);
   const { clientId, redirectUri } = requireOAuthConfig(config);
   const scope = await connectorScopePaths(env, options);
   const state = randomUUID();
@@ -102,7 +117,7 @@ export async function startGmailOAuth(env = process.env, options = {}) {
 }
 
 export async function exchangeGmailCode(code, env = process.env, fetchImpl = fetch, options = {}) {
-  const config = await readConnectorConfig("gmail", env);
+  const config = await readGmailOAuthConfig(env);
   const { clientId, clientSecret, redirectUri } = requireOAuthConfig(config);
   if (!clientSecret) {
     const error = new Error("gmail_client_secret_required");
@@ -131,7 +146,7 @@ export async function exchangeGmailCode(code, env = process.env, fetchImpl = fet
 }
 
 export async function refreshGmailAccessToken(env = process.env, fetchImpl = fetch, options = {}) {
-  const config = await readConnectorConfig("gmail", env);
+  const config = await readGmailOAuthConfig(env);
   const { clientId, clientSecret } = requireOAuthConfig(config);
   const prior = await readGmailToken(env, options);
   const refreshToken = String(prior.refreshToken || "").trim();
