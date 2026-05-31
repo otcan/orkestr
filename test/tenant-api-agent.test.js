@@ -281,7 +281,7 @@ test("tenant api-agent explains missing Gmail capability without a generic safet
   assert.doesNotMatch(assistant.text, /safely handle|private connector|account identity/i);
 });
 
-test("tenant api-agent answers same-user missing connector requests deterministically", async () => {
+test("tenant api-agent routes missing connector requests through OpenAI", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-api-agent-gmail-missing-"));
   const env = await allowSanitizerEnv(home);
   await createThread({
@@ -307,7 +307,7 @@ test("tenant api-agent answers same-user missing connector requests deterministi
       return response({
         id: "resp_api_agent_gmail_missing",
         model: "gpt-5-mini",
-        output_text: "Gmail is not connected or enabled for this chat yet. Ask the Orkestr admin to connect Gmail for this user, then resend.",
+        output_text: "Gmail is not connected or enabled for this chat yet. I can start Gmail sign-in if you want to connect it.",
         output: [],
         usage: { input_tokens: 140, output_tokens: 18 },
       });
@@ -317,10 +317,10 @@ test("tenant api-agent answers same-user missing connector requests deterministi
   const assistant = messages.find((message) => message.role === "assistant");
 
   assert.equal(result.ok, true);
-  assert.equal(result.missingCapability, true);
-  assert.equal(calls.length, 0);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].body.tools.some((tool) => tool.name === "orkestr_start_connector_auth"), true);
   assert.match(assistant.text, /Gmail is not connected or enabled for this chat yet/i);
-  assert.match(assistant.text, /connect Gmail from this chat/i);
+  assert.match(assistant.text, /start Gmail sign-in/i);
   assert.doesNotMatch(assistant.text, /checked/i);
 });
 
@@ -674,6 +674,98 @@ test("tenant api-agent creates user skills through sanitized chat tools", async 
   assert.equal(sanitizerActions.includes("thread.input"), true);
   assert.equal(sanitizerActions.includes("api-agent.input"), true);
   assert.equal(sanitizerActions.includes("api-agent.tool.orkestr_create_skill"), true);
+});
+
+test("tenant api-agent lets OpenAI initiate Gmail sign-in with connector auth tool", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-api-agent-gmail-auth-flow-"));
+  const sanitizerLog = path.join(home, "auth-tool-sanitizer.jsonl");
+  const script = path.join(home, "auth-tool-sanitizer.mjs");
+  await fs.writeFile(
+    script,
+    [
+      "import fs from 'node:fs';",
+      "let input = '';",
+      "process.stdin.setEncoding('utf8');",
+      "process.stdin.on('data', (chunk) => { input += chunk; });",
+      "process.stdin.on('end', () => {",
+      "  const payload = JSON.parse(input);",
+      `  fs.appendFileSync(${JSON.stringify(sanitizerLog)}, JSON.stringify({ action: payload.action, input: payload.input }) + '\\n');`,
+      "  console.log(JSON.stringify({ allow: true, reason: 'auth-tool-ok', model: 'test-llm' }));",
+      "});",
+      "",
+    ].join("\n"),
+    "utf8",
+  );
+  const env = {
+    ORKESTR_HOME: home,
+    OPENAI_API_KEY: "sk-test",
+    GMAIL_OAUTH_CLIENT_ID: "gmail-client-env",
+    GMAIL_OAUTH_CLIENT_SECRET: "gmail-secret-env",
+    GMAIL_OAUTH_REDIRECT_URI: "https://example.test/oauth/gmail/callback",
+    ORKESTR_LLM_SANITIZER_COMMAND_JSON: JSON.stringify([process.execPath, script]),
+  };
+  await upsertUser({ id: "otcan", role: "user", displayName: "Otcan" }, env);
+  await createThread({
+    id: "gmail-auth-chat",
+    ownerUserId: "otcan",
+    name: "gmail-auth-chat",
+    runtimeKind: "api-agent",
+    executor: { type: "api-agent", metadata: { runtimeKind: "api-agent" } },
+    binding: { connector: "whatsapp", chatId: "chat-gmail-auth" },
+  }, env);
+  await enqueueThreadInputForPrincipal("gmail-auth-chat", {
+    text: "Connect my Gmail account person@example.com",
+    source: "whatsapp_inbound",
+    connector: "whatsapp",
+    chatId: "chat-gmail-auth",
+  }, userPrincipal({ id: "otcan", role: "user" }), env);
+
+  const calls = [];
+  const result = await processApiAgentThreadInput("gmail-auth-chat", env, {
+    fetchImpl: async (_url, options) => {
+      calls.push(JSON.parse(options.body));
+      if (calls.length === 1) {
+        return response({
+          id: "resp_gmail_auth_tool_1",
+          model: "gpt-5-mini",
+          output_text: "",
+          output: [{
+            type: "function_call",
+            name: "orkestr_start_connector_auth",
+            call_id: "call_gmail_auth",
+            arguments: JSON.stringify({
+              provider: "gmail",
+              account: "person@example.com",
+            }),
+          }],
+          usage: { input_tokens: 180, output_tokens: 12 },
+        });
+      }
+      const toolOutput = JSON.parse(calls[1].input.at(-1).output);
+      return response({
+        id: "resp_gmail_auth_tool_2",
+        model: "gpt-5-mini",
+        output_text: `Open this Gmail sign-in link: ${toolOutput.authorizeUrl}`,
+        output: [],
+        usage: { input_tokens: 220, output_tokens: 8 },
+      });
+    },
+  });
+  const messages = await listThreadMessages("gmail-auth-chat", env);
+  const assistant = messages.find((message) => message.role === "assistant");
+  const savedState = JSON.parse(await fs.readFile(path.join(userDataPaths("otcan", env).oauth, "gmail-state.json"), "utf8"));
+  const sanitizerActions = (await fs.readFile(sanitizerLog, "utf8"))
+    .trim()
+    .split("\n")
+    .map((line) => JSON.parse(line).action);
+
+  assert.equal(result.ok, true);
+  assert.equal(calls.length, 2);
+  assert.equal(calls[0].tools.some((tool) => tool.name === "orkestr_start_connector_auth"), true);
+  assert.match(assistant.text, /accounts\.google\.com/i);
+  assert.equal(savedState.userId, "otcan");
+  assert.equal(savedState.account, "person@example.com");
+  assert.equal(sanitizerActions.includes("api-agent.tool.orkestr_start_connector_auth"), true);
 });
 
 test("tenant api-agent tool gateway stays inside scoped file roots", async () => {
