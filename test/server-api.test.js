@@ -4,6 +4,8 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { recoverAfterStartup, runtimeMonitorIntervalMs, startServer, startupRecoveryDelayMs } from "../apps/server/src/server.js";
+import { startCodexAppServerThread, stopCodexAppServerClients } from "../packages/core/src/codex-app-server.js";
+import { createThread, getThread, listThreadMessages, updateThread } from "../packages/core/src/threads.js";
 
 async function request(baseUrl, route, options = {}) {
   const response = await fetch(`${baseUrl}${route}`, {
@@ -22,9 +24,15 @@ async function createFakeCodexAppServer(home) {
   await fs.writeFile(
     codexPath,
     `#!/usr/bin/env node
+import fs from "node:fs";
 import readline from "node:readline";
 
 const args = process.argv.slice(2);
+function logCall(method, params = {}) {
+  const file = process.env.FAKE_CODEX_CALLS || "";
+  if (!file) return;
+  fs.appendFileSync(file, JSON.stringify({ method, params }) + "\\n");
+}
 if (args[0] === "--version") {
   console.log("codex-cli fake");
   process.exit(0);
@@ -53,6 +61,7 @@ rl.on("line", (line) => {
   const id = message.id;
   const method = message.method;
   const params = message.params || {};
+  logCall(method, params);
   if (method === "initialize") return send({ id, result: { userAgent: "fake", platformFamily: "linux", platformOs: "linux" } });
   if (method === "initialized") return;
   if (method === "thread/start") {
@@ -141,12 +150,16 @@ test("server exposes health, readiness, version, and agent message APIs", async 
   const priorHome = process.env.ORKESTR_HOME;
   const priorWorkspaceRoot = process.env.ORKESTR_RUNTIME_WORKSPACE_ROOT;
   const priorCodexBin = process.env.ORKESTR_CODEX_BIN;
+  const priorCodexAppServerMode = process.env.ORKESTR_CODEX_APP_SERVER_MODE;
+  const priorCodexAppServerSocket = process.env.ORKESTR_CODEX_APP_SERVER_SOCKET;
   const priorRuntimeCodexCommand = process.env.ORKESTR_RUNTIME_CODEX_COMMAND;
   const priorPath = process.env.PATH;
   process.env.ORKESTR_HOME = home;
   process.env.ORKESTR_RUNTIME_WORKSPACE_ROOT = workspaceRoot;
   const fakeCodexBin = await createFakeCodexAppServer(home);
   process.env.ORKESTR_CODEX_BIN = path.join(fakeCodexBin, "codex");
+  process.env.ORKESTR_CODEX_APP_SERVER_MODE = "stdio";
+  delete process.env.ORKESTR_CODEX_APP_SERVER_SOCKET;
   delete process.env.ORKESTR_RUNTIME_CODEX_COMMAND;
   process.env.PATH = `${fakeCodexBin}${path.delimiter}${priorPath || ""}`;
   const server = await startServer({ port: 0, host: "127.0.0.1" });
@@ -245,9 +258,106 @@ test("server exposes health, readiness, version, and agent message APIs", async 
     else process.env.ORKESTR_RUNTIME_WORKSPACE_ROOT = priorWorkspaceRoot;
     if (priorCodexBin === undefined) delete process.env.ORKESTR_CODEX_BIN;
     else process.env.ORKESTR_CODEX_BIN = priorCodexBin;
+    if (priorCodexAppServerMode === undefined) delete process.env.ORKESTR_CODEX_APP_SERVER_MODE;
+    else process.env.ORKESTR_CODEX_APP_SERVER_MODE = priorCodexAppServerMode;
+    if (priorCodexAppServerSocket === undefined) delete process.env.ORKESTR_CODEX_APP_SERVER_SOCKET;
+    else process.env.ORKESTR_CODEX_APP_SERVER_SOCKET = priorCodexAppServerSocket;
     if (priorRuntimeCodexCommand === undefined) delete process.env.ORKESTR_RUNTIME_CODEX_COMMAND;
     else process.env.ORKESTR_RUNTIME_CODEX_COMMAND = priorRuntimeCodexCommand;
     if (priorPath === undefined) delete process.env.PATH;
     else process.env.PATH = priorPath;
+  }
+});
+
+test("thread interrupt API interrupts persisted app-server active turn before resume", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-api-app-server-interrupt-"));
+  const callsFile = path.join(home, "codex-calls.jsonl");
+  const priorHome = process.env.ORKESTR_HOME;
+  const priorCodexBin = process.env.ORKESTR_CODEX_BIN;
+  const priorCodexAppServerMode = process.env.ORKESTR_CODEX_APP_SERVER_MODE;
+  const priorCodexAppServerSocket = process.env.ORKESTR_CODEX_APP_SERVER_SOCKET;
+  const priorRuntimeCodexCommand = process.env.ORKESTR_RUNTIME_CODEX_COMMAND;
+  const priorRuntimeHome = process.env.HOME;
+  const priorCodexHome = process.env.CODEX_HOME;
+  const priorPath = process.env.PATH;
+  const priorFakeCalls = process.env.FAKE_CODEX_CALLS;
+  process.env.ORKESTR_HOME = path.join(home, "orkestr-home");
+  process.env.HOME = path.join(home, "runtime-home");
+  process.env.CODEX_HOME = path.join(home, "codex-home");
+  const fakeCodexBin = await createFakeCodexAppServer(home);
+  process.env.ORKESTR_CODEX_BIN = path.join(fakeCodexBin, "codex");
+  process.env.ORKESTR_CODEX_APP_SERVER_MODE = "stdio";
+  delete process.env.ORKESTR_CODEX_APP_SERVER_SOCKET;
+  delete process.env.ORKESTR_RUNTIME_CODEX_COMMAND;
+  process.env.PATH = `${fakeCodexBin}${path.delimiter}${priorPath || ""}`;
+  process.env.FAKE_CODEX_CALLS = callsFile;
+  stopCodexAppServerClients();
+  const server = await startServer({ port: 0, host: "127.0.0.1" });
+  const { port } = server.address();
+  const baseUrl = `http://127.0.0.1:${port}`;
+
+  try {
+    const thread = await createThread({
+      id: "api-app-server-interrupt-thread",
+      name: "API App Server Interrupt Thread",
+      cwd: home,
+      executorId: "codex",
+      executor: { type: "codex" },
+      runtimeKind: "codex-app-server",
+    });
+    const started = await startCodexAppServerThread(thread);
+    await updateThread(started.thread.id, {
+      state: "working",
+      runtime: {
+        ...(started.thread.runtime || {}),
+        runtimeKind: "codex-app-server",
+        state: "working",
+        activeTurnId: "active-turn",
+      },
+    });
+    stopCodexAppServerClients();
+
+    const payload = await request(baseUrl, `/api/threads/${started.thread.id}/interrupt`, {
+      method: "POST",
+      body: JSON.stringify({ text: "replace the active work" }),
+    });
+    const callsRaw = await fs.readFile(callsFile, "utf8");
+    const calls = callsRaw.trim().split("\n").filter(Boolean).map((line) => JSON.parse(line));
+    const interruptIndex = calls.findIndex((call) => call.method === "turn/interrupt");
+    const startIndex = calls.findIndex((call) => call.method === "turn/start");
+    const messages = await listThreadMessages(started.thread.id);
+    const interruptedThread = await getThread(started.thread.id);
+
+    assert.equal(payload.interrupted, true);
+    assert.equal(payload.message.text, "replace the active work");
+    assert.equal(payload.message.state, "completed");
+    assert.equal(payload.message.deliveryState, "delivered");
+    assert.ok(interruptIndex >= 0, callsRaw);
+    assert.ok(startIndex >= 0, callsRaw);
+    assert.ok(interruptIndex < startIndex, callsRaw);
+    assert.equal(calls[interruptIndex].params.turnId, "active-turn");
+    assert.ok(messages.some((message) => message.text === "replace the active work" && message.state === "completed"));
+    assert.equal(interruptedThread.runtime.activeTurnId, null);
+  } finally {
+    stopCodexAppServerClients();
+    await new Promise((resolve) => server.close(resolve));
+    if (priorHome === undefined) delete process.env.ORKESTR_HOME;
+    else process.env.ORKESTR_HOME = priorHome;
+    if (priorCodexBin === undefined) delete process.env.ORKESTR_CODEX_BIN;
+    else process.env.ORKESTR_CODEX_BIN = priorCodexBin;
+    if (priorCodexAppServerMode === undefined) delete process.env.ORKESTR_CODEX_APP_SERVER_MODE;
+    else process.env.ORKESTR_CODEX_APP_SERVER_MODE = priorCodexAppServerMode;
+    if (priorCodexAppServerSocket === undefined) delete process.env.ORKESTR_CODEX_APP_SERVER_SOCKET;
+    else process.env.ORKESTR_CODEX_APP_SERVER_SOCKET = priorCodexAppServerSocket;
+    if (priorRuntimeCodexCommand === undefined) delete process.env.ORKESTR_RUNTIME_CODEX_COMMAND;
+    else process.env.ORKESTR_RUNTIME_CODEX_COMMAND = priorRuntimeCodexCommand;
+    if (priorRuntimeHome === undefined) delete process.env.HOME;
+    else process.env.HOME = priorRuntimeHome;
+    if (priorCodexHome === undefined) delete process.env.CODEX_HOME;
+    else process.env.CODEX_HOME = priorCodexHome;
+    if (priorPath === undefined) delete process.env.PATH;
+    else process.env.PATH = priorPath;
+    if (priorFakeCalls === undefined) delete process.env.FAKE_CODEX_CALLS;
+    else process.env.FAKE_CODEX_CALLS = priorFakeCalls;
   }
 });

@@ -1237,18 +1237,16 @@ export class ThreadsController {
     const thread = await getThread(threadId);
     if (!thread) throw httpError("thread_not_found", 404);
     await this.assertThreadSanitized("thread.interrupt", principal, thread, body);
-    const result = await wakeThread(thread.id, { reason: "interrupt" });
-    if (!result) throw httpError("thread_wake_failed", 500);
-    if (threadUsesCodexAppServer(result.thread)) {
-      const interrupted = await interruptCodexAppServerThread(result.thread).catch(() => ({ interrupted: false }));
+    if (threadUsesCodexAppServer(thread)) {
+      const interrupted = await interruptCodexAppServerThread(thread).catch(() => ({ interrupted: false }));
       if (String(body.text || "").trim()) {
-        const message = await enqueueThreadInputForPrincipal(result.thread.id, {
+        const message = await enqueueThreadInputForPrincipal(thread.id, {
           ...body,
           source: body.source || "interrupt",
           forceDeliveryAfterInterrupt: true,
         }, principal);
-        const delivered = await deliverPendingThreadInputs(result.thread.id);
-        const current = (await listThreadMessages(result.thread.id)).find((item: any) => item.id === message.id) || message;
+        const delivered = await deliverPendingThreadInputs(thread.id);
+        const current = (await listThreadMessages(thread.id)).find((item: any) => item.id === message.id) || message;
         return {
           ok: true,
           interrupted: Boolean((interrupted as any).interrupted),
@@ -1261,11 +1259,13 @@ export class ThreadsController {
           observedVia: current.observedVia || "codex_app_server_interrupt",
           reason: "interrupt",
           state: current.state,
-          runtime: await runtimeStatus(result.thread.id).catch(() => result.status),
+          runtime: await runtimeStatus(thread.id).catch(() => null),
         };
       }
-      return { ok: true, interrupted: Boolean((interrupted as any).interrupted), runtime: await runtimeStatus(result.thread.id).catch(() => result.status) };
+      return { ok: true, interrupted: Boolean((interrupted as any).interrupted), runtime: await runtimeStatus(thread.id).catch(() => null) };
     }
+    const result = await wakeThread(thread.id, { reason: "interrupt" });
+    if (!result) throw httpError("thread_wake_failed", 500);
     const paneId = result.status?.paneId || result.lease?.paneId;
     const interrupted = shouldInterruptRuntime(result.status as Record<string, any> | null);
     if (paneId && interrupted) {
