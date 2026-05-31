@@ -1285,17 +1285,24 @@ function whatsappTypingCooldownMs(env = process.env) {
   return Number.isFinite(parsed) ? Math.max(0, parsed) : 10_000;
 }
 
-function latestOutboundDeliveryForTypingParent(state = null, parent = null, chatId = "") {
+function latestOutboundDeliveryForTypingParent(state = null, parent = null, chatId = "", predicate = null) {
   if (!parent || !chatId) return null;
   const parentMs = messageTimeMs(parent);
   return [...(state?.outboundDeliveries || [])]
     .reverse()
     .find((delivery) => {
       if (delivery.chatId !== chatId) return false;
+      if (predicate && !predicate(delivery)) return false;
       if (parent.id && delivery.parentMessageId === parent.id) return true;
       const deliveredMs = Date.parse(String(delivery.deliveredAt || ""));
       return Number.isFinite(deliveredMs) && (!parentMs || deliveredMs >= parentMs);
     }) || null;
+}
+
+function latestFinalOutboundDeliveryForTypingParent(state = null, parent = null, chatId = "") {
+  return latestOutboundDeliveryForTypingParent(state, parent, chatId, (delivery) =>
+    String(delivery?.deliveryType || "").trim().toLowerCase() === "final"
+  );
 }
 
 function typingCooldownActive(state = null, parent = null, chatId = "", env = process.env) {
@@ -1458,7 +1465,7 @@ function latestWhatsAppTypingParent(messages = [], thread = null, state = null) 
     const messageState = String(message.state || "").trim().toLowerCase();
     if (messageState === "failed") return false;
     if (deferredWhatsAppTypingDeliveryState(message)) return false;
-    if (latestOutboundDeliveryForTypingParent(state, message, chatId)) return false;
+    if (latestFinalOutboundDeliveryForTypingParent(state, message, chatId)) return false;
     if (completedFinalReplyForTypingParent(messages, message, chatId)) return false;
     return true;
   }) || null;
