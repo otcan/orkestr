@@ -514,7 +514,39 @@ export class GoogleMarketingCallbacksController {
   }
 
   @Get("callback")
-  async googleMarketingCallback(@Query() _query: Record<string, string>, @Req() request: any, @Res() response: any) {
+  async googleMarketingCallback(@Query() query: Record<string, string>, @Req() request: any, @Res() response: any) {
+    try {
+      const result = await finishGmailOAuth(queryParamsFromRequest(request, query));
+      return response
+        .status(200)
+        .header("cache-control", "no-store")
+        .type("text/html; charset=utf-8")
+        .send(googleOAuthHtml({
+          ok: true,
+          state: result.state,
+          title: "Gmail connected",
+          message: "Gmail authorization is complete. You can return to Orkestr.",
+          setupHref: "/setup/gmail",
+          setupLabel: "Open Mail Setup",
+        }));
+    } catch (error) {
+      const message = String((error as Error)?.message || "");
+      if (message && !["gmail_oauth_state_mismatch", "gmail_oauth_code_required"].includes(message)) {
+        return response
+          .status(Number((error as any)?.statusCode || 500) || 500)
+          .header("cache-control", "no-store")
+          .type("text/html; charset=utf-8")
+          .send(googleOAuthHtml({
+            ok: false,
+            state: "error",
+            title: "Gmail auth failed",
+            message,
+            setupHref: "/setup/gmail",
+            setupLabel: "Open Mail Setup",
+          }));
+      }
+    }
+
     const callbackUrl = externalUrlFromRequest(request);
     let payload: any = null;
     try {
@@ -544,6 +576,12 @@ function externalUrlFromRequest(request: any): string {
   const host = String(headers["x-forwarded-host"] || headers.host || "127.0.0.1").split(",")[0].trim();
   const url = String(request?.originalUrl || request?.url || "");
   return `${proto}://${host}${url}`;
+}
+
+function queryParamsFromRequest(request: any, fallback: Record<string, string> = {}): URLSearchParams {
+  const url = String(request?.originalUrl || request?.url || "");
+  if (url.includes("?")) return new URL(url, "http://localhost").searchParams;
+  return new URLSearchParams(fallback);
 }
 
 function googleMarketingOAuthHtml(payload: Record<string, unknown> = {}): string {

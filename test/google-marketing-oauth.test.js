@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { startServer } from "../apps/server/src/server.js";
+import { readGmailToken, startGmailOAuth } from "../packages/connectors/src/gmail.js";
 import { writeConnectorConfig } from "../packages/storage/src/config.js";
 
 function restoreEnvValue(name, value) {
@@ -185,6 +186,62 @@ if (["list", "health", "start", "stop", "restart"].includes(command)) {
   } finally {
     await new Promise((resolve) => server.close(resolve));
     await new Promise((resolve) => cdpServer.close(resolve));
+    for (const [name, value] of Object.entries(priorEnv)) restoreEnvValue(name, value);
+  }
+});
+
+test("shared Google callback completes Gmail OAuth when the state belongs to Gmail", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-gmail-shared-callback-"));
+  const priorEnv = {
+    ORKESTR_HOME: process.env.ORKESTR_HOME,
+    ORKESTR_OVERLAY_DIR: process.env.ORKESTR_OVERLAY_DIR,
+    ORKESTR_RECOVER_RUNNING_ON_START: process.env.ORKESTR_RECOVER_RUNNING_ON_START,
+  };
+  const originalFetch = globalThis.fetch;
+  process.env.ORKESTR_HOME = home;
+  delete process.env.ORKESTR_OVERLAY_DIR;
+  process.env.ORKESTR_RECOVER_RUNNING_ON_START = "0";
+  await writeConnectorConfig("gmail", {
+    clientId: "client-id",
+    clientSecret: "client-secret",
+    redirectUri: "https://ops-health.example.test/google-marketing/oauth/callback",
+  });
+  const started = await startGmailOAuth(process.env);
+  const server = await startServer({ port: 0, host: "127.0.0.1" });
+  const { port } = server.address();
+
+  globalThis.fetch = async (url, options = {}) => {
+    if (String(url) === "https://oauth2.googleapis.com/token") {
+      const body = new URLSearchParams(options.body);
+      assert.equal(body.get("code"), "gmail-code");
+      assert.equal(body.get("redirect_uri"), "https://ops-health.example.test/google-marketing/oauth/callback");
+      return {
+        ok: true,
+        status: 200,
+        async json() {
+          return {
+            access_token: "shared-callback-access",
+            refresh_token: "shared-callback-refresh",
+            expires_in: 3600,
+          };
+        },
+      };
+    }
+    return originalFetch(url, options);
+  };
+
+  try {
+    const response = await originalFetch(
+      `http://127.0.0.1:${port}/google-marketing/oauth/callback?code=gmail-code&state=${encodeURIComponent(started.state)}`,
+    );
+    const html = await response.text();
+
+    assert.equal(response.status, 200);
+    assert.ok(html.includes("Gmail authorization is complete"));
+    assert.equal((await readGmailToken(process.env)).accessToken, "shared-callback-access");
+  } finally {
+    globalThis.fetch = originalFetch;
+    await new Promise((resolve) => server.close(resolve));
     for (const [name, value] of Object.entries(priorEnv)) restoreEnvValue(name, value);
   }
 });
