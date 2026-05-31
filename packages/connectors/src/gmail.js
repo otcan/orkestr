@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
-import { readConnectorConfig } from "../../storage/src/config.js";
 import { appendEvent, readJson, writeJson, writeSecretJson } from "../../storage/src/store.js";
 import { connectorFile, connectorScopePaths, listConnectorScopePaths } from "./connector-storage.js";
+import { readParentConnectorRuntimeConfig } from "./parent-connector-apps.js";
 
 const tokenUrl = "https://oauth2.googleapis.com/token";
 const gmailApiBase = "https://gmail.googleapis.com/gmail/v1/users/me";
@@ -24,21 +24,6 @@ function requireOAuthConfig(config) {
     throw error;
   }
   return { clientId, clientSecret, redirectUri };
-}
-
-function publicRedirectUri(env = process.env) {
-  const base = String(env.ORKESTR_PUBLIC_HTTPS_URL || env.ORKESTR_PUBLIC_URL || env.ORKESTR_BASE_URL || "").trim().replace(/\/+$/, "");
-  return base ? `${base}/oauth/gmail/callback` : "";
-}
-
-async function readGmailOAuthConfig(env = process.env) {
-  const config = await readConnectorConfig("gmail", env);
-  return {
-    ...config,
-    clientId: String(config.clientId || env.GMAIL_OAUTH_CLIENT_ID || env.GOOGLE_OAUTH_CLIENT_ID || "").trim(),
-    clientSecret: String(config.clientSecret || env.GMAIL_OAUTH_CLIENT_SECRET || env.GOOGLE_OAUTH_CLIENT_SECRET || "").trim(),
-    redirectUri: String(config.redirectUri || env.GMAIL_OAUTH_REDIRECT_URI || env.GOOGLE_OAUTH_REDIRECT_URI || publicRedirectUri(env)).trim(),
-  };
 }
 
 async function requestToken(params, fetchImpl = fetch) {
@@ -92,7 +77,7 @@ export async function readGmailToken(env = process.env, options = {}) {
 }
 
 export async function startGmailOAuth(env = process.env, options = {}) {
-  const config = await readGmailOAuthConfig(env);
+  const config = await readParentConnectorRuntimeConfig("gmail", env);
   const { clientId, redirectUri } = requireOAuthConfig(config);
   const scope = await connectorScopePaths(env, options);
   const state = randomUUID();
@@ -117,7 +102,7 @@ export async function startGmailOAuth(env = process.env, options = {}) {
 }
 
 export async function exchangeGmailCode(code, env = process.env, fetchImpl = fetch, options = {}) {
-  const config = await readGmailOAuthConfig(env);
+  const config = await readParentConnectorRuntimeConfig("gmail", env);
   const { clientId, clientSecret, redirectUri } = requireOAuthConfig(config);
   if (!clientSecret) {
     const error = new Error("gmail_client_secret_required");
@@ -146,7 +131,7 @@ export async function exchangeGmailCode(code, env = process.env, fetchImpl = fet
 }
 
 export async function refreshGmailAccessToken(env = process.env, fetchImpl = fetch, options = {}) {
-  const config = await readGmailOAuthConfig(env);
+  const config = await readParentConnectorRuntimeConfig("gmail", env);
   const { clientId, clientSecret } = requireOAuthConfig(config);
   const prior = await readGmailToken(env, options);
   const refreshToken = String(prior.refreshToken || "").trim();

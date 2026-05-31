@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { startGmailOAuth } from "../../connectors/src/gmail.js";
+import { startOutlookDeviceOAuth } from "../../connectors/src/outlook.js";
 import { listTimersForPrincipal } from "./timers.js";
 import { whereAmI } from "./whereiam.js";
 import {
@@ -11,7 +12,7 @@ import {
   searchUserSkillsForPrincipal,
   setUserSkillForPrincipal,
 } from "./user-skills.js";
-import { linkUserPrivateIdentity, readUserPrivateIdentities } from "./users.js";
+import { linkUserPrivateIdentity } from "./users.js";
 import { fileBrowserRootsForPrincipal, listFilesForPrincipal } from "./workspace-files.js";
 
 function clean(value) {
@@ -58,33 +59,56 @@ function skillPatchFromArgs(args = {}) {
   return patch;
 }
 
-export async function startGmailOAuthForPrincipal(args = {}, principal = {}, env = process.env) {
+async function linkConnectorIdentity(provider = "", account = "", principal = {}, env = process.env, args = {}) {
   const userId = principalUserId(principal);
-  const account = clean(args.account || args.email).toLowerCase();
-  let identities = await readUserPrivateIdentities(userId, env).catch(() => []);
-  if (account) {
-    identities = await linkUserPrivateIdentity(userId, {
-      provider: "gmail",
-      accountId: account,
-      externalId: account,
-      displayName: clean(args.displayName || args.name || account),
-      source: "chat",
-    }, {
-      env,
-      actorUserId: userId,
-      migrate: args.migrate === true,
-    });
+  const normalizedProvider = clean(provider).toLowerCase();
+  const normalizedAccount = clean(account).toLowerCase();
+  if (!normalizedAccount) return [];
+  return linkUserPrivateIdentity(userId, {
+    provider: normalizedProvider,
+    accountId: normalizedAccount,
+    externalId: normalizedAccount,
+    displayName: clean(args.displayName || args.name || normalizedAccount),
+    source: "chat",
+  }, {
+    env,
+    actorUserId: userId,
+    migrate: args.migrate === true,
+  });
+}
+
+async function startConnectorAuth(args = {}, principal = {}, env = process.env, fetchImpl = fetch) {
+  const provider = clean(args.provider).toLowerCase();
+  const account = clean(args.account).toLowerCase();
+  if (provider === "gmail") {
+    const identities = await linkConnectorIdentity(provider, account, principal, env, args);
+    const oauth = await startGmailOAuth(env, { principal, account });
+    return {
+      ok: true,
+      provider,
+      state: "authorization_url_ready",
+      account: oauth.account || account,
+      authorizeUrl: oauth.authorizeUrl,
+      redirectUri: oauth.redirectUri,
+      identities,
+      message: "Open the Gmail sign-in link and finish Google authorization.",
+    };
   }
-  const oauth = await startGmailOAuth(env, { principal, account });
-  return {
-    ok: true,
-    connector: "gmail",
-    userId,
-    account,
-    authorizeUrl: oauth.authorizeUrl,
-    redirectUri: oauth.redirectUri,
-    identities,
-  };
+  if (provider === "outlook") {
+    const identities = await linkConnectorIdentity(provider, account, principal, env, args);
+    const oauth = await startOutlookDeviceOAuth(env, { principal, account }, fetchImpl);
+    return {
+      ...oauth,
+      ok: oauth.ok !== false,
+      provider,
+      state: oauth.state || "device_code_pending",
+      identities,
+      message: oauth.message || "Open the Microsoft sign-in link and enter the device code.",
+    };
+  }
+  const error = new Error("unsupported_connector_auth_provider");
+  error.statusCode = 400;
+  throw error;
 }
 
 export function tenantApiAgentToolDefinitions() {
@@ -233,25 +257,26 @@ export function tenantApiAgentToolDefinitions() {
     },
     {
       type: "function",
-      name: "orkestr_start_gmail_oauth",
-      description: "Start a user-scoped Gmail sign-in flow for this chat. Use when the user asks to connect, sign in to, or use Gmail but Gmail is not connected yet. This only returns a Google sign-in link; it does not read Gmail data.",
+      name: "orkestr_list_timers",
+      description: "List timers visible to this tenant.",
       parameters: {
         type: "object",
-        properties: {
-          account: { type: "string", description: "Optional Gmail email address or login hint. Use an empty string if unknown." },
-        },
-        required: ["account"],
+        properties: {},
         additionalProperties: false,
       },
       strict: true,
     },
     {
       type: "function",
-      name: "orkestr_list_timers",
-      description: "List timers visible to this tenant.",
+      name: "orkestr_start_connector_auth",
+      description: "Start a tenant-scoped Gmail or Outlook sign-in using the parent Orkestr connector app. Use this when the user asks to connect, sign in, or log in to Gmail or Outlook.",
       parameters: {
         type: "object",
-        properties: {},
+        properties: {
+          provider: { type: "string", enum: ["gmail", "outlook"], description: "Connector provider to sign in." },
+          account: { type: "string", description: "Optional email/account hint, or empty string if the user did not provide one." },
+        },
+        required: ["provider", "account"],
         additionalProperties: false,
       },
       strict: true,
@@ -287,9 +312,6 @@ export async function runTenantApiAgentTool(name = "", args = {}, context = {}, 
   if (tool === "orkestr_delete_skill") {
     return deleteUserSkillForPrincipal(principalUserId(principal), args.skillId, principal, env);
   }
-  if (tool === "orkestr_start_gmail_oauth") {
-    return startGmailOAuthForPrincipal(args, principal, env);
-  }
   if (tool === "orkestr_list_files") {
     return listFilesForPrincipal(clean(args.path), principal, env);
   }
@@ -321,6 +343,9 @@ export async function runTenantApiAgentTool(name = "", args = {}, context = {}, 
   }
   if (tool === "orkestr_list_timers") {
     return { timers: await listTimersForPrincipal(principal, env) };
+  }
+  if (tool === "orkestr_start_connector_auth") {
+    return startConnectorAuth(args, principal, env, context.fetchImpl || fetch);
   }
   const error = new Error("api_agent_tool_not_allowed");
   error.statusCode = 403;

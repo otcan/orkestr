@@ -10,6 +10,7 @@ import { readOverlay } from "../../core/src/overlay.js";
 import { CODEX_DISABLED_ON_MACOS, codexAppServerProbe, codexLoginStatus, defaultCodexHome } from "./codex.js";
 import { getWhatsAppStatus } from "./whatsapp.js";
 import { connectorFile, connectorScopePaths } from "./connector-storage.js";
+import { parentConnectorAppStatus } from "./parent-connector-apps.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -99,10 +100,11 @@ async function overlayConnectorStatus(id, overlay) {
 export async function getConnectorStatuses({ env = process.env, home = os.homedir(), principal = null } = {}) {
   const paths = dataPaths(env);
   const scopedPaths = await connectorScopePaths(env, { principal });
-  const [openaiConfig, gmailConfig, outlookConfig] = await Promise.all([
+  const [openaiConfig, gmailStoredConfig, outlookStoredConfig, whatsappConfig] = await Promise.all([
     readConnectorConfig("openai", env),
     readConnectorConfig("gmail", env),
     readConnectorConfig("outlook", env),
+    readConnectorConfig("whatsapp", env),
   ]);
   const codexHome = defaultCodexHome(env, home);
   const codexAuthPath = path.join(codexHome, "auth.json");
@@ -134,6 +136,9 @@ export async function getConnectorStatuses({ env = process.env, home = os.homedi
   const codexAppServerUnavailable = codexAppServerFailed && !codexAppServerAuthInvalid;
   const codexRuntimeInvalid = Boolean(codexRuntimeAuthInvalid);
   const whatsapp = await getWhatsAppStatus(env);
+  const parentWhatsApp = parentConnectorAppStatus({ provider: "whatsapp", config: whatsappConfig, env, runtimeStatus: whatsapp });
+  const parentGmail = parentConnectorAppStatus({ provider: "gmail", config: gmailStoredConfig, env });
+  const parentOutlook = parentConnectorAppStatus({ provider: "outlook", config: outlookStoredConfig, env });
   const overlay = await readOverlay(env);
 
   const connectors = {
@@ -225,39 +230,43 @@ export async function getConnectorStatuses({ env = process.env, home = os.homedi
             }),
     gmail:
       gmailOAuthExists
-        ? status("gmail", "Gmail", "connected", "Gmail OAuth token is stored locally.")
+        ? status("gmail", "Gmail", "connected", "User Gmail OAuth token is stored locally.", { parentConnector: parentGmail })
         : gmailOAuthError.message
-          ? status("gmail", "Gmail", "broken", "Gmail OAuth failed. Recheck credentials and restart OAuth.", {
+          ? status("gmail", "Gmail", "broken", "Gmail OAuth failed. Restart Gmail sign-in from chat after fixing the parent app config.", {
+              parentConnector: parentGmail,
               error: gmailOAuthError.message,
               updatedAt: gmailOAuthError.updatedAt,
             })
-        : gmailConfig.clientId || env.GMAIL_OAUTH_CLIENT_ID
-          ? status("gmail", "Gmail", "partial", "Gmail OAuth client is configured. Complete OAuth next.")
+        : parentGmail.parentAppConfigured
+          ? status("gmail", "Gmail", "partial", "Parent Gmail app is configured. Connect this user's Gmail from chat.", { parentConnector: parentGmail })
+        : parentGmail.parentAppPartiallyConfigured
+          ? status("gmail", "Gmail", "partial", "Parent Gmail app can start sign-in, but is missing required callback credentials.", { parentConnector: parentGmail })
         : gmailProfileExists
-          ? status("gmail", "Gmail", "partial", "Gmail browser profile exists. OAuth can be added later.")
-          : status("gmail", "Gmail", "not_connected", "Connect Gmail OAuth or prepare the Gmail browser."),
+          ? status("gmail", "Gmail", "partial", "Gmail browser profile exists. OAuth can be added from chat after the parent app is configured.", { parentConnector: parentGmail })
+          : status("gmail", "Gmail", "not_connected", "Configure the parent Gmail app once; users can then connect Gmail from chat.", { parentConnector: parentGmail }),
     outlook:
       outlookOAuthExists
-        ? status("outlook", "Outlook", "connected", "Outlook OAuth token is stored locally.")
+        ? status("outlook", "Outlook", "connected", "User Outlook OAuth token is stored locally.", { parentConnector: parentOutlook })
         : outlookOAuthError.message
-          ? status("outlook", "Outlook", "broken", "Outlook OAuth failed. Recheck the Microsoft app registration and restart sign-in.", {
+          ? status("outlook", "Outlook", "broken", "Outlook OAuth failed. Restart Outlook sign-in from chat after fixing the parent app config.", {
+              parentConnector: parentOutlook,
               error: outlookOAuthError.message,
               updatedAt: outlookOAuthError.updatedAt,
             })
-        : outlookConfig.clientId || env.OUTLOOK_OAUTH_CLIENT_ID || env.MICROSOFT_OAUTH_CLIENT_ID
-          ? status("outlook", "Outlook", "partial", "Outlook app registration is configured. Complete Microsoft device sign-in next.")
-          : status("outlook", "Outlook", "not_connected", "Create a Microsoft app registration, paste its client ID, then start Outlook sign-in."),
+        : parentOutlook.parentAppConfigured
+          ? status("outlook", "Outlook", "partial", "Parent Outlook app is configured. Connect this user's Outlook from chat.", { parentConnector: parentOutlook })
+          : status("outlook", "Outlook", "not_connected", "Configure the parent Outlook app once; users can then connect Outlook from chat.", { parentConnector: parentOutlook }),
     linkedin: linkedinProfileExists
       ? status("linkedin", "LinkedIn", "partial", "LinkedIn browser profile exists. Log in through the virtual browser.")
       : status("linkedin", "LinkedIn", "not_connected", "Prepare a LinkedIn virtual browser profile."),
     whatsapp:
       whatsapp.state === "paired"
-        ? status("whatsapp", "WhatsApp", "connected", whatsapp.summary, whatsapp)
+        ? status("whatsapp", "WhatsApp", "connected", whatsapp.summary, { ...whatsapp, parentConnector: parentWhatsApp })
         : whatsapp.state === "qr_needed" || whatsapp.state === "pairing_code" || whatsapp.state === "authenticating"
-          ? status("whatsapp", "WhatsApp", "partial", whatsapp.summary, whatsapp)
+          ? status("whatsapp", "WhatsApp", "partial", whatsapp.summary, { ...whatsapp, parentConnector: parentWhatsApp })
           : ["not_configured", "unpaired"].includes(whatsapp.state)
-            ? status("whatsapp", "WhatsApp", "not_connected", whatsapp.summary, whatsapp)
-            : status("whatsapp", "WhatsApp", "broken", whatsapp.summary, whatsapp),
+            ? status("whatsapp", "WhatsApp", "not_connected", whatsapp.summary, { ...whatsapp, parentConnector: parentWhatsApp })
+            : status("whatsapp", "WhatsApp", "broken", whatsapp.summary, { ...whatsapp, parentConnector: parentWhatsApp }),
     browsers: chrome.command
       ? status("browsers", "Desktops", "connected", "Chrome-compatible browser is available.", {
           command: chrome.command,
