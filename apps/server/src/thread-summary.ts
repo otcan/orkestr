@@ -278,6 +278,25 @@ function threadSummaryState(thread: any, status: any): string {
   return transientRuntimeStates.has(state.toLowerCase()) && !hasOpenRuntimeLease(thread) ? "sleeping" : state;
 }
 
+function hasOwnKey(value: any, key: string): boolean {
+  return Boolean(value && typeof value === "object" && Object.prototype.hasOwnProperty.call(value, key));
+}
+
+export function threadSummaryRuntimeSnapshot(thread: any, status: any, state: string): any {
+  const stored = thread?.runtime && typeof thread.runtime === "object" ? { ...thread.runtime } : null;
+  if (!status) return stored;
+  if (!stored && !status?.lease) return null;
+  const runtime = {
+    ...(stored || {}),
+    ...(status?.lease || {}),
+    state,
+  };
+  if (hasOwnKey(status, "codexStatus")) runtime.codexStatus = status.codexStatus || null;
+  if (hasOwnKey(status, "activeTurnId")) runtime.activeTurnId = status.activeTurnId || null;
+  if (hasOwnKey(status, "pendingRequest")) runtime.pendingRequest = status.pendingRequest || null;
+  return runtime;
+}
+
 function threadCheckoutPath(thread: any, status: any): string {
   return nonEmptyString(
     thread?.worktreePath ||
@@ -439,6 +458,9 @@ export async function threadRuntimeSummary(thread: any, messages: any[] = [], op
   const liveCodexModeSource = String(status?.codexModeSource || "").trim();
   const storedCodexMode = persistedCodexMode(metadata);
   const progress = status?.progress || thread.runtime?.progress || null;
+  const runtime = threadSummaryRuntimeSnapshot(thread, status, state);
+  const codexStatus = hasOwnKey(status, "codexStatus") ? status?.codexStatus || null : thread.runtime?.codexStatus || null;
+  const activeTurnId = hasOwnKey(status, "activeTurnId") ? status?.activeTurnId || null : thread.runtime?.activeTurnId || null;
   const summary = {
     ...thread,
     ...gitState,
@@ -450,7 +472,7 @@ export async function threadRuntimeSummary(thread: any, messages: any[] = [], op
     sessionName: status?.sessionName || thread.runtime?.sessionName || thread.executor?.sessionName || null,
     paneId: status?.paneId || thread.runtime?.paneId || thread.executor?.tmuxTarget || null,
     tmuxTarget: status?.paneId || thread.runtime?.paneId || thread.executor?.tmuxTarget || null,
-    runtime: status?.lease ? { ...(thread.runtime || {}), ...status.lease, state } : thread.runtime || null,
+    runtime,
     activeRuntimeLeaseId: status?.lease?.id || thread.activeRuntimeLeaseId || null,
     promptReady: status?.promptReady ?? ready,
     promptReadyStable: status?.promptReadyStable ?? ready,
@@ -487,8 +509,8 @@ export async function threadRuntimeSummary(thread: any, messages: any[] = [], op
     codexAppServerTransport: status?.codexAppServerTransport || null,
     codexAppServerSocket: status?.codexAppServerSocket || null,
     codexSessionId: metadata.codexSessionId || null,
-    codexStatus: status?.codexStatus || thread.runtime?.codexStatus || null,
-    activeTurnId: status?.activeTurnId || thread.runtime?.activeTurnId || null,
+    codexStatus,
+    activeTurnId,
     importedFromCodex: metadata.importedFromCodex,
     migrationRequired: Boolean(status?.migrationRequired),
     planAvailable,

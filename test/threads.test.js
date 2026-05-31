@@ -7,7 +7,7 @@ import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
 import { promisify } from "node:util";
 import { startServer } from "../apps/server/src/server.js";
-import { threadRuntimeSummary } from "../apps/server/src/thread-summary.ts";
+import { threadRuntimeSummary, threadSummaryRuntimeSnapshot } from "../apps/server/src/thread-summary.ts";
 import { runNextThreadMessage } from "../packages/core/src/executors.js";
 import { applyRuntimeCodexMode, consumeThreadConnectorDeliverySignalCount, deliverPendingThreadInputs, doctorRuntimeResources, drainAllPendingThreadInputs, hardResetThreadRuntime, listRuntimeLeases, resetThreadRuntime, resolveCodexThreadMetadata, runtimeStatus, setThreadConnectorDeliverySignalHandler, sleepThread, syncRuntimeLeases, syncRuntimeWindowName, wakeThread } from "../packages/core/src/runtime-leases.js";
 import { ensureDataDirs } from "../packages/storage/src/paths.js";
@@ -3850,6 +3850,45 @@ test("thread summary ignores corrupt Codex model and reasoning metadata", async 
     restoreEnvValue("OPENAI_MODEL", priorOpenAiModel);
     restoreEnvValue("ORKESTR_DEFAULT_CODEX_REASONING", priorReasoning);
   }
+});
+
+test("thread summary runtime snapshot mirrors live Codex active status", () => {
+  const runtime = threadSummaryRuntimeSnapshot({
+    runtime: {
+      runtimeKind: "codex-app-server",
+      state: "working",
+      activeTurnId: "known-active-turn",
+      codexStatus: { type: "idle" },
+    },
+  }, {
+    state: "working",
+    activeTurnId: "known-active-turn",
+    codexStatus: { type: "active", activeFlags: ["running"] },
+  }, "working");
+
+  assert.equal(runtime.state, "working");
+  assert.equal(runtime.activeTurnId, "known-active-turn");
+  assert.equal(runtime.codexStatus.type, "active");
+  assert.deepEqual(runtime.codexStatus.activeFlags, ["running"]);
+});
+
+test("thread summary runtime snapshot clears stale active turn from live ready status", () => {
+  const runtime = threadSummaryRuntimeSnapshot({
+    runtime: {
+      runtimeKind: "codex-app-server",
+      state: "working",
+      activeTurnId: "stale-turn",
+      codexStatus: { type: "active", activeFlags: ["running"] },
+    },
+  }, {
+    state: "ready",
+    activeTurnId: null,
+    codexStatus: { type: "idle" },
+  }, "ready");
+
+  assert.equal(runtime.state, "ready");
+  assert.equal(runtime.activeTurnId, null);
+  assert.equal(runtime.codexStatus.type, "idle");
 });
 
 test("thread summary ignores stale Plan mode text without a live Codex status line", async () => {
