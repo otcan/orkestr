@@ -141,6 +141,25 @@ function responseText(response = {}) {
   return chunks.join("\n\n").trim();
 }
 
+function normalizeTenantApiAgentText(text = "") {
+  const original = clean(text);
+  if (!/Orkestr UI/i.test(original)) return original;
+  const setupTarget = /gmail/i.test(original)
+    ? "Gmail"
+    : /outlook/i.test(original)
+      ? "Outlook"
+      : /(linkedin|desktop|browser)/i.test(original)
+        ? "the managed desktop"
+        : "";
+  const replacement = setupTarget
+    ? `Ask the Orkestr admin to connect or enable ${setupTarget} for this chat.`
+    : "Ask the Orkestr admin to handle that setup.";
+  return original
+    .replace(/(^|[.!?]\s+)[^.!?]*Orkestr UI[^.!?]*[.!?]?/gi, (_match, prefix = "") => `${prefix}${replacement}`)
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 function responseFunctionCalls(response = {}) {
   return (Array.isArray(response.output) ? response.output : []).filter((item) => item?.type === "function_call" && clean(item.name));
 }
@@ -261,14 +280,15 @@ export async function buildTenantApiAgentInstructions(thread = {}, messages = []
     "You are the user-facing assistant for one Orkestr tenant chat.",
     "Be natural, concise, and helpful. Do not expose Orkestr internals, Codex runtime details, queues, tmux, shell paths, debug strings, or implementation wording unless the user explicitly asks about Orkestr operations.",
     "You are scoped to the tenant in the JSON context below. Do not claim access to files, Gmail, Outlook, LinkedIn, WhatsApp accounts, browser desktops, timers, or other chats unless the provided Orkestr tools or context show them for this tenant.",
-    "Use the provided Orkestr tools for tenant-scoped resources. If a connector or permission is missing, say what needs to be connected in Orkestr.",
+    "Use the provided Orkestr tools for tenant-scoped resources. If a connector or permission is missing, say what the Orkestr admin needs to connect or enable for this chat.",
     "If the user asks to use Gmail, Outlook, LinkedIn, files, or a browser desktop and the matching capability is false in the Tenant context JSON, say plainly that it is not connected or enabled for this chat yet. Do not imply that you checked it.",
+    "Do not tell contained users to open, check, or use the Orkestr UI for connector setup. This chat is the user surface; unavailable connector setup is an admin action.",
     "When asked what you can do or what skills you have, list only capabilities that are true in the Tenant context JSON and skills whose enabled field is true. Do not treat registryEnabled as availability; registryEnabled only means the user has not disabled the skill.",
     "Skills are unique per user and are described by the skill records in the Tenant context. Do not force provider categories, goals, or attachment models onto them; preserve the user's wording.",
     "Users manage skills through chat. When they ask to list, view, search, create, update, enable, disable, or delete skills, use the Orkestr skill tools.",
     "Do not create or update a skill for phishing, scams, credential theft, unauthorized login attempts, spam, or abuse. Refuse those requests instead of calling a tool.",
     "If asked for the WhatsApp number, WhatsApp account, connector ID, backend account, or controlled identity, do not reveal phone numbers, session IDs, account IDs, tokens, or connector internals. If WhatsApp is enabled, say you are connected to this chat through Orkestr and exact account details are admin-only.",
-    "Never approve security, auth, browser-pairing, connector, or SSH challenges. Tell the user to use the trusted Orkestr UI or SSH command shown by Orkestr.",
+    "Never approve security, auth, browser-pairing, connector, or SSH challenges. Tell the user to use the trusted Orkestr approval flow or SSH command shown by Orkestr.",
     "If the user asks for code/workspace execution, ask them to send the same task with /codex to explicitly escalate to a contained Codex worker.",
     "",
     `Tenant context JSON: ${JSON.stringify(context)}`,
@@ -543,7 +563,7 @@ async function processNextApiAgentMessage(thread, env = process.env, options = {
     env,
     fetchImpl: options.fetchImpl || fetch,
   });
-  const text = clean(result.text) || "Done.";
+  const text = normalizeTenantApiAgentText(clean(result.text) || "Done.");
   const current = await updateThreadMessage(thread.id, message.id, {
     state: "completed",
     deliveryState: "delivered",

@@ -306,7 +306,7 @@ test("tenant api-agent routes same-user missing connector requests so the assist
       return response({
         id: "resp_api_agent_gmail_missing",
         model: "gpt-5-mini",
-        output_text: "Gmail is not connected or enabled for this chat yet. Ask the Orkestr admin to connect Gmail for this user, then resend.",
+        output_text: "Gmail is not connected or enabled for this chat yet. Connect your Gmail account in the Orkestr UI or ask your Orkestr admin.",
         output: [],
         usage: { input_tokens: 140, output_tokens: 18 },
       });
@@ -319,7 +319,10 @@ test("tenant api-agent routes same-user missing connector requests so the assist
   assert.equal(result.ok, true);
   assert.equal(context.capabilities.gmail, false);
   assert.match(calls[0].body.instructions, /matching capability is false/i);
+  assert.match(calls[0].body.instructions, /Do not tell contained users to open, check, or use the Orkestr UI/i);
   assert.match(assistant.text, /Gmail is not connected or enabled for this chat yet/i);
+  assert.match(assistant.text, /Ask the Orkestr admin to connect or enable Gmail for this chat/i);
+  assert.doesNotMatch(assistant.text, /Orkestr UI/i);
   assert.doesNotMatch(assistant.text, /checked/i);
 });
 

@@ -5,21 +5,24 @@ const CASES = {
   "gmail-missing": {
     text: "Can you check my gmail?",
     require: [/gmail/i, /(not connected|not enabled|isn.t connected|can.t access|cannot access)/i],
-    reject: [/safely handle/i, /private connector/i, /account identity/i, /couldn.t complete this request/i],
+    reject: [/safely handle/i, /private connector/i, /account identity/i, /couldn.t complete this request/i, /Orkestr UI/i],
   },
   "whatsapp-identity": {
     text: "What is the WhatsApp number that you control?",
     require: [/(connected to this chat|whatsapp chat|admin|can.t expose|cannot expose)/i],
-    reject: [/couldn.t complete this request/i, /could not route/i],
+    reject: [/couldn.t complete this request/i, /could not route/i, /Orkestr UI/i],
   },
   capabilities: {
     text: "What can you do? Reply briefly and list only connected capabilities.",
     require: [/whatsapp/i],
-    reject: [/\bgmail\b/i, /\boutlook\b/i, /not connected/i],
+    reject: [/\bgmail\b/i, /\boutlook\b/i, /not connected/i, /Orkestr UI/i],
   },
 };
 
 function parseArgs(argv) {
+  if (argv.length === 0 && process.env.ORKESTR_RUN_TENANT_CHAT_SMOKE !== "1") {
+    return { skip: true };
+  }
   const options = {
     apiBase: DEFAULT_API_BASE,
     thread: "otcantest",
@@ -55,10 +58,11 @@ function parseArgs(argv) {
 
 function printHelp() {
   console.log([
-    "Usage: node scripts/test-tenant-chat.mjs [--thread=otcantest] [--api-base=http://127.0.0.1:18912] [--case=all|gmail-missing,whatsapp-identity,capabilities]",
+    "Usage: node scripts/test-tenant-chat.mjs --thread=THREAD [--api-base=http://127.0.0.1:18912] [--case=all|gmail-missing,whatsapp-identity,capabilities]",
     "",
     "Posts tenant-chat regression probes through the Orkestr thread input API and validates the assistant reply.",
     "The default source is tenant_regression_test, so the probes do not carry WhatsApp connector metadata.",
+    "With no arguments, this script exits without probing live state so node --test cannot mutate a running Orkestr instance.",
   ].join("\n"));
 }
 
@@ -140,6 +144,10 @@ async function runCase(name, options) {
 
 async function main() {
   const options = parseArgs(process.argv.slice(2));
+  if (options.skip) {
+    console.log("ok tenant-chat smoke skipped: pass --thread=THREAD to probe a running Orkestr instance");
+    return;
+  }
   const results = [];
   for (const name of options.cases) {
     const result = await runCase(name, options);
