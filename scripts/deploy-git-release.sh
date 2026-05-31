@@ -933,7 +933,7 @@ no_interrupt="$(bool_value "${no_interrupt_arg:-${ORKESTR_DEPLOY_NO_INTERRUPT:-1
 wait_active="$(bool_value "${wait_active_arg:-${ORKESTR_DEPLOY_WAIT_ACTIVE:-0}}")"
 active_timeout_seconds="${active_timeout_arg:-${ORKESTR_DEPLOY_ACTIVE_TIMEOUT_SECONDS:-900}}"
 active_check_url="${ORKESTR_DEPLOY_ACTIVE_CHECK_URL:-http://$host:$port/api/threads?scope=all}"
-active_check_timeout_ms="${ORKESTR_DEPLOY_ACTIVE_CHECK_TIMEOUT_MS:-3000}"
+active_check_timeout_ms="${ORKESTR_DEPLOY_ACTIVE_CHECK_TIMEOUT_MS:-10000}"
 deploy_drain_file="${ORKESTR_DEPLOY_DRAIN_FILE:-${ORKESTR_HOME:-$deploy_root/data}/deploy-drain.json}"
 deploy_drain_ttl_seconds="${ORKESTR_DEPLOY_DRAIN_TTL_SECONDS:-1800}"
 deploy_drain_started=0

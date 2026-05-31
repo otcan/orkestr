@@ -88,9 +88,11 @@ export function formatActiveThreads(report = {}) {
     .join("\n");
 }
 
-async function readJsonUrl(url, timeoutMs = 3000) {
+const DEFAULT_ACTIVE_CHECK_TIMEOUT_MS = 10000;
+
+async function readJsonUrl(url, timeoutMs = DEFAULT_ACTIVE_CHECK_TIMEOUT_MS) {
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), Math.max(1, Number(timeoutMs) || 3000));
+  const timeout = setTimeout(() => controller.abort(), Math.max(1, Number(timeoutMs) || DEFAULT_ACTIVE_CHECK_TIMEOUT_MS));
   try {
     const response = await fetch(url, { signal: controller.signal });
     const text = await response.text();
@@ -134,7 +136,7 @@ function argValue(argv, flag, fallback = "") {
 async function main() {
   const argv = process.argv.slice(2);
   const url = argValue(argv, "--url", process.env.ORKESTR_DEPLOY_ACTIVE_CHECK_URL || "");
-  const timeoutMs = Number(argValue(argv, "--timeout-ms", process.env.ORKESTR_DEPLOY_ACTIVE_CHECK_TIMEOUT_MS || "3000")) || 3000;
+  const timeoutMs = Number(argValue(argv, "--timeout-ms", process.env.ORKESTR_DEPLOY_ACTIVE_CHECK_TIMEOUT_MS || String(DEFAULT_ACTIVE_CHECK_TIMEOUT_MS))) || DEFAULT_ACTIVE_CHECK_TIMEOUT_MS;
   if (!url) {
     console.log(JSON.stringify({ ok: false, unavailable: true, active: [], error: "missing_url", checkedAt: new Date().toISOString() }));
     return;
