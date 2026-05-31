@@ -2550,13 +2550,6 @@ ork-first-thread-wizard.first-thread-host {
   margin-top: 22px;
 }
 
-.skills-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
-  gap: 14px;
-  margin-top: 14px;
-}
-
 .user-connector-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
@@ -2564,8 +2557,7 @@ ork-first-thread-wizard.first-thread-host {
   margin-top: 14px;
 }
 
-.connector-card,
-.skill-card {
+.connector-card {
   display: flex;
   flex-direction: column;
   gap: 12px;
@@ -2608,20 +2600,6 @@ ork-first-thread-wizard.first-thread-host {
 .connector-device-code strong {
   color: #f0fff2;
   font-size: 1.1rem;
-}
-
-.skill-meta {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-}
-
-.skill-meta span {
-  padding: 6px 8px;
-  border: 1px solid var(--line);
-  border-radius: 6px;
-  color: var(--muted);
-  font-size: 0.82rem;
 }
 
 .drop-zone.dragging,

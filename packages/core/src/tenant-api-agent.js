@@ -156,6 +156,19 @@ function sourceChannelForMessage(message = {}) {
   return clean(message.connector || message.originSurface || message.source || "");
 }
 
+function publicSkillContext(skills = []) {
+  return (Array.isArray(skills) ? skills : []).slice(0, 50).map((skill) => ({
+    id: clean(skill.id),
+    name: clean(skill.name || skill.label || skill.id),
+    description: clean(skill.description || skill.summary).slice(0, 1000),
+    instructions: clean(skill.instructions).slice(0, 3000),
+    enabled: skill.enabled === true,
+    builtIn: skill.builtIn === true,
+    requiresConnector: clean(skill.requiresConnector),
+    requiresDesktop: clean(skill.requiresDesktop),
+  })).filter((skill) => skill.id);
+}
+
 function publicTenantCapabilities(capabilities = {}) {
   const scopedConnectors = capabilities.scopedConnectors && typeof capabilities.scopedConnectors === "object" ? capabilities.scopedConnectors : {};
   return {
@@ -173,6 +186,7 @@ function publicTenantCapabilities(capabilities = {}) {
     privateOperatorData: false,
     enabledSkills: Array.isArray(capabilities.enabledSkills) ? [...capabilities.enabledSkills] : [],
     disabledSkills: Array.isArray(capabilities.disabledSkills) ? [...capabilities.disabledSkills] : [],
+    skills: publicSkillContext(capabilities.skills),
     scopedConnectors: {
       whatsapp: scopedConnectors.whatsapp === true || capabilities.whatsapp === true,
       gmail: scopedConnectors.gmail === true,
@@ -230,6 +244,9 @@ export async function buildTenantApiAgentInstructions(thread = {}, messages = []
     "You are scoped to the tenant in the JSON context below. Do not claim access to files, Gmail, Outlook, LinkedIn, WhatsApp accounts, browser desktops, timers, or other chats unless the provided Orkestr tools or context show them for this tenant.",
     "Use the provided Orkestr tools for tenant-scoped resources. If a connector or permission is missing, say what needs to be connected in Orkestr.",
     "When asked what you can do, list only capabilities that are true in the Tenant context JSON. Do not mention unavailable capabilities as if they are connected.",
+    "Skills are unique per user and are described by the skill records in the Tenant context. Do not force provider categories, goals, or attachment models onto them; preserve the user's wording.",
+    "Users manage skills through chat. When they ask to list, view, search, create, update, enable, disable, or delete skills, use the Orkestr skill tools.",
+    "Do not create or update a skill for phishing, scams, credential theft, unauthorized login attempts, spam, or abuse. Refuse those requests instead of calling a tool.",
     "If asked for the WhatsApp number, WhatsApp account, connector ID, backend account, or controlled identity, do not reveal phone numbers, session IDs, account IDs, tokens, or connector internals. If WhatsApp is enabled, say you are connected to this chat through Orkestr and exact account details are admin-only.",
     "Never approve security, auth, browser-pairing, connector, or SSH challenges. Tell the user to use the trusted Orkestr UI or SSH command shown by Orkestr.",
     "If the user asks for code/workspace execution, ask them to send the same task with /codex to explicitly escalate to a contained Codex worker.",

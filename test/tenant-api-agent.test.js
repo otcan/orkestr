@@ -8,6 +8,7 @@ import { processApiAgentThreadInput, threadUsesApiAgent } from "../packages/core
 import { runTenantApiAgentTool } from "../packages/core/src/tenant-api-agent-tools.js";
 import { userPrincipal } from "../packages/core/src/principal.js";
 import { createThread, enqueueThreadInputForPrincipal, getThread, listThreadMessages } from "../packages/core/src/threads.js";
+import { upsertUser } from "../packages/core/src/users.js";
 import { listFilesForPrincipal } from "../packages/core/src/workspace-files.js";
 import { initialQueueDeliveryState, routeWhatsAppInbound } from "../packages/connectors/src/whatsapp.js";
 import { writeConnectorConfig } from "../packages/storage/src/config.js";
@@ -484,21 +485,125 @@ test("tenant api-agent fails closed when credit budget is exhausted", async () =
   assert.equal(messages.find((message) => message.role === "user").state, "failed");
 });
 
+test("tenant api-agent creates user skills through sanitized chat tools", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-api-agent-skill-tools-"));
+  const sanitizerLog = path.join(home, "sanitizer-actions.jsonl");
+  const script = path.join(home, "skill-tool-sanitizer.mjs");
+  await fs.writeFile(
+    script,
+    [
+      "import fs from 'node:fs';",
+      "let input = '';",
+      "process.stdin.setEncoding('utf8');",
+      "process.stdin.on('data', (chunk) => { input += chunk; });",
+      "process.stdin.on('end', () => {",
+      "  const payload = JSON.parse(input);",
+      `  fs.appendFileSync(${JSON.stringify(sanitizerLog)}, JSON.stringify({ action: payload.action, input: payload.input }) + '\\n');`,
+      "  console.log(JSON.stringify({ allow: true, reason: 'skill-tool-ok', model: 'test-llm' }));",
+      "});",
+      "",
+    ].join("\n"),
+    "utf8",
+  );
+  const env = {
+    ORKESTR_HOME: home,
+    OPENAI_API_KEY: "sk-test",
+    ORKESTR_LLM_SANITIZER_COMMAND_JSON: JSON.stringify([process.execPath, script]),
+  };
+  await upsertUser({ id: "otcan", role: "user", displayName: "Otcan" }, env);
+  await createThread({
+    id: "skill-chat",
+    ownerUserId: "otcan",
+    name: "skill-chat",
+    runtimeKind: "api-agent",
+    executor: { type: "api-agent", metadata: { runtimeKind: "api-agent" } },
+    binding: { connector: "whatsapp", chatId: "chat-skill" },
+  }, env);
+  await enqueueThreadInputForPrincipal("skill-chat", {
+    text: "Add a CRM helper skill for my own HubSpot process.",
+    source: "whatsapp_inbound",
+    connector: "whatsapp",
+    chatId: "chat-skill",
+  }, userPrincipal({ id: "otcan", role: "user" }), env);
+
+  const calls = [];
+  const result = await processApiAgentThreadInput("skill-chat", env, {
+    fetchImpl: async (url, options) => {
+      calls.push(JSON.parse(options.body));
+      if (calls.length === 1) {
+        return response({
+          id: "resp_skill_tool_1",
+          model: "gpt-5-mini",
+          output_text: "",
+          output: [{
+            type: "function_call",
+            name: "orkestr_create_skill",
+            call_id: "call_skill_create",
+            arguments: JSON.stringify({
+              name: "CRM helper",
+              description: "Help this user with their own CRM workflow.",
+              instructions: "Use only CRM accounts connected by this user.",
+              enabled: true,
+            }),
+          }],
+          usage: { input_tokens: 180, output_tokens: 12 },
+        });
+      }
+      return response({
+        id: "resp_skill_tool_2",
+        model: "gpt-5-mini",
+        output_text: "CRM helper is enabled for this chat.",
+        output: [],
+        usage: { input_tokens: 220, output_tokens: 8 },
+      });
+    },
+  });
+  const messages = await listThreadMessages("skill-chat", env);
+  const listed = await runTenantApiAgentTool("orkestr_list_skills", {}, { principal: userPrincipal({ id: "otcan", role: "user" }) }, env);
+  const sanitizerActions = (await fs.readFile(sanitizerLog, "utf8"))
+    .trim()
+    .split("\n")
+    .map((line) => JSON.parse(line).action);
+
+  assert.equal(result.ok, true);
+  assert.equal(calls.length, 2);
+  assert.equal(messages.find((message) => message.role === "assistant").text, "CRM helper is enabled for this chat.");
+  assert.equal(listed.skills.some((skill) => skill.id === "crm-helper" && skill.createdBy === "chat"), true);
+  assert.equal(sanitizerActions.includes("thread.input"), true);
+  assert.equal(sanitizerActions.includes("api-agent.input"), true);
+  assert.equal(sanitizerActions.includes("api-agent.tool.orkestr_create_skill"), true);
+});
+
 test("tenant api-agent tool gateway stays inside scoped file roots", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-api-agent-tools-"));
   const env = { ORKESTR_HOME: home };
+  await upsertUser({ id: "otcan", role: "user", displayName: "Otcan" }, env);
   const principal = userPrincipal({ id: "otcan", role: "user" });
   const files = await listFilesForPrincipal("", principal, env);
   const target = path.join(files.roots[0].path, "notes.txt");
 
   await runTenantApiAgentTool("orkestr_write_file", { path: target, text: "tenant note" }, { principal }, env);
   const read = await runTenantApiAgentTool("orkestr_read_file", { path: target }, { principal }, env);
+  const createdSkill = await runTenantApiAgentTool("orkestr_create_skill", {
+    name: "CRM helper",
+    description: "Help this user with their own CRM workflow.",
+    instructions: "Only use accounts and records owned by this user.",
+    enabled: true,
+  }, { principal }, env);
+  const searchedSkills = await runTenantApiAgentTool("orkestr_search_skills", { query: "crm" }, { principal }, env);
+  const listedSkills = await runTenantApiAgentTool("orkestr_list_skills", {}, { principal }, env);
+  const deletedSkill = await runTenantApiAgentTool("orkestr_delete_skill", { skillId: createdSkill.skill.id }, { principal }, env);
 
   await assert.rejects(
     () => runTenantApiAgentTool("orkestr_read_file", { path: path.join(home, "secrets", "token") }, { principal }, env),
     /file_path_forbidden/,
   );
   assert.equal(read.text, "tenant note");
+  assert.equal(createdSkill.skill.id, "crm-helper");
+  assert.equal(createdSkill.skill.createdBy, "chat");
+  assert.equal(searchedSkills.skills.some((skill) => skill.id === "crm-helper"), true);
+  assert.equal(listedSkills.skills.some((skill) => skill.id === "linkedin" && skill.label === "Managed Desktop"), true);
+  assert.equal(deletedSkill.deleted, true);
 });
 
 test("tenant api-agent records manual usage summaries", async () => {

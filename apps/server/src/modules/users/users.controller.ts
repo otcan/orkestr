@@ -1,4 +1,4 @@
-import { Body, Controller, Get, HttpCode, Param, Patch, Post, Req } from "@nestjs/common";
+import { Body, Controller, Delete, Get, HttpCode, Param, Patch, Post, Query, Req } from "@nestjs/common";
 import { startGmailOAuth as beginGmailOAuth } from "../../../../../packages/connectors/src/gmail.js";
 import { startOutlookDeviceOAuth } from "../../../../../packages/connectors/src/outlook.js";
 import { isAdminPrincipal, resourceOwnerUserId } from "../../../../../packages/core/src/policy.js";
@@ -20,7 +20,11 @@ import {
   updateUserLimits,
 } from "../../../../../packages/core/src/users.js";
 import {
+  createUserSkillForPrincipal,
+  deleteUserSkillForPrincipal,
+  getUserSkillForPrincipal,
   listUserSkillsForPrincipal,
+  searchUserSkillsForPrincipal,
   setUserSkillForPrincipal,
 } from "../../../../../packages/core/src/user-skills.js";
 import { httpError } from "../../common/http.js";
@@ -76,7 +80,15 @@ function userSummary(user: any, threads: any[], timers: any[]) {
 
 function skillBody(body: Record<string, unknown> = {}) {
   const output: Record<string, unknown> = {};
+  if (body.id !== undefined) output.id = body.id;
+  if (body.skillId !== undefined) output.skillId = body.skillId;
+  if (body.name !== undefined) output.name = body.name;
+  if (body.label !== undefined) output.label = body.label;
+  if (body.description !== undefined) output.description = body.description;
+  if (body.summary !== undefined) output.summary = body.summary;
+  if (body.instructions !== undefined) output.instructions = body.instructions;
   if (body.enabled !== undefined) output.enabled = body.enabled;
+  if (body.metadata !== undefined) output.metadata = body.metadata;
   return output;
 }
 
@@ -174,16 +186,60 @@ export class UsersController {
     return listUserSkillsForPrincipal(principal.userId, principal);
   }
 
+  @Get("me/skills/search")
+  async searchMySkills(@Req() request: any, @Query("q") query = "") {
+    const principal = requestPrincipal(request);
+    return searchUserSkillsForPrincipal(principal.userId, query, principal);
+  }
+
+  @Post("me/skills")
+  @HttpCode(200)
+  async createMySkill(@Req() request: any, @Body() body: Record<string, unknown> = {}) {
+    const principal = requestPrincipal(request);
+    return createUserSkillForPrincipal(principal.userId, skillBody(body), principal);
+  }
+
+  @Get("me/skills/:skillId")
+  async mySkill(@Req() request: any, @Param("skillId") skillId: string) {
+    const principal = requestPrincipal(request);
+    return getUserSkillForPrincipal(principal.userId, skillId, principal);
+  }
+
   @Patch("me/skills/:skillId")
   async updateMySkill(@Req() request: any, @Param("skillId") skillId: string, @Body() body: Record<string, unknown> = {}) {
     const principal = requestPrincipal(request);
     return setUserSkillForPrincipal(principal.userId, skillId, skillBody(body), principal);
   }
 
+  @Delete("me/skills/:skillId")
+  async deleteMySkill(@Req() request: any, @Param("skillId") skillId: string) {
+    const principal = requestPrincipal(request);
+    return deleteUserSkillForPrincipal(principal.userId, skillId, principal);
+  }
+
   @Get(":userId/skills")
   async skills(@Req() request: any, @Param("userId") userId: string) {
     const principal = requestPrincipal(request);
     return listUserSkillsForPrincipal(requestedUserId(userId, request), principal);
+  }
+
+  @Get(":userId/skills/search")
+  async searchSkills(@Req() request: any, @Param("userId") userId: string, @Query("q") query = "") {
+    const principal = requestPrincipal(request);
+    return searchUserSkillsForPrincipal(requestedUserId(userId, request), query, principal);
+  }
+
+  @Post(":userId/skills")
+  @HttpCode(200)
+  async createSkill(@Req() request: any, @Param("userId") userId: string, @Body() body: Record<string, unknown> = {}) {
+    const principal = requestPrincipal(request);
+    return createUserSkillForPrincipal(requestedUserId(userId, request), skillBody(body), principal);
+  }
+
+  @Get(":userId/skills/:skillId")
+  async skill(@Req() request: any, @Param("userId") userId: string, @Param("skillId") skillId: string) {
+    const principal = requestPrincipal(request);
+    return getUserSkillForPrincipal(requestedUserId(userId, request), skillId, principal);
   }
 
   @Get(":userId/identities")
@@ -291,6 +347,12 @@ export class UsersController {
   async updateSkill(@Req() request: any, @Param("userId") userId: string, @Param("skillId") skillId: string, @Body() body: Record<string, unknown> = {}) {
     const principal = requestPrincipal(request);
     return setUserSkillForPrincipal(requestedUserId(userId, request), skillId, skillBody(body), principal);
+  }
+
+  @Delete(":userId/skills/:skillId")
+  async deleteSkill(@Req() request: any, @Param("userId") userId: string, @Param("skillId") skillId: string) {
+    const principal = requestPrincipal(request);
+    return deleteUserSkillForPrincipal(requestedUserId(userId, request), skillId, principal);
   }
 
   @Get("credit-usage")

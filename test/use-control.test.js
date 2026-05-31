@@ -22,7 +22,15 @@ import { sanitizeAction } from "../packages/core/src/llm-sanitizer.js";
 import { recordCreditUsage } from "../packages/core/src/credit-usage.js";
 import { approvePairingChallenge } from "../packages/core/src/security.js";
 import { createUser, disableUser, findOrCreateExternalUser, listUsers, readUserPrivateIdentities, updateUser, upsertUser } from "../packages/core/src/users.js";
-import { listUserSkillsForPrincipal, setUserSkillForPrincipal, userScopedCapabilityHints } from "../packages/core/src/user-skills.js";
+import {
+  createUserSkillForPrincipal,
+  deleteUserSkillForPrincipal,
+  getUserSkillForPrincipal,
+  listUserSkillsForPrincipal,
+  searchUserSkillsForPrincipal,
+  setUserSkillForPrincipal,
+  userScopedCapabilityHints,
+} from "../packages/core/src/user-skills.js";
 import { createTenantVm } from "../packages/core/src/tenant-vm-registry.js";
 import { acquireDesktopLease } from "../packages/browsers/src/desktop-leases.js";
 import {
@@ -491,16 +499,39 @@ test("user skill registry is scoped per owner and stores public skill toggles", 
 
   const initial = await listUserSkillsForPrincipal("alice", alice, env);
   assert.ok(initial.skills.some((skill) => skill.id === "gmail" && skill.enabled));
+  assert.equal(initial.skills.find((skill) => skill.id === "linkedin")?.label, "Managed Desktop");
   assert.ok(initial.skills.some((skill) => skill.id === "learning" && skill.scopes.includes("own_workspace")));
   assert.equal(initial.skills.some((skill) => Object.hasOwn(skill, "token")), false);
 
   const disabled = await setUserSkillForPrincipal("alice", "gmail", { enabled: false }, alice, env);
+  const created = await createUserSkillForPrincipal("alice", {
+    name: "Box transfer",
+    description: "Use the user's Box account for their own transfer workflow.",
+    instructions: "Ask the user what they want moved, then use only the accounts they connected.",
+    metadata: { endpoint: "box", token: "never-store-this" },
+  }, alice, env);
+  const fetched = await getUserSkillForPrincipal("alice", created.skill.id, alice, env);
+  const searched = await searchUserSkillsForPrincipal("alice", "transfer", alice, env);
+  const updated = await setUserSkillForPrincipal("alice", created.skill.id, {
+    instructions: "Only work with the user's own connected accounts.",
+    enabled: true,
+  }, alice, env);
+  const deleted = await deleteUserSkillForPrincipal("alice", created.skill.id, alice, env);
   const after = await listUserSkillsForPrincipal("alice", adminPrincipal(), env);
   const file = await fs.readFile(userDataPaths("alice", env).skills, "utf8");
 
   assert.equal(disabled.skill.id, "gmail");
   assert.equal(disabled.skill.enabled, false);
+  assert.equal(created.skill.id, "box-transfer");
+  assert.equal(created.skill.builtIn, false);
+  assert.equal(created.skill.metadata.endpoint, "box");
+  assert.equal(Object.hasOwn(created.skill.metadata, "token"), false);
+  assert.equal(fetched.skill.id, "box-transfer");
+  assert.equal(searched.skills.some((skill) => skill.id === "box-transfer"), true);
+  assert.match(updated.skill.instructions, /own connected accounts/);
+  assert.equal(deleted.deleted, true);
   assert.equal(after.skills.find((skill) => skill.id === "gmail").enabled, false);
+  assert.equal(after.skills.some((skill) => skill.id === "box-transfer"), false);
   assert.match(file, /"gmail"/);
   assert.equal(file.includes("secret"), false);
   assert.equal(file.includes("token"), false);
@@ -1012,6 +1043,29 @@ test("user management API is admin-only and can pair a browser to a managed user
     }));
     assert.equal(disabledSkill.skill.id, "linkedin");
     assert.equal(disabledSkill.skill.enabled, false);
+    assert.equal(disabledSkill.skill.label, "Managed Desktop");
+    const createdSkill = await read(await fetch(`${baseUrl}/api/users/alice-example.test/skills`, {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie: adminCookie },
+      body: JSON.stringify({
+        name: "Calendly follow-up",
+        description: "Help this user handle their own scheduling workflow.",
+        instructions: "Use only accounts connected by this user.",
+        metadata: { workspace: "calendar", apiKey: "not-stored" },
+      }),
+    }));
+    assert.equal(createdSkill.skill.id, "calendly-follow-up");
+    assert.equal(createdSkill.skill.metadata.workspace, "calendar");
+    assert.equal(Object.hasOwn(createdSkill.skill.metadata, "apiKey"), false);
+    const fetchedSkill = await read(await fetch(`${baseUrl}/api/users/alice-example.test/skills/calendly-follow-up`, { headers: { cookie: adminCookie } }));
+    assert.equal(fetchedSkill.skill.description, "Help this user handle their own scheduling workflow.");
+    const searchedSkill = await read(await fetch(`${baseUrl}/api/users/alice-example.test/skills/search?q=calendly`, { headers: { cookie: adminCookie } }));
+    assert.equal(searchedSkill.skills.some((skill) => skill.id === "calendly-follow-up"), true);
+    const deletedSkill = await read(await fetch(`${baseUrl}/api/users/alice-example.test/skills/calendly-follow-up`, {
+      method: "DELETE",
+      headers: { cookie: adminCookie },
+    }));
+    assert.equal(deletedSkill.deleted, true);
 
     const userChallenge = await read(await fetch(`${baseUrl}/api/setup/security/challenges`, {
       method: "POST",
@@ -1071,6 +1125,18 @@ test("user management API is admin-only and can pair a browser to a managed user
     const selfSkills = await read(await fetch(`${baseUrl}/api/users/me/skills`, { headers: { cookie: userCookie } }));
     assert.equal(selfSkills.userId, "alice-example.test");
     assert.equal(selfSkills.skills.find((skill) => skill.id === "linkedin").enabled, false);
+    const selfSkillCreate = await read(await fetch(`${baseUrl}/api/users/me/skills`, {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie: userCookie },
+      body: JSON.stringify({
+        name: "Job board helper",
+        description: "Help this user with job board workflows they control.",
+        instructions: "Use only the user's own accounts and browser sessions.",
+      }),
+    }));
+    assert.equal(selfSkillCreate.skill.id, "job-board-helper");
+    const selfSkillSearch = await read(await fetch(`${baseUrl}/api/users/me/skills/search?q=job`, { headers: { cookie: userCookie } }));
+    assert.equal(selfSkillSearch.skills.some((skill) => skill.id === "job-board-helper"), true);
     const selfSkillUpdate = await read(await fetch(`${baseUrl}/api/users/me/skills/learning`, {
       method: "PATCH",
       headers: { "content-type": "application/json", cookie: userCookie },
@@ -1083,6 +1149,11 @@ test("user management API is admin-only and can pair a browser to a managed user
       body: JSON.stringify({ enabled: true }),
     }));
     assert.equal(selfLinkedInEnable.skill.enabled, true);
+    const selfSkillDelete = await read(await fetch(`${baseUrl}/api/users/me/skills/job-board-helper`, {
+      method: "DELETE",
+      headers: { cookie: userCookie },
+    }));
+    assert.equal(selfSkillDelete.deleted, true);
     const crossSkillsResponse = await fetch(`${baseUrl}/api/users/bob-example.test/skills`, { headers: { cookie: userCookie } });
     const crossSkills = await read(crossSkillsResponse);
     assert.equal(crossSkillsResponse.status, 403);

@@ -55,7 +55,6 @@
         <button class="secondary" type="button" [class.active]="isUserNavPanelActive('userTimers')" (click)="openPanel('userTimers')">Timers</button>
         <button class="secondary" type="button" [class.active]="isUserNavPanelActive('userDesk')" (click)="openPanel('userDesk')">Desk</button>
         <button class="secondary" type="button" [class.active]="isUserNavPanelActive('userConnectors')" (click)="openPanel('userConnectors')">Connectors</button>
-        <button class="secondary" type="button" [class.active]="isUserNavPanelActive('userSkills')" (click)="openPanel('userSkills')">Skills</button>
       </nav>
     }
 
@@ -260,8 +259,6 @@
       <ork-user-desk-page></ork-user-desk-page>
     } @else if (activePanel === "userConnectors") {
       <ork-user-connectors-page></ork-user-connectors-page>
-    } @else if (activePanel === "userSkills") {
-      <ork-user-skills-page></ork-user-skills-page>
     } @else if ((threadWizardOpen || !threads.length) && canCreateThreadFromSidebar()) {
       <ork-first-thread-wizard
         class="first-thread-host"

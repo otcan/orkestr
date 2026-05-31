@@ -270,7 +270,7 @@ test("web shell switches to a constrained non-admin user mode", async () => {
   assert.match(component, /uiRuntimeReady\(\): boolean/);
   assert.match(component, /return this\.isUserMode\(\) \|\| this\.codexAgentReady\(\)/);
   assert.match(component, /panelAllowedForCurrentUser\(panel: Panel\): boolean/);
-  assert.match(component, /\["chat", "history", "timers", "files", "userTimers", "userDesk", "userConnectors", "userSkills"\]\.includes\(panel\)/);
+  assert.match(component, /\["chat", "history", "timers", "files", "userTimers", "userDesk", "userConnectors"\]\.includes\(panel\)/);
   assert.match(component, /normalizeUserModeView\(\)/);
   assert.match(component, /isUserNavPanelActive\(panel: Panel\): boolean/);
   assert.match(component, /isRouteLevelUserPanel\(panel: Panel\): boolean/);
@@ -283,7 +283,7 @@ test("web shell switches to a constrained non-admin user mode", async () => {
   assert.match(template, /\(click\)="openPanel\('userTimers'\)">Timers<\/button>/);
   assert.match(template, /\(click\)="openPanel\('userDesk'\)">Desk<\/button>/);
   assert.match(template, /\(click\)="openPanel\('userConnectors'\)">Connectors<\/button>/);
-  assert.match(template, /\(click\)="openPanel\('userSkills'\)">Skills<\/button>/);
+  assert.doesNotMatch(template, /\(click\)="openPanel\('userSkills'\)">Skills<\/button>/);
   assert.match(template, /\[placeholder\]="sidebarSearchPlaceholder\(\)"/);
   assert.match(template, /@if \(isAdminMode\(\) && visibleChildWorkers\(thread\)\.length > 0\)/);
   assert.match(template, /@if \(activePanel === "settings" && isAdminMode\(\)\)/);
@@ -399,44 +399,36 @@ test("web shell exposes a user connector management page", async () => {
   assert.match(styles, /\.connector-device-code/);
 });
 
-test("web shell exposes a user skills management page", async () => {
+test("web shell keeps user skills chat and API only", async () => {
   const template = await fs.readFile("apps/web/src/app/app.component.html", "utf8");
   const component = await fs.readFile("apps/web/src/app/app.component.ts", "utf8");
-  const skillsComponent = await fs.readFile("apps/web/src/app/user-skills-page.component.ts", "utf8");
-  const skillsTemplate = await fs.readFile("apps/web/src/app/user-skills-page.component.html", "utf8");
-  const opsComponent = await fs.readFile("apps/web/src/app/ops-page.component.ts", "utf8");
+  const usersController = await fs.readFile("apps/server/src/modules/users/users.controller.ts", "utf8");
+  const agentTools = await fs.readFile("packages/core/src/tenant-api-agent-tools.js", "utf8");
+  const agent = await fs.readFile("packages/core/src/tenant-api-agent.js", "utf8");
   const opsTemplate = await fs.readFile("apps/web/src/app/ops-page.component.html", "utf8");
   const api = await fs.readFile("apps/web/src/app/api.service.ts", "utf8");
-  const styles = await fs.readFile("apps/web/src/styles.css", "utf8");
 
-  assert.match(component, /import \{ UserSkillsPageComponent \} from "\.\/user-skills-page\.component"/);
-  assert.match(component, /type Panel = .*"userSkills"/);
+  assert.doesNotMatch(component, /UserSkillsPageComponent/);
+  assert.doesNotMatch(component, /"userSkills"/);
   assert.match(component, /parts\[0\] === "skills"/);
   assert.match(component, /parts\[0\] === "ng" && parts\[1\] === "skills"/);
-  assert.match(component, /panel === "userSkills"\) return "\/skills"/);
-  assert.match(component, /globalThis\.document\.title = "Skills · Orkestr"/);
-  assert.match(template, /<ork-user-skills-page><\/ork-user-skills-page>/);
-  assert.match(template, /\(click\)="openPanel\('userSkills'\)"/);
-  assert.match(skillsComponent, /selector: "ork-user-skills-page"/);
-  assert.match(skillsComponent, /this\.api\.currentUserSkills\(\)/);
-  assert.match(skillsComponent, /enabledSkills\(\): UserSkill\[\]/);
-  assert.match(skillsComponent, /disabledSkills\(\): UserSkill\[\]/);
-  assert.match(skillsComponent, /this\.skills\.filter\(\(skill\) => skill\.enabled === true\)/);
-  assert.match(skillsComponent, /this\.api\.updateCurrentUserSkill\(skill\.id, enabled\)/);
-  assert.match(skillsTemplate, /@for \(skill of skills; track skill\.id\)/);
-  assert.match(skillsTemplate, /\(click\)="updateSkill\(skill, true\)"/);
-  assert.match(skillsTemplate, /\(click\)="updateSkill\(skill, false\)"/);
+  assert.doesNotMatch(template, /<ork-user-skills-page><\/ork-user-skills-page>/);
+  assert.doesNotMatch(template, /\(click\)="openPanel\('userSkills'\)"/);
+  assert.doesNotMatch(opsTemplate, /<h4>Skills<\/h4>/);
   assert.match(api, /interface UserSkill/);
   assert.match(api, /currentUserSkills\(\)/);
   assert.match(api, /userSkills\(id: string\)/);
+  assert.match(api, /createCurrentUserSkill\(body: Record<string, unknown>\)/);
+  assert.match(api, /searchCurrentUserSkills\(query: string\)/);
+  assert.match(api, /deleteCurrentUserSkill\(skillId: string\)/);
   assert.match(api, /updateUserSkill\(id: string, skillId: string, enabled: boolean\)/);
-  assert.match(opsComponent, /opsUserSkills: UserSkill\[\] = \[\]/);
-  assert.match(opsComponent, /loadSelectedUserSkills\(false\)/);
-  assert.match(opsComponent, /toggleUserSkill\(user: OrkestrUser, skill: UserSkill\)/);
-  assert.match(opsTemplate, /<h4>Skills<\/h4>/);
-  assert.match(opsTemplate, /toggleUserSkill\(user, skill\)/);
-  assert.match(styles, /\.skills-grid/);
-  assert.match(styles, /\.skill-card/);
+  assert.match(usersController, /@Post\("me\/skills"\)/);
+  assert.match(usersController, /@Get\("me\/skills\/search"\)/);
+  assert.match(usersController, /@Delete\("me\/skills\/:skillId"\)/);
+  assert.match(agentTools, /name: "orkestr_create_skill"/);
+  assert.match(agentTools, /name: "orkestr_search_skills"/);
+  assert.match(agentTools, /name: "orkestr_delete_skill"/);
+  assert.match(agent, /Users manage skills through chat/);
 });
 
 test("web shell exposes a user-scoped files page", async () => {

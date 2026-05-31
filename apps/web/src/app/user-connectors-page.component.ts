@@ -65,7 +65,7 @@ export class UserConnectorsPageComponent implements OnInit {
       whatsapp: "WhatsApp Chat",
       gmail: "Gmail",
       outlook: "Outlook",
-      linkedin: "LinkedIn Desk",
+      linkedin: "Managed Desktop",
       browsers: "Desktops",
     };
     return labels[id] || id;
@@ -76,7 +76,7 @@ export class UserConnectorsPageComponent implements OnInit {
       whatsapp: "Messages arrive through your assigned chat.",
       gmail: "Connect the Gmail account assigned to this user.",
       outlook: "Connect the Outlook account assigned to this user.",
-      linkedin: "Use the private browser desk for LinkedIn and web logins.",
+      linkedin: "Use the private browser desk for web logins and managed browsing.",
       browsers: "Managed browser desktops for this account.",
     };
     return summaries[id] || "User connector";

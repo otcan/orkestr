@@ -2,6 +2,14 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { listTimersForPrincipal } from "./timers.js";
 import { whereAmI } from "./whereiam.js";
+import {
+  createUserSkillForPrincipal,
+  deleteUserSkillForPrincipal,
+  getUserSkillForPrincipal,
+  listUserSkillsForPrincipal,
+  searchUserSkillsForPrincipal,
+  setUserSkillForPrincipal,
+} from "./user-skills.js";
 import { fileBrowserRootsForPrincipal, listFilesForPrincipal } from "./workspace-files.js";
 
 function clean(value) {
@@ -29,6 +37,25 @@ function safeText(value = "", max = 60_000) {
   return String(value || "").slice(0, max);
 }
 
+function principalUserId(principal = {}) {
+  const userId = clean(principal?.userId);
+  if (!userId) {
+    const error = new Error("user_required");
+    error.statusCode = 403;
+    throw error;
+  }
+  return userId;
+}
+
+function skillPatchFromArgs(args = {}) {
+  const patch = {};
+  if (clean(args.name)) patch.name = clean(args.name);
+  if (clean(args.description)) patch.description = clean(args.description);
+  if (clean(args.instructions)) patch.instructions = clean(args.instructions);
+  if (args.enabled !== undefined) patch.enabled = args.enabled === true || args.enabled === "true";
+  return patch;
+}
+
 export function tenantApiAgentToolDefinitions() {
   return [
     {
@@ -38,6 +65,94 @@ export function tenantApiAgentToolDefinitions() {
       parameters: {
         type: "object",
         properties: {},
+        additionalProperties: false,
+      },
+      strict: true,
+    },
+    {
+      type: "function",
+      name: "orkestr_list_skills",
+      description: "List this user's Orkestr skills and their user-specific descriptions. Use this when the user asks what skills are available.",
+      parameters: {
+        type: "object",
+        properties: {},
+        additionalProperties: false,
+      },
+      strict: true,
+    },
+    {
+      type: "function",
+      name: "orkestr_get_skill",
+      description: "View one of this user's Orkestr skills by id.",
+      parameters: {
+        type: "object",
+        properties: {
+          skillId: { type: "string", description: "The skill id to view." },
+        },
+        required: ["skillId"],
+        additionalProperties: false,
+      },
+      strict: true,
+    },
+    {
+      type: "function",
+      name: "orkestr_search_skills",
+      description: "Search this user's Orkestr skills by id, name, description, or instructions.",
+      parameters: {
+        type: "object",
+        properties: {
+          query: { type: "string", description: "Search text." },
+        },
+        required: ["query"],
+        additionalProperties: false,
+      },
+      strict: true,
+    },
+    {
+      type: "function",
+      name: "orkestr_create_skill",
+      description: "Create a user-specific skill record. Refuse instead of calling this for requests involving scams, credential theft, unauthorized account access, or abuse.",
+      parameters: {
+        type: "object",
+        properties: {
+          name: { type: "string", description: "Short user-facing skill name." },
+          description: { type: "string", description: "What this skill lets the assistant help with for this user." },
+          instructions: { type: "string", description: "User-specific operating instructions. Do not include secrets or passwords." },
+          enabled: { type: "boolean", description: "Whether the skill should be enabled immediately." },
+        },
+        required: ["name", "description", "instructions", "enabled"],
+        additionalProperties: false,
+      },
+      strict: true,
+    },
+    {
+      type: "function",
+      name: "orkestr_update_skill",
+      description: "Update a user-specific Orkestr skill or enable/disable an existing skill.",
+      parameters: {
+        type: "object",
+        properties: {
+          skillId: { type: "string", description: "The skill id to update." },
+          name: { type: "string", description: "New skill name, or empty string to keep it unchanged." },
+          description: { type: "string", description: "New description, or empty string to keep it unchanged." },
+          instructions: { type: "string", description: "New instructions, or empty string to keep them unchanged." },
+          enabled: { type: "boolean", description: "Whether the skill should be enabled." },
+        },
+        required: ["skillId", "name", "description", "instructions", "enabled"],
+        additionalProperties: false,
+      },
+      strict: true,
+    },
+    {
+      type: "function",
+      name: "orkestr_delete_skill",
+      description: "Delete a user-created skill. For built-in skills this disables the skill instead of removing the built-in record.",
+      parameters: {
+        type: "object",
+        properties: {
+          skillId: { type: "string", description: "The skill id to delete or disable." },
+        },
+        required: ["skillId"],
         additionalProperties: false,
       },
       strict: true,
@@ -105,6 +220,27 @@ export async function runTenantApiAgentTool(name = "", args = {}, context = {}, 
   const tool = clean(name);
   if (tool === "orkestr_whereiam") {
     return whereAmI({ threadId: thread?.id || "", cwd: thread?.cwd || thread?.workspace || "", principal }, env);
+  }
+  if (tool === "orkestr_list_skills") {
+    return listUserSkillsForPrincipal(principalUserId(principal), principal, env);
+  }
+  if (tool === "orkestr_get_skill") {
+    return getUserSkillForPrincipal(principalUserId(principal), args.skillId, principal, env);
+  }
+  if (tool === "orkestr_search_skills") {
+    return searchUserSkillsForPrincipal(principalUserId(principal), args.query, principal, env);
+  }
+  if (tool === "orkestr_create_skill") {
+    return createUserSkillForPrincipal(principalUserId(principal), {
+      ...skillPatchFromArgs(args),
+      createdBy: "chat",
+    }, principal, env);
+  }
+  if (tool === "orkestr_update_skill") {
+    return setUserSkillForPrincipal(principalUserId(principal), args.skillId, skillPatchFromArgs(args), principal, env);
+  }
+  if (tool === "orkestr_delete_skill") {
+    return deleteUserSkillForPrincipal(principalUserId(principal), args.skillId, principal, env);
   }
   if (tool === "orkestr_list_files") {
     return listFilesForPrincipal(clean(args.path), principal, env);

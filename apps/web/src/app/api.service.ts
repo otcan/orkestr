@@ -951,19 +951,27 @@ export interface UserIdentitiesResponse {
 
 export interface UserSkill {
   id: string;
+  name?: string;
   label: string;
   category: string;
+  description?: string;
   summary?: string;
+  instructions?: string;
   enabled: boolean;
   enabledByDefault?: boolean;
+  builtIn?: boolean;
+  createdBy?: string;
   scopes?: string[];
   requiresConnector?: string;
   requiresDesktop?: string;
+  metadata?: Record<string, unknown>;
+  createdAt?: string;
   updatedAt?: string;
 }
 
 export interface UserSkillsResponse {
   userId: string;
+  query?: string;
   skills: UserSkill[];
   generatedAt?: string;
 }
@@ -1119,6 +1127,20 @@ export class ApiService {
     return this.http.get<UserSkillsResponse>(this.api(`/users/${encodeURIComponent(id)}/skills`));
   }
 
+  currentUserSkill(skillId: string): Observable<{ ok: boolean; userId: string; skill: UserSkill }> {
+    return this.http.get<{ ok: boolean; userId: string; skill: UserSkill }>(
+      this.api(`/users/me/skills/${encodeURIComponent(skillId)}`),
+    );
+  }
+
+  searchCurrentUserSkills(query: string): Observable<UserSkillsResponse> {
+    return this.http.get<UserSkillsResponse>(this.api(`/users/me/skills/search?q=${encodeURIComponent(query)}`));
+  }
+
+  createCurrentUserSkill(body: Record<string, unknown>): Observable<{ ok: boolean; userId: string; skill: UserSkill }> {
+    return this.http.post<{ ok: boolean; userId: string; skill: UserSkill }>(this.api("/users/me/skills"), body);
+  }
+
   updateCurrentUserSkill(skillId: string, enabled: boolean): Observable<{ ok: boolean; userId: string; skill: UserSkill }> {
     return this.http.patch<{ ok: boolean; userId: string; skill: UserSkill }>(
       this.api(`/users/me/skills/${encodeURIComponent(skillId)}`),
@@ -1126,10 +1148,39 @@ export class ApiService {
     );
   }
 
+  deleteCurrentUserSkill(skillId: string): Observable<{ ok: boolean; userId: string; skillId: string; deleted?: boolean; disabled?: boolean }> {
+    return this.http.delete<{ ok: boolean; userId: string; skillId: string; deleted?: boolean; disabled?: boolean }>(
+      this.api(`/users/me/skills/${encodeURIComponent(skillId)}`),
+    );
+  }
+
+  userSkill(id: string, skillId: string): Observable<{ ok: boolean; userId: string; skill: UserSkill }> {
+    return this.http.get<{ ok: boolean; userId: string; skill: UserSkill }>(
+      this.api(`/users/${encodeURIComponent(id)}/skills/${encodeURIComponent(skillId)}`),
+    );
+  }
+
+  searchUserSkills(id: string, query: string): Observable<UserSkillsResponse> {
+    return this.http.get<UserSkillsResponse>(this.api(`/users/${encodeURIComponent(id)}/skills/search?q=${encodeURIComponent(query)}`));
+  }
+
+  createUserSkill(id: string, body: Record<string, unknown>): Observable<{ ok: boolean; userId: string; skill: UserSkill }> {
+    return this.http.post<{ ok: boolean; userId: string; skill: UserSkill }>(
+      this.api(`/users/${encodeURIComponent(id)}/skills`),
+      body,
+    );
+  }
+
   updateUserSkill(id: string, skillId: string, enabled: boolean): Observable<{ ok: boolean; userId: string; skill: UserSkill }> {
     return this.http.patch<{ ok: boolean; userId: string; skill: UserSkill }>(
       this.api(`/users/${encodeURIComponent(id)}/skills/${encodeURIComponent(skillId)}`),
       { enabled },
+    );
+  }
+
+  deleteUserSkill(id: string, skillId: string): Observable<{ ok: boolean; userId: string; skillId: string; deleted?: boolean; disabled?: boolean }> {
+    return this.http.delete<{ ok: boolean; userId: string; skillId: string; deleted?: boolean; disabled?: boolean }>(
+      this.api(`/users/${encodeURIComponent(id)}/skills/${encodeURIComponent(skillId)}`),
     );
   }
 

@@ -58,9 +58,9 @@ const skillDefinitions = [
   },
   {
     id: "linkedin",
-    label: "LinkedIn Desk",
+    label: "Managed Desktop",
     category: "desktop",
-    summary: "Use the user's assigned desktop for LinkedIn and browser-based workflows.",
+    summary: "Use the user's assigned managed browser desktop for web workflows.",
     enabledByDefault: true,
     scopes: ["own_desktop"],
     requiresDesktop: "linkedin",
@@ -75,6 +75,13 @@ const skillDefinitions = [
   },
 ];
 
+const FIELD_LIMITS = {
+  name: 120,
+  description: 2000,
+  instructions: 8000,
+  metadataString: 1000,
+};
+
 function nowIso() {
   return new Date().toISOString();
 }
@@ -87,6 +94,15 @@ function skillError(message, statusCode = 400) {
   const error = new Error(message);
   error.statusCode = statusCode;
   return error;
+}
+
+function boolValue(value, fallback = false) {
+  if (value === undefined || value === null || value === "") return fallback;
+  return value === true || value === "true" || value === 1 || value === "1";
+}
+
+function bounded(value = "", max = 1000) {
+  return clean(value).slice(0, max);
 }
 
 export function normalizeSkillId(value = "") {
@@ -109,14 +125,72 @@ function definitionForSkill(skillId) {
   return skillDefinitions.find((definition) => definition.id === id) || null;
 }
 
-function normalizeOverride(skillId, input = {}) {
+function safeMetadata(input = {}, depth = 0) {
+  if (!input || typeof input !== "object" || Array.isArray(input) || depth > 3) return {};
+  const output = {};
+  for (const [rawKey, rawValue] of Object.entries(input).slice(0, 50)) {
+    const key = bounded(rawKey, 80);
+    if (!key) continue;
+    if (/(token|secret|password|credential|cookie|session|bearer|api[_-]?key|private[_-]?key)/i.test(key)) continue;
+    if (rawValue === null || rawValue === undefined) continue;
+    if (Array.isArray(rawValue)) {
+      output[key] = rawValue.slice(0, 20).map((item) => {
+        if (item && typeof item === "object" && !Array.isArray(item)) return safeMetadata(item, depth + 1);
+        if (typeof item === "number" || typeof item === "boolean") return item;
+        return bounded(item, FIELD_LIMITS.metadataString);
+      });
+      continue;
+    }
+    if (rawValue && typeof rawValue === "object") {
+      output[key] = safeMetadata(rawValue, depth + 1);
+      continue;
+    }
+    if (typeof rawValue === "number" || typeof rawValue === "boolean") {
+      output[key] = rawValue;
+      continue;
+    }
+    output[key] = bounded(rawValue, FIELD_LIMITS.metadataString);
+  }
+  return output;
+}
+
+function normalizeScopes(input, fallback = []) {
+  const source = Array.isArray(input) && input.length ? input : fallback;
+  return [...new Set(source.map((scope) => bounded(scope, 80)).filter(Boolean))].slice(0, 20);
+}
+
+function normalizeSkillRecord(skillId, input = {}, existing = null, definition = null, options = {}) {
   const id = normalizeSkillId(skillId || input.id || input.skillId);
   if (!id) throw skillError("skill_id_required", 400);
-  const enabled = input.enabled === undefined ? true : input.enabled === true || input.enabled === "true" || input.enabled === 1;
+  const builtIn = Boolean(definition);
+  const createdAt = clean(input.createdAt) || clean(existing?.createdAt) || (options.touch === false ? "" : nowIso());
+  const updatedAt = options.touch === false
+    ? clean(input.updatedAt || existing?.updatedAt)
+    : nowIso();
+  const fallbackName = definition?.label || id;
+  const fallbackDescription = definition?.summary || "";
+  const enabledFallback = existing?.enabled !== undefined
+    ? existing.enabled === true
+    : definition?.enabledByDefault !== false;
   return {
     id,
-    enabled,
-    updatedAt: clean(input.updatedAt) || nowIso(),
+    name: bounded(definition?.label || input.name || input.label || existing?.name || existing?.label || fallbackName, FIELD_LIMITS.name) || fallbackName,
+    label: bounded(definition?.label || input.label || input.name || existing?.label || existing?.name || fallbackName, FIELD_LIMITS.name) || fallbackName,
+    description: bounded(definition?.summary || input.description || input.summary || existing?.description || existing?.summary || fallbackDescription, FIELD_LIMITS.description),
+    summary: bounded(definition?.summary || input.summary || input.description || existing?.summary || existing?.description || fallbackDescription, FIELD_LIMITS.description),
+    instructions: bounded(input.instructions || existing?.instructions || "", FIELD_LIMITS.instructions),
+    category: bounded(definition?.category || input.category || existing?.category || "user", 80),
+    enabled: boolValue(input.enabled, enabledFallback),
+    enabledByDefault: definition ? definition.enabledByDefault !== false : boolValue(input.enabledByDefault, true),
+    builtIn,
+    createdBy: bounded(input.createdBy || existing?.createdBy || (builtIn ? "system" : "api"), 80),
+    scopes: normalizeScopes(input.scopes || existing?.scopes, definition?.scopes || []),
+    requiresConnector: bounded(definition?.requiresConnector || input.requiresConnector || existing?.requiresConnector || "", 80),
+    requiresDesktop: bounded(definition?.requiresDesktop || input.requiresDesktop || existing?.requiresDesktop || "", 80),
+    metadata: safeMetadata(input.metadata || existing?.metadata || {}),
+    createdAt,
+    updatedAt,
+    deletedAt: clean(input.deletedAt || existing?.deletedAt),
   };
 }
 
@@ -144,19 +218,40 @@ async function assertKnownUser(userId, env = process.env) {
   return user;
 }
 
-function publicSkill(definition, override = null) {
-  const enabled = override?.enabled === undefined ? definition.enabledByDefault !== false : override.enabled === true;
+function storedSkillRecords(payload = {}) {
+  const rawSkills = payload.skills && typeof payload.skills === "object" ? payload.skills : {};
+  const records = [];
+  for (const definition of builtinUserSkillDefinitions()) {
+    records.push(normalizeSkillRecord(definition.id, rawSkills[definition.id] || {}, null, definition, { touch: false }));
+  }
+  for (const [rawId, rawRecord] of Object.entries(rawSkills)) {
+    const id = normalizeSkillId(rawId);
+    if (!id || definitionForSkill(id)) continue;
+    const record = normalizeSkillRecord(id, rawRecord && typeof rawRecord === "object" ? rawRecord : { id }, null, null, { touch: false });
+    if (!record.deletedAt) records.push(record);
+  }
+  return records;
+}
+
+function publicSkill(record = {}) {
   return {
-    id: definition.id,
-    label: definition.label,
-    category: definition.category,
-    summary: definition.summary,
-    enabled,
-    enabledByDefault: definition.enabledByDefault !== false,
-    scopes: [...definition.scopes],
-    requiresConnector: definition.requiresConnector || "",
-    requiresDesktop: definition.requiresDesktop || "",
-    updatedAt: clean(override?.updatedAt),
+    id: record.id,
+    name: record.name || record.label || record.id,
+    label: record.label || record.name || record.id,
+    description: clean(record.description || record.summary),
+    summary: clean(record.summary || record.description),
+    instructions: clean(record.instructions),
+    category: clean(record.category || "user"),
+    enabled: record.enabled === true,
+    enabledByDefault: record.enabledByDefault !== false,
+    builtIn: record.builtIn === true,
+    createdBy: clean(record.createdBy || (record.builtIn ? "system" : "api")),
+    scopes: Array.isArray(record.scopes) ? [...record.scopes] : [],
+    requiresConnector: clean(record.requiresConnector),
+    requiresDesktop: clean(record.requiresDesktop),
+    metadata: safeMetadata(record.metadata || {}),
+    createdAt: clean(record.createdAt),
+    updatedAt: clean(record.updatedAt),
   };
 }
 
@@ -165,7 +260,7 @@ export async function listUserSkills(userId, env = process.env) {
   const payload = await readUserSkillFile(user.id, env);
   return {
     userId: user.id,
-    skills: builtinUserSkillDefinitions().map((definition) => publicSkill(definition, payload.skills[definition.id] || null)),
+    skills: storedSkillRecords(payload).map((record) => publicSkill(record)),
     generatedAt: nowIso(),
   };
 }
@@ -176,42 +271,167 @@ export async function listUserSkillsForPrincipal(userId, principal = {}, env = p
   return listUserSkills(target.id, env);
 }
 
-export async function setUserSkill(userId, skillId, patch = {}, env = process.env) {
+export async function getUserSkill(userId, skillId, env = process.env) {
   const user = await assertKnownUser(userId, env);
-  const definition = definitionForSkill(skillId);
-  if (!definition) throw skillError("skill_not_found", 404);
+  const id = normalizeSkillId(skillId);
+  const skill = (await listUserSkills(user.id, env)).skills.find((item) => item.id === id);
+  if (!skill) throw skillError("skill_not_found", 404);
+  return { ok: true, userId: user.id, skill };
+}
+
+export async function getUserSkillForPrincipal(userId, skillId, principal = {}, env = process.env) {
+  const target = await assertKnownUser(userId, env);
+  assertOwnerAccess(principal, target.id, "user_skills_access", env);
+  return getUserSkill(target.id, skillId, env);
+}
+
+export async function createUserSkill(userId, input = {}, env = process.env) {
+  const user = await assertKnownUser(userId, env);
+  const id = normalizeSkillId(input.id || input.skillId || input.name || input.label);
+  if (!id) throw skillError("skill_id_required", 400);
+  if (definitionForSkill(id)) throw skillError("skill_reserved", 409);
   const payload = await readUserSkillFile(user.id, env);
-  const override = normalizeOverride(definition.id, { ...patch, id: definition.id });
+  const existing = payload.skills[id];
+  if (existing && !clean(existing.deletedAt)) throw skillError("skill_exists", 409);
+  const record = normalizeSkillRecord(id, { ...input, id, enabled: input.enabled ?? true }, existing, null, { touch: true });
   const next = {
     ...payload,
     skills: {
       ...payload.skills,
-      [definition.id]: override,
+      [id]: record,
+    },
+  };
+  await writeUserSkillFile(user.id, next, env);
+  await appendEvent({
+    type: "user_skill_created",
+    userId: user.id,
+    skillId: id,
+    enabled: record.enabled,
+  }, env).catch(() => {});
+  return {
+    ok: true,
+    userId: user.id,
+    skill: publicSkill(record),
+  };
+}
+
+export async function createUserSkillForPrincipal(userId, input = {}, principal = {}, env = process.env) {
+  const target = await assertKnownUser(userId, env);
+  assertOwnerAccess(principal, target.id, "user_skills_create", env);
+  return createUserSkill(target.id, { ...input, createdBy: input.createdBy || "api" }, env);
+}
+
+export async function updateUserSkill(userId, skillId, patch = {}, env = process.env) {
+  const user = await assertKnownUser(userId, env);
+  const id = normalizeSkillId(skillId || patch.id || patch.skillId);
+  if (!id) throw skillError("skill_id_required", 400);
+  const definition = definitionForSkill(id);
+  const payload = await readUserSkillFile(user.id, env);
+  const existing = payload.skills[id] || null;
+  if (!definition && (!existing || clean(existing.deletedAt))) throw skillError("skill_not_found", 404);
+  const record = normalizeSkillRecord(id, { ...existing, ...patch, id }, existing, definition, { touch: true });
+  const next = {
+    ...payload,
+    skills: {
+      ...payload.skills,
+      [id]: record,
     },
   };
   await writeUserSkillFile(user.id, next, env);
   await appendEvent({
     type: "user_skill_updated",
     userId: user.id,
-    skillId: definition.id,
-    enabled: override.enabled,
+    skillId: id,
+    enabled: record.enabled,
   }, env).catch(() => {});
   return {
     ok: true,
     userId: user.id,
-    skill: publicSkill(definition, override),
+    skill: publicSkill(record),
   };
+}
+
+export async function setUserSkill(userId, skillId, patch = {}, env = process.env) {
+  return updateUserSkill(userId, skillId, patch, env);
 }
 
 export async function setUserSkillForPrincipal(userId, skillId, patch = {}, principal = {}, env = process.env) {
   const target = await assertKnownUser(userId, env);
   assertOwnerAccess(principal, target.id, "user_skills_update", env);
-  if (!isAdminPrincipal(principal) && patch.enabled === undefined) throw skillError("skill_enabled_required", 400);
-  return setUserSkill(target.id, skillId, patch, env);
+  if (!isAdminPrincipal(principal) && patch.enabled === undefined && !patch.name && !patch.description && !patch.instructions && !patch.metadata) {
+    throw skillError("skill_patch_required", 400);
+  }
+  return updateUserSkill(target.id, skillId, patch, env);
+}
+
+export async function deleteUserSkill(userId, skillId, env = process.env) {
+  const user = await assertKnownUser(userId, env);
+  const id = normalizeSkillId(skillId);
+  if (!id) throw skillError("skill_id_required", 400);
+  const definition = definitionForSkill(id);
+  const payload = await readUserSkillFile(user.id, env);
+  const existing = payload.skills[id] || null;
+  if (!definition && (!existing || clean(existing.deletedAt))) throw skillError("skill_not_found", 404);
+  const record = definition
+    ? normalizeSkillRecord(id, { ...existing, enabled: false }, existing, definition, { touch: true })
+    : normalizeSkillRecord(id, { ...existing, enabled: false, deletedAt: nowIso() }, existing, null, { touch: true });
+  await writeUserSkillFile(user.id, {
+    ...payload,
+    skills: {
+      ...payload.skills,
+      [id]: record,
+    },
+  }, env);
+  await appendEvent({
+    type: definition ? "user_skill_disabled" : "user_skill_deleted",
+    userId: user.id,
+    skillId: id,
+  }, env).catch(() => {});
+  return {
+    ok: true,
+    userId: user.id,
+    skillId: id,
+    deleted: !definition,
+    disabled: definition ? true : undefined,
+  };
+}
+
+export async function deleteUserSkillForPrincipal(userId, skillId, principal = {}, env = process.env) {
+  const target = await assertKnownUser(userId, env);
+  assertOwnerAccess(principal, target.id, "user_skills_delete", env);
+  return deleteUserSkill(target.id, skillId, env);
+}
+
+export async function searchUserSkills(userId, query = "", env = process.env) {
+  const user = await assertKnownUser(userId, env);
+  const needle = clean(query).toLowerCase();
+  const listed = await listUserSkills(user.id, env);
+  const skills = needle
+    ? listed.skills.filter((skill) => [
+        skill.id,
+        skill.name,
+        skill.label,
+        skill.description,
+        skill.summary,
+        skill.instructions,
+      ].some((value) => clean(value).toLowerCase().includes(needle)))
+    : listed.skills;
+  return {
+    userId: user.id,
+    query: needle,
+    skills,
+    generatedAt: nowIso(),
+  };
+}
+
+export async function searchUserSkillsForPrincipal(userId, query = "", principal = {}, env = process.env) {
+  const target = await assertKnownUser(userId, env);
+  assertOwnerAccess(principal, target.id, "user_skills_access", env);
+  return searchUserSkills(target.id, query, env);
 }
 
 function defaultSkillSnapshot(userId) {
-  const skills = builtinUserSkillDefinitions().map((definition) => publicSkill(definition));
+  const skills = builtinUserSkillDefinitions().map((definition) => publicSkill(normalizeSkillRecord(definition.id, {}, null, definition, { touch: false })));
   const skillEnabled = Object.fromEntries(skills.map((skill) => [skill.id, skill.enabled === true]));
   return {
     userId: normalizeUserId(userId),
@@ -289,12 +509,19 @@ function userDesktopSkillAvailable(skillId = "", snapshot = {}, env = process.en
 function publicSkillList(skills = []) {
   return skills.map((skill) => ({
     id: skill.id,
+    name: clean(skill.name || skill.label || skill.id),
     label: skill.label,
+    description: clean(skill.description || skill.summary),
+    summary: clean(skill.summary || skill.description),
+    instructions: clean(skill.instructions),
     category: skill.category,
     enabled: skill.enabled === true,
+    builtIn: skill.builtIn === true,
+    createdBy: clean(skill.createdBy || (skill.builtIn ? "system" : "api")),
     scopes: Array.isArray(skill.scopes) ? [...skill.scopes] : [],
     requiresConnector: clean(skill.requiresConnector),
     requiresDesktop: clean(skill.requiresDesktop),
+    metadata: safeMetadata(skill.metadata || {}),
   }));
 }
 
