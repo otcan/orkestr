@@ -128,19 +128,45 @@ function publicBaseUrl(env = process.env) {
   return clean(env.ORKESTR_PUBLIC_HTTPS_URL || env.ORKESTR_PUBLIC_URL || env.ORKESTR_BASE_URL).replace(/\/+$/, "");
 }
 
+function oauthPublicBaseUrl(providerId, env = process.env) {
+  const normalized = clean(providerId).toUpperCase().replace(/[^A-Z0-9]+/g, "_");
+  return firstEnv(env, [
+    `ORKESTR_${normalized}_OAUTH_PUBLIC_BASE_URL`,
+    `${normalized}_OAUTH_PUBLIC_BASE_URL`,
+    `ORKESTR_${normalized}_OAUTH_CALLBACK_BASE_URL`,
+    `${normalized}_OAUTH_CALLBACK_BASE_URL`,
+    "ORKESTR_OAUTH_PUBLIC_BASE_URL",
+    "ORKESTR_OAUTH_CALLBACK_BASE_URL",
+    "ORKESTR_CONNECT_PUBLIC_URL",
+    "ORKESTR_CONNECT_BASE_URL",
+  ]).replace(/\/+$/, "");
+}
+
+function fullRedirectEnvValue(definition, env = process.env) {
+  return firstEnv(env, definition.envMappings?.redirectUri || []);
+}
+
 export function parentConnectorRuntimeConfig(providerId, config = {}, env = process.env) {
   const definition = parentConnectorProvider(providerId);
   if (!definition) return { ...(config || {}) };
   const runtimeConfig = { ...(config || {}) };
   for (const [key, envKeys] of Object.entries(definition.envMappings || {})) {
+    if (key === "redirectUri") continue;
     runtimeConfig[key] = clean(runtimeConfig[key]) || firstEnv(env, envKeys);
   }
   for (const [key, value] of Object.entries(definition.defaults || {})) {
     runtimeConfig[key] = clean(runtimeConfig[key]) || value;
   }
-  if (!clean(runtimeConfig.redirectUri) && definition.defaultRedirectPath) {
-    const baseUrl = publicBaseUrl(env);
-    if (baseUrl) runtimeConfig.redirectUri = `${baseUrl}${definition.defaultRedirectPath}`;
+  if (definition.defaultRedirectPath) {
+    const explicitRedirectUri = fullRedirectEnvValue(definition, env);
+    const brokerBaseUrl = oauthPublicBaseUrl(definition.provider, env);
+    const fallbackBaseUrl = publicBaseUrl(env);
+    runtimeConfig.redirectUri = explicitRedirectUri ||
+      (brokerBaseUrl ? `${brokerBaseUrl}${definition.defaultRedirectPath}` : "") ||
+      clean(config.redirectUri) ||
+      (fallbackBaseUrl ? `${fallbackBaseUrl}${definition.defaultRedirectPath}` : "");
+  } else {
+    runtimeConfig.redirectUri = clean(runtimeConfig.redirectUri) || fullRedirectEnvValue(definition, env);
   }
   return runtimeConfig;
 }

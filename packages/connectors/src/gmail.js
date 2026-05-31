@@ -86,6 +86,7 @@ export async function startGmailOAuth(env = process.env, options = {}) {
     state,
     account,
     userId: scope.userId || "",
+    redirectUri,
     createdAt: new Date().toISOString(),
   });
   const url = new URL("https://accounts.google.com/o/oauth2/v2/auth");
@@ -103,7 +104,8 @@ export async function startGmailOAuth(env = process.env, options = {}) {
 
 export async function exchangeGmailCode(code, env = process.env, fetchImpl = fetch, options = {}) {
   const config = await readParentConnectorRuntimeConfig("gmail", env);
-  const { clientId, clientSecret, redirectUri } = requireOAuthConfig(config);
+  const { clientId, clientSecret, redirectUri: configuredRedirectUri } = requireOAuthConfig(config);
+  const redirectUri = String(options.redirectUri || configuredRedirectUri || "").trim();
   if (!clientSecret) {
     const error = new Error("gmail_client_secret_required");
     error.statusCode = 400;
@@ -199,7 +201,10 @@ export async function finishGmailOAuth(query, env = process.env, fetchImpl = fet
     throw error;
   }
   const { savedState, scopeOptions } = await findOAuthState(state, env);
-  const token = await exchangeGmailCode(code, env, fetchImpl, scopeOptions);
+  const token = await exchangeGmailCode(code, env, fetchImpl, {
+    ...scopeOptions,
+    redirectUri: savedState.redirectUri || "",
+  });
   return {
     ok: true,
     state,

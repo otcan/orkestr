@@ -66,6 +66,43 @@ test("gmail oauth start can use service env app credentials", async () => {
   assert.equal(started.redirectUri, "https://orkestr.example.test/oauth/gmail/callback");
 });
 
+test("gmail oauth uses the public broker callback and exchanges with the started redirect", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-gmail-broker-start-"));
+  const env = {
+    ORKESTR_HOME: home,
+    GMAIL_OAUTH_CLIENT_ID: "env-client-id",
+    GMAIL_OAUTH_CLIENT_SECRET: "env-client-secret",
+    ORKESTR_CONNECT_PUBLIC_URL: "https://connect.orkestr.app/",
+  };
+
+  const started = await startGmailOAuth(env, { account: "person@example.com" });
+  const savedState = JSON.parse(await fs.readFile(path.join(home, "oauth", "gmail-state.json"), "utf8"));
+  const url = new URL(started.authorizeUrl);
+
+  assert.equal(url.searchParams.get("redirect_uri"), "https://connect.orkestr.app/oauth/gmail/callback");
+  assert.equal(savedState.redirectUri, "https://connect.orkestr.app/oauth/gmail/callback");
+
+  const result = await finishGmailOAuth(
+    new URLSearchParams({ code: "callback-code", state: started.state }),
+    {
+      ...env,
+      GMAIL_OAUTH_REDIRECT_URI: "https://wrong.example.test/oauth/gmail/callback",
+    },
+    async (_url, options) => {
+      const body = new URLSearchParams(options.body);
+      assert.equal(body.get("redirect_uri"), "https://connect.orkestr.app/oauth/gmail/callback");
+      return jsonResponse({
+        access_token: "broker-access",
+        refresh_token: "broker-refresh",
+        expires_in: 60,
+      });
+    },
+  );
+
+  assert.equal(result.ok, true);
+  assert.equal((await readGmailToken(env)).accessToken, "broker-access");
+});
+
 test("gmail authorization code is exchanged and stored securely", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-gmail-exchange-"));
   const env = { ORKESTR_HOME: home };

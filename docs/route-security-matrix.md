@@ -38,6 +38,7 @@ authorization.
 | Files and workspaces | `GET /api/files`, `GET /api/system/files`, workspace folders | Owner-scoped | workspace principal helpers and path containment |
 | Browser desktops | browsers, browser sessions, leases, share links | Owner-scoped except share challenge bootstrap | browser and desktop lease principal helpers |
 | Mail connectors | Gmail and Outlook OAuth/messages/tests | Owner-scoped | connector principal storage helpers |
+| OAuth callback broker | `GET /oauth/gmail/callback`, future provider callbacks | Public callback, state-bound to one scoped user | short-lived OAuth state lookup and scoped token storage |
 | WhatsApp inbound | `POST /api/connectors/whatsapp/inbound` | Machine-token bootstrap or paired admin/user route target | inbound machine auth and router ownership |
 | WhatsApp bridge administration | accounts, chats, QR, send, recover, deliver, config, overlay actions | Admin only | connector route guard |
 | Users | `GET/POST/PATCH /api/users` | Admin only | users controller and control-plane guard |

@@ -105,6 +105,17 @@ the operator with `WHATSAPP_BRIDGE_MODE=external` or
 Gmail OAuth is part of the public setup surface. Browser-backed Gmail and
 LinkedIn profiles are managed as local virtual browser profiles.
 
+For contained or external users, use a public OAuth broker callback instead of
+the private Orkestr UI hostname. Set `ORKESTR_CONNECT_PUBLIC_URL`, for example
+`https://connect.orkestr.app`, and register this Google redirect URI:
+
+```text
+https://connect.orkestr.app/oauth/gmail/callback
+```
+
+The callback endpoint only completes the OAuth exchange. User tokens are still
+stored in that user's scoped Orkestr data directory.
+
 The rule is simple: account state stays local. Orkestr can coordinate the agent
 with those accounts, but the public OSS repo must not ship tokens, cookies,
 profiles, or private automation scripts.

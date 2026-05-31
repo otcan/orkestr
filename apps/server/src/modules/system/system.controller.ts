@@ -19,6 +19,10 @@ import { isAdminPrincipal } from "../../../../../packages/core/src/policy.js";
 import { getUser } from "../../../../../packages/core/src/users.js";
 import { configuredWhatsAppChatNamePrefix, defaultWhatsAppReplyPrefix } from "../../../../../packages/core/src/whatsapp-defaults.js";
 import {
+  parentConnectorProviderDefinitions,
+  parentConnectorRuntimeConfig,
+} from "../../../../../packages/connectors/src/parent-connector-apps.js";
+import {
   approvePairingChallenge,
   createPairingChallenge,
   deletePairingChallenge,
@@ -39,6 +43,17 @@ import { httpError } from "../../common/http.js";
 
 const execFileAsync = promisify(execFile);
 let lastCpuSample: { idle: number; total: number } | null = null;
+const publicConnectorRuntimeConfigKeys = new Set([
+  "account",
+  "audience",
+  "authorizeUrl",
+  "clientId",
+  "redirectUri",
+  "scopes",
+  "shop",
+  "tenantId",
+  "tokenUrl",
+]);
 
 async function gitValue(args: string[]): Promise<string> {
   try {
@@ -101,6 +116,25 @@ async function releaseMetadata() {
     }
   }
   return null;
+}
+
+async function publicEffectiveConfig() {
+  const config = await publicConfig();
+  for (const definition of parentConnectorProviderDefinitions()) {
+    if (!definition.defaultRedirectPath) continue;
+    const current = config[definition.provider] && typeof config[definition.provider] === "object"
+      ? { ...config[definition.provider] }
+      : {};
+    const runtime = parentConnectorRuntimeConfig(definition.provider, current, process.env);
+    for (const [key, value] of Object.entries(runtime)) {
+      if (!publicConnectorRuntimeConfigKeys.has(key)) continue;
+      const text = String(value || "").trim();
+      if (!text) continue;
+      current[key] = text;
+    }
+    if (Object.keys(current).length) config[definition.provider] = current;
+  }
+  return config;
 }
 
 function pct(used: number, total: number): number {
@@ -291,7 +325,7 @@ export class SystemController {
   async setupStatus(@Req() request: any) {
     const status = {
       ...(await getSetupStatus({ principal: requestPrincipal(request) })),
-      config: await publicConfig(),
+      config: await publicEffectiveConfig(),
       whatsappDefaults: {
         chatNamePrefix: configuredWhatsAppChatNamePrefix(),
         replyPrefix: defaultWhatsAppReplyPrefix(),

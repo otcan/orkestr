@@ -9,6 +9,7 @@ import {
   parentConnectorAppStatus,
   parentConnectorProvider,
   parentConnectorProviderDefinitions,
+  parentConnectorRuntimeConfig,
 } from "../packages/connectors/src/parent-connector-apps.js";
 
 function isolatedExternalWhatsAppEnv(home, extra = {}) {
@@ -96,6 +97,31 @@ test("gmail OAuth derives redirect URI from public Orkestr URL when unset", asyn
   const authorizeUrl = new URL(started.authorizeUrl);
 
   assert.equal(authorizeUrl.searchParams.get("redirect_uri"), "https://orkestr.example.test/oauth/gmail/callback");
+});
+
+test("OAuth public broker base overrides stale persisted connector redirects", () => {
+  const runtime = parentConnectorRuntimeConfig("gmail", {
+    clientId: "gmail-client",
+    clientSecret: "gmail-secret",
+    redirectUri: "https://private.example.test/oauth/gmail/callback",
+  }, {
+    ORKESTR_CONNECT_PUBLIC_URL: "https://connect.orkestr.app/",
+  });
+
+  assert.equal(runtime.redirectUri, "https://connect.orkestr.app/oauth/gmail/callback");
+});
+
+test("provider-specific OAuth redirect env wins over the public broker base", () => {
+  const runtime = parentConnectorRuntimeConfig("gmail", {
+    clientId: "gmail-client",
+    clientSecret: "gmail-secret",
+    redirectUri: "https://private.example.test/oauth/gmail/callback",
+  }, {
+    ORKESTR_CONNECT_PUBLIC_URL: "https://connect.orkestr.app/",
+    GMAIL_OAUTH_REDIRECT_URI: "https://gmail.example.test/oauth/gmail/callback",
+  });
+
+  assert.equal(runtime.redirectUri, "https://gmail.example.test/oauth/gmail/callback");
 });
 
 test("setup connector statuses expose parent-managed connector metadata", async () => {
