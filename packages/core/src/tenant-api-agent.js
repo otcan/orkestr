@@ -156,13 +156,31 @@ function sourceChannelForMessage(message = {}) {
   return clean(message.connector || message.originSurface || message.source || "");
 }
 
-function publicSkillContext(skills = []) {
+function publicSkillEnabled(skill = {}, capabilities = {}, scopedConnectors = {}) {
+  if (skill.enabled !== true) return false;
+  const id = clean(skill.id).toLowerCase();
+  const connector = clean(skill.requiresConnector).toLowerCase();
+  if (connector) return scopedConnectors[connector] === true && capabilities[connector] === true;
+  const desktop = clean(skill.requiresDesktop).toLowerCase();
+  if (desktop) return capabilities.desktopLeases === true || capabilities.virtualBrowsers === true || capabilities.linkedin === true;
+  if (id === "files") return capabilities.files === true;
+  if (id === "timers") return capabilities.timers === true;
+  if (id === "whatsapp") return capabilities.whatsapp === true;
+  if (id === "gmail") return capabilities.gmail === true;
+  if (id === "outlook") return capabilities.outlook === true;
+  if (id === "linkedin") return capabilities.linkedin === true || capabilities.desktopLeases === true || capabilities.virtualBrowsers === true;
+  if (id === "learning") return capabilities.learning === true;
+  return true;
+}
+
+function publicSkillContext(skills = [], capabilities = {}, scopedConnectors = {}) {
   return (Array.isArray(skills) ? skills : []).slice(0, 50).map((skill) => ({
     id: clean(skill.id),
     name: clean(skill.name || skill.label || skill.id),
     description: clean(skill.description || skill.summary).slice(0, 1000),
     instructions: clean(skill.instructions).slice(0, 3000),
-    enabled: skill.enabled === true,
+    enabled: publicSkillEnabled(skill, capabilities, scopedConnectors),
+    registryEnabled: skill.enabled === true,
     builtIn: skill.builtIn === true,
     requiresConnector: clean(skill.requiresConnector),
     requiresDesktop: clean(skill.requiresDesktop),
@@ -171,6 +189,7 @@ function publicSkillContext(skills = []) {
 
 function publicTenantCapabilities(capabilities = {}) {
   const scopedConnectors = capabilities.scopedConnectors && typeof capabilities.scopedConnectors === "object" ? capabilities.scopedConnectors : {};
+  const skills = publicSkillContext(capabilities.skills, capabilities, scopedConnectors);
   return {
     files: capabilities.files === true,
     timers: capabilities.timers === true,
@@ -184,9 +203,9 @@ function publicTenantCapabilities(capabilities = {}) {
     hostSkills: false,
     globalConnectorAccounts: false,
     privateOperatorData: false,
-    enabledSkills: Array.isArray(capabilities.enabledSkills) ? [...capabilities.enabledSkills] : [],
-    disabledSkills: Array.isArray(capabilities.disabledSkills) ? [...capabilities.disabledSkills] : [],
-    skills: publicSkillContext(capabilities.skills),
+    enabledSkills: skills.filter((skill) => skill.enabled).map((skill) => skill.id),
+    disabledSkills: skills.filter((skill) => !skill.enabled).map((skill) => skill.id),
+    skills,
     scopedConnectors: {
       whatsapp: scopedConnectors.whatsapp === true || capabilities.whatsapp === true,
       gmail: scopedConnectors.gmail === true,
@@ -244,7 +263,7 @@ export async function buildTenantApiAgentInstructions(thread = {}, messages = []
     "You are scoped to the tenant in the JSON context below. Do not claim access to files, Gmail, Outlook, LinkedIn, WhatsApp accounts, browser desktops, timers, or other chats unless the provided Orkestr tools or context show them for this tenant.",
     "Use the provided Orkestr tools for tenant-scoped resources. If a connector or permission is missing, say what needs to be connected in Orkestr.",
     "If the user asks to use Gmail, Outlook, LinkedIn, files, or a browser desktop and the matching capability is false in the Tenant context JSON, say plainly that it is not connected or enabled for this chat yet. Do not imply that you checked it.",
-    "When asked what you can do, list only capabilities that are true in the Tenant context JSON. Do not mention unavailable capabilities as if they are connected.",
+    "When asked what you can do or what skills you have, list only capabilities that are true in the Tenant context JSON and skills whose enabled field is true. Do not treat registryEnabled as availability; registryEnabled only means the user has not disabled the skill.",
     "Skills are unique per user and are described by the skill records in the Tenant context. Do not force provider categories, goals, or attachment models onto them; preserve the user's wording.",
     "Users manage skills through chat. When they ask to list, view, search, create, update, enable, disable, or delete skills, use the Orkestr skill tools.",
     "Do not create or update a skill for phishing, scams, credential theft, unauthorized login attempts, spam, or abuse. Refuse those requests instead of calling a tool.",

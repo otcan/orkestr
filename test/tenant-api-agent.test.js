@@ -101,6 +101,12 @@ test("tenant api-agent answers non-admin WhatsApp thread without Codex delivery"
   assert.equal(context.capabilities.desktops, false);
   assert.equal(context.capabilities.gmail, false);
   assert.equal(context.capabilities.linkedin, false);
+  assert.equal(context.capabilities.enabledSkills.includes("whatsapp"), true);
+  assert.equal(context.capabilities.enabledSkills.includes("gmail"), false);
+  assert.equal(context.capabilities.enabledSkills.includes("outlook"), false);
+  assert.equal(context.capabilities.skills.find((skill) => skill.id === "whatsapp")?.enabled, true);
+  assert.equal(context.capabilities.skills.find((skill) => skill.id === "gmail")?.enabled, false);
+  assert.equal(context.capabilities.skills.find((skill) => skill.id === "gmail")?.registryEnabled, true);
   assert.equal(current.state, "completed");
   assert.equal(current.deliveryState, "delivered");
   assert.equal(assistant.source, "api-agent");
