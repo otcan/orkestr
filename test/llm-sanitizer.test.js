@@ -51,6 +51,18 @@ test("LLM sanitizer payload declares LLM-only fail-closed policy", async () => {
   assert.match(payload.requestedAt, /^\d{4}-\d{2}-\d{2}T/);
 });
 
+test("LLM sanitizer prompts route same-user missing connector requests without granting tool access", async () => {
+  const codexPrompt = await fs.readFile("scripts/llm-sanitizer-codex.mjs", "utf8");
+  const openAiPrompt = await fs.readFile("packages/core/src/llm-sanitizer.js", "utf8");
+
+  assert.match(codexPrompt, /allow a same-user request to use Gmail, Outlook, LinkedIn, files, browser desktops, or another connector even when the capability is false/i);
+  assert.match(codexPrompt, /This input routing step does not grant data access/i);
+  assert.match(codexPrompt, /execute a tool or perform actual data access/i);
+  assert.match(openAiPrompt, /allow same-user requests to use a connector even when that capability is missing/i);
+  assert.match(openAiPrompt, /Do not treat this as permission for tool execution/i);
+  assert.match(openAiPrompt, /Deny tool execution or actual connector data access/i);
+});
+
 test("LLM sanitizer denies conflicting allow text when explicit allow is false", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-sanitizer-conflict-"));
   const command = await sanitizerScript(home, [

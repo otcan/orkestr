@@ -751,11 +751,20 @@ function attachmentSummaryText(attachments = []) {
   ].join("\n\n");
 }
 
-function inboundRoutingFailureNoticeText(error) {
+export function inboundRoutingFailureNoticeText(error) {
   const reason = String(error?.message || error || "routing_failed").trim();
   const lowered = reason.toLowerCase();
   if (reason === "llm_sanitizer_unconfigured") {
     return "Orkestr could not accept your message because the isolated-user LLM sanitizer is not configured. Ask the admin to connect the sanitizer, then resend.";
+  }
+  if (lowered.includes("gmail")) {
+    return "Gmail is not connected or enabled for this chat yet. Ask the Orkestr admin to connect Gmail for this user, then resend.";
+  }
+  if (lowered.includes("outlook")) {
+    return "Outlook is not connected or enabled for this chat yet. Ask the Orkestr admin to connect Outlook for this user, then resend.";
+  }
+  if (lowered.includes("linkedin") || lowered.includes("desktop")) {
+    return "The managed desktop is not connected or enabled for this chat yet. Ask the Orkestr admin to enable the desktop for this user, then resend.";
   }
   if (lowered.includes("whatsapp") || lowered.includes("connector") || lowered.includes("capability") || lowered.includes("account identity")) {
     return "I can't safely handle that request in this chat. Ask the Orkestr admin to enable the needed capability, or rephrase it without requesting private connector/account details.";

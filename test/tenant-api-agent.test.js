@@ -222,6 +222,101 @@ test("tenant api-agent explains connector-identity sanitizer denials instead of 
   assert.match(assistant.text, /can't expose backend WhatsApp account or connector identity/i);
 });
 
+test("tenant api-agent explains missing Gmail capability without a generic safety refusal", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-api-agent-gmail-denial-"));
+  const script = path.join(home, "deny-api-agent-gmail.mjs");
+  await fs.writeFile(
+    script,
+    [
+      "let input = '';",
+      "process.stdin.setEncoding('utf8');",
+      "process.stdin.on('data', (chunk) => { input += chunk; });",
+      "process.stdin.on('end', () => {",
+      "  const payload = JSON.parse(input);",
+      "  const deny = payload.action === 'api-agent.input';",
+      "  console.log(JSON.stringify({ allow: !deny, reason: deny ? 'gmail capability missing' : 'allowed', model: 'test-llm' }));",
+      "});",
+      "",
+    ].join("\n"),
+    "utf8",
+  );
+  const env = {
+    ORKESTR_HOME: home,
+    OPENAI_API_KEY: "sk-test",
+    ORKESTR_LLM_SANITIZER_COMMAND_JSON: JSON.stringify([process.execPath, script]),
+  };
+  await createThread({
+    id: "otcantest-gmail-denial",
+    ownerUserId: "otcan",
+    name: "otcantest",
+    runtimeKind: "api-agent",
+    executor: { type: "api-agent", metadata: { runtimeKind: "api-agent" } },
+    binding: { connector: "whatsapp", chatId: "chat-otcan", outboundAccountId: "wa-1" },
+  }, env);
+  await enqueueThreadInputForPrincipal("otcantest-gmail-denial", {
+    text: "Can you check my gmail?",
+    source: "whatsapp_inbound",
+    connector: "whatsapp",
+    chatId: "chat-otcan",
+    accountId: "wa-1",
+  }, userPrincipal({ id: "otcan", role: "user" }), env);
+
+  const result = await processApiAgentThreadInput("otcantest-gmail-denial", env, {
+    fetchImpl: async () => {
+      throw new Error("openai should not be called when sanitizer blocks");
+    },
+  });
+  const messages = await listThreadMessages("otcantest-gmail-denial", env);
+  const assistant = messages.find((message) => message.role === "assistant");
+
+  assert.equal(result.ok, false);
+  assert.match(assistant.text, /Gmail is not connected or enabled for this chat yet/i);
+  assert.doesNotMatch(assistant.text, /safely handle|private connector|account identity/i);
+});
+
+test("tenant api-agent routes same-user missing connector requests so the assistant can explain setup", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-api-agent-gmail-missing-"));
+  const env = await allowSanitizerEnv(home);
+  await createThread({
+    id: "otcantest-gmail-missing",
+    ownerUserId: "otcan",
+    name: "otcantest",
+    runtimeKind: "api-agent",
+    executor: { type: "api-agent", metadata: { runtimeKind: "api-agent" } },
+    binding: { connector: "whatsapp", chatId: "chat-otcan", outboundAccountId: "wa-1" },
+  }, env);
+  await enqueueThreadInputForPrincipal("otcantest-gmail-missing", {
+    text: "Can you check my gmail?",
+    source: "whatsapp_inbound",
+    connector: "whatsapp",
+    chatId: "chat-otcan",
+    accountId: "wa-1",
+  }, userPrincipal({ id: "otcan", role: "user" }), env);
+
+  const calls = [];
+  const result = await processApiAgentThreadInput("otcantest-gmail-missing", env, {
+    fetchImpl: async (url, options) => {
+      calls.push({ url: String(url), body: JSON.parse(options.body) });
+      return response({
+        id: "resp_api_agent_gmail_missing",
+        model: "gpt-5-mini",
+        output_text: "Gmail is not connected or enabled for this chat yet. Ask the Orkestr admin to connect Gmail for this user, then resend.",
+        output: [],
+        usage: { input_tokens: 140, output_tokens: 18 },
+      });
+    },
+  });
+  const messages = await listThreadMessages("otcantest-gmail-missing", env);
+  const assistant = messages.find((message) => message.role === "assistant");
+  const context = tenantContextFromInstructions(calls[0].body.instructions);
+
+  assert.equal(result.ok, true);
+  assert.equal(context.capabilities.gmail, false);
+  assert.match(calls[0].body.instructions, /matching capability is false/i);
+  assert.match(assistant.text, /Gmail is not connected or enabled for this chat yet/i);
+  assert.doesNotMatch(assistant.text, /checked/i);
+});
+
 test("tenant api-agent drains queued tenant messages while it owns the lock", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-api-agent-drain-"));
   const env = await allowSanitizerEnv(home);

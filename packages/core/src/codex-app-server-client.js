@@ -558,7 +558,31 @@ export class CodexAppServerClient {
       ...whatsappProjectionFields(whatsappParent, thread),
     }, this.env);
     notifyMessageHandler({ thread, message });
-    await updateThread(thread.id, { state: "ready", lastError: null }, this.env).catch(() => {});
+    const finalAnswer = clean(phase).toLowerCase() === "final_answer";
+    const completedKey = finalAnswer ? this.turnParentKey(codexId, turnId) : "";
+    if (completedKey) {
+      this.completedTurns.add(completedKey);
+      while (this.completedTurns.size > 500) {
+        const oldest = this.completedTurns.keys().next().value;
+        this.completedTurns.delete(oldest);
+      }
+      this.threadStates.set(codexId, { ...(this.threadStates.get(codexId) || {}), activeTurnId: "", status: { type: "idle" } });
+    }
+    await updateThread(thread.id, {
+      state: "ready",
+      lastError: null,
+      ...(finalAnswer ? {
+        runtime: {
+          ...(thread.runtime || {}),
+          runtimeKind: "codex-app-server",
+          activeTurnId: null,
+          lastTurnId: turnId || null,
+          lastTurnStatus: "completed",
+          state: "ready",
+          updatedAt: nowIso(),
+        },
+      } : {}),
+    }, this.env).catch(() => {});
     return message;
   }
 

@@ -13,7 +13,7 @@ import { getSetupStatus } from "../packages/core/src/setup.js";
 import { appendThreadMessage, createThread, enqueueThreadInput, getThread, listThreadMessages, listThreads, updateThreadMessage } from "../packages/core/src/threads.js";
 import { createUser, linkUserPrivateIdentity } from "../packages/core/src/users.js";
 import { deliverWhatsAppReplies, formatWhatsAppOutboundText, getWhatsAppChatParticipants, getWhatsAppStatus, initialQueueDeliveryState, mapLocalWhatsAppStatusFromHealth, routeWhatsAppInbound, syncWhatsAppTypingIndicators } from "../packages/connectors/src/whatsapp.js";
-import { cleanupLocalWhatsAppChromeLocks, forwardLocalWhatsAppInbound, handleInboundMessage, listLocalWhatsAppChats, localWhatsAppAccountIdsForEnv, localWhatsAppConnectedPageReadyFallbackEligible, localWhatsAppInboundForwardTarget, localWhatsAppMessageRouteFields, localWhatsAppReadyFallbackEligible, localWhatsAppTypingClearRetryDelaysMs, localWhatsAppUnreadRecoveryBoundChats, localWhatsAppUnreadRecoveryIntervalMs, normalizeGroupParticipantIds, recoverConfiguredLocalWhatsAppAccounts, recoverUnreadLocalWhatsAppMessages, recoverableLocalWhatsAppAccountIds, reduceLocalWhatsAppBridgeState, sendWhatsAppTextWithConfirmation, startLocalWhatsAppAccount, webCacheRoot } from "../packages/connectors/src/whatsapp-local-bridge.js";
+import { cleanupLocalWhatsAppChromeLocks, forwardLocalWhatsAppInbound, handleInboundMessage, inboundRoutingFailureNoticeText, listLocalWhatsAppChats, localWhatsAppAccountIdsForEnv, localWhatsAppConnectedPageReadyFallbackEligible, localWhatsAppInboundForwardTarget, localWhatsAppMessageRouteFields, localWhatsAppReadyFallbackEligible, localWhatsAppTypingClearRetryDelaysMs, localWhatsAppUnreadRecoveryBoundChats, localWhatsAppUnreadRecoveryIntervalMs, normalizeGroupParticipantIds, recoverConfiguredLocalWhatsAppAccounts, recoverUnreadLocalWhatsAppMessages, recoverableLocalWhatsAppAccountIds, reduceLocalWhatsAppBridgeState, sendWhatsAppTextWithConfirmation, startLocalWhatsAppAccount, webCacheRoot } from "../packages/connectors/src/whatsapp-local-bridge.js";
 import { createAndBindWhatsAppThreadGroup } from "../packages/connectors/src/whatsapp-thread-groups.js";
 import { prepareWhatsAppTableAttachments } from "../packages/connectors/src/whatsapp-table-attachments.js";
 import { writeConnectorConfig } from "../packages/storage/src/config.js";
@@ -1329,6 +1329,16 @@ test("local whatsapp bridge runs api-agent tenant chats without waking legacy ru
   assert.equal(events.some((event) => event.type === "thread_input_delivery_skipped" && event.threadId === "otcantest"), false);
   assert.equal(calls.some((call) => call.url.endsWith("/responses")), true);
   assert.equal(calls.some((call) => call.url.endsWith("/send-text") && call.body?.to === chatId), true);
+});
+
+test("local whatsapp inbound failures explain missing user capabilities", () => {
+  const gmail = inboundRoutingFailureNoticeText(new Error("gmail capability missing"));
+  const desktop = inboundRoutingFailureNoticeText(new Error("desktop capability false"));
+
+  assert.match(gmail, /Gmail is not connected or enabled for this chat yet/i);
+  assert.doesNotMatch(gmail, /safely handle|private connector|account identity/i);
+  assert.match(desktop, /managed desktop is not connected or enabled/i);
+  assert.doesNotMatch(desktop, /safely handle|private connector|account identity/i);
 });
 
 test("api-agent thread pending delivery skips legacy runtime wakeups", async () => {

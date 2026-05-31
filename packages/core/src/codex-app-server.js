@@ -354,8 +354,9 @@ async function startCodexAppServerTurn({ client, thread, id, pending, env, runti
   const status = clean(result?.turn?.status || result?.status).toLowerCase();
   const terminalResult = ["completed", "failed", "interrupted", "aborted", "cancelled", "canceled"].includes(status);
   const completedKey = turnId && client.turnParentKey ? client.turnParentKey(id, turnId) : "";
-  const alreadyCompleted = Boolean(completedKey && client.completedTurns?.has(completedKey));
   if (turnId) client.rememberTurnParent(id, turnId, pending);
+  await new Promise((resolve) => setImmediate(resolve));
+  const alreadyCompleted = Boolean(completedKey && client.completedTurns?.has(completedKey));
   if (turnId && !terminalResult && !alreadyCompleted) {
     client.threadStates.set(id, { ...(client.threadStates.get(id) || {}), activeTurnId: turnId, status: { type: "active", activeFlags: ["running"] } });
     await updateThread(thread.id, {

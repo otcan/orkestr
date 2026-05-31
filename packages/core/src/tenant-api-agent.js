@@ -243,6 +243,7 @@ export async function buildTenantApiAgentInstructions(thread = {}, messages = []
     "Be natural, concise, and helpful. Do not expose Orkestr internals, Codex runtime details, queues, tmux, shell paths, debug strings, or implementation wording unless the user explicitly asks about Orkestr operations.",
     "You are scoped to the tenant in the JSON context below. Do not claim access to files, Gmail, Outlook, LinkedIn, WhatsApp accounts, browser desktops, timers, or other chats unless the provided Orkestr tools or context show them for this tenant.",
     "Use the provided Orkestr tools for tenant-scoped resources. If a connector or permission is missing, say what needs to be connected in Orkestr.",
+    "If the user asks to use Gmail, Outlook, LinkedIn, files, or a browser desktop and the matching capability is false in the Tenant context JSON, say plainly that it is not connected or enabled for this chat yet. Do not imply that you checked it.",
     "When asked what you can do, list only capabilities that are true in the Tenant context JSON. Do not mention unavailable capabilities as if they are connected.",
     "Skills are unique per user and are described by the skill records in the Tenant context. Do not force provider categories, goals, or attachment models onto them; preserve the user's wording.",
     "Users manage skills through chat. When they ask to list, view, search, create, update, enable, disable, or delete skills, use the Orkestr skill tools.",
@@ -319,6 +320,9 @@ function userSafeApiAgentError(error) {
   const lowered = lower(code);
   if (code.includes("budget_exceeded")) return "I can't answer right now because this chat has reached its OpenAI usage budget. Ask an admin to raise the limit or try again later.";
   if (code.includes("openai_api_key_required")) return "This chat is not connected to the OpenAI API yet. Ask an admin to configure the API-agent key in Orkestr.";
+  if (lowered.includes("gmail")) return "Gmail is not connected or enabled for this chat yet. Ask the Orkestr admin to connect Gmail for this user, then resend.";
+  if (lowered.includes("outlook")) return "Outlook is not connected or enabled for this chat yet. Ask the Orkestr admin to connect Outlook for this user, then resend.";
+  if (lowered.includes("linkedin") || lowered.includes("desktop")) return "The managed desktop is not connected or enabled for this chat yet. Ask the Orkestr admin to enable the desktop for this user, then resend.";
   if (lowered.includes("whatsapp") || lowered.includes("connector") || lowered.includes("account identity") || lowered.includes("capability")) {
     return "I can use this WhatsApp chat, but I can't expose backend WhatsApp account or connector identity from here. Ask the Orkestr admin to check connector settings.";
   }
