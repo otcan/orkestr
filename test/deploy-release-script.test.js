@@ -81,10 +81,10 @@ test("release deploy script exposes versioned install, status, and rollback", as
   assert.match(script, /ExecStart=\$node_bin dist\/server\/apps\/server\/src\/server\.js/);
   assert.match(script, /50-shutdown-timeout\.conf/);
   assert.match(script, /TimeoutStopSec=\$timeout/);
-  assert.match(script, /KillMode=process/);
+  assert.match(script, /KillMode=mixed/);
   assert.match(script, /Deploy drain active: new inputs will queue/);
   assert.match(script, /Deploy drain cleared after \$\{service_name\}\.service passed health checks/);
-  assert.match(script, /runtime children and browser desktops are preserved by systemd KillMode=process/);
+  assert.match(script, /service-local child processes are reaped after the stop timeout/);
   assert.match(script, /ORKESTR_CODEX_APP_SERVER_MODE/);
   assert.match(script, /ORKESTR_CODEX_APP_SERVER_SERVICE_NAME/);
   assert.match(script, /tags_only_arg/);

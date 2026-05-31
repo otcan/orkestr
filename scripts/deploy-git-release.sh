@@ -658,7 +658,7 @@ deploy_guard_before_restart() {
     begin_deploy_drain
     deploy_guard_active_work unsafe
     echo "No-interrupt deploy guard: external Codex app-server is active; codex-app-server turns may continue during the UI restart."
-    echo "No-interrupt deploy preservation: restarting only the UI/API service process; runtime children and browser desktops are preserved by systemd KillMode=process."
+    echo "No-interrupt deploy preservation: external Codex app-server turns are preserved while service-local child processes are reaped after the stop timeout."
     return 0
   fi
   deploy_guard_active_work
@@ -706,7 +706,7 @@ EOF
   cat > "$dropin_dir/50-shutdown-timeout.conf" <<EOF
 [Service]
 TimeoutStopSec=$timeout
-KillMode=process
+KillMode=mixed
 EOF
   systemctl daemon-reload
 }

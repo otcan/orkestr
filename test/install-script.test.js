@@ -228,7 +228,7 @@ test("install script exposes a host-native systemd VPS path", async () => {
   assert.match(script, /update\)/);
   assert.match(script, /ExecStart=\/usr\/local\/bin\/orkestr serve/);
   assert.match(script, /TimeoutStopSec=\$timeout_stop_sec/);
-  assert.match(script, /KillMode=process/);
+  assert.match(script, /KillMode=mixed/);
   assert.match(script, /ExecStart=\/usr\/local\/bin\/orkestr-update/);
   assert.match(script, /systemctl restart "\$\{service_name\}\.service"/);
   assert.doesNotMatch(script, /systemctl enable --now "\$\{service_name\}\.service"/);

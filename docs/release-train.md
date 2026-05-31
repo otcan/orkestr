@@ -209,9 +209,11 @@ active until the new UI/API process passes health checks; startup recovery
 defers while that marker is active so continuing Codex app-server turns are not
 misclassified as restart interruptions. The deployer also writes a versioned
 systemd drop-in that makes the API `node` process the service main process; this
-avoids `npm start` wrapper orphans. The systemd unit uses `KillMode=process` so
-the release restart targets that UI/API process and does not SIGTERM
-browserctl-managed desktop processes that live in the service cgroup. A Codex
+avoids `npm start` wrapper orphans. The systemd unit uses `KillMode=mixed` so
+the release restart gives the UI/API process a normal shutdown window while
+still reaping service-local child processes, such as WhatsApp bridge Chrome, if
+they outlive the stop timeout. Browserctl-managed desktops and active Codex
+app-server turns run outside the UI service cgroup. A Codex
 turn is treated as restart-safe only when `/api/threads?scope=all` reports both
 `runtime=codex-app-server` and `appServer=websocket` or `appServer=proxy`. First-time migrations from the
 old in-process app-server remain conservative and wait until active work is idle
