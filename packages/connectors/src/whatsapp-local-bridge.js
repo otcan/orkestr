@@ -110,7 +110,7 @@ export async function forwardLocalWhatsAppInbound(input = {}, env = process.env,
     method: "POST",
     headers,
     body: JSON.stringify(input),
-    signal: AbortSignal.timeout(Number(env.WHATSAPP_INBOUND_FORWARD_TIMEOUT_MS || 10_000)),
+    signal: AbortSignal.timeout(Number(env.WHATSAPP_INBOUND_FORWARD_TIMEOUT_MS || 60_000)),
   });
   const payload = await response.json().catch(() => ({}));
   if (!response.ok || payload?.ok === false) {

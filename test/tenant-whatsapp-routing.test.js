@@ -107,3 +107,36 @@ test("local WhatsApp bridge forwards tenant-routed chats with the scoped tenant 
   assert.equal(calls[0].body.chatId, "120363111111111111@g.us");
   assert.equal(calls[0].body.accountId, "tenant-wa");
 });
+
+test("local WhatsApp tenant forwards allow sanitizer-backed targets enough time by default", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-tenant-wa-forward-timeout-"));
+  const env = { ORKESTR_HOME: home };
+  await createTenantVm({
+    id: "slow-tenant",
+    ownerUserId: "slow",
+    endpoint: { baseUrl: "https://slow.example.test" },
+  }, env);
+  await configureTenantWhatsAppRoute("slow-tenant", {
+    chatId: "120363333333333333@g.us",
+    accountId: "tenant-wa",
+  }, env);
+  const originalTimeout = AbortSignal.timeout;
+  const timeouts = [];
+  AbortSignal.timeout = (ms) => {
+    timeouts.push(ms);
+    return new AbortController().signal;
+  };
+  try {
+    await forwardLocalWhatsAppInbound({
+      eventId: "tenant-wa-event-slow",
+      chatId: "120363333333333333@g.us",
+      accountId: "tenant-wa",
+      from: "491700000000@c.us",
+      text: "hello tenant",
+    }, env, async () => response({ ok: true, threadId: "tenant-thread", messageId: "tenant-message" }, true, 202));
+  } finally {
+    AbortSignal.timeout = originalTimeout;
+  }
+
+  assert.equal(timeouts[0], 60_000);
+});
