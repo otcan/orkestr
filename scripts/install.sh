@@ -967,7 +967,7 @@ install_system_packages() {
   if [ "$systemd" -ne 1 ] || [ "${ORKESTR_SKIP_SYSTEM_PACKAGES:-0}" = "1" ]; then
     return 0
   fi
-  apt_install ca-certificates curl git openssh-client procps ripgrep sqlite3 tmux util-linux
+  apt_install bubblewrap ca-certificates curl git openssh-client procps ripgrep sqlite3 tmux util-linux
   install_browser_package
   install_desktop_packages
 }
