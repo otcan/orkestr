@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.0-alpha.21
+
+- Mirror all Codex assistant updates to WhatsApp: generic commentary, progress updates, approval prompts, plans, and final answers now all reach the bound WhatsApp chat instead of being filtered to only selected "user-facing" updates.
+- Remove WhatsApp progress throttling and latest-only suppression so every assistant update is delivered in order.
+
 ## 0.1.0-alpha.20
 
 - Guard native Codex approval flow: YOLO threads auto-accept command/file approval requests, stale approval prompts are cleared, and `/approve` from WhatsApp is handled locally when no actionable Codex approval is pending.
