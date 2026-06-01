@@ -166,7 +166,8 @@ function normalizeTenantApiAgentText(text = "") {
 }
 
 function weakTenantApiAgentText(text = "") {
-  return /^(?:done|ok|okay|sure|yes|no|acknowledged|completed|finished|handled)[.!?]*$/i.test(clean(text));
+  const value = clean(text);
+  return !value || /^(?:done|ok|okay|sure|yes|no|acknowledged|completed|finished|handled)[.!?]*$/i.test(value);
 }
 
 function userMessageNeedsSubstantiveAnswer(text = "") {

@@ -195,6 +195,81 @@ test("tenant api-agent repairs bare acknowledgements for identity and capability
   assert.equal(usage.recent.some((record) => record.callKind === "assistant_repair"), true);
 });
 
+test("tenant api-agent repairs empty tool-result answers for identity and capability turns", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-api-agent-empty-tool-repair-"));
+  const env = await allowSanitizerEnv(home);
+  await createThread({
+    id: "otcantest-empty-tool-repair",
+    ownerUserId: "otcan",
+    name: "otcantest",
+    bindingName: "orkestr.de",
+    runtimeKind: "api-agent",
+    executorId: "api-agent",
+    executor: { type: "api-agent", metadata: { runtimeKind: "api-agent" } },
+    binding: { connector: "whatsapp", chatId: "chat-otcan", displayName: "orkestr.de", outboundAccountId: "wa-1" },
+  }, env);
+  const input = await enqueueThreadInputForPrincipal("otcantest-empty-tool-repair", {
+    text: "I'm Can. How can you help me?",
+    source: "whatsapp_inbound",
+    connector: "whatsapp",
+    chatId: "chat-otcan",
+    accountId: "wa-1",
+  }, userPrincipal({ id: "otcan", role: "user" }), env);
+
+  const calls = [];
+  const result = await processApiAgentThreadInput("otcantest-empty-tool-repair", env, {
+    fetchImpl: async (_url, options) => {
+      const body = JSON.parse(options.body);
+      calls.push(body);
+      if (calls.length === 1) {
+        return response({
+          id: "resp_api_agent_empty_tool_repair_1",
+          model: "gpt-5-mini",
+          output_text: "",
+          output: [{
+            type: "function_call",
+            name: "orkestr_list_skills",
+            call_id: "call_list_skills",
+            arguments: "{}",
+          }],
+          usage: { input_tokens: 330, output_tokens: 20 },
+        });
+      }
+      if (calls.length === 2) {
+        assert.equal(body.input.some((item) => item.type === "function_call_output"), true);
+        return response({
+          id: "resp_api_agent_empty_tool_repair_2",
+          model: "gpt-5-mini",
+          output_text: "",
+          output: [],
+          usage: { input_tokens: 520, output_tokens: 2 },
+        });
+      }
+      assert.equal(body.tools, undefined);
+      assert.match(body.instructions, /Response repair/i);
+      assert.match(body.input.at(-1).content, /I'm Can\. How can you help me\?/);
+      return response({
+        id: "resp_api_agent_empty_tool_repair_3",
+        model: "gpt-5-mini",
+        output_text: "Got it, Can. I can help you here on WhatsApp with questions, planning, drafting, and connected tenant features. For workspace execution, send the task with /codex.",
+        output: [],
+        usage: { input_tokens: 610, output_tokens: 33 },
+      });
+    },
+  });
+  const messages = await listThreadMessages("otcantest-empty-tool-repair", env);
+  const current = messages.find((message) => message.id === input.id);
+  const assistant = messages.find((message) => message.parentMessageId === input.id);
+  const usage = await creditUsageSummary({ tenantId: "otcan" }, env);
+
+  assert.equal(result.ok, true);
+  assert.equal(calls.length, 3);
+  assert.equal(current.state, "completed");
+  assert.match(assistant.text, /Got it, Can/i);
+  assert.notEqual(assistant.text.trim(), "Done.");
+  assert.equal(usage.recent.some((record) => record.callKind === "assistant_repair"), true);
+});
+
 test("tenant api-agent retries stale running messages after a restart", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-api-agent-stale-running-"));
   const env = await allowSanitizerEnv(home, { ORKESTR_API_AGENT_STALE_RUNNING_MS: "1000" });
