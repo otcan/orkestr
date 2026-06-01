@@ -1498,7 +1498,7 @@ test("whatsapp delivery mirrors bound thread replies that only carry the binding
   assert.match(calls[0].body.text, /bound chat id but no parent/);
 });
 
-test("whatsapp delivery mirrors throttled commentary progress before final replies", async () => {
+test("whatsapp delivery mirrors every commentary update before final replies", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-progress-"));
   const env = externalBridgeEnv(home, { ORKESTR_WHATSAPP_PROGRESS_MIN_INTERVAL_MS: "60000" });
   await createThread({ id: "thread-wa-progress", name: "WA Progress Thread" }, env);
@@ -1521,8 +1521,9 @@ test("whatsapp delivery mirrors throttled commentary progress before final repli
   }, env);
 
   const calls = [];
-  const internalProgress = await deliverWhatsAppReplies(env, async () => {
-    throw new Error("internal progress should not be mirrored");
+  const firstProgress = await deliverWhatsAppReplies(env, async (url, options) => {
+    calls.push({ url, body: JSON.parse(options.body) });
+    return response({ ok: true, ids: ["sent-progress-1"] });
   });
 
   await appendThreadMessage("thread-wa-progress", {
@@ -1536,9 +1537,9 @@ test("whatsapp delivery mirrors throttled commentary progress before final repli
     chatId: "chat-progress",
   }, env);
 
-  const progress = await deliverWhatsAppReplies(env, async (url, options) => {
+  const secondProgress = await deliverWhatsAppReplies(env, async (url, options) => {
     calls.push({ url, body: JSON.parse(options.body) });
-    return response({ ok: true, ids: ["sent-progress"] });
+    return response({ ok: true, ids: ["sent-progress-2"] });
   });
 
   await appendThreadMessage("thread-wa-progress", {
@@ -1551,8 +1552,9 @@ test("whatsapp delivery mirrors throttled commentary progress before final repli
     connector: "whatsapp",
     chatId: "chat-progress",
   }, env);
-  const throttled = await deliverWhatsAppReplies(env, async () => {
-    throw new Error("progress should be throttled");
+  const thirdProgress = await deliverWhatsAppReplies(env, async (url, options) => {
+    calls.push({ url, body: JSON.parse(options.body) });
+    return response({ ok: true, ids: ["sent-progress-3"] });
   });
 
   await appendThreadMessage("thread-wa-progress", {
@@ -1570,19 +1572,58 @@ test("whatsapp delivery mirrors throttled commentary progress before final repli
     return response({ ok: true, ids: ["sent-final"] });
   });
 
-  assert.equal(internalProgress.delivered.length, 0);
-  assert.equal(progress.delivered.length, 1);
-  assert.equal(progress.delivered[0].deliveryType, "progress");
-  assert.equal(throttled.delivered.length, 0);
-  assert.equal(throttled.skipped.some((item) => item.reason === "progress_throttled"), true);
+  assert.equal(firstProgress.delivered.length, 1);
+  assert.equal(firstProgress.delivered[0].deliveryType, "progress");
+  assert.equal(secondProgress.delivered.length, 1);
+  assert.equal(secondProgress.delivered[0].deliveryType, "progress");
+  assert.equal(thirdProgress.delivered.length, 1);
+  assert.equal(thirdProgress.delivered[0].deliveryType, "progress");
   assert.equal(final.delivered.length, 1);
   assert.equal(final.delivered[0].deliveryType, "final");
   assert.deepEqual(calls.map((call) => stripDebugFooter(call.body.text)), [
+    "I’m checking the repo and running focused tests now.",
     "Milestone: focused tests are running.",
+    "Milestone: focused tests passed; full suite is running.",
     "Done. Tests passed.",
   ]);
   assertDebugFooter(calls[0].body.text, { messageType: "update" });
-  assertDebugFooter(calls[1].body.text, { messageType: "final" });
+  assertDebugFooter(calls[1].body.text, { messageType: "update" });
+  assertDebugFooter(calls[2].body.text, { messageType: "update" });
+  assertDebugFooter(calls[3].body.text, { messageType: "final" });
+});
+
+test("whatsapp delivery mirrors Codex approval prompts as updates", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-approval-update-"));
+  const env = externalBridgeEnv(home);
+  await createThread({ id: "thread-wa-approval-update", name: "WA Approval Update Thread" }, env);
+  await writeConnectorConfig("whatsapp", {
+    bridgeMode: "external",
+    bridgeUrl: "http://wa.local",
+    threadRoutes: { "chat-approval-update": "thread-wa-approval-update" },
+  }, env);
+
+  const routed = await routeWhatsAppInbound({ eventId: "wa-approval-update-1", chatId: "chat-approval-update", text: "clean it" }, env);
+  await appendThreadMessage("thread-wa-approval-update", {
+    role: "assistant",
+    source: "codex-app-server",
+    phase: "awaiting_approval",
+    state: "completed",
+    text: "Codex is requesting command approval.\nCommand: rm -f tmp.pyc\nApprove or deny in Orkestr.",
+    parentMessageId: routed.message.id,
+    connector: "whatsapp",
+    chatId: "chat-approval-update",
+  }, env);
+
+  const calls = [];
+  const delivery = await deliverWhatsAppReplies(env, async (url, options) => {
+    calls.push({ url, body: JSON.parse(options.body) });
+    return response({ ok: true, ids: ["sent-approval-update"] });
+  });
+
+  assert.equal(delivery.delivered.length, 1);
+  assert.equal(delivery.delivered[0].deliveryType, "progress");
+  assert.match(stripDebugFooter(calls[0].body.text), /Codex is requesting command approval/);
+  assertDebugFooter(calls[0].body.text, { messageType: "update" });
 });
 
 test("whatsapp typing indicators follow active routed thread runtime", async () => {
@@ -2075,7 +2116,7 @@ test("whatsapp typing sync stops after outbound final delivery for the active pa
   assert.deepEqual(result.targets, []);
 });
 
-test("whatsapp delivery does not backfill commentary progress after a final answer exists", async () => {
+test("whatsapp delivery mirrors fresh commentary even when a final answer already exists", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-progress-final-"));
   const env = externalBridgeEnv(home);
   await createThread({ id: "thread-wa-progress-final", name: "WA Progress Final Thread" }, env);
@@ -2091,7 +2132,7 @@ test("whatsapp delivery does not backfill commentary progress after a final answ
     source: "codex-rollout",
     phase: "commentary",
     state: "completed",
-    text: "Milestone: old progress that should not be backfilled.",
+    text: "Milestone: fresh progress should still be mirrored.",
     parentMessageId: routed.message.id,
     connector: "whatsapp",
     chatId: "chat-progress-final",
@@ -2110,13 +2151,17 @@ test("whatsapp delivery does not backfill commentary progress after a final answ
   const calls = [];
   const delivery = await deliverWhatsAppReplies(env, async (url, options) => {
     calls.push({ url, body: JSON.parse(options.body) });
-    return response({ ok: true, ids: ["sent-final-only"] });
+    return response({ ok: true, ids: ["sent-progress-or-final"] });
   });
 
-  assert.equal(delivery.delivered.length, 1);
-  assert.equal(delivery.skipped.some((item) => item.reason === "final_reply_available"), true);
-  assert.deepEqual(calls.map((call) => stripDebugFooter(call.body.text)), ["Final only."]);
-  assertDebugFooter(calls[0].body.text, { messageType: "final" });
+  assert.equal(delivery.delivered.length, 2);
+  assert.deepEqual(delivery.delivered.map((item) => item.deliveryType), ["progress", "final"]);
+  assert.deepEqual(calls.map((call) => stripDebugFooter(call.body.text)), [
+    "Milestone: fresh progress should still be mirrored.",
+    "Final only.",
+  ]);
+  assertDebugFooter(calls[0].body.text, { messageType: "update" });
+  assertDebugFooter(calls[1].body.text, { messageType: "final" });
 });
 
 test("whatsapp delivery mirrors newer progress after an older final was already delivered", async () => {
@@ -2735,7 +2780,7 @@ test("whatsapp outbound formatting strips proposed plan envelopes", () => {
   );
 });
 
-test("whatsapp delivery does not mirror proposed plans as final answers", async () => {
+test("whatsapp delivery mirrors proposed plans with WhatsApp-safe formatting", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-proposed-plan-"));
   const env = externalBridgeEnv(home);
   await createThread({ id: "thread-wa-proposed-plan", name: "WA Proposed Plan Thread" }, env);
@@ -2757,12 +2802,16 @@ test("whatsapp delivery does not mirror proposed plans as final answers", async 
     chatId: "chat-proposed-plan",
   }, env);
 
-  const delivery = await deliverWhatsAppReplies(env, async () => {
-    throw new Error("should not mirror proposed plan");
+  const calls = [];
+  const delivery = await deliverWhatsAppReplies(env, async (url, options) => {
+    calls.push({ url, body: JSON.parse(options.body) });
+    return response({ ok: true, ids: ["sent-proposed-plan"] });
   });
 
-  assert.equal(delivery.delivered.length, 0);
-  assert.equal(delivery.skipped.length, 0);
+  assert.equal(delivery.delivered.length, 1);
+  assert.equal(delivery.delivered[0].deliveryType, "final");
+  assert.equal(stripDebugFooter(calls[0].body.text), "Plan\n\nDo it");
+  assertDebugFooter(calls[0].body.text, { messageType: "final" });
 });
 
 test("whatsapp delivery forwards failed WhatsApp-origin thread inputs once", async () => {

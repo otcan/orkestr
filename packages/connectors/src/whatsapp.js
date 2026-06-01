@@ -337,10 +337,6 @@ function proposedPlanEnvelopeBody(value) {
   return text.replace(proposedPlanOpenTagPattern, "").replace(proposedPlanCloseTagPattern, "").trim();
 }
 
-function hasProposedPlanEnvelope(value) {
-  return proposedPlanEnvelopeBody(value) !== null;
-}
-
 function stripProposedPlanEnvelope(value) {
   return proposedPlanEnvelopeBody(value) ?? String(value || "");
 }
@@ -1298,44 +1294,27 @@ function codexAssistantSource(message) {
   return ["codex-rollout", "codex-app-server"].includes(String(message?.source || "").trim());
 }
 
+function codexAssistantPhase(message) {
+  return String(message?.phase || "final_answer").trim().toLowerCase();
+}
+
+function shouldSkipCodexAssistantMirror(message) {
+  return ["context_compaction"].includes(codexAssistantPhase(message));
+}
+
 function shouldMirrorWhatsAppReply(message) {
   if (codexAssistantSource(message)) {
-    const phase = String(message.phase || "final_answer").trim();
-    if (phase === "plan" || hasProposedPlanEnvelope(message.text)) return false;
-    return !phase || ["final_answer", "need_input", "awaiting_input", "question", "request_user_input"].includes(phase);
+    const phase = codexAssistantPhase(message);
+    if (shouldSkipCodexAssistantMirror(message)) return false;
+    return !["commentary", "awaiting_approval"].includes(phase);
   }
   return true;
 }
 
 function shouldMirrorWhatsAppProgress(message) {
   if (!codexAssistantSource(message)) return false;
-  const phase = String(message.phase || "").trim().toLowerCase();
-  return (
-    phase === "commentary" &&
-    !hasProposedPlanEnvelope(message.text) &&
-    isUserFacingProgressText(message.text)
-  );
-}
-
-function isUserFacingProgressText(value) {
-  const text = pickString(value);
-  if (!text) return false;
-  const lower = text.toLowerCase();
-  if (
-    /^(milestone|blocked|blocker|need input|need-input|waiting|ready|done|failed|error|queued|interrupted):\s+\S/.test(lower) ||
-    /\b(pairing code|verification code|approval required|approve this|please approve|waiting for you|needs your approval)\b/.test(lower)
-  ) {
-    return true;
-  }
-  if (/^(i['’]?m|i am|i['’]?ll|i will|checking|inspecting|reading|running|trying|looking)\b/.test(lower)) {
-    return false;
-  }
-  return false;
-}
-
-function progressMirrorIntervalMs(env = process.env) {
-  const value = Number(env.ORKESTR_WHATSAPP_PROGRESS_MIN_INTERVAL_MS || 60_000);
-  return Number.isFinite(value) && value >= 0 ? value : 60_000;
+  if (shouldSkipCodexAssistantMirror(message)) return false;
+  return ["commentary", "awaiting_approval"].includes(codexAssistantPhase(message));
 }
 
 function latestProgressReplyForParent(messages, parentId) {
@@ -1356,14 +1335,6 @@ function completedFinalReplyForParent(messages, parentId) {
     candidate.parentMessageId === parentId &&
     shouldMirrorWhatsAppReply(candidate)
   ) || null;
-}
-
-function completedFinalReplyAfterMessage(messages, parentId, message) {
-  const messageMs = messageTimeMs(message);
-  const final = completedFinalReplyForParent(messages, parentId);
-  if (!final) return null;
-  const finalMs = messageTimeMs(final);
-  return !messageMs || !finalMs || finalMs >= messageMs ? final : null;
 }
 
 function messageTimeMs(message = {}) {
@@ -1417,16 +1388,6 @@ function typingCooldownActive(state = null, parent = null, chatId = "", env = pr
   const delivery = latestOutboundDeliveryForTypingParent(state, parent, chatId);
   const deliveredMs = Date.parse(String(delivery?.deliveredAt || ""));
   return Number.isFinite(deliveredMs) && Date.now() - deliveredMs < cooldownMs;
-}
-
-function latestProgressDelivery(outboundDeliveries, parentMessageId, chatId) {
-  return [...(outboundDeliveries || [])]
-    .reverse()
-    .find((delivery) =>
-      delivery.deliveryType === "progress" &&
-      delivery.parentMessageId === parentMessageId &&
-      (!chatId || delivery.chatId === chatId)
-    ) || null;
 }
 
 function whatsappOutboundDeliveryRetentionLimit(env = process.env) {
@@ -2166,16 +2127,6 @@ async function deliverWhatsAppRepliesOnce(env = process.env, fetchImpl = fetch) 
           skipped.push({ agentId, threadId, messageId: message.id, reason: "mirroring_disabled" });
           continue;
         }
-        if (completedFinalReplyAfterMessage(messages, message.parentMessageId, message)) {
-          skipped.push({ agentId, threadId, messageId: message.id, reason: "final_reply_available" });
-          continue;
-        }
-        const latestProgress = latestProgressReplyForParent(messages, message.parentMessageId);
-        if (latestProgress?.id !== message.id) {
-          skipped.push({ agentId, threadId, messageId: message.id, reason: "superseded_progress" });
-          continue;
-        }
-
         const chatId = pickString(message.chatId, parent?.chatId);
         const accountId = kind === "thread"
           ? pickString(thread?.binding?.responderAccountId, thread?.binding?.outboundAccountId, message.accountId, parent?.accountId)
@@ -2192,12 +2143,6 @@ async function deliverWhatsAppRepliesOnce(env = process.env, fetchImpl = fetch) 
           continue;
         }
 
-        const lastProgress = latestProgressDelivery(outboundDeliveries, message.parentMessageId, chatId);
-        const elapsedMs = lastProgress?.deliveredAt ? Date.now() - Date.parse(lastProgress.deliveredAt) : Infinity;
-        if (elapsedMs < progressMirrorIntervalMs(env)) {
-          skipped.push({ agentId, threadId, messageId: message.id, reason: "progress_throttled" });
-          continue;
-        }
         const textKey = deliveryTextKey(chatId, `progress:${message.id}\n${text}`);
         if (deliveredTextKeys.has(textKey) || batchTextKeys.has(textKey)) {
           skipped.push({ agentId, threadId, messageId: message.id, reason: "duplicate_text" });
