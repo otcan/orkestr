@@ -227,6 +227,42 @@ test("thread message mutations do not overwrite concurrent appends", async () =>
   assert.equal(new Set(messages.map((message) => message.cursor)).size, messages.length);
 });
 
+test("whatsapp thread inputs suppress duplicate external ids atomically", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-external-id-dedupe-"));
+  const env = { ORKESTR_HOME: home };
+  await createThread({
+    id: "wa-dedupe-thread",
+    name: "WA Dedupe Thread",
+    executorId: "noop",
+    binding: {
+      connector: "whatsapp",
+      chatId: "chat-dedupe",
+      enabled: true,
+      outboundAccountId: "responder",
+    },
+  }, env);
+
+  const input = {
+    source: "whatsapp_inbound",
+    connector: "whatsapp",
+    externalId: "false_chat-dedupe_message-1_sender",
+    chatId: "chat-dedupe",
+    from: "sender",
+    accountId: "responder",
+    text: "Proceed",
+  };
+  const results = await Promise.all([
+    enqueueThreadInput("wa-dedupe-thread", input, env),
+    enqueueThreadInput("wa-dedupe-thread", input, env),
+  ]);
+  const messages = await listThreadMessages("wa-dedupe-thread", env);
+
+  assert.equal(messages.length, 1);
+  assert.equal(messages[0].externalId, input.externalId);
+  assert.equal(results.filter((result) => result.duplicate).length, 1);
+  assert.equal(results.find((result) => result.duplicate)?.duplicateReason, "external_id");
+});
+
 test("thread creation reuses an existing visible agent name", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-name-dedupe-"));
   const env = { ORKESTR_HOME: home };

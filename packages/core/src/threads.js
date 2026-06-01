@@ -367,14 +367,28 @@ export async function appendThreadMessage(threadId, input, env = process.env) {
   const filePath = await messagesPath(thread.id, env);
   const message = await enqueueMessageMutation(filePath, async () => {
     const messages = await readJson(filePath, []);
+    const role = String(input.role || "assistant");
+    const source = String(input.source || "manual");
+    const externalId = String(input.externalId || "").trim();
+    if (role === "user" && externalId && whatsappOrigin({ ...input, role, source })) {
+      const duplicate = [...messages].reverse().find((existing) =>
+        existing.role === "user" &&
+        whatsappOrigin(existing) &&
+        String(existing.externalId || "").trim() === externalId &&
+        sameOptionalMessageField(existing, input, "chatId") &&
+        sameOptionalMessageField(existing, input, "from") &&
+        sameOptionalMessageField(existing, input, "accountId")
+      );
+      if (duplicate) return { ...duplicate, duplicate: true, duplicateReason: "external_id" };
+    }
     const cursor =
       Number(input.cursor || 0) ||
       Math.max(0, ...messages.map((item) => Number(item.cursor || 0)).filter(Number.isFinite)) + 1;
     const nextMessage = {
       id: randomUUID(),
       ownerUserId: normalizeUserId(input.ownerUserId || thread.ownerUserId || env.ORKESTR_ADMIN_USER_ID || adminUserId),
-      role: String(input.role || "assistant"),
-      source: String(input.source || "manual"),
+      role,
+      source,
       text: String(input.text || "").trim(),
       promptFile: String(input.promptFile || "").trim(),
       parentMessageId: String(input.parentMessageId || "").trim() || null,
@@ -400,6 +414,17 @@ export async function appendThreadMessage(threadId, input, env = process.env) {
     await writeJson(filePath, messages);
     return nextMessage;
   });
+  if (message.duplicate) {
+    await appendEvent({
+      type: "thread_input_duplicate_suppressed",
+      threadId: thread.id,
+      messageId: message.id,
+      source: input.source || "",
+      connector: input.connector || "",
+      duplicateReason: message.duplicateReason || "",
+    }, env);
+    return message;
+  }
   await updateThread(thread.id, { state: activeInputStates.has(message.state) ? message.state : thread.state }, env);
   await appendEvent({ type: `thread_message_${message.state}`, threadId: thread.id, messageId: message.id, source: message.source, role: message.role, ownerUserId: message.ownerUserId }, env);
   return message;
