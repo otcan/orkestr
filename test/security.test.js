@@ -265,6 +265,52 @@ test("whatsapp inbound machine token bypasses browser pairing only for inbound",
   assert.equal(otherRoute.error, "browser_pairing_required");
 });
 
+test("whatsapp bridge machine token bypasses browser pairing only for bridge routes", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-security-wa-bridge-"));
+  const env = {
+    ORKESTR_HOME: home,
+    ORKESTR_AUTH_REQUIRED: "1",
+    ORKESTR_WHATSAPP_BRIDGE_TOKEN: "wa-bridge-secret",
+  };
+
+  const blocked = await authorizeHttpRequest({
+    method: "GET",
+    url: "/api/connectors/whatsapp/bridge/health",
+    headers: {},
+  }, env);
+  const badToken = await authorizeHttpRequest({
+    method: "GET",
+    url: "/api/connectors/whatsapp/bridge/health",
+    headers: { authorization: "Bearer wrong-secret" },
+  }, env);
+  const allowedHealth = await authorizeHttpRequest({
+    method: "GET",
+    url: "/api/connectors/whatsapp/bridge/health",
+    headers: { authorization: "Bearer wa-bridge-secret" },
+  }, env);
+  const allowedSend = await authorizeHttpRequest({
+    method: "POST",
+    url: "/api/connectors/whatsapp/bridge/send-text",
+    headers: { authorization: "Bearer wa-bridge-secret" },
+  }, env);
+  const otherRoute = await authorizeHttpRequest({
+    method: "GET",
+    url: "/api/threads",
+    headers: { authorization: "Bearer wa-bridge-secret" },
+  }, env);
+
+  assert.equal(blocked.ok, false);
+  assert.equal(blocked.error, "browser_pairing_required");
+  assert.equal(badToken.ok, false);
+  assert.equal(badToken.error, "browser_pairing_required");
+  assert.equal(allowedHealth.ok, true);
+  assert.equal(allowedHealth.machineAuth, "whatsapp_bridge");
+  assert.equal(allowedSend.ok, true);
+  assert.equal(allowedSend.machineAuth, "whatsapp_bridge");
+  assert.equal(otherRoute.ok, false);
+  assert.equal(otherRoute.error, "browser_pairing_required");
+});
+
 test("paired browser sessions can open desktop routes without desktop-share challenge", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-security-desktop-session-"));
   const env = {

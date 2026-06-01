@@ -212,22 +212,38 @@ function whatsappInboundTokens(env = process.env) {
   ];
 }
 
-function isWhatsAppInboundRequest(request) {
-  const method = String(request?.method || "GET").toUpperCase();
-  const url = String(request?.url || "").split("?")[0];
-  return method === "POST" && url === "/api/connectors/whatsapp/inbound";
+function whatsappBridgeTokens(env = process.env) {
+  return [
+    ...splitSecretList(env.ORKESTR_WHATSAPP_BRIDGE_TOKEN),
+    ...splitSecretList(env.WHATSAPP_BRIDGE_TOKEN),
+    ...splitSecretList(env.ORKESTR_WHATSAPP_BRIDGE_TOKENS),
+    ...splitSecretList(env.WHATSAPP_BRIDGE_TOKENS),
+  ];
 }
 
-function authorizeWhatsAppInboundRequest(request, env = process.env) {
-  if (!isWhatsAppInboundRequest(request)) return null;
+function isWhatsAppMachineRoute(request) {
+  const method = String(request?.method || "GET").toUpperCase();
+  const url = String(request?.url || "").split("?")[0];
+  if (method === "POST" && url === "/api/connectors/whatsapp/inbound") {
+    return { kind: "whatsapp_inbound", tokens: whatsappInboundTokens };
+  }
+  if (url.startsWith("/api/connectors/whatsapp/bridge/")) {
+    return { kind: "whatsapp_bridge", tokens: whatsappBridgeTokens };
+  }
+  return null;
+}
+
+function authorizeWhatsAppMachineRequest(request, env = process.env) {
+  const route = isWhatsAppMachineRoute(request);
+  if (!route) return null;
   const token = bearerToken(request?.headers?.authorization || request?.headers?.Authorization || "");
   if (!token) return null;
-  const matched = whatsappInboundTokens(env).some((candidate) => timingSafeSecretEqual(token, candidate));
+  const matched = route.tokens(env).some((candidate) => timingSafeSecretEqual(token, candidate));
   if (!matched) return null;
   return {
     ok: true,
     principal: adminPrincipal(defaultAdminUser(env)),
-    machineAuth: "whatsapp_inbound",
+    machineAuth: route.kind,
   };
 }
 
@@ -596,7 +612,7 @@ export async function authorizeHttpRequest(request, env = process.env) {
   if (shareAuth && Number(shareAuth.statusCode || 0) >= 400) {
     return { ok: false, status, statusCode: shareAuth.statusCode, error: shareAuth.error || "desktop_share_forbidden" };
   }
-  const whatsappInboundAuth = authorizeWhatsAppInboundRequest(request, env);
+  const whatsappInboundAuth = authorizeWhatsAppMachineRequest(request, env);
   if (whatsappInboundAuth?.ok) return { ok: true, status, principal: whatsappInboundAuth.principal, machineAuth: whatsappInboundAuth.machineAuth };
   if (!status.authEnabled) return { ok: true, status, principal: adminPrincipal(defaultAdminUser(env)) };
   const token = cookieValue(request?.headers?.cookie || "");
