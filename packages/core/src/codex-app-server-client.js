@@ -14,6 +14,7 @@ import {
 import { listThreadMessages, updateThread, updateThreadMessage } from "./threads.js";
 import {
   appendOrUpdateEventMessage,
+  appServerStateFromStatus,
   approvalPromptText,
   clean,
   clientKey,
@@ -21,10 +22,12 @@ import {
   commandEnv,
   itemPhase,
   itemText,
+  isCodexApprovalRequestMethod,
   markThreadFromCodexStatus,
   nowIso,
   publicError,
   runtimeHome,
+  threadAutoAcceptsCodexApprovals,
   threadEventId,
   threadForCodexThreadId,
   threadUsesRestrictedCodexPolicy,
@@ -311,10 +314,12 @@ export class CodexAppServerClient {
     this.pendingRequests.set(String(message.id), request);
     if (!thread) {
       this.rejectServerRequest(message.id, "No Orkestr thread is mapped to this Codex request.");
+      this.pendingRequests.delete(String(message.id));
       return;
     }
     if (threadUsesRestrictedCodexPolicy(thread, this.env)) {
       this.rejectServerRequest(message.id, "Blocked by Orkestr tenant isolation for this contained user.");
+      this.pendingRequests.delete(String(message.id));
       await appendOrUpdateEventMessage(thread, {
         role: "assistant",
         source: "orkestr_runtime",
@@ -354,12 +359,26 @@ export class CodexAppServerClient {
       }, this.env).catch(() => {});
       return;
     }
+    if (isCodexApprovalRequestMethod(message.method) && threadAutoAcceptsCodexApprovals(thread, this.env)) {
+      this.respond(message.id, { decision: "accept" });
+      this.pendingRequests.delete(String(message.id));
+      await appendEvent({
+        type: "codex_app_server_request_auto_accepted_yolo",
+        threadId: thread.id,
+        codexThreadId: codexId,
+        method: message.method,
+        requestId: String(message.id),
+      }, this.env).catch(() => {});
+      return;
+    }
     await updateThread(thread.id, {
       state: "awaiting_approval",
       runtime: {
         ...(thread.runtime || {}),
         runtimeKind: "codex-app-server",
+        state: "awaiting_approval",
         pendingRequest: request,
+        codexStatus: { type: "active", activeFlags: ["waitingOnApproval"] },
       },
     }, this.env).catch(() => {});
     await appendTurnLifecycleEvent("awaiting_approval", {
@@ -423,6 +442,11 @@ export class CodexAppServerClient {
     if (message.method === "thread/status/changed" && codexId) {
       const state = this.threadStates.get(codexId) || {};
       this.threadStates.set(codexId, { ...state, status: params.status || null });
+      if (appServerStateFromStatus(params.status) !== "awaiting_approval") {
+        for (const [requestKey, request] of this.pendingRequests.entries()) {
+          if (request?.codexThreadId === codexId) this.pendingRequests.delete(requestKey);
+        }
+      }
       const thread = await threadForCodexThreadId(codexId, this.env);
       if (thread) await markThreadFromCodexStatus(thread, params.status, this.env);
       return;
@@ -473,6 +497,9 @@ export class CodexAppServerClient {
         }
         const state = this.threadStates.get(threadId) || {};
         this.threadStates.set(threadId, { ...state, activeTurnId: "", status: { type: status === "failed" ? "systemError" : "idle" } });
+        for (const [requestKey, request] of this.pendingRequests.entries()) {
+          if (request?.codexThreadId === threadId && (!turnId || !request.turnId || request.turnId === turnId)) this.pendingRequests.delete(requestKey);
+        }
         const thread = await threadForCodexThreadId(threadId, this.env);
         if (thread) {
           await updateThread(thread.id, {
@@ -484,6 +511,8 @@ export class CodexAppServerClient {
               activeTurnId: null,
               lastTurnId: turnId || null,
               lastTurnStatus: status,
+              pendingRequest: null,
+              codexStatus: { type: status === "failed" ? "systemError" : "idle" },
               state: status === "failed" ? "failed" : "ready",
               updatedAt: nowIso(),
             },
@@ -646,6 +675,8 @@ export class CodexAppServerClient {
           activeTurnId: null,
           lastTurnId: turnId || null,
           lastTurnStatus: "completed",
+          pendingRequest: null,
+          codexStatus: { type: "idle" },
           state: "ready",
           updatedAt: nowIso(),
         },
@@ -654,11 +685,14 @@ export class CodexAppServerClient {
     return message;
   }
 
-  pendingRequestForThread(thread) {
+  pendingRequestForThread(thread, options = {}) {
     const id = codexThreadId(thread);
     for (const request of this.pendingRequests.values()) {
       if (request.codexThreadId === id || request.threadId === thread.id) return request;
     }
+    if (options.includePersisted === false) return null;
+    const persisted = thread?.runtime?.pendingRequest || null;
+    if (persisted && (persisted.codexThreadId === id || persisted.threadId === thread.id)) return persisted;
     return null;
   }
 
@@ -679,6 +713,7 @@ export class CodexAppServerClient {
         ...(thread.runtime || {}),
         runtimeKind: "codex-app-server",
         pendingRequest: null,
+        state: "working",
       },
     }, this.env).catch(() => {});
     await appendEvent({

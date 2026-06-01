@@ -254,6 +254,16 @@ test("thread settings exposes detailed repo metadata editing", async () => {
   assert.match(component, /baseBranch: this\.threadBaseBranchDraft\.trim\(\)/);
 });
 
+test("runtime approval controls require an actionable pending request", async () => {
+  const template = await fs.readFile("apps/web/src/app/app.component.html", "utf8");
+  const component = await fs.readFile("apps/web/src/app/app.component.ts", "utf8");
+
+  assert.match(template, /@if \(hasActionablePendingApproval\(thread\)\)/);
+  assert.match(component, /hasActionablePendingApproval\(thread: ThreadSummary \| null = this\.selectedThread\(\)\): boolean/);
+  assert.match(component, /No Codex approval request is pending for this thread\./);
+  assert.match(component, /flags\.includes\("waitingOnApproval"\)/);
+});
+
 test("web shell switches to a constrained non-admin user mode", async () => {
   const template = await fs.readFile("apps/web/src/app/app.component.html", "utf8");
   const component = await fs.readFile("apps/web/src/app/app.component.ts", "utf8");

@@ -1187,8 +1187,10 @@
             <button class="secondary" type="button" (click)="loadRuntime()" [disabled]="busy">Reload</button>
           </div>
           <div class="runtime-actions">
-            <input name="approve-text" [(ngModel)]="approveText" (ngModelChange)="persistThreadTextField('approveText', $event)" placeholder="Approval text" />
-            <button type="button" (click)="approveSelected()" [disabled]="busy">Approve</button>
+            @if (hasActionablePendingApproval(thread)) {
+              <input name="approve-text" [(ngModel)]="approveText" (ngModelChange)="persistThreadTextField('approveText', $event)" placeholder="Approval text" />
+              <button type="button" (click)="approveSelected()" [disabled]="busy">Approve</button>
+            }
             <input name="interrupt-text" [(ngModel)]="interruptText" (ngModelChange)="persistThreadTextField('interruptText', $event)" placeholder="Interrupt message" />
             <button class="danger-soft" type="button" (click)="interruptSelected()" [disabled]="busy">Interrupt</button>
           </div>

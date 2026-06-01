@@ -245,6 +245,18 @@ export function approvalPolicyForThread(thread, env = process.env) {
   return requested;
 }
 
+export function threadAutoAcceptsCodexApprovals(thread = {}, env = process.env) {
+  if (threadUsesRestrictedCodexPolicy(thread, env)) return false;
+  return codexSandboxForThread(thread, env) === "danger-full-access" && approvalPolicyForThread(thread, env) === "never";
+}
+
+export function isCodexApprovalRequestMethod(method = "") {
+  return [
+    "item/commandExecution/requestApproval",
+    "item/fileChange/requestApproval",
+  ].includes(clean(method));
+}
+
 const codexReasoningEfforts = new Set(["none", "minimal", "low", "medium", "high", "xhigh"]);
 
 export function normalizeCodexModel(value) {
@@ -377,6 +389,7 @@ export async function markThreadFromCodexStatus(thread, status, env = process.en
       runtimeKind: "codex-app-server",
       codexStatus: status || null,
       activeTurnId,
+      pendingRequest: state === "awaiting_approval" ? thread.runtime?.pendingRequest || null : null,
       updatedAt: nowIso(),
     },
   }, env).catch(() => {});

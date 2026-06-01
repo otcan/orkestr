@@ -49,6 +49,7 @@ import { visibleThreadMessages } from "../../../../../packages/core/src/thread-m
 import { resolveWorkspacePathForPrincipal, workspacePrincipalForOwner, workspaceRootForPrincipal } from "../../../../../packages/core/src/workspace-files.js";
 import {
   archiveCodexAppServerThread,
+  answerCodexAppServerPendingRequest,
   compactCodexAppServerThread,
   interruptCodexAppServerThread,
   rollbackCodexAppServerThread,
@@ -1303,6 +1304,23 @@ export class ThreadsController {
   @Post(":threadId/approve")
   @HttpCode(202)
   async approve(@Req() request: any, @Param("threadId") threadId: string, @Body() body: Record<string, unknown> = {}) {
+    const thread = await getThread(threadId);
+    if (!thread) throw httpError("thread_not_found", 404);
+    if (threadUsesCodexAppServer(thread)) {
+      await this.assertThreadSanitized("thread.approve", requestPrincipal(request), thread, body);
+      const result = await answerCodexAppServerPendingRequest(thread, {
+        decision: String(body.decision || "accept"),
+        text: String(body.text || "Approved. Proceed."),
+      });
+      if (!result.answered) throw httpError(result.reason || "no_pending_request", 409);
+      return {
+        ok: true,
+        answered: true,
+        request: result.request,
+        thread: result.thread ? await threadRuntimeSummary(result.thread, await listThreadMessages(result.thread.id)) : undefined,
+        runtime: result.status,
+      };
+    }
     return this.input(request, threadId, { ...body, text: String(body.text || "Approved. Proceed."), source: body.source || "approval" });
   }
 

@@ -7,6 +7,7 @@ import test from "node:test";
 import { once } from "node:events";
 import { WebSocketServer } from "ws";
 import {
+  answerCodexAppServerPendingRequest,
   codexAppServerThreadStatus,
   deliverCodexAppServerPendingInputs,
   getCodexAppServerClient,
@@ -986,6 +987,164 @@ test("Codex app-server sends short chat replies to pending user-input requests",
   }
 });
 
+test("Codex app-server auto-accepts command approvals for YOLO threads", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-codex-app-server-yolo-approval-"));
+  const fake = await createFakeCodex(home);
+  const env = {
+    ORKESTR_HOME: path.join(home, "orkestr"),
+    HOME: path.join(home, "runtime-home"),
+    PATH: `${fake.bin}${path.delimiter}${process.env.PATH || ""}`,
+    FAKE_CODEX_STATE: fake.stateFile,
+  };
+  try {
+    const thread = await createThread({
+      id: "app-server-yolo-approval-thread",
+      name: "YOLO Approval Thread",
+      cwd: home,
+      codexSandbox: "danger-full-access",
+      codexApprovalPolicy: "never",
+      executorId: "codex",
+      executor: {
+        type: "codex",
+        metadata: {
+          codexSandbox: "danger-full-access",
+          codexApprovalPolicy: "never",
+        },
+      },
+    }, env);
+    const started = await startCodexAppServerThread(thread, env);
+    const client = await getCodexAppServerClient({ env, home: env.HOME });
+    const writes = [];
+    client.write = (payload) => writes.push(payload);
+
+    await client.handleServerRequest({
+      id: 7,
+      method: "item/commandExecution/requestApproval",
+      params: {
+        threadId: started.thread.executor.codexThreadId,
+        turnId: "turn-yolo",
+        itemId: "call-yolo",
+        command: ["git", "status", "--short"],
+        cwd: home,
+      },
+    });
+
+    const updated = await getThread(started.thread.id, env);
+    const messages = await listThreadMessages(started.thread.id, env);
+
+    assert.deepEqual(writes, [{ id: 7, result: { decision: "accept" } }]);
+    assert.equal(client.pendingRequests.has("7"), false);
+    assert.notEqual(updated.state, "awaiting_approval");
+    assert.equal(updated.runtime?.pendingRequest, undefined);
+    assert.equal(messages.some((message) => message.phase === "awaiting_approval"), false);
+  } finally {
+    stopCodexAppServerClients();
+  }
+});
+
+test("Codex app-server completed turns clear persisted approval requests", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-codex-app-server-complete-clears-approval-"));
+  const fake = await createFakeCodex(home);
+  const env = {
+    ORKESTR_HOME: path.join(home, "orkestr"),
+    HOME: path.join(home, "runtime-home"),
+    PATH: `${fake.bin}${path.delimiter}${process.env.PATH || ""}`,
+    FAKE_CODEX_STATE: fake.stateFile,
+  };
+  try {
+    const thread = await createThread({ id: "app-server-complete-clears-approval-thread", name: "Complete Clears Approval Thread", cwd: home, executorId: "codex", executor: { type: "codex" } }, env);
+    const started = await startCodexAppServerThread(thread, env);
+    const request = {
+      requestId: "approval-before-completion",
+      method: "item/commandExecution/requestApproval",
+      threadId: started.thread.id,
+      codexThreadId: started.thread.executor.codexThreadId,
+      turnId: "turn-clears-approval",
+      itemId: "call-clears-approval",
+    };
+    await updateThread(started.thread.id, {
+      state: "awaiting_approval",
+      runtime: {
+        ...(started.thread.runtime || {}),
+        runtimeKind: "codex-app-server",
+        state: "awaiting_approval",
+        activeTurnId: "turn-clears-approval",
+        pendingRequest: request,
+        codexStatus: { type: "active", activeFlags: ["waitingOnApproval"] },
+      },
+    }, env);
+    const client = await getCodexAppServerClient({ env, home: env.HOME });
+
+    await client.handleNotification({
+      method: "turn/completed",
+      params: {
+        turn: {
+          id: "turn-clears-approval",
+          threadId: started.thread.executor.codexThreadId,
+          status: "completed",
+          error: null,
+        },
+      },
+    });
+
+    const updated = await getThread(started.thread.id, env);
+
+    assert.equal(updated.state, "ready");
+    assert.equal(updated.runtime.pendingRequest, null);
+    assert.equal(updated.runtime.activeTurnId, null);
+    assert.deepEqual(updated.runtime.codexStatus, { type: "idle" });
+  } finally {
+    stopCodexAppServerClients();
+  }
+});
+
+test("Codex app-server approval helper refuses stale persisted requests", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-codex-app-server-stale-approval-helper-"));
+  const fake = await createFakeCodex(home);
+  const env = {
+    ORKESTR_HOME: path.join(home, "orkestr"),
+    HOME: path.join(home, "runtime-home"),
+    PATH: `${fake.bin}${path.delimiter}${process.env.PATH || ""}`,
+    FAKE_CODEX_STATE: fake.stateFile,
+  };
+  try {
+    const thread = await createThread({
+      id: "app-server-stale-approval-helper-thread",
+      name: "Stale Approval Helper Thread",
+      state: "awaiting_approval",
+      executorId: "codex",
+      executor: {
+        type: "codex",
+        transport: "app-server",
+        codexThreadId: "stale-approval-codex-thread",
+      },
+      runtimeKind: "codex-app-server",
+      codexThreadId: "stale-approval-codex-thread",
+      runtime: {
+        runtimeKind: "codex-app-server",
+        state: "awaiting_approval",
+        pendingRequest: {
+          requestId: "stale-approval-request",
+          method: "item/commandExecution/requestApproval",
+          threadId: "app-server-stale-approval-helper-thread",
+          codexThreadId: "stale-approval-codex-thread",
+        },
+        codexStatus: { type: "active", activeFlags: [] },
+      },
+    }, env);
+
+    const result = await answerCodexAppServerPendingRequest(thread, { decision: "accept" }, env);
+    const updated = await getThread(thread.id, env);
+
+    assert.equal(result.answered, false);
+    assert.equal(result.reason, "no_pending_request");
+    assert.equal(updated.runtime.pendingRequest, null);
+    assert.equal(updated.state, "ready");
+  } finally {
+    stopCodexAppServerClients();
+  }
+});
+
 test("Codex app-server mirrors interrupted turns to the thread and WhatsApp", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-codex-app-server-interrupted-"));
   const fake = await createFakeCodex(home);
@@ -1230,13 +1389,22 @@ test("Codex app-server status ignores stale stored working state without live cl
         runtimeKind: "codex-app-server",
         state: "ready",
         codexStatus: { type: "active", activeFlags: [] },
+        pendingRequest: {
+          requestId: "stale-request-after-completion",
+          method: "item/commandExecution/requestApproval",
+          threadId: "app-server-active-empty-status-thread",
+          codexThreadId: "empty-active-codex-thread",
+        },
       },
     }, env);
     const idleActiveStatus = await codexAppServerThreadStatus(idleActive, env);
+    const idleActiveUpdated = await getThread(idleActive.id, env);
 
     assert.equal(idleActiveStatus.state, "ready");
     assert.equal(idleActiveStatus.working, false);
     assert.equal(idleActiveStatus.activeTurnId, null);
+    assert.equal(idleActiveStatus.pendingRequest, null);
+    assert.equal(idleActiveUpdated.runtime.pendingRequest, null);
   } finally {
     stopCodexAppServerClients();
   }

@@ -1191,6 +1191,55 @@ test("whatsapp inbound can route directly to a thread and mirror its reply once"
   assert.equal(calls[0].body.to, "chat-thread");
 });
 
+test("whatsapp explicit approve command is local when no Codex approval is pending", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-approval-no-pending-"));
+  const env = externalBridgeEnv(home);
+  await createThread({
+    id: "thread-wa-approval-no-pending",
+    name: "WA Approval No Pending",
+    executorId: "codex",
+    runtimeKind: "codex-app-server",
+    codexThreadId: "codex-wa-approval-no-pending",
+    executor: {
+      type: "codex",
+      transport: "app-server",
+      codexThreadId: "codex-wa-approval-no-pending",
+    },
+    runtime: {
+      runtimeKind: "codex-app-server",
+      state: "ready",
+      codexStatus: { type: "idle" },
+    },
+  }, env);
+  await writeConnectorConfig("whatsapp", {
+    bridgeMode: "external",
+    bridgeUrl: "http://wa.local",
+    threadRoutes: { "chat-approval-no-pending": "thread-wa-approval-no-pending" },
+  }, env);
+
+  const routed = await routeWhatsAppInbound({
+    eventId: "wa-approval-no-pending-1",
+    chatId: "chat-approval-no-pending",
+    accountId: "responder",
+    text: "/approve",
+  }, env);
+  const messages = await listThreadMessages("thread-wa-approval-no-pending", env);
+  const calls = [];
+  const delivery = await deliverWhatsAppReplies(env, async (url, options) => {
+    calls.push({ url, body: JSON.parse(options.body) });
+    return response({ ok: true, body: JSON.parse(options.body) });
+  });
+
+  assert.equal(routed.reason, "no_pending_request");
+  assert.equal(routed.message.state, "completed");
+  assert.equal(routed.message.deliveryState, "ignored");
+  assert.equal(messages.filter((message) => message.role === "user" && message.state === "queued").length, 0);
+  assert.equal(messages[0].observedVia, "whatsapp_codex_app_server_approval_not_pending");
+  assert.match(messages[1].text, /No Codex approval request is pending/);
+  assert.equal(delivery.delivered.length, 1);
+  assert.match(calls[0].body.text, /No Codex approval request is pending/);
+});
+
 test("whatsapp inbound can auto-provision a scoped user thread", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-auto-user-thread-"));
   const env = await externalBridgeEnvWithAllowingSanitizer(home, {
