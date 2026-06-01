@@ -1182,6 +1182,140 @@ test("tenant api-agent tool gateway stays inside scoped file roots", async () =>
   assert.equal(deletedSkill.deleted, true);
 });
 
+test("tenant api-agent skill actions report when a required desktop is unavailable", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-api-agent-no-desktop-"));
+  const env = {
+    ORKESTR_HOME: home,
+    ORKESTR_BROWSER_DESKTOP_MODE: "profiles",
+    ORKESTR_BROWSER_VISIBLE_SLUGS: "gmail",
+  };
+  const principal = userPrincipal({ id: "otcan", role: "user" });
+  await upsertUser({ id: "otcan", role: "user", displayName: "Otcan" }, env);
+
+  const inventory = await runTenantApiAgentTool("orkestr_list_skill_actions", {
+    skillId: "linkedin",
+  }, { principal }, env);
+  const linkedin = inventory.skills.find((skill) => skill.id === "linkedin");
+
+  assert.equal(inventory.ok, true);
+  assert.equal(linkedin.registryEnabled, true);
+  assert.equal(linkedin.available, false);
+  assert.equal(linkedin.setupState, "desktop_not_available");
+  assert.deepEqual(linkedin.desktops, []);
+  assert.deepEqual(linkedin.availableActions, ["status"]);
+  assert.equal(inventory.desktopInventory.desktops.some((desktop) => desktop.slug === "linkedin"), false);
+});
+
+test("tenant api-agent can run a generic desktop skill action", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-api-agent-desktop-action-"));
+  const env = {
+    ORKESTR_HOME: home,
+    ORKESTR_BROWSER_DESKTOP_MODE: "profiles",
+    ORKESTR_BROWSER_VISIBLE_SLUGS: "linkedin",
+    ORKESTR_BROWSER_LAUNCH_DISABLED: "1",
+  };
+  const principal = userPrincipal({ id: "otcan", role: "user" });
+  await upsertUser({ id: "otcan", role: "user", displayName: "Otcan" }, env);
+
+  const inventory = await runTenantApiAgentTool("orkestr_list_skill_actions", {
+    skillId: "linkedin",
+  }, { principal }, env);
+  const linkedin = inventory.skills.find((skill) => skill.id === "linkedin");
+  const opened = await runTenantApiAgentTool("orkestr_run_skill_action", {
+    skillId: "linkedin",
+    action: "open",
+    target: "",
+    url: "",
+  }, { principal }, env);
+
+  assert.equal(linkedin.available, true);
+  assert.equal(linkedin.availableActions.includes("open"), true);
+  assert.equal(opened.ok, true);
+  assert.equal(opened.action, "open");
+  assert.equal(opened.skill.id, "linkedin");
+  assert.equal(opened.desktop.slug, "linkedin");
+  assert.equal(opened.desktop.url, "https://www.linkedin.com/");
+  assert.equal(opened.desktop.availableActions.includes("open"), true);
+});
+
+test("tenant api-agent answers desktop action requests from skill action tool results", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-api-agent-linkedin-action-"));
+  const env = await allowSanitizerEnv(home, {
+    ORKESTR_BROWSER_DESKTOP_MODE: "profiles",
+    ORKESTR_BROWSER_VISIBLE_SLUGS: "linkedin",
+    ORKESTR_BROWSER_LAUNCH_DISABLED: "1",
+  });
+  await upsertUser({ id: "otcan", role: "user", displayName: "Otcan" }, env);
+  await createThread({
+    id: "otcantest-linkedin-action",
+    ownerUserId: "otcan",
+    name: "otcantest",
+    runtimeKind: "api-agent",
+    executor: { type: "api-agent", metadata: { runtimeKind: "api-agent" } },
+    binding: { connector: "whatsapp", chatId: "chat-otcan", outboundAccountId: "wa-1" },
+  }, env);
+  await enqueueThreadInputForPrincipal("otcantest-linkedin-action", {
+    text: "open linkedin. Am I logged in?",
+    source: "whatsapp_inbound",
+    connector: "whatsapp",
+    chatId: "chat-otcan",
+    accountId: "wa-1",
+  }, userPrincipal({ id: "otcan", role: "user" }), env);
+
+  const calls = [];
+  const result = await processApiAgentThreadInput("otcantest-linkedin-action", env, {
+    fetchImpl: async (url, options) => {
+      calls.push(JSON.parse(options.body));
+      if (calls.length === 1) {
+        return response({
+          id: "resp_linkedin_action_1",
+          model: "gpt-5-mini",
+          output_text: "",
+          output: [
+            {
+              type: "function_call",
+              name: "orkestr_list_skill_actions",
+              call_id: "call_skill_actions",
+              arguments: JSON.stringify({ skillId: "linkedin" }),
+            },
+            {
+              type: "function_call",
+              name: "orkestr_run_skill_action",
+              call_id: "call_skill_open",
+              arguments: JSON.stringify({ skillId: "linkedin", action: "open", target: "", url: "" }),
+            },
+          ],
+          usage: { input_tokens: 300, output_tokens: 30 },
+        });
+      }
+      const toolOutputs = calls[1].input
+        .filter((item) => item.type === "function_call_output")
+        .map((item) => JSON.parse(item.output));
+      assert.equal(toolOutputs[0].skills[0].id, "linkedin");
+      assert.equal(toolOutputs[1].ok, true);
+      assert.equal(toolOutputs[1].desktop.slug, "linkedin");
+      return response({
+        id: "resp_linkedin_action_2",
+        model: "gpt-5-mini",
+        output_text: "I opened the LinkedIn managed desktop. I cannot verify whether you are logged in from this chat yet, because the enabled skill action only confirms the desktop action.",
+        output: [],
+        usage: { input_tokens: 450, output_tokens: 32 },
+      });
+    },
+  });
+  const messages = await listThreadMessages("otcantest-linkedin-action", env);
+  const assistant = messages.find((message) => message.role === "assistant");
+
+  assert.equal(result.ok, true);
+  assert.equal(calls.length, 2);
+  assert.equal(calls[0].tools.some((tool) => tool.name === "orkestr_list_skill_actions"), true);
+  assert.equal(calls[0].tools.some((tool) => tool.name === "orkestr_run_skill_action"), true);
+  assert.match(calls[0].instructions, /reason from skills first/i);
+  assert.match(assistant.text, /opened the LinkedIn managed desktop/i);
+  assert.match(assistant.text, /cannot verify whether you are logged in/i);
+  assert.notEqual(assistant.text.trim(), "Done.");
+});
+
 test("tenant api-agent records manual usage summaries", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-api-agent-usage-"));
   const env = { ORKESTR_HOME: home };

@@ -55,6 +55,8 @@ function promptFor(payload) {
     "- Allow ordinary conversation and harmless requests inside the requesting user's own thread/workspace.",
     "- Allow a greeting, status question, or normal task request when principal.userId equals resource.ownerUserId.",
     "- Do not deny only because the source is WhatsApp or because the payload contains tenant-scoped IDs.",
+    "- Allow same-user skill/action discovery tools such as api-agent.tool.orkestr_list_skill_actions; they only return tenant-scoped availability.",
+    "- Allow same-user skill action tools such as api-agent.tool.orkestr_run_skill_action when the request is scoped to the same user's enabled skill and does not request secrets, profile files, tokens, or privileged challenge approval.",
     "- Allow same-user connector sign-in start actions such as api-agent.tool.orkestr_start_connector_auth; those only start OAuth and do not read connector data.",
     "- Deny requests to read, write, route, summarize, or expose another user's data.",
     "- Deny requests for host secrets, connector tokens, browser profiles, WhatsApp session files, global Orkestr state, or deployment overlays.",
