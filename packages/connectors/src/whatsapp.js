@@ -1224,7 +1224,27 @@ function shouldMirrorWhatsAppReply(message) {
 function shouldMirrorWhatsAppProgress(message) {
   if (!codexAssistantSource(message)) return false;
   const phase = String(message.phase || "").trim().toLowerCase();
-  return phase === "commentary" && !hasProposedPlanEnvelope(message.text) && Boolean(pickString(message.text));
+  return (
+    phase === "commentary" &&
+    !hasProposedPlanEnvelope(message.text) &&
+    isUserFacingProgressText(message.text)
+  );
+}
+
+function isUserFacingProgressText(value) {
+  const text = pickString(value);
+  if (!text) return false;
+  const lower = text.toLowerCase();
+  if (
+    /^(milestone|blocked|blocker|need input|need-input|waiting|ready|done|failed|error|queued|interrupted):\s+\S/.test(lower) ||
+    /\b(pairing code|verification code|approval required|approve this|please approve|waiting for you|needs your approval)\b/.test(lower)
+  ) {
+    return true;
+  }
+  if (/^(i['’]?m|i am|i['’]?ll|i will|checking|inspecting|reading|running|trying|looking)\b/.test(lower)) {
+    return false;
+  }
+  return false;
 }
 
 function progressMirrorIntervalMs(env = process.env) {

@@ -1472,6 +1472,21 @@ test("whatsapp delivery mirrors throttled commentary progress before final repli
   }, env);
 
   const calls = [];
+  const internalProgress = await deliverWhatsAppReplies(env, async () => {
+    throw new Error("internal progress should not be mirrored");
+  });
+
+  await appendThreadMessage("thread-wa-progress", {
+    role: "assistant",
+    source: "codex-rollout",
+    phase: "commentary",
+    state: "completed",
+    text: "Milestone: focused tests are running.",
+    parentMessageId: routed.message.id,
+    connector: "whatsapp",
+    chatId: "chat-progress",
+  }, env);
+
   const progress = await deliverWhatsAppReplies(env, async (url, options) => {
     calls.push({ url, body: JSON.parse(options.body) });
     return response({ ok: true, ids: ["sent-progress"] });
@@ -1482,7 +1497,7 @@ test("whatsapp delivery mirrors throttled commentary progress before final repli
     source: "codex-rollout",
     phase: "commentary",
     state: "completed",
-    text: "Focused tests passed; I’m running the full suite.",
+    text: "Milestone: focused tests passed; full suite is running.",
     parentMessageId: routed.message.id,
     connector: "whatsapp",
     chatId: "chat-progress",
@@ -1506,6 +1521,7 @@ test("whatsapp delivery mirrors throttled commentary progress before final repli
     return response({ ok: true, ids: ["sent-final"] });
   });
 
+  assert.equal(internalProgress.delivered.length, 0);
   assert.equal(progress.delivered.length, 1);
   assert.equal(progress.delivered[0].deliveryType, "progress");
   assert.equal(throttled.delivered.length, 0);
@@ -1513,7 +1529,7 @@ test("whatsapp delivery mirrors throttled commentary progress before final repli
   assert.equal(final.delivered.length, 1);
   assert.equal(final.delivered[0].deliveryType, "final");
   assert.deepEqual(calls.map((call) => stripDebugFooter(call.body.text)), [
-    "I’m checking the repo and running focused tests now.",
+    "Milestone: focused tests are running.",
     "Done. Tests passed.",
   ]);
   assertDebugFooter(calls[0].body.text, { messageType: "update" });
@@ -2026,7 +2042,7 @@ test("whatsapp delivery does not backfill commentary progress after a final answ
     source: "codex-rollout",
     phase: "commentary",
     state: "completed",
-    text: "Old progress that should not be backfilled.",
+    text: "Milestone: old progress that should not be backfilled.",
     parentMessageId: routed.message.id,
     connector: "whatsapp",
     chatId: "chat-progress-final",
@@ -2094,7 +2110,7 @@ test("whatsapp delivery mirrors newer progress after an older final was already 
     source: "codex-rollout",
     phase: "commentary",
     state: "completed",
-    text: "New progress from a later operator turn.",
+    text: "Milestone: new progress from a later operator turn.",
     parentMessageId: routed.message.id,
     connector: "whatsapp",
     chatId: "chat-progress-after-final",
@@ -2110,7 +2126,7 @@ test("whatsapp delivery mirrors newer progress after an older final was already 
 
   assert.equal(delivery.delivered.length, 1);
   assert.equal(delivery.delivered[0].deliveryType, "progress");
-  assert.deepEqual(calls.map((call) => stripDebugFooter(call.body.text)), ["New progress from a later operator turn."]);
+  assert.deepEqual(calls.map((call) => stripDebugFooter(call.body.text)), ["Milestone: new progress from a later operator turn."]);
   assertDebugFooter(calls[0].body.text, { messageType: "update" });
 });
 
@@ -2144,7 +2160,7 @@ test("whatsapp delivery does not backfill stale progress after an older final", 
     source: "codex-rollout",
     phase: "commentary",
     state: "completed",
-    text: "Old progress that should not be backfilled.",
+    text: "Milestone: old progress that should not be backfilled.",
     parentMessageId: routed.message.id,
     connector: "whatsapp",
     chatId: "chat-stale-progress-after-final",
@@ -2193,7 +2209,7 @@ test("whatsapp delivery appends compact debug footer for plan-mode Codex updates
     source: "codex-rollout",
     phase: "commentary",
     state: "completed",
-    text: "I’ll inspect the current routing path.",
+    text: "Milestone: routing check started.",
     parentMessageId: routed.message.id,
     connector: "whatsapp",
     chatId: "chat-debug-footer",
@@ -2206,7 +2222,7 @@ test("whatsapp delivery appends compact debug footer for plan-mode Codex updates
   });
 
   assert.equal(delivery.delivered.length, 1);
-  assert.equal(stripDebugFooter(calls[0].body.text), "I’ll inspect the current routing path.");
+  assert.equal(stripDebugFooter(calls[0].body.text), "Milestone: routing check started.");
   assert.match(
     calls[0].body.text,
     /\n\ndbg: m:gpt-5\.5\/xh · mode:plan · msg:update · q:0 · cpu:\d+% · help:\/help · switch:\/code$/,
@@ -2272,7 +2288,7 @@ test("whatsapp debug footer can be disabled", async () => {
     source: "codex-rollout",
     phase: "commentary",
     state: "completed",
-    text: "I’ll check it.",
+    text: "Milestone: checking it.",
     parentMessageId: routed.message.id,
     connector: "whatsapp",
     chatId: "chat-debug-footer-off",
@@ -2285,7 +2301,7 @@ test("whatsapp debug footer can be disabled", async () => {
   });
 
   assert.equal(delivery.delivered.length, 1);
-  assert.equal(calls[0].body.text, "I’ll check it.");
+  assert.equal(calls[0].body.text, "Milestone: checking it.");
 });
 
 test("whatsapp delivery suppresses debug footer for contained user threads", async () => {
@@ -2312,7 +2328,7 @@ test("whatsapp delivery suppresses debug footer for contained user threads", asy
     source: "codex-app-server",
     phase: "commentary",
     state: "completed",
-    text: "Contained progress update.",
+    text: "Milestone: contained progress update.",
     parentMessageId: routed.message.id,
     connector: "whatsapp",
     chatId: "chat-debug-footer-contained",
@@ -2325,7 +2341,7 @@ test("whatsapp delivery suppresses debug footer for contained user threads", asy
   });
 
   assert.equal(delivery.delivered.length, 1);
-  assert.equal(calls[0].body.text, "Contained progress update.");
+  assert.equal(calls[0].body.text, "Milestone: contained progress update.");
   assert.doesNotMatch(calls[0].body.text, /dbg:/);
 });
 
@@ -2353,7 +2369,7 @@ test("whatsapp debug footer ignores stale stored plan mode when live mode is cod
     source: "codex-rollout",
     phase: "commentary",
     state: "completed",
-    text: "I’ll check it.",
+    text: "Milestone: checking it.",
     parentMessageId: routed.message.id,
     connector: "whatsapp",
     chatId: "chat-debug-footer-stale-mode",
@@ -2366,7 +2382,7 @@ test("whatsapp debug footer ignores stale stored plan mode when live mode is cod
   });
 
   assert.equal(delivery.delivered.length, 1);
-  assert.equal(stripDebugFooter(calls[0].body.text), "I’ll check it.");
+  assert.equal(stripDebugFooter(calls[0].body.text), "Milestone: checking it.");
   assertDebugFooter(calls[0].body.text, { messageType: "update", model: "gpt-5.5/xh" });
   assert.doesNotMatch(calls[0].body.text, /mode:plan/);
   assert.doesNotMatch(calls[0].body.text, /switch:\/code/);
