@@ -174,6 +174,7 @@ export async function tenantWhatsAppInboundForwardRoute(input = {}, env = proces
       ownerUserId: vm.ownerUserId,
       target,
       token,
+      chatName: clean(vm.connectors?.whatsappChatName),
       accountId: routeAccountId,
     };
   }

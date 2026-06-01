@@ -1390,11 +1390,14 @@ test("local whatsapp bridge runs api-agent tenant chats without waking legacy ru
 test("local whatsapp inbound failures explain missing user capabilities", () => {
   const gmail = inboundRoutingFailureNoticeText(new Error("gmail capability missing"));
   const desktop = inboundRoutingFailureNoticeText(new Error("desktop capability false"));
+  const target = inboundRoutingFailureNoticeText(new Error("whatsapp_target_required"));
 
   assert.match(gmail, /Gmail is not connected or enabled for this chat yet/i);
   assert.doesNotMatch(gmail, /safely handle|private connector|account identity/i);
   assert.match(desktop, /managed desktop is not connected or enabled/i);
   assert.doesNotMatch(desktop, /safely handle|private connector|account identity/i);
+  assert.match(target, /not connected to a thread/i);
+  assert.doesNotMatch(target, /safely handle|private connector|account identity/i);
 });
 
 test("api-agent thread pending delivery skips legacy runtime wakeups", async () => {
@@ -3628,6 +3631,42 @@ test("generated single-account whatsapp groups route lid senders through the gro
   const messages = await listThreadMessages("generated-lid-thread", env);
 
   assert.equal(routed.threadId, "generated-lid-thread");
+  assert.equal(messages.length, 1);
+  assert.equal(messages[0].text, "lid sender");
+  assert.equal(messages[0].from, "66378837028965@lid");
+});
+
+test("generated single-account whatsapp groups tolerate missing responder identity for lid senders", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-generated-lid-no-responder-"));
+  const env = externalBridgeEnv(home);
+  await createThread({
+    id: "generated-lid-no-responder-thread",
+    name: "Generated Lid No Responder Thread",
+    binding: {
+      connector: "whatsapp",
+      chatId: "120363424272031669@g.us",
+      displayName: "orkestr",
+      enabled: true,
+      generated: true,
+      allowOtherPeople: false,
+      senderAccountId: "responder",
+      responderAccountId: "responder",
+      outboundAccountId: "responder",
+      senderContactId: "4917632400662@c.us",
+    },
+  }, env);
+
+  const routed = await routeWhatsAppInbound({
+    eventId: "wa-generated-lid-no-responder",
+    chatId: "120363424272031669@g.us",
+    accountId: "responder",
+    from: "66378837028965@lid",
+    fromMe: false,
+    text: "lid sender",
+  }, env);
+  const messages = await listThreadMessages("generated-lid-no-responder-thread", env);
+
+  assert.equal(routed.threadId, "generated-lid-no-responder-thread");
   assert.equal(messages.length, 1);
   assert.equal(messages[0].text, "lid sender");
   assert.equal(messages[0].from, "66378837028965@lid");

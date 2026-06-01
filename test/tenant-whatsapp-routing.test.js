@@ -86,6 +86,7 @@ test("local WhatsApp bridge forwards tenant-routed chats with the scoped tenant 
   }, env);
   const configured = await configureTenantWhatsAppRoute("bob-tenant", {
     chatId: "120363111111111111@g.us",
+    chatName: "Bob tenant WA",
     accountId: "tenant-wa",
   }, env);
   const calls = [];
@@ -106,6 +107,8 @@ test("local WhatsApp bridge forwards tenant-routed chats with the scoped tenant 
   assert.equal(calls[0].options.headers.authorization, `Bearer ${configured.route.token}`);
   assert.equal(calls[0].body.chatId, "120363111111111111@g.us");
   assert.equal(calls[0].body.accountId, "tenant-wa");
+  assert.equal(calls[0].body.displayName, "Bob tenant WA");
+  assert.equal(calls[0].body.chatName, "Bob tenant WA");
 });
 
 test("local WhatsApp tenant forwards allow sanitizer-backed targets enough time by default", async () => {
