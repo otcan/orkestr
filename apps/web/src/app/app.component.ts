@@ -2752,6 +2752,19 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     return this.isThreadUnread(thread) || this.childWorkers(thread).some((worker) => this.isThreadUnread(worker));
   }
 
+  hasUnreadThreads(): boolean {
+    return this.threads.some((thread) => this.isThreadUnread(thread));
+  }
+
+  markAllThreadsRead(): void {
+    const storage = this.readStateStorage();
+    if (!storage) return;
+    for (const thread of this.threads) {
+      storage.setItem(this.threadReadKey(thread.id), String(this.activityMs(thread)));
+    }
+    this.renderNow();
+  }
+
   isThreadUnreadAssistantFinal(thread: ThreadSummary, includeFamily = false): boolean {
     const unreadThread = this.latestUnreadThread(thread, includeFamily);
     if (!unreadThread) return false;

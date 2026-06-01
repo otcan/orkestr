@@ -303,6 +303,15 @@ textarea:focus {
   gap: 8px;
 }
 
+.sidebar-read-all {
+  min-height: 30px;
+  border-radius: 8px;
+  padding: 5px 9px;
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
 .user-mode-card {
   display: grid;
   gap: 4px;

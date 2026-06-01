@@ -40,6 +40,14 @@
       </div>
       <div class="brand-actions">
         <span class="health" [class.ok]="apiOnline">{{ apiOnline ? "online" : "loading" }}</span>
+        <button
+          class="secondary sidebar-read-all"
+          type="button"
+          [disabled]="!hasUnreadThreads()"
+          title="Mark every loaded Orkestr thread as read"
+          aria-label="Mark all Orkestr thread messages as read"
+          (click)="markAllThreadsRead()"
+        >Read all</button>
       </div>
     </div>
 
