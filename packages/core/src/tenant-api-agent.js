@@ -1,7 +1,7 @@
 import { appendEvent } from "../../storage/src/store.js";
 import { assertSanitizedAction } from "./llm-sanitizer.js";
 import { isAdminPrincipal } from "./policy.js";
-import { adminPrincipal, userPrincipal } from "./principal.js";
+import { userPrincipal } from "./principal.js";
 import { assertCreditBudget, estimateOpenAICost, recordCreditUsage } from "./credit-usage.js";
 import { startCodexAppServerThread, threadUsesCodexAppServer } from "./codex-app-server.js";
 import { tenantApiAgentToolDefinitions, runTenantApiAgentTool } from "./tenant-api-agent-tools.js";
@@ -37,8 +37,6 @@ function threadOwnerUserId(thread = {}, env = process.env) {
 
 function tenantPrincipalForThread(thread = {}, env = process.env) {
   const ownerUserId = threadOwnerUserId(thread, env);
-  const adminId = normalizeUserId(env.ORKESTR_ADMIN_USER_ID || adminUserId);
-  if (ownerUserId === adminId) return adminPrincipal({ id: adminId, displayName: "Admin" });
   return userPrincipal({ id: ownerUserId, role: "user", source: "api-agent", displayName: ownerUserId });
 }
 
@@ -318,6 +316,7 @@ export async function buildTenantApiAgentInstructions(thread = {}, messages = []
     "Only say setup is unavailable on this Orkestr installation if a tool or Tenant context explicitly reports missing parent app/platform configuration. Even then, do not offer an admin note or tell the user to contact an admin unless the user explicitly asks how to escalate setup.",
     "If the user asks to use Gmail, Outlook, LinkedIn, files, or a browser desktop and the matching capability is false in the Tenant context JSON, say plainly that it is not connected or enabled for this chat yet. Do not imply that you checked it unless you used a tool.",
     "Do not tell contained users to open, check, or use the Orkestr UI for connector setup. This chat is the user surface; connector setup should happen through the sign-in instructions you provide in chat when parent app credentials exist.",
+    "When Gmail capability is true and the user asks to search, list, open, read, inspect, or summarize Gmail, use the scoped Gmail tools directly. The user's request is consent for that same-user Gmail action; do not ask for repeated confirmation unless the target email or search is ambiguous.",
     "When asked what you can do or what skills you have, list only capabilities that are true in the Tenant context JSON and skills whose enabled field is true. Do not treat registryEnabled as availability; registryEnabled only means the user has not disabled the skill.",
     "Skills are unique per user and are described by the skill records in the Tenant context. Do not force provider categories, goals, or attachment models onto them; preserve the user's wording.",
     "Users manage skills through chat. When they ask to list, view, search, create, update, enable, disable, or delete skills, use the Orkestr skill tools.",

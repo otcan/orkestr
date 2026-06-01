@@ -5,6 +5,7 @@ import {
   disconnectConnectorAuth,
   startConnectorAuth as beginConnectorAuth,
 } from "../../connectors/src/connector-auth.js";
+import { getGmailMessage, listGmailMessages } from "../../connectors/src/gmail.js";
 import { listTimersForPrincipal } from "./timers.js";
 import { whereAmI } from "./whereiam.js";
 import {
@@ -86,6 +87,92 @@ async function startConnectorAuth(args = {}, principal = {}, env = process.env, 
   const identities = await linkConnectorIdentity(provider, account, principal, env, args);
   const oauth = await beginConnectorAuth(args, principal, env, fetchImpl);
   return { ...oauth, identities };
+}
+
+async function assertConnectorConnected(provider = "", principal = {}, env = process.env) {
+  const status = await connectorAuthStatus(provider, env, { principal });
+  if (status.connected !== true) {
+    const error = new Error(`${provider}_not_connected`);
+    error.statusCode = 403;
+    throw error;
+  }
+  return status;
+}
+
+function publicGmailMessage(message = {}, options = {}) {
+  const includeText = options.includeText === true;
+  return {
+    id: clean(message.id),
+    threadId: clean(message.threadId),
+    subject: clean(message.subject),
+    from: clean(message.from),
+    to: clean(message.to),
+    date: clean(message.date),
+    internalDate: clean(message.internalDate),
+    snippet: clean(message.snippet).slice(0, 1000),
+    labelIds: Array.isArray(message.labelIds) ? message.labelIds.slice(0, 20).map(clean).filter(Boolean) : [],
+    ...(includeText ? { text: safeText(message.text, 20_000) } : {}),
+  };
+}
+
+async function searchGmail(args = {}, principal = {}, env = process.env, fetchImpl = fetch) {
+  await assertConnectorConnected("gmail", principal, env);
+  const maxResults = Math.max(1, Math.min(10, Number(args.maxResults) || 5));
+  const listed = await listGmailMessages({
+    maxResults,
+    query: clean(args.query),
+  }, env, fetchImpl, { principal });
+  const messages = [];
+  for (const item of (listed.messages || []).slice(0, maxResults)) {
+    const id = clean(item.id);
+    if (!id) continue;
+    const message = await getGmailMessage(id, env, fetchImpl, { principal });
+    messages.push(publicGmailMessage(message));
+  }
+  return {
+    ok: true,
+    provider: "gmail",
+    query: clean(args.query),
+    resultSizeEstimate: listed.resultSizeEstimate || messages.length,
+    nextPageToken: clean(listed.nextPageToken),
+    messages,
+  };
+}
+
+async function readGmailMessage(args = {}, principal = {}, env = process.env, fetchImpl = fetch) {
+  await assertConnectorConnected("gmail", principal, env);
+  const message = await getGmailMessage(args.messageId, env, fetchImpl, { principal });
+  return {
+    ok: true,
+    provider: "gmail",
+    message: publicGmailMessage(message, { includeText: true }),
+  };
+}
+
+async function readLatestGmailMessage(args = {}, principal = {}, env = process.env, fetchImpl = fetch) {
+  await assertConnectorConnected("gmail", principal, env);
+  const listed = await listGmailMessages({
+    maxResults: 1,
+    query: clean(args.query),
+  }, env, fetchImpl, { principal });
+  const id = clean(listed.messages?.[0]?.id);
+  if (!id) {
+    return {
+      ok: true,
+      provider: "gmail",
+      query: clean(args.query),
+      message: null,
+      resultSizeEstimate: listed.resultSizeEstimate || 0,
+    };
+  }
+  const message = await getGmailMessage(id, env, fetchImpl, { principal });
+  return {
+    ok: true,
+    provider: "gmail",
+    query: clean(args.query),
+    message: publicGmailMessage(message, { includeText: true }),
+    resultSizeEstimate: listed.resultSizeEstimate || 1,
+  };
 }
 
 export function tenantApiAgentToolDefinitions() {
@@ -275,6 +362,49 @@ export function tenantApiAgentToolDefinitions() {
     },
     {
       type: "function",
+      name: "orkestr_search_gmail",
+      description: "Search or list this user's scoped Gmail messages. Returns safe metadata and snippets, not full message bodies. Use this when Gmail capability is true and the user asks for latest mail, unread mail, or a Gmail search.",
+      parameters: {
+        type: "object",
+        properties: {
+          query: { type: "string", description: "Gmail search query. Use an empty string for latest messages." },
+          maxResults: { type: "number", description: "Maximum messages to return, 1 to 10." },
+        },
+        required: ["query", "maxResults"],
+        additionalProperties: false,
+      },
+      strict: true,
+    },
+    {
+      type: "function",
+      name: "orkestr_read_gmail_message",
+      description: "Read one full scoped Gmail message by id for this user. Use after orkestr_search_gmail when the user asks to open, read, or summarize a specific or latest message.",
+      parameters: {
+        type: "object",
+        properties: {
+          messageId: { type: "string", description: "Gmail message id returned by orkestr_search_gmail." },
+        },
+        required: ["messageId"],
+        additionalProperties: false,
+      },
+      strict: true,
+    },
+    {
+      type: "function",
+      name: "orkestr_read_latest_gmail_message",
+      description: "Read the latest full scoped Gmail message matching an optional Gmail query. Use this directly when Gmail capability is true and the user asks to read or summarize the latest, most recent, unread, or searched email.",
+      parameters: {
+        type: "object",
+        properties: {
+          query: { type: "string", description: "Optional Gmail search query. Use an empty string for the latest message overall." },
+        },
+        required: ["query"],
+        additionalProperties: false,
+      },
+      strict: true,
+    },
+    {
+      type: "function",
       name: "orkestr_disconnect_connector",
       description: "Disconnect this user's scoped connector token or pending OAuth state. This does not alter parent app credentials.",
       parameters: {
@@ -356,6 +486,15 @@ export async function runTenantApiAgentTool(name = "", args = {}, context = {}, 
   }
   if (tool === "orkestr_connector_status") {
     return connectorAuthStatus(args.provider, env, { principal });
+  }
+  if (tool === "orkestr_search_gmail") {
+    return searchGmail(args, principal, env, context.fetchImpl || fetch);
+  }
+  if (tool === "orkestr_read_gmail_message") {
+    return readGmailMessage(args, principal, env, context.fetchImpl || fetch);
+  }
+  if (tool === "orkestr_read_latest_gmail_message") {
+    return readLatestGmailMessage(args, principal, env, context.fetchImpl || fetch);
   }
   if (tool === "orkestr_disconnect_connector") {
     return disconnectConnectorAuth(args, principal, env);

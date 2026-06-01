@@ -1016,6 +1016,140 @@ test("tenant api-agent lets OpenAI initiate explicit Gmail sign-in with connecto
   assert.equal(sanitizerActions.includes("api-agent.tool.orkestr_start_connector_auth"), true);
 });
 
+test("tenant api-agent reads scoped Gmail directly without repeated confirmation", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-api-agent-gmail-read-"));
+  const sanitizerLog = path.join(home, "gmail-read-sanitizer.jsonl");
+  const script = path.join(home, "gmail-read-sanitizer.mjs");
+  await fs.writeFile(
+    script,
+    [
+      "import fs from 'node:fs';",
+      "let input = '';",
+      "process.stdin.setEncoding('utf8');",
+      "process.stdin.on('data', (chunk) => { input += chunk; });",
+      "process.stdin.on('end', () => {",
+      "  const payload = JSON.parse(input);",
+      `  fs.appendFileSync(${JSON.stringify(sanitizerLog)}, JSON.stringify({ action: payload.action, principal: payload.principal, capabilities: payload.resource?.capabilities }) + '\\n');`,
+      "  console.log(JSON.stringify({ allow: true, reason: 'gmail-read-ok', model: 'test-llm' }));",
+      "});",
+      "",
+    ].join("\n"),
+    "utf8",
+  );
+  const env = {
+    ORKESTR_HOME: home,
+    ORKESTR_ADMIN_USER_ID: "otcan",
+    OPENAI_API_KEY: "sk-test",
+    GMAIL_OAUTH_CLIENT_ID: "gmail-client-env",
+    GMAIL_OAUTH_CLIENT_SECRET: "gmail-secret-env",
+    GMAIL_OAUTH_REDIRECT_URI: "https://example.test/oauth/gmail/callback",
+    ORKESTR_LLM_SANITIZER_COMMAND_JSON: JSON.stringify([process.execPath, script]),
+  };
+  await upsertUser({ id: "otcan", role: "user", displayName: "Otcan" }, env);
+  const paths = userDataPaths("otcan", env);
+  await fs.mkdir(paths.secrets, { recursive: true });
+  await fs.writeFile(path.join(paths.secrets, "gmail-token.json"), JSON.stringify({
+    accessToken: "user-scoped-access-token",
+    refreshToken: "user-scoped-refresh-token",
+    expiresAt: Math.floor(Date.now() / 1000) + 3600,
+  }), "utf8");
+  await createThread({
+    id: "gmail-read-chat",
+    ownerUserId: "otcan",
+    name: "gmail-read-chat",
+    runtimeKind: "api-agent",
+    executor: { type: "api-agent", metadata: { runtimeKind: "api-agent" } },
+    binding: { connector: "whatsapp", chatId: "chat-gmail-read" },
+  }, env);
+  await enqueueThreadInputForPrincipal("gmail-read-chat", {
+    text: "Summarize my latest Gmail message",
+    source: "whatsapp_inbound",
+    connector: "whatsapp",
+    chatId: "chat-gmail-read",
+  }, userPrincipal({ id: "otcan", role: "user" }), env);
+
+  const openAiCalls = [];
+  const gmailCalls = [];
+  const result = await processApiAgentThreadInput("gmail-read-chat", env, {
+    fetchImpl: async (url, options = {}) => {
+      const parsed = new URL(String(url));
+      if (parsed.hostname === "api.openai.com") {
+        openAiCalls.push(JSON.parse(options.body));
+        if (openAiCalls.length === 1) {
+          return response({
+            id: "resp_gmail_read_1",
+            model: "gpt-5-mini",
+            output_text: "",
+            output: [{
+              type: "function_call",
+              name: "orkestr_read_latest_gmail_message",
+              call_id: "call_gmail_read_latest",
+              arguments: JSON.stringify({ query: "" }),
+            }],
+            usage: { input_tokens: 220, output_tokens: 16 },
+          });
+        }
+        const toolOutput = JSON.parse(openAiCalls[1].input.at(-1).output);
+        assert.equal(toolOutput.message.subject, "Project update");
+        assert.match(toolOutput.message.text, /The project is ready for review/);
+        return response({
+          id: "resp_gmail_read_2",
+          model: "gpt-5-mini",
+          output_text: "Latest Gmail: Project update from Alex. The project is ready for review.",
+          output: [],
+          usage: { input_tokens: 260, output_tokens: 15 },
+        });
+      }
+      if (parsed.hostname === "gmail.googleapis.com") {
+        gmailCalls.push({ url: parsed, authorization: options.headers?.authorization || "" });
+        assert.equal(options.headers.authorization, "Bearer user-scoped-access-token");
+        if (parsed.pathname.endsWith("/messages")) {
+          return response({ messages: [{ id: "msg-1" }], resultSizeEstimate: 1 });
+        }
+        if (parsed.pathname.endsWith("/messages/msg-1")) {
+          return response({
+            id: "msg-1",
+            threadId: "thread-1",
+            labelIds: ["INBOX"],
+            snippet: "The project is ready for review.",
+            internalDate: "1780270000000",
+            payload: {
+              headers: [
+                { name: "Subject", value: "Project update" },
+                { name: "From", value: "Alex <alex@example.com>" },
+                { name: "To", value: "Otcantest <otcantest@example.com>" },
+                { name: "Date", value: "Mon, 1 Jun 2026 09:00:00 +0200" },
+              ],
+              mimeType: "text/plain",
+              body: { data: Buffer.from("The project is ready for review.", "utf8").toString("base64url") },
+            },
+          });
+        }
+      }
+      throw new Error(`unexpected_fetch_${url}`);
+    },
+  });
+  const messages = await listThreadMessages("gmail-read-chat", env);
+  const assistant = messages.find((message) => message.role === "assistant");
+  const sanitizerEvents = (await fs.readFile(sanitizerLog, "utf8"))
+    .trim()
+    .split("\n")
+    .map((line) => JSON.parse(line));
+
+  assert.equal(result.ok, true);
+  assert.equal(openAiCalls.length, 2);
+  assert.equal(openAiCalls[0].tools.some((tool) => tool.name === "orkestr_read_latest_gmail_message"), true);
+  assert.match(openAiCalls[0].instructions, /user's request is consent/i);
+  assert.equal(gmailCalls.length, 2);
+  assert.equal(sanitizerEvents.some((event) =>
+    event.action === "api-agent.tool.orkestr_read_latest_gmail_message" &&
+    event.principal?.role === "user" &&
+    event.capabilities?.gmail === true
+  ), true);
+  assert.match(assistant.text, /Project update/);
+  assert.doesNotMatch(assistant.text, /confirm|proceed|permission/i);
+});
+
 test("tenant api-agent tool gateway stays inside scoped file roots", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-api-agent-tools-"));
   const env = { ORKESTR_HOME: home };
