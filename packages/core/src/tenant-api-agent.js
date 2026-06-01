@@ -206,18 +206,36 @@ function publicSkillEnabled(skill = {}, capabilities = {}, scopedConnectors = {}
   return true;
 }
 
+function publicSkillActionHints(skill = {}, available = false) {
+  const id = clean(skill.id).toLowerCase();
+  if (!available) return ["status"];
+  if (clean(skill.requiresDesktop)) return ["status", "list_actions"];
+  if (id === "files") return ["list", "read", "write"];
+  if (id === "timers") return ["list"];
+  if (["gmail", "outlook", "jira", "shopify", "whatsapp"].includes(id)) return ["status"];
+  if (id === "whereiam") return ["status"];
+  return ["status"];
+}
+
 function publicSkillContext(skills = [], capabilities = {}, scopedConnectors = {}) {
-  return (Array.isArray(skills) ? skills : []).slice(0, 50).map((skill) => ({
-    id: clean(skill.id),
-    name: clean(skill.name || skill.label || skill.id),
-    description: clean(skill.description || skill.summary).slice(0, 1000),
-    instructions: clean(skill.instructions).slice(0, 3000),
-    enabled: publicSkillEnabled(skill, capabilities, scopedConnectors),
-    registryEnabled: skill.enabled === true,
-    builtIn: skill.builtIn === true,
-    requiresConnector: clean(skill.requiresConnector),
-    requiresDesktop: clean(skill.requiresDesktop),
-  })).filter((skill) => skill.id);
+  return (Array.isArray(skills) ? skills : []).slice(0, 50).map((skill) => {
+    const available = publicSkillEnabled(skill, capabilities, scopedConnectors);
+    return {
+      id: clean(skill.id),
+      name: clean(skill.name || skill.label || skill.id),
+      description: clean(skill.description || skill.summary).slice(0, 1000),
+      instructions: clean(skill.instructions).slice(0, 3000),
+      enabled: available,
+      available,
+      registryEnabled: skill.enabled === true,
+      builtIn: skill.builtIn === true,
+      requiresConnector: clean(skill.requiresConnector),
+      requiresDesktop: clean(skill.requiresDesktop),
+      setupState: available ? "available" : skill.enabled === true ? "capability_not_available" : "skill_disabled",
+      availableActions: publicSkillActionHints(skill, available),
+      actionTool: "orkestr_list_skill_actions",
+    };
+  }).filter((skill) => skill.id);
 }
 
 function publicTenantCapabilities(capabilities = {}) {
@@ -318,6 +336,9 @@ export async function buildTenantApiAgentInstructions(thread = {}, messages = []
     "Do not tell contained users to open, check, or use the Orkestr UI for connector setup. This chat is the user surface; connector setup should happen through the sign-in instructions you provide in chat when parent app credentials exist.",
     "When Gmail capability is true and the user asks to search, list, open, read, inspect, or summarize Gmail, use the scoped Gmail tools directly. The user's request is consent for that same-user Gmail action; do not ask for repeated confirmation unless the target email or search is ambiguous.",
     "When asked what you can do or what skills you have, list only capabilities that are true in the Tenant context JSON and skills whose enabled field is true. Do not treat registryEnabled as availability; registryEnabled only means the user has not disabled the skill.",
+    "For capability and action questions, reason from skills first: use orkestr_list_skills or orkestr_list_skill_actions to inspect enabled skills, current availability, and available actions before saying what you can do.",
+    "If the user asks you to open, start, stop, restart, check, or otherwise act through a skill, use orkestr_list_skill_actions first and then orkestr_run_skill_action only when that action is available.",
+    "After running a skill action, answer from the tool result. If the tool only opens a desktop or returns status, say exactly that; do not claim that you inspected account login, page contents, messages, or external state unless a tool result explicitly confirms that.",
     "Skills are unique per user and are described by the skill records in the Tenant context. Do not force provider categories, goals, or attachment models onto them; preserve the user's wording.",
     "Users manage skills through chat. When they ask to list, view, search, create, update, enable, disable, or delete skills, use the Orkestr skill tools.",
     "Do not create or update a skill for phishing, scams, credential theft, unauthorized login attempts, spam, or abuse. Refuse those requests instead of calling a tool.",
