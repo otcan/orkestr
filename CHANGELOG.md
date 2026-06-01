@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.1.0-alpha.20
+
+- Guard native Codex approval flow: YOLO threads auto-accept command/file approval requests, stale approval prompts are cleared, and `/approve` from WhatsApp is handled locally when no actionable Codex approval is pending.
+- Hide web approval controls unless the selected app-server thread is actually awaiting approval.
+- Add a sidebar "Read all" action for clearing loaded Orkestr thread unread state.
+- Improve tenant connector setup from WhatsApp: user-owned Gmail sign-in, scoped Gmail tools for API agents, parent app credentials, and shared Google OAuth callback routing.
+- Harden WhatsApp routing: atomic inbound event dedupe, tenant reply recovery, stale frame recovery, typing lifecycle fixes, and filtered progress mirroring so internal commentary is not sent to WhatsApp.
+- Improve native Codex app-server turn handling: local mode commands, imported final cleanup, active status normalization, stale API-agent recovery, and safer release restarts that reap service child processes.
+- Add public OAuth broker support and use neutral example domains in docs and installer defaults.
+
 ## 0.1.0-alpha.5
 
 - Remove a live-looking tailnet hostname from public WhatsApp test fixtures.
