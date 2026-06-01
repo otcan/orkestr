@@ -163,6 +163,14 @@ const topLevel = {
   localEnvFile: "ORKESTR_LOCAL_ENV_FILE",
   host: "ORKESTR_HOST",
   port: "ORKESTR_PORT",
+  primaryDomain: "ORKESTR_PRIMARY_DOMAIN",
+  appHost: "ORKESTR_APP_HOST",
+  authHost: "ORKESTR_AUTH_HOST",
+  publicUrl: "ORKESTR_PUBLIC_URL",
+  authUrl: "ORKESTR_AUTH_URL",
+  cookieDomain: "ORKESTR_COOKIE_DOMAIN",
+  connectPublicUrl: "ORKESTR_CONNECT_PUBLIC_URL",
+  acmeEmail: "ORKESTR_ACME_EMAIL",
   installLocalService: "ORKESTR_INSTALL_LOCAL_SERVICE",
   startAfterInstall: "ORKESTR_START_AFTER_INSTALL",
   localServiceName: "ORKESTR_LOCAL_SERVICE_NAME",
@@ -174,6 +182,16 @@ const topLevel = {
 };
 
 const nested = {
+  domain: {
+    primary: "ORKESTR_PRIMARY_DOMAIN",
+    appHost: "ORKESTR_APP_HOST",
+    authHost: "ORKESTR_AUTH_HOST",
+    publicUrl: "ORKESTR_PUBLIC_URL",
+    authUrl: "ORKESTR_AUTH_URL",
+    cookieDomain: "ORKESTR_COOKIE_DOMAIN",
+    connectPublicUrl: "ORKESTR_CONNECT_PUBLIC_URL",
+    acmeEmail: "ORKESTR_ACME_EMAIL",
+  },
   codex: {
     bin: "ORKESTR_CODEX_BIN",
     sandbox: "ORKESTR_CODEX_SANDBOX",
@@ -1169,7 +1187,7 @@ checkout_git_ref() {
 write_env_file() {
   local chrome
   chrome="$(chrome_path)"
-  local codex_command codex_sandbox codex_approval codex_app_server_mode codex_app_server_socket codex_app_server_service runtime_settings_file desktop_mode browserctl_path
+  local codex_command codex_sandbox codex_approval codex_app_server_mode codex_app_server_socket codex_app_server_service runtime_settings_file desktop_mode browserctl_path primary_domain app_host auth_host public_url auth_url cookie_domain public_https_url
   codex_command="${ORKESTR_RUNTIME_CODEX_COMMAND:-$(codex_command_default)}"
   codex_sandbox="${ORKESTR_CODEX_SANDBOX:-$(codex_sandbox_default)}"
   codex_approval="${ORKESTR_CODEX_APPROVAL_POLICY:-$(codex_approval_default)}"
@@ -1179,6 +1197,26 @@ write_env_file() {
   runtime_settings_file="${ORKESTR_RUNTIME_SETTINGS_FILE:-$data_dir/runtime-settings.json}"
   desktop_mode="${ORKESTR_BROWSER_DESKTOP_MODE:-browserctl}"
   browserctl_path="${ORKESTR_BROWSERCTL_PATH:-/usr/local/bin/orkestr-browserctl}"
+  primary_domain="${ORKESTR_PRIMARY_DOMAIN:-${ORKESTR_DOMAIN:-}}"
+  app_host="${ORKESTR_APP_HOST:-}"
+  auth_host="${ORKESTR_AUTH_HOST:-}"
+  if [ -n "$primary_domain" ]; then
+    app_host="${app_host:-app.$primary_domain}"
+    auth_host="${auth_host:-auth.$primary_domain}"
+  fi
+  public_url="${ORKESTR_PUBLIC_URL:-${ORKESTR_APP_URL:-}}"
+  auth_url="${ORKESTR_AUTH_URL:-}"
+  if [ -n "$app_host" ] && [ -z "$public_url" ]; then
+    public_url="https://$app_host"
+  fi
+  if [ -n "$auth_host" ] && [ -z "$auth_url" ]; then
+    auth_url="https://$auth_host"
+  fi
+  cookie_domain="${ORKESTR_COOKIE_DOMAIN:-}"
+  if [ -z "$cookie_domain" ] && [ -n "$primary_domain" ] && [ -n "$app_host" ] && [ -n "$auth_host" ] && [ "$app_host" != "$auth_host" ]; then
+    cookie_domain="$primary_domain"
+  fi
+  public_https_url="${ORKESTR_PUBLIC_HTTPS_URL:-$public_url}"
   if [ -f "$env_file" ]; then
     echo "Keeping existing environment file and applying safe defaults: $env_file"
     migrate_systemd_env_file "$desktop_mode" "$browserctl_path"
@@ -1196,7 +1234,13 @@ ORKESTR_HOST=$host
 ORKESTR_PORT=$port
 ORKESTR_AUTH_REQUIRED=${ORKESTR_AUTH_REQUIRED:-1}
 ORKESTR_COOKIE_SECURE=${ORKESTR_COOKIE_SECURE:-0}
-ORKESTR_PUBLIC_HTTPS_URL=${ORKESTR_PUBLIC_HTTPS_URL:-}
+ORKESTR_PRIMARY_DOMAIN=$primary_domain
+ORKESTR_APP_HOST=$app_host
+ORKESTR_AUTH_HOST=$auth_host
+ORKESTR_PUBLIC_URL=$public_url
+ORKESTR_AUTH_URL=$auth_url
+ORKESTR_COOKIE_DOMAIN=$cookie_domain
+ORKESTR_PUBLIC_HTTPS_URL=$public_https_url
 # Public OAuth broker base for external users, for example https://connect.example.com.
 # When set, OAuth callbacks use this public base instead of the private Orkestr UI URL.
 ORKESTR_CONNECT_PUBLIC_URL=${ORKESTR_CONNECT_PUBLIC_URL:-}
@@ -1299,9 +1343,29 @@ ensure_env_assignment() {
 }
 
 migrate_systemd_env_file() {
-  local desktop_mode browserctl_path current_mode
+  local desktop_mode browserctl_path current_mode primary_domain app_host auth_host public_url auth_url cookie_domain public_https_url
   desktop_mode="$1"
   browserctl_path="$2"
+  primary_domain="${ORKESTR_PRIMARY_DOMAIN:-${ORKESTR_DOMAIN:-}}"
+  app_host="${ORKESTR_APP_HOST:-}"
+  auth_host="${ORKESTR_AUTH_HOST:-}"
+  if [ -n "$primary_domain" ]; then
+    app_host="${app_host:-app.$primary_domain}"
+    auth_host="${auth_host:-auth.$primary_domain}"
+  fi
+  public_url="${ORKESTR_PUBLIC_URL:-${ORKESTR_APP_URL:-}}"
+  auth_url="${ORKESTR_AUTH_URL:-}"
+  if [ -n "$app_host" ] && [ -z "$public_url" ]; then
+    public_url="https://$app_host"
+  fi
+  if [ -n "$auth_host" ] && [ -z "$auth_url" ]; then
+    auth_url="https://$auth_host"
+  fi
+  cookie_domain="${ORKESTR_COOKIE_DOMAIN:-}"
+  if [ -z "$cookie_domain" ] && [ -n "$primary_domain" ] && [ -n "$app_host" ] && [ -n "$auth_host" ] && [ "$app_host" != "$auth_host" ]; then
+    cookie_domain="$primary_domain"
+  fi
+  public_https_url="${ORKESTR_PUBLIC_HTTPS_URL:-$public_url}"
   current_mode="$(env_file_value ORKESTR_BROWSER_DESKTOP_MODE)"
   if [ -z "$current_mode" ] || [ "$current_mode" = "profiles" ]; then
     set_env_assignment ORKESTR_BROWSER_DESKTOP_MODE "$desktop_mode"
@@ -1314,6 +1378,13 @@ migrate_systemd_env_file() {
   ensure_env_assignment ORKESTR_CODEX_APP_SERVER_SOCKET "$(codex_app_server_socket_default)"
   ensure_env_assignment ORKESTR_CODEX_APP_SERVER_SERVICE_NAME "$(codex_app_server_service_name)"
   ensure_env_assignment ORKESTR_RUNTIME_WORKSPACE_ROOT "$workspace_dir"
+  if [ -n "$primary_domain" ]; then ensure_env_assignment ORKESTR_PRIMARY_DOMAIN "$primary_domain"; fi
+  if [ -n "$app_host" ]; then ensure_env_assignment ORKESTR_APP_HOST "$app_host"; fi
+  if [ -n "$auth_host" ]; then ensure_env_assignment ORKESTR_AUTH_HOST "$auth_host"; fi
+  if [ -n "$public_url" ]; then ensure_env_assignment ORKESTR_PUBLIC_URL "$public_url"; fi
+  if [ -n "$auth_url" ]; then ensure_env_assignment ORKESTR_AUTH_URL "$auth_url"; fi
+  if [ -n "$cookie_domain" ]; then ensure_env_assignment ORKESTR_COOKIE_DOMAIN "$cookie_domain"; fi
+  if [ -n "$public_https_url" ]; then ensure_env_assignment ORKESTR_PUBLIC_HTTPS_URL "$public_https_url"; fi
   chmod 0640 "$env_file" || true
 }
 
@@ -1696,6 +1767,27 @@ fresh_reset_local_install() {
 }
 
 write_local_env_file() {
+  local primary_domain app_host auth_host public_url auth_url cookie_domain public_https_url
+  primary_domain="${ORKESTR_PRIMARY_DOMAIN:-${ORKESTR_DOMAIN:-}}"
+  app_host="${ORKESTR_APP_HOST:-}"
+  auth_host="${ORKESTR_AUTH_HOST:-}"
+  if [ -n "$primary_domain" ]; then
+    app_host="${app_host:-app.$primary_domain}"
+    auth_host="${auth_host:-auth.$primary_domain}"
+  fi
+  public_url="${ORKESTR_PUBLIC_URL:-${ORKESTR_APP_URL:-}}"
+  auth_url="${ORKESTR_AUTH_URL:-}"
+  if [ -n "$app_host" ] && [ -z "$public_url" ]; then
+    public_url="https://$app_host"
+  fi
+  if [ -n "$auth_host" ] && [ -z "$auth_url" ]; then
+    auth_url="https://$auth_host"
+  fi
+  cookie_domain="${ORKESTR_COOKIE_DOMAIN:-}"
+  if [ -z "$cookie_domain" ] && [ -n "$primary_domain" ] && [ -n "$app_host" ] && [ -n "$auth_host" ] && [ "$app_host" != "$auth_host" ]; then
+    cookie_domain="$primary_domain"
+  fi
+  public_https_url="${ORKESTR_PUBLIC_HTTPS_URL:-$public_url}"
   mkdir -p "$(dirname "$local_env_file")"
   {
     echo "# Orkestr local environment."
@@ -1705,6 +1797,13 @@ write_local_env_file() {
     write_env_var ORKESTR_HOME "$data_dir"
     write_env_var ORKESTR_HOST "$host"
     write_env_var ORKESTR_PORT "$port"
+    write_env_var ORKESTR_PRIMARY_DOMAIN "$primary_domain"
+    write_env_var ORKESTR_APP_HOST "$app_host"
+    write_env_var ORKESTR_AUTH_HOST "$auth_host"
+    write_env_var ORKESTR_PUBLIC_URL "$public_url"
+    write_env_var ORKESTR_AUTH_URL "$auth_url"
+    write_env_var ORKESTR_COOKIE_DOMAIN "$cookie_domain"
+    write_env_var ORKESTR_PUBLIC_HTTPS_URL "$public_https_url"
     write_env_var ORKESTR_INSTALL_PROFILE "$install_profile"
     write_env_var ORKESTR_INSTALL_LOCAL_SERVICE "$local_service"
     write_env_var ORKESTR_START_AFTER_INSTALL "$start_after_install"

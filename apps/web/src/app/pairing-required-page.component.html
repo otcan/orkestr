@@ -41,7 +41,7 @@
         </div>
         <div class="challenge-meta">
           <span>Expires {{ expiryLabel() }}</span>
-          <span>Server {{ setupStatus?.security?.https?.url || "current host" }}</span>
+          <span>Server {{ setupStatus?.urls?.authUrl || setupStatus?.security?.https?.authUrl || setupStatus?.security?.https?.url || "current host" }}</span>
         </div>
       </section>
 

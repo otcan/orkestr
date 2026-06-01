@@ -5,6 +5,7 @@ import { dataPaths, ensureDataDirs } from "../../storage/src/paths.js";
 import { appendEvent, readJson, writeSecretJson } from "../../storage/src/store.js";
 import { authorizeDesktopShareHttpRequest } from "./desktop-shares.js";
 import { adminPrincipal, principalFromSecuritySession } from "./principal.js";
+import { publicUrlConfig } from "./public-url-config.js";
 import { defaultAdminUser, getUser, normalizeUserId } from "./users.js";
 
 const execFileAsync = promisify(execFile);
@@ -228,10 +229,11 @@ export function securityCookieName() {
 
 export async function securityStatus(env = process.env) {
   const config = await readSecurityConfig(env);
+  const urls = publicUrlConfig(env);
   const host = bindHost(env);
   const caddy = await commandStatus("caddy", ["version"], env);
   const tailscale = await commandStatus("tailscale", ["status", "--json"], env);
-  const httpsUrl = String(env.ORKESTR_PUBLIC_HTTPS_URL || env.ORKESTR_HTTPS_URL || env.ORKESTR_TAILSCALE_HTTPS_NAME || "").trim();
+  const httpsUrl = String(urls.appUrl || env.ORKESTR_PUBLIC_HTTPS_URL || env.ORKESTR_HTTPS_URL || env.ORKESTR_TAILSCALE_HTTPS_NAME || "").trim();
   const caddyConfigured = String(env.ORKESTR_CADDY_ENABLED || "").trim() === "1";
   const mtlsCaCert = String(env.ORKESTR_MTLS_CA_CERT || "").trim();
   const mtlsMode = String(env.ORKESTR_MTLS_MODE || "require_and_verify").trim() || "require_and_verify";
@@ -264,6 +266,9 @@ export async function securityStatus(env = process.env) {
     https: {
       configured: httpsConfigured,
       url: httpsUrl,
+      appUrl: urls.appUrl || httpsUrl,
+      authUrl: urls.authUrl || httpsUrl,
+      primaryDomain: urls.primaryDomain,
     },
     caddy: {
       installed: caddy.installed || caddyConfigured,
@@ -614,10 +619,13 @@ export async function authorizeHttpRequest(request, env = process.env) {
 }
 
 export function sessionCookieHeader(token, env = process.env) {
-  const secure = String(env.ORKESTR_COOKIE_SECURE || "").trim() === "1" || Boolean(String(env.ORKESTR_PUBLIC_HTTPS_URL || "").startsWith("https://"));
+  const urls = publicUrlConfig(env);
+  const secure = String(env.ORKESTR_COOKIE_SECURE || "").trim() === "1" ||
+    Boolean(String(urls.appUrl || env.ORKESTR_PUBLIC_HTTPS_URL || "").startsWith("https://"));
   return [
     `${cookieName}=${encodeURIComponent(token)}`,
     "Path=/",
+    urls.cookieDomain ? `Domain=${urls.cookieDomain}` : "",
     "HttpOnly",
     "SameSite=Lax",
     `Max-Age=${Math.floor(sessionTtlMs / 1000)}`,

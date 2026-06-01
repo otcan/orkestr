@@ -85,6 +85,12 @@ test("install script exposes a host-native systemd VPS path", async () => {
   assert.match(script, /ORKESTR_ENABLE_HOST_CODEX/);
   assert.match(script, /ORKESTR_LOCAL_ENV_FILE/);
   assert.match(script, /ORKESTR_RUNTIME_SETTINGS_FILE/);
+  assert.match(script, /primaryDomain: "ORKESTR_PRIMARY_DOMAIN"/);
+  assert.match(script, /appHost: "ORKESTR_APP_HOST"/);
+  assert.match(script, /authHost: "ORKESTR_AUTH_HOST"/);
+  assert.match(script, /ORKESTR_PRIMARY_DOMAIN=\$primary_domain/);
+  assert.match(script, /ORKESTR_AUTH_URL=\$auth_url/);
+  assert.match(script, /ORKESTR_COOKIE_DOMAIN=\$cookie_domain/);
   assert.match(script, /local_runtime_path/);
   assert.match(script, /write_env_var PATH/);
   assert.match(script, /install_local_runtime_tools/);
@@ -301,11 +307,16 @@ test("bootstrap script provides an opinionated fresh VPS path", async () => {
   assert.match(script, /--no-tailscale/);
   assert.match(script, /--tailscale-up/);
   assert.match(script, /--domain DOMAIN/);
+  assert.match(script, /--app-host HOST/);
+  assert.match(script, /--auth-host HOST/);
   assert.match(script, /--email EMAIL/);
   assert.match(script, /--mtls-ca FILE/);
   assert.match(script, /--mtls-mode MODE/);
   assert.match(script, /TS_AUTHKEY/);
   assert.match(script, /ORKESTR_ACME_EMAIL/);
+  assert.match(script, /ORKESTR_PUBLIC_URL/);
+  assert.match(script, /ORKESTR_AUTH_URL/);
+  assert.match(script, /ORKESTR_COOKIE_DOMAIN/);
   assert.match(script, /ORKESTR_TENANT_BOOTSTRAP_PROFILE/);
   assert.match(script, /ORKESTR_MTLS_CA_CERT/);
   assert.match(script, /ORKESTR_MTLS_MODE/);
@@ -313,6 +324,8 @@ test("bootstrap script provides an opinionated fresh VPS path", async () => {
   assert.match(script, /tailscale serve --bg 443/);
   assert.match(script, /tailscale serve --bg --https/);
   assert.match(script, /apt_install caddy/);
+  assert.match(script, /redir https:\/\/\$app_host\{uri\} permanent/);
+  assert.match(script, /\$proxy_hosts \{/);
   assert.match(script, /root \\\* \/usr\/share\/caddy/);
   assert.match(script, /\/etc\/caddy\/conf\.d\/orkestr\.caddy/);
   assert.match(script, /client_auth/);

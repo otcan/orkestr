@@ -32,6 +32,8 @@ Options:
   --tailscale-hostname NAME  Hostname to pass to tailscale up. Defaults to orkestr.
   --tailscale-https-port N   Tailscale HTTPS port. Defaults to 443.
   --domain DOMAIN            Configure Caddy public HTTPS for this domain.
+  --app-host HOST            Public app hostname, for example app.example.com.
+  --auth-host HOST           Public auth/pairing hostname, for example auth.example.com.
   --email EMAIL              ACME account email for Caddy certificate issuance.
   --mtls-ca FILE             Optional client CA certificate for Caddy mTLS.
   --mtls-mode MODE           Caddy client auth mode. Defaults to require_and_verify.
@@ -63,7 +65,13 @@ tailscale=1
 tailscale_up=0
 tailscale_hostname="${ORKESTR_TAILSCALE_HOSTNAME:-orkestr}"
 tailscale_https_port="${ORKESTR_TAILSCALE_HTTPS_PORT:-443}"
-domain="${ORKESTR_DOMAIN:-}"
+primary_domain="${ORKESTR_PRIMARY_DOMAIN:-${ORKESTR_DOMAIN:-}}"
+domain="${ORKESTR_DOMAIN:-$primary_domain}"
+app_host="${ORKESTR_APP_HOST:-}"
+auth_host="${ORKESTR_AUTH_HOST:-}"
+public_url="${ORKESTR_PUBLIC_URL:-}"
+auth_url="${ORKESTR_AUTH_URL:-}"
+cookie_domain="${ORKESTR_COOKIE_DOMAIN:-}"
 acme_email="${ORKESTR_ACME_EMAIL:-}"
 mtls_ca="${ORKESTR_MTLS_CA_CERT:-}"
 mtls_mode="${ORKESTR_MTLS_MODE:-require_and_verify}"
@@ -156,6 +164,15 @@ while [ "$#" -gt 0 ]; do
       ;;
     --domain)
       domain="${2:-}"
+      primary_domain="${2:-}"
+      shift 2
+      ;;
+    --app-host)
+      app_host="${2:-}"
+      shift 2
+      ;;
+    --auth-host)
+      auth_host="${2:-}"
       shift 2
       ;;
     --email|--acme-email)
@@ -192,6 +209,14 @@ if [ "$track_main" -eq 1 ]; then
   git_ref=main
   deploy_channel=main
   deploy_tags_only=0
+fi
+
+if [ -n "$domain" ] && { [ -n "$app_host" ] || [ -n "$auth_host" ]; }; then
+  app_host="${app_host:-app.$domain}"
+  auth_host="${auth_host:-auth.$domain}"
+  public_url="${public_url:-https://$app_host}"
+  auth_url="${auth_url:-https://$auth_host}"
+  cookie_domain="${cookie_domain:-$domain}"
 fi
 
 log() {
@@ -382,6 +407,25 @@ run_install_script() {
 
 configure_runtime_env() {
   set_env_value ORKESTR_WHATSAPP_EXTERNAL_BRIDGE_ENABLED 0 "$env_file"
+  if [ -n "$primary_domain" ]; then
+    set_env_value ORKESTR_PRIMARY_DOMAIN "$primary_domain" "$env_file"
+  fi
+  if [ -n "$app_host" ]; then
+    set_env_value ORKESTR_APP_HOST "$app_host" "$env_file"
+  fi
+  if [ -n "$auth_host" ]; then
+    set_env_value ORKESTR_AUTH_HOST "$auth_host" "$env_file"
+  fi
+  if [ -n "$public_url" ]; then
+    set_env_value ORKESTR_PUBLIC_URL "$public_url" "$env_file"
+    set_env_value ORKESTR_PUBLIC_HTTPS_URL "$public_url" "$env_file"
+  fi
+  if [ -n "$auth_url" ]; then
+    set_env_value ORKESTR_AUTH_URL "$auth_url" "$env_file"
+  fi
+  if [ -n "$cookie_domain" ]; then
+    set_env_value ORKESTR_COOKIE_DOMAIN "$cookie_domain" "$env_file"
+  fi
   if [ "$demo" -eq 1 ]; then
     set_env_value ORKESTR_RESET_ON_UPDATE 1 "$env_file"
     set_env_value ORKESTR_RESET_OVERLAY 1 "$env_file"
@@ -423,7 +467,23 @@ configure_tailscale_serve() {
 
 configure_caddy() {
   [ -n "$domain" ] || return 0
-  log "Installing and configuring Caddy for https://$domain"
+  local proxy_hosts redirect_block
+  proxy_hosts="$domain"
+  redirect_block=""
+  if [ -n "$app_host" ] || [ -n "$auth_host" ]; then
+    proxy_hosts="$app_host"
+    if [ -n "$auth_host" ] && [ "$auth_host" != "$app_host" ]; then
+      proxy_hosts="$proxy_hosts, $auth_host"
+    fi
+    if [ -n "$app_host" ] && [ "$domain" != "$app_host" ] && [ "$domain" != "$auth_host" ]; then
+      redirect_block="$domain {
+  redir https://$app_host{uri} permanent
+}
+
+"
+    fi
+  fi
+  log "Installing and configuring Caddy for $proxy_hosts"
   apt_install caddy
   mkdir -p /etc/caddy/conf.d
   if [ -n "$mtls_ca" ]; then
@@ -453,7 +513,31 @@ EOF
   elif ! grep -q '^import /etc/caddy/conf\.d/\*\.caddy$' /etc/caddy/Caddyfile; then
     printf '\nimport /etc/caddy/conf.d/*.caddy\n' >> /etc/caddy/Caddyfile
   fi
-  if [ -n "$mtls_ca" ]; then
+  if [ -n "$app_host" ] || [ -n "$auth_host" ]; then
+    if [ -n "$mtls_ca" ]; then
+      cat > /etc/caddy/conf.d/orkestr.caddy <<EOF
+${redirect_block}
+$proxy_hosts {
+  encode zstd gzip
+  tls {
+    client_auth {
+      mode $mtls_mode
+      trusted_ca_cert_file $mtls_ca
+    }
+  }
+  reverse_proxy 127.0.0.1:$port
+}
+EOF
+    else
+      cat > /etc/caddy/conf.d/orkestr.caddy <<EOF
+${redirect_block}
+$proxy_hosts {
+  encode zstd gzip
+  reverse_proxy 127.0.0.1:$port
+}
+EOF
+    fi
+  elif [ -n "$mtls_ca" ]; then
     cat > /etc/caddy/conf.d/orkestr.caddy <<EOF
 $domain {
   encode zstd gzip
@@ -479,7 +563,18 @@ EOF
   systemctl reload caddy || systemctl restart caddy
   set_env_value ORKESTR_CADDY_ENABLED 1 "$env_file"
   set_env_value ORKESTR_COOKIE_SECURE 1 "$env_file"
-  set_env_value ORKESTR_PUBLIC_HTTPS_URL "https://$domain" "$env_file"
+  if [ -n "$public_url" ]; then
+    set_env_value ORKESTR_PUBLIC_URL "$public_url" "$env_file"
+    set_env_value ORKESTR_PUBLIC_HTTPS_URL "$public_url" "$env_file"
+  else
+    set_env_value ORKESTR_PUBLIC_HTTPS_URL "https://$domain" "$env_file"
+  fi
+  if [ -n "$auth_url" ]; then
+    set_env_value ORKESTR_AUTH_URL "$auth_url" "$env_file"
+  fi
+  if [ -n "$cookie_domain" ]; then
+    set_env_value ORKESTR_COOKIE_DOMAIN "$cookie_domain" "$env_file"
+  fi
   if [ -n "$mtls_ca" ]; then
     set_env_value ORKESTR_MTLS_ENABLED 1 "$env_file"
     set_env_value ORKESTR_MTLS_CA_CERT "$mtls_ca" "$env_file"
@@ -539,7 +634,7 @@ run_doctor() {
 }
 
 print_summary() {
-  local tailscale_status domain_url mtls_status
+  local tailscale_status domain_url auth_summary mtls_status
   tailscale_status="not installed"
   if have tailscale; then
     if tailscale_connected; then
@@ -550,8 +645,9 @@ print_summary() {
   fi
   domain_url=""
   if [ -n "$domain" ]; then
-    domain_url="https://$domain/setup"
+    domain_url="${public_url:-https://$domain}/setup"
   fi
+  auth_summary="${auth_url:-same as app}"
   mtls_status="disabled"
   if [ -n "$mtls_ca" ]; then
     mtls_status="enabled ($mtls_mode)"
@@ -580,6 +676,7 @@ Access:
   Local: http://127.0.0.1:$port/setup
   Tailscale: $tailscale_status
   Domain: ${domain_url:-not configured}
+  Auth: $auth_summary
   mTLS: $mtls_status
 
 EOF

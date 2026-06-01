@@ -1,3 +1,5 @@
+import { publicUrlConfig } from "./public-url-config.js";
+
 function envValue(env, names = []) {
   for (const name of names) {
     const value = String(env[name] || "").trim();
@@ -42,6 +44,7 @@ export function authProvider(env = process.env) {
 
 export function publicAuthStatus(env = process.env) {
   const provider = authProvider(env);
+  const urls = publicUrlConfig(env);
   const issuer = issuerFromConfig(env);
   const realm = envValue(env, ["ORKESTR_KEYCLOAK_REALM", "KEYCLOAK_REALM"]) || realmFromIssuer(issuer);
   const clientId = envValue(env, ["ORKESTR_KEYCLOAK_CLIENT_ID", "KEYCLOAK_CLIENT_ID"]);
@@ -95,6 +98,11 @@ export function publicAuthStatus(env = process.env) {
       genericIdentityLinks: false,
       perUserHome: true,
       note: "Connector identities belong under each user's Orkestr home directory, not in the generic user record.",
+    },
+    urls: {
+      appUrl: urls.appUrl,
+      authUrl: urls.authUrl,
+      sameOriginAuth: urls.sameOriginAuth,
     },
   };
 }

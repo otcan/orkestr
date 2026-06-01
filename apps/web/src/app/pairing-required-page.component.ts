@@ -122,7 +122,11 @@ export class PairingRequiredPageComponent implements OnDestroy {
   }
 
   private serverHost(): string {
-    const configured = this.setupStatus?.security?.https?.url || "";
+    const configured =
+      this.setupStatus?.urls?.authUrl ||
+      this.setupStatus?.security?.https?.authUrl ||
+      this.setupStatus?.security?.https?.url ||
+      "";
     try {
       if (configured) return new URL(configured).hostname;
     } catch {

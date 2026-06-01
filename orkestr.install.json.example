@@ -3,6 +3,14 @@
   "port": 19812,
   "installLocalService": true,
   "startAfterInstall": true,
+  "domain": {
+    "primary": "example.com",
+    "appHost": "app.example.com",
+    "authHost": "auth.example.com",
+    "publicUrl": "https://app.example.com",
+    "authUrl": "https://auth.example.com",
+    "cookieDomain": "example.com"
+  },
   "localServiceName": "orkestr",
   "localServiceLabel": "com.orkestr.oss",
   "codex": {
