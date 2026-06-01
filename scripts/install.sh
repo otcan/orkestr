@@ -963,11 +963,27 @@ ensure_node() {
   fi
 }
 
+configure_bubblewrap_apparmor() {
+  local source_profile target_profile
+  source_profile="/usr/share/apparmor/extra-profiles/bwrap-userns-restrict"
+  target_profile="/etc/apparmor.d/bwrap-userns-restrict"
+  if [ "${ORKESTR_SKIP_SYSTEM_PACKAGES:-0}" = "1" ] || [ ! -r "$source_profile" ]; then
+    return 0
+  fi
+  if ! have apparmor_parser; then
+    echo "Warning: AppArmor parser is missing; Codex bubblewrap user namespace setup was not applied." >&2
+    return 0
+  fi
+  install -m 0644 "$source_profile" "$target_profile"
+  apparmor_parser -r "$target_profile" || echo "Warning: could not load Codex bubblewrap AppArmor profile: $target_profile" >&2
+}
+
 install_system_packages() {
   if [ "$systemd" -ne 1 ] || [ "${ORKESTR_SKIP_SYSTEM_PACKAGES:-0}" = "1" ]; then
     return 0
   fi
-  apt_install bubblewrap ca-certificates curl git openssh-client procps ripgrep sqlite3 tmux util-linux
+  apt_install apparmor-profiles apparmor-utils bubblewrap ca-certificates curl git openssh-client procps ripgrep sqlite3 tmux util-linux
+  configure_bubblewrap_apparmor
   install_browser_package
   install_desktop_packages
 }

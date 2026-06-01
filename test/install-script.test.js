@@ -187,7 +187,9 @@ test("install script exposes a host-native systemd VPS path", async () => {
   assert.match(script, /ensure_overlay_file\(\)/);
   assert.match(script, /overlay\.json/);
   assert.match(script, /"default": "noop"/);
-  assert.match(script, /apt_install bubblewrap ca-certificates curl git openssh-client procps ripgrep sqlite3 tmux util-linux/);
+  assert.match(script, /configure_bubblewrap_apparmor\(\)/);
+  assert.match(script, /bwrap-userns-restrict/);
+  assert.match(script, /apt_install apparmor-profiles apparmor-utils bubblewrap ca-certificates curl git openssh-client procps ripgrep sqlite3 tmux util-linux/);
   assert.match(script, /sqlite3/);
   assert.match(script, /util-linux/);
   assert.match(script, /install_desktop_packages/);
