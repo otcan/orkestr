@@ -11,6 +11,7 @@ import { RawTerminalController } from "./raw-terminal.controller";
 import { ConnectorStore } from "./stores/connector.store";
 import { RuntimeStore } from "./stores/runtime.store";
 import { ThreadStore } from "./stores/thread.store";
+import { ThreadComposerComponent } from "./thread-composer.component";
 import { ThreadMessageListComponent } from "./thread-message-list.component";
 import { UserConnectorsPageComponent } from "./user-connectors-page.component";
 import { UserDeskPageComponent } from "./user-desk-page.component";
@@ -59,7 +60,7 @@ const DEFAULT_WHATSAPP_REPLY_PREFIX = "orkestr:";
 
 @Component({
   selector: "ork-root",
-  imports: [DatePipe, FormsModule, FirstThreadWizardComponent, FilesPageComponent, OpsPageComponent, OnboardingPageComponent, PairingRequiredPageComponent, ThreadMessageListComponent, UserConnectorsPageComponent, UserDeskPageComponent, UserTimersPageComponent],
+  imports: [DatePipe, FormsModule, FirstThreadWizardComponent, FilesPageComponent, OpsPageComponent, OnboardingPageComponent, PairingRequiredPageComponent, ThreadComposerComponent, ThreadMessageListComponent, UserConnectorsPageComponent, UserDeskPageComponent, UserTimersPageComponent],
   templateUrl: "./app.component.html",
 })
 export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
@@ -111,7 +112,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
 
   @ViewChild("messagePane") private readonly messagePane?: ElementRef<HTMLElement>;
   @ViewChild("rawTerminalHost") private readonly rawTerminalHost?: ElementRef<HTMLElement>;
-  @ViewChild("composerInput") private readonly composerInput?: ElementRef<HTMLTextAreaElement>;
+  @ViewChild(ThreadComposerComponent) private readonly composer?: ThreadComposerComponent;
 
   threads: ThreadSummary[] = [];
   readonly messageCache = signal<Record<string, ThreadMessage[]>>({});
@@ -1835,12 +1836,6 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     }
   }
 
-  handleComposerKeydown(event: KeyboardEvent): void {
-    if (event.key !== "Enter" || event.shiftKey) return;
-    event.preventDefault();
-    void this.sendMessage();
-  }
-
   rememberScrollPosition(): void {
     const pane = this.messagePane?.nativeElement;
     if (!pane) return;
@@ -1911,9 +1906,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
 
   private focusComposerSoon(): void {
     globalThis.setTimeout(() => {
-      this.composerInput?.nativeElement.focus();
-      const value = this.composerInput?.nativeElement.value || "";
-      this.composerInput?.nativeElement.setSelectionRange(value.length, value.length);
+      this.composer?.focusEnd();
     }, 0);
   }
 

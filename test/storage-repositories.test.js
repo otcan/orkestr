@@ -25,6 +25,13 @@ test("storage repositories wrap thread, message, timer, user, and connector stat
   assert.equal(path.basename(messagePath), ".._unsafe_thread.json");
   await messages.save("../unsafe/thread", [{ id: "message-1", text: "hello" }]);
   assert.deepEqual(await messages.list("../unsafe/thread"), [{ id: "message-1", text: "hello" }]);
+  await messages.mutate("../unsafe/thread", (current) => ({ messages: [...current, { id: "message-2", text: "there" }] }));
+  assert.deepEqual(await messages.list("../unsafe/thread"), [
+    { id: "message-1", text: "hello" },
+    { id: "message-2", text: "there" },
+  ]);
+  await messages.delete("../unsafe/thread");
+  assert.deepEqual(await messages.list("../unsafe/thread"), []);
 
   const connectors = createConnectorStateRepository(env);
   await connectors.writeWhatsAppState({ inboundEvents: [{ eventId: "event-1" }] });

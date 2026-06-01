@@ -10,7 +10,9 @@ import {
   threadBindingUpdateSchema,
   threadInputSchema,
   threadInterruptSchema,
+  threadMessagesQuerySchema,
   threadRepoUpdateSchema,
+  threadUploadSchema,
   threadWorkerCreateSchema,
   timerCreateSchema,
   whatsappInboundSchema,
@@ -22,6 +24,8 @@ test("shared API schemas expose high-value request contracts", () => {
   assert.equal(agentMessageSchema.params.required[0], "agentId");
   assert.equal(timerCreateSchema.body.properties.promptFile.type, "string");
   assert.equal(threadInputSchema.body.properties.attachments.type, "array");
+  assert.equal(threadMessagesQuerySchema.querystring.properties.limit.type, "string");
+  assert.equal(threadUploadSchema.body.properties.files.type, "array");
   assert.equal(threadInterruptSchema.params.required[0], "threadId");
   assert.equal(threadApproveSchema.body.properties.text.type, "string");
   assert.equal(threadWorkerCreateSchema.body.properties.autoRun.type, "boolean");

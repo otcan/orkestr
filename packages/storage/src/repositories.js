@@ -1,4 +1,5 @@
 import path from "node:path";
+import fs from "node:fs/promises";
 import { dataPaths, ensureDataDirs, userDataPaths } from "./paths.js";
 import { readJson, writeJson } from "./store.js";
 import { listThreadRecords, saveThreadRecords } from "./thread-registry.js";
@@ -29,6 +30,23 @@ export function createThreadMessageRepository(env = process.env) {
     },
     async save(threadId, messages) {
       return writeJson(await this.pathForThread(threadId), Array.isArray(messages) ? messages : []);
+    },
+    async mutate(threadId, operation) {
+      const filePath = await this.pathForThread(threadId);
+      const current = await readJson(filePath, []);
+      const messages = Array.isArray(current) ? current : [];
+      const result = await operation(messages, filePath);
+      if (Array.isArray(result)) {
+        await writeJson(filePath, result);
+        return result;
+      }
+      if (result && Array.isArray(result.messages)) {
+        await writeJson(filePath, result.messages);
+      }
+      return result;
+    },
+    async delete(threadId) {
+      return fs.rm(await this.pathForThread(threadId), { force: true });
     },
   };
 }

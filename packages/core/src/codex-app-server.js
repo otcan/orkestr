@@ -454,6 +454,13 @@ export async function interruptCodexAppServerThread(thread, env = process.env) {
   return { interrupted: true, turnId: activeTurnId };
 }
 
+async function drainCodexAppServerNotifications(client, cycles = 3) {
+  for (let index = 0; index < cycles; index += 1) {
+    await new Promise((resolve) => setImmediate(resolve));
+    await client.drainNotifications?.();
+  }
+}
+
 async function startCodexAppServerTurn({ client, thread, id, pending, env, runtimeEnv = env, observedVia = "codex_app_server_turn_start" }) {
   const result = await client.request("turn/start", turnStartParams(thread, pending, runtimeEnv));
   const turnId = clean(result?.turn?.id || result?.turnId);
@@ -461,8 +468,7 @@ async function startCodexAppServerTurn({ client, thread, id, pending, env, runti
   const terminalResult = ["completed", "failed", "interrupted", "aborted", "cancelled", "canceled"].includes(status);
   const completedKey = turnId && client.turnParentKey ? client.turnParentKey(id, turnId) : "";
   if (turnId) client.rememberTurnParent(id, turnId, pending);
-  await new Promise((resolve) => setImmediate(resolve));
-  await client.drainNotifications?.();
+  await drainCodexAppServerNotifications(client);
   const alreadyCompleted = Boolean(completedKey && client.completedTurns?.has(completedKey));
   if (turnId && !terminalResult && !alreadyCompleted) {
     client.threadStates.set(id, { ...(client.threadStates.get(id) || {}), activeTurnId: turnId, status: { type: "active", activeFlags: ["running"] } });
