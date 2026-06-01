@@ -1,9 +1,9 @@
 import path from "node:path";
 import fs from "node:fs/promises";
 import { randomUUID } from "node:crypto";
-import { dataPaths, ensureDataDirs } from "../../storage/src/paths.js";
-import { appendEvent, readJson, writeJson } from "../../storage/src/store.js";
-import { createThreadRepository } from "../../storage/src/repositories.js";
+import { ensureDataDirs } from "../../storage/src/paths.js";
+import { appendEvent } from "../../storage/src/store.js";
+import { createThreadMessageRepository, createThreadRepository } from "../../storage/src/repositories.js";
 import { assertSanitizedAction } from "./llm-sanitizer.js";
 import { assertResourceAccess, assertThreadLimit, filterResourcesForPrincipal, isAdminPrincipal, policyError, resourceOwnerUserId } from "./policy.js";
 import { userScopedCapabilityHints } from "./user-skills.js";
@@ -70,11 +70,6 @@ function restrictedCodexSecurityProfile(input = {}) {
   const requested = String(input.securityProfile || input.executor?.metadata?.securityProfile || "").trim();
   if (["demo-isolated", "quarantined-demo", "external-user", "private-user", "generated-whatsapp"].includes(requested.toLowerCase())) return requested;
   return "external-user";
-}
-
-async function messagesPath(threadId, env) {
-  const paths = await ensureDataDirs(env);
-  return path.join(paths.threadMessages, `${safeThreadId(threadId)}.json`);
 }
 
 async function enqueueMessageMutation(filePath, operation) {
@@ -328,8 +323,9 @@ export async function deleteThread(threadId, options = {}, env = process.env) {
   const next = threads.filter((thread) => !deletedIds.has(thread.id));
   await saveThreads(next, env);
   const paths = await ensureDataDirs(env);
+  const messageRepository = createThreadMessageRepository(env);
   for (const deletedId of deletedIds) {
-    await fs.rm(await messagesPath(deletedId, env), { force: true }).catch(() => {});
+    await messageRepository.delete(deletedId).catch(() => {});
     await fs.rm(path.join(paths.home, "uploads", deletedId), { recursive: true, force: true }).catch(() => {});
     await fs.rm(path.join(paths.home, "uploads", safeThreadId(deletedId)), { recursive: true, force: true }).catch(() => {});
     await appendEvent({ type: "thread_deleted", threadId: deletedId, parentThreadId: target.id === deletedId ? null : target.id }, env);
@@ -349,7 +345,7 @@ export async function deleteThreadForPrincipal(threadId, principal, options = {}
 export async function listThreadMessages(threadId, env = process.env) {
   const thread = await getThread(threadId, env);
   const id = thread?.id || normalizeThreadId(threadId);
-  return readJson(await messagesPath(id, env), []);
+  return createThreadMessageRepository(env).list(id);
 }
 
 export async function listThreadMessagesForPrincipal(threadId, principal, env = process.env) {
@@ -364,9 +360,10 @@ export async function appendThreadMessage(threadId, input, env = process.env) {
     error.statusCode = 404;
     throw error;
   }
-  const filePath = await messagesPath(thread.id, env);
+  const messageRepository = createThreadMessageRepository(env);
+  const filePath = await messageRepository.pathForThread(thread.id);
   const message = await enqueueMessageMutation(filePath, async () => {
-    const messages = await readJson(filePath, []);
+    const messages = await messageRepository.list(thread.id);
     const role = String(input.role || "assistant");
     const source = String(input.source || "manual");
     const externalId = String(input.externalId || "").trim();
@@ -410,8 +407,8 @@ export async function appendThreadMessage(threadId, input, env = process.env) {
       error.statusCode = 400;
       throw error;
     }
-    messages.push(nextMessage);
-    await writeJson(filePath, messages);
+    const next = [...messages, nextMessage];
+    await messageRepository.save(thread.id, next);
     return nextMessage;
   });
   if (message.duplicate) {
@@ -558,9 +555,10 @@ export async function updateThreadMessage(threadId, messageId, patch, env = proc
     error.statusCode = 404;
     throw error;
   }
-  const filePath = await messagesPath(thread.id, env);
+  const messageRepository = createThreadMessageRepository(env);
+  const filePath = await messageRepository.pathForThread(thread.id);
   return enqueueMessageMutation(filePath, async () => {
-    const messages = await readJson(filePath, []);
+    const messages = await messageRepository.list(thread.id);
     let updated = null;
     const next = messages.map((message) => {
       if (message.id !== messageId) return message;
@@ -576,7 +574,7 @@ export async function updateThreadMessage(threadId, messageId, patch, env = proc
       error.statusCode = 404;
       throw error;
     }
-    await writeJson(filePath, next);
+    await messageRepository.save(thread.id, next);
     return updated;
   });
 }

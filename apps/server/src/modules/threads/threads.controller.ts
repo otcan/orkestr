@@ -3,8 +3,7 @@ import path from "node:path";
 import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { promisify } from "node:util";
-import { Body, Controller, Delete, Get, HttpCode, Param, Post, Put, Query, Req, UploadedFiles, UseInterceptors } from "@nestjs/common";
-import { AnyFilesInterceptor } from "@nestjs/platform-express";
+import { Body, Controller, Delete, Get, HttpCode, Param, Post, Put, Query, Req } from "@nestjs/common";
 import { deliverWhatsAppReplies } from "../../../../../packages/connectors/src/whatsapp.js";
 import { runNextThreadMessage } from "../../../../../packages/core/src/executors.js";
 import {
@@ -30,9 +29,7 @@ import {
   updateThread,
 } from "../../../../../packages/core/src/threads.js";
 import { requestPrincipal } from "../../../../../packages/core/src/principal.js";
-import { assertSanitizedAction } from "../../../../../packages/core/src/llm-sanitizer.js";
 import { isAdminPrincipal } from "../../../../../packages/core/src/policy.js";
-import { userScopedCapabilityHints } from "../../../../../packages/core/src/user-skills.js";
 import { parseThreadInputCommand } from "../../../../../packages/core/src/thread-commands.js";
 import { codexResumeCommand } from "../../../../../packages/core/src/codex-attach-command.js";
 import { launchNativeTerminal } from "../../../../../packages/core/src/native-terminal.js";
@@ -43,7 +40,6 @@ import {
   processApiAgentThreadInput,
   threadUsesApiAgent,
 } from "../../../../../packages/core/src/tenant-api-agent.js";
-import { visibleThreadMessages } from "../../../../../packages/core/src/thread-message-visibility.js";
 import { resolveWorkspacePathForPrincipal, workspacePrincipalForOwner, workspaceRootForPrincipal } from "../../../../../packages/core/src/workspace-files.js";
 import {
   archiveCodexAppServerThread,
@@ -52,11 +48,9 @@ import {
   interruptCodexAppServerThread,
   rollbackCodexAppServerThread,
   startCodexAppServerThread,
-  syncCodexAppServerThreadMessages,
   threadNeedsCodexAppServerMigration,
   threadUsesCodexAppServer,
 } from "../../../../../packages/core/src/codex-app-server.js";
-import { ensureDataDirs } from "../../../../../packages/storage/src/paths.js";
 import { codexThreadId, threadRuntimeSummary, threadSummaryPayload } from "../../thread-summary.js";
 import { ensureAttachmentsArray, httpError, validateRequestSchema } from "../../common/http.js";
 import {
@@ -67,42 +61,20 @@ import {
   threadInterruptSchema,
 } from "../../../../../packages/shared/src/api-schemas.js";
 import {
+  ThreadActionSanitizerService,
   ThreadBindingService,
   ThreadRuntimeService,
 } from "./thread-application.services.js";
-import { assertThreadAdminOnly } from "./thread-route-helpers.js";
+import {
+  assertThreadAdminOnly,
+  hasOwn,
+  optionalBodyBoolean,
+  optionalBodyString,
+  optionalBodyStringArray,
+  optionalBodyStringMap,
+} from "./thread-route-helpers.js";
 
 const execFileAsync = promisify(execFile);
-
-function messageCursor(message: any, index: number): number {
-  return Number(message?.cursor || 0) || index + 1;
-}
-
-function messageTimestampMs(message: any): number {
-  const ms = Date.parse(String(message?.timestamp || message?.createdAt || ""));
-  return Number.isFinite(ms) ? ms : 0;
-}
-
-function chronologicalMessages(messages: any[] = []) {
-  return messages
-    .map((message, index) => ({ message, index }))
-    .sort((left, right) => {
-      const leftMs = messageTimestampMs(left.message);
-      const rightMs = messageTimestampMs(right.message);
-      if (leftMs && rightMs && leftMs !== rightMs) return leftMs - rightMs;
-      if (leftMs !== rightMs) return leftMs - rightMs;
-      return messageCursor(left.message, left.index) - messageCursor(right.message, right.index);
-    })
-    .map(({ message }) => message);
-}
-
-async function syncNativeCodexHistory(thread: any, options: Record<string, unknown> = {}) {
-  if (!threadUsesCodexAppServer(thread)) return thread;
-  await syncCodexAppServerThreadMessages(thread, process.env, options).catch(() => null);
-  return await getThread(thread.id) || thread;
-}
-
-const needInputPhases = new Set(["need_input", "awaiting_input", "question", "request_user_input"]);
 
 function shouldInterruptRuntime(status: Record<string, any> | null | undefined): boolean {
   if (!status) return false;
@@ -115,211 +87,12 @@ function shouldInterruptRuntime(status: Record<string, any> | null | undefined):
   );
 }
 
-function isNeedInputMessage(message: any): boolean {
-  const role = String(message?.role || message?.kind || "assistant").trim().toLowerCase();
-  const phase = String(message?.phase || "").trim().toLowerCase();
-  return role === "assistant" && needInputPhases.has(phase) && !!String(message?.text || "").trim();
-}
-
-function latestPendingQuestion(messages: any[] = []) {
-  let userRepliedAfterQuestion = false;
-  for (let index = messages.length - 1; index >= 0; index -= 1) {
-    const message = messages[index];
-    const text = String(message?.text || "").trim();
-    if (!text) continue;
-    const role = String(message?.role || message?.kind || "").trim().toLowerCase();
-    if (role === "user") {
-      userRepliedAfterQuestion = true;
-      continue;
-    }
-    if (!isNeedInputMessage(message)) continue;
-    if (userRepliedAfterQuestion) return null;
-    const timestamp = message?.timestamp || message?.createdAt || null;
-    const eventId = String(message?.eventId || message?.id || "").trim() || null;
-    return {
-      text,
-      eventId,
-      messageId: message?.id || null,
-      cursor: messageCursor(message, index),
-      timestamp,
-      phase: message?.phase || null,
-    };
-  }
-  return null;
-}
-
-function bridgeMessage(message: any, index: number) {
-  const role = String(message?.role || "assistant").trim() === "user" ? "user" : "assistant";
-  const text = String(message?.text || "").trim();
-  const timestamp = message?.timestamp || message?.createdAt || new Date().toISOString();
-  const phase = message?.phase || (role === "assistant" ? "final_answer" : null);
-  return {
-    ...message,
-    cursor: messageCursor(message, index),
-    timestamp,
-    role,
-    kind: role,
-    phase,
-    source: message?.source || "thread",
-    stable: true,
-    text,
-    eventId: message?.eventId || message?.id || `${timestamp}:${index}`,
-    awaitingInputCandidate: isNeedInputMessage({ ...message, role, phase, text }),
-  };
-}
-
-function normalizedMessageText(value: unknown): string {
-  return String(value || "").replace(/\s+/g, " ").trim();
-}
-
-const liveCodexDisplaySources = new Set(["codex-rollout", "codex-app-server", "codex-app-server-import"]);
-
-function liveCodexDisplaySource(message: any): boolean {
-  return liveCodexDisplaySources.has(String(message?.source || "").trim());
-}
-
-function duplicateAdjacentAssistant(previous: any, current: any): boolean {
-  if (!previous || !current) return false;
-  if (previous.role !== "assistant" || current.role !== "assistant") return false;
-  if (!liveCodexDisplaySource(previous) || !liveCodexDisplaySource(current)) return false;
-  if (String(previous.phase || "") !== String(current.phase || "")) return false;
-  if (!normalizedMessageText(current.text) || normalizedMessageText(previous.text) !== normalizedMessageText(current.text)) return false;
-  const previousMs = Date.parse(String(previous.timestamp || previous.createdAt || ""));
-  const currentMs = Date.parse(String(current.timestamp || current.createdAt || ""));
-  return Number.isFinite(previousMs) && Number.isFinite(currentMs) && Math.abs(currentMs - previousMs) <= 5000;
-}
-
-function codexAppServerDisplaySource(message: any): boolean {
-  return ["codex-app-server", "codex-app-server-import"].includes(String(message?.source || "").trim());
-}
-
-function codexAppServerDuplicateKey(message: any): string {
-  if (!codexAppServerDisplaySource(message)) return "";
-  const text = normalizedMessageText(message?.text);
-  const codexThreadId = String(message?.codexThreadId || message?.executorThreadId || "").trim();
-  const codexTurnId = String(message?.codexTurnId || message?.executorTurnId || "").trim();
-  if (!text || !codexThreadId || !codexTurnId) return "";
-  return [
-    codexThreadId,
-    codexTurnId,
-    String(message?.role || ""),
-    String(message?.phase || ""),
-    text,
-  ].join("\n");
-}
-
-function dedupeDisplayMessages(messages: any[] = []) {
-  const deduped: any[] = [];
-  const seenCodexAppServerKeys = new Set<string>();
-  for (const message of messages) {
-    if (duplicateAdjacentAssistant(deduped.at(-1), message)) continue;
-    const codexAppServerKey = codexAppServerDuplicateKey(message);
-    if (codexAppServerKey) {
-      if (seenCodexAppServerKeys.has(codexAppServerKey)) continue;
-      seenCodexAppServerKeys.add(codexAppServerKey);
-    }
-    deduped.push(message);
-  }
-  return deduped;
-}
-
-function safeUploadName(name: unknown): string {
-  const base = path.basename(String(name || "upload.bin")).replace(/[^a-zA-Z0-9_.-]/g, "_");
-  return base || "upload.bin";
-}
-
-function hasOwn(value: Record<string, unknown>, key: string): boolean {
-  return Object.prototype.hasOwnProperty.call(value, key);
-}
-
-function optionalBodyString(body: Record<string, unknown>, key: string, fallback: unknown = ""): string {
-  if (hasOwn(body, key) && (body[key] === null || body[key] === undefined)) return "";
-  return String(hasOwn(body, key) ? body[key] : fallback || "").trim();
-}
-
-function optionalBodyBoolean(body: Record<string, unknown>, key: string, fallback = true): boolean {
-  const value = hasOwn(body, key) ? body[key] : fallback;
-  if (typeof value === "string") return !["0", "false", "no", "off"].includes(value.trim().toLowerCase());
-  return value !== false;
-}
-
 function includeAllUserThreadsQuery(query: Record<string, unknown> = {}): boolean {
   const scope = String(query.scope || query.threadScope || "").trim().toLowerCase();
   if (["all", "all-users", "all_users", "admin-all"].includes(scope)) return true;
   return optionalBodyBoolean(query, "includeAllUsers", false) ||
     optionalBodyBoolean(query, "allUsers", false) ||
     optionalBodyBoolean(query, "includeAllUserThreads", false);
-}
-
-function optionalBodyStringArray(body: Record<string, unknown>, key: string, fallback: unknown = []): string[] {
-  const value = hasOwn(body, key) ? body[key] : fallback;
-  if (!Array.isArray(value)) return [];
-  const seen = new Set<string>();
-  const result: string[] = [];
-  for (const item of value) {
-    const text = String(item || "").trim();
-    const comparable = text.toLowerCase();
-    if (!text || seen.has(comparable)) continue;
-    seen.add(comparable);
-    result.push(text);
-  }
-  return result;
-}
-
-function optionalBodyStringMap(body: Record<string, unknown>, key: string, fallback: unknown = {}): Record<string, string> {
-  const value = hasOwn(body, key) ? body[key] : fallback;
-  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
-  const result: Record<string, string> = {};
-  for (const [rawKey, rawValue] of Object.entries(value as Record<string, unknown>)) {
-    const id = String(rawKey || "").trim();
-    const label = String(rawValue || "").trim();
-    if (id && label) result[id] = label;
-  }
-  return result;
-}
-
-function sanitizerFileMeta(file: any): Record<string, unknown> {
-  return {
-    name: String(file?.name || file?.filename || file?.originalname || "").slice(0, 240),
-    mimetype: String(file?.mimetype || file?.type || "").slice(0, 120),
-    size: Number(file?.size || 0) || null,
-  };
-}
-
-function sanitizedThreadActionInput(input: Record<string, unknown> = {}): Record<string, unknown> {
-  const scalarKeys = [
-    "text",
-    "prompt",
-    "promptFile",
-    "source",
-    "reason",
-    "mode",
-    "name",
-    "title",
-    "displayName",
-    "threadId",
-    "ownerUserId",
-    "workspace",
-    "cwd",
-    "connector",
-    "chatId",
-    "replyPrefix",
-  ];
-  const result: Record<string, unknown> = {};
-  for (const key of scalarKeys) {
-    if (!hasOwn(input, key)) continue;
-    result[key] = String(input[key] || "").slice(0, key === "text" || key === "prompt" ? 8000 : 500);
-  }
-  for (const key of ["wake", "start", "deleteWorkers", "mirrorToWhatsApp", "enabled", "allowOtherPeople"]) {
-    if (hasOwn(input, key)) result[key] = Boolean(input[key]);
-  }
-  if (Array.isArray(input.attachments)) {
-    result.attachments = input.attachments.map(sanitizerFileMeta);
-  }
-  if (Array.isArray(input.files)) {
-    result.files = input.files.map(sanitizerFileMeta);
-  }
-  return result;
 }
 
 function adminUserIdFromEnv(): string {
@@ -514,77 +287,16 @@ async function prepareThreadCreateBody(body: Record<string, unknown> = {}, princ
   };
 }
 
-function uploadBuffer(file: any): Buffer {
-  if (Buffer.isBuffer(file?.buffer)) return file.buffer;
-  const encoded = String(file?.contentBase64 || "").trim();
-  if (!encoded) throw httpError("upload_content_required", 400);
-  return Buffer.from(encoded, "base64");
-}
-
-function messagePage(thread: any, rawMessages: any[] = [], query: Record<string, unknown> = {}, status: any = null) {
-  const since = Math.max(0, Number.parseInt(String(query.since || "0"), 10) || 0);
-  const before = Math.max(0, Number.parseInt(String(query.before || "0"), 10) || 0);
-  const requestedLimit = Math.max(0, Number.parseInt(String(query.limit || "0"), 10) || 0);
-  const limit = requestedLimit ? Math.min(requestedLimit, 100) : 100;
-  const orderedMessages = visibleThreadMessages(chronologicalMessages(rawMessages));
-  const pendingQuestion = latestPendingQuestion(orderedMessages);
-  let messages = dedupeDisplayMessages(orderedMessages.map(bridgeMessage).filter((message) => message.text));
-  if (since > 0) messages = messages.filter((message) => Number(message.cursor || 0) > since);
-  if (before > 0) messages = messages.filter((message) => Number(message.cursor || 0) < before);
-  messages = messages.slice(-limit);
-  const allCursors = rawMessages.map((message, index) => messageCursor(message, index));
-  const cursor = Math.max(0, ...allCursors);
-  const oldestCursor = messages.length ? Number(messages[0]?.cursor || 0) : null;
-  return {
-    thread,
-    orkestrThreadId: thread.id,
-    threadId: codexThreadId(thread) || thread.id,
-    codexThreadId: codexThreadId(thread) || null,
-    since,
-    before,
-    limit,
-    count: messages.length,
-    messages,
-    cursor,
-    currentCursor: cursor,
-    oldestCursor,
-    hasMoreBefore: oldestCursor !== null && rawMessages.some((message, index) => messageCursor(message, index) < oldestCursor),
-    state: status?.state || thread.state || "sleeping",
-    source: "orkestr-oss",
-    staleWorking: false,
-    awaitingInput: !!pendingQuestion,
-    awaitingInputEventId: pendingQuestion?.eventId || null,
-    pendingQuestion,
-  };
-}
-
 @Controller("api/threads")
 export class ThreadsController {
   constructor(
+    private readonly threadActionSanitizer: ThreadActionSanitizerService,
     private readonly threadBindingService: ThreadBindingService,
     private readonly threadRuntimeService: ThreadRuntimeService,
   ) {}
 
   private async assertThreadSanitized(action: string, principal: any, thread: any, input: Record<string, unknown> = {}) {
-    if (isAdminPrincipal(principal)) return null;
-    const capabilities = await userScopedCapabilityHints({
-      userId: thread?.ownerUserId || principal?.userId || "",
-      thread,
-    }, process.env);
-    return assertSanitizedAction({
-      action,
-      principal,
-      resource: {
-        type: "thread",
-        id: thread?.id || "",
-        ownerUserId: thread?.ownerUserId || principal?.userId || "",
-        state: thread?.state || "",
-        parentThreadId: thread?.parentThreadId || null,
-        rootThreadId: thread?.rootThreadId || null,
-        capabilities,
-      },
-      input: sanitizedThreadActionInput(input),
-    }, process.env);
+    return this.threadActionSanitizer.assertAllowed(action, principal, thread, input);
   }
 
   private assertThreadAdminOnly(action: string, principal: any) {
@@ -655,15 +367,6 @@ export class ThreadsController {
       requestThreadWake(thread.id, { reason: body.reason || "thread_created" });
     }
     return { thread };
-  }
-
-  @Get(":threadId/messages")
-  async messages(@Param("threadId") threadId: string, @Query() query: Record<string, unknown>) {
-    let thread = await getThread(threadId);
-    if (!thread) throw httpError("thread_not_found", 404);
-    thread = await syncNativeCodexHistory(thread);
-    const status = await this.threadRuntimeService.status(thread.id).catch(() => null);
-    return messagePage(thread, await listThreadMessages(thread.id), query, status);
   }
 
   @Post(":threadId/input")
@@ -879,52 +582,6 @@ export class ThreadsController {
       observed: true,
       observedVia: "pending_delivery",
     };
-  }
-
-  @Post(":threadId/uploads")
-  @HttpCode(201)
-  @UseInterceptors(AnyFilesInterceptor({ limits: { fileSize: 25 * 1024 * 1024, files: 20 } }))
-  async uploads(
-    @Req() request: any,
-    @Param("threadId") threadId: string,
-    @Body() body: Record<string, unknown> = {},
-    @UploadedFiles() uploadedFiles: any[] = [],
-  ) {
-    const principal = requestPrincipal(request);
-    const thread = await getThread(threadId);
-    if (!thread) throw httpError("thread_not_found", 404);
-    const files = uploadedFiles.length ? uploadedFiles : Array.isArray(body.files) ? body.files : [];
-    if (!files.length) throw httpError("upload_files_required", 400);
-    await this.assertThreadSanitized("thread.upload", principal, thread, {
-      ...body,
-      files: files.map((file: any) => ({
-        name: file?.originalname || file?.name || "",
-        mimetype: file?.mimetype || file?.type || "",
-        size: uploadBuffer(file).length,
-      })),
-    });
-    const paths = await ensureDataDirs();
-    const uploadDir = path.join(paths.home, "uploads", thread.id);
-    await fs.mkdir(uploadDir, { recursive: true, mode: 0o700 });
-    const attachments: Array<Record<string, unknown>> = [];
-    for (const file of files) {
-      const name = safeUploadName((file as any)?.originalname || (file as any)?.name);
-      const buffer = uploadBuffer(file);
-      if (buffer.length > 25 * 1024 * 1024) throw httpError(`upload_too_large:${name}`, 413);
-      const storedName = `${new Date().toISOString().replace(/[:.]/g, "-")}-${randomUUID().slice(0, 8)}-${name}`;
-      const savedPath = path.join(uploadDir, storedName);
-      await fs.writeFile(savedPath, buffer, { mode: 0o600 });
-      attachments.push({
-        name,
-        filename: name,
-        mimetype: String((file as any)?.mimetype || (file as any)?.type || "application/octet-stream"),
-        size: buffer.length,
-        path: savedPath,
-        saved_path: savedPath,
-        source: "browser_upload",
-      });
-    }
-    return { ok: true, threadId: thread.id, attachments };
   }
 
   @Get(":threadId/runtime-lite")
@@ -1305,23 +962,6 @@ export class ThreadsController {
     if (!thread) throw httpError("thread_not_found", 404);
     await this.assertThreadSanitized("thread.resume", requestPrincipal(request), thread, body);
     return wakeThread(threadId, { reason: body.reason || body.mode || "resume" });
-  }
-
-  @Get(":threadId/history")
-  async history(@Param("threadId") threadId: string) {
-    let thread = await getThread(threadId);
-    if (!thread) throw httpError("thread_not_found", 404);
-    thread = await syncNativeCodexHistory(thread, { force: true });
-    const messages = chronologicalMessages(await listThreadMessages(thread.id));
-    return {
-      thread,
-      orkestrThreadId: thread.id,
-      threadId: codexThreadId(thread) || thread.id,
-      codexThreadId: codexThreadId(thread) || null,
-      messages,
-      count: messages.length,
-      updatedAt: messages.at(-1)?.createdAt || thread.updatedAt || null,
-    };
   }
 
   @Post(":threadId/recover")

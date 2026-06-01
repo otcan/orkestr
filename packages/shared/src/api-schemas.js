@@ -144,6 +144,33 @@ export const threadInputSchema = {
   },
 };
 
+export const threadMessagesQuerySchema = {
+  ...idParams("threadId"),
+  querystring: {
+    type: "object",
+    properties: {
+      since: stringValue,
+      before: stringValue,
+      limit: stringValue,
+    },
+    additionalProperties: false,
+  },
+};
+
+export const threadUploadSchema = {
+  ...idParams("threadId"),
+  body: {
+    type: "object",
+    properties: {
+      files: {
+        type: "array",
+        items: objectValue,
+      },
+    },
+    additionalProperties: true,
+  },
+};
+
 export const threadInterruptSchema = {
   ...idParams("threadId"),
   body: {

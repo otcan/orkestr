@@ -1,3 +1,25 @@
+import {
+  archiveCodexAppServerThread,
+  codexAppServerThreadStatus,
+  compactCodexAppServerThread,
+  deliverCodexAppServerPendingInputs,
+  interruptCodexAppServerThread,
+  resumeCodexAppServerThread,
+  syncCodexAppServerThreadMessages,
+  threadNeedsCodexAppServerMigration,
+  threadUsesCodexAppServer,
+} from "./codex-app-server.js";
+
+export const archiveCodexRuntimeThread = archiveCodexAppServerThread;
+export const codexRuntimeThreadStatus = codexAppServerThreadStatus;
+export const compactCodexRuntimeThread = compactCodexAppServerThread;
+export const deliverCodexRuntimePendingInputs = deliverCodexAppServerPendingInputs;
+export const interruptCodexRuntimeThread = interruptCodexAppServerThread;
+export const resumeCodexRuntimeThread = resumeCodexAppServerThread;
+export const syncCodexRuntimeThreadMessages = syncCodexAppServerThreadMessages;
+export const threadNeedsNativeCodexRuntimeMigration = threadNeedsCodexAppServerMigration;
+export const threadUsesNativeCodexRuntime = threadUsesCodexAppServer;
+
 export {
   archiveCodexAppServerThread,
   codexAppServerThreadStatus,
@@ -5,11 +27,11 @@ export {
   deliverCodexAppServerPendingInputs,
   interruptCodexAppServerThread,
   resumeCodexAppServerThread,
+  syncCodexAppServerThreadMessages,
   threadNeedsCodexAppServerMigration,
   threadUsesCodexAppServer,
-} from "./codex-app-server.js";
+};
 
 export async function codexRuntimeStatus(thread, env = process.env, counts = {}) {
-  const { codexAppServerThreadStatus } = await import("./codex-app-server.js");
-  return codexAppServerThreadStatus(thread, env, counts);
+  return codexRuntimeThreadStatus(thread, env, counts);
 }

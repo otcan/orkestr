@@ -103,4 +103,5 @@ test("architecture guardrail: runtime leases uses explicit runtime adapters", as
   assert.equal(raw.includes('from "./tmux-runtime.js"'), false);
   assert.equal(raw.includes('from "./runtime-codex-adapter.js"'), true);
   assert.equal(raw.includes('from "./runtime-tmux-legacy.js"'), true);
+  assert.equal(/CodexAppServer|codexAppServer/.test(raw), false);
 });

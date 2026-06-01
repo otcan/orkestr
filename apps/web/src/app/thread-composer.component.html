@@ -1,0 +1,67 @@
+<form
+  class="composer"
+  [class.dragging]="draggingUpload"
+  (submit)="submit(); $event.preventDefault()"
+  (dragover)="handleDragOver($event)"
+  (dragenter)="handleDragEnter($event)"
+  (dragleave)="handleDragLeave($event)"
+  (drop)="handleDrop($event)"
+>
+  <input
+    #composerFilePicker
+    class="visually-hidden"
+    type="file"
+    multiple
+    (change)="queueFiles.emit(composerFilePicker.files); composerFilePicker.value = ''"
+  />
+  @if (pendingFiles.length > 0) {
+    <div class="queued-files">
+      @for (file of pendingFiles; track file.id) {
+        <span class="file-chip">
+          {{ file.name }} <small>{{ formatBytes(file.size) }}</small>
+          <button type="button" (click)="removeFile.emit(file.id)">×</button>
+        </span>
+      }
+    </div>
+  }
+  @if (showPlanBanner) {
+    <div class="plan-composer-banner" [class.ready]="planReady">
+      <div>
+        <strong>Planning mode</strong>
+        <span>{{ planHint }}</span>
+      </div>
+    </div>
+  }
+  <div class="composer-row">
+    <div class="composer-tools">
+      <button class="secondary upload-button" type="button" (click)="composerFilePicker.click()" title="Upload files">Upload</button>
+      @if (adminMode) {
+        <button class="secondary command-help-button" type="button" (click)="openHelp.emit()" title="Command help" aria-haspopup="dialog" [attr.aria-expanded]="slashHelpOpen">Help</button>
+      }
+    </div>
+    <textarea
+      #composerInput
+      name="thread-input"
+      [rows]="rows"
+      [ngModel]="draft"
+      (ngModelChange)="handleDraftChange($event)"
+      (keydown)="handleKeydown($event)"
+      [placeholder]="placeholder"
+      [disabled]="!inputReady"
+    ></textarea>
+    <div class="composer-actions">
+      <button type="submit" [disabled]="sendDisabled()">{{ sending ? "Sending" : "Send" }}</button>
+      @if (adminMode) {
+        <button
+          class="secondary send-now-button"
+          type="button"
+          title="Interrupt the current run and send this message immediately"
+          (click)="submitNow()"
+          [disabled]="sendDisabled()"
+        >
+          {{ sendingNow ? "Sending now" : "Send Now" }}
+        </button>
+      }
+    </div>
+  </div>
+</form>

@@ -21,14 +21,13 @@ import {
 } from "./threads.js";
 import { parseThreadInputCommand } from "./thread-commands.js";
 import {
-  archiveCodexAppServerThread,
-  codexAppServerThreadStatus,
-  compactCodexAppServerThread,
-  deliverCodexAppServerPendingInputs,
-  interruptCodexAppServerThread,
-  resumeCodexAppServerThread,
-  threadNeedsCodexAppServerMigration,
-  threadUsesCodexAppServer,
+  codexRuntimeThreadStatus,
+  compactCodexRuntimeThread,
+  deliverCodexRuntimePendingInputs,
+  interruptCodexRuntimeThread,
+  resumeCodexRuntimeThread,
+  threadNeedsNativeCodexRuntimeMigration,
+  threadUsesNativeCodexRuntime,
 } from "./runtime-codex-adapter.js";
 import { appendOrUpdateEventMessage, normalizeCodexModel, normalizeReasoningEffort } from "./codex-app-server-common.js";
 import { completeThreadSecurityApproveCommand, threadSecurityApproveChallengeId } from "./security-thread-command.js";
@@ -600,15 +599,15 @@ export async function runtimeStatus(threadId, env = process.env, messagesOverrid
   if (threadUsesApiAgent(thread, env)) {
     return apiAgentRuntimeStatus(thread, messages, env);
   }
-  if (threadUsesCodexAppServer(thread, env)) {
-    return codexAppServerThreadStatus(thread, env, {
+  if (threadUsesNativeCodexRuntime(thread, env)) {
+    return codexRuntimeThreadStatus(thread, env, {
       pendingCount,
       awaitingAckCount,
       nextDeliveryAttemptAt,
       runningCount,
     });
   }
-  if (threadNeedsCodexAppServerMigration(thread)) {
+  if (threadNeedsNativeCodexRuntimeMigration(thread)) {
     const status = {
       state: "migration_required",
       status: "migration_required",
@@ -1000,10 +999,10 @@ export async function wakeThread(threadId, options = {}, env = process.env) {
     error.statusCode = 404;
     throw error;
   }
-  if (threadUsesCodexAppServer(thread, env)) {
-    return resumeCodexAppServerThread(thread, env);
+  if (threadUsesNativeCodexRuntime(thread, env)) {
+    return resumeCodexRuntimeThread(thread, env);
   }
-  if (threadNeedsCodexAppServerMigration(thread)) {
+  if (threadNeedsNativeCodexRuntimeMigration(thread)) {
     const error = new Error("codex_app_server_migration_required");
     error.statusCode = 409;
     error.repair = "Run `orkestr codex migrate` on this host.";
@@ -1120,7 +1119,7 @@ export async function sleepThread(threadId, options = {}, env = process.env) {
     error.statusCode = 404;
     throw error;
   }
-  if (threadUsesCodexAppServer(thread, env)) {
+  if (threadUsesNativeCodexRuntime(thread, env)) {
     const error = new Error("codex_app_server_sleep_unsupported_use_stop");
     error.statusCode = 409;
     throw error;
@@ -1208,9 +1207,9 @@ export async function resetThreadRuntime(threadId, options = {}, env = process.e
     error.statusCode = 404;
     throw error;
   }
-  if (threadUsesCodexAppServer(thread, env)) {
-    const interrupted = await interruptCodexAppServerThread(thread, env).catch(() => ({ interrupted: false }));
-    const resumed = await resumeCodexAppServerThread(thread, env).catch(async () => ({ thread: await updateThread(thread.id, {
+  if (threadUsesNativeCodexRuntime(thread, env)) {
+    const interrupted = await interruptCodexRuntimeThread(thread, env).catch(() => ({ interrupted: false }));
+    const resumed = await resumeCodexRuntimeThread(thread, env).catch(async () => ({ thread: await updateThread(thread.id, {
       state: "ready",
       runtime: { ...(thread.runtime || {}), runtimeKind: "codex-app-server", state: "ready", activeTurnId: null, pendingRequest: null },
     }, env), status: null }));
@@ -1315,8 +1314,8 @@ async function writeManualContextCheckpoint(threadId, context = {}, env = proces
 
 async function compactCodexRuntimeContext(threadId, env = process.env) {
   const thread = await getThread(threadId, env).catch(() => null);
-  if (thread && threadUsesCodexAppServer(thread, env)) {
-    return compactCodexAppServerThread(thread, env);
+  if (thread && threadUsesNativeCodexRuntime(thread, env)) {
+    return compactCodexRuntimeThread(thread, env);
   }
   const status = await runtimeStatus(threadId, env).catch((error) => ({ error: error instanceof Error ? error.message : String(error) }));
   if (!status?.paneId) {
@@ -1418,8 +1417,8 @@ export async function hardResetThreadRuntime(threadId, options = {}, env = proce
 }
 
 async function completeStopCommand(thread, message, env = process.env) {
-  const stopped = threadUsesCodexAppServer(thread, env)
-    ? { slept: 0, interrupted: await interruptCodexAppServerThread(thread, env).catch(() => ({ interrupted: false })) }
+  const stopped = threadUsesNativeCodexRuntime(thread, env)
+    ? { slept: 0, interrupted: await interruptCodexRuntimeThread(thread, env).catch(() => ({ interrupted: false })) }
     : await sleepThread(thread.id, { reason: whatsappOrigin(message) ? "whatsapp_stop_command" : "stop_command", kill: true }, env);
   const updated = await updateThreadMessage(thread.id, message.id, {
     state: "completed",
@@ -1482,7 +1481,7 @@ function shouldDeferCodexModeCommand(result = {}) {
 }
 
 export async function completeCodexModeCommand(thread, message, mode, env = process.env) {
-  if (threadUsesCodexAppServer(thread, env)) {
+  if (threadUsesNativeCodexRuntime(thread, env)) {
     const updated = await updateThreadMessage(thread.id, message.id, {
       state: "completed",
       deliveryState: "delivered",
@@ -1679,9 +1678,9 @@ async function supersedeOlderCodexModeCommands(thread, messages, selected, parse
 async function completeInterruptCommand(thread, message, parsed, env = process.env) {
   const reason = whatsappOrigin(message) ? "whatsapp_interrupt_command" : "interrupt_command";
   const woken = await wakeThread(thread.id, { reason }, env);
-  const appServer = threadUsesCodexAppServer(woken.thread || thread, env);
-  const interrupted = appServer
-    ? Boolean((await interruptCodexAppServerThread(woken.thread || thread, env).catch(() => ({ interrupted: false }))).interrupted)
+  const nativeCodexRuntime = threadUsesNativeCodexRuntime(woken.thread || thread, env);
+  const interrupted = nativeCodexRuntime
+    ? Boolean((await interruptCodexRuntimeThread(woken.thread || thread, env).catch(() => ({ interrupted: false }))).interrupted)
     : await interruptRuntimeStatus(woken.status, env);
   const payloadText = String(parsed.text || "").trim();
   if (!payloadText && !String(message.promptFile || "").trim()) {
@@ -1970,7 +1969,7 @@ export async function applyRuntimeCodexMode(threadId, mode, env = process.env, o
     throw error;
   }
   const thread = await getThread(threadId, env).catch(() => null);
-  if (thread && threadUsesCodexAppServer(thread, env)) {
+  if (thread && threadUsesNativeCodexRuntime(thread, env)) {
     await updateThread(thread.id, codexModePersistencePatch(desired, "orkestr-command", { changed: true, reason: "app-server-local-mode" }), env).catch(() => {});
     return { applied: true, changed: true, mode: desired, reason: "app-server-local-mode" };
   }
@@ -3110,10 +3109,10 @@ export async function deliverPendingThreadInputs(threadId, env = process.env) {
     await appendEvent({ type: "thread_input_delivery_skipped", threadId: thread.id, reason: "api_agent_thread" }, env).catch(() => null);
     return [];
   }
-  if (threadUsesCodexAppServer(thread, env)) {
-    return deliverCodexAppServerPendingInputs(thread, env);
+  if (threadUsesNativeCodexRuntime(thread, env)) {
+    return deliverCodexRuntimePendingInputs(thread, env);
   }
-  if (threadNeedsCodexAppServerMigration(thread)) {
+  if (threadNeedsNativeCodexRuntimeMigration(thread)) {
     await appendEvent({ type: "thread_input_delivery_blocked", threadId: thread.id, reason: "codex_app_server_migration_required" }, env).catch(() => null);
     return [];
   }
@@ -3326,8 +3325,8 @@ export function requestThreadWake(threadId, options = {}, env = process.env) {
     void wakeThread(threadId, options, env).catch(async (error) => {
       const errorText = error instanceof Error ? error.message : String(error);
       const current = await getThread(threadId, env).catch(() => null);
-      const appServer = current && threadUsesCodexAppServer(current, env);
-      await updateThread(threadId, appServer ? {
+      const nativeCodexRuntime = current && threadUsesNativeCodexRuntime(current, env);
+      await updateThread(threadId, nativeCodexRuntime ? {
         state: "failed",
         lastError: errorText,
         runtime: {
@@ -3346,7 +3345,7 @@ export function requestThreadWake(threadId, options = {}, env = process.env) {
         threadId,
         reason: options.reason || "wake",
         error: errorText,
-        runtimeKind: appServer ? "codex-app-server" : "codex-tmux",
+        runtimeKind: nativeCodexRuntime ? "codex-app-server" : "codex-tmux",
       }, env).catch(() => {});
     });
   });
@@ -3490,7 +3489,7 @@ function codexRolloutPathForThread(thread = {}) {
 
 function shouldSyncDetachedRollout(thread = {}, activeLeaseThreadIds = new Set()) {
   if (!thread?.id || activeLeaseThreadIds.has(thread.id)) return false;
-  if (!threadUsesCodexAppServer(thread)) return false;
+  if (!threadUsesNativeCodexRuntime(thread)) return false;
   if (threadUsesContainedUserPolicy(thread)) return false;
   if (String(thread?.binding?.connector || "").trim().toLowerCase() !== "whatsapp") return false;
   return Boolean(codexThreadId(thread) || codexRolloutPathForThread(thread));

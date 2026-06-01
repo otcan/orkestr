@@ -1173,73 +1173,28 @@
       }
 
       @if (activePanel === "chat") {
-        <form
-          class="composer"
-          [class.dragging]="draggingUpload"
-          (submit)="sendMessage(); $event.preventDefault()"
-          (dragover)="handleDragOver($event)"
-          (dragenter)="handleDragEnter($event)"
-          (dragleave)="handleDragLeave($event)"
-          (drop)="handleDrop($event)"
-        >
-          <input
-            #composerFilePicker
-            class="visually-hidden"
-            type="file"
-            multiple
-            (change)="queueFiles(composerFilePicker.files); composerFilePicker.value = ''"
-          />
-          @if (pendingFiles.length > 0) {
-            <div class="queued-files">
-              @for (file of pendingFiles; track file.id) {
-                <span class="file-chip">
-                  {{ file.name }} <small>{{ formatBytes(file.size) }}</small>
-                  <button type="button" (click)="removePendingFile(file.id)">×</button>
-                </span>
-              }
-            </div>
-          }
-          @if (showPlanComposerBanner(thread)) {
-            <div class="plan-composer-banner" [class.ready]="thread.planImplementationReady">
-              <div>
-                <strong>Planning mode</strong>
-                <span>{{ planComposerHint(thread) }}</span>
-              </div>
-            </div>
-          }
-          <div class="composer-row">
-            <div class="composer-tools">
-              <button class="secondary upload-button" type="button" (click)="composerFilePicker.click()" title="Upload files">Upload</button>
-              @if (isAdminMode()) {
-                <button class="secondary command-help-button" type="button" (click)="openSlashHelp()" title="Command help" aria-haspopup="dialog" [attr.aria-expanded]="slashHelpOpen">Help</button>
-              }
-            </div>
-            <textarea
-              #composerInput
-              name="thread-input"
-              [rows]="composerRows()"
-              [(ngModel)]="draft"
-              (ngModelChange)="persistThreadTextField('draft', $event)"
-              (keydown)="handleComposerKeydown($event)"
-              [placeholder]="composerPlaceholder(thread)"
-              [disabled]="!threadInputReady()"
-            ></textarea>
-            <div class="composer-actions">
-              <button type="submit" [disabled]="sending || sendingNow || implementingPlan || !threadInputReady() || (!draft.trim() && pendingFiles.length === 0)">{{ sending ? "Sending" : "Send" }}</button>
-              @if (isAdminMode()) {
-                <button
-                  class="secondary send-now-button"
-                  type="button"
-                  title="Interrupt the current run and send this message immediately"
-                  (click)="sendMessageNow()"
-                  [disabled]="sending || sendingNow || implementingPlan || !threadInputReady() || (!draft.trim() && pendingFiles.length === 0)"
-                >
-                  {{ sendingNow ? "Sending now" : "Send Now" }}
-                </button>
-              }
-            </div>
-          </div>
-        </form>
+        <ork-thread-composer
+          [thread]="thread"
+          [draft]="draft"
+          (draftChange)="persistThreadTextField('draft', $event)"
+          [pendingFiles]="pendingFiles"
+          [sending]="sending"
+          [sendingNow]="sendingNow"
+          [implementingPlan]="implementingPlan"
+          [inputReady]="threadInputReady()"
+          [adminMode]="isAdminMode()"
+          [slashHelpOpen]="slashHelpOpen"
+          [showPlanBanner]="showPlanComposerBanner(thread)"
+          [planReady]="!!thread.planImplementationReady"
+          [planHint]="planComposerHint(thread)"
+          [placeholder]="composerPlaceholder(thread)"
+          [rows]="composerRows()"
+          (queueFiles)="queueFiles($event)"
+          (removeFile)="removePendingFile($event)"
+          (send)="sendMessage()"
+          (sendNow)="sendMessageNow()"
+          (openHelp)="openSlashHelp()"
+        ></ork-thread-composer>
       }
     } @else {
       <section class="empty-state full">

@@ -267,6 +267,7 @@ test("runtime approval controls require an actionable pending request", async ()
 test("web shell switches to a constrained non-admin user mode", async () => {
   const template = await fs.readFile("apps/web/src/app/app.component.html", "utf8");
   const component = await fs.readFile("apps/web/src/app/app.component.ts", "utf8");
+  const composerTemplate = await fs.readFile("apps/web/src/app/thread-composer.component.html", "utf8");
   const api = await fs.readFile("apps/web/src/app/api.service.ts", "utf8");
   const usersController = await fs.readFile("apps/server/src/modules/users/users.controller.ts", "utf8");
   const styles = await fs.readFile("apps/web/src/styles.css", "utf8");
@@ -299,7 +300,8 @@ test("web shell switches to a constrained non-admin user mode", async () => {
   assert.match(template, /@if \(activePanel === "settings" && isAdminMode\(\)\)/);
   assert.match(template, /@if \(activePanel === "workers" && isAdminMode\(\)\)/);
   assert.match(template, /@if \(isAdminMode\(\)\) \{\s*<div class="codex-control-scroll"/s);
-  assert.match(template, /\[disabled\]="!threadInputReady\(\)"/);
+  assert.match(template, /\[inputReady\]="threadInputReady\(\)"/);
+  assert.match(composerTemplate, /\[disabled\]="!inputReady"/);
   assert.match(styles, /\.user-mode-card/);
   assert.match(styles, /\.user-mode-nav/);
 });
