@@ -387,6 +387,38 @@ export async function resumeCodexAppServerThread(thread, env = process.env) {
   return withInternalClient({ thread: updated, codexThread, status: await codexAppServerThreadStatus(updated, env) }, client);
 }
 
+export async function answerCodexAppServerPendingRequest(thread, options = {}, env = process.env) {
+  const current = thread?.id ? await getThread(thread.id, env).catch(() => null) || thread : thread;
+  if (!current?.id) return { ok: false, answered: false, reason: "thread_required" };
+  const id = codexThreadId(current);
+  if (!id) return { ok: false, answered: false, reason: "codex_thread_id_required" };
+  const status = await codexAppServerThreadStatus(current, env).catch((error) => ({
+    state: "failed",
+    error: publicError(error),
+    pendingRequest: null,
+  }));
+  if (status.state !== "awaiting_approval" || !status.pendingRequest) {
+    return { ok: false, answered: false, reason: "no_pending_request", status };
+  }
+  const refreshed = await getThread(current.id, env).catch(() => null) || current;
+  await ensureContainedCodexRuntimeHome(refreshed, env);
+  const runtimeEnv = codexRuntimeEnvForThread(refreshed, env);
+  const client = await getCodexAppServerClient({ env: runtimeEnv, home: runtimeHome(runtimeEnv) });
+  const request = client.pendingRequestForThread(refreshed, { includePersisted: true });
+  if (!request) return { ok: false, answered: false, reason: "pending_request_not_actionable", status };
+  const decision = clean(options.decision || "accept") || "accept";
+  const text = clean(options.text || "");
+  const answeredRequest = await client.answerPendingRequest(refreshed, decision, { text });
+  const updated = await getThread(current.id, env).catch(() => null) || refreshed;
+  return {
+    ok: true,
+    answered: true,
+    request: answeredRequest,
+    thread: updated,
+    status: await codexAppServerThreadStatus(updated, env).catch(() => null),
+  };
+}
+
 export async function interruptCodexAppServerThread(thread, env = process.env) {
   const id = codexThreadId(thread);
   if (!id) return { interrupted: false, reason: "codex_thread_id_required" };
@@ -667,7 +699,8 @@ async function deliverCodexAppServerPendingInputsUnlocked(thread, env = process.
       return delivered;
     }
   }
-  const pendingApproval = client.pendingRequestForThread(thread);
+  const approvalStatusState = appServerStateFromStatus(client.threadStates.get(id)?.status || thread.runtime?.codexStatus);
+  const pendingApproval = client.pendingRequestForThread(thread, { includePersisted: approvalStatusState === "awaiting_approval" });
   const text = clean(next.text);
   if (pendingApproval?.method === "item/tool/requestUserInput") {
     await client.answerPendingRequest(thread, "answer", { text });
@@ -795,7 +828,8 @@ export async function codexAppServerThreadStatus(thread, env = process.env, coun
       state = liveState;
     }
   }
-  const pendingRequest = client?.pendingRequestForThread(thread) || thread.runtime?.pendingRequest || null;
+  const livePendingRequest = client?.pendingRequestForThread(thread, { includePersisted: false }) || null;
+  const persistedPendingRequest = thread.runtime?.pendingRequest || null;
   const rawCodexStatus = hasClientState ? state.status || null : thread.runtime?.codexStatus || null;
   const stateActiveTurnId = hasClientState && Object.prototype.hasOwnProperty.call(state, "activeTurnId")
     ? clean(state.activeTurnId)
@@ -803,6 +837,28 @@ export async function codexAppServerThreadStatus(thread, env = process.env, coun
   const knownActiveTurnWithIdleStatus = Boolean(stateActiveTurnId && appServerStateFromStatus(rawCodexStatus) === "ready" && clean(rawCodexStatus?.type).toLowerCase() === "idle");
   const rawStatusState = knownActiveTurnWithIdleStatus ? "working" : appServerStateFromStatus(rawCodexStatus);
   const statusState = hasClientState || rawStatusState !== "working" ? rawStatusState : "";
+  const pendingRequest = livePendingRequest || (persistedPendingRequest && rawStatusState === "awaiting_approval" ? persistedPendingRequest : null);
+  if (persistedPendingRequest && !pendingRequest && ["ready", "failed", "unloaded"].includes(rawStatusState)) {
+    await updateThread(thread.id, {
+      state: rawStatusState === "ready" ? "ready" : rawStatusState,
+      runtime: {
+        ...(thread.runtime || {}),
+        runtimeKind: "codex-app-server",
+        state: rawStatusState === "ready" ? "ready" : rawStatusState,
+        pendingRequest: null,
+        activeTurnId: rawStatusState === "ready" ? null : thread.runtime?.activeTurnId || null,
+        codexStatus: rawCodexStatus || null,
+        updatedAt: nowIso(),
+      },
+    }, env).catch(() => {});
+    await appendEvent({
+      type: "codex_app_server_stale_pending_request_cleared",
+      threadId: thread.id,
+      codexThreadId: id || null,
+      status: rawStatusState,
+      requestId: clean(persistedPendingRequest.requestId || persistedPendingRequest.id),
+    }, env).catch(() => {});
+  }
   const activeTurnId = statusState && ["ready", "failed", "unloaded", "awaiting_approval"].includes(statusState)
     ? ""
     : stateActiveTurnId;

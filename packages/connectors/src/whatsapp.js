@@ -5,11 +5,13 @@ import os from "node:os";
 import { enqueueAgentMessage, updateAgentMessage } from "../../core/src/messages.js";
 import { resourceOwnerUserId } from "../../core/src/policy.js";
 import { adminPrincipal, userPrincipal } from "../../core/src/principal.js";
+import { appServerStateFromStatus } from "../../core/src/codex-app-server-common.js";
 import { clearRuntimeLeasesForThread, runtimeStatus } from "../../core/src/runtime-leases.js";
+import { classifyApprovalReply } from "../../core/src/runtime-settings.js";
 import { processApiAgentThreadInput, threadUsesApiAgent } from "../../core/src/tenant-api-agent.js";
 import { threadRequiresTenantIsolation } from "../../core/src/tenant-policy.js";
 import { parseThreadInputCommand } from "../../core/src/thread-commands.js";
-import { createThreadForPrincipal, enqueueThreadInputForPrincipal, listThreadMessages, listThreads, listThreadsForPrincipal, updateThread, updateThreadMessage } from "../../core/src/threads.js";
+import { appendThreadMessage, createThreadForPrincipal, enqueueThreadInputForPrincipal, listThreadMessages, listThreads, listThreadsForPrincipal, updateThread, updateThreadMessage } from "../../core/src/threads.js";
 import { adminUserId, findOrCreateExternalUser, normalizeUserId } from "../../core/src/users.js";
 import { dataPaths, ensureDataDirs } from "../../storage/src/paths.js";
 import { readConnectorConfig } from "../../storage/src/config.js";
@@ -422,6 +424,34 @@ function principalForThread(thread = {}, env = process.env) {
   const adminId = normalizeUserId(env.ORKESTR_ADMIN_USER_ID || adminUserId);
   if (ownerUserId === adminId) return adminPrincipal({ id: adminId, displayName: "Admin" });
   return userPrincipal({ id: ownerUserId, role: "user", displayName: ownerUserId, source: "whatsapp-owner" });
+}
+
+function explicitWhatsAppApprovalReply(text = "") {
+  const normalized = pickString(text).toLowerCase().replace(/\s+/g, " ");
+  if (!normalized.startsWith("/approve") && !normalized.startsWith("/deny")) return null;
+  const classified = classifyApprovalReply(text);
+  return classified.action ? classified : null;
+}
+
+function threadHasActionableStoredPendingRequest(thread = {}) {
+  const runtime = thread?.runtime || {};
+  const pendingRequest = runtime.pendingRequest || thread.pendingRequest || null;
+  if (!pendingRequest || typeof pendingRequest !== "object") return false;
+  const statusState = appServerStateFromStatus(runtime.codexStatus || thread.codexStatus || null);
+  const storedState = pickString(runtime.state, thread.state, thread.status).toLowerCase();
+  return statusState === "awaiting_approval" ||
+    (!statusState && storedState === "awaiting_approval") ||
+    thread?.turnLifecycle?.awaitingApproval === true;
+}
+
+function isCodexAppServerThread(thread = {}) {
+  return pickString(
+    thread.runtimeKind,
+    thread.runtime?.runtimeKind,
+    thread.executor?.metadata?.runtimeKind,
+    thread.executor?.transport,
+  ).toLowerCase() === "codex-app-server" ||
+    pickString(thread.executor?.transport).toLowerCase() === "app-server";
 }
 
 function shouldUseApiAgentForWhatsAppThread(thread = {}, env = process.env) {
@@ -934,6 +964,62 @@ export async function routeWhatsAppInbound(input = {}, env = process.env) {
   };
   let thread = threadId ? (await listThreads(env)).find((item) => item.id === threadId || item.name === threadId || item.bindingName === threadId) : null;
   thread = await ensureApiAgentWhatsAppThread(thread, env);
+  const approvalReply = explicitWhatsAppApprovalReply(text);
+  if (threadId && thread && isCodexAppServerThread(thread) && approvalReply && !threadHasActionableStoredPendingRequest(thread)) {
+    const message = await appendThreadMessage(thread.id, {
+      ...messageInput,
+      role: "user",
+      state: "completed",
+      deliveryState: "ignored",
+      deliveredAt: new Date().toISOString(),
+      observedVia: "whatsapp_codex_app_server_approval_not_pending",
+    }, env);
+    await appendThreadMessage(thread.id, {
+      role: "assistant",
+      source: "orkestr_runtime",
+      phase: "final_answer",
+      text: `No Codex approval request is pending for this thread, so I did not forward "${text}" to Codex.`,
+      state: "completed",
+      parentMessageId: message.id,
+      connector: "whatsapp",
+      chatId,
+      accountId,
+    }, env);
+    const event = {
+      eventId,
+      agentId: null,
+      threadId,
+      messageId: message.id,
+      chatId,
+      from,
+      accountId,
+      attachments: Array.isArray(input.attachments) ? input.attachments : [],
+      receivedAt: pickString(input.timestamp, input.receivedAt) || new Date().toISOString(),
+    };
+    state.inboundEvents = [...(state.inboundEvents || []), event];
+    await writeWhatsAppState(state, env);
+    await appendEvent({
+      type: "whatsapp_approval_command_without_pending_request",
+      eventId,
+      threadId,
+      messageId: message.id,
+      action: approvalReply.action,
+      chatId,
+    }, env);
+    return {
+      duplicate: false,
+      event,
+      agentId: null,
+      threadId,
+      ownerUserId: resourceOwnerUserId(thread, env),
+      autoProvisioned: threadRoute.autoProvisioned === true,
+      createdThread: threadRoute.createdThread === true,
+      userId: threadRoute.user?.id || null,
+      message,
+      approvalHandled: false,
+      reason: "no_pending_request",
+    };
+  }
   let message = threadId
     ? await enqueueThreadInputForPrincipal(threadId, messageInput, principalForThread(thread, env), env)
     : await enqueueAgentMessage(agentId, messageInput, env);

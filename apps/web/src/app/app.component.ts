@@ -1097,6 +1097,10 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     const thread = this.selectedThread();
     if (!thread) return;
     if (!this.guardCodexRuntime()) return;
+    if (!this.hasActionablePendingApproval(thread)) {
+      this.error = "No Codex approval request is pending for this thread.";
+      return;
+    }
     this.busy = true;
     try {
       await firstValueFrom(this.api.approveThread(thread.id, this.approveText.trim() || "Approved. Proceed."));
@@ -2737,6 +2741,34 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   canRecoverThread(thread: ThreadSummary): boolean {
     const state = this.threadState(thread);
     return state.includes("broken") || state.includes("failed") || Boolean(thread["lastError"]);
+  }
+
+  pendingApprovalRequest(thread: ThreadSummary | null = this.selectedThread()): Record<string, unknown> | null {
+    const candidates = [
+      this.pathValue(thread, "runtime.pendingRequest"),
+      this.pathValue(thread, "pendingRequest"),
+      this.pathValue(this.runtimeDetails, "runtime.pendingRequest"),
+      this.pathValue(this.runtimeDetails, "pendingRequest"),
+    ];
+    return candidates.find((candidate): candidate is Record<string, unknown> => !!candidate && typeof candidate === "object") || null;
+  }
+
+  hasActionablePendingApproval(thread: ThreadSummary | null = this.selectedThread()): boolean {
+    if (!this.pendingApprovalRequest(thread)) return false;
+    const runtimeState = [
+      thread?.state,
+      thread?.status,
+      thread?.turnLifecycle?.state,
+      this.objectValue(thread?.runtime, "state"),
+      this.objectValue(thread?.runtime, "status"),
+      this.objectValue(this.runtimeDetails?.["runtime"], "state"),
+      this.objectValue(this.runtimeDetails?.["runtime"], "status"),
+    ].map((value) => String(value || "").trim().toLowerCase());
+    const codexStatus = (thread?.codexStatus || this.pathValue(thread, "runtime.codexStatus") || this.pathValue(this.runtimeDetails, "runtime.codexStatus")) as Record<string, unknown> | null;
+    const flags = Array.isArray(codexStatus?.["activeFlags"]) ? codexStatus["activeFlags"].map((flag) => String(flag || "")) : [];
+    return runtimeState.includes("awaiting_approval") ||
+      thread?.turnLifecycle?.awaitingApproval === true ||
+      flags.includes("waitingOnApproval");
   }
 
   activityTime(thread: ThreadSummary): Date {
