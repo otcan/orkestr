@@ -1306,6 +1306,28 @@ EOF
   chmod 0640 "$env_file"
 }
 
+ensure_overlay_file() {
+  local overlay_dir overlay_file
+  overlay_dir="${ORKESTR_OVERLAY_DIR:-/opt/orkestr/overlay}"
+  overlay_file="$overlay_dir/overlay.json"
+  mkdir -p "$overlay_dir"
+  if [ ! -e "$overlay_file" ]; then
+    cat > "$overlay_file" <<'EOF'
+{
+  "name": "Private Orkestr",
+  "connectors": {},
+  "executors": {
+    "default": "noop",
+    "modules": []
+  },
+  "agents": [],
+  "timers": []
+}
+EOF
+  fi
+  chown -R "$run_user:$run_group" "$overlay_dir"
+}
+
 env_file_value() {
   local name value
   name="$1"
@@ -2252,8 +2274,9 @@ Update Codex or set ORKESTR_CODEX_BIN to a newer Codex CLI before installing.
 EOF
     exit 1
   fi
-  mkdir -p "$data_dir" "$data_dir/run" "$workspace_dir" /opt/orkestr/overlay
-  chown -R "$run_user:$run_group" "$data_dir" "$workspace_dir" /opt/orkestr/overlay
+  mkdir -p "$data_dir" "$data_dir/run" "$workspace_dir"
+  chown -R "$run_user:$run_group" "$data_dir" "$workspace_dir"
+  ensure_overlay_file
   mkdir -p "$codex_home"
   chown -R "$run_user:$run_group" "$codex_home"
   chmod 0700 "$codex_home"

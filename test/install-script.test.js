@@ -184,6 +184,9 @@ test("install script exposes a host-native systemd VPS path", async () => {
   assert.match(script, /ORKESTR_UPDATE_INTERVAL_SECONDS/);
   assert.match(script, /ORKESTR_RESET_ON_UPDATE=\$\{ORKESTR_RESET_ON_UPDATE:-0\}/);
   assert.match(script, /ORKESTR_RESET_OVERLAY=\$\{ORKESTR_RESET_OVERLAY:-0\}/);
+  assert.match(script, /ensure_overlay_file\(\)/);
+  assert.match(script, /overlay\.json/);
+  assert.match(script, /"default": "noop"/);
   assert.match(script, /sqlite3/);
   assert.match(script, /util-linux/);
   assert.match(script, /install_desktop_packages/);
