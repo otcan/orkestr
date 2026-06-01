@@ -35,6 +35,14 @@ function envFlag(value) {
   return ["1", "true", "yes", "on"].includes(String(value || "").trim().toLowerCase());
 }
 
+function approvalInstructions(env = process.env) {
+  return {
+    sshCommand: String(env.ORKESTR_SECURITY_APPROVE_SSH_COMMAND || "").trim(),
+    approveCommand: String(env.ORKESTR_SECURITY_APPROVE_COMMAND || "").trim(),
+    sudoApproveCommand: String(env.ORKESTR_SECURITY_APPROVE_SUDO_COMMAND || "").trim(),
+  };
+}
+
 async function readSecurityConfig(env = process.env) {
   const config = await readJson(secretPath(env), { enabled: false, sessions: [], challenges: [] });
   return {
@@ -270,6 +278,7 @@ export async function securityStatus(env = process.env) {
       authUrl: urls.authUrl || httpsUrl,
       primaryDomain: urls.primaryDomain,
     },
+    approval: approvalInstructions(env),
     caddy: {
       installed: caddy.installed || caddyConfigured,
       configured: caddyConfigured,

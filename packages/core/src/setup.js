@@ -80,6 +80,11 @@ function publicSetupSecurityStatus(security = {}) {
     https: {
       configured: Boolean(security?.https?.configured),
     },
+    approval: {
+      sshCommand: String(security?.approval?.sshCommand || ""),
+      approveCommand: String(security?.approval?.approveCommand || ""),
+      sudoApproveCommand: String(security?.approval?.sudoApproveCommand || ""),
+    },
     mtls: {
       enabled: Boolean(security?.mtls?.enabled),
       configured: Boolean(security?.mtls?.configured),

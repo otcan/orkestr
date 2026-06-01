@@ -307,6 +307,11 @@ export interface SecurityStatus {
     authUrl?: string;
     primaryDomain?: string;
   };
+  approval?: {
+    sshCommand?: string;
+    approveCommand?: string;
+    sudoApproveCommand?: string;
+  };
   caddy?: {
     installed?: boolean;
     configured?: boolean;

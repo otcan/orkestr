@@ -81,6 +81,9 @@ test("redacted setup status keeps public app and auth URLs for pairing", async (
       ORKESTR_APP_HOST: "app.orkestr.de",
       ORKESTR_AUTH_HOST: "auth.orkestr.de",
       ORKESTR_AUTH_REQUIRED: "1",
+      ORKESTR_SECURITY_APPROVE_SSH_COMMAND: "ssh root@203.0.113.10",
+      ORKESTR_SECURITY_APPROVE_COMMAND: "orkestr-de security approve <challenge-id>",
+      ORKESTR_SECURITY_APPROVE_SUDO_COMMAND: "sudo orkestr-de security approve <challenge-id>",
     },
   });
 
@@ -88,4 +91,7 @@ test("redacted setup status keeps public app and auth URLs for pairing", async (
   assert.equal(redacted.urls.appUrl, "https://app.orkestr.de");
   assert.equal(redacted.urls.authUrl, "https://auth.orkestr.de");
   assert.equal(redacted.security.https.url, undefined);
+  assert.equal(redacted.security.approval.sshCommand, "ssh root@203.0.113.10");
+  assert.equal(redacted.security.approval.approveCommand, "orkestr-de security approve <challenge-id>");
+  assert.equal(redacted.security.approval.sudoApproveCommand, "sudo orkestr-de security approve <challenge-id>");
 });
