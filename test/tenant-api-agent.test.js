@@ -117,6 +117,84 @@ test("tenant api-agent answers non-admin WhatsApp thread without Codex delivery"
   assert.equal(usage.byModel["gpt-5-mini"] > 0, true);
 });
 
+test("tenant api-agent repairs bare acknowledgements for identity and capability turns", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-api-agent-repair-"));
+  const env = await allowSanitizerEnv(home);
+  await createThread({
+    id: "otcantest-repair",
+    ownerUserId: "otcan",
+    name: "otcantest",
+    bindingName: "orkestr.de",
+    runtimeKind: "api-agent",
+    executorId: "api-agent",
+    executor: { type: "api-agent", metadata: { runtimeKind: "api-agent" } },
+    binding: { connector: "whatsapp", chatId: "chat-otcan", displayName: "orkestr.de", outboundAccountId: "wa-1" },
+  }, env);
+  await appendThreadMessage("otcantest-repair", {
+    role: "user",
+    text: "who am I?",
+    state: "completed",
+  }, env);
+  await appendThreadMessage("otcantest-repair", {
+    role: "assistant",
+    source: "api-agent",
+    phase: "final_answer",
+    text: "You are the person messaging this WhatsApp chat.",
+    state: "completed",
+  }, env);
+  const input = await enqueueThreadInputForPrincipal("otcantest-repair", {
+    text: "I'm Can. How can you help me?",
+    source: "whatsapp_inbound",
+    connector: "whatsapp",
+    chatId: "chat-otcan",
+    accountId: "wa-1",
+  }, userPrincipal({ id: "otcan", role: "user" }), env);
+
+  const calls = [];
+  const result = await processApiAgentThreadInput("otcantest-repair", env, {
+    fetchImpl: async (_url, options) => {
+      const body = JSON.parse(options.body);
+      calls.push(body);
+      if (calls.length === 1) {
+        const context = tenantContextFromInstructions(body.instructions);
+        assert.equal(context.chat.chatName, "orkestr.de");
+        assert.equal(context.chat.surface, "WhatsApp chat");
+        assert.match(body.instructions, /Never answer a normal chat question/i);
+        assert.match(body.instructions, /Use the recent message history for conversational identity/i);
+        return response({
+          id: "resp_api_agent_repair_1",
+          model: "gpt-5-mini",
+          output_text: "Done.",
+          output: [],
+          usage: { input_tokens: 250, output_tokens: 2 },
+        });
+      }
+      assert.equal(body.tools, undefined);
+      assert.match(body.instructions, /Response repair/i);
+      assert.match(body.input.at(-1).content, /I'm Can\. How can you help me\?/);
+      return response({
+        id: "resp_api_agent_repair_2",
+        model: "gpt-5-mini",
+        output_text: "Got it, Can. I can help you here on WhatsApp with questions, planning, drafting, and any tenant features that are connected for this chat. For workspace execution, send the task with /codex.",
+        output: [],
+        usage: { input_tokens: 310, output_tokens: 37 },
+      });
+    },
+  });
+  const messages = await listThreadMessages("otcantest-repair", env);
+  const current = messages.find((message) => message.id === input.id);
+  const assistant = messages.find((message) => message.parentMessageId === input.id);
+  const usage = await creditUsageSummary({ tenantId: "otcan" }, env);
+
+  assert.equal(result.ok, true);
+  assert.equal(calls.length, 2);
+  assert.equal(current.state, "completed");
+  assert.equal(assistant.text.trim(), "Got it, Can. I can help you here on WhatsApp with questions, planning, drafting, and any tenant features that are connected for this chat. For workspace execution, send the task with /codex.");
+  assert.notEqual(assistant.text.trim(), "Done.");
+  assert.equal(usage.count, 2);
+  assert.equal(usage.recent.some((record) => record.callKind === "assistant_repair"), true);
+});
+
 test("tenant api-agent retries stale running messages after a restart", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-api-agent-stale-running-"));
   const env = await allowSanitizerEnv(home, { ORKESTR_API_AGENT_STALE_RUNNING_MS: "1000" });

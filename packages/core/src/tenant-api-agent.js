@@ -165,6 +165,49 @@ function normalizeTenantApiAgentText(text = "") {
     .trim();
 }
 
+function weakTenantApiAgentText(text = "") {
+  return /^(?:done|ok|okay|sure|yes|no|acknowledged|completed|finished|handled)[.!?]*$/i.test(clean(text));
+}
+
+function userMessageNeedsSubstantiveAnswer(text = "") {
+  const value = clean(text);
+  if (!value) return false;
+  if (/[?]/.test(value)) return true;
+  if (/^(?:who|what|why|how|when|where|which|can|could|would|should|do|does|did|is|are|am|will|tell|explain|help)\b/i.test(value)) return true;
+  if (/\b(?:who am i|what can you do|how can you help|what skills|which skills)\b/i.test(value)) return true;
+  if (/\b(?:i am|i['"]m|im|my name is|call me)\s+[a-z]/i.test(value)) return true;
+  return false;
+}
+
+function tenantApiAgentTextNeedsRepair(text = "", message = {}) {
+  return weakTenantApiAgentText(text) && userMessageNeedsSubstantiveAnswer(message.text);
+}
+
+function introducedName(text = "") {
+  const match = clean(text).match(/\b(?:i am|i['"]m|im|my name is|call me)\s+([a-z][a-z .'-]{0,48})/i);
+  if (!match) return "";
+  return clean(match[1])
+    .replace(/[.?!,;:].*$/g, "")
+    .split(/\s+/)
+    .slice(0, 3)
+    .join(" ");
+}
+
+function fallbackWeakTenantApiAgentAnswer(message = {}) {
+  const text = clean(message.text);
+  const name = introducedName(text);
+  if (name) {
+    return `Got it, ${name}. I can help in this chat with questions, planning, drafting, and tenant features that are connected for this user. For workspace execution, send the task with /codex.`;
+  }
+  if (/\bwho\s+am\s+i\b/i.test(text)) {
+    return "You are the person messaging this Orkestr chat. I can use identity details you share in this conversation, but I will not guess private profile details.";
+  }
+  if (/\b(?:what can you do|how can you help|what skills|which skills)\b/i.test(text)) {
+    return "I can help in this chat with questions, planning, drafting, and tenant features that are connected for this user. For workspace execution, send the task with /codex.";
+  }
+  return "I can help in this chat. Tell me what you want to do, and if it needs workspace execution send the task with /codex.";
+}
+
 function responseFunctionCalls(response = {}) {
   return (Array.isArray(response.output) ? response.output : []).filter((item) => item?.type === "function_call" && clean(item.name));
 }
@@ -187,6 +230,28 @@ function messageInputItem(message = {}) {
 
 function sourceChannelForMessage(message = {}) {
   return clean(message.connector || message.originSurface || message.source || "");
+}
+
+function sourceChannelForThread(thread = {}) {
+  return thread.binding?.connector === "whatsapp" || thread.binding?.chatId ? "whatsapp" : "web";
+}
+
+function publicThreadLabel(thread = {}) {
+  return clean(thread.bindingName || thread.binding?.displayName || thread.name || thread.title || thread.id);
+}
+
+function publicChatContext(thread = {}) {
+  const binding = thread.binding && typeof thread.binding === "object" ? thread.binding : {};
+  const channel = sourceChannelForThread(thread);
+  const chatName = clean(binding.displayName || thread.bindingName || thread.name || thread.title);
+  return {
+    channel,
+    surface: channel === "whatsapp" ? "WhatsApp chat" : "web chat",
+    chatName: chatName || null,
+    threadLabel: publicThreadLabel(thread) || null,
+    connector: clean(binding.connector) || (channel === "whatsapp" ? "whatsapp" : ""),
+    hasChatBinding: Boolean(binding.chatId || binding.connector),
+  };
 }
 
 function publicSkillEnabled(skill = {}, capabilities = {}, scopedConnectors = {}) {
@@ -311,11 +376,13 @@ async function scopedCapabilitiesForThread(thread = {}, env = process.env) {
 async function tenantContext(thread = {}, messages = [], env = process.env) {
   const ownerUserId = threadOwnerUserId(thread, env);
   const capabilities = await scopedCapabilitiesForThread(thread, env);
+  const chat = publicChatContext(thread);
   return {
     tenantId: ownerUserId,
     threadId: thread.id || null,
-    threadName: thread.bindingName || thread.name || thread.title || thread.id || null,
-    sourceChannel: thread.binding?.connector === "whatsapp" || thread.binding?.chatId ? "whatsapp" : "web",
+    threadName: chat.threadLabel,
+    sourceChannel: chat.channel,
+    chat,
     runtimeKind: API_AGENT_RUNTIME_KIND,
     capabilities: publicTenantCapabilities(capabilities),
     recentMessageCount: Math.min(20, messages.length),
@@ -326,8 +393,12 @@ export async function buildTenantApiAgentInstructions(thread = {}, messages = []
   const context = await tenantContext(thread, messages, env);
   return [
     "You are the user-facing assistant for one Orkestr tenant chat.",
+    "Treat this as a real conversation in the user's chat, not as a job runner that answers normal messages with a completion token.",
     "Be natural, concise, and helpful. Do not expose Orkestr internals, Codex runtime details, queues, tmux, shell paths, debug strings, or implementation wording unless the user explicitly asks about Orkestr operations.",
     "You are scoped to the tenant in the JSON context below. Do not claim access to files, Gmail, Outlook, LinkedIn, WhatsApp accounts, browser desktops, timers, or other chats unless the provided Orkestr tools or context show them for this tenant.",
+    "Use the recent message history for conversational identity. If the user says their name or identity, acknowledge it and use it in later turns. If the user asks 'who am I?', answer from the conversation and the Tenant context instead of asking a vague clarification.",
+    "If the user asks how you can help, what you can do, or what skills you have, answer with a short capability summary grounded in the Tenant context and enabled skills. For workspace/code execution, mention /codex as the explicit escalation path.",
+    "Never answer a normal chat question, introduction, or capability question with only 'Done', 'OK', 'Sure', or another bare acknowledgement.",
     "Use the provided Orkestr tools for tenant-scoped resources. If the user asks whether Gmail, Outlook, Jira, Shopify, or WhatsApp is connected, available, enabled, or accessible, use the connector status tool before answering.",
     "If the user asks to connect, sign in, log in, set up, disconnect, or reconnect Gmail, Outlook, Jira, or Shopify, use the connector auth/disconnect tools and give the returned sign-in instructions.",
     "Connector setup is user-owned by default. When a connector is not connected or a matching capability is false, say that it is not connected for this chat yet and that you can help set it up here.",
@@ -465,6 +536,53 @@ async function handleCodexEscalation(thread, message, env = process.env) {
   return { escalated: true, thread: updated };
 }
 
+function repairConversationInput(inputItems = []) {
+  return inputItems.map((item) => {
+    if (clean(item?.role) && item.content !== undefined) {
+      return { role: lower(item.role) === "assistant" ? "assistant" : "user", content: clean(item.content) };
+    }
+    if (item?.type === "function_call") {
+      return { role: "assistant", content: `Called tenant tool ${clean(item.name)} with ${clean(item.arguments || "{}")}.` };
+    }
+    if (item?.type === "function_call_output") {
+      return { role: "user", content: `Tenant tool result: ${clean(item.output).slice(0, 20_000)}` };
+    }
+    return null;
+  }).filter(Boolean);
+}
+
+async function repairWeakTenantApiAgentResponse({ baseBody, inputItems, thread, message, text, env, fetchImpl }) {
+  const repairBody = {
+    ...baseBody,
+    instructions: [
+      baseBody.instructions,
+      "",
+      "Response repair: the previous draft was only a bare acknowledgement and is not acceptable as the final answer for the latest user message.",
+      "Write the actual final answer now. Keep it concise, conversational, and grounded in the Tenant context.",
+      "If the latest user message introduced a name or identity, acknowledge it and briefly say how you can help.",
+      "If the latest user message asks what you can do or how you can help, provide a short practical capability summary and mention /codex for workspace execution.",
+      "Do not use tools during this repair step.",
+    ].join("\n"),
+    input: [
+      ...repairConversationInput(inputItems).slice(-30),
+      { role: "assistant", content: clean(text) || "Done." },
+      {
+        role: "user",
+        content: [
+          "Rewrite the previous assistant draft as a useful final answer for this latest user message.",
+          `Latest user message: ${clean(message.text).slice(0, 4000)}`,
+        ].join("\n"),
+      },
+    ],
+  };
+  delete repairBody.tools;
+  delete repairBody.tool_choice;
+  delete repairBody.parallel_tool_calls;
+  const response = await postOpenAIResponse(repairBody, env, fetchImpl, `orkestr-${thread.id}-${message.id}-repair`);
+  await recordResponseUsage({ response, thread, message, callKind: "assistant_repair" }, env);
+  return { response, text: responseText(response) };
+}
+
 async function runTenantApiAgentResponse({ thread, messages, message, env, fetchImpl }) {
   const model = apiAgentModel(env);
   const principal = tenantPrincipalForThread(thread, env);
@@ -495,7 +613,23 @@ async function runTenantApiAgentResponse({ thread, messages, message, env, fetch
   const first = await postOpenAIResponse(baseBody, env, fetchImpl, `orkestr-${thread.id}-${message.id}-1`);
   await recordResponseUsage({ response: first, thread, message, callKind: "assistant" }, env);
   const calls = responseFunctionCalls(first);
-  if (!calls.length) return { response: first, text: responseText(first) };
+  if (!calls.length) {
+    const text = responseText(first);
+    if (!tenantApiAgentTextNeedsRepair(text, message)) return { response: first, text };
+    const repaired = await repairWeakTenantApiAgentResponse({
+      baseBody,
+      inputItems: input,
+      thread,
+      message,
+      text,
+      env,
+      fetchImpl,
+    });
+    return {
+      response: repaired.response,
+      text: tenantApiAgentTextNeedsRepair(repaired.text, message) ? fallbackWeakTenantApiAgentAnswer(message) : repaired.text,
+    };
+  }
 
   const toolInput = [...input, ...responseFunctionCallInputItems(first)];
   for (const call of calls.slice(0, 3)) {
@@ -528,7 +662,21 @@ async function runTenantApiAgentResponse({ thread, messages, message, env, fetch
     input: toolInput,
   }, env, fetchImpl, `orkestr-${thread.id}-${message.id}-2`);
   await recordResponseUsage({ response: second, thread, message, callKind: "assistant_tool_result" }, env);
-  return { response: second, text: responseText(second) };
+  const text = responseText(second);
+  if (!tenantApiAgentTextNeedsRepair(text, message)) return { response: second, text };
+  const repaired = await repairWeakTenantApiAgentResponse({
+    baseBody,
+    inputItems: toolInput,
+    thread,
+    message,
+    text,
+    env,
+    fetchImpl,
+  });
+  return {
+    response: repaired.response,
+    text: tenantApiAgentTextNeedsRepair(repaired.text, message) ? fallbackWeakTenantApiAgentAnswer(message) : repaired.text,
+  };
 }
 
 function apiAgentBatchLimit(env = process.env) {
