@@ -1,0 +1,60 @@
+@if (loading) {
+  <div class="empty-state loading-state">
+    <h3>Loading messages</h3>
+    <p>Fetching the selected chat without clearing the current thread state.</p>
+  </div>
+} @else {
+  @for (message of messages; track messageKey(message)) {
+    <article
+      class="message"
+      [class.user]="message.role === 'user'"
+      [class.assistant-final]="isFinalAssistantMessage(message)"
+      [class.assistant-info]="isInfoAssistantMessage(message)"
+      [class.assistant-plan]="messagePhase(message) === 'plan'"
+      [class.failed]="message.state === 'failed'"
+    >
+      <div class="message-meta">
+        <strong>{{ messageRoleLabel(message) }}</strong>
+        @if (messagePhaseLabel(message)) {
+          <em class="phase-badge">{{ messagePhaseLabel(message) }}</em>
+        }
+        <span>{{ messageTime(message) | date: "MMM d, HH:mm:ss" }}</span>
+        @if (message.state && message.state !== "completed") {
+          <em>{{ messageDeliveryStateLabel(message) }}</em>
+        }
+      </div>
+      @if (messageFailureDetail(message)) {
+        <div class="message-failure">
+          <strong>Not delivered</strong>
+          <span>{{ messageFailureDetail(message) }}</span>
+        </div>
+      }
+      <div class="message-body" [innerHTML]="messageTextHtml(message)"></div>
+      @if (messagePhase(message) === "plan") {
+        <div class="plan-message-actions">
+          <button
+            class="implement-command-button"
+            type="button"
+            (click)="implementPlan.emit()"
+            [disabled]="sending || sendingNow || implementingPlan || !threadInputReady"
+            title="Implement the current Codex plan when the implementation prompt is visible"
+          >
+            {{ implementingPlan ? "Implementing" : "/implement" }}
+          </button>
+        </div>
+      }
+      @if ((message.attachments || []).length > 0) {
+        <div class="attachments">
+          @for (attachment of message.attachments || []; track attachmentLabel(attachment)) {
+            <span>{{ attachmentLabel(attachment) }}</span>
+          }
+        </div>
+      }
+    </article>
+  } @empty {
+    <div class="empty-state">
+      <h3>No messages yet</h3>
+      <p>This thread exists, but no normalized Orkestr messages are stored yet.</p>
+    </div>
+  }
+}

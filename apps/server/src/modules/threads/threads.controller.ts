@@ -15,12 +15,11 @@ import {
   requestThreadInputDelivery,
   requestThreadWake,
   resetThreadRuntime,
-  runtimeStatus,
   sleepThread,
   syncRuntimeWindowName,
   wakeThread,
 } from "../../../../../packages/core/src/runtime-leases.js";
-import { createTimerForPrincipal, deleteTimerForPrincipal, listTimersForPrincipal } from "../../../../../packages/core/src/timers.js";
+import { deleteTimerForPrincipal, listTimersForPrincipal } from "../../../../../packages/core/src/timers.js";
 import {
   appendThreadMessage,
   createThreadForPrincipal,
@@ -34,7 +33,6 @@ import { requestPrincipal } from "../../../../../packages/core/src/principal.js"
 import { assertSanitizedAction } from "../../../../../packages/core/src/llm-sanitizer.js";
 import { isAdminPrincipal } from "../../../../../packages/core/src/policy.js";
 import { userScopedCapabilityHints } from "../../../../../packages/core/src/user-skills.js";
-import { createThreadWorker, detectThreadRepo, listThreadWorkers, refreshThreadGitState, syncThreadWorkerWithParent, updateThreadRepo } from "../../../../../packages/core/src/thread-workers.js";
 import { parseThreadInputCommand } from "../../../../../packages/core/src/thread-commands.js";
 import { codexResumeCommand } from "../../../../../packages/core/src/codex-attach-command.js";
 import { launchNativeTerminal } from "../../../../../packages/core/src/native-terminal.js";
@@ -60,7 +58,19 @@ import {
 } from "../../../../../packages/core/src/codex-app-server.js";
 import { ensureDataDirs } from "../../../../../packages/storage/src/paths.js";
 import { codexThreadId, threadRuntimeSummary, threadSummaryPayload } from "../../thread-summary.js";
-import { ensureAttachmentsArray, httpError } from "../../common/http.js";
+import { ensureAttachmentsArray, httpError, validateRequestSchema } from "../../common/http.js";
+import {
+  threadApproveSchema,
+  threadBindingUpdateSchema,
+  threadCreateSchema,
+  threadInputSchema,
+  threadInterruptSchema,
+} from "../../../../../packages/shared/src/api-schemas.js";
+import {
+  ThreadBindingService,
+  ThreadRuntimeService,
+} from "./thread-application.services.js";
+import { assertThreadAdminOnly } from "./thread-route-helpers.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -550,6 +560,11 @@ function messagePage(thread: any, rawMessages: any[] = [], query: Record<string,
 
 @Controller("api/threads")
 export class ThreadsController {
+  constructor(
+    private readonly threadBindingService: ThreadBindingService,
+    private readonly threadRuntimeService: ThreadRuntimeService,
+  ) {}
+
   private async assertThreadSanitized(action: string, principal: any, thread: any, input: Record<string, unknown> = {}) {
     if (isAdminPrincipal(principal)) return null;
     const capabilities = await userScopedCapabilityHints({
@@ -573,8 +588,7 @@ export class ThreadsController {
   }
 
   private assertThreadAdminOnly(action: string, principal: any) {
-    if (isAdminPrincipal(principal)) return;
-    throw httpError(`${action.replace(/[^a-z0-9]+/gi, "_").toLowerCase()}_admin_required`, 403);
+    assertThreadAdminOnly(action, principal);
   }
 
   private async applyOrQueueCodexModeCommand(thread: any, mode: "code" | "plan", source = "codex_mode_command") {
@@ -603,6 +617,7 @@ export class ThreadsController {
 
   @Post()
   async create(@Req() request: any, @Body() body: Record<string, unknown> = {}) {
+    validateRequestSchema(threadCreateSchema, { body });
     const principal = requestPrincipal(request);
     await this.assertThreadSanitized("thread.create", principal, {
       id: "",
@@ -642,96 +657,19 @@ export class ThreadsController {
     return { thread };
   }
 
-  @Get(":threadId/workers")
-  async workers(@Req() request: any, @Param("threadId") threadId: string) {
-    this.assertThreadAdminOnly("thread.workers", requestPrincipal(request));
-    const parent = await getThread(threadId);
-    if (!parent) throw httpError("thread_not_found", 404);
-    const workers = await listThreadWorkers(parent.id);
-    return {
-      thread: await threadRuntimeSummary(parent, await listThreadMessages(parent.id)),
-      workers: await Promise.all(workers.map(async (worker: any) => threadRuntimeSummary(worker, await listThreadMessages(worker.id)))),
-    };
-  }
-
-  @Post(":threadId/workers")
-  @HttpCode(201)
-  async createWorker(@Req() request: any, @Param("threadId") threadId: string, @Body() body: Record<string, unknown> = {}) {
-    this.assertThreadAdminOnly("thread.worker.create", requestPrincipal(request));
-    const result: any = await createThreadWorker(threadId, body);
-    if (body.wake !== false) {
-      if (body.autoRun !== false && result.message) requestThreadInputDelivery(result.worker.id);
-      else requestThreadWake(result.worker.id, { reason: "worker_created" });
-    }
-    return {
-      ...result,
-      worker: await threadRuntimeSummary(result.worker, await listThreadMessages(result.worker.id)),
-    };
-  }
-
-  @Put(":threadId/repo")
-  async updateRepo(@Req() request: any, @Param("threadId") threadId: string, @Body() body: Record<string, unknown> = {}) {
-    this.assertThreadAdminOnly("thread.repo.update", requestPrincipal(request));
-    const result: any = await updateThreadRepo(threadId, body);
-    return {
-      ...result,
-      thread: await threadRuntimeSummary(result.thread, await listThreadMessages(result.thread.id)),
-    };
-  }
-
-  @Post(":threadId/repo/detect")
-  @HttpCode(200)
-  async detectRepo(@Req() request: any, @Param("threadId") threadId: string) {
-    this.assertThreadAdminOnly("thread.repo.detect", requestPrincipal(request));
-    const detected = await detectThreadRepo(threadId);
-    const result: any = await updateThreadRepo(threadId, detected);
-    return {
-      ...result,
-      detected,
-      thread: await threadRuntimeSummary(result.thread, await listThreadMessages(result.thread.id)),
-    };
-  }
-
-  @Post(":threadId/sync-parent")
-  @HttpCode(200)
-  async syncParent(@Req() request: any, @Param("threadId") threadId: string) {
-    this.assertThreadAdminOnly("thread.sync-parent", requestPrincipal(request));
-    const thread = await getThread(threadId);
-    if (!thread) throw httpError("thread_not_found", 404);
-    const refreshed: any = await refreshThreadGitState(thread.id).catch(() => null);
-    const currentThread = refreshed?.thread || thread;
-    const refreshedParentBehind = Number(refreshed?.gitState?.gitParentBehind ?? NaN);
-    if (Number.isFinite(refreshedParentBehind) && refreshedParentBehind <= 0) {
-      return {
-        synced: false,
-        reason: "already_synced",
-        gitState: refreshed.gitState,
-        thread: await threadRuntimeSummary(currentThread, await listThreadMessages(currentThread.id)),
-      };
-    }
-    const status = await runtimeStatus(thread.id).catch(() => null);
-    if (status?.working || status?.foregroundWorking || status?.typingActive || Number(status?.runningCount || 0) > 0 || Number(status?.pendingCount || 0) > 0) {
-      throw httpError("thread_is_active", 409);
-    }
-    const result: any = await syncThreadWorkerWithParent(currentThread.id);
-    return {
-      ...result,
-      thread: await threadRuntimeSummary(result.thread, await listThreadMessages(result.thread.id)),
-    };
-  }
-
   @Get(":threadId/messages")
   async messages(@Param("threadId") threadId: string, @Query() query: Record<string, unknown>) {
     let thread = await getThread(threadId);
     if (!thread) throw httpError("thread_not_found", 404);
     thread = await syncNativeCodexHistory(thread);
-    const status = await runtimeStatus(thread.id).catch(() => null);
+    const status = await this.threadRuntimeService.status(thread.id).catch(() => null);
     return messagePage(thread, await listThreadMessages(thread.id), query, status);
   }
 
   @Post(":threadId/input")
   @HttpCode(202)
   async input(@Req() request: any, @Param("threadId") threadId: string, @Body() body: Record<string, unknown> = {}) {
+    validateRequestSchema(threadInputSchema, { params: { threadId }, body });
     ensureAttachmentsArray(body);
     const principal = requestPrincipal(request);
     const thread = await getThread(threadId);
@@ -889,7 +827,7 @@ export class ThreadsController {
         thread: await threadRuntimeSummary(updatedThread || thread, updatedMessages),
       };
     }
-    const before = await runtimeStatus(thread.id).catch(() => null);
+    const before = await this.threadRuntimeService.status(thread.id).catch(() => null);
     const message = await enqueueThreadInputForPrincipal(thread.id, body, principal);
     if (threadUsesApiAgent(thread)) {
       if (body.autoRun === false) {
@@ -1007,7 +945,7 @@ export class ThreadsController {
   async runtime(@Param("threadId") threadId: string) {
     const thread = await getThread(threadId);
     if (!thread) throw httpError("thread_not_found", 404);
-    return { thread, runtime: await runtimeStatus(thread.id) };
+    return { thread, runtime: await this.threadRuntimeService.status(thread.id) };
   }
 
   @Post(":threadId/wake")
@@ -1126,7 +1064,7 @@ export class ThreadsController {
         return {
           ok: false,
           thread,
-          runtime: await runtimeStatus(thread.id).catch(() => null),
+          runtime: await this.threadRuntimeService.status(thread.id).catch(() => null),
           message: (wakeResult as any).error || "Codex app-server attach failed.",
         };
       }
@@ -1136,7 +1074,7 @@ export class ThreadsController {
         return {
           ok: false,
           thread,
-          runtime: (wakeResult as any).status || await runtimeStatus(thread.id).catch(() => null),
+          runtime: (wakeResult as any).status || await this.threadRuntimeService.status(thread.id).catch(() => null),
           message: "Codex thread id is missing.",
         };
       }
@@ -1146,7 +1084,7 @@ export class ThreadsController {
         ok: true,
         state: "ready",
         thread,
-        runtime: (wakeResult as any).status || await runtimeStatus(thread.id).catch(() => null),
+        runtime: (wakeResult as any).status || await this.threadRuntimeService.status(thread.id).catch(() => null),
         attachKind: "codex-app-server",
         attachCommand,
       };
@@ -1155,17 +1093,17 @@ export class ThreadsController {
       return {
         ok: false,
         thread,
-        runtime: await runtimeStatus(thread.id).catch(() => null),
+        runtime: await this.threadRuntimeService.status(thread.id).catch(() => null),
         message: "Run `orkestr codex migrate` on this host before opening this Codex thread.",
       };
     }
-    let status: any = await runtimeStatus(thread.id);
+    let status: any = await this.threadRuntimeService.status(thread.id);
     let wakeResult: Awaited<ReturnType<typeof wakeThread>> | null = null;
     if (!status.sessionName || status.state === "sleeping") {
       wakeResult = await wakeThread(thread.id, { reason: "attach" });
       if (!wakeResult) throw httpError("thread_wake_failed", 500);
       thread = wakeResult.thread || thread;
-      status = wakeResult.status || await runtimeStatus(thread.id);
+      status = wakeResult.status || await this.threadRuntimeService.status(thread.id);
       if (!status.sessionName && wakeResult.lease?.sessionName) {
         status = { ...status, sessionName: wakeResult.lease.sessionName };
       }
@@ -1234,6 +1172,7 @@ export class ThreadsController {
   @Post(":threadId/interrupt")
   @HttpCode(200)
   async interrupt(@Req() request: any, @Param("threadId") threadId: string, @Body() body: Record<string, unknown> = {}) {
+    validateRequestSchema(threadInterruptSchema, { params: { threadId }, body });
     const principal = requestPrincipal(request);
     const thread = await getThread(threadId);
     if (!thread) throw httpError("thread_not_found", 404);
@@ -1261,10 +1200,10 @@ export class ThreadsController {
           observedVia: current.observedVia || "codex_app_server_interrupt",
           reason: "interrupt",
           state: current.state,
-          runtime: await runtimeStatus(thread.id).catch(() => null),
+          runtime: await this.threadRuntimeService.status(thread.id).catch(() => null),
         };
       }
-      return { ok: true, interrupted: Boolean((interrupted as any).interrupted), runtime: await runtimeStatus(thread.id).catch(() => null) };
+      return { ok: true, interrupted: Boolean((interrupted as any).interrupted), runtime: await this.threadRuntimeService.status(thread.id).catch(() => null) };
     }
     const result = await wakeThread(thread.id, { reason: "interrupt" });
     if (!result) throw httpError("thread_wake_failed", 500);
@@ -1304,6 +1243,7 @@ export class ThreadsController {
   @Post(":threadId/approve")
   @HttpCode(202)
   async approve(@Req() request: any, @Param("threadId") threadId: string, @Body() body: Record<string, unknown> = {}) {
+    validateRequestSchema(threadApproveSchema, { params: { threadId }, body });
     const thread = await getThread(threadId);
     if (!thread) throw httpError("thread_not_found", 404);
     if (threadUsesCodexAppServer(thread)) {
@@ -1404,29 +1344,6 @@ export class ThreadsController {
     return { execution, whatsappDelivery };
   }
 
-  @Get(":threadId/timers")
-  async timers(@Req() request: any, @Param("threadId") threadId: string) {
-    const thread = await getThread(threadId);
-    if (!thread) throw httpError("thread_not_found", 404);
-    const timers = (await listTimersForPrincipal(requestPrincipal(request))).filter((timer) => timer.targetType === "thread" && timer.target === thread.id);
-    return { thread, timers };
-  }
-
-  @Post(":threadId/timers")
-  async createTimer(@Req() request: any, @Param("threadId") threadId: string, @Body() body: Record<string, unknown> = {}) {
-    const thread = await getThread(threadId);
-    if (!thread) throw httpError("thread_not_found", 404);
-    const timer = await createTimerForPrincipal({ ...body, targetType: "thread", target: thread.id }, requestPrincipal(request));
-    return { timer };
-  }
-
-  @Delete(":threadId/timers/:timerId")
-  async deleteTimer(@Req() request: any, @Param("threadId") threadId: string, @Param("timerId") timerId: string) {
-    const thread = await getThread(threadId);
-    if (!thread) throw httpError("thread_not_found", 404);
-    return { ok: await deleteTimerForPrincipal(timerId, requestPrincipal(request)) };
-  }
-
   @Get(":threadId")
   async get(@Param("threadId") threadId: string) {
     const thread = await getThread(threadId);
@@ -1459,6 +1376,7 @@ export class ThreadsController {
 
   @Put(":threadId/binding")
   async binding(@Req() request: any, @Param("threadId") threadId: string, @Body() body: Record<string, unknown> = {}) {
+    validateRequestSchema(threadBindingUpdateSchema, { params: { threadId }, body });
     const thread = await getThread(threadId);
     if (!thread) throw httpError("thread_not_found", 404);
     await this.assertThreadSanitized("thread.binding.update", requestPrincipal(request), thread, body);
@@ -1496,11 +1414,11 @@ export class ThreadsController {
       trustedOverrideAuthorTags: optionalBodyStringArray(body, "trustedOverrideAuthorTags", current.trustedOverrideAuthorTags || []),
       updatedAt: new Date().toISOString(),
     };
-    const updated = await updateThread(thread.id, {
-      ...generatedWhatsAppBindingCodexPatch(thread, binding),
+    const updated = await this.threadBindingService.updateWhatsAppBinding(
+      thread,
       binding,
-      bindingName: binding.displayName,
-    });
+      generatedWhatsAppBindingCodexPatch(thread, binding),
+    );
     return { ok: true, thread: updated, binding };
   }
 }

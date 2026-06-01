@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import { dataPaths, ensureDataDirs } from "../../storage/src/paths.js";
 import { appendEvent, readJson, writeJson } from "../../storage/src/store.js";
-import { listThreadRecords, saveThreadRecords } from "../../storage/src/thread-registry.js";
+import { createThreadRepository } from "../../storage/src/repositories.js";
 import { assertSanitizedAction } from "./llm-sanitizer.js";
 import { assertResourceAccess, assertThreadLimit, filterResourcesForPrincipal, isAdminPrincipal, policyError, resourceOwnerUserId } from "./policy.js";
 import { userScopedCapabilityHints } from "./user-skills.js";
@@ -87,7 +87,7 @@ async function enqueueMessageMutation(filePath, operation) {
 }
 
 export async function listThreads(env = process.env) {
-  return listThreadRecords(env);
+  return createThreadRepository(env).list();
 }
 
 export async function listThreadsForPrincipal(principal, env = process.env) {
@@ -123,7 +123,7 @@ export async function getThreadForPrincipal(threadId, principal, env = process.e
 }
 
 async function saveThreads(threads, env) {
-  return saveThreadRecords(threads, env);
+  return createThreadRepository(env).save(threads);
 }
 
 export async function createThread(input = {}, env = process.env) {

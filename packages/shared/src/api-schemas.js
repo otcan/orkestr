@@ -144,6 +144,81 @@ export const threadInputSchema = {
   },
 };
 
+export const threadInterruptSchema = {
+  ...idParams("threadId"),
+  body: {
+    type: "object",
+    properties: {
+      text: stringValue,
+      promptFile: stringValue,
+      attachments: {
+        type: "array",
+        items: objectValue,
+      },
+    },
+    additionalProperties: true,
+  },
+};
+
+export const threadApproveSchema = {
+  ...idParams("threadId"),
+  body: {
+    type: "object",
+    properties: {
+      text: stringValue,
+      approval: stringValue,
+      action: stringValue,
+    },
+    additionalProperties: true,
+  },
+};
+
+export const threadWorkerCreateSchema = {
+  ...idParams("threadId"),
+  body: {
+    type: "object",
+    properties: {
+      label: stringValue,
+      task: stringValue,
+      branchName: stringValue,
+      remoteBranch: stringValue,
+      autoRun: { type: "boolean" },
+    },
+    additionalProperties: true,
+  },
+};
+
+export const threadBindingUpdateSchema = {
+  ...idParams("threadId"),
+  body: {
+    type: "object",
+    properties: {
+      connector: stringValue,
+      chatId: stringValue,
+      displayName: stringValue,
+      senderAccountId: stringValue,
+      responderAccountId: stringValue,
+      mirrorToWhatsApp: { type: "boolean" },
+    },
+    additionalProperties: true,
+  },
+};
+
+export const threadRepoUpdateSchema = {
+  ...idParams("threadId"),
+  body: {
+    type: "object",
+    properties: {
+      repoPath: stringValue,
+      repoRemoteUrl: stringValue,
+      branchName: stringValue,
+      remoteBranch: stringValue,
+      baseBranch: stringValue,
+    },
+    additionalProperties: true,
+  },
+};
+
 export const threadRunSchema = {
   ...idParams("threadId"),
   body: objectValue,

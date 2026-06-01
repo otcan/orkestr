@@ -29,7 +29,7 @@ import {
   resumeCodexAppServerThread,
   threadNeedsCodexAppServerMigration,
   threadUsesCodexAppServer,
-} from "./codex-app-server.js";
+} from "./runtime-codex-adapter.js";
 import { appendOrUpdateEventMessage, normalizeCodexModel, normalizeReasoningEffort } from "./codex-app-server-common.js";
 import { completeThreadSecurityApproveCommand, threadSecurityApproveChallengeId } from "./security-thread-command.js";
 import { threadUsesContainedUserPolicy } from "./tenant-policy.js";
@@ -47,7 +47,7 @@ import {
   tmuxPaneIds,
   tmuxSendKeys,
   tmuxWindowNameForLabel,
-} from "./tmux-runtime.js";
+} from "./runtime-tmux-legacy.js";
 
 const execFileAsync = promisify(execFile);
 const deliveryLocks = new Set();
@@ -3325,12 +3325,28 @@ export function requestThreadWake(threadId, options = {}, env = process.env) {
   setImmediate(() => {
     void wakeThread(threadId, options, env).catch(async (error) => {
       const errorText = error instanceof Error ? error.message : String(error);
-      await updateThread(threadId, { state: "sleeping", lastError: errorText }, env).catch(() => {});
+      const current = await getThread(threadId, env).catch(() => null);
+      const appServer = current && threadUsesCodexAppServer(current, env);
+      await updateThread(threadId, appServer ? {
+        state: "failed",
+        lastError: errorText,
+        runtime: {
+          ...(current.runtime || {}),
+          runtimeKind: "codex-app-server",
+          state: "failed",
+          lastError: errorText,
+          updatedAt: nowIso(),
+        },
+      } : {
+        state: "sleeping",
+        lastError: errorText,
+      }, env).catch(() => {});
       await appendEvent({
         type: "runtime_wake_failed",
         threadId,
         reason: options.reason || "wake",
         error: errorText,
+        runtimeKind: appServer ? "codex-app-server" : "codex-tmux",
       }, env).catch(() => {});
     });
   });

@@ -1,4 +1,5 @@
 import { appendEvent } from "../../storage/src/store.js";
+import { turnLifecycleEventName } from "./orkestr-events.js";
 
 function clean(value) {
   return String(value || "").trim();
@@ -75,7 +76,7 @@ export function turnLifecycleFromRuntimeStatus(status = {}, messages = []) {
 
 export function turnLifecycleEvent(type = "", payload = {}) {
   return {
-    type: `turn_lifecycle_${lower(type) || "event"}`,
+    type: turnLifecycleEventName(type),
     threadId: clean(payload.threadId),
     messageId: clean(payload.messageId) || null,
     runtimeKind: clean(payload.runtimeKind),

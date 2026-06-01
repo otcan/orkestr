@@ -3172,7 +3172,7 @@ test("whatsapp delivery reports waking queue notices", async () => {
 
   assert.equal(delivery.delivered.length, 1);
   assert.equal(delivery.delivered[0].deliveryType, "queue_notice");
-  assert.match(stripDebugFooter(calls[0].body.text), /^Waking this Orkestr thread and queued your message: "wake test"\./);
+  assert.match(stripDebugFooter(calls[0].body.text), /^Waiting for the legacy Codex terminal and queued your message: "wake test"\./);
   assertDebugFooter(calls[0].body.text, { messageType: "update" });
 });
 
@@ -3191,7 +3191,7 @@ test("whatsapp queue notices do not treat app-server threads as missing tmux ses
   assert.equal(initialQueueDeliveryState({
     state: "sleeping",
     runtimeKind: "codex-app-server",
-  }, { text: "resume app server" }), "resuming_codex_thread");
+  }, { text: "resume app server" }), "");
   assert.equal(initialQueueDeliveryState({
     state: "ready",
     runtimeKind: "codex-tmux",

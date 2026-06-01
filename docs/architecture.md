@@ -2,6 +2,11 @@
 
 Orkestr is a self-hosted agent workstation monorepo with a small API server, a web cockpit, a CLI, and reusable packages.
 
+The long-term package boundary and migration rules are defined in
+[ADR 0001](adr/0001-architecture-boundaries.md). New code should follow that
+dependency direction even while legacy runtime and connector files are being
+split.
+
 ```mermaid
 flowchart TB
   subgraph Clients

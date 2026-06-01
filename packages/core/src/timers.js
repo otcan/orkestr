@@ -1,7 +1,8 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
-import { dataPaths, ensureDataDirs } from "../../storage/src/paths.js";
-import { appendEvent, readJson, writeJson } from "../../storage/src/store.js";
+import { ensureDataDirs } from "../../storage/src/paths.js";
+import { createTimerRepository } from "../../storage/src/repositories.js";
+import { appendEvent } from "../../storage/src/store.js";
 import { assertSanitizedAction } from "./llm-sanitizer.js";
 import { enqueueAgentMessage } from "./messages.js";
 import { principalForUserId, userPrincipal } from "./principal.js";
@@ -142,8 +143,7 @@ export function normalizeStoredTimer(timer, now = new Date(), env = process.env)
 }
 
 export async function listTimers(env = process.env) {
-  const paths = await ensureDataDirs(env);
-  const timers = await readJson(paths.timers, []);
+  const timers = await createTimerRepository(env).list();
   return timers.map((timer) => normalizeStoredTimer(timer, new Date(), env));
 }
 
@@ -302,7 +302,7 @@ export async function doctorTimersForPrincipal(principal, env = process.env, now
 }
 
 export async function createTimer(input, env = process.env) {
-  const paths = await ensureDataDirs(env);
+  const timerRepository = createTimerRepository(env);
   const timers = await listTimers(env);
   const prompt = String(input.prompt || "").trim();
   const promptFile = String(input.promptFile || "").trim();
@@ -327,7 +327,7 @@ export async function createTimer(input, env = process.env) {
   };
   timer.nextRunAt = nextRunAt(timer);
   timers.push(timer);
-  await writeJson(paths.timers, timers);
+  await timerRepository.save(timers);
   await appendEvent({ type: "timer_created", timerId: timer.id, label: timer.label, target: timer.target, ownerUserId: timer.ownerUserId }, env);
   return timer;
 }
@@ -378,10 +378,10 @@ async function enqueueTimerMessage(timer, source, env, principal = null) {
 }
 
 export async function deleteTimer(id, env = process.env) {
-  const paths = await ensureDataDirs(env);
+  const timerRepository = createTimerRepository(env);
   const timers = await listTimers(env);
   const next = timers.filter((timer) => timer.id !== id);
-  await writeJson(paths.timers, next);
+  await timerRepository.save(next);
   if (timers.length !== next.length) {
     await appendEvent({ type: "timer_deleted", timerId: id }, env);
   }
@@ -396,7 +396,7 @@ export async function deleteTimerForPrincipal(id, principal, env = process.env) 
 }
 
 export async function runTimerNow(id, env = process.env, now = new Date(), options = {}) {
-  const paths = dataPaths(env);
+  const timerRepository = createTimerRepository(env);
   const timers = await listTimers(env);
   const timer = timers.find((entry) => entry.id === id);
   if (!timer) {
@@ -410,7 +410,7 @@ export async function runTimerNow(id, env = process.env, now = new Date(), optio
   if (timer.cadence === "once") timer.enabled = false;
   delete timer.lastError;
   delete timer.lastErrorAt;
-  await writeJson(paths.timers, timers);
+  await timerRepository.save(timers);
   return appendEvent(
     {
       type: "timer_manual_run",
@@ -438,7 +438,7 @@ export async function runTimerNowForPrincipal(id, principal, env = process.env, 
 }
 
 export async function markDueTimers(env = process.env, now = new Date()) {
-  const paths = dataPaths(env);
+  const timerRepository = createTimerRepository(env);
   const timers = await listTimers(env);
   let changed = false;
   const due = [];
@@ -496,6 +496,6 @@ export async function markDueTimers(env = process.env, now = new Date()) {
       ).catch(() => {});
     }
   }
-  if (changed) await writeJson(paths.timers, next);
+  if (changed) await timerRepository.save(next);
   return due;
 }

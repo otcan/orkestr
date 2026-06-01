@@ -1,15 +1,12 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import crypto from "node:crypto";
-import os from "node:os";
-import { enqueueAgentMessage, updateAgentMessage } from "../../core/src/messages.js";
+import { enqueueAgentMessage } from "../../core/src/messages.js";
 import { resourceOwnerUserId } from "../../core/src/policy.js";
 import { adminPrincipal, userPrincipal } from "../../core/src/principal.js";
 import { appServerStateFromStatus } from "../../core/src/codex-app-server-common.js";
 import { clearRuntimeLeasesForThread, runtimeStatus } from "../../core/src/runtime-leases.js";
 import { classifyApprovalReply } from "../../core/src/runtime-settings.js";
 import { processApiAgentThreadInput, threadUsesApiAgent } from "../../core/src/tenant-api-agent.js";
-import { threadRequiresTenantIsolation } from "../../core/src/tenant-policy.js";
 import { parseThreadInputCommand } from "../../core/src/thread-commands.js";
 import { appendThreadMessage, createThreadForPrincipal, enqueueThreadInputForPrincipal, listThreadMessages, listThreads, listThreadsForPrincipal, updateThread, updateThreadMessage } from "../../core/src/threads.js";
 import { adminUserId, findOrCreateExternalUser, normalizeUserId } from "../../core/src/users.js";
@@ -25,8 +22,51 @@ import {
 } from "./whatsapp-local-bridge.js";
 import { routerUpdateWhatsAppDeliveryTarget } from "./whatsapp-router-updates.js";
 import { attachmentDeliveryKey, prepareWhatsAppTableAttachments } from "./whatsapp-table-attachments.js";
+import { appendWhatsAppDebugFooter, formatWhatsAppOutboundText } from "./whatsapp-formatting.js";
+import {
+  bindingAccountIds,
+  isWhatsAppGroupChatId,
+  whatsappAutoThreadBinding,
+  whatsappDisplayName,
+  whatsappInboundThreadMatchesBinding,
+} from "./whatsapp-inbound-routing.js";
+import {
+  acquireOutboundDeliveryClaim,
+  deliveryTextKey,
+  finishOutboundDeliveryClaim,
+  outboundDeliveryKey,
+  pruneOutboundDeliveryClaims,
+} from "./whatsapp-delivery-ledger.js";
+import {
+  codexAssistantSource,
+  shouldMirrorWhatsAppProgress,
+  shouldMirrorWhatsAppReply,
+} from "./whatsapp-mirror-policy.js";
+import {
+  boundThreadWhatsAppAssistantOrigin,
+  completePassiveMirrorParent,
+  completedAssistantReplyForParent,
+  failedWhatsAppDeliveryTarget,
+  formatWhatsAppDeliveryFailure,
+  formatWhatsAppModeQueued,
+  formatWhatsAppQueueNotice,
+  initialQueueDeliveryState,
+  latestProgressReplyForParent,
+  queuedInputWhatsAppDeliveryTarget,
+  queuedModeWhatsAppDeliveryTarget,
+  recoverParentsForAlreadyMirroredReplies,
+  staleUntrackedWhatsAppProgress,
+  staleUntrackedWhatsAppReply,
+  threadAllowsWhatsAppMirroring,
+  whatsappOutboundDeliveryRetentionLimit,
+  whatsappTypingTargetForThread,
+} from "./whatsapp-outbound-mirror.js";
+import { createWhatsAppOutboundMirrorWorker } from "./whatsapp-outbound-worker.js";
 
-let whatsappDeliveryInFlight = null;
+export { formatWhatsAppOutboundText } from "./whatsapp-formatting.js";
+export { initialQueueDeliveryState } from "./whatsapp-outbound-mirror.js";
+
+const whatsappOutboundMirrorWorker = createWhatsAppOutboundMirrorWorker();
 
 async function fetchJson(url, fetchImpl, options = {}) {
   const response = await fetchImpl(url, { ...options, signal: AbortSignal.timeout(2000) });
@@ -328,42 +368,6 @@ function pickString(...values) {
   return "";
 }
 
-const proposedPlanOpenTagPattern = /^\s*<\s*proposed[\s_-]*plan\s*>\s*/i;
-const proposedPlanCloseTagPattern = /\s*<\s*\/\s*proposed[\s_-]*plan\s*>\s*$/i;
-
-function proposedPlanEnvelopeBody(value) {
-  const text = String(value || "");
-  if (!proposedPlanOpenTagPattern.test(text)) return null;
-  return text.replace(proposedPlanOpenTagPattern, "").replace(proposedPlanCloseTagPattern, "").trim();
-}
-
-function stripProposedPlanEnvelope(value) {
-  return proposedPlanEnvelopeBody(value) ?? String(value || "");
-}
-
-function comparableParticipantId(value) {
-  return pickString(value).toLowerCase();
-}
-
-function participantIdSet(values = []) {
-  if (!Array.isArray(values)) return new Set();
-  return new Set(values.map(comparableParticipantId).filter(Boolean));
-}
-
-function isWhatsAppGroupChatId(value) {
-  return /@g\.us$/i.test(pickString(value));
-}
-
-function generatedSingleAccountGroupBindingCanTrustGroupBoundary(binding = {}, chatId = "", from = "") {
-  const senderAccountId = pickString(binding.senderAccountId, binding.inboundAccountId);
-  const responderAccountId = pickString(binding.responderAccountId, binding.outboundAccountId);
-  if (!binding.generated || !isWhatsAppGroupChatId(chatId) || !senderAccountId || senderAccountId !== responderAccountId) return false;
-  const senderContactId = pickString(binding.senderContactId);
-  const responderContactId = pickString(binding.responderContactId);
-  if (!senderContactId || !responderContactId || !from) return false;
-  return comparableParticipantId(from) !== comparableParticipantId(responderContactId);
-}
-
 function routeAgentId(input, config) {
   const chatId = pickString(input.chatId, input.chat?.id, input.fromChatId);
   const routes = config.routes || config.chatRoutes || {};
@@ -375,31 +379,11 @@ function routeAgentId(input, config) {
   );
 }
 
-function bindingAccountIds(binding = {}) {
-  return new Set([
-    pickString(binding.senderAccountId, binding.inboundAccountId),
-    pickString(binding.responderAccountId, binding.outboundAccountId),
-  ].filter(Boolean));
-}
-
 function whatsappAutoProvisionUsers(config = {}, env = process.env) {
   return truthyEnv(env.ORKESTR_WHATSAPP_AUTO_PROVISION_USERS) ||
     truthyEnv(env.WHATSAPP_AUTO_PROVISION_USERS) ||
     truthyEnv(config.autoProvisionUsers) ||
     truthyEnv(config.autoProvisionUserChats);
-}
-
-function whatsappDisplayName(input = {}, fallback = "") {
-  return pickString(
-    input.displayName,
-    input.chatName,
-    input.chat?.name,
-    input.senderName,
-    input.pushName,
-    input.notifyName,
-    input.contactName,
-    fallback,
-  );
 }
 
 async function chatHasConfiguredThreadBinding({ chatId = "", accountId = "" } = {}, env = process.env) {
@@ -545,25 +529,6 @@ function kickWhatsAppApiAgentThread(thread, env = process.env) {
     }, env).catch(() => null));
 }
 
-function whatsappAutoThreadBinding({ chatId = "", accountId = "", from = "", displayName = "" } = {}) {
-  return {
-    connector: "whatsapp",
-    chatId,
-    displayName,
-    enabled: true,
-    generated: true,
-    allowOtherPeople: false,
-    additionalParticipantsEnabled: false,
-    additionalParticipantIds: [],
-    mirrorToWhatsApp: true,
-    senderAccountId: accountId || null,
-    responderAccountId: accountId || null,
-    outboundAccountId: accountId || null,
-    senderContactId: from || null,
-    updatedAt: new Date().toISOString(),
-  };
-}
-
 async function routeAutoProvisionedThread(input = {}, config = {}, env = process.env) {
   if (!whatsappAutoProvisionUsers(config, env)) return { threadId: "", binding: null };
   const chatId = pickString(input.chatId, input.chat?.id, input.fromChatId);
@@ -638,28 +603,7 @@ async function routeThread(input, config, env) {
   if (explicit) return { threadId: explicit, binding: null };
   if (!chatId) return { threadId: "", binding: null };
   const threads = await listThreads(env);
-  const thread = threads.find((item) => {
-    const binding = item?.binding || {};
-    const senderAccountId = pickString(binding.senderAccountId, binding.inboundAccountId);
-    const senderContactId = pickString(binding.senderContactId);
-    const responderContactId = pickString(binding.responderContactId);
-    if (senderAccountId) {
-      if (accountId && !bindingAccountIds(binding).has(accountId)) return false;
-      if (!fromMe) {
-        if (responderContactId && comparableParticipantId(from) === comparableParticipantId(responderContactId)) return false;
-        const senderContactMatches = senderContactId && comparableParticipantId(from) === comparableParticipantId(senderContactId);
-        const trustGroupBoundary = generatedSingleAccountGroupBindingCanTrustGroupBoundary(binding, chatId, from);
-        if (!senderContactMatches && !trustGroupBoundary) {
-          const additionalParticipantsEnabled = binding.additionalParticipantsEnabled === true || binding.allowOtherPeopleConfirmed === true;
-          if (!additionalParticipantsEnabled) return false;
-          if (!participantIdSet(binding.additionalParticipantIds).has(comparableParticipantId(from))) return false;
-        }
-      }
-    }
-    return binding.enabled !== false &&
-      String(binding.connector || "whatsapp") === "whatsapp" &&
-      String(binding.chatId || "").trim() === chatId;
-  });
+  const thread = threads.find((item) => whatsappInboundThreadMatchesBinding({ thread: item, chatId, accountId, from, fromMe }));
   return thread ? { threadId: thread.id, binding: thread.binding || null } : { threadId: "", binding: null };
 }
 
@@ -678,44 +622,6 @@ function mergeByKey(existing = [], next = [], keyFn = () => "") {
   return [...merged.values()];
 }
 
-function outboundDeliveryKey(delivery = {}) {
-  return [
-    pickString(delivery.kind),
-    pickString(delivery.deliveryType),
-    pickString(delivery.chatId),
-    pickString(delivery.accountId),
-    pickString(delivery.messageId),
-    pickString(delivery.textKey),
-  ].join("|");
-}
-
-function outboundDeliveryClaimTtlMs(env = process.env) {
-  const parsed = Number(env.ORKESTR_WHATSAPP_OUTBOUND_CLAIM_TTL_MS || env.WHATSAPP_OUTBOUND_CLAIM_TTL_MS || 120_000);
-  return Number.isFinite(parsed) ? Math.max(5_000, Math.floor(parsed)) : 120_000;
-}
-
-function outboundDeliveryClaimRetentionLimit(env = process.env) {
-  return Math.max(500, whatsappOutboundDeliveryRetentionLimit(env));
-}
-
-function outboundDeliveryClaimExpired(claim = {}, nowMs = Date.now(), env = process.env) {
-  const status = String(claim.status || "claimed").trim().toLowerCase();
-  const ttlMs = outboundDeliveryClaimTtlMs(env);
-  const expiresAtMs = Date.parse(String(claim.expiresAt || ""));
-  if (Number.isFinite(expiresAtMs)) return expiresAtMs <= nowMs;
-  const baseMs = Date.parse(String(claim.updatedAt || claim.claimedAt || claim.deliveredAt || claim.failedAt || ""));
-  if (!Number.isFinite(baseMs)) return status === "claimed";
-  const retentionMs = status === "claimed" ? ttlMs : Math.max(ttlMs, 60_000);
-  return nowMs - baseMs > retentionMs;
-}
-
-function pruneOutboundDeliveryClaims(claims = [], env = process.env) {
-  const nowMs = Date.now();
-  return (claims || [])
-    .filter((claim) => pickString(claim.claimKey) && !outboundDeliveryClaimExpired(claim, nowMs, env))
-    .slice(-outboundDeliveryClaimRetentionLimit(env));
-}
-
 function mergeWhatsAppState(existing = {}, next = {}, env = process.env) {
   return {
     ...existing,
@@ -725,7 +631,7 @@ function mergeWhatsAppState(existing = {}, next = {}, env = process.env) {
       .slice(-whatsappOutboundDeliveryRetentionLimit(env)),
     outboundDeliveryClaims: pruneOutboundDeliveryClaims(
       mergeByKey(existing.outboundDeliveryClaims, next.outboundDeliveryClaims, (claim) => pickString(claim.claimKey)),
-      env,
+      { env, retentionLimit: whatsappOutboundDeliveryRetentionLimit(env) },
     ),
     updatedAt: new Date().toISOString(),
   };
@@ -735,114 +641,6 @@ async function writeWhatsAppState(state, env) {
   const paths = dataPaths(env);
   const existing = await readJson(paths.whatsapp, { inboundEvents: [], outboundDeliveries: [], outboundDeliveryClaims: [] }).catch(() => ({}));
   await writeJson(paths.whatsapp, mergeWhatsAppState(existing, state, env));
-}
-
-function outboundDeliveryClaimKey({ accountId = "", chatId = "", textKey = "" } = {}) {
-  return crypto
-    .createHash("sha256")
-    .update(`${pickString(accountId)}\n${pickString(chatId)}\n${pickString(textKey)}`)
-    .digest("hex");
-}
-
-async function outboundDeliveryClaimDir(env = process.env) {
-  const paths = await ensureDataDirs(env);
-  const dir = path.join(paths.home, "whatsapp-delivery-claims");
-  await fs.mkdir(dir, { recursive: true });
-  return dir;
-}
-
-async function readOutboundDeliveryClaimFile(filePath) {
-  const raw = await fs.readFile(filePath, "utf8").catch(() => "");
-  if (!raw) return {};
-  try {
-    const parsed = JSON.parse(raw);
-    return parsed && typeof parsed === "object" ? parsed : {};
-  } catch {
-    return {};
-  }
-}
-
-function upsertOutboundDeliveryClaim(state, claim) {
-  state.outboundDeliveryClaims = mergeByKey(
-    state.outboundDeliveryClaims || [],
-    [claim],
-    (item) => pickString(item.claimKey),
-  );
-}
-
-async function acquireOutboundDeliveryClaim({
-  state,
-  kind,
-  deliveryType,
-  agentId,
-  threadId,
-  messageId,
-  sourceMessageId,
-  chatId,
-  accountId,
-  textKey,
-} = {}, env = process.env) {
-  const claimKey = outboundDeliveryClaimKey({ accountId, chatId, textKey });
-  if (!claimKey || !textKey || !chatId) return { acquired: false, reason: "missing_delivery_claim_key" };
-  const dir = await outboundDeliveryClaimDir(env);
-  const filePath = path.join(dir, `${claimKey}.json`);
-  const ttlMs = outboundDeliveryClaimTtlMs(env);
-  const now = Date.now();
-  const nowIso = new Date(now).toISOString();
-  const claim = {
-    claimKey,
-    kind,
-    deliveryType,
-    agentId: agentId || null,
-    threadId: threadId || null,
-    messageId,
-    sourceMessageId: sourceMessageId || null,
-    chatId,
-    accountId,
-    textKey,
-    status: "claimed",
-    claimedAt: nowIso,
-    updatedAt: nowIso,
-    expiresAt: new Date(now + ttlMs).toISOString(),
-    pid: process.pid,
-  };
-
-  for (let attempt = 0; attempt < 2; attempt += 1) {
-    let handle = null;
-    try {
-      handle = await fs.open(filePath, "wx");
-      await handle.writeFile(JSON.stringify(claim, null, 2) + "\n", "utf8");
-      await handle.close();
-      upsertOutboundDeliveryClaim(state, claim);
-      await writeWhatsAppState(state, env);
-      return { acquired: true, claim, filePath };
-    } catch (error) {
-      if (handle) await handle.close().catch(() => {});
-      if (error?.code !== "EEXIST") throw error;
-      const existing = await readOutboundDeliveryClaimFile(filePath);
-      if (outboundDeliveryClaimExpired(existing, now, env)) {
-        await fs.unlink(filePath).catch(() => {});
-        continue;
-      }
-      return { acquired: false, reason: "delivery_claim_active", claim: existing, filePath };
-    }
-  }
-  return { acquired: false, reason: "delivery_claim_active", filePath };
-}
-
-async function finishOutboundDeliveryClaim({ state, claim, filePath, status, error = "", delivery = null } = {}, env = process.env) {
-  if (!claim?.claimKey) return;
-  const nowIso = new Date().toISOString();
-  const updated = {
-    ...claim,
-    status,
-    updatedAt: nowIso,
-    ...(status === "delivered" ? { deliveredAt: delivery?.deliveredAt || nowIso } : {}),
-    ...(status === "failed" ? { failedAt: nowIso, error: String(error || "").slice(0, 500) } : {}),
-  };
-  upsertOutboundDeliveryClaim(state, updated);
-  await writeWhatsAppState(state, env);
-  if (status === "delivered" && filePath) await fs.unlink(filePath).catch(() => {});
 }
 
 async function sendClaimedWhatsAppText({
@@ -879,7 +677,7 @@ async function sendClaimedWhatsAppText({
     chatId,
     accountId,
     textKey,
-  }, env);
+  }, env, { persistState: writeWhatsAppState });
   if (!claimResult.acquired) return { skipped: { reason: claimResult.reason || "delivery_claim_active" } };
 
   try {
@@ -905,10 +703,10 @@ async function sendClaimedWhatsAppText({
     deliveredIds.add(messageId);
     deliveredTextKeys.add(textKey);
     batchTextKeys.add(textKey);
-    await finishOutboundDeliveryClaim({ state, claim: claimResult.claim, filePath: claimResult.filePath, status: "delivered", delivery }, env);
+    await finishOutboundDeliveryClaim({ state, claim: claimResult.claim, filePath: claimResult.filePath, status: "delivered", delivery }, env, { persistState: writeWhatsAppState });
     return { delivery };
   } catch (error) {
-    await finishOutboundDeliveryClaim({ state, claim: claimResult.claim, filePath: claimResult.filePath, status: "failed", error: error.message || String(error) }, env).catch(() => {});
+    await finishOutboundDeliveryClaim({ state, claim: claimResult.claim, filePath: claimResult.filePath, status: "failed", error: error.message || String(error) }, env, { persistState: writeWhatsAppState }).catch(() => {});
     return { failure: { error } };
   }
 }
@@ -1115,697 +913,11 @@ async function sendWhatsAppText({ chatId, text, accountId, attachments = [], con
   return payload;
 }
 
-function normalizedDeliveryText(value) {
-  return String(value || "").replace(/\s+/g, " ").trim();
-}
-
-function formatMarkdownLinksForWhatsApp(value) {
-  return String(value || "").replace(/\[([^\]\n]{1,180})\]\((https?:\/\/[^)\s]+)\)/g, (_match, label, url) => {
-    const cleanLabel = String(label || "").trim();
-    const cleanUrl = String(url || "").trim();
-    return cleanLabel && cleanLabel !== cleanUrl ? `${cleanLabel}: ${cleanUrl}` : cleanUrl;
-  });
-}
-
-function formatMarkdownBoldForWhatsApp(value) {
-  const text = String(value || "");
-  let formatted = "";
-  let index = 0;
-
-  while (index < text.length) {
-    const start = text.indexOf("**", index);
-    if (start === -1) {
-      formatted += text.slice(index);
-      break;
-    }
-
-    const end = text.indexOf("**", start + 2);
-    if (end === -1) {
-      formatted += text.slice(index);
-      break;
-    }
-
-    const body = text.slice(start + 2, end);
-    formatted += text.slice(index, start);
-    formatted += body.trim() ? `*${body}*` : `**${body}**`;
-    index = end + 2;
-  }
-
-  return formatted;
-}
-
-function formatWhatsAppLine(value) {
-  const heading = String(value || "").match(/^(\s*)#{1,6}\s+(.+?)\s*#*\s*$/);
-  const line = heading ? `${heading[1]}${heading[2]}` : String(value || "");
-  const chunks = line.split(/(`[^`]*`)/g);
-  return chunks
-    .map((chunk) => {
-      if (chunk.startsWith("`") && chunk.endsWith("`")) return chunk;
-      return formatMarkdownBoldForWhatsApp(formatMarkdownLinksForWhatsApp(chunk));
-    })
-    .join("");
-}
-
-export function formatWhatsAppOutboundText(value) {
-  const lines = stripProposedPlanEnvelope(value).replace(/\r\n/g, "\n").split("\n");
-  let inFence = false;
-  const formatted = lines.map((line) => {
-    if (line.trim().startsWith("```")) {
-      inFence = !inFence;
-      return line;
-    }
-    return inFence ? line : formatWhatsAppLine(line);
-  });
-  return formatted.join("\n").trim();
-}
-
-function footerEnabled(env = process.env) {
-  const value = String(env.ORKESTR_WHATSAPP_DEBUG_FOOTER ?? "1").trim().toLowerCase();
-  return !["0", "false", "off", "no"].includes(value);
-}
-
-function shortReasoningEffort(value) {
-  const effort = pickString(value).toLowerCase();
-  if (!effort) return "";
-  if (effort === "xhigh" || effort === "extra-high" || effort === "extra_high") return "xh";
-  if (effort === "high") return "h";
-  if (effort === "medium") return "m";
-  if (effort === "low") return "l";
-  return effort.replace(/\s+/g, "-").slice(0, 8);
-}
-
-function codexModelDebugLabel(message = {}, thread = {}, env = process.env) {
-  const metadata = thread?.executor?.metadata && typeof thread.executor.metadata === "object" ? thread.executor.metadata : {};
-  const model = pickString(
-    message.codexModel,
-    message.model,
-    thread.codexModel,
-    metadata.codexModel,
-    env.ORKESTR_DEFAULT_CODEX_MODEL,
-    env.OPENAI_MODEL,
-    "unknown",
-  );
-  const effort = shortReasoningEffort(
-    pickString(
-      message.codexReasoningEffort,
-      message.reasoningEffort,
-      thread.codexReasoningEffort,
-      metadata.codexReasoningEffort,
-      env.ORKESTR_DEFAULT_CODEX_REASONING,
-      env.OPENAI_REASONING_EFFORT,
-    ),
-  );
-  return effort ? `${model}/${effort}` : model;
-}
-
-function codexModeDebugValue(message = {}, thread = {}) {
-  const mode = pickString(
-    message.codexModeLive,
-    thread.codexModeLive,
-    thread.runtime?.progress?.codexMode,
-    thread.runtime?.codexMode,
-    thread.codexModeSource === "runtime-pane" ? thread.codexMode : "",
-  ).toLowerCase();
-  return mode === "plan" ? "plan" : "";
-}
-
-function queueDebugCount(messages = [], currentMessage = null) {
-  const activeMessageId = pickString(currentMessage?.id);
-  const activeParentId = pickString(currentMessage?.parentMessageId);
-  return messages.filter((message) => {
-    if (activeMessageId && message?.id === activeMessageId) return false;
-    if (activeParentId && message?.id === activeParentId) return false;
-    if (String(message?.role || "").toLowerCase() !== "user") return false;
-    const state = String(message?.state || "").toLowerCase();
-    const deliveryState = String(message?.deliveryState || "").toLowerCase();
-    return ["queued", "pending_delivery"].includes(state) ||
-      ["blocked_frozen_runtime", "waiting_runtime_ready", "waiting_runtime_start", "retrying_delivery"].includes(deliveryState);
-  }).length;
-}
-
-function cpuDebugPercent() {
-  const cpuCount = os.cpus().length || 1;
-  const percent = Math.round(((os.loadavg()[0] || 0) / cpuCount) * 100);
-  if (!Number.isFinite(percent)) return 0;
-  return Math.max(0, Math.min(999, percent));
-}
-
-function shouldAppendWhatsAppDebugFooter(message = {}, env = process.env, deliveryType = "", thread = null) {
-  if (!footerEnabled(env)) return false;
-  if (thread && threadRequiresTenantIsolation(thread, env)) return false;
-  if (codexAssistantSource(message) || message.source === "orkestr_runtime") return true;
-  return ["delivery_error", "mode_queued", "queue_notice", "router_update"].includes(String(deliveryType || "").trim());
-}
-
-function footerMessageType(deliveryType = "") {
-  return ["progress", "queue_notice", "mode_queued", "delivery_error", "router_update"].includes(String(deliveryType || "").trim())
-    ? "update"
-    : "final";
-}
-
-function whatsappDebugFooter({ message = {}, thread = {}, messages = [], deliveryType = "final", env = process.env } = {}) {
-  const mode = codexModeDebugValue(message, thread);
-  const parts = [
-    `m:${codexModelDebugLabel(message, thread, env)}`,
-    ...(mode ? [`mode:${mode}`] : []),
-    `msg:${footerMessageType(deliveryType)}`,
-    `q:${queueDebugCount(messages, message)}`,
-    `cpu:${cpuDebugPercent()}%`,
-    "help:/help",
-    ...(mode === "plan" ? ["switch:/code"] : []),
-  ];
-  return `dbg: ${parts.join(" · ")}`;
-}
-
-function appendWhatsAppDebugFooter(text, options = {}) {
-  const cleanText = String(text || "").trim();
-  if (!cleanText || !shouldAppendWhatsAppDebugFooter(options.message, options.env, options.deliveryType, options.thread)) return cleanText;
-  return `${cleanText}\n\n${whatsappDebugFooter(options)}`;
-}
-
-function deliveryTextKey(chatId, text) {
-  return crypto
-    .createHash("sha256")
-    .update(`${String(chatId || "").trim()}\n${normalizedDeliveryText(text)}`)
-    .digest("hex");
-}
-
-function codexAssistantSource(message) {
-  return ["codex-rollout", "codex-app-server"].includes(String(message?.source || "").trim());
-}
-
-function codexAssistantPhase(message) {
-  return String(message?.phase || "final_answer").trim().toLowerCase();
-}
-
-function shouldSkipCodexAssistantMirror(message) {
-  return ["context_compaction"].includes(codexAssistantPhase(message));
-}
-
-function shouldMirrorWhatsAppReply(message) {
-  if (codexAssistantSource(message)) {
-    const phase = codexAssistantPhase(message);
-    if (shouldSkipCodexAssistantMirror(message)) return false;
-    return !["commentary", "awaiting_approval"].includes(phase);
-  }
-  return true;
-}
-
-function shouldMirrorWhatsAppProgress(message) {
-  if (!codexAssistantSource(message)) return false;
-  if (shouldSkipCodexAssistantMirror(message)) return false;
-  return ["commentary", "awaiting_approval"].includes(codexAssistantPhase(message));
-}
-
-function latestProgressReplyForParent(messages, parentId) {
-  return [...messages]
-    .reverse()
-    .find((candidate) =>
-      candidate.role === "assistant" &&
-      candidate.state === "completed" &&
-      candidate.parentMessageId === parentId &&
-      shouldMirrorWhatsAppProgress(candidate)
-    ) || null;
-}
-
-function completedFinalReplyForParent(messages, parentId) {
-  return messages.find((candidate) =>
-    candidate.role === "assistant" &&
-    candidate.state === "completed" &&
-    candidate.parentMessageId === parentId &&
-    shouldMirrorWhatsAppReply(candidate)
-  ) || null;
-}
-
-function messageTimeMs(message = {}) {
-  const ms = Date.parse(String(message.timestamp || message.createdAt || ""));
-  return Number.isFinite(ms) ? ms : 0;
-}
-
-function completedFinalReplyForTypingParent(messages = [], parent = null, chatId = "") {
-  if (!parent) return null;
-  const direct = completedFinalReplyForParent(messages, parent.id);
-  if (direct) return direct;
-  const parentMs = messageTimeMs(parent);
-  if (!parentMs) return null;
-  return messages.find((candidate) =>
-    candidate.role === "assistant" &&
-    candidate.state === "completed" &&
-    shouldMirrorWhatsAppReply(candidate) &&
-    messageTimeMs(candidate) >= parentMs &&
-    (!chatId || !candidate.chatId || candidate.chatId === chatId)
-  ) || null;
-}
-
-function whatsappTypingCooldownMs(env = process.env) {
-  const parsed = Number(env.ORKESTR_WHATSAPP_TYPING_COOLDOWN_MS || env.WHATSAPP_TYPING_COOLDOWN_MS || 10_000);
-  return Number.isFinite(parsed) ? Math.max(0, parsed) : 10_000;
-}
-
-function latestOutboundDeliveryForTypingParent(state = null, parent = null, chatId = "", predicate = null) {
-  if (!parent || !chatId) return null;
-  const parentMs = messageTimeMs(parent);
-  return [...(state?.outboundDeliveries || [])]
-    .reverse()
-    .find((delivery) => {
-      if (delivery.chatId !== chatId) return false;
-      if (predicate && !predicate(delivery)) return false;
-      if (parent.id && delivery.parentMessageId === parent.id) return true;
-      const deliveredMs = Date.parse(String(delivery.deliveredAt || ""));
-      return Number.isFinite(deliveredMs) && (!parentMs || deliveredMs >= parentMs);
-    }) || null;
-}
-
-function latestFinalOutboundDeliveryForTypingParent(state = null, parent = null, chatId = "") {
-  return latestOutboundDeliveryForTypingParent(state, parent, chatId, (delivery) =>
-    String(delivery?.deliveryType || "").trim().toLowerCase() === "final"
-  );
-}
-
-function typingCooldownActive(state = null, parent = null, chatId = "", env = process.env) {
-  const cooldownMs = whatsappTypingCooldownMs(env);
-  if (!cooldownMs) return false;
-  const delivery = latestOutboundDeliveryForTypingParent(state, parent, chatId);
-  const deliveredMs = Date.parse(String(delivery?.deliveredAt || ""));
-  return Number.isFinite(deliveredMs) && Date.now() - deliveredMs < cooldownMs;
-}
-
-function whatsappOutboundDeliveryRetentionLimit(env = process.env) {
-  const raw = env.ORKESTR_WHATSAPP_OUTBOUND_DELIVERY_RETENTION;
-  const parsed = Number(raw || 5000);
-  const minimum = raw ? 1 : 500;
-  return Number.isFinite(parsed) ? Math.max(minimum, Math.floor(parsed)) : 5000;
-}
-
-function whatsappReplyBackfillWindowMs(env = process.env) {
-  const parsed = Number(env.ORKESTR_WHATSAPP_REPLY_BACKFILL_WINDOW_MS || 24 * 60 * 60 * 1000);
-  return Number.isFinite(parsed) ? Math.max(0, parsed) : 24 * 60 * 60 * 1000;
-}
-
-function whatsappProgressBackfillWindowMs(env = process.env) {
-  const parsed = Number(env.ORKESTR_WHATSAPP_PROGRESS_BACKFILL_WINDOW_MS || 5 * 60 * 1000);
-  return Number.isFinite(parsed) ? Math.max(0, parsed) : 5 * 60 * 1000;
-}
-
-function oldestOutboundDeliveryMs(outboundDeliveries = []) {
-  return Math.min(
-    ...outboundDeliveries
-      .map((delivery) => Date.parse(String(delivery?.deliveredAt || "")))
-      .filter(Number.isFinite),
-  );
-}
-
-function staleUntrackedWhatsAppReply(message = {}, outboundDeliveries = [], env = process.env) {
-  const messageMs = messageTimeMs(message);
-  if (!messageMs) return false;
-  const backfillWindowMs = whatsappReplyBackfillWindowMs(env);
-  if (backfillWindowMs && Date.now() - messageMs > backfillWindowMs) return true;
-  if (outboundDeliveries.length < whatsappOutboundDeliveryRetentionLimit(env)) return false;
-  const oldestDeliveryMs = oldestOutboundDeliveryMs(outboundDeliveries);
-  return Number.isFinite(oldestDeliveryMs) && messageMs < oldestDeliveryMs;
-}
-
-function staleUntrackedWhatsAppProgress(message = {}, outboundDeliveries = [], env = process.env) {
-  const messageMs = messageTimeMs(message);
-  if (!messageMs) return false;
-  const backfillWindowMs = whatsappProgressBackfillWindowMs(env);
-  if (backfillWindowMs && Date.now() - messageMs > backfillWindowMs) return true;
-  if (outboundDeliveries.length < whatsappOutboundDeliveryRetentionLimit(env)) return false;
-  const oldestDeliveryMs = oldestOutboundDeliveryMs(outboundDeliveries);
-  return Number.isFinite(oldestDeliveryMs) && messageMs < oldestDeliveryMs;
-}
-
-function threadAllowsWhatsAppMirroring(thread) {
-  if (!thread?.binding) return true;
-  return thread.binding.mirrorToWhatsApp !== false && thread.binding.mirrorReplies !== false;
-}
-
-function boundThreadWhatsAppAssistantOrigin({ message = {}, thread = null, kind = "" } = {}) {
-  if (kind !== "thread" || !threadAllowsWhatsAppMirroring(thread)) return false;
-  const binding = thread?.binding || {};
-  if (String(binding.connector || "whatsapp").trim().toLowerCase() !== "whatsapp") return false;
-  const bindingChatId = pickString(binding.chatId);
-  const messageChatId = pickString(message.chatId, bindingChatId);
-  return Boolean(bindingChatId && messageChatId === bindingChatId);
-}
-
-function whatsappMessageOrigin(message, state = null) {
-  if (!message) return false;
-  if (message.connector === "whatsapp" || message.source === "whatsapp_inbound" || message.source === "whatsapp_client") return true;
-  return Boolean((state?.inboundEvents || []).some((event) => event.messageId === message.id));
-}
-
-export function initialQueueDeliveryState(status = null, message = null) {
-  const parsed = parseThreadInputCommand({ text: message?.text || "" });
-  if (parsed.command === "interrupt") return "interrupting";
-  if (!status) return "";
-  const state = String(status.state || "").trim().toLowerCase();
-  const runtimeKind = String(status.runtimeKind || status.runtimeState || "").trim().toLowerCase();
-  if (runtimeKind === "api-agent") return "";
-  const isCodexAppServer = runtimeKind === "codex-app-server";
-  if (isCodexAppServer && state === "working") return "awaiting_active_turn";
-  if (isCodexAppServer && state === "awaiting_approval") return "awaiting_approval";
-  if (state === "working") return "awaiting_runtime_completion";
-  if (isCodexAppServer && (state === "waking" || state === "sleeping" || state === "unloaded")) return "resuming_codex_thread";
-  if (state === "waking" || state === "sleeping") return "waiting_runtime_start";
-  if (!isCodexAppServer && !status.sessionName) return "waiting_runtime_start";
-  if (status.promptReady === false) return "waiting_runtime_ready";
-  return "";
-}
-
 async function annotateInitialThreadQueueNotice(threadId, message, env = process.env) {
   if (!threadId || !message?.id || message.duplicate) return message;
   const deliveryState = initialQueueDeliveryState(await runtimeStatus(threadId, env).catch(() => null), message);
   if (!deliveryState) return message;
   return updateThreadMessage(threadId, message.id, { deliveryState }, env).catch(() => message);
-}
-
-function runtimeKindFromStatus(status = null) {
-  return String(status?.runtimeKind || status?.runtimeState || "").trim().toLowerCase();
-}
-
-function runtimeStateFromStatus(status = null) {
-  return String(status?.state || status?.status || "").trim().toLowerCase();
-}
-
-function runtimeActiveTurnId(status = null) {
-  return String(status?.activeTurnId || status?.turnId || "").trim();
-}
-
-function runtimeTypingActive(status = null) {
-  if (!status) return false;
-  const lifecycle = status.turnLifecycle && typeof status.turnLifecycle === "object" ? status.turnLifecycle : null;
-  if (lifecycle) {
-    if (lifecycle.awaitingApproval === true || lifecycle.queued === true) return false;
-    if (Object.prototype.hasOwnProperty.call(lifecycle, "typingActive")) return lifecycle.typingActive === true;
-  }
-  const state = runtimeStateFromStatus(status);
-  if (state === "frozen" || status.frozen === true) return false;
-  const isCodexAppServer = runtimeKindFromStatus(status) === "codex-app-server";
-  if (isCodexAppServer) {
-    if (!runtimeActiveTurnId(status)) return false;
-    if (state === "awaiting_approval") return false;
-  }
-  const explicitForeground = status.typingActive === true || status.foregroundWorking === true;
-  if (explicitForeground) return true;
-  const hasExplicitForegroundSignal = Object.prototype.hasOwnProperty.call(status, "typingActive") ||
-    Object.prototype.hasOwnProperty.call(status, "foregroundWorking");
-  if (hasExplicitForegroundSignal) return false;
-  if (status.backgroundWork === true || status.progress?.staleWorkingPrompt === true) return false;
-  if (isCodexAppServer) {
-    return status.working === true || state === "working" || state === "running";
-  }
-  return status.working === true || state === "working" || state === "running";
-}
-
-function deferredWhatsAppTypingDeliveryState(message = {}) {
-  const deliveryState = String(message.deliveryState || "").trim().toLowerCase();
-  return [
-    "awaiting_active_turn",
-    "awaiting_approval",
-    "interrupting",
-    "resuming_codex_thread",
-  ].includes(deliveryState);
-}
-
-function latestWhatsAppTypingParent(messages = [], thread = null, state = null) {
-  return [...messages].reverse().find((message) => {
-    if (String(message?.role || "").trim().toLowerCase() !== "user") return false;
-    if (!whatsappMessageOrigin(message, state)) return false;
-    const chatId = pickString(message.chatId, thread?.binding?.chatId);
-    if (!chatId) return false;
-    const messageState = String(message.state || "").trim().toLowerCase();
-    if (messageState === "failed") return false;
-    if (deferredWhatsAppTypingDeliveryState(message)) return false;
-    if (latestFinalOutboundDeliveryForTypingParent(state, message, chatId)) return false;
-    if (completedFinalReplyForTypingParent(messages, message, chatId)) return false;
-    return true;
-  }) || null;
-}
-
-function whatsappTypingTargetForThread({ thread, messages = [], status = null, state = null, env = process.env } = {}) {
-  if (!threadAllowsWhatsAppMirroring(thread)) return null;
-  if (!runtimeTypingActive(status)) return null;
-  const parent = latestWhatsAppTypingParent(messages, thread, state);
-  if (!parent) return null;
-  const chatId = pickString(parent.chatId, thread?.binding?.chatId);
-  if (!chatId) return null;
-  if (typingCooldownActive(state, parent, chatId, env)) return null;
-  return {
-    threadId: thread?.id || null,
-    messageId: parent.id || null,
-    chatId,
-    accountId: pickString(
-      thread?.binding?.responderAccountId,
-      thread?.binding?.outboundAccountId,
-      parent.accountId,
-    ),
-  };
-}
-
-function passiveMirrorCanCompleteParent(parent, reply, chatId, state = null) {
-  if (!parent || parent.role !== "user" || !whatsappMessageOrigin(parent, state)) return false;
-  const parentState = String(parent.state || "").trim().toLowerCase();
-  const parentDeliveryState = String(parent.deliveryState || "").trim().toLowerCase();
-  const recoverableStates = new Set(["queued", "pending_delivery", "awaiting_ack", "running", "failed"]);
-  const recoverableDeliveryStates = new Set([
-    "awaiting_ack",
-    "awaiting_ack_unobserved",
-    "awaiting_runtime_completion",
-    "blocked_frozen_runtime",
-    "delivering",
-    "failed",
-    "recovering_stale_ack",
-    "retrying_delivery",
-    "waiting_runtime_ready",
-    "waiting_runtime_start",
-    "waking",
-  ]);
-  if (!recoverableStates.has(parentState) && !recoverableDeliveryStates.has(parentDeliveryState)) return false;
-  const parentChatId = pickString(parent.chatId, reply?.chatId);
-  const replyChatId = pickString(chatId, reply?.chatId, parent.chatId);
-  return !parentChatId || !replyChatId || parentChatId === replyChatId;
-}
-
-function completedAssistantReplyForParent(messages, parent, chatId, state = null) {
-  if (!parent?.id) return null;
-  return messages.find((candidate) =>
-    candidate.role === "assistant" &&
-    candidate.state === "completed" &&
-    candidate.parentMessageId === parent.id &&
-    shouldMirrorWhatsAppReply(candidate) &&
-    passiveMirrorCanCompleteParent(parent, candidate, chatId, state)
-  ) || null;
-}
-
-async function completePassiveMirrorParent({ kind, agentId, threadId, parent, reply, chatId, delivery = null, state, env }) {
-  if (!passiveMirrorCanCompleteParent(parent, reply, chatId, state)) return null;
-  const previousState = parent.state || null;
-  const previousDeliveryState = parent.deliveryState || null;
-  const patch = {
-    state: "completed",
-    deliveryState: "delivered",
-    deliveredAt: delivery?.deliveredAt || new Date().toISOString(),
-    observedVia: "whatsapp_passive_mirror_delivery",
-    passiveMirrorMessageId: reply?.id || null,
-    error: null,
-  };
-  const updated = kind === "thread"
-    ? await updateThreadMessage(threadId, parent.id, patch, env)
-    : await updateAgentMessage(agentId, parent.id, patch, env);
-  Object.assign(parent, updated);
-  await appendEvent({
-    type: "whatsapp_passive_mirror_parent_completed",
-    kind,
-    agentId: agentId || null,
-    threadId: threadId || null,
-    messageId: parent.id,
-    replyMessageId: reply?.id || null,
-    chatId: pickString(chatId, reply?.chatId, parent.chatId),
-    previousState,
-    previousDeliveryState,
-  }, env).catch(() => {});
-  return updated;
-}
-
-async function recoverParentsForAlreadyMirroredReplies(messageSets, deliveredIds, outboundDeliveries, state, env) {
-  const deliveriesByMessageId = new Map((outboundDeliveries || [])
-    .filter((delivery) => delivery?.messageId)
-    .map((delivery) => [delivery.messageId, delivery]));
-  for (const { agentId, threadId, messages, kind } of messageSets) {
-    for (const reply of messages) {
-      if (reply.role !== "assistant" || reply.state !== "completed" || !deliveredIds.has(reply.id)) continue;
-      if (!shouldMirrorWhatsAppReply(reply)) continue;
-      const parent = messages.find((entry) => entry.id === reply.parentMessageId);
-      if (!parent) continue;
-      const delivery = deliveriesByMessageId.get(reply.id) || null;
-      await completePassiveMirrorParent({
-        kind,
-        agentId,
-        threadId,
-        parent,
-        reply,
-        chatId: pickString(reply.chatId, parent.chatId, delivery?.chatId),
-        delivery,
-        state,
-        env,
-      }).catch(() => null);
-    }
-  }
-}
-
-function failedWhatsAppDeliveryTarget(message, thread, state) {
-  const role = String(message?.role || "").trim().toLowerCase();
-  const messageState = String(message?.state || "").trim().toLowerCase();
-  const deliveryState = String(message?.deliveryState || "").trim().toLowerCase();
-  const observedVia = String(message?.observedVia || "").trim().toLowerCase();
-  if (role !== "user" || (messageState !== "failed" && deliveryState !== "failed")) return null;
-  if (observedVia === "stale_ack_recovery_exhausted") return null;
-  const inboundEvent = [...(state?.inboundEvents || [])]
-    .reverse()
-    .find((event) => event.messageId === message.id) || null;
-  const whatsappOrigin =
-    message.connector === "whatsapp" ||
-    message.source === "whatsapp_inbound" ||
-    Boolean(inboundEvent);
-  if (!whatsappOrigin) return null;
-  const chatId = pickString(message.chatId, inboundEvent?.chatId, thread?.binding?.chatId);
-  if (!chatId) return null;
-  return {
-    chatId,
-    accountId: pickString(
-      thread?.binding?.responderAccountId,
-      thread?.binding?.outboundAccountId,
-      message.accountId,
-      inboundEvent?.accountId,
-    ),
-  };
-}
-
-function formatWhatsAppDeliveryFailure(message) {
-  const reason = pickString(message.error, message.deliveryError, "Orkestr could not confirm this message reached Codex.")
-    .replace(/\s+/g, " ")
-    .slice(0, 600)
-    .trim();
-  return [
-    "Delivery failed",
-    "",
-    "Your message could not be delivered to Codex.",
-    `Reason: ${reason || "Unknown error."}`,
-  ].join("\n");
-}
-
-function whatsappQueueNoticeOrigin(message, thread, state) {
-  const inboundEvent = [...(state?.inboundEvents || [])]
-    .reverse()
-    .find((event) => event.messageId === message.id) || null;
-  const whatsappOrigin =
-    message.connector === "whatsapp" ||
-    message.source === "whatsapp_inbound" ||
-    Boolean(inboundEvent);
-  if (!whatsappOrigin) return null;
-  const chatId = pickString(message.chatId, inboundEvent?.chatId, thread?.binding?.chatId);
-  if (!chatId) return null;
-  return {
-    chatId,
-    accountId: pickString(
-      thread?.binding?.responderAccountId,
-      thread?.binding?.outboundAccountId,
-      message.accountId,
-      inboundEvent?.accountId,
-    ),
-  };
-}
-
-function queuedInputWhatsAppDeliveryTarget(message, thread, state) {
-  const role = String(message?.role || "").trim().toLowerCase();
-  const messageState = String(message?.state || "").trim().toLowerCase();
-  const deliveryState = String(message?.deliveryState || "").trim().toLowerCase();
-  if (role !== "user") return null;
-  if (!["queued", "pending_delivery"].includes(messageState)) return null;
-  const runtimeKind = String(thread?.runtimeKind || thread?.runtime?.runtimeKind || thread?.executor?.metadata?.runtimeKind || "").trim().toLowerCase();
-  if (runtimeKind === "codex-app-server" && deliveryState === "awaiting_active_turn") return null;
-  if (![
-    "awaiting_runtime_completion",
-    "awaiting_active_turn",
-    "awaiting_approval",
-    "interrupting",
-    "recovering_stale_ack",
-    "resuming_codex_thread",
-    "retrying_delivery",
-    "waiting_runtime_ready",
-    "waiting_runtime_start",
-    "waking",
-  ].includes(deliveryState)) return null;
-  const target = whatsappQueueNoticeOrigin(message, thread, state);
-  return target ? { ...target, reason: deliveryState || messageState } : null;
-}
-
-function queueNoticePreview(message) {
-  const text = pickString(message?.text, message?.promptFile ? "message from prompt file" : "message");
-  const parsed = parseThreadInputCommand({ text });
-  const previewText = parsed.command === "interrupt" && parsed.text ? parsed.text : text;
-  const normalized = previewText.replace(/\s+/g, " ").trim();
-  return normalized.length > 120 ? `${normalized.slice(0, 117)}...` : normalized;
-}
-
-function formatWhatsAppQueueNotice(message, reason = "") {
-  const preview = queueNoticePreview(message);
-  const normalizedReason = String(reason || "").trim().toLowerCase();
-  if (normalizedReason === "awaiting_active_turn") {
-    return `Queued for the next Codex turn: "${preview}".`;
-  }
-  if (normalizedReason === "awaiting_approval") {
-    return `Queued your message while Codex is waiting for approval: "${preview}". Send /approve or /deny to answer the approval request.`;
-  }
-  if (normalizedReason === "resuming_codex_thread") {
-    return `Resuming this Codex thread and queued your message: "${preview}".`;
-  }
-  if (["waiting_runtime_start", "waking"].includes(normalizedReason)) {
-    return `Waking this Orkestr thread and queued your message: "${preview}". It will be delivered automatically once the Codex session is awake.`;
-  }
-  if (normalizedReason === "awaiting_runtime_completion") {
-    return `Queued your latest message while current work is still running: "${preview}".`;
-  }
-  if (normalizedReason === "interrupting") {
-    return `Interrupting the current Codex turn and queued your message: "${preview}".`;
-  }
-  if (["recovering_stale_ack", "retrying_delivery"].includes(normalizedReason)) {
-    return `Queued your latest message while Orkestr recovers this thread: "${preview}".`;
-  }
-  return `Queued your message while Orkestr prepares this thread: "${preview}".`;
-}
-
-function queuedModeWhatsAppDeliveryTarget(message, thread, state) {
-  const role = String(message?.role || "").trim().toLowerCase();
-  const messageState = String(message?.state || "").trim().toLowerCase();
-  const deliveryState = String(message?.deliveryState || "").trim().toLowerCase();
-  const mode = String(message?.text || "").trim().match(/^\/(code|coding|plan|planning)\b/i)?.[1]?.toLowerCase();
-  if (role !== "user" || messageState !== "queued" || deliveryState !== "waiting_runtime_ready" || !mode) return null;
-  const inboundEvent = [...(state?.inboundEvents || [])]
-    .reverse()
-    .find((event) => event.messageId === message.id) || null;
-  const whatsappOrigin =
-    message.connector === "whatsapp" ||
-    message.source === "whatsapp_inbound" ||
-    Boolean(inboundEvent);
-  if (!whatsappOrigin) return null;
-  const chatId = pickString(message.chatId, inboundEvent?.chatId, thread?.binding?.chatId);
-  if (!chatId) return null;
-  return {
-    mode: mode === "coding" ? "code" : mode === "planning" ? "plan" : mode,
-    chatId,
-    accountId: pickString(
-      thread?.binding?.responderAccountId,
-      thread?.binding?.outboundAccountId,
-      message.accountId,
-      inboundEvent?.accountId,
-    ),
-  };
-}
-
-function formatWhatsAppModeQueued(mode) {
-  return `Mode switch queued. Orkestr will switch to ${mode} when Codex is ready.`;
 }
 
 export async function syncWhatsAppTypingIndicators(env = process.env, options = {}) {
@@ -2289,9 +1401,5 @@ async function deliverWhatsAppRepliesOnce(env = process.env, fetchImpl = fetch) 
 }
 
 export async function deliverWhatsAppReplies(env = process.env, fetchImpl = fetch) {
-  if (whatsappDeliveryInFlight) return whatsappDeliveryInFlight;
-  whatsappDeliveryInFlight = deliverWhatsAppRepliesOnce(env, fetchImpl).finally(() => {
-    whatsappDeliveryInFlight = null;
-  });
-  return whatsappDeliveryInFlight;
+  return whatsappOutboundMirrorWorker.run(() => deliverWhatsAppRepliesOnce(env, fetchImpl));
 }

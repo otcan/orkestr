@@ -1,5 +1,6 @@
-import { dataPaths, ensureDataDirs, userDataPaths } from "../../storage/src/paths.js";
-import { appendEvent, readJson, writeJson } from "../../storage/src/store.js";
+import { ensureDataDirs, userDataPaths } from "../../storage/src/paths.js";
+import { createUserIdentityRepository, createUserRepository } from "../../storage/src/repositories.js";
+import { appendEvent } from "../../storage/src/store.js";
 import { authProvider } from "./auth-config.js";
 
 export const adminUserId = "admin";
@@ -113,14 +114,11 @@ export function publicUser(user = {}, env = process.env) {
 }
 
 async function readUsersFile(env = process.env) {
-  const paths = await ensureDataDirs(env);
-  const users = await readJson(paths.users, []);
-  return Array.isArray(users) ? users : [];
+  return createUserRepository(env).list();
 }
 
 async function writeUsersFile(users, env = process.env) {
-  const paths = dataPaths(env);
-  await writeJson(paths.users, users);
+  await createUserRepository(env).save(users);
 }
 
 export async function listUsers(env = process.env) {
@@ -303,8 +301,7 @@ function assertLoginContactComplete(user = {}) {
 }
 
 export async function readUserPrivateIdentities(userId, env = process.env) {
-  const paths = userDataPaths(userId, env);
-  const identities = await readJson(paths.identities, []);
+  const identities = await createUserIdentityRepository(env).list(userId);
   return Array.isArray(identities)
     ? identities.map(normalizeIdentity).filter((identity) => identity.provider && (identity.externalId || identity.chatId))
     : [];
@@ -372,8 +369,7 @@ export async function unlinkUserPrivateIdentity(userId, identity = {}, { env = p
 
 async function addUserPrivateIdentity(userId, identity = {}, env = process.env) {
   const normalized = normalizeIdentity(identity);
-  const paths = userDataPaths(userId, env);
-  await ensureDataDirs(env);
+  const repository = createUserIdentityRepository(env);
   const identities = await readUserPrivateIdentities(userId, env);
   let replaced = false;
   const next = identities.map((item) => {
@@ -386,17 +382,16 @@ async function addUserPrivateIdentity(userId, identity = {}, env = process.env) 
     return { ...item, ...normalized, source: normalized.source || item.source, linkedAt: item.linkedAt || normalized.linkedAt };
   });
   if (!replaced) next.push(normalized);
-  await writeJson(paths.identities, next);
+  await repository.save(userId, next);
   return next;
 }
 
 async function removeUserPrivateIdentities(userId, predicate, env = process.env) {
-  const paths = userDataPaths(userId, env);
-  await ensureDataDirs(env);
+  const repository = createUserIdentityRepository(env);
   const identities = await readUserPrivateIdentities(userId, env);
   const removed = identities.filter(predicate);
   if (!removed.length) return [];
-  await writeJson(paths.identities, identities.filter((identity) => !predicate(identity)));
+  await repository.save(userId, identities.filter((identity) => !predicate(identity)));
   return removed;
 }
 

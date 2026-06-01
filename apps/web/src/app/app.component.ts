@@ -8,6 +8,10 @@ import { OnboardingPageComponent } from "./onboarding-page.component";
 import { PairingRequiredPageComponent } from "./pairing-required-page.component";
 import { OpsPageComponent, ToolsView } from "./ops-page.component";
 import { RawTerminalController } from "./raw-terminal.controller";
+import { ConnectorStore } from "./stores/connector.store";
+import { RuntimeStore } from "./stores/runtime.store";
+import { ThreadStore } from "./stores/thread.store";
+import { ThreadMessageListComponent } from "./thread-message-list.component";
 import { UserConnectorsPageComponent } from "./user-connectors-page.component";
 import { UserDeskPageComponent } from "./user-desk-page.component";
 import { UserTimersPageComponent } from "./user-timers-page.component";
@@ -55,12 +59,15 @@ const DEFAULT_WHATSAPP_REPLY_PREFIX = "orkestr:";
 
 @Component({
   selector: "ork-root",
-  imports: [DatePipe, FormsModule, FirstThreadWizardComponent, FilesPageComponent, OpsPageComponent, OnboardingPageComponent, PairingRequiredPageComponent, UserConnectorsPageComponent, UserDeskPageComponent, UserTimersPageComponent],
+  imports: [DatePipe, FormsModule, FirstThreadWizardComponent, FilesPageComponent, OpsPageComponent, OnboardingPageComponent, PairingRequiredPageComponent, ThreadMessageListComponent, UserConnectorsPageComponent, UserDeskPageComponent, UserTimersPageComponent],
   templateUrl: "./app.component.html",
 })
 export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   private readonly api = inject(ApiService);
   private readonly cdr = inject(ChangeDetectorRef);
+  private readonly connectorStore = inject(ConnectorStore);
+  private readonly runtimeStore = inject(RuntimeStore);
+  private readonly threadStore = inject(ThreadStore);
   private readonly popStateHandler = () => {
     this.onboardingActive = this.onboardingFromPath();
     this.setupPageMode = this.setupPageModeFromPath();
@@ -3479,7 +3486,27 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     return String(thread.publicStatusCode || thread.status || thread.state || "").toLowerCase();
   }
 
+  private syncSignalStores(): void {
+    this.threadStore.setThreads(this.threads);
+    this.threadStore.selectThread(this.selectedId);
+    this.threadStore.setMessagesByThread(this.messageCache());
+    this.threadStore.setLoadingByThread(this.loadingThreadIds());
+    this.connectorStore.setConnectors(this.setupStatus?.connectors || []);
+    this.connectorStore.setWhatsAppStatus(this.whatsappStatusDetails);
+    const active: Record<string, boolean> = {};
+    const now = Date.now();
+    for (const [threadId, until] of Object.entries(this.activeThreadIds())) {
+      if (Number(until || 0) > now) active[threadId] = true;
+    }
+    this.runtimeStore.setWorkingThreads(active);
+    const selected = this.selectedThread();
+    if (selected?.id && this.runtimeDetails) {
+      this.runtimeStore.setRuntime(selected.id, this.runtimeDetails);
+    }
+  }
+
   private renderNow(): void {
+    this.syncSignalStores();
     this.cdr.detectChanges();
   }
 

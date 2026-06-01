@@ -1,6 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  OrkestrEventTypes,
+  orkestrEventIdempotencyKey,
+  turnLifecycleEventName,
+} from "../packages/core/src/orkestr-events.js";
+import {
   normalizeTurnLifecycle,
   turnLifecycleEvent,
   turnLifecycleFromRuntimeStatus,
@@ -22,6 +27,22 @@ test("turn lifecycle normalizes queued, running, approval, and terminal states",
   assert.equal(approval.typingActive, false);
   assert.equal(terminal.terminal, true);
   assert.equal(terminal.sidebarWorking, false);
+});
+
+test("shared Orkestr event contract exposes stable names and idempotency keys", () => {
+  assert.equal(OrkestrEventTypes.threadInputQueued, "thread.input.queued");
+  assert.equal(OrkestrEventTypes.whatsappMirrorDelivered, "whatsapp.mirror.delivered");
+  assert.equal(turnLifecycleEventName("completed"), "turn_lifecycle_completed");
+  assert.equal(
+    orkestrEventIdempotencyKey({
+      type: OrkestrEventTypes.whatsappMirrorDelivered,
+      threadId: "thread-1",
+      messageId: "message-1",
+      chatId: "chat-1",
+      deliveryType: "final",
+    }),
+    "whatsapp.mirror.delivered|thread-1|message-1|||chat-1|final",
+  );
 });
 
 test("turn lifecycle events use the shared terminal event contract", () => {
