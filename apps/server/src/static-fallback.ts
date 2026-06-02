@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { INestApplication } from "@nestjs/common";
-import { renderPublicSite } from "./public-site.js";
+import { publicPairingUrl, publicSiteAllowedForHost, publicSitePath, renderPublicSite } from "./public-site.js";
 
 const publicDir = path.resolve(process.cwd(), "dist/web/browser");
 const publicAssetDir = path.resolve(process.cwd(), "docs/assets");
@@ -30,7 +30,15 @@ export function registerStaticFallback(app: INestApplication): void {
     if (url.startsWith("/public-assets/")) {
       return servePublicAsset(url, response);
     }
-    const publicSite = renderPublicSite(url, process.env);
+    const privatePublicRedirect = privatePublicPathRedirectUrl(request, url, process.env);
+    if (privatePublicRedirect) {
+      return response
+        .status(302)
+        .header("cache-control", "no-store")
+        .header("location", privatePublicRedirect)
+        .send("Redirecting to Orkestr authentication.");
+    }
+    const publicSite = renderPublicSite(url, process.env, { host: requestHostHeader(request) });
     if (publicSite) {
       return response
         .status(200)
@@ -40,6 +48,31 @@ export function registerStaticFallback(app: INestApplication): void {
     }
     return serveStaticPath(url || "/", response);
   });
+}
+
+function privatePublicPathRedirectUrl(request: any, requestUrl: string, env = process.env) {
+  const url = new URL(requestUrl || "/", "http://localhost");
+  if (!publicSitePath(url.pathname)) return "";
+  if (publicSiteAllowedForHost(requestHostHeader(request), env)) return "";
+  const pairingUrl = publicPairingUrl(env);
+  if (!pairingUrl) return "";
+  try {
+    const target = new URL(pairingUrl);
+    target.searchParams.set("return", originalRequestUrl(request, requestUrl));
+    return target.toString();
+  } catch {
+    return "";
+  }
+}
+
+function requestHostHeader(request: any) {
+  return String(request.headers?.["x-forwarded-host"] || request.headers?.host || "");
+}
+
+function originalRequestUrl(request: any, requestUrl: string) {
+  const proto = String(request.headers?.["x-forwarded-proto"] || request.protocol || "https").split(",")[0].trim() || "https";
+  const host = String(request.headers?.["x-forwarded-host"] || request.headers?.host || "localhost").split(",")[0].trim() || "localhost";
+  return `${proto}://${host}${requestUrl || "/"}`;
 }
 
 function serveDesktopSharePage(response: any) {

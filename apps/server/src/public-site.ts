@@ -14,6 +14,31 @@ function clean(value = "") {
   return String(value || "").trim();
 }
 
+function normalizeUrl(value = "") {
+  const text = clean(value).replace(/\/+$/, "");
+  if (!text) return "";
+  try {
+    const parsed = new URL(/^https?:\/\//i.test(text) ? text : `https://${text}`);
+    if (!["http:", "https:"].includes(parsed.protocol) || !parsed.hostname) return "";
+    parsed.hash = "";
+    parsed.search = "";
+    parsed.pathname = parsed.pathname.replace(/\/+$/, "");
+    return parsed.toString().replace(/\/+$/, "");
+  } catch {
+    return "";
+  }
+}
+
+function hostFromValue(value = "") {
+  const text = clean(value).replace(/^https?:\/\//i, "").replace(/\/.*$/, "").replace(/:\d+$/, "").replace(/^\.+/, "").replace(/\.+$/, "");
+  return /^[a-z0-9][a-z0-9.-]*[a-z0-9]$/i.test(text) ? text.toLowerCase() : "";
+}
+
+function requestHost(value = "") {
+  const first = clean(value).split(",")[0] || "";
+  return hostFromValue(first);
+}
+
 function escapeHtml(value = "") {
   return clean(value)
     .replace(/&/g, "&amp;")
@@ -30,6 +55,36 @@ function publicContact(env = process.env) {
   return clean(env.ORKESTR_PUBLIC_CONTACT || env.ORKESTR_SUPPORT_EMAIL || "Ask the person who invited you.");
 }
 
+export function publicSiteBaseUrl(env = process.env) {
+  const configured = normalizeUrl(env.ORKESTR_PUBLIC_SITE_URL || env.ORKESTR_PRIMARY_PUBLIC_URL || "");
+  if (configured) return configured;
+  const primary = hostFromValue(env.ORKESTR_PRIMARY_DOMAIN || env.ORKESTR_DOMAIN || "");
+  return primary ? `https://${primary}` : "";
+}
+
+export function publicSiteHost(env = process.env) {
+  return requestHost(publicSiteBaseUrl(env));
+}
+
+export function publicSiteAllowedForHost(hostHeader = "", env = process.env) {
+  const expected = publicSiteHost(env);
+  if (!expected) return true;
+  const actual = requestHost(hostHeader);
+  if (!actual) return true;
+  return actual === expected || actual === `www.${expected}` || (expected.startsWith("www.") && actual === expected.slice(4));
+}
+
+export function publicPairingUrl(env = process.env) {
+  const configured = normalizeUrl(env.ORKESTR_PUBLIC_AUTH_URL || env.ORKESTR_AUTH_ENTRY_URL || env.ORKESTR_PAIRING_URL || "");
+  const base = configured || publicSiteBaseUrl(env);
+  if (!base) return "";
+  try {
+    return new URL("/setup/pairing", base).toString();
+  } catch {
+    return "";
+  }
+}
+
 export function publicSitePath(pathname = "") {
   const path = clean(pathname || "/").replace(/\/+$/, "") || "/";
   if (path === "/" || path === "/public") return "home";
@@ -42,7 +97,8 @@ export function publicSitePath(pathname = "") {
   return "";
 }
 
-export function renderPublicSite(requestUrl = "/", env = process.env) {
+export function renderPublicSite(requestUrl = "/", env = process.env, options: { host?: string } = {}) {
+  if (!publicSiteAllowedForHost(options.host || "", env)) return "";
   const url = new URL(requestUrl || "/", "http://localhost");
   const pageId = publicSitePath(url.pathname);
   if (!pageId) return "";
