@@ -1497,6 +1497,9 @@ test("local whatsapp inbound failures explain missing user capabilities", () => 
   const gmail = inboundRoutingFailureNoticeText(new Error("gmail capability missing"));
   const desktop = inboundRoutingFailureNoticeText(new Error("desktop capability false"));
   const target = inboundRoutingFailureNoticeText(new Error("whatsapp_target_required"));
+  const pairing = inboundRoutingFailureNoticeText(new Error("browser_pairing_required"), {
+    env: { ORKESTR_PUBLIC_SITE_URL: "https://orkestr.example.test/" },
+  });
 
   assert.match(gmail, /Gmail is not connected or enabled for this chat yet/i);
   assert.doesNotMatch(gmail, /safely handle|private connector|account identity/i);
@@ -1504,6 +1507,8 @@ test("local whatsapp inbound failures explain missing user capabilities", () => 
   assert.doesNotMatch(desktop, /safely handle|private connector|account identity/i);
   assert.match(target, /not connected to a thread/i);
   assert.doesNotMatch(target, /safely handle|private connector|account identity/i);
+  assert.match(pairing, /browser_pairing_required/);
+  assert.match(pairing, /https:\/\/orkestr\.example\.test\//);
 });
 
 test("api-agent thread pending delivery skips legacy runtime wakeups", async () => {

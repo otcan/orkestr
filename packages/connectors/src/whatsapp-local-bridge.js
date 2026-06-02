@@ -861,11 +861,25 @@ function attachmentSummaryText(attachments = []) {
   ].join("\n\n");
 }
 
-export function inboundRoutingFailureNoticeText(error) {
+function publicHelpUrl(env = process.env) {
+  const configured = String(env.ORKESTR_PUBLIC_SITE_URL || env.ORKESTR_PUBLIC_HELP_URL || "").trim();
+  const fallback = "https://orkestr.de/";
+  try {
+    const url = new URL(configured || fallback);
+    return ["http:", "https:"].includes(url.protocol) ? url.toString() : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+export function inboundRoutingFailureNoticeText(error, { env = process.env } = {}) {
   const reason = String(error?.message || error || "routing_failed").trim();
   const lowered = reason.toLowerCase();
   if (reason === "llm_sanitizer_unconfigured") {
     return "Orkestr could not accept your message because the isolated-user LLM sanitizer is not configured. Ask the admin to connect the sanitizer, then resend.";
+  }
+  if (reason === "browser_pairing_required") {
+    return `Orkestr could not route your message: browser_pairing_required. Open ${publicHelpUrl(env)} to continue setup, then resend.`;
   }
   if (reason === "whatsapp_target_required") {
     return "Orkestr could not route your message because this WhatsApp chat is not connected to a thread.";
@@ -894,7 +908,7 @@ async function sendInboundRoutingFailureNotice({ accountId = "", chatId = "", ev
   const sourceEventId = String(eventId || "").trim();
   if (!selectedAccountId || !id || !sourceEventId) return { sent: false, reason: "missing_target" };
   if (hasInboundFailureNotice(selectedAccountId, sourceEventId)) return { sent: false, reason: "already_notified" };
-  const text = inboundRoutingFailureNoticeText(error);
+  const text = inboundRoutingFailureNoticeText(error, { env });
   rememberInboundFailureNotice(selectedAccountId, sourceEventId);
   try {
     if (client) {
