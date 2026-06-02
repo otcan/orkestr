@@ -340,6 +340,10 @@ test("local whatsapp group participant ids are normalized for created test chats
     normalizeGroupParticipantIds("66378837028965@lid, 4917632400662@c.us"),
     ["66378837028965@lid", "4917632400662@c.us"],
   );
+  assert.deepEqual(
+    normalizeGroupParticipantIds(["+49 176 32400662", "4917632400662"]),
+    ["4917632400662@c.us"],
+  );
 });
 
 test("whatsapp thread group creation binds an existing thread idempotently", async () => {

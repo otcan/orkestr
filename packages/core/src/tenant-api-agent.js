@@ -277,7 +277,7 @@ function publicSkillActionHints(skill = {}, available = false) {
   if (!available) return ["status"];
   if (clean(skill.requiresDesktop)) return ["status", "list_actions"];
   if (id === "files") return ["list", "read", "write"];
-  if (id === "timers") return ["list"];
+  if (id === "timers") return ["list", "create", "delete", "run"];
   if (["gmail", "outlook", "jira", "shopify", "whatsapp"].includes(id)) return ["status"];
   if (id === "whereiam") return ["status"];
   return ["status"];

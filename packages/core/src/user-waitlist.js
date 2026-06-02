@@ -1,6 +1,6 @@
 import { dataPaths } from "../../storage/src/paths.js";
 import { appendEvent, readJson, writeJson } from "../../storage/src/store.js";
-import { createThread } from "./threads.js";
+import { appendThreadMessage, createThread } from "./threads.js";
 import { API_AGENT_RUNTIME_KIND } from "./tenant-api-agent.js";
 import { setUserOnboardingState } from "./user-onboarding.js";
 import { linkUserPrivateIdentity, normalizeUserId, publicUser, upsertUser } from "./users.js";
@@ -194,7 +194,7 @@ export async function updateWaitlistEntry(entryId, patch = {}, env = process.env
   return { ok: true, entry: next };
 }
 
-export async function approveWaitlistEntry(entryId, input = {}, env = process.env) {
+export async function approveWaitlistEntry(entryId, input = {}, env = process.env, dependencies = {}) {
   const id = clean(entryId);
   if (!id) throw waitlistError("waitlist_entry_id_required", 400);
   const store = await readWaitlistStore(env);
@@ -218,7 +218,7 @@ export async function approveWaitlistEntry(entryId, input = {}, env = process.en
     displayName: entry.displayName,
     source: "manual",
   }, { env, actorUserId, migrate: true });
-  const thread = await createThread({
+  let thread = await createThread({
     id: clean(input.threadId) || `onboarding-${user.id}`,
     ownerUserId: user.id,
     name: connectionName,
@@ -266,6 +266,17 @@ export async function approveWaitlistEntry(entryId, input = {}, env = process.en
     reviewedBy: actorUserId,
   }, env);
   const firstPrompt = buildWaitlistOnboardingPrompt({ user, entry, connectionName });
+  const provisioned = await provisionWaitlistWhatsAppOnboarding({
+    thread,
+    entry,
+    firstPrompt,
+    input,
+    connectionName,
+    env,
+    dependencies,
+  });
+  thread = provisioned.thread || thread;
+  const { thread: _thread, ...whatsapp } = provisioned;
   await appendEvent({
     type: "waitlist_entry_approved",
     waitlistEntryId: entry.id,
@@ -280,12 +291,110 @@ export async function approveWaitlistEntry(entryId, input = {}, env = process.en
     thread,
     onboarding: onboarding.onboarding,
     firstPrompt,
-    whatsapp: {
-      phoneNumber: entry.phoneNumber,
-      connectionName,
-      chatId: thread.binding?.chatId || "",
-      pendingChatCreation: !thread.binding?.chatId,
-    },
+    whatsapp,
+  };
+}
+
+async function provisionWaitlistWhatsAppOnboarding({
+  thread = {},
+  entry = {},
+  firstPrompt = "",
+  input = {},
+  connectionName = "",
+  env = process.env,
+  dependencies = {},
+} = {}) {
+  let currentThread = thread;
+  let group = null;
+  let groupError = "";
+  let promptMessage = null;
+  let delivery = null;
+  if (!clean(currentThread.binding?.chatId) && input.createWhatsAppGroup !== false && typeof dependencies.createWhatsAppThreadGroup === "function") {
+    try {
+      group = await dependencies.createWhatsAppThreadGroup(currentThread, {
+        name: connectionName,
+        senderAccountId: clean(input.senderAccountId || input.whatsappAccountId || input.accountId),
+        responderAccountId: clean(input.responderAccountId || input.outboundAccountId || input.whatsappAccountId || input.accountId),
+        outboundAccountId: clean(input.outboundAccountId || input.responderAccountId || input.whatsappAccountId || input.accountId),
+        participantIds: Array.isArray(input.participantIds) && input.participantIds.length ? input.participantIds : [entry.phoneNumber],
+        adminParticipantIds: Array.isArray(input.adminParticipantIds) ? input.adminParticipantIds : [],
+        promoteParticipantsAsAdmins: input.promoteParticipantsAsAdmins !== false,
+        generatePicture: input.generatePicture !== false,
+        mirrorToWhatsApp: true,
+      }, env);
+      currentThread = group.thread || currentThread;
+    } catch (error) {
+      groupError = error?.message || String(error);
+      await appendEvent({
+        type: "waitlist_whatsapp_group_create_failed",
+        waitlistEntryId: entry.id,
+        threadId: currentThread.id,
+        error: groupError,
+      }, env).catch(() => {});
+      if (input.requireWhatsAppGroup === true) throw error;
+    }
+  }
+  const chatId = clean(currentThread.binding?.chatId);
+  if (chatId && firstPrompt && input.sendFirstPrompt !== false) {
+    try {
+      promptMessage = await appendThreadMessage(currentThread.id, {
+        role: "assistant",
+        source: "orkestr_onboarding",
+        connector: "whatsapp",
+        chatId,
+        accountId: clean(currentThread.binding?.responderAccountId || currentThread.binding?.outboundAccountId || currentThread.binding?.senderAccountId),
+        text: firstPrompt,
+        state: "completed",
+      }, env);
+      if (typeof dependencies.deliverWhatsAppReplies === "function") {
+        delivery = await dependencies.deliverWhatsAppReplies(env);
+      }
+      await appendEvent({
+        type: "waitlist_first_prompt_queued",
+        waitlistEntryId: entry.id,
+        threadId: currentThread.id,
+        messageId: promptMessage.id,
+        chatId,
+      }, env).catch(() => {});
+    } catch (error) {
+      const promptError = error?.message || String(error);
+      await appendEvent({
+        type: "waitlist_first_prompt_failed",
+        waitlistEntryId: entry.id,
+        threadId: currentThread.id,
+        chatId,
+        error: promptError,
+      }, env).catch(() => {});
+      if (input.requireFirstPrompt === true) throw error;
+      return waitlistWhatsAppResult({ thread: currentThread, entry, connectionName, group, groupError, promptError });
+    }
+  }
+  return waitlistWhatsAppResult({ thread: currentThread, entry, connectionName, group, groupError, promptMessage, delivery });
+}
+
+function waitlistWhatsAppResult({
+  thread = {},
+  entry = {},
+  connectionName = "",
+  group = null,
+  groupError = "",
+  promptMessage = null,
+  promptError = "",
+  delivery = null,
+} = {}) {
+  const chatId = clean(thread.binding?.chatId);
+  return {
+    phoneNumber: entry.phoneNumber,
+    connectionName,
+    chatId,
+    pendingChatCreation: !chatId,
+    groupCreated: group?.created === true,
+    groupReused: group?.reused === true,
+    groupError,
+    firstPromptMessageId: promptMessage?.id || "",
+    firstPromptDelivery: delivery || null,
+    promptError,
+    thread,
   };
 }
 

@@ -6,7 +6,7 @@ import test from "node:test";
 import { startServer } from "../apps/server/src/server.js";
 import { userDataPaths } from "../packages/storage/src/paths.js";
 import { createTimer, listTimers } from "../packages/core/src/timers.js";
-import { listThreads } from "../packages/core/src/threads.js";
+import { listThreadMessages, listThreads, updateThread } from "../packages/core/src/threads.js";
 import {
   linkUserPrivateIdentity,
   readUserPrivateIdentities,
@@ -94,14 +94,51 @@ test("waitlist submissions are normalized, idempotent, and admin-reviewable", as
     adminNote: "Sent WA intro",
     reviewedBy: "admin",
   }, env);
+  const createdGroups = [];
+  const deliveries = [];
   const approved = await approveWaitlistEntry(first.waitlist.id, {
     connectionName: "Can-Orkestr",
     actorUserId: "admin",
     whatsappAccountId: "wa-router",
-  }, env);
+  }, env, {
+    async createWhatsAppThreadGroup(thread, options, groupEnv) {
+      createdGroups.push(options);
+      const binding = {
+        ...(thread.binding || {}),
+        connector: "whatsapp",
+        chatId: "120363000000000003@g.us",
+        displayName: options.name,
+        mirrorToWhatsApp: true,
+        responderAccountId: options.responderAccountId,
+        outboundAccountId: options.outboundAccountId,
+        senderContactId: options.participantIds[0],
+      };
+      const updated = await updateThread(thread.id, { binding, bindingName: binding.displayName }, groupEnv);
+      return { ok: true, created: true, reused: false, thread: updated, binding, chat: { id: binding.chatId, name: binding.displayName } };
+    },
+    async deliverWhatsAppReplies() {
+      deliveries.push(true);
+      return { delivered: [{ messageId: "first-prompt" }], skipped: [], failed: [] };
+    },
+  });
   const user = await getUser(approved.user.id, env);
   const identities = await readUserPrivateIdentities(approved.user.id, env);
   const threads = await listThreads(env);
+  const messages = await listThreadMessages(approved.thread.id, env);
+  const failedSubmit = await submitWaitlistEntry({
+    displayName: "Bridge Later",
+    phoneNumber: "+49176000002",
+    acceptedTerms: true,
+    consentToContact: true,
+  }, env);
+  const failedApproval = await approveWaitlistEntry(failedSubmit.waitlist.id, {
+    connectionName: "Bridge-Later",
+    actorUserId: "admin",
+  }, env, {
+    async createWhatsAppThreadGroup() {
+      throw new Error("whatsapp_responder_account_not_ready");
+    },
+  });
 
   assert.equal(first.submitted, true);
   assert.equal(duplicate.waitlist.id, first.waitlist.id);
@@ -116,7 +153,21 @@ test("waitlist submissions are normalized, idempotent, and admin-reviewable", as
   assert.equal(user.phoneNumber, "+49176000000");
   assert.equal(approved.thread.ownerUserId, approved.user.id);
   assert.equal(approved.thread.runtimeKind, "api-agent");
-  assert.equal(approved.whatsapp.pendingChatCreation, true);
+  assert.equal(approved.whatsapp.pendingChatCreation, false);
+  assert.equal(approved.whatsapp.groupCreated, true);
+  assert.equal(approved.whatsapp.chatId, "120363000000000003@g.us");
+  assert.equal(approved.whatsapp.firstPromptDelivery.delivered.length, 1);
+  assert.deepEqual(createdGroups.map((group) => group.participantIds), [["+49176000000"]]);
+  assert.deepEqual(deliveries, [true]);
+  assert.ok(messages.some((message) =>
+    message.role === "assistant" &&
+    message.source === "orkestr_onboarding" &&
+    message.connector === "whatsapp" &&
+    message.chatId === "120363000000000003@g.us" &&
+    message.text.includes("private Orkestr onboarding chat")
+  ));
+  assert.equal(failedApproval.whatsapp.pendingChatCreation, true);
+  assert.match(failedApproval.whatsapp.groupError, /whatsapp_responder_account_not_ready/);
   assert.match(approved.firstPrompt, /private Orkestr onboarding chat/);
   assert.ok(identities.some((identity) => identity.provider === "whatsapp" && identity.externalId === "+49176000000"));
   assert.ok(threads.some((thread) => thread.id === approved.thread.id && thread.ownerUserId === approved.user.id));

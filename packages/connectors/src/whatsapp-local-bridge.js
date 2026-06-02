@@ -198,7 +198,9 @@ export function normalizeGroupParticipantIds(participantIds = []) {
   const seen = new Set();
   const normalized = [];
   for (const value of values) {
-    const id = String(value || "").trim();
+    const raw = String(value || "").trim();
+    const digits = raw.replace(/\D+/g, "");
+    const id = raw && !raw.includes("@") && digits ? `${digits}@c.us` : raw;
     const comparable = id.toLowerCase();
     if (!id || seen.has(comparable)) continue;
     seen.add(comparable);

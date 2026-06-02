@@ -1391,6 +1391,49 @@ test("tenant api-agent tool gateway stays inside scoped file roots", async () =>
   assert.equal(deletedSkill.deleted, true);
 });
 
+test("tenant api-agent can manage timers from chat", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-api-agent-timers-"));
+  const env = await allowSanitizerEnv(home);
+  await upsertUser({ id: "otcan", role: "user", displayName: "Otcan" }, env);
+  const thread = await createThread({
+    id: "otcantest-timers",
+    ownerUserId: "otcan",
+    name: "otcantest",
+    runtimeKind: "api-agent",
+    executor: { type: "api-agent", metadata: { runtimeKind: "api-agent" } },
+  }, env);
+  const principal = userPrincipal({ id: "otcan", role: "user" });
+
+  const created = await runTenantApiAgentTool("orkestr_create_timer", {
+    label: "Morning check-in",
+    targetType: "thread",
+    target: "",
+    cadence: "daily",
+    time: "08:30",
+    every: "",
+    prompt: "Ask me for my morning priorities.",
+    enabled: true,
+  }, { principal, thread }, env);
+  const listed = await runTenantApiAgentTool("orkestr_list_timers", {}, { principal, thread }, env);
+  const run = await runTenantApiAgentTool("orkestr_run_timer", { timerId: created.timer.id }, { principal, thread }, env);
+  const messages = await listThreadMessages(thread.id, env);
+  const deleted = await runTenantApiAgentTool("orkestr_delete_timer", { timerId: created.timer.id }, { principal, thread }, env);
+  const after = await runTenantApiAgentTool("orkestr_list_timers", {}, { principal, thread }, env);
+
+  assert.equal(created.timer.ownerUserId, "otcan");
+  assert.equal(created.timer.targetType, "thread");
+  assert.equal(created.timer.target, thread.id);
+  assert.equal(listed.timers.some((timer) => timer.id === created.timer.id), true);
+  assert.equal(run.event.type, "timer_manual_run");
+  assert.equal(messages.some((message) =>
+    message.role === "user" &&
+    message.source === "timer_manual_run" &&
+    message.text === "Ask me for my morning priorities."
+  ), true);
+  assert.equal(deleted.ok, true);
+  assert.equal(after.timers.some((timer) => timer.id === created.timer.id), false);
+});
+
 test("tenant api-agent skill actions report when a required desktop is unavailable", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-api-agent-no-desktop-"));
   const env = {

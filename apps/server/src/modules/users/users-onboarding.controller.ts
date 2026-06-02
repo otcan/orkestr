@@ -15,6 +15,8 @@ import {
   listWaitlistEntries,
   updateWaitlistEntry,
 } from "../../../../../packages/core/src/user-waitlist.js";
+import { deliverWhatsAppReplies } from "../../../../../packages/connectors/src/whatsapp.js";
+import { createAndBindWhatsAppThreadGroup } from "../../../../../packages/connectors/src/whatsapp-thread-groups.js";
 import { httpError } from "../../common/http.js";
 
 function assertAdminRequest(request: any): void {
@@ -140,7 +142,10 @@ export class UsersOnboardingController {
   @HttpCode(200)
   async approveWaitlist(@Req() request: any, @Param("entryId") entryId: string, @Body() body: Record<string, unknown> = {}) {
     assertAdminRequest(request);
-    return approveWaitlistEntry(entryId, waitlistApprovalInput(body, request));
+    return approveWaitlistEntry(entryId, waitlistApprovalInput(body, request), process.env, {
+      createWhatsAppThreadGroup: createAndBindWhatsAppThreadGroup,
+      deliverWhatsAppReplies,
+    });
   }
 
   @Get(":userId/onboarding")
