@@ -34,7 +34,7 @@ function fakeFetch(routes, seen = []) {
     const parsed = new URL(url);
     const method = String(options.method || "GET").toUpperCase();
     const key = `${method} ${parsed.pathname}`;
-    seen.push({ key, search: parsed.search, body: options.body ? JSON.parse(options.body) : null });
+    seen.push({ key, search: parsed.search, headers: options.headers || {}, body: options.body ? JSON.parse(options.body) : null });
     const route = routes[key];
     if (!route) return jsonResponse({ error: `missing route: ${key}` }, 404);
     return jsonResponse(typeof route === "function" ? route(seen.at(-1)) : route);
@@ -77,6 +77,28 @@ test("CLI lists threads from the public API", async () => {
   assert.match(stdout.text(), /Demo/);
   assert.match(stdout.text(), /ready/);
   assert.match(stdout.text(), /thread-1/);
+});
+
+test("CLI sends local cli-auth bearer token when ORKESTR_HOME has one", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-cli-auth-"));
+  await fs.mkdir(path.join(home, "secrets"), { recursive: true });
+  await fs.writeFile(path.join(home, "secrets", "cli-auth.json"), JSON.stringify({
+    token: "local-cli-token",
+    expiresAt: new Date(Date.now() + 60_000).toISOString(),
+  }), "utf8");
+  const stdout = capture();
+  const seen = [];
+  const code = await runCli(["--api", "http://orkestr.test", "list", "--json"], {
+    env: { ORKESTR_HOME: home },
+    stdout,
+    stderr: capture(),
+    fetchImpl: fakeFetch({
+      "GET /api/threads/summary": { threads: [] },
+    }, seen),
+  });
+
+  assert.equal(code, 0);
+  assert.equal(seen[0].headers.authorization, "Bearer local-cli-token");
 });
 
 test("CLI whereiam sends the current directory to the public API", async () => {

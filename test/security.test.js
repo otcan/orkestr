@@ -405,6 +405,55 @@ test("whatsapp bridge machine token bypasses browser pairing only for bridge rou
   assert.equal(otherRoute.error, "browser_pairing_required");
 });
 
+test("local CLI machine token bypasses browser pairing for operator routes", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-security-cli-token-"));
+  await fs.mkdir(path.join(home, "secrets"), { recursive: true });
+  await fs.writeFile(path.join(home, "secrets", "cli-auth.json"), JSON.stringify({
+    schemaVersion: 1,
+    token: "cli-secret",
+    expiresAt: new Date(Date.now() + 60_000).toISOString(),
+  }), "utf8");
+  const env = {
+    ORKESTR_HOME: home,
+    ORKESTR_AUTH_REQUIRED: "1",
+  };
+
+  const blocked = await authorizeHttpRequest({
+    method: "GET",
+    url: "/api/threads",
+    headers: {},
+    socket: { remoteAddress: "127.0.0.1" },
+  }, env);
+  const badToken = await authorizeHttpRequest({
+    method: "GET",
+    url: "/api/threads",
+    headers: { authorization: "Bearer wrong-secret" },
+    socket: { remoteAddress: "127.0.0.1" },
+  }, env);
+  const remoteToken = await authorizeHttpRequest({
+    method: "GET",
+    url: "/api/threads",
+    headers: { authorization: "Bearer cli-secret" },
+    socket: { remoteAddress: "203.0.113.4" },
+  }, env);
+  const allowed = await authorizeHttpRequest({
+    method: "GET",
+    url: "/api/threads",
+    headers: { authorization: "Bearer cli-secret" },
+    socket: { remoteAddress: "127.0.0.1" },
+  }, env);
+
+  assert.equal(blocked.ok, false);
+  assert.equal(blocked.error, "browser_pairing_required");
+  assert.equal(badToken.ok, false);
+  assert.equal(badToken.error, "browser_pairing_required");
+  assert.equal(remoteToken.ok, false);
+  assert.equal(remoteToken.error, "browser_pairing_required");
+  assert.equal(allowed.ok, true);
+  assert.equal(allowed.machineAuth, "cli");
+  assert.equal(allowed.principal.userId, "admin");
+});
+
 test("paired browser sessions can open desktop routes without desktop-share challenge", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-security-desktop-session-"));
   const env = {

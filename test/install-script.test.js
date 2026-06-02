@@ -426,6 +426,31 @@ test("k3s public IP helper routes a provider-routed address to a KubeVirt VM", a
   assert.match(script, /203\.0\.113\.10/);
 });
 
+test("public KubeVirt migration helper operates the isolated app VM", async () => {
+  const script = await fs.readFile("scripts/migrate-public-kubevirt.sh", "utf8");
+  const pkg = JSON.parse(await fs.readFile("package.json", "utf8"));
+  const { stdout } = await execFileAsync("bash", ["scripts/migrate-public-kubevirt.sh", "--help"]);
+
+  await execFileAsync("bash", ["-n", "scripts/migrate-public-kubevirt.sh"]);
+  assert.equal(pkg.scripts["smoke:public-kubevirt"], "bash scripts/migrate-public-kubevirt.sh smoke");
+  assert.match(stdout, /copy-public-state/);
+  assert.match(stdout, /backup-vm-state/);
+  assert.match(stdout, /update-vm --ref REF/);
+  assert.match(stdout, /cutover/);
+  assert.match(stdout, /rollback/);
+  assert.match(stdout, /browser_pairing_required/);
+  assert.match(stdout, /orkestr-de-app/);
+  assert.match(script, /virtctl_k3s credentials add-ssh-key/);
+  assert.match(script, /kubectl_k3s get pod -n "\$namespace" -l "kubevirt\.io\/domain=\$vm"/);
+  assert.match(script, /ORKESTR_HOME='\$vm_home' ORKESTR_API_BASE='\$vm_api' orkestr list --json/);
+  assert.match(script, /ORKESTR_HOME='\$vm_home' ORKESTR_API_BASE='\$vm_api' orkestr attach --print/);
+  assert.match(script, /\/home\/openclaw\/\.orkestr-production/);
+  assert.match(script, /\/var\/run\/docker\.sock/);
+  assert.match(script, /systemctl disable --now orkestr-public\.service/);
+  assert.match(script, /systemctl enable --now orkestr-public\.service/);
+  assert.match(script, /vm-public-state-\$stamp\.tar\.gz/);
+});
+
 test("public domain smoke runner validates Caddy/TLS and browser pairing", async () => {
   const script = await fs.readFile("scripts/smoke-public-domain.sh", "utf8");
   const { stdout } = await execFileAsync("bash", ["scripts/smoke-public-domain.sh", "--help"]);

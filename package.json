@@ -22,6 +22,7 @@
     "web:build": "ng build web",
     "smoke": "node scripts/smoke.mjs",
     "smoke:public-domain": "bash scripts/smoke-public-domain.sh",
+    "smoke:public-kubevirt": "bash scripts/migrate-public-kubevirt.sh smoke",
     "smoke:vps:aws": "bash scripts/smoke-vps-aws.sh",
     "smoke:vps:k3s": "bash scripts/smoke-vps-k3s.sh",
     "k3s:public-ip": "bash scripts/k3s-vm-public-ip.sh",

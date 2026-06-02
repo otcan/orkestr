@@ -245,6 +245,23 @@ function whatsappBridgeTokens(env = process.env) {
   ];
 }
 
+function cliAuthPath(env = process.env) {
+  return `${dataPaths(env).secrets}/cli-auth.json`;
+}
+
+async function cliMachineTokens(env = process.env) {
+  const values = [
+    ...splitSecretList(env.ORKESTR_CLI_AUTH_TOKEN),
+    ...splitSecretList(env.ORKESTR_API_TOKEN),
+  ];
+  const stored = await readJson(cliAuthPath(env), {}).catch(() => ({}));
+  const expiresAt = Date.parse(String(stored?.expiresAt || ""));
+  if (!Number.isFinite(expiresAt) || expiresAt > Date.now()) {
+    values.push(...splitSecretList(stored?.token));
+  }
+  return values;
+}
+
 function isWhatsAppMachineRoute(request) {
   const method = String(request?.method || "GET").toUpperCase();
   const url = String(request?.originalUrl || request?.url || "").split("?")[0];
@@ -255,6 +272,21 @@ function isWhatsAppMachineRoute(request) {
     return { kind: "whatsapp_bridge", tokens: whatsappBridgeTokens };
   }
   return null;
+}
+
+async function authorizeCliMachineRequest(request, env = process.env) {
+  const token = bearerToken(request?.headers?.authorization || request?.headers?.Authorization || "");
+  if (!token) return null;
+  const remoteAllowed = envFlag(env.ORKESTR_CLI_AUTH_ALLOW_REMOTE);
+  if (!remoteAllowed && !isLocalRequest(request)) return null;
+  const tokens = await cliMachineTokens(env);
+  const matched = tokens.some((candidate) => timingSafeSecretEqual(token, candidate));
+  if (!matched) return null;
+  return {
+    ok: true,
+    principal: adminPrincipal(defaultAdminUser(env)),
+    machineAuth: "cli",
+  };
 }
 
 function authorizeWhatsAppMachineRequest(request, env = process.env) {
@@ -639,6 +671,8 @@ export async function authorizeHttpRequest(request, env = process.env) {
   }
   const whatsappInboundAuth = authorizeWhatsAppMachineRequest(request, env);
   if (whatsappInboundAuth?.ok) return { ok: true, status, principal: whatsappInboundAuth.principal, machineAuth: whatsappInboundAuth.machineAuth };
+  const cliAuth = await authorizeCliMachineRequest(request, env);
+  if (cliAuth?.ok) return { ok: true, status, principal: cliAuth.principal, machineAuth: cliAuth.machineAuth };
   if (!status.authEnabled) return { ok: true, status, principal: adminPrincipal(defaultAdminUser(env)) };
   const token = cookieValue(request?.headers?.cookie || "");
   const session = await securitySessionForToken(token, env, { request });
