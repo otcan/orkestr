@@ -178,6 +178,92 @@ test("detached rollout final answers clear matching active app-server turns", as
   assert.equal(reply?.codexTurnId, activeTurnId);
 });
 
+test("detached rollout sync does not attach a final answer to a queued app-server WhatsApp input", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-detached-rollout-queued-parent-"));
+  const rolloutPath = path.join(home, "rollout.jsonl");
+  const env = {
+    ORKESTR_HOME: path.join(home, "orkestr"),
+    ORKESTR_ROLLOUT_SYNC_LOOKBACK_BYTES: "8192",
+  };
+  const codexThreadId = "44444444-4444-4444-8444-444444444444";
+  const activeTurnId = "019e8891-0376-7503-829b-c1f2d8300b78";
+  await fs.mkdir(path.dirname(rolloutPath), { recursive: true });
+  await createThread({
+    id: "detached-rollout-queued-parent-thread",
+    name: "Detached Rollout Queued Parent Thread",
+    state: "working",
+    executorId: "codex",
+    executor: {
+      type: "codex",
+      transport: "app-server",
+      codexThreadId,
+      metadata: {
+        runtimeKind: "codex-app-server",
+        codexRolloutPath: rolloutPath,
+      },
+    },
+    runtime: {
+      runtimeKind: "codex-app-server",
+      state: "working",
+      activeTurnId,
+      codexStatus: { type: "active", activeFlags: ["running"] },
+    },
+    binding: {
+      connector: "whatsapp",
+      chatId: "chat-rollout-queued-parent",
+      responderAccountId: "responder",
+      outboundAccountId: "responder",
+    },
+  }, env);
+  const first = await appendThreadMessage("detached-rollout-queued-parent-thread", {
+    role: "user",
+    source: "whatsapp_inbound",
+    connector: "whatsapp",
+    chatId: "chat-rollout-queued-parent",
+    accountId: "responder",
+    text: "First image",
+    timestamp: "2026-06-02T13:41:02.000Z",
+    state: "completed",
+    deliveryState: "delivered",
+    observedVia: "codex_app_server_turn_start",
+    codexThreadId,
+    codexTurnId: activeTurnId,
+    executorTurnId: activeTurnId,
+  }, env);
+  const second = await appendThreadMessage("detached-rollout-queued-parent-thread", {
+    role: "user",
+    source: "whatsapp_inbound",
+    connector: "whatsapp",
+    chatId: "chat-rollout-queued-parent",
+    accountId: "responder",
+    text: "Second image",
+    timestamp: "2026-06-02T13:41:34.000Z",
+    state: "queued",
+    deliveryState: "awaiting_active_turn",
+  }, env);
+  await fs.writeFile(rolloutPath, JSON.stringify({
+    timestamp: "2026-06-02T13:42:14.000Z",
+    type: "response_item",
+    payload: {
+      type: "message",
+      role: "assistant",
+      phase: "final_answer",
+      content: [{ type: "output_text", text: "First image final answer" }],
+    },
+  }) + "\n", "utf8");
+
+  const result = await syncRuntimeLeases(env);
+  const messages = await listThreadMessages("detached-rollout-queued-parent-thread", env);
+  const reply = messages.find((message) => message.text === "First image final answer");
+  const queued = messages.find((message) => message.id === second.id);
+
+  assert.equal(result.appended, 1);
+  assert.equal(reply?.parentMessageId, first.id);
+  assert.notEqual(reply?.parentMessageId, second.id);
+  assert.equal(queued?.state, "queued");
+  assert.equal(queued?.deliveryState, "awaiting_active_turn");
+});
+
 test("detached rollout sync ignores contained app-server WhatsApp threads", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-contained-rollout-"));
   const rolloutPath = path.join(home, "rollout.jsonl");

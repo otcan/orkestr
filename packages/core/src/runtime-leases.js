@@ -3469,6 +3469,26 @@ function latestWhatsAppInput(messages = [], beforeTimestamp = null, thread = nul
   ) || null;
 }
 
+function rolloutCanUseWhatsAppParent(message = {}, thread = null) {
+  if (!threadUsesNativeCodexRuntime(thread)) return true;
+  if (String(message.codexTurnId || message.executorTurnId || "").trim()) return true;
+  const state = String(message.state || "").trim().toLowerCase();
+  const deliveryState = String(message.deliveryState || "").trim().toLowerCase();
+  if (state === "queued" && deliveryState === "awaiting_active_turn") return false;
+  return true;
+}
+
+function latestRolloutWhatsAppInput(messages = [], beforeTimestamp = null, thread = null) {
+  const beforeMs = beforeTimestamp ? timestampMs(beforeTimestamp) : 0;
+  return [...messages].reverse().find((message) =>
+    message?.role === "user" &&
+    whatsappOrigin(message) &&
+    String(message.chatId || thread?.binding?.chatId || "").trim() &&
+    (!beforeMs || timestampMs(message.timestamp || message.createdAt) <= beforeMs + 1000) &&
+    rolloutCanUseWhatsAppParent(message, thread)
+  ) || null;
+}
+
 function whatsappParentChatId(parent = null, thread = null) {
   return String(parent?.chatId || thread?.binding?.chatId || "").trim();
 }
@@ -3514,7 +3534,7 @@ async function appendRolloutMessages({ thread, rolloutPath, body, start, initial
     const eventKey = rolloutMessageEventKey(message);
     const textKey = rolloutMessageNearTextKey(message);
     if (existingEventKeys.has(eventKey) || existingTextKeys.has(textKey)) continue;
-    const whatsappParent = latestWhatsAppInput(existing, message.timestamp, thread);
+    const whatsappParent = latestRolloutWhatsAppInput(existing, message.timestamp, thread);
     const parentTurnId = String(whatsappParent?.codexTurnId || whatsappParent?.executorTurnId || "").trim();
     await appendThreadMessage(thread.id, {
       role: "assistant",
@@ -3649,7 +3669,7 @@ async function syncLeaseRollout(lease, env = process.env) {
     const eventKey = rolloutMessageEventKey(message);
     const textKey = rolloutMessageNearTextKey(message);
     if (existingEventKeys.has(eventKey) || existingTextKeys.has(textKey)) continue;
-    const whatsappParent = latestWhatsAppInput(existing, message.timestamp, thread);
+    const whatsappParent = latestRolloutWhatsAppInput(existing, message.timestamp, thread);
     await appendThreadMessage(lease.threadId, {
       role: "assistant",
       source: message.source,
