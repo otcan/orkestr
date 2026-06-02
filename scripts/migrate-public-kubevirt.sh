@@ -423,6 +423,10 @@ cutover() {
   json_health "$svc_url"
   log "Cutting Caddy over to $svc_url"
   replace_caddy_upstream "127.0.0.1:19812" "${svc_url#http://}"
+  if [ "$dry_run" -eq 1 ]; then
+    log "Dry run: would disable host orkestr-public.service and run post-cutover smoke."
+    return 0
+  fi
   if systemctl is-active --quiet orkestr-public.service; then
     log "Stopping host orkestr-public.service after successful Caddy reload."
     systemctl disable --now orkestr-public.service
@@ -435,6 +439,11 @@ rollback() {
   mkdir -p "$backup_dir"
   svc_url="$(service_url)"
   log "Rolling Caddy back from $svc_url to host 127.0.0.1:19812"
+  if [ "$dry_run" -eq 1 ]; then
+    replace_caddy_upstream "${svc_url#http://}" "127.0.0.1:19812"
+    log "Dry run: would enable host orkestr-public.service and verify host public health."
+    return 0
+  fi
   systemctl enable --now orkestr-public.service
   replace_caddy_upstream "${svc_url#http://}" "127.0.0.1:19812"
   json_health "$host_api"
