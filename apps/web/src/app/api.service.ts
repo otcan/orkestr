@@ -980,6 +980,57 @@ export interface UserIdentitiesResponse {
   identities: UserIdentity[];
 }
 
+export interface WaitlistNotification {
+  state?: "sent" | "skipped" | "failed" | "unknown" | string;
+  recipients?: string[];
+  sentAt?: string;
+  updatedAt?: string;
+  error?: string;
+  skippedReason?: string;
+}
+
+export interface WaitlistEntry {
+  id: string;
+  displayName: string;
+  phoneNumber: string;
+  email?: string;
+  intendedUse?: string;
+  status: "pending" | "contacted" | "approved" | "rejected" | "paused" | string;
+  acceptedTerms?: boolean;
+  consentToContact?: boolean;
+  source?: {
+    ip?: string;
+    userAgent?: string;
+  };
+  adminNote?: string;
+  reviewedBy?: string;
+  reviewedAt?: string;
+  notification?: WaitlistNotification | null;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+export interface WaitlistResponse {
+  ok: boolean;
+  entries: WaitlistEntry[];
+  total: number;
+}
+
+export interface WaitlistUpdateResponse {
+  ok: boolean;
+  entry: WaitlistEntry;
+}
+
+export interface WaitlistApproveResponse {
+  ok: boolean;
+  entry: WaitlistEntry;
+  user?: OrkestrUser;
+  thread?: ThreadSummary;
+  onboarding?: Record<string, unknown>;
+  firstPrompt?: string;
+  whatsapp?: Record<string, unknown>;
+}
+
 export interface UserSkill {
   id: string;
   name?: string;
@@ -1102,6 +1153,21 @@ export class ApiService {
 
   users(): Observable<UsersResponse> {
     return this.http.get<UsersResponse>(this.api("/users"));
+  }
+
+  waitlist(status = "", limit = 200): Observable<WaitlistResponse> {
+    const params = new URLSearchParams();
+    if (status.trim()) params.set("status", status.trim());
+    params.set("limit", String(limit));
+    return this.http.get<WaitlistResponse>(this.api(`/users/onboarding/waitlist?${params.toString()}`));
+  }
+
+  updateWaitlistEntry(id: string, body: Record<string, unknown>): Observable<WaitlistUpdateResponse> {
+    return this.http.patch<WaitlistUpdateResponse>(this.api(`/users/onboarding/waitlist/${encodeURIComponent(id)}`), body);
+  }
+
+  approveWaitlistEntry(id: string, body: Record<string, unknown>): Observable<WaitlistApproveResponse> {
+    return this.http.post<WaitlistApproveResponse>(this.api(`/users/onboarding/waitlist/${encodeURIComponent(id)}/approve`), body);
   }
 
   currentUser(): Observable<UserResponse> {

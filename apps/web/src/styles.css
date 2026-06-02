@@ -3167,6 +3167,72 @@ ork-first-thread-wizard.first-thread-host {
   text-transform: uppercase;
 }
 
+.waitlist-panel,
+.waitlist-detail-card,
+.waitlist-approval-card {
+  display: grid;
+  gap: 14px;
+  min-width: 0;
+}
+
+.waitlist-summary-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.waitlist-summary-card h3 {
+  margin: 0;
+}
+
+.waitlist-filter-tabs {
+  align-self: start;
+}
+
+.waitlist-facts {
+  display: grid;
+  gap: 10px;
+  margin: 0;
+}
+
+.waitlist-facts div {
+  display: grid;
+  gap: 4px;
+  border-bottom: 1px solid rgba(119, 205, 126, 0.12);
+  padding-bottom: 10px;
+}
+
+.waitlist-facts dt {
+  color: #91ad8b;
+  font-size: 0.74rem;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.waitlist-facts dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.waitlist-warning,
+.waitlist-confirm {
+  border: 1px solid rgba(255, 92, 72, 0.44);
+  border-radius: 8px;
+  background: rgba(94, 28, 22, 0.72);
+  color: #ffd1c4;
+  padding: 10px 12px;
+}
+
+.waitlist-span-all {
+  grid-column: 1 / -1;
+}
+
+.waitlist-approval-form textarea,
+.waitlist-review-form textarea {
+  min-height: 86px;
+}
+
 @media (max-width: 980px) {
   .user-admin-layout {
     grid-template-columns: 1fr;

@@ -173,6 +173,71 @@ test("waitlist submissions are normalized, idempotent, and admin-reviewable", as
   assert.ok(threads.some((thread) => thread.id === approved.thread.id && thread.ownerUserId === approved.user.id));
 });
 
+test("waitlist submissions notify admins without blocking public submissions", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-waitlist-notify-"));
+  const env = { ORKESTR_HOME: home };
+  const sent = [];
+  const first = await submitWaitlistEntry({
+    displayName: "Notify User",
+    phoneNumber: "+49176001000",
+    email: "notify@example.test",
+    intendedUse: "Beta testing",
+    acceptedTerms: true,
+    consentToContact: true,
+  }, env, {
+    async sendWaitlistNotification(entry, notifyEnv) {
+      sent.push({ entry, notifyEnv });
+      return { ok: true, configured: true, recipients: ["admin@example.test"], messageId: "message-1" };
+    },
+  });
+  const duplicate = await submitWaitlistEntry({
+    displayName: "Notify User Updated",
+    phoneNumber: "+49 176 001000",
+    email: "notify@example.test",
+    intendedUse: "Updated use case",
+    acceptedTerms: true,
+    consentToContact: true,
+  }, env, {
+    async sendWaitlistNotification() {
+      throw new Error("duplicate_should_not_notify");
+    },
+  });
+  const failed = await submitWaitlistEntry({
+    displayName: "Failed Notify",
+    phoneNumber: "+49176001001",
+    email: "failed@example.test",
+    acceptedTerms: true,
+    consentToContact: true,
+  }, env, {
+    async sendWaitlistNotification() {
+      throw new Error("smtp_offline");
+    },
+  });
+  const skipped = await submitWaitlistEntry({
+    displayName: "Skipped Notify",
+    phoneNumber: "+49176001002",
+    email: "skipped@example.test",
+    acceptedTerms: true,
+    consentToContact: true,
+  }, env);
+  const listed = await listWaitlistEntries({}, env);
+  const firstEntry = listed.entries.find((entry) => entry.id === first.waitlist.id);
+  const failedEntry = listed.entries.find((entry) => entry.id === failed.waitlist.id);
+  const skippedEntry = listed.entries.find((entry) => entry.id === skipped.waitlist.id);
+
+  assert.equal(first.submitted, true);
+  assert.equal(duplicate.waitlist.id, first.waitlist.id);
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0].entry.phoneNumber, "+49176001000");
+  assert.equal(sent[0].notifyEnv.ORKESTR_HOME, home);
+  assert.equal(firstEntry.notification.state, "sent");
+  assert.equal(firstEntry.notification.recipients[0], "admin@example.test");
+  assert.equal(failedEntry.notification.state, "failed");
+  assert.match(failedEntry.notification.error, /smtp_offline/);
+  assert.equal(skippedEntry.notification.state, "skipped");
+  assert.equal(skippedEntry.notification.skippedReason, "waitlist_email_not_configured");
+});
+
 test("support requests and offboarding are user scoped and conservative", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-external-onboarding-"));
   const env = { ORKESTR_HOME: home };
