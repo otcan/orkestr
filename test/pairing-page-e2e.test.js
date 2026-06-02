@@ -80,7 +80,7 @@ test("pairing required page generates and consumes a challenge in a real browser
     const errors = [];
     page.on("pageerror", (error) => errors.push(error.message || String(error)));
 
-    await page.goto(baseUrl, { waitUntil: "networkidle2" });
+    await page.goto(`${baseUrl}/thread/Test`, { waitUntil: "networkidle2" });
     await page.waitForFunction(() => document.body.innerText.includes("Pairing Required"));
 
     await page.click("button");
