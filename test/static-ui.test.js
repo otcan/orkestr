@@ -113,6 +113,15 @@ test("server serves the public site at root and Angular UI at app routes", async
   }
 });
 
+test("pairing-required flow stays on the Orkestr app host", async () => {
+  const component = await fs.readFile("apps/web/src/app/app.component.ts", "utf8");
+
+  assert.match(component, /private enterPairingRequired/);
+  assert.match(component, /this\.replacePairingPath\(\)/);
+  assert.doesNotMatch(component, /globalThis\.location\.href\s*=\s*authPairingUrl/);
+  assert.doesNotMatch(component, /new URL\("\/setup\/pairing", authUrl\)/);
+});
+
 test("global shell keeps onboarding footer reachable", async () => {
   const styles = await fs.readFile("apps/web/src/styles.css", "utf8");
   const onboardingTemplate = await fs.readFile("apps/web/src/app/onboarding-page.component.html", "utf8");
