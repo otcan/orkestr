@@ -13,7 +13,7 @@ import { getSetupStatus } from "../packages/core/src/setup.js";
 import { appendThreadMessage, createThread, enqueueThreadInput, getThread, listThreadMessages, listThreads, updateThreadMessage } from "../packages/core/src/threads.js";
 import { createUser, linkUserPrivateIdentity } from "../packages/core/src/users.js";
 import { deliverWhatsAppReplies, formatWhatsAppOutboundText, getWhatsAppChatParticipants, getWhatsAppStatus, initialQueueDeliveryState, mapLocalWhatsAppStatusFromHealth, routeWhatsAppInbound, syncWhatsAppTypingIndicators } from "../packages/connectors/src/whatsapp.js";
-import { cleanupLocalWhatsAppChromeLocks, clearLocalWhatsAppChatTypingState, forwardLocalWhatsAppInbound, handleInboundMessage, inboundRoutingFailureNoticeText, listLocalWhatsAppChats, localWhatsAppAccountIdsForEnv, localWhatsAppConnectedPageReadyFallbackEligible, localWhatsAppInboundForwardTarget, localWhatsAppMessageRouteFields, localWhatsAppReadyFallbackEligible, localWhatsAppTypingClearRetryDelaysMs, localWhatsAppUnreadRecoveryBoundChats, localWhatsAppUnreadRecoveryIntervalMs, normalizeGroupParticipantIds, recoverConfiguredLocalWhatsAppAccounts, recoverUnreadLocalWhatsAppMessages, recoverableLocalWhatsAppAccountIds, reduceLocalWhatsAppBridgeState, sendWhatsAppTextWithConfirmation, startLocalWhatsAppAccount, webCacheRoot } from "../packages/connectors/src/whatsapp-local-bridge.js";
+import { cleanupLocalWhatsAppChromeLocks, clearLocalWhatsAppChatTypingState, forwardLocalWhatsAppInbound, getLocalWhatsAppBridgeStatus, handleInboundMessage, inboundRoutingFailureNoticeText, listLocalWhatsAppChats, localWhatsAppAccountIdsForEnv, localWhatsAppConnectedPageReadyFallbackEligible, localWhatsAppInboundForwardTarget, localWhatsAppMessageRouteFields, localWhatsAppReadyFallbackEligible, localWhatsAppTypingClearRetryDelaysMs, localWhatsAppUnreadRecoveryBoundChats, localWhatsAppUnreadRecoveryIntervalMs, normalizeGroupParticipantIds, recoverConfiguredLocalWhatsAppAccounts, recoverUnreadLocalWhatsAppMessages, recoverableLocalWhatsAppAccountIds, reduceLocalWhatsAppBridgeState, resetLocalWhatsAppBridgeForTest, sendWhatsAppTextWithConfirmation, setLocalWhatsAppRuntimeForTest, startLocalWhatsAppAccount, startLocalWhatsAppTyping, stopLocalWhatsAppTyping, webCacheRoot } from "../packages/connectors/src/whatsapp-local-bridge.js";
 import { routedWhatsAppTypingTarget, runWithRoutedWhatsAppTyping } from "../packages/connectors/src/whatsapp-router-typing.js";
 import { createAndBindWhatsAppThreadGroup } from "../packages/connectors/src/whatsapp-thread-groups.js";
 import { prepareWhatsAppTableAttachments } from "../packages/connectors/src/whatsapp-table-attachments.js";
@@ -226,6 +226,118 @@ test("local whatsapp typing clear falls back to direct chatstate stop", async ()
     ["clearState"],
     ["directChatstate", "chat-typing-clear", "stop"],
   ]);
+});
+
+test("local whatsapp typing starts are single-flight per chat", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-typing-single-flight-"));
+  const env = {
+    ORKESTR_HOME: home,
+    ORKESTR_WHATSAPP_ACCOUNT_IDS: "responder",
+    ORKESTR_WHATSAPP_TYPING_REFRESH_MS: "60000",
+    ORKESTR_WHATSAPP_TYPING_OPERATION_TIMEOUT_MS: "1000",
+  };
+  let releaseStart;
+  let holdStart = true;
+  const startGate = new Promise((resolve) => {
+    releaseStart = resolve;
+  });
+  const calls = [];
+  const chat = {
+    async sendStateTyping() {
+      calls.push(["sendStateTyping"]);
+    },
+    async clearState() {
+      calls.push(["clearState"]);
+    },
+  };
+  const runtime = {
+    client: {
+      async getChatById(chatId) {
+        calls.push(["getChatById", chatId]);
+        if (holdStart) await startGate;
+        return chat;
+      },
+      async sendPresenceAvailable() {
+        calls.push(["sendPresenceAvailable"]);
+      },
+      pupPage: {
+        async evaluate(_fn, chatId, state) {
+          calls.push(["directChatstate", chatId, state]);
+          return true;
+        },
+      },
+    },
+  };
+
+  try {
+    setLocalWhatsAppRuntimeForTest("responder", runtime, {}, env);
+    const first = startLocalWhatsAppTyping({ accountId: "responder", chatId: "chat-typing-race", env });
+    const second = startLocalWhatsAppTyping({ accountId: "responder", chatId: "chat-typing-race", env });
+    await Promise.resolve();
+
+    assert.deepEqual(calls, [["getChatById", "chat-typing-race"]]);
+    holdStart = false;
+    releaseStart();
+    const results = await Promise.all([first, second]);
+
+    assert.equal(results[0].reused, false);
+    assert.equal(results[1].reused, true);
+    assert.equal(calls.filter((call) => call[0] === "getChatById").length, 1);
+    assert.equal(calls.filter((call) => call[0] === "sendStateTyping").length, 1);
+    assert.equal((await getLocalWhatsAppBridgeStatus(env)).activeTypingCount, 1);
+
+    await stopLocalWhatsAppTyping({ accountId: "responder", chatId: "chat-typing-race", env });
+    assert.equal((await getLocalWhatsAppBridgeStatus(env)).activeTypingCount, 0);
+  } finally {
+    await resetLocalWhatsAppBridgeForTest(env);
+  }
+});
+
+test("local whatsapp typing refresh exhaustion stops stale sessions", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-typing-exhausted-"));
+  const env = {
+    ORKESTR_HOME: home,
+    ORKESTR_WHATSAPP_ACCOUNT_IDS: "responder",
+    ORKESTR_WHATSAPP_TYPING_REFRESH_MS: "2000",
+    ORKESTR_WHATSAPP_TYPING_OPERATION_TIMEOUT_MS: "500",
+    ORKESTR_WHATSAPP_TYPING_REFRESH_FAILURE_LIMIT: "1",
+    ORKESTR_WHATSAPP_TYPING_CLEAR_RETRY_MS: "0",
+  };
+  let failRefresh = false;
+  const chat = {
+    async sendStateTyping() {},
+    async clearState() {},
+  };
+  const runtime = {
+    client: {
+      async getChatById() {
+        if (failRefresh) throw new Error("typing_get_chat_timeout");
+        return chat;
+      },
+      async sendPresenceAvailable() {},
+      pupPage: {
+        async evaluate() {
+          return true;
+        },
+      },
+    },
+  };
+
+  try {
+    setLocalWhatsAppRuntimeForTest("responder", runtime, {}, env);
+    await startLocalWhatsAppTyping({ accountId: "responder", chatId: "chat-typing-stale", env });
+    assert.equal((await getLocalWhatsAppBridgeStatus(env)).activeTypingCount, 1);
+
+    failRefresh = true;
+    await new Promise((resolve) => setTimeout(resolve, 2300));
+
+    assert.equal((await getLocalWhatsAppBridgeStatus(env)).activeTypingCount, 0);
+    const events = await listEvents(env);
+    assert.ok(events.find((event) => event.type === "whatsapp_local_typing_refresh_exhausted"));
+    assert.ok(events.find((event) => event.type === "whatsapp_local_typing_stopped"));
+  } finally {
+    await resetLocalWhatsAppBridgeForTest(env);
+  }
 });
 
 test("local whatsapp ready fallback accepts the WhatsApp 99 percent startup stall", () => {

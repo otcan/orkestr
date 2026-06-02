@@ -238,13 +238,14 @@ export async function startServer({ port = 19812, host = "127.0.0.1", openBrowse
   await loadOverlayExecutorAdapters(serverEnv);
   await startConfiguredLocalWhatsAppAccounts(serverEnv).catch(() => {});
   const app = await createApp();
+  const runRuntimeSync = createRuntimeWhatsAppSyncRunner(serverEnv);
 
   const timer = setInterval(() => {
-    runTimerLoop(serverEnv).catch(() => {});
+    runTimerLoop(serverEnv, runRuntimeSync).catch(() => {});
   }, timerLoopIntervalMs());
 
   const runtimeMonitor = setInterval(() => {
-    syncRuntimeAndDeliverWhatsApp(serverEnv).catch(() => {});
+    runRuntimeSync().catch(() => {});
   }, runtimeMonitorIntervalMs());
 
   const paneProgressMonitor = setInterval(() => {
@@ -326,13 +327,42 @@ export async function recoverAfterStartup(env = process.env) {
   return syncRuntimeAndDeliverWhatsApp(env, { forceWhatsapp: true, recoveryCause: "orkestr_restart" });
 }
 
-async function runTimerLoop(env = process.env) {
+async function runTimerLoop(env = process.env, syncImpl: (options?: { forceWhatsapp?: boolean; recoveryCause?: string }) => Promise<any> = (options = {}) => syncRuntimeAndDeliverWhatsApp(env, options)) {
   const dueTimers = await markDueTimers(env);
   const drained = await drainAllPendingThreadInputs(env);
   const deliveredCount = drained.reduce((count: number, result: any) => count + Number(result?.delivered?.length || 0), 0);
   if (dueTimers.length || deliveredCount > 0 || drained.length > 0) {
-    await syncRuntimeAndDeliverWhatsApp(env, { forceWhatsapp: true });
+    await syncImpl({ forceWhatsapp: true });
   }
+}
+
+function mergeRuntimeSyncOptions(current: { forceWhatsapp?: boolean; recoveryCause?: string } | null, next: { forceWhatsapp?: boolean; recoveryCause?: string } = {}) {
+  return {
+    forceWhatsapp: Boolean(current?.forceWhatsapp || next.forceWhatsapp),
+    recoveryCause: current?.recoveryCause || next.recoveryCause,
+  };
+}
+
+function createRuntimeWhatsAppSyncRunner(env = process.env) {
+  let inFlight: Promise<any> | null = null;
+  let queuedOptions: { forceWhatsapp?: boolean; recoveryCause?: string } | null = null;
+  const run = (options: { forceWhatsapp?: boolean; recoveryCause?: string } = {}) => {
+    if (inFlight) {
+      queuedOptions = mergeRuntimeSyncOptions(queuedOptions, options);
+      return inFlight.then(() => ({ ok: true, queuedBehindActiveSync: true }));
+    }
+    inFlight = syncRuntimeAndDeliverWhatsApp(env, options)
+      .finally(() => {
+        inFlight = null;
+        if (queuedOptions) {
+          const next = queuedOptions;
+          queuedOptions = null;
+          void run(next).catch(() => {});
+        }
+      });
+    return inFlight;
+  };
+  return run;
 }
 
 async function syncRuntimeAndDeliverWhatsApp(env = process.env, options: { forceWhatsapp?: boolean; recoveryCause?: string } = {}) {
@@ -352,6 +382,8 @@ async function syncRuntimeAndDeliverWhatsApp(env = process.env, options: { force
 
 function createWhatsAppDeliveryScheduler(env = process.env) {
   let timer: NodeJS.Timeout | null = null;
+  let running = false;
+  let rerunRequested = false;
   const retryDelayMs = whatsAppDeliveryRetryDelayMs();
   const shouldRetry = (result: any) => {
     if (!result || !Array.isArray(result.failed) || !result.failed.length) return false;
@@ -368,6 +400,11 @@ function createWhatsAppDeliveryScheduler(env = process.env) {
     });
   };
   const run = () => {
+    if (running) {
+      rerunRequested = true;
+      return;
+    }
+    running = true;
     syncWhatsAppTypingIndicators(env)
       .catch(() => {})
       .then(() => deliverWhatsAppReplies(env))
@@ -382,6 +419,13 @@ function createWhatsAppDeliveryScheduler(env = process.env) {
       })
       .catch(() => {
         scheduler.schedule(retryDelayMs);
+      })
+      .finally(() => {
+        running = false;
+        if (rerunRequested) {
+          rerunRequested = false;
+          scheduler.schedule();
+        }
       });
   };
   const scheduler = {
