@@ -4,6 +4,7 @@ import { codexAssistantSource } from "./whatsapp-mirror-policy.js";
 
 const proposedPlanOpenTagPattern = /^\s*<\s*proposed[\s_-]*plan\s*>\s*/i;
 const proposedPlanCloseTagPattern = /\s*<\s*\/\s*proposed[\s_-]*plan\s*>\s*$/i;
+let lastProcessCpuSample = null;
 
 function pickString(...values) {
   for (const value of values) {
@@ -147,9 +148,26 @@ function queueDebugCount(messages = [], currentMessage = null) {
   }).length;
 }
 
-function cpuDebugPercent() {
+function loadDebugPercent() {
   const cpuCount = os.cpus().length || 1;
   const percent = Math.round(((os.loadavg()[0] || 0) / cpuCount) * 100);
+  if (!Number.isFinite(percent)) return 0;
+  return Math.max(0, Math.min(999, percent));
+}
+
+function processCpuDebugPercent() {
+  const current = {
+    usage: process.cpuUsage(),
+    sampledAtMs: Date.now(),
+  };
+  const previous = lastProcessCpuSample;
+  lastProcessCpuSample = current;
+  if (!previous) return 0;
+  const elapsedMs = Math.max(1, current.sampledAtMs - previous.sampledAtMs);
+  const usedMicros =
+    (current.usage.user - previous.usage.user) +
+    (current.usage.system - previous.usage.system);
+  const percent = Math.round(usedMicros / (elapsedMs * 1000) * 100);
   if (!Number.isFinite(percent)) return 0;
   return Math.max(0, Math.min(999, percent));
 }
@@ -174,7 +192,8 @@ export function whatsappDebugFooter({ message = {}, thread = {}, messages = [], 
     ...(mode ? [`mode:${mode}`] : []),
     `msg:${footerMessageType(deliveryType)}`,
     `q:${queueDebugCount(messages, message)}`,
-    `cpu:${cpuDebugPercent()}%`,
+    `load:${loadDebugPercent()}%`,
+    `api:${processCpuDebugPercent()}%`,
     "help:/help",
     ...(mode === "plan" ? ["switch:/code"] : []),
   ];

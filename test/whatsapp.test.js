@@ -91,7 +91,7 @@ function assertDebugFooter(text, { mode = "", messageType = "final", model = "[^
   const pattern = new RegExp(
     `\\n\\ndbg: m:${model === "[^·\\n]+" ? model : escapedModel}` +
       (mode ? ` · mode:${mode}` : "") +
-      ` · msg:${messageType} · q:\\d+ · cpu:\\d+% · help:/help` +
+      ` · msg:${messageType} · q:\\d+ · load:\\d+% · api:\\d+% · help:/help` +
       (mode === "plan" ? " · switch:/code" : "") +
       "$",
   );
@@ -2433,7 +2433,7 @@ test("whatsapp delivery appends compact debug footer for plan-mode Codex updates
   assert.equal(stripDebugFooter(calls[0].body.text), "Milestone: routing check started.");
   assert.match(
     calls[0].body.text,
-    /\n\ndbg: m:gpt-5\.5\/xh · mode:plan · msg:update · q:0 · cpu:\d+% · help:\/help · switch:\/code$/,
+    /\n\ndbg: m:gpt-5\.5\/xh · mode:plan · msg:update · q:0 · load:\d+% · api:\d+% · help:\/help · switch:\/code$/,
   );
 });
 

@@ -247,7 +247,7 @@ function whatsappBridgeTokens(env = process.env) {
 
 function isWhatsAppMachineRoute(request) {
   const method = String(request?.method || "GET").toUpperCase();
-  const url = String(request?.url || "").split("?")[0];
+  const url = String(request?.originalUrl || request?.url || "").split("?")[0];
   if (method === "POST" && url === "/api/connectors/whatsapp/inbound") {
     return { kind: "whatsapp_inbound", tokens: whatsappInboundTokens };
   }
