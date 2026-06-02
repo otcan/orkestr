@@ -447,6 +447,7 @@ test("public KubeVirt migration helper operates the isolated app VM", async () =
   assert.match(script, /Codex is not signed in/);
   assert.match(script, /public Codex runtime is not configured/);
   assert.match(script, /\/home\/openclaw\/\.orkestr-production/);
+  assert.match(script, /\/root\/\.codex\/auth\.json/);
   assert.match(script, /\/var\/run\/docker\.sock/);
   assert.match(script, /systemctl disable --now orkestr-public\.service/);
   assert.match(script, /systemctl enable --now orkestr-public\.service/);

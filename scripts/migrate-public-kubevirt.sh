@@ -368,7 +368,7 @@ smoke() {
   grep -q 'browser_pairing_required' /tmp/orkestr-public-attach-denied.json || die "Attach denial did not include browser_pairing_required"
 
   log "Checking containment from inside VM."
-  vm_ssh "set -euo pipefail; for p in /home/openclaw/.orkestr-production /root/.codex /home/openclaw/.codex-ops /var/run/docker.sock /run/podman/podman.sock; do if sudo test -e \"\$p\"; then echo \"unexpected visible host path: \$p\" >&2; exit 20; fi; done"
+  vm_ssh "set -euo pipefail; for p in /home/openclaw/.orkestr-production /home/openclaw/.codex-ops /var/run/docker.sock /run/podman/podman.sock /root/.codex/auth.json /root/.codex/config.toml /root/.codex/history.jsonl; do if sudo test -e \"\$p\"; then echo \"unexpected visible private state: \$p\" >&2; exit 20; fi; done"
   log "Smoke passed."
 }
 
