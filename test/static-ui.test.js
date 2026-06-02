@@ -113,6 +113,83 @@ test("server serves the public site at root and Angular UI at app routes", async
   }
 });
 
+test("server keeps public pages on the configured public site host only", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-static-ui-private-host-"));
+  const prior = {
+    home: process.env.ORKESTR_HOME,
+    overlay: process.env.ORKESTR_OVERLAY_DIR,
+    publicSiteUrl: process.env.ORKESTR_PUBLIC_SITE_URL,
+    primaryDomain: process.env.ORKESTR_PRIMARY_DOMAIN,
+    publicUrl: process.env.ORKESTR_PUBLIC_URL,
+    authRequired: process.env.ORKESTR_AUTH_REQUIRED,
+  };
+  process.env.ORKESTR_HOME = home;
+  process.env.ORKESTR_PUBLIC_SITE_URL = "https://orkestr.de";
+  process.env.ORKESTR_PRIMARY_DOMAIN = "orkestr.de";
+  process.env.ORKESTR_PUBLIC_URL = "https://orkestr.app.ops.example.test";
+  process.env.ORKESTR_AUTH_REQUIRED = "1";
+  delete process.env.ORKESTR_OVERLAY_DIR;
+  const server = await startServer({ port: 0, host: "127.0.0.1" });
+  const { port } = server.address();
+  try {
+    const publicResponse = await fetch(`http://127.0.0.1:${port}/`, {
+      headers: { "x-forwarded-host": "orkestr.de", "x-forwarded-proto": "https" },
+    });
+    const publicHtml = await publicResponse.text();
+    const privateRootResponse = await fetch(`http://127.0.0.1:${port}/`, {
+      redirect: "manual",
+      headers: { "x-forwarded-host": "orkestr.app.ops.example.test", "x-forwarded-proto": "https" },
+    });
+    const privateTermsResponse = await fetch(`http://127.0.0.1:${port}/terms`, {
+      redirect: "manual",
+      headers: { "x-forwarded-host": "ops.example.test", "x-forwarded-proto": "https" },
+    });
+    const privateThreadResponse = await fetch(`http://127.0.0.1:${port}/thread/demo`, {
+      headers: { "x-forwarded-host": "orkestr.app.ops.example.test", "x-forwarded-proto": "https" },
+    });
+    const privateThreadHtml = await privateThreadResponse.text();
+
+    assert.equal(publicResponse.status, 200);
+    assertPublicShell(publicHtml);
+    assert.equal(privateRootResponse.status, 302);
+    assert.equal(
+      privateRootResponse.headers.get("location"),
+      "https://orkestr.de/setup/pairing?return=https%3A%2F%2Forkestr.app.ops.example.test%2F",
+    );
+    assert.equal(privateTermsResponse.status, 302);
+    assert.equal(
+      privateTermsResponse.headers.get("location"),
+      "https://orkestr.de/setup/pairing?return=https%3A%2F%2Fops.example.test%2Fterms",
+    );
+    assert.equal(privateThreadResponse.status, 200);
+    assertAngularShell(privateThreadHtml);
+    assert.doesNotMatch(privateThreadHtml, /Invite-only private beta/);
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+    if (prior.home === undefined) delete process.env.ORKESTR_HOME;
+    else process.env.ORKESTR_HOME = prior.home;
+    if (prior.overlay === undefined) delete process.env.ORKESTR_OVERLAY_DIR;
+    else process.env.ORKESTR_OVERLAY_DIR = prior.overlay;
+    if (prior.publicSiteUrl === undefined) delete process.env.ORKESTR_PUBLIC_SITE_URL;
+    else process.env.ORKESTR_PUBLIC_SITE_URL = prior.publicSiteUrl;
+    if (prior.primaryDomain === undefined) delete process.env.ORKESTR_PRIMARY_DOMAIN;
+    else process.env.ORKESTR_PRIMARY_DOMAIN = prior.primaryDomain;
+    if (prior.publicUrl === undefined) delete process.env.ORKESTR_PUBLIC_URL;
+    else process.env.ORKESTR_PUBLIC_URL = prior.publicUrl;
+    if (prior.authRequired === undefined) delete process.env.ORKESTR_AUTH_REQUIRED;
+    else process.env.ORKESTR_AUTH_REQUIRED = prior.authRequired;
+  }
+});
+
+test("pairing-required flow stays on the Orkestr app host", async () => {
+  const component = await fs.readFile("apps/web/src/app/app.component.ts", "utf8");
+
+  assert.match(component, /private enterPairingRequired/);
+  assert.match(component, /this\.replacePairingPath\(\)/);
+  assert.doesNotMatch(component, /globalThis\.location\.href\s*=\s*authPairingUrl/);
+  assert.doesNotMatch(component, /new URL\("\/setup\/pairing", authUrl\)/);
+});
+
 test("global shell keeps onboarding footer reachable", async () => {
   const styles = await fs.readFile("apps/web/src/styles.css", "utf8");
   const onboardingTemplate = await fs.readFile("apps/web/src/app/onboarding-page.component.html", "utf8");
@@ -204,7 +281,7 @@ test("ops audit view exposes normalized filterable events", async () => {
   const styles = await fs.readFile("apps/web/src/styles.css", "utf8");
 
   assert.match(component, /export type ToolsView = .*"audit"/);
-  assert.match(appComponent, /"connectors", "users", "audit"/);
+  assert.match(appComponent, /"connectors", "users", "waitlist", "audit"/);
   assert.match(template, /\[class\.active\]="toolsView === 'audit'"/);
   assert.match(template, /setToolsView\('audit'\)">Audit<\/button>/);
   assert.match(template, /@if \(toolsView === "audit"\)/);
@@ -221,6 +298,43 @@ test("ops audit view exposes normalized filterable events", async () => {
   assert.match(sanitizer, /type: "policy_sanitizer_decision"/);
   assert.match(styles, /\.audit-filters/);
   assert.match(styles, /\.audit-row small/);
+});
+
+test("ops waitlist view exposes secure approval workflow", async () => {
+  const opsTemplate = await fs.readFile("apps/web/src/app/ops-page.component.html", "utf8");
+  const opsComponent = await fs.readFile("apps/web/src/app/ops-page.component.ts", "utf8");
+  const waitlistTemplate = await fs.readFile("apps/web/src/app/ops-waitlist.component.html", "utf8");
+  const waitlistComponent = await fs.readFile("apps/web/src/app/ops-waitlist.component.ts", "utf8");
+  const appComponent = await fs.readFile("apps/web/src/app/app.component.ts", "utf8");
+  const api = await fs.readFile("apps/web/src/app/api.service.ts", "utf8");
+  const userWaitlist = await fs.readFile("packages/core/src/user-waitlist.js", "utf8");
+  const waitlistNotifications = await fs.readFile("packages/core/src/waitlist-notifications.js", "utf8");
+  const emailNotifications = await fs.readFile("packages/core/src/email-notifications.js", "utf8");
+  const styles = await fs.readFile("apps/web/src/styles.css", "utf8");
+
+  assert.match(opsComponent, /export type ToolsView = .*"waitlist"/);
+  assert.match(opsComponent, /OpsWaitlistComponent/);
+  assert.match(appComponent, /"connectors", "users", "waitlist", "audit"/);
+  assert.match(opsTemplate, /\[class\.active\]="toolsView === 'waitlist'"/);
+  assert.match(opsTemplate, /setToolsView\('waitlist'\)">Waitlist<\/button>/);
+  assert.match(opsTemplate, /<ork-ops-waitlist><\/ork-ops-waitlist>/);
+  assert.match(waitlistComponent, /this\.api\.waitlist\("", 500\)/);
+  assert.match(waitlistComponent, /this\.api\.updateWaitlistEntry\(entry\.id/);
+  assert.match(waitlistComponent, /this\.api\.approveWaitlistEntry\(entry\.id/);
+  assert.match(waitlistTemplate, /High risk: approval creates or connects a user/);
+  assert.match(waitlistTemplate, /I confirm this applicant should be onboarded/);
+  assert.match(waitlistComponent, /Admin email not configured/);
+  assert.match(waitlistTemplate, /Primary WhatsApp account/);
+  assert.match(api, /export interface WaitlistEntry/);
+  assert.match(api, /waitlist\(status = "", limit = 200\)/);
+  assert.match(api, /approveWaitlistEntry\(id: string, body: Record<string, unknown>\)/);
+  assert.match(userWaitlist, /notifyWaitlistEntrySubmitted/);
+  assert.match(waitlistNotifications, /sendWaitlistNotification/);
+  assert.match(waitlistNotifications, /waitlist_notification_sent/);
+  assert.match(waitlistNotifications, /waitlist_notification_failed/);
+  assert.match(emailNotifications, /ORKESTR_WAITLIST_NOTIFY_EMAIL/);
+  assert.match(emailNotifications, /ORKESTR_SMTP_HOST/);
+  assert.match(styles, /\.waitlist-warning/);
 });
 
 test("ops users page exposes WhatsApp identity binding controls", async () => {

@@ -38,6 +38,16 @@ import {
   pruneOutboundDeliveryClaims,
 } from "./whatsapp-delivery-ledger.js";
 import {
+  advanceWhatsAppOutboundMirrorCursors,
+  canCreateWhatsAppOutboundIntent,
+  markWhatsAppOutboundIntent,
+  mergeWhatsAppOutboundIntents,
+  mergeWhatsAppOutboundMirrorCursors,
+  outboundIntentKey,
+  outboundMirrorMessageCursor,
+  outboundMirrorMessageSetKey,
+} from "./whatsapp-outbound-intents.js";
+import {
   codexAssistantSource,
   shouldMirrorWhatsAppProgress,
   shouldMirrorWhatsAppReply,
@@ -622,33 +632,150 @@ function mergeByKey(existing = [], next = [], keyFn = () => "") {
   return [...merged.values()];
 }
 
+function timeMs(value) {
+  const ms = Date.parse(String(value || ""));
+  return Number.isFinite(ms) ? ms : 0;
+}
+
+function mergeOutboundDeliveries(existing = [], next = [], env = process.env) {
+  const merged = new Map();
+  for (const delivery of [...(existing || []), ...(next || [])]) {
+    const key = outboundDeliveryKey(delivery);
+    if (!key) continue;
+    const previous = merged.get(key);
+    if (!previous || timeMs(delivery?.deliveredAt) >= timeMs(previous?.deliveredAt)) {
+      merged.set(key, delivery);
+    }
+  }
+  return [...merged.values()]
+    .sort((left, right) => timeMs(left?.deliveredAt) - timeMs(right?.deliveredAt))
+    .slice(-whatsappOutboundDeliveryRetentionLimit(env));
+}
+
 function mergeWhatsAppState(existing = {}, next = {}, env = process.env) {
   return {
     ...existing,
     ...next,
     inboundEvents: mergeByKey(existing.inboundEvents, next.inboundEvents, (event) => pickString(event.eventId)).slice(-500),
-    outboundDeliveries: mergeByKey(existing.outboundDeliveries, next.outboundDeliveries, outboundDeliveryKey)
-      .slice(-whatsappOutboundDeliveryRetentionLimit(env)),
+    outboundDeliveries: mergeOutboundDeliveries(existing.outboundDeliveries, next.outboundDeliveries, env),
     outboundDeliveryClaims: pruneOutboundDeliveryClaims(
       mergeByKey(existing.outboundDeliveryClaims, next.outboundDeliveryClaims, (claim) => pickString(claim.claimKey)),
       { env, retentionLimit: whatsappOutboundDeliveryRetentionLimit(env) },
     ),
+    outboundIntents: mergeWhatsAppOutboundIntents(existing.outboundIntents, next.outboundIntents, env),
+    outboundMirrorCursors: mergeWhatsAppOutboundMirrorCursors(existing.outboundMirrorCursors, next.outboundMirrorCursors),
     updatedAt: new Date().toISOString(),
   };
 }
 
 async function writeWhatsAppState(state, env) {
   const paths = dataPaths(env);
-  const existing = await readJson(paths.whatsapp, { inboundEvents: [], outboundDeliveries: [], outboundDeliveryClaims: [] }).catch(() => ({}));
+  const existing = await readJson(paths.whatsapp, {
+    inboundEvents: [],
+    outboundDeliveries: [],
+    outboundDeliveryClaims: [],
+    outboundIntents: [],
+    outboundMirrorCursors: [],
+  }).catch(() => ({}));
   await writeJson(paths.whatsapp, mergeWhatsAppState(existing, state, env));
+}
+
+async function ensureWhatsAppOutboundIntent({
+  state,
+  outboundIntents,
+  kind,
+  deliveryType,
+  routerUpdateType,
+  agentId,
+  threadId,
+  messageId,
+  sourceMessageId,
+  parentMessageId,
+  chatId,
+  accountId,
+  textKey,
+  text,
+  attachments,
+  message,
+  parent,
+  thread,
+  messageSetKey,
+  messageCursor,
+  env,
+} = {}) {
+  const intentId = outboundIntentKey({
+    kind,
+    deliveryType,
+    routerUpdateType,
+    chatId,
+    accountId,
+    messageId,
+    sourceMessageId,
+    textKey,
+  });
+  const existing = outboundIntents.find((intent) => pickString(intent.intentId, outboundIntentKey(intent)) === intentId);
+  if (existing) {
+    const status = String(existing.status || "pending").trim().toLowerCase();
+    if (status === "delivered") return { skipped: { reason: "intent_already_delivered" } };
+    return { intent: existing };
+  }
+  const gate = canCreateWhatsAppOutboundIntent({
+    state,
+    messageSetKey,
+    messageCursor,
+    message,
+    parent,
+    thread,
+    kind,
+    env,
+  });
+  if (!gate.ok) return { skipped: { reason: gate.reason || "missing_outbound_intent" } };
+  const now = new Date().toISOString();
+  const intent = {
+    intentId,
+    status: "pending",
+    kind,
+    deliveryType,
+    ...(routerUpdateType ? { routerUpdateType } : {}),
+    agentId: agentId || null,
+    threadId: threadId || null,
+    messageSetKey,
+    messageCursor: Number(messageCursor || 0) || 0,
+    messageId,
+    ...(sourceMessageId ? { sourceMessageId } : {}),
+    ...(parentMessageId ? { parentMessageId } : {}),
+    chatId,
+    accountId,
+    textKey,
+    text,
+    ...(attachments ? { attachments } : {}),
+    createdAt: now,
+    updatedAt: now,
+    createdReason: gate.reason || "new_after_cursor",
+  };
+  outboundIntents.push(intent);
+  state.outboundIntents = outboundIntents;
+  await writeWhatsAppState(state, env);
+  return { intent, created: true };
+}
+
+async function sendWhatsAppOutboundCandidate(input = {}) {
+  const intentResult = await ensureWhatsAppOutboundIntent(input);
+  if (intentResult.skipped) return intentResult;
+  return sendClaimedWhatsAppText({
+    ...input,
+    intent: intentResult.intent,
+  });
 }
 
 async function sendClaimedWhatsAppText({
   state,
   outboundDeliveries,
+  outboundIntents,
   deliveredIds,
   deliveredTextKeys,
   batchTextKeys,
+  intent,
   kind,
   deliveryType,
   routerUpdateType,
@@ -700,12 +827,33 @@ async function sendClaimedWhatsAppText({
     };
     outboundDeliveries.push(delivery);
     state.outboundDeliveries = outboundDeliveries;
+    if (intent?.intentId) {
+      const marked = markWhatsAppOutboundIntent(outboundIntents, intent.intentId, {
+        status: "delivered",
+        deliveredAt: delivery.deliveredAt,
+        deliveryMessageId: delivery.messageId,
+        error: "",
+      });
+      outboundIntents.splice(0, outboundIntents.length, ...marked);
+      state.outboundIntents = outboundIntents;
+    }
     deliveredIds.add(messageId);
     deliveredTextKeys.add(textKey);
     batchTextKeys.add(textKey);
     await finishOutboundDeliveryClaim({ state, claim: claimResult.claim, filePath: claimResult.filePath, status: "delivered", delivery }, env, { persistState: writeWhatsAppState });
     return { delivery };
   } catch (error) {
+    if (intent?.intentId) {
+      const previousAttempts = Number(intent.attempts || 0) || 0;
+      const marked = markWhatsAppOutboundIntent(outboundIntents, intent.intentId, {
+        status: "pending",
+        attempts: previousAttempts + 1,
+        failedAt: new Date().toISOString(),
+        error: error.message || String(error),
+      });
+      outboundIntents.splice(0, outboundIntents.length, ...marked);
+      state.outboundIntents = outboundIntents;
+    }
     await finishOutboundDeliveryClaim({ state, claim: claimResult.claim, filePath: claimResult.filePath, status: "failed", error: error.message || String(error) }, env, { persistState: writeWhatsAppState }).catch(() => {});
     return { failure: { error } };
   }
@@ -946,6 +1094,7 @@ async function deliverWhatsAppRepliesOnce(env = process.env, fetchImpl = fetch) 
   const deliveredTextKeys = new Set((state.outboundDeliveries || []).map((delivery) => delivery.textKey).filter(Boolean));
   const batchTextKeys = new Set();
   const outboundDeliveries = [...(state.outboundDeliveries || [])];
+  const outboundIntents = [...(state.outboundIntents || [])];
   const delivered = [];
   const skipped = [];
   const failed = [];
@@ -956,7 +1105,9 @@ async function deliverWhatsAppRepliesOnce(env = process.env, fetchImpl = fetch) 
   ];
   await recoverParentsForAlreadyMirroredReplies(messageSets, deliveredIds, outboundDeliveries, state, env);
   for (const { agentId, threadId, thread, messages, kind } of messageSets) {
-    for (const message of messages) {
+    const messageSetKey = outboundMirrorMessageSetKey({ kind, agentId, threadId });
+    for (const [messageIndex, message] of messages.entries()) {
+      const messageCursor = outboundMirrorMessageCursor(message, messageIndex);
       const routerUpdateTarget = routerUpdateWhatsAppDeliveryTarget({
         message,
         thread,
@@ -988,12 +1139,17 @@ async function deliverWhatsAppRepliesOnce(env = process.env, fetchImpl = fetch) 
           skipped.push({ agentId, threadId, messageId: message.id, reason: "duplicate_text" });
           continue;
         }
-        const result = await sendClaimedWhatsAppText({
+        const result = await sendWhatsAppOutboundCandidate({
           state,
           outboundDeliveries,
+          outboundIntents,
           deliveredIds,
           deliveredTextKeys,
           batchTextKeys,
+          messageSetKey,
+          messageCursor,
+          message,
+          thread,
           kind,
           deliveryType: "router_update",
           routerUpdateType: routerUpdateTarget.routerUpdateType,
@@ -1053,12 +1209,17 @@ async function deliverWhatsAppRepliesOnce(env = process.env, fetchImpl = fetch) 
           skipped.push({ agentId, threadId, messageId: message.id, reason: "duplicate_text" });
           continue;
         }
-        const result = await sendClaimedWhatsAppText({
+        const result = await sendWhatsAppOutboundCandidate({
           state,
           outboundDeliveries,
+          outboundIntents,
           deliveredIds,
           deliveredTextKeys,
           batchTextKeys,
+          messageSetKey,
+          messageCursor,
+          message,
+          thread,
           kind,
           deliveryType: "mode_queued",
           agentId,
@@ -1114,12 +1275,17 @@ async function deliverWhatsAppRepliesOnce(env = process.env, fetchImpl = fetch) 
           skipped.push({ agentId, threadId, messageId: message.id, reason: "duplicate_text" });
           continue;
         }
-        const result = await sendClaimedWhatsAppText({
+        const result = await sendWhatsAppOutboundCandidate({
           state,
           outboundDeliveries,
+          outboundIntents,
           deliveredIds,
           deliveredTextKeys,
           batchTextKeys,
+          messageSetKey,
+          messageCursor,
+          message,
+          thread,
           kind,
           deliveryType: "queue_notice",
           agentId,
@@ -1188,12 +1354,17 @@ async function deliverWhatsAppRepliesOnce(env = process.env, fetchImpl = fetch) 
           skipped.push({ agentId, threadId, messageId: message.id, reason: "duplicate_text" });
           continue;
         }
-        const result = await sendClaimedWhatsAppText({
+        const result = await sendWhatsAppOutboundCandidate({
           state,
           outboundDeliveries,
+          outboundIntents,
           deliveredIds,
           deliveredTextKeys,
           batchTextKeys,
+          messageSetKey,
+          messageCursor,
+          message,
+          thread,
           kind,
           deliveryType: "delivery_error",
           agentId,
@@ -1261,12 +1432,18 @@ async function deliverWhatsAppRepliesOnce(env = process.env, fetchImpl = fetch) 
           continue;
         }
 
-        const result = await sendClaimedWhatsAppText({
+        const result = await sendWhatsAppOutboundCandidate({
           state,
           outboundDeliveries,
+          outboundIntents,
           deliveredIds,
           deliveredTextKeys,
           batchTextKeys,
+          messageSetKey,
+          messageCursor,
+          message,
+          parent,
+          thread,
           kind,
           deliveryType: "progress",
           agentId,
@@ -1342,12 +1519,18 @@ async function deliverWhatsAppRepliesOnce(env = process.env, fetchImpl = fetch) 
         continue;
       }
 
-      const result = await sendClaimedWhatsAppText({
+      const result = await sendWhatsAppOutboundCandidate({
         state,
         outboundDeliveries,
+        outboundIntents,
         deliveredIds,
         deliveredTextKeys,
         batchTextKeys,
+        messageSetKey,
+        messageCursor,
+        message,
+        parent,
+        thread,
         kind,
         deliveryType,
         agentId,
@@ -1393,8 +1576,10 @@ async function deliverWhatsAppRepliesOnce(env = process.env, fetchImpl = fetch) 
     }
   }
 
-  if (delivered.length) {
+  const cursorsChanged = advanceWhatsAppOutboundMirrorCursors(state, messageSets);
+  if (delivered.length || cursorsChanged) {
     state.outboundDeliveries = outboundDeliveries;
+    state.outboundIntents = outboundIntents;
     await writeWhatsAppState(state, env);
   }
   return { delivered, skipped, failed };

@@ -93,8 +93,8 @@ export function whatsappOutboundDeliveryRetentionLimit(env = process.env) {
 }
 
 function whatsappReplyBackfillWindowMs(env = process.env) {
-  const parsed = Number(env.ORKESTR_WHATSAPP_REPLY_BACKFILL_WINDOW_MS || 24 * 60 * 60 * 1000);
-  return Number.isFinite(parsed) ? Math.max(0, parsed) : 24 * 60 * 60 * 1000;
+  const parsed = Number(env.ORKESTR_WHATSAPP_REPLY_BACKFILL_WINDOW_MS || 15 * 60 * 1000);
+  return Number.isFinite(parsed) ? Math.max(0, parsed) : 15 * 60 * 1000;
 }
 
 function whatsappProgressBackfillWindowMs(env = process.env) {
@@ -258,6 +258,7 @@ function passiveMirrorCanCompleteParent(parent, reply, chatId, state = null) {
     "awaiting_ack_unobserved",
     "awaiting_runtime_completion",
     "blocked_frozen_runtime",
+    "codex_app_server_sending",
     "delivering",
     "failed",
     "recovering_stale_ack",
@@ -266,6 +267,7 @@ function passiveMirrorCanCompleteParent(parent, reply, chatId, state = null) {
     "waiting_runtime_start",
     "waking",
   ]);
+  if (parentDeliveryState && !recoverableDeliveryStates.has(parentDeliveryState)) return false;
   if (!recoverableStates.has(parentState) && !recoverableDeliveryStates.has(parentDeliveryState)) return false;
   const parentChatId = pickString(parent.chatId, reply?.chatId);
   const replyChatId = pickString(chatId, reply?.chatId, parent.chatId);

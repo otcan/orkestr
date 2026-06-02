@@ -393,11 +393,6 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
 
   private enterPairingRequired(setup: SetupStatus | null = this.setupStatus): void {
     if (setup) this.setupStatus = setup;
-    const authPairingUrl = this.crossOriginAuthPairingUrl(setup);
-    if (authPairingUrl) {
-      globalThis.location.href = authPairingUrl;
-      return;
-    }
     this.apiOnline = true;
     this.appReady = true;
     this.pairingRequired = true;
@@ -3741,7 +3736,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     const candidate = parts[0] === "ops"
       ? String(parts[1] || "system")
       : parts[0] === "ng" && parts[1] === "ops" ? String(parts[2] || "system") : "system";
-    return ["system", "timers", "desktops", "models", "settings", "connectors", "users", "audit"].includes(candidate) ? candidate as ToolsView : "system";
+    return ["system", "timers", "desktops", "models", "settings", "connectors", "users", "waitlist", "audit"].includes(candidate) ? candidate as ToolsView : "system";
   }
 
   private normalizeLegacyRoutePath(): void {
@@ -3830,20 +3825,6 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     const next = returnTo ? `/setup/pairing?return=${encodeURIComponent(returnTo)}` : "/setup/pairing";
     if (`${globalThis.location?.pathname || ""}${globalThis.location?.search || ""}` === next) return;
     globalThis.history?.replaceState({}, "", next);
-  }
-
-  private crossOriginAuthPairingUrl(setup: SetupStatus | null = this.setupStatus): string {
-    const authUrl = setup?.urls?.authUrl || setup?.security?.https?.authUrl || "";
-    if (!authUrl) return "";
-    try {
-      const target = new URL("/setup/pairing", authUrl);
-      const current = new URL(globalThis.location?.href || "/");
-      if (target.origin === current.origin) return "";
-      target.searchParams.set("return", current.toString());
-      return target.toString();
-    } catch {
-      return "";
-    }
   }
 
   private safePairingReturnUrl(): string {

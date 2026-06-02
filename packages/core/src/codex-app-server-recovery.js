@@ -1,3 +1,6 @@
+import fs from "node:fs/promises";
+import path from "node:path";
+import { dataPaths } from "../../storage/src/paths.js";
 import { appendEvent } from "../../storage/src/store.js";
 import { listThreadMessages, listThreads, updateThread } from "./threads.js";
 import { getCodexAppServerClient } from "./codex-app-server-client.js";
@@ -23,6 +26,12 @@ import {
   terminalAssistantMessage,
 } from "./thread-message-visibility.js";
 import { readLiveCodexThreadState } from "./codex-app-server-live-state.js";
+
+const recoveryScanCache = new Map();
+
+function safeThreadId(threadId) {
+  return String(threadId || "").replace(/[^a-zA-Z0-9_.-]/g, "_") || "default";
+}
 
 function runtimeStatusState(thread) {
   return appServerStateFromStatus(thread?.runtime?.codexStatus || null);
@@ -52,6 +61,16 @@ function staleRecoveryLookbackMs(env = process.env) {
   const fallback = 24 * 60 * 60 * 1000;
   const parsed = Number(env.ORKESTR_CODEX_APP_SERVER_STALE_RECOVERY_LOOKBACK_MS || fallback);
   return Number.isFinite(parsed) ? Math.max(0, parsed) : fallback;
+}
+
+function staleRecoveryScanCacheMs(env = process.env) {
+  const parsed = Number(env.ORKESTR_CODEX_APP_SERVER_STALE_RECOVERY_SCAN_CACHE_MS || 120000);
+  return Number.isFinite(parsed) ? Math.max(0, parsed) : 120000;
+}
+
+function staleRecoveryMessageScanLimit(env = process.env) {
+  const parsed = Number(env.ORKESTR_CODEX_APP_SERVER_STALE_RECOVERY_MESSAGE_SCAN_LIMIT || 2000);
+  return Number.isFinite(parsed) ? Math.max(0, Math.floor(parsed)) : 2000;
 }
 
 function timestampMs(value) {
@@ -248,10 +267,66 @@ function shouldRecoverIncompleteTurn(thread, clientState, turn, env = process.en
   return Date.now() - turn.lastActivityMs >= staleFinalGraceMs(env);
 }
 
+function recoveryScanMessages(messages = [], fullScan = false, env = process.env) {
+  if (fullScan) return messages;
+  const limit = staleRecoveryMessageScanLimit(env);
+  if (limit <= 0 || messages.length <= limit) return messages;
+  return messages.slice(-limit);
+}
+
+async function threadMessagesFingerprint(threadId, env = process.env) {
+  const filePath = path.join(dataPaths(env).threadMessages, `${safeThreadId(threadId)}.json`);
+  const stats = await fs.stat(filePath).catch(() => null);
+  if (!stats?.isFile()) return "missing";
+  return `${stats.size}:${stats.mtimeMs}`;
+}
+
+function recoveryScanKey(thread, clientState, messagesFingerprint, options = {}, env = process.env) {
+  const runtime = thread?.runtime && typeof thread.runtime === "object" ? thread.runtime : {};
+  const clientStatus = clientState?.status || null;
+  return JSON.stringify({
+    home: dataPaths(env).home,
+    id: thread?.id || "",
+    updatedAt: thread?.updatedAt || "",
+    state: thread?.state || "",
+    lastError: thread?.lastError || "",
+    runtimeState: runtime.state || "",
+    runtimeKind: runtime.runtimeKind || thread?.runtimeKind || "",
+    activeTurnId: runtime.activeTurnId || "",
+    pendingRequest: runtime.pendingRequest || null,
+    lastTurnStatus: runtime.lastTurnStatus || "",
+    codexStatus: runtime.codexStatus || null,
+    clientActiveTurnId: clientState?.activeTurnId || "",
+    clientStatus,
+    messagesFingerprint,
+    noticeCause: clean(options.noticeCause || options.cause),
+  });
+}
+
+function recoveryCacheHit(threadId, scanKey, env = process.env) {
+  const ttlMs = staleRecoveryScanCacheMs(env);
+  if (ttlMs <= 0) return false;
+  const cached = recoveryScanCache.get(threadId);
+  return Boolean(cached && cached.scanKey === scanKey && cached.expiresAt > Date.now());
+}
+
+function rememberRecoveryNoop(threadId, scanKey, env = process.env) {
+  const ttlMs = staleRecoveryScanCacheMs(env);
+  if (ttlMs <= 0) return;
+  recoveryScanCache.set(threadId, { scanKey, expiresAt: Date.now() + ttlMs });
+}
+
+function pruneRecoveryScanCache(activeThreadIds) {
+  for (const threadId of recoveryScanCache.keys()) {
+    if (!activeThreadIds.has(threadId)) recoveryScanCache.delete(threadId);
+  }
+}
+
 export async function recoverStaleCodexAppServerTurns(env = process.env, options = {}) {
   const threads = await listThreads(env).catch(() => []);
   const appServerThreads = threads.filter((thread) => threadUsesCodexAppServer(thread, env));
   if (!appServerThreads.length) return { recovered: 0, appended: 0 };
+  pruneRecoveryScanCache(new Set(appServerThreads.map((thread) => thread.id).filter(Boolean)));
   const client = await getCodexAppServerClient({ env, home: runtimeHome(env) }).catch(() => null);
   let recovered = 0;
   let appended = 0;
@@ -259,9 +334,14 @@ export async function recoverStaleCodexAppServerTurns(env = process.env, options
     const codexId = codexThreadId(thread);
     if (!codexId) continue;
     let clientState = client?.threadStates.has(codexId) ? client.threadStates.get(codexId) : null;
+    const messagesFingerprint = await threadMessagesFingerprint(thread.id, env);
+    const initialScanKey = recoveryScanKey(thread, clientState, messagesFingerprint, options, env);
+    if (recoveryCacheHit(thread.id, initialScanKey, env)) continue;
+    const staleRuntimeCandidate = staleAppServerRuntime(thread, clientState);
     const messages = await listThreadMessages(thread.id, env).catch(() => []);
-    const incompleteTurn = latestIncompleteDeliveredTurn(messages);
-    let staleRuntime = staleAppServerRuntime(thread, clientState);
+    const scanMessages = recoveryScanMessages(messages, staleRuntimeCandidate, env);
+    const incompleteTurn = latestIncompleteDeliveredTurn(scanMessages);
+    let staleRuntime = staleRuntimeCandidate;
     let shouldRecoverTurn = shouldRecoverIncompleteTurn(thread, clientState, incompleteTurn, env);
     if ((staleRuntime || shouldRecoverTurn) && client) {
       const liveReadState = await readLiveCodexThreadState(client, codexId);
@@ -271,10 +351,16 @@ export async function recoverStaleCodexAppServerTurns(env = process.env, options
         shouldRecoverTurn = shouldRecoverIncompleteTurn(thread, clientState, incompleteTurn, env);
       }
     }
+    const liveScanKey = clientState === (client?.threadStates.has(codexId) ? client.threadStates.get(codexId) : null)
+      ? initialScanKey
+      : recoveryScanKey(thread, clientState, messagesFingerprint, options, env);
     const noticeTurn = shouldRecoverTurn || incompleteTurnMatchesRuntimeTurn(thread, incompleteTurn)
       ? incompleteTurn
       : null;
-    if (!staleRuntime && !shouldRecoverTurn) continue;
+    if (!staleRuntime && !shouldRecoverTurn) {
+      rememberRecoveryNoop(thread.id, liveScanKey, env);
+      continue;
+    }
     let notice = null;
     let noticeMessages = messages;
     let freshNoticeTurn = noticeTurn;
@@ -310,6 +396,7 @@ export async function recoverStaleCodexAppServerTurns(env = process.env, options
       reason: freshNoticeTurn?.reason || noticeTurn?.reason || (staleRuntime ? "stale_runtime" : "incomplete_turn"),
       noticeCause: clean(options.noticeCause || options.cause),
     }, env).catch(() => {});
+    recoveryScanCache.delete(thread.id);
   }
   return { recovered, appended };
 }

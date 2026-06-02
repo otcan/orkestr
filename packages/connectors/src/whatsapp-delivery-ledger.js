@@ -22,7 +22,7 @@ function mergeByKey(existing = [], next = [], keyFn = () => "") {
 }
 
 export function normalizedDeliveryText(value) {
-  return String(value || "").replace(/\s+/g, " ").trim();
+  return String(value || "").replace(/\n\ndbg: .+$/s, "").replace(/\s+/g, " ").trim();
 }
 
 export function deliveryTextKey(chatId, text) {
