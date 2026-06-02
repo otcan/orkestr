@@ -17,11 +17,36 @@ import { cleanupLocalWhatsAppChromeLocks, clearLocalWhatsAppChatTypingState, for
 import { routedWhatsAppTypingTarget, runWithRoutedWhatsAppTyping } from "../packages/connectors/src/whatsapp-router-typing.js";
 import { createAndBindWhatsAppThreadGroup } from "../packages/connectors/src/whatsapp-thread-groups.js";
 import { prepareWhatsAppTableAttachments } from "../packages/connectors/src/whatsapp-table-attachments.js";
+import { mergeWhatsAppOutboundIntents, mergeWhatsAppOutboundMirrorCursors } from "../packages/connectors/src/whatsapp-outbound-intents.js";
 import { writeConnectorConfig } from "../packages/storage/src/config.js";
 import { listEvents } from "../packages/storage/src/store.js";
 
 afterEach(() => {
   stopCodexAppServerClients();
+});
+
+test("whatsapp outbound intent state merge is monotonic", () => {
+  const cursors = mergeWhatsAppOutboundMirrorCursors(
+    [{ messageSetKey: "thread||one", cursor: 42, updatedAt: "2026-06-02T12:00:00.000Z" }],
+    [{ messageSetKey: "thread||one", cursor: 12, updatedAt: "2026-06-02T13:00:00.000Z" }],
+  );
+  const intents = mergeWhatsAppOutboundIntents(
+    [{
+      intentId: "intent-1",
+      status: "delivered",
+      messageId: "message-1",
+      updatedAt: "2026-06-02T12:00:00.000Z",
+    }],
+    [{
+      intentId: "intent-1",
+      status: "pending",
+      messageId: "message-1",
+      updatedAt: "2026-06-02T13:00:00.000Z",
+    }],
+  );
+
+  assert.equal(cursors[0].cursor, 42);
+  assert.equal(intents[0].status, "delivered");
 });
 
 function response(payload, ok = true, status = 200) {
@@ -2752,6 +2777,97 @@ test("whatsapp delivery does not backfill stale untracked final replies", async 
 
   assert.equal(delivery.delivered.length, 0);
   assert.deepEqual(delivery.skipped.find((item) => item.messageId === reply.id)?.reason, "stale_untracked_reply");
+});
+
+test("whatsapp delivery records an outbound intent for current WA replies", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-intent-current-"));
+  const env = externalBridgeEnv(home);
+  await createThread({ id: "thread-wa-intent-current", name: "WA Intent Current Thread" }, env);
+  await writeConnectorConfig("whatsapp", {
+    bridgeMode: "external",
+    bridgeUrl: "http://wa.local",
+    threadRoutes: { "chat-intent-current": "thread-wa-intent-current" },
+  }, env);
+
+  const routed = await routeWhatsAppInbound({ eventId: "wa-intent-current-1", chatId: "chat-intent-current", text: "current request" }, env);
+  const reply = await appendThreadMessage("thread-wa-intent-current", {
+    role: "assistant",
+    source: "codex-rollout",
+    phase: "final_answer",
+    state: "completed",
+    connector: "whatsapp",
+    chatId: "chat-intent-current",
+    parentMessageId: routed.message.id,
+    text: "current answer",
+  }, env);
+
+  const calls = [];
+  const delivery = await deliverWhatsAppReplies(env, async (url, options) => {
+    calls.push({ url, body: JSON.parse(options.body) });
+    return response({ ok: true, ids: ["sent-intent-current"] });
+  });
+  const duplicate = await deliverWhatsAppReplies(env, async () => {
+    throw new Error("current intent should not resend after delivery");
+  });
+  const state = JSON.parse(await fs.readFile(path.join(home, "whatsapp.json"), "utf8"));
+  const intent = state.outboundIntents.find((item) => item.messageId === reply.id);
+
+  assert.equal(delivery.delivered.length, 1);
+  assert.equal(duplicate.delivered.length, 0);
+  assert.equal(calls.length, 1);
+  assert.equal(stripDebugFooter(calls[0].body.text), "current answer");
+  assert.equal(intent.status, "delivered");
+  assert.equal(intent.deliveryType, "final");
+  assert.equal(state.outboundMirrorCursors.some((cursor) => cursor.threadId === "thread-wa-intent-current"), true);
+});
+
+test("whatsapp delivery does not backfill historical replies without outbound intents", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-no-historical-intent-"));
+  const env = externalBridgeEnv(home, {
+    ORKESTR_WHATSAPP_REPLY_BACKFILL_WINDOW_MS: String(24 * 60 * 60 * 1000),
+  });
+  await createThread({ id: "thread-wa-no-historical-intent", name: "WA No Historical Intent Thread" }, env);
+  await writeConnectorConfig("whatsapp", {
+    bridgeMode: "external",
+    bridgeUrl: "http://wa.local",
+    threadRoutes: { "chat-no-historical-intent": "thread-wa-no-historical-intent" },
+  }, env);
+
+  const oldAt = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString();
+  const parent = await appendThreadMessage("thread-wa-no-historical-intent", {
+    role: "user",
+    source: "whatsapp_inbound",
+    state: "completed",
+    connector: "whatsapp",
+    chatId: "chat-no-historical-intent",
+    text: "old request inside old backfill window",
+    createdAt: oldAt,
+  }, env);
+  const reply = await appendThreadMessage("thread-wa-no-historical-intent", {
+    role: "assistant",
+    source: "codex-rollout",
+    phase: "final_answer",
+    state: "completed",
+    connector: "whatsapp",
+    chatId: "chat-no-historical-intent",
+    parentMessageId: parent.id,
+    text: "old answer that should not be recovered by scan",
+    createdAt: oldAt,
+  }, env);
+
+  const delivery = await deliverWhatsAppReplies(env, async () => {
+    throw new Error("historical reply without an outbound intent should not be sent");
+  });
+  const state = JSON.parse(await fs.readFile(path.join(home, "whatsapp.json"), "utf8"));
+  const second = await deliverWhatsAppReplies(env, async () => {
+    throw new Error("historical reply should stay inert after cursor advances");
+  });
+
+  assert.equal(delivery.delivered.length, 0);
+  assert.deepEqual(delivery.skipped.find((item) => item.messageId === reply.id)?.reason, "missing_outbound_intent");
+  assert.equal((state.outboundIntents || []).some((item) => item.messageId === reply.id), false);
+  assert.equal(state.outboundMirrorCursors.some((cursor) => cursor.threadId === "thread-wa-no-historical-intent"), true);
+  assert.equal(second.delivered.length, 0);
 });
 
 test("whatsapp delivery does not replay replies older than retained delivery ledger", async () => {
