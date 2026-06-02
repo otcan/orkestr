@@ -18,6 +18,7 @@ export function dataPaths(env = process.env) {
     config: path.join(home, "config.json"),
     runtimeSettings: env.ORKESTR_RUNTIME_SETTINGS_FILE || path.join(home, "runtime-settings.json"),
     agents: path.join(home, "agents.json"),
+    waitlist: path.join(home, "waitlist.json"),
     users: path.join(home, "users.json"),
     tenantVms: path.join(home, "tenant-vms.json"),
     userDataRoot: path.join(home, "users"),

@@ -10,6 +10,11 @@ import {
   resumeOnboardedUser,
   setUserOnboardingState,
 } from "../../../../../packages/core/src/user-onboarding.js";
+import {
+  approveWaitlistEntry,
+  listWaitlistEntries,
+  updateWaitlistEntry,
+} from "../../../../../packages/core/src/user-waitlist.js";
 import { httpError } from "../../common/http.js";
 
 function assertAdminRequest(request: any): void {
@@ -77,6 +82,31 @@ function offboardingInput(body: Record<string, unknown> = {}, request: any) {
   };
 }
 
+function waitlistStatusPatch(body: Record<string, unknown> = {}, request: any) {
+  const principal = requestPrincipal(request);
+  return {
+    status: String(body.status || "").trim(),
+    adminNote: String(body.adminNote || body.note || "").trim(),
+    reviewedBy: principal?.userId || "admin",
+  };
+}
+
+function waitlistApprovalInput(body: Record<string, unknown> = {}, request: any) {
+  const principal = requestPrincipal(request);
+  return {
+    userId: String(body.userId || "").trim(),
+    connectionName: String(body.connectionName || body.chatName || "").trim(),
+    threadId: String(body.threadId || "").trim(),
+    chatId: String(body.chatId || body.whatsappChatId || "").trim(),
+    whatsappAccountId: String(body.whatsappAccountId || body.accountId || "").trim(),
+    senderAccountId: String(body.senderAccountId || "").trim(),
+    responderAccountId: String(body.responderAccountId || "").trim(),
+    outboundAccountId: String(body.outboundAccountId || "").trim(),
+    adminNote: String(body.adminNote || body.note || "").trim(),
+    actorUserId: principal?.userId || "admin",
+  };
+}
+
 @Controller("api/users")
 export class UsersOnboardingController {
   @Get("onboarding/invite-template")
@@ -89,6 +119,28 @@ export class UsersOnboardingController {
   async provisioningChecklist(@Req() request: any, @Query() query: Record<string, unknown> = {}) {
     assertAdminRequest(request);
     return buildProvisioningChecklist(checklistInput(query));
+  }
+
+  @Get("onboarding/waitlist")
+  async waitlist(@Req() request: any, @Query() query: Record<string, unknown> = {}) {
+    assertAdminRequest(request);
+    return listWaitlistEntries({
+      status: String(query.status || "").trim(),
+      limit: Number(query.limit || 100),
+    });
+  }
+
+  @Patch("onboarding/waitlist/:entryId")
+  async updateWaitlist(@Req() request: any, @Param("entryId") entryId: string, @Body() body: Record<string, unknown> = {}) {
+    assertAdminRequest(request);
+    return updateWaitlistEntry(entryId, waitlistStatusPatch(body, request));
+  }
+
+  @Post("onboarding/waitlist/:entryId/approve")
+  @HttpCode(200)
+  async approveWaitlist(@Req() request: any, @Param("entryId") entryId: string, @Body() body: Record<string, unknown> = {}) {
+    assertAdminRequest(request);
+    return approveWaitlistEntry(entryId, waitlistApprovalInput(body, request));
   }
 
   @Get(":userId/onboarding")

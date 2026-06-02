@@ -1,3 +1,5 @@
+import { renderWaitlistSection, waitlistCss } from "./public-waitlist.js";
+
 type PublicPage = {
   title: string;
   eyebrow?: string;
@@ -28,10 +30,6 @@ function publicContact(env = process.env) {
   return clean(env.ORKESTR_PUBLIC_CONTACT || env.ORKESTR_SUPPORT_EMAIL || "Ask the person who invited you.");
 }
 
-function appUrl(env = process.env) {
-  return clean(env.ORKESTR_PUBLIC_APP_URL || env.ORKESTR_PUBLIC_HTTPS_URL || env.ORKESTR_PUBLIC_URL || "/app");
-}
-
 export function publicSitePath(pathname = "") {
   const path = clean(pathname || "/").replace(/\/+$/, "") || "/";
   if (path === "/" || path === "/public") return "home";
@@ -54,7 +52,6 @@ export function renderPublicSite(requestUrl = "/", env = process.env) {
 
 function shell(page: PublicPage, env = process.env) {
   const repo = publicRepoUrl(env);
-  const app = appUrl(env);
   const title = escapeHtml(page.title ? `${page.title} | Orkestr` : "Orkestr");
   return `<!doctype html>
 <html lang="en">
@@ -73,7 +70,7 @@ function shell(page: PublicPage, env = process.env) {
       <a href="${escapeHtml(repo)}" rel="noreferrer">Repo</a>
       <a href="/privacy">Privacy</a>
       <a href="/terms">Terms</a>
-      <a class="button small" href="${escapeHtml(app)}">App</a>
+      <a class="button small" href="/#waitlist">Join waitlist</a>
     </nav>
   </header>
   ${page.body}
@@ -96,7 +93,6 @@ function shell(page: PublicPage, env = process.env) {
 function renderHome(env = process.env) {
   const repo = publicRepoUrl(env);
   const contact = publicContact(env);
-  const app = appUrl(env);
   return shell({
     title: "Invite-only agent workstation",
     summary: "Orkestr is a self-hosted agent workstation for persistent AI chats, WhatsApp, desktops, timers, files, and user-owned connectors.",
@@ -109,12 +105,13 @@ function renderHome(env = process.env) {
       <h1>Orkestr</h1>
       <p class="lead">A self-hosted agent workstation for persistent AI chats, WhatsApp, managed desktops, timers, files, and user-owned connectors.</p>
       <div class="actions">
-        <a class="button" href="${escapeHtml(app)}">Open app</a>
+        <a class="button" href="#waitlist">Join waitlist</a>
         <a class="button secondary" href="${escapeHtml(repo)}" rel="noreferrer">View OSS repo</a>
       </div>
-      <p class="contact">To join, ask your inviter for access. ${escapeHtml(contact)}</p>
+      <p class="contact">Invite-only beta access starts with your WhatsApp number. ${escapeHtml(contact)}</p>
     </div>
   </section>
+  ${renderWaitlistSection()}
   <section class="band intro" aria-labelledby="how-title">
     <div>
       <p class="eyebrow">How it works</p>
@@ -359,6 +356,7 @@ h2 { margin: 0 0 14px; font-size: clamp(28px, 4vw, 48px); line-height: 1.04; let
   border-bottom: 1px solid rgba(23, 32, 42, 0.1);
 }
 .band p { margin: 0; color: #475569; font-size: 18px; line-height: 1.55; }
+${waitlistCss()}
 .flow, .feature-list {
   display: grid;
   gap: 12px;

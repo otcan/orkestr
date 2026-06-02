@@ -6,6 +6,7 @@ import test from "node:test";
 import { startServer } from "../apps/server/src/server.js";
 import { userDataPaths } from "../packages/storage/src/paths.js";
 import { createTimer, listTimers } from "../packages/core/src/timers.js";
+import { listThreads } from "../packages/core/src/threads.js";
 import {
   linkUserPrivateIdentity,
   readUserPrivateIdentities,
@@ -20,6 +21,12 @@ import {
   recordUserSupportRequest,
   setUserOnboardingState,
 } from "../packages/core/src/user-onboarding.js";
+import {
+  approveWaitlistEntry,
+  listWaitlistEntries,
+  submitWaitlistEntry,
+  updateWaitlistEntry,
+} from "../packages/core/src/user-waitlist.js";
 
 function saveEnv(keys) {
   return Object.fromEntries(keys.map((key) => [key, process.env[key]]));
@@ -58,6 +65,61 @@ test("external user invite template and checklist describe the full beta flow", 
   assert.equal(checklist.connectionName, "can-test");
   assert.ok(checklist.steps.find((step) => step.id === "wa-group" && step.label.includes("can-test")));
   assert.ok(checklist.steps.find((step) => step.id === "smoke"));
+});
+
+test("waitlist submissions are normalized, idempotent, and admin-reviewable", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-waitlist-core-"));
+  const env = { ORKESTR_HOME: home };
+  const first = await submitWaitlistEntry({
+    displayName: "Can",
+    phoneNumber: "+49 176 000000",
+    email: "CAN@EXAMPLE.TEST",
+    intendedUse: "Job applications",
+    acceptedTerms: true,
+    consentToContact: true,
+    sourceIp: "198.51.100.10",
+    userAgent: "test-agent",
+  }, env);
+  const duplicate = await submitWaitlistEntry({
+    displayName: "Can Updated",
+    phoneNumber: "+49176000000",
+    email: "can@example.test",
+    intendedUse: "Leads and job applications",
+    acceptedTerms: true,
+    consentToContact: true,
+  }, env);
+  const listed = await listWaitlistEntries({}, env);
+  const reviewed = await updateWaitlistEntry(first.waitlist.id, {
+    status: "contacted",
+    adminNote: "Sent WA intro",
+    reviewedBy: "admin",
+  }, env);
+  const approved = await approveWaitlistEntry(first.waitlist.id, {
+    connectionName: "Can-Orkestr",
+    actorUserId: "admin",
+    whatsappAccountId: "wa-router",
+  }, env);
+  const user = await getUser(approved.user.id, env);
+  const identities = await readUserPrivateIdentities(approved.user.id, env);
+  const threads = await listThreads(env);
+
+  assert.equal(first.submitted, true);
+  assert.equal(duplicate.waitlist.id, first.waitlist.id);
+  assert.equal(listed.entries.length, 1);
+  assert.equal(listed.entries[0].displayName, "Can Updated");
+  assert.equal(listed.entries[0].phoneNumber, "+49176000000");
+  assert.equal(listed.entries[0].email, "can@example.test");
+  assert.equal(reviewed.entry.status, "contacted");
+  assert.equal(reviewed.entry.adminNote, "Sent WA intro");
+  assert.equal(approved.entry.status, "approved");
+  assert.equal(approved.user.limits.maxThreads, 1);
+  assert.equal(user.phoneNumber, "+49176000000");
+  assert.equal(approved.thread.ownerUserId, approved.user.id);
+  assert.equal(approved.thread.runtimeKind, "api-agent");
+  assert.equal(approved.whatsapp.pendingChatCreation, true);
+  assert.match(approved.firstPrompt, /private Orkestr onboarding chat/);
+  assert.ok(identities.some((identity) => identity.provider === "whatsapp" && identity.externalId === "+49176000000"));
+  assert.ok(threads.some((thread) => thread.id === approved.thread.id && thread.ownerUserId === approved.user.id));
 });
 
 test("support requests and offboarding are user scoped and conservative", async () => {
@@ -105,6 +167,60 @@ test("support requests and offboarding are user scoped and conservative", async 
   await assert.rejects(() => fs.access(path.join(paths.secrets, "gmail-token.json")));
 });
 
+test("waitlist API accepts public submissions and keeps review admin-only", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-waitlist-api-"));
+  const prior = saveEnv([
+    "ORKESTR_HOME",
+    "ORKESTR_AUTH_REQUIRED",
+    "ORKESTR_UNSAFE_ALLOW_PUBLIC_UNAUTHENTICATED",
+    "ORKESTR_RECOVER_RUNNING_ON_START",
+    "ORKESTR_CODEX_BIN",
+    "WHATSAPP_BRIDGE_MODE",
+    "ORKESTR_WHATSAPP_EXTERNAL_BRIDGE_ENABLED",
+    "ORKESTR_PUBLIC_URL",
+  ]);
+  process.env.ORKESTR_HOME = home;
+  process.env.ORKESTR_AUTH_REQUIRED = "1";
+  delete process.env.ORKESTR_UNSAFE_ALLOW_PUBLIC_UNAUTHENTICATED;
+  process.env.ORKESTR_RECOVER_RUNNING_ON_START = "0";
+  process.env.ORKESTR_CODEX_BIN = "__orkestr_codex_disabled_on_macos__";
+  process.env.WHATSAPP_BRIDGE_MODE = "external";
+  process.env.ORKESTR_WHATSAPP_EXTERNAL_BRIDGE_ENABLED = "1";
+  process.env.ORKESTR_PUBLIC_URL = "https://app.orkestr.example.test";
+  const server = await startServer({ port: 0, host: "127.0.0.1" });
+  const { port } = server.address();
+  const baseUrl = `http://127.0.0.1:${port}`;
+
+  try {
+    const submit = await json(await fetch(`${baseUrl}/api/public/waitlist`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        displayName: "Can",
+        phoneNumber: "+49176000000",
+        email: "can@example.test",
+        intendedUse: "I want Orkestr for job applications.",
+        acceptedTerms: true,
+        consentToContact: true,
+      }),
+    }));
+    const blockedList = await fetch(`${baseUrl}/api/users/onboarding/waitlist`);
+    const blockedThreads = await fetch(`${baseUrl}/api/threads`);
+    const listed = await listWaitlistEntries({}, process.env);
+
+    assert.equal(submit.ok, true);
+    assert.equal(submit.submitted, true);
+    assert.match(submit.message, /waitlist/);
+    assert.equal(blockedList.status, 401);
+    assert.equal(blockedThreads.status, 401);
+    assert.equal(listed.entries.length, 1);
+    assert.equal(listed.entries[0].phoneNumber, "+49176000000");
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+    restoreEnv(prior);
+  }
+});
+
 test("admin onboarding endpoints expose invite, checklist, and offboarding", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-external-onboarding-api-"));
   const prior = saveEnv([
@@ -133,6 +249,19 @@ test("admin onboarding endpoints expose invite, checklist, and offboarding", asy
   try {
     const invite = await json(await fetch(`${baseUrl}/api/users/onboarding/invite-template?name=Can`));
     const checklist = await json(await fetch(`${baseUrl}/api/users/onboarding/provisioning-checklist?userId=can&connectionName=can-test`));
+    const waitlist = await submitWaitlistEntry({
+      displayName: "Beta User",
+      phoneNumber: "+49176000001",
+      email: "beta@example.test",
+      intendedUse: "Inbox help",
+      acceptedTerms: true,
+      consentToContact: true,
+    }, process.env);
+    const approved = await json(await fetch(`${baseUrl}/api/users/onboarding/waitlist/${waitlist.waitlist.id}/approve`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ connectionName: "Beta-Orkestr", whatsappAccountId: "wa-router" }),
+    }));
     const paused = await json(await fetch(`${baseUrl}/api/users/can/offboard`, {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -141,6 +270,9 @@ test("admin onboarding endpoints expose invite, checklist, and offboarding", asy
 
     assert.match(invite.message, /Hi Can/);
     assert.equal(checklist.connectionName, "can-test");
+    assert.equal(approved.user.phoneNumber, "+49176000001");
+    assert.equal(approved.thread.bindingName, "Beta-Orkestr");
+    assert.match(approved.firstPrompt, /connect Gmail, Outlook, Jira, Shopify/);
     assert.equal(paused.user.status, "disabled");
     assert.equal(paused.onboarding.state, "paused");
   } finally {
