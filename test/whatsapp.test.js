@@ -14,6 +14,7 @@ import { appendThreadMessage, createThread, enqueueThreadInput, getThread, listT
 import { createUser, linkUserPrivateIdentity } from "../packages/core/src/users.js";
 import { deliverWhatsAppReplies, formatWhatsAppOutboundText, getWhatsAppChatParticipants, getWhatsAppStatus, initialQueueDeliveryState, mapLocalWhatsAppStatusFromHealth, routeWhatsAppInbound, syncWhatsAppTypingIndicators } from "../packages/connectors/src/whatsapp.js";
 import { cleanupLocalWhatsAppChromeLocks, forwardLocalWhatsAppInbound, handleInboundMessage, inboundRoutingFailureNoticeText, listLocalWhatsAppChats, localWhatsAppAccountIdsForEnv, localWhatsAppConnectedPageReadyFallbackEligible, localWhatsAppInboundForwardTarget, localWhatsAppMessageRouteFields, localWhatsAppReadyFallbackEligible, localWhatsAppTypingClearRetryDelaysMs, localWhatsAppUnreadRecoveryBoundChats, localWhatsAppUnreadRecoveryIntervalMs, normalizeGroupParticipantIds, recoverConfiguredLocalWhatsAppAccounts, recoverUnreadLocalWhatsAppMessages, recoverableLocalWhatsAppAccountIds, reduceLocalWhatsAppBridgeState, sendWhatsAppTextWithConfirmation, startLocalWhatsAppAccount, webCacheRoot } from "../packages/connectors/src/whatsapp-local-bridge.js";
+import { routedWhatsAppTypingTarget, runWithRoutedWhatsAppTyping } from "../packages/connectors/src/whatsapp-router-typing.js";
 import { createAndBindWhatsAppThreadGroup } from "../packages/connectors/src/whatsapp-thread-groups.js";
 import { prepareWhatsAppTableAttachments } from "../packages/connectors/src/whatsapp-table-attachments.js";
 import { writeConnectorConfig } from "../packages/storage/src/config.js";
@@ -344,6 +345,40 @@ test("local whatsapp group participant ids are normalized for created test chats
     normalizeGroupParticipantIds(["+49 176 32400662", "4917632400662"]),
     ["4917632400662@c.us"],
   );
+});
+
+test("routed whatsapp typing wraps api-agent work for the bound chat", async () => {
+  const calls = [];
+  const thread = {
+    id: "tenant-thread",
+    binding: {
+      chatId: "120363000000000004@g.us",
+      responderAccountId: "account-2",
+      outboundAccountId: "account-1",
+    },
+  };
+  const target = routedWhatsAppTypingTarget({ thread, input: { chatId: "120363000000000004@g.us" } });
+  const result = await runWithRoutedWhatsAppTyping({ thread, input: { chatId: "120363000000000004@g.us" } }, async () => {
+    calls.push(["work"]);
+    return { ok: true };
+  }, {
+    async startTyping(input) {
+      calls.push(["start", input.accountId, input.chatId]);
+      return { ok: true, active: true };
+    },
+    async stopTyping(input) {
+      calls.push(["stop", input.accountId, input.chatId]);
+      return { ok: true, active: false };
+    },
+  });
+
+  assert.deepEqual(target, { accountId: "account-2", chatId: "120363000000000004@g.us" });
+  assert.deepEqual(result, { ok: true });
+  assert.deepEqual(calls, [
+    ["start", "account-2", "120363000000000004@g.us"],
+    ["work"],
+    ["stop", "account-2", "120363000000000004@g.us"],
+  ]);
 });
 
 test("whatsapp thread group creation binds an existing thread idempotently", async () => {
