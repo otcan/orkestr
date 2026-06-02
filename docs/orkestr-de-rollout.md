@@ -96,6 +96,9 @@ The helper:
   `browser_pairing_required`
 - checks that the VM cannot see known personal host paths or host container
   sockets
+- verifies the VM-local operator attach path when a Codex-backed thread is
+  available, and records a skip when the public VM has no Codex login because
+  public coding execution is out of scope
 - switches Caddy to the VM Service and disables `orkestr-public.service`
 
 ## Operator access
@@ -115,7 +118,9 @@ ssh -i /root/.ssh/orkestr-de-operator orkestr@"$pod_ip" \
 ```
 
 External unauthenticated attach requests must continue to fail with
-`browser_pairing_required`.
+`browser_pairing_required`. If the public VM has no Codex login, VM-local
+`attach --print` may report `Codex is not signed in`; that confirms the request
+reached the local operator path rather than browser-pairing auth.
 
 ## Verification
 

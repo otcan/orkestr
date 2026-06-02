@@ -444,6 +444,8 @@ test("public KubeVirt migration helper operates the isolated app VM", async () =
   assert.match(script, /kubectl_k3s get pod -n "\$namespace" -l "kubevirt\.io\/domain=\$vm"/);
   assert.match(script, /ORKESTR_HOME='\$vm_home' ORKESTR_API_BASE='\$vm_api' orkestr list --json/);
   assert.match(script, /ORKESTR_HOME='\$vm_home' ORKESTR_API_BASE='\$vm_api' orkestr attach --print/);
+  assert.match(script, /Codex is not signed in/);
+  assert.match(script, /public Codex runtime is not configured/);
   assert.match(script, /\/home\/openclaw\/\.orkestr-production/);
   assert.match(script, /\/var\/run\/docker\.sock/);
   assert.match(script, /systemctl disable --now orkestr-public\.service/);

@@ -350,8 +350,14 @@ smoke() {
   thread_id="$(vm_ssh "ORKESTR_HOME='$vm_home' ORKESTR_API_BASE='$vm_api' orkestr list --json" | jq -r '.threads[0].id // empty' | tail -n 1)"
   if [ -n "$thread_id" ]; then
     log "Checking VM-local attach --print for $thread_id."
-    attach_output="$(vm_ssh "ORKESTR_HOME='$vm_home' ORKESTR_API_BASE='$vm_api' orkestr attach --print '$thread_id'")"
-    printf '%s\n' "$attach_output" | grep -E 'tmux|attach|codex|thread' >/dev/null || die "Unexpected attach output"
+    if attach_output="$(vm_ssh "ORKESTR_HOME='$vm_home' ORKESTR_API_BASE='$vm_api' orkestr attach --print '$thread_id'" 2>&1)"; then
+      printf '%s\n' "$attach_output" | grep -E 'tmux|attach|codex|thread' >/dev/null || die "Unexpected attach output"
+    elif printf '%s\n' "$attach_output" | grep -q 'Codex is not signed in'; then
+      log "Attach reached the VM-local operator path but skipped: public Codex runtime is not configured."
+    else
+      printf '%s\n' "$attach_output" >&2
+      die "VM-local attach --print failed"
+    fi
   else
     log "No VM thread exists; skipping attach --print positive check."
   fi
