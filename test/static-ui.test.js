@@ -113,6 +113,74 @@ test("server serves the public site at root and Angular UI at app routes", async
   }
 });
 
+test("server keeps public pages on the configured public site host only", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-static-ui-private-host-"));
+  const prior = {
+    home: process.env.ORKESTR_HOME,
+    overlay: process.env.ORKESTR_OVERLAY_DIR,
+    publicSiteUrl: process.env.ORKESTR_PUBLIC_SITE_URL,
+    primaryDomain: process.env.ORKESTR_PRIMARY_DOMAIN,
+    publicUrl: process.env.ORKESTR_PUBLIC_URL,
+    authRequired: process.env.ORKESTR_AUTH_REQUIRED,
+  };
+  process.env.ORKESTR_HOME = home;
+  process.env.ORKESTR_PUBLIC_SITE_URL = "https://orkestr.de";
+  process.env.ORKESTR_PRIMARY_DOMAIN = "orkestr.de";
+  process.env.ORKESTR_PUBLIC_URL = "https://orkestr.app.ops.example.test";
+  process.env.ORKESTR_AUTH_REQUIRED = "1";
+  delete process.env.ORKESTR_OVERLAY_DIR;
+  const server = await startServer({ port: 0, host: "127.0.0.1" });
+  const { port } = server.address();
+  try {
+    const publicResponse = await fetch(`http://127.0.0.1:${port}/`, {
+      headers: { "x-forwarded-host": "orkestr.de", "x-forwarded-proto": "https" },
+    });
+    const publicHtml = await publicResponse.text();
+    const privateRootResponse = await fetch(`http://127.0.0.1:${port}/`, {
+      redirect: "manual",
+      headers: { "x-forwarded-host": "orkestr.app.ops.example.test", "x-forwarded-proto": "https" },
+    });
+    const privateTermsResponse = await fetch(`http://127.0.0.1:${port}/terms`, {
+      redirect: "manual",
+      headers: { "x-forwarded-host": "ops.example.test", "x-forwarded-proto": "https" },
+    });
+    const privateThreadResponse = await fetch(`http://127.0.0.1:${port}/thread/demo`, {
+      headers: { "x-forwarded-host": "orkestr.app.ops.example.test", "x-forwarded-proto": "https" },
+    });
+    const privateThreadHtml = await privateThreadResponse.text();
+
+    assert.equal(publicResponse.status, 200);
+    assertPublicShell(publicHtml);
+    assert.equal(privateRootResponse.status, 302);
+    assert.equal(
+      privateRootResponse.headers.get("location"),
+      "https://orkestr.de/setup/pairing?return=https%3A%2F%2Forkestr.app.ops.example.test%2F",
+    );
+    assert.equal(privateTermsResponse.status, 302);
+    assert.equal(
+      privateTermsResponse.headers.get("location"),
+      "https://orkestr.de/setup/pairing?return=https%3A%2F%2Fops.example.test%2Fterms",
+    );
+    assert.equal(privateThreadResponse.status, 200);
+    assertAngularShell(privateThreadHtml);
+    assert.doesNotMatch(privateThreadHtml, /Invite-only private beta/);
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+    if (prior.home === undefined) delete process.env.ORKESTR_HOME;
+    else process.env.ORKESTR_HOME = prior.home;
+    if (prior.overlay === undefined) delete process.env.ORKESTR_OVERLAY_DIR;
+    else process.env.ORKESTR_OVERLAY_DIR = prior.overlay;
+    if (prior.publicSiteUrl === undefined) delete process.env.ORKESTR_PUBLIC_SITE_URL;
+    else process.env.ORKESTR_PUBLIC_SITE_URL = prior.publicSiteUrl;
+    if (prior.primaryDomain === undefined) delete process.env.ORKESTR_PRIMARY_DOMAIN;
+    else process.env.ORKESTR_PRIMARY_DOMAIN = prior.primaryDomain;
+    if (prior.publicUrl === undefined) delete process.env.ORKESTR_PUBLIC_URL;
+    else process.env.ORKESTR_PUBLIC_URL = prior.publicUrl;
+    if (prior.authRequired === undefined) delete process.env.ORKESTR_AUTH_REQUIRED;
+    else process.env.ORKESTR_AUTH_REQUIRED = prior.authRequired;
+  }
+});
+
 test("pairing-required flow stays on the Orkestr app host", async () => {
   const component = await fs.readFile("apps/web/src/app/app.component.ts", "utf8");
 

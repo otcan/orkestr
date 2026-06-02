@@ -164,6 +164,7 @@ const topLevel = {
   host: "ORKESTR_HOST",
   port: "ORKESTR_PORT",
   primaryDomain: "ORKESTR_PRIMARY_DOMAIN",
+  publicSiteUrl: "ORKESTR_PUBLIC_SITE_URL",
   appHost: "ORKESTR_APP_HOST",
   authHost: "ORKESTR_AUTH_HOST",
   publicUrl: "ORKESTR_PUBLIC_URL",
@@ -184,6 +185,7 @@ const topLevel = {
 const nested = {
   domain: {
     primary: "ORKESTR_PRIMARY_DOMAIN",
+    publicSiteUrl: "ORKESTR_PUBLIC_SITE_URL",
     appHost: "ORKESTR_APP_HOST",
     authHost: "ORKESTR_AUTH_HOST",
     publicUrl: "ORKESTR_PUBLIC_URL",
@@ -1203,7 +1205,7 @@ checkout_git_ref() {
 write_env_file() {
   local chrome
   chrome="$(chrome_path)"
-  local codex_command codex_sandbox codex_approval codex_app_server_mode codex_app_server_socket codex_app_server_service runtime_settings_file desktop_mode browserctl_path primary_domain app_host auth_host public_url auth_url cookie_domain public_https_url
+  local codex_command codex_sandbox codex_approval codex_app_server_mode codex_app_server_socket codex_app_server_service runtime_settings_file desktop_mode browserctl_path primary_domain public_site_url app_host auth_host public_url auth_url cookie_domain public_https_url
   codex_command="${ORKESTR_RUNTIME_CODEX_COMMAND:-$(codex_command_default)}"
   codex_sandbox="${ORKESTR_CODEX_SANDBOX:-$(codex_sandbox_default)}"
   codex_approval="${ORKESTR_CODEX_APPROVAL_POLICY:-$(codex_approval_default)}"
@@ -1214,6 +1216,10 @@ write_env_file() {
   desktop_mode="${ORKESTR_BROWSER_DESKTOP_MODE:-browserctl}"
   browserctl_path="${ORKESTR_BROWSERCTL_PATH:-/usr/local/bin/orkestr-browserctl}"
   primary_domain="${ORKESTR_PRIMARY_DOMAIN:-${ORKESTR_DOMAIN:-}}"
+  public_site_url="${ORKESTR_PUBLIC_SITE_URL:-}"
+  if [ -z "$public_site_url" ] && [ -n "$primary_domain" ]; then
+    public_site_url="https://$primary_domain"
+  fi
   app_host="${ORKESTR_APP_HOST:-}"
   auth_host="${ORKESTR_AUTH_HOST:-}"
   if [ -n "$primary_domain" ]; then
@@ -1251,6 +1257,7 @@ ORKESTR_PORT=$port
 ORKESTR_AUTH_REQUIRED=${ORKESTR_AUTH_REQUIRED:-1}
 ORKESTR_COOKIE_SECURE=${ORKESTR_COOKIE_SECURE:-0}
 ORKESTR_PRIMARY_DOMAIN=$primary_domain
+ORKESTR_PUBLIC_SITE_URL=$public_site_url
 ORKESTR_APP_HOST=$app_host
 ORKESTR_AUTH_HOST=$auth_host
 ORKESTR_PUBLIC_URL=$public_url
@@ -1381,10 +1388,14 @@ ensure_env_assignment() {
 }
 
 migrate_systemd_env_file() {
-  local desktop_mode browserctl_path current_mode primary_domain app_host auth_host public_url auth_url cookie_domain public_https_url
+  local desktop_mode browserctl_path current_mode primary_domain public_site_url app_host auth_host public_url auth_url cookie_domain public_https_url
   desktop_mode="$1"
   browserctl_path="$2"
   primary_domain="${ORKESTR_PRIMARY_DOMAIN:-${ORKESTR_DOMAIN:-}}"
+  public_site_url="${ORKESTR_PUBLIC_SITE_URL:-}"
+  if [ -z "$public_site_url" ] && [ -n "$primary_domain" ]; then
+    public_site_url="https://$primary_domain"
+  fi
   app_host="${ORKESTR_APP_HOST:-}"
   auth_host="${ORKESTR_AUTH_HOST:-}"
   if [ -n "$primary_domain" ]; then
@@ -1417,6 +1428,7 @@ migrate_systemd_env_file() {
   ensure_env_assignment ORKESTR_CODEX_APP_SERVER_SERVICE_NAME "$(codex_app_server_service_name)"
   ensure_env_assignment ORKESTR_RUNTIME_WORKSPACE_ROOT "$workspace_dir"
   if [ -n "$primary_domain" ]; then ensure_env_assignment ORKESTR_PRIMARY_DOMAIN "$primary_domain"; fi
+  if [ -n "$public_site_url" ]; then ensure_env_assignment ORKESTR_PUBLIC_SITE_URL "$public_site_url"; fi
   if [ -n "$app_host" ]; then ensure_env_assignment ORKESTR_APP_HOST "$app_host"; fi
   if [ -n "$auth_host" ]; then ensure_env_assignment ORKESTR_AUTH_HOST "$auth_host"; fi
   if [ -n "$public_url" ]; then ensure_env_assignment ORKESTR_PUBLIC_URL "$public_url"; fi
@@ -1805,8 +1817,12 @@ fresh_reset_local_install() {
 }
 
 write_local_env_file() {
-  local primary_domain app_host auth_host public_url auth_url cookie_domain public_https_url
+  local primary_domain public_site_url app_host auth_host public_url auth_url cookie_domain public_https_url
   primary_domain="${ORKESTR_PRIMARY_DOMAIN:-${ORKESTR_DOMAIN:-}}"
+  public_site_url="${ORKESTR_PUBLIC_SITE_URL:-}"
+  if [ -z "$public_site_url" ] && [ -n "$primary_domain" ]; then
+    public_site_url="https://$primary_domain"
+  fi
   app_host="${ORKESTR_APP_HOST:-}"
   auth_host="${ORKESTR_AUTH_HOST:-}"
   if [ -n "$primary_domain" ]; then
@@ -1836,6 +1852,7 @@ write_local_env_file() {
     write_env_var ORKESTR_HOST "$host"
     write_env_var ORKESTR_PORT "$port"
     write_env_var ORKESTR_PRIMARY_DOMAIN "$primary_domain"
+    write_env_var ORKESTR_PUBLIC_SITE_URL "$public_site_url"
     write_env_var ORKESTR_APP_HOST "$app_host"
     write_env_var ORKESTR_AUTH_HOST "$auth_host"
     write_env_var ORKESTR_PUBLIC_URL "$public_url"

@@ -32,6 +32,7 @@ Options:
   --tailscale-hostname NAME  Hostname to pass to tailscale up. Defaults to orkestr.
   --tailscale-https-port N   Tailscale HTTPS port. Defaults to 443.
   --domain DOMAIN            Configure Caddy public HTTPS for this domain.
+  --public-site-url URL      Public landing/legal site URL. Defaults to https://DOMAIN.
   --app-host HOST            Public app hostname, for example app.example.com.
   --auth-host HOST           Public auth/pairing hostname, for example auth.example.com.
   --email EMAIL              ACME account email for Caddy certificate issuance.
@@ -67,6 +68,7 @@ tailscale_hostname="${ORKESTR_TAILSCALE_HOSTNAME:-orkestr}"
 tailscale_https_port="${ORKESTR_TAILSCALE_HTTPS_PORT:-443}"
 primary_domain="${ORKESTR_PRIMARY_DOMAIN:-${ORKESTR_DOMAIN:-}}"
 domain="${ORKESTR_DOMAIN:-$primary_domain}"
+public_site_url="${ORKESTR_PUBLIC_SITE_URL:-}"
 app_host="${ORKESTR_APP_HOST:-}"
 auth_host="${ORKESTR_AUTH_HOST:-}"
 public_url="${ORKESTR_PUBLIC_URL:-}"
@@ -167,6 +169,10 @@ while [ "$#" -gt 0 ]; do
       primary_domain="${2:-}"
       shift 2
       ;;
+    --public-site-url)
+      public_site_url="${2:-}"
+      shift 2
+      ;;
     --app-host)
       app_host="${2:-}"
       shift 2
@@ -214,9 +220,13 @@ fi
 if [ -n "$domain" ] && { [ -n "$app_host" ] || [ -n "$auth_host" ]; }; then
   app_host="${app_host:-app.$domain}"
   auth_host="${auth_host:-auth.$domain}"
+  public_site_url="${public_site_url:-https://$domain}"
   public_url="${public_url:-https://$app_host}"
   auth_url="${auth_url:-https://$auth_host}"
   cookie_domain="${cookie_domain:-$domain}"
+fi
+if [ -z "$public_site_url" ] && [ -n "$primary_domain" ]; then
+  public_site_url="https://$primary_domain"
 fi
 
 log() {
@@ -389,6 +399,7 @@ run_install_script() {
   export ORKESTR_RELEASE_DEPLOY="$release_update"
   export ORKESTR_DEPLOY_CHANNEL="$deploy_channel"
   export ORKESTR_DEPLOY_TAGS_ONLY="$deploy_tags_only"
+  export ORKESTR_PUBLIC_SITE_URL="$public_site_url"
   if [ "$demo" -eq 1 ]; then
     export ORKESTR_RESET_ON_UPDATE=1
     export ORKESTR_RESET_OVERLAY=1
@@ -409,6 +420,9 @@ configure_runtime_env() {
   set_env_value ORKESTR_WHATSAPP_EXTERNAL_BRIDGE_ENABLED 0 "$env_file"
   if [ -n "$primary_domain" ]; then
     set_env_value ORKESTR_PRIMARY_DOMAIN "$primary_domain" "$env_file"
+  fi
+  if [ -n "$public_site_url" ]; then
+    set_env_value ORKESTR_PUBLIC_SITE_URL "$public_site_url" "$env_file"
   fi
   if [ -n "$app_host" ]; then
     set_env_value ORKESTR_APP_HOST "$app_host" "$env_file"
@@ -568,6 +582,9 @@ EOF
     set_env_value ORKESTR_PUBLIC_HTTPS_URL "$public_url" "$env_file"
   else
     set_env_value ORKESTR_PUBLIC_HTTPS_URL "https://$domain" "$env_file"
+  fi
+  if [ -n "$public_site_url" ]; then
+    set_env_value ORKESTR_PUBLIC_SITE_URL "$public_site_url" "$env_file"
   fi
   if [ -n "$auth_url" ]; then
     set_env_value ORKESTR_AUTH_URL "$auth_url" "$env_file"

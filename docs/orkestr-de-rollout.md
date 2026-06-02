@@ -40,6 +40,7 @@ The bootstrap writes:
 
 ```text
 ORKESTR_PRIMARY_DOMAIN=orkestr.de
+ORKESTR_PUBLIC_SITE_URL=https://orkestr.de
 ORKESTR_APP_HOST=app.orkestr.de
 ORKESTR_AUTH_HOST=auth.orkestr.de
 ORKESTR_PUBLIC_URL=https://app.orkestr.de
