@@ -3,13 +3,14 @@ import { ChangeDetectorRef, Component, EventEmitter, Input, OnDestroy, OnInit, O
 import { FormsModule } from "@angular/forms";
 import { firstValueFrom } from "rxjs";
 import { Agent, AgentTemplate, ApiService, BrowserSession, ConnectorStatus, DesktopLeaseRecord, EventRecord, OrkestrUser, OutlookOAuthPollResponse, SecurityChallenge, SecuritySession, SetupStatus, TimerDoctorResponse, TimerRecord, UserIdentity, UserOutlookOAuthStartResponse, VersionResponse } from "./api.service";
+import { OpsWaitlistComponent } from "./ops-waitlist.component";
 
-export type ToolsView = "system" | "timers" | "desktops" | "models" | "settings" | "connectors" | "users" | "audit";
+export type ToolsView = "system" | "timers" | "desktops" | "models" | "settings" | "connectors" | "users" | "waitlist" | "audit";
 type MailIdentityProvider = "gmail" | "outlook";
 
 @Component({
   selector: "ork-ops-page",
-  imports: [DatePipe, FormsModule],
+  imports: [DatePipe, FormsModule, OpsWaitlistComponent],
   templateUrl: "./ops-page.component.html",
 })
 export class OpsPageComponent implements OnInit, OnDestroy {

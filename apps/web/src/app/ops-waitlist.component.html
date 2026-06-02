@@ -1,0 +1,211 @@
+<section class="waitlist-panel">
+  <div class="panel-title compact-title">
+    <div>
+      <p class="eyebrow">Waitlist approvals</p>
+      <h3>{{ statusCount("pending") }} pending applications</h3>
+      <small>New applications can notify admins by SMTP and stay pending until explicitly approved.</small>
+    </div>
+    <button class="secondary" type="button" (click)="load()" [disabled]="busy">Reload</button>
+  </div>
+
+  @if (error) {
+    <div class="notice error">{{ error }}</div>
+  }
+  @if (notice && !error) {
+    <div class="notice">{{ notice }}</div>
+  }
+
+  <div class="ops-grid user-metrics waitlist-metrics">
+    <article class="ops-card" [class.critical]="statusCount('pending') > 0">
+      <h4>Pending</h4>
+      <p>{{ statusCount("pending") }}</p>
+      <small>Need review</small>
+    </article>
+    <article class="ops-card">
+      <h4>Contacted</h4>
+      <p>{{ statusCount("contacted") }}</p>
+      <small>Waiting for decision</small>
+    </article>
+    <article class="ops-card">
+      <h4>Approved</h4>
+      <p>{{ statusCount("approved") }}</p>
+      <small>Provisioned users</small>
+    </article>
+    <article class="ops-card">
+      <h4>WhatsApp</h4>
+      <p>{{ whatsappAccountOptions().length }}</p>
+      <small>{{ whatsapp?.summary || whatsapp?.state || "No status loaded" }}</small>
+    </article>
+  </div>
+
+  <div class="user-admin-layout waitlist-layout">
+    <aside class="user-list-panel">
+      <div class="tool-tabs waitlist-filter-tabs" aria-label="Waitlist filters">
+        @for (status of statusOptions; track status.value) {
+          <button type="button" [class.active]="statusFilter === status.value" (click)="setFilter(status.value)">
+            {{ status.label }} {{ statusCount(status.value) }}
+          </button>
+        }
+      </div>
+      <div class="user-list">
+        @for (entry of visibleEntries(); track trackEntry($index, entry)) {
+          <button class="user-row" type="button" [class.active]="entry.id === selectedEntryId" (click)="selectEntry(entry)">
+            <span>
+              <strong>{{ entry.displayName || entry.phoneNumber || entry.id }}</strong>
+              <small>{{ entry.phoneNumber || "No WhatsApp number" }} · {{ entry.email || "No email" }}</small>
+              <small>{{ entry.createdAt | date: "MMM d, HH:mm" }} · {{ notificationLabel(entry) }}</small>
+            </span>
+            <em [class.ready]="statusClass(entry) === 'ready'" [class.bad]="statusClass(entry) === 'bad'">{{ entry.status }}</em>
+          </button>
+        } @empty {
+          <p class="empty">{{ busy ? "Loading waitlist..." : "No entries for this filter." }}</p>
+        }
+      </div>
+    </aside>
+
+    <section class="user-detail-panel">
+      @if (selectedEntry(); as entry) {
+        <article class="ops-card waitlist-summary-card">
+          <div>
+            <p class="eyebrow">Applicant</p>
+            <h3>{{ entry.displayName || entry.phoneNumber }}</h3>
+            <small>{{ entry.phoneNumber }} · {{ entry.email || "No email" }}</small>
+          </div>
+          <span class="status-pill" [class.ready]="statusClass(entry) === 'ready'" [class.bad]="statusClass(entry) === 'bad'">{{ entry.status }}</span>
+        </article>
+
+        <div class="ops-columns">
+          <article class="ops-card waitlist-detail-card">
+            <h4>Application</h4>
+            <dl class="waitlist-facts">
+              <div>
+                <dt>Submitted</dt>
+                <dd>{{ entry.createdAt | date: "MMM d, yyyy HH:mm" }}</dd>
+              </div>
+              <div>
+                <dt>Email notification</dt>
+                <dd>
+                  <span class="status-pill" [class.ready]="notificationClass(entry) === 'ready'" [class.bad]="notificationClass(entry) === 'bad'">
+                    {{ entry.notification?.state || "unknown" }}
+                  </span>
+                  {{ notificationLabel(entry) }}
+                </dd>
+              </div>
+              <div>
+                <dt>Consent</dt>
+                <dd>{{ entry.acceptedTerms ? "Terms accepted" : "Terms missing" }} · {{ entry.consentToContact ? "Contact allowed" : "Contact missing" }}</dd>
+              </div>
+              <div>
+                <dt>Source</dt>
+                <dd>{{ entry.source?.ip || "No IP" }} · {{ entry.source?.userAgent || "No user agent" }}</dd>
+              </div>
+              <div>
+                <dt>Use case</dt>
+                <dd>{{ entry.intendedUse || "No use case provided." }}</dd>
+              </div>
+            </dl>
+
+            <form class="user-edit-form waitlist-review-form" (ngSubmit)="saveReview(entry)">
+              <label>
+                <span>Review status</span>
+                <select name="waitlist-review-status" [(ngModel)]="reviewStatus">
+                  <option value="pending">Pending</option>
+                  <option value="contacted">Contacted</option>
+                  <option value="paused">Paused</option>
+                  <option value="rejected">Rejected</option>
+                </select>
+              </label>
+              <label class="waitlist-span-all">
+                <span>Admin note</span>
+                <textarea name="waitlist-review-note" rows="3" [(ngModel)]="reviewNote" placeholder="Private review note"></textarea>
+              </label>
+              <div class="settings-actions compact-actions waitlist-span-all">
+                <button class="secondary" type="submit" [disabled]="savingReview">Save review</button>
+              </div>
+            </form>
+          </article>
+
+          <article class="ops-card critical waitlist-approval-card">
+            <h4>Approve and provision</h4>
+            <p class="waitlist-warning">
+              High risk: approval creates or connects a user and can create a WhatsApp onboarding chat. Only approve applicants you intend to onboard.
+            </p>
+            <form class="user-edit-form waitlist-approval-form" (ngSubmit)="approve(entry)">
+              <label>
+                <span>Generated chat name</span>
+                <input name="waitlist-connection-name" [(ngModel)]="approvalDraft.connectionName" placeholder="Applicant - Orkestr" />
+              </label>
+              <label>
+                <span>Primary WhatsApp account</span>
+                <select name="waitlist-whatsapp-account" [(ngModel)]="approvalDraft.whatsappAccountId">
+                  <option value="">No account selected</option>
+                  @for (account of whatsappAccountOptions(); track accountId(account)) {
+                    <option [value]="accountId(account)">{{ accountLabel(account) }}</option>
+                  }
+                </select>
+              </label>
+              <label>
+                <span>Sender account</span>
+                <select name="waitlist-sender-account" [(ngModel)]="approvalDraft.senderAccountId">
+                  <option value="">Use primary account</option>
+                  @for (account of whatsappAccountOptions(); track accountId(account)) {
+                    <option [value]="accountId(account)">{{ accountLabel(account) }}</option>
+                  }
+                </select>
+              </label>
+              <label>
+                <span>Orkestr reply account</span>
+                <select name="waitlist-responder-account" [(ngModel)]="approvalDraft.responderAccountId">
+                  <option value="">Use primary account</option>
+                  @for (account of whatsappAccountOptions(); track accountId(account)) {
+                    <option [value]="accountId(account)">{{ accountLabel(account) }}</option>
+                  }
+                </select>
+              </label>
+              <label>
+                <span>Outbound account</span>
+                <select name="waitlist-outbound-account" [(ngModel)]="approvalDraft.outboundAccountId">
+                  <option value="">Use reply account</option>
+                  @for (account of whatsappAccountOptions(); track accountId(account)) {
+                    <option [value]="accountId(account)">{{ accountLabel(account) }}</option>
+                  }
+                </select>
+              </label>
+              <label>
+                <span>Existing chat id</span>
+                <input name="waitlist-chat-id" [(ngModel)]="approvalDraft.chatId" placeholder="Optional WhatsApp chat id" />
+              </label>
+              <label>
+                <span>Reviewer</span>
+                <input name="waitlist-actor-user-id" [(ngModel)]="approvalDraft.actorUserId" />
+              </label>
+              <label class="checkbox-row">
+                <input type="checkbox" name="waitlist-create-group" [(ngModel)]="approvalDraft.createWhatsAppGroup" />
+                <span>Create WhatsApp group when no chat id exists</span>
+              </label>
+              <label class="checkbox-row">
+                <input type="checkbox" name="waitlist-send-first-prompt" [(ngModel)]="approvalDraft.sendFirstPrompt" />
+                <span>Queue first onboarding message</span>
+              </label>
+              <label class="waitlist-span-all">
+                <span>Approval note</span>
+                <textarea name="waitlist-approval-note" rows="3" [(ngModel)]="approvalDraft.adminNote" placeholder="Private approval note"></textarea>
+              </label>
+              <label class="checkbox-row waitlist-confirm waitlist-span-all">
+                <input type="checkbox" name="waitlist-confirm-approval" [(ngModel)]="approvalConfirmed" />
+                <span>I confirm this applicant should be onboarded and may receive an Orkestr WhatsApp chat.</span>
+              </label>
+              <div class="settings-actions compact-actions waitlist-span-all">
+                <button type="submit" [disabled]="!canApprove(entry)">
+                  {{ approvingId === entry.id ? "Approving..." : "Approve and provision" }}
+                </button>
+              </div>
+            </form>
+          </article>
+        </div>
+      } @else {
+        <p class="empty">{{ busy ? "Loading waitlist..." : "No waitlist entries yet." }}</p>
+      }
+    </section>
+  </div>
+</section>

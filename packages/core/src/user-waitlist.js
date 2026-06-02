@@ -4,6 +4,7 @@ import { appendThreadMessage, createThread } from "./threads.js";
 import { API_AGENT_RUNTIME_KIND } from "./tenant-api-agent.js";
 import { setUserOnboardingState } from "./user-onboarding.js";
 import { linkUserPrivateIdentity, normalizeUserId, publicUser, upsertUser } from "./users.js";
+import { notifyWaitlistEntrySubmitted, setWaitlistNotification, waitlistNotificationRecord } from "./waitlist-notifications.js";
 
 const waitlistStatuses = new Set(["pending", "contacted", "approved", "rejected", "paused"]);
 
@@ -82,12 +83,13 @@ function adminWaitlistEntry(entry = {}) {
     adminNote: clean(entry.adminNote).slice(0, 1000),
     reviewedBy: clean(entry.reviewedBy).slice(0, 96),
     reviewedAt: clean(entry.reviewedAt),
+    notification: waitlistNotificationRecord(entry.notification),
     createdAt: String(entry.createdAt || ""),
     updatedAt: String(entry.updatedAt || ""),
   };
 }
 
-export async function submitWaitlistEntry(input = {}, env = process.env) {
+export async function submitWaitlistEntry(input = {}, env = process.env, dependencies = {}) {
   const displayName = clean(input.displayName || input.name).slice(0, 120);
   const phoneNumber = normalizePhoneInput(input.phoneNumber || input.phone || input.whatsappNumber || input.whatsapp);
   const email = normalizeEmailInput(input.email);
@@ -120,6 +122,7 @@ export async function submitWaitlistEntry(input = {}, env = process.env) {
     updatedAt: now,
   };
   let entry;
+  let isNewEntry = false;
   let eventType = "waitlist_entry_submitted";
   if (existingIndex >= 0) {
     const existing = store.entries[existingIndex];
@@ -132,6 +135,7 @@ export async function submitWaitlistEntry(input = {}, env = process.env) {
     store.entries[existingIndex] = entry;
     eventType = "waitlist_entry_updated";
   } else {
+    isNewEntry = true;
     entry = adminWaitlistEntry({
       id: `waitlist-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
       ...patch,
@@ -147,6 +151,10 @@ export async function submitWaitlistEntry(input = {}, env = process.env) {
     hasEmail: Boolean(entry.email),
     hasPhone: Boolean(entry.phoneNumber),
   }, env).catch(() => {});
+  const notification = await notifyWaitlistEntrySubmitted(entry, { isNewEntry, env, dependencies });
+  if (notification) {
+    entry = adminWaitlistEntry(await setWaitlistNotification(entry.id, notification, env).catch(() => entry) || entry);
+  }
   return {
     ok: true,
     submitted: true,

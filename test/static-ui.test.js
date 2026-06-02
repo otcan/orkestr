@@ -204,7 +204,7 @@ test("ops audit view exposes normalized filterable events", async () => {
   const styles = await fs.readFile("apps/web/src/styles.css", "utf8");
 
   assert.match(component, /export type ToolsView = .*"audit"/);
-  assert.match(appComponent, /"connectors", "users", "audit"/);
+  assert.match(appComponent, /"connectors", "users", "waitlist", "audit"/);
   assert.match(template, /\[class\.active\]="toolsView === 'audit'"/);
   assert.match(template, /setToolsView\('audit'\)">Audit<\/button>/);
   assert.match(template, /@if \(toolsView === "audit"\)/);
@@ -221,6 +221,43 @@ test("ops audit view exposes normalized filterable events", async () => {
   assert.match(sanitizer, /type: "policy_sanitizer_decision"/);
   assert.match(styles, /\.audit-filters/);
   assert.match(styles, /\.audit-row small/);
+});
+
+test("ops waitlist view exposes secure approval workflow", async () => {
+  const opsTemplate = await fs.readFile("apps/web/src/app/ops-page.component.html", "utf8");
+  const opsComponent = await fs.readFile("apps/web/src/app/ops-page.component.ts", "utf8");
+  const waitlistTemplate = await fs.readFile("apps/web/src/app/ops-waitlist.component.html", "utf8");
+  const waitlistComponent = await fs.readFile("apps/web/src/app/ops-waitlist.component.ts", "utf8");
+  const appComponent = await fs.readFile("apps/web/src/app/app.component.ts", "utf8");
+  const api = await fs.readFile("apps/web/src/app/api.service.ts", "utf8");
+  const userWaitlist = await fs.readFile("packages/core/src/user-waitlist.js", "utf8");
+  const waitlistNotifications = await fs.readFile("packages/core/src/waitlist-notifications.js", "utf8");
+  const emailNotifications = await fs.readFile("packages/core/src/email-notifications.js", "utf8");
+  const styles = await fs.readFile("apps/web/src/styles.css", "utf8");
+
+  assert.match(opsComponent, /export type ToolsView = .*"waitlist"/);
+  assert.match(opsComponent, /OpsWaitlistComponent/);
+  assert.match(appComponent, /"connectors", "users", "waitlist", "audit"/);
+  assert.match(opsTemplate, /\[class\.active\]="toolsView === 'waitlist'"/);
+  assert.match(opsTemplate, /setToolsView\('waitlist'\)">Waitlist<\/button>/);
+  assert.match(opsTemplate, /<ork-ops-waitlist><\/ork-ops-waitlist>/);
+  assert.match(waitlistComponent, /this\.api\.waitlist\("", 500\)/);
+  assert.match(waitlistComponent, /this\.api\.updateWaitlistEntry\(entry\.id/);
+  assert.match(waitlistComponent, /this\.api\.approveWaitlistEntry\(entry\.id/);
+  assert.match(waitlistTemplate, /High risk: approval creates or connects a user/);
+  assert.match(waitlistTemplate, /I confirm this applicant should be onboarded/);
+  assert.match(waitlistComponent, /Admin email not configured/);
+  assert.match(waitlistTemplate, /Primary WhatsApp account/);
+  assert.match(api, /export interface WaitlistEntry/);
+  assert.match(api, /waitlist\(status = "", limit = 200\)/);
+  assert.match(api, /approveWaitlistEntry\(id: string, body: Record<string, unknown>\)/);
+  assert.match(userWaitlist, /notifyWaitlistEntrySubmitted/);
+  assert.match(waitlistNotifications, /sendWaitlistNotification/);
+  assert.match(waitlistNotifications, /waitlist_notification_sent/);
+  assert.match(waitlistNotifications, /waitlist_notification_failed/);
+  assert.match(emailNotifications, /ORKESTR_WAITLIST_NOTIFY_EMAIL/);
+  assert.match(emailNotifications, /ORKESTR_SMTP_HOST/);
+  assert.match(styles, /\.waitlist-warning/);
 });
 
 test("ops users page exposes WhatsApp identity binding controls", async () => {
