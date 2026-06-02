@@ -35,6 +35,30 @@ function envFlag(value) {
   return ["1", "true", "yes", "on"].includes(String(value || "").trim().toLowerCase());
 }
 
+function remoteAuthSignal(env = process.env, urls = publicUrlConfig(env), host = bindHost(env)) {
+  const publicUrlConfigured = Boolean(
+    urls.primaryDomain ||
+    urls.appHost ||
+    urls.authHost ||
+    urls.appUrl ||
+    urls.authUrl ||
+    urls.connectUrl ||
+    env.ORKESTR_PUBLIC_URL ||
+    env.ORKESTR_APP_URL ||
+    env.ORKESTR_PUBLIC_HTTPS_URL ||
+    env.ORKESTR_HTTPS_URL ||
+    env.ORKESTR_TAILSCALE_HTTPS_NAME ||
+    env.ORKESTR_CONNECT_PUBLIC_URL,
+  );
+  return publicUrlConfigured || !isLocalBind(host);
+}
+
+function effectiveAuthRequired(env = process.env, urls = publicUrlConfig(env), host = bindHost(env)) {
+  if (String(env.ORKESTR_AUTH_REQUIRED || "").trim() === "1") return true;
+  if (envFlag(env.ORKESTR_UNSAFE_ALLOW_PUBLIC_UNAUTHENTICATED)) return false;
+  return remoteAuthSignal(env, urls, host);
+}
+
 function approvalInstructions(env = process.env) {
   return {
     sshCommand: String(env.ORKESTR_SECURITY_APPROVE_SSH_COMMAND || "").trim(),
@@ -264,7 +288,7 @@ export async function securityStatus(env = process.env) {
   const mtlsEnabled = envFlag(env.ORKESTR_MTLS_ENABLED) || Boolean(mtlsCaCert);
   const proxyLocalBindSetting = String(env.ORKESTR_REVERSE_PROXY_LOCAL_BIND || "").trim();
   const proxyLocalBind = proxyLocalBindSetting === "1";
-  const authRequired = String(env.ORKESTR_AUTH_REQUIRED || "").trim() === "1";
+  const authRequired = effectiveAuthRequired(env, urls, host);
   const authEnabled = Boolean(authRequired || config.enabled || (config.sessions || []).length);
   const sessionCount = (config.sessions || []).filter((session) => Date.parse(session.expiresAt || "") > Date.now()).length;
   const pendingChallenges = activePendingChallenges(config);

@@ -540,7 +540,7 @@ The supported remote shape is provided by the host-native installer and covered 
 
 - Keep `ORKESTR_HOST=127.0.0.1`.
 - Use Tailscale or Caddy/TLS before remote access.
-- Keep `ORKESTR_AUTH_REQUIRED=1` and approve browsers through the setup pairing flow.
+- Keep `ORKESTR_AUTH_REQUIRED=1` and approve browsers through the setup pairing flow. Public URLs/domains and non-local binds require auth by default unless an explicit unsafe dev override is set.
 - Do not expose raw `/api/*`, thread streams, or terminal routes directly to the public internet.
 - Keep real overlays, browser profiles, WhatsApp session state, Gmail tokens, and hostnames out of this public repo.
 - Treat this alpha as single-user software.

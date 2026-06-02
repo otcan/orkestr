@@ -30,6 +30,9 @@ Environment:
   ORKESTR_DEPLOY_BACKUP_EXCLUDES Space-separated paths under ORKESTR_HOME to omit from backups. Defaults to live runtime/session dirs.
   ORKESTR_DEPLOY_SYNC_WORKERS   Fast-forward and push safe stale worker branches after deploy. Defaults to 1.
   ORKESTR_DEPLOY_HEALTH_URL     Health URL. Defaults to http://$ORKESTR_HOST:$ORKESTR_PORT/api/health.
+  ORKESTR_DEPLOY_EXPOSURE_CHECK Check public no-cookie API exposure after restart. Defaults to 1.
+  ORKESTR_DEPLOY_PUBLIC_BASE_URL Public app URL to probe. Defaults to configured Orkestr public URLs or /api/setup/status.
+  ORKESTR_DEPLOY_EXPOSURE_PRIVATE_PATHS Space-separated private paths that must return 401 before auth.
   ORKESTR_DEPLOY_NO_INTERRUPT   Refuse to restart while thread work is active. Defaults to 1.
   ORKESTR_DEPLOY_WAIT_ACTIVE    Wait for active thread work before restart. Defaults to 0.
   ORKESTR_DEPLOY_ACTIVE_TIMEOUT_SECONDS  Max wait with --wait-active. Defaults to 900.
@@ -198,6 +201,60 @@ health_check() {
   done
   echo "Health check failed: $url" >&2
   return 1
+}
+
+public_exposure_base_url() {
+  local configured setup_url setup_json
+  configured="${ORKESTR_DEPLOY_PUBLIC_BASE_URL:-${ORKESTR_PUBLIC_APP_URL:-${ORKESTR_PUBLIC_URL:-${ORKESTR_APP_URL:-${ORKESTR_PUBLIC_HTTPS_URL:-${ORKESTR_HTTPS_URL:-${ORKESTR_TAILSCALE_HTTPS_NAME:-}}}}}}}"
+  configured="${configured%/}"
+  if [ -n "$configured" ]; then
+    printf '%s\n' "$configured"
+    return 0
+  fi
+  setup_url="http://$host:$port/api/setup/status"
+  setup_json="$(curl -fsS "$setup_url" --max-time 8 2>/dev/null || true)"
+  if [ -z "$setup_json" ]; then
+    return 0
+  fi
+  node -e 'const j = JSON.parse(process.argv[1] || "{}"); process.stdout.write(String(j.urls?.appUrl || j.urls?.authUrl || ""));' "$setup_json" 2>/dev/null | sed 's|/*$||'
+}
+
+public_exposure_url_is_local() {
+  node -e 'const value = process.argv[1] || ""; try { const host = new URL(value).hostname.toLowerCase(); process.exit(["localhost", "127.0.0.1", "::1"].includes(host) ? 0 : 1); } catch { process.exit(1); }' "$1"
+}
+
+deploy_public_exposure_check() {
+  local base path url code paths curl_args
+  if [ "$exposure_check" != "1" ]; then
+    echo "Public exposure check disabled."
+    return 0
+  fi
+  base="$(public_exposure_base_url)"
+  base="${base%/}"
+  if [ -z "$base" ]; then
+    echo "Public exposure check skipped: no public app URL configured."
+    return 0
+  fi
+  if public_exposure_url_is_local "$base"; then
+    echo "Public exposure check skipped: configured app URL is local-only ($base)."
+    return 0
+  fi
+  paths="${exposure_private_paths:-}"
+  curl_args=(-sS -o /dev/null -w '%{http_code}' --max-time "$exposure_timeout_seconds")
+  if [ "$exposure_curl_insecure" = "1" ]; then
+    curl_args=(-k "${curl_args[@]}")
+  fi
+  for path in $paths; do
+    [ -n "$path" ] || continue
+    url="$base$path"
+    code="$(curl "${curl_args[@]}" "$url" 2>/dev/null || printf '000')"
+    if [ "$code" != "401" ]; then
+      echo "Public exposure check failed: unauthenticated $url returned HTTP $code; expected 401." >&2
+      echo "Refusing to mark deploy healthy because a private API may be exposed." >&2
+      return 1
+    fi
+  done
+  echo "Public exposure check passed: unauthenticated private APIs returned 401 from $base."
 }
 
 write_history_event() {
@@ -676,6 +733,7 @@ restart_and_verify() {
   fi
   systemctl is-active --quiet "${service_name}.service"
   health_check "$health_url" 40
+  deploy_public_exposure_check
   if [ "$deploy_drain_started" = "1" ]; then
     clear_deploy_drain
     echo "Deploy drain cleared after ${service_name}.service passed health checks."
@@ -925,6 +983,10 @@ codex_app_server_service_name="${ORKESTR_CODEX_APP_SERVER_SERVICE_NAME:-${servic
 host="${ORKESTR_HOST:-127.0.0.1}"
 port="${ORKESTR_PORT:-19812}"
 health_url="${ORKESTR_DEPLOY_HEALTH_URL:-http://$host:$port/api/health}"
+exposure_check="$(bool_value "${ORKESTR_DEPLOY_EXPOSURE_CHECK:-1}")"
+exposure_private_paths="${ORKESTR_DEPLOY_EXPOSURE_PRIVATE_PATHS:-/api/threads /api/users /api/timers /api/browser-sessions /api/desktops/leases /api/connectors /api/whereiam}"
+exposure_timeout_seconds="${ORKESTR_DEPLOY_EXPOSURE_TIMEOUT_SECONDS:-12}"
+exposure_curl_insecure="$(bool_value "${ORKESTR_DEPLOY_EXPOSURE_CURL_INSECURE:-0}")"
 run_smoke="${run_smoke_arg:-${ORKESTR_DEPLOY_RUN_SMOKE:-1}}"
 run_backup="${backup_state_arg:-${ORKESTR_DEPLOY_BACKUP_STATE:-1}}"
 backup_excludes="${ORKESTR_DEPLOY_BACKUP_EXCLUDES:-run tmp whatsapp-bridge/sessions}"
@@ -952,8 +1014,19 @@ case "$sync_workers" in
   0|1) ;;
   *) echo "ORKESTR_DEPLOY_SYNC_WORKERS must be 0 or 1." >&2; exit 2 ;;
 esac
+case "$exposure_check" in
+  0|1) ;;
+  *) echo "ORKESTR_DEPLOY_EXPOSURE_CHECK must be 0 or 1." >&2; exit 2 ;;
+esac
+case "$exposure_curl_insecure" in
+  0|1) ;;
+  *) echo "ORKESTR_DEPLOY_EXPOSURE_CURL_INSECURE must be 0 or 1." >&2; exit 2 ;;
+esac
 case "$active_timeout_seconds" in
   ''|*[!0-9]*) echo "ORKESTR_DEPLOY_ACTIVE_TIMEOUT_SECONDS must be a non-negative integer." >&2; exit 2 ;;
+esac
+case "$exposure_timeout_seconds" in
+  ''|*[!0-9]*) echo "ORKESTR_DEPLOY_EXPOSURE_TIMEOUT_SECONDS must be a positive integer." >&2; exit 2 ;;
 esac
 case "$active_check_timeout_ms" in
   ''|*[!0-9]*) echo "ORKESTR_DEPLOY_ACTIVE_CHECK_TIMEOUT_MS must be a positive integer." >&2; exit 2 ;;

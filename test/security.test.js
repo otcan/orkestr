@@ -22,6 +22,100 @@ async function json(response) {
   return response.json();
 }
 
+test("public URL configuration requires pairing by default", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-security-public-"));
+  const prior = saveEnv([
+    "ORKESTR_HOME",
+    "ORKESTR_AUTH_REQUIRED",
+    "ORKESTR_UNSAFE_ALLOW_PUBLIC_UNAUTHENTICATED",
+    "ORKESTR_PRIMARY_DOMAIN",
+    "ORKESTR_APP_HOST",
+    "ORKESTR_AUTH_HOST",
+    "ORKESTR_PUBLIC_URL",
+    "ORKESTR_PUBLIC_HTTPS_URL",
+    "ORKESTR_CONNECT_PUBLIC_URL",
+    "ORKESTR_HOST",
+  ]);
+  process.env.ORKESTR_HOME = home;
+  delete process.env.ORKESTR_AUTH_REQUIRED;
+  delete process.env.ORKESTR_UNSAFE_ALLOW_PUBLIC_UNAUTHENTICATED;
+  process.env.ORKESTR_PRIMARY_DOMAIN = "orkestr.example.test";
+  process.env.ORKESTR_APP_HOST = "app.orkestr.example.test";
+  process.env.ORKESTR_AUTH_HOST = "auth.orkestr.example.test";
+  process.env.ORKESTR_HOST = "127.0.0.1";
+
+  try {
+    const status = await securityStatus();
+    assert.equal(status.authRequired, true);
+    assert.equal(status.authEnabled, true);
+
+    const blocked = await authorizeHttpRequest({ method: "GET", url: "/api/threads", headers: {} });
+    assert.equal(blocked.ok, false);
+    assert.equal(blocked.statusCode, 401);
+    assert.equal(blocked.error, "browser_pairing_required");
+
+    const setupStatus = await authorizeHttpRequest({ method: "GET", url: "/api/setup/status", headers: {} });
+    assert.equal(setupStatus.ok, true);
+  } finally {
+    restoreEnv(prior);
+  }
+});
+
+test("public unauthenticated mode requires explicit unsafe override", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-security-unsafe-public-"));
+  const prior = saveEnv([
+    "ORKESTR_HOME",
+    "ORKESTR_AUTH_REQUIRED",
+    "ORKESTR_UNSAFE_ALLOW_PUBLIC_UNAUTHENTICATED",
+    "ORKESTR_PUBLIC_URL",
+    "ORKESTR_HOST",
+  ]);
+  process.env.ORKESTR_HOME = home;
+  delete process.env.ORKESTR_AUTH_REQUIRED;
+  process.env.ORKESTR_UNSAFE_ALLOW_PUBLIC_UNAUTHENTICATED = "1";
+  process.env.ORKESTR_PUBLIC_URL = "https://app.orkestr.example.test";
+  process.env.ORKESTR_HOST = "127.0.0.1";
+
+  try {
+    const status = await securityStatus();
+    assert.equal(status.authRequired, false);
+    assert.equal(status.authEnabled, false);
+
+    const allowed = await authorizeHttpRequest({ method: "GET", url: "/api/threads", headers: {} });
+    assert.equal(allowed.ok, true);
+  } finally {
+    restoreEnv(prior);
+  }
+});
+
+test("non-local bind requires pairing by default", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-security-nonlocal-"));
+  const prior = saveEnv([
+    "ORKESTR_HOME",
+    "ORKESTR_AUTH_REQUIRED",
+    "ORKESTR_UNSAFE_ALLOW_PUBLIC_UNAUTHENTICATED",
+    "ORKESTR_PUBLIC_URL",
+    "ORKESTR_HOST",
+  ]);
+  process.env.ORKESTR_HOME = home;
+  delete process.env.ORKESTR_AUTH_REQUIRED;
+  delete process.env.ORKESTR_UNSAFE_ALLOW_PUBLIC_UNAUTHENTICATED;
+  delete process.env.ORKESTR_PUBLIC_URL;
+  process.env.ORKESTR_HOST = "0.0.0.0";
+
+  try {
+    const status = await securityStatus();
+    assert.equal(status.authRequired, true);
+    assert.equal(status.authEnabled, true);
+
+    const blocked = await authorizeHttpRequest({ method: "GET", url: "/api/users", headers: {} });
+    assert.equal(blocked.ok, false);
+    assert.equal(blocked.statusCode, 401);
+  } finally {
+    restoreEnv(prior);
+  }
+});
+
 test("browser pairing protects API routes when auth is required", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-security-"));
   const codexHome = path.join(home, "private-codex-home");
