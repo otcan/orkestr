@@ -18,6 +18,7 @@ export function dataPaths(env = process.env) {
     config: path.join(home, "config.json"),
     runtimeSettings: env.ORKESTR_RUNTIME_SETTINGS_FILE || path.join(home, "runtime-settings.json"),
     agents: path.join(home, "agents.json"),
+    waitlist: path.join(home, "waitlist.json"),
     users: path.join(home, "users.json"),
     tenantVms: path.join(home, "tenant-vms.json"),
     userDataRoot: path.join(home, "users"),
@@ -46,6 +47,7 @@ export function userDataPaths(userId, env = process.env) {
     secrets: path.join(root, "secrets"),
     identities: path.join(root, "identities.json"),
     skills: path.join(root, "skills.json"),
+    onboarding: path.join(root, "onboarding.json"),
     timers: path.join(root, "timers.json"),
   };
 }

@@ -175,6 +175,13 @@ export interface SetupStatus {
   setupState: string;
   home: string;
   connectors: ConnectorStatus[];
+  urls?: {
+    primaryDomain?: string;
+    appUrl?: string;
+    authUrl?: string;
+    connectUrl?: string;
+    sameOriginAuth?: boolean;
+  };
   config?: Record<string, Record<string, string>>;
   whatsappDefaults?: {
     chatNamePrefix?: string;
@@ -296,6 +303,14 @@ export interface SecurityStatus {
   https?: {
     configured?: boolean;
     url?: string;
+    appUrl?: string;
+    authUrl?: string;
+    primaryDomain?: string;
+  };
+  approval?: {
+    sshCommand?: string;
+    approveCommand?: string;
+    sudoApproveCommand?: string;
   };
   caddy?: {
     installed?: boolean;

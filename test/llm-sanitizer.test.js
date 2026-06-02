@@ -59,14 +59,67 @@ test("LLM sanitizer prompts route same-user missing connector requests without g
   assert.match(codexPrompt, /start a user-scoped connector sign-in flow/i);
   assert.match(codexPrompt, /Allow same-user api-agent\.tool\.orkestr_start_connector_auth/i);
   assert.match(codexPrompt, /Allow same-user api-agent\.tool\.orkestr_connector_status/i);
+  assert.match(codexPrompt, /Allow same-user api-agent\.tool\.orkestr_get_onboarding_profile/i);
+  assert.match(codexPrompt, /Allow same-user api-agent\.tool\.orkestr_create_timer/i);
+  assert.match(codexPrompt, /same-user timer management tools/i);
   assert.match(codexPrompt, /This input routing step does not grant data access/i);
   assert.match(codexPrompt, /execute a tool or perform actual data access/i);
   assert.match(openAiPrompt, /allow same-user requests to use a connector even when that capability is missing/i);
   assert.match(openAiPrompt, /start a user-scoped connector sign-in flow/i);
   assert.match(openAiPrompt, /Allow same-user api-agent\.tool\.orkestr_start_connector_auth/i);
   assert.match(openAiPrompt, /Allow same-user api-agent\.tool\.orkestr_connector_status/i);
+  assert.match(openAiPrompt, /Allow same-user api-agent\.tool\.orkestr_get_onboarding_profile/i);
+  assert.match(openAiPrompt, /Allow same-user api-agent\.tool\.orkestr_create_timer/i);
+  assert.match(openAiPrompt, /same-user timer management tools/i);
   assert.match(openAiPrompt, /Do not treat this as permission for connector data access/i);
   assert.match(openAiPrompt, /Deny tool execution or actual connector data access/i);
+});
+
+test("OpenAI LLM sanitizer retries transient HTTP failures before fail-closed", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-sanitizer-openai-retry-"));
+  const originalFetch = globalThis.fetch;
+  const calls = [];
+  globalThis.fetch = async (_url, options) => {
+    calls.push(JSON.parse(options.body));
+    if (calls.length === 1) {
+      return {
+        ok: false,
+        status: 500,
+        async json() {
+          return { error: { message: "temporary upstream failure" } };
+        },
+      };
+    }
+    return {
+      ok: true,
+      status: 200,
+      async json() {
+        return {
+          id: "resp_sanitizer_retry_ok",
+          model: "gpt-4.1-mini",
+          output_text: JSON.stringify({ allow: true, reason: "same-user chat allowed", category: "same_user" }),
+          usage: { input_tokens: 100, output_tokens: 12 },
+        };
+      },
+    };
+  };
+
+  try {
+    const decision = await sanitizeAction(request(), {
+      ORKESTR_HOME: home,
+      OPENAI_API_KEY: "sk-test",
+      ORKESTR_LLM_SANITIZER_PROVIDER: "openai",
+      ORKESTR_LLM_SANITIZER_MAX_ATTEMPTS: "2",
+      ORKESTR_LLM_SANITIZER_RETRY_DELAY_MS: "0",
+    });
+
+    assert.equal(decision.allow, true);
+    assert.equal(decision.reason, "same-user chat allowed");
+    assert.equal(calls.length, 2);
+    assert.equal(calls[0].metadata.orkestr_runtime, "llm-sanitizer");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 });
 
 test("LLM sanitizer denies conflicting allow text when explicit allow is false", async () => {

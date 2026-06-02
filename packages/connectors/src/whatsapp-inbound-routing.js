@@ -30,10 +30,9 @@ export function generatedSingleAccountGroupBindingCanTrustGroupBoundary(binding 
   const senderAccountId = pickString(binding.senderAccountId, binding.inboundAccountId);
   const responderAccountId = pickString(binding.responderAccountId, binding.outboundAccountId);
   if (!binding.generated || !isWhatsAppGroupChatId(chatId) || !senderAccountId || senderAccountId !== responderAccountId) return false;
-  const senderContactId = pickString(binding.senderContactId);
   const responderContactId = pickString(binding.responderContactId);
-  if (!senderContactId || !responderContactId || !from) return false;
-  return comparableParticipantId(from) !== comparableParticipantId(responderContactId);
+  if (!from) return false;
+  return !responderContactId || comparableParticipantId(from) !== comparableParticipantId(responderContactId);
 }
 
 export function whatsappAutoThreadBinding({ chatId = "", accountId = "", from = "", displayName = "" } = {}) {

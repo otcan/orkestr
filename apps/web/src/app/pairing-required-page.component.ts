@@ -65,17 +65,17 @@ export class PairingRequiredPageComponent implements OnDestroy {
   }
 
   sshCommand(): string {
-    return `ssh root@${this.serverHost()}`;
+    return this.withChallengeId(this.setupStatus?.security?.approval?.sshCommand || `ssh root@${this.serverHost()}`);
   }
 
   approveCommand(): string {
     const id = this.challenge?.id || "<challenge-id>";
-    return `orkestr security approve ${id}`;
+    return this.withChallengeId(this.setupStatus?.security?.approval?.approveCommand || `orkestr security approve ${id}`);
   }
 
   sudoApproveCommand(): string {
     const id = this.challenge?.id || "<challenge-id>";
-    return `sudo orkestr security approve ${id}`;
+    return this.withChallengeId(this.setupStatus?.security?.approval?.sudoApproveCommand || `sudo orkestr security approve ${id}`);
   }
 
   challengeStatusClass(): string {
@@ -122,13 +122,22 @@ export class PairingRequiredPageComponent implements OnDestroy {
   }
 
   private serverHost(): string {
-    const configured = this.setupStatus?.security?.https?.url || "";
+    const configured =
+      this.setupStatus?.urls?.authUrl ||
+      this.setupStatus?.security?.https?.authUrl ||
+      this.setupStatus?.security?.https?.url ||
+      "";
     try {
       if (configured) return new URL(configured).hostname;
     } catch {
       // Fall through to the current browser host.
     }
     return globalThis.location?.hostname || "your-server";
+  }
+
+  private withChallengeId(command: string): string {
+    const id = this.challenge?.id || "<challenge-id>";
+    return String(command || "").replaceAll("<challenge-id>", id).replaceAll("{{challengeId}}", id);
   }
 
   private errorText(error: unknown): string {

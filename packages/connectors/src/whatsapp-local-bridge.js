@@ -106,11 +106,14 @@ export async function forwardLocalWhatsAppInbound(input = {}, env = process.env,
   const headers = { "content-type": "application/json" };
   const token = tenantRoute?.token || localWhatsAppInboundForwardToken({ chatId }, env);
   if (token) headers.authorization = `Bearer ${token}`;
+  const body = tenantRoute?.chatName && !input.displayName && !input.chatName
+    ? { ...input, displayName: tenantRoute.chatName, chatName: tenantRoute.chatName }
+    : input;
   const response = await fetchImpl(target, {
     method: "POST",
     headers,
-    body: JSON.stringify(input),
-    signal: AbortSignal.timeout(Number(env.WHATSAPP_INBOUND_FORWARD_TIMEOUT_MS || 10_000)),
+    body: JSON.stringify(body),
+    signal: AbortSignal.timeout(Number(env.WHATSAPP_INBOUND_FORWARD_TIMEOUT_MS || 60_000)),
   });
   const payload = await response.json().catch(() => ({}));
   if (!response.ok || payload?.ok === false) {
@@ -195,7 +198,9 @@ export function normalizeGroupParticipantIds(participantIds = []) {
   const seen = new Set();
   const normalized = [];
   for (const value of values) {
-    const id = String(value || "").trim();
+    const raw = String(value || "").trim();
+    const digits = raw.replace(/\D+/g, "");
+    const id = raw && !raw.includes("@") && digits ? `${digits}@c.us` : raw;
     const comparable = id.toLowerCase();
     if (!id || seen.has(comparable)) continue;
     seen.add(comparable);
@@ -862,6 +867,9 @@ export function inboundRoutingFailureNoticeText(error) {
   if (reason === "llm_sanitizer_unconfigured") {
     return "Orkestr could not accept your message because the isolated-user LLM sanitizer is not configured. Ask the admin to connect the sanitizer, then resend.";
   }
+  if (reason === "whatsapp_target_required") {
+    return "Orkestr could not route your message because this WhatsApp chat is not connected to a thread.";
+  }
   if (lowered.includes("gmail")) {
     return "Gmail is not connected or enabled for this chat yet. Ask the Orkestr admin to connect Gmail for this user, then resend.";
   }
@@ -876,9 +884,6 @@ export function inboundRoutingFailureNoticeText(error) {
   }
   if (reason.startsWith("llm_sanitizer")) {
     return `Orkestr could not accept your message because the isolated-user LLM sanitizer blocked or could not verify it: ${reason}.`;
-  }
-  if (reason === "whatsapp_target_required") {
-    return "Orkestr could not route your message because this WhatsApp chat is not connected to a thread.";
   }
   return `Orkestr could not route your message: ${reason}.`;
 }

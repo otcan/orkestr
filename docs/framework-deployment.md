@@ -158,6 +158,12 @@ SSH-approved browser-pairing flow can access a protected API route with a
 cookie. By default it revokes the temporary browser session before exiting.
 Pass `--keep-session` only when you want to keep that paired browser.
 
+Versioned deploys run a smaller public exposure gate automatically after the
+service restart when a public app URL is configured. That deploy gate checks
+multiple private API routes without cookies and refuses to mark the deploy
+healthy unless each route returns `401`. The broader public-domain smoke remains
+the full domain, certificate, pairing, and raw-port validation path.
+
 When the Caddy site is protected with mTLS, pass the client certificate used by
 the operator browser. The smoke first confirms that `/setup` is not reachable
 without a client certificate, then repeats the normal HTTPS and browser-pairing

@@ -5,6 +5,7 @@ import { dataPaths, ensureDataDirs } from "../../storage/src/paths.js";
 import { appendEvent, readJson, writeSecretJson } from "../../storage/src/store.js";
 import { authorizeDesktopShareHttpRequest } from "./desktop-shares.js";
 import { adminPrincipal, principalFromSecuritySession } from "./principal.js";
+import { publicUrlConfig } from "./public-url-config.js";
 import { defaultAdminUser, getUser, normalizeUserId } from "./users.js";
 
 const execFileAsync = promisify(execFile);
@@ -32,6 +33,38 @@ function randomToken(bytes = 32) {
 
 function envFlag(value) {
   return ["1", "true", "yes", "on"].includes(String(value || "").trim().toLowerCase());
+}
+
+function remoteAuthSignal(env = process.env, urls = publicUrlConfig(env), host = bindHost(env)) {
+  const publicUrlConfigured = Boolean(
+    urls.primaryDomain ||
+    urls.appHost ||
+    urls.authHost ||
+    urls.appUrl ||
+    urls.authUrl ||
+    urls.connectUrl ||
+    env.ORKESTR_PUBLIC_URL ||
+    env.ORKESTR_APP_URL ||
+    env.ORKESTR_PUBLIC_HTTPS_URL ||
+    env.ORKESTR_HTTPS_URL ||
+    env.ORKESTR_TAILSCALE_HTTPS_NAME ||
+    env.ORKESTR_CONNECT_PUBLIC_URL,
+  );
+  return publicUrlConfigured || !isLocalBind(host);
+}
+
+function effectiveAuthRequired(env = process.env, urls = publicUrlConfig(env), host = bindHost(env)) {
+  if (String(env.ORKESTR_AUTH_REQUIRED || "").trim() === "1") return true;
+  if (envFlag(env.ORKESTR_UNSAFE_ALLOW_PUBLIC_UNAUTHENTICATED)) return false;
+  return remoteAuthSignal(env, urls, host);
+}
+
+function approvalInstructions(env = process.env) {
+  return {
+    sshCommand: String(env.ORKESTR_SECURITY_APPROVE_SSH_COMMAND || "").trim(),
+    approveCommand: String(env.ORKESTR_SECURITY_APPROVE_COMMAND || "").trim(),
+    sudoApproveCommand: String(env.ORKESTR_SECURITY_APPROVE_SUDO_COMMAND || "").trim(),
+  };
 }
 
 async function readSecurityConfig(env = process.env) {
@@ -203,22 +236,38 @@ function whatsappInboundTokens(env = process.env) {
   ];
 }
 
-function isWhatsAppInboundRequest(request) {
-  const method = String(request?.method || "GET").toUpperCase();
-  const url = String(request?.url || "").split("?")[0];
-  return method === "POST" && url === "/api/connectors/whatsapp/inbound";
+function whatsappBridgeTokens(env = process.env) {
+  return [
+    ...splitSecretList(env.ORKESTR_WHATSAPP_BRIDGE_TOKEN),
+    ...splitSecretList(env.WHATSAPP_BRIDGE_TOKEN),
+    ...splitSecretList(env.ORKESTR_WHATSAPP_BRIDGE_TOKENS),
+    ...splitSecretList(env.WHATSAPP_BRIDGE_TOKENS),
+  ];
 }
 
-function authorizeWhatsAppInboundRequest(request, env = process.env) {
-  if (!isWhatsAppInboundRequest(request)) return null;
+function isWhatsAppMachineRoute(request) {
+  const method = String(request?.method || "GET").toUpperCase();
+  const url = String(request?.url || "").split("?")[0];
+  if (method === "POST" && url === "/api/connectors/whatsapp/inbound") {
+    return { kind: "whatsapp_inbound", tokens: whatsappInboundTokens };
+  }
+  if (url.startsWith("/api/connectors/whatsapp/bridge/")) {
+    return { kind: "whatsapp_bridge", tokens: whatsappBridgeTokens };
+  }
+  return null;
+}
+
+function authorizeWhatsAppMachineRequest(request, env = process.env) {
+  const route = isWhatsAppMachineRoute(request);
+  if (!route) return null;
   const token = bearerToken(request?.headers?.authorization || request?.headers?.Authorization || "");
   if (!token) return null;
-  const matched = whatsappInboundTokens(env).some((candidate) => timingSafeSecretEqual(token, candidate));
+  const matched = route.tokens(env).some((candidate) => timingSafeSecretEqual(token, candidate));
   if (!matched) return null;
   return {
     ok: true,
     principal: adminPrincipal(defaultAdminUser(env)),
-    machineAuth: "whatsapp_inbound",
+    machineAuth: route.kind,
   };
 }
 
@@ -228,17 +277,18 @@ export function securityCookieName() {
 
 export async function securityStatus(env = process.env) {
   const config = await readSecurityConfig(env);
+  const urls = publicUrlConfig(env);
   const host = bindHost(env);
   const caddy = await commandStatus("caddy", ["version"], env);
   const tailscale = await commandStatus("tailscale", ["status", "--json"], env);
-  const httpsUrl = String(env.ORKESTR_PUBLIC_HTTPS_URL || env.ORKESTR_HTTPS_URL || env.ORKESTR_TAILSCALE_HTTPS_NAME || "").trim();
+  const httpsUrl = String(urls.appUrl || env.ORKESTR_PUBLIC_HTTPS_URL || env.ORKESTR_HTTPS_URL || env.ORKESTR_TAILSCALE_HTTPS_NAME || "").trim();
   const caddyConfigured = String(env.ORKESTR_CADDY_ENABLED || "").trim() === "1";
   const mtlsCaCert = String(env.ORKESTR_MTLS_CA_CERT || "").trim();
   const mtlsMode = String(env.ORKESTR_MTLS_MODE || "require_and_verify").trim() || "require_and_verify";
   const mtlsEnabled = envFlag(env.ORKESTR_MTLS_ENABLED) || Boolean(mtlsCaCert);
   const proxyLocalBindSetting = String(env.ORKESTR_REVERSE_PROXY_LOCAL_BIND || "").trim();
   const proxyLocalBind = proxyLocalBindSetting === "1";
-  const authRequired = String(env.ORKESTR_AUTH_REQUIRED || "").trim() === "1";
+  const authRequired = effectiveAuthRequired(env, urls, host);
   const authEnabled = Boolean(authRequired || config.enabled || (config.sessions || []).length);
   const sessionCount = (config.sessions || []).filter((session) => Date.parse(session.expiresAt || "") > Date.now()).length;
   const pendingChallenges = activePendingChallenges(config);
@@ -264,7 +314,11 @@ export async function securityStatus(env = process.env) {
     https: {
       configured: httpsConfigured,
       url: httpsUrl,
+      appUrl: urls.appUrl || httpsUrl,
+      authUrl: urls.authUrl || httpsUrl,
+      primaryDomain: urls.primaryDomain,
     },
+    approval: approvalInstructions(env),
     caddy: {
       installed: caddy.installed || caddyConfigured,
       configured: caddyConfigured,
@@ -563,6 +617,7 @@ function isAllowedBeforePairing(request) {
   if (url.startsWith("/oauth/")) return true;
   if (method === "GET" && /^\/api\/desktop-shares\/[^/]+\/(?:open|status)$/.test(url)) return true;
   if (method === "GET" && ["/api/health", "/api/ready", "/api/version", "/api/setup/status"].some((path) => url.startsWith(path))) return true;
+  if (method === "POST" && url === "/api/public/waitlist") return true;
   if (method === "POST" && (url === "/api/setup/security/challenge" || url === "/api/setup/security/challenges")) return true;
   if (method === "GET" && /^\/api\/setup\/security\/challenges\/[^/]+$/.test(url)) return true;
   if (method === "POST" && url === "/api/setup/security/pair") return true;
@@ -582,7 +637,7 @@ export async function authorizeHttpRequest(request, env = process.env) {
   if (shareAuth && Number(shareAuth.statusCode || 0) >= 400) {
     return { ok: false, status, statusCode: shareAuth.statusCode, error: shareAuth.error || "desktop_share_forbidden" };
   }
-  const whatsappInboundAuth = authorizeWhatsAppInboundRequest(request, env);
+  const whatsappInboundAuth = authorizeWhatsAppMachineRequest(request, env);
   if (whatsappInboundAuth?.ok) return { ok: true, status, principal: whatsappInboundAuth.principal, machineAuth: whatsappInboundAuth.machineAuth };
   if (!status.authEnabled) return { ok: true, status, principal: adminPrincipal(defaultAdminUser(env)) };
   const token = cookieValue(request?.headers?.cookie || "");
@@ -614,10 +669,13 @@ export async function authorizeHttpRequest(request, env = process.env) {
 }
 
 export function sessionCookieHeader(token, env = process.env) {
-  const secure = String(env.ORKESTR_COOKIE_SECURE || "").trim() === "1" || Boolean(String(env.ORKESTR_PUBLIC_HTTPS_URL || "").startsWith("https://"));
+  const urls = publicUrlConfig(env);
+  const secure = String(env.ORKESTR_COOKIE_SECURE || "").trim() === "1" ||
+    Boolean(String(urls.appUrl || env.ORKESTR_PUBLIC_HTTPS_URL || "").startsWith("https://"));
   return [
     `${cookieName}=${encodeURIComponent(token)}`,
     "Path=/",
+    urls.cookieDomain ? `Domain=${urls.cookieDomain}` : "",
     "HttpOnly",
     "SameSite=Lax",
     `Max-Age=${Math.floor(sessionTtlMs / 1000)}`,

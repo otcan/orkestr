@@ -367,6 +367,27 @@ export async function unlinkUserPrivateIdentity(userId, identity = {}, { env = p
   return readUserPrivateIdentities(user.id, env);
 }
 
+export async function clearUserPrivateIdentities(userId, { env = process.env, actorUserId = "system", provider = "" } = {}) {
+  const user = await getUser(userId, env);
+  if (!user) throw userError("user_not_found", 404);
+  const normalizedProvider = String(provider || "").trim().toLowerCase();
+  const removed = await removeUserPrivateIdentities(
+    user.id,
+    (item) => !normalizedProvider || item.provider === normalizedProvider,
+    env,
+  );
+  if (removed.length) {
+    await appendEvent({
+      type: "user_identities_cleared",
+      userId: user.id,
+      provider: normalizedProvider || null,
+      count: removed.length,
+      actorUserId,
+    }, env).catch(() => {});
+  }
+  return { ok: true, userId: user.id, removedCount: removed.length, identities: await readUserPrivateIdentities(user.id, env) };
+}
+
 async function addUserPrivateIdentity(userId, identity = {}, env = process.env) {
   const normalized = normalizeIdentity(identity);
   const repository = createUserIdentityRepository(env);

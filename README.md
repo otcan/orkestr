@@ -60,6 +60,9 @@ The public V1 is intentionally narrow:
 - optionally add timers, Gmail setup, and browser desktops
 - keep private credentials and personal bindings outside the OSS repo through `ORKESTR_OVERLAY_DIR`
 
+For invite-only external-user beta onboarding, see
+[`docs/external-user-onboarding.md`](docs/external-user-onboarding.md).
+
 Orkestr is not trying to be a generic agent marketplace, team product, plugin
 platform, or cloud service. Those abstractions are deliberately out of scope
 until the single-user Codex loop is boring and reliable.
@@ -537,7 +540,7 @@ The supported remote shape is provided by the host-native installer and covered 
 
 - Keep `ORKESTR_HOST=127.0.0.1`.
 - Use Tailscale or Caddy/TLS before remote access.
-- Keep `ORKESTR_AUTH_REQUIRED=1` and approve browsers through the setup pairing flow.
+- Keep `ORKESTR_AUTH_REQUIRED=1` and approve browsers through the setup pairing flow. Public URLs/domains and non-local binds require auth by default unless an explicit unsafe dev override is set.
 - Do not expose raw `/api/*`, thread streams, or terminal routes directly to the public internet.
 - Keep real overlays, browser profiles, WhatsApp session state, Gmail tokens, and hostnames out of this public repo.
 - Treat this alpha as single-user software.

@@ -14,7 +14,8 @@ import {
   stopVirtualBrowser,
 } from "../../browsers/src/browsers.js";
 import { getGmailMessage, listGmailMessages } from "../../connectors/src/gmail.js";
-import { listTimersForPrincipal } from "./timers.js";
+import { runTenantApiAgentProfileTool, tenantApiAgentProfileToolDefinitions } from "./tenant-api-agent-profile-tools.js";
+import { runTenantApiAgentTimerTool, tenantApiAgentTimerToolDefinitions } from "./tenant-api-agent-timer-tools.js";
 import { whereAmI } from "./whereiam.js";
 import {
   createUserSkillForPrincipal,
@@ -185,7 +186,7 @@ function skillActionNames(skill = {}, capabilities = {}, desktops = null) {
   if (!skillAvailableFromCapabilities(skill, capabilities)) return ["status"];
   if (id === "whereiam") return ["status"];
   if (id === "files") return capabilities.files === true ? ["list", "read", "write"] : ["status"];
-  if (id === "timers") return capabilities.timers === true ? ["list"] : ["status"];
+  if (id === "timers") return capabilities.timers === true ? ["list", "create", "delete", "run"] : ["status"];
   if (["gmail", "outlook", "jira", "shopify", "whatsapp"].includes(id)) return ["status"];
   if (clean(skill.requiresDesktop)) {
     if (!desktops) return ["status", "list_actions"];
@@ -428,6 +429,7 @@ export function tenantApiAgentToolDefinitions() {
       },
       strict: true,
     },
+    ...tenantApiAgentProfileToolDefinitions(),
     {
       type: "function",
       name: "orkestr_get_skill",
@@ -579,17 +581,7 @@ export function tenantApiAgentToolDefinitions() {
       },
       strict: true,
     },
-    {
-      type: "function",
-      name: "orkestr_list_timers",
-      description: "List timers visible to this tenant.",
-      parameters: {
-        type: "object",
-        properties: {},
-        additionalProperties: false,
-      },
-      strict: true,
-    },
+    ...tenantApiAgentTimerToolDefinitions(),
     {
       type: "function",
       name: "orkestr_start_connector_auth",
@@ -691,6 +683,8 @@ export async function runTenantApiAgentTool(name = "", args = {}, context = {}, 
   if (tool === "orkestr_list_skills") {
     return skillActionInventory(principal, thread, env, { includeDesktopInventory: false });
   }
+  const profileTool = await runTenantApiAgentProfileTool(tool, args, { principal }, env);
+  if (profileTool.handled) return profileTool.result;
   if (tool === "orkestr_get_skill") {
     return getUserSkillForPrincipal(principalUserId(principal), args.skillId, principal, env);
   }
@@ -744,9 +738,8 @@ export async function runTenantApiAgentTool(name = "", args = {}, context = {}, 
     const stats = await fs.stat(filePath).catch(() => null);
     return { ok: true, path: filePath, size: stats?.size ?? null };
   }
-  if (tool === "orkestr_list_timers") {
-    return { timers: await listTimersForPrincipal(principal, env) };
-  }
+  const timerTool = await runTenantApiAgentTimerTool(tool, args, { principal, thread }, env);
+  if (timerTool.handled) return timerTool.result;
   if (tool === "orkestr_start_connector_auth") {
     return startConnectorAuth(args, principal, env, context.fetchImpl || fetch);
   }

@@ -2,6 +2,7 @@ import { connectorOrder, getConnectorStatuses } from "../../connectors/src/conne
 import { dataPaths } from "../../storage/src/paths.js";
 import { publicAuthStatus } from "./auth-config.js";
 import { readOverlay } from "./overlay.js";
+import { publicUrlConfig } from "./public-url-config.js";
 import { readRuntimeSettings } from "./runtime-settings.js";
 import { securityStatus } from "./security.js";
 
@@ -29,6 +30,7 @@ export async function getSetupStatus({ env = process.env, home, principal = null
   const overlay = await readOverlay(env);
   const security = await securityStatus(env);
   const auth = publicAuthStatus(env);
+  const urls = publicUrlConfig(env);
   const settings = await readRuntimeSettings(env);
   return {
     generatedAt: new Date().toISOString(),
@@ -38,6 +40,7 @@ export async function getSetupStatus({ env = process.env, home, principal = null
     overlay,
     security,
     auth,
+    urls,
     connectors,
   };
 }
@@ -50,6 +53,7 @@ export function publicSetupStatus(status = {}) {
     overlay: publicOverlayStatus(status.overlay),
     security: publicSetupSecurityStatus(status.security),
     auth: publicSetupAuthStatus(status.auth),
+    urls: publicSetupUrlStatus(status.urls),
     connectors: [],
     config: {},
     whatsappDefaults: {},
@@ -76,12 +80,27 @@ function publicSetupSecurityStatus(security = {}) {
     https: {
       configured: Boolean(security?.https?.configured),
     },
+    approval: {
+      sshCommand: String(security?.approval?.sshCommand || ""),
+      approveCommand: String(security?.approval?.approveCommand || ""),
+      sudoApproveCommand: String(security?.approval?.sudoApproveCommand || ""),
+    },
     mtls: {
       enabled: Boolean(security?.mtls?.enabled),
       configured: Boolean(security?.mtls?.configured),
       mode: String(security?.mtls?.mode || ""),
       caConfigured: Boolean(security?.mtls?.caConfigured),
     },
+  };
+}
+
+function publicSetupUrlStatus(urls = {}) {
+  return {
+    primaryDomain: String(urls?.primaryDomain || ""),
+    appUrl: String(urls?.appUrl || ""),
+    authUrl: String(urls?.authUrl || ""),
+    connectUrl: String(urls?.connectUrl || ""),
+    sameOriginAuth: Boolean(urls?.sameOriginAuth),
   };
 }
 

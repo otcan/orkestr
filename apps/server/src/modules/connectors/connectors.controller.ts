@@ -36,9 +36,11 @@ import {
   recoverLocalWhatsAppChatMessages,
   sendLocalWhatsAppMessage,
   sendLocalWhatsAppText,
+  startLocalWhatsAppTyping,
   startLocalWhatsAppAccount,
   stopLocalWhatsAppTyping,
 } from "../../../../../packages/connectors/src/whatsapp-local-bridge.js";
+import { runWithRoutedWhatsAppTyping } from "../../../../../packages/connectors/src/whatsapp-router-typing.js";
 import { writeConnectorConfig } from "../../../../../packages/storage/src/config.js";
 import { ensureAttachmentsArray, httpError } from "../../common/http.js";
 
@@ -340,13 +342,19 @@ export class ConnectorsController {
     if (routed.threadId && !routed.duplicate) {
       const thread = await getThread(String(routed.threadId || ""));
       if (threadUsesApiAgent(thread || {})) {
-        await processApiAgentThreadInput(thread.id).catch(() => null);
-        await deliverWhatsAppReplies().catch(() => {});
+        const payload = await runWithRoutedWhatsAppTyping({ thread, input: body }, async () => {
+          await processApiAgentThreadInput(thread.id).catch(() => null);
+          await deliverWhatsAppReplies().catch(() => {});
+          return { ...routed, runtimeKind: "api-agent" };
+        }, {
+          startTyping: startLocalWhatsAppTyping,
+          stopTyping: stopLocalWhatsAppTyping,
+        });
         return response
           .status(202)
           .header("cache-control", "no-store")
           .type("application/json; charset=utf-8")
-          .send({ ...routed, runtimeKind: "api-agent" });
+          .send(payload);
       }
       await deliverWhatsAppReplies().catch(() => {});
       requestThreadInputDelivery(routed.threadId);

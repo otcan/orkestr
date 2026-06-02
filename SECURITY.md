@@ -9,7 +9,8 @@ Orkestr is public alpha, single-user software. It can wake local terminal sessio
 - Keep `ORKESTR_OVERLAY_DIR` private.
 - Do not expose `/api/*`, thread streams, terminal routes, or browser controls directly to the internet.
 - Use a private network such as Tailscale, or Caddy/TLS behind a domain you control, before remote access.
-- Keep `ORKESTR_AUTH_REQUIRED=1` for remote installs and approve browsers through the pairing flow.
+- Keep `ORKESTR_AUTH_REQUIRED=1` for remote installs and approve browsers through the pairing flow. Orkestr also treats public URLs, public domains, and non-local binds as auth-required by default.
+- Never set `ORKESTR_UNSAFE_ALLOW_PUBLIC_UNAUTHENTICATED=1` on a public host. That flag exists only for disposable local/dev testing.
 
 ## Remote Access
 
@@ -24,7 +25,7 @@ of the box. The expected shape is:
 
 This is not only aspirational: `scripts/bootstrap-vps.sh` and `scripts/install.sh --systemd` configure the localhost bind and browser pairing defaults, and `npm run smoke:vps:aws` exercises the fresh-VPS path. The `/setup` Secure Access step reports the current bind address, Caddy availability, Tailscale/HTTPS hints, and browser pairing state.
 
-Set `ORKESTR_AUTH_REQUIRED=1` to require browser pairing before protected API access. The host-native VPS installer enables this by default in `/etc/orkestr/orkestr.env`. An unpaired browser can only generate a pairing challenge and poll that challenge. Approve the challenge from trusted host access:
+Set `ORKESTR_AUTH_REQUIRED=1` to require browser pairing before protected API access. The host-native VPS installer enables this by default in `/etc/orkestr/orkestr.env`. If a public app URL, primary domain, connector URL, or non-local bind is configured, Orkestr fails closed and requires auth even when `ORKESTR_AUTH_REQUIRED` was omitted. An unpaired browser can only generate a pairing challenge, poll that challenge, read redacted setup status, and access health/version endpoints. Approve the challenge from trusted host access:
 
 ```bash
 ssh root@YOUR_SERVER
@@ -32,6 +33,11 @@ orkestr security approve CHALLENGE_ID
 ```
 
 `root` is the default in these instructions because fresh VPS images usually reserve service, install, and firewall control for root. Hardened installs can use a sudo-capable deploy user and run `sudo orkestr security approve CHALLENGE_ID` instead. After approval, Orkestr sets a `HttpOnly`, `SameSite=Lax` session cookie. Use `ORKESTR_COOKIE_SECURE=1` when serving through HTTPS.
+
+Versioned deploys run a public exposure check after restart when a public app
+URL is configured. The deploy is not considered healthy unless unauthenticated
+requests to private routes such as `/api/threads`, `/api/users`, `/api/timers`,
+desktop leases, browser sessions, connectors, and `whereiam` return `401`.
 
 ## Secrets
 

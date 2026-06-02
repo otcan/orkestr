@@ -117,6 +117,159 @@ test("tenant api-agent answers non-admin WhatsApp thread without Codex delivery"
   assert.equal(usage.byModel["gpt-5-mini"] > 0, true);
 });
 
+test("tenant api-agent repairs bare acknowledgements for identity and capability turns", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-api-agent-repair-"));
+  const env = await allowSanitizerEnv(home);
+  await createThread({
+    id: "otcantest-repair",
+    ownerUserId: "otcan",
+    name: "otcantest",
+    bindingName: "orkestr.de",
+    runtimeKind: "api-agent",
+    executorId: "api-agent",
+    executor: { type: "api-agent", metadata: { runtimeKind: "api-agent" } },
+    binding: { connector: "whatsapp", chatId: "chat-otcan", displayName: "orkestr.de", outboundAccountId: "wa-1" },
+  }, env);
+  await appendThreadMessage("otcantest-repair", {
+    role: "user",
+    text: "who am I?",
+    state: "completed",
+  }, env);
+  await appendThreadMessage("otcantest-repair", {
+    role: "assistant",
+    source: "api-agent",
+    phase: "final_answer",
+    text: "You are the person messaging this WhatsApp chat.",
+    state: "completed",
+  }, env);
+  const input = await enqueueThreadInputForPrincipal("otcantest-repair", {
+    text: "I'm Can. How can you help me?",
+    source: "whatsapp_inbound",
+    connector: "whatsapp",
+    chatId: "chat-otcan",
+    accountId: "wa-1",
+  }, userPrincipal({ id: "otcan", role: "user" }), env);
+
+  const calls = [];
+  const result = await processApiAgentThreadInput("otcantest-repair", env, {
+    fetchImpl: async (_url, options) => {
+      const body = JSON.parse(options.body);
+      calls.push(body);
+      if (calls.length === 1) {
+        const context = tenantContextFromInstructions(body.instructions);
+        assert.equal(context.chat.chatName, "orkestr.de");
+        assert.equal(context.chat.surface, "WhatsApp chat");
+        assert.match(body.instructions, /Never answer a normal chat question/i);
+        assert.match(body.instructions, /Use the recent message history for conversational identity/i);
+        return response({
+          id: "resp_api_agent_repair_1",
+          model: "gpt-5-mini",
+          output_text: "Done.",
+          output: [],
+          usage: { input_tokens: 250, output_tokens: 2 },
+        });
+      }
+      assert.equal(body.tools, undefined);
+      assert.match(body.instructions, /Response repair/i);
+      assert.match(body.input.at(-1).content, /I'm Can\. How can you help me\?/);
+      return response({
+        id: "resp_api_agent_repair_2",
+        model: "gpt-5-mini",
+        output_text: "Got it, Can. I can help you here on WhatsApp with questions, planning, drafting, and any tenant features that are connected for this chat. For workspace execution, send the task with /codex.",
+        output: [],
+        usage: { input_tokens: 310, output_tokens: 37 },
+      });
+    },
+  });
+  const messages = await listThreadMessages("otcantest-repair", env);
+  const current = messages.find((message) => message.id === input.id);
+  const assistant = messages.find((message) => message.parentMessageId === input.id);
+  const usage = await creditUsageSummary({ tenantId: "otcan" }, env);
+
+  assert.equal(result.ok, true);
+  assert.equal(calls.length, 2);
+  assert.equal(current.state, "completed");
+  assert.equal(assistant.text.trim(), "Got it, Can. I can help you here on WhatsApp with questions, planning, drafting, and any tenant features that are connected for this chat. For workspace execution, send the task with /codex.");
+  assert.notEqual(assistant.text.trim(), "Done.");
+  assert.equal(usage.count, 2);
+  assert.equal(usage.recent.some((record) => record.callKind === "assistant_repair"), true);
+});
+
+test("tenant api-agent repairs empty tool-result answers for identity and capability turns", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-api-agent-empty-tool-repair-"));
+  const env = await allowSanitizerEnv(home);
+  await createThread({
+    id: "otcantest-empty-tool-repair",
+    ownerUserId: "otcan",
+    name: "otcantest",
+    bindingName: "orkestr.de",
+    runtimeKind: "api-agent",
+    executorId: "api-agent",
+    executor: { type: "api-agent", metadata: { runtimeKind: "api-agent" } },
+    binding: { connector: "whatsapp", chatId: "chat-otcan", displayName: "orkestr.de", outboundAccountId: "wa-1" },
+  }, env);
+  const input = await enqueueThreadInputForPrincipal("otcantest-empty-tool-repair", {
+    text: "I'm Can. How can you help me?",
+    source: "whatsapp_inbound",
+    connector: "whatsapp",
+    chatId: "chat-otcan",
+    accountId: "wa-1",
+  }, userPrincipal({ id: "otcan", role: "user" }), env);
+
+  const calls = [];
+  const result = await processApiAgentThreadInput("otcantest-empty-tool-repair", env, {
+    fetchImpl: async (_url, options) => {
+      const body = JSON.parse(options.body);
+      calls.push(body);
+      if (calls.length === 1) {
+        return response({
+          id: "resp_api_agent_empty_tool_repair_1",
+          model: "gpt-5-mini",
+          output_text: "",
+          output: [{
+            type: "function_call",
+            name: "orkestr_list_skills",
+            call_id: "call_list_skills",
+            arguments: "{}",
+          }],
+          usage: { input_tokens: 330, output_tokens: 20 },
+        });
+      }
+      if (calls.length === 2) {
+        assert.equal(body.input.some((item) => item.type === "function_call_output"), true);
+        return response({
+          id: "resp_api_agent_empty_tool_repair_2",
+          model: "gpt-5-mini",
+          output_text: "",
+          output: [],
+          usage: { input_tokens: 520, output_tokens: 2 },
+        });
+      }
+      assert.equal(body.tools, undefined);
+      assert.match(body.instructions, /Response repair/i);
+      assert.match(body.input.at(-1).content, /I'm Can\. How can you help me\?/);
+      return response({
+        id: "resp_api_agent_empty_tool_repair_3",
+        model: "gpt-5-mini",
+        output_text: "Got it, Can. I can help you here on WhatsApp with questions, planning, drafting, and connected tenant features. For workspace execution, send the task with /codex.",
+        output: [],
+        usage: { input_tokens: 610, output_tokens: 33 },
+      });
+    },
+  });
+  const messages = await listThreadMessages("otcantest-empty-tool-repair", env);
+  const current = messages.find((message) => message.id === input.id);
+  const assistant = messages.find((message) => message.parentMessageId === input.id);
+  const usage = await creditUsageSummary({ tenantId: "otcan" }, env);
+
+  assert.equal(result.ok, true);
+  assert.equal(calls.length, 3);
+  assert.equal(current.state, "completed");
+  assert.match(assistant.text, /Got it, Can/i);
+  assert.notEqual(assistant.text.trim(), "Done.");
+  assert.equal(usage.recent.some((record) => record.callKind === "assistant_repair"), true);
+});
+
 test("tenant api-agent retries stale running messages after a restart", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-api-agent-stale-running-"));
   const env = await allowSanitizerEnv(home, { ORKESTR_API_AGENT_STALE_RUNNING_MS: "1000" });
@@ -279,6 +432,62 @@ test("tenant api-agent explains connector-identity sanitizer denials instead of 
   assert.equal(result.ok, false);
   assert.match(assistant.text, /I can use this WhatsApp chat/i);
   assert.match(assistant.text, /can't expose backend WhatsApp account or connector identity/i);
+});
+
+test("tenant api-agent reports sanitizer outages as temporary resend errors", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-api-agent-sanitizer-outage-"));
+  const script = path.join(home, "unavailable-api-agent-sanitizer.mjs");
+  await fs.writeFile(
+    script,
+    [
+      "let input = '';",
+      "process.stdin.setEncoding('utf8');",
+      "process.stdin.on('data', (chunk) => { input += chunk; });",
+      "process.stdin.on('end', () => {",
+      "  const payload = JSON.parse(input);",
+      "  if (payload.action === 'api-agent.input') {",
+      "    console.log(JSON.stringify({ allow: false, unavailable: true, reason: 'llm_sanitizer_http_500', model: 'test-llm' }));",
+      "    return;",
+      "  }",
+      "  console.log(JSON.stringify({ allow: true, reason: 'allowed', model: 'test-llm' }));",
+      "});",
+      "",
+    ].join("\n"),
+    "utf8",
+  );
+  const env = {
+    ORKESTR_HOME: home,
+    OPENAI_API_KEY: "sk-test",
+    ORKESTR_LLM_SANITIZER_COMMAND_JSON: JSON.stringify([process.execPath, script]),
+  };
+  await createThread({
+    id: "otcan-sanitizer-outage",
+    ownerUserId: "otcan",
+    name: "otcan-sanitizer-outage",
+    runtimeKind: "api-agent",
+    executor: { type: "api-agent", metadata: { runtimeKind: "api-agent" } },
+    binding: { connector: "whatsapp", chatId: "chat-outage", outboundAccountId: "wa-1" },
+  }, env);
+  await enqueueThreadInputForPrincipal("otcan-sanitizer-outage", {
+    text: "I'm Can. How can you help me?",
+    source: "whatsapp_inbound",
+    connector: "whatsapp",
+    chatId: "chat-outage",
+    accountId: "wa-1",
+  }, userPrincipal({ id: "otcan", role: "user" }), env);
+
+  const result = await processApiAgentThreadInput("otcan-sanitizer-outage", env, {
+    fetchImpl: async () => {
+      throw new Error("openai should not be called when sanitizer is unavailable");
+    },
+  });
+  const messages = await listThreadMessages("otcan-sanitizer-outage", env);
+  const assistant = messages.find((message) => message.role === "assistant");
+
+  assert.equal(result.ok, false);
+  assert.match(assistant.text, /sanitizer service was temporarily unavailable/i);
+  assert.match(assistant.text, /Please resend the message/i);
+  assert.doesNotMatch(assistant.text, /ask an admin|check the sanitizer setup/i);
 });
 
 test("tenant api-agent explains missing Gmail capability without a generic safety refusal", async () => {
@@ -1180,6 +1389,90 @@ test("tenant api-agent tool gateway stays inside scoped file roots", async () =>
   assert.equal(searchedSkills.skills.some((skill) => skill.id === "crm-helper"), true);
   assert.equal(listedSkills.skills.some((skill) => skill.id === "linkedin" && skill.label === "Managed Desktop"), true);
   assert.equal(deletedSkill.deleted, true);
+});
+
+test("tenant api-agent can manage timers from chat", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-api-agent-timers-"));
+  const env = await allowSanitizerEnv(home);
+  await upsertUser({ id: "otcan", role: "user", displayName: "Otcan" }, env);
+  const thread = await createThread({
+    id: "otcantest-timers",
+    ownerUserId: "otcan",
+    name: "otcantest",
+    runtimeKind: "api-agent",
+    executor: { type: "api-agent", metadata: { runtimeKind: "api-agent" } },
+  }, env);
+  const principal = userPrincipal({ id: "otcan", role: "user" });
+
+  const created = await runTenantApiAgentTool("orkestr_create_timer", {
+    label: "Morning check-in",
+    targetType: "thread",
+    target: "",
+    cadence: "daily",
+    time: "08:30",
+    every: "",
+    prompt: "Ask me for my morning priorities.",
+    enabled: true,
+  }, { principal, thread }, env);
+  const listed = await runTenantApiAgentTool("orkestr_list_timers", {}, { principal, thread }, env);
+  const run = await runTenantApiAgentTool("orkestr_run_timer", { timerId: created.timer.id }, { principal, thread }, env);
+  const messages = await listThreadMessages(thread.id, env);
+  const deleted = await runTenantApiAgentTool("orkestr_delete_timer", { timerId: created.timer.id }, { principal, thread }, env);
+  const after = await runTenantApiAgentTool("orkestr_list_timers", {}, { principal, thread }, env);
+
+  assert.equal(created.timer.ownerUserId, "otcan");
+  assert.equal(created.timer.targetType, "thread");
+  assert.equal(created.timer.target, thread.id);
+  assert.equal(listed.timers.some((timer) => timer.id === created.timer.id), true);
+  assert.equal(run.event.type, "timer_manual_run");
+  assert.equal(messages.some((message) =>
+    message.role === "user" &&
+    message.source === "timer_manual_run" &&
+    message.text === "Ask me for my morning priorities."
+  ), true);
+  assert.equal(deleted.ok, true);
+  assert.equal(after.timers.some((timer) => timer.id === created.timer.id), false);
+});
+
+test("tenant api-agent stores onboarding profile details from chat", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-api-agent-profile-"));
+  const env = await allowSanitizerEnv(home);
+  await upsertUser({ id: "otcan", role: "user", displayName: "Otcan" }, env);
+  const thread = await createThread({
+    id: "otcantest-profile",
+    ownerUserId: "otcan",
+    name: "otcantest",
+    runtimeKind: "api-agent",
+    executor: { type: "api-agent", metadata: { runtimeKind: "api-agent" } },
+  }, env);
+  const principal = userPrincipal({ id: "otcan", role: "user" });
+
+  const updated = await runTenantApiAgentTool("orkestr_update_onboarding_profile", {
+    displayName: "Can",
+    timezone: "Europe/Berlin",
+    locale: "tr-TR",
+    preferences: "Use concise WhatsApp replies.",
+    toolRequests: "Connect Gmail and open the managed desktop.",
+    notes: "Interested in job application help.",
+  }, { principal, thread }, env);
+  const second = await runTenantApiAgentTool("orkestr_update_onboarding_profile", {
+    displayName: "",
+    timezone: "",
+    locale: "",
+    preferences: "Prefer morning check-ins.",
+    toolRequests: "",
+    notes: "",
+  }, { principal, thread }, env);
+  const fetched = await runTenantApiAgentTool("orkestr_get_onboarding_profile", {}, { principal, thread }, env);
+  const context = tenantContextFromInstructions(await buildTenantApiAgentInstructions(thread, [], env));
+
+  assert.equal(updated.profile.displayName, "Can");
+  assert.equal(updated.profile.toolRequests, "Connect Gmail and open the managed desktop.");
+  assert.equal(second.profile.displayName, "Can");
+  assert.equal(second.profile.preferences, "Prefer morning check-ins.");
+  assert.equal(fetched.profile.timezone, "Europe/Berlin");
+  assert.equal(context.onboardingProfile.displayName, "Can");
+  assert.equal(context.onboardingProfile.preferences, "Prefer morning check-ins.");
 });
 
 test("tenant api-agent skill actions report when a required desktop is unavailable", async () => {

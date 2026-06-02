@@ -393,6 +393,11 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
 
   private enterPairingRequired(setup: SetupStatus | null = this.setupStatus): void {
     if (setup) this.setupStatus = setup;
+    const authPairingUrl = this.crossOriginAuthPairingUrl(setup);
+    if (authPairingUrl) {
+      globalThis.location.href = authPairingUrl;
+      return;
+    }
     this.apiOnline = true;
     this.appReady = true;
     this.pairingRequired = true;
@@ -925,6 +930,11 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   }
 
   async handleBrowserPaired(): Promise<void> {
+    const returnUrl = this.safePairingReturnUrl();
+    if (returnUrl) {
+      globalThis.location.replace(returnUrl);
+      return;
+    }
     this.pairingRequired = false;
     this.appReady = true;
     this.onboardingActive = false;
@@ -3816,9 +3826,48 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   }
 
   private replacePairingPath(): void {
-    const next = "/setup/pairing";
-    if (globalThis.location?.pathname === next) return;
+    const returnTo = new URLSearchParams(globalThis.location?.search || "").get("return");
+    const next = returnTo ? `/setup/pairing?return=${encodeURIComponent(returnTo)}` : "/setup/pairing";
+    if (`${globalThis.location?.pathname || ""}${globalThis.location?.search || ""}` === next) return;
     globalThis.history?.replaceState({}, "", next);
+  }
+
+  private crossOriginAuthPairingUrl(setup: SetupStatus | null = this.setupStatus): string {
+    const authUrl = setup?.urls?.authUrl || setup?.security?.https?.authUrl || "";
+    if (!authUrl) return "";
+    try {
+      const target = new URL("/setup/pairing", authUrl);
+      const current = new URL(globalThis.location?.href || "/");
+      if (target.origin === current.origin) return "";
+      target.searchParams.set("return", current.toString());
+      return target.toString();
+    } catch {
+      return "";
+    }
+  }
+
+  private safePairingReturnUrl(): string {
+    const raw = new URLSearchParams(globalThis.location?.search || "").get("return") || "";
+    if (!raw) return "";
+    try {
+      const target = new URL(raw);
+      if (!["http:", "https:"].includes(target.protocol)) return "";
+      const allowedOrigins = [
+        this.setupStatus?.urls?.appUrl,
+        this.setupStatus?.urls?.authUrl,
+        this.setupStatus?.security?.https?.appUrl,
+        this.setupStatus?.security?.https?.authUrl,
+      ].map((value) => {
+        try {
+          return value ? new URL(value).origin : "";
+        } catch {
+          return "";
+        }
+      }).filter(Boolean);
+      return allowedOrigins.includes(target.origin) ? target.toString() : "";
+    } catch {
+      return "";
+    }
   }
 
   private normalizeSetupSection(value: unknown): SetupSection {

@@ -14,6 +14,7 @@ import { appendThreadMessage, createThread, enqueueThreadInput, getThread, listT
 import { createUser, linkUserPrivateIdentity } from "../packages/core/src/users.js";
 import { deliverWhatsAppReplies, formatWhatsAppOutboundText, getWhatsAppChatParticipants, getWhatsAppStatus, initialQueueDeliveryState, mapLocalWhatsAppStatusFromHealth, routeWhatsAppInbound, syncWhatsAppTypingIndicators } from "../packages/connectors/src/whatsapp.js";
 import { cleanupLocalWhatsAppChromeLocks, clearLocalWhatsAppChatTypingState, forwardLocalWhatsAppInbound, handleInboundMessage, inboundRoutingFailureNoticeText, listLocalWhatsAppChats, localWhatsAppAccountIdsForEnv, localWhatsAppConnectedPageReadyFallbackEligible, localWhatsAppInboundForwardTarget, localWhatsAppMessageRouteFields, localWhatsAppReadyFallbackEligible, localWhatsAppTypingClearRetryDelaysMs, localWhatsAppUnreadRecoveryBoundChats, localWhatsAppUnreadRecoveryIntervalMs, normalizeGroupParticipantIds, recoverConfiguredLocalWhatsAppAccounts, recoverUnreadLocalWhatsAppMessages, recoverableLocalWhatsAppAccountIds, reduceLocalWhatsAppBridgeState, sendWhatsAppTextWithConfirmation, startLocalWhatsAppAccount, webCacheRoot } from "../packages/connectors/src/whatsapp-local-bridge.js";
+import { routedWhatsAppTypingTarget, runWithRoutedWhatsAppTyping } from "../packages/connectors/src/whatsapp-router-typing.js";
 import { createAndBindWhatsAppThreadGroup } from "../packages/connectors/src/whatsapp-thread-groups.js";
 import { prepareWhatsAppTableAttachments } from "../packages/connectors/src/whatsapp-table-attachments.js";
 import { writeConnectorConfig } from "../packages/storage/src/config.js";
@@ -407,6 +408,44 @@ test("local whatsapp group participant ids are normalized for created test chats
     normalizeGroupParticipantIds("66378837028965@lid, 4917632400662@c.us"),
     ["66378837028965@lid", "4917632400662@c.us"],
   );
+  assert.deepEqual(
+    normalizeGroupParticipantIds(["+49 176 32400662", "4917632400662"]),
+    ["4917632400662@c.us"],
+  );
+});
+
+test("routed whatsapp typing wraps api-agent work for the bound chat", async () => {
+  const calls = [];
+  const thread = {
+    id: "tenant-thread",
+    binding: {
+      chatId: "120363000000000004@g.us",
+      responderAccountId: "account-2",
+      outboundAccountId: "account-1",
+    },
+  };
+  const target = routedWhatsAppTypingTarget({ thread, input: { chatId: "120363000000000004@g.us" } });
+  const result = await runWithRoutedWhatsAppTyping({ thread, input: { chatId: "120363000000000004@g.us" } }, async () => {
+    calls.push(["work"]);
+    return { ok: true };
+  }, {
+    async startTyping(input) {
+      calls.push(["start", input.accountId, input.chatId]);
+      return { ok: true, active: true };
+    },
+    async stopTyping(input) {
+      calls.push(["stop", input.accountId, input.chatId]);
+      return { ok: true, active: false };
+    },
+  });
+
+  assert.deepEqual(target, { accountId: "account-2", chatId: "120363000000000004@g.us" });
+  assert.deepEqual(result, { ok: true });
+  assert.deepEqual(calls, [
+    ["start", "account-2", "120363000000000004@g.us"],
+    ["work"],
+    ["stop", "account-2", "120363000000000004@g.us"],
+  ]);
 });
 
 test("whatsapp thread group creation binds an existing thread idempotently", async () => {
@@ -1457,11 +1496,14 @@ test("local whatsapp bridge runs api-agent tenant chats without waking legacy ru
 test("local whatsapp inbound failures explain missing user capabilities", () => {
   const gmail = inboundRoutingFailureNoticeText(new Error("gmail capability missing"));
   const desktop = inboundRoutingFailureNoticeText(new Error("desktop capability false"));
+  const target = inboundRoutingFailureNoticeText(new Error("whatsapp_target_required"));
 
   assert.match(gmail, /Gmail is not connected or enabled for this chat yet/i);
   assert.doesNotMatch(gmail, /safely handle|private connector|account identity/i);
   assert.match(desktop, /managed desktop is not connected or enabled/i);
   assert.doesNotMatch(desktop, /safely handle|private connector|account identity/i);
+  assert.match(target, /not connected to a thread/i);
+  assert.doesNotMatch(target, /safely handle|private connector|account identity/i);
 });
 
 test("api-agent thread pending delivery skips legacy runtime wakeups", async () => {
@@ -3695,6 +3737,42 @@ test("generated single-account whatsapp groups route lid senders through the gro
   const messages = await listThreadMessages("generated-lid-thread", env);
 
   assert.equal(routed.threadId, "generated-lid-thread");
+  assert.equal(messages.length, 1);
+  assert.equal(messages[0].text, "lid sender");
+  assert.equal(messages[0].from, "66378837028965@lid");
+});
+
+test("generated single-account whatsapp groups tolerate missing responder identity for lid senders", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-generated-lid-no-responder-"));
+  const env = externalBridgeEnv(home);
+  await createThread({
+    id: "generated-lid-no-responder-thread",
+    name: "Generated Lid No Responder Thread",
+    binding: {
+      connector: "whatsapp",
+      chatId: "120363424272031669@g.us",
+      displayName: "orkestr",
+      enabled: true,
+      generated: true,
+      allowOtherPeople: false,
+      senderAccountId: "responder",
+      responderAccountId: "responder",
+      outboundAccountId: "responder",
+      senderContactId: "4917632400662@c.us",
+    },
+  }, env);
+
+  const routed = await routeWhatsAppInbound({
+    eventId: "wa-generated-lid-no-responder",
+    chatId: "120363424272031669@g.us",
+    accountId: "responder",
+    from: "66378837028965@lid",
+    fromMe: false,
+    text: "lid sender",
+  }, env);
+  const messages = await listThreadMessages("generated-lid-no-responder-thread", env);
+
+  assert.equal(routed.threadId, "generated-lid-no-responder-thread");
   assert.equal(messages.length, 1);
   assert.equal(messages[0].text, "lid sender");
   assert.equal(messages[0].from, "66378837028965@lid");
