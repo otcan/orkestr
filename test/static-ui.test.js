@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { startServer } from "../apps/server/src/server.js";
+import { approvePairingChallenge } from "../packages/core/src/security.js";
 
 function assertAngularShell(html) {
   assert.match(html, /<ork-root(?:\s|>)/);
@@ -147,6 +148,30 @@ test("server keeps public pages on the configured public site host only", async 
     const privateThreadResponse = await fetch(`http://127.0.0.1:${port}/thread/demo`, {
       headers: { "x-forwarded-host": "orkestr.app.ops.example.test", "x-forwarded-proto": "https" },
     });
+    const challengeResponse = await fetch(`http://127.0.0.1:${port}/api/setup/security/challenges`, { method: "POST" });
+    const challenge = await challengeResponse.json();
+    await approvePairingChallenge(challenge.challengeId, { approvedBy: "node:test", env: process.env });
+    const pairResponse = await fetch(`http://127.0.0.1:${port}/api/setup/security/pair`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ challengeId: challenge.challengeId }),
+    });
+    const pairedCookie = pairResponse.headers.get("set-cookie") || "";
+    assert.equal(pairResponse.status, 200);
+    assert.match(pairedCookie, /orkestr_session=/);
+    const pairedStatusResponse = await fetch(`http://127.0.0.1:${port}/api/setup/status`, {
+      headers: { cookie: pairedCookie },
+    });
+    assert.equal(pairedStatusResponse.status, 200);
+    const pairedPrivateRootResponse = await fetch(`http://127.0.0.1:${port}/`, {
+      redirect: "manual",
+      headers: {
+        "x-forwarded-host": "orkestr.app.ops.example.test",
+        "x-forwarded-proto": "https",
+        cookie: pairedCookie,
+      },
+    });
+    const pairedPrivateRootHtml = await pairedPrivateRootResponse.text();
     const privateThreadHtml = await privateThreadResponse.text();
 
     assert.equal(publicResponse.status, 200);
@@ -164,6 +189,9 @@ test("server keeps public pages on the configured public site host only", async 
     assert.equal(privateThreadResponse.status, 200);
     assertAngularShell(privateThreadHtml);
     assert.doesNotMatch(privateThreadHtml, /Invite-only private beta/);
+    assert.equal(pairedPrivateRootResponse.status, 200);
+    assertAngularShell(pairedPrivateRootHtml);
+    assert.doesNotMatch(pairedPrivateRootHtml, /Invite-only private beta/);
   } finally {
     await new Promise((resolve) => server.close(resolve));
     if (prior.home === undefined) delete process.env.ORKESTR_HOME;

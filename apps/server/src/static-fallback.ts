@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { INestApplication } from "@nestjs/common";
+import { securityCookieName, verifySecurityToken } from "../../../packages/core/src/security.js";
 import { publicPairingUrl, publicSiteAllowedForHost, publicSitePath, renderPublicSite } from "./public-site.js";
 
 const publicDir = path.resolve(process.cwd(), "dist/web/browser");
@@ -30,7 +31,7 @@ export function registerStaticFallback(app: INestApplication): void {
     if (url.startsWith("/public-assets/")) {
       return servePublicAsset(url, response);
     }
-    const privatePublicRedirect = privatePublicPathRedirectUrl(request, url, process.env);
+    const privatePublicRedirect = await privatePublicPathRedirectUrl(request, url, process.env);
     if (privatePublicRedirect) {
       return response
         .status(302)
@@ -50,10 +51,12 @@ export function registerStaticFallback(app: INestApplication): void {
   });
 }
 
-function privatePublicPathRedirectUrl(request: any, requestUrl: string, env = process.env) {
+async function privatePublicPathRedirectUrl(request: any, requestUrl: string, env = process.env) {
   const url = new URL(requestUrl || "/", "http://localhost");
   if (!publicSitePath(url.pathname)) return "";
   if (publicSiteAllowedForHost(requestHostHeader(request), env)) return "";
+  if (request?.orkestrSecuritySession) return "";
+  if (await requestHasSecuritySession(request, env)) return "";
   const pairingUrl = publicPairingUrl(env);
   if (!pairingUrl) return "";
   try {
@@ -63,6 +66,21 @@ function privatePublicPathRedirectUrl(request: any, requestUrl: string, env = pr
   } catch {
     return "";
   }
+}
+
+async function requestHasSecuritySession(request: any, env = process.env) {
+  const token = cookieValue(request?.headers?.cookie || "", securityCookieName());
+  if (!token) return false;
+  return verifySecurityToken(token, env, { request }).catch(() => false);
+}
+
+function cookieValue(header: string, name: string) {
+  const raw = String(header || "");
+  for (const part of raw.split(";")) {
+    const [key, ...rest] = part.trim().split("=");
+    if (key === name) return decodeURIComponent(rest.join("=") || "");
+  }
+  return "";
 }
 
 function requestHostHeader(request: any) {
