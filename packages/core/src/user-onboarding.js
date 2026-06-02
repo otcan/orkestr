@@ -62,9 +62,53 @@ function userOnboardingDefaults(userId = "") {
     userId: normalizeUserId(userId),
     state: "invited",
     invite: null,
+    profile: publicOnboardingProfile(),
     supportRequests: [],
     updatedAt: nowIso(),
   };
+}
+
+function safeProfileText(value = "", max = 2000) {
+  return clean(value).slice(0, max);
+}
+
+function publicOnboardingProfile(profile = {}) {
+  return {
+    displayName: safeProfileText(profile.displayName || profile.name, 120),
+    timezone: safeProfileText(profile.timezone, 80),
+    locale: safeProfileText(profile.locale || profile.language, 80),
+    preferences: safeProfileText(profile.preferences, 4000),
+    toolRequests: safeProfileText(profile.toolRequests || profile.tools, 4000),
+    notes: safeProfileText(profile.notes || profile.context, 4000),
+    updatedAt: clean(profile.updatedAt),
+  };
+}
+
+function optionalProfileValue(input = {}, keys = [], max = 2000) {
+  const present = keys.find((key) => input[key] !== undefined);
+  if (!present) return undefined;
+  const value = safeProfileText(input[present], max);
+  return value || undefined;
+}
+
+function profilePatch(input = {}) {
+  return {
+    displayName: optionalProfileValue(input, ["displayName", "name"], 120),
+    timezone: optionalProfileValue(input, ["timezone"], 80),
+    locale: optionalProfileValue(input, ["locale", "language"], 80),
+    preferences: optionalProfileValue(input, ["preferences"], 4000),
+    toolRequests: optionalProfileValue(input, ["toolRequests", "tools"], 4000),
+    notes: optionalProfileValue(input, ["notes", "context"], 4000),
+  };
+}
+
+function mergeProfile(existing = {}, patch = {}) {
+  const next = { ...publicOnboardingProfile(existing) };
+  for (const [key, value] of Object.entries(profilePatch(patch))) {
+    if (value !== undefined) next[key] = value;
+  }
+  next.updatedAt = nowIso();
+  return publicOnboardingProfile(next);
 }
 
 export function buildExternalUserInviteTemplate(input = {}, env = process.env) {
@@ -134,6 +178,7 @@ export async function readUserOnboardingState(userId, env = process.env) {
     ...payload,
     userId: user.id,
     state: normalizeOnboardingState(payload.state || fallback.state),
+    profile: publicOnboardingProfile(payload.profile || fallback.profile),
     supportRequests: Array.isArray(payload.supportRequests) ? payload.supportRequests.slice(-50) : [],
   };
 }
@@ -146,6 +191,7 @@ export async function setUserOnboardingState(userId, patch = {}, env = process.e
     ...existing,
     state: normalizeOnboardingState(patch.state || existing.state),
     invite: patch.invite === undefined ? existing.invite : patch.invite,
+    profile: patch.profile === undefined ? existing.profile : mergeProfile(existing.profile, patch.profile),
     updatedAt: nowIso(),
   };
   await writeJson(userDataPaths(user.id, env).onboarding, next);
@@ -155,6 +201,24 @@ export async function setUserOnboardingState(userId, patch = {}, env = process.e
     state: next.state,
   }, env).catch(() => {});
   return { ok: true, user: publicUser(user, env), onboarding: next };
+}
+
+export async function readUserOnboardingProfileForPrincipal(principal = {}, env = process.env) {
+  const userId = normalizeUserId(principal?.userId);
+  if (!userId) throw onboardingError("user_required", 403);
+  const onboarding = await readUserOnboardingState(userId, env);
+  return { ok: true, userId, profile: onboarding.profile };
+}
+
+export async function updateUserOnboardingProfileForPrincipal(input = {}, principal = {}, env = process.env) {
+  const userId = normalizeUserId(principal?.userId);
+  if (!userId) throw onboardingError("user_required", 403);
+  const updated = await setUserOnboardingState(userId, { profile: input }, env);
+  await appendEvent({
+    type: "user_onboarding_profile_updated",
+    userId,
+  }, env).catch(() => {});
+  return { ok: true, userId, profile: updated.onboarding.profile };
 }
 
 export async function recordUserSupportRequest(userId, input = {}, env = process.env) {

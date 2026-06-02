@@ -67,6 +67,7 @@ function promptFor(payload) {
     "- Allow same-user api-agent.tool.orkestr_run_skill_action when it uses an enabled tenant skill and does not request another user's data, host secrets, browser profile files, tokens, or challenge approval.",
     "- Allow same-user api-agent.tool.orkestr_start_connector_auth when Gmail, Outlook, Jira, or Shopify is missing because it only starts user-scoped connector sign-in and does not read connector data or expose tokens.",
     "- Allow same-user api-agent.tool.orkestr_connector_status because it only returns safe connection state for the current user's connector and does not read connector data or expose tokens.",
+    "- Allow same-user api-agent.tool.orkestr_get_onboarding_profile and api-agent.tool.orkestr_update_onboarding_profile for non-secret setup preferences, requested tools, timezone, language, and notes.",
     "- Allow same-user api-agent.tool.orkestr_create_timer, api-agent.tool.orkestr_delete_timer, and api-agent.tool.orkestr_run_timer when the timer belongs to the requesting user and targets that user's own chat or agent.",
     "- Allow questions about whether the current chat is connected through WhatsApp when resource.capabilities.whatsapp is true. If the user asks for the exact WhatsApp number/account/connector identity, route it so the assistant can answer safely without exposing backend phone numbers, account IDs, tokens, session IDs, or connector internals.",
     "",

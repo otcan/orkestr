@@ -7,6 +7,7 @@ import { startCodexAppServerThread, threadUsesCodexAppServer } from "./codex-app
 import { tenantApiAgentToolDefinitions, runTenantApiAgentTool } from "./tenant-api-agent-tools.js";
 import { threadRequiresTenantIsolation } from "./tenant-policy.js";
 import { appendThreadMessage, getThread, listThreadMessages, updateThread, updateThreadMessage } from "./threads.js";
+import { readUserOnboardingState } from "./user-onboarding.js";
 import { userScopedCapabilityHints } from "./user-skills.js";
 import { adminUserId, normalizeUserId } from "./users.js";
 import { appendTurnLifecycleEvent, turnLifecycleFromRuntimeStatus } from "./turn-lifecycle.js";
@@ -378,6 +379,7 @@ async function tenantContext(thread = {}, messages = [], env = process.env) {
   const ownerUserId = threadOwnerUserId(thread, env);
   const capabilities = await scopedCapabilitiesForThread(thread, env);
   const chat = publicChatContext(thread);
+  const onboarding = await readUserOnboardingState(ownerUserId, env).catch(() => null);
   return {
     tenantId: ownerUserId,
     threadId: thread.id || null,
@@ -386,6 +388,7 @@ async function tenantContext(thread = {}, messages = [], env = process.env) {
     chat,
     runtimeKind: API_AGENT_RUNTIME_KIND,
     capabilities: publicTenantCapabilities(capabilities),
+    onboardingProfile: onboarding?.profile || null,
     recentMessageCount: Math.min(20, messages.length),
   };
 }
@@ -398,6 +401,7 @@ export async function buildTenantApiAgentInstructions(thread = {}, messages = []
     "Be natural, concise, and helpful. Do not expose Orkestr internals, Codex runtime details, queues, tmux, shell paths, debug strings, or implementation wording unless the user explicitly asks about Orkestr operations.",
     "You are scoped to the tenant in the JSON context below. Do not claim access to files, Gmail, Outlook, LinkedIn, WhatsApp accounts, browser desktops, timers, or other chats unless the provided Orkestr tools or context show them for this tenant.",
     "Use the recent message history for conversational identity. If the user says their name or identity, acknowledge it and use it in later turns. If the user asks 'who am I?', answer from the conversation and the Tenant context instead of asking a vague clarification.",
+    "When the user shares non-secret onboarding details, preferences, timezone, language, requested tools, or setup notes, save them with the onboarding profile tool. Never store passwords, tokens, recovery codes, or secrets.",
     "If the user asks how you can help, what you can do, or what skills you have, answer with a short capability summary grounded in the Tenant context and enabled skills. For workspace/code execution, mention /codex as the explicit escalation path.",
     "Never answer a normal chat question, introduction, or capability question with only 'Done', 'OK', 'Sure', or another bare acknowledgement.",
     "Use the provided Orkestr tools for tenant-scoped resources. If the user asks whether Gmail, Outlook, Jira, Shopify, or WhatsApp is connected, available, enabled, or accessible, use the connector status tool before answering.",

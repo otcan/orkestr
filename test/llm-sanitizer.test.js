@@ -59,6 +59,7 @@ test("LLM sanitizer prompts route same-user missing connector requests without g
   assert.match(codexPrompt, /start a user-scoped connector sign-in flow/i);
   assert.match(codexPrompt, /Allow same-user api-agent\.tool\.orkestr_start_connector_auth/i);
   assert.match(codexPrompt, /Allow same-user api-agent\.tool\.orkestr_connector_status/i);
+  assert.match(codexPrompt, /Allow same-user api-agent\.tool\.orkestr_get_onboarding_profile/i);
   assert.match(codexPrompt, /Allow same-user api-agent\.tool\.orkestr_create_timer/i);
   assert.match(codexPrompt, /same-user timer management tools/i);
   assert.match(codexPrompt, /This input routing step does not grant data access/i);
@@ -67,6 +68,7 @@ test("LLM sanitizer prompts route same-user missing connector requests without g
   assert.match(openAiPrompt, /start a user-scoped connector sign-in flow/i);
   assert.match(openAiPrompt, /Allow same-user api-agent\.tool\.orkestr_start_connector_auth/i);
   assert.match(openAiPrompt, /Allow same-user api-agent\.tool\.orkestr_connector_status/i);
+  assert.match(openAiPrompt, /Allow same-user api-agent\.tool\.orkestr_get_onboarding_profile/i);
   assert.match(openAiPrompt, /Allow same-user api-agent\.tool\.orkestr_create_timer/i);
   assert.match(openAiPrompt, /same-user timer management tools/i);
   assert.match(openAiPrompt, /Do not treat this as permission for connector data access/i);

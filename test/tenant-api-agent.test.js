@@ -1434,6 +1434,47 @@ test("tenant api-agent can manage timers from chat", async () => {
   assert.equal(after.timers.some((timer) => timer.id === created.timer.id), false);
 });
 
+test("tenant api-agent stores onboarding profile details from chat", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-api-agent-profile-"));
+  const env = await allowSanitizerEnv(home);
+  await upsertUser({ id: "otcan", role: "user", displayName: "Otcan" }, env);
+  const thread = await createThread({
+    id: "otcantest-profile",
+    ownerUserId: "otcan",
+    name: "otcantest",
+    runtimeKind: "api-agent",
+    executor: { type: "api-agent", metadata: { runtimeKind: "api-agent" } },
+  }, env);
+  const principal = userPrincipal({ id: "otcan", role: "user" });
+
+  const updated = await runTenantApiAgentTool("orkestr_update_onboarding_profile", {
+    displayName: "Can",
+    timezone: "Europe/Berlin",
+    locale: "tr-TR",
+    preferences: "Use concise WhatsApp replies.",
+    toolRequests: "Connect Gmail and open the managed desktop.",
+    notes: "Interested in job application help.",
+  }, { principal, thread }, env);
+  const second = await runTenantApiAgentTool("orkestr_update_onboarding_profile", {
+    displayName: "",
+    timezone: "",
+    locale: "",
+    preferences: "Prefer morning check-ins.",
+    toolRequests: "",
+    notes: "",
+  }, { principal, thread }, env);
+  const fetched = await runTenantApiAgentTool("orkestr_get_onboarding_profile", {}, { principal, thread }, env);
+  const context = tenantContextFromInstructions(await buildTenantApiAgentInstructions(thread, [], env));
+
+  assert.equal(updated.profile.displayName, "Can");
+  assert.equal(updated.profile.toolRequests, "Connect Gmail and open the managed desktop.");
+  assert.equal(second.profile.displayName, "Can");
+  assert.equal(second.profile.preferences, "Prefer morning check-ins.");
+  assert.equal(fetched.profile.timezone, "Europe/Berlin");
+  assert.equal(context.onboardingProfile.displayName, "Can");
+  assert.equal(context.onboardingProfile.preferences, "Prefer morning check-ins.");
+});
+
 test("tenant api-agent skill actions report when a required desktop is unavailable", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-api-agent-no-desktop-"));
   const env = {

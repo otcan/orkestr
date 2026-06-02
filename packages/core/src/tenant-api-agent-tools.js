@@ -14,6 +14,7 @@ import {
   stopVirtualBrowser,
 } from "../../browsers/src/browsers.js";
 import { getGmailMessage, listGmailMessages } from "../../connectors/src/gmail.js";
+import { runTenantApiAgentProfileTool, tenantApiAgentProfileToolDefinitions } from "./tenant-api-agent-profile-tools.js";
 import { runTenantApiAgentTimerTool, tenantApiAgentTimerToolDefinitions } from "./tenant-api-agent-timer-tools.js";
 import { whereAmI } from "./whereiam.js";
 import {
@@ -428,6 +429,7 @@ export function tenantApiAgentToolDefinitions() {
       },
       strict: true,
     },
+    ...tenantApiAgentProfileToolDefinitions(),
     {
       type: "function",
       name: "orkestr_get_skill",
@@ -681,6 +683,8 @@ export async function runTenantApiAgentTool(name = "", args = {}, context = {}, 
   if (tool === "orkestr_list_skills") {
     return skillActionInventory(principal, thread, env, { includeDesktopInventory: false });
   }
+  const profileTool = await runTenantApiAgentProfileTool(tool, args, { principal }, env);
+  if (profileTool.handled) return profileTool.result;
   if (tool === "orkestr_get_skill") {
     return getUserSkillForPrincipal(principalUserId(principal), args.skillId, principal, env);
   }
