@@ -16,6 +16,12 @@ import { parentConnectorAppStatus } from "./parent-connector-apps.js";
 const execFileAsync = promisify(execFile);
 
 export const connectorOrder = ["openai", "codex", "gmail", "outlook", "jira", "shopify", "linkedin", "whatsapp", "browsers", "timers"];
+const commandVersionCache = new Map();
+
+function commandVersionCacheTtlMs(env = process.env) {
+  const parsed = Number(env.ORKESTR_COMMAND_VERSION_CACHE_MS || 30000);
+  return Number.isFinite(parsed) ? Math.max(0, parsed) : 30000;
+}
 
 async function pathExists(filePath) {
   try {
@@ -27,10 +33,17 @@ async function pathExists(filePath) {
 }
 
 async function commandVersion(command, args = ["--version"]) {
+  const ttlMs = commandVersionCacheTtlMs();
+  const cacheKey = JSON.stringify([command, args, process.env.PATH || ""]);
+  const cached = ttlMs > 0 ? commandVersionCache.get(cacheKey) : null;
+  if (cached && cached.expiresAt > Date.now()) return cached.version;
   try {
     const { stdout, stderr } = await execFileAsync(command, args, { timeout: 2500 });
-    return String(stdout || stderr || "").trim();
+    const version = String(stdout || stderr || "").trim();
+    if (ttlMs > 0) commandVersionCache.set(cacheKey, { expiresAt: Date.now() + ttlMs, version });
+    return version;
   } catch {
+    if (ttlMs > 0) commandVersionCache.set(cacheKey, { expiresAt: Date.now() + ttlMs, version: "" });
     return "";
   }
 }

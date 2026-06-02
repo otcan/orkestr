@@ -91,7 +91,7 @@ function assertDebugFooter(text, { mode = "", messageType = "final", model = "[^
   const pattern = new RegExp(
     `\\n\\ndbg: m:${model === "[^·\\n]+" ? model : escapedModel}` +
       (mode ? ` · mode:${mode}` : "") +
-      ` · msg:${messageType} · q:\\d+ · cpu:\\d+% · help:/help` +
+      ` · msg:${messageType} · q:\\d+ · load:\\d+% · api:\\d+% · help:/help` +
       (mode === "plan" ? " · switch:/code" : "") +
       "$",
   );
@@ -2433,7 +2433,7 @@ test("whatsapp delivery appends compact debug footer for plan-mode Codex updates
   assert.equal(stripDebugFooter(calls[0].body.text), "Milestone: routing check started.");
   assert.match(
     calls[0].body.text,
-    /\n\ndbg: m:gpt-5\.5\/xh · mode:plan · msg:update · q:0 · cpu:\d+% · help:\/help · switch:\/code$/,
+    /\n\ndbg: m:gpt-5\.5\/xh · mode:plan · msg:update · q:0 · load:\d+% · api:\d+% · help:\/help · switch:\/code$/,
   );
 });
 
@@ -2748,6 +2748,46 @@ test("whatsapp delivery does not backfill stale untracked final replies", async 
 
   const delivery = await deliverWhatsAppReplies(env, async () => {
     throw new Error("stale reply should not be sent");
+  });
+
+  assert.equal(delivery.delivered.length, 0);
+  assert.deepEqual(delivery.skipped.find((item) => item.messageId === reply.id)?.reason, "stale_untracked_reply");
+});
+
+test("whatsapp delivery does not send day-old final replies by default", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-day-old-final-"));
+  const env = externalBridgeEnv(home);
+  await createThread({ id: "thread-wa-day-old-final", name: "WA Day Old Final Thread" }, env);
+  await writeConnectorConfig("whatsapp", {
+    bridgeMode: "external",
+    bridgeUrl: "http://wa.local",
+    threadRoutes: { "chat-day-old-final": "thread-wa-day-old-final" },
+  }, env);
+
+  const oldFinalAt = new Date(Date.now() - 19 * 60 * 60 * 1000).toISOString();
+  const parent = await appendThreadMessage("thread-wa-day-old-final", {
+    role: "user",
+    source: "whatsapp_inbound",
+    state: "completed",
+    connector: "whatsapp",
+    chatId: "chat-day-old-final",
+    text: "300 ml kefir add",
+    createdAt: oldFinalAt,
+  }, env);
+  const reply = await appendThreadMessage("thread-wa-day-old-final", {
+    role: "assistant",
+    source: "codex-app-server",
+    phase: "final_answer",
+    state: "completed",
+    connector: "whatsapp",
+    chatId: "chat-day-old-final",
+    parentMessageId: parent.id,
+    text: "Added 300 ml kefir.",
+    createdAt: oldFinalAt,
+  }, env);
+
+  const delivery = await deliverWhatsAppReplies(env, async () => {
+    throw new Error("day-old final reply should not be sent");
   });
 
   assert.equal(delivery.delivered.length, 0);

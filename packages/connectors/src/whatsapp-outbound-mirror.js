@@ -93,8 +93,8 @@ export function whatsappOutboundDeliveryRetentionLimit(env = process.env) {
 }
 
 function whatsappReplyBackfillWindowMs(env = process.env) {
-  const parsed = Number(env.ORKESTR_WHATSAPP_REPLY_BACKFILL_WINDOW_MS || 24 * 60 * 60 * 1000);
-  return Number.isFinite(parsed) ? Math.max(0, parsed) : 24 * 60 * 60 * 1000;
+  const parsed = Number(env.ORKESTR_WHATSAPP_REPLY_BACKFILL_WINDOW_MS || 15 * 60 * 1000);
+  return Number.isFinite(parsed) ? Math.max(0, parsed) : 15 * 60 * 1000;
 }
 
 function whatsappProgressBackfillWindowMs(env = process.env) {
