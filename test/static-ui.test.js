@@ -11,7 +11,16 @@ function assertAngularShell(html) {
   assert.match(html, /src="main[^"]*\.js"/);
 }
 
-test("server serves the built Angular UI at root", async () => {
+function assertPublicShell(html) {
+  assert.match(html, /<h1>Orkestr<\/h1>/);
+  assert.match(html, /Invite-only private beta/);
+  assert.match(html, /View OSS repo/);
+  assert.match(html, /href="\/privacy"/);
+  assert.match(html, /href="\/terms"/);
+  assert.doesNotMatch(html, /<ork-root(?:\s|>)/);
+}
+
+test("server serves the public site at root and Angular UI at app routes", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-static-ui-"));
   const priorHome = process.env.ORKESTR_HOME;
   const priorOverlay = process.env.ORKESTR_OVERLAY_DIR;
@@ -22,6 +31,17 @@ test("server serves the built Angular UI at root", async () => {
   try {
     const response = await fetch(`http://127.0.0.1:${port}/`);
     const html = await response.text();
+    const appResponse = await fetch(`http://127.0.0.1:${port}/app`);
+    const appHtml = await appResponse.text();
+    const termsResponse = await fetch(`http://127.0.0.1:${port}/terms`);
+    const termsHtml = await termsResponse.text();
+    const privacyResponse = await fetch(`http://127.0.0.1:${port}/privacy`);
+    const privacyHtml = await privacyResponse.text();
+    const acceptableUseResponse = await fetch(`http://127.0.0.1:${port}/acceptable-use`);
+    const dataDeletionResponse = await fetch(`http://127.0.0.1:${port}/data-deletion`);
+    const supportResponse = await fetch(`http://127.0.0.1:${port}/support`);
+    const betaResponse = await fetch(`http://127.0.0.1:${port}/beta`);
+    const publicAssetResponse = await fetch(`http://127.0.0.1:${port}/public-assets/orkestr-three-screen-demo.png`);
     const onboardingResponse = await fetch(`http://127.0.0.1:${port}/setup`);
     const onboardingHtml = await onboardingResponse.text();
     const setupGmailResponse = await fetch(`http://127.0.0.1:${port}/setup/gmail`);
@@ -43,8 +63,20 @@ test("server serves the built Angular UI at root", async () => {
     const googleMarketingStartHtml = await googleMarketingStartResponse.text();
 
     assert.equal(response.status, 200);
-    assertAngularShell(html);
+    assertPublicShell(html);
     assert.match(html, /rel="icon" type="image\/svg\+xml" href="\/favicon\.svg"/);
+    assert.equal(appResponse.status, 200);
+    assertAngularShell(appHtml);
+    assert.equal(termsResponse.status, 200);
+    assert.match(termsHtml, /Only connect accounts you own or are authorized to use/);
+    assert.equal(privacyResponse.status, 200);
+    assert.match(privacyHtml, /Parent connector apps can provide OAuth entry points/);
+    assert.equal(acceptableUseResponse.status, 200);
+    assert.equal(dataDeletionResponse.status, 200);
+    assert.equal(supportResponse.status, 200);
+    assert.equal(betaResponse.status, 200);
+    assert.equal(publicAssetResponse.status, 200);
+    assert.match(publicAssetResponse.headers.get("content-type") || "", /image\/png/);
     assert.equal(onboardingResponse.status, 200);
     assertAngularShell(onboardingHtml);
     assert.equal(setupGmailResponse.status, 200);

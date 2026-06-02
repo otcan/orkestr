@@ -1,8 +1,10 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { INestApplication } from "@nestjs/common";
+import { renderPublicSite } from "./public-site.js";
 
 const publicDir = path.resolve(process.cwd(), "dist/web/browser");
+const publicAssetDir = path.resolve(process.cwd(), "docs/assets");
 
 const mimeTypes = new Map<string, string>([
   [".html", "text/html; charset=utf-8"],
@@ -10,6 +12,9 @@ const mimeTypes = new Map<string, string>([
   [".css", "text/css; charset=utf-8"],
   [".json", "application/json; charset=utf-8"],
   [".svg", "image/svg+xml"],
+  [".png", "image/png"],
+  [".jpg", "image/jpeg"],
+  [".jpeg", "image/jpeg"],
 ]);
 
 export function registerStaticFallback(app: INestApplication): void {
@@ -21,6 +26,17 @@ export function registerStaticFallback(app: INestApplication): void {
     }
     if (url.startsWith("/desktop-share/")) {
       return serveDesktopSharePage(response);
+    }
+    if (url.startsWith("/public-assets/")) {
+      return servePublicAsset(url, response);
+    }
+    const publicSite = renderPublicSite(url, process.env);
+    if (publicSite) {
+      return response
+        .status(200)
+        .header("cache-control", "no-store")
+        .type("text/html; charset=utf-8")
+        .send(publicSite);
     }
     return serveStaticPath(url || "/", response);
   });
@@ -132,6 +148,30 @@ function serveDesktopSharePage(response: any) {
   </script>
 </body>
 </html>`);
+}
+
+async function servePublicAsset(requestUrl: string, response: any) {
+  const url = new URL(requestUrl, "http://localhost");
+  const requested = decodeURIComponent(url.pathname.replace(/^\/public-assets\/?/, "/"));
+  const safePath = path.normalize(requested).replace(/^(\.\.[/\\])+/, "");
+  const filePath = path.join(publicAssetDir, safePath);
+  const target = filePath.startsWith(publicAssetDir) ? filePath : "";
+  const ext = path.extname(target);
+
+  try {
+    const body = await fs.readFile(target);
+    return response
+      .status(200)
+      .header("cache-control", "no-store")
+      .type(mimeTypes.get(ext) || "application/octet-stream")
+      .send(body);
+  } catch {
+    return response
+      .status(404)
+      .header("cache-control", "no-store")
+      .type("text/plain; charset=utf-8")
+      .send("public asset not found");
+  }
 }
 
 async function serveStaticPath(requestUrl: string, response: any) {

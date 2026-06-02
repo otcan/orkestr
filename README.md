@@ -60,6 +60,9 @@ The public V1 is intentionally narrow:
 - optionally add timers, Gmail setup, and browser desktops
 - keep private credentials and personal bindings outside the OSS repo through `ORKESTR_OVERLAY_DIR`
 
+For invite-only external-user beta onboarding, see
+[`docs/external-user-onboarding.md`](docs/external-user-onboarding.md).
+
 Orkestr is not trying to be a generic agent marketplace, team product, plugin
 platform, or cloud service. Those abstractions are deliberately out of scope
 until the single-user Codex loop is boring and reliable.

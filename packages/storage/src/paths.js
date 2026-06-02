@@ -46,6 +46,7 @@ export function userDataPaths(userId, env = process.env) {
     secrets: path.join(root, "secrets"),
     identities: path.join(root, "identities.json"),
     skills: path.join(root, "skills.json"),
+    onboarding: path.join(root, "onboarding.json"),
     timers: path.join(root, "timers.json"),
   };
 }
