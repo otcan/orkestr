@@ -37,6 +37,7 @@ import {
   sendLocalWhatsAppMessage,
   sendLocalWhatsAppText,
   startLocalWhatsAppAccount,
+  stopLocalWhatsAppTyping,
 } from "../../../../../packages/connectors/src/whatsapp-local-bridge.js";
 import { writeConnectorConfig } from "../../../../../packages/storage/src/config.js";
 import { ensureAttachmentsArray, httpError } from "../../common/http.js";
@@ -279,6 +280,15 @@ export class ConnectorsController {
       accountId,
       chatId,
       participantIds: bodyStringArray(body, "participantIds").concat(bodyStringArray(body, "participants")),
+    });
+  }
+
+  @Post("whatsapp/bridge/typing/clear")
+  @HttpCode(200)
+  async whatsappBridgeClearTyping(@Body() body: Record<string, unknown> = {}) {
+    return stopLocalWhatsAppTyping({
+      accountId: String(body.accountId || ""),
+      chatId: String(body.chatId || body.to || ""),
     });
   }
 
