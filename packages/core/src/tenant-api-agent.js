@@ -493,6 +493,9 @@ function userSafeApiAgentError(error) {
   if (lowered.includes("whatsapp") || lowered.includes("connector") || lowered.includes("account identity") || lowered.includes("capability")) {
     return "I can use this WhatsApp chat, but I can't expose backend WhatsApp account or connector identity from here. Ask the Orkestr admin to check connector settings.";
   }
+  if (error?.sanitizer?.unavailable === true || /llm_sanitizer_(?:http|timeout|empty_response|invalid_json|unavailable)/i.test(code)) {
+    return "I couldn't safely verify this because the sanitizer service was temporarily unavailable. Please resend the message.";
+  }
   if (code.includes("sanitizer") || error?.sanitizer) return "I couldn't safely verify this request, so I did not run it. Please try a simpler request or ask an admin to check the sanitizer setup.";
   return "I couldn't complete this request right now. Please try again in a moment.";
 }

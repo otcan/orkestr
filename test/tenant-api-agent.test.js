@@ -434,6 +434,62 @@ test("tenant api-agent explains connector-identity sanitizer denials instead of 
   assert.match(assistant.text, /can't expose backend WhatsApp account or connector identity/i);
 });
 
+test("tenant api-agent reports sanitizer outages as temporary resend errors", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-api-agent-sanitizer-outage-"));
+  const script = path.join(home, "unavailable-api-agent-sanitizer.mjs");
+  await fs.writeFile(
+    script,
+    [
+      "let input = '';",
+      "process.stdin.setEncoding('utf8');",
+      "process.stdin.on('data', (chunk) => { input += chunk; });",
+      "process.stdin.on('end', () => {",
+      "  const payload = JSON.parse(input);",
+      "  if (payload.action === 'api-agent.input') {",
+      "    console.log(JSON.stringify({ allow: false, unavailable: true, reason: 'llm_sanitizer_http_500', model: 'test-llm' }));",
+      "    return;",
+      "  }",
+      "  console.log(JSON.stringify({ allow: true, reason: 'allowed', model: 'test-llm' }));",
+      "});",
+      "",
+    ].join("\n"),
+    "utf8",
+  );
+  const env = {
+    ORKESTR_HOME: home,
+    OPENAI_API_KEY: "sk-test",
+    ORKESTR_LLM_SANITIZER_COMMAND_JSON: JSON.stringify([process.execPath, script]),
+  };
+  await createThread({
+    id: "otcan-sanitizer-outage",
+    ownerUserId: "otcan",
+    name: "otcan-sanitizer-outage",
+    runtimeKind: "api-agent",
+    executor: { type: "api-agent", metadata: { runtimeKind: "api-agent" } },
+    binding: { connector: "whatsapp", chatId: "chat-outage", outboundAccountId: "wa-1" },
+  }, env);
+  await enqueueThreadInputForPrincipal("otcan-sanitizer-outage", {
+    text: "I'm Can. How can you help me?",
+    source: "whatsapp_inbound",
+    connector: "whatsapp",
+    chatId: "chat-outage",
+    accountId: "wa-1",
+  }, userPrincipal({ id: "otcan", role: "user" }), env);
+
+  const result = await processApiAgentThreadInput("otcan-sanitizer-outage", env, {
+    fetchImpl: async () => {
+      throw new Error("openai should not be called when sanitizer is unavailable");
+    },
+  });
+  const messages = await listThreadMessages("otcan-sanitizer-outage", env);
+  const assistant = messages.find((message) => message.role === "assistant");
+
+  assert.equal(result.ok, false);
+  assert.match(assistant.text, /sanitizer service was temporarily unavailable/i);
+  assert.match(assistant.text, /Please resend the message/i);
+  assert.doesNotMatch(assistant.text, /ask an admin|check the sanitizer setup/i);
+});
+
 test("tenant api-agent explains missing Gmail capability without a generic safety refusal", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-api-agent-gmail-denial-"));
   const script = path.join(home, "deny-api-agent-gmail.mjs");
