@@ -147,6 +147,30 @@ export function transientLocalWhatsAppSendError(error) {
   return /Promise was collected|Runtime\.callFunctionOn|Execution context was destroyed|Target closed/i.test(message);
 }
 
+function sendOperationTimeoutMs(env = process.env, overrideMs = null) {
+  const parsed = Number(overrideMs || env.ORKESTR_WHATSAPP_SEND_OPERATION_TIMEOUT_MS || env.WA_SEND_OPERATION_TIMEOUT_MS || 20_000);
+  return Number.isFinite(parsed) ? Math.max(500, parsed) : 20_000;
+}
+
+function isSendOperationTimeout(error) {
+  return String(error?.message || error || "").includes("whatsapp_send_") &&
+    String(error?.message || error || "").includes("_timeout");
+}
+
+function withSendOperationTimeout(promise, label, env = process.env, overrideMs = null) {
+  const timeoutMs = sendOperationTimeoutMs(env, overrideMs);
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      const error = new Error(`${label}_timeout`);
+      error.statusCode = 504;
+      reject(error);
+    }, timeoutMs);
+    Promise.resolve(promise)
+      .then(resolve, reject)
+      .finally(() => clearTimeout(timer));
+  });
+}
+
 function serializedMessageId(message = {}) {
   return String(message?.id?._serialized || message?.id || "");
 }
@@ -171,17 +195,30 @@ export async function sendWhatsAppTextWithConfirmation({
   text = "",
   maxAttempts = 2,
   retryDelayMs = 500,
+  env = process.env,
+  operationTimeoutMs = null,
 } = {}) {
   let lastError = null;
   const attempts = Math.max(1, Number(maxAttempts || 1));
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
     try {
-      return await client.sendMessage(chatId, text);
+      return await withSendOperationTimeout(
+        client.sendMessage(chatId, text),
+        "whatsapp_send_message",
+        env,
+        operationTimeoutMs,
+      );
     } catch (error) {
       lastError = error;
-      if (!transientLocalWhatsAppSendError(error)) throw error;
-      const confirmed = await recentOwnTextMessage(client, chatId, text);
+      if (!transientLocalWhatsAppSendError(error) && !isSendOperationTimeout(error)) throw error;
+      const confirmed = await withSendOperationTimeout(
+        recentOwnTextMessage(client, chatId, text),
+        "whatsapp_send_confirm",
+        env,
+        operationTimeoutMs,
+      ).catch(() => null);
       if (confirmed) return confirmed;
+      if (isSendOperationTimeout(error)) throw error;
       if (attempt >= attempts) throw error;
       await wait(retryDelayMs);
     }
@@ -539,7 +576,13 @@ function typingMaxTtlMs(env = process.env) {
 }
 
 function typingRefreshFailureLimit(env = process.env) {
-  const parsed = Number(env.ORKESTR_WHATSAPP_TYPING_REFRESH_FAILURE_LIMIT || env.WA_TYPING_REFRESH_FAILURE_LIMIT || 3);
+  const parsed = Number(
+    env.ORKESTR_WHATSAPP_TYPING_REFRESH_FAILURE_LIMIT ||
+    env.WA_TYPING_REFRESH_FAILURE_LIMIT ||
+    env.ORKESTR_WHATSAPP_TYPING_MAX_REFRESH_FAILURES ||
+    env.WA_TYPING_MAX_REFRESH_FAILURES ||
+    3,
+  );
   return Number.isFinite(parsed) ? Math.max(1, Math.floor(parsed)) : 3;
 }
 
@@ -1034,7 +1077,7 @@ async function sendInboundRoutingFailureNotice({ accountId = "", chatId = "", ev
   try {
     if (client) {
       rememberOutboundText(selectedAccountId, id, text);
-      const message = await sendWhatsAppTextWithConfirmation({ client, chatId: id, text });
+      const message = await sendWhatsAppTextWithConfirmation({ client, chatId: id, text, env });
       rememberOutboundMessageId(serializedMessageId(message));
     } else {
       await sendLocalWhatsAppText({ accountId: selectedAccountId, chatId: id, text, env });
@@ -2256,7 +2299,9 @@ function recoverableSendRuntimeError(error) {
     reason.includes("frame was detached") ||
     reason.includes("target closed") ||
     reason.includes("session closed") ||
-    reason.includes("protocol error");
+    reason.includes("protocol error") ||
+    reason.includes("whatsapp_send_message_timeout") ||
+    reason.includes("whatsapp_send_media_timeout");
 }
 
 async function recoverLocalWhatsAppAccountAfterSendError(accountId, error, env = process.env) {
@@ -2303,6 +2348,7 @@ export async function sendLocalWhatsAppMessage({ chatId = "", text = "", account
         client: runtime.client,
         chatId,
         text: cleanText,
+        env,
       });
       rememberOutboundMessageId(serializedMessageId(message));
       sent.push({
@@ -2322,9 +2368,13 @@ export async function sendLocalWhatsAppMessage({ chatId = "", text = "", account
       for (const attachment of normalizedAttachments) {
         await fs.access(attachment.path);
         const media = MessageMedia.fromFilePath(attachment.path);
-        const message = await runtime.client.sendMessage(chatId, media, {
-          sendMediaAsDocument: true,
-        });
+        const message = await withSendOperationTimeout(
+          runtime.client.sendMessage(chatId, media, {
+            sendMediaAsDocument: true,
+          }),
+          "whatsapp_send_media",
+          env,
+        );
         rememberOutboundMessageId(message?.id?._serialized);
         sent.push({
           id: String(message?.id?._serialized || ""),

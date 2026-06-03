@@ -1,4 +1,6 @@
+import dns from "node:dns/promises";
 import fs from "node:fs/promises";
+import net from "node:net";
 import path from "node:path";
 import {
   connectorAuthStatus,
@@ -54,9 +56,230 @@ function safeText(value = "", max = 60_000) {
   return String(value || "").slice(0, max);
 }
 
+function webFetchEnabled(env = process.env) {
+  return !falsey(env.ORKESTR_API_AGENT_WEB_FETCH_ENABLED);
+}
+
+function webFetchMaxBytes(env = process.env) {
+  const value = Number(env.ORKESTR_API_AGENT_WEB_FETCH_MAX_BYTES);
+  return Number.isFinite(value) && value > 0 ? Math.min(value, 1_000_000) : 300_000;
+}
+
+function webFetchTimeoutMs(env = process.env) {
+  const value = Number(env.ORKESTR_API_AGENT_WEB_FETCH_TIMEOUT_MS);
+  return Number.isFinite(value) && value > 0 ? Math.min(value, 30_000) : 15_000;
+}
+
+function isPrivateIp(address = "") {
+  const ip = clean(address);
+  const version = net.isIP(ip);
+  if (!version) return false;
+  if (version === 4) {
+    const parts = ip.split(".").map((part) => Number(part));
+    if (parts.length !== 4 || parts.some((part) => !Number.isInteger(part) || part < 0 || part > 255)) return true;
+    const [a, b] = parts;
+    return a === 0 ||
+      a === 10 ||
+      a === 127 ||
+      (a === 169 && b === 254) ||
+      (a === 172 && b >= 16 && b <= 31) ||
+      (a === 192 && b === 168) ||
+      a >= 224;
+  }
+  const normalized = ip.toLowerCase();
+  return normalized === "::1" ||
+    normalized.startsWith("fc") ||
+    normalized.startsWith("fd") ||
+    normalized.startsWith("fe80:") ||
+    normalized === "::" ||
+    normalized.startsWith("::ffff:127.") ||
+    normalized.startsWith("::ffff:10.") ||
+    normalized.startsWith("::ffff:192.168.");
+}
+
+function normalizePublicHttpUrl(rawUrl = "", baseUrl = "") {
+  let parsed;
+  try {
+    parsed = new URL(clean(rawUrl), baseUrl || undefined);
+  } catch {
+    const error = new Error("invalid_url");
+    error.statusCode = 400;
+    throw error;
+  }
+  if (!["http:", "https:"].includes(parsed.protocol)) {
+    const error = new Error("unsupported_url_protocol");
+    error.statusCode = 400;
+    throw error;
+  }
+  const hostname = clean(parsed.hostname).toLowerCase();
+  if (!hostname || hostname === "localhost" || hostname.endsWith(".localhost") || isPrivateIp(hostname)) {
+    const error = new Error("url_host_forbidden");
+    error.statusCode = 403;
+    throw error;
+  }
+  parsed.hash = "";
+  return parsed;
+}
+
+async function assertPublicHostname(parsedUrl, env = process.env) {
+  if (truthy(env.ORKESTR_API_AGENT_WEB_FETCH_SKIP_DNS_CHECK)) return;
+  const records = await dns.lookup(parsedUrl.hostname, { all: true, verbatim: true }).catch((error) => {
+    const failed = new Error(`url_dns_lookup_failed:${clean(error?.code || error?.message || error)}`);
+    failed.statusCode = 502;
+    throw failed;
+  });
+  if (!records.length || records.some((record) => isPrivateIp(record.address))) {
+    const error = new Error("url_resolves_to_forbidden_address");
+    error.statusCode = 403;
+    throw error;
+  }
+}
+
+function decodeHtmlEntities(value = "") {
+  return String(value || "")
+    .replace(/&#x([0-9a-f]+);/gi, (_match, hex) => String.fromCodePoint(Number.parseInt(hex, 16)))
+    .replace(/&#(\d+);/g, (_match, decimal) => String.fromCodePoint(Number(decimal)))
+    .replace(/&nbsp;/gi, " ")
+    .replace(/&amp;/gi, "&")
+    .replace(/&quot;/gi, "\"")
+    .replace(/&#39;|&apos;/gi, "'")
+    .replace(/&lt;/gi, "<")
+    .replace(/&gt;/gi, ">");
+}
+
+function stripHtmlToText(html = "", maxChars = 20_000) {
+  return decodeHtmlEntities(String(html || "")
+    .replace(/<script[\s\S]*?<\/script>/gi, " ")
+    .replace(/<style[\s\S]*?<\/style>/gi, " ")
+    .replace(/<noscript[\s\S]*?<\/noscript>/gi, " ")
+    .replace(/<br\s*\/?>/gi, "\n")
+    .replace(/<\/(?:p|div|li|h[1-6]|tr|section|article|ul|ol)>/gi, "\n")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/[ \t\f\v]+/g, " ")
+    .replace(/\n\s+/g, "\n")
+    .replace(/\n{3,}/g, "\n\n"))
+    .trim()
+    .slice(0, maxChars);
+}
+
+function extractHtmlTitle(html = "") {
+  const match = String(html || "").match(/<title[^>]*>([\s\S]*?)<\/title>/i);
+  return decodeHtmlEntities((match?.[1] || "").replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim()).slice(0, 500);
+}
+
+function extractHtmlLinks(html = "", baseUrl = "", maxLinks = 80) {
+  const links = [];
+  for (const match of String(html || "").matchAll(/<a\b([^>]*)>([\s\S]*?)<\/a>/gi)) {
+    if (links.length >= maxLinks) break;
+    const attrs = match[1] || "";
+    const hrefMatch = attrs.match(/\bhref\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))/i);
+    const href = clean(hrefMatch?.[1] || hrefMatch?.[2] || hrefMatch?.[3]);
+    if (!href || /^(?:javascript:|mailto:|tel:|#)/i.test(href)) continue;
+    let url = "";
+    try {
+      url = new URL(decodeHtmlEntities(href), baseUrl).toString();
+    } catch {
+      continue;
+    }
+    const inner = match[2] || "";
+    const countMatch = inner.match(/<small[^>]*>\s*([\d.,]+)\s*<\/small>/i);
+    const text = decodeHtmlEntities(inner.replace(/<small[\s\S]*?<\/small>/gi, " ").replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim());
+    if (!text) continue;
+    links.push({
+      text: text.slice(0, 500),
+      url: url.slice(0, 1000),
+      ...(countMatch ? { count: Number(clean(countMatch[1]).replace(/[.,]/g, "")) || null } : {}),
+    });
+  }
+  return links;
+}
+
+async function fetchPublicWebPage(args = {}, env = process.env, fetchImpl = fetch) {
+  if (!webFetchEnabled(env)) {
+    const error = new Error("web_fetch_disabled");
+    error.statusCode = 403;
+    throw error;
+  }
+  const maxLinks = Math.max(0, Math.min(120, Number(args.maxLinks) || 80));
+  const maxChars = Math.max(1000, Math.min(40_000, Number(args.maxChars) || 20_000));
+  const maxBytes = webFetchMaxBytes(env);
+  const startedUrl = normalizePublicHttpUrl(args.url);
+  let currentUrl = startedUrl;
+  let response = null;
+  for (let redirect = 0; redirect <= 4; redirect += 1) {
+    await assertPublicHostname(currentUrl, env);
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), webFetchTimeoutMs(env));
+    try {
+      response = await fetchImpl(currentUrl.toString(), {
+        method: "GET",
+        redirect: "manual",
+        headers: {
+          "user-agent": "Orkestr API-agent web fetch",
+          accept: "text/html,text/plain,application/xhtml+xml",
+        },
+        signal: controller.signal,
+      });
+    } catch (error) {
+      const failed = new Error(error?.name === "AbortError" ? "web_fetch_timeout" : `web_fetch_failed:${clean(error?.message || error)}`);
+      failed.statusCode = error?.name === "AbortError" ? 504 : 502;
+      throw failed;
+    } finally {
+      clearTimeout(timer);
+    }
+    if (![301, 302, 303, 307, 308].includes(Number(response.status))) break;
+    const location = response.headers?.get?.("location");
+    if (!location) break;
+    currentUrl = normalizePublicHttpUrl(location, currentUrl.toString());
+    if (redirect === 4) {
+      const error = new Error("web_fetch_redirect_limit");
+      error.statusCode = 400;
+      throw error;
+    }
+  }
+  if (!response?.ok) {
+    const error = new Error(`web_fetch_http_${response?.status || "unknown"}`);
+    error.statusCode = response?.status || 502;
+    throw error;
+  }
+  const contentType = clean(response.headers?.get?.("content-type")).toLowerCase();
+  if (contentType && !/(text\/html|text\/plain|application\/xhtml\+xml)/i.test(contentType)) {
+    const error = new Error("web_fetch_unsupported_content_type");
+    error.statusCode = 415;
+    throw error;
+  }
+  const buffer = Buffer.from(await response.arrayBuffer());
+  const truncated = buffer.length > maxBytes;
+  const body = buffer.subarray(0, maxBytes).toString("utf8");
+  return {
+    ok: true,
+    url: currentUrl.toString(),
+    requestedUrl: startedUrl.toString(),
+    status: response.status,
+    contentType,
+    truncated,
+    title: extractHtmlTitle(body),
+    text: stripHtmlToText(body, maxChars),
+    links: extractHtmlLinks(body, currentUrl.toString(), maxLinks),
+    fetchedAt: new Date().toISOString(),
+  };
+}
+
 function safeUrl(value = "") {
   const text = clean(value);
   return /^(https?:|\/)/i.test(text) ? text.slice(0, 1000) : "";
+}
+
+function lower(value = "") {
+  return clean(value).toLowerCase();
+}
+
+function falsey(value = "") {
+  return ["0", "false", "off", "no"].includes(lower(value));
+}
+
+function truthy(value = "") {
+  return ["1", "true", "on", "yes"].includes(lower(value));
 }
 
 function principalUserId(principal = {}) {
@@ -540,6 +763,22 @@ export function tenantApiAgentToolDefinitions() {
     },
     {
       type: "function",
+      name: "orkestr_fetch_web_page",
+      description: "Fetch a public HTTP(S) web page and return safe extracted title, text, and links. Use this for current public page content when the user asks to inspect a public site. Do not use it for private, internal, account-only, or authenticated URLs.",
+      parameters: {
+        type: "object",
+        properties: {
+          url: { type: "string", description: "Public http(s) URL to fetch." },
+          maxLinks: { type: "number", description: "Maximum links to return, from 0 to 120." },
+          maxChars: { type: "number", description: "Maximum extracted text characters to return, from 1000 to 40000." },
+        },
+        required: ["url", "maxLinks", "maxChars"],
+        additionalProperties: false,
+      },
+      strict: true,
+    },
+    {
+      type: "function",
       name: "orkestr_list_files",
       description: "List files and directories inside this tenant's allowed file roots.",
       parameters: {
@@ -708,6 +947,9 @@ export async function runTenantApiAgentTool(name = "", args = {}, context = {}, 
   }
   if (tool === "orkestr_run_skill_action") {
     return runSkillAction(args, principal, thread, env, context.fetchImpl || fetch);
+  }
+  if (tool === "orkestr_fetch_web_page") {
+    return fetchPublicWebPage(args, env, context.fetchImpl || fetch);
   }
   if (tool === "orkestr_list_files") {
     return listFilesForPrincipal(clean(args.path), principal, env);

@@ -730,6 +730,35 @@ test("local whatsapp send retries transient text sends when not confirmed", asyn
   assert.equal(sent.id._serialized, "sent-retry");
 });
 
+test("local whatsapp send times out hung browser sends without retrying", async () => {
+  let attempts = 0;
+  const client = {
+    sendMessage() {
+      attempts += 1;
+      return new Promise(() => {});
+    },
+    async getChatById() {
+      return {
+        async fetchMessages() {
+          return [];
+        },
+      };
+    },
+  };
+
+  await assert.rejects(
+    () => sendWhatsAppTextWithConfirmation({
+      client,
+      chatId: "chat-hung",
+      text: "hung send",
+      retryDelayMs: 0,
+      operationTimeoutMs: 10,
+    }),
+    /whatsapp_send_message_timeout/,
+  );
+  assert.equal(attempts, 1);
+});
+
 test("local whatsapp message route fields keep own group echoes on the group chat", () => {
   assert.deepEqual(
     localWhatsAppMessageRouteFields({
@@ -4199,6 +4228,39 @@ test("generated single-account whatsapp groups tolerate missing responder identi
   assert.equal(messages.length, 1);
   assert.equal(messages[0].text, "lid sender");
   assert.equal(messages[0].from, "66378837028965@lid");
+});
+
+test("whatsapp inbound matches saved phone sender against WhatsApp contact ids", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-phone-sender-match-"));
+  const env = externalBridgeEnv(home);
+  await createThread({
+    id: "phone-sender-thread",
+    name: "Phone Sender Thread",
+    binding: {
+      connector: "whatsapp",
+      chatId: "120363425280218500@g.us",
+      displayName: "orkestr.de",
+      enabled: true,
+      senderAccountId: "sender",
+      responderAccountId: "responder",
+      outboundAccountId: "responder",
+      senderContactId: "+4917632400662",
+    },
+  }, env);
+
+  const routed = await routeWhatsAppInbound({
+    eventId: "wa-phone-sender-match",
+    chatId: "120363425280218500@g.us",
+    accountId: "responder",
+    from: "4917632400662@c.us",
+    fromMe: false,
+    text: "route check",
+  }, env);
+  const messages = await listThreadMessages("phone-sender-thread", env);
+
+  assert.equal(routed.threadId, "phone-sender-thread");
+  assert.equal(messages.length, 1);
+  assert.equal(messages[0].text, "route check");
 });
 
 test("legacy allowOtherPeople does not enable additional participants without confirmation", async () => {

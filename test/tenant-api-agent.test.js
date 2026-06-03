@@ -24,6 +24,8 @@ function response(payload, ok = true, status = 200) {
   };
 }
 
+const GENERIC_TOOL_FALLBACK_TEXT = "I can't truthfully complete or claim external browser, workspace, file, or account work from this chat without a tool result. Workspace and live browser execution are not available in this chat right now.";
+
 function tenantContextFromInstructions(instructions = "") {
   const match = String(instructions).match(/Tenant context JSON: (\{.*\})$/m);
   assert.ok(match, "instructions should include tenant context JSON");
@@ -565,6 +567,70 @@ test("tenant api-agent prompt treats connector setup as user-owned", async () =>
   assert.doesNotMatch(instructions, /unless host-level app credentials are missing/i);
 });
 
+test("tenant api-agent prompt hides codex escalation when host codex is disabled", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-api-agent-codex-disabled-prompt-"));
+  const env = await allowSanitizerEnv(home, {
+    ORKESTR_CODEX_BIN: "__orkestr_codex_disabled_public_instance__",
+  });
+  await createThread({
+    id: "otcantest-codex-disabled-prompt",
+    ownerUserId: "otcan",
+    name: "otcantest",
+    runtimeKind: "api-agent",
+    executor: { type: "api-agent", metadata: { runtimeKind: "api-agent" } },
+    binding: { connector: "whatsapp", chatId: "chat-otcan", outboundAccountId: "wa-1" },
+  }, env);
+
+  const thread = await getThread("otcantest-codex-disabled-prompt", env);
+  const instructions = await buildTenantApiAgentInstructions(thread, [], env);
+  const context = tenantContextFromInstructions(instructions);
+
+  assert.equal(context.capabilities.codexEscalation, false);
+  assert.equal(context.capabilities.webFetch, true);
+  assert.match(instructions, /Workspace\/code execution is not available in this chat right now/i);
+  assert.doesNotMatch(instructions, /\/codex/i);
+  assert.doesNotMatch(instructions, /Codex/);
+});
+
+test("tenant api-agent rejects explicit codex escalation when host codex is disabled", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-api-agent-codex-disabled-input-"));
+  const env = await allowSanitizerEnv(home, {
+    ORKESTR_CODEX_BIN: "__orkestr_codex_disabled_public_instance__",
+  });
+  await createThread({
+    id: "otcantest-codex-disabled-input",
+    ownerUserId: "otcan",
+    name: "otcantest",
+    runtimeKind: "api-agent",
+    executor: { type: "api-agent", metadata: { runtimeKind: "api-agent" } },
+    binding: { connector: "whatsapp", chatId: "chat-otcan", outboundAccountId: "wa-1" },
+  }, env);
+  const input = await enqueueThreadInputForPrincipal("otcantest-codex-disabled-input", {
+    text: "/codex fetch the top trending topics",
+    source: "whatsapp_inbound",
+    connector: "whatsapp",
+    chatId: "chat-otcan",
+    accountId: "wa-1",
+  }, userPrincipal({ id: "otcan", role: "user" }), env);
+
+  const result = await processApiAgentThreadInput("otcantest-codex-disabled-input", env, {
+    fetchImpl: async () => {
+      throw new Error("openai_should_not_be_called");
+    },
+  });
+  const messages = await listThreadMessages("otcantest-codex-disabled-input", env);
+  const current = messages.find((message) => message.id === input.id);
+  const assistant = messages.find((message) => message.parentMessageId === input.id);
+
+  assert.equal(result.ok, true);
+  assert.equal(result.codexUnavailable, true);
+  assert.equal(current.state, "completed");
+  assert.equal(current.deliveryState, "api_agent_completed");
+  assert.match(assistant.text, /cannot start a workspace worker/i);
+  assert.doesNotMatch(assistant.text, /\/codex/i);
+  assert.doesNotMatch(assistant.text, /Codex/i);
+});
+
 test("tenant api-agent routes missing Gmail status through OpenAI with user-owned setup guidance", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-api-agent-gmail-status-"));
   const env = await allowSanitizerEnv(home);
@@ -630,6 +696,70 @@ test("tenant api-agent routes missing Gmail status through OpenAI with user-owne
   assert.match(assistant.text, /not connected for this chat/i);
   assert.match(assistant.text, /set it up here/i);
   assert.doesNotMatch(assistant.text, /Orkestr UI|Orkestr admin|Orkestr administrator|admin note|send your admin/i);
+});
+
+test("tenant api-agent formats Gmail status tool output when model falls back generically", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-api-agent-gmail-status-fallback-"));
+  const env = await allowSanitizerEnv(home);
+  await writeConnectorConfig("gmail", {
+    clientId: "gmail-client",
+    clientSecret: "gmail-secret",
+    redirectUri: "http://localhost/oauth/gmail/callback",
+  }, env);
+  await createThread({
+    id: "otcantest-gmail-status-fallback",
+    ownerUserId: "otcan",
+    name: "otcantest",
+    runtimeKind: "api-agent",
+    executor: { type: "api-agent", metadata: { runtimeKind: "api-agent" } },
+    binding: { connector: "whatsapp", chatId: "chat-otcan", outboundAccountId: "wa-1" },
+  }, env);
+  await enqueueThreadInputForPrincipal("otcantest-gmail-status-fallback", {
+    text: "Is Gmail connected for this chat?",
+    source: "whatsapp_inbound",
+    connector: "whatsapp",
+    chatId: "chat-otcan",
+    accountId: "wa-1",
+  }, userPrincipal({ id: "otcan", role: "user" }), env);
+
+  const calls = [];
+  const result = await processApiAgentThreadInput("otcantest-gmail-status-fallback", env, {
+    fetchImpl: async (_url, options) => {
+      calls.push(JSON.parse(options.body));
+      if (calls.length === 1) {
+        return response({
+          id: "resp_gmail_status_fallback_1",
+          model: "gpt-5-mini",
+          output_text: "",
+          output: [{
+            type: "function_call",
+            name: "orkestr_connector_status",
+            call_id: "call_gmail_status_fallback",
+            arguments: JSON.stringify({ provider: "gmail" }),
+          }],
+          usage: { input_tokens: 180, output_tokens: 10 },
+        });
+      }
+      const toolOutput = JSON.parse(calls[1].input.at(-1).output);
+      assert.equal(toolOutput.provider, "gmail");
+      assert.equal(toolOutput.state, "not_connected");
+      return response({
+        id: "resp_gmail_status_fallback_2",
+        model: "gpt-5-mini",
+        output_text: GENERIC_TOOL_FALLBACK_TEXT,
+        output: [],
+        usage: { input_tokens: 220, output_tokens: 18 },
+      });
+    },
+  });
+  const messages = await listThreadMessages("otcantest-gmail-status-fallback", env);
+  const assistant = messages.find((message) => message.role === "assistant");
+
+  assert.equal(result.ok, true);
+  assert.equal(calls.length, 2);
+  assert.match(assistant.text, /Gmail is not connected for this chat/i);
+  assert.match(assistant.text, /start the Gmail sign-in flow|set it up/i);
+  assert.doesNotMatch(assistant.text, /without a tool result|Workspace and live browser/i);
 });
 
 test("tenant api-agent lets OpenAI start Gmail auth from a connector follow-up", async () => {
@@ -774,6 +904,65 @@ test("tenant api-agent lets OpenAI explain missing Gmail app config without admi
   assert.equal(result.ok, true);
   assert.equal(assistant.text, "Gmail setup is not available on this Orkestr installation yet.");
   assert.doesNotMatch(assistant.text, /Ask me to connect Gmail|platform level|not right now|admin note|send your admin/i);
+});
+
+test("tenant api-agent formats Gmail auth tool output when model falls back generically", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-api-agent-gmail-auth-fallback-"));
+  const env = await allowSanitizerEnv(home);
+  await upsertUser({ id: "otcan", role: "user", displayName: "Otcan" }, env);
+  await createThread({
+    id: "otcantest-gmail-auth-fallback",
+    ownerUserId: "otcan",
+    name: "otcantest",
+    runtimeKind: "api-agent",
+    executor: { type: "api-agent", metadata: { runtimeKind: "api-agent" } },
+    binding: { connector: "whatsapp", chatId: "chat-otcan", outboundAccountId: "wa-1" },
+  }, env);
+  await enqueueThreadInputForPrincipal("otcantest-gmail-auth-fallback", {
+    text: "Connect Gmail for me.",
+    source: "whatsapp_inbound",
+    connector: "whatsapp",
+    chatId: "chat-otcan",
+    accountId: "wa-1",
+  }, userPrincipal({ id: "otcan", role: "user" }), env);
+
+  const calls = [];
+  const result = await processApiAgentThreadInput("otcantest-gmail-auth-fallback", env, {
+    fetchImpl: async (_url, options) => {
+      calls.push(JSON.parse(options.body));
+      if (calls.length === 1) {
+        return response({
+          id: "resp_gmail_auth_fallback_1",
+          model: "gpt-5-mini",
+          output_text: "",
+          output: [{
+            type: "function_call",
+            name: "orkestr_start_connector_auth",
+            call_id: "call_gmail_auth_fallback",
+            arguments: JSON.stringify({ provider: "gmail", account: "", shop: "" }),
+          }],
+          usage: { input_tokens: 180, output_tokens: 12 },
+        });
+      }
+      const toolOutput = JSON.parse(calls[1].input.at(-1).output);
+      assert.equal(toolOutput.ok, false);
+      assert.equal(toolOutput.error, "gmail_oauth_config_required");
+      return response({
+        id: "resp_gmail_auth_fallback_2",
+        model: "gpt-5-mini",
+        output_text: GENERIC_TOOL_FALLBACK_TEXT,
+        output: [],
+        usage: { input_tokens: 220, output_tokens: 8 },
+      });
+    },
+  });
+  const messages = await listThreadMessages("otcantest-gmail-auth-fallback", env);
+  const assistant = messages.filter((message) => message.role === "assistant").at(-1);
+
+  assert.equal(result.ok, true);
+  assert.match(assistant.text, /Gmail sign-in is not available yet/i);
+  assert.match(assistant.text, /parent app configuration is missing/i);
+  assert.doesNotMatch(assistant.text, /without a tool result|Workspace and live browser/i);
 });
 
 test("tenant api-agent drains queued tenant messages while it owns the lock", async () => {
@@ -1607,6 +1796,566 @@ test("tenant api-agent answers desktop action requests from skill action tool re
   assert.match(assistant.text, /opened the LinkedIn managed desktop/i);
   assert.match(assistant.text, /cannot verify whether you are logged in/i);
   assert.notEqual(assistant.text.trim(), "Done.");
+});
+
+test("tenant api-agent formats LinkedIn desktop tool output when model falls back generically", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-api-agent-linkedin-action-fallback-"));
+  const env = await allowSanitizerEnv(home, {
+    ORKESTR_BROWSER_DESKTOP_MODE: "profiles",
+    ORKESTR_BROWSER_VISIBLE_SLUGS: "linkedin",
+    ORKESTR_BROWSER_LAUNCH_DISABLED: "1",
+  });
+  await upsertUser({ id: "otcan", role: "user", displayName: "Otcan" }, env);
+  await createThread({
+    id: "otcantest-linkedin-action-fallback",
+    ownerUserId: "otcan",
+    name: "otcantest",
+    runtimeKind: "api-agent",
+    executor: { type: "api-agent", metadata: { runtimeKind: "api-agent" } },
+    binding: { connector: "whatsapp", chatId: "chat-otcan", outboundAccountId: "wa-1" },
+  }, env);
+  await enqueueThreadInputForPrincipal("otcantest-linkedin-action-fallback", {
+    text: "Open LinkedIn. Am I logged in?",
+    source: "whatsapp_inbound",
+    connector: "whatsapp",
+    chatId: "chat-otcan",
+    accountId: "wa-1",
+  }, userPrincipal({ id: "otcan", role: "user" }), env);
+
+  const calls = [];
+  const result = await processApiAgentThreadInput("otcantest-linkedin-action-fallback", env, {
+    fetchImpl: async (_url, options) => {
+      calls.push(JSON.parse(options.body));
+      if (calls.length === 1) {
+        return response({
+          id: "resp_linkedin_action_fallback_1",
+          model: "gpt-5-mini",
+          output_text: "",
+          output: [
+            {
+              type: "function_call",
+              name: "orkestr_list_skill_actions",
+              call_id: "call_skill_actions_fallback",
+              arguments: JSON.stringify({ skillId: "linkedin" }),
+            },
+            {
+              type: "function_call",
+              name: "orkestr_run_skill_action",
+              call_id: "call_skill_open_fallback",
+              arguments: JSON.stringify({ skillId: "linkedin", action: "open", target: "", url: "" }),
+            },
+          ],
+          usage: { input_tokens: 300, output_tokens: 30 },
+        });
+      }
+      const toolOutputs = calls[1].input
+        .filter((item) => item.type === "function_call_output")
+        .map((item) => JSON.parse(item.output));
+      assert.equal(toolOutputs[0].skills[0].id, "linkedin");
+      assert.equal(toolOutputs[1].ok, true);
+      assert.equal(toolOutputs[1].desktop.slug, "linkedin");
+      return response({
+        id: "resp_linkedin_action_fallback_2",
+        model: "gpt-5-mini",
+        output_text: GENERIC_TOOL_FALLBACK_TEXT,
+        output: [],
+        usage: { input_tokens: 450, output_tokens: 32 },
+      });
+    },
+  });
+  const messages = await listThreadMessages("otcantest-linkedin-action-fallback", env);
+  const assistant = messages.find((message) => message.role === "assistant");
+
+  assert.equal(result.ok, true);
+  assert.equal(calls.length, 2);
+  assert.match(assistant.text, /LinkedIn/i);
+  assert.match(assistant.text, /is open/i);
+  assert.match(assistant.text, /does not report login state/i);
+  assert.doesNotMatch(assistant.text, /without a tool result|Workspace and live browser/i);
+  assert.notEqual(assistant.text.trim(), "Done.");
+});
+
+test("tenant api-agent confirmation of offered browser action cannot finalize as Done", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-api-agent-browser-confirmation-"));
+  const env = await allowSanitizerEnv(home, {
+    ORKESTR_BROWSER_DESKTOP_MODE: "profiles",
+    ORKESTR_BROWSER_VISIBLE_SLUGS: "linkedin",
+    ORKESTR_BROWSER_LAUNCH_DISABLED: "1",
+  });
+  await upsertUser({ id: "otcan", role: "user", displayName: "Otcan" }, env);
+  await createThread({
+    id: "otcantest-browser-confirmation",
+    ownerUserId: "otcan",
+    name: "otcantest",
+    runtimeKind: "api-agent",
+    executor: { type: "api-agent", metadata: { runtimeKind: "api-agent" } },
+    binding: { connector: "whatsapp", chatId: "chat-otcan", outboundAccountId: "wa-1" },
+  }, env);
+  await appendThreadMessage("otcantest-browser-confirmation", {
+    role: "user",
+    source: "whatsapp_inbound",
+    text: "Great. Can you check Ekşisözlük and tell me the trending topics today?",
+    state: "completed",
+    connector: "whatsapp",
+    chatId: "chat-otcan",
+    accountId: "wa-1",
+  }, env);
+  await appendThreadMessage("otcantest-browser-confirmation", {
+    role: "assistant",
+    source: "api-agent",
+    phase: "final_answer",
+    text: "Sure — I can do that. I can open your managed browser desk (LinkedIn Browser Desk) to visit eksisozluk.com and gather today's trending topics and top entries.\n\nShall I open the desktop and fetch the trends now? It'll take ~30-60 seconds. Also tell me if you want translations into English.",
+    state: "completed",
+    connector: "whatsapp",
+    chatId: "chat-otcan",
+    accountId: "wa-1",
+  }, env);
+  const input = await enqueueThreadInputForPrincipal("otcantest-browser-confirmation", {
+    text: "Yes. And yes.",
+    source: "whatsapp_inbound",
+    connector: "whatsapp",
+    chatId: "chat-otcan",
+    accountId: "wa-1",
+  }, userPrincipal({ id: "otcan", role: "user" }), env);
+
+  const calls = [];
+  const result = await processApiAgentThreadInput("otcantest-browser-confirmation", env, {
+    fetchImpl: async (_url, options) => {
+      const body = JSON.parse(options.body);
+      calls.push(body);
+      if (calls.length === 1) {
+        assert.match(body.instructions, /Pending action confirmation/i);
+        return response({
+          id: "resp_browser_confirmation_1",
+          model: "gpt-5-mini",
+          output_text: "Done.",
+          output: [],
+          usage: { input_tokens: 420, output_tokens: 2 },
+        });
+      }
+      if (calls.length === 2) {
+        assert.match(body.instructions, /Action confirmation retry/i);
+        assert.equal(body.tools.some((tool) => tool.name === "orkestr_list_skill_actions"), true);
+        assert.equal(body.tools.some((tool) => tool.name === "orkestr_run_skill_action"), true);
+        return response({
+          id: "resp_browser_confirmation_retry",
+          model: "gpt-5-mini",
+          output_text: "",
+          output: [
+            {
+              type: "function_call",
+              name: "orkestr_list_skill_actions",
+              call_id: "call_browser_actions",
+              arguments: JSON.stringify({ skillId: "linkedin" }),
+            },
+            {
+              type: "function_call",
+              name: "orkestr_run_skill_action",
+              call_id: "call_browser_open_url",
+              arguments: JSON.stringify({ skillId: "linkedin", action: "open_url", target: "", url: "https://eksisozluk.com/" }),
+            },
+          ],
+          usage: { input_tokens: 520, output_tokens: 42 },
+        });
+      }
+      const toolOutputs = body.input
+        .filter((item) => item.type === "function_call_output")
+        .map((item) => JSON.parse(item.output));
+      assert.equal(toolOutputs[0].skills[0].availableActions.includes("open_url"), true);
+      assert.equal(toolOutputs[1].ok, true);
+      assert.equal(toolOutputs[1].openedUrl, "https://eksisozluk.com/");
+      return response({
+        id: "resp_browser_confirmation_2",
+        model: "gpt-5-mini",
+        output_text: "I opened the managed desktop to https://eksisozluk.com/. I can’t truthfully say I gathered today’s trending topics or translations from this chat, because the available desktop action only confirms that the URL was opened. Send the task with /codex for browser/content work.",
+        output: [],
+        usage: { input_tokens: 620, output_tokens: 48 },
+      });
+    },
+  });
+  const messages = await listThreadMessages("otcantest-browser-confirmation", env);
+  const current = messages.find((message) => message.id === input.id);
+  const assistant = messages.find((message) => message.parentMessageId === input.id);
+
+  assert.equal(result.ok, true);
+  assert.equal(calls.length, 3);
+  assert.equal(current.state, "completed");
+  assert.match(assistant.text, /opened the managed desktop/i);
+  assert.match(assistant.text, /eksisozluk\.com/i);
+  assert.match(assistant.text, /\/codex/i);
+  assert.doesNotMatch(assistant.text, /^Done\.?$/i);
+});
+
+test("tenant api-agent repairs bare confirmation replies when no action is pending", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-api-agent-bare-confirmation-"));
+  const env = await allowSanitizerEnv(home);
+  await upsertUser({ id: "otcan", role: "user", displayName: "Otcan" }, env);
+  await createThread({
+    id: "otcantest-bare-confirmation",
+    ownerUserId: "otcan",
+    name: "otcantest",
+    runtimeKind: "api-agent",
+    executor: { type: "api-agent", metadata: { runtimeKind: "api-agent" } },
+    binding: { connector: "whatsapp", chatId: "chat-otcan", outboundAccountId: "wa-1" },
+  }, env);
+  await appendThreadMessage("otcantest-bare-confirmation", {
+    role: "assistant",
+    source: "api-agent",
+    phase: "final_answer",
+    text: "I can help in this chat. Tell me what you want to do, and if it needs workspace execution send the task with /codex.",
+    state: "completed",
+    connector: "whatsapp",
+    chatId: "chat-otcan",
+    accountId: "wa-1",
+  }, env);
+  const input = await enqueueThreadInputForPrincipal("otcantest-bare-confirmation", {
+    text: "Yes. And yes.",
+    source: "whatsapp_inbound",
+    connector: "whatsapp",
+    chatId: "chat-otcan",
+    accountId: "wa-1",
+  }, userPrincipal({ id: "otcan", role: "user" }), env);
+
+  const calls = [];
+  const result = await processApiAgentThreadInput("otcantest-bare-confirmation", env, {
+    fetchImpl: async (_url, options) => {
+      const body = JSON.parse(options.body);
+      calls.push(body);
+      if (calls.length === 1) {
+        return response({
+          id: "resp_bare_confirmation_1",
+          model: "gpt-5-mini",
+          output_text: "Done.",
+          output: [],
+          usage: { input_tokens: 180, output_tokens: 2 },
+        });
+      }
+      assert.equal(body.tools, undefined);
+      assert.match(body.instructions, /Response repair/i);
+      assert.match(body.instructions, /only a confirmation/i);
+      return response({
+        id: "resp_bare_confirmation_2",
+        model: "gpt-5-mini",
+        output_text: "I don’t have a concrete action to complete from that confirmation alone. Tell me the specific task you want, and use /codex if it needs browser or workspace execution.",
+        output: [],
+        usage: { input_tokens: 260, output_tokens: 34 },
+      });
+    },
+  });
+  const messages = await listThreadMessages("otcantest-bare-confirmation", env);
+  const assistant = messages.find((message) => message.parentMessageId === input.id);
+
+  assert.equal(result.ok, true);
+  assert.equal(calls.length, 2);
+  assert.match(assistant.text, /specific task/i);
+  assert.match(assistant.text, /\/codex/i);
+  assert.doesNotMatch(assistant.text, /^Done\.?$/i);
+});
+
+test("tenant api-agent repairs unconfirmed action promises for bare confirmations", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-api-agent-bare-confirmation-promise-"));
+  const env = await allowSanitizerEnv(home);
+  await upsertUser({ id: "otcan", role: "user", displayName: "Otcan" }, env);
+  await createThread({
+    id: "otcantest-bare-confirmation-promise",
+    ownerUserId: "otcan",
+    name: "otcantest",
+    runtimeKind: "api-agent",
+    executor: { type: "api-agent", metadata: { runtimeKind: "api-agent" } },
+    binding: { connector: "whatsapp", chatId: "chat-otcan", outboundAccountId: "wa-1" },
+  }, env);
+  await appendThreadMessage("otcantest-bare-confirmation-promise", {
+    role: "assistant",
+    source: "api-agent",
+    phase: "final_answer",
+    text: "I can help in this chat. Tell me what you want to do, and if it needs workspace execution send the task with /codex.",
+    state: "completed",
+    connector: "whatsapp",
+    chatId: "chat-otcan",
+    accountId: "wa-1",
+  }, env);
+  const input = await enqueueThreadInputForPrincipal("otcantest-bare-confirmation-promise", {
+    text: "Yes. And yes.",
+    source: "whatsapp_inbound",
+    connector: "whatsapp",
+    chatId: "chat-otcan",
+    accountId: "wa-1",
+  }, userPrincipal({ id: "otcan", role: "user" }), env);
+
+  const calls = [];
+  const result = await processApiAgentThreadInput("otcantest-bare-confirmation-promise", env, {
+    fetchImpl: async (_url, options) => {
+      const body = JSON.parse(options.body);
+      calls.push(body);
+      if (calls.length === 1) {
+        return response({
+          id: "resp_bare_confirmation_promise_1",
+          model: "gpt-5-mini",
+          output_text: "Great — I’ll open the managed browser, visit eksisozluk.com, collect today’s trending topics and top entries, and translate them into English. Which output do you want? Reply A, B, or C.",
+          output: [],
+          usage: { input_tokens: 220, output_tokens: 44 },
+        });
+      }
+      assert.equal(body.tools, undefined);
+      assert.match(body.instructions, /do not promise future browser or workspace work/i);
+      return response({
+        id: "resp_bare_confirmation_promise_2",
+        model: "gpt-5-mini",
+        output_text: "I do not have a confirmed action to complete from that message alone. Tell me the specific task you want, and if it needs browser or workspace execution send it with /codex.",
+        output: [],
+        usage: { input_tokens: 300, output_tokens: 35 },
+      });
+    },
+  });
+  const messages = await listThreadMessages("otcantest-bare-confirmation-promise", env);
+  const assistant = messages.find((message) => message.parentMessageId === input.id);
+
+  assert.equal(result.ok, true);
+  assert.equal(calls.length, 2);
+  assert.match(assistant.text, /specific task/i);
+  assert.match(assistant.text, /\/codex/i);
+  assert.doesNotMatch(assistant.text, /collect today/i);
+  assert.doesNotMatch(assistant.text, /Reply A, B, or C/i);
+});
+
+test("tenant api-agent repairs browser research promises without tool evidence", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-api-agent-browser-promise-"));
+  const env = await allowSanitizerEnv(home, {
+    ORKESTR_API_AGENT_WEB_FETCH_ENABLED: "0",
+  });
+  await upsertUser({ id: "otcan", role: "user", displayName: "Otcan" }, env);
+  await createThread({
+    id: "otcantest-browser-promise",
+    ownerUserId: "otcan",
+    name: "otcantest",
+    runtimeKind: "api-agent",
+    executor: { type: "api-agent", metadata: { runtimeKind: "api-agent" } },
+    binding: { connector: "whatsapp", chatId: "chat-otcan", outboundAccountId: "wa-1" },
+  }, env);
+  const input = await enqueueThreadInputForPrincipal("otcantest-browser-promise", {
+    text: "Great. Can you check Ekşisözlük and tell me the trending topics today?",
+    source: "whatsapp_inbound",
+    connector: "whatsapp",
+    chatId: "chat-otcan",
+    accountId: "wa-1",
+  }, userPrincipal({ id: "otcan", role: "user" }), env);
+
+  const calls = [];
+  const result = await processApiAgentThreadInput("otcantest-browser-promise", env, {
+    fetchImpl: async (_url, options) => {
+      const body = JSON.parse(options.body);
+      calls.push(body);
+      if (calls.length === 1) {
+        return response({
+          id: "resp_browser_promise_1",
+          model: "gpt-5-mini",
+          output_text: "I can. The Managed LinkedIn Browser Desk is available and can open eksisozluk.com, collect today’s trending topics and translate them to English. To actually run the browser and fetch the results, resend this request prefixed with /codex.",
+          output: [],
+          usage: { input_tokens: 260, output_tokens: 43 },
+        });
+      }
+      assert.equal(body.tools, undefined);
+      assert.match(body.instructions, /no tool result confirms completed work/i);
+      return response({
+        id: "resp_browser_promise_2",
+        model: "gpt-5-mini",
+        output_text: "I can’t gather live page contents from this chat without a browser/workspace run. Send the task with /codex so a Codex worker can open the page and report the results.",
+        output: [],
+        usage: { input_tokens: 330, output_tokens: 34 },
+      });
+    },
+  });
+  const messages = await listThreadMessages("otcantest-browser-promise", env);
+  const assistant = messages.find((message) => message.parentMessageId === input.id);
+
+  assert.equal(result.ok, true);
+  assert.equal(calls.length, 2);
+  assert.match(assistant.text, /\/codex/i);
+  assert.match(assistant.text, /external browser/i);
+  assert.doesNotMatch(assistant.text, /collect today/i);
+  assert.doesNotMatch(assistant.text, /Managed LinkedIn Browser Desk/i);
+});
+
+test("tenant api-agent does not suggest codex when browser execution is disabled", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-api-agent-browser-promise-codex-disabled-"));
+  const env = await allowSanitizerEnv(home, {
+    ORKESTR_CODEX_BIN: "__orkestr_codex_disabled_public_instance__",
+    ORKESTR_API_AGENT_WEB_FETCH_ENABLED: "0",
+  });
+  await upsertUser({ id: "otcan", role: "user", displayName: "Otcan" }, env);
+  await createThread({
+    id: "otcantest-browser-promise-codex-disabled",
+    ownerUserId: "otcan",
+    name: "otcantest",
+    runtimeKind: "api-agent",
+    executor: { type: "api-agent", metadata: { runtimeKind: "api-agent" } },
+    binding: { connector: "whatsapp", chatId: "chat-otcan", outboundAccountId: "wa-1" },
+  }, env);
+  const input = await enqueueThreadInputForPrincipal("otcantest-browser-promise-codex-disabled", {
+    text: "Can you check Ekşisözlük and tell me the trending topics today?",
+    source: "whatsapp_inbound",
+    connector: "whatsapp",
+    chatId: "chat-otcan",
+    accountId: "wa-1",
+  }, userPrincipal({ id: "otcan", role: "user" }), env);
+
+  const calls = [];
+  const result = await processApiAgentThreadInput("otcantest-browser-promise-codex-disabled", env, {
+    fetchImpl: async (_url, options) => {
+      const body = JSON.parse(options.body);
+      calls.push(body);
+      assert.doesNotMatch(body.instructions, /\/codex/i);
+      if (calls.length === 1) {
+        return response({
+          id: "resp_browser_promise_codex_disabled_1",
+          model: "gpt-5-mini",
+          output_text: "I can open the browser and collect today’s trending topics. Send the request with /codex to run it.",
+          output: [],
+          usage: { input_tokens: 260, output_tokens: 28 },
+        });
+      }
+      return response({
+        id: "resp_browser_promise_codex_disabled_2",
+        model: "gpt-5-mini",
+        output_text: "Send it with /codex so I can run a browser worker.",
+        output: [],
+        usage: { input_tokens: 330, output_tokens: 16 },
+      });
+    },
+  });
+  const messages = await listThreadMessages("otcantest-browser-promise-codex-disabled", env);
+  const assistant = messages.find((message) => message.parentMessageId === input.id);
+
+  assert.equal(result.ok, true);
+  assert.equal(calls.length, 2);
+  assert.match(assistant.text, /not available in this chat right now/i);
+  assert.doesNotMatch(assistant.text, /\/codex/i);
+  assert.doesNotMatch(assistant.text, /collect today/i);
+});
+
+test("tenant api-agent web fetch tool extracts public page links safely", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-api-agent-web-fetch-tool-"));
+  const env = {
+    ORKESTR_HOME: home,
+    ORKESTR_API_AGENT_WEB_FETCH_SKIP_DNS_CHECK: "1",
+  };
+  const html = [
+    "<!doctype html>",
+    "<html>",
+    "<head><title>gundem - eksi sozluk</title></head>",
+    "<body>",
+    "<a href=\"/robert-lewandowski--123\"><span>robert lewandowski</span><small>190</small></a>",
+    "<a href=\"/yalnizligin-en-cok-koydugu-an--456\">yalnizligin en cok koydugu an <small>87</small></a>",
+    "<a href=\"javascript:void(0)\">skip me</a>",
+    "</body>",
+    "</html>",
+  ].join("");
+  const principal = userPrincipal({ id: "otcan", role: "user" });
+  const seen = [];
+
+  const result = await runTenantApiAgentTool("orkestr_fetch_web_page", {
+    url: "https://eksisozluk.com/basliklar/gundem",
+    maxLinks: 10,
+    maxChars: 2000,
+  }, {
+    principal,
+    fetchImpl: async (url, options) => {
+      seen.push({ url: String(url), options });
+      return new Response(html, {
+        status: 200,
+        headers: { "content-type": "text/html; charset=utf-8" },
+      });
+    },
+  }, env);
+
+  assert.equal(seen.length, 1);
+  assert.equal(seen[0].url, "https://eksisozluk.com/basliklar/gundem");
+  assert.equal(seen[0].options.redirect, "manual");
+  assert.equal(result.ok, true);
+  assert.equal(result.title, "gundem - eksi sozluk");
+  assert.equal(result.links.length, 2);
+  assert.equal(result.links[0].text, "robert lewandowski");
+  assert.equal(result.links[0].count, 190);
+  assert.equal(result.links[1].count, 87);
+  assert.match(result.links[0].url, /^https:\/\/eksisozluk\.com\/robert-lewandowski--123$/);
+  assert.match(result.text, /robert lewandowski/);
+});
+
+test("tenant api-agent web fetch tool rejects private hosts", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-api-agent-web-fetch-private-"));
+  const env = { ORKESTR_HOME: home };
+  const principal = userPrincipal({ id: "otcan", role: "user" });
+
+  await assert.rejects(
+    () => runTenantApiAgentTool("orkestr_fetch_web_page", {
+      url: "http://127.0.0.1:18912/api/threads",
+      maxLinks: 10,
+      maxChars: 2000,
+    }, { principal }, env),
+    /url_host_forbidden/,
+  );
+});
+
+test("tenant api-agent answers public web topic requests from web fetch tool output", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-api-agent-web-fetch-answer-"));
+  const env = await allowSanitizerEnv(home, {
+    ORKESTR_CODEX_BIN: "__orkestr_codex_disabled_public_instance__",
+    ORKESTR_API_AGENT_WEB_FETCH_SKIP_DNS_CHECK: "1",
+  });
+  await upsertUser({ id: "otcan", role: "user", displayName: "Otcan" }, env);
+  await createThread({
+    id: "otcantest-web-fetch-answer",
+    ownerUserId: "otcan",
+    name: "otcantest",
+    runtimeKind: "api-agent",
+    executor: { type: "api-agent", metadata: { runtimeKind: "api-agent" } },
+    binding: { connector: "whatsapp", chatId: "chat-otcan", outboundAccountId: "wa-1" },
+  }, env);
+  const input = await enqueueThreadInputForPrincipal("otcantest-web-fetch-answer", {
+    text: "Can you check Eksi Sozluk and tell me the top 3 gundem topics today?",
+    source: "whatsapp_inbound",
+    connector: "whatsapp",
+    chatId: "chat-otcan",
+    accountId: "wa-1",
+  }, userPrincipal({ id: "otcan", role: "user" }), env);
+
+  const html = [
+    "<!doctype html>",
+    "<html><head><title>gundem - eksi sozluk</title></head><body>",
+    "<a href=\"/robert-lewandowski--123\">robert lewandowski <small>190</small></a>",
+    "<a href=\"/yalnizligin-en-cok-koydugu-an--456\">yalnizligin en cok koydugu an <small>87</small></a>",
+    "<a href=\"/minyon-kadin-agresifligi--789\">minyon kadin agresifligi <small>97</small></a>",
+    "</body></html>",
+  ].join("");
+  const openAiCalls = [];
+  const webFetchCalls = [];
+
+  const result = await processApiAgentThreadInput("otcantest-web-fetch-answer", env, {
+    fetchImpl: async (url, options = {}) => {
+      if (String(url).includes("/responses")) {
+        openAiCalls.push(JSON.parse(options.body));
+        throw new Error("openai_should_not_be_called_for_direct_web_fetch");
+      }
+      webFetchCalls.push(String(url));
+      return new Response(html, {
+        status: 200,
+        headers: { "content-type": "text/html; charset=utf-8" },
+      });
+    },
+  });
+  const messages = await listThreadMessages("otcantest-web-fetch-answer", env);
+  const assistant = messages.find((message) => message.parentMessageId === input.id);
+
+  assert.equal(result.ok, true);
+  assert.equal(openAiCalls.length, 0);
+  assert.deepEqual(webFetchCalls, ["https://eksisozluk.com/basliklar/gundem"]);
+  assert.equal(assistant.source, "api-agent");
+  assert.match(assistant.text, /Top counted items I found/i);
+  assert.match(assistant.text, /robert lewandowski \(190\)/i);
+  assert.match(assistant.text, /yalnizligin en cok koydugu an \(87\)/i);
+  assert.match(assistant.text, /minyon kadin agresifligi \(97\)/i);
+  assert.doesNotMatch(assistant.text, /\/codex/i);
+  assert.doesNotMatch(assistant.text, /Codex/i);
 });
 
 test("tenant api-agent records manual usage summaries", async () => {

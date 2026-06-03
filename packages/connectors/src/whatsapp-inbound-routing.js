@@ -7,7 +7,12 @@ function pickString(...values) {
 }
 
 export function comparableParticipantId(value) {
-  return pickString(value).toLowerCase();
+  const raw = pickString(value).toLowerCase();
+  const withoutPrefix = raw.replace(/^whatsapp:/, "");
+  const withoutContactDomain = withoutPrefix.replace(/@(c\.us|s\.whatsapp\.net)$/i, "");
+  const compactPhone = withoutContactDomain.replace(/[()\s.-]+/g, "");
+  const phoneLike = compactPhone.match(/^\+?([0-9]{5,})$/);
+  return phoneLike ? phoneLike[1] : raw;
 }
 
 export function participantIdSet(values = []) {
