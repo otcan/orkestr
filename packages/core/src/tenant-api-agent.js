@@ -482,6 +482,22 @@ function webFetchIssue(output = {}) {
   return "the public fetch did not return useful page contents";
 }
 
+function publicAppBaseUrl(env = process.env) {
+  return clean(env.ORKESTR_PUBLIC_URL || env.ORKESTR_APP_URL || env.ORKESTR_PUBLIC_HTTPS_URL || env.ORKESTR_CONNECT_PUBLIC_URL);
+}
+
+function publicFacingUrl(value = "", env = process.env) {
+  const raw = clean(value);
+  if (!raw || !raw.startsWith("/")) return raw;
+  const base = publicAppBaseUrl(env);
+  if (!base) return raw;
+  try {
+    return new URL(raw, base).toString();
+  } catch {
+    return raw;
+  }
+}
+
 function defaultManagedDesktopSlug(env = process.env) {
   return clean(env.ORKESTR_DEFAULT_DESKTOP_SLUG || env.ORKESTR_MANUAL_INTERVENTION_DESKTOP_SLUG || "desktop");
 }
@@ -511,7 +527,7 @@ async function openPublicWebFetchInDesktop({ target, output, thread, principal, 
   }
   const desktop = opened.desktop || {};
   const desktopLabel = clean(desktop.label || desktop.slug || "the managed desktop");
-  const openedUrl = clean(opened.openedUrl || opened.url || target?.url);
+  const openedUrl = publicFacingUrl(opened.openedUrl || opened.url || target?.url, env);
   return [
     `I couldn't fetch useful page contents from this chat (${webFetchIssue(output)}), so I opened ${openedUrl || clean(target?.url)} in ${desktopLabel}.`,
     "The desktop action only confirms that the URL was opened; it does not return page contents or login state.",
@@ -542,7 +558,7 @@ async function runDirectManagedDesktopAction({ request, thread, principal, messa
   }
   const desktop = output.desktop || {};
   const label = clean(desktop.label || desktop.slug || "Managed Desktop");
-  const url = clean(output.openedUrl || output.url || desktop.url);
+  const url = publicFacingUrl(output.openedUrl || output.url || desktop.url, env);
   const lines = [`${label} is open${url ? ` at ${url}` : ""}.`];
   if (/\blogged\s*in|login|signed\s*in/i.test(clean(message?.text))) {
     lines.push("The tool result only confirms the desktop action; it does not report login state, so I cannot confirm whether you are logged in.");
@@ -643,7 +659,8 @@ function formatSkillActionsTool(result = {}, context = {}) {
     if (actions.length) lines.push(`Available actions: ${actions.join(", ")}.`);
     const desktops = Array.isArray(skill.desktops) ? skill.desktops : [];
     for (const desktop of desktops.slice(0, 2)) {
-      lines.push(`${clean(desktop.label || desktop.slug || "Desktop")} is ${clean(desktop.state || desktop.status || "unknown")}${clean(desktop.url) ? ` at ${clean(desktop.url)}` : ""}.`);
+      const url = publicFacingUrl(desktop.url, context.env);
+      lines.push(`${clean(desktop.label || desktop.slug || "Desktop")} is ${clean(desktop.state || desktop.status || "unknown")}${url ? ` at ${url}` : ""}.`);
     }
   }
   if (/\blogged\s*in|login|signed\s*in/i.test(clean(context.message?.text))) {
@@ -663,7 +680,7 @@ function formatRunSkillActionTool(result = {}, context = {}) {
   }
   const desktop = output.desktop || {};
   const desktopLabel = clean(desktop.label || desktop.slug || label);
-  const url = clean(output.openedUrl || output.url || desktop.url);
+  const url = publicFacingUrl(output.openedUrl || output.url || desktop.url, context.env);
   const lines = [];
   if (action === "open_url") lines.push(`I opened ${url || "the requested URL"} in ${desktopLabel}.`);
   else if (action === "open" || action === "start") lines.push(`${desktopLabel} is open${url ? ` at ${url}` : ""}.`);
@@ -1263,7 +1280,7 @@ async function runTenantApiAgentToolResultResponse({
   await recordResponseUsage({ response: second, thread, message, callKind }, env);
   const text = responseText(second);
   const customFallback = typeof fallbackFromToolOutputs === "function" ? clean(fallbackFromToolOutputs(toolOutputs, { message, text })) : "";
-  const toolFallback = clean(formatToolResultFallback(toolResults, { message, text, pendingAction }));
+  const toolFallback = clean(formatToolResultFallback(toolResults, { message, text, pendingAction, env }));
   const fallback = customFallback || toolFallback;
   if (fallback && shouldPreferWebFetchFallback(text, fallback, message)) return { response: second, text: fallback };
   if (fallback && genericToolFallbackText(text)) return { response: second, text: fallback };
