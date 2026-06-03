@@ -8,8 +8,8 @@ import { ensureDataDirs } from "../../../../../packages/storage/src/paths.js";
 import { threadMessagesQuerySchema, threadUploadSchema } from "../../../../../packages/shared/src/api-schemas.js";
 import { httpError, validateRequestSchema } from "../../common/http.js";
 import { requestPrincipal } from "../../../../../packages/core/src/principal.js";
-import { ThreadActionSanitizerService, ThreadRuntimeService } from "./thread-application.services.js";
-import { syncNativeCodexHistory, threadHistoryPayload, threadMessagePage } from "./thread-message-page.js";
+import { ThreadActionSanitizerService } from "./thread-application.services.js";
+import { scheduleNativeCodexHistorySync, syncNativeCodexHistory, threadHistoryPayload, threadMessagePage } from "./thread-message-page.js";
 
 function safeUploadName(name: unknown): string {
   const base = path.basename(String(name || "upload.bin")).replace(/[^a-zA-Z0-9_.-]/g, "_");
@@ -27,17 +27,15 @@ function uploadBuffer(file: any): Buffer {
 export class ThreadMessagesController {
   constructor(
     private readonly threadActionSanitizer: ThreadActionSanitizerService,
-    private readonly threadRuntimeService: ThreadRuntimeService,
   ) {}
 
   @Get(":threadId/messages")
   async messages(@Param("threadId") threadId: string, @Query() query: Record<string, unknown>) {
     validateRequestSchema(threadMessagesQuerySchema, { params: { threadId }, querystring: query || {} });
-    let thread = await getThread(threadId);
+    const thread = await getThread(threadId);
     if (!thread) throw httpError("thread_not_found", 404);
-    thread = await syncNativeCodexHistory(thread);
-    const status = await this.threadRuntimeService.status(thread.id).catch(() => null);
-    return threadMessagePage(thread, await listThreadMessages(thread.id), query, status);
+    scheduleNativeCodexHistorySync(thread);
+    return threadMessagePage(thread, await listThreadMessages(thread.id), query, null);
   }
 
   @Post(":threadId/uploads")

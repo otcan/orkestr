@@ -37,6 +37,24 @@ export async function syncNativeCodexHistory(thread: any, options: Record<string
   return await getThread(thread.id) || thread;
 }
 
+const scheduledNativeCodexHistorySyncs = new Set<string>();
+
+export function scheduleNativeCodexHistorySync(thread: any, options: Record<string, unknown> = {}) {
+  if (!threadUsesNativeCodexRuntime(thread)) return false;
+  const threadId = String(thread?.id || "").trim();
+  const nativeThreadId = codexThreadId(thread) || threadId;
+  if (!threadId || !nativeThreadId) return false;
+  const key = `${threadId}:${nativeThreadId}`;
+  if (scheduledNativeCodexHistorySyncs.has(key)) return false;
+  scheduledNativeCodexHistorySyncs.add(key);
+  syncCodexRuntimeThreadMessages(thread, process.env, options)
+    .catch(() => null)
+    .finally(() => {
+      scheduledNativeCodexHistorySyncs.delete(key);
+    });
+  return true;
+}
+
 const needInputPhases = new Set(["need_input", "awaiting_input", "question", "request_user_input"]);
 
 function isNeedInputMessage(message: any): boolean {
