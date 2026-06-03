@@ -14,6 +14,7 @@ import {
   requestThreadInputDelivery,
   requestThreadWake,
   resetThreadRuntime,
+  safeResetThreadRuntime,
   sleepThread,
   syncRuntimeWindowName,
   wakeThread,
@@ -412,25 +413,28 @@ export class ThreadsController {
         stopped: true,
         interrupted: Boolean((result as any).interrupted?.interrupted),
         slept: result.slept,
-        threadId: codexThreadId(thread) || thread.id,
+        threadId: codexThreadId((result as any).thread || thread) || thread.id,
         orkestrThreadId: thread.id,
         message,
         thread: await threadRuntimeSummary(result.thread, await listThreadMessages(thread.id)),
       };
     }
-    if (parsedCommand.command === "reset" || parsedCommand.command === "hard_reset") {
-      await this.assertThreadSanitized(parsedCommand.command === "hard_reset" ? "thread.hard-reset" : "thread.reset", principal, thread, body);
+    if (parsedCommand.command === "reset" || parsedCommand.command === "hard_reset" || parsedCommand.command === "safe_reset") {
+      await this.assertThreadSanitized(parsedCommand.command === "hard_reset" ? "thread.hard-reset" : parsedCommand.command === "safe_reset" ? "thread.safe-reset" : "thread.reset", principal, thread, body);
       const hard = parsedCommand.command === "hard_reset";
-      const result = hard
+      const safe = parsedCommand.command === "safe_reset";
+      const result = safe
+        ? await safeResetThreadRuntime(thread.id, { reason: body.source === "whatsapp" ? "whatsapp_safe_reset_command" : "safe_reset_command" })
+        : hard
         ? await hardResetThreadRuntime(thread.id, { reason: body.source === "whatsapp" ? "whatsapp_hard_reset_command" : "hard_reset_command" })
         : await resetThreadRuntime(thread.id, { reason: body.source === "whatsapp" ? "whatsapp_reset_command" : "reset_command" });
       const message = await appendThreadMessage(thread.id, {
         role: "user",
-        source: body.source || (hard ? "hard_reset_command" : "reset_command"),
-        text: hard ? "/hard_reset" : "/reset",
+        source: body.source || (safe ? "safe_reset_command" : hard ? "hard_reset_command" : "reset_command"),
+        text: safe ? "/safe_reset" : hard ? "/hard_reset" : "/reset",
         state: "completed",
         deliveryState: "delivered",
-        observedVia: hard ? "orkestr_hard_reset_command" : "orkestr_reset_command",
+        observedVia: safe ? "orkestr_safe_reset_command" : hard ? "orkestr_hard_reset_command" : "orkestr_reset_command",
         deliveredAt: new Date().toISOString(),
         resetSlept: (result as any).slept ?? null,
         compactionMethod: hard
@@ -438,16 +442,21 @@ export class ThreadsController {
             ? (result as any).compaction?.method
             : (result as any).manualCheckpoint?.method || (result as any).compaction?.method || null)
           : null,
-        manualCheckpointPath: hard ? (result as any).manualCheckpoint?.path || null : null,
+        manualCheckpointPath: hard || safe ? (result as any).manualCheckpoint?.path || null : null,
+        oldCodexThreadId: safe ? (result as any).oldCodexThreadId || null : null,
+        newCodexThreadId: safe ? (result as any).newCodexThreadId || null : null,
       });
       return {
         ok: true,
         reset: true,
         hardReset: hard,
+        safeReset: safe,
         slept: (result as any).slept ?? null,
         compaction: hard ? (result as any).compaction || null : null,
-        manualCheckpoint: hard ? (result as any).manualCheckpoint || null : null,
-        threadId: codexThreadId(thread) || thread.id,
+        manualCheckpoint: hard || safe ? (result as any).manualCheckpoint || null : null,
+        oldCodexThreadId: safe ? (result as any).oldCodexThreadId || null : null,
+        newCodexThreadId: safe ? (result as any).newCodexThreadId || null : null,
+        threadId: codexThreadId((result as any).thread || thread) || thread.id,
         orkestrThreadId: thread.id,
         message,
         thread: await threadRuntimeSummary((result as any).thread || thread, await listThreadMessages(thread.id)),
@@ -697,6 +706,19 @@ export class ThreadsController {
     if (!thread) throw httpError("thread_not_found", 404);
     await this.assertThreadSanitized("thread.hard-reset", requestPrincipal(request), thread, body);
     const result: any = await hardResetThreadRuntime(thread.id, { reason: body.reason || "manual_hard_reset" });
+    return {
+      ...result,
+      thread: await threadRuntimeSummary(result.thread || thread, await listThreadMessages(thread.id)),
+    };
+  }
+
+  @Post(":threadId/safe-reset")
+  @HttpCode(200)
+  async safeReset(@Req() request: any, @Param("threadId") threadId: string, @Body() body: Record<string, unknown> = {}) {
+    const thread = await getThread(threadId);
+    if (!thread) throw httpError("thread_not_found", 404);
+    await this.assertThreadSanitized("thread.safe-reset", requestPrincipal(request), thread, body);
+    const result: any = await safeResetThreadRuntime(thread.id, { reason: body.reason || "manual_safe_reset" });
     return {
       ...result,
       thread: await threadRuntimeSummary(result.thread || thread, await listThreadMessages(thread.id)),

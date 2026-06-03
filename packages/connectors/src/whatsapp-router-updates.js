@@ -66,6 +66,7 @@ function recoveryActionForMessage(message) {
   const deliveryState = String(message?.deliveryState || "").trim().toLowerCase();
   const parsed = parseThreadInputCommand({ text: message?.text || "" });
   if (observedVia === "orkestr_stop_command") return { action: "stop", rawCommand: parsed.rawCommand || "stop" };
+  if (observedVia === "orkestr_safe_reset_command") return { action: "safe_reset", rawCommand: parsed.rawCommand || "safe_reset" };
   if (observedVia === "orkestr_hard_reset_command") return { action: "hard_reset", rawCommand: parsed.rawCommand || "hard_reset" };
   if (observedVia === "orkestr_reset_command") {
     return { action: parsed.rawCommand === "restart" ? "restart" : "reset", rawCommand: parsed.rawCommand || "reset" };
@@ -145,6 +146,13 @@ function formatWhatsAppRecoveryActionRequested(message, target = {}) {
       "Hard reset requested.",
       "",
       "Orkestr created a recovery checkpoint when possible, then restarted the Codex pane.",
+    ].join("\n");
+  }
+  if (target.action === "safe_reset") {
+    return [
+      "Safe reset requested.",
+      "",
+      "Orkestr saved recent Orkestr context and started a fresh Codex session for this thread.",
     ].join("\n");
   }
   if (target.queuedPayload) {

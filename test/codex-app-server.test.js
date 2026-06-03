@@ -22,7 +22,7 @@ import {
   syncCodexAppServerThreadMessages,
 } from "../packages/core/src/codex-app-server.js";
 import { migrateCodexThreadsToAppServer } from "../packages/core/src/codex-app-server-migration.js";
-import { resetThreadRuntime, sleepThread } from "../packages/core/src/runtime-leases.js";
+import { resetThreadRuntime, safeResetThreadRuntime, sleepThread } from "../packages/core/src/runtime-leases.js";
 import { containedCodexRuntimePaths, effortForThread, modelForThread, threadStartParams, turnStartParams } from "../packages/core/src/codex-app-server-common.js";
 import { appendThreadMessage, createThread, enqueueThreadInput, getThread, listThreadMessages, updateThread, updateThreadMessage } from "../packages/core/src/threads.js";
 import { deliverWhatsAppReplies } from "../packages/connectors/src/whatsapp.js";
@@ -1651,6 +1651,7 @@ test("Codex app-server recovery marks stale delivered turns ready and appends on
     assert.equal(notices[0].parentMessageId, null);
     assert.equal(notices[0].codexTurnId, "stale-turn");
     assert.match(notices[0].text, /^Codex response missing/);
+    assert.match(notices[0].text, /\/safe-reset/);
     assert.doesNotMatch(notices[0].text, /\/now/);
     assert.ok(messages.find((message) => message.id === input.id));
 
@@ -2483,6 +2484,54 @@ test("Codex app-server sleep is rejected and reset interrupts active turns", asy
     assert.ok(rawState.calls.some((call) => call.method === "turn/interrupt" && call.params.turnId === "active-turn"));
     assert.ok(rawState.calls.some((call) => call.method === "thread/resume"));
     assert.ok(!rawState.calls.some((call) => call.method === "thread/unsubscribe"));
+  } finally {
+    stopCodexAppServerClients();
+  }
+});
+
+test("Codex app-server safe reset checkpoints and starts a fresh thread", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-codex-app-server-safe-reset-"));
+  const fake = await createFakeCodex(home);
+  const env = {
+    ORKESTR_HOME: path.join(home, "orkestr"),
+    HOME: path.join(home, "runtime-home"),
+    PATH: `${fake.bin}${path.delimiter}${process.env.PATH || ""}`,
+    FAKE_CODEX_STATE: fake.stateFile,
+  };
+  try {
+    const thread = await createThread({ id: "app-server-safe-reset-thread", name: "App Server Safe Reset Thread", cwd: home, executorId: "codex", executor: { type: "codex" } }, env);
+    const started = await startCodexAppServerThread(thread, env);
+    await appendThreadMessage(started.thread.id, { role: "user", text: "Important active task", state: "completed" }, env);
+    await appendThreadMessage(started.thread.id, { role: "assistant", phase: "final_answer", text: "Important result", state: "completed" }, env);
+    await updateThread(started.thread.id, {
+      state: "working",
+      runtime: {
+        ...(started.thread.runtime || {}),
+        runtimeKind: "codex-app-server",
+        state: "working",
+        activeTurnId: "active-turn",
+      },
+    }, env);
+    await markAppServerTurnActive(started.thread, env);
+
+    const oldCodexThreadId = started.thread.codexThreadId;
+    const reset = await safeResetThreadRuntime(started.thread.id, { reason: "test_safe_reset" }, env);
+    const rawState = JSON.parse(await fs.readFile(fake.stateFile, "utf8"));
+    const resetThread = await getThread(started.thread.id, env);
+    const checkpoint = await fs.readFile(reset.manualCheckpoint.path, "utf8");
+
+    assert.equal(reset.ok, true);
+    assert.equal(reset.safeReset, true);
+    assert.equal(reset.slept, 0);
+    assert.equal(reset.oldCodexThreadId, oldCodexThreadId);
+    assert.notEqual(reset.newCodexThreadId, oldCodexThreadId);
+    assert.equal(resetThread.codexThreadId, reset.newCodexThreadId);
+    assert.equal(resetThread.executor.metadata.lastSafeReset.codexThreadId, oldCodexThreadId);
+    assert.match(checkpoint, /Important active task/);
+    assert.match(checkpoint, /Important result/);
+    assert.equal(rawState.calls.filter((call) => call.method === "thread\/start").length, 2);
+    assert.ok(rawState.calls.some((call) => call.method === "turn/interrupt" && call.params.turnId === "active-turn"));
+    assert.ok(!rawState.calls.some((call) => call.method === "thread/resume"));
   } finally {
     stopCodexAppServerClients();
   }

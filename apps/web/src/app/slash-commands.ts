@@ -53,7 +53,14 @@ export const SLASH_COMMANDS: SlashCommandInfo[] = [
     command: "/hard-reset",
     aliases: ["/hard_reset"],
     label: "Hard reset",
-    detail: "Checkpoint context and restart the runtime from a clean session.",
+    detail: "Checkpoint context when possible, then restart the current runtime.",
+    acceptsText: false,
+  },
+  {
+    command: "/safe-reset",
+    aliases: ["/safe_reset"],
+    label: "Safe reset",
+    detail: "Save recent Orkestr context and start a fresh Codex session for this thread.",
     acceptsText: false,
   },
 ];

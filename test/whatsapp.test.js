@@ -3583,6 +3583,17 @@ test("whatsapp delivery reports recovery action requests", async () => {
     observedVia: "orkestr_interrupt_command",
     forceDeliveryAfterInterrupt: true,
   }, env);
+  const safeReset = await appendThreadMessage("thread-wa-recovery-action", {
+    role: "user",
+    source: "whatsapp_inbound",
+    connector: "whatsapp",
+    chatId: "chat-recovery-action",
+    accountId: "account-1",
+    text: "/safe-reset",
+    state: "completed",
+    deliveryState: "delivered",
+    observedVia: "orkestr_safe_reset_command",
+  }, env);
 
   const calls = [];
   const delivery = await deliverWhatsAppReplies(env, async (url, options) => {
@@ -3593,17 +3604,20 @@ test("whatsapp delivery reports recovery action requests", async () => {
     throw new Error("should not resend recovery action notices");
   });
 
-  assert.equal(delivery.delivered.length, 2);
-  assert.deepEqual(delivery.delivered.map((entry) => entry.deliveryType), ["router_update", "router_update"]);
-  assert.deepEqual(delivery.delivered.map((entry) => entry.routerUpdateType), ["recovery_action_requested", "recovery_action_requested"]);
+  assert.equal(delivery.delivered.length, 3);
+  assert.deepEqual(delivery.delivered.map((entry) => entry.deliveryType), ["router_update", "router_update", "router_update"]);
+  assert.deepEqual(delivery.delivered.map((entry) => entry.routerUpdateType), ["recovery_action_requested", "recovery_action_requested", "recovery_action_requested"]);
   assert.equal(delivery.delivered[0].sourceMessageId, restart.id);
   assert.equal(delivery.delivered[1].sourceMessageId, now.id);
+  assert.equal(delivery.delivered[2].sourceMessageId, safeReset.id);
   assert.equal(duplicate.delivered.length, 0);
   assert.equal(calls.every((call) => call.body.to === "chat-recovery-action"), true);
   assert.match(stripDebugFooter(calls[0].body.text), /^Restart requested\.\n\nOrkestr reset the current Codex runtime and resumed the thread\./);
   assert.match(stripDebugFooter(calls[1].body.text), /^Interrupt requested\.\n\nOrkestr interrupted the current Codex turn and queued your message for the next turn: "fix the pairing number"\./);
+  assert.match(stripDebugFooter(calls[2].body.text), /^Safe reset requested\.\n\nOrkestr saved recent Orkestr context and started a fresh Codex session for this thread\./);
   assertDebugFooter(calls[0].body.text, { messageType: "update" });
   assertDebugFooter(calls[1].body.text, { messageType: "update" });
+  assertDebugFooter(calls[2].body.text, { messageType: "update" });
 });
 
 test("whatsapp delivery reports stale-ack recovery exhaustion as manual action", async () => {

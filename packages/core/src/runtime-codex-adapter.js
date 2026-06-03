@@ -5,6 +5,7 @@ import {
   deliverCodexAppServerPendingInputs,
   interruptCodexAppServerThread,
   resumeCodexAppServerThread,
+  startCodexAppServerThread,
   syncCodexAppServerThreadMessages,
   threadNeedsCodexAppServerMigration,
   threadUsesCodexAppServer,
@@ -16,6 +17,7 @@ export const compactCodexRuntimeThread = compactCodexAppServerThread;
 export const deliverCodexRuntimePendingInputs = deliverCodexAppServerPendingInputs;
 export const interruptCodexRuntimeThread = interruptCodexAppServerThread;
 export const resumeCodexRuntimeThread = resumeCodexAppServerThread;
+export const startCodexRuntimeThread = startCodexAppServerThread;
 export const syncCodexRuntimeThreadMessages = syncCodexAppServerThreadMessages;
 export const threadNeedsNativeCodexRuntimeMigration = threadNeedsCodexAppServerMigration;
 export const threadUsesNativeCodexRuntime = threadUsesCodexAppServer;
@@ -27,6 +29,7 @@ export {
   deliverCodexAppServerPendingInputs,
   interruptCodexAppServerThread,
   resumeCodexAppServerThread,
+  startCodexAppServerThread,
   syncCodexAppServerThreadMessages,
   threadNeedsCodexAppServerMigration,
   threadUsesCodexAppServer,

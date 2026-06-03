@@ -26,6 +26,7 @@ import {
   deliverCodexRuntimePendingInputs,
   interruptCodexRuntimeThread,
   resumeCodexRuntimeThread,
+  startCodexRuntimeThread,
   threadNeedsNativeCodexRuntimeMigration,
   threadUsesNativeCodexRuntime,
 } from "./runtime-codex-adapter.js";
@@ -225,6 +226,10 @@ function temporaryRuntimeReason({ thread = {}, workspace = "", command = "" } = 
 
 function codexThreadId(thread) {
   return String(thread?.executor?.codexThreadId || thread?.codexThreadId || "").trim();
+}
+
+function codexSessionId(thread) {
+  return String(thread?.executor?.codexSessionId || thread?.codexSessionId || thread?.executor?.metadata?.codexSessionId || "").trim();
 }
 
 function threadName(thread) {
@@ -1416,6 +1421,115 @@ export async function hardResetThreadRuntime(threadId, options = {}, env = proce
   };
 }
 
+function codexSafeResetPatch(thread, checkpoint, reason) {
+  const runtime = thread?.runtime && typeof thread.runtime === "object" ? thread.runtime : {};
+  const metadata = thread?.executor?.metadata && typeof thread.executor.metadata === "object" ? thread.executor.metadata : {};
+  const oldCodexThreadId = codexThreadId(thread);
+  const oldCodexSessionId = codexSessionId(thread) || oldCodexThreadId;
+  const archive = {
+    codexThreadId: oldCodexThreadId || null,
+    codexSessionId: oldCodexSessionId || null,
+    reason,
+    resetAt: nowIso(),
+    checkpointPath: checkpoint?.path || null,
+    previousState: thread?.state || null,
+    previousRuntimeState: runtime.state || null,
+  };
+  return {
+    state: "waking",
+    lastError: null,
+    runtimeKind: "codex-app-server",
+    codexThreadId: null,
+    codexSessionId: null,
+    executor: {
+      ...(thread.executor || {}),
+      id: "codex",
+      type: "codex",
+      transport: "app-server",
+      codexThreadId: null,
+      codexSessionId: null,
+      metadata: {
+        ...metadata,
+        transport: "app-server",
+        runtimeKind: "codex-app-server",
+        codexThreadId: null,
+        codexSessionId: null,
+        lastSafeReset: archive,
+      },
+    },
+    runtime: {
+      ...runtime,
+      runtimeKind: "codex-app-server",
+      state: "waking",
+      activeTurnId: null,
+      pendingRequest: null,
+      codexStatus: null,
+      lastTurnStatus: null,
+      safeReset: archive,
+    },
+  };
+}
+
+export async function safeResetThreadRuntime(threadId, options = {}, env = process.env) {
+  const reason = options.reason || "safe_reset";
+  const thread = await getThread(threadId, env);
+  if (!thread) {
+    const error = new Error("thread_not_found");
+    error.statusCode = 404;
+    throw error;
+  }
+  if (!threadUsesNativeCodexRuntime(thread, env)) {
+    return hardResetThreadRuntime(thread.id, { reason, wakeReason: options.wakeReason || reason }, env);
+  }
+  const oldCodexThreadId = codexThreadId(thread);
+  const oldCodexSessionId = codexSessionId(thread) || oldCodexThreadId;
+  const statusBefore = await runtimeStatus(thread.id, env).catch(() => null);
+  const checkpoint = await writeManualContextCheckpoint(thread.id, { reason, status: statusBefore }, env);
+  const interrupted = await interruptCodexRuntimeThread(thread, env).catch(() => ({ interrupted: false }));
+  const prepared = await updateThread(thread.id, codexSafeResetPatch(thread, checkpoint, reason), env);
+  try {
+    const started = await startCodexRuntimeThread(prepared, env);
+    if (!started?.thread) throw new Error("codex_app_server_safe_reset_start_failed");
+    await appendEvent({
+      type: "thread_runtime_safe_reset",
+      threadId: thread.id,
+      reason,
+      oldCodexThreadId: oldCodexThreadId || null,
+      oldCodexSessionId: oldCodexSessionId || null,
+      newCodexThreadId: codexThreadId(started.thread) || null,
+      newCodexSessionId: codexSessionId(started.thread) || null,
+      interrupted: Boolean(interrupted?.interrupted),
+      manualCheckpointPath: checkpoint.path || null,
+    }, env).catch(() => {});
+    return {
+      ok: true,
+      reset: true,
+      safeReset: true,
+      slept: 0,
+      interrupted,
+      manualCheckpoint: checkpoint,
+      oldCodexThreadId: oldCodexThreadId || null,
+      oldCodexSessionId: oldCodexSessionId || null,
+      newCodexThreadId: codexThreadId(started.thread) || null,
+      newCodexSessionId: codexSessionId(started.thread) || null,
+      thread: started.thread,
+      lease: null,
+      status: started.status || await runtimeStatus(thread.id, env).catch(() => null),
+    };
+  } catch (error) {
+    await updateThread(thread.id, {
+      state: "failed",
+      lastError: error instanceof Error ? error.message : String(error),
+      runtime: {
+        ...(prepared.runtime || {}),
+        state: "failed",
+        codexStatus: { type: "systemError", error: error instanceof Error ? error.message : String(error) },
+      },
+    }, env).catch(() => {});
+    throw error;
+  }
+}
+
 async function completeStopCommand(thread, message, env = process.env) {
   const stopped = threadUsesNativeCodexRuntime(thread, env)
     ? { slept: 0, interrupted: await interruptCodexRuntimeThread(thread, env).catch(() => ({ interrupted: false })) }
@@ -1462,6 +1576,31 @@ async function completeResetCommand(thread, message, hard = false, env = process
     source: message.source || null,
     slept: result.slept,
     compacted: hard ? result.compaction?.compacted === true : null,
+    manualCheckpointPath: result.manualCheckpoint?.path || null,
+  }, env).catch(() => {});
+  return updated.id;
+}
+
+async function completeSafeResetCommand(thread, message, env = process.env) {
+  const result = await safeResetThreadRuntime(thread.id, { reason: whatsappOrigin(message) ? "whatsapp_safe_reset_command" : "safe_reset_command" }, env);
+  const updated = await updateThreadMessage(thread.id, message.id, {
+    state: "completed",
+    deliveryState: "delivered",
+    observedVia: "orkestr_safe_reset_command",
+    deliveredAt: nowIso(),
+    error: null,
+    resetSlept: result.slept,
+    manualCheckpointPath: result.manualCheckpoint?.path || null,
+    oldCodexThreadId: result.oldCodexThreadId || null,
+    newCodexThreadId: result.newCodexThreadId || null,
+  }, env);
+  await appendEvent({
+    type: "thread_safe_reset_command",
+    threadId: thread.id,
+    messageId: message.id,
+    source: message.source || null,
+    oldCodexThreadId: result.oldCodexThreadId || null,
+    newCodexThreadId: result.newCodexThreadId || null,
     manualCheckpointPath: result.manualCheckpoint?.path || null,
   }, env).catch(() => {});
   return updated.id;
@@ -1590,7 +1729,7 @@ function immediateThreadCommand(message) {
   if (securityChallengeId) return { command: "security_approve", rawCommand: "security_approve", text: securityChallengeId };
   const parsed = parseThreadInputCommand({ text: message.text });
   if (parsed.command === "interrupt") return parsed;
-  if (parsed.command === "stop" || parsed.command === "reset" || parsed.command === "hard_reset") return parsed;
+  if (parsed.command === "stop" || parsed.command === "reset" || parsed.command === "hard_reset" || parsed.command === "safe_reset") return parsed;
   if ((parsed.command === "plan" || parsed.command === "code") && !parsed.text) return parsed;
   return null;
 }
@@ -1731,6 +1870,7 @@ async function completeImmediateThreadCommand(thread, message, parsed, env = pro
   if (parsed.command === "stop") return completeStopCommand(thread, message, env);
   if (parsed.command === "reset") return completeResetCommand(thread, message, false, env);
   if (parsed.command === "hard_reset") return completeResetCommand(thread, message, true, env);
+  if (parsed.command === "safe_reset") return completeSafeResetCommand(thread, message, env);
   if (parsed.command === "plan" || parsed.command === "code") {
     return completeCodexModeCommand(thread, message, parsed.command, env);
   }
@@ -1738,7 +1878,7 @@ async function completeImmediateThreadCommand(thread, message, parsed, env = pro
 }
 
 async function supersedeAwaitingAcksForControlCommand(thread, messages, controlMessage, parsed, env = process.env) {
-  if (!["interrupt", "stop", "reset", "hard_reset"].includes(parsed?.command)) return;
+  if (!["interrupt", "stop", "reset", "hard_reset", "safe_reset"].includes(parsed?.command)) return;
   const controlCursor = messageCursor(controlMessage);
   const controlMs = messageTimeMs(controlMessage);
   const commandLabel = parsed.rawCommand ? `/${parsed.rawCommand}` : `/${parsed.command}`;
@@ -2249,6 +2389,8 @@ function runtimeInterruptionReason(reason) {
     whatsapp_reset_command: "a WhatsApp reset was requested",
     hard_reset_command: "a hard reset was requested",
     whatsapp_hard_reset_command: "a WhatsApp hard reset was requested",
+    safe_reset_command: "a safe reset was requested",
+    whatsapp_safe_reset_command: "a WhatsApp safe reset was requested",
     ui_stop: "the pane was stopped from the UI",
     manual_sleep: "the pane was put to sleep",
     hibernate: "the thread was hibernated",
@@ -3147,7 +3289,7 @@ export async function deliverPendingThreadInputs(threadId, env = process.env, op
       const immediateCandidates = messages
         .map((message) => ({ message, parsed: immediateThreadCommand(message) }))
         .filter((item) => item.parsed);
-      const priorityImmediate = immediateCandidates.find((item) => ["stop", "reset", "hard_reset"].includes(item.parsed.command));
+      const priorityImmediate = immediateCandidates.find((item) => ["stop", "reset", "hard_reset", "safe_reset"].includes(item.parsed.command));
       const interruptImmediate = [...immediateCandidates]
         .reverse()
         .find((item) => item.parsed.command === "interrupt");
@@ -3237,6 +3379,10 @@ export async function deliverPendingThreadInputs(threadId, env = process.env, op
       }
       if (parsedCommand.command === "hard_reset") {
         delivered.push(await completeResetCommand(thread, next, true, env));
+        continue;
+      }
+      if (parsedCommand.command === "safe_reset") {
+        delivered.push(await completeSafeResetCommand(thread, next, env));
         continue;
       }
       if ((parsedCommand.command === "plan" || parsedCommand.command === "code") && !parsedCommand.text) {

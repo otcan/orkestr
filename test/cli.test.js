@@ -717,13 +717,15 @@ test("CLI reports inputs waiting for runtime acknowledgement", async () => {
   assert.match(stdout.text(), /Awaiting ack thread-1/);
 });
 
-test("CLI resets and hard-resets threads through the public API", async () => {
+test("CLI resets threads through the public API", async () => {
   const resetOut = capture();
   const hardResetOut = capture();
+  const safeResetOut = capture();
   const seen = [];
   const routes = {
     "POST /api/threads/Demo/reset": { ok: true, reset: true },
     "POST /api/threads/Demo/hard-reset": { ok: true, reset: true, hardReset: true },
+    "POST /api/threads/Demo/safe-reset": { ok: true, reset: true, safeReset: true },
   };
 
   const resetCode = await runCli(["--api", "http://orkestr.test", "reset", "Demo"], {
@@ -736,15 +738,23 @@ test("CLI resets and hard-resets threads through the public API", async () => {
     stderr: capture(),
     fetchImpl: fakeFetch(routes, seen),
   });
+  const safeResetCode = await runCli(["--api", "http://orkestr.test", "safe-reset", "Demo"], {
+    stdout: safeResetOut,
+    stderr: capture(),
+    fetchImpl: fakeFetch(routes, seen),
+  });
 
   assert.equal(resetCode, 0);
   assert.equal(hardResetCode, 0);
+  assert.equal(safeResetCode, 0);
   assert.deepEqual(seen.map((entry) => entry.key), [
     "POST /api/threads/Demo/reset",
     "POST /api/threads/Demo/hard-reset",
+    "POST /api/threads/Demo/safe-reset",
   ]);
   assert.match(resetOut.text(), /Reset Demo/);
   assert.match(hardResetOut.text(), /Hard reset Demo/);
+  assert.match(safeResetOut.text(), /Safe reset Demo/);
 });
 
 test("CLI update can run the versioned release deployer", async () => {

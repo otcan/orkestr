@@ -4802,6 +4802,16 @@ test("thread input commands strip /now before runtime delivery", () => {
     rawCommand: "hard-reset",
     text: "",
   });
+  assert.deepEqual(parseThreadInputCommand({ text: "/safe_reset" }), {
+    command: "safe_reset",
+    rawCommand: "safe_reset",
+    text: "",
+  });
+  assert.deepEqual(parseThreadInputCommand({ text: "/safe-reset" }), {
+    command: "safe_reset",
+    rawCommand: "safe-reset",
+    text: "",
+  });
   assert.deepEqual(parseThreadInputCommand({ text: "/plan write tests" }), {
     command: "plan",
     rawCommand: "plan",

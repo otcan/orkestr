@@ -87,8 +87,9 @@ Use dynamic discovery for live Orkestr context:
 Orkestr capabilities:
 
 - Threads: \`orkestr list\`, \`orkestr send <thread> "<message>"\`,
-  \`orkestr wake <thread>\`, \`orkestr reset <thread>\`. \`orkestr sleep\` is
-  only for legacy tmux runtimes.
+  \`orkestr wake <thread>\`, \`orkestr reset <thread>\`, and
+  \`orkestr safe-reset <thread>\` for a fresh Codex session after a broken
+  app-server session. \`orkestr sleep\` is only for legacy tmux runtimes.
 - Browser pairing/security: \`orkestr security challenges\`,
   \`orkestr security approve <challenge-id>\`, \`orkestr security reject
   <challenge-id>\`, and \`orkestr security sessions\`. If the user asks to

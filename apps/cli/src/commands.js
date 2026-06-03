@@ -61,6 +61,7 @@ export async function runCli(argv = process.argv.slice(2), context = {}) {
     if (command === "sleep") return await postThreadAction("sleep", args, ctx);
     if (command === "reset") return await postThreadAction("reset", args, ctx);
     if (command === "hard-reset" || command === "hard_reset") return await postThreadAction("hard-reset", args, ctx);
+    if (command === "safe-reset" || command === "safe_reset") return await postThreadAction("safe-reset", args, ctx);
     ctx.stderr.write(`Unknown command: ${command}\n\n`);
     writeUsage(ctx.stderr);
     return 2;
@@ -661,7 +662,9 @@ async function postThreadAction(action, argv, ctx) {
         ? "Slept legacy tmux runtime"
         : action === "hard-reset"
           ? "Hard reset"
-          : "Reset";
+          : action === "safe-reset"
+            ? "Safe reset"
+            : "Reset";
     ctx.stdout.write(`${label} ${target}\n`);
   }
   return 0;
@@ -693,6 +696,7 @@ Common thread commands:
   orkestr wake <thread-name-or-id> [--json]
   orkestr reset <thread-name-or-id> [--json]
   orkestr hard-reset <thread-name-or-id> [--json]
+  orkestr safe-reset <thread-name-or-id> [--json]
 
 Advanced:
   orkestr update [--track-main|--ref ref] [--release|--in-place] [--channel name] [--allow-untagged|--require-tagged] [--no-smoke] [--wait-active] [--active-timeout seconds|--allow-interrupt]

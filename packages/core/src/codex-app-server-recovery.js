@@ -188,6 +188,7 @@ function staleTurnNoticeText(reason = "no_assistant_response", options = {}) {
       "",
       "Orkestr found progress updates for this turn, but Codex went idle before a final answer was recorded.",
       "Send the next instruction normally to continue.",
+      "If this repeats, reply /safe-reset to save recent Orkestr context and start a fresh Codex session for this thread.",
     ].join("\n");
   }
   return [
@@ -195,6 +196,7 @@ function staleTurnNoticeText(reason = "no_assistant_response", options = {}) {
     "",
     "Orkestr found a delivered message with no assistant response after the Codex runtime stopped, restarted, or lost the active turn.",
     "Send the next instruction normally to continue.",
+    "If this repeats, reply /safe-reset to save recent Orkestr context and start a fresh Codex session for this thread.",
   ].join("\n");
 }
 

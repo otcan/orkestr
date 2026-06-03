@@ -1,4 +1,4 @@
-const CONTROL_COMMANDS = new Set(["now", "interrupt", "implement", "stop", "reset", "restart", "hard_reset", "hard-reset", "plan", "planning", "code", "coding"]);
+const CONTROL_COMMANDS = new Set(["now", "interrupt", "implement", "stop", "reset", "restart", "hard_reset", "hard-reset", "safe_reset", "safe-reset", "plan", "planning", "code", "coding"]);
 
 export function parseThreadInputCommand(input = {}) {
   const text = String(input.text || "");
@@ -15,11 +15,13 @@ export function parseThreadInputCommand(input = {}) {
         ? "reset"
         : command === "hard-reset"
           ? "hard_reset"
-          : command === "planning"
-            ? "plan"
-            : command === "coding"
-              ? "code"
-              : command,
+          : command === "safe-reset"
+            ? "safe_reset"
+            : command === "planning"
+              ? "plan"
+              : command === "coding"
+                ? "code"
+                : command,
     rawCommand: command,
     text: String(match[3] || "").trimStart(),
   };
