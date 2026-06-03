@@ -1754,6 +1754,7 @@ test("tenant api-agent can use configured generic desktop for the managed deskto
 test("tenant api-agent answers desktop action requests from skill action tool results", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-api-agent-linkedin-action-"));
   const env = await allowSanitizerEnv(home, {
+    ORKESTR_API_AGENT_DIRECT_DESKTOP_ENABLED: "0",
     ORKESTR_BROWSER_DESKTOP_MODE: "profiles",
     ORKESTR_BROWSER_VISIBLE_SLUGS: "linkedin",
     ORKESTR_BROWSER_LAUNCH_DISABLED: "1",
@@ -1832,6 +1833,7 @@ test("tenant api-agent answers desktop action requests from skill action tool re
 test("tenant api-agent formats LinkedIn desktop tool output when model falls back generically", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-api-agent-linkedin-action-fallback-"));
   const env = await allowSanitizerEnv(home, {
+    ORKESTR_API_AGENT_DIRECT_DESKTOP_ENABLED: "0",
     ORKESTR_BROWSER_DESKTOP_MODE: "profiles",
     ORKESTR_BROWSER_VISIBLE_SLUGS: "linkedin",
     ORKESTR_BROWSER_LAUNCH_DISABLED: "1",
@@ -1903,6 +1905,46 @@ test("tenant api-agent formats LinkedIn desktop tool output when model falls bac
   assert.match(assistant.text, /is open/i);
   assert.match(assistant.text, /does not report login state/i);
   assert.doesNotMatch(assistant.text, /without a tool result|Workspace and live browser/i);
+  assert.notEqual(assistant.text.trim(), "Done.");
+});
+
+test("tenant api-agent opens managed desktop requests directly without weak model replies", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-api-agent-direct-desktop-open-"));
+  const env = await allowSanitizerEnv(home, {
+    ORKESTR_BROWSER_DESKTOP_MODE: "profiles",
+    ORKESTR_BROWSER_VISIBLE_SLUGS: "desktop",
+    ORKESTR_DEFAULT_DESKTOP_SLUG: "desktop",
+    ORKESTR_BROWSER_LAUNCH_DISABLED: "1",
+  });
+  await upsertUser({ id: "otcan", role: "user", displayName: "Otcan" }, env);
+  await createThread({
+    id: "otcantest-direct-desktop-open",
+    ownerUserId: "otcan",
+    name: "otcantest",
+    runtimeKind: "api-agent",
+    executor: { type: "api-agent", metadata: { runtimeKind: "api-agent" } },
+    binding: { connector: "whatsapp", chatId: "chat-otcan", outboundAccountId: "wa-1" },
+  }, env);
+  const input = await enqueueThreadInputForPrincipal("otcantest-direct-desktop-open", {
+    text: "Open LinkedIn. Am I logged in?",
+    source: "whatsapp_inbound",
+    connector: "whatsapp",
+    chatId: "chat-otcan",
+    accountId: "wa-1",
+  }, userPrincipal({ id: "otcan", role: "user" }), env);
+
+  const result = await processApiAgentThreadInput("otcantest-direct-desktop-open", env, {
+    fetchImpl: async () => {
+      throw new Error("openai_should_not_be_called_for_direct_desktop_open");
+    },
+  });
+  const messages = await listThreadMessages("otcantest-direct-desktop-open", env);
+  const assistant = messages.find((message) => message.parentMessageId === input.id);
+
+  assert.equal(result.ok, true);
+  assert.match(assistant.text, /Desktop is open/i);
+  assert.match(assistant.text, /does not report login state/i);
+  assert.doesNotMatch(assistant.text, /\/codex/i);
   assert.notEqual(assistant.text.trim(), "Done.");
 });
 
@@ -2492,6 +2534,7 @@ test("tenant api-agent does not treat exact replies containing domains as web fe
 test("tenant api-agent does not treat incidental domain labels as web fetch targets", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-api-agent-domain-label-no-fetch-"));
   const env = await allowSanitizerEnv(home, {
+    ORKESTR_API_AGENT_DIRECT_DESKTOP_ENABLED: "0",
     ORKESTR_API_AGENT_WEB_FETCH_SKIP_DNS_CHECK: "1",
   });
   await upsertUser({ id: "otcan", role: "user", displayName: "Otcan" }, env);

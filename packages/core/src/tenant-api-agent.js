@@ -1,3 +1,4 @@
+import net from "node:net";
 import { appendEvent } from "../../storage/src/store.js";
 import { assertSanitizedAction } from "./llm-sanitizer.js";
 import { isAdminPrincipal } from "./policy.js";
@@ -43,6 +44,10 @@ function falsey(value = "") {
 
 function webFetchAvailable(env = process.env) {
   return !falsey(env.ORKESTR_API_AGENT_WEB_FETCH_ENABLED);
+}
+
+function desktopDirectActionsAvailable(env = process.env) {
+  return !falsey(env.ORKESTR_API_AGENT_DIRECT_DESKTOP_ENABLED);
 }
 
 function codexEscalationSentence(env = process.env) {
@@ -354,6 +359,46 @@ function publicWebFetchTargetForMessage(text = "") {
   return null;
 }
 
+function privateHostname(hostname = "") {
+  const host = lower(hostname);
+  if (!host || host === "localhost" || host.endsWith(".localhost")) return true;
+  const version = net.isIP(host);
+  if (!version) return false;
+  if (version === 4) {
+    const parts = host.split(".").map((part) => Number(part));
+    const [a, b] = parts;
+    return a === 0 ||
+      a === 10 ||
+      a === 127 ||
+      (a === 169 && b === 254) ||
+      (a === 172 && b >= 16 && b <= 31) ||
+      (a === 192 && b === 168) ||
+      a >= 224;
+  }
+  return host === "::1" || host === "::" || host.startsWith("fc") || host.startsWith("fd") || host.startsWith("fe80:");
+}
+
+function publicWebFetchTargetForbidden(url = "") {
+  try {
+    const parsed = new URL(clean(url));
+    return !["http:", "https:"].includes(parsed.protocol) || privateHostname(parsed.hostname);
+  } catch {
+    return true;
+  }
+}
+
+function managedDesktopOpenRequest(text = "") {
+  const value = clean(text);
+  if (!desktopActionIntent(value)) return null;
+  if (/\b(?:open|start|launch)\s+(?:linkedin|managed desktop|desktop|browser|web desktop)\b/i.test(value)) return { skillId: "linkedin", action: "open" };
+  if (/\blinkedin\b/i.test(value) && /\b(?:logged\s*in|login|signed\s*in)\b/i.test(value)) return { skillId: "linkedin", action: "open" };
+  return null;
+}
+
+function desktopActionIntent(text = "") {
+  return /\b(?:open|start|launch|logged\s*in|login|signed\s*in)\b/i.test(clean(text));
+}
+
 function countedWebTextLines(text = "", limit = 10) {
   const seen = new Set();
   const entries = [];
@@ -467,6 +512,38 @@ async function openPublicWebFetchInDesktop({ target, output, thread, principal, 
     `I couldn't fetch useful page contents from this chat (${webFetchIssue(output)}), so I opened ${openedUrl || clean(target?.url)} in ${desktopLabel}.`,
     "The desktop action only confirms that the URL was opened; it does not return page contents or login state.",
   ].join("\n");
+}
+
+async function runDirectManagedDesktopAction({ request, thread, principal, message, env, fetchImpl }) {
+  const args = { skillId: request.skillId, action: request.action, target: "", url: "" };
+  let output = null;
+  try {
+    await assertSanitizedAction({
+      action: "api-agent.tool.orkestr_run_skill_action",
+      principal,
+      resource: {
+        type: "thread",
+        id: thread.id,
+        ownerUserId: threadOwnerUserId(thread, env),
+        capabilities: await scopedCapabilitiesForThread(thread, env),
+      },
+      input: { tool: "orkestr_run_skill_action", args },
+    }, env);
+    output = await runTenantApiAgentTool("orkestr_run_skill_action", args, { principal, thread, fetchImpl }, env);
+  } catch (error) {
+    output = { ok: false, error: clean(error?.message || error || "desktop_action_failed") };
+  }
+  if (output?.ok === false || clean(output?.error)) {
+    return `Managed Desktop ${request.action} could not be completed: ${clean(output.error || "desktop_action_failed")}.`;
+  }
+  const desktop = output.desktop || {};
+  const label = clean(desktop.label || desktop.slug || "Managed Desktop");
+  const url = clean(output.openedUrl || output.url || desktop.url);
+  const lines = [`${label} is open${url ? ` at ${url}` : ""}.`];
+  if (/\blogged\s*in|login|signed\s*in/i.test(clean(message?.text))) {
+    lines.push("The tool result only confirms the desktop action; it does not report login state, so I cannot confirm whether you are logged in.");
+  }
+  return lines.join("\n");
 }
 
 function providerLabel(provider = "") {
@@ -1290,32 +1367,36 @@ async function runTenantApiAgentResponse({ thread, messages, message, env, fetch
   const webFetchTarget = webFetchAvailable(env) ? publicWebFetchTargetForMessage(message.text) : null;
   if (webFetchTarget) {
     let output = {};
-    try {
-      await assertSanitizedAction({
-        action: "api-agent.tool.orkestr_fetch_web_page",
-        principal,
-        resource: {
-          type: "thread",
-          id: thread.id,
-          ownerUserId: threadOwnerUserId(thread, env),
-          capabilities: await scopedCapabilitiesForThread(thread, env),
-        },
-        input: {
-          tool: "orkestr_fetch_web_page",
-          args: {
-            url: webFetchTarget.url,
-            maxLinks: webFetchTarget.maxLinks,
-            maxChars: webFetchTarget.maxChars,
+    if (publicWebFetchTargetForbidden(webFetchTarget.url)) {
+      output = { ok: false, error: "url_host_forbidden" };
+    } else {
+      try {
+        await assertSanitizedAction({
+          action: "api-agent.tool.orkestr_fetch_web_page",
+          principal,
+          resource: {
+            type: "thread",
+            id: thread.id,
+            ownerUserId: threadOwnerUserId(thread, env),
+            capabilities: await scopedCapabilitiesForThread(thread, env),
           },
-        },
-      }, env);
-      output = await runTenantApiAgentTool("orkestr_fetch_web_page", {
-        url: webFetchTarget.url,
-        maxLinks: webFetchTarget.maxLinks,
-        maxChars: webFetchTarget.maxChars,
-      }, { principal, thread, fetchImpl }, env);
-    } catch (error) {
-      output = { ok: false, error: clean(error?.message || error || "web_fetch_failed") };
+          input: {
+            tool: "orkestr_fetch_web_page",
+            args: {
+              url: webFetchTarget.url,
+              maxLinks: webFetchTarget.maxLinks,
+              maxChars: webFetchTarget.maxChars,
+            },
+          },
+        }, env);
+        output = await runTenantApiAgentTool("orkestr_fetch_web_page", {
+          url: webFetchTarget.url,
+          maxLinks: webFetchTarget.maxLinks,
+          maxChars: webFetchTarget.maxChars,
+        }, { principal, thread, fetchImpl }, env);
+      } catch (error) {
+        output = { ok: false, error: clean(error?.message || error || "web_fetch_failed") };
+      }
     }
     const directAnswer = fallbackWebFetchToolAnswer([output]);
     const text = webFetchDirectAnswerUsable(output, directAnswer)
@@ -1329,6 +1410,21 @@ async function runTenantApiAgentResponse({ thread, messages, message, env, fetch
       response: {
         id: `web_fetch_direct_${message.id}`,
         model: "orkestr-api-agent-web-fetch",
+        output_text: text,
+        output: [],
+        usage: {},
+      },
+      text,
+    };
+  }
+
+  const desktopRequest = desktopDirectActionsAvailable(env) ? managedDesktopOpenRequest(message.text) : null;
+  if (desktopRequest) {
+    const text = await runDirectManagedDesktopAction({ request: desktopRequest, thread, principal, message, env, fetchImpl });
+    return {
+      response: {
+        id: `desktop_direct_${message.id}`,
+        model: "orkestr-api-agent-desktop",
         output_text: text,
         output: [],
         usage: {},
