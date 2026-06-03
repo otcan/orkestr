@@ -1,3 +1,5 @@
+import { isNoReplyAssistantMessage } from "../../core/src/no-reply.js";
+
 function clean(value) {
   return String(value || "").trim();
 }
@@ -15,6 +17,7 @@ export function shouldSkipCodexAssistantMirror(message = {}) {
 }
 
 export function shouldMirrorWhatsAppReply(message = {}) {
+  if (isNoReplyAssistantMessage(message)) return false;
   if (codexAssistantSource(message)) {
     const phase = codexAssistantPhase(message);
     if (shouldSkipCodexAssistantMirror(message)) return false;
@@ -24,6 +27,7 @@ export function shouldMirrorWhatsAppReply(message = {}) {
 }
 
 export function shouldMirrorWhatsAppProgress(message = {}) {
+  if (isNoReplyAssistantMessage(message)) return false;
   if (!codexAssistantSource(message)) return false;
   if (shouldSkipCodexAssistantMirror(message)) return false;
   return ["commentary", "awaiting_approval"].includes(codexAssistantPhase(message));

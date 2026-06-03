@@ -5365,6 +5365,56 @@ test("thread APIs suppress runtime interruption notices superseded by final answ
   }
 });
 
+test("thread APIs hide NO_REPLY assistant turns from visible history", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-api-no-reply-"));
+  const priorHome = process.env.ORKESTR_HOME;
+  process.env.ORKESTR_HOME = home;
+  const server = await startServer({ port: 0, host: "127.0.0.1" });
+  const { port } = server.address();
+  const baseUrl = `http://127.0.0.1:${port}`;
+  try {
+    await createThread({ id: "no-reply-api-thread", name: "No Reply API Thread" }, { ORKESTR_HOME: home });
+    const input = await appendThreadMessage("no-reply-api-thread", {
+      role: "user",
+      source: "manual",
+      text: "Only reply if action is needed.",
+      state: "completed",
+      createdAt: "2026-06-03T10:00:00.000Z",
+    }, { ORKESTR_HOME: home });
+    const silent = await appendThreadMessage("no-reply-api-thread", {
+      role: "assistant",
+      source: "codex-app-server",
+      phase: "final_answer",
+      text: " NO_REPLY\n",
+      state: "completed",
+      parentMessageId: input.id,
+      createdAt: "2026-06-03T10:01:00.000Z",
+    }, { ORKESTR_HOME: home });
+
+    const stored = await listThreadMessages("no-reply-api-thread", { ORKESTR_HOME: home });
+    const listed = await fetch(`${baseUrl}/api/threads/no-reply-api-thread/messages`);
+    const summarized = await fetch(`${baseUrl}/api/threads`);
+    const payload = await listed.json();
+    const summaryPayload = await summarized.json();
+    const summary = summaryPayload.threads.find((thread) => thread.id === "no-reply-api-thread");
+
+    assert.equal(silent.text, "NO_REPLY");
+    assert.equal(silent.visibility, "silent");
+    assert.equal(silent.silentReason, "no_reply");
+    assert.equal(stored.length, 2);
+    assert.equal(listed.status, 200);
+    assert.equal(payload.messages.length, 1);
+    assert.equal(payload.messages[0].text, "Only reply if action is needed.");
+    assert.equal(payload.messages.some((message) => message.text === "NO_REPLY"), false);
+    assert.equal(summary.lastMessageRole, "user");
+    assert.equal(summary.lastMessageAt, "2026-06-03T10:00:00.000Z");
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+    if (priorHome === undefined) delete process.env.ORKESTR_HOME;
+    else process.env.ORKESTR_HOME = priorHome;
+  }
+});
+
 test("thread interrupt API attempts delivery before returning queued status", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-api-interrupt-"));
   const fakeTmux = await createFakeTmux(home);

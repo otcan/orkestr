@@ -1,4 +1,5 @@
 import { clean } from "./codex-app-server-common.js";
+import { isNoReplyAssistantMessage } from "./no-reply.js";
 
 export function messageTurnId(message = {}) {
   return clean(message.codexTurnId || message.executorTurnId);
@@ -64,5 +65,8 @@ export function runtimeInterruptedSuperseded(message = {}, messages = []) {
 }
 
 export function visibleThreadMessages(messages = []) {
-  return messages.filter((message) => !runtimeInterruptedSuperseded(message, messages));
+  return messages.filter((message) =>
+    !isNoReplyAssistantMessage(message) &&
+    !runtimeInterruptedSuperseded(message, messages)
+  );
 }

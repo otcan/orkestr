@@ -5,6 +5,7 @@ import { ensureDataDirs } from "../../storage/src/paths.js";
 import { appendEvent } from "../../storage/src/store.js";
 import { createThreadMessageRepository, createThreadRepository } from "../../storage/src/repositories.js";
 import { assertSanitizedAction } from "./llm-sanitizer.js";
+import { normalizeNoReplyAssistantMessage } from "./no-reply.js";
 import { assertResourceAccess, assertThreadLimit, filterResourcesForPrincipal, isAdminPrincipal, policyError, resourceOwnerUserId } from "./policy.js";
 import { userScopedCapabilityHints } from "./user-skills.js";
 import { adminUserId, getUser, normalizeUserId } from "./users.js";
@@ -26,6 +27,8 @@ const messageStringFields = [
   "runtimeLeaseId",
   "deliveredAt",
   "error",
+  "visibility",
+  "silentReason",
   "originSurface",
   "originTransport",
   "executorKind",
@@ -390,7 +393,7 @@ export async function appendThreadMessage(threadId, input, env = process.env) {
     const cursor =
       Number(input.cursor || 0) ||
       Math.max(0, ...messages.map((item) => Number(item.cursor || 0)).filter(Number.isFinite)) + 1;
-    const nextMessage = {
+    let nextMessage = {
       id: randomUUID(),
       ownerUserId: normalizeUserId(input.ownerUserId || thread.ownerUserId || env.ORKESTR_ADMIN_USER_ID || adminUserId),
       role,
@@ -407,6 +410,7 @@ export async function appendThreadMessage(threadId, input, env = process.env) {
       const value = String(input[key] || "").trim();
       if (value) nextMessage[key] = value;
     }
+    nextMessage = normalizeNoReplyAssistantMessage(nextMessage);
     if (input.forceDeliveryAfterInterrupt === true) nextMessage.forceDeliveryAfterInterrupt = true;
     if (Array.isArray(input.attachments) && input.attachments.length) {
       nextMessage.attachments = input.attachments.map((attachment) => ({ ...attachment }));
@@ -571,11 +575,11 @@ export async function updateThreadMessage(threadId, messageId, patch, env = proc
     let updated = null;
     const next = messages.map((message) => {
       if (message.id !== messageId) return message;
-      updated = {
+      updated = normalizeNoReplyAssistantMessage({
         ...message,
         ...patch,
         updatedAt: nowIso(),
-      };
+      });
       return updated;
     });
     if (!updated) {

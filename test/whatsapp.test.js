@@ -1350,6 +1350,46 @@ test("whatsapp delivery mirrors assistant replies once to the source chat", asyn
   assert.match(calls[0].body.text, /No-op executor received/);
 });
 
+test("whatsapp delivery suppresses NO_REPLY assistant turns", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-no-reply-"));
+  const env = externalBridgeEnv(home);
+  await writeConnectorConfig("whatsapp", { bridgeMode: "external", bridgeUrl: "http://wa.local" }, env);
+  await createThread({ id: "thread-wa-no-reply", name: "WA No Reply Thread" }, env);
+  const parent = await appendThreadMessage("thread-wa-no-reply", {
+    role: "user",
+    source: "whatsapp_inbound",
+    connector: "whatsapp",
+    state: "completed",
+    deliveryState: "delivered",
+    text: "quiet status?",
+    chatId: "chat-no-reply",
+  }, env);
+  const silent = await appendThreadMessage("thread-wa-no-reply", {
+    role: "assistant",
+    source: "codex-app-server",
+    phase: "final_answer",
+    state: "completed",
+    text: "NO_REPLY",
+    parentMessageId: parent.id,
+    connector: "whatsapp",
+    chatId: "chat-no-reply",
+  }, env);
+
+  const calls = [];
+  const delivery = await deliverWhatsAppReplies(env, async (url, options) => {
+    calls.push({ url, body: JSON.parse(options.body) });
+    return response({ ok: true, ids: ["sent-no-reply"] });
+  });
+  const messages = await listThreadMessages("thread-wa-no-reply", env);
+  const stored = messages.find((message) => message.id === silent.id);
+
+  assert.equal(stored.visibility, "silent");
+  assert.equal(stored.silentReason, "no_reply");
+  assert.equal(delivery.delivered.length, 0);
+  assert.equal(delivery.failed.length, 0);
+  assert.equal(calls.length, 0);
+});
+
 test("whatsapp remote runtime route forwards inbound input and mirrors queue notice from public router", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-remote-queue-"));
   const env = externalBridgeEnv(home, {
