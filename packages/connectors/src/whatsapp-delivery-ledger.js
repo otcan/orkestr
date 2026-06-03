@@ -171,5 +171,7 @@ export async function finishOutboundDeliveryClaim({ state, claim, filePath, stat
   };
   upsertOutboundDeliveryClaim(state, updated);
   await persistState?.(state, env);
-  if (status === "delivered" && filePath) await fs.unlink(filePath).catch(() => {});
+  if (["delivered", "failed"].includes(String(status || "").trim().toLowerCase()) && filePath) {
+    await fs.unlink(filePath).catch(() => {});
+  }
 }

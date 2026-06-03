@@ -185,3 +185,45 @@ test("WhatsApp delivery ledger claims prevent concurrent duplicate sends", async
   assert.equal(outboundDeliveryClaimExpired({ status: "claimed", updatedAt: "2000-01-01T00:00:00.000Z" }, Date.now(), env), true);
   assert.equal(pruneOutboundDeliveryClaims([{ claimKey: "old", updatedAt: "2000-01-01T00:00:00.000Z" }], { env }).length, 0);
 });
+
+test("WhatsApp delivery ledger releases failed claim files for retry", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-ledger-failed-"));
+  const env = { ORKESTR_HOME: home, ORKESTR_WHATSAPP_OUTBOUND_CLAIM_TTL_MS: "60000" };
+  const state = { outboundDeliveryClaims: [] };
+  const persistState = async () => {};
+  const textKey = deliveryTextKey("chat-1", "retry message");
+
+  const first = await acquireOutboundDeliveryClaim({
+    state,
+    kind: "thread",
+    deliveryType: "final",
+    threadId: "thread-1",
+    messageId: "message-1",
+    chatId: "chat-1",
+    accountId: "wa-1",
+    textKey,
+  }, env, { persistState });
+  assert.equal(first.acquired, true);
+
+  await finishOutboundDeliveryClaim({
+    state,
+    claim: first.claim,
+    filePath: first.filePath,
+    status: "failed",
+    error: "temporary bridge failure",
+  }, env, { persistState });
+
+  assert.equal((await fs.stat(first.filePath).catch(() => null)), null);
+
+  const retry = await acquireOutboundDeliveryClaim({
+    state,
+    kind: "thread",
+    deliveryType: "final",
+    threadId: "thread-1",
+    messageId: "message-1",
+    chatId: "chat-1",
+    accountId: "wa-1",
+    textKey,
+  }, env, { persistState });
+  assert.equal(retry.acquired, true);
+});
