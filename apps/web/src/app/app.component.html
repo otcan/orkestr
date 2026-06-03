@@ -617,6 +617,13 @@
 
       @if (activePanel === "chat") {
         <section #messagePane class="messages" (scroll)="rememberScrollPosition()">
+          @if (selectedMessagesHasOlder()) {
+            <div class="message-pager">
+              <button class="secondary" type="button" (click)="loadOlderMessages()" [disabled]="selectedMessagesLoadingOlder()">
+                {{ selectedMessagesLoadingOlder() ? "Loading" : "Load older" }}
+              </button>
+            </div>
+          }
           <ork-thread-message-list
             [messages]="selectedMessages()"
             [loading]="selectedMessagesLoading()"

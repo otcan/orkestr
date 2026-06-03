@@ -1854,6 +1854,18 @@ ork-first-thread-wizard.first-thread-host {
   gap: 12px;
 }
 
+.message-pager {
+  display: flex;
+  justify-content: center;
+  padding: 2px 0 6px;
+}
+
+.message-pager button {
+  min-height: 34px;
+  border-radius: 8px;
+  padding: 7px 12px;
+}
+
 .message {
   max-width: min(860px, 86%);
   border: 1px solid rgba(119, 205, 126, 0.16);

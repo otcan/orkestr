@@ -11,6 +11,7 @@ import {
   codexAppServerThreadStatus,
   deliverCodexAppServerPendingInputs,
   getCodexAppServerClient,
+  hydrateCodexAppServerThreadMessages,
   importCodexAppServerThread,
   interruptCodexAppServerThread,
   listCodexAppServerThreads,
@@ -2255,6 +2256,38 @@ test("Codex app-server recovery reports progress-only turns with no final answer
   } finally {
     stopCodexAppServerClients();
   }
+});
+
+test("Codex app-server history hydration preserves non-final assistant messages", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-codex-app-server-history-preserve-"));
+  const env = { ORKESTR_HOME: path.join(home, "orkestr") };
+  const thread = await createThread({ id: "app-server-history-preserve-thread", name: "History Preserve Thread", cwd: home, executorId: "codex", executor: { type: "codex" } }, env);
+  const codexThread = {
+    id: "codex-history-preserve-thread",
+    turns: [
+      {
+        id: "codex-history-preserve-turn",
+        threadId: "codex-history-preserve-thread",
+        status: "completed",
+        items: [
+          { type: "userMessage", id: "history-preserve-user", content: [{ type: "text", text: "User request" }] },
+          { type: "agentMessage", id: "history-preserve-commentary", text: "Working on it.", phase: "commentary" },
+          { type: "contextCompaction", id: "history-preserve-context", phase: "context_compaction" },
+          { type: "plan", id: "history-preserve-plan", text: "Plan survives.", phase: "plan" },
+          { type: "agentMessage", id: "history-preserve-final", text: "Final answer survives.", phase: "final_answer" },
+        ],
+      },
+    ],
+  };
+
+  const result = await hydrateCodexAppServerThreadMessages(thread, codexThread, env);
+  const messages = await listThreadMessages(thread.id, env);
+
+  assert.equal(result.created, 5);
+  assert.ok(messages.find((message) => message.role === "assistant" && message.phase === "commentary" && message.text === "Working on it."));
+  assert.ok(messages.find((message) => message.role === "assistant" && message.phase === "context_compaction" && message.text === "Codex compacted the conversation context."));
+  assert.ok(messages.find((message) => message.role === "assistant" && message.phase === "plan" && message.text === "Plan survives."));
+  assert.ok(messages.find((message) => message.role === "assistant" && message.phase === "final_answer" && message.text === "Final answer survives."));
 });
 
 test("Codex app-server history sync adopts native turns without duplicating Orkestr inputs", async () => {

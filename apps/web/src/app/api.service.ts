@@ -751,7 +751,12 @@ export interface ThreadMessagesResponse {
   messages: ThreadMessage[];
   cursor?: number;
   currentCursor?: number;
+  oldestCursor?: number | null;
+  hasMoreBefore?: boolean;
   count?: number;
+  since?: number;
+  before?: number;
+  limit?: number;
   state?: string;
 }
 
@@ -1585,8 +1590,20 @@ export class ApiService {
     );
   }
 
-  threadMessages(id: string, limit = 100): Observable<ThreadMessagesResponse> {
-    return this.http.get<ThreadMessagesResponse>(this.api(`/threads/${encodeURIComponent(id)}/messages?limit=${limit}`));
+  threadMessages(
+    id: string,
+    options: number | { limit?: number; since?: number | null; before?: number | null } = 100,
+  ): Observable<ThreadMessagesResponse> {
+    const query = new URLSearchParams();
+    if (typeof options === "number") {
+      query.set("limit", String(options));
+    } else {
+      if (options.limit !== undefined) query.set("limit", String(options.limit));
+      if (options.since !== undefined && options.since !== null) query.set("since", String(options.since));
+      if (options.before !== undefined && options.before !== null) query.set("before", String(options.before));
+    }
+    const suffix = query.toString() ? `?${query.toString()}` : "";
+    return this.http.get<ThreadMessagesResponse>(this.api(`/threads/${encodeURIComponent(id)}/messages${suffix}`));
   }
 
   threadRuntime(id: string): Observable<ThreadSummary> {

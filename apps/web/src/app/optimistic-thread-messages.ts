@@ -95,9 +95,16 @@ export function mergeServerMessagesWithOptimistic(
   cachedMessages: ThreadMessage[],
 ): ThreadMessage[] {
   const serverKeys = new Set(serverMessages.map((message) => messageKey(message)));
-  const optimisticMessages = cachedMessages.filter((message) => Boolean(message["optimistic"]) && !serverKeys.has(messageKey(message)));
-  if (!optimisticMessages.length) return serverMessages;
-  return [...serverMessages, ...optimisticMessages].sort((a, b) => {
+  const byKey = new Map<string, ThreadMessage>();
+  for (const message of cachedMessages) {
+    const key = messageKey(message);
+    if (Boolean(message["optimistic"]) && serverKeys.has(key)) continue;
+    byKey.set(key, message);
+  }
+  for (const message of serverMessages) {
+    byKey.set(messageKey(message), withoutOptimisticFlags(message));
+  }
+  return [...byKey.values()].sort((a, b) => {
     const delta = messageTimeMs(a) - messageTimeMs(b);
     if (delta !== 0) return delta;
     return messageKey(a).localeCompare(messageKey(b));

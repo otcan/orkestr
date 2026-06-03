@@ -32,6 +32,7 @@ import {
   SetupStatus,
   ThreadAttachResponse,
   ThreadMessage,
+  ThreadMessagesResponse,
   ThreadSummary,
   TimerRecord,
   OrkestrUser,
@@ -56,7 +57,14 @@ type PersistedThreadTextField =
   | "approveText"
   | "interruptText";
 
+interface ThreadMessagePageState {
+  oldestCursor: number | null;
+  hasMoreBefore: boolean;
+  loadingOlder: boolean;
+}
+
 const DEFAULT_WHATSAPP_REPLY_PREFIX = "orkestr:";
+const MESSAGE_PAGE_LIMIT = 100;
 
 @Component({
   selector: "ork-root",
@@ -116,6 +124,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
 
   threads: ThreadSummary[] = [];
   readonly messageCache = signal<Record<string, ThreadMessage[]>>({});
+  readonly messagePageState = signal<Record<string, ThreadMessagePageState>>({});
   readonly loadingThreadIds = signal<Record<string, boolean>>({});
   readonly activeThreadIds = signal<Record<string, number>>({});
   readonly slashCommands = SLASH_COMMANDS;
@@ -1847,6 +1856,21 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     this.shouldStickToBottom = this.isMessagePaneNearBottom();
   }
 
+  private restoreMessagePaneOffset(previousScrollHeight: number, previousScrollTop: number): void {
+    if (this.activePanel !== "chat") return;
+    const run = () => {
+      const pane = this.messagePane?.nativeElement;
+      if (!pane) return;
+      const delta = pane.scrollHeight - previousScrollHeight;
+      pane.scrollTop = previousScrollTop + Math.max(0, delta);
+    };
+    if (typeof globalThis.requestAnimationFrame === "function") {
+      globalThis.requestAnimationFrame(() => globalThis.requestAnimationFrame(run));
+    } else {
+      globalThis.setTimeout?.(run, 0);
+    }
+  }
+
   handleDragOver(event: DragEvent): void {
     event.preventDefault();
   }
@@ -1946,6 +1970,20 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   selectedMessages(): ThreadMessage[] {
     const thread = this.selectedThread();
     return thread ? this.messageCache()[thread.id] || [] : [];
+  }
+
+  selectedMessagesHasOlder(): boolean {
+    const thread = this.selectedThread();
+    if (!thread) return false;
+    const page = this.messagePageState()[thread.id];
+    return Boolean(page?.hasMoreBefore);
+  }
+
+  selectedMessagesLoadingOlder(): boolean {
+    const thread = this.selectedThread();
+    if (!thread) return false;
+    const page = this.messagePageState()[thread.id];
+    return Boolean(page?.loadingOlder);
   }
 
   private appendOptimisticUserMessage(
@@ -3327,6 +3365,66 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     return current;
   }
 
+  private emptyMessagePageState(): ThreadMessagePageState {
+    return { oldestCursor: null, hasMoreBefore: false, loadingOlder: false };
+  }
+
+  private normalizedCursor(value: unknown): number | null {
+    const cursor = Number(value || 0);
+    return Number.isFinite(cursor) && cursor > 0 ? cursor : null;
+  }
+
+  private oldestMessageCursor(messages: ThreadMessage[]): number | null {
+    const cursors = messages
+      .map((message) => this.normalizedCursor(message.cursor))
+      .filter((cursor): cursor is number => cursor !== null);
+    return cursors.length ? Math.min(...cursors) : null;
+  }
+
+  private minCursor(left: number | null, right: number | null): number | null {
+    if (left === null) return right;
+    if (right === null) return left;
+    return Math.min(left, right);
+  }
+
+  private threadMessagePageState(threadId: string): ThreadMessagePageState {
+    return this.messagePageState()[threadId] || this.emptyMessagePageState();
+  }
+
+  private setThreadMessagesLoadingOlder(threadId: string, loadingOlder: boolean): void {
+    this.messagePageState.update((pages) => ({
+      ...pages,
+      [threadId]: { ...(pages[threadId] || this.emptyMessagePageState()), loadingOlder },
+    }));
+  }
+
+  private updateLatestThreadMessagePageState(threadId: string, payload: ThreadMessagesResponse): void {
+    const current = this.threadMessagePageState(threadId);
+    const incomingOldest = this.normalizedCursor(payload.oldestCursor);
+    const oldestCursor = this.minCursor(current.oldestCursor, incomingOldest);
+    let hasMoreBefore = payload.hasMoreBefore === true;
+    if (current.oldestCursor !== null && incomingOldest !== null && current.oldestCursor < incomingOldest) {
+      hasMoreBefore = current.hasMoreBefore;
+    } else if (incomingOldest === null && current.oldestCursor !== null) {
+      hasMoreBefore = current.hasMoreBefore;
+    }
+    this.messagePageState.update((pages) => ({
+      ...pages,
+      [threadId]: { oldestCursor, hasMoreBefore, loadingOlder: current.loadingOlder },
+    }));
+  }
+
+  private updateOlderThreadMessagePageState(threadId: string, payload: ThreadMessagesResponse): void {
+    const current = this.threadMessagePageState(threadId);
+    const incomingOldest = this.normalizedCursor(payload.oldestCursor);
+    const oldestCursor = this.minCursor(current.oldestCursor, incomingOldest);
+    const hasMoreBefore = incomingOldest !== null && payload.hasMoreBefore === true;
+    this.messagePageState.update((pages) => ({
+      ...pages,
+      [threadId]: { oldestCursor, hasMoreBefore, loadingOlder: false },
+    }));
+  }
+
   private async loadSelectedThread(forceBottom: boolean): Promise<void> {
     if (this.isRouteLevelUserPanel(this.activePanel)) return;
     const thread = this.selectedThread();
@@ -3335,7 +3433,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     const loadToken = this.beginThreadLoad(threadId);
     const wasNearBottom = this.isMessagePaneNearBottom();
     try {
-      const payload = await firstValueFrom(this.api.threadMessages(threadId, 150));
+      const payload = await firstValueFrom(this.api.threadMessages(threadId, { limit: MESSAGE_PAGE_LIMIT }));
       if (this.threadLoadTokens.get(threadId) !== loadToken) return;
       const previousMessages = this.messageCache()[threadId] || [];
       const nextMessages = mergeServerMessagesWithOptimistic(payload.messages || [], previousMessages);
@@ -3343,6 +3441,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
       const signature = nextMessages.map((message) => this.messageKey(message)).join("|");
       const changed = signature !== previousSignature;
       this.messageCache.update((cache) => ({ ...cache, [threadId]: nextMessages }));
+      this.updateLatestThreadMessagePageState(threadId, payload);
       const currentThread = this.selectedThread();
       if (currentThread?.id === threadId) this.markThreadRead(currentThread);
       if (forceBottom || (!previousSignature && nextMessages.length > 0) || (changed && wasNearBottom)) {
@@ -3357,6 +3456,45 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
       this.finishThreadLoad(threadId, loadToken);
     }
     this.renderNow();
+  }
+
+  async loadOlderMessages(): Promise<void> {
+    const thread = this.selectedThread();
+    if (!thread) return;
+    const threadId = thread.id;
+    const page = this.threadMessagePageState(threadId);
+    if (page.loadingOlder || !page.hasMoreBefore) return;
+    const cachedMessages = this.messageCache()[threadId] || [];
+    const oldestCursor = page.oldestCursor || this.oldestMessageCursor(cachedMessages);
+    if (!oldestCursor) {
+      this.messagePageState.update((pages) => ({
+        ...pages,
+        [threadId]: { ...page, hasMoreBefore: false, loadingOlder: false },
+      }));
+      this.renderNow();
+      return;
+    }
+    const pane = this.messagePane?.nativeElement;
+    const previousScrollHeight = pane?.scrollHeight || 0;
+    const previousScrollTop = pane?.scrollTop || 0;
+    this.setThreadMessagesLoadingOlder(threadId, true);
+    this.renderNow();
+    try {
+      const payload = await firstValueFrom(this.api.threadMessages(threadId, { limit: MESSAGE_PAGE_LIMIT, before: oldestCursor }));
+      const previousMessages = this.messageCache()[threadId] || [];
+      const nextMessages = mergeServerMessagesWithOptimistic(payload.messages || [], previousMessages);
+      this.messageCache.update((cache) => ({ ...cache, [threadId]: nextMessages }));
+      this.updateOlderThreadMessagePageState(threadId, payload);
+      this.renderNow();
+      if (this.selectedThread()?.id === threadId && (payload.messages || []).length > 0) {
+        this.restoreMessagePaneOffset(previousScrollHeight, previousScrollTop);
+      }
+    } catch (error) {
+      this.error = this.errorText(error);
+    } finally {
+      this.setThreadMessagesLoadingOlder(threadId, false);
+      this.renderNow();
+    }
   }
 
   private beginThreadLoad(threadId: string): number {

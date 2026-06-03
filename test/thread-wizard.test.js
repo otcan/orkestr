@@ -126,6 +126,32 @@ test("web thread input renders optimistic user messages before server refresh", 
   assert.ok(sendMessage.includes("response.message"));
 });
 
+test("web chat paginates older messages without dropping cached history", async () => {
+  const sources = await read([
+    "apps/web/src/app/app.component.ts",
+    "apps/web/src/app/app.component.html",
+    "apps/web/src/app/api.service.ts",
+    "apps/web/src/app/optimistic-thread-messages.ts",
+    "apps/web/src/styles.css",
+  ]);
+
+  assert.ok(sources.includes("oldestCursor?: number | null"));
+  assert.ok(sources.includes("hasMoreBefore?: boolean"));
+  assert.ok(sources.includes("before?: number"));
+  assert.ok(sources.includes("threadMessages("));
+  assert.ok(sources.includes("URLSearchParams"));
+  assert.ok(sources.includes("query.set(\"before\""));
+  assert.ok(sources.includes("messagePageState"));
+  assert.ok(sources.includes("selectedMessagesHasOlder()"));
+  assert.ok(sources.includes("loadOlderMessages()"));
+  assert.ok(sources.includes("restoreMessagePaneOffset"));
+  assert.ok(sources.includes("Load older"));
+  assert.ok(sources.includes(".message-pager"));
+  assert.ok(sources.includes("const byKey = new Map"));
+  assert.ok(sources.includes("for (const message of cachedMessages)"));
+  assert.ok(sources.includes("for (const message of serverMessages)"));
+});
+
 test("chat messages show delivery failure reasons", async () => {
   const sources = await read([
     "apps/web/src/app/app.component.ts",
