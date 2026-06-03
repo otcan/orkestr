@@ -12,13 +12,18 @@ function clean(value) {
 function timerCreateInput(args = {}, thread = null) {
   const targetType = clean(args.targetType || "thread").toLowerCase();
   const target = clean(args.target || (targetType === "thread" ? thread?.id : ""));
+  const delay = clean(args.delay || args.after || args.in);
+  const runAt = clean(args.runAt || args.dueAt);
+  const cadence = delay || runAt ? "once" : clean(args.cadence || "daily").toLowerCase();
   return {
     label: clean(args.label),
     targetType,
     target,
-    cadence: clean(args.cadence || "daily").toLowerCase(),
+    cadence,
     time: clean(args.time || "09:00"),
     every: clean(args.every),
+    delay,
+    runAt,
     prompt: clean(args.prompt),
     enabled: args.enabled !== false,
   };
@@ -48,12 +53,14 @@ export function tenantApiAgentTimerToolDefinitions() {
           targetType: { type: "string", enum: ["thread", "agent"], description: "Usually thread for the current chat." },
           target: { type: "string", description: "Target thread or agent id. Use empty string to target the current chat." },
           cadence: { type: "string", enum: ["once", "daily", "weekly", "interval"], description: "Timer cadence." },
+          delay: { type: "string", description: "Relative delay for one-shot timers, such as 2m, 10 minutes, or 2 hours. Empty string if unused." },
+          runAt: { type: "string", description: "Absolute ISO time for one-shot timers. Empty string if unused." },
           time: { type: "string", description: "Clock time such as 09:00 for daily/weekly timers, or empty string for interval timers." },
           every: { type: "string", description: "Interval expression such as 2h or 1d for interval timers, otherwise empty string." },
           prompt: { type: "string", description: "The instruction Orkestr should send when the timer fires." },
           enabled: { type: "boolean", description: "Whether the timer should be enabled immediately." },
         },
-        required: ["label", "targetType", "target", "cadence", "time", "every", "prompt", "enabled"],
+        required: ["label", "targetType", "target", "cadence", "delay", "runAt", "time", "every", "prompt", "enabled"],
         additionalProperties: false,
       },
       strict: true,

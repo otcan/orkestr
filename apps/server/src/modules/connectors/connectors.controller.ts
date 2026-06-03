@@ -25,6 +25,7 @@ import { requestThreadInputDelivery } from "../../../../../packages/core/src/run
 import { getThread, getThreadForPrincipal } from "../../../../../packages/core/src/threads.js";
 import { processApiAgentThreadInput, threadUsesApiAgent } from "../../../../../packages/core/src/tenant-api-agent.js";
 import { requestPrincipal } from "../../../../../packages/core/src/principal.js";
+import { publicRoutingFailurePayload } from "../../../../../packages/core/src/routing-failures.js";
 import {
   createLocalWhatsAppChat,
   generateLocalWhatsAppChatPicture,
@@ -80,6 +81,20 @@ function optionalBodyBoolean(body: Record<string, unknown>, key: string, fallbac
   const value = body[key];
   if (typeof value === "string") return ["1", "true", "yes", "on"].includes(value.trim().toLowerCase());
   return value === true;
+}
+
+function errorStatusCode(error: any, fallback = 500): number {
+  const status = Number(error?.statusCode || error?.status || (typeof error?.getStatus === "function" ? error.getStatus() : 0));
+  return Number.isFinite(status) && status > 0 ? status : fallback;
+}
+
+function errorSafeCode(error: any, fallback = "request_failed"): string {
+  const response = typeof error?.getResponse === "function" ? error.getResponse() : null;
+  if (response && typeof response === "object" && !Array.isArray(response)) {
+    const value = String((response as Record<string, unknown>).error || (response as Record<string, unknown>).message || "").trim();
+    if (value) return value;
+  }
+  return String(error?.message || fallback).trim() || fallback;
 }
 
 @Controller("api/connectors")
@@ -337,33 +352,47 @@ export class ConnectorsController {
 
   @Post("whatsapp/inbound")
   async whatsappInbound(@Body() body: Record<string, unknown> = {}, @Res() response: any) {
-    ensureAttachmentsArray(body);
-    const routed = await routeWhatsAppInbound(body);
-    if (routed.threadId && !routed.duplicate) {
-      const thread = await getThread(String(routed.threadId || ""));
-      if (threadUsesApiAgent(thread || {})) {
-        const payload = await runWithRoutedWhatsAppTyping({ thread, input: body }, async () => {
-          await processApiAgentThreadInput(thread.id).catch(() => null);
+    try {
+      ensureAttachmentsArray(body);
+      const routed = await routeWhatsAppInbound(body);
+      if (routed.threadId && !routed.duplicate) {
+        const thread = await getThread(String(routed.threadId || ""));
+        if (threadUsesApiAgent(thread || {})) {
+          const payload = await runWithRoutedWhatsAppTyping({ thread, input: body }, async () => {
+            await processApiAgentThreadInput(thread.id).catch(() => null);
+            await deliverWhatsAppReplies().catch(() => {});
+            return { ...routed, runtimeKind: "api-agent" };
+          }, {
+            startTyping: startLocalWhatsAppTyping,
+            stopTyping: stopLocalWhatsAppTyping,
+          });
+          return response
+            .status(202)
+            .header("cache-control", "no-store")
+            .type("application/json; charset=utf-8")
+            .send(payload);
+        }
           await deliverWhatsAppReplies().catch(() => {});
-          return { ...routed, runtimeKind: "api-agent" };
-        }, {
-          startTyping: startLocalWhatsAppTyping,
-          stopTyping: stopLocalWhatsAppTyping,
-        });
-        return response
-          .status(202)
-          .header("cache-control", "no-store")
-          .type("application/json; charset=utf-8")
-          .send(payload);
+        if (!(routed as any).remoteRuntime) requestThreadInputDelivery(routed.threadId);
       }
-      await deliverWhatsAppReplies().catch(() => {});
-      if (!(routed as any).remoteRuntime) requestThreadInputDelivery(routed.threadId);
+      return response
+        .status(routed.duplicate ? 200 : 202)
+        .header("cache-control", "no-store")
+        .type("application/json; charset=utf-8")
+        .send(routed);
+    } catch (error: any) {
+      const statusCode = errorStatusCode(error, 500);
+      const code = statusCode >= 500 ? "whatsapp_inbound_route_failed" : errorSafeCode(error, "whatsapp_inbound_route_failed");
+      const payload = publicRoutingFailurePayload(error, {
+        code,
+        retryable: statusCode >= 500,
+      });
+      return response
+        .status(statusCode)
+        .header("cache-control", "no-store")
+        .type("application/json; charset=utf-8")
+        .send(payload);
     }
-    return response
-      .status(routed.duplicate ? 200 : 202)
-      .header("cache-control", "no-store")
-      .type("application/json; charset=utf-8")
-      .send(routed);
   }
 
   @Post("whatsapp/deliver")

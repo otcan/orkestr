@@ -15,6 +15,7 @@ import { listFilesForPrincipal } from "../packages/core/src/workspace-files.js";
 import { initialQueueDeliveryState, routeWhatsAppInbound } from "../packages/connectors/src/whatsapp.js";
 import { writeConnectorConfig } from "../packages/storage/src/config.js";
 import { userDataPaths } from "../packages/storage/src/paths.js";
+import { listEvents } from "../packages/storage/src/store.js";
 
 function response(payload, ok = true, status = 200) {
   return {
@@ -119,6 +120,38 @@ test("tenant api-agent answers non-admin WhatsApp thread without Codex delivery"
   assert.equal(assistant.text.includes("Codex"), false);
   assert.equal(usage.count, 1);
   assert.equal(usage.byModel["gpt-5-mini"] > 0, true);
+});
+
+test("tenant api-agent keeps timers available when capability lookup falls back", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-api-agent-capability-fallback-"));
+  const env = await allowSanitizerEnv(home);
+  await upsertUser({ id: "otcan", role: "user", displayName: "Otcan" }, env);
+  const paths = userDataPaths("otcan", env);
+  await fs.mkdir(paths.root, { recursive: true });
+  await fs.writeFile(paths.skills, "{not-valid-json", "utf8");
+  const thread = await createThread({
+    id: "otcan-capability-fallback",
+    ownerUserId: "otcan",
+    name: "otcan capability fallback",
+    runtimeKind: "api-agent",
+    executor: { type: "api-agent", metadata: { runtimeKind: "api-agent" } },
+    binding: { connector: "whatsapp", chatId: "chat-capability" },
+  }, env);
+
+  const instructions = await buildTenantApiAgentInstructions(thread, [], env);
+  const context = tenantContextFromInstructions(instructions);
+  const events = await listEvents(env, 20);
+
+  assert.equal(context.capabilities.timers, true);
+  assert.equal(context.capabilities.whatsapp, true);
+  assert.ok(context.capabilities.enabledSkills.includes("timers"));
+  assert.equal(context.capabilities.skills.find((skill) => skill.id === "timers")?.available, true);
+  assert.equal(events.some((event) =>
+    event.type === "api_agent_capability_decision" &&
+    event.threadId === thread.id &&
+    event.capability === "timers" &&
+    event.result === "fallback_available"
+  ), true);
 });
 
 test("tenant api-agent repairs bare acknowledgements for identity and capability turns", async () => {
@@ -1663,6 +1696,18 @@ test("tenant api-agent can manage timers from chat", async () => {
     prompt: "Ask me for my morning priorities.",
     enabled: true,
   }, { principal, thread }, env);
+  const relative = await runTenantApiAgentTool("orkestr_create_timer", {
+    label: "Say hi",
+    targetType: "thread",
+    target: "",
+    cadence: "once",
+    delay: "2m",
+    runAt: "",
+    time: "",
+    every: "",
+    prompt: "Tell me hi.",
+    enabled: true,
+  }, { principal, thread }, env);
   const listed = await runTenantApiAgentTool("orkestr_list_timers", {}, { principal, thread }, env);
   const run = await runTenantApiAgentTool("orkestr_run_timer", { timerId: created.timer.id }, { principal, thread }, env);
   const messages = await listThreadMessages(thread.id, env);
@@ -1672,7 +1717,11 @@ test("tenant api-agent can manage timers from chat", async () => {
   assert.equal(created.timer.ownerUserId, "otcan");
   assert.equal(created.timer.targetType, "thread");
   assert.equal(created.timer.target, thread.id);
+  assert.equal(relative.timer.cadence, "once");
+  assert.equal(relative.timer.target, thread.id);
+  assert.ok(Date.parse(relative.timer.nextRunAt) > Date.now());
   assert.equal(listed.timers.some((timer) => timer.id === created.timer.id), true);
+  assert.equal(listed.timers.some((timer) => timer.id === relative.timer.id), true);
   assert.equal(run.event.type, "timer_manual_run");
   assert.equal(messages.some((message) =>
     message.role === "user" &&
@@ -1680,6 +1729,7 @@ test("tenant api-agent can manage timers from chat", async () => {
     message.text === "Ask me for my morning priorities."
   ), true);
   assert.equal(deleted.ok, true);
+  await runTenantApiAgentTool("orkestr_delete_timer", { timerId: relative.timer.id }, { principal, thread }, env);
   assert.equal(after.timers.some((timer) => timer.id === created.timer.id), false);
 });
 
