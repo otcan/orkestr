@@ -90,6 +90,37 @@ function codexModeSetting(value) {
   return mode === "plan" || mode === "code" ? mode : "";
 }
 
+function codexStatusActiveFlags(status) {
+  return Array.isArray(status?.activeFlags)
+    ? status.activeFlags.map((flag) => clean(flag).toLowerCase()).filter(Boolean)
+    : [];
+}
+
+function appServerStatusProgress({ thread, runtimeState, codexStatus, pendingRequest }) {
+  const state = clean(runtimeState).toLowerCase();
+  const flags = codexStatusActiveFlags(codexStatus);
+  if (pendingRequest || state === "awaiting_approval") {
+    return {
+      stateHint: "awaiting_approval",
+      summary: "Waiting for approval",
+      tailLines: [],
+      capturedAt: nowIso(),
+    };
+  }
+  const mode = codexModeSetting(thread?.codexMode || thread?.executor?.metadata?.codexMode);
+  const planningFlag = flags.some((flag) => /(?:^|[_-])plan(?:ning)?(?:$|[_-])|review/.test(flag));
+  if ((state === "working" || state === "planning") && (mode === "plan" || planningFlag)) {
+    return {
+      stateHint: "planning",
+      summary: "Planning",
+      tailLines: [],
+      capturedAt: nowIso(),
+      codexMode: "plan",
+    };
+  }
+  return null;
+}
+
 function codexAppServerModePatch(mode, reason = "app-server-local-mode") {
   const desired = codexModeSetting(mode);
   if (!desired) return {};
@@ -910,6 +941,7 @@ export async function codexAppServerThreadStatus(thread, env = process.env, coun
   const codexStatus = activeTurnId && clean(rawCodexStatus?.type).toLowerCase() === "idle"
     ? { ...rawCodexStatus, type: "active", activeFlags: ["running"] }
     : rawCodexStatus;
+  const progress = appServerStatusProgress({ thread, runtimeState, codexStatus, pendingRequest });
   const status = {
     state: runtimeState,
     status: runtimeState,
@@ -943,7 +975,7 @@ export async function codexAppServerThreadStatus(thread, env = process.env, coun
     planImplementationReady: false,
     planImplementationMenuVisible: false,
     planImplementationSelectedChoice: null,
-    progress: null,
+    progress,
   };
   return {
     ...status,

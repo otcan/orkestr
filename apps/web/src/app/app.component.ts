@@ -2677,7 +2677,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     if (this.isThreadProcessing(thread)) return "hot";
     const state = String(thread.publicStatusCode || thread.status || thread.state || "").toLowerCase();
     if (state.includes("broken") || state.includes("failed")) return "bad";
-    if (state.includes("stuck") || state.includes("working") || state.includes("running")) return "hot";
+    if (state.includes("stuck") || state.includes("working") || state.includes("running") || state.includes("approval")) return "hot";
     if (state.includes("ready")) return "ready";
     if (state.includes("sleep")) return "sleep";
     return "idle";
@@ -2705,8 +2705,9 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
       activeCount > 0 ||
       progressState === "working" ||
       progressState === "planning" ||
+      progressState === "awaiting_approval" ||
       progressState === "awaiting_input" ||
-      /(?:working|running|processing|waking|pending)/.test(state),
+      /(?:working|running|processing|waking|pending|approval)/.test(state),
     );
   }
 
@@ -2733,6 +2734,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     if (thread.turnLifecycle?.awaitingApproval) return "Waiting for approval";
     if (lifecycleState === "queued") return "Queued";
     if (lifecycleState === "waking") return "Starting";
+    if (lifecycleState === "planning") return "Planning";
     if (lifecycleState === "running") return "Working";
     const progressState = this.threadProgressStateHint(thread);
     const progressSummary = this.threadProgressSummary(thread);
@@ -2753,6 +2755,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     if (label === "Starting") return "Start";
     if (label === "Queued") return "Queue";
     if (label === "Loading") return "Load";
+    if (label === "Waiting for approval") return "Approval";
     if (label === "Planning" || label === "Implement plan?") return "Plan";
     if (label === "Waiting for input") return "Input";
     if (label === "Error") return "Error";

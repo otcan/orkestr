@@ -70,6 +70,30 @@ function codexConversationInterruptionNoticeText() {
   ].join("\n");
 }
 
+function pendingRequestForCodexThread(pendingRequests, codexThreadId) {
+  const id = clean(codexThreadId);
+  if (!id) return null;
+  for (const request of pendingRequests.values()) {
+    if (clean(request?.codexThreadId) === id) return request;
+  }
+  return null;
+}
+
+function codexStatusType(status) {
+  return clean(status?.type).toLowerCase();
+}
+
+function approvalCodexStatus(status) {
+  const activeFlags = Array.isArray(status?.activeFlags)
+    ? status.activeFlags.map((flag) => clean(flag)).filter(Boolean)
+    : [];
+  return {
+    ...(status || {}),
+    type: "active",
+    activeFlags: [...new Set([...activeFlags, "waitingOnApproval"])],
+  };
+}
+
 export class CodexAppServerClient {
   constructor({ env = process.env, home = os.homedir() } = {}) {
     this.env = { ...env };
@@ -442,13 +466,31 @@ export class CodexAppServerClient {
     if (message.method === "thread/status/changed" && codexId) {
       const state = this.threadStates.get(codexId) || {};
       this.threadStates.set(codexId, { ...state, status: params.status || null });
-      if (appServerStateFromStatus(params.status) !== "awaiting_approval") {
+      const pendingRequest = pendingRequestForCodexThread(this.pendingRequests, codexId);
+      const rawStatusType = codexStatusType(params.status);
+      const statusState = appServerStateFromStatus(params.status);
+      if (!pendingRequest && statusState !== "awaiting_approval" && rawStatusType !== "active") {
         for (const [requestKey, request] of this.pendingRequests.entries()) {
           if (request?.codexThreadId === codexId) this.pendingRequests.delete(requestKey);
         }
       }
       const thread = await threadForCodexThreadId(codexId, this.env);
-      if (thread) await markThreadFromCodexStatus(thread, params.status, this.env);
+      if (thread && pendingRequest && rawStatusType === "active" && statusState !== "awaiting_approval") {
+        await updateThread(thread.id, {
+          state: "awaiting_approval",
+          runtime: {
+            ...(thread.runtime || {}),
+            runtimeKind: "codex-app-server",
+            state: "awaiting_approval",
+            activeTurnId: clean(pendingRequest.turnId || thread.runtime?.activeTurnId) || null,
+            pendingRequest,
+            codexStatus: approvalCodexStatus(params.status),
+            updatedAt: nowIso(),
+          },
+        }, this.env).catch(() => {});
+      } else if (thread) {
+        await markThreadFromCodexStatus(thread, params.status, this.env);
+      }
       return;
     }
     if (message.method === "turn/started") {

@@ -147,6 +147,9 @@ test("web chat paginates older messages without dropping cached history", async 
   assert.ok(sources.includes("restoreMessagePaneOffset"));
   assert.ok(sources.includes("Load older"));
   assert.ok(sources.includes(".message-pager"));
+  assert.ok(sources.includes("lifecycleState === \"planning\""));
+  assert.ok(sources.includes("label === \"Waiting for approval\""));
+  assert.ok(sources.includes("return \"Approval\""));
   assert.ok(sources.includes("const byKey = new Map"));
   assert.ok(sources.includes("for (const message of cachedMessages)"));
   assert.ok(sources.includes("for (const message of serverMessages)"));

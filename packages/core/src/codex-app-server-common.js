@@ -211,10 +211,10 @@ export function codexSandboxForThread(thread = {}, env = process.env) {
 }
 
 export function appServerStateFromStatus(status) {
-  const type = clean(status?.type);
+  const type = clean(status?.type).toLowerCase();
   if (type === "active") {
-    const flags = Array.isArray(status?.activeFlags) ? status.activeFlags : [];
-    if (flags.includes("waitingOnApproval")) return "awaiting_approval";
+    const flags = Array.isArray(status?.activeFlags) ? status.activeFlags.map((flag) => clean(flag).toLowerCase()) : [];
+    if (flags.some((flag) => ["waitingonapproval", "waiting_on_approval", "awaiting_approval"].includes(flag))) return "awaiting_approval";
     if (flags.length) return "working";
     return "ready";
   }

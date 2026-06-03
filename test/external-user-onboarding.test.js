@@ -376,7 +376,13 @@ test("admin onboarding endpoints expose invite, checklist, and offboarding", asy
     const approved = await json(await fetch(`${baseUrl}/api/users/onboarding/waitlist/${waitlist.waitlist.id}/approve`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ connectionName: "Beta-Orkestr", whatsappAccountId: "wa-router" }),
+      body: JSON.stringify({
+        connectionName: "Beta-Orkestr",
+        whatsappAccountId: "wa-router",
+        chatId: "120363000000000099@g.us",
+        createWhatsAppGroup: false,
+        sendFirstPrompt: false,
+      }),
     }));
     const paused = await json(await fetch(`${baseUrl}/api/users/can/offboard`, {
       method: "POST",
@@ -388,6 +394,9 @@ test("admin onboarding endpoints expose invite, checklist, and offboarding", asy
     assert.equal(checklist.connectionName, "can-test");
     assert.equal(approved.user.phoneNumber, "+49176000001");
     assert.equal(approved.thread.bindingName, "Beta-Orkestr");
+    assert.equal(approved.whatsapp.chatId, "120363000000000099@g.us");
+    assert.equal(approved.whatsapp.groupCreated, false);
+    assert.equal(approved.whatsapp.firstPromptMessageId, "");
     assert.match(approved.firstPrompt, /connect Gmail, Outlook, Jira, Shopify/);
     assert.equal(paused.user.status, "disabled");
     assert.equal(paused.onboarding.state, "paused");

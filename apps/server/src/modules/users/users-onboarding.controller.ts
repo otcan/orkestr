@@ -74,6 +74,15 @@ function onboardingPatch(body: Record<string, unknown> = {}) {
   };
 }
 
+function optionalBoolean(value: unknown): boolean | undefined {
+  if (value === undefined || value === null || value === "") return undefined;
+  if (value === true || value === false) return value;
+  const normalized = String(value).trim().toLowerCase();
+  if (["1", "true", "yes", "on"].includes(normalized)) return true;
+  if (["0", "false", "no", "off"].includes(normalized)) return false;
+  return undefined;
+}
+
 function offboardingInput(body: Record<string, unknown> = {}, request: any) {
   const principal = requestPrincipal(request);
   return {
@@ -106,6 +115,10 @@ function waitlistApprovalInput(body: Record<string, unknown> = {}, request: any)
     outboundAccountId: String(body.outboundAccountId || "").trim(),
     adminNote: String(body.adminNote || body.note || "").trim(),
     actorUserId: principal?.userId || "admin",
+    createWhatsAppGroup: optionalBoolean(body.createWhatsAppGroup),
+    sendFirstPrompt: optionalBoolean(body.sendFirstPrompt),
+    requireWhatsAppGroup: optionalBoolean(body.requireWhatsAppGroup),
+    requireFirstPrompt: optionalBoolean(body.requireFirstPrompt),
   };
 }
 

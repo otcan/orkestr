@@ -24,13 +24,15 @@ export function normalizeTurnLifecycle(input = {}) {
   const runningCount = count(input.runningCount);
   const awaitingAckCount = count(input.awaitingAckCount);
   const awaitingApproval = state === "awaiting_approval" || input.awaitingApproval === true;
+  const planning = state === "planning";
   const queued = state === "queued" || pendingCount > 0 || awaitingAckCount > 0;
-  const running = state === "running" || state === "working" || runningCount > 0 || Boolean(activeTurnId && !awaitingApproval);
+  const running = planning || state === "running" || state === "working" || runningCount > 0 || Boolean(activeTurnId && !awaitingApproval);
   const terminal = turnLifecycleTerminalStates.has(state);
   return {
     state,
     active: running || queued || awaitingApproval,
     running,
+    planning,
     queued,
     awaitingApproval,
     terminal,
@@ -49,8 +51,11 @@ export function turnLifecycleFromRuntimeStatus(status = {}, messages = []) {
   const runtimeState = lower(status.state || status.status);
   const latestRunning = [...(Array.isArray(messages) ? messages : [])].reverse()
     .find((message) => lower(message.role) === "user" && lower(message.state) === "running") || null;
-  const state = runtimeState === "awaiting_approval"
+  const progressState = lower(status.progress?.stateHint);
+  const state = runtimeState === "awaiting_approval" || progressState === "awaiting_approval"
     ? "awaiting_approval"
+    : progressState === "planning"
+      ? "planning"
     : runtimeState === "working" || runtimeState === "running"
       ? "running"
       : runtimeState === "waking"

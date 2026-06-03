@@ -23,7 +23,7 @@ import {
 } from "../packages/core/src/codex-app-server.js";
 import { migrateCodexThreadsToAppServer } from "../packages/core/src/codex-app-server-migration.js";
 import { resetThreadRuntime, safeResetThreadRuntime, sleepThread } from "../packages/core/src/runtime-leases.js";
-import { containedCodexRuntimePaths, effortForThread, modelForThread, threadStartParams, turnStartParams } from "../packages/core/src/codex-app-server-common.js";
+import { appServerStateFromStatus, containedCodexRuntimePaths, effortForThread, modelForThread, threadStartParams, turnStartParams } from "../packages/core/src/codex-app-server-common.js";
 import { appendThreadMessage, createThread, enqueueThreadInput, getThread, listThreadMessages, updateThread, updateThreadMessage } from "../packages/core/src/threads.js";
 import { deliverWhatsAppReplies } from "../packages/connectors/src/whatsapp.js";
 import { writeConnectorConfig } from "../packages/storage/src/config.js";
@@ -1458,6 +1458,126 @@ test("Codex app-server status does not report idle while an active turn is known
   } finally {
     stopCodexAppServerClients();
   }
+});
+
+test("Codex app-server status exposes planning progress for active plan-mode turns", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-codex-app-server-plan-progress-"));
+  const fake = await createFakeCodex(home);
+  const env = {
+    ORKESTR_HOME: path.join(home, "orkestr"),
+    HOME: path.join(home, "runtime-home"),
+    PATH: `${fake.bin}${path.delimiter}${process.env.PATH || ""}`,
+    FAKE_CODEX_STATE: fake.stateFile,
+  };
+  try {
+    const thread = await createThread({
+      id: "app-server-plan-progress-thread",
+      name: "App Server Plan Progress Thread",
+      state: "working",
+      codexMode: "plan",
+      codexModeSource: "orkestr-command",
+      executorId: "codex",
+      executor: {
+        type: "codex",
+        transport: "app-server",
+        codexThreadId: "plan-progress-codex-thread",
+        codexSessionId: "plan-progress-codex-thread",
+      },
+      runtimeKind: "codex-app-server",
+      codexThreadId: "plan-progress-codex-thread",
+      codexSessionId: "plan-progress-codex-thread",
+      runtime: {
+        runtimeKind: "codex-app-server",
+        state: "working",
+        activeTurnId: "plan-progress-turn",
+        codexStatus: { type: "active", activeFlags: ["running"] },
+      },
+    }, env);
+    const client = await getCodexAppServerClient({ env, home: env.HOME });
+    client.threadStates.set("plan-progress-codex-thread", {
+      activeTurnId: "plan-progress-turn",
+      status: { type: "active", activeFlags: ["running"] },
+    });
+
+    const status = await codexAppServerThreadStatus(thread, env);
+
+    assert.equal(status.state, "working");
+    assert.equal(status.progress.stateHint, "planning");
+    assert.equal(status.progress.summary, "Planning");
+    assert.equal(status.turnLifecycle.state, "planning");
+    assert.equal(status.turnLifecycle.planning, true);
+  } finally {
+    stopCodexAppServerClients();
+  }
+});
+
+test("Codex app-server active status does not erase live pending approval requests", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-codex-app-server-live-approval-status-"));
+  const fake = await createFakeCodex(home);
+  const env = {
+    ORKESTR_HOME: path.join(home, "orkestr"),
+    HOME: path.join(home, "runtime-home"),
+    PATH: `${fake.bin}${path.delimiter}${process.env.PATH || ""}`,
+    FAKE_CODEX_STATE: fake.stateFile,
+  };
+  try {
+    const codexThreadId = "live-approval-codex-thread";
+    const thread = await createThread({
+      id: "app-server-live-approval-status-thread",
+      name: "App Server Live Approval Status Thread",
+      state: "awaiting_approval",
+      executorId: "codex",
+      executor: {
+        type: "codex",
+        transport: "app-server",
+        codexThreadId,
+        codexSessionId: codexThreadId,
+      },
+      runtimeKind: "codex-app-server",
+      codexThreadId,
+      codexSessionId: codexThreadId,
+      runtime: {
+        runtimeKind: "codex-app-server",
+        state: "awaiting_approval",
+        activeTurnId: "approval-turn",
+      },
+    }, env);
+    const request = {
+      requestId: "approval-request-live",
+      method: "item/commandExecution/requestApproval",
+      threadId: thread.id,
+      codexThreadId,
+      turnId: "approval-turn",
+      itemId: "approval-item",
+    };
+    const client = await getCodexAppServerClient({ env, home: env.HOME });
+    client.pendingRequests.set(request.requestId, request);
+
+    await client.handleNotification({
+      method: "thread/status/changed",
+      params: {
+        threadId: codexThreadId,
+        status: { type: "active", activeFlags: [] },
+      },
+    });
+    const updated = await getThread(thread.id, env);
+    const status = await codexAppServerThreadStatus(updated, env);
+
+    assert.equal(client.pendingRequests.has(request.requestId), true);
+    assert.equal(updated.state, "awaiting_approval");
+    assert.equal(updated.runtime.pendingRequest.requestId, request.requestId);
+    assert.deepEqual(updated.runtime.codexStatus.activeFlags, ["waitingOnApproval"]);
+    assert.equal(status.state, "awaiting_approval");
+    assert.equal(status.turnLifecycle.awaitingApproval, true);
+    assert.equal(status.progress.stateHint, "awaiting_approval");
+  } finally {
+    stopCodexAppServerClients();
+  }
+});
+
+test("Codex app-server status normalizes approval flags case-insensitively", () => {
+  assert.equal(appServerStateFromStatus({ type: "active", activeFlags: ["waitingOnApproval"] }), "awaiting_approval");
+  assert.equal(appServerStateFromStatus({ type: "ACTIVE", activeFlags: ["waiting_on_approval"] }), "awaiting_approval");
 });
 
 test("Codex app-server recovery asks app-server before marking an active turn interrupted", async () => {
