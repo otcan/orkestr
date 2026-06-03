@@ -1,4 +1,7 @@
 #!/usr/bin/env node
+import fs from "node:fs/promises";
+import path from "node:path";
+
 const activeStates = new Set(["working", "processing", "running", "waking"]);
 
 function number(value) {
@@ -90,11 +93,34 @@ export function formatActiveThreads(report = {}) {
 
 const DEFAULT_ACTIVE_CHECK_TIMEOUT_MS = 10000;
 
-async function readJsonUrl(url, timeoutMs = DEFAULT_ACTIVE_CHECK_TIMEOUT_MS) {
+async function cliAuthToken(env = process.env) {
+  const explicit = String(env.ORKESTR_API_TOKEN || env.ORKESTR_CLI_AUTH_TOKEN || "").trim();
+  if (explicit) return explicit;
+  const home = String(env.ORKESTR_HOME || "").trim();
+  if (!home) return "";
+  try {
+    const raw = await fs.readFile(path.join(home, "secrets", "cli-auth.json"), "utf8");
+    const parsed = JSON.parse(raw);
+    const token = String(parsed?.token || "").trim();
+    if (!token) return "";
+    const expiresAt = Date.parse(String(parsed?.expiresAt || ""));
+    if (Number.isFinite(expiresAt) && expiresAt <= Date.now()) return "";
+    return token;
+  } catch {
+    return "";
+  }
+}
+
+async function activeCheckHeaders(env = process.env) {
+  const token = await cliAuthToken(env);
+  return token ? { authorization: `Bearer ${token}` } : undefined;
+}
+
+async function readJsonUrl(url, timeoutMs = DEFAULT_ACTIVE_CHECK_TIMEOUT_MS, env = process.env) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), Math.max(1, Number(timeoutMs) || DEFAULT_ACTIVE_CHECK_TIMEOUT_MS));
   try {
-    const response = await fetch(url, { signal: controller.signal });
+    const response = await fetch(url, { signal: controller.signal, headers: await activeCheckHeaders(env) });
     const text = await response.text();
     if (!response.ok) {
       return { ok: false, unavailable: true, statusCode: response.status, error: `HTTP ${response.status}`, active: [] };
@@ -108,7 +134,7 @@ async function readJsonUrl(url, timeoutMs = DEFAULT_ACTIVE_CHECK_TIMEOUT_MS) {
 export async function checkActiveWork(url, options = {}) {
   const checkedAt = new Date().toISOString();
   try {
-    const result = await readJsonUrl(url, options.timeoutMs);
+    const result = await readJsonUrl(url, options.timeoutMs, options.env || process.env);
     if (!result.ok) return { ...result, checkedAt };
     return {
       ok: true,
