@@ -14,6 +14,7 @@ import {
 test("turn lifecycle normalizes queued, running, approval, and terminal states", () => {
   const queued = turnLifecycleFromRuntimeStatus({ state: "ready", pendingCount: 2, typingActive: true });
   const running = turnLifecycleFromRuntimeStatus({ state: "working", activeTurnId: "turn-1", runningCount: 1, typingActive: true });
+  const planning = turnLifecycleFromRuntimeStatus({ state: "working", activeTurnId: "turn-plan", progress: { stateHint: "planning" }, typingActive: true });
   const approval = turnLifecycleFromRuntimeStatus({ state: "awaiting_approval", activeTurnId: "turn-2", typingActive: true });
   const terminal = normalizeTurnLifecycle({ state: "completed", typingActive: true });
 
@@ -23,6 +24,9 @@ test("turn lifecycle normalizes queued, running, approval, and terminal states",
   assert.equal(running.state, "running");
   assert.equal(running.running, true);
   assert.equal(running.typingActive, true);
+  assert.equal(planning.state, "planning");
+  assert.equal(planning.planning, true);
+  assert.equal(planning.sidebarWorking, true);
   assert.equal(approval.awaitingApproval, true);
   assert.equal(approval.typingActive, false);
   assert.equal(terminal.terminal, true);
