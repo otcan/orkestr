@@ -429,6 +429,9 @@ function formatConnectorStatusTool(result = {}) {
     if (/config_required|config_missing|parent_config_missing|oauth_config/i.test(error)) {
       return `${provider} is not available for sign-in yet because the parent app configuration is missing on this Orkestr installation.`;
     }
+    if (/capability\s+is\s+false|capability_not_available|not\s+enabled|not\s+connected/i.test(error)) {
+      return `${provider} is not connected or enabled for this chat yet.`;
+    }
     return `${provider} status could not be checked: ${error || "tool_failed"}.`;
   }
   if (output.connected === true) return `${provider} is connected for this chat.`;
