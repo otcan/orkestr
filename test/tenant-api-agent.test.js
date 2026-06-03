@@ -4,8 +4,10 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { recordCreditUsage, creditUsageSummary } from "../packages/core/src/credit-usage.js";
+import { drainAllPendingThreadInputs } from "../packages/core/src/runtime-leases.js";
 import { buildTenantApiAgentInstructions, processApiAgentThreadInput, threadUsesApiAgent } from "../packages/core/src/tenant-api-agent.js";
 import { runTenantApiAgentTool } from "../packages/core/src/tenant-api-agent-tools.js";
+import { createTimer, listTimers, markDueTimers } from "../packages/core/src/timers.js";
 import { userPrincipal } from "../packages/core/src/principal.js";
 import { appendThreadMessage, createThread, enqueueThreadInputForPrincipal, getThread, listThreadMessages } from "../packages/core/src/threads.js";
 import { readUserPrivateIdentities, upsertUser } from "../packages/core/src/users.js";
@@ -1006,6 +1008,64 @@ test("tenant api-agent drains queued tenant messages while it owns the lock", as
   assert.equal(call, 2);
   assert.deepEqual(messages.filter((message) => message.role === "user").map((message) => message.state), ["completed", "completed"]);
   assert.deepEqual(messages.filter((message) => message.role === "assistant").map((message) => message.text), ["First answer", "Second answer"]);
+});
+
+test("due timers drain through api-agent threads and retain WhatsApp binding", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-api-agent-timer-drain-"));
+  const env = await allowSanitizerEnv(home);
+  await createThread({
+    id: "otcan-timer",
+    ownerUserId: "otcan",
+    name: "otcan-timer",
+    runtimeKind: "api-agent",
+    executor: { type: "api-agent", metadata: { runtimeKind: "api-agent" } },
+    binding: { connector: "whatsapp", chatId: "chat-timer", outboundAccountId: "wa-1" },
+  }, env);
+  await createTimer({
+    ownerUserId: "otcan",
+    label: "Timer drain",
+    targetType: "thread",
+    target: "otcan-timer",
+    prompt: "reply exactly timer fired",
+    cadence: "interval",
+    every: "1m",
+  }, env);
+  const timers = await listTimers(env);
+  timers[0].nextRunAt = "2020-01-01T00:00:00.000Z";
+  await fs.writeFile(path.join(home, "timers.json"), `${JSON.stringify(timers, null, 2)}\n`);
+
+  const due = await markDueTimers(env, new Date("2026-05-15T10:00:00.000Z"));
+  let messages = await listThreadMessages("otcan-timer", env);
+  const timerInput = messages.find((message) => message.source === "timer_due");
+  assert.equal(due.length, 1);
+  assert.equal(timerInput?.connector, "whatsapp");
+  assert.equal(timerInput?.chatId, "chat-timer");
+  assert.equal(timerInput?.accountId, "wa-1");
+  assert.equal(timerInput?.state, "queued");
+
+  const priorFetch = globalThis.fetch;
+  globalThis.fetch = async () => response({
+    id: "resp_api_agent_timer_drain",
+    model: "gpt-5-mini",
+    output_text: "timer fired",
+    output: [],
+    usage: { input_tokens: 80, output_tokens: 5 },
+  });
+  try {
+    const drained = await drainAllPendingThreadInputs(env);
+    messages = await listThreadMessages("otcan-timer", env);
+    const completedInput = messages.find((message) => message.id === timerInput.id);
+    const assistant = messages.find((message) => message.role === "assistant" && message.parentMessageId === timerInput.id);
+
+    assert.deepEqual(drained, [{ threadId: "otcan-timer", delivered: [timerInput.id] }]);
+    assert.equal(completedInput?.state, "completed");
+    assert.equal(assistant?.text, "timer fired");
+    assert.equal(assistant?.connector, "whatsapp");
+    assert.equal(assistant?.chatId, "chat-timer");
+    assert.equal(assistant?.accountId, "wa-1");
+  } finally {
+    globalThis.fetch = priorFetch;
+  }
 });
 
 test("WhatsApp auto-provisioned tenant threads default to api-agent runtime", async () => {

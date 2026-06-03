@@ -32,7 +32,7 @@ import {
 import { appendOrUpdateEventMessage, normalizeCodexModel, normalizeReasoningEffort } from "./codex-app-server-common.js";
 import { completeThreadSecurityApproveCommand, threadSecurityApproveChallengeId } from "./security-thread-command.js";
 import { threadUsesContainedUserPolicy } from "./tenant-policy.js";
-import { apiAgentRuntimeStatus, threadUsesApiAgent } from "./tenant-api-agent.js";
+import { apiAgentRuntimeStatus, processApiAgentThreadInput, threadUsesApiAgent } from "./tenant-api-agent.js";
 import { appendTurnLifecycleEvent, turnLifecycleFromRuntimeStatus } from "./turn-lifecycle.js";
 import {
   capturePane,
@@ -3106,8 +3106,18 @@ export async function deliverPendingThreadInputs(threadId, env = process.env) {
   const thread = await getThread(threadId, env);
   if (!thread) return [];
   if (threadUsesApiAgent(thread, env)) {
-    await appendEvent({ type: "thread_input_delivery_skipped", threadId: thread.id, reason: "api_agent_thread" }, env).catch(() => null);
-    return [];
+    const result = await processApiAgentThreadInput(thread.id, env);
+    const results = Array.isArray(result?.results) ? result.results : result?.processed ? [result] : [];
+    const delivered = results.map((entry) => entry?.message?.id).filter(Boolean);
+    await appendEvent({
+      type: "thread_input_delivery_api_agent",
+      threadId: thread.id,
+      deliveredCount: delivered.length,
+      running: result?.running === true,
+      skipped: result?.skipped === true,
+      reason: result?.reason || null,
+    }, env).catch(() => null);
+    return delivered;
   }
   if (threadUsesNativeCodexRuntime(thread, env)) {
     return deliverCodexRuntimePendingInputs(thread, env);

@@ -6,7 +6,7 @@ import { appendEvent } from "../../storage/src/store.js";
 import { assertSanitizedAction } from "./llm-sanitizer.js";
 import { enqueueAgentMessage } from "./messages.js";
 import { principalForUserId, userPrincipal } from "./principal.js";
-import { enqueueThreadInput, getThreadForPrincipal, listThreads, listThreadsForPrincipal } from "./threads.js";
+import { enqueueThreadInput, getThread, getThreadForPrincipal, listThreads, listThreadsForPrincipal } from "./threads.js";
 import { assertResourceAccess, filterResourcesForPrincipal, isAdminPrincipal, policyError } from "./policy.js";
 import { adminUserId, normalizeUserId } from "./users.js";
 
@@ -83,6 +83,29 @@ async function assertTimerExecutionSanitized(timer, source, env = process.env, p
       promptFile: timer.promptFile || "",
     },
   }, env);
+}
+
+function whatsappTimerThreadDefaults(thread, input = {}) {
+  const binding = thread?.binding || {};
+  const connector = String(binding.connector || "").trim().toLowerCase();
+  if (connector !== "whatsapp" && !binding.chatId) return input;
+  const chatId = String(binding.chatId || "").trim();
+  if (!chatId) return input;
+  return {
+    ...input,
+    connector: String(input.connector || "whatsapp").trim(),
+    originSurface: String(input.originSurface || "timer").trim(),
+    originTransport: String(input.originTransport || "timer").trim(),
+    chatId,
+    accountId: String(
+      input.accountId ||
+      binding.responderAccountId ||
+      binding.outboundAccountId ||
+      binding.senderAccountId ||
+      binding.inboundAccountId ||
+      "",
+    ).trim(),
+  };
 }
 
 export function nextRunAt(timer, from = new Date()) {
@@ -372,9 +395,9 @@ async function enqueueTimerMessage(timer, source, env, principal = null) {
     promptFile: timer.promptFile || "",
     ownerUserId: timer.ownerUserId,
   };
-  return timer.targetType === "thread"
-    ? enqueueThreadInput(timer.target, input, env)
-    : enqueueAgentMessage(timer.target, input, env);
+  if (timer.targetType !== "thread") return enqueueAgentMessage(timer.target, input, env);
+  const thread = await getThread(timer.target, env).catch(() => null);
+  return enqueueThreadInput(thread?.id || timer.target, whatsappTimerThreadDefaults(thread, input), env);
 }
 
 export async function deleteTimer(id, env = process.env) {
