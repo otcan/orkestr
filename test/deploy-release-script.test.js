@@ -100,6 +100,11 @@ test("release deploy script exposes versioned install, status, and rollback", as
   assert.match(script, /Deploy drain active: new inputs will queue/);
   assert.match(script, /Deploy drain cleared after \$\{service_name\}\.service passed health checks/);
   assert.match(script, /service-local child processes are reaped after the stop timeout/);
+  assert.match(script, /send_release_whatsapp_notifications/);
+  assert.match(script, /release-whatsapp-notify\.mjs/);
+  assert.match(script, /ORKESTR_RELEASE_WA_NOTIFICATIONS/);
+  assert.match(stdout, /ORKESTR_RELEASE_WA_NOTIFICATIONS/);
+  assert.match(stdout, /ORKESTR_RELEASE_WA_NOTIFY_EXCLUDE_CHAT_IDS/);
   assert.match(script, /ORKESTR_CODEX_APP_SERVER_MODE/);
   assert.match(script, /ORKESTR_CODEX_APP_SERVER_SERVICE_NAME/);
   assert.match(script, /tags_only_arg/);

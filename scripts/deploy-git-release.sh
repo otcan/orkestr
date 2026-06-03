@@ -38,6 +38,8 @@ Environment:
   ORKESTR_DEPLOY_ACTIVE_TIMEOUT_SECONDS  Max wait with --wait-active. Defaults to 900.
   ORKESTR_DEPLOY_ACTIVE_CHECK_URL Thread summary URL. Defaults to http://$ORKESTR_HOST:$ORKESTR_PORT/api/threads?scope=all.
   ORKESTR_DEPLOY_DRAIN_FILE     Drain marker file. Defaults to $ORKESTR_HOME/deploy-drain.json.
+  ORKESTR_RELEASE_WA_NOTIFICATIONS Send WhatsApp release notifications to non-admin external chats. Defaults to 1.
+  ORKESTR_RELEASE_WA_NOTIFY_EXCLUDE_CHAT_IDS Exclude specific WhatsApp chat ids from release notifications.
   ORKESTR_CODEX_APP_SERVER_MODE If external/proxy/daemon, active codex-app-server turns are restart-safe.
   ORKESTR_CODEX_APP_SERVER_SOCKET  Unix socket for the external Codex app-server.
   ORKESTR_CODEX_APP_SERVER_SERVICE_NAME  External Codex app-server systemd unit. Defaults to $ORKESTR_SERVICE_NAME-codex.
@@ -403,6 +405,33 @@ sync_versioned_env() {
   set_env_assignment ORKESTR_APP_DIR "$current_link"
   set_env_assignment ORKESTR_RELEASE_DEPLOY "1"
   set_env_assignment ORKESTR_CURRENT_LINK "$current_link"
+}
+
+send_release_whatsapp_notifications() {
+  local release_dir target_ref deployed_at api_base notify_enabled
+  release_dir="$1"
+  target_ref="${2:-}"
+  deployed_at="${3:-}"
+  notify_enabled="$(bool_value "${ORKESTR_RELEASE_WA_NOTIFICATIONS:-1}")"
+  if [ "$notify_enabled" != "1" ]; then
+    echo "Release WhatsApp notifications disabled."
+    return 0
+  fi
+  if [ ! -f "$release_dir/scripts/release-whatsapp-notify.mjs" ]; then
+    echo "Release WhatsApp notifications skipped: target release does not expose notifier."
+    return 0
+  fi
+  api_base="${ORKESTR_API_BASE:-http://$host:$port}"
+  if node "$release_dir/scripts/release-whatsapp-notify.mjs" \
+    --release-id "$release_id" \
+    --channel "$deploy_channel" \
+    --commit "$target_ref" \
+    --deployed-at "$deployed_at" \
+    --api-base "$api_base"; then
+    return 0
+  fi
+  echo "Release WhatsApp notifications failed; deploy remains successful and notification retry is left in the ledger." >&2
+  return 0
 }
 
 repair_env_file_permissions() {
@@ -944,6 +973,7 @@ install_command() {
   activate_release "$release_dir"
   sync_versioned_env
   if restart_and_verify; then
+    send_release_whatsapp_notifications "$release_dir" "$target_ref" "$deployed_at"
     sync_safe_workers_after_deploy "$release_dir"
     write_history_event "success" "$release_id" "$deploy_ref" "$target_ref" "$previous_release" "$release_dir" "$backup_path"
     echo "Orkestr deployed $release_id ($target_ref)."
