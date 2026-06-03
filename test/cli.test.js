@@ -1136,6 +1136,26 @@ test("CLI attach with an explicit thread does not fetch the thread list", async 
   assert.match(stdout.text(), /orkestr-demo/);
 });
 
+test("CLI attach prints native Codex attach commands for app-server threads", async () => {
+  const stdout = capture();
+  const attachCommand = "codex resume -C '/workspace/demo' 'codex-thread-1'";
+  const code = await runCli(["attach", "Demo", "--print"], {
+    stdout,
+    stderr: capture(),
+    fetchImpl: fakeFetch({
+      "POST /api/threads/Demo/attach": {
+        ok: true,
+        attachKind: "codex-app-server",
+        attachCommand,
+        runtime: { transport: "app-server" },
+      },
+    }),
+  });
+
+  assert.equal(code, 0);
+  assert.equal(stdout.text(), `${attachCommand}\n`);
+});
+
 test("CLI attach can execute tmux for an attachable thread", async () => {
   const spawned = [];
   const code = await runCli(["attach", "Demo"], {
@@ -1157,4 +1177,30 @@ test("CLI attach can execute tmux for an attachable thread", async () => {
 
   assert.equal(code, 0);
   assert.deepEqual(spawned, [{ command: "tmux", args: ["attach-session", "-t", "orkestr-demo"] }]);
+});
+
+test("CLI attach executes native Codex attach commands for app-server threads", async () => {
+  const spawned = [];
+  const attachCommand = "codex resume -C '/workspace/demo' 'codex-thread-1'";
+  const code = await runCli(["attach", "Demo"], {
+    stdout: capture(),
+    stderr: capture(),
+    spawnImpl(command, args) {
+      spawned.push({ command, args });
+      const child = new EventEmitter();
+      queueMicrotask(() => child.emit("exit", 0));
+      return child;
+    },
+    fetchImpl: fakeFetch({
+      "POST /api/threads/Demo/attach": {
+        ok: true,
+        attachKind: "codex-app-server",
+        attachCommand,
+        runtime: { transport: "app-server" },
+      },
+    }),
+  });
+
+  assert.equal(code, 0);
+  assert.deepEqual(spawned, [{ command: "sh", args: ["-lc", `exec ${attachCommand}`] }]);
 });

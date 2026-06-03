@@ -610,11 +610,13 @@ async function attach(argv, ctx) {
   }
   if (!payload.ok) throw new Error(payload.message || `Thread is not attachable: ${target}`);
   const sessionName = payload.runtime?.sessionName || parseTmuxSession(payload.attachCommand);
-  if (!sessionName) throw new Error("Attach response did not include a tmux session.");
+  const attachCommand = String(payload.attachCommand || "").trim();
+  if (!sessionName && !attachCommand) throw new Error("Attach response did not include an attach command.");
   if (printOnly) {
-    ctx.stdout.write(`tmux attach-session -t ${shellToken(sessionName)}\n`);
+    ctx.stdout.write(`${sessionName ? `tmux attach-session -t ${shellToken(sessionName)}` : attachCommand}\n`);
     return 0;
   }
+  if (!sessionName) return spawnInherited(ctx.spawnImpl, "sh", ["-lc", `exec ${attachCommand}`]);
   return spawnInherited(ctx.spawnImpl, "tmux", ["attach-session", "-t", sessionName]);
 }
 
