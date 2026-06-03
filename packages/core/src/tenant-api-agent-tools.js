@@ -383,6 +383,52 @@ function publicDesktopRecord(session = {}) {
   };
 }
 
+function uniqueClean(values = []) {
+  const seen = new Set();
+  const output = [];
+  for (const value of values) {
+    const text = clean(value);
+    if (!text || seen.has(text)) continue;
+    seen.add(text);
+    output.push(text);
+  }
+  return output;
+}
+
+function desktopSlugCandidatesForSkill(skill = {}, env = process.env, args = {}) {
+  const explicit = clean(args.target || args.slug);
+  if (explicit) return [explicit];
+  const id = lower(skill.id);
+  const required = clean(skill.requiredDesktop || skill.requiresDesktop);
+  return uniqueClean([
+    required,
+    id === "linkedin" ? clean(env.ORKESTR_LINKEDIN_DESKTOP_SLUG || env.ORKESTR_LINKEDIN_BROWSER_SLUG) : "",
+    clean(env.ORKESTR_DEFAULT_DESKTOP_SLUG),
+    clean(env.ORKESTR_MANUAL_INTERVENTION_DESKTOP_SLUG),
+    (id === "linkedin" || required) ? "desktop" : "",
+  ]);
+}
+
+function genericDesktopFallback(desktops = []) {
+  const list = Array.isArray(desktops) ? desktops : [];
+  const exact = list.find((desktop) => clean(desktop.slug) === "desktop");
+  if (exact) return exact;
+  if (list.length !== 1) return null;
+  const [only] = list;
+  const label = lower(`${only.slug || ""} ${only.label || ""}`);
+  if (/(gmail|outlook|mail)/i.test(label)) return null;
+  return /desktop|browser|managed/.test(label) ? only : null;
+}
+
+function desktopForSkill(skill = {}, desktops = [], env = process.env, args = {}) {
+  const list = Array.isArray(desktops) ? desktops : [];
+  for (const slug of desktopSlugCandidatesForSkill(skill, env, args)) {
+    const desktop = list.find((item) => clean(item.slug) === slug);
+    if (desktop) return desktop;
+  }
+  return clean(args.target || args.slug) ? null : genericDesktopFallback(list);
+}
+
 async function safeDesktopInventory(principal = {}, env = process.env) {
   try {
     const payload = await listBrowserSessions(env, { principal });
@@ -404,7 +450,7 @@ async function safeDesktopInventory(principal = {}, env = process.env) {
   }
 }
 
-function skillActionNames(skill = {}, capabilities = {}, desktops = null) {
+function skillActionNames(skill = {}, capabilities = {}, desktops = null, env = process.env) {
   const id = clean(skill.id).toLowerCase();
   if (!skillAvailableFromCapabilities(skill, capabilities)) return ["status"];
   if (id === "whereiam") return ["status"];
@@ -413,7 +459,7 @@ function skillActionNames(skill = {}, capabilities = {}, desktops = null) {
   if (["gmail", "outlook", "jira", "shopify", "whatsapp"].includes(id)) return ["status"];
   if (clean(skill.requiresDesktop)) {
     if (!desktops) return ["status", "list_actions"];
-    const desktop = desktops.find((item) => item.slug === clean(skill.requiresDesktop));
+    const desktop = desktopForSkill(skill, desktops, env);
     return desktop ? desktop.availableActions : ["status"];
   }
   return ["status"];
@@ -447,7 +493,7 @@ async function skillActionInventory(principal = {}, thread = null, env = process
     .filter((skill) => !skillFilter || skill.id === skillFilter)
     .map((skill) => {
       const requiredDesktop = clean(skill.requiresDesktop);
-      const matchingDesktop = requiredDesktop && desktops ? desktops.find((desktop) => desktop.slug === requiredDesktop) || null : null;
+      const matchingDesktop = requiredDesktop && desktops ? desktopForSkill(skill, desktops, env) : null;
       const registryEnabled = skill.enabled === true;
       const capabilityAvailable = skillAvailableFromCapabilities(skill, capabilities);
       const available = capabilityAvailable && (!requiredDesktop || !desktops || Boolean(matchingDesktop));
@@ -464,10 +510,11 @@ async function skillActionInventory(principal = {}, thread = null, env = process
         available,
         enabled: capabilityAvailable,
         setupState: available ? "available" : unavailableReason,
-        availableActions: skillActionNames(skill, capabilities, desktops),
+        availableActions: skillActionNames(skill, capabilities, desktops, env),
         actionTool: "orkestr_run_skill_action",
         ...(requiredDesktop ? {
           requiredDesktop,
+          resolvedDesktop: clean(matchingDesktop?.slug),
           desktops: matchingDesktop ? [matchingDesktop] : [],
         } : {}),
       };
@@ -512,8 +559,9 @@ async function runSkillAction(args = {}, principal = {}, thread = null, env = pr
   }
   if (action === "status" || action === "list_actions") return { ok: true, action, skill, desktopInventory: inventory.desktopInventory };
   if (clean(skill.requiresDesktop)) {
-    const slug = clean(args.target || args.slug || skill.requiredDesktop || skill.requiresDesktop);
-    const desktop = (inventory.desktopInventory?.desktops || []).find((item) => item.slug === slug) || null;
+    const desktops = inventory.desktopInventory?.desktops || [];
+    const desktop = desktopForSkill(skill, desktops, env, args);
+    const slug = clean(desktop?.slug || args.target || args.slug || skill.requiredDesktop || skill.requiresDesktop);
     if (!desktop) return { ok: false, error: "desktop_not_available", action, skill, desktopInventory: inventory.desktopInventory };
     if (!desktop.availableActions.includes(action)) return { ok: false, error: "skill_action_not_available", action, skill, desktop };
     let result;

@@ -513,13 +513,22 @@ function configuredVisibleDesktopSlugs(env = process.env) {
   return slugs.length ? new Set(slugs) : null;
 }
 
+function configuredDesktopFallbackSlugs(env = process.env) {
+  return [
+    clean(env.ORKESTR_LINKEDIN_DESKTOP_SLUG || env.ORKESTR_LINKEDIN_BROWSER_SLUG),
+    clean(env.ORKESTR_DEFAULT_DESKTOP_SLUG),
+    clean(env.ORKESTR_MANUAL_INTERVENTION_DESKTOP_SLUG),
+    "desktop",
+  ].filter(Boolean);
+}
+
 function userDesktopSkillAvailable(skillId = "", snapshot = {}, env = process.env) {
   if (snapshot.userFound !== true) return false;
   const enabled = clean(env.ORKESTR_USER_DESKTOPS_ENABLED).toLowerCase();
   if (["0", "false", "no"].includes(enabled)) return false;
   const visible = configuredVisibleDesktopSlugs(env);
   if (!visible) return true;
-  if (skillId === "linkedin") return visible.has("linkedin");
+  if (skillId === "linkedin") return ["linkedin", ...configuredDesktopFallbackSlugs(env)].some((slug) => visible.has(slug));
   return visible.has(skillId);
 }
 

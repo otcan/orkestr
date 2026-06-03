@@ -405,6 +405,66 @@ function fallbackWebFetchToolAnswer(toolOutputs = []) {
   return text ? `Fetched ${clean(output.title) || clean(output.url) || "the public page"}:\n${text}` : "";
 }
 
+function webFetchLooksLikeBrowserChallenge(output = {}) {
+  const text = lower([
+    output.title,
+    output.text,
+    ...(Array.isArray(output.links) ? output.links.map((link) => link.text) : []),
+  ].filter(Boolean).join(" "));
+  return /\b(?:cloudflare|checking your browser|just a moment|attention required|verify you are human|captcha|ddos-guard|enable cookies|access denied)\b/i.test(text);
+}
+
+function webFetchDirectAnswerUsable(output = {}, answer = "") {
+  if (!output?.ok || !clean(answer)) return false;
+  if (webFetchLooksLikeBrowserChallenge(output)) return false;
+  const links = Array.isArray(output.links) ? output.links.filter((link) => clean(link.text)) : [];
+  return links.length > 0 || clean(output.text).length >= 40;
+}
+
+function webFetchDesktopFallbackAllowed(output = {}) {
+  const error = clean(output?.error);
+  if (!error) return true;
+  return !/(?:url_host_forbidden|url_resolves_to_forbidden_address|unsupported_url_protocol|invalid_url|private|localhost|loopback)/i.test(error);
+}
+
+function webFetchIssue(output = {}) {
+  if (webFetchLooksLikeBrowserChallenge(output)) return "the public fetch looked like a browser challenge";
+  if (output?.ok === false) return clean(output.error || "web_fetch_failed");
+  return "the public fetch did not return useful page contents";
+}
+
+async function openPublicWebFetchInDesktop({ target, output, thread, principal, env, fetchImpl }) {
+  if (!webFetchDesktopFallbackAllowed(output)) return "";
+  const args = { skillId: "linkedin", action: "open_url", target: "", url: clean(target?.url) };
+  let opened = null;
+  try {
+    await assertSanitizedAction({
+      action: "api-agent.tool.orkestr_run_skill_action",
+      principal,
+      resource: {
+        type: "thread",
+        id: thread.id,
+        ownerUserId: threadOwnerUserId(thread, env),
+        capabilities: await scopedCapabilitiesForThread(thread, env),
+      },
+      input: { tool: "orkestr_run_skill_action", args },
+    }, env);
+    opened = await runTenantApiAgentTool("orkestr_run_skill_action", args, { principal, thread, fetchImpl }, env);
+  } catch (error) {
+    opened = { ok: false, error: clean(error?.message || error || "desktop_fallback_failed") };
+  }
+  if (opened?.ok === false || clean(opened?.error)) {
+    return `I couldn't fetch useful page contents from this chat (${webFetchIssue(output)}), and the managed desktop fallback could not open it: ${clean(opened.error || "desktop_fallback_failed")}.`;
+  }
+  const desktop = opened.desktop || {};
+  const desktopLabel = clean(desktop.label || desktop.slug || "the managed desktop");
+  const openedUrl = clean(opened.openedUrl || opened.url || target?.url);
+  return [
+    `I couldn't fetch useful page contents from this chat (${webFetchIssue(output)}), so I opened ${openedUrl || clean(target?.url)} in ${desktopLabel}.`,
+    "The desktop action only confirms that the URL was opened; it does not return page contents or login state.",
+  ].join("\n");
+}
+
 function providerLabel(provider = "") {
   const id = lower(provider);
   if (id === "gmail") return "Gmail";
@@ -1253,11 +1313,14 @@ async function runTenantApiAgentResponse({ thread, messages, message, env, fetch
     } catch (error) {
       output = { ok: false, error: clean(error?.message || error || "web_fetch_failed") };
     }
-    const text = fallbackWebFetchToolAnswer([output]) || (
-      output?.ok === false
-        ? `I couldn't fetch that public page from this chat right now: ${clean(output.error || "web_fetch_failed")}.`
-        : "I fetched the public page, but I could not extract a useful list from it."
-    );
+    const directAnswer = fallbackWebFetchToolAnswer([output]);
+    const text = webFetchDirectAnswerUsable(output, directAnswer)
+      ? directAnswer
+      : await openPublicWebFetchInDesktop({ target: webFetchTarget, output, thread, principal, env, fetchImpl }) || (
+        output?.ok === false
+          ? `I couldn't fetch that public page from this chat right now: ${clean(output.error || "web_fetch_failed")}.`
+          : "I fetched the public page, but I could not extract useful content from it."
+      );
     return {
       response: {
         id: `web_fetch_direct_${message.id}`,

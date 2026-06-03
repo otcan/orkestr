@@ -1720,6 +1720,37 @@ test("tenant api-agent can run a generic desktop skill action", async () => {
   assert.equal(opened.desktop.availableActions.includes("open"), true);
 });
 
+test("tenant api-agent can use configured generic desktop for the managed desktop skill", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-api-agent-generic-desktop-action-"));
+  const env = {
+    ORKESTR_HOME: home,
+    ORKESTR_BROWSER_DESKTOP_MODE: "profiles",
+    ORKESTR_BROWSER_VISIBLE_SLUGS: "desktop",
+    ORKESTR_DEFAULT_DESKTOP_SLUG: "desktop",
+    ORKESTR_BROWSER_LAUNCH_DISABLED: "1",
+  };
+  const principal = userPrincipal({ id: "otcan", role: "user" });
+  await upsertUser({ id: "otcan", role: "user", displayName: "Otcan" }, env);
+
+  const inventory = await runTenantApiAgentTool("orkestr_list_skill_actions", {
+    skillId: "linkedin",
+  }, { principal }, env);
+  const linkedin = inventory.skills.find((skill) => skill.id === "linkedin");
+  const opened = await runTenantApiAgentTool("orkestr_run_skill_action", {
+    skillId: "linkedin",
+    action: "open",
+    target: "",
+    url: "",
+  }, { principal }, env);
+
+  assert.equal(linkedin.available, true);
+  assert.equal(linkedin.resolvedDesktop, "desktop");
+  assert.equal(linkedin.availableActions.includes("open"), true);
+  assert.deepEqual(linkedin.desktops.map((desktop) => desktop.slug), ["desktop"]);
+  assert.equal(opened.ok, true);
+  assert.equal(opened.desktop.slug, "desktop");
+});
+
 test("tenant api-agent answers desktop action requests from skill action tool results", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-api-agent-linkedin-action-"));
   const env = await allowSanitizerEnv(home, {
@@ -2356,6 +2387,148 @@ test("tenant api-agent answers public web topic requests from web fetch tool out
   assert.match(assistant.text, /minyon kadin agresifligi \(97\)/i);
   assert.doesNotMatch(assistant.text, /\/codex/i);
   assert.doesNotMatch(assistant.text, /Codex/i);
+});
+
+test("tenant api-agent answers explicit public URL fetches without falling back to Done", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-api-agent-explicit-web-fetch-answer-"));
+  const env = await allowSanitizerEnv(home, {
+    ORKESTR_CODEX_BIN: "__orkestr_codex_disabled_public_instance__",
+    ORKESTR_API_AGENT_WEB_FETCH_SKIP_DNS_CHECK: "1",
+  });
+  await upsertUser({ id: "otcan", role: "user", displayName: "Otcan" }, env);
+  await createThread({
+    id: "otcantest-explicit-web-fetch-answer",
+    ownerUserId: "otcan",
+    name: "otcantest",
+    runtimeKind: "api-agent",
+    executor: { type: "api-agent", metadata: { runtimeKind: "api-agent" } },
+    binding: { connector: "whatsapp", chatId: "chat-otcan", outboundAccountId: "wa-1" },
+  }, env);
+  const input = await enqueueThreadInputForPrincipal("otcantest-explicit-web-fetch-answer", {
+    text: "Fetch https://orkestr.de/ and summarize what is on the page.",
+    source: "whatsapp_inbound",
+    connector: "whatsapp",
+    chatId: "chat-otcan",
+    accountId: "wa-1",
+  }, userPrincipal({ id: "otcan", role: "user" }), env);
+  const html = [
+    "<!doctype html>",
+    "<html><head><title>Orkestr public alpha</title></head><body>",
+    "<main>Orkestr lets users talk to contained agents from chat. The public alpha focuses on WhatsApp, Gmail setup, managed desktops, and safe tenant boundaries.</main>",
+    "</body></html>",
+  ].join("");
+  const openAiCalls = [];
+  const webFetchCalls = [];
+
+  const result = await processApiAgentThreadInput("otcantest-explicit-web-fetch-answer", env, {
+    fetchImpl: async (url, options = {}) => {
+      if (String(url).includes("/responses")) {
+        openAiCalls.push(JSON.parse(options.body));
+        throw new Error("openai_should_not_be_called_for_direct_web_fetch");
+      }
+      webFetchCalls.push(String(url));
+      return new Response(html, {
+        status: 200,
+        headers: { "content-type": "text/html; charset=utf-8" },
+      });
+    },
+  });
+  const messages = await listThreadMessages("otcantest-explicit-web-fetch-answer", env);
+  const assistant = messages.find((message) => message.parentMessageId === input.id);
+
+  assert.equal(result.ok, true);
+  assert.equal(openAiCalls.length, 0);
+  assert.deepEqual(webFetchCalls, ["https://orkestr.de/"]);
+  assert.match(assistant.text, /Fetched Orkestr public alpha/i);
+  assert.match(assistant.text, /contained agents/i);
+  assert.notEqual(assistant.text.trim(), "Done.");
+  assert.doesNotMatch(assistant.text, /\/codex/i);
+});
+
+test("tenant api-agent opens the generic desktop when public fetch hits a browser challenge", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-api-agent-web-fetch-desktop-fallback-"));
+  const env = await allowSanitizerEnv(home, {
+    ORKESTR_CODEX_BIN: "__orkestr_codex_disabled_public_instance__",
+    ORKESTR_API_AGENT_WEB_FETCH_SKIP_DNS_CHECK: "1",
+    ORKESTR_BROWSER_DESKTOP_MODE: "profiles",
+    ORKESTR_BROWSER_VISIBLE_SLUGS: "desktop",
+    ORKESTR_DEFAULT_DESKTOP_SLUG: "desktop",
+    ORKESTR_BROWSER_LAUNCH_DISABLED: "1",
+  });
+  await upsertUser({ id: "otcan", role: "user", displayName: "Otcan" }, env);
+  await createThread({
+    id: "otcantest-web-fetch-desktop-fallback",
+    ownerUserId: "otcan",
+    name: "otcantest",
+    runtimeKind: "api-agent",
+    executor: { type: "api-agent", metadata: { runtimeKind: "api-agent" } },
+    binding: { connector: "whatsapp", chatId: "chat-otcan", outboundAccountId: "wa-1" },
+  }, env);
+  const input = await enqueueThreadInputForPrincipal("otcantest-web-fetch-desktop-fallback", {
+    text: "Fetch https://example.com/protected and summarize it.",
+    source: "whatsapp_inbound",
+    connector: "whatsapp",
+    chatId: "chat-otcan",
+    accountId: "wa-1",
+  }, userPrincipal({ id: "otcan", role: "user" }), env);
+  const html = "<html><head><title>Just a moment...</title></head><body>Checking your browser before accessing the site. Cloudflare</body></html>";
+
+  const result = await processApiAgentThreadInput("otcantest-web-fetch-desktop-fallback", env, {
+    fetchImpl: async (url) => {
+      assert.equal(String(url).includes("/responses"), false);
+      return new Response(html, {
+        status: 200,
+        headers: { "content-type": "text/html; charset=utf-8" },
+      });
+    },
+  });
+  const messages = await listThreadMessages("otcantest-web-fetch-desktop-fallback", env);
+  const assistant = messages.find((message) => message.parentMessageId === input.id);
+
+  assert.equal(result.ok, true);
+  assert.match(assistant.text, /opened https:\/\/example\.com\/protected in Desktop/i);
+  assert.match(assistant.text, /does not return page contents/i);
+  assert.doesNotMatch(assistant.text, /Fetched Just a moment/i);
+  assert.doesNotMatch(assistant.text, /\/codex/i);
+});
+
+test("tenant api-agent does not desktop-fallback private web fetch targets", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-api-agent-private-web-fetch-no-desktop-"));
+  const env = await allowSanitizerEnv(home, {
+    ORKESTR_CODEX_BIN: "__orkestr_codex_disabled_public_instance__",
+    ORKESTR_BROWSER_DESKTOP_MODE: "profiles",
+    ORKESTR_BROWSER_VISIBLE_SLUGS: "desktop",
+    ORKESTR_DEFAULT_DESKTOP_SLUG: "desktop",
+    ORKESTR_BROWSER_LAUNCH_DISABLED: "1",
+  });
+  await upsertUser({ id: "otcan", role: "user", displayName: "Otcan" }, env);
+  await createThread({
+    id: "otcantest-private-web-fetch-no-desktop",
+    ownerUserId: "otcan",
+    name: "otcantest",
+    runtimeKind: "api-agent",
+    executor: { type: "api-agent", metadata: { runtimeKind: "api-agent" } },
+    binding: { connector: "whatsapp", chatId: "chat-otcan", outboundAccountId: "wa-1" },
+  }, env);
+  const input = await enqueueThreadInputForPrincipal("otcantest-private-web-fetch-no-desktop", {
+    text: "Fetch http://127.0.0.1:19812/api/health and summarize it.",
+    source: "whatsapp_inbound",
+    connector: "whatsapp",
+    chatId: "chat-otcan",
+    accountId: "wa-1",
+  }, userPrincipal({ id: "otcan", role: "user" }), env);
+
+  const result = await processApiAgentThreadInput("otcantest-private-web-fetch-no-desktop", env, {
+    fetchImpl: async () => {
+      throw new Error("private_fetch_should_be_rejected_before_network");
+    },
+  });
+  const messages = await listThreadMessages("otcantest-private-web-fetch-no-desktop", env);
+  const assistant = messages.find((message) => message.parentMessageId === input.id);
+
+  assert.equal(result.ok, true);
+  assert.match(assistant.text, /url_host_forbidden/i);
+  assert.doesNotMatch(assistant.text, /opened/i);
 });
 
 test("tenant api-agent records manual usage summaries", async () => {
