@@ -34,6 +34,7 @@ function parseArgs(argv = [], env = process.env) {
     vmHome: clean(env.ORKESTR_DE_ACCEPTANCE_VM_HOME || "/opt/orkestr/data"),
     parentHome: clean(env.ORKESTR_DE_ACCEPTANCE_PARENT_HOME || env.ORKESTR_PARENT_HOME || env.ORKESTR_HOME),
     parentWaBase: clean(env.ORKESTR_DE_ACCEPTANCE_PARENT_WA_BASE) || DEFAULT_PARENT_WA_BASE,
+    parentWaToken: clean(env.ORKESTR_DE_ACCEPTANCE_PARENT_WA_TOKEN || env.WHATSAPP_BRIDGE_TOKEN || env.WA_HTTP_TOKEN),
     requireWaHistory: env.ORKESTR_DE_ACCEPTANCE_WA_HISTORY !== "0",
     thread: clean(env.ORKESTR_DE_ACCEPTANCE_THREAD || "onboarding-admin-orkestr-de"),
     chatId: clean(env.ORKESTR_DE_ACCEPTANCE_CHAT_ID || "120363425280218500@g.us"),
@@ -69,6 +70,8 @@ function parseArgs(argv = [], env = process.env) {
       options.parentHome = clean(argv[++index]);
     } else if (arg === "--parent-wa-base") {
       options.parentWaBase = clean(argv[++index]).replace(/\/+$/, "");
+    } else if (arg === "--parent-wa-token") {
+      options.parentWaToken = clean(argv[++index]);
     } else if (arg === "--thread") {
       options.thread = clean(argv[++index]);
     } else if (arg === "--chat-id") {
@@ -119,6 +122,7 @@ function printHelp() {
     "  --vm-home DIR         Public ORKESTR_HOME inside the VM. Default: /opt/orkestr/data",
     "  --parent-home DIR     Parent ORKESTR_HOME containing tenant route secrets.",
     "  --parent-wa-base URL  Parent WA bridge base for history checks. Default: http://127.0.0.1:8787",
+    "  --parent-wa-token TOK  Parent WA bridge bearer token. Prefer ORKESTR_DE_ACCEPTANCE_PARENT_WA_TOKEN.",
     "  --thread ID           Public tenant thread id. Default: onboarding-admin-orkestr-de",
     "  --chat-id ID          WhatsApp chat id routed to the public tenant.",
     "  --account-id ID       Parent WhatsApp inbound account id. Default: sender",
@@ -295,7 +299,9 @@ async function waitForWhatsAppHistory(options, assistantText = "") {
   let lastError = null;
   while (Date.now() <= deadline) {
     try {
-      const payload = await requestJson(url);
+      const payload = await requestJson(url, {
+        headers: options.parentWaToken ? { authorization: `Bearer ${options.parentWaToken}` } : {},
+      });
       const texts = collectTexts(payload).map((text) => text.replace(/\s+/g, " "));
       if (texts.some((text) => text.includes(needle))) {
         return { checked: true, delivered: true };

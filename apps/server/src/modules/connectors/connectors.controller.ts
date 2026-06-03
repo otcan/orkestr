@@ -32,6 +32,7 @@ import {
   getLocalWhatsAppBridgeStatus,
   getLocalWhatsAppQrSvg,
   listLocalWhatsAppChats,
+  listLocalWhatsAppChatMessages,
   logoutLocalWhatsAppAccount,
   promoteLocalWhatsAppGroupParticipants,
   recoverLocalWhatsAppChatMessages,
@@ -208,6 +209,11 @@ export class ConnectorsController {
   @Get("whatsapp/bridge/accounts/:accountId/chats")
   async whatsappBridgeAccountChats(@Param("accountId") accountId: string) {
     return listLocalWhatsAppChats(accountId);
+  }
+
+  @Get("whatsapp/bridge/accounts/:accountId/chats/:chatId/history")
+  async whatsappBridgeChatHistory(@Param("accountId") accountId: string, @Param("chatId") chatId: string, @Query("limit") limit = "30") {
+    return listLocalWhatsAppChatMessages({ accountId, chatId, limit: Number(limit || 30) || 30 });
   }
 
   @Post("whatsapp/bridge/chats")

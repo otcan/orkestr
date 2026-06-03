@@ -2175,6 +2175,40 @@ export async function listLocalWhatsAppChats(accountId = "", env = process.env) 
   };
 }
 
+export async function listLocalWhatsAppChatMessages({ accountId = "", chatId = "", limit = 30, env = process.env } = {}) {
+  const normalized = normalizeAccountId(accountId, env);
+  const id = String(chatId || "").trim();
+  if (!id) {
+    const error = new Error("whatsapp_chat_id_required");
+    error.statusCode = 400;
+    throw error;
+  }
+  const runtime = runtimes.get(normalized);
+  const state = accountStates.get(normalized) || defaultAccountState(normalized);
+  if (!runtime?.client || !state.ready) {
+    return { accountId: normalized, chatId: id, ready: false, messages: [] };
+  }
+  const max = Math.max(1, Math.min(100, Number(limit || 30) || 30));
+  const chat = await runtime.client.getChatById(id);
+  const messages = await chat.fetchMessages({ limit: max });
+  return {
+    accountId: normalized,
+    chatId: id,
+    ready: true,
+    messages: (Array.isArray(messages) ? messages : []).map((message) => ({
+      id: serializedMessageId(message),
+      body: String(message?.body || ""),
+      type: String(message?.type || ""),
+      fromMe: Boolean(message?.fromMe),
+      from: serializedId(message?.from),
+      to: serializedId(message?.to),
+      author: serializedId(message?.author),
+      timestamp: message?.timestamp ? new Date(Number(message.timestamp) * 1000).toISOString() : null,
+      hasMedia: Boolean(message?.hasMedia),
+    })),
+  };
+}
+
 export async function listLocalWhatsAppChatParticipants({ accountId = "", chatId = "", env = process.env } = {}) {
   const normalized = normalizeAccountId(accountId, env);
   const id = String(chatId || "").trim();
