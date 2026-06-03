@@ -51,6 +51,9 @@ test("release deploy script exposes versioned install, status, and rollback", as
   assert.match(script, /\/api\/threads \/api\/users \/api\/timers \/api\/browser-sessions \/api\/desktops\/leases \/api\/connectors \/api\/whereiam/);
   assert.match(script, /Public exposure check failed: unauthenticated/);
   assert.match(script, /expected 401/);
+  assert.match(script, /blocked_count/);
+  assert.match(script, /\^0\+\$/);
+  assert.match(script, /blocked by TLS\/network/);
   assert.match(script, /sync_versioned_env/);
   assert.match(script, /set_env_assignment ORKESTR_APP_DIR "\$current_link"/);
   assert.match(script, /set_env_assignment ORKESTR_RELEASE_DEPLOY "1"/);

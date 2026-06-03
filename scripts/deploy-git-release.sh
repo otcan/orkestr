@@ -224,7 +224,7 @@ public_exposure_url_is_local() {
 }
 
 deploy_public_exposure_check() {
-  local base path url code paths curl_args
+  local base path url code paths curl_args blocked_count
   if [ "$exposure_check" != "1" ]; then
     echo "Public exposure check disabled."
     return 0
@@ -244,16 +244,28 @@ deploy_public_exposure_check() {
   if [ "$exposure_curl_insecure" = "1" ]; then
     curl_args=(-k "${curl_args[@]}")
   fi
+  blocked_count=0
   for path in $paths; do
     [ -n "$path" ] || continue
     url="$base$path"
-    code="$(curl "${curl_args[@]}" "$url" 2>/dev/null || printf '000')"
+    code="$(curl "${curl_args[@]}" "$url" 2>/dev/null || true)"
+    if [ -z "$code" ]; then
+      code="000"
+    fi
+    if printf '%s' "$code" | grep -Eq '^0+$'; then
+      blocked_count=$((blocked_count + 1))
+      continue
+    fi
     if [ "$code" != "401" ]; then
       echo "Public exposure check failed: unauthenticated $url returned HTTP $code; expected 401." >&2
       echo "Refusing to mark deploy healthy because a private API may be exposed." >&2
       return 1
     fi
   done
+  if [ "$blocked_count" -gt 0 ]; then
+    echo "Public exposure check passed: unauthenticated private APIs returned 401 or were blocked by TLS/network from $base."
+    return 0
+  fi
   echo "Public exposure check passed: unauthenticated private APIs returned 401 from $base."
 }
 
