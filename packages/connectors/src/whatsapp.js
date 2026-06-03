@@ -148,12 +148,46 @@ function firstAccountError(accounts = []) {
   return accounts.map((account) => account.error).find(Boolean) || "";
 }
 
+function publicBridgeAccount(account = {}) {
+  const id = pickString(account.accountId, account.id);
+  return {
+    id,
+    accountId: id,
+    label: pickString(account.label, account.name),
+    state: pickString(account.state, account.status),
+    ready: Boolean(account.ready),
+    authenticated: Boolean(account.authenticated),
+    started: Boolean(account.started),
+    qrAvailable: Boolean(account.qrAvailable),
+    pairingCodeUpdatedAt: pickString(account.pairingCodeUpdatedAt),
+    loadingPercent: account.loadingPercent ?? null,
+    loadingMessage: pickString(account.loadingMessage),
+    error: pickString(account.error),
+    updatedAt: pickString(account.updatedAt),
+  };
+}
+
+function publicExternalBridgeHealth(payload = {}) {
+  return {
+    ok: payload.ok === true,
+    mode: pickString(payload.mode),
+    state: pickString(payload.state, payload.status),
+    ready: Boolean(payload.ready),
+    clientReady: Boolean(payload.clientReady),
+    authenticated: Boolean(payload.authenticated),
+    qrAvailable: Boolean(payload.qrAvailable),
+    maxAccounts: Number.isFinite(Number(payload.maxAccounts)) ? Number(payload.maxAccounts) : undefined,
+    accounts: Array.isArray(payload.accounts) ? payload.accounts.map(publicBridgeAccount) : undefined,
+    updatedAt: pickString(payload.updatedAt),
+  };
+}
+
 async function externalBridgeAccounts(bridgeUrl, healthPayload, fetchImpl, headers = {}) {
-  if (Array.isArray(healthPayload?.accounts)) return healthPayload.accounts;
+  if (Array.isArray(healthPayload?.accounts)) return healthPayload.accounts.map(publicBridgeAccount);
   try {
     const dashboard = await fetchJson(whatsappBridgeEndpointUrl(bridgeUrl, "/api/dashboard"), fetchImpl, { headers });
-    if (dashboard.ok && Array.isArray(dashboard.accounts)) return dashboard.accounts;
-    if (dashboard.ok && Array.isArray(dashboard.payload?.accounts)) return dashboard.payload.accounts;
+    if (dashboard.ok && Array.isArray(dashboard.accounts)) return dashboard.accounts.map(publicBridgeAccount);
+    if (dashboard.ok && Array.isArray(dashboard.payload?.accounts)) return dashboard.payload.accounts.map(publicBridgeAccount);
   } catch {
     // Older bridges only expose /health; account discovery stays best-effort.
   }
@@ -299,7 +333,7 @@ export async function getWhatsAppStatus(env = process.env, fetchImpl = fetch) {
         state: "failed",
         summary: `WhatsApp bridge returned HTTP ${health.status}.`,
         bridgeUrl,
-        health: health.payload,
+        health: publicExternalBridgeHealth(health.payload),
         qrAvailable: false,
       };
     }
@@ -309,7 +343,7 @@ export async function getWhatsAppStatus(env = process.env, fetchImpl = fetch) {
         state: "paired",
         summary: "WhatsApp bridge is reachable and paired.",
         bridgeUrl,
-        health: health.payload,
+        health: publicExternalBridgeHealth(health.payload),
         accounts,
         qrAvailable: false,
       };
@@ -320,7 +354,7 @@ export async function getWhatsAppStatus(env = process.env, fetchImpl = fetch) {
       state: qrAvailable ? "qr_needed" : "unpaired",
       summary: qrAvailable ? "WhatsApp bridge is reachable; scan the QR code to pair." : "WhatsApp bridge is reachable but not paired.",
       bridgeUrl,
-      health: health.payload,
+      health: publicExternalBridgeHealth(health.payload),
       accounts,
       qrAvailable,
       qrUrl: qrAvailable ? `${bridgeUrl}/qr.svg` : "",
