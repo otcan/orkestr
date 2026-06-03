@@ -1321,6 +1321,156 @@ test("whatsapp delivery mirrors assistant replies once to the source chat", asyn
   assert.match(calls[0].body.text, /No-op executor received/);
 });
 
+test("whatsapp remote runtime route forwards inbound input and mirrors queue notice from public router", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-remote-queue-"));
+  const env = externalBridgeEnv(home, {
+    ORKESTR_WHATSAPP_DEBUG_FOOTER: "0",
+    ORKESTR_REMOTE_THREAD_BACKENDS_JSON: JSON.stringify({
+      personal: { baseUrl: "http://parent.local", token: "parent-token" },
+    }),
+  });
+  await writeConnectorConfig("whatsapp", { bridgeMode: "external", bridgeUrl: "http://wa.local", apiToken: "wa-token" }, env);
+  await createThread({
+    id: "public-remote-queue",
+    name: "Public Remote Queue",
+    binding: {
+      connector: "whatsapp",
+      chatId: "chat-remote-queue",
+      responderAccountId: "responder",
+      remoteBackend: "personal",
+      remoteThreadId: "parent-thread",
+    },
+  }, env);
+  const parentUser = {
+    id: "parent-user-queue",
+    role: "user",
+    source: "whatsapp_inbound",
+    state: "queued",
+    deliveryState: "awaiting_active_turn",
+    text: "status?",
+    chatId: "chat-remote-queue",
+    accountId: "responder",
+    createdAt: new Date().toISOString(),
+  };
+  const sendCalls = [];
+  const fetchImpl = async (url, options = {}) => {
+    const parsed = new URL(String(url));
+    if (parsed.host === "parent.local" && parsed.pathname === "/threads/parent-thread/input") {
+      assert.equal(options.headers.authorization, "Bearer parent-token");
+      assert.equal(JSON.parse(options.body).parseCommands, true);
+      return response({ ok: true, message: parentUser });
+    }
+    if (parsed.host === "parent.local" && parsed.pathname === "/threads/parent-thread/messages") {
+      return response({ ok: true, messages: [parentUser] });
+    }
+    if (parsed.host === "wa.local" && parsed.pathname === "/send-text") {
+      sendCalls.push(JSON.parse(options.body));
+      return response({ ok: true, ids: ["queue-notice"] });
+    }
+    throw new Error(`unexpected fetch ${parsed.href}`);
+  };
+
+  const routed = await routeWhatsAppInbound({
+    eventId: "remote-queue-1",
+    chatId: "chat-remote-queue",
+    accountId: "responder",
+    text: "status?",
+  }, env, fetchImpl);
+  const delivery = await deliverWhatsAppReplies(env, fetchImpl);
+  const messages = await listThreadMessages("public-remote-queue", env);
+
+  assert.equal(routed.remoteRuntime, true);
+  assert.equal(messages[0].remoteMessageId, "parent-user-queue");
+  assert.equal(messages[0].deliveryState, "awaiting_active_turn");
+  assert.equal(delivery.delivered.length, 1);
+  assert.equal(sendCalls.length, 1);
+  assert.equal(sendCalls[0].to, "chat-remote-queue");
+  assert.match(sendCalls[0].text, /^Queued for the next Codex turn/);
+});
+
+test("whatsapp remote runtime imports parent replies and mirrors them once through public bridge", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-remote-reply-"));
+  const env = externalBridgeEnv(home, {
+    ORKESTR_WHATSAPP_DEBUG_FOOTER: "0",
+    ORKESTR_REMOTE_THREAD_BACKENDS_JSON: JSON.stringify({
+      personal: { baseUrl: "http://parent.local", token: "parent-token" },
+    }),
+  });
+  await writeConnectorConfig("whatsapp", { bridgeMode: "external", bridgeUrl: "http://wa.local", apiToken: "wa-token" }, env);
+  await createThread({
+    id: "public-remote-reply",
+    name: "Public Remote Reply",
+    binding: {
+      connector: "whatsapp",
+      chatId: "chat-remote-reply",
+      responderAccountId: "responder",
+      remoteBackend: "personal",
+      remoteThreadId: "parent-thread",
+    },
+  }, env);
+  const parentUser = {
+    id: "parent-user-reply",
+    role: "user",
+    source: "whatsapp_inbound",
+    state: "queued",
+    deliveryState: "awaiting_active_turn",
+    text: "status?",
+    chatId: "chat-remote-reply",
+    accountId: "responder",
+    createdAt: new Date().toISOString(),
+  };
+  const parentUserDelivered = {
+    ...parentUser,
+    state: "completed",
+    deliveryState: "delivered",
+    deliveredAt: new Date().toISOString(),
+  };
+  const parentReply = {
+    id: "parent-assistant-reply",
+    role: "assistant",
+    source: "codex-app-server",
+    phase: "final_answer",
+    state: "completed",
+    parentMessageId: "parent-user-reply",
+    text: "Parent runtime answer.",
+    chatId: "chat-remote-reply",
+    createdAt: new Date().toISOString(),
+  };
+  const sendCalls = [];
+  const fetchImpl = async (url, options = {}) => {
+    const parsed = new URL(String(url));
+    if (parsed.host === "parent.local" && parsed.pathname === "/threads/parent-thread/input") {
+      return response({ ok: true, message: parentUser });
+    }
+    if (parsed.host === "parent.local" && parsed.pathname === "/threads/parent-thread/messages") {
+      return response({ ok: true, messages: [parentUserDelivered, parentReply] });
+    }
+    if (parsed.host === "wa.local" && parsed.pathname === "/send-text") {
+      sendCalls.push(JSON.parse(options.body));
+      return response({ ok: true, ids: [`sent-${sendCalls.length}`] });
+    }
+    throw new Error(`unexpected fetch ${parsed.href}`);
+  };
+
+  await routeWhatsAppInbound({
+    eventId: "remote-reply-1",
+    chatId: "chat-remote-reply",
+    accountId: "responder",
+    text: "status?",
+  }, env, fetchImpl);
+  const delivery = await deliverWhatsAppReplies(env, fetchImpl);
+  const duplicate = await deliverWhatsAppReplies(env, fetchImpl);
+  const messages = await listThreadMessages("public-remote-reply", env);
+  const imported = messages.find((message) => message.remoteMessageId === "parent-assistant-reply");
+
+  assert.equal(delivery.delivered.length, 1);
+  assert.equal(duplicate.delivered.length, 0);
+  assert.equal(sendCalls.length, 1);
+  assert.equal(sendCalls[0].to, "chat-remote-reply");
+  assert.match(sendCalls[0].text, /Parent runtime answer/);
+  assert.equal(imported.parentMessageId, messages[0].id);
+});
+
 test("whatsapp delivery skips outbound replies while an active persisted claim exists", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-claim-active-"));
   const env = externalBridgeEnv(home, {

@@ -53,6 +53,11 @@ import {
   shouldMirrorWhatsAppReply,
 } from "./whatsapp-mirror-policy.js";
 import {
+  enqueueRemoteWhatsAppThreadInput,
+  remoteWhatsAppRuntimeBinding,
+  syncRemoteWhatsAppThreadMessages,
+} from "./whatsapp-remote-runtime.js";
+import {
   boundThreadWhatsAppAssistantOrigin,
   completePassiveMirrorParent,
   completedAssistantReplyForParent,
@@ -859,7 +864,28 @@ async function sendClaimedWhatsAppText({
   }
 }
 
-export async function routeWhatsAppInbound(input = {}, env = process.env) {
+function remoteMessagePatch(remoteResult = {}, fallback = {}) {
+  const remoteMessage = remoteResult.message || {};
+  const patch = {
+    remoteBackend: remoteResult.backendId || fallback.remoteBackend || "",
+    remoteThreadId: remoteResult.remoteThreadId || fallback.remoteThreadId || "",
+    remoteRoutedAt: new Date().toISOString(),
+    observedVia: "remote_runtime_forwarded",
+  };
+  const remoteMessageId = pickString(remoteMessage.id, remoteMessage.messageId);
+  const remoteState = pickString(remoteMessage.state);
+  const remoteDeliveryState = pickString(remoteMessage.deliveryState);
+  const remoteObservedVia = pickString(remoteMessage.observedVia);
+  const remoteDeliveredAt = pickString(remoteMessage.deliveredAt);
+  if (remoteMessageId) patch.remoteMessageId = remoteMessageId;
+  if (remoteState) patch.state = remoteState;
+  if (remoteDeliveryState) patch.deliveryState = remoteDeliveryState;
+  if (remoteObservedVia) patch.observedVia = remoteObservedVia;
+  if (remoteDeliveredAt) patch.deliveredAt = remoteDeliveredAt;
+  return patch;
+}
+
+export async function routeWhatsAppInbound(input = {}, env = process.env, fetchImpl = fetch) {
   const config = await readConnectorConfig("whatsapp", env);
   const eventId = pickString(input.eventId, input.id, input.messageId);
   if (!eventId) throw badRequest("whatsapp_event_id_required");
@@ -906,6 +932,93 @@ export async function routeWhatsAppInbound(input = {}, env = process.env) {
   };
   let thread = threadId ? (await listThreads(env)).find((item) => item.id === threadId || item.name === threadId || item.bindingName === threadId) : null;
   thread = await ensureApiAgentWhatsAppThread(thread, env);
+  const remoteRuntime = threadId && thread ? remoteWhatsAppRuntimeBinding(thread, env) : null;
+  if (remoteRuntime) {
+    let message = threadId
+      ? await appendThreadMessage(thread.id, {
+          ...messageInput,
+          role: "user",
+          state: "queued",
+          deliveryState: "remote_forwarding",
+          originTransport: "whatsapp-public-router",
+          remoteBackend: remoteRuntime.backendId,
+          remoteThreadId: remoteRuntime.remoteThreadId,
+        }, env)
+      : await enqueueAgentMessage(agentId, messageInput, env);
+    const contentDuplicate = Boolean(message.duplicate);
+    let remoteResult = null;
+    if (!contentDuplicate && threadId) {
+      try {
+        remoteResult = await enqueueRemoteWhatsAppThreadInput({ thread, message, input: messageInput }, env, fetchImpl);
+        message = await updateThreadMessage(thread.id, message.id, remoteMessagePatch(remoteResult, {
+          remoteBackend: remoteRuntime.backendId,
+          remoteThreadId: remoteRuntime.remoteThreadId,
+        }), env).catch(() => message);
+      } catch (error) {
+        message = await updateThreadMessage(thread.id, message.id, {
+          state: "failed",
+          deliveryState: "failed",
+          observedVia: "remote_runtime_forward_failed",
+          error: error.message || String(error),
+          remoteBackend: remoteRuntime.backendId,
+          remoteThreadId: remoteRuntime.remoteThreadId,
+        }, env).catch(() => message);
+        await appendEvent({
+          type: "whatsapp_remote_runtime_forward_failed",
+          eventId,
+          threadId,
+          messageId: message.id,
+          chatId,
+          remoteBackend: remoteRuntime.backendId,
+          remoteThreadId: remoteRuntime.remoteThreadId,
+          error: error.message || String(error),
+        }, env).catch(() => {});
+      }
+    }
+    const event = {
+      eventId,
+      agentId: null,
+      threadId: threadId || null,
+      messageId: message.id,
+      chatId,
+      from,
+      accountId,
+      attachments: Array.isArray(input.attachments) ? input.attachments : [],
+      receivedAt: pickString(input.timestamp, input.receivedAt) || new Date().toISOString(),
+      remoteBackend: remoteRuntime.backendId,
+      remoteThreadId: remoteRuntime.remoteThreadId,
+      remoteMessageId: pickString(message.remoteMessageId, remoteResult?.message?.id, remoteResult?.message?.messageId),
+    };
+    if (contentDuplicate) event.duplicateReason = message.duplicateReason || "active_input";
+    state.inboundEvents = [...(state.inboundEvents || []), event];
+    await writeWhatsAppState(state, env);
+    await appendEvent({
+      type: contentDuplicate ? "whatsapp_inbound_duplicate" : "whatsapp_remote_runtime_inbound_routed",
+      eventId,
+      agentId: null,
+      threadId: threadId || null,
+      messageId: message.id,
+      chatId,
+      duplicateReason: contentDuplicate ? event.duplicateReason : "",
+      remoteBackend: remoteRuntime.backendId,
+      remoteThreadId: remoteRuntime.remoteThreadId,
+    }, env);
+    return {
+      duplicate: contentDuplicate,
+      remoteRuntime: true,
+      remoteBackend: remoteRuntime.backendId,
+      remoteThreadId: remoteRuntime.remoteThreadId,
+      remote: remoteResult?.payload || null,
+      event,
+      agentId: null,
+      threadId: threadId || null,
+      ownerUserId: thread ? resourceOwnerUserId(thread, env) : null,
+      autoProvisioned: threadRoute.autoProvisioned === true,
+      createdThread: threadRoute.createdThread === true,
+      userId: threadRoute.user?.id || null,
+      message,
+    };
+  }
   const approvalReply = explicitWhatsAppApprovalReply(text);
   if (threadId && thread && isCodexAppServerThread(thread) && approvalReply && !threadHasActionableStoredPendingRequest(thread)) {
     const message = await appendThreadMessage(thread.id, {
@@ -1089,6 +1202,9 @@ async function deliverWhatsAppRepliesOnce(env = process.env, fetchImpl = fetch) 
   if (!bridgeUrl && bridgeMode(config, env) !== "local") {
     return { delivered: [], skipped: [], failed: [], status: "not_configured" };
   }
+  await syncRemoteWhatsAppThreadMessages(env, fetchImpl).catch((error) =>
+    appendEvent({ type: "whatsapp_remote_runtime_sync_failed", error: error.message || String(error) }, env).catch(() => null)
+  );
   const state = await readWhatsAppState(env);
   const deliveredIds = new Set((state.outboundDeliveries || []).map((delivery) => delivery.messageId));
   const deliveredTextKeys = new Set((state.outboundDeliveries || []).map((delivery) => delivery.textKey).filter(Boolean));

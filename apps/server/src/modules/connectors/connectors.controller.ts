@@ -357,7 +357,7 @@ export class ConnectorsController {
           .send(payload);
       }
       await deliverWhatsAppReplies().catch(() => {});
-      requestThreadInputDelivery(routed.threadId);
+      if (!(routed as any).remoteRuntime) requestThreadInputDelivery(routed.threadId);
     }
     return response
       .status(routed.duplicate ? 200 : 202)

@@ -41,6 +41,15 @@ const messageStringFields = [
   "codexModel",
   "codexReasoningEffort",
   "codexModeLive",
+  "remoteBackend",
+  "remoteThreadId",
+  "remoteMessageId",
+  "remoteParentMessageId",
+  "remoteRoutedAt",
+  "remoteSyncedAt",
+  "publicThreadId",
+  "publicMessageId",
+  "forwardedBy",
 ];
 
 function safeThreadId(threadId) {

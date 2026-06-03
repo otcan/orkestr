@@ -1032,6 +1032,12 @@ export class ThreadsController {
         .map((id) => [id, rawAdditionalParticipantLabels[id]] as const)
         .filter((entry) => entry[1]),
     );
+    const remoteBackend = optionalBodyString(body, "remoteBackend", current.remoteBackend || current.remoteRuntimeBackend || "") || null;
+    const remoteThreadIdValue = optionalBodyString(body, "remoteThreadId", current.remoteThreadId || current.remoteRuntimeThreadId || "") || null;
+    const hasRemoteRuntimeBinding =
+      Boolean(remoteBackend || remoteThreadIdValue || current.remoteBackend || current.remoteThreadId || current.remoteRuntimeBackend || current.remoteRuntimeThreadId) ||
+      hasOwn(body, "remoteRuntimeEnabled") ||
+      hasOwn(body, "remoteMirrorEnabled");
     const binding = {
       ...current,
       connector: optionalBodyString(body, "connector", current.connector || "whatsapp") || "whatsapp",
@@ -1052,6 +1058,12 @@ export class ThreadsController {
       outboundAccountId: optionalBodyString(body, "outboundAccountId", current.outboundAccountId || "") || null,
       ownerAuthorTags: optionalBodyStringArray(body, "ownerAuthorTags", current.ownerAuthorTags || []),
       trustedOverrideAuthorTags: optionalBodyStringArray(body, "trustedOverrideAuthorTags", current.trustedOverrideAuthorTags || []),
+      ...(hasRemoteRuntimeBinding ? {
+        remoteBackend,
+        remoteThreadId: remoteThreadIdValue,
+        remoteRuntimeEnabled: optionalBodyBoolean(body, "remoteRuntimeEnabled", current.remoteRuntimeEnabled !== false),
+        remoteMirrorEnabled: optionalBodyBoolean(body, "remoteMirrorEnabled", current.remoteMirrorEnabled !== false),
+      } : {}),
       updatedAt: new Date().toISOString(),
     };
     const updated = await this.threadBindingService.updateWhatsAppBinding(

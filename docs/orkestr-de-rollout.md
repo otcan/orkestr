@@ -122,6 +122,67 @@ External unauthenticated attach requests must continue to fail with
 `attach --print` may report `Codex is not signed in`; that confirms the request
 reached the local operator path rather than browser-pairing auth.
 
+## Public WhatsApp router with parent runtime delegation
+
+For migration periods where public Orkestr owns WhatsApp routing but existing
+personal/dev Codex threads remain the execution backend, use two private parent
+proxies:
+
+- WhatsApp transport proxy: exposes the already-paired parent WhatsApp Web
+  account to the public VM. This keeps the current login/session and avoids QR
+  reauth.
+- Parent runtime proxy: exposes only the narrow runtime API needed by the
+  public router: thread input, thread messages, thread history, runtime status,
+  and interrupt. Use `scripts/parent-runtime-proxy.mjs` as the implementation.
+
+The parent runtime proxy is configured with secrets outside the repo:
+
+```text
+ORKESTR_PARENT_RUNTIME_PROXY_LISTEN_HOST=<private-host-ip>
+ORKESTR_PARENT_RUNTIME_PROXY_PORT=18914
+ORKESTR_PARENT_RUNTIME_PROXY_UPSTREAM=http://127.0.0.1:<parent-api-port>
+ORKESTR_PARENT_RUNTIME_PROXY_TOKEN=<token accepted from public VM>
+ORKESTR_PARENT_RUNTIME_PROXY_CLI_AUTH_FILE=<parent ORKESTR_HOME>/secrets/cli-auth.json
+```
+
+The public VM points delegated thread bindings at that proxy:
+
+```text
+ORKESTR_REMOTE_THREAD_BACKENDS_JSON={
+  "personal": {
+    "baseUrl": "http://<private-host-ip>:18914",
+    "token": "<token accepted by parent runtime proxy>"
+  }
+}
+```
+
+Each public WhatsApp-bound thread that delegates to the parent runtime stores:
+
+```json
+{
+  "connector": "whatsapp",
+  "chatId": "<wa-chat-id>",
+  "responderAccountId": "<public-responder-account>",
+  "remoteBackend": "personal",
+  "remoteThreadId": "<parent-thread-id>",
+  "remoteRuntimeEnabled": true,
+  "remoteMirrorEnabled": true
+}
+```
+
+During cutover:
+
+- Public Orkestr receives inbound WhatsApp, records the public user message, and
+  forwards the same input to the parent runtime.
+- Public Orkestr imports parent messages and sends queue notices, progress, final
+  replies, and failures through the public WhatsApp bridge.
+- Personal/dev Orkestr must not mirror migrated chats directly. Set the parent
+  binding `mirrorToWhatsApp=false` or remove the parent WhatsApp binding after
+  the public route is active.
+- Do not copy parent WhatsApp session state, Gmail tokens, browser profiles, or
+  Codex homes into the public VM. Only proxy the authenticated transport/runtime
+  surfaces through the allowlisted private endpoints.
+
 ## Verification
 
 Run:
