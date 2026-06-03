@@ -28,6 +28,21 @@ test("auth status describes Keycloak passwordless email and phone policy", async
   assert.equal(JSON.stringify(auth).includes("super-secret"), false);
 });
 
+test("auth status describes Microsoft Graph mail without exposing token config", async () => {
+  const auth = publicAuthStatus({
+    ORKESTR_MAIL_PROVIDER: "graph",
+    ORKESTR_GRAPH_MAIL_FROM: "hello@example.test",
+    ORKESTR_GRAPH_MAIL_SENDER: "sender@example.test",
+    ORKESTR_GRAPH_MAIL_TOKEN_COMMAND_JSON: "[\"/private/token-helper\"]",
+  });
+
+  assert.equal(auth.mail.provider, "graph");
+  assert.equal(auth.mail.configured, true);
+  assert.equal(auth.mail.from, "he***@example.test");
+  assert.equal(auth.mail.user, "se***@example.test");
+  assert.equal(JSON.stringify(auth).includes("token-helper"), false);
+});
+
 test("public URL config separates app and auth hosts for hosted deployments", () => {
   const urls = publicUrlConfig({
     ORKESTR_PRIMARY_DOMAIN: "orkestr.de",

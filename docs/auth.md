@@ -62,5 +62,19 @@ ORKESTR_OUTLOOK_SMTP_FROM=notifications@example.com
 ORKESTR_WAITLIST_NOTIFY_EMAIL=admin@example.com
 ```
 
-Orkestr reports whether Outlook mail delivery is configured, but it does not
-expose SMTP passwords through the API or UI.
+Orkestr can also send outbound notifications through Microsoft Graph `sendMail`
+when SMTP is not available. Keep token helpers and token files in the private
+runtime environment. The command form is a JSON array so the app does not parse
+shell syntax.
+
+```env
+ORKESTR_MAIL_PROVIDER=graph
+ORKESTR_GRAPH_MAIL_FROM=hello@example.com
+ORKESTR_GRAPH_MAIL_SENDER=sender@example.com
+ORKESTR_GRAPH_MAIL_TOKEN_COMMAND_JSON=["/usr/local/bin/example-graph-token"]
+ORKESTR_WAITLIST_NOTIFY_EMAIL=admin@example.com
+```
+
+Orkestr reports whether Outlook or Graph mail delivery is configured, but it
+does not expose SMTP passwords, access tokens, or token commands through the API
+or UI.

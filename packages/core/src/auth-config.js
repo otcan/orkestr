@@ -53,11 +53,25 @@ export function publicAuthStatus(env = process.env) {
   const outlookUser = envValue(env, ["ORKESTR_OUTLOOK_SMTP_USER", "OUTLOOK_SMTP_USER"]);
   const outlookFrom = envValue(env, ["ORKESTR_OUTLOOK_SMTP_FROM", "OUTLOOK_SMTP_FROM", "ORKESTR_MAIL_FROM"]);
   const outlookHost = envValue(env, ["ORKESTR_OUTLOOK_SMTP_HOST", "OUTLOOK_SMTP_HOST"]) || "smtp.office365.com";
+  const mailProvider = envValue(env, ["ORKESTR_MAIL_PROVIDER", "ORKESTR_EMAIL_PROVIDER"]).toLowerCase();
+  const graphFrom = envValue(env, ["ORKESTR_GRAPH_MAIL_FROM", "ORKESTR_OUTLOOK_GRAPH_FROM", "OUTLOOK_GRAPH_FROM", "ORKESTR_MAIL_FROM"]);
+  const graphSender = envValue(env, ["ORKESTR_GRAPH_MAIL_SENDER", "ORKESTR_OUTLOOK_GRAPH_SENDER", "OUTLOOK_GRAPH_SENDER"]);
+  const graphConfigured = Boolean(
+    envValue(env, [
+      "ORKESTR_GRAPH_MAIL_ACCESS_TOKEN",
+      "ORKESTR_OUTLOOK_GRAPH_ACCESS_TOKEN",
+      "OUTLOOK_GRAPH_ACCESS_TOKEN",
+      "ORKESTR_GRAPH_MAIL_TOKEN_COMMAND_JSON",
+      "ORKESTR_OUTLOOK_GRAPH_TOKEN_COMMAND_JSON",
+      "OUTLOOK_GRAPH_TOKEN_COMMAND_JSON",
+    ]),
+  );
   const passwordless = envBool(env, "ORKESTR_AUTH_PASSWORDLESS", true);
   const requireEmailFactor = envBool(env, "ORKESTR_AUTH_REQUIRE_EMAIL_FACTOR", true);
   const requirePhoneFactor = envBool(env, "ORKESTR_AUTH_REQUIRE_PHONE_FACTOR", true);
   const keycloakConfigured = provider === "keycloak" && Boolean(issuer && clientId);
   const outlookConfigured = Boolean(outlookUser || outlookFrom);
+  const effectiveMailProvider = mailProvider || (graphConfigured ? "graph" : "outlook");
 
   return {
     provider,
@@ -87,12 +101,14 @@ export function publicAuthStatus(env = process.env) {
       requiredActions: ["verify email", "verify phone"],
     },
     mail: {
-      provider: "outlook",
-      configured: outlookConfigured,
-      host: outlookHost,
-      user: redactUser(outlookUser),
-      from: redactUser(outlookFrom),
-      note: "Use Outlook SMTP in Keycloak for verification email delivery; Orkestr does not store SMTP secrets in public config.",
+      provider: effectiveMailProvider === "graph" ? "graph" : "outlook",
+      configured: effectiveMailProvider === "graph" ? Boolean(graphConfigured && graphFrom) : outlookConfigured,
+      host: effectiveMailProvider === "graph" ? "graph.microsoft.com" : outlookHost,
+      user: redactUser(effectiveMailProvider === "graph" ? graphSender : outlookUser),
+      from: redactUser(effectiveMailProvider === "graph" ? graphFrom : outlookFrom),
+      note: effectiveMailProvider === "graph"
+        ? "Use Microsoft Graph Mail.Send for Orkestr outbound mail; token material stays in private runtime config."
+        : "Use Outlook SMTP in Keycloak for verification email delivery; Orkestr does not store SMTP secrets in public config.",
     },
     storage: {
       genericIdentityLinks: false,

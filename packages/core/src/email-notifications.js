@@ -1,7 +1,11 @@
 import crypto from "node:crypto";
+import { execFile } from "node:child_process";
 import net from "node:net";
 import tls from "node:tls";
 import { once } from "node:events";
+import { promisify } from "node:util";
+
+const execFileAsync = promisify(execFile);
 
 function clean(value = "") {
   return String(value || "").trim();
@@ -32,6 +36,13 @@ function splitEmailList(value = "") {
     .split(/[,\s]+/)
     .map((item) => clean(item))
     .filter(Boolean);
+}
+
+function mailProvider(env = process.env) {
+  const explicit = envValue(env, ["ORKESTR_MAIL_PROVIDER", "ORKESTR_EMAIL_PROVIDER"]).toLowerCase();
+  if (explicit) return explicit;
+  if (graphEmailConfigured(env)) return "graph";
+  return "smtp";
 }
 
 function smtpEmailConfig(env = process.env) {
@@ -68,6 +79,50 @@ function smtpEmailConfig(env = process.env) {
     rejectUnauthorized: !envBoolValue(env, ["ORKESTR_SMTP_ALLOW_INVALID_TLS", "ORKESTR_OUTLOOK_SMTP_ALLOW_INVALID_TLS", "OUTLOOK_SMTP_ALLOW_INVALID_TLS"], false),
     timeoutMs: Math.max(2_000, Math.min(60_000, Number(env.ORKESTR_SMTP_TIMEOUT_MS) || 10_000)),
     helloName: clean(env.ORKESTR_SMTP_HELO || "orkestr.local"),
+  };
+}
+
+function graphEmailConfigured(env = process.env) {
+  return Boolean(
+    envValue(env, [
+      "ORKESTR_GRAPH_MAIL_ACCESS_TOKEN",
+      "ORKESTR_OUTLOOK_GRAPH_ACCESS_TOKEN",
+      "OUTLOOK_GRAPH_ACCESS_TOKEN",
+      "ORKESTR_GRAPH_MAIL_TOKEN_COMMAND_JSON",
+      "ORKESTR_OUTLOOK_GRAPH_TOKEN_COMMAND_JSON",
+      "OUTLOOK_GRAPH_TOKEN_COMMAND_JSON",
+    ]),
+  );
+}
+
+function graphEmailConfig(env = process.env) {
+  const smtp = smtpEmailConfig(env);
+  const endpoint = envValue(env, ["ORKESTR_GRAPH_MAIL_ENDPOINT", "ORKESTR_OUTLOOK_GRAPH_ENDPOINT"]) || "https://graph.microsoft.com/v1.0";
+  const user = envValue(env, ["ORKESTR_GRAPH_MAIL_USER", "ORKESTR_OUTLOOK_GRAPH_USER", "OUTLOOK_GRAPH_USER"]) || "me";
+  const sender = envValue(env, ["ORKESTR_GRAPH_MAIL_SENDER", "ORKESTR_OUTLOOK_GRAPH_SENDER", "OUTLOOK_GRAPH_SENDER"]);
+  const from = envValue(env, [
+    "ORKESTR_GRAPH_MAIL_FROM",
+    "ORKESTR_OUTLOOK_GRAPH_FROM",
+    "OUTLOOK_GRAPH_FROM",
+    "ORKESTR_MAIL_FROM",
+  ]) || smtp.from;
+  return {
+    endpoint: endpoint.replace(/\/+$/, ""),
+    user,
+    sender,
+    from,
+    accessToken: envValue(env, [
+      "ORKESTR_GRAPH_MAIL_ACCESS_TOKEN",
+      "ORKESTR_OUTLOOK_GRAPH_ACCESS_TOKEN",
+      "OUTLOOK_GRAPH_ACCESS_TOKEN",
+    ]),
+    tokenCommandJson: envValue(env, [
+      "ORKESTR_GRAPH_MAIL_TOKEN_COMMAND_JSON",
+      "ORKESTR_OUTLOOK_GRAPH_TOKEN_COMMAND_JSON",
+      "OUTLOOK_GRAPH_TOKEN_COMMAND_JSON",
+    ]),
+    saveToSentItems: envBoolValue(env, ["ORKESTR_GRAPH_MAIL_SAVE_TO_SENT", "ORKESTR_OUTLOOK_GRAPH_SAVE_TO_SENT"], false),
+    timeoutMs: Math.max(2_000, Math.min(60_000, Number(env.ORKESTR_GRAPH_MAIL_TIMEOUT_MS) || 10_000)),
   };
 }
 
@@ -243,35 +298,162 @@ async function sendSmtpMessage({ from = "", to = [], subject = "", text = "" } =
   }
 }
 
+function parseTokenCommand(value = "") {
+  if (!clean(value)) return [];
+  let parsed;
+  try {
+    parsed = JSON.parse(value);
+  } catch {
+    throw new Error("graph_token_command_invalid_json");
+  }
+  if (!Array.isArray(parsed) || !parsed.length || parsed.some((part) => typeof part !== "string" || !clean(part))) {
+    throw new Error("graph_token_command_invalid");
+  }
+  return parsed.map((part) => String(part));
+}
+
+async function graphAccessToken(config = {}) {
+  if (clean(config.accessToken)) return clean(config.accessToken);
+  const command = parseTokenCommand(config.tokenCommandJson);
+  if (!command.length) return "";
+  const [file, ...args] = command;
+  const { stdout } = await execFileAsync(file, args, {
+    timeout: config.timeoutMs,
+    maxBuffer: 1024 * 1024,
+    windowsHide: true,
+    env: {
+      ...process.env,
+      ORKESTR_GRAPH_MAIL_TOKEN_AUDIENCE: "https://graph.microsoft.com/.default",
+    },
+  });
+  return clean(String(stdout || "").split(/\r?\n/).find((line) => clean(line)) || "");
+}
+
+function graphRecipients(to = []) {
+  const recipients = Array.isArray(to) ? to : splitEmailList(to);
+  return recipients.map((recipient) => ({
+    emailAddress: {
+      address: envelopeAddress(recipient),
+    },
+  })).filter((recipient) => recipient.emailAddress.address);
+}
+
+function graphSendUrl(config = {}) {
+  const user = clean(config.user) || "me";
+  if (user.toLowerCase() === "me") return `${config.endpoint}/me/sendMail`;
+  return `${config.endpoint}/users/${encodeURIComponent(user)}/sendMail`;
+}
+
+async function sendGraphMessage({ from = "", to = [], subject = "", text = "" } = {}, config = {}) {
+  const token = await graphAccessToken(config);
+  if (!token) {
+    const error = new Error("graph_token_missing");
+    error.graphResponse = "Microsoft Graph token is missing.";
+    throw error;
+  }
+  const cleanFrom = envelopeAddress(from || config.from);
+  const message = {
+    subject: escapeHeader(subject),
+    body: {
+      contentType: "Text",
+      content: String(text || ""),
+    },
+    toRecipients: graphRecipients(to),
+    from: {
+      emailAddress: {
+        address: cleanFrom,
+      },
+    },
+  };
+  const cleanSender = envelopeAddress(config.sender);
+  if (cleanSender) {
+    message.sender = {
+      emailAddress: {
+        address: cleanSender,
+      },
+    };
+  }
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), config.timeoutMs);
+  try {
+    const response = await fetch(graphSendUrl(config), {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        message,
+        saveToSentItems: Boolean(config.saveToSentItems),
+      }),
+      signal: controller.signal,
+    });
+    const body = await response.text();
+    if (!response.ok) {
+      const error = new Error(`graph_${response.status}`);
+      error.graphResponse = body.slice(0, 500);
+      throw error;
+    }
+    return {
+      ok: true,
+      messageId: response.headers.get("request-id") || "",
+    };
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 export async function sendEmail(message = {}, env = process.env) {
-  const config = smtpEmailConfig(env);
+  const provider = mailProvider(env);
   const recipients = Array.isArray(message.to) ? message.to : splitEmailList(message.to);
+  const config = provider === "graph" ? graphEmailConfig(env) : smtpEmailConfig(env);
   const from = clean(message.from || config.from);
   if (!recipients.length) return { ok: false, configured: false, skippedReason: "email_recipient_missing" };
-  if (!config.host || !from) return { ok: false, configured: false, skippedReason: "smtp_not_configured" };
-  const result = await sendSmtpMessage({
-    from,
-    to: recipients,
-    subject: message.subject,
-    text: message.text,
-  }, {
-    ...config,
-    from,
-  });
+  if (provider === "graph" && (!from || !graphEmailConfigured(env))) {
+    return { ok: false, configured: false, skippedReason: "graph_mail_not_configured" };
+  }
+  if (provider !== "graph" && (!config.host || !from)) {
+    return { ok: false, configured: false, skippedReason: "smtp_not_configured" };
+  }
+  const result = provider === "graph"
+    ? await sendGraphMessage({
+      from,
+      to: recipients,
+      subject: message.subject,
+      text: message.text,
+    }, {
+      ...config,
+      from,
+    })
+    : await sendSmtpMessage({
+      from,
+      to: recipients,
+      subject: message.subject,
+      text: message.text,
+    }, {
+      ...config,
+      from,
+    });
   return {
     ...result,
     configured: true,
+    provider,
     recipients,
   };
 }
 
 export function waitlistNotificationConfig(env = process.env) {
   const recipients = splitEmailList(env.ORKESTR_WAITLIST_NOTIFY_EMAILS || env.ORKESTR_WAITLIST_NOTIFY_EMAIL);
-  const smtp = smtpEmailConfig(env);
+  const provider = mailProvider(env);
+  const mail = provider === "graph" ? graphEmailConfig(env) : smtpEmailConfig(env);
   return {
-    configured: Boolean(recipients.length && smtp.host && smtp.from),
+    configured: provider === "graph"
+      ? Boolean(recipients.length && mail.from && graphEmailConfigured(env))
+      : Boolean(recipients.length && mail.host && mail.from),
+    provider,
     recipients,
-    from: smtp.from,
+    from: mail.from,
     adminUrl: waitlistAdminUrl(env),
   };
 }
