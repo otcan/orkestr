@@ -264,12 +264,19 @@ json_health() {
 }
 
 assert_kubevirt_service_ready() {
-  local ready endpoints pod_status
-  ready="$(kubectl_k3s get vmi -n "$namespace" "$vm" -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}' 2>/dev/null || true)"
+  local ready endpoints pod_status deadline
+  deadline=$((SECONDS + 180))
+  while [ "$SECONDS" -le "$deadline" ]; do
+    ready="$(kubectl_k3s get vmi -n "$namespace" "$vm" -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}' 2>/dev/null || true)"
+    pod_status="$(kubectl_k3s get pod -n "$namespace" -l "kubevirt.io/domain=$vm" -o jsonpath='{range .items[*]}{.metadata.name} {.status.phase} {.status.containerStatuses[*].ready}{" "}{end}' 2>/dev/null || true)"
+    endpoints="$(kubectl_k3s get endpointslice -n "$namespace" -l "kubernetes.io/service-name=$service" -o json 2>/dev/null | jq '[.items[].endpoints[]? | select((.conditions.ready // true) == true and (.conditions.serving // true) == true) | .addresses[]?] | length' 2>/dev/null || printf '0')"
+    if [ "$ready" = "True" ] && grep -Eq ' Running .*true' <<<"$pod_status" && [ "${endpoints:-0}" -gt 0 ]; then
+      return 0
+    fi
+    sleep 3
+  done
   [ "$ready" = "True" ] || die "VMI $namespace/$vm is not Ready (Ready=$ready)"
-  pod_status="$(kubectl_k3s get pod -n "$namespace" -l "kubevirt.io/domain=$vm" -o jsonpath='{range .items[*]}{.metadata.name} {.status.phase} {.status.containerStatuses[*].ready}{\"\\n\"}{end}' 2>/dev/null || true)"
-  printf '%s\n' "$pod_status" | grep -Eq ' Running .*true' || die "VMI launcher pod is not serving: ${pod_status:-missing}"
-  endpoints="$(kubectl_k3s get endpointslice -n "$namespace" -l "kubernetes.io/service-name=$service" -o json 2>/dev/null | jq '[.items[].endpoints[]? | select((.conditions.ready // true) == true) | .addresses[]?] | length' 2>/dev/null || printf '0')"
+  grep -Eq ' Running .*true' <<<"$pod_status" || die "VMI launcher pod is not serving: ${pod_status:-missing}"
   [ "${endpoints:-0}" -gt 0 ] || die "Service $namespace/$service has no ready EndpointSlice addresses"
 }
 
