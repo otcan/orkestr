@@ -334,9 +334,9 @@ function publicWebContentRequest(text = "") {
   if (!value) return false;
   if (/\b(?:reply|respond|say|answer)\s+exactly\b/i.test(value)) return false;
   if (/https?:\/\//i.test(value)) return true;
-  const hasDomain = /(?:^|\s)(?:[a-z0-9-]+\.)+[a-z]{2,}(?:\/[^\s]*)?/i.test(value);
   const hasWebIntent = /\b(?:fetch|check|open|read|inspect|summari[sz]e|look up|visit|tell me|what are|top|trending|gundem|gündem|topics?|links?|entries?|page|site|web)\b/i.test(value);
-  if (hasDomain) return hasWebIntent;
+  const targetedDomain = /\b(?:fetch|check|open|read|inspect|summari[sz]e|look up|visit)\s+(?:the\s+)?(?:public\s+)?(?:web\s+)?(?:site\s+|page\s+)?((?:[a-z0-9-]+\.)+[a-z]{2,})(?:\/[^\s<>"')]+)?/i.test(value);
+  if (targetedDomain) return true;
   return hasWebIntent &&
     /\b(?:public|website|site|web|page|url|link|news|trending|topics?|entries?|gundem|gündem|eksi|ekşi|sozluk|sözlük)\b/i.test(value);
 }
@@ -346,7 +346,7 @@ function publicWebFetchTargetForMessage(text = "") {
   if (!publicWebContentRequest(value)) return null;
   const explicitUrl = value.match(/https?:\/\/[^\s<>"')]+/i)?.[0];
   if (explicitUrl) return { url: explicitUrl, maxLinks: 80, maxChars: 20_000, reason: "explicit_url" };
-  const domainPath = value.match(/\b((?:[a-z0-9-]+\.)+[a-z]{2,})(\/[^\s<>"')]+)?/i);
+  const domainPath = value.match(/\b(?:fetch|check|open|read|inspect|summari[sz]e|look up|visit)\s+(?:the\s+)?(?:public\s+)?(?:web\s+)?(?:site\s+|page\s+)?((?:[a-z0-9-]+\.)+[a-z]{2,})(\/[^\s<>"')]+)?/i);
   if (domainPath) return { url: `https://${domainPath[1]}${domainPath[2] || "/"}`, maxLinks: 80, maxChars: 20_000, reason: "domain" };
   if (/\b(?:eksi|ekşi)\s*(?:sozluk|sözlük)\b/i.test(value) && /\b(?:gundem|gündem|trending|topics?|başlıklar|basliklar|top)\b/i.test(value)) {
     return { url: "https://eksisozluk.com/basliklar/gundem", maxLinks: 80, maxChars: 20_000, reason: "eksi_gundem" };

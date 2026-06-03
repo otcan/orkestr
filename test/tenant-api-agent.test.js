@@ -2489,6 +2489,50 @@ test("tenant api-agent does not treat exact replies containing domains as web fe
   assert.equal(assistant.text, "orkestr.de e2e OK 123");
 });
 
+test("tenant api-agent does not treat incidental domain labels as web fetch targets", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-api-agent-domain-label-no-fetch-"));
+  const env = await allowSanitizerEnv(home, {
+    ORKESTR_API_AGENT_WEB_FETCH_SKIP_DNS_CHECK: "1",
+  });
+  await upsertUser({ id: "otcan", role: "user", displayName: "Otcan" }, env);
+  await createThread({
+    id: "otcantest-domain-label-no-fetch",
+    ownerUserId: "otcan",
+    name: "otcantest",
+    runtimeKind: "api-agent",
+    executor: { type: "api-agent", metadata: { runtimeKind: "api-agent" } },
+    binding: { connector: "whatsapp", chatId: "chat-otcan", outboundAccountId: "wa-1" },
+  }, env);
+  const input = await enqueueThreadInputForPrincipal("otcantest-domain-label-no-fetch", {
+    text: "orkestr.de e2e 123: Open LinkedIn. Am I logged in?",
+    source: "whatsapp_inbound",
+    connector: "whatsapp",
+    chatId: "chat-otcan",
+    accountId: "wa-1",
+  }, userPrincipal({ id: "otcan", role: "user" }), env);
+  const openAiCalls = [];
+
+  const result = await processApiAgentThreadInput("otcantest-domain-label-no-fetch", env, {
+    fetchImpl: async (url, options = {}) => {
+      assert.equal(String(url).includes("/responses"), true);
+      openAiCalls.push(JSON.parse(options.body));
+      return response({
+        id: "resp_domain_label_no_fetch",
+        model: "gpt-5-mini",
+        output_text: "The managed desktop status does not report login state, so I cannot confirm whether you are logged in.",
+        output: [],
+        usage: { input_tokens: 140, output_tokens: 18 },
+      });
+    },
+  });
+  const messages = await listThreadMessages("otcantest-domain-label-no-fetch", env);
+  const assistant = messages.find((message) => message.parentMessageId === input.id);
+
+  assert.equal(result.ok, true);
+  assert.equal(openAiCalls.length, 1);
+  assert.match(assistant.text, /managed desktop status/i);
+});
+
 test("tenant api-agent opens the generic desktop when public fetch hits a browser challenge", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-api-agent-web-fetch-desktop-fallback-"));
   const env = await allowSanitizerEnv(home, {
