@@ -393,6 +393,21 @@ sync_versioned_env() {
   set_env_assignment ORKESTR_CURRENT_LINK "$current_link"
 }
 
+repair_env_file_permissions() {
+  if [ "$(id -u)" -ne 0 ] || [ ! -f "$env_file_path" ]; then
+    return 0
+  fi
+  local run_user run_group
+  run_user="$(runtime_run_user)"
+  if ! id "$run_user" >/dev/null 2>&1; then
+    chmod 0640 "$env_file_path" || true
+    return 0
+  fi
+  run_group="$(id -gn "$run_user")"
+  chown "root:$run_group" "$env_file_path" || true
+  chmod 0640 "$env_file_path" || true
+}
+
 active_thread_report() {
   if [ ! -f "$script_dir/deploy-active-work-check.mjs" ]; then
     printf '{"ok":false,"unavailable":true,"active":[],"error":"missing_active_work_checker"}\n'
@@ -565,6 +580,7 @@ ensure_codex_app_server_split_for_target() {
     return 0
   fi
   [ -f "$env_file_path" ] || { mkdir -p "$(dirname "$env_file_path")"; touch "$env_file_path"; chmod 0640 "$env_file_path" || true; }
+  repair_env_file_permissions
   socket="$(codex_app_server_socket_default)"
   set_env_assignment ORKESTR_CODEX_APP_SERVER_MODE external
   set_env_assignment ORKESTR_CODEX_APP_SERVER_SOCKET "$socket"
@@ -980,6 +996,7 @@ service_name="${ORKESTR_SERVICE_NAME:-orkestr}"
 codex_app_server_mode="$(printf '%s' "${ORKESTR_CODEX_APP_SERVER_MODE:-stdio}" | LC_ALL=C tr '[:upper:]' '[:lower:]')"
 codex_app_server_socket="${ORKESTR_CODEX_APP_SERVER_SOCKET:-}"
 codex_app_server_service_name="${ORKESTR_CODEX_APP_SERVER_SERVICE_NAME:-${service_name}-codex}"
+repair_env_file_permissions
 host="${ORKESTR_HOST:-127.0.0.1}"
 port="${ORKESTR_PORT:-19812}"
 health_url="${ORKESTR_DEPLOY_HEALTH_URL:-http://$host:$port/api/health}"

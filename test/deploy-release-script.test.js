@@ -54,6 +54,9 @@ test("release deploy script exposes versioned install, status, and rollback", as
   assert.match(script, /sync_versioned_env/);
   assert.match(script, /set_env_assignment ORKESTR_APP_DIR "\$current_link"/);
   assert.match(script, /set_env_assignment ORKESTR_RELEASE_DEPLOY "1"/);
+  assert.match(script, /repair_env_file_permissions/);
+  assert.match(script, /chown "root:\$run_group" "\$env_file_path"/);
+  assert.match(script, /chmod 0640 "\$env_file_path"/);
   assert.match(script, /repair_runtime_ownership/);
   assert.match(script, /systemctl show -p MainPID --value/);
   assert.match(script, /ps -o user= -p "\$main_pid"/);
