@@ -1,8 +1,11 @@
 #!/usr/bin/env node
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 import { forwardLocalWhatsAppInbound } from "../packages/connectors/src/whatsapp-local-bridge.js";
 
 const DEFAULT_PUBLIC_API_BASE = "https://app.orkestr.de";
 const DEFAULT_PARENT_WA_BASE = "http://127.0.0.1:8787";
+const execFileAsync = promisify(execFile);
 
 function clean(value = "") {
   return String(value || "").trim();
@@ -24,6 +27,11 @@ function parseArgs(argv = [], env = process.env) {
     execute: false,
     mode: "tenant-forward",
     apiBase: clean(env.ORKESTR_DE_ACCEPTANCE_API_BASE) || DEFAULT_PUBLIC_API_BASE,
+    pollMode: clean(env.ORKESTR_DE_ACCEPTANCE_POLL_MODE || "http"),
+    guestExec: clean(env.ORKESTR_DE_ACCEPTANCE_GUEST_EXEC || "/tmp/crawlerai_guest_exec.sh"),
+    guestNamespace: clean(env.ORKESTR_DE_ACCEPTANCE_GUEST_NAMESPACE || "orkestr-de"),
+    guestVmi: clean(env.ORKESTR_DE_ACCEPTANCE_GUEST_VMI || "orkestr-de"),
+    vmHome: clean(env.ORKESTR_DE_ACCEPTANCE_VM_HOME || "/opt/orkestr/data"),
     parentHome: clean(env.ORKESTR_DE_ACCEPTANCE_PARENT_HOME || env.ORKESTR_PARENT_HOME || env.ORKESTR_HOME),
     parentWaBase: clean(env.ORKESTR_DE_ACCEPTANCE_PARENT_WA_BASE) || DEFAULT_PARENT_WA_BASE,
     requireWaHistory: env.ORKESTR_DE_ACCEPTANCE_WA_HISTORY !== "0",
@@ -47,6 +55,16 @@ function parseArgs(argv = [], env = process.env) {
       options.requireWaHistory = false;
     } else if (arg === "--api-base") {
       options.apiBase = clean(argv[++index]);
+    } else if (arg === "--poll-mode") {
+      options.pollMode = clean(argv[++index]);
+    } else if (arg === "--guest-exec") {
+      options.guestExec = clean(argv[++index]);
+    } else if (arg === "--guest-namespace") {
+      options.guestNamespace = clean(argv[++index]);
+    } else if (arg === "--guest-vmi") {
+      options.guestVmi = clean(argv[++index]);
+    } else if (arg === "--vm-home") {
+      options.vmHome = clean(argv[++index]);
     } else if (arg === "--parent-home") {
       options.parentHome = clean(argv[++index]);
     } else if (arg === "--parent-wa-base") {
@@ -76,6 +94,7 @@ function parseArgs(argv = [], env = process.env) {
   }
 
   if (!options.apiBase) throw new Error("api_base_required");
+  if (!["http", "vm-file"].includes(options.pollMode)) throw new Error("invalid_poll_mode");
   if (!options.thread) throw new Error("thread_required");
   if (!options.chatId) throw new Error("chat_id_required");
   if (!Number.isFinite(options.timeoutMs) || options.timeoutMs < 1000) throw new Error("invalid_timeout_ms");
@@ -93,6 +112,11 @@ function printHelp() {
     "",
     "Options:",
     "  --api-base URL        Public tenant API base. Default: https://app.orkestr.de",
+    "  --poll-mode MODE      http or vm-file. Use vm-file when public APIs are auth-blocked.",
+    "  --guest-exec FILE     Guest exec helper for vm-file polling. Default: /tmp/crawlerai_guest_exec.sh",
+    "  --guest-namespace NS  KubeVirt namespace for vm-file polling. Default: orkestr-de",
+    "  --guest-vmi NAME      KubeVirt VMI for vm-file polling. Default: orkestr-de",
+    "  --vm-home DIR         Public ORKESTR_HOME inside the VM. Default: /opt/orkestr/data",
     "  --parent-home DIR     Parent ORKESTR_HOME containing tenant route secrets.",
     "  --parent-wa-base URL  Parent WA bridge base for history checks. Default: http://127.0.0.1:8787",
     "  --thread ID           Public tenant thread id. Default: onboarding-admin-orkestr-de",
@@ -165,7 +189,28 @@ function messagesFromPayload(payload = {}) {
   return [];
 }
 
+function shellSingleQuote(value = "") {
+  return `'${String(value).replace(/'/g, "'\\''")}'`;
+}
+
+async function fetchVmFileThreadMessages(options) {
+  const file = `${options.vmHome.replace(/\/+$/, "")}/thread-messages/${options.thread}.json`;
+  const command = `cat ${shellSingleQuote(file)}`;
+  const { stdout } = await execFileAsync(options.guestExec, [command], {
+    env: {
+      ...process.env,
+      NS: options.guestNamespace,
+      VMI: options.guestVmi,
+    },
+    timeout: Math.max(1000, options.pollMs),
+    maxBuffer: 5 * 1024 * 1024,
+  });
+  const parsed = JSON.parse(stdout || "[]");
+  return messagesFromPayload(parsed);
+}
+
 async function fetchThreadMessages(options) {
+  if (options.pollMode === "vm-file") return fetchVmFileThreadMessages(options);
   const url = `${options.apiBase.replace(/\/+$/, "")}/api/threads/${encodeURIComponent(options.thread)}/messages?limit=80`;
   return messagesFromPayload(await requestJson(url));
 }
@@ -299,6 +344,7 @@ async function main() {
   console.log(JSON.stringify({
     ok: true,
     mode: options.mode,
+    pollMode: options.pollMode,
     runId: options.runId,
     apiBase: options.apiBase,
     thread: options.thread,

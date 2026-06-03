@@ -332,8 +332,12 @@ function messageInputItem(message = {}) {
 function publicWebContentRequest(text = "") {
   const value = clean(text);
   if (!value) return false;
-  if (/https?:\/\/|(?:^|\s)(?:[a-z0-9-]+\.)+[a-z]{2,}(?:\/[^\s]*)?/i.test(value)) return true;
-  return /\b(?:fetch|check|open|read|inspect|summari[sz]e|look up|visit|tell me|what are|top|trending|gundem|gündem|topics?|links?|entries?|page|site|web)\b/i.test(value) &&
+  if (/\b(?:reply|respond|say|answer)\s+exactly\b/i.test(value)) return false;
+  if (/https?:\/\//i.test(value)) return true;
+  const hasDomain = /(?:^|\s)(?:[a-z0-9-]+\.)+[a-z]{2,}(?:\/[^\s]*)?/i.test(value);
+  const hasWebIntent = /\b(?:fetch|check|open|read|inspect|summari[sz]e|look up|visit|tell me|what are|top|trending|gundem|gündem|topics?|links?|entries?|page|site|web)\b/i.test(value);
+  if (hasDomain) return hasWebIntent;
+  return hasWebIntent &&
     /\b(?:public|website|site|web|page|url|link|news|trending|topics?|entries?|gundem|gündem|eksi|ekşi|sozluk|sözlük)\b/i.test(value);
 }
 
