@@ -263,6 +263,23 @@ json_health() {
   curl -fsS "$1/api/health" | jq -e '.ok == true' >/dev/null
 }
 
+assert_kubevirt_service_ready() {
+  local ready endpoints pod_status deadline
+  deadline=$((SECONDS + 180))
+  while [ "$SECONDS" -le "$deadline" ]; do
+    ready="$(kubectl_k3s get vmi -n "$namespace" "$vm" -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}' 2>/dev/null || true)"
+    pod_status="$(kubectl_k3s get pod -n "$namespace" -l "kubevirt.io/domain=$vm" -o jsonpath='{range .items[*]}{.metadata.name} {.status.phase} {.status.containerStatuses[*].ready}{" "}{end}' 2>/dev/null || true)"
+    endpoints="$(kubectl_k3s get endpointslice -n "$namespace" -l "kubernetes.io/service-name=$service" -o json 2>/dev/null | jq '[.items[].endpoints[]? | select((.conditions.ready // true) == true and (.conditions.serving // true) == true) | .addresses[]?] | length' 2>/dev/null || printf '0')"
+    if [ "$ready" = "True" ] && grep -Eq ' Running .*true' <<<"$pod_status" && [ "${endpoints:-0}" -gt 0 ]; then
+      return 0
+    fi
+    sleep 3
+  done
+  [ "$ready" = "True" ] || die "VMI $namespace/$vm is not Ready (Ready=$ready)"
+  grep -Eq ' Running .*true' <<<"$pod_status" || die "VMI launcher pod is not serving: ${pod_status:-missing}"
+  [ "${endpoints:-0}" -gt 0 ] || die "Service $namespace/$service has no ready EndpointSlice addresses"
+}
+
 ensure_ssh() {
   mkdir -p "$(dirname "$ssh_key")" "$(dirname "$known_hosts")"
   if [ ! -r "$ssh_key" ]; then
@@ -340,6 +357,8 @@ smoke() {
   local svc_url code thread_id attach_output
   ensure_ssh
   svc_url="$(service_url)"
+  log "Checking KubeVirt service endpoints."
+  assert_kubevirt_service_ready
   log "Checking VM Service health at $svc_url."
   json_health "$svc_url"
   curl -fsS "$svc_url/api/version" | jq '{version, commit, tag, releaseId, dirty}'
@@ -458,6 +477,9 @@ status() {
   svc_url="$(service_url)"
   log "KubeVirt VM:"
   kubectl_k3s get vm,vmi,svc,pvc -n "$namespace" -o wide
+  log "KubeVirt launcher pod and endpoints:"
+  kubectl_k3s get pod,endpoints,endpointslice -n "$namespace" -l "kubevirt.io/domain=$vm" -o wide || true
+  kubectl_k3s get endpoints,endpointslice -n "$namespace" -l "kubernetes.io/service-name=$service" -o wide || true
   log "Host public API:"
   curl -fsS "$host_api/api/version" | jq '{version, commit, releaseId, dirty}' || true
   log "VM public API:"

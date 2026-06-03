@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { listAgentMessages } from "../packages/core/src/messages.js";
-import { createTimer, doctorTimers, listTimers, markDueTimers, nextRunAt, normalizeStoredTimer } from "../packages/core/src/timers.js";
+import { createTimer, doctorTimers, listTimers, markDueTimers, nextRunAt, normalizeStoredTimer, parseTimerDelayMs, timerRunAtFromDelay } from "../packages/core/src/timers.js";
 import { createThread, listThreadMessages } from "../packages/core/src/threads.js";
 
 test("daily timers schedule the next future clock time", () => {
@@ -23,6 +23,24 @@ test("timer persistence creates records with a next run", async () => {
   assert.equal(timers.length, 1);
   assert.equal(timers[0].id, timer.id);
   assert.ok(timers[0].nextRunAt);
+});
+
+test("relative one-shot timers preserve delay-derived runAt", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-relative-timers-"));
+  const env = { ORKESTR_HOME: home };
+  const before = Date.now();
+  const timer = await createTimer({ label: "Hi", prompt: "Tell me hi", cadence: "daily", delay: "2 minutes" }, env);
+  const after = Date.now();
+  const nextMs = Date.parse(timer.nextRunAt);
+
+  assert.equal(timer.cadence, "once");
+  assert.equal(timer.runAt, timer.nextRunAt);
+  assert.ok(nextMs >= before + 119_000);
+  assert.ok(nextMs <= after + 121_000);
+  assert.equal(parseTimerDelayMs("in 2 minutes"), 120_000);
+  assert.equal(parseTimerDelayMs("2h"), 2 * 60 * 60 * 1000);
+  assert.equal(timerRunAtFromDelay("10m", new Date("2026-05-15T10:00:00.000Z")), "2026-05-15T10:10:00.000Z");
+  await assert.rejects(() => createTimer({ label: "Bad", prompt: "No", delay: "soonish" }, env), /invalid_timer_delay/);
 });
 
 test("timer doctor reports healthy configured timers", async () => {

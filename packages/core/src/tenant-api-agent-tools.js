@@ -485,7 +485,31 @@ function skillAvailableFromCapabilities(skill = {}, capabilities = {}) {
 async function skillActionInventory(principal = {}, thread = null, env = process.env, options = {}) {
   const userId = principalUserId(principal);
   const listed = await listUserSkillsForPrincipal(userId, principal, env);
-  const capabilities = await userScopedCapabilityHints({ userId, thread }, env);
+  const capabilities = await userScopedCapabilityHints({ userId, thread }, env).catch((error) => ({
+    files: false,
+    timers: true,
+    virtualBrowsers: false,
+    desktopLeases: false,
+    whatsapp: Boolean(thread?.binding?.connector === "whatsapp" || thread?.binding?.chatId),
+    gmail: false,
+    outlook: false,
+    linkedin: false,
+    learning: false,
+    enabledSkills: ["timers"],
+    disabledSkills: [],
+    scopedConnectors: {
+      whatsapp: Boolean(thread?.binding?.connector === "whatsapp" || thread?.binding?.chatId),
+      gmail: false,
+      outlook: false,
+      jira: false,
+      shopify: false,
+      linkedin: false,
+    },
+    capabilityDecision: {
+      result: "fallback",
+      reason: clean(error?.message || error || "capability_lookup_failed"),
+    },
+  }));
   const skillFilter = clean(options.skillId).toLowerCase();
   const desktopInventory = options.includeDesktopInventory === true ? await safeDesktopInventory(principal, env) : null;
   const desktops = desktopInventory?.desktops || null;

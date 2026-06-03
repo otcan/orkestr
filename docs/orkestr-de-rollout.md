@@ -87,6 +87,40 @@ bash scripts/migrate-public-kubevirt.sh smoke
 bash scripts/migrate-public-kubevirt.sh cutover
 ```
 
+### Endpoint Recovery Check
+
+The public VM can report `VMI Running` while the `virt-launcher` pod is in
+`Error` and the `orkestr-de-app` Service has no endpoints. Treat that as an
+unhealthy public instance even if the VMI status looks ready.
+
+Run:
+
+```bash
+bash scripts/migrate-public-kubevirt.sh status
+bash scripts/migrate-public-kubevirt.sh smoke
+```
+
+The smoke now fails before app health if:
+
+- namespace `orkestr-de` / VMI `orkestr-de` is not Ready
+- the `virt-launcher` pod is not serving
+- Service `orkestr-de-app` has no ready EndpointSlice addresses
+
+Recovery order:
+
+1. Keep the personal ops instance untouched.
+2. If Caddy is already routed to the VM and public health is failing, either fix
+   the VM immediately or roll back the public Caddy upstream.
+3. Restart the public VM only:
+
+   ```bash
+   KUBECONFIG=/etc/rancher/k3s/k3s.yaml virtctl restart --namespace orkestr-de orkestr-de
+   ```
+
+4. Wait for `bash scripts/migrate-public-kubevirt.sh smoke` to pass.
+5. Only then route or keep routing WhatsApp/OAuth/challenge traffic to the
+   public instance.
+
 The helper:
 
 - creates a dedicated operator key if VM SSH access is missing

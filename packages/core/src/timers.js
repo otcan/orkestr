@@ -34,6 +34,32 @@ function parseIntervalMs(value) {
   return amount * dayMs;
 }
 
+export function parseTimerDelayMs(value) {
+  const text = String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/^in\s+/, "")
+    .replace(/^after\s+/, "");
+  if (!text) return null;
+  const match = text.match(/^(\d+)\s*(m|min|mins|minute|minutes|h|hr|hrs|hour|hours|d|day|days)$/i);
+  if (!match) {
+    const error = new Error("invalid_timer_delay");
+    error.statusCode = 400;
+    throw error;
+  }
+  const amount = Math.max(1, Number(match[1]));
+  const unit = match[2].toLowerCase();
+  if (["m", "min", "mins", "minute", "minutes"].includes(unit)) return amount * 60 * 1000;
+  if (["h", "hr", "hrs", "hour", "hours"].includes(unit)) return amount * hourMs;
+  return amount * dayMs;
+}
+
+export function timerRunAtFromDelay(value, from = new Date()) {
+  const delayMs = parseTimerDelayMs(value);
+  if (delayMs === null) return "";
+  return new Date(from.getTime() + delayMs).toISOString();
+}
+
 function intervalText(milliseconds) {
   const ms = Math.max(60_000, Number(milliseconds || 0) || 0);
   if (ms % dayMs === 0) return `${ms / dayMs}d`;
@@ -329,6 +355,9 @@ export async function createTimer(input, env = process.env) {
   const timers = await listTimers(env);
   const prompt = String(input.prompt || "").trim();
   const promptFile = String(input.promptFile || "").trim();
+  const delayedRunAt = timerRunAtFromDelay(input.delay || input.after || input.in);
+  const runAt = String(input.runAt || input.dueAt || delayedRunAt || "").trim();
+  const cadence = runAt ? "once" : String(input.cadence || "daily").trim().toLowerCase();
   if (!prompt && !promptFile) {
     const error = new Error("timer_prompt_required");
     error.statusCode = 400;
@@ -340,9 +369,10 @@ export async function createTimer(input, env = process.env) {
     label: String(input.label || "Recurring agent task").trim(),
     targetType: String(input.targetType || (input.threadId ? "thread" : "agent")).trim(),
     target: String(input.target || input.threadId || input.agentId || "coding-agent").trim(),
-    cadence: String(input.cadence || "daily").trim().toLowerCase(),
+    cadence,
     time: String(input.time || "09:00").trim(),
     every: String(input.every || "").trim() || null,
+    runAt,
     prompt,
     promptFile,
     enabled: input.enabled !== false,

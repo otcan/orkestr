@@ -25,6 +25,7 @@ import {
   deleteThreadForPrincipal,
   enqueueThreadInputForPrincipal,
   getThread,
+  getThreadForPrincipal,
   listThreadMessages,
   updateThread,
 } from "../../../../../packages/core/src/threads.js";
@@ -38,6 +39,8 @@ import {
   API_AGENT_RUNTIME_KIND,
   defaultTenantThreadRuntime,
   processApiAgentThreadInput,
+  publicTenantCapabilities,
+  scopedCapabilitiesForThread,
   threadUsesApiAgent,
 } from "../../../../../packages/core/src/tenant-api-agent.js";
 import { resolveWorkspacePathForPrincipal, workspacePrincipalForOwner, workspaceRootForPrincipal } from "../../../../../packages/core/src/workspace-files.js";
@@ -603,6 +606,32 @@ export class ThreadsController {
     const thread = await getThread(threadId);
     if (!thread) throw httpError("thread_not_found", 404);
     return { thread, runtime: await this.threadRuntimeService.status(thread.id) };
+  }
+
+  @Get(":threadId/capabilities")
+  async capabilities(@Req() request: any, @Param("threadId") threadId: string) {
+    const principal = requestPrincipal(request);
+    const thread = await getThreadForPrincipal(threadId, principal);
+    if (!thread) throw httpError("thread_not_found", 404);
+    const effective = await scopedCapabilitiesForThread(thread);
+    return {
+      ok: true,
+      thread: {
+        id: thread.id,
+        name: thread.name || thread.title || "",
+        ownerUserId: thread.ownerUserId || thread.userId || "",
+        runtimeKind: thread.runtimeKind || thread.executor?.metadata?.runtimeKind || "",
+        binding: thread.binding || null,
+      },
+      capabilities: publicTenantCapabilities(effective),
+      raw: {
+        skillRegistry: effective.skillRegistry || null,
+        scopedConnectors: effective.scopedConnectors || {},
+        capabilityDecision: effective.capabilityDecision || null,
+        enabledSkills: effective.enabledSkills || [],
+        disabledSkills: effective.disabledSkills || [],
+      },
+    };
   }
 
   @Post(":threadId/wake")

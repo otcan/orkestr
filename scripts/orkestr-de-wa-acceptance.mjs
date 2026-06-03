@@ -34,6 +34,7 @@ function parseArgs(argv = [], env = process.env) {
     vmHome: clean(env.ORKESTR_DE_ACCEPTANCE_VM_HOME || "/opt/orkestr/data"),
     parentHome: clean(env.ORKESTR_DE_ACCEPTANCE_PARENT_HOME || env.ORKESTR_PARENT_HOME || env.ORKESTR_HOME),
     parentWaBase: clean(env.ORKESTR_DE_ACCEPTANCE_PARENT_WA_BASE) || DEFAULT_PARENT_WA_BASE,
+    parentWaToken: clean(env.ORKESTR_DE_ACCEPTANCE_PARENT_WA_TOKEN || env.WHATSAPP_BRIDGE_TOKEN || env.WA_HTTP_TOKEN),
     requireWaHistory: env.ORKESTR_DE_ACCEPTANCE_WA_HISTORY !== "0",
     thread: clean(env.ORKESTR_DE_ACCEPTANCE_THREAD || "onboarding-admin-orkestr-de"),
     chatId: clean(env.ORKESTR_DE_ACCEPTANCE_CHAT_ID || "120363425280218500@g.us"),
@@ -69,6 +70,8 @@ function parseArgs(argv = [], env = process.env) {
       options.parentHome = clean(argv[++index]);
     } else if (arg === "--parent-wa-base") {
       options.parentWaBase = clean(argv[++index]).replace(/\/+$/, "");
+    } else if (arg === "--parent-wa-token") {
+      options.parentWaToken = clean(argv[++index]);
     } else if (arg === "--thread") {
       options.thread = clean(argv[++index]);
     } else if (arg === "--chat-id") {
@@ -81,7 +84,7 @@ function parseArgs(argv = [], env = process.env) {
       options.runId = safeId(argv[++index]);
     } else if (arg === "--case") {
       const value = clean(argv[++index]);
-      options.cases = value === "all" ? ["exact", "web", "desktop", "private"] : value.split(",").map(clean).filter(Boolean);
+      options.cases = value === "all" ? ["exact", "web", "desktop", "private", "timer"] : value.split(",").map(clean).filter(Boolean);
     } else if (arg === "--timeout-ms") {
       options.timeoutMs = Number(argv[++index] || 0);
     } else if (arg === "--poll-ms") {
@@ -119,11 +122,12 @@ function printHelp() {
     "  --vm-home DIR         Public ORKESTR_HOME inside the VM. Default: /opt/orkestr/data",
     "  --parent-home DIR     Parent ORKESTR_HOME containing tenant route secrets.",
     "  --parent-wa-base URL  Parent WA bridge base for history checks. Default: http://127.0.0.1:8787",
+    "  --parent-wa-token TOK  Parent WA bridge bearer token. Prefer ORKESTR_DE_ACCEPTANCE_PARENT_WA_TOKEN.",
     "  --thread ID           Public tenant thread id. Default: onboarding-admin-orkestr-de",
     "  --chat-id ID          WhatsApp chat id routed to the public tenant.",
     "  --account-id ID       Parent WhatsApp inbound account id. Default: sender",
     "  --from ID             Sender contact id for the synthetic inbound event.",
-    "  --case LIST           exact,web,desktop,private or all.",
+    "  --case LIST           exact,web,desktop,private,timer or all.",
     "  --no-wa-history       Skip parent WhatsApp history verification.",
     "",
     "This does not exercise phone-authored inbound delivery unless the sender WhatsApp account is paired.",
@@ -151,6 +155,12 @@ function caseSpec(name, runId) {
       text: `orkestr.de e2e ${runId}: Fetch http://127.0.0.1:19812/api/health and summarize it.`,
       require: [/(url_host_forbidden|couldn.t fetch|can.t reach|cannot access|no access|forbidden)/i],
       reject: [/opened .*Desktop/i],
+    },
+    timer: {
+      text: `Set a timer in 2 minutes, telling me "orkestr.de timer e2e HI ${runId}"`,
+      require: [new RegExp(`orkestr\\.de timer e2e HI ${runId.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`, "i")],
+      reject: [/safely handle|private connector|admin to enable|capability denial/i],
+      timerDue: true,
     },
   };
   if (!specs[name]) throw new Error(`unknown_case:${name}`);
@@ -237,6 +247,29 @@ async function waitForAssistant(options, parentMessageId = "") {
   throw lastError || new Error(`assistant_timeout:${parentMessageId || options.thread}`);
 }
 
+async function waitForAssistantMatching(options, patterns = [], parentMessageId = "") {
+  const deadline = Date.now() + Math.max(options.timeoutMs, 180_000);
+  let lastError = null;
+  while (Date.now() <= deadline) {
+    try {
+      const messages = await fetchThreadMessages(options);
+      const assistants = messages.filter((message) =>
+        clean(message.role) === "assistant" &&
+        clean(message.text) &&
+        (!parentMessageId || clean(message.parentMessageId) === parentMessageId)
+      );
+      for (const assistant of assistants.slice().reverse()) {
+        const text = clean(assistant.text);
+        if (patterns.every((pattern) => pattern.test(text))) return assistant;
+      }
+    } catch (error) {
+      lastError = error;
+    }
+    await sleep(options.pollMs);
+  }
+  throw lastError || new Error(`assistant_match_timeout:${parentMessageId || options.thread}`);
+}
+
 function collectTexts(value, output = []) {
   if (value === null || value === undefined) return output;
   if (typeof value === "string") {
@@ -266,7 +299,9 @@ async function waitForWhatsAppHistory(options, assistantText = "") {
   let lastError = null;
   while (Date.now() <= deadline) {
     try {
-      const payload = await requestJson(url);
+      const payload = await requestJson(url, {
+        headers: options.parentWaToken ? { authorization: `Bearer ${options.parentWaToken}` } : {},
+      });
       const texts = collectTexts(payload).map((text) => text.replace(/\s+/g, " "));
       if (texts.some((text) => text.includes(needle))) {
         return { checked: true, delivered: true };
@@ -310,6 +345,23 @@ async function runCase(name, options) {
   if (!forwarded?.forwarded) throw new Error(`case_not_forwarded:${name}`);
   const parentMessageId = clean(forwarded.payload?.message?.id || forwarded.payload?.messageId);
   const immediateAssistant = forwarded.payload?.assistant || null;
+  if (spec.timerDue) {
+    if (immediateAssistant?.text && /safely handle|private connector|admin to enable|capability/i.test(immediateAssistant.text)) {
+      throw new Error(`case_failed:${name}:timer_request_denied:${immediateAssistant.text}`);
+    }
+    const assistant = await waitForAssistantMatching(options, spec.require);
+    const text = validate(name, spec, assistant);
+    const waHistory = await waitForWhatsAppHistory(options, text);
+    return {
+      name,
+      ok: true,
+      eventId,
+      parentMessageId,
+      assistantId: clean(assistant.id),
+      text,
+      waHistory,
+    };
+  }
   const assistant = immediateAssistant?.text ? immediateAssistant : await waitForAssistant(options, parentMessageId);
   const text = validate(name, spec, assistant);
   const waHistory = await waitForWhatsAppHistory(options, text);

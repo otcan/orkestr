@@ -5,6 +5,7 @@ import { appendEvent, readJson } from "../../storage/src/store.js";
 import { requestThreadInputDelivery } from "../../core/src/runtime-leases.js";
 import { processApiAgentThreadInput, threadUsesApiAgent } from "../../core/src/tenant-api-agent.js";
 import { tenantWhatsAppInboundForwardRoute } from "../../core/src/tenant-whatsapp-routing.js";
+import { attachRoutingFailure, normalizeRoutingFailure, routingFailureFromError } from "../../core/src/routing-failures.js";
 import { getThread, listThreads } from "../../core/src/threads.js";
 import { setGeneratedLocalWhatsAppGroupPicture } from "./whatsapp-chat-picture.js";
 
@@ -19,6 +20,7 @@ const inboundFailureNoticeKeys = new Set();
 const typingSessions = new Map();
 const typingStartPromises = new Map();
 const typingClearRetryTimers = new Map();
+const inboundForwardHealthCache = new Map();
 let typingSessionGeneration = 0;
 
 function nowIso() {
@@ -100,11 +102,105 @@ function localWhatsAppInboundForwardToken({ chatId = "" } = {}, env = process.en
   return String(tokens[String(chatId || "").trim()] || env.ORKESTR_WHATSAPP_INBOUND_FORWARD_TOKEN || env.WHATSAPP_INBOUND_FORWARD_TOKEN || "").trim();
 }
 
+function falsey(value = "") {
+  return ["0", "false", "off", "no"].includes(String(value || "").trim().toLowerCase());
+}
+
+function inboundForwardHealthTimeoutMs(env = process.env) {
+  const parsed = Number(env.ORKESTR_WHATSAPP_INBOUND_FORWARD_HEALTH_TIMEOUT_MS || 5000);
+  return Number.isFinite(parsed) ? Math.max(500, parsed) : 5000;
+}
+
+function inboundForwardHealthCacheMs(env = process.env) {
+  const parsed = Number(env.ORKESTR_WHATSAPP_INBOUND_FORWARD_HEALTH_CACHE_MS || 10_000);
+  return Number.isFinite(parsed) ? Math.max(0, parsed) : 10_000;
+}
+
+function inboundForwardHealthGateEnabled({ tenantRoute = null } = {}, env = process.env) {
+  if (falsey(env.ORKESTR_WHATSAPP_INBOUND_FORWARD_HEALTH_GATE || env.WHATSAPP_INBOUND_FORWARD_HEALTH_GATE)) return false;
+  return Boolean(tenantRoute) || String(env.ORKESTR_WHATSAPP_INBOUND_FORWARD_HEALTH_GATE || env.WHATSAPP_INBOUND_FORWARD_HEALTH_GATE || "").trim() !== "";
+}
+
+function healthUrlForInboundTarget(target = "") {
+  try {
+    return String(new URL("/api/health", target));
+  } catch {
+    return "";
+  }
+}
+
+async function assertInboundForwardTargetHealthy(target = "", tenantRoute = null, env = process.env, fetchImpl = fetch) {
+  const healthUrl = healthUrlForInboundTarget(target);
+  if (!healthUrl) {
+    throw attachRoutingFailure(new Error("target_instance_unhealthy"), {
+      code: "target_instance_unhealthy",
+      userFacingCategory: "instance_health",
+      target,
+      instanceId: tenantRoute?.tenantVmId || "",
+      retryable: true,
+      reason: "invalid_health_url",
+    });
+  }
+  const cacheMs = inboundForwardHealthCacheMs(env);
+  const cached = inboundForwardHealthCache.get(healthUrl);
+  if (cached && cacheMs > 0 && Date.now() - cached.checkedAt < cacheMs) {
+    if (cached.ok) return cached;
+    throw attachRoutingFailure(new Error("target_instance_unhealthy"), {
+      code: "target_instance_unhealthy",
+      userFacingCategory: "instance_health",
+      target,
+      instanceId: tenantRoute?.tenantVmId || "",
+      retryable: true,
+      reason: cached.reason || "cached_unhealthy",
+    });
+  }
+  try {
+    const response = await fetchImpl(healthUrl, {
+      method: "GET",
+      headers: { accept: "application/json" },
+      signal: AbortSignal.timeout(inboundForwardHealthTimeoutMs(env)),
+    });
+    const payload = await response.json().catch(() => ({}));
+    const ok = response.ok && payload?.ok !== false;
+    const result = {
+      ok,
+      checkedAt: Date.now(),
+      status: response.status,
+      reason: ok ? "ok" : `health_http_${response.status}`,
+    };
+    inboundForwardHealthCache.set(healthUrl, result);
+    if (ok) return result;
+    throw attachRoutingFailure(new Error("target_instance_unhealthy"), {
+      code: "target_instance_unhealthy",
+      userFacingCategory: "instance_health",
+      target,
+      instanceId: tenantRoute?.tenantVmId || "",
+      retryable: true,
+      reason: result.reason,
+    });
+  } catch (error) {
+    if (error?.routingFailure) throw error;
+    const reason = error?.name === "AbortError" ? "health_timeout" : String(error?.message || error || "health_failed");
+    inboundForwardHealthCache.set(healthUrl, { ok: false, checkedAt: Date.now(), reason });
+    throw attachRoutingFailure(new Error("target_instance_unhealthy"), {
+      code: "target_instance_unhealthy",
+      userFacingCategory: "instance_health",
+      target,
+      instanceId: tenantRoute?.tenantVmId || "",
+      retryable: true,
+      reason,
+    });
+  }
+}
+
 export async function forwardLocalWhatsAppInbound(input = {}, env = process.env, fetchImpl = fetch) {
   const chatId = String(input.chatId || input.chat?.id || input.fromChatId || "").trim();
   const tenantRoute = await tenantWhatsAppInboundForwardRoute(input, env);
   const target = tenantRoute?.target || localWhatsAppInboundForwardTarget({ chatId }, env);
   if (!target) return null;
+  if (inboundForwardHealthGateEnabled({ tenantRoute }, env)) {
+    await assertInboundForwardTargetHealthy(target, tenantRoute, env, fetchImpl);
+  }
   const headers = { "content-type": "application/json" };
   const token = tenantRoute?.token || localWhatsAppInboundForwardToken({ chatId }, env);
   if (token) headers.authorization = `Bearer ${token}`;
@@ -119,9 +215,15 @@ export async function forwardLocalWhatsAppInbound(input = {}, env = process.env,
   });
   const payload = await response.json().catch(() => ({}));
   if (!response.ok || payload?.ok === false) {
-    const error = new Error(payload?.error || `whatsapp_inbound_forward_failed_${response.status}`);
+    const error = new Error(payload?.error || payload?.routingFailure?.code || `whatsapp_inbound_forward_failed_${response.status}`);
     error.statusCode = response.status || 502;
     error.payload = payload;
+    error.routingFailure = normalizeRoutingFailure(payload?.routingFailure || {}, {
+      code: payload?.error || `whatsapp_inbound_forward_failed_${response.status}`,
+      target,
+      instanceId: tenantRoute?.tenantVmId || "",
+      retryable: response.status >= 500,
+    });
     throw error;
   }
   await appendEvent({
@@ -1038,7 +1140,14 @@ function publicHelpUrl(env = process.env) {
 
 export function inboundRoutingFailureNoticeText(error, { env = process.env } = {}) {
   const reason = String(error?.message || error || "routing_failed").trim();
+  const failure = routingFailureFromError(error, { reason });
   const lowered = reason.toLowerCase();
+  if (failure.code === "target_instance_unhealthy" || failure.userFacingCategory === "instance_health") {
+    return "This Orkestr instance is temporarily unavailable for this chat. Your message was not delivered; please resend it after the instance is healthy.";
+  }
+  if (failure.capability === "timers" || failure.userFacingCategory === "timer" || lowered.includes("timer")) {
+    return "Timers are not available for this chat right now. Please try again after Orkestr is healthy.";
+  }
   if (reason === "llm_sanitizer_unconfigured") {
     return "Orkestr could not accept your message because the isolated-user LLM sanitizer is not configured. Ask the admin to connect the sanitizer, then resend.";
   }
@@ -1058,7 +1167,7 @@ export function inboundRoutingFailureNoticeText(error, { env = process.env } = {
     return "The managed desktop is not connected or enabled for this chat yet. Ask the Orkestr admin to enable the desktop for this user, then resend.";
   }
   if (lowered.includes("whatsapp") || lowered.includes("connector") || lowered.includes("capability") || lowered.includes("account identity")) {
-    return "I can't safely handle that request in this chat. Ask the Orkestr admin to enable the needed capability, or rephrase it without requesting private connector/account details.";
+    return "This chat is missing a required Orkestr capability or connector setup. Please retry after the chat setup is healthy.";
   }
   if (reason.startsWith("llm_sanitizer")) {
     return `Orkestr could not accept your message because the isolated-user LLM sanitizer blocked or could not verify it: ${reason}.`;
@@ -1164,6 +1273,7 @@ export async function handleInboundMessage(accountId, message, env = process.env
     }
     return { routed, eventId, chatId, from, fromMe: routeFromMe };
   } catch (error) {
+    const routingFailure = routingFailureFromError(error);
     const notice = await sendInboundRoutingFailureNotice({
       accountId,
       chatId,
@@ -1181,11 +1291,12 @@ export async function handleInboundMessage(accountId, message, env = process.env
         from,
         fromMe: routeFromMe,
         error: error.message || String(error),
+        routingFailure,
         noticeSent: notice?.sent === true,
       },
       env,
     );
-    return { error: error.message || String(error), eventId, chatId, from, fromMe: routeFromMe, noticeSent: notice?.sent === true };
+    return { error: error.message || String(error), routingFailure, eventId, chatId, from, fromMe: routeFromMe, noticeSent: notice?.sent === true };
   }
 }
 
@@ -2061,6 +2172,40 @@ export async function listLocalWhatsAppChats(accountId = "", env = process.env) 
     state: state.state || "ready",
     ready: true,
     chats: [...merged.values()],
+  };
+}
+
+export async function listLocalWhatsAppChatMessages({ accountId = "", chatId = "", limit = 30, env = process.env } = {}) {
+  const normalized = normalizeAccountId(accountId, env);
+  const id = String(chatId || "").trim();
+  if (!id) {
+    const error = new Error("whatsapp_chat_id_required");
+    error.statusCode = 400;
+    throw error;
+  }
+  const runtime = runtimes.get(normalized);
+  const state = accountStates.get(normalized) || defaultAccountState(normalized);
+  if (!runtime?.client || !state.ready) {
+    return { accountId: normalized, chatId: id, ready: false, messages: [] };
+  }
+  const max = Math.max(1, Math.min(100, Number(limit || 30) || 30));
+  const chat = await runtime.client.getChatById(id);
+  const messages = await chat.fetchMessages({ limit: max });
+  return {
+    accountId: normalized,
+    chatId: id,
+    ready: true,
+    messages: (Array.isArray(messages) ? messages : []).map((message) => ({
+      id: serializedMessageId(message),
+      body: String(message?.body || ""),
+      type: String(message?.type || ""),
+      fromMe: Boolean(message?.fromMe),
+      from: serializedId(message?.from),
+      to: serializedId(message?.to),
+      author: serializedId(message?.author),
+      timestamp: message?.timestamp ? new Date(Number(message.timestamp) * 1000).toISOString() : null,
+      hasMedia: Boolean(message?.hasMedia),
+    })),
   };
 }
 

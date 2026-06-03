@@ -1812,6 +1812,12 @@ test("local whatsapp bridge runs api-agent tenant chats without waking legacy ru
 test("local whatsapp inbound failures explain missing user capabilities", () => {
   const gmail = inboundRoutingFailureNoticeText(new Error("gmail capability missing"));
   const desktop = inboundRoutingFailureNoticeText(new Error("desktop capability false"));
+  const timer = inboundRoutingFailureNoticeText(Object.assign(new Error("timer capability false"), {
+    routingFailure: { code: "timer_capability_unavailable", capability: "timers", userFacingCategory: "timer" },
+  }));
+  const unhealthy = inboundRoutingFailureNoticeText(Object.assign(new Error("target_instance_unhealthy"), {
+    routingFailure: { code: "target_instance_unhealthy", userFacingCategory: "instance_health", retryable: true },
+  }));
   const target = inboundRoutingFailureNoticeText(new Error("whatsapp_target_required"));
   const pairing = inboundRoutingFailureNoticeText(new Error("browser_pairing_required"), {
     env: { ORKESTR_PUBLIC_SITE_URL: "https://orkestr.example.test/" },
@@ -1821,6 +1827,10 @@ test("local whatsapp inbound failures explain missing user capabilities", () => 
   assert.doesNotMatch(gmail, /safely handle|private connector|account identity/i);
   assert.match(desktop, /managed desktop is not connected or enabled/i);
   assert.doesNotMatch(desktop, /safely handle|private connector|account identity/i);
+  assert.match(timer, /Timers are not available/i);
+  assert.doesNotMatch(timer, /safely handle|private connector|account identity|admin/i);
+  assert.match(unhealthy, /temporarily unavailable/i);
+  assert.doesNotMatch(unhealthy, /safely handle|private connector|account identity|admin/i);
   assert.match(target, /not connected to a thread/i);
   assert.doesNotMatch(target, /safely handle|private connector|account identity/i);
   assert.match(pairing, /browser_pairing_required/);

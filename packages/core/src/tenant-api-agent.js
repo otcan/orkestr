@@ -9,7 +9,8 @@ import { tenantApiAgentToolDefinitions, runTenantApiAgentTool } from "./tenant-a
 import { threadRequiresTenantIsolation } from "./tenant-policy.js";
 import { appendThreadMessage, getThread, listThreadMessages, updateThread, updateThreadMessage } from "./threads.js";
 import { readUserOnboardingState } from "./user-onboarding.js";
-import { userScopedCapabilityHints } from "./user-skills.js";
+import { builtinUserSkillDefinitions, userScopedCapabilityHints } from "./user-skills.js";
+import { routingFailureFromError } from "./routing-failures.js";
 import { adminUserId, normalizeUserId } from "./users.js";
 import { appendTurnLifecycleEvent, turnLifecycleFromRuntimeStatus } from "./turn-lifecycle.js";
 
@@ -27,6 +28,51 @@ function clean(value) {
 
 function lower(value) {
   return clean(value).toLowerCase();
+}
+
+function apiAgentToolCapability(tool = "") {
+  const name = lower(tool);
+  if (["orkestr_list_timers", "orkestr_create_timer", "orkestr_delete_timer", "orkestr_run_timer"].includes(name)) return "timers";
+  if (name.includes("gmail")) return "gmail";
+  if (name.includes("outlook")) return "outlook";
+  if (name.includes("desktop") || name.includes("browser") || name.includes("linkedin")) return "linkedin";
+  if (name.includes("file")) return "files";
+  if (name.includes("whatsapp")) return "whatsapp";
+  if (name.includes("skill")) return "skills";
+  return "";
+}
+
+function messageCapabilityIntent(text = "") {
+  const value = lower(text);
+  if (/\b(?:timer|remind|reminder|schedule|in\s+\d+\s*(?:m|min|minute|minutes|h|hour|hours|d|day|days))\b/.test(value)) return "timers";
+  if (/\bgmail\b/.test(value)) return "gmail";
+  if (/\boutlook\b/.test(value)) return "outlook";
+  if (/\b(?:linkedin|desktop|browser)\b/.test(value)) return "linkedin";
+  if (/\bwhatsapp\b/.test(value)) return "whatsapp";
+  if (/\bfile\b/.test(value)) return "files";
+  return "";
+}
+
+function capabilityAvailable(capabilities = {}, capability = "") {
+  const id = clean(capability);
+  if (!id || id === "skills") return true;
+  return capabilities[id] === true;
+}
+
+async function appendApiAgentCapabilityDecision(input = {}, env = process.env) {
+  await appendEvent({
+    type: "api_agent_capability_decision",
+    threadId: clean(input.threadId),
+    messageId: clean(input.messageId),
+    ownerUserId: normalizeUserId(input.ownerUserId || env.ORKESTR_ADMIN_USER_ID || adminUserId),
+    action: clean(input.action || "capability_check"),
+    tool: clean(input.tool),
+    capability: clean(input.capability),
+    result: clean(input.result || "unknown"),
+    reason: clean(input.reason),
+    retryable: input.retryable === true,
+    targetInstanceId: clean(input.targetInstanceId),
+  }, env).catch(() => {});
 }
 
 function codexEscalationAvailable(env = process.env) {
@@ -880,7 +926,7 @@ function publicSkillContext(skills = [], capabilities = {}, scopedConnectors = {
   }).filter((skill) => skill.id);
 }
 
-function publicTenantCapabilities(capabilities = {}, env = process.env) {
+export function publicTenantCapabilities(capabilities = {}, env = process.env) {
   const scopedConnectors = capabilities.scopedConnectors && typeof capabilities.scopedConnectors === "object" ? capabilities.scopedConnectors : {};
   const connectorAuth = capabilities.connectorAuth && typeof capabilities.connectorAuth === "object" ? capabilities.connectorAuth : {};
   const skills = publicSkillContext(capabilities.skills, capabilities, scopedConnectors);
@@ -923,31 +969,88 @@ function publicTenantCapabilities(capabilities = {}, env = process.env) {
   };
 }
 
-async function scopedCapabilitiesForThread(thread = {}, env = process.env) {
-  try {
-    return await userScopedCapabilityHints({ userId: threadOwnerUserId(thread, env), thread }, env);
-  } catch {
-    return {
-      files: false,
-      timers: false,
-      virtualBrowsers: false,
-      desktopLeases: false,
-      whatsapp: Boolean(thread.binding?.connector === "whatsapp" || thread.binding?.chatId),
+function fallbackCapabilitySkills() {
+  return builtinUserSkillDefinitions().map((skill) => ({
+    id: clean(skill.id),
+    name: clean(skill.label || skill.id),
+    label: clean(skill.label || skill.id),
+    description: clean(skill.summary),
+    summary: clean(skill.summary),
+    instructions: "",
+    category: clean(skill.category || "user"),
+    enabled: ["whereiam", "timers", "whatsapp"].includes(clean(skill.id)),
+    enabledByDefault: skill.enabledByDefault !== false,
+    builtIn: true,
+    createdBy: "system",
+    scopes: Array.isArray(skill.scopes) ? [...skill.scopes] : [],
+    requiresConnector: clean(skill.requiresConnector),
+    requiresDesktop: clean(skill.requiresDesktop),
+  }));
+}
+
+function fallbackCapabilitiesForThread(thread = {}, env = process.env, error = null) {
+  const hasWhatsApp = Boolean(thread?.binding?.connector === "whatsapp" || thread?.binding?.chatId);
+  const reason = clean(error?.message || error || "capability_lookup_failed");
+  return {
+    threads: true,
+    whereiam: true,
+    files: false,
+    timers: true,
+    virtualBrowsers: false,
+    desktopLeases: false,
+    whatsapp: hasWhatsApp,
+    gmail: false,
+    outlook: false,
+    linkedin: false,
+    learning: false,
+    hostSkills: false,
+    globalConnectorAccounts: false,
+    privateOperatorData: false,
+    skillRegistry: {
+      userId: threadOwnerUserId(thread, env),
+      source: "capability-lookup-fallback",
+      userFound: false,
+      error: reason,
+    },
+    enabledSkills: hasWhatsApp ? ["whereiam", "timers", "whatsapp"] : ["whereiam", "timers"],
+    disabledSkills: [],
+    skills: fallbackCapabilitySkills(),
+    scopedConnectors: {
+      whatsapp: hasWhatsApp,
       gmail: false,
       outlook: false,
+      jira: false,
+      shopify: false,
       linkedin: false,
-      learning: false,
-      enabledSkills: [],
-      disabledSkills: [],
-      scopedConnectors: {
-        whatsapp: Boolean(thread.binding?.connector === "whatsapp" || thread.binding?.chatId),
-        gmail: false,
-        outlook: false,
-        jira: false,
-        shopify: false,
-        linkedin: false,
+    },
+    connectorAuth: {},
+    capabilityDecision: {
+      result: "fallback",
+      reason,
+      timers: {
+        available: true,
+        reason: "timer_builtin_fallback",
       },
-    };
+    },
+  };
+}
+
+export async function scopedCapabilitiesForThread(thread = {}, env = process.env) {
+  try {
+    return await userScopedCapabilityHints({ userId: threadOwnerUserId(thread, env), thread }, env);
+  } catch (error) {
+    const fallback = fallbackCapabilitiesForThread(thread, env, error);
+    await appendApiAgentCapabilityDecision({
+      threadId: thread.id,
+      ownerUserId: threadOwnerUserId(thread, env),
+      action: "capability_lookup",
+      capability: "timers",
+      result: "fallback_available",
+      reason: fallback.capabilityDecision.reason,
+      retryable: true,
+      targetInstanceId: clean(fallback.skillRegistry?.source),
+    }, env);
+    return fallback;
   }
 }
 
@@ -1080,6 +1183,8 @@ function userSafeApiAgentError(error) {
   const lowered = lower(code);
   if (code.includes("budget_exceeded")) return "I can't answer right now because this chat has reached its OpenAI usage budget. Ask an admin to raise the limit or try again later.";
   if (code.includes("openai_api_key_required")) return "This chat is not connected to the OpenAI API yet. Ask an admin to configure the API-agent key in Orkestr.";
+  if (lowered.includes("target_instance_unhealthy")) return "This Orkestr instance is temporarily unavailable for this chat. Please resend the message after it comes back online.";
+  if (lowered.includes("timer")) return "Timers are not available for this chat right now. Please try again in a moment.";
   if (lowered.includes("gmail_oauth_config_required")) return "Gmail sign-in is not available on this Orkestr installation yet because the Gmail app credentials are not configured.";
   if (lowered.includes("gmail")) return "Gmail is not connected or enabled for this chat yet. Ask me to connect Gmail and I will send a Google sign-in link.";
   if (lowered.includes("outlook")) return "Outlook is not connected or enabled for this chat yet. Ask me to connect Outlook and I will send Microsoft sign-in instructions.";
@@ -1250,6 +1355,20 @@ async function runTenantApiAgentToolResultResponse({
     let args = {};
     try {
       args = JSON.parse(call.arguments || "{}");
+      const capabilities = await scopedCapabilitiesForThread(thread, env);
+      const capability = apiAgentToolCapability(call.name);
+      if (capability) {
+        await appendApiAgentCapabilityDecision({
+          threadId: thread.id,
+          messageId: message.id,
+          ownerUserId: threadOwnerUserId(thread, env),
+          action: "api_agent_tool_call",
+          tool: call.name,
+          capability,
+          result: capabilityAvailable(capabilities, capability) ? "available" : "unavailable",
+          reason: capabilityAvailable(capabilities, capability) ? "capability_true" : "capability_false",
+        }, env);
+      }
       await assertSanitizedAction({
         action: `api-agent.tool.${call.name}`,
         principal,
@@ -1257,13 +1376,32 @@ async function runTenantApiAgentToolResultResponse({
           type: "thread",
           id: thread.id,
           ownerUserId: threadOwnerUserId(thread, env),
-          capabilities: await scopedCapabilitiesForThread(thread, env),
+          capabilities,
         },
         input: { tool: call.name, args },
       }, env);
       output = await runTenantApiAgentTool(call.name, args, { principal, thread, fetchImpl }, env);
     } catch (error) {
       output = { ok: false, error: clean(error?.message || error || "tool_failed") };
+      const failure = routingFailureFromError(error, {
+        capability: apiAgentToolCapability(call.name),
+        threadId: thread.id,
+        retryable: false,
+      });
+      if (failure.capability) {
+        output.routingFailure = failure;
+        await appendApiAgentCapabilityDecision({
+          threadId: thread.id,
+          messageId: message.id,
+          ownerUserId: threadOwnerUserId(thread, env),
+          action: "api_agent_tool_error",
+          tool: call.name,
+          capability: failure.capability,
+          result: "failed",
+          reason: failure.code,
+          retryable: failure.retryable,
+        }, env);
+      }
     }
     toolResults.push({ name: clean(call.name), args, output });
     toolOutputs.push(output);
@@ -1664,6 +1802,18 @@ async function processNextApiAgentMessage(thread, env = process.env, options = {
   }
   const principal = tenantPrincipalForThread(thread, env);
   const capabilities = await scopedCapabilitiesForThread(thread, env);
+  const requestedCapability = messageCapabilityIntent(message.text);
+  if (requestedCapability) {
+    await appendApiAgentCapabilityDecision({
+      threadId: thread.id,
+      messageId: message.id,
+      ownerUserId: threadOwnerUserId(thread, env),
+      action: "api_agent_input",
+      capability: requestedCapability,
+      result: capabilityAvailable(capabilities, requestedCapability) ? "available" : "unavailable",
+      reason: capabilityAvailable(capabilities, requestedCapability) ? "capability_true" : "capability_false",
+    }, env);
+  }
   if (!isAdminPrincipal(principal)) {
     await assertSanitizedAction({
       action: "api-agent.input",

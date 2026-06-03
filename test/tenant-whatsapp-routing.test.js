@@ -97,18 +97,55 @@ test("local WhatsApp bridge forwards tenant-routed chats with the scoped tenant 
     accountId: "tenant-wa",
     from: "491700000000@c.us",
     text: "hello tenant",
-  }, env, async (url, options) => {
-    calls.push({ url, options, body: JSON.parse(options.body) });
+  }, env, async (url, options = {}) => {
+    calls.push({ url, options, body: options.body ? JSON.parse(options.body) : null });
+    if (String(url) === "https://bob.example.test/api/health") return response({ ok: true }, true, 200);
     return response({ ok: true, threadId: "tenant-thread", messageId: "tenant-message" }, true, 202);
   });
 
   assert.equal(forwarded.forwarded, true);
-  assert.equal(String(calls[0].url), "https://bob.example.test/api/connectors/whatsapp/inbound");
-  assert.equal(calls[0].options.headers.authorization, `Bearer ${configured.route.token}`);
-  assert.equal(calls[0].body.chatId, "120363111111111111@g.us");
-  assert.equal(calls[0].body.accountId, "tenant-wa");
-  assert.equal(calls[0].body.displayName, "Bob tenant WA");
-  assert.equal(calls[0].body.chatName, "Bob tenant WA");
+  assert.equal(String(calls[0].url), "https://bob.example.test/api/health");
+  assert.equal(String(calls[1].url), "https://bob.example.test/api/connectors/whatsapp/inbound");
+  assert.equal(calls[1].options.headers.authorization, `Bearer ${configured.route.token}`);
+  assert.equal(calls[1].body.chatId, "120363111111111111@g.us");
+  assert.equal(calls[1].body.accountId, "tenant-wa");
+  assert.equal(calls[1].body.displayName, "Bob tenant WA");
+  assert.equal(calls[1].body.chatName, "Bob tenant WA");
+});
+
+test("local WhatsApp tenant forwards block unhealthy target instances before routing", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-tenant-wa-forward-health-"));
+  const env = { ORKESTR_HOME: home, ORKESTR_WHATSAPP_INBOUND_FORWARD_HEALTH_CACHE_MS: "0" };
+  await createTenantVm({
+    id: "down-tenant",
+    ownerUserId: "down",
+    endpoint: { baseUrl: "https://down.example.test" },
+  }, env);
+  await configureTenantWhatsAppRoute("down-tenant", {
+    chatId: "120363444444444444@g.us",
+    accountId: "tenant-wa",
+  }, env);
+  const calls = [];
+
+  await assert.rejects(
+    () => forwardLocalWhatsAppInbound({
+      eventId: "tenant-wa-event-down",
+      chatId: "120363444444444444@g.us",
+      accountId: "tenant-wa",
+      from: "491700000000@c.us",
+      text: "hello tenant",
+    }, env, async (url) => {
+      calls.push(String(url));
+      return response({ ok: false }, false, 502);
+    }),
+    (error) => {
+      assert.equal(error.routingFailure.code, "target_instance_unhealthy");
+      assert.equal(error.routingFailure.instanceId, "down-tenant");
+      assert.equal(error.routingFailure.retryable, true);
+      return true;
+    },
+  );
+  assert.deepEqual(calls, ["https://down.example.test/api/health"]);
 });
 
 test("local WhatsApp tenant forwards allow sanitizer-backed targets enough time by default", async () => {
@@ -136,10 +173,14 @@ test("local WhatsApp tenant forwards allow sanitizer-backed targets enough time 
       accountId: "tenant-wa",
       from: "491700000000@c.us",
       text: "hello tenant",
-    }, env, async () => response({ ok: true, threadId: "tenant-thread", messageId: "tenant-message" }, true, 202));
+    }, env, async (url) => {
+      if (String(url) === "https://slow.example.test/api/health") return response({ ok: true }, true, 200);
+      return response({ ok: true, threadId: "tenant-thread", messageId: "tenant-message" }, true, 202);
+    });
   } finally {
     AbortSignal.timeout = originalTimeout;
   }
 
-  assert.equal(timeouts[0], 60_000);
+  assert.equal(timeouts[0], 5000);
+  assert.equal(timeouts[1], 60_000);
 });
