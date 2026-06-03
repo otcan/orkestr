@@ -415,8 +415,10 @@ repair_env_file_permissions() {
     chmod 0640 "$env_file_path" || true
     return 0
   fi
-  run_group="$(id -gn "$run_user")"
-  chown "root:$run_group" "$env_file_path" || true
+  if [ "$run_user" != "root" ]; then
+    run_group="$(id -gn "$run_user")"
+    chown "root:$run_group" "$env_file_path" || true
+  fi
   chmod 0640 "$env_file_path" || true
 }
 
