@@ -209,6 +209,7 @@ test("whereAmI gates contained user capabilities through the user skill registry
   assert.equal(payload.capabilities.whatsapp, true);
   assert.equal(payload.capabilities.linkedin, true);
   assert.equal(payload.capabilities.desktopLeases, true);
+  assert.equal(payload.capabilities.scopedConnectors.linkedin, true);
   assert.equal(payload.capabilities.scopedConnectors.gmail, true);
   assert.equal(payload.capabilities.gmail, false);
   assert.equal(payload.capabilities.timers, false);

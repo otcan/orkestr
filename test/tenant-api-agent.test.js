@@ -1912,7 +1912,7 @@ test("tenant api-agent opens managed desktop requests directly without weak mode
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-api-agent-direct-desktop-open-"));
   const env = await allowSanitizerEnv(home, {
     ORKESTR_BROWSER_DESKTOP_MODE: "profiles",
-    ORKESTR_BROWSER_VISIBLE_SLUGS: "desktop",
+    ORKESTR_BROWSER_VISIBLE_SLUGS: "desktop,linkedin",
     ORKESTR_DEFAULT_DESKTOP_SLUG: "desktop",
     ORKESTR_BROWSER_LAUNCH_DISABLED: "1",
   });
@@ -1942,7 +1942,7 @@ test("tenant api-agent opens managed desktop requests directly without weak mode
   const assistant = messages.find((message) => message.parentMessageId === input.id);
 
   assert.equal(result.ok, true);
-  assert.match(assistant.text, /Desktop is open/i);
+  assert.match(assistant.text, /LinkedIn is open/i);
   assert.match(assistant.text, /does not report login state/i);
   assert.doesNotMatch(assistant.text, /\/codex/i);
   assert.notEqual(assistant.text.trim(), "Done.");
@@ -2582,7 +2582,7 @@ test("tenant api-agent opens the generic desktop when public fetch hits a browse
     ORKESTR_CODEX_BIN: "__orkestr_codex_disabled_public_instance__",
     ORKESTR_API_AGENT_WEB_FETCH_SKIP_DNS_CHECK: "1",
     ORKESTR_BROWSER_DESKTOP_MODE: "profiles",
-    ORKESTR_BROWSER_VISIBLE_SLUGS: "desktop",
+    ORKESTR_BROWSER_VISIBLE_SLUGS: "desktop,linkedin",
     ORKESTR_DEFAULT_DESKTOP_SLUG: "desktop",
     ORKESTR_BROWSER_LAUNCH_DISABLED: "1",
   });

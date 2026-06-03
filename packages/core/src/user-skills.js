@@ -577,6 +577,7 @@ export async function userScopedCapabilityHints({ userId = "", thread = null } =
     }),
   ));
   const hasThreadWhatsAppBinding = threadHasWhatsAppBinding(thread || {});
+  const desktopLinkedinAvailable = userDesktopSkillAvailable("linkedin", snapshot, env);
   const scopedConnectors = {
     ...tenantConnectors,
     whatsapp: tenantConnectors.whatsapp || hasThreadWhatsAppBinding,
@@ -584,10 +585,11 @@ export async function userScopedCapabilityHints({ userId = "", thread = null } =
     outlook: tenantConnectors.outlook || outlookToken,
     jira: tenantConnectors.jira || jiraToken,
     shopify: tenantConnectors.shopify || shopifyToken,
+    linkedin: tenantConnectors.linkedin || desktopLinkedinAvailable,
   };
   const enabled = (skillId) => snapshot.skillEnabled[skillId] === true;
   const whatsappAvailable = scopedConnectors.whatsapp;
-  const linkedinAvailable = scopedConnectors.linkedin || userDesktopSkillAvailable("linkedin", snapshot, env);
+  const linkedinAvailable = scopedConnectors.linkedin;
 
   return {
     threads: true,

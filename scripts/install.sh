@@ -2149,6 +2149,25 @@ EOF
   chmod 0755 /usr/local/bin/orkestr-browserctl
 }
 
+prepare_default_desktop_profiles() {
+  if [ "${ORKESTR_PREPARE_DEFAULT_DESKTOPS:-1}" = "0" ]; then
+    return 0
+  fi
+  if [ "${ORKESTR_BROWSER_DESKTOP_MODE:-browserctl}" != "browserctl" ]; then
+    return 0
+  fi
+  local seen_slugs slug
+  seen_slugs=""
+  for slug in "${ORKESTR_DEFAULT_DESKTOP_SLUG:-desktop}" "${ORKESTR_MANUAL_INTERVENTION_DESKTOP_SLUG:-desktop}"; do
+    if [ -z "$slug" ] || printf '%s\n' "$seen_slugs" | grep -qx "$slug"; then
+      continue
+    fi
+    seen_slugs="${seen_slugs}${slug}
+"
+    ORKESTR_HOME="$data_dir" /usr/local/bin/orkestr-browserctl health "$slug" >/dev/null
+  done
+}
+
 write_codex_app_server_wrapper() {
   cat > /usr/local/bin/orkestr-codex-app-server <<'EOF'
 #!/usr/bin/env bash
@@ -2322,6 +2341,7 @@ EOF
   write_deploy_wrapper
   write_reset_wrapper
   write_browserctl_wrapper
+  prepare_default_desktop_profiles
   write_codex_app_server_wrapper
   write_systemd_codex_app_server_service
   write_systemd_service

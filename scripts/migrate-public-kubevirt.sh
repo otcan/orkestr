@@ -347,6 +347,9 @@ smoke() {
   log "Checking VM-local CLI list."
   vm_ssh "ORKESTR_HOME='$vm_home' ORKESTR_API_BASE='$vm_api' orkestr list --json >/tmp/orkestr-list.json && jq '{count:(.threads | length)}' /tmp/orkestr-list.json"
 
+  log "Checking VM default managed desktop."
+  vm_ssh "set -euo pipefail; slug=\$(set -a; . /etc/orkestr/orkestr.env; set +a; printf '%s' \"\${ORKESTR_DEFAULT_DESKTOP_SLUG:-desktop}\"); ORKESTR_HOME='$vm_home' orkestr-browserctl health \"\$slug\" >/tmp/orkestr-default-desktop.json; jq -e --arg slug \"\$slug\" '.ok == true and .session.slug == \$slug and (.session.status == \"prepared\" or .session.status == \"running\") and ((.session.desk_url // \"\") | test(\"^/desktop/\"))' /tmp/orkestr-default-desktop.json >/dev/null; jq '{slug:.session.slug,status:.session.status,url:.session.desk_url}' /tmp/orkestr-default-desktop.json"
+
   thread_id="$(vm_ssh "ORKESTR_HOME='$vm_home' ORKESTR_API_BASE='$vm_api' orkestr list --json" | jq -r '.threads[0].id // empty' | tail -n 1)"
   if [ -n "$thread_id" ]; then
     log "Checking VM-local attach --print for $thread_id."

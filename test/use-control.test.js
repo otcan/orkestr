@@ -610,7 +610,7 @@ test("WhatsApp-bound tenant thread exposes scoped WhatsApp capability without te
   assert.equal(capabilities.gmail, false);
   assert.equal(capabilities.linkedin, true);
   assert.equal(capabilities.desktopLeases, true);
-  assert.equal(capabilities.scopedConnectors.linkedin, false);
+  assert.equal(capabilities.scopedConnectors.linkedin, true);
 });
 
 test("LLM sanitizer is fail-closed when no provider is configured", async () => {

@@ -482,9 +482,13 @@ function webFetchIssue(output = {}) {
   return "the public fetch did not return useful page contents";
 }
 
+function defaultManagedDesktopSlug(env = process.env) {
+  return clean(env.ORKESTR_DEFAULT_DESKTOP_SLUG || env.ORKESTR_MANUAL_INTERVENTION_DESKTOP_SLUG || "desktop");
+}
+
 async function openPublicWebFetchInDesktop({ target, output, thread, principal, env, fetchImpl }) {
   if (!webFetchDesktopFallbackAllowed(output)) return "";
-  const args = { skillId: "linkedin", action: "open_url", target: "", url: clean(target?.url) };
+  const args = { skillId: "linkedin", action: "open_url", target: defaultManagedDesktopSlug(env), url: clean(target?.url) };
   let opened = null;
   try {
     await assertSanitizedAction({

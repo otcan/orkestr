@@ -213,6 +213,9 @@ test("install script exposes a host-native systemd VPS path", async () => {
   assert.match(script, /write_update_units/);
   assert.match(script, /write_deploy_wrapper/);
   assert.match(script, /write_reset_wrapper/);
+  assert.match(script, /prepare_default_desktop_profiles/);
+  assert.match(script, /ORKESTR_PREPARE_DEFAULT_DESKTOPS/);
+  assert.match(script, /orkestr-browserctl health "\$slug"/);
   assert.match(script, /write_codex_app_server_wrapper/);
   assert.match(script, /write_systemd_codex_app_server_service/);
   assert.match(script, /ExecStart=\/usr\/local\/bin\/orkestr-codex-app-server/);
@@ -443,6 +446,8 @@ test("public KubeVirt migration helper operates the isolated app VM", async () =
   assert.match(script, /virtctl_k3s credentials add-ssh-key/);
   assert.match(script, /kubectl_k3s get pod -n "\$namespace" -l "kubevirt\.io\/domain=\$vm"/);
   assert.match(script, /ORKESTR_HOME='\$vm_home' ORKESTR_API_BASE='\$vm_api' orkestr list --json/);
+  assert.match(script, /Checking VM default managed desktop/);
+  assert.match(script, /orkestr-browserctl health/);
   assert.match(script, /ORKESTR_HOME='\$vm_home' ORKESTR_API_BASE='\$vm_api' orkestr attach --print/);
   assert.match(script, /Codex is not signed in/);
   assert.match(script, /public Codex runtime is not configured/);
