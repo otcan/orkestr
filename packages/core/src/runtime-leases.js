@@ -3098,7 +3098,7 @@ function scheduleThreadInputDelivery(threadId, env = process.env, delayMs = 0) {
   deliveryTimers.set(id, timer);
 }
 
-export async function deliverPendingThreadInputs(threadId, env = process.env) {
+export async function deliverPendingThreadInputs(threadId, env = process.env, options = {}) {
   if (deployDrainActiveSync(env)) {
     await appendEvent({ type: "thread_input_delivery_deferred", threadId, reason: "deploy_draining" }, env).catch(() => {});
     return [];
@@ -3106,6 +3106,10 @@ export async function deliverPendingThreadInputs(threadId, env = process.env) {
   const thread = await getThread(threadId, env);
   if (!thread) return [];
   if (threadUsesApiAgent(thread, env)) {
+    if (options.processApiAgent !== true) {
+      await appendEvent({ type: "thread_input_delivery_skipped", threadId: thread.id, reason: "api_agent_thread" }, env).catch(() => null);
+      return [];
+    }
     const result = await processApiAgentThreadInput(thread.id, env);
     const results = Array.isArray(result?.results) ? result.results : result?.processed ? [result] : [];
     const delivered = results.map((entry) => entry?.message?.id).filter(Boolean);
@@ -4232,7 +4236,7 @@ export async function drainAllPendingThreadInputs(env = process.env) {
   for (const thread of threads) {
     const messages = await listThreadMessages(thread.id, env);
     if (messages.some((message) => message.role === "user" && pendingInputStates.has(message.state))) {
-      results.push({ threadId: thread.id, delivered: await deliverPendingThreadInputs(thread.id, env) });
+      results.push({ threadId: thread.id, delivered: await deliverPendingThreadInputs(thread.id, env, { processApiAgent: true }) });
     }
   }
   return results;
