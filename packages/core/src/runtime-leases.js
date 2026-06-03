@@ -20,6 +20,7 @@ import {
   updateThreadMessage,
 } from "./threads.js";
 import { parseThreadInputCommand } from "./thread-commands.js";
+import { performCodexAppServerSafeReset } from "./codex-safe-reset.js";
 import {
   codexRuntimeThreadStatus,
   compactCodexRuntimeThread,
@@ -226,10 +227,6 @@ function temporaryRuntimeReason({ thread = {}, workspace = "", command = "" } = 
 
 function codexThreadId(thread) {
   return String(thread?.executor?.codexThreadId || thread?.codexThreadId || "").trim();
-}
-
-function codexSessionId(thread) {
-  return String(thread?.executor?.codexSessionId || thread?.codexSessionId || thread?.executor?.metadata?.codexSessionId || "").trim();
 }
 
 function threadName(thread) {
@@ -1421,55 +1418,6 @@ export async function hardResetThreadRuntime(threadId, options = {}, env = proce
   };
 }
 
-function codexSafeResetPatch(thread, checkpoint, reason) {
-  const runtime = thread?.runtime && typeof thread.runtime === "object" ? thread.runtime : {};
-  const metadata = thread?.executor?.metadata && typeof thread.executor.metadata === "object" ? thread.executor.metadata : {};
-  const oldCodexThreadId = codexThreadId(thread);
-  const oldCodexSessionId = codexSessionId(thread) || oldCodexThreadId;
-  const archive = {
-    codexThreadId: oldCodexThreadId || null,
-    codexSessionId: oldCodexSessionId || null,
-    reason,
-    resetAt: nowIso(),
-    checkpointPath: checkpoint?.path || null,
-    previousState: thread?.state || null,
-    previousRuntimeState: runtime.state || null,
-  };
-  return {
-    state: "waking",
-    lastError: null,
-    runtimeKind: "codex-app-server",
-    codexThreadId: null,
-    codexSessionId: null,
-    executor: {
-      ...(thread.executor || {}),
-      id: "codex",
-      type: "codex",
-      transport: "app-server",
-      codexThreadId: null,
-      codexSessionId: null,
-      metadata: {
-        ...metadata,
-        transport: "app-server",
-        runtimeKind: "codex-app-server",
-        codexThreadId: null,
-        codexSessionId: null,
-        lastSafeReset: archive,
-      },
-    },
-    runtime: {
-      ...runtime,
-      runtimeKind: "codex-app-server",
-      state: "waking",
-      activeTurnId: null,
-      pendingRequest: null,
-      codexStatus: null,
-      lastTurnStatus: null,
-      safeReset: archive,
-    },
-  };
-}
-
 export async function safeResetThreadRuntime(threadId, options = {}, env = process.env) {
   const reason = options.reason || "safe_reset";
   const thread = await getThread(threadId, env);
@@ -1481,53 +1429,17 @@ export async function safeResetThreadRuntime(threadId, options = {}, env = proce
   if (!threadUsesNativeCodexRuntime(thread, env)) {
     return hardResetThreadRuntime(thread.id, { reason, wakeReason: options.wakeReason || reason }, env);
   }
-  const oldCodexThreadId = codexThreadId(thread);
-  const oldCodexSessionId = codexSessionId(thread) || oldCodexThreadId;
   const statusBefore = await runtimeStatus(thread.id, env).catch(() => null);
-  const checkpoint = await writeManualContextCheckpoint(thread.id, { reason, status: statusBefore }, env);
-  const interrupted = await interruptCodexRuntimeThread(thread, env).catch(() => ({ interrupted: false }));
-  const prepared = await updateThread(thread.id, codexSafeResetPatch(thread, checkpoint, reason), env);
-  try {
-    const started = await startCodexRuntimeThread(prepared, env);
-    if (!started?.thread) throw new Error("codex_app_server_safe_reset_start_failed");
-    await appendEvent({
-      type: "thread_runtime_safe_reset",
-      threadId: thread.id,
-      reason,
-      oldCodexThreadId: oldCodexThreadId || null,
-      oldCodexSessionId: oldCodexSessionId || null,
-      newCodexThreadId: codexThreadId(started.thread) || null,
-      newCodexSessionId: codexSessionId(started.thread) || null,
-      interrupted: Boolean(interrupted?.interrupted),
-      manualCheckpointPath: checkpoint.path || null,
-    }, env).catch(() => {});
-    return {
-      ok: true,
-      reset: true,
-      safeReset: true,
-      slept: 0,
-      interrupted,
-      manualCheckpoint: checkpoint,
-      oldCodexThreadId: oldCodexThreadId || null,
-      oldCodexSessionId: oldCodexSessionId || null,
-      newCodexThreadId: codexThreadId(started.thread) || null,
-      newCodexSessionId: codexSessionId(started.thread) || null,
-      thread: started.thread,
-      lease: null,
-      status: started.status || await runtimeStatus(thread.id, env).catch(() => null),
-    };
-  } catch (error) {
-    await updateThread(thread.id, {
-      state: "failed",
-      lastError: error instanceof Error ? error.message : String(error),
-      runtime: {
-        ...(prepared.runtime || {}),
-        state: "failed",
-        codexStatus: { type: "systemError", error: error instanceof Error ? error.message : String(error) },
-      },
-    }, env).catch(() => {});
-    throw error;
-  }
+  const result = await performCodexAppServerSafeReset(thread, {
+    reason,
+    statusBefore,
+    interruptThread: interruptCodexRuntimeThread,
+    startThread: startCodexRuntimeThread,
+  }, env);
+  return {
+    ...result,
+    status: result.status || await runtimeStatus(thread.id, env).catch(() => null),
+  };
 }
 
 async function completeStopCommand(thread, message, env = process.env) {

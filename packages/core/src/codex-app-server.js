@@ -40,6 +40,7 @@ import { ensureRuntimeAgentsFile } from "./agent-context.js";
 import { containedUserDeveloperInstructions } from "./tenant-policy.js";
 import { relocateLegacyUserWorkspace } from "./workspace-files.js";
 import { parseThreadInputCommand } from "./thread-commands.js";
+import { performCodexAppServerSafeReset } from "./codex-safe-reset.js";
 import { completeThreadSecurityApproveCommand } from "./security-thread-command.js";
 import { appendTurnLifecycleEvent, turnLifecycleFromRuntimeStatus } from "./turn-lifecycle.js";
 
@@ -794,6 +795,37 @@ async function deliverCodexAppServerPendingInputsUnlocked(thread, env = process.
       interruptSent: Boolean(interrupted?.interrupted),
       error: null,
     }, env);
+    delivered.push(next.id);
+    return delivered;
+  }
+  if (parsedCommand.command === "safe_reset") {
+    const whatsappCommand = clean(next.connector).toLowerCase() === "whatsapp" ||
+      clean(next.source).toLowerCase().includes("whatsapp");
+    const result = await performCodexAppServerSafeReset(thread, {
+      reason: whatsappCommand ? "whatsapp_safe_reset_command" : "safe_reset_command",
+      interruptThread: interruptCodexAppServerThread,
+      startThread: startCodexAppServerThread,
+    }, env);
+    await updateThreadMessage(thread.id, next.id, {
+      state: "completed",
+      deliveryState: "delivered",
+      deliveredAt: nowIso(),
+      observedVia: "orkestr_safe_reset_command",
+      error: null,
+      resetSlept: result.slept,
+      manualCheckpointPath: result.manualCheckpoint?.path || null,
+      oldCodexThreadId: result.oldCodexThreadId || null,
+      newCodexThreadId: result.newCodexThreadId || null,
+    }, env);
+    await appendEvent({
+      type: "thread_safe_reset_command",
+      threadId: thread.id,
+      messageId: next.id,
+      source: next.source || null,
+      oldCodexThreadId: result.oldCodexThreadId || null,
+      newCodexThreadId: result.newCodexThreadId || null,
+      manualCheckpointPath: result.manualCheckpoint?.path || null,
+    }, env).catch(() => {});
     delivered.push(next.id);
     return delivered;
   }

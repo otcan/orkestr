@@ -2537,6 +2537,47 @@ test("Codex app-server safe reset checkpoints and starts a fresh thread", async 
   }
 });
 
+test("Codex app-server /safe-reset command starts fresh thread without delivering prompt", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-codex-app-server-safe-reset-command-"));
+  const fake = await createFakeCodex(home);
+  const env = {
+    ORKESTR_HOME: path.join(home, "orkestr"),
+    HOME: path.join(home, "runtime-home"),
+    PATH: `${fake.bin}${path.delimiter}${process.env.PATH || ""}`,
+    FAKE_CODEX_STATE: fake.stateFile,
+  };
+  try {
+    const thread = await createThread({ id: "app-server-safe-reset-command-thread", name: "App Server Safe Reset Command Thread", cwd: home, executorId: "codex", executor: { type: "codex" } }, env);
+    const started = await startCodexAppServerThread(thread, env);
+    const oldCodexThreadId = started.thread.codexThreadId;
+    const input = await enqueueThreadInput(started.thread.id, {
+      text: "/safe-reset",
+      source: "whatsapp_inbound",
+      connector: "whatsapp",
+      chatId: "chat-safe-reset-command",
+    }, env);
+
+    const delivered = await deliverCodexAppServerPendingInputs(await getThread(started.thread.id, env), env);
+    const rawState = JSON.parse(await fs.readFile(fake.stateFile, "utf8"));
+    const resetThread = await getThread(started.thread.id, env);
+    const messages = await listThreadMessages(started.thread.id, env);
+    const completed = messages.find((message) => message.id === input.id);
+
+    assert.deepEqual(delivered, [input.id]);
+    assert.equal(completed.state, "completed");
+    assert.equal(completed.deliveryState, "delivered");
+    assert.equal(completed.observedVia, "orkestr_safe_reset_command");
+    assert.equal(completed.oldCodexThreadId, oldCodexThreadId);
+    assert.notEqual(completed.newCodexThreadId, oldCodexThreadId);
+    assert.equal(resetThread.codexThreadId, completed.newCodexThreadId);
+    assert.equal(rawState.calls.filter((call) => call.method === "thread/start").length, 2);
+    assert.ok(!rawState.calls.some((call) => call.method === "turn/start" && call.params?.input?.some((item) => item.text === "/safe-reset")));
+    assert.ok(!rawState.calls.some((call) => call.method === "thread/resume"));
+  } finally {
+    stopCodexAppServerClients();
+  }
+});
+
 test("Codex app-server queues WhatsApp input behind active turns", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-codex-app-server-wa-queue-"));
   const fake = await createFakeCodex(home);
