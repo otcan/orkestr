@@ -103,7 +103,7 @@ function codexSafeResetPatch(thread, checkpoint, reason) {
   };
 }
 
-export async function performCodexAppServerSafeReset(threadOrId, options = {}, env = process.env) {
+export async function performNativeCodexSafeReset(threadOrId, options = {}, env = process.env) {
   const reason = options.reason || "safe_reset";
   const thread = typeof threadOrId === "string"
     ? await getThread(threadOrId, env)
@@ -164,3 +164,5 @@ export async function performCodexAppServerSafeReset(threadOrId, options = {}, e
     throw error;
   }
 }
+
+export const performCodexAppServerSafeReset = performNativeCodexSafeReset;

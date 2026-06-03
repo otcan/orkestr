@@ -137,6 +137,7 @@ async function runOpenAISanitizer(payload, env = process.env) {
             "Allow same-user api-agent.tool.orkestr_connector_status because it only returns safe connection state for the current user's connector and does not read connector data or expose tokens.",
             "Allow same-user api-agent.tool.orkestr_get_onboarding_profile and api-agent.tool.orkestr_update_onboarding_profile for non-secret setup preferences, requested tools, timezone, language, and notes.",
             "Allow same-user api-agent.tool.orkestr_create_timer, api-agent.tool.orkestr_delete_timer, and api-agent.tool.orkestr_run_timer when the timer belongs to the requesting user and targets that user's own chat or agent.",
+            "Allow same-user connector_prompt_push.create and connector_prompt_push.execute only when the push belongs to the requesting user, targets that user's own chat or agent, and the matching connector capability is true.",
             "Deny cross-tenant access, host secrets, connector tokens, browser profile files, private overlays, sanitizer bypass, and challenge approval.",
             "Deny tool execution or actual connector data access when the matching capability is not true for the same user, except explicit same-user connector auth-start/status tools such as orkestr_start_connector_auth and orkestr_connector_status, and same-user timer management tools.",
             "If uncertain, deny.",

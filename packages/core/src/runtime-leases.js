@@ -20,7 +20,7 @@ import {
   updateThreadMessage,
 } from "./threads.js";
 import { parseThreadInputCommand } from "./thread-commands.js";
-import { performCodexAppServerSafeReset } from "./codex-safe-reset.js";
+import { performNativeCodexSafeReset } from "./codex-safe-reset.js";
 import {
   codexRuntimeThreadStatus,
   compactCodexRuntimeThread,
@@ -1430,7 +1430,7 @@ export async function safeResetThreadRuntime(threadId, options = {}, env = proce
     return hardResetThreadRuntime(thread.id, { reason, wakeReason: options.wakeReason || reason }, env);
   }
   const statusBefore = await runtimeStatus(thread.id, env).catch(() => null);
-  const result = await performCodexAppServerSafeReset(thread, {
+  const result = await performNativeCodexSafeReset(thread, {
     reason,
     statusBefore,
     interruptThread: interruptCodexRuntimeThread,
