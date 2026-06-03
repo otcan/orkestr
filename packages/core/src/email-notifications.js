@@ -12,6 +12,21 @@ function boolEnv(value, fallback = false) {
   return value === true || value === "true" || value === "1" || value === 1;
 }
 
+function envValue(env = process.env, names = []) {
+  for (const name of names) {
+    const value = clean(env[name]);
+    if (value) return value;
+  }
+  return "";
+}
+
+function envBoolValue(env = process.env, names = [], fallback = false) {
+  for (const name of names) {
+    if (env[name] !== undefined && env[name] !== null && env[name] !== "") return boolEnv(env[name], fallback);
+  }
+  return fallback;
+}
+
 function splitEmailList(value = "") {
   return String(value || "")
     .split(/[,\s]+/)
@@ -20,19 +35,37 @@ function splitEmailList(value = "") {
 }
 
 function smtpEmailConfig(env = process.env) {
-  const secure = boolEnv(env.ORKESTR_SMTP_SECURE, false);
-  const host = clean(env.ORKESTR_SMTP_HOST);
-  const port = Number(env.ORKESTR_SMTP_PORT || (secure ? 465 : 587));
-  const user = clean(env.ORKESTR_SMTP_USER);
+  const secure = envBoolValue(env, ["ORKESTR_SMTP_SECURE", "ORKESTR_OUTLOOK_SMTP_SECURE", "OUTLOOK_SMTP_SECURE"], false);
+  const user = envValue(env, ["ORKESTR_SMTP_USER", "ORKESTR_OUTLOOK_SMTP_USER", "OUTLOOK_SMTP_USER"]);
+  const from = envValue(env, ["ORKESTR_SMTP_FROM", "ORKESTR_OUTLOOK_SMTP_FROM", "OUTLOOK_SMTP_FROM", "ORKESTR_MAIL_FROM"]) || user;
+  const outlookConfigured = Boolean(
+    envValue(env, [
+      "ORKESTR_OUTLOOK_SMTP_HOST",
+      "OUTLOOK_SMTP_HOST",
+      "ORKESTR_OUTLOOK_SMTP_USER",
+      "OUTLOOK_SMTP_USER",
+      "ORKESTR_OUTLOOK_SMTP_FROM",
+      "OUTLOOK_SMTP_FROM",
+    ]),
+  );
+  const host = envValue(env, ["ORKESTR_SMTP_HOST", "ORKESTR_OUTLOOK_SMTP_HOST", "OUTLOOK_SMTP_HOST"]) || (outlookConfigured ? "smtp.office365.com" : "");
+  const configuredPort = envValue(env, ["ORKESTR_SMTP_PORT", "ORKESTR_OUTLOOK_SMTP_PORT", "OUTLOOK_SMTP_PORT"]);
+  const port = Number(configuredPort || (secure ? 465 : 587));
   return {
     host,
     port: Number.isFinite(port) && port > 0 ? port : secure ? 465 : 587,
     user,
-    pass: String(env.ORKESTR_SMTP_PASS || ""),
-    from: clean(env.ORKESTR_SMTP_FROM || user),
+    pass: envValue(env, [
+      "ORKESTR_SMTP_PASS",
+      "ORKESTR_OUTLOOK_SMTP_PASS",
+      "ORKESTR_OUTLOOK_SMTP_PASSWORD",
+      "OUTLOOK_SMTP_PASS",
+      "OUTLOOK_SMTP_PASSWORD",
+    ]),
+    from,
     secure,
-    startTls: boolEnv(env.ORKESTR_SMTP_STARTTLS, !secure),
-    rejectUnauthorized: !boolEnv(env.ORKESTR_SMTP_ALLOW_INVALID_TLS, false),
+    startTls: envBoolValue(env, ["ORKESTR_SMTP_STARTTLS", "ORKESTR_OUTLOOK_SMTP_STARTTLS", "OUTLOOK_SMTP_STARTTLS"], !secure),
+    rejectUnauthorized: !envBoolValue(env, ["ORKESTR_SMTP_ALLOW_INVALID_TLS", "ORKESTR_OUTLOOK_SMTP_ALLOW_INVALID_TLS", "OUTLOOK_SMTP_ALLOW_INVALID_TLS"], false),
     timeoutMs: Math.max(2_000, Math.min(60_000, Number(env.ORKESTR_SMTP_TIMEOUT_MS) || 10_000)),
     helloName: clean(env.ORKESTR_SMTP_HELO || "orkestr.local"),
   };

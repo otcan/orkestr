@@ -52,11 +52,14 @@ ORKESTR_KEYCLOAK_CLIENT_ID=orkestr
 
 Use Outlook SMTP in Keycloak for verification emails. Keep the SMTP secret in
 the private host environment or Keycloak secret store, not in this repository.
+The same `ORKESTR_OUTLOOK_SMTP_*` variables are accepted as aliases for
+Orkestr outbound SMTP notifications, including waitlist admin email.
 
 ```env
 ORKESTR_OUTLOOK_SMTP_HOST=smtp.office365.com
 ORKESTR_OUTLOOK_SMTP_USER=notifications@example.com
 ORKESTR_OUTLOOK_SMTP_FROM=notifications@example.com
+ORKESTR_WAITLIST_NOTIFY_EMAIL=admin@example.com
 ```
 
 Orkestr reports whether Outlook mail delivery is configured, but it does not
