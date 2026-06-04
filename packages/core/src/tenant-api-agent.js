@@ -432,6 +432,32 @@ function gmailContextInstructions(message = {}, gmailContext = null) {
   return lines.join("\n");
 }
 
+function gmailContextReadFollowupEligible(message = {}, gmailContext = null) {
+  const text = clean(message.text);
+  if (!gmailContext?.messageId || !text || gmailPromptPushInfo(message)) return false;
+  if (!userMessageNeedsSubstantiveAnswer(text)) return false;
+  if (introducedName(text) || /\bwho\s+am\s+i\b/i.test(text)) return false;
+  if (/\b(?:what can you do|how can you help|what skills|which skills)\b/i.test(text)) return false;
+  if (gmailSignInIntent(text)) return false;
+  return true;
+}
+
+function directGmailContextReadResponse(message = {}, gmailContext = {}) {
+  const messageId = clean(gmailContext.messageId);
+  return {
+    id: `gmail_context_read_${clean(message.id) || Date.now()}`,
+    model: "orkestr-api-agent-direct-tool",
+    output_text: "",
+    output: [{
+      type: "function_call",
+      name: "orkestr_read_gmail_message",
+      call_id: `call_gmail_context_${(clean(message.id) || "message").replace(/[^A-Za-z0-9_-]/g, "_").slice(0, 80)}`,
+      arguments: JSON.stringify({ messageId }),
+    }],
+    usage: {},
+  };
+}
+
 function genericTenantApiAgentHelpText(text = "") {
   const value = clean(text).replace(/\s+/g, " ");
   if (!value) return true;
@@ -1978,6 +2004,24 @@ async function runTenantApiAgentResponse({ thread, messages, message, env, fetch
       },
       text,
     };
+  }
+
+  if (gmailContextReadFollowupEligible(message, gmailContext) &&
+    capabilityAvailable(await scopedCapabilitiesForThread(thread, env), "gmail")) {
+    return runTenantApiAgentToolResultResponse({
+      baseBody,
+      inputItems: input,
+      responseWithCalls: directGmailContextReadResponse(message, gmailContext),
+      thread,
+      message,
+      principal,
+      pendingAction,
+      gmailContext,
+      env,
+      fetchImpl,
+      idempotencySuffix: "gmail-context-read-2",
+      callKind: "assistant_gmail_context_read_tool_result",
+    });
   }
 
   const first = await postOpenAIResponse(baseBody, env, fetchImpl, `orkestr-${thread.id}-${message.id}-1`);

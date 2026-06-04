@@ -2030,27 +2030,13 @@ test("tenant api-agent uses Gmail prompt-push message id for follow-up actions",
         if (openAiCalls.length === 1) {
           assert.match(body.instructions, /Recent Gmail notification context/i);
           assert.match(body.instructions, /paypal-msg-1/);
-          assert.equal(body.tools.some((tool) => tool.name === "orkestr_read_gmail_message"), true);
           assert.match(body.input.find((item) => item.content?.includes("Receipt for Your Payment"))?.content || "", /Private connector context/);
-          return response({
-            id: "resp_gmail_push_followup_1",
-            model: "gpt-5-mini",
-            output_text: "",
-            output: [{
-              type: "function_call",
-              name: "orkestr_read_gmail_message",
-              call_id: "call_read_paypal_message",
-              arguments: JSON.stringify({ messageId: "paypal-msg-1" }),
-            }],
-            usage: { input_tokens: 360, output_tokens: 20 },
-          });
-        }
-        if (openAiCalls.length === 2) {
-          const toolOutput = JSON.parse(openAiCalls[1].input.at(-1).output);
+          assert.equal(body.input.some((item) => item.type === "function_call" && item.name === "orkestr_read_gmail_message"), true);
+          const toolOutput = JSON.parse(body.input.at(-1).output);
           assert.equal(toolOutput.message.subject, "Receipt for Your Payment to LimeBike Germany Gmb...");
           assert.match(toolOutput.message.text, /single Lime ride receipt/i);
           return response({
-            id: "resp_gmail_push_followup_2",
+            id: "resp_gmail_push_followup_1",
             model: "gpt-5-mini",
             output_text: GENERIC_TOOL_FALLBACK_TEXT,
             output: [],
@@ -2061,7 +2047,7 @@ test("tenant api-agent uses Gmail prompt-push message id for follow-up actions",
         assert.match(body.instructions, /answer the user's latest request from those results/i);
         assert.match(body.input.map((item) => item.content || "").join("\n"), /Tenant tool result/i);
         return response({
-          id: "resp_gmail_push_followup_3",
+          id: "resp_gmail_push_followup_2",
           model: "gpt-5-mini",
           output_text: "This looks like a one-off Lime receipt, not proof of a recurring subscription. I found no cancellation link in the receipt body, but I can extract the transaction details or draft a support message if you want to dispute it.",
           output: [],
@@ -2098,7 +2084,7 @@ test("tenant api-agent uses Gmail prompt-push message id for follow-up actions",
   const assistant = messages.filter((message) => message.role === "assistant").at(-1);
 
   assert.equal(result.ok, true);
-  assert.equal(openAiCalls.length, 3);
+  assert.equal(openAiCalls.length, 2);
   assert.deepEqual(gmailCalls, ["/gmail/v1/users/me/messages/paypal-msg-1"]);
   assert.match(assistant.text, /one-off Lime receipt/i);
   assert.doesNotMatch(assistant.text, /Tell me what you want|workspace execution|\/codex/i);
