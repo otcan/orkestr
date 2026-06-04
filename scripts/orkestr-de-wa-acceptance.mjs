@@ -40,6 +40,9 @@ function parseArgs(argv = [], env = process.env) {
     chatId: clean(env.ORKESTR_DE_ACCEPTANCE_CHAT_ID || "120363425280218500@g.us"),
     accountId: clean(env.ORKESTR_DE_ACCEPTANCE_ACCOUNT_ID || "sender"),
     from: clean(env.ORKESTR_DE_ACCEPTANCE_FROM || "66378837028965@lid"),
+    requireRouteMode: clean(env.ORKESTR_DE_ACCEPTANCE_REQUIRE_ROUTE_MODE),
+    requireTargetSource: clean(env.ORKESTR_DE_ACCEPTANCE_REQUIRE_TARGET_SOURCE),
+    rejectTargetSource: clean(env.ORKESTR_DE_ACCEPTANCE_REJECT_TARGET_SOURCE),
     timeoutMs: Number(env.ORKESTR_DE_ACCEPTANCE_TIMEOUT_MS || 90_000),
     pollMs: Number(env.ORKESTR_DE_ACCEPTANCE_POLL_MS || 1500),
     runId: safeId(env.ORKESTR_DE_ACCEPTANCE_RUN_ID || new Date().toISOString().replace(/[-:.TZ]/g, "").slice(0, 14)),
@@ -80,6 +83,12 @@ function parseArgs(argv = [], env = process.env) {
       options.accountId = clean(argv[++index]);
     } else if (arg === "--from") {
       options.from = clean(argv[++index]);
+    } else if (arg === "--require-route-mode") {
+      options.requireRouteMode = clean(argv[++index]);
+    } else if (arg === "--require-target-source") {
+      options.requireTargetSource = clean(argv[++index]);
+    } else if (arg === "--reject-target-source") {
+      options.rejectTargetSource = clean(argv[++index]);
     } else if (arg === "--run-id") {
       options.runId = safeId(argv[++index]);
     } else if (arg === "--case") {
@@ -127,6 +136,9 @@ function printHelp() {
     "  --chat-id ID          WhatsApp chat id routed to the public tenant.",
     "  --account-id ID       Parent WhatsApp inbound account id. Default: sender",
     "  --from ID             Sender contact id for the synthetic inbound event.",
+    "  --require-route-mode MODE  Require the forward result routeMode, for example broker.",
+    "  --require-target-source SRC Require the forward result targetSource, for example broker.",
+    "  --reject-target-source SRC  Fail if the forward result targetSource matches this value.",
     "  --case LIST           exact,web,desktop,private,timer or all.",
     "  --no-wa-history       Skip parent WhatsApp history verification.",
     "",
@@ -327,6 +339,20 @@ function validate(name, spec, assistant) {
   return text;
 }
 
+function assertForwardedRoute(options, forwarded, name) {
+  const routeMode = clean(forwarded?.routeMode);
+  const targetSource = clean(forwarded?.targetSource);
+  if (options.requireRouteMode && routeMode !== options.requireRouteMode) {
+    throw new Error(`case_failed:${name}:route_mode:${routeMode || "missing"}:expected:${options.requireRouteMode}`);
+  }
+  if (options.requireTargetSource && targetSource !== options.requireTargetSource) {
+    throw new Error(`case_failed:${name}:target_source:${targetSource || "missing"}:expected:${options.requireTargetSource}`);
+  }
+  if (options.rejectTargetSource && targetSource === options.rejectTargetSource) {
+    throw new Error(`case_failed:${name}:target_source_rejected:${targetSource}`);
+  }
+}
+
 async function runCase(name, options) {
   const spec = caseSpec(name, options.runId);
   const parentEnv = {
@@ -343,6 +369,7 @@ async function runCase(name, options) {
     timestamp: new Date().toISOString(),
   }, parentEnv);
   if (!forwarded?.forwarded) throw new Error(`case_not_forwarded:${name}`);
+  assertForwardedRoute(options, forwarded, name);
   const parentMessageId = clean(forwarded.payload?.message?.id || forwarded.payload?.messageId);
   const immediateAssistant = forwarded.payload?.assistant || null;
   if (spec.timerDue) {
@@ -360,6 +387,8 @@ async function runCase(name, options) {
       assistantId: clean(assistant.id),
       text,
       waHistory,
+      routeMode: clean(forwarded.routeMode),
+      targetSource: clean(forwarded.targetSource),
     };
   }
   const assistant = immediateAssistant?.text ? immediateAssistant : await waitForAssistant(options, parentMessageId);
@@ -373,6 +402,8 @@ async function runCase(name, options) {
     assistantId: clean(assistant.id),
     text,
     waHistory,
+    routeMode: clean(forwarded.routeMode),
+    targetSource: clean(forwarded.targetSource),
   };
 }
 
@@ -406,6 +437,8 @@ async function main() {
       name: result.name,
       assistantId: result.assistantId,
       waHistory: result.waHistory,
+      routeMode: result.routeMode,
+      targetSource: result.targetSource,
     })),
   }, null, 2));
 }

@@ -72,7 +72,24 @@ function tenantVmProvisionBody(body: Record<string, unknown> = {}) {
 
 function tenantVmWhatsAppRouteBody(body: Record<string, unknown> = {}) {
   const output: Record<string, unknown> = {};
-  for (const key of ["chatId", "whatsappChatId", "waChatId", "chatName", "displayName", "accountId", "whatsappAccountId", "token"]) {
+  for (const key of [
+    "chatId",
+    "whatsappChatId",
+    "waChatId",
+    "chatName",
+    "displayName",
+    "accountId",
+    "whatsappAccountId",
+    "token",
+    "routeMode",
+    "whatsappRouteMode",
+    "brokerBaseUrl",
+    "whatsappBrokerBaseUrl",
+    "controlPlaneBaseUrl",
+    "internalBaseUrl",
+    "baseUrl",
+    "targetBaseUrl",
+  ]) {
     if (body[key] !== undefined) output[key] = String(body[key] || "").trim();
   }
   if (body.enabled !== undefined) output.enabled = body.enabled;
