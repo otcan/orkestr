@@ -1885,6 +1885,135 @@ async function runTenantApiAgentToolResultResponse({
   };
 }
 
+function recentMessagesBefore(messages = [], message = {}, count = 4) {
+  const index = messages.findIndex((item) => clean(item.id) === clean(message.id));
+  const end = index >= 0 ? index : messages.length;
+  return messages.slice(Math.max(0, end - count), end);
+}
+
+function gmailNotificationManagementContext(messages = [], message = {}) {
+  return recentMessagesBefore(messages, message, 6).some((item) =>
+    /\b(?:gmail|mail|email)\b/i.test(clean(item.text)) &&
+    /\b(?:notification|notifications|notify|listener|push|alert|alerts|rule|rules)\b/i.test(clean(item.text))
+  );
+}
+
+function gmailNotificationManagementIntent(text = "", messages = [], message = {}) {
+  const value = lower(text);
+  const hasMailSubject = /\b(?:gmail|mail|email)\b/.test(value);
+  const hasNotificationSubject = /\b(?:notification|notifications|notify|listener|push|alert|alerts|rule|rules)\b/.test(value);
+  const hasContext = gmailNotificationManagementContext(messages, message);
+  const explicitSubject = (hasMailSubject && hasNotificationSubject) ||
+    /\b(?:do not|don't|dont|no longer|stop)\s+notify\b/.test(value) ||
+    /\bnotify\s+me\s+of\s+(?:those|these|all)?\s*(?:mails?|emails?|gmail)\b/.test(value);
+  const subjectMatches = explicitSubject || hasContext;
+  if (!subjectMatches) return null;
+
+  const deleteAction = /\b(?:delete|remove)\b/.test(value);
+  const disableAction = /\b(?:deactivate|disable|stop|mute|silence|turn\s+off|shut\s+off)\b/.test(value) ||
+    /\b(?:do not|don't|dont|no longer|stop)\s+notify\b/.test(value);
+  if (!deleteAction && !disableAction) return null;
+  return {
+    action: deleteAction ? "delete" : "disable",
+    all: /\b(?:all|every|them all|notifications|rules)\b/.test(value) || hasContext,
+  };
+}
+
+async function runDirectGmailNotificationManagementAction({ intent, thread, message, principal, env, fetchImpl }) {
+  const capabilities = await scopedCapabilitiesForThread(thread, env);
+  if (!capabilityAvailable(capabilities, "gmail")) {
+    return {
+      response: {
+        id: `gmail_notification_unavailable_${message.id}`,
+        model: "orkestr-api-agent-direct",
+        output_text: "Gmail is not connected or enabled for this chat yet.",
+        output: [],
+        usage: {},
+      },
+      text: "Gmail is not connected or enabled for this chat yet.",
+    };
+  }
+  await appendApiAgentCapabilityDecision({
+    threadId: thread.id,
+    messageId: message.id,
+    ownerUserId: threadOwnerUserId(thread, env),
+    action: "api_agent_direct_gmail_notification_management",
+    tool: intent.action === "delete" ? "orkestr_delete_gmail_notification" : "orkestr_update_gmail_notification",
+    capability: "gmail",
+    result: "available",
+    reason: "direct_notification_management_intent",
+  }, env);
+
+  const listed = await runTenantApiAgentTool("orkestr_list_gmail_notifications", {}, { principal, thread, fetchImpl }, env);
+  const notifications = (Array.isArray(listed.notifications) ? listed.notifications : [])
+    .filter((notification) => clean(notification.target) === clean(thread.id));
+  if (!notifications.length) {
+    return {
+      response: {
+        id: `gmail_notification_none_${message.id}`,
+        model: "orkestr-api-agent-direct",
+        output_text: "No Gmail notification rules are configured for this chat.",
+        output: [],
+        usage: {},
+      },
+      text: "No Gmail notification rules are configured for this chat.",
+    };
+  }
+  if (!intent.all && notifications.length > 1) {
+    const names = notifications.slice(0, 5).map((notification) => clean(notification.label || notification.id)).join(", ");
+    const text = `I found ${notifications.length} Gmail notification rules for this chat: ${names}. Say which one to ${intent.action}, or say "all".`;
+    return {
+      response: {
+        id: `gmail_notification_selection_${message.id}`,
+        model: "orkestr-api-agent-direct",
+        output_text: text,
+        output: [],
+        usage: {},
+      },
+      text,
+    };
+  }
+
+  const selected = intent.all ? notifications : notifications.slice(0, 1);
+  const changed = [];
+  for (const notification of selected) {
+    if (intent.action === "delete") {
+      const result = await runTenantApiAgentTool("orkestr_delete_gmail_notification", {
+        notificationId: notification.id,
+      }, { principal, thread, fetchImpl }, env);
+      if (result.ok) changed.push(notification);
+    } else {
+      const result = await runTenantApiAgentTool("orkestr_update_gmail_notification", {
+        notificationId: notification.id,
+        enabled: false,
+      }, { principal, thread, fetchImpl }, env);
+      if (result.ok !== false) changed.push(result.notification || notification);
+    }
+  }
+  const verb = intent.action === "delete" ? "deleted" : "disabled";
+  const text = changed.length
+    ? `Gmail notifications ${verb}: ${changed.map((notification) => clean(notification.label || notification.id)).join(", ")}.`
+    : `Gmail notification ${intent.action} failed.`;
+  await appendEvent({
+    type: "gmail_notification_direct_management",
+    threadId: thread.id,
+    messageId: message.id,
+    ownerUserId: threadOwnerUserId(thread, env),
+    action: intent.action,
+    count: changed.length,
+  }, env).catch(() => {});
+  return {
+    response: {
+      id: `gmail_notification_${intent.action}_${message.id}`,
+      model: "orkestr-api-agent-direct",
+      output_text: text,
+      output: [],
+      usage: {},
+    },
+    text,
+  };
+}
+
 async function retryPendingActionConfirmationWithTools({ baseBody, inputItems, thread, message, text, principal, pendingAction, env, fetchImpl }) {
   const retryBody = {
     ...baseBody,
@@ -1946,6 +2075,17 @@ async function runTenantApiAgentResponse({ thread, messages, message, env, fetch
       },
       text,
     };
+  }
+  const gmailNotificationIntent = gmailNotificationManagementIntent(message.text, messages, message);
+  if (gmailNotificationIntent) {
+    return runDirectGmailNotificationManagementAction({
+      intent: gmailNotificationIntent,
+      thread,
+      message,
+      principal,
+      env,
+      fetchImpl,
+    });
   }
   const instructions = [
     await buildTenantApiAgentInstructions(thread, messages, env),

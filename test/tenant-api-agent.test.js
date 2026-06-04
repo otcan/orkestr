@@ -7,7 +7,7 @@ import { recordCreditUsage, creditUsageSummary } from "../packages/core/src/cred
 import { drainAllPendingThreadInputs } from "../packages/core/src/runtime-leases.js";
 import { buildTenantApiAgentInstructions, processApiAgentThreadInput, threadUsesApiAgent } from "../packages/core/src/tenant-api-agent.js";
 import { runTenantApiAgentTool } from "../packages/core/src/tenant-api-agent-tools.js";
-import { listGmailNotificationsForPrincipal } from "../packages/core/src/gmail-notifications.js";
+import { createGmailNotificationForPrincipal, listGmailNotificationsForPrincipal } from "../packages/core/src/gmail-notifications.js";
 import { createTimer, listTimers, markDueTimers } from "../packages/core/src/timers.js";
 import { userPrincipal } from "../packages/core/src/principal.js";
 import { appendThreadMessage, createThread, enqueueThreadInputForPrincipal, getThread, listThreadMessages } from "../packages/core/src/threads.js";
@@ -823,6 +823,74 @@ test("tenant api-agent Gmail notification tools list and delete scoped rules", a
   assert.equal(listed.notifications.length, 1);
   assert.equal(deleted.ok, true);
   assert.deepEqual(after.notifications, []);
+});
+
+test("tenant api-agent directly disables Gmail notification rules from confirmation wording", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-api-agent-gmail-notification-disable-direct-"));
+  const env = await allowSanitizerEnv(home, {
+    ORKESTR_GMAIL_NOTIFICATIONS_ENABLED: "1",
+    ORKESTR_GMAIL_NOTIFICATION_MIN_INTERVAL_MS: "300000",
+  });
+  await upsertUser({ id: "otcan", role: "user", displayName: "Otcan" }, env);
+  const paths = userDataPaths("otcan", env);
+  await fs.mkdir(paths.secrets, { recursive: true });
+  await fs.writeFile(path.join(paths.secrets, "gmail-token.json"), JSON.stringify({
+    accessToken: "user-gmail-notification-disable-access",
+    refreshToken: "user-gmail-notification-disable-refresh",
+    expiresAt: Math.floor(Date.now() / 1000) + 3600,
+  }), "utf8");
+  await createThread({
+    id: "otcantest-gmail-notification-disable-direct",
+    ownerUserId: "otcan",
+    name: "otcantest",
+    runtimeKind: "api-agent",
+    executor: { type: "api-agent", metadata: { runtimeKind: "api-agent" } },
+    binding: { connector: "whatsapp", chatId: "chat-otcan", outboundAccountId: "wa-1" },
+  }, env);
+  const principal = userPrincipal({ id: "otcan", role: "user" });
+  const thread = await getThread("otcantest-gmail-notification-disable-direct", env);
+  await createGmailNotificationForPrincipal({
+    label: "Gmail new mail",
+    query: "is:unread newer_than:1d",
+    interval: "5m",
+    targetType: "thread",
+    target: "",
+    maxItemsPerRun: 1,
+    enabled: true,
+    allowBroadQuery: false,
+  }, principal, env, { thread });
+  await appendThreadMessage(thread.id, {
+    role: "assistant",
+    source: "api-agent",
+    text: "Do you want me to stop all current Gmail notifications for this chat?",
+    state: "completed",
+  }, env);
+  const input = await enqueueThreadInputForPrincipal(thread.id, {
+    text: "All, please deactivate them all",
+    source: "whatsapp_inbound",
+    connector: "whatsapp",
+    chatId: "chat-otcan",
+    accountId: "wa-1",
+  }, principal, env);
+
+  const openAiCalls = [];
+  const result = await processApiAgentThreadInput(thread.id, env, {
+    fetchImpl: async (url, options = {}) => {
+      if (String(url).includes("/responses")) openAiCalls.push(JSON.parse(options.body));
+      return response({ id: "unexpected", output_text: "unexpected", output: [], usage: {} });
+    },
+  });
+  const notifications = await listGmailNotificationsForPrincipal(principal, env);
+  const messages = await listThreadMessages(thread.id, env);
+  const current = messages.find((message) => message.id === input.id);
+  const assistant = messages.find((message) => message.role === "assistant" && message.parentMessageId === input.id);
+
+  assert.equal(result.ok, true);
+  assert.equal(openAiCalls.length, 0);
+  assert.equal(current.state, "completed");
+  assert.equal(notifications.length, 1);
+  assert.equal(notifications[0].enabled, false);
+  assert.match(assistant.text, /Gmail notifications disabled: Gmail new mail/);
 });
 
 test("tenant api-agent prompt treats connector setup as user-owned", async () => {
