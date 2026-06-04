@@ -936,6 +936,13 @@ install_command() {
   release_id="$(sanitize_id "${target_tag:-$deploy_channel-$short_sha}")"
   release_dir="$releases_dir/$release_id"
   previous_release="$(current_release_id)"
+  deployed_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  if [ -f "$release_dir/release-manifest.json" ]; then
+    deployed_at="$(node -e 'try { const fs = require("node:fs"); const manifest = JSON.parse(fs.readFileSync(process.argv[1], "utf8")); process.stdout.write(String(manifest.deployedAt || "")); } catch {}' "$release_dir/release-manifest.json" 2>/dev/null || true)"
+    if [ -z "$deployed_at" ]; then
+      deployed_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    fi
+  fi
   if [ "$previous_release" = "$release_id" ] && [ -d "$release_dir" ]; then
     repair_runtime_ownership
     echo "Orkestr already at $release_id ($target_ref)."
@@ -947,7 +954,6 @@ install_command() {
     git -C "$repo_cache" worktree add --detach "$release_dir" "$target_ref"
     (cd "$release_dir" && bash scripts/install-runtime-deps.sh)
     npm --prefix "$release_dir" run build:runtime
-    deployed_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
     node "$release_dir/scripts/release-manifest.mjs" \
       --cwd "$release_dir" \
       --output "$release_dir/release-manifest.json" \
