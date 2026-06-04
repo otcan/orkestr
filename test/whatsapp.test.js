@@ -1979,6 +1979,51 @@ test("whatsapp delivery mirrors bound thread replies that only carry the binding
   assert.match(calls[0].body.text, /bound chat id but no parent/);
 });
 
+test("whatsapp delivery mirrors imported app-server replies through the bound thread chat", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-import-bound-"));
+  const env = externalBridgeEnv(home);
+  await writeConnectorConfig("whatsapp", { bridgeMode: "external", bridgeUrl: "http://wa.local" }, env);
+  await createThread({
+    id: "thread-import-bound",
+    name: "Imported Bound Reply Thread",
+    binding: {
+      connector: "whatsapp",
+      chatId: "chat-import-bound",
+      responderAccountId: "account-import-bound",
+      mirrorToWhatsApp: true,
+    },
+  }, env);
+  await appendThreadMessage("thread-import-bound", {
+    role: "assistant",
+    source: "codex-app-server-import",
+    phase: "commentary",
+    text: "Imported progress should be mirrored.",
+    state: "completed",
+  }, env);
+  await appendThreadMessage("thread-import-bound", {
+    role: "assistant",
+    source: "codex-app-server-import",
+    phase: "final_answer",
+    text: "Imported final should be mirrored.",
+    state: "completed",
+  }, env);
+
+  const calls = [];
+  const delivery = await deliverWhatsAppReplies(env, async (url, options) => {
+    calls.push({ url, body: JSON.parse(options.body) });
+    return response({ ok: true, ids: [`sent-import-${calls.length}`] });
+  });
+
+  assert.equal(delivery.delivered.length, 2);
+  assert.deepEqual(delivery.delivered.map((item) => item.deliveryType), ["progress", "final"]);
+  assert.deepEqual(calls.map((call) => call.body.to), ["chat-import-bound", "chat-import-bound"]);
+  assert.deepEqual(calls.map((call) => call.body.accountId), ["account-import-bound", "account-import-bound"]);
+  assert.deepEqual(calls.map((call) => stripDebugFooter(call.body.text)), [
+    "Imported progress should be mirrored.",
+    "Imported final should be mirrored.",
+  ]);
+});
+
 test("whatsapp delivery mirrors every commentary update before final replies", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-progress-"));
   const env = externalBridgeEnv(home, { ORKESTR_WHATSAPP_PROGRESS_MIN_INTERVAL_MS: "60000" });
