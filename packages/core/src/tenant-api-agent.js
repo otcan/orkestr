@@ -295,7 +295,7 @@ function fallbackGmailTestingAccessDeniedAnswer(message = {}) {
   return [
     `Gmail sign-in did not complete${account ? ` for ${account}` : ""}.`,
     "This Google OAuth app is still in testing mode, so only Gmail addresses on the approved Google test-user list can register.",
-    "Ask the Orkestr admin to add that address as a Google OAuth test user, then try Gmail sign-in again from this chat.",
+    "Add that Gmail address as a Google OAuth test user first, then try Gmail sign-in again from this chat.",
   ].join(" ");
 }
 
@@ -690,7 +690,7 @@ function formatConnectorAuthTool(result = {}) {
     }
     if (/gmail_account_not_approved_for_testing/i.test(error)) {
       const account = clean(args.account);
-      return `${provider} sign-in cannot start${account ? ` for ${account}` : ""} because this Google OAuth app is still in testing mode and that address is not on the approved test-user list. Ask the Orkestr admin to add it first, then try again.`;
+      return `${provider} sign-in cannot start${account ? ` for ${account}` : ""} because this Google OAuth app is still in testing mode and that address is not on the approved test-user list. Add it as a Google OAuth test user first, then try again.`;
     }
     if (/shopify_shop_required/i.test(error)) return "Shopify sign-in needs a shop name first.";
     return `${provider} sign-in could not be started: ${error || "tool_failed"}.`;
@@ -1216,7 +1216,7 @@ function userSafeApiAgentError(error) {
   if (lowered.includes("timer")) return "Timers are not available for this chat right now. Please try again in a moment.";
   if (lowered.includes("gmail_oauth_config_required")) return "Gmail sign-in is not available on this Orkestr installation yet because the Gmail app credentials are not configured.";
   if (lowered.includes("gmail_account_required_for_tester_check")) return "Which Gmail address do you want to connect? This Orkestr Gmail app is in Google testing mode, so I need the exact address before sending a sign-in link.";
-  if (lowered.includes("gmail_account_not_approved_for_testing")) return "Gmail sign-in cannot start for that address because this Google OAuth app is still in testing mode and the address is not on the approved test-user list. Ask the Orkestr admin to add it first, then try again.";
+  if (lowered.includes("gmail_account_not_approved_for_testing")) return "Gmail sign-in cannot start for that address because this Google OAuth app is still in testing mode and the address is not on the approved test-user list. Add it as a Google OAuth test user first, then try again.";
   if (lowered.includes("gmail")) return "Gmail is not connected or enabled for this chat yet. Ask me to connect Gmail and I will send a Google sign-in link.";
   if (lowered.includes("outlook")) return "Outlook is not connected or enabled for this chat yet. Ask me to connect Outlook and I will send Microsoft sign-in instructions.";
   if (lowered.includes("linkedin") || lowered.includes("desktop")) return "The managed desktop is not connected or enabled for this chat yet. Ask the Orkestr admin to enable the desktop for this user, then resend.";

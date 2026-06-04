@@ -978,6 +978,7 @@ test("tenant api-agent explains Google tester approval failures instead of sayin
   assert.notEqual(assistant.text.trim(), "Done.");
   assert.match(assistant.text, /Gmail sign-in did not complete for oguzcan\.unver\.us@gmail\.com/i);
   assert.match(assistant.text, /approved Google test-user list|Google OAuth test user/i);
+  assert.doesNotMatch(assistant.text, /Ask me to connect Gmail|You can connect Gmail/i);
 });
 
 test("tenant api-agent lets OpenAI explain missing Gmail app config without admin-note language", async () => {
