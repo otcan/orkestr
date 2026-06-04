@@ -1629,7 +1629,7 @@ async function deliverWhatsAppRepliesOnce(env = process.env, fetchImpl = fetch) 
           skipped.push({ agentId, threadId, messageId: message.id, reason: "mirroring_disabled" });
           continue;
         }
-        const chatId = pickString(message.chatId, parent?.chatId);
+        const chatId = pickString(message.chatId, parent?.chatId, thread?.binding?.chatId);
         const accountId = kind === "thread"
           ? pickString(thread?.binding?.responderAccountId, thread?.binding?.outboundAccountId, message.accountId, parent?.accountId)
           : pickString(message.accountId, parent?.accountId);
@@ -1709,7 +1709,7 @@ async function deliverWhatsAppRepliesOnce(env = process.env, fetchImpl = fetch) 
         continue;
       }
 
-      const chatId = pickString(message.chatId, parent?.chatId);
+      const chatId = pickString(message.chatId, parent?.chatId, thread?.binding?.chatId);
       const preparedOutbound = await prepareWhatsAppTableAttachments(pickString(message.text), {
         env,
         messageId: message.id,
