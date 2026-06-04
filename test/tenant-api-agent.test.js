@@ -2049,9 +2049,9 @@ test("tenant api-agent uses Gmail prompt-push message id for follow-up actions",
         return response({
           id: "resp_gmail_push_followup_2",
           model: "gpt-5-mini",
-          output_text: "This looks like a one-off Lime receipt, not proof of a recurring subscription. I found no cancellation link in the receipt body, but I can extract the transaction details or draft a support message if you want to dispute it.",
+          output_text: "Done.",
           output: [],
-          usage: { input_tokens: 520, output_tokens: 38 },
+          usage: { input_tokens: 520, output_tokens: 2 },
         });
       }
       if (parsed.hostname === "gmail.googleapis.com") {
@@ -2086,7 +2086,10 @@ test("tenant api-agent uses Gmail prompt-push message id for follow-up actions",
   assert.equal(result.ok, true);
   assert.equal(openAiCalls.length, 2);
   assert.deepEqual(gmailCalls, ["/gmail/v1/users/me/messages/paypal-msg-1"]);
-  assert.match(assistant.text, /one-off Lime receipt/i);
+  assert.match(assistant.text, /I read the Gmail message/i);
+  assert.match(assistant.text, /single Lime ride receipt/i);
+  assert.match(assistant.text, /I did not cancel, send, delete, archive, or modify anything/i);
+  assert.doesNotMatch(assistant.text, /next step is to read the full email/i);
   assert.doesNotMatch(assistant.text, /Tell me what you want|workspace execution|\/codex/i);
 });
 

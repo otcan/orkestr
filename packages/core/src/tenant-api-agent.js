@@ -1164,6 +1164,33 @@ function gmailReadToolResultNeedsNarrativeRepair(toolResults = [], message = {},
   return hasReadMessage && (Boolean(gmailContext) || userMessageNeedsSubstantiveAnswer(message.text));
 }
 
+function firstEmailAddress(text = "") {
+  return clean(clean(text).match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i)?.[0] || "");
+}
+
+function fallbackGmailReadNarrativeAnswer(toolResults = [], message = {}, gmailContext = null) {
+  const readResult = (Array.isArray(toolResults) ? toolResults : []).find((result) =>
+    ["orkestr_read_gmail_message", "orkestr_read_latest_gmail_message"].includes(result.name) &&
+    result.output?.ok !== false &&
+    result.output?.message
+  );
+  const gmail = readResult?.output?.message;
+  if (!gmail) return fallbackGmailContextAnswer(message, gmailContext);
+  const body = compactField(gmail.text || gmail.snippet, 900);
+  const supportEmail = firstEmailAddress(body);
+  return [
+    `I read the Gmail message: ${compactField(gmail.subject || gmailContext?.subject || "(no subject)", 220)}.`,
+    clean(gmail.from || gmailContext?.from) ? `From: ${clean(gmail.from || gmailContext?.from)}` : "",
+    body ? `What it says: ${body}` : "",
+    "I did not cancel, send, delete, archive, or modify anything.",
+    [
+      "For your request, this email gives the message content and transaction/support context.",
+      supportEmail ? `The support contact shown is ${supportEmail}.` : "",
+      "I can draft a support/cancellation/dispute message from these details, or search Gmail for a separate subscription or billing-agreement email.",
+    ].filter(Boolean).join(" "),
+  ].filter(Boolean).join("\n\n");
+}
+
 function requestedNumberedItemCount(text = "") {
   const value = clean(text);
   const topMatch = value.match(/\btop\s+(\d{1,2})\b/i);
@@ -1818,17 +1845,24 @@ async function runTenantApiAgentToolResultResponse({
     fetchImpl,
   });
   const repairedText = responseText(repaired.response) || repaired.text;
-  if (fallback && genericToolFallbackText(repairedText)) return { response: repaired.response, text: fallback };
+  if (fallback && genericToolFallbackText(repairedText)) {
+    return {
+      response: repaired.response,
+      text: repairGmailReadNarrative ? fallbackGmailReadNarrativeAnswer(toolResults, message, gmailContext) : fallback,
+    };
+  }
   return {
     response: repaired.response,
     text: tenantApiAgentTextNeedsRepair(repairedText, message, { pendingActionConfirmation: Boolean(pendingAction), gmailContext, env })
-      ? fallbackTenantApiAgentRepairAnswer(message, {
-        pendingActionConfirmation: Boolean(pendingAction),
-        originalText: text,
-        repairedText,
-        gmailContext,
-        env,
-      })
+      ? repairGmailReadNarrative
+        ? fallbackGmailReadNarrativeAnswer(toolResults, message, gmailContext)
+        : fallbackTenantApiAgentRepairAnswer(message, {
+          pendingActionConfirmation: Boolean(pendingAction),
+          originalText: text,
+          repairedText,
+          gmailContext,
+          env,
+        })
       : repairedText,
   };
 }
