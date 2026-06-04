@@ -581,6 +581,100 @@ test("tenant api-agent explains missing Gmail capability without a generic safet
   assert.doesNotMatch(assistant.text, /safely handle|private connector|account identity/i);
 });
 
+test("tenant api-agent does not report Gmail push automation as disconnected Gmail", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-api-agent-gmail-push-limit-"));
+  const script = path.join(home, "deny-api-agent-gmail-push.mjs");
+  await fs.writeFile(
+    script,
+    [
+      "let input = '';",
+      "process.stdin.setEncoding('utf8');",
+      "process.stdin.on('data', (chunk) => { input += chunk; });",
+      "process.stdin.on('end', () => {",
+      "  const payload = JSON.parse(input);",
+      "  const deny = payload.action === 'api-agent.input';",
+      "  console.log(JSON.stringify({ allow: !deny, reason: deny ? 'Request is to setup push notification on Gmail messages but cross-tenant or cross-resource action not authorized' : 'allowed', model: 'test-llm' }));",
+      "});",
+      "",
+    ].join("\n"),
+    "utf8",
+  );
+  const env = {
+    ORKESTR_HOME: home,
+    OPENAI_API_KEY: "sk-test",
+    ORKESTR_LLM_SANITIZER_COMMAND_JSON: JSON.stringify([process.execPath, script]),
+  };
+  await createThread({
+    id: "otcantest-gmail-push-limit",
+    ownerUserId: "otcan",
+    name: "otcantest",
+    runtimeKind: "api-agent",
+    executor: { type: "api-agent", metadata: { runtimeKind: "api-agent" } },
+    binding: { connector: "whatsapp", chatId: "chat-otcan", outboundAccountId: "wa-1" },
+  }, env);
+  await enqueueThreadInputForPrincipal("otcantest-gmail-push-limit", {
+    text: "Can you setup a push notification on every Gmail message received - send me the mail subject here?",
+    source: "whatsapp_inbound",
+    connector: "whatsapp",
+    chatId: "chat-otcan",
+    accountId: "wa-1",
+  }, userPrincipal({ id: "otcan", role: "user" }), env);
+
+  let modelCalls = 0;
+  const result = await processApiAgentThreadInput("otcantest-gmail-push-limit", env, {
+    fetchImpl: async () => {
+      modelCalls += 1;
+      return response({ id: "resp_should_not_run", model: "gpt-5-mini", output_text: "Done.", output: [], usage: {} });
+    },
+  });
+  const messages = await listThreadMessages("otcantest-gmail-push-limit", env);
+  const user = messages.find((message) => message.role === "user");
+  const assistant = messages.find((message) => message.role === "assistant");
+
+  assert.equal(result.ok, true);
+  assert.equal(modelCalls, 0);
+  assert.equal(user.state, "completed");
+  assert.match(assistant.text, /Gmail push notifications|every-minute polling/i);
+  assert.match(assistant.text, /did not create a background Gmail notification rule/i);
+  assert.doesNotMatch(assistant.text, /Gmail is not connected|Ask me to connect Gmail|I can help in this chat/i);
+});
+
+test("tenant api-agent answers Gmail every-minute polling requests without generic fallback", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-api-agent-gmail-poll-limit-"));
+  const env = await allowSanitizerEnv(home);
+  await createThread({
+    id: "otcantest-gmail-poll-limit",
+    ownerUserId: "otcan",
+    name: "otcantest",
+    runtimeKind: "api-agent",
+    executor: { type: "api-agent", metadata: { runtimeKind: "api-agent" } },
+    binding: { connector: "whatsapp", chatId: "chat-otcan", outboundAccountId: "wa-1" },
+  }, env);
+  await enqueueThreadInputForPrincipal("otcantest-gmail-poll-limit", {
+    text: "Check every minute and push here if new mail?",
+    source: "whatsapp_inbound",
+    connector: "whatsapp",
+    chatId: "chat-otcan",
+    accountId: "wa-1",
+  }, userPrincipal({ id: "otcan", role: "user" }), env);
+
+  let modelCalls = 0;
+  const result = await processApiAgentThreadInput("otcantest-gmail-poll-limit", env, {
+    fetchImpl: async () => {
+      modelCalls += 1;
+      return response({ id: "resp_should_not_run", model: "gpt-5-mini", output_text: "I can help in this chat.", output: [], usage: {} });
+    },
+  });
+  const messages = await listThreadMessages("otcantest-gmail-poll-limit", env);
+  const assistant = messages.find((message) => message.role === "assistant");
+
+  assert.equal(result.ok, true);
+  assert.equal(modelCalls, 0);
+  assert.match(assistant.text, /Gmail push notifications|every-minute polling/i);
+  assert.match(assistant.text, /read or search Gmail on demand/i);
+  assert.doesNotMatch(assistant.text, /I can help in this chat|Done\.|Ask me to connect Gmail/i);
+});
+
 test("tenant api-agent prompt treats connector setup as user-owned", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-api-agent-setup-prompt-"));
   const env = await allowSanitizerEnv(home);

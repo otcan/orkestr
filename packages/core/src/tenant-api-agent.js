@@ -314,6 +314,17 @@ function gmailAddressRequiredForTestingAnswer() {
   return "Which Gmail address do you want to connect? This Orkestr Gmail app is in Google testing mode, so I need the exact address before sending a sign-in link.";
 }
 
+function gmailNotificationAutomationIntent(text = "") {
+  const value = lower(text);
+  const mail = /\b(?:gmail|mail|email|inbox)\b/.test(value);
+  const automation = /\b(?:push|notify|notification|alert|poll|recurr|every\s+\d+|every\s+minute|check\s+every|new\s+(?:mail|email|message)|incoming|received)\b/.test(value);
+  return mail && automation;
+}
+
+function gmailNotificationAutomationUnavailableAnswer() {
+  return "Gmail push notifications or every-minute polling are not wired into this chat yet. I did not create a background Gmail notification rule. I can still read or search Gmail on demand from this chat.";
+}
+
 function fallbackGmailTestingAccessDeniedAnswer(message = {}) {
   const account = emailFromText(message.text);
   return [
@@ -1241,6 +1252,7 @@ function userSafeApiAgentError(error) {
   if (lowered.includes("gmail_oauth_config_required")) return "Gmail sign-in is not available on this Orkestr installation yet because the Gmail app credentials are not configured.";
   if (lowered.includes("gmail_account_required_for_tester_check")) return gmailAddressRequiredForTestingAnswer();
   if (lowered.includes("gmail_account_not_approved_for_testing")) return "Gmail sign-in cannot start for that address because this Google OAuth app is still in testing mode and the address is not on the approved test-user list. Add it as a Google OAuth test user first, then try again.";
+  if (lowered.includes("connector_prompt_push") || (lowered.includes("gmail") && /\b(?:push|notification|notify|poll|every|background)\b/.test(lowered))) return gmailNotificationAutomationUnavailableAnswer();
   if (lowered.includes("gmail")) return "Gmail is not connected or enabled for this chat yet. Ask me to connect Gmail and I will send a Google sign-in link.";
   if (lowered.includes("outlook")) return "Outlook is not connected or enabled for this chat yet. Ask me to connect Outlook and I will send Microsoft sign-in instructions.";
   if (lowered.includes("linkedin") || lowered.includes("desktop")) return "The managed desktop is not connected or enabled for this chat yet. Ask the Orkestr admin to enable the desktop for this user, then resend.";
@@ -1895,6 +1907,34 @@ async function processNextApiAgentMessage(thread, env = process.env, options = {
       result: capabilityAvailable(capabilities, requestedCapability) ? "available" : "unavailable",
       reason: capabilityAvailable(capabilities, requestedCapability) ? "capability_true" : "capability_false",
     }, env);
+  }
+  if (gmailNotificationAutomationIntent(message.text)) {
+    await updateThreadMessage(thread.id, message.id, {
+      state: "running",
+      deliveryState: "api_agent_running",
+      observedVia: "api_agent_direct",
+      deliveredAt: nowIso(),
+    }, env);
+    await updateThread(thread.id, { state: "working" }, env).catch(() => {});
+    await appendTurnLifecycleEvent("started", {
+      threadId: thread.id,
+      messageId: message.id,
+      runtimeKind: API_AGENT_RUNTIME_KIND,
+      state: "running",
+      source: "api-agent",
+      reason: "gmail_notification_automation_unavailable",
+    }, env).catch(() => {});
+    return completeApiAgentMessage(thread, message, gmailNotificationAutomationUnavailableAnswer(), env, {
+      observedVia: "api_agent_direct",
+      response: {
+        id: `gmail_notification_automation_unavailable_${message.id}`,
+        model: "orkestr-api-agent-direct",
+        output_text: gmailNotificationAutomationUnavailableAnswer(),
+        output: [],
+        usage: {},
+      },
+      event: { directReason: "gmail_notification_automation_unavailable" },
+    });
   }
   if (!isAdminPrincipal(principal)) {
     await assertSanitizedAction({
