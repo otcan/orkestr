@@ -3843,17 +3843,17 @@ test("whatsapp delivery reports waking queue notices", async () => {
 
   assert.equal(delivery.delivered.length, 1);
   assert.equal(delivery.delivered[0].deliveryType, "queue_notice");
-  assert.match(stripDebugFooter(calls[0].body.text), /^Waiting for the legacy Codex terminal and queued your message: "wake test"\./);
+  assert.match(stripDebugFooter(calls[0].body.text), /^Waking this Orkestr thread and queued your message: "wake test"\./);
   assertDebugFooter(calls[0].body.text, { messageType: "update" });
 });
 
-test("whatsapp queue notices do not treat app-server threads as missing tmux sessions", () => {
+test("whatsapp queue notices use app-server runtime states", () => {
   assert.equal(initialQueueDeliveryState({
     state: "ready",
     runtimeKind: "codex-app-server",
     sessionName: null,
     promptReady: true,
-  }, { text: "send normally" }), "");
+  }, { text: "send normally" }), "waiting_runtime_ready");
   assert.equal(initialQueueDeliveryState({
     state: "working",
     runtimeKind: "codex-app-server",
@@ -3862,7 +3862,7 @@ test("whatsapp queue notices do not treat app-server threads as missing tmux ses
   assert.equal(initialQueueDeliveryState({
     state: "sleeping",
     runtimeKind: "codex-app-server",
-  }, { text: "resume app server" }), "");
+  }, { text: "resume app server" }), "waking");
   assert.equal(initialQueueDeliveryState({
     state: "ready",
     runtimeKind: "codex-tmux",
@@ -3871,35 +3871,47 @@ test("whatsapp queue notices do not treat app-server threads as missing tmux ses
   }, { text: "wake tmux" }), "waiting_runtime_start");
 });
 
-test("whatsapp delivery suppresses app-server active-turn queue notices", async () => {
-  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-app-server-active-queue-silent-"));
+test("whatsapp delivery reports app-server active-turn queue notices", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-app-server-active-queue-notice-"));
   const env = externalBridgeEnv(home);
   await createThread({
-    id: "thread-wa-app-server-active-queue-silent",
-    name: "WA App Server Active Queue Silent Thread",
+    id: "thread-wa-app-server-active-queue-notice",
+    name: "WA App Server Active Queue Notice Thread",
     runtimeKind: "codex-app-server",
   }, env);
   await writeConnectorConfig("whatsapp", {
     bridgeMode: "external",
     bridgeUrl: "http://wa.local",
-    threadRoutes: { "chat-app-server-active-queue-silent": "thread-wa-app-server-active-queue-silent" },
+    threadRoutes: { "chat-app-server-active-queue-notice": "thread-wa-app-server-active-queue-notice" },
   }, env);
   const routed = await routeWhatsAppInbound({
-    eventId: "wa-app-server-active-queue-silent-1",
-    chatId: "chat-app-server-active-queue-silent",
+    eventId: "wa-app-server-active-queue-notice-1",
+    chatId: "chat-app-server-active-queue-notice",
     text: "queue behind app server turn",
   }, env);
-  await updateThreadMessage("thread-wa-app-server-active-queue-silent", routed.message.id, {
+  await updateThreadMessage("thread-wa-app-server-active-queue-notice", routed.message.id, {
     state: "queued",
     deliveryState: "awaiting_active_turn",
   }, env);
 
-  const delivery = await deliverWhatsAppReplies(env, async () => {
-    throw new Error("app-server active-turn queue notice should not be sent");
+  const calls = [];
+  const delivery = await deliverWhatsAppReplies(env, async (url, options) => {
+    calls.push({ url, body: JSON.parse(options.body) });
+    return response({ ok: true, ids: ["sent-app-server-queue-notice"] });
   });
+  const duplicate = await deliverWhatsAppReplies(env, async () => {
+    throw new Error("should not resend app-server active-turn queue notice");
+  });
+  const messages = await listThreadMessages("thread-wa-app-server-active-queue-notice", env);
 
-  assert.equal(delivery.delivered.length, 0);
-  assert.equal(delivery.skipped.some((item) => item.messageId === routed.message.id), false);
+  assert.equal(delivery.delivered.length, 1);
+  assert.equal(delivery.delivered[0].deliveryType, "queue_notice");
+  assert.equal(delivery.delivered[0].sourceMessageId, routed.message.id);
+  assert.equal(duplicate.delivered.length, 0);
+  assert.equal(calls[0].body.to, "chat-app-server-active-queue-notice");
+  assert.match(stripDebugFooter(calls[0].body.text), /^Queued for the next Codex turn: "queue behind app server turn"\./);
+  assertDebugFooter(calls[0].body.text, { messageType: "update" });
+  assert.equal(messages.find((entry) => entry.id === routed.message.id).state, "queued");
 });
 
 test("whatsapp delivery forwards failed routed inputs using inbound event metadata", async () => {
