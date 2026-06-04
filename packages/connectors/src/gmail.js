@@ -1,14 +1,16 @@
 import { randomUUID } from "node:crypto";
 import { appendEvent, readJson, writeJson, writeSecretJson } from "../../storage/src/store.js";
 import { connectorFile, connectorScopePaths, listConnectorScopePaths } from "./connector-storage.js";
+import {
+  googleWorkspaceCapabilitiesForScopes,
+  googleWorkspaceScopesForCapabilities,
+  normalizeGoogleWorkspaceCapabilities,
+} from "./google-workspace-scopes.js";
 import { readParentConnectorRuntimeConfig } from "./parent-connector-apps.js";
 
 const tokenUrl = "https://oauth2.googleapis.com/token";
 const gmailApiBase = "https://gmail.googleapis.com/gmail/v1/users/me";
-const gmailScopes = [
-  "https://www.googleapis.com/auth/gmail.readonly",
-  "https://www.googleapis.com/auth/gmail.modify",
-];
+const defaultGmailCapabilities = ["gmail_read", "gmail_actions"];
 
 function nowSeconds() {
   return Math.floor(Date.now() / 1000);
@@ -21,6 +23,17 @@ function clean(value) {
 function splitList(value = "") {
   if (Array.isArray(value)) return value.map(clean).filter(Boolean);
   return clean(value).split(/[\s,]+/g).map(clean).filter(Boolean);
+}
+
+function uniqueList(values = []) {
+  const seen = new Set();
+  const result = [];
+  for (const value of values.map(clean).filter(Boolean)) {
+    if (seen.has(value)) continue;
+    seen.add(value);
+    result.push(value);
+  }
+  return result;
 }
 
 function normalizeEmail(value = "") {
@@ -91,10 +104,24 @@ async function saveTokenPayload(payload, env, prior = {}, options = {}) {
     throw error;
   }
   const expiresIn = Number(payload.expires_in || 3600);
+  const requestedCapabilities = normalizeGoogleWorkspaceCapabilities(
+    options.capabilities || options.requestedCapabilities || prior.requestedCapabilities || [],
+    [],
+  );
+  const requestedScopes = uniqueList(options.scopes || options.requestedScopes || prior.requestedScopes || []);
+  const grantedScopes = uniqueList(
+    splitList(payload.scope || prior.scope || prior.grantedScopes || requestedScopes.join(" ")),
+  );
+  const capabilities = googleWorkspaceCapabilitiesForScopes(grantedScopes, requestedCapabilities);
   const token = {
     accessToken,
     refreshToken: String(payload.refresh_token || prior.refreshToken || "").trim(),
-    scope: String(payload.scope || prior.scope || ""),
+    scope: grantedScopes.join(" "),
+    grantedScopes,
+    capabilities,
+    requestedCapabilities,
+    requestedScopes,
+    provider: clean(options.provider || prior.provider || "gmail"),
     tokenType: String(payload.token_type || prior.tokenType || "Bearer"),
     expiresAt: nowSeconds() + Math.max(1, expiresIn),
     updatedAt: new Date().toISOString(),
@@ -123,16 +150,23 @@ export async function startGmailOAuth(env = process.env, options = {}) {
   const scope = await connectorScopePaths(env, options);
   const state = randomUUID();
   const account = normalizeEmail(options.account || config.account || "");
+  const capabilities = normalizeGoogleWorkspaceCapabilities(options.capabilities || options.requestedCapabilities, defaultGmailCapabilities);
+  const requestedScopes = uniqueList(options.scopes || options.requestedScopes || googleWorkspaceScopesForCapabilities(capabilities));
+  const provider = clean(options.provider || "gmail");
   assertApprovedTesterAccount(account, config);
   const thread = options.thread && typeof options.thread === "object" ? options.thread : {};
   const binding = thread.binding && typeof thread.binding === "object" ? thread.binding : {};
   await writeJson(connectorFile(scope, "oauth", "gmail-state.json"), {
+    provider,
     state,
+    connectId: clean(options.connectId),
     account,
     userId: scope.userId || "",
     threadId: clean(options.threadId || thread.id),
     chatId: clean(options.chatId || binding.chatId),
     accountId: clean(options.accountId || binding.responderAccountId || binding.outboundAccountId),
+    requestedCapabilities: capabilities,
+    requestedScopes,
     redirectUri,
     createdAt: new Date().toISOString(),
   });
@@ -142,11 +176,11 @@ export async function startGmailOAuth(env = process.env, options = {}) {
   url.searchParams.set("response_type", "code");
   url.searchParams.set("access_type", "offline");
   url.searchParams.set("prompt", "consent");
-  url.searchParams.set("scope", gmailScopes.join(" "));
+  url.searchParams.set("scope", requestedScopes.join(" "));
   url.searchParams.set("state", state);
   if (account) url.searchParams.set("login_hint", account);
-  await appendEvent({ type: "gmail_oauth_started", userId: scope.userId || undefined }, env);
-  return { authorizeUrl: url.toString(), state, redirectUri, account };
+  await appendEvent({ type: `${provider === "google_workspace" ? "google_workspace" : "gmail"}_oauth_started`, userId: scope.userId || undefined }, env);
+  return { authorizeUrl: url.toString(), state, redirectUri, account, provider, capabilities, scopes: requestedScopes };
 }
 
 export async function exchangeGmailCode(code, env = process.env, fetchImpl = fetch, options = {}) {
@@ -199,7 +233,12 @@ export async function refreshGmailAccessToken(env = process.env, fetchImpl = fet
       },
       fetchImpl,
     );
-    const token = await saveTokenPayload(payload, env, prior, options);
+    const token = await saveTokenPayload(payload, env, prior, {
+      ...options,
+      provider: prior.provider || options.provider || "gmail",
+      requestedCapabilities: prior.requestedCapabilities || options.requestedCapabilities || options.capabilities || [],
+      requestedScopes: prior.requestedScopes || options.requestedScopes || options.scopes || [],
+    });
     const scope = await connectorScopePaths(env, options);
     await appendEvent({ type: "gmail_oauth_token_refreshed", userId: scope.userId || undefined }, env);
     return token;
@@ -251,16 +290,25 @@ export async function finishGmailOAuth(query, env = process.env, fetchImpl = fet
   const token = await exchangeGmailCode(code, env, fetchImpl, {
     ...scopeOptions,
     redirectUri: savedState.redirectUri || "",
+    provider: savedState.provider || "gmail",
+    connectId: savedState.connectId || "",
+    requestedCapabilities: savedState.requestedCapabilities || [],
+    requestedScopes: savedState.requestedScopes || [],
   });
   return {
     ok: true,
+    provider: savedState.provider || "gmail",
     state,
+    connectId: savedState.connectId || "",
     account: savedState.account || "",
     userId: savedState.userId || "",
     threadId: savedState.threadId || "",
     chatId: savedState.chatId || "",
     accountId: savedState.accountId || "",
     scope: token.scope,
+    grantedScopes: token.grantedScopes || [],
+    requestedCapabilities: savedState.requestedCapabilities || [],
+    capabilities: token.capabilities || [],
     expiresAt: token.expiresAt,
     receivedAt: new Date().toISOString(),
   };

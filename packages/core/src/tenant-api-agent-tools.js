@@ -23,6 +23,10 @@ import {
   runGmailNotificationNowForPrincipal,
 } from "./gmail-notifications.js";
 import { runTenantApiAgentProfileTool, tenantApiAgentProfileToolDefinitions } from "./tenant-api-agent-profile-tools.js";
+import {
+  runTenantApiAgentGoogleWorkspaceTool,
+  tenantApiAgentGoogleWorkspaceToolDefinitions,
+} from "../../connectors/src/google-workspace-api-agent-tools.js";
 import { runTenantApiAgentTimerTool, tenantApiAgentTimerToolDefinitions } from "./tenant-api-agent-timer-tools.js";
 import { whereAmI } from "./whereiam.js";
 import {
@@ -462,7 +466,7 @@ function skillActionNames(skill = {}, capabilities = {}, desktops = null, env = 
   if (id === "whereiam") return ["status"];
   if (id === "files") return capabilities.files === true ? ["list", "read", "write"] : ["status"];
   if (id === "timers") return capabilities.timers === true ? ["list", "create", "delete", "run"] : ["status"];
-  if (id === "gmail") return ["status", "search", "read", "notify", "list_notifications"];
+  if (id === "gmail") return ["status", "search", "read", "notify", "list_notifications", "actions", "draft", "send", "calendar", "drive_file"];
   if (["outlook", "jira", "shopify", "whatsapp"].includes(id)) return ["status"];
   if (clean(skill.requiresDesktop)) {
     if (!desktops) return ["status", "list_actions"];
@@ -923,6 +927,7 @@ export function tenantApiAgentToolDefinitions() {
       strict: true,
     },
     ...tenantApiAgentTimerToolDefinitions(),
+    ...tenantApiAgentGoogleWorkspaceToolDefinitions(),
     {
       type: "function",
       name: "orkestr_start_connector_auth",
@@ -1144,6 +1149,8 @@ export async function runTenantApiAgentTool(name = "", args = {}, context = {}, 
   }
   const timerTool = await runTenantApiAgentTimerTool(tool, args, { principal, thread }, env);
   if (timerTool.handled) return timerTool.result;
+  const googleWorkspaceTool = await runTenantApiAgentGoogleWorkspaceTool(tool, args, { principal, thread, fetchImpl: context.fetchImpl || fetch }, env);
+  if (googleWorkspaceTool.handled) return googleWorkspaceTool.result;
   if (tool === "orkestr_start_connector_auth") {
     return startConnectorAuth(args, principal, env, context.fetchImpl || fetch, context);
   }

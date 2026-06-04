@@ -77,6 +77,10 @@ import {
   whatsappTypingTargetForThread,
 } from "./whatsapp-outbound-mirror.js";
 import { createWhatsAppOutboundMirrorWorker } from "./whatsapp-outbound-worker.js";
+import {
+  createGoogleWorkspaceConnectLink,
+  googleWorkspaceConnectCommand,
+} from "./google-workspace.js";
 
 export { formatWhatsAppOutboundText } from "./whatsapp-formatting.js";
 export { initialQueueDeliveryState } from "./whatsapp-outbound-mirror.js";
@@ -966,6 +970,71 @@ export async function routeWhatsAppInbound(input = {}, env = process.env, fetchI
   };
   let thread = threadId ? (await listThreads(env)).find((item) => item.id === threadId || item.name === threadId || item.bindingName === threadId) : null;
   thread = await ensureApiAgentWhatsAppThread(thread, env);
+  if (threadId && thread && googleWorkspaceConnectCommand(text)) {
+    const message = await appendThreadMessage(thread.id, {
+      ...messageInput,
+      role: "user",
+      state: "queued",
+      deliveryState: "pending_delivery",
+      observedVia: "google_workspace_connect_command",
+    }, env);
+    const connect = await createGoogleWorkspaceConnectLink({
+      principal: principalForThread(thread, env),
+      thread,
+      chatId,
+      accountId,
+    }, env);
+    await appendThreadMessage(thread.id, {
+      role: "assistant",
+      source: "google_workspace_connect",
+      phase: "final_answer",
+      text: connect.message,
+      state: "completed",
+      parentMessageId: message.id,
+      connector: "whatsapp",
+      chatId,
+      accountId,
+      googleWorkspaceConnectId: connect.connectId,
+      googleWorkspaceConnectExpiresAt: connect.expiresAt,
+    }, env);
+    const event = {
+      eventId,
+      agentId: null,
+      threadId,
+      messageId: message.id,
+      chatId,
+      from,
+      accountId,
+      attachments: Array.isArray(input.attachments) ? input.attachments : [],
+      receivedAt: pickString(input.timestamp, input.receivedAt) || new Date().toISOString(),
+    };
+    state.inboundEvents = [...(state.inboundEvents || []), event];
+    await writeWhatsAppState(state, env);
+    await appendEvent({
+      type: "whatsapp_google_workspace_connect_link_created",
+      eventId,
+      threadId,
+      messageId: message.id,
+      chatId,
+      userId: resourceOwnerUserId(thread, env),
+    }, env);
+    return {
+      duplicate: false,
+      handledCommand: "google_workspace_connect",
+      googleWorkspaceConnect: true,
+      connectId: connect.connectId,
+      link: connect.link,
+      expiresAt: connect.expiresAt,
+      event,
+      agentId: null,
+      threadId,
+      ownerUserId: resourceOwnerUserId(thread, env),
+      autoProvisioned: threadRoute.autoProvisioned === true,
+      createdThread: threadRoute.createdThread === true,
+      userId: threadRoute.user?.id || null,
+      message,
+    };
+  }
   const remoteRuntime = threadId && thread ? remoteWhatsAppRuntimeBinding(thread, env) : null;
   if (remoteRuntime) {
     let message = threadId

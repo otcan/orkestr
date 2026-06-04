@@ -100,10 +100,10 @@ compatibility is for private host deployments and must be explicitly enabled by
 the operator with `WHATSAPP_BRIDGE_MODE=external` or
 `ORKESTR_WHATSAPP_EXTERNAL_BRIDGE_ENABLED=1`.
 
-### Connect Gmail and Browser Profiles
+### Connect Google Workspace and Browser Profiles
 
-Gmail OAuth is part of the public setup surface. Browser-backed Gmail and
-LinkedIn profiles are managed as local virtual browser profiles.
+Google Workspace OAuth is part of the public setup surface. Browser-backed
+Gmail and LinkedIn profiles are managed as local virtual browser profiles.
 
 For contained or external users, use a public OAuth broker callback instead of
 the private Orkestr UI hostname. Set `ORKESTR_CONNECT_PUBLIC_URL`, for example
@@ -115,6 +115,11 @@ https://connect.example.com/oauth/gmail/callback
 
 The callback endpoint only completes the OAuth exchange. User tokens are still
 stored in that user's scoped Orkestr data directory.
+
+For WhatsApp-bound users, the preferred flow is `/connect google` in chat. That
+creates a one-time link where the user chooses the exact capabilities to grant:
+Gmail read, Gmail actions, Gmail send/drafts, Calendar read, and Drive selected
+files. See [Google Workspace OAuth verification prep](google-workspace-oauth-verification.md).
 
 The rule is simple: account state stays local. Orkestr can coordinate the agent
 with those accounts, but the public OSS repo must not ship tokens, cookies,

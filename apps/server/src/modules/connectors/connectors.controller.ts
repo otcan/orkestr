@@ -10,6 +10,14 @@ import {
   startGmailOAuth as beginGmailOAuth,
 } from "../../../../../packages/connectors/src/gmail.js";
 import {
+  getGoogleWorkspaceConnectRequest,
+  googleWorkspaceConnectHtml,
+  startGoogleWorkspaceOAuth,
+} from "../../../../../packages/connectors/src/google-workspace.js";
+import {
+  googleWorkspaceCapabilityLabels,
+} from "../../../../../packages/connectors/src/google-workspace-scopes.js";
+import {
   pollOutlookDeviceOAuth,
   startOutlookDeviceOAuth,
 } from "../../../../../packages/connectors/src/outlook.js";
@@ -362,6 +370,14 @@ export class ConnectorsController {
       ensureAttachmentsArray(body);
       const routed = await routeWhatsAppInbound(body);
       if (routed.threadId && !routed.duplicate) {
+        if ((routed as any).handledCommand) {
+          await deliverWhatsAppReplies().catch(() => {});
+          return response
+            .status(202)
+            .header("cache-control", "no-store")
+            .type("application/json; charset=utf-8")
+            .send(routed);
+        }
         const thread = await getThread(String(routed.threadId || ""));
         if (threadUsesApiAgent(thread || {})) {
           const payload = await runWithRoutedWhatsAppTyping({ thread, input: body }, async () => {
@@ -502,11 +518,59 @@ export class ConnectorCallbacksController {
   async gmailCallback(@Query() query: Record<string, string>, @Res() response: any) {
     const result = await finishGmailOAuth(new URLSearchParams(query));
     await notifyGmailOAuthCallback(result).catch(() => null);
+    const payload = googleOAuthCallbackPayload(result);
     return response
       .status(200)
       .header("cache-control", "no-store")
       .type("text/html; charset=utf-8")
-      .send(`<!doctype html><title>Gmail connected</title><h1>Gmail callback received</h1><p>State: ${escapeHtml(result.state)}</p>`);
+      .send(googleOAuthHtml(payload));
+  }
+}
+
+@Controller("connect")
+export class GoogleWorkspaceConnectController {
+  @Get("google")
+  async googleConnect(@Query("connect") connect = "", @Res() response: any) {
+    let payload: any = null;
+    try {
+      payload = await getGoogleWorkspaceConnectRequest(connect, process.env);
+    } catch (error) {
+      payload = { ok: false, state: "error", error: String((error as Error)?.message || "google_workspace_connect_failed") };
+    }
+    const ok = payload?.ok === true;
+    return response
+      .status(ok ? 200 : Number((payload as any)?.statusCode || 400) || 400)
+      .header("cache-control", "no-store")
+      .type("text/html; charset=utf-8")
+      .send(googleWorkspaceConnectHtml({
+        connectId: connect,
+        request: payload?.request || {},
+        error: ok ? "" : String(payload?.error || payload?.state || "Google Workspace connection link is not available."),
+      }));
+  }
+
+  @Get("google/start")
+  async googleStart(@Query() query: Record<string, string | string[]>, @Res() response: any) {
+    const capabilities = Array.isArray(query.capability)
+      ? query.capability
+      : String(query.capability || "").split(/[\s,]+/g).filter(Boolean);
+    try {
+      const started = await startGoogleWorkspaceOAuth(process.env, {
+        connectId: String(query.connect || ""),
+        capabilities,
+        account: String(query.account || ""),
+      });
+      return response.redirect(302, started.authorizeUrl);
+    } catch (error) {
+      return response
+        .status(Number((error as any)?.statusCode || 400) || 400)
+        .header("cache-control", "no-store")
+        .type("text/html; charset=utf-8")
+        .send(googleWorkspaceConnectHtml({
+          connectId: String(query.connect || ""),
+          error: String((error as Error)?.message || "Google Workspace OAuth could not start."),
+        }));
+    }
   }
 }
 
@@ -576,14 +640,7 @@ export class GoogleMarketingCallbacksController {
         .status(200)
         .header("cache-control", "no-store")
         .type("text/html; charset=utf-8")
-        .send(googleOAuthHtml({
-          ok: true,
-          state: result.state,
-          title: "Gmail connected",
-          message: "Gmail authorization is complete. You can return to Orkestr.",
-          setupHref: "/setup/gmail",
-          setupLabel: "Open Mail Setup",
-        }));
+        .send(googleOAuthHtml(googleOAuthCallbackPayload(result)));
     } catch (error) {
       const message = String((error as Error)?.message || "");
       if (message && !["gmail_oauth_state_mismatch", "gmail_oauth_code_required"].includes(message)) {
@@ -629,6 +686,37 @@ function clean(value: unknown): string {
   return String(value || "").trim();
 }
 
+function stringArray(value: unknown): string[] {
+  if (Array.isArray(value)) return value.map(clean).filter(Boolean);
+  return clean(value).split(/[\s,]+/g).map(clean).filter(Boolean);
+}
+
+function googleOAuthCallbackPayload(result: Record<string, unknown> = {}) {
+  const provider = clean(result.provider);
+  if (provider === "google_workspace") {
+    const capabilities = stringArray(result.capabilities);
+    const labels = googleWorkspaceCapabilityLabels(capabilities);
+    return {
+      ok: true,
+      state: clean(result.state) || "ok",
+      title: "Google Workspace connected",
+      message: labels.length
+        ? `Google Workspace authorization is complete. Enabled capabilities: ${labels.join(", ")}.`
+        : "Google Workspace authorization is complete, but no optional Workspace capabilities were granted.",
+      setupHref: "/setup/gmail",
+      setupLabel: "Open Connectors",
+    };
+  }
+  return {
+    ok: true,
+    state: clean(result.state) || "ok",
+    title: "Gmail connected",
+    message: "Gmail authorization is complete. You can return to Orkestr.",
+    setupHref: "/setup/gmail",
+    setupLabel: "Open Mail Setup",
+  };
+}
+
 async function notifyGmailOAuthCallback(result: Record<string, unknown> = {}) {
   const threadId = clean(result.threadId);
   if (!threadId) return null;
@@ -638,10 +726,18 @@ async function notifyGmailOAuthCallback(result: Record<string, unknown> = {}) {
   const chatId = clean(result.chatId) || clean(binding.chatId);
   const accountId = clean(result.accountId) || clean(binding.responderAccountId) || clean(binding.outboundAccountId);
   const account = clean(result.account);
-  const text = [
-    `Gmail authorization is complete${account ? ` for ${account}` : ""}.`,
-    "You can now ask me to read, search, or summarize Gmail from this chat.",
-  ].join(" ");
+  const provider = clean(result.provider);
+  const labels = provider === "google_workspace" ? googleWorkspaceCapabilityLabels(stringArray(result.capabilities)) : [];
+  const text = provider === "google_workspace"
+    ? [
+        `Google Workspace authorization is complete${account ? ` for ${account}` : ""}.`,
+        labels.length ? `Enabled: ${labels.join(", ")}.` : "No optional Workspace capabilities were granted.",
+        "You can now ask me to use only the enabled Google capabilities from this chat.",
+      ].join(" ")
+    : [
+        `Gmail authorization is complete${account ? ` for ${account}` : ""}.`,
+        "You can now ask me to read, search, or summarize Gmail from this chat.",
+      ].join(" ");
   const message = await appendThreadMessage(threadId, {
     role: "assistant",
     source: "api-agent",

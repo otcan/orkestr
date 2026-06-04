@@ -19,6 +19,7 @@ import { createAndBindWhatsAppThreadGroup } from "../packages/connectors/src/wha
 import { prepareWhatsAppTableAttachments } from "../packages/connectors/src/whatsapp-table-attachments.js";
 import { mergeWhatsAppOutboundIntents, mergeWhatsAppOutboundMirrorCursors } from "../packages/connectors/src/whatsapp-outbound-intents.js";
 import { writeConnectorConfig } from "../packages/storage/src/config.js";
+import { userDataPaths } from "../packages/storage/src/paths.js";
 import { listEvents } from "../packages/storage/src/store.js";
 
 afterEach(() => {
@@ -4074,6 +4075,48 @@ test("whatsapp inbound routes through enabled thread bindings", async () => {
   assert.equal(messages[0].accountId, "bound-account");
   assert.equal(messages[0].originSurface, "whatsapp");
   assert.equal(messages[0].originTransport, "whatsapp-local-bridge");
+});
+
+test("whatsapp /connect google creates a user-scoped workspace oauth link", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-google-connect-"));
+  const env = externalBridgeEnv(home, {
+    ORKESTR_CONNECT_PUBLIC_URL: "https://connect.example.test",
+  });
+  await createThread({
+    id: "google-connect-thread",
+    name: "Google Connect Thread",
+    ownerUserId: "alice",
+    runtimeKind: "api-agent",
+    executorId: "api-agent",
+    executor: { type: "api-agent", metadata: { runtimeKind: "api-agent" } },
+    binding: {
+      connector: "whatsapp",
+      chatId: "chat-google-connect",
+      displayName: "Google Connect Chat",
+      enabled: true,
+      outboundAccountId: "bound-account",
+    },
+  }, env);
+
+  const routed = await routeWhatsAppInbound({
+    eventId: "wa-google-connect-1",
+    chatId: "chat-google-connect",
+    text: "/connect google",
+  }, env);
+  const messages = await listThreadMessages("google-connect-thread", env);
+  const ledger = JSON.parse(await fs.readFile(path.join(userDataPaths("alice", env).oauth, "google-workspace-connect.json"), "utf8"));
+
+  assert.equal(routed.threadId, "google-connect-thread");
+  assert.equal(routed.googleWorkspaceConnect, true);
+  assert.equal(messages.length, 2);
+  assert.equal(messages[0].observedVia, "google_workspace_connect_command");
+  assert.equal(messages[1].role, "assistant");
+  assert.match(messages[1].text, /https:\/\/connect\.example\.test\/connect\/google\?connect=/);
+  assert.match(messages[1].text, /Gmail read, Gmail actions, Gmail send and drafts, Calendar read, Drive selected files/);
+  assert.match(messages[1].text, /drive\.file only/);
+  assert.equal(ledger.requests[0].connectId, routed.connectId);
+  assert.equal(ledger.requests[0].userId, "alice");
+  assert.equal(ledger.requests[0].threadId, "google-connect-thread");
 });
 
 test("direct whatsapp thread inputs inherit binding delivery metadata", async () => {

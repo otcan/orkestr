@@ -3,6 +3,11 @@ import { randomUUID } from "node:crypto";
 import { appendEvent, readJson, writeJson } from "../../storage/src/store.js";
 import { connectorFile, connectorScopePaths } from "./connector-storage.js";
 import { startGmailOAuth } from "./gmail.js";
+import {
+  googleWorkspaceCapabilityLabels,
+  googleWorkspaceCapabilitiesForScopes,
+  normalizeGoogleWorkspaceCapabilities,
+} from "./google-workspace-scopes.js";
 import { startOutlookDeviceOAuth } from "./outlook.js";
 import {
   parentConnectorAppStatus,
@@ -54,6 +59,20 @@ function errorFile(provider, scope) {
 
 function pendingFile(provider, scope) {
   return connectorFile(scope, "secrets", `${provider}-device-pending.json`);
+}
+
+function publicGmailTokenDetails(token = {}) {
+  const capabilities = Array.isArray(token.capabilities) && token.capabilities.length
+    ? normalizeGoogleWorkspaceCapabilities(token.capabilities, [])
+    : googleWorkspaceCapabilitiesForScopes(token.scope || token.grantedScopes || "", []);
+  const grantedScopes = Array.isArray(token.grantedScopes)
+    ? token.grantedScopes.map(clean).filter(Boolean)
+    : splitScopes(token.scope);
+  return {
+    capabilities,
+    capabilityLabels: googleWorkspaceCapabilityLabels(capabilities),
+    grantedScopes,
+  };
 }
 
 async function fileExists(filePath = "") {
@@ -174,11 +193,12 @@ export async function connectorAuthStatus(providerId = "", env = process.env, op
   }
 
   const tokenPath = tokenFile(provider, scope);
-  const [tokenExists, pending, oauthState, error] = await Promise.all([
+  const [tokenExists, pending, oauthState, error, token] = await Promise.all([
     fileExists(tokenPath),
     readJson(pendingFile(provider, scope), {}),
     readJson(oauthStateFile(provider, scope), {}),
     readJson(errorFile(provider, scope), {}),
+    readJson(tokenPath, {}),
   ]);
   const state = tokenExists
     ? "connected"
@@ -203,6 +223,7 @@ export async function connectorAuthStatus(providerId = "", env = process.env, op
     shop: clean(oauthState.shop),
     parentConnector,
     userConnectionRequired: true,
+    ...(provider === "gmail" && tokenExists ? publicGmailTokenDetails(token) : {}),
     error: clean(error.message),
     updatedAt: clean(error.updatedAt),
     message: tokenExists
@@ -218,7 +239,12 @@ export async function startConnectorAuth(args = {}, principal = {}, env = proces
   if (!oauthProviderIds.has(provider)) throw connectorError("unsupported_connector_auth_provider", 400);
   const account = clean(args.account).toLowerCase();
   if (provider === "gmail") {
-    const oauth = await startGmailOAuth(env, { principal, account, thread: options.thread });
+    const oauth = await startGmailOAuth(env, {
+      principal,
+      account,
+      thread: options.thread,
+      capabilities: args.capabilities || args.requestedCapabilities || undefined,
+    });
     return {
       ok: true,
       provider,
@@ -226,6 +252,8 @@ export async function startConnectorAuth(args = {}, principal = {}, env = proces
       account: oauth.account || account,
       authorizeUrl: oauth.authorizeUrl,
       redirectUri: oauth.redirectUri,
+      capabilities: oauth.capabilities || [],
+      scopes: oauth.scopes || [],
       message: "Open the Gmail sign-in link and finish Google authorization.",
     };
   }

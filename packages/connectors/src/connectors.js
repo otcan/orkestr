@@ -58,26 +58,32 @@ async function firstCommandVersion(commands, args = ["--version"]) {
 
 function oauthConnectorSetupStatus(auth = {}, label = "", summaries = {}) {
   const parent = auth.parentConnector || {};
+  const safeAuthDetails = {
+    parentConnector: parent,
+    ...(Array.isArray(auth.capabilities) ? { capabilities: auth.capabilities } : {}),
+    ...(Array.isArray(auth.capabilityLabels) ? { capabilityLabels: auth.capabilityLabels } : {}),
+    ...(Array.isArray(auth.grantedScopes) ? { grantedScopes: auth.grantedScopes } : {}),
+  };
   if (auth.connected || auth.state === "connected") {
-    return status(auth.provider, label || parent.label || auth.provider, "connected", summaries.connected || `User ${label || auth.provider} OAuth token is stored locally.`, { parentConnector: parent });
+    return status(auth.provider, label || parent.label || auth.provider, "connected", summaries.connected || `User ${label || auth.provider} OAuth token is stored locally.`, safeAuthDetails);
   }
   if (auth.state === "broken" || auth.error) {
     return status(auth.provider, label || parent.label || auth.provider, "broken", summaries.broken || `${label || auth.provider} OAuth failed. Restart sign-in after fixing the parent app config.`, {
-      parentConnector: parent,
+      ...safeAuthDetails,
       error: auth.error || "",
       updatedAt: auth.updatedAt || null,
     });
   }
   if (auth.pending || auth.state === "pending" || auth.state === "authorization_url_ready") {
-    return status(auth.provider, label || parent.label || auth.provider, "partial", summaries.pending || `${label || auth.provider} sign-in is in progress.`, { parentConnector: parent });
+    return status(auth.provider, label || parent.label || auth.provider, "partial", summaries.pending || `${label || auth.provider} sign-in is in progress.`, safeAuthDetails);
   }
   if (parent.parentAppConfigured) {
-    return status(auth.provider, label || parent.label || auth.provider, "partial", summaries.ready || `Parent ${label || auth.provider} app is configured. Connect this user's account from chat.`, { parentConnector: parent });
+    return status(auth.provider, label || parent.label || auth.provider, "partial", summaries.ready || `Parent ${label || auth.provider} app is configured. Connect this user's account from chat.`, safeAuthDetails);
   }
   if (parent.parentAppPartiallyConfigured) {
-    return status(auth.provider, label || parent.label || auth.provider, "partial", summaries.partial || `Parent ${label || auth.provider} app can start sign-in, but is missing callback or token credentials.`, { parentConnector: parent });
+    return status(auth.provider, label || parent.label || auth.provider, "partial", summaries.partial || `Parent ${label || auth.provider} app can start sign-in, but is missing callback or token credentials.`, safeAuthDetails);
   }
-  return status(auth.provider, label || parent.label || auth.provider, "not_connected", summaries.missing || `Configure the parent ${label || auth.provider} app once; users can then connect from chat.`, { parentConnector: parent });
+  return status(auth.provider, label || parent.label || auth.provider, "not_connected", summaries.missing || `Configure the parent ${label || auth.provider} app once; users can then connect from chat.`, safeAuthDetails);
 }
 
 function codexBinaryStatus(env = process.env) {

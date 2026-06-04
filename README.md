@@ -525,7 +525,7 @@ More detail: [docs/architecture.md](docs/architecture.md).
 - WhatsApp chat creation and thread binding
 - Thread-first runtime API for local Codex sessions
 - Virtual browser registry, including a general-purpose virtual desktop
-- Gmail OAuth surface
+- WhatsApp-first Google Workspace OAuth surface for user-scoped Gmail, Calendar, and Drive capabilities
 - LinkedIn and Gmail browser profiles
 - Timers and manual timer runs
 - Host/system doctor for runtime, browser, Codex, Caddy/Tailscale, and writable data paths

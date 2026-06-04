@@ -11,6 +11,7 @@ const knownCoreConnectorImports = new Set([
   "packages/core/src/codex-app-server-client.js",
   "packages/core/src/codex-app-server-common.js",
   "packages/core/src/codex-app-server.js",
+  "packages/core/src/gmail-notifications.js",
   "packages/core/src/runtime-leases.js",
   "packages/core/src/setup.js",
   "packages/core/src/system-doctor.js",

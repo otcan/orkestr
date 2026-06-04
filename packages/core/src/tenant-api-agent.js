@@ -33,7 +33,7 @@ function lower(value) {
 function apiAgentToolCapability(tool = "") {
   const name = lower(tool);
   if (["orkestr_list_timers", "orkestr_create_timer", "orkestr_delete_timer", "orkestr_run_timer"].includes(name)) return "timers";
-  if (name.includes("gmail")) return "gmail";
+  if (name.includes("gmail") || name.includes("google_calendar") || name.includes("google_drive") || name.includes("google_workspace")) return "gmail";
   if (name.includes("outlook")) return "outlook";
   if (name.includes("desktop") || name.includes("browser") || name.includes("linkedin")) return "linkedin";
   if (name.includes("file")) return "files";
@@ -44,8 +44,8 @@ function apiAgentToolCapability(tool = "") {
 
 function messageCapabilityIntent(text = "") {
   const value = lower(text);
+  if (/\b(?:gmail|google workspace|google calendar|calendar events?|google drive|drive file)\b/.test(value)) return "gmail";
   if (/\b(?:timer|remind|reminder|schedule|in\s+\d+\s*(?:m|min|minute|minutes|h|hour|hours|d|day|days))\b/.test(value)) return "timers";
-  if (/\bgmail\b/.test(value)) return "gmail";
   if (/\boutlook\b/.test(value)) return "outlook";
   if (/\b(?:linkedin|desktop|browser)\b/.test(value)) return "linkedin";
   if (/\bwhatsapp\b/.test(value)) return "whatsapp";
@@ -874,6 +874,46 @@ function formatGmailNotificationTool(result = {}) {
   return "";
 }
 
+function formatGoogleWorkspaceTool(result = {}) {
+  const output = result.output || {};
+  const error = clean(output.error);
+  if (output.ok === false || error) {
+    if (/google_workspace_not_connected|gmail_not_connected|capability_not_granted/i.test(error)) {
+      return "Google Workspace is not connected or the requested capability was not granted for this chat yet.";
+    }
+    return `Google Workspace tool failed: ${error || "tool_failed"}.`;
+  }
+  if (result.name === "orkestr_modify_gmail_message") {
+    return `Gmail message ${clean(output.messageId || output.message?.id || "updated")} was updated.`;
+  }
+  if (result.name === "orkestr_create_gmail_draft") {
+    return `Gmail draft created${clean(output.draft?.id) ? `: ${clean(output.draft.id)}` : ""}.`;
+  }
+  if (result.name === "orkestr_send_gmail_draft" || result.name === "orkestr_send_gmail_message") {
+    return `Gmail message sent${clean(output.message?.id) ? `: ${clean(output.message.id)}` : ""}.`;
+  }
+  if (result.name === "orkestr_list_google_calendar_events") {
+    const events = Array.isArray(output.events) ? output.events : [];
+    if (!events.length) return "No matching Google Calendar events were found.";
+    return [
+      `Found ${events.length} Google Calendar event${events.length === 1 ? "" : "s"}:`,
+      ...events.slice(0, 10).map((event) => {
+        const start = clean(event.start?.dateTime || event.start?.date);
+        return `- ${clean(event.summary || "(no title)")}${start ? ` (${start})` : ""}${clean(event.location) ? ` at ${clean(event.location)}` : ""}`;
+      }),
+    ].join("\n");
+  }
+  if (result.name === "orkestr_get_google_drive_file") {
+    const file = output.file || {};
+    return [
+      `Google Drive file: ${clean(file.name || file.id || "file")}`,
+      clean(file.mimeType) ? `Type: ${clean(file.mimeType)}` : "",
+      clean(output.content) ? clean(output.content).slice(0, 1200) : "",
+    ].filter(Boolean).join("\n");
+  }
+  return "";
+}
+
 function formatFileTool(result = {}) {
   const output = result.output || {};
   const name = result.name;
@@ -914,6 +954,7 @@ function formatToolResultFallback(toolResults = [], context = {}) {
     else if (result.name === "orkestr_list_skills") formatted = formatListSkillsTool(result);
     else if (["orkestr_search_gmail", "orkestr_read_gmail_message", "orkestr_read_latest_gmail_message"].includes(result.name)) formatted = formatGmailTool(result);
     else if (["orkestr_create_gmail_notification", "orkestr_list_gmail_notifications", "orkestr_delete_gmail_notification", "orkestr_run_gmail_notification_now"].includes(result.name)) formatted = formatGmailNotificationTool(result);
+    else if (["orkestr_modify_gmail_message", "orkestr_create_gmail_draft", "orkestr_send_gmail_draft", "orkestr_send_gmail_message", "orkestr_list_google_calendar_events", "orkestr_get_google_drive_file"].includes(result.name)) formatted = formatGoogleWorkspaceTool(result);
     else if (["orkestr_list_files", "orkestr_read_file", "orkestr_write_file"].includes(result.name)) formatted = formatFileTool(result);
     else if (["orkestr_list_timers", "orkestr_create_timer", "orkestr_delete_timer", "orkestr_run_timer"].includes(result.name)) formatted = formatTimerTool(result);
     else if (result.name === "orkestr_fetch_web_page") formatted = fallbackWebFetchToolAnswer([result.output]);
@@ -1056,6 +1097,8 @@ export function publicTenantCapabilities(capabilities = {}, env = process.env) {
         parentAppConfigured: status.parentAppConfigured === true,
         parentAppPartiallyConfigured: status.parentAppPartiallyConfigured === true,
         userConnectionRequired: status.userConnectionRequired === true,
+        capabilities: Array.isArray(status.capabilities) ? status.capabilities.map(clean).filter(Boolean) : [],
+        capabilityLabels: Array.isArray(status.capabilityLabels) ? status.capabilityLabels.map(clean).filter(Boolean) : [],
       }];
     })),
   };
@@ -1182,13 +1225,14 @@ export async function buildTenantApiAgentInstructions(thread = {}, messages = []
       : "If the user asks how you can help, what you can do, or what skills you have, answer with a short capability summary grounded in the Tenant context and enabled skills. Workspace/code execution is not available in this chat right now; do not mention a slash-command escalation path.",
     "Never answer a normal chat question, introduction, or capability question with only 'Done', 'OK', 'Sure', or another bare acknowledgement.",
     "Use the provided Orkestr tools for tenant-scoped resources. If the user asks whether Gmail, Outlook, Jira, Shopify, or WhatsApp is connected, available, enabled, or accessible, use the connector status tool before answering.",
-    "If the user asks to connect, sign in, log in, set up, disconnect, or reconnect Gmail, Outlook, Jira, or Shopify, use the connector auth/disconnect tools and give the returned sign-in instructions.",
+    "If the user asks to connect, sign in, log in, set up, disconnect, or reconnect Gmail, Outlook, Jira, or Shopify, use the connector auth/disconnect tools and give the returned sign-in instructions. If they ask for Google Workspace with selectable Gmail, Calendar, or Drive permissions from WhatsApp, tell them to send /connect google.",
     "For Gmail sign-in, if the user did not provide the exact Gmail address they want to connect, ask for that address before starting auth. If Orkestr reports that the address is not approved for Google testing, explain that it must be added as a Google OAuth test user first and do not send a sign-in link.",
     "Connector setup is user-owned by default. When a connector is not connected or a matching capability is false, say that it is not connected for this chat yet and that you can help set it up here.",
     "Only say setup is unavailable on this Orkestr installation if a tool or Tenant context explicitly reports missing parent app/platform configuration. Even then, do not offer an admin note or tell the user to contact an admin unless the user explicitly asks how to escalate setup.",
     "If the user asks to use Gmail, Outlook, LinkedIn, files, or a browser desktop and the matching capability is false in the Tenant context JSON, say plainly that it is not connected or enabled for this chat yet. Do not imply that you checked it unless you used a tool.",
     "Do not tell contained users to open, check, or use the Orkestr UI for connector setup. This chat is the user surface; connector setup should happen through the sign-in instructions you provide in chat when parent app credentials exist.",
     "When Gmail capability is true and the user asks to search, list, open, read, inspect, or summarize Gmail, use the scoped Gmail tools directly. The user's request is consent for that same-user Gmail action; do not ask for repeated confirmation unless the target email or search is ambiguous.",
+    "When Gmail capability is true and the Tenant connectorAuth.gmail capabilities include Gmail actions, Gmail send, Calendar read, or Drive selected files, use the matching Google Workspace tools. For sending email, require explicit approval of recipients, subject, and body before sending; drafts may be created when the user asks to draft.",
     "When Gmail capability is true and the user asks to notify, alert, push, monitor, or periodically check new Gmail in this chat, create or manage a Gmail notification rule with the Gmail notification tools. Use the safe default query when the user did not specify a narrower query, and explain if the requested interval was rounded up by policy.",
     webFetch
       ? "When the user asks for current public web page content, public site topics, public links, or a public page summary, use orkestr_fetch_web_page first. Answer only from the returned title, text, links, and counts. If the fetch fails or the returned content is insufficient, say that plainly instead of claiming you checked the page."

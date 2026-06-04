@@ -396,12 +396,12 @@
               @if (mailProvider === "gmail") {
                 <strong>Create a Google OAuth app</strong>
                 <ol>
-                  <li>Open Google Cloud Console, enable Gmail API, and configure the OAuth consent screen.</li>
+                  <li>Open Google Cloud Console, enable Gmail API plus any selected Calendar or Drive APIs, and configure the OAuth consent screen.</li>
                   <li>Create an OAuth client for a web application.</li>
                   <li>Add this authorized redirect URI: <code>{{ gmailRedirectUri }}</code></li>
-                  <li>Paste the client ID and secret here, then start auth.</li>
+                  <li>Paste the client ID and secret here, then start auth or ask a WhatsApp-bound user to send <code>/connect google</code>.</li>
                 </ol>
-                <small>Use your own Google project. Gmail scopes requested: readonly and modify.</small>
+                <small>Use your own Google project. Orkestr requests only the scopes selected by the user; Drive uses selected-file access only.</small>
                 <a class="oauth-link" href="https://console.cloud.google.com/apis/credentials" target="_blank" rel="noreferrer">Open Google credentials</a>
               } @else {
                 <strong>Create a Microsoft app registration</strong>
