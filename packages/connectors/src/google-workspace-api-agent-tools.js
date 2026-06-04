@@ -1,10 +1,13 @@
 import {
+  createGoogleCalendarEvent,
   createGmailDraft,
+  deleteGoogleCalendarEvent,
   getGoogleDriveFile,
   listGoogleCalendarEvents,
   modifyGmailMessage,
   sendGmailDraft,
   sendGmailMessage,
+  updateGoogleCalendarEvent,
 } from "./google-workspace.js";
 
 function clean(value) {
@@ -124,6 +127,69 @@ export function tenantApiAgentGoogleWorkspaceToolDefinitions() {
     },
     {
       type: "function",
+      name: "orkestr_create_google_calendar_event",
+      description: "Create a scoped Google Calendar event after the user explicitly approves the event title, time, and calendar. Requires Calendar actions capability.",
+      parameters: {
+        type: "object",
+        properties: {
+          calendarId: { type: "string", description: "Calendar id, usually primary." },
+          summary: { type: "string", description: "Event title." },
+          description: { type: "string", description: "Event description or empty string." },
+          location: { type: "string", description: "Event location or empty string." },
+          startDateTime: { type: "string", description: "RFC3339 start date-time, or empty when using startDate." },
+          endDateTime: { type: "string", description: "RFC3339 end date-time, or empty when using endDate." },
+          startDate: { type: "string", description: "All-day start date YYYY-MM-DD, or empty when using startDateTime." },
+          endDate: { type: "string", description: "All-day exclusive end date YYYY-MM-DD, or empty when using endDateTime." },
+          timeZone: { type: "string", description: "IANA timezone, or empty string." },
+          sendUpdates: { type: "string", enum: ["", "all", "externalOnly", "none"], description: "Google Calendar guest update behavior." },
+        },
+        required: ["calendarId", "summary", "description", "location", "startDateTime", "endDateTime", "startDate", "endDate", "timeZone", "sendUpdates"],
+        additionalProperties: false,
+      },
+      strict: true,
+    },
+    {
+      type: "function",
+      name: "orkestr_update_google_calendar_event",
+      description: "Update a scoped Google Calendar event after the user explicitly approves the changed fields. Requires Calendar actions capability.",
+      parameters: {
+        type: "object",
+        properties: {
+          calendarId: { type: "string", description: "Calendar id, usually primary." },
+          eventId: { type: "string", description: "Calendar event id." },
+          summary: { type: "string", description: "New event title, or empty to leave unchanged." },
+          description: { type: "string", description: "New event description, or empty to leave unchanged." },
+          location: { type: "string", description: "New event location, or empty to leave unchanged." },
+          startDateTime: { type: "string", description: "New RFC3339 start date-time, or empty." },
+          endDateTime: { type: "string", description: "New RFC3339 end date-time, or empty." },
+          startDate: { type: "string", description: "New all-day start date YYYY-MM-DD, or empty." },
+          endDate: { type: "string", description: "New all-day exclusive end date YYYY-MM-DD, or empty." },
+          timeZone: { type: "string", description: "IANA timezone, or empty string." },
+          sendUpdates: { type: "string", enum: ["", "all", "externalOnly", "none"], description: "Google Calendar guest update behavior." },
+        },
+        required: ["calendarId", "eventId", "summary", "description", "location", "startDateTime", "endDateTime", "startDate", "endDate", "timeZone", "sendUpdates"],
+        additionalProperties: false,
+      },
+      strict: true,
+    },
+    {
+      type: "function",
+      name: "orkestr_delete_google_calendar_event",
+      description: "Delete a scoped Google Calendar event only after the user explicitly approves deletion. Requires Calendar actions capability.",
+      parameters: {
+        type: "object",
+        properties: {
+          calendarId: { type: "string", description: "Calendar id, usually primary." },
+          eventId: { type: "string", description: "Calendar event id." },
+          sendUpdates: { type: "string", enum: ["", "all", "externalOnly", "none"], description: "Google Calendar guest update behavior." },
+        },
+        required: ["calendarId", "eventId", "sendUpdates"],
+        additionalProperties: false,
+      },
+      strict: true,
+    },
+    {
+      type: "function",
       name: "orkestr_get_google_drive_file",
       description: "Read metadata, and optionally text content, for a Drive file selected or created through Orkestr. Requires drive.file capability; do not use broad Drive access.",
       parameters: {
@@ -176,6 +242,18 @@ export async function runTenantApiAgentGoogleWorkspaceTool(name = "", args = {},
       },
     };
   }
+  if (tool === "orkestr_create_google_calendar_event") {
+    const result = await createGoogleCalendarEvent(args, env, fetchImpl, options);
+    return { handled: true, result: { ok: true, provider: "google_calendar", action: "create", calendarId: result.calendarId, event: publicCalendarEvent(result.event) } };
+  }
+  if (tool === "orkestr_update_google_calendar_event") {
+    const result = await updateGoogleCalendarEvent(args, env, fetchImpl, options);
+    return { handled: true, result: { ok: true, provider: "google_calendar", action: "update", calendarId: result.calendarId, eventId: result.eventId, event: publicCalendarEvent(result.event) } };
+  }
+  if (tool === "orkestr_delete_google_calendar_event") {
+    const result = await deleteGoogleCalendarEvent(args, env, fetchImpl, options);
+    return { handled: true, result: { ok: true, provider: "google_calendar", action: "delete", calendarId: result.calendarId, eventId: result.eventId } };
+  }
   if (tool === "orkestr_get_google_drive_file") {
     const result = await getGoogleDriveFile(args, env, fetchImpl, options);
     return {
@@ -190,4 +268,3 @@ export async function runTenantApiAgentGoogleWorkspaceTool(name = "", args = {},
   }
   return { handled: false, result: null };
 }
-
