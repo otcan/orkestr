@@ -319,11 +319,11 @@ async function linkConnectorIdentity(provider = "", account = "", principal = {}
   });
 }
 
-async function startConnectorAuth(args = {}, principal = {}, env = process.env, fetchImpl = fetch) {
+async function startConnectorAuth(args = {}, principal = {}, env = process.env, fetchImpl = fetch, context = {}) {
   const provider = clean(args.provider).toLowerCase();
   const account = clean(args.account).toLowerCase();
+  const oauth = await beginConnectorAuth(args, principal, env, fetchImpl, { thread: context.thread });
   const identities = await linkConnectorIdentity(provider, account, principal, env, args);
-  const oauth = await beginConnectorAuth(args, principal, env, fetchImpl);
   return { ...oauth, identities };
 }
 
@@ -901,7 +901,7 @@ export function tenantApiAgentToolDefinitions() {
         type: "object",
         properties: {
           provider: { type: "string", enum: ["gmail", "outlook", "jira", "shopify"], description: "Connector provider to sign in." },
-          account: { type: "string", description: "Optional email/account hint, or empty string if the user did not provide one." },
+          account: { type: "string", description: "Email/account hint. For Gmail sign-in, ask the user for the exact Gmail address before starting auth if they did not provide one." },
           shop: { type: "string", description: "Shopify shop domain/name for Shopify sign-in, or empty string for other providers." },
         },
         required: ["provider", "account", "shop"],
@@ -1055,7 +1055,7 @@ export async function runTenantApiAgentTool(name = "", args = {}, context = {}, 
   const timerTool = await runTenantApiAgentTimerTool(tool, args, { principal, thread }, env);
   if (timerTool.handled) return timerTool.result;
   if (tool === "orkestr_start_connector_auth") {
-    return startConnectorAuth(args, principal, env, context.fetchImpl || fetch);
+    return startConnectorAuth(args, principal, env, context.fetchImpl || fetch, context);
   }
   if (tool === "orkestr_connector_status") {
     return connectorAuthStatus(args.provider, env, { principal });

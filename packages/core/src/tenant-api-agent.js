@@ -280,6 +280,25 @@ function assistantMentionsUnavailableCodex(text = "", env = process.env) {
   return !codexEscalationAvailable(env) && /(^|\s)\/codex(?:\s|$|[.!?,;:])/i.test(clean(text));
 }
 
+function gmailTestingAccessDeniedMessage(text = "") {
+  const value = lower(text);
+  return value.includes("access_denied") &&
+    (value.includes("google verification process") || value.includes("app is currently being tested") || value.includes("developer-approved testers"));
+}
+
+function emailFromText(text = "") {
+  return clean(clean(text).match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i)?.[0] || "").toLowerCase();
+}
+
+function fallbackGmailTestingAccessDeniedAnswer(message = {}) {
+  const account = emailFromText(message.text);
+  return [
+    `Gmail sign-in did not complete${account ? ` for ${account}` : ""}.`,
+    "This Google OAuth app is still in testing mode, so only Gmail addresses on the approved Google test-user list can register.",
+    "Ask the Orkestr admin to add that address as a Google OAuth test user, then try Gmail sign-in again from this chat.",
+  ].join(" ");
+}
+
 function pendingActionConfirmation(messages = [], message = {}) {
   if (!bareConfirmationText(message.text)) return null;
   const index = messages.findIndex((item) => item.id === message.id);
@@ -309,6 +328,7 @@ function tenantApiAgentTextNeedsRepair(text = "", message = {}, options = {}) {
   if (weakTenantApiAgentText(text) && (
     userMessageNeedsSubstantiveAnswer(message.text) ||
     bareConfirmationText(message.text) ||
+    gmailTestingAccessDeniedMessage(message.text) ||
     options.pendingActionConfirmation === true
   )) return true;
   if (assistantMentionsUnavailableCodex(text, options.env)) return true;
@@ -353,6 +373,7 @@ function fallbackUnconfirmedActionAnswer(env = process.env) {
 
 function fallbackTenantApiAgentRepairAnswer(message = {}, options = {}) {
   const env = options.env || process.env;
+  if (gmailTestingAccessDeniedMessage(message.text)) return fallbackGmailTestingAccessDeniedAnswer(message);
   if (options.pendingActionConfirmation === true) return fallbackPendingActionConfirmationAnswer(env);
   if (assistantPromisesUnconfirmedAction(options.originalText) || assistantPromisesUnconfirmedAction(options.repairedText)) {
     return fallbackUnconfirmedActionAnswer(env);
@@ -663,6 +684,13 @@ function formatConnectorAuthTool(result = {}) {
     const error = clean(output.error);
     if (/config_required|config_missing|parent_config_missing|oauth_config/i.test(error)) {
       return `${provider} sign-in is not available yet because the parent app configuration is missing on this Orkestr installation.`;
+    }
+    if (/gmail_account_required_for_tester_check/i.test(error)) {
+      return "Which Gmail address do you want to connect? This Orkestr Gmail app is in Google testing mode, so I need the exact address before sending a sign-in link.";
+    }
+    if (/gmail_account_not_approved_for_testing/i.test(error)) {
+      const account = clean(args.account);
+      return `${provider} sign-in cannot start${account ? ` for ${account}` : ""} because this Google OAuth app is still in testing mode and that address is not on the approved test-user list. Ask the Orkestr admin to add it first, then try again.`;
     }
     if (/shopify_shop_required/i.test(error)) return "Shopify sign-in needs a shop name first.";
     return `${provider} sign-in could not be started: ${error || "tool_failed"}.`;
@@ -1091,6 +1119,7 @@ export async function buildTenantApiAgentInstructions(thread = {}, messages = []
     "Never answer a normal chat question, introduction, or capability question with only 'Done', 'OK', 'Sure', or another bare acknowledgement.",
     "Use the provided Orkestr tools for tenant-scoped resources. If the user asks whether Gmail, Outlook, Jira, Shopify, or WhatsApp is connected, available, enabled, or accessible, use the connector status tool before answering.",
     "If the user asks to connect, sign in, log in, set up, disconnect, or reconnect Gmail, Outlook, Jira, or Shopify, use the connector auth/disconnect tools and give the returned sign-in instructions.",
+    "For Gmail sign-in, if the user did not provide the exact Gmail address they want to connect, ask for that address before starting auth. If Orkestr reports that the address is not approved for Google testing, explain that it must be added as a Google OAuth test user first and do not send a sign-in link.",
     "Connector setup is user-owned by default. When a connector is not connected or a matching capability is false, say that it is not connected for this chat yet and that you can help set it up here.",
     "Only say setup is unavailable on this Orkestr installation if a tool or Tenant context explicitly reports missing parent app/platform configuration. Even then, do not offer an admin note or tell the user to contact an admin unless the user explicitly asks how to escalate setup.",
     "If the user asks to use Gmail, Outlook, LinkedIn, files, or a browser desktop and the matching capability is false in the Tenant context JSON, say plainly that it is not connected or enabled for this chat yet. Do not imply that you checked it unless you used a tool.",
@@ -1186,6 +1215,8 @@ function userSafeApiAgentError(error) {
   if (lowered.includes("target_instance_unhealthy")) return "This Orkestr instance is temporarily unavailable for this chat. Please resend the message after it comes back online.";
   if (lowered.includes("timer")) return "Timers are not available for this chat right now. Please try again in a moment.";
   if (lowered.includes("gmail_oauth_config_required")) return "Gmail sign-in is not available on this Orkestr installation yet because the Gmail app credentials are not configured.";
+  if (lowered.includes("gmail_account_required_for_tester_check")) return "Which Gmail address do you want to connect? This Orkestr Gmail app is in Google testing mode, so I need the exact address before sending a sign-in link.";
+  if (lowered.includes("gmail_account_not_approved_for_testing")) return "Gmail sign-in cannot start for that address because this Google OAuth app is still in testing mode and the address is not on the approved test-user list. Ask the Orkestr admin to add it first, then try again.";
   if (lowered.includes("gmail")) return "Gmail is not connected or enabled for this chat yet. Ask me to connect Gmail and I will send a Google sign-in link.";
   if (lowered.includes("outlook")) return "Outlook is not connected or enabled for this chat yet. Ask me to connect Outlook and I will send Microsoft sign-in instructions.";
   if (lowered.includes("linkedin") || lowered.includes("desktop")) return "The managed desktop is not connected or enabled for this chat yet. Ask the Orkestr admin to enable the desktop for this user, then resend.";
@@ -1854,7 +1885,7 @@ async function processNextApiAgentMessage(thread, env = process.env, options = {
     env,
     fetchImpl: options.fetchImpl || fetch,
   });
-  const text = normalizeTenantApiAgentText(clean(result.text) || "Done.");
+  const text = normalizeTenantApiAgentText(clean(result.text) || fallbackTenantApiAgentRepairAnswer(message, { env }));
   return completeApiAgentMessage(thread, message, text, env, { response: result.response });
 }
 

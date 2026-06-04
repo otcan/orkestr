@@ -153,6 +153,66 @@ test("gmail callback validates state and exchanges tokens", async () => {
   assert.equal((await readGmailToken(env)).accessToken, "access-callback");
 });
 
+test("gmail oauth remembers the originating thread for callback notifications", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-gmail-callback-thread-"));
+  const env = { ORKESTR_HOME: home };
+  await writeConnectorConfig("gmail", {
+    clientId: "client-id",
+    clientSecret: "client-secret",
+    redirectUri: "http://localhost/callback",
+  }, env);
+  const started = await startGmailOAuth(env, {
+    account: "person@example.com",
+    thread: {
+      id: "thread-1",
+      binding: {
+        chatId: "wa-chat",
+        responderAccountId: "wa-responder",
+      },
+    },
+  });
+
+  const result = await finishGmailOAuth(
+    new URLSearchParams({ code: "callback-code", state: started.state }),
+    env,
+    async () =>
+      jsonResponse({
+        access_token: "access-callback",
+        refresh_token: "refresh-callback",
+        expires_in: 60,
+      }),
+  );
+
+  assert.equal(result.threadId, "thread-1");
+  assert.equal(result.chatId, "wa-chat");
+  assert.equal(result.accountId, "wa-responder");
+  assert.equal(result.account, "person@example.com");
+});
+
+test("gmail oauth testing allowlist requires and validates the requested account", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-gmail-approved-testers-"));
+  const env = {
+    ORKESTR_HOME: home,
+    GMAIL_OAUTH_CLIENT_ID: "client-id",
+    GMAIL_OAUTH_CLIENT_SECRET: "client-secret",
+    GMAIL_OAUTH_REDIRECT_URI: "http://localhost/callback",
+    GMAIL_OAUTH_APPROVED_TESTERS: "approved@example.com",
+  };
+
+  await assert.rejects(
+    () => startGmailOAuth(env),
+    /gmail_account_required_for_tester_check/,
+  );
+  await assert.rejects(
+    () => startGmailOAuth(env, { account: "other@example.com" }),
+    /gmail_account_not_approved_for_testing/,
+  );
+
+  const started = await startGmailOAuth(env, { account: "approved@example.com" });
+  const url = new URL(started.authorizeUrl);
+  assert.equal(url.searchParams.get("login_hint"), "approved@example.com");
+});
+
 test("gmail callback rejects unknown OAuth state", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-gmail-unknown-state-"));
   const env = { ORKESTR_HOME: home };

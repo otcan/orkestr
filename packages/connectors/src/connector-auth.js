@@ -213,12 +213,12 @@ export async function connectorAuthStatus(providerId = "", env = process.env, op
   };
 }
 
-export async function startConnectorAuth(args = {}, principal = {}, env = process.env, fetchImpl = fetch) {
+export async function startConnectorAuth(args = {}, principal = {}, env = process.env, fetchImpl = fetch, options = {}) {
   const provider = normalizeProvider(args.provider);
   if (!oauthProviderIds.has(provider)) throw connectorError("unsupported_connector_auth_provider", 400);
   const account = clean(args.account).toLowerCase();
   if (provider === "gmail") {
-    const oauth = await startGmailOAuth(env, { principal, account });
+    const oauth = await startGmailOAuth(env, { principal, account, thread: options.thread });
     return {
       ok: true,
       provider,

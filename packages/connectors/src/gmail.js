@@ -14,6 +14,47 @@ function nowSeconds() {
   return Math.floor(Date.now() / 1000);
 }
 
+function clean(value) {
+  return String(value || "").trim();
+}
+
+function splitList(value = "") {
+  if (Array.isArray(value)) return value.map(clean).filter(Boolean);
+  return clean(value).split(/[\s,]+/g).map(clean).filter(Boolean);
+}
+
+function normalizeEmail(value = "") {
+  return clean(value).toLowerCase();
+}
+
+function approvedTesterAccounts(config = {}) {
+  return splitList(config.approvedTesters || config.approvedTesterAccounts || config.allowedAccounts)
+    .map(normalizeEmail)
+    .filter(Boolean);
+}
+
+function assertApprovedTesterAccount(account = "", config = {}) {
+  const approved = approvedTesterAccounts(config);
+  if (!approved.length) return;
+  const normalized = normalizeEmail(account);
+  if (!normalized) {
+    const error = new Error("gmail_account_required_for_tester_check");
+    error.statusCode = 400;
+    throw error;
+  }
+  if (approved.includes("*")) return;
+  const allowed = approved.some((item) =>
+    item === normalized ||
+    (item.startsWith("@") && normalized.endsWith(item))
+  );
+  if (!allowed) {
+    const error = new Error("gmail_account_not_approved_for_testing");
+    error.statusCode = 403;
+    error.account = normalized;
+    throw error;
+  }
+}
+
 function requireOAuthConfig(config) {
   const clientId = String(config.clientId || "").trim();
   const clientSecret = String(config.clientSecret || "").trim();
@@ -81,11 +122,17 @@ export async function startGmailOAuth(env = process.env, options = {}) {
   const { clientId, redirectUri } = requireOAuthConfig(config);
   const scope = await connectorScopePaths(env, options);
   const state = randomUUID();
-  const account = String(options.account || config.account || "").trim();
+  const account = normalizeEmail(options.account || config.account || "");
+  assertApprovedTesterAccount(account, config);
+  const thread = options.thread && typeof options.thread === "object" ? options.thread : {};
+  const binding = thread.binding && typeof thread.binding === "object" ? thread.binding : {};
   await writeJson(connectorFile(scope, "oauth", "gmail-state.json"), {
     state,
     account,
     userId: scope.userId || "",
+    threadId: clean(options.threadId || thread.id),
+    chatId: clean(options.chatId || binding.chatId),
+    accountId: clean(options.accountId || binding.responderAccountId || binding.outboundAccountId),
     redirectUri,
     createdAt: new Date().toISOString(),
   });
@@ -210,6 +257,9 @@ export async function finishGmailOAuth(query, env = process.env, fetchImpl = fet
     state,
     account: savedState.account || "",
     userId: savedState.userId || "",
+    threadId: savedState.threadId || "",
+    chatId: savedState.chatId || "",
+    accountId: savedState.accountId || "",
     scope: token.scope,
     expiresAt: token.expiresAt,
     receivedAt: new Date().toISOString(),

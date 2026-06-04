@@ -22,7 +22,7 @@ import {
 import { createAndBindWhatsAppThreadGroup } from "../../../../../packages/connectors/src/whatsapp-thread-groups.js";
 import { loginCodexWithApiKey, startCodexDeviceAuth } from "../../../../../packages/connectors/src/codex.js";
 import { requestThreadInputDelivery } from "../../../../../packages/core/src/runtime-leases.js";
-import { getThread, getThreadForPrincipal } from "../../../../../packages/core/src/threads.js";
+import { appendThreadMessage, getThread, getThreadForPrincipal } from "../../../../../packages/core/src/threads.js";
 import { processApiAgentThreadInput, threadUsesApiAgent } from "../../../../../packages/core/src/tenant-api-agent.js";
 import { requestPrincipal } from "../../../../../packages/core/src/principal.js";
 import { publicRoutingFailurePayload } from "../../../../../packages/core/src/routing-failures.js";
@@ -501,6 +501,7 @@ export class ConnectorCallbacksController {
   @Get("gmail/callback")
   async gmailCallback(@Query() query: Record<string, string>, @Res() response: any) {
     const result = await finishGmailOAuth(new URLSearchParams(query));
+    await notifyGmailOAuthCallback(result).catch(() => null);
     return response
       .status(200)
       .header("cache-control", "no-store")
@@ -570,6 +571,7 @@ export class GoogleMarketingCallbacksController {
   async googleMarketingCallback(@Query() query: Record<string, string>, @Req() request: any, @Res() response: any) {
     try {
       const result = await finishGmailOAuth(queryParamsFromRequest(request, query));
+      await notifyGmailOAuthCallback(result).catch(() => null);
       return response
         .status(200)
         .header("cache-control", "no-store")
@@ -621,6 +623,37 @@ export class GoogleMarketingCallbacksController {
       .type("text/html; charset=utf-8")
       .send(googleMarketingOAuthHtml(payload));
   }
+}
+
+function clean(value: unknown): string {
+  return String(value || "").trim();
+}
+
+async function notifyGmailOAuthCallback(result: Record<string, unknown> = {}) {
+  const threadId = clean(result.threadId);
+  if (!threadId) return null;
+  const thread = await getThread(threadId).catch(() => null);
+  if (!thread) return null;
+  const binding = (thread as any).binding && typeof (thread as any).binding === "object" ? (thread as any).binding : {};
+  const chatId = clean(result.chatId) || clean(binding.chatId);
+  const accountId = clean(result.accountId) || clean(binding.responderAccountId) || clean(binding.outboundAccountId);
+  const account = clean(result.account);
+  const text = [
+    `Gmail authorization is complete${account ? ` for ${account}` : ""}.`,
+    "You can now ask me to read, search, or summarize Gmail from this chat.",
+  ].join(" ");
+  const message = await appendThreadMessage(threadId, {
+    role: "assistant",
+    source: "api-agent",
+    phase: "final_answer",
+    text,
+    state: "completed",
+    connector: chatId ? "whatsapp" : "gmail",
+    chatId,
+    accountId,
+  });
+  await deliverWhatsAppReplies().catch(() => null);
+  return message;
 }
 
 function externalUrlFromRequest(request: any): string {

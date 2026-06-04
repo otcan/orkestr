@@ -872,6 +872,109 @@ test("tenant api-agent lets OpenAI start Gmail auth from a connector follow-up",
   assert.equal(savedState.userId, "otcan");
 });
 
+test("tenant api-agent asks for Gmail address when testing allowlist requires it", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-api-agent-gmail-allowlist-account-"));
+  const env = await allowSanitizerEnv(home, {
+    GMAIL_OAUTH_CLIENT_ID: "gmail-client-env",
+    GMAIL_OAUTH_CLIENT_SECRET: "gmail-secret-env",
+    GMAIL_OAUTH_REDIRECT_URI: "https://example.test/oauth/gmail/callback",
+    GMAIL_OAUTH_APPROVED_TESTERS: "approved@example.com",
+  });
+  await upsertUser({ id: "otcan", role: "user", displayName: "Otcan" }, env);
+  await createThread({
+    id: "otcantest-gmail-allowlist-account",
+    ownerUserId: "otcan",
+    name: "otcantest",
+    runtimeKind: "api-agent",
+    executor: { type: "api-agent", metadata: { runtimeKind: "api-agent" } },
+    binding: { connector: "whatsapp", chatId: "chat-otcan", outboundAccountId: "wa-1" },
+  }, env);
+  await enqueueThreadInputForPrincipal("otcantest-gmail-allowlist-account", {
+    text: "I want to connect a second Gmail",
+    source: "whatsapp_inbound",
+    connector: "whatsapp",
+    chatId: "chat-otcan",
+    accountId: "wa-1",
+  }, userPrincipal({ id: "otcan", role: "user" }), env);
+
+  const calls = [];
+  const result = await processApiAgentThreadInput("otcantest-gmail-allowlist-account", env, {
+    fetchImpl: async (_url, options) => {
+      calls.push(JSON.parse(options.body));
+      if (calls.length === 1) {
+        return response({
+          id: "resp_gmail_allowlist_account_1",
+          model: "gpt-5-mini",
+          output_text: "",
+          output: [{
+            type: "function_call",
+            name: "orkestr_start_connector_auth",
+            call_id: "call_gmail_allowlist_account",
+            arguments: JSON.stringify({ provider: "gmail", account: "", shop: "" }),
+          }],
+          usage: { input_tokens: 180, output_tokens: 12 },
+        });
+      }
+      return response({
+        id: "resp_gmail_allowlist_account_2",
+        model: "gpt-5-mini",
+        output_text: GENERIC_TOOL_FALLBACK_TEXT,
+        output: [],
+        usage: { input_tokens: 220, output_tokens: 8 },
+      });
+    },
+  });
+  const messages = await listThreadMessages("otcantest-gmail-allowlist-account", env);
+  const assistant = messages.filter((message) => message.role === "assistant").at(-1);
+
+  assert.equal(result.ok, true);
+  assert.match(assistant.text, /Which Gmail address do you want to connect/i);
+  assert.doesNotMatch(assistant.text, /accounts\.google\.com|Done\./i);
+});
+
+test("tenant api-agent explains Google tester approval failures instead of saying Done", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-api-agent-gmail-access-denied-"));
+  const env = await allowSanitizerEnv(home);
+  await upsertUser({ id: "otcan", role: "user", displayName: "Otcan" }, env);
+  await createThread({
+    id: "otcantest-gmail-access-denied",
+    ownerUserId: "otcan",
+    name: "otcantest",
+    runtimeKind: "api-agent",
+    executor: { type: "api-agent", metadata: { runtimeKind: "api-agent" } },
+    binding: { connector: "whatsapp", chatId: "chat-otcan", outboundAccountId: "wa-1" },
+  }, env);
+  await enqueueThreadInputForPrincipal("otcantest-gmail-access-denied", {
+    text: [
+      "Access blocked: orkestr.de has not completed the Google verification process",
+      "oguzcan.unver.us@gmail.com",
+      "The app is currently being tested, and can only be accessed by developer-approved testers.",
+      "Error 403: access_denied",
+    ].join("\n"),
+    source: "whatsapp_inbound",
+    connector: "whatsapp",
+    chatId: "chat-otcan",
+    accountId: "wa-1",
+  }, userPrincipal({ id: "otcan", role: "user" }), env);
+
+  const result = await processApiAgentThreadInput("otcantest-gmail-access-denied", env, {
+    fetchImpl: async () => response({
+      id: "resp_gmail_access_denied",
+      model: "gpt-5-mini",
+      output_text: "Done.",
+      output: [],
+      usage: { input_tokens: 180, output_tokens: 4 },
+    }),
+  });
+  const messages = await listThreadMessages("otcantest-gmail-access-denied", env);
+  const assistant = messages.filter((message) => message.role === "assistant").at(-1);
+
+  assert.equal(result.ok, true);
+  assert.notEqual(assistant.text.trim(), "Done.");
+  assert.match(assistant.text, /Gmail sign-in did not complete for oguzcan\.unver\.us@gmail\.com/i);
+  assert.match(assistant.text, /approved Google test-user list|Google OAuth test user/i);
+});
+
 test("tenant api-agent lets OpenAI explain missing Gmail app config without admin-note language", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-api-agent-gmail-followup-config-"));
   const env = await allowSanitizerEnv(home);

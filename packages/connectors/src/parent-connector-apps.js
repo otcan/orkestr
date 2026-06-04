@@ -44,6 +44,12 @@ const providerDefinitions = {
       clientSecret: ["GMAIL_OAUTH_CLIENT_SECRET", "GOOGLE_OAUTH_CLIENT_SECRET"],
       redirectUri: ["GMAIL_OAUTH_REDIRECT_URI", "GOOGLE_OAUTH_REDIRECT_URI"],
       account: ["GMAIL_OAUTH_ACCOUNT", "GOOGLE_OAUTH_ACCOUNT"],
+      approvedTesters: [
+        "GMAIL_OAUTH_APPROVED_TESTERS",
+        "GOOGLE_OAUTH_APPROVED_TESTERS",
+        "GMAIL_OAUTH_ALLOWED_ACCOUNTS",
+        "GOOGLE_OAUTH_ALLOWED_ACCOUNTS",
+      ],
     },
     defaultRedirectPath: "/oauth/gmail/callback",
     summary: "Parent Orkestr owns the Google OAuth app; each user stores only their own Gmail token.",
