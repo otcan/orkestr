@@ -2194,7 +2194,7 @@ test("whatsapp delivery mirrors bound thread replies that only carry the binding
   assert.match(calls[0].body.text, /bound chat id but no parent/);
 });
 
-test("whatsapp delivery mirrors imported app-server final replies through the bound thread chat", async () => {
+test("whatsapp delivery mirrors imported app-server updates and final replies through the bound thread chat", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-import-bound-"));
   const env = externalBridgeEnv(home);
   await writeConnectorConfig("whatsapp", { bridgeMode: "external", bridgeUrl: "http://wa.local" }, env);
@@ -2229,14 +2229,17 @@ test("whatsapp delivery mirrors imported app-server final replies through the bo
     return response({ ok: true, ids: [`sent-import-${calls.length}`] });
   });
 
-  assert.equal(delivery.delivered.length, 1);
-  assert.equal(delivery.delivered[0].deliveryType, "final");
-  assert.deepEqual(calls.map((call) => call.body.to), ["chat-import-bound"]);
-  assert.deepEqual(calls.map((call) => call.body.accountId), ["account-import-bound"]);
-  assert.deepEqual(calls.map((call) => stripDebugFooter(call.body.text)), ["Imported final should be mirrored."]);
+  assert.equal(delivery.delivered.length, 2);
+  assert.deepEqual(delivery.delivered.map((item) => item.deliveryType), ["progress", "final"]);
+  assert.deepEqual(calls.map((call) => call.body.to), ["chat-import-bound", "chat-import-bound"]);
+  assert.deepEqual(calls.map((call) => call.body.accountId), ["account-import-bound", "account-import-bound"]);
+  assert.deepEqual(calls.map((call) => stripDebugFooter(call.body.text)), [
+    "Imported progress should be mirrored.",
+    "Imported final should be mirrored.",
+  ]);
 });
 
-test("whatsapp delivery sends one final message when commentary exists by default", async () => {
+test("whatsapp delivery mirrors Codex updates and final messages by default", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-final-only-"));
   const env = externalBridgeEnv(home);
   await createThread({ id: "thread-wa-final-only", name: "WA Final Only Thread" }, env);
@@ -2253,6 +2256,16 @@ test("whatsapp delivery sends one final message when commentary exists by defaul
     phase: "commentary",
     state: "completed",
     text: "I am checking the repo now.",
+    parentMessageId: routed.message.id,
+    connector: "whatsapp",
+    chatId: "chat-final-only",
+  }, env);
+  await appendThreadMessage("thread-wa-final-only", {
+    role: "assistant",
+    source: "codex-rollout",
+    phase: "context_compaction",
+    state: "completed",
+    text: "Codex compacted the conversation context.",
     parentMessageId: routed.message.id,
     connector: "whatsapp",
     chatId: "chat-final-only",
@@ -2281,15 +2294,17 @@ test("whatsapp delivery sends one final message when commentary exists by defaul
     return response({ ok: true, ids: ["sent-final-only"] });
   });
 
-  assert.equal(delivery.delivered.length, 1);
-  assert.equal(delivery.delivered[0].deliveryType, "final");
-  assert.equal(calls.length, 1);
-  assert.equal(stripDebugFooter(calls[0].body.text), finalText);
+  assert.equal(delivery.delivered.length, 3);
+  assert.deepEqual(delivery.delivered.map((item) => item.deliveryType), ["progress", "progress", "final"]);
+  assert.equal(calls.length, 3);
+  assert.equal(stripDebugFooter(calls[0].body.text), "I am checking the repo now.");
+  assert.equal(stripDebugFooter(calls[1].body.text), "Codex compacted the conversation context.");
+  assert.equal(stripDebugFooter(calls[2].body.text), finalText);
 });
 
-test("whatsapp delivery mirrors every commentary update before final replies when opted in", async () => {
+test("whatsapp delivery mirrors every commentary update before final replies by default", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-progress-"));
-  const env = externalBridgeEnv(home, { ORKESTR_WHATSAPP_MIRROR_PROGRESS_UPDATES: "1" });
+  const env = externalBridgeEnv(home);
   await createThread({ id: "thread-wa-progress", name: "WA Progress Thread" }, env);
   await writeConnectorConfig("whatsapp", {
     bridgeMode: "external",

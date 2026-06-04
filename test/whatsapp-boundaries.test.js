@@ -60,21 +60,24 @@ test("WhatsApp debug footer is gated and marks progress as update", () => {
   assert.match(enabled, /switch:\/code/);
 });
 
-test("WhatsApp mirror policy separates final replies from progress updates", () => {
+test("WhatsApp mirror policy forwards Codex final replies and progress updates", () => {
   assert.equal(shouldMirrorWhatsAppReply({ source: "codex-app-server", phase: "final_answer" }), true);
   assert.equal(shouldMirrorWhatsAppReply({ source: "codex-app-server", phase: "commentary" }), false);
-  assert.equal(shouldMirrorWhatsAppProgress({ source: "codex-app-server", phase: "commentary" }), false);
+  assert.equal(shouldMirrorWhatsAppProgress({ source: "codex-app-server", phase: "commentary" }), true);
   assert.equal(
     shouldMirrorWhatsAppProgress(
       { source: "codex-app-server", phase: "commentary" },
-      { ORKESTR_WHATSAPP_MIRROR_PROGRESS_UPDATES: "1" },
+      { ORKESTR_WHATSAPP_MIRROR_PROGRESS_UPDATES: "0" },
     ),
     true,
   );
   assert.equal(shouldMirrorWhatsAppReply({ source: "codex-app-server-import", phase: "final_answer" }), true);
-  assert.equal(shouldMirrorWhatsAppProgress({ source: "codex-app-server-import", phase: "commentary" }), false);
+  assert.equal(shouldMirrorWhatsAppProgress({ source: "codex-app-server-import", phase: "commentary" }), true);
   assert.equal(shouldMirrorWhatsAppProgress({ source: "codex-app-server", phase: "awaiting_approval" }), true);
-  assert.equal(shouldMirrorWhatsAppProgress({ source: "codex-app-server", phase: "context_compaction" }), false);
+  assert.equal(shouldMirrorWhatsAppReply({ source: "codex-app-server", phase: "context_compaction" }), false);
+  assert.equal(shouldMirrorWhatsAppProgress({ source: "codex-app-server", phase: "context_compaction" }), true);
+  assert.equal(shouldMirrorWhatsAppReply({ source: "codex-app-server", phase: "future_codex_phase" }), true);
+  assert.equal(shouldMirrorWhatsAppProgress({ source: "codex-app-server", phase: "future_codex_phase" }), false);
   assert.equal(shouldMirrorWhatsAppReply({ source: "manual", phase: "commentary" }), true);
 });
 
