@@ -175,7 +175,7 @@ export function googleWorkspaceConnectMessage({ link = "", expiresAt = "" } = {}
     "Open this Google Workspace connection link and choose exactly what Orkestr may access:",
     clean(link),
     "",
-    "Available capabilities: Gmail read, Gmail actions, Gmail send and drafts, Calendar read, Drive selected files.",
+    "Available capabilities: Gmail read, Gmail actions, Gmail send and drafts, Calendar read, Calendar actions, Drive selected files.",
     "Drive access uses drive.file only; Orkestr will not request broad Drive access.",
     clean(expiresAt) ? `This one-time link expires at ${clean(expiresAt)}.` : "",
   ].filter((line) => line !== "").join("\n");
@@ -425,6 +425,90 @@ export async function listGoogleCalendarEvents(args = {}, env = process.env, fet
   };
 }
 
+function calendarTimeValue(args = {}, prefix = "start") {
+  const objectValue = args[prefix];
+  if (objectValue && typeof objectValue === "object" && !Array.isArray(objectValue)) {
+    const dateTime = clean(objectValue.dateTime);
+    const date = clean(objectValue.date);
+    const timeZone = clean(objectValue.timeZone);
+    if (dateTime) return { dateTime, ...(timeZone ? { timeZone } : {}) };
+    if (date) return { date, ...(timeZone ? { timeZone } : {}) };
+  }
+  const dateTime = clean(args[`${prefix}DateTime`] || args[`${prefix}Time`]);
+  const date = clean(args[`${prefix}Date`]);
+  const timeZone = clean(args.timeZone);
+  if (dateTime) return { dateTime, ...(timeZone ? { timeZone } : {}) };
+  if (date) return { date, ...(timeZone ? { timeZone } : {}) };
+  return null;
+}
+
+function calendarEventBody(args = {}, { requireTimes = false } = {}) {
+  const body = {};
+  for (const key of ["summary", "description", "location"]) {
+    const value = clean(args[key]);
+    if (value) body[key] = value;
+  }
+  const start = calendarTimeValue(args, "start");
+  const end = calendarTimeValue(args, "end");
+  if (start) body.start = start;
+  if (end) body.end = end;
+  if (requireTimes && (!start || !end)) throw connectorError("google_calendar_event_times_required", 400);
+  if (!Object.keys(body).length) throw connectorError("google_calendar_event_body_required", 400);
+  return body;
+}
+
+function calendarEventUrl(calendarId = "primary", eventId = "") {
+  const base = `${calendarApiBase}/calendars/${encodeURIComponent(clean(calendarId) || "primary")}/events`;
+  return eventId ? `${base}/${encodeURIComponent(eventId)}` : base;
+}
+
+function appendSendUpdates(url, args = {}) {
+  const value = clean(args.sendUpdates);
+  if (!value) return url;
+  const parsed = new URL(url);
+  parsed.searchParams.set("sendUpdates", value);
+  return parsed;
+}
+
+export async function createGoogleCalendarEvent(args = {}, env = process.env, fetchImpl = fetch, options = {}) {
+  const accessToken = await accessTokenWithCapability("calendar_actions", env, fetchImpl, options);
+  const calendarId = clean(args.calendarId) || "primary";
+  const event = await jsonApiRequest(appendSendUpdates(calendarEventUrl(calendarId), args), {
+    method: "POST",
+    body: calendarEventBody(args, { requireTimes: true }),
+    accessToken,
+    fetchImpl,
+  });
+  return { ok: true, provider: "google_calendar", action: "create", calendarId, event };
+}
+
+export async function updateGoogleCalendarEvent(args = {}, env = process.env, fetchImpl = fetch, options = {}) {
+  const eventId = clean(args.eventId || args.id);
+  if (!eventId) throw connectorError("google_calendar_event_id_required", 400);
+  const accessToken = await accessTokenWithCapability("calendar_actions", env, fetchImpl, options);
+  const calendarId = clean(args.calendarId) || "primary";
+  const event = await jsonApiRequest(appendSendUpdates(calendarEventUrl(calendarId, eventId), args), {
+    method: "PATCH",
+    body: calendarEventBody(args),
+    accessToken,
+    fetchImpl,
+  });
+  return { ok: true, provider: "google_calendar", action: "update", calendarId, eventId, event };
+}
+
+export async function deleteGoogleCalendarEvent(args = {}, env = process.env, fetchImpl = fetch, options = {}) {
+  const eventId = clean(args.eventId || args.id);
+  if (!eventId) throw connectorError("google_calendar_event_id_required", 400);
+  const accessToken = await accessTokenWithCapability("calendar_actions", env, fetchImpl, options);
+  const calendarId = clean(args.calendarId) || "primary";
+  await jsonApiRequest(appendSendUpdates(calendarEventUrl(calendarId, eventId), args), {
+    method: "DELETE",
+    accessToken,
+    fetchImpl,
+  });
+  return { ok: true, provider: "google_calendar", action: "delete", calendarId, eventId };
+}
+
 async function driveTextResponse(response) {
   if (typeof response.text === "function") return response.text();
   const buffer = Buffer.from(await response.arrayBuffer());
@@ -456,4 +540,3 @@ export async function getGoogleDriveFile(args = {}, env = process.env, fetchImpl
   const content = (await driveTextResponse(response)).slice(0, Math.max(1000, Math.min(60_000, Number(args.maxChars) || 20_000)));
   return { ok: true, provider: "google_drive", file: metadata, content };
 }
-

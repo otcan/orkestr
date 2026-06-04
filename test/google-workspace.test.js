@@ -4,8 +4,10 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import {
+  createGoogleCalendarEvent,
   createGmailDraft,
   createGoogleWorkspaceConnectLink,
+  deleteGoogleCalendarEvent,
   getGoogleDriveFile,
   getGoogleWorkspaceConnectRequest,
   googleWorkspaceConnectHtml,
@@ -13,6 +15,7 @@ import {
   modifyGmailMessage,
   sendGmailDraft,
   startGoogleWorkspaceOAuth,
+  updateGoogleCalendarEvent,
 } from "../packages/connectors/src/google-workspace.js";
 import {
   googleWorkspaceCapabilitiesForScopes,
@@ -74,14 +77,15 @@ async function storeToken(env, scope, principal = null) {
 }
 
 test("google workspace scope selection maps only requested capabilities", () => {
-  const capabilities = normalizeGoogleWorkspaceCapabilities(["gmail_send", "calendar_read", "drive_file"]);
+  const capabilities = normalizeGoogleWorkspaceCapabilities(["gmail_send", "calendar_read", "calendar_actions", "drive_file"]);
   const scopes = googleWorkspaceScopesForCapabilities(capabilities);
 
-  assert.deepEqual(capabilities, ["gmail_send", "calendar_read", "drive_file"]);
+  assert.deepEqual(capabilities, ["gmail_send", "calendar_read", "calendar_actions", "drive_file"]);
   assert.ok(scopes.includes("openid"));
   assert.ok(scopes.includes("https://www.googleapis.com/auth/gmail.send"));
   assert.ok(scopes.includes("https://www.googleapis.com/auth/gmail.compose"));
   assert.ok(scopes.includes("https://www.googleapis.com/auth/calendar.events.readonly"));
+  assert.ok(scopes.includes("https://www.googleapis.com/auth/calendar.events"));
   assert.ok(scopes.includes("https://www.googleapis.com/auth/drive.file"));
   assert.equal(scopes.includes("https://www.googleapis.com/auth/gmail.modify"), false);
   assert.equal(scopes.includes("https://www.googleapis.com/auth/drive.readonly"), false);
@@ -136,7 +140,7 @@ test("google workspace callback stores only granted partial capabilities", async
   const link = await createGoogleWorkspaceConnectLink({ principal: alice, thread: { id: "thread-1" } }, env);
   const started = await startGoogleWorkspaceOAuth(env, {
     connectId: link.connectId,
-    capabilities: ["gmail_read", "gmail_actions", "gmail_send", "calendar_read", "drive_file"],
+    capabilities: ["gmail_read", "gmail_actions", "gmail_send", "calendar_read", "calendar_actions", "drive_file"],
   });
 
   const result = await finishGmailOAuth(
@@ -152,6 +156,7 @@ test("google workspace callback stores only granted partial capabilities", async
           "https://www.googleapis.com/auth/userinfo.email",
           "https://www.googleapis.com/auth/gmail.readonly",
           "https://www.googleapis.com/auth/calendar.events.readonly",
+          "https://www.googleapis.com/auth/calendar.events",
         ].join(" "),
       }),
   );
@@ -159,9 +164,9 @@ test("google workspace callback stores only granted partial capabilities", async
   const status = await connectorAuthStatus("gmail", env, { principal: alice });
 
   assert.equal(result.provider, "google_workspace");
-  assert.deepEqual(result.capabilities, ["gmail_read", "calendar_read"]);
-  assert.deepEqual(token.capabilities, ["gmail_read", "calendar_read"]);
-  assert.deepEqual(status.capabilities, ["gmail_read", "calendar_read"]);
+  assert.deepEqual(result.capabilities, ["gmail_read", "calendar_read", "calendar_actions"]);
+  assert.deepEqual(token.capabilities, ["gmail_read", "calendar_read", "calendar_actions"]);
+  assert.deepEqual(status.capabilities, ["gmail_read", "calendar_read", "calendar_actions"]);
 });
 
 test("gmail action and draft helpers build scoped Gmail requests", async () => {
@@ -214,6 +219,7 @@ test("calendar and drive helpers build scoped google workspace requests", async 
     env,
     [
       "https://www.googleapis.com/auth/calendar.events.readonly",
+      "https://www.googleapis.com/auth/calendar.events",
       "https://www.googleapis.com/auth/drive.file",
     ].join(" "),
   );
@@ -222,10 +228,27 @@ test("calendar and drive helpers build scoped google workspace requests", async 
   const fetchImpl = async (url, options) => {
     calls.push({ url: new URL(String(url)), options });
     const parsed = new URL(String(url));
-    if (parsed.pathname === "/calendar/v3/calendars/primary/events") {
+    if (parsed.pathname === "/calendar/v3/calendars/primary/events" && (!options.method || options.method === "GET")) {
       assert.equal(parsed.searchParams.get("timeMin"), "2026-06-04T00:00:00Z");
       assert.equal(parsed.searchParams.get("timeMax"), "2026-06-05T00:00:00Z");
       return jsonResponse({ items: [{ id: "event-1", summary: "Planning" }] });
+    }
+    if (parsed.pathname === "/calendar/v3/calendars/primary/events" && options.method === "POST") {
+      const body = JSON.parse(options.body);
+      assert.equal(parsed.searchParams.get("sendUpdates"), "none");
+      assert.equal(body.summary, "Demo");
+      assert.deepEqual(body.start, { dateTime: "2026-06-04T12:00:00Z" });
+      assert.deepEqual(body.end, { dateTime: "2026-06-04T12:30:00Z" });
+      return jsonResponse({ id: "event-2", summary: "Demo" });
+    }
+    if (parsed.pathname === "/calendar/v3/calendars/primary/events/event-2" && options.method === "PATCH") {
+      const body = JSON.parse(options.body);
+      assert.equal(body.summary, "Updated demo");
+      return jsonResponse({ id: "event-2", summary: "Updated demo" });
+    }
+    if (parsed.pathname === "/calendar/v3/calendars/primary/events/event-2" && options.method === "DELETE") {
+      assert.equal(parsed.searchParams.get("sendUpdates"), "none");
+      return jsonResponse({}, true, 204);
     }
     if (parsed.pathname === "/drive/v3/files/file-1" && !parsed.searchParams.get("alt")) {
       assert.equal(parsed.searchParams.get("fields"), "id,name,mimeType,size,modifiedTime,webViewLink");
@@ -243,9 +266,29 @@ test("calendar and drive helpers build scoped google workspace requests", async 
     timeMax: "2026-06-05T00:00:00Z",
     maxResults: 5,
   }, env, fetchImpl);
+  const created = await createGoogleCalendarEvent({
+    calendarId: "primary",
+    summary: "Demo",
+    startDateTime: "2026-06-04T12:00:00Z",
+    endDateTime: "2026-06-04T12:30:00Z",
+    sendUpdates: "none",
+  }, env, fetchImpl);
+  const updated = await updateGoogleCalendarEvent({
+    calendarId: "primary",
+    eventId: "event-2",
+    summary: "Updated demo",
+  }, env, fetchImpl);
+  const deleted = await deleteGoogleCalendarEvent({
+    calendarId: "primary",
+    eventId: "event-2",
+    sendUpdates: "none",
+  }, env, fetchImpl);
   const file = await getGoogleDriveFile({ fileId: "file-1", includeContent: true }, env, fetchImpl);
 
   assert.equal(events.events[0].id, "event-1");
+  assert.equal(created.event.id, "event-2");
+  assert.equal(updated.event.summary, "Updated demo");
+  assert.equal(deleted.eventId, "event-2");
   assert.equal(file.file.name, "Notes.txt");
   assert.equal(file.content, "Drive file contents");
 });
@@ -255,7 +298,7 @@ test("google workspace disclosure html names capabilities and drive.file limit",
   assert.match(html, /Connect Google Workspace/);
   assert.match(html, /Gmail read/);
   assert.match(html, /Calendar read/);
+  assert.match(html, /Calendar actions/);
   assert.match(html, /Drive selected files/);
   assert.match(html, /Drive uses selected-file access only/);
 });
-

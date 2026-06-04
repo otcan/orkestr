@@ -30,6 +30,7 @@ Optional capabilities map to scopes as follows:
 - Gmail send/drafts: `https://www.googleapis.com/auth/gmail.send`,
   `https://www.googleapis.com/auth/gmail.compose`
 - Calendar read: `https://www.googleapis.com/auth/calendar.events.readonly`
+- Calendar actions: `https://www.googleapis.com/auth/calendar.events`
 - Drive selected files: `https://www.googleapis.com/auth/drive.file`
 
 Orkestr must not request broad Drive scopes for this flow. Drive access is
@@ -49,6 +50,8 @@ Use generic demo data only.
 - Demonstrate draft creation or approved send if Gmail send/drafts was
   selected.
 - Demonstrate Calendar event listing if Calendar read was selected.
+- Demonstrate creating, updating, or deleting a test Calendar event if Calendar
+  actions was selected.
 - Demonstrate Drive selected-file metadata or text content access if
   `drive.file` was selected.
 - Show that unselected or ungranted capabilities are unavailable.
@@ -56,4 +59,3 @@ Use generic demo data only.
 Do not include refresh tokens, OAuth client secrets, real private messages,
 private file IDs, phone numbers, session state, local paths, or private hostnames
 in public verification material.
-
