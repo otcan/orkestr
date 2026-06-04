@@ -219,8 +219,44 @@ function responseText(response = {}) {
   return chunks.join("\n\n").trim();
 }
 
-function normalizeTenantApiAgentText(text = "") {
+function tenantApiAgentInternalThoughtParagraph(text = "") {
+  const value = clean(text).replace(/\s+/g, " ");
+  if (!value) return false;
+  if (/^(?:User|The user)\s+(?:wants?|wanted|asked|asks|said|says|requested|previously|has|is|may|might|probably|expects?)\b/i.test(value)) return true;
+  if (/^(?:Now what\?|They\s+(?:might|may|probably)|We\s+(?:should|need|must|did|have|already)|Need to|Maybe|Possibly)\b/i.test(value) &&
+    /\b(?:user|assistant|developer|system|tool calls?|timer tool|prompt|thread|chat|respond|offer|ask|wait|instruction|final|turn|previous)\b/i.test(value)) return true;
+  if (/^(?:The\s+)?(?:developer|system)\s+instructions?\b/i.test(value)) return true;
+  return /^(?:User|The user|We|They|Now|Need|Maybe|Possibly|The)\b/i.test(value) &&
+    /\b(?:developer instructions?|system instructions?|tool calls?|function_call|output_text|assistant turn|latest user message|we should wait|create_timer tool|orkestr_[a-z0-9_]+)\b/i.test(value);
+}
+
+function stripTenantApiAgentInternalThought(text = "") {
   const original = clean(text);
+  if (!original) return "";
+
+  const paragraphs = original.split(/\n\s*\n+/);
+  const keptParagraphs = [];
+  for (const paragraph of paragraphs) {
+    if (tenantApiAgentInternalThoughtParagraph(paragraph)) {
+      return clean(keptParagraphs.join("\n\n"));
+    }
+    keptParagraphs.push(paragraph);
+  }
+
+  const lines = original.split(/\r?\n/);
+  const keptLines = [];
+  for (const line of lines) {
+    if (tenantApiAgentInternalThoughtParagraph(line)) {
+      return clean(keptLines.join("\n"));
+    }
+    keptLines.push(line);
+  }
+
+  return original;
+}
+
+function normalizeTenantApiAgentText(text = "") {
+  const original = stripTenantApiAgentInternalThought(text);
   if (!/(Orkestr UI|Orkestr admin|Orkestr administrator)/i.test(original)) return original;
   const setupTarget = /gmail/i.test(original)
     ? "Gmail"
@@ -2024,7 +2060,8 @@ async function processNextApiAgentMessage(thread, env = process.env, options = {
     env,
     fetchImpl: options.fetchImpl || fetch,
   });
-  const text = normalizeTenantApiAgentText(clean(result.text) || fallbackTenantApiAgentRepairAnswer(message, { env }));
+  const text = normalizeTenantApiAgentText(clean(result.text) || fallbackTenantApiAgentRepairAnswer(message, { env })) ||
+    fallbackTenantApiAgentRepairAnswer(message, { env });
   return completeApiAgentMessage(thread, message, text, env, { response: result.response });
 }
 

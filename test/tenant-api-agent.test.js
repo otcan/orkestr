@@ -1875,6 +1875,50 @@ test("tenant api-agent reads scoped Gmail directly without repeated confirmation
   assert.doesNotMatch(assistant.text, /confirm|proceed|permission/i);
 });
 
+test("tenant api-agent strips leaked internal thought from final chat text", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-api-agent-thought-strip-"));
+  const env = await allowSanitizerEnv(home);
+  await createThread({
+    id: "gmail-thought-strip-chat",
+    ownerUserId: "otcan",
+    name: "gmail-thought-strip-chat",
+    runtimeKind: "api-agent",
+    executor: { type: "api-agent", metadata: { runtimeKind: "api-agent" } },
+    binding: { connector: "whatsapp", chatId: "chat-gmail-thought-strip" },
+  }, env);
+  await enqueueThreadInputForPrincipal("gmail-thought-strip-chat", {
+    text: "Can you check my last 3 emails?",
+    source: "whatsapp_inbound",
+    connector: "whatsapp",
+    chatId: "chat-gmail-thought-strip",
+  }, userPrincipal({ id: "otcan", role: "user" }), env);
+
+  const result = await processApiAgentThreadInput("gmail-thought-strip-chat", env, {
+    fetchImpl: async () => response({
+      id: "resp_gmail_thought_strip_1",
+      model: "gpt-5-mini",
+      output_text: [
+        "Here are your latest 3 messages:",
+        "1) From: Newsletter Team -- Subject: Spring update -- Unread -- Promotions",
+        "2) From: billing@example.com -- Subject: Invoice ready -- Unread -- Updates",
+        "3) From: Alex Example -- Subject: OAuth client JSON -- Unread -- Sent -- Important",
+        "",
+        "User wants to check last 3 emails; we did. Now what? They might ask to read or summarize. We should wait.",
+        "The developer instructions say use timers when appropriate. Tool orkestr_create_timer can create periodic checks.",
+      ].join("\n"),
+      output: [],
+      usage: { input_tokens: 220, output_tokens: 70 },
+    }),
+  });
+  const messages = await listThreadMessages("gmail-thought-strip-chat", env);
+  const assistant = messages.find((message) => message.role === "assistant");
+
+  assert.equal(result.ok, true);
+  assert.match(assistant.text, /Here are your latest 3 messages/);
+  assert.match(assistant.text, /OAuth client JSON/);
+  assert.doesNotMatch(assistant.text, /User wants|Now what|developer instructions|orkestr_create_timer|We should/i);
+});
+
 test("tenant api-agent tool gateway stays inside scoped file roots", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-api-agent-tools-"));
   const env = { ORKESTR_HOME: home };
