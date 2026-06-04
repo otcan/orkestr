@@ -156,7 +156,9 @@ export function initialQueueDeliveryState(status = null, message = null) {
   if (!status) return "";
   const state = String(status.state || "").trim().toLowerCase();
   const runtimeKind = String(status.runtimeKind || status.runtimeState || "").trim().toLowerCase();
-  if (runtimeKind === "api-agent") return "";
+  if (runtimeKind === "api-agent") {
+    return state === "working" ? "awaiting_runtime_completion" : "waiting_runtime_ready";
+  }
   const isCodexAppServer = runtimeKind === "codex-app-server";
   if (isCodexAppServer && state === "working") return "awaiting_active_turn";
   if (isCodexAppServer && state === "awaiting_approval") return "awaiting_approval";

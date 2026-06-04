@@ -368,7 +368,7 @@ export class ConnectorsController {
   async whatsappInbound(@Body() body: Record<string, unknown> = {}, @Res() response: any) {
     try {
       ensureAttachmentsArray(body);
-      const routed = await routeWhatsAppInbound(body);
+      const routed = await routeWhatsAppInbound({ ...body, deferApiAgentAutoRun: true });
       if (routed.threadId && !routed.duplicate) {
         if ((routed as any).handledCommand) {
           await deliverWhatsAppReplies().catch(() => {});
@@ -381,6 +381,7 @@ export class ConnectorsController {
         const thread = await getThread(String(routed.threadId || ""));
         if (threadUsesApiAgent(thread || {})) {
           const payload = await runWithRoutedWhatsAppTyping({ thread, input: body }, async () => {
+            await deliverWhatsAppReplies().catch(() => null);
             await processApiAgentThreadInput(thread.id).catch(() => null);
             await deliverWhatsAppReplies().catch(() => {});
             return { ...routed, runtimeKind: "api-agent" };

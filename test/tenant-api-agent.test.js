@@ -1533,8 +1533,8 @@ test("WhatsApp routing cleans mixed tenant Codex runtime state before enqueueing
   assert.equal(thread.executor.metadata.codexThreadId, null);
   assert.equal(threadUsesApiAgent(thread, env), true);
   assert.equal(messages[0].state, "queued");
-  assert.equal(messages[0].deliveryState || "", "");
-  assert.equal(initialQueueDeliveryState({ runtimeKind: "api-agent", state: "queued" }, messages[0]), "");
+  assert.equal(messages[0].deliveryState || "", "waiting_runtime_ready");
+  assert.equal(initialQueueDeliveryState({ runtimeKind: "api-agent", state: "queued" }, messages[0]), "waiting_runtime_ready");
 });
 
 test("WhatsApp routing cleans stale api-agent tmux runtime metadata before enqueueing", async () => {

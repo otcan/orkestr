@@ -1851,7 +1851,10 @@ test("local whatsapp bridge runs api-agent tenant chats without waking legacy ru
   assert.equal(events.some((event) => event.type === "thread_input_delivery_deferred" && event.threadId === "otcantest"), false);
   assert.equal(events.some((event) => event.type === "thread_input_delivery_skipped" && event.threadId === "otcantest"), false);
   assert.equal(calls.some((call) => call.url.endsWith("/responses")), true);
-  assert.equal(calls.some((call) => call.url.endsWith("/send-text") && call.body?.to === chatId), true);
+  const sendCalls = calls.filter((call) => call.url.endsWith("/send-text") && call.body?.to === chatId);
+  assert.equal(sendCalls.length, 2);
+  assert.match(sendCalls[0].body.text, /^Queued your message while Orkestr prepares this thread: "Hi"\./);
+  assert.equal(sendCalls[1].body.text, "Hi! How can I help you today?");
 });
 
 test("local whatsapp inbound failures explain missing user capabilities", () => {

@@ -1264,6 +1264,7 @@ export async function handleInboundMessage(accountId, message, env = process.env
     if (routed.threadId && !routed.duplicate) {
       const thread = await getThread(routed.threadId, env).catch(() => null);
       if (threadUsesApiAgent(thread || {}, env)) {
+        await deliverWhatsAppReplies(env).catch(() => {});
         if (localWhatsAppApiAgentAutoRun(env)) await processApiAgentThreadInput(thread.id, env).catch(() => null);
         await deliverWhatsAppReplies(env).catch(() => {});
         return { routed: { ...routed, runtimeKind: "api-agent" }, eventId, chatId, from, fromMe: routeFromMe };

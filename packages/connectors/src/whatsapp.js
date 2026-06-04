@@ -587,7 +587,8 @@ function whatsappApiAgentAutoRun(env = process.env) {
 
 function kickWhatsAppApiAgentThread(thread, env = process.env) {
   if (!thread?.id || !threadUsesApiAgent(thread, env) || !whatsappApiAgentAutoRun(env)) return;
-  void processApiAgentThreadInput(thread.id, env)
+  void deliverWhatsAppReplies(env).catch(() => null)
+    .then(() => processApiAgentThreadInput(thread.id, env))
     .then(() => deliverWhatsAppReplies(env).catch(() => null))
     .catch((error) => appendEvent({
       type: "whatsapp_api_agent_autorun_failed",
