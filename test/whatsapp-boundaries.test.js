@@ -70,7 +70,7 @@ test("WhatsApp mirror policy separates final replies from progress updates", () 
   assert.equal(shouldMirrorWhatsAppReply({ source: "manual", phase: "commentary" }), true);
 });
 
-test("WhatsApp outbound mirror worker serializes delivery and avoids app-server sleep notices", async () => {
+test("WhatsApp outbound mirror worker serializes delivery and maps app-server queue states", async () => {
   const worker = createWhatsAppOutboundMirrorWorker();
   let runs = 0;
   let release;
@@ -93,7 +93,7 @@ test("WhatsApp outbound mirror worker serializes delivery and avoids app-server 
     state: "sleeping",
     runtimeKind: "codex-app-server",
     promptReady: false,
-  }, { text: "hello" }), "");
+  }, { text: "hello" }), "waking");
   assert.equal(initialQueueDeliveryState({
     state: "working",
     runtimeKind: "codex-app-server",
