@@ -442,7 +442,7 @@ test("public KubeVirt migration helper operates the isolated app VM", async () =
   assert.match(stdout, /cutover/);
   assert.match(stdout, /rollback/);
   assert.match(stdout, /browser_pairing_required/);
-  assert.match(stdout, /orkestr-de-app/);
+  assert.match(stdout, /orkestr-public-app/);
   assert.match(script, /virtctl_k3s credentials add-ssh-key/);
   assert.match(script, /kubectl_k3s get pod -n "\$namespace" -l "kubevirt\.io\/domain=\$vm"/);
   assert.match(script, /ORKESTR_HOME='\$vm_home' ORKESTR_API_BASE='\$vm_api' orkestr list --json/);
@@ -451,8 +451,9 @@ test("public KubeVirt migration helper operates the isolated app VM", async () =
   assert.match(script, /ORKESTR_HOME='\$vm_home' ORKESTR_API_BASE='\$vm_api' orkestr attach --print/);
   assert.match(script, /Codex is not signed in/);
   assert.match(script, /public Codex runtime is not configured/);
-  assert.match(script, /\/home\/openclaw\/\.orkestr-production/);
-  assert.match(script, /\/root\/\.codex\/auth\.json/);
+  assert.match(script, /ORKESTR_PUBLIC_PRIVATE_STATE_SENTINELS/);
+  assert.doesNotMatch(script, /\/home\/[^/\s"']+\/\.orkestr-production/);
+  assert.doesNotMatch(script, /\/root\/\.codex\/auth\.json/);
   assert.match(script, /\/var\/run\/docker\.sock/);
   assert.match(script, /systemctl disable --now orkestr-public\.service/);
   assert.match(script, /systemctl enable --now orkestr-public\.service/);

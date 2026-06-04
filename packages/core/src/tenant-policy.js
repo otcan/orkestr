@@ -122,8 +122,8 @@ Do not use Codex skills, MCP tools, local skill files, private operator
 directories, root/user home files, or browser tabs that are not explicitly
 exposed by \`orkestr whereiam --json\` for the current contained user. This
 includes host Gmail, Outlook, LinkedIn, HubSpot, Dropbox, GoDaddy, WhatsApp,
-and automation skills under paths such as \`/root/.codex\`,
-\`/home/openclaw/.codex-ops\`, or another operator home.
+and automation skills under paths such as \`<operator-codex-home>\`,
+\`<operator-codex-skills>\`, or another operator home.
 
 If the user asks to check Gmail, Outlook, LinkedIn, browser profiles, files, or
 any other connector and \`orkestr whereiam --json\` does not show that connector

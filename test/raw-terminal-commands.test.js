@@ -31,7 +31,7 @@ test("raw terminal parser recognizes pairing approval commands", () => {
       "VxqcH2wTo7_DJhf01y-9KVDy",
       "pending",
       "Approve From SSH",
-      "ssh root@orkestr.crawlerai.de",
+      "ssh root@orkestr.example.test",
       "orkestr security approve VxqcH2wTo7_DJhf01y-9KVDy",
       "sudo orkestr security approve VxqcH2wTo7_DJhf01y-9KVDy",
     ].join("\n")),

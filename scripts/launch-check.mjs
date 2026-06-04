@@ -22,10 +22,22 @@ const scanPatterns = [
   { name: "private host placeholder", pattern: /private-(?:domain|host)|real-chat-id/i },
   { name: "OpenAI key", pattern: /sk-[A-Za-z0-9]{20,}/ },
   { name: "Google OAuth secret", pattern: /GOCSPX-[A-Za-z0-9_-]{10,}/ },
-  { name: "machine path", pattern: /\/home\/openclaw|\/root\// },
+  { name: "machine path", pattern: /\/home\/[^/\s"']+\/\.orkestr|\/root\// },
+  { name: "numeric WhatsApp id", pattern: /\b\d{10,}@(?:c\.us|g\.us|lid)\b/i },
+  { name: "real WhatsApp group id", pattern: /\b120\d{12,}@g\.us\b/i },
   { name: "tailnet host", pattern: /[a-z0-9-]+\.ts\.net/i },
   { name: "tailscale ip", pattern: /\b100\.\d{1,3}\.\d{1,3}\.\d{1,3}\b/ },
 ];
+
+scanPatterns.push({
+  name: "live Orkestr hostname",
+  pattern: new RegExp(String.raw`\b(?:[a-z0-9-]+\.)*orkestr\.${["d", "e"].join("")}\b`, "i"),
+});
+
+for (const host of String(process.env.ORKESTR_PRIVACY_SCAN_BLOCKED_HOSTS || "").split(/[\s,]+/).filter(Boolean)) {
+  const escaped = host.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  scanPatterns.push({ name: "configured blocked host", pattern: new RegExp(escaped, "i") });
+}
 
 const scanSkips = new Set([
   "node_modules",
@@ -92,6 +104,8 @@ async function privacyScan() {
   const allowed = hits.filter((hit) =>
     hit.startsWith("docs/alpha-release.md:") ||
     hit.startsWith("scripts/launch-check.mjs:") ||
+    hit.startsWith("test/demo-asset.test.js:") ||
+    hit.startsWith("test/tenant-isolation-release.test.js:") ||
     hit.startsWith("test/gmail.test.js:") ||
     hit.startsWith("packages/connectors/src/gmail.js:"),
   );

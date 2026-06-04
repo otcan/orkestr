@@ -106,7 +106,7 @@ test("waitlist submissions are normalized, idempotent, and admin-reviewable", as
       const binding = {
         ...(thread.binding || {}),
         connector: "whatsapp",
-        chatId: "120363000000000003@g.us",
+        chatId: "wa-group-three@g.us",
         displayName: options.name,
         mirrorToWhatsApp: true,
         responderAccountId: options.responderAccountId,
@@ -155,7 +155,7 @@ test("waitlist submissions are normalized, idempotent, and admin-reviewable", as
   assert.equal(approved.thread.runtimeKind, "api-agent");
   assert.equal(approved.whatsapp.pendingChatCreation, false);
   assert.equal(approved.whatsapp.groupCreated, true);
-  assert.equal(approved.whatsapp.chatId, "120363000000000003@g.us");
+  assert.equal(approved.whatsapp.chatId, "wa-group-three@g.us");
   assert.equal(approved.whatsapp.firstPromptDelivery.delivered.length, 1);
   assert.deepEqual(createdGroups.map((group) => group.participantIds), [["+49176000000"]]);
   assert.deepEqual(deliveries, [true]);
@@ -163,7 +163,7 @@ test("waitlist submissions are normalized, idempotent, and admin-reviewable", as
     message.role === "assistant" &&
     message.source === "orkestr_onboarding" &&
     message.connector === "whatsapp" &&
-    message.chatId === "120363000000000003@g.us" &&
+    message.chatId === "wa-group-three@g.us" &&
     message.text.includes("private Orkestr onboarding chat")
   ));
   assert.equal(failedApproval.whatsapp.pendingChatCreation, true);
@@ -379,7 +379,7 @@ test("admin onboarding endpoints expose invite, checklist, and offboarding", asy
       body: JSON.stringify({
         connectionName: "Beta-Orkestr",
         whatsappAccountId: "wa-router",
-        chatId: "120363000000000099@g.us",
+        chatId: "wa-group-ninety-nine@g.us",
         createWhatsAppGroup: false,
         sendFirstPrompt: false,
       }),
@@ -394,7 +394,7 @@ test("admin onboarding endpoints expose invite, checklist, and offboarding", asy
     assert.equal(checklist.connectionName, "can-test");
     assert.equal(approved.user.phoneNumber, "+49176000001");
     assert.equal(approved.thread.bindingName, "Beta-Orkestr");
-    assert.equal(approved.whatsapp.chatId, "120363000000000099@g.us");
+    assert.equal(approved.whatsapp.chatId, "wa-group-ninety-nine@g.us");
     assert.equal(approved.whatsapp.groupCreated, false);
     assert.equal(approved.whatsapp.firstPromptMessageId, "");
     assert.match(approved.firstPrompt, /connect Gmail, Outlook, Jira, Shopify/);

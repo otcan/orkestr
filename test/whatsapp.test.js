@@ -398,16 +398,16 @@ test("stored external whatsapp bridge config is ignored unless the host opts in"
 
 test("local whatsapp bridge supports configured account ids", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-configured-accounts-"));
-  const env = { ORKESTR_HOME: home, ORKESTR_WHATSAPP_ACCOUNT_IDS: "main,openclaw" };
+  const env = { ORKESTR_HOME: home, ORKESTR_WHATSAPP_ACCOUNT_IDS: "main,secondary" };
 
-  assert.deepEqual(localWhatsAppAccountIdsForEnv(env), ["main", "openclaw"]);
+  assert.deepEqual(localWhatsAppAccountIdsForEnv(env), ["main", "secondary"]);
 
   const status = await getWhatsAppStatus(env);
 
   assert.equal(status.state, "unpaired");
   assert.equal(status.mode, "local");
-  assert.deepEqual(status.accounts.map((account) => account.accountId), ["main", "openclaw"]);
-  assert.deepEqual(status.accounts.map((account) => account.label), ["main", "openclaw"]);
+  assert.deepEqual(status.accounts.map((account) => account.accountId), ["main", "secondary"]);
+  assert.deepEqual(status.accounts.map((account) => account.label), ["main", "secondary"]);
 });
 
 test("local whatsapp inbound forwarding posts mapped chats", async () => {
@@ -424,7 +424,7 @@ test("local whatsapp inbound forwarding posts mapped chats", async () => {
   const forwarded = await forwardLocalWhatsAppInbound({
     eventId: "event-forward-1",
     chatId: "chat-forward@g.us",
-    from: "491111111111@c.us",
+    from: "wa-contact-one@c.us",
     accountId: "responder",
     text: "hello",
   }, env, async (url, options) => {
@@ -447,7 +447,7 @@ test("local whatsapp inbound forwarding posts mapped chats", async () => {
 
 test("local whatsapp recovery notifies chat when tenant sanitizer blocks inbound", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-sanitizer-notice-"));
-  const chatId = "120363423847331215@g.us";
+  const chatId = "wa-group-alpha@g.us";
   const env = {
     ORKESTR_HOME: home,
     ORKESTR_WHATSAPP_ACCOUNT_IDS: "responder",
@@ -469,9 +469,9 @@ test("local whatsapp recovery notifies chat when tenant sanitizer blocks inbound
   const sent = [];
   let seen = 0;
   const inboundMessage = {
-    id: { _serialized: `false_${chatId}_MSG_4917632400662@c.us` },
+    id: { _serialized: `false_${chatId}_MSG_wa-contact-primary@c.us` },
     from: chatId,
-    author: "4917632400662@c.us",
+    author: "wa-contact-primary@c.us",
     fromMe: false,
     body: "hi",
     timestamp: 1780070400,
@@ -519,16 +519,16 @@ test("local whatsapp bridge maps public account ids to existing LocalAuth client
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-configured-client-ids-"));
   const env = {
     ORKESTR_HOME: home,
-    ORKESTR_WHATSAPP_ACCOUNT_IDS: "main,openclaw",
-    ORKESTR_WHATSAPP_ACCOUNT_CLIENT_IDS: "main:codex-whatsapp,openclaw:codex-whatsapp-openclaw",
-    ORKESTR_WHATSAPP_ACCOUNT_SESSION_ROOTS: "main:/state/main,openclaw:/state/openclaw",
+    ORKESTR_WHATSAPP_ACCOUNT_IDS: "main,secondary",
+    ORKESTR_WHATSAPP_ACCOUNT_CLIENT_IDS: "main:codex-whatsapp,secondary:codex-whatsapp-secondary",
+    ORKESTR_WHATSAPP_ACCOUNT_SESSION_ROOTS: "main:/state/main,secondary:/state/secondary",
   };
 
   const status = await getWhatsAppStatus(env);
 
-  assert.deepEqual(status.accounts.map((account) => account.accountId), ["main", "openclaw"]);
-  assert.deepEqual(status.accounts.map((account) => account.clientId), ["codex-whatsapp", "codex-whatsapp-openclaw"]);
-  assert.deepEqual(status.accounts.map((account) => account.sessionRoot), ["/state/main", "/state/openclaw"]);
+  assert.deepEqual(status.accounts.map((account) => account.accountId), ["main", "secondary"]);
+  assert.deepEqual(status.accounts.map((account) => account.clientId), ["codex-whatsapp", "codex-whatsapp-secondary"]);
+  assert.deepEqual(status.accounts.map((account) => account.sessionRoot), ["/state/main", "/state/secondary"]);
 });
 
 test("local whatsapp web cache lives under orkestr home", async () => {
@@ -537,17 +537,18 @@ test("local whatsapp web cache lives under orkestr home", async () => {
 });
 
 test("local whatsapp group participant ids are normalized for created test chats", () => {
+  const participantDigits = "15550100001";
   assert.deepEqual(
-    normalizeGroupParticipantIds(["66378837028965@lid", " 66378837028965@lid ", "4917632400662@c.us"]),
-    ["66378837028965@lid", "4917632400662@c.us"],
+    normalizeGroupParticipantIds(["wa-lid-primary@lid", " wa-lid-primary@lid ", "wa-contact-primary@c.us"]),
+    ["wa-lid-primary@lid", "wa-contact-primary@c.us"],
   );
   assert.deepEqual(
-    normalizeGroupParticipantIds("66378837028965@lid, 4917632400662@c.us"),
-    ["66378837028965@lid", "4917632400662@c.us"],
+    normalizeGroupParticipantIds("wa-lid-primary@lid, wa-contact-primary@c.us"),
+    ["wa-lid-primary@lid", "wa-contact-primary@c.us"],
   );
   assert.deepEqual(
-    normalizeGroupParticipantIds(["+49 176 32400662", "4917632400662"]),
-    ["4917632400662@c.us"],
+    normalizeGroupParticipantIds([`+${participantDigits}`, participantDigits]),
+    [`${participantDigits}@c.us`],
   );
 });
 
@@ -556,13 +557,13 @@ test("routed whatsapp typing wraps api-agent work for the bound chat", async () 
   const thread = {
     id: "tenant-thread",
     binding: {
-      chatId: "120363000000000004@g.us",
+      chatId: "wa-group-four@g.us",
       responderAccountId: "account-2",
       outboundAccountId: "account-1",
     },
   };
-  const target = routedWhatsAppTypingTarget({ thread, input: { chatId: "120363000000000004@g.us" } });
-  const result = await runWithRoutedWhatsAppTyping({ thread, input: { chatId: "120363000000000004@g.us" } }, async () => {
+  const target = routedWhatsAppTypingTarget({ thread, input: { chatId: "wa-group-four@g.us" } });
+  const result = await runWithRoutedWhatsAppTyping({ thread, input: { chatId: "wa-group-four@g.us" } }, async () => {
     calls.push(["work"]);
     return { ok: true };
   }, {
@@ -576,24 +577,24 @@ test("routed whatsapp typing wraps api-agent work for the bound chat", async () 
     },
   });
 
-  assert.deepEqual(target, { accountId: "account-2", chatId: "120363000000000004@g.us" });
+  assert.deepEqual(target, { accountId: "account-2", chatId: "wa-group-four@g.us" });
   assert.deepEqual(result, { ok: true });
   assert.deepEqual(calls, [
-    ["start", "account-2", "120363000000000004@g.us"],
+    ["start", "account-2", "wa-group-four@g.us"],
     ["work"],
-    ["stop", "account-2", "120363000000000004@g.us"],
+    ["stop", "account-2", "wa-group-four@g.us"],
   ]);
 });
 
 test("whatsapp thread group creation binds an existing thread idempotently", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-thread-group-"));
   const env = { ORKESTR_HOME: home };
-  const thread = await createThread({ id: "crawlerai-linkedin", name: "Crawlerai LinkedIn" }, env);
+  const thread = await createThread({ id: "sample-linkedin", name: "Sample LinkedIn" }, env);
   const createCalls = [];
 
   const created = await createAndBindWhatsAppThreadGroup(thread, {
-    name: "Crawlerai-Linkedin",
-    participantIds: ["4917632400662@c.us"],
+    name: "Sample-Linkedin",
+    participantIds: ["wa-contact-primary@c.us"],
     responderAccountId: "account-1",
     mirrorToWhatsApp: true,
   }, env, {
@@ -601,29 +602,29 @@ test("whatsapp thread group creation binds an existing thread idempotently", asy
       createCalls.push(options);
       return {
         ok: true,
-        chat: { id: "120363000000000002@g.us", name: options.name, generated: true },
+        chat: { id: "wa-group-two@g.us", name: options.name, generated: true },
         senderAccountId: "account-1",
         responderAccountId: "account-1",
-        senderContactId: "4917632400662@c.us",
-        responderContactId: "4917000000000@c.us",
+        senderContactId: "wa-contact-primary@c.us",
+        responderContactId: "wa-contact-tenant@c.us",
       };
     },
   });
-  const updated = await getThread("crawlerai-linkedin", env);
-  const reused = await createAndBindWhatsAppThreadGroup(updated, { name: "Crawlerai-Linkedin" }, env, {
+  const updated = await getThread("sample-linkedin", env);
+  const reused = await createAndBindWhatsAppThreadGroup(updated, { name: "Sample-Linkedin" }, env, {
     async createChat() {
       throw new Error("existing binding should be reused");
     },
   });
 
   assert.equal(created.created, true);
-  assert.equal(created.binding.chatId, "120363000000000002@g.us");
-  assert.equal(updated.binding.displayName, "Crawlerai-Linkedin");
+  assert.equal(created.binding.chatId, "wa-group-two@g.us");
+  assert.equal(updated.binding.displayName, "Sample-Linkedin");
   assert.equal(updated.binding.mirrorToWhatsApp, true);
   assert.equal(updated.binding.responderAccountId, "account-1");
-  assert.deepEqual(createCalls.map((call) => call.participantIds), [["4917632400662@c.us"]]);
+  assert.deepEqual(createCalls.map((call) => call.participantIds), [["wa-contact-primary@c.us"]]);
   assert.equal(reused.reused, true);
-  assert.equal(reused.binding.chatId, "120363000000000002@g.us");
+  assert.equal(reused.binding.chatId, "wa-group-two@g.us");
 });
 
 test("whatsapp thread group creation can use an external bridge", async () => {
@@ -640,10 +641,10 @@ test("whatsapp thread group creation can use an external bridge", async () => {
   const result = await createAndBindWhatsAppThreadGroup(
     await getThread("thread-external-group", env),
     {
-      name: "Crawlerai-Linkedin",
+      name: "Sample-Linkedin",
       senderAccountId: "sender",
       responderAccountId: "responder",
-      participantIds: ["491111111111@c.us"],
+      participantIds: ["wa-contact-one@c.us"],
       mirrorToWhatsApp: true,
     },
     env,
@@ -652,11 +653,11 @@ test("whatsapp thread group creation can use an external bridge", async () => {
         calls.push({ url, options, body: JSON.parse(options.body) });
         return response({
           ok: true,
-          chat: { id: "group-1@g.us", name: "Crawlerai-Linkedin", isGroup: true, generated: true },
+          chat: { id: "group-1@g.us", name: "Sample-Linkedin", isGroup: true, generated: true },
           senderAccountId: "sender",
           responderAccountId: "responder",
-          senderContactId: "491111111111@c.us",
-          responderContactId: "492222222222@c.us",
+          senderContactId: "wa-contact-one@c.us",
+          responderContactId: "wa-contact-two@c.us",
         });
       },
     },
@@ -665,8 +666,8 @@ test("whatsapp thread group creation can use an external bridge", async () => {
   assert.equal(calls.length, 1);
   assert.equal(calls[0].url.pathname, "/bridge/chats");
   assert.equal(calls[0].options.headers.authorization, "Bearer secret-token");
-  assert.equal(calls[0].body.name, "Crawlerai-Linkedin");
-  assert.deepEqual(calls[0].body.participantIds, ["491111111111@c.us"]);
+  assert.equal(calls[0].body.name, "Sample-Linkedin");
+  assert.deepEqual(calls[0].body.participantIds, ["wa-contact-one@c.us"]);
   assert.equal(result.created, true);
   assert.equal(result.binding.chatId, "group-1@g.us");
   assert.equal(result.binding.responderAccountId, "responder");
@@ -763,13 +764,13 @@ test("local whatsapp message route fields keep own group echoes on the group cha
   assert.deepEqual(
     localWhatsAppMessageRouteFields({
       fromMe: true,
-      from: "51346837356638@lid",
-      to: "120363424272031669@g.us",
-      id: { remote: "120363424272031669@g.us" },
+      from: "wa-lid-own@lid",
+      to: "wa-group-beta@g.us",
+      id: { remote: "wa-group-beta@g.us" },
     }),
     {
-      chatId: "120363424272031669@g.us",
-      from: "51346837356638@lid",
+      chatId: "wa-group-beta@g.us",
+      from: "wa-lid-own@lid",
       fromMe: true,
     },
   );
@@ -783,7 +784,7 @@ test("local whatsapp known chats include stored thread bindings while bridge is 
     name: "Known WA Thread",
     binding: {
       connector: "whatsapp",
-      chatId: "120363000000000000@g.us",
+      chatId: "wa-group-zero@g.us",
       displayName: "Known Group",
       outboundAccountId: "account-1",
       updatedAt: "2026-05-18T03:00:00.000Z",
@@ -794,7 +795,7 @@ test("local whatsapp known chats include stored thread bindings while bridge is 
     name: "Legacy WA Thread",
     binding: {
       connector: "whatsapp",
-      chatId: "120363111111111111@g.us",
+      chatId: "wa-group-route-one@g.us",
       displayName: "Legacy Group",
       outboundAccountId: "legacy-account",
     },
@@ -810,27 +811,27 @@ test("local whatsapp known chats include stored thread bindings while bridge is 
 
 test("local whatsapp known chats honor configured responder account ids", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-known-configured-"));
-  const env = { ORKESTR_HOME: home, ORKESTR_WHATSAPP_ACCOUNT_IDS: "main,openclaw" };
+  const env = { ORKESTR_HOME: home, ORKESTR_WHATSAPP_ACCOUNT_IDS: "main,secondary" };
   await createThread({
-    id: "known-openclaw-thread",
-    name: "Known OpenClaw Thread",
+    id: "known-secondary-thread",
+    name: "Known Secondary Thread",
     binding: {
       connector: "whatsapp",
-      chatId: "120363222222222222@g.us",
-      displayName: "OpenClaw Group",
-      outboundAccountId: "openclaw",
+      chatId: "wa-group-route-two@g.us",
+      displayName: "Secondary Group",
+      outboundAccountId: "secondary",
     },
   }, env);
 
   const main = await listLocalWhatsAppChats("main", env);
-  const openclaw = await listLocalWhatsAppChats("openclaw", env);
+  const secondary = await listLocalWhatsAppChats("secondary", env);
 
   assert.deepEqual(main.chats.map((chat) => chat.name), []);
-  assert.deepEqual(openclaw.chats.map((chat) => chat.name), ["OpenClaw Group"]);
+  assert.deepEqual(secondary.chats.map((chat) => chat.name), ["Secondary Group"]);
 });
 
 test("local whatsapp unread recovery only scans bound chats for the selected account", () => {
-  const env = { ORKESTR_WHATSAPP_ACCOUNT_IDS: "main,openclaw" };
+  const env = { ORKESTR_WHATSAPP_ACCOUNT_IDS: "main,secondary" };
   const threads = [
     {
       id: "main-thread",
@@ -841,11 +842,11 @@ test("local whatsapp unread recovery only scans bound chats for the selected acc
       },
     },
     {
-      id: "openclaw-thread",
+      id: "secondary-thread",
       binding: {
         connector: "whatsapp",
-        chatId: "openclaw-chat@g.us",
-        outboundAccountId: "openclaw",
+        chatId: "secondary-chat@g.us",
+        outboundAccountId: "secondary",
       },
     },
     {
@@ -862,8 +863,8 @@ test("local whatsapp unread recovery only scans bound chats for the selected acc
   assert.deepEqual(localWhatsAppUnreadRecoveryBoundChats(threads, "main", env), [
     { chatId: "main-chat@g.us", threadId: "main-thread", accountId: "main" },
   ]);
-  assert.deepEqual(localWhatsAppUnreadRecoveryBoundChats(threads, "openclaw", env), [
-    { chatId: "openclaw-chat@g.us", threadId: "openclaw-thread", accountId: "openclaw" },
+  assert.deepEqual(localWhatsAppUnreadRecoveryBoundChats(threads, "secondary", env), [
+    { chatId: "secondary-chat@g.us", threadId: "secondary-thread", accountId: "secondary" },
   ]);
   assert.equal(localWhatsAppUnreadRecoveryIntervalMs({ ORKESTR_WHATSAPP_UNREAD_RECOVERY_MS: "5" }), 10000);
 });
@@ -871,14 +872,14 @@ test("local whatsapp unread recovery only scans bound chats for the selected acc
 test("local whatsapp unread recovery routes missed unread messages", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-unread-recovery-"));
   const env = { ORKESTR_HOME: home, ORKESTR_WHATSAPP_ACCOUNT_IDS: "responder" };
-  const chatId = "120363000000000000@g.us";
+  const chatId = "wa-group-zero@g.us";
   let sentSeen = false;
   let getChatByIdCalls = 0;
   const message = {
     id: { _serialized: "missed-message-1", remote: chatId },
     fromMe: false,
     from: chatId,
-    author: "491111111111@c.us",
+    author: "wa-contact-one@c.us",
     body: "missed hello",
     timestamp: 1_780_000_000,
   };
@@ -947,7 +948,7 @@ test("local whatsapp phone pairing validates phone numbers before browser launch
 test("local whatsapp phone pairing accepts configured account ids", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-phone-configured-invalid-"));
   await assert.rejects(
-    startLocalWhatsAppAccount("openclaw", { ORKESTR_HOME: home, ORKESTR_WHATSAPP_ACCOUNT_IDS: "main,openclaw" }, { phoneNumber: "+++" }),
+    startLocalWhatsAppAccount("secondary", { ORKESTR_HOME: home, ORKESTR_WHATSAPP_ACCOUNT_IDS: "main,secondary" }, { phoneNumber: "+++" }),
     /whatsapp_pairing_phone_number_invalid/,
   );
 });
@@ -1153,15 +1154,15 @@ test("whatsapp participants are discovered from external bridge chat metadata", 
       isGroup: true,
       groupMetadata: {
         participants: [
-          { id: "491111111111@c.us", name: "Saved Main", isAdmin: true },
-          { id: { _serialized: "492222222222@c.us" }, pushname: "Saved Other", isSuperAdmin: true },
+          { id: "wa-contact-one@c.us", name: "Saved Main", isAdmin: true },
+          { id: { _serialized: "wa-contact-two@c.us" }, pushname: "Saved Other", isSuperAdmin: true },
         ],
       },
     });
   });
 
   assert.equal(result.ready, true);
-  assert.deepEqual(result.participants.map((participant) => participant.id), ["491111111111@c.us", "492222222222@c.us"]);
+  assert.deepEqual(result.participants.map((participant) => participant.id), ["wa-contact-one@c.us", "wa-contact-two@c.us"]);
   assert.deepEqual(result.participants.map((participant) => participant.name), ["Saved Main", "Saved Other"]);
 });
 
@@ -1293,7 +1294,7 @@ test("whatsapp inbound endpoint accepts bridge token when browser pairing is req
         eventId: "wa-token-accepted",
         agentId: "agent-token-api",
         chatId: "bridge-chat@g.us",
-        from: "491700000000@c.us",
+        from: "wa-contact-tenant@c.us",
         text: "token routed",
       }),
     });
@@ -1717,7 +1718,7 @@ test("whatsapp inbound can auto-provision a scoped user thread", async () => {
     eventId: "wa-auto-user-1",
     chatId: "chat-auto-user",
     accountId: "main",
-    from: "491234567890@c.us",
+    from: "wa-contact-sample@c.us",
     chatName: "otcantest",
     senderName: "Otcan Test",
     text: "hello from the user",
@@ -1731,7 +1732,7 @@ test("whatsapp inbound can auto-provision a scoped user thread", async () => {
   assert.equal(thread.binding.chatId, "chat-auto-user");
   assert.equal(thread.binding.displayName, "otcantest");
   assert.equal(thread.binding.generated, true);
-  assert.equal(thread.binding.senderContactId, "491234567890@c.us");
+  assert.equal(thread.binding.senderContactId, "wa-contact-sample@c.us");
   assert.equal(thread.binding.outboundAccountId, "main");
   assert.equal(messages.length, 1);
   assert.equal(messages[0].ownerUserId, thread.ownerUserId);
@@ -1741,7 +1742,7 @@ test("whatsapp inbound can auto-provision a scoped user thread", async () => {
     eventId: "wa-auto-user-2",
     chatId: "chat-auto-user",
     accountId: "main",
-    from: "491234567890@c.us",
+    from: "wa-contact-sample@c.us",
     text: "second message",
   }, env);
   const messagesAfter = await listThreadMessages(routed.threadId, env);
@@ -1755,7 +1756,7 @@ test("whatsapp inbound can auto-provision a scoped user thread", async () => {
 
 test("local whatsapp bridge runs api-agent tenant chats without waking legacy runtime", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-api-agent-local-"));
-  const chatId = "120363423847331215@g.us";
+  const chatId = "wa-group-alpha@g.us";
   const env = await externalBridgeEnvWithAllowingSanitizer(home, {
     OPENAI_API_KEY: "sk-test",
     ORKESTR_WHATSAPP_API_AGENT_AUTORUN: "1",
@@ -1785,8 +1786,8 @@ test("local whatsapp bridge runs api-agent tenant chats without waking legacy ru
       senderAccountId: "responder",
       responderAccountId: "responder",
       outboundAccountId: "responder",
-      senderContactId: "66378837028965@lid",
-      responderContactId: "4917000000000@c.us",
+      senderContactId: "wa-lid-primary@lid",
+      responderContactId: "wa-contact-tenant@c.us",
     },
   }, env);
 
@@ -1816,9 +1817,9 @@ test("local whatsapp bridge runs api-agent tenant chats without waking legacy ru
   let routed;
   try {
     routed = await handleInboundMessage("responder", {
-      id: { _serialized: `false_${chatId}_3AB09B996787296175FB_66378837028965@lid`, remote: chatId },
+      id: { _serialized: `false_${chatId}_3AB09B996787296175FB_wa-lid-primary@lid`, remote: chatId },
       from: chatId,
-      author: "66378837028965@lid",
+      author: "wa-lid-primary@lid",
       fromMe: false,
       body: "Hi",
       timestamp: 1_780_000_000,
@@ -1915,7 +1916,7 @@ test("whatsapp inbound uses manually linked user identities before provisioning"
   await linkUserPrivateIdentity(user.id, {
     provider: "whatsapp",
     accountId: "main",
-    externalId: "491111111111@c.us",
+    externalId: "wa-contact-one@c.us",
     chatId: "manual-alice-chat@g.us",
     displayName: "Alice WA",
     source: "manual",
@@ -1925,7 +1926,7 @@ test("whatsapp inbound uses manually linked user identities before provisioning"
     eventId: "wa-manual-user-1",
     chatId: "manual-alice-chat@g.us",
     accountId: "main",
-    from: "491111111111@c.us",
+    from: "wa-contact-one@c.us",
     chatName: "Alice Chat",
     text: "hello from manually linked whatsapp",
   }, env);
@@ -4087,8 +4088,8 @@ test("direct whatsapp thread inputs inherit binding delivery metadata", async ()
       chatId: "chat-direct",
       displayName: "Direct Chat",
       enabled: true,
-      responderAccountId: "openclaw",
-      outboundAccountId: "openclaw",
+      responderAccountId: "secondary",
+      outboundAccountId: "secondary",
     },
   }, env);
 
@@ -4096,7 +4097,7 @@ test("direct whatsapp thread inputs inherit binding delivery metadata", async ()
 
   assert.equal(message.connector, "whatsapp");
   assert.equal(message.chatId, "chat-direct");
-  assert.equal(message.accountId, "openclaw");
+  assert.equal(message.accountId, "secondary");
   assert.equal(message.originSurface, "whatsapp");
   assert.equal(message.originTransport, "whatsapp-direct");
 });
@@ -4117,8 +4118,8 @@ test("generated whatsapp bindings listen to the selected sender and answer as th
       senderAccountId: "account-1",
       responderAccountId: "account-2",
       outboundAccountId: "account-2",
-      senderContactId: "491111111111@c.us",
-      responderContactId: "492222222222@c.us",
+      senderContactId: "wa-contact-one@c.us",
+      responderContactId: "wa-contact-two@c.us",
     },
   }, env);
 
@@ -4131,7 +4132,7 @@ test("generated whatsapp bindings listen to the selected sender and answer as th
     eventId: "wa-generated-responder-sees-sender",
     chatId: "chat-generated",
     accountId: "account-2",
-    from: "491111111111@c.us",
+    from: "wa-contact-one@c.us",
     fromMe: false,
     text: "selected sender via responder",
   }, env);
@@ -4180,7 +4181,7 @@ test("whatsapp auto-provision does not bypass existing binding participant restr
       senderAccountId: "account-1",
       responderAccountId: "account-1",
       outboundAccountId: "account-1",
-      senderContactId: "491111111111@c.us",
+      senderContactId: "wa-contact-one@c.us",
     },
   }, env);
 
@@ -4189,7 +4190,7 @@ test("whatsapp auto-provision does not bypass existing binding participant restr
       eventId: "wa-auto-restricted-rejected",
       chatId: "chat-auto-restricted",
       accountId: "account-1",
-      from: "493333333333@c.us",
+      from: "wa-contact-three@c.us",
       text: "should not create a separate user thread",
     }, env),
     /whatsapp_target_required/,
@@ -4206,7 +4207,7 @@ test("generated single-account whatsapp groups route lid senders through the gro
     name: "Generated Lid Thread",
     binding: {
       connector: "whatsapp",
-      chatId: "120363424272031669@g.us",
+      chatId: "wa-group-beta@g.us",
       displayName: "orkestr",
       enabled: true,
       generated: true,
@@ -4214,17 +4215,17 @@ test("generated single-account whatsapp groups route lid senders through the gro
       senderAccountId: "responder",
       responderAccountId: "responder",
       outboundAccountId: "responder",
-      senderContactId: "4917632400662@c.us",
-      responderContactId: "905555154214@c.us",
+      senderContactId: "wa-contact-primary@c.us",
+      responderContactId: "wa-contact-responder@c.us",
     },
   }, env);
 
   await assert.rejects(
     () => routeWhatsAppInbound({
       eventId: "wa-generated-lid-responder",
-      chatId: "120363424272031669@g.us",
+      chatId: "wa-group-beta@g.us",
       accountId: "responder",
-      from: "905555154214@c.us",
+      from: "wa-contact-responder@c.us",
       fromMe: false,
       text: "responder echo",
     }, env),
@@ -4233,9 +4234,9 @@ test("generated single-account whatsapp groups route lid senders through the gro
   await assert.rejects(
     () => routeWhatsAppInbound({
       eventId: "wa-generated-lid-wrong-chat",
-      chatId: "120363999999999999@g.us",
+      chatId: "wa-group-other@g.us",
       accountId: "responder",
-      from: "66378837028965@lid",
+      from: "wa-lid-primary@lid",
       fromMe: false,
       text: "wrong chat",
     }, env),
@@ -4244,9 +4245,9 @@ test("generated single-account whatsapp groups route lid senders through the gro
 
   const routed = await routeWhatsAppInbound({
     eventId: "wa-generated-lid-sender",
-    chatId: "120363424272031669@g.us",
+    chatId: "wa-group-beta@g.us",
     accountId: "responder",
-    from: "66378837028965@lid",
+    from: "wa-lid-primary@lid",
     fromMe: false,
     text: "lid sender",
   }, env);
@@ -4255,7 +4256,7 @@ test("generated single-account whatsapp groups route lid senders through the gro
   assert.equal(routed.threadId, "generated-lid-thread");
   assert.equal(messages.length, 1);
   assert.equal(messages[0].text, "lid sender");
-  assert.equal(messages[0].from, "66378837028965@lid");
+  assert.equal(messages[0].from, "wa-lid-primary@lid");
 });
 
 test("generated single-account whatsapp groups tolerate missing responder identity for lid senders", async () => {
@@ -4266,7 +4267,7 @@ test("generated single-account whatsapp groups tolerate missing responder identi
     name: "Generated Lid No Responder Thread",
     binding: {
       connector: "whatsapp",
-      chatId: "120363424272031669@g.us",
+      chatId: "wa-group-beta@g.us",
       displayName: "orkestr",
       enabled: true,
       generated: true,
@@ -4274,15 +4275,15 @@ test("generated single-account whatsapp groups tolerate missing responder identi
       senderAccountId: "responder",
       responderAccountId: "responder",
       outboundAccountId: "responder",
-      senderContactId: "4917632400662@c.us",
+      senderContactId: "wa-contact-primary@c.us",
     },
   }, env);
 
   const routed = await routeWhatsAppInbound({
     eventId: "wa-generated-lid-no-responder",
-    chatId: "120363424272031669@g.us",
+    chatId: "wa-group-beta@g.us",
     accountId: "responder",
-    from: "66378837028965@lid",
+    from: "wa-lid-primary@lid",
     fromMe: false,
     text: "lid sender",
   }, env);
@@ -4291,32 +4292,34 @@ test("generated single-account whatsapp groups tolerate missing responder identi
   assert.equal(routed.threadId, "generated-lid-no-responder-thread");
   assert.equal(messages.length, 1);
   assert.equal(messages[0].text, "lid sender");
-  assert.equal(messages[0].from, "66378837028965@lid");
+  assert.equal(messages[0].from, "wa-lid-primary@lid");
 });
 
 test("whatsapp inbound matches saved phone sender against WhatsApp contact ids", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-phone-sender-match-"));
   const env = externalBridgeEnv(home);
+  const senderDigits = "15550100001";
+  const senderContactId = `${senderDigits}@c.us`;
   await createThread({
     id: "phone-sender-thread",
     name: "Phone Sender Thread",
     binding: {
       connector: "whatsapp",
-      chatId: "120363425280218500@g.us",
-      displayName: "orkestr.de",
+      chatId: "wa-group-acceptance@g.us",
+      displayName: "orkestr.example.test",
       enabled: true,
       senderAccountId: "sender",
       responderAccountId: "responder",
       outboundAccountId: "responder",
-      senderContactId: "+4917632400662",
+      senderContactId: `+${senderDigits}`,
     },
   }, env);
 
   const routed = await routeWhatsAppInbound({
     eventId: "wa-phone-sender-match",
-    chatId: "120363425280218500@g.us",
+    chatId: "wa-group-acceptance@g.us",
     accountId: "responder",
-    from: "4917632400662@c.us",
+    from: senderContactId,
     fromMe: false,
     text: "route check",
   }, env);
@@ -4363,23 +4366,23 @@ test("additional participants require an explicit selected participant", async (
       enabled: true,
       allowOtherPeople: true,
       additionalParticipantsEnabled: true,
-      additionalParticipantIds: ["491111111111@c.us"],
+      additionalParticipantIds: ["wa-contact-one@c.us"],
       senderAccountId: "account-1",
       responderAccountId: "account-2",
-      responderContactId: "492222222222@c.us",
+      responderContactId: "wa-contact-two@c.us",
     },
   }, env);
 
   await assert.rejects(
-    () => routeWhatsAppInbound({ eventId: "wa-additional-rejected", chatId: "chat-selected", accountId: "account-1", from: "493333333333@c.us", fromMe: false, text: "not selected" }, env),
+    () => routeWhatsAppInbound({ eventId: "wa-additional-rejected", chatId: "chat-selected", accountId: "account-1", from: "wa-contact-three@c.us", fromMe: false, text: "not selected" }, env),
     /whatsapp_target_required/,
   );
   await assert.rejects(
-    () => routeWhatsAppInbound({ eventId: "wa-additional-responder", chatId: "chat-selected", accountId: "account-1", from: "492222222222@c.us", fromMe: false, text: "responder" }, env),
+    () => routeWhatsAppInbound({ eventId: "wa-additional-responder", chatId: "chat-selected", accountId: "account-1", from: "wa-contact-two@c.us", fromMe: false, text: "responder" }, env),
     /whatsapp_target_required/,
   );
 
-  const routed = await routeWhatsAppInbound({ eventId: "wa-additional-selected", chatId: "chat-selected", accountId: "account-1", from: "491111111111@c.us", fromMe: false, text: "selected allowed" }, env);
+  const routed = await routeWhatsAppInbound({ eventId: "wa-additional-selected", chatId: "chat-selected", accountId: "account-1", from: "wa-contact-one@c.us", fromMe: false, text: "selected allowed" }, env);
 
   assert.equal(routed.threadId, "selected-additional-thread");
 });

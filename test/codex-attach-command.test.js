@@ -73,7 +73,7 @@ test("codex resume attach can read the persisted runtime command", async () => {
   const env = { ORKESTR_HOME: home };
   await writeRuntimeSettings({
     codex: {
-      command: "/home/user/.orkestr/codex-cli/node_modules/.bin/codex --sandbox workspace-write --ask-for-approval on-request --no-alt-screen",
+      command: "/tmp/orkestr-codex-cli/node_modules/.bin/codex --sandbox workspace-write --ask-for-approval on-request --no-alt-screen",
     },
   }, env);
 
@@ -85,7 +85,7 @@ test("codex resume attach can read the persisted runtime command", async () => {
 
   assert.equal(
     command,
-    "/home/user/.orkestr/codex-cli/node_modules/.bin/codex --sandbox workspace-write --ask-for-approval on-request --no-alt-screen resume -C '/repo/with space' 'abc'\\''def'"
+    "/tmp/orkestr-codex-cli/node_modules/.bin/codex --sandbox workspace-write --ask-for-approval on-request --no-alt-screen resume -C '/repo/with space' 'abc'\\''def'"
   );
 });
 

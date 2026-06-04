@@ -108,8 +108,8 @@ test("WhatsApp inbound routing requires explicit participants unless a generated
       senderAccountId: "wa-1",
       responderAccountId: "wa-1",
       outboundAccountId: "wa-1",
-      senderContactId: "491234@c.us",
-      responderContactId: "905555@c.us",
+      senderContactId: "wa-contact-short@c.us",
+      responderContactId: "wa-contact-short-responder@c.us",
       additionalParticipantsEnabled: false,
       additionalParticipantIds: [],
     },
@@ -119,7 +119,7 @@ test("WhatsApp inbound routing requires explicit participants unless a generated
     thread: baseThread,
     chatId: "group-1@g.us",
     accountId: "wa-1",
-    from: "66378837028965@lid",
+    from: "wa-lid-primary@lid",
     fromMe: false,
   }), true);
 
@@ -127,15 +127,15 @@ test("WhatsApp inbound routing requires explicit participants unless a generated
     thread: { binding: { ...baseThread.binding, generated: false } },
     chatId: "group-1@g.us",
     accountId: "wa-1",
-    from: "66378837028965@lid",
+    from: "wa-lid-primary@lid",
     fromMe: false,
   }), false);
 
   assert.equal(whatsappInboundThreadMatchesBinding({
-    thread: { binding: { ...baseThread.binding, generated: false, additionalParticipantsEnabled: true, additionalParticipantIds: ["66378837028965@lid"] } },
+    thread: { binding: { ...baseThread.binding, generated: false, additionalParticipantsEnabled: true, additionalParticipantIds: ["wa-lid-primary@lid"] } },
     chatId: "group-1@g.us",
     accountId: "wa-1",
-    from: "66378837028965@lid",
+    from: "wa-lid-primary@lid",
     fromMe: false,
   }), true);
 });

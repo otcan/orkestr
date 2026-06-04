@@ -33,16 +33,16 @@ test("tenant WhatsApp routes store scoped tokens outside the public VM registry"
   }, env);
 
   const configured = await configureTenantWhatsAppRoute("alice-tenant", {
-    chatId: "120363000000000000@g.us",
+    chatId: "wa-group-zero@g.us",
     accountId: "responder",
   }, env);
   const vm = await getTenantVm("alice-tenant", env);
   const route = await tenantWhatsAppInboundForwardRoute({
-    chatId: "120363000000000000@g.us",
+    chatId: "wa-group-zero@g.us",
     accountId: "responder",
   }, env);
   const accountMismatch = await tenantWhatsAppInboundForwardRoute({
-    chatId: "120363000000000000@g.us",
+    chatId: "wa-group-zero@g.us",
     accountId: "other-account",
   }, env);
   const listed = await listTenantWhatsAppRoutes(env);
@@ -51,7 +51,7 @@ test("tenant WhatsApp routes store scoped tokens outside the public VM registry"
   assert.equal(configured.route.target, "https://alice.example.test/api/connectors/whatsapp/inbound");
   assert.match(configured.route.token, /^owt_/);
   assert.equal(configured.route.tokenConfigured, true);
-  assert.equal(vm.connectors.whatsappChatId, "120363000000000000@g.us");
+  assert.equal(vm.connectors.whatsappChatId, "wa-group-zero@g.us");
   assert.equal(vm.connectors.whatsappRouteEnabled, true);
   assert.equal(route.tenantVmId, "alice-tenant");
   assert.equal(route.target, configured.route.target);
@@ -63,7 +63,7 @@ test("tenant WhatsApp routes store scoped tokens outside the public VM registry"
 
   const disabled = await disableTenantWhatsAppRoute("alice-tenant", env);
   assert.equal(disabled.route.enabled, false);
-  assert.equal(await tenantWhatsAppInboundForwardRoute({ chatId: "120363000000000000@g.us" }, env), null);
+  assert.equal(await tenantWhatsAppInboundForwardRoute({ chatId: "wa-group-zero@g.us" }, env), null);
 
   await createTenantVm({
     id: "credentialed-tenant",
@@ -71,7 +71,7 @@ test("tenant WhatsApp routes store scoped tokens outside the public VM registry"
     endpoint: { baseUrl: "https://token@example.test" },
   }, env);
   await assert.rejects(
-    () => configureTenantWhatsAppRoute("credentialed-tenant", { chatId: "120363222222222222@g.us" }, env),
+    () => configureTenantWhatsAppRoute("credentialed-tenant", { chatId: "wa-group-route-two@g.us" }, env),
     /tenant_vm_base_url_required/,
   );
 });
@@ -85,7 +85,7 @@ test("local WhatsApp bridge forwards tenant-routed chats with the scoped tenant 
     endpoint: { baseUrl: "https://bob.example.test" },
   }, env);
   const configured = await configureTenantWhatsAppRoute("bob-tenant", {
-    chatId: "120363111111111111@g.us",
+    chatId: "wa-group-route-one@g.us",
     chatName: "Bob tenant WA",
     accountId: "tenant-wa",
   }, env);
@@ -93,9 +93,9 @@ test("local WhatsApp bridge forwards tenant-routed chats with the scoped tenant 
 
   const forwarded = await forwardLocalWhatsAppInbound({
     eventId: "tenant-wa-event-1",
-    chatId: "120363111111111111@g.us",
+    chatId: "wa-group-route-one@g.us",
     accountId: "tenant-wa",
-    from: "491700000000@c.us",
+    from: "wa-contact-tenant@c.us",
     text: "hello tenant",
   }, env, async (url, options = {}) => {
     calls.push({ url, options, body: options.body ? JSON.parse(options.body) : null });
@@ -107,7 +107,7 @@ test("local WhatsApp bridge forwards tenant-routed chats with the scoped tenant 
   assert.equal(String(calls[0].url), "https://bob.example.test/api/health");
   assert.equal(String(calls[1].url), "https://bob.example.test/api/connectors/whatsapp/inbound");
   assert.equal(calls[1].options.headers.authorization, `Bearer ${configured.route.token}`);
-  assert.equal(calls[1].body.chatId, "120363111111111111@g.us");
+  assert.equal(calls[1].body.chatId, "wa-group-route-one@g.us");
   assert.equal(calls[1].body.accountId, "tenant-wa");
   assert.equal(calls[1].body.displayName, "Bob tenant WA");
   assert.equal(calls[1].body.chatName, "Bob tenant WA");
@@ -122,7 +122,7 @@ test("local WhatsApp tenant forwards block unhealthy target instances before rou
     endpoint: { baseUrl: "https://down.example.test" },
   }, env);
   await configureTenantWhatsAppRoute("down-tenant", {
-    chatId: "120363444444444444@g.us",
+    chatId: "wa-group-route-four@g.us",
     accountId: "tenant-wa",
   }, env);
   const calls = [];
@@ -130,9 +130,9 @@ test("local WhatsApp tenant forwards block unhealthy target instances before rou
   await assert.rejects(
     () => forwardLocalWhatsAppInbound({
       eventId: "tenant-wa-event-down",
-      chatId: "120363444444444444@g.us",
+      chatId: "wa-group-route-four@g.us",
       accountId: "tenant-wa",
-      from: "491700000000@c.us",
+      from: "wa-contact-tenant@c.us",
       text: "hello tenant",
     }, env, async (url) => {
       calls.push(String(url));
@@ -157,7 +157,7 @@ test("local WhatsApp tenant forwards allow sanitizer-backed targets enough time 
     endpoint: { baseUrl: "https://slow.example.test" },
   }, env);
   await configureTenantWhatsAppRoute("slow-tenant", {
-    chatId: "120363333333333333@g.us",
+    chatId: "wa-group-route-three@g.us",
     accountId: "tenant-wa",
   }, env);
   const originalTimeout = AbortSignal.timeout;
@@ -169,9 +169,9 @@ test("local WhatsApp tenant forwards allow sanitizer-backed targets enough time 
   try {
     await forwardLocalWhatsAppInbound({
       eventId: "tenant-wa-event-slow",
-      chatId: "120363333333333333@g.us",
+      chatId: "wa-group-route-three@g.us",
       accountId: "tenant-wa",
-      from: "491700000000@c.us",
+      from: "wa-contact-tenant@c.us",
       text: "hello tenant",
     }, env, async (url) => {
       if (String(url) === "https://slow.example.test/api/health") return response({ ok: true }, true, 200);

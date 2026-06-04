@@ -189,13 +189,13 @@ console.log(JSON.stringify({ ok: true, sessions: [session] }));
     ORKESTR_DESKTOP_LEASE_FILE: path.join(home, "desktop-leases.json"),
   };
 
-  await createThread({ id: "crawlerai-linkedin", name: "Crawlerai LinkedIn", title: "Crawlerai-Linkedin", state: "ready" }, env);
+  await createThread({ id: "sample-linkedin", name: "Sample LinkedIn", title: "Sample-Linkedin", state: "ready" }, env);
   const payload = await listBrowserSessions(env);
   const linkedin = payload.sessions.find((session) => session.slug === "linkedin");
 
   assert.equal(linkedin.lease, null);
-  assert.deepEqual(linkedin.relatedThreads.map((thread) => thread.id), ["crawlerai-linkedin"]);
-  assert.equal(linkedin.relatedThreads[0].title, "Crawlerai-Linkedin");
+  assert.deepEqual(linkedin.relatedThreads.map((thread) => thread.id), ["sample-linkedin"]);
+  assert.equal(linkedin.relatedThreads[0].title, "Sample-Linkedin");
 });
 
 test("managed desktop sessions can open a requested URL through CDP", async () => {
