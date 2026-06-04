@@ -9,6 +9,7 @@ import { stopCodexAppServerClients } from "../packages/core/src/codex-app-server
 import { runNextAgentMessage, runNextThreadMessage } from "../packages/core/src/executors.js";
 import { listAgentMessages } from "../packages/core/src/messages.js";
 import { deliverPendingThreadInputs, listRuntimeLeases } from "../packages/core/src/runtime-leases.js";
+import { listRouterTraces } from "../packages/core/src/router-traces.js";
 import { getSetupStatus } from "../packages/core/src/setup.js";
 import { appendThreadMessage, createThread, enqueueThreadInput, getThread, listThreadMessages, listThreads, updateThreadMessage } from "../packages/core/src/threads.js";
 import { createUser, linkUserPrivateIdentity } from "../packages/core/src/users.js";
@@ -19,7 +20,7 @@ import { createAndBindWhatsAppThreadGroup } from "../packages/connectors/src/wha
 import { prepareWhatsAppTableAttachments } from "../packages/connectors/src/whatsapp-table-attachments.js";
 import { mergeWhatsAppOutboundIntents, mergeWhatsAppOutboundMirrorCursors } from "../packages/connectors/src/whatsapp-outbound-intents.js";
 import { writeConnectorConfig } from "../packages/storage/src/config.js";
-import { userDataPaths } from "../packages/storage/src/paths.js";
+import { dataPaths, userDataPaths } from "../packages/storage/src/paths.js";
 import { listEvents } from "../packages/storage/src/store.js";
 
 afterEach(() => {
@@ -56,6 +57,28 @@ function response(payload, ok = true, status = 200) {
     status,
     async json() {
       return payload;
+    },
+  };
+}
+
+function binaryResponse(body, headers = {}, status = 200) {
+  const buffer = Buffer.isBuffer(body) ? body : Buffer.from(String(body));
+  const normalizedHeaders = Object.fromEntries(
+    Object.entries(headers).map(([key, value]) => [key.toLowerCase(), String(value)]),
+  );
+  return {
+    ok: status >= 200 && status < 300,
+    status,
+    headers: {
+      get(name) {
+        return normalizedHeaders[String(name || "").toLowerCase()] || "";
+      },
+    },
+    async json() {
+      return {};
+    },
+    async arrayBuffer() {
+      return buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength);
     },
   };
 }
@@ -1541,6 +1564,182 @@ test("whatsapp remote runtime imports parent replies and mirrors them once throu
   assert.equal(imported.parentMessageId, messages[0].id);
 });
 
+test("whatsapp remote runtime stages parent attachments and sends them as media", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-remote-attachment-"));
+  const env = externalBridgeEnv(home, {
+    ORKESTR_WHATSAPP_DEBUG_FOOTER: "0",
+    ORKESTR_REMOTE_THREAD_BACKENDS_JSON: JSON.stringify({
+      personal: { baseUrl: "http://parent.local", token: "parent-token" },
+    }),
+  });
+  await writeConnectorConfig("whatsapp", { bridgeMode: "external", bridgeUrl: "http://wa.local", apiToken: "wa-token" }, env);
+  await createThread({
+    id: "public-remote-attachment",
+    name: "Public Remote Attachment",
+    binding: {
+      connector: "whatsapp",
+      chatId: "chat-remote-attachment",
+      responderAccountId: "responder",
+      remoteBackend: "personal",
+      remoteThreadId: "parent-thread",
+    },
+  }, env);
+  const parentUser = {
+    id: "parent-user-attachment",
+    role: "user",
+    source: "whatsapp_inbound",
+    state: "completed",
+    deliveryState: "delivered",
+    text: "make a one-pager",
+    chatId: "chat-remote-attachment",
+    accountId: "responder",
+    createdAt: new Date().toISOString(),
+  };
+  const parentReply = {
+    id: "parent-assistant-attachment",
+    role: "assistant",
+    source: "codex-app-server",
+    phase: "final_answer",
+    state: "completed",
+    parentMessageId: "parent-user-attachment",
+    text: "Prepared it here: [PROJECT_ONE_PAGER.md](/workspace/thread/PROJECT_ONE_PAGER.md).",
+    chatId: "chat-remote-attachment",
+    createdAt: new Date().toISOString(),
+    attachments: [{
+      id: "remote-doc",
+      filename: "PROJECT_ONE_PAGER.md",
+      mimetype: "text/markdown",
+      size: 22,
+      downloadUrl: "/api/threads/parent-thread/attachments/remote-doc/download",
+    }],
+  };
+  const sendCalls = [];
+  const fetchImpl = async (url, options = {}) => {
+    const parsed = new URL(String(url));
+    if (parsed.host === "parent.local" && parsed.pathname === "/threads/parent-thread/input") {
+      return response({ ok: true, message: parentUser });
+    }
+    if (parsed.host === "parent.local" && parsed.pathname === "/threads/parent-thread/messages") {
+      return response({ ok: true, messages: [parentUser, parentReply] });
+    }
+    if (parsed.host === "parent.local" && parsed.pathname === "/api/threads/parent-thread/attachments/remote-doc/download") {
+      assert.equal(options.headers.authorization, "Bearer parent-token");
+      return binaryResponse("# Project one-pager\n", { "content-type": "text/markdown" });
+    }
+    if (parsed.host === "wa.local" && parsed.pathname === "/send-media") {
+      sendCalls.push(JSON.parse(options.body));
+      return response({ ok: true, ids: ["sent-text", "sent-doc"] });
+    }
+    throw new Error(`unexpected fetch ${parsed.href}`);
+  };
+
+  await routeWhatsAppInbound({
+    eventId: "remote-attachment-1",
+    chatId: "chat-remote-attachment",
+    accountId: "responder",
+    text: "make a one-pager",
+  }, env, fetchImpl);
+  const delivery = await deliverWhatsAppReplies(env, fetchImpl);
+  const duplicate = await deliverWhatsAppReplies(env, fetchImpl);
+  const messages = await listThreadMessages("public-remote-attachment", env);
+  const imported = messages.find((message) => message.remoteMessageId === "parent-assistant-attachment");
+
+  assert.equal(delivery.delivered.length, 1);
+  assert.equal(duplicate.delivered.length, 0);
+  assert.equal(sendCalls.length, 1);
+  assert.equal(sendCalls[0].to, "chat-remote-attachment");
+  assert.equal(sendCalls[0].paths.length, 1);
+  assert.match(sendCalls[0].paths[0], /whatsapp-bridge\/outbound-media\/remote-artifacts/);
+  assert.equal(await fs.readFile(sendCalls[0].paths[0], "utf8"), "# Project one-pager\n");
+  assert.equal(imported.attachments.length, 1);
+  assert.equal(imported.attachments[0].remoteAttachmentId, "remote-doc");
+  assert.equal(imported.attachments[0].filename, "PROJECT_ONE_PAGER.md");
+  assert.equal(imported.attachments[0].path, sendCalls[0].paths[0]);
+});
+
+test("whatsapp remote runtime reports missing parent attachments instead of silently dropping them", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-remote-attachment-missing-"));
+  const env = externalBridgeEnv(home, {
+    ORKESTR_WHATSAPP_DEBUG_FOOTER: "0",
+    ORKESTR_REMOTE_THREAD_BACKENDS_JSON: JSON.stringify({
+      personal: { baseUrl: "http://parent.local", token: "parent-token" },
+    }),
+  });
+  await writeConnectorConfig("whatsapp", { bridgeMode: "external", bridgeUrl: "http://wa.local", apiToken: "wa-token" }, env);
+  await createThread({
+    id: "public-remote-attachment-missing",
+    name: "Public Remote Attachment Missing",
+    binding: {
+      connector: "whatsapp",
+      chatId: "chat-remote-attachment-missing",
+      responderAccountId: "responder",
+      remoteBackend: "personal",
+      remoteThreadId: "parent-thread",
+    },
+  }, env);
+  const parentUser = {
+    id: "parent-user-missing-attachment",
+    role: "user",
+    source: "whatsapp_inbound",
+    state: "completed",
+    deliveryState: "delivered",
+    text: "make a one-pager",
+    chatId: "chat-remote-attachment-missing",
+    accountId: "responder",
+    createdAt: new Date().toISOString(),
+  };
+  const parentReply = {
+    id: "parent-assistant-missing-attachment",
+    role: "assistant",
+    source: "codex-app-server",
+    phase: "final_answer",
+    state: "completed",
+    parentMessageId: "parent-user-missing-attachment",
+    text: "Prepared the one-pager.",
+    chatId: "chat-remote-attachment-missing",
+    createdAt: new Date().toISOString(),
+    attachments: [{
+      id: "remote-missing",
+      filename: "missing.md",
+      mimetype: "text/markdown",
+      size: 12,
+      downloadUrl: "/api/threads/parent-thread/attachments/remote-missing/download",
+    }],
+  };
+  const sendCalls = [];
+  const fetchImpl = async (url, options = {}) => {
+    const parsed = new URL(String(url));
+    if (parsed.host === "parent.local" && parsed.pathname === "/threads/parent-thread/input") {
+      return response({ ok: true, message: parentUser });
+    }
+    if (parsed.host === "parent.local" && parsed.pathname === "/threads/parent-thread/messages") {
+      return response({ ok: true, messages: [parentUser, parentReply] });
+    }
+    if (parsed.host === "parent.local" && parsed.pathname.includes("/attachments/remote-missing/download")) {
+      return response({ ok: false, error: "missing" }, false, 404);
+    }
+    if (parsed.host === "wa.local" && parsed.pathname === "/send-text") {
+      sendCalls.push(JSON.parse(options.body));
+      return response({ ok: true, ids: ["sent-missing-note"] });
+    }
+    throw new Error(`unexpected fetch ${parsed.href}`);
+  };
+
+  await routeWhatsAppInbound({
+    eventId: "remote-attachment-missing-1",
+    chatId: "chat-remote-attachment-missing",
+    accountId: "responder",
+    text: "make a one-pager",
+  }, env, fetchImpl);
+  const delivery = await deliverWhatsAppReplies(env, fetchImpl);
+
+  assert.equal(delivery.delivered.length, 1);
+  assert.equal(sendCalls.length, 1);
+  assert.equal(sendCalls[0].paths, undefined);
+  assert.match(sendCalls[0].text, /Attachment not sent:/);
+  assert.match(sendCalls[0].text, /missing\.md: missing/);
+});
+
 test("whatsapp delivery skips outbound replies while an active persisted claim exists", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-claim-active-"));
   const env = externalBridgeEnv(home, {
@@ -1625,12 +1824,16 @@ test("whatsapp inbound can route directly to a thread and mirror its reply once"
     bridgeUrl: "http://wa.local",
     threadRoutes: { "chat-thread": "thread-wa" },
   }, env);
+  const inboundMediaDir = path.join(dataPaths(env).home, "whatsapp-bridge", "inbound-media", "test");
+  await fs.mkdir(inboundMediaDir, { recursive: true });
+  const inboundImagePath = path.join(inboundMediaDir, "thread-image.jpg");
+  await fs.writeFile(inboundImagePath, "image", "utf8");
 
   const routed = await routeWhatsAppInbound({
     eventId: "wa-thread-1",
     chatId: "chat-thread",
     text: "thread status?",
-    attachments: [{ kind: "image", path: "/tmp/thread-image.jpg", filename: "thread-image.jpg", mimetype: "image/jpeg" }],
+    attachments: [{ kind: "image", path: inboundImagePath, filename: "thread-image.jpg", mimetype: "image/jpeg" }],
   }, env);
   await runNextThreadMessage("thread-wa", {}, env);
 
@@ -1646,12 +1849,20 @@ test("whatsapp inbound can route directly to a thread and mirror its reply once"
 
   assert.equal(routed.threadId, "thread-wa");
   assert.equal(messages.length, 2);
-  assert.equal(messages[0].attachments[0].path, "/tmp/thread-image.jpg");
+  assert.equal(messages[0].attachments[0].path, inboundImagePath);
   assert.equal(messages[0].attachments[0].filename, "thread-image.jpg");
+  assert.equal(Boolean(messages[0].routerTraceId), true);
+  assert.equal(messages[1].routerTraceId, messages[0].routerTraceId);
   assert.equal(delivery.delivered.length, 1);
   assert.equal(duplicate.delivered.length, 0);
   assert.equal(calls[0].url.pathname, "/send-text");
   assert.equal(calls[0].body.to, "chat-thread");
+  const traces = await listRouterTraces({ threadId: "thread-wa" }, env);
+  assert.equal(traces.length, 1);
+  assert.equal(traces[0].routerTraceId, messages[0].routerTraceId);
+  assert.equal(traces[0].currentPhase, "completed");
+  assert.equal(traces[0].phases.some((phase) => phase.phase === "received"), true);
+  assert.equal(traces[0].phases.some((phase) => phase.phase === "mirror_sent"), true);
 });
 
 test("whatsapp explicit approve command is local when no Codex approval is pending", async () => {
@@ -1847,7 +2058,10 @@ test("local whatsapp bridge runs api-agent tenant chats without waking legacy ru
   assert.equal(events.some((event) => event.type === "thread_input_delivery_deferred" && event.threadId === "otcantest"), false);
   assert.equal(events.some((event) => event.type === "thread_input_delivery_skipped" && event.threadId === "otcantest"), false);
   assert.equal(calls.some((call) => call.url.endsWith("/responses")), true);
-  assert.equal(calls.some((call) => call.url.endsWith("/send-text") && call.body?.to === chatId), true);
+  const sendCalls = calls.filter((call) => call.url.endsWith("/send-text") && call.body?.to === chatId);
+  assert.equal(sendCalls.length, 2);
+  assert.match(sendCalls[0].body.text, /^Queued your message while Orkestr prepares this thread: "Hi"\./);
+  assert.equal(sendCalls[1].body.text, "Hi! How can I help you today?");
 });
 
 test("local whatsapp inbound failures explain missing user capabilities", () => {
@@ -1979,9 +2193,102 @@ test("whatsapp delivery mirrors bound thread replies that only carry the binding
   assert.match(calls[0].body.text, /bound chat id but no parent/);
 });
 
-test("whatsapp delivery mirrors every commentary update before final replies", async () => {
+test("whatsapp delivery mirrors imported app-server final replies through the bound thread chat", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-import-bound-"));
+  const env = externalBridgeEnv(home);
+  await writeConnectorConfig("whatsapp", { bridgeMode: "external", bridgeUrl: "http://wa.local" }, env);
+  await createThread({
+    id: "thread-import-bound",
+    name: "Imported Bound Reply Thread",
+    binding: {
+      connector: "whatsapp",
+      chatId: "chat-import-bound",
+      responderAccountId: "account-import-bound",
+      mirrorToWhatsApp: true,
+    },
+  }, env);
+  await appendThreadMessage("thread-import-bound", {
+    role: "assistant",
+    source: "codex-app-server-import",
+    phase: "commentary",
+    text: "Imported progress should be mirrored.",
+    state: "completed",
+  }, env);
+  await appendThreadMessage("thread-import-bound", {
+    role: "assistant",
+    source: "codex-app-server-import",
+    phase: "final_answer",
+    text: "Imported final should be mirrored.",
+    state: "completed",
+  }, env);
+
+  const calls = [];
+  const delivery = await deliverWhatsAppReplies(env, async (url, options) => {
+    calls.push({ url, body: JSON.parse(options.body) });
+    return response({ ok: true, ids: [`sent-import-${calls.length}`] });
+  });
+
+  assert.equal(delivery.delivered.length, 1);
+  assert.equal(delivery.delivered[0].deliveryType, "final");
+  assert.deepEqual(calls.map((call) => call.body.to), ["chat-import-bound"]);
+  assert.deepEqual(calls.map((call) => call.body.accountId), ["account-import-bound"]);
+  assert.deepEqual(calls.map((call) => stripDebugFooter(call.body.text)), ["Imported final should be mirrored."]);
+});
+
+test("whatsapp delivery sends one final message when commentary exists by default", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-final-only-"));
+  const env = externalBridgeEnv(home);
+  await createThread({ id: "thread-wa-final-only", name: "WA Final Only Thread" }, env);
+  await writeConnectorConfig("whatsapp", {
+    bridgeMode: "external",
+    bridgeUrl: "http://wa.local",
+    threadRoutes: { "chat-final-only": "thread-wa-final-only" },
+  }, env);
+
+  const routed = await routeWhatsAppInbound({ eventId: "wa-final-only-1", chatId: "chat-final-only", text: "help me" }, env);
+  await appendThreadMessage("thread-wa-final-only", {
+    role: "assistant",
+    source: "codex-rollout",
+    phase: "commentary",
+    state: "completed",
+    text: "I am checking the repo now.",
+    parentMessageId: routed.message.id,
+    connector: "whatsapp",
+    chatId: "chat-final-only",
+  }, env);
+  const finalText = [
+    "Here is the answer.",
+    "",
+    "Steps:",
+    "- Open the receipt.",
+    "- Cancel only if the merchant exposes a subscription.",
+  ].join("\n");
+  await appendThreadMessage("thread-wa-final-only", {
+    role: "assistant",
+    source: "codex-rollout",
+    phase: "final_answer",
+    state: "completed",
+    text: finalText,
+    parentMessageId: routed.message.id,
+    connector: "whatsapp",
+    chatId: "chat-final-only",
+  }, env);
+
+  const calls = [];
+  const delivery = await deliverWhatsAppReplies(env, async (url, options) => {
+    calls.push({ url, body: JSON.parse(options.body) });
+    return response({ ok: true, ids: ["sent-final-only"] });
+  });
+
+  assert.equal(delivery.delivered.length, 1);
+  assert.equal(delivery.delivered[0].deliveryType, "final");
+  assert.equal(calls.length, 1);
+  assert.equal(stripDebugFooter(calls[0].body.text), finalText);
+});
+
+test("whatsapp delivery mirrors every commentary update before final replies when opted in", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-progress-"));
-  const env = externalBridgeEnv(home, { ORKESTR_WHATSAPP_PROGRESS_MIN_INTERVAL_MS: "60000" });
+  const env = externalBridgeEnv(home, { ORKESTR_WHATSAPP_MIRROR_PROGRESS_UPDATES: "1" });
   await createThread({ id: "thread-wa-progress", name: "WA Progress Thread" }, env);
   await writeConnectorConfig("whatsapp", {
     bridgeMode: "external",
@@ -2599,7 +2906,7 @@ test("whatsapp typing sync stops after outbound final delivery for the active pa
 
 test("whatsapp delivery mirrors fresh commentary even when a final answer already exists", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-progress-final-"));
-  const env = externalBridgeEnv(home);
+  const env = externalBridgeEnv(home, { ORKESTR_WHATSAPP_MIRROR_PROGRESS_UPDATES: "1" });
   await createThread({ id: "thread-wa-progress-final", name: "WA Progress Final Thread" }, env);
   await writeConnectorConfig("whatsapp", {
     bridgeMode: "external",
@@ -2647,7 +2954,7 @@ test("whatsapp delivery mirrors fresh commentary even when a final answer alread
 
 test("whatsapp delivery mirrors newer progress after an older final was already delivered", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-progress-after-final-"));
-  const env = externalBridgeEnv(home);
+  const env = externalBridgeEnv(home, { ORKESTR_WHATSAPP_MIRROR_PROGRESS_UPDATES: "1" });
   await createThread({ id: "thread-wa-progress-after-final", name: "WA Progress After Final Thread" }, env);
   await writeConnectorConfig("whatsapp", {
     bridgeMode: "external",
@@ -2707,7 +3014,7 @@ test("whatsapp delivery mirrors newer progress after an older final was already 
 
 test("whatsapp delivery does not backfill stale progress after an older final", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-stale-progress-after-final-"));
-  const env = externalBridgeEnv(home);
+  const env = externalBridgeEnv(home, { ORKESTR_WHATSAPP_MIRROR_PROGRESS_UPDATES: "1" });
   await createThread({ id: "thread-wa-stale-progress-after-final", name: "WA Stale Progress After Final Thread" }, env);
   await writeConnectorConfig("whatsapp", {
     bridgeMode: "external",
@@ -2763,7 +3070,7 @@ test("whatsapp delivery does not backfill stale progress after an older final", 
 
 test("whatsapp delivery appends compact debug footer for plan-mode Codex updates", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-debug-footer-"));
-  const env = externalBridgeEnv(home);
+  const env = externalBridgeEnv(home, { ORKESTR_WHATSAPP_MIRROR_PROGRESS_UPDATES: "1" });
   await createThread({
     id: "thread-wa-debug-footer",
     name: "WA Debug Footer Thread",
@@ -2849,6 +3156,7 @@ test("whatsapp debug footer can be disabled", async () => {
     ORKESTR_HOME: home,
     ORKESTR_WHATSAPP_EXTERNAL_BRIDGE_ENABLED: "1",
     ORKESTR_WHATSAPP_DEBUG_FOOTER: "0",
+    ORKESTR_WHATSAPP_MIRROR_PROGRESS_UPDATES: "1",
   };
   await createThread({ id: "thread-wa-debug-footer-off", name: "WA Debug Footer Off Thread" }, env);
   await writeConnectorConfig("whatsapp", {
@@ -2881,7 +3189,7 @@ test("whatsapp debug footer can be disabled", async () => {
 
 test("whatsapp delivery suppresses debug footer for contained user threads", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-debug-footer-contained-"));
-  const env = await externalBridgeEnvWithAllowingSanitizer(home);
+  const env = await externalBridgeEnvWithAllowingSanitizer(home, { ORKESTR_WHATSAPP_MIRROR_PROGRESS_UPDATES: "1" });
   await createThread({
     id: "thread-wa-debug-footer-contained",
     name: "WA Debug Footer Contained Thread",
@@ -2922,7 +3230,7 @@ test("whatsapp delivery suppresses debug footer for contained user threads", asy
 
 test("whatsapp debug footer ignores stale stored plan mode when live mode is code", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-debug-footer-stale-mode-"));
-  const env = externalBridgeEnv(home);
+  const env = externalBridgeEnv(home, { ORKESTR_WHATSAPP_MIRROR_PROGRESS_UPDATES: "1" });
   await createThread({
     id: "thread-wa-debug-footer-stale-mode",
     name: "WA Debug Footer Stale Mode Thread",
@@ -3359,6 +3667,91 @@ test("whatsapp delivery sends markdown tables as CSV attachments", async () => {
   ].join("\n"));
   assert.equal(delivery.delivered[0].attachments.length, 1);
   assert.equal(delivery.failed.length, 0);
+});
+
+test("whatsapp delivery sends allowed local paths as media attachments and does not replay them", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-path-attachment-"));
+  const env = externalBridgeEnv(home);
+  const paths = dataPaths(env);
+  const uploadDir = path.join(paths.home, "uploads", "thread-wa-path-attachment");
+  await fs.mkdir(uploadDir, { recursive: true });
+  const reportPath = path.join(uploadDir, "report.txt");
+  await fs.writeFile(reportPath, "report payload", "utf8");
+  await createThread({ id: "thread-wa-path-attachment", name: "WA Path Attachment" }, env);
+  await writeConnectorConfig("whatsapp", {
+    bridgeMode: "external",
+    bridgeUrl: "http://wa.local",
+    threadRoutes: { "chat-path-attachment": "thread-wa-path-attachment" },
+  }, env);
+
+  const routed = await routeWhatsAppInbound({ eventId: "wa-path-attachment-1", chatId: "chat-path-attachment", text: "send report" }, env);
+  const reply = await appendThreadMessage("thread-wa-path-attachment", {
+    role: "assistant",
+    source: "codex-rollout",
+    phase: "final_answer",
+    state: "completed",
+    text: `Generated report: ${reportPath}`,
+    parentMessageId: routed.message.id,
+    connector: "whatsapp",
+    chatId: "chat-path-attachment",
+  }, env);
+
+  const calls = [];
+  const delivery = await deliverWhatsAppReplies(env, async (url, options) => {
+    calls.push({ url, body: JSON.parse(options.body) });
+    return response({ ok: true, ids: ["sent-report"] });
+  });
+  const duplicate = await deliverWhatsAppReplies(env, async () => {
+    throw new Error("should not resend path attachment");
+  });
+  const storedReply = (await listThreadMessages("thread-wa-path-attachment", env)).find((message) => message.id === reply.id);
+
+  assert.equal(delivery.delivered.length, 1);
+  assert.equal(duplicate.delivered.length, 0);
+  assert.equal(calls[0].url.pathname, "/send-media");
+  assert.deepEqual(calls[0].body.paths, [reportPath]);
+  assert.equal(storedReply.attachments.length, 1);
+  assert.match(storedReply.attachments[0].id, /^att_[a-f0-9]{32}$/);
+  assert.equal(storedReply.attachments[0].filename, "report.txt");
+});
+
+test("whatsapp delivery skips forbidden local paths and redacts them from outbound text", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-forbidden-path-"));
+  const env = externalBridgeEnv(home);
+  const paths = dataPaths(env);
+  await fs.mkdir(paths.secrets, { recursive: true });
+  const secretPath = path.join(paths.secrets, "token.txt");
+  await fs.writeFile(secretPath, "secret", "utf8");
+  await createThread({ id: "thread-wa-forbidden-path", name: "WA Forbidden Path" }, env);
+  await writeConnectorConfig("whatsapp", {
+    bridgeMode: "external",
+    bridgeUrl: "http://wa.local",
+    threadRoutes: { "chat-forbidden-path": "thread-wa-forbidden-path" },
+  }, env);
+
+  const routed = await routeWhatsAppInbound({ eventId: "wa-forbidden-path-1", chatId: "chat-forbidden-path", text: "send report" }, env);
+  await appendThreadMessage("thread-wa-forbidden-path", {
+    role: "assistant",
+    source: "codex-rollout",
+    phase: "final_answer",
+    state: "completed",
+    text: `Secret path: ${secretPath}`,
+    parentMessageId: routed.message.id,
+    connector: "whatsapp",
+    chatId: "chat-forbidden-path",
+  }, env);
+
+  const calls = [];
+  const delivery = await deliverWhatsAppReplies(env, async (url, options) => {
+    calls.push({ url, body: JSON.parse(options.body) });
+    return response({ ok: true, ids: ["sent-redacted"] });
+  });
+
+  assert.equal(delivery.delivered.length, 1);
+  assert.equal(calls[0].url.pathname, "/send-text");
+  assert.equal(calls[0].body.paths, undefined);
+  assert.doesNotMatch(calls[0].body.text, new RegExp(secretPath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+  assert.match(calls[0].body.text, /\[local file path omitted]/);
 });
 
 test("whatsapp table attachment detection ignores fenced code blocks", async () => {
@@ -3798,17 +4191,17 @@ test("whatsapp delivery reports waking queue notices", async () => {
 
   assert.equal(delivery.delivered.length, 1);
   assert.equal(delivery.delivered[0].deliveryType, "queue_notice");
-  assert.match(stripDebugFooter(calls[0].body.text), /^Waiting for the legacy Codex terminal and queued your message: "wake test"\./);
+  assert.match(stripDebugFooter(calls[0].body.text), /^Waking this Orkestr thread and queued your message: "wake test"\./);
   assertDebugFooter(calls[0].body.text, { messageType: "update" });
 });
 
-test("whatsapp queue notices do not treat app-server threads as missing tmux sessions", () => {
+test("whatsapp queue notices use app-server runtime states", () => {
   assert.equal(initialQueueDeliveryState({
     state: "ready",
     runtimeKind: "codex-app-server",
     sessionName: null,
     promptReady: true,
-  }, { text: "send normally" }), "");
+  }, { text: "send normally" }), "waiting_runtime_ready");
   assert.equal(initialQueueDeliveryState({
     state: "working",
     runtimeKind: "codex-app-server",
@@ -3817,7 +4210,7 @@ test("whatsapp queue notices do not treat app-server threads as missing tmux ses
   assert.equal(initialQueueDeliveryState({
     state: "sleeping",
     runtimeKind: "codex-app-server",
-  }, { text: "resume app server" }), "");
+  }, { text: "resume app server" }), "waking");
   assert.equal(initialQueueDeliveryState({
     state: "ready",
     runtimeKind: "codex-tmux",
@@ -3826,35 +4219,47 @@ test("whatsapp queue notices do not treat app-server threads as missing tmux ses
   }, { text: "wake tmux" }), "waiting_runtime_start");
 });
 
-test("whatsapp delivery suppresses app-server active-turn queue notices", async () => {
-  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-app-server-active-queue-silent-"));
+test("whatsapp delivery reports app-server active-turn queue notices", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-app-server-active-queue-notice-"));
   const env = externalBridgeEnv(home);
   await createThread({
-    id: "thread-wa-app-server-active-queue-silent",
-    name: "WA App Server Active Queue Silent Thread",
+    id: "thread-wa-app-server-active-queue-notice",
+    name: "WA App Server Active Queue Notice Thread",
     runtimeKind: "codex-app-server",
   }, env);
   await writeConnectorConfig("whatsapp", {
     bridgeMode: "external",
     bridgeUrl: "http://wa.local",
-    threadRoutes: { "chat-app-server-active-queue-silent": "thread-wa-app-server-active-queue-silent" },
+    threadRoutes: { "chat-app-server-active-queue-notice": "thread-wa-app-server-active-queue-notice" },
   }, env);
   const routed = await routeWhatsAppInbound({
-    eventId: "wa-app-server-active-queue-silent-1",
-    chatId: "chat-app-server-active-queue-silent",
+    eventId: "wa-app-server-active-queue-notice-1",
+    chatId: "chat-app-server-active-queue-notice",
     text: "queue behind app server turn",
   }, env);
-  await updateThreadMessage("thread-wa-app-server-active-queue-silent", routed.message.id, {
+  await updateThreadMessage("thread-wa-app-server-active-queue-notice", routed.message.id, {
     state: "queued",
     deliveryState: "awaiting_active_turn",
   }, env);
 
-  const delivery = await deliverWhatsAppReplies(env, async () => {
-    throw new Error("app-server active-turn queue notice should not be sent");
+  const calls = [];
+  const delivery = await deliverWhatsAppReplies(env, async (url, options) => {
+    calls.push({ url, body: JSON.parse(options.body) });
+    return response({ ok: true, ids: ["sent-app-server-queue-notice"] });
   });
+  const duplicate = await deliverWhatsAppReplies(env, async () => {
+    throw new Error("should not resend app-server active-turn queue notice");
+  });
+  const messages = await listThreadMessages("thread-wa-app-server-active-queue-notice", env);
 
-  assert.equal(delivery.delivered.length, 0);
-  assert.equal(delivery.skipped.some((item) => item.messageId === routed.message.id), false);
+  assert.equal(delivery.delivered.length, 1);
+  assert.equal(delivery.delivered[0].deliveryType, "queue_notice");
+  assert.equal(delivery.delivered[0].sourceMessageId, routed.message.id);
+  assert.equal(duplicate.delivered.length, 0);
+  assert.equal(calls[0].body.to, "chat-app-server-active-queue-notice");
+  assert.match(stripDebugFooter(calls[0].body.text), /^Queued for the next Codex turn: "queue behind app server turn"\./);
+  assertDebugFooter(calls[0].body.text, { messageType: "update" });
+  assert.equal(messages.find((entry) => entry.id === routed.message.id).state, "queued");
 });
 
 test("whatsapp delivery forwards failed routed inputs using inbound event metadata", async () => {

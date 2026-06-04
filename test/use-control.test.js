@@ -1101,6 +1101,30 @@ test("user management API is admin-only and can pair a browser to a managed user
     assert.equal(currentUser.user.id, "alice-example.test");
     assert.equal(currentUser.user.role, "user");
     assert.equal(currentUser.user.resourceSummary.threadCount, 1);
+    const selfOnboardingPatch = await read(await fetch(`${baseUrl}/api/users/me/onboarding`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json", cookie: userCookie },
+      body: JSON.stringify({ profile: { timezone: "Europe/Berlin" } }),
+    }));
+    assert.equal(selfOnboardingPatch.onboarding.profile.timezone, "Europe/Berlin");
+    const selfOnboarding = await read(await fetch(`${baseUrl}/api/users/me/onboarding`, { headers: { cookie: userCookie } }));
+    assert.equal(selfOnboarding.onboarding.profile.timezone, "Europe/Berlin");
+    const deniedSelfStateResponse = await fetch(`${baseUrl}/api/users/me/onboarding`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json", cookie: userCookie },
+      body: JSON.stringify({ state: "active" }),
+    });
+    const deniedSelfState = await read(deniedSelfStateResponse);
+    assert.equal(deniedSelfStateResponse.status, 403);
+    assert.equal(deniedSelfState.error, "admin_required");
+    const deniedCrossOnboardingResponse = await fetch(`${baseUrl}/api/users/bob-example.test/onboarding`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json", cookie: userCookie },
+      body: JSON.stringify({ profile: { timezone: "Europe/London" } }),
+    });
+    const deniedCrossOnboarding = await read(deniedCrossOnboardingResponse);
+    assert.equal(deniedCrossOnboardingResponse.status, 403);
+    assert.equal(deniedCrossOnboarding.error, "user_onboarding_forbidden");
     await recordCreditUsage({
       tenantId: "alice-example.test",
       threadId: "alice-existing",

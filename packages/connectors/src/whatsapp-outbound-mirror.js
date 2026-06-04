@@ -12,14 +12,14 @@ function pickString(...values) {
   return "";
 }
 
-export function latestProgressReplyForParent(messages, parentId) {
+export function latestProgressReplyForParent(messages, parentId, env = process.env) {
   return [...messages]
     .reverse()
     .find((candidate) =>
       candidate.role === "assistant" &&
       candidate.state === "completed" &&
       candidate.parentMessageId === parentId &&
-      shouldMirrorWhatsAppProgress(candidate)
+      shouldMirrorWhatsAppProgress(candidate, env)
     ) || null;
 }
 
@@ -156,11 +156,16 @@ export function initialQueueDeliveryState(status = null, message = null) {
   if (!status) return "";
   const state = String(status.state || "").trim().toLowerCase();
   const runtimeKind = String(status.runtimeKind || status.runtimeState || "").trim().toLowerCase();
-  if (runtimeKind === "api-agent") return "";
+  if (runtimeKind === "api-agent") {
+    return state === "working" ? "awaiting_runtime_completion" : "waiting_runtime_ready";
+  }
   const isCodexAppServer = runtimeKind === "codex-app-server";
   if (isCodexAppServer && state === "working") return "awaiting_active_turn";
   if (isCodexAppServer && state === "awaiting_approval") return "awaiting_approval";
-  if (isCodexAppServer) return "";
+  if (isCodexAppServer && ["sleeping", "waking", "unloaded", "notloaded", "failed", "migration_required"].includes(state)) {
+    return "waking";
+  }
+  if (isCodexAppServer) return "waiting_runtime_ready";
   if (state === "working") return "awaiting_runtime_completion";
   if (state === "waking" || state === "sleeping") return "waiting_runtime_start";
   if (!status.sessionName) return "waiting_runtime_start";
@@ -410,8 +415,6 @@ export function queuedInputWhatsAppDeliveryTarget(message, thread, state) {
   const deliveryState = String(message?.deliveryState || "").trim().toLowerCase();
   if (role !== "user") return null;
   if (!["queued", "pending_delivery"].includes(messageState)) return null;
-  const runtimeKind = String(thread?.runtimeKind || thread?.runtime?.runtimeKind || thread?.executor?.metadata?.runtimeKind || "").trim().toLowerCase();
-  if (runtimeKind === "codex-app-server" && deliveryState === "awaiting_active_turn") return null;
   if (![
     "awaiting_runtime_completion",
     "awaiting_active_turn",
@@ -445,7 +448,7 @@ export function formatWhatsAppQueueNotice(message, reason = "") {
     return `Queued your message while Codex is waiting for approval: "${preview}". Send /approve or /deny to answer the approval request.`;
   }
   if (["waiting_runtime_start", "waking"].includes(normalizedReason)) {
-    return `Waiting for the legacy Codex terminal and queued your message: "${preview}".`;
+    return `Waking this Orkestr thread and queued your message: "${preview}".`;
   }
   if (normalizedReason === "awaiting_runtime_completion") {
     return `Queued your latest message while current work is still running: "${preview}".`;

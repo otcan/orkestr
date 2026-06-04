@@ -67,10 +67,22 @@ function supportInput(body: Record<string, unknown> = {}) {
   };
 }
 
+function profileInput(body: Record<string, unknown> = {}) {
+  const profile = body.profile && typeof body.profile === "object" && !Array.isArray(body.profile)
+    ? body.profile as Record<string, unknown>
+    : body;
+  const output: Record<string, unknown> = {};
+  for (const key of ["displayName", "name", "timezone", "locale", "language", "preferences", "toolRequests", "tools", "notes", "context"]) {
+    if (profile[key] !== undefined) output[key] = profile[key];
+  }
+  return Object.keys(output).length ? output : undefined;
+}
+
 function onboardingPatch(body: Record<string, unknown> = {}) {
   return {
     state: String(body.state || "").trim(),
     invite: body.invite === undefined ? undefined : body.invite,
+    profile: profileInput(body),
   };
 }
 
@@ -170,8 +182,11 @@ export class UsersOnboardingController {
 
   @Patch(":userId/onboarding")
   async updateOnboarding(@Req() request: any, @Param("userId") userId: string, @Body() body: Record<string, unknown> = {}) {
-    assertAdminRequest(request);
-    return setUserOnboardingState(requestedUserId(userId, request), onboardingPatch(body));
+    const requested = requestedUserId(userId, request);
+    const patch = onboardingPatch(body);
+    if (patch.state || patch.invite !== undefined) assertAdminRequest(request);
+    else assertSelfOrAdmin(request, requested);
+    return setUserOnboardingState(requested, patch);
   }
 
   @Post("me/support")

@@ -168,6 +168,8 @@ test("chat messages show delivery failure reasons", async () => {
   assert.ok(sources.includes("Not delivered"));
   assert.ok(sources.includes("Delivery failed"));
   assert.ok(sources.includes(".message-failure"));
+  assert.ok(sources.includes("attachmentDownloadUrl(attachment)"));
+  assert.ok(sources.includes("[attr.download]=\"attachmentLabel(attachment)\""));
 });
 
 test("web UI exposes browser terminal attach for app-server threads", async () => {

@@ -147,14 +147,18 @@ test("tenant VM registry API is admin-only and returns public-safe records", asy
       body: JSON.stringify({
         chatId: "120363000000000000@g.us",
         accountId: "responder",
+        brokerBaseUrl: "http://alice-broker.internal.test",
       }),
     }));
-    assert.equal(whatsappRoute.route.target, "https://alice.example.test/api/connectors/whatsapp/inbound");
+    assert.equal(whatsappRoute.route.target, "http://alice-broker.internal.test/api/connectors/whatsapp/inbound");
+    assert.equal(whatsappRoute.route.routeMode, "broker");
+    assert.equal(whatsappRoute.route.targetSource, "broker");
     assert.match(whatsappRoute.route.token, /^owt_/);
     const listedWithRoute = await read(await fetch(`${baseUrl}/api/tenant-vms`, { headers: { cookie: adminCookie } }));
     assert.equal(listedWithRoute.tenantVms[0].whatsappRoute.token, undefined);
     assert.equal(listedWithRoute.tenantVms[0].whatsappRoute.tokenConfigured, true);
     assert.equal(listedWithRoute.tenantVms[0].whatsappRoute.chatId, "120363000000000000@g.us");
+    assert.equal(listedWithRoute.tenantVms[0].whatsappRoute.target, "http://alice-broker.internal.test/api/connectors/whatsapp/inbound");
 
     const provisioned = await read(await fetch(`${baseUrl}/api/tenant-vms/alice-tenant/provision`, {
       method: "POST",

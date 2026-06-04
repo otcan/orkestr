@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import { dataPaths, ensureDataDirs } from "../../storage/src/paths.js";
 import { appendEvent, readJson, writeSecretJson } from "../../storage/src/store.js";
+import { attachRoutingFailure } from "./routing-failures.js";
 import { getTenantVm, listTenantVms, publicTenantVm, updateTenantVm } from "./tenant-vm-registry.js";
 
 function clean(value = "") {
@@ -30,16 +31,73 @@ function normalizeBaseUrl(value = "") {
   return clean(value).replace(/\/+$/, "");
 }
 
-function inboundTargetForTenant(vm = {}) {
-  const baseUrl = normalizeBaseUrl(vm.endpoint?.baseUrl || vm.endpoint?.url);
-  if (!baseUrl) return "";
+function normalizeRouteMode(value = "") {
+  const mode = clean(value).toLowerCase();
+  if (["broker", "managed", "control-plane", "controlplane", "internal"].includes(mode)) return "broker";
+  if (["direct", "public", "legacy"].includes(mode)) return "direct";
+  return "";
+}
+
+function inboundApiTarget(baseUrl = "") {
+  const normalized = normalizeBaseUrl(baseUrl);
+  if (!normalized) return "";
   try {
-    const base = new URL(baseUrl);
+    const base = new URL(normalized);
     if (!["http:", "https:"].includes(base.protocol) || base.username || base.password) return "";
-    return String(new URL("/api/connectors/whatsapp/inbound", `${baseUrl}/`));
+    return String(new URL("/api/connectors/whatsapp/inbound", `${normalized}/`));
   } catch {
     return "";
   }
+}
+
+function tenantRouteTarget(vm = {}, input = {}) {
+  const routeMode = normalizeRouteMode(
+    input.routeMode ||
+    input.whatsappRouteMode ||
+    vm.connectors?.whatsappRouteMode,
+  );
+  const brokerBaseUrl = normalizeBaseUrl(
+    input.brokerBaseUrl ||
+    input.whatsappBrokerBaseUrl ||
+    input.controlPlaneBaseUrl ||
+    input.internalBaseUrl ||
+    vm.connectors?.whatsappBrokerBaseUrl ||
+    vm.endpoint?.brokerBaseUrl,
+  );
+  const directBaseUrl = normalizeBaseUrl(
+    input.targetBaseUrl ||
+    input.baseUrl ||
+    vm.endpoint?.baseUrl ||
+    vm.endpoint?.url,
+  );
+  const brokerTarget = inboundApiTarget(brokerBaseUrl);
+  const directTarget = inboundApiTarget(directBaseUrl);
+
+  if (routeMode === "broker") {
+    return {
+      target: brokerTarget,
+      routeMode: "broker",
+      targetSource: brokerTarget ? "broker" : "missing_broker",
+      brokerBaseUrl,
+    };
+  }
+  if (routeMode === "direct") {
+    return {
+      target: directTarget,
+      routeMode: "direct",
+      targetSource: directTarget ? "endpoint" : "missing_endpoint",
+      brokerBaseUrl,
+    };
+  }
+  if (brokerTarget) {
+    return { target: brokerTarget, routeMode: "broker", targetSource: "broker", brokerBaseUrl };
+  }
+  return {
+    target: directTarget,
+    routeMode: "direct",
+    targetSource: directTarget ? "endpoint" : "missing_endpoint",
+    brokerBaseUrl,
+  };
 }
 
 async function readRouteSecrets(env = process.env) {
@@ -58,6 +116,7 @@ async function writeRouteSecrets(state, env = process.env) {
 
 function publicRoute(vm, secret = {}, { includeToken = false } = {}) {
   const token = clean(secret.token);
+  const routeTarget = tenantRouteTarget(vm);
   return {
     tenantVmId: vm.id,
     ownerUserId: vm.ownerUserId,
@@ -65,7 +124,9 @@ function publicRoute(vm, secret = {}, { includeToken = false } = {}) {
     chatName: clean(vm.connectors?.whatsappChatName),
     accountId: clean(vm.connectors?.whatsappAccountId),
     enabled: vm.connectors?.whatsappRouteEnabled === true,
-    target: inboundTargetForTenant(vm),
+    target: routeTarget.target,
+    routeMode: routeTarget.routeMode,
+    targetSource: routeTarget.targetSource,
     tokenConfigured: Boolean(token),
     tokenPreview: tokenPreview(token),
     ...(includeToken && token ? { token } : {}),
@@ -85,8 +146,9 @@ export async function configureTenantWhatsAppRoute(tenantVmId, input = {}, env =
     error.statusCode = 400;
     throw error;
   }
-  if (!inboundTargetForTenant(vm)) {
-    const error = new Error("tenant_vm_base_url_required");
+  const routeTarget = tenantRouteTarget(vm, input);
+  if (!routeTarget.target) {
+    const error = new Error(routeTarget.routeMode === "broker" ? "tenant_vm_broker_base_url_required" : "tenant_vm_base_url_required");
     error.statusCode = 400;
     throw error;
   }
@@ -108,6 +170,8 @@ export async function configureTenantWhatsAppRoute(tenantVmId, input = {}, env =
       whatsappChatName: clean(input.chatName || input.displayName || vm.connectors.whatsappChatName),
       whatsappAccountId: clean(input.accountId || input.whatsappAccountId || vm.connectors.whatsappAccountId),
       whatsappRouteEnabled: input.enabled === undefined ? true : truthy(input.enabled),
+      whatsappRouteMode: routeTarget.routeMode,
+      whatsappBrokerBaseUrl: routeTarget.brokerBaseUrl || clean(vm.connectors?.whatsappBrokerBaseUrl),
     },
   }, env);
   await appendEvent({
@@ -116,6 +180,8 @@ export async function configureTenantWhatsAppRoute(tenantVmId, input = {}, env =
     ownerUserId: updated.ownerUserId,
     chatId,
     tokenReset: truthy(input.resetToken) || !existing.token,
+    routeMode: routeTarget.routeMode,
+    targetSource: routeTarget.targetSource,
   }, env).catch(() => {});
 
   return {
@@ -166,9 +232,42 @@ export async function tenantWhatsAppInboundForwardRoute(input = {}, env = proces
     if (clean(vm.connectors?.whatsappChatId) !== chatId) continue;
     const routeAccountId = clean(vm.connectors?.whatsappAccountId);
     if (accountId && routeAccountId && accountId !== routeAccountId) continue;
-    const target = inboundTargetForTenant(vm);
+    const routeTarget = tenantRouteTarget(vm);
+    const target = routeTarget.target;
     const token = clean(state.routes?.[vm.id]?.token);
-    if (!target || !token) continue;
+    if (!target || !token) {
+      const reason = !target && !token ? "missing_target_and_token" : (!target ? routeTarget.targetSource : "missing_token");
+      await appendEvent({
+        type: "tenant_whatsapp_route_lookup_failed",
+        tenantVmId: vm.id,
+        ownerUserId: vm.ownerUserId,
+        chatId,
+        accountId: routeAccountId,
+        routeMode: routeTarget.routeMode,
+        targetSource: routeTarget.targetSource,
+        reason,
+      }, env).catch(() => {});
+      const error = attachRoutingFailure(new Error("tenant_route_missing"), {
+        code: "tenant_route_missing",
+        userFacingCategory: "instance_health",
+        capability: "whatsapp",
+        target,
+        instanceId: vm.id,
+        retryable: false,
+        reason,
+      });
+      error.statusCode = 502;
+      throw error;
+    }
+    await appendEvent({
+      type: "tenant_whatsapp_route_lookup_resolved",
+      tenantVmId: vm.id,
+      ownerUserId: vm.ownerUserId,
+      chatId,
+      accountId: routeAccountId,
+      routeMode: routeTarget.routeMode,
+      targetSource: routeTarget.targetSource,
+    }, env).catch(() => {});
     return {
       tenantVmId: vm.id,
       ownerUserId: vm.ownerUserId,
@@ -176,6 +275,8 @@ export async function tenantWhatsAppInboundForwardRoute(input = {}, env = proces
       token,
       chatName: clean(vm.connectors?.whatsappChatName),
       accountId: routeAccountId,
+      routeMode: routeTarget.routeMode,
+      targetSource: routeTarget.targetSource,
     };
   }
   return null;

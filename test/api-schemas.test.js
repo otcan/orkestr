@@ -23,6 +23,7 @@ test("shared API schemas expose high-value request contracts", () => {
   assert.equal(whatsappInboundSchema.body.properties.attachments.type, "array");
   assert.equal(agentMessageSchema.params.required[0], "agentId");
   assert.equal(timerCreateSchema.body.properties.promptFile.type, "string");
+  assert.equal(timerCreateSchema.body.properties.timezone.type, "string");
   assert.equal(threadInputSchema.body.properties.attachments.type, "array");
   assert.equal(threadMessagesQuerySchema.querystring.properties.limit.type, "string");
   assert.equal(threadUploadSchema.body.properties.files.type, "array");

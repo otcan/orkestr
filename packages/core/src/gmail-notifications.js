@@ -8,6 +8,7 @@ import {
   listConnectorPromptPushes,
   listConnectorPromptPushesForPrincipal,
   updateConnectorPromptPush,
+  updateConnectorPromptPushForPrincipal,
 } from "./connector-pushes.js";
 import { isAdminPrincipal } from "./policy.js";
 import { adminUserId, normalizeUserId } from "./users.js";
@@ -48,6 +49,10 @@ function notificationError(message, statusCode = 400) {
   const error = new Error(message);
   error.statusCode = statusCode;
   return error;
+}
+
+function hasOwn(input = {}, key) {
+  return Object.prototype.hasOwnProperty.call(input, key);
 }
 
 export function gmailNotificationsEnabled(env = process.env) {
@@ -163,6 +168,94 @@ function notificationPushInput(input = {}, principal = null, env = process.env, 
   };
 }
 
+function normalizedNoReplyTemplate(input = {}, fallback = defaultPromptTemplate) {
+  if (input.noReply === true || lower(input.noReplyBehavior) === "suppress" || lower(input.promptTemplate || input.prompt) === "no_reply") {
+    return "NO_REPLY";
+  }
+  return clean(input.promptTemplate || input.prompt) || fallback;
+}
+
+function senderAddressFor(input = {}, existing = {}) {
+  const sourceConfig = existing.sourceConfig && typeof existing.sourceConfig === "object" ? existing.sourceConfig : {};
+  return clean(
+    input.senderAddress ||
+    input.fromAddress ||
+    input.fromEmail ||
+    input.account ||
+    input.sourceConfig?.account ||
+    sourceConfig.account,
+  );
+}
+
+function queryForNotificationUpdate(input = {}, existing = {}, env = process.env) {
+  const sourceConfig = existing.sourceConfig && typeof existing.sourceConfig === "object" ? existing.sourceConfig : {};
+  const requestedFromMe = input.fromMe === true || lower(input.from) === "me";
+  if (requestedFromMe) {
+    const sender = senderAddressFor(input, existing);
+    if (!sender) throw notificationError("gmail_notification_from_me_address_required", 400);
+    return clean(input.query || input.sourceConfig?.query) || `from:${sender} newer_than:1d`;
+  }
+  if (hasOwn(input, "query") || input.sourceConfig?.query !== undefined) {
+    return clean(input.query || input.sourceConfig?.query) || gmailNotificationDefaultQuery(env);
+  }
+  return clean(sourceConfig.query) || gmailNotificationDefaultQuery(env);
+}
+
+function notificationUpdatePatch(input = {}, existing = {}, env = process.env, context = {}) {
+  const existingSchedule = existing.schedule && typeof existing.schedule === "object" ? existing.schedule : {};
+  const existingSafety = existing.safety && typeof existing.safety === "object" ? existing.safety : {};
+  const existingSourceConfig = existing.sourceConfig && typeof existing.sourceConfig === "object" ? existing.sourceConfig : {};
+  const intervalInput = hasOwn(input, "interval") || hasOwn(input, "every") || hasOwn(input, "intervalMs") || hasOwn(input, "everyMs")
+    ? input
+    : { intervalMs: existingSchedule.intervalMs || existingSafety.minIntervalMs || gmailNotificationMinIntervalMs(env) };
+  const intervalMs = normalizedIntervalMs(intervalInput, env);
+  const requestedIntervalMs = parseIntervalMs(intervalInput.intervalMs ?? intervalInput.everyMs ?? intervalInput.interval ?? intervalInput.every, intervalMs);
+  const maxItemsPerRun = hasOwn(input, "maxItemsPerRun") || hasOwn(input, "maxResults")
+    ? normalizedMaxItems(input, env)
+    : Number(existingSourceConfig.maxResults || existingSafety.maxItemsPerRun || 1) || 1;
+  const hasTargetInput = hasOwn(input, "targetType") || hasOwn(input, "threadId") || hasOwn(input, "target") || hasOwn(input, "agentId");
+  const targetType = hasTargetInput ? targetTypeFor(input, context) : lower(existing.targetType || "thread");
+  const target = hasTargetInput ? targetFor(input, context) : clean(existing.target);
+  const enabled = input.enabled === undefined ? existing.enabled === true : input.enabled !== false;
+  const account = senderAddressFor(input, existing);
+  const query = queryForNotificationUpdate(input, existing, env);
+  const nextRunAt = enabled
+    ? clean(input.nextRunAt || existing.nextRunAt || existingSchedule.nextRunAt) || nowIso()
+    : "";
+  return {
+    label: clean(input.label || existing.label || "Gmail notifications"),
+    targetType,
+    target,
+    promptTemplate: normalizedNoReplyTemplate(input, clean(existing.promptTemplate || existing.prompt) || defaultPromptTemplate),
+    sourceConfig: {
+      ...existingSourceConfig,
+      query,
+      maxResults: maxItemsPerRun,
+      account,
+      preview: clean(existingSourceConfig.preview || "subject_from_date_snippet"),
+    },
+    safety: {
+      ...existingSafety,
+      maxItemsPerRun,
+      minIntervalMs: intervalMs,
+      bodyPreviewChars: 0,
+      requireQuery: true,
+      allowBroadQuery: boolValue(input.allowBroadQuery ?? input.safety?.allowBroadQuery ?? existingSafety.allowBroadQuery, false),
+      noReplyBehavior: input.noReply === true || lower(input.noReplyBehavior) === "suppress" ? "suppress" : clean(existingSafety.noReplyBehavior),
+    },
+    schedule: {
+      ...existingSchedule,
+      type: notificationAutomationType,
+      intervalMs,
+      requestedIntervalMs,
+      every: intervalLabel(intervalMs),
+      nextRunAt,
+    },
+    nextRunAt,
+    enabled,
+  };
+}
+
 export function publicGmailNotification(push = {}, env = process.env) {
   const schedule = push.schedule && typeof push.schedule === "object" ? push.schedule : {};
   const sourceConfig = push.sourceConfig && typeof push.sourceConfig === "object" ? push.sourceConfig : {};
@@ -240,6 +333,41 @@ export async function createGmailNotificationForPrincipal(input = {}, principal,
   const push = await createConnectorPromptPushForPrincipal(notificationPushInput(input, principal, env, context), principal, env);
   await appendEvent({ type: "gmail_notification_created", notificationId: push.id, ownerUserId: push.ownerUserId, targetType: push.targetType, target: push.target }, env).catch(() => {});
   return publicGmailNotification(push, env);
+}
+
+async function resolveGmailNotificationForUpdate(notificationId, input = {}, principal, env = process.env, context = {}) {
+  const requestedId = clean(notificationId || input.notificationId || input.id);
+  if (requestedId) {
+    const push = await getStoredGmailNotification(requestedId, env);
+    const accessible = (await listConnectorPromptPushesForPrincipal(principal, env)).some((candidate) => candidate.id === push.id);
+    if (!accessible) throw notificationError("gmail_notification_not_found", 404);
+    return push;
+  }
+  const notifications = (await listConnectorPromptPushesForPrincipal(principal, env)).filter(isGmailNotification);
+  const currentTarget = clean(input.target || input.threadId || context.thread?.id);
+  const candidates = currentTarget
+    ? notifications.filter((push) => clean(push.target) === currentTarget)
+    : notifications;
+  if (candidates.length === 1) return candidates[0];
+  if (!candidates.length) throw notificationError("gmail_notification_not_found", 404);
+  const error = notificationError("gmail_notification_selection_required", 409);
+  error.notifications = candidates.map((push) => publicGmailNotification(push, env));
+  throw error;
+}
+
+export async function updateGmailNotificationForPrincipal(notificationId, input = {}, principal, env = process.env, context = {}) {
+  if (!gmailNotificationsEnabled(env)) throw notificationError("gmail_notifications_disabled", 403);
+  const existing = await resolveGmailNotificationForUpdate(notificationId, input, principal, env, context);
+  const patch = notificationUpdatePatch(input, existing, env, context);
+  const updated = await updateConnectorPromptPushForPrincipal(existing.id, patch, principal, env);
+  await appendEvent({
+    type: "gmail_notification_updated",
+    notificationId: updated.id,
+    ownerUserId: updated.ownerUserId,
+    targetType: updated.targetType,
+    target: updated.target,
+  }, env).catch(() => {});
+  return publicGmailNotification(updated, env);
 }
 
 export async function deleteGmailNotificationForPrincipal(id, principal, env = process.env) {

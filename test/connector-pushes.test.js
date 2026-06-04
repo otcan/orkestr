@@ -9,6 +9,7 @@ import {
   runConnectorPromptPush,
 } from "../packages/core/src/connector-pushes.js";
 import { createThread, listThreadMessages } from "../packages/core/src/threads.js";
+import { visibleThreadMessages } from "../packages/core/src/thread-message-visibility.js";
 import { userPrincipal } from "../packages/core/src/principal.js";
 import { createUser } from "../packages/core/src/users.js";
 import { exchangeGmailCode } from "../packages/connectors/src/gmail.js";
@@ -84,6 +85,8 @@ test("connector prompt pushes render source items and dedupe delivered messages"
   assert.equal(messages[0].source, "connector_prompt_push");
   assert.equal(messages[0].connector, "gmail");
   assert.equal(messages[0].externalId, "m1");
+  assert.equal(messages[0].visibility, "internal");
+  assert.equal(visibleThreadMessages(messages).length, 0);
   assert.equal(messages[0].text, "Summarize Hiring update from recruiter@example.com.");
 });
 

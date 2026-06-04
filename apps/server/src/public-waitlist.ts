@@ -19,6 +19,10 @@ export function renderWaitlistSection() {
         <input name="email" autocomplete="email" inputmode="email" maxlength="160">
       </label>
       <label>
+        <span>Timezone</span>
+        <input name="timezone" autocomplete="off" maxlength="80" placeholder="Europe/Berlin">
+      </label>
+      <label>
         <span>What should Orkestr help with?</span>
         <textarea name="intendedUse" rows="4" maxlength="1000" placeholder="Job applications, leads, fitness check-ins, inbox help..."></textarea>
       </label>
@@ -38,6 +42,11 @@ export function renderWaitlistSection() {
         const form = document.getElementById("waitlist-form");
         const status = document.getElementById("waitlist-status");
         if (!form || !status) return;
+        const timezone = form.querySelector('[name="timezone"]');
+        try {
+          const detected = Intl.DateTimeFormat().resolvedOptions().timeZone || "";
+          if (timezone && detected && !timezone.value) timezone.value = detected;
+        } catch {}
         form.addEventListener("submit", async (event) => {
           event.preventDefault();
           status.textContent = "Sending request...";

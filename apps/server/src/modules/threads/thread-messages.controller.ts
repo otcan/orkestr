@@ -1,9 +1,10 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
-import { Body, Controller, Get, HttpCode, Param, Post, Query, Req, UploadedFiles, UseInterceptors } from "@nestjs/common";
+import { Body, Controller, Get, HttpCode, Param, Post, Query, Req, Res, UploadedFiles, UseInterceptors } from "@nestjs/common";
 import { AnyFilesInterceptor } from "@nestjs/platform-express";
-import { getThread, listThreadMessages } from "../../../../../packages/core/src/threads.js";
+import { getThread, getThreadForPrincipal, listThreadMessages } from "../../../../../packages/core/src/threads.js";
+import { resolveStoredThreadAttachment, resolveThreadAttachments } from "../../../../../packages/core/src/thread-attachments.js";
 import { ensureDataDirs } from "../../../../../packages/storage/src/paths.js";
 import { threadMessagesQuerySchema, threadUploadSchema } from "../../../../../packages/shared/src/api-schemas.js";
 import { httpError, validateRequestSchema } from "../../common/http.js";
@@ -21,6 +22,10 @@ function uploadBuffer(file: any): Buffer {
   const encoded = String(file?.contentBase64 || "").trim();
   if (!encoded) throw httpError("upload_content_required", 400);
   return Buffer.from(encoded, "base64");
+}
+
+function contentDispositionFilename(name: string): string {
+  return path.basename(String(name || "attachment")).replace(/["\r\n\\]/g, "_") || "attachment";
 }
 
 @Controller("api/threads")
@@ -82,7 +87,36 @@ export class ThreadMessagesController {
         source: "browser_upload",
       });
     }
-    return { ok: true, threadId: thread.id, attachments };
+    const resolved = await (resolveThreadAttachments as any)({ thread, attachments, env: process.env });
+    return { ok: true, threadId: thread.id, attachments: resolved.attachments.length ? resolved.attachments : attachments };
+  }
+
+  @Get(":threadId/attachments/:attachmentId/download")
+  async downloadAttachment(
+    @Req() request: any,
+    @Param("threadId") threadId: string,
+    @Param("attachmentId") attachmentId: string,
+    @Res() response: any,
+  ) {
+    const principal = requestPrincipal(request);
+    const thread = await getThreadForPrincipal(threadId, principal);
+    if (!thread) throw httpError("thread_not_found", 404);
+    const resolved = await resolveStoredThreadAttachment({
+      thread,
+      messages: await listThreadMessages(thread.id),
+      attachmentId,
+      env: process.env,
+    });
+    if (!resolved.found) throw httpError("attachment_not_found", 404);
+    if (!resolved.allowed) throw httpError(resolved.reason || "attachment_forbidden", 403);
+    const attachment = resolved.attachment || {};
+    const filePath = String(resolved.path || "");
+    if (!filePath) throw httpError("attachment_path_missing", 403);
+    const buffer = await fs.readFile(filePath);
+    response.setHeader("content-type", String(attachment.mimetype || "application/octet-stream"));
+    response.setHeader("content-length", String(buffer.length));
+    response.setHeader("content-disposition", `attachment; filename="${contentDispositionFilename(String(attachment.filename || attachment.name || "attachment"))}"`);
+    return response.send(buffer);
   }
 
   @Get(":threadId/history")

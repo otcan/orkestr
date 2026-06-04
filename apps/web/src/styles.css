@@ -2123,6 +2123,7 @@ ork-first-thread-wizard.first-thread-host {
 }
 
 .attachments span,
+.attachments a,
 .file-chip {
   display: inline-flex;
   align-items: center;
@@ -2133,6 +2134,7 @@ ork-first-thread-wizard.first-thread-host {
   font-size: 0.8rem;
   font-weight: 800;
   padding: 7px 10px;
+  text-decoration: none;
 }
 
 .file-chip button {

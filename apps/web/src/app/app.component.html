@@ -330,6 +330,7 @@
           <button type="button" [class.active]="activePanel === 'raw'" (click)="openPanel('raw')" [disabled]="!codexAgentReady()">Raw</button>
         }
         <button type="button" [class.active]="activePanel === 'history'" (click)="openPanel('history')">History</button>
+        <button type="button" [class.active]="activePanel === 'delivery'" (click)="openPanel('delivery')">Delivery</button>
         <button type="button" [class.active]="activePanel === 'timers'" (click)="openPanel('timers')">Thread Timers</button>
         @if (isUserMode()) {
           <button type="button" (click)="openPanel('files')">Files</button>
@@ -654,6 +655,58 @@
               </article>
             } @empty {
               <p class="empty">No history rows are available.</p>
+            }
+          </div>
+        </section>
+      }
+
+      @if (activePanel === "delivery") {
+        <section class="panel-body">
+          <div class="panel-title">
+            <div>
+              <p class="eyebrow">Delivery</p>
+              <h3>{{ deliveryTraces.length }} traces</h3>
+            </div>
+            <button class="secondary" type="button" (click)="loadDeliveryTraces()" [disabled]="busy">Reload</button>
+          </div>
+          <div class="compact-list">
+            @for (trace of deliveryTraces; track trace.routerTraceId) {
+              <article class="compact-row">
+                <strong>{{ traceTitle(trace) }}</strong>
+                <span>{{ traceStatusLabel(trace) }}</span>
+                @if (trace.lastError) {
+                  <small>{{ trace.lastError }}</small>
+                }
+                @if (traceRecovery(trace)) {
+                  <small>{{ traceRecovery(trace) }}</small>
+                }
+                <div class="settings-facts">
+                  <span>Trace</span>
+                  <strong>{{ trace.routerTraceId }}</strong>
+                  <span>Current</span>
+                  <strong>{{ tracePhaseLabel(trace.currentPhase) }}</strong>
+                  <span>Updated</span>
+                  <strong>{{ trace.updatedAt | date: "MMM d, HH:mm:ss" }}</strong>
+                  <span>Retries</span>
+                  <strong>{{ trace.retryCount || 0 }}</strong>
+                </div>
+                <div class="compact-list">
+                  @for (phase of trace.phases || []; track phase.ts + phase.phase) {
+                    <article class="compact-row">
+                      <strong>{{ tracePhaseLabel(phase.phase) }}</strong>
+                      <span>{{ phase.ts | date: "MMM d, HH:mm:ss" }}</span>
+                      @if (phase.reason) {
+                        <small>{{ phase.reason }}</small>
+                      }
+                      @if (phase.error) {
+                        <small>{{ phase.error }}</small>
+                      }
+                    </article>
+                  }
+                </div>
+              </article>
+            } @empty {
+              <p class="empty">No delivery traces are stored for this thread.</p>
             }
           </div>
         </section>

@@ -67,6 +67,7 @@ function normalizeEndpoint(endpoint = {}, input = {}) {
   return {
     domain: clean(source.domain || input.domain),
     baseUrl: clean(source.baseUrl || source.url || input.baseUrl || input.url),
+    brokerBaseUrl: clean(source.brokerBaseUrl || source.controlPlaneBaseUrl || source.internalBaseUrl || input.brokerBaseUrl || input.controlPlaneBaseUrl || input.internalBaseUrl),
     publicIp: clean(source.publicIp || source.ip || input.publicIp || input.ip),
     sshHost: clean(source.sshHost || input.sshHost),
     sshUser: clean(source.sshUser || input.sshUser || "root"),
@@ -107,6 +108,8 @@ function normalizeConnectors(connectors = {}) {
     whatsappChatId: clean(source.whatsappChatId || source.waChatId || ""),
     whatsappAccountId: clean(source.whatsappAccountId || source.waAccountId || ""),
     whatsappRouteEnabled: source.whatsappRouteEnabled === true || source.waRouteEnabled === true,
+    whatsappRouteMode: clean(source.whatsappRouteMode || source.waRouteMode || source.whatsappMode || ""),
+    whatsappBrokerBaseUrl: clean(source.whatsappBrokerBaseUrl || source.waBrokerBaseUrl || source.whatsappControlPlaneBaseUrl || source.whatsappInternalBaseUrl || ""),
     gmailAccountId: clean(source.gmailAccountId || ""),
     outlookAccountId: clean(source.outlookAccountId || ""),
     linkedinDesktopSlug: clean(source.linkedinDesktopSlug || source.linkedin || "linkedin"),

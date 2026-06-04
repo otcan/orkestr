@@ -96,6 +96,10 @@
                 <dd>{{ entry.acceptedTerms ? "Terms accepted" : "Terms missing" }} · {{ entry.consentToContact ? "Contact allowed" : "Contact missing" }}</dd>
               </div>
               <div>
+                <dt>Timezone</dt>
+                <dd>{{ entry.timezone || "Not provided" }}</dd>
+              </div>
+              <div>
                 <dt>Source</dt>
                 <dd>{{ entry.source?.ip || "No IP" }} · {{ entry.source?.userAgent || "No user agent" }}</dd>
               </div>

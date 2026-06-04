@@ -33,6 +33,26 @@ function onboardingError(message, statusCode = 400) {
   return error;
 }
 
+export function normalizeTimezone(value = "") {
+  const timezone = safeProfileText(value, 80);
+  if (!timezone) return "";
+  try {
+    return Intl.DateTimeFormat("en-US", { timeZone: timezone }).resolvedOptions().timeZone || timezone;
+  } catch {
+    throw onboardingError("invalid_timezone", 400);
+  }
+}
+
+function publicTimezone(value = "") {
+  const timezone = safeProfileText(value, 80);
+  if (!timezone) return "";
+  try {
+    return normalizeTimezone(timezone);
+  } catch {
+    return timezone;
+  }
+}
+
 function publicBaseUrl(env = process.env) {
   return clean(env.ORKESTR_PUBLIC_SITE_URL || env.ORKESTR_PRIMARY_PUBLIC_URL || env.ORKESTR_PRIMARY_DOMAIN && `https://${env.ORKESTR_PRIMARY_DOMAIN}` || env.ORKESTR_PUBLIC_HTTPS_URL || env.ORKESTR_PUBLIC_URL || "https://orkestr.example");
 }
@@ -75,7 +95,7 @@ function safeProfileText(value = "", max = 2000) {
 function publicOnboardingProfile(profile = {}) {
   return {
     displayName: safeProfileText(profile.displayName || profile.name, 120),
-    timezone: safeProfileText(profile.timezone, 80),
+    timezone: publicTimezone(profile.timezone),
     locale: safeProfileText(profile.locale || profile.language, 80),
     preferences: safeProfileText(profile.preferences, 4000),
     toolRequests: safeProfileText(profile.toolRequests || profile.tools, 4000),
@@ -92,9 +112,10 @@ function optionalProfileValue(input = {}, keys = [], max = 2000) {
 }
 
 function profilePatch(input = {}) {
+  const timezone = optionalProfileValue(input, ["timezone"], 80);
   return {
     displayName: optionalProfileValue(input, ["displayName", "name"], 120),
-    timezone: optionalProfileValue(input, ["timezone"], 80),
+    timezone: timezone === undefined ? undefined : normalizeTimezone(timezone),
     locale: optionalProfileValue(input, ["locale", "language"], 80),
     preferences: optionalProfileValue(input, ["preferences"], 4000),
     toolRequests: optionalProfileValue(input, ["toolRequests", "tools"], 4000),

@@ -129,9 +129,24 @@ function healthUrlForInboundTarget(target = "") {
   }
 }
 
+async function appendInboundForwardHealthEvent({ target = "", tenantRoute = null, ok = false, status = null, reason = "", cached = false } = {}, env = process.env) {
+  await appendEvent({
+    type: "whatsapp_local_inbound_forward_health_checked",
+    target,
+    tenantVmId: tenantRoute?.tenantVmId || null,
+    routeMode: tenantRoute?.routeMode || "",
+    targetSource: tenantRoute?.targetSource || "",
+    ok,
+    status,
+    reason,
+    cached,
+  }, env).catch(() => {});
+}
+
 async function assertInboundForwardTargetHealthy(target = "", tenantRoute = null, env = process.env, fetchImpl = fetch) {
   const healthUrl = healthUrlForInboundTarget(target);
   if (!healthUrl) {
+    await appendInboundForwardHealthEvent({ target, tenantRoute, ok: false, reason: "invalid_health_url" }, env);
     throw attachRoutingFailure(new Error("target_instance_unhealthy"), {
       code: "target_instance_unhealthy",
       userFacingCategory: "instance_health",
@@ -144,6 +159,7 @@ async function assertInboundForwardTargetHealthy(target = "", tenantRoute = null
   const cacheMs = inboundForwardHealthCacheMs(env);
   const cached = inboundForwardHealthCache.get(healthUrl);
   if (cached && cacheMs > 0 && Date.now() - cached.checkedAt < cacheMs) {
+    await appendInboundForwardHealthEvent({ target, tenantRoute, ok: cached.ok, status: cached.status || null, reason: cached.reason || "cached", cached: true }, env);
     if (cached.ok) return cached;
     throw attachRoutingFailure(new Error("target_instance_unhealthy"), {
       code: "target_instance_unhealthy",
@@ -169,6 +185,7 @@ async function assertInboundForwardTargetHealthy(target = "", tenantRoute = null
       reason: ok ? "ok" : `health_http_${response.status}`,
     };
     inboundForwardHealthCache.set(healthUrl, result);
+    await appendInboundForwardHealthEvent({ target, tenantRoute, ok, status: response.status, reason: result.reason }, env);
     if (ok) return result;
     throw attachRoutingFailure(new Error("target_instance_unhealthy"), {
       code: "target_instance_unhealthy",
@@ -182,6 +199,7 @@ async function assertInboundForwardTargetHealthy(target = "", tenantRoute = null
     if (error?.routingFailure) throw error;
     const reason = error?.name === "AbortError" ? "health_timeout" : String(error?.message || error || "health_failed");
     inboundForwardHealthCache.set(healthUrl, { ok: false, checkedAt: Date.now(), reason });
+    await appendInboundForwardHealthEvent({ target, tenantRoute, ok: false, reason }, env);
     throw attachRoutingFailure(new Error("target_instance_unhealthy"), {
       code: "target_instance_unhealthy",
       userFacingCategory: "instance_health",
@@ -195,49 +213,103 @@ async function assertInboundForwardTargetHealthy(target = "", tenantRoute = null
 
 export async function forwardLocalWhatsAppInbound(input = {}, env = process.env, fetchImpl = fetch) {
   const chatId = String(input.chatId || input.chat?.id || input.fromChatId || "").trim();
-  const tenantRoute = await tenantWhatsAppInboundForwardRoute(input, env);
-  const target = tenantRoute?.target || localWhatsAppInboundForwardTarget({ chatId }, env);
-  if (!target) return null;
-  if (inboundForwardHealthGateEnabled({ tenantRoute }, env)) {
-    await assertInboundForwardTargetHealthy(target, tenantRoute, env, fetchImpl);
-  }
-  const headers = { "content-type": "application/json" };
-  const token = tenantRoute?.token || localWhatsAppInboundForwardToken({ chatId }, env);
-  if (token) headers.authorization = `Bearer ${token}`;
-  const body = tenantRoute?.chatName && !input.displayName && !input.chatName
-    ? { ...input, displayName: tenantRoute.chatName, chatName: tenantRoute.chatName }
-    : input;
-  const response = await fetchImpl(target, {
-    method: "POST",
-    headers,
-    body: JSON.stringify(body),
-    signal: AbortSignal.timeout(Number(env.WHATSAPP_INBOUND_FORWARD_TIMEOUT_MS || 60_000)),
-  });
-  const payload = await response.json().catch(() => ({}));
-  if (!response.ok || payload?.ok === false) {
-    const error = new Error(payload?.error || payload?.routingFailure?.code || `whatsapp_inbound_forward_failed_${response.status}`);
-    error.statusCode = response.status || 502;
-    error.payload = payload;
-    error.routingFailure = normalizeRoutingFailure(payload?.routingFailure || {}, {
-      code: payload?.error || `whatsapp_inbound_forward_failed_${response.status}`,
+  let tenantRoute = null;
+  let target = "";
+  let targetSource = "";
+  let routeMode = "";
+  try {
+    tenantRoute = await tenantWhatsAppInboundForwardRoute(input, env);
+    target = tenantRoute?.target || localWhatsAppInboundForwardTarget({ chatId }, env);
+    if (!target) return null;
+    targetSource = tenantRoute ? (tenantRoute.targetSource || "tenant_route") : "legacy_env_forward_map";
+    routeMode = tenantRoute?.routeMode || (tenantRoute ? "managed" : "legacy_env");
+    await appendEvent({
+      type: "whatsapp_local_inbound_forward_route_resolved",
+      chatId,
+      eventId: String(input.eventId || input.id || input.messageId || ""),
+      target,
+      targetSource,
+      routeMode,
+      tenantVmId: tenantRoute?.tenantVmId || null,
+    }, env).catch(() => {});
+    if (inboundForwardHealthGateEnabled({ tenantRoute }, env)) {
+      await assertInboundForwardTargetHealthy(target, tenantRoute, env, fetchImpl);
+    }
+    const headers = { "content-type": "application/json" };
+    const token = tenantRoute?.token || localWhatsAppInboundForwardToken({ chatId }, env);
+    if (token) headers.authorization = `Bearer ${token}`;
+    const body = tenantRoute?.chatName && !input.displayName && !input.chatName
+      ? { ...input, displayName: tenantRoute.chatName, chatName: tenantRoute.chatName }
+      : input;
+    const response = await fetchImpl(target, {
+      method: "POST",
+      headers,
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(Number(env.WHATSAPP_INBOUND_FORWARD_TIMEOUT_MS || 60_000)),
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok || payload?.ok === false) {
+      const error = new Error(payload?.error || payload?.routingFailure?.code || `whatsapp_inbound_forward_failed_${response.status}`);
+      error.statusCode = response.status || 502;
+      error.payload = payload;
+      error.routingFailure = normalizeRoutingFailure(payload?.routingFailure || {}, {
+        code: payload?.error || `whatsapp_inbound_forward_failed_${response.status}`,
+        target,
+        instanceId: tenantRoute?.tenantVmId || "",
+        retryable: response.status >= 500,
+      });
+      throw error;
+    }
+    await appendEvent({
+      type: "whatsapp_local_inbound_forwarded",
+      chatId,
+      eventId: String(input.eventId || input.id || input.messageId || ""),
+      target,
+      targetSource,
+      routeMode,
+      tenantVmId: tenantRoute?.tenantVmId || null,
+      status: response.status,
+      threadId: payload.threadId || null,
+      agentId: payload.agentId || null,
+      messageId: payload.messageId || null,
+    }, env).catch(() => {});
+    return { forwarded: true, target, targetSource, routeMode, payload };
+  } catch (error) {
+    const wrapped = error?.routingFailure ? error : attachRoutingFailure(new Error("whatsapp_inbound_forward_failed"), {
+      code: "whatsapp_inbound_forward_failed",
+      userFacingCategory: "instance_health",
+      capability: "whatsapp",
       target,
       instanceId: tenantRoute?.tenantVmId || "",
-      retryable: response.status >= 500,
+      retryable: true,
+      reason: String(error?.message || error || "forward_failed"),
     });
-    throw error;
+    if (!wrapped.statusCode) wrapped.statusCode = error?.statusCode || 502;
+    if (wrapped !== error) {
+      wrapped.cause = error;
+      if (error?.payload) wrapped.payload = error.payload;
+    }
+    const failure = routingFailureFromError(wrapped, {
+      code: "whatsapp_inbound_forward_failed",
+      target,
+      instanceId: tenantRoute?.tenantVmId || "",
+      retryable: true,
+      reason: String(error?.message || error || "forward_failed"),
+    });
+    await appendEvent({
+      type: "whatsapp_local_inbound_forward_failed",
+      chatId,
+      eventId: String(input.eventId || input.id || input.messageId || ""),
+      target: failure.target || target,
+      targetSource,
+      routeMode,
+      tenantVmId: tenantRoute?.tenantVmId || failure.instanceId || null,
+      code: failure.code,
+      reason: failure.reason,
+      retryable: failure.retryable,
+    }, env).catch(() => {});
+    throw wrapped;
   }
-  await appendEvent({
-    type: "whatsapp_local_inbound_forwarded",
-    chatId,
-    eventId: String(input.eventId || input.id || input.messageId || ""),
-    target,
-    tenantVmId: tenantRoute?.tenantVmId || null,
-    status: response.status,
-    threadId: payload.threadId || null,
-    agentId: payload.agentId || null,
-    messageId: payload.messageId || null,
-  }, env).catch(() => {});
-  return { forwarded: true, target, payload };
 }
 
 function wait(ms) {
@@ -1264,6 +1336,7 @@ export async function handleInboundMessage(accountId, message, env = process.env
     if (routed.threadId && !routed.duplicate) {
       const thread = await getThread(routed.threadId, env).catch(() => null);
       if (threadUsesApiAgent(thread || {}, env)) {
+        await deliverWhatsAppReplies(env).catch(() => {});
         if (localWhatsAppApiAgentAutoRun(env)) await processApiAgentThreadInput(thread.id, env).catch(() => null);
         await deliverWhatsAppReplies(env).catch(() => {});
         return { routed: { ...routed, runtimeKind: "api-agent" }, eventId, chatId, from, fromMe: routeFromMe };

@@ -29,6 +29,7 @@ import {
   ApiService,
   ConnectorStatus,
   CreditUsageSummary,
+  RouterTraceRecord,
   SetupStatus,
   ThreadAttachResponse,
   ThreadMessage,
@@ -43,7 +44,7 @@ import {
 } from "./api.service";
 import { appendPendingFiles, messageWithAttachmentPaths, PendingFile, removePendingFile, uploadPendingFiles } from "./thread-uploads";
 
-type Panel = "chat" | "history" | "timers" | "attach" | "settings" | "workers" | "runtime" | "raw" | "ops" | "files" | "userTimers" | "userDesk" | "userConnectors";
+type Panel = "chat" | "history" | "delivery" | "timers" | "attach" | "settings" | "workers" | "runtime" | "raw" | "ops" | "files" | "userTimers" | "userDesk" | "userConnectors";
 type CodexRateLimitKey = "primary" | "secondary";
 type SetupPageMode = "setup" | "onboarding";
 type SetupSection = "system" | "security" | "maintenance" | "codex" | "whatsapp" | "browsers";
@@ -129,6 +130,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   readonly activeThreadIds = signal<Record<string, number>>({});
   readonly slashCommands = SLASH_COMMANDS;
   historyMessages: ThreadMessage[] = [];
+  deliveryTraces: RouterTraceRecord[] = [];
   timers: TimerRecord[] = [];
   allTimers: TimerRecord[] = [];
   runtimeDetails: Record<string, unknown> | null = null;
@@ -504,11 +506,11 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
 
   panelAllowedForCurrentUser(panel: Panel): boolean {
     if (this.isAdminMode()) return true;
-    return ["chat", "history", "timers", "files", "userTimers", "userDesk", "userConnectors"].includes(panel);
+    return ["chat", "history", "delivery", "timers", "files", "userTimers", "userDesk", "userConnectors"].includes(panel);
   }
 
   isUserNavPanelActive(panel: Panel): boolean {
-    if (panel === "chat") return ["chat", "history", "timers"].includes(this.activePanel);
+    if (panel === "chat") return ["chat", "history", "delivery", "timers"].includes(this.activePanel);
     return this.activePanel === panel;
   }
 
@@ -703,6 +705,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
 
   private clearThreadPanelState(): void {
     this.historyMessages = [];
+    this.deliveryTraces = [];
     this.timers = [];
     this.runtimeDetails = null;
     this.attachDetails = null;
@@ -804,6 +807,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     const thread = this.selectedThread();
     if (thread) this.pushPath(this.threadSlug(thread), panel);
     if (panel === "history") await this.loadHistory();
+    if (panel === "delivery") await this.loadDeliveryTraces();
     if (panel === "timers") await this.loadTimers();
     if (panel === "runtime") await this.loadRuntime();
     if (panel === "raw") await this.loadRaw();
@@ -1255,6 +1259,20 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     try {
       const payload = await firstValueFrom(this.api.threadHistory(thread.id));
       this.historyMessages = payload.messages || [];
+    } catch (error) {
+      this.error = this.errorText(error);
+    } finally {
+      this.busy = false;
+    }
+  }
+
+  async loadDeliveryTraces(): Promise<void> {
+    const thread = this.selectedThread();
+    if (!thread) return;
+    this.busy = true;
+    try {
+      const payload = await firstValueFrom(this.api.routerTraces({ threadId: thread.id }));
+      this.deliveryTraces = payload.traces || [];
     } catch (error) {
       this.error = this.errorText(error);
     } finally {
@@ -3338,6 +3356,24 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     return JSON.stringify(this.runtimeDetails || {}, null, 2);
   }
 
+  tracePhaseLabel(value: unknown): string {
+    return String(value || "unknown").replace(/_/g, " ");
+  }
+
+  traceTitle(trace: RouterTraceRecord): string {
+    return String(trace.sourceEventId || trace.routerTraceId || "trace").trim();
+  }
+
+  traceStatusLabel(trace: RouterTraceRecord): string {
+    if (trace.diagnostics?.stuck) return "stuck";
+    if (trace.terminal) return trace.terminalState || "completed";
+    return trace.currentPhase || "open";
+  }
+
+  traceRecovery(trace: RouterTraceRecord): string {
+    return String(trace.diagnostics?.recovery || "").trim();
+  }
+
   runtimeValue(key: string): string {
     const runtime = this.runtimeDetails?.["runtime"];
     if (runtime && typeof runtime === "object" && key in runtime) return String((runtime as Record<string, unknown>)[key] || "");
@@ -3452,6 +3488,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
       }
       if (previousSignature && changed && nextMessages.length > 0) this.markThreadActive(threadId, 45_000);
       if (this.activePanel === "history") await this.loadHistory();
+      if (this.activePanel === "delivery") await this.loadDeliveryTraces();
       if (this.activePanel === "timers") await this.loadTimers();
       if (this.activePanel === "runtime") await this.loadRuntime();
       if (this.activePanel === "raw") await this.loadRaw();
@@ -3869,7 +3906,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     if (parts[0] === "skills" || (parts[0] === "ng" && parts[1] === "skills")) return "chat";
     const threadIndex = parts.indexOf("thread");
     const panel = String(parts[threadIndex + 2] || "");
-    return ["history", "timers", "attach", "settings", "workers", "runtime", "raw", "ops", "files"].includes(panel) ? panel as Panel : "chat";
+    return ["history", "delivery", "timers", "attach", "settings", "workers", "runtime", "raw", "ops", "files"].includes(panel) ? panel as Panel : "chat";
   }
 
   private toolsViewFromPath(): ToolsView {

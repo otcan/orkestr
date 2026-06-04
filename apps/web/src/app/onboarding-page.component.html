@@ -95,6 +95,34 @@
         </section>
       }
 
+      @if (activeStep === "profile") {
+        <form class="setup-form" (submit)="saveTimezone(); $event.preventDefault()">
+          <h3>Timezone</h3>
+          <p>{{ timezoneSummary() }}</p>
+          <label>
+            <span>IANA timezone</span>
+            <input
+              name="onboarding-timezone"
+              [(ngModel)]="timezone"
+              autocomplete="off"
+              list="timezone-options"
+              maxlength="80"
+              placeholder="Europe/Berlin"
+            />
+          </label>
+          <datalist id="timezone-options">
+            <option value="Europe/Berlin"></option>
+            <option value="Europe/Istanbul"></option>
+            <option value="America/New_York"></option>
+            <option value="America/Los_Angeles"></option>
+            <option value="UTC"></option>
+          </datalist>
+          <button type="submit" [disabled]="busy || timezoneSaving || !timezone.trim()">
+            {{ timezoneSaving ? "Saving" : timezoneDone() ? "Update timezone" : "Save timezone" }}
+          </button>
+        </form>
+      }
+
       @if (activeStep === "system") {
         <section class="setup-form">
           <h3>Connections</h3>
@@ -634,7 +662,7 @@
         <footer class="setup-nav">
           <button class="secondary" type="button" (click)="previousStep()" [disabled]="busy || isFirstStep()">Back</button>
           <span>{{ stepStateLabel(activeStep) }}</span>
-          <button type="button" (click)="nextStep()" [disabled]="busy || (isLastStep() && !canOpenApp())" [attr.title]="isLastStep() ? openAppBlockReason() || null : null">
+          <button type="button" (click)="nextStep()" [disabled]="busy || (activeStep === 'profile' && !timezoneDone()) || (isLastStep() && !canOpenApp())" [attr.title]="isLastStep() ? openAppBlockReason() || null : null">
             {{ isLastStep() ? "Open Orkestr" : "Next" }}
           </button>
         </footer>

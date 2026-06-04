@@ -535,6 +535,7 @@ export interface TimerRecord {
   cadence: string;
   nextRunAt: string;
   time?: string;
+  timezone?: string;
   every?: string | null;
   prompt?: string;
   promptFile?: string;
@@ -772,6 +773,53 @@ export interface ThreadRuntimeResponse {
   runtime?: Record<string, unknown>;
 }
 
+export interface RouterTracePhase {
+  phase: string;
+  ts?: string;
+  reason?: string;
+  error?: string;
+  [key: string]: unknown;
+}
+
+export interface RouterTraceRecord {
+  routerTraceId: string;
+  turnId?: string;
+  connector?: string;
+  accountId?: string;
+  chatId?: string;
+  sourceEventId?: string;
+  threadId?: string;
+  messageId?: string;
+  currentPhase?: string;
+  terminal?: boolean;
+  terminalState?: string;
+  retryCount?: number;
+  lastError?: string;
+  ownerProcess?: string;
+  createdAt?: string;
+  updatedAt?: string;
+  phases?: RouterTracePhase[];
+  diagnostics?: {
+    stuck?: boolean;
+    ageMs?: number;
+    terminal?: boolean;
+    currentPhase?: string;
+    recovery?: string;
+    lastError?: string;
+  };
+  [key: string]: unknown;
+}
+
+export interface RouterTraceListResponse {
+  traces: RouterTraceRecord[];
+}
+
+export interface RouterTraceDetailResponse {
+  trace: RouterTraceRecord | null;
+  turns: Array<Record<string, unknown>>;
+  outbox: Array<Record<string, unknown>>;
+}
+
 export interface ThreadAttachResponse {
   ok: boolean;
   state?: string;
@@ -979,6 +1027,31 @@ export interface UserResponse {
   user: OrkestrUser;
 }
 
+export interface OnboardingProfile {
+  displayName?: string;
+  timezone?: string;
+  locale?: string;
+  preferences?: string;
+  toolRequests?: string;
+  notes?: string;
+  updatedAt?: string;
+}
+
+export interface UserOnboardingState {
+  schemaVersion?: number;
+  userId?: string;
+  state?: string;
+  invite?: Record<string, unknown> | null;
+  profile?: OnboardingProfile;
+  updatedAt?: string;
+}
+
+export interface UserOnboardingResponse {
+  ok?: boolean;
+  user?: OrkestrUser;
+  onboarding: UserOnboardingState;
+}
+
 export interface UserIdentitiesResponse {
   ok?: boolean;
   userId: string;
@@ -999,6 +1072,7 @@ export interface WaitlistEntry {
   displayName: string;
   phoneNumber: string;
   email?: string;
+  timezone?: string;
   intendedUse?: string;
   status: "pending" | "contacted" | "approved" | "rejected" | "paused" | string;
   acceptedTerms?: boolean;
@@ -1177,6 +1251,14 @@ export class ApiService {
 
   currentUser(): Observable<UserResponse> {
     return this.http.get<UserResponse>(this.api("/users/me"));
+  }
+
+  myOnboarding(): Observable<UserOnboardingResponse> {
+    return this.http.get<UserOnboardingResponse>(this.api("/users/me/onboarding"));
+  }
+
+  updateMyOnboardingProfile(profile: OnboardingProfile): Observable<UserOnboardingResponse> {
+    return this.http.patch<UserOnboardingResponse>(this.api("/users/me/onboarding"), { profile });
   }
 
   createUser(body: Record<string, unknown>): Observable<UserResponse> {
@@ -1676,6 +1758,18 @@ export class ApiService {
 
   threadRuntimeFull(id: string): Observable<ThreadRuntimeResponse> {
     return this.http.get<ThreadRuntimeResponse>(this.api(`/threads/${encodeURIComponent(id)}/runtime`));
+  }
+
+  routerTraces(options: { threadId?: string; stuck?: boolean } = {}): Observable<RouterTraceListResponse> {
+    const query = new URLSearchParams();
+    if (options.threadId) query.set("threadId", options.threadId);
+    if (options.stuck) query.set("stuck", "true");
+    const suffix = query.toString() ? `?${query.toString()}` : "";
+    return this.http.get<RouterTraceListResponse>(this.api(`/router-traces${suffix}`));
+  }
+
+  routerTrace(id: string): Observable<RouterTraceDetailResponse> {
+    return this.http.get<RouterTraceDetailResponse>(this.api(`/router-traces/${encodeURIComponent(id)}`));
   }
 
   attachThread(id: string): Observable<ThreadAttachResponse> {

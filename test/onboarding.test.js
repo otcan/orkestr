@@ -31,6 +31,9 @@ test("onboarding focuses the starter setup on virtual desktop and WhatsApp", asy
   assert.ok(onboarding.includes("Self-hosted agent cockpit"));
   assert.ok(onboarding.includes("Set up Orkestr"));
   assert.ok(onboarding.includes("Start with one capability"));
+  assert.ok(onboarding.includes("Timezone"));
+  assert.ok(onboarding.includes("saveTimezone()"));
+  assert.ok(onboarding.includes("myOnboarding()"));
   assert.ok(onboarding.includes("Connect only what you need now"));
   assert.ok(onboarding.includes("persistent Codex threads"));
   assert.ok(onboarding.includes("buildStamp()"));

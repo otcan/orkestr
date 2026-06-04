@@ -2,7 +2,7 @@ import { dataPaths } from "../../storage/src/paths.js";
 import { appendEvent, readJson, writeJson } from "../../storage/src/store.js";
 import { appendThreadMessage, createThread } from "./threads.js";
 import { API_AGENT_RUNTIME_KIND } from "./tenant-api-agent.js";
-import { setUserOnboardingState } from "./user-onboarding.js";
+import { normalizeTimezone, setUserOnboardingState } from "./user-onboarding.js";
 import { linkUserPrivateIdentity, normalizeUserId, publicUser, upsertUser } from "./users.js";
 import { notifyWaitlistEntrySubmitted, setWaitlistNotification, waitlistNotificationRecord } from "./waitlist-notifications.js";
 
@@ -49,6 +49,16 @@ function validateEmail(value = "") {
   return !email || /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
 }
 
+function normalizeWaitlistTimezone(value = "") {
+  const timezone = clean(value);
+  if (!timezone) return "";
+  try {
+    return normalizeTimezone(timezone);
+  } catch {
+    throw waitlistError("waitlist_timezone_invalid", 400);
+  }
+}
+
 function waitlistDefaults() {
   return {
     schemaVersion: 1,
@@ -72,6 +82,7 @@ function adminWaitlistEntry(entry = {}) {
     displayName: clean(entry.displayName),
     phoneNumber: normalizePhoneInput(entry.phoneNumber),
     email: normalizeEmailInput(entry.email),
+    timezone: normalizeWaitlistTimezone(entry.timezone),
     intendedUse: clean(entry.intendedUse).slice(0, 1000),
     status: normalizeWaitlistStatus(entry.status || "pending"),
     acceptedTerms: Boolean(entry.acceptedTerms),
@@ -93,6 +104,7 @@ export async function submitWaitlistEntry(input = {}, env = process.env, depende
   const displayName = clean(input.displayName || input.name).slice(0, 120);
   const phoneNumber = normalizePhoneInput(input.phoneNumber || input.phone || input.whatsappNumber || input.whatsapp);
   const email = normalizeEmailInput(input.email);
+  const timezone = normalizeWaitlistTimezone(input.timezone || input.timeZone);
   const intendedUse = clean(input.intendedUse || input.useCase || input.message).slice(0, 1000);
   const acceptedTerms = boolValue(input.acceptedTerms || input.termsAccepted || input.acceptTerms);
   const consentToContact = boolValue(input.consentToContact || input.contactConsent || input.allowContact);
@@ -112,6 +124,7 @@ export async function submitWaitlistEntry(input = {}, env = process.env, depende
     displayName,
     phoneNumber,
     email,
+    ...(timezone ? { timezone } : {}),
     intendedUse,
     acceptedTerms,
     consentToContact,
@@ -266,6 +279,10 @@ export async function approveWaitlistEntry(entryId, input = {}, env = process.en
       phoneNumber: entry.phoneNumber,
       approvedAt: nowIso(),
       approvedBy: actorUserId,
+    },
+    profile: {
+      displayName: entry.displayName,
+      timezone: entry.timezone,
     },
   }, env);
   const reviewed = await updateWaitlistEntry(entry.id, {

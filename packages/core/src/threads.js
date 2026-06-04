@@ -7,6 +7,7 @@ import { createThreadMessageRepository, createThreadRepository } from "../../sto
 import { assertSanitizedAction } from "./llm-sanitizer.js";
 import { normalizeNoReplyAssistantMessage } from "./no-reply.js";
 import { assertResourceAccess, assertThreadLimit, filterResourcesForPrincipal, isAdminPrincipal, policyError, resourceOwnerUserId } from "./policy.js";
+import { resolveThreadAttachments } from "./thread-attachments.js";
 import { userScopedCapabilityHints } from "./user-skills.js";
 import { adminUserId, getUser, normalizeUserId } from "./users.js";
 
@@ -22,6 +23,10 @@ const messageStringFields = [
   "accountId",
   "phase",
   "eventId",
+  "sourceEventId",
+  "routerTraceId",
+  "turnId",
+  "outboxId",
   "deliveryState",
   "observedVia",
   "runtimeLeaseId",
@@ -412,13 +417,19 @@ export async function appendThreadMessage(threadId, input, env = process.env) {
     }
     nextMessage = normalizeNoReplyAssistantMessage(nextMessage);
     if (input.forceDeliveryAfterInterrupt === true) nextMessage.forceDeliveryAfterInterrupt = true;
-    if (Array.isArray(input.attachments) && input.attachments.length) {
-      nextMessage.attachments = input.attachments.map((attachment) => ({ ...attachment }));
-    }
     if (!nextMessage.text && !nextMessage.promptFile) {
       const error = new Error("message_text_required");
       error.statusCode = 400;
       throw error;
+    }
+    const resolvedAttachments = await resolveThreadAttachments({
+      thread,
+      text: nextMessage.text,
+      attachments: Array.isArray(input.attachments) ? input.attachments : [],
+      env,
+    });
+    if (resolvedAttachments.attachments.length) {
+      nextMessage.attachments = resolvedAttachments.attachments;
     }
     const next = [...messages, nextMessage];
     await messageRepository.save(thread.id, next);
@@ -573,15 +584,32 @@ export async function updateThreadMessage(threadId, messageId, patch, env = proc
   return enqueueMessageMutation(filePath, async () => {
     const messages = await messageRepository.list(thread.id);
     let updated = null;
-    const next = messages.map((message) => {
-      if (message.id !== messageId) return message;
+    const normalizeAttachments = Object.prototype.hasOwnProperty.call(patch || {}, "text") ||
+      Object.prototype.hasOwnProperty.call(patch || {}, "attachments");
+    const next = [];
+    for (const message of messages) {
+      if (message.id !== messageId) {
+        next.push(message);
+        continue;
+      }
       updated = normalizeNoReplyAssistantMessage({
         ...message,
         ...patch,
         updatedAt: nowIso(),
       });
-      return updated;
-    });
+      if (normalizeAttachments) {
+        const sourceAttachments = Array.isArray(updated.attachments) ? updated.attachments : [];
+        const resolvedAttachments = await resolveThreadAttachments({
+          thread,
+          text: updated.text,
+          attachments: sourceAttachments,
+          env,
+        });
+        if (resolvedAttachments.attachments.length) updated.attachments = resolvedAttachments.attachments;
+        else delete updated.attachments;
+      }
+      next.push(updated);
+    }
     if (!updated) {
       const error = new Error("message_not_found");
       error.statusCode = 404;

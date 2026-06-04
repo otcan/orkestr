@@ -74,6 +74,7 @@ test("waitlist submissions are normalized, idempotent, and admin-reviewable", as
     displayName: "Can",
     phoneNumber: "+49 176 000000",
     email: "CAN@EXAMPLE.TEST",
+    timezone: "Europe/Berlin",
     intendedUse: "Job applications",
     acceptedTerms: true,
     consentToContact: true,
@@ -125,6 +126,7 @@ test("waitlist submissions are normalized, idempotent, and admin-reviewable", as
   const identities = await readUserPrivateIdentities(approved.user.id, env);
   const threads = await listThreads(env);
   const messages = await listThreadMessages(approved.thread.id, env);
+  const approvedOnboarding = await readUserOnboardingState(approved.user.id, env);
   const failedSubmit = await submitWaitlistEntry({
     displayName: "Bridge Later",
     phoneNumber: "+49176000002",
@@ -146,6 +148,7 @@ test("waitlist submissions are normalized, idempotent, and admin-reviewable", as
   assert.equal(listed.entries[0].displayName, "Can Updated");
   assert.equal(listed.entries[0].phoneNumber, "+49176000000");
   assert.equal(listed.entries[0].email, "can@example.test");
+  assert.equal(listed.entries[0].timezone, "Europe/Berlin");
   assert.equal(reviewed.entry.status, "contacted");
   assert.equal(reviewed.entry.adminNote, "Sent WA intro");
   assert.equal(approved.entry.status, "approved");
@@ -153,6 +156,7 @@ test("waitlist submissions are normalized, idempotent, and admin-reviewable", as
   assert.equal(user.phoneNumber, "+49176000000");
   assert.equal(approved.thread.ownerUserId, approved.user.id);
   assert.equal(approved.thread.runtimeKind, "api-agent");
+  assert.equal(approvedOnboarding.profile.timezone, "Europe/Berlin");
   assert.equal(approved.whatsapp.pendingChatCreation, false);
   assert.equal(approved.whatsapp.groupCreated, true);
   assert.equal(approved.whatsapp.chatId, "120363000000000003@g.us");
@@ -315,6 +319,7 @@ test("waitlist API accepts public submissions and keeps review admin-only", asyn
         displayName: "Can",
         phoneNumber: "+49176000000",
         email: "can@example.test",
+        timezone: "Europe/Berlin",
         intendedUse: "I want Orkestr for job applications.",
         acceptedTerms: true,
         consentToContact: true,
@@ -331,6 +336,7 @@ test("waitlist API accepts public submissions and keeps review admin-only", asyn
     assert.equal(blockedThreads.status, 401);
     assert.equal(listed.entries.length, 1);
     assert.equal(listed.entries[0].phoneNumber, "+49176000000");
+    assert.equal(listed.entries[0].timezone, "Europe/Berlin");
   } finally {
     await new Promise((resolve) => server.close(resolve));
     restoreEnv(prior);

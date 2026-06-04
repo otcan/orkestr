@@ -346,6 +346,148 @@ function gmailSignInIntent(text = "") {
     /\b(?:connect|sign\s*in|login|log\s*in|authorize|authorise|auth|oauth|set\s*up|setup|reconnect|register|add)\b/.test(value);
 }
 
+function compactField(value = "", max = 240) {
+  const normalized = clean(value).replace(/\s+/g, " ");
+  return normalized.length > max ? `${normalized.slice(0, Math.max(0, max - 3)).trimEnd()}...` : normalized;
+}
+
+function parseStructuredGmailPromptPush(text = "") {
+  const value = clean(text);
+  if (!/^new\s+gmail\s+message\b/i.test(value)) return null;
+  const fields = {};
+  const pattern = /(?:^|\n)\s*([A-Za-z][A-Za-z ]{1,24}):\s*([\s\S]*?)(?=\n\s*[A-Za-z][A-Za-z ]{1,24}:\s*|\s*$)/g;
+  for (const match of value.matchAll(pattern)) {
+    const key = lower(match[1]).replace(/\s+/g, " ");
+    if (!fields[key]) fields[key] = compactField(match[2], key === "snippet" ? 500 : 240);
+  }
+  const info = {
+    from: fields.from || "",
+    subject: fields.subject || "",
+    date: fields.received || fields.date || "",
+    snippet: fields.snippet || "",
+  };
+  return Object.values(info).some(Boolean) ? info : null;
+}
+
+function isGmailPromptPushMessage(message = {}) {
+  return lower(message.source) === "connector_prompt_push" &&
+    lower(message.connector || message.originSurface) === "gmail";
+}
+
+function gmailPromptPushInfo(message = {}) {
+  if (!isGmailPromptPushMessage(message)) return null;
+  const parsed = parseStructuredGmailPromptPush(message.text) || {};
+  const messageId = clean(message.externalId);
+  if (!messageId && !Object.values(parsed).some(Boolean)) return null;
+  return { ...parsed, messageId };
+}
+
+function gmailPromptPushLabel(info = {}) {
+  const subject = compactField(info.subject || "(no subject)", 180);
+  const from = compactField(info.from, 180);
+  return `${from ? `${from} - ` : ""}${subject}`;
+}
+
+function gmailPromptPushModelContext(message = {}) {
+  const info = gmailPromptPushInfo(message);
+  if (!info) return "";
+  const details = [
+    "Private connector context for API-agent tool use only: Gmail notification.",
+    info.messageId ? `Gmail message id: ${info.messageId}.` : "",
+    info.from ? `From: ${info.from}.` : "",
+    info.subject ? `Subject: ${info.subject}.` : "",
+    info.date ? `Date: ${info.date}.` : "",
+    "Use this context for follow-up tool calls, and do not print private connector ids unless the user explicitly asks.",
+  ].filter(Boolean).join(" ");
+  return `[${details}]`;
+}
+
+function latestGmailPromptPushBefore(messages = [], message = {}) {
+  const index = messages.findIndex((item) => clean(item.id) === clean(message.id));
+  const before = index >= 0 ? messages.slice(0, index) : messages;
+  for (const item of before.slice().reverse()) {
+    const info = gmailPromptPushInfo(item);
+    if (info) return { message: item, ...info };
+  }
+  return null;
+}
+
+function gmailContextInstructions(message = {}, gmailContext = null) {
+  const current = gmailPromptPushInfo(message);
+  const info = current || gmailContext;
+  if (!info) return "";
+  const lines = [
+    current
+      ? "Latest message is a structured Gmail notification delivered by a connector prompt-push."
+      : "Recent Gmail notification context is available for the latest user message.",
+    `Gmail notification summary: ${gmailPromptPushLabel(info)}.`,
+  ];
+  if (info.messageId) {
+    lines.push(`Private Gmail message id for tool calls: ${info.messageId}.`);
+  }
+  lines.push(
+    "If the latest user message asks to open, read, summarize, extract details from, or act on that Gmail notification, use orkestr_read_gmail_message with the private message id when available before giving a specific answer.",
+    "If no tool is called or the model cannot act, answer from the notification context without claiming the external action was completed.",
+  );
+  return lines.join("\n");
+}
+
+function gmailContextReadFollowupEligible(message = {}, gmailContext = null) {
+  const text = clean(message.text);
+  if (!gmailContext?.messageId || !text || gmailPromptPushInfo(message)) return false;
+  if (!userMessageNeedsSubstantiveAnswer(text)) return false;
+  if (introducedName(text) || /\bwho\s+am\s+i\b/i.test(text)) return false;
+  if (/\b(?:what can you do|how can you help|what skills|which skills)\b/i.test(text)) return false;
+  if (gmailSignInIntent(text)) return false;
+  return true;
+}
+
+function directGmailContextReadResponse(message = {}, gmailContext = {}) {
+  const messageId = clean(gmailContext.messageId);
+  return {
+    id: `gmail_context_read_${clean(message.id) || Date.now()}`,
+    model: "orkestr-api-agent-direct-tool",
+    output_text: "",
+    output: [{
+      type: "function_call",
+      name: "orkestr_read_gmail_message",
+      call_id: `call_gmail_context_${(clean(message.id) || "message").replace(/[^A-Za-z0-9_-]/g, "_").slice(0, 80)}`,
+      arguments: JSON.stringify({ messageId }),
+    }],
+    usage: {},
+  };
+}
+
+function genericTenantApiAgentHelpText(text = "") {
+  const value = clean(text).replace(/\s+/g, " ");
+  if (!value) return true;
+  return /^I can help in this chat\. Tell me what you want(?: to do)?\b/i.test(value) ||
+    /^Tell me what you want(?: to do)?\b/i.test(value);
+}
+
+function fallbackGmailPromptPushAnswer(message = {}) {
+  const info = gmailPromptPushInfo(message);
+  if (!info) return "";
+  return [
+    `Got it - new Gmail message${info.from ? ` from ${info.from}` : ""}.`,
+    info.subject ? `Subject: ${info.subject}` : "",
+    info.date ? `Received: ${info.date}` : "",
+    info.snippet ? `Snippet: "${info.snippet}"` : "",
+    "",
+    "Available next actions: read the full message, summarize it, extract details, mark it read/archive/delete, draft a reply, save it, or set a reminder.",
+  ].filter((line) => line !== "").join("\n");
+}
+
+function fallbackGmailContextAnswer(message = {}, gmailContext = null) {
+  if (!gmailContext) return "";
+  const label = gmailPromptPushLabel(gmailContext);
+  return [
+    "Yes, I can help with that.",
+    `The latest relevant Gmail notification before your question was: ${label}.`,
+    "The next step is to read the full email with the Gmail tool before giving a specific answer, so we can confirm what it is, extract transaction/support details, and avoid treating a one-off receipt as a recurring subscription. I will not cancel, send, delete, or modify anything without your explicit approval.",
+  ].join("\n\n");
+}
+
 function gmailAddressRequiredForTestingAnswer() {
   return "Which Gmail address do you want to connect? This Orkestr Gmail app is in Google testing mode, so I need the exact address before sending a sign-in link.";
 }
@@ -385,6 +527,9 @@ function userMessageNeedsSubstantiveAnswer(text = "") {
 }
 
 function tenantApiAgentTextNeedsRepair(text = "", message = {}, options = {}) {
+  const gmailPrompt = gmailPromptPushInfo(message);
+  if (gmailPrompt && (weakTenantApiAgentText(text) || genericTenantApiAgentHelpText(text))) return true;
+  if (options.gmailContext && genericTenantApiAgentHelpText(text)) return true;
   if (weakTenantApiAgentText(text) && (
     userMessageNeedsSubstantiveAnswer(message.text) ||
     bareConfirmationText(message.text) ||
@@ -405,7 +550,11 @@ function introducedName(text = "") {
     .join(" ");
 }
 
-function fallbackWeakTenantApiAgentAnswer(message = {}, env = process.env) {
+function fallbackWeakTenantApiAgentAnswer(message = {}, env = process.env, options = {}) {
+  const gmailPromptFallback = fallbackGmailPromptPushAnswer(message);
+  if (gmailPromptFallback) return gmailPromptFallback;
+  const gmailContextFallback = fallbackGmailContextAnswer(message, options.gmailContext);
+  if (gmailContextFallback) return gmailContextFallback;
   const text = clean(message.text);
   const name = introducedName(text);
   if (name) {
@@ -436,9 +585,11 @@ function fallbackTenantApiAgentRepairAnswer(message = {}, options = {}) {
   if (gmailTestingAccessDeniedMessage(message.text)) return fallbackGmailTestingAccessDeniedAnswer(message);
   if (options.pendingActionConfirmation === true) return fallbackPendingActionConfirmationAnswer(env);
   if (assistantPromisesUnconfirmedAction(options.originalText) || assistantPromisesUnconfirmedAction(options.repairedText)) {
+    const gmailFallback = fallbackGmailPromptPushAnswer(message) || fallbackGmailContextAnswer(message, options.gmailContext);
+    if (gmailFallback) return gmailFallback;
     return fallbackUnconfirmedActionAnswer(env);
   }
-  return fallbackWeakTenantApiAgentAnswer(message, env);
+  return fallbackWeakTenantApiAgentAnswer(message, env, options);
 }
 
 function responseFunctionCalls(response = {}) {
@@ -455,9 +606,13 @@ function responseFunctionCallInputItems(response = {}) {
 }
 
 function messageInputItem(message = {}) {
+  const content = [
+    clean(message.text || message.promptFile || ""),
+    gmailPromptPushModelContext(message),
+  ].filter(Boolean).join("\n\n");
   return {
     role: lower(message.role) === "assistant" ? "assistant" : "user",
-    content: clean(message.text || message.promptFile || ""),
+    content,
   };
 }
 
@@ -900,7 +1055,8 @@ function formatGmailNotificationTool(result = {}) {
       const skipped = Array.isArray(output.run.skipped) ? output.run.skipped.length : 0;
       return `Gmail notification ran now: ${delivered} delivered${skipped ? `, ${skipped} skipped` : ""}.`;
     }
-    return `Gmail notification created: ${clean(notification.label || notification.id)}. It is ${notification.enabled === false ? "disabled" : "enabled"} and checks every ${every}.`;
+    const action = result.name === "orkestr_update_gmail_notification" ? "updated" : "created";
+    return `Gmail notification ${action}: ${clean(notification.label || notification.id)}. It is ${notification.enabled === false ? "disabled" : "enabled"} and checks every ${every}.`;
   }
   if (output.run) {
     const delivered = Array.isArray(output.run.delivered) ? output.run.delivered.length : 0;
@@ -1000,7 +1156,7 @@ function formatToolResultFallback(toolResults = [], context = {}) {
     else if (result.name === "orkestr_run_skill_action") formatted = formatRunSkillActionTool(result, context);
     else if (result.name === "orkestr_list_skills") formatted = formatListSkillsTool(result);
     else if (["orkestr_search_gmail", "orkestr_read_gmail_message", "orkestr_read_latest_gmail_message"].includes(result.name)) formatted = formatGmailTool(result);
-    else if (["orkestr_create_gmail_notification", "orkestr_list_gmail_notifications", "orkestr_delete_gmail_notification", "orkestr_run_gmail_notification_now"].includes(result.name)) formatted = formatGmailNotificationTool(result);
+    else if (["orkestr_create_gmail_notification", "orkestr_update_gmail_notification", "orkestr_list_gmail_notifications", "orkestr_delete_gmail_notification", "orkestr_run_gmail_notification_now"].includes(result.name)) formatted = formatGmailNotificationTool(result);
     else if (["orkestr_modify_gmail_message", "orkestr_create_gmail_draft", "orkestr_send_gmail_draft", "orkestr_send_gmail_message", "orkestr_list_google_calendar_events", "orkestr_create_google_calendar_event", "orkestr_update_google_calendar_event", "orkestr_delete_google_calendar_event", "orkestr_get_google_drive_file"].includes(result.name)) formatted = formatGoogleWorkspaceTool(result);
     else if (["orkestr_list_files", "orkestr_read_file", "orkestr_write_file"].includes(result.name)) formatted = formatFileTool(result);
     else if (["orkestr_list_timers", "orkestr_create_timer", "orkestr_delete_timer", "orkestr_run_timer"].includes(result.name)) formatted = formatTimerTool(result);
@@ -1008,6 +1164,43 @@ function formatToolResultFallback(toolResults = [], context = {}) {
     if (formatted) parts.push(formatted);
   }
   return parts.join("\n\n").trim();
+}
+
+function gmailReadToolResultNeedsNarrativeRepair(toolResults = [], message = {}, gmailContext = null) {
+  if (!Array.isArray(toolResults) || !toolResults.length) return false;
+  const hasReadMessage = toolResults.some((result) =>
+    ["orkestr_read_gmail_message", "orkestr_read_latest_gmail_message"].includes(result.name) &&
+    result.output?.ok !== false &&
+    result.output?.message
+  );
+  return hasReadMessage && (Boolean(gmailContext) || userMessageNeedsSubstantiveAnswer(message.text));
+}
+
+function firstEmailAddress(text = "") {
+  return clean(clean(text).match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i)?.[0] || "");
+}
+
+function fallbackGmailReadNarrativeAnswer(toolResults = [], message = {}, gmailContext = null) {
+  const readResult = (Array.isArray(toolResults) ? toolResults : []).find((result) =>
+    ["orkestr_read_gmail_message", "orkestr_read_latest_gmail_message"].includes(result.name) &&
+    result.output?.ok !== false &&
+    result.output?.message
+  );
+  const gmail = readResult?.output?.message;
+  if (!gmail) return fallbackGmailContextAnswer(message, gmailContext);
+  const body = compactField(gmail.text || gmail.snippet, 900);
+  const supportEmail = firstEmailAddress(body);
+  return [
+    `I read the Gmail message: ${compactField(gmail.subject || gmailContext?.subject || "(no subject)", 220)}.`,
+    clean(gmail.from || gmailContext?.from) ? `From: ${clean(gmail.from || gmailContext?.from)}` : "",
+    body ? `What it says: ${body}` : "",
+    "I did not cancel, send, delete, archive, or modify anything.",
+    [
+      "For your request, this email gives the message content and transaction/support context.",
+      supportEmail ? `The support contact shown is ${supportEmail}.` : "",
+      "I can draft a support/cancellation/dispute message from these details, or search Gmail for a separate subscription or billing-agreement email.",
+    ].filter(Boolean).join(" "),
+  ].filter(Boolean).join("\n\n");
 }
 
 function requestedNumberedItemCount(text = "") {
@@ -1267,6 +1460,7 @@ export async function buildTenantApiAgentInstructions(thread = {}, messages = []
     "You are scoped to the tenant in the JSON context below. Do not claim access to files, Gmail, Outlook, LinkedIn, WhatsApp accounts, browser desktops, timers, or other chats unless the provided Orkestr tools or context show them for this tenant.",
     "Use the recent message history for conversational identity. If the user says their name or identity, acknowledge it and use it in later turns. If the user asks 'who am I?', answer from the conversation and the Tenant context instead of asking a vague clarification.",
     "When the user shares non-secret onboarding details, preferences, timezone, language, requested tools, or setup notes, save them with the onboarding profile tool. Never store passwords, tokens, recovery codes, or secrets.",
+    "For reminders, timers, calendar scheduling, daily summaries, or any other time-specific instruction, use Tenant context JSON onboardingProfile.timezone when it is present. If it is missing, ask the user for their IANA timezone before scheduling or giving time-specific instructions. When the user gives a timezone, call orkestr_update_onboarding_profile before continuing.",
     codexAvailable
       ? "If the user asks how you can help, what you can do, or what skills you have, answer with a short capability summary grounded in the Tenant context and enabled skills. For workspace/code execution, mention /codex as the explicit escalation path."
       : "If the user asks how you can help, what you can do, or what skills you have, answer with a short capability summary grounded in the Tenant context and enabled skills. Workspace/code execution is not available in this chat right now; do not mention a slash-command escalation path.",
@@ -1280,7 +1474,7 @@ export async function buildTenantApiAgentInstructions(thread = {}, messages = []
     "Do not tell contained users to open, check, or use the Orkestr UI for connector setup. This chat is the user surface; connector setup should happen through the sign-in instructions you provide in chat when parent app credentials exist.",
     "When Gmail capability is true and the user asks to search, list, open, read, inspect, or summarize Gmail, use the scoped Gmail tools directly. The user's request is consent for that same-user Gmail action; do not ask for repeated confirmation unless the target email or search is ambiguous.",
     "When Gmail capability is true and the Tenant connectorAuth.gmail capabilities include Gmail actions, Gmail send, Calendar read, Calendar actions, or Drive selected files, use the matching Google Workspace tools. For sending email, require explicit approval of recipients, subject, and body before sending; drafts may be created when the user asks to draft. For Calendar actions, require explicit approval of the calendar, title, time, and changed/deleted event before creating, updating, or deleting events.",
-    "When Gmail capability is true and the user asks to notify, alert, push, monitor, or periodically check new Gmail in this chat, create or manage a Gmail notification rule with the Gmail notification tools. Use the safe default query when the user did not specify a narrower query, and explain if the requested interval was rounded up by policy.",
+    "When Gmail capability is true and the user asks to notify, alert, push, monitor, or periodically check new Gmail in this chat, call the Gmail notification tool in that turn to create or manage the rule. Do not ask for yes/no confirmation when the safe defaults are enough; the user's request is consent for a same-chat notification rule. Use the safe default query when the user did not specify a narrower query, and explain after the tool result if the requested interval was rounded up by policy.",
     webFetch
       ? "When the user asks for current public web page content, public site topics, public links, or a public page summary, use orkestr_fetch_web_page first. Answer only from the returned title, text, links, and counts. If the fetch fails or the returned content is insufficient, say that plainly instead of claiming you checked the page."
       : "Public web page fetching is not available in this chat right now. Do not claim you checked current public web content unless another tool result explicitly returns it.",
@@ -1413,6 +1607,9 @@ async function handleCodexEscalation(thread, message, env = process.env) {
       connector: message.connector,
       chatId: message.chatId,
       accountId: message.accountId,
+      sourceEventId: message.sourceEventId || "",
+      routerTraceId: message.routerTraceId || "",
+      turnId: message.turnId || "",
     }, env);
     await appendEvent({ type: "api_agent_codex_unavailable", threadId: thread.id, messageId: message.id, ownerUserId: threadOwnerUserId(thread, env) }, env).catch(() => {});
     return { ok: true, processed: true, codexUnavailable: true };
@@ -1445,6 +1642,9 @@ async function handleCodexEscalation(thread, message, env = process.env) {
     connector: message.connector,
     chatId: message.chatId,
     accountId: message.accountId,
+    sourceEventId: message.sourceEventId || "",
+    routerTraceId: message.routerTraceId || "",
+    turnId: message.turnId || "",
   }, env);
   await startCodexAppServerThread(updated, env).catch(() => null);
   await appendEvent({ type: "api_agent_codex_escalated", threadId: thread.id, messageId: message.id, ownerUserId: threadOwnerUserId(thread, env) }, env).catch(() => {});
@@ -1466,7 +1666,19 @@ function repairConversationInput(inputItems = []) {
   }).filter(Boolean);
 }
 
-async function repairWeakTenantApiAgentResponse({ baseBody, inputItems, thread, message, text, env, fetchImpl }) {
+async function repairWeakTenantApiAgentResponse({
+  baseBody,
+  inputItems,
+  thread,
+  message,
+  text,
+  principal = null,
+  pendingAction = null,
+  gmailContext = null,
+  env,
+  fetchImpl,
+  allowTools = false,
+}) {
   const codexAvailable = codexEscalationAvailable(env);
   const repairBody = {
     ...baseBody,
@@ -1480,7 +1692,11 @@ async function repairWeakTenantApiAgentResponse({ baseBody, inputItems, thread, 
         ? "If the latest user message asks what you can do or how you can help, provide a short practical capability summary and mention /codex for workspace execution."
         : "If the latest user message asks what you can do or how you can help, provide a short practical capability summary and say workspace execution is not available in this chat right now.",
       "If the latest user message is only a confirmation like yes/ok and no tool result confirms completed work, do not say Done and do not promise future browser or workspace work. Ask for the concrete task or explain the pending limitation.",
-      "Do not use tools during this repair step.",
+      "If tenant tool results are present in the conversation, answer the user's latest request from those results instead of returning a raw tool dump or a generic capability fallback.",
+      allowTools
+        ? "If the latest user message asks for an Orkestr action and a matching tool is available, call the tool before finalizing."
+        : "Do not use tools during this repair step.",
+      gmailContextInstructions(message, gmailContext),
     ].join("\n"),
     input: [
       ...repairConversationInput(inputItems).slice(-30),
@@ -1494,11 +1710,29 @@ async function repairWeakTenantApiAgentResponse({ baseBody, inputItems, thread, 
       },
     ],
   };
-  delete repairBody.tools;
-  delete repairBody.tool_choice;
-  delete repairBody.parallel_tool_calls;
+  if (!allowTools) {
+    delete repairBody.tools;
+    delete repairBody.tool_choice;
+    delete repairBody.parallel_tool_calls;
+  }
   const response = await postOpenAIResponse(repairBody, env, fetchImpl, `orkestr-${thread.id}-${message.id}-repair`);
   await recordResponseUsage({ response, thread, message, callKind: "assistant_repair" }, env);
+  if (allowTools && responseFunctionCalls(response).length) {
+    return runTenantApiAgentToolResultResponse({
+      baseBody: repairBody,
+      inputItems: repairBody.input,
+      responseWithCalls: response,
+      thread,
+      message,
+      principal,
+      pendingAction,
+      gmailContext,
+      env,
+      fetchImpl,
+      idempotencySuffix: "repair-2",
+      callKind: "assistant_repair_tool_result",
+    });
+  }
   return { response, text: responseText(response) };
 }
 
@@ -1530,6 +1764,7 @@ async function runTenantApiAgentToolResultResponse({
   message,
   principal,
   pendingAction,
+  gmailContext = null,
   env,
   fetchImpl,
   idempotencySuffix = "2",
@@ -1610,30 +1845,42 @@ async function runTenantApiAgentToolResultResponse({
   const customFallback = typeof fallbackFromToolOutputs === "function" ? clean(fallbackFromToolOutputs(toolOutputs, { message, text })) : "";
   const toolFallback = clean(formatToolResultFallback(toolResults, { message, text, pendingAction, env }));
   const fallback = customFallback || toolFallback;
+  const repairGmailReadNarrative = gmailReadToolResultNeedsNarrativeRepair(toolResults, message, gmailContext);
   if (fallback && shouldPreferWebFetchFallback(text, fallback, message)) return { response: second, text: fallback };
-  if (fallback && genericToolFallbackText(text)) return { response: second, text: fallback };
-  if (!tenantApiAgentTextNeedsRepair(text, message, { pendingActionConfirmation: Boolean(pendingAction), env })) return { response: second, text };
-  if (fallback) return { response: second, text: fallback };
+  if (fallback && genericToolFallbackText(text) && !repairGmailReadNarrative) return { response: second, text: fallback };
+  if (!repairGmailReadNarrative && !tenantApiAgentTextNeedsRepair(text, message, { pendingActionConfirmation: Boolean(pendingAction), gmailContext, env })) return { response: second, text };
+  if (fallback && !repairGmailReadNarrative) return { response: second, text: fallback };
   const repaired = await repairWeakTenantApiAgentResponse({
     baseBody,
     inputItems: toolInput,
     thread,
     message,
     text,
+    principal,
+    pendingAction,
+    gmailContext,
     env,
     fetchImpl,
   });
   const repairedText = responseText(repaired.response) || repaired.text;
-  if (fallback && genericToolFallbackText(repairedText)) return { response: repaired.response, text: fallback };
+  if (fallback && genericToolFallbackText(repairedText)) {
+    return {
+      response: repaired.response,
+      text: repairGmailReadNarrative ? fallbackGmailReadNarrativeAnswer(toolResults, message, gmailContext) : fallback,
+    };
+  }
   return {
     response: repaired.response,
-    text: tenantApiAgentTextNeedsRepair(repairedText, message, { pendingActionConfirmation: Boolean(pendingAction), env })
-      ? fallbackTenantApiAgentRepairAnswer(message, {
-        pendingActionConfirmation: Boolean(pendingAction),
-        originalText: text,
-        repairedText,
-        env,
-      })
+    text: tenantApiAgentTextNeedsRepair(repairedText, message, { pendingActionConfirmation: Boolean(pendingAction), gmailContext, env })
+      ? repairGmailReadNarrative
+        ? fallbackGmailReadNarrativeAnswer(toolResults, message, gmailContext)
+        : fallbackTenantApiAgentRepairAnswer(message, {
+          pendingActionConfirmation: Boolean(pendingAction),
+          originalText: text,
+          repairedText,
+          gmailContext,
+          env,
+        })
       : repairedText,
   };
 }
@@ -1686,6 +1933,7 @@ async function runTenantApiAgentResponse({ thread, messages, message, env, fetch
   const model = apiAgentModel(env);
   const principal = tenantPrincipalForThread(thread, env);
   const pendingAction = pendingActionConfirmation(messages, message);
+  const gmailContext = latestGmailPromptPushBefore(messages, message);
   if (gmailTesterAllowlistConfigured(env) && gmailSignInIntent(message.text) && !emailFromText(message.text)) {
     const text = gmailAddressRequiredForTestingAnswer();
     return {
@@ -1701,6 +1949,7 @@ async function runTenantApiAgentResponse({ thread, messages, message, env, fetch
   }
   const instructions = [
     await buildTenantApiAgentInstructions(thread, messages, env),
+    gmailContextInstructions(message, gmailContext),
     pendingActionConfirmationInstructions(pendingAction, env),
   ].filter(Boolean).join("\n");
   const input = messages
@@ -1809,6 +2058,24 @@ async function runTenantApiAgentResponse({ thread, messages, message, env, fetch
     };
   }
 
+  if (gmailContextReadFollowupEligible(message, gmailContext) &&
+    capabilityAvailable(await scopedCapabilitiesForThread(thread, env), "gmail")) {
+    return runTenantApiAgentToolResultResponse({
+      baseBody,
+      inputItems: input,
+      responseWithCalls: directGmailContextReadResponse(message, gmailContext),
+      thread,
+      message,
+      principal,
+      pendingAction,
+      gmailContext,
+      env,
+      fetchImpl,
+      idempotencySuffix: "gmail-context-read-2",
+      callKind: "assistant_gmail_context_read_tool_result",
+    });
+  }
+
   const first = await postOpenAIResponse(baseBody, env, fetchImpl, `orkestr-${thread.id}-${message.id}-1`);
   await recordResponseUsage({ response: first, thread, message, callKind: "assistant" }, env);
   const calls = responseFunctionCalls(first);
@@ -1827,23 +2094,28 @@ async function runTenantApiAgentResponse({ thread, messages, message, env, fetch
         fetchImpl,
       });
     }
-    if (!tenantApiAgentTextNeedsRepair(text, message, { pendingActionConfirmation: Boolean(pendingAction), env })) return { response: first, text };
+    if (!tenantApiAgentTextNeedsRepair(text, message, { pendingActionConfirmation: Boolean(pendingAction), gmailContext, env })) return { response: first, text };
     const repaired = await repairWeakTenantApiAgentResponse({
       baseBody,
       inputItems: input,
       thread,
       message,
       text,
+      principal,
+      pendingAction,
+      gmailContext,
       env,
       fetchImpl,
+      allowTools: true,
     });
     return {
       response: repaired.response,
-      text: tenantApiAgentTextNeedsRepair(repaired.text, message, { pendingActionConfirmation: Boolean(pendingAction), env })
+      text: tenantApiAgentTextNeedsRepair(repaired.text, message, { pendingActionConfirmation: Boolean(pendingAction), gmailContext, env })
         ? fallbackTenantApiAgentRepairAnswer(message, {
           pendingActionConfirmation: Boolean(pendingAction),
           originalText: text,
           repairedText: repaired.text,
+          gmailContext,
           env,
         })
         : repaired.text,
@@ -1858,6 +2130,7 @@ async function runTenantApiAgentResponse({ thread, messages, message, env, fetch
     message,
     principal,
     pendingAction,
+    gmailContext,
     env,
     fetchImpl,
     idempotencySuffix: "2",
@@ -1954,6 +2227,9 @@ async function failApiAgentMessage(thread, error, env = process.env) {
     connector: message.connector,
     chatId: message.chatId,
     accountId: message.accountId,
+    sourceEventId: message.sourceEventId || "",
+    routerTraceId: message.routerTraceId || "",
+    turnId: message.turnId || "",
   }, env).catch(() => null);
   await recordCreditUsage({
     tenantId: threadOwnerUserId(thread, env),
@@ -1989,6 +2265,9 @@ async function completeApiAgentMessage(thread, message, text, env = process.env,
     connector: message.connector,
     chatId: message.chatId,
     accountId: message.accountId,
+    sourceEventId: message.sourceEventId || "",
+    routerTraceId: message.routerTraceId || "",
+    turnId: message.turnId || "",
   }, env);
   await updateThread(thread.id, { state: "ready" }, env).catch(() => {});
   await appendTurnLifecycleEvent("completed", {
@@ -2071,8 +2350,9 @@ async function processNextApiAgentMessage(thread, env = process.env, options = {
     env,
     fetchImpl: options.fetchImpl || fetch,
   });
-  const text = normalizeTenantApiAgentText(clean(result.text) || fallbackTenantApiAgentRepairAnswer(message, { env })) ||
-    fallbackTenantApiAgentRepairAnswer(message, { env });
+  const gmailContext = latestGmailPromptPushBefore(latestMessages, message);
+  const text = normalizeTenantApiAgentText(clean(result.text) || fallbackTenantApiAgentRepairAnswer(message, { gmailContext, env })) ||
+    fallbackTenantApiAgentRepairAnswer(message, { gmailContext, env });
   return completeApiAgentMessage(thread, message, text, env, { response: result.response });
 }
 

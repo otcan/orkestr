@@ -20,6 +20,7 @@ import {
   updateThreadMessage,
 } from "./threads.js";
 import { parseThreadInputCommand } from "./thread-commands.js";
+import { recordRouterTraceEvent } from "./router-traces.js";
 import { performNativeCodexSafeReset } from "./codex-safe-reset.js";
 import {
   codexRuntimeThreadStatus,
@@ -96,6 +97,25 @@ function markConnectorDeliverySignal(message = {}) {
       deliveryState: message.deliveryState || message.state || null,
     })).catch(() => {});
   }
+}
+
+async function recordMessageRouterTrace(message = {}, phase, context = {}, env = process.env) {
+  if (!message?.routerTraceId) return null;
+  return recordRouterTraceEvent({
+    routerTraceId: message.routerTraceId,
+    turnId: message.turnId || "",
+    connector: message.connector || "",
+    accountId: message.accountId || "",
+    chatId: message.chatId || "",
+    sourceEventId: message.sourceEventId || message.eventId || message.externalId || "",
+    threadId: context.threadId || "",
+    messageId: message.id || "",
+    phase,
+    reason: context.reason || "",
+    error: context.error || "",
+    attempt: context.attempt,
+    ownerProcess: context.ownerProcess || "",
+  }, env).catch(() => null);
 }
 
 export function consumeThreadConnectorDeliverySignalCount() {
@@ -3088,6 +3108,11 @@ async function sendThreadInputToPane(thread, message, status, env = process.env)
     ...rollout,
     error: null,
   }, env);
+  await recordMessageRouterTrace(pending || message, "delivery_started", {
+    threadId: thread.id,
+    attempt,
+    ownerProcess: status.lease?.id || status.paneId || "",
+  }, env);
   if (attempt > 1) markConnectorDeliverySignal(pending);
 
   let submittedExistingPaste = false;
@@ -3118,6 +3143,11 @@ async function sendThreadInputToPane(thread, message, status, env = process.env)
     deliveryInputBytes: deliveryInput.bytes,
     ...rollout,
     error: null,
+  }, env);
+  await recordMessageRouterTrace(message, "delivered_to_runtime", {
+    threadId: thread.id,
+    attempt,
+    ownerProcess: status.lease?.id || status.paneId || "",
   }, env);
   await appendEvent({
     type: "thread_input_delivery_attempted",
@@ -3153,7 +3183,7 @@ function scheduleThreadInputDelivery(threadId, env = process.env, delayMs = 0) {
 }
 
 export async function deliverPendingThreadInputs(threadId, env = process.env, options = {}) {
-  if (deployDrainActiveSync(env)) {
+      if (deployDrainActiveSync(env)) {
     await appendEvent({ type: "thread_input_delivery_deferred", threadId, reason: "deploy_draining" }, env).catch(() => {});
     return [];
   }
@@ -3303,6 +3333,7 @@ export async function deliverPendingThreadInputs(threadId, env = process.env, op
         if (completed?.messageId) delivered.push(completed.messageId);
         continue;
       }
+      await recordMessageRouterTrace(next, "queued", { threadId: thread.id }, env);
       await updateThreadMessage(thread.id, next.id, {
         state: "pending_delivery",
         deliveryState: next.forceDeliveryAfterInterrupt ? "interrupting" : "waking",
@@ -3365,6 +3396,7 @@ export async function deliverPendingThreadInputs(threadId, env = process.env, op
           break;
         }
         await updateThreadMessage(thread.id, next.id, { state: "failed", deliveryState: "failed", error: errorText }, env).catch(() => {});
+        await recordMessageRouterTrace(next, "runtime_failed", { threadId: thread.id, error: errorText }, env);
         markConnectorDeliverySignal(next);
         await updateThread(thread.id, { state: "failed", lastError: errorText }, env).catch(() => {});
         await appendEvent({ type: "thread_input_delivery_failed", threadId: thread.id, messageId: next.id, error: errorText }, env);
