@@ -627,6 +627,7 @@ export async function runtimeStatus(threadId, env = process.env, messagesOverrid
       awaitingAckCount,
       nextDeliveryAttemptAt,
       runningCount,
+      messages,
     });
   }
   if (threadNeedsNativeCodexRuntimeMigration(thread)) {
