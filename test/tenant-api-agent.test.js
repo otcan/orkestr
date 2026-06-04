@@ -620,6 +620,8 @@ test("tenant api-agent creates a persisted Gmail notification rule from chat", a
       openAiCalls.push(body);
       if (openAiCalls.length === 1) {
         assert.equal(body.tools.some((tool) => tool.name === "orkestr_create_gmail_notification"), true);
+        assert.match(body.instructions, /Do not ask for yes\/no confirmation/i);
+        assert.match(body.tools.find((tool) => tool.name === "orkestr_create_gmail_notification")?.description || "", /do not ask for yes\/no confirmation/i);
         return response({
           id: "resp_gmail_notification_1",
           model: "gpt-5-mini",

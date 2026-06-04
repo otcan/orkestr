@@ -1004,7 +1004,7 @@ export function tenantApiAgentToolDefinitions() {
     {
       type: "function",
       name: "orkestr_create_gmail_notification",
-      description: "Create a persisted background Gmail notification rule for this chat. Use when the user asks to notify, alert, push, monitor, or periodically check new Gmail. Default query is scoped to recent unread mail; do not request broad all-mail notifications unless the user explicitly asks.",
+      description: "Create a persisted background Gmail notification rule for this chat. Use immediately when the user asks to notify, alert, push, monitor, or periodically check new Gmail; do not ask for yes/no confirmation when the safe defaults are enough. Default query is scoped to recent unread mail; do not request broad all-mail notifications unless the user explicitly asks.",
       parameters: {
         type: "object",
         properties: {
