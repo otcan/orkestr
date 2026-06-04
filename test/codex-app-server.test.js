@@ -636,20 +636,22 @@ test("Codex app-server starts threads, delivers input, and imports existing thre
       if (status.state === "ready") break;
       await new Promise((resolve) => setTimeout(resolve, 10));
     }
+    const attachmentPath = path.join(home, "fitness-label.jpg");
+    await fs.writeFile(attachmentPath, Buffer.from([0xff, 0xd8, 0xff, 0xd9]));
     await enqueueThreadInput(startedWhatsApp.thread.id, {
       text: "add this too",
       source: "whatsapp_inbound",
       connector: "whatsapp",
       chatId: "chat-1",
       accountId: "account-1",
-      attachments: [{ path: "/tmp/fitness-label.jpg", filename: "fitness-label.jpg", mimetype: "image/jpeg", kind: "image" }],
+      attachments: [{ path: attachmentPath, filename: "fitness-label.jpg", mimetype: "image/jpeg", kind: "image" }],
     }, env);
     await deliverCodexAppServerPendingInputs(startedWhatsApp.thread, env);
     const attachmentMessages = await listThreadMessages(startedWhatsApp.thread.id, env);
     assert.ok(attachmentMessages.some((message) =>
       message.source === "codex-app-server" &&
       /Reply to: add this too/.test(message.text) &&
-      String(message.text || "").includes("Attachment 1: /tmp/fitness-label.jpg")
+      String(message.text || "").includes(`Attachment 1: ${attachmentPath}`)
     ));
     await writeConnectorConfig("whatsapp", { bridgeMode: "external", bridgeUrl: "http://wa.local" }, env);
     const whatsappCalls = [];
@@ -663,7 +665,7 @@ test("Codex app-server starts threads, delivers input, and imports existing thre
     assert.equal(whatsappCalls[0].body.to, "chat-1");
     assert.equal(whatsappCalls[0].body.accountId, "account-1");
     assert.ok(whatsappCalls.some((call) => /Reply to: whatsapp ping/.test(call.body.text)));
-    assert.ok(whatsappCalls.some((call) => call.body.text.includes("Attachment 1: /tmp/fitness-label.jpg")));
+    assert.ok(whatsappCalls.some((call) => call.body.text.includes(`Attachment 1: ${attachmentPath}`)));
 
     const rawState = JSON.parse(await fs.readFile(fake.stateFile, "utf8"));
     rawState.threads.push({
