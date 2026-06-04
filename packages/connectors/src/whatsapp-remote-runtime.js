@@ -1,4 +1,6 @@
+import path from "node:path";
 import { appendEvent } from "../../storage/src/store.js";
+import { recordRouterTraceEvent } from "../../core/src/router-traces.js";
 import { appendThreadMessage, listThreadMessages, listThreads, updateThreadMessage } from "../../core/src/threads.js";
 
 function pickString(...values) {
@@ -70,7 +72,7 @@ export function configuredRemoteThreadBackends(env = process.env) {
   return backends;
 }
 
-function backendForBinding(binding = {}, env = process.env) {
+export function backendForBinding(binding = {}, env = process.env) {
   const backendId = pickString(
     binding.remoteBackend,
     binding.remoteRuntimeBackend,
@@ -109,12 +111,12 @@ export function remoteWhatsAppRuntimeBinding(thread = null, env = process.env) {
   };
 }
 
-function remoteEndpointUrl(backend, endpointPath) {
+export function remoteEndpointUrl(backend, endpointPath) {
   const endpoint = String(endpointPath || "").trim().replace(/^\/+/, "");
   return new URL(`${backend.baseUrl}/${endpoint}`);
 }
 
-function remoteHeaders(backend, extra = {}) {
+export function remoteHeaders(backend, extra = {}) {
   return {
     "content-type": "application/json",
     ...(backend.token ? { authorization: `Bearer ${backend.token}` } : {}),
@@ -136,6 +138,44 @@ async function remoteJson(backend, endpointPath, fetchImpl, options = {}) {
     throw error;
   }
   return payload;
+}
+
+function safeFilePart(value = "", fallback = "attachment") {
+  return path.basename(String(value || fallback)).replace(/[^a-zA-Z0-9_.-]/g, "_").slice(0, 160) || fallback;
+}
+
+function remoteMessageAttachmentId(attachment = {}) {
+  return pickString(attachment.id, attachment.attachmentId, attachment.remoteAttachmentId, attachment.remoteArtifactId, attachment.artifactId);
+}
+
+function normalizeRemoteRuntimeAttachment(remote, remoteMessage = {}, attachment = {}, index = 0) {
+  const id = remoteMessageAttachmentId(attachment);
+  if (!id) return null;
+  const remoteMessageId = pickString(remoteMessage.id, remoteMessage.messageId);
+  const filename = safeFilePart(pickString(attachment.filename, attachment.name, `attachment-${index + 1}`));
+  return {
+    kind: pickString(attachment.kind, "file"),
+    filename,
+    name: pickString(attachment.name, filename),
+    mimetype: pickString(attachment.mimetype, attachment.type, "application/octet-stream"),
+    size: Number(attachment.size || 0) || 0,
+    source: "remote_runtime_attachment",
+    downloadable: false,
+    remote: true,
+    remoteBackend: remote.backendId,
+    remoteThreadId: remote.remoteThreadId,
+    remoteMessageId,
+    remoteAttachmentId: id,
+    ...(pickString(attachment.remoteArtifactId, attachment.artifactId) ? { remoteArtifactId: pickString(attachment.remoteArtifactId, attachment.artifactId) } : {}),
+    ...(pickString(attachment.downloadUrl, attachment.remoteDownloadUrl) ? { remoteDownloadUrl: pickString(attachment.downloadUrl, attachment.remoteDownloadUrl) } : {}),
+    ...(pickString(attachment.sha256) ? { sha256: pickString(attachment.sha256) } : {}),
+  };
+}
+
+function remoteRuntimeAttachmentsForMessage(remote, remoteMessage = {}) {
+  return (Array.isArray(remoteMessage.attachments) ? remoteMessage.attachments : [])
+    .map((attachment, index) => normalizeRemoteRuntimeAttachment(remote, remoteMessage, attachment, index))
+    .filter(Boolean);
 }
 
 export async function enqueueRemoteWhatsAppThreadInput({ thread, message, input = {} } = {}, env = process.env, fetchImpl = fetch) {
@@ -221,9 +261,10 @@ async function updatePublicRemoteParent(thread, localMessage, remoteMessage, rem
   return updateThreadMessage(thread.id, localMessage.id, patch, env).catch(() => null);
 }
 
-async function appendRemoteAssistantMessage({ thread, remote, remoteMessage, parentMessageId, env }) {
+async function appendRemoteAssistantMessage({ thread, remote, remoteMessage, parentMessageId, parent, env }) {
   const binding = thread?.binding || {};
-  return appendThreadMessage(thread.id, {
+  const attachments = remoteRuntimeAttachmentsForMessage(remote, remoteMessage);
+  const appended = await appendThreadMessage(thread.id, {
     role: "assistant",
     source: pickString(remoteMessage.source, "remote-runtime"),
     phase: pickString(remoteMessage.phase, messageRole(remoteMessage) === "assistant" ? "final_answer" : ""),
@@ -231,6 +272,8 @@ async function appendRemoteAssistantMessage({ thread, remote, remoteMessage, par
     text: pickString(remoteMessage.text),
     parentMessageId,
     connector: "whatsapp",
+    routerTraceId: pickString(remoteMessage.routerTraceId, parent?.routerTraceId),
+    turnId: pickString(remoteMessage.turnId, parent?.turnId),
     chatId: pickString(remoteMessage.chatId, binding.chatId),
     accountId: pickString(binding.responderAccountId, binding.outboundAccountId, remoteMessage.accountId),
     createdAt: messageTimestamp(remoteMessage),
@@ -239,7 +282,20 @@ async function appendRemoteAssistantMessage({ thread, remote, remoteMessage, par
     remoteMessageId: pickString(remoteMessage.id, remoteMessage.messageId),
     remoteParentMessageId: pickString(remoteMessage.parentMessageId, remoteMessage.parentId),
     remoteSyncedAt: new Date().toISOString(),
+    ...(attachments.length ? { attachments } : {}),
   }, env);
+  await recordRouterTraceEvent({
+    routerTraceId: appended.routerTraceId,
+    turnId: appended.turnId,
+    connector: "whatsapp",
+    accountId: appended.accountId,
+    chatId: appended.chatId,
+    threadId: thread.id,
+    messageId: appended.id,
+    phase: "assistant_seen",
+    ownerProcess: remote.backendId,
+  }, env).catch(() => {});
+  return appended;
 }
 
 export async function syncRemoteWhatsAppThreadMessages(env = process.env, fetchImpl = fetch) {
@@ -268,7 +324,8 @@ export async function syncRemoteWhatsAppThreadMessages(env = process.env, fetchI
         if (local || !completedAssistantMessage(remoteMessage)) continue;
         const parentMessageId = publicParentIdForRemoteMessage(remoteMessage, localByRemoteId);
         if (!parentMessageId && remote.binding.remoteMirrorOrphanReplies !== true) continue;
-        const appended = await appendRemoteAssistantMessage({ thread, remote, remoteMessage, parentMessageId, env });
+        const parent = parentMessageId ? localMessages.find((message) => message.id === parentMessageId) || null : null;
+        const appended = await appendRemoteAssistantMessage({ thread, remote, remoteMessage, parentMessageId, parent, env });
         localByRemoteId.set(remoteMessageId, appended);
         imported += 1;
       }

@@ -773,6 +773,53 @@ export interface ThreadRuntimeResponse {
   runtime?: Record<string, unknown>;
 }
 
+export interface RouterTracePhase {
+  phase: string;
+  ts?: string;
+  reason?: string;
+  error?: string;
+  [key: string]: unknown;
+}
+
+export interface RouterTraceRecord {
+  routerTraceId: string;
+  turnId?: string;
+  connector?: string;
+  accountId?: string;
+  chatId?: string;
+  sourceEventId?: string;
+  threadId?: string;
+  messageId?: string;
+  currentPhase?: string;
+  terminal?: boolean;
+  terminalState?: string;
+  retryCount?: number;
+  lastError?: string;
+  ownerProcess?: string;
+  createdAt?: string;
+  updatedAt?: string;
+  phases?: RouterTracePhase[];
+  diagnostics?: {
+    stuck?: boolean;
+    ageMs?: number;
+    terminal?: boolean;
+    currentPhase?: string;
+    recovery?: string;
+    lastError?: string;
+  };
+  [key: string]: unknown;
+}
+
+export interface RouterTraceListResponse {
+  traces: RouterTraceRecord[];
+}
+
+export interface RouterTraceDetailResponse {
+  trace: RouterTraceRecord | null;
+  turns: Array<Record<string, unknown>>;
+  outbox: Array<Record<string, unknown>>;
+}
+
 export interface ThreadAttachResponse {
   ok: boolean;
   state?: string;
@@ -1711,6 +1758,18 @@ export class ApiService {
 
   threadRuntimeFull(id: string): Observable<ThreadRuntimeResponse> {
     return this.http.get<ThreadRuntimeResponse>(this.api(`/threads/${encodeURIComponent(id)}/runtime`));
+  }
+
+  routerTraces(options: { threadId?: string; stuck?: boolean } = {}): Observable<RouterTraceListResponse> {
+    const query = new URLSearchParams();
+    if (options.threadId) query.set("threadId", options.threadId);
+    if (options.stuck) query.set("stuck", "true");
+    const suffix = query.toString() ? `?${query.toString()}` : "";
+    return this.http.get<RouterTraceListResponse>(this.api(`/router-traces${suffix}`));
+  }
+
+  routerTrace(id: string): Observable<RouterTraceDetailResponse> {
+    return this.http.get<RouterTraceDetailResponse>(this.api(`/router-traces/${encodeURIComponent(id)}`));
   }
 
   attachThread(id: string): Observable<ThreadAttachResponse> {

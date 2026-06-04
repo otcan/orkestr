@@ -9,6 +9,7 @@ import { stopCodexAppServerClients } from "../packages/core/src/codex-app-server
 import { runNextAgentMessage, runNextThreadMessage } from "../packages/core/src/executors.js";
 import { listAgentMessages } from "../packages/core/src/messages.js";
 import { deliverPendingThreadInputs, listRuntimeLeases } from "../packages/core/src/runtime-leases.js";
+import { listRouterTraces } from "../packages/core/src/router-traces.js";
 import { getSetupStatus } from "../packages/core/src/setup.js";
 import { appendThreadMessage, createThread, enqueueThreadInput, getThread, listThreadMessages, listThreads, updateThreadMessage } from "../packages/core/src/threads.js";
 import { createUser, linkUserPrivateIdentity } from "../packages/core/src/users.js";
@@ -56,6 +57,28 @@ function response(payload, ok = true, status = 200) {
     status,
     async json() {
       return payload;
+    },
+  };
+}
+
+function binaryResponse(body, headers = {}, status = 200) {
+  const buffer = Buffer.isBuffer(body) ? body : Buffer.from(String(body));
+  const normalizedHeaders = Object.fromEntries(
+    Object.entries(headers).map(([key, value]) => [key.toLowerCase(), String(value)]),
+  );
+  return {
+    ok: status >= 200 && status < 300,
+    status,
+    headers: {
+      get(name) {
+        return normalizedHeaders[String(name || "").toLowerCase()] || "";
+      },
+    },
+    async json() {
+      return {};
+    },
+    async arrayBuffer() {
+      return buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength);
     },
   };
 }
@@ -1541,6 +1564,182 @@ test("whatsapp remote runtime imports parent replies and mirrors them once throu
   assert.equal(imported.parentMessageId, messages[0].id);
 });
 
+test("whatsapp remote runtime stages parent attachments and sends them as media", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-remote-attachment-"));
+  const env = externalBridgeEnv(home, {
+    ORKESTR_WHATSAPP_DEBUG_FOOTER: "0",
+    ORKESTR_REMOTE_THREAD_BACKENDS_JSON: JSON.stringify({
+      personal: { baseUrl: "http://parent.local", token: "parent-token" },
+    }),
+  });
+  await writeConnectorConfig("whatsapp", { bridgeMode: "external", bridgeUrl: "http://wa.local", apiToken: "wa-token" }, env);
+  await createThread({
+    id: "public-remote-attachment",
+    name: "Public Remote Attachment",
+    binding: {
+      connector: "whatsapp",
+      chatId: "chat-remote-attachment",
+      responderAccountId: "responder",
+      remoteBackend: "personal",
+      remoteThreadId: "parent-thread",
+    },
+  }, env);
+  const parentUser = {
+    id: "parent-user-attachment",
+    role: "user",
+    source: "whatsapp_inbound",
+    state: "completed",
+    deliveryState: "delivered",
+    text: "make a one-pager",
+    chatId: "chat-remote-attachment",
+    accountId: "responder",
+    createdAt: new Date().toISOString(),
+  };
+  const parentReply = {
+    id: "parent-assistant-attachment",
+    role: "assistant",
+    source: "codex-app-server",
+    phase: "final_answer",
+    state: "completed",
+    parentMessageId: "parent-user-attachment",
+    text: "Prepared it here: [PROJECT_ONE_PAGER.md](/workspace/thread/PROJECT_ONE_PAGER.md).",
+    chatId: "chat-remote-attachment",
+    createdAt: new Date().toISOString(),
+    attachments: [{
+      id: "remote-doc",
+      filename: "PROJECT_ONE_PAGER.md",
+      mimetype: "text/markdown",
+      size: 22,
+      downloadUrl: "/api/threads/parent-thread/attachments/remote-doc/download",
+    }],
+  };
+  const sendCalls = [];
+  const fetchImpl = async (url, options = {}) => {
+    const parsed = new URL(String(url));
+    if (parsed.host === "parent.local" && parsed.pathname === "/threads/parent-thread/input") {
+      return response({ ok: true, message: parentUser });
+    }
+    if (parsed.host === "parent.local" && parsed.pathname === "/threads/parent-thread/messages") {
+      return response({ ok: true, messages: [parentUser, parentReply] });
+    }
+    if (parsed.host === "parent.local" && parsed.pathname === "/api/threads/parent-thread/attachments/remote-doc/download") {
+      assert.equal(options.headers.authorization, "Bearer parent-token");
+      return binaryResponse("# Project one-pager\n", { "content-type": "text/markdown" });
+    }
+    if (parsed.host === "wa.local" && parsed.pathname === "/send-media") {
+      sendCalls.push(JSON.parse(options.body));
+      return response({ ok: true, ids: ["sent-text", "sent-doc"] });
+    }
+    throw new Error(`unexpected fetch ${parsed.href}`);
+  };
+
+  await routeWhatsAppInbound({
+    eventId: "remote-attachment-1",
+    chatId: "chat-remote-attachment",
+    accountId: "responder",
+    text: "make a one-pager",
+  }, env, fetchImpl);
+  const delivery = await deliverWhatsAppReplies(env, fetchImpl);
+  const duplicate = await deliverWhatsAppReplies(env, fetchImpl);
+  const messages = await listThreadMessages("public-remote-attachment", env);
+  const imported = messages.find((message) => message.remoteMessageId === "parent-assistant-attachment");
+
+  assert.equal(delivery.delivered.length, 1);
+  assert.equal(duplicate.delivered.length, 0);
+  assert.equal(sendCalls.length, 1);
+  assert.equal(sendCalls[0].to, "chat-remote-attachment");
+  assert.equal(sendCalls[0].paths.length, 1);
+  assert.match(sendCalls[0].paths[0], /whatsapp-bridge\/outbound-media\/remote-artifacts/);
+  assert.equal(await fs.readFile(sendCalls[0].paths[0], "utf8"), "# Project one-pager\n");
+  assert.equal(imported.attachments.length, 1);
+  assert.equal(imported.attachments[0].remoteAttachmentId, "remote-doc");
+  assert.equal(imported.attachments[0].filename, "PROJECT_ONE_PAGER.md");
+  assert.equal(imported.attachments[0].path, sendCalls[0].paths[0]);
+});
+
+test("whatsapp remote runtime reports missing parent attachments instead of silently dropping them", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-remote-attachment-missing-"));
+  const env = externalBridgeEnv(home, {
+    ORKESTR_WHATSAPP_DEBUG_FOOTER: "0",
+    ORKESTR_REMOTE_THREAD_BACKENDS_JSON: JSON.stringify({
+      personal: { baseUrl: "http://parent.local", token: "parent-token" },
+    }),
+  });
+  await writeConnectorConfig("whatsapp", { bridgeMode: "external", bridgeUrl: "http://wa.local", apiToken: "wa-token" }, env);
+  await createThread({
+    id: "public-remote-attachment-missing",
+    name: "Public Remote Attachment Missing",
+    binding: {
+      connector: "whatsapp",
+      chatId: "chat-remote-attachment-missing",
+      responderAccountId: "responder",
+      remoteBackend: "personal",
+      remoteThreadId: "parent-thread",
+    },
+  }, env);
+  const parentUser = {
+    id: "parent-user-missing-attachment",
+    role: "user",
+    source: "whatsapp_inbound",
+    state: "completed",
+    deliveryState: "delivered",
+    text: "make a one-pager",
+    chatId: "chat-remote-attachment-missing",
+    accountId: "responder",
+    createdAt: new Date().toISOString(),
+  };
+  const parentReply = {
+    id: "parent-assistant-missing-attachment",
+    role: "assistant",
+    source: "codex-app-server",
+    phase: "final_answer",
+    state: "completed",
+    parentMessageId: "parent-user-missing-attachment",
+    text: "Prepared the one-pager.",
+    chatId: "chat-remote-attachment-missing",
+    createdAt: new Date().toISOString(),
+    attachments: [{
+      id: "remote-missing",
+      filename: "missing.md",
+      mimetype: "text/markdown",
+      size: 12,
+      downloadUrl: "/api/threads/parent-thread/attachments/remote-missing/download",
+    }],
+  };
+  const sendCalls = [];
+  const fetchImpl = async (url, options = {}) => {
+    const parsed = new URL(String(url));
+    if (parsed.host === "parent.local" && parsed.pathname === "/threads/parent-thread/input") {
+      return response({ ok: true, message: parentUser });
+    }
+    if (parsed.host === "parent.local" && parsed.pathname === "/threads/parent-thread/messages") {
+      return response({ ok: true, messages: [parentUser, parentReply] });
+    }
+    if (parsed.host === "parent.local" && parsed.pathname.includes("/attachments/remote-missing/download")) {
+      return response({ ok: false, error: "missing" }, false, 404);
+    }
+    if (parsed.host === "wa.local" && parsed.pathname === "/send-text") {
+      sendCalls.push(JSON.parse(options.body));
+      return response({ ok: true, ids: ["sent-missing-note"] });
+    }
+    throw new Error(`unexpected fetch ${parsed.href}`);
+  };
+
+  await routeWhatsAppInbound({
+    eventId: "remote-attachment-missing-1",
+    chatId: "chat-remote-attachment-missing",
+    accountId: "responder",
+    text: "make a one-pager",
+  }, env, fetchImpl);
+  const delivery = await deliverWhatsAppReplies(env, fetchImpl);
+
+  assert.equal(delivery.delivered.length, 1);
+  assert.equal(sendCalls.length, 1);
+  assert.equal(sendCalls[0].paths, undefined);
+  assert.match(sendCalls[0].text, /Attachment not sent:/);
+  assert.match(sendCalls[0].text, /missing\.md: missing/);
+});
+
 test("whatsapp delivery skips outbound replies while an active persisted claim exists", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-claim-active-"));
   const env = externalBridgeEnv(home, {
@@ -1652,10 +1851,18 @@ test("whatsapp inbound can route directly to a thread and mirror its reply once"
   assert.equal(messages.length, 2);
   assert.equal(messages[0].attachments[0].path, inboundImagePath);
   assert.equal(messages[0].attachments[0].filename, "thread-image.jpg");
+  assert.equal(Boolean(messages[0].routerTraceId), true);
+  assert.equal(messages[1].routerTraceId, messages[0].routerTraceId);
   assert.equal(delivery.delivered.length, 1);
   assert.equal(duplicate.delivered.length, 0);
   assert.equal(calls[0].url.pathname, "/send-text");
   assert.equal(calls[0].body.to, "chat-thread");
+  const traces = await listRouterTraces({ threadId: "thread-wa" }, env);
+  assert.equal(traces.length, 1);
+  assert.equal(traces[0].routerTraceId, messages[0].routerTraceId);
+  assert.equal(traces[0].currentPhase, "completed");
+  assert.equal(traces[0].phases.some((phase) => phase.phase === "received"), true);
+  assert.equal(traces[0].phases.some((phase) => phase.phase === "mirror_sent"), true);
 });
 
 test("whatsapp explicit approve command is local when no Codex approval is pending", async () => {

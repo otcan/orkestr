@@ -30,6 +30,7 @@ export function dataPaths(env = process.env) {
     workspaces: path.join(home, "workspaces"),
     timers: path.join(home, "timers.json"),
     connectorPromptPushes: path.join(home, "connector-prompt-pushes.json"),
+    routerTraces: path.join(home, "router-traces.json"),
     releaseWhatsAppNotifications: path.join(home, "release-whatsapp-notifications.json"),
     events: path.join(home, "events.jsonl"),
     whatsapp: path.join(home, "whatsapp.json"),

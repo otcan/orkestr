@@ -96,6 +96,7 @@ export function connectorPromptPushSafety(input = {}) {
     bodyPreviewChars: Math.max(0, Math.min(6000, bodyPreviewChars)),
     requireQuery: boolValue(source.requireQuery, true),
     allowBroadQuery: boolValue(source.allowBroadQuery, false),
+    noReplyBehavior: clean(source.noReplyBehavior),
   };
 }
 
@@ -260,7 +261,26 @@ export async function updateConnectorPromptPush(id, patch = {}, env = process.en
     throw error;
   }
   await writePushStore({ ...store, pushes }, env);
+  await appendEvent({ type: "connector_prompt_push_updated", pushId: updated.id, ownerUserId: updated.ownerUserId, connector: updated.connector, targetType: updated.targetType, target: updated.target }, env).catch(() => {});
   return updated;
+}
+
+export async function updateConnectorPromptPushForPrincipal(id, patch = {}, principal, env = process.env) {
+  const existing = await getConnectorPromptPush(id, env);
+  if (!existing) throw promptPushError("connector_prompt_push_not_found", 404);
+  assertOwnerAccess(principal, existing.ownerUserId, "connector_prompt_push_update", env);
+  const updatedPreview = normalizeConnectorPromptPush({ ...existing, ...patch, id: existing.id, ownerUserId: existing.ownerUserId, connector: existing.connector, source: existing.source, createdAt: existing.createdAt }, env);
+  validateConnectorPromptPush(updatedPreview);
+  await assertConnectorPromptPushCapability(updatedPreview, principal, env);
+  if (!isAdminPrincipal(principal)) {
+    await assertSanitizedAction({
+      action: "connector_prompt_push.update",
+      principal,
+      resource: { type: "connector_prompt_push", id: existing.id, ownerUserId: existing.ownerUserId, connector: existing.connector, targetType: updatedPreview.targetType, target: updatedPreview.target },
+      input: { label: updatedPreview.label, connector: updatedPreview.connector, prompt: updatedPreview.prompt.slice(0, maxPromptChars), promptTemplate: updatedPreview.promptTemplate.slice(0, maxPromptChars), sourceConfig: updatedPreview.sourceConfig, safety: updatedPreview.safety, enabled: updatedPreview.enabled },
+    }, env);
+  }
+  return updateConnectorPromptPush(id, patch, env);
 }
 
 export async function deleteConnectorPromptPush(id, env = process.env) {
@@ -352,6 +372,7 @@ async function enqueueConnectorPrompt(push, item, text, env = process.env) {
     connector: push.connector,
     originSurface: push.connector,
     originTransport: "prompt-push",
+    visibility: "internal",
     externalId: sourceItemId(item),
     text,
     ownerUserId: push.ownerUserId,

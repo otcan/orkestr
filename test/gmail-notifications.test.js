@@ -8,7 +8,10 @@ import {
   listGmailNotifications,
   runDueGmailNotifications,
   runGmailNotificationNow,
+  updateGmailNotificationForPrincipal,
 } from "../packages/core/src/gmail-notifications.js";
+import { getConnectorPromptPush } from "../packages/core/src/connector-pushes.js";
+import { adminPrincipal } from "../packages/core/src/principal.js";
 import { createThread, listThreadMessages } from "../packages/core/src/threads.js";
 import { exchangeGmailCode } from "../packages/connectors/src/gmail.js";
 import { writeConnectorConfig } from "../packages/storage/src/config.js";
@@ -126,4 +129,40 @@ test("gmail notifications schedule safe previews and dedupe Gmail message ids", 
   assert.equal(notifications[0].processedSourceItemCount, 1);
   assert.ok(Date.parse(notifications[0].nextRunAt) > Date.now());
   assert.equal(calls.filter((call) => call.url.pathname.endsWith("/messages")).length, 2);
+});
+
+test("gmail notification update resolves the current thread rule and can suppress visible push output", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-gmail-notification-update-"));
+  const env = {
+    ORKESTR_HOME: home,
+    ORKESTR_GMAIL_NOTIFICATIONS_ENABLED: "1",
+    ORKESTR_GMAIL_NOTIFICATION_MIN_INTERVAL_MS: "300000",
+  };
+  const thread = await createThread({
+    id: "gmail-notification-update-thread",
+    name: "Gmail Notification Update Thread",
+    binding: { connector: "whatsapp", chatId: "chat-gmail-update", outboundAccountId: "wa-1" },
+  }, env);
+  const created = await createGmailNotification({
+    label: "Unread alerts",
+    threadId: thread.id,
+    query: "is:unread newer_than:1d",
+    interval: "5m",
+    enabled: true,
+  }, env);
+
+  const updated = await updateGmailNotificationForPrincipal("", {
+    threadId: thread.id,
+    fromMe: true,
+    fromAddress: "me@example.com",
+    interval: "15m",
+    noReply: true,
+  }, adminPrincipal(), env, { thread });
+  const stored = await getConnectorPromptPush(created.id, env);
+
+  assert.equal(updated.id, created.id);
+  assert.equal(updated.query, "from:me@example.com newer_than:1d");
+  assert.equal(updated.every, "15m");
+  assert.equal(stored.promptTemplate, "NO_REPLY");
+  assert.equal(stored.safety.noReplyBehavior, "suppress");
 });

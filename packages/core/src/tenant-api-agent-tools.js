@@ -21,6 +21,7 @@ import {
   deleteGmailNotificationForPrincipal,
   listGmailNotificationsForPrincipal,
   runGmailNotificationNowForPrincipal,
+  updateGmailNotificationForPrincipal,
 } from "./gmail-notifications.js";
 import { runTenantApiAgentProfileTool, tenantApiAgentProfileToolDefinitions } from "./tenant-api-agent-profile-tools.js";
 import {
@@ -726,11 +727,51 @@ function gmailNotificationInput(args = {}, thread = null) {
   };
 }
 
+function gmailNotificationUpdateInput(args = {}, thread = null) {
+  const input = { notificationId: clean(args.notificationId || args.id) };
+  if (args.label !== undefined) input.label = clean(args.label);
+  if (clean(args.query)) input.query = clean(args.query);
+  if (args.useDefaultQuery === true) input.query = "";
+  if (clean(args.interval || args.every)) input.interval = clean(args.interval || args.every);
+  if (Number(args.maxItemsPerRun || args.maxResults || 0) > 0) input.maxItemsPerRun = Number(args.maxItemsPerRun || args.maxResults || 1) || 1;
+  if (args.enabled !== undefined) input.enabled = args.enabled !== false;
+  if (args.allowBroadQuery !== undefined) input.allowBroadQuery = args.allowBroadQuery === true;
+  if (clean(args.targetType)) input.targetType = clean(args.targetType).toLowerCase();
+  if (clean(args.target) || clean(args.threadId) || clean(args.agentId)) {
+    const targetType = clean(input.targetType || args.targetType || "thread").toLowerCase();
+    input.target = clean(args.target || (targetType === "thread" ? (args.threadId || thread?.id) : args.agentId));
+  }
+  if (args.promptTemplate !== undefined || args.prompt !== undefined) input.promptTemplate = clean(args.promptTemplate || args.prompt);
+  if (args.noReply === true) input.noReply = true;
+  if (clean(args.noReplyBehavior)) input.noReplyBehavior = clean(args.noReplyBehavior);
+  if (args.fromMe === true) input.fromMe = true;
+  if (clean(args.from)) input.from = clean(args.from);
+  if (clean(args.fromAddress || args.senderAddress || args.senderEmail)) {
+    input.fromAddress = clean(args.fromAddress || args.senderAddress || args.senderEmail);
+  }
+  if (clean(args.account)) input.account = clean(args.account);
+  return input;
+}
+
 async function createGmailNotification(args = {}, principal = {}, thread = null, env = process.env) {
   await assertConnectorConnected("gmail", principal, env);
   return {
     ok: true,
     notification: await createGmailNotificationForPrincipal(gmailNotificationInput(args, thread), principal, env, { thread }),
+  };
+}
+
+async function updateGmailNotification(args = {}, principal = {}, thread = null, env = process.env) {
+  await assertConnectorConnected("gmail", principal, env);
+  return {
+    ok: true,
+    notification: await updateGmailNotificationForPrincipal(
+      clean(args.notificationId || args.id),
+      gmailNotificationUpdateInput(args, thread),
+      principal,
+      env,
+      { thread },
+    ),
   };
 }
 
@@ -1024,6 +1065,35 @@ export function tenantApiAgentToolDefinitions() {
     },
     {
       type: "function",
+      name: "orkestr_update_gmail_notification",
+      description: "Update one persisted Gmail background notification rule for this chat. Use this when the user asks to change, narrow, mute, silence, disable, re-enable, or retarget an existing Gmail notification. If notificationId is empty and exactly one rule exists for this chat, that rule is updated; if multiple match, the tool returns a selection error. Use noReply/noReplyBehavior=suppress for silent rules that should not send a chat message unless a later tool action produces a real answer.",
+      parameters: {
+        type: "object",
+        properties: {
+          notificationId: { type: "string", description: "Notification id to update. Use empty string to update the single matching current-chat rule." },
+          label: { type: "string", description: "Optional replacement label. Empty means keep the current label." },
+          query: { type: "string", description: "Optional replacement Gmail search query. Empty means keep the current query." },
+          useDefaultQuery: { type: "boolean", description: "True to reset the rule to the safe default recent unread query." },
+          interval: { type: "string", description: "Optional polling interval such as 5m, 15m, 1h." },
+          targetType: { type: "string", enum: ["", "thread", "agent"], description: "Optional replacement target type. Empty means keep current." },
+          target: { type: "string", description: "Optional replacement target id. Empty means keep the current target unless targetType is explicitly supplied for the current chat." },
+          maxItemsPerRun: { type: "number", description: "Optional maximum new messages to deliver per run, 1 to 5." },
+          enabled: { type: "boolean", description: "Optional enabled state." },
+          allowBroadQuery: { type: "boolean", description: "True only when the user explicitly requests a broad all-mail query." },
+          fromMe: { type: "boolean", description: "True when the user explicitly wants the rule to match mail sent by their own Gmail account." },
+          fromAddress: { type: "string", description: "Exact sender email address to use with fromMe or sender-scoped rules." },
+          account: { type: "string", description: "Gmail account address hint for fromMe and scoped account selection." },
+          promptTemplate: { type: "string", description: "Optional prompt template. Use NO_REPLY only when the user wants silent notification processing." },
+          noReply: { type: "boolean", description: "True to set the notification prompt to NO_REPLY and suppress visible chat output." },
+          noReplyBehavior: { type: "string", enum: ["", "suppress"], description: "Set to suppress for silent notification rules." },
+        },
+        required: ["notificationId"],
+        additionalProperties: false,
+      },
+      strict: true,
+    },
+    {
+      type: "function",
       name: "orkestr_list_gmail_notifications",
       description: "List this tenant's persisted Gmail background notification rules.",
       parameters: {
@@ -1168,6 +1238,9 @@ export async function runTenantApiAgentTool(name = "", args = {}, context = {}, 
   }
   if (tool === "orkestr_create_gmail_notification") {
     return createGmailNotification(args, principal, thread, env);
+  }
+  if (tool === "orkestr_update_gmail_notification") {
+    return updateGmailNotification(args, principal, thread, env);
   }
   if (tool === "orkestr_list_gmail_notifications") {
     return { ok: true, notifications: await listGmailNotificationsForPrincipal(principal, env) };

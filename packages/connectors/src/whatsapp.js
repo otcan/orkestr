@@ -8,7 +8,15 @@ import { clearRuntimeLeasesForThread, runtimeStatus } from "../../core/src/runti
 import { classifyApprovalReply } from "../../core/src/runtime-settings.js";
 import { processApiAgentThreadInput, threadUsesApiAgent } from "../../core/src/tenant-api-agent.js";
 import { parseThreadInputCommand } from "../../core/src/thread-commands.js";
-import { redactDeniedThreadAttachmentPaths, resolveThreadAttachments } from "../../core/src/thread-attachments.js";
+import { isRemoteThreadAttachmentDescriptor, redactDeniedThreadAttachmentPaths, resolveThreadAttachments } from "../../core/src/thread-attachments.js";
+import {
+  ensureRouterTurn,
+  markRouterOutboxItem,
+  planRouterOutboxItem,
+  recordRouterTraceEvent,
+  routerTraceIdFor,
+  turnIdFor,
+} from "../../core/src/router-traces.js";
 import { appendThreadMessage, createThreadForPrincipal, enqueueThreadInputForPrincipal, listThreadMessages, listThreads, listThreadsForPrincipal, updateThread, updateThreadMessage } from "../../core/src/threads.js";
 import { adminUserId, findOrCreateExternalUser, normalizeUserId } from "../../core/src/users.js";
 import { dataPaths, ensureDataDirs } from "../../storage/src/paths.js";
@@ -58,6 +66,7 @@ import {
   remoteWhatsAppRuntimeBinding,
   syncRemoteWhatsAppThreadMessages,
 } from "./whatsapp-remote-runtime.js";
+import { materializeRemoteWhatsAppAttachments } from "./whatsapp-remote-artifacts.js";
 import {
   boundThreadWhatsAppAssistantOrigin,
   completePassiveMirrorParent,
@@ -199,6 +208,27 @@ async function persistMessageAttachmentsIfChanged(threadId, message, attachments
   if (!threadId || !message?.id || !attachments.length) return;
   if (attachmentSetKey(message.attachments || []) === attachmentSetKey(attachments)) return;
   await updateThreadMessage(threadId, message.id, { attachments }, env).catch(() => null);
+}
+
+function remoteAttachmentFailureReason(reason = "") {
+  return String(reason || "remote_attachment_unavailable").replace(/^remote_attachment_/, "").replace(/^remote_/, "").replace(/_/g, " ");
+}
+
+function appendRemoteAttachmentFailureNotes(text = "", skipped = []) {
+  const failures = (Array.isArray(skipped) ? skipped : [])
+    .map((item) => {
+      const filename = pickString(item.filename, item.remoteAttachmentId, "attachment");
+      const reason = remoteAttachmentFailureReason(item.reason);
+      return `${filename}: ${reason}`;
+    })
+    .filter(Boolean);
+  if (!failures.length) return text;
+  return [
+    String(text || "").trim(),
+    "",
+    "Attachment not sent:",
+    ...failures.map((line) => `- ${line}`),
+  ].filter((line, index) => index !== 0 || line).join("\n");
 }
 
 async function externalBridgeAccounts(bridgeUrl, healthPayload, fetchImpl, headers = {}) {
@@ -762,6 +792,8 @@ async function ensureWhatsAppOutboundIntent({
   messageCursor,
   env,
 } = {}) {
+  const routerTraceId = pickString(message?.routerTraceId, parent?.routerTraceId);
+  const turnId = pickString(message?.turnId, parent?.turnId) || (routerTraceId ? turnIdFor({ routerTraceId }) : "");
   const intentId = outboundIntentKey({
     kind,
     deliveryType,
@@ -775,7 +807,21 @@ async function ensureWhatsAppOutboundIntent({
   const existing = outboundIntents.find((intent) => pickString(intent.intentId, outboundIntentKey(intent)) === intentId);
   if (existing) {
     const status = String(existing.status || "pending").trim().toLowerCase();
-    if (status === "delivered") return { skipped: { reason: "intent_already_delivered" } };
+    if (status === "delivered") {
+      await recordRouterTraceEvent({
+        routerTraceId: pickString(existing.routerTraceId, routerTraceId),
+        turnId: pickString(existing.turnId, turnId),
+        connector: "whatsapp",
+        phase: "skipped",
+        reason: "intent_already_delivered",
+        threadId,
+        messageId,
+        chatId,
+        accountId,
+        terminal: true,
+      }, env).catch(() => {});
+      return { skipped: { reason: "intent_already_delivered" } };
+    }
     return { intent: existing };
   }
   const gate = canCreateWhatsAppOutboundIntent({
@@ -788,10 +834,36 @@ async function ensureWhatsAppOutboundIntent({
     kind,
     env,
   });
-  if (!gate.ok) return { skipped: { reason: gate.reason || "missing_outbound_intent" } };
+  if (!gate.ok) {
+    await recordRouterTraceEvent({
+      routerTraceId,
+      turnId,
+      connector: "whatsapp",
+      phase: "skipped",
+      reason: gate.reason || "missing_outbound_intent",
+      threadId,
+      messageId,
+      chatId,
+      accountId,
+      terminal: true,
+    }, env).catch(() => {});
+    return { skipped: { reason: gate.reason || "missing_outbound_intent" } };
+  }
   const now = new Date().toISOString();
+  const outboxItem = await planRouterOutboxItem({
+    routerTraceId,
+    turnId,
+    connector: "whatsapp",
+    destination: chatId,
+    eventId: messageId,
+    payloadHash: textKey,
+    status: "pending",
+  }, env).catch(() => null);
   const intent = {
     intentId,
+    ...(routerTraceId ? { routerTraceId } : {}),
+    ...(turnId ? { turnId } : {}),
+    ...(outboxItem?.outboxId ? { outboxId: outboxItem.outboxId } : {}),
     status: "pending",
     kind,
     deliveryType,
@@ -815,10 +887,24 @@ async function ensureWhatsAppOutboundIntent({
   outboundIntents.push(intent);
   state.outboundIntents = outboundIntents;
   await writeWhatsAppState(state, env);
-  return { intent, created: true };
+  return { intent, outboxItem, created: true };
 }
 
 async function sendWhatsAppOutboundCandidate(input = {}) {
+  if (String(input.message?.role || "").trim().toLowerCase() === "assistant") {
+    await recordRouterTraceEvent({
+      routerTraceId: pickString(input.message?.routerTraceId, input.parent?.routerTraceId),
+      turnId: pickString(input.message?.turnId, input.parent?.turnId),
+      connector: "whatsapp",
+      accountId: pickString(input.accountId, input.message?.accountId, input.parent?.accountId),
+      chatId: pickString(input.chatId, input.message?.chatId, input.parent?.chatId),
+      threadId: input.threadId || "",
+      messageId: input.messageId || input.message?.id || "",
+      phase: "assistant_seen",
+      deliveryType: input.deliveryType,
+      routerUpdateType: input.routerUpdateType,
+    }, input.env).catch(() => {});
+  }
   const intentResult = await ensureWhatsAppOutboundIntent(input);
   if (intentResult.skipped) return intentResult;
   return sendClaimedWhatsAppText({
@@ -852,6 +938,8 @@ async function sendClaimedWhatsAppText({
   env,
   fetchImpl,
 } = {}) {
+  const routerTraceId = pickString(intent?.routerTraceId);
+  const turnId = pickString(intent?.turnId) || (routerTraceId ? turnIdFor({ routerTraceId }) : "");
   const claimResult = await acquireOutboundDeliveryClaim({
     state,
     kind,
@@ -864,7 +952,35 @@ async function sendClaimedWhatsAppText({
     accountId,
     textKey,
   }, env, { persistState: writeWhatsAppState });
-  if (!claimResult.acquired) return { skipped: { reason: claimResult.reason || "delivery_claim_active" } };
+  if (!claimResult.acquired) {
+    await recordRouterTraceEvent({
+      routerTraceId,
+      turnId,
+      connector: "whatsapp",
+      phase: "skipped",
+      reason: claimResult.reason || "delivery_claim_active",
+      threadId,
+      messageId,
+      chatId,
+      accountId,
+    }, env).catch(() => {});
+    return { skipped: { reason: claimResult.reason || "delivery_claim_active" } };
+  }
+  await recordRouterTraceEvent({
+    routerTraceId,
+    turnId,
+    connector: "whatsapp",
+    phase: "mirror_claimed",
+    threadId,
+    messageId,
+    chatId,
+    accountId,
+    deliveryType,
+    routerUpdateType,
+    claimKey: claimResult.claim?.claimKey,
+    outboxId: intent?.outboxId,
+  }, env).catch(() => {});
+  await markRouterOutboxItem(intent?.outboxId, { status: "claimed" }, env).catch(() => null);
 
   try {
     const payload = await sendWhatsAppText({ chatId, text, accountId, attachments, config, env, fetchImpl });
@@ -877,6 +993,9 @@ async function sendClaimedWhatsAppText({
       messageId,
       ...(sourceMessageId ? { sourceMessageId } : {}),
       ...(parentMessageId ? { parentMessageId } : {}),
+      ...(routerTraceId ? { routerTraceId } : {}),
+      ...(turnId ? { turnId } : {}),
+      ...(intent?.outboxId ? { outboxId: intent.outboxId } : {}),
       chatId,
       accountId,
       textKey,
@@ -900,6 +1019,34 @@ async function sendClaimedWhatsAppText({
     deliveredTextKeys.add(textKey);
     batchTextKeys.add(textKey);
     await finishOutboundDeliveryClaim({ state, claim: claimResult.claim, filePath: claimResult.filePath, status: "delivered", delivery }, env, { persistState: writeWhatsAppState });
+    await markRouterOutboxItem(intent?.outboxId, { status: "delivered", deliveredAt: delivery.deliveredAt }, env).catch(() => null);
+    await recordRouterTraceEvent({
+      routerTraceId,
+      turnId,
+      connector: "whatsapp",
+      phase: "mirror_sent",
+      threadId,
+      messageId,
+      chatId,
+      accountId,
+      deliveryType,
+      routerUpdateType,
+      outboxId: intent?.outboxId,
+    }, env).catch(() => {});
+    if (deliveryType === "final" || deliveryType === "router_update") {
+      await recordRouterTraceEvent({
+        routerTraceId,
+        turnId,
+        connector: "whatsapp",
+        phase: "completed",
+        threadId,
+        messageId,
+        chatId,
+        accountId,
+        deliveryType,
+        terminal: true,
+      }, env).catch(() => {});
+    }
     return { delivery };
   } catch (error) {
     if (intent?.intentId) {
@@ -914,6 +1061,25 @@ async function sendClaimedWhatsAppText({
       state.outboundIntents = outboundIntents;
     }
     await finishOutboundDeliveryClaim({ state, claim: claimResult.claim, filePath: claimResult.filePath, status: "failed", error: error.message || String(error) }, env, { persistState: writeWhatsAppState }).catch(() => {});
+    await markRouterOutboxItem(intent?.outboxId, {
+      status: "failed",
+      attempts: Number(intent?.attempts || 0) + 1,
+      error: error.message || String(error),
+    }, env).catch(() => null);
+    await recordRouterTraceEvent({
+      routerTraceId,
+      turnId,
+      connector: "whatsapp",
+      phase: "mirror_failed",
+      threadId,
+      messageId,
+      chatId,
+      accountId,
+      deliveryType,
+      routerUpdateType,
+      outboxId: intent?.outboxId,
+      error,
+    }, env).catch(() => {});
     return { failure: { error } };
   }
 }
@@ -942,12 +1108,56 @@ function remoteMessagePatch(remoteResult = {}, fallback = {}) {
 export async function routeWhatsAppInbound(input = {}, env = process.env, fetchImpl = fetch) {
   const config = await readConnectorConfig("whatsapp", env);
   const eventId = pickString(input.eventId, input.id, input.messageId);
-  if (!eventId) throw badRequest("whatsapp_event_id_required");
+  const initialChatId = pickString(input.chatId, input.chat?.id, input.fromChatId);
+  const initialAccountId = pickString(input.accountId);
+  const initialTraceId = routerTraceIdFor({
+    connector: "whatsapp",
+    accountId: initialAccountId,
+    chatId: initialChatId,
+    eventId: eventId || "missing_event_id",
+    fallbackId: `${initialAccountId}:${initialChatId}:missing_event_id`,
+  });
+  const initialTurnId = turnIdFor({ routerTraceId: initialTraceId });
+  if (!eventId) {
+    await recordRouterTraceEvent({
+      routerTraceId: initialTraceId,
+      turnId: initialTurnId,
+      connector: "whatsapp",
+      accountId: initialAccountId,
+      chatId: initialChatId,
+      phase: "skipped",
+      reason: "missing_event_id",
+      terminal: true,
+    }, env).catch(() => {});
+    throw badRequest("whatsapp_event_id_required");
+  }
+  await recordRouterTraceEvent({
+    routerTraceId: initialTraceId,
+    turnId: initialTurnId,
+    connector: "whatsapp",
+    accountId: initialAccountId,
+    chatId: initialChatId,
+    sourceEventId: eventId,
+    phase: "received",
+  }, env).catch(() => {});
 
   const state = await readWhatsAppState(env);
   const existing = (state.inboundEvents || []).find((event) => event.eventId === eventId);
   if (existing) {
-    await appendEvent({ type: "whatsapp_inbound_duplicate", eventId, agentId: existing.agentId || null, threadId: existing.threadId || null, messageId: existing.messageId }, env);
+    await recordRouterTraceEvent({
+      routerTraceId: pickString(existing.routerTraceId, initialTraceId),
+      turnId: pickString(existing.turnId, initialTurnId),
+      connector: "whatsapp",
+      accountId: pickString(existing.accountId, initialAccountId),
+      chatId: pickString(existing.chatId, initialChatId),
+      sourceEventId: eventId,
+      threadId: existing.threadId || null,
+      messageId: existing.messageId,
+      phase: "skipped",
+      reason: "duplicate_event_id",
+      terminal: true,
+    }, env).catch(() => {});
+    await appendEvent({ type: "whatsapp_inbound_duplicate", eventId, routerTraceId: pickString(existing.routerTraceId, initialTraceId), agentId: existing.agentId || null, threadId: existing.threadId || null, messageId: existing.messageId }, env);
     return {
       duplicate: true,
       event: existing,
@@ -961,15 +1171,44 @@ export async function routeWhatsAppInbound(input = {}, env = process.env, fetchI
   if (!threadRoute.threadId) threadRoute = await routeAutoProvisionedThread(input, config, env);
   const threadId = threadRoute.threadId;
   const agentId = threadId ? "" : routeAgentId(input, config);
-  if (!threadId && !agentId) throw badRequest("whatsapp_target_required");
+  if (!threadId && !agentId) {
+    await recordRouterTraceEvent({
+      routerTraceId: initialTraceId,
+      turnId: initialTurnId,
+      connector: "whatsapp",
+      accountId: initialAccountId,
+      chatId: initialChatId,
+      sourceEventId: eventId,
+      phase: "skipped",
+      reason: "missing_target",
+      terminal: true,
+    }, env).catch(() => {});
+    throw badRequest("whatsapp_target_required");
+  }
 
   const text = pickString(input.text, input.body, input.message);
   const promptFile = pickString(input.promptFile);
-  if (!text && !promptFile) throw badRequest("message_text_required");
+  if (!text && !promptFile) {
+    await recordRouterTraceEvent({
+      routerTraceId: initialTraceId,
+      turnId: initialTurnId,
+      connector: "whatsapp",
+      accountId: initialAccountId,
+      chatId: initialChatId,
+      sourceEventId: eventId,
+      threadId: threadId || "",
+      phase: "skipped",
+      reason: "missing_text",
+      terminal: true,
+    }, env).catch(() => {});
+    throw badRequest("message_text_required");
+  }
 
-  const chatId = pickString(input.chatId, input.chat?.id, input.fromChatId);
+  const chatId = initialChatId;
   const from = pickString(input.from, input.sender, input.author);
   const accountId = pickString(input.accountId, threadRoute.binding?.outboundAccountId);
+  const routerTraceId = initialTraceId;
+  const turnId = initialTurnId;
   const messageInput = {
     role: "user",
     source: "whatsapp_inbound",
@@ -977,6 +1216,9 @@ export async function routeWhatsAppInbound(input = {}, env = process.env, fetchI
     originTransport: "whatsapp-local-bridge",
     connector: "whatsapp",
     externalId: eventId,
+    sourceEventId: eventId,
+    routerTraceId,
+    turnId,
     chatId,
     from,
     accountId,
@@ -986,6 +1228,17 @@ export async function routeWhatsAppInbound(input = {}, env = process.env, fetchI
   };
   let thread = threadId ? (await listThreads(env)).find((item) => item.id === threadId || item.name === threadId || item.bindingName === threadId) : null;
   thread = await ensureApiAgentWhatsAppThread(thread, env);
+  await ensureRouterTurn({
+    routerTraceId,
+    turnId,
+    connector: "whatsapp",
+    accountId,
+    chatId,
+    eventId,
+    threadId: thread?.id || threadId || "",
+    state: "received",
+    mirrorPolicy: "reply_to_source",
+  }, env).catch(() => null);
   if (threadId && thread && googleWorkspaceConnectCommand(text)) {
     const message = await appendThreadMessage(thread.id, {
       ...messageInput,
@@ -1008,6 +1261,8 @@ export async function routeWhatsAppInbound(input = {}, env = process.env, fetchI
       state: "completed",
       parentMessageId: message.id,
       connector: "whatsapp",
+      routerTraceId,
+      turnId,
       chatId,
       accountId,
       googleWorkspaceConnectId: connect.connectId,
@@ -1015,6 +1270,8 @@ export async function routeWhatsAppInbound(input = {}, env = process.env, fetchI
     }, env);
     const event = {
       eventId,
+      routerTraceId,
+      turnId,
       agentId: null,
       threadId,
       messageId: message.id,
@@ -1026,6 +1283,9 @@ export async function routeWhatsAppInbound(input = {}, env = process.env, fetchI
     };
     state.inboundEvents = [...(state.inboundEvents || []), event];
     await writeWhatsAppState(state, env);
+    await ensureRouterTurn({ routerTraceId, turnId, connector: "whatsapp", accountId, chatId, eventId, threadId, messageId: message.id, state: "completed" }, env).catch(() => null);
+    await recordRouterTraceEvent({ routerTraceId, turnId, connector: "whatsapp", accountId, chatId, sourceEventId: eventId, threadId, messageId: message.id, phase: "routed" }, env).catch(() => {});
+    await recordRouterTraceEvent({ routerTraceId, turnId, connector: "whatsapp", accountId, chatId, sourceEventId: eventId, threadId, messageId: message.id, phase: "completed", reason: "google_workspace_connect", terminal: true }, env).catch(() => {});
     await appendEvent({
       type: "whatsapp_google_workspace_connect_link_created",
       eventId,
@@ -1073,6 +1333,18 @@ export async function routeWhatsAppInbound(input = {}, env = process.env, fetchI
           remoteBackend: remoteRuntime.backendId,
           remoteThreadId: remoteRuntime.remoteThreadId,
         }), env).catch(() => message);
+        await recordRouterTraceEvent({
+          routerTraceId,
+          turnId,
+          connector: "whatsapp",
+          accountId,
+          chatId,
+          sourceEventId: eventId,
+          threadId,
+          messageId: message.id,
+          phase: "delivered_to_runtime",
+          ownerProcess: remoteRuntime.backendId,
+        }, env).catch(() => {});
       } catch (error) {
         message = await updateThreadMessage(thread.id, message.id, {
           state: "failed",
@@ -1092,10 +1364,26 @@ export async function routeWhatsAppInbound(input = {}, env = process.env, fetchI
           remoteThreadId: remoteRuntime.remoteThreadId,
           error: error.message || String(error),
         }, env).catch(() => {});
+        await recordRouterTraceEvent({
+          routerTraceId,
+          turnId,
+          connector: "whatsapp",
+          accountId,
+          chatId,
+          sourceEventId: eventId,
+          threadId,
+          messageId: message.id,
+          phase: "runtime_failed",
+          ownerProcess: remoteRuntime.backendId,
+          error,
+          retryable: false,
+        }, env).catch(() => {});
       }
     }
     const event = {
       eventId,
+      routerTraceId,
+      turnId,
       agentId: null,
       threadId: threadId || null,
       messageId: message.id,
@@ -1111,9 +1399,24 @@ export async function routeWhatsAppInbound(input = {}, env = process.env, fetchI
     if (contentDuplicate) event.duplicateReason = message.duplicateReason || "active_input";
     state.inboundEvents = [...(state.inboundEvents || []), event];
     await writeWhatsAppState(state, env);
+    await ensureRouterTurn({ routerTraceId, turnId, connector: "whatsapp", accountId, chatId, eventId, threadId, messageId: message.id, state: contentDuplicate ? "skipped" : "queued" }, env).catch(() => null);
+    await recordRouterTraceEvent({
+      routerTraceId,
+      turnId,
+      connector: "whatsapp",
+      accountId,
+      chatId,
+      sourceEventId: eventId,
+      threadId,
+      messageId: message.id,
+      phase: contentDuplicate ? "skipped" : "routed",
+      reason: contentDuplicate ? event.duplicateReason : "",
+      terminal: contentDuplicate,
+    }, env).catch(() => {});
     await appendEvent({
       type: contentDuplicate ? "whatsapp_inbound_duplicate" : "whatsapp_remote_runtime_inbound_routed",
       eventId,
+      routerTraceId,
       agentId: null,
       threadId: threadId || null,
       messageId: message.id,
@@ -1156,11 +1459,15 @@ export async function routeWhatsAppInbound(input = {}, env = process.env, fetchI
       state: "completed",
       parentMessageId: message.id,
       connector: "whatsapp",
+      routerTraceId,
+      turnId,
       chatId,
       accountId,
     }, env);
     const event = {
       eventId,
+      routerTraceId,
+      turnId,
       agentId: null,
       threadId,
       messageId: message.id,
@@ -1172,6 +1479,8 @@ export async function routeWhatsAppInbound(input = {}, env = process.env, fetchI
     };
     state.inboundEvents = [...(state.inboundEvents || []), event];
     await writeWhatsAppState(state, env);
+    await ensureRouterTurn({ routerTraceId, turnId, connector: "whatsapp", accountId, chatId, eventId, threadId, messageId: message.id, state: "skipped" }, env).catch(() => null);
+    await recordRouterTraceEvent({ routerTraceId, turnId, connector: "whatsapp", accountId, chatId, sourceEventId: eventId, threadId, messageId: message.id, phase: "skipped", reason: "approval_not_pending", terminal: true }, env).catch(() => {});
     await appendEvent({
       type: "whatsapp_approval_command_without_pending_request",
       eventId,
@@ -1203,6 +1512,8 @@ export async function routeWhatsAppInbound(input = {}, env = process.env, fetchI
   }
   const event = {
     eventId,
+    routerTraceId,
+    turnId,
     agentId: agentId || null,
     threadId: threadId || null,
     messageId: message.id,
@@ -1215,9 +1526,37 @@ export async function routeWhatsAppInbound(input = {}, env = process.env, fetchI
   if (contentDuplicate) event.duplicateReason = message.duplicateReason || "active_input";
   state.inboundEvents = [...(state.inboundEvents || []), event];
   await writeWhatsAppState(state, env);
+  await ensureRouterTurn({ routerTraceId, turnId, connector: "whatsapp", accountId, chatId, eventId, threadId: threadId || "", messageId: message.id, state: contentDuplicate ? "skipped" : "queued" }, env).catch(() => null);
+  await recordRouterTraceEvent({
+    routerTraceId,
+    turnId,
+    connector: "whatsapp",
+    accountId,
+    chatId,
+    sourceEventId: eventId,
+    threadId: threadId || "",
+    messageId: message.id,
+    phase: contentDuplicate ? "skipped" : "routed",
+    reason: contentDuplicate ? event.duplicateReason : "",
+    terminal: contentDuplicate,
+  }, env).catch(() => {});
+  if (!contentDuplicate) {
+    await recordRouterTraceEvent({
+      routerTraceId,
+      turnId,
+      connector: "whatsapp",
+      accountId,
+      chatId,
+      sourceEventId: eventId,
+      threadId: threadId || "",
+      messageId: message.id,
+      phase: "queued",
+    }, env).catch(() => {});
+  }
   await appendEvent({
     type: contentDuplicate ? "whatsapp_inbound_duplicate" : "whatsapp_inbound_routed",
     eventId,
+    routerTraceId,
     agentId: agentId || null,
     threadId: threadId || null,
     messageId: message.id,
@@ -1730,18 +2069,28 @@ async function deliverWhatsAppRepliesOnce(env = process.env, fetchImpl = fetch) 
         env,
         messageId: message.id,
       });
+      const sourceMessageAttachments = Array.isArray(message.attachments) ? message.attachments : [];
+      const remoteMaterialized = await materializeRemoteWhatsAppAttachments({
+        thread,
+        message,
+        attachments: sourceMessageAttachments,
+        env,
+        fetchImpl,
+      });
       const resolvedOutboundAttachments = await resolveThreadAttachments({
         thread,
         text: pickString(message.text),
         attachments: [
-          ...(Array.isArray(message.attachments) ? message.attachments : []),
+          ...sourceMessageAttachments.filter((attachment) => !isRemoteThreadAttachmentDescriptor(attachment)),
+          ...remoteMaterialized.attachments,
           ...preparedOutbound.attachments,
         ],
         env,
       });
       const attachments = resolvedOutboundAttachments.attachments;
       const deliveryType = message.source === "orkestr_runtime" ? "router_update" : "final";
-      const text = appendWhatsAppDebugFooter(formatWhatsAppOutboundText(redactDeniedThreadAttachmentPaths(preparedOutbound.text, { thread, env })), {
+      const formattedText = formatWhatsAppOutboundText(redactDeniedThreadAttachmentPaths(preparedOutbound.text, { thread, env }));
+      const text = appendWhatsAppDebugFooter(appendRemoteAttachmentFailureNotes(formattedText, remoteMaterialized.skipped), {
         message,
         thread,
         messages,

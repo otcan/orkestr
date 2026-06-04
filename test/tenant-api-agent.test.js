@@ -802,6 +802,12 @@ test("tenant api-agent Gmail notification tools list and delete scoped rules", a
     enabled: true,
     allowBroadQuery: false,
   }, { principal, thread }, env);
+  const updated = await runTenantApiAgentTool("orkestr_update_gmail_notification", {
+    notificationId: "",
+    query: "from:alerts@example.com newer_than:1d",
+    interval: "15m",
+    noReply: true,
+  }, { principal, thread }, env);
   const listed = await runTenantApiAgentTool("orkestr_list_gmail_notifications", {}, { principal, thread }, env);
   const deleted = await runTenantApiAgentTool("orkestr_delete_gmail_notification", {
     notificationId: created.notification.id,
@@ -811,6 +817,9 @@ test("tenant api-agent Gmail notification tools list and delete scoped rules", a
   assert.equal(created.ok, true);
   assert.equal(created.notification.intervalMs, 300000);
   assert.equal(created.notification.target, "otcantest-gmail-notification-tools");
+  assert.equal(updated.ok, true);
+  assert.equal(updated.notification.query, "from:alerts@example.com newer_than:1d");
+  assert.equal(updated.notification.intervalMs, 900000);
   assert.equal(listed.notifications.length, 1);
   assert.equal(deleted.ok, true);
   assert.deepEqual(after.notifications, []);

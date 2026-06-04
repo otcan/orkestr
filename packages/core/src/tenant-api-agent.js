@@ -1055,7 +1055,8 @@ function formatGmailNotificationTool(result = {}) {
       const skipped = Array.isArray(output.run.skipped) ? output.run.skipped.length : 0;
       return `Gmail notification ran now: ${delivered} delivered${skipped ? `, ${skipped} skipped` : ""}.`;
     }
-    return `Gmail notification created: ${clean(notification.label || notification.id)}. It is ${notification.enabled === false ? "disabled" : "enabled"} and checks every ${every}.`;
+    const action = result.name === "orkestr_update_gmail_notification" ? "updated" : "created";
+    return `Gmail notification ${action}: ${clean(notification.label || notification.id)}. It is ${notification.enabled === false ? "disabled" : "enabled"} and checks every ${every}.`;
   }
   if (output.run) {
     const delivered = Array.isArray(output.run.delivered) ? output.run.delivered.length : 0;
@@ -1144,7 +1145,7 @@ function formatToolResultFallback(toolResults = [], context = {}) {
     else if (result.name === "orkestr_run_skill_action") formatted = formatRunSkillActionTool(result, context);
     else if (result.name === "orkestr_list_skills") formatted = formatListSkillsTool(result);
     else if (["orkestr_search_gmail", "orkestr_read_gmail_message", "orkestr_read_latest_gmail_message"].includes(result.name)) formatted = formatGmailTool(result);
-    else if (["orkestr_create_gmail_notification", "orkestr_list_gmail_notifications", "orkestr_delete_gmail_notification", "orkestr_run_gmail_notification_now"].includes(result.name)) formatted = formatGmailNotificationTool(result);
+    else if (["orkestr_create_gmail_notification", "orkestr_update_gmail_notification", "orkestr_list_gmail_notifications", "orkestr_delete_gmail_notification", "orkestr_run_gmail_notification_now"].includes(result.name)) formatted = formatGmailNotificationTool(result);
     else if (["orkestr_modify_gmail_message", "orkestr_create_gmail_draft", "orkestr_send_gmail_draft", "orkestr_send_gmail_message", "orkestr_list_google_calendar_events", "orkestr_get_google_drive_file"].includes(result.name)) formatted = formatGoogleWorkspaceTool(result);
     else if (["orkestr_list_files", "orkestr_read_file", "orkestr_write_file"].includes(result.name)) formatted = formatFileTool(result);
     else if (["orkestr_list_timers", "orkestr_create_timer", "orkestr_delete_timer", "orkestr_run_timer"].includes(result.name)) formatted = formatTimerTool(result);
@@ -1595,6 +1596,9 @@ async function handleCodexEscalation(thread, message, env = process.env) {
       connector: message.connector,
       chatId: message.chatId,
       accountId: message.accountId,
+      sourceEventId: message.sourceEventId || "",
+      routerTraceId: message.routerTraceId || "",
+      turnId: message.turnId || "",
     }, env);
     await appendEvent({ type: "api_agent_codex_unavailable", threadId: thread.id, messageId: message.id, ownerUserId: threadOwnerUserId(thread, env) }, env).catch(() => {});
     return { ok: true, processed: true, codexUnavailable: true };
@@ -1627,6 +1631,9 @@ async function handleCodexEscalation(thread, message, env = process.env) {
     connector: message.connector,
     chatId: message.chatId,
     accountId: message.accountId,
+    sourceEventId: message.sourceEventId || "",
+    routerTraceId: message.routerTraceId || "",
+    turnId: message.turnId || "",
   }, env);
   await startCodexAppServerThread(updated, env).catch(() => null);
   await appendEvent({ type: "api_agent_codex_escalated", threadId: thread.id, messageId: message.id, ownerUserId: threadOwnerUserId(thread, env) }, env).catch(() => {});
@@ -2209,6 +2216,9 @@ async function failApiAgentMessage(thread, error, env = process.env) {
     connector: message.connector,
     chatId: message.chatId,
     accountId: message.accountId,
+    sourceEventId: message.sourceEventId || "",
+    routerTraceId: message.routerTraceId || "",
+    turnId: message.turnId || "",
   }, env).catch(() => null);
   await recordCreditUsage({
     tenantId: threadOwnerUserId(thread, env),
@@ -2244,6 +2254,9 @@ async function completeApiAgentMessage(thread, message, text, env = process.env,
     connector: message.connector,
     chatId: message.chatId,
     accountId: message.accountId,
+    sourceEventId: message.sourceEventId || "",
+    routerTraceId: message.routerTraceId || "",
+    turnId: message.turnId || "",
   }, env);
   await updateThread(thread.id, { state: "ready" }, env).catch(() => {});
   await appendTurnLifecycleEvent("completed", {

@@ -1,9 +1,10 @@
-import { Body, Controller, Delete, Get, HttpCode, Param, Post, Req } from "@nestjs/common";
+import { Body, Controller, Delete, Get, HttpCode, Param, Patch, Post, Req } from "@nestjs/common";
 import {
   createGmailNotificationForPrincipal,
   deleteGmailNotificationForPrincipal,
   listGmailNotificationsForPrincipal,
   runGmailNotificationNowForPrincipal,
+  updateGmailNotificationForPrincipal,
 } from "../../../../../packages/core/src/gmail-notifications.js";
 import { requestPrincipal } from "../../../../../packages/core/src/principal.js";
 
@@ -17,6 +18,11 @@ export class GmailNotificationsController {
   @Post()
   async create(@Req() request: any, @Body() body: Record<string, unknown> = {}) {
     return { notification: await createGmailNotificationForPrincipal(body, requestPrincipal(request)) };
+  }
+
+  @Patch(":notificationId")
+  async update(@Req() request: any, @Param("notificationId") notificationId: string, @Body() body: Record<string, unknown> = {}) {
+    return { notification: await updateGmailNotificationForPrincipal(notificationId, body, requestPrincipal(request)) };
   }
 
   @Delete(":notificationId")

@@ -266,6 +266,9 @@ export async function runNextThreadMessage(threadId, options = {}, env = process
           connector: message.connector || "",
           chatId: message.chatId || "",
           accountId: message.accountId || "",
+          sourceEventId: message.sourceEventId || "",
+          routerTraceId: message.routerTraceId || "",
+          turnId: message.turnId || "",
         },
         env,
       );

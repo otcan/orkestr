@@ -67,6 +67,7 @@ export function runtimeInterruptedSuperseded(message = {}, messages = []) {
 export function visibleThreadMessages(messages = []) {
   return messages.filter((message) =>
     !isNoReplyAssistantMessage(message) &&
+    clean(message?.visibility).toLowerCase() !== "internal" &&
     !runtimeInterruptedSuperseded(message, messages)
   );
 }

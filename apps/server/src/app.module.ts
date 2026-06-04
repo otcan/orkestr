@@ -4,6 +4,7 @@ import { BrowsersModule } from "./modules/browsers/browsers.module.js";
 import { CodexModule } from "./modules/codex/codex.module.js";
 import { ConnectorsModule } from "./modules/connectors/connectors.module.js";
 import { GmailNotificationsModule } from "./modules/gmail-notifications/gmail-notifications.module.js";
+import { RouterTracesModule } from "./modules/router-traces/router-traces.module.js";
 import { SystemModule } from "./modules/system/system.module.js";
 import { ThreadsModule } from "./modules/threads/threads.module.js";
 import { TimersModule } from "./modules/timers/timers.module.js";
@@ -16,6 +17,7 @@ import { UsersModule } from "./modules/users/users.module.js";
     CodexModule,
     ConnectorsModule,
     GmailNotificationsModule,
+    RouterTracesModule,
     BrowsersModule,
     AgentsModule,
     ThreadsModule,
