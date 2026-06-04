@@ -314,17 +314,6 @@ function gmailAddressRequiredForTestingAnswer() {
   return "Which Gmail address do you want to connect? This Orkestr Gmail app is in Google testing mode, so I need the exact address before sending a sign-in link.";
 }
 
-function gmailNotificationAutomationIntent(text = "") {
-  const value = lower(text);
-  const mail = /\b(?:gmail|mail|email|inbox)\b/.test(value);
-  const automation = /\b(?:push|notify|notification|alert|poll|recurr|every\s+\d+|every\s+minute|check\s+every|new\s+(?:mail|email|message)|incoming|received)\b/.test(value);
-  return mail && automation;
-}
-
-function gmailNotificationAutomationUnavailableAnswer() {
-  return "Gmail push notifications or every-minute polling are not wired into this chat yet. I did not create a background Gmail notification rule. I can still read or search Gmail on demand from this chat.";
-}
-
 function fallbackGmailTestingAccessDeniedAnswer(message = {}) {
   const account = emailFromText(message.text);
   return [
@@ -847,6 +836,44 @@ function formatGmailTool(result = {}) {
   return "";
 }
 
+function formatGmailNotificationTool(result = {}) {
+  const output = result.output || {};
+  if (output.ok === false || clean(output.error)) {
+    const error = clean(output.error || "tool_failed");
+    if (/gmail_notifications_disabled/i.test(error)) return "Gmail background notifications are not enabled on this Orkestr installation yet.";
+    if (/gmail_not_connected|connector_prompt_push_capability_required/i.test(error)) return "Gmail is not connected or enabled for this chat yet.";
+    return `Gmail notification tool failed: ${error}.`;
+  }
+  if (Array.isArray(output.notifications)) {
+    if (!output.notifications.length) return "No Gmail notification rules are configured for this chat.";
+    return [
+      "Gmail notification rules:",
+      ...output.notifications.slice(0, 10).map((notification) => {
+        const state = notification.enabled === false ? "disabled" : "enabled";
+        const every = clean(notification.every) || `${Math.round(Number(notification.intervalMs || 0) / 60_000)}m`;
+        const query = clean(notification.query) || "default query";
+        return `- ${clean(notification.label || notification.id)} (${state}, every ${every}, ${query})`;
+      }),
+    ].join("\n");
+  }
+  if (output.notification) {
+    const notification = output.notification;
+    const every = clean(notification.every) || `${Math.round(Number(notification.intervalMs || 0) / 60_000)}m`;
+    if (output.run) {
+      const delivered = Array.isArray(output.run.delivered) ? output.run.delivered.length : 0;
+      const skipped = Array.isArray(output.run.skipped) ? output.run.skipped.length : 0;
+      return `Gmail notification ran now: ${delivered} delivered${skipped ? `, ${skipped} skipped` : ""}.`;
+    }
+    return `Gmail notification created: ${clean(notification.label || notification.id)}. It is ${notification.enabled === false ? "disabled" : "enabled"} and checks every ${every}.`;
+  }
+  if (output.run) {
+    const delivered = Array.isArray(output.run.delivered) ? output.run.delivered.length : 0;
+    return `Gmail notification ran now: ${delivered} delivered.`;
+  }
+  if (output.ok !== undefined) return output.ok ? "Gmail notification was updated." : "Gmail notification action failed.";
+  return "";
+}
+
 function formatFileTool(result = {}) {
   const output = result.output || {};
   const name = result.name;
@@ -886,6 +913,7 @@ function formatToolResultFallback(toolResults = [], context = {}) {
     else if (result.name === "orkestr_run_skill_action") formatted = formatRunSkillActionTool(result, context);
     else if (result.name === "orkestr_list_skills") formatted = formatListSkillsTool(result);
     else if (["orkestr_search_gmail", "orkestr_read_gmail_message", "orkestr_read_latest_gmail_message"].includes(result.name)) formatted = formatGmailTool(result);
+    else if (["orkestr_create_gmail_notification", "orkestr_list_gmail_notifications", "orkestr_delete_gmail_notification", "orkestr_run_gmail_notification_now"].includes(result.name)) formatted = formatGmailNotificationTool(result);
     else if (["orkestr_list_files", "orkestr_read_file", "orkestr_write_file"].includes(result.name)) formatted = formatFileTool(result);
     else if (["orkestr_list_timers", "orkestr_create_timer", "orkestr_delete_timer", "orkestr_run_timer"].includes(result.name)) formatted = formatTimerTool(result);
     else if (result.name === "orkestr_fetch_web_page") formatted = fallbackWebFetchToolAnswer([result.output]);
@@ -963,7 +991,8 @@ function publicSkillActionHints(skill = {}, available = false) {
   if (clean(skill.requiresDesktop)) return ["status", "list_actions"];
   if (id === "files") return ["list", "read", "write"];
   if (id === "timers") return ["list", "create", "delete", "run"];
-  if (["gmail", "outlook", "jira", "shopify", "whatsapp"].includes(id)) return ["status"];
+  if (id === "gmail") return ["status", "search", "read", "notify", "list_notifications"];
+  if (["outlook", "jira", "shopify", "whatsapp"].includes(id)) return ["status"];
   if (id === "whereiam") return ["status"];
   return ["status"];
 }
@@ -1160,6 +1189,7 @@ export async function buildTenantApiAgentInstructions(thread = {}, messages = []
     "If the user asks to use Gmail, Outlook, LinkedIn, files, or a browser desktop and the matching capability is false in the Tenant context JSON, say plainly that it is not connected or enabled for this chat yet. Do not imply that you checked it unless you used a tool.",
     "Do not tell contained users to open, check, or use the Orkestr UI for connector setup. This chat is the user surface; connector setup should happen through the sign-in instructions you provide in chat when parent app credentials exist.",
     "When Gmail capability is true and the user asks to search, list, open, read, inspect, or summarize Gmail, use the scoped Gmail tools directly. The user's request is consent for that same-user Gmail action; do not ask for repeated confirmation unless the target email or search is ambiguous.",
+    "When Gmail capability is true and the user asks to notify, alert, push, monitor, or periodically check new Gmail in this chat, create or manage a Gmail notification rule with the Gmail notification tools. Use the safe default query when the user did not specify a narrower query, and explain if the requested interval was rounded up by policy.",
     webFetch
       ? "When the user asks for current public web page content, public site topics, public links, or a public page summary, use orkestr_fetch_web_page first. Answer only from the returned title, text, links, and counts. If the fetch fails or the returned content is insufficient, say that plainly instead of claiming you checked the page."
       : "Public web page fetching is not available in this chat right now. Do not claim you checked current public web content unless another tool result explicitly returns it.",
@@ -1252,7 +1282,9 @@ function userSafeApiAgentError(error) {
   if (lowered.includes("gmail_oauth_config_required")) return "Gmail sign-in is not available on this Orkestr installation yet because the Gmail app credentials are not configured.";
   if (lowered.includes("gmail_account_required_for_tester_check")) return gmailAddressRequiredForTestingAnswer();
   if (lowered.includes("gmail_account_not_approved_for_testing")) return "Gmail sign-in cannot start for that address because this Google OAuth app is still in testing mode and the address is not on the approved test-user list. Add it as a Google OAuth test user first, then try again.";
-  if (lowered.includes("connector_prompt_push") || (lowered.includes("gmail") && /\b(?:push|notification|notify|poll|every|background)\b/.test(lowered))) return gmailNotificationAutomationUnavailableAnswer();
+  if (lowered.includes("gmail_notifications_disabled")) return "Gmail background notifications are not enabled on this Orkestr installation yet.";
+  if (lowered.includes("connector_prompt_push") && lowered.includes("capability")) return "Gmail is not connected or enabled for this chat yet. Ask me to connect Gmail and I will send a Google sign-in link.";
+  if (lowered.includes("connector_prompt_push") || (lowered.includes("gmail") && /\b(?:push|notification|notify|poll|every|background)\b/.test(lowered))) return "I couldn't manage Gmail notifications for this chat right now. Please try again in a moment.";
   if (lowered.includes("gmail")) return "Gmail is not connected or enabled for this chat yet. Ask me to connect Gmail and I will send a Google sign-in link.";
   if (lowered.includes("outlook")) return "Outlook is not connected or enabled for this chat yet. Ask me to connect Outlook and I will send Microsoft sign-in instructions.";
   if (lowered.includes("linkedin") || lowered.includes("desktop")) return "The managed desktop is not connected or enabled for this chat yet. Ask the Orkestr admin to enable the desktop for this user, then resend.";
@@ -1907,34 +1939,6 @@ async function processNextApiAgentMessage(thread, env = process.env, options = {
       result: capabilityAvailable(capabilities, requestedCapability) ? "available" : "unavailable",
       reason: capabilityAvailable(capabilities, requestedCapability) ? "capability_true" : "capability_false",
     }, env);
-  }
-  if (gmailNotificationAutomationIntent(message.text)) {
-    await updateThreadMessage(thread.id, message.id, {
-      state: "running",
-      deliveryState: "api_agent_running",
-      observedVia: "api_agent_direct",
-      deliveredAt: nowIso(),
-    }, env);
-    await updateThread(thread.id, { state: "working" }, env).catch(() => {});
-    await appendTurnLifecycleEvent("started", {
-      threadId: thread.id,
-      messageId: message.id,
-      runtimeKind: API_AGENT_RUNTIME_KIND,
-      state: "running",
-      source: "api-agent",
-      reason: "gmail_notification_automation_unavailable",
-    }, env).catch(() => {});
-    return completeApiAgentMessage(thread, message, gmailNotificationAutomationUnavailableAnswer(), env, {
-      observedVia: "api_agent_direct",
-      response: {
-        id: `gmail_notification_automation_unavailable_${message.id}`,
-        model: "orkestr-api-agent-direct",
-        output_text: gmailNotificationAutomationUnavailableAnswer(),
-        output: [],
-        usage: {},
-      },
-      event: { directReason: "gmail_notification_automation_unavailable" },
-    });
   }
   if (!isAdminPrincipal(principal)) {
     await assertSanitizedAction({

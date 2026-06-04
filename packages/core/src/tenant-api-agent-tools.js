@@ -16,6 +16,12 @@ import {
   stopVirtualBrowser,
 } from "../../browsers/src/browsers.js";
 import { getGmailMessage, listGmailMessages } from "../../connectors/src/gmail.js";
+import {
+  createGmailNotificationForPrincipal,
+  deleteGmailNotificationForPrincipal,
+  listGmailNotificationsForPrincipal,
+  runGmailNotificationNowForPrincipal,
+} from "./gmail-notifications.js";
 import { runTenantApiAgentProfileTool, tenantApiAgentProfileToolDefinitions } from "./tenant-api-agent-profile-tools.js";
 import { runTenantApiAgentTimerTool, tenantApiAgentTimerToolDefinitions } from "./tenant-api-agent-timer-tools.js";
 import { whereAmI } from "./whereiam.js";
@@ -456,7 +462,8 @@ function skillActionNames(skill = {}, capabilities = {}, desktops = null, env = 
   if (id === "whereiam") return ["status"];
   if (id === "files") return capabilities.files === true ? ["list", "read", "write"] : ["status"];
   if (id === "timers") return capabilities.timers === true ? ["list", "create", "delete", "run"] : ["status"];
-  if (["gmail", "outlook", "jira", "shopify", "whatsapp"].includes(id)) return ["status"];
+  if (id === "gmail") return ["status", "search", "read", "notify", "list_notifications"];
+  if (["outlook", "jira", "shopify", "whatsapp"].includes(id)) return ["status"];
   if (clean(skill.requiresDesktop)) {
     if (!desktops) return ["status", "list_actions"];
     const desktop = desktopForSkill(skill, desktops, env);
@@ -697,6 +704,29 @@ async function readLatestGmailMessage(args = {}, principal = {}, env = process.e
     query: clean(args.query),
     message: publicGmailMessage(message, { includeText: true }),
     resultSizeEstimate: listed.resultSizeEstimate || 1,
+  };
+}
+
+function gmailNotificationInput(args = {}, thread = null) {
+  const targetType = clean(args.targetType || "thread").toLowerCase();
+  const target = clean(args.target || (targetType === "thread" ? thread?.id : ""));
+  return {
+    label: clean(args.label || "Gmail notifications"),
+    targetType,
+    target,
+    query: clean(args.query),
+    interval: clean(args.interval || args.every),
+    maxItemsPerRun: Number(args.maxItemsPerRun || 1) || 1,
+    enabled: args.enabled !== false,
+    allowBroadQuery: args.allowBroadQuery === true,
+  };
+}
+
+async function createGmailNotification(args = {}, principal = {}, thread = null, env = process.env) {
+  await assertConnectorConnected("gmail", principal, env);
+  return {
+    ok: true,
+    notification: await createGmailNotificationForPrincipal(gmailNotificationInput(args, thread), principal, env, { thread }),
   };
 }
 
@@ -968,6 +998,66 @@ export function tenantApiAgentToolDefinitions() {
     },
     {
       type: "function",
+      name: "orkestr_create_gmail_notification",
+      description: "Create a persisted background Gmail notification rule for this chat. Use when the user asks to notify, alert, push, monitor, or periodically check new Gmail. Default query is scoped to recent unread mail; do not request broad all-mail notifications unless the user explicitly asks.",
+      parameters: {
+        type: "object",
+        properties: {
+          label: { type: "string", description: "Short notification label." },
+          query: { type: "string", description: "Gmail search query. Use empty string for the safe default recent unread query." },
+          interval: { type: "string", description: "Polling interval such as 5m, 15m, 1h. Values below the configured minimum are rounded up." },
+          targetType: { type: "string", enum: ["thread", "agent"], description: "Usually thread for the current chat." },
+          target: { type: "string", description: "Target thread or agent id. Use empty string to target the current chat." },
+          maxItemsPerRun: { type: "number", description: "Maximum new messages to deliver per run, 1 to 5." },
+          enabled: { type: "boolean", description: "Whether the notification should start enabled." },
+          allowBroadQuery: { type: "boolean", description: "True only when the user explicitly requests a broad all-mail query." },
+        },
+        required: ["label", "query", "interval", "targetType", "target", "maxItemsPerRun", "enabled", "allowBroadQuery"],
+        additionalProperties: false,
+      },
+      strict: true,
+    },
+    {
+      type: "function",
+      name: "orkestr_list_gmail_notifications",
+      description: "List this tenant's persisted Gmail background notification rules.",
+      parameters: {
+        type: "object",
+        properties: {},
+        additionalProperties: false,
+      },
+      strict: true,
+    },
+    {
+      type: "function",
+      name: "orkestr_delete_gmail_notification",
+      description: "Delete one of this tenant's Gmail background notification rules.",
+      parameters: {
+        type: "object",
+        properties: {
+          notificationId: { type: "string", description: "Gmail notification id to delete." },
+        },
+        required: ["notificationId"],
+        additionalProperties: false,
+      },
+      strict: true,
+    },
+    {
+      type: "function",
+      name: "orkestr_run_gmail_notification_now",
+      description: "Run one of this tenant's Gmail background notification rules immediately.",
+      parameters: {
+        type: "object",
+        properties: {
+          notificationId: { type: "string", description: "Gmail notification id to run now." },
+        },
+        required: ["notificationId"],
+        additionalProperties: false,
+      },
+      strict: true,
+    },
+    {
+      type: "function",
       name: "orkestr_disconnect_connector",
       description: "Disconnect this user's scoped connector token or pending OAuth state. This does not alter parent app credentials.",
       parameters: {
@@ -1068,6 +1158,18 @@ export async function runTenantApiAgentTool(name = "", args = {}, context = {}, 
   }
   if (tool === "orkestr_read_latest_gmail_message") {
     return readLatestGmailMessage(args, principal, env, context.fetchImpl || fetch);
+  }
+  if (tool === "orkestr_create_gmail_notification") {
+    return createGmailNotification(args, principal, thread, env);
+  }
+  if (tool === "orkestr_list_gmail_notifications") {
+    return { ok: true, notifications: await listGmailNotificationsForPrincipal(principal, env) };
+  }
+  if (tool === "orkestr_delete_gmail_notification") {
+    return { ok: await deleteGmailNotificationForPrincipal(args.notificationId, principal, env) };
+  }
+  if (tool === "orkestr_run_gmail_notification_now") {
+    return runGmailNotificationNowForPrincipal(args.notificationId, principal, env, context.fetchImpl || fetch);
   }
   if (tool === "orkestr_disconnect_connector") {
     return disconnectConnectorAuth(args, principal, env);

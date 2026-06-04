@@ -7,6 +7,7 @@ import { recordCreditUsage, creditUsageSummary } from "../packages/core/src/cred
 import { drainAllPendingThreadInputs } from "../packages/core/src/runtime-leases.js";
 import { buildTenantApiAgentInstructions, processApiAgentThreadInput, threadUsesApiAgent } from "../packages/core/src/tenant-api-agent.js";
 import { runTenantApiAgentTool } from "../packages/core/src/tenant-api-agent-tools.js";
+import { listGmailNotificationsForPrincipal } from "../packages/core/src/gmail-notifications.js";
 import { createTimer, listTimers, markDueTimers } from "../packages/core/src/timers.js";
 import { userPrincipal } from "../packages/core/src/principal.js";
 import { appendThreadMessage, createThread, enqueueThreadInputForPrincipal, getThread, listThreadMessages } from "../packages/core/src/threads.js";
@@ -581,38 +582,29 @@ test("tenant api-agent explains missing Gmail capability without a generic safet
   assert.doesNotMatch(assistant.text, /safely handle|private connector|account identity/i);
 });
 
-test("tenant api-agent does not report Gmail push automation as disconnected Gmail", async () => {
-  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-api-agent-gmail-push-limit-"));
-  const script = path.join(home, "deny-api-agent-gmail-push.mjs");
-  await fs.writeFile(
-    script,
-    [
-      "let input = '';",
-      "process.stdin.setEncoding('utf8');",
-      "process.stdin.on('data', (chunk) => { input += chunk; });",
-      "process.stdin.on('end', () => {",
-      "  const payload = JSON.parse(input);",
-      "  const deny = payload.action === 'api-agent.input';",
-      "  console.log(JSON.stringify({ allow: !deny, reason: deny ? 'Request is to setup push notification on Gmail messages but cross-tenant or cross-resource action not authorized' : 'allowed', model: 'test-llm' }));",
-      "});",
-      "",
-    ].join("\n"),
-    "utf8",
-  );
-  const env = {
-    ORKESTR_HOME: home,
-    OPENAI_API_KEY: "sk-test",
-    ORKESTR_LLM_SANITIZER_COMMAND_JSON: JSON.stringify([process.execPath, script]),
-  };
+test("tenant api-agent creates a persisted Gmail notification rule from chat", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-api-agent-gmail-notification-"));
+  const env = await allowSanitizerEnv(home, {
+    ORKESTR_GMAIL_NOTIFICATIONS_ENABLED: "1",
+    ORKESTR_GMAIL_NOTIFICATION_MIN_INTERVAL_MS: "300000",
+  });
+  await upsertUser({ id: "otcan", role: "user", displayName: "Otcan" }, env);
+  const paths = userDataPaths("otcan", env);
+  await fs.mkdir(paths.secrets, { recursive: true });
+  await fs.writeFile(path.join(paths.secrets, "gmail-token.json"), JSON.stringify({
+    accessToken: "user-gmail-notification-access",
+    refreshToken: "user-gmail-notification-refresh",
+    expiresAt: Math.floor(Date.now() / 1000) + 3600,
+  }), "utf8");
   await createThread({
-    id: "otcantest-gmail-push-limit",
+    id: "otcantest-gmail-notification",
     ownerUserId: "otcan",
     name: "otcantest",
     runtimeKind: "api-agent",
     executor: { type: "api-agent", metadata: { runtimeKind: "api-agent" } },
     binding: { connector: "whatsapp", chatId: "chat-otcan", outboundAccountId: "wa-1" },
   }, env);
-  await enqueueThreadInputForPrincipal("otcantest-gmail-push-limit", {
+  await enqueueThreadInputForPrincipal("otcantest-gmail-notification", {
     text: "Can you setup a push notification on every Gmail message received - send me the mail subject here?",
     source: "whatsapp_inbound",
     connector: "whatsapp",
@@ -620,59 +612,111 @@ test("tenant api-agent does not report Gmail push automation as disconnected Gma
     accountId: "wa-1",
   }, userPrincipal({ id: "otcan", role: "user" }), env);
 
-  let modelCalls = 0;
-  const result = await processApiAgentThreadInput("otcantest-gmail-push-limit", env, {
-    fetchImpl: async () => {
-      modelCalls += 1;
-      return response({ id: "resp_should_not_run", model: "gpt-5-mini", output_text: "Done.", output: [], usage: {} });
+  const openAiCalls = [];
+  const result = await processApiAgentThreadInput("otcantest-gmail-notification", env, {
+    fetchImpl: async (_url, options = {}) => {
+      const body = JSON.parse(options.body);
+      openAiCalls.push(body);
+      if (openAiCalls.length === 1) {
+        assert.equal(body.tools.some((tool) => tool.name === "orkestr_create_gmail_notification"), true);
+        return response({
+          id: "resp_gmail_notification_1",
+          model: "gpt-5-mini",
+          output_text: "",
+          output: [{
+            type: "function_call",
+            name: "orkestr_create_gmail_notification",
+            call_id: "call_create_gmail_notification",
+            arguments: JSON.stringify({
+              label: "Gmail subject notifications",
+              query: "",
+              interval: "1m",
+              targetType: "thread",
+              target: "",
+              maxItemsPerRun: 1,
+              enabled: true,
+              allowBroadQuery: false,
+            }),
+          }],
+          usage: { input_tokens: 300, output_tokens: 20 },
+        });
+      }
+      const toolOutput = JSON.parse(body.input.at(-1).output);
+      assert.equal(toolOutput.ok, true);
+      assert.equal(toolOutput.notification.query, "is:unread newer_than:1d");
+      assert.equal(toolOutput.notification.intervalMs, 300000);
+      return response({
+        id: "resp_gmail_notification_2",
+        model: "gpt-5-mini",
+        output_text: "Gmail notification created. I will send subject/from/snippet previews here when new matching Gmail arrives.",
+        output: [],
+        usage: { input_tokens: 360, output_tokens: 18 },
+      });
     },
   });
-  const messages = await listThreadMessages("otcantest-gmail-push-limit", env);
+  const messages = await listThreadMessages("otcantest-gmail-notification", env);
   const user = messages.find((message) => message.role === "user");
   const assistant = messages.find((message) => message.role === "assistant");
+  const notifications = await listGmailNotificationsForPrincipal(userPrincipal({ id: "otcan", role: "user" }), env);
 
   assert.equal(result.ok, true);
-  assert.equal(modelCalls, 0);
+  assert.equal(openAiCalls.length, 2);
   assert.equal(user.state, "completed");
-  assert.match(assistant.text, /Gmail push notifications|every-minute polling/i);
-  assert.match(assistant.text, /did not create a background Gmail notification rule/i);
-  assert.doesNotMatch(assistant.text, /Gmail is not connected|Ask me to connect Gmail|I can help in this chat/i);
+  assert.equal(notifications.length, 1);
+  assert.equal(notifications[0].target, "otcantest-gmail-notification");
+  assert.equal(notifications[0].query, "is:unread newer_than:1d");
+  assert.equal(notifications[0].intervalMs, 300000);
+  assert.match(assistant.text, /Gmail notification created/i);
+  assert.doesNotMatch(assistant.text, /not wired|did not create|Gmail is not connected|Ask me to connect Gmail/i);
 });
 
-test("tenant api-agent answers Gmail every-minute polling requests without generic fallback", async () => {
-  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-api-agent-gmail-poll-limit-"));
-  const env = await allowSanitizerEnv(home);
+test("tenant api-agent Gmail notification tools list and delete scoped rules", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-api-agent-gmail-notification-tools-"));
+  const env = await allowSanitizerEnv(home, {
+    ORKESTR_GMAIL_NOTIFICATIONS_ENABLED: "1",
+    ORKESTR_GMAIL_NOTIFICATION_MIN_INTERVAL_MS: "300000",
+  });
+  await upsertUser({ id: "otcan", role: "user", displayName: "Otcan" }, env);
+  const paths = userDataPaths("otcan", env);
+  await fs.mkdir(paths.secrets, { recursive: true });
+  await fs.writeFile(path.join(paths.secrets, "gmail-token.json"), JSON.stringify({
+    accessToken: "user-gmail-notification-tool-access",
+    refreshToken: "user-gmail-notification-tool-refresh",
+    expiresAt: Math.floor(Date.now() / 1000) + 3600,
+  }), "utf8");
   await createThread({
-    id: "otcantest-gmail-poll-limit",
+    id: "otcantest-gmail-notification-tools",
     ownerUserId: "otcan",
     name: "otcantest",
     runtimeKind: "api-agent",
     executor: { type: "api-agent", metadata: { runtimeKind: "api-agent" } },
     binding: { connector: "whatsapp", chatId: "chat-otcan", outboundAccountId: "wa-1" },
   }, env);
-  await enqueueThreadInputForPrincipal("otcantest-gmail-poll-limit", {
-    text: "Check every minute and push here if new mail?",
-    source: "whatsapp_inbound",
-    connector: "whatsapp",
-    chatId: "chat-otcan",
-    accountId: "wa-1",
-  }, userPrincipal({ id: "otcan", role: "user" }), env);
+  const principal = userPrincipal({ id: "otcan", role: "user" });
+  const thread = await getThread("otcantest-gmail-notification-tools", env);
 
-  let modelCalls = 0;
-  const result = await processApiAgentThreadInput("otcantest-gmail-poll-limit", env, {
-    fetchImpl: async () => {
-      modelCalls += 1;
-      return response({ id: "resp_should_not_run", model: "gpt-5-mini", output_text: "I can help in this chat.", output: [], usage: {} });
-    },
-  });
-  const messages = await listThreadMessages("otcantest-gmail-poll-limit", env);
-  const assistant = messages.find((message) => message.role === "assistant");
+  const created = await runTenantApiAgentTool("orkestr_create_gmail_notification", {
+    label: "Unread Gmail",
+    query: "is:unread newer_than:1d",
+    interval: "1m",
+    targetType: "thread",
+    target: "",
+    maxItemsPerRun: 1,
+    enabled: true,
+    allowBroadQuery: false,
+  }, { principal, thread }, env);
+  const listed = await runTenantApiAgentTool("orkestr_list_gmail_notifications", {}, { principal, thread }, env);
+  const deleted = await runTenantApiAgentTool("orkestr_delete_gmail_notification", {
+    notificationId: created.notification.id,
+  }, { principal, thread }, env);
+  const after = await runTenantApiAgentTool("orkestr_list_gmail_notifications", {}, { principal, thread }, env);
 
-  assert.equal(result.ok, true);
-  assert.equal(modelCalls, 0);
-  assert.match(assistant.text, /Gmail push notifications|every-minute polling/i);
-  assert.match(assistant.text, /read or search Gmail on demand/i);
-  assert.doesNotMatch(assistant.text, /I can help in this chat|Done\.|Ask me to connect Gmail/i);
+  assert.equal(created.ok, true);
+  assert.equal(created.notification.intervalMs, 300000);
+  assert.equal(created.notification.target, "otcantest-gmail-notification-tools");
+  assert.equal(listed.notifications.length, 1);
+  assert.equal(deleted.ok, true);
+  assert.deepEqual(after.notifications, []);
 });
 
 test("tenant api-agent prompt treats connector setup as user-owned", async () => {

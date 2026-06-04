@@ -3,7 +3,7 @@ import { dataPaths } from "../../storage/src/paths.js";
 import { appendEvent, readJson, writeJson } from "../../storage/src/store.js";
 import { assertSanitizedAction } from "./llm-sanitizer.js";
 import { enqueueAgentMessage } from "./messages.js";
-import { assertOwnerAccess, isAdminPrincipal, policyError } from "./policy.js";
+import { assertOwnerAccess, canAccessOwner, isAdminPrincipal, policyError } from "./policy.js";
 import { principalForUserId, userPrincipal } from "./principal.js";
 import { enqueueThreadInput, getThread, getThreadForPrincipal } from "./threads.js";
 import { userScopedCapabilityHints } from "./user-skills.js";
@@ -119,11 +119,17 @@ export function normalizeConnectorPromptPush(input = {}, env = process.env) {
     promptTemplate,
     sourceConfig,
     safety,
+    automationType: cleanLower(input.automationType || input.notificationType || input.kind),
+    schedule: safeObject(input.schedule || {}),
+    nextRunAt: clean(input.nextRunAt || input.schedule?.nextRunAt),
     enabled: input.enabled === true,
     createdAt: clean(input.createdAt) || now,
     updatedAt: clean(input.updatedAt) || now,
     lastRunAt: clean(input.lastRunAt),
     lastDeliveredAt: clean(input.lastDeliveredAt),
+    lastError: clean(input.lastError).slice(0, 500),
+    lastErrorAt: clean(input.lastErrorAt),
+    failureCount: Math.max(0, Math.floor(optionalNumber(input.failureCount, 0) || 0)),
     deliveredCount: Math.max(0, Math.floor(optionalNumber(input.deliveredCount, 0) || 0)),
     processedSourceItemIds: Array.isArray(input.processedSourceItemIds)
       ? [...new Set(input.processedSourceItemIds.map(clean).filter(Boolean))].slice(-500)
@@ -155,6 +161,12 @@ export async function listConnectorPromptPushes(env = process.env) {
 export async function getConnectorPromptPush(id, env = process.env) {
   const pushId = clean(id);
   return (await listConnectorPromptPushes(env)).find((push) => push.id === pushId) || null;
+}
+
+export async function listConnectorPromptPushesForPrincipal(principal, env = process.env) {
+  const pushes = await listConnectorPromptPushes(env);
+  if (isAdminPrincipal(principal)) return pushes;
+  return pushes.filter((push) => canAccessOwner(principal, push.ownerUserId, env));
 }
 
 export async function createConnectorPromptPush(input = {}, env = process.env) {
@@ -221,6 +233,53 @@ export async function createConnectorPromptPushForPrincipal(input = {}, principa
   return createConnectorPromptPush(push, env);
 }
 
+export async function updateConnectorPromptPush(id, patch = {}, env = process.env) {
+  const pushId = clean(id);
+  const store = await readPushStore(env);
+  let updated = null;
+  const pushes = store.pushes.map((entry) => {
+    if (clean(entry.id) !== pushId) return entry;
+    updated = normalizeConnectorPromptPush({
+      ...entry,
+      ...patch,
+      sourceConfig: patch.sourceConfig || entry.sourceConfig,
+      safety: patch.safety || entry.safety,
+      schedule: patch.schedule || entry.schedule,
+      id: entry.id,
+      ownerUserId: entry.ownerUserId,
+      connector: entry.connector,
+      source: entry.source,
+      createdAt: entry.createdAt,
+    }, env);
+    validateConnectorPromptPush(updated);
+    return updated;
+  });
+  if (!updated) {
+    const error = new Error("connector_prompt_push_not_found");
+    error.statusCode = 404;
+    throw error;
+  }
+  await writePushStore({ ...store, pushes }, env);
+  return updated;
+}
+
+export async function deleteConnectorPromptPush(id, env = process.env) {
+  const pushId = clean(id);
+  const store = await readPushStore(env);
+  const next = store.pushes.filter((entry) => clean(entry.id) !== pushId);
+  if (next.length === store.pushes.length) return false;
+  await writePushStore({ ...store, pushes: next }, env);
+  await appendEvent({ type: "connector_prompt_push_deleted", pushId }, env).catch(() => {});
+  return true;
+}
+
+export async function deleteConnectorPromptPushForPrincipal(id, principal, env = process.env) {
+  const push = await getConnectorPromptPush(id, env);
+  if (!push) return false;
+  assertOwnerAccess(principal, push.ownerUserId, "connector_prompt_push_delete", env);
+  return deleteConnectorPromptPush(id, env);
+}
+
 function sourceItemId(item = {}) {
   return clean(item.sourceItemId || item.id || item.messageId || item.externalId || item.threadId);
 }
@@ -269,6 +328,24 @@ export function renderConnectorPrompt(push = {}, item = {}) {
   return clipped([rendered, context ? `Connector item:\n${context}` : ""].filter(Boolean).join("\n\n"), maxPromptChars);
 }
 
+function threadDeliveryDefaults(thread, input = {}) {
+  const binding = thread?.binding || {};
+  if (String(binding.connector || "").trim().toLowerCase() !== "whatsapp" && !binding.chatId) return input;
+  const chatId = clean(input.chatId || binding.chatId);
+  if (!chatId) return input;
+  return {
+    ...input,
+    chatId,
+    accountId: clean(
+      input.accountId ||
+      binding.responderAccountId ||
+      binding.outboundAccountId ||
+      binding.senderAccountId ||
+      binding.inboundAccountId,
+    ),
+  };
+}
+
 async function enqueueConnectorPrompt(push, item, text, env = process.env) {
   const input = {
     source: "connector_prompt_push",
@@ -281,7 +358,7 @@ async function enqueueConnectorPrompt(push, item, text, env = process.env) {
   };
   if (push.targetType === "agent") return enqueueAgentMessage(push.target, input, env);
   const thread = await getThread(push.target, env);
-  return enqueueThreadInput(thread?.id || push.target, input, env);
+  return enqueueThreadInput(thread?.id || push.target, threadDeliveryDefaults(thread, input), env);
 }
 
 async function updatePushAfterRun(push, result, env = process.env) {

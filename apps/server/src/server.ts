@@ -14,6 +14,7 @@ import {
   syncRuntimeLeases,
 } from "../../../packages/core/src/runtime-leases.js";
 import { markDueTimers } from "../../../packages/core/src/timers.js";
+import { runDueGmailNotifications } from "../../../packages/core/src/gmail-notifications.js";
 import {
   recoverStaleCodexAppServerTurns,
   setCodexAppServerMessageHandler,
@@ -329,9 +330,11 @@ export async function recoverAfterStartup(env = process.env) {
 
 async function runTimerLoop(env = process.env, syncImpl: (options?: { forceWhatsapp?: boolean; recoveryCause?: string }) => Promise<any> = (options = {}) => syncRuntimeAndDeliverWhatsApp(env, options)) {
   const dueTimers = await markDueTimers(env);
+  const gmailNotificationRuns = await runDueGmailNotifications(env);
   const drained = await drainAllPendingThreadInputs(env);
   const deliveredCount = drained.reduce((count: number, result: any) => count + Number(result?.delivered?.length || 0), 0);
-  if (dueTimers.length || deliveredCount > 0 || drained.length > 0) {
+  const gmailDeliveredCount = gmailNotificationRuns.reduce((count: number, result: any) => count + Number(result?.run?.delivered?.length || 0), 0);
+  if (dueTimers.length || gmailDeliveredCount > 0 || deliveredCount > 0 || drained.length > 0) {
     await syncImpl({ forceWhatsapp: true });
   }
 }
