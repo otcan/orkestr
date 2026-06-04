@@ -976,7 +976,7 @@ export function tenantApiAgentToolDefinitions() {
     {
       type: "function",
       name: "orkestr_read_gmail_message",
-      description: "Read one full scoped Gmail message by id for this user. Use after orkestr_search_gmail when the user asks to open, read, or summarize a specific or latest message.",
+      description: "Read one full scoped Gmail message by id for this user. Use after orkestr_search_gmail or when private connector notification context supplies a Gmail message id and the user asks to open, read, summarize, extract details from, or act on that message.",
       parameters: {
         type: "object",
         properties: {

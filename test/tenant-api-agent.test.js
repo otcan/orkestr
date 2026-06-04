@@ -1972,6 +1972,242 @@ test("tenant api-agent reads scoped Gmail directly without repeated confirmation
   assert.doesNotMatch(assistant.text, /confirm|proceed|permission/i);
 });
 
+test("tenant api-agent uses Gmail prompt-push message id for follow-up actions", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-api-agent-gmail-push-followup-"));
+  const env = await allowSanitizerEnv(home, {
+    ORKESTR_ADMIN_USER_ID: "otcan",
+    GMAIL_OAUTH_CLIENT_ID: "gmail-client-env",
+    GMAIL_OAUTH_CLIENT_SECRET: "gmail-secret-env",
+    GMAIL_OAUTH_REDIRECT_URI: "https://example.test/oauth/gmail/callback",
+  });
+  await upsertUser({ id: "otcan", role: "user", displayName: "Otcan" }, env);
+  const paths = userDataPaths("otcan", env);
+  await fs.mkdir(paths.secrets, { recursive: true });
+  await fs.writeFile(path.join(paths.secrets, "gmail-token.json"), JSON.stringify({
+    accessToken: "user-push-followup-token",
+    refreshToken: "user-push-followup-refresh",
+    expiresAt: Math.floor(Date.now() / 1000) + 3600,
+  }), "utf8");
+  await createThread({
+    id: "gmail-push-followup-chat",
+    ownerUserId: "otcan",
+    name: "gmail-push-followup-chat",
+    runtimeKind: "api-agent",
+    executor: { type: "api-agent", metadata: { runtimeKind: "api-agent" } },
+    binding: { connector: "whatsapp", chatId: "chat-gmail-push-followup" },
+  }, env);
+  await appendThreadMessage("gmail-push-followup-chat", {
+    role: "user",
+    source: "connector_prompt_push",
+    connector: "gmail",
+    originSurface: "gmail",
+    externalId: "paypal-msg-1",
+    chatId: "chat-gmail-push-followup",
+    state: "completed",
+    text: [
+      "New Gmail message",
+      "From: PayPal <service@paypal.de>",
+      "Subject: Receipt for Your Payment to LimeBike Germany Gmb...",
+      "Date: Thu, 04 Jun 2026 06:48:39 -0700",
+      "Snippet: You paid 0.99 EUR to LimeBike Germany Gmb.",
+    ].join("\n"),
+  }, env);
+  await enqueueThreadInputForPrincipal("gmail-push-followup-chat", {
+    text: "Can I cancel this subscription? Can you help me about that?",
+    source: "whatsapp_inbound",
+    connector: "whatsapp",
+    chatId: "chat-gmail-push-followup",
+  }, userPrincipal({ id: "otcan", role: "user" }), env);
+
+  const openAiCalls = [];
+  const gmailCalls = [];
+  const result = await processApiAgentThreadInput("gmail-push-followup-chat", env, {
+    fetchImpl: async (url, options = {}) => {
+      const parsed = new URL(String(url));
+      if (parsed.hostname === "api.openai.com") {
+        const body = JSON.parse(options.body);
+        openAiCalls.push(body);
+        if (openAiCalls.length === 1) {
+          assert.match(body.instructions, /Recent Gmail notification context/i);
+          assert.match(body.instructions, /paypal-msg-1/);
+          assert.equal(body.tools.some((tool) => tool.name === "orkestr_read_gmail_message"), true);
+          assert.match(body.input.find((item) => item.content?.includes("Receipt for Your Payment"))?.content || "", /Private connector context/);
+          return response({
+            id: "resp_gmail_push_followup_1",
+            model: "gpt-5-mini",
+            output_text: "",
+            output: [{
+              type: "function_call",
+              name: "orkestr_read_gmail_message",
+              call_id: "call_read_paypal_message",
+              arguments: JSON.stringify({ messageId: "paypal-msg-1" }),
+            }],
+            usage: { input_tokens: 360, output_tokens: 20 },
+          });
+        }
+        const toolOutput = JSON.parse(openAiCalls[1].input.at(-1).output);
+        assert.equal(toolOutput.message.subject, "Receipt for Your Payment to LimeBike Germany Gmb...");
+        assert.match(toolOutput.message.text, /single Lime ride receipt/i);
+        return response({
+          id: "resp_gmail_push_followup_2",
+          model: "gpt-5-mini",
+          output_text: "This looks like a one-off Lime receipt, not proof of a recurring subscription. I found no cancellation link in the receipt body, but I can extract the transaction details or draft a support message if you want to dispute it.",
+          output: [],
+          usage: { input_tokens: 430, output_tokens: 38 },
+        });
+      }
+      if (parsed.hostname === "gmail.googleapis.com") {
+        gmailCalls.push(parsed.pathname);
+        assert.equal(options.headers.authorization, "Bearer user-push-followup-token");
+        if (parsed.pathname.endsWith("/messages/paypal-msg-1")) {
+          return response({
+            id: "paypal-msg-1",
+            threadId: "paypal-thread-1",
+            labelIds: ["INBOX"],
+            snippet: "You paid 0.99 EUR to LimeBike Germany Gmb.",
+            internalDate: "1780577319000",
+            payload: {
+              headers: [
+                { name: "Subject", value: "Receipt for Your Payment to LimeBike Germany Gmb..." },
+                { name: "From", value: "PayPal <service@paypal.de>" },
+                { name: "To", value: "Otcan <otcan@example.com>" },
+                { name: "Date", value: "Thu, 04 Jun 2026 06:48:39 -0700" },
+              ],
+              mimeType: "text/plain",
+              body: { data: Buffer.from("This is a single Lime ride receipt. No recurring subscription or billing agreement link is shown.", "utf8").toString("base64url") },
+            },
+          });
+        }
+      }
+      throw new Error(`unexpected_fetch_${url}`);
+    },
+  });
+  const messages = await listThreadMessages("gmail-push-followup-chat", env);
+  const assistant = messages.filter((message) => message.role === "assistant").at(-1);
+
+  assert.equal(result.ok, true);
+  assert.equal(openAiCalls.length, 2);
+  assert.deepEqual(gmailCalls, ["/gmail/v1/users/me/messages/paypal-msg-1"]);
+  assert.match(assistant.text, /one-off Lime receipt/i);
+  assert.doesNotMatch(assistant.text, /Tell me what you want|workspace execution|\/codex/i);
+});
+
+test("tenant api-agent keeps Gmail prompt-push notification useful when model stays generic", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-api-agent-gmail-push-fallback-"));
+  const env = await allowSanitizerEnv(home);
+  await createThread({
+    id: "gmail-push-fallback-chat",
+    ownerUserId: "otcan",
+    name: "gmail-push-fallback-chat",
+    runtimeKind: "api-agent",
+    executor: { type: "api-agent", metadata: { runtimeKind: "api-agent" } },
+    binding: { connector: "whatsapp", chatId: "chat-gmail-push-fallback" },
+  }, env);
+  await enqueueThreadInputForPrincipal("gmail-push-fallback-chat", {
+    text: [
+      "New Gmail message",
+      "From: Alerts <alerts@example.com>",
+      "Subject: Server receipt",
+      "Date: Thu, 04 Jun 2026 14:00:00 +0000",
+      "Snippet: Receipt preview only.",
+    ].join("\n"),
+    source: "connector_prompt_push",
+    connector: "gmail",
+    originSurface: "gmail",
+    externalId: "gmail-msg-fallback-1",
+    chatId: "chat-gmail-push-fallback",
+  }, userPrincipal({ id: "otcan", role: "user" }), env);
+
+  let modelCall = 0;
+  const result = await processApiAgentThreadInput("gmail-push-fallback-chat", env, {
+    fetchImpl: async (_url, options = {}) => {
+      modelCall += 1;
+      const body = JSON.parse(options.body);
+      if (body.input.some((item) => item.content?.includes("Server receipt"))) {
+        assert.match(body.instructions, /structured Gmail notification/i);
+      }
+      return response({
+        id: `resp_gmail_push_fallback_${modelCall}`,
+        model: "gpt-5-mini",
+        output_text: body.instructions.includes("Response repair")
+          ? "Done."
+          : "I can help in this chat. Tell me what you want to do. For workspace execution, send the task with /codex.",
+        output: [],
+        usage: { input_tokens: 300, output_tokens: 12 },
+      });
+    },
+  });
+  const messages = await listThreadMessages("gmail-push-fallback-chat", env);
+  const assistant = messages.find((message) => message.role === "assistant");
+
+  assert.equal(result.ok, true);
+  assert.match(assistant.text, /new Gmail message from Alerts <alerts@example\.com>/i);
+  assert.match(assistant.text, /Subject: Server receipt/i);
+  assert.match(assistant.text, /Receipt preview only/i);
+  assert.doesNotMatch(assistant.text, /Tell me what you want|workspace execution|\/codex/i);
+});
+
+test("tenant api-agent keeps prior Gmail context for weak follow-up fallback", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-api-agent-gmail-context-fallback-"));
+  const env = await allowSanitizerEnv(home);
+  await createThread({
+    id: "gmail-context-fallback-chat",
+    ownerUserId: "otcan",
+    name: "gmail-context-fallback-chat",
+    runtimeKind: "api-agent",
+    executor: { type: "api-agent", metadata: { runtimeKind: "api-agent" } },
+    binding: { connector: "whatsapp", chatId: "chat-gmail-context-fallback" },
+  }, env);
+  await appendThreadMessage("gmail-context-fallback-chat", {
+    role: "user",
+    source: "connector_prompt_push",
+    connector: "gmail",
+    originSurface: "gmail",
+    externalId: "paypal-msg-fallback-1",
+    chatId: "chat-gmail-context-fallback",
+    state: "completed",
+    text: [
+      "New Gmail message",
+      "From: PayPal <service@paypal.de>",
+      "Subject: Receipt for Your Payment to LimeBike Germany Gmb...",
+      "Date: Thu, 04 Jun 2026 06:48:39 -0700",
+      "Snippet: You paid 0.99 EUR to LimeBike Germany Gmb.",
+    ].join("\n"),
+  }, env);
+  await enqueueThreadInputForPrincipal("gmail-context-fallback-chat", {
+    text: "Can I cancel this subscription? Can you help me about that?",
+    source: "whatsapp_inbound",
+    connector: "whatsapp",
+    chatId: "chat-gmail-context-fallback",
+  }, userPrincipal({ id: "otcan", role: "user" }), env);
+
+  let modelCall = 0;
+  const result = await processApiAgentThreadInput("gmail-context-fallback-chat", env, {
+    fetchImpl: async (_url, options = {}) => {
+      modelCall += 1;
+      const body = JSON.parse(options.body);
+      assert.match(body.instructions, /PayPal <service@paypal\.de> - Receipt for Your Payment/i);
+      return response({
+        id: `resp_gmail_context_fallback_${modelCall}`,
+        model: "gpt-5-mini",
+        output_text: body.instructions.includes("Response repair")
+          ? "Done."
+          : "I can help in this chat. Tell me what you want to do. For workspace execution, send the task with /codex.",
+        output: [],
+        usage: { input_tokens: 300, output_tokens: 12 },
+      });
+    },
+  });
+  const messages = await listThreadMessages("gmail-context-fallback-chat", env);
+  const assistant = messages.filter((message) => message.role === "assistant").at(-1);
+
+  assert.equal(result.ok, true);
+  assert.match(assistant.text, /latest relevant Gmail notification/i);
+  assert.match(assistant.text, /PayPal <service@paypal\.de> - Receipt for Your Payment/i);
+  assert.match(assistant.text, /read the full email/i);
+  assert.doesNotMatch(assistant.text, /Tell me what you want|workspace execution|\/codex/i);
+});
+
 test("tenant api-agent strips leaked internal thought from final chat text", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-api-agent-thought-strip-"));
   const env = await allowSanitizerEnv(home);

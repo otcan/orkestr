@@ -346,6 +346,122 @@ function gmailSignInIntent(text = "") {
     /\b(?:connect|sign\s*in|login|log\s*in|authorize|authorise|auth|oauth|set\s*up|setup|reconnect|register|add)\b/.test(value);
 }
 
+function compactField(value = "", max = 240) {
+  const normalized = clean(value).replace(/\s+/g, " ");
+  return normalized.length > max ? `${normalized.slice(0, Math.max(0, max - 3)).trimEnd()}...` : normalized;
+}
+
+function parseStructuredGmailPromptPush(text = "") {
+  const value = clean(text);
+  if (!/^new\s+gmail\s+message\b/i.test(value)) return null;
+  const fields = {};
+  const pattern = /(?:^|\n)\s*([A-Za-z][A-Za-z ]{1,24}):\s*([\s\S]*?)(?=\n\s*[A-Za-z][A-Za-z ]{1,24}:\s*|\s*$)/g;
+  for (const match of value.matchAll(pattern)) {
+    const key = lower(match[1]).replace(/\s+/g, " ");
+    if (!fields[key]) fields[key] = compactField(match[2], key === "snippet" ? 500 : 240);
+  }
+  const info = {
+    from: fields.from || "",
+    subject: fields.subject || "",
+    date: fields.received || fields.date || "",
+    snippet: fields.snippet || "",
+  };
+  return Object.values(info).some(Boolean) ? info : null;
+}
+
+function isGmailPromptPushMessage(message = {}) {
+  return lower(message.source) === "connector_prompt_push" &&
+    lower(message.connector || message.originSurface) === "gmail";
+}
+
+function gmailPromptPushInfo(message = {}) {
+  if (!isGmailPromptPushMessage(message)) return null;
+  const parsed = parseStructuredGmailPromptPush(message.text) || {};
+  const messageId = clean(message.externalId);
+  if (!messageId && !Object.values(parsed).some(Boolean)) return null;
+  return { ...parsed, messageId };
+}
+
+function gmailPromptPushLabel(info = {}) {
+  const subject = compactField(info.subject || "(no subject)", 180);
+  const from = compactField(info.from, 180);
+  return `${from ? `${from} - ` : ""}${subject}`;
+}
+
+function gmailPromptPushModelContext(message = {}) {
+  const info = gmailPromptPushInfo(message);
+  if (!info) return "";
+  const details = [
+    "Private connector context for API-agent tool use only: Gmail notification.",
+    info.messageId ? `Gmail message id: ${info.messageId}.` : "",
+    info.from ? `From: ${info.from}.` : "",
+    info.subject ? `Subject: ${info.subject}.` : "",
+    info.date ? `Date: ${info.date}.` : "",
+    "Use this context for follow-up tool calls, and do not print private connector ids unless the user explicitly asks.",
+  ].filter(Boolean).join(" ");
+  return `[${details}]`;
+}
+
+function latestGmailPromptPushBefore(messages = [], message = {}) {
+  const index = messages.findIndex((item) => clean(item.id) === clean(message.id));
+  const before = index >= 0 ? messages.slice(0, index) : messages;
+  for (const item of before.slice().reverse()) {
+    const info = gmailPromptPushInfo(item);
+    if (info) return { message: item, ...info };
+  }
+  return null;
+}
+
+function gmailContextInstructions(message = {}, gmailContext = null) {
+  const current = gmailPromptPushInfo(message);
+  const info = current || gmailContext;
+  if (!info) return "";
+  const lines = [
+    current
+      ? "Latest message is a structured Gmail notification delivered by a connector prompt-push."
+      : "Recent Gmail notification context is available for the latest user message.",
+    `Gmail notification summary: ${gmailPromptPushLabel(info)}.`,
+  ];
+  if (info.messageId) {
+    lines.push(`Private Gmail message id for tool calls: ${info.messageId}.`);
+  }
+  lines.push(
+    "If the latest user message asks to open, read, summarize, extract details from, or act on that Gmail notification, use orkestr_read_gmail_message with the private message id when available before giving a specific answer.",
+    "If no tool is called or the model cannot act, answer from the notification context without claiming the external action was completed.",
+  );
+  return lines.join("\n");
+}
+
+function genericTenantApiAgentHelpText(text = "") {
+  const value = clean(text).replace(/\s+/g, " ");
+  if (!value) return true;
+  return /^I can help in this chat\. Tell me what you want(?: to do)?\b/i.test(value) ||
+    /^Tell me what you want(?: to do)?\b/i.test(value);
+}
+
+function fallbackGmailPromptPushAnswer(message = {}) {
+  const info = gmailPromptPushInfo(message);
+  if (!info) return "";
+  return [
+    `Got it - new Gmail message${info.from ? ` from ${info.from}` : ""}.`,
+    info.subject ? `Subject: ${info.subject}` : "",
+    info.date ? `Received: ${info.date}` : "",
+    info.snippet ? `Snippet: "${info.snippet}"` : "",
+    "",
+    "Available next actions: read the full message, summarize it, extract details, mark it read/archive/delete, draft a reply, save it, or set a reminder.",
+  ].filter((line) => line !== "").join("\n");
+}
+
+function fallbackGmailContextAnswer(message = {}, gmailContext = null) {
+  if (!gmailContext) return "";
+  const label = gmailPromptPushLabel(gmailContext);
+  return [
+    "Yes, I can help with that.",
+    `The latest relevant Gmail notification before your question was: ${label}.`,
+    "The next step is to read the full email with the Gmail tool before giving a specific answer, so we can confirm what it is, extract transaction/support details, and avoid treating a one-off receipt as a recurring subscription. I will not cancel, send, delete, or modify anything without your explicit approval.",
+  ].join("\n\n");
+}
+
 function gmailAddressRequiredForTestingAnswer() {
   return "Which Gmail address do you want to connect? This Orkestr Gmail app is in Google testing mode, so I need the exact address before sending a sign-in link.";
 }
@@ -385,6 +501,9 @@ function userMessageNeedsSubstantiveAnswer(text = "") {
 }
 
 function tenantApiAgentTextNeedsRepair(text = "", message = {}, options = {}) {
+  const gmailPrompt = gmailPromptPushInfo(message);
+  if (gmailPrompt && (weakTenantApiAgentText(text) || genericTenantApiAgentHelpText(text))) return true;
+  if (options.gmailContext && genericTenantApiAgentHelpText(text)) return true;
   if (weakTenantApiAgentText(text) && (
     userMessageNeedsSubstantiveAnswer(message.text) ||
     bareConfirmationText(message.text) ||
@@ -405,7 +524,11 @@ function introducedName(text = "") {
     .join(" ");
 }
 
-function fallbackWeakTenantApiAgentAnswer(message = {}, env = process.env) {
+function fallbackWeakTenantApiAgentAnswer(message = {}, env = process.env, options = {}) {
+  const gmailPromptFallback = fallbackGmailPromptPushAnswer(message);
+  if (gmailPromptFallback) return gmailPromptFallback;
+  const gmailContextFallback = fallbackGmailContextAnswer(message, options.gmailContext);
+  if (gmailContextFallback) return gmailContextFallback;
   const text = clean(message.text);
   const name = introducedName(text);
   if (name) {
@@ -436,9 +559,11 @@ function fallbackTenantApiAgentRepairAnswer(message = {}, options = {}) {
   if (gmailTestingAccessDeniedMessage(message.text)) return fallbackGmailTestingAccessDeniedAnswer(message);
   if (options.pendingActionConfirmation === true) return fallbackPendingActionConfirmationAnswer(env);
   if (assistantPromisesUnconfirmedAction(options.originalText) || assistantPromisesUnconfirmedAction(options.repairedText)) {
+    const gmailFallback = fallbackGmailPromptPushAnswer(message) || fallbackGmailContextAnswer(message, options.gmailContext);
+    if (gmailFallback) return gmailFallback;
     return fallbackUnconfirmedActionAnswer(env);
   }
-  return fallbackWeakTenantApiAgentAnswer(message, env);
+  return fallbackWeakTenantApiAgentAnswer(message, env, options);
 }
 
 function responseFunctionCalls(response = {}) {
@@ -455,9 +580,13 @@ function responseFunctionCallInputItems(response = {}) {
 }
 
 function messageInputItem(message = {}) {
+  const content = [
+    clean(message.text || message.promptFile || ""),
+    gmailPromptPushModelContext(message),
+  ].filter(Boolean).join("\n\n");
   return {
     role: lower(message.role) === "assistant" ? "assistant" : "user",
-    content: clean(message.text || message.promptFile || ""),
+    content,
   };
 }
 
@@ -1464,6 +1593,7 @@ async function repairWeakTenantApiAgentResponse({
   text,
   principal = null,
   pendingAction = null,
+  gmailContext = null,
   env,
   fetchImpl,
   allowTools = false,
@@ -1484,6 +1614,7 @@ async function repairWeakTenantApiAgentResponse({
       allowTools
         ? "If the latest user message asks for an Orkestr action and a matching tool is available, call the tool before finalizing."
         : "Do not use tools during this repair step.",
+      gmailContextInstructions(message, gmailContext),
     ].join("\n"),
     input: [
       ...repairConversationInput(inputItems).slice(-30),
@@ -1513,6 +1644,7 @@ async function repairWeakTenantApiAgentResponse({
       message,
       principal,
       pendingAction,
+      gmailContext,
       env,
       fetchImpl,
       idempotencySuffix: "repair-2",
@@ -1550,6 +1682,7 @@ async function runTenantApiAgentToolResultResponse({
   message,
   principal,
   pendingAction,
+  gmailContext = null,
   env,
   fetchImpl,
   idempotencySuffix = "2",
@@ -1632,7 +1765,7 @@ async function runTenantApiAgentToolResultResponse({
   const fallback = customFallback || toolFallback;
   if (fallback && shouldPreferWebFetchFallback(text, fallback, message)) return { response: second, text: fallback };
   if (fallback && genericToolFallbackText(text)) return { response: second, text: fallback };
-  if (!tenantApiAgentTextNeedsRepair(text, message, { pendingActionConfirmation: Boolean(pendingAction), env })) return { response: second, text };
+  if (!tenantApiAgentTextNeedsRepair(text, message, { pendingActionConfirmation: Boolean(pendingAction), gmailContext, env })) return { response: second, text };
   if (fallback) return { response: second, text: fallback };
   const repaired = await repairWeakTenantApiAgentResponse({
     baseBody,
@@ -1640,6 +1773,9 @@ async function runTenantApiAgentToolResultResponse({
     thread,
     message,
     text,
+    principal,
+    pendingAction,
+    gmailContext,
     env,
     fetchImpl,
   });
@@ -1647,11 +1783,12 @@ async function runTenantApiAgentToolResultResponse({
   if (fallback && genericToolFallbackText(repairedText)) return { response: repaired.response, text: fallback };
   return {
     response: repaired.response,
-    text: tenantApiAgentTextNeedsRepair(repairedText, message, { pendingActionConfirmation: Boolean(pendingAction), env })
+    text: tenantApiAgentTextNeedsRepair(repairedText, message, { pendingActionConfirmation: Boolean(pendingAction), gmailContext, env })
       ? fallbackTenantApiAgentRepairAnswer(message, {
         pendingActionConfirmation: Boolean(pendingAction),
         originalText: text,
         repairedText,
+        gmailContext,
         env,
       })
       : repairedText,
@@ -1706,6 +1843,7 @@ async function runTenantApiAgentResponse({ thread, messages, message, env, fetch
   const model = apiAgentModel(env);
   const principal = tenantPrincipalForThread(thread, env);
   const pendingAction = pendingActionConfirmation(messages, message);
+  const gmailContext = latestGmailPromptPushBefore(messages, message);
   if (gmailTesterAllowlistConfigured(env) && gmailSignInIntent(message.text) && !emailFromText(message.text)) {
     const text = gmailAddressRequiredForTestingAnswer();
     return {
@@ -1721,6 +1859,7 @@ async function runTenantApiAgentResponse({ thread, messages, message, env, fetch
   }
   const instructions = [
     await buildTenantApiAgentInstructions(thread, messages, env),
+    gmailContextInstructions(message, gmailContext),
     pendingActionConfirmationInstructions(pendingAction, env),
   ].filter(Boolean).join("\n");
   const input = messages
@@ -1847,7 +1986,7 @@ async function runTenantApiAgentResponse({ thread, messages, message, env, fetch
         fetchImpl,
       });
     }
-    if (!tenantApiAgentTextNeedsRepair(text, message, { pendingActionConfirmation: Boolean(pendingAction), env })) return { response: first, text };
+    if (!tenantApiAgentTextNeedsRepair(text, message, { pendingActionConfirmation: Boolean(pendingAction), gmailContext, env })) return { response: first, text };
     const repaired = await repairWeakTenantApiAgentResponse({
       baseBody,
       inputItems: input,
@@ -1856,17 +1995,19 @@ async function runTenantApiAgentResponse({ thread, messages, message, env, fetch
       text,
       principal,
       pendingAction,
+      gmailContext,
       env,
       fetchImpl,
       allowTools: true,
     });
     return {
       response: repaired.response,
-      text: tenantApiAgentTextNeedsRepair(repaired.text, message, { pendingActionConfirmation: Boolean(pendingAction), env })
+      text: tenantApiAgentTextNeedsRepair(repaired.text, message, { pendingActionConfirmation: Boolean(pendingAction), gmailContext, env })
         ? fallbackTenantApiAgentRepairAnswer(message, {
           pendingActionConfirmation: Boolean(pendingAction),
           originalText: text,
           repairedText: repaired.text,
+          gmailContext,
           env,
         })
         : repaired.text,
@@ -1881,6 +2022,7 @@ async function runTenantApiAgentResponse({ thread, messages, message, env, fetch
     message,
     principal,
     pendingAction,
+    gmailContext,
     env,
     fetchImpl,
     idempotencySuffix: "2",
@@ -2094,8 +2236,9 @@ async function processNextApiAgentMessage(thread, env = process.env, options = {
     env,
     fetchImpl: options.fetchImpl || fetch,
   });
-  const text = normalizeTenantApiAgentText(clean(result.text) || fallbackTenantApiAgentRepairAnswer(message, { env })) ||
-    fallbackTenantApiAgentRepairAnswer(message, { env });
+  const gmailContext = latestGmailPromptPushBefore(latestMessages, message);
+  const text = normalizeTenantApiAgentText(clean(result.text) || fallbackTenantApiAgentRepairAnswer(message, { gmailContext, env })) ||
+    fallbackTenantApiAgentRepairAnswer(message, { gmailContext, env });
   return completeApiAgentMessage(thread, message, text, env, { response: result.response });
 }
 
