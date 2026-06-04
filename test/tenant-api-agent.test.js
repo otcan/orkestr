@@ -890,37 +890,23 @@ test("tenant api-agent asks for Gmail address when testing allowlist requires it
     binding: { connector: "whatsapp", chatId: "chat-otcan", outboundAccountId: "wa-1" },
   }, env);
   await enqueueThreadInputForPrincipal("otcantest-gmail-allowlist-account", {
-    text: "I want to connect a second Gmail",
+    text: "Connect Gmail",
     source: "whatsapp_inbound",
     connector: "whatsapp",
     chatId: "chat-otcan",
     accountId: "wa-1",
   }, userPrincipal({ id: "otcan", role: "user" }), env);
 
-  const calls = [];
+  let modelCalls = 0;
   const result = await processApiAgentThreadInput("otcantest-gmail-allowlist-account", env, {
-    fetchImpl: async (_url, options) => {
-      calls.push(JSON.parse(options.body));
-      if (calls.length === 1) {
-        return response({
-          id: "resp_gmail_allowlist_account_1",
-          model: "gpt-5-mini",
-          output_text: "",
-          output: [{
-            type: "function_call",
-            name: "orkestr_start_connector_auth",
-            call_id: "call_gmail_allowlist_account",
-            arguments: JSON.stringify({ provider: "gmail", account: "", shop: "" }),
-          }],
-          usage: { input_tokens: 180, output_tokens: 12 },
-        });
-      }
+    fetchImpl: async () => {
+      modelCalls += 1;
       return response({
-        id: "resp_gmail_allowlist_account_2",
+        id: "resp_gmail_allowlist_account",
         model: "gpt-5-mini",
-        output_text: GENERIC_TOOL_FALLBACK_TEXT,
+        output_text: "Done.",
         output: [],
-        usage: { input_tokens: 220, output_tokens: 8 },
+        usage: { input_tokens: 180, output_tokens: 4 },
       });
     },
   });
@@ -928,6 +914,7 @@ test("tenant api-agent asks for Gmail address when testing allowlist requires it
   const assistant = messages.filter((message) => message.role === "assistant").at(-1);
 
   assert.equal(result.ok, true);
+  assert.equal(modelCalls, 0);
   assert.match(assistant.text, /Which Gmail address do you want to connect/i);
   assert.doesNotMatch(assistant.text, /accounts\.google\.com|Done\./i);
 });

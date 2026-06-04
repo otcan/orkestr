@@ -290,6 +290,30 @@ function emailFromText(text = "") {
   return clean(clean(text).match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i)?.[0] || "").toLowerCase();
 }
 
+function splitList(value = "") {
+  if (Array.isArray(value)) return value.map(clean).filter(Boolean);
+  return clean(value).split(/[\s,]+/g).map(clean).filter(Boolean);
+}
+
+function gmailTesterAllowlistConfigured(env = process.env) {
+  return splitList(
+    env.GMAIL_OAUTH_APPROVED_TESTERS ||
+    env.GOOGLE_OAUTH_APPROVED_TESTERS ||
+    env.GMAIL_OAUTH_ALLOWED_ACCOUNTS ||
+    env.GOOGLE_OAUTH_ALLOWED_ACCOUNTS
+  ).length > 0;
+}
+
+function gmailSignInIntent(text = "") {
+  const value = lower(text);
+  return /\bgmail\b/.test(value) &&
+    /\b(?:connect|sign\s*in|login|log\s*in|authorize|authorise|auth|oauth|set\s*up|setup|reconnect|register|add)\b/.test(value);
+}
+
+function gmailAddressRequiredForTestingAnswer() {
+  return "Which Gmail address do you want to connect? This Orkestr Gmail app is in Google testing mode, so I need the exact address before sending a sign-in link.";
+}
+
 function fallbackGmailTestingAccessDeniedAnswer(message = {}) {
   const account = emailFromText(message.text);
   return [
@@ -686,7 +710,7 @@ function formatConnectorAuthTool(result = {}) {
       return `${provider} sign-in is not available yet because the parent app configuration is missing on this Orkestr installation.`;
     }
     if (/gmail_account_required_for_tester_check/i.test(error)) {
-      return "Which Gmail address do you want to connect? This Orkestr Gmail app is in Google testing mode, so I need the exact address before sending a sign-in link.";
+      return gmailAddressRequiredForTestingAnswer();
     }
     if (/gmail_account_not_approved_for_testing/i.test(error)) {
       const account = clean(args.account);
@@ -1215,7 +1239,7 @@ function userSafeApiAgentError(error) {
   if (lowered.includes("target_instance_unhealthy")) return "This Orkestr instance is temporarily unavailable for this chat. Please resend the message after it comes back online.";
   if (lowered.includes("timer")) return "Timers are not available for this chat right now. Please try again in a moment.";
   if (lowered.includes("gmail_oauth_config_required")) return "Gmail sign-in is not available on this Orkestr installation yet because the Gmail app credentials are not configured.";
-  if (lowered.includes("gmail_account_required_for_tester_check")) return "Which Gmail address do you want to connect? This Orkestr Gmail app is in Google testing mode, so I need the exact address before sending a sign-in link.";
+  if (lowered.includes("gmail_account_required_for_tester_check")) return gmailAddressRequiredForTestingAnswer();
   if (lowered.includes("gmail_account_not_approved_for_testing")) return "Gmail sign-in cannot start for that address because this Google OAuth app is still in testing mode and the address is not on the approved test-user list. Add it as a Google OAuth test user first, then try again.";
   if (lowered.includes("gmail")) return "Gmail is not connected or enabled for this chat yet. Ask me to connect Gmail and I will send a Google sign-in link.";
   if (lowered.includes("outlook")) return "Outlook is not connected or enabled for this chat yet. Ask me to connect Outlook and I will send Microsoft sign-in instructions.";
@@ -1527,6 +1551,19 @@ async function runTenantApiAgentResponse({ thread, messages, message, env, fetch
   const model = apiAgentModel(env);
   const principal = tenantPrincipalForThread(thread, env);
   const pendingAction = pendingActionConfirmation(messages, message);
+  if (gmailTesterAllowlistConfigured(env) && gmailSignInIntent(message.text) && !emailFromText(message.text)) {
+    const text = gmailAddressRequiredForTestingAnswer();
+    return {
+      response: {
+        id: `gmail_account_required_${message.id}`,
+        model: "orkestr-api-agent-direct",
+        output_text: text,
+        output: [],
+        usage: {},
+      },
+      text,
+    };
+  }
   const instructions = [
     await buildTenantApiAgentInstructions(thread, messages, env),
     pendingActionConfirmationInstructions(pendingAction, env),
