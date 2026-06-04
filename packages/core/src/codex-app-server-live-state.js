@@ -1,4 +1,4 @@
-import { appServerStateFromStatus, clean } from "./codex-app-server-common.js";
+import { appServerStateFromStatus, clean, nowIso } from "./codex-app-server-common.js";
 
 export function activeTurnFromCodexThread(codexThread = {}) {
   const turns = Array.isArray(codexThread.turns) ? codexThread.turns : [];
@@ -34,6 +34,20 @@ export async function readLiveCodexThreadState(client, codexId) {
   const read = await client.request("thread/read", { threadId: id, includeTurns: true }).catch(() => null);
   const state = liveStateFromCodexThread(read?.thread || null, id);
   if (!state) return null;
-  client.threadStates.set(id, state);
-  return state;
+  const previous = client.threadStates.get(id) || {};
+  const checkedAt = nowIso();
+  const previousActiveTurnId = clean(previous.activeTurnId);
+  const activeTurnId = clean(state.activeTurnId);
+  const next = {
+    ...previous,
+    ...state,
+    liveStateCheckedAt: checkedAt,
+    activeTurnObservedAt: activeTurnId
+      ? previousActiveTurnId === activeTurnId
+        ? previous.activeTurnObservedAt || checkedAt
+        : checkedAt
+      : null,
+  };
+  client.threadStates.set(id, next);
+  return next;
 }
