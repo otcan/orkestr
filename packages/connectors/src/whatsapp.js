@@ -1356,7 +1356,7 @@ async function deliverWhatsAppRepliesOnce(env = process.env, fetchImpl = fetch) 
         const chatId = routerUpdateTarget.chatId;
         if (
           routerUpdateTarget.skipIfAssistantOutput &&
-          (completedAssistantReplyForParent(messages, message, chatId, state) || latestProgressReplyForParent(messages, message.id))
+          (completedAssistantReplyForParent(messages, message, chatId, state) || latestProgressReplyForParent(messages, message.id, env))
         ) {
           skipped.push({ agentId, threadId, messageId: message.id, reason: "assistant_output_available" });
           continue;
@@ -1493,7 +1493,7 @@ async function deliverWhatsAppRepliesOnce(env = process.env, fetchImpl = fetch) 
           continue;
         }
         const chatId = queuedInputTarget.chatId;
-        if (completedAssistantReplyForParent(messages, message, chatId, state) || latestProgressReplyForParent(messages, message.id)) {
+        if (completedAssistantReplyForParent(messages, message, chatId, state) || latestProgressReplyForParent(messages, message.id, env)) {
           skipped.push({ agentId, threadId, messageId: message.id, reason: "assistant_output_available" });
           continue;
         }
@@ -1629,7 +1629,7 @@ async function deliverWhatsAppRepliesOnce(env = process.env, fetchImpl = fetch) 
         continue;
       }
       if (message.role !== "assistant" || message.state !== "completed" || deliveredIds.has(message.id)) continue;
-      if (shouldMirrorWhatsAppProgress(message)) {
+      if (shouldMirrorWhatsAppProgress(message, env)) {
         const parent = messages.find((entry) => entry.id === message.parentMessageId);
         const whatsappOrigin =
           parent?.connector === "whatsapp" ||

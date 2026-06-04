@@ -63,9 +63,17 @@ test("WhatsApp debug footer is gated and marks progress as update", () => {
 test("WhatsApp mirror policy separates final replies from progress updates", () => {
   assert.equal(shouldMirrorWhatsAppReply({ source: "codex-app-server", phase: "final_answer" }), true);
   assert.equal(shouldMirrorWhatsAppReply({ source: "codex-app-server", phase: "commentary" }), false);
-  assert.equal(shouldMirrorWhatsAppProgress({ source: "codex-app-server", phase: "commentary" }), true);
+  assert.equal(shouldMirrorWhatsAppProgress({ source: "codex-app-server", phase: "commentary" }), false);
+  assert.equal(
+    shouldMirrorWhatsAppProgress(
+      { source: "codex-app-server", phase: "commentary" },
+      { ORKESTR_WHATSAPP_MIRROR_PROGRESS_UPDATES: "1" },
+    ),
+    true,
+  );
   assert.equal(shouldMirrorWhatsAppReply({ source: "codex-app-server-import", phase: "final_answer" }), true);
-  assert.equal(shouldMirrorWhatsAppProgress({ source: "codex-app-server-import", phase: "commentary" }), true);
+  assert.equal(shouldMirrorWhatsAppProgress({ source: "codex-app-server-import", phase: "commentary" }), false);
+  assert.equal(shouldMirrorWhatsAppProgress({ source: "codex-app-server", phase: "awaiting_approval" }), true);
   assert.equal(shouldMirrorWhatsAppProgress({ source: "codex-app-server", phase: "context_compaction" }), false);
   assert.equal(shouldMirrorWhatsAppReply({ source: "manual", phase: "commentary" }), true);
 });

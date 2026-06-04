@@ -12,14 +12,14 @@ function pickString(...values) {
   return "";
 }
 
-export function latestProgressReplyForParent(messages, parentId) {
+export function latestProgressReplyForParent(messages, parentId, env = process.env) {
   return [...messages]
     .reverse()
     .find((candidate) =>
       candidate.role === "assistant" &&
       candidate.state === "completed" &&
       candidate.parentMessageId === parentId &&
-      shouldMirrorWhatsAppProgress(candidate)
+      shouldMirrorWhatsAppProgress(candidate, env)
     ) || null;
 }
 
