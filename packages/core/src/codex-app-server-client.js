@@ -465,7 +465,7 @@ export class CodexAppServerClient {
     }
     if (message.method === "thread/status/changed" && codexId) {
       const state = this.threadStates.get(codexId) || {};
-      this.threadStates.set(codexId, { ...state, status: params.status || null });
+      this.threadStates.set(codexId, { ...state, status: params.status || null, statusObservedAt: nowIso() });
       const pendingRequest = pendingRequestForCodexThread(this.pendingRequests, codexId);
       const rawStatusType = codexStatusType(params.status);
       const statusState = appServerStateFromStatus(params.status);
@@ -499,7 +499,7 @@ export class CodexAppServerClient {
       const turnId = clean(turn.id);
       if (threadId && turnId) {
         const state = this.threadStates.get(threadId) || {};
-        this.threadStates.set(threadId, { ...state, activeTurnId: turnId, status: { type: "active", activeFlags: ["running"] } });
+        this.threadStates.set(threadId, { ...state, activeTurnId: turnId, activeTurnObservedAt: nowIso(), status: { type: "active", activeFlags: ["running"] }, statusObservedAt: nowIso() });
         const thread = await threadForCodexThreadId(threadId, this.env);
         if (thread) {
           await updateThread(thread.id, {
@@ -538,7 +538,7 @@ export class CodexAppServerClient {
           }
         }
         const state = this.threadStates.get(threadId) || {};
-        this.threadStates.set(threadId, { ...state, activeTurnId: "", status: { type: status === "failed" ? "systemError" : "idle" } });
+        this.threadStates.set(threadId, { ...state, activeTurnId: "", activeTurnObservedAt: null, status: { type: status === "failed" ? "systemError" : "idle" }, statusObservedAt: nowIso() });
         for (const [requestKey, request] of this.pendingRequests.entries()) {
           if (request?.codexThreadId === threadId && (!turnId || !request.turnId || request.turnId === turnId)) this.pendingRequests.delete(requestKey);
         }
@@ -678,7 +678,7 @@ export class CodexAppServerClient {
         const oldest = this.completedTurns.keys().next().value;
         this.completedTurns.delete(oldest);
       }
-      this.threadStates.set(codexId, { ...(this.threadStates.get(codexId) || {}), activeTurnId: "", status: { type: "idle" } });
+      this.threadStates.set(codexId, { ...(this.threadStates.get(codexId) || {}), activeTurnId: "", activeTurnObservedAt: null, status: { type: "idle" }, statusObservedAt: nowIso() });
     }
     let deliveredParent = rememberedParent;
     if (finalAnswer && !deliveredParent?.id) {

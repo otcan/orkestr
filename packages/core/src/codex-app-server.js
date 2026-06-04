@@ -63,6 +63,39 @@ function codexAppServerActiveTurnRetryMs(env = process.env) {
   return Number.isFinite(parsed) ? Math.max(250, parsed) : 15000;
 }
 
+function codexAppServerActiveTurnVerifyMs(env = process.env) {
+  const raw = String(env.ORKESTR_CODEX_APP_SERVER_ACTIVE_TURN_VERIFY_MS ?? "15000").trim().toLowerCase();
+  if (["0", "off", "false", "disabled"].includes(raw)) return 0;
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) ? Math.max(1000, parsed) : 15000;
+}
+
+function timestampMs(value) {
+  const parsed = Date.parse(String(value || ""));
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function markActiveTurnObserved(client, id, state = {}) {
+  const activeTurnId = clean(state.activeTurnId);
+  if (!client || !id || !activeTurnId || state.activeTurnObservedAt) return state;
+  const next = { ...state, activeTurnObservedAt: nowIso() };
+  client.threadStates.set(id, next);
+  return next;
+}
+
+function activeTurnNeedsLiveVerification(state = {}, env = process.env) {
+  const activeTurnId = clean(state.activeTurnId);
+  if (!activeTurnId) return false;
+  const verifyMs = codexAppServerActiveTurnVerifyMs(env);
+  if (!verifyMs) return false;
+  if (clean(state.status?.type).toLowerCase() !== "active") return false;
+  const now = Date.now();
+  const observedAt = timestampMs(state.activeTurnObservedAt);
+  if (!observedAt || now - observedAt < verifyMs) return false;
+  const checkedAt = timestampMs(state.liveStateCheckedAt);
+  return !checkedAt || now - checkedAt >= verifyMs;
+}
+
 function isoAfter(ms) {
   return new Date(Date.now() + Math.max(0, ms)).toISOString();
 }
@@ -70,11 +103,6 @@ function isoAfter(ms) {
 function codexAppServerInputClaimStaleMs(env = process.env) {
   const parsed = Number(env.ORKESTR_CODEX_APP_SERVER_INPUT_CLAIM_STALE_MS || 30000);
   return Number.isFinite(parsed) ? Math.max(1000, parsed) : 30000;
-}
-
-function timestampMs(value) {
-  const ms = Date.parse(String(value || ""));
-  return Number.isFinite(ms) ? ms : 0;
 }
 
 function recentDeliveryClaim(message = {}, env = process.env) {
@@ -468,7 +496,7 @@ export async function interruptCodexAppServerThread(thread, env = process.env) {
   }
   if (!activeTurnId) return { interrupted: false, reason: "no_active_turn" };
   await client.request("turn/interrupt", { threadId: id, turnId: activeTurnId });
-  client.threadStates.set(id, { ...(client.threadStates.get(id) || {}), activeTurnId: "", status: { type: "idle" } });
+  client.threadStates.set(id, { ...(client.threadStates.get(id) || {}), activeTurnId: "", activeTurnObservedAt: null, status: { type: "idle" }, statusObservedAt: nowIso() });
   for (const [requestKey, request] of client.pendingRequests.entries()) {
     if (request?.threadId === thread.id || request?.codexThreadId === id) client.pendingRequests.delete(requestKey);
   }
@@ -503,7 +531,7 @@ async function startCodexAppServerTurn({ client, thread, id, pending, env, runti
   await drainCodexAppServerNotifications(client);
   const alreadyCompleted = Boolean(completedKey && client.completedTurns?.has(completedKey));
   if (turnId && !terminalResult && !alreadyCompleted) {
-    client.threadStates.set(id, { ...(client.threadStates.get(id) || {}), activeTurnId: turnId, status: { type: "active", activeFlags: ["running"] } });
+    client.threadStates.set(id, { ...(client.threadStates.get(id) || {}), activeTurnId: turnId, activeTurnObservedAt: nowIso(), status: { type: "active", activeFlags: ["running"] }, statusObservedAt: nowIso() });
     await updateThread(thread.id, {
       state: "working",
       runtime: { ...(thread.runtime || {}), runtimeKind: "codex-app-server", activeTurnId: turnId, state: "working" },
@@ -595,7 +623,7 @@ export async function sendCodexAppServerInput(thread, message, env = process.env
   }
   const statusClearsActiveTurn = ["ready", "failed", "unloaded", "awaiting_approval"].includes(clientStatusState);
   if (statusClearsActiveTurn && clean(clientState.activeTurnId)) {
-    client.threadStates.set(id, { ...clientState, activeTurnId: "" });
+    client.threadStates.set(id, { ...clientState, activeTurnId: "", activeTurnObservedAt: null, statusObservedAt: nowIso() });
     await updateThread(thread.id, {
       state: clientStatusState === "ready" ? "ready" : clientStatusState,
       runtime: {
@@ -624,7 +652,7 @@ export async function sendCodexAppServerInput(thread, message, env = process.env
   let deliveryTurnId = activeTurnId;
   if (activeTurnId && pending.forceDeliveryAfterInterrupt === true) {
     await client.request("turn/interrupt", { threadId: id, turnId: activeTurnId }).catch(() => null);
-    client.threadStates.set(id, { ...(client.threadStates.get(id) || {}), activeTurnId: "", status: { type: "idle" } });
+    client.threadStates.set(id, { ...(client.threadStates.get(id) || {}), activeTurnId: "", activeTurnObservedAt: null, status: { type: "idle" }, statusObservedAt: nowIso() });
     for (const [requestKey, request] of client.pendingRequests.entries()) {
       if (request?.threadId === thread.id || request?.codexThreadId === id) client.pendingRequests.delete(requestKey);
     }
@@ -897,6 +925,16 @@ export async function codexAppServerThreadStatus(thread, env = process.env, coun
       state = liveState;
     }
   }
+  if (id && client && hasClientState) {
+    state = markActiveTurnObserved(client, id, state);
+    if (activeTurnNeedsLiveVerification(state, runtimeEnv)) {
+      const liveState = await readLiveCodexThreadState(client, id);
+      if (liveState) {
+        hasClientState = true;
+        state = liveState;
+      }
+    }
+  }
   const livePendingRequest = client?.pendingRequestForThread(thread, { includePersisted: false }) || null;
   const persistedPendingRequest = thread.runtime?.pendingRequest || null;
   const rawCodexStatus = hasClientState ? state.status || null : thread.runtime?.codexStatus || null;
@@ -941,6 +979,27 @@ export async function codexAppServerThreadStatus(thread, env = process.env, coun
   const codexStatus = activeTurnId && clean(rawCodexStatus?.type).toLowerCase() === "idle"
     ? { ...rawCodexStatus, type: "active", activeFlags: ["running"] }
     : rawCodexStatus;
+  if (stateActiveTurnIdBeforeRead && runtimeState !== "working" && !activeTurnId) {
+    await updateThread(thread.id, {
+      state: runtimeState === "ready" ? "ready" : runtimeState,
+      runtime: {
+        ...(thread.runtime || {}),
+        runtimeKind: "codex-app-server",
+        state: runtimeState === "ready" ? "ready" : runtimeState,
+        activeTurnId: null,
+        pendingRequest: runtimeState === "awaiting_approval" ? pendingRequest : null,
+        codexStatus: codexStatus || null,
+        updatedAt: nowIso(),
+      },
+    }, env).catch(() => {});
+    await appendEvent({
+      type: "codex_app_server_stale_active_turn_cleared_by_status",
+      threadId: thread.id,
+      codexThreadId: id || null,
+      activeTurnId: stateActiveTurnIdBeforeRead,
+      status: runtimeState,
+    }, env).catch(() => {});
+  }
   const progress = appServerStatusProgress({ thread, runtimeState, codexStatus, pendingRequest });
   const status = {
     state: runtimeState,
