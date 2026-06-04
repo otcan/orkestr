@@ -401,7 +401,7 @@
                   <li>Add this authorized redirect URI: <code>{{ gmailRedirectUri }}</code></li>
                   <li>Paste the client ID and secret here, then start auth.</li>
                 </ol>
-                <small>Use your own Google project. Gmail scopes requested: readonly and modify.</small>
+                <small>Use your own Google project. Gmail scope requested: readonly.</small>
                 <a class="oauth-link" href="https://console.cloud.google.com/apis/credentials" target="_blank" rel="noreferrer">Open Google credentials</a>
               } @else {
                 <strong>Create a Microsoft app registration</strong>
@@ -483,7 +483,7 @@
                 @if (mailProvider === "gmail") {
                   <div><dt>OAuth client</dt><dd>{{ mailProviderCredentialState("gmail") }}</dd></div>
                   <div><dt>Redirect</dt><dd>{{ gmailRedirectUri || "-" }}</dd></div>
-                  <div><dt>Scope</dt><dd>gmail.readonly, gmail.modify</dd></div>
+                  <div><dt>Scope</dt><dd>gmail.readonly</dd></div>
                 } @else {
                   <div><dt>Application</dt><dd>{{ mailProviderCredentialState("outlook") }}</dd></div>
                   <div><dt>Tenant</dt><dd>{{ outlookTenantId || "common" }}</dd></div>

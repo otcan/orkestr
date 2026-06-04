@@ -7,7 +7,6 @@ const tokenUrl = "https://oauth2.googleapis.com/token";
 const gmailApiBase = "https://gmail.googleapis.com/gmail/v1/users/me";
 const gmailScopes = [
   "https://www.googleapis.com/auth/gmail.readonly",
-  "https://www.googleapis.com/auth/gmail.modify",
 ];
 
 function nowSeconds() {
