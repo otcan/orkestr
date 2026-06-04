@@ -1469,6 +1469,70 @@ test("Codex app-server status clears stale active client turn after live verific
   }
 });
 
+test("Codex app-server status clears active turn when Orkestr already has its final answer", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-codex-app-server-final-answer-status-"));
+  const fake = await createFakeCodex(home);
+  const activeTurnId = "final-answer-already-stored-turn";
+  const env = {
+    ORKESTR_HOME: path.join(home, "orkestr"),
+    HOME: path.join(home, "runtime-home"),
+    PATH: `${fake.bin}${path.delimiter}${process.env.PATH || ""}`,
+    FAKE_CODEX_STATE: fake.stateFile,
+    ORKESTR_CODEX_APP_SERVER_ACTIVE_TURN_VERIFY_MS: "disabled",
+  };
+  try {
+    const thread = await createThread({
+      id: "app-server-final-answer-status-thread",
+      name: "App Server Final Answer Status Thread",
+      cwd: home,
+      executorId: "codex",
+      executor: { type: "codex" },
+    }, env);
+    const started = await startCodexAppServerThread(thread, env);
+    const codexId = started.thread.executor.codexThreadId;
+    const client = await getCodexAppServerClient({ env, home: env.HOME });
+    client.threadStates.set(codexId, {
+      activeTurnId,
+      activeTurnObservedAt: new Date(Date.now() - 60_000).toISOString(),
+      status: { type: "active", activeFlags: ["running"] },
+    });
+    await updateThread(started.thread.id, {
+      state: "working",
+      runtime: {
+        ...(started.thread.runtime || {}),
+        runtimeKind: "codex-app-server",
+        state: "working",
+        activeTurnId,
+        codexStatus: { type: "active", activeFlags: ["running"] },
+      },
+    }, env);
+    await appendThreadMessage(started.thread.id, {
+      role: "assistant",
+      source: "codex-app-server",
+      phase: "final_answer",
+      text: "Stored final answer.",
+      state: "completed",
+      codexThreadId: codexId,
+      codexTurnId: activeTurnId,
+    }, env);
+
+    const messages = await listThreadMessages(started.thread.id, env);
+    const status = await codexAppServerThreadStatus(await getThread(started.thread.id, env), env, { messages });
+    const updated = await getThread(started.thread.id, env);
+
+    assert.equal(status.state, "ready");
+    assert.equal(status.working, false);
+    assert.equal(status.activeTurnId, null);
+    assert.equal(status.turnLifecycle.sidebarWorking, false);
+    assert.equal(updated.state, "ready");
+    assert.equal(updated.runtime.state, "ready");
+    assert.equal(updated.runtime.activeTurnId, null);
+    assert.equal(client.threadStates.get(codexId)?.activeTurnId, "");
+  } finally {
+    stopCodexAppServerClients();
+  }
+});
+
 test("Codex app-server status does not report idle while an active turn is known", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-codex-app-server-idle-active-turn-"));
   const fake = await createFakeCodex(home);
