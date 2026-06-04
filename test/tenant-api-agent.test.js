@@ -957,19 +957,24 @@ test("tenant api-agent explains Google tester approval failures instead of sayin
     accountId: "wa-1",
   }, userPrincipal({ id: "otcan", role: "user" }), env);
 
+  let modelCalls = 0;
   const result = await processApiAgentThreadInput("otcantest-gmail-access-denied", env, {
-    fetchImpl: async () => response({
+    fetchImpl: async () => {
+      modelCalls += 1;
+      return response({
       id: "resp_gmail_access_denied",
       model: "gpt-5-mini",
       output_text: "Done.",
       output: [],
       usage: { input_tokens: 180, output_tokens: 4 },
-    }),
+      });
+    },
   });
   const messages = await listThreadMessages("otcantest-gmail-access-denied", env);
   const assistant = messages.filter((message) => message.role === "assistant").at(-1);
 
   assert.equal(result.ok, true);
+  assert.equal(modelCalls, 0);
   assert.notEqual(assistant.text.trim(), "Done.");
   assert.match(assistant.text, /Gmail sign-in did not complete for oguzcan\.unver\.us@gmail\.com/i);
   assert.match(assistant.text, /approved Google test-user list|Google OAuth test user/i);

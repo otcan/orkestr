@@ -1554,6 +1554,20 @@ async function runTenantApiAgentResponse({ thread, messages, message, env, fetch
     store: false,
   };
 
+  if (gmailTestingAccessDeniedMessage(message.text)) {
+    const text = fallbackGmailTestingAccessDeniedAnswer(message);
+    return {
+      response: {
+        id: `gmail_testing_access_denied_${message.id}`,
+        model: "orkestr-api-agent-direct",
+        output_text: text,
+        output: [],
+        usage: {},
+      },
+      text,
+    };
+  }
+
   const webFetchTarget = webFetchAvailable(env) ? publicWebFetchTargetForMessage(message.text) : null;
   if (webFetchTarget) {
     let output = {};
