@@ -207,8 +207,9 @@ test("tenant api-agent repairs bare acknowledgements for identity and capability
           usage: { input_tokens: 250, output_tokens: 2 },
         });
       }
-      assert.equal(body.tools, undefined);
+      assert.equal(body.tools.some((tool) => tool.name === "orkestr_list_skills"), true);
       assert.match(body.instructions, /Response repair/i);
+      assert.match(body.instructions, /call the tool before finalizing/i);
       assert.match(body.input.at(-1).content, /I'm Can\. How can you help me\?/);
       return response({
         id: "resp_api_agent_repair_2",
@@ -668,6 +669,100 @@ test("tenant api-agent creates a persisted Gmail notification rule from chat", a
   assert.equal(notifications[0].intervalMs, 300000);
   assert.match(assistant.text, /Gmail notification created/i);
   assert.doesNotMatch(assistant.text, /not wired|did not create|Gmail is not connected|Ask me to connect Gmail/i);
+});
+
+test("tenant api-agent repair retry can call Gmail notification tools", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-api-agent-gmail-notification-repair-"));
+  const env = await allowSanitizerEnv(home, {
+    ORKESTR_GMAIL_NOTIFICATIONS_ENABLED: "1",
+    ORKESTR_GMAIL_NOTIFICATION_MIN_INTERVAL_MS: "300000",
+  });
+  await upsertUser({ id: "otcan", role: "user", displayName: "Otcan" }, env);
+  const paths = userDataPaths("otcan", env);
+  await fs.mkdir(paths.secrets, { recursive: true });
+  await fs.writeFile(path.join(paths.secrets, "gmail-token.json"), JSON.stringify({
+    accessToken: "user-gmail-notification-repair-access",
+    refreshToken: "user-gmail-notification-repair-refresh",
+    expiresAt: Math.floor(Date.now() / 1000) + 3600,
+  }), "utf8");
+  await createThread({
+    id: "otcantest-gmail-notification-repair",
+    ownerUserId: "otcan",
+    name: "otcantest",
+    runtimeKind: "api-agent",
+    executor: { type: "api-agent", metadata: { runtimeKind: "api-agent" } },
+    binding: { connector: "whatsapp", chatId: "chat-otcan", outboundAccountId: "wa-1" },
+  }, env);
+  await enqueueThreadInputForPrincipal("otcantest-gmail-notification-repair", {
+    text: "Can you send me a message here whenever I receive a Gmail mail?",
+    source: "whatsapp_inbound",
+    connector: "whatsapp",
+    chatId: "chat-otcan",
+    accountId: "wa-1",
+  }, userPrincipal({ id: "otcan", role: "user" }), env);
+
+  const openAiCalls = [];
+  const result = await processApiAgentThreadInput("otcantest-gmail-notification-repair", env, {
+    fetchImpl: async (_url, options = {}) => {
+      const body = JSON.parse(options.body);
+      openAiCalls.push(body);
+      if (openAiCalls.length === 1) {
+        return response({
+          id: "resp_gmail_notification_repair_1",
+          model: "gpt-5-mini",
+          output_text: "I'll send you a message here whenever new Gmail arrives.",
+          output: [],
+          usage: { input_tokens: 300, output_tokens: 12 },
+        });
+      }
+      if (openAiCalls.length === 2) {
+        assert.equal(body.tools.some((tool) => tool.name === "orkestr_create_gmail_notification"), true);
+        assert.match(body.instructions, /call the tool before finalizing/i);
+        return response({
+          id: "resp_gmail_notification_repair_2",
+          model: "gpt-5-mini",
+          output_text: "",
+          output: [{
+            type: "function_call",
+            name: "orkestr_create_gmail_notification",
+            call_id: "call_create_gmail_notification_repair",
+            arguments: JSON.stringify({
+              label: "Gmail notifications",
+              query: "",
+              interval: "1m",
+              targetType: "thread",
+              target: "",
+              maxItemsPerRun: 1,
+              enabled: true,
+              allowBroadQuery: false,
+            }),
+          }],
+          usage: { input_tokens: 380, output_tokens: 20 },
+        });
+      }
+      const toolOutput = JSON.parse(body.input.at(-1).output);
+      assert.equal(toolOutput.ok, true);
+      assert.equal(toolOutput.notification.query, "is:unread newer_than:1d");
+      assert.equal(toolOutput.notification.intervalMs, 300000);
+      return response({
+        id: "resp_gmail_notification_repair_3",
+        model: "gpt-5-mini",
+        output_text: "Gmail notification created. I will message you here when new unread Gmail arrives.",
+        output: [],
+        usage: { input_tokens: 430, output_tokens: 18 },
+      });
+    },
+  });
+  const messages = await listThreadMessages("otcantest-gmail-notification-repair", env);
+  const assistant = messages.find((message) => message.role === "assistant");
+  const notifications = await listGmailNotificationsForPrincipal(userPrincipal({ id: "otcan", role: "user" }), env);
+
+  assert.equal(result.ok, true);
+  assert.equal(openAiCalls.length, 3);
+  assert.equal(notifications.length, 1);
+  assert.equal(notifications[0].target, "otcantest-gmail-notification-repair");
+  assert.match(assistant.text, /Gmail notification created/i);
+  assert.doesNotMatch(assistant.text, /Tell me what you want|workspace execution|\/codex/i);
 });
 
 test("tenant api-agent Gmail notification tools list and delete scoped rules", async () => {
@@ -2491,8 +2586,9 @@ test("tenant api-agent repairs bare confirmation replies when no action is pendi
           usage: { input_tokens: 180, output_tokens: 2 },
         });
       }
-      assert.equal(body.tools, undefined);
+      assert.equal(body.tools.some((tool) => tool.name === "orkestr_list_skills"), true);
       assert.match(body.instructions, /Response repair/i);
+      assert.match(body.instructions, /call the tool before finalizing/i);
       assert.match(body.instructions, /only a confirmation/i);
       return response({
         id: "resp_bare_confirmation_2",
@@ -2557,8 +2653,9 @@ test("tenant api-agent repairs unconfirmed action promises for bare confirmation
           usage: { input_tokens: 220, output_tokens: 44 },
         });
       }
-      assert.equal(body.tools, undefined);
+      assert.equal(body.tools.some((tool) => tool.name === "orkestr_list_skills"), true);
       assert.match(body.instructions, /do not promise future browser or workspace work/i);
+      assert.match(body.instructions, /call the tool before finalizing/i);
       return response({
         id: "resp_bare_confirmation_promise_2",
         model: "gpt-5-mini",
@@ -2615,8 +2712,9 @@ test("tenant api-agent repairs browser research promises without tool evidence",
           usage: { input_tokens: 260, output_tokens: 43 },
         });
       }
-      assert.equal(body.tools, undefined);
+      assert.equal(body.tools.some((tool) => tool.name === "orkestr_list_skills"), true);
       assert.match(body.instructions, /no tool result confirms completed work/i);
+      assert.match(body.instructions, /call the tool before finalizing/i);
       return response({
         id: "resp_browser_promise_2",
         model: "gpt-5-mini",

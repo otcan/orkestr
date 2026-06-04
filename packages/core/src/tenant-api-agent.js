@@ -1455,7 +1455,18 @@ function repairConversationInput(inputItems = []) {
   }).filter(Boolean);
 }
 
-async function repairWeakTenantApiAgentResponse({ baseBody, inputItems, thread, message, text, env, fetchImpl }) {
+async function repairWeakTenantApiAgentResponse({
+  baseBody,
+  inputItems,
+  thread,
+  message,
+  text,
+  principal = null,
+  pendingAction = null,
+  env,
+  fetchImpl,
+  allowTools = false,
+}) {
   const codexAvailable = codexEscalationAvailable(env);
   const repairBody = {
     ...baseBody,
@@ -1469,7 +1480,9 @@ async function repairWeakTenantApiAgentResponse({ baseBody, inputItems, thread, 
         ? "If the latest user message asks what you can do or how you can help, provide a short practical capability summary and mention /codex for workspace execution."
         : "If the latest user message asks what you can do or how you can help, provide a short practical capability summary and say workspace execution is not available in this chat right now.",
       "If the latest user message is only a confirmation like yes/ok and no tool result confirms completed work, do not say Done and do not promise future browser or workspace work. Ask for the concrete task or explain the pending limitation.",
-      "Do not use tools during this repair step.",
+      allowTools
+        ? "If the latest user message asks for an Orkestr action and a matching tool is available, call the tool before finalizing."
+        : "Do not use tools during this repair step.",
     ].join("\n"),
     input: [
       ...repairConversationInput(inputItems).slice(-30),
@@ -1483,11 +1496,28 @@ async function repairWeakTenantApiAgentResponse({ baseBody, inputItems, thread, 
       },
     ],
   };
-  delete repairBody.tools;
-  delete repairBody.tool_choice;
-  delete repairBody.parallel_tool_calls;
+  if (!allowTools) {
+    delete repairBody.tools;
+    delete repairBody.tool_choice;
+    delete repairBody.parallel_tool_calls;
+  }
   const response = await postOpenAIResponse(repairBody, env, fetchImpl, `orkestr-${thread.id}-${message.id}-repair`);
   await recordResponseUsage({ response, thread, message, callKind: "assistant_repair" }, env);
+  if (allowTools && responseFunctionCalls(response).length) {
+    return runTenantApiAgentToolResultResponse({
+      baseBody: repairBody,
+      inputItems: repairBody.input,
+      responseWithCalls: response,
+      thread,
+      message,
+      principal,
+      pendingAction,
+      env,
+      fetchImpl,
+      idempotencySuffix: "repair-2",
+      callKind: "assistant_repair_tool_result",
+    });
+  }
   return { response, text: responseText(response) };
 }
 
@@ -1823,8 +1853,11 @@ async function runTenantApiAgentResponse({ thread, messages, message, env, fetch
       thread,
       message,
       text,
+      principal,
+      pendingAction,
       env,
       fetchImpl,
+      allowTools: true,
     });
     return {
       response: repaired.response,
