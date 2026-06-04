@@ -96,6 +96,25 @@ function activeTurnNeedsLiveVerification(state = {}, env = process.env) {
   return !checkedAt || now - checkedAt >= verifyMs;
 }
 
+function turnHasCompletedFinalAnswer(messages = [], turnId = "") {
+  const id = clean(turnId);
+  if (!id) return false;
+  return (Array.isArray(messages) ? messages : []).some((message) =>
+    clean(message?.role).toLowerCase() === "assistant" &&
+    clean(message?.state).toLowerCase() === "completed" &&
+    clean(message?.phase).toLowerCase() === "final_answer" &&
+    clean(message?.codexTurnId) === id
+  );
+}
+
+async function activeTurnHasCompletedFinalAnswer(thread, turnId = "", env = process.env, counts = {}) {
+  const id = clean(turnId);
+  if (!id) return false;
+  if (Array.isArray(counts.messages)) return turnHasCompletedFinalAnswer(counts.messages, id);
+  const messages = await listThreadMessages(thread.id, env).catch(() => []);
+  return turnHasCompletedFinalAnswer(messages, id);
+}
+
 function isoAfter(ms) {
   return new Date(Date.now() + Math.max(0, ms)).toISOString();
 }
@@ -981,20 +1000,36 @@ export async function codexAppServerThreadStatus(thread, env = process.env, coun
       requestId: clean(persistedPendingRequest.requestId || persistedPendingRequest.id),
     }, env).catch(() => {});
   }
-  const activeTurnId = statusState && ["ready", "failed", "unloaded", "awaiting_approval"].includes(statusState)
+  let activeTurnId = statusState && ["ready", "failed", "unloaded", "awaiting_approval"].includes(statusState)
     ? ""
     : stateActiveTurnId;
+  const finalAnswerCompletedActiveTurn = await activeTurnHasCompletedFinalAnswer(thread, activeTurnId, env, counts);
+  if (finalAnswerCompletedActiveTurn) {
+    activeTurnId = "";
+    if (id && client) {
+      client.threadStates.set(id, {
+        ...(client.threadStates.get(id) || state),
+        activeTurnId: "",
+        activeTurnObservedAt: null,
+        status: { type: "idle" },
+        statusObservedAt: nowIso(),
+      });
+    }
+  }
   const threadState = clean(thread.state);
   const fallbackState = threadState === "sleeping" || threadState === "unloaded"
     ? "unloaded"
     : threadState === "failed"
       ? "failed"
       : "ready";
-  const runtimeState = pendingRequest ? "awaiting_approval" : activeTurnId ? "working" : statusState || fallbackState;
-  const codexStatus = activeTurnId && clean(rawCodexStatus?.type).toLowerCase() === "idle"
+  const runtimeState = pendingRequest ? "awaiting_approval" : activeTurnId ? "working" : finalAnswerCompletedActiveTurn ? "ready" : statusState || fallbackState;
+  const codexStatus = finalAnswerCompletedActiveTurn
+    ? { type: "idle" }
+    : activeTurnId && clean(rawCodexStatus?.type).toLowerCase() === "idle"
     ? { ...rawCodexStatus, type: "active", activeFlags: ["running"] }
     : rawCodexStatus;
-  if (stateActiveTurnIdBeforeRead && runtimeState !== "working" && !activeTurnId) {
+  const clearedActiveTurnId = stateActiveTurnIdBeforeRead || clean(thread.runtime?.activeTurnId);
+  if (clearedActiveTurnId && runtimeState !== "working" && !activeTurnId) {
     await updateThread(thread.id, {
       state: runtimeState === "ready" ? "ready" : runtimeState,
       runtime: {
@@ -1011,8 +1046,9 @@ export async function codexAppServerThreadStatus(thread, env = process.env, coun
       type: "codex_app_server_stale_active_turn_cleared_by_status",
       threadId: thread.id,
       codexThreadId: id || null,
-      activeTurnId: stateActiveTurnIdBeforeRead,
+      activeTurnId: clearedActiveTurnId,
       status: runtimeState,
+      reason: finalAnswerCompletedActiveTurn ? "completed_final_answer" : "live_status",
     }, env).catch(() => {});
   }
   const progress = appServerStatusProgress({ thread, runtimeState, codexStatus, pendingRequest });
