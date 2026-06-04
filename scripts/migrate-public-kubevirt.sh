@@ -3,7 +3,7 @@ set -euo pipefail
 
 usage() {
   cat <<'USAGE'
-Migrate and operate the public app.orkestr.de Orkestr instance on a KubeVirt VM.
+Migrate and operate the public app.orkestr.example.test Orkestr instance on a KubeVirt VM.
 
 Usage:
   scripts/migrate-public-kubevirt.sh status [options]
@@ -16,25 +16,25 @@ Usage:
   scripts/migrate-public-kubevirt.sh cutover [options]
   scripts/migrate-public-kubevirt.sh rollback [options]
 
-Defaults match the public orkestr.de deployment on a single-node k3s/KubeVirt host.
+Defaults match the public orkestr.example.test deployment on a single-node k3s/KubeVirt host.
 
 Options:
   --kubeconfig FILE       k3s kubeconfig. Defaults to KUBECONFIG or /etc/rancher/k3s/k3s.yaml.
-  --namespace NS          KubeVirt namespace. Defaults to orkestr-de.
-  --vm VM                 KubeVirt VM name. Defaults to orkestr-de.
-  --service SERVICE       Kubernetes Service name. Defaults to orkestr-de-app.
+  --namespace NS          KubeVirt namespace. Defaults to orkestr-public.
+  --vm VM                 KubeVirt VM name. Defaults to orkestr-public.
+  --service SERVICE       Kubernetes Service name. Defaults to orkestr-public-app.
   --service-port PORT     Kubernetes Service port. Defaults to 19812.
-  --host-home DIR         Current host public ORKESTR_HOME. Defaults to /home/openclaw/.orkestr-public.
+  --host-home DIR         Current host public ORKESTR_HOME. Defaults to /var/lib/orkestr-public.
   --vm-home DIR           Public ORKESTR_HOME inside the VM. Defaults to /opt/orkestr/data.
   --vm-api URL            Public API base inside the VM. Defaults to http://127.0.0.1:19812.
   --host-api URL          Current host public API. Defaults to http://127.0.0.1:19812.
   --ssh-user USER         VM SSH user. Defaults to orkestr.
-  --ssh-key FILE          Operator SSH key. Defaults to /root/.ssh/orkestr-de-operator.
-  --known-hosts FILE      virtctl SSH known_hosts file. Defaults to /root/.ssh/orkestr-de-known-hosts.
+  --ssh-key FILE          Operator SSH key. Defaults to $HOME/.ssh/orkestr-public-operator.
+  --known-hosts FILE      virtctl SSH known_hosts file. Defaults to $HOME/.ssh/orkestr-public-known-hosts.
   --caddyfile FILE        Caddyfile to edit. Defaults to /etc/caddy/Caddyfile.
   --backup-dir DIR        Backup root. Defaults to /var/backups/orkestr-public-kubevirt.
   --ref REF               Git ref for update-vm.
-  --channel NAME          Orkestr release channel for update-vm. Defaults to orkestr-de.
+  --channel NAME          Orkestr release channel for update-vm. Defaults to public.
   --dry-run               Print planned Caddy cutover/rollback changes without writing them.
   --help                  Show this help.
 
@@ -43,7 +43,7 @@ Smoke checks:
   - VM-local orkestr list works over authorized operator SSH.
   - VM-local orkestr attach --print works when a thread exists.
   - External unauthenticated attach remains blocked with browser_pairing_required.
-  - The VM cannot read known personal host paths or host container sockets.
+  - The VM cannot read configured host sentinel paths or host container sockets.
 USAGE
 }
 
@@ -76,21 +76,22 @@ case "$action" in
 esac
 
 kubeconfig="${KUBECONFIG:-/etc/rancher/k3s/k3s.yaml}"
-namespace="${ORKESTR_PUBLIC_KUBEVIRT_NAMESPACE:-orkestr-de}"
-vm="${ORKESTR_PUBLIC_KUBEVIRT_VM:-orkestr-de}"
-service="${ORKESTR_PUBLIC_KUBEVIRT_SERVICE:-orkestr-de-app}"
+namespace="${ORKESTR_PUBLIC_KUBEVIRT_NAMESPACE:-orkestr-public}"
+vm="${ORKESTR_PUBLIC_KUBEVIRT_VM:-orkestr-public}"
+service="${ORKESTR_PUBLIC_KUBEVIRT_SERVICE:-orkestr-public-app}"
 service_port="${ORKESTR_PUBLIC_KUBEVIRT_SERVICE_PORT:-19812}"
-host_home="${ORKESTR_PUBLIC_HOST_HOME:-/home/openclaw/.orkestr-public}"
+host_home="${ORKESTR_PUBLIC_HOST_HOME:-/var/lib/orkestr-public}"
 vm_home="${ORKESTR_PUBLIC_VM_HOME:-/opt/orkestr/data}"
 vm_api="${ORKESTR_PUBLIC_VM_API:-http://127.0.0.1:19812}"
 host_api="${ORKESTR_PUBLIC_HOST_API:-http://127.0.0.1:19812}"
 ssh_user="${ORKESTR_PUBLIC_VM_SSH_USER:-orkestr}"
-ssh_key="${ORKESTR_PUBLIC_VM_SSH_KEY:-/root/.ssh/orkestr-de-operator}"
-known_hosts="${ORKESTR_PUBLIC_VM_KNOWN_HOSTS:-/root/.ssh/orkestr-de-known-hosts}"
+ssh_key="${ORKESTR_PUBLIC_VM_SSH_KEY:-${HOME:-/tmp}/.ssh/orkestr-public-operator}"
+known_hosts="${ORKESTR_PUBLIC_VM_KNOWN_HOSTS:-${HOME:-/tmp}/.ssh/orkestr-public-known-hosts}"
 caddyfile="${ORKESTR_PUBLIC_CADDYFILE:-/etc/caddy/Caddyfile}"
 backup_dir="${ORKESTR_PUBLIC_BACKUP_DIR:-/var/backups/orkestr-public-kubevirt}"
 ref="${ORKESTR_PUBLIC_DEPLOY_REF:-}"
-channel="${ORKESTR_PUBLIC_DEPLOY_CHANNEL:-orkestr-de}"
+channel="${ORKESTR_PUBLIC_DEPLOY_CHANNEL:-public}"
+private_state_sentinels="${ORKESTR_PUBLIC_PRIVATE_STATE_SENTINELS:-}"
 dry_run=0
 
 while [ "$#" -gt 0 ]; do
@@ -390,7 +391,11 @@ smoke() {
   grep -q 'browser_pairing_required' /tmp/orkestr-public-attach-denied.json || die "Attach denial did not include browser_pairing_required"
 
   log "Checking containment from inside VM."
-  vm_ssh "set -euo pipefail; for p in /home/openclaw/.orkestr-production /home/openclaw/.codex-ops /var/run/docker.sock /run/podman/podman.sock /root/.codex/auth.json /root/.codex/config.toml /root/.codex/history.jsonl; do if sudo test -e \"\$p\"; then echo \"unexpected visible private state: \$p\" >&2; exit 20; fi; done"
+  container_sentinels="/var/run/docker.sock /run/podman/podman.sock"
+  if [ -n "$private_state_sentinels" ]; then
+    container_sentinels="$container_sentinels $private_state_sentinels"
+  fi
+  vm_ssh "set -euo pipefail; for p in $container_sentinels; do if sudo test -e \"\$p\"; then echo \"unexpected visible private state: \$p\" >&2; exit 20; fi; done"
   log "Smoke passed."
 }
 
@@ -399,7 +404,7 @@ replace_caddy_upstream() {
   local to="$2"
   [ -r "$caddyfile" ] || die "Cannot read Caddyfile: $caddyfile"
   if [ "$dry_run" -eq 1 ]; then
-    log "Dry run: would replace public orkestr.de reverse_proxy $from with reverse_proxy $to in $caddyfile"
+    log "Dry run: would replace public orkestr.example.test reverse_proxy $from with reverse_proxy $to in $caddyfile"
     return 0
   fi
   cp "$caddyfile" "$backup_dir/Caddyfile.$(date -u +%Y%m%dT%H%M%SZ).bak"
@@ -409,7 +414,7 @@ import sys
 path = Path(sys.argv[1])
 old = f"reverse_proxy {sys.argv[2]}"
 new = f"reverse_proxy {sys.argv[3]}"
-targets = {"https://orkestr.de", "https://app.orkestr.de", "https://auth.orkestr.de"}
+targets = {"https://orkestr.example.test", "https://app.orkestr.example.test", "https://auth.orkestr.example.test"}
 lines = path.read_text().splitlines(keepends=True)
 in_target = False
 depth = 0
@@ -431,7 +436,7 @@ for line in lines:
         if depth <= 0:
             in_target = False
 if changed == 0:
-    raise SystemExit(f"missing {old} in public orkestr.de blocks")
+    raise SystemExit(f"missing {old} in public orkestr.example.test blocks")
 path.write_text("".join(out))
 PY
   caddy validate --config "$caddyfile" >/dev/null
@@ -485,7 +490,7 @@ status() {
   log "VM public API:"
   curl -fsS "$svc_url/api/version" | jq '{version, commit, releaseId, dirty}' || true
   log "Caddy public upstreams:"
-  grep -nE 'app\.orkestr\.de|auth\.orkestr\.de|orkestr\.de|reverse_proxy' "$caddyfile" | grep -A4 -B2 'orkestr.de' || true
+  grep -nE 'app\.orkestr\.example\.test|auth\.orkestr\.example\.test|orkestr\.example\.test|reverse_proxy' "$caddyfile" | grep -A4 -B2 'orkestr.example.test' || true
 }
 
 case "$action" in

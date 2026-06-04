@@ -525,7 +525,7 @@ test("CLI creates Orkestr threads with integrated WhatsApp binding", async () =>
     "--wa-title",
     "Project Fitness",
     "--wa-participant",
-    "15551234567@c.us",
+    "wa-contact-alice@c.us",
     "--outbound-account",
     "responder",
     "--json",
@@ -535,13 +535,13 @@ test("CLI creates Orkestr threads with integrated WhatsApp binding", async () =>
     fetchImpl: fakeFetch({
       "POST /api/connectors/whatsapp/bridge/chats": {
         ok: true,
-        chat: { id: "120363000000000000@g.us", name: "Project Fitness", generated: true },
-        senderContactId: "15551234567@c.us",
-        responderContactId: "15557654321@c.us",
+        chat: { id: "wa-group-zero@g.us", name: "Project Fitness", generated: true },
+        senderContactId: "wa-contact-alice@c.us",
+        responderContactId: "wa-contact-bob@c.us",
         responderAccountId: "responder",
       },
       "POST /api/threads": { thread: { id: "thread-fitness", name: "Project Fitness", state: "sleeping" } },
-      "PUT /api/threads/thread-fitness/binding": { ok: true, binding: { chatId: "120363000000000000@g.us" } },
+      "PUT /api/threads/thread-fitness/binding": { ok: true, binding: { chatId: "wa-group-zero@g.us" } },
     }, seen),
   });
 
@@ -549,7 +549,7 @@ test("CLI creates Orkestr threads with integrated WhatsApp binding", async () =>
   assert.equal(seen[0].key, "POST /api/connectors/whatsapp/bridge/chats");
   assert.deepEqual(seen[0].body, {
     name: "Project Fitness",
-    participantIds: ["15551234567@c.us"],
+    participantIds: ["wa-contact-alice@c.us"],
     promoteParticipantsAsAdmins: true,
     responderAccountId: "responder",
     outboundAccountId: "responder",
@@ -557,10 +557,10 @@ test("CLI creates Orkestr threads with integrated WhatsApp binding", async () =>
   assert.equal(seen[1].key, "POST /api/threads");
   assert.deepEqual(seen[1].body, { name: "Project Fitness" });
   assert.equal(seen[2].key, "PUT /api/threads/thread-fitness/binding");
-  assert.equal(seen[2].body.chatId, "120363000000000000@g.us");
+  assert.equal(seen[2].body.chatId, "wa-group-zero@g.us");
   assert.equal(seen[2].body.generated, true);
-  assert.equal(seen[2].body.senderContactId, "15551234567@c.us");
-  assert.equal(seen[2].body.responderContactId, "15557654321@c.us");
+  assert.equal(seen[2].body.senderContactId, "wa-contact-alice@c.us");
+  assert.equal(seen[2].body.responderContactId, "wa-contact-bob@c.us");
   assert.match(stdout.text(), /"ok": true/);
 });
 
@@ -570,11 +570,11 @@ test("CLI binds an existing thread to a generated WhatsApp group", async () => {
   const code = await runCli([
     "whatsapp",
     "bind-thread",
-    "crawlerai-linkedin",
+    "sample-linkedin",
     "--name",
-    "Crawlerai-Linkedin",
+    "Sample-Linkedin",
     "--wa-participant",
-    "4917632400662@c.us",
+    "wa-contact-primary@c.us",
     "--outbound-account",
     "account-1",
     "--json",
@@ -585,9 +585,9 @@ test("CLI binds an existing thread to a generated WhatsApp group", async () => {
       "POST /api/connectors/whatsapp/thread-groups": {
         ok: true,
         created: true,
-        chat: { id: "120363000000000002@g.us", name: "Crawlerai-Linkedin" },
-        thread: { id: "crawlerai-linkedin" },
-        binding: { displayName: "Crawlerai-Linkedin", chatId: "120363000000000002@g.us" },
+        chat: { id: "wa-group-two@g.us", name: "Sample-Linkedin" },
+        thread: { id: "sample-linkedin" },
+        binding: { displayName: "Sample-Linkedin", chatId: "wa-group-two@g.us" },
       },
     }, seen),
   });
@@ -595,9 +595,9 @@ test("CLI binds an existing thread to a generated WhatsApp group", async () => {
   assert.equal(code, 0);
   assert.deepEqual(seen.map((entry) => entry.key), ["POST /api/connectors/whatsapp/thread-groups"]);
   assert.deepEqual(seen[0].body, {
-    threadId: "crawlerai-linkedin",
-    name: "Crawlerai-Linkedin",
-    participantIds: ["4917632400662@c.us"],
+    threadId: "sample-linkedin",
+    name: "Sample-Linkedin",
+    participantIds: ["wa-contact-primary@c.us"],
     adminParticipantIds: [],
     promoteParticipantsAsAdmins: true,
     generatePicture: true,
@@ -606,7 +606,7 @@ test("CLI binds an existing thread to a generated WhatsApp group", async () => {
     responderAccountId: "account-1",
     outboundAccountId: "account-1",
   });
-  assert.match(stdout.text(), /Crawlerai-Linkedin/);
+  assert.match(stdout.text(), /Sample-Linkedin/);
 });
 
 test("CLI applies configured WhatsApp chat-name and reply prefixes", async () => {
@@ -622,7 +622,7 @@ test("CLI applies configured WhatsApp chat-name and reply prefixes", async () =>
       "create",
       "easylab",
       "--wa-participant",
-      "15551234567@c.us",
+      "wa-contact-alice@c.us",
       "--json",
     ], {
       stdout,
@@ -630,10 +630,10 @@ test("CLI applies configured WhatsApp chat-name and reply prefixes", async () =>
       fetchImpl: fakeFetch({
         "POST /api/connectors/whatsapp/bridge/chats": {
           ok: true,
-          chat: { id: "120363000000000001@g.us", name: "acme-easylab", generated: true },
+          chat: { id: "wa-group-one@g.us", name: "acme-easylab", generated: true },
         },
         "POST /api/threads": { thread: { id: "thread-easylab", name: "acme-easylab", state: "sleeping" } },
-        "PUT /api/threads/thread-easylab/binding": { ok: true, binding: { chatId: "120363000000000001@g.us" } },
+        "PUT /api/threads/thread-easylab/binding": { ok: true, binding: { chatId: "wa-group-one@g.us" } },
       }, seen),
     });
 

@@ -6,7 +6,7 @@ private overlays outside the OSS repo.
 
 ## Public Site
 
-Use `https://orkestr.de` as the public information site:
+Use `https://orkestr.example.test` as the public information site:
 
 - no login required
 - clear "invite-only private beta" positioning
@@ -29,9 +29,9 @@ Default WhatsApp copy:
 ```text
 Hi Can, I invited you to try Orkestr.
 Orkestr is an invite-only beta assistant you can use from WhatsApp. It can help with your own files, timers, managed browser work, and accounts you choose to connect.
-Before I create your private Orkestr chat, please read: https://orkestr.de/terms and https://orkestr.de/privacy
+Before I create your private Orkestr chat, please read: https://orkestr.example.test/terms and https://orkestr.example.test/privacy
 If you agree, reply exactly: I agree to use Orkestr beta with my own accounts
-After that I will create your private chat and send the first message there. App entry for invited users: https://orkestr.de/app
+After that I will create your private chat and send the first message there. App entry for invited users: https://orkestr.example.test/app
 ```
 
 Only continue after the user explicitly accepts the beta terms.

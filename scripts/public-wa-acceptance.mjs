@@ -3,7 +3,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { forwardLocalWhatsAppInbound } from "../packages/connectors/src/whatsapp-local-bridge.js";
 
-const DEFAULT_PUBLIC_API_BASE = "https://app.orkestr.de";
+const DEFAULT_PUBLIC_API_BASE = "";
 const DEFAULT_PARENT_WA_BASE = "http://127.0.0.1:8787";
 const execFileAsync = promisify(execFile);
 
@@ -26,26 +26,26 @@ function parseArgs(argv = [], env = process.env) {
   const options = {
     execute: false,
     mode: "tenant-forward",
-    apiBase: clean(env.ORKESTR_DE_ACCEPTANCE_API_BASE) || DEFAULT_PUBLIC_API_BASE,
-    pollMode: clean(env.ORKESTR_DE_ACCEPTANCE_POLL_MODE || "http"),
-    guestExec: clean(env.ORKESTR_DE_ACCEPTANCE_GUEST_EXEC || "/tmp/crawlerai_guest_exec.sh"),
-    guestNamespace: clean(env.ORKESTR_DE_ACCEPTANCE_GUEST_NAMESPACE || "orkestr-de"),
-    guestVmi: clean(env.ORKESTR_DE_ACCEPTANCE_GUEST_VMI || "orkestr-de"),
-    vmHome: clean(env.ORKESTR_DE_ACCEPTANCE_VM_HOME || "/opt/orkestr/data"),
-    parentHome: clean(env.ORKESTR_DE_ACCEPTANCE_PARENT_HOME || env.ORKESTR_PARENT_HOME || env.ORKESTR_HOME),
-    parentWaBase: clean(env.ORKESTR_DE_ACCEPTANCE_PARENT_WA_BASE) || DEFAULT_PARENT_WA_BASE,
-    parentWaToken: clean(env.ORKESTR_DE_ACCEPTANCE_PARENT_WA_TOKEN || env.WHATSAPP_BRIDGE_TOKEN || env.WA_HTTP_TOKEN),
-    requireWaHistory: env.ORKESTR_DE_ACCEPTANCE_WA_HISTORY !== "0",
-    thread: clean(env.ORKESTR_DE_ACCEPTANCE_THREAD || "onboarding-admin-orkestr-de"),
-    chatId: clean(env.ORKESTR_DE_ACCEPTANCE_CHAT_ID || "120363425280218500@g.us"),
-    accountId: clean(env.ORKESTR_DE_ACCEPTANCE_ACCOUNT_ID || "sender"),
-    from: clean(env.ORKESTR_DE_ACCEPTANCE_FROM || "66378837028965@lid"),
-    requireRouteMode: clean(env.ORKESTR_DE_ACCEPTANCE_REQUIRE_ROUTE_MODE),
-    requireTargetSource: clean(env.ORKESTR_DE_ACCEPTANCE_REQUIRE_TARGET_SOURCE),
-    rejectTargetSource: clean(env.ORKESTR_DE_ACCEPTANCE_REJECT_TARGET_SOURCE),
-    timeoutMs: Number(env.ORKESTR_DE_ACCEPTANCE_TIMEOUT_MS || 90_000),
-    pollMs: Number(env.ORKESTR_DE_ACCEPTANCE_POLL_MS || 1500),
-    runId: safeId(env.ORKESTR_DE_ACCEPTANCE_RUN_ID || new Date().toISOString().replace(/[-:.TZ]/g, "").slice(0, 14)),
+    apiBase: clean(env.ORKESTR_PUBLIC_ACCEPTANCE_API_BASE) || DEFAULT_PUBLIC_API_BASE,
+    pollMode: clean(env.ORKESTR_PUBLIC_ACCEPTANCE_POLL_MODE || "http"),
+    guestExec: clean(env.ORKESTR_PUBLIC_ACCEPTANCE_GUEST_EXEC || "/tmp/orkestr_guest_exec.sh"),
+    guestNamespace: clean(env.ORKESTR_PUBLIC_ACCEPTANCE_GUEST_NAMESPACE || "orkestr-public"),
+    guestVmi: clean(env.ORKESTR_PUBLIC_ACCEPTANCE_GUEST_VMI || "orkestr-public"),
+    vmHome: clean(env.ORKESTR_PUBLIC_ACCEPTANCE_VM_HOME || "/opt/orkestr/data"),
+    parentHome: clean(env.ORKESTR_PUBLIC_ACCEPTANCE_PARENT_HOME || env.ORKESTR_PARENT_HOME || env.ORKESTR_HOME),
+    parentWaBase: clean(env.ORKESTR_PUBLIC_ACCEPTANCE_PARENT_WA_BASE) || DEFAULT_PARENT_WA_BASE,
+    parentWaToken: clean(env.ORKESTR_PUBLIC_ACCEPTANCE_PARENT_WA_TOKEN || env.WHATSAPP_BRIDGE_TOKEN || env.WA_HTTP_TOKEN),
+    requireWaHistory: env.ORKESTR_PUBLIC_ACCEPTANCE_WA_HISTORY !== "0",
+    thread: clean(env.ORKESTR_PUBLIC_ACCEPTANCE_THREAD || "onboarding-admin-public"),
+    chatId: clean(env.ORKESTR_PUBLIC_ACCEPTANCE_CHAT_ID),
+    accountId: clean(env.ORKESTR_PUBLIC_ACCEPTANCE_ACCOUNT_ID || "sender"),
+    from: clean(env.ORKESTR_PUBLIC_ACCEPTANCE_FROM),
+    requireRouteMode: clean(env.ORKESTR_PUBLIC_ACCEPTANCE_REQUIRE_ROUTE_MODE),
+    requireTargetSource: clean(env.ORKESTR_PUBLIC_ACCEPTANCE_REQUIRE_TARGET_SOURCE),
+    rejectTargetSource: clean(env.ORKESTR_PUBLIC_ACCEPTANCE_REJECT_TARGET_SOURCE),
+    timeoutMs: Number(env.ORKESTR_PUBLIC_ACCEPTANCE_TIMEOUT_MS || 90_000),
+    pollMs: Number(env.ORKESTR_PUBLIC_ACCEPTANCE_POLL_MS || 1500),
+    runId: safeId(env.ORKESTR_PUBLIC_ACCEPTANCE_RUN_ID || new Date().toISOString().replace(/[-:.TZ]/g, "").slice(0, 14)),
     cases: ["exact", "web", "desktop", "private"],
   };
 
@@ -105,10 +105,12 @@ function parseArgs(argv = [], env = process.env) {
     }
   }
 
+  if (options.help || !options.execute) return options;
   if (!options.apiBase) throw new Error("api_base_required");
   if (!["http", "vm-file"].includes(options.pollMode)) throw new Error("invalid_poll_mode");
   if (!options.thread) throw new Error("thread_required");
   if (!options.chatId) throw new Error("chat_id_required");
+  if (!options.from) throw new Error("from_required");
   if (!Number.isFinite(options.timeoutMs) || options.timeoutMs < 1000) throw new Error("invalid_timeout_ms");
   if (!Number.isFinite(options.pollMs) || options.pollMs < 100) throw new Error("invalid_poll_ms");
   if (options.mode !== "tenant-forward") throw new Error("only tenant-forward mode is implemented; pair the sender account before adding sender-web mode");
@@ -117,25 +119,25 @@ function parseArgs(argv = [], env = process.env) {
 
 function printHelp() {
   console.log([
-    "Usage: node scripts/orkestr-de-wa-acceptance.mjs --execute [options]",
+    "Usage: node scripts/public-wa-acceptance.mjs --execute [options]",
     "",
-    "Runs live app.orkestr.de acceptance probes through the existing parent WhatsApp tenant-forward route.",
+    "Runs public tenant acceptance probes through an explicitly provided API base.",
     "This checks public API-agent replies and optionally verifies the reply appears in the parent WhatsApp bridge history.",
     "",
     "Options:",
-    "  --api-base URL        Public tenant API base. Default: https://app.orkestr.de",
+    "  --api-base URL        Public tenant API base. Required with --execute.",
     "  --poll-mode MODE      http or vm-file. Use vm-file when public APIs are auth-blocked.",
-    "  --guest-exec FILE     Guest exec helper for vm-file polling. Default: /tmp/crawlerai_guest_exec.sh",
-    "  --guest-namespace NS  KubeVirt namespace for vm-file polling. Default: orkestr-de",
-    "  --guest-vmi NAME      KubeVirt VMI for vm-file polling. Default: orkestr-de",
+    "  --guest-exec FILE     Guest exec helper for vm-file polling. Default: /tmp/orkestr_guest_exec.sh",
+    "  --guest-namespace NS  KubeVirt namespace for vm-file polling. Default: orkestr-public",
+    "  --guest-vmi NAME      KubeVirt VMI for vm-file polling. Default: orkestr-public",
     "  --vm-home DIR         Public ORKESTR_HOME inside the VM. Default: /opt/orkestr/data",
     "  --parent-home DIR     Parent ORKESTR_HOME containing tenant route secrets.",
     "  --parent-wa-base URL  Parent WA bridge base for history checks. Default: http://127.0.0.1:8787",
-    "  --parent-wa-token TOK  Parent WA bridge bearer token. Prefer ORKESTR_DE_ACCEPTANCE_PARENT_WA_TOKEN.",
-    "  --thread ID           Public tenant thread id. Default: onboarding-admin-orkestr-de",
-    "  --chat-id ID          WhatsApp chat id routed to the public tenant.",
+    "  --parent-wa-token TOK  Parent WA bridge bearer token. Prefer ORKESTR_PUBLIC_ACCEPTANCE_PARENT_WA_TOKEN.",
+    "  --thread ID           Public tenant thread id. Default: onboarding-admin-public",
+    "  --chat-id ID          WhatsApp chat id routed to the public tenant. Required with --execute.",
     "  --account-id ID       Parent WhatsApp inbound account id. Default: sender",
-    "  --from ID             Sender contact id for the synthetic inbound event.",
+    "  --from ID             Sender contact id for the synthetic inbound event. Required with --execute.",
     "  --require-route-mode MODE  Require the forward result routeMode, for example broker.",
     "  --require-target-source SRC Require the forward result targetSource, for example broker.",
     "  --reject-target-source SRC  Fail if the forward result targetSource matches this value.",
@@ -149,28 +151,28 @@ function printHelp() {
 function caseSpec(name, runId) {
   const specs = {
     exact: {
-      text: `orkestr.de e2e ${runId}: reply exactly "orkestr.de e2e OK ${runId}"`,
-      require: [new RegExp(`orkestr\\.de e2e OK ${runId.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`)],
+      text: `orkestr.example.test e2e ${runId}: reply exactly "orkestr.example.test e2e OK ${runId}"`,
+      require: [new RegExp(`orkestr\\.example\\.test e2e OK ${runId.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`)],
       reject: [/^Done\.?$/i],
     },
     web: {
-      text: `orkestr.de e2e ${runId}: Fetch https://orkestr.de/ and summarize what is on the page.`,
+      text: `orkestr.example.test e2e ${runId}: Fetch https://orkestr.example.test/ and summarize what is on the page.`,
       require: [/(Fetched|opened .*Desktop|couldn.t fetch useful page contents)/i],
       reject: [/^Done\.?$/i, /\/codex/i],
     },
     desktop: {
-      text: `orkestr.de e2e ${runId}: Open LinkedIn. Am I logged in?`,
+      text: `orkestr.example.test e2e ${runId}: Open LinkedIn. Am I logged in?`,
       require: [/(Desktop|LinkedIn|managed desktop)/i, /(open|opened|available|does not report login state|cannot confirm)/i],
       reject: [/^Done\.?$/i, /Tell me what you want/i, /\/codex/i],
     },
     private: {
-      text: `orkestr.de e2e ${runId}: Fetch http://127.0.0.1:19812/api/health and summarize it.`,
+      text: `orkestr.example.test e2e ${runId}: Fetch http://127.0.0.1:19812/api/health and summarize it.`,
       require: [/(url_host_forbidden|couldn.t fetch|can.t reach|cannot access|no access|forbidden)/i],
       reject: [/opened .*Desktop/i],
     },
     timer: {
-      text: `Set a timer in 2 minutes, telling me "orkestr.de timer e2e HI ${runId}"`,
-      require: [new RegExp(`orkestr\\.de timer e2e HI ${runId.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`, "i")],
+      text: `Set a timer in 2 minutes, telling me "orkestr.example.test timer e2e HI ${runId}"`,
+      require: [new RegExp(`orkestr\\.example\\.test timer e2e HI ${runId.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`, "i")],
       reject: [/safely handle|private connector|admin to enable|capability denial/i],
       timerDue: true,
     },
@@ -359,7 +361,7 @@ async function runCase(name, options) {
     ...process.env,
     ...(options.parentHome ? { ORKESTR_HOME: options.parentHome } : {}),
   };
-  const eventId = `orkestr-de-acceptance-${options.runId}-${name}`;
+  const eventId = `public-acceptance-${options.runId}-${name}`;
   const forwarded = await forwardLocalWhatsAppInbound({
     eventId,
     chatId: options.chatId,

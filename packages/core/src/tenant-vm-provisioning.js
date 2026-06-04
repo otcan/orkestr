@@ -168,8 +168,8 @@ export function buildTenantVmProvisioningPlan(vm, input = {}, env = process.env)
           name: namespace,
           labels: {
             "app.kubernetes.io/name": "orkestr-tenant",
-            "orkestr.dev/tenant-vm-id": safeLabelValue(vm.id),
-            "orkestr.dev/owner-user-id": safeLabelValue(vm.ownerUserId),
+            "orkestr.example.test/tenant-vm-id": safeLabelValue(vm.id),
+            "orkestr.example.test/owner-user-id": safeLabelValue(vm.ownerUserId),
           },
         },
       },
@@ -182,8 +182,8 @@ export function buildTenantVmProvisioningPlan(vm, input = {}, env = process.env)
           labels: {
             app: vmName,
             "app.kubernetes.io/name": "orkestr-tenant",
-            "orkestr.dev/tenant-vm-id": safeLabelValue(vm.id),
-            "orkestr.dev/owner-user-id": safeLabelValue(vm.ownerUserId),
+            "orkestr.example.test/tenant-vm-id": safeLabelValue(vm.id),
+            "orkestr.example.test/owner-user-id": safeLabelValue(vm.ownerUserId),
           },
         },
         spec: {

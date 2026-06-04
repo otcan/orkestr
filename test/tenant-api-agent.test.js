@@ -162,11 +162,11 @@ test("tenant api-agent repairs bare acknowledgements for identity and capability
     id: "otcantest-repair",
     ownerUserId: "otcan",
     name: "otcantest",
-    bindingName: "orkestr.de",
+    bindingName: "orkestr.example.test",
     runtimeKind: "api-agent",
     executorId: "api-agent",
     executor: { type: "api-agent", metadata: { runtimeKind: "api-agent" } },
-    binding: { connector: "whatsapp", chatId: "chat-otcan", displayName: "orkestr.de", outboundAccountId: "wa-1" },
+    binding: { connector: "whatsapp", chatId: "chat-otcan", displayName: "orkestr.example.test", outboundAccountId: "wa-1" },
   }, env);
   await appendThreadMessage("otcantest-repair", {
     role: "user",
@@ -195,7 +195,7 @@ test("tenant api-agent repairs bare acknowledgements for identity and capability
       calls.push(body);
       if (calls.length === 1) {
         const context = tenantContextFromInstructions(body.instructions);
-        assert.equal(context.chat.chatName, "orkestr.de");
+        assert.equal(context.chat.chatName, "orkestr.example.test");
         assert.equal(context.chat.surface, "WhatsApp chat");
         assert.match(body.instructions, /Never answer a normal chat question/i);
         assert.match(body.instructions, /Use the recent message history for conversational identity/i);
@@ -241,11 +241,11 @@ test("tenant api-agent repairs empty tool-result answers for identity and capabi
     id: "otcantest-empty-tool-repair",
     ownerUserId: "otcan",
     name: "otcantest",
-    bindingName: "orkestr.de",
+    bindingName: "orkestr.example.test",
     runtimeKind: "api-agent",
     executorId: "api-agent",
     executor: { type: "api-agent", metadata: { runtimeKind: "api-agent" } },
-    binding: { connector: "whatsapp", chatId: "chat-otcan", displayName: "orkestr.de", outboundAccountId: "wa-1" },
+    binding: { connector: "whatsapp", chatId: "chat-otcan", displayName: "orkestr.example.test", outboundAccountId: "wa-1" },
   }, env);
   const input = await enqueueThreadInputForPrincipal("otcantest-empty-tool-repair", {
     text: "I'm Can. How can you help me?",
@@ -1454,7 +1454,7 @@ test("WhatsApp auto-provisioned tenant threads default to api-agent runtime", as
     eventId: "auto-api-agent-1",
     chatId: "chat-auto-api",
     accountId: "main",
-    from: "491234567890@c.us",
+    from: "wa-contact-sample@c.us",
     chatName: "otcantest",
     text: "hello",
   }, env);
@@ -1516,7 +1516,7 @@ test("WhatsApp routing cleans mixed tenant Codex runtime state before enqueueing
     eventId: "mixed-api-agent-1",
     chatId: "chat-mixed",
     accountId: "wa-1",
-    from: "491234567890@c.us",
+    from: "wa-contact-sample@c.us",
     text: "hello",
   }, env);
   const thread = await getThread("otcantest", env);
@@ -1606,7 +1606,7 @@ test("WhatsApp routing cleans stale api-agent tmux runtime metadata before enque
     eventId: "stale-api-agent-1",
     chatId: "chat-stale-api-agent",
     accountId: "wa-1",
-    from: "491234567890@c.us",
+    from: "wa-contact-sample@c.us",
     text: "hello",
   }, env);
   const thread = await getThread("otcantest", env);
@@ -3206,7 +3206,7 @@ test("tenant api-agent answers explicit public URL fetches without falling back 
     binding: { connector: "whatsapp", chatId: "chat-otcan", outboundAccountId: "wa-1" },
   }, env);
   const input = await enqueueThreadInputForPrincipal("otcantest-explicit-web-fetch-answer", {
-    text: "Fetch https://orkestr.de/ and summarize what is on the page.",
+    text: "Fetch https://orkestr.example.test/ and summarize what is on the page.",
     source: "whatsapp_inbound",
     connector: "whatsapp",
     chatId: "chat-otcan",
@@ -3239,7 +3239,7 @@ test("tenant api-agent answers explicit public URL fetches without falling back 
 
   assert.equal(result.ok, true);
   assert.equal(openAiCalls.length, 0);
-  assert.deepEqual(webFetchCalls, ["https://orkestr.de/"]);
+  assert.deepEqual(webFetchCalls, ["https://orkestr.example.test/"]);
   assert.match(assistant.text, /Fetched Orkestr public alpha/i);
   assert.match(assistant.text, /contained agents/i);
   assert.notEqual(assistant.text.trim(), "Done.");
@@ -3261,7 +3261,7 @@ test("tenant api-agent does not treat exact replies containing domains as web fe
     binding: { connector: "whatsapp", chatId: "chat-otcan", outboundAccountId: "wa-1" },
   }, env);
   const input = await enqueueThreadInputForPrincipal("otcantest-exact-domain-no-fetch", {
-    text: "orkestr.de e2e 123: reply exactly \"orkestr.de e2e OK 123\"",
+    text: "orkestr.example.test e2e 123: reply exactly \"orkestr.example.test e2e OK 123\"",
     source: "whatsapp_inbound",
     connector: "whatsapp",
     chatId: "chat-otcan",
@@ -3276,7 +3276,7 @@ test("tenant api-agent does not treat exact replies containing domains as web fe
       return response({
         id: "resp_exact_domain_no_fetch",
         model: "gpt-5-mini",
-        output_text: "orkestr.de e2e OK 123",
+        output_text: "orkestr.example.test e2e OK 123",
         output: [],
         usage: { input_tokens: 140, output_tokens: 8 },
       });
@@ -3287,7 +3287,7 @@ test("tenant api-agent does not treat exact replies containing domains as web fe
 
   assert.equal(result.ok, true);
   assert.equal(openAiCalls.length, 1);
-  assert.equal(assistant.text, "orkestr.de e2e OK 123");
+  assert.equal(assistant.text, "orkestr.example.test e2e OK 123");
 });
 
 test("tenant api-agent does not treat incidental domain labels as web fetch targets", async () => {
@@ -3306,7 +3306,7 @@ test("tenant api-agent does not treat incidental domain labels as web fetch targ
     binding: { connector: "whatsapp", chatId: "chat-otcan", outboundAccountId: "wa-1" },
   }, env);
   const input = await enqueueThreadInputForPrincipal("otcantest-domain-label-no-fetch", {
-    text: "orkestr.de e2e 123: Open LinkedIn. Am I logged in?",
+    text: "orkestr.example.test e2e 123: Open LinkedIn. Am I logged in?",
     source: "whatsapp_inbound",
     connector: "whatsapp",
     chatId: "chat-otcan",

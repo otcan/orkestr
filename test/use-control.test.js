@@ -346,7 +346,7 @@ test("admin chat summary hides tenant-owned WhatsApp-only threads by default", a
       ownerUserId: "otcan",
       binding: {
         connector: "whatsapp",
-        chatId: "120363423847331215@g.us",
+        chatId: "wa-group-alpha@g.us",
         displayName: "otcantest",
         generated: true,
         mirrorToWhatsApp: true,
@@ -407,7 +407,7 @@ test("generated WhatsApp binding persists restricted Codex defaults for tenant t
       method: "PUT",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
-        chatId: "120363423847331215@g.us",
+        chatId: "wa-group-alpha@g.us",
         displayName: "otcantest",
         generated: true,
       }),
@@ -944,20 +944,20 @@ test("user management API is admin-only and can pair a browser to a managed user
       headers: { "content-type": "application/json", cookie: adminCookie },
       body: JSON.stringify({
         accountId: "main",
-        externalId: "491234567890@c.us",
+        externalId: "wa-contact-sample@c.us",
         chatId: "manual-chat@g.us",
         displayName: "Alice WhatsApp",
       }),
     }));
     assert.equal(linkedWhatsApp.identities[0].provider, "whatsapp");
     assert.equal(linkedWhatsApp.identities[0].source, "manual");
-    assert.equal(linkedWhatsApp.identities[0].externalId, "491234567890@c.us");
+    assert.equal(linkedWhatsApp.identities[0].externalId, "wa-contact-sample@c.us");
     assert.equal(linkedWhatsApp.identities[0].chatId, "manual-chat@g.us");
 
     const duplicateWhatsAppResponse = await fetch(`${baseUrl}/api/users/bob-example.test/identities/whatsapp`, {
       method: "POST",
       headers: { "content-type": "application/json", cookie: adminCookie },
-      body: JSON.stringify({ accountId: "main", externalId: "491234567890@c.us" }),
+      body: JSON.stringify({ accountId: "main", externalId: "wa-contact-sample@c.us" }),
     });
     const duplicateWhatsApp = await read(duplicateWhatsAppResponse);
     assert.equal(duplicateWhatsAppResponse.status, 409);
@@ -966,16 +966,16 @@ test("user management API is admin-only and can pair a browser to a managed user
     const migratedWhatsApp = await read(await fetch(`${baseUrl}/api/users/bob-example.test/identities/whatsapp`, {
       method: "POST",
       headers: { "content-type": "application/json", cookie: adminCookie },
-      body: JSON.stringify({ accountId: "main", externalId: "491234567890@c.us", migrate: true }),
+      body: JSON.stringify({ accountId: "main", externalId: "wa-contact-sample@c.us", migrate: true }),
     }));
     assert.equal(migratedWhatsApp.userId, "bob-example.test");
-    assert.equal(migratedWhatsApp.identities[0].externalId, "491234567890@c.us");
+    assert.equal(migratedWhatsApp.identities[0].externalId, "wa-contact-sample@c.us");
     const aliceIdentitiesAfterMigration = await read(await fetch(`${baseUrl}/api/users/alice-example.test/identities`, { headers: { cookie: adminCookie } }));
     assert.deepEqual(aliceIdentitiesAfterMigration.identities, []);
     const unlinkedWhatsApp = await read(await fetch(`${baseUrl}/api/users/bob-example.test/identities/whatsapp/unlink`, {
       method: "POST",
       headers: { "content-type": "application/json", cookie: adminCookie },
-      body: JSON.stringify({ accountId: "main", externalId: "491234567890@c.us" }),
+      body: JSON.stringify({ accountId: "main", externalId: "wa-contact-sample@c.us" }),
     }));
     assert.deepEqual(unlinkedWhatsApp.identities, []);
 

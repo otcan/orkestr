@@ -67,7 +67,7 @@ test("external WhatsApp bridge status hides parent bridge internals", async () =
           state: "idle",
           ready: true,
           authenticated: true,
-          sessionRoot: "/home/openclaw/.orkestr-production/whatsapp-bridge/sessions/session-codex-whatsapp",
+          sessionRoot: "<operator-orkestr-home>/whatsapp-bridge/sessions/session-codex-whatsapp",
           clientId: "codex-whatsapp",
           token: "must-not-leak",
         }],

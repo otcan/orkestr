@@ -1,14 +1,14 @@
-# orkestr.de KubeVirt rollout
+# Public KubeVirt Rollout
 
-This is the public-beta deployment shape for `orkestr.de`. The public app must
-run inside the `orkestr-de` k3s/KubeVirt VM, not as a host-level process sharing
+This is the public-beta deployment shape for `orkestr.example.test`. The public app must
+run inside the `orkestr-public` k3s/KubeVirt VM, not as a host-level process sharing
 the personal/dev Orkestr runtime.
 
 ## Hosts
 
-- `orkestr.de`: public landing page or redirect target.
-- `app.orkestr.de`: Orkestr application.
-- `auth.orkestr.de`: browser pairing, login, and challenge approval surface.
+- `orkestr.example.test`: public landing page or redirect target.
+- `app.orkestr.example.test`: Orkestr application.
+- `auth.orkestr.example.test`: browser pairing, login, and challenge approval surface.
 
 ## DNS
 
@@ -18,7 +18,7 @@ Point these records at the dedicated VPS public IPv4 address:
 A     @     <vps-ip>
 A     app   <vps-ip>
 A     auth  <vps-ip>
-CNAME www   orkestr.de
+CNAME www   orkestr.example.test
 ```
 
 Keep DNS provider credentials and API keys outside the OSS repository.
@@ -26,21 +26,21 @@ Keep DNS provider credentials and API keys outside the OSS repository.
 ## Runtime boundary
 
 - Personal/dev Orkestr stays on the operator host at
-  `https://orkestr.app.ops.oguzcanunver.com`.
-- Public Orkestr runs in namespace `orkestr-de`, VM `orkestr-de`, Service
-  `orkestr-de-app:19812`.
-- Caddy routes `orkestr.de`, `app.orkestr.de`, and `auth.orkestr.de` to the
+  `<operator-app-url>`.
+- Public Orkestr runs in namespace `orkestr-public`, VM `orkestr-public`, Service
+  `orkestr-public-app:19812`.
+- Caddy routes `orkestr.example.test`, `app.orkestr.example.test`, and `auth.orkestr.example.test` to the
   Kubernetes Service, not to host `127.0.0.1:19812`.
 - Public `ORKESTR_HOME` lives inside the VM, normally `/opt/orkestr/data`.
 - Public rollout is an exact Orkestr release inside the VM with
-  `ORKESTR_HOME=/opt/orkestr/data orkestr update --release --ref <ref> --channel orkestr-de --allow-interrupt
+  `ORKESTR_HOME=/opt/orkestr/data orkestr update --release --ref <ref> --channel public --allow-interrupt
   --no-smoke`. The public VM is isolated from personal/dev work, and the generic
   local smoke plus active-thread HTTP check are skipped because the public app
   intentionally protects private API routes with browser pairing. Use the public
   KubeVirt and public-domain smokes instead.
 - Public Gmail, Outlook, Jira, Shopify, browser, WhatsApp, and runtime secrets
-  must be VM-local. Do not mount or copy personal `/home/openclaw/.orkestr-production`,
-  `/root/.codex`, PA browser profiles, private overlays, or host WhatsApp
+  must be VM-local. Do not mount or copy personal `<operator-orkestr-home>`,
+  `<operator-codex-home>`, PA browser profiles, private overlays, or host WhatsApp
   session state.
 
 ## Fresh VM bootstrap
@@ -49,9 +49,9 @@ On a fresh Ubuntu 24.04 VPS:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/otcan/orkestr/main/scripts/bootstrap-vps.sh | sudo bash -s -- \
-  --domain orkestr.de \
-  --app-host app.orkestr.de \
-  --auth-host auth.orkestr.de \
+  --domain orkestr.example.test \
+  --app-host app.orkestr.example.test \
+  --auth-host auth.orkestr.example.test \
   --email admin@example.com \
   --with-whatsapp \
   --track-main
@@ -60,14 +60,14 @@ curl -fsSL https://raw.githubusercontent.com/otcan/orkestr/main/scripts/bootstra
 The bootstrap writes:
 
 ```text
-ORKESTR_PRIMARY_DOMAIN=orkestr.de
-ORKESTR_PUBLIC_SITE_URL=https://orkestr.de
-ORKESTR_APP_HOST=app.orkestr.de
-ORKESTR_AUTH_HOST=auth.orkestr.de
-ORKESTR_PUBLIC_URL=https://app.orkestr.de
-ORKESTR_AUTH_URL=https://auth.orkestr.de
-ORKESTR_COOKIE_DOMAIN=orkestr.de
-ORKESTR_PUBLIC_HTTPS_URL=https://app.orkestr.de
+ORKESTR_PRIMARY_DOMAIN=orkestr.example.test
+ORKESTR_PUBLIC_SITE_URL=https://orkestr.example.test
+ORKESTR_APP_HOST=app.orkestr.example.test
+ORKESTR_AUTH_HOST=auth.orkestr.example.test
+ORKESTR_PUBLIC_URL=https://app.orkestr.example.test
+ORKESTR_AUTH_URL=https://auth.orkestr.example.test
+ORKESTR_COOKIE_DOMAIN=orkestr.example.test
+ORKESTR_PUBLIC_HTTPS_URL=https://app.orkestr.example.test
 ```
 
 For the existing public VM, use the migration helper instead of re-running the
@@ -90,7 +90,7 @@ bash scripts/migrate-public-kubevirt.sh cutover
 ### Endpoint Recovery Check
 
 The public VM can report `VMI Running` while the `virt-launcher` pod is in
-`Error` and the `orkestr-de-app` Service has no endpoints. Treat that as an
+`Error` and the `orkestr-public-app` Service has no endpoints. Treat that as an
 unhealthy public instance even if the VMI status looks ready.
 
 Run:
@@ -102,9 +102,9 @@ bash scripts/migrate-public-kubevirt.sh smoke
 
 The smoke now fails before app health if:
 
-- namespace `orkestr-de` / VMI `orkestr-de` is not Ready
+- namespace `orkestr-public` / VMI `orkestr-public` is not Ready
 - the `virt-launcher` pod is not serving
-- Service `orkestr-de-app` has no ready EndpointSlice addresses
+- Service `orkestr-public-app` has no ready EndpointSlice addresses
 
 Recovery order:
 
@@ -114,7 +114,7 @@ Recovery order:
 3. Restart the public VM only:
 
    ```bash
-   KUBECONFIG=/etc/rancher/k3s/k3s.yaml virtctl restart --namespace orkestr-de orkestr-de
+   KUBECONFIG=/etc/rancher/k3s/k3s.yaml virtctl restart --namespace orkestr-public orkestr-public
    ```
 
 4. Wait for `bash scripts/migrate-public-kubevirt.sh smoke` to pass.
@@ -124,7 +124,7 @@ Recovery order:
 The helper:
 
 - creates a dedicated operator key if VM SSH access is missing
-- backs up `/home/openclaw/.orkestr-public`
+- backs up `<host-public-orkestr-home>`
 - copies only public instance state into the VM
 - refuses to pass smoke if unauthenticated attach stops returning
   `browser_pairing_required`
@@ -141,13 +141,13 @@ Operator CLI actions are VM-local:
 
 ```bash
 pod_ip="$(kubectl --kubeconfig /etc/rancher/k3s/k3s.yaml \
-  get pod -n orkestr-de -l kubevirt.io/domain=orkestr-de \
+  get pod -n orkestr-public -l kubevirt.io/domain=orkestr-public \
   -o jsonpath='{.items[0].status.podIP}')"
 
-ssh -i /root/.ssh/orkestr-de-operator orkestr@"$pod_ip" \
+ssh -i "$HOME/.ssh/orkestr-public-operator" orkestr@"$pod_ip" \
   'ORKESTR_HOME=/opt/orkestr/data ORKESTR_API_BASE=http://127.0.0.1:19812 orkestr list'
 
-ssh -i /root/.ssh/orkestr-de-operator orkestr@"$pod_ip" \
+ssh -i "$HOME/.ssh/orkestr-public-operator" orkestr@"$pod_ip" \
   'ORKESTR_HOME=/opt/orkestr/data ORKESTR_API_BASE=http://127.0.0.1:19812 orkestr attach --print <thread>'
 ```
 
@@ -172,7 +172,7 @@ proxies:
 The parent runtime proxy is configured with secrets outside the repo:
 
 ```text
-ORKESTR_PARENT_RUNTIME_PROXY_LISTEN_HOST=<private-host-ip>
+ORKESTR_PARENT_RUNTIME_PROXY_LISTEN_HOST=<operator-proxy-ip>
 ORKESTR_PARENT_RUNTIME_PROXY_PORT=18914
 ORKESTR_PARENT_RUNTIME_PROXY_UPSTREAM=http://127.0.0.1:<parent-api-port>
 ORKESTR_PARENT_RUNTIME_PROXY_TOKEN=<token accepted from public VM>
@@ -184,7 +184,7 @@ The public VM points delegated thread bindings at that proxy:
 ```text
 ORKESTR_REMOTE_THREAD_BACKENDS_JSON={
   "personal": {
-    "baseUrl": "http://<private-host-ip>:18914",
+    "baseUrl": "http://<operator-proxy-ip>:18914",
     "token": "<token accepted by parent runtime proxy>"
   }
 }
@@ -222,14 +222,14 @@ During cutover:
 Run:
 
 ```bash
-bash scripts/smoke-public-domain.sh --domain app.orkestr.de --host <vps-ip> --ssh root@<vps-ip>
+bash scripts/smoke-public-domain.sh --domain app.orkestr.example.test --host <vps-ip> --ssh root@<vps-ip>
 bash scripts/migrate-public-kubevirt.sh smoke
 ```
 
 Then verify manually:
 
-- `https://app.orkestr.de` redirects unpaired browsers into the pairing flow on
-  `https://auth.orkestr.de`.
+- `https://app.orkestr.example.test` redirects unpaired browsers into the pairing flow on
+  `https://auth.orkestr.example.test`.
 - Approving the challenge from SSH pairs the browser and returns to the app.
 - Creating a test thread produces a Codex final answer.
 - WhatsApp inbound messages, working status, final answers, and error messages

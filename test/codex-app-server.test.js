@@ -238,7 +238,7 @@ test("Codex app-server turn params ignore corrupt model and reasoning metadata",
       codexReasoningEffort: "0",
       executor: {
         metadata: {
-          codexModel: "/root/.codex/sessions/2026/05/29/rollout.jsonl",
+          codexModel: "<operator-codex-home>/sessions/2026/05/29/rollout.jsonl",
           codexReasoningEffort: "0",
         },
       },
@@ -426,7 +426,7 @@ test("Codex app-server rehomes existing contained threads away from shared runti
         runtimeKind: "codex-app-server",
         state: "working",
         codexThreadId: "old-shared-thread",
-        operatorRolloutPath: "/root/.codex/sessions/stale-rollout.jsonl",
+        operatorRolloutPath: "<operator-codex-home>/sessions/stale-rollout.jsonl",
         operatorRolloutOffset: 1234,
         operatorRolloutSyncedAt: "2026-05-29T12:00:00.000Z",
         activeTurnId: "old-turn",
@@ -480,7 +480,7 @@ test("Codex app-server rehomes existing contained threads away from shared runti
     const contaminated = await updateThread(resumed.thread.id, {
       runtime: {
         ...(resumed.thread.runtime || {}),
-        operatorRolloutPath: "/root/.codex/sessions/stale-after-rehome.jsonl",
+        operatorRolloutPath: "<operator-codex-home>/sessions/stale-after-rehome.jsonl",
         operatorRolloutOffset: 456,
         operatorRolloutSyncedAt: "2026-05-29T12:02:00.000Z",
         activeTurnId: "old-current-turn",

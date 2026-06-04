@@ -1201,7 +1201,7 @@ function attachmentSummaryText(attachments = []) {
 
 function publicHelpUrl(env = process.env) {
   const configured = String(env.ORKESTR_PUBLIC_SITE_URL || env.ORKESTR_PUBLIC_HELP_URL || "").trim();
-  const fallback = "https://orkestr.de/";
+  const fallback = "https://orkestr.example.test/";
   try {
     const url = new URL(configured || fallback);
     return ["http:", "https:"].includes(url.protocol) ? url.toString() : fallback;

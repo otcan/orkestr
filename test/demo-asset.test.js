@@ -22,7 +22,7 @@ test("README demo asset does not expose private identifiers", () => {
     /\b\d{10,}\b/,
     /@(?:g\.us|c\.us|lid)\b/i,
     /\/home\/|\/root\//,
-    /ops\.|oguzcan|openclaw|metastate|peplab|magie|linkedin/i,
+    /private-(?:domain|host)|real-chat-id|personal-name|customer-project/i,
   ];
 
   for (const pattern of forbidden) {
