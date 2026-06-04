@@ -33,6 +33,12 @@ const capabilityDefinitions = [
     scopes: ["https://www.googleapis.com/auth/calendar.events.readonly"],
   },
   {
+    id: "calendar_actions",
+    label: "Calendar actions",
+    summary: "Create, update, and delete user-approved Google Calendar events.",
+    scopes: ["https://www.googleapis.com/auth/calendar.events"],
+  },
+  {
     id: "drive_file",
     label: "Drive selected files",
     summary: "Read metadata and content only for files selected or created with Orkestr.",
@@ -119,4 +125,3 @@ export function googleWorkspaceCapabilitySummary(input = []) {
   const labels = googleWorkspaceCapabilityLabels(input);
   return labels.length ? labels.join(", ") : "No Google Workspace capabilities";
 }
-

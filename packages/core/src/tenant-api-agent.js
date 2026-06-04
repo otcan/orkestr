@@ -1095,6 +1095,17 @@ function formatGoogleWorkspaceTool(result = {}) {
       }),
     ].join("\n");
   }
+  if (result.name === "orkestr_create_google_calendar_event") {
+    const event = output.event || {};
+    return `Google Calendar event created${clean(event.summary) ? `: ${clean(event.summary)}` : ""}${clean(event.id) ? ` (${clean(event.id)})` : ""}.`;
+  }
+  if (result.name === "orkestr_update_google_calendar_event") {
+    const event = output.event || {};
+    return `Google Calendar event updated${clean(event.summary) ? `: ${clean(event.summary)}` : ""}${clean(output.eventId || event.id) ? ` (${clean(output.eventId || event.id)})` : ""}.`;
+  }
+  if (result.name === "orkestr_delete_google_calendar_event") {
+    return `Google Calendar event deleted${clean(output.eventId) ? `: ${clean(output.eventId)}` : ""}.`;
+  }
   if (result.name === "orkestr_get_google_drive_file") {
     const file = output.file || {};
     return [
@@ -1146,7 +1157,7 @@ function formatToolResultFallback(toolResults = [], context = {}) {
     else if (result.name === "orkestr_list_skills") formatted = formatListSkillsTool(result);
     else if (["orkestr_search_gmail", "orkestr_read_gmail_message", "orkestr_read_latest_gmail_message"].includes(result.name)) formatted = formatGmailTool(result);
     else if (["orkestr_create_gmail_notification", "orkestr_update_gmail_notification", "orkestr_list_gmail_notifications", "orkestr_delete_gmail_notification", "orkestr_run_gmail_notification_now"].includes(result.name)) formatted = formatGmailNotificationTool(result);
-    else if (["orkestr_modify_gmail_message", "orkestr_create_gmail_draft", "orkestr_send_gmail_draft", "orkestr_send_gmail_message", "orkestr_list_google_calendar_events", "orkestr_get_google_drive_file"].includes(result.name)) formatted = formatGoogleWorkspaceTool(result);
+    else if (["orkestr_modify_gmail_message", "orkestr_create_gmail_draft", "orkestr_send_gmail_draft", "orkestr_send_gmail_message", "orkestr_list_google_calendar_events", "orkestr_create_google_calendar_event", "orkestr_update_google_calendar_event", "orkestr_delete_google_calendar_event", "orkestr_get_google_drive_file"].includes(result.name)) formatted = formatGoogleWorkspaceTool(result);
     else if (["orkestr_list_files", "orkestr_read_file", "orkestr_write_file"].includes(result.name)) formatted = formatFileTool(result);
     else if (["orkestr_list_timers", "orkestr_create_timer", "orkestr_delete_timer", "orkestr_run_timer"].includes(result.name)) formatted = formatTimerTool(result);
     else if (result.name === "orkestr_fetch_web_page") formatted = fallbackWebFetchToolAnswer([result.output]);
@@ -1462,7 +1473,7 @@ export async function buildTenantApiAgentInstructions(thread = {}, messages = []
     "If the user asks to use Gmail, Outlook, LinkedIn, files, or a browser desktop and the matching capability is false in the Tenant context JSON, say plainly that it is not connected or enabled for this chat yet. Do not imply that you checked it unless you used a tool.",
     "Do not tell contained users to open, check, or use the Orkestr UI for connector setup. This chat is the user surface; connector setup should happen through the sign-in instructions you provide in chat when parent app credentials exist.",
     "When Gmail capability is true and the user asks to search, list, open, read, inspect, or summarize Gmail, use the scoped Gmail tools directly. The user's request is consent for that same-user Gmail action; do not ask for repeated confirmation unless the target email or search is ambiguous.",
-    "When Gmail capability is true and the Tenant connectorAuth.gmail capabilities include Gmail actions, Gmail send, Calendar read, or Drive selected files, use the matching Google Workspace tools. For sending email, require explicit approval of recipients, subject, and body before sending; drafts may be created when the user asks to draft.",
+    "When Gmail capability is true and the Tenant connectorAuth.gmail capabilities include Gmail actions, Gmail send, Calendar read, Calendar actions, or Drive selected files, use the matching Google Workspace tools. For sending email, require explicit approval of recipients, subject, and body before sending; drafts may be created when the user asks to draft. For Calendar actions, require explicit approval of the calendar, title, time, and changed/deleted event before creating, updating, or deleting events.",
     "When Gmail capability is true and the user asks to notify, alert, push, monitor, or periodically check new Gmail in this chat, call the Gmail notification tool in that turn to create or manage the rule. Do not ask for yes/no confirmation when the safe defaults are enough; the user's request is consent for a same-chat notification rule. Use the safe default query when the user did not specify a narrower query, and explain after the tool result if the requested interval was rounded up by policy.",
     webFetch
       ? "When the user asks for current public web page content, public site topics, public links, or a public page summary, use orkestr_fetch_web_page first. Answer only from the returned title, text, links, and counts. If the fetch fails or the returned content is insufficient, say that plainly instead of claiming you checked the page."
