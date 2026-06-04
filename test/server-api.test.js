@@ -259,7 +259,31 @@ test("server exposes health, readiness, version, and agent message APIs", async 
     assert.equal(mode.thread.codexModel, "gpt-test");
     assert.equal(upload.attachments[0].filename, "hello.txt");
     assert.equal(upload.attachments[0].mimetype, "text/plain");
+    assert.match(upload.attachments[0].id, /^att_[a-f0-9]{32}$/);
     assert.ok(String(upload.attachments[0].saved_path || "").endsWith("hello.txt"));
+    await request(baseUrl, `/api/threads/${createdThread.thread.id}/input`, {
+      method: "POST",
+      body: JSON.stringify({
+        text: "Please inspect the uploaded file.",
+        attachments: upload.attachments,
+      }),
+    });
+    const messagePage = await request(baseUrl, `/api/threads/${createdThread.thread.id}/messages`);
+    const uploadedMessage = messagePage.messages.find((message) => message.role === "user" && (message.attachments || []).length);
+    assert.ok(uploadedMessage, "uploaded thread message should include attachments");
+    assert.match(uploadedMessage.attachments[0].downloadUrl, /^\/api\/threads\/.+\/attachments\/att_[a-f0-9]{32}\/download$/);
+    const downloadResponse = await fetch(`${baseUrl}${uploadedMessage.attachments[0].downloadUrl}`);
+    const downloaded = await downloadResponse.text();
+    assert.equal(downloadResponse.status, 200);
+    assert.match(downloadResponse.headers.get("content-disposition") || "", /hello\.txt/);
+    assert.equal(downloaded, "hello attachment");
+    const missingDownload = await fetch(`${baseUrl}/api/threads/${createdThread.thread.id}/attachments/att_missing/download`);
+    assert.equal(missingDownload.status, 404);
+    const crossThreadDownload = await fetch(`${baseUrl}/api/threads/${relativeWorkspaceThread.thread.id}/attachments/${uploadedMessage.attachments[0].id}/download`);
+    assert.equal(crossThreadDownload.status, 404);
+    await fs.unlink(String(uploadedMessage.attachments[0].path || uploadedMessage.attachments[0].saved_path));
+    const staleDownload = await fetch(`${baseUrl}${uploadedMessage.attachments[0].downloadUrl}`);
+    assert.equal(staleDownload.status, 403);
   } finally {
     await new Promise((resolve) => server.close(resolve));
     if (priorHome === undefined) delete process.env.ORKESTR_HOME;

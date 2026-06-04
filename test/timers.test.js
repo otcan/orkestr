@@ -15,6 +15,12 @@ test("daily timers schedule the next future clock time", () => {
   assert.equal(next.getMinutes(), 0);
 });
 
+test("daily timers can schedule clock time in an IANA timezone", () => {
+  const timer = { cadence: "daily", time: "09:30", timezone: "Europe/Berlin" };
+  assert.equal(nextRunAt(timer, new Date("2026-01-15T08:00:00.000Z")), "2026-01-15T08:30:00.000Z");
+  assert.equal(nextRunAt(timer, new Date("2026-01-15T08:40:00.000Z")), "2026-01-16T08:30:00.000Z");
+});
+
 test("timer persistence creates records with a next run", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-timers-"));
   const env = { ORKESTR_HOME: home };

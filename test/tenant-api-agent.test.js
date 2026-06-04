@@ -2138,13 +2138,38 @@ test("tenant api-agent stores onboarding profile details from chat", async () =>
     notes: "",
   }, { principal, thread }, env);
   const fetched = await runTenantApiAgentTool("orkestr_get_onboarding_profile", {}, { principal, thread }, env);
-  const context = tenantContextFromInstructions(await buildTenantApiAgentInstructions(thread, [], env));
+  const timer = await runTenantApiAgentTool("orkestr_create_timer", {
+    label: "Morning check-in",
+    targetType: "thread",
+    target: "",
+    cadence: "daily",
+    delay: "",
+    runAt: "",
+    time: "09:00",
+    timezone: "",
+    every: "",
+    prompt: "Ask me for my morning priorities.",
+    enabled: true,
+  }, { principal, thread }, env);
+  const instructions = await buildTenantApiAgentInstructions(thread, [], env);
+  const context = tenantContextFromInstructions(instructions);
 
   assert.equal(updated.profile.displayName, "Can");
   assert.equal(updated.profile.toolRequests, "Connect Gmail and open the managed desktop.");
   assert.equal(second.profile.displayName, "Can");
   assert.equal(second.profile.preferences, "Prefer morning check-ins.");
+  await assert.rejects(() => runTenantApiAgentTool("orkestr_update_onboarding_profile", {
+    displayName: "",
+    timezone: "Mars/Base",
+    locale: "",
+    preferences: "",
+    toolRequests: "",
+    notes: "",
+  }, { principal, thread }, env), /invalid_timezone/);
   assert.equal(fetched.profile.timezone, "Europe/Berlin");
+  assert.equal(timer.timer.timezone, "Europe/Berlin");
+  assert.match(instructions, /IANA timezone/i);
+  assert.match(instructions, /orkestr_update_onboarding_profile/i);
   assert.equal(context.onboardingProfile.displayName, "Can");
   assert.equal(context.onboardingProfile.preferences, "Prefer morning check-ins.");
 });

@@ -46,7 +46,11 @@
       @if ((message.attachments || []).length > 0) {
         <div class="attachments">
           @for (attachment of message.attachments || []; track attachmentLabel(attachment)) {
-            <span>{{ attachmentLabel(attachment) }}</span>
+            @if (attachmentDownloadUrl(attachment)) {
+              <a [href]="attachmentDownloadUrl(attachment)" [attr.download]="attachmentLabel(attachment)">{{ attachmentLabel(attachment) }}</a>
+            } @else {
+              <span>{{ attachmentLabel(attachment) }}</span>
+            }
           }
         </div>
       }

@@ -18,6 +18,8 @@ function assertPublicShell(html) {
   assert.match(html, /Join waitlist/);
   assert.match(html, /id="waitlist-form"/);
   assert.match(html, /\/api\/public\/waitlist/);
+  assert.match(html, /name="timezone"/);
+  assert.match(html, /resolvedOptions\(\)\.timeZone/);
   assert.match(html, /View OSS repo/);
   assert.match(html, /href="\/privacy"/);
   assert.match(html, /href="\/terms"/);

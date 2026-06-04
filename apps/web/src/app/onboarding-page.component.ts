@@ -1,13 +1,13 @@
 import { ChangeDetectorRef, Component, EventEmitter, Input, OnChanges, OnDestroy, OnInit, Output, SimpleChanges, inject } from "@angular/core";
 import { FormsModule } from "@angular/forms";
 import { firstValueFrom } from "rxjs";
-import { ApiService, BackupRestorePlanResponse, BackupStatusResponse, BrowserSession, CodexAppServerStatus, CodexMigrationResponse, CodexStoredThread, ConnectorStatus, OutlookOAuthPollResponse, OutlookOAuthStartResponse, SetupStatus, StateBackupRecord, SystemDoctorResponse, ThreadSummary, VersionResponse } from "./api.service";
+import { ApiService, BackupRestorePlanResponse, BackupStatusResponse, BrowserSession, CodexAppServerStatus, CodexMigrationResponse, CodexStoredThread, ConnectorStatus, OnboardingProfile, OutlookOAuthPollResponse, OutlookOAuthStartResponse, SetupStatus, StateBackupRecord, SystemDoctorResponse, ThreadSummary, UserOnboardingState, VersionResponse } from "./api.service";
 import { SecurityChallengesPanelComponent } from "./security-challenges-panel.component";
 
 type ConnectorStep = "openai" | "codex" | "gmail" | "linkedin" | "whatsapp" | "browsers";
 type MarketingStep = "google-marketing";
 type MaintenanceStep = "maintenance";
-type OnboardingStep = "goal" | "system" | "security" | MaintenanceStep | MarketingStep | ConnectorStep | "finish";
+type OnboardingStep = "goal" | "profile" | "system" | "security" | MaintenanceStep | MarketingStep | ConnectorStep | "finish";
 type OnboardingGoalId = "whatsapp-codex" | "virtual-desktop" | "inbox-summary";
 type SetupPageMode = "setup" | "onboarding";
 type MailProvider = "gmail" | "outlook";
@@ -64,6 +64,11 @@ export class OnboardingPageComponent implements OnInit, OnChanges, OnDestroy {
   notice = "";
   activeStep: OnboardingStep = "goal";
   selectedGoal: OnboardingGoalId = "whatsapp-codex";
+  onboardingProfile: OnboardingProfile | null = null;
+  timezone = "";
+  detectedTimezone = "";
+  timezoneLoaded = false;
+  timezoneSaving = false;
   firstThread: ThreadSummary | null = null;
   whatsappChatId = "";
   whatsappChatName = "";
@@ -136,6 +141,8 @@ export class OnboardingPageComponent implements OnInit, OnChanges, OnDestroy {
   private readonly leanSetupConnectorIds: ConnectorStep[] = ["codex", "whatsapp", "browsers"];
 
   ngOnInit(): void {
+    this.detectedTimezone = this.browserTimezone();
+    if (!this.timezone) this.timezone = this.detectedTimezone;
     this.restoreProgress();
     this.applySetupSectionFromInput();
     void this.load();
@@ -158,16 +165,18 @@ export class OnboardingPageComponent implements OnInit, OnChanges, OnDestroy {
   async load(showBusy = true): Promise<void> {
     if (showBusy) this.busy = true;
     try {
-      const [setupResult, doctorResult, versionResult] = await Promise.allSettled([
+      const [setupResult, doctorResult, versionResult, onboardingResult] = await Promise.allSettled([
         firstValueFrom(this.api.setupStatus()),
         firstValueFrom(this.api.systemDoctor()),
         firstValueFrom(this.api.version()),
+        firstValueFrom(this.api.myOnboarding()),
       ]);
       if (setupResult.status === "rejected") throw setupResult.reason;
       const setup = setupResult.value;
       this.setup = setup;
       this.doctor = doctorResult.status === "fulfilled" ? doctorResult.value : null;
       this.versionInfo = versionResult.status === "fulfilled" ? versionResult.value : this.versionInfo;
+      if (onboardingResult.status === "fulfilled") this.applyOnboardingState(onboardingResult.value.onboarding || null);
       if (this.activeStep === "maintenance") await this.loadBackupStatus(false);
       this.hydrateForms(setup);
       if (this.activeStep === "codex") await this.loadCodexAppServer(false);
@@ -193,6 +202,28 @@ export class OnboardingPageComponent implements OnInit, OnChanges, OnDestroy {
     }
     await this.saveConnector("openai", { openaiApiKey }, "OpenAI settings saved.");
     this.openaiApiKey = "";
+  }
+
+  async saveTimezone(): Promise<void> {
+    const timezone = this.timezone.trim();
+    if (!timezone) {
+      this.error = "Enter your timezone before continuing.";
+      return;
+    }
+    this.busy = true;
+    this.timezoneSaving = true;
+    try {
+      const result = await firstValueFrom(this.api.updateMyOnboardingProfile({ timezone }));
+      this.applyOnboardingState(result.onboarding || null);
+      this.notice = `Timezone saved: ${this.timezoneLabel()}.`;
+      this.error = "";
+    } catch (error) {
+      this.error = this.errorText(error);
+    } finally {
+      this.timezoneSaving = false;
+      this.busy = false;
+      this.renderNow();
+    }
   }
 
   async saveGmail(): Promise<void> {
@@ -556,6 +587,7 @@ export class OnboardingPageComponent implements OnInit, OnChanges, OnDestroy {
 
   stepStateLabel(id: OnboardingStep): string {
     if (id === "goal") return this.selectedGoal ? "selected" : "choose";
+    if (id === "profile") return this.timezoneDone() ? "saved" : "needed";
     if (id === "system") return this.setup ? "checked" : "checking";
     if (id === "security") return this.securityStepLabel();
     if (id === "maintenance") return this.maintenanceStepLabel();
@@ -566,6 +598,7 @@ export class OnboardingPageComponent implements OnInit, OnChanges, OnDestroy {
 
   stepStateClass(id: OnboardingStep): string {
     if (id === "goal") return this.selectedGoal ? "ready" : "idle";
+    if (id === "profile") return this.timezoneDone() ? "ready" : "partial";
     if (id === "system") return this.setup ? "ready" : "idle";
     if (id === "security") return this.securityStepClass();
     if (id === "maintenance") return this.backupStatus?.latestBackup ? "ready" : "partial";
@@ -576,6 +609,7 @@ export class OnboardingPageComponent implements OnInit, OnChanges, OnDestroy {
 
   stepDone(id: OnboardingStep): boolean {
     if (id === "goal") return Boolean(this.selectedGoal);
+    if (id === "profile") return this.timezoneDone();
     if (id === "system") return Boolean(this.setup);
     if (id === "security") return this.securityDone();
     if (id === "maintenance") return Boolean(this.backupStatus?.latestBackup);
@@ -695,6 +729,20 @@ export class OnboardingPageComponent implements OnInit, OnChanges, OnDestroy {
     return this.isSetupMode() ? "Back to Orkestr" : "Open Orkestr";
   }
 
+  timezoneDone(): boolean {
+    return Boolean(String(this.onboardingProfile?.timezone || "").trim());
+  }
+
+  timezoneLabel(): string {
+    return String(this.onboardingProfile?.timezone || this.timezone || this.detectedTimezone || "").trim();
+  }
+
+  timezoneSummary(): string {
+    if (this.timezoneDone()) return `Saved as ${this.timezoneLabel()}.`;
+    if (this.detectedTimezone) return `Detected ${this.detectedTimezone}.`;
+    return "Use an IANA timezone such as Europe/Berlin or America/New_York.";
+  }
+
   activeStepIndex(): number {
     return Math.max(0, this.pageSections().findIndex((step) => step.id === this.activeStep));
   }
@@ -723,6 +771,7 @@ export class OnboardingPageComponent implements OnInit, OnChanges, OnDestroy {
     const byId = Object.fromEntries(this.connectorSteps.map((step) => [step.id, step]));
     return [
       { id: "goal", label: "Start with one capability", eyebrow: "Start here" },
+      { id: "profile", label: "Timezone", eyebrow: "Profile" },
       { id: "system", label: "Connections", eyebrow: "Runtime" },
       { id: "security", label: "Secure access", eyebrow: "Remote safety" },
       ...this.requiredConnectorSteps().map((id) => byId[id]),
@@ -1415,6 +1464,14 @@ export class OnboardingPageComponent implements OnInit, OnChanges, OnDestroy {
     this.formHydrated = true;
   }
 
+  private applyOnboardingState(onboarding: UserOnboardingState | null): void {
+    this.timezoneLoaded = true;
+    if (onboarding?.profile) this.onboardingProfile = onboarding.profile;
+    const savedTimezone = String(this.onboardingProfile?.timezone || "").trim();
+    if (savedTimezone) this.timezone = savedTimezone;
+    else if (!this.timezone.trim()) this.timezone = this.detectedTimezone;
+  }
+
   private mailAccountRowsFor(provider: MailProvider): MailAccountRow[] {
     const connector = this.connector(provider);
     const details = connector?.details || {};
@@ -1507,6 +1564,14 @@ export class OnboardingPageComponent implements OnInit, OnChanges, OnDestroy {
       this.cdr.detectChanges();
     } catch {
       // Change detection may already be running during synchronous tests.
+    }
+  }
+
+  private browserTimezone(): string {
+    try {
+      return String(Intl.DateTimeFormat().resolvedOptions().timeZone || "").trim();
+    } catch {
+      return "";
     }
   }
 

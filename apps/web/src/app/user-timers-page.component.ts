@@ -108,7 +108,7 @@ export class UserTimersPageComponent implements OnInit {
 
   timerTimeLabel(timer: TimerRecord): string {
     if (timer.cadence === "interval") return String(timer.every || "interval");
-    return String(timer.time || "09:00");
+    return [String(timer.time || "09:00"), String(timer.timezone || "").trim()].filter(Boolean).join(" ");
   }
 
   private upsertTimer(timer: TimerRecord): TimerRecord[] {

@@ -8,6 +8,7 @@ import { clearRuntimeLeasesForThread, runtimeStatus } from "../../core/src/runti
 import { classifyApprovalReply } from "../../core/src/runtime-settings.js";
 import { processApiAgentThreadInput, threadUsesApiAgent } from "../../core/src/tenant-api-agent.js";
 import { parseThreadInputCommand } from "../../core/src/thread-commands.js";
+import { redactDeniedThreadAttachmentPaths, resolveThreadAttachments } from "../../core/src/thread-attachments.js";
 import { appendThreadMessage, createThreadForPrincipal, enqueueThreadInputForPrincipal, listThreadMessages, listThreads, listThreadsForPrincipal, updateThread, updateThreadMessage } from "../../core/src/threads.js";
 import { adminUserId, findOrCreateExternalUser, normalizeUserId } from "../../core/src/users.js";
 import { dataPaths, ensureDataDirs } from "../../storage/src/paths.js";
@@ -184,6 +185,20 @@ function publicExternalBridgeHealth(payload = {}) {
     accounts: Array.isArray(payload.accounts) ? payload.accounts.map(publicBridgeAccount) : undefined,
     updatedAt: pickString(payload.updatedAt),
   };
+}
+
+function attachmentSetKey(attachments = []) {
+  return (attachments || [])
+    .map((attachment) => pickString(attachment.id, attachment.path, attachment.saved_path))
+    .filter(Boolean)
+    .sort()
+    .join("\n");
+}
+
+async function persistMessageAttachmentsIfChanged(threadId, message, attachments, env) {
+  if (!threadId || !message?.id || !attachments.length) return;
+  if (attachmentSetKey(message.attachments || []) === attachmentSetKey(attachments)) return;
+  await updateThreadMessage(threadId, message.id, { attachments }, env).catch(() => null);
 }
 
 async function externalBridgeAccounts(bridgeUrl, healthPayload, fetchImpl, headers = {}) {
@@ -1714,9 +1729,18 @@ async function deliverWhatsAppRepliesOnce(env = process.env, fetchImpl = fetch) 
         env,
         messageId: message.id,
       });
-      const attachments = preparedOutbound.attachments;
+      const resolvedOutboundAttachments = await resolveThreadAttachments({
+        thread,
+        text: pickString(message.text),
+        attachments: [
+          ...(Array.isArray(message.attachments) ? message.attachments : []),
+          ...preparedOutbound.attachments,
+        ],
+        env,
+      });
+      const attachments = resolvedOutboundAttachments.attachments;
       const deliveryType = message.source === "orkestr_runtime" ? "router_update" : "final";
-      const text = appendWhatsAppDebugFooter(formatWhatsAppOutboundText(preparedOutbound.text), {
+      const text = appendWhatsAppDebugFooter(formatWhatsAppOutboundText(redactDeniedThreadAttachmentPaths(preparedOutbound.text, { thread, env })), {
         message,
         thread,
         messages,
@@ -1737,6 +1761,7 @@ async function deliverWhatsAppRepliesOnce(env = process.env, fetchImpl = fetch) 
         skipped.push({ agentId, threadId, messageId: message.id, reason: "duplicate_text" });
         continue;
       }
+      await persistMessageAttachmentsIfChanged(threadId, message, attachments, env);
 
       const result = await sendWhatsAppOutboundCandidate({
         state,

@@ -2,6 +2,7 @@ import {
   getThread,
   listThreadMessages,
 } from "../../../../../packages/core/src/threads.js";
+import { addAttachmentDownloadUrls } from "../../../../../packages/core/src/thread-attachments.js";
 import { visibleThreadMessages } from "../../../../../packages/core/src/thread-message-visibility.js";
 import {
   syncCodexRuntimeThreadMessages,
@@ -90,12 +91,12 @@ function latestPendingQuestion(messages: any[] = []) {
   return null;
 }
 
-function bridgeMessage(message: any, index: number) {
+function bridgeMessage(thread: any, message: any, index: number) {
   const role = String(message?.role || "assistant").trim() === "user" ? "user" : "assistant";
   const text = String(message?.text || "").trim();
   const timestamp = message?.timestamp || message?.createdAt || new Date().toISOString();
   const phase = message?.phase || (role === "assistant" ? "final_answer" : null);
-  return {
+  return addAttachmentDownloadUrls(thread, {
     ...message,
     cursor: messageCursor(message, index),
     timestamp,
@@ -107,7 +108,7 @@ function bridgeMessage(message: any, index: number) {
     text,
     eventId: message?.eventId || message?.id || `${timestamp}:${index}`,
     awaitingInputCandidate: isNeedInputMessage({ ...message, role, phase, text }),
-  };
+  });
 }
 
 function normalizedMessageText(value: unknown): string {
@@ -172,7 +173,7 @@ export function threadMessagePage(thread: any, rawMessages: any[] = [], query: R
   const limit = requestedLimit ? Math.min(requestedLimit, 100) : 100;
   const orderedMessages = visibleThreadMessages(chronologicalMessages(rawMessages));
   const pendingQuestion = latestPendingQuestion(orderedMessages);
-  let messages = dedupeDisplayMessages(orderedMessages.map(bridgeMessage).filter((message) => message.text));
+  let messages = dedupeDisplayMessages(orderedMessages.map((message, index) => bridgeMessage(thread, message, index)).filter((message) => message.text));
   if (since > 0) messages = messages.filter((message) => Number(message.cursor || 0) > since);
   if (before > 0) messages = messages.filter((message) => Number(message.cursor || 0) < before);
   messages = messages.slice(-limit);

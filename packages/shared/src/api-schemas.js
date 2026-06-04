@@ -266,6 +266,7 @@ export const timerCreateSchema = {
       agentId: stringValue,
       cadence: stringValue,
       time: stringValue,
+      timezone: stringValue,
       every: stringValue,
       runAt: stringValue,
       prompt: stringValue,

@@ -535,6 +535,7 @@ export interface TimerRecord {
   cadence: string;
   nextRunAt: string;
   time?: string;
+  timezone?: string;
   every?: string | null;
   prompt?: string;
   promptFile?: string;
@@ -979,6 +980,31 @@ export interface UserResponse {
   user: OrkestrUser;
 }
 
+export interface OnboardingProfile {
+  displayName?: string;
+  timezone?: string;
+  locale?: string;
+  preferences?: string;
+  toolRequests?: string;
+  notes?: string;
+  updatedAt?: string;
+}
+
+export interface UserOnboardingState {
+  schemaVersion?: number;
+  userId?: string;
+  state?: string;
+  invite?: Record<string, unknown> | null;
+  profile?: OnboardingProfile;
+  updatedAt?: string;
+}
+
+export interface UserOnboardingResponse {
+  ok?: boolean;
+  user?: OrkestrUser;
+  onboarding: UserOnboardingState;
+}
+
 export interface UserIdentitiesResponse {
   ok?: boolean;
   userId: string;
@@ -999,6 +1025,7 @@ export interface WaitlistEntry {
   displayName: string;
   phoneNumber: string;
   email?: string;
+  timezone?: string;
   intendedUse?: string;
   status: "pending" | "contacted" | "approved" | "rejected" | "paused" | string;
   acceptedTerms?: boolean;
@@ -1177,6 +1204,14 @@ export class ApiService {
 
   currentUser(): Observable<UserResponse> {
     return this.http.get<UserResponse>(this.api("/users/me"));
+  }
+
+  myOnboarding(): Observable<UserOnboardingResponse> {
+    return this.http.get<UserOnboardingResponse>(this.api("/users/me/onboarding"));
+  }
+
+  updateMyOnboardingProfile(profile: OnboardingProfile): Observable<UserOnboardingResponse> {
+    return this.http.patch<UserOnboardingResponse>(this.api("/users/me/onboarding"), { profile });
   }
 
   createUser(body: Record<string, unknown>): Observable<UserResponse> {

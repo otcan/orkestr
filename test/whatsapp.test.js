@@ -19,7 +19,7 @@ import { createAndBindWhatsAppThreadGroup } from "../packages/connectors/src/wha
 import { prepareWhatsAppTableAttachments } from "../packages/connectors/src/whatsapp-table-attachments.js";
 import { mergeWhatsAppOutboundIntents, mergeWhatsAppOutboundMirrorCursors } from "../packages/connectors/src/whatsapp-outbound-intents.js";
 import { writeConnectorConfig } from "../packages/storage/src/config.js";
-import { userDataPaths } from "../packages/storage/src/paths.js";
+import { dataPaths, userDataPaths } from "../packages/storage/src/paths.js";
 import { listEvents } from "../packages/storage/src/store.js";
 
 afterEach(() => {
@@ -1625,12 +1625,16 @@ test("whatsapp inbound can route directly to a thread and mirror its reply once"
     bridgeUrl: "http://wa.local",
     threadRoutes: { "chat-thread": "thread-wa" },
   }, env);
+  const inboundMediaDir = path.join(dataPaths(env).home, "whatsapp-bridge", "inbound-media", "test");
+  await fs.mkdir(inboundMediaDir, { recursive: true });
+  const inboundImagePath = path.join(inboundMediaDir, "thread-image.jpg");
+  await fs.writeFile(inboundImagePath, "image", "utf8");
 
   const routed = await routeWhatsAppInbound({
     eventId: "wa-thread-1",
     chatId: "chat-thread",
     text: "thread status?",
-    attachments: [{ kind: "image", path: "/tmp/thread-image.jpg", filename: "thread-image.jpg", mimetype: "image/jpeg" }],
+    attachments: [{ kind: "image", path: inboundImagePath, filename: "thread-image.jpg", mimetype: "image/jpeg" }],
   }, env);
   await runNextThreadMessage("thread-wa", {}, env);
 
@@ -1646,7 +1650,7 @@ test("whatsapp inbound can route directly to a thread and mirror its reply once"
 
   assert.equal(routed.threadId, "thread-wa");
   assert.equal(messages.length, 2);
-  assert.equal(messages[0].attachments[0].path, "/tmp/thread-image.jpg");
+  assert.equal(messages[0].attachments[0].path, inboundImagePath);
   assert.equal(messages[0].attachments[0].filename, "thread-image.jpg");
   assert.equal(delivery.delivered.length, 1);
   assert.equal(duplicate.delivered.length, 0);
@@ -3404,6 +3408,91 @@ test("whatsapp delivery sends markdown tables as CSV attachments", async () => {
   ].join("\n"));
   assert.equal(delivery.delivered[0].attachments.length, 1);
   assert.equal(delivery.failed.length, 0);
+});
+
+test("whatsapp delivery sends allowed local paths as media attachments and does not replay them", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-path-attachment-"));
+  const env = externalBridgeEnv(home);
+  const paths = dataPaths(env);
+  const uploadDir = path.join(paths.home, "uploads", "thread-wa-path-attachment");
+  await fs.mkdir(uploadDir, { recursive: true });
+  const reportPath = path.join(uploadDir, "report.txt");
+  await fs.writeFile(reportPath, "report payload", "utf8");
+  await createThread({ id: "thread-wa-path-attachment", name: "WA Path Attachment" }, env);
+  await writeConnectorConfig("whatsapp", {
+    bridgeMode: "external",
+    bridgeUrl: "http://wa.local",
+    threadRoutes: { "chat-path-attachment": "thread-wa-path-attachment" },
+  }, env);
+
+  const routed = await routeWhatsAppInbound({ eventId: "wa-path-attachment-1", chatId: "chat-path-attachment", text: "send report" }, env);
+  const reply = await appendThreadMessage("thread-wa-path-attachment", {
+    role: "assistant",
+    source: "codex-rollout",
+    phase: "final_answer",
+    state: "completed",
+    text: `Generated report: ${reportPath}`,
+    parentMessageId: routed.message.id,
+    connector: "whatsapp",
+    chatId: "chat-path-attachment",
+  }, env);
+
+  const calls = [];
+  const delivery = await deliverWhatsAppReplies(env, async (url, options) => {
+    calls.push({ url, body: JSON.parse(options.body) });
+    return response({ ok: true, ids: ["sent-report"] });
+  });
+  const duplicate = await deliverWhatsAppReplies(env, async () => {
+    throw new Error("should not resend path attachment");
+  });
+  const storedReply = (await listThreadMessages("thread-wa-path-attachment", env)).find((message) => message.id === reply.id);
+
+  assert.equal(delivery.delivered.length, 1);
+  assert.equal(duplicate.delivered.length, 0);
+  assert.equal(calls[0].url.pathname, "/send-media");
+  assert.deepEqual(calls[0].body.paths, [reportPath]);
+  assert.equal(storedReply.attachments.length, 1);
+  assert.match(storedReply.attachments[0].id, /^att_[a-f0-9]{32}$/);
+  assert.equal(storedReply.attachments[0].filename, "report.txt");
+});
+
+test("whatsapp delivery skips forbidden local paths and redacts them from outbound text", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-forbidden-path-"));
+  const env = externalBridgeEnv(home);
+  const paths = dataPaths(env);
+  await fs.mkdir(paths.secrets, { recursive: true });
+  const secretPath = path.join(paths.secrets, "token.txt");
+  await fs.writeFile(secretPath, "secret", "utf8");
+  await createThread({ id: "thread-wa-forbidden-path", name: "WA Forbidden Path" }, env);
+  await writeConnectorConfig("whatsapp", {
+    bridgeMode: "external",
+    bridgeUrl: "http://wa.local",
+    threadRoutes: { "chat-forbidden-path": "thread-wa-forbidden-path" },
+  }, env);
+
+  const routed = await routeWhatsAppInbound({ eventId: "wa-forbidden-path-1", chatId: "chat-forbidden-path", text: "send report" }, env);
+  await appendThreadMessage("thread-wa-forbidden-path", {
+    role: "assistant",
+    source: "codex-rollout",
+    phase: "final_answer",
+    state: "completed",
+    text: `Secret path: ${secretPath}`,
+    parentMessageId: routed.message.id,
+    connector: "whatsapp",
+    chatId: "chat-forbidden-path",
+  }, env);
+
+  const calls = [];
+  const delivery = await deliverWhatsAppReplies(env, async (url, options) => {
+    calls.push({ url, body: JSON.parse(options.body) });
+    return response({ ok: true, ids: ["sent-redacted"] });
+  });
+
+  assert.equal(delivery.delivered.length, 1);
+  assert.equal(calls[0].url.pathname, "/send-text");
+  assert.equal(calls[0].body.paths, undefined);
+  assert.doesNotMatch(calls[0].body.text, new RegExp(secretPath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+  assert.match(calls[0].body.text, /\[local file path omitted]/);
 });
 
 test("whatsapp table attachment detection ignores fenced code blocks", async () => {

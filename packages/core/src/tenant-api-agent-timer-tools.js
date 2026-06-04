@@ -4,12 +4,13 @@ import {
   listTimersForPrincipal,
   runTimerNowForPrincipal,
 } from "./timers.js";
+import { readUserOnboardingProfileForPrincipal } from "./user-onboarding.js";
 
 function clean(value) {
   return String(value || "").trim();
 }
 
-function timerCreateInput(args = {}, thread = null) {
+function timerCreateInput(args = {}, thread = null, profileTimezone = "") {
   const targetType = clean(args.targetType || "thread").toLowerCase();
   const target = clean(args.target || (targetType === "thread" ? thread?.id : ""));
   const delay = clean(args.delay || args.after || args.in);
@@ -21,6 +22,7 @@ function timerCreateInput(args = {}, thread = null) {
     target,
     cadence,
     time: clean(args.time || "09:00"),
+    timezone: clean(args.timezone || args.timeZone || profileTimezone),
     every: clean(args.every),
     delay,
     runAt,
@@ -45,7 +47,7 @@ export function tenantApiAgentTimerToolDefinitions() {
     {
       type: "function",
       name: "orkestr_create_timer",
-      description: "Create a timer for this tenant from chat. Use this when the user asks to remind them, schedule a recurring check, or run a future task in this chat.",
+      description: "Create a timer for this tenant from chat. Use this when the user asks to remind them, schedule a recurring check, or run a future task in this chat. For daily or weekly clock times, use the user's saved IANA timezone from the onboarding profile.",
       parameters: {
         type: "object",
         properties: {
@@ -56,11 +58,12 @@ export function tenantApiAgentTimerToolDefinitions() {
           delay: { type: "string", description: "Relative delay for one-shot timers, such as 2m, 10 minutes, or 2 hours. Empty string if unused." },
           runAt: { type: "string", description: "Absolute ISO time for one-shot timers. Empty string if unused." },
           time: { type: "string", description: "Clock time such as 09:00 for daily/weekly timers, or empty string for interval timers." },
+          timezone: { type: "string", description: "IANA timezone for daily/weekly clock times, such as Europe/Berlin. Empty string for relative or interval timers." },
           every: { type: "string", description: "Interval expression such as 2h or 1d for interval timers, otherwise empty string." },
           prompt: { type: "string", description: "The instruction Orkestr should send when the timer fires." },
           enabled: { type: "boolean", description: "Whether the timer should be enabled immediately." },
         },
-        required: ["label", "targetType", "target", "cadence", "delay", "runAt", "time", "every", "prompt", "enabled"],
+        required: ["label", "targetType", "target", "cadence", "delay", "runAt", "time", "timezone", "every", "prompt", "enabled"],
         additionalProperties: false,
       },
       strict: true,
@@ -103,9 +106,10 @@ export async function runTenantApiAgentTimerTool(name = "", args = {}, context =
     return { handled: true, result: { timers: await listTimersForPrincipal(principal, env) } };
   }
   if (tool === "orkestr_create_timer") {
+    const profile = await readUserOnboardingProfileForPrincipal(principal, env).catch(() => null);
     return {
       handled: true,
-      result: { timer: await createTimerForPrincipal(timerCreateInput(args, context.thread || null), principal, env) },
+      result: { timer: await createTimerForPrincipal(timerCreateInput(args, context.thread || null, profile?.profile?.timezone || ""), principal, env) },
     };
   }
   if (tool === "orkestr_delete_timer") {

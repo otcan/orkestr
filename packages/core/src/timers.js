@@ -24,6 +24,88 @@ function parseClock(time = "09:00") {
   };
 }
 
+function normalizeTimerTimezone(value = "") {
+  const timezone = String(value || "").trim().slice(0, 80);
+  if (!timezone) return "";
+  try {
+    return Intl.DateTimeFormat("en-US", { timeZone: timezone }).resolvedOptions().timeZone || timezone;
+  } catch {
+    const error = new Error("invalid_timer_timezone");
+    error.statusCode = 400;
+    throw error;
+  }
+}
+
+function storedTimerTimezone(value = "") {
+  try {
+    return normalizeTimerTimezone(value);
+  } catch {
+    return "";
+  }
+}
+
+function timeZoneParts(date = new Date(), timezone = "") {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: timezone,
+    hourCycle: "h23",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  }).formatToParts(date);
+  const values = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  return {
+    year: Number(values.year),
+    month: Number(values.month),
+    day: Number(values.day),
+    hour: Number(values.hour),
+    minute: Number(values.minute),
+    second: Number(values.second),
+  };
+}
+
+function timeZoneOffsetMs(date = new Date(), timezone = "") {
+  const parts = timeZoneParts(date, timezone);
+  const localAsUtc = Date.UTC(parts.year, parts.month - 1, parts.day, parts.hour, parts.minute, parts.second, 0);
+  return localAsUtc - date.getTime();
+}
+
+function zonedWallClockToUtc(parts = {}, timezone = "") {
+  const localAsUtc = Date.UTC(parts.year, parts.month - 1, parts.day, parts.hour, parts.minute, 0, 0);
+  let utcMs = localAsUtc;
+  for (let index = 0; index < 3; index += 1) {
+    utcMs = localAsUtc - timeZoneOffsetMs(new Date(utcMs), timezone);
+  }
+  return new Date(utcMs);
+}
+
+function addLocalDays(parts = {}, days = 1) {
+  const shifted = new Date(Date.UTC(parts.year, parts.month - 1, parts.day + days, parts.hour, parts.minute, 0, 0));
+  return {
+    year: shifted.getUTCFullYear(),
+    month: shifted.getUTCMonth() + 1,
+    day: shifted.getUTCDate(),
+    hour: shifted.getUTCHours(),
+    minute: shifted.getUTCMinutes(),
+  };
+}
+
+function nextZonedClockRunAt(timer, from = new Date()) {
+  const timezone = normalizeTimerTimezone(timer.timezone);
+  const cadence = String(timer.cadence || "daily").toLowerCase();
+  const { hour, minute } = parseClock(timer.time || "09:00");
+  const localNow = timeZoneParts(from, timezone);
+  let candidateParts = { ...localNow, hour, minute };
+  let candidate = zonedWallClockToUtc(candidateParts, timezone);
+  if (candidate <= from) {
+    candidateParts = addLocalDays(candidateParts, cadence === "weekly" ? 7 : 1);
+    candidate = zonedWallClockToUtc(candidateParts, timezone);
+  }
+  return candidate.toISOString();
+}
+
 function parseIntervalMs(value) {
   const match = String(value || "").trim().match(/^(\d+)\s*(m|h|d)$/i);
   if (!match) return dayMs;
@@ -142,6 +224,7 @@ export function nextRunAt(timer, from = new Date()) {
   if (cadence === "interval") {
     return new Date(from.getTime() + parseIntervalMs(timer.every || "1d")).toISOString();
   }
+  if (timer.timezone) return nextZonedClockRunAt(timer, from);
   const { hour, minute } = parseClock(timer.time || "09:00");
   const next = new Date(from);
   next.setHours(hour, minute, 0, 0);
@@ -178,6 +261,7 @@ export function normalizeStoredTimer(timer, now = new Date(), env = process.env)
     target: String(timer.target || timer.threadId || timer.agentId || "coding-agent").trim(),
     cadence,
     time: String(timer.time || clockFromIso(legacyDueAt || timer.runAt)).trim(),
+    timezone: storedTimerTimezone(timer.timezone),
     every,
     runAt: String(timer.runAt || (cadence === "once" ? legacyDueAt : "")).trim(),
     prompt: String(timer.prompt || timer.text || "").trim(),
@@ -371,6 +455,7 @@ export async function createTimer(input, env = process.env) {
     target: String(input.target || input.threadId || input.agentId || "coding-agent").trim(),
     cadence,
     time: String(input.time || "09:00").trim(),
+    timezone: normalizeTimerTimezone(input.timezone || input.timeZone),
     every: String(input.every || "").trim() || null,
     runAt,
     prompt,
@@ -381,7 +466,7 @@ export async function createTimer(input, env = process.env) {
   timer.nextRunAt = nextRunAt(timer);
   timers.push(timer);
   await timerRepository.save(timers);
-  await appendEvent({ type: "timer_created", timerId: timer.id, label: timer.label, target: timer.target, ownerUserId: timer.ownerUserId }, env);
+  await appendEvent({ type: "timer_created", timerId: timer.id, label: timer.label, target: timer.target, ownerUserId: timer.ownerUserId, timezone: timer.timezone || null }, env);
   return timer;
 }
 

@@ -81,4 +81,8 @@ export class ThreadMessageListComponent {
   attachmentLabel(attachment: Record<string, unknown>): string {
     return String(attachment["name"] || attachment["filename"] || attachment["path"] || attachment["saved_path"] || "attachment");
   }
+
+  attachmentDownloadUrl(attachment: Record<string, unknown>): string {
+    return String(attachment["downloadUrl"] || "").trim();
+  }
 }
