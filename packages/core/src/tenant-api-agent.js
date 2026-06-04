@@ -1128,6 +1128,16 @@ function formatToolResultFallback(toolResults = [], context = {}) {
   return parts.join("\n\n").trim();
 }
 
+function gmailReadToolResultNeedsNarrativeRepair(toolResults = [], message = {}, gmailContext = null) {
+  if (!Array.isArray(toolResults) || !toolResults.length) return false;
+  const hasReadMessage = toolResults.some((result) =>
+    ["orkestr_read_gmail_message", "orkestr_read_latest_gmail_message"].includes(result.name) &&
+    result.output?.ok !== false &&
+    result.output?.message
+  );
+  return hasReadMessage && (Boolean(gmailContext) || userMessageNeedsSubstantiveAnswer(message.text));
+}
+
 function requestedNumberedItemCount(text = "") {
   const value = clean(text);
   const topMatch = value.match(/\btop\s+(\d{1,2})\b/i);
@@ -1611,6 +1621,7 @@ async function repairWeakTenantApiAgentResponse({
         ? "If the latest user message asks what you can do or how you can help, provide a short practical capability summary and mention /codex for workspace execution."
         : "If the latest user message asks what you can do or how you can help, provide a short practical capability summary and say workspace execution is not available in this chat right now.",
       "If the latest user message is only a confirmation like yes/ok and no tool result confirms completed work, do not say Done and do not promise future browser or workspace work. Ask for the concrete task or explain the pending limitation.",
+      "If tenant tool results are present in the conversation, answer the user's latest request from those results instead of returning a raw tool dump or a generic capability fallback.",
       allowTools
         ? "If the latest user message asks for an Orkestr action and a matching tool is available, call the tool before finalizing."
         : "Do not use tools during this repair step.",
@@ -1763,10 +1774,11 @@ async function runTenantApiAgentToolResultResponse({
   const customFallback = typeof fallbackFromToolOutputs === "function" ? clean(fallbackFromToolOutputs(toolOutputs, { message, text })) : "";
   const toolFallback = clean(formatToolResultFallback(toolResults, { message, text, pendingAction, env }));
   const fallback = customFallback || toolFallback;
+  const repairGmailReadNarrative = gmailReadToolResultNeedsNarrativeRepair(toolResults, message, gmailContext);
   if (fallback && shouldPreferWebFetchFallback(text, fallback, message)) return { response: second, text: fallback };
-  if (fallback && genericToolFallbackText(text)) return { response: second, text: fallback };
-  if (!tenantApiAgentTextNeedsRepair(text, message, { pendingActionConfirmation: Boolean(pendingAction), gmailContext, env })) return { response: second, text };
-  if (fallback) return { response: second, text: fallback };
+  if (fallback && genericToolFallbackText(text) && !repairGmailReadNarrative) return { response: second, text: fallback };
+  if (!repairGmailReadNarrative && !tenantApiAgentTextNeedsRepair(text, message, { pendingActionConfirmation: Boolean(pendingAction), gmailContext, env })) return { response: second, text };
+  if (fallback && !repairGmailReadNarrative) return { response: second, text: fallback };
   const repaired = await repairWeakTenantApiAgentResponse({
     baseBody,
     inputItems: toolInput,
