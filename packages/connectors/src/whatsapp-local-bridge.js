@@ -1276,11 +1276,20 @@ export function inboundRoutingFailureNoticeText(error, { env = process.env } = {
   return `Orkestr could not route your message: ${reason}.`;
 }
 
+function inboundRoutingFailureShouldNotify(error) {
+  const reason = String(error?.message || error || "").trim();
+  const failure = routingFailureFromError(error, { reason });
+  if (reason === "whatsapp_target_required" || failure.code === "whatsapp_target_required") return false;
+  if (reason === "message_text_required" || failure.code === "message_text_required") return false;
+  return true;
+}
+
 async function sendInboundRoutingFailureNotice({ accountId = "", chatId = "", eventId = "", error = null, client = null, env = process.env } = {}) {
   const selectedAccountId = String(accountId || "").trim();
   const id = String(chatId || "").trim();
   const sourceEventId = String(eventId || "").trim();
   if (!selectedAccountId || !id || !sourceEventId) return { sent: false, reason: "missing_target" };
+  if (!inboundRoutingFailureShouldNotify(error)) return { sent: false, reason: "routing_failure_not_user_notifiable" };
   if (hasInboundFailureNotice(selectedAccountId, sourceEventId)) return { sent: false, reason: "already_notified" };
   const text = inboundRoutingFailureNoticeText(error, { env });
   rememberInboundFailureNotice(selectedAccountId, sourceEventId);
@@ -1395,10 +1404,11 @@ export async function handleInboundMessage(accountId, message, env = process.env
         error: error.message || String(error),
         routingFailure,
         noticeSent: notice?.sent === true,
+        noticeReason: notice?.reason || "",
       },
       env,
     );
-    return { error: error.message || String(error), routingFailure, eventId, chatId, from, fromMe: routeFromMe, noticeSent: notice?.sent === true };
+    return { error: error.message || String(error), routingFailure, eventId, chatId, from, fromMe: routeFromMe, noticeSent: notice?.sent === true, noticeReason: notice?.reason || "" };
   }
 }
 

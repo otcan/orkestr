@@ -2093,6 +2093,37 @@ test("local whatsapp inbound failures explain missing user capabilities", () => 
   assert.match(pairing, /https:\/\/orkestr\.example\.test\//);
 });
 
+test("local whatsapp inbound stays silent for unbound chats", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-unbound-silent-"));
+  const env = externalBridgeEnv(home);
+  const sent = [];
+  const client = {
+    async sendMessage(chatId, text) {
+      sent.push({ chatId, text });
+      return { id: { _serialized: "sent-unbound-notice" }, body: text };
+    },
+  };
+
+  const result = await handleInboundMessage("responder", {
+    id: { _serialized: "false_unknown-chat@g.us_3AB0UNBOUND_semra@c.us", remote: "unknown-chat@g.us" },
+    from: "unknown-chat@g.us",
+    author: "semra@c.us",
+    fromMe: false,
+    body: "hello?",
+    timestamp: 1_780_000_000,
+  }, env, { client });
+  const events = await listEvents(env, 20);
+  const failed = events.find((event) => event.type === "whatsapp_local_inbound_failed");
+
+  assert.equal(result.error, "whatsapp_target_required");
+  assert.equal(result.routingFailure.code, "whatsapp_target_required");
+  assert.equal(result.noticeSent, false);
+  assert.equal(result.noticeReason, "routing_failure_not_user_notifiable");
+  assert.deepEqual(sent, []);
+  assert.equal(failed?.noticeSent, false);
+  assert.equal(failed?.noticeReason, "routing_failure_not_user_notifiable");
+});
+
 test("api-agent thread pending delivery skips legacy runtime wakeups", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-api-agent-delivery-skip-"));
   const env = { ORKESTR_HOME: home };
