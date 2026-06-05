@@ -59,6 +59,13 @@ export function whatsappAutoThreadBinding({ chatId = "", accountId = "", from = 
   };
 }
 
+export function whatsappBindingIsRouteEligible(binding = {}) {
+  return binding.enabled !== false &&
+    binding.routeEligible !== false &&
+    binding.deprecated !== true &&
+    binding.retired !== true;
+}
+
 export function whatsappDisplayName(input = {}, fallback = "") {
   return pickString(
     input.displayName,
@@ -90,7 +97,7 @@ export function whatsappInboundThreadMatchesBinding({ thread = {}, chatId = "", 
       }
     }
   }
-  return binding.enabled !== false &&
+  return whatsappBindingIsRouteEligible(binding) &&
     String(binding.connector || "whatsapp") === "whatsapp" &&
     String(binding.chatId || "").trim() === chatId;
 }

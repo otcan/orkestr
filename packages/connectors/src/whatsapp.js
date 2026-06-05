@@ -36,6 +36,7 @@ import {
   bindingAccountIds,
   isWhatsAppGroupChatId,
   whatsappAutoThreadBinding,
+  whatsappBindingIsRouteEligible,
   whatsappDisplayName,
   whatsappInboundThreadMatchesBinding,
 } from "./whatsapp-inbound-routing.js";
@@ -489,7 +490,6 @@ async function chatHasConfiguredThreadBinding({ chatId = "", accountId = "" } = 
   const threads = await listThreads(env);
   return threads.some((thread) => {
     const binding = thread?.binding || {};
-    if (binding.enabled === false) return false;
     if (String(binding.connector || "whatsapp").trim().toLowerCase() !== "whatsapp") return false;
     if (pickString(binding.chatId) !== chatId) return false;
     const accounts = bindingAccountIds(binding);
@@ -693,15 +693,20 @@ async function routeThread(input, config, env) {
   const from = pickString(input.from, input.sender, input.author);
   const fromMe = input.fromMe === true || input.from_me === true || String(input.fromMe || input.from_me || "").toLowerCase() === "true";
   const routes = config.threadRoutes || config.threads || {};
+  const explicitInput = pickString(input.threadId, input.targetThreadId);
   const explicit = pickString(
-    input.threadId,
-    input.targetThreadId,
+    explicitInput,
     chatId ? routes[chatId] : "",
     config.defaultThreadId,
   );
-  if (explicit) return { threadId: explicit, binding: null };
-  if (!chatId) return { threadId: "", binding: null };
+  if (!chatId && !explicit) return { threadId: "", binding: null };
   const threads = await listThreads(env);
+  if (explicit) {
+    const thread = threads.find((item) => item.id === explicit || item.name === explicit || item.bindingName === explicit) || null;
+    const binding = thread?.binding || null;
+    if (binding && !whatsappBindingIsRouteEligible(binding)) return { threadId: "", binding: null };
+    return { threadId: explicit, binding };
+  }
   const thread = threads.find((item) => whatsappInboundThreadMatchesBinding({ thread: item, chatId, accountId, from, fromMe }));
   return thread ? { threadId: thread.id, binding: thread.binding || null } : { threadId: "", binding: null };
 }

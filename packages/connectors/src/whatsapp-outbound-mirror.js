@@ -2,6 +2,7 @@ import { updateAgentMessage } from "../../core/src/messages.js";
 import { appendEvent } from "../../storage/src/store.js";
 import { updateThreadMessage } from "../../core/src/threads.js";
 import { parseThreadInputCommand } from "../../core/src/thread-commands.js";
+import { whatsappBindingIsRouteEligible } from "./whatsapp-inbound-routing.js";
 import { shouldMirrorWhatsAppProgress, shouldMirrorWhatsAppReply } from "./whatsapp-mirror-policy.js";
 
 function pickString(...values) {
@@ -132,7 +133,9 @@ export function staleUntrackedWhatsAppProgress(message = {}, outboundDeliveries 
 
 export function threadAllowsWhatsAppMirroring(thread) {
   if (!thread?.binding) return true;
-  return thread.binding.mirrorToWhatsApp !== false && thread.binding.mirrorReplies !== false;
+  return whatsappBindingIsRouteEligible(thread.binding) &&
+    thread.binding.mirrorToWhatsApp !== false &&
+    thread.binding.mirrorReplies !== false;
 }
 
 export function boundThreadWhatsAppAssistantOrigin({ message = {}, thread = null, kind = "" } = {}) {

@@ -8,6 +8,7 @@ import { tenantWhatsAppInboundForwardRoute } from "../../core/src/tenant-whatsap
 import { attachRoutingFailure, normalizeRoutingFailure, routingFailureFromError } from "../../core/src/routing-failures.js";
 import { getThread, listThreads } from "../../core/src/threads.js";
 import { setGeneratedLocalWhatsAppGroupPicture } from "./whatsapp-chat-picture.js";
+import { whatsappBindingIsRouteEligible } from "./whatsapp-inbound-routing.js";
 
 export const localWhatsAppAccountIds = ["account-1", "account-2"];
 export const localWhatsAppBridgeBasePath = "/api/connectors/whatsapp/bridge";
@@ -72,6 +73,13 @@ function normalizeAccountId(accountId = "", env = process.env) {
     throw error;
   }
   return normalized;
+}
+
+function defaultResponderAccountId(env = process.env) {
+  const explicit = String(env.ORKESTR_WHATSAPP_DEFAULT_RESPONDER_ACCOUNT_ID || env.WHATSAPP_LOCAL_DEFAULT_RESPONDER_ACCOUNT_ID || "").trim();
+  if (explicit) return explicit;
+  const autostart = splitAccountList(env.ORKESTR_WHATSAPP_AUTOSTART_ACCOUNT_IDS || env.WHATSAPP_LOCAL_AUTOSTART_ACCOUNT_IDS);
+  return autostart[0] || localWhatsAppAccountIdsForEnv(env)[0] || "";
 }
 
 function accountLabel(accountId) {
@@ -623,15 +631,18 @@ function groupIdFromCreateResult(result) {
 async function knownLocalWhatsAppChats(accountId, env = process.env) {
   const selectedAccountId = normalizeAccountId(accountId, env);
   const known = new Map();
+  const suppressedChatIds = new Set();
   const threads = await listThreads(env).catch(() => []);
   for (const thread of threads) {
     const binding = thread?.binding || {};
     if (String(binding.connector || "whatsapp").trim().toLowerCase() !== "whatsapp") continue;
     const chatId = String(binding.chatId || "").trim();
-    const accountIds = [binding.senderAccountId, binding.responderAccountId, binding.outboundAccountId]
-      .map((candidate) => String(candidate || "").trim())
-      .filter(Boolean);
+    const accountIds = bindingAccountIds(binding);
     if (!chatId || (accountIds.length && !accountIds.some((candidate) => localAccountMatches(candidate, selectedAccountId, env)))) continue;
+    if (!whatsappBindingIsRouteEligible(binding)) {
+      suppressedChatIds.add(chatId);
+      continue;
+    }
     addChat(known, {
       id: chatId,
       name: String(binding.displayName || thread.bindingName || thread.name || thread.title || chatId).trim(),
@@ -646,6 +657,7 @@ async function knownLocalWhatsAppChats(accountId, env = process.env) {
   const state = await readJson(dataPaths(env).whatsapp, { inboundEvents: [], outboundDeliveries: [] }).catch(() => ({ inboundEvents: [], outboundDeliveries: [] }));
   for (const event of state.inboundEvents || []) {
     const chatId = String(event?.chatId || "").trim();
+    if (suppressedChatIds.has(chatId)) continue;
     if (!chatId || !localAccountMatches(event.accountId, selectedAccountId, env)) continue;
     addChat(known, {
       id: chatId,
@@ -658,6 +670,7 @@ async function knownLocalWhatsAppChats(accountId, env = process.env) {
   }
   for (const delivery of state.outboundDeliveries || []) {
     const chatId = String(delivery?.chatId || "").trim();
+    if (suppressedChatIds.has(chatId)) continue;
     if (!chatId || !localAccountMatches(delivery.accountId, selectedAccountId, env)) continue;
     addChat(known, {
       id: chatId,
@@ -671,6 +684,22 @@ async function knownLocalWhatsAppChats(accountId, env = process.env) {
   return [...known.values()].sort((a, b) =>
     String(a.name || a.id).localeCompare(String(b.name || b.id), undefined, { sensitivity: "base" }),
   );
+}
+
+async function suppressedLocalWhatsAppChatIds(accountId, env = process.env) {
+  const selectedAccountId = normalizeAccountId(accountId, env);
+  const threads = await listThreads(env).catch(() => []);
+  const suppressed = new Set();
+  for (const thread of threads) {
+    const binding = thread?.binding || {};
+    if (String(binding.connector || "whatsapp").trim().toLowerCase() !== "whatsapp") continue;
+    if (whatsappBindingIsRouteEligible(binding)) continue;
+    const chatId = String(binding.chatId || "").trim();
+    const accountIds = bindingAccountIds(binding);
+    if (!chatId || (accountIds.length && !accountIds.some((candidate) => localAccountMatches(candidate, selectedAccountId, env)))) continue;
+    suppressed.add(chatId);
+  }
+  return suppressed;
 }
 
 export async function getLocalWhatsAppBridgeStatus(env = process.env) {
@@ -1457,7 +1486,7 @@ export function localWhatsAppUnreadRecoveryBoundChats(threads = [], accountId = 
   for (const thread of Array.isArray(threads) ? threads : []) {
     const binding = thread?.binding || {};
     if (String(binding.connector || "whatsapp").trim().toLowerCase() !== "whatsapp") continue;
-    if (binding.enabled === false) continue;
+    if (!whatsappBindingIsRouteEligible(binding)) continue;
     const chatId = String(binding.chatId || "").trim();
     if (!chatId) continue;
     const accounts = bindingAccountIds(binding);
@@ -2218,6 +2247,7 @@ export async function listLocalWhatsAppChats(accountId = "", env = process.env) 
   const runtime = runtimes.get(normalized);
   const state = accountStates.get(normalized) || defaultAccountState(normalized);
   const knownChats = await knownLocalWhatsAppChats(normalized, env);
+  const suppressedChatIds = await suppressedLocalWhatsAppChatIds(normalized, env);
   if (!runtime?.client || !state.ready) {
     return {
       accountId: normalized,
@@ -2230,8 +2260,10 @@ export async function listLocalWhatsAppChats(accountId = "", env = process.env) 
   const merged = new Map();
   for (const chat of knownChats) addChat(merged, chat);
   for (const chat of chats) {
+    const id = String(chat?.id?._serialized || "");
+    if (suppressedChatIds.has(id)) continue;
     addChat(merged, {
-      id: String(chat?.id?._serialized || ""),
+      id,
       name: String(chat?.name || chat?.formattedTitle || chat?.id?.user || ""),
       isGroup: Boolean(chat?.isGroup),
       unreadCount: Number(chat?.unreadCount || 0),
@@ -2324,8 +2356,8 @@ export async function createLocalWhatsAppChat({ name = "", senderAccountId = "",
   }
   const participants = normalizeGroupParticipantIds(participantIds);
   const adminParticipants = normalizeGroupParticipantIds(adminParticipantIds);
-  const responder = normalizeAccountId(responderAccountId || senderAccountId, env);
-  const sender = normalizeAccountId(senderAccountId || (participants.length ? responder : ""), env);
+  const responder = normalizeAccountId(responderAccountId || senderAccountId || defaultResponderAccountId(env), env);
+  const sender = normalizeAccountId(senderAccountId || responder, env);
   const responderRuntime = runtimes.get(responder);
   const responderState = accountStates.get(responder) || defaultAccountState(responder);
   if (!responderRuntime?.client || !responderState.ready) {
