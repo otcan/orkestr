@@ -40,6 +40,7 @@ export function tenantApiAgentTimerToolDefinitions() {
       parameters: {
         type: "object",
         properties: {},
+        required: [],
         additionalProperties: false,
       },
       strict: true,

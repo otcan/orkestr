@@ -784,6 +784,7 @@ export function tenantApiAgentToolDefinitions() {
       parameters: {
         type: "object",
         properties: {},
+        required: [],
         additionalProperties: false,
       },
       strict: true,
@@ -795,6 +796,7 @@ export function tenantApiAgentToolDefinitions() {
       parameters: {
         type: "object",
         properties: {},
+        required: [],
         additionalProperties: false,
       },
       strict: true,
@@ -1090,7 +1092,7 @@ export function tenantApiAgentToolDefinitions() {
         required: ["notificationId"],
         additionalProperties: false,
       },
-      strict: true,
+      strict: false,
     },
     {
       type: "function",
@@ -1099,6 +1101,7 @@ export function tenantApiAgentToolDefinitions() {
       parameters: {
         type: "object",
         properties: {},
+        required: [],
         additionalProperties: false,
       },
       strict: true,

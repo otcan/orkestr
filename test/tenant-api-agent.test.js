@@ -6,7 +6,7 @@ import test from "node:test";
 import { recordCreditUsage, creditUsageSummary } from "../packages/core/src/credit-usage.js";
 import { drainAllPendingThreadInputs } from "../packages/core/src/runtime-leases.js";
 import { buildTenantApiAgentInstructions, processApiAgentThreadInput, threadUsesApiAgent } from "../packages/core/src/tenant-api-agent.js";
-import { runTenantApiAgentTool } from "../packages/core/src/tenant-api-agent-tools.js";
+import { runTenantApiAgentTool, tenantApiAgentToolDefinitions } from "../packages/core/src/tenant-api-agent-tools.js";
 import { listGmailNotificationsForPrincipal } from "../packages/core/src/gmail-notifications.js";
 import { createTimer, listTimers, markDueTimers } from "../packages/core/src/timers.js";
 import { userPrincipal } from "../packages/core/src/principal.js";
@@ -29,6 +29,16 @@ function response(payload, ok = true, status = 200) {
 }
 
 const GENERIC_TOOL_FALLBACK_TEXT = "I can't truthfully complete or claim external browser, workspace, file, or account work from this chat without a tool result. Workspace and live browser execution are not available in this chat right now.";
+
+test("tenant api-agent strict tool schemas satisfy OpenAI requirements", () => {
+  for (const tool of tenantApiAgentToolDefinitions()) {
+    if (tool.type !== "function" || tool.strict !== true) continue;
+    const properties = Object.keys(tool.parameters?.properties || {});
+    const required = tool.parameters?.required;
+    assert.ok(Array.isArray(required), `${tool.name} strict schema should define required`);
+    assert.deepEqual(properties.filter((key) => !required.includes(key)), [], `${tool.name} strict schema should require every property`);
+  }
+});
 
 function tenantContextFromInstructions(instructions = "") {
   const match = String(instructions).match(/Tenant context JSON: (\{.*\})$/m);

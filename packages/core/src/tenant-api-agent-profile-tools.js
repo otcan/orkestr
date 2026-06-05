@@ -16,6 +16,7 @@ export function tenantApiAgentProfileToolDefinitions() {
       parameters: {
         type: "object",
         properties: {},
+        required: [],
         additionalProperties: false,
       },
       strict: true,
