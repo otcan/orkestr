@@ -15,6 +15,7 @@ import { createUser } from "../packages/core/src/users.js";
 import { exchangeGmailCode } from "../packages/connectors/src/gmail.js";
 import { runGmailPromptPush } from "../packages/connectors/src/gmail-prompt-push.js";
 import { writeConnectorConfig } from "../packages/storage/src/config.js";
+import { userDataPaths } from "../packages/storage/src/paths.js";
 
 function jsonResponse(payload, ok = true, status = 200) {
   return {
@@ -230,4 +231,62 @@ test("non-admin connector prompt pushes require the matching connector capabilit
     }, alice, env),
     /connector_prompt_push_capability_required/,
   );
+});
+
+test("connector prompt push sanitizer receives scoped connector capabilities", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-connector-push-sanitizer-cap-"));
+  const sanitizerLog = path.join(home, "sanitizer.jsonl");
+  const script = path.join(home, "sanitizer.mjs");
+  await fs.writeFile(
+    script,
+    [
+      "import fs from 'node:fs';",
+      "let input = '';",
+      "process.stdin.setEncoding('utf8');",
+      "process.stdin.on('data', (chunk) => { input += chunk; });",
+      "process.stdin.on('end', () => {",
+      "  const payload = JSON.parse(input);",
+      `  fs.appendFileSync(${JSON.stringify(sanitizerLog)}, JSON.stringify({ action: payload.action, resource: payload.resource }) + '\\n');`,
+      "  const ok = payload.resource?.capabilities?.gmail === true;",
+      "  console.log(JSON.stringify({ allow: ok, reason: ok ? 'capability-ok' : 'missing-gmail-capability', model: 'test-llm' }));",
+      "});",
+      "",
+    ].join("\n"),
+    "utf8",
+  );
+  const env = {
+    ORKESTR_HOME: home,
+    ORKESTR_LLM_SANITIZER_COMMAND_JSON: JSON.stringify([process.execPath, script]),
+  };
+  await createUser({
+    id: "alice",
+    email: "alice@example.com",
+    phoneNumber: "+15550001000",
+    role: "user",
+  }, env);
+  const paths = userDataPaths("alice", env);
+  await fs.mkdir(paths.secrets, { recursive: true });
+  await fs.writeFile(path.join(paths.secrets, "gmail-token.json"), JSON.stringify({
+    accessToken: "alice-gmail-access",
+    refreshToken: "alice-gmail-refresh",
+    expiresAt: Math.floor(Date.now() / 1000) + 3600,
+  }), "utf8");
+  await createThread({ id: "alice-thread", name: "Alice Thread", ownerUserId: "alice" }, env);
+
+  const push = await createConnectorPromptPushForPrincipal({
+    connector: "gmail",
+    threadId: "alice-thread",
+    prompt: "Handle {{subject}}",
+    sourceConfig: { query: "newer_than:1d" },
+    enabled: true,
+  }, userPrincipal({ id: "alice" }), env);
+  const events = (await fs.readFile(sanitizerLog, "utf8"))
+    .trim()
+    .split("\n")
+    .map((line) => JSON.parse(line));
+  const createEvent = events.find((event) => event.action === "connector_prompt_push.create");
+
+  assert.equal(push.connector, "gmail");
+  assert.equal(createEvent.resource.capabilities.gmail, true);
+  assert.equal(createEvent.resource.capabilities.scopedConnectors.gmail, true);
 });

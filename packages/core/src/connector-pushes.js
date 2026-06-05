@@ -196,11 +196,11 @@ async function principalForPushOwner(push, env = process.env) {
 async function assertConnectorPromptPushCapability(push, principal = null, env = process.env) {
   const actor = principal || await principalForPushOwner(push, env);
   assertOwnerAccess(actor, push.ownerUserId, "connector_prompt_push_access", env);
-  if (isAdminPrincipal(actor)) return actor;
+  if (isAdminPrincipal(actor)) return { actor, capabilities: { [push.connector]: true } };
   const thread = push.targetType === "thread" ? await getThreadForPrincipal(push.target, actor, env) : null;
   const capabilities = await userScopedCapabilityHints({ userId: push.ownerUserId, thread }, env);
   if (capabilities?.[push.connector] !== true) throw policyError("connector_prompt_push_capability_required", 403);
-  return actor;
+  return { actor, capabilities };
 }
 
 export async function createConnectorPromptPushForPrincipal(input = {}, principal, env = process.env) {
@@ -209,7 +209,7 @@ export async function createConnectorPromptPushForPrincipal(input = {}, principa
     : normalizeUserId(principal?.userId);
   const push = normalizeConnectorPromptPush({ ...input, ownerUserId }, env);
   validateConnectorPromptPush(push);
-  await assertConnectorPromptPushCapability(push, principal, env);
+  const capabilityContext = await assertConnectorPromptPushCapability(push, principal, env);
   if (!isAdminPrincipal(principal)) {
     await assertSanitizedAction({
       action: "connector_prompt_push.create",
@@ -221,6 +221,7 @@ export async function createConnectorPromptPushForPrincipal(input = {}, principa
         connector: push.connector,
         targetType: push.targetType,
         target: push.target,
+        capabilities: capabilityContext.capabilities,
       },
       input: {
         label: push.label,
@@ -271,12 +272,12 @@ export async function updateConnectorPromptPushForPrincipal(id, patch = {}, prin
   assertOwnerAccess(principal, existing.ownerUserId, "connector_prompt_push_update", env);
   const updatedPreview = normalizeConnectorPromptPush({ ...existing, ...patch, id: existing.id, ownerUserId: existing.ownerUserId, connector: existing.connector, source: existing.source, createdAt: existing.createdAt }, env);
   validateConnectorPromptPush(updatedPreview);
-  await assertConnectorPromptPushCapability(updatedPreview, principal, env);
+  const capabilityContext = await assertConnectorPromptPushCapability(updatedPreview, principal, env);
   if (!isAdminPrincipal(principal)) {
     await assertSanitizedAction({
       action: "connector_prompt_push.update",
       principal,
-      resource: { type: "connector_prompt_push", id: existing.id, ownerUserId: existing.ownerUserId, connector: existing.connector, targetType: updatedPreview.targetType, target: updatedPreview.target },
+      resource: { type: "connector_prompt_push", id: existing.id, ownerUserId: existing.ownerUserId, connector: existing.connector, targetType: updatedPreview.targetType, target: updatedPreview.target, capabilities: capabilityContext.capabilities },
       input: { label: updatedPreview.label, connector: updatedPreview.connector, prompt: updatedPreview.prompt.slice(0, maxPromptChars), promptTemplate: updatedPreview.promptTemplate.slice(0, maxPromptChars), sourceConfig: updatedPreview.sourceConfig, safety: updatedPreview.safety, enabled: updatedPreview.enabled },
     }, env);
   }
@@ -426,7 +427,8 @@ export async function runConnectorPromptPush(pushOrId, sourceItems = [], env = p
     result.skipped.push({ reason: "min_interval", lastRunAt: push.lastRunAt });
     return result;
   }
-  const actor = await assertConnectorPromptPushCapability(push, options.principal || null, env);
+  const capabilityContext = await assertConnectorPromptPushCapability(push, options.principal || null, env);
+  const actor = capabilityContext.actor;
   const seen = new Set(push.processedSourceItemIds || []);
   const batchSeen = new Set();
   const candidates = [];
@@ -457,6 +459,7 @@ export async function runConnectorPromptPush(pushOrId, sourceItems = [], env = p
             connector: push.connector,
             targetType: push.targetType,
             target: push.target,
+            capabilities: capabilityContext.capabilities,
           },
           input: {
             sourceItemId: item.sourceItemId,
