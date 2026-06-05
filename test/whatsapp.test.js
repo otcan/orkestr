@@ -14,7 +14,7 @@ import { getSetupStatus } from "../packages/core/src/setup.js";
 import { appendThreadMessage, createThread, enqueueThreadInput, getThread, listThreadMessages, listThreads, updateThreadMessage } from "../packages/core/src/threads.js";
 import { createUser, linkUserPrivateIdentity } from "../packages/core/src/users.js";
 import { deliverWhatsAppReplies, formatWhatsAppOutboundText, getWhatsAppChatParticipants, getWhatsAppStatus, initialQueueDeliveryState, mapLocalWhatsAppStatusFromHealth, routeWhatsAppInbound, sendWhatsAppText, syncWhatsAppTypingIndicators } from "../packages/connectors/src/whatsapp.js";
-import { cleanupLocalWhatsAppChromeLocks, clearLocalWhatsAppChatTypingState, forwardLocalWhatsAppInbound, getLocalWhatsAppBridgeStatus, handleInboundMessage, inboundRoutingFailureNoticeText, listLocalWhatsAppChats, localWhatsAppAccountIdsForEnv, localWhatsAppConnectedPageReadyFallbackEligible, localWhatsAppInboundForwardTarget, localWhatsAppMessageRouteFields, localWhatsAppReadyFallbackEligible, localWhatsAppTypingClearRetryDelaysMs, localWhatsAppUnreadRecoveryBoundChats, localWhatsAppUnreadRecoveryIntervalMs, normalizeGroupParticipantIds, recoverConfiguredLocalWhatsAppAccounts, recoverUnreadLocalWhatsAppMessages, recoverableLocalWhatsAppAccountIds, reduceLocalWhatsAppBridgeState, resetLocalWhatsAppBridgeForTest, sendWhatsAppTextWithConfirmation, setLocalWhatsAppRuntimeForTest, startLocalWhatsAppAccount, startLocalWhatsAppTyping, stopLocalWhatsAppTyping, webCacheRoot } from "../packages/connectors/src/whatsapp-local-bridge.js";
+import { cleanupLocalWhatsAppChromeLocks, clearLocalWhatsAppChatTypingState, forwardLocalWhatsAppInbound, getLocalWhatsAppBridgeStatus, handleInboundMessage, inboundRoutingFailureNoticeText, listLocalWhatsAppChats, localWhatsAppAccountIdsForEnv, localWhatsAppConnectedPageReadyFallbackEligible, localWhatsAppInboundForwardTarget, localWhatsAppMessageRouteFields, localWhatsAppReadyFallbackEligible, localWhatsAppTypingClearRetryDelaysMs, localWhatsAppUnreadRecoveryBoundChats, localWhatsAppUnreadRecoveryIntervalMs, normalizeGroupParticipantIds, recoverConfiguredLocalWhatsAppAccounts, recoverUnreadLocalWhatsAppMessages, recoverableLocalWhatsAppAccountIds, reduceLocalWhatsAppBridgeState, resetLocalWhatsAppBridgeForTest, sendLocalWhatsAppMessage, sendWhatsAppTextWithConfirmation, setLocalWhatsAppRuntimeForTest, startLocalWhatsAppAccount, startLocalWhatsAppTyping, stopLocalWhatsAppTyping, webCacheRoot } from "../packages/connectors/src/whatsapp-local-bridge.js";
 import { routedWhatsAppTypingTarget, runWithRoutedWhatsAppTyping } from "../packages/connectors/src/whatsapp-router-typing.js";
 import { createAndBindWhatsAppThreadGroup } from "../packages/connectors/src/whatsapp-thread-groups.js";
 import { prepareWhatsAppTableAttachments } from "../packages/connectors/src/whatsapp-table-attachments.js";
@@ -782,6 +782,64 @@ test("local whatsapp send times out hung browser sends without retrying", async 
     /whatsapp_send_message_timeout/,
   );
   assert.equal(attempts, 1);
+});
+
+test("local whatsapp inbound ignores recent outbound attachment echoes", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-attachment-echo-"));
+  const env = {
+    ORKESTR_HOME: home,
+    ORKESTR_WHATSAPP_ACCOUNT_IDS: "responder",
+  };
+  const chatId = "chat-attachment-echo@g.us";
+  const filename = "orkestr-table-test.csv";
+  const body = "a,b\n1,2\n";
+  const attachmentPath = path.join(home, filename);
+  await fs.writeFile(attachmentPath, body);
+  const sent = [];
+  const runtime = {
+    client: {
+      async sendMessage(to, media, options) {
+        sent.push({ to, media, options });
+        return { id: { _serialized: `true_${chatId}_sent-document` } };
+      },
+    },
+  };
+
+  try {
+    setLocalWhatsAppRuntimeForTest("responder", runtime, {}, env);
+    await sendLocalWhatsAppMessage({
+      accountId: "responder",
+      chatId,
+      attachments: [{ path: attachmentPath, filename, mimetype: "text/csv" }],
+      env,
+    });
+
+    const result = await handleInboundMessage("responder", {
+      id: { _serialized: `true_${chatId}_echo-document`, remote: chatId },
+      from: "51346837356638@lid",
+      to: chatId,
+      fromMe: true,
+      body: "",
+      hasMedia: true,
+      type: "document",
+      timestamp: 1_780_000_000,
+      _data: { filename },
+      async downloadMedia() {
+        return {
+          data: Buffer.from(body).toString("base64"),
+          filename,
+          mimetype: "text/csv",
+        };
+      },
+    }, env, { ownOnly: true });
+
+    assert.equal(sent.length, 1);
+    assert.equal(sent[0].to, chatId);
+    assert.equal(result.skipped, "outbound_echo_attachment");
+    assert.equal(result.chatId, chatId);
+  } finally {
+    await resetLocalWhatsAppBridgeForTest(env);
+  }
 });
 
 test("local whatsapp message route fields keep own group echoes on the group chat", () => {

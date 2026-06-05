@@ -17,6 +17,7 @@ const runtimes = new Map();
 const accountStates = new Map();
 const outboundMessageIds = new Set();
 const outboundMessageTextKeys = new Set();
+const outboundAttachmentKeys = new Map();
 const inboundFailureNoticeKeys = new Set();
 const typingSessions = new Map();
 const typingStartPromises = new Map();
@@ -588,6 +589,53 @@ function rememberOutboundText(accountId, chatId, text) {
   }
 }
 
+function outboundEchoTtlMs(env = process.env) {
+  const parsed = Number(env.ORKESTR_WHATSAPP_OUTBOUND_ECHO_TTL_MS || 30 * 60 * 1000);
+  return Number.isFinite(parsed) ? Math.max(60_000, Math.floor(parsed)) : 30 * 60 * 1000;
+}
+
+function pruneOutboundAttachmentKeys(env = process.env) {
+  const cutoff = Date.now() - outboundEchoTtlMs(env);
+  for (const [key, rememberedAt] of outboundAttachmentKeys.entries()) {
+    if (Number(rememberedAt || 0) < cutoff) outboundAttachmentKeys.delete(key);
+  }
+  while (outboundAttachmentKeys.size > 500) {
+    const [oldest] = outboundAttachmentKeys.keys();
+    outboundAttachmentKeys.delete(oldest);
+  }
+}
+
+function attachmentEchoFilename(attachment = {}) {
+  return path.basename(String(attachment.filename || attachment.path || "").trim());
+}
+
+function attachmentEchoKey(accountId, chatId, attachment = {}) {
+  const filename = attachmentEchoFilename(attachment);
+  if (!filename) return "";
+  return [
+    String(accountId || "").trim(),
+    String(chatId || "").trim(),
+    filename,
+  ].join(":");
+}
+
+function rememberOutboundAttachment(accountId, chatId, attachment = {}, env = process.env) {
+  const key = attachmentEchoKey(accountId, chatId, attachment);
+  if (!key || key.endsWith("::")) return;
+  outboundAttachmentKeys.set(key, Date.now());
+  pruneOutboundAttachmentKeys(env);
+}
+
+function outboundAttachmentsRecentlySent(accountId, chatId, attachments = [], env = process.env) {
+  const items = Array.isArray(attachments) ? attachments : [];
+  if (!items.length) return false;
+  pruneOutboundAttachmentKeys(env);
+  return items.every((attachment) => {
+    const key = attachmentEchoKey(accountId, chatId, attachment);
+    return Boolean(key && outboundAttachmentKeys.has(key));
+  });
+}
+
 function rememberInboundFailureNotice(accountId, eventId) {
   const key = `${String(accountId || "").trim()}:${String(eventId || "").trim()}`;
   if (!key.endsWith(":")) inboundFailureNoticeKeys.add(key);
@@ -1119,6 +1167,7 @@ export async function resetLocalWhatsAppBridgeForTest(env = process.env) {
   accountStates.clear();
   outboundMessageIds.clear();
   outboundMessageTextKeys.clear();
+  outboundAttachmentKeys.clear();
   inboundFailureNoticeKeys.clear();
   typingStartPromises.clear();
   typingClearRetryTimers.clear();
@@ -1355,6 +1404,9 @@ export async function handleInboundMessage(accountId, message, env = process.env
   const eventId = String(message.id?._serialized || `${accountId}:${chatId}:${message.timestamp || Date.now()}`).trim();
   if (fromMe && outboundMessageIds.has(eventId)) return { skipped: "outbound_echo_id", eventId, chatId };
   if (fromMe && outboundMessageTextKeys.has(textKey(accountId, chatId, text))) return { skipped: "outbound_echo_text", eventId, chatId };
+  if (fromMe && outboundAttachmentsRecentlySent(accountId, chatId, attachments, env)) {
+    return { skipped: "outbound_echo_attachment", eventId, chatId };
+  }
   const routedText = text || attachmentSummaryText(attachments);
   const inbound = {
     eventId,
@@ -2627,6 +2679,7 @@ export async function sendLocalWhatsAppMessage({ chatId = "", text = "", account
       const MessageMedia = dependencies.whatsapp.MessageMedia;
       for (const attachment of normalizedAttachments) {
         await fs.access(attachment.path);
+        rememberOutboundAttachment(selectedAccountId, chatId, attachment, env);
         const media = MessageMedia.fromFilePath(attachment.path);
         const message = await withSendOperationTimeout(
           runtime.client.sendMessage(chatId, media, {
