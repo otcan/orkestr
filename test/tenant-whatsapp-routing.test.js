@@ -123,7 +123,7 @@ test("local WhatsApp bridge prefers managed broker routes over legacy forward ma
   const env = {
     ORKESTR_HOME: home,
     ORKESTR_WHATSAPP_INBOUND_FORWARD_MAP_JSON: JSON.stringify({
-      "120363555555555555@g.us": "https://legacy.example.test/api/connectors/whatsapp/inbound",
+      "wa-group-broker@g.us": "https://legacy.example.test/api/connectors/whatsapp/inbound",
     }),
     ORKESTR_WHATSAPP_INBOUND_FORWARD_TOKEN: "legacy-token",
   };
@@ -133,22 +133,22 @@ test("local WhatsApp bridge prefers managed broker routes over legacy forward ma
     endpoint: { baseUrl: "https://public-broker.example.test" },
   }, env);
   const configured = await configureTenantWhatsAppRoute("broker-tenant", {
-    chatId: "120363555555555555@g.us",
+    chatId: "wa-group-broker@g.us",
     chatName: "Broker tenant WA",
     accountId: "tenant-wa",
     brokerBaseUrl: "http://broker.internal.test",
   }, env);
   const route = await tenantWhatsAppInboundForwardRoute({
-    chatId: "120363555555555555@g.us",
+    chatId: "wa-group-broker@g.us",
     accountId: "tenant-wa",
   }, env);
   const calls = [];
 
   const forwarded = await forwardLocalWhatsAppInbound({
     eventId: "tenant-wa-event-broker",
-    chatId: "120363555555555555@g.us",
+    chatId: "wa-group-broker@g.us",
     accountId: "tenant-wa",
-    from: "491700000000@c.us",
+    from: "wa-contact-broker@c.us",
     text: "hello broker",
   }, env, async (url, options = {}) => {
     calls.push({ url: String(url), options, body: options.body ? JSON.parse(options.body) : null });
@@ -176,7 +176,7 @@ test("local WhatsApp bridge does not fall back to legacy maps when a managed rou
   const env = {
     ORKESTR_HOME: home,
     ORKESTR_WHATSAPP_INBOUND_FORWARD_MAP_JSON: JSON.stringify({
-      "120363666666666666@g.us": "https://legacy.example.test/api/connectors/whatsapp/inbound",
+      "wa-group-missing-broker@g.us": "https://legacy.example.test/api/connectors/whatsapp/inbound",
     }),
     ORKESTR_WHATSAPP_INBOUND_FORWARD_TOKEN: "legacy-token",
   };
@@ -186,7 +186,7 @@ test("local WhatsApp bridge does not fall back to legacy maps when a managed rou
     endpoint: { baseUrl: "https://missing.example.test" },
   }, env);
   const configured = await configureTenantWhatsAppRoute("missing-broker-tenant", {
-    chatId: "120363666666666666@g.us",
+    chatId: "wa-group-missing-broker@g.us",
     accountId: "tenant-wa",
   }, env);
   const vm = await getTenantVm("missing-broker-tenant", env);
@@ -202,9 +202,9 @@ test("local WhatsApp bridge does not fall back to legacy maps when a managed rou
   await assert.rejects(
     () => forwardLocalWhatsAppInbound({
       eventId: "tenant-wa-event-missing-broker",
-      chatId: "120363666666666666@g.us",
+      chatId: "wa-group-missing-broker@g.us",
       accountId: "tenant-wa",
-      from: "491700000000@c.us",
+      from: "wa-contact-missing-broker@c.us",
       text: "hello missing broker",
     }, env, async (url) => {
       calls.push(String(url));
@@ -231,7 +231,7 @@ test("local WhatsApp bridge wraps tenant forward network failures", async () => 
     endpoint: { brokerBaseUrl: "http://network-broker.internal.test" },
   }, env);
   await configureTenantWhatsAppRoute("network-broker-tenant", {
-    chatId: "120363777777777777@g.us",
+    chatId: "wa-group-network@g.us",
     accountId: "tenant-wa",
     routeMode: "broker",
   }, env);
@@ -240,9 +240,9 @@ test("local WhatsApp bridge wraps tenant forward network failures", async () => 
   await assert.rejects(
     () => forwardLocalWhatsAppInbound({
       eventId: "tenant-wa-event-network",
-      chatId: "120363777777777777@g.us",
+      chatId: "wa-group-network@g.us",
       accountId: "tenant-wa",
-      from: "491700000000@c.us",
+      from: "wa-contact-network@c.us",
       text: "hello network",
     }, env, async (url) => {
       calls.push(String(url));

@@ -490,8 +490,8 @@ Regenerate the public three-screen proof asset:
 npm run demo:record
 ```
 
-The generated README asset combines the saved WhatsApp source screenshot with
-a fresh TMUX capture and an Orkestr Web UI rendering that show the same public
+The generated README asset combines a generated WhatsApp source panel with a
+fresh TMUX capture and an Orkestr Web UI rendering that show the same public
 GitHub verification lines. It must not include tokens, private chat IDs, phone
 numbers, local paths, or private ops hosts.
 

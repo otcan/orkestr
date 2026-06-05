@@ -33,7 +33,7 @@ test("public launch docs expose the minimum launch surface", async () => {
   assert.match(security, /Do not expose/);
   assert.match(security, /out\s+of\s+the\s+box/);
   assert.match(readme, /orkestr-three-screen-demo\.png/);
-  assert.match(readme, /WhatsApp source screenshot/);
+  assert.match(readme, /generated WhatsApp source panel/);
   assert.match(readme, /TMUX capture/);
   assert.match(roadmap, /disposable fake-data runs/);
   assert.doesNotMatch(roadmap, /Virtual Desktop Generation/);

@@ -1,5 +1,4 @@
 import fs from "node:fs/promises";
-import fsSync from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { execFile } from "node:child_process";
@@ -9,7 +8,6 @@ import { fileURLToPath } from "node:url";
 const execFileAsync = promisify(execFile);
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 export const demoAssetPath = path.join(repoRoot, "docs", "assets", "orkestr-three-screen-demo.png");
-export const whatsappProofPath = path.join(repoRoot, "docs", "assets", "whatsapp-github-proof.jpeg");
 
 const proofLines = [
   "orkestr: The PNG is on GitHub now.",
@@ -21,7 +19,7 @@ const proofLines = [
   "https://raw.githubusercontent.com/otcan/orkestr/main/docs/assets/orkestr-three-screen-demo.png",
   "",
   "Verified:",
-  "• origin/main is at d3853aa",
+  "• origin/main contains the demo PNG",
   "• GitHub default branch is main",
   "• GitHub API returns the PNG at docs/assets/orkestr-three-screen-demo.png",
   "• raw URL returns HTTP 200 with content-type: image/png",
@@ -37,11 +35,6 @@ function escapeHtml(value) {
 
 function shellQuote(value) {
   return `'${String(value).replaceAll("'", "'\\''")}'`;
-}
-
-function whatsappImageDataUri() {
-  const data = fsSync.readFileSync(whatsappProofPath);
-  return `data:image/jpeg;base64,${data.toString("base64")}`;
 }
 
 function terminalTranscriptText() {
@@ -69,7 +62,6 @@ function proofMessage() {
 }
 
 export function renderDemoHtml({ tmuxText = terminalTranscriptText() } = {}) {
-  const whatsappDataUri = whatsappImageDataUri();
   const webProof = proofMessage();
   return `<!doctype html>
 <html lang="en">
@@ -163,14 +155,100 @@ export function renderDemoHtml({ tmuxText = terminalTranscriptText() } = {}) {
         linear-gradient(180deg, rgba(240, 232, 219, 0.08), transparent),
         #0b130c;
     }
-    .phone-shot {
+    .phone-shell {
       width: 100%;
       height: 100%;
-      object-fit: contain;
-      object-position: top center;
+      overflow: hidden;
       border-radius: 20px;
       background: #ede8df;
       box-shadow: 0 16px 40px rgba(0, 0, 0, 0.32);
+      color: #101510;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+    .phone-status {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      height: 34px;
+      padding: 0 16px;
+      background: #f7f5ef;
+      color: #121a13;
+      font-size: 13px;
+      font-weight: 800;
+    }
+    .phone-chat-head {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      height: 58px;
+      padding: 0 14px;
+      border-bottom: 1px solid rgba(0, 0, 0, 0.08);
+      background: #f7f5ef;
+    }
+    .phone-back { font-size: 28px; line-height: 1; }
+    .phone-avatar {
+      display: grid;
+      place-items: center;
+      width: 34px;
+      height: 34px;
+      border-radius: 999px;
+      background: #0f5b41;
+      color: #eaffef;
+      font-size: 11px;
+      font-weight: 900;
+    }
+    .phone-chat-head strong { display: block; font-size: 15px; line-height: 1.1; }
+    .phone-chat-head small { color: #66746b; font-size: 12px; }
+    .phone-body {
+      height: calc(100% - 126px);
+      padding: 14px 12px;
+      overflow: hidden;
+      background:
+        linear-gradient(rgba(245, 239, 229, 0.86), rgba(245, 239, 229, 0.86)),
+        repeating-linear-gradient(45deg, rgba(45, 95, 75, 0.08) 0 2px, transparent 2px 22px);
+    }
+    .phone-bubble {
+      width: 92%;
+      margin-left: 18px;
+      border-radius: 8px;
+      background: #fff;
+      box-shadow: 0 1px 2px rgba(0, 0, 0, 0.12);
+      overflow: hidden;
+    }
+    .phone-preview {
+      padding: 10px 12px;
+      background: #f0f0f0;
+      border-left: 4px solid #d4d4d4;
+      color: #2e332e;
+      font-size: 13px;
+      line-height: 1.25;
+    }
+    .phone-message {
+      margin: 0;
+      padding: 10px 12px 14px;
+      color: #111811;
+      font-size: 15px;
+      line-height: 1.35;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+    .phone-composer {
+      display: grid;
+      grid-template-columns: 30px 1fr 30px;
+      align-items: center;
+      gap: 8px;
+      height: 34px;
+      padding: 0 12px;
+      background: #f7f5ef;
+      color: #141a15;
+      font-size: 22px;
+    }
+    .phone-input {
+      height: 24px;
+      border-radius: 999px;
+      background: #fff;
+      border: 1px solid rgba(0, 0, 0, 0.12);
     }
     .terminal {
       height: calc(100% - 54px);
@@ -356,8 +434,24 @@ export function renderDemoHtml({ tmuxText = terminalTranscriptText() } = {}) {
     </header>
     <section class="grid">
       <section class="panel">
-        <div class="panel-head"><span class="panel-title">WhatsApp Source</span><span class="panel-kicker">attached image</span></div>
-        <div class="phone-frame"><img class="phone-shot" alt="WhatsApp screenshot with GitHub proof lines" src="${whatsappDataUri}" /></div>
+        <div class="panel-head"><span class="panel-title">WhatsApp Source</span><span class="panel-kicker">same lines</span></div>
+        <div class="phone-frame">
+          <div class="phone-shell" aria-label="WhatsApp screenshot with GitHub proof lines">
+            <div class="phone-status"><span>11:32</span><span>5G 52%</span></div>
+            <div class="phone-chat-head">
+              <span class="phone-back">‹</span>
+              <span class="phone-avatar">ORK</span>
+              <span><strong>otcanClaw-orkestr</strong><small>Orkestr, You</small></span>
+            </div>
+            <div class="phone-body">
+              <article class="phone-bubble">
+                <div class="phone-preview">orkestr/docs/assets/orkestr-three-screen-demo.png at main · otcan/orkestr<br />github.com</div>
+                <pre class="phone-message">otcanclaw: ${webProof}</pre>
+              </article>
+            </div>
+            <div class="phone-composer"><span>+</span><span class="phone-input"></span><span>◉</span></div>
+          </div>
+        </div>
       </section>
       <section class="panel">
         <div class="panel-head"><span class="panel-title">TMUX Capture</span><span class="panel-kicker">same lines</span></div>
@@ -471,7 +565,6 @@ async function loadPuppeteer() {
 
 export async function recordDemo() {
   await fs.mkdir(path.dirname(demoAssetPath), { recursive: true });
-  await fs.access(whatsappProofPath);
   const tmuxText = await captureTmuxTranscript();
   const puppeteer = await loadPuppeteer();
   const browser = await puppeteer.launch({
