@@ -7,6 +7,7 @@ import { adminPrincipal } from "../../../packages/core/src/principal.js";
 import { getThread, listThreadMessages, listThreads, listThreadsForPrincipal } from "../../../packages/core/src/threads.js";
 import { detectThreadGitState } from "../../../packages/core/src/thread-workers.js";
 import { defaultAdminUser, normalizeUserId } from "../../../packages/core/src/users.js";
+import { appendEvent } from "../../../packages/storage/src/store.js";
 import { visibleThreadMessages } from "../../../packages/core/src/thread-message-visibility.js";
 
 type ThreadSummaryOptions = {
@@ -26,14 +27,27 @@ const threadMetadataCache = new Map<string, {
 let threadSummaryPayloadCache: {
   cacheKey: string;
   expiresAt: number;
+  staleExpiresAt: number;
   payload: Record<string, unknown> | null;
   inFlight: Promise<Record<string, unknown>> | null;
 } = {
   cacheKey: "",
   expiresAt: 0,
+  staleExpiresAt: 0,
   payload: null,
   inFlight: null,
 };
+
+export function resetThreadSummaryCachesForTest(): void {
+  threadMetadataCache.clear();
+  threadSummaryPayloadCache = {
+    cacheKey: "",
+    expiresAt: 0,
+    staleExpiresAt: 0,
+    payload: null,
+    inFlight: null,
+  };
+}
 
 export function codexThreadId(thread: any): string {
   return String(thread?.executor?.codexThreadId || thread?.codexThreadId || "").trim();
@@ -246,6 +260,21 @@ function threadSummaryPayloadCacheTtlMs(): number {
   return Number.isFinite(parsed) ? Math.max(0, parsed) : 5000;
 }
 
+function threadSummaryStalePayloadTtlMs(): number {
+  const parsed = Number(process.env.ORKESTR_THREAD_SUMMARY_STALE_PAYLOAD_TTL_MS || 30_000);
+  return Number.isFinite(parsed) ? Math.max(0, parsed) : 30_000;
+}
+
+function threadSummaryMessagesLimit(): number {
+  const parsed = Number(process.env.ORKESTR_THREAD_SUMMARY_MESSAGES_LIMIT || 200);
+  return Number.isFinite(parsed) ? Math.max(0, Math.floor(parsed)) : 200;
+}
+
+function threadSummarySlowMs(): number {
+  const parsed = Number(process.env.ORKESTR_THREAD_SUMMARY_SLOW_MS || 1500);
+  return Number.isFinite(parsed) ? Math.max(0, parsed) : 1500;
+}
+
 async function listThreadSummaryScope(principal: Record<string, any> | null, includeAllUserThreads: boolean) {
   const effectivePrincipal = principal || adminPrincipal(defaultAdminUser());
   if (includeAllUserThreads || !isAdminPrincipal(effectivePrincipal)) {
@@ -255,6 +284,59 @@ async function listThreadSummaryScope(principal: Record<string, any> | null, inc
   const ownerUserId = normalizeUserId(effectivePrincipal.userId || defaultAdminUser().id);
   const threads = await listThreads();
   return threads.filter((thread: any) => resourceOwnerUserId(thread) === ownerUserId);
+}
+
+async function listThreadMessagesForSummary(threadId: string) {
+  const messages = await listThreadMessages(threadId);
+  const limit = threadSummaryMessagesLimit();
+  if (limit <= 0 || messages.length <= limit) return messages;
+  const tailStart = Math.max(0, messages.length - limit);
+  const tail = messages.slice(tailStart);
+  const preserveStates = new Set(["queued", "pending_delivery", "awaiting_ack", "running"]);
+  const preserved = messages.slice(0, tailStart).filter((message) => {
+    const role = String(message?.role || message?.kind || "").trim().toLowerCase();
+    const state = String(message?.state || "").trim().toLowerCase();
+    return (role === "user" && preserveStates.has(state)) || isNeedInputMessage(message);
+  });
+  return [...preserved, ...tail];
+}
+
+function storeThreadSummaryPayload(
+  cacheKey: string,
+  payload: Record<string, unknown>,
+  payloadCacheTtlMs: number,
+  stalePayloadTtlMs: number,
+) {
+  if (payloadCacheTtlMs <= 0) return;
+  const now = Date.now();
+  threadSummaryPayloadCache = {
+    cacheKey,
+    expiresAt: now + payloadCacheTtlMs,
+    staleExpiresAt: now + payloadCacheTtlMs + stalePayloadTtlMs,
+    payload,
+    inFlight: null,
+  };
+}
+
+function keepStaleThreadSummaryPayload(
+  cacheKey: string,
+  stalePayloadTtlMs: number,
+  computePayload: Promise<Record<string, unknown>>,
+) {
+  if (threadSummaryPayloadCache.inFlight !== computePayload) return false;
+  const keepPayload = threadSummaryPayloadCache.cacheKey === cacheKey ? threadSummaryPayloadCache.payload : null;
+  threadSummaryPayloadCache = {
+    cacheKey: keepPayload ? cacheKey : "",
+    expiresAt: 0,
+    staleExpiresAt: keepPayload && stalePayloadTtlMs > 0 ? Date.now() + stalePayloadTtlMs : 0,
+    payload: keepPayload,
+    inFlight: null,
+  };
+  return Boolean(keepPayload);
+}
+
+function summaryErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error || "unknown_error");
 }
 
 function nonEmptyString(value: unknown): string {
@@ -528,6 +610,7 @@ export async function threadRuntimeSummary(thread: any, messages: any[] = [], op
 export async function threadSummaryPayload(options: ThreadSummaryOptions = {}) {
   const cacheTtlMs = Number(options.cacheTtlMs ?? threadSummaryCacheTtlMs()) || 0;
   const payloadCacheTtlMs = Number(options.payloadCacheTtlMs ?? threadSummaryPayloadCacheTtlMs()) || 0;
+  const stalePayloadTtlMs = threadSummaryStalePayloadTtlMs();
   const principal = options.principal || null;
   const includeAllUserThreads = options.includeAllUserThreads === true;
   const effectivePrincipal = principal || adminPrincipal(defaultAdminUser());
@@ -547,56 +630,99 @@ export async function threadSummaryPayload(options: ThreadSummaryOptions = {}) {
   ) {
     return threadSummaryPayloadCache.payload;
   }
+  const stalePayloadAvailable = Boolean(
+    payloadCacheTtlMs > 0 &&
+    stalePayloadTtlMs > 0 &&
+    threadSummaryPayloadCache.cacheKey === payloadCacheKey &&
+    threadSummaryPayloadCache.payload &&
+    threadSummaryPayloadCache.staleExpiresAt > now,
+  );
+  const stalePayload = stalePayloadAvailable ? threadSummaryPayloadCache.payload : null;
+  const inFlightPayload = threadSummaryPayloadCache.inFlight;
   if (
     payloadCacheTtlMs > 0 &&
     threadSummaryPayloadCache.cacheKey === payloadCacheKey &&
-    threadSummaryPayloadCache.inFlight
+    inFlightPayload
   ) {
-    return threadSummaryPayloadCache.inFlight;
+    return stalePayload || inFlightPayload;
   }
   const computePayload = (async () => {
+    const startedAt = Date.now();
     const threads = await listThreadSummaryScope(effectivePrincipal, includeAllUserThreads);
     const activeThreadIds = new Set(threads.map((thread: any) => String(thread?.id || "")).filter(Boolean));
     for (const id of threadMetadataCache.keys()) {
       if (!activeThreadIds.has(id)) threadMetadataCache.delete(id);
     }
-    return {
+    const payload = {
       generatedAt: new Date().toISOString(),
       threads: await Promise.all(threads.map(async (thread: any) => threadRuntimeSummary(
         thread,
-        await listThreadMessages(thread.id),
+        await listThreadMessagesForSummary(thread.id),
         { cacheTtlMs },
       ))),
     };
+    const durationMs = Date.now() - startedAt;
+    const slowMs = threadSummarySlowMs();
+    if (slowMs > 0 && durationMs >= slowMs) {
+      await appendEvent({
+        type: "thread_summary_slow",
+        durationMs,
+        threadCount: threads.length,
+        cacheTtlMs,
+        payloadCacheTtlMs,
+        includeAllUserThreads,
+        ownerUserId: effectivePrincipal?.userId || null,
+      }).catch(() => {});
+    }
+    return payload;
   })();
   if (payloadCacheTtlMs > 0) {
+    const priorPayload = threadSummaryPayloadCache.cacheKey === payloadCacheKey ? threadSummaryPayloadCache.payload : null;
     threadSummaryPayloadCache = {
       cacheKey: payloadCacheKey,
       expiresAt: 0,
-      payload: null,
+      staleExpiresAt: priorPayload && stalePayloadTtlMs > 0 ? Date.now() + stalePayloadTtlMs : 0,
+      payload: priorPayload,
       inFlight: computePayload,
     };
+    if (priorPayload && stalePayloadTtlMs > 0) {
+      void computePayload
+        .then((payload) => {
+          if (threadSummaryPayloadCache.inFlight === computePayload) {
+            storeThreadSummaryPayload(payloadCacheKey, payload, payloadCacheTtlMs, stalePayloadTtlMs);
+          }
+        })
+        .catch((error) => {
+          const stalePayloadKept = keepStaleThreadSummaryPayload(payloadCacheKey, stalePayloadTtlMs, computePayload);
+          void appendEvent({
+            type: "thread_summary_refresh_failed",
+            error: summaryErrorMessage(error),
+            stalePayloadKept,
+            includeAllUserThreads,
+            ownerUserId: effectivePrincipal?.userId || null,
+          }).catch(() => {});
+        });
+      return priorPayload;
+    }
   }
   try {
     const payload = await computePayload;
     if (payloadCacheTtlMs > 0) {
-      threadSummaryPayloadCache = {
-        cacheKey: payloadCacheKey,
-        expiresAt: Date.now() + payloadCacheTtlMs,
-        payload,
-        inFlight: null,
-      };
+      storeThreadSummaryPayload(payloadCacheKey, payload, payloadCacheTtlMs, stalePayloadTtlMs);
     }
     return payload;
   } catch (error) {
+    let stalePayloadKept = false;
     if (threadSummaryPayloadCache.inFlight === computePayload) {
-      threadSummaryPayloadCache = {
-        cacheKey: "",
-        expiresAt: 0,
-        payload: null,
-        inFlight: null,
-      };
+      stalePayloadKept = keepStaleThreadSummaryPayload(payloadCacheKey, stalePayloadTtlMs, computePayload);
     }
+    await appendEvent({
+      type: "thread_summary_refresh_failed",
+      error: summaryErrorMessage(error),
+      stalePayloadKept,
+      includeAllUserThreads,
+      ownerUserId: effectivePrincipal?.userId || null,
+    }).catch(() => {});
     throw error;
   }
 }

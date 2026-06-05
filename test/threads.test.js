@@ -7,7 +7,7 @@ import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
 import { promisify } from "node:util";
 import { startServer } from "../apps/server/src/server.js";
-import { threadRuntimeSummary, threadSummaryRuntimeSnapshot } from "../apps/server/src/thread-summary.ts";
+import { resetThreadSummaryCachesForTest, threadRuntimeSummary, threadSummaryPayload, threadSummaryRuntimeSnapshot } from "../apps/server/src/thread-summary.ts";
 import { runNextThreadMessage } from "../packages/core/src/executors.js";
 import { applyRuntimeCodexMode, consumeThreadConnectorDeliverySignalCount, deliverPendingThreadInputs, doctorRuntimeResources, drainAllPendingThreadInputs, hardResetThreadRuntime, listRuntimeLeases, resetThreadRuntime, resolveCodexThreadMetadata, runtimeStatus, setThreadConnectorDeliverySignalHandler, sleepThread, syncRuntimeLeases, syncRuntimeWindowName, wakeThread } from "../packages/core/src/runtime-leases.js";
 import { ensureDataDirs } from "../packages/storage/src/paths.js";
@@ -3878,6 +3878,78 @@ test("thread summary ignores stale need_input questions when messages are out of
     assert.equal(summary.pendingQuestion, null);
   } finally {
     restoreEnvValue("ORKESTR_HOME", priorHome);
+  }
+});
+
+test("thread summary returns stale payload while an expired cache refreshes", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-stale-payload-summary-"));
+  const priorHome = process.env.ORKESTR_HOME;
+  const priorStaleTtl = process.env.ORKESTR_THREAD_SUMMARY_STALE_PAYLOAD_TTL_MS;
+  process.env.ORKESTR_HOME = path.join(home, "orkestr-home");
+  process.env.ORKESTR_THREAD_SUMMARY_STALE_PAYLOAD_TTL_MS = "5000";
+  resetThreadSummaryCachesForTest();
+
+  try {
+    await createThread({ id: "stale-payload-summary-thread", name: "Old Summary Name" });
+    const firstPayload = await threadSummaryPayload({ cacheTtlMs: 0, payloadCacheTtlMs: 1 });
+    const firstThread = firstPayload.threads.find((thread) => thread.id === "stale-payload-summary-thread");
+    assert.equal(firstThread.name, "Old Summary Name");
+
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    await updateThread("stale-payload-summary-thread", { name: "New Summary Name" });
+
+    const stalePayload = await threadSummaryPayload({ cacheTtlMs: 0, payloadCacheTtlMs: 1 });
+    const staleThread = stalePayload.threads.find((thread) => thread.id === "stale-payload-summary-thread");
+    assert.equal(staleThread.name, "Old Summary Name");
+
+    let refreshedThread = null;
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      const payload = await threadSummaryPayload({ cacheTtlMs: 0, payloadCacheTtlMs: 1000 });
+      refreshedThread = payload.threads.find((thread) => thread.id === "stale-payload-summary-thread");
+      if (refreshedThread?.name === "New Summary Name") break;
+    }
+    assert.equal(refreshedThread?.name, "New Summary Name");
+  } finally {
+    resetThreadSummaryCachesForTest();
+    restoreEnvValue("ORKESTR_HOME", priorHome);
+    restoreEnvValue("ORKESTR_THREAD_SUMMARY_STALE_PAYLOAD_TTL_MS", priorStaleTtl);
+  }
+});
+
+test("thread summary message cap preserves old active delivery state", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-summary-message-cap-"));
+  const priorHome = process.env.ORKESTR_HOME;
+  const priorMessageLimit = process.env.ORKESTR_THREAD_SUMMARY_MESSAGES_LIMIT;
+  process.env.ORKESTR_HOME = path.join(home, "orkestr-home");
+  process.env.ORKESTR_THREAD_SUMMARY_MESSAGES_LIMIT = "2";
+  resetThreadSummaryCachesForTest();
+
+  try {
+    await createThread({ id: "summary-message-cap-thread", name: "Summary Message Cap Thread" });
+    await appendThreadMessage("summary-message-cap-thread", {
+      role: "user",
+      source: "manual",
+      text: "Still pending",
+      state: "queued",
+    });
+    for (let index = 0; index < 3; index += 1) {
+      await appendThreadMessage("summary-message-cap-thread", {
+        role: "assistant",
+        source: "test",
+        text: `Completed ${index}`,
+        state: "completed",
+      });
+    }
+
+    const payload = await threadSummaryPayload({ cacheTtlMs: 0, payloadCacheTtlMs: 0 });
+    const summary = payload.threads.find((thread) => thread.id === "summary-message-cap-thread");
+    assert.equal(summary.pendingCount, 1);
+    assert.equal(summary.turnLifecycle.queued, true);
+  } finally {
+    resetThreadSummaryCachesForTest();
+    restoreEnvValue("ORKESTR_HOME", priorHome);
+    restoreEnvValue("ORKESTR_THREAD_SUMMARY_MESSAGES_LIMIT", priorMessageLimit);
   }
 });
 
