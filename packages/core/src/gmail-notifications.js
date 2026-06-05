@@ -10,6 +10,7 @@ import {
   updateConnectorPromptPush,
   updateConnectorPromptPushForPrincipal,
 } from "./connector-pushes.js";
+import { principalForUserId, userPrincipal } from "./principal.js";
 import { isAdminPrincipal } from "./policy.js";
 import { adminUserId, normalizeUserId } from "./users.js";
 
@@ -382,6 +383,16 @@ async function getStoredGmailNotification(id, env = process.env) {
   return push;
 }
 
+async function principalForNotificationOwner(push = {}, env = process.env) {
+  const ownerUserId = normalizeUserId(push.ownerUserId || push.userId || env.ORKESTR_ADMIN_USER_ID || adminUserId);
+  return await principalForUserId(ownerUserId, env) ||
+    userPrincipal({
+      id: ownerUserId,
+      role: ownerUserId === normalizeUserId(env.ORKESTR_ADMIN_USER_ID || adminUserId) ? "admin" : "user",
+      source: "gmail-notification-owner",
+    });
+}
+
 async function scheduleAfterRun(push = {}, env = process.env, now = new Date(), patch = {}) {
   const intervalMs = Number(push.schedule?.intervalMs || push.safety?.minIntervalMs || gmailNotificationMinIntervalMs(env)) || gmailNotificationMinIntervalMs(env);
   const nextRunAt = push.enabled === true ? new Date(now.getTime() + intervalMs).toISOString() : "";
@@ -403,9 +414,11 @@ export async function runGmailNotificationNow(id, env = process.env, fetchImpl =
   if (!gmailNotificationsEnabled(env)) throw notificationError("gmail_notifications_disabled", 403);
   const now = options.now instanceof Date ? options.now : new Date();
   const push = await getStoredGmailNotification(id, env);
+  const principal = options.principal || await principalForNotificationOwner(push, env);
   try {
     const result = await runGmailPromptPush(push.id, env, fetchImpl, {
       ...options,
+      principal,
       force: options.force !== false,
     });
     const latest = result.push || await getStoredGmailNotification(push.id, env);
