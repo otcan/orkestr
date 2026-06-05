@@ -889,8 +889,8 @@ test("tenant api-agent Gmail notification tools list and delete scoped rules", a
     targetType: "thread",
     target: "",
     maxItemsPerRun: 1,
-    enabled: true,
-    allowBroadQuery: false,
+    enabled: "true",
+    allowBroadQuery: "",
   }, { principal, thread }, env);
   const updated = await runTenantApiAgentTool("orkestr_update_gmail_notification", {
     notificationId: "",
@@ -1233,14 +1233,31 @@ test("tenant api-agent asks for Gmail address when testing allowlist requires it
 
   let modelCalls = 0;
   const result = await processApiAgentThreadInput("otcantest-gmail-allowlist-account", env, {
-    fetchImpl: async () => {
+    fetchImpl: async (_url, options = {}) => {
       modelCalls += 1;
+      if (modelCalls === 1) {
+        return response({
+          id: "resp_gmail_allowlist_account_1",
+          model: "gpt-5-mini",
+          output_text: "",
+          output: [{
+            type: "function_call",
+            name: "orkestr_start_connector_auth",
+            call_id: "call_gmail_allowlist_account",
+            arguments: JSON.stringify({ provider: "gmail", account: "", shop: "" }),
+          }],
+          usage: { input_tokens: 180, output_tokens: 14 },
+        });
+      }
+      const body = JSON.parse(options.body);
+      const toolOutput = JSON.parse(body.input.find((item) => item.type === "function_call_output")?.output || "{}");
+      assert.equal(toolOutput.error, "gmail_account_required_for_tester_check");
       return response({
-        id: "resp_gmail_allowlist_account",
+        id: "resp_gmail_allowlist_account_2",
         model: "gpt-5-mini",
-        output_text: "Done.",
+        output_text: GENERIC_TOOL_FALLBACK_TEXT,
         output: [],
-        usage: { input_tokens: 180, output_tokens: 4 },
+        usage: { input_tokens: 260, output_tokens: 22 },
       });
     },
   });
@@ -1248,7 +1265,7 @@ test("tenant api-agent asks for Gmail address when testing allowlist requires it
   const assistant = messages.filter((message) => message.role === "assistant").at(-1);
 
   assert.equal(result.ok, true);
-  assert.equal(modelCalls, 0);
+  assert.equal(modelCalls, 2);
   assert.match(assistant.text, /Which Gmail address do you want to connect/i);
   assert.doesNotMatch(assistant.text, /accounts\.google\.com|Done\./i);
 });
@@ -1267,8 +1284,8 @@ test("tenant api-agent explains Google tester approval failures instead of sayin
   }, env);
   await enqueueThreadInputForPrincipal("otcantest-gmail-access-denied", {
     text: [
-      "Access blocked: orkestr.de has not completed the Google verification process",
-      "oguzcan.unver.us@gmail.com",
+      "Access blocked: example-app.example.test has not completed the Google verification process",
+      "tester@example.test",
       "The app is currently being tested, and can only be accessed by developer-approved testers.",
       "Error 403: access_denied",
     ].join("\n"),
@@ -1283,11 +1300,11 @@ test("tenant api-agent explains Google tester approval failures instead of sayin
     fetchImpl: async () => {
       modelCalls += 1;
       return response({
-      id: "resp_gmail_access_denied",
-      model: "gpt-5-mini",
-      output_text: "Done.",
-      output: [],
-      usage: { input_tokens: 180, output_tokens: 4 },
+        id: "resp_gmail_access_denied",
+        model: "gpt-5-mini",
+        output_text: "Gmail sign-in did not complete for tester@example.test. This Google OAuth app is still in testing mode, so that address must be added to the approved Google test-user list before sign-in can work.",
+        output: [],
+        usage: { input_tokens: 180, output_tokens: 34 },
       });
     },
   });
@@ -1295,9 +1312,9 @@ test("tenant api-agent explains Google tester approval failures instead of sayin
   const assistant = messages.filter((message) => message.role === "assistant").at(-1);
 
   assert.equal(result.ok, true);
-  assert.equal(modelCalls, 0);
+  assert.equal(modelCalls, 1);
   assert.notEqual(assistant.text.trim(), "Done.");
-  assert.match(assistant.text, /Gmail sign-in did not complete for oguzcan\.unver\.us@gmail\.com/i);
+  assert.match(assistant.text, /Gmail sign-in did not complete for tester@example\.test/i);
   assert.match(assistant.text, /approved Google test-user list|Google OAuth test user/i);
   assert.doesNotMatch(assistant.text, /Ask me to connect Gmail|You can connect Gmail/i);
 });
@@ -1428,6 +1445,119 @@ test("tenant api-agent formats Gmail auth tool output when model falls back gene
   assert.match(assistant.text, /Gmail sign-in is not available yet/i);
   assert.match(assistant.text, /parent app configuration is missing/i);
   assert.doesNotMatch(assistant.text, /without a tool result|Workspace and live browser/i);
+});
+
+test("tenant api-agent exposes provider verb object action registry", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-api-agent-action-registry-"));
+  const env = await allowSanitizerEnv(home);
+  const principal = userPrincipal({ id: "otcan", role: "user" });
+
+  const gmail = await runTenantApiAgentTool("orkestr_list_action_registry", {
+    provider: "gmail",
+    verb: "",
+    object: "",
+  }, { principal }, env);
+  const timers = await runTenantApiAgentTool("orkestr_list_action_registry", {
+    provider: "timer",
+    verb: "create",
+    object: "timer",
+  }, { principal }, env);
+
+  assert.equal(gmail.ok, true);
+  assert.equal(gmail.actions.some((action) => action.provider === "gmail" && action.verb === "read" && action.object === "message"), true);
+  assert.equal(gmail.actions.some((action) => action.provider === "calendar"), false);
+  assert.equal(timers.actions.length, 1);
+  assert.equal(timers.actions[0].tool, "orkestr_create_automation");
+});
+
+test("tenant api-agent generic automation tools manage timer prompts", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-api-agent-automation-timer-"));
+  const env = await allowSanitizerEnv(home);
+  await upsertUser({ id: "otcan", role: "user", displayName: "Otcan" }, env);
+  await createThread({
+    id: "otcan-automation-timer",
+    ownerUserId: "otcan",
+    name: "otcan-automation-timer",
+    runtimeKind: "api-agent",
+    executor: { type: "api-agent", metadata: { runtimeKind: "api-agent" } },
+    binding: { connector: "whatsapp", chatId: "chat-automation-timer", outboundAccountId: "wa-1" },
+  }, env);
+  const principal = userPrincipal({ id: "otcan", role: "user" });
+  const thread = await getThread("otcan-automation-timer", env);
+
+  const created = await runTenantApiAgentTool("orkestr_create_automation", {
+    type: "timer",
+    provider: "timer",
+    label: "Daily Gmail check",
+    targetType: "thread",
+    target: "",
+    cadence: "interval",
+    delay: "",
+    runAt: "",
+    time: "",
+    timezone: "Europe/Istanbul",
+    every: "1h",
+    prompt: "Check Gmail and summarize new important mail.",
+    promptTemplate: "",
+    query: "",
+    maxItemsPerRun: 0,
+    enabled: true,
+    allowBroadQuery: false,
+  }, { principal, thread }, env);
+  const automationId = created.automation.automationId;
+  const listed = await runTenantApiAgentTool("orkestr_list_automations", {}, { principal, thread }, env);
+  const paused = await runTenantApiAgentTool("orkestr_pause_automation", {
+    automationId,
+    type: "",
+  }, { principal, thread }, env);
+  const resumed = await runTenantApiAgentTool("orkestr_resume_automation", {
+    automationId,
+    type: "",
+  }, { principal, thread }, env);
+  const updated = await runTenantApiAgentTool("orkestr_update_automation", {
+    automationId,
+    type: "",
+    label: "Hourly Gmail check",
+    targetType: "",
+    target: "",
+    cadence: "",
+    delay: "",
+    runAt: "",
+    time: "",
+    timezone: "",
+    every: "2h",
+    prompt: "",
+    promptTemplate: "",
+    query: "",
+    maxItemsPerRun: 0,
+    enabled: "true",
+    allowBroadQuery: "",
+    noReplyBehavior: "",
+  }, { principal, thread }, env);
+  const run = await runTenantApiAgentTool("orkestr_run_automation", {
+    automationId,
+    type: "",
+    force: false,
+    sourceItemsJson: "[]",
+  }, { principal, thread }, env);
+  const deleted = await runTenantApiAgentTool("orkestr_delete_automation", {
+    automationId,
+    type: "",
+  }, { principal, thread }, env);
+
+  assert.equal(created.ok, true);
+  assert.match(automationId, /^timer:/);
+  assert.equal(created.automation.target, "otcan-automation-timer");
+  assert.equal(listed.automations.some((automation) => automation.automationId === automationId), true);
+  assert.equal(paused.automation.enabled, false);
+  assert.equal(resumed.automation.enabled, true);
+  assert.equal(updated.automation.label, "Hourly Gmail check");
+  assert.equal(updated.automation.schedule.every, "2h");
+  assert.equal(updated.automation.prompt, "Check Gmail and summarize new important mail.");
+  assert.equal(run.ok, true);
+  assert.equal(run.event.target, "otcan-automation-timer");
+  assert.equal(deleted.ok, true);
+  assert.equal((await listTimers(env)).length, 0);
 });
 
 test("tenant api-agent drains queued tenant messages while it owns the lock", async () => {
@@ -2120,6 +2250,7 @@ test("tenant api-agent uses Gmail prompt-push message id for follow-up actions",
 
   const openAiCalls = [];
   const gmailCalls = [];
+  const gmailToolOutputs = [];
   const result = await processApiAgentThreadInput("gmail-push-followup-chat", env, {
     fetchImpl: async (url, options = {}) => {
       const parsed = new URL(String(url));
@@ -2130,27 +2261,27 @@ test("tenant api-agent uses Gmail prompt-push message id for follow-up actions",
           assert.match(body.instructions, /Recent Gmail notification context/i);
           assert.match(body.instructions, /paypal-msg-1/);
           assert.match(body.input.find((item) => item.content?.includes("Receipt for Your Payment"))?.content || "", /Private connector context/);
-          assert.equal(body.input.some((item) => item.type === "function_call" && item.name === "orkestr_read_gmail_message"), true);
-          const toolOutput = JSON.parse(body.input.at(-1).output);
-          assert.equal(toolOutput.message.subject, "Receipt for Your Payment to LimeBike Germany Gmb...");
-          assert.match(toolOutput.message.text, /single Lime ride receipt/i);
+          assert.equal(body.input.some((item) => item.type === "function_call" && item.name === "orkestr_read_gmail_message"), false);
           return response({
             id: "resp_gmail_push_followup_1",
             model: "gpt-5-mini",
-            output_text: GENERIC_TOOL_FALLBACK_TEXT,
-            output: [],
-            usage: { input_tokens: 430, output_tokens: 38 },
+            output_text: "",
+            output: [{
+              type: "function_call",
+              name: "orkestr_read_gmail_message",
+              call_id: "call_gmail_push_followup_read",
+              arguments: JSON.stringify({ messageId: "paypal-msg-1" }),
+            }],
+            usage: { input_tokens: 430, output_tokens: 18 },
           });
         }
-        assert.match(body.instructions, /Response repair/i);
-        assert.match(body.instructions, /answer the user's latest request from those results/i);
-        assert.match(body.input.map((item) => item.content || "").join("\n"), /Tenant tool result/i);
+        gmailToolOutputs.push(JSON.parse(body.input.find((item) => item.type === "function_call_output")?.output || "{}"));
         return response({
           id: "resp_gmail_push_followup_2",
           model: "gpt-5-mini",
-          output_text: "Done.",
+          output_text: "I read the Gmail message. It looks like a single Lime ride receipt for 0.99 EUR, not a subscription: the message says it is a payment to LimeBike Germany Gmb and does not show a recurring billing agreement. I did not cancel, send, delete, archive, or modify anything.",
           output: [],
-          usage: { input_tokens: 520, output_tokens: 2 },
+          usage: { input_tokens: 520, output_tokens: 54 },
         });
       }
       if (parsed.hostname === "gmail.googleapis.com") {
@@ -2183,13 +2314,121 @@ test("tenant api-agent uses Gmail prompt-push message id for follow-up actions",
   const assistant = messages.filter((message) => message.role === "assistant").at(-1);
 
   assert.equal(result.ok, true);
-  assert.equal(openAiCalls.length, 2);
+  assert.equal(openAiCalls.length, 3);
   assert.deepEqual(gmailCalls, ["/gmail/v1/users/me/messages/paypal-msg-1"]);
+  assert.equal(gmailToolOutputs[0].message.subject, "Receipt for Your Payment to LimeBike Germany Gmb...");
+  assert.match(gmailToolOutputs[0].message.text, /single Lime ride receipt/i);
   assert.match(assistant.text, /I read the Gmail message/i);
   assert.match(assistant.text, /single Lime ride receipt/i);
   assert.match(assistant.text, /I did not cancel, send, delete, archive, or modify anything/i);
   assert.doesNotMatch(assistant.text, /next step is to read the full email/i);
   assert.doesNotMatch(assistant.text, /Tell me what you want|workspace execution|\/codex/i);
+});
+
+test("tenant api-agent does not let stale Gmail context override notification requests", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-api-agent-gmail-context-notification-"));
+  const env = await allowSanitizerEnv(home, {
+    ORKESTR_ADMIN_USER_ID: "otcan",
+    ORKESTR_GMAIL_NOTIFICATIONS_ENABLED: "1",
+    ORKESTR_GMAIL_NOTIFICATION_MIN_INTERVAL_MS: "300000",
+    GMAIL_OAUTH_CLIENT_ID: "gmail-client-env",
+    GMAIL_OAUTH_CLIENT_SECRET: "gmail-secret-env",
+    GMAIL_OAUTH_REDIRECT_URI: "https://example.test/oauth/gmail/callback",
+  });
+  await upsertUser({ id: "otcan", role: "user", displayName: "Otcan" }, env);
+  const paths = userDataPaths("otcan", env);
+  await fs.mkdir(paths.secrets, { recursive: true });
+  await fs.writeFile(path.join(paths.secrets, "gmail-token.json"), JSON.stringify({
+    accessToken: "user-context-notification-token",
+    refreshToken: "user-context-notification-refresh",
+    expiresAt: Math.floor(Date.now() / 1000) + 3600,
+  }), "utf8");
+  await createThread({
+    id: "gmail-context-notification-chat",
+    ownerUserId: "otcan",
+    name: "gmail-context-notification-chat",
+    runtimeKind: "api-agent",
+    executor: { type: "api-agent", metadata: { runtimeKind: "api-agent" } },
+    binding: { connector: "whatsapp", chatId: "chat-gmail-context-notification" },
+  }, env);
+  await appendThreadMessage("gmail-context-notification-chat", {
+    role: "user",
+    source: "connector_prompt_push",
+    connector: "gmail",
+    originSurface: "gmail",
+    externalId: "stale-gmail-msg-1",
+    chatId: "chat-gmail-context-notification",
+    state: "completed",
+    text: [
+      "New Gmail message",
+      "From: Alerts <alerts@example.com>",
+      "Subject: Previous alert",
+      "Date: Thu, 04 Jun 2026 06:00:00 -0700",
+      "Snippet: A previous Gmail alert.",
+    ].join("\n"),
+  }, env);
+  await enqueueThreadInputForPrincipal("gmail-context-notification-chat", {
+    text: "Can you send me a message here whenever I receive a Gmail mail?",
+    source: "whatsapp_inbound",
+    connector: "whatsapp",
+    chatId: "chat-gmail-context-notification",
+  }, userPrincipal({ id: "otcan", role: "user" }), env);
+
+  const openAiCalls = [];
+  const result = await processApiAgentThreadInput("gmail-context-notification-chat", env, {
+    fetchImpl: async (url, options = {}) => {
+      const parsed = new URL(String(url));
+      assert.equal(parsed.hostname, "api.openai.com");
+      const body = JSON.parse(options.body);
+      openAiCalls.push(body);
+      if (openAiCalls.length === 1) {
+        assert.match(body.instructions, /Recent Gmail notification context/i);
+        assert.match(body.instructions, /stale-gmail-msg-1/);
+        assert.match(body.instructions, /Do not let this stale Gmail context override/i);
+        assert.equal(body.input.some((item) => item.type === "function_call" && item.name === "orkestr_read_gmail_message"), false);
+        return response({
+          id: "resp_gmail_context_notification_1",
+          model: "gpt-5-mini",
+          output_text: "",
+          output: [{
+            type: "function_call",
+            name: "orkestr_create_gmail_notification",
+            call_id: "call_gmail_context_notification",
+            arguments: JSON.stringify({
+              label: "Gmail message notifications",
+              query: "",
+              interval: "1m",
+              targetType: "thread",
+              target: "",
+              maxItemsPerRun: 1,
+              enabled: true,
+              allowBroadQuery: false,
+            }),
+          }],
+          usage: { input_tokens: 360, output_tokens: 22 },
+        });
+      }
+      const toolOutput = JSON.parse(body.input.find((item) => item.type === "function_call_output")?.output || "{}");
+      assert.equal(toolOutput.ok, true);
+      assert.equal(toolOutput.notification.target, "gmail-context-notification-chat");
+      return response({
+        id: "resp_gmail_context_notification_2",
+        model: "gpt-5-mini",
+        output_text: "Gmail notification created. I will message this chat when new matching Gmail arrives.",
+        output: [],
+        usage: { input_tokens: 420, output_tokens: 18 },
+      });
+    },
+  });
+  const messages = await listThreadMessages("gmail-context-notification-chat", env);
+  const assistant = messages.filter((message) => message.role === "assistant").at(-1);
+  const notifications = await listGmailNotificationsForPrincipal(userPrincipal({ id: "otcan", role: "user" }), env);
+
+  assert.equal(result.ok, true);
+  assert.equal(openAiCalls.length, 2);
+  assert.equal(notifications.length, 1);
+  assert.match(assistant.text, /Gmail notification created/i);
+  assert.doesNotMatch(assistant.text, /Previous alert|read the Gmail message|subscription/i);
 });
 
 test("tenant api-agent keeps Gmail prompt-push notification useful when model stays generic", async () => {
@@ -2754,7 +2993,7 @@ test("tenant api-agent formats LinkedIn desktop tool output when model falls bac
   assert.notEqual(assistant.text.trim(), "Done.");
 });
 
-test("tenant api-agent opens managed desktop requests directly without weak model replies", async () => {
+test("tenant api-agent routes managed desktop requests through skill tools", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-api-agent-direct-desktop-open-"));
   const env = await allowSanitizerEnv(home, {
     ORKESTR_BROWSER_DESKTOP_MODE: "profiles",
@@ -2779,15 +3018,55 @@ test("tenant api-agent opens managed desktop requests directly without weak mode
     accountId: "wa-1",
   }, userPrincipal({ id: "otcan", role: "user" }), env);
 
+  const calls = [];
   const result = await processApiAgentThreadInput("otcantest-direct-desktop-open", env, {
-    fetchImpl: async () => {
-      throw new Error("openai_should_not_be_called_for_direct_desktop_open");
+    fetchImpl: async (_url, options = {}) => {
+      const body = JSON.parse(options.body);
+      calls.push(body);
+      if (calls.length === 1) {
+        assert.equal(body.tools.some((tool) => tool.name === "orkestr_list_skill_actions"), true);
+        assert.equal(body.tools.some((tool) => tool.name === "orkestr_run_skill_action"), true);
+        return response({
+          id: "resp_direct_desktop_open_1",
+          model: "gpt-5-mini",
+          output_text: "",
+          output: [
+            {
+              type: "function_call",
+              name: "orkestr_list_skill_actions",
+              call_id: "call_direct_desktop_actions",
+              arguments: JSON.stringify({ skillId: "linkedin" }),
+            },
+            {
+              type: "function_call",
+              name: "orkestr_run_skill_action",
+              call_id: "call_direct_desktop_open",
+              arguments: JSON.stringify({ skillId: "linkedin", action: "open", target: "", url: "" }),
+            },
+          ],
+          usage: { input_tokens: 300, output_tokens: 30 },
+        });
+      }
+      const toolOutputs = body.input
+        .filter((item) => item.type === "function_call_output")
+        .map((item) => JSON.parse(item.output));
+      assert.equal(toolOutputs[0].skills[0].id, "linkedin");
+      assert.equal(toolOutputs[1].ok, true);
+      assert.equal(toolOutputs[1].desktop.slug, "linkedin");
+      return response({
+        id: "resp_direct_desktop_open_2",
+        model: "gpt-5-mini",
+        output_text: GENERIC_TOOL_FALLBACK_TEXT,
+        output: [],
+        usage: { input_tokens: 450, output_tokens: 32 },
+      });
     },
   });
   const messages = await listThreadMessages("otcantest-direct-desktop-open", env);
   const assistant = messages.find((message) => message.parentMessageId === input.id);
 
   assert.equal(result.ok, true);
+  assert.equal(calls.length, 2);
   assert.match(assistant.text, /LinkedIn is open/i);
   assert.match(assistant.text, /does not report login state/i);
   assert.doesNotMatch(assistant.text, /\/codex/i);
@@ -3255,8 +3534,33 @@ test("tenant api-agent answers public web topic requests from web fetch tool out
   const result = await processApiAgentThreadInput("otcantest-web-fetch-answer", env, {
     fetchImpl: async (url, options = {}) => {
       if (String(url).includes("/responses")) {
-        openAiCalls.push(JSON.parse(options.body));
-        throw new Error("openai_should_not_be_called_for_direct_web_fetch");
+        const body = JSON.parse(options.body);
+        openAiCalls.push(body);
+        if (openAiCalls.length === 1) {
+          assert.equal(body.tools.some((tool) => tool.name === "orkestr_fetch_web_page"), true);
+          return response({
+            id: "resp_web_fetch_answer_1",
+            model: "gpt-5-mini",
+            output_text: "",
+            output: [{
+              type: "function_call",
+              name: "orkestr_fetch_web_page",
+              call_id: "call_web_fetch_answer",
+              arguments: JSON.stringify({ url: "https://eksisozluk.com/basliklar/gundem", maxLinks: 10, maxChars: 2000 }),
+            }],
+            usage: { input_tokens: 260, output_tokens: 18 },
+          });
+        }
+        const toolOutput = JSON.parse(body.input.find((item) => item.type === "function_call_output")?.output || "{}");
+        assert.equal(toolOutput.title, "gundem - eksi sozluk");
+        assert.equal(toolOutput.links.length, 3);
+        return response({
+          id: "resp_web_fetch_answer_2",
+          model: "gpt-5-mini",
+          output_text: "Top counted items I found: robert lewandowski (190), yalnizligin en cok koydugu an (87), and minyon kadin agresifligi (97).",
+          output: [],
+          usage: { input_tokens: 380, output_tokens: 32 },
+        });
       }
       webFetchCalls.push(String(url));
       return new Response(html, {
@@ -3269,7 +3573,7 @@ test("tenant api-agent answers public web topic requests from web fetch tool out
   const assistant = messages.find((message) => message.parentMessageId === input.id);
 
   assert.equal(result.ok, true);
-  assert.equal(openAiCalls.length, 0);
+  assert.equal(openAiCalls.length, 2);
   assert.deepEqual(webFetchCalls, ["https://eksisozluk.com/basliklar/gundem"]);
   assert.equal(assistant.source, "api-agent");
   assert.match(assistant.text, /Top counted items I found/i);
@@ -3314,8 +3618,33 @@ test("tenant api-agent answers explicit public URL fetches without falling back 
   const result = await processApiAgentThreadInput("otcantest-explicit-web-fetch-answer", env, {
     fetchImpl: async (url, options = {}) => {
       if (String(url).includes("/responses")) {
-        openAiCalls.push(JSON.parse(options.body));
-        throw new Error("openai_should_not_be_called_for_direct_web_fetch");
+        const body = JSON.parse(options.body);
+        openAiCalls.push(body);
+        if (openAiCalls.length === 1) {
+          assert.equal(body.tools.some((tool) => tool.name === "orkestr_fetch_web_page"), true);
+          return response({
+            id: "resp_explicit_web_fetch_answer_1",
+            model: "gpt-5-mini",
+            output_text: "",
+            output: [{
+              type: "function_call",
+              name: "orkestr_fetch_web_page",
+              call_id: "call_explicit_web_fetch_answer",
+              arguments: JSON.stringify({ url: "https://orkestr.example.test/", maxLinks: 10, maxChars: 2000 }),
+            }],
+            usage: { input_tokens: 260, output_tokens: 18 },
+          });
+        }
+        const toolOutput = JSON.parse(body.input.find((item) => item.type === "function_call_output")?.output || "{}");
+        assert.equal(toolOutput.title, "Orkestr public alpha");
+        assert.match(toolOutput.text, /contained agents/);
+        return response({
+          id: "resp_explicit_web_fetch_answer_2",
+          model: "gpt-5-mini",
+          output_text: "Fetched Orkestr public alpha. The page says Orkestr lets users talk to contained agents from chat and focuses on WhatsApp, Gmail setup, managed desktops, and safe tenant boundaries.",
+          output: [],
+          usage: { input_tokens: 360, output_tokens: 30 },
+        });
       }
       webFetchCalls.push(String(url));
       return new Response(html, {
@@ -3328,7 +3657,7 @@ test("tenant api-agent answers explicit public URL fetches without falling back 
   const assistant = messages.find((message) => message.parentMessageId === input.id);
 
   assert.equal(result.ok, true);
-  assert.equal(openAiCalls.length, 0);
+  assert.equal(openAiCalls.length, 2);
   assert.deepEqual(webFetchCalls, ["https://orkestr.example.test/"]);
   assert.match(assistant.text, /Fetched Orkestr public alpha/i);
   assert.match(assistant.text, /contained agents/i);
@@ -3452,10 +3781,66 @@ test("tenant api-agent opens the generic desktop when public fetch hits a browse
     accountId: "wa-1",
   }, userPrincipal({ id: "otcan", role: "user" }), env);
   const html = "<html><head><title>Just a moment...</title></head><body>Checking your browser before accessing the site. Cloudflare</body></html>";
+  const openAiCalls = [];
 
   const result = await processApiAgentThreadInput("otcantest-web-fetch-desktop-fallback", env, {
-    fetchImpl: async (url) => {
-      assert.equal(String(url).includes("/responses"), false);
+    fetchImpl: async (url, options = {}) => {
+      if (String(url).includes("/responses")) {
+        const body = JSON.parse(options.body);
+        openAiCalls.push(body);
+        if (openAiCalls.length === 1) {
+          assert.equal(body.tools.some((tool) => tool.name === "orkestr_fetch_web_page"), true);
+          return response({
+            id: "resp_web_fetch_desktop_fallback_1",
+            model: "gpt-5-mini",
+            output_text: "",
+            output: [{
+              type: "function_call",
+              name: "orkestr_fetch_web_page",
+              call_id: "call_web_fetch_desktop_fallback",
+              arguments: JSON.stringify({ url: "https://example.com/protected", maxLinks: 10, maxChars: 2000 }),
+            }],
+            usage: { input_tokens: 280, output_tokens: 18 },
+          });
+        }
+        if (openAiCalls.length === 2) {
+          const toolOutput = JSON.parse(body.input.find((item) => item.type === "function_call_output")?.output || "{}");
+          assert.equal(toolOutput.title, "Just a moment...");
+          assert.match(toolOutput.text, /Checking your browser/i);
+          return response({
+            id: "resp_web_fetch_desktop_fallback_2",
+            model: "gpt-5-mini",
+            output_text: "",
+            output: [
+              {
+                type: "function_call",
+                name: "orkestr_list_skill_actions",
+                call_id: "call_web_fetch_desktop_actions",
+                arguments: JSON.stringify({ skillId: "linkedin" }),
+              },
+              {
+                type: "function_call",
+                name: "orkestr_run_skill_action",
+                call_id: "call_web_fetch_desktop_open_url",
+                arguments: JSON.stringify({ skillId: "linkedin", action: "open_url", target: "", url: "https://example.com/protected" }),
+              },
+            ],
+            usage: { input_tokens: 420, output_tokens: 42 },
+          });
+        }
+        const toolOutputs = body.input
+          .filter((item) => item.type === "function_call_output")
+          .map((item) => JSON.parse(item.output));
+        assert.equal(toolOutputs.at(-1).ok, true);
+        assert.equal(toolOutputs.at(-1).openedUrl, "https://example.com/protected");
+        return response({
+          id: "resp_web_fetch_desktop_fallback_3",
+          model: "gpt-5-mini",
+          output_text: GENERIC_TOOL_FALLBACK_TEXT,
+          output: [],
+          usage: { input_tokens: 560, output_tokens: 32 },
+        });
+      }
       return new Response(html, {
         status: 200,
         headers: { "content-type": "text/html; charset=utf-8" },
@@ -3466,7 +3851,8 @@ test("tenant api-agent opens the generic desktop when public fetch hits a browse
   const assistant = messages.find((message) => message.parentMessageId === input.id);
 
   assert.equal(result.ok, true);
-  assert.match(assistant.text, /opened https:\/\/example\.com\/protected in Desktop/i);
+  assert.equal(openAiCalls.length, 3);
+  assert.match(assistant.text, /opened https:\/\/example\.com\/protected in LinkedIn/i);
   assert.match(assistant.text, /does not return page contents/i);
   assert.doesNotMatch(assistant.text, /Fetched Just a moment/i);
   assert.doesNotMatch(assistant.text, /\/codex/i);
@@ -3498,15 +3884,42 @@ test("tenant api-agent does not desktop-fallback private web fetch targets", asy
     accountId: "wa-1",
   }, userPrincipal({ id: "otcan", role: "user" }), env);
 
+  const openAiCalls = [];
   const result = await processApiAgentThreadInput("otcantest-private-web-fetch-no-desktop", env, {
-    fetchImpl: async () => {
-      throw new Error("private_fetch_should_be_rejected_before_network");
+    fetchImpl: async (url, options = {}) => {
+      if (!String(url).includes("/responses")) throw new Error("private_fetch_should_be_rejected_before_network");
+      const body = JSON.parse(options.body);
+      openAiCalls.push(body);
+      if (openAiCalls.length === 1) {
+        return response({
+          id: "resp_private_web_fetch_no_desktop_1",
+          model: "gpt-5-mini",
+          output_text: "",
+          output: [{
+            type: "function_call",
+            name: "orkestr_fetch_web_page",
+            call_id: "call_private_web_fetch_no_desktop",
+            arguments: JSON.stringify({ url: "http://127.0.0.1:19812/api/health", maxLinks: 10, maxChars: 2000 }),
+          }],
+          usage: { input_tokens: 240, output_tokens: 18 },
+        });
+      }
+      const toolOutput = JSON.parse(body.input.find((item) => item.type === "function_call_output")?.output || "{}");
+      assert.equal(toolOutput.error, "url_host_forbidden");
+      return response({
+        id: "resp_private_web_fetch_no_desktop_2",
+        model: "gpt-5-mini",
+        output_text: "I cannot fetch that URL from this chat because private/local hosts are blocked (url_host_forbidden).",
+        output: [],
+        usage: { input_tokens: 320, output_tokens: 18 },
+      });
     },
   });
   const messages = await listThreadMessages("otcantest-private-web-fetch-no-desktop", env);
   const assistant = messages.find((message) => message.parentMessageId === input.id);
 
   assert.equal(result.ok, true);
+  assert.equal(openAiCalls.length, 2);
   assert.match(assistant.text, /url_host_forbidden/i);
   assert.doesNotMatch(assistant.text, /opened/i);
 });

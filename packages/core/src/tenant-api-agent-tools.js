@@ -28,6 +28,15 @@ import {
   runTenantApiAgentGoogleWorkspaceTool,
   tenantApiAgentGoogleWorkspaceToolDefinitions,
 } from "../../connectors/src/google-workspace-api-agent-tools.js";
+import { listActionRegistry } from "./action-registry.js";
+import {
+  createAutomationForPrincipal,
+  deleteAutomationForPrincipal,
+  listAutomationsForPrincipal,
+  runAutomationForPrincipal,
+  setAutomationEnabledForPrincipal,
+  updateAutomationForPrincipal,
+} from "./automations.js";
 import { runTenantApiAgentTimerTool, tenantApiAgentTimerToolDefinitions } from "./tenant-api-agent-timer-tools.js";
 import { whereAmI } from "./whereiam.js";
 import {
@@ -466,8 +475,8 @@ function skillActionNames(skill = {}, capabilities = {}, desktops = null, env = 
   if (!skillAvailableFromCapabilities(skill, capabilities)) return ["status"];
   if (id === "whereiam") return ["status"];
   if (id === "files") return capabilities.files === true ? ["list", "read", "write"] : ["status"];
-  if (id === "timers") return capabilities.timers === true ? ["list", "create", "delete", "run"] : ["status"];
-  if (id === "gmail") return ["status", "search", "read", "notify", "list_notifications", "actions", "draft", "send", "calendar", "drive_file"];
+  if (id === "timers") return capabilities.timers === true ? ["list", "create", "update", "pause", "resume", "delete", "run", "automations"] : ["status"];
+  if (id === "gmail") return ["status", "search", "read", "notify", "list_notifications", "automations", "actions", "draft", "send", "calendar", "drive_file"];
   if (["outlook", "jira", "shopify", "whatsapp"].includes(id)) return ["status"];
   if (clean(skill.requiresDesktop)) {
     if (!desktops) return ["status", "list_actions"];
@@ -970,6 +979,157 @@ export function tenantApiAgentToolDefinitions() {
       strict: true,
     },
     ...tenantApiAgentTimerToolDefinitions(),
+    {
+      type: "function",
+      name: "orkestr_list_action_registry",
+      description: "List the tenant action registry as provider + verb + object + options. Use this to reason about available and planned connector actions across Gmail, Outlook, Calendar, Jira, WhatsApp, Drive, timers, and pushes before choosing an action.",
+      parameters: {
+        type: "object",
+        properties: {
+          provider: { type: "string", description: "Optional provider filter such as gmail, outlook, calendar, jira, whatsapp, drive, timer, or push. Empty string returns all providers." },
+          verb: { type: "string", description: "Optional verb filter such as list, read, create, update, delete, send, run, watch, pause, or resume. Empty string returns all verbs." },
+          object: { type: "string", description: "Optional object filter such as message, event, issue, chat, notification, timer, connector_push, or file. Empty string returns all objects." },
+        },
+        required: ["provider", "verb", "object"],
+        additionalProperties: false,
+      },
+      strict: true,
+    },
+    {
+      type: "function",
+      name: "orkestr_list_automations",
+      description: "List this tenant's timers and connector prompt pushes in one normalized automation list.",
+      parameters: {
+        type: "object",
+        properties: {},
+        required: [],
+        additionalProperties: false,
+      },
+      strict: true,
+    },
+    {
+      type: "function",
+      name: "orkestr_create_automation",
+      description: "Create a timer, Gmail notification, or connector prompt push. Timers are prompts that fire into a target chat/thread and can call tools when they run. Use this when the user asks to add, create, schedule, watch, notify, monitor, or push updates.",
+      parameters: {
+        type: "object",
+        properties: {
+          type: { type: "string", enum: ["timer", "gmail_notification", "push"], description: "Automation type to create." },
+          provider: { type: "string", enum: ["", "gmail", "outlook", "calendar", "jira", "whatsapp", "drive", "timer", "push"], description: "Connector provider. Use gmail for Gmail notifications or Gmail prompt pushes, timer for timers, empty string when not applicable." },
+          label: { type: "string", description: "Short automation label." },
+          targetType: { type: "string", enum: ["thread", "agent"], description: "Usually thread for the current chat." },
+          target: { type: "string", description: "Target thread or agent id. Use empty string to target the current chat." },
+          cadence: { type: "string", enum: ["", "once", "daily", "weekly", "interval"], description: "Timer cadence, or empty string for non-timers." },
+          delay: { type: "string", description: "Relative one-shot timer delay, or empty string." },
+          runAt: { type: "string", description: "Absolute one-shot timer ISO time, or empty string." },
+          time: { type: "string", description: "Daily/weekly timer clock time, or empty string." },
+          timezone: { type: "string", description: "IANA timezone for clock timers, or empty string." },
+          every: { type: "string", description: "Interval expression for timers or pushes, such as 5m, 1h, or 1d. Empty string when unused." },
+          prompt: { type: "string", description: "Timer prompt or connector push prompt. For timer automations, this is the instruction injected when the timer fires." },
+          promptTemplate: { type: "string", description: "Connector push prompt template, or empty string." },
+          query: { type: "string", description: "Connector source query, such as a Gmail search query. Empty string uses the safe default for Gmail notifications." },
+          maxItemsPerRun: { type: "number", description: "Maximum source items per run, 1 to 5." },
+          enabled: { type: "boolean", description: "Whether the automation starts enabled." },
+          allowBroadQuery: { type: "boolean", description: "True only when the user explicitly asks for a broad query." },
+        },
+        required: ["type", "provider", "label", "targetType", "target", "cadence", "delay", "runAt", "time", "timezone", "every", "prompt", "promptTemplate", "query", "maxItemsPerRun", "enabled", "allowBroadQuery"],
+        additionalProperties: false,
+      },
+      strict: true,
+    },
+    {
+      type: "function",
+      name: "orkestr_update_automation",
+      description: "Modify an existing timer, Gmail notification, or connector prompt push. Use automation ids returned by orkestr_list_automations, such as timer:<id>, gmail_notification:<id>, or push:<id>.",
+      parameters: {
+        type: "object",
+        properties: {
+          automationId: { type: "string", description: "Automation id, preferably prefixed with timer:, gmail_notification:, or push:." },
+          type: { type: "string", enum: ["", "timer", "gmail_notification", "push"], description: "Automation type when automationId is not prefixed. Empty string when prefixed." },
+          label: { type: "string", description: "Replacement label, or empty string to keep existing." },
+          targetType: { type: "string", enum: ["", "thread", "agent"], description: "Replacement target type, or empty string." },
+          target: { type: "string", description: "Replacement target id, or empty string." },
+          cadence: { type: "string", enum: ["", "once", "daily", "weekly", "interval"], description: "Replacement timer cadence, or empty string." },
+          delay: { type: "string", description: "Replacement one-shot delay, or empty string." },
+          runAt: { type: "string", description: "Replacement absolute one-shot ISO time, or empty string." },
+          time: { type: "string", description: "Replacement clock time, or empty string." },
+          timezone: { type: "string", description: "Replacement IANA timezone, or empty string." },
+          every: { type: "string", description: "Replacement interval expression, or empty string." },
+          prompt: { type: "string", description: "Replacement timer or push prompt, or empty string." },
+          promptTemplate: { type: "string", description: "Replacement push prompt template, or empty string." },
+          query: { type: "string", description: "Replacement connector query, or empty string." },
+          maxItemsPerRun: { type: "number", description: "Replacement max items per run. Use 0 to keep existing." },
+          enabled: { type: "string", enum: ["", "true", "false"], description: "Replacement enabled state. Use empty string to keep existing." },
+          allowBroadQuery: { type: "string", enum: ["", "true", "false"], description: "True only when broad query is explicitly requested. Use empty string to keep existing." },
+          noReplyBehavior: { type: "string", enum: ["", "suppress"], description: "Optional connector push no-reply behavior." },
+        },
+        required: ["automationId", "type", "label", "targetType", "target", "cadence", "delay", "runAt", "time", "timezone", "every", "prompt", "promptTemplate", "query", "maxItemsPerRun", "enabled", "allowBroadQuery", "noReplyBehavior"],
+        additionalProperties: false,
+      },
+      strict: true,
+    },
+    {
+      type: "function",
+      name: "orkestr_delete_automation",
+      description: "Delete an existing timer, Gmail notification, or connector prompt push.",
+      parameters: {
+        type: "object",
+        properties: {
+          automationId: { type: "string", description: "Automation id, preferably prefixed with timer:, gmail_notification:, or push:." },
+          type: { type: "string", enum: ["", "timer", "gmail_notification", "push"], description: "Automation type when automationId is not prefixed. Empty string when prefixed." },
+        },
+        required: ["automationId", "type"],
+        additionalProperties: false,
+      },
+      strict: true,
+    },
+    {
+      type: "function",
+      name: "orkestr_run_automation",
+      description: "Run an existing timer, Gmail notification, or connector prompt push now. Timers enqueue their prompt into the target chat/thread; Gmail notifications poll Gmail; connector pushes use provided sourceItems.",
+      parameters: {
+        type: "object",
+        properties: {
+          automationId: { type: "string", description: "Automation id, preferably prefixed with timer:, gmail_notification:, or push:." },
+          type: { type: "string", enum: ["", "timer", "gmail_notification", "push"], description: "Automation type when automationId is not prefixed. Empty string when prefixed." },
+          force: { type: "boolean", description: "Bypass min-interval safety when supported." },
+          sourceItemsJson: { type: "string", description: "JSON array of source items for connector prompt pushes. Use [] for timers and Gmail notifications." },
+        },
+        required: ["automationId", "type", "force", "sourceItemsJson"],
+        additionalProperties: false,
+      },
+      strict: true,
+    },
+    {
+      type: "function",
+      name: "orkestr_pause_automation",
+      description: "Disable a timer, Gmail notification, or connector prompt push without deleting it.",
+      parameters: {
+        type: "object",
+        properties: {
+          automationId: { type: "string", description: "Automation id, preferably prefixed with timer:, gmail_notification:, or push:." },
+          type: { type: "string", enum: ["", "timer", "gmail_notification", "push"], description: "Automation type when automationId is not prefixed. Empty string when prefixed." },
+        },
+        required: ["automationId", "type"],
+        additionalProperties: false,
+      },
+      strict: true,
+    },
+    {
+      type: "function",
+      name: "orkestr_resume_automation",
+      description: "Re-enable a paused timer, Gmail notification, or connector prompt push.",
+      parameters: {
+        type: "object",
+        properties: {
+          automationId: { type: "string", description: "Automation id, preferably prefixed with timer:, gmail_notification:, or push:." },
+          type: { type: "string", enum: ["", "timer", "gmail_notification", "push"], description: "Automation type when automationId is not prefixed. Empty string when prefixed." },
+        },
+        required: ["automationId", "type"],
+        additionalProperties: false,
+      },
+      strict: true,
+    },
     ...tenantApiAgentGoogleWorkspaceToolDefinitions(),
     {
       type: "function",
@@ -1222,6 +1382,39 @@ export async function runTenantApiAgentTool(name = "", args = {}, context = {}, 
   }
   const timerTool = await runTenantApiAgentTimerTool(tool, args, { principal, thread }, env);
   if (timerTool.handled) return timerTool.result;
+  if (tool === "orkestr_list_action_registry") {
+    return { ok: true, actions: listActionRegistry(args) };
+  }
+  if (tool === "orkestr_list_automations") {
+    return { ok: true, automations: await listAutomationsForPrincipal(principal, env) };
+  }
+  if (tool === "orkestr_create_automation") {
+    return createAutomationForPrincipal(args, principal, env, { thread, fetchImpl: context.fetchImpl || fetch });
+  }
+  if (tool === "orkestr_update_automation") {
+    return updateAutomationForPrincipal(args, principal, env, { thread, fetchImpl: context.fetchImpl || fetch });
+  }
+  if (tool === "orkestr_delete_automation") {
+    return deleteAutomationForPrincipal(args, principal, env);
+  }
+  if (tool === "orkestr_run_automation") {
+    let sourceItems = [];
+    if (clean(args.sourceItemsJson)) {
+      try {
+        const parsed = JSON.parse(args.sourceItemsJson);
+        sourceItems = Array.isArray(parsed) ? parsed : [];
+      } catch {
+        return { ok: false, error: "invalid_source_items_json" };
+      }
+    }
+    return runAutomationForPrincipal({ ...args, sourceItems }, principal, env, { thread, fetchImpl: context.fetchImpl || fetch });
+  }
+  if (tool === "orkestr_pause_automation") {
+    return setAutomationEnabledForPrincipal(args, false, principal, env);
+  }
+  if (tool === "orkestr_resume_automation") {
+    return setAutomationEnabledForPrincipal(args, true, principal, env);
+  }
   const googleWorkspaceTool = await runTenantApiAgentGoogleWorkspaceTool(tool, args, { principal, thread, fetchImpl: context.fetchImpl || fetch }, env);
   if (googleWorkspaceTool.handled) return googleWorkspaceTool.result;
   if (tool === "orkestr_start_connector_auth") {

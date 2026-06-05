@@ -1,4 +1,3 @@
-import net from "node:net";
 import { appendEvent } from "../../storage/src/store.js";
 import { assertSanitizedAction } from "./llm-sanitizer.js";
 import { isAdminPrincipal } from "./policy.js";
@@ -13,6 +12,8 @@ import { builtinUserSkillDefinitions, userScopedCapabilityHints } from "./user-s
 import { routingFailureFromError } from "./routing-failures.js";
 import { adminUserId, normalizeUserId } from "./users.js";
 import { appendTurnLifecycleEvent, turnLifecycleFromRuntimeStatus } from "./turn-lifecycle.js";
+import { actionRegistryInstructions } from "./action-registry.js";
+import { recordApiAgentFailureSuggestion } from "./api-agent-suggestions.js";
 
 export const API_AGENT_RUNTIME_KIND = "api-agent";
 
@@ -33,6 +34,8 @@ function lower(value) {
 function apiAgentToolCapability(tool = "") {
   const name = lower(tool);
   if (["orkestr_list_timers", "orkestr_create_timer", "orkestr_delete_timer", "orkestr_run_timer"].includes(name)) return "timers";
+  if (name.includes("automation")) return "timers";
+  if (name.includes("action_registry")) return "skills";
   if (name.includes("gmail") || name.includes("google_calendar") || name.includes("google_drive") || name.includes("google_workspace")) return "gmail";
   if (name.includes("outlook")) return "outlook";
   if (name.includes("desktop") || name.includes("browser") || name.includes("linkedin")) return "linkedin";
@@ -45,7 +48,7 @@ function apiAgentToolCapability(tool = "") {
 function messageCapabilityIntent(text = "") {
   const value = lower(text);
   if (/\b(?:gmail|google workspace|google calendar|calendar events?|google drive|drive file)\b/.test(value)) return "gmail";
-  if (/\b(?:timer|remind|reminder|schedule|in\s+\d+\s*(?:m|min|minute|minutes|h|hour|hours|d|day|days))\b/.test(value)) return "timers";
+  if (/\b(?:timer|automation|automations|push|notify|notification|notifications|watch|monitor|remind|reminder|schedule|in\s+\d+\s*(?:m|min|minute|minutes|h|hour|hours|d|day|days))\b/.test(value)) return "timers";
   if (/\boutlook\b/.test(value)) return "outlook";
   if (/\b(?:linkedin|desktop|browser)\b/.test(value)) return "linkedin";
   if (/\bwhatsapp\b/.test(value)) return "whatsapp";
@@ -90,10 +93,6 @@ function falsey(value = "") {
 
 function webFetchAvailable(env = process.env) {
   return !falsey(env.ORKESTR_API_AGENT_WEB_FETCH_ENABLED);
-}
-
-function desktopDirectActionsAvailable(env = process.env) {
-  return !falsey(env.ORKESTR_API_AGENT_DIRECT_DESKTOP_ENABLED);
 }
 
 function codexEscalationSentence(env = process.env) {
@@ -426,36 +425,11 @@ function gmailContextInstructions(message = {}, gmailContext = null) {
     lines.push(`Private Gmail message id for tool calls: ${info.messageId}.`);
   }
   lines.push(
-    "If the latest user message asks to open, read, summarize, extract details from, or act on that Gmail notification, use orkestr_read_gmail_message with the private message id when available before giving a specific answer.",
+    "If the latest user message asks to open, read, summarize, extract details from, or act on that Gmail notification, the Gmail read tools can use the private message id when available.",
+    "Do not let this stale Gmail context override the current user request. If the current request asks to notify, alert, push, watch, monitor, create/update automations, or manage notification rules, use the notification or automation tools instead of reading this email.",
     "If no tool is called or the model cannot act, answer from the notification context without claiming the external action was completed.",
   );
   return lines.join("\n");
-}
-
-function gmailContextReadFollowupEligible(message = {}, gmailContext = null) {
-  const text = clean(message.text);
-  if (!gmailContext?.messageId || !text || gmailPromptPushInfo(message)) return false;
-  if (!userMessageNeedsSubstantiveAnswer(text)) return false;
-  if (introducedName(text) || /\bwho\s+am\s+i\b/i.test(text)) return false;
-  if (/\b(?:what can you do|how can you help|what skills|which skills)\b/i.test(text)) return false;
-  if (gmailSignInIntent(text)) return false;
-  return true;
-}
-
-function directGmailContextReadResponse(message = {}, gmailContext = {}) {
-  const messageId = clean(gmailContext.messageId);
-  return {
-    id: `gmail_context_read_${clean(message.id) || Date.now()}`,
-    model: "orkestr-api-agent-direct-tool",
-    output_text: "",
-    output: [{
-      type: "function_call",
-      name: "orkestr_read_gmail_message",
-      call_id: `call_gmail_context_${(clean(message.id) || "message").replace(/[^A-Za-z0-9_-]/g, "_").slice(0, 80)}`,
-      arguments: JSON.stringify({ messageId }),
-    }],
-    usage: {},
-  };
 }
 
 function genericTenantApiAgentHelpText(text = "") {
@@ -616,71 +590,6 @@ function messageInputItem(message = {}) {
   };
 }
 
-function publicWebContentRequest(text = "") {
-  const value = clean(text);
-  if (!value) return false;
-  if (/\b(?:reply|respond|say|answer)\s+exactly\b/i.test(value)) return false;
-  if (/https?:\/\//i.test(value)) return true;
-  const hasWebIntent = /\b(?:fetch|check|open|read|inspect|summari[sz]e|look up|visit|tell me|what are|top|trending|gundem|gündem|topics?|links?|entries?|page|site|web)\b/i.test(value);
-  const targetedDomain = /\b(?:fetch|check|open|read|inspect|summari[sz]e|look up|visit)\s+(?:the\s+)?(?:public\s+)?(?:web\s+)?(?:site\s+|page\s+)?((?:[a-z0-9-]+\.)+[a-z]{2,})(?:\/[^\s<>"')]+)?/i.test(value);
-  if (targetedDomain) return true;
-  return hasWebIntent &&
-    /\b(?:public|website|site|web|page|url|link|news|trending|topics?|entries?|gundem|gündem|eksi|ekşi|sozluk|sözlük)\b/i.test(value);
-}
-
-function publicWebFetchTargetForMessage(text = "") {
-  const value = clean(text);
-  if (!publicWebContentRequest(value)) return null;
-  const explicitUrl = value.match(/https?:\/\/[^\s<>"')]+/i)?.[0];
-  if (explicitUrl) return { url: explicitUrl, maxLinks: 80, maxChars: 20_000, reason: "explicit_url" };
-  const domainPath = value.match(/\b(?:fetch|check|open|read|inspect|summari[sz]e|look up|visit)\s+(?:the\s+)?(?:public\s+)?(?:web\s+)?(?:site\s+|page\s+)?((?:[a-z0-9-]+\.)+[a-z]{2,})(\/[^\s<>"')]+)?/i);
-  if (domainPath) return { url: `https://${domainPath[1]}${domainPath[2] || "/"}`, maxLinks: 80, maxChars: 20_000, reason: "domain" };
-  if (/\b(?:eksi|ekşi)\s*(?:sozluk|sözlük)\b/i.test(value) && /\b(?:gundem|gündem|trending|topics?|başlıklar|basliklar|top)\b/i.test(value)) {
-    return { url: "https://eksisozluk.com/basliklar/gundem", maxLinks: 80, maxChars: 20_000, reason: "eksi_gundem" };
-  }
-  return null;
-}
-
-function privateHostname(hostname = "") {
-  const host = lower(hostname);
-  if (!host || host === "localhost" || host.endsWith(".localhost")) return true;
-  const version = net.isIP(host);
-  if (!version) return false;
-  if (version === 4) {
-    const parts = host.split(".").map((part) => Number(part));
-    const [a, b] = parts;
-    return a === 0 ||
-      a === 10 ||
-      a === 127 ||
-      (a === 169 && b === 254) ||
-      (a === 172 && b >= 16 && b <= 31) ||
-      (a === 192 && b === 168) ||
-      a >= 224;
-  }
-  return host === "::1" || host === "::" || host.startsWith("fc") || host.startsWith("fd") || host.startsWith("fe80:");
-}
-
-function publicWebFetchTargetForbidden(url = "") {
-  try {
-    const parsed = new URL(clean(url));
-    return !["http:", "https:"].includes(parsed.protocol) || privateHostname(parsed.hostname);
-  } catch {
-    return true;
-  }
-}
-
-function managedDesktopOpenRequest(text = "") {
-  const value = clean(text);
-  if (!desktopActionIntent(value)) return null;
-  if (/\b(?:open|start|launch)\s+(?:linkedin|managed desktop|desktop|browser|web desktop)\b/i.test(value)) return { skillId: "linkedin", action: "open" };
-  if (/\blinkedin\b/i.test(value) && /\b(?:logged\s*in|login|signed\s*in)\b/i.test(value)) return { skillId: "linkedin", action: "open" };
-  return null;
-}
-
-function desktopActionIntent(text = "") {
-  return /\b(?:open|start|launch|logged\s*in|login|signed\s*in)\b/i.test(clean(text));
-}
-
 function countedWebTextLines(text = "", limit = 10) {
   const seen = new Set();
   const entries = [];
@@ -703,6 +612,9 @@ function countedWebTextLines(text = "", limit = 10) {
 function fallbackWebFetchToolAnswer(toolOutputs = []) {
   const output = toolOutputs.find((item) => item?.ok === true && (clean(item.text) || Array.isArray(item.links)));
   if (!output) return "";
+  if (webFetchLooksLikeBrowserChallenge(output)) {
+    return `The public fetch returned a browser challenge for ${clean(output.url || output.requestedUrl) || "the requested page"}; it did not return useful page contents.`;
+  }
   const countedLinks = (Array.isArray(output.links) ? output.links : [])
     .map((link) => ({ label: clean(link.text), count: Number(link.count) }))
     .filter((entry) => entry.label && Number.isFinite(entry.count) && entry.count > 0)
@@ -745,25 +657,6 @@ function webFetchLooksLikeBrowserChallenge(output = {}) {
   return /\b(?:cloudflare|checking your browser|just a moment|attention required|verify you are human|captcha|ddos-guard|enable cookies|access denied)\b/i.test(text);
 }
 
-function webFetchDirectAnswerUsable(output = {}, answer = "") {
-  if (!output?.ok || !clean(answer)) return false;
-  if (webFetchLooksLikeBrowserChallenge(output)) return false;
-  const links = Array.isArray(output.links) ? output.links.filter((link) => clean(link.text)) : [];
-  return links.length > 0 || clean(output.text).length >= 40;
-}
-
-function webFetchDesktopFallbackAllowed(output = {}) {
-  const error = clean(output?.error);
-  if (!error) return true;
-  return !/(?:url_host_forbidden|url_resolves_to_forbidden_address|unsupported_url_protocol|invalid_url|private|localhost|loopback)/i.test(error);
-}
-
-function webFetchIssue(output = {}) {
-  if (webFetchLooksLikeBrowserChallenge(output)) return "the public fetch looked like a browser challenge";
-  if (output?.ok === false) return clean(output.error || "web_fetch_failed");
-  return "the public fetch did not return useful page contents";
-}
-
 function publicAppBaseUrl(env = process.env) {
   return clean(env.ORKESTR_PUBLIC_URL || env.ORKESTR_APP_URL || env.ORKESTR_PUBLIC_HTTPS_URL || env.ORKESTR_CONNECT_PUBLIC_URL);
 }
@@ -778,74 +671,6 @@ function publicFacingUrl(value = "", env = process.env) {
   } catch {
     return raw;
   }
-}
-
-function defaultManagedDesktopSlug(env = process.env) {
-  return clean(env.ORKESTR_DEFAULT_DESKTOP_SLUG || env.ORKESTR_MANUAL_INTERVENTION_DESKTOP_SLUG || "desktop");
-}
-
-async function openPublicWebFetchInDesktop({ target, output, thread, principal, env, fetchImpl }) {
-  if (!webFetchDesktopFallbackAllowed(output)) return "";
-  const args = { skillId: "linkedin", action: "open_url", target: defaultManagedDesktopSlug(env), url: clean(target?.url) };
-  let opened = null;
-  try {
-    await assertSanitizedAction({
-      action: "api-agent.tool.orkestr_run_skill_action",
-      principal,
-      resource: {
-        type: "thread",
-        id: thread.id,
-        ownerUserId: threadOwnerUserId(thread, env),
-        capabilities: await scopedCapabilitiesForThread(thread, env),
-      },
-      input: { tool: "orkestr_run_skill_action", args },
-    }, env);
-    opened = await runTenantApiAgentTool("orkestr_run_skill_action", args, { principal, thread, fetchImpl }, env);
-  } catch (error) {
-    opened = { ok: false, error: clean(error?.message || error || "desktop_fallback_failed") };
-  }
-  if (opened?.ok === false || clean(opened?.error)) {
-    return `I couldn't fetch useful page contents from this chat (${webFetchIssue(output)}), and the managed desktop fallback could not open it: ${clean(opened.error || "desktop_fallback_failed")}.`;
-  }
-  const desktop = opened.desktop || {};
-  const desktopLabel = clean(desktop.label || desktop.slug || "the managed desktop");
-  const openedUrl = publicFacingUrl(opened.openedUrl || opened.url || target?.url, env);
-  return [
-    `I couldn't fetch useful page contents from this chat (${webFetchIssue(output)}), so I opened ${openedUrl || clean(target?.url)} in ${desktopLabel}.`,
-    "The desktop action only confirms that the URL was opened; it does not return page contents or login state.",
-  ].join("\n");
-}
-
-async function runDirectManagedDesktopAction({ request, thread, principal, message, env, fetchImpl }) {
-  const args = { skillId: request.skillId, action: request.action, target: "", url: "" };
-  let output = null;
-  try {
-    await assertSanitizedAction({
-      action: "api-agent.tool.orkestr_run_skill_action",
-      principal,
-      resource: {
-        type: "thread",
-        id: thread.id,
-        ownerUserId: threadOwnerUserId(thread, env),
-        capabilities: await scopedCapabilitiesForThread(thread, env),
-      },
-      input: { tool: "orkestr_run_skill_action", args },
-    }, env);
-    output = await runTenantApiAgentTool("orkestr_run_skill_action", args, { principal, thread, fetchImpl }, env);
-  } catch (error) {
-    output = { ok: false, error: clean(error?.message || error || "desktop_action_failed") };
-  }
-  if (output?.ok === false || clean(output?.error)) {
-    return `Managed Desktop ${request.action} could not be completed: ${clean(output.error || "desktop_action_failed")}.`;
-  }
-  const desktop = output.desktop || {};
-  const label = clean(desktop.label || desktop.slug || "Managed Desktop");
-  const url = publicFacingUrl(output.openedUrl || output.url || desktop.url, env);
-  const lines = [`${label} is open${url ? ` at ${url}` : ""}.`];
-  if (/\blogged\s*in|login|signed\s*in/i.test(clean(message?.text))) {
-    lines.push("The tool result only confirms the desktop action; it does not report login state, so I cannot confirm whether you are logged in.");
-  }
-  return lines.join("\n");
 }
 
 function providerLabel(provider = "") {
@@ -1142,6 +967,47 @@ function formatTimerTool(result = {}) {
   return "";
 }
 
+function formatActionRegistryTool(result = {}) {
+  const actions = Array.isArray(result.output?.actions) ? result.output.actions : [];
+  if (!actions.length) return "No matching actions are registered for this chat.";
+  return [
+    "Registered actions:",
+    ...actions.slice(0, 12).map((action) => {
+      const status = clean(action.status) ? `, ${clean(action.status)}` : "";
+      return `- ${clean(action.provider)}.${clean(action.verb)}.${clean(action.object)} (${clean(action.tool)}${status})`;
+    }),
+  ].join("\n");
+}
+
+function formatAutomationTool(result = {}) {
+  const output = result.output || {};
+  if (output.ok === false || clean(output.error)) return `Automation tool failed: ${clean(output.error || "tool_failed")}.`;
+  if (Array.isArray(output.automations)) {
+    return output.automations.length
+      ? [
+          "Automations:",
+          ...output.automations.slice(0, 12).map((automation) => {
+            const state = automation.enabled === false ? "paused" : "enabled";
+            const nextRun = clean(automation.schedule?.nextRunAt) ? `, next ${clean(automation.schedule.nextRunAt)}` : "";
+            return `- ${clean(automation.label || automation.automationId)} (${clean(automation.type || automation.provider)}, ${state}${nextRun})`;
+          }),
+        ].join("\n")
+      : "No automations are configured for this chat.";
+  }
+  if (output.automation) {
+    const state = output.automation.enabled === false ? "paused" : "enabled";
+    return `Automation saved: ${clean(output.automation.label || output.automation.automationId)} (${clean(output.automation.type)}, ${state}).`;
+  }
+  if (output.event) return `Automation ran now: ${clean(output.event.label || output.automationId || "timer")}.`;
+  if (output.run) {
+    const delivered = Array.isArray(output.run.delivered) ? output.run.delivered.length : 0;
+    const skipped = Array.isArray(output.run.skipped) ? output.run.skipped.length : 0;
+    return `Automation ran now: ${delivered} delivered${skipped ? `, ${skipped} skipped` : ""}.`;
+  }
+  if (output.ok !== undefined) return output.ok ? "Automation updated." : "Automation action failed.";
+  return "";
+}
+
 function formatToolResultFallback(toolResults = [], context = {}) {
   if (!Array.isArray(toolResults) || !toolResults.length) return "";
   const hasRunSkillAction = toolResults.some((result) => result.name === "orkestr_run_skill_action");
@@ -1160,6 +1026,8 @@ function formatToolResultFallback(toolResults = [], context = {}) {
     else if (["orkestr_modify_gmail_message", "orkestr_create_gmail_draft", "orkestr_send_gmail_draft", "orkestr_send_gmail_message", "orkestr_list_google_calendar_events", "orkestr_create_google_calendar_event", "orkestr_update_google_calendar_event", "orkestr_delete_google_calendar_event", "orkestr_get_google_drive_file"].includes(result.name)) formatted = formatGoogleWorkspaceTool(result);
     else if (["orkestr_list_files", "orkestr_read_file", "orkestr_write_file"].includes(result.name)) formatted = formatFileTool(result);
     else if (["orkestr_list_timers", "orkestr_create_timer", "orkestr_delete_timer", "orkestr_run_timer"].includes(result.name)) formatted = formatTimerTool(result);
+    else if (result.name === "orkestr_list_action_registry") formatted = formatActionRegistryTool(result);
+    else if (["orkestr_list_automations", "orkestr_create_automation", "orkestr_update_automation", "orkestr_delete_automation", "orkestr_run_automation", "orkestr_pause_automation", "orkestr_resume_automation"].includes(result.name)) formatted = formatAutomationTool(result);
     else if (result.name === "orkestr_fetch_web_page") formatted = fallbackWebFetchToolAnswer([result.output]);
     if (formatted) parts.push(formatted);
   }
@@ -1279,8 +1147,8 @@ function publicSkillActionHints(skill = {}, available = false) {
   if (!available) return ["status"];
   if (clean(skill.requiresDesktop)) return ["status", "list_actions"];
   if (id === "files") return ["list", "read", "write"];
-  if (id === "timers") return ["list", "create", "delete", "run"];
-  if (id === "gmail") return ["status", "search", "read", "notify", "list_notifications"];
+  if (id === "timers") return ["list", "create", "update", "pause", "resume", "delete", "run", "automations"];
+  if (id === "gmail") return ["status", "search", "read", "notify", "list_notifications", "automations"];
   if (["outlook", "jira", "shopify", "whatsapp"].includes(id)) return ["status"];
   if (id === "whereiam") return ["status"];
   return ["status"];
@@ -1482,7 +1350,8 @@ export async function buildTenantApiAgentInstructions(thread = {}, messages = []
     "Do not tell contained users to open, check, or use the Orkestr UI for connector setup. This chat is the user surface; connector setup should happen through the sign-in instructions you provide in chat when parent app credentials exist.",
     "When Gmail capability is true and the user asks to search, list, open, read, inspect, or summarize Gmail, use the scoped Gmail tools directly. The user's request is consent for that same-user Gmail action; do not ask for repeated confirmation unless the target email or search is ambiguous.",
     "When Gmail capability is true and the Tenant connectorAuth.gmail capabilities include Gmail actions, Gmail send, Calendar read, Calendar actions, or Drive selected files, use the matching Google Workspace tools. For sending email, require explicit approval of recipients, subject, and body before sending; drafts may be created when the user asks to draft. For Calendar actions, require explicit approval of the calendar, title, time, and changed/deleted event before creating, updating, or deleting events.",
-    "When Gmail capability is true and the user asks to notify, alert, push, monitor, or periodically check new Gmail in this chat, call the Gmail notification tool in that turn to create or manage the rule. Do not ask for yes/no confirmation when the safe defaults are enough; the user's request is consent for a same-chat notification rule. Use the safe default query when the user did not specify a narrower query, and explain after the tool result if the requested interval was rounded up by policy.",
+    "When Gmail capability is true and the user asks to notify, alert, push, monitor, or periodically check new Gmail in this chat, call a Gmail notification or generic automation tool in that turn to create or manage the rule. Do not ask for yes/no confirmation when the safe defaults are enough; the user's request is consent for a same-chat notification rule. Use the safe default query when the user did not specify a narrower query, and explain after the tool result if the requested interval was rounded up by policy.",
+    actionRegistryInstructions(),
     webFetch
       ? "When the user asks for current public web page content, public site topics, public links, or a public page summary, use orkestr_fetch_web_page first. Answer only from the returned title, text, links, and counts. If the fetch fails or the returned content is insufficient, say that plainly instead of claiming you checked the page."
       : "Public web page fetching is not available in this chat right now. Do not claim you checked current public web content unless another tool result explicitly returns it.",
@@ -1778,6 +1647,7 @@ async function runTenantApiAgentToolResultResponse({
   idempotencySuffix = "2",
   callKind = "assistant_tool_result",
   fallbackFromToolOutputs = null,
+  toolDepth = 1,
 }) {
   const toolInput = [...inputItems, ...responseFunctionCallInputItems(responseWithCalls)];
   const calls = responseFunctionCalls(responseWithCalls);
@@ -1849,6 +1719,24 @@ async function runTenantApiAgentToolResultResponse({
     input: toolInput,
   }, env, fetchImpl, `orkestr-${thread.id}-${message.id}-${idempotencySuffix}`);
   await recordResponseUsage({ response: second, thread, message, callKind }, env);
+  if (responseFunctionCalls(second).length && toolDepth < 3) {
+    return runTenantApiAgentToolResultResponse({
+      baseBody,
+      inputItems: toolInput,
+      responseWithCalls: second,
+      thread,
+      message,
+      principal,
+      pendingAction,
+      gmailContext,
+      env,
+      fetchImpl,
+      idempotencySuffix: `${idempotencySuffix}-${toolDepth + 1}`,
+      callKind: `${callKind}_next`,
+      fallbackFromToolOutputs,
+      toolDepth: toolDepth + 1,
+    });
+  }
   const text = responseText(second);
   const customFallback = typeof fallbackFromToolOutputs === "function" ? clean(fallbackFromToolOutputs(toolOutputs, { message, text })) : "";
   const toolFallback = clean(formatToolResultFallback(toolResults, { message, text, pendingAction, env }));
@@ -1943,19 +1831,6 @@ async function runTenantApiAgentResponse({ thread, messages, message, env, fetch
   const principal = tenantPrincipalForThread(thread, env);
   const pendingAction = pendingActionConfirmation(messages, message);
   const gmailContext = latestGmailPromptPushBefore(messages, message);
-  if (gmailTesterAllowlistConfigured(env) && gmailSignInIntent(message.text) && !emailFromText(message.text)) {
-    const text = gmailAddressRequiredForTestingAnswer();
-    return {
-      response: {
-        id: `gmail_account_required_${message.id}`,
-        model: "orkestr-api-agent-direct",
-        output_text: text,
-        output: [],
-        usage: {},
-      },
-      text,
-    };
-  }
   const instructions = [
     await buildTenantApiAgentInstructions(thread, messages, env),
     gmailContextInstructions(message, gmailContext),
@@ -1983,107 +1858,6 @@ async function runTenantApiAgentResponse({ thread, messages, message, env, fetch
     safety_identifier: `orkestr:${threadOwnerUserId(thread, env)}`,
     store: false,
   };
-
-  if (gmailTestingAccessDeniedMessage(message.text)) {
-    const text = fallbackGmailTestingAccessDeniedAnswer(message);
-    return {
-      response: {
-        id: `gmail_testing_access_denied_${message.id}`,
-        model: "orkestr-api-agent-direct",
-        output_text: text,
-        output: [],
-        usage: {},
-      },
-      text,
-    };
-  }
-
-  const webFetchTarget = webFetchAvailable(env) ? publicWebFetchTargetForMessage(message.text) : null;
-  if (webFetchTarget) {
-    let output = {};
-    if (publicWebFetchTargetForbidden(webFetchTarget.url)) {
-      output = { ok: false, error: "url_host_forbidden" };
-    } else {
-      try {
-        await assertSanitizedAction({
-          action: "api-agent.tool.orkestr_fetch_web_page",
-          principal,
-          resource: {
-            type: "thread",
-            id: thread.id,
-            ownerUserId: threadOwnerUserId(thread, env),
-            capabilities: await scopedCapabilitiesForThread(thread, env),
-          },
-          input: {
-            tool: "orkestr_fetch_web_page",
-            args: {
-              url: webFetchTarget.url,
-              maxLinks: webFetchTarget.maxLinks,
-              maxChars: webFetchTarget.maxChars,
-            },
-          },
-        }, env);
-        output = await runTenantApiAgentTool("orkestr_fetch_web_page", {
-          url: webFetchTarget.url,
-          maxLinks: webFetchTarget.maxLinks,
-          maxChars: webFetchTarget.maxChars,
-        }, { principal, thread, fetchImpl }, env);
-      } catch (error) {
-        output = { ok: false, error: clean(error?.message || error || "web_fetch_failed") };
-      }
-    }
-    const directAnswer = fallbackWebFetchToolAnswer([output]);
-    const text = webFetchDirectAnswerUsable(output, directAnswer)
-      ? directAnswer
-      : await openPublicWebFetchInDesktop({ target: webFetchTarget, output, thread, principal, env, fetchImpl }) || (
-        output?.ok === false
-          ? `I couldn't fetch that public page from this chat right now: ${clean(output.error || "web_fetch_failed")}.`
-          : "I fetched the public page, but I could not extract useful content from it."
-      );
-    return {
-      response: {
-        id: `web_fetch_direct_${message.id}`,
-        model: "orkestr-api-agent-web-fetch",
-        output_text: text,
-        output: [],
-        usage: {},
-      },
-      text,
-    };
-  }
-
-  const desktopRequest = desktopDirectActionsAvailable(env) ? managedDesktopOpenRequest(message.text) : null;
-  if (desktopRequest) {
-    const text = await runDirectManagedDesktopAction({ request: desktopRequest, thread, principal, message, env, fetchImpl });
-    return {
-      response: {
-        id: `desktop_direct_${message.id}`,
-        model: "orkestr-api-agent-desktop",
-        output_text: text,
-        output: [],
-        usage: {},
-      },
-      text,
-    };
-  }
-
-  if (gmailContextReadFollowupEligible(message, gmailContext) &&
-    capabilityAvailable(await scopedCapabilitiesForThread(thread, env), "gmail")) {
-    return runTenantApiAgentToolResultResponse({
-      baseBody,
-      inputItems: input,
-      responseWithCalls: directGmailContextReadResponse(message, gmailContext),
-      thread,
-      message,
-      principal,
-      pendingAction,
-      gmailContext,
-      env,
-      fetchImpl,
-      idempotencySuffix: "gmail-context-read-2",
-      callKind: "assistant_gmail_context_read_tool_result",
-    });
-  }
 
   const first = await postOpenAIResponse(baseBody, env, fetchImpl, `orkestr-${thread.id}-${message.id}-1`);
   await recordResponseUsage({ response: first, thread, message, callKind: "assistant" }, env);
@@ -2252,6 +2026,7 @@ async function failApiAgentMessage(thread, error, env = process.env) {
     error: clean(error?.message || error),
     estimatedCostUsd: 0,
   }, env).catch(() => null);
+  await recordApiAgentFailureSuggestion({ thread, message, error }, env).catch(() => null);
   await updateThread(thread.id, { state: "ready" }, env).catch(() => {});
   return { ok: false, error: clean(error?.message || error), message, assistant };
 }

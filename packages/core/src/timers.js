@@ -533,6 +533,128 @@ export async function deleteTimerForPrincipal(id, principal, env = process.env) 
   return deleteTimer(id, env);
 }
 
+function timerUpdatePatch(existing = {}, patch = {}, now = new Date()) {
+  const next = { ...existing };
+  const scheduleKeys = new Set(["cadence", "time", "timezone", "timeZone", "every", "runAt", "dueAt", "delay", "after", "in"]);
+  let scheduleChanged = false;
+  for (const [key, rawValue] of Object.entries(patch || {})) {
+    if (rawValue === undefined) continue;
+    if (key === "id" || key === "ownerUserId" || key === "userId" || key === "createdAt") continue;
+    if (key === "timerId") continue;
+    if (key === "threadId") {
+      next.targetType = "thread";
+      next.target = String(rawValue || "").trim();
+      scheduleChanged = true;
+      continue;
+    }
+    if (key === "agentId") {
+      next.targetType = "agent";
+      next.target = String(rawValue || "").trim();
+      continue;
+    }
+    if (key === "timeZone") {
+      next.timezone = normalizeTimerTimezone(rawValue);
+      scheduleChanged = true;
+      continue;
+    }
+    if (key === "timezone") {
+      next.timezone = normalizeTimerTimezone(rawValue);
+      scheduleChanged = true;
+      continue;
+    }
+    if (["runAt", "dueAt", "delay", "after", "in"].includes(key)) {
+      const delayedRunAt = timerRunAtFromDelay(rawValue);
+      next.runAt = String(key === "delay" || key === "after" || key === "in" ? delayedRunAt : rawValue || "").trim();
+      if (next.runAt) next.cadence = "once";
+      scheduleChanged = true;
+      continue;
+    }
+    if (key === "enabled") {
+      next.enabled = rawValue !== false;
+      scheduleChanged = true;
+      continue;
+    }
+    next[key] = typeof rawValue === "string" ? rawValue.trim() : rawValue;
+    if (scheduleKeys.has(key)) scheduleChanged = true;
+  }
+  if (next.cadence && !timerCadences.has(String(next.cadence).toLowerCase())) {
+    const error = new Error("invalid_timer_cadence");
+    error.statusCode = 400;
+    throw error;
+  }
+  next.cadence = String(next.cadence || existing.cadence || "daily").toLowerCase();
+  next.targetType = String(next.targetType || existing.targetType || "agent").trim();
+  next.target = String(next.target || existing.target || "").trim();
+  next.label = String(next.label || existing.label || "Recurring agent task").trim();
+  next.prompt = String(next.prompt || "").trim();
+  next.promptFile = String(next.promptFile || "").trim();
+  next.time = String(next.time || "09:00").trim();
+  next.every = String(next.every || "").trim() || null;
+  next.enabled = next.enabled !== false;
+  next.updatedAt = now.toISOString();
+  if (scheduleChanged) {
+    next.nextRunAt = next.enabled ? nextRunAt(next, now) : null;
+  }
+  return next;
+}
+
+export async function updateTimer(id, patch = {}, env = process.env, now = new Date()) {
+  const timerRepository = createTimerRepository(env);
+  const timerId = String(id || patch?.timerId || "").trim();
+  const timers = await listTimers(env);
+  let updated = null;
+  const next = timers.map((timer) => {
+    if (timer.id !== timerId) return timer;
+    updated = timerUpdatePatch(timer, patch, now);
+    return updated;
+  });
+  if (!updated) {
+    const error = new Error("timer_not_found");
+    error.statusCode = 404;
+    throw error;
+  }
+  await timerRepository.save(next);
+  await appendEvent({
+    type: "timer_updated",
+    timerId: updated.id,
+    ownerUserId: updated.ownerUserId,
+    target: updated.target,
+    enabled: updated.enabled !== false,
+  }, env);
+  return updated;
+}
+
+export async function updateTimerForPrincipal(id, patch = {}, principal, env = process.env) {
+  const timer = (await listTimers(env)).find((entry) => entry.id === id);
+  if (!timer) {
+    const error = new Error("timer_not_found");
+    error.statusCode = 404;
+    throw error;
+  }
+  assertResourceAccess(principal, timer, "timer_update", env);
+  const targetType = String(patch?.targetType || (patch?.threadId ? "thread" : "")).trim().toLowerCase();
+  const target = String(patch?.target || patch?.threadId || patch?.agentId || "").trim();
+  if (targetType === "thread" && target) {
+    await getThreadForPrincipal(target, principal, env);
+  }
+  if (!isAdminPrincipal(principal)) {
+    await assertSanitizedAction({
+      action: "timer.update",
+      principal,
+      resource: { type: "timer", id: timer.id, ownerUserId: timer.ownerUserId },
+      input: {
+        label: patch?.label || "",
+        targetType: patch?.targetType || "",
+        target: patch?.target || patch?.threadId || patch?.agentId || "",
+        cadence: patch?.cadence || "",
+        enabled: patch?.enabled,
+        prompt: String(patch?.prompt || "").slice(0, 8000),
+      },
+    }, env);
+  }
+  return updateTimer(id, patch, env);
+}
+
 export async function runTimerNow(id, env = process.env, now = new Date(), options = {}) {
   const timerRepository = createTimerRepository(env);
   const timers = await listTimers(env);
