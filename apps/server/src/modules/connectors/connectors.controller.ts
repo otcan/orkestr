@@ -26,6 +26,7 @@ import {
   getWhatsAppChatParticipants,
   getWhatsAppStatus,
   routeWhatsAppInbound,
+  sendWhatsAppText,
 } from "../../../../../packages/connectors/src/whatsapp.js";
 import { createAndBindWhatsAppThreadGroup } from "../../../../../packages/connectors/src/whatsapp-thread-groups.js";
 import { loginCodexWithApiKey, startCodexDeviceAuth } from "../../../../../packages/connectors/src/codex.js";
@@ -44,8 +45,6 @@ import {
   logoutLocalWhatsAppAccount,
   promoteLocalWhatsAppGroupParticipants,
   recoverLocalWhatsAppChatMessages,
-  sendLocalWhatsAppMessage,
-  sendLocalWhatsAppText,
   startLocalWhatsAppTyping,
   startLocalWhatsAppAccount,
   stopLocalWhatsAppTyping,
@@ -343,7 +342,7 @@ export class ConnectorsController {
   @Post("whatsapp/bridge/send-text")
   @HttpCode(200)
   async whatsappBridgeSendText(@Body() body: Record<string, unknown> = {}) {
-    return sendLocalWhatsAppText({
+    return sendWhatsAppText({
       chatId: String(body.to || body.chatId || ""),
       text: String(body.text || ""),
       accountId: String(body.accountId || ""),
@@ -356,7 +355,7 @@ export class ConnectorsController {
     const paths = Array.isArray(body.paths)
       ? body.paths.map((value) => String(value || "").trim()).filter(Boolean)
       : [String(body.path || "").trim()].filter(Boolean);
-    return sendLocalWhatsAppMessage({
+    return sendWhatsAppText({
       chatId: String(body.to || body.chatId || ""),
       text: String(body.text || ""),
       accountId: String(body.accountId || ""),

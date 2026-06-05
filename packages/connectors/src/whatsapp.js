@@ -1603,19 +1603,23 @@ async function listThreadMessageSets(env) {
   return sets;
 }
 
-async function sendWhatsAppText({ chatId, text, accountId, attachments = [], config, env, fetchImpl }) {
-  const bridgeUrl = configuredBridgeUrl(config, env);
+/**
+ * @param {{ chatId?: string, text?: string, accountId?: string, attachments?: Array<Record<string, unknown>>, config?: Record<string, unknown> | null, env?: Record<string, string | undefined>, fetchImpl?: typeof fetch }} [options]
+ */
+export async function sendWhatsAppText({ chatId = "", text = "", accountId = "", attachments = [], config = null, env = process.env, fetchImpl = fetch } = {}) {
+  const resolvedConfig = config || await readConnectorConfig("whatsapp", env).catch(() => ({}));
+  const bridgeUrl = configuredBridgeUrl(resolvedConfig, env);
   const normalizedAttachments = Array.isArray(attachments)
     ? attachments.map((attachment) => ({
         ...attachment,
         path: String(attachment?.path || "").trim(),
       })).filter((attachment) => attachment.path)
     : [];
-  if (!bridgeUrl && bridgeMode(config, env) === "local") {
+  if (!bridgeUrl && bridgeMode(resolvedConfig, env) === "local") {
     return sendLocalWhatsAppMessage({ chatId, text, accountId, attachments: normalizedAttachments, env });
   }
   if (!bridgeUrl) throw badRequest("whatsapp_bridge_not_configured");
-  const headers = { "content-type": "application/json", ...bridgeAuthHeaders(config, env) };
+  const headers = { "content-type": "application/json", ...bridgeAuthHeaders(resolvedConfig, env) };
   const response = await fetchImpl(whatsappBridgeEndpointUrl(bridgeUrl, normalizedAttachments.length ? "/send-media" : "/send-text"), {
     method: "POST",
     headers,

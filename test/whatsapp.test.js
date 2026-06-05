@@ -13,7 +13,7 @@ import { listRouterTraces } from "../packages/core/src/router-traces.js";
 import { getSetupStatus } from "../packages/core/src/setup.js";
 import { appendThreadMessage, createThread, enqueueThreadInput, getThread, listThreadMessages, listThreads, updateThreadMessage } from "../packages/core/src/threads.js";
 import { createUser, linkUserPrivateIdentity } from "../packages/core/src/users.js";
-import { deliverWhatsAppReplies, formatWhatsAppOutboundText, getWhatsAppChatParticipants, getWhatsAppStatus, initialQueueDeliveryState, mapLocalWhatsAppStatusFromHealth, routeWhatsAppInbound, syncWhatsAppTypingIndicators } from "../packages/connectors/src/whatsapp.js";
+import { deliverWhatsAppReplies, formatWhatsAppOutboundText, getWhatsAppChatParticipants, getWhatsAppStatus, initialQueueDeliveryState, mapLocalWhatsAppStatusFromHealth, routeWhatsAppInbound, sendWhatsAppText, syncWhatsAppTypingIndicators } from "../packages/connectors/src/whatsapp.js";
 import { cleanupLocalWhatsAppChromeLocks, clearLocalWhatsAppChatTypingState, forwardLocalWhatsAppInbound, getLocalWhatsAppBridgeStatus, handleInboundMessage, inboundRoutingFailureNoticeText, listLocalWhatsAppChats, localWhatsAppAccountIdsForEnv, localWhatsAppConnectedPageReadyFallbackEligible, localWhatsAppInboundForwardTarget, localWhatsAppMessageRouteFields, localWhatsAppReadyFallbackEligible, localWhatsAppTypingClearRetryDelaysMs, localWhatsAppUnreadRecoveryBoundChats, localWhatsAppUnreadRecoveryIntervalMs, normalizeGroupParticipantIds, recoverConfiguredLocalWhatsAppAccounts, recoverUnreadLocalWhatsAppMessages, recoverableLocalWhatsAppAccountIds, reduceLocalWhatsAppBridgeState, resetLocalWhatsAppBridgeForTest, sendWhatsAppTextWithConfirmation, setLocalWhatsAppRuntimeForTest, startLocalWhatsAppAccount, startLocalWhatsAppTyping, stopLocalWhatsAppTyping, webCacheRoot } from "../packages/connectors/src/whatsapp-local-bridge.js";
 import { routedWhatsAppTypingTarget, runWithRoutedWhatsAppTyping } from "../packages/connectors/src/whatsapp-router-typing.js";
 import { createAndBindWhatsAppThreadGroup } from "../packages/connectors/src/whatsapp-thread-groups.js";
@@ -1211,6 +1211,35 @@ test("whatsapp external bridge delivery preserves path prefixes", async () => {
 
   assert.equal(delivery.delivered.length, 1);
   assert.equal(calls[0].url.pathname, "/api/connectors/whatsapp/bridge/send-text");
+  assert.equal(calls[0].body.accountId, "responder");
+});
+
+test("whatsapp bridge send uses external bridge config without local accounts", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-external-send-"));
+  const env = externalBridgeEnv(home);
+  await writeConnectorConfig("whatsapp", {
+    bridgeMode: "external",
+    bridgeUrl: "http://parent.local/api/connectors/whatsapp/bridge",
+    apiToken: "bridge-secret",
+  }, env);
+
+  const calls = [];
+  const result = await sendWhatsAppText({
+    chatId: "chat-release@g.us",
+    text: "release notice",
+    accountId: "responder",
+    env,
+    fetchImpl: async (url, options) => {
+      calls.push({ url, options, body: JSON.parse(options.body) });
+      return response({ ok: true, sent: [{ id: "sent-release" }] });
+    },
+  });
+
+  assert.deepEqual(result, { ok: true, sent: [{ id: "sent-release" }] });
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].url.pathname, "/api/connectors/whatsapp/bridge/send-text");
+  assert.equal(calls[0].options.headers.authorization, "Bearer bridge-secret");
+  assert.equal(calls[0].body.to, "chat-release@g.us");
   assert.equal(calls[0].body.accountId, "responder");
 });
 
