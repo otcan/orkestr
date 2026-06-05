@@ -197,8 +197,25 @@ requests a pre-CI deploy.
 Use the versioned deployer:
 
 ```bash
+orkestr instances --probe
 orkestr update --release --ref <tag-or-main-or-sha> --channel <channel>
 ```
+
+When a central broker owns multiple Orkestr instances, the release train must
+inventory them before deployment with `orkestr instances --probe`. Runtime state
+may list additional instances in `release-instances.json` or through
+`ORKESTR_RELEASE_INSTANCES_FILE`; keep real hosts and deploy commands in that
+private state, not in the OSS repo. Instances are updated by fan-out only when
+they are explicitly marked `releaseTrainEnabled` and have a deploy command in
+the broker registry. To deploy eligible remote instances after the local host
+passes health checks, use:
+
+```bash
+orkestr update --release --ref <tag-or-main-or-sha> --channel <channel> --all-instances
+```
+
+Without `--all-instances`, the deployer still prints a broker plan so skipped,
+disabled, or commandless instances are visible in the release log.
 
 Versioned deploys are no-interrupt by default. On current host-native installs,
 Codex app-server runs as its own service and Orkestr talks to it through a short

@@ -1,0 +1,118 @@
+#!/usr/bin/env node
+import { spawn } from "node:child_process";
+import {
+  deployReleaseInstances,
+  listReleaseInstances,
+  publicReleaseInstance,
+} from "../packages/core/src/release-instances.js";
+
+function flagValue(argv, flag, fallback = "") {
+  const index = argv.indexOf(flag);
+  return index >= 0 ? String(argv[index + 1] || fallback) : fallback;
+}
+
+function hasFlag(argv, flag) {
+  return argv.includes(flag);
+}
+
+function commandName(argv = []) {
+  return argv.find((value) => !value.startsWith("--")) || "list";
+}
+
+function shortCommit(value) {
+  const text = String(value || "");
+  return text.length > 12 ? text.slice(0, 12) : text;
+}
+
+function formatInstanceTable(instances = []) {
+  if (!instances.length) return "No release instances registered.";
+  const rows = instances.map((instance) => {
+    const version = instance.currentVersion || {};
+    const release = version.releaseId || version.describe || shortCommit(version.commit) || "-";
+    const train = instance.kind === "local-service"
+      ? "local"
+      : instance.releaseTrainEnabled
+      ? (instance.hasDeployCommand ? "ready" : "needs-command")
+      : "disabled";
+    return [
+      instance.id || "-",
+      instance.kind || "-",
+      instance.status || "-",
+      train,
+      release,
+      instance.baseUrl || instance.versionUrl || "-",
+    ];
+  });
+  const widths = [10, 12, 10, 13, 12, 24].map((minimum, index) => Math.max(minimum, ...rows.map((row) => String(row[index] || "").length)));
+  const header = ["ID", "KIND", "STATUS", "TRAIN", "RELEASE", "URL"].map((value, index) => value.padEnd(widths[index])).join("  ");
+  const body = rows.map((row) => row.map((value, index) => String(value || "-").padEnd(widths[index])).join("  ")).join("\n");
+  return `${header}\n${body}`;
+}
+
+function formatDeployResults(report = {}) {
+  const results = Array.isArray(report.results) ? report.results : [];
+  if (!results.length) return "No release instances matched.";
+  return results.map((result) => {
+    const detail = result.reason || result.error || (result.code !== undefined ? `exit=${result.code}` : "");
+    return `${result.status.padEnd(8)} ${String(result.id || "-").padEnd(24)}${detail ? ` ${detail}` : ""}`;
+  }).join("\n");
+}
+
+function usage() {
+  return `Usage:
+  scripts/release-instance-broker.mjs list [--probe] [--json]
+  scripts/release-instance-broker.mjs plan [--ref REF] [--channel CHANNEL] [--json]
+  scripts/release-instance-broker.mjs deploy [--ref REF] [--channel CHANNEL] [--include-local] [--dry-run] [--json]
+`;
+}
+
+async function main() {
+  const argv = process.argv.slice(2);
+  if (hasFlag(argv, "--help") || hasFlag(argv, "-h")) {
+    process.stdout.write(usage());
+    return;
+  }
+  const command = commandName(argv);
+  const json = hasFlag(argv, "--json");
+  const ref = flagValue(argv, "--ref", process.env.ORKESTR_DEPLOY_REF || process.env.ORKESTR_UPDATE_REF || "main");
+  const channel = flagValue(argv, "--channel", process.env.ORKESTR_DEPLOY_CHANNEL || "production");
+  const instances = await listReleaseInstances(process.env, {
+    probe: hasFlag(argv, "--probe"),
+    fetchImpl: globalThis.fetch,
+  });
+
+  if (command === "list") {
+    const payload = {
+      instances: instances.map((instance) => publicReleaseInstance(instance)),
+      generatedAt: new Date().toISOString(),
+    };
+    if (json) console.log(JSON.stringify(payload, null, 2));
+    else console.log(formatInstanceTable(payload.instances));
+    return;
+  }
+
+  if (command === "plan" || command === "deploy") {
+    const report = await deployReleaseInstances({
+      instances,
+      ref,
+      channel,
+      dryRun: command === "plan" || hasFlag(argv, "--dry-run"),
+      skipLocal: !hasFlag(argv, "--include-local"),
+      spawnImpl: spawn,
+    }, process.env);
+    if (json) console.log(JSON.stringify(report, null, 2));
+    else console.log(formatDeployResults(report));
+    if (!report.ok) process.exitCode = 1;
+    return;
+  }
+
+  process.stderr.write(`Unknown command: ${command}\n\n${usage()}`);
+  process.exitCode = 2;
+}
+
+if (process.argv[1] && import.meta.url === new URL(process.argv[1], "file:").href) {
+  main().catch((error) => {
+    console.error(error instanceof Error ? error.stack || error.message : String(error));
+    process.exitCode = 1;
+  });
+}

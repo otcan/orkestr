@@ -7,7 +7,7 @@ usage() {
 Deploy Orkestr from an exact git ref into versioned release directories.
 
 Usage:
-  scripts/deploy-git-release.sh install [--ref REF] [--channel NAME] [--allow-untagged|--require-tagged] [--no-smoke] [--no-backup] [--sync-workers|--no-sync-workers] [--no-interrupt|--allow-interrupt] [--wait-active] [--active-timeout SECONDS]
+  scripts/deploy-git-release.sh install [--ref REF] [--channel NAME] [--allow-untagged|--require-tagged] [--no-smoke] [--no-backup] [--sync-workers|--no-sync-workers] [--all-instances|--no-all-instances] [--no-interrupt|--allow-interrupt] [--wait-active] [--active-timeout SECONDS]
   scripts/deploy-git-release.sh rollback [--to RELEASE_ID] [--no-interrupt|--allow-interrupt] [--wait-active] [--active-timeout SECONDS]
   scripts/deploy-git-release.sh status [--json]
   scripts/deploy-git-release.sh --check-only
@@ -29,6 +29,7 @@ Environment:
   ORKESTR_DEPLOY_BACKUP_STATE   Back up ORKESTR_HOME before activation. Defaults to 1.
   ORKESTR_DEPLOY_BACKUP_EXCLUDES Space-separated paths under ORKESTR_HOME to omit from backups. Defaults to live runtime/session dirs.
   ORKESTR_DEPLOY_SYNC_WORKERS   Fast-forward and push safe stale worker branches after deploy. Defaults to 1.
+  ORKESTR_RELEASE_TRAIN_FANOUT  Deploy eligible broker-listed instances after local deploy. Defaults to 0.
   ORKESTR_DEPLOY_HEALTH_URL     Health URL. Defaults to http://$ORKESTR_HOST:$ORKESTR_PORT/api/health.
   ORKESTR_DEPLOY_EXPOSURE_CHECK Check public no-cookie API exposure after restart. Defaults to 1.
   ORKESTR_DEPLOY_PUBLIC_BASE_URL Public app URL to probe. Defaults to configured Orkestr public URLs or /api/setup/status.
@@ -62,6 +63,7 @@ run_smoke_arg=""
 tags_only_arg=""
 backup_state_arg=""
 sync_workers_arg=""
+fanout_arg=""
 no_interrupt_arg=""
 wait_active_arg=""
 active_timeout_arg=""
@@ -114,6 +116,14 @@ while [ "$#" -gt 0 ]; do
       ;;
     --no-sync-workers)
       sync_workers_arg=0
+      shift
+      ;;
+    --all-instances)
+      fanout_arg=1
+      shift
+      ;;
+    --no-all-instances)
+      fanout_arg=0
       shift
       ;;
     --no-interrupt)
@@ -868,6 +878,28 @@ process.exit(0);
 NODE
 }
 
+release_train_instance_fanout() {
+  local release_dir target_ref fanout
+  release_dir="$1"
+  target_ref="$2"
+  fanout="$(bool_value "${fanout_arg:-${ORKESTR_RELEASE_TRAIN_FANOUT:-0}}")"
+  if [ ! -f "$release_dir/scripts/release-instance-broker.mjs" ]; then
+    echo "Release instance broker skipped: target release does not expose broker script."
+    return 0
+  fi
+  if [ "$fanout" = "1" ]; then
+    echo "Release instance broker: deploying eligible remote instances."
+    node "$release_dir/scripts/release-instance-broker.mjs" deploy \
+      --ref "$target_ref" \
+      --channel "$deploy_channel"
+    return $?
+  fi
+  echo "Release instance broker: fan-out disabled; planning broker-listed instances."
+  node "$release_dir/scripts/release-instance-broker.mjs" plan \
+    --ref "$target_ref" \
+    --channel "$deploy_channel" || true
+}
+
 status_command() {
   local active
   active="$(current_release_id)"
@@ -919,7 +951,7 @@ repair_runtime_ownership() {
 }
 
 install_command() {
-  local target_ref target_tag target_describe short_sha tag_required release_dir previous_release backup_path deployed_at
+  local target_ref target_tag target_describe short_sha tag_required release_dir previous_release backup_path deployed_at fanout_status
   prepare_repo_cache
   target_ref="$(resolve_target_ref "$deploy_ref")"
   target_tag="$(git -C "$repo_cache" describe --tags --exact-match "$target_ref" 2>/dev/null || true)"
@@ -979,10 +1011,16 @@ install_command() {
   activate_release "$release_dir"
   sync_versioned_env
   if restart_and_verify; then
+    fanout_status=0
+    release_train_instance_fanout "$release_dir" "$target_ref" || fanout_status=$?
     send_release_whatsapp_notifications "$release_dir" "$target_ref" "$deployed_at"
     sync_safe_workers_after_deploy "$release_dir"
     write_history_event "success" "$release_id" "$deploy_ref" "$target_ref" "$previous_release" "$release_dir" "$backup_path"
     echo "Orkestr deployed $release_id ($target_ref)."
+    if [ "$fanout_status" -ne 0 ]; then
+      echo "Release instance broker failed for one or more remote instances." >&2
+      exit "$fanout_status"
+    fi
   else
     write_history_event "failed" "$release_id" "$deploy_ref" "$target_ref" "$previous_release" "$release_dir" "$backup_path" "health_check_failed"
     exit 1

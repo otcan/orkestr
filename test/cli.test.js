@@ -79,6 +79,45 @@ test("CLI lists threads from the public API", async () => {
   assert.match(stdout.text(), /thread-1/);
 });
 
+test("CLI lists release instances from the broker API", async () => {
+  const stdout = capture();
+  const seen = [];
+  const code = await runCli(["--api", "http://orkestr.test", "instances", "--probe"], {
+    stdout,
+    stderr: capture(),
+    fetchImpl: fakeFetch({
+      "GET /api/release/instances": {
+        instances: [
+          {
+            id: "central",
+            kind: "local-service",
+            status: "running",
+            releaseTrainEnabled: true,
+            hasDeployCommand: false,
+            baseUrl: "https://central.example.test",
+            currentVersion: { releaseId: "main-abc123" },
+          },
+          {
+            id: "vm-tenant",
+            kind: "tenant-vm",
+            status: "running",
+            releaseTrainEnabled: true,
+            hasDeployCommand: true,
+            baseUrl: "https://tenant.example.test",
+          },
+        ],
+      },
+    }, seen),
+  });
+
+  assert.equal(code, 0);
+  assert.equal(seen[0].search, "?probe=1");
+  assert.match(stdout.text(), /central/);
+  assert.match(stdout.text(), /local/);
+  assert.match(stdout.text(), /vm-tenant/);
+  assert.match(stdout.text(), /ready/);
+});
+
 test("CLI sends local cli-auth bearer token when ORKESTR_HOME has one", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-cli-auth-"));
   await fs.mkdir(path.join(home, "secrets"), { recursive: true });
@@ -819,6 +858,32 @@ test("CLI update forwards no-interrupt deploy guard flags", async () => {
     "--wait-active",
     "--active-timeout",
     "30",
+  ]);
+});
+
+test("CLI update forwards release instance fan-out flag", async () => {
+  const spawned = [];
+  const code = await runCli(["update", "--release", "--ref", "main", "--allow-untagged", "--all-instances", "--no-smoke"], {
+    env: {},
+    stdout: capture(),
+    stderr: capture(),
+    spawnImpl(command, args, options) {
+      spawned.push({ command, args, env: options.env });
+      const child = new EventEmitter();
+      queueMicrotask(() => child.emit("exit", 0));
+      return child;
+    },
+  });
+
+  assert.equal(code, 0);
+  assert.equal(spawned[0].env.ORKESTR_RELEASE_TRAIN_FANOUT, "1");
+  assert.deepEqual(spawned[0].args.slice(1), [
+    "install",
+    "--ref",
+    "main",
+    "--allow-untagged",
+    "--no-smoke",
+    "--all-instances",
   ]);
 });
 

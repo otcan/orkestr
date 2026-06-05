@@ -32,6 +32,7 @@ export function dataPaths(env = process.env) {
     connectorOutbox: path.join(home, "connector-outbox.json"),
     connectorPromptPushes: path.join(home, "connector-prompt-pushes.json"),
     routerTraces: path.join(home, "router-traces.json"),
+    releaseInstances: env.ORKESTR_RELEASE_INSTANCES_FILE || path.join(home, "release-instances.json"),
     releaseWhatsAppNotifications: path.join(home, "release-whatsapp-notifications.json"),
     events: path.join(home, "events.jsonl"),
     whatsapp: path.join(home, "whatsapp.json"),

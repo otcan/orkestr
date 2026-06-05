@@ -39,6 +39,7 @@ export async function runCli(argv = process.argv.slice(2), context = {}) {
     if (command === "list") return await list(args, ctx);
     if (command === "status") return await statusCommand(args, ctx);
     if (command === "version") return await versionCommand(args, ctx);
+    if (command === "instances" || command === "instance") return await releaseInstancesCommand(args, ctx);
     if (command === "whereiam" || command === "whereami") return await whereiamCommand(args, ctx);
     if (command === "settings") return await settingsCommand(args, ctx);
     if (command === "doctor") return await doctorCommand(args, ctx);
@@ -160,6 +161,16 @@ async function versionCommand(argv, ctx) {
   const payload = await requestJson("/api/version", ctx);
   if (json) ctx.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
   else ctx.stdout.write(`${formatVersion(payload)}\n`);
+  return 0;
+}
+
+async function releaseInstancesCommand(argv, ctx) {
+  const json = argv.includes("--json");
+  const params = new URLSearchParams();
+  if (argv.includes("--probe")) params.set("probe", "1");
+  const payload = await requestJson(`/api/release/instances${params.size ? `?${params.toString()}` : ""}`, ctx);
+  if (json) ctx.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
+  else ctx.stdout.write(`${formatReleaseInstanceTable(payload.instances || [])}\n`);
   return 0;
 }
 
@@ -351,7 +362,7 @@ async function updateCommand(argv, ctx) {
   if (subcommand === "status") return updateStatusCommand(rest, ctx);
   if (subcommand === "rollback") return updateRollbackCommand(rest, ctx);
   if (subcommand !== "install" && subcommand !== "run") {
-    throw new Error("Usage: orkestr update [--track-main|--ref ref] [--release|--in-place] [--channel name] [--allow-untagged|--require-tagged] [--no-smoke] [--wait-active] [--active-timeout seconds|--allow-interrupt]\n       orkestr update status [--json]\n       orkestr update rollback [--to release-id]");
+    throw new Error("Usage: orkestr update [--track-main|--ref ref] [--release|--in-place] [--channel name] [--allow-untagged|--require-tagged] [--no-smoke] [--all-instances] [--wait-active] [--active-timeout seconds|--allow-interrupt]\n       orkestr update status [--json]\n       orkestr update rollback [--to release-id]");
   }
   return updateInstallCommand(rest, ctx);
 }
@@ -374,6 +385,8 @@ async function updateInstallCommand(argv, ctx) {
   const release = trackMain || argv.includes("--release") || ctx.env.ORKESTR_RELEASE_DEPLOY === "1";
   const inPlace = argv.includes("--in-place");
   const checkOnly = argv.includes("--check-only");
+  const allInstances = argv.includes("--all-instances");
+  const noAllInstances = argv.includes("--no-all-instances");
   const allowUntagged = trackMain || argv.includes("--allow-untagged") || argv.includes("--allow-untagged-releases");
   const requireTagged = argv.includes("--require-tagged") || argv.includes("--require-tagged-releases");
   const env = { ...ctx.env };
@@ -384,6 +397,8 @@ async function updateInstallCommand(argv, ctx) {
   if (channel) env.ORKESTR_DEPLOY_CHANNEL = channel;
   if (release && !inPlace) env.ORKESTR_RELEASE_DEPLOY = "1";
   if (inPlace) env.ORKESTR_RELEASE_DEPLOY = "0";
+  if (allInstances) env.ORKESTR_RELEASE_TRAIN_FANOUT = "1";
+  if (noAllInstances) env.ORKESTR_RELEASE_TRAIN_FANOUT = "0";
   if (allowUntagged) env.ORKESTR_DEPLOY_TAGS_ONLY = "0";
   if (requireTagged) env.ORKESTR_DEPLOY_TAGS_ONLY = "1";
 
@@ -396,6 +411,8 @@ async function updateInstallCommand(argv, ctx) {
         ...(allowUntagged ? ["--allow-untagged"] : []),
         ...(requireTagged ? ["--require-tagged"] : []),
         ...(argv.includes("--no-smoke") ? ["--no-smoke"] : []),
+        ...(allInstances ? ["--all-instances"] : []),
+        ...(noAllInstances ? ["--no-all-instances"] : []),
         ...deployGuardArgs(argv),
         ...(checkOnly ? ["--check-only"] : []),
       ]
@@ -680,6 +697,7 @@ function writeUsage(stream) {
   orkestr [serve] [--open] [--host 127.0.0.1] [--port 19812]
   orkestr status [--json]
   orkestr version [--json]
+  orkestr instances [--probe] [--json]
   orkestr service [status|start|stop|restart|logs] [--service orkestr] [--lines 100] [--no-follow]
   orkestr start|stop|restart
   orkestr update
@@ -699,7 +717,7 @@ Common thread commands:
   orkestr safe-reset <thread-name-or-id> [--json]
 
 Advanced:
-  orkestr update [--track-main|--ref ref] [--release|--in-place] [--channel name] [--allow-untagged|--require-tagged] [--no-smoke] [--wait-active] [--active-timeout seconds|--allow-interrupt]
+  orkestr update [--track-main|--ref ref] [--release|--in-place] [--channel name] [--allow-untagged|--require-tagged] [--no-smoke] [--all-instances] [--wait-active] [--active-timeout seconds|--allow-interrupt]
   orkestr update status [--json]
   orkestr update rollback [--to release-id]
   orkestr settings [--json]
@@ -765,6 +783,31 @@ function formatVersion(version = {}) {
     `Channel: ${version.channel || "-"}`,
     `Deployed: ${version.deployedAt || "-"}`,
   ].join("\n");
+}
+
+function formatReleaseInstanceTable(instances = []) {
+  if (!instances.length) return "No release instances registered.";
+  const rows = instances.map((instance) => {
+    const version = instance.currentVersion || {};
+    const release = version.releaseId || version.describe || shortCommit(version.commit) || "-";
+    const train = instance.kind === "local-service"
+      ? "local"
+      : instance.releaseTrainEnabled
+      ? (instance.hasDeployCommand ? "ready" : "needs-command")
+      : "disabled";
+    return [
+      instance.id || "-",
+      instance.kind || "-",
+      instance.status || "-",
+      train,
+      release,
+      instance.baseUrl || instance.versionUrl || "-",
+    ];
+  });
+  const widths = [10, 12, 10, 13, 12, 24].map((minimum, index) => Math.max(minimum, ...rows.map((row) => String(row[index] || "").length)));
+  const header = ["ID", "KIND", "STATUS", "TRAIN", "RELEASE", "URL"].map((value, index) => value.padEnd(widths[index])).join("  ");
+  const body = rows.map((row) => row.map((value, index) => String(value || "-").padEnd(widths[index])).join("  ")).join("\n");
+  return `${header}\n${body}`;
 }
 
 function shortCommit(value) {
@@ -870,6 +913,9 @@ function positional(argv) {
     "--no-wait-active",
     "--check-only",
     "--no-follow",
+    "--probe",
+    "--all-instances",
+    "--no-all-instances",
   ]);
   for (let index = 0; index < argv.length; index += 1) {
     const value = argv[index];
