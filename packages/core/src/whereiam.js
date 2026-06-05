@@ -1,6 +1,7 @@
 import path from "node:path";
 import fs from "node:fs/promises";
 import { ensureDataDirs } from "../../storage/src/paths.js";
+import { getApiSessionBinding } from "./api-session-bindings.js";
 import { publicPrincipal } from "./principal.js";
 import { listRuntimeLeases, runtimeStatus } from "./runtime-leases.js";
 import { readRuntimeSettings } from "./runtime-settings.js";
@@ -226,7 +227,10 @@ export async function whereAmI(input = {}, env = process.env) {
   const settings = await readRuntimeSettings(env);
   const rawCwd = clean(input.cwd) || process.cwd();
   const cwd = await realOrResolved(rawCwd);
-  const requestedThreadId = clean(input.threadId || input.orkestrThreadId);
+  const requestedApiSessionId = clean(input.apiSessionId || input.sessionId || input.codexApiSessionId);
+  const apiSessionBinding = requestedApiSessionId ? await getApiSessionBinding(requestedApiSessionId, env).catch(() => null) : null;
+  const requestedThreadId = clean(input.threadId || input.orkestrThreadId || apiSessionBinding?.threadId);
+  const requestedThreadFromApiSession = Boolean(!clean(input.threadId || input.orkestrThreadId) && apiSessionBinding?.threadId);
   const requestedSessionName = clean(input.sessionName);
   const requestedPaneId = clean(input.paneId || input.tmuxPaneId);
   const principal = input.principal || null;
@@ -242,7 +246,7 @@ export async function whereAmI(input = {}, env = process.env) {
     const thread = threads.find((item) => [item.id, item.name, item.bindingName].includes(requestedThreadId)) || null;
     if (thread) {
       match = { thread, lease: leaseByThreadId.get(thread.id) || null, score: 1000 };
-      matchedBy = "threadId";
+      matchedBy = requestedThreadFromApiSession ? "apiSessionId" : "threadId";
     }
   }
 
@@ -318,6 +322,16 @@ export async function whereAmI(input = {}, env = process.env) {
     runtime: publicRuntime(lease, status),
     settings,
     capabilities: await capabilityHints(thread || { ownerUserId: owner }, { ownerUserId: owner }, env),
+    apiSession: requestedApiSessionId
+      ? {
+          id: requestedApiSessionId,
+          bound: Boolean(thread && apiSessionBinding && apiSessionBinding.threadId === thread.id),
+          threadId: thread && apiSessionBinding?.threadId === thread.id ? thread.id : null,
+          createdAt: thread && apiSessionBinding?.threadId === thread.id ? clean(apiSessionBinding.createdAt) || null : null,
+          updatedAt: thread && apiSessionBinding?.threadId === thread.id ? clean(apiSessionBinding.updatedAt) || null : null,
+          lastSeenAt: thread && apiSessionBinding?.threadId === thread.id ? clean(apiSessionBinding.lastSeenAt) || null : null,
+        }
+      : null,
     commands: commandHints(),
     generatedAt: nowIso(),
   };

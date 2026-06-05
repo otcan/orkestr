@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import { dataPaths } from "../../storage/src/paths.js";
 import { appendEvent, readJson, writeJson } from "../../storage/src/store.js";
+import { recordWatcherAlert } from "./watcher-alerts.js";
 
 export const routerTracePhases = [
   "received",
@@ -21,6 +22,7 @@ export const routerTracePhases = [
 const knownPhases = new Set(routerTracePhases);
 const terminalPhases = new Set(["skipped", "completed"]);
 const failurePhases = new Set(["runtime_failed", "mirror_failed"]);
+const watcherAlertPhases = new Set(["runtime_failed", "mirror_failed", "stuck"]);
 
 function clean(value) {
   return String(value || "").trim();
@@ -250,6 +252,23 @@ export async function recordRouterTraceEvent(input = {}, env = process.env) {
     error: phase.error || "",
     terminal: next.terminal === true,
   }, env).catch(() => {});
+  if (watcherAlertPhases.has(phase.phase)) {
+    await recordWatcherAlert({
+      severity: "error",
+      source: `router.${phase.phase}`,
+      code: "router_trace_failure",
+      message: phase.error || phase.reason || phase.phase,
+      routerTraceId,
+      threadId: next.threadId || "",
+      messageId: next.messageId || "",
+      details: {
+        connector: next.connector || "",
+        phase: phase.phase,
+        reason: phase.reason || "",
+        terminal: next.terminal === true,
+      },
+    }, env).catch(() => {});
+  }
   return publicTrace(next, env);
 }
 

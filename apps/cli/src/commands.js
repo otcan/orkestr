@@ -177,8 +177,12 @@ async function releaseInstancesCommand(argv, ctx) {
 async function whereiamCommand(argv, ctx) {
   const json = argv.includes("--json");
   const cwd = flagValue(argv, "--cwd") || ctx.cwd || process.cwd();
+  const apiSessionId = flagValue(argv, "--api-session-id") || flagValue(argv, "--api-session") || "";
+  const bind = argv.includes("--bind");
   const params = new URLSearchParams();
   if (cwd) params.set("cwd", cwd);
+  if (apiSessionId) params.set("apiSessionId", apiSessionId);
+  if (bind) params.set("bind", "1");
   const payload = await requestJson(`/api/whereiam?${params.toString()}`, ctx);
   if (json) ctx.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
   else ctx.stdout.write(`${formatWhereAmI(payload)}\n`);
@@ -708,7 +712,7 @@ function writeUsage(stream) {
 Common thread commands:
   orkestr list [--json] [--api http://127.0.0.1:19812]
   orkestr create <name> [--wa-participant jid]... [--no-wa] [--json]
-  orkestr whereiam [--cwd path] [--json]
+  orkestr whereiam [--cwd path] [--api-session-id id] [--bind] [--json]
   orkestr attach [thread-name-or-id] [--print] [--json]
   orkestr send <thread-name-or-id> "<message>" [--json]
   orkestr wake <thread-name-or-id> [--json]

@@ -1,11 +1,24 @@
 import { ArgumentsHost, Catch, ExceptionFilter, HttpException } from "@nestjs/common";
 
+export type JsonErrorReporter = (input: {
+  exception: unknown;
+  statusCode: number;
+  message: string;
+  request?: unknown;
+}) => void;
+
 @Catch()
 export class JsonErrorFilter implements ExceptionFilter {
+  constructor(private readonly reporter: JsonErrorReporter | null = null) {}
+
   catch(exception: unknown, host: ArgumentsHost) {
+    const request = host.switchToHttp().getRequest();
     const response = host.switchToHttp().getResponse();
     const statusCode = statusForException(exception);
     const message = messageForException(exception);
+    if (statusCode >= 500) {
+      this.reporter?.({ exception, statusCode, message, request });
+    }
 
     response
       .status(statusCode)

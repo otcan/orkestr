@@ -3,13 +3,19 @@ import os from "node:os";
 import path from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { Body, Controller, Delete, Get, HttpCode, Param, Post, Query, Req, Res, UploadedFiles, UseInterceptors } from "@nestjs/common";
+import { Body, Controller, Delete, Get, HttpCode, HttpException, Param, Post, Query, Req, Res, UploadedFiles, UseInterceptors } from "@nestjs/common";
 import { AnyFilesInterceptor } from "@nestjs/platform-express";
 import { doctorRuntimeResources, listRuntimeLeases } from "../../../../../packages/core/src/runtime-leases.js";
 import { getSetupStatus, publicSetupStatus } from "../../../../../packages/core/src/setup.js";
 import { readRuntimeSettings } from "../../../../../packages/core/src/runtime-settings.js";
 import { systemDoctor } from "../../../../../packages/core/src/system-doctor.js";
 import { whereAmI } from "../../../../../packages/core/src/whereiam.js";
+import {
+  appendApiSessionMessage,
+  bindApiSessionToThread,
+  getApiSessionBindingForPrincipal,
+} from "../../../../../packages/core/src/api-session-bindings.js";
+import { deliverWhatsAppReplies } from "../../../../../packages/connectors/src/whatsapp.js";
 import { listEventsForPrincipal } from "../../../../../packages/core/src/audit-events.js";
 import { createStateBackup, stateBackupStatus, stateRestorePlan } from "../../../../../packages/core/src/state-backups.js";
 import { migrateCodexThreadsToAppServer } from "../../../../../packages/core/src/codex-app-server-migration.js";
@@ -282,6 +288,38 @@ function shouldRedactSetupStatus(request: any, status: any): boolean {
   return !isAdminPrincipal(requestPrincipal(request));
 }
 
+function apiSessionDeliveryResultForMessage(delivery: any, messageId: string) {
+  const delivered = Array.isArray(delivery?.delivered)
+    ? delivery.delivered.find((item: any) => String(item?.messageId || "") === messageId)
+    : null;
+  const failed = Array.isArray(delivery?.failed)
+    ? delivery.failed.find((item: any) => String(item?.messageId || "") === messageId)
+    : null;
+  const skipped = Array.isArray(delivery?.skipped)
+    ? delivery.skipped.find((item: any) => String(item?.messageId || "") === messageId)
+    : null;
+  if (delivered) return { ok: true, state: "delivered", delivered };
+  if (failed) return { ok: false, state: "failed", failure: failed, statusCode: 502 };
+  if (skipped) return { ok: false, state: "skipped", skipped, statusCode: 409 };
+  return { ok: false, state: "missing_delivery_result", statusCode: 502 };
+}
+
+function throwApiSessionDeliveryError(result: any, message: any, delivery: any): never {
+  throw new HttpException({
+    ok: false,
+    error: "whatsapp_delivery_not_delivered",
+    deliveryState: result.state,
+    reason: result.failure?.error || result.failure?.reason || result.skipped?.reason || result.state,
+    message: {
+      id: message.id,
+      threadId: message.threadId || null,
+      connector: message.connector || null,
+      chatId: message.chatId || null,
+    },
+    delivery,
+  }, result.statusCode || 502);
+}
+
 @Controller("api")
 export class SystemController {
   @Get("health")
@@ -480,14 +518,95 @@ export class SystemController {
     @Query("threadId") threadId = "",
     @Query("sessionName") sessionName = "",
     @Query("paneId") paneId = "",
+    @Query("apiSessionId") apiSessionId = "",
+    @Query("bind") bind = "",
   ) {
-    return whereAmI({
+    const principal = requestPrincipal(request);
+    let payload = await whereAmI({
       cwd: String(cwd || ""),
       threadId: String(threadId || ""),
       sessionName: String(sessionName || ""),
       paneId: String(paneId || ""),
-      principal: requestPrincipal(request),
+      apiSessionId: String(apiSessionId || ""),
+      principal,
     });
+    if (String(apiSessionId || "").trim() && ["1", "true", "yes"].includes(String(bind || "").toLowerCase())) {
+      if (!payload.thread?.id) throw httpError("api_session_thread_not_resolved", 404);
+      await bindApiSessionToThread({
+        apiSessionId: String(apiSessionId || ""),
+        threadId: payload.thread.id,
+        cwd: String(cwd || payload.workspace?.cwd || ""),
+        source: "whereiam",
+      }, process.env, principal);
+      payload = await whereAmI({
+        cwd: String(cwd || ""),
+        apiSessionId: String(apiSessionId || ""),
+        principal,
+      });
+    }
+    return payload;
+  }
+
+  @Post("session-bindings")
+  @HttpCode(200)
+  async bindApiSession(@Req() request: any, @Body() body: Record<string, unknown> = {}) {
+    const principal = requestPrincipal(request);
+    let threadId = String(body.threadId || body.orkestrThreadId || "").trim();
+    if (!threadId) {
+      const payload = await whereAmI({
+        cwd: String(body.cwd || ""),
+        sessionName: String(body.sessionName || ""),
+        paneId: String(body.paneId || ""),
+        principal,
+      });
+      threadId = String(payload.thread?.id || "").trim();
+    }
+    if (!threadId) throw httpError("api_session_thread_not_resolved", 404);
+    const result = await bindApiSessionToThread({
+      apiSessionId: String(body.apiSessionId || body.sessionId || ""),
+      threadId,
+      cwd: String(body.cwd || ""),
+      source: String(body.source || "api-session"),
+      metadata: body.metadata && typeof body.metadata === "object" ? body.metadata : {},
+    }, process.env, principal);
+    return { ok: true, binding: result.binding, thread: { id: result.thread.id, name: result.thread.name || null } };
+  }
+
+  @Get("session-bindings/:apiSessionId")
+  async apiSessionBinding(@Req() request: any, @Param("apiSessionId") apiSessionId: string) {
+    const binding = await getApiSessionBindingForPrincipal(apiSessionId, requestPrincipal(request), process.env);
+    if (!binding) throw httpError("api_session_not_bound", 404);
+    return { ok: true, binding };
+  }
+
+  @Post("session-bindings/:apiSessionId/messages")
+  @HttpCode(200)
+  async appendApiSessionBoundMessage(
+    @Req() request: any,
+    @Param("apiSessionId") apiSessionId: string,
+    @Body() body: Record<string, unknown> = {},
+  ) {
+    const result = await appendApiSessionMessage({
+      ...body,
+      apiSessionId,
+      metadata: body.metadata && typeof body.metadata === "object" ? body.metadata : {},
+    }, process.env, requestPrincipal(request));
+    let delivery = null;
+    let deliveryState: any = null;
+    if (result.deliveryExpected) {
+      delivery = await deliverWhatsAppReplies(process.env);
+      deliveryState = apiSessionDeliveryResultForMessage(delivery, result.message.id);
+      if (!deliveryState.ok) throwApiSessionDeliveryError(deliveryState, { ...result.message, threadId: result.thread.id }, delivery);
+    }
+    return {
+      ok: true,
+      binding: result.binding,
+      thread: { id: result.thread.id, name: result.thread.name || null },
+      message: result.message,
+      deliveryExpected: result.deliveryExpected,
+      deliveryState,
+      delivery,
+    };
   }
 
   @Get("system")

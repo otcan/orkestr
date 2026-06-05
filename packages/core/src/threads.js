@@ -58,6 +58,7 @@ const messageStringFields = [
   "publicThreadId",
   "publicMessageId",
   "forwardedBy",
+  "apiSessionId",
 ];
 
 function safeThreadId(threadId) {

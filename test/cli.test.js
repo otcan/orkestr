@@ -164,6 +164,29 @@ test("CLI whereiam sends the current directory to the public API", async () => {
   assert.match(stdout.text(), /Repo: \/repo\/demo/);
 });
 
+test("CLI whereiam can bind a stable API session id", async () => {
+  const stdout = capture();
+  const seen = [];
+  const cwd = "/workspace/demo";
+  const code = await runCli(["whereiam", "--cwd", cwd, "--api-session-id", "api-1", "--bind", "--json"], {
+    cwd,
+    stdout,
+    stderr: capture(),
+    fetchImpl: fakeFetch({
+      "GET /api/whereiam": {
+        ok: true,
+        matchedBy: "thread.repoPath",
+        thread: { id: "thread-1", displayName: "Demo", state: "ready" },
+        apiSession: { id: "api-1", bound: true, threadId: "thread-1" },
+      },
+    }, seen),
+  });
+
+  assert.equal(code, 0);
+  assert.equal(seen[0].search, `?cwd=${encodeURIComponent(cwd)}&apiSessionId=api-1&bind=1`);
+  assert.equal(JSON.parse(stdout.text()).apiSession.bound, true);
+});
+
 test("CLI codex migrate calls the migration API", async () => {
   const stdout = capture();
   const seen = [];

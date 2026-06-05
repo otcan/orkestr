@@ -6,25 +6,15 @@ import { NestFactory } from "@nestjs/core";
 import type { INestApplication } from "@nestjs/common";
 import { loadOverlayExecutorAdapters, recoverInterruptedExecutions } from "../../../packages/core/src/executors.js";
 import {
-  consumeThreadConnectorDeliverySignalCount,
-  drainAllPendingThreadInputs,
   setThreadConnectorDeliverySignalHandler,
   setThreadInputDeliveryFailureHandler,
   syncPaneProgressForActiveLeases,
-  syncRuntimeLeases,
 } from "../../../packages/core/src/runtime-leases.js";
-import { markDueTimers } from "../../../packages/core/src/timers.js";
-import { runDueGmailNotifications } from "../../../packages/core/src/gmail-notifications.js";
 import {
-  recoverStaleCodexAppServerTurns,
   setCodexAppServerMessageHandler,
   stopCodexAppServerClients,
 } from "../../../packages/core/src/codex-app-server.js";
-import { deployDrainActiveSync } from "../../../packages/core/src/deploy-drain.js";
-import { deliverWhatsAppReplies, syncWhatsAppTypingIndicators } from "../../../packages/connectors/src/whatsapp.js";
 import {
-  recoverConfiguredLocalWhatsAppAccounts,
-  recoverUnreadLocalWhatsAppMessages,
   startConfiguredLocalWhatsAppAccounts,
   stopLocalWhatsAppBridge,
 } from "../../../packages/connectors/src/whatsapp-local-bridge.js";
@@ -37,6 +27,25 @@ import { JsonErrorFilter } from "./common/json-error.filter.js";
 import { attachDesktopProxyUpgrade, registerDesktopProxy } from "./desktop-proxy.js";
 import { registerStaticFallback } from "./static-fallback.js";
 import { attachThreadStreamUpgrade } from "./thread-stream.js";
+import { reportServerError } from "./watcher-reporting.js";
+import {
+  createRuntimeWhatsAppSyncRunner,
+  createWhatsAppDeliveryScheduler,
+  paneProgressMonitorIntervalMs,
+  recoverAfterStartup,
+  runtimeMonitorIntervalMs,
+  runTimerLoop,
+  scheduleStartupRecovery,
+  startupRecoveryDelayMs,
+  timerLoopIntervalMs,
+} from "./server-runtime-sync.js";
+
+export {
+  paneProgressMonitorIntervalMs,
+  recoverAfterStartup,
+  runtimeMonitorIntervalMs,
+  startupRecoveryDelayMs,
+};
 
 export async function createApp(): Promise<INestApplication> {
   const app = await NestFactory.create(AppModule, { logger: false });
@@ -87,13 +96,31 @@ export async function createApp(): Promise<INestApplication> {
         .send(JSON.stringify(payload));
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
+      reportServerError(process.env, {
+        source: "server.http.auth",
+        code: "http_auth_unhandled",
+        message,
+        error,
+        method: String((request as any)?.method || ""),
+        route: String((request as any)?.originalUrl || (request as any)?.url || ""),
+      });
       return response
         .status(500)
         .type("application/json")
         .send(JSON.stringify({ ok: false, error: message }));
     }
   });
-  app.useGlobalFilters(new JsonErrorFilter());
+  app.useGlobalFilters(new JsonErrorFilter(({ exception, statusCode, message, request }) => {
+    reportServerError(process.env, {
+      source: "server.http.exception",
+      code: "http_exception_unhandled",
+      message,
+      error: exception,
+      method: String((request as any)?.method || ""),
+      route: String((request as any)?.originalUrl || (request as any)?.url || ""),
+      statusCode,
+    });
+  }));
   return app;
 }
 
@@ -241,20 +268,48 @@ export async function startServer({ port = 19812, host = "127.0.0.1", openBrowse
     await recoverInterruptedExecutions(serverEnv);
   }
   await loadOverlayExecutorAdapters(serverEnv);
-  await startConfiguredLocalWhatsAppAccounts(serverEnv).catch(() => {});
+  await startConfiguredLocalWhatsAppAccounts(serverEnv).catch((error) => {
+    reportServerError(serverEnv, {
+      source: "server.start.whatsapp",
+      code: "whatsapp_start_failed",
+      message: error?.message || String(error),
+      error,
+    });
+  });
   const app = await createApp();
   const runRuntimeSync = createRuntimeWhatsAppSyncRunner(serverEnv);
 
   const timer = setInterval(() => {
-    runTimerLoop(serverEnv, runRuntimeSync).catch(() => {});
+    runTimerLoop(serverEnv, runRuntimeSync).catch((error) => {
+      reportServerError(serverEnv, {
+        source: "server.timerLoop",
+        code: "timer_loop_failed",
+        message: error?.message || String(error),
+        error,
+      });
+    });
   }, timerLoopIntervalMs());
 
   const runtimeMonitor = setInterval(() => {
-    runRuntimeSync().catch(() => {});
+    runRuntimeSync().catch((error) => {
+      reportServerError(serverEnv, {
+        source: "server.runtimeMonitor",
+        code: "runtime_monitor_failed",
+        message: error?.message || String(error),
+        error,
+      });
+    });
   }, runtimeMonitorIntervalMs());
 
   const paneProgressMonitor = setInterval(() => {
-    syncPaneProgressForActiveLeases(serverEnv).catch(() => {});
+    syncPaneProgressForActiveLeases(serverEnv).catch((error) => {
+      reportServerError(serverEnv, {
+        source: "server.paneProgress",
+        code: "pane_progress_sync_failed",
+        message: error?.message || String(error),
+        error,
+      });
+    });
   }, paneProgressMonitorIntervalMs());
   const whatsappDeliveryScheduler = createWhatsAppDeliveryScheduler(serverEnv);
   const clearConnectorDeliverySignalHandler = setThreadConnectorDeliverySignalHandler(() => {
@@ -293,168 +348,6 @@ export async function startServer({ port = 19812, host = "127.0.0.1", openBrowse
     stopCodexAppServerClients();
     await stopLocalWhatsAppBridge(serverEnv).catch(() => {});
   });
-}
-
-export function runtimeMonitorIntervalMs() {
-  const parsed = Number(process.env.ORKESTR_RUNTIME_MONITOR_INTERVAL_MS || 5000);
-  return Number.isFinite(parsed) ? Math.max(5000, parsed) : 5000;
-}
-
-export function paneProgressMonitorIntervalMs() {
-  const parsed = Number(process.env.ORKESTR_PANE_PROGRESS_INTERVAL_MS || 1000);
-  return Number.isFinite(parsed) ? Math.max(1000, parsed) : 1000;
-}
-
-function timerLoopIntervalMs() {
-  const parsed = Number(process.env.ORKESTR_TIMER_LOOP_INTERVAL_MS || 30_000);
-  return Number.isFinite(parsed) ? Math.max(5000, parsed) : 30_000;
-}
-
-export function startupRecoveryDelayMs() {
-  const parsed = Number(process.env.ORKESTR_STARTUP_RECOVERY_DELAY_MS || 1000);
-  return Number.isFinite(parsed) ? Math.max(0, parsed) : 1000;
-}
-
-function scheduleStartupRecovery(env = process.env) {
-  if (env.ORKESTR_STARTUP_RECOVERY === "0") return null;
-  const timer = setTimeout(() => {
-    recoverAfterStartup(env).catch(() => {});
-  }, startupRecoveryDelayMs());
-  timer.unref?.();
-  return timer;
-}
-
-export async function recoverAfterStartup(env = process.env) {
-  if (deployDrainActiveSync(env)) {
-    return { deferred: true, reason: "deploy_draining" };
-  }
-  await drainAllPendingThreadInputs(env).catch(() => []);
-  return syncRuntimeAndDeliverWhatsApp(env, { forceWhatsapp: true, recoveryCause: "orkestr_restart" });
-}
-
-async function runTimerLoop(env = process.env, syncImpl: (options?: { forceWhatsapp?: boolean; recoveryCause?: string }) => Promise<any> = (options = {}) => syncRuntimeAndDeliverWhatsApp(env, options)) {
-  const dueTimers = await markDueTimers(env);
-  const gmailNotificationRuns = await runDueGmailNotifications(env);
-  const drained = await drainAllPendingThreadInputs(env);
-  const deliveredCount = drained.reduce((count: number, result: any) => count + Number(result?.delivered?.length || 0), 0);
-  const gmailDeliveredCount = gmailNotificationRuns.reduce((count: number, result: any) => count + Number(result?.run?.delivered?.length || 0), 0);
-  if (dueTimers.length || gmailDeliveredCount > 0 || deliveredCount > 0 || drained.length > 0) {
-    await syncImpl({ forceWhatsapp: true });
-  }
-}
-
-function mergeRuntimeSyncOptions(current: { forceWhatsapp?: boolean; recoveryCause?: string } | null, next: { forceWhatsapp?: boolean; recoveryCause?: string } = {}) {
-  return {
-    forceWhatsapp: Boolean(current?.forceWhatsapp || next.forceWhatsapp),
-    recoveryCause: current?.recoveryCause || next.recoveryCause,
-  };
-}
-
-function createRuntimeWhatsAppSyncRunner(env = process.env) {
-  let inFlight: Promise<any> | null = null;
-  let queuedOptions: { forceWhatsapp?: boolean; recoveryCause?: string } | null = null;
-  const run = (options: { forceWhatsapp?: boolean; recoveryCause?: string } = {}) => {
-    if (inFlight) {
-      queuedOptions = mergeRuntimeSyncOptions(queuedOptions, options);
-      return inFlight.then(() => ({ ok: true, queuedBehindActiveSync: true }));
-    }
-    inFlight = syncRuntimeAndDeliverWhatsApp(env, options)
-      .finally(() => {
-        inFlight = null;
-        if (queuedOptions) {
-          const next = queuedOptions;
-          queuedOptions = null;
-          void run(next).catch(() => {});
-        }
-      });
-    return inFlight;
-  };
-  return run;
-}
-
-async function syncRuntimeAndDeliverWhatsApp(env = process.env, options: { forceWhatsapp?: boolean; recoveryCause?: string } = {}) {
-  const pendingConnectorDeliveries = consumeThreadConnectorDeliverySignalCount();
-  const synced = await syncRuntimeLeases(env);
-  const recovered = await recoverStaleCodexAppServerTurns(env, { noticeCause: options.recoveryCause }).catch(() => ({ recovered: 0, appended: 0 }));
-  await recoverConfiguredLocalWhatsAppAccounts(env).catch(() => {});
-  const unreadRecovery = await recoverUnreadLocalWhatsAppMessages(env).catch(() => ({ routed: 0 }));
-  await syncWhatsAppTypingIndicators(env).catch(() => {});
-  const connectorDeliveries = pendingConnectorDeliveries + consumeThreadConnectorDeliverySignalCount();
-  const appended = (synced.appended || 0) + (recovered.appended || 0);
-  if (options.forceWhatsapp || appended > 0 || connectorDeliveries > 0 || Number(unreadRecovery.routed || 0) > 0) {
-    await deliverWhatsAppReplies(env).catch(() => {});
-  }
-  return { ...synced, appended, recoveredAppServerTurns: recovered.recovered || 0 };
-}
-
-function createWhatsAppDeliveryScheduler(env = process.env) {
-  let timer: NodeJS.Timeout | null = null;
-  let running = false;
-  let rerunRequested = false;
-  const retryDelayMs = whatsAppDeliveryRetryDelayMs();
-  const shouldRetry = (result: any) => {
-    if (!result || !Array.isArray(result.failed) || !result.failed.length) return false;
-    return result.failed.some((failure: any) => {
-      const reason = String(failure?.error || failure?.reason || failure?.message || "").toLowerCase();
-      return reason.includes("not_ready") ||
-        reason.includes("bridge_not_ready") ||
-        reason.includes("detached frame") ||
-        reason.includes("target closed") ||
-        reason.includes("session closed") ||
-        reason.includes("fetch failed") ||
-        reason.includes("econnrefused") ||
-        reason.includes("timeout");
-    });
-  };
-  const run = () => {
-    if (running) {
-      rerunRequested = true;
-      return;
-    }
-    running = true;
-    syncWhatsAppTypingIndicators(env)
-      .catch(() => {})
-      .then(() => deliverWhatsAppReplies(env))
-      .then(async (result) => {
-        await syncWhatsAppTypingIndicators(env).catch(() => {});
-        return result;
-      })
-      .then((result) => {
-        if (shouldRetry(result)) {
-          scheduler.schedule(retryDelayMs);
-        }
-      })
-      .catch(() => {
-        scheduler.schedule(retryDelayMs);
-      })
-      .finally(() => {
-        running = false;
-        if (rerunRequested) {
-          rerunRequested = false;
-          scheduler.schedule();
-        }
-      });
-  };
-  const scheduler = {
-    schedule(delayMs = 0) {
-      if (timer) return;
-      timer = setTimeout(() => {
-        timer = null;
-        run();
-      }, Math.max(0, delayMs));
-      if (typeof timer.unref === "function") timer.unref();
-    },
-    close() {
-      if (timer) clearTimeout(timer);
-      timer = null;
-    },
-  };
-  return scheduler;
-}
-
-function whatsAppDeliveryRetryDelayMs() {
-  const parsed = Number(process.env.ORKESTR_WHATSAPP_DELIVERY_RETRY_MS || 10_000);
-  return Number.isFinite(parsed) ? Math.max(1000, parsed) : 10_000;
 }
 
 export function serverHandle(
