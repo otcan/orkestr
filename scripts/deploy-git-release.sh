@@ -889,15 +889,15 @@ release_train_instance_fanout() {
   fi
   if [ "$fanout" = "1" ]; then
     echo "Release instance broker: deploying eligible remote instances."
-    node "$release_dir/scripts/release-instance-broker.mjs" deploy \
+    (cd "$release_dir" && node scripts/release-instance-broker.mjs deploy \
       --ref "$target_ref" \
-      --channel "$deploy_channel"
+      --channel "$deploy_channel")
     return $?
   fi
   echo "Release instance broker: fan-out disabled; planning broker-listed instances."
-  node "$release_dir/scripts/release-instance-broker.mjs" plan \
+  (cd "$release_dir" && node scripts/release-instance-broker.mjs plan \
     --ref "$target_ref" \
-    --channel "$deploy_channel" || true
+    --channel "$deploy_channel") || true
 }
 
 status_command() {
