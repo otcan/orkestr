@@ -30,6 +30,7 @@ Environment:
   ORKESTR_DEPLOY_BACKUP_EXCLUDES Space-separated paths under ORKESTR_HOME to omit from backups. Defaults to live runtime/session dirs.
   ORKESTR_DEPLOY_SYNC_WORKERS   Fast-forward and push safe stale worker branches after deploy. Defaults to 1.
   ORKESTR_RELEASE_TRAIN_FANOUT  Deploy eligible broker-listed instances after local deploy. Defaults to 0.
+  ORKESTR_DEPLOY_LOCK_BUSY_EXIT_CODE Exit code when another deploy holds the lock. Defaults to 0.
   ORKESTR_DEPLOY_HEALTH_URL     Health URL. Defaults to http://$ORKESTR_HOST:$ORKESTR_PORT/api/health.
   ORKESTR_DEPLOY_EXPOSURE_CHECK Check public no-cookie API exposure after restart. Defaults to 1.
   ORKESTR_DEPLOY_PUBLIC_BASE_URL Public app URL to probe. Defaults to configured Orkestr public URLs or /api/setup/status.
@@ -1097,6 +1098,7 @@ run_backup="${backup_state_arg:-${ORKESTR_DEPLOY_BACKUP_STATE:-1}}"
 backup_excludes="${ORKESTR_DEPLOY_BACKUP_EXCLUDES:-run tmp whatsapp-bridge/sessions}"
 sync_workers="$(bool_value "${sync_workers_arg:-${ORKESTR_DEPLOY_SYNC_WORKERS:-1}}")"
 lock_file="${ORKESTR_DEPLOY_LOCK_FILE:-/var/lock/orkestr-deploy.lock}"
+lock_busy_exit_code="${ORKESTR_DEPLOY_LOCK_BUSY_EXIT_CODE:-0}"
 no_interrupt="$(bool_value "${no_interrupt_arg:-${ORKESTR_DEPLOY_NO_INTERRUPT:-1}}")"
 wait_active="$(bool_value "${wait_active_arg:-${ORKESTR_DEPLOY_WAIT_ACTIVE:-0}}")"
 active_timeout_seconds="${active_timeout_arg:-${ORKESTR_DEPLOY_ACTIVE_TIMEOUT_SECONDS:-900}}"
@@ -1136,6 +1138,9 @@ esac
 case "$active_check_timeout_ms" in
   ''|*[!0-9]*) echo "ORKESTR_DEPLOY_ACTIVE_CHECK_TIMEOUT_MS must be a positive integer." >&2; exit 2 ;;
 esac
+case "$lock_busy_exit_code" in
+  ''|*[!0-9]*) echo "ORKESTR_DEPLOY_LOCK_BUSY_EXIT_CODE must be a non-negative integer." >&2; exit 2 ;;
+esac
 case "$deploy_drain_ttl_seconds" in
   ''|*[!0-9]*) echo "ORKESTR_DEPLOY_DRAIN_TTL_SECONDS must be a positive integer." >&2; exit 2 ;;
 esac
@@ -1155,7 +1160,7 @@ if [ "$command" != "status" ]; then
   exec 9>"$lock_file"
   if ! flock -n 9; then
     echo "Another Orkestr deploy is already running."
-    exit 0
+    exit "$lock_busy_exit_code"
   fi
 fi
 

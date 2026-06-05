@@ -445,6 +445,10 @@ test("public KubeVirt migration helper operates the isolated app VM", async () =
   assert.match(stdout, /orkestr-public-app/);
   assert.match(script, /virtctl_k3s credentials add-ssh-key/);
   assert.match(script, /kubectl_k3s get pod -n "\$namespace" -l "kubevirt\.io\/domain=\$vm"/);
+  assert.match(script, /systemctl is-active --quiet orkestr-update\.timer/);
+  assert.match(script, /sudo systemctl stop orkestr-update\.timer orkestr-update\.service/);
+  assert.match(script, /ORKESTR_DEPLOY_LOCK_BUSY_EXIT_CODE=75/);
+  assert.match(script, /sudo systemctl start orkestr-update\.timer/);
   assert.match(script, /ORKESTR_HOME='\$vm_home' ORKESTR_API_BASE='\$vm_api' orkestr list --json/);
   assert.match(script, /Checking VM default managed desktop/);
   assert.match(script, /orkestr-browserctl health/);

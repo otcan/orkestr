@@ -351,7 +351,7 @@ update_vm() {
   [ -n "$ref" ] || die "update-vm requires --ref REF"
   ensure_ssh
   log "Updating VM Orkestr to $ref on channel $channel."
-  vm_ssh "set -euo pipefail; sudo env ORKESTR_HOME='$vm_home' ORKESTR_API_BASE='$vm_api' orkestr update --release --ref '$ref' --channel '$channel' --allow-interrupt --no-smoke"
+  vm_ssh "set -euo pipefail; timer_was_active=0; if systemctl is-active --quiet orkestr-update.timer 2>/dev/null; then timer_was_active=1; fi; sudo systemctl stop orkestr-update.timer orkestr-update.service 2>/dev/null || true; status=0; sudo env ORKESTR_HOME='$vm_home' ORKESTR_API_BASE='$vm_api' ORKESTR_DEPLOY_LOCK_BUSY_EXIT_CODE=75 orkestr update --release --ref '$ref' --channel '$channel' --allow-interrupt --no-smoke || status=\$?; if [ \"\$timer_was_active\" = \"1\" ]; then sudo systemctl start orkestr-update.timer 2>/dev/null || true; fi; exit \"\$status\""
 }
 
 smoke() {
