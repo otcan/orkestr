@@ -33,7 +33,10 @@ of relying on static thread or workspace text in this file.
   safe capability hints.
 - API callers can use `GET /api/whereiam?cwd=<absolute-current-directory>`.
   A plain HTTP request cannot reveal the caller's working directory, so pass
-  `cwd` explicitly.
+  `cwd` explicitly. API callers with a stable session id should bind with
+  `apiSessionId=<stable-id>&bind=1`, then post visible assistant messages with
+  `orkestr api-session message "<text>" --api-session-id <stable-id>` so
+  WhatsApp delivery failures surface immediately.
 - Use `orkestr list`, `orkestr send <thread> "<message>"`, `orkestr wake
   <thread>`, and `orkestr sleep <thread>` for thread control.
 - Use `orkestr timers list`, `orkestr timers run <timer-id>`, and `orkestr

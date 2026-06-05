@@ -37,7 +37,8 @@ function fakeFetch(routes, seen = []) {
     seen.push({ key, search: parsed.search, headers: options.headers || {}, body: options.body ? JSON.parse(options.body) : null });
     const route = routes[key];
     if (!route) return jsonResponse({ error: `missing route: ${key}` }, 404);
-    return jsonResponse(typeof route === "function" ? route(seen.at(-1)) : route);
+    const result = typeof route === "function" ? route(seen.at(-1)) : route;
+    return result instanceof Response ? result : jsonResponse(result);
   };
 }
 
@@ -185,6 +186,130 @@ test("CLI whereiam can bind a stable API session id", async () => {
   assert.equal(code, 0);
   assert.equal(seen[0].search, `?cwd=${encodeURIComponent(cwd)}&apiSessionId=api-1&bind=1`);
   assert.equal(JSON.parse(stdout.text()).apiSession.bound, true);
+});
+
+test("CLI api-session bind posts a stable session binding", async () => {
+  const stdout = capture();
+  const seen = [];
+  const cwd = "/workspace/demo";
+  const code = await runCli(["api-session", "bind", "--api-session-id", "api-1", "--cwd", cwd, "--thread", "thread-1"], {
+    cwd,
+    stdout,
+    stderr: capture(),
+    fetchImpl: fakeFetch({
+      "POST /api/session-bindings": {
+        ok: true,
+        binding: { apiSessionId: "api-1", threadId: "thread-1", cwd },
+        thread: { id: "thread-1", name: "Demo" },
+      },
+    }, seen),
+  });
+
+  assert.equal(code, 0);
+  assert.equal(seen[0].body.apiSessionId, "api-1");
+  assert.equal(seen[0].body.cwd, cwd);
+  assert.equal(seen[0].body.threadId, "thread-1");
+  assert.equal(seen[0].body.source, "orkestr-cli");
+  assert.match(stdout.text(), /Bound API session api-1 to Demo/);
+});
+
+test("CLI api-session message eagerly binds then posts visible assistant output", async () => {
+  const stdout = capture();
+  const seen = [];
+  const cwd = "/workspace/demo";
+  const code = await runCli(["api-session", "message", "Forward this", "--phase", "commentary"], {
+    cwd,
+    env: { ORKESTR_API_SESSION_ID: "api-env-1" },
+    stdout,
+    stderr: capture(),
+    fetchImpl: fakeFetch({
+      "GET /api/whereiam": {
+        ok: true,
+        thread: { id: "thread-1", displayName: "Demo", state: "ready" },
+        apiSession: { id: "api-env-1", bound: true, threadId: "thread-1" },
+      },
+      "POST /api/session-bindings/api-env-1/messages": {
+        ok: true,
+        binding: { apiSessionId: "api-env-1", threadId: "thread-1" },
+        thread: { id: "thread-1", name: "Demo" },
+        message: { id: "message-1", role: "assistant" },
+        deliveryExpected: true,
+        deliveryState: { ok: true, state: "delivered" },
+      },
+    }, seen),
+  });
+
+  assert.equal(code, 0);
+  assert.deepEqual(seen.map((entry) => entry.key), [
+    "GET /api/whereiam",
+    "POST /api/session-bindings/api-env-1/messages",
+  ]);
+  assert.equal(seen[0].search, `?cwd=${encodeURIComponent(cwd)}&apiSessionId=api-env-1&bind=1`);
+  assert.equal(seen[1].body.text, "Forward this");
+  assert.equal(seen[1].body.role, "assistant");
+  assert.equal(seen[1].body.phase, "commentary");
+  assert.match(stdout.text(), /Recorded assistant API session message: delivered/);
+});
+
+test("CLI api-session message reports WhatsApp delivery failures with the reason", async () => {
+  const stderr = capture();
+  const seen = [];
+  const cwd = "/workspace/demo";
+  const code = await runCli(["api-session", "message", "Forward this"], {
+    cwd,
+    env: { ORKESTR_API_SESSION_ID: "api-env-1" },
+    stdout: capture(),
+    stderr,
+    fetchImpl: fakeFetch({
+      "GET /api/whereiam": {
+        ok: true,
+        thread: { id: "thread-1", displayName: "Demo", state: "ready" },
+        apiSession: { id: "api-env-1", bound: true, threadId: "thread-1" },
+      },
+      "POST /api/session-bindings/api-env-1/messages": () => new Response(JSON.stringify({
+        ok: false,
+        error: "whatsapp_delivery_not_delivered",
+        deliveryState: "skipped",
+        reason: "missing_responder_account",
+        message: { id: "message-1", threadId: "thread-1", chatId: "chat-1" },
+      }), {
+        status: 409,
+        headers: { "content-type": "application/json" },
+      }),
+    }, seen),
+  });
+
+  assert.equal(code, 1);
+  assert.match(stderr.text(), /whatsapp_delivery_not_delivered/);
+  assert.match(stderr.text(), /delivery=skipped/);
+  assert.match(stderr.text(), /reason=missing_responder_account/);
+  assert.match(stderr.text(), /thread=thread-1/);
+});
+
+test("CLI api-session status reads the durable binding", async () => {
+  const stdout = capture();
+  const seen = [];
+  const code = await runCli(["api-session", "status", "--api-session-id", "api-1"], {
+    stdout,
+    stderr: capture(),
+    fetchImpl: fakeFetch({
+      "GET /api/session-bindings/api-1": {
+        ok: true,
+        binding: {
+          apiSessionId: "api-1",
+          threadId: "thread-1",
+          cwd: "/workspace/demo",
+          lastMessageRole: "assistant",
+          lastMessageAt: "2026-06-06T08:00:00.000Z",
+        },
+      },
+    }, seen),
+  });
+
+  assert.equal(code, 0);
+  assert.equal(seen[0].key, "GET /api/session-bindings/api-1");
+  assert.match(stdout.text(), /API session api-1: thread-1/);
+  assert.match(stdout.text(), /Last message: assistant/);
 });
 
 test("CLI codex migrate calls the migration API", async () => {

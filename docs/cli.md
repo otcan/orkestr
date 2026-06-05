@@ -24,6 +24,9 @@ Advanced and scripting commands:
 
 ```bash
 orkestr whereiam --cwd "$PWD" --json
+orkestr api-session bind --api-session-id "$ORKESTR_API_SESSION_ID" --cwd "$PWD"
+orkestr api-session message "Visible assistant update" --api-session-id "$ORKESTR_API_SESSION_ID"
+orkestr api-session status --api-session-id "$ORKESTR_API_SESSION_ID"
 orkestr settings --json
 orkestr doctor timers
 orkestr security challenges
@@ -65,6 +68,16 @@ the preferred source for agent-facing choices such as the active Codex sandbox
 and approval mode, the managed desktop to use for manual intervention, the Gmail
 OAuth desktop slug, and WhatsApp sender/responder role names. Secrets and OAuth
 tokens are never returned by this command.
+
+`orkestr api-session` is the stable bridge for API-driven agents that are not
+already running inside Orkestr's Codex app-server transport. `bind` attaches a
+stable external session id to the Orkestr thread resolved from `--cwd`,
+`--thread`, `--session-name`, or `--pane-id`. `message` eagerly binds by cwd
+unless `--no-bind` is passed, records the visible user or assistant message, and
+exits non-zero when a bound WhatsApp assistant delivery cannot be confirmed.
+The session id can be passed with `--api-session-id` or supplied through
+`ORKESTR_API_SESSION_ID`, `CODEX_API_SESSION_ID`, `CODEX_SESSION_ID`,
+`CODEX_CONVERSATION_ID`, or `OPENAI_SESSION_ID`.
 
 `orkestr thread create` creates a top-level Orkestr thread through the public API.
 Useful flags are `--id`, `--cwd`, `--command`, `--executor`, and `--json`.

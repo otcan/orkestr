@@ -43,6 +43,7 @@ export async function runCli(argv = process.argv.slice(2), context = {}) {
     if (command === "whereiam" || command === "whereami") return await whereiamCommand(args, ctx);
     if (command === "settings") return await settingsCommand(args, ctx);
     if (command === "doctor") return await doctorCommand(args, ctx);
+    if (command === "api-session" || command === "api") return await apiSessionCommand(args, ctx);
     if (command === "whatsapp" || command === "wa") return await whatsappCommand(args, ctx);
     if (command === "timers" || command === "timer") return await timersCommand(args, ctx);
     if (command === "security") return await securityCommand(args, ctx);
@@ -177,7 +178,7 @@ async function releaseInstancesCommand(argv, ctx) {
 async function whereiamCommand(argv, ctx) {
   const json = argv.includes("--json");
   const cwd = flagValue(argv, "--cwd") || ctx.cwd || process.cwd();
-  const apiSessionId = flagValue(argv, "--api-session-id") || flagValue(argv, "--api-session") || "";
+  const apiSessionId = resolveApiSessionId(argv, ctx);
   const bind = argv.includes("--bind");
   const params = new URLSearchParams();
   if (cwd) params.set("cwd", cwd);
@@ -187,6 +188,152 @@ async function whereiamCommand(argv, ctx) {
   if (json) ctx.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
   else ctx.stdout.write(`${formatWhereAmI(payload)}\n`);
   return payload?.ok === false ? 1 : 0;
+}
+
+async function apiSessionCommand(argv, ctx) {
+  const subcommand = argv[0]?.startsWith("--") ? "status" : argv[0] || "status";
+  const rest = subcommand === "status" && argv[0]?.startsWith("--") ? argv : argv.slice(1);
+  if (subcommand === "bind") return apiSessionBindCommand(rest, ctx);
+  if (subcommand === "message" || subcommand === "msg" || subcommand === "append") return apiSessionMessageCommand(rest, ctx);
+  if (subcommand === "status" || subcommand === "show") return apiSessionStatusCommand(rest, ctx);
+  throw new Error("Usage: orkestr api-session [bind|message|status] --api-session-id id [--json]");
+}
+
+async function apiSessionBindCommand(argv, ctx) {
+  const json = argv.includes("--json");
+  const apiSessionId = requireApiSessionId(argv, ctx);
+  const cwd = flagValue(argv, "--cwd") || ctx.cwd || process.cwd();
+  const body = {
+    apiSessionId,
+    cwd,
+    threadId: flagValue(argv, "--thread") || flagValue(argv, "--thread-id"),
+    sessionName: flagValue(argv, "--session-name"),
+    paneId: flagValue(argv, "--pane-id"),
+    source: flagValue(argv, "--source") || "orkestr-cli",
+    metadata: {
+      client: "orkestr-cli",
+    },
+  };
+  const payload = await requestJson("/api/session-bindings", {
+    ...ctx,
+    method: "POST",
+    body,
+  });
+  if (json) ctx.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
+  else ctx.stdout.write(`Bound API session ${payload.binding?.apiSessionId || apiSessionId} to ${payload.thread?.name || payload.binding?.threadId || "thread"}\n`);
+  return 0;
+}
+
+async function apiSessionMessageCommand(argv, ctx) {
+  const json = argv.includes("--json");
+  const apiSessionId = requireApiSessionId(argv, ctx);
+  const cwd = flagValue(argv, "--cwd") || ctx.cwd || process.cwd();
+  if (!argv.includes("--no-bind")) {
+    await requestJson(`/api/whereiam?${apiSessionBindQuery({ argv, ctx, apiSessionId, cwd }).toString()}`, ctx);
+  }
+  const text = await apiSessionMessageText(argv, ctx);
+  const body = {
+    role: flagValue(argv, "--role") || "assistant",
+    phase: flagValue(argv, "--phase") || "final_answer",
+    state: flagValue(argv, "--state") || "completed",
+    source: flagValue(argv, "--source") || "api-session",
+    text,
+  };
+  const payload = await requestJson(`/api/session-bindings/${encodeURIComponent(apiSessionId)}/messages`, {
+    ...ctx,
+    method: "POST",
+    body,
+  }).catch((error) => {
+    throw enrichApiSessionMessageError(error);
+  });
+  if (json) ctx.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
+  else {
+    const delivery = payload.deliveryState?.state || (payload.deliveryExpected ? "delivered" : "stored");
+    ctx.stdout.write(`Recorded ${payload.message?.role || body.role} API session message: ${delivery}\n`);
+  }
+  return 0;
+}
+
+async function apiSessionStatusCommand(argv, ctx) {
+  const json = argv.includes("--json");
+  const apiSessionId = requireApiSessionId(argv, ctx);
+  const payload = await requestJson(`/api/session-bindings/${encodeURIComponent(apiSessionId)}`, ctx);
+  if (json) ctx.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
+  else {
+    const binding = payload.binding || {};
+    ctx.stdout.write(`API session ${binding.apiSessionId || apiSessionId}: ${binding.threadId || "unbound"}\n`);
+    if (binding.cwd) ctx.stdout.write(`CWD: ${binding.cwd}\n`);
+    if (binding.lastMessageAt) ctx.stdout.write(`Last message: ${binding.lastMessageRole || "-"} at ${binding.lastMessageAt}\n`);
+  }
+  return 0;
+}
+
+function apiSessionBindQuery({ argv, apiSessionId, cwd }) {
+  const params = new URLSearchParams();
+  if (cwd) params.set("cwd", cwd);
+  const threadId = flagValue(argv, "--thread") || flagValue(argv, "--thread-id");
+  if (threadId) params.set("threadId", threadId);
+  const sessionName = flagValue(argv, "--session-name");
+  if (sessionName) params.set("sessionName", sessionName);
+  const paneId = flagValue(argv, "--pane-id");
+  if (paneId) params.set("paneId", paneId);
+  params.set("apiSessionId", apiSessionId);
+  params.set("bind", "1");
+  return params;
+}
+
+async function apiSessionMessageText(argv, ctx) {
+  const explicit = flagValue(argv, "--text") || flagValue(argv, "--message");
+  if (explicit) return explicit;
+  const text = positional(argv).join(" ").trim();
+  if (text) return text;
+  if (argv.includes("--stdin")) return readStdin(ctx.stdin);
+  throw new Error("Usage: orkestr api-session message <text> --api-session-id id [--role assistant|user] [--phase final_answer]");
+}
+
+function resolveApiSessionId(argv, ctx) {
+  return flagValue(argv, "--api-session-id") ||
+    flagValue(argv, "--api-session") ||
+    String(ctx.env?.ORKESTR_API_SESSION_ID || "").trim() ||
+    String(ctx.env?.CODEX_API_SESSION_ID || "").trim() ||
+    String(ctx.env?.CODEX_SESSION_ID || "").trim() ||
+    String(ctx.env?.CODEX_CONVERSATION_ID || "").trim() ||
+    String(ctx.env?.OPENAI_SESSION_ID || "").trim();
+}
+
+function requireApiSessionId(argv, ctx) {
+  const id = resolveApiSessionId(argv, ctx);
+  if (!id) throw new Error("api_session_id_required: pass --api-session-id or set ORKESTR_API_SESSION_ID");
+  return id;
+}
+
+function enrichApiSessionMessageError(error) {
+  const payload = error?.payload && typeof error.payload === "object" ? error.payload : null;
+  if (!payload) return error;
+  const parts = [
+    payload.error || payload.message || error.message || "api_session_message_failed",
+    payload.deliveryState ? `delivery=${payload.deliveryState}` : "",
+    payload.reason ? `reason=${payload.reason}` : "",
+    payload.message?.threadId ? `thread=${payload.message.threadId}` : "",
+    payload.message?.chatId ? `chat=${payload.message.chatId}` : "",
+  ].filter(Boolean);
+  const next = new Error(parts.join(" "));
+  next.status = error.status;
+  next.payload = payload;
+  return next;
+}
+
+function readStdin(stdin) {
+  return new Promise((resolve, reject) => {
+    let text = "";
+    stdin.setEncoding?.("utf8");
+    stdin.on("data", (chunk) => {
+      text += String(chunk || "");
+    });
+    stdin.on("end", () => resolve(text.trim()));
+    stdin.on("error", reject);
+    stdin.resume?.();
+  });
 }
 
 async function settingsCommand(argv, ctx) {
@@ -713,6 +860,9 @@ Common thread commands:
   orkestr list [--json] [--api http://127.0.0.1:19812]
   orkestr create <name> [--wa-participant jid]... [--no-wa] [--json]
   orkestr whereiam [--cwd path] [--api-session-id id] [--bind] [--json]
+  orkestr api-session bind [--api-session-id id] [--cwd path] [--thread thread-id] [--json]
+  orkestr api-session message <text> [--api-session-id id] [--role assistant|user] [--phase final_answer] [--json]
+  orkestr api-session status [--api-session-id id] [--json]
   orkestr attach [thread-name-or-id] [--print] [--json]
   orkestr send <thread-name-or-id> "<message>" [--json]
   orkestr wake <thread-name-or-id> [--json]
@@ -883,6 +1033,8 @@ function positional(argv) {
     "--lines",
     "--to",
     "--active-timeout",
+    "--api-session",
+    "--api-session-id",
     "--wa-admin",
     "--admin-participant",
     "--wa-participant",
@@ -890,6 +1042,16 @@ function positional(argv) {
     "--wa-title",
     "--outbound-account",
     "--inbound-account",
+    "--message",
+    "--pane-id",
+    "--phase",
+    "--role",
+    "--session-name",
+    "--source",
+    "--state",
+    "--text",
+    "--thread",
+    "--thread-id",
   ]);
   const flagsWithoutValues = new Set([
     "--blank",
@@ -918,6 +1080,8 @@ function positional(argv) {
     "--check-only",
     "--no-follow",
     "--probe",
+    "--stdin",
+    "--no-bind",
     "--all-instances",
     "--no-all-instances",
   ]);

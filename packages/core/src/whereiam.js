@@ -164,6 +164,8 @@ function publicWorkspace(thread = null, lease = null, cwd = "") {
 function commandHints() {
   return {
     whereiam: "orkestr whereiam --json",
+    bindApiSession: "orkestr api-session bind --api-session-id <stable-id>",
+    postApiSessionMessage: "orkestr api-session message \"<message>\" --api-session-id <stable-id>",
     listThreads: "orkestr list",
     sendThreadInput: "orkestr send <thread-name-or-id> \"<message>\"",
     timers: "orkestr timers list",

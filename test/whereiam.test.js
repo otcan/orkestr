@@ -21,6 +21,7 @@ test("runtime AGENTS.md points agents to dynamic whereiam discovery", async () =
 
   assert.equal(result.written, true);
   assert.match(body, /orkestr whereiam --json/);
+  assert.match(body, /orkestr api-session message/);
   assert.match(body, /orkestr settings --json/);
   assert.match(body, /Orkestr is the host application around this Codex session/);
   assert.match(body, /orkestr security approve <challenge-id>/);
@@ -124,6 +125,7 @@ test("whereAmI resolves the current thread from a nested workspace path", async 
   assert.equal(payload.settings.profile, undefined);
   assert.equal(payload.settings.desktops.gmailAuth, "gmail");
   assert.equal(payload.matchedBy, "thread.cwd");
+  assert.match(payload.commands.postApiSessionMessage, /orkestr api-session message/);
 });
 
 test("whereAmI exposes server-owned contained user runtime policy metadata", async () => {

@@ -75,6 +75,10 @@ Use dynamic discovery for live Orkestr context:
   from a plain HTTP request. API clients with their own stable session id can
   add \`apiSessionId=<stable-id>&bind=1\` once, then reuse that id for durable
   Orkestr thread attachment.
+- API wrappers that emit visible assistant messages should prefer
+  \`orkestr api-session message "<text>" --api-session-id <stable-id>\`. The
+  command eagerly binds by cwd before posting and exits non-zero if the bound
+  WhatsApp delivery cannot be confirmed.
 - Runtime settings are included in \`orkestr whereiam --json\` and can also be
   inspected with \`orkestr settings --json\`. Use those settings for managed
   desktop slugs, Gmail/Outlook auth routes, and permission-routing behavior.
