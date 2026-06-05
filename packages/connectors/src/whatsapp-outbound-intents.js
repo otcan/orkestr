@@ -42,8 +42,8 @@ export function whatsappOutboundIntentBootstrapWindowMs(env = process.env) {
 }
 
 export function whatsappLiveOutputRecoveryWindowMs(env = process.env) {
-  const parsed = Number(env.ORKESTR_WHATSAPP_LIVE_OUTPUT_RECOVERY_WINDOW_MS || 24 * 60 * 60 * 1000);
-  return Number.isFinite(parsed) ? Math.max(0, Math.floor(parsed)) : 24 * 60 * 60 * 1000;
+  const parsed = Number(env.ORKESTR_WHATSAPP_LIVE_OUTPUT_RECOVERY_WINDOW_MS || 5 * 60 * 1000);
+  return Number.isFinite(parsed) ? Math.max(0, Math.floor(parsed)) : 5 * 60 * 1000;
 }
 
 export function outboundMirrorMessageSetKey({ kind = "", agentId = "", threadId = "" } = {}) {

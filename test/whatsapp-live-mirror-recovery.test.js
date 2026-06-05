@@ -120,6 +120,44 @@ test("whatsapp delivery recovers missed live app-server output after the mirror 
   assert.deepEqual(reasons, ["live_bound_recovery", "live_bound_recovery"]);
 });
 
+test("whatsapp delivery does not recover stale live progress outside the default recovery window", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-stale-live-recovery-"));
+  const runtimeEnv = await createBoundThread(home, "thread-stale-live-recovery");
+  delete runtimeEnv.ORKESTR_WHATSAPP_LIVE_OUTPUT_RECOVERY_WINDOW_MS;
+  const oldAt = new Date(Date.now() - 10 * 60 * 1000).toISOString();
+  const parent = await appendThreadMessage("thread-stale-live-recovery", {
+    role: "user",
+    source: "whatsapp_inbound",
+    state: "completed",
+    connector: "whatsapp",
+    chatId: "chat-live-recovery",
+    accountId: "account-live-recovery",
+    text: "old routed request",
+    createdAt: oldAt,
+  }, runtimeEnv);
+  const progress = await appendThreadMessage("thread-stale-live-recovery", {
+    role: "assistant",
+    source: "codex-app-server",
+    phase: "commentary",
+    state: "completed",
+    chatId: "chat-live-recovery",
+    accountId: "account-live-recovery",
+    parentMessageId: parent.id,
+    text: "Old progress should not replay after restart.",
+    createdAt: oldAt,
+  }, runtimeEnv);
+  await writeCursorPast(home, "thread-stale-live-recovery", Number(progress.cursor) + 1);
+
+  const delivery = await deliverWhatsAppReplies(runtimeEnv, async () => {
+    throw new Error("stale live progress should not be recovered");
+  });
+  const state = JSON.parse(await fs.readFile(path.join(home, "whatsapp.json"), "utf8"));
+
+  assert.equal(delivery.delivered.length, 0);
+  assert.equal((state.outboundIntents || []).some((intent) => intent.messageId === progress.id), false);
+  assert.equal(delivery.skipped.find((item) => item.messageId === progress.id)?.reason, "stale_untracked_reply");
+});
+
 test("whatsapp delivery does not recover imported transcript output after the mirror cursor advanced", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-import-recovery-"));
   const runtimeEnv = await createBoundThread(home, "thread-import-recovery");
