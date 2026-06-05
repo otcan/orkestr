@@ -1166,6 +1166,14 @@ function formatToolResultFallback(toolResults = [], context = {}) {
   return parts.join("\n\n").trim();
 }
 
+function gmailNotificationToolResultsHaveFailure(toolResults = []) {
+  return (Array.isArray(toolResults) ? toolResults : []).some((result) => {
+    if (!["orkestr_create_gmail_notification", "orkestr_update_gmail_notification", "orkestr_delete_gmail_notification", "orkestr_run_gmail_notification_now"].includes(clean(result?.name))) return false;
+    const output = result?.output || {};
+    return output.ok === false || Boolean(clean(output.error));
+  });
+}
+
 function gmailReadToolResultNeedsNarrativeRepair(toolResults = [], message = {}, gmailContext = null) {
   if (!Array.isArray(toolResults) || !toolResults.length) return false;
   const hasReadMessage = toolResults.some((result) =>
@@ -1847,6 +1855,7 @@ async function runTenantApiAgentToolResultResponse({
   const fallback = customFallback || toolFallback;
   const repairGmailReadNarrative = gmailReadToolResultNeedsNarrativeRepair(toolResults, message, gmailContext);
   if (fallback && shouldPreferWebFetchFallback(text, fallback, message)) return { response: second, text: fallback };
+  if (fallback && gmailNotificationToolResultsHaveFailure(toolResults) && !repairGmailReadNarrative) return { response: second, text: fallback };
   if (fallback && genericToolFallbackText(text) && !repairGmailReadNarrative) return { response: second, text: fallback };
   if (!repairGmailReadNarrative && !tenantApiAgentTextNeedsRepair(text, message, { pendingActionConfirmation: Boolean(pendingAction), gmailContext, env })) return { response: second, text };
   if (fallback && !repairGmailReadNarrative) return { response: second, text: fallback };

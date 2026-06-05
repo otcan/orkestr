@@ -673,6 +673,86 @@ test("tenant api-agent creates a persisted Gmail notification rule from chat", a
   assert.doesNotMatch(assistant.text, /not wired|did not create|Gmail is not connected|Ask me to connect Gmail/i);
 });
 
+test("tenant api-agent reports disabled Gmail notifications from tool results", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-api-agent-gmail-notification-disabled-"));
+  const env = await allowSanitizerEnv(home, {
+    ORKESTR_GMAIL_NOTIFICATION_MIN_INTERVAL_MS: "300000",
+  });
+  await upsertUser({ id: "otcan", role: "user", displayName: "Otcan" }, env);
+  const paths = userDataPaths("otcan", env);
+  await fs.mkdir(paths.secrets, { recursive: true });
+  await fs.writeFile(path.join(paths.secrets, "gmail-token.json"), JSON.stringify({
+    accessToken: "user-gmail-notification-disabled-access",
+    refreshToken: "user-gmail-notification-disabled-refresh",
+    expiresAt: Math.floor(Date.now() / 1000) + 3600,
+  }), "utf8");
+  await createThread({
+    id: "otcantest-gmail-notification-disabled",
+    ownerUserId: "otcan",
+    name: "otcantest",
+    runtimeKind: "api-agent",
+    executor: { type: "api-agent", metadata: { runtimeKind: "api-agent" } },
+    binding: { connector: "whatsapp", chatId: "chat-otcan", outboundAccountId: "wa-1" },
+  }, env);
+  await enqueueThreadInputForPrincipal("otcantest-gmail-notification-disabled", {
+    text: "Can you send me a message here whenever I receive a Gmail mail?",
+    source: "whatsapp_inbound",
+    connector: "whatsapp",
+    chatId: "chat-otcan",
+    accountId: "wa-1",
+  }, userPrincipal({ id: "otcan", role: "user" }), env);
+
+  const openAiCalls = [];
+  const result = await processApiAgentThreadInput("otcantest-gmail-notification-disabled", env, {
+    fetchImpl: async (_url, options = {}) => {
+      const body = JSON.parse(options.body);
+      openAiCalls.push(body);
+      if (openAiCalls.length === 1) {
+        return response({
+          id: "resp_gmail_notification_disabled_1",
+          model: "gpt-5-mini",
+          output_text: "",
+          output: [{
+            type: "function_call",
+            name: "orkestr_create_gmail_notification",
+            call_id: "call_create_gmail_notification_disabled",
+            arguments: JSON.stringify({
+              label: "Gmail notifications",
+              query: "",
+              interval: "1m",
+              targetType: "thread",
+              target: "",
+              maxItemsPerRun: 1,
+              enabled: true,
+              allowBroadQuery: false,
+            }),
+          }],
+          usage: { input_tokens: 300, output_tokens: 20 },
+        });
+      }
+      const toolOutput = JSON.parse(body.input.at(-1).output);
+      assert.equal(toolOutput.ok, false);
+      assert.equal(toolOutput.error, "gmail_notifications_disabled");
+      return response({
+        id: "resp_gmail_notification_disabled_2",
+        model: "gpt-5-mini",
+        output_text: "I couldn't manage Gmail notifications for this chat right now. Please try again in a moment.",
+        output: [],
+        usage: { input_tokens: 360, output_tokens: 18 },
+      });
+    },
+  });
+  const messages = await listThreadMessages("otcantest-gmail-notification-disabled", env);
+  const assistant = messages.find((message) => message.role === "assistant");
+  const notifications = await listGmailNotificationsForPrincipal(userPrincipal({ id: "otcan", role: "user" }), env);
+
+  assert.equal(result.ok, true);
+  assert.equal(openAiCalls.length, 2);
+  assert.deepEqual(notifications, []);
+  assert.match(assistant.text, /Gmail background notifications are not enabled/i);
+  assert.doesNotMatch(assistant.text, /try again in a moment/i);
+});
+
 test("tenant api-agent repair retry can call Gmail notification tools", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-api-agent-gmail-notification-repair-"));
   const env = await allowSanitizerEnv(home, {
