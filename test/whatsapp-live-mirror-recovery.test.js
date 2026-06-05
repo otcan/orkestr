@@ -1,0 +1,172 @@
+import assert from "node:assert/strict";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import test from "node:test";
+import { appendThreadMessage, createThread } from "../packages/core/src/threads.js";
+import { deliverWhatsAppReplies } from "../packages/connectors/src/whatsapp.js";
+import { outboundMirrorMessageSetKey } from "../packages/connectors/src/whatsapp-outbound-intents.js";
+import { writeConnectorConfig } from "../packages/storage/src/config.js";
+
+function response(payload, ok = true, status = 200) {
+  return {
+    ok,
+    status,
+    async json() {
+      return payload;
+    },
+  };
+}
+
+function env(home, extra = {}) {
+  return {
+    ORKESTR_HOME: home,
+    ORKESTR_WHATSAPP_EXTERNAL_BRIDGE_ENABLED: "1",
+    ORKESTR_WHATSAPP_DEBUG_FOOTER: "0",
+    ORKESTR_WHATSAPP_API_AGENT_AUTORUN: "0",
+    ORKESTR_WHATSAPP_PROGRESS_BACKFILL_WINDOW_MS: "1000",
+    ORKESTR_WHATSAPP_REPLY_BACKFILL_WINDOW_MS: "1000",
+    ORKESTR_WHATSAPP_LIVE_OUTPUT_RECOVERY_WINDOW_MS: String(60 * 60 * 1000),
+    ...extra,
+  };
+}
+
+async function createBoundThread(home, threadId) {
+  const runtimeEnv = env(home);
+  await writeConnectorConfig("whatsapp", { bridgeMode: "external", bridgeUrl: "http://wa.local" }, runtimeEnv);
+  await createThread({
+    id: threadId,
+    name: threadId,
+    binding: {
+      connector: "whatsapp",
+      chatId: "chat-live-recovery",
+      responderAccountId: "account-live-recovery",
+      outboundAccountId: "account-live-recovery",
+      mirrorToWhatsApp: true,
+    },
+  }, runtimeEnv);
+  return runtimeEnv;
+}
+
+async function writeCursorPast(home, threadId, cursor) {
+  await fs.writeFile(path.join(home, "whatsapp.json"), JSON.stringify({
+    outboundDeliveries: [],
+    outboundIntents: [],
+    inboundEvents: [],
+    outboundMirrorCursors: [{
+      messageSetKey: outboundMirrorMessageSetKey({ kind: "thread", threadId }),
+      kind: "thread",
+      agentId: null,
+      threadId,
+      cursor,
+      updatedAt: new Date().toISOString(),
+    }],
+  }, null, 2));
+}
+
+test("whatsapp delivery recovers missed live app-server output after the mirror cursor advanced", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-live-recovery-"));
+  const runtimeEnv = await createBoundThread(home, "thread-live-recovery");
+  const oldAt = new Date(Date.now() - 10 * 60 * 1000).toISOString();
+  const parent = await appendThreadMessage("thread-live-recovery", {
+    role: "user",
+    source: "whatsapp_inbound",
+    state: "completed",
+    connector: "whatsapp",
+    chatId: "chat-live-recovery",
+    accountId: "account-live-recovery",
+    text: "please keep me posted",
+    createdAt: oldAt,
+  }, runtimeEnv);
+  const progress = await appendThreadMessage("thread-live-recovery", {
+    role: "assistant",
+    source: "codex-app-server",
+    phase: "commentary",
+    state: "completed",
+    chatId: "chat-live-recovery",
+    accountId: "account-live-recovery",
+    parentMessageId: parent.id,
+    text: "Checking the routing path.",
+    createdAt: oldAt,
+  }, runtimeEnv);
+  const final = await appendThreadMessage("thread-live-recovery", {
+    role: "assistant",
+    source: "codex-app-server",
+    phase: "final_answer",
+    state: "completed",
+    chatId: "chat-live-recovery",
+    accountId: "account-live-recovery",
+    parentMessageId: parent.id,
+    text: "Routing is fixed.",
+    createdAt: oldAt,
+  }, runtimeEnv);
+  await writeCursorPast(home, "thread-live-recovery", Number(final.cursor) + 1);
+
+  const calls = [];
+  const delivery = await deliverWhatsAppReplies(runtimeEnv, async (url, options) => {
+    calls.push({ url, body: JSON.parse(options.body) });
+    return response({ ok: true, ids: [`sent-${calls.length}`] });
+  });
+  const state = JSON.parse(await fs.readFile(path.join(home, "whatsapp.json"), "utf8"));
+  const reasons = state.outboundIntents
+    .filter((intent) => [progress.id, final.id].includes(intent.messageId))
+    .map((intent) => intent.createdReason);
+
+  assert.equal(delivery.delivered.length, 2);
+  assert.deepEqual(delivery.delivered.map((item) => item.deliveryType), ["progress", "final"]);
+  assert.deepEqual(calls.map((call) => call.body.to), ["chat-live-recovery", "chat-live-recovery"]);
+  assert.deepEqual(calls.map((call) => call.body.accountId), ["account-live-recovery", "account-live-recovery"]);
+  assert.deepEqual(calls.map((call) => call.body.text), ["Checking the routing path.", "Routing is fixed."]);
+  assert.deepEqual(reasons, ["live_bound_recovery", "live_bound_recovery"]);
+});
+
+test("whatsapp delivery does not recover imported transcript output after the mirror cursor advanced", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-import-recovery-"));
+  const runtimeEnv = await createBoundThread(home, "thread-import-recovery");
+  const oldAt = new Date(Date.now() - 10 * 60 * 1000).toISOString();
+  const parent = await appendThreadMessage("thread-import-recovery", {
+    role: "user",
+    source: "whatsapp_inbound",
+    state: "completed",
+    connector: "whatsapp",
+    chatId: "chat-live-recovery",
+    accountId: "account-live-recovery",
+    text: "historical request",
+    createdAt: oldAt,
+  }, runtimeEnv);
+  const progress = await appendThreadMessage("thread-import-recovery", {
+    role: "assistant",
+    source: "codex-app-server-import",
+    phase: "commentary",
+    state: "completed",
+    chatId: "chat-live-recovery",
+    accountId: "account-live-recovery",
+    parentMessageId: parent.id,
+    text: "Imported progress should stay inert.",
+    createdAt: oldAt,
+  }, runtimeEnv);
+  const final = await appendThreadMessage("thread-import-recovery", {
+    role: "assistant",
+    source: "codex-app-server-import",
+    phase: "final_answer",
+    state: "completed",
+    chatId: "chat-live-recovery",
+    accountId: "account-live-recovery",
+    parentMessageId: parent.id,
+    text: "Imported final should stay inert.",
+    createdAt: oldAt,
+  }, runtimeEnv);
+  await writeCursorPast(home, "thread-import-recovery", Number(final.cursor) + 1);
+
+  const delivery = await deliverWhatsAppReplies(runtimeEnv, async () => {
+    throw new Error("imported transcript output should not be recovered");
+  });
+  const state = JSON.parse(await fs.readFile(path.join(home, "whatsapp.json"), "utf8"));
+
+  assert.equal(delivery.delivered.length, 0);
+  assert.equal((state.outboundIntents || []).some((intent) => [progress.id, final.id].includes(intent.messageId)), false);
+  assert.deepEqual(
+    [progress.id, final.id].map((id) => delivery.skipped.find((item) => item.messageId === id)?.reason),
+    ["stale_untracked_reply", "stale_untracked_reply"],
+  );
+});

@@ -29,6 +29,7 @@ export function dataPaths(env = process.env) {
     desktopLeases: env.ORKESTR_DESKTOP_LEASE_FILE || path.join(home, "desktop-leases.json"),
     workspaces: path.join(home, "workspaces"),
     timers: path.join(home, "timers.json"),
+    connectorOutbox: path.join(home, "connector-outbox.json"),
     connectorPromptPushes: path.join(home, "connector-prompt-pushes.json"),
     routerTraces: path.join(home, "router-traces.json"),
     releaseWhatsAppNotifications: path.join(home, "release-whatsapp-notifications.json"),

@@ -78,6 +78,11 @@ function optionalNumber(value) {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
+function visibleMessageMutationFields(patch = {}) {
+  return ["text", "attachments", "deletedAt"]
+    .filter((key) => Object.prototype.hasOwnProperty.call(patch || {}, key));
+}
+
 function restrictedCodexApprovalPolicy(input = {}) {
   const requested = String(input.codexApprovalPolicy || input.executor?.metadata?.codexApprovalPolicy || "on-request").trim() || "on-request";
   return requested === "never" ? "on-request" : requested;
@@ -584,17 +589,24 @@ export async function updateThreadMessage(threadId, messageId, patch, env = proc
   return enqueueMessageMutation(filePath, async () => {
     const messages = await messageRepository.list(thread.id);
     let updated = null;
+    let previous = null;
     const normalizeAttachments = Object.prototype.hasOwnProperty.call(patch || {}, "text") ||
       Object.prototype.hasOwnProperty.call(patch || {}, "attachments");
+    const visibleMutationFields = visibleMessageMutationFields(patch);
     const next = [];
     for (const message of messages) {
       if (message.id !== messageId) {
         next.push(message);
         continue;
       }
+      previous = message;
+      const nextRevision = visibleMutationFields.length
+        ? Math.max(1, Number(message.revision || 1) || 1) + 1
+        : message.revision;
       updated = normalizeNoReplyAssistantMessage({
         ...message,
         ...patch,
+        ...(nextRevision ? { revision: nextRevision } : {}),
         updatedAt: nowIso(),
       });
       if (normalizeAttachments) {
@@ -616,8 +628,34 @@ export async function updateThreadMessage(threadId, messageId, patch, env = proc
       throw error;
     }
     await messageRepository.save(thread.id, next);
+    if (visibleMutationFields.length) {
+      const deleted = Boolean(patch?.deletedAt);
+      await appendEvent({
+        type: deleted ? "thread_message_deleted" : "thread_message_edited",
+        eventType: deleted ? "message.deleted" : "message.edited",
+        threadId: thread.id,
+        messageId: updated.id,
+        ownerUserId: updated.ownerUserId || thread.ownerUserId || null,
+        role: updated.role,
+        source: updated.source,
+        connector: updated.connector || "",
+        chatId: updated.chatId || "",
+        accountId: updated.accountId || "",
+        previousRevision: previous?.revision || 1,
+        sourceRevision: updated.revision || 1,
+        changedFields: visibleMutationFields,
+      }, env);
+    }
     return updated;
   });
+}
+
+export async function deleteThreadMessage(threadId, messageId, options = {}, env = process.env) {
+  return updateThreadMessage(threadId, messageId, {
+    deletedAt: String(options.deletedAt || "").trim() || nowIso(),
+    deletedBy: String(options.deletedBy || options.actor || "").trim(),
+    deleteReason: String(options.reason || options.deleteReason || "").trim(),
+  }, env);
 }
 
 export async function nextQueuedThreadMessage(threadId, env = process.env) {

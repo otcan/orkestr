@@ -41,6 +41,13 @@ import {
   whatsappInboundThreadMatchesBinding,
 } from "./whatsapp-inbound-routing.js";
 import {
+  claimConnectorOutboxJob,
+  connectorOutboxTerminalState,
+  ensureConnectorOutboxJob,
+  markConnectorOutboxJob,
+  releaseConnectorOutboxClaim,
+} from "./connector-outbox.js";
+import {
   acquireOutboundDeliveryClaim,
   deliveryTextKey,
   finishOutboundDeliveryClaim,
@@ -50,6 +57,7 @@ import {
 import {
   advanceWhatsAppOutboundMirrorCursors,
   canCreateWhatsAppOutboundIntent,
+  canRecoverLiveWhatsAppOutboundIntent,
   markWhatsAppOutboundIntent,
   mergeWhatsAppOutboundIntents,
   mergeWhatsAppOutboundMirrorCursors,
@@ -1071,12 +1079,74 @@ async function sendClaimedWhatsAppText({
   textKey,
   text,
   attachments,
+  message,
+  parent,
+  thread,
   config,
   env,
   fetchImpl,
 } = {}) {
   const routerTraceId = pickString(intent?.routerTraceId);
   const turnId = pickString(intent?.turnId) || (routerTraceId ? turnIdFor({ routerTraceId }) : "");
+  const outboxResult = await ensureConnectorOutboxJob({
+    tenantId: resourceOwnerUserId(thread || {}, env),
+    ownerUserId: resourceOwnerUserId(thread || {}, env),
+    connector: "whatsapp",
+    accountId,
+    chatId,
+    threadId: threadId || "",
+    agentId: agentId || "",
+    sourceEventId: pickString(message?.eventId, message?.sourceEventId, sourceMessageId, messageId),
+    sourceMessageId: pickString(sourceMessageId, messageId),
+    sourceRevision: pickString(message?.revision, message?.updatedAt, message?.createdAt, "1"),
+    deliveryType,
+    payload: {
+      text,
+      ...(routerUpdateType ? { routerUpdateType } : {}),
+      ...(attachments ? { attachments } : {}),
+    },
+    metadata: {
+      kind,
+      routerUpdateType: routerUpdateType || "",
+      parentMessageId: parentMessageId || "",
+      textKey,
+      routerTraceId,
+      turnId,
+      routerOutboxId: intent?.outboxId || "",
+    },
+  }, env);
+  if (connectorOutboxTerminalState(outboxResult.job?.state)) {
+    await recordRouterTraceEvent({
+      routerTraceId,
+      turnId,
+      connector: "whatsapp",
+      phase: "skipped",
+      reason: `connector_outbox_${outboxResult.job.state}`,
+      threadId,
+      messageId,
+      chatId,
+      accountId,
+      terminal: true,
+    }, env).catch(() => {});
+    return { skipped: { reason: `connector_outbox_${outboxResult.job.state}` } };
+  }
+  const outboxClaim = await claimConnectorOutboxJob(outboxResult.job.id, {
+    claimant: `whatsapp-mirror:${process.pid}`,
+  }, env);
+  if (!outboxClaim.acquired) {
+    await recordRouterTraceEvent({
+      routerTraceId,
+      turnId,
+      connector: "whatsapp",
+      phase: "skipped",
+      reason: outboxClaim.reason || "connector_outbox_claim_active",
+      threadId,
+      messageId,
+      chatId,
+      accountId,
+    }, env).catch(() => {});
+    return { skipped: { reason: outboxClaim.reason || "connector_outbox_claim_active" } };
+  }
   const claimResult = await acquireOutboundDeliveryClaim({
     state,
     kind,
@@ -1090,6 +1160,7 @@ async function sendClaimedWhatsAppText({
     textKey,
   }, env, { persistState: writeWhatsAppState });
   if (!claimResult.acquired) {
+    await releaseConnectorOutboxClaim(outboxClaim.job.id, { reason: claimResult.reason || "delivery_claim_active" }, env).catch(() => {});
     await recordRouterTraceEvent({
       routerTraceId,
       turnId,
@@ -1116,6 +1187,7 @@ async function sendClaimedWhatsAppText({
     routerUpdateType,
     claimKey: claimResult.claim?.claimKey,
     outboxId: intent?.outboxId,
+    connectorOutboxJobId: outboxClaim.job.id,
   }, env).catch(() => {});
   await markRouterOutboxItem(intent?.outboxId, { status: "claimed" }, env).catch(() => null);
 
@@ -1133,6 +1205,7 @@ async function sendClaimedWhatsAppText({
       ...(routerTraceId ? { routerTraceId } : {}),
       ...(turnId ? { turnId } : {}),
       ...(intent?.outboxId ? { outboxId: intent.outboxId } : {}),
+      connectorOutboxJobId: outboxClaim.job.id,
       chatId,
       accountId,
       textKey,
@@ -1156,6 +1229,12 @@ async function sendClaimedWhatsAppText({
     deliveredTextKeys.add(textKey);
     batchTextKeys.add(textKey);
     await finishOutboundDeliveryClaim({ state, claim: claimResult.claim, filePath: claimResult.filePath, status: "delivered", delivery }, env, { persistState: writeWhatsAppState });
+    await markConnectorOutboxJob(outboxClaim.job.id, {
+      state: "delivered",
+      deliveredAt: delivery.deliveredAt,
+      brokerAck: payload,
+      error: "",
+    }, env).catch(() => null);
     await markRouterOutboxItem(intent?.outboxId, { status: "delivered", deliveredAt: delivery.deliveredAt }, env).catch(() => null);
     await recordRouterTraceEvent({
       routerTraceId,
@@ -1169,6 +1248,7 @@ async function sendClaimedWhatsAppText({
       deliveryType,
       routerUpdateType,
       outboxId: intent?.outboxId,
+      connectorOutboxJobId: outboxClaim.job.id,
     }, env).catch(() => {});
     if (deliveryType === "final" || deliveryType === "router_update") {
       await recordRouterTraceEvent({
@@ -1198,6 +1278,11 @@ async function sendClaimedWhatsAppText({
       state.outboundIntents = outboundIntents;
     }
     await finishOutboundDeliveryClaim({ state, claim: claimResult.claim, filePath: claimResult.filePath, status: "failed", error: error.message || String(error) }, env, { persistState: writeWhatsAppState }).catch(() => {});
+    await markConnectorOutboxJob(outboxClaim.job.id, {
+      state: "failed_retryable",
+      failedAt: new Date().toISOString(),
+      error: error.message || String(error),
+    }, env).catch(() => null);
     await markRouterOutboxItem(intent?.outboxId, {
       status: "failed",
       attempts: Number(intent?.attempts || 0) + 1,
@@ -1215,6 +1300,7 @@ async function sendClaimedWhatsAppText({
       deliveryType,
       routerUpdateType,
       outboxId: intent?.outboxId,
+      connectorOutboxJobId: outboxClaim.job.id,
       error,
     }, env).catch(() => {});
     return { failure: { error } };
@@ -2161,7 +2247,17 @@ async function deliverWhatsAppRepliesOnce(env = process.env, fetchImpl = fetch) 
           message.connector === "whatsapp" ||
           boundThreadWhatsAppAssistantOrigin({ message, thread, kind });
         if (!whatsappOrigin) continue;
-        if (staleUntrackedWhatsAppProgress(message, outboundDeliveries, env)) {
+        const liveRecovery = canRecoverLiveWhatsAppOutboundIntent({
+          state,
+          messageSetKey,
+          messageCursor,
+          message,
+          parent,
+          thread,
+          kind,
+          env,
+        });
+        if (!liveRecovery && staleUntrackedWhatsAppProgress(message, outboundDeliveries, env)) {
           skipped.push({ agentId, threadId, messageId: message.id, reason: "stale_untracked_reply" });
           continue;
         }
@@ -2240,7 +2336,17 @@ async function deliverWhatsAppRepliesOnce(env = process.env, fetchImpl = fetch) 
         message.connector === "whatsapp" ||
         boundThreadWhatsAppAssistantOrigin({ message, thread, kind });
       if (!whatsappOrigin) continue;
-      if (staleUntrackedWhatsAppReply(message, outboundDeliveries, env)) {
+      const liveRecovery = canRecoverLiveWhatsAppOutboundIntent({
+        state,
+        messageSetKey,
+        messageCursor,
+        message,
+        parent,
+        thread,
+        kind,
+        env,
+      });
+      if (!liveRecovery && staleUntrackedWhatsAppReply(message, outboundDeliveries, env)) {
         skipped.push({ agentId, threadId, messageId: message.id, reason: "stale_untracked_reply" });
         continue;
       }

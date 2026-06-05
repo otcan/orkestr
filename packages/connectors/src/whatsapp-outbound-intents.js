@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import { whatsappBindingIsRouteEligible } from "./whatsapp-inbound-routing.js";
 
 function pickString(...values) {
   for (const value of values) {
@@ -38,6 +39,11 @@ export function whatsappOutboundIntentRetentionLimit(env = process.env) {
 export function whatsappOutboundIntentBootstrapWindowMs(env = process.env) {
   const parsed = Number(env.ORKESTR_WHATSAPP_OUTBOUND_INTENT_BOOTSTRAP_WINDOW_MS || 15 * 60 * 1000);
   return Number.isFinite(parsed) ? Math.max(0, Math.floor(parsed)) : 15 * 60 * 1000;
+}
+
+export function whatsappLiveOutputRecoveryWindowMs(env = process.env) {
+  const parsed = Number(env.ORKESTR_WHATSAPP_LIVE_OUTPUT_RECOVERY_WINDOW_MS || 24 * 60 * 60 * 1000);
+  return Number.isFinite(parsed) ? Math.max(0, Math.floor(parsed)) : 24 * 60 * 60 * 1000;
 }
 
 export function outboundMirrorMessageSetKey({ kind = "", agentId = "", threadId = "" } = {}) {
@@ -120,6 +126,19 @@ function whatsappMessageOrigin(message = {}, state = null) {
   return Boolean((state?.inboundEvents || []).some((event) => event.messageId === message.id));
 }
 
+function liveCodexAppServerAssistantOutput(message = {}) {
+  return clean(message?.role).toLowerCase() === "assistant" &&
+    clean(message?.state).toLowerCase() === "completed" &&
+    clean(message?.source) === "codex-app-server";
+}
+
+function threadAllowsLiveRecovery(thread = null) {
+  const binding = thread?.binding || {};
+  return whatsappBindingIsRouteEligible(binding) &&
+    binding.mirrorToWhatsApp !== false &&
+    binding.mirrorReplies !== false;
+}
+
 function boundThreadOrigin({ message = {}, thread = null, kind = "" } = {}) {
   if (kind !== "thread") return false;
   const binding = thread?.binding || {};
@@ -127,6 +146,33 @@ function boundThreadOrigin({ message = {}, thread = null, kind = "" } = {}) {
   const bindingChatId = pickString(binding.chatId);
   const messageChatId = pickString(message.chatId, bindingChatId);
   return Boolean(bindingChatId && messageChatId === bindingChatId);
+}
+
+function liveRecoveryWindowAllowed(message = {}, env = process.env) {
+  const windowMs = whatsappLiveOutputRecoveryWindowMs(env);
+  if (!windowMs) return false;
+  const messageMs = dateMs(message.createdAt || message.timestamp);
+  return Boolean(messageMs && Date.now() - messageMs <= windowMs);
+}
+
+export function canRecoverLiveWhatsAppOutboundIntent({
+  state = null,
+  messageSetKey = "",
+  messageCursor = 0,
+  message = {},
+  parent = null,
+  thread = null,
+  kind = "",
+  env = process.env,
+} = {}) {
+  const cursor = Math.max(0, Number(messageCursor || 0) || 0);
+  const existingCursor = outboundMirrorCursorMap(state?.outboundMirrorCursors || []).get(messageSetKey);
+  if (!existingCursor || cursor > Number(existingCursor.cursor || 0)) return false;
+  if (!liveCodexAppServerAssistantOutput(message)) return false;
+  if (!threadAllowsLiveRecovery(thread)) return false;
+  if (!boundThreadOrigin({ message, thread, kind })) return false;
+  if (!whatsappMessageOrigin(parent, state) && !whatsappMessageOrigin(message, state)) return false;
+  return liveRecoveryWindowAllowed(message, env);
 }
 
 function bootstrapAllowed({ message = {}, parent = null, state = null, thread = null, kind = "", env = process.env } = {}) {
@@ -152,9 +198,20 @@ export function canCreateWhatsAppOutboundIntent({
   const cursor = Math.max(0, Number(messageCursor || 0) || 0);
   const existingCursor = outboundMirrorCursorMap(state?.outboundMirrorCursors || []).get(messageSetKey);
   if (existingCursor) {
-    return cursor > Number(existingCursor.cursor || 0)
-      ? { ok: true, reason: "new_after_cursor" }
-      : { ok: false, reason: "missing_outbound_intent" };
+    if (cursor > Number(existingCursor.cursor || 0)) return { ok: true, reason: "new_after_cursor" };
+    if (canRecoverLiveWhatsAppOutboundIntent({
+      state,
+      messageSetKey,
+      messageCursor,
+      message,
+      parent,
+      thread,
+      kind,
+      env,
+    })) {
+      return { ok: true, reason: "live_bound_recovery" };
+    }
+    return { ok: false, reason: "missing_outbound_intent" };
   }
   return bootstrapAllowed({ message, parent, state, thread, kind, env })
     ? { ok: true, reason: "bootstrap_current_turn" }
