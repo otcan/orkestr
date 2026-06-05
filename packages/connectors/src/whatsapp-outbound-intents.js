@@ -26,7 +26,7 @@ function statusRank(value) {
   if (status === "delivered") return 4;
   if (status === "pending") return 3;
   if (status === "failed") return 2;
-  if (status === "skipped") return 1;
+  if (status === "skipped" || status === "cancelled") return 1;
   return 0;
 }
 

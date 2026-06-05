@@ -3587,6 +3587,103 @@ test("whatsapp delivery records an outbound intent for current WA replies", asyn
   assert.equal(state.outboundMirrorCursors.some((cursor) => cursor.threadId === "thread-wa-intent-current"), true);
 });
 
+test("whatsapp delivery treats skipped outbound intents as terminal", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-intent-skipped-"));
+  const env = externalBridgeEnv(home);
+  await createThread({ id: "thread-wa-intent-skipped", name: "WA Skipped Intent Thread" }, env);
+  await writeConnectorConfig("whatsapp", {
+    bridgeMode: "external",
+    bridgeUrl: "http://wa.local",
+    threadRoutes: { "chat-intent-skipped": "thread-wa-intent-skipped" },
+  }, env);
+
+  const routed = await routeWhatsAppInbound({ eventId: "wa-intent-skipped-1", chatId: "chat-intent-skipped", text: "current request" }, env);
+  const reply = await appendThreadMessage("thread-wa-intent-skipped", {
+    role: "assistant",
+    source: "codex-rollout",
+    phase: "final_answer",
+    state: "completed",
+    connector: "whatsapp",
+    chatId: "chat-intent-skipped",
+    parentMessageId: routed.message.id,
+    text: "current answer",
+  }, env);
+
+  await deliverWhatsAppReplies(env, async () => {
+    throw new Error("bridge temporarily unavailable");
+  });
+  const state = JSON.parse(await fs.readFile(path.join(home, "whatsapp.json"), "utf8"));
+  const intent = state.outboundIntents.find((item) => item.messageId === reply.id);
+  intent.status = "skipped";
+  intent.error = "superseded_runtime_interruption";
+  await fs.writeFile(path.join(home, "whatsapp.json"), JSON.stringify(state, null, 2));
+
+  const second = await deliverWhatsAppReplies(env, async () => {
+    throw new Error("skipped outbound intent should not be retried");
+  });
+
+  assert.equal(second.delivered.length, 0);
+  assert.deepEqual(second.skipped.find((item) => item.messageId === reply.id)?.reason, "superseded_runtime_interruption");
+});
+
+test("whatsapp delivery skips runtime interruption notices superseded by newer WA input", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-superseded-runtime-notice-"));
+  const env = externalBridgeEnv(home);
+  await createThread({
+    id: "thread-wa-superseded-runtime-notice",
+    name: "WA Superseded Runtime Notice Thread",
+    binding: {
+      connector: "whatsapp",
+      chatId: "chat-superseded-runtime-notice",
+      responderAccountId: "account-1",
+      outboundAccountId: "account-1",
+      mirrorToWhatsApp: true,
+    },
+  }, env);
+  await writeConnectorConfig("whatsapp", {
+    bridgeMode: "external",
+    bridgeUrl: "http://wa.local",
+  }, env);
+  const baseMs = Date.now() - 60_000;
+  await appendThreadMessage("thread-wa-superseded-runtime-notice", {
+    role: "user",
+    source: "whatsapp_inbound",
+    state: "completed",
+    deliveryState: "delivered",
+    connector: "whatsapp",
+    chatId: "chat-superseded-runtime-notice",
+    accountId: "account-1",
+    text: "Status?",
+    createdAt: new Date(baseMs).toISOString(),
+  }, env);
+  const notice = await appendThreadMessage("thread-wa-superseded-runtime-notice", {
+    role: "assistant",
+    source: "orkestr_runtime",
+    phase: "runtime_interrupted",
+    state: "completed",
+    text: "Codex response missing\n\nOrkestr found a delivered message with no assistant response.",
+    createdAt: new Date(baseMs + 1000).toISOString(),
+  }, env);
+  await appendThreadMessage("thread-wa-superseded-runtime-notice", {
+    role: "user",
+    source: "whatsapp_inbound",
+    state: "completed",
+    deliveryState: "delivered",
+    connector: "whatsapp",
+    chatId: "chat-superseded-runtime-notice",
+    accountId: "account-1",
+    text: "Still broken! Please check if messages are delivered!!!!",
+    createdAt: new Date(baseMs + 2000).toISOString(),
+  }, env);
+
+  const delivery = await deliverWhatsAppReplies(env, async () => {
+    throw new Error("superseded runtime notice should not be sent");
+  });
+
+  assert.equal(delivery.delivered.length, 0);
+  assert.deepEqual(delivery.skipped.find((item) => item.messageId === notice.id)?.reason, "superseded_runtime_interruption");
+});
+
 test("whatsapp delivery does not backfill historical replies without outbound intents", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-no-historical-intent-"));
   const env = externalBridgeEnv(home, {
