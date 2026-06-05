@@ -11,6 +11,7 @@ import {
   listTenantWhatsAppRoutes,
   tenantWhatsAppInboundForwardRoute,
 } from "../packages/core/src/tenant-whatsapp-routing.js";
+import { listRouterTraces } from "../packages/core/src/router-traces.js";
 
 function response(payload = {}, ok = true, status = 200) {
   return {
@@ -53,6 +54,9 @@ test("tenant WhatsApp routes store scoped tokens outside the public VM registry"
   assert.equal(configured.route.targetSource, "endpoint");
   assert.match(configured.route.token, /^owt_/);
   assert.equal(configured.route.tokenConfigured, true);
+  assert.equal(configured.route.diagnostics.status, "configured");
+  assert.equal(configured.route.diagnostics.nextAction, "sync_whatsapp_inbound_token_to_target");
+  assert.equal(configured.route.tokenSync.recommendedEnv.ORKESTR_WHATSAPP_INBOUND_TOKEN, configured.route.token);
   assert.equal(vm.connectors.whatsappChatId, "wa-group-zero@g.us");
   assert.equal(vm.connectors.whatsappRouteEnabled, true);
   assert.equal(vm.connectors.whatsappRouteMode, "direct");
@@ -63,6 +67,8 @@ test("tenant WhatsApp routes store scoped tokens outside the public VM registry"
   assert.equal(route.token, configured.route.token);
   assert.equal(accountMismatch, null);
   assert.equal(listed[0].token, undefined);
+  assert.equal(listed[0].tokenSync, undefined);
+  assert.equal(listed[0].diagnostics.tokenState, "configured");
   assert.equal(listed[0].tokenPreview.includes("..."), true);
   assert.equal(tenantVmFile.includes(configured.route.token), false);
 
@@ -116,6 +122,57 @@ test("local WhatsApp bridge forwards tenant-routed chats with the scoped tenant 
   assert.equal(calls[1].body.accountId, "tenant-wa");
   assert.equal(calls[1].body.displayName, "Bob tenant WA");
   assert.equal(calls[1].body.chatName, "Bob tenant WA");
+});
+
+test("local WhatsApp bridge surfaces target inbound token failures in traces", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-tenant-wa-token-failure-"));
+  const env = { ORKESTR_HOME: home, ORKESTR_WHATSAPP_INBOUND_FORWARD_HEALTH_CACHE_MS: "0" };
+  await createTenantVm({
+    id: "token-broker-tenant",
+    ownerUserId: "token",
+    endpoint: { brokerBaseUrl: "http://token-broker.internal.test" },
+  }, env);
+  await configureTenantWhatsAppRoute("token-broker-tenant", {
+    chatId: "wa-group-token@g.us",
+    accountId: "tenant-wa",
+    routeMode: "broker",
+  }, env);
+
+  await assert.rejects(
+    () => forwardLocalWhatsAppInbound({
+      eventId: "tenant-wa-event-token",
+      chatId: "wa-group-token@g.us",
+      accountId: "tenant-wa",
+      from: "wa-contact-token@c.us",
+      text: "hello token",
+    }, env, async (url) => {
+      if (String(url) === "http://token-broker.internal.test/api/health") return response({ ok: true }, true, 200);
+      return response({
+        ok: false,
+        error: "whatsapp_inbound_token_invalid",
+        routingFailure: {
+          code: "whatsapp_inbound_token_invalid",
+          capability: "whatsapp",
+          userFacingCategory: "connector",
+          safeMessage: "Target instance rejected the broker WhatsApp inbound token.",
+          retryable: false,
+        },
+      }, false, 401);
+    }),
+    (error) => {
+      assert.equal(error.message, "whatsapp_inbound_token_invalid");
+      assert.equal(error.routingFailure.code, "whatsapp_inbound_token_invalid");
+      assert.equal(error.routingFailure.userFacingCategory, "connector");
+      assert.equal(error.routingFailure.retryable, false);
+      assert.match(error.routingFailure.safeMessage, /rejected the broker WhatsApp inbound token/);
+      return true;
+    },
+  );
+
+  const traces = await listRouterTraces({}, env);
+  assert.equal(traces[0].currentPhase, "runtime_failed");
+  assert.equal(traces[0].diagnostics.terminal, true);
+  assert.match(traces[0].lastError, /broker WhatsApp inbound token/);
 });
 
 test("local WhatsApp bridge prefers managed broker routes over legacy forward maps", async () => {

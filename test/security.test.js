@@ -349,9 +349,11 @@ test("whatsapp inbound machine token bypasses browser pairing only for inbound",
   }, env);
 
   assert.equal(blocked.ok, false);
-  assert.equal(blocked.error, "browser_pairing_required");
+  assert.equal(blocked.error, "whatsapp_inbound_token_required");
+  assert.equal(blocked.routingFailure.code, "whatsapp_inbound_token_required");
   assert.equal(badToken.ok, false);
-  assert.equal(badToken.error, "browser_pairing_required");
+  assert.equal(badToken.error, "whatsapp_inbound_token_invalid");
+  assert.equal(badToken.routingFailure.code, "whatsapp_inbound_token_invalid");
   assert.equal(allowed.ok, true);
   assert.equal(allowed.machineAuth, "whatsapp_inbound");
   assert.equal(allowed.principal.userId, "admin");
@@ -394,9 +396,11 @@ test("whatsapp bridge machine token bypasses browser pairing only for bridge rou
   }, env);
 
   assert.equal(blocked.ok, false);
-  assert.equal(blocked.error, "browser_pairing_required");
+  assert.equal(blocked.error, "whatsapp_bridge_token_required");
+  assert.equal(blocked.routingFailure.code, "whatsapp_bridge_token_required");
   assert.equal(badToken.ok, false);
-  assert.equal(badToken.error, "browser_pairing_required");
+  assert.equal(badToken.error, "whatsapp_bridge_token_invalid");
+  assert.equal(badToken.routingFailure.code, "whatsapp_bridge_token_invalid");
   assert.equal(allowedHealth.ok, true);
   assert.equal(allowedHealth.machineAuth, "whatsapp_bridge");
   assert.equal(allowedSend.ok, true);

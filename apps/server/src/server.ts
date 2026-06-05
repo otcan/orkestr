@@ -73,14 +73,18 @@ export async function createApp(): Promise<INestApplication> {
         }
         return next();
       }
+      const authResult = result as any;
+      const payload: Record<string, unknown> = {
+        ok: false,
+        error: result.error || "unauthorized",
+        security: result.status,
+      };
+      if (authResult.machineAuth) payload.machineAuth = authResult.machineAuth;
+      if (authResult.routingFailure) payload.routingFailure = authResult.routingFailure;
       return response
         .status(result.statusCode || 401)
         .type("application/json")
-        .send(JSON.stringify({
-          ok: false,
-          error: result.error || "unauthorized",
-          security: result.status,
-        }));
+        .send(JSON.stringify(payload));
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       return response

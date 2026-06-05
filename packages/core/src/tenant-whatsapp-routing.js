@@ -23,6 +23,55 @@ function tokenPreview(token = "") {
   return `${value.slice(0, 6)}...${value.slice(-6)}`;
 }
 
+function routeDiagnostics(routeTarget = {}, token = "") {
+  const missing = [];
+  if (!routeTarget.target) missing.push(routeTarget.routeMode === "broker" ? "brokerBaseUrl" : "baseUrl");
+  if (!clean(token)) missing.push("routeToken");
+  const status = missing.length ? "incomplete" : "configured";
+  const nextAction = !routeTarget.target
+    ? (routeTarget.routeMode === "broker" ? "set_broker_base_url" : "set_target_base_url")
+    : !clean(token)
+      ? "configure_route_token"
+      : "sync_whatsapp_inbound_token_to_target";
+  const safeMessage = status === "configured"
+    ? "Route is configured. The target instance must also have the same WhatsApp inbound token."
+    : "Route is incomplete and cannot receive brokered WhatsApp messages yet.";
+  return {
+    status,
+    routeMode: routeTarget.routeMode || "",
+    targetSource: routeTarget.targetSource || "",
+    tokenState: clean(token) ? "configured" : "missing",
+    missing,
+    nextAction,
+    safeMessage,
+  };
+}
+
+function tokenSyncPayload(token = "", routeTarget = {}) {
+  const value = clean(token);
+  if (!value) return null;
+  return {
+    requiredOnTarget: true,
+    targetUrl: routeTarget.target || "",
+    recommendedEnv: {
+      ORKESTR_WHATSAPP_INBOUND_TOKEN: value,
+    },
+    acceptedEnvKeys: [
+      "ORKESTR_WHATSAPP_INBOUND_TOKEN",
+      "WHATSAPP_INBOUND_TOKEN",
+      "ORKESTR_WHATSAPP_INBOUND_TOKENS",
+      "WHATSAPP_INBOUND_TOKENS",
+    ],
+    targetEnvFile: "/etc/orkestr/orkestr.env",
+    authHeader: "Authorization: Bearer <ORKESTR_WHATSAPP_INBOUND_TOKEN>",
+    verifyTarget: {
+      method: "POST",
+      path: "/api/connectors/whatsapp/inbound",
+      expectedAuthSuccessErrors: ["whatsapp_target_required", "message_text_required"],
+    },
+  };
+}
+
 function newScopedToken() {
   return `owt_${crypto.randomBytes(32).toString("base64url")}`;
 }
@@ -117,6 +166,8 @@ async function writeRouteSecrets(state, env = process.env) {
 function publicRoute(vm, secret = {}, { includeToken = false } = {}) {
   const token = clean(secret.token);
   const routeTarget = tenantRouteTarget(vm);
+  const diagnostics = routeDiagnostics(routeTarget, token);
+  const tokenSync = includeToken ? tokenSyncPayload(token, routeTarget) : null;
   return {
     tenantVmId: vm.id,
     ownerUserId: vm.ownerUserId,
@@ -129,7 +180,9 @@ function publicRoute(vm, secret = {}, { includeToken = false } = {}) {
     targetSource: routeTarget.targetSource,
     tokenConfigured: Boolean(token),
     tokenPreview: tokenPreview(token),
+    diagnostics,
     ...(includeToken && token ? { token } : {}),
+    ...(tokenSync ? { tokenSync } : {}),
   };
 }
 

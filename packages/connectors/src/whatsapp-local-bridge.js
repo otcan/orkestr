@@ -6,6 +6,7 @@ import { requestThreadInputDelivery } from "../../core/src/runtime-leases.js";
 import { processApiAgentThreadInput, threadUsesApiAgent } from "../../core/src/tenant-api-agent.js";
 import { tenantWhatsAppInboundForwardRoute } from "../../core/src/tenant-whatsapp-routing.js";
 import { attachRoutingFailure, normalizeRoutingFailure, routingFailureFromError } from "../../core/src/routing-failures.js";
+import { recordRouterTraceEvent, routerTraceIdFor, turnIdFor } from "../../core/src/router-traces.js";
 import { getThread, listThreads } from "../../core/src/threads.js";
 import { setGeneratedLocalWhatsAppGroupPicture } from "./whatsapp-chat-picture.js";
 import { whatsappBindingIsRouteEligible } from "./whatsapp-inbound-routing.js";
@@ -220,8 +221,47 @@ async function assertInboundForwardTargetHealthy(target = "", tenantRoute = null
   }
 }
 
+function targetInboundFailureCode(payload = {}, status = 0) {
+  const raw = String(payload?.routingFailure?.code || payload?.error || "").trim();
+  if ((status === 401 || status === 403) && raw === "browser_pairing_required") return "whatsapp_inbound_token_invalid";
+  return raw || `whatsapp_inbound_forward_failed_${status || "unknown"}`;
+}
+
+function targetInboundFailureCategory(code = "", status = 0) {
+  const lowered = String(code || "").toLowerCase();
+  if (lowered.includes("token") || lowered.includes("auth") || status === 401 || status === 403) return "connector";
+  return "instance_health";
+}
+
+function targetInboundFailureSafeMessage(code = "", status = 0) {
+  const lowered = String(code || "").toLowerCase();
+  if (lowered.includes("token_unconfigured")) return "Target instance has no WhatsApp inbound token configured.";
+  if (lowered.includes("token_required")) return "Broker request reached the target without a WhatsApp inbound token.";
+  if (lowered.includes("token_invalid") || status === 401 || status === 403) return "Target instance rejected the broker WhatsApp inbound token.";
+  return "Target instance could not accept the brokered WhatsApp message.";
+}
+
+function inboundForwardTraceContext(input = {}, chatId = "") {
+  const eventId = String(input.eventId || input.id || input.messageId || "").trim();
+  const accountId = String(input.accountId || "").trim();
+  const routerTraceId = routerTraceIdFor({
+    connector: "whatsapp",
+    accountId,
+    chatId,
+    eventId: eventId || "missing_event_id",
+    fallbackId: `${accountId}:${chatId}:missing_event_id`,
+  });
+  return {
+    eventId,
+    accountId,
+    routerTraceId,
+    turnId: routerTraceId ? turnIdFor({ routerTraceId }) : "",
+  };
+}
+
 export async function forwardLocalWhatsAppInbound(input = {}, env = process.env, fetchImpl = fetch) {
   const chatId = String(input.chatId || input.chat?.id || input.fromChatId || "").trim();
+  const trace = inboundForwardTraceContext(input, chatId);
   let tenantRoute = null;
   let target = "";
   let targetSource = "";
@@ -241,6 +281,17 @@ export async function forwardLocalWhatsAppInbound(input = {}, env = process.env,
       routeMode,
       tenantVmId: tenantRoute?.tenantVmId || null,
     }, env).catch(() => {});
+    await recordRouterTraceEvent({
+      routerTraceId: trace.routerTraceId,
+      turnId: trace.turnId,
+      connector: "whatsapp",
+      accountId: trace.accountId,
+      chatId,
+      sourceEventId: trace.eventId,
+      phase: "delivery_started",
+      reason: "broker_forward",
+      ownerProcess: tenantRoute?.tenantVmId || targetSource,
+    }, env).catch(() => null);
     if (inboundForwardHealthGateEnabled({ tenantRoute }, env)) {
       await assertInboundForwardTargetHealthy(target, tenantRoute, env, fetchImpl);
     }
@@ -258,14 +309,25 @@ export async function forwardLocalWhatsAppInbound(input = {}, env = process.env,
     });
     const payload = await response.json().catch(() => ({}));
     if (!response.ok || payload?.ok === false) {
-      const error = new Error(payload?.error || payload?.routingFailure?.code || `whatsapp_inbound_forward_failed_${response.status}`);
+      const code = targetInboundFailureCode(payload, response.status);
+      const safeMessage = targetInboundFailureSafeMessage(code, response.status);
+      const error = new Error(code);
       error.statusCode = response.status || 502;
       error.payload = payload;
-      error.routingFailure = normalizeRoutingFailure(payload?.routingFailure || {}, {
-        code: payload?.error || `whatsapp_inbound_forward_failed_${response.status}`,
+      error.routingFailure = normalizeRoutingFailure({
+        ...(payload?.routingFailure && typeof payload.routingFailure === "object" ? payload.routingFailure : {}),
+        code,
+        safeMessage,
+      }, {
+        code,
+        capability: "whatsapp",
+        provider: "whatsapp",
+        userFacingCategory: targetInboundFailureCategory(code, response.status),
         target,
         instanceId: tenantRoute?.tenantVmId || "",
         retryable: response.status >= 500,
+        reason: code,
+        safeMessage,
       });
       throw error;
     }
@@ -282,6 +344,19 @@ export async function forwardLocalWhatsAppInbound(input = {}, env = process.env,
       agentId: payload.agentId || null,
       messageId: payload.messageId || null,
     }, env).catch(() => {});
+    await recordRouterTraceEvent({
+      routerTraceId: trace.routerTraceId,
+      turnId: trace.turnId,
+      connector: "whatsapp",
+      accountId: trace.accountId,
+      chatId,
+      sourceEventId: trace.eventId,
+      threadId: payload.threadId || "",
+      messageId: payload.messageId || "",
+      phase: "routed",
+      reason: "forwarded_to_target",
+      ownerProcess: tenantRoute?.tenantVmId || targetSource,
+    }, env).catch(() => null);
     return { forwarded: true, target, targetSource, routeMode, payload };
   } catch (error) {
     const wrapped = error?.routingFailure ? error : attachRoutingFailure(new Error("whatsapp_inbound_forward_failed"), {
@@ -317,6 +392,22 @@ export async function forwardLocalWhatsAppInbound(input = {}, env = process.env,
       reason: failure.reason,
       retryable: failure.retryable,
     }, env).catch(() => {});
+    if (target) {
+      await recordRouterTraceEvent({
+        routerTraceId: trace.routerTraceId,
+        turnId: trace.turnId,
+        connector: "whatsapp",
+        accountId: trace.accountId,
+        chatId,
+        sourceEventId: trace.eventId,
+        phase: "runtime_failed",
+        reason: failure.code,
+        error: failure.safeMessage || failure.reason,
+        retryable: failure.retryable,
+        ownerProcess: tenantRoute?.tenantVmId || targetSource,
+        terminal: failure.retryable === false,
+      }, env).catch(() => null);
+    }
     throw wrapped;
   }
 }
@@ -1292,6 +1383,10 @@ export function inboundRoutingFailureNoticeText(error, { env = process.env } = {
   const reason = String(error?.message || error || "routing_failed").trim();
   const failure = routingFailureFromError(error, { reason });
   const lowered = reason.toLowerCase();
+  const failureText = `${failure.code} ${failure.reason} ${failure.safeMessage}`.toLowerCase();
+  if (failureText.includes("whatsapp_inbound_token")) {
+    return "This chat route is configured, but the target Orkestr instance rejected or is missing the broker WhatsApp token. Your message was not delivered; ask the admin to sync the target inbound token, then resend.";
+  }
   if (failure.code === "target_instance_unhealthy" || failure.userFacingCategory === "instance_health") {
     return "This Orkestr instance is temporarily unavailable for this chat. Your message was not delivered; please resend it after the instance is healthy.";
   }

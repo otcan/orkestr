@@ -274,6 +274,30 @@ function isWhatsAppMachineRoute(request) {
   return null;
 }
 
+function whatsappMachineAuthFailure(route, reason, statusCode) {
+  const error = `${route.kind}_token_${reason}`;
+  const safeMessage = reason === "unconfigured"
+    ? "The target Orkestr instance has no WhatsApp inbound token configured."
+    : reason === "required"
+      ? "The broker request did not include a WhatsApp inbound token."
+      : "The target Orkestr instance rejected the broker WhatsApp token.";
+  return {
+    ok: false,
+    statusCode,
+    error,
+    machineAuth: route.kind,
+    routingFailure: {
+      code: error,
+      capability: "whatsapp",
+      provider: "whatsapp",
+      userFacingCategory: "connector",
+      retryable: reason === "unconfigured",
+      safeMessage,
+      reason: error,
+    },
+  };
+}
+
 async function authorizeCliMachineRequest(request, env = process.env) {
   const token = bearerToken(request?.headers?.authorization || request?.headers?.Authorization || "");
   if (!token) return null;
@@ -293,9 +317,11 @@ function authorizeWhatsAppMachineRequest(request, env = process.env) {
   const route = isWhatsAppMachineRoute(request);
   if (!route) return null;
   const token = bearerToken(request?.headers?.authorization || request?.headers?.Authorization || "");
-  if (!token) return null;
-  const matched = route.tokens(env).some((candidate) => timingSafeSecretEqual(token, candidate));
-  if (!matched) return null;
+  const tokens = route.tokens(env);
+  if (!tokens.length) return whatsappMachineAuthFailure(route, "unconfigured", 503);
+  if (!token) return whatsappMachineAuthFailure(route, "required", 401);
+  const matched = tokens.some((candidate) => timingSafeSecretEqual(token, candidate));
+  if (!matched) return whatsappMachineAuthFailure(route, "invalid", 401);
   return {
     ok: true,
     principal: adminPrincipal(defaultAdminUser(env)),
@@ -671,6 +697,7 @@ export async function authorizeHttpRequest(request, env = process.env) {
   }
   const whatsappInboundAuth = authorizeWhatsAppMachineRequest(request, env);
   if (whatsappInboundAuth?.ok) return { ok: true, status, principal: whatsappInboundAuth.principal, machineAuth: whatsappInboundAuth.machineAuth };
+  if (whatsappInboundAuth && status.authEnabled) return { ...whatsappInboundAuth, status };
   const cliAuth = await authorizeCliMachineRequest(request, env);
   if (cliAuth?.ok) return { ok: true, status, principal: cliAuth.principal, machineAuth: cliAuth.machineAuth };
   if (!status.authEnabled) return { ok: true, status, principal: adminPrincipal(defaultAdminUser(env)) };

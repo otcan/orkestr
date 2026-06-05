@@ -40,6 +40,7 @@ function inferredCategory(message = "", code = "") {
   if (text.includes("target_instance_unhealthy")) return "instance_health";
   if (text.includes("sanitizer")) return "sanitizer";
   if (text.includes("timer")) return "timer";
+  if (text.includes("whatsapp_inbound_token") || text.includes("whatsapp_bridge_token")) return "connector";
   if (text.includes("gmail") || text.includes("outlook") || text.includes("connector")) return "connector";
   if (text.includes("desktop") || text.includes("linkedin")) return "desktop";
   if (text.includes("browser_pairing_required")) return "auth";

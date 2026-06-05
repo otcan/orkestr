@@ -1380,7 +1380,7 @@ test("whatsapp inbound endpoint accepts direct agent target", async () => {
   }
 });
 
-test("whatsapp inbound endpoint accepts bridge token when browser pairing is required", async () => {
+test("whatsapp inbound endpoint accepts inbound token when browser pairing is required", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-token-api-"));
   const priorHome = process.env.ORKESTR_HOME;
   const priorAuth = process.env.ORKESTR_AUTH_REQUIRED;
@@ -1413,7 +1413,8 @@ test("whatsapp inbound endpoint accepts bridge token when browser pairing is req
     const messages = await listAgentMessages("agent-token-api", { ORKESTR_HOME: home });
 
     assert.equal(blocked.status, 401);
-    assert.equal(blockedPayload.error, "browser_pairing_required");
+    assert.equal(blockedPayload.error, "whatsapp_inbound_token_required");
+    assert.equal(blockedPayload.routingFailure.code, "whatsapp_inbound_token_required");
     assert.equal(accepted.status, 202);
     assert.equal(payload.agentId, "agent-token-api");
     assert.equal(payload.duplicate, false);
@@ -2161,6 +2162,13 @@ test("local whatsapp inbound failures explain missing user capabilities", () => 
   const unhealthy = inboundRoutingFailureNoticeText(Object.assign(new Error("target_instance_unhealthy"), {
     routingFailure: { code: "target_instance_unhealthy", userFacingCategory: "instance_health", retryable: true },
   }));
+  const token = inboundRoutingFailureNoticeText(Object.assign(new Error("whatsapp_inbound_token_invalid"), {
+    routingFailure: {
+      code: "whatsapp_inbound_token_invalid",
+      userFacingCategory: "connector",
+      safeMessage: "Target instance rejected the broker WhatsApp inbound token.",
+    },
+  }));
   const target = inboundRoutingFailureNoticeText(new Error("whatsapp_target_required"));
   const pairing = inboundRoutingFailureNoticeText(new Error("browser_pairing_required"), {
     env: { ORKESTR_PUBLIC_SITE_URL: "https://orkestr.example.test/" },
@@ -2174,6 +2182,7 @@ test("local whatsapp inbound failures explain missing user capabilities", () => 
   assert.doesNotMatch(timer, /safely handle|private connector|account identity|admin/i);
   assert.match(unhealthy, /temporarily unavailable/i);
   assert.doesNotMatch(unhealthy, /safely handle|private connector|account identity|admin/i);
+  assert.match(token, /target Orkestr instance rejected or is missing the broker WhatsApp token/i);
   assert.match(target, /not connected to a thread/i);
   assert.doesNotMatch(target, /safely handle|private connector|account identity/i);
   assert.match(pairing, /browser_pairing_required/);
