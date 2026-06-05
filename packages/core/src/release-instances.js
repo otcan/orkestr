@@ -85,6 +85,14 @@ function configuredBaseUrl(env = process.env) {
   return `http://${host}:${port}`;
 }
 
+function configuredLocalApiBase(env = process.env) {
+  const configured = clean(env.ORKESTR_LOCAL_API_BASE || env.ORKESTR_DEPLOY_LOCAL_API_BASE || env.ORKESTR_API_BASE);
+  if (configured) return configured.replace(/\/+$/g, "");
+  const host = clean(env.ORKESTR_HOST || "127.0.0.1");
+  const port = clean(env.ORKESTR_PORT || env.PORT || "19812");
+  return `http://${host}:${port}`;
+}
+
 function normalizeVersionPayload(payload = {}) {
   if (!payload || typeof payload !== "object" || Array.isArray(payload)) return null;
   const git = payload.git && typeof payload.git === "object" ? payload.git : {};
@@ -123,6 +131,7 @@ async function readLocalReleaseManifest(env = process.env) {
 
 async function localReleaseInstance(env = process.env) {
   const baseUrl = configuredBaseUrl(env);
+  const localApiBase = configuredLocalApiBase(env);
   const manifest = await readLocalReleaseManifest(env);
   const instanceId = safeId(env.ORKESTR_INSTANCE_ID || env.ORKESTR_RELEASE_INSTANCE_ID || env.ORKESTR_SERVICE_NAME || "local");
   return normalizeReleaseInstance({
@@ -132,8 +141,8 @@ async function localReleaseInstance(env = process.env) {
     status: "running",
     source: "local-env",
     baseUrl,
-    healthUrl: clean(env.ORKESTR_DEPLOY_HEALTH_URL) || joinUrl(baseUrl, "/api/health"),
-    versionUrl: joinUrl(baseUrl, "/api/version"),
+    healthUrl: clean(env.ORKESTR_DEPLOY_HEALTH_URL) || joinUrl(localApiBase, "/api/health"),
+    versionUrl: clean(env.ORKESTR_DEPLOY_VERSION_URL) || joinUrl(localApiBase, "/api/version"),
     releaseTrainEnabled: boolValue(env.ORKESTR_RELEASE_TRAIN_LOCAL_ENABLED, true),
     updateStrategy: "local-deployer",
     serviceName: clean(env.ORKESTR_SERVICE_NAME || "orkestr"),

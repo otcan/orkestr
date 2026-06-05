@@ -70,6 +70,17 @@ test("release instance broker merges local, tenant VM, and private registry targ
   assert.equal(Object.hasOwn(publicTenant, "deployCommand"), false);
   assert.equal(Object.hasOwn(publicTenant, "commandEnv"), false);
 
+  const probedUrls = [];
+  const probed = await listReleaseInstances(env, {
+    probe: true,
+    fetchImpl: async (url) => {
+      probedUrls.push(String(url));
+      return new Response(JSON.stringify({ releaseId: String(url).includes("127.0.0.1") ? "central-loopback" : "remote-release" }));
+    },
+  });
+  assert.equal(probed.find((instance) => instance.id === "central").currentVersion.releaseId, "central-loopback");
+  assert.equal(probedUrls[0], "http://127.0.0.1:19812/api/version");
+
   const spawned = [];
   const report = await deployReleaseInstances({
     instances,
