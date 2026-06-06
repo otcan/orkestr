@@ -796,6 +796,104 @@ test("CLI binds an existing thread to a generated WhatsApp group", async () => {
   assert.match(stdout.text(), /Sample-Linkedin/);
 });
 
+test("CLI lists neutral WhatsApp accounts", async () => {
+  const stdout = capture();
+  const seen = [];
+  const code = await runCli(["whatsapp", "accounts", "list"], {
+    stdout,
+    stderr: capture(),
+    fetchImpl: fakeFetch({
+      "GET /api/connectors/whatsapp/accounts": {
+        accounts: [
+          { accountId: "neutral-1", state: "ready", ready: true, legacyRoleAliases: [], nextAction: "none" },
+          { accountId: "responder", state: "idle", ready: false, legacyRoleAliases: ["responder"], nextAction: "pair_account" },
+        ],
+      },
+    }, seen),
+  });
+
+  assert.equal(code, 0);
+  assert.deepEqual(seen.map((entry) => entry.key), ["GET /api/connectors/whatsapp/accounts"]);
+  assert.match(stdout.text(), /neutral-1/);
+  assert.match(stdout.text(), /responder/);
+  assert.match(stdout.text(), /pair_account/);
+});
+
+test("CLI starts a WhatsApp account pairing session", async () => {
+  const stdout = capture();
+  const seen = [];
+  const code = await runCli(["whatsapp", "accounts", "pair", "neutral-1", "--phone", "+491234", "--json"], {
+    stdout,
+    stderr: capture(),
+    fetchImpl: fakeFetch({
+      "POST /api/connectors/whatsapp/accounts/neutral-1/pairing-session": {
+        ok: true,
+        account: { accountId: "neutral-1", state: "qr_required", qrRequired: true, qrAvailable: true },
+        pairing: { state: "qr_required", qrRequired: true, qrAvailable: true, qrUrl: "/api/connectors/whatsapp/bridge/qr.svg?accountId=neutral-1" },
+      },
+    }, seen),
+  });
+
+  assert.equal(code, 0);
+  assert.equal(seen[0].key, "POST /api/connectors/whatsapp/accounts/neutral-1/pairing-session");
+  assert.deepEqual(seen[0].body, { phoneNumber: "+491234" });
+  assert.equal(JSON.parse(stdout.text()).pairing.qrRequired, true);
+});
+
+test("CLI resolves active WhatsApp bindings", async () => {
+  const stdout = capture();
+  const seen = [];
+  const code = await runCli(["whatsapp", "bindings", "resolve", "--thread", "thread-1"], {
+    stdout,
+    stderr: capture(),
+    fetchImpl: fakeFetch({
+      "GET /api/connectors/whatsapp/bindings/resolve": {
+        ok: true,
+        selected: {
+          id: "thread:thread-1:whatsapp",
+          state: "ready",
+          reason: "ready",
+          threadName: "Thread 1",
+          chatId: "chat-1@g.us",
+          responderAccountId: "neutral-1",
+          acl: { send: { mode: "all-users" } },
+          nextAction: "none",
+        },
+      },
+    }, seen),
+  });
+
+  assert.equal(code, 0);
+  assert.equal(seen[0].key, "GET /api/connectors/whatsapp/bindings/resolve");
+  assert.equal(seen[0].search, "?thread=thread-1");
+  assert.match(stdout.text(), /thread:thread-1:whatsapp/);
+  assert.match(stdout.text(), /Responder account: neutral-1/);
+});
+
+test("CLI reports Codex WhatsApp binding status", async () => {
+  const stdout = capture();
+  const seen = [];
+  const code = await runCli(["whatsapp", "codex", "status", "--thread", "thread-1", "--json"], {
+    stdout,
+    stderr: capture(),
+    fetchImpl: fakeFetch({
+      "GET /api/connectors/whatsapp/codex/status": {
+        ok: false,
+        thread: "thread-1",
+        resolution: {
+          ok: false,
+          error: "responder_account_inactive",
+          selected: { id: "thread:thread-1:whatsapp", state: "inactive", nextAction: "pair_account" },
+        },
+      },
+    }, seen),
+  });
+
+  assert.equal(code, 1);
+  assert.equal(seen[0].search, "?thread=thread-1");
+  assert.equal(JSON.parse(stdout.text()).resolution.error, "responder_account_inactive");
+});
+
 test("CLI applies configured WhatsApp chat-name and reply prefixes", async () => {
   const previousNamePrefix = process.env.ORKESTR_WHATSAPP_CHAT_NAME_PREFIX;
   const previousReplyPrefix = process.env.ORKESTR_WHATSAPP_REPLY_PREFIX;

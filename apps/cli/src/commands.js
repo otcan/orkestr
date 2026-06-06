@@ -364,8 +364,141 @@ async function timersCommand(argv, ctx) {
 async function whatsappCommand(argv, ctx) {
   const subcommand = argv[0] || "";
   const rest = argv.slice(1);
+  if (subcommand === "accounts" || subcommand === "account") return whatsappAccountsCommand(rest, ctx);
+  if (subcommand === "bindings" || subcommand === "binding") return whatsappBindingsCommand(rest, ctx);
+  if (subcommand === "codex") return whatsappCodexCommand(rest, ctx);
   if (subcommand === "bind-thread" || subcommand === "thread-group") return whatsappBindThreadCommand(rest, ctx);
-  throw new Error("Usage: orkestr whatsapp bind-thread <thread> --name <group name> [--wa-participant jid]... [--sender-account id] [--outbound-account id] [--force-new] [--json]");
+  throw new Error(whatsappUsage());
+}
+
+function whatsappUsage() {
+  return [
+    "Usage:",
+    "  orkestr whatsapp accounts [list] [--json]",
+    "  orkestr whatsapp accounts status <account-id> [--json]",
+    "  orkestr whatsapp accounts pair <account-id> [--phone number] [--json]",
+    "  orkestr whatsapp accounts reconnect <account-id> [--json]",
+    "  orkestr whatsapp bindings [list] [--json]",
+    "  orkestr whatsapp bindings status <binding-id|thread-id|chat-id> [--json]",
+    "  orkestr whatsapp bindings resolve [--thread id] [--chat-id id] [--account id] [--json]",
+    "  orkestr whatsapp codex status --thread <thread> [--chat-id id] [--json]",
+    "  orkestr whatsapp bind-thread <thread> --name <group name> [--wa-participant jid]... [--sender-account id] [--outbound-account id] [--force-new] [--json]",
+  ].join("\n");
+}
+
+async function whatsappAccountsCommand(argv, ctx) {
+  const subcommand = argv[0]?.startsWith("--") ? "list" : argv[0] || "list";
+  const rest = subcommand === "list" && argv[0]?.startsWith("--") ? argv : argv.slice(1);
+  const json = rest.includes("--json") || argv.includes("--json");
+  if (subcommand === "list") {
+    const payload = await requestJson("/api/connectors/whatsapp/accounts", ctx);
+    if (json) ctx.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
+    else ctx.stdout.write(formatWhatsAppAccounts(payload.accounts || []));
+    return 0;
+  }
+  if (subcommand === "status") {
+    const accountId = positional(rest)[0];
+    if (!accountId) throw new Error("Usage: orkestr whatsapp accounts status <account-id> [--json]");
+    const payload = await requestJson(`/api/connectors/whatsapp/accounts/${encodeURIComponent(accountId)}/status`, ctx);
+    if (json) ctx.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
+    else ctx.stdout.write(formatWhatsAppAccountStatus(payload.account || {}));
+    return payload.account?.ready === false ? 1 : 0;
+  }
+  if (subcommand === "pair" || subcommand === "start") {
+    const accountId = positional(rest)[0];
+    if (!accountId) throw new Error("Usage: orkestr whatsapp accounts pair <account-id> [--phone number] [--json]");
+    const body = {};
+    const phone = flagValue(rest, "--phone") || flagValue(rest, "--phone-number");
+    if (phone) body.phoneNumber = phone;
+    const payload = await requestJson(`/api/connectors/whatsapp/accounts/${encodeURIComponent(accountId)}/pairing-session`, {
+      ...ctx,
+      method: "POST",
+      body,
+    });
+    if (json) ctx.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
+    else ctx.stdout.write(formatWhatsAppPairing(payload));
+    return 0;
+  }
+  if (subcommand === "reconnect") {
+    const accountId = positional(rest)[0];
+    if (!accountId) throw new Error("Usage: orkestr whatsapp accounts reconnect <account-id> [--json]");
+    const payload = await requestJson(`/api/connectors/whatsapp/accounts/${encodeURIComponent(accountId)}/reconnect`, {
+      ...ctx,
+      method: "POST",
+      body: {},
+    });
+    if (json) ctx.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
+    else ctx.stdout.write(formatWhatsAppAccountStatus(payload.account || {}));
+    return 0;
+  }
+  if (subcommand === "doctor") {
+    const [accounts, bindings] = await Promise.all([
+      requestJson("/api/connectors/whatsapp/accounts", ctx),
+      requestJson("/api/connectors/whatsapp/bindings", ctx),
+    ]);
+    const payload = { ok: true, accounts: accounts.accounts || [], bindings: bindings.bindings || [], generatedAt: new Date().toISOString() };
+    payload.ok = payload.accounts.every((account) => account.ready || account.qrRequired) &&
+      payload.bindings.every((binding) => binding.state === "ready");
+    if (json) ctx.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
+    else {
+      ctx.stdout.write(formatWhatsAppAccounts(payload.accounts));
+      ctx.stdout.write(formatWhatsAppBindings(payload.bindings));
+    }
+    return payload.ok ? 0 : 1;
+  }
+  throw new Error(whatsappUsage());
+}
+
+async function whatsappBindingsCommand(argv, ctx) {
+  const subcommand = argv[0]?.startsWith("--") ? "list" : argv[0] || "list";
+  const rest = subcommand === "list" && argv[0]?.startsWith("--") ? argv : argv.slice(1);
+  const json = rest.includes("--json") || argv.includes("--json");
+  if (subcommand === "list") {
+    const payload = await requestJson("/api/connectors/whatsapp/bindings", ctx);
+    if (json) ctx.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
+    else ctx.stdout.write(formatWhatsAppBindings(payload.bindings || []));
+    return 0;
+  }
+  if (subcommand === "status") {
+    const bindingId = positional(rest)[0];
+    if (!bindingId) throw new Error("Usage: orkestr whatsapp bindings status <binding-id|thread-id|chat-id> [--json]");
+    const payload = await requestJson(`/api/connectors/whatsapp/bindings/${encodeURIComponent(bindingId)}/status`, ctx);
+    if (json) ctx.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
+    else ctx.stdout.write(formatWhatsAppBindingStatus(payload.binding || {}));
+    return payload.binding?.state === "ready" ? 0 : 1;
+  }
+  if (subcommand === "resolve") {
+    const params = new URLSearchParams();
+    const thread = flagValue(rest, "--thread") || flagValue(rest, "--thread-id") || positional(rest)[0] || "";
+    const chatId = flagValue(rest, "--chat-id") || flagValue(rest, "--chat") || "";
+    const accountId = flagValue(rest, "--account") || flagValue(rest, "--account-id") || "";
+    if (thread) params.set("thread", thread);
+    if (chatId) params.set("chatId", chatId);
+    if (accountId) params.set("accountId", accountId);
+    const payload = await requestJson(`/api/connectors/whatsapp/bindings/resolve${params.size ? `?${params.toString()}` : ""}`, ctx);
+    if (json) ctx.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
+    else ctx.stdout.write(formatWhatsAppBindingResolution(payload));
+    return payload.ok ? 0 : 1;
+  }
+  throw new Error(whatsappUsage());
+}
+
+async function whatsappCodexCommand(argv, ctx) {
+  const subcommand = argv[0]?.startsWith("--") ? "status" : argv[0] || "status";
+  const rest = subcommand === "status" && argv[0]?.startsWith("--") ? argv : argv.slice(1);
+  const json = rest.includes("--json") || argv.includes("--json");
+  if (subcommand !== "status") throw new Error("Usage: orkestr whatsapp codex status --thread <thread> [--chat-id id] [--json]");
+  const params = new URLSearchParams();
+  const thread = flagValue(rest, "--thread") || flagValue(rest, "--thread-id") || positional(rest)[0] || "";
+  const chatId = flagValue(rest, "--chat-id") || flagValue(rest, "--chat") || "";
+  const accountId = flagValue(rest, "--account") || flagValue(rest, "--account-id") || "";
+  if (thread) params.set("thread", thread);
+  if (chatId) params.set("chatId", chatId);
+  if (accountId) params.set("accountId", accountId);
+  const payload = await requestJson(`/api/connectors/whatsapp/codex/status${params.size ? `?${params.toString()}` : ""}`, ctx);
+  if (json) ctx.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
+  else ctx.stdout.write(formatWhatsAppBindingResolution(payload.resolution || {}));
+  return payload.ok ? 0 : 1;
 }
 
 async function whatsappBindThreadCommand(argv, ctx) {
@@ -406,6 +539,81 @@ async function whatsappBindThreadCommand(argv, ctx) {
     ctx.stdout.write(`Thread binding: ${payload.binding?.displayName || name}\t${payload.thread?.id || threadId}\n`);
   }
   return 0;
+}
+
+function formatWhatsAppAccounts(accounts = []) {
+  if (!accounts.length) return "No visible WhatsApp accounts.\n";
+  return [
+    "ACCOUNT\tSTATE\tREADY\tALIASES\tNEXT",
+    ...accounts.map((account) => [
+      account.accountId || account.id || "-",
+      account.state || "-",
+      account.ready ? "yes" : "no",
+      account.legacyRoleAliases?.length ? account.legacyRoleAliases.join(",") : "-",
+      account.nextAction || "-",
+    ].join("\t")),
+  ].join("\n") + "\n";
+}
+
+function formatWhatsAppAccountStatus(account = {}) {
+  return [
+    `WhatsApp account: ${account.accountId || account.id || "-"}`,
+    `State: ${account.state || "-"}`,
+    `Ready: ${account.ready ? "yes" : "no"}`,
+    `Authenticated: ${account.authenticated ? "yes" : "no"}`,
+    `QR: ${account.qrAvailable ? account.qrUrl || "available" : "not available"}`,
+    `Next: ${account.nextAction || "-"}`,
+    account.legacyRoleAliases?.length ? `Legacy aliases: ${account.legacyRoleAliases.join(", ")}` : "",
+  ].filter(Boolean).join("\n") + "\n";
+}
+
+function formatWhatsAppPairing(payload = {}) {
+  const account = payload.account || {};
+  const pairing = payload.pairing || {};
+  return [
+    `WhatsApp account: ${account.accountId || account.id || "-"}`,
+    `State: ${pairing.state || account.state || "-"}`,
+    `QR: ${pairing.qrAvailable || pairing.qrRequired ? pairing.qrUrl || "available" : "not available"}`,
+    `Next: ${pairing.nextAction || account.nextAction || "-"}`,
+  ].join("\n") + "\n";
+}
+
+function formatWhatsAppBindings(bindings = []) {
+  if (!bindings.length) return "No visible WhatsApp bindings.\n";
+  return [
+    "BINDING\tSTATE\tTHREAD\tCHAT\tRESPONDER\tNEXT",
+    ...bindings.map((binding) => [
+      binding.id || "-",
+      binding.state || "-",
+      binding.threadName || binding.threadId || "-",
+      binding.chatId || "-",
+      binding.responderAccountId || "-",
+      binding.nextAction || "-",
+    ].join("\t")),
+  ].join("\n") + "\n";
+}
+
+function formatWhatsAppBindingStatus(binding = {}) {
+  return [
+    `WhatsApp binding: ${binding.id || "-"}`,
+    `State: ${binding.state || "-"}`,
+    `Reason: ${binding.reason || "-"}`,
+    `Thread: ${binding.threadName || binding.threadId || "-"}`,
+    `Chat: ${binding.chatId || "-"}`,
+    `Responder account: ${binding.responderAccountId || "-"}`,
+    `Send ACL: ${binding.acl?.send?.mode || "-"}`,
+    `Next: ${binding.nextAction || "-"}`,
+  ].join("\n") + "\n";
+}
+
+function formatWhatsAppBindingResolution(payload = {}) {
+  if (!payload.selected) {
+    return [
+      `WhatsApp binding: ${payload.ok ? "ready" : "not resolved"}`,
+      `Reason: ${payload.error || payload.reason || "-"}`,
+    ].join("\n") + "\n";
+  }
+  return formatWhatsAppBindingStatus(payload.selected);
 }
 
 async function listTimersCommand(argv, ctx) {
@@ -876,6 +1084,9 @@ Advanced:
   orkestr update rollback [--to release-id]
   orkestr settings [--json]
   orkestr codex [status|migrate] [--dry-run] [--json]
+  orkestr whatsapp accounts [list|status|pair|reconnect|doctor] [--json]
+  orkestr whatsapp bindings [list|status|resolve] [--json]
+  orkestr whatsapp codex status --thread <thread> [--json]
   orkestr whatsapp bind-thread <thread> --name <group name> [--wa-participant jid]... [--json]
   orkestr timers [list|doctor|run <timer-id>] [--json]
   orkestr security [challenges|sessions|approve <challenge-id>|reject <challenge-id>|revoke <session-id|all>] [--json]
