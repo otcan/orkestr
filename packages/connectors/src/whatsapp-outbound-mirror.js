@@ -419,17 +419,11 @@ export function queuedInputWhatsAppDeliveryTarget(message, thread, state) {
   const deliveryState = String(message?.deliveryState || "").trim().toLowerCase();
   if (role !== "user") return null;
   if (!["queued", "pending_delivery"].includes(messageState)) return null;
-  if (![
-    "awaiting_runtime_completion",
-    "awaiting_active_turn",
-    "awaiting_approval",
-    "interrupting",
-    "recovering_stale_ack",
-    "retrying_delivery",
-    "waiting_runtime_ready",
-    "waiting_runtime_start",
-    "waking",
-  ].includes(deliveryState)) return null;
+  const queueableStates = [
+    "awaiting_runtime_completion", "awaiting_active_turn", "awaiting_approval", "interrupting",
+    "recovering_stale_ack", "retrying_delivery", "waiting_runtime_ready", "waiting_runtime_start", "waking",
+  ];
+  if (!queueableStates.includes(deliveryState)) return null;
   const target = whatsappQueueNoticeOrigin(message, thread, state);
   return target ? { ...target, reason: deliveryState || messageState } : null;
 }

@@ -181,6 +181,24 @@ function publicPhase(input = {}) {
   };
 }
 
+function comparableWithoutUpdatedAt(value = {}) {
+  const comparable = { ...(value || {}) };
+  delete comparable.updatedAt;
+  return JSON.stringify(comparable);
+}
+
+function comparablePhase(phase = {}) {
+  const comparable = { ...(phase || {}) };
+  delete comparable.ts;
+  return JSON.stringify(comparable);
+}
+
+function phaseAlreadyRecorded(trace = {}, phase = {}) {
+  const key = comparablePhase(phase);
+  if (!key) return false;
+  return (Array.isArray(trace.phases) ? trace.phases : []).some((entry) => comparablePhase(entry) === key);
+}
+
 function publicTrace(trace = {}, env = process.env) {
   const diagnostics = diagnoseRouterTrace(trace, env);
   return {
@@ -215,6 +233,8 @@ export async function recordRouterTraceEvent(input = {}, env = process.env) {
   const traces = [...store.traces];
   const index = traces.findIndex((trace) => clean(trace.routerTraceId) === routerTraceId);
   const previous = index >= 0 ? traces[index] : {};
+  const duplicatePhase = phaseAlreadyRecorded(previous, phase);
+  const previousPhases = Array.isArray(previous.phases) ? previous.phases : [];
   const next = {
     ...previous,
     routerTraceId,
@@ -233,10 +253,14 @@ export async function recordRouterTraceEvent(input = {}, env = process.env) {
     lastError: safeError(input.error) || clean(input.lastError || previous.lastError),
     ownerProcess: clean(input.ownerProcess || previous.ownerProcess),
     createdAt: clean(previous.createdAt) || now,
-    updatedAt: now,
-    phases: [...(Array.isArray(previous.phases) ? previous.phases : []), phase].slice(-200),
+    updatedAt: duplicatePhase ? clean(previous.updatedAt) || now : now,
+    phases: duplicatePhase ? previousPhases : [...previousPhases, phase].slice(-200),
   };
+  next.currentPhase = duplicatePhase ? clean(previous.currentPhase || next.currentPhase) : phase.phase;
   if (!next.connector) delete next.connector;
+  if (index >= 0 && comparableWithoutUpdatedAt(previous) === comparableWithoutUpdatedAt(next)) {
+    return publicTrace(previous, env);
+  }
   if (index >= 0) traces[index] = next;
   else traces.push(next);
   await writeRouterTraceStore({ ...store, traces }, env);
@@ -332,6 +356,9 @@ export async function planRouterOutboxItem(input = {}, env = process.env) {
     ...(clean(input.error) ? { error: safeError(input.error) } : {}),
     ...(clean(input.deliveredAt || previous.deliveredAt) ? { deliveredAt: clean(input.deliveredAt || previous.deliveredAt) } : {}),
   };
+  if (index >= 0 && comparableWithoutUpdatedAt(previous) === comparableWithoutUpdatedAt(item)) {
+    return previous;
+  }
   if (index >= 0) outbox[index] = item;
   else outbox.push(item);
   await writeRouterTraceStore({ ...store, outbox }, env);
@@ -353,9 +380,14 @@ export async function markRouterOutboxItem(outboxId, patch = {}, env = process.e
       ...(clean(patch.error) ? { error: safeError(patch.error) } : {}),
       ...(clean(patch.deliveredAt) ? { deliveredAt: clean(patch.deliveredAt) } : {}),
     };
+    if (comparableWithoutUpdatedAt(item) === comparableWithoutUpdatedAt(updated)) {
+      updated = item;
+      return item;
+    }
     return updated;
   });
   if (!updated) return null;
+  if (store.outbox.some((item) => item === updated)) return updated;
   await writeRouterTraceStore({ ...store, outbox }, env);
   return updated;
 }
