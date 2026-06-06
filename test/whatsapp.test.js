@@ -14,7 +14,7 @@ import { getSetupStatus } from "../packages/core/src/setup.js";
 import { appendThreadMessage, createThread, enqueueThreadInput, getThread, listThreadMessages, listThreads, updateThreadMessage } from "../packages/core/src/threads.js";
 import { createUser, linkUserPrivateIdentity } from "../packages/core/src/users.js";
 import { deliverWhatsAppReplies, formatWhatsAppOutboundText, getWhatsAppChatParticipants, getWhatsAppStatus, initialQueueDeliveryState, mapLocalWhatsAppStatusFromHealth, routeWhatsAppInbound, sendWhatsAppText, syncWhatsAppTypingIndicators } from "../packages/connectors/src/whatsapp.js";
-import { cleanupLocalWhatsAppChromeLocks, clearLocalWhatsAppChatTypingState, forwardLocalWhatsAppInbound, getLocalWhatsAppBridgeStatus, handleInboundMessage, inboundRoutingFailureNoticeText, listLocalWhatsAppChats, localWhatsAppAccountIdsForEnv, localWhatsAppConnectedPageReadyFallbackEligible, localWhatsAppInboundForwardTarget, localWhatsAppMessageRouteFields, localWhatsAppReadyFallbackEligible, localWhatsAppTypingClearRetryDelaysMs, localWhatsAppUnreadRecoveryBoundChats, localWhatsAppUnreadRecoveryIntervalMs, normalizeGroupParticipantIds, recoverConfiguredLocalWhatsAppAccounts, recoverUnreadLocalWhatsAppMessages, recoverableLocalWhatsAppAccountIds, reduceLocalWhatsAppBridgeState, resetLocalWhatsAppBridgeForTest, sendLocalWhatsAppMessage, sendWhatsAppTextWithConfirmation, setLocalWhatsAppRuntimeForTest, startLocalWhatsAppAccount, startLocalWhatsAppTyping, stopLocalWhatsAppTyping, webCacheRoot } from "../packages/connectors/src/whatsapp-local-bridge.js";
+import { cleanupLocalWhatsAppChromeLocks, clearLocalWhatsAppChatTypingState, createLocalWhatsAppChat, forwardLocalWhatsAppInbound, getLocalWhatsAppBridgeStatus, handleInboundMessage, inboundRoutingFailureNoticeText, listLocalWhatsAppChats, localWhatsAppAccountIdsForEnv, localWhatsAppConnectedPageReadyFallbackEligible, localWhatsAppInboundForwardTarget, localWhatsAppMessageRouteFields, localWhatsAppReadyFallbackEligible, localWhatsAppTypingClearRetryDelaysMs, localWhatsAppUnreadRecoveryBoundChats, localWhatsAppUnreadRecoveryIntervalMs, normalizeGroupParticipantIds, recoverConfiguredLocalWhatsAppAccounts, recoverUnreadLocalWhatsAppMessages, recoverableLocalWhatsAppAccountIds, reduceLocalWhatsAppBridgeState, resetLocalWhatsAppBridgeForTest, sendLocalWhatsAppMessage, sendWhatsAppTextWithConfirmation, setLocalWhatsAppRuntimeForTest, setLocalWhatsAppRuntimeRecoveryHooksForTest, startLocalWhatsAppAccount, startLocalWhatsAppTyping, stopLocalWhatsAppTyping, webCacheRoot } from "../packages/connectors/src/whatsapp-local-bridge.js";
 import { routedWhatsAppTypingTarget, runWithRoutedWhatsAppTyping } from "../packages/connectors/src/whatsapp-router-typing.js";
 import { createAndBindWhatsAppThreadGroup } from "../packages/connectors/src/whatsapp-thread-groups.js";
 import { prepareWhatsAppTableAttachments } from "../packages/connectors/src/whatsapp-table-attachments.js";
@@ -1131,6 +1131,116 @@ test("local whatsapp recovery resets recoverable accounts before restarting", as
   assert.deepEqual(calls, [["restart", "responder"], ["start", "responder"]]);
   assert.deepEqual(result.recovered, [{ accountId: "responder", state: "starting", ready: false }]);
   assert.deepEqual(result.skipped, []);
+});
+
+test("local whatsapp send recovers unstarted Web comms before retrying later", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-send-comms-recover-"));
+  const env = {
+    ORKESTR_HOME: home,
+    ORKESTR_WHATSAPP_ACCOUNT_IDS: "responder",
+  };
+  const commsError = new Error("[comms] deprecatedSendStanzaAndReturnAck called before startComms");
+  const calls = [];
+  const runtime = {
+    client: {
+      async sendMessage(chatId, text) {
+        calls.push(["send", chatId, text]);
+        throw commsError;
+      },
+    },
+  };
+
+  try {
+    setLocalWhatsAppRuntimeForTest("responder", runtime, {}, env);
+    setLocalWhatsAppRuntimeRecoveryHooksForTest({
+      async restartAccount(accountId, actualEnv, options) {
+        calls.push(["restart", accountId, actualEnv === env, options.reason]);
+      },
+      async startAccount(accountId, actualEnv, options) {
+        calls.push(["start", accountId, actualEnv === env, options.showNotification]);
+        return { accountId, state: "starting", ready: false };
+      },
+    });
+
+    await assert.rejects(
+      () => sendLocalWhatsAppMessage({ accountId: "responder", chatId: "chat-comms@g.us", text: "hello", env }),
+      (error) => {
+        assert.equal(error.message, "whatsapp_local_bridge_not_ready_recovered_after_send_runtime_error");
+        assert.equal(error.statusCode, 503);
+        assert.equal(error.cause, commsError);
+        return true;
+      },
+    );
+
+    assert.deepEqual(calls, [
+      ["send", "chat-comms@g.us", "hello"],
+      ["restart", "responder", true, "send_runtime_error"],
+      ["start", "responder", true, false],
+    ]);
+    const events = await listEvents(env);
+    assert.ok(events.find((event) => event.type === "whatsapp_local_send_runtime_recovery_start"));
+    assert.ok(events.find((event) => event.type === "whatsapp_local_send_runtime_recovery_started"));
+  } finally {
+    await resetLocalWhatsAppBridgeForTest(env);
+  }
+});
+
+test("local whatsapp chat creation recovers unstarted Web comms before retrying later", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-chat-comms-recover-"));
+  const env = {
+    ORKESTR_HOME: home,
+    ORKESTR_WHATSAPP_ACCOUNT_IDS: "responder",
+  };
+  const commsError = new Error("sendIq called before startComms");
+  const calls = [];
+  const runtime = {
+    client: {
+      info: { wid: { _serialized: "responder@c.us" } },
+      async createGroup(title, participants, options) {
+        calls.push(["createGroup", title, participants, options]);
+        throw commsError;
+      },
+    },
+  };
+
+  try {
+    setLocalWhatsAppRuntimeForTest("responder", runtime, {}, env);
+    setLocalWhatsAppRuntimeRecoveryHooksForTest({
+      async restartAccount(accountId, actualEnv, options) {
+        calls.push(["restart", accountId, actualEnv === env, options.reason]);
+      },
+      async startAccount(accountId, actualEnv, options) {
+        calls.push(["start", accountId, actualEnv === env, options.showNotification]);
+        return { accountId, state: "starting", ready: false };
+      },
+    });
+
+    await assert.rejects(
+      () => createLocalWhatsAppChat({
+        name: "otcanClaw-watcher",
+        responderAccountId: "responder",
+        participantIds: ["owner@c.us"],
+        env,
+      }),
+      (error) => {
+        assert.equal(error.message, "whatsapp_local_bridge_not_ready_recovered_after_chat_create_runtime_error");
+        assert.equal(error.statusCode, 503);
+        assert.equal(error.cause, commsError);
+        return true;
+      },
+    );
+
+    assert.deepEqual(calls, [
+      ["createGroup", "otcanClaw-watcher", ["owner@c.us"], { announce: false }],
+      ["restart", "responder", true, "chat_create_runtime_error"],
+      ["start", "responder", true, false],
+    ]);
+    const events = await listEvents(env);
+    assert.ok(events.find((event) => event.type === "whatsapp_local_chat_create_runtime_recovery_start"));
+    assert.ok(events.find((event) => event.type === "whatsapp_local_chat_create_runtime_recovery_started"));
+  } finally {
+    await resetLocalWhatsAppBridgeForTest(env);
+  }
 });
 
 test("local whatsapp chrome lock cleanup moves only dead-pid singleton markers", async () => {

@@ -24,6 +24,7 @@ const typingSessions = new Map();
 const typingStartPromises = new Map();
 const typingClearRetryTimers = new Map();
 const inboundForwardHealthCache = new Map();
+let runtimeRecoveryHooksForTest = null;
 let typingSessionGeneration = 0;
 
 function nowIso() {
@@ -1262,6 +1263,11 @@ export async function resetLocalWhatsAppBridgeForTest(env = process.env) {
   inboundFailureNoticeKeys.clear();
   typingStartPromises.clear();
   typingClearRetryTimers.clear();
+  runtimeRecoveryHooksForTest = null;
+}
+
+export function setLocalWhatsAppRuntimeRecoveryHooksForTest(hooks = null) {
+  runtimeRecoveryHooksForTest = hooks && typeof hooks === "object" ? hooks : null;
 }
 
 function authReadyTimeoutMs(env = process.env, options = {}) {
@@ -2535,19 +2541,26 @@ export async function createLocalWhatsAppChat({ name = "", senderAccountId = "",
 
   let chatId = "";
   let createdGroup = null;
-  if (participants.length) {
-    createdGroup = await responderRuntime.client.createGroup(title, participants, { announce: false });
-    chatId = groupIdFromCreateResult(createdGroup);
-  } else if (sender === responder) {
-    chatId = senderContactId;
-  } else {
-    if (!senderState.ready || !senderRuntime?.client) {
-      const error = new Error("whatsapp_sender_account_not_ready");
-      error.statusCode = 400;
-      throw error;
+  try {
+    if (participants.length) {
+      createdGroup = await responderRuntime.client.createGroup(title, participants, { announce: false });
+      chatId = groupIdFromCreateResult(createdGroup);
+    } else if (sender === responder) {
+      chatId = senderContactId;
+    } else {
+      if (!senderState.ready || !senderRuntime?.client) {
+        const error = new Error("whatsapp_sender_account_not_ready");
+        error.statusCode = 400;
+        throw error;
+      }
+      createdGroup = await responderRuntime.client.createGroup(title, [senderContactId]);
+      chatId = groupIdFromCreateResult(createdGroup);
     }
-    createdGroup = await responderRuntime.client.createGroup(title, [senderContactId]);
-    chatId = groupIdFromCreateResult(createdGroup);
+  } catch (error) {
+    if (recoverableLocalWhatsAppRuntimeError(error)) {
+      return recoverLocalWhatsAppAccountAfterChatCreateError(responder, error, env);
+    }
+    throw error;
   }
   if (!chatId) {
     const error = new Error("whatsapp_chat_create_failed");
@@ -2700,35 +2713,66 @@ export async function promoteLocalWhatsAppGroupParticipants({ accountId = "", ch
   return { ok: true, accountId: normalized, chatId: id, participantIds: participants, result };
 }
 
-function recoverableSendRuntimeError(error) {
-  const reason = String(error?.message || error || "").toLowerCase();
+function recoverableLocalWhatsAppRuntimeError(error) {
+  const reason = [
+    error?.message,
+    error?.stack,
+    error?.cause?.message,
+    String(error || ""),
+  ].filter(Boolean).join("\n").toLowerCase();
   return reason.includes("detached frame") ||
     reason.includes("frame was detached") ||
     reason.includes("target closed") ||
     reason.includes("session closed") ||
     reason.includes("protocol error") ||
+    reason.includes("before startcomms") ||
+    reason.includes("singletonorthrowifuninitialized") ||
+    reason.includes("deprecatedsendstanzaandreturnack") ||
+    reason.includes("sendiq called before startcomms") ||
     reason.includes("whatsapp_send_message_timeout") ||
     reason.includes("whatsapp_send_media_timeout");
 }
 
-async function recoverLocalWhatsAppAccountAfterSendError(accountId, error, env = process.env) {
+async function recoverLocalWhatsAppAccountAfterRuntimeError(accountId, error, env = process.env, options = {}) {
+  const eventPrefix = String(options.eventPrefix || "whatsapp_local_runtime_recovery");
+  const reason = String(options.reason || "runtime_error");
+  const retryMessage = String(options.retryMessage || "whatsapp_local_bridge_not_ready_recovered_after_runtime_error");
+  const hooks = runtimeRecoveryHooksForTest || {};
+  const restartAccount = hooks.restartAccount || restartRecoverableLocalWhatsAppAccount;
+  const startAccount = hooks.startAccount || startLocalWhatsAppAccount;
   await appendEvent({
-    type: "whatsapp_local_send_runtime_recovery_start",
+    type: `${eventPrefix}_start`,
     accountId,
     error: error?.message || String(error),
   }, env).catch(() => {});
-  await restartRecoverableLocalWhatsAppAccount(accountId, env, { reason: "send_runtime_error" });
-  const account = await startLocalWhatsAppAccount(accountId, env, { showNotification: false });
+  await restartAccount(accountId, env, { reason });
+  const account = await startAccount(accountId, env, { showNotification: false });
   await appendEvent({
-    type: "whatsapp_local_send_runtime_recovery_started",
+    type: `${eventPrefix}_started`,
     accountId,
     state: account?.state || "",
     ready: account?.ready === true,
   }, env).catch(() => {});
-  const retry = new Error("whatsapp_local_bridge_not_ready_recovered_after_send_runtime_error");
+  const retry = new Error(retryMessage);
   retry.statusCode = 503;
   retry.cause = error;
   throw retry;
+}
+
+async function recoverLocalWhatsAppAccountAfterSendError(accountId, error, env = process.env) {
+  return recoverLocalWhatsAppAccountAfterRuntimeError(accountId, error, env, {
+    eventPrefix: "whatsapp_local_send_runtime_recovery",
+    reason: "send_runtime_error",
+    retryMessage: "whatsapp_local_bridge_not_ready_recovered_after_send_runtime_error",
+  });
+}
+
+async function recoverLocalWhatsAppAccountAfterChatCreateError(accountId, error, env = process.env) {
+  return recoverLocalWhatsAppAccountAfterRuntimeError(accountId, error, env, {
+    eventPrefix: "whatsapp_local_chat_create_runtime_recovery",
+    reason: "chat_create_runtime_error",
+    retryMessage: "whatsapp_local_bridge_not_ready_recovered_after_chat_create_runtime_error",
+  });
 }
 
 /**
@@ -2794,7 +2838,7 @@ export async function sendLocalWhatsAppMessage({ chatId = "", text = "", account
       }
     }
   } catch (error) {
-    if (selectedAccountId && recoverableSendRuntimeError(error)) {
+    if (selectedAccountId && recoverableLocalWhatsAppRuntimeError(error)) {
       return recoverLocalWhatsAppAccountAfterSendError(selectedAccountId, error, env);
     }
     throw error;
