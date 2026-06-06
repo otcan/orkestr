@@ -131,6 +131,7 @@ test("release instance deploy verifies configured connectivity commands", async 
       releaseTrainEnabled: true,
       deployCommand: ["deploy-edge", "{{ref}}"],
       connectivityCommand: ["check-edge", "{{ref}}"],
+      labels: { requiredWhatsAppAccounts: "sender,responder" },
     },
   ];
   const report = await deployReleaseInstances({
@@ -163,6 +164,7 @@ test("release instance deploy verifies configured connectivity commands", async 
     ["check-edge", ["feed1234"]],
   ]);
   assert.equal(spawned[1].env.ORKESTR_RELEASE_CONNECTIVITY_CHECK, "1");
+  assert.equal(spawned[1].env.ORKESTR_RELEASE_REQUIRED_WHATSAPP_ACCOUNTS, "sender,responder");
 });
 
 test("release connectivity retries transient command failures", async () => {
@@ -357,6 +359,58 @@ test("release connectivity check fails WhatsApp-routed instances that are not pa
     "https://app.example.test/api/version",
     "https://app.example.test/api/connectors/whatsapp/status",
   ]);
+});
+
+test("release connectivity check requires configured WhatsApp accounts", async () => {
+  const baseInstance = {
+    id: "vm-orkestr-de",
+    kind: "tenant-vm",
+    releaseTrainEnabled: true,
+    baseUrl: "https://app.example.test",
+    versionUrl: "https://app.example.test/api/version",
+    labels: {
+      router: "parent-whatsapp",
+      requiredWhatsAppAccounts: "sender,responder",
+    },
+  };
+  const failed = await verifyReleaseInstanceConnectivity([baseInstance], {
+    fetchImpl: async (url) => {
+      if (String(url).endsWith("/api/version")) {
+        return new Response(JSON.stringify({ releaseId: "release-one", commit: "abc123" }));
+      }
+      return new Response(JSON.stringify({
+        state: "paired",
+        health: { ready: true },
+        accounts: [
+          { accountId: "sender", state: "idle", ready: false },
+          { accountId: "responder", state: "ready", ready: true },
+        ],
+      }));
+    },
+  });
+
+  assert.equal(failed.ok, false);
+  assert.equal(failed.counts.connection_failed, 1);
+  assert.match(failed.results[0].error, /whatsapp_required_accounts_not_ready:sender/);
+
+  const ok = await verifyReleaseInstanceConnectivity([baseInstance], {
+    fetchImpl: async (url) => {
+      if (String(url).endsWith("/api/version")) {
+        return new Response(JSON.stringify({ releaseId: "release-one", commit: "abc123" }));
+      }
+      return new Response(JSON.stringify({
+        state: "paired",
+        accounts: [
+          { accountId: "sender", state: "ready", ready: true },
+          { accountId: "responder", state: "ready", ready: true },
+        ],
+      }));
+    },
+  });
+
+  assert.equal(ok.ok, true);
+  assert.deepEqual(ok.results[0].whatsappRequiredAccounts, ["sender", "responder"]);
+  assert.deepEqual(ok.results[0].whatsappReadyAccounts, ["sender", "responder"]);
 });
 
 test("release instances API is admin-only and returns public-safe broker records", async () => {

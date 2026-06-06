@@ -21,6 +21,8 @@ Options:
   --artifact-dir PATH        Write detailed JSON artifacts here.
   --release-id ID            Release/check identifier for artifacts and messages.
   --desktop-slug SLUG        Require a specific desktop session to be listed.
+  --required-whatsapp-accounts LIST
+                             Comma/space-separated WA accounts that must be ready.
   --allow-auth-blocked       Treat protected target APIs as skipped instead of failed.
   --execute                  Enable real chat injection checks.
   --thread THREAD_ID         Thread used by --execute chat injection.
@@ -30,6 +32,7 @@ Options:
 
 Environment:
   ORKESTR_RELEASE_CHECK_URLS can be "local=http://127.0.0.1:19812,remote=https://example".
+  ORKESTR_RELEASE_REQUIRED_WHATSAPP_ACCOUNTS can require accounts such as sender,responder.
   ORKESTR_HOME controls the default artifact root.
 `;
 }

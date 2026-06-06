@@ -13,6 +13,29 @@ function cleanLower(value = "") {
   return clean(value).toLowerCase();
 }
 
+function splitList(value) {
+  if (Array.isArray(value)) return value.flatMap((item) => splitList(item));
+  const text = clean(value);
+  if (!text) return [];
+  if (text.startsWith("[")) {
+    try {
+      const parsed = JSON.parse(text);
+      if (Array.isArray(parsed)) return splitList(parsed);
+    } catch {
+      // Fall back to delimiter parsing for operator-provided env values.
+    }
+  }
+  return text.split(/[,\s]+/g).map((item) => clean(item)).filter(Boolean);
+}
+
+function firstList(...values) {
+  for (const value of values) {
+    const items = splitList(value);
+    if (items.length) return [...new Set(items)];
+  }
+  return [];
+}
+
 function commandConfigured(command) {
   return Array.isArray(command) ? command.length > 0 : Boolean(clean(command));
 }
@@ -38,6 +61,7 @@ function deployContext(instance = {}, options = {}, env = process.env) {
     ref: clean(options.ref || instance.ref || env.ORKESTR_DEPLOY_REF || env.ORKESTR_UPDATE_REF || "main"),
     channel: clean(options.channel || instance.channel || env.ORKESTR_DEPLOY_CHANNEL || "production"),
     releaseId: clean(options.releaseId || ""),
+    requiredWhatsAppAccounts: releaseInstanceRequiredWhatsAppAccounts(instance, options, env).join(","),
   };
 }
 
@@ -86,6 +110,7 @@ function spawnReleaseConnectivityCommand(command, instance, options = {}, env = 
   const spawnImpl = options.spawnImpl || defaultSpawn;
   const context = { ...deployContext(instance, options, env), ...extraContext };
   const commandValue = interpolatedCommand(command, context);
+  const requiredWhatsAppAccounts = releaseInstanceRequiredWhatsAppAccounts(instance, options, env).join(",");
   const childEnv = {
     ...process.env,
     ...env,
@@ -95,6 +120,7 @@ function spawnReleaseConnectivityCommand(command, instance, options = {}, env = 
     ORKESTR_DEPLOY_REF: context.ref,
     ORKESTR_UPDATE_REF: context.ref,
     ORKESTR_DEPLOY_CHANNEL: context.channel,
+    ...(requiredWhatsAppAccounts ? { ORKESTR_RELEASE_REQUIRED_WHATSAPP_ACCOUNTS: requiredWhatsAppAccounts } : {}),
     ...extraEnv,
   };
   const cwd = instance.cwd || options.cwd || process.cwd();
@@ -234,19 +260,80 @@ function releaseInstanceRequiresWhatsApp(instance = {}) {
   return cleanLower(labels.router) === "parent-whatsapp";
 }
 
-function whatsappStatusReady(payload = {}) {
-  const state = cleanLower(payload.state || payload.status);
-  if (["paired", "connected", "ready"].includes(state)) return true;
-  const health = payload.health && typeof payload.health === "object" ? payload.health : {};
-  if (health.ready === true || health.clientReady === true || health.authenticated === true) return true;
-  const accounts = Array.isArray(payload.accounts) ? payload.accounts : [];
-  return accounts.some((account) => account?.ready === true || ["ready", "connected", "paired"].includes(cleanLower(account?.state || account?.status)));
+function releaseInstanceRequiredWhatsAppAccounts(instance = {}, options = {}, env = process.env) {
+  const labels = instance.labels || {};
+  return firstList(
+    options.requiredWhatsAppAccounts,
+    options.whatsappRequiredAccounts,
+    labels.requiredWhatsAppAccounts,
+    labels["required-whatsapp-accounts"],
+    labels.whatsappRequiredAccounts,
+    labels["whatsapp-required-accounts"],
+    labels.releaseRequiredWhatsAppAccounts,
+    labels["release-required-whatsapp-accounts"],
+    env.ORKESTR_RELEASE_REQUIRED_WHATSAPP_ACCOUNTS,
+    env.ORKESTR_REQUIRED_WHATSAPP_ACCOUNTS,
+  );
 }
 
-async function verifyHttpConnectivity(instance, options = {}) {
+function whatsappAccounts(payload = {}) {
+  const health = payload.health && typeof payload.health === "object" ? payload.health : {};
+  const rows = [
+    ...(Array.isArray(payload.accounts) ? payload.accounts : []),
+    ...(Array.isArray(health.accounts) ? health.accounts : []),
+  ];
+  const seen = new Set();
+  return rows.filter((account) => {
+    const key = clean(account?.accountId || account?.id || account?.label || JSON.stringify(account || {}));
+    if (!key || seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+function whatsappAccountReady(account = {}) {
+  if (account.ready === true || account.authenticated === true || account.clientReady === true) return true;
+  return ["ready", "connected", "paired"].includes(cleanLower(account.state || account.status));
+}
+
+function whatsappAccountNames(account = {}) {
+  return [
+    account.accountId,
+    account.id,
+    account.label,
+    account.runtimeAccountId,
+    ...(Array.isArray(account.aliases) ? account.aliases : []),
+    ...(Array.isArray(account.legacyRoleAliases) ? account.legacyRoleAliases : []),
+  ].map((value) => cleanLower(value)).filter(Boolean);
+}
+
+function whatsappStatusCheck(payload = {}, requiredAccounts = []) {
+  const required = firstList(requiredAccounts).map((value) => cleanLower(value));
+  const accounts = whatsappAccounts(payload);
+  const readyAccounts = accounts.filter((account) => whatsappAccountReady(account));
+  if (required.length) {
+    const missing = required.filter((accountId) => !readyAccounts.some((account) => whatsappAccountNames(account).includes(accountId)));
+    return {
+      ok: missing.length === 0,
+      missing,
+      readyAccounts: readyAccounts.map((account) => clean(account.accountId || account.id || account.label)).filter(Boolean),
+    };
+  }
+  const state = cleanLower(payload.state || payload.status);
+  if (["paired", "connected", "ready"].includes(state)) return { ok: true, missing: [], readyAccounts: [] };
+  const health = payload.health && typeof payload.health === "object" ? payload.health : {};
+  if (health.ready === true || health.clientReady === true || health.authenticated === true) return { ok: true, missing: [], readyAccounts: [] };
+  return {
+    ok: readyAccounts.length > 0,
+    missing: [],
+    readyAccounts: readyAccounts.map((account) => clean(account.accountId || account.id || account.label)).filter(Boolean),
+  };
+}
+
+async function verifyHttpConnectivity(instance, options = {}, env = process.env) {
   const timeoutMs = options.connectivityTimeoutMs || options.timeoutMs || 5000;
   const detail = await verifyVersionProbe(instance, options);
-  if (!releaseInstanceRequiresWhatsApp(instance)) return assertExpectedVersion(instance, { method: "http", ...detail }, options);
+  if (!releaseInstanceRequiresWhatsApp(instance)) return assertExpectedVersion(instance, { method: "http", ...detail }, options, env);
   const whatsappUrl = joinUrl(instance.baseUrl, "/api/connectors/whatsapp/status");
   if (!whatsappUrl) throw new Error("whatsapp_status_url_missing");
   const whatsapp = await fetchJsonWithTimeout(whatsappUrl, {
@@ -254,14 +341,22 @@ async function verifyHttpConnectivity(instance, options = {}) {
     timeoutMs,
   });
   if (!whatsapp.ok) throw new Error(`whatsapp_status_failed:${whatsapp.error || "unknown"}`);
-  if (!whatsappStatusReady(whatsapp.payload)) {
+  const requiredAccounts = releaseInstanceRequiredWhatsAppAccounts(instance, options, env);
+  const check = whatsappStatusCheck(whatsapp.payload, requiredAccounts);
+  if (!check.ok) {
+    if (requiredAccounts.length) throw new Error(`whatsapp_required_accounts_not_ready:${check.missing.join(",") || "unknown"}`);
     throw new Error(`whatsapp_not_ready:${clean(whatsapp.payload?.state || whatsapp.payload?.status || "unknown")}`);
   }
-  return assertExpectedVersion(instance, {
+  const verified = assertExpectedVersion(instance, {
     method: "http",
     ...detail,
     whatsapp: clean(whatsapp.payload?.state || whatsapp.payload?.status || "ready"),
-  }, options);
+  }, options, env);
+  return {
+    ...verified,
+    ...(requiredAccounts.length ? { whatsappRequiredAccounts: requiredAccounts } : {}),
+    ...(check.readyAccounts.length ? { whatsappReadyAccounts: check.readyAccounts } : {}),
+  };
 }
 
 async function verifyVersionProbe(instance, options = {}) {
@@ -293,7 +388,7 @@ async function verifyInstanceConnectivity(instanceInput, options = {}, env = pro
   const instance = normalizeReleaseInstance(instanceInput, env);
   try {
     if (commandConfigured(instance.connectivityCommand)) return await verifyCommandConnectivity(instance, options, env);
-    return await verifyHttpConnectivity(instance, options);
+    return await verifyHttpConnectivity(instance, options, env);
   } catch (error) {
     return connectionFailedResult(instance, error, {
       method: commandConfigured(instance.connectivityCommand) ? "command" : "http",

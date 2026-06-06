@@ -30,6 +30,8 @@ Environment:
   ORKESTR_DEPLOY_BACKUP_EXCLUDES Space-separated paths under ORKESTR_HOME to omit from backups. Defaults to live runtime/session dirs.
   ORKESTR_DEPLOY_SYNC_WORKERS   Fast-forward and push safe stale worker branches after deploy. Defaults to 1.
   ORKESTR_RELEASE_TRAIN_FANOUT  Deploy eligible broker-listed instances after local deploy. Defaults to 0.
+  ORKESTR_RELEASE_REQUIRED_WHATSAPP_ACCOUNTS Space/comma-separated WA accounts that must be ready after restart.
+  ORKESTR_RELEASE_CONNECTIVITY_RECOVERY_COMMAND Command to run between required-account retry attempts.
   ORKESTR_DEPLOY_LOCK_BUSY_EXIT_CODE Exit code when another deploy holds the lock. Defaults to 0.
   ORKESTR_DEPLOY_HEALTH_URL     Health URL. Defaults to http://$ORKESTR_HOST:$ORKESTR_PORT/api/health.
   ORKESTR_DEPLOY_EXPOSURE_CHECK Check public no-cookie API exposure after restart. Defaults to 1.
@@ -810,6 +812,107 @@ restart_and_verify() {
   fi
 }
 
+required_whatsapp_account_list() {
+  local raw
+  raw="${ORKESTR_RELEASE_REQUIRED_WHATSAPP_ACCOUNTS:-${ORKESTR_REQUIRED_WHATSAPP_ACCOUNTS:-}}"
+  printf '%s\n' "$raw" | tr ',\n\t' '    ' | xargs 2>/dev/null || true
+}
+
+positive_integer_env() {
+  local value fallback minimum
+  value="${1:-}"
+  fallback="$2"
+  minimum="${3:-1}"
+  case "$value" in
+    ""|*[!0-9]*)
+      echo "$fallback"
+      ;;
+    *)
+      if [ "$value" -lt "$minimum" ]; then echo "$minimum"; else echo "$value"; fi
+      ;;
+  esac
+}
+
+whatsapp_account_ready() {
+  local account payload
+  account="$1"
+  payload="$(ORKESTR_API_BASE="${ORKESTR_API_BASE:-http://$host:$port}" orkestr whatsapp accounts status "$account" --json 2>/dev/null)" || return 1
+  printf '%s' "$payload" | node -e '
+const wanted = String(process.argv[1] || "").trim().toLowerCase();
+let data = "";
+process.stdin.on("data", (chunk) => { data += chunk; });
+process.stdin.on("end", () => {
+  let payload;
+  try { payload = JSON.parse(data || "{}"); } catch { process.exit(1); }
+  const status = payload.status && typeof payload.status === "object" ? payload.status : {};
+  const health = status.health && typeof status.health === "object" ? status.health : {};
+  const accounts = [
+    payload.account,
+    ...(Array.isArray(status.accounts) ? status.accounts : []),
+    ...(Array.isArray(health.accounts) ? health.accounts : []),
+  ].filter(Boolean);
+  const names = (account) => [
+    account.accountId,
+    account.id,
+    account.label,
+    account.runtimeAccountId,
+    ...(Array.isArray(account.aliases) ? account.aliases : []),
+    ...(Array.isArray(account.legacyRoleAliases) ? account.legacyRoleAliases : []),
+  ].map((value) => String(value || "").trim().toLowerCase()).filter(Boolean);
+  const ready = (account) => account.ready === true ||
+    account.authenticated === true ||
+    account.clientReady === true ||
+    ["ready", "connected", "paired"].includes(String(account.state || account.status || "").trim().toLowerCase());
+  process.exit(accounts.some((account) => ready(account) && names(account).includes(wanted)) ? 0 : 1);
+});
+' "$account"
+}
+
+run_release_connectivity_recovery() {
+  local attempt error
+  attempt="$1"
+  error="$2"
+  [ -n "${ORKESTR_RELEASE_CONNECTIVITY_RECOVERY_COMMAND:-}" ] || return 0
+  ORKESTR_RELEASE_CONNECTIVITY_RECOVERY=1 \
+  ORKESTR_RELEASE_CONNECTIVITY_CHECK=0 \
+  ORKESTR_RELEASE_CONNECTIVITY_ATTEMPT="$attempt" \
+  ORKESTR_RELEASE_CONNECTIVITY_NEXT_ATTEMPT="$((attempt + 1))" \
+  ORKESTR_RELEASE_CONNECTIVITY_ERROR="$error" \
+    sh -lc "$ORKESTR_RELEASE_CONNECTIVITY_RECOVERY_COMMAND" || true
+}
+
+verify_required_whatsapp_accounts() {
+  local required attempts delay_ms attempt missing account error
+  required="$(required_whatsapp_account_list)"
+  [ -n "$required" ] || return 0
+  attempts="$(positive_integer_env "${ORKESTR_RELEASE_CONNECTIVITY_ATTEMPTS:-}" 6 1)"
+  delay_ms="$(positive_integer_env "${ORKESTR_RELEASE_CONNECTIVITY_RETRY_DELAY_MS:-}" 15000 0)"
+  attempt=1
+  while [ "$attempt" -le "$attempts" ]; do
+    missing=""
+    for account in $required; do
+      if ! whatsapp_account_ready "$account"; then
+        missing="${missing}${missing:+,}$account"
+      fi
+    done
+    if [ -z "$missing" ]; then
+      echo "Release WhatsApp account check passed: $required"
+      return 0
+    fi
+    error="whatsapp_required_accounts_not_ready:$missing"
+    if [ "$attempt" -ge "$attempts" ]; then
+      echo "Release WhatsApp account check failed: $error" >&2
+      return 1
+    fi
+    echo "Release WhatsApp account check retry $attempt/$attempts: $error" >&2
+    run_release_connectivity_recovery "$attempt" "$error"
+    if [ "$delay_ms" -gt 0 ]; then
+      sleep "$(node -e 'process.stdout.write(String(Math.max(0, Number(process.argv[1] || 0) / 1000)))' "$delay_ms")"
+    fi
+    attempt="$((attempt + 1))"
+  done
+}
+
 configure_service_shutdown_timeout() {
   if [ "$(id -u)" -ne 0 ]; then
     return 0
@@ -1012,6 +1115,10 @@ install_command() {
   activate_release "$release_dir"
   sync_versioned_env
   if restart_and_verify; then
+    if ! verify_required_whatsapp_accounts; then
+      write_history_event "failed" "$release_id" "$deploy_ref" "$target_ref" "$previous_release" "$release_dir" "$backup_path" "whatsapp_required_accounts_not_ready"
+      exit 1
+    fi
     fanout_status=0
     release_train_instance_fanout "$release_dir" "$target_ref" || fanout_status=$?
     send_release_whatsapp_notifications "$release_dir" "$target_ref" "$deployed_at"

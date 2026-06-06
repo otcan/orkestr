@@ -18,6 +18,21 @@ function safeName(value, fallback = "target") {
     .slice(0, 80) || fallback;
 }
 
+function splitList(value) {
+  if (Array.isArray(value)) return value.flatMap((item) => splitList(item));
+  const text = String(value || "").trim();
+  if (!text) return [];
+  if (text.startsWith("[")) {
+    try {
+      const parsed = JSON.parse(text);
+      if (Array.isArray(parsed)) return splitList(parsed);
+    } catch {
+      // Fall through to delimiter parsing.
+    }
+  }
+  return [...new Set(text.split(/[,\s]+/g).map((item) => item.trim()).filter(Boolean))];
+}
+
 function normalizeBaseUrl(value) {
   const raw = String(value || "").trim();
   if (!raw) return "";
@@ -70,6 +85,7 @@ export function parseReleaseRegressionArgs(argv = [], env = process.env) {
     threadId: String(env.ORKESTR_RELEASE_TEST_THREAD || "").trim(),
     linkedInThreadId: String(env.ORKESTR_RELEASE_LINKEDIN_THREAD || "").trim(),
     desktopSlug: String(env.ORKESTR_RELEASE_DESKTOP_SLUG || "").trim(),
+    requiredWhatsAppAccounts: splitList(env.ORKESTR_RELEASE_REQUIRED_WHATSAPP_ACCOUNTS || env.ORKESTR_REQUIRED_WHATSAPP_ACCOUNTS),
     message: String(env.ORKESTR_RELEASE_TEST_MESSAGE || "").trim(),
     expect: String(env.ORKESTR_RELEASE_TEST_EXPECT || "").trim(),
   };
@@ -90,6 +106,7 @@ export function parseReleaseRegressionArgs(argv = [], env = process.env) {
     else if (arg === "--thread") options.threadId = String(argv[++index] || "").trim();
     else if (arg === "--linkedin-thread") options.linkedInThreadId = String(argv[++index] || "").trim();
     else if (arg === "--desktop-slug") options.desktopSlug = String(argv[++index] || "").trim();
+    else if (arg === "--required-whatsapp-accounts") options.requiredWhatsAppAccounts = splitList(argv[++index]);
     else if (arg === "--message") options.message = String(argv[++index] || "").trim();
     else if (arg === "--expect") options.expect = String(argv[++index] || "").trim();
     else if (arg === "--help" || arg === "-h") options.help = true;
@@ -216,14 +233,59 @@ function desktopSessions(payload = {}) {
   return [];
 }
 
-function whatsappReady(payload = {}) {
+function whatsappAccounts(payload = {}) {
+  const health = payload.health && typeof payload.health === "object" ? payload.health : {};
+  const rows = [
+    ...(Array.isArray(payload.accounts) ? payload.accounts : []),
+    ...(Array.isArray(health.accounts) ? health.accounts : []),
+  ];
+  const seen = new Set();
+  return rows.filter((account) => {
+    const key = String(account?.accountId || account?.id || account?.label || JSON.stringify(account || {})).trim();
+    if (!key || seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+function whatsappAccountReady(account = {}) {
+  if (account.ready === true || account.authenticated === true || account.clientReady === true) return true;
+  return ["ready", "connected", "paired"].includes(String(account.state || account.status || "").trim().toLowerCase());
+}
+
+function whatsappAccountNames(account = {}) {
+  return [
+    account.accountId,
+    account.id,
+    account.label,
+    account.runtimeAccountId,
+    ...(Array.isArray(account.aliases) ? account.aliases : []),
+    ...(Array.isArray(account.legacyRoleAliases) ? account.legacyRoleAliases : []),
+  ].map((value) => String(value || "").trim().toLowerCase()).filter(Boolean);
+}
+
+function whatsappReadiness(payload = {}, requiredAccounts = []) {
+  const required = splitList(requiredAccounts).map((item) => item.toLowerCase());
+  const accounts = whatsappAccounts(payload);
+  const readyAccounts = accounts.filter((account) => whatsappAccountReady(account));
+  if (required.length) {
+    const missing = required.filter((accountId) => !readyAccounts.some((account) => whatsappAccountNames(account).includes(accountId)));
+    return {
+      ok: missing.length === 0,
+      missing,
+      readyAccounts: readyAccounts.map((account) => String(account.accountId || account.id || account.label || "").trim()).filter(Boolean),
+    };
+  }
   const state = String(payload.state || payload.status || "").toLowerCase();
   const health = payload.health && typeof payload.health === "object" ? payload.health : {};
-  const accounts = Array.isArray(payload.accounts) ? payload.accounts : Array.isArray(health.accounts) ? health.accounts : [];
-  return state === "paired" ||
-    state === "connected" ||
-    health.ready === true ||
-    accounts.some((account) => account?.ready === true || String(account?.state || "").toLowerCase() === "ready");
+  return {
+    ok: state === "paired" ||
+      state === "connected" ||
+      health.ready === true ||
+      readyAccounts.length > 0,
+    missing: [],
+    readyAccounts: readyAccounts.map((account) => String(account.accountId || account.id || account.label || "").trim()).filter(Boolean),
+  };
 }
 
 async function runScenario(name, target, options, artifacts, callback) {
@@ -295,12 +357,16 @@ async function checkWhatsApp(target, options, artifacts, deps) {
   return runScenario("whatsapp-readiness", target, options, artifacts, async () => {
     try {
       const status = await requestJson(target, "/api/connectors/whatsapp/status", options, deps);
-      if (!whatsappReady(status.payload)) {
+      const readiness = whatsappReadiness(status.payload, options.requiredWhatsAppAccounts);
+      if (!readiness.ok) {
+        if (readiness.missing.length) throw new Error(`Required WhatsApp accounts are not ready: ${readiness.missing.join(", ")}`);
         throw new Error(`WhatsApp is not ready: ${status.payload?.state || status.payload?.status || "unknown"}`);
       }
       return scenarioPass("whatsapp-readiness", {
         state: status.payload?.state || status.payload?.status || null,
         accountCount: Array.isArray(status.payload?.accounts) ? status.payload.accounts.length : 0,
+        requiredAccounts: options.requiredWhatsAppAccounts || [],
+        readyAccounts: readiness.readyAccounts,
       });
     } catch (error) {
       return scenarioAuthBlocked("whatsapp-readiness", error, options.allowAuthBlocked);

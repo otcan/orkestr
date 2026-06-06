@@ -260,6 +260,22 @@ vm_scp_from() {
   scp "${args[@]}" "$ssh_user@$ip:$1" "$2"
 }
 
+shell_env_arg() {
+  local name value
+  name="$1"
+  value="${!name:-}"
+  [ -n "$value" ] || return 0
+  printf ' %s=%q' "$name" "$value"
+}
+
+remote_release_env_args() {
+  shell_env_arg ORKESTR_RELEASE_REQUIRED_WHATSAPP_ACCOUNTS
+  shell_env_arg ORKESTR_REQUIRED_WHATSAPP_ACCOUNTS
+  shell_env_arg ORKESTR_RELEASE_CONNECTIVITY_RECOVERY_COMMAND
+  shell_env_arg ORKESTR_RELEASE_CONNECTIVITY_ATTEMPTS
+  shell_env_arg ORKESTR_RELEASE_CONNECTIVITY_RETRY_DELAY_MS
+}
+
 json_health() {
   curl -fsS "$1/api/health" | jq -e '.ok == true' >/dev/null
 }
@@ -348,10 +364,12 @@ backup_vm_state() {
 }
 
 update_vm() {
+  local extra_env
   [ -n "$ref" ] || die "update-vm requires --ref REF"
   ensure_ssh
+  extra_env="$(remote_release_env_args)"
   log "Updating VM Orkestr to $ref on channel $channel."
-  vm_ssh "set -euo pipefail; timer_was_active=0; if systemctl is-active --quiet orkestr-update.timer 2>/dev/null; then timer_was_active=1; fi; sudo systemctl stop orkestr-update.timer orkestr-update.service 2>/dev/null || true; status=0; sudo env ORKESTR_HOME='$vm_home' ORKESTR_API_BASE='$vm_api' ORKESTR_DEPLOY_LOCK_BUSY_EXIT_CODE=75 orkestr update --release --ref '$ref' --channel '$channel' --allow-interrupt --no-smoke || status=\$?; if [ \"\$timer_was_active\" = \"1\" ]; then sudo systemctl start orkestr-update.timer 2>/dev/null || true; fi; exit \"\$status\""
+  vm_ssh "set -euo pipefail; timer_was_active=0; if systemctl is-active --quiet orkestr-update.timer 2>/dev/null; then timer_was_active=1; fi; sudo systemctl stop orkestr-update.timer orkestr-update.service 2>/dev/null || true; status=0; sudo env ORKESTR_HOME='$vm_home' ORKESTR_API_BASE='$vm_api' ORKESTR_DEPLOY_LOCK_BUSY_EXIT_CODE=75$extra_env orkestr update --release --ref '$ref' --channel '$channel' --allow-interrupt --no-smoke || status=\$?; if [ \"\$timer_was_active\" = \"1\" ]; then sudo systemctl start orkestr-update.timer 2>/dev/null || true; fi; exit \"\$status\""
 }
 
 smoke() {

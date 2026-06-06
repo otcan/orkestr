@@ -121,6 +121,36 @@ test("release regression runner fails when WhatsApp is not ready", async () => {
   assert.match(whatsapp.error, /not ready/);
 });
 
+test("release regression runner requires configured WhatsApp accounts", async () => {
+  const artifactDir = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-release-regression-"));
+  const summary = await runReleaseRegression({
+    releaseId: "release-1",
+    artifactDir,
+    targets: [{ name: "local", baseUrl: "http://127.0.0.1:19812" }],
+    timeoutMs: 100,
+    pollMs: 100,
+    headers: {},
+    execute: false,
+    requiredWhatsAppAccounts: ["sender", "responder"],
+  }, {
+    fetch: fakeFetch(healthyRoutes({
+      "/api/connectors/whatsapp/status": {
+        state: "paired",
+        health: { ready: true },
+        accounts: [
+          { accountId: "sender", state: "idle", ready: false },
+          { accountId: "responder", state: "ready", ready: true },
+        ],
+      },
+    })),
+  });
+
+  assert.equal(summary.ok, false);
+  const whatsapp = summary.targets[0].scenarios.find((item) => item.name === "whatsapp-readiness");
+  assert.equal(whatsapp.ok, false);
+  assert.match(whatsapp.error, /Required WhatsApp accounts are not ready: sender/);
+});
+
 test("release regression execute mode verifies submitted chat input is visible", async () => {
   const artifactDir = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-release-regression-"));
   const calls = [];
