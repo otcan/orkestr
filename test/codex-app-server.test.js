@@ -2533,6 +2533,39 @@ test("Codex app-server history hydration preserves non-final assistant messages"
   assert.ok(messages.find((message) => message.role === "assistant" && message.phase === "final_answer" && message.text === "Final answer survives."));
 });
 
+test("Codex app-server history hydration spreads turn-level timestamps across items", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-codex-app-server-history-times-"));
+  const env = { ORKESTR_HOME: path.join(home, "orkestr") };
+  const thread = await createThread({ id: "app-server-history-times-thread", name: "History Times Thread", cwd: home, executorId: "codex", executor: { type: "codex" } }, env);
+  const codexThread = {
+    id: "codex-history-times-thread",
+    turns: [
+      {
+        id: "codex-history-times-turn",
+        threadId: "codex-history-times-thread",
+        status: "completed",
+        createdAt: "2026-06-06T09:18:39.000Z",
+        items: [
+          { type: "userMessage", id: "history-times-user", content: [{ type: "text", text: "User request" }] },
+          { type: "agentMessage", id: "history-times-commentary", text: "All final checks are complete.", phase: "commentary" },
+          { type: "agentMessage", id: "history-times-final", text: "Deployed.", phase: "final_answer" },
+        ],
+      },
+    ],
+  };
+
+  await hydrateCodexAppServerThreadMessages(thread, codexThread, env);
+  const messages = await listThreadMessages(thread.id, env);
+  const createdAt = messages.map((message) => message.createdAt);
+
+  assert.deepEqual(createdAt, [
+    "2026-06-06T09:18:39.000Z",
+    "2026-06-06T09:18:39.001Z",
+    "2026-06-06T09:18:39.002Z",
+  ]);
+  assert.equal(new Set(createdAt).size, createdAt.length);
+});
+
 test("Codex app-server history sync adopts native turns without duplicating Orkestr inputs", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-codex-app-server-sync-"));
   const fake = await createFakeCodex(home);
@@ -2569,6 +2602,7 @@ test("Codex app-server history sync adopts native turns without duplicating Orke
       ],
     });
     await fs.writeFile(fake.stateFile, JSON.stringify(state, null, 2));
+    const importOnlyCreatedAt = new Date(Date.parse(nativeCreatedAt) + 3).toISOString();
 
     const liveProjectedReply = await appendThreadMessage(thread.id, {
       role: "assistant",
@@ -2604,7 +2638,7 @@ test("Codex app-server history sync adopts native turns without duplicating Orke
     assert.notEqual(nativeReply?.createdAt, nativeCreatedAt);
     assert.equal(importOnlyReply?.source, "codex-app-server-import");
     assert.equal(importOnlyReply?.codexItemId, "native-agent-import-only");
-    assert.equal(importOnlyReply?.createdAt, nativeCreatedAt);
+    assert.equal(importOnlyReply?.createdAt, importOnlyCreatedAt);
 
     await updateThreadMessage(thread.id, importOnlyReply.id, { createdAt: "2026-05-27T11:54:36.000Z" }, env);
     const repair = await syncCodexAppServerThreadMessages(started.thread, env, { force: true });
@@ -2613,7 +2647,7 @@ test("Codex app-server history sync adopts native turns without duplicating Orke
 
     assert.equal(repair.synced, true);
     assert.equal(repair.updated, 1);
-    assert.equal(repairedReply?.createdAt, nativeCreatedAt);
+    assert.equal(repairedReply?.createdAt, importOnlyCreatedAt);
 
     const second = await syncCodexAppServerThreadMessages(started.thread, env, { force: true });
     assert.equal(second.count, 0);

@@ -238,6 +238,19 @@ test("thread sidebar treats runtime interruption messages as errors", async () =
   assert.match(component, /Codex conversation was interrupted\./);
 });
 
+test("thread reload signature tracks final message identity", async () => {
+  const component = await fs.readFile("apps/web/src/app/app.component.ts", "utf8");
+  const api = await fs.readFile("apps/web/src/app/api.service.ts", "utf8");
+
+  assert.match(component, /thread\.lastMessageAt \|\| ""/);
+  assert.match(component, /thread\.lastMessageCursor \?\? ""/);
+  assert.match(component, /thread\.lastMessageId \|\| ""/);
+  assert.match(component, /thread\.lastMessageRole \|\| ""/);
+  assert.match(component, /thread\.lastMessagePhase \|\| ""/);
+  assert.match(api, /lastMessageCursor\?: number \| null/);
+  assert.match(api, /lastMessageId\?: string \| null/);
+});
+
 test("ops desktop links are only shown for running desktops", async () => {
   const template = await fs.readFile("apps/web/src/app/ops-page.component.html", "utf8");
   const component = await fs.readFile("apps/web/src/app/ops-page.component.ts", "utf8");

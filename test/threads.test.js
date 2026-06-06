@@ -5358,6 +5358,35 @@ test("thread APIs create, queue, run, and list messages", async () => {
   }
 });
 
+test("thread summary exposes cursor and phase when final shares info timestamp", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-summary-final-cursor-"));
+  const env = { ...process.env, ORKESTR_HOME: home };
+  const thread = await createThread({ id: "same-time-final-thread", name: "Same Time Final" }, env);
+  const createdAt = "2026-06-06T09:18:39.000Z";
+  await appendThreadMessage("same-time-final-thread", {
+    role: "assistant",
+    source: "codex-app-server-import",
+    phase: "commentary",
+    text: "All final checks are complete.",
+    createdAt,
+  }, env);
+  const final = await appendThreadMessage("same-time-final-thread", {
+    role: "assistant",
+    source: "codex-app-server-import",
+    phase: "final_answer",
+    text: "Deployed.",
+    createdAt,
+  }, env);
+  const messages = await listThreadMessages("same-time-final-thread", env);
+  const summary = await threadRuntimeSummary(thread, messages, { cacheTtlMs: 0 });
+
+  assert.equal(summary.lastMessageAt, createdAt);
+  assert.equal(summary.lastMessagePhase, "final_answer");
+  assert.equal(summary.lastMessageRole, "assistant");
+  assert.equal(summary.lastMessageCursor, final.cursor);
+  assert.equal(summary.lastMessageId, final.id);
+});
+
 test("thread APIs suppress runtime interruption notices superseded by final answers", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-api-superseded-notice-"));
   const priorHome = process.env.ORKESTR_HOME;
@@ -5584,6 +5613,71 @@ test("thread message API hides adjacent duplicate rollout assistant records", as
     assert.equal(listed.status, 200);
     assert.equal(payload.messages.length, 1);
     assert.equal(payload.messages[0].text, "same final answer");
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+    if (priorHome === undefined) delete process.env.ORKESTR_HOME;
+    else process.env.ORKESTR_HOME = priorHome;
+  }
+});
+
+test("thread message API keeps completed Codex info updates visible with final answer", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-final-api-"));
+  const priorHome = process.env.ORKESTR_HOME;
+  process.env.ORKESTR_HOME = home;
+  const server = await startServer({ port: 0, host: "127.0.0.1" });
+  const { port } = server.address();
+  const baseUrl = `http://127.0.0.1:${port}`;
+  try {
+    await createThread({ id: "final-api-thread", name: "Final API Thread" }, { ORKESTR_HOME: home });
+    await appendThreadMessage("final-api-thread", {
+      role: "assistant",
+      source: "codex-app-server-import",
+      phase: "commentary",
+      text: "deploy is still running",
+      codexThreadId: "codex-thread-1",
+      codexTurnId: "turn-1",
+      createdAt: "2026-06-06T09:00:00.000Z",
+    }, { ORKESTR_HOME: home });
+    await appendThreadMessage("final-api-thread", {
+      role: "assistant",
+      source: "codex-app-server-import",
+      phase: "commentary",
+      text: "final checks are running",
+      codexThreadId: "codex-thread-1",
+      codexTurnId: "turn-1",
+      createdAt: "2026-06-06T09:01:00.000Z",
+    }, { ORKESTR_HOME: home });
+    await appendThreadMessage("final-api-thread", {
+      role: "assistant",
+      source: "codex-app-server-import",
+      phase: "commentary",
+      text: "new turn is still active",
+      codexThreadId: "codex-thread-1",
+      codexTurnId: "turn-2",
+      createdAt: "2026-06-06T09:02:00.000Z",
+    }, { ORKESTR_HOME: home });
+    await appendThreadMessage("final-api-thread", {
+      role: "assistant",
+      source: "codex-app-server-import",
+      phase: "final_answer",
+      text: "Deployed.",
+      codexThreadId: "codex-thread-1",
+      codexTurnId: "turn-1",
+      createdAt: "2026-06-06T09:03:00.000Z",
+    }, { ORKESTR_HOME: home });
+
+    const listed = await fetch(`${baseUrl}/api/threads/final-api-thread/messages`);
+    const payload = await listed.json();
+    const texts = payload.messages.map((message) => message.text);
+
+    assert.equal(listed.status, 200);
+    assert.deepEqual(texts, [
+      "deploy is still running",
+      "final checks are running",
+      "new turn is still active",
+      "Deployed.",
+    ]);
+    assert.equal(payload.messages.at(-1).phase, "final_answer");
   } finally {
     await new Promise((resolve) => server.close(resolve));
     if (priorHome === undefined) delete process.env.ORKESTR_HOME;

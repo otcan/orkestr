@@ -1233,8 +1233,15 @@ function uuidV7Timestamp(value) {
   return plausibleCodexHistoryMs(ms) ? new Date(ms).toISOString() : "";
 }
 
-function codexHistoryTimestamp(turn = {}, item = {}) {
-  const candidates = [
+function offsetCodexHistoryTimestamp(timestamp, offsetMs = 0) {
+  const base = Date.parse(clean(timestamp));
+  if (!Number.isFinite(base)) return "";
+  const offset = Math.max(0, Number(offsetMs) || 0);
+  return new Date(base + offset).toISOString();
+}
+
+function codexHistoryTimestamp(turn = {}, item = {}, itemIndex = 0) {
+  const itemCandidates = [
     item.timestamp,
     item.createdAt,
     item.created_at,
@@ -1242,6 +1249,15 @@ function codexHistoryTimestamp(turn = {}, item = {}) {
     item.completed_at,
     item.startedAt,
     item.started_at,
+  ];
+  for (const candidate of itemCandidates) {
+    const timestamp = isoTimestamp(candidate);
+    if (timestamp) return timestamp;
+  }
+  const itemUuidTimestamp = uuidV7Timestamp(item.id);
+  if (itemUuidTimestamp) return itemUuidTimestamp;
+
+  const turnCandidates = [
     turn.timestamp,
     turn.createdAt,
     turn.created_at,
@@ -1250,11 +1266,12 @@ function codexHistoryTimestamp(turn = {}, item = {}) {
     turn.startedAt,
     turn.started_at,
   ];
-  for (const candidate of candidates) {
+  for (const candidate of turnCandidates) {
     const timestamp = isoTimestamp(candidate);
-    if (timestamp) return timestamp;
+    if (timestamp) return offsetCodexHistoryTimestamp(timestamp, itemIndex);
   }
-  return uuidV7Timestamp(item.id) || uuidV7Timestamp(turn.id);
+  const turnUuidTimestamp = uuidV7Timestamp(turn.id);
+  return turnUuidTimestamp ? offsetCodexHistoryTimestamp(turnUuidTimestamp, itemIndex) : "";
 }
 
 function codexAppServerHistorySource(value) {
@@ -1391,6 +1408,7 @@ async function upsertHydratedCodexMessage(thread, input, messages, env = process
   }
   if (duplicateHistoryMatch(existing, input)) {
     delete patch.eventId;
+    delete patch.createdAt;
     delete patch.codexItemId;
     delete patch.executorItemId;
   }
@@ -1413,9 +1431,10 @@ export async function hydrateCodexAppServerThreadMessages(thread, codexThread, e
   const completedTurnId = latestCompletedHistoryTurnId(turns);
   for (const turn of turns) {
     const turnId = clean(turn.id);
-    for (const item of Array.isArray(turn.items) ? turn.items : []) {
+    const items = Array.isArray(turn.items) ? turn.items : [];
+    for (const [itemIndex, item] of items.entries()) {
       const type = clean(item.type);
-      const timestamp = codexHistoryTimestamp(turn, item);
+      const timestamp = codexHistoryTimestamp(turn, item, itemIndex);
       if (type === "userMessage") {
         const text = itemText(item) || userInputText(item.input);
         if (!text) continue;

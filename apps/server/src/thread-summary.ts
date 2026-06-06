@@ -70,11 +70,15 @@ function compareMessagesByTime(left: { message: any; index: number }, right: { m
   return messageCursor(left.message, left.index) - messageCursor(right.message, right.index);
 }
 
-function latestStoredMessage(messages: any[] = []) {
+function latestStoredMessageEntry(messages: any[] = []) {
   return messages
     .map((message, index) => ({ message, index }))
     .sort(compareMessagesByTime)
-    .at(-1)?.message || null;
+    .at(-1) || null;
+}
+
+function latestStoredMessage(messages: any[] = []) {
+  return latestStoredMessageEntry(messages)?.message || null;
 }
 
 function chronologicalMessages(messages: any[] = []) {
@@ -145,10 +149,13 @@ function planImplementationPendingQuestion(thread: any, status: any) {
 }
 
 function latestMessageSummary(messages: any[] = []) {
-  const message = latestStoredMessage(visibleThreadMessages(messages));
+  const latestEntry = latestStoredMessageEntry(visibleThreadMessages(messages));
+  const message = latestEntry?.message || null;
   if (!message) {
     return {
       lastMessageAt: null,
+      lastMessageCursor: null,
+      lastMessageId: null,
       lastMessageRole: null,
       lastMessagePhase: null,
       lastMessageState: null,
@@ -162,6 +169,8 @@ function latestMessageSummary(messages: any[] = []) {
   const phase = role === "assistant" && hasProposedPlanEnvelope(text) ? "plan" : rawPhase;
   return {
     lastMessageAt: message?.timestamp || message?.createdAt || null,
+    lastMessageCursor: messageCursor(message, latestEntry?.index ?? 0),
+    lastMessageId: String(message?.id || message?.eventId || "").trim() || null,
     lastMessageRole: role,
     lastMessagePhase: phase,
     lastMessageState: String(message?.state || "").trim().toLowerCase() || null,

@@ -663,6 +663,8 @@ export interface ThreadSummary {
   forkedFromCodexThreadId?: string | null;
   lastActivityAt?: string;
   lastMessageAt?: string | null;
+  lastMessageCursor?: number | null;
+  lastMessageId?: string | null;
   lastMessageRole?: string | null;
   lastMessagePhase?: string | null;
   lastMessageState?: string | null;
