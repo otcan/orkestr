@@ -314,6 +314,7 @@ function enrichApiSessionMessageError(error) {
     payload.error || payload.message || error.message || "api_session_message_failed",
     payload.deliveryState ? `delivery=${payload.deliveryState}` : "",
     payload.reason ? `reason=${payload.reason}` : "",
+    payload.pending === true ? "pending=true" : "",
     payload.message?.threadId ? `thread=${payload.message.threadId}` : "",
     payload.message?.chatId ? `chat=${payload.message.chatId}` : "",
   ].filter(Boolean);

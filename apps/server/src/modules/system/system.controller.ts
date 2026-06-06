@@ -304,6 +304,50 @@ function apiSessionDeliveryResultForMessage(delivery: any, messageId: string) {
   return { ok: false, state: "missing_delivery_result", statusCode: 502 };
 }
 
+function positiveInteger(value: unknown, fallback: number, minimum = 1): number {
+  if (value === undefined || value === null || String(value).trim() === "") return fallback;
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.max(minimum, Math.floor(parsed));
+}
+
+function apiSessionDeliveryTimeoutMs(env = process.env): number {
+  return positiveInteger(env.ORKESTR_API_SESSION_DELIVERY_TIMEOUT_MS, 30_000, 0);
+}
+
+async function deliverWhatsAppRepliesForApiSession(env = process.env): Promise<any> {
+  const timeoutMs = apiSessionDeliveryTimeoutMs(env);
+  if (!timeoutMs) return deliverWhatsAppReplies(env);
+  let timeout: NodeJS.Timeout | null = null;
+  try {
+    return await Promise.race([
+      deliverWhatsAppReplies(env),
+      new Promise((_, reject) => {
+        timeout = setTimeout(() => reject(new Error(`whatsapp_delivery_timeout:${timeoutMs}`)), timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timeout) clearTimeout(timeout);
+  }
+}
+
+function throwApiSessionDeliveryTimeout(message: any, timeoutMs: number): never {
+  throw new HttpException({
+    ok: false,
+    error: "whatsapp_delivery_timeout",
+    deliveryState: "timeout",
+    reason: `WhatsApp delivery did not complete within ${timeoutMs}ms`,
+    timeoutMs,
+    pending: true,
+    message: {
+      id: message.id,
+      threadId: message.threadId || null,
+      connector: message.connector || null,
+      chatId: message.chatId || null,
+    },
+  }, 504);
+}
+
 function throwApiSessionDeliveryError(result: any, message: any, delivery: any): never {
   throw new HttpException({
     ok: false,
@@ -594,7 +638,14 @@ export class SystemController {
     let delivery = null;
     let deliveryState: any = null;
     if (result.deliveryExpected) {
-      delivery = await deliverWhatsAppReplies(process.env);
+      try {
+        delivery = await deliverWhatsAppRepliesForApiSession(process.env);
+      } catch (error) {
+        if (String(error instanceof Error ? error.message : error).startsWith("whatsapp_delivery_timeout:")) {
+          throwApiSessionDeliveryTimeout({ ...result.message, threadId: result.thread.id }, apiSessionDeliveryTimeoutMs(process.env));
+        }
+        throw error;
+      }
       deliveryState = apiSessionDeliveryResultForMessage(delivery, result.message.id);
       if (!deliveryState.ok) throwApiSessionDeliveryError(deliveryState, { ...result.message, threadId: result.thread.id }, delivery);
     }

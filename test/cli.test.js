@@ -343,6 +343,43 @@ test("CLI api-session message reports WhatsApp delivery failures with the reason
   assert.match(stderr.text(), /thread=thread-1/);
 });
 
+test("CLI api-session message reports WhatsApp delivery timeouts as pending", async () => {
+  const stderr = capture();
+  const seen = [];
+  const cwd = "/workspace/demo";
+  const code = await runCli(["api-session", "message", "Forward this"], {
+    cwd,
+    env: { ORKESTR_API_SESSION_ID: "api-env-1" },
+    stdout: capture(),
+    stderr,
+    fetchImpl: fakeFetch({
+      "GET /api/whereiam": {
+        ok: true,
+        thread: { id: "thread-1", displayName: "Demo", state: "ready" },
+        apiSession: { id: "api-env-1", bound: true, threadId: "thread-1" },
+      },
+      "POST /api/session-bindings/api-env-1/messages": () => new Response(JSON.stringify({
+        ok: false,
+        error: "whatsapp_delivery_timeout",
+        deliveryState: "timeout",
+        reason: "WhatsApp delivery did not complete within 30000ms",
+        timeoutMs: 30000,
+        pending: true,
+        message: { id: "message-1", threadId: "thread-1", chatId: "chat-1" },
+      }), {
+        status: 504,
+        headers: { "content-type": "application/json" },
+      }),
+    }, seen),
+  });
+
+  assert.equal(code, 1);
+  assert.match(stderr.text(), /whatsapp_delivery_timeout/);
+  assert.match(stderr.text(), /delivery=timeout/);
+  assert.match(stderr.text(), /pending=true/);
+  assert.match(stderr.text(), /thread=thread-1/);
+});
+
 test("CLI api-session status reads the durable binding", async () => {
   const stdout = capture();
   const seen = [];
