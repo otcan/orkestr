@@ -3,6 +3,10 @@ import path from "node:path";
 import { spawn as defaultSpawn } from "node:child_process";
 import { dataPaths, ensureDataDirs } from "../../storage/src/paths.js";
 import { readJson } from "../../storage/src/store.js";
+import {
+  releaseInstanceRequiredWhatsAppAccounts,
+  releaseInstanceRequiresWhatsApp,
+} from "./release-whatsapp-policy.js";
 import { listTenantVms } from "./tenant-vm-registry.js";
 
 const enabledValues = new Set(["1", "true", "yes", "on", "enabled"]);
@@ -62,55 +66,6 @@ function normalizeCommandEnv(commandEnv = {}) {
 
 function commandConfigured(command) {
   return Array.isArray(command) ? command.length > 0 : Boolean(clean(command));
-}
-
-function splitList(value) {
-  if (Array.isArray(value)) return value.flatMap((item) => splitList(item));
-  const text = clean(value);
-  if (!text) return [];
-  if (text.startsWith("[")) {
-    try {
-      const parsed = JSON.parse(text);
-      if (Array.isArray(parsed)) return splitList(parsed);
-    } catch {
-      // Fall back to delimiter parsing for operator-provided env values.
-    }
-  }
-  return text.split(/[,\s]+/g).map((item) => clean(item)).filter(Boolean);
-}
-
-function firstList(...values) {
-  for (const value of values) {
-    const items = splitList(value);
-    if (items.length) return [...new Set(items)];
-  }
-  return [];
-}
-
-function releaseInstanceRequiresWhatsApp(instance = {}) {
-  const labels = instance.labels || {};
-  if (["1", "true", "yes", "on", "required"].includes(cleanLower(labels.requireWhatsAppConnectivity || labels["require-whatsapp-connectivity"]))) return true;
-  if (["1", "true", "yes", "on", "required"].includes(cleanLower(labels.whatsappConnectivityCheck || labels["whatsapp-connectivity-check"]))) return true;
-  if (firstList(labels.requiredWhatsAppAccounts, labels["required-whatsapp-accounts"], labels.whatsappRequiredAccounts, labels["whatsapp-required-accounts"]).length) return true;
-  return cleanLower(labels.router) === "parent-whatsapp";
-}
-
-function releaseInstanceRequiredWhatsAppAccounts(instance = {}, options = {}, env = process.env) {
-  const labels = instance.labels || {};
-  return firstList(
-    options.requiredWhatsAppAccounts,
-    options.whatsappRequiredAccounts,
-    labels.requiredWhatsAppAccounts,
-    labels["required-whatsapp-accounts"],
-    labels.whatsappRequiredAccounts,
-    labels["whatsapp-required-accounts"],
-    labels.releaseRequiredWhatsAppAccounts,
-    labels["release-required-whatsapp-accounts"],
-    ...(releaseInstanceRequiresWhatsApp(instance) ? [
-      env.ORKESTR_RELEASE_REQUIRED_WHATSAPP_ACCOUNTS,
-      env.ORKESTR_REQUIRED_WHATSAPP_ACCOUNTS,
-    ] : []),
-  );
 }
 
 function joinUrl(baseUrl, suffix) {
