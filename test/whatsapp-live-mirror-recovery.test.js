@@ -155,7 +155,8 @@ test("whatsapp delivery does not recover stale live progress outside the default
 
   assert.equal(delivery.delivered.length, 0);
   assert.equal((state.outboundIntents || []).some((intent) => intent.messageId === progress.id), false);
-  assert.equal(delivery.skipped.find((item) => item.messageId === progress.id)?.reason, "stale_untracked_reply");
+  assert.equal(delivery.skipped.find((item) => item.messageId === progress.id), undefined);
+  assert.equal(delivery.skippedSummary.count, 0);
 });
 
 test("whatsapp delivery does not recover imported transcript output after the mirror cursor advanced", async () => {
@@ -205,8 +206,9 @@ test("whatsapp delivery does not recover imported transcript output after the mi
   assert.equal((state.outboundIntents || []).some((intent) => [progress.id, final.id].includes(intent.messageId)), false);
   assert.deepEqual(
     [progress.id, final.id].map((id) => delivery.skipped.find((item) => item.messageId === id)?.reason),
-    ["stale_untracked_reply", "stale_untracked_reply"],
+    [undefined, undefined],
   );
+  assert.equal(delivery.skippedSummary.count, 0);
 });
 
 test("whatsapp delivery summarizes repeated stale skipped replies with a bounded sample", async () => {
@@ -240,8 +242,6 @@ test("whatsapp delivery summarizes repeated stale skipped replies with a bounded
       createdAt: oldAt,
     }, runtimeEnv));
   }
-  await writeCursorPast(home, "thread-stale-skip-summary", Number(replies.at(-1).cursor) + 1);
-
   const delivery = await deliverWhatsAppReplies(runtimeEnv, async () => {
     throw new Error("stale transcript output should not be sent");
   });
@@ -256,4 +256,11 @@ test("whatsapp delivery summarizes repeated stale skipped replies with a bounded
   assert.equal(delivery.skippedSummary.sampled, 2);
   assert.equal(delivery.skippedSummary.omitted, 3);
   assert.deepEqual(delivery.skippedSummary.reasons, { stale_untracked_reply: 5 });
+
+  const second = await deliverWhatsAppReplies(runtimeEnv, async () => {
+    throw new Error("already-cursored stale transcript output should not be sent");
+  });
+  assert.equal(second.delivered.length, 0);
+  assert.equal(second.skippedSummary.count, 0);
+  assert.deepEqual(second.skipped, []);
 });

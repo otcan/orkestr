@@ -62,6 +62,7 @@ import {
   mergeWhatsAppOutboundIntents,
   mergeWhatsAppOutboundMirrorCursors,
   outboundIntentKey,
+  outboundMirrorCursorMap,
   outboundMirrorMessageCursor,
   outboundMirrorMessageSetKey,
 } from "./whatsapp-outbound-intents.js";
@@ -1904,6 +1905,12 @@ function createWhatsAppDeliverySkippedCollector(env = process.env) {
   };
 }
 
+function whatsappOutboundMirrorCursorPassed(state = null, messageSetKey = "", messageCursor = 0) {
+  const cursor = Math.max(0, Number(messageCursor || 0) || 0);
+  const existingCursor = outboundMirrorCursorMap(state?.outboundMirrorCursors || []).get(messageSetKey);
+  return Boolean(existingCursor && cursor > 0 && cursor <= Number(existingCursor.cursor || 0));
+}
+
 export async function syncWhatsAppTypingIndicators(env = process.env, options = {}) {
   const config = await readConnectorConfig("whatsapp", env);
   if (bridgeMode(config, env) !== "local") return { ok: true, active: 0, skipped: "external_bridge" };
@@ -2295,7 +2302,21 @@ async function deliverWhatsAppRepliesOnce(env = process.env, fetchImpl = fetch) 
           kind,
           env,
         });
-        if (!liveRecovery && staleUntrackedWhatsAppProgress(message, outboundDeliveries, env)) {
+        const chatId = pickString(message.chatId, parent?.chatId, thread?.binding?.chatId);
+        const accountId = kind === "thread"
+          ? pickString(thread?.binding?.responderAccountId, thread?.binding?.outboundAccountId, message.accountId, parent?.accountId)
+          : pickString(message.accountId, parent?.accountId);
+        const existingIntent = findWhatsAppOutboundIntent(outboundIntents, {
+          kind,
+          deliveryType: "progress",
+          agentId,
+          threadId,
+          messageId: message.id,
+          chatId,
+          accountId,
+        });
+        if (!liveRecovery && !existingIntent && whatsappOutboundMirrorCursorPassed(state, messageSetKey, messageCursor)) continue;
+        if (!liveRecovery && !existingIntent && staleUntrackedWhatsAppProgress(message, outboundDeliveries, env)) {
           skipped.push({ agentId, threadId, messageId: message.id, reason: "stale_untracked_reply" });
           continue;
         }
@@ -2303,10 +2324,6 @@ async function deliverWhatsAppRepliesOnce(env = process.env, fetchImpl = fetch) 
           skipped.push({ agentId, threadId, messageId: message.id, reason: "mirroring_disabled" });
           continue;
         }
-        const chatId = pickString(message.chatId, parent?.chatId, thread?.binding?.chatId);
-        const accountId = kind === "thread"
-          ? pickString(thread?.binding?.responderAccountId, thread?.binding?.outboundAccountId, message.accountId, parent?.accountId)
-          : pickString(message.accountId, parent?.accountId);
         const text = appendWhatsAppDebugFooter(formatWhatsAppOutboundText(pickString(message.text)), {
           message,
           thread,
@@ -2384,7 +2401,22 @@ async function deliverWhatsAppRepliesOnce(env = process.env, fetchImpl = fetch) 
         kind,
         env,
       });
-      if (!liveRecovery && staleUntrackedWhatsAppReply(message, outboundDeliveries, env)) {
+      const chatId = pickString(message.chatId, parent?.chatId, thread?.binding?.chatId);
+      const accountId = kind === "thread"
+        ? pickString(thread?.binding?.responderAccountId, thread?.binding?.outboundAccountId, message.accountId, parent?.accountId)
+        : pickString(message.accountId, parent?.accountId);
+      const deliveryType = message.source === "orkestr_runtime" ? "router_update" : "final";
+      const existingIntent = findWhatsAppOutboundIntent(outboundIntents, {
+        kind,
+        deliveryType,
+        agentId,
+        threadId,
+        messageId: message.id,
+        chatId,
+        accountId,
+      });
+      if (!liveRecovery && !existingIntent && whatsappOutboundMirrorCursorPassed(state, messageSetKey, messageCursor)) continue;
+      if (!liveRecovery && !existingIntent && staleUntrackedWhatsAppReply(message, outboundDeliveries, env)) {
         skipped.push({ agentId, threadId, messageId: message.id, reason: "stale_untracked_reply" });
         continue;
       }
@@ -2393,10 +2425,6 @@ async function deliverWhatsAppRepliesOnce(env = process.env, fetchImpl = fetch) 
         continue;
       }
 
-      const chatId = pickString(message.chatId, parent?.chatId, thread?.binding?.chatId);
-      const accountId = kind === "thread"
-        ? pickString(thread?.binding?.responderAccountId, thread?.binding?.outboundAccountId, message.accountId, parent?.accountId)
-        : pickString(message.accountId, parent?.accountId);
       if (supersededRuntimeInterruptionNotice(messages, message, chatId, state)) {
         await skipWhatsAppOutboundCandidate({
           state,
@@ -2440,7 +2468,6 @@ async function deliverWhatsAppRepliesOnce(env = process.env, fetchImpl = fetch) 
         env,
       });
       const attachments = resolvedOutboundAttachments.attachments;
-      const deliveryType = message.source === "orkestr_runtime" ? "router_update" : "final";
       const formattedText = formatWhatsAppOutboundText(redactDeniedThreadAttachmentPaths(preparedOutbound.text, { thread, env }));
       const text = appendWhatsAppDebugFooter(appendRemoteAttachmentFailureNotes(formattedText, remoteMaterialized.skipped), {
         message,
