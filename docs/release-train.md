@@ -217,6 +217,20 @@ orkestr update --release --ref <tag-or-main-or-sha> --channel <channel> --all-in
 Without `--all-instances`, the deployer still prints a broker plan so skipped,
 disabled, or commandless instances are visible in the release log.
 
+For WhatsApp-routed instances, require the connector accounts that must be live
+after restart:
+
+```bash
+ORKESTR_RELEASE_REQUIRED_WHATSAPP_ACCOUNTS="sender,responder" \
+ORKESTR_RELEASE_CONNECTIVITY_RECOVERY_COMMAND='orkestr whatsapp accounts reconnect responder >/dev/null 2>&1; orkestr whatsapp accounts reconnect sender >/dev/null 2>&1' \
+orkestr update --release --ref <tag-or-main-or-sha> --channel <channel> --all-instances
+```
+
+The account gate retries longer than generic HTTP connectivity because WhatsApp
+Web sessions can take time to reattach after the service restart. Tune with
+`ORKESTR_RELEASE_WHATSAPP_ACCOUNT_ATTEMPTS` and
+`ORKESTR_RELEASE_WHATSAPP_ACCOUNT_RETRY_DELAY_MS` when needed.
+
 Versioned deploys are no-interrupt by default. On current host-native installs,
 Codex app-server runs as its own service and Orkestr talks to it through a short
 proxy connection, so UI/API restarts do not stop active Codex turns. The deployer

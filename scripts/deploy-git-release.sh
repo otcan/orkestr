@@ -31,6 +31,8 @@ Environment:
   ORKESTR_DEPLOY_SYNC_WORKERS   Fast-forward and push safe stale worker branches after deploy. Defaults to 1.
   ORKESTR_RELEASE_TRAIN_FANOUT  Deploy eligible broker-listed instances after local deploy. Defaults to 0.
   ORKESTR_RELEASE_REQUIRED_WHATSAPP_ACCOUNTS Space/comma-separated WA accounts that must be ready after restart.
+  ORKESTR_RELEASE_WHATSAPP_ACCOUNT_ATTEMPTS Required WhatsApp account retry attempts. Defaults to 12.
+  ORKESTR_RELEASE_WHATSAPP_ACCOUNT_RETRY_DELAY_MS Required WhatsApp account retry delay. Defaults to 15000.
   ORKESTR_RELEASE_CONNECTIVITY_RECOVERY_COMMAND Command to run between required-account retry attempts.
   ORKESTR_DEPLOY_LOCK_BUSY_EXIT_CODE Exit code when another deploy holds the lock. Defaults to 0.
   ORKESTR_DEPLOY_HEALTH_URL     Health URL. Defaults to http://$ORKESTR_HOST:$ORKESTR_PORT/api/health.
@@ -885,8 +887,8 @@ verify_required_whatsapp_accounts() {
   local required attempts delay_ms attempt missing account error
   required="$(required_whatsapp_account_list)"
   [ -n "$required" ] || return 0
-  attempts="$(positive_integer_env "${ORKESTR_RELEASE_CONNECTIVITY_ATTEMPTS:-}" 6 1)"
-  delay_ms="$(positive_integer_env "${ORKESTR_RELEASE_CONNECTIVITY_RETRY_DELAY_MS:-}" 15000 0)"
+  attempts="$(positive_integer_env "${ORKESTR_RELEASE_WHATSAPP_ACCOUNT_ATTEMPTS:-${ORKESTR_RELEASE_CONNECTIVITY_ATTEMPTS:-}}" 12 1)"
+  delay_ms="$(positive_integer_env "${ORKESTR_RELEASE_WHATSAPP_ACCOUNT_RETRY_DELAY_MS:-${ORKESTR_RELEASE_CONNECTIVITY_RETRY_DELAY_MS:-}}" 15000 0)"
   attempt=1
   while [ "$attempt" -le "$attempts" ]; do
     missing=""
