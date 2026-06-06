@@ -10,6 +10,7 @@ import {
   clean,
   codexThreadId,
   nowIso,
+  publicError,
   runtimeHome,
   threadEventId,
   threadUsesCodexAppServer,
@@ -55,6 +56,13 @@ function staleAppServerRuntime(thread, clientState = null) {
 function staleFinalGraceMs(env = process.env) {
   const parsed = Number(env.ORKESTR_CODEX_APP_SERVER_STALE_FINAL_GRACE_MS || 30000);
   return Number.isFinite(parsed) ? Math.max(0, parsed) : 30000;
+}
+
+function staleActiveTurnMs(env = process.env) {
+  const raw = String(env.ORKESTR_CODEX_APP_SERVER_STALE_ACTIVE_TURN_MS ?? "180000").trim().toLowerCase();
+  if (["0", "off", "false", "disabled"].includes(raw)) return 0;
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) ? Math.max(0, parsed) : 180000;
 }
 
 function staleRecoveryLookbackMs(env = process.env) {
@@ -166,6 +174,24 @@ function refreshedTurnState(messages = [], originalTurn = null) {
 
 function staleTurnNoticeText(reason = "no_assistant_response", options = {}) {
   const noticeCause = clean(options.noticeCause || options.cause).toLowerCase();
+  if (noticeCause === "active_turn_timeout") {
+    if (reason === "no_final_answer") {
+      return [
+        "Codex response timed out",
+        "",
+        "Orkestr found progress updates for this turn, but Codex stayed active too long without a final answer.",
+        "Send the next instruction normally to continue.",
+        "If this repeats, reply /safe-reset to save recent Orkestr context and start a fresh Codex session for this thread.",
+      ].join("\n");
+    }
+    return [
+      "Codex response timed out",
+      "",
+      "Orkestr delivered this message to Codex, but Codex stayed active too long without producing a visible response.",
+      "Send the next instruction normally to continue.",
+      "If this repeats, reply /safe-reset to save recent Orkestr context and start a fresh Codex session for this thread.",
+    ].join("\n");
+  }
   if (noticeCause === "orkestr_restart") {
     if (reason === "no_final_answer") {
       return [
@@ -269,6 +295,44 @@ function shouldRecoverIncompleteTurn(thread, clientState, turn, env = process.en
   return Date.now() - turn.lastActivityMs >= staleFinalGraceMs(env);
 }
 
+function pendingApprovalState(thread = {}, clientState = {}) {
+  const liveStatusState = appServerStateFromStatus(clientState?.status || null);
+  const threadState = clean(thread?.state).toLowerCase();
+  const runtimeState = clean(thread?.runtime?.state).toLowerCase();
+  return liveStatusState === "awaiting_approval" ||
+    threadState === "awaiting_approval" ||
+    runtimeState === "awaiting_approval" ||
+    Boolean(thread?.runtime?.pendingRequest);
+}
+
+function activeTurnMatchesDeliveredTurn(thread, clientState, turn) {
+  const liveActiveTurnId = clean(clientState?.activeTurnId);
+  if (!liveActiveTurnId || !turn) return false;
+  const turnId = messageTurnId(turn?.latestUser);
+  if (turnId && liveActiveTurnId === turnId) return true;
+  return incompleteTurnMatchesRuntimeTurn(thread, turn) && liveActiveTurnId === clean(thread?.runtime?.activeTurnId);
+}
+
+function shouldRecoverStaleActiveTurn(thread, clientState, turn, env = process.env) {
+  if (!activeTurnMatchesDeliveredTurn(thread, clientState, turn)) return false;
+  if (pendingApprovalState(thread, clientState)) return false;
+  const timeoutMs = staleActiveTurnMs(env);
+  if (!timeoutMs) return false;
+  const lastActivityMs = Number(turn?.lastActivityMs || 0);
+  if (!lastActivityMs || Date.now() - lastActivityMs < timeoutMs) return false;
+  const observedAt = timestampMs(clientState?.activeTurnObservedAt);
+  if (!observedAt || Date.now() - observedAt < timeoutMs) return false;
+  return true;
+}
+
+function activeTurnRecoveryPending(thread, clientState, turn, env = process.env) {
+  return Boolean(
+    staleActiveTurnMs(env) &&
+    activeTurnMatchesDeliveredTurn(thread, clientState, turn) &&
+    !pendingApprovalState(thread, clientState)
+  );
+}
+
 function recoveryScanMessages(messages = [], fullScan = false, env = process.env) {
   if (fullScan) return messages;
   const limit = staleRecoveryMessageScanLimit(env);
@@ -345,22 +409,26 @@ export async function recoverStaleCodexAppServerTurns(env = process.env, options
     const incompleteTurn = latestIncompleteDeliveredTurn(scanMessages);
     let staleRuntime = staleRuntimeCandidate;
     let shouldRecoverTurn = shouldRecoverIncompleteTurn(thread, clientState, incompleteTurn, env);
-    if ((staleRuntime || shouldRecoverTurn) && client) {
+    let shouldRecoverActiveTurn = shouldRecoverStaleActiveTurn(thread, clientState, incompleteTurn, env);
+    if ((staleRuntime || shouldRecoverTurn || shouldRecoverActiveTurn || activeTurnRecoveryPending(thread, clientState, incompleteTurn, env)) && client) {
       const liveReadState = await readLiveCodexThreadState(client, codexId);
       if (liveReadState) {
         clientState = liveReadState;
         staleRuntime = staleAppServerRuntime(thread, clientState);
         shouldRecoverTurn = shouldRecoverIncompleteTurn(thread, clientState, incompleteTurn, env);
+        shouldRecoverActiveTurn = shouldRecoverStaleActiveTurn(thread, clientState, incompleteTurn, env);
       }
     }
     const liveScanKey = clientState === (client?.threadStates.has(codexId) ? client.threadStates.get(codexId) : null)
       ? initialScanKey
       : recoveryScanKey(thread, clientState, messagesFingerprint, options, env);
-    const noticeTurn = shouldRecoverTurn || incompleteTurnMatchesRuntimeTurn(thread, incompleteTurn)
+    const noticeTurn = shouldRecoverTurn || shouldRecoverActiveTurn || incompleteTurnMatchesRuntimeTurn(thread, incompleteTurn)
       ? incompleteTurn
       : null;
-    if (!staleRuntime && !shouldRecoverTurn) {
-      rememberRecoveryNoop(thread.id, liveScanKey, env);
+    if (!staleRuntime && !shouldRecoverTurn && !shouldRecoverActiveTurn) {
+      if (!activeTurnRecoveryPending(thread, clientState, incompleteTurn, env)) {
+        rememberRecoveryNoop(thread.id, liveScanKey, env);
+      }
       continue;
     }
     let notice = null;
@@ -371,9 +439,27 @@ export async function recoverStaleCodexAppServerTurns(env = process.env, options
       freshNoticeTurn = refreshedTurnState(noticeMessages, noticeTurn);
     }
     if (freshNoticeTurn) {
-      const result = await appendStaleTurnNotice(thread, noticeMessages, freshNoticeTurn, env, options);
+      const noticeOptions = shouldRecoverActiveTurn && !clean(options.noticeCause || options.cause)
+        ? { ...options, noticeCause: "active_turn_timeout" }
+        : options;
+      const result = await appendStaleTurnNotice(thread, noticeMessages, freshNoticeTurn, env, noticeOptions);
       notice = result?.notice || null;
       if (result?.appended) appended += 1;
+    }
+    const interruptedTurnId = shouldRecoverActiveTurn ? clean(clientState?.activeTurnId) : "";
+    let interruptError = "";
+    if (interruptedTurnId && client) {
+      await client.request("turn/interrupt", { threadId: codexId, turnId: interruptedTurnId }).catch((error) => {
+        interruptError = publicError(error);
+        return null;
+      });
+      client.threadStates.set(codexId, {
+        ...(client.threadStates.get(codexId) || clientState || {}),
+        activeTurnId: "",
+        activeTurnObservedAt: null,
+        status: { type: "idle" },
+        statusObservedAt: nowIso(),
+      });
     }
     await updateThread(thread.id, {
       state: "ready",
@@ -384,7 +470,7 @@ export async function recoverStaleCodexAppServerTurns(env = process.env, options
         state: "ready",
         activeTurnId: null,
         pendingRequest: null,
-        codexStatus: clientState?.status || { type: "idle" },
+        codexStatus: shouldRecoverActiveTurn ? { type: "idle" } : clientState?.status || { type: "idle" },
         recoveredAt: nowIso(),
       },
     }, env).catch(() => null);
@@ -395,8 +481,12 @@ export async function recoverStaleCodexAppServerTurns(env = process.env, options
       codexThreadId: codexId,
       noticeMessageId: notice?.id || null,
       latestUserMessageId: freshNoticeTurn?.latestUser?.id || noticeTurn?.latestUser?.id || null,
-      reason: freshNoticeTurn?.reason || noticeTurn?.reason || (staleRuntime ? "stale_runtime" : "incomplete_turn"),
-      noticeCause: clean(options.noticeCause || options.cause),
+      reason: shouldRecoverActiveTurn ? "active_turn_timeout" : freshNoticeTurn?.reason || noticeTurn?.reason || (staleRuntime ? "stale_runtime" : "incomplete_turn"),
+      interruptedTurnId: interruptedTurnId || null,
+      interruptError: interruptError || null,
+      noticeCause: shouldRecoverActiveTurn && !clean(options.noticeCause || options.cause)
+        ? "active_turn_timeout"
+        : clean(options.noticeCause || options.cause),
     }, env).catch(() => {});
     recoveryScanCache.delete(thread.id);
   }
