@@ -1990,6 +1990,20 @@ async function deliverWhatsAppRepliesOnce(env = process.env, fetchImpl = fetch) 
         const deliveryId = `${message.id}:${routerUpdateTarget.routerUpdateType}`;
         if (deliveredIds.has(deliveryId)) continue;
         const chatId = routerUpdateTarget.chatId;
+        const accountId = kind === "thread" ? routerUpdateTarget.accountId : pickString(message.accountId, routerUpdateTarget.accountId);
+        const existingIntent = findWhatsAppOutboundIntent(outboundIntents, {
+          kind,
+          deliveryType: "router_update",
+          routerUpdateType: routerUpdateTarget.routerUpdateType,
+          agentId,
+          threadId,
+          messageId: deliveryId,
+          sourceMessageId: message.id,
+          chatId,
+          accountId,
+        });
+        if (staleTerminalWhatsAppOutboundIntentPassedCursor({ state, messageSetKey, messageCursor, intent: existingIntent, env })) continue;
+        if (!existingIntent && whatsappOutboundMirrorCursorPassed(state, messageSetKey, messageCursor)) continue;
         if (
           routerUpdateTarget.skipIfAssistantOutput &&
           (completedAssistantReplyForParent(messages, message, chatId, state) || latestProgressReplyForParent(messages, message.id, env))
@@ -2004,7 +2018,6 @@ async function deliverWhatsAppRepliesOnce(env = process.env, fetchImpl = fetch) 
           deliveryType: "router_update",
           env,
         });
-        const accountId = kind === "thread" ? routerUpdateTarget.accountId : pickString(message.accountId, routerUpdateTarget.accountId);
         const textKey = deliveryTextKey(chatId, `${deliveryId}\n${text}`);
         if (deliveredTextKeys.has(textKey) || batchTextKeys.has(textKey)) {
           skipped.push({ agentId, threadId, messageId: message.id, reason: "duplicate_text" });
@@ -2075,6 +2088,17 @@ async function deliverWhatsAppRepliesOnce(env = process.env, fetchImpl = fetch) 
           env,
         });
         const accountId = kind === "thread" ? queuedModeTarget.accountId : pickString(message.accountId, queuedModeTarget.accountId);
+        const existingIntent = findWhatsAppOutboundIntent(outboundIntents, {
+          kind,
+          deliveryType: "mode_queued",
+          agentId,
+          threadId,
+          messageId: deliveryId,
+          chatId,
+          accountId,
+        });
+        if (staleTerminalWhatsAppOutboundIntentPassedCursor({ state, messageSetKey, messageCursor, intent: existingIntent, env })) continue;
+        if (!existingIntent && whatsappOutboundMirrorCursorPassed(state, messageSetKey, messageCursor)) continue;
         const textKey = deliveryTextKey(chatId, `${deliveryId}\n${text}`);
         if (deliveredTextKeys.has(textKey) || batchTextKeys.has(textKey)) {
           skipped.push({ agentId, threadId, messageId: message.id, reason: "duplicate_text" });
@@ -2133,6 +2157,18 @@ async function deliverWhatsAppRepliesOnce(env = process.env, fetchImpl = fetch) 
         let queueTarget = queuedInputTarget;
         let chatId = queueTarget.chatId;
         let accountId = kind === "thread" ? queueTarget.accountId : pickString(queueMessage.accountId, queueTarget.accountId);
+        let existingIntent = findWhatsAppOutboundIntent(outboundIntents, {
+          kind,
+          deliveryType: "queue_notice",
+          agentId,
+          threadId,
+          messageId: deliveryId,
+          sourceMessageId: message.id,
+          chatId,
+          accountId,
+        });
+        if (staleTerminalWhatsAppOutboundIntentPassedCursor({ state, messageSetKey, messageCursor, intent: existingIntent, env })) continue;
+        if (!existingIntent && whatsappOutboundMirrorCursorPassed(state, messageSetKey, messageCursor)) continue;
         if (kind === "thread") {
           queueMessages = await listThreadMessages(threadId, env).catch(() => messages);
           queueMessage = queueMessages.find((entry) => entry.id === message.id) || message;
@@ -2158,6 +2194,18 @@ async function deliverWhatsAppRepliesOnce(env = process.env, fetchImpl = fetch) 
           }
           chatId = queueTarget.chatId;
           accountId = pickString(queueTarget.accountId, queueMessage.accountId, accountId);
+          existingIntent = findWhatsAppOutboundIntent(outboundIntents, {
+            kind,
+            deliveryType: "queue_notice",
+            agentId,
+            threadId,
+            messageId: deliveryId,
+            sourceMessageId: message.id,
+            chatId,
+            accountId,
+          });
+          if (staleTerminalWhatsAppOutboundIntentPassedCursor({ state, messageSetKey, messageCursor, intent: existingIntent, env })) continue;
+          if (!existingIntent && whatsappOutboundMirrorCursorPassed(state, messageSetKey, messageCursor)) continue;
         }
         if (completedAssistantReplyForParent(queueMessages, queueMessage, chatId, state) || latestProgressReplyForParent(queueMessages, queueMessage.id, env)) {
           await skipWhatsAppOutboundCandidate({
@@ -2238,6 +2286,18 @@ async function deliverWhatsAppRepliesOnce(env = process.env, fetchImpl = fetch) 
           continue;
         }
         const chatId = failedDeliveryTarget.chatId;
+        const accountId = kind === "thread" ? failedDeliveryTarget.accountId : pickString(message.accountId, failedDeliveryTarget.accountId);
+        const existingIntent = findWhatsAppOutboundIntent(outboundIntents, {
+          kind,
+          deliveryType: "delivery_error",
+          agentId,
+          threadId,
+          messageId: message.id,
+          chatId,
+          accountId,
+        });
+        if (staleTerminalWhatsAppOutboundIntentPassedCursor({ state, messageSetKey, messageCursor, intent: existingIntent, env })) continue;
+        if (!existingIntent && whatsappOutboundMirrorCursorPassed(state, messageSetKey, messageCursor)) continue;
         const completedReply = completedAssistantReplyForParent(messages, message, chatId, state);
         if (completedReply) {
           if (deliveredIds.has(completedReply.id)) {
@@ -2263,7 +2323,6 @@ async function deliverWhatsAppRepliesOnce(env = process.env, fetchImpl = fetch) 
           deliveryType: "delivery_error",
           env,
         });
-        const accountId = kind === "thread" ? failedDeliveryTarget.accountId : pickString(message.accountId, failedDeliveryTarget.accountId);
         const textKey = deliveryTextKey(chatId, `${message.id}\n${text}`);
         if (deliveredTextKeys.has(textKey) || batchTextKeys.has(textKey)) {
           skipped.push({ agentId, threadId, messageId: message.id, reason: "duplicate_text" });

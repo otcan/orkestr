@@ -268,6 +268,32 @@ test("whatsapp delivery ignores old terminal skipped intents after the mirror cu
   assert.deepEqual(delivery.skipped, []);
 });
 
+test("whatsapp delivery ignores old router update notices after the mirror cursor advanced", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-old-router-update-"));
+  const runtimeEnv = await createBoundThread(home, "thread-old-router-update");
+  const oldAt = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+  const message = await appendThreadMessage("thread-old-router-update", {
+    role: "user",
+    source: "whatsapp_inbound",
+    state: "completed",
+    connector: "whatsapp",
+    chatId: "chat-live-recovery",
+    accountId: "account-live-recovery",
+    text: "/safe-reset",
+    observedVia: "orkestr_safe_reset_command",
+    createdAt: oldAt,
+  }, runtimeEnv);
+  await writeCursorPast(home, "thread-old-router-update", Number(message.cursor) + 1);
+
+  const delivery = await deliverWhatsAppReplies(runtimeEnv, async () => {
+    throw new Error("old router update notice should not be sent or reported");
+  });
+
+  assert.equal(delivery.delivered.length, 0);
+  assert.equal(delivery.skippedSummary.count, 0);
+  assert.deepEqual(delivery.skipped, []);
+});
+
 test("whatsapp delivery summarizes repeated stale skipped replies with a bounded sample", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-stale-skip-summary-"));
   const runtimeEnv = await createBoundThread(home, "thread-stale-skip-summary");
