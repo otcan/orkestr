@@ -1037,14 +1037,11 @@ function findWhatsAppOutboundIntent(outboundIntents = [], input = {}) {
   const exactIntentId = input.textKey ? outboundIntentKey(input) : "";
   const index = whatsappOutboundIntentIndex(outboundIntents);
   if (exactIntentId) {
-    const exact = index.byIntentId.get(exactIntentId) ||
-      outboundIntents.find((intent) => pickString(intent.intentId, outboundIntentKey(intent)) === exactIntentId);
+    const exact = index.byIntentId.get(exactIntentId);
     if (exact) return exact;
   }
   const fieldKey = outboundIntentFieldKey(input);
-  return index.byFields.get(fieldKey) ||
-    outboundIntents.find((intent) => outboundIntentFieldMatches(intent, input)) ||
-    null;
+  return index.byFields.get(fieldKey) || null;
 }
 
 async function skipWhatsAppOutboundCandidate({
