@@ -144,6 +144,46 @@ function connectionFailedResult(instance, error, detail = {}) {
   };
 }
 
+function positiveInteger(value, fallback, minimum = 1) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? Math.max(minimum, Math.floor(parsed)) : fallback;
+}
+
+function releaseConnectivityAttempts(options = {}, env = process.env) {
+  return positiveInteger(
+    options.connectivityAttempts ?? options.attempts ?? env.ORKESTR_RELEASE_CONNECTIVITY_ATTEMPTS,
+    1,
+  );
+}
+
+function releaseConnectivityRetryDelayMs(options = {}, env = process.env) {
+  return positiveInteger(
+    options.connectivityRetryDelayMs ?? options.retryDelayMs ?? env.ORKESTR_RELEASE_CONNECTIVITY_RETRY_DELAY_MS,
+    0,
+    0,
+  );
+}
+
+function wait(ms) {
+  const delay = Math.max(0, Number(ms) || 0);
+  if (!delay) return Promise.resolve();
+  return new Promise((resolve) => setTimeout(resolve, delay));
+}
+
+function retryableConnectivityFailure(result = {}) {
+  if (result.status !== "connection_failed") return false;
+  const error = cleanLower(result.error);
+  if (!error) return false;
+  if (error.includes("release_commit_mismatch") || error.includes("release_id_mismatch")) return false;
+  return error.includes("connectivity_command_failed") ||
+    error.includes("whatsapp_") ||
+    error.includes("version_probe_failed") ||
+    error.includes("fetch") ||
+    error.includes("timeout") ||
+    error.includes("econnreset") ||
+    error.includes("econnrefused");
+}
+
 function releaseInstanceRequiresWhatsApp(instance = {}) {
   const labels = instance.labels || {};
   if (["1", "true", "yes", "on", "required"].includes(cleanLower(labels.requireWhatsAppConnectivity || labels["require-whatsapp-connectivity"]))) return true;
@@ -218,6 +258,20 @@ async function verifyInstanceConnectivity(instanceInput, options = {}, env = pro
   }
 }
 
+async function verifyInstanceConnectivityWithRetries(instanceInput, options = {}, env = process.env) {
+  const attempts = releaseConnectivityAttempts(options, env);
+  const retryDelayMs = releaseConnectivityRetryDelayMs(options, env);
+  let result = null;
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    result = await verifyInstanceConnectivity(instanceInput, options, env);
+    if (result.status !== "connection_failed" || attempt >= attempts || !retryableConnectivityFailure(result)) {
+      return attempt > 1 ? { ...result, attempts: attempt } : result;
+    }
+    await wait(retryDelayMs);
+  }
+  return result;
+}
+
 function releaseConnectivityTargets(instances = [], options = {}, env = process.env) {
   return instances
     .map((instance) => normalizeReleaseInstance(instance, env))
@@ -229,7 +283,7 @@ function releaseConnectivityTargets(instances = [], options = {}, env = process.
 export async function verifyReleaseInstanceConnectivity(instances = [], options = {}, env = process.env) {
   const targets = releaseConnectivityTargets(instances, options, env);
   const results = [];
-  for (const instance of targets) results.push(await verifyInstanceConnectivity(instance, options, env));
+  for (const instance of targets) results.push(await verifyInstanceConnectivityWithRetries(instance, options, env));
   const counts = results.reduce((acc, result) => {
     acc[result.status] = (acc[result.status] || 0) + 1;
     return acc;

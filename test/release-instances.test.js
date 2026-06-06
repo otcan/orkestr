@@ -161,6 +161,39 @@ test("release instance deploy verifies configured connectivity commands", async 
   assert.equal(spawned[1].env.ORKESTR_RELEASE_CONNECTIVITY_CHECK, "1");
 });
 
+test("release connectivity retries transient command failures", async () => {
+  const spawned = [];
+  const instances = [
+    {
+      id: "edge",
+      displayName: "Edge",
+      kind: "remote-service",
+      releaseTrainEnabled: true,
+      connectivityCommand: ["check-edge", "{{ref}}"],
+    },
+  ];
+  const report = await verifyReleaseInstanceConnectivity(instances, {
+    ref: "feed1234",
+    channel: "main",
+    connectivityAttempts: 2,
+    connectivityRetryDelayMs: 0,
+    spawnImpl(command, args, options) {
+      spawned.push({ command, args, env: options.env });
+      const child = new EventEmitter();
+      queueMicrotask(() => child.emit("exit", spawned.length === 1 ? 1 : 0));
+      return child;
+    },
+  });
+
+  assert.equal(report.ok, true);
+  assert.equal(report.counts.connected, 1);
+  assert.equal(report.results[0].attempts, 2);
+  assert.deepEqual(spawned.map((entry) => [entry.command, entry.args]), [
+    ["check-edge", ["feed1234"]],
+    ["check-edge", ["feed1234"]],
+  ]);
+});
+
 test("release command connectivity verifies the deployed instance commit", async () => {
   const instances = [
     {

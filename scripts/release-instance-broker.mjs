@@ -16,6 +16,11 @@ function hasFlag(argv, flag) {
   return argv.includes(flag);
 }
 
+function positiveInteger(value, fallback, minimum = 1) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? Math.max(minimum, Math.floor(parsed)) : fallback;
+}
+
 function commandName(argv = []) {
   return argv.find((value) => !value.startsWith("--")) || "list";
 }
@@ -116,6 +121,8 @@ async function main() {
         ref,
         channel,
         skipLocal: !hasFlag(argv, "--include-local"),
+        connectivityAttempts: positiveInteger(process.env.ORKESTR_RELEASE_CONNECTIVITY_ATTEMPTS, 6),
+        connectivityRetryDelayMs: positiveInteger(process.env.ORKESTR_RELEASE_CONNECTIVITY_RETRY_DELAY_MS, 15_000, 0),
         spawnImpl: spawn,
         fetchImpl: globalThis.fetch,
       }, process.env);
