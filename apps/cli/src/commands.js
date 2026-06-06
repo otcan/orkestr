@@ -329,8 +329,8 @@ function compactApiSessionMessagePayload(payload) {
   if (payload.delivery && typeof payload.delivery === "object" && !Array.isArray(payload.delivery)) {
     const delivery = { ...payload.delivery };
     if (Array.isArray(delivery.skipped)) {
-      delivery.skippedSummary = summarizeDeliveryItems(delivery.skipped);
-      delivery.skippedSample = delivery.skipped.slice(0, 5).map(compactDeliveryItem);
+      delivery.skippedSummary = delivery.skippedSummary || summarizeDeliveryItems(delivery.skipped);
+      delivery.skippedSample = delivery.skippedSample || delivery.skipped.slice(0, 5).map(compactDeliveryItem);
       delete delivery.skipped;
     }
     next.delivery = delivery;

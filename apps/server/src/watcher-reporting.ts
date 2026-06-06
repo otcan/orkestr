@@ -35,15 +35,25 @@ export function reportServerError(env = process.env, input: WatcherServerErrorIn
 export function reportWhatsAppDeliveryAnomalies(env = process.env, source: string, result: any) {
   const failed = Array.isArray(result?.failed) ? result.failed : [];
   const skipped = Array.isArray(result?.skipped) ? result.skipped : [];
+  const skippedReasons = result?.skippedSummary?.reasons && typeof result.skippedSummary.reasons === "object"
+    ? result.skippedSummary.reasons
+    : null;
+  const badReasons = new Set([
+    "missing_outbound_intent",
+    "missing_chat_id",
+    "missing_text",
+    "mirroring_disabled",
+    "stale_untracked_reply",
+  ]);
   const badSkipped = skipped.filter((item: any) => {
     const reason = String(item?.reason || item?.error || "").toLowerCase();
-    return reason === "missing_outbound_intent" ||
-      reason === "missing_chat_id" ||
-      reason === "missing_text" ||
-      reason === "mirroring_disabled" ||
-      reason === "stale_untracked_reply";
+    return badReasons.has(reason);
   });
-  if (!failed.length && !badSkipped.length) return;
+  const badSkippedCount = skippedReasons
+    ? Object.entries(skippedReasons).reduce((sum, [reason, count]) =>
+      sum + (badReasons.has(String(reason).toLowerCase()) ? Number(count || 0) : 0), 0)
+    : badSkipped.length;
+  if (!failed.length && !badSkippedCount) return;
   const first = failed[0] || badSkipped[0] || {};
   const reason = String(first.error || first.reason || "delivery_anomaly");
   reportServerError(env, {
@@ -54,7 +64,8 @@ export function reportWhatsAppDeliveryAnomalies(env = process.env, source: strin
     messageId: String(first.messageId || ""),
     details: {
       failedCount: failed.length,
-      skippedCount: badSkipped.length,
+      skippedCount: badSkippedCount,
+      skippedSampleCount: badSkipped.length,
       reason,
       kind: first.kind || "",
       agentId: first.agentId || "",

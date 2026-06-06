@@ -208,3 +208,52 @@ test("whatsapp delivery does not recover imported transcript output after the mi
     ["stale_untracked_reply", "stale_untracked_reply"],
   );
 });
+
+test("whatsapp delivery summarizes repeated stale skipped replies with a bounded sample", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-stale-skip-summary-"));
+  const runtimeEnv = await createBoundThread(home, "thread-stale-skip-summary");
+  runtimeEnv.ORKESTR_WHATSAPP_DELIVERY_SKIPPED_SAMPLE_LIMIT = "2";
+  delete runtimeEnv.ORKESTR_WHATSAPP_LIVE_OUTPUT_RECOVERY_WINDOW_MS;
+  const oldAt = new Date(Date.now() - 10 * 60 * 1000).toISOString();
+  const replies = [];
+
+  for (let index = 0; index < 5; index += 1) {
+    const parent = await appendThreadMessage("thread-stale-skip-summary", {
+      role: "user",
+      source: "whatsapp_inbound",
+      state: "completed",
+      connector: "whatsapp",
+      chatId: "chat-live-recovery",
+      accountId: "account-live-recovery",
+      text: `historical request ${index}`,
+      createdAt: oldAt,
+    }, runtimeEnv);
+    replies.push(await appendThreadMessage("thread-stale-skip-summary", {
+      role: "assistant",
+      source: "codex-app-server-import",
+      phase: "final_answer",
+      state: "completed",
+      chatId: "chat-live-recovery",
+      accountId: "account-live-recovery",
+      parentMessageId: parent.id,
+      text: `Historical answer ${index} should stay inert.`,
+      createdAt: oldAt,
+    }, runtimeEnv));
+  }
+  await writeCursorPast(home, "thread-stale-skip-summary", Number(replies.at(-1).cursor) + 1);
+
+  const delivery = await deliverWhatsAppReplies(runtimeEnv, async () => {
+    throw new Error("stale transcript output should not be sent");
+  });
+
+  assert.equal(delivery.delivered.length, 0);
+  assert.equal(delivery.skipped.filter((item) => item.reason === "stale_untracked_reply").length, 2);
+  assert.deepEqual(
+    delivery.skipped.map((item) => item.messageId),
+    replies.slice(0, 2).map((reply) => reply.id),
+  );
+  assert.equal(delivery.skippedSummary.count, 5);
+  assert.equal(delivery.skippedSummary.sampled, 2);
+  assert.equal(delivery.skippedSummary.omitted, 3);
+  assert.deepEqual(delivery.skippedSummary.reasons, { stale_untracked_reply: 5 });
+});

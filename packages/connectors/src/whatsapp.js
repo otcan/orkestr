@@ -1866,6 +1866,44 @@ async function annotateInitialThreadQueueNotice(threadId, message, env = process
   return updateThreadMessage(threadId, message.id, { deliveryState }, env).catch(() => message);
 }
 
+function whatsappDeliverySkippedSampleLimit(env = process.env) {
+  const parsed = Number(env.ORKESTR_WHATSAPP_DELIVERY_SKIPPED_SAMPLE_LIMIT || 20);
+  return Number.isFinite(parsed) ? Math.max(0, Math.floor(parsed)) : 20;
+}
+
+function whatsappDeliverySkippedReason(item = {}) {
+  return String(item?.reason || item?.status || item?.error || "unknown").trim() || "unknown";
+}
+
+function createWhatsAppDeliverySkippedCollector(env = process.env) {
+  const sampleLimit = whatsappDeliverySkippedSampleLimit(env);
+  const items = [];
+  const counts = {};
+  const sampledCounts = {};
+  return {
+    push(item = {}) {
+      const reason = whatsappDeliverySkippedReason(item);
+      counts[reason] = (counts[reason] || 0) + 1;
+      sampledCounts[reason] = sampledCounts[reason] || 0;
+      if (sampledCounts[reason] >= sampleLimit) return;
+      sampledCounts[reason] += 1;
+      items.push(item);
+    },
+    items() {
+      return items;
+    },
+    summary() {
+      const count = Object.values(counts).reduce((sum, value) => sum + value, 0);
+      return {
+        count,
+        sampled: items.length,
+        omitted: Math.max(0, count - items.length),
+        reasons: Object.fromEntries(Object.entries(counts).sort(([left], [right]) => left.localeCompare(right))),
+      };
+    },
+  };
+}
+
 export async function syncWhatsAppTypingIndicators(env = process.env, options = {}) {
   const config = await readConnectorConfig("whatsapp", env);
   if (bridgeMode(config, env) !== "local") return { ok: true, active: 0, skipped: "external_bridge" };
@@ -1897,7 +1935,7 @@ async function deliverWhatsAppRepliesOnce(env = process.env, fetchImpl = fetch) 
   const outboundDeliveries = [...(state.outboundDeliveries || [])];
   const outboundIntents = [...(state.outboundIntents || [])];
   const delivered = [];
-  const skipped = [];
+  const skipped = createWhatsAppDeliverySkippedCollector(env);
   const failed = [];
 
   const messageSets = [
@@ -2487,7 +2525,7 @@ async function deliverWhatsAppRepliesOnce(env = process.env, fetchImpl = fetch) 
     state.outboundIntents = outboundIntents;
     await writeWhatsAppState(state, env);
   }
-  return { delivered, skipped, failed };
+  return { delivered, skipped: skipped.items(), skippedSummary: skipped.summary(), failed };
 }
 
 export async function deliverWhatsAppReplies(env = process.env, fetchImpl = fetch) {
