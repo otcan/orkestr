@@ -246,7 +246,7 @@ async function apiSessionMessageCommand(argv, ctx) {
   }).catch((error) => {
     throw enrichApiSessionMessageError(error);
   });
-  if (json) ctx.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
+  if (json) ctx.stdout.write(`${JSON.stringify(compactApiSessionMessagePayload(payload), null, 2)}\n`);
   else {
     const delivery = payload.deliveryState?.state || (payload.deliveryExpected ? "delivered" : "stored");
     ctx.stdout.write(`Recorded ${payload.message?.role || body.role} API session message: ${delivery}\n`);
@@ -321,6 +321,46 @@ function enrichApiSessionMessageError(error) {
   next.status = error.status;
   next.payload = payload;
   return next;
+}
+
+function compactApiSessionMessagePayload(payload) {
+  if (!payload || typeof payload !== "object") return payload;
+  const next = { ...payload };
+  if (payload.delivery && typeof payload.delivery === "object" && !Array.isArray(payload.delivery)) {
+    const delivery = { ...payload.delivery };
+    if (Array.isArray(delivery.skipped)) {
+      delivery.skippedSummary = summarizeDeliveryItems(delivery.skipped);
+      delivery.skippedSample = delivery.skipped.slice(0, 5).map(compactDeliveryItem);
+      delete delivery.skipped;
+    }
+    next.delivery = delivery;
+  }
+  return next;
+}
+
+function summarizeDeliveryItems(items = []) {
+  const reasons = {};
+  for (const item of items) {
+    const reason = String(item?.reason || item?.status || item?.error || "unknown");
+    reasons[reason] = (reasons[reason] || 0) + 1;
+  }
+  return {
+    count: items.length,
+    reasons: Object.fromEntries(Object.entries(reasons).sort(([left], [right]) => left.localeCompare(right))),
+  };
+}
+
+function compactDeliveryItem(item) {
+  if (!item || typeof item !== "object") return item;
+  return {
+    id: item.id || item.messageId || item.outboxId || null,
+    reason: item.reason || "",
+    status: item.status || "",
+    threadId: item.threadId || item.thread || "",
+    chatId: item.chatId || item.chat || "",
+    createdAt: item.createdAt || "",
+    updatedAt: item.updatedAt || "",
+  };
 }
 
 function readStdin(stdin) {

@@ -251,6 +251,63 @@ test("CLI api-session message eagerly binds then posts visible assistant output"
   assert.match(stdout.text(), /Recorded assistant API session message: delivered/);
 });
 
+test("CLI api-session message JSON summarizes noisy WhatsApp delivery skips", async () => {
+  const stdout = capture();
+  const seen = [];
+  const cwd = "/workspace/demo";
+  const code = await runCli(["api-session", "message", "Forward this", "--json"], {
+    cwd,
+    env: { ORKESTR_API_SESSION_ID: "api-env-1" },
+    stdout,
+    stderr: capture(),
+    fetchImpl: fakeFetch({
+      "GET /api/whereiam": {
+        ok: true,
+        thread: { id: "thread-1", displayName: "Demo", state: "ready" },
+        apiSession: { id: "api-env-1", bound: true, threadId: "thread-1" },
+      },
+      "POST /api/session-bindings/api-env-1/messages": {
+        ok: true,
+        binding: { apiSessionId: "api-env-1", threadId: "thread-1" },
+        thread: { id: "thread-1", name: "Demo" },
+        message: { id: "message-1", role: "assistant" },
+        deliveryExpected: true,
+        deliveryState: { ok: true, state: "delivered" },
+        delivery: {
+          delivered: [{ messageId: "message-1", status: "delivered" }],
+          failed: [],
+          skipped: [
+            { messageId: "skip-1", reason: "stale_untracked_reply", threadId: "thread-1", chatId: "chat-1" },
+            { messageId: "skip-2", reason: "stale_untracked_reply", threadId: "thread-1", chatId: "chat-1" },
+            { messageId: "skip-3", reason: "duplicate_text", threadId: "thread-1", chatId: "chat-1" },
+            { messageId: "skip-4", reason: "stale_untracked_reply", threadId: "thread-1", chatId: "chat-1" },
+            { messageId: "skip-5", reason: "already_delivered", threadId: "thread-1", chatId: "chat-1" },
+            { messageId: "skip-6", reason: "stale_untracked_reply", threadId: "thread-1", chatId: "chat-1" },
+          ],
+        },
+      },
+    }, seen),
+  });
+
+  assert.equal(code, 0);
+  const payload = JSON.parse(stdout.text());
+  assert.deepEqual(seen.map((entry) => entry.key), [
+    "GET /api/whereiam",
+    "POST /api/session-bindings/api-env-1/messages",
+  ]);
+  assert.equal(payload.delivery.delivered[0].messageId, "message-1");
+  assert.equal(payload.delivery.skipped, undefined);
+  assert.equal(payload.delivery.skippedSummary.count, 6);
+  assert.deepEqual(payload.delivery.skippedSummary.reasons, {
+    already_delivered: 1,
+    duplicate_text: 1,
+    stale_untracked_reply: 4,
+  });
+  assert.equal(payload.delivery.skippedSample.length, 5);
+  assert.equal(payload.delivery.skippedSample[0].id, "skip-1");
+  assert.equal(payload.delivery.skippedSample.at(-1).id, "skip-5");
+});
+
 test("CLI api-session message reports WhatsApp delivery failures with the reason", async () => {
   const stderr = capture();
   const seen = [];
