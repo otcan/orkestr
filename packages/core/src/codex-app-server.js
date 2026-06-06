@@ -761,6 +761,7 @@ async function deliverCodexAppServerPendingInputsUnlocked(thread, env = process.
   const messages = await listThreadMessages(thread.id, env);
   let next = messages.find((message) => message.role === "user" && pendingInputStates.has(message.state));
   if (!next) return delivered;
+  thread = await getThread(thread.id, env).catch(() => null) || thread;
   const securityCommand = await completeThreadSecurityApproveCommand(thread, next, env);
   if (securityCommand?.handled) {
     delivered.push(next.id);
@@ -778,7 +779,7 @@ async function deliverCodexAppServerPendingInputsUnlocked(thread, env = process.
     await appendEvent({ type: "codex_app_server_unavailable", threadId: thread.id, error: errorText }, env).catch(() => {});
     return delivered;
   }
-  const id = codexThreadId(thread);
+  let id = codexThreadId(thread);
   const statusType = clean(client.threadStates.get(id)?.status?.type);
   const threadState = clean(thread.state);
   if (id && (!statusType || statusType === "notLoaded" || threadState === "sleeping" || threadState === "unloaded" || threadState === "failed")) {
@@ -786,6 +787,7 @@ async function deliverCodexAppServerPendingInputsUnlocked(thread, env = process.
       const resumed = await resumeCodexAppServerThread(thread, env);
       thread = resumed.thread || thread;
       client = resumed.client || client;
+      id = codexThreadId(thread);
     } catch (error) {
       const errorText = publicError(error);
       await updateThreadMessage(thread.id, next.id, {
@@ -923,6 +925,7 @@ async function deliverCodexAppServerPendingInputsUnlocked(thread, env = process.
     return delivered;
   }
   try {
+    thread = await getThread(thread.id, env).catch(() => null) || thread;
     const result = await sendCodexAppServerInput(thread, next, env);
     if (result.skipped) return delivered;
     if (!result.deferred) delivered.push(result.message.id);

@@ -504,7 +504,15 @@ test("local whatsapp recovery notifies chat when tenant sanitizer blocks inbound
     id: { _serialized: chatId },
     unreadCount: 1,
     async fetchMessages() {
-      return [inboundMessage];
+      return [
+        inboundMessage,
+        ...sent.map((message, index) => ({
+          fromMe: true,
+          body: message.text,
+          id: { _serialized: `true_${chatId}_NOTICE_${index + 1}` },
+          timestamp: Math.floor(Date.now() / 1000),
+        })),
+      ];
     },
     async sendSeen() {
       seen += 1;
@@ -513,6 +521,10 @@ test("local whatsapp recovery notifies chat when tenant sanitizer blocks inbound
   const client = {
     async getChats() {
       return [chat];
+    },
+    async getChatById(id) {
+      assert.equal(id, chatId);
+      return chat;
     },
     async sendMessage(to, text) {
       sent.push({ to, text });
@@ -738,7 +750,9 @@ test("local whatsapp send retries transient text sends when not confirmed", asyn
     async getChatById() {
       return {
         async fetchMessages() {
-          return [];
+          return attempts >= 2
+            ? [{ fromMe: true, body: "retry me", id: { _serialized: "sent-retry" }, timestamp: Math.floor(Date.now() / 1000) }]
+            : [];
         },
       };
     },
@@ -753,6 +767,71 @@ test("local whatsapp send retries transient text sends when not confirmed", asyn
 
   assert.equal(attempts, 2);
   assert.equal(sent.id._serialized, "sent-retry");
+});
+
+test("local whatsapp send rejects normal successes that are not visible in chat history", async () => {
+  let attempts = 0;
+  const client = {
+    async sendMessage() {
+      attempts += 1;
+      return { id: { _serialized: "false-positive-send" } };
+    },
+    async getChatById() {
+      return {
+        async fetchMessages() {
+          return [];
+        },
+      };
+    },
+  };
+
+  await assert.rejects(
+    () => sendWhatsAppTextWithConfirmation({
+      client,
+      chatId: "chat-false-positive",
+      text: "not actually visible",
+      maxAttempts: 1,
+      retryDelayMs: 0,
+      env: {
+        ORKESTR_WHATSAPP_SEND_CONFIRMATION_ATTEMPTS: "1",
+        ORKESTR_WHATSAPP_SEND_CONFIRMATION_DELAY_MS: "0",
+      },
+    }),
+    /whatsapp_send_not_confirmed/,
+  );
+  assert.equal(attempts, 1);
+});
+
+test("local whatsapp send retries normal successes that are not confirmed", async () => {
+  let attempts = 0;
+  const client = {
+    async sendMessage() {
+      attempts += 1;
+      return { id: { _serialized: `send-attempt-${attempts}` } };
+    },
+    async getChatById() {
+      return {
+        async fetchMessages() {
+          return attempts >= 2
+            ? [{ fromMe: true, body: "eventually visible", id: { _serialized: "confirmed-visible" }, timestamp: Math.floor(Date.now() / 1000) }]
+            : [];
+        },
+      };
+    },
+  };
+
+  const sent = await sendWhatsAppTextWithConfirmation({
+    client,
+    chatId: "chat-retry-unconfirmed",
+    text: "eventually visible",
+    retryDelayMs: 0,
+    env: {
+      ORKESTR_WHATSAPP_SEND_CONFIRMATION_ATTEMPTS: "1",
+      ORKESTR_WHATSAPP_SEND_CONFIRMATION_DELAY_MS: "0",
+    },
+  });
+  assert.equal(attempts, 2);
+  assert.equal(sent.id._serialized, "confirmed-visible");
 });
 
 test("local whatsapp send times out hung browser sends without retrying", async () => {

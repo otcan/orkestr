@@ -1854,6 +1854,80 @@ test("Codex app-server recovery interrupts stale live active turns with no visib
   }
 });
 
+test("Codex app-server recovery interrupts every stale live active turn", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-codex-app-server-multi-active-timeout-"));
+  const fake = await createFakeCodex(home);
+  const staleAt = new Date(Date.now() - 60_000).toISOString();
+  const env = {
+    ORKESTR_HOME: path.join(home, "orkestr"),
+    HOME: path.join(home, "runtime-home"),
+    PATH: `${fake.bin}${path.delimiter}${process.env.PATH || ""}`,
+    FAKE_CODEX_STATE: fake.stateFile,
+    ORKESTR_CODEX_APP_SERVER_STALE_ACTIVE_TURN_MS: "1",
+    ORKESTR_CODEX_APP_SERVER_STALE_FINAL_GRACE_MS: "0",
+    ORKESTR_CODEX_APP_SERVER_STALE_RECOVERY_SCAN_CACHE_MS: "0",
+  };
+  try {
+    const thread = await createThread({ id: "app-server-multi-active-timeout-thread", name: "Multi Active Timeout Thread", cwd: home, executorId: "codex", executor: { type: "codex" } }, env);
+    const started = await startCodexAppServerThread(thread, env);
+    const codexId = started.thread.executor.codexThreadId;
+    await updateThread(started.thread.id, {
+      state: "working",
+      runtime: {
+        ...(started.thread.runtime || {}),
+        runtimeKind: "codex-app-server",
+        state: "working",
+        activeTurnId: "second-live-active-turn",
+        codexStatus: { type: "active", activeFlags: ["running"] },
+      },
+    }, env);
+    await appendThreadMessage(started.thread.id, {
+      role: "user",
+      source: "whatsapp",
+      connector: "whatsapp",
+      chatId: "chat-multi-active-timeout",
+      accountId: "account-multi-active-timeout",
+      text: "Newest active turn has no final answer.",
+      state: "completed",
+      deliveryState: "delivered",
+      deliveredAt: staleAt,
+      observedVia: "codex_app_server_turn_start",
+      codexThreadId: codexId,
+      codexTurnId: "second-live-active-turn",
+      createdAt: staleAt,
+    }, env);
+    const rawState = JSON.parse(await fs.readFile(fake.stateFile, "utf8"));
+    const codexThread = rawState.threads.find((item) => item.id === codexId);
+    codexThread.status = { type: "active", activeFlags: [] };
+    codexThread.turns.push(
+      { id: "first-live-active-turn", threadId: codexId, status: "inProgress", items: [{ type: "userMessage", id: "multi-active-user-1", content: [{ type: "text", text: "Older active turn" }] }] },
+      { id: "second-live-active-turn", threadId: codexId, status: "inProgress", items: [{ type: "userMessage", id: "multi-active-user-2", content: [{ type: "text", text: "Newest active turn has no final answer." }] }] },
+    );
+    await fs.writeFile(fake.stateFile, JSON.stringify(rawState, null, 2));
+    const client = await getCodexAppServerClient({ env, home: env.HOME });
+    client.threadStates.set(codexId, {
+      activeTurnId: "second-live-active-turn",
+      activeTurnIds: ["second-live-active-turn", "first-live-active-turn"],
+      activeTurnObservedAt: staleAt,
+      liveStateCheckedAt: staleAt,
+      status: { type: "active", activeFlags: ["running"] },
+      statusObservedAt: staleAt,
+    });
+
+    const result = await recoverStaleCodexAppServerTurns(env);
+    const finalState = JSON.parse(await fs.readFile(fake.stateFile, "utf8"));
+    const interrupted = finalState.calls
+      .filter((call) => call.method === "turn/interrupt" && call.params?.threadId === codexId)
+      .map((call) => call.params?.turnId)
+      .sort();
+
+    assert.equal(result.recovered, 1);
+    assert.deepEqual(interrupted, ["first-live-active-turn", "second-live-active-turn"]);
+  } finally {
+    stopCodexAppServerClients();
+  }
+});
+
 test("Codex app-server recovery treats unscoped rollout final answers as completed turns", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-codex-app-server-rollout-final-recovery-"));
   const fake = await createFakeCodex(home);

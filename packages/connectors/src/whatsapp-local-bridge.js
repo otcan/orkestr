@@ -419,7 +419,7 @@ function wait(ms) {
 
 export function transientLocalWhatsAppSendError(error) {
   const message = String(error?.message || error || "");
-  return /Promise was collected|Runtime\.callFunctionOn|Execution context was destroyed|Target closed/i.test(message);
+  return /Promise was collected|Runtime\.callFunctionOn|Execution context was destroyed|Target closed|whatsapp_send_not_confirmed/i.test(message);
 }
 
 function sendOperationTimeoutMs(env = process.env, overrideMs = null) {
@@ -454,14 +454,58 @@ function sentMessageText(message = {}) {
   return String(message?.body || message?.text || message?.caption || "");
 }
 
-async function recentOwnTextMessage(client, chatId, text) {
+function disabledEnvValue(value) {
+  return ["0", "false", "off", "no", "disabled"].includes(String(value || "").trim().toLowerCase());
+}
+
+function sendConfirmationRequired(env = process.env) {
+  return !disabledEnvValue(env.ORKESTR_WHATSAPP_SEND_CONFIRMATION_REQUIRED || env.WA_SEND_CONFIRMATION_REQUIRED);
+}
+
+function sendConfirmationAttempts(env = process.env) {
+  const parsed = Number(env.ORKESTR_WHATSAPP_SEND_CONFIRMATION_ATTEMPTS || env.WA_SEND_CONFIRMATION_ATTEMPTS || 4);
+  return Number.isFinite(parsed) ? Math.max(1, Math.floor(parsed)) : 4;
+}
+
+function sendConfirmationDelayMs(env = process.env) {
+  const parsed = Number(env.ORKESTR_WHATSAPP_SEND_CONFIRMATION_DELAY_MS || env.WA_SEND_CONFIRMATION_DELAY_MS || 750);
+  return Number.isFinite(parsed) ? Math.max(0, parsed) : 750;
+}
+
+function messageTimestampMs(message = {}) {
+  const seconds = Number(message?.timestamp || 0);
+  return Number.isFinite(seconds) && seconds > 0 ? seconds * 1000 : 0;
+}
+
+async function recentOwnTextMessage(client, chatId, text, options = {}) {
   if (!client || !chatId || !String(text || "")) return null;
   const chat = await client.getChatById(chatId).catch(() => null);
   if (!chat || typeof chat.fetchMessages !== "function") return null;
   const messages = await chat.fetchMessages({ limit: 20 }).catch(() => []);
+  const sinceMs = Number(options.sinceMs || 0);
   return [...(Array.isArray(messages) ? messages : [])].reverse().find((message) =>
-    Boolean(message?.fromMe) && sentMessageText(message) === text
+    Boolean(message?.fromMe) &&
+    sentMessageText(message) === text &&
+    (!sinceMs || !messageTimestampMs(message) || messageTimestampMs(message) >= sinceMs)
   ) || null;
+}
+
+async function confirmRecentOwnTextMessage(client, chatId, text, env = process.env, options = {}) {
+  const attempts = sendConfirmationAttempts(env);
+  const delayMs = sendConfirmationDelayMs(env);
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    const confirmed = await recentOwnTextMessage(client, chatId, text, options);
+    if (confirmed) return confirmed;
+    if (attempt < attempts && delayMs > 0) await wait(delayMs);
+  }
+  return null;
+}
+
+function unconfirmedSendError(chatId = "") {
+  const error = new Error("whatsapp_send_not_confirmed");
+  error.statusCode = 502;
+  error.chatId = chatId;
+  return error;
 }
 
 export async function sendWhatsAppTextWithConfirmation({
@@ -477,17 +521,27 @@ export async function sendWhatsAppTextWithConfirmation({
   const attempts = Math.max(1, Number(maxAttempts || 1));
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
     try {
-      return await withSendOperationTimeout(
+      const sentAtMs = Date.now();
+      const sentMessage = await withSendOperationTimeout(
         client.sendMessage(chatId, text),
         "whatsapp_send_message",
         env,
         operationTimeoutMs,
       );
+      if (!sendConfirmationRequired(env)) return sentMessage;
+      const confirmed = await withSendOperationTimeout(
+        confirmRecentOwnTextMessage(client, chatId, text, env, { sinceMs: sentAtMs - 5000 }),
+        "whatsapp_send_confirm",
+        env,
+        operationTimeoutMs,
+      ).catch(() => null);
+      if (confirmed) return confirmed;
+      throw unconfirmedSendError(chatId);
     } catch (error) {
       lastError = error;
       if (!transientLocalWhatsAppSendError(error) && !isSendOperationTimeout(error)) throw error;
       const confirmed = await withSendOperationTimeout(
-        recentOwnTextMessage(client, chatId, text),
+        confirmRecentOwnTextMessage(client, chatId, text, env),
         "whatsapp_send_confirm",
         env,
         operationTimeoutMs,
@@ -2730,7 +2784,8 @@ function recoverableLocalWhatsAppRuntimeError(error) {
     reason.includes("deprecatedsendstanzaandreturnack") ||
     reason.includes("sendiq called before startcomms") ||
     reason.includes("whatsapp_send_message_timeout") ||
-    reason.includes("whatsapp_send_media_timeout");
+    reason.includes("whatsapp_send_media_timeout") ||
+    reason.includes("whatsapp_send_not_confirmed");
 }
 
 async function recoverLocalWhatsAppAccountAfterRuntimeError(accountId, error, env = process.env, options = {}) {

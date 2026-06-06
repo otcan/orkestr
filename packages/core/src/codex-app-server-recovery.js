@@ -306,11 +306,12 @@ function pendingApprovalState(thread = {}, clientState = {}) {
 }
 
 function activeTurnMatchesDeliveredTurn(thread, clientState, turn) {
-  const liveActiveTurnId = clean(clientState?.activeTurnId);
-  if (!liveActiveTurnId || !turn) return false;
+  const liveActiveTurnIds = activeTurnIdsFromClientState(clientState);
+  if (!liveActiveTurnIds.length || !turn) return false;
   const turnId = messageTurnId(turn?.latestUser);
-  if (turnId && liveActiveTurnId === turnId) return true;
-  return incompleteTurnMatchesRuntimeTurn(thread, turn) && liveActiveTurnId === clean(thread?.runtime?.activeTurnId);
+  if (turnId && liveActiveTurnIds.includes(turnId)) return true;
+  const runtimeTurnId = clean(thread?.runtime?.activeTurnId);
+  return incompleteTurnMatchesRuntimeTurn(thread, turn) && liveActiveTurnIds.includes(runtimeTurnId);
 }
 
 function shouldRecoverStaleActiveTurn(thread, clientState, turn, env = process.env) {
@@ -333,11 +334,43 @@ function activeTurnRecoveryPending(thread, clientState, turn, env = process.env)
   );
 }
 
+function activeTurnIdsFromClientState(clientState = {}) {
+  const ids = [];
+  const add = (value) => {
+    const id = clean(value);
+    if (id && !ids.includes(id)) ids.push(id);
+  };
+  add(clientState?.activeTurnId);
+  for (const id of Array.isArray(clientState?.activeTurnIds) ? clientState.activeTurnIds : []) add(id);
+  return ids;
+}
+
 function recoveryScanMessages(messages = [], fullScan = false, env = process.env) {
   if (fullScan) return messages;
   const limit = staleRecoveryMessageScanLimit(env);
   if (limit <= 0 || messages.length <= limit) return messages;
   return messages.slice(-limit);
+}
+
+function safeResetBoundaryMs(thread = {}) {
+  return Math.max(
+    timestampMs(thread?.runtime?.safeReset?.resetAt),
+    timestampMs(thread?.executor?.metadata?.lastSafeReset?.resetAt),
+  );
+}
+
+function recoveryEligibleMessages(thread = {}, messages = []) {
+  const codexId = codexThreadId(thread);
+  const boundaryMs = safeResetBoundaryMs(thread);
+  if (!codexId && !boundaryMs) return messages;
+  return (Array.isArray(messages) ? messages : []).filter((message) => {
+    const messageCodexId = clean(message?.codexThreadId || message?.executorThreadId);
+    if (codexId && messageCodexId && messageCodexId !== codexId) return false;
+    if (!boundaryMs) return true;
+    if (codexId && messageCodexId === codexId) return true;
+    const activityMs = messageActivityMs(message);
+    return Boolean(activityMs && activityMs >= boundaryMs);
+  });
 }
 
 async function threadMessagesFingerprint(threadId, env = process.env) {
@@ -359,6 +392,7 @@ function recoveryScanKey(thread, clientState, messagesFingerprint, options = {},
     runtimeState: runtime.state || "",
     runtimeKind: runtime.runtimeKind || thread?.runtimeKind || "",
     activeTurnId: runtime.activeTurnId || "",
+    safeResetAt: runtime.safeReset?.resetAt || thread?.executor?.metadata?.lastSafeReset?.resetAt || "",
     pendingRequest: runtime.pendingRequest || null,
     lastTurnStatus: runtime.lastTurnStatus || "",
     codexStatus: runtime.codexStatus || null,
@@ -404,7 +438,7 @@ export async function recoverStaleCodexAppServerTurns(env = process.env, options
     const initialScanKey = recoveryScanKey(thread, clientState, messagesFingerprint, options, env);
     if (recoveryCacheHit(thread.id, initialScanKey, env)) continue;
     const staleRuntimeCandidate = staleAppServerRuntime(thread, clientState);
-    const messages = await listThreadMessages(thread.id, env).catch(() => []);
+    const messages = recoveryEligibleMessages(thread, await listThreadMessages(thread.id, env).catch(() => []));
     const scanMessages = recoveryScanMessages(messages, staleRuntimeCandidate, env);
     const incompleteTurn = latestIncompleteDeliveredTurn(scanMessages);
     let staleRuntime = staleRuntimeCandidate;
@@ -435,7 +469,7 @@ export async function recoverStaleCodexAppServerTurns(env = process.env, options
     let noticeMessages = messages;
     let freshNoticeTurn = noticeTurn;
     if (noticeTurn) {
-      noticeMessages = await listThreadMessages(thread.id, env).catch(() => messages);
+      noticeMessages = recoveryEligibleMessages(thread, await listThreadMessages(thread.id, env).catch(() => messages));
       freshNoticeTurn = refreshedTurnState(noticeMessages, noticeTurn);
     }
     if (freshNoticeTurn) {
@@ -446,16 +480,19 @@ export async function recoverStaleCodexAppServerTurns(env = process.env, options
       notice = result?.notice || null;
       if (result?.appended) appended += 1;
     }
-    const interruptedTurnId = shouldRecoverActiveTurn ? clean(clientState?.activeTurnId) : "";
+    const interruptedTurnIds = shouldRecoverActiveTurn ? activeTurnIdsFromClientState(clientState) : [];
     let interruptError = "";
-    if (interruptedTurnId && client) {
-      await client.request("turn/interrupt", { threadId: codexId, turnId: interruptedTurnId }).catch((error) => {
-        interruptError = publicError(error);
-        return null;
-      });
+    if (interruptedTurnIds.length && client) {
+      for (const interruptedTurnId of interruptedTurnIds) {
+        await client.request("turn/interrupt", { threadId: codexId, turnId: interruptedTurnId }).catch((error) => {
+          interruptError = [interruptError, publicError(error)].filter(Boolean).join("; ");
+          return null;
+        });
+      }
       client.threadStates.set(codexId, {
         ...(client.threadStates.get(codexId) || clientState || {}),
         activeTurnId: "",
+        activeTurnIds: [],
         activeTurnObservedAt: null,
         status: { type: "idle" },
         statusObservedAt: nowIso(),
@@ -482,7 +519,8 @@ export async function recoverStaleCodexAppServerTurns(env = process.env, options
       noticeMessageId: notice?.id || null,
       latestUserMessageId: freshNoticeTurn?.latestUser?.id || noticeTurn?.latestUser?.id || null,
       reason: shouldRecoverActiveTurn ? "active_turn_timeout" : freshNoticeTurn?.reason || noticeTurn?.reason || (staleRuntime ? "stale_runtime" : "incomplete_turn"),
-      interruptedTurnId: interruptedTurnId || null,
+      interruptedTurnId: interruptedTurnIds[0] || null,
+      interruptedTurnIds,
       interruptError: interruptError || null,
       noticeCause: shouldRecoverActiveTurn && !clean(options.noticeCause || options.cause)
         ? "active_turn_timeout"

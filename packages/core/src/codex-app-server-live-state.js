@@ -1,22 +1,29 @@
 import { appServerStateFromStatus, clean, nowIso } from "./codex-app-server-common.js";
 
-export function activeTurnFromCodexThread(codexThread = {}) {
+export function activeTurnsFromCodexThread(codexThread = {}) {
   const turns = Array.isArray(codexThread.turns) ? codexThread.turns : [];
+  const ids = [];
   for (let index = turns.length - 1; index >= 0; index -= 1) {
     const turn = turns[index] || {};
     const status = clean(turn.status).toLowerCase();
     if (["active", "inprogress", "in_progress", "running", "started"].includes(status)) {
-      return clean(turn.id);
+      const id = clean(turn.id);
+      if (id && !ids.includes(id)) ids.push(id);
     }
   }
-  return "";
+  return ids;
+}
+
+export function activeTurnFromCodexThread(codexThread = {}) {
+  return activeTurnsFromCodexThread(codexThread)[0] || "";
 }
 
 export function liveStateFromCodexThread(codexThread = {}, fallbackCodexId = "") {
   const codexId = clean(codexThread.id || codexThread.threadId || fallbackCodexId);
   if (!codexId) return null;
   const status = codexThread.status || null;
-  const activeTurnId = clean(codexThread.activeTurnId || codexThread.currentTurnId || activeTurnFromCodexThread(codexThread));
+  const activeTurnIds = activeTurnsFromCodexThread(codexThread);
+  const activeTurnId = clean(codexThread.activeTurnId || codexThread.currentTurnId || activeTurnIds[0]);
   const effectiveStatus = activeTurnId && appServerStateFromStatus(status) !== "working"
     ? { type: "active", activeFlags: ["running"] }
     : status;
@@ -24,6 +31,9 @@ export function liveStateFromCodexThread(codexThread = {}, fallbackCodexId = "")
   return {
     status: effectiveStatus,
     activeTurnId,
+    activeTurnIds: activeTurnId
+      ? [activeTurnId, ...activeTurnIds.filter((id) => id !== activeTurnId)]
+      : activeTurnIds,
     thread: codexThread,
   };
 }
