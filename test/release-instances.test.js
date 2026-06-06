@@ -167,6 +167,59 @@ test("release instance deploy verifies configured connectivity commands", async 
   assert.equal(spawned[1].env.ORKESTR_RELEASE_REQUIRED_WHATSAPP_ACCOUNTS, "sender,responder");
 });
 
+test("release deploy scopes required WhatsApp account env to WhatsApp-routed instances", async () => {
+  const spawned = [];
+  const instances = [
+    {
+      id: "plain-vm",
+      kind: "tenant-vm",
+      releaseTrainEnabled: true,
+      deployCommand: ["deploy-plain"],
+      connectivityCommand: ["check-plain"],
+    },
+    {
+      id: "wa-vm",
+      kind: "tenant-vm",
+      releaseTrainEnabled: true,
+      deployCommand: ["deploy-wa"],
+      connectivityCommand: ["check-wa"],
+      labels: { router: "parent-whatsapp" },
+    },
+  ];
+  const report = await deployReleaseInstances({
+    instances,
+    ref: "feed1234",
+    channel: "main",
+    spawnImpl(command, args, options) {
+      spawned.push({ command, args, env: options.env });
+      const child = new EventEmitter();
+      queueMicrotask(() => child.emit("exit", 0));
+      return child;
+    },
+  }, {
+    ORKESTR_RELEASE_REQUIRED_WHATSAPP_ACCOUNTS: "sender,responder",
+  });
+  const connectivity = await verifyReleaseInstanceConnectivity(instances, {
+    ref: "feed1234",
+    channel: "main",
+    spawnImpl(command, args, options) {
+      spawned.push({ command, args, env: options.env });
+      const child = new EventEmitter();
+      queueMicrotask(() => child.emit("exit", 0));
+      return child;
+    },
+  }, {
+    ORKESTR_RELEASE_REQUIRED_WHATSAPP_ACCOUNTS: "sender,responder",
+  });
+
+  assert.equal(report.ok, true);
+  assert.equal(connectivity.ok, true);
+  assert.equal(spawned.find((entry) => entry.command === "deploy-plain").env.ORKESTR_RELEASE_REQUIRED_WHATSAPP_ACCOUNTS, undefined);
+  assert.equal(spawned.find((entry) => entry.command === "deploy-wa").env.ORKESTR_RELEASE_REQUIRED_WHATSAPP_ACCOUNTS, "sender,responder");
+  assert.equal(spawned.find((entry) => entry.command === "check-plain").env.ORKESTR_RELEASE_REQUIRED_WHATSAPP_ACCOUNTS, undefined);
+  assert.equal(spawned.find((entry) => entry.command === "check-wa").env.ORKESTR_RELEASE_REQUIRED_WHATSAPP_ACCOUNTS, "sender,responder");
+});
+
 test("release connectivity retries transient command failures", async () => {
   const spawned = [];
   const instances = [

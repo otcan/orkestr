@@ -64,6 +64,55 @@ function commandConfigured(command) {
   return Array.isArray(command) ? command.length > 0 : Boolean(clean(command));
 }
 
+function splitList(value) {
+  if (Array.isArray(value)) return value.flatMap((item) => splitList(item));
+  const text = clean(value);
+  if (!text) return [];
+  if (text.startsWith("[")) {
+    try {
+      const parsed = JSON.parse(text);
+      if (Array.isArray(parsed)) return splitList(parsed);
+    } catch {
+      // Fall back to delimiter parsing for operator-provided env values.
+    }
+  }
+  return text.split(/[,\s]+/g).map((item) => clean(item)).filter(Boolean);
+}
+
+function firstList(...values) {
+  for (const value of values) {
+    const items = splitList(value);
+    if (items.length) return [...new Set(items)];
+  }
+  return [];
+}
+
+function releaseInstanceRequiresWhatsApp(instance = {}) {
+  const labels = instance.labels || {};
+  if (["1", "true", "yes", "on", "required"].includes(cleanLower(labels.requireWhatsAppConnectivity || labels["require-whatsapp-connectivity"]))) return true;
+  if (["1", "true", "yes", "on", "required"].includes(cleanLower(labels.whatsappConnectivityCheck || labels["whatsapp-connectivity-check"]))) return true;
+  if (firstList(labels.requiredWhatsAppAccounts, labels["required-whatsapp-accounts"], labels.whatsappRequiredAccounts, labels["whatsapp-required-accounts"]).length) return true;
+  return cleanLower(labels.router) === "parent-whatsapp";
+}
+
+function releaseInstanceRequiredWhatsAppAccounts(instance = {}, options = {}, env = process.env) {
+  const labels = instance.labels || {};
+  return firstList(
+    options.requiredWhatsAppAccounts,
+    options.whatsappRequiredAccounts,
+    labels.requiredWhatsAppAccounts,
+    labels["required-whatsapp-accounts"],
+    labels.whatsappRequiredAccounts,
+    labels["whatsapp-required-accounts"],
+    labels.releaseRequiredWhatsAppAccounts,
+    labels["release-required-whatsapp-accounts"],
+    ...(releaseInstanceRequiresWhatsApp(instance) ? [
+      env.ORKESTR_RELEASE_REQUIRED_WHATSAPP_ACCOUNTS,
+      env.ORKESTR_REQUIRED_WHATSAPP_ACCOUNTS,
+    ] : []),
+  );
+}
+
 function joinUrl(baseUrl, suffix) {
   const base = clean(baseUrl).replace(/\/+$/g, "");
   if (!base) return "";
@@ -400,6 +449,7 @@ function spawnReleaseCommand(command, instance, options = {}) {
   const spawnImpl = options.spawnImpl || defaultSpawn;
   const context = deployContext(instance, options);
   const commandValue = interpolatedCommand(command, context);
+  const requiredWhatsAppAccounts = releaseInstanceRequiredWhatsAppAccounts(instance, options, options.env || process.env).join(",");
   const env = {
     ...process.env,
     ...options.env,
@@ -409,6 +459,11 @@ function spawnReleaseCommand(command, instance, options = {}) {
     ORKESTR_UPDATE_REF: context.ref,
     ORKESTR_DEPLOY_CHANNEL: context.channel,
   };
+  if (requiredWhatsAppAccounts) env.ORKESTR_RELEASE_REQUIRED_WHATSAPP_ACCOUNTS = requiredWhatsAppAccounts;
+  else if (!releaseInstanceRequiresWhatsApp(instance)) {
+    delete env.ORKESTR_RELEASE_REQUIRED_WHATSAPP_ACCOUNTS;
+    delete env.ORKESTR_REQUIRED_WHATSAPP_ACCOUNTS;
+  }
   const cwd = instance.cwd || options.cwd || process.cwd();
   const child = Array.isArray(commandValue)
     ? spawnImpl(commandValue[0], commandValue.slice(1), { stdio: options.stdio || "inherit", env, cwd })

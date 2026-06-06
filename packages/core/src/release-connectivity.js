@@ -123,6 +123,10 @@ function spawnReleaseConnectivityCommand(command, instance, options = {}, env = 
     ...(requiredWhatsAppAccounts ? { ORKESTR_RELEASE_REQUIRED_WHATSAPP_ACCOUNTS: requiredWhatsAppAccounts } : {}),
     ...extraEnv,
   };
+  if (!requiredWhatsAppAccounts && !releaseInstanceRequiresWhatsApp(instance)) {
+    delete childEnv.ORKESTR_RELEASE_REQUIRED_WHATSAPP_ACCOUNTS;
+    delete childEnv.ORKESTR_REQUIRED_WHATSAPP_ACCOUNTS;
+  }
   const cwd = instance.cwd || options.cwd || process.cwd();
   const child = Array.isArray(commandValue)
     ? spawnImpl(commandValue[0], commandValue.slice(1), { stdio: options.stdio || "inherit", env: childEnv, cwd })
@@ -257,6 +261,7 @@ function releaseInstanceRequiresWhatsApp(instance = {}) {
   const labels = instance.labels || {};
   if (["1", "true", "yes", "on", "required"].includes(cleanLower(labels.requireWhatsAppConnectivity || labels["require-whatsapp-connectivity"]))) return true;
   if (["1", "true", "yes", "on", "required"].includes(cleanLower(labels.whatsappConnectivityCheck || labels["whatsapp-connectivity-check"]))) return true;
+  if (firstList(labels.requiredWhatsAppAccounts, labels["required-whatsapp-accounts"], labels.whatsappRequiredAccounts, labels["whatsapp-required-accounts"]).length) return true;
   return cleanLower(labels.router) === "parent-whatsapp";
 }
 
@@ -271,8 +276,10 @@ function releaseInstanceRequiredWhatsAppAccounts(instance = {}, options = {}, en
     labels["whatsapp-required-accounts"],
     labels.releaseRequiredWhatsAppAccounts,
     labels["release-required-whatsapp-accounts"],
-    env.ORKESTR_RELEASE_REQUIRED_WHATSAPP_ACCOUNTS,
-    env.ORKESTR_REQUIRED_WHATSAPP_ACCOUNTS,
+    ...(releaseInstanceRequiresWhatsApp(instance) ? [
+      env.ORKESTR_RELEASE_REQUIRED_WHATSAPP_ACCOUNTS,
+      env.ORKESTR_REQUIRED_WHATSAPP_ACCOUNTS,
+    ] : []),
   );
 }
 
