@@ -840,6 +840,42 @@ test("CLI starts a WhatsApp account pairing session", async () => {
   assert.equal(JSON.parse(stdout.text()).pairing.qrRequired, true);
 });
 
+test("CLI adds and updates neutral WhatsApp accounts", async () => {
+  const stdout = capture();
+  const seen = [];
+  const code = await runCli(["whatsapp", "accounts", "add", "--id", "user-wa", "--display-name", "User WA", "--owner", "alice", "--json"], {
+    stdout,
+    stderr: capture(),
+    fetchImpl: fakeFetch({
+      "POST /api/connectors/whatsapp/accounts": {
+        ok: true,
+        account: { accountId: "user-wa", displayName: "User WA", ownerUserId: "alice" },
+      },
+    }, seen),
+  });
+
+  assert.equal(code, 0);
+  assert.equal(seen[0].key, "POST /api/connectors/whatsapp/accounts");
+  assert.deepEqual(seen[0].body, { accountId: "user-wa", displayName: "User WA", ownerUserId: "alice" });
+  assert.equal(JSON.parse(stdout.text()).account.ownerUserId, "alice");
+
+  const stdout2 = capture();
+  const seen2 = [];
+  const updateCode = await runCli(["whatsapp", "accounts", "update", "user-wa", "--display-name", "Renamed WA"], {
+    stdout: stdout2,
+    stderr: capture(),
+    fetchImpl: fakeFetch({
+      "PUT /api/connectors/whatsapp/accounts/user-wa": {
+        ok: true,
+        account: { accountId: "user-wa", displayName: "Renamed WA" },
+      },
+    }, seen2),
+  });
+  assert.equal(updateCode, 0);
+  assert.deepEqual(seen2[0].body, { displayName: "Renamed WA" });
+  assert.match(stdout2.text(), /Renamed WA/);
+});
+
 test("CLI resolves active WhatsApp bindings", async () => {
   const stdout = capture();
   const seen = [];
@@ -868,6 +904,95 @@ test("CLI resolves active WhatsApp bindings", async () => {
   assert.equal(seen[0].search, "?thread=thread-1");
   assert.match(stdout.text(), /thread:thread-1:whatsapp/);
   assert.match(stdout.text(), /Responder account: neutral-1/);
+});
+
+test("CLI creates, updates, and deletes WhatsApp bindings", async () => {
+  const stdout = capture();
+  const seen = [];
+  const code = await runCli([
+    "whatsapp",
+    "bindings",
+    "create",
+    "--thread",
+    "thread-1",
+    "--chat-id",
+    "chat-1@g.us",
+    "--responder-account",
+    "neutral-1",
+    "--send-acl",
+    "all-users",
+  ], {
+    stdout,
+    stderr: capture(),
+    fetchImpl: fakeFetch({
+      "POST /api/connectors/whatsapp/bindings": {
+        ok: true,
+        binding: {
+          id: "thread:thread-1:whatsapp",
+          state: "inactive",
+          reason: "responder_account_inactive",
+          threadName: "Thread 1",
+          chatId: "chat-1@g.us",
+          responderAccountId: "neutral-1",
+          acl: { send: { mode: "all-users" } },
+          nextAction: "pair_account",
+        },
+      },
+    }, seen),
+  });
+
+  assert.equal(code, 0);
+  assert.equal(seen[0].key, "POST /api/connectors/whatsapp/bindings");
+  assert.deepEqual(seen[0].body, {
+    threadId: "thread-1",
+    chatId: "chat-1@g.us",
+    responderConnectorAccountId: "neutral-1",
+    responderAccountId: "neutral-1",
+    acl: { send: { mode: "all-users" } },
+  });
+  assert.match(stdout.text(), /pair_account/);
+
+  const stdout2 = capture();
+  const seen2 = [];
+  const updateCode = await runCli(["whatsapp", "bindings", "update", "thread-1", "--responder-account", "neutral-2", "--send-acl", "owner-only"], {
+    stdout: stdout2,
+    stderr: capture(),
+    fetchImpl: fakeFetch({
+      "PUT /api/connectors/whatsapp/bindings/thread-1": {
+        ok: true,
+        binding: {
+          id: "thread:thread-1:whatsapp",
+          state: "ready",
+          threadName: "Thread 1",
+          chatId: "chat-1@g.us",
+          responderAccountId: "neutral-2",
+          acl: { send: { mode: "owner-only" } },
+        },
+      },
+    }, seen2),
+  });
+  assert.equal(updateCode, 0);
+  assert.deepEqual(seen2[0].body, {
+    responderConnectorAccountId: "neutral-2",
+    responderAccountId: "neutral-2",
+    acl: { send: { mode: "owner-only" } },
+  });
+  assert.match(stdout2.text(), /neutral-2/);
+
+  const stdout3 = capture();
+  const seen3 = [];
+  const deleteCode = await runCli(["whatsapp", "bindings", "delete", "thread-1"], {
+    stdout: stdout3,
+    stderr: capture(),
+    fetchImpl: fakeFetch({
+      "DELETE /api/connectors/whatsapp/bindings/thread-1": {
+        ok: true,
+        binding: { id: "thread:thread-1:whatsapp", state: "disabled", reason: "binding_not_route_eligible" },
+      },
+    }, seen3),
+  });
+  assert.equal(deleteCode, 0);
+  assert.equal(seen3[0].key, "DELETE /api/connectors/whatsapp/bindings/thread-1");
 });
 
 test("CLI reports Codex WhatsApp binding status", async () => {

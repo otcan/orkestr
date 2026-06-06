@@ -375,12 +375,18 @@ function whatsappUsage() {
   return [
     "Usage:",
     "  orkestr whatsapp accounts [list] [--json]",
+    "  orkestr whatsapp accounts add [--id id] [--display-name name] [--owner user] [--json]",
     "  orkestr whatsapp accounts status <account-id> [--json]",
+    "  orkestr whatsapp accounts update <account-id> [--display-name name] [--owner user] [--json]",
     "  orkestr whatsapp accounts pair <account-id> [--phone number] [--json]",
     "  orkestr whatsapp accounts reconnect <account-id> [--json]",
+    "  orkestr whatsapp accounts delete <account-id> [--json]",
     "  orkestr whatsapp bindings [list] [--json]",
+    "  orkestr whatsapp bindings create --thread id --chat-id id --responder-account id [--send-acl mode] [--json]",
     "  orkestr whatsapp bindings status <binding-id|thread-id|chat-id> [--json]",
     "  orkestr whatsapp bindings resolve [--thread id] [--chat-id id] [--account id] [--json]",
+    "  orkestr whatsapp bindings update <binding-id|thread-id|chat-id> [--responder-account id] [--send-acl mode] [--json]",
+    "  orkestr whatsapp bindings delete <binding-id|thread-id|chat-id> [--json]",
     "  orkestr whatsapp codex status --thread <thread> [--chat-id id] [--json]",
     "  orkestr whatsapp bind-thread <thread> --name <group name> [--wa-participant jid]... [--sender-account id] [--outbound-account id] [--force-new] [--json]",
   ].join("\n");
@@ -396,6 +402,19 @@ async function whatsappAccountsCommand(argv, ctx) {
     else ctx.stdout.write(formatWhatsAppAccounts(payload.accounts || []));
     return 0;
   }
+  if (subcommand === "add" || subcommand === "create") {
+    const body = whatsappAccountBody(rest);
+    const positionalId = positional(rest)[0];
+    if (positionalId && !body.accountId) body.accountId = positionalId;
+    const payload = await requestJson("/api/connectors/whatsapp/accounts", {
+      ...ctx,
+      method: "POST",
+      body,
+    });
+    if (json) ctx.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
+    else ctx.stdout.write(formatWhatsAppAccountStatus(payload.account || {}));
+    return 0;
+  }
   if (subcommand === "status") {
     const accountId = positional(rest)[0];
     if (!accountId) throw new Error("Usage: orkestr whatsapp accounts status <account-id> [--json]");
@@ -403,6 +422,18 @@ async function whatsappAccountsCommand(argv, ctx) {
     if (json) ctx.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
     else ctx.stdout.write(formatWhatsAppAccountStatus(payload.account || {}));
     return payload.account?.ready === false ? 1 : 0;
+  }
+  if (subcommand === "update") {
+    const accountId = positional(rest)[0];
+    if (!accountId) throw new Error("Usage: orkestr whatsapp accounts update <account-id> [--display-name name] [--owner user] [--json]");
+    const payload = await requestJson(`/api/connectors/whatsapp/accounts/${encodeURIComponent(accountId)}`, {
+      ...ctx,
+      method: "PUT",
+      body: whatsappAccountBody(rest),
+    });
+    if (json) ctx.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
+    else ctx.stdout.write(formatWhatsAppAccountStatus(payload.account || {}));
+    return 0;
   }
   if (subcommand === "pair" || subcommand === "start") {
     const accountId = positional(rest)[0];
@@ -431,6 +462,17 @@ async function whatsappAccountsCommand(argv, ctx) {
     else ctx.stdout.write(formatWhatsAppAccountStatus(payload.account || {}));
     return 0;
   }
+  if (subcommand === "delete" || subcommand === "remove") {
+    const accountId = positional(rest)[0];
+    if (!accountId) throw new Error("Usage: orkestr whatsapp accounts delete <account-id> [--json]");
+    const payload = await requestJson(`/api/connectors/whatsapp/accounts/${encodeURIComponent(accountId)}`, {
+      ...ctx,
+      method: "DELETE",
+    });
+    if (json) ctx.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
+    else ctx.stdout.write(`Deleted WhatsApp account ${payload.account?.accountId || payload.account?.id || accountId}\n`);
+    return 0;
+  }
   if (subcommand === "doctor") {
     const [accounts, bindings] = await Promise.all([
       requestJson("/api/connectors/whatsapp/accounts", ctx),
@@ -449,6 +491,21 @@ async function whatsappAccountsCommand(argv, ctx) {
   throw new Error(whatsappUsage());
 }
 
+function whatsappAccountBody(argv = []) {
+  const body = {};
+  const id = flagValue(argv, "--id") || flagValue(argv, "--account-id") || flagValue(argv, "--account");
+  const displayName = flagValue(argv, "--display-name") || flagValue(argv, "--name") || flagValue(argv, "--label");
+  const ownerUserId = flagValue(argv, "--owner") || flagValue(argv, "--owner-user") || flagValue(argv, "--owner-user-id");
+  const runtimeAccountId = flagValue(argv, "--runtime-account") || flagValue(argv, "--runtime-account-id");
+  if (id) body.accountId = id;
+  if (displayName) body.displayName = displayName;
+  if (ownerUserId) body.ownerUserId = ownerUserId;
+  if (runtimeAccountId) body.runtimeAccountId = runtimeAccountId;
+  if (argv.includes("--autostart")) body.autostart = true;
+  if (argv.includes("--no-autostart")) body.autostart = false;
+  return body;
+}
+
 async function whatsappBindingsCommand(argv, ctx) {
   const subcommand = argv[0]?.startsWith("--") ? "list" : argv[0] || "list";
   const rest = subcommand === "list" && argv[0]?.startsWith("--") ? argv : argv.slice(1);
@@ -457,6 +514,21 @@ async function whatsappBindingsCommand(argv, ctx) {
     const payload = await requestJson("/api/connectors/whatsapp/bindings", ctx);
     if (json) ctx.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
     else ctx.stdout.write(formatWhatsAppBindings(payload.bindings || []));
+    return 0;
+  }
+  if (subcommand === "create" || subcommand === "add") {
+    const body = whatsappBindingBody(rest);
+    if (!body.threadId) {
+      const positionalThread = positional(rest)[0];
+      if (positionalThread) body.threadId = positionalThread;
+    }
+    const payload = await requestJson("/api/connectors/whatsapp/bindings", {
+      ...ctx,
+      method: "POST",
+      body,
+    });
+    if (json) ctx.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
+    else ctx.stdout.write(formatWhatsAppBindingStatus(payload.binding || {}));
     return 0;
   }
   if (subcommand === "status") {
@@ -480,7 +552,54 @@ async function whatsappBindingsCommand(argv, ctx) {
     else ctx.stdout.write(formatWhatsAppBindingResolution(payload));
     return payload.ok ? 0 : 1;
   }
+  if (subcommand === "update") {
+    const bindingId = positional(rest)[0];
+    if (!bindingId) throw new Error("Usage: orkestr whatsapp bindings update <binding-id|thread-id|chat-id> [--responder-account id] [--send-acl mode] [--json]");
+    const payload = await requestJson(`/api/connectors/whatsapp/bindings/${encodeURIComponent(bindingId)}`, {
+      ...ctx,
+      method: "PUT",
+      body: whatsappBindingBody(rest),
+    });
+    if (json) ctx.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
+    else ctx.stdout.write(formatWhatsAppBindingStatus(payload.binding || {}));
+    return 0;
+  }
+  if (subcommand === "delete" || subcommand === "remove") {
+    const bindingId = positional(rest)[0];
+    if (!bindingId) throw new Error("Usage: orkestr whatsapp bindings delete <binding-id|thread-id|chat-id> [--json]");
+    const payload = await requestJson(`/api/connectors/whatsapp/bindings/${encodeURIComponent(bindingId)}`, {
+      ...ctx,
+      method: "DELETE",
+    });
+    if (json) ctx.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
+    else ctx.stdout.write(formatWhatsAppBindingStatus(payload.binding || {}));
+    return 0;
+  }
   throw new Error(whatsappUsage());
+}
+
+function whatsappBindingBody(argv = []) {
+  const body = {};
+  const threadId = flagValue(argv, "--thread") || flagValue(argv, "--thread-id");
+  const chatId = flagValue(argv, "--chat-id") || flagValue(argv, "--chat");
+  const accountId = flagValue(argv, "--responder-account") || flagValue(argv, "--account") || flagValue(argv, "--account-id") || flagValue(argv, "--outbound-account");
+  const sendAcl = flagValue(argv, "--send-acl") || flagValue(argv, "--send");
+  const displayName = flagValue(argv, "--display-name") || flagValue(argv, "--name");
+  const replyPrefix = flagValue(argv, "--reply-prefix");
+  if (threadId) body.threadId = threadId;
+  if (chatId) body.chatId = chatId;
+  if (accountId) {
+    body.responderConnectorAccountId = accountId;
+    body.responderAccountId = accountId;
+  }
+  if (sendAcl) body.acl = { send: { mode: sendAcl } };
+  if (displayName) body.displayName = displayName;
+  if (replyPrefix) body.replyPrefix = replyPrefix;
+  if (argv.includes("--no-mirror")) body.mirrorToWhatsApp = false;
+  if (argv.includes("--mirror")) body.mirrorToWhatsApp = true;
+  if (argv.includes("--disabled")) body.enabled = false;
+  if (argv.includes("--enabled")) body.enabled = true;
+  return body;
 }
 
 async function whatsappCodexCommand(argv, ctx) {
@@ -558,6 +677,7 @@ function formatWhatsAppAccounts(accounts = []) {
 function formatWhatsAppAccountStatus(account = {}) {
   return [
     `WhatsApp account: ${account.accountId || account.id || "-"}`,
+    account.displayName || account.label ? `Name: ${account.displayName || account.label}` : "",
     `State: ${account.state || "-"}`,
     `Ready: ${account.ready ? "yes" : "no"}`,
     `Authenticated: ${account.authenticated ? "yes" : "no"}`,
@@ -1084,8 +1204,8 @@ Advanced:
   orkestr update rollback [--to release-id]
   orkestr settings [--json]
   orkestr codex [status|migrate] [--dry-run] [--json]
-  orkestr whatsapp accounts [list|status|pair|reconnect|doctor] [--json]
-  orkestr whatsapp bindings [list|status|resolve] [--json]
+  orkestr whatsapp accounts [list|add|status|update|pair|reconnect|delete|doctor] [--json]
+  orkestr whatsapp bindings [list|create|status|resolve|update|delete] [--json]
   orkestr whatsapp codex status --thread <thread> [--json]
   orkestr whatsapp bind-thread <thread> --name <group name> [--wa-participant jid]... [--json]
   orkestr timers [list|doctor|run <timer-id>] [--json]

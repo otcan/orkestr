@@ -1,10 +1,18 @@
-import { Body, Controller, Get, HttpCode, Param, Post, Query } from "@nestjs/common";
+import { Body, Controller, Delete, Get, HttpCode, Param, Post, Put, Query } from "@nestjs/common";
 import {
   getWhatsAppBindingStatus,
   listWhatsAppBindingStatuses,
-  listWhatsAppConnectorAccounts,
+  listPersistentWhatsAppConnectorAccounts,
+  retireWhatsAppThreadBinding,
   resolveWhatsAppBinding,
+  updateWhatsAppThreadBinding,
+  upsertWhatsAppThreadBinding,
 } from "../../../../../packages/connectors/src/whatsapp-account-bindings.js";
+import {
+  deleteWhatsAppConnectorAccount,
+  updateWhatsAppConnectorAccount,
+  upsertWhatsAppConnectorAccount,
+} from "../../../../../packages/connectors/src/whatsapp-account-registry.js";
 import { getWhatsAppStatus } from "../../../../../packages/connectors/src/whatsapp.js";
 import {
   localWhatsAppBridgeBasePath,
@@ -26,7 +34,20 @@ export class WhatsAppDiagnosticsController {
   async accounts() {
     const status = await getWhatsAppStatus();
     return {
-      accounts: listWhatsAppConnectorAccounts({ status }),
+      accounts: await listPersistentWhatsAppConnectorAccounts({ status }),
+      status,
+    };
+  }
+
+  @Post("accounts")
+  @HttpCode(201)
+  async createAccount(@Body() body: Record<string, unknown> = {}) {
+    const account = await upsertWhatsAppConnectorAccount(body, process.env);
+    const status = await getWhatsAppStatus();
+    const accounts = await listPersistentWhatsAppConnectorAccounts({ status });
+    return {
+      ok: true,
+      account: accounts.find((item) => item.accountId === account.accountId) || account,
       status,
     };
   }
@@ -34,10 +55,27 @@ export class WhatsAppDiagnosticsController {
   @Get("accounts/:accountId/status")
   async accountStatus(@Param("accountId") accountId: string) {
     const status = await getWhatsAppStatus();
-    const accounts = listWhatsAppConnectorAccounts({ status });
+    const accounts = await listPersistentWhatsAppConnectorAccounts({ status });
     const account = accounts.find((item) => item.accountId === accountId || item.id === accountId);
     if (!account) throw httpError("wa_account_missing", 404);
     return { account, status };
+  }
+
+  @Put("accounts/:accountId")
+  async updateAccount(@Param("accountId") accountId: string, @Body() body: Record<string, unknown> = {}) {
+    const account = await updateWhatsAppConnectorAccount(accountId, body, process.env);
+    const status = await getWhatsAppStatus();
+    const accounts = await listPersistentWhatsAppConnectorAccounts({ status });
+    return {
+      ok: true,
+      account: accounts.find((item) => item.accountId === account.accountId) || account,
+      status,
+    };
+  }
+
+  @Delete("accounts/:accountId")
+  async deleteAccount(@Param("accountId") accountId: string) {
+    return { ok: true, account: await deleteWhatsAppConnectorAccount(accountId, process.env) };
   }
 
   @Post("accounts/:accountId/pairing-session")
@@ -52,7 +90,7 @@ export class WhatsAppDiagnosticsController {
       authReadyTimeoutMs: Number(body.authReadyTimeoutMs || body.authTimeoutMs || 0) || undefined,
     });
     const nextStatus = await getWhatsAppStatus();
-    const account = listWhatsAppConnectorAccounts({ status: nextStatus }).find((item) => item.accountId === accountId || item.id === accountId);
+    const account = (await listPersistentWhatsAppConnectorAccounts({ status: nextStatus })).find((item) => item.accountId === accountId || item.id === accountId);
     if (!account) throw httpError("wa_account_missing", 404);
     return {
       ok: true,
@@ -74,7 +112,7 @@ export class WhatsAppDiagnosticsController {
     if (!localStatusMode(status)) throw httpError("wa_account_reconnect_not_supported_for_external_bridge", 400);
     await startLocalWhatsAppAccount(accountId, process.env, { showNotification: true });
     const nextStatus = await getWhatsAppStatus();
-    const account = listWhatsAppConnectorAccounts({ status: nextStatus }).find((item) => item.accountId === accountId || item.id === accountId);
+    const account = (await listPersistentWhatsAppConnectorAccounts({ status: nextStatus })).find((item) => item.accountId === accountId || item.id === accountId);
     if (!account) throw httpError("wa_account_missing", 404);
     return { ok: true, account };
   }
@@ -83,6 +121,19 @@ export class WhatsAppDiagnosticsController {
   async bindings() {
     const status = await getWhatsAppStatus();
     return listWhatsAppBindingStatuses({ status });
+  }
+
+  @Post("bindings")
+  @HttpCode(201)
+  async createBinding(@Body() body: Record<string, unknown> = {}) {
+    const result = await upsertWhatsAppThreadBinding(body, process.env);
+    const status = await getWhatsAppStatus();
+    const refreshed = await getWhatsAppBindingStatus(result.binding.id || result.binding.threadId, { status });
+    return {
+      ok: true,
+      thread: result.thread,
+      binding: refreshed.binding,
+    };
   }
 
   @Get("bindings/resolve")
@@ -95,6 +146,30 @@ export class WhatsAppDiagnosticsController {
   async bindingStatus(@Param("bindingId") bindingId: string) {
     const status = await getWhatsAppStatus();
     return getWhatsAppBindingStatus(bindingId, { status });
+  }
+
+  @Put("bindings/:bindingId")
+  async updateBinding(@Param("bindingId") bindingId: string, @Body() body: Record<string, unknown> = {}) {
+    const result = await updateWhatsAppThreadBinding(bindingId, body, process.env);
+    const status = await getWhatsAppStatus();
+    const refreshed = await getWhatsAppBindingStatus(result.binding.id || result.binding.threadId, { status });
+    return {
+      ok: true,
+      thread: result.thread,
+      binding: refreshed.binding,
+    };
+  }
+
+  @Delete("bindings/:bindingId")
+  async deleteBinding(@Param("bindingId") bindingId: string) {
+    const result = await retireWhatsAppThreadBinding(bindingId, process.env);
+    const status = await getWhatsAppStatus();
+    const refreshed = await getWhatsAppBindingStatus(result.binding.id || result.binding.threadId, { status });
+    return {
+      ok: true,
+      thread: result.thread,
+      binding: refreshed.binding,
+    };
   }
 
   @Get("codex/status")

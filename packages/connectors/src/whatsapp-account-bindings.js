@@ -1,7 +1,9 @@
+import { defaultWhatsAppReplyPrefix } from "../../core/src/whatsapp-defaults.js";
 import { resourceOwnerUserId } from "../../core/src/policy.js";
-import { listThreads } from "../../core/src/threads.js";
+import { getThread, listThreads, updateThread } from "../../core/src/threads.js";
 import { adminUserId, normalizeUserId } from "../../core/src/users.js";
 import { bindingAccountIds, whatsappBindingIsRouteEligible } from "./whatsapp-inbound-routing.js";
+import { readWhatsAppConnectorAccounts } from "./whatsapp-account-registry.js";
 import { localWhatsAppAccountIdsForEnv, localWhatsAppBridgeBasePath } from "./whatsapp-local-bridge.js";
 
 function pickString(...values) {
@@ -50,16 +52,19 @@ function legacyRoleAliases(accountId = "", env = process.env) {
     .map(([role]) => role);
 }
 
-function configuredAccountIds(status = {}, env = process.env) {
+function configuredAccountIds(status = {}, env = process.env, registryAccounts = []) {
   const fromStatus = Array.isArray(status.accounts)
     ? status.accounts.map((account) => pickString(account.accountId, account.id))
+    : [];
+  const fromRegistry = Array.isArray(registryAccounts)
+    ? registryAccounts.map((account) => pickString(account.accountId, account.id))
     : [];
   const fromEnv = splitList(env.ORKESTR_WHATSAPP_ACCOUNT_IDS || env.WHATSAPP_LOCAL_ACCOUNT_IDS);
   const localMode = pickString(status.mode) === "local" ||
     pickString(status.bridgeUrl) === localWhatsAppBridgeBasePath ||
     (!pickString(status.mode) && !pickString(status.bridgeUrl));
   const localDefaults = localMode ? localWhatsAppAccountIdsForEnv(env) : [];
-  return unique([...fromStatus, ...fromEnv, ...localDefaults]);
+  return unique([...fromStatus, ...fromRegistry, ...fromEnv, ...localDefaults]);
 }
 
 function statusAccountMap(status = {}) {
@@ -81,7 +86,22 @@ function accountState(account = {}, status = {}) {
   return "inactive";
 }
 
-function accountReadiness(account = {}, status = {}) {
+function accountReadiness(account = {}, status = {}, { runtimeConfigured = true } = {}) {
+  if (!runtimeConfigured) {
+    return {
+      state: "not_configured",
+      paired: false,
+      authenticated: false,
+      started: false,
+      ready: false,
+      commsReady: false,
+      sendReady: false,
+      inboundReady: false,
+      qrAvailable: false,
+      qrRequired: false,
+      nextAction: "configure_runtime_account",
+    };
+  }
   const state = accountState(account, status);
   const authenticated = Boolean(account.authenticated || account.ready || state === "authenticated" || state === "ready" || state === "paired");
   const ready = Boolean(account.ready || state === "ready" || (status.state === "paired" && authenticated));
@@ -110,14 +130,15 @@ function accountReadiness(account = {}, status = {}) {
 export function normalizeWhatsAppConnectorAccount(accountId, account = {}, { status = {}, env = process.env } = {}) {
   const id = pickString(accountId, account.accountId, account.id);
   const aliases = legacyRoleAliases(id, env);
-  const readiness = accountReadiness(account, status);
+  const runtimeConfigured = account.runtimeConfigured !== false;
+  const readiness = accountReadiness(account, status, { runtimeConfigured });
   return {
     id,
     accountId: id,
     connector: "whatsapp",
     kind: "connector_account",
     neutral: true,
-    ownerUserId: ownerUserIdForAccount(env),
+    ownerUserId: normalizeUserId(account.ownerUserId || ownerUserIdForAccount(env)),
     displayName: pickString(account.displayName, account.label, account.name, id),
     label: pickString(account.label, account.displayName, account.name, id),
     state: readiness.state,
@@ -136,19 +157,38 @@ export function normalizeWhatsAppConnectorAccount(accountId, account = {}, { sta
     loadingMessage: pickString(account.loadingMessage),
     error: pickString(account.error),
     updatedAt: pickString(account.updatedAt) || null,
-    capabilities: ["status", "send", "receive", "pair"],
-    sessionRef: id ? `whatsapp:${id}` : "",
+    capabilities: Array.isArray(account.capabilities) && account.capabilities.length ? account.capabilities : ["status", "send", "receive", "pair"],
+    sessionRef: pickString(account.sessionRef) || (id ? `whatsapp:${id}` : ""),
+    runtimeAccountId: pickString(account.runtimeAccountId, id),
+    autostart: account.autostart === true,
+    createdAt: pickString(account.createdAt) || null,
     legacyRoleAliases: aliases,
     compatibilityOnly: aliases.length > 0,
+    runtimeConfigured,
     nextAction: readiness.nextAction,
   };
 }
 
-export function listWhatsAppConnectorAccounts({ status = {}, env = process.env } = {}) {
+export function listWhatsAppConnectorAccounts({ status = {}, env = process.env, registryAccounts = [] } = {}) {
   const accountById = statusAccountMap(status);
-  return configuredAccountIds(status, env).map((accountId) =>
-    normalizeWhatsAppConnectorAccount(accountId, accountById.get(accountId) || { accountId }, { status, env })
-  );
+  const registryById = new Map((Array.isArray(registryAccounts) ? registryAccounts : [])
+    .map((account) => [pickString(account.accountId, account.id), account])
+    .filter(([accountId]) => accountId));
+  const runtimeIds = new Set(configuredAccountIds(status, env));
+  return configuredAccountIds(status, env, registryAccounts).map((accountId) => {
+    const account = {
+      ...(registryById.get(accountId) || {}),
+      ...(accountById.get(accountId) || {}),
+      accountId,
+      runtimeConfigured: runtimeIds.has(accountId),
+    };
+    return normalizeWhatsAppConnectorAccount(accountId, account, { status, env });
+  });
+}
+
+export async function listPersistentWhatsAppConnectorAccounts({ status = {}, env = process.env } = {}) {
+  const registryAccounts = await readWhatsAppConnectorAccounts(env);
+  return listWhatsAppConnectorAccounts({ status, env, registryAccounts });
 }
 
 function responderAccountIdForBinding(binding = {}) {
@@ -160,7 +200,12 @@ function bindingIdForThread(thread = {}, binding = {}) {
 }
 
 function bindingAcl(binding = {}) {
-  const sendAcl = binding.sendAcl && typeof binding.sendAcl === "object" && !Array.isArray(binding.sendAcl)
+  const existingAcl = binding.acl && typeof binding.acl === "object" && !Array.isArray(binding.acl)
+    ? binding.acl
+    : {};
+  const sendAcl = existingAcl.send && typeof existingAcl.send === "object" && !Array.isArray(existingAcl.send)
+    ? existingAcl.send
+    : binding.sendAcl && typeof binding.sendAcl === "object" && !Array.isArray(binding.sendAcl)
     ? binding.sendAcl
     : null;
   const additional = Array.isArray(binding.additionalParticipantIds) ? binding.additionalParticipantIds.filter(Boolean) : [];
@@ -173,7 +218,7 @@ function bindingAcl(binding = {}) {
   return {
     send: {
       mode: sendMode,
-      users: sendMode === "users" ? additional : [],
+      users: sendMode === "users" ? unique([...(Array.isArray(sendAcl?.users) ? sendAcl.users : []), ...additional]) : [],
     },
     read: { mode: "owner-only" },
     receive: { mode: "thread" },
@@ -195,6 +240,134 @@ function bindingDiagnostic({ binding = {}, responderAccount = null, routeEligibl
   return { state: "ready", reason: "ready", nextAction: "none" };
 }
 
+function optionalBoolean(value, fallback = false) {
+  if (value === undefined || value === null || value === "") return fallback;
+  if (typeof value === "boolean") return value;
+  return ["1", "true", "yes", "on"].includes(String(value).trim().toLowerCase());
+}
+
+function normalizeSendAcl(value, fallback = null) {
+  if (value && typeof value === "object" && !Array.isArray(value)) {
+    const mode = pickString(value.mode, fallback?.mode, "owner-only");
+    return {
+      mode,
+      users: Array.isArray(value.users) ? unique(value.users) : Array.isArray(fallback?.users) ? unique(fallback.users) : [],
+    };
+  }
+  const text = pickString(value);
+  if (text) return { mode: text, users: [] };
+  if (fallback) return {
+    mode: pickString(fallback.mode, "owner-only"),
+    users: Array.isArray(fallback.users) ? unique(fallback.users) : [],
+  };
+  return { mode: "owner-only", users: [] };
+}
+
+function normalizeBindingAcl(input = {}, current = {}) {
+  const currentAcl = bindingAcl(current);
+  return {
+    send: normalizeSendAcl(input.acl?.send || input.sendAcl, currentAcl.send),
+    read: { mode: pickString(input.acl?.read?.mode, currentAcl.read?.mode, "owner-only") },
+    receive: { mode: pickString(input.acl?.receive?.mode, currentAcl.receive?.mode, "thread") },
+    manage: { mode: pickString(input.acl?.manage?.mode, currentAcl.manage?.mode, "owner-only") },
+  };
+}
+
+function normalizeBindingPatch(thread = {}, input = {}) {
+  const current = thread?.binding && typeof thread.binding === "object" ? thread.binding : {};
+  const responderAccountId = pickString(
+    input.responderConnectorAccountId,
+    input.responderAccountId,
+    input.outboundAccountId,
+    input.accountId,
+    current.responderConnectorAccountId,
+    current.responderAccountId,
+    current.outboundAccountId,
+  );
+  const displayName = pickString(input.displayName, input.name, current.displayName, thread.bindingName, thread.name, thread.id);
+  const replyPrefix = pickString(input.replyPrefix, current.replyPrefix, defaultWhatsAppReplyPrefix());
+  const chatId = pickString(input.chatId, input.chat, current.chatId);
+  if (!chatId) {
+    const error = new Error("wa_binding_chat_required");
+    error.statusCode = 400;
+    throw error;
+  }
+  if (!responderAccountId) {
+    const error = new Error("wa_responder_account_required");
+    error.statusCode = 400;
+    throw error;
+  }
+  return {
+    ...current,
+    connector: "whatsapp",
+    id: pickString(current.id) || (thread.id ? `thread:${thread.id}:whatsapp` : ""),
+    level: pickString(input.level, current.level, "thread"),
+    chatId,
+    displayName,
+    enabled: optionalBoolean(input.enabled, current.enabled !== false),
+    routeEligible: optionalBoolean(input.routeEligible, current.routeEligible !== false),
+    responderConnectorAccountId: responderAccountId,
+    responderAccountId,
+    outboundAccountId: responderAccountId,
+    mirrorToWhatsApp: optionalBoolean(input.mirrorToWhatsApp, current.mirrorToWhatsApp !== false),
+    replyPrefix,
+    acl: normalizeBindingAcl(input, current),
+    updatedAt: new Date().toISOString(),
+  };
+}
+
+export async function upsertWhatsAppThreadBinding(input = {}, env = process.env) {
+  const threadId = pickString(input.threadId, input.thread, input.target);
+  if (!threadId) {
+    const error = new Error("thread_id_required");
+    error.statusCode = 400;
+    throw error;
+  }
+  const thread = await getThread(threadId, env);
+  if (!thread) {
+    const error = new Error("thread_not_found");
+    error.statusCode = 404;
+    throw error;
+  }
+  const binding = normalizeBindingPatch(thread, input);
+  const updated = await updateThread(thread.id, {
+    binding,
+    bindingName: binding.displayName,
+  }, env);
+  return { ok: true, thread: updated, binding: normalizeWhatsAppBinding(updated, { accounts: [], env }) };
+}
+
+export async function updateWhatsAppThreadBinding(bindingId, input = {}, env = process.env) {
+  const existing = await getWhatsAppBindingStatus(bindingId, { env });
+  return upsertWhatsAppThreadBinding({
+    ...input,
+    threadId: existing.binding.threadId,
+  }, env);
+}
+
+export async function retireWhatsAppThreadBinding(bindingId, env = process.env) {
+  const existing = await getWhatsAppBindingStatus(bindingId, { env });
+  const thread = await getThread(existing.binding.threadId, env);
+  if (!thread) {
+    const error = new Error("thread_not_found");
+    error.statusCode = 404;
+    throw error;
+  }
+  const binding = {
+    ...(thread.binding || {}),
+    enabled: false,
+    routeEligible: false,
+    retired: true,
+    retiredAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  };
+  const updated = await updateThread(thread.id, {
+    binding,
+    bindingName: pickString(binding.displayName, thread.bindingName, thread.name),
+  }, env);
+  return { ok: true, thread: updated, binding: normalizeWhatsAppBinding(updated, { accounts: [], env }) };
+}
+
 export function normalizeWhatsAppBinding(thread = {}, { accounts = [], env = process.env } = {}) {
   const binding = thread?.binding && typeof thread.binding === "object" ? thread.binding : {};
   const responderAccountId = responderAccountIdForBinding(binding);
@@ -207,7 +380,7 @@ export function normalizeWhatsAppBinding(thread = {}, { accounts = [], env = pro
     id: bindingIdForThread(thread, binding),
     bindingId: bindingIdForThread(thread, binding),
     connector: "whatsapp",
-    level: "thread",
+    level: pickString(binding.level, "thread"),
     enabled: binding.enabled !== false,
     routeEligible,
     state: diagnostic.state,
@@ -220,7 +393,7 @@ export function normalizeWhatsAppBinding(thread = {}, { accounts = [], env = pro
     displayName: pickString(binding.displayName, thread.bindingName, thread.name),
     responderAccountId,
     responderConnectorAccountId: responderAccountId || null,
-    accountIds: [...bindingAccountIds(binding)],
+    accountIds: unique([...bindingAccountIds(binding), responderAccountId]),
     legacyFields: {
       senderAccountId: pickString(binding.senderAccountId, binding.inboundAccountId) || null,
       responderAccountId: pickString(binding.responderAccountId) || null,
@@ -244,7 +417,7 @@ function whatsappThreads(threads = []) {
 }
 
 export async function listWhatsAppBindingStatuses({ env = process.env, status = {}, threads = null } = {}) {
-  const accounts = listWhatsAppConnectorAccounts({ status, env });
+  const accounts = await listPersistentWhatsAppConnectorAccounts({ status, env });
   const sourceThreads = Array.isArray(threads) ? threads : await listThreads(env);
   const bindings = whatsappThreads(sourceThreads).map((thread) => normalizeWhatsAppBinding(thread, { accounts, env }));
   return {
