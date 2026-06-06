@@ -63,7 +63,12 @@ function formatDeployResults(report = {}) {
   });
   const connectivity = Array.isArray(report.connectivity?.results) ? report.connectivity.results : [];
   const connectivityLines = connectivity.map((result) => {
-    const detail = result.error || result.method || "";
+    const detail = [
+      result.error || result.method || "",
+      result.attempts > 1 ? `attempts=${result.attempts}` : "",
+      result.recoveryAttempts ? `recovery=${result.recoveryAttempts}` : "",
+      result.lastRecoveryError ? `lastRecoveryError=${result.lastRecoveryError}` : "",
+    ].filter(Boolean).join(" ");
     return `${result.status.padEnd(18)} ${String(result.id || "-").padEnd(24)}${detail ? ` ${detail}` : ""}`;
   });
   const lines = [
@@ -123,6 +128,7 @@ async function main() {
         skipLocal: !hasFlag(argv, "--include-local"),
         connectivityAttempts: positiveInteger(process.env.ORKESTR_RELEASE_CONNECTIVITY_ATTEMPTS, 6),
         connectivityRetryDelayMs: positiveInteger(process.env.ORKESTR_RELEASE_CONNECTIVITY_RETRY_DELAY_MS, 15_000, 0),
+        connectivityRecoveryCommand: process.env.ORKESTR_RELEASE_CONNECTIVITY_RECOVERY_COMMAND || "",
         spawnImpl: spawn,
         fetchImpl: globalThis.fetch,
       }, process.env);

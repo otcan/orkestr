@@ -82,10 +82,10 @@ function interpolatedCommand(command, context) {
   return interpolateToken(command, context);
 }
 
-function spawnConnectivityCommand(instance, options = {}, env = process.env) {
+function spawnReleaseConnectivityCommand(command, instance, options = {}, env = process.env, extraEnv = {}, extraContext = {}) {
   const spawnImpl = options.spawnImpl || defaultSpawn;
-  const context = deployContext(instance, options, env);
-  const commandValue = interpolatedCommand(instance.connectivityCommand, context);
+  const context = { ...deployContext(instance, options, env), ...extraContext };
+  const commandValue = interpolatedCommand(command, context);
   const childEnv = {
     ...process.env,
     ...env,
@@ -95,7 +95,7 @@ function spawnConnectivityCommand(instance, options = {}, env = process.env) {
     ORKESTR_DEPLOY_REF: context.ref,
     ORKESTR_UPDATE_REF: context.ref,
     ORKESTR_DEPLOY_CHANNEL: context.channel,
-    ORKESTR_RELEASE_CONNECTIVITY_CHECK: "1",
+    ...extraEnv,
   };
   const cwd = instance.cwd || options.cwd || process.cwd();
   const child = Array.isArray(commandValue)
@@ -105,6 +105,49 @@ function spawnConnectivityCommand(instance, options = {}, env = process.env) {
     child.on("error", reject);
     child.on("exit", (code, signal) => resolve({ code: code ?? (signal ? 128 : 1), signal: signal || "" }));
   });
+}
+
+function spawnConnectivityCommand(instance, options = {}, env = process.env) {
+  return spawnReleaseConnectivityCommand(instance.connectivityCommand, instance, options, env, {
+    ORKESTR_RELEASE_CONNECTIVITY_CHECK: "1",
+  });
+}
+
+function connectivityRecoveryCommand(instance = {}, options = {}, env = process.env) {
+  if (commandConfigured(instance.connectivityRecoveryCommand)) return instance.connectivityRecoveryCommand;
+  return options.connectivityRecoveryCommand ??
+    options.recoveryCommand ??
+    env.ORKESTR_RELEASE_CONNECTIVITY_RECOVERY_COMMAND ??
+    [];
+}
+
+async function runConnectivityRecovery(instanceInput, result = {}, attempt = 1, options = {}, env = process.env) {
+  const instance = normalizeReleaseInstance(instanceInput, env);
+  const command = connectivityRecoveryCommand(instance, options, env);
+  if (!commandConfigured(command)) return null;
+  try {
+    const outcome = await spawnReleaseConnectivityCommand(command, instance, options, env, {
+      ORKESTR_RELEASE_CONNECTIVITY_RECOVERY: "1",
+      ORKESTR_RELEASE_CONNECTIVITY_CHECK: "0",
+      ORKESTR_RELEASE_CONNECTIVITY_ATTEMPT: String(attempt),
+      ORKESTR_RELEASE_CONNECTIVITY_NEXT_ATTEMPT: String(attempt + 1),
+      ORKESTR_RELEASE_CONNECTIVITY_ERROR: clean(result.error || ""),
+    }, {
+      attempt: String(attempt),
+      nextAttempt: String(attempt + 1),
+      error: clean(result.error || ""),
+    });
+    return {
+      status: outcome.code === 0 ? "recovered" : "failed",
+      code: outcome.code,
+      signal: outcome.signal,
+    };
+  } catch (error) {
+    return {
+      status: "failed",
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
 }
 
 async function fetchJsonWithTimeout(url, { fetchImpl = globalThis.fetch, timeoutMs = 5000 } = {}) {
@@ -262,10 +305,25 @@ async function verifyInstanceConnectivityWithRetries(instanceInput, options = {}
   const attempts = releaseConnectivityAttempts(options, env);
   const retryDelayMs = releaseConnectivityRetryDelayMs(options, env);
   let result = null;
+  let recoveryAttempts = 0;
+  let lastRecoveryError = "";
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
     result = await verifyInstanceConnectivity(instanceInput, options, env);
     if (result.status !== "connection_failed" || attempt >= attempts || !retryableConnectivityFailure(result)) {
-      return attempt > 1 ? { ...result, attempts: attempt } : result;
+      const detail = {};
+      if (attempt > 1) detail.attempts = attempt;
+      if (recoveryAttempts) detail.recoveryAttempts = recoveryAttempts;
+      if (lastRecoveryError) detail.lastRecoveryError = lastRecoveryError;
+      return Object.keys(detail).length ? { ...result, ...detail } : result;
+    }
+    const recovery = await runConnectivityRecovery(instanceInput, result, attempt, options, env);
+    if (recovery) {
+      recoveryAttempts += 1;
+      if (recovery.status === "failed") {
+        lastRecoveryError = recovery.error || `recovery_command_failed:${recovery.code ?? "unknown"}`;
+      } else {
+        lastRecoveryError = "";
+      }
     }
     await wait(retryDelayMs);
   }

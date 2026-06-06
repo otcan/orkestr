@@ -212,6 +212,12 @@ export function normalizeReleaseInstance(input = {}, env = process.env) {
       input.verifyCommand ??
       input.postDeployCheckCommand,
   );
+  const connectivityRecoveryCommand = normalizeCommand(
+    input.connectivityRecoveryCommand ??
+      input.recoveryCommand ??
+      input.postConnectivityFailureCommand ??
+      input.postDeployRecoveryCommand,
+  );
   const enabled = input.enabled === undefined ? true : boolValue(input.enabled, true);
   const releaseTrainEnabled = boolValue(
     input.releaseTrainEnabled ?? input.release_train_enabled ?? input.releaseTrain ?? labels.releaseTrainEnabled ?? labels["release-train-enabled"],
@@ -240,6 +246,7 @@ export function normalizeReleaseInstance(input = {}, env = process.env) {
     labels,
     deployCommand: command,
     connectivityCommand,
+    connectivityRecoveryCommand,
     commandEnv: normalizeCommandEnv(input.commandEnv || input.env),
     currentVersion: normalizeVersionPayload(input.currentVersion || input.version),
     lastError: clean(input.lastError || input.error),
@@ -310,6 +317,7 @@ export function publicReleaseInstance(instance = {}) {
     updateStrategy: normalized.updateStrategy,
     hasDeployCommand: commandConfigured(normalized.deployCommand),
     hasConnectivityCommand: commandConfigured(normalized.connectivityCommand),
+    hasConnectivityRecoveryCommand: commandConfigured(normalized.connectivityRecoveryCommand),
     baseUrl: normalized.baseUrl,
     healthUrl: normalized.healthUrl,
     versionUrl: normalized.versionUrl,

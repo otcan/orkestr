@@ -53,6 +53,7 @@ test("release instance broker merges local, tenant VM, and private registry targ
         baseUrl: "https://edge.example.test",
         releaseTrainEnabled: true,
         deployCommand: "deploy-edge {{ref}} {{channel}}",
+        connectivityRecoveryCommand: "recover-edge {{id}}",
       },
     ],
   });
@@ -70,6 +71,9 @@ test("release instance broker merges local, tenant VM, and private registry targ
   assert.equal(publicTenant.hasDeployCommand, true);
   assert.equal(Object.hasOwn(publicTenant, "deployCommand"), false);
   assert.equal(Object.hasOwn(publicTenant, "commandEnv"), false);
+  const publicEdge = publicReleaseInstance(instances.find((instance) => instance.id === "edge"));
+  assert.equal(publicEdge.hasConnectivityRecoveryCommand, true);
+  assert.equal(Object.hasOwn(publicEdge, "connectivityRecoveryCommand"), false);
 
   const probedUrls = [];
   const probed = await listReleaseInstances(env, {
@@ -190,6 +194,85 @@ test("release connectivity retries transient command failures", async () => {
   assert.equal(report.results[0].attempts, 2);
   assert.deepEqual(spawned.map((entry) => [entry.command, entry.args]), [
     ["check-edge", ["feed1234"]],
+    ["check-edge", ["feed1234"]],
+  ]);
+});
+
+test("release connectivity runs recovery command before retrying transient failures", async () => {
+  const spawned = [];
+  const instances = [
+    {
+      id: "edge",
+      displayName: "Edge",
+      kind: "remote-service",
+      releaseTrainEnabled: true,
+      connectivityCommand: ["check-edge", "{{ref}}"],
+      connectivityRecoveryCommand: ["recover-edge", "{{id}}", "{{attempt}}", "{{nextAttempt}}"],
+    },
+  ];
+  const report = await verifyReleaseInstanceConnectivity(instances, {
+    ref: "feed1234",
+    channel: "main",
+    connectivityAttempts: 2,
+    connectivityRetryDelayMs: 0,
+    spawnImpl(command, args, options) {
+      spawned.push({ command, args, env: options.env });
+      const child = new EventEmitter();
+      const checkCount = spawned.filter((entry) => entry.command === "check-edge").length;
+      const code = command === "check-edge" && checkCount === 1 ? 1 : 0;
+      queueMicrotask(() => child.emit("exit", code));
+      return child;
+    },
+  });
+
+  assert.equal(report.ok, true);
+  assert.equal(report.counts.connected, 1);
+  assert.equal(report.results[0].attempts, 2);
+  assert.equal(report.results[0].recoveryAttempts, 1);
+  assert.deepEqual(spawned.map((entry) => [entry.command, entry.args]), [
+    ["check-edge", ["feed1234"]],
+    ["recover-edge", ["edge", "1", "2"]],
+    ["check-edge", ["feed1234"]],
+  ]);
+  assert.equal(spawned[1].env.ORKESTR_RELEASE_CONNECTIVITY_RECOVERY, "1");
+  assert.equal(spawned[1].env.ORKESTR_RELEASE_CONNECTIVITY_ATTEMPT, "1");
+  assert.equal(spawned[1].env.ORKESTR_RELEASE_CONNECTIVITY_NEXT_ATTEMPT, "2");
+  assert.equal(spawned[1].env.ORKESTR_RELEASE_CONNECTIVITY_ERROR, "connectivity_command_failed:1");
+});
+
+test("release connectivity can use an environment recovery command", async () => {
+  const spawned = [];
+  const instances = [
+    {
+      id: "edge",
+      displayName: "Edge",
+      kind: "remote-service",
+      releaseTrainEnabled: true,
+      connectivityCommand: ["check-edge", "{{ref}}"],
+    },
+  ];
+  const report = await verifyReleaseInstanceConnectivity(instances, {
+    ref: "feed1234",
+    channel: "main",
+    connectivityAttempts: 2,
+    connectivityRetryDelayMs: 0,
+    spawnImpl(command, args, options) {
+      spawned.push({ command, args, env: options.env });
+      const child = new EventEmitter();
+      const checkCount = spawned.filter((entry) => entry.command === "check-edge").length;
+      const code = command === "check-edge" && checkCount === 1 ? 1 : 0;
+      queueMicrotask(() => child.emit("exit", code));
+      return child;
+    },
+  }, {
+    ORKESTR_RELEASE_CONNECTIVITY_RECOVERY_COMMAND: "recover-edge {{instanceId}} {{error}}",
+  });
+
+  assert.equal(report.ok, true);
+  assert.equal(report.results[0].recoveryAttempts, 1);
+  assert.deepEqual(spawned.map((entry) => [entry.command, entry.args]), [
+    ["check-edge", ["feed1234"]],
+    ["sh", ["-lc", "recover-edge edge connectivity_command_failed:1"]],
     ["check-edge", ["feed1234"]],
   ]);
 });
