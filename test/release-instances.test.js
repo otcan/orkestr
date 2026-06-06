@@ -161,6 +161,58 @@ test("release instance deploy verifies configured connectivity commands", async 
   assert.equal(spawned[1].env.ORKESTR_RELEASE_CONNECTIVITY_CHECK, "1");
 });
 
+test("release command connectivity verifies the deployed instance commit", async () => {
+  const instances = [
+    {
+      id: "edge",
+      displayName: "Edge",
+      kind: "remote-service",
+      releaseTrainEnabled: true,
+      baseUrl: "https://edge.example.test",
+      versionUrl: "https://edge.example.test/api/version",
+      connectivityCommand: ["check-edge", "{{ref}}"],
+      labels: { router: "parent-whatsapp" },
+    },
+  ];
+  const spawnOk = (command, args, options) => {
+    const child = new EventEmitter();
+    queueMicrotask(() => child.emit("exit", 0));
+    return child;
+  };
+  const okUrls = [];
+  const ok = await verifyReleaseInstanceConnectivity(instances, {
+    ref: "abcdef1234567890",
+    channel: "main",
+    spawnImpl: spawnOk,
+    fetchImpl: async (url) => {
+      okUrls.push(String(url));
+      return new Response(JSON.stringify({
+        releaseId: "main-abcdef123456",
+        commit: "abcdef1234567890",
+      }));
+    },
+  });
+
+  assert.equal(ok.ok, true);
+  assert.equal(ok.results[0].method, "command+http");
+  assert.equal(ok.results[0].commit, "abcdef1234567890");
+  assert.deepEqual(okUrls, ["https://edge.example.test/api/version"]);
+
+  const failed = await verifyReleaseInstanceConnectivity(instances, {
+    ref: "abcdef1234567890",
+    channel: "main",
+    spawnImpl: spawnOk,
+    fetchImpl: async () => new Response(JSON.stringify({
+      releaseId: "main-deadbeef0000",
+      commit: "deadbeef00000000",
+    })),
+  });
+
+  assert.equal(failed.ok, false);
+  assert.equal(failed.counts.connection_failed, 1);
+  assert.match(failed.results[0].error, /release_commit_mismatch:abcdef1234567890:deadbeef00000000/);
+});
+
 test("release connectivity check fails WhatsApp-routed instances that are not paired", async () => {
   const checkedUrls = [];
   const report = await verifyReleaseInstanceConnectivity([

@@ -41,6 +41,42 @@ function deployContext(instance = {}, options = {}, env = process.env) {
   };
 }
 
+function expectedCommit(options = {}, env = process.env) {
+  const explicit = clean(options.expectedCommit || options.commit || env.ORKESTR_DEPLOY_COMMIT || env.ORKESTR_BUILD_COMMIT);
+  if (explicit) return explicit;
+  const ref = clean(options.ref || env.ORKESTR_DEPLOY_REF || env.ORKESTR_UPDATE_REF);
+  return /^[a-f0-9]{7,40}$/i.test(ref) ? ref : "";
+}
+
+function commitsMatch(actual = "", expected = "") {
+  const left = clean(actual).toLowerCase();
+  const right = clean(expected).toLowerCase();
+  if (!right) return true;
+  if (!left) return false;
+  if (!/^[a-f0-9]{7,40}$/i.test(left) || !/^[a-f0-9]{7,40}$/i.test(right)) return left === right;
+  return left.startsWith(right) || right.startsWith(left);
+}
+
+function versionDetail(payload = {}) {
+  const git = payload?.git && typeof payload.git === "object" ? payload.git : {};
+  return {
+    releaseId: clean(payload?.releaseId),
+    commit: clean(payload?.commit || git.commit),
+  };
+}
+
+function assertExpectedVersion(instance, detail = {}, options = {}, env = process.env) {
+  const wantedCommit = expectedCommit(options, env);
+  if (wantedCommit && !commitsMatch(detail.commit, wantedCommit)) {
+    throw new Error(`release_commit_mismatch:${wantedCommit}:${detail.commit || "missing"}`);
+  }
+  const wantedReleaseId = clean(options.expectedReleaseId || options.releaseId || "");
+  if (wantedReleaseId && clean(detail.releaseId) !== wantedReleaseId) {
+    throw new Error(`release_id_mismatch:${wantedReleaseId}:${clean(detail.releaseId) || "missing"}`);
+  }
+  return connectedResult(instance, detail);
+}
+
 function interpolatedCommand(command, context) {
   if (Array.isArray(command)) return command.map((part) => interpolateToken(part, context)).filter(Boolean);
   return interpolateToken(command, context);
@@ -126,16 +162,8 @@ function whatsappStatusReady(payload = {}) {
 
 async function verifyHttpConnectivity(instance, options = {}) {
   const timeoutMs = options.connectivityTimeoutMs || options.timeoutMs || 5000;
-  const version = await fetchJsonWithTimeout(instance.versionUrl, {
-    fetchImpl: options.fetchImpl,
-    timeoutMs,
-  });
-  if (!version.ok) throw new Error(version.error || "version_probe_failed");
-  const detail = {
-    releaseId: clean(version.payload?.releaseId),
-    commit: clean(version.payload?.commit || version.payload?.git?.commit),
-  };
-  if (!releaseInstanceRequiresWhatsApp(instance)) return connectedResult(instance, { method: "http", ...detail });
+  const detail = await verifyVersionProbe(instance, options);
+  if (!releaseInstanceRequiresWhatsApp(instance)) return assertExpectedVersion(instance, { method: "http", ...detail }, options);
   const whatsappUrl = joinUrl(instance.baseUrl, "/api/connectors/whatsapp/status");
   if (!whatsappUrl) throw new Error("whatsapp_status_url_missing");
   const whatsapp = await fetchJsonWithTimeout(whatsappUrl, {
@@ -146,17 +174,36 @@ async function verifyHttpConnectivity(instance, options = {}) {
   if (!whatsappStatusReady(whatsapp.payload)) {
     throw new Error(`whatsapp_not_ready:${clean(whatsapp.payload?.state || whatsapp.payload?.status || "unknown")}`);
   }
-  return connectedResult(instance, {
+  return assertExpectedVersion(instance, {
     method: "http",
     ...detail,
     whatsapp: clean(whatsapp.payload?.state || whatsapp.payload?.status || "ready"),
+  }, options);
+}
+
+async function verifyVersionProbe(instance, options = {}) {
+  const timeoutMs = options.connectivityTimeoutMs || options.timeoutMs || 5000;
+  const version = await fetchJsonWithTimeout(instance.versionUrl, {
+    fetchImpl: options.fetchImpl,
+    timeoutMs,
   });
+  if (!version.ok) throw new Error(version.error || "version_probe_failed");
+  return versionDetail(version.payload);
 }
 
 async function verifyCommandConnectivity(instance, options = {}, env = process.env) {
   const outcome = await spawnConnectivityCommand(instance, options, env);
   if (outcome.code !== 0) throw new Error(`connectivity_command_failed:${outcome.code}`);
-  return connectedResult(instance, { method: "command", code: outcome.code, signal: outcome.signal });
+  if (!clean(instance.versionUrl)) {
+    return connectedResult(instance, { method: "command", code: outcome.code, signal: outcome.signal });
+  }
+  const detail = await verifyVersionProbe(instance, options);
+  const verified = assertExpectedVersion(instance, { method: "command+http", ...detail }, options, env);
+  return {
+    ...verified,
+    code: outcome.code,
+    signal: outcome.signal,
+  };
 }
 
 async function verifyInstanceConnectivity(instanceInput, options = {}, env = process.env) {
