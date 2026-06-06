@@ -40,6 +40,11 @@ test("WhatsApp formatting strips plan envelopes and preserves code fences", () =
 });
 
 test("WhatsApp debug footer is gated and marks progress as update", () => {
+  const defaultDisabled = appendWhatsAppDebugFooter("Done", {
+    message: { source: "codex-app-server", phase: "final_answer" },
+  });
+  assert.equal(defaultDisabled, "Done");
+
   const disabled = appendWhatsAppDebugFooter("Done", {
     env: { ORKESTR_WHATSAPP_DEBUG_FOOTER: "0" },
     message: { source: "codex-app-server", phase: "final_answer" },

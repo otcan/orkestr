@@ -85,8 +85,12 @@ export function formatWhatsAppOutboundText(value) {
 }
 
 function footerEnabled(env = process.env) {
-  const value = String(env.ORKESTR_WHATSAPP_DEBUG_FOOTER ?? "1").trim().toLowerCase();
-  return !["0", "false", "off", "no"].includes(value);
+  const value = String(env.ORKESTR_WHATSAPP_DEBUG_FOOTER ?? "0").trim().toLowerCase();
+  return ["1", "true", "on", "yes"].includes(value);
+}
+
+export function stripWhatsAppDebugFooter(text) {
+  return String(text || "").replace(/\s*\ndbg:\s*m:[^\n]*\s*$/i, "").trim();
 }
 
 function shortReasoningEffort(value) {
@@ -201,7 +205,7 @@ export function whatsappDebugFooter({ message = {}, thread = {}, messages = [], 
 }
 
 export function appendWhatsAppDebugFooter(text, options = {}) {
-  const cleanText = String(text || "").trim();
+  const cleanText = stripWhatsAppDebugFooter(text);
   if (!cleanText || !shouldAppendWhatsAppDebugFooter(options.message, options.env, options.deliveryType, options.thread)) return cleanText;
   return `${cleanText}\n\n${whatsappDebugFooter(options)}`;
 }

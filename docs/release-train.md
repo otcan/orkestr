@@ -229,7 +229,9 @@ orkestr update --release --ref <tag-or-main-or-sha> --channel <channel> --all-in
 The account gate retries longer than generic HTTP connectivity because WhatsApp
 Web sessions can take time to reattach after the service restart. Tune with
 `ORKESTR_RELEASE_WHATSAPP_ACCOUNT_ATTEMPTS` and
-`ORKESTR_RELEASE_WHATSAPP_ACCOUNT_RETRY_DELAY_MS` when needed.
+`ORKESTR_RELEASE_WHATSAPP_ACCOUNT_RETRY_DELAY_MS` when needed. If a routed
+instance uses an external bridge with slow health responses, tune the service
+environment with `ORKESTR_WHATSAPP_BRIDGE_STATUS_TIMEOUT_MS`.
 
 Versioned deploys are no-interrupt by default. On current host-native installs,
 Codex app-server runs as its own service and Orkestr talks to it through a short

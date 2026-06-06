@@ -3,6 +3,7 @@ import { appendEvent } from "../../storage/src/store.js";
 import { updateThreadMessage } from "../../core/src/threads.js";
 import { parseThreadInputCommand } from "../../core/src/thread-commands.js";
 import { whatsappBindingIsRouteEligible } from "./whatsapp-inbound-routing.js";
+import { stripWhatsAppDebugFooter } from "./whatsapp-formatting.js";
 import { shouldMirrorWhatsAppProgress, shouldMirrorWhatsAppReply } from "./whatsapp-mirror-policy.js";
 
 function pickString(...values) {
@@ -434,11 +435,15 @@ export function queuedInputWhatsAppDeliveryTarget(message, thread, state) {
 }
 
 function queueNoticePreview(message) {
-  const text = pickString(message?.text, message?.promptFile ? "message from prompt file" : "message");
+  const text = stripQueuePreviewDebugFooter(pickString(message?.text, message?.promptFile ? "message from prompt file" : "message"));
   const parsed = parseThreadInputCommand({ text });
-  const previewText = parsed.command === "interrupt" && parsed.text ? parsed.text : text;
+  const previewText = stripQueuePreviewDebugFooter(parsed.command === "interrupt" && parsed.text ? parsed.text : text);
   const normalized = previewText.replace(/\s+/g, " ").trim();
   return normalized.length > 120 ? `${normalized.slice(0, 117)}...` : normalized;
+}
+
+function stripQueuePreviewDebugFooter(text) {
+  return stripWhatsAppDebugFooter(text).replace(/\s+dbg:\s*m:[^\n]*$/i, "").trim();
 }
 
 export function formatWhatsAppQueueNotice(message, reason = "") {

@@ -107,15 +107,43 @@ export { initialQueueDeliveryState } from "./whatsapp-outbound-mirror.js";
 
 const whatsappOutboundMirrorWorker = createWhatsAppOutboundMirrorWorker();
 
+function positiveInteger(value, fallback, minimum = 1) {
+  if (value === undefined || value === null || String(value).trim() === "") return fallback;
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.max(minimum, Math.floor(parsed));
+}
+
+function whatsappBridgeStatusTimeoutMs(env = process.env) {
+  return positiveInteger(
+    pickString(
+      env.ORKESTR_WHATSAPP_BRIDGE_STATUS_TIMEOUT_MS,
+      env.WHATSAPP_BRIDGE_STATUS_TIMEOUT_MS,
+      env.ORKESTR_WHATSAPP_BRIDGE_FETCH_TIMEOUT_MS,
+      env.WHATSAPP_BRIDGE_FETCH_TIMEOUT_MS,
+    ),
+    45_000,
+    1,
+  );
+}
+
 async function fetchJson(url, fetchImpl, options = {}) {
-  const response = await fetchImpl(url, { ...options, signal: AbortSignal.timeout(2000) });
+  const { env, timeoutMs, ...fetchOptions } = options;
+  const response = await fetchImpl(url, {
+    ...fetchOptions,
+    signal: AbortSignal.timeout(positiveInteger(timeoutMs, whatsappBridgeStatusTimeoutMs(env), 1)),
+  });
   const payload = await response.json().catch(() => ({}));
   return { ok: response.ok, status: response.status, payload };
 }
 
 async function fetchOk(url, fetchImpl, options = {}) {
+  const { env, timeoutMs, ...fetchOptions } = options;
   try {
-    const response = await fetchImpl(url, { ...options, signal: AbortSignal.timeout(2000) });
+    const response = await fetchImpl(url, {
+      ...fetchOptions,
+      signal: AbortSignal.timeout(positiveInteger(timeoutMs, whatsappBridgeStatusTimeoutMs(env), 1)),
+    });
     return response.ok;
   } catch {
     return false;
@@ -241,10 +269,10 @@ function appendRemoteAttachmentFailureNotes(text = "", skipped = []) {
   ].filter((line, index) => index !== 0 || line).join("\n");
 }
 
-async function externalBridgeAccounts(bridgeUrl, healthPayload, fetchImpl, headers = {}) {
+async function externalBridgeAccounts(bridgeUrl, healthPayload, fetchImpl, headers = {}, env = process.env) {
   if (Array.isArray(healthPayload?.accounts)) return healthPayload.accounts.map(publicBridgeAccount);
   try {
-    const dashboard = await fetchJson(whatsappBridgeEndpointUrl(bridgeUrl, "/api/dashboard"), fetchImpl, { headers });
+    const dashboard = await fetchJson(whatsappBridgeEndpointUrl(bridgeUrl, "/api/dashboard"), fetchImpl, { headers, env });
     if (dashboard.ok && Array.isArray(dashboard.accounts)) return dashboard.accounts.map(publicBridgeAccount);
     if (dashboard.ok && Array.isArray(dashboard.payload?.accounts)) return dashboard.payload.accounts.map(publicBridgeAccount);
   } catch {
@@ -386,7 +414,7 @@ export async function getWhatsAppStatus(env = process.env, fetchImpl = fetch) {
   }
   const headers = bridgeAuthHeaders(config, env);
   try {
-    const health = await fetchJson(whatsappBridgeEndpointUrl(bridgeUrl, "/health"), fetchImpl, { headers });
+    const health = await fetchJson(whatsappBridgeEndpointUrl(bridgeUrl, "/health"), fetchImpl, { headers, env });
     if (!health.ok) {
       return {
         state: "failed",
@@ -397,7 +425,7 @@ export async function getWhatsAppStatus(env = process.env, fetchImpl = fetch) {
       };
     }
     if (hasReadySignal(health.payload)) {
-      const accounts = await externalBridgeAccounts(bridgeUrl, health.payload, fetchImpl, headers);
+      const accounts = await externalBridgeAccounts(bridgeUrl, health.payload, fetchImpl, headers, env);
       return {
         state: "paired",
         summary: "WhatsApp bridge is reachable and paired.",
@@ -407,8 +435,8 @@ export async function getWhatsAppStatus(env = process.env, fetchImpl = fetch) {
         qrAvailable: false,
       };
     }
-    const qrAvailable = await fetchOk(whatsappBridgeEndpointUrl(bridgeUrl, "/qr.svg"), fetchImpl, { headers });
-    const accounts = await externalBridgeAccounts(bridgeUrl, health.payload, fetchImpl, headers);
+    const qrAvailable = await fetchOk(whatsappBridgeEndpointUrl(bridgeUrl, "/qr.svg"), fetchImpl, { headers, env });
+    const accounts = await externalBridgeAccounts(bridgeUrl, health.payload, fetchImpl, headers, env);
     return {
       state: qrAvailable ? "qr_needed" : "unpaired",
       summary: qrAvailable ? "WhatsApp bridge is reachable; scan the QR code to pair." : "WhatsApp bridge is reachable but not paired.",
@@ -805,6 +833,12 @@ function mergeWhatsAppState(existing = {}, next = {}, env = process.env) {
   };
 }
 
+function comparableWhatsAppState(state = {}) {
+  const comparable = { ...(state || {}) };
+  delete comparable.updatedAt;
+  return JSON.stringify(comparable);
+}
+
 async function writeWhatsAppState(state, env) {
   const paths = dataPaths(env);
   const existing = await readJson(paths.whatsapp, {
@@ -814,7 +848,9 @@ async function writeWhatsAppState(state, env) {
     outboundIntents: [],
     outboundMirrorCursors: [],
   }).catch(() => ({}));
-  await writeJson(paths.whatsapp, mergeWhatsAppState(existing, state, env));
+  const merged = mergeWhatsAppState(existing, state, env);
+  if (comparableWhatsAppState(existing) === comparableWhatsAppState(merged)) return;
+  await writeJson(paths.whatsapp, merged);
 }
 
 async function ensureWhatsAppOutboundIntent({
@@ -954,22 +990,61 @@ async function ensureWhatsAppOutboundIntent({
 }
 
 function outboundIntentFieldMatches(intent = {}, input = {}) {
-  return pickString(intent.kind) === pickString(input.kind) &&
-    pickString(intent.deliveryType) === pickString(input.deliveryType) &&
-    pickString(intent.routerUpdateType) === pickString(input.routerUpdateType) &&
-    pickString(intent.messageId) === pickString(input.messageId) &&
-    pickString(intent.sourceMessageId) === pickString(input.sourceMessageId) &&
-    pickString(intent.chatId) === pickString(input.chatId) &&
-    pickString(intent.accountId) === pickString(input.accountId);
+  return outboundIntentFieldKey(intent) === outboundIntentFieldKey(input);
+}
+
+function outboundIntentFieldKey(input = {}) {
+  return [
+    pickString(input.kind),
+    pickString(input.deliveryType),
+    pickString(input.routerUpdateType),
+    pickString(input.messageId),
+    pickString(input.sourceMessageId),
+    pickString(input.chatId),
+    pickString(input.accountId),
+  ].join("\x1f");
+}
+
+const whatsappOutboundIntentIndexCache = new WeakMap();
+
+function outboundIntentIndexIdentity(intent = {}) {
+  return pickString(intent.intentId, outboundIntentKey(intent), intent.messageId);
+}
+
+function whatsappOutboundIntentIndex(outboundIntents = []) {
+  if (!Array.isArray(outboundIntents)) return { byIntentId: new Map(), byFields: new Map() };
+  const signature = [
+    outboundIntents.length,
+    outboundIntentIndexIdentity(outboundIntents[0]),
+    outboundIntentIndexIdentity(outboundIntents[outboundIntents.length - 1]),
+  ].join("\x1e");
+  const cached = whatsappOutboundIntentIndexCache.get(outboundIntents);
+  if (cached?.signature === signature) return cached;
+  const byIntentId = new Map();
+  const byFields = new Map();
+  for (const intent of outboundIntents) {
+    const intentId = outboundIntentIndexIdentity(intent);
+    if (intentId && !byIntentId.has(intentId)) byIntentId.set(intentId, intent);
+    const fieldKey = outboundIntentFieldKey(intent);
+    if (fieldKey && !byFields.has(fieldKey)) byFields.set(fieldKey, intent);
+  }
+  const indexed = { signature, byIntentId, byFields };
+  whatsappOutboundIntentIndexCache.set(outboundIntents, indexed);
+  return indexed;
 }
 
 function findWhatsAppOutboundIntent(outboundIntents = [], input = {}) {
   const exactIntentId = input.textKey ? outboundIntentKey(input) : "";
+  const index = whatsappOutboundIntentIndex(outboundIntents);
   if (exactIntentId) {
-    const exact = outboundIntents.find((intent) => pickString(intent.intentId, outboundIntentKey(intent)) === exactIntentId);
+    const exact = index.byIntentId.get(exactIntentId) ||
+      outboundIntents.find((intent) => pickString(intent.intentId, outboundIntentKey(intent)) === exactIntentId);
     if (exact) return exact;
   }
-  return outboundIntents.find((intent) => outboundIntentFieldMatches(intent, input)) || null;
+  const fieldKey = outboundIntentFieldKey(input);
+  return index.byFields.get(fieldKey) ||
+    outboundIntents.find((intent) => outboundIntentFieldMatches(intent, input)) ||
+    null;
 }
 
 async function skipWhatsAppOutboundCandidate({

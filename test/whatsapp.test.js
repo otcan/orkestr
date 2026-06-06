@@ -19,6 +19,7 @@ import { routedWhatsAppTypingTarget, runWithRoutedWhatsAppTyping } from "../pack
 import { createAndBindWhatsAppThreadGroup } from "../packages/connectors/src/whatsapp-thread-groups.js";
 import { prepareWhatsAppTableAttachments } from "../packages/connectors/src/whatsapp-table-attachments.js";
 import { mergeWhatsAppOutboundIntents, mergeWhatsAppOutboundMirrorCursors } from "../packages/connectors/src/whatsapp-outbound-intents.js";
+import { formatWhatsAppQueueNotice } from "../packages/connectors/src/whatsapp-outbound-mirror.js";
 import { writeConnectorConfig } from "../packages/storage/src/config.js";
 import { dataPaths, userDataPaths } from "../packages/storage/src/paths.js";
 import { listEvents } from "../packages/storage/src/store.js";
@@ -1363,6 +1364,34 @@ test("whatsapp status reports paired from health readiness", async () => {
   });
 
   assert.equal(status.state, "paired");
+});
+
+test("whatsapp status bridge timeout is configurable", async () => {
+  const timeoutHome = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-status-timeout-"));
+  const timeoutEnv = externalBridgeEnv(timeoutHome, {
+    ORKESTR_WHATSAPP_BRIDGE_STATUS_TIMEOUT_MS: "5",
+  });
+  await writeConnectorConfig("whatsapp", { bridgeMode: "external", bridgeUrl: "http://wa.local" }, timeoutEnv);
+
+  const timedOut = await getWhatsAppStatus(timeoutEnv, async (_url, options = {}) => new Promise((_resolve, reject) => {
+    options.signal?.addEventListener("abort", () => reject(options.signal.reason || new Error("aborted")), { once: true });
+  }));
+
+  assert.equal(timedOut.state, "unreachable");
+  assert.match(timedOut.error, /timeout|aborted/i);
+
+  const slowHome = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-status-slow-"));
+  const slowEnv = externalBridgeEnv(slowHome, {
+    ORKESTR_WHATSAPP_BRIDGE_STATUS_TIMEOUT_MS: "100",
+  });
+  await writeConnectorConfig("whatsapp", { bridgeMode: "external", bridgeUrl: "http://wa.local" }, slowEnv);
+
+  const slow = await getWhatsAppStatus(slowEnv, async () => {
+    await new Promise((resolve) => setTimeout(resolve, 15));
+    return response({ ok: true, ready: true });
+  });
+
+  assert.equal(slow.state, "paired");
 });
 
 test("whatsapp status discovers external bridge accounts from dashboard", async () => {
@@ -4646,6 +4675,15 @@ test("whatsapp queue notices use app-server runtime states", () => {
     sessionName: null,
     promptReady: true,
   }, { text: "wake tmux" }), "waiting_runtime_start");
+});
+
+test("whatsapp queue notices strip pasted debug footers from previews", () => {
+  const notice = formatWhatsAppQueueNotice({
+    text: "Codex compacted the conversation context.\n\ndbg: m:gpt-5.5/xh · msg:update · q:0 · load:25% · api:122% · help:/help",
+  }, "awaiting_active_turn");
+
+  assert.equal(notice, 'Queued for the next Codex turn: "Codex compacted the conversation context.".');
+  assert.doesNotMatch(notice, /dbg:/);
 });
 
 test("whatsapp delivery reports app-server active-turn queue notices", async () => {
