@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { spawn } from "node:child_process";
+import { verifyReleaseInstanceConnectivity } from "../packages/core/src/release-connectivity.js";
 import {
   deployReleaseInstances,
   listReleaseInstances,
@@ -51,18 +52,27 @@ function formatInstanceTable(instances = []) {
 
 function formatDeployResults(report = {}) {
   const results = Array.isArray(report.results) ? report.results : [];
-  if (!results.length) return "No release instances matched.";
-  return results.map((result) => {
+  const deploymentLines = results.map((result) => {
     const detail = result.reason || result.error || (result.code !== undefined ? `exit=${result.code}` : "");
     return `${result.status.padEnd(8)} ${String(result.id || "-").padEnd(24)}${detail ? ` ${detail}` : ""}`;
-  }).join("\n");
+  });
+  const connectivity = Array.isArray(report.connectivity?.results) ? report.connectivity.results : [];
+  const connectivityLines = connectivity.map((result) => {
+    const detail = result.error || result.method || "";
+    return `${result.status.padEnd(18)} ${String(result.id || "-").padEnd(24)}${detail ? ` ${detail}` : ""}`;
+  });
+  const lines = [
+    ...(deploymentLines.length ? deploymentLines : ["No release instances matched."]),
+    ...(connectivityLines.length ? ["", "Connectivity:", ...connectivityLines] : []),
+  ];
+  return lines.join("\n");
 }
 
 function usage() {
   return `Usage:
   scripts/release-instance-broker.mjs list [--probe] [--json]
   scripts/release-instance-broker.mjs plan [--ref REF] [--channel CHANNEL] [--json]
-  scripts/release-instance-broker.mjs deploy [--ref REF] [--channel CHANNEL] [--include-local] [--dry-run] [--json]
+  scripts/release-instance-broker.mjs deploy [--ref REF] [--channel CHANNEL] [--include-local] [--dry-run] [--no-connectivity-check] [--json]
 `;
 }
 
@@ -99,7 +109,20 @@ async function main() {
       dryRun: command === "plan" || hasFlag(argv, "--dry-run"),
       skipLocal: !hasFlag(argv, "--include-local"),
       spawnImpl: spawn,
+      fetchImpl: globalThis.fetch,
     }, process.env);
+    if (command === "deploy" && !hasFlag(argv, "--dry-run") && !hasFlag(argv, "--no-connectivity-check") && report.ok) {
+      report.connectivity = await verifyReleaseInstanceConnectivity(instances, {
+        ref,
+        channel,
+        skipLocal: !hasFlag(argv, "--include-local"),
+        spawnImpl: spawn,
+        fetchImpl: globalThis.fetch,
+      }, process.env);
+      report.ok = report.connectivity.ok;
+    } else {
+      report.connectivity = null;
+    }
     if (json) console.log(JSON.stringify(report, null, 2));
     else console.log(formatDeployResults(report));
     if (!report.ok) process.exitCode = 1;

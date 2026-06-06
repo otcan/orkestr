@@ -206,6 +206,12 @@ export function normalizeReleaseInstance(input = {}, env = process.env) {
   const labels = normalizeLabels(input.labels);
   const baseUrl = clean(input.baseUrl || input.url || input.publicUrl);
   const command = normalizeCommand(input.deployCommand ?? input.command ?? input.updateCommand);
+  const connectivityCommand = normalizeCommand(
+    input.connectivityCommand ??
+      input.checkCommand ??
+      input.verifyCommand ??
+      input.postDeployCheckCommand,
+  );
   const enabled = input.enabled === undefined ? true : boolValue(input.enabled, true);
   const releaseTrainEnabled = boolValue(
     input.releaseTrainEnabled ?? input.release_train_enabled ?? input.releaseTrain ?? labels.releaseTrainEnabled ?? labels["release-train-enabled"],
@@ -233,6 +239,7 @@ export function normalizeReleaseInstance(input = {}, env = process.env) {
     cwd: clean(input.cwd),
     labels,
     deployCommand: command,
+    connectivityCommand,
     commandEnv: normalizeCommandEnv(input.commandEnv || input.env),
     currentVersion: normalizeVersionPayload(input.currentVersion || input.version),
     lastError: clean(input.lastError || input.error),
@@ -302,6 +309,7 @@ export function publicReleaseInstance(instance = {}) {
     releaseTrainEnabled: normalized.releaseTrainEnabled,
     updateStrategy: normalized.updateStrategy,
     hasDeployCommand: commandConfigured(normalized.deployCommand),
+    hasConnectivityCommand: commandConfigured(normalized.connectivityCommand),
     baseUrl: normalized.baseUrl,
     healthUrl: normalized.healthUrl,
     versionUrl: normalized.versionUrl,

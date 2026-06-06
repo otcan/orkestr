@@ -7,6 +7,7 @@ import test from "node:test";
 import { startServer } from "../apps/server/src/server.js";
 import { approvePairingChallenge } from "../packages/core/src/security.js";
 import { createTenantVm } from "../packages/core/src/tenant-vm-registry.js";
+import { verifyReleaseInstanceConnectivity } from "../packages/core/src/release-connectivity.js";
 import {
   deployReleaseInstances,
   listReleaseInstances,
@@ -109,6 +110,85 @@ test("release instance broker merges local, tenant VM, and private registry targ
   assert.equal(spawned[1].command, "deploy-vm");
   assert.deepEqual(spawned[1].args, ["--ref", "abc123def456", "--channel", "main"]);
   assert.equal(spawned[1].env.ORKESTR_RELEASE_INSTANCE_ID, "vm-tenant-one");
+});
+
+test("release instance deploy verifies configured connectivity commands", async () => {
+  const spawned = [];
+  const instances = [
+    {
+      id: "local",
+      kind: "local-service",
+      releaseTrainEnabled: true,
+    },
+    {
+      id: "edge",
+      displayName: "Edge",
+      kind: "remote-service",
+      releaseTrainEnabled: true,
+      deployCommand: ["deploy-edge", "{{ref}}"],
+      connectivityCommand: ["check-edge", "{{ref}}"],
+    },
+  ];
+  const report = await deployReleaseInstances({
+    instances,
+    ref: "feed1234",
+    channel: "main",
+    spawnImpl(command, args, options) {
+      spawned.push({ command, args, env: options.env });
+      const child = new EventEmitter();
+      queueMicrotask(() => child.emit("exit", 0));
+      return child;
+    },
+  });
+  const connectivity = await verifyReleaseInstanceConnectivity(instances, {
+    ref: "feed1234",
+    channel: "main",
+    spawnImpl(command, args, options) {
+      spawned.push({ command, args, env: options.env });
+      const child = new EventEmitter();
+      queueMicrotask(() => child.emit("exit", 0));
+      return child;
+    },
+  });
+
+  assert.equal(report.ok, true);
+  assert.equal(connectivity.ok, true);
+  assert.equal(connectivity.counts.connected, 1);
+  assert.deepEqual(spawned.map((entry) => [entry.command, entry.args]), [
+    ["deploy-edge", ["feed1234"]],
+    ["check-edge", ["feed1234"]],
+  ]);
+  assert.equal(spawned[1].env.ORKESTR_RELEASE_CONNECTIVITY_CHECK, "1");
+});
+
+test("release connectivity check fails WhatsApp-routed instances that are not paired", async () => {
+  const checkedUrls = [];
+  const report = await verifyReleaseInstanceConnectivity([
+    {
+      id: "vm-orkestr-de",
+      kind: "tenant-vm",
+      releaseTrainEnabled: true,
+      baseUrl: "https://app.example.test",
+      versionUrl: "https://app.example.test/api/version",
+      labels: { router: "parent-whatsapp" },
+    },
+  ], {
+    fetchImpl: async (url) => {
+      checkedUrls.push(String(url));
+      if (String(url).endsWith("/api/version")) {
+        return new Response(JSON.stringify({ releaseId: "release-one", commit: "abc123" }));
+      }
+      return new Response(JSON.stringify({ state: "failed" }));
+    },
+  });
+
+  assert.equal(report.ok, false);
+  assert.equal(report.counts.connection_failed, 1);
+  assert.match(report.results[0].error, /whatsapp_not_ready/);
+  assert.deepEqual(checkedUrls, [
+    "https://app.example.test/api/version",
+    "https://app.example.test/api/connectors/whatsapp/status",
+  ]);
 });
 
 test("release instances API is admin-only and returns public-safe broker records", async () => {
