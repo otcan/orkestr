@@ -5,7 +5,7 @@ import path from "node:path";
 import test from "node:test";
 import { appendThreadMessage, createThread } from "../packages/core/src/threads.js";
 import { deliverWhatsAppReplies } from "../packages/connectors/src/whatsapp.js";
-import { outboundMirrorMessageSetKey } from "../packages/connectors/src/whatsapp-outbound-intents.js";
+import { outboundIntentKey, outboundMirrorMessageSetKey } from "../packages/connectors/src/whatsapp-outbound-intents.js";
 import { writeConnectorConfig } from "../packages/storage/src/config.js";
 
 function response(payload, ok = true, status = 200) {
@@ -48,11 +48,12 @@ async function createBoundThread(home, threadId) {
   return runtimeEnv;
 }
 
-async function writeCursorPast(home, threadId, cursor) {
+async function writeCursorPast(home, threadId, cursor, extraState = {}) {
   await fs.writeFile(path.join(home, "whatsapp.json"), JSON.stringify({
     outboundDeliveries: [],
     outboundIntents: [],
     inboundEvents: [],
+    ...extraState,
     outboundMirrorCursors: [{
       messageSetKey: outboundMirrorMessageSetKey({ kind: "thread", threadId }),
       kind: "thread",
@@ -209,6 +210,62 @@ test("whatsapp delivery does not recover imported transcript output after the mi
     [undefined, undefined],
   );
   assert.equal(delivery.skippedSummary.count, 0);
+});
+
+test("whatsapp delivery ignores old terminal skipped intents after the mirror cursor advanced", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-old-terminal-intent-"));
+  const runtimeEnv = await createBoundThread(home, "thread-old-terminal-intent");
+  const oldAt = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+  const parent = await appendThreadMessage("thread-old-terminal-intent", {
+    role: "user",
+    source: "whatsapp_inbound",
+    state: "completed",
+    connector: "whatsapp",
+    chatId: "chat-live-recovery",
+    accountId: "account-live-recovery",
+    text: "historical request with terminal skip",
+    createdAt: oldAt,
+  }, runtimeEnv);
+  const reply = await appendThreadMessage("thread-old-terminal-intent", {
+    role: "assistant",
+    source: "codex-app-server-import",
+    phase: "final_answer",
+    state: "completed",
+    chatId: "chat-live-recovery",
+    accountId: "account-live-recovery",
+    parentMessageId: parent.id,
+    text: "Historical answer had already been quarantined.",
+    createdAt: oldAt,
+  }, runtimeEnv);
+  const intent = {
+    status: "skipped",
+    kind: "thread",
+    deliveryType: "final",
+    threadId: "thread-old-terminal-intent",
+    messageSetKey: outboundMirrorMessageSetKey({ kind: "thread", threadId: "thread-old-terminal-intent" }),
+    messageCursor: Number(reply.cursor),
+    messageId: reply.id,
+    parentMessageId: parent.id,
+    chatId: "chat-live-recovery",
+    accountId: "account-live-recovery",
+    error: "quarantined_stale_pending_progress",
+    createdAt: oldAt,
+    updatedAt: oldAt,
+    skippedAt: oldAt,
+    lastChangedAt: oldAt,
+  };
+  intent.intentId = outboundIntentKey(intent);
+  await writeCursorPast(home, "thread-old-terminal-intent", Number(reply.cursor) + 1, {
+    outboundIntents: [intent],
+  });
+
+  const delivery = await deliverWhatsAppReplies(runtimeEnv, async () => {
+    throw new Error("old terminal skipped intent should not be retried or reported");
+  });
+
+  assert.equal(delivery.delivered.length, 0);
+  assert.equal(delivery.skippedSummary.count, 0);
+  assert.deepEqual(delivery.skipped, []);
 });
 
 test("whatsapp delivery summarizes repeated stale skipped replies with a bounded sample", async () => {

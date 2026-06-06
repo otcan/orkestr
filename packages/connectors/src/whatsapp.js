@@ -1911,6 +1911,31 @@ function whatsappOutboundMirrorCursorPassed(state = null, messageSetKey = "", me
   return Boolean(existingCursor && cursor > 0 && cursor <= Number(existingCursor.cursor || 0));
 }
 
+function whatsappTerminalIntentVisibilityWindowMs(env = process.env) {
+  const parsed = Number(env.ORKESTR_WHATSAPP_TERMINAL_INTENT_VISIBILITY_WINDOW_MS || 15 * 60 * 1000);
+  return Number.isFinite(parsed) ? Math.max(0, Math.floor(parsed)) : 15 * 60 * 1000;
+}
+
+function whatsappIntentTerminalMs(intent = {}) {
+  const ms = Date.parse(String(intent?.lastChangedAt || intent?.skippedAt || intent?.cancelledAt || intent?.updatedAt || intent?.createdAt || ""));
+  return Number.isFinite(ms) ? ms : 0;
+}
+
+function staleTerminalWhatsAppOutboundIntentPassedCursor({
+  state = null,
+  messageSetKey = "",
+  messageCursor = 0,
+  intent = null,
+  env = process.env,
+} = {}) {
+  const status = String(intent?.status || "").trim().toLowerCase();
+  if (status !== "skipped" && status !== "cancelled") return false;
+  if (!whatsappOutboundMirrorCursorPassed(state, messageSetKey, messageCursor)) return false;
+  const terminalMs = whatsappIntentTerminalMs(intent);
+  if (!terminalMs) return false;
+  return Date.now() - terminalMs > whatsappTerminalIntentVisibilityWindowMs(env);
+}
+
 export async function syncWhatsAppTypingIndicators(env = process.env, options = {}) {
   const config = await readConnectorConfig("whatsapp", env);
   if (bridgeMode(config, env) !== "local") return { ok: true, active: 0, skipped: "external_bridge" };
@@ -2315,6 +2340,7 @@ async function deliverWhatsAppRepliesOnce(env = process.env, fetchImpl = fetch) 
           chatId,
           accountId,
         });
+        if (!liveRecovery && staleTerminalWhatsAppOutboundIntentPassedCursor({ state, messageSetKey, messageCursor, intent: existingIntent, env })) continue;
         if (!liveRecovery && !existingIntent && whatsappOutboundMirrorCursorPassed(state, messageSetKey, messageCursor)) continue;
         if (!liveRecovery && !existingIntent && staleUntrackedWhatsAppProgress(message, outboundDeliveries, env)) {
           skipped.push({ agentId, threadId, messageId: message.id, reason: "stale_untracked_reply" });
@@ -2415,6 +2441,7 @@ async function deliverWhatsAppRepliesOnce(env = process.env, fetchImpl = fetch) 
         chatId,
         accountId,
       });
+      if (!liveRecovery && staleTerminalWhatsAppOutboundIntentPassedCursor({ state, messageSetKey, messageCursor, intent: existingIntent, env })) continue;
       if (!liveRecovery && !existingIntent && whatsappOutboundMirrorCursorPassed(state, messageSetKey, messageCursor)) continue;
       if (!liveRecovery && !existingIntent && staleUntrackedWhatsAppReply(message, outboundDeliveries, env)) {
         skipped.push({ agentId, threadId, messageId: message.id, reason: "stale_untracked_reply" });
