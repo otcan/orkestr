@@ -534,6 +534,16 @@ function pickString(...values) {
   return "";
 }
 
+function messageSourceRevision(message = {}) {
+  const parsed = Number(message?.revision || 1);
+  return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : 1;
+}
+
+function deliverySourceRevision(delivery = {}) {
+  const parsed = Number(delivery?.sourceRevision || 1);
+  return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : 1;
+}
+
 function messageTimeMs(message = {}) {
   const ms = Date.parse(String(message.timestamp || message.createdAt || ""));
   return Number.isFinite(ms) ? ms : 0;
@@ -1310,6 +1320,107 @@ async function skipWhatsAppOutboundCandidate({
   return { skipped: { reason: reason || "obsolete_outbound_notice" } };
 }
 
+const mutationNoticeSourceTypes = new Set(["final", "progress", "router_update"]);
+
+function latestDeliveredWhatsAppSourceRevision(outboundDeliveries = [], sourceMessageId = "") {
+  const id = pickString(sourceMessageId);
+  if (!id) return 0;
+  const delivery = [...(outboundDeliveries || [])].reverse().find((item) => {
+    const sourceId = pickString(item?.sourceMessageId, item?.messageId);
+    if (sourceId !== id) return false;
+    return mutationNoticeSourceTypes.has(pickString(item?.deliveryType).toLowerCase());
+  });
+  return delivery ? deliverySourceRevision(delivery) : 0;
+}
+
+function whatsappMutationNoticeTarget({ message = {}, parent = null, thread = null, kind = "", outboundDeliveries = [] } = {}) {
+  if (String(message?.role || "").trim().toLowerCase() !== "assistant") return null;
+  if (String(message?.state || "").trim().toLowerCase() !== "completed") return null;
+  if (!shouldMirrorWhatsAppReply(message) && !shouldMirrorWhatsAppProgress(message)) return null;
+  const whatsappOrigin =
+    parent?.connector === "whatsapp" ||
+    parent?.source === "whatsapp_inbound" ||
+    message.connector === "whatsapp" ||
+    boundThreadWhatsAppAssistantOrigin({ message, thread, kind });
+  if (!whatsappOrigin) return null;
+  const sourceRevision = messageSourceRevision(message);
+  const deliveredRevision = latestDeliveredWhatsAppSourceRevision(outboundDeliveries, message.id);
+  const deleted = Boolean(pickString(message.deletedAt));
+  if (!deleted && (!deliveredRevision || sourceRevision <= deliveredRevision)) return null;
+  const chatId = pickString(message.chatId, parent?.chatId, thread?.binding?.chatId);
+  if (!chatId) return null;
+  const accountId = kind === "thread"
+    ? pickString(thread?.binding?.responderAccountId, thread?.binding?.outboundAccountId, message.accountId, parent?.accountId)
+    : pickString(message.accountId, parent?.accountId);
+  return {
+    chatId,
+    accountId,
+    sourceRevision,
+    deliveredRevision,
+    deliveryType: deleted ? "delete_notice" : "edit_notice",
+    action: deleted ? "deleted" : "edited",
+    priorDelivery: deliveredRevision > 0,
+  };
+}
+
+function formatWhatsAppMutationNotice(message = {}, target = {}) {
+  if (target.action === "deleted") {
+    const reason = pickString(message.deleteReason);
+    return [
+      "A previous Orkestr message was deleted.",
+      "WhatsApp cannot remove the already-sent bridge copy, so this tombstone is recorded as a correction notice.",
+      ...(reason ? [`Reason: ${reason}`] : []),
+    ].join("\n");
+  }
+  const text = formatWhatsAppOutboundText(pickString(message.text));
+  return ["Correction to my previous message:", "", text].join("\n").trim();
+}
+
+async function markUnsupportedWhatsAppMutation({
+  thread,
+  kind,
+  agentId,
+  threadId,
+  message,
+  target,
+  env,
+} = {}) {
+  const job = await ensureConnectorOutboxJob({
+    tenantId: resourceOwnerUserId(thread || {}, env),
+    ownerUserId: resourceOwnerUserId(thread || {}, env),
+    connector: "whatsapp",
+    accountId: target.accountId,
+    chatId: target.chatId,
+    threadId: threadId || "",
+    agentId: agentId || "",
+    sourceEventId: pickString(message?.eventId, message?.sourceEventId, message?.id),
+    sourceMessageId: pickString(message?.id),
+    sourceRevision: String(target.sourceRevision || messageSourceRevision(message)),
+    deliveryType: target.deliveryType,
+    state: "skipped",
+    error: "unsupported_connector_action_original_not_delivered",
+    payload: {
+      action: target.action,
+      deletedAt: pickString(message?.deletedAt),
+    },
+    metadata: {
+      kind,
+      unsupportedConnectorAction: true,
+    },
+  }, env);
+  await appendEvent({
+    type: "whatsapp_outbound_mutation_skipped",
+    reason: "unsupported_connector_action_original_not_delivered",
+    outboxJobId: job.job.id,
+    agentId: agentId || null,
+    threadId: threadId || null,
+    messageId: message?.id || null,
+    chatId: target.chatId,
+    deliveryType: target.deliveryType,
+  }, env).catch(() => null);
+  return job;
+}
+
 async function sendWhatsAppOutboundCandidate(input = {}) {
   if (String(input.message?.role || "").trim().toLowerCase() === "assistant") {
     await recordRouterTraceEvent({
@@ -1493,6 +1604,7 @@ async function sendClaimedWhatsAppText({
       threadId: threadId || null,
       messageId,
       ...(sourceMessageId ? { sourceMessageId } : {}),
+      sourceRevision: messageSourceRevision(message),
       ...(parentMessageId ? { parentMessageId } : {}),
       ...(routerTraceId ? { routerTraceId } : {}),
       ...(turnId ? { turnId } : {}),
@@ -2860,6 +2972,107 @@ async function deliverWhatsAppRepliesOnce(env = process.env, fetchImpl = fetch) 
         } else if (result.failure) {
           const error = result.failure.error;
           const failure = { kind, agentId: agentId || null, threadId: threadId || null, messageId: message.id, chatId, error: error.message || String(error) };
+          failed.push(failure);
+          await appendEvent({ type: "whatsapp_outbound_failed", ...failure }, env);
+        }
+        continue;
+      }
+      const mutationParent = messages.find((entry) => entry.id === message.parentMessageId);
+      const mutationTarget = whatsappMutationNoticeTarget({
+        message,
+        parent: mutationParent,
+        thread,
+        kind,
+        outboundDeliveries,
+      });
+      if (mutationTarget) {
+        if (kind === "thread" && !threadAllowsWhatsAppMirroring(thread)) {
+          skipped.push({ agentId, threadId, messageId: message.id, reason: "mirroring_disabled" });
+          continue;
+        }
+        const deliveryId = `${message.id}:${mutationTarget.deliveryType}:${mutationTarget.sourceRevision}`;
+        if (deliveredIds.has(deliveryId)) continue;
+        if (!mutationTarget.priorDelivery) {
+          await markUnsupportedWhatsAppMutation({
+            thread,
+            kind,
+            agentId,
+            threadId,
+            message,
+            target: mutationTarget,
+            env,
+          });
+          skipped.push({
+            agentId,
+            threadId,
+            messageId: message.id,
+            reason: "unsupported_connector_action_original_not_delivered",
+          });
+          continue;
+        }
+        const noticeText = formatWhatsAppMutationNotice(message, mutationTarget);
+        const text = appendWhatsAppDebugFooter(noticeText, {
+          message,
+          thread,
+          messages,
+          deliveryType: mutationTarget.deliveryType,
+          env,
+        });
+        if (!text) {
+          skipped.push({ agentId, threadId, messageId: message.id, reason: "missing_text" });
+          continue;
+        }
+        const textKey = deliveryTextKey(mutationTarget.chatId, `${deliveryId}\n${text}`);
+        if (deliveredTextKeys.has(textKey) || batchTextKeys.has(textKey)) {
+          skipped.push({ agentId, threadId, messageId: message.id, reason: "duplicate_text" });
+          continue;
+        }
+        const result = await sendWhatsAppOutboundCandidate({
+          state,
+          outboundDeliveries,
+          outboundIntents,
+          deliveredIds,
+          deliveredTextKeys,
+          batchTextKeys,
+          messageSetKey,
+          messageCursor,
+          message,
+          parent: mutationParent,
+          thread,
+          kind,
+          deliveryType: mutationTarget.deliveryType,
+          agentId,
+          threadId,
+          messageId: deliveryId,
+          sourceMessageId: message.id,
+          parentMessageId: message.parentMessageId,
+          chatId: mutationTarget.chatId,
+          accountId: mutationTarget.accountId,
+          textKey,
+          text,
+          config,
+          env,
+          fetchImpl,
+        });
+        if (result.skipped) {
+          skipped.push({ agentId, threadId, messageId: message.id, reason: result.skipped.reason });
+          continue;
+        }
+        if (result.delivery) {
+          delivered.push(result.delivery);
+          await appendEvent({
+            type: "whatsapp_outbound_mutation_notice_delivered",
+            action: mutationTarget.action,
+            agentId: agentId || null,
+            threadId: threadId || null,
+            messageId: message.id,
+            chatId: mutationTarget.chatId,
+            deliveryType: mutationTarget.deliveryType,
+            sourceRevision: mutationTarget.sourceRevision,
+          }, env);
+        } else if (result.failure) {
+          const error = result.failure.error;
+          const failure = { kind, agentId: agentId || null, threadId: threadId || null, messageId: message.id, chatId: mutationTarget.chatId, error: error.message || String(error) };
           failed.push(failure);
           await appendEvent({ type: "whatsapp_outbound_failed", ...failure }, env);
         }
