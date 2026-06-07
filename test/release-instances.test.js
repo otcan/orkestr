@@ -524,6 +524,11 @@ test("release instances API is admin-only and returns public-safe broker records
 
     const payload = await read(await fetch(`${baseUrl}/api/release/instances`, { headers: { cookie } }));
     assert.deepEqual(payload.instances.map((instance) => instance.id), ["central-api", "remote-api"]);
+    assert.equal(payload.counts.total, 2);
+    assert.equal(payload.counts.reachable, 1);
+    assert.equal(payload.counts.down, 1);
+    assert.equal(payload.counts.downtimeSeconds, 60);
+    assert.equal(payload.counts.availabilityPercent, 50);
     const remote = payload.instances.find((instance) => instance.id === "remote-api");
     assert.equal(remote.releaseTrainEnabled, true);
     assert.equal(remote.hasDeployCommand, true);

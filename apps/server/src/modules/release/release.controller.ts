@@ -39,8 +39,21 @@ export class ReleaseController {
       const key = instance.releaseTrainEnabled ? "releaseTrainEnabled" : "releaseTrainDisabled";
       acc[key] = (acc[key] || 0) + 1;
       if (instance.hasDeployCommand) acc.withDeployCommand = (acc.withDeployCommand || 0) + 1;
+      const status = String(instance.status || "").trim().toLowerCase();
+      if (["reachable", "running", "ready", "ok", "healthy"].includes(status)) acc.reachable = (acc.reachable || 0) + 1;
+      if (["unreachable", "broken", "failed", "error", "down"].includes(status) || instance.lastError) acc.unreachable = (acc.unreachable || 0) + 1;
+      const downtimeState = String(instance.downtime?.state || "").trim().toLowerCase();
+      if (downtimeState === "up") acc.up = (acc.up || 0) + 1;
+      if (downtimeState === "down") {
+        acc.down = (acc.down || 0) + 1;
+        acc.downtimeSeconds = (acc.downtimeSeconds || 0) + Number(instance.downtime?.durationSeconds || 0);
+      }
       return acc;
     }, {});
+    counts.total = publicInstances.length;
+    counts.availabilityPercent = counts.total > 0
+      ? Math.round(((counts.reachable || 0) / counts.total) * 1000) / 10
+      : 100;
     return {
       instances: publicInstances,
       counts,

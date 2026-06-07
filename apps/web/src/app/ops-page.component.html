@@ -43,6 +43,11 @@
         <p>{{ releaseUnreachableCount() }}</p>
         <small>unreachable or erroring</small>
       </article>
+      <article class="ops-card" [class.critical]="releaseDowntimeCount() > 0">
+        <h4>Availability</h4>
+        <p>{{ releaseAvailabilityPercent() }}</p>
+        <small>{{ releaseDowntimeCount() }} down · {{ releaseDowntimeTotalLabel() }}</small>
+      </article>
       <article class="ops-card">
         <h4>Local Release</h4>
         <p>{{ opsVersion?.releaseId || opsVersion?.describe || opsVersion?.version || "unknown" }}</p>

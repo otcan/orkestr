@@ -784,7 +784,26 @@ export class OpsPageComponent implements OnInit, OnDestroy {
   }
 
   releaseUnreachableCount(): number {
-    return this.opsReleaseInstances.filter((instance) => this.releaseInstanceStatusClass(instance) === "bad").length;
+    return Number(this.opsReleaseCounts["unreachable"] || 0) || this.opsReleaseInstances.filter((instance) => this.releaseInstanceStatusClass(instance) === "bad").length;
+  }
+
+  releaseAvailabilityPercent(): string {
+    const percent = Number(this.opsReleaseCounts["availabilityPercent"]);
+    if (Number.isFinite(percent)) return `${percent}%`;
+    const total = this.brokerInstances().length;
+    if (!total) return "100%";
+    return `${Math.round(((total - this.releaseUnreachableCount()) / total) * 1000) / 10}%`;
+  }
+
+  releaseDowntimeCount(): number {
+    return Number(this.opsReleaseCounts["down"] || 0) || this.opsReleaseInstances.filter((instance) => String(instance.downtime?.state || "").toLowerCase() === "down").length;
+  }
+
+  releaseDowntimeTotalLabel(): string {
+    const seconds = Number(this.opsReleaseCounts["downtimeSeconds"] || 0);
+    if (seconds >= 3600) return `${Math.floor(seconds / 3600)}h ${Math.floor((seconds % 3600) / 60)}m`;
+    if (seconds >= 60) return `${Math.floor(seconds / 60)}m`;
+    return `${Math.max(0, seconds)}s`;
   }
 
   async planReleaseRollout(): Promise<void> {
