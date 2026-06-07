@@ -2,7 +2,7 @@ import { DatePipe } from "@angular/common";
 import { ChangeDetectorRef, Component, EventEmitter, Input, OnDestroy, OnInit, Output, inject } from "@angular/core";
 import { FormsModule } from "@angular/forms";
 import { firstValueFrom } from "rxjs";
-import { Agent, AgentTemplate, ApiService, BrowserSession, ConnectorStatus, DesktopLeaseRecord, EventRecord, OrkestrUser, OutlookOAuthPollResponse, ReleaseInstance, ReleaseInstancesResponse, SecurityChallenge, SecuritySession, SetupStatus, TimerDoctorResponse, TimerRecord, UserIdentity, UserOutlookOAuthStartResponse, VersionResponse, WatcherAlert } from "./api.service";
+import { Agent, AgentTemplate, ApiService, BrowserSession, ConnectorStatus, DesktopLeaseRecord, EventRecord, OrkestrUser, OutlookOAuthPollResponse, ReleaseInstance, ReleaseInstancesResponse, SecurityChallenge, SecuritySession, SetupStatus, TimerDoctorResponse, TimerRecord, UserIdentity, UserOutlookOAuthStartResponse, VersionResponse, WatcherAlert, WhatsAppDoctorAccount, WhatsAppDoctorBinding, WhatsAppDoctorResponse, WhatsAppOutboxJob } from "./api.service";
 import { OpsWaitlistComponent } from "./ops-waitlist.component";
 
 export type ToolsView = "system" | "broker" | "timers" | "desktops" | "models" | "settings" | "connectors" | "users" | "waitlist" | "audit";
@@ -28,6 +28,11 @@ export class OpsPageComponent implements OnInit, OnDestroy {
   opsSetup: SetupStatus | null = null;
   opsVersion: VersionResponse | null = null;
   opsWhatsApp: Record<string, unknown> | null = null;
+  opsWhatsAppDoctor: WhatsAppDoctorResponse | null = null;
+  opsWhatsAppDoctorError = "";
+  opsWhatsAppOutboxJobs: WhatsAppOutboxJob[] = [];
+  opsWhatsAppOutboxTotal = 0;
+  opsWhatsAppOutboxError = "";
   opsRuntimeBudget: Record<string, unknown> | null = null;
   opsConnectors: ConnectorStatus[] = [];
   opsReleaseInstances: ReleaseInstance[] = [];
@@ -114,12 +119,14 @@ export class OpsPageComponent implements OnInit, OnDestroy {
         this.renderNow();
       });
     try {
-      const [version, releaseInstances, watcherAlerts, setup, whatsapp, agents, templates, timers, timerDoctor, events, browsers, desktopLeases, runtimeLeases, executors, executions, system, processes, models, users, securityChallenges, securitySessions] = await Promise.allSettled([
+      const [version, releaseInstances, watcherAlerts, setup, whatsapp, whatsappDoctor, whatsappOutbox, agents, templates, timers, timerDoctor, events, browsers, desktopLeases, runtimeLeases, executors, executions, system, processes, models, users, securityChallenges, securitySessions] = await Promise.allSettled([
         firstValueFrom(this.api.version()),
         firstValueFrom(this.api.releaseInstances(true)),
         firstValueFrom(this.api.watcherAlerts(20)),
         firstValueFrom(this.api.setupStatus()),
         firstValueFrom(this.api.whatsappStatus()),
+        firstValueFrom(this.api.whatsappDoctor()),
+        firstValueFrom(this.api.whatsappOutbox({ limit: 20 })),
         firstValueFrom(this.api.agents()),
         firstValueFrom(this.api.agentTemplates()),
         firstValueFrom(this.api.timers()),
@@ -152,6 +159,22 @@ export class OpsPageComponent implements OnInit, OnDestroy {
         this.opsConnectors = setup.value.connectors || [];
       }
       if (whatsapp.status === "fulfilled") this.opsWhatsApp = whatsapp.value;
+      if (whatsappDoctor.status === "fulfilled") {
+        this.opsWhatsAppDoctor = whatsappDoctor.value;
+        this.opsWhatsAppDoctorError = "";
+      } else {
+        this.opsWhatsAppDoctor = null;
+        this.opsWhatsAppDoctorError = this.errorText(whatsappDoctor.reason);
+      }
+      if (whatsappOutbox.status === "fulfilled") {
+        this.opsWhatsAppOutboxJobs = whatsappOutbox.value.jobs || [];
+        this.opsWhatsAppOutboxTotal = Number(whatsappOutbox.value.total || whatsappOutbox.value.count || 0);
+        this.opsWhatsAppOutboxError = "";
+      } else {
+        this.opsWhatsAppOutboxJobs = [];
+        this.opsWhatsAppOutboxTotal = 0;
+        this.opsWhatsAppOutboxError = this.errorText(whatsappOutbox.reason);
+      }
       if (agents.status === "fulfilled") this.opsAgents = agents.value.agents || [];
       if (templates.status === "fulfilled") this.opsAgentTemplates = templates.value.templates || [];
       if (timers.status === "fulfilled") this.opsTimers = timers.value.timers || [];
@@ -760,6 +783,135 @@ export class OpsPageComponent implements OnInit, OnDestroy {
 
   releaseInstanceEndpoint(instance: ReleaseInstance): string {
     return String(instance.baseUrl || instance.versionUrl || instance.healthUrl || "").trim();
+  }
+
+  whatsappDoctorCount(key: string): number {
+    return Number(this.opsWhatsAppDoctor?.counts?.[key] || 0);
+  }
+
+  whatsappAccounts(): WhatsAppDoctorAccount[] {
+    return this.opsWhatsAppDoctor?.accounts || [];
+  }
+
+  whatsappReadyAccountCount(): number {
+    return this.whatsappAccounts().filter((account) => this.whatsappAccountStatusClass(account) === "ready").length;
+  }
+
+  whatsappBindings(): WhatsAppDoctorBinding[] {
+    return this.opsWhatsAppDoctor?.bindings || [];
+  }
+
+  whatsappRouteEligibleBindingCount(): number {
+    return this.whatsappBindings().filter((binding) => binding.routeEligible !== false && binding.enabled !== false).length;
+  }
+
+  visibleWhatsAppBindings(): WhatsAppDoctorBinding[] {
+    return [...this.whatsappBindings()]
+      .sort((a, b) => {
+        const aReady = this.whatsappBindingStatusClass(a) === "ready" ? 1 : 0;
+        const bReady = this.whatsappBindingStatusClass(b) === "ready" ? 1 : 0;
+        if (aReady !== bReady) return aReady - bReady;
+        return this.whatsappBindingTitle(a).localeCompare(this.whatsappBindingTitle(b));
+      })
+      .slice(0, 16);
+  }
+
+  whatsappAccountLabel(account: WhatsAppDoctorAccount): string {
+    return String(account.displayName || account.label || account.name || account.accountId || account.id || "WhatsApp account").trim();
+  }
+
+  whatsappAccountIdentity(account: WhatsAppDoctorAccount): string {
+    const phone = String(account.phoneNumber || account.phone || account.number || account.pairingPhoneNumber || "").trim();
+    return phone || "No phone number on record";
+  }
+
+  whatsappAccountStatusClass(account: WhatsAppDoctorAccount): string {
+    const state = String(account.state || "").trim().toLowerCase();
+    if (account.error || ["failed", "error", "broken", "disconnected"].includes(state)) return "bad";
+    if (account.ready || account.sendReady || account.inboundReady || state === "ready") return "ready";
+    return "";
+  }
+
+  whatsappAccountStatusLabel(account: WhatsAppDoctorAccount): string {
+    return [
+      account.state || "unknown",
+      account.ready ? "ready" : "not ready",
+      account.nextAction && account.nextAction !== "none" ? account.nextAction : "",
+    ].filter(Boolean).join(" · ");
+  }
+
+  whatsappAccountFlags(account: WhatsAppDoctorAccount): string {
+    return [
+      account.authenticated ? "authenticated" : "not authenticated",
+      account.paired ? "paired" : "not paired",
+      account.started ? "started" : "stopped",
+      account.sendReady ? "send ready" : "send blocked",
+      account.inboundReady ? "inbound ready" : "inbound blocked",
+    ].join(" · ");
+  }
+
+  whatsappAccountMeta(account: WhatsAppDoctorAccount): string {
+    return [
+      account.accountId ? `account ${account.accountId}` : "",
+      account.runtimeAccountId && account.runtimeAccountId !== account.accountId ? `runtime ${account.runtimeAccountId}` : "",
+      account.autostart ? "autostart" : "manual start",
+      account.updatedAt ? `updated ${new Date(account.updatedAt).toLocaleString()}` : "",
+    ].filter(Boolean).join(" · ");
+  }
+
+  whatsappBindingTitle(binding: WhatsAppDoctorBinding): string {
+    return String(binding.displayName || binding.threadName || binding.chatId || binding.bindingId || binding.id || "WhatsApp binding").trim();
+  }
+
+  whatsappBindingStatusClass(binding: WhatsAppDoctorBinding): string {
+    const state = String(binding.state || "").trim().toLowerCase();
+    if (binding.enabled === false || binding.routeEligible === false || binding.mirrorToWhatsApp === false) return "";
+    if (state === "ready") return "ready";
+    if (state || binding.reason) return "bad";
+    return "";
+  }
+
+  whatsappBindingStatusLabel(binding: WhatsAppDoctorBinding): string {
+    return [
+      binding.state || "unknown",
+      binding.reason || "",
+      binding.enabled === false ? "disabled" : "",
+      binding.routeEligible === false ? "not routable" : "routable",
+      binding.mirrorToWhatsApp === false ? "mirror off" : "mirror on",
+    ].filter(Boolean).join(" · ");
+  }
+
+  whatsappBindingMeta(binding: WhatsAppDoctorBinding): string {
+    return [
+      binding.threadId ? `thread ${binding.threadId}` : "",
+      binding.chatId ? `chat ${binding.chatId}` : "",
+      binding.responderAccountId || binding.responderConnectorAccountId ? `account ${binding.responderAccountId || binding.responderConnectorAccountId}` : "",
+      binding.accountIds?.length ? `allowed ${binding.accountIds.join(", ")}` : "",
+    ].filter(Boolean).join(" · ");
+  }
+
+  whatsappOutboxStateClass(job: WhatsAppOutboxJob): string {
+    const state = String(job.state || "").trim().toLowerCase();
+    if (["delivered", "skipped", "suppressed"].includes(state)) return "ready";
+    if (["failed", "dead", "dead_letter", "dead-letter", "failed_terminal"].includes(state)) return "bad";
+    return "";
+  }
+
+  whatsappOutboxTitle(job: WhatsAppOutboxJob): string {
+    return [
+      job.deliveryType || "message",
+      job.state || "unknown",
+      job.accountId ? `via ${job.accountId}` : "",
+    ].filter(Boolean).join(" · ");
+  }
+
+  whatsappOutboxMeta(job: WhatsAppOutboxJob): string {
+    return [
+      job.threadId ? `thread ${job.threadId}` : "",
+      job.chatId ? `chat ${job.chatId}` : "",
+      Number.isFinite(Number(job.attemptCount)) ? `${job.attemptCount} attempt${Number(job.attemptCount) === 1 ? "" : "s"}` : "",
+      job.updatedAt ? `updated ${new Date(job.updatedAt).toLocaleString()}` : "",
+    ].filter(Boolean).join(" · ");
   }
 
   watcherAlertStatusClass(alert: WatcherAlert): string {

@@ -973,6 +973,56 @@ export interface WhatsAppOutboxActionResponse {
   count?: number;
 }
 
+export interface WhatsAppDoctorAccount extends WhatsAppAccount {
+  authenticated?: boolean;
+  paired?: boolean;
+  started?: boolean;
+  commsReady?: boolean;
+  sendReady?: boolean;
+  inboundReady?: boolean;
+  autostart?: boolean;
+  runtimeAccountId?: string;
+  pairingPhoneNumber?: string;
+  phoneNumber?: string;
+  phone?: string;
+  number?: string;
+  nextAction?: string;
+  updatedAt?: string | null;
+  error?: string;
+}
+
+export interface WhatsAppDoctorBinding {
+  id?: string;
+  bindingId?: string;
+  threadId?: string;
+  threadName?: string;
+  displayName?: string;
+  chatId?: string;
+  state?: string;
+  reason?: string;
+  nextAction?: string;
+  enabled?: boolean;
+  routeEligible?: boolean;
+  mirrorToWhatsApp?: boolean;
+  responderAccountId?: string;
+  responderConnectorAccountId?: string;
+  accountIds?: string[];
+  updatedAt?: string;
+  lastEvaluationAt?: string;
+  [key: string]: unknown;
+}
+
+export interface WhatsAppDoctorResponse {
+  ok?: boolean;
+  status?: string;
+  summary?: string;
+  accountId?: string;
+  counts?: Record<string, number>;
+  accounts?: WhatsAppDoctorAccount[];
+  bindings?: WhatsAppDoctorBinding[];
+  checks?: Array<Record<string, unknown>>;
+}
+
 export interface ThreadAttachResponse {
   ok: boolean;
   attachable?: boolean;
@@ -1958,10 +2008,17 @@ export class ApiService {
     return this.http.get<RouterTraceDetailResponse>(this.api(`/router-traces/${encodeURIComponent(id)}`));
   }
 
-  whatsappOutbox(options: { threadId?: string; state?: string; limit?: number } = {}): Observable<WhatsAppOutboxListResponse> {
+  whatsappDoctor(): Observable<WhatsAppDoctorResponse> {
+    return this.http.get<WhatsAppDoctorResponse>(this.api("/connectors/whatsapp/doctor"));
+  }
+
+  whatsappOutbox(options: { threadId?: string; state?: string; accountId?: string; chatId?: string; deliveryType?: string; limit?: number } = {}): Observable<WhatsAppOutboxListResponse> {
     const query = new URLSearchParams();
     if (options.threadId) query.set("threadId", options.threadId);
     if (options.state) query.set("state", options.state);
+    if (options.accountId) query.set("accountId", options.accountId);
+    if (options.chatId) query.set("chatId", options.chatId);
+    if (options.deliveryType) query.set("deliveryType", options.deliveryType);
     if (options.limit) query.set("limit", String(options.limit));
     const suffix = query.toString() ? `?${query.toString()}` : "";
     return this.http.get<WhatsAppOutboxListResponse>(this.api(`/connectors/whatsapp/outbox${suffix}`));

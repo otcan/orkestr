@@ -53,6 +53,21 @@
         <p>{{ opsReleaseGeneratedAt ? (opsReleaseGeneratedAt | date: "HH:mm:ss") : "--" }}</p>
         <small>{{ opsWatcherAlerts.length }} recent alerts</small>
       </article>
+      <article class="ops-card" [class.critical]="whatsappDoctorCount('errors') > 0 || opsWhatsAppDoctorError">
+        <h4>WhatsApp Accounts</h4>
+        <p>{{ whatsappReadyAccountCount() }} / {{ whatsappDoctorCount("accounts") || whatsappAccounts().length }}</p>
+        <small>{{ opsWhatsAppDoctor?.summary || objectValue(opsWhatsApp, "summary") || "doctor not loaded" }}</small>
+      </article>
+      <article class="ops-card">
+        <h4>WA Bindings</h4>
+        <p>{{ whatsappRouteEligibleBindingCount() }} / {{ whatsappDoctorCount("bindings") || whatsappBindings().length }}</p>
+        <small>route eligible WhatsApp chats</small>
+      </article>
+      <article class="ops-card" [class.critical]="opsWhatsAppOutboxError">
+        <h4>Outbox</h4>
+        <p>{{ opsWhatsAppOutboxTotal }}</p>
+        <small>{{ opsWhatsAppOutboxJobs.length }} latest delivery records loaded</small>
+      </article>
     </div>
     @if (opsReleaseError) {
       <div class="notice error">{{ opsReleaseError }}</div>
@@ -60,25 +75,97 @@
     @if (opsWatcherAlertsError) {
       <div class="notice error">{{ opsWatcherAlertsError }}</div>
     }
-    <div class="compact-list">
-      @for (instance of opsReleaseInstances; track instance.id) {
-        <article class="compact-row">
-          <strong>{{ releaseInstanceLabel(instance) }}</strong>
-          <span [class.ready]="releaseInstanceStatusClass(instance) === 'ready'" [class.bad]="releaseInstanceStatusClass(instance) === 'bad'">
-            {{ instance.status || "unknown" }} · {{ releaseInstanceRolloutLabel(instance) }}
-          </span>
-          <p>{{ releaseInstanceVersion(instance) }} @if (releaseInstanceCommit(instance)) { · {{ releaseInstanceCommit(instance) }} }</p>
-          <small>{{ releaseInstanceMeta(instance) }}</small>
-          @if (releaseInstanceEndpoint(instance)) {
-            <small>{{ releaseInstanceEndpoint(instance) }}</small>
+    @if (opsWhatsAppDoctorError) {
+      <div class="notice error">{{ opsWhatsAppDoctorError }}</div>
+    }
+    @if (opsWhatsAppOutboxError) {
+      <div class="notice error">{{ opsWhatsAppOutboxError }}</div>
+    }
+    <div class="ops-columns">
+      <section>
+        <h4>Instances</h4>
+        <div class="compact-list">
+          @for (instance of opsReleaseInstances; track instance.id) {
+            <article class="compact-row">
+              <strong>{{ releaseInstanceLabel(instance) }}</strong>
+              <span [class.ready]="releaseInstanceStatusClass(instance) === 'ready'" [class.bad]="releaseInstanceStatusClass(instance) === 'bad'">
+                {{ instance.status || "unknown" }} · {{ releaseInstanceRolloutLabel(instance) }}
+              </span>
+              <p>{{ releaseInstanceVersion(instance) }} @if (releaseInstanceCommit(instance)) { · {{ releaseInstanceCommit(instance) }} }</p>
+              <small>{{ releaseInstanceMeta(instance) }}</small>
+              @if (releaseInstanceEndpoint(instance)) {
+                <small>{{ releaseInstanceEndpoint(instance) }}</small>
+              }
+              @if (instance.lastError) {
+                <small>{{ instance.lastError }}</small>
+              }
+            </article>
+          } @empty {
+            <p class="empty">No Broker instances loaded.</p>
           }
-          @if (instance.lastError) {
-            <small>{{ instance.lastError }}</small>
+        </div>
+      </section>
+      <section>
+        <h4>WhatsApp Accounts</h4>
+        <div class="compact-list">
+          @for (account of whatsappAccounts(); track account.accountId || account.id) {
+            <article class="compact-row">
+              <strong>{{ whatsappAccountLabel(account) }}</strong>
+              <span [class.ready]="whatsappAccountStatusClass(account) === 'ready'" [class.bad]="whatsappAccountStatusClass(account) === 'bad'">
+                {{ whatsappAccountStatusLabel(account) }}
+              </span>
+              <p>{{ whatsappAccountIdentity(account) }}</p>
+              <small>{{ whatsappAccountFlags(account) }}</small>
+              <small>{{ whatsappAccountMeta(account) }}</small>
+              @if (account.error) {
+                <small>{{ account.error }}</small>
+              }
+            </article>
+          } @empty {
+            <p class="empty">No WhatsApp account diagnostics loaded.</p>
           }
-        </article>
-      } @empty {
-        <p class="empty">No Broker instances loaded.</p>
-      }
+        </div>
+      </section>
+    </div>
+    <div class="ops-columns">
+      <section>
+        <h4>WhatsApp Bindings</h4>
+        <div class="compact-list">
+          @for (binding of visibleWhatsAppBindings(); track binding.bindingId || binding.id || binding.chatId) {
+            <article class="compact-row">
+              <strong>{{ whatsappBindingTitle(binding) }}</strong>
+              <span [class.ready]="whatsappBindingStatusClass(binding) === 'ready'" [class.bad]="whatsappBindingStatusClass(binding) === 'bad'">
+                {{ whatsappBindingStatusLabel(binding) }}
+              </span>
+              <small>{{ whatsappBindingMeta(binding) }}</small>
+              @if (binding.lastEvaluationAt) {
+                <small>evaluated {{ binding.lastEvaluationAt | date: "MMM d, HH:mm:ss" }}</small>
+              }
+            </article>
+          } @empty {
+            <p class="empty">No WhatsApp bindings loaded.</p>
+          }
+        </div>
+      </section>
+      <section>
+        <h4>Latest Outbox</h4>
+        <div class="compact-list">
+          @for (job of opsWhatsAppOutboxJobs; track job.id) {
+            <article class="compact-row">
+              <strong>{{ whatsappOutboxTitle(job) }}</strong>
+              <span [class.ready]="whatsappOutboxStateClass(job) === 'ready'" [class.bad]="whatsappOutboxStateClass(job) === 'bad'">
+                {{ job.state || "unknown" }} · {{ job.updatedAt | date: "MMM d, HH:mm:ss" }}
+              </span>
+              <small>{{ whatsappOutboxMeta(job) }}</small>
+              @if (job.error) {
+                <small>{{ job.error }}</small>
+              }
+            </article>
+          } @empty {
+            <p class="empty">No WhatsApp outbox records loaded.</p>
+          }
+        </div>
+      </section>
     </div>
     <div class="ops-columns">
       <section>

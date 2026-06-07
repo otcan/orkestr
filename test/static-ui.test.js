@@ -124,12 +124,21 @@ test("ops page exposes release broker inventory", async () => {
 
   assert.match(api, /releaseInstances\(probe = true\)/);
   assert.match(api, /watcherAlerts\(limit = 20\)/);
+  assert.match(api, /interface WhatsAppDoctorResponse/);
+  assert.match(api, /whatsappDoctor\(\)/);
   assert.match(component, /opsReleaseInstances: ReleaseInstance\[\]/);
   assert.match(component, /opsWatcherAlerts: WatcherAlert\[\]/);
+  assert.match(component, /opsWhatsAppDoctor: WhatsAppDoctorResponse \| null = null/);
+  assert.match(component, /opsWhatsAppOutboxJobs: WhatsAppOutboxJob\[\] = \[\]/);
   assert.match(component, /releaseInstanceVersion\(instance: ReleaseInstance\)/);
   assert.match(component, /watcherAlertTitle\(alert: WatcherAlert\)/);
+  assert.match(component, /whatsappAccountIdentity\(account: WhatsAppDoctorAccount\)/);
+  assert.match(component, /visibleWhatsAppBindings\(\): WhatsAppDoctorBinding\[\]/);
   assert.match(template, /toolsView === 'broker'/);
   assert.match(template, /releaseInstanceRolloutLabel\(instance\)/);
+  assert.match(template, /WhatsApp Accounts/);
+  assert.match(template, /WhatsApp Bindings/);
+  assert.match(template, /Latest Outbox/);
   assert.match(template, /Recent Alerts/);
 });
 
@@ -383,7 +392,7 @@ test("thread delivery panel exposes admin WhatsApp outbox operator controls", as
   const styles = await fs.readFile("apps/web/src/styles.css", "utf8");
 
   assert.match(api, /interface WhatsAppOutboxJob/);
-  assert.match(api, /whatsappOutbox\(options: \{ threadId\?: string; state\?: string; limit\?: number \} = \{\}\)/);
+  assert.match(api, /whatsappOutbox\(options: \{ threadId\?: string; state\?: string; accountId\?: string; chatId\?: string; deliveryType\?: string; limit\?: number \} = \{\}\)/);
   assert.match(api, /whatsappOutboxAction\(jobId: string, action: string/);
   assert.match(component, /deliveryOutboxJobs: WhatsAppOutboxJob\[\] = \[\]/);
   assert.match(component, /this\.api\.whatsappOutbox\(\{ threadId: thread\.id, limit: 50 \}\)/);
