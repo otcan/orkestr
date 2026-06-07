@@ -589,6 +589,96 @@ test("CLI prints non-secret runtime settings from local state", async () => {
   assert.equal(payload.settings.codex.permissionPrompts.alwaysApprove.requiresExplicitScope, true);
 });
 
+test("CLI manages secure input secrets without echoing values", async () => {
+  const stdout = capture();
+  const seen = [];
+  const code = await runCli(["secret", "set", "openai/api-key", "--value", "super-secret-value", "--json"], {
+    stdout,
+    stderr: capture(),
+    fetchImpl: fakeFetch({
+      "POST /api/secure-input/secrets": {
+        ok: true,
+        secret: {
+          handle: "secret://user/admin/openai/api-key",
+          scope: "user",
+          ownerUserId: "admin",
+          status: "configured",
+          updatedAt: "2026-06-07T12:00:00.000Z",
+        },
+      },
+    }, seen),
+  });
+
+  assert.equal(code, 0);
+  assert.equal(seen[0].key, "POST /api/secure-input/secrets");
+  assert.deepEqual(seen[0].body, {
+    scope: "user",
+    name: "openai/api-key",
+    value: "super-secret-value",
+  });
+  assert.equal(stdout.text().includes("super-secret-value"), false);
+  assert.equal(JSON.parse(stdout.text()).secret.handle, "secret://user/admin/openai/api-key");
+
+  const listStdout = capture();
+  const listSeen = [];
+  const listCode = await runCli(["secret", "list", "--global"], {
+    stdout: listStdout,
+    stderr: capture(),
+    fetchImpl: fakeFetch({
+      "GET /api/secure-input/secrets": {
+        ok: true,
+        secrets: [{ handle: "secret://global/openai/api-key", scope: "global", status: "configured" }],
+      },
+    }, listSeen),
+  });
+  assert.equal(listCode, 0);
+  assert.equal(listSeen[0].search, "?scope=global");
+  assert.match(listStdout.text(), /secret:\/\/global\/openai\/api-key/);
+
+  const deleteStdout = capture();
+  const deleteSeen = [];
+  const deleteCode = await runCli(["secret", "delete", "openai/api-key", "--user", "alice"], {
+    stdout: deleteStdout,
+    stderr: capture(),
+    fetchImpl: fakeFetch({
+      "DELETE /api/secure-input/secrets/openai%2Fapi-key": {
+        ok: true,
+        secret: { handle: "secret://user/alice/openai/api-key" },
+      },
+    }, deleteSeen),
+  });
+  assert.equal(deleteCode, 0);
+  assert.equal(deleteSeen[0].search, "?scope=user&userId=alice");
+  assert.match(deleteStdout.text(), /secret:\/\/user\/alice\/openai\/api-key/);
+
+  const ttyStdout = capture();
+  const ttySeen = [];
+  const ttyCode = await runCli(["secret", "set", "gmail/client-secret", "--user", "alice", "--json"], {
+    stdout: ttyStdout,
+    stderr: capture(),
+    readSecretValue: async () => "tty-secret-value",
+    fetchImpl: fakeFetch({
+      "POST /api/secure-input/secrets": {
+        ok: true,
+        secret: {
+          handle: "secret://user/alice/gmail/client-secret",
+          scope: "user",
+          ownerUserId: "alice",
+          status: "configured",
+        },
+      },
+    }, ttySeen),
+  });
+  assert.equal(ttyCode, 0);
+  assert.deepEqual(ttySeen[0].body, {
+    scope: "user",
+    userId: "alice",
+    name: "gmail/client-secret",
+    value: "tty-secret-value",
+  });
+  assert.equal(ttyStdout.text().includes("tty-secret-value"), false);
+});
+
 test("CLI lists timers from the public API", async () => {
   const stdout = capture();
   const code = await runCli(["timers"], {
@@ -934,6 +1024,143 @@ test("CLI starts a WhatsApp account pairing session", async () => {
   assert.equal(JSON.parse(stdout.text()).pairing.qrRequired, true);
 });
 
+test("CLI prints WhatsApp phone pairing codes in text mode", async () => {
+  const stdout = capture();
+  const seen = [];
+  const code = await runCli(["whatsapp", "accounts", "pair", "neutral-1", "--phone", "+491234"], {
+    stdout,
+    stderr: capture(),
+    fetchImpl: fakeFetch({
+      "POST /api/connectors/whatsapp/accounts/neutral-1/pairing-session": {
+        ok: true,
+        account: { accountId: "neutral-1", state: "pairing_code", pairingCode: "123-45678", pairingPhoneNumber: "***1234", nextAction: "enter_pairing_code" },
+        pairing: { state: "pairing_code", pairingCode: "123-45678", pairingPhoneNumber: "***1234", qrRequired: false, qrAvailable: false, nextAction: "enter_pairing_code" },
+      },
+    }, seen),
+  });
+
+  assert.equal(code, 0);
+  assert.equal(seen[0].key, "POST /api/connectors/whatsapp/accounts/neutral-1/pairing-session");
+  assert.match(stdout.text(), /Code: 123-45678/);
+  assert.match(stdout.text(), /Phone: \*\*\*1234/);
+  assert.match(stdout.text(), /Next: enter_pairing_code/);
+});
+
+test("CLI disconnects WhatsApp accounts through the lifecycle API", async () => {
+  const stdout = capture();
+  const seen = [];
+  const code = await runCli(["whatsapp", "accounts", "disconnect", "neutral-1", "--json"], {
+    stdout,
+    stderr: capture(),
+    fetchImpl: fakeFetch({
+      "POST /api/connectors/whatsapp/accounts/neutral-1/disconnect": {
+        ok: true,
+        account: { accountId: "neutral-1", state: "idle", ready: false },
+      },
+    }, seen),
+  });
+
+  assert.equal(code, 0);
+  assert.equal(seen[0].key, "POST /api/connectors/whatsapp/accounts/neutral-1/disconnect");
+  assert.equal(JSON.parse(stdout.text()).account.state, "idle");
+});
+
+test("CLI lists WhatsApp connector outbox jobs", async () => {
+  const stdout = capture();
+  const seen = [];
+  const code = await runCli(["whatsapp", "outbox", "--state", "failed_retryable", "--tenant", "tenant-a"], {
+    stdout,
+    stderr: capture(),
+    fetchImpl: fakeFetch({
+      "GET /api/connectors/whatsapp/outbox": {
+        ok: true,
+        jobs: [
+          { id: "co_1", state: "failed_retryable", tenantId: "tenant-a", accountId: "wa-1", chatId: "chat-1", threadId: "thread-1", deliveryType: "final", updatedAt: "2026-06-07T12:00:00.000Z", error: "bridge_down" },
+        ],
+      },
+    }, seen),
+  });
+
+  assert.equal(code, 0);
+  assert.equal(seen[0].key, "GET /api/connectors/whatsapp/outbox");
+  assert.equal(seen[0].search, "?state=failed_retryable&tenantId=tenant-a");
+  assert.match(stdout.text(), /co_1/);
+  assert.match(stdout.text(), /failed_retryable/);
+});
+
+test("CLI applies WhatsApp connector outbox actions", async () => {
+  const stdout = capture();
+  const seen = [];
+  const code = await runCli(["whatsapp", "outbox", "replay", "co_1", "--reason", "operator replay"], {
+    stdout,
+    stderr: capture(),
+    fetchImpl: fakeFetch({
+      "POST /api/connectors/whatsapp/outbox/co_1/replay": {
+        ok: true,
+        action: "replay",
+        previousState: "delivered",
+        job: { id: "co_1", state: "pending" },
+        whatsapp: { ok: true, matchedIntents: 1, removedDeliveries: 1 },
+      },
+    }, seen),
+  });
+
+  assert.equal(code, 0);
+  assert.equal(seen[0].key, "POST /api/connectors/whatsapp/outbox/co_1/replay");
+  assert.deepEqual(seen[0].body, { reason: "operator replay" });
+  assert.match(stdout.text(), /delivered -> pending/);
+  assert.match(stdout.text(), /intents=1/);
+});
+
+test("CLI applies bulk WhatsApp connector outbox actions", async () => {
+  const stdout = capture();
+  const seen = [];
+  const code = await runCli(["whatsapp", "outbox", "suppress", "co_1", "co_2", "--reason", "stale"], {
+    stdout,
+    stderr: capture(),
+    fetchImpl: fakeFetch({
+      "POST /api/connectors/whatsapp/outbox/actions": {
+        ok: true,
+        action: "suppress",
+        count: 2,
+        results: [
+          { ok: true, action: "suppress", previousState: "pending", job: { id: "co_1", state: "suppressed" }, whatsapp: { matchedIntents: 1, removedDeliveries: 0 } },
+          { ok: true, action: "suppress", previousState: "failed_retryable", job: { id: "co_2", state: "suppressed" }, whatsapp: { matchedIntents: 0, removedDeliveries: 0 } },
+        ],
+      },
+    }, seen),
+  });
+
+  assert.equal(code, 0);
+  assert.equal(seen[0].key, "POST /api/connectors/whatsapp/outbox/actions");
+  assert.deepEqual(seen[0].body, { reason: "stale", action: "suppress", jobIds: ["co_1", "co_2"] });
+  assert.match(stdout.text(), /co_1/);
+  assert.match(stdout.text(), /co_2/);
+});
+
+test("CLI doctors WhatsApp accounts through the lifecycle API", async () => {
+  const stdout = capture();
+  const seen = [];
+  const code = await runCli(["whatsapp", "doctor", "--account", "neutral-1", "--json"], {
+    stdout,
+    stderr: capture(),
+    fetchImpl: fakeFetch({
+      "GET /api/connectors/whatsapp/doctor": {
+        ok: true,
+        status: "ok",
+        counts: { ok: 2, warnings: 0, errors: 0 },
+        accounts: [{ accountId: "neutral-1", ready: true }],
+        bindings: [{ id: "thread:thread-1:whatsapp", state: "ready" }],
+      },
+    }, seen),
+  });
+
+  assert.equal(code, 0);
+  assert.equal(seen[0].key, "GET /api/connectors/whatsapp/doctor");
+  assert.equal(seen[0].search, "?account=neutral-1");
+  assert.equal(JSON.parse(stdout.text()).status, "ok");
+});
+
 test("CLI adds and updates neutral WhatsApp accounts", async () => {
   const stdout = capture();
   const seen = [];
@@ -998,6 +1225,25 @@ test("CLI resolves active WhatsApp bindings", async () => {
   assert.equal(seen[0].search, "?thread=thread-1");
   assert.match(stdout.text(), /thread:thread-1:whatsapp/);
   assert.match(stdout.text(), /Responder account: neutral-1/);
+});
+
+test("CLI filters active WhatsApp binding lists", async () => {
+  const stdout = capture();
+  const seen = [];
+  const code = await runCli(["whatsapp", "bindings", "list", "--thread", "thread-1", "--user", "alice", "--json"], {
+    stdout,
+    stderr: capture(),
+    fetchImpl: fakeFetch({
+      "GET /api/connectors/whatsapp/bindings": {
+        bindings: [{ id: "thread:thread-1:whatsapp", level: "thread", state: "ready" }],
+      },
+    }, seen),
+  });
+
+  assert.equal(code, 0);
+  assert.equal(seen[0].key, "GET /api/connectors/whatsapp/bindings");
+  assert.equal(seen[0].search, "?thread=thread-1&user=alice");
+  assert.equal(JSON.parse(stdout.text()).bindings[0].level, "thread");
 });
 
 test("CLI creates, updates, and deletes WhatsApp bindings", async () => {
@@ -1089,6 +1335,112 @@ test("CLI creates, updates, and deletes WhatsApp bindings", async () => {
   assert.equal(seen3[0].key, "DELETE /api/connectors/whatsapp/bindings/thread-1");
 });
 
+test("CLI creates multi-level WhatsApp bindings with target selectors", async () => {
+  const stdout = capture();
+  const seen = [];
+  const code = await runCli([
+    "whatsapp",
+    "bindings",
+    "create",
+    "--level",
+    "account-default",
+    "--target-account",
+    "neutral-1",
+    "--responder-account",
+    "neutral-1",
+    "--json",
+  ], {
+    stdout,
+    stderr: capture(),
+    fetchImpl: fakeFetch({
+      "POST /api/connectors/whatsapp/bindings": {
+        ok: true,
+        binding: {
+          id: "account-default:neutral-1:whatsapp",
+          level: "account-default",
+          state: "ready",
+          responderAccountId: "neutral-1",
+          targetAccountId: "neutral-1",
+        },
+      },
+    }, seen),
+  });
+
+  assert.equal(code, 0);
+  assert.equal(seen[0].key, "POST /api/connectors/whatsapp/bindings");
+  assert.deepEqual(seen[0].body, {
+    level: "account-default",
+    targetAccountId: "neutral-1",
+    responderConnectorAccountId: "neutral-1",
+    responderAccountId: "neutral-1",
+  });
+  assert.equal(JSON.parse(stdout.text()).binding.level, "account-default");
+});
+
+test("CLI runs WhatsApp broker migration dry runs", async () => {
+  const stdout = capture();
+  const seen = [];
+  const code = await runCli(["whatsapp", "migrate", "--dry-run"], {
+    stdout,
+    stderr: capture(),
+    fetchImpl: fakeFetch({
+      "POST /api/connectors/whatsapp/migrate": {
+        ok: true,
+        dryRun: true,
+        migrated: 3,
+        counts: {
+          accountsCreated: 2,
+          accountsUpdated: 0,
+          accountsUnchanged: 0,
+          threadBindingsUpdated: 1,
+          threadBindingsSkipped: 0,
+          threadBindingsUnchanged: 0,
+          tokenPlansConfigured: 1,
+          tokenPlansMissing: 2,
+          tokenPlansTotal: 3,
+        },
+        accounts: [
+          { action: "create", accountId: "responder", runtimeAccountId: "responder", autostart: true },
+        ],
+        threadBindings: [
+          {
+            action: "update",
+            bindingId: "thread:thread-1:whatsapp",
+            threadName: "Thread 1",
+            responderAccountId: "responder",
+            acl: { send: { mode: "owner-only" }, receive: { mode: "thread" } },
+          },
+        ],
+        tokenPlans: [
+          {
+            tokenId: "wa-bridge-send-thread:thread-1:whatsapp",
+            requiredScope: "whatsapp:bridge:send",
+            accountId: "responder",
+            chatId: "chat-1@g.us",
+            tokenConfigured: false,
+            token: "[redacted]",
+          },
+        ],
+        rollback: {
+          instructions: ["Do not restore old role-naming code paths."],
+        },
+      },
+    }, seen),
+  });
+
+  assert.equal(code, 0);
+  assert.equal(seen[0].key, "POST /api/connectors/whatsapp/migrate");
+  assert.deepEqual(seen[0].body, { dryRun: true });
+  assert.match(stdout.text(), /WhatsApp migration: dry run/);
+  assert.match(stdout.text(), /Migrated: 3/);
+  assert.match(stdout.text(), /Account plans:/);
+  assert.match(stdout.text(), /Binding plans:/);
+  assert.match(stdout.text(), /acl\(send=owner-only receive=thread\)/);
+  assert.match(stdout.text(), /Scoped token plans:/);
+  assert.match(stdout.text(), /token=\[redacted\]/);
+  assert.match(stdout.text(), /Do not restore old role-naming code paths/);
+});
+
 test("CLI reports Codex WhatsApp binding status", async () => {
   const stdout = capture();
   const seen = [];
@@ -1111,6 +1463,34 @@ test("CLI reports Codex WhatsApp binding status", async () => {
   assert.equal(code, 1);
   assert.equal(seen[0].search, "?thread=thread-1");
   assert.equal(JSON.parse(stdout.text()).resolution.error, "responder_account_inactive");
+});
+
+test("CLI connects Codex WhatsApp binding to a responder account", async () => {
+  const stdout = capture();
+  const seen = [];
+  const code = await runCli(["whatsapp", "codex", "connect", "--thread", "thread-1", "--account", "neutral-1", "--chat-id", "chat-1@g.us", "--json"], {
+    stdout,
+    stderr: capture(),
+    fetchImpl: fakeFetch({
+      "POST /api/connectors/whatsapp/codex/connect": {
+        ok: true,
+        binding: { id: "thread:thread-1:whatsapp", level: "thread", responderAccountId: "neutral-1" },
+        resolution: {
+          ok: true,
+          selected: { id: "thread:thread-1:whatsapp", level: "thread", state: "ready", responderAccountId: "neutral-1" },
+        },
+      },
+    }, seen),
+  });
+
+  assert.equal(code, 0);
+  assert.equal(seen[0].key, "POST /api/connectors/whatsapp/codex/connect");
+  assert.deepEqual(seen[0].body, {
+    thread: "thread-1",
+    accountId: "neutral-1",
+    chatId: "chat-1@g.us",
+  });
+  assert.equal(JSON.parse(stdout.text()).resolution.selected.responderAccountId, "neutral-1");
 });
 
 test("CLI applies configured WhatsApp chat-name and reply prefixes", async () => {
@@ -1694,6 +2074,112 @@ test("CLI attach prints native Codex attach commands for app-server threads", as
 
   assert.equal(code, 0);
   assert.equal(stdout.text(), `${attachCommand}\n`);
+});
+
+test("CLI attach renders raw terminal watch-and-wait payloads", async () => {
+  const stdout = capture();
+  const spawned = [];
+  const code = await runCli(["attach", "Demo"], {
+    stdout,
+    stderr: capture(),
+    spawnImpl(command, args) {
+      spawned.push({ command, args });
+      const child = new EventEmitter();
+      queueMicrotask(() => child.emit("exit", 0));
+      return child;
+    },
+    fetchImpl: fakeFetch({
+      "POST /api/threads/Demo/attach": {
+        ok: true,
+        attachable: false,
+        watchOnly: true,
+        watch: {
+          threadName: "Demo",
+          runtimeMode: "codex-app-server",
+          runtimeState: "working",
+          activeTurnId: "turn-1",
+          activeDuration: "10s",
+          staleRisk: "low",
+          recommendedAction: "wait",
+          intervalMs: 5000,
+          timeoutMs: 900000,
+          nextCheckInMs: 5000,
+        },
+      },
+    }),
+  });
+
+  assert.equal(code, 0);
+  assert.deepEqual(spawned, []);
+  assert.match(stdout.text(), /Raw attach watch-and-wait/);
+  assert.match(stdout.text(), /Active turn: turn-1/);
+  assert.match(stdout.text(), /Recommended action: wait/);
+});
+
+test("CLI attach read-only passes non-mutating watch options", async () => {
+  const stdout = capture();
+  const seen = [];
+  const code = await runCli(["attach", "Demo", "--read-only", "--interval", "2", "--timeout", "1m"], {
+    stdout,
+    stderr: capture(),
+    fetchImpl: fakeFetch({
+      "POST /api/threads/Demo/attach": {
+        ok: true,
+        attachable: false,
+        watchOnly: true,
+        watchText: "watching\n",
+      },
+    }, seen),
+  });
+
+  assert.equal(code, 0);
+  assert.equal(stdout.text(), "watching\n");
+  assert.equal(seen[0].body.readOnly, true);
+  assert.equal(seen[0].body.intervalMs, 2000);
+  assert.equal(seen[0].body.timeoutMs, 60000);
+  assert.equal(Number.isFinite(seen[0].body.watchStartedAtMs), true);
+});
+
+test("CLI attach takeover waits through watch-and-wait before attaching", async () => {
+  const stdout = capture();
+  const spawned = [];
+  const seen = [];
+  let attempts = 0;
+  const code = await runCli(["attach", "Demo", "--takeover", "--interval", "0.001", "--timeout", "2s"], {
+    stdout,
+    stderr: capture(),
+    spawnImpl(command, args) {
+      spawned.push({ command, args });
+      const child = new EventEmitter();
+      queueMicrotask(() => child.emit("exit", 0));
+      return child;
+    },
+    fetchImpl: fakeFetch({
+      "POST /api/threads/Demo/attach": () => {
+        attempts += 1;
+        if (attempts === 1) {
+          return {
+            ok: true,
+            attachable: false,
+            watchOnly: true,
+            watchText: "watching\n",
+          };
+        }
+        return {
+          ok: true,
+          attachKind: "raw-terminal",
+          runtime: { sessionName: "orkestr-thread-demo" },
+        };
+      },
+    }, seen),
+  });
+
+  assert.equal(code, 0);
+  assert.equal(stdout.text(), "watching\n");
+  assert.equal(attempts, 2);
+  assert.equal(seen[0].body.takeover, true);
+  assert.equal(seen[1].body.takeover, true);
+  assert.deepEqual(spawned, [{ command: "tmux", args: ["attach-session", "-t", "orkestr-thread-demo"] }]);
 });
 
 test("CLI attach can execute tmux for an attachable thread", async () => {

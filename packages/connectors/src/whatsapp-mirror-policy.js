@@ -12,13 +12,14 @@ export function codexAssistantPhase(message = {}) {
   return clean(message?.phase || "final_answer").toLowerCase();
 }
 
-const codexProgressPhases = new Set(["commentary", "awaiting_approval", "context_compaction"]);
+const codexProgressPhases = new Set(["commentary", "awaiting_approval"]);
+const codexSuppressedPhases = new Set(["context_compaction"]);
 
 export function shouldMirrorWhatsAppReply(message = {}) {
   if (isNoReplyAssistantMessage(message)) return false;
   if (codexAssistantSource(message)) {
     const phase = codexAssistantPhase(message);
-    return !codexProgressPhases.has(phase);
+    return !codexProgressPhases.has(phase) && !codexSuppressedPhases.has(phase);
   }
   return true;
 }
@@ -27,5 +28,5 @@ export function shouldMirrorWhatsAppProgress(message = {}, env = process.env) {
   if (isNoReplyAssistantMessage(message)) return false;
   if (!codexAssistantSource(message)) return false;
   const phase = codexAssistantPhase(message);
-  return codexProgressPhases.has(phase);
+  return codexProgressPhases.has(phase) && !codexSuppressedPhases.has(phase);
 }

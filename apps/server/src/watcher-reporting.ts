@@ -15,10 +15,14 @@ export type WatcherServerErrorInput = {
   details?: Record<string, unknown>;
 };
 
-export function reportServerError(env = process.env, input: WatcherServerErrorInput, options: { deliverWatcher?: boolean } = {}) {
+export function reportServerError(env = process.env, input: WatcherServerErrorInput, options: { deliverWatcher?: boolean; mirrorWatcher?: boolean } = {}) {
+  const mirrorToConnector = options.mirrorWatcher !== undefined
+    ? options.mirrorWatcher
+    : options.deliverWatcher !== false;
   void recordWatcherAlert({
     severity: "error",
     ...input,
+    mirrorToConnector,
     details: {
       ...(input.details || {}),
       ...(input.statusCode ? { statusCode: input.statusCode } : {}),

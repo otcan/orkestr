@@ -5,21 +5,23 @@ import type { IncomingMessage } from "node:http";
 import type { Duplex } from "node:stream";
 import { WebSocketServer, type WebSocket } from "ws";
 import { approvePairingChallenge, authorizeHttpRequest } from "../../../packages/core/src/security.js";
-import { runtimeStatus, wakeThread } from "../../../packages/core/src/runtime-leases.js";
-import { getThreadForPrincipal } from "../../../packages/core/src/threads.js";
+import { runtimeStatus } from "../../../packages/core/src/runtime-leases.js";
+import { getThreadForPrincipal, listThreadMessages } from "../../../packages/core/src/threads.js";
 import { isAdminPrincipal } from "../../../packages/core/src/policy.js";
-import { codexThreadId, threadUsesCodexAppServer } from "../../../packages/core/src/codex-app-server-common.js";
+import { threadUsesCodexAppServer } from "../../../packages/core/src/codex-app-server-common.js";
 import { recordCodexRuntimeAuthInvalidSignal } from "../../../packages/core/src/codex-auth-health.js";
-import { codexResumeCommand } from "../../../packages/core/src/codex-attach-command.js";
-import { shellQuote } from "../../../packages/core/src/native-terminal.js";
 import { paneProgressFromText } from "../../../packages/core/src/pane-progress.js";
 import { rawControlCommandMayMatch, rawSecurityApproveChallengeId } from "../../../packages/core/src/raw-terminal-commands.js";
-import { killTmuxSession } from "../../../packages/core/src/tmux-runtime.js";
+import {
+  rawAttachPollIntervalMs,
+  rawAttachWatchPayload,
+  rawAttachWatchText,
+  rawStructuredTurnActive,
+} from "../../../packages/core/src/raw-terminal-watch.js";
 import { threadSummaryPayload } from "./thread-summary.js";
 
 const execFileAsync = promisify(execFile);
 const attachedServers = new WeakSet<Server>();
-const browserAttachSessions = new Map<string, { clients: number; killTimer: NodeJS.Timeout | null }>();
 
 type SummaryClient = {
   principal: Record<string, unknown>;
@@ -122,107 +124,6 @@ async function resizePane(paneId: string, cols: unknown, rows: unknown): Promise
   const width = Math.max(40, Math.min(400, Math.floor(parsedWidth)));
   const height = Math.max(8, Math.min(120, Math.floor(parsedHeight)));
   await execFileAsync("tmux", ["resize-pane", "-t", paneId, "-x", String(width), "-y", String(height)]);
-}
-
-function safeTmuxName(value: unknown): string {
-  return String(value || "thread").replace(/[^A-Za-z0-9_.-]+/g, "-").replace(/^-+|-+$/g, "") || "thread";
-}
-
-function browserAttachSessionName(threadId: string): string {
-  return `orkestr-browser-attach-${safeTmuxName(threadId).slice(0, 42)}`;
-}
-
-async function tmuxHasSession(sessionName: string): Promise<boolean> {
-  try {
-    await execFileAsync("tmux", ["has-session", "-t", sessionName]);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-async function tmuxPaneId(sessionName: string): Promise<string> {
-  const { stdout } = await execFileAsync("tmux", ["list-panes", "-t", sessionName, "-F", "#{pane_id}"]);
-  return String(stdout || "").trim().split(/\s+/).filter(Boolean)[0] || "";
-}
-
-function rawAttachIdleTtlMs(): number {
-  const parsed = Number(process.env.ORKESTR_RAW_ATTACH_IDLE_TTL_MS || 30_000);
-  return Number.isFinite(parsed) ? Math.max(0, parsed) : 30_000;
-}
-
-function cancelBrowserAttachKill(sessionName: string): void {
-  const state = browserAttachSessions.get(sessionName);
-  if (!state?.killTimer) return;
-  clearTimeout(state.killTimer);
-  state.killTimer = null;
-}
-
-function retainBrowserAttachSession(sessionName: string): void {
-  if (!sessionName) return;
-  const state = browserAttachSessions.get(sessionName) || { clients: 0, killTimer: null };
-  if (state.killTimer) {
-    clearTimeout(state.killTimer);
-    state.killTimer = null;
-  }
-  state.clients += 1;
-  browserAttachSessions.set(sessionName, state);
-}
-
-function releaseBrowserAttachSession(sessionName: string): void {
-  if (!sessionName) return;
-  const state = browserAttachSessions.get(sessionName);
-  if (!state) return;
-  state.clients = Math.max(0, state.clients - 1);
-  if (state.clients > 0 || state.killTimer) return;
-  const killSession = async () => {
-    const current = browserAttachSessions.get(sessionName);
-    if (!current || current.clients > 0) return;
-    browserAttachSessions.delete(sessionName);
-    await killTmuxSession(sessionName).catch(() => undefined);
-  };
-  const ttlMs = rawAttachIdleTtlMs();
-  if (ttlMs <= 0) {
-    void killSession();
-    return;
-  }
-  state.killTimer = setTimeout(() => void killSession(), ttlMs);
-  if (typeof state.killTimer.unref === "function") state.killTimer.unref();
-}
-
-async function ensureAppServerAttachPane(thread: Record<string, any>, cols: unknown, rows: unknown): Promise<Record<string, unknown> | null> {
-  if (!threadUsesCodexAppServer(thread)) return null;
-  const wakeResult: any = await wakeThread(String(thread.id), { reason: "browser_attach" }).catch(() => null);
-  const currentThread = wakeResult?.thread || thread;
-  const codexId = codexThreadId(currentThread);
-  if (!codexId) return null;
-
-  const cwd = String(currentThread.cwd || currentThread.workspace || currentThread.repoPath || currentThread.worktreePath || "/root");
-  const sessionName = browserAttachSessionName(String(currentThread.id || thread.id));
-  cancelBrowserAttachKill(sessionName);
-  if (await tmuxHasSession(sessionName)) {
-    // Browser Raw attach sessions are disposable; restart them so stale Codex resume screens are not replayed.
-    await killTmuxSession(sessionName).catch(() => undefined);
-  }
-  const attachCommand = await codexResumeCommand({ cwd, codexThreadId: codexId });
-  const script = [
-    "clear",
-    `printf ${shellQuote(`Attaching Orkestr thread ${currentThread.name || currentThread.id} to Codex...\\n\\n`)}`,
-    attachCommand,
-    `printf ${shellQuote("\\nCodex attach exited. Press Enter to close this browser terminal.\\n")}`,
-    "read _",
-  ].join("; ");
-  await execFileAsync("tmux", ["new-session", "-d", "-s", sessionName, "-c", cwd, script]);
-
-  const paneId = await tmuxPaneId(sessionName);
-  if (!paneId) return null;
-  await resizePane(paneId, cols, rows).catch(() => undefined);
-  return {
-    paneId,
-    sessionName,
-    state: "ready",
-    runtimeKind: "codex-browser-attach",
-  };
 }
 
 async function sendRawInput(paneId: string, data: string): Promise<void> {
@@ -414,6 +315,74 @@ function writeUpgradeError(socket: Duplex, statusCode: number, error: string): v
   socket.destroy();
 }
 
+function handleRawWatchAndWait(
+  wss: WebSocketServer,
+  request: IncomingMessage,
+  socket: Duplex,
+  head: Buffer,
+  thread: Record<string, any>,
+  initialStatus: Record<string, any>,
+): void {
+  wss.handleUpgrade(request, socket, head, (ws) => {
+    let closed = false;
+    let timer: NodeJS.Timeout | null = null;
+    const startedAtMs = Date.now();
+    const intervalMs = rawAttachPollIntervalMs();
+
+    const close = () => {
+      closed = true;
+      if (timer) clearTimeout(timer);
+      timer = null;
+    };
+
+    const schedule = () => {
+      if (closed) return;
+      timer = setTimeout(() => void push(), intervalMs);
+      if (typeof timer.unref === "function") timer.unref();
+    };
+
+    const push = async () => {
+      if (closed || ws.readyState !== ws.OPEN) return;
+      const status = await runtimeStatus(String(thread.id)).catch(() => initialStatus);
+      const messages = await listThreadMessages(String(thread.id)).catch(() => []);
+      const watch = rawAttachWatchPayload({ thread, status, messages, startedAtMs, intervalMs });
+      wsSend(ws, { type: "transport_ready", transport: "raw-watch-and-wait", intervalMs });
+      wsSend(ws, { type: "visible_screen", data: rawAttachWatchText(watch) });
+      if (!rawStructuredTurnActive(thread, status)) {
+        wsSend(ws, {
+          type: "output",
+          data: rawTerminalNotice("Structured turn is idle. Reopen Raw or run `orkestr attach --takeover` to take over the terminal."),
+        });
+        return;
+      }
+      schedule();
+    };
+
+    ws.on("close", close);
+    ws.on("error", close);
+    void push();
+  });
+}
+
+function handleRawTakeoverPrompt(
+  wss: WebSocketServer,
+  request: IncomingMessage,
+  socket: Duplex,
+  head: Buffer,
+  thread: Record<string, any>,
+  status: Record<string, any> | null,
+): void {
+  wss.handleUpgrade(request, socket, head, async (ws) => {
+    const messages = await listThreadMessages(String(thread.id)).catch(() => []);
+    const watch = rawAttachWatchPayload({ thread, status: status || {}, messages });
+    wsSend(ws, { type: "transport_ready", transport: "raw-watch-and-wait", intervalMs: rawAttachPollIntervalMs() });
+    wsSend(ws, {
+      type: "visible_screen",
+      data: `${rawAttachWatchText(watch)}Structured runtime is idle. Use Raw takeover or run \`orkestr attach ${thread.name || thread.id} --takeover\` to enter terminal mode.\n`,
+    });
+  });
+}
+
 async function authorizeUpgradeRequest(request: IncomingMessage, socket: Duplex): Promise<Record<string, any> | null> {
   const result: any = await authorizeHttpRequest(request).catch((error) => ({
     ok: false,
@@ -512,22 +481,20 @@ export function attachThreadStreamUpgrade(server: Server): void {
     }
 
     let status: Record<string, any> | null = await runtimeStatus(thread.id).catch(() => null);
-    let paneId = String(status?.paneId || "").trim();
-    if (!paneId && threadUsesCodexAppServer(thread)) {
-      const attachStatus = await ensureAppServerAttachPane(thread as Record<string, any>, target.cols, target.rows).catch(() => null);
-      if (attachStatus) {
-        status = { ...(status || {}), ...attachStatus };
-        paneId = String(attachStatus.paneId || "").trim();
+    if (threadUsesCodexAppServer(thread)) {
+      if (status && rawStructuredTurnActive(thread as Record<string, any>, status)) {
+        handleRawWatchAndWait(wss, request, socket, head, thread as Record<string, any>, status);
+        return;
       }
+      handleRawTakeoverPrompt(wss, request, socket, head, thread as Record<string, any>, status);
+      return;
     }
+    let paneId = String(status?.paneId || "").trim();
     if (!paneId) {
       socket.destroy();
       return;
     }
     await resizePane(paneId, target.cols, target.rows).catch(() => undefined);
-    const browserAttachSessionNameForStream = status?.runtimeKind === "codex-browser-attach"
-      ? String(status.sessionName || "").trim()
-      : "";
 
     wss.handleUpgrade(request, socket, head, (ws) => {
       let lastScreen = "";
@@ -537,7 +504,6 @@ export function attachThreadStreamUpgrade(server: Server): void {
       let snapshotInFlight = false;
       let nextSnapshotIntervalMs = rawSnapshotActiveIntervalMs();
       const rawControlState = { buffer: "" };
-      if (browserAttachSessionNameForStream) retainBrowserAttachSession(browserAttachSessionNameForStream);
 
       const scheduleSnapshot = (delayMs = nextSnapshotIntervalMs) => {
         if (closed) return;
@@ -617,7 +583,6 @@ export function attachThreadStreamUpgrade(server: Server): void {
         closed = true;
         if (snapshotTimer) clearTimeout(snapshotTimer);
         clearInterval(heartbeatTimer);
-        if (browserAttachSessionNameForStream) releaseBrowserAttachSession(browserAttachSessionNameForStream);
       };
       ws.on("close", closeRawStream);
       ws.on("error", closeRawStream);

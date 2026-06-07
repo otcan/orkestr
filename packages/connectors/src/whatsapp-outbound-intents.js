@@ -25,9 +25,9 @@ function newerIso(...values) {
 function statusRank(value) {
   const status = clean(value).toLowerCase();
   if (status === "delivered") return 4;
-  if (status === "pending") return 3;
-  if (status === "failed") return 2;
-  if (status === "skipped" || status === "cancelled") return 1;
+  if (status === "skipped" || status === "cancelled") return 3;
+  if (status === "pending") return 2;
+  if (status === "failed") return 1;
   return 0;
 }
 
@@ -42,8 +42,8 @@ export function whatsappOutboundIntentBootstrapWindowMs(env = process.env) {
 }
 
 export function whatsappLiveOutputRecoveryWindowMs(env = process.env) {
-  const parsed = Number(env.ORKESTR_WHATSAPP_LIVE_OUTPUT_RECOVERY_WINDOW_MS || 5 * 60 * 1000);
-  return Number.isFinite(parsed) ? Math.max(0, Math.floor(parsed)) : 5 * 60 * 1000;
+  const parsed = Number(env.ORKESTR_WHATSAPP_LIVE_OUTPUT_RECOVERY_WINDOW_MS || 2 * 60 * 60 * 1000);
+  return Number.isFinite(parsed) ? Math.max(0, Math.floor(parsed)) : 2 * 60 * 60 * 1000;
 }
 
 export function outboundMirrorMessageSetKey({ kind = "", agentId = "", threadId = "" } = {}) {
@@ -107,17 +107,25 @@ export function mergeWhatsAppOutboundMirrorCursors(existing = [], next = []) {
     const cursor = Math.max(0, Number(item?.cursor || 0) || 0);
     const previous = merged.get(messageSetKey);
     const previousCursor = Number(previous?.cursor || 0) || 0;
-    if (!previous || cursor > previousCursor || (cursor === previousCursor && dateMs(item.updatedAt) > dateMs(previous.updatedAt))) {
+    if (!previous || cursor > previousCursor) {
       merged.set(messageSetKey, { ...item, messageSetKey, cursor });
     }
   }
   return [...merged.values()].sort((left, right) => clean(left.messageSetKey).localeCompare(clean(right.messageSetKey)));
 }
 
+const emptyOutboundMirrorCursors = Object.freeze([]);
+const outboundMirrorCursorMapCache = new WeakMap();
+
 export function outboundMirrorCursorMap(cursors = []) {
-  return new Map((cursors || [])
+  const list = Array.isArray(cursors) ? cursors : emptyOutboundMirrorCursors;
+  const cached = outboundMirrorCursorMapCache.get(list);
+  if (cached) return cached;
+  const map = new Map(list
     .map((cursor) => [pickString(cursor.messageSetKey, outboundMirrorMessageSetKey(cursor)), cursor])
     .filter(([key]) => key));
+  outboundMirrorCursorMapCache.set(list, map);
+  return map;
 }
 
 function whatsappMessageOrigin(message = {}, state = null) {

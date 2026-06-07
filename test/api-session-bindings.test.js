@@ -112,12 +112,19 @@ test("watcher alerts create the configured watcher thread, redact secrets, and d
     code: "test_failure",
     message: "bridge failed token=secret-value",
     threadId: "thread-1",
+    routerTraceId: "trace-1",
+    details: {
+      accountId: "responder",
+      bindingId: "thread:thread-1:whatsapp",
+      apiToken: "must-not-render",
+    },
   }, runtimeEnv);
   const second = await recordWatcherAlert({
     source: "test.router",
     code: "test_failure",
     message: "bridge failed token=secret-value",
     threadId: "thread-1",
+    routerTraceId: "trace-1",
   }, runtimeEnv);
   const messages = await listThreadMessages(first.thread.id, runtimeEnv);
 
@@ -127,6 +134,46 @@ test("watcher alerts create the configured watcher thread, redact secrets, and d
   assert.equal(second.reason, "deduped");
   assert.equal(messages.length, 1);
   assert.match(messages[0].text, /\[watcher:error\] test\.router/);
+  assert.match(messages[0].text, /routerTrace: trace-1/);
+  assert.match(messages[0].text, /context: accountId=responder bindingId=thread:thread-1:whatsapp/);
   assert.match(messages[0].text, /token=\[redacted\]/);
   assert.doesNotMatch(messages[0].text, /secret-value/);
+  assert.doesNotMatch(messages[0].text, /must-not-render/);
+});
+
+test("watcher alerts can stay out of WhatsApp mirroring for delivery anomalies", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-watcher-alert-no-wa-"));
+  const runtimeEnv = env(home, {
+    ORKESTR_WATCHER_THREAD_NAME: "test-watcher-wa",
+  });
+  const watcherThread = await createThread({
+    id: "test-watcher-wa-thread",
+    name: "test-watcher-wa",
+    title: "Test watcher WA",
+    state: "ready",
+    binding: {
+      connector: "whatsapp",
+      chatId: "watcher-chat",
+      responderAccountId: "responder",
+      outboundAccountId: "responder",
+      mirrorToWhatsApp: true,
+    },
+  }, runtimeEnv);
+
+  const result = await recordWatcherAlert({
+    source: "server.whatsappDeliveryScheduler",
+    code: "whatsapp_delivery_failed",
+    message: "WhatsApp delivery anomaly: bridge_not_ready",
+    threadId: "thread-1",
+    messageId: "message-1",
+    mirrorToConnector: false,
+  }, runtimeEnv);
+  const messages = await listThreadMessages(watcherThread.id, runtimeEnv);
+
+  assert.equal(result.ok, true);
+  assert.equal(messages.length, 1);
+  assert.match(messages[0].text, /\[watcher:error\] server\.whatsappDeliveryScheduler/);
+  assert.equal(messages[0].connector || "", "");
+  assert.equal(messages[0].chatId || "", "");
+  assert.equal(messages[0].originSurface || "", "");
 });

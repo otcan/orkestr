@@ -119,7 +119,8 @@ async function resolveWatcherThread(env = process.env) {
   }, env);
 }
 
-function watcherMessageDefaults(thread = null) {
+function watcherMessageDefaults(thread = null, alert = {}) {
+  if (alert?.mirrorToConnector === false) return {};
   const binding = thread?.binding || {};
   if (lower(binding.connector || "whatsapp") !== "whatsapp") return {};
   if (binding.mirrorToWhatsApp === false || binding.mirrorReplies === false) return {};
@@ -144,6 +145,10 @@ function formatAlert(alert = {}) {
   if (alert.messageId) lines.push(`message: ${clean(alert.messageId)}`);
   if (alert.routerTraceId) lines.push(`routerTrace: ${clean(alert.routerTraceId)}`);
   if (alert.route) lines.push(`route: ${clean(alert.method)} ${clean(alert.route)}`.trim());
+  const detailLines = Object.entries(alert.details || {})
+    .map(([key, value]) => `${clean(key)}=${redact(value, 500)}`)
+    .filter((line) => line !== "=");
+  if (detailLines.length) lines.push(`context: ${detailLines.join(" ")}`);
   lines.push(`time: ${clean(alert.createdAt) || nowIso()}`);
   if (alert.error?.stack) lines.push(`stack: ${redact(alert.error.stack, 1200)}`);
   return lines.join("\n");
@@ -166,6 +171,7 @@ export async function recordWatcherAlert(input = {}, env = process.env) {
     routerTraceId: clean(input.routerTraceId),
     method: clean(input.method),
     route: clean(input.route),
+    mirrorToConnector: input.mirrorToConnector !== false,
     createdAt,
   };
   const store = await readAlertStore(env);
@@ -192,7 +198,7 @@ export async function recordWatcherAlert(input = {}, env = process.env) {
       state: "completed",
       text: formatAlert(alert),
       routerTraceId: alert.routerTraceId,
-      ...watcherMessageDefaults(thread),
+      ...watcherMessageDefaults(thread, alert),
     }, env);
   }
   const recorded = {

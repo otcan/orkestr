@@ -8,6 +8,7 @@ import { codexLoginStatus, defaultCodexHome } from "../../connectors/src/codex.j
 import { dataPaths } from "../../storage/src/paths.js";
 import { activeCodexRuntimeAuthInvalid } from "./codex-auth-health.js";
 import { codexAppServerStatus } from "./codex-app-server-client.js";
+import { publicUrlIdentityConfigNames, publicUrlIdentityDiagnostics, publicUrlIdentityRecords } from "./public-url-config.js";
 import { securityStatus } from "./security.js";
 
 const execFileAsync = promisify(execFile);
@@ -260,6 +261,126 @@ function securityChecks(security) {
   return checks;
 }
 
+function publicUrlIdentityCheck(env) {
+  const diagnostics = publicUrlIdentityDiagnostics(env);
+  if (diagnostics.ok) {
+    return doctorCheck("public_url_identity", "Public URL identity", "ok", diagnostics.summary, {
+      roots: diagnostics.roots,
+      active: diagnostics.active,
+    });
+  }
+  return doctorCheck("public_url_identity", "Public URL identity", "warning", diagnostics.summary, {
+    roots: diagnostics.roots,
+    active: diagnostics.active,
+    records: diagnostics.records.map((record) => ({
+      name: record.name,
+      host: record.host,
+      root: record.root,
+    })),
+    repair: "Split public and private instances into separate service environments, or remove the conflicting URL/auth drop-in from this service.",
+  });
+}
+
+function splitSystemdPathList(value = "") {
+  return String(value || "").split(/\s+/).map((item) => item.trim()).filter(Boolean);
+}
+
+async function activeSystemdDropInPaths(env) {
+  const explicit = String(env.ORKESTR_SYSTEMD_DROPIN_PATHS || "").trim();
+  if (explicit) return splitSystemdPathList(explicit);
+
+  const serviceName = String(env.ORKESTR_SERVICE_NAME || "").trim();
+  if (!serviceName || String(env.ORKESTR_SYSTEMD_DROPIN_CHECK || "").trim() === "0") return [];
+  try {
+    const result = await execFileAsync("systemctl", ["show", serviceName, "-p", "DropInPaths", "--value"], {
+      env: commandEnv(env),
+      timeout: 2500,
+      maxBuffer: 128 * 1024,
+    });
+    return splitSystemdPathList(result.stdout || "");
+  } catch {
+    return [];
+  }
+}
+
+const identityAssignmentPattern = new RegExp(`\\b(${publicUrlIdentityConfigNames.join("|")})=([^\\s"']*)`, "g");
+
+function systemdDropInIdentityEnv(content = "") {
+  const env = {};
+  for (const line of String(content || "").split("\n")) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith("#") || !trimmed.startsWith("Environment=")) continue;
+    for (const match of trimmed.matchAll(identityAssignmentPattern)) {
+      env[match[1]] = match[2] || "";
+    }
+  }
+  return env;
+}
+
+function groupIdentityRoots(records) {
+  const roots = [...new Set(records.map((record) => record.root).filter(Boolean))].sort();
+  return roots.map((root) => ({
+    root,
+    sources: [...new Set(records.filter((record) => record.root === root).map((record) => record.source).filter(Boolean))].sort(),
+    variables: [...new Set(records.filter((record) => record.root === root).map((record) => record.name).filter(Boolean))].sort(),
+  }));
+}
+
+async function publicUrlDropInIdentityCheck(env) {
+  const dropInPaths = await activeSystemdDropInPaths(env);
+  if (!dropInPaths.length) {
+    return doctorCheck("public_url_dropins", "Public URL drop-ins", "ok", "No active systemd URL/auth drop-ins were reported.", {
+      roots: [],
+      checkedPaths: [],
+    });
+  }
+
+  const records = [];
+  const unreadable = [];
+  for (const dropInPath of dropInPaths) {
+    let content = "";
+    try {
+      content = await fs.readFile(dropInPath, "utf8");
+    } catch (error) {
+      unreadable.push({ path: dropInPath, error: cleanMessage(error) });
+      continue;
+    }
+    const dropInEnv = systemdDropInIdentityEnv(content);
+    if (!dropInEnv.ORKESTR_PRIMARY_DOMAIN && env.ORKESTR_PRIMARY_DOMAIN) dropInEnv.ORKESTR_PRIMARY_DOMAIN = env.ORKESTR_PRIMARY_DOMAIN;
+    if (!dropInEnv.ORKESTR_DOMAIN && env.ORKESTR_DOMAIN) dropInEnv.ORKESTR_DOMAIN = env.ORKESTR_DOMAIN;
+    records.push(...publicUrlIdentityRecords(dropInEnv, { source: dropInPath }));
+  }
+
+  const roots = groupIdentityRoots(records);
+  if (roots.length > 1) {
+    return doctorCheck("public_url_dropins", "Public URL drop-ins", "warning", `Active systemd drop-ins mix ${roots.map((root) => root.root).join(", ")} URL identities.`, {
+      roots,
+      checkedPaths: dropInPaths,
+      records: records.map((record) => ({
+        source: record.source,
+        name: record.name,
+        host: record.host,
+        root: record.root,
+      })),
+      repair: "Move public and private URL/auth drop-ins onto separate services, or remove the stale conflicting drop-in from this service.",
+    });
+  }
+
+  if (unreadable.length) {
+    return doctorCheck("public_url_dropins", "Public URL drop-ins", "warning", "Some active systemd drop-ins could not be inspected.", {
+      roots,
+      checkedPaths: dropInPaths,
+      unreadable,
+      repair: "Check file permissions for the active systemd drop-ins and rerun `orkestr doctor system`.",
+    });
+  }
+
+  return doctorCheck("public_url_dropins", "Public URL drop-ins", "ok", records.length ? "Active systemd URL/auth drop-ins use one URL identity." : "Active systemd drop-ins do not set URL/auth identity variables.", {
+    roots,
+    checkedPaths: dropInPaths,
+  });
+}
+
 function summarize(checks) {
   const counts = {
     total: checks.length,
@@ -347,7 +468,8 @@ export async function systemDoctor({ env = process.env, home = os.homedir() } = 
     ];
   }
 
-  const checks = [...pathChecks, ...commandChecks, ...securityDoctorChecks];
+  const urlDropInCheck = await publicUrlDropInIdentityCheck(env);
+  const checks = [...pathChecks, ...commandChecks, publicUrlIdentityCheck(env), urlDropInCheck, ...securityDoctorChecks];
   const { counts, status, summary } = summarize(checks);
   const issues = checks
     .filter((check) => check.status !== "ok")

@@ -431,8 +431,9 @@ export function queuedInputWhatsAppDeliveryTarget(message, thread, state) {
 function queueNoticePreview(message) {
   const text = stripQueuePreviewDebugFooter(pickString(message?.text, message?.promptFile ? "message from prompt file" : "message"));
   const parsed = parseThreadInputCommand({ text });
-  const previewText = stripQueuePreviewDebugFooter(parsed.command === "interrupt" && parsed.text ? parsed.text : text);
+  const previewText = stripQueuePreviewNoticeWrappers(stripQueuePreviewDebugFooter(parsed.command === "interrupt" && parsed.text ? parsed.text : text));
   const normalized = previewText.replace(/\s+/g, " ").trim();
+  if (generatedQueueNoticePreviewFragment(normalized)) return "";
   return normalized.length > 120 ? `${normalized.slice(0, 117)}...` : normalized;
 }
 
@@ -440,28 +441,93 @@ function stripQueuePreviewDebugFooter(text) {
   return stripWhatsAppDebugFooter(text).replace(/\s+dbg:\s*m:[^\n]*$/i, "").trim();
 }
 
+function stripQueuePreviewNoticeWrappers(text) {
+  let current = String(text || "").trim();
+  for (let i = 0; i < 5; i += 1) {
+    const next = stripQueuePreviewNoticeWrapper(current);
+    if (next === current) return current;
+    current = next;
+  }
+  return current;
+}
+
+function stripQueuePreviewNoticeWrapper(text) {
+  const value = String(text || "").trim();
+  const patterns = [
+    /^Queued for the next Codex turn:\s*["“](.*)["”]\.?\s*$/i,
+    /^Queued your message while Orkestr prepares this thread:\s*["“](.*)["”]\.?\s*$/i,
+    /^Waking this Orkestr thread and queued your message:\s*["“](.*)["”]\.?\s*$/i,
+    /^Queued your latest message while current work is still running:\s*["“](.*)["”]\.?\s*$/i,
+    /^Interrupting the current Codex turn and queued your message:\s*["“](.*)["”]\.?\s*$/i,
+    /^Queued your latest message while Orkestr recovers this thread:\s*["“](.*)["”]\.?\s*$/i,
+    /^Queued your message while Codex is waiting for approval:\s*["“](.*)["”]\.\s*Send \/approve or \/deny to answer the approval request\.?\s*$/i,
+  ];
+  for (const pattern of patterns) {
+    const match = value.match(pattern);
+    if (match?.[1]) return match[1].trim();
+  }
+  const prefixes = [
+    /^Queued for the next Codex turn:\s*["“]?/i,
+    /^Queued your message while Orkestr prepares this thread:\s*["“]?/i,
+    /^Waking this Orkestr thread and queued your message:\s*["“]?/i,
+    /^Queued your latest message while current work is still running:\s*["“]?/i,
+    /^Interrupting the current Codex turn and queued your message:\s*["“]?/i,
+    /^Queued your latest message while Orkestr recovers this thread:\s*["“]?/i,
+    /^Queued your message while Codex is waiting for approval:\s*["“]?/i,
+  ];
+  for (const prefix of prefixes) {
+    if (prefix.test(value)) {
+      return value
+        .replace(prefix, "")
+        .replace(/\s*Send \/approve or \/deny to answer the approval request\.?\s*$/i, "")
+        .replace(/["”]\.?\s*$/, "")
+        .trim();
+    }
+  }
+  return value;
+}
+
+function generatedQueueNoticePreviewFragment(text) {
+  const value = String(text || "").replace(/\s+/g, " ").trim().toLowerCase();
+  if (!value) return false;
+  const prefixes = [
+    "queued for the nex",
+    "queued your message while orkestr prepares",
+    "waking this orkestr thread and queued",
+    "queued your latest message while current work",
+    "interrupting the current codex turn and queued",
+    "queued your latest message while orkestr recovers",
+    "queued your message while codex is waiting",
+  ];
+  return prefixes.some((prefix) => value.startsWith(prefix));
+}
+
+function queueNoticePreviewClause(preview) {
+  return preview ? `: "${preview}".` : ".";
+}
+
 export function formatWhatsAppQueueNotice(message, reason = "") {
   const preview = queueNoticePreview(message);
   const normalizedReason = String(reason || "").trim().toLowerCase();
   if (normalizedReason === "awaiting_active_turn") {
-    return `Queued for the next Codex turn: "${preview}".`;
+    return `Queued for the next Codex turn${queueNoticePreviewClause(preview)}`;
   }
   if (normalizedReason === "awaiting_approval") {
-    return `Queued your message while Codex is waiting for approval: "${preview}". Send /approve or /deny to answer the approval request.`;
+    return `Queued your message while Codex is waiting for approval${queueNoticePreviewClause(preview)} Send /approve or /deny to answer the approval request.`;
   }
   if (["waiting_runtime_start", "waking"].includes(normalizedReason)) {
-    return `Waking this Orkestr thread and queued your message: "${preview}".`;
+    return `Waking this Orkestr thread and queued your message${queueNoticePreviewClause(preview)}`;
   }
   if (normalizedReason === "awaiting_runtime_completion") {
-    return `Queued your latest message while current work is still running: "${preview}".`;
+    return `Queued your latest message while current work is still running${queueNoticePreviewClause(preview)}`;
   }
   if (normalizedReason === "interrupting") {
-    return `Interrupting the current Codex turn and queued your message: "${preview}".`;
+    return `Interrupting the current Codex turn and queued your message${queueNoticePreviewClause(preview)}`;
   }
   if (["recovering_stale_ack", "retrying_delivery"].includes(normalizedReason)) {
-    return `Queued your latest message while Orkestr recovers this thread: "${preview}".`;
+    return `Queued your latest message while Orkestr recovers this thread${queueNoticePreviewClause(preview)}`;
   }
-  return `Queued your message while Orkestr prepares this thread: "${preview}".`;
+  return `Queued your message while Orkestr prepares this thread${queueNoticePreviewClause(preview)}`;
 }
 
 export function queuedModeWhatsAppDeliveryTarget(message, thread, state) {

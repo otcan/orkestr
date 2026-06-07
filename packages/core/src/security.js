@@ -43,6 +43,8 @@ function remoteAuthSignal(env = process.env, urls = publicUrlConfig(env), host =
     urls.appUrl ||
     urls.authUrl ||
     urls.connectUrl ||
+    env.ORKESTR_PUBLIC_APP_URL ||
+    env.ORKESTR_PUBLIC_AUTH_URL ||
     env.ORKESTR_PUBLIC_URL ||
     env.ORKESTR_APP_URL ||
     env.ORKESTR_PUBLIC_HTTPS_URL ||
@@ -220,11 +222,132 @@ function splitSecretList(value) {
     .filter(Boolean);
 }
 
+function splitScopeList(value) {
+  const values = Array.isArray(value) ? value : String(value || "").split(/[\s,]+/g);
+  return values.map((item) => String(item || "").trim().toLowerCase()).filter(Boolean);
+}
+
 function timingSafeSecretEqual(a, b) {
   const left = String(a || "");
   const right = String(b || "");
   if (!left || !right) return false;
   return crypto.timingSafeEqual(Buffer.from(sha256(left)), Buffer.from(sha256(right)));
+}
+
+function timingSafeHashEqual(a, b) {
+  const left = String(a || "").trim().toLowerCase();
+  const right = String(b || "").trim().toLowerCase();
+  if (!left || !right || left.length !== right.length) return false;
+  return crypto.timingSafeEqual(Buffer.from(left), Buffer.from(right));
+}
+
+function parseJsonTokens(value, defaults = {}) {
+  const raw = String(value || "").trim();
+  if (!raw) return [];
+  let parsed = null;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return [];
+  }
+  const entries = Array.isArray(parsed)
+    ? parsed.map((entry, index) => [String(entry?.id || entry?.name || index), entry])
+    : Object.entries(parsed || {});
+  return entries.map(([key, entry]) => {
+    const record = typeof entry === "string" ? { token: entry } : { ...(entry || {}) };
+    const token = String(record.token || record.value || record.secret || "").trim();
+    const tokenHash = String(record.tokenHash || record.hash || "").trim().toLowerCase();
+    if (!token && !tokenHash) return null;
+    return {
+      ...defaults,
+      id: String(record.id || record.tokenId || key || "").trim(),
+      token,
+      tokenHash,
+      scopes: splitScopeList(record.scopes || record.scope || record.capabilities || defaults.scopes || []),
+      principalKind: String(record.principalKind || record.kind || defaults.principalKind || "external_instance").trim(),
+      principalId: String(record.principalId || record.userId || record.ownerUserId || record.instanceId || defaults.principalId || "").trim(),
+      ownerUserId: String(record.ownerUserId || record.userId || defaults.ownerUserId || "").trim(),
+      instanceId: String(record.instanceId || record.instance || defaults.instanceId || "").trim(),
+      accountId: String(record.accountId || defaults.accountId || "").trim(),
+      bindingId: String(record.bindingId || defaults.bindingId || "").trim(),
+      chatId: String(record.chatId || defaults.chatId || "").trim(),
+      expiresAt: String(record.expiresAt || defaults.expiresAt || "").trim(),
+      disabled: record.disabled === true || record.enabled === false,
+    };
+  }).filter(Boolean);
+}
+
+function scopedWhatsAppTokens(env = process.env, routeKind = "") {
+  const common = [
+    env.ORKESTR_WHATSAPP_SCOPED_TOKENS_JSON,
+    env.WHATSAPP_SCOPED_TOKENS_JSON,
+  ].flatMap((value) => parseJsonTokens(value));
+  if (routeKind === "whatsapp_inbound") {
+    return [
+      ...common,
+      ...parseJsonTokens(env.ORKESTR_WHATSAPP_INBOUND_SCOPED_TOKENS_JSON, { scopes: ["whatsapp:inbound"] }),
+      ...parseJsonTokens(env.WHATSAPP_INBOUND_SCOPED_TOKENS_JSON, { scopes: ["whatsapp:inbound"] }),
+      ...parseJsonTokens(env.ORKESTR_WHATSAPP_INBOUND_TOKEN_JSON, { scopes: ["whatsapp:inbound"] }),
+    ];
+  }
+  if (routeKind === "whatsapp_bridge") {
+    return [
+      ...common,
+      ...parseJsonTokens(env.ORKESTR_WHATSAPP_BRIDGE_SCOPED_TOKENS_JSON, { scopes: ["whatsapp:bridge"] }),
+      ...parseJsonTokens(env.WHATSAPP_BRIDGE_SCOPED_TOKENS_JSON, { scopes: ["whatsapp:bridge"] }),
+      ...parseJsonTokens(env.ORKESTR_WHATSAPP_BRIDGE_TOKEN_JSON, { scopes: ["whatsapp:bridge"] }),
+    ];
+  }
+  return common;
+}
+
+function scopedTokenMatches(record, token) {
+  if (!record || !token) return false;
+  if (record.token && timingSafeSecretEqual(token, record.token)) return true;
+  if (record.tokenHash) return timingSafeHashEqual(sha256(token), record.tokenHash);
+  return false;
+}
+
+function scopedTokenExpired(record) {
+  if (!record?.expiresAt) return false;
+  const expiresAt = Date.parse(record.expiresAt);
+  return Number.isFinite(expiresAt) && expiresAt <= Date.now();
+}
+
+function whatsappBridgeRequiredScopes(method, url) {
+  const parts = String(url || "").split("/").filter(Boolean).map((part) => part.toLowerCase());
+  const action = parts.slice(3);
+  const leaf = action.at(-1) || "";
+  if (method === "POST" && ["send-text", "send-media"].includes(leaf)) return ["whatsapp:bridge:send", "whatsapp:send"];
+  if (method === "POST" && action[0] === "typing") return ["whatsapp:bridge:send", "whatsapp:send"];
+  if (method === "GET") return ["whatsapp:bridge:read", "whatsapp:read"];
+  return ["whatsapp:bridge:manage", "whatsapp:manage"];
+}
+
+function tokenAllowsWhatsAppScope(record, route) {
+  const scopes = splitScopeList(record?.scopes || []);
+  if (!scopes.length) return false;
+  if (scopes.includes("*") || scopes.includes("whatsapp:*")) return true;
+  if (route.kind === "whatsapp_inbound") {
+    return scopes.some((scope) => ["whatsapp:inbound", "whatsapp:receive", "whatsapp:bridge:inbound", "whatsapp:bridge:receive"].includes(scope));
+  }
+  if (route.kind === "whatsapp_bridge" && scopes.includes("whatsapp:bridge")) return true;
+  return (route.requiredScopes || []).some((scope) => scopes.includes(scope));
+}
+
+function publicMachineTokenContext(record, route) {
+  return {
+    tokenId: record.id || null,
+    routeKind: route.kind,
+    scopes: splitScopeList(record.scopes || []),
+    principalKind: record.principalKind || null,
+    principalId: record.principalId || null,
+    ownerUserId: record.ownerUserId || null,
+    instanceId: record.instanceId || null,
+    accountId: record.accountId || null,
+    bindingId: record.bindingId || null,
+    chatId: record.chatId || null,
+  };
 }
 
 function whatsappInboundTokens(env = process.env) {
@@ -266,21 +389,23 @@ function isWhatsAppMachineRoute(request) {
   const method = String(request?.method || "GET").toUpperCase();
   const url = String(request?.originalUrl || request?.url || "").split("?")[0];
   if (method === "POST" && url === "/api/connectors/whatsapp/inbound") {
-    return { kind: "whatsapp_inbound", tokens: whatsappInboundTokens };
+    return { kind: "whatsapp_inbound", tokens: whatsappInboundTokens, requiredScopes: ["whatsapp:inbound"] };
   }
   if (url.startsWith("/api/connectors/whatsapp/bridge/")) {
-    return { kind: "whatsapp_bridge", tokens: whatsappBridgeTokens };
+    return { kind: "whatsapp_bridge", tokens: whatsappBridgeTokens, requiredScopes: whatsappBridgeRequiredScopes(method, url) };
   }
   return null;
 }
 
 function whatsappMachineAuthFailure(route, reason, statusCode) {
-  const error = `${route.kind}_token_${reason}`;
+  const error = reason === "scope_denied" ? "wa_token_scope_denied" : `${route.kind}_token_${reason}`;
   const safeMessage = reason === "unconfigured"
     ? "The target Orkestr instance has no WhatsApp inbound token configured."
     : reason === "required"
       ? "The broker request did not include a WhatsApp inbound token."
-      : "The target Orkestr instance rejected the broker WhatsApp token.";
+      : reason === "scope_denied"
+        ? "The broker WhatsApp token does not allow the requested operation."
+        : "The target Orkestr instance rejected the broker WhatsApp token.";
   return {
     ok: false,
     statusCode,
@@ -318,8 +443,23 @@ function authorizeWhatsAppMachineRequest(request, env = process.env) {
   if (!route) return null;
   const token = bearerToken(request?.headers?.authorization || request?.headers?.Authorization || "");
   const tokens = route.tokens(env);
-  if (!tokens.length) return whatsappMachineAuthFailure(route, "unconfigured", 503);
+  const scopedTokens = scopedWhatsAppTokens(env, route.kind);
+  if (!tokens.length && !scopedTokens.length) return whatsappMachineAuthFailure(route, "unconfigured", 503);
   if (!token) return whatsappMachineAuthFailure(route, "required", 401);
+  const scopedMatch = scopedTokens.find((candidate) => scopedTokenMatches(candidate, token));
+  if (scopedMatch) {
+    if (scopedMatch.disabled || scopedTokenExpired(scopedMatch)) return whatsappMachineAuthFailure(route, "invalid", 401);
+    if (!tokenAllowsWhatsAppScope(scopedMatch, route)) return whatsappMachineAuthFailure(route, "scope_denied", 403);
+    const principal = adminPrincipal(defaultAdminUser(env));
+    principal.source = "whatsapp-machine-token";
+    principal.machine = publicMachineTokenContext(scopedMatch, route);
+    return {
+      ok: true,
+      principal,
+      machineAuth: route.kind,
+      machineAuthContext: publicMachineTokenContext(scopedMatch, route),
+    };
+  }
   const matched = tokens.some((candidate) => timingSafeSecretEqual(token, candidate));
   if (!matched) return whatsappMachineAuthFailure(route, "invalid", 401);
   return {
@@ -696,7 +836,13 @@ export async function authorizeHttpRequest(request, env = process.env) {
     return { ok: false, status, statusCode: shareAuth.statusCode, error: shareAuth.error || "desktop_share_forbidden" };
   }
   const whatsappInboundAuth = authorizeWhatsAppMachineRequest(request, env);
-  if (whatsappInboundAuth?.ok) return { ok: true, status, principal: whatsappInboundAuth.principal, machineAuth: whatsappInboundAuth.machineAuth };
+  if (whatsappInboundAuth?.ok) return {
+    ok: true,
+    status,
+    principal: whatsappInboundAuth.principal,
+    machineAuth: whatsappInboundAuth.machineAuth,
+    machineAuthContext: whatsappInboundAuth.machineAuthContext || null,
+  };
   if (whatsappInboundAuth && status.authEnabled) return { ...whatsappInboundAuth, status };
   const cliAuth = await authorizeCliMachineRequest(request, env);
   if (cliAuth?.ok) return { ok: true, status, principal: cliAuth.principal, machineAuth: cliAuth.machineAuth };

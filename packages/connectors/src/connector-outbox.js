@@ -3,6 +3,7 @@ import { dataPaths, ensureDataDirs } from "../../storage/src/paths.js";
 import { appendEvent, readJson, writeJson } from "../../storage/src/store.js";
 
 const terminalStates = new Set(["delivered", "skipped", "skipped_policy", "suppressed", "dead_letter", "cancelled"]);
+const operatorActions = new Set(["retry", "suppress", "mark_delivered", "mark-delivered", "replay", "dead_letter", "dead-letter"]);
 
 function clean(value) {
   return String(value || "").trim();
@@ -48,9 +49,21 @@ export function connectorOutboxTerminalState(value = "") {
   return terminalStates.has(clean(value || "pending").toLowerCase());
 }
 
+export function normalizeConnectorOutboxAction(action = "") {
+  const normalized = clean(action).toLowerCase().replace(/-/g, "_");
+  return operatorActions.has(normalized) ? normalized : "";
+}
+
 export function connectorOutboxClaimTtlMs(env = process.env) {
   const parsed = Number(env.ORKESTR_CONNECTOR_OUTBOX_CLAIM_TTL_MS || env.ORKESTR_WHATSAPP_OUTBOUND_CLAIM_TTL_MS || 120_000);
   return Number.isFinite(parsed) ? Math.max(5_000, Math.floor(parsed)) : 120_000;
+}
+
+export function connectorOutboxRetentionLimit(env = process.env) {
+  const raw = clean(env.ORKESTR_CONNECTOR_OUTBOX_RETENTION || env.ORKESTR_WHATSAPP_CONNECTOR_OUTBOX_RETENTION || "");
+  const parsed = Number(raw || 10_000);
+  const minimum = raw ? 1 : 1_000;
+  return Number.isFinite(parsed) ? Math.max(minimum, Math.floor(parsed)) : 10_000;
 }
 
 export function connectorOutboxPayloadHash(payload = {}) {
@@ -134,7 +147,20 @@ export function mergeConnectorOutboxJobs(existing = [], next = [], env = process
     const key = normalized.idempotencyKey;
     merged.set(key, merged.has(key) ? mergeJob(merged.get(key), normalized) : normalized);
   }
-  return [...merged.values()].sort((left, right) => dateMs(left.createdAt) - dateMs(right.createdAt));
+  return pruneConnectorOutboxJobs([...merged.values()], env);
+}
+
+export function pruneConnectorOutboxJobs(jobs = [], env = process.env) {
+  const sorted = [...(jobs || [])].sort((left, right) => dateMs(left.createdAt) - dateMs(right.createdAt));
+  const active = sorted.filter((job) => !connectorOutboxTerminalState(job.state));
+  const terminal = sorted.filter((job) => connectorOutboxTerminalState(job.state));
+  const retainedTerminal = terminal
+    .sort((left, right) =>
+      dateMs(left.updatedAt || left.terminalAt || left.createdAt) - dateMs(right.updatedAt || right.terminalAt || right.createdAt)
+    )
+    .slice(-connectorOutboxRetentionLimit(env));
+  const retained = new Set([...active, ...retainedTerminal].map((job) => job.idempotencyKey));
+  return sorted.filter((job) => retained.has(job.idempotencyKey));
 }
 
 export async function readConnectorOutbox(env = process.env) {
@@ -144,6 +170,53 @@ export async function readConnectorOutbox(env = process.env) {
   return {
     schemaVersion: 1,
     jobs: mergeConnectorOutboxJobs(jobs, [], env),
+  };
+}
+
+function filterValueMatches(actual = "", expected = "") {
+  const needle = clean(expected).toLowerCase();
+  if (!needle) return true;
+  return clean(actual).toLowerCase() === needle;
+}
+
+function stateFilterMatches(actual = "", expected = "") {
+  const raw = clean(expected).toLowerCase();
+  if (!raw) return true;
+  const states = raw.split(/[\s,]+/g).map(clean).filter(Boolean);
+  return !states.length || states.includes(clean(actual || "pending").toLowerCase());
+}
+
+export async function listConnectorOutboxJobs(filters = {}, env = process.env) {
+  const store = await readConnectorOutbox(env);
+  const limit = Math.max(0, Math.floor(Number(filters.limit || 0) || 0));
+  const jobs = store.jobs
+    .filter((job) => filterValueMatches(job.connector, filters.connector))
+    .filter((job) => stateFilterMatches(job.state, filters.state))
+    .filter((job) => filterValueMatches(job.tenantId, filters.tenantId))
+    .filter((job) => filterValueMatches(job.ownerUserId, filters.ownerUserId || filters.userId))
+    .filter((job) => filterValueMatches(job.accountId, filters.accountId))
+    .filter((job) => filterValueMatches(job.chatId, filters.chatId))
+    .filter((job) => filterValueMatches(job.threadId, filters.threadId || filters.thread))
+    .filter((job) => filterValueMatches(job.deliveryType, filters.deliveryType))
+    .sort((left, right) => dateMs(right.updatedAt || right.terminalAt || right.createdAt) - dateMs(left.updatedAt || left.terminalAt || left.createdAt));
+  const visible = limit ? jobs.slice(0, limit) : jobs;
+  return {
+    schemaVersion: store.schemaVersion,
+    jobs: visible,
+    count: visible.length,
+    total: jobs.length,
+    filters: {
+      connector: clean(filters.connector),
+      state: clean(filters.state),
+      tenantId: clean(filters.tenantId),
+      ownerUserId: clean(filters.ownerUserId || filters.userId),
+      accountId: clean(filters.accountId),
+      chatId: clean(filters.chatId),
+      threadId: clean(filters.threadId || filters.thread),
+      deliveryType: clean(filters.deliveryType),
+      limit,
+    },
+    generatedAt: nowIso(),
   };
 }
 
@@ -276,4 +349,128 @@ export async function markConnectorOutboxJob(jobIdOrKey = "", patch = {}, env = 
     state: updated.state,
   }, env).catch(() => {});
   return updated;
+}
+
+function operatorPatchForAction(job = {}, action = "", options = {}) {
+  const normalized = normalizeConnectorOutboxAction(action);
+  const now = nowIso();
+  const reason = clean(options.reason || options.error);
+  const operator = clean(options.operator || options.operatorId || "operator");
+  if (normalized === "retry" || normalized === "replay") {
+    return {
+      state: "pending",
+      claimedBy: "",
+      claimedAt: "",
+      claimExpiresAt: "",
+      deliveredAt: "",
+      failedAt: "",
+      skippedAt: "",
+      terminalAt: "",
+      error: "",
+      metadata: {
+        ...(job.metadata || {}),
+        ...(normalized === "replay" ? { replayCount: Number(job.metadata?.replayCount || 0) + 1 } : {}),
+        [`${normalized}RequestedAt`]: now,
+        [`${normalized}RequestedBy`]: operator,
+        [`${normalized}FromState`]: clean(job.state || "pending"),
+        ...(reason ? { [`${normalized}Reason`]: reason } : {}),
+      },
+    };
+  }
+  if (normalized === "suppress") {
+    return {
+      state: "suppressed",
+      claimedBy: "",
+      claimedAt: "",
+      claimExpiresAt: "",
+      skippedAt: now,
+      terminalAt: now,
+      error: reason || "operator_suppressed",
+      metadata: {
+        ...(job.metadata || {}),
+        suppressedBy: operator,
+        suppressedAt: now,
+      },
+    };
+  }
+  if (normalized === "dead_letter") {
+    return {
+      state: "dead_letter",
+      claimedBy: "",
+      claimedAt: "",
+      claimExpiresAt: "",
+      failedAt: clean(job.failedAt) || now,
+      terminalAt: now,
+      error: reason || clean(job.error) || "operator_dead_letter",
+      metadata: {
+        ...(job.metadata || {}),
+        deadLetteredBy: operator,
+        deadLetteredAt: now,
+      },
+    };
+  }
+  if (normalized === "mark_delivered") {
+    return {
+      state: "delivered",
+      claimedBy: "",
+      claimedAt: "",
+      claimExpiresAt: "",
+      deliveredAt: clean(options.deliveredAt) || now,
+      terminalAt: now,
+      error: "",
+      brokerAck: options.brokerAck && typeof options.brokerAck === "object" && !Array.isArray(options.brokerAck)
+        ? options.brokerAck
+        : {
+            operatorMarked: true,
+            operator,
+            ...(reason ? { reason } : {}),
+            markedAt: now,
+          },
+      metadata: {
+        ...(job.metadata || {}),
+        markedDeliveredBy: operator,
+        markedDeliveredAt: now,
+      },
+    };
+  }
+  return null;
+}
+
+export async function applyConnectorOutboxJobAction(jobIdOrKey = "", action = "", options = {}, env = process.env) {
+  const normalized = normalizeConnectorOutboxAction(action);
+  if (!normalized) {
+    const error = new Error("connector_outbox_action_invalid");
+    error.statusCode = 400;
+    throw error;
+  }
+  const store = await readConnectorOutbox(env);
+  const target = clean(jobIdOrKey);
+  const current = store.jobs.find((job) => job.id === target || job.idempotencyKey === target);
+  if (!current) {
+    const error = new Error("connector_outbox_job_missing");
+    error.statusCode = 404;
+    throw error;
+  }
+  const patch = operatorPatchForAction(current, normalized, options);
+  const job = await markConnectorOutboxJob(current.id, patch, env);
+  await appendEvent({
+    type: "connector_outbox_operator_action",
+    outboxJobId: current.id,
+    tenantId: current.tenantId,
+    connector: current.connector,
+    chatId: current.chatId,
+    threadId: current.threadId,
+    sourceMessageId: current.sourceMessageId,
+    deliveryType: current.deliveryType,
+    action: normalized,
+    previousState: current.state,
+    state: job?.state || "",
+    operator: clean(options.operator || options.operatorId || "operator"),
+  }, env).catch(() => {});
+  return {
+    ok: true,
+    action: normalized,
+    previousState: current.state,
+    job,
+  };
 }

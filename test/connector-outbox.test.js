@@ -3,13 +3,19 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
+import { startServer } from "../apps/server/src/server.js";
 import {
+  applyConnectorOutboxJobAction,
   claimConnectorOutboxJob,
+  connectorOutboxRetentionLimit,
   connectorOutboxTerminalState,
   ensureConnectorOutboxJob,
+  listConnectorOutboxJobs,
+  mergeConnectorOutboxJobs,
   markConnectorOutboxJob,
   readConnectorOutbox,
 } from "../packages/connectors/src/connector-outbox.js";
+import { approvePairingChallenge, createPairingChallenge, pairBrowser, sessionCookieHeader } from "../packages/core/src/security.js";
 
 function env(home, extra = {}) {
   return {
@@ -79,4 +85,129 @@ test("connector outbox expired claims are retryable after broker downtime", asyn
   assert.equal(claim.acquired, true);
   assert.equal(claim.job.claimedBy, "new-worker");
   assert.equal(claim.job.attemptCount, 2);
+});
+
+test("connector outbox operator actions list and terminalize selected jobs", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-connector-outbox-ops-"));
+  const runtimeEnv = env(home);
+  const { job } = await ensureConnectorOutboxJob(whatsappJob({
+    tenantId: "tenant-a",
+    state: "failed_retryable",
+    failedAt: new Date().toISOString(),
+    error: "bridge_down",
+  }), runtimeEnv);
+
+  const listed = await listConnectorOutboxJobs({ connector: "whatsapp", state: "failed_retryable", tenantId: "tenant-a" }, runtimeEnv);
+  assert.equal(listed.count, 1);
+  assert.equal(listed.jobs[0].id, job.id);
+
+  const suppressed = await applyConnectorOutboxJobAction(job.id, "suppress", { reason: "stale", operator: "tester" }, runtimeEnv);
+  assert.equal(suppressed.job.state, "suppressed");
+  assert.equal(suppressed.job.error, "stale");
+  assert.equal(suppressed.job.claimedBy, "");
+
+  const retry = await applyConnectorOutboxJobAction(job.id, "retry", { reason: "operator retry", operator: "tester" }, runtimeEnv);
+  assert.equal(retry.job.state, "pending");
+  assert.equal(retry.job.error, "");
+  assert.equal(retry.job.skippedAt, "");
+  assert.equal(retry.job.metadata.retryRequestedBy, "tester");
+
+  const delivered = await applyConnectorOutboxJobAction(job.id, "mark-delivered", { reason: "confirmed elsewhere", operator: "tester" }, runtimeEnv);
+  assert.equal(delivered.job.state, "delivered");
+  assert.equal(delivered.job.brokerAck.operatorMarked, true);
+});
+
+test("whatsapp outbox diagnostics require an admin principal", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-connector-outbox-admin-"));
+  const priorHome = process.env.ORKESTR_HOME;
+  const priorAuth = process.env.ORKESTR_AUTH_REQUIRED;
+  const priorRecover = process.env.ORKESTR_RECOVER_RUNNING_ON_START;
+  process.env.ORKESTR_HOME = home;
+  process.env.ORKESTR_AUTH_REQUIRED = "1";
+  process.env.ORKESTR_RECOVER_RUNNING_ON_START = "0";
+  const runtimeEnv = env(home);
+  const { job } = await ensureConnectorOutboxJob(whatsappJob({
+    tenantId: "tenant-a",
+    state: "failed_retryable",
+    failedAt: new Date().toISOString(),
+    error: "bridge_down",
+  }), runtimeEnv);
+  const server = await startServer({ port: 0, host: "127.0.0.1" });
+  const { port } = server.address();
+  const baseUrl = `http://127.0.0.1:${port}`;
+
+  try {
+    const challenge = await createPairingChallenge({ env: process.env, userId: "alice", role: "user" });
+    await approvePairingChallenge(challenge.challengeId, { env: process.env });
+    const paired = await pairBrowser({ challengeId: challenge.challengeId, env: process.env });
+    const cookie = sessionCookieHeader(paired.token, process.env);
+
+    const listResponse = await fetch(`${baseUrl}/api/connectors/whatsapp/outbox?threadId=thread-1`, {
+      headers: { cookie },
+    });
+    const listPayload = await listResponse.json();
+    assert.equal(listResponse.status, 403);
+    assert.equal(listPayload.error, "connector_admin_required");
+
+    const actionResponse = await fetch(`${baseUrl}/api/connectors/whatsapp/outbox/${encodeURIComponent(job.id)}/suppress`, {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie },
+      body: JSON.stringify({ reason: "test" }),
+    });
+    const actionPayload = await actionResponse.json();
+    assert.equal(actionResponse.status, 403);
+    assert.equal(actionPayload.error, "connector_admin_required");
+  } finally {
+    await server.close();
+    if (priorHome === undefined) delete process.env.ORKESTR_HOME;
+    else process.env.ORKESTR_HOME = priorHome;
+    if (priorAuth === undefined) delete process.env.ORKESTR_AUTH_REQUIRED;
+    else process.env.ORKESTR_AUTH_REQUIRED = priorAuth;
+    if (priorRecover === undefined) delete process.env.ORKESTR_RECOVER_RUNNING_ON_START;
+    else process.env.ORKESTR_RECOVER_RUNNING_ON_START = priorRecover;
+  }
+});
+
+test("connector outbox retention prunes terminal history but keeps active jobs", async () => {
+  const runtimeEnv = env("/tmp/unused-orkestr-connector-outbox-retention", {
+    ORKESTR_CONNECTOR_OUTBOX_RETENTION: "2",
+  });
+  const oldActive = whatsappJob({
+    tenantId: "tenant-a",
+    sourceMessageId: "active-old",
+    sourceEventId: "active-old",
+    state: "pending",
+    createdAt: "2026-06-07T10:00:00.000Z",
+    updatedAt: "2026-06-07T10:00:00.000Z",
+  });
+  const terminalOne = whatsappJob({
+    tenantId: "tenant-a",
+    sourceMessageId: "terminal-1",
+    sourceEventId: "terminal-1",
+    state: "delivered",
+    createdAt: "2026-06-07T10:01:00.000Z",
+    updatedAt: "2026-06-07T10:01:00.000Z",
+  });
+  const terminalTwo = whatsappJob({
+    tenantId: "tenant-a",
+    sourceMessageId: "terminal-2",
+    sourceEventId: "terminal-2",
+    state: "skipped",
+    createdAt: "2026-06-07T10:02:00.000Z",
+    updatedAt: "2026-06-07T10:02:00.000Z",
+  });
+  const terminalThree = whatsappJob({
+    tenantId: "tenant-a",
+    sourceMessageId: "terminal-3",
+    sourceEventId: "terminal-3",
+    state: "suppressed",
+    createdAt: "2026-06-07T10:03:00.000Z",
+    updatedAt: "2026-06-07T10:03:00.000Z",
+  });
+
+  const merged = mergeConnectorOutboxJobs([oldActive, terminalOne, terminalTwo, terminalThree], [], runtimeEnv);
+
+  assert.equal(connectorOutboxRetentionLimit(runtimeEnv), 2);
+  assert.deepEqual(merged.map((job) => job.sourceMessageId), ["active-old", "terminal-2", "terminal-3"]);
+  assert.equal(merged.find((job) => job.sourceMessageId === "active-old")?.state, "pending");
 });

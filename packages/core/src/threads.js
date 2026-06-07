@@ -59,6 +59,8 @@ const messageStringFields = [
   "publicMessageId",
   "forwardedBy",
   "apiSessionId",
+  "clientMessageId",
+  "idempotencyKey",
 ];
 
 function safeThreadId(threadId) {
@@ -289,15 +291,22 @@ export async function updateThread(threadId, patch = {}, env = process.env) {
   const id = normalizeThreadId(threadId);
   const threads = await listThreads(env);
   let updated = null;
+  let changed = false;
   const next = threads.map((thread) => {
     if (thread.id !== id && thread.name !== id && thread.bindingName !== id) return thread;
-    updated = {
+    const candidate = {
       ...thread,
       ...patch,
       executor: patch.executor ? { ...(thread.executor || {}), ...patch.executor } : thread.executor,
       binding: patch.binding ? { ...(thread.binding || {}), ...patch.binding } : thread.binding,
       updatedAt: nowIso(),
     };
+    if (comparableThreadState(thread) === comparableThreadState(candidate)) {
+      updated = thread;
+      return thread;
+    }
+    updated = candidate;
+    changed = true;
     return updated;
   });
   if (!updated) {
@@ -305,8 +314,14 @@ export async function updateThread(threadId, patch = {}, env = process.env) {
     error.statusCode = 404;
     throw error;
   }
-  await saveThreads(next, env);
+  if (changed) await saveThreads(next, env);
   return updated;
+}
+
+function comparableThreadState(thread = {}) {
+  const comparable = { ...(thread || {}) };
+  delete comparable.updatedAt;
+  return JSON.stringify(comparable);
 }
 
 function descendantThreadIds(threads, rootIds) {
@@ -389,6 +404,14 @@ export async function appendThreadMessage(threadId, input, env = process.env) {
     const messages = await messageRepository.list(thread.id);
     const role = String(input.role || "assistant");
     const source = String(input.source || "manual");
+    const clientMessageId = clientInputIdempotencyKey(input);
+    if (role === "user" && clientMessageId) {
+      const duplicate = [...messages].reverse().find((existing) =>
+        existing.role === "user" &&
+        clientInputIdempotencyKey(existing) === clientMessageId
+      );
+      if (duplicate) return { ...duplicate, duplicate: true, duplicateReason: "client_message_id" };
+    }
     const externalId = String(input.externalId || "").trim();
     if (role === "user" && externalId && whatsappOrigin({ ...input, role, source })) {
       const duplicate = [...messages].reverse().find((existing) =>
@@ -417,6 +440,7 @@ export async function appendThreadMessage(threadId, input, env = process.env) {
       cursor,
       state: String(input.state || "completed"),
     };
+    if (clientMessageId) nextMessage.clientMessageId = clientMessageId;
     for (const key of messageStringFields) {
       const value = String(input[key] || "").trim();
       if (value) nextMessage[key] = value;
@@ -459,6 +483,16 @@ export async function appendThreadMessage(threadId, input, env = process.env) {
 
 function compactInputText(value) {
   return String(value || "").replace(/\s+/g, " ").trim();
+}
+
+function clientInputIdempotencyKey(input = {}) {
+  return String(
+    input.clientMessageId ||
+    input.client_message_id ||
+    input.clientMessageID ||
+    input.idempotencyKey ||
+    "",
+  ).trim();
 }
 
 function whatsappOrigin(input = {}) {

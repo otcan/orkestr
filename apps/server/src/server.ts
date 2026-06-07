@@ -18,6 +18,7 @@ import {
   startConfiguredLocalWhatsAppAccounts,
   stopLocalWhatsAppBridge,
 } from "../../../packages/connectors/src/whatsapp-local-bridge.js";
+import { clearWhatsAppDeliveryIdleCache } from "../../../packages/connectors/src/whatsapp.js";
 import { ensureDataDirs } from "../../../packages/storage/src/paths.js";
 import { authorizeHttpRequest } from "../../../packages/core/src/security.js";
 import { getThreadForPrincipal, listThreads } from "../../../packages/core/src/threads.js";
@@ -47,6 +48,11 @@ export {
   startupRecoveryDelayMs,
 };
 
+function whatsappDeliveryPollIntervalMs(env = process.env) {
+  const parsed = Number(env.ORKESTR_WHATSAPP_DELIVERY_POLL_INTERVAL_MS || 10000);
+  return Number.isFinite(parsed) ? Math.max(5000, Math.floor(parsed)) : 10000;
+}
+
 export async function createApp(): Promise<INestApplication> {
   const app = await NestFactory.create(AppModule, { logger: false });
   app.use((_request, response, next) => {
@@ -59,6 +65,8 @@ export async function createApp(): Promise<INestApplication> {
       if (result.ok) {
         (request as any).orkestrPrincipal = result.principal;
         (request as any).orkestrSecuritySession = result.session || null;
+        (request as any).orkestrMachineAuth = (result as any).machineAuth || null;
+        (request as any).orkestrMachineAuthContext = (result as any).machineAuthContext || null;
         const resourceAuth = await authorizeThreadResourceRequest(request, result.principal);
         if (!resourceAuth.ok) {
           return response
@@ -160,6 +168,14 @@ function isUserConnectorRoute(route: { method: string; connector: string; action
   if (route.connector === "outlook") {
     if (route.method === "POST" && route.action.length === 2 && route.action[0] === "oauth" && ["start", "poll"].includes(route.action[1])) return true;
     if (route.method === "POST" && route.action.length === 1 && route.action[0] === "test") return true;
+  }
+  if (route.connector === "whatsapp") {
+    if (route.action[0] !== "accounts") return false;
+    if (route.method === "GET" && route.action.length === 1) return true;
+    if (route.method === "POST" && route.action.length === 1) return true;
+    if ((route.method === "PUT" || route.method === "DELETE") && route.action.length === 2) return true;
+    if (route.method === "GET" && route.action.length === 3 && ["status", "qr.svg"].includes(route.action[2])) return true;
+    if (route.method === "POST" && route.action.length === 3 && ["pairing-session", "reconnect", "disconnect"].includes(route.action[2])) return true;
   }
   return false;
 }
@@ -312,16 +328,32 @@ export async function startServer({ port = 19812, host = "127.0.0.1", openBrowse
     });
   }, paneProgressMonitorIntervalMs());
   const whatsappDeliveryScheduler = createWhatsAppDeliveryScheduler(serverEnv);
-  const clearConnectorDeliverySignalHandler = setThreadConnectorDeliverySignalHandler(() => {
+  const whatsappDeliveryPoll = setInterval(() => {
     whatsappDeliveryScheduler.schedule();
+  }, whatsappDeliveryPollIntervalMs(serverEnv));
+  whatsappDeliveryPoll.unref?.();
+  const whatsappDeliveryFollowUpDelayMs = () => {
+    const parsed = Number(serverEnv.ORKESTR_WHATSAPP_DELIVERY_MIN_INTERVAL_MS || 0);
+    const minIntervalMs = Number.isFinite(parsed) ? Math.max(0, Math.floor(parsed)) : 0;
+    return Math.max(1500, Math.min(30000, minIntervalMs + 500));
+  };
+  const scheduleWhatsAppDeliveryFollowUp = () => {
+    clearWhatsAppDeliveryIdleCache();
+    const timer = setTimeout(() => whatsappDeliveryScheduler.schedule(), whatsappDeliveryFollowUpDelayMs());
+    if (typeof timer.unref === "function") timer.unref();
+  };
+  const clearConnectorDeliverySignalHandler = setThreadConnectorDeliverySignalHandler(() => {
+    clearWhatsAppDeliveryIdleCache();
+    whatsappDeliveryScheduler.schedule();
+    scheduleWhatsAppDeliveryFollowUp();
   });
   const clearDeliveryFailureHandler = setThreadInputDeliveryFailureHandler(() => {
     whatsappDeliveryScheduler.schedule();
   });
-  const clearCodexAppServerMessageHandler = setCodexAppServerMessageHandler(({ message }: any = {}) => {
-    if (String(message?.connector || "").trim().toLowerCase() === "whatsapp") {
-      whatsappDeliveryScheduler.schedule();
-    }
+  const clearCodexAppServerMessageHandler = setCodexAppServerMessageHandler(() => {
+    clearWhatsAppDeliveryIdleCache();
+    whatsappDeliveryScheduler.schedule();
+    scheduleWhatsAppDeliveryFollowUp();
   });
 
   registerDesktopProxy(app);
@@ -344,6 +376,7 @@ export async function startServer({ port = 19812, host = "127.0.0.1", openBrowse
     clearDeliveryFailureHandler();
     clearCodexAppServerMessageHandler();
     if (startupRecoveryTimer) clearTimeout(startupRecoveryTimer);
+    clearInterval(whatsappDeliveryPoll);
     whatsappDeliveryScheduler.close();
     stopCodexAppServerClients();
     await stopLocalWhatsAppBridge(serverEnv).catch(() => {});
@@ -384,7 +417,32 @@ if (fileURLToPath(import.meta.url) === path.resolve(process.argv[1] || "")) {
   const args = new Set(process.argv.slice(2));
   const port = Number(process.env.PORT || process.env.ORKESTR_PORT || 19812);
   const host = process.env.ORKESTR_HOST || "127.0.0.1";
-  startServer({ port, host, openBrowser: args.has("--open") }).catch((error) => {
+  let handle: ReturnType<typeof serverHandle> | null = null;
+  let closing = false;
+  const shutdown = (signal: string) => {
+    if (closing) return;
+    closing = true;
+    const timeoutMs = Number(process.env.ORKESTR_SHUTDOWN_FORCE_EXIT_MS || 10000);
+    const forceExit = setTimeout(() => {
+      console.error(`Forced Orkestr shutdown after ${timeoutMs}ms (${signal}).`);
+      process.exit(0);
+    }, Math.max(1000, timeoutMs));
+    forceExit.unref?.();
+    if (!handle) {
+      clearTimeout(forceExit);
+      process.exit(0);
+    }
+    handle.close((error) => {
+      clearTimeout(forceExit);
+      if (error) console.error(error?.stack || error?.message || String(error));
+      process.exit(error ? 1 : 0);
+    });
+  };
+  process.once("SIGTERM", () => shutdown("SIGTERM"));
+  process.once("SIGINT", () => shutdown("SIGINT"));
+  startServer({ port, host, openBrowser: args.has("--open") }).then((server) => {
+    handle = server;
+  }).catch((error) => {
     console.error(error?.stack || error?.message || String(error));
     process.exit(1);
   });

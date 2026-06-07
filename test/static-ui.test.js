@@ -220,6 +220,21 @@ test("pairing-required flow stays on the Orkestr app host", async () => {
   assert.doesNotMatch(component, /new URL\("\/setup\/pairing", authUrl\)/);
 });
 
+test("pairing return and Codex required shell stay same-origin and reason-aware", async () => {
+  const component = await fs.readFile("apps/web/src/app/app.component.ts", "utf8");
+  const template = await fs.readFile("apps/web/src/app/app.component.html", "utf8");
+
+  assert.match(component, /private authContextIssue\(\)/);
+  assert.match(component, /setupStatusRedacted\(\)/);
+  assert.match(component, /Boolean\(codex\)/);
+  assert.match(component, /reason === "codex_auth_invalid"/);
+  assert.match(component, /Codex sign-in expired/);
+  assert.match(component, /sameOriginPairingReturnUrl/);
+  assert.match(component, /target\.origin === current\.origin/);
+  assert.doesNotMatch(component, /allowedOrigins\.includes\(target\.origin\)/);
+  assert.doesNotMatch(template, /Codex Agent broken/);
+});
+
 test("global shell keeps onboarding footer reachable", async () => {
   const styles = await fs.readFile("apps/web/src/styles.css", "utf8");
   const onboardingTemplate = await fs.readFile("apps/web/src/app/onboarding-page.component.html", "utf8");
@@ -343,6 +358,47 @@ test("ops audit view exposes normalized filterable events", async () => {
   assert.match(styles, /\.audit-row small/);
 });
 
+test("thread delivery panel exposes admin WhatsApp outbox operator controls", async () => {
+  const template = await fs.readFile("apps/web/src/app/app.component.html", "utf8");
+  const component = await fs.readFile("apps/web/src/app/app.component.ts", "utf8");
+  const api = await fs.readFile("apps/web/src/app/api.service.ts", "utf8");
+  const controller = await fs.readFile("apps/server/src/modules/connectors/whatsapp-diagnostics.controller.ts", "utf8");
+  const styles = await fs.readFile("apps/web/src/styles.css", "utf8");
+
+  assert.match(api, /interface WhatsAppOutboxJob/);
+  assert.match(api, /whatsappOutbox\(options: \{ threadId\?: string; state\?: string; limit\?: number \} = \{\}\)/);
+  assert.match(api, /whatsappOutboxAction\(jobId: string, action: string/);
+  assert.match(component, /deliveryOutboxJobs: WhatsAppOutboxJob\[\] = \[\]/);
+  assert.match(component, /this\.api\.whatsappOutbox\(\{ threadId: thread\.id, limit: 50 \}\)/);
+  assert.match(component, /applyOutboxAction\(job: WhatsAppOutboxJob, action: string\)/);
+  assert.match(template, /WhatsApp Outbox/);
+  assert.match(template, /@for \(action of outboxJobActions\(job\); track action\)/);
+  assert.match(template, /\(click\)="applyOutboxAction\(job, action\)"/);
+  assert.match(controller, /function assertAdminRequest\(request: any\)/);
+  assert.match(controller, /whatsapp_outbox_admin_required/);
+  assert.match(styles, /\.outbox-list/);
+  assert.match(styles, /\.outbox-actions/);
+});
+
+test("thread WhatsApp settings use neutral connector account labels", async () => {
+  const template = await fs.readFile("apps/web/src/app/app.component.html", "utf8");
+  const component = await fs.readFile("apps/web/src/app/app.component.ts", "utf8");
+  const controller = await fs.readFile("apps/server/src/modules/threads/thread-binding.controller.ts", "utf8");
+  const schemas = await fs.readFile("packages/shared/src/api-schemas.js", "utf8");
+
+  assert.match(template, /Inbound account/);
+  assert.match(template, /Reply account/);
+  assert.match(template, /Listen with/);
+  assert.match(template, /Reply with/);
+  assert.doesNotMatch(template, />Sender</);
+  assert.doesNotMatch(template, />Responder</);
+  assert.match(component, /selectedWhatsAppReplyAccountId\(\)/);
+  assert.match(component, /selectedWhatsAppInboundAccountId\(\)/);
+  assert.match(component, /responderConnectorAccountId: this\.selectedWhatsAppReplyAccountId\(\)/);
+  assert.match(controller, /responderConnectorAccountId/);
+  assert.match(schemas, /responderConnectorAccountId/);
+});
+
 test("ops waitlist view exposes secure approval workflow", async () => {
   const opsTemplate = await fs.readFile("apps/web/src/app/ops-page.component.html", "utf8");
   const opsComponent = await fs.readFile("apps/web/src/app/ops-page.component.ts", "utf8");
@@ -367,7 +423,10 @@ test("ops waitlist view exposes secure approval workflow", async () => {
   assert.match(waitlistTemplate, /High risk: approval creates or connects a user/);
   assert.match(waitlistTemplate, /I confirm this applicant should be onboarded/);
   assert.match(waitlistComponent, /Admin email not configured/);
-  assert.match(waitlistTemplate, /Primary WhatsApp account/);
+  assert.match(waitlistTemplate, /Default WhatsApp account/);
+  assert.match(waitlistTemplate, /Inbound account/);
+  assert.match(waitlistTemplate, /Reply account/);
+  assert.match(waitlistTemplate, /Delivery account/);
   assert.match(api, /export interface WaitlistEntry/);
   assert.match(api, /waitlist\(status = "", limit = 200\)/);
   assert.match(api, /approveWaitlistEntry\(id: string, body: Record<string, unknown>\)/);
@@ -378,6 +437,20 @@ test("ops waitlist view exposes secure approval workflow", async () => {
   assert.match(emailNotifications, /ORKESTR_WAITLIST_NOTIFY_EMAIL/);
   assert.match(emailNotifications, /ORKESTR_SMTP_HOST/);
   assert.match(styles, /\.waitlist-warning/);
+});
+
+test("secure input routes are marked no-capture and metadata-only", async () => {
+  const controller = await fs.readFile("apps/server/src/modules/secure-input/secure-input.controller.ts", "utf8");
+  const core = await fs.readFile("packages/core/src/secure-secrets.js", "utf8");
+  const cli = await fs.readFile("apps/cli/src/commands.js", "utf8");
+
+  assert.match(controller, /X-Orkestr-Secure-Input/);
+  assert.match(controller, /noMirror,noCapture,noCodexContext,noScreenshot/);
+  assert.match(controller, /return setSecureSecret/);
+  assert.match(core, /encryptedValue/);
+  assert.match(core, /createCipheriv\("aes-256-gcm"/);
+  assert.match(cli, /\/dev\/tty/);
+  assert.match(cli, /stty \$\{enabled \? "echo" : "-echo"\}/);
 });
 
 test("ops users page exposes WhatsApp identity binding controls", async () => {
@@ -399,6 +472,7 @@ test("ops users page exposes WhatsApp identity binding controls", async () => {
   assert.match(component, /selectedUserWhatsAppIdentities\(user: OrkestrUser\): UserIdentity\[\]/);
   assert.match(component, /whatsappIdentitySource\(identity: UserIdentity\): string/);
   assert.match(template, /WhatsApp identities/);
+  assert.match(template, /WhatsApp identity ID/);
   assert.match(template, /wa-identity-sender-/);
   assert.match(template, /wa-identity-chat-/);
   assert.match(template, /\(submit\)="linkWhatsAppIdentity\(user\); \$event\.preventDefault\(\)"/);
@@ -470,7 +544,7 @@ test("web shell switches to a constrained non-admin user mode", async () => {
   assert.match(component, /currentUser: OrkestrUser \| null = null/);
   assert.match(component, /firstValueFrom\(this\.api\.currentUser\(\)\)/);
   assert.match(component, /shouldShowCodexRequiredShell\(\): boolean/);
-  assert.match(component, /this\.appReady && this\.isAdminMode\(\) && !this\.codexAgentReady\(\)/);
+  assert.match(component, /this\.appReady && this\.isAdminMode\(\) && !this\.authContextIssue\(\) && Boolean\(codex\) && !this\.codexAgentReady\(\)/);
   assert.match(component, /uiRuntimeReady\(\): boolean/);
   assert.match(component, /return this\.isUserMode\(\) \|\| this\.codexAgentReady\(\)/);
   assert.match(component, /panelAllowedForCurrentUser\(panel: Panel\): boolean/);

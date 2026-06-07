@@ -669,6 +669,52 @@
             </div>
             <button class="secondary" type="button" (click)="loadDeliveryTraces()" [disabled]="busy">Reload</button>
           </div>
+          @if (isAdminMode()) {
+            <div class="panel-title compact-title">
+              <div>
+                <p class="eyebrow">WhatsApp Outbox</p>
+                <h3>{{ deliveryOutboxJobs.length }} jobs</h3>
+              </div>
+            </div>
+            <div class="compact-list outbox-list">
+              @for (job of deliveryOutboxJobs; track job.id) {
+                <article class="compact-row outbox-row">
+                  <div>
+                    <strong>{{ outboxJobTitle(job) }}</strong>
+                    <span>{{ outboxStateLabel(job) }}</span>
+                    @if (outboxJobMeta(job)) {
+                      <small>{{ outboxJobMeta(job) }}</small>
+                    }
+                    @if (job.error) {
+                      <small>{{ job.error }}</small>
+                    }
+                  </div>
+                  <div class="settings-facts">
+                    <span>Revision</span>
+                    <strong>{{ job.sourceRevision || "1" }}</strong>
+                    <span>Attempts</span>
+                    <strong>{{ job.attemptCount || 0 }}</strong>
+                    <span>Updated</span>
+                    <strong>{{ outboxUpdatedAt(job) | date: "MMM d, HH:mm:ss" }}</strong>
+                  </div>
+                  <div class="outbox-actions">
+                    @for (action of outboxJobActions(job); track action) {
+                      <button
+                        class="secondary"
+                        type="button"
+                        (click)="applyOutboxAction(job, action)"
+                        [disabled]="busy || deliveryOutboxBusyJobId === job.id"
+                      >
+                        {{ deliveryOutboxBusyJobId === job.id ? "Applying" : outboxActionLabel(action) }}
+                      </button>
+                    }
+                  </div>
+                </article>
+              } @empty {
+                <p class="empty">No WhatsApp outbox jobs are stored for this thread.</p>
+              }
+            </div>
+          }
           <div class="compact-list">
             @for (trace of deliveryTraces; track trace.routerTraceId) {
               <article class="compact-row">
@@ -812,14 +858,14 @@
 
               <div class="wa-summary-strip" aria-label="WhatsApp connection summary">
                 <div>
-                  <span>Sender</span>
-                  <strong>{{ selectedWhatsAppSenderAccountLabel() }}</strong>
-                  <small>{{ selectedWhatsAppSenderAccountStateLabel() }}</small>
+                  <span>Inbound account</span>
+                  <strong>{{ selectedWhatsAppInboundAccountLabel() }}</strong>
+                  <small>{{ selectedWhatsAppInboundAccountStateLabel() }}</small>
                 </div>
                 <div>
-                  <span>Responder</span>
-                  <strong>{{ selectedWhatsAppAccountLabel() }}</strong>
-                  <small>{{ selectedWhatsAppAccountStateLabel() }}</small>
+                  <span>Reply account</span>
+                  <strong>{{ selectedWhatsAppReplyAccountLabel() }}</strong>
+                  <small>{{ selectedWhatsAppReplyAccountStateLabel() }}</small>
                 </div>
                 <div>
                   <span>Chat</span>
@@ -843,10 +889,10 @@
                       <strong>{{ whatsappDisplayName || whatsappChatLabel(thread) }}</strong>
                       <span>Chat id</span>
                       <strong>{{ whatsappChatId || thread.binding?.chatId }}</strong>
-                      <span>Sender account</span>
-                      <strong>{{ selectedWhatsAppSenderAccountLabel() }}</strong>
-                      <span>Orkestr account</span>
-                      <strong>{{ selectedWhatsAppAccountLabel() }}</strong>
+                      <span>Inbound account</span>
+                      <strong>{{ selectedWhatsAppInboundAccountLabel() }}</strong>
+                      <span>Reply account</span>
+                      <strong>{{ selectedWhatsAppReplyAccountLabel() }}</strong>
                     </div>
                   </section>
 
@@ -871,15 +917,15 @@
                       <span>Allow messages from additional chat participants</span>
                     </label>
                     <div class="settings-facts">
-                      <span>Linked sender account</span>
-                      <strong>{{ selectedWhatsAppSenderAccountLabel() }}</strong>
+                      <span>Linked inbound account</span>
+                      <strong>{{ selectedWhatsAppInboundAccountLabel() }}</strong>
                       @if (whatsappAllowOtherPeople) {
                         <span>Allowed participants</span>
                         <strong>{{ whatsappParticipantsLoading ? "Checking" : whatsappAdditionalParticipantCount(thread) }}</strong>
                       }
                     </div>
                     @if (!whatsappAllowOtherPeople) {
-                      <p class="helper">Additional participants are off. Orkestr only listens to the linked sender account.</p>
+                      <p class="helper">Additional participants are off. Orkestr only listens to the linked inbound account.</p>
                     } @else if (whatsappParticipants.length > 0 || whatsappSavedAdditionalParticipants(thread).length > 0) {
                       <div class="wa-participant-list">
                         @for (participant of whatsappSelectableParticipants(thread); track participant.id) {
@@ -912,10 +958,10 @@
                         }
                       </div>
                       @if (whatsappSelectableParticipants(thread).length === 0 && whatsappSavedAdditionalParticipants(thread).length === 0) {
-                        <p class="helper">No extra participants are available. The linked sender account can already message Orkestr.</p>
+                        <p class="helper">No extra participants are available. The linked inbound account can already message Orkestr.</p>
                       }
                     } @else if (!whatsappParticipantsLoading) {
-                      <p class="helper">The participant list is unavailable until the selected sender account is connected and the chat can be inspected. Orkestr can still listen to the linked sender account.</p>
+                      <p class="helper">The participant list is unavailable until the selected inbound account is connected and the chat can be inspected. Orkestr can still listen to the linked inbound account.</p>
                     }
                     <div class="settings-actions">
                       <button type="button" (click)="saveThreadBinding(thread)" [disabled]="busy || savingThreadBinding || !threadBindingDirty(thread)">
@@ -933,16 +979,16 @@
                     <div class="wa-section-head">
                       <span class="wa-step">1</span>
                       <div>
-                        <h4>Sender account</h4>
-                        <small>Select the WhatsApp account whose messages Orkestr should listen to.</small>
+                        <h4>Inbound account</h4>
+                        <small>Select the WhatsApp account whose chat messages Orkestr should listen to.</small>
                       </div>
                     </div>
                     <label class="settings-field">
-                      <span>Listen to</span>
+                      <span>Listen with</span>
                       <select
                         name="thread-wa-sender-account-select-{{ thread.id }}"
-                        [ngModel]="selectedWhatsAppSenderAccountId()"
-                        (ngModelChange)="changeWhatsAppSenderAccount($event)"
+                        [ngModel]="selectedWhatsAppInboundAccountId()"
+                        (ngModelChange)="changeWhatsAppInboundAccount($event)"
                       >
                         @for (account of connectedWhatsAppAccounts(); track whatsappAccountId(account)) {
                           <option [value]="whatsappAccountId(account)">
@@ -954,11 +1000,11 @@
                       </select>
                     </label>
                     <div class="settings-actions compact-actions">
-                      <button type="button" (click)="startWhatsAppAccount(selectedWhatsAppSenderAccountId())" [disabled]="busy || !canLoadLocalWhatsAppChats(selectedWhatsAppSenderAccountId())">
-                        Connect sender
+                      <button type="button" (click)="startSelectedWhatsAppInboundAccount()" [disabled]="busy || !canLoadLocalWhatsAppChats(selectedWhatsAppInboundAccountId())">
+                        Connect inbound account
                       </button>
-                      <button class="secondary" type="button" (click)="logoutWhatsAppAccount(selectedWhatsAppSenderAccountId())" [disabled]="busy || !canLoadLocalWhatsAppChats(selectedWhatsAppSenderAccountId())">
-                        Disconnect sender
+                      <button class="secondary" type="button" (click)="logoutSelectedWhatsAppInboundAccount()" [disabled]="busy || !canLoadLocalWhatsAppChats(selectedWhatsAppInboundAccountId())">
+                        Disconnect inbound account
                       </button>
                     </div>
                   </section>
@@ -967,16 +1013,16 @@
                     <div class="wa-section-head">
                       <span class="wa-step">2</span>
                       <div>
-                        <h4>Orkestr account</h4>
-                        <small>Select the WhatsApp account Orkestr should use to answer. If only one account is connected, use the same account.</small>
+                        <h4>Reply account</h4>
+                        <small>Select the WhatsApp account Orkestr should use to send replies. If only one account is connected, use the same account.</small>
                       </div>
                     </div>
                     <label class="settings-field">
-                      <span>Answer as</span>
+                      <span>Reply with</span>
                       <select
                         name="thread-wa-account-select-{{ thread.id }}"
-                        [ngModel]="selectedWhatsAppAccountId()"
-                        (ngModelChange)="changeWhatsAppAccount($event)"
+                        [ngModel]="selectedWhatsAppReplyAccountId()"
+                        (ngModelChange)="changeWhatsAppReplyAccount($event)"
                       >
                         @for (account of connectedWhatsAppAccounts(); track whatsappAccountId(account)) {
                           <option [value]="whatsappAccountId(account)">
@@ -988,11 +1034,11 @@
                       </select>
                     </label>
                     <div class="settings-actions compact-actions">
-                      <button type="button" (click)="startSelectedWhatsAppAccount()" [disabled]="busy || !canLoadLocalWhatsAppChats()">
-                        Connect Orkestr account
+                      <button type="button" (click)="startSelectedWhatsAppReplyAccount()" [disabled]="busy || !canLoadLocalWhatsAppChats()">
+                        Connect reply account
                       </button>
-                      <button class="secondary" type="button" (click)="logoutSelectedWhatsAppAccount()" [disabled]="busy || !canLoadLocalWhatsAppChats()">
-                        Disconnect Orkestr account
+                      <button class="secondary" type="button" (click)="logoutSelectedWhatsAppReplyAccount()" [disabled]="busy || !canLoadLocalWhatsAppChats()">
+                        Disconnect reply account
                       </button>
                       @if (whatsappAccountQrUrl()) {
                         <a class="button secondary" [href]="whatsappAccountQrUrl()" target="_blank" rel="noreferrer">Open QR</a>
@@ -1217,12 +1263,18 @@
 
       @if (activePanel === "raw" && isAdminMode()) {
         <section class="panel-body raw-panel">
-          @if (attachDetails?.ok && embeddedRawTerminalAvailable(thread)) {
+          @if (attachDetails?.ok && !attachDetails?.watchOnly && embeddedRawTerminalAvailable(thread)) {
             <div #rawTerminalHost class="raw-terminal-host" (click)="focusRawTerminal()" aria-label="Raw terminal"></div>
           } @else {
             <div class="empty-state">
               <h3>No live terminal</h3>
-              @if (canWakeThread(thread)) {
+              @if (attachDetails?.takeoverAvailable) {
+                <p>{{ attachDetails?.message || "Terminal takeover is available." }}</p>
+                <button type="button" (click)="takeoverRaw()" [disabled]="busy">Take Over</button>
+                @if (attachDetails?.watchText) {
+                  <pre class="raw-watch">{{ attachDetails?.watchText }}</pre>
+                }
+              } @else if (canWakeThread(thread)) {
                 <p>Wake the thread first, then reopen Raw.</p>
               } @else {
                 <p>This thread is not currently eligible for raw terminal attach.</p>

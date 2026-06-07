@@ -16,6 +16,7 @@ import {
   safeResetThreadRuntime,
   sleepThread,
   syncRuntimeWindowName,
+  takeoverRawTerminalThread,
   wakeThread,
 } from "../../../../../packages/core/src/runtime-leases.js";
 import { deleteTimerForPrincipal, listTimersForPrincipal } from "../../../../../packages/core/src/timers.js";
@@ -30,8 +31,14 @@ import {
 import { requestPrincipal } from "../../../../../packages/core/src/principal.js";
 import { isAdminPrincipal } from "../../../../../packages/core/src/policy.js";
 import { parseThreadInputCommand } from "../../../../../packages/core/src/thread-commands.js";
-import { codexResumeCommand } from "../../../../../packages/core/src/codex-attach-command.js";
 import { launchNativeTerminal } from "../../../../../packages/core/src/native-terminal.js";
+import {
+  rawAttachPollIntervalMs,
+  rawAttachTimeoutMs,
+  rawAttachWatchPayload,
+  rawAttachWatchText,
+  rawStructuredTurnActive,
+} from "../../../../../packages/core/src/raw-terminal-watch.js";
 import {
   API_AGENT_RUNTIME_KIND,
   defaultTenantThreadRuntime,
@@ -76,6 +83,83 @@ function shouldInterruptRuntime(status: Record<string, any> | null | undefined):
     status.typingActive ||
     Number(status.runningCount || 0) > 0,
   );
+}
+
+function queuedInputResponse(thread: Record<string, any>, message: Record<string, any>, reason = "pending_delivery") {
+  const state = String(message.state || "queued");
+  const queued = ["queued", "pending_delivery", "awaiting_ack", "running"].includes(state);
+  return {
+    ok: true,
+    threadId: codexThreadId(thread) || thread.id,
+    orkestrThreadId: thread.id,
+    message,
+    queued,
+    queueItemId: message.id,
+    delivered: [],
+    deliveryState: message.deliveryState || message.state || "queued",
+    reason,
+    state,
+    observed: true,
+    observedVia: message.observedVia || "pending_delivery",
+  };
+}
+
+function threadInputNeedsDelivery(message: Record<string, any>) {
+  return ["queued", "pending_delivery", "awaiting_ack", "running"].includes(String(message.state || ""));
+}
+
+function attachNumberMs(body: Record<string, unknown> = {}, key: string, secondsKey = "") {
+  const value = Number(body[key]);
+  if (Number.isFinite(value) && value > 0) return Math.floor(value);
+  const seconds = Number(secondsKey ? body[secondsKey] : null);
+  if (Number.isFinite(seconds) && seconds > 0) return Math.floor(seconds * 1000);
+  return undefined;
+}
+
+function attachBoolean(body: Record<string, unknown> = {}, key: string): boolean {
+  const value = body && typeof body === "object" ? body[key] : undefined;
+  if (typeof value === "string") return ["1", "true", "yes", "on"].includes(value.trim().toLowerCase());
+  return value === true;
+}
+
+async function attachWatchResponse(thread: Record<string, any>, status: Record<string, any> = {}, body: Record<string, unknown> = {}) {
+  const messages = await listThreadMessages(thread.id).catch(() => []);
+  const readOnly = body.readOnly === true || String(body.readOnly || "").toLowerCase() === "true";
+  const takeoverAvailable = body.takeoverAvailable === true || String(body.takeoverAvailable || "").toLowerCase() === "true";
+  const active = rawStructuredTurnActive(thread, status);
+  const intervalMs = rawAttachPollIntervalMs({
+    intervalMs: attachNumberMs(body, "intervalMs", "interval"),
+  });
+  const timeoutMs = rawAttachTimeoutMs({
+    timeoutMs: attachNumberMs(body, "timeoutMs", "timeout"),
+  });
+  const watch = rawAttachWatchPayload({
+    thread,
+    status,
+    messages,
+    startedAtMs: Number(body.watchStartedAtMs || 0) || Date.now(),
+    intervalMs,
+    timeoutMs,
+  });
+  const watchText = `${rawAttachWatchText(watch)}${takeoverAvailable ? "Structured runtime is idle. Run `orkestr attach <thread> --takeover` or use Raw takeover to enter terminal mode.\n" : ""}`;
+  return {
+    ok: true,
+    attachable: false,
+    watchOnly: true,
+    takeoverAvailable,
+    state: "watching",
+    thread,
+    runtime: status,
+    watch,
+    watchText,
+    message: active
+      ? "Structured runtime is active; attach is in watch-and-wait mode."
+      : readOnly
+        ? "Read-only raw attach is in watch-and-wait mode."
+        : takeoverAvailable
+          ? "Structured runtime is idle; terminal takeover requires explicit confirmation."
+          : "Raw attach is in watch-and-wait mode.",
+  };
 }
 
 function includeAllUserThreadsQuery(query: Record<string, unknown> = {}): boolean {
@@ -487,11 +571,10 @@ export class ThreadsController {
         thread: await threadRuntimeSummary(updatedThread || thread, updatedMessages),
       };
     }
-    const before = await this.threadRuntimeService.status(thread.id).catch(() => null);
     const message = await enqueueThreadInputForPrincipal(thread.id, body, principal);
     if (threadUsesApiAgent(thread)) {
       if (body.autoRun === false) {
-        return { ok: true, threadId: thread.id, orkestrThreadId: thread.id, message, queued: true, reason: "auto_run_disabled", observed: true };
+        return { ...queuedInputResponse(thread, message, "auto_run_disabled"), threadId: thread.id, observedVia: message.observedVia || "auto_run_disabled" };
       }
       const processed: any = await processApiAgentThreadInput(thread.id);
       await deliverWhatsAppReplies().catch(() => {});
@@ -509,46 +592,48 @@ export class ThreadsController {
       };
     }
     if (body.autoRun === false) {
-      return { ok: true, threadId: codexThreadId(thread) || thread.id, orkestrThreadId: thread.id, message, queued: true, reason: "auto_run_disabled", observed: true };
+      return queuedInputResponse(thread, message, "auto_run_disabled");
     }
-    if (before?.state === "ready" && before?.promptReady === true) {
-      const delivered = await deliverPendingThreadInputs(thread.id);
-      const current = (await listThreadMessages(thread.id)).find((item: any) => item.id === message.id) || message;
-      return {
-        ok: true,
-        threadId: codexThreadId(thread) || thread.id,
-        orkestrThreadId: thread.id,
-        message: current,
-        delivered,
-        queued: current.state !== "completed",
-        deliveryState: current.deliveryState || current.state,
-        observed: true,
-        observedVia: current.observedVia || "pending_delivery",
-      };
-    }
-    requestThreadInputDelivery(thread.id);
-    return {
-      ok: true,
-      threadId: codexThreadId(thread) || thread.id,
-      orkestrThreadId: thread.id,
-      message,
-      queued: true,
-      queueItemId: message.id,
-      reason: before?.state === "sleeping" ? "waking" : "pending_delivery",
-      state: "waking",
-      observed: true,
-      observedVia: "pending_delivery",
-    };
+    if (threadInputNeedsDelivery(message)) requestThreadInputDelivery(thread.id);
+    return queuedInputResponse(thread, message, message.duplicate ? message.duplicateReason || "duplicate_input" : "pending_delivery");
   }
 
   @Post(":threadId/attach")
   @HttpCode(200)
-  async attach(@Req() request: any, @Param("threadId") threadId: string) {
+  async attach(@Req() request: any, @Param("threadId") threadId: string, @Body() body: Record<string, unknown> = {}) {
     this.assertThreadAdminOnly("thread.attach", requestPrincipal(request));
     let thread = await getThread(threadId);
     if (!thread) throw httpError("thread_not_found", 404);
+    const readOnly = attachBoolean(body, "readOnly");
+    const takeover = attachBoolean(body, "takeover");
+    const interrupt = attachBoolean(body, "interrupt");
+    const yes = attachBoolean(body, "yes");
     if (threadUsesCodexAppServer(thread)) {
-      const wakeResult = await wakeThread(thread.id, { reason: "attach" }).catch((error: Error) => ({
+      const currentStatus: any = await this.threadRuntimeService.status(thread.id).catch(() => null);
+      const activeStructuredTurn = currentStatus && rawStructuredTurnActive(thread, currentStatus);
+      if (readOnly || (activeStructuredTurn && !interrupt)) {
+        return attachWatchResponse(thread, currentStatus || {}, body);
+      }
+      if (activeStructuredTurn && interrupt && !yes) {
+        return {
+          ok: false,
+          attachable: false,
+          confirmationRequired: true,
+          thread,
+          runtime: currentStatus,
+          message: "Interrupting an active structured turn before raw terminal takeover requires --yes.",
+        };
+      }
+      if (!takeover && !interrupt) {
+        return attachWatchResponse(thread, currentStatus || {}, {
+          ...body,
+          takeoverAvailable: true,
+        });
+      }
+      if (activeStructuredTurn && interrupt) {
+        await interruptCodexAppServerThread(thread).catch(() => null);
+      }
+      const wakeResult = await takeoverRawTerminalThread(thread.id, { reason: interrupt ? "raw_interrupt_takeover" : "raw_takeover" }).catch((error: Error) => ({
         error: error.message,
         thread,
         status: null,
@@ -562,24 +647,15 @@ export class ThreadsController {
         };
       }
       thread = (wakeResult as any).thread || thread;
-      const codexId = codexThreadId(thread);
-      if (!codexId) {
-        return {
-          ok: false,
-          thread,
-          runtime: (wakeResult as any).status || await this.threadRuntimeService.status(thread.id).catch(() => null),
-          message: "Codex thread id is missing.",
-        };
-      }
-      const cwd = String(thread.cwd || thread.workspace || thread.repoPath || thread.worktreePath || "/root");
-      const attachCommand = await codexResumeCommand({ cwd, codexThreadId: codexId });
+      const runtime = (wakeResult as any).status || await this.threadRuntimeService.status(thread.id).catch(() => null);
       return {
         ok: true,
         state: "ready",
         thread,
-        runtime: (wakeResult as any).status || await this.threadRuntimeService.status(thread.id).catch(() => null),
-        attachKind: "codex-app-server",
-        attachCommand,
+        runtime,
+        woke: (wakeResult as any).reused !== true,
+        attachKind: "raw-terminal",
+        attachCommand: `tmux attach-session -t ${runtime?.sessionName || (wakeResult as any).lease?.sessionName}`,
       };
     }
     if (threadNeedsCodexAppServerMigration(thread)) {
@@ -592,6 +668,9 @@ export class ThreadsController {
     }
     let status: any = await this.threadRuntimeService.status(thread.id);
     let wakeResult: Awaited<ReturnType<typeof wakeThread>> | null = null;
+    if (readOnly && !status.sessionName) {
+      return attachWatchResponse(thread, status || {}, body);
+    }
     if (!status.sessionName || status.state === "sleeping") {
       wakeResult = await wakeThread(thread.id, { reason: "attach" });
       if (!wakeResult) throw httpError("thread_wake_failed", 500);

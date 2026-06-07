@@ -214,6 +214,65 @@
         </section>
       }
 
+      @if (activeStep === "secrets") {
+        <section class="setup-form secure-input-setup">
+          <h3>Secrets</h3>
+          <p>Store connector credentials and API keys as handles. Orkestr returns metadata only, so saved values stay hidden after submission.</p>
+          <form class="secure-secret-form" (submit)="saveSecureSecret(); $event.preventDefault()">
+            <div class="secure-secret-grid">
+              <label>
+                <span>Scope</span>
+                <select name="secure-secret-scope" [(ngModel)]="secureSecretScope" (ngModelChange)="refreshSecureSecretsForScope()">
+                  <option value="user">User</option>
+                  <option value="global">Global</option>
+                </select>
+              </label>
+              @if (secureSecretScope === "user") {
+                <label>
+                  <span>Owner user ID</span>
+                  <input name="secure-secret-user-id" [(ngModel)]="secureSecretUserId" autocomplete="off" placeholder="leave empty for current user" />
+                </label>
+              }
+              <label>
+                <span>Secret name</span>
+                <input name="secure-secret-name" [(ngModel)]="secureSecretName" autocomplete="off" placeholder="openai/api-key" />
+              </label>
+              <label>
+                <span>Secret value</span>
+                <input name="secure-secret-value" type="password" [(ngModel)]="secureSecretValue" autocomplete="off" placeholder="Hidden after save" />
+              </label>
+            </div>
+            <small class="form-section-note">{{ secureSecretScopeSummary() }}</small>
+            <div class="button-row">
+              <button type="submit" [disabled]="busy || !secureSecretName.trim() || !secureSecretValue">Save secret</button>
+              <button class="secondary" type="button" (click)="loadSecureSecrets()" [disabled]="busy">Refresh</button>
+            </div>
+          </form>
+
+          @if (secureSecrets.length) {
+            <div class="check-list secure-secret-list">
+              @for (secret of secureSecrets; track secret.handle) {
+                <div class="check-row secure-secret-row">
+                  <div>
+                    <strong>{{ secret.name }}</strong>
+                    <small>{{ secret.handle }}</small>
+                    <small>{{ secureSecretOwnerLabel(secret) }} · {{ secureSecretFingerprintLabel(secret) }}{{ secureSecretUpdatedLabel(secret) ? " · " + secureSecretUpdatedLabel(secret) : "" }}</small>
+                  </div>
+                  <div class="secure-secret-actions">
+                    <em [class]="secureSecretStatusClass(secret)">{{ secureSecretStatusLabel(secret) }}</em>
+                    <button class="secondary" type="button" (click)="deleteSecureSecret(secret)" [disabled]="busy || deletingSecureSecret === secret.handle">
+                      {{ deletingSecureSecret === secret.handle ? "Deleting" : "Delete" }}
+                    </button>
+                  </div>
+                </div>
+              }
+            </div>
+          } @else {
+            <p class="empty">No secrets in this scope.</p>
+          }
+        </section>
+      }
+
       @if (activeStep === "maintenance") {
         <section class="setup-form">
           <h3>Backup, Restore, Migration</h3>

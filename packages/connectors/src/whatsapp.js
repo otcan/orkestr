@@ -31,7 +31,7 @@ import {
 } from "./whatsapp-local-bridge.js";
 import { routerUpdateWhatsAppDeliveryTarget } from "./whatsapp-router-updates.js";
 import { attachmentDeliveryKey, prepareWhatsAppTableAttachments } from "./whatsapp-table-attachments.js";
-import { appendWhatsAppDebugFooter, formatWhatsAppOutboundText } from "./whatsapp-formatting.js";
+import { appendWhatsAppDebugFooter, formatWhatsAppOutboundText, stripWhatsAppDebugFooter } from "./whatsapp-formatting.js";
 import {
   bindingAccountIds,
   isWhatsAppGroupChatId,
@@ -106,6 +106,9 @@ export { formatWhatsAppOutboundText } from "./whatsapp-formatting.js";
 export { initialQueueDeliveryState } from "./whatsapp-outbound-mirror.js";
 
 const whatsappOutboundMirrorWorker = createWhatsAppOutboundMirrorWorker();
+let whatsappDeliveryIdleCache = null;
+let whatsappDeliveryRunCache = null;
+const whatsappMirrorMessageFileCache = new Map();
 
 function positiveInteger(value, fallback, minimum = 1) {
   if (value === undefined || value === null || String(value).trim() === "") return fallback;
@@ -211,11 +214,36 @@ function publicBridgeAccount(account = {}) {
     authenticated: Boolean(account.authenticated),
     started: Boolean(account.started),
     qrAvailable: Boolean(account.qrAvailable),
+    qrUrl: pickString(account.qrUrl),
+    pairingCode: pickString(account.pairingCode),
     pairingCodeUpdatedAt: pickString(account.pairingCodeUpdatedAt),
+    pairingPhoneNumber: pickString(account.pairingPhoneNumber),
     loadingPercent: account.loadingPercent ?? null,
     loadingMessage: pickString(account.loadingMessage),
     error: pickString(account.error),
     updatedAt: pickString(account.updatedAt),
+  };
+}
+
+function publicLocalBridgeHealth(health = {}) {
+  return {
+    ok: health.ok === true,
+    mode: pickString(health.mode),
+    state: pickString(health.state, health.status),
+    ready: Boolean(health.ready),
+    clientReady: Boolean(health.clientReady),
+    authenticated: Boolean(health.authenticated),
+    qrAvailable: Boolean(health.qrAvailable),
+    qrUrl: pickString(health.qrUrl),
+    maxAccounts: Number.isFinite(Number(health.maxAccounts)) ? Number(health.maxAccounts) : undefined,
+    accounts: Array.isArray(health.accounts) ? health.accounts.map(publicBridgeAccount) : [],
+    activeTypingCount: Number.isFinite(Number(health.activeTypingCount)) ? Number(health.activeTypingCount) : undefined,
+    activeTyping: Array.isArray(health.activeTyping) ? health.activeTyping.map((session) => ({
+      accountId: pickString(session.accountId),
+      chatId: pickString(session.chatId),
+      startedAt: pickString(session.startedAt),
+      lastSyncedAt: pickString(session.lastSyncedAt),
+    })) : [],
   };
 }
 
@@ -313,14 +341,16 @@ function normalizeParticipants(payload = {}) {
 }
 
 export function mapLocalWhatsAppStatusFromHealth(health) {
+  const publicHealth = publicLocalBridgeHealth(health);
+  const accounts = publicHealth.accounts || [];
   if (hasReadySignal(health)) {
     return {
       state: "paired",
       summary: "Built-in WhatsApp bridge is paired.",
       mode: "local",
       bridgeUrl: localWhatsAppBridgeBasePath,
-      health,
-      accounts: health.accounts,
+      health: publicHealth,
+      accounts,
       qrAvailable: false,
     };
   }
@@ -330,8 +360,8 @@ export function mapLocalWhatsAppStatusFromHealth(health) {
       summary: "Built-in WhatsApp bridge is ready for pairing; scan a QR code.",
       mode: "local",
       bridgeUrl: localWhatsAppBridgeBasePath,
-      health,
-      accounts: health.accounts,
+      health: publicHealth,
+      accounts,
       qrAvailable: true,
       qrUrl: health.qrUrl,
     };
@@ -343,8 +373,8 @@ export function mapLocalWhatsAppStatusFromHealth(health) {
       summary: "Built-in WhatsApp bridge generated a phone pairing code.",
       mode: "local",
       bridgeUrl: localWhatsAppBridgeBasePath,
-      health,
-      accounts: health.accounts,
+      health: publicHealth,
+      accounts,
       qrAvailable: false,
       pairingCode: codeAccount?.pairingCode || "",
       pairingCodeUpdatedAt: codeAccount?.pairingCodeUpdatedAt || null,
@@ -356,8 +386,8 @@ export function mapLocalWhatsAppStatusFromHealth(health) {
       summary: "Built-in WhatsApp bridge is authenticated and waiting for WhatsApp Web to become ready.",
       mode: "local",
       bridgeUrl: localWhatsAppBridgeBasePath,
-      health,
-      accounts: health.accounts,
+      health: publicHealth,
+      accounts,
       qrAvailable: false,
     };
   }
@@ -367,8 +397,8 @@ export function mapLocalWhatsAppStatusFromHealth(health) {
       summary: firstAccountError(health.accounts) || "Built-in WhatsApp bridge could not start.",
       mode: "local",
       bridgeUrl: localWhatsAppBridgeBasePath,
-      health,
-      accounts: health.accounts,
+      health: publicHealth,
+      accounts,
       qrAvailable: false,
     };
   }
@@ -378,8 +408,8 @@ export function mapLocalWhatsAppStatusFromHealth(health) {
       summary: "Built-in WhatsApp bridge is starting. QR codes will appear shortly.",
       mode: "local",
       bridgeUrl: localWhatsAppBridgeBasePath,
-      health,
-      accounts: health.accounts,
+      health: publicHealth,
+      accounts,
       qrAvailable: false,
     };
   }
@@ -388,8 +418,8 @@ export function mapLocalWhatsAppStatusFromHealth(health) {
     summary: "Start WhatsApp 1 or WhatsApp 2 and scan the QR code.",
     mode: "local",
     bridgeUrl: localWhatsAppBridgeBasePath,
-    health,
-    accounts: health.accounts,
+    health: publicHealth,
+    accounts,
     qrAvailable: false,
   };
 }
@@ -524,11 +554,31 @@ function sameWhatsAppChat(message = {}, chatId = "", state = null) {
   return pickString(message.chatId, inboundEvent?.chatId) === targetChatId;
 }
 
+function messageMatchesWhatsAppChat(message = {}, chatId = "") {
+  const targetChatId = pickString(chatId);
+  const messageChatId = pickString(message?.chatId);
+  return !targetChatId || !messageChatId || messageChatId === targetChatId;
+}
+
+function sameParentFinalReply(messages = [], message = {}, chatId = "") {
+  const parentMessageId = pickString(message?.parentMessageId);
+  if (!parentMessageId) return null;
+  return messages.find((candidate) =>
+    candidate?.id !== message?.id &&
+    candidate?.role === "assistant" &&
+    candidate?.state === "completed" &&
+    candidate?.parentMessageId === parentMessageId &&
+    shouldMirrorWhatsAppReply(candidate) &&
+    messageMatchesWhatsAppChat(candidate, chatId)
+  ) || null;
+}
+
 function supersededRuntimeInterruptionNotice(messages = [], message = {}, chatId = "", state = null) {
   const role = String(message?.role || "").trim().toLowerCase();
   const phase = String(message?.phase || "").trim().toLowerCase();
   const source = String(message?.source || "").trim().toLowerCase();
   if (role !== "assistant" || phase !== "runtime_interrupted" || source !== "orkestr_runtime") return false;
+  if (sameParentFinalReply(messages, message, chatId)) return true;
   const noticeMs = messageTimeMs(message);
   if (!noticeMs) return false;
   return messages.some((candidate) =>
@@ -536,6 +586,21 @@ function supersededRuntimeInterruptionNotice(messages = [], message = {}, chatId
     messageTimeMs(candidate) > noticeMs &&
     sameWhatsAppChat(candidate, chatId, state)
   );
+}
+
+function whatsappOvertakenProgressGraceMs(env = process.env) {
+  return positiveInteger(env.ORKESTR_WHATSAPP_OVERTAKEN_PROGRESS_GRACE_MS, 15_000, 0);
+}
+
+function progressOvertakenByFinal(messages = [], message = {}, chatId = "", env = process.env) {
+  const progressMs = messageTimeMs(message);
+  if (!progressMs) return false;
+  const graceMs = whatsappOvertakenProgressGraceMs(env);
+  if (graceMs && Date.now() - progressMs <= graceMs) return false;
+  const finalReply = sameParentFinalReply(messages, message, chatId);
+  if (!finalReply) return false;
+  const finalMs = messageTimeMs(finalReply);
+  return Boolean(finalMs && finalMs >= progressMs);
 }
 
 function routeAgentId(input, config) {
@@ -778,7 +843,14 @@ async function routeThread(input, config, env) {
     if (binding && !whatsappBindingIsRouteEligible(binding)) return { threadId: "", binding: null };
     return { threadId: explicit, binding };
   }
-  const thread = threads.find((item) => whatsappInboundThreadMatchesBinding({ thread: item, chatId, accountId, from, fromMe }));
+  const thread = threads.find((item) => whatsappInboundThreadMatchesBinding({
+    thread: item,
+    chatId,
+    accountId,
+    from,
+    fromMe,
+    aclContext: input.machineAuthContext || null,
+  }));
   return thread ? { threadId: thread.id, binding: thread.binding || null } : { threadId: "", binding: null };
 }
 
@@ -839,6 +911,12 @@ function comparableWhatsAppState(state = {}) {
   return JSON.stringify(comparable);
 }
 
+export function clearWhatsAppDeliveryIdleCache() {
+  whatsappDeliveryIdleCache = null;
+  whatsappDeliveryRunCache = null;
+  whatsappMirrorMessageFileCache.clear();
+}
+
 async function writeWhatsAppState(state, env) {
   const paths = dataPaths(env);
   const existing = await readJson(paths.whatsapp, {
@@ -851,6 +929,130 @@ async function writeWhatsAppState(state, env) {
   const merged = mergeWhatsAppState(existing, state, env);
   if (comparableWhatsAppState(existing) === comparableWhatsAppState(merged)) return;
   await writeJson(paths.whatsapp, merged);
+  clearWhatsAppDeliveryIdleCache();
+}
+
+function connectorOutboxJobIntentMatches(job = {}, intent = {}) {
+  const jobId = pickString(job.id);
+  if (jobId && pickString(intent.connectorOutboxJobId) === jobId) return true;
+  const routerOutboxId = pickString(job.metadata?.routerOutboxId);
+  if (routerOutboxId && pickString(intent.outboxId) === routerOutboxId) return true;
+  const sourceMessageId = pickString(job.sourceMessageId, job.sourceEventId);
+  const intentSource = pickString(intent.sourceMessageId, intent.messageId);
+  const sameSource = Boolean(sourceMessageId && (sourceMessageId === intentSource || sourceMessageId === pickString(intent.messageId)));
+  return sameSource &&
+    (!job.chatId || pickString(intent.chatId) === pickString(job.chatId)) &&
+    (!job.accountId || pickString(intent.accountId) === pickString(job.accountId)) &&
+    (!job.deliveryType || pickString(intent.deliveryType) === pickString(job.deliveryType));
+}
+
+function connectorOutboxJobDeliveryMatches(job = {}, delivery = {}) {
+  const jobId = pickString(job.id);
+  if (jobId && pickString(delivery.connectorOutboxJobId) === jobId) return true;
+  const sourceMessageId = pickString(job.sourceMessageId, job.sourceEventId);
+  const deliverySource = pickString(delivery.sourceMessageId, delivery.messageId);
+  const sameSource = Boolean(sourceMessageId && (sourceMessageId === deliverySource || sourceMessageId === pickString(delivery.messageId)));
+  return sameSource &&
+    (!job.chatId || pickString(delivery.chatId) === pickString(job.chatId)) &&
+    (!job.accountId || pickString(delivery.accountId) === pickString(job.accountId)) &&
+    (!job.deliveryType || pickString(delivery.deliveryType) === pickString(job.deliveryType));
+}
+
+function connectorOutboxIntentPatch(action = "", job = {}, options = {}) {
+  const now = new Date().toISOString();
+  const normalized = pickString(action).toLowerCase().replace(/-/g, "_");
+  const reason = pickString(options.reason || options.error);
+  if (normalized === "retry" || normalized === "replay") {
+    return {
+      status: "pending",
+      error: "",
+      deliveredAt: "",
+      skippedAt: "",
+      failedAt: "",
+      cancelledAt: "",
+      updatedAt: now,
+      lastChangedAt: now,
+      connectorOutboxJobId: pickString(job.id),
+      [`${normalized}RequestedAt`]: now,
+      ...(reason ? { [`${normalized}Reason`]: reason } : {}),
+    };
+  }
+  if (normalized === "suppress" || normalized === "dead_letter") {
+    return {
+      status: "skipped",
+      skippedAt: now,
+      error: reason || `connector_outbox_${normalized}`,
+      updatedAt: now,
+      lastChangedAt: now,
+      connectorOutboxJobId: pickString(job.id),
+    };
+  }
+  if (normalized === "mark_delivered") {
+    return {
+      status: "delivered",
+      deliveredAt: pickString(options.deliveredAt) || now,
+      error: "",
+      updatedAt: now,
+      lastChangedAt: now,
+      connectorOutboxJobId: pickString(job.id),
+    };
+  }
+  return null;
+}
+
+async function writeWhatsAppStateForOperatorAction(state = {}, env = process.env) {
+  const paths = dataPaths(env);
+  await writeJson(paths.whatsapp, {
+    ...state,
+    updatedAt: new Date().toISOString(),
+  });
+  clearWhatsAppDeliveryIdleCache();
+}
+
+export async function applyWhatsAppConnectorOutboxAction(job = {}, action = "", options = {}, env = process.env) {
+  if (pickString(job.connector).toLowerCase() !== "whatsapp") return { ok: true, skipped: "not_whatsapp" };
+  const patch = connectorOutboxIntentPatch(action, job, options);
+  if (!patch) return { ok: false, error: "whatsapp_outbox_action_invalid" };
+  const state = await readWhatsAppState(env);
+  const outboundIntents = Array.isArray(state.outboundIntents) ? state.outboundIntents : [];
+  const outboundDeliveries = Array.isArray(state.outboundDeliveries) ? state.outboundDeliveries : [];
+  let matchedIntents = 0;
+  const nextIntents = outboundIntents.map((intent) => {
+    if (!connectorOutboxJobIntentMatches(job, intent)) return intent;
+    matchedIntents += 1;
+    return {
+      ...intent,
+      ...patch,
+    };
+  });
+  const normalized = pickString(action).toLowerCase().replace(/-/g, "_");
+  let removedDeliveries = 0;
+  const nextDeliveries = normalized === "retry" || normalized === "replay"
+    ? outboundDeliveries.filter((delivery) => {
+        const matched = connectorOutboxJobDeliveryMatches(job, delivery);
+        if (matched) removedDeliveries += 1;
+        return !matched;
+      })
+    : outboundDeliveries;
+  if (!matchedIntents && !removedDeliveries) {
+    return { ok: true, matchedIntents: 0, removedDeliveries: 0 };
+  }
+  await writeWhatsAppStateForOperatorAction({
+    ...state,
+    outboundIntents: nextIntents,
+    outboundDeliveries: nextDeliveries,
+  }, env);
+  await appendEvent({
+    type: "whatsapp_connector_outbox_operator_action",
+    outboxJobId: pickString(job.id),
+    action: normalized,
+    sourceMessageId: pickString(job.sourceMessageId),
+    chatId: pickString(job.chatId),
+    accountId: pickString(job.accountId),
+    matchedIntents,
+    removedDeliveries,
+  }, env).catch(() => {});
+  return { ok: true, matchedIntents, removedDeliveries };
 }
 
 async function ensureWhatsAppOutboundIntent({
@@ -1189,6 +1391,23 @@ async function sendClaimedWhatsAppText({
     },
   }, env);
   if (connectorOutboxTerminalState(outboxResult.job?.state)) {
+    const outboxState = String(outboxResult.job?.state || "").trim().toLowerCase();
+    if (intent?.intentId) {
+      const now = new Date().toISOString();
+      const marked = markWhatsAppOutboundIntent(outboundIntents, intent.intentId, outboxState === "delivered" ? {
+        status: "delivered",
+        deliveredAt: pickString(outboxResult.job?.deliveredAt) || now,
+        deliveryMessageId: messageId,
+        error: "",
+      } : {
+        status: outboxState === "cancelled" ? "cancelled" : "skipped",
+        skippedAt: pickString(outboxResult.job?.skippedAt) || now,
+        error: pickString(outboxResult.job?.error, `connector_outbox_${outboxState}`),
+      });
+      outboundIntents.splice(0, outboundIntents.length, ...marked);
+      state.outboundIntents = outboundIntents;
+      await writeWhatsAppState(state, env);
+    }
     await recordRouterTraceEvent({
       routerTraceId,
       turnId,
@@ -1401,6 +1620,22 @@ function remoteMessagePatch(remoteResult = {}, fallback = {}) {
   return patch;
 }
 
+function generatedWhatsAppQueueNoticeText(text = "") {
+  const value = String(text || "").replace(/\s+/g, " ").trim();
+  if (!value) return false;
+  return [
+    /^Queued for the next Codex turn(?:[:.]\s|$)/i,
+    /^Queued your message while Orkestr prepares this thread(?:[:.]\s|$)/i,
+    /^Waking this Orkestr thread and queued your message(?:[:.]\s|$)/i,
+    /^Queued your latest message while current work is still running(?:[:.]\s|$)/i,
+    /^Interrupting the current Codex turn and queued your message(?:[:.]\s|$)/i,
+    /^Queued your latest message while Orkestr recovers this thread(?:[:.]\s|$)/i,
+    /^Queued your message while Codex is waiting for approval(?:[:.]\s|$)/i,
+    /^Queued your latest message behind background work on this thread(?:[:.]\s|$)/i,
+    /^Interrupting Codex and sending now(?:[:.]\s|$)/i,
+  ].some((pattern) => pattern.test(value));
+}
+
 export async function routeWhatsAppInbound(input = {}, env = process.env, fetchImpl = fetch) {
   const config = await readConnectorConfig("whatsapp", env);
   const eventId = pickString(input.eventId, input.id, input.messageId);
@@ -1482,7 +1717,7 @@ export async function routeWhatsAppInbound(input = {}, env = process.env, fetchI
     throw badRequest("whatsapp_target_required");
   }
 
-  const text = pickString(input.text, input.body, input.message);
+  const text = stripWhatsAppDebugFooter(pickString(input.text, input.body, input.message));
   const promptFile = pickString(input.promptFile);
   if (!text && !promptFile) {
     await recordRouterTraceEvent({
@@ -1505,6 +1740,52 @@ export async function routeWhatsAppInbound(input = {}, env = process.env, fetchI
   const accountId = pickString(input.accountId, threadRoute.binding?.outboundAccountId);
   const routerTraceId = initialTraceId;
   const turnId = initialTurnId;
+  if (!promptFile && generatedWhatsAppQueueNoticeText(text)) {
+    const event = {
+      eventId,
+      routerTraceId,
+      turnId,
+      agentId: agentId || null,
+      threadId: threadId || null,
+      messageId: null,
+      chatId,
+      from,
+      accountId,
+      ignoredReason: "generated_queue_notice",
+      receivedAt: pickString(input.timestamp, input.receivedAt) || new Date().toISOString(),
+    };
+    state.inboundEvents = [...(state.inboundEvents || []), event];
+    await writeWhatsAppState(state, env);
+    await ensureRouterTurn({ routerTraceId, turnId, connector: "whatsapp", accountId, chatId, eventId, threadId: threadId || "", state: "skipped" }, env).catch(() => null);
+    await recordRouterTraceEvent({
+      routerTraceId,
+      turnId,
+      connector: "whatsapp",
+      accountId,
+      chatId,
+      sourceEventId: eventId,
+      threadId: threadId || "",
+      phase: "skipped",
+      reason: "generated_queue_notice",
+      terminal: true,
+    }, env).catch(() => {});
+    await appendEvent({
+      type: "whatsapp_generated_queue_notice_ignored",
+      eventId,
+      routerTraceId,
+      agentId: agentId || null,
+      threadId: threadId || null,
+      chatId,
+    }, env);
+    return {
+      duplicate: false,
+      skipped: true,
+      ignoredGeneratedQueueNotice: true,
+      event,
+      agentId: agentId || null,
+      threadId: threadId || null,
+    };
+  }
   const messageInput = {
     role: "user",
     source: "whatsapp_inbound",
@@ -1873,22 +2154,115 @@ export async function routeWhatsAppInbound(input = {}, env = process.env, fetchI
   };
 }
 
-async function listMessageSets(env) {
+async function listMessageSets(env, state = null) {
   const paths = await ensureDataDirs(env);
   const files = await fs.readdir(paths.messages).catch(() => []);
   const sets = [];
   for (const file of files.filter((entry) => entry.endsWith(".json"))) {
     const agentId = path.basename(file, ".json");
-    const messages = await readJson(path.join(paths.messages, file), []);
+    const messageSetKey = outboundMirrorMessageSetKey({ kind: "agent", agentId });
+    const messages = await readWhatsAppMirrorMessageSet(path.join(paths.messages, file), messageSetKey, state, env);
     if (Array.isArray(messages)) sets.push({ agentId, messages });
   }
   return sets;
 }
 
-async function listThreadMessageSets(env) {
+function safeMessageFileId(value) {
+  return String(value || "").replace(/[^a-zA-Z0-9_.-]/g, "_") || "default";
+}
+
+function whatsappMirrorScanOverlap(env = process.env) {
+  return positiveInteger(env.ORKESTR_WHATSAPP_OUTBOUND_SCAN_CURSOR_OVERLAP, 25, 0);
+}
+
+function whatsappMirrorInitialTailLimit(env = process.env) {
+  return positiveInteger(env.ORKESTR_WHATSAPP_OUTBOUND_SCAN_TAIL_LIMIT, 250, 1);
+}
+
+function messagesAfterMirrorCursor(messages = [], cursor = 0, env = process.env) {
+  const list = Array.isArray(messages) ? messages : [];
+  const numericCursor = Math.max(0, Number(cursor || 0) || 0);
+  let start = Math.max(0, list.length - whatsappMirrorInitialTailLimit(env));
+  if (numericCursor > 0) {
+    const threshold = Math.max(0, numericCursor - whatsappMirrorScanOverlap(env));
+    const cursorStart = list.findIndex((message, index) => outboundMirrorMessageCursor(message, index) > threshold);
+    if (cursorStart < 0) return [];
+    start = cursorStart;
+  }
+  return list.slice(start).map((message, index) =>
+    Number(message?.cursor || 0) > 0 ? message : { ...message, cursor: start + index + 1 }
+  );
+}
+
+async function readWhatsAppMirrorMessageSet(filePath, messageSetKey, state = null, env = process.env) {
+  const cursor = Number(outboundMirrorCursorMap(state?.outboundMirrorCursors || []).get(messageSetKey)?.cursor || 0) || 0;
+  const stat = await fs.stat(filePath).catch(() => null);
+  const signature = stat ? `${stat.mtimeMs}:${stat.size}` : "missing";
+  const stateSignature = whatsappMirrorStateSignature(state, messageSetKey, cursor);
+  const cacheKey = `${filePath}:${messageSetKey}`;
+  const cached = whatsappMirrorMessageFileCache.get(cacheKey);
+  if (
+    cursor > 0 &&
+    !messageSetHasActiveWhatsAppOutboundIntent(state, messageSetKey) &&
+    cached?.signature === signature &&
+    cached?.stateSignature === stateSignature
+  ) return null;
+  const messages = await readJson(filePath, []);
+  whatsappMirrorMessageFileCache.set(cacheKey, { signature, stateSignature });
+  return messagesAfterMirrorCursor(messages, cursor, env);
+}
+
+function messageSetHasActiveWhatsAppOutboundIntent(state = null, messageSetKey = "") {
+  return (state?.outboundIntents || []).some((intent) => {
+    if (String(intent?.messageSetKey || "") !== String(messageSetKey || "")) return false;
+    const status = String(intent?.status || "pending").trim().toLowerCase();
+    return status !== "delivered" && status !== "skipped" && status !== "cancelled";
+  });
+}
+
+function whatsappMirrorStateSignature(state = null, messageSetKey = "", cursor = 0) {
+  const recentIntentState = (state?.outboundIntents || []).slice(-100).map((intent) => [
+    intent?.messageSetKey || "",
+    intent?.messageId || "",
+    intent?.status || "",
+    intent?.error || "",
+    intent?.deliveryType || "",
+    intent?.updatedAt || "",
+    intent?.deliveredAt || "",
+    intent?.failedAt || "",
+  ]);
+  const recentDeliveryState = (state?.outboundDeliveries || []).slice(-100).map((delivery) => [
+    delivery?.messageSetKey || "",
+    delivery?.messageId || "",
+    delivery?.parentMessageId || "",
+    delivery?.deliveryType || "",
+    delivery?.chatId || "",
+    delivery?.accountId || "",
+    delivery?.deliveredAt || "",
+  ]);
+  return JSON.stringify({ messageSetKey, cursor, recentIntentState, recentDeliveryState });
+}
+
+function threadConfiguredForWhatsAppRoute(thread = {}, config = {}) {
+  const routes = Object.values(config.threadRoutes || config.threads || {}).map((value) => String(value || "").trim()).filter(Boolean);
+  const defaultThreadId = pickString(config.defaultThreadId);
+  const ids = [thread.id, thread.name, thread.bindingName].map((value) => String(value || "").trim()).filter(Boolean);
+  return ids.some((id) => routes.includes(id) || id === defaultThreadId);
+}
+
+function threadEligibleForWhatsAppMirrorScan(thread = {}, config = {}) {
+  if (thread?.binding?.chatId || String(thread?.binding?.connector || "").trim().toLowerCase() === "whatsapp") return true;
+  return threadConfiguredForWhatsAppRoute(thread, config);
+}
+
+async function listThreadMessageSets(env, state = null, config = {}) {
+  const paths = await ensureDataDirs(env);
   const sets = [];
   for (const thread of await listThreads(env)) {
-    const messages = await listThreadMessages(thread.id, env);
+    if (!threadEligibleForWhatsAppMirrorScan(thread, config)) continue;
+    const messageSetKey = outboundMirrorMessageSetKey({ kind: "thread", threadId: thread.id });
+    const filePath = path.join(paths.threadMessages, `${safeMessageFileId(thread.id)}.json`);
+    const messages = await readWhatsAppMirrorMessageSet(filePath, messageSetKey, state, env);
     if (Array.isArray(messages)) sets.push({ threadId: thread.id, thread, messages });
   }
   return sets;
@@ -1977,6 +2351,58 @@ function createWhatsAppDeliverySkippedCollector(env = process.env) {
   };
 }
 
+function whatsappDeliveryIdleThrottleMs(env = process.env, fetchImpl = fetch) {
+  const configured = pickString(env.ORKESTR_WHATSAPP_DELIVERY_IDLE_THROTTLE_MS);
+  if (configured) return positiveInteger(configured, 0, 0);
+  if (fetchImpl !== fetch) return 0;
+  return 30000;
+}
+
+function whatsappDeliveryMinIntervalMs(env = process.env, fetchImpl = fetch) {
+  if (fetchImpl !== fetch) return 0;
+  return positiveInteger(env.ORKESTR_WHATSAPP_DELIVERY_MIN_INTERVAL_MS, 0, 0);
+}
+
+function cacheableWhatsAppDeliveryResult(result = {}) {
+  return !(
+    (result.delivered || []).length ||
+    (result.failed || []).length ||
+    (result.skipped || []).length ||
+    Number(result?.skippedSummary?.count || 0) > 0
+  );
+}
+
+async function fileSignature(filePath) {
+  const stat = await fs.stat(filePath).catch(() => null);
+  if (!stat) return `${filePath}:missing`;
+  return `${filePath}:${stat.mtimeMs}:${stat.size}`;
+}
+
+async function jsonDirSignature(dirPath) {
+  const entries = await fs.readdir(dirPath, { withFileTypes: true }).catch(() => []);
+  const parts = await Promise.all(entries
+    .filter((entry) => entry.isFile() && entry.name.endsWith(".json"))
+    .map(async (entry) => {
+      const filePath = path.join(dirPath, entry.name);
+      const stat = await fs.stat(filePath).catch(() => null);
+      return stat ? `${entry.name}:${stat.mtimeMs}:${stat.size}` : `${entry.name}:missing`;
+    }));
+  return `${dirPath}:${parts.sort().join(";")}`;
+}
+
+async function whatsappDeliveryIdleSignature(env = process.env) {
+  const paths = dataPaths(env);
+  const parts = await Promise.all([
+    fileSignature(paths.config),
+    fileSignature(paths.threads),
+    fileSignature(paths.whatsapp),
+    fileSignature(paths.connectorOutbox),
+    jsonDirSignature(paths.messages),
+    jsonDirSignature(paths.threadMessages),
+  ]);
+  return `${paths.home}|${parts.join("|")}`;
+}
+
 function whatsappOutboundMirrorCursorPassed(state = null, messageSetKey = "", messageCursor = 0) {
   const cursor = Math.max(0, Number(messageCursor || 0) || 0);
   const existingCursor = outboundMirrorCursorMap(state?.outboundMirrorCursors || []).get(messageSetKey);
@@ -2015,7 +2441,7 @@ export async function syncWhatsAppTypingIndicators(env = process.env, options = 
   const statusImpl = options.statusImpl || runtimeStatus;
   const syncImpl = options.syncImpl || syncLocalWhatsAppTypingTargets;
   const targets = [];
-  for (const { threadId, thread, messages } of await listThreadMessageSets(env)) {
+  for (const { threadId, thread, messages } of await listThreadMessageSets(env, state, config)) {
     const status = await statusImpl(threadId, env, messages).catch(() => null);
     const target = whatsappTypingTargetForThread({ thread, messages, status, state, env });
     if (target) targets.push(target);
@@ -2043,8 +2469,8 @@ async function deliverWhatsAppRepliesOnce(env = process.env, fetchImpl = fetch) 
   const failed = [];
 
   const messageSets = [
-    ...(await listMessageSets(env)).map((set) => ({ ...set, kind: "agent" })),
-    ...(await listThreadMessageSets(env)).map((set) => ({ ...set, kind: "thread" })),
+    ...(await listMessageSets(env, state)).map((set) => ({ ...set, kind: "agent" })),
+    ...(await listThreadMessageSets(env, state, config)).map((set) => ({ ...set, kind: "thread" })),
   ];
   await recoverParentsForAlreadyMirroredReplies(messageSets, deliveredIds, outboundDeliveries, state, env);
   for (const { agentId, threadId, thread, messages, kind } of messageSets) {
@@ -2481,6 +2907,25 @@ async function deliverWhatsAppRepliesOnce(env = process.env, fetchImpl = fetch) 
           skipped.push({ agentId, threadId, messageId: message.id, reason: "mirroring_disabled" });
           continue;
         }
+        if (progressOvertakenByFinal(messages, message, chatId, env)) {
+          await skipWhatsAppOutboundCandidate({
+            state,
+            outboundIntents,
+            kind,
+            deliveryType: "progress",
+            agentId,
+            threadId,
+            messageId: message.id,
+            chatId,
+            accountId,
+            message,
+            parent,
+            reason: "overtaken_by_final",
+            env,
+          });
+          skipped.push({ agentId, threadId, messageId: message.id, reason: "overtaken_by_final" });
+          continue;
+        }
         const text = appendWhatsAppDebugFooter(formatWhatsAppOutboundText(pickString(message.text)), {
           message,
           thread,
@@ -2626,7 +3071,11 @@ async function deliverWhatsAppRepliesOnce(env = process.env, fetchImpl = fetch) 
         env,
       });
       const attachments = resolvedOutboundAttachments.attachments;
-      const formattedText = formatWhatsAppOutboundText(redactDeniedThreadAttachmentPaths(preparedOutbound.text, { thread, env }));
+      const formattedText = formatWhatsAppOutboundText(redactDeniedThreadAttachmentPaths(preparedOutbound.text, {
+        thread,
+        principal: principalForThread(thread || {}, env),
+        env,
+      }));
       const text = appendWhatsAppDebugFooter(appendRemoteAttachmentFailureNotes(formattedText, remoteMaterialized.skipped), {
         message,
         thread,
@@ -2714,5 +3163,27 @@ async function deliverWhatsAppRepliesOnce(env = process.env, fetchImpl = fetch) 
 }
 
 export async function deliverWhatsAppReplies(env = process.env, fetchImpl = fetch) {
-  return whatsappOutboundMirrorWorker.run(() => deliverWhatsAppRepliesOnce(env, fetchImpl));
+  const minIntervalMs = whatsappDeliveryMinIntervalMs(env, fetchImpl);
+  if (minIntervalMs > 0 && whatsappDeliveryRunCache && Date.now() - whatsappDeliveryRunCache.updatedAt <= minIntervalMs) {
+    return whatsappDeliveryRunCache.result;
+  }
+  const throttleMs = whatsappDeliveryIdleThrottleMs(env, fetchImpl);
+  if (throttleMs > 0 && whatsappDeliveryIdleCache) {
+    const now = Date.now();
+    if (now - whatsappDeliveryIdleCache.updatedAt <= throttleMs) {
+      const signature = await whatsappDeliveryIdleSignature(env).catch(() => "");
+      if (signature && signature === whatsappDeliveryIdleCache.signature) return whatsappDeliveryIdleCache.result;
+    }
+  }
+  const result = await whatsappOutboundMirrorWorker.run(() => deliverWhatsAppRepliesOnce(env, fetchImpl));
+  if (throttleMs > 0 && cacheableWhatsAppDeliveryResult(result)) {
+    const signature = await whatsappDeliveryIdleSignature(env).catch(() => "");
+    whatsappDeliveryIdleCache = signature ? { signature, result, updatedAt: Date.now() } : null;
+  } else {
+    clearWhatsAppDeliveryIdleCache();
+  }
+  if (minIntervalMs > 0) {
+    whatsappDeliveryRunCache = { result, updatedAt: Date.now() };
+  }
+  return result;
 }

@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
 import path from "node:path";
+import readline from "node:readline";
 import { fileURLToPath } from "node:url";
 import { startServer } from "../../server/src/server.js";
 import {
@@ -11,6 +12,7 @@ import {
   revokeSecuritySession,
 } from "../../../packages/core/src/security.js";
 import { readRuntimeSettings } from "../../../packages/core/src/runtime-settings.js";
+import { rawAttachWatchText } from "../../../packages/core/src/raw-terminal-watch.js";
 import { defaultApiBase, requestJson } from "./api-client.js";
 import { createCommand } from "./create-command.js";
 import { desktopCommand } from "./desktop-command.js";
@@ -42,6 +44,7 @@ export async function runCli(argv = process.argv.slice(2), context = {}) {
     if (command === "instances" || command === "instance") return await releaseInstancesCommand(args, ctx);
     if (command === "whereiam" || command === "whereami") return await whereiamCommand(args, ctx);
     if (command === "settings") return await settingsCommand(args, ctx);
+    if (command === "secret" || command === "secrets") return await secretCommand(args, ctx);
     if (command === "doctor") return await doctorCommand(args, ctx);
     if (command === "api-session" || command === "api") return await apiSessionCommand(args, ctx);
     if (command === "whatsapp" || command === "wa") return await whatsappCommand(args, ctx);
@@ -173,6 +176,130 @@ async function releaseInstancesCommand(argv, ctx) {
   if (json) ctx.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
   else ctx.stdout.write(`${formatReleaseInstanceTable(payload.instances || [])}\n`);
   return 0;
+}
+
+async function secretCommand(argv, ctx) {
+  const subcommand = argv[0]?.startsWith("--") ? "list" : argv[0] || "list";
+  const rest = subcommand === "list" && argv[0]?.startsWith("--") ? argv : argv.slice(1);
+  const json = argv.includes("--json") || rest.includes("--json");
+  if (subcommand === "list" || subcommand === "ls") {
+    const params = secretParams(rest);
+    const payload = await requestJson(`/api/secure-input/secrets${params.size ? `?${params.toString()}` : ""}`, ctx);
+    if (json) ctx.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
+    else ctx.stdout.write(formatSecretTable(payload.secrets || []));
+    return 0;
+  }
+  if (subcommand === "set" || subcommand === "put") {
+    const name = positional(rest)[0] || flagValue(rest, "--name") || flagValue(rest, "--secret");
+    const value = flagValue(rest, "--value") || flagValue(rest, "--secret-value") || await secretValueFromInput(rest, ctx);
+    if (!name) throw new Error("Usage: orkestr secret set <name> --value <secret> [--global|--user user-id] [--json]");
+    if (!value) throw new Error("secret_value_required");
+    const payload = await requestJson("/api/secure-input/secrets", {
+      ...ctx,
+      method: "POST",
+      body: {
+        ...secretBodyTarget(rest),
+        name,
+        value,
+      },
+    });
+    if (json) ctx.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
+    else ctx.stdout.write(formatSecretStatus(payload.secret || {}));
+    return 0;
+  }
+  if (subcommand === "delete" || subcommand === "remove" || subcommand === "rm") {
+    const name = positional(rest)[0] || flagValue(rest, "--name") || flagValue(rest, "--secret");
+    if (!name) throw new Error("Usage: orkestr secret delete <name> [--global|--user user-id] [--json]");
+    const params = secretParams(rest);
+    const payload = await requestJson(`/api/secure-input/secrets/${encodeURIComponent(name)}${params.size ? `?${params.toString()}` : ""}`, {
+      ...ctx,
+      method: "DELETE",
+    });
+    if (json) ctx.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
+    else ctx.stdout.write(`Deleted secret ${payload.secret?.handle || name}\n`);
+    return 0;
+  }
+  throw new Error("Usage: orkestr secret [list|set|delete] [--global|--user user-id] [--json]");
+}
+
+function secretBodyTarget(argv = []) {
+  const body = {};
+  const userId = flagValue(argv, "--user") || flagValue(argv, "--user-id") || flagValue(argv, "--owner") || flagValue(argv, "--owner-user-id");
+  if (argv.includes("--global")) body.scope = "global";
+  else body.scope = "user";
+  if (userId) body.userId = userId;
+  return body;
+}
+
+function secretParams(argv = []) {
+  const params = new URLSearchParams();
+  const target = secretBodyTarget(argv);
+  if (target.scope) params.set("scope", target.scope);
+  if (target.userId) params.set("userId", target.userId);
+  return params;
+}
+
+async function secretValueFromInput(argv = [], ctx = {}) {
+  if (argv.includes("--stdin")) return readStdin(ctx.stdin);
+  if (typeof ctx.readSecretValue === "function") return String(await ctx.readSecretValue() || "");
+  return readHiddenSecretFromTty(ctx);
+}
+
+async function readHiddenSecretFromTty(ctx = {}) {
+  if (!ctx.stdin?.isTTY) throw new Error("secret_value_required: pass --stdin or run from an interactive TTY");
+  ctx.stderr.write("Secret value: ");
+  await setTtyEcho(ctx, false);
+  try {
+    return await readLine(ctx.stdin);
+  } finally {
+    await setTtyEcho(ctx, true);
+    ctx.stderr.write("\n");
+  }
+}
+
+function setTtyEcho(ctx = {}, enabled = true) {
+  const ttyPath = String(ctx.env?.ORKESTR_SECRET_TTY || "/dev/tty");
+  const command = `stty ${enabled ? "echo" : "-echo"} < ${shellToken(ttyPath)}`;
+  return new Promise((resolve) => {
+    const child = ctx.spawnImpl("sh", ["-c", command], { stdio: ["ignore", "ignore", "ignore"] });
+    child.on?.("close", () => resolve());
+    child.on?.("error", () => resolve());
+  });
+}
+
+function readLine(stdin) {
+  return new Promise((resolve, reject) => {
+    const rl = readline.createInterface({ input: stdin, terminal: false });
+    rl.once("line", (line) => {
+      rl.close();
+      resolve(String(line || "").trim());
+    });
+    rl.once("error", reject);
+  });
+}
+
+function formatSecretTable(secrets = []) {
+  if (!secrets.length) return "No secrets.\n";
+  return [
+    "HANDLE\tSCOPE\tOWNER\tSTATUS\tUPDATED",
+    ...secrets.map((secret) => [
+      secret.handle || "-",
+      secret.scope || "-",
+      secret.ownerUserId || "-",
+      secret.status || "-",
+      secret.updatedAt || "-",
+    ].join("\t")),
+  ].join("\n") + "\n";
+}
+
+function formatSecretStatus(secret = {}) {
+  return [
+    `Secret: ${secret.handle || "-"}`,
+    `Scope: ${secret.scope || "-"}`,
+    `Owner: ${secret.ownerUserId || "-"}`,
+    `Status: ${secret.status || "-"}`,
+    `Updated: ${secret.updatedAt || "-"}`,
+  ].join("\n") + "\n";
 }
 
 async function whereiamCommand(argv, ctx) {
@@ -407,7 +534,10 @@ async function whatsappCommand(argv, ctx) {
   const rest = argv.slice(1);
   if (subcommand === "accounts" || subcommand === "account") return whatsappAccountsCommand(rest, ctx);
   if (subcommand === "bindings" || subcommand === "binding") return whatsappBindingsCommand(rest, ctx);
+  if (subcommand === "outbox") return whatsappOutboxCommand(rest, ctx);
   if (subcommand === "codex") return whatsappCodexCommand(rest, ctx);
+  if (subcommand === "migrate") return whatsappMigrateCommand(rest, ctx);
+  if (subcommand === "doctor") return whatsappAccountsCommand(["doctor", ...rest], ctx);
   if (subcommand === "bind-thread" || subcommand === "thread-group") return whatsappBindThreadCommand(rest, ctx);
   throw new Error(whatsappUsage());
 }
@@ -421,16 +551,35 @@ function whatsappUsage() {
     "  orkestr whatsapp accounts update <account-id> [--display-name name] [--owner user] [--json]",
     "  orkestr whatsapp accounts pair <account-id> [--phone number] [--json]",
     "  orkestr whatsapp accounts reconnect <account-id> [--json]",
-    "  orkestr whatsapp accounts delete <account-id> [--json]",
+    "  orkestr whatsapp accounts disconnect <account-id> [--json]",
+    "  orkestr whatsapp accounts remove <account-id> [--json]",
+    "  orkestr whatsapp doctor [--account <account-id>] [--json]",
+    "  orkestr whatsapp migrate [--dry-run] [--json]",
+    "  orkestr whatsapp outbox [list] [--state state] [--tenant id] [--account id] [--chat-id id] [--thread id] [--limit n] [--json]",
+    "  orkestr whatsapp outbox <retry|suppress|mark-delivered|replay|dead-letter> <job-id>... [--reason text] [--json]",
     "  orkestr whatsapp bindings [list] [--json]",
-    "  orkestr whatsapp bindings create --thread id --chat-id id --responder-account id [--send-acl mode] [--json]",
+    "  orkestr whatsapp bindings create --level <chat|thread|instance|user|account-default> --responder-account id [--thread id] [--chat-id id] [--instance id] [--user id] [--target-account id] [--send-acl mode] [--json]",
     "  orkestr whatsapp bindings status <binding-id|thread-id|chat-id> [--json]",
     "  orkestr whatsapp bindings resolve [--thread id] [--chat-id id] [--account id] [--json]",
     "  orkestr whatsapp bindings update <binding-id|thread-id|chat-id> [--responder-account id] [--send-acl mode] [--json]",
     "  orkestr whatsapp bindings delete <binding-id|thread-id|chat-id> [--json]",
+    "  orkestr whatsapp codex connect --thread <thread> --account <account-id> [--chat-id id] [--json]",
     "  orkestr whatsapp codex status --thread <thread> [--chat-id id] [--json]",
     "  orkestr whatsapp bind-thread <thread> --name <group name> [--wa-participant jid]... [--sender-account id] [--outbound-account id] [--force-new] [--json]",
   ].join("\n");
+}
+
+async function whatsappMigrateCommand(argv, ctx) {
+  const json = argv.includes("--json");
+  const dryRun = argv.includes("--dry-run") || argv.includes("--check");
+  const payload = await requestJson("/api/connectors/whatsapp/migrate", {
+    ...ctx,
+    method: "POST",
+    body: { dryRun },
+  });
+  if (json) ctx.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
+  else ctx.stdout.write(formatWhatsAppMigration(payload));
+  return payload.ok === false ? 1 : 0;
 }
 
 async function whatsappAccountsCommand(argv, ctx) {
@@ -503,6 +652,18 @@ async function whatsappAccountsCommand(argv, ctx) {
     else ctx.stdout.write(formatWhatsAppAccountStatus(payload.account || {}));
     return 0;
   }
+  if (subcommand === "disconnect") {
+    const accountId = positional(rest)[0];
+    if (!accountId) throw new Error("Usage: orkestr whatsapp accounts disconnect <account-id> [--json]");
+    const payload = await requestJson(`/api/connectors/whatsapp/accounts/${encodeURIComponent(accountId)}/disconnect`, {
+      ...ctx,
+      method: "POST",
+      body: {},
+    });
+    if (json) ctx.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
+    else ctx.stdout.write(formatWhatsAppAccountStatus(payload.account || {}));
+    return 0;
+  }
   if (subcommand === "delete" || subcommand === "remove") {
     const accountId = positional(rest)[0];
     if (!accountId) throw new Error("Usage: orkestr whatsapp accounts delete <account-id> [--json]");
@@ -515,17 +676,15 @@ async function whatsappAccountsCommand(argv, ctx) {
     return 0;
   }
   if (subcommand === "doctor") {
-    const [accounts, bindings] = await Promise.all([
-      requestJson("/api/connectors/whatsapp/accounts", ctx),
-      requestJson("/api/connectors/whatsapp/bindings", ctx),
-    ]);
-    const payload = { ok: true, accounts: accounts.accounts || [], bindings: bindings.bindings || [], generatedAt: new Date().toISOString() };
-    payload.ok = payload.accounts.every((account) => account.ready || account.qrRequired) &&
-      payload.bindings.every((binding) => binding.state === "ready");
+    const params = new URLSearchParams();
+    const accountId = flagValue(rest, "--account") || flagValue(rest, "--account-id") || positional(rest)[0] || "";
+    if (accountId) params.set("account", accountId);
+    const payload = await requestJson(`/api/connectors/whatsapp/doctor${params.size ? `?${params.toString()}` : ""}`, ctx);
     if (json) ctx.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
     else {
       ctx.stdout.write(formatWhatsAppAccounts(payload.accounts));
       ctx.stdout.write(formatWhatsAppBindings(payload.bindings));
+      ctx.stdout.write(`Doctor: ${payload.status || (payload.ok ? "ok" : "broken")} - ${payload.summary || ""}\n`);
     }
     return payload.ok ? 0 : 1;
   }
@@ -547,12 +706,75 @@ function whatsappAccountBody(argv = []) {
   return body;
 }
 
+const whatsappOutboxActions = new Set(["retry", "suppress", "mark-delivered", "mark_delivered", "replay", "dead-letter", "dead_letter"]);
+
+async function whatsappOutboxCommand(argv, ctx) {
+  const subcommand = argv[0]?.startsWith("--") ? "list" : argv[0] || "list";
+  const rest = subcommand === "list" && argv[0]?.startsWith("--") ? argv : argv.slice(1);
+  const json = rest.includes("--json") || argv.includes("--json");
+  if (subcommand === "list") {
+    const params = new URLSearchParams();
+    const state = flagValue(rest, "--state") || flagValue(rest, "--status");
+    const tenant = flagValue(rest, "--tenant") || flagValue(rest, "--tenant-id") || flagValue(rest, "--owner") || flagValue(rest, "--user");
+    const account = flagValue(rest, "--account") || flagValue(rest, "--account-id");
+    const chatId = flagValue(rest, "--chat-id") || flagValue(rest, "--chat");
+    const thread = flagValue(rest, "--thread") || flagValue(rest, "--thread-id");
+    const deliveryType = flagValue(rest, "--delivery-type") || flagValue(rest, "--type");
+    const limit = flagValue(rest, "--limit");
+    if (state) params.set("state", state);
+    if (tenant) params.set("tenantId", tenant);
+    if (account) params.set("accountId", account);
+    if (chatId) params.set("chatId", chatId);
+    if (thread) params.set("threadId", thread);
+    if (deliveryType) params.set("deliveryType", deliveryType);
+    if (limit) params.set("limit", limit);
+    const payload = await requestJson(`/api/connectors/whatsapp/outbox${params.size ? `?${params.toString()}` : ""}`, ctx);
+    if (json) ctx.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
+    else ctx.stdout.write(formatWhatsAppOutboxJobs(payload));
+    return 0;
+  }
+  if (whatsappOutboxActions.has(subcommand)) {
+    const jobIds = positional(rest);
+    if (!jobIds.length) throw new Error("Usage: orkestr whatsapp outbox <retry|suppress|mark-delivered|replay|dead-letter> <job-id>... [--reason text] [--json]");
+    const body = {
+      reason: flagValue(rest, "--reason") || "",
+    };
+    const action = subcommand.replace(/_/g, "-");
+    const payload = jobIds.length === 1
+      ? await requestJson(`/api/connectors/whatsapp/outbox/${encodeURIComponent(jobIds[0])}/${encodeURIComponent(action)}`, {
+          ...ctx,
+          method: "POST",
+          body,
+        })
+      : await requestJson("/api/connectors/whatsapp/outbox/actions", {
+          ...ctx,
+          method: "POST",
+          body: {
+            ...body,
+            action,
+            jobIds,
+          },
+        });
+    if (json) ctx.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
+    else ctx.stdout.write(formatWhatsAppOutboxAction(payload));
+    return payload.ok === false ? 1 : 0;
+  }
+  throw new Error("Usage: orkestr whatsapp outbox [list|retry|suppress|mark-delivered|replay|dead-letter] [--json]");
+}
+
 async function whatsappBindingsCommand(argv, ctx) {
   const subcommand = argv[0]?.startsWith("--") ? "list" : argv[0] || "list";
   const rest = subcommand === "list" && argv[0]?.startsWith("--") ? argv : argv.slice(1);
   const json = rest.includes("--json") || argv.includes("--json");
   if (subcommand === "list") {
-    const payload = await requestJson("/api/connectors/whatsapp/bindings", ctx);
+    const params = new URLSearchParams();
+    const thread = flagValue(rest, "--thread") || flagValue(rest, "--thread-id") || "";
+    const chatId = flagValue(rest, "--chat-id") || flagValue(rest, "--chat") || "";
+    const user = flagValue(rest, "--user") || flagValue(rest, "--user-id") || flagValue(rest, "--owner") || "";
+    if (thread) params.set("thread", thread);
+    if (chatId) params.set("chatId", chatId);
+    if (user) params.set("user", user);
+    const payload = await requestJson(`/api/connectors/whatsapp/bindings${params.size ? `?${params.toString()}` : ""}`, ctx);
     if (json) ctx.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
     else ctx.stdout.write(formatWhatsAppBindings(payload.bindings || []));
     return 0;
@@ -621,14 +843,22 @@ async function whatsappBindingsCommand(argv, ctx) {
 
 function whatsappBindingBody(argv = []) {
   const body = {};
+  const level = flagValue(argv, "--level");
   const threadId = flagValue(argv, "--thread") || flagValue(argv, "--thread-id");
   const chatId = flagValue(argv, "--chat-id") || flagValue(argv, "--chat");
+  const instanceId = flagValue(argv, "--instance") || flagValue(argv, "--instance-id");
+  const ownerUserId = flagValue(argv, "--user") || flagValue(argv, "--user-id") || flagValue(argv, "--owner") || flagValue(argv, "--owner-user") || flagValue(argv, "--owner-user-id");
+  const targetAccountId = flagValue(argv, "--target-account") || flagValue(argv, "--target-account-id");
   const accountId = flagValue(argv, "--responder-account") || flagValue(argv, "--account") || flagValue(argv, "--account-id") || flagValue(argv, "--outbound-account");
   const sendAcl = flagValue(argv, "--send-acl") || flagValue(argv, "--send");
   const displayName = flagValue(argv, "--display-name") || flagValue(argv, "--name");
   const replyPrefix = flagValue(argv, "--reply-prefix");
+  if (level) body.level = level;
   if (threadId) body.threadId = threadId;
   if (chatId) body.chatId = chatId;
+  if (instanceId) body.instanceId = instanceId;
+  if (ownerUserId) body.ownerUserId = ownerUserId;
+  if (targetAccountId) body.targetAccountId = targetAccountId;
   if (accountId) {
     body.responderConnectorAccountId = accountId;
     body.responderAccountId = accountId;
@@ -647,18 +877,35 @@ async function whatsappCodexCommand(argv, ctx) {
   const subcommand = argv[0]?.startsWith("--") ? "status" : argv[0] || "status";
   const rest = subcommand === "status" && argv[0]?.startsWith("--") ? argv : argv.slice(1);
   const json = rest.includes("--json") || argv.includes("--json");
-  if (subcommand !== "status") throw new Error("Usage: orkestr whatsapp codex status --thread <thread> [--chat-id id] [--json]");
-  const params = new URLSearchParams();
   const thread = flagValue(rest, "--thread") || flagValue(rest, "--thread-id") || positional(rest)[0] || "";
   const chatId = flagValue(rest, "--chat-id") || flagValue(rest, "--chat") || "";
   const accountId = flagValue(rest, "--account") || flagValue(rest, "--account-id") || "";
-  if (thread) params.set("thread", thread);
-  if (chatId) params.set("chatId", chatId);
-  if (accountId) params.set("accountId", accountId);
-  const payload = await requestJson(`/api/connectors/whatsapp/codex/status${params.size ? `?${params.toString()}` : ""}`, ctx);
-  if (json) ctx.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
-  else ctx.stdout.write(formatWhatsAppBindingResolution(payload.resolution || {}));
-  return payload.ok ? 0 : 1;
+  if (subcommand === "connect") {
+    if (!thread || !accountId) throw new Error("Usage: orkestr whatsapp codex connect --thread <thread> --account <account-id> [--chat-id id] [--json]");
+    const payload = await requestJson("/api/connectors/whatsapp/codex/connect", {
+      ...ctx,
+      method: "POST",
+      body: {
+        thread,
+        accountId,
+        ...(chatId ? { chatId } : {}),
+      },
+    });
+    if (json) ctx.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
+    else ctx.stdout.write(formatWhatsAppBindingResolution(payload.resolution || {}));
+    return payload.ok ? 0 : 1;
+  }
+  if (subcommand === "status") {
+    const params = new URLSearchParams();
+    if (thread) params.set("thread", thread);
+    if (chatId) params.set("chatId", chatId);
+    if (accountId) params.set("accountId", accountId);
+    const payload = await requestJson(`/api/connectors/whatsapp/codex/status${params.size ? `?${params.toString()}` : ""}`, ctx);
+    if (json) ctx.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
+    else ctx.stdout.write(formatWhatsAppBindingResolution(payload.resolution || {}));
+    return payload.ok ? 0 : 1;
+  }
+  throw new Error("Usage: orkestr whatsapp codex [status|connect] --thread <thread> [--account id] [--chat-id id] [--json]");
 }
 
 async function whatsappBindThreadCommand(argv, ctx) {
@@ -734,17 +981,91 @@ function formatWhatsAppPairing(payload = {}) {
   return [
     `WhatsApp account: ${account.accountId || account.id || "-"}`,
     `State: ${pairing.state || account.state || "-"}`,
+    pairing.pairingCode || account.pairingCode ? `Code: ${pairing.pairingCode || account.pairingCode}` : "",
+    pairing.pairingPhoneNumber || account.pairingPhoneNumber ? `Phone: ${pairing.pairingPhoneNumber || account.pairingPhoneNumber}` : "",
     `QR: ${pairing.qrAvailable || pairing.qrRequired ? pairing.qrUrl || "available" : "not available"}`,
     `Next: ${pairing.nextAction || account.nextAction || "-"}`,
+  ].filter(Boolean).join("\n") + "\n";
+}
+
+function formatWhatsAppOutboxJobs(payload = {}) {
+  const jobs = payload.jobs || [];
+  if (!jobs.length) return "No WhatsApp outbox jobs matched.\n";
+  return [
+    "JOB\tSTATE\tTENANT\tACCOUNT\tCHAT\tTHREAD\tTYPE\tUPDATED\tERROR",
+    ...jobs.map((job) => [
+      job.id || "-",
+      job.state || "-",
+      job.tenantId || job.ownerUserId || "-",
+      job.accountId || "-",
+      job.chatId || "-",
+      job.threadId || "-",
+      job.deliveryType || "-",
+      job.updatedAt || job.createdAt || "-",
+      job.error || "-",
+    ].join("\t")),
   ].join("\n") + "\n";
+}
+
+function formatWhatsAppOutboxAction(payload = {}) {
+  const results = payload.results || (payload.job ? [payload] : []);
+  if (!results.length) return `Outbox action: ${payload.ok ? "ok" : "failed"}\n`;
+  return results.map((result) => [
+    `Outbox job: ${result.job?.id || "-"}`,
+    `Action: ${result.action || payload.action || "-"}`,
+    `State: ${result.previousState || "-"} -> ${result.job?.state || "-"}`,
+    result.whatsapp ? `WhatsApp state: intents=${result.whatsapp.matchedIntents || 0} removedDeliveries=${result.whatsapp.removedDeliveries || 0}` : "",
+  ].filter(Boolean).join("\n")).join("\n\n") + "\n";
+}
+
+function formatWhatsAppMigration(payload = {}) {
+  const counts = payload.counts || {};
+  const lines = [
+    `WhatsApp migration: ${payload.dryRun ? "dry run" : "applied"}`,
+    `Migrated: ${Number(payload.migrated || 0)}`,
+    `Accounts: created=${Number(counts.accountsCreated || 0)} updated=${Number(counts.accountsUpdated || 0)} unchanged=${Number(counts.accountsUnchanged || 0)}`,
+    `Thread bindings: updated=${Number(counts.threadBindingsUpdated || 0)} skipped=${Number(counts.threadBindingsSkipped || 0)} unchanged=${Number(counts.threadBindingsUnchanged || 0)}`,
+    `Token plans: configured=${Number(counts.tokenPlansConfigured || 0)} missing=${Number(counts.tokenPlansMissing || 0)} total=${Number(counts.tokenPlansTotal || 0)}`,
+  ];
+  if (Array.isArray(payload.accounts) && payload.accounts.length) {
+    lines.push("", "Account plans:");
+    for (const account of payload.accounts) {
+      lines.push(`- ${account.action || "-"} ${account.accountId || "-"} runtime=${account.runtimeAccountId || "-"} autostart=${account.autostart ? "yes" : "no"}`);
+    }
+  }
+  if (Array.isArray(payload.threadBindings) && payload.threadBindings.length) {
+    lines.push("", "Binding plans:");
+    for (const binding of payload.threadBindings) {
+      const acl = binding.acl || {};
+      lines.push(`- ${binding.action || "-"} ${binding.bindingId || "-"} thread=${binding.threadName || binding.threadId || "-"} responder=${binding.responderAccountId || "-"} acl(send=${acl.send?.mode || "-"} receive=${acl.receive?.mode || "-"})`);
+    }
+  }
+  if (Array.isArray(payload.tokenPlans) && payload.tokenPlans.length) {
+    lines.push("", "Scoped token plans:");
+    for (const token of payload.tokenPlans) {
+      lines.push(`- ${token.tokenId || "-"} ${token.requiredScope || "-"} account=${token.accountId || "-"} chat=${token.chatId || "-"} ${token.tokenConfigured ? "configured" : "missing"} token=${token.token || "[redacted]"}`);
+    }
+  }
+  if (Array.isArray(payload.warnings) && payload.warnings.length) {
+    lines.push("", "Warnings:");
+    for (const warning of payload.warnings) {
+      lines.push(`- ${warning.code || "warning"} ${warning.message || ""}`.trim());
+    }
+  }
+  if (payload.rollback?.instructions?.length) {
+    lines.push("", "Rollback:");
+    for (const instruction of payload.rollback.instructions) lines.push(`- ${instruction}`);
+  }
+  return lines.join("\n") + "\n";
 }
 
 function formatWhatsAppBindings(bindings = []) {
   if (!bindings.length) return "No visible WhatsApp bindings.\n";
   return [
-    "BINDING\tSTATE\tTHREAD\tCHAT\tRESPONDER\tNEXT",
+    "BINDING\tLEVEL\tSTATE\tTHREAD\tCHAT\tRESPONDER\tNEXT",
     ...bindings.map((binding) => [
       binding.id || "-",
+      binding.level || "-",
       binding.state || "-",
       binding.threadName || binding.threadId || "-",
       binding.chatId || "-",
@@ -757,6 +1078,7 @@ function formatWhatsAppBindings(bindings = []) {
 function formatWhatsAppBindingStatus(binding = {}) {
   return [
     `WhatsApp binding: ${binding.id || "-"}`,
+    `Level: ${binding.level || "-"}`,
     `State: ${binding.state || "-"}`,
     `Reason: ${binding.reason || "-"}`,
     `Thread: ${binding.threadName || binding.threadId || "-"}`,
@@ -1136,16 +1458,60 @@ async function createWorkerCommand(argv, ctx) {
 async function attach(argv, ctx) {
   const printOnly = argv.includes("--print");
   const json = argv.includes("--json");
+  const readOnly = argv.includes("--read-only");
+  const takeover = argv.includes("--takeover");
+  const interrupt = argv.includes("--interrupt");
+  const yes = argv.includes("--yes");
+  const intervalMs = parseDurationMs(flagValue(argv, "--interval"), { numericUnit: "seconds" });
+  const timeoutMs = parseDurationMs(flagValue(argv, "--timeout"), { numericUnit: "seconds" });
   const targetArg = positional(argv)[0];
   const target = targetArg || threadName(await chooseThread(ctx));
+  const body = {};
+  if (readOnly) body.readOnly = true;
+  if (takeover) body.takeover = true;
+  if (interrupt) body.interrupt = true;
+  if (yes) body.yes = true;
+  if (intervalMs) body.intervalMs = intervalMs;
+  if (timeoutMs) body.timeoutMs = timeoutMs;
+  body.watchStartedAtMs = Date.now();
   const payload = await requestJson(`/api/threads/${encodeURIComponent(target)}/attach`, {
     ...ctx,
     method: "POST",
+    ...(Object.keys(body).length ? { body } : {}),
   });
   if (json) {
     ctx.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
     return 0;
   }
+  if (payload.watchOnly || payload.attachable === false) {
+    ctx.stdout.write(String(payload.watchText || rawAttachWatchText(payload.watch || {})));
+    if (readOnly || printOnly || !takeover) return 0;
+    return watchAttachUntilAttachable(target, body, ctx, { printOnly });
+  }
+  return runAttachPayload(payload, target, ctx, { printOnly });
+}
+
+async function watchAttachUntilAttachable(target, body, ctx, { printOnly = false } = {}) {
+  const startedAtMs = Number(body.watchStartedAtMs || Date.now());
+  const timeoutMs = Number(body.timeoutMs || 15 * 60_000);
+  const intervalMs = Number(body.intervalMs || 5000);
+  for (;;) {
+    if (Date.now() - startedAtMs >= timeoutMs) throw new Error(`Attach watch timed out for ${target}`);
+    await new Promise((resolve) => setTimeout(resolve, Math.max(1000, intervalMs)));
+    const payload = await requestJson(`/api/threads/${encodeURIComponent(target)}/attach`, {
+      ...ctx,
+      method: "POST",
+      body: { ...body, watchStartedAtMs: startedAtMs },
+    });
+    if (payload.watchOnly || payload.attachable === false) {
+      ctx.stdout.write(String(payload.watchText || rawAttachWatchText(payload.watch || {})));
+      continue;
+    }
+    return runAttachPayload(payload, target, ctx, { printOnly });
+  }
+}
+
+function runAttachPayload(payload, target, ctx, { printOnly = false } = {}) {
   if (!payload.ok) throw new Error(payload.message || `Thread is not attachable: ${target}`);
   const sessionName = payload.runtime?.sessionName || parseTmuxSession(payload.attachCommand);
   const attachCommand = String(payload.attachCommand || "").trim();
@@ -1156,6 +1522,22 @@ async function attach(argv, ctx) {
   }
   if (!sessionName) return spawnInherited(ctx.spawnImpl, "sh", ["-lc", `exec ${attachCommand}`]);
   return spawnInherited(ctx.spawnImpl, "tmux", ["attach-session", "-t", sessionName]);
+}
+
+function parseDurationMs(value, { numericUnit = "milliseconds" } = {}) {
+  const text = String(value || "").trim().toLowerCase();
+  if (!text) return 0;
+  const numeric = Number(text);
+  if (Number.isFinite(numeric)) return Math.max(0, Math.floor(numeric * (numericUnit === "seconds" ? 1000 : 1)));
+  const match = text.match(/^(\d+(?:\.\d+)?)(ms|s|sec|secs|second|seconds|m|min|mins|minute|minutes|h|hr|hrs|hour|hours)$/);
+  if (!match) return 0;
+  const amount = Number(match[1]);
+  const unit = match[2];
+  if (!Number.isFinite(amount)) return 0;
+  if (unit === "ms") return Math.floor(amount);
+  if (unit.startsWith("s")) return Math.floor(amount * 1000);
+  if (unit.startsWith("m")) return Math.floor(amount * 60_000);
+  return Math.floor(amount * 60 * 60_000);
 }
 
 async function chooseThread(ctx) {
@@ -1232,7 +1614,7 @@ Common thread commands:
   orkestr api-session bind [--api-session-id id] [--cwd path] [--thread thread-id] [--json]
   orkestr api-session message <text> [--api-session-id id] [--role assistant|user] [--phase final_answer] [--json]
   orkestr api-session status [--api-session-id id] [--json]
-  orkestr attach [thread-name-or-id] [--print] [--json]
+  orkestr attach [thread-name-or-id] [--print] [--read-only] [--takeover] [--interrupt] [--yes] [--interval seconds] [--timeout duration] [--json]
   orkestr send <thread-name-or-id> "<message>" [--json]
   orkestr wake <thread-name-or-id> [--json]
   orkestr reset <thread-name-or-id> [--json]
@@ -1244,10 +1626,12 @@ Advanced:
   orkestr update status [--json]
   orkestr update rollback [--to release-id]
   orkestr settings [--json]
+  orkestr secret [list|set|delete] [--global|--user user-id] [--json]
   orkestr codex [status|migrate] [--dry-run] [--json]
-  orkestr whatsapp accounts [list|add|status|update|pair|reconnect|delete|doctor] [--json]
+  orkestr whatsapp accounts [list|add|status|update|pair|reconnect|disconnect|remove|doctor] [--json]
+  orkestr whatsapp migrate [--dry-run] [--json]
   orkestr whatsapp bindings [list|create|status|resolve|update|delete] [--json]
-  orkestr whatsapp codex status --thread <thread> [--json]
+  orkestr whatsapp codex [status|connect] --thread <thread> [--account id] [--json]
   orkestr whatsapp bind-thread <thread> --name <group name> [--wa-participant jid]... [--json]
   orkestr timers [list|doctor|run <timer-id>] [--json]
   orkestr security [challenges|sessions|approve <challenge-id>|reject <challenge-id>|revoke <session-id|all>] [--json]
@@ -1383,6 +1767,8 @@ function positional(argv) {
   const flagsWithValues = new Set([
     "--branch",
     "--branch-name",
+    "--account",
+    "--account-id",
     "--cmd",
     "--command",
     "--cwd",
@@ -1390,20 +1776,33 @@ function positional(argv) {
     "--host",
     "--id",
     "--label",
+    "--level",
+    "--limit",
     "--name",
     "--port",
+    "--phone",
+    "--phone-number",
     "--repo",
     "--repo-path",
+    "--reason",
     "--reply-prefix",
     "--responder-account",
     "--service",
     "--sender-account",
+    "--status",
     "--task",
+    "--target-account",
+    "--target-account-id",
+    "--value",
+    "--secret-value",
+    "--tenant",
+    "--tenant-id",
     "--title",
     "--ref",
     "--channel",
     "--lines",
     "--to",
+    "--timeout",
     "--active-timeout",
     "--api-session",
     "--api-session-id",
@@ -1414,6 +1813,7 @@ function positional(argv) {
     "--wa-title",
     "--outbound-account",
     "--inbound-account",
+    "--interval",
     "--message",
     "--pane-id",
     "--phase",
@@ -1424,6 +1824,15 @@ function positional(argv) {
     "--text",
     "--thread",
     "--thread-id",
+    "--delivery-type",
+    "--type",
+    "--instance",
+    "--instance-id",
+    "--user",
+    "--user-id",
+    "--owner",
+    "--owner-user",
+    "--owner-user-id",
   ]);
   const flagsWithoutValues = new Set([
     "--blank",
@@ -1450,12 +1859,17 @@ function positional(argv) {
     "--wait-active",
     "--no-wait-active",
     "--check-only",
+    "--global",
     "--no-follow",
     "--probe",
     "--stdin",
     "--no-bind",
     "--all-instances",
     "--no-all-instances",
+    "--takeover",
+    "--interrupt",
+    "--read-only",
+    "--yes",
   ]);
   for (let index = 0; index < argv.length; index += 1) {
     const value = argv[index];

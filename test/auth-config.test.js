@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { publicAuthStatus } from "../packages/core/src/auth-config.js";
-import { publicUrlConfig } from "../packages/core/src/public-url-config.js";
+import { publicUrlConfig, publicUrlIdentityDiagnostics } from "../packages/core/src/public-url-config.js";
 import { sessionCookieHeader } from "../packages/core/src/security.js";
 import { getSetupStatus, publicSetupStatus } from "../packages/core/src/setup.js";
 
@@ -57,6 +57,71 @@ test("public URL config separates app and auth hosts for hosted deployments", ()
   assert.equal(urls.sameOriginAuth, false);
 });
 
+test("public URL config prefers explicit public app and auth URLs over legacy aliases", () => {
+  const urls = publicUrlConfig({
+    ORKESTR_PRIMARY_DOMAIN: "ops.example.test",
+    ORKESTR_PUBLIC_URL: "https://app.public.example.test",
+    ORKESTR_PUBLIC_APP_URL: "https://orkestr.app.ops.example.test",
+    ORKESTR_AUTH_URL: "https://auth.public.example.test",
+    ORKESTR_PUBLIC_AUTH_URL: "https://auth.ops.example.test",
+  });
+
+  assert.equal(urls.appUrl, "https://orkestr.app.ops.example.test");
+  assert.equal(urls.authUrl, "https://auth.ops.example.test");
+  assert.equal(urls.appHost, "orkestr.app.ops.example.test");
+  assert.equal(urls.authHost, "auth.ops.example.test");
+});
+
+test("public URL identity diagnostics accept one hosted URL family", () => {
+  const diagnostics = publicUrlIdentityDiagnostics({
+    ORKESTR_PRIMARY_DOMAIN: "orkestr.de",
+    ORKESTR_APP_HOST: "app.orkestr.de",
+    ORKESTR_AUTH_HOST: "auth.orkestr.de",
+    ORKESTR_PUBLIC_SITE_URL: "https://orkestr.de",
+    ORKESTR_PUBLIC_APP_URL: "https://app.orkestr.de",
+    ORKESTR_AUTH_URL: "https://auth.orkestr.de",
+    ORKESTR_PAIRING_URL: "https://app.orkestr.de/setup/pairing",
+    ORKESTR_COOKIE_DOMAIN: "orkestr.de",
+  });
+
+  assert.equal(diagnostics.ok, true);
+  assert.deepEqual(diagnostics.roots.map((root) => root.root), ["orkestr.de"]);
+});
+
+test("public URL identity diagnostics ignore a separate public marketing site URL", () => {
+  const diagnostics = publicUrlIdentityDiagnostics({
+    ORKESTR_PRIMARY_DOMAIN: "ops.oguzcanunver.com",
+    ORKESTR_APP_HOST: "orkestr.app.ops.oguzcanunver.com",
+    ORKESTR_AUTH_HOST: "auth.ops.oguzcanunver.com",
+    ORKESTR_PUBLIC_SITE_URL: "https://orkestr.de",
+    ORKESTR_PUBLIC_APP_URL: "https://orkestr.app.ops.oguzcanunver.com",
+    ORKESTR_AUTH_URL: "https://auth.ops.oguzcanunver.com",
+    ORKESTR_PAIRING_URL: "https://orkestr.app.ops.oguzcanunver.com/setup/pairing",
+  });
+
+  assert.equal(diagnostics.ok, true);
+  assert.deepEqual(diagnostics.roots.map((root) => root.root), ["ops.oguzcanunver.com"]);
+  assert.equal(diagnostics.records.some((record) => record.name === "ORKESTR_PUBLIC_SITE_URL"), false);
+});
+
+test("public URL identity diagnostics warn on mixed runtime service URLs", () => {
+  const diagnostics = publicUrlIdentityDiagnostics({
+    ORKESTR_PRIMARY_DOMAIN: "ops.oguzcanunver.com",
+    ORKESTR_APP_HOST: "orkestr.app.ops.oguzcanunver.com",
+    ORKESTR_AUTH_HOST: "auth.ops.oguzcanunver.com",
+    ORKESTR_PUBLIC_SITE_URL: "https://orkestr.de",
+    ORKESTR_PUBLIC_APP_URL: "https://orkestr.app.ops.oguzcanunver.com",
+    ORKESTR_AUTH_URL: "https://auth.ops.oguzcanunver.com",
+    ORKESTR_CONNECT_PUBLIC_URL: "https://connect.orkestr.de",
+    ORKESTR_PAIRING_URL: "https://orkestr.app.ops.oguzcanunver.com/setup/pairing",
+  });
+
+  assert.equal(diagnostics.ok, false);
+  assert.equal(diagnostics.status, "warning");
+  assert.deepEqual(diagnostics.roots.map((root) => root.root), ["ops.oguzcanunver.com", "orkestr.de"]);
+  assert.ok(diagnostics.records.some((record) => record.name === "ORKESTR_CONNECT_PUBLIC_URL" && record.root === "orkestr.de"));
+});
+
 test("pairing session cookie can cover app and auth subdomains", () => {
   const header = sessionCookieHeader("token-value", {
     ORKESTR_PRIMARY_DOMAIN: "orkestr.example.test",
@@ -109,4 +174,17 @@ test("redacted setup status keeps public app and auth URLs for pairing", async (
   assert.equal(redacted.security.approval.sshCommand, "ssh root@203.0.113.10");
   assert.equal(redacted.security.approval.approveCommand, "orkestr-public security approve <challenge-id>");
   assert.equal(redacted.security.approval.sudoApproveCommand, "sudo orkestr-public security approve <challenge-id>");
+});
+
+test("public app URL alone enables remote auth protection", async () => {
+  const status = await getSetupStatus({
+    env: {
+      ORKESTR_HOME: "/tmp/orkestr-auth-public-app-test",
+      ORKESTR_PUBLIC_APP_URL: "https://orkestr.app.ops.example.test",
+    },
+  });
+
+  assert.equal(status.urls.appUrl, "https://orkestr.app.ops.example.test");
+  assert.equal(status.security.authRequired, true);
+  assert.equal(status.security.remoteReady, true);
 });

@@ -834,7 +834,7 @@ export class OpsPageComponent implements OnInit, OnDestroy {
   whatsappIdentitySummary(identity: UserIdentity): string {
     return [
       identity.accountId ? `account ${identity.accountId}` : "",
-      identity.externalId ? `sender ${identity.externalId}` : "",
+      identity.externalId ? `identity ${identity.externalId}` : "",
       identity.chatId ? `chat ${identity.chatId}` : "",
     ].filter(Boolean).join(" · ") || "no ids saved";
   }

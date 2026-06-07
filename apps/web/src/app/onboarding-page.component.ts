@@ -1,13 +1,15 @@
 import { ChangeDetectorRef, Component, EventEmitter, Input, OnChanges, OnDestroy, OnInit, Output, SimpleChanges, inject } from "@angular/core";
 import { FormsModule } from "@angular/forms";
 import { firstValueFrom } from "rxjs";
-import { ApiService, BackupRestorePlanResponse, BackupStatusResponse, BrowserSession, CodexAppServerStatus, CodexMigrationResponse, CodexStoredThread, ConnectorStatus, OnboardingProfile, OutlookOAuthPollResponse, OutlookOAuthStartResponse, SetupStatus, StateBackupRecord, SystemDoctorResponse, ThreadSummary, UserOnboardingState, VersionResponse } from "./api.service";
+import { ApiService, BackupRestorePlanResponse, BackupStatusResponse, BrowserSession, CodexAppServerStatus, CodexMigrationResponse, CodexStoredThread, ConnectorStatus, OnboardingProfile, OutlookOAuthPollResponse, OutlookOAuthStartResponse, SecureSecretMetadata, SetupStatus, StateBackupRecord, SystemDoctorResponse, ThreadSummary, UserOnboardingState, VersionResponse } from "./api.service";
 import { SecurityChallengesPanelComponent } from "./security-challenges-panel.component";
 
 type ConnectorStep = "openai" | "codex" | "gmail" | "linkedin" | "whatsapp" | "browsers";
 type MarketingStep = "google-marketing";
 type MaintenanceStep = "maintenance";
-type OnboardingStep = "goal" | "profile" | "system" | "security" | MaintenanceStep | MarketingStep | ConnectorStep | "finish";
+type SecureInputStep = "secrets";
+type SecureSecretScope = "user" | "global";
+type OnboardingStep = "goal" | "profile" | "system" | "security" | MaintenanceStep | SecureInputStep | MarketingStep | ConnectorStep | "finish";
 type OnboardingGoalId = "whatsapp-codex" | "virtual-desktop" | "inbox-summary";
 type SetupPageMode = "setup" | "onboarding";
 type MailProvider = "gmail" | "outlook";
@@ -85,6 +87,12 @@ export class OnboardingPageComponent implements OnInit, OnChanges, OnDestroy {
   restoreBackupPath = "";
   restorePlan: BackupRestorePlanResponse | null = null;
   migrationResult: CodexMigrationResponse | null = null;
+  secureSecrets: SecureSecretMetadata[] = [];
+  secureSecretScope: SecureSecretScope = "user";
+  secureSecretUserId = "";
+  secureSecretName = "";
+  secureSecretValue = "";
+  deletingSecureSecret = "";
 
   openaiApiKey = "";
   mailProvider: MailProvider = "gmail";
@@ -178,6 +186,7 @@ export class OnboardingPageComponent implements OnInit, OnChanges, OnDestroy {
       this.versionInfo = versionResult.status === "fulfilled" ? versionResult.value : this.versionInfo;
       if (onboardingResult.status === "fulfilled") this.applyOnboardingState(onboardingResult.value.onboarding || null);
       if (this.activeStep === "maintenance") await this.loadBackupStatus(false);
+      if (this.activeStep === "secrets") await this.loadSecureSecrets(false);
       this.hydrateForms(setup);
       if (this.activeStep === "codex") await this.loadCodexAppServer(false);
       this.applySetupSectionFromInput();
@@ -591,6 +600,7 @@ export class OnboardingPageComponent implements OnInit, OnChanges, OnDestroy {
     if (id === "system") return this.setup ? "checked" : "checking";
     if (id === "security") return this.securityStepLabel();
     if (id === "maintenance") return this.maintenanceStepLabel();
+    if (id === "secrets") return this.secureSecretsLabel();
     if (id === "finish") return this.requiredConnectorSteps().every((step) => this.stepDone(step)) ? "ready" : "review";
     if (id === "gmail") return this.mailStatusLabel();
     return this.stateLabel(id);
@@ -602,6 +612,7 @@ export class OnboardingPageComponent implements OnInit, OnChanges, OnDestroy {
     if (id === "system") return this.setup ? "ready" : "idle";
     if (id === "security") return this.securityStepClass();
     if (id === "maintenance") return this.backupStatus?.latestBackup ? "ready" : "partial";
+    if (id === "secrets") return this.secureSecrets.length ? "ready" : "idle";
     if (id === "finish") return this.requiredConnectorSteps().every((step) => this.stepDone(step)) ? "ready" : "partial";
     if (id === "gmail") return this.mailStatusClass();
     return this.stateClass(id);
@@ -613,6 +624,7 @@ export class OnboardingPageComponent implements OnInit, OnChanges, OnDestroy {
     if (id === "system") return Boolean(this.setup);
     if (id === "security") return this.securityDone();
     if (id === "maintenance") return Boolean(this.backupStatus?.latestBackup);
+    if (id === "secrets") return this.secureSecrets.length > 0;
     if (id === "finish") return this.requiredConnectorSteps().every((step) => this.stepDone(step));
     if (id === "gmail") return this.mailDone();
     if (id === "codex") return this.agentRuntimeReady();
@@ -784,6 +796,7 @@ export class OnboardingPageComponent implements OnInit, OnChanges, OnDestroy {
     return [
       { id: "system", label: "Connections", eyebrow: "Runtime" },
       { id: "security", label: "Security", eyebrow: "Remote access" },
+      { id: "secrets", label: "Secrets", eyebrow: "Secure input" },
       { id: "maintenance", label: "Maintenance", eyebrow: "Backups" },
       ...setupConnectors,
     ];
@@ -1039,6 +1052,110 @@ export class OnboardingPageComponent implements OnInit, OnChanges, OnDestroy {
       this.busy = false;
       this.renderNow();
     }
+  }
+
+  secureSecretsLabel(): string {
+    const count = this.secureSecrets.length;
+    if (count === 1) return "1 secret";
+    if (count > 1) return `${count} secrets`;
+    return "none";
+  }
+
+  secureSecretScopeSummary(): string {
+    if (this.secureSecretScope === "global") return "Global secrets are available to admin-managed Orkestr workflows.";
+    const userId = this.secureSecretUserId.trim();
+    return userId ? `User scope for ${userId}.` : "User scope for the signed-in operator.";
+  }
+
+  secureSecretStatusClass(secret: SecureSecretMetadata): string {
+    const status = String(secret.status || "").toLowerCase();
+    if (secret.configured !== false && (!status || status === "configured")) return "ready";
+    if (status === "missing" || status === "error") return "bad";
+    return "partial";
+  }
+
+  secureSecretStatusLabel(secret: SecureSecretMetadata): string {
+    return String(secret.status || (secret.configured === false ? "missing" : "configured")).replace(/_/g, " ");
+  }
+
+  secureSecretOwnerLabel(secret: SecureSecretMetadata): string {
+    if (secret.scope === "global") return "global";
+    return String(secret.ownerUserId || "user");
+  }
+
+  secureSecretUpdatedLabel(secret: SecureSecretMetadata): string {
+    return String(secret.updatedAt || secret.createdAt || "");
+  }
+
+  secureSecretFingerprintLabel(secret: SecureSecretMetadata): string {
+    const fingerprint = String(secret.valueFingerprint || "").trim();
+    return fingerprint ? `fingerprint ${fingerprint}` : "value hidden";
+  }
+
+  async loadSecureSecrets(showBusy = true): Promise<void> {
+    if (showBusy) this.busy = true;
+    try {
+      const result = await firstValueFrom(this.api.secureSecrets(this.secureSecretTarget()));
+      this.secureSecrets = result.secrets || [];
+      this.error = "";
+    } catch (error) {
+      this.error = this.errorText(error);
+    } finally {
+      if (showBusy) this.busy = false;
+      this.renderNow();
+    }
+  }
+
+  async saveSecureSecret(): Promise<void> {
+    const name = this.secureSecretName.trim();
+    const value = this.secureSecretValue;
+    if (!name) {
+      this.error = "Enter a secret name before saving.";
+      return;
+    }
+    if (!value) {
+      this.error = "Enter a secret value before saving.";
+      return;
+    }
+    this.busy = true;
+    try {
+      const result = await firstValueFrom(this.api.setSecureSecret({ ...this.secureSecretTarget(), name, value }));
+      this.secureSecretValue = "";
+      this.secureSecretName = "";
+      this.notice = `Secret saved: ${result.secret.handle}`;
+      this.error = "";
+      await this.loadSecureSecrets(false);
+    } catch (error) {
+      this.error = this.errorText(error);
+    } finally {
+      this.busy = false;
+      this.renderNow();
+    }
+  }
+
+  async deleteSecureSecret(secret: SecureSecretMetadata): Promise<void> {
+    const name = String(secret.name || "").trim();
+    if (!name) return;
+    this.deletingSecureSecret = secret.handle || name;
+    this.busy = true;
+    try {
+      const scope = secret.scope === "global" ? "global" : "user";
+      const userId = scope === "user" ? String(secret.ownerUserId || "").trim() : "";
+      await firstValueFrom(this.api.deleteSecureSecret(name, { scope, userId }));
+      this.notice = `Secret deleted: ${secret.handle || name}`;
+      this.error = "";
+      await this.loadSecureSecrets(false);
+    } catch (error) {
+      this.error = this.errorText(error);
+    } finally {
+      this.deletingSecureSecret = "";
+      this.busy = false;
+      this.renderNow();
+    }
+  }
+
+  async refreshSecureSecretsForScope(): Promise<void> {
+    await this.loadSecureSecrets();
   }
 
   async startCodexDeviceAuth(): Promise<void> {
@@ -1330,6 +1447,7 @@ export class OnboardingPageComponent implements OnInit, OnChanges, OnDestroy {
     if (this.isSetupMode()) this.setupSectionChange.emit(id);
     if (id === "codex") void this.loadCodexAppServer(false);
     if (id === "maintenance") void this.loadBackupStatus(false);
+    if (id === "secrets") void this.loadSecureSecrets(false);
   }
 
   previousStep(): void {
@@ -1371,6 +1489,13 @@ export class OnboardingPageComponent implements OnInit, OnChanges, OnDestroy {
     } finally {
       this.busy = false;
     }
+  }
+
+  private secureSecretTarget(): { scope: SecureSecretScope; userId?: string } {
+    const target: { scope: SecureSecretScope; userId?: string } = { scope: this.secureSecretScope };
+    const userId = this.secureSecretUserId.trim();
+    if (this.secureSecretScope === "user" && userId) target.userId = userId;
+    return target;
   }
 
   private async browserAction(slug: string, action: string, message: string, options: BrowserActionOptions = {}): Promise<void> {

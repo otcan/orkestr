@@ -9,12 +9,13 @@ import { promisify } from "node:util";
 import { startServer } from "../apps/server/src/server.js";
 import { resetThreadSummaryCachesForTest, threadRuntimeSummary, threadSummaryPayload, threadSummaryRuntimeSnapshot } from "../apps/server/src/thread-summary.ts";
 import { runNextThreadMessage } from "../packages/core/src/executors.js";
-import { applyRuntimeCodexMode, consumeThreadConnectorDeliverySignalCount, deliverPendingThreadInputs, doctorRuntimeResources, drainAllPendingThreadInputs, hardResetThreadRuntime, listRuntimeLeases, resetThreadRuntime, resolveCodexThreadMetadata, runtimeStatus, setThreadConnectorDeliverySignalHandler, sleepThread, syncRuntimeLeases, syncRuntimeWindowName, wakeThread } from "../packages/core/src/runtime-leases.js";
+import { applyRuntimeCodexMode, consumeThreadConnectorDeliverySignalCount, deliverPendingThreadInputs, doctorRuntimeResources, drainAllPendingThreadInputs, hardResetThreadRuntime, listRuntimeLeases, resetThreadRuntime, resolveCodexThreadMetadata, runtimeStatus, setThreadConnectorDeliverySignalHandler, sleepThread, syncRuntimeLeases, syncRuntimeWindowName, takeoverRawTerminalThread, wakeThread } from "../packages/core/src/runtime-leases.js";
 import { ensureDataDirs } from "../packages/storage/src/paths.js";
 import { parseThreadInputCommand } from "../packages/core/src/thread-commands.js";
 import { createPairingChallenge, getPairingChallenge } from "../packages/core/src/security.js";
 import { createThreadWorker, detectThreadGitState, listThreadWorkers, refreshThreadGitState, syncSafeThreadWorkersWithParents, syncThreadWorkerWithParent, updateThreadRepo } from "../packages/core/src/thread-workers.js";
-import { appendThreadMessage, createThread, deleteThread, enqueueThreadInput, getThread, listThreadMessages, listThreads, updateThread, updateThreadMessage } from "../packages/core/src/threads.js";
+import { appendThreadMessage, createThread, deleteThread, enqueueThreadInput, enqueueThreadInputForPrincipal, getThread, listThreadMessages, listThreads, updateThread, updateThreadMessage } from "../packages/core/src/threads.js";
+import { adminPrincipal } from "../packages/core/src/principal.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -263,6 +264,39 @@ test("whatsapp thread inputs suppress duplicate external ids atomically", async 
   assert.equal(results.find((result) => result.duplicate)?.duplicateReason, "external_id");
 });
 
+test("thread inputs reuse browser client message ids atomically", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-client-message-id-dedupe-"));
+  const env = { ORKESTR_HOME: home };
+  const principal = adminPrincipal("admin");
+  await createThread({ id: "browser-dedupe-thread", name: "Browser Dedupe Thread", executorId: "noop" }, env);
+
+  const input = {
+    source: "browser",
+    clientMessageId: "browser-send-1",
+    text: "Proceed",
+  };
+  const results = await Promise.all([
+    enqueueThreadInputForPrincipal("browser-dedupe-thread", input, principal, env),
+    enqueueThreadInputForPrincipal("browser-dedupe-thread", { ...input, text: "Proceed retry" }, principal, env),
+  ]);
+  let messages = await listThreadMessages("browser-dedupe-thread", env);
+
+  assert.equal(messages.length, 1);
+  assert.equal(messages[0].clientMessageId, input.clientMessageId);
+  assert.equal(new Set(results.map((result) => result.id)).size, 1);
+  assert.equal(results.filter((result) => result.duplicate).length, 1);
+  assert.equal(results.find((result) => result.duplicate)?.duplicateReason, "client_message_id");
+
+  await updateThreadMessage("browser-dedupe-thread", messages[0].id, { state: "completed", deliveryState: "delivered" }, env);
+  const retry = await enqueueThreadInputForPrincipal("browser-dedupe-thread", input, principal, env);
+  messages = await listThreadMessages("browser-dedupe-thread", env);
+
+  assert.equal(retry.id, messages[0].id);
+  assert.equal(retry.duplicate, true);
+  assert.equal(retry.duplicateReason, "client_message_id");
+  assert.equal(messages.length, 1);
+});
+
 test("thread creation reuses an existing visible agent name", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-name-dedupe-"));
   const env = { ORKESTR_HOME: home };
@@ -420,6 +454,139 @@ test("thread attach endpoint wakes a sleeping thread before returning tmux comma
     restoreEnvValue("TMUX_LOG", priorTmuxLog);
     restoreEnvValue("TMUX_STATE", priorTmuxState);
     restoreEnvValue("ORKESTR_RECOVER_RUNNING_ON_START", priorRecoverOnStart);
+  }
+});
+
+test("thread attach endpoint prompts idle app-server raw takeover without creating tmux", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-attach-raw-prompt-"));
+  const fakeTmux = await createFakeTmux(home);
+  const priorHome = process.env.ORKESTR_HOME;
+  const priorRuntimeHome = process.env.HOME;
+  const priorCodexHome = process.env.CODEX_HOME;
+  const priorPath = process.env.PATH;
+  const priorTmuxLog = process.env.TMUX_LOG;
+  const priorTmuxState = process.env.TMUX_STATE;
+  const priorRecoverOnStart = process.env.ORKESTR_RECOVER_RUNNING_ON_START;
+  process.env.ORKESTR_HOME = path.join(home, "orkestr-home");
+  process.env.HOME = path.join(home, "runtime-home");
+  process.env.CODEX_HOME = path.join(home, "codex-home");
+  process.env.PATH = `${fakeTmux.bin}:${priorPath || ""}`;
+  process.env.TMUX_LOG = fakeTmux.log;
+  process.env.TMUX_STATE = fakeTmux.state;
+  process.env.ORKESTR_RECOVER_RUNNING_ON_START = "0";
+
+  let server;
+  try {
+    await createThread({
+      id: "attach-raw-prompt-thread",
+      name: "Attach Raw Prompt Thread",
+      executor: {
+        id: "codex",
+        type: "codex",
+        codexThreadId: "019ea1a1-ff15-74a2-a9d1-0eecc7c3cb94",
+        transport: "app-server",
+        metadata: {
+          transport: "app-server",
+          runtimeKind: "codex-app-server",
+        },
+      },
+      runtime: {
+        runtimeKind: "codex-app-server",
+        state: "ready",
+      },
+    });
+    server = await startServer({ port: 0, host: "127.0.0.1" });
+    const { port } = server.address();
+
+    const response = await fetch(`http://127.0.0.1:${port}/api/threads/attach-raw-prompt-thread/attach`, {
+      method: "POST",
+    });
+    const payload = await response.json();
+    const log = await fs.readFile(fakeTmux.log, "utf8").catch(() => "");
+
+    assert.equal(response.status, 200);
+    assert.equal(payload.ok, true);
+    assert.equal(payload.watchOnly, true);
+    assert.equal(payload.takeoverAvailable, true);
+    assert.match(payload.message, /takeover requires explicit confirmation/);
+    assert.doesNotMatch(log, /__CALL__\tnew-session/);
+  } finally {
+    if (server) await new Promise((resolve) => server.close(resolve));
+    restoreEnvValue("ORKESTR_HOME", priorHome);
+    restoreEnvValue("HOME", priorRuntimeHome);
+    restoreEnvValue("CODEX_HOME", priorCodexHome);
+    restoreEnvValue("PATH", priorPath);
+    restoreEnvValue("TMUX_LOG", priorTmuxLog);
+    restoreEnvValue("TMUX_STATE", priorTmuxState);
+    restoreEnvValue("ORKESTR_RECOVER_RUNNING_ON_START", priorRecoverOnStart);
+  }
+});
+
+test("raw terminal takeover creates canonical tmux session and expires after warm ttl", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-raw-takeover-"));
+  const fakeTmux = await createFakeTmux(home);
+  const priorPath = process.env.PATH;
+  const priorTmuxLog = process.env.TMUX_LOG;
+  const priorTmuxState = process.env.TMUX_STATE;
+  process.env.PATH = `${fakeTmux.bin}:${priorPath || ""}`;
+  process.env.TMUX_LOG = fakeTmux.log;
+  process.env.TMUX_STATE = fakeTmux.state;
+
+  try {
+    const env = {
+      ORKESTR_HOME: path.join(home, "orkestr-home"),
+      HOME: path.join(home, "runtime-home"),
+      CODEX_HOME: path.join(home, "codex-home"),
+      PATH: process.env.PATH,
+      TMUX_LOG: fakeTmux.log,
+      TMUX_STATE: fakeTmux.state,
+      ORKESTR_RAW_TERMINAL_TTL_MS: "1",
+    };
+    await createThread({
+      id: "raw-takeover-thread",
+      name: "Raw Takeover Thread",
+      cwd: path.join(home, "workspace"),
+      executor: {
+        id: "codex",
+        type: "codex",
+        codexThreadId: "019ea1a1-ff15-74a2-a9d1-0eecc7c3cb94",
+        transport: "app-server",
+        metadata: {
+          transport: "app-server",
+          runtimeKind: "codex-app-server",
+        },
+      },
+      runtime: {
+        runtimeKind: "codex-app-server",
+        state: "ready",
+      },
+    }, env);
+
+    const result = await takeoverRawTerminalThread("raw-takeover-thread", { reason: "test_takeover" }, env);
+    const status = await runtimeStatus("raw-takeover-thread", env);
+    const leases = await listRuntimeLeases(env);
+    let log = await fs.readFile(fakeTmux.log, "utf8");
+
+    assert.equal(result.status.sessionName, "orkestr-thread-raw-takeover-thread");
+    assert.equal(status.runtimeKind, "raw-terminal");
+    assert.equal(status.sessionName, "orkestr-thread-raw-takeover-thread");
+    assert.equal(leases[0].runtimeKind, "raw-terminal");
+    assert.equal(leases[0].ttlMs, 1);
+    assert.match(log, /__CALL__\tnew-session\t-d\t-s\torkestr-thread-raw-takeover-thread/);
+
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    await syncRuntimeLeases(env);
+    const after = await runtimeStatus("raw-takeover-thread", env);
+    const afterLeases = await listRuntimeLeases(env);
+    log = await fs.readFile(fakeTmux.log, "utf8");
+
+    assert.equal(after.state, "sleeping");
+    assert.equal(afterLeases[0].endReason, "runtime_ttl");
+    assert.match(log, /__CALL__\tkill-session\t-t\torkestr-thread-raw-takeover-thread/);
+  } finally {
+    restoreEnvValue("PATH", priorPath);
+    restoreEnvValue("TMUX_LOG", priorTmuxLog);
+    restoreEnvValue("TMUX_STATE", priorTmuxState);
   }
 });
 
@@ -3950,6 +4117,46 @@ test("thread summary message cap preserves old active delivery state", async () 
     resetThreadSummaryCachesForTest();
     restoreEnvValue("ORKESTR_HOME", priorHome);
     restoreEnvValue("ORKESTR_THREAD_SUMMARY_MESSAGES_LIMIT", priorMessageLimit);
+  }
+});
+
+test("thread summary preserves raw-terminal mode for sleeping takeover threads", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-summary-raw-terminal-"));
+  const priorHome = process.env.ORKESTR_HOME;
+  process.env.ORKESTR_HOME = path.join(home, "orkestr-home");
+
+  try {
+    await createThread({
+      id: "summary-raw-terminal-thread",
+      name: "Summary Raw Terminal Thread",
+      runtimeKind: "raw-terminal",
+      codexSessionId: "019ea2ca-b360-7751-bd76-cbd5fedf0a60",
+      executor: {
+        id: "codex",
+        type: "codex",
+        codexSessionId: "019ea2ca-b360-7751-bd76-cbd5fedf0a60",
+        transport: "raw-terminal",
+        metadata: {
+          runtimeKind: "raw-terminal",
+          terminalMode: "raw-terminal",
+          codexSessionId: "019ea2ca-b360-7751-bd76-cbd5fedf0a60",
+        },
+      },
+      runtime: {
+        state: "sleeping",
+        reason: "manual_sleep",
+      },
+      terminalMode: "raw-terminal",
+    });
+    const thread = await getThread("summary-raw-terminal-thread");
+
+    const summary = await threadRuntimeSummary(thread, [], { cacheTtlMs: 0 });
+
+    assert.equal(summary.runtimeKind, "raw-terminal");
+    assert.equal(summary.codexSessionId, "019ea2ca-b360-7751-bd76-cbd5fedf0a60");
+    assert.equal(summary.migrationRequired, false);
+  } finally {
+    restoreEnvValue("ORKESTR_HOME", priorHome);
   }
 });
 

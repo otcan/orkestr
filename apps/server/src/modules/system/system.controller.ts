@@ -284,7 +284,7 @@ async function pairingChallengeTarget(body: Record<string, unknown> = {}, reques
 
 function shouldRedactSetupStatus(request: any, status: any): boolean {
   if (!status?.security?.authEnabled) return false;
-  if (!request?.orkestrSecuritySession) return true;
+  if (!request?.orkestrSecuritySession && request?.orkestrMachineAuth !== "cli") return true;
   return !isAdminPrincipal(requestPrincipal(request));
 }
 

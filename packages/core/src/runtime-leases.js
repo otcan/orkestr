@@ -23,6 +23,11 @@ import { parseThreadInputCommand } from "./thread-commands.js";
 import { recordRouterTraceEvent } from "./router-traces.js";
 import { performNativeCodexSafeReset } from "./codex-safe-reset.js";
 import {
+  consumeThreadConnectorDeliverySignalCount,
+  markConnectorDeliverySignal,
+  setThreadConnectorDeliverySignalHandler,
+} from "./connector-delivery-signals.js";
+import {
   codexRuntimeThreadStatus,
   compactCodexRuntimeThread,
   deliverCodexRuntimePendingInputs,
@@ -50,14 +55,19 @@ import {
   tmuxSendKeys,
   tmuxWindowNameForLabel,
 } from "./runtime-tmux-legacy.js";
+import {
+  RAW_TERMINAL_RUNTIME_KIND,
+  rawTerminalModePatch,
+  rawTerminalSessionName,
+  rawTerminalTtlMs,
+  threadUsesRawTerminalMode,
+} from "./raw-terminal-mode.js";
 
 const execFileAsync = promisify(execFile);
 const deliveryLocks = new Set();
 const deliveryTimers = new Map();
 let runtimeSyncInFlight = null;
-let connectorDeliverySignalCount = 0;
 let threadInputDeliveryFailureHandler = null;
-let connectorDeliverySignalHandler = null;
 const pendingInputStates = new Set(["queued", "pending_delivery", "awaiting_ack"]);
 const needInputPhases = new Set(["need_input", "awaiting_input", "question", "request_user_input"]);
 const proposedPlanOpenTagPattern = /^\s*<\s*proposed[\s_-]*plan\s*>/i;
@@ -84,21 +94,6 @@ function whatsappOrigin(message = {}) {
     whatsappSources.has(String(message.source || "").trim().toLowerCase());
 }
 
-function markConnectorDeliverySignal(message = {}) {
-  if (!whatsappOrigin(message)) return;
-  connectorDeliverySignalCount += 1;
-  if (connectorDeliverySignalHandler) {
-    Promise.resolve(connectorDeliverySignalHandler({
-      type: "thread_connector_delivery_signal",
-      messageId: message.id || null,
-      source: message.source || null,
-      connector: message.connector || null,
-      chatId: message.chatId || null,
-      deliveryState: message.deliveryState || message.state || null,
-    })).catch(() => {});
-  }
-}
-
 async function recordMessageRouterTrace(message = {}, phase, context = {}, env = process.env) {
   if (!message?.routerTraceId) return null;
   return recordRouterTraceEvent({
@@ -118,23 +113,12 @@ async function recordMessageRouterTrace(message = {}, phase, context = {}, env =
   }, env).catch(() => null);
 }
 
-export function consumeThreadConnectorDeliverySignalCount() {
-  const count = connectorDeliverySignalCount;
-  connectorDeliverySignalCount = 0;
-  return count;
-}
+export { consumeThreadConnectorDeliverySignalCount, setThreadConnectorDeliverySignalHandler };
 
 export function setThreadInputDeliveryFailureHandler(handler) {
   threadInputDeliveryFailureHandler = typeof handler === "function" ? handler : null;
   return () => {
     if (threadInputDeliveryFailureHandler === handler) threadInputDeliveryFailureHandler = null;
-  };
-}
-
-export function setThreadConnectorDeliverySignalHandler(handler) {
-  connectorDeliverySignalHandler = typeof handler === "function" ? handler : null;
-  return () => {
-    if (connectorDeliverySignalHandler === handler) connectorDeliverySignalHandler = null;
   };
 }
 
@@ -722,10 +706,12 @@ export async function runtimeStatus(threadId, env = process.env, messagesOverrid
       : promptReady
         ? "ready"
         : recentlyStarted || pendingCount > 0 ? "waking" : "ready";
+  const leaseRuntimeKind = lease.runtimeKind || (threadUsesRawTerminalMode(thread) ? RAW_TERMINAL_RUNTIME_KIND : "codex-tmux");
   const status = {
     state,
     status: state,
     runtimeState: "live",
+    runtimeKind: leaseRuntimeKind,
     lease: { ...lease, paneId, windowName: lease.windowName || tmuxWindowName(thread) },
     sessionName: lease.sessionName,
     paneId,
@@ -1045,7 +1031,8 @@ export async function wakeThread(threadId, options = {}, env = process.env) {
   const paths = await ensureDataDirs(env);
   const desiredMode = desiredCodexModeForWake(thread);
   const desiredModeUpdatedAt = desiredMode ? nowIso() : null;
-  const sessionName = `orkestr-${safeName(thread.id).slice(0, 48)}`;
+  const terminalMode = threadUsesRawTerminalMode(thread);
+  const sessionName = terminalMode ? rawTerminalSessionName(thread) : `orkestr-${safeName(thread.id).slice(0, 48)}`;
   const workspace = runtimeWorkspace(thread, env);
   await fs.mkdir(workspace, { recursive: true });
   await ensureRuntimeAgentsFile(workspace, env).catch(() => {});
@@ -1053,13 +1040,19 @@ export async function wakeThread(threadId, options = {}, env = process.env) {
   const command = runtimeCommand(thread, workspace, env);
   await ensureRuntimeCodexAuthenticated(command, env);
   const temporaryReason = temporaryRuntimeReason({ thread, workspace, command }, env);
-  const ttlMs = temporaryReason ? tempRuntimeTtlMs(env) : runtimeLeaseTtlMs(env);
+  const ttlMs = terminalMode ? rawTerminalTtlMs(env) : temporaryReason ? tempRuntimeTtlMs(env) : runtimeLeaseTtlMs(env);
   await updateThread(thread.id, {
     state: "waking",
     wakePolicy: thread.wakePolicy || "wake-on-message",
     desiredCodexMode: desiredMode || null,
     desiredCodexModeUpdatedAt: desiredModeUpdatedAt,
-    runtime: { state: "waking", sessionName, workspace, reason: options.reason || "wake" },
+    runtime: {
+      state: "waking",
+      sessionName,
+      workspace,
+      reason: options.reason || "wake",
+      ...(terminalMode ? { runtimeKind: RAW_TERMINAL_RUNTIME_KIND, terminalMode: RAW_TERMINAL_RUNTIME_KIND } : {}),
+    },
   }, env);
 
   if (await tmuxHasSession(sessionName)) {
@@ -1096,8 +1089,8 @@ export async function wakeThread(threadId, options = {}, env = process.env) {
     baseCommit: thread.baseCommit || thread.executor?.metadata?.baseCommit || null,
     worktreePath: thread.worktreePath || thread.executor?.metadata?.worktreePath || null,
     command,
-    temporary: Boolean(temporaryReason),
-    temporaryReason: temporaryReason || null,
+    temporary: terminalMode ? false : Boolean(temporaryReason),
+    temporaryReason: terminalMode ? null : temporaryReason || null,
     ttlMs: ttlMs || null,
     resourceClass: "light",
     reason: String(options.reason || "wake"),
@@ -1107,6 +1100,7 @@ export async function wakeThread(threadId, options = {}, env = process.env) {
     rolloutOffset,
     rolloutOffsetLookbackApplied,
     rolloutOffsetLookbackBytes,
+    ...(terminalMode ? { runtimeKind: RAW_TERMINAL_RUNTIME_KIND, terminalMode: RAW_TERMINAL_RUNTIME_KIND } : {}),
   };
   const leases = await listRuntimeLeases(env);
   leases.push(lease);
@@ -1124,6 +1118,7 @@ export async function wakeThread(threadId, options = {}, env = process.env) {
       paneId,
       windowName,
       workspace,
+      ...(terminalMode ? { runtimeKind: RAW_TERMINAL_RUNTIME_KIND, terminalMode: RAW_TERMINAL_RUNTIME_KIND } : {}),
       repoPath: lease.repoPath,
       branchName: lease.branchName,
       worktreePath: lease.worktreePath,
@@ -1133,6 +1128,38 @@ export async function wakeThread(threadId, options = {}, env = process.env) {
   }, env);
   await appendEvent({ type: "runtime_woken", threadId: thread.id, leaseId: lease.id, sessionName, paneId, windowName, reason: lease.reason }, env);
   return { thread: updatedThread, lease, reused: false, status: await runtimeStatus(thread.id, env), dataHome: paths.home };
+}
+
+export async function takeoverRawTerminalThread(threadId, options = {}, env = process.env) {
+  const thread = await getThread(threadId, env);
+  if (!thread) {
+    const error = new Error("thread_not_found");
+    error.statusCode = 404;
+    throw error;
+  }
+  const sessionName = rawTerminalSessionName(thread);
+  const reason = String(options.reason || "raw_takeover").trim() || "raw_takeover";
+  const marked = await updateThread(thread.id, {
+    state: "waking",
+    ...rawTerminalModePatch(thread, {
+      sessionName,
+      runtime: {
+        ...(thread.runtime || {}),
+        state: "waking",
+        reason,
+      },
+    }),
+  }, env);
+  const result = await wakeThread(marked.id, { reason }, env);
+  await appendEvent({
+    type: "raw_terminal_takeover",
+    threadId: marked.id,
+    sessionName,
+    leaseId: result.lease?.id || null,
+    reused: result.reused === true,
+    reason,
+  }, env).catch(() => {});
+  return result;
 }
 
 export async function sleepThread(threadId, options = {}, env = process.env) {
@@ -1858,6 +1885,7 @@ function latestNeedInputBeforeMessage(messages = [], messageId = "") {
 }
 
 function runtimeLeaseTemporaryReason(lease = {}, env = process.env) {
+  if (lease.runtimeKind === RAW_TERMINAL_RUNTIME_KIND || lease.terminalMode === RAW_TERMINAL_RUNTIME_KIND) return "";
   if (lease.temporaryReason) return String(lease.temporaryReason);
   if (lease.temporary === true) return "temporary";
   const label = `${lease.threadId || ""} ${lease.threadName || ""} ${lease.sessionName || ""} ${lease.command || ""}`;

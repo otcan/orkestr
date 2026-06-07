@@ -4,8 +4,8 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { appendThreadMessage, createThread } from "../packages/core/src/threads.js";
-import { readConnectorOutbox } from "../packages/connectors/src/connector-outbox.js";
-import { deliverWhatsAppReplies } from "../packages/connectors/src/whatsapp.js";
+import { applyConnectorOutboxJobAction, readConnectorOutbox } from "../packages/connectors/src/connector-outbox.js";
+import { applyWhatsAppConnectorOutboxAction, deliverWhatsAppReplies } from "../packages/connectors/src/whatsapp.js";
 import { writeConnectorConfig } from "../packages/storage/src/config.js";
 
 function response(payload, ok = true, status = 200) {
@@ -78,4 +78,66 @@ test("whatsapp delivery terminalizes a tenant-scoped connector outbox job", asyn
   assert.equal(job.deliveryType, "final");
   assert.equal(job.payload.text, "All routed messages are accounted for.");
   assert.equal(job.brokerAck.ids[0], "wa-sent-1");
+});
+
+test("whatsapp connector outbox replay resets intent and delivered ledger", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-connector-outbox-replay-"));
+  const runtimeEnv = env(home);
+  await writeConnectorConfig("whatsapp", { bridgeMode: "external", bridgeUrl: "http://wa.local" }, runtimeEnv);
+  await createThread({
+    id: "thread-wa-outbox-replay",
+    ownerUserId: "tenant-a",
+    name: "WA Connector Outbox Replay Thread",
+    binding: {
+      connector: "whatsapp",
+      chatId: "shared-chat",
+      responderAccountId: "responder",
+      outboundAccountId: "responder",
+      mirrorToWhatsApp: true,
+    },
+  }, runtimeEnv);
+  const parent = await appendThreadMessage("thread-wa-outbox-replay", {
+    role: "user",
+    source: "whatsapp_inbound",
+    state: "completed",
+    connector: "whatsapp",
+    chatId: "shared-chat",
+    accountId: "responder",
+    text: "again?",
+  }, runtimeEnv);
+  const reply = await appendThreadMessage("thread-wa-outbox-replay", {
+    role: "assistant",
+    source: "codex-app-server",
+    phase: "final_answer",
+    state: "completed",
+    parentMessageId: parent.id,
+    chatId: "shared-chat",
+    accountId: "responder",
+    text: "Replayable answer.",
+  }, runtimeEnv);
+
+  await deliverWhatsAppReplies(runtimeEnv, async () => response({ ok: true, ids: ["wa-sent-1"] }));
+  const outbox = await readConnectorOutbox(runtimeEnv);
+  const job = outbox.jobs.find((item) => item.sourceMessageId === reply.id);
+  assert.equal(job?.state, "delivered");
+
+  const replay = await applyConnectorOutboxJobAction(job.id, "replay", { reason: "operator replay", operator: "tester" }, runtimeEnv);
+  const whatsapp = await applyWhatsAppConnectorOutboxAction(replay.job, "replay", { reason: "operator replay" }, runtimeEnv);
+  assert.equal(replay.job.state, "pending");
+  assert.equal(whatsapp.matchedIntents, 1);
+  assert.equal(whatsapp.removedDeliveries, 1);
+
+  const calls = [];
+  const second = await deliverWhatsAppReplies(runtimeEnv, async (url, options) => {
+    calls.push({ url, body: JSON.parse(options.body) });
+    return response({ ok: true, ids: ["wa-sent-2"] });
+  });
+  const refreshed = await readConnectorOutbox(runtimeEnv);
+  const replayedJob = refreshed.jobs.find((item) => item.id === job.id);
+
+  assert.equal(second.delivered.length, 1);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].body.text, "Replayable answer.");
+  assert.equal(replayedJob.state, "delivered");
+  assert.equal(replayedJob.brokerAck.ids[0], "wa-sent-2");
 });

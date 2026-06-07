@@ -175,6 +175,7 @@ export interface SetupStatus {
   setupState: string;
   home: string;
   connectors: ConnectorStatus[];
+  redacted?: boolean;
   urls?: {
     primaryDomain?: string;
     appUrl?: string;
@@ -495,6 +496,33 @@ export interface CodexApiKeyLoginResponse {
   message?: string;
 }
 
+export interface SecureSecretMetadata {
+  id: string;
+  name: string;
+  handle: string;
+  scope: "user" | "global" | string;
+  ownerUserId?: string | null;
+  managedBy?: string;
+  setByUserId?: string;
+  status?: string;
+  configured?: boolean;
+  createdAt?: string | null;
+  updatedAt?: string | null;
+  lastUsedAt?: string | null;
+  usedBy?: string[];
+  valueFingerprint?: string | null;
+}
+
+export interface SecureSecretListResponse {
+  ok: boolean;
+  secrets: SecureSecretMetadata[];
+}
+
+export interface SecureSecretMutationResponse {
+  ok: boolean;
+  secret: SecureSecretMetadata;
+}
+
 export interface AgentTemplate {
   id: string;
   name: string;
@@ -721,6 +749,7 @@ export interface ThreadSummary {
     mirrorToWhatsApp?: boolean;
     senderAccountId?: string | null;
     inboundAccountId?: string | null;
+    responderConnectorAccountId?: string | null;
     responderAccountId?: string | null;
     outboundAccountId?: string | null;
     senderContactId?: string | null;
@@ -822,13 +851,60 @@ export interface RouterTraceDetailResponse {
   outbox: Array<Record<string, unknown>>;
 }
 
+export interface WhatsAppOutboxJob {
+  id: string;
+  tenantId?: string;
+  ownerUserId?: string;
+  connector?: string;
+  accountId?: string;
+  chatId?: string;
+  threadId?: string;
+  sourceMessageId?: string;
+  sourceRevision?: string;
+  deliveryType?: string;
+  state?: string;
+  attemptCount?: number;
+  claimedBy?: string;
+  claimExpiresAt?: string;
+  createdAt?: string;
+  updatedAt?: string;
+  terminalAt?: string;
+  deliveredAt?: string;
+  failedAt?: string;
+  skippedAt?: string;
+  error?: string;
+  metadata?: Record<string, unknown>;
+  [key: string]: unknown;
+}
+
+export interface WhatsAppOutboxListResponse {
+  jobs: WhatsAppOutboxJob[];
+  count: number;
+  total: number;
+  generatedAt?: string;
+  filters?: Record<string, unknown>;
+}
+
+export interface WhatsAppOutboxActionResponse {
+  ok?: boolean;
+  action?: string;
+  previousState?: string;
+  job?: WhatsAppOutboxJob;
+  results?: WhatsAppOutboxActionResponse[];
+  count?: number;
+}
+
 export interface ThreadAttachResponse {
   ok: boolean;
+  attachable?: boolean;
+  watchOnly?: boolean;
+  takeoverAvailable?: boolean;
   state?: string;
   thread?: ThreadSummary;
   runtime?: Record<string, unknown>;
   attachKind?: string;
   attachCommand?: string;
+  watchText?: string;
   launched?: boolean;
   terminal?: Record<string, unknown>;
   message?: string;
@@ -930,6 +1006,7 @@ export interface WhatsAppAccount {
   state?: string;
   ready?: boolean;
   qrUrl?: string;
+  capabilities?: string[];
   [key: string]: unknown;
 }
 
@@ -1508,6 +1585,26 @@ export class ApiService {
     return this.http.post<CodexMigrationResponse>(this.api("/codex/migrate"), { dryRun });
   }
 
+  secureSecrets(options: { scope?: "user" | "global"; userId?: string } = {}): Observable<SecureSecretListResponse> {
+    const params = new URLSearchParams();
+    if (options.scope) params.set("scope", options.scope);
+    if (options.userId?.trim()) params.set("userId", options.userId.trim());
+    const suffix = params.toString() ? `?${params.toString()}` : "";
+    return this.http.get<SecureSecretListResponse>(this.api(`/secure-input/secrets${suffix}`));
+  }
+
+  setSecureSecret(body: { name: string; value: string; scope?: "user" | "global"; userId?: string }): Observable<SecureSecretMutationResponse> {
+    return this.http.post<SecureSecretMutationResponse>(this.api("/secure-input/secrets"), body);
+  }
+
+  deleteSecureSecret(name: string, options: { scope?: "user" | "global"; userId?: string } = {}): Observable<SecureSecretMutationResponse> {
+    const params = new URLSearchParams();
+    if (options.scope) params.set("scope", options.scope);
+    if (options.userId?.trim()) params.set("userId", options.userId.trim());
+    const suffix = params.toString() ? `?${params.toString()}` : "";
+    return this.http.delete<SecureSecretMutationResponse>(this.api(`/secure-input/secrets/${encodeURIComponent(name)}${suffix}`));
+  }
+
   whatsappStatus(): Observable<WhatsAppStatusResponse> {
     return this.http.get<WhatsAppStatusResponse>(this.api("/connectors/whatsapp/status"));
   }
@@ -1774,8 +1871,24 @@ export class ApiService {
     return this.http.get<RouterTraceDetailResponse>(this.api(`/router-traces/${encodeURIComponent(id)}`));
   }
 
-  attachThread(id: string): Observable<ThreadAttachResponse> {
-    return this.http.post<ThreadAttachResponse>(this.api(`/threads/${encodeURIComponent(id)}/attach`), {});
+  whatsappOutbox(options: { threadId?: string; state?: string; limit?: number } = {}): Observable<WhatsAppOutboxListResponse> {
+    const query = new URLSearchParams();
+    if (options.threadId) query.set("threadId", options.threadId);
+    if (options.state) query.set("state", options.state);
+    if (options.limit) query.set("limit", String(options.limit));
+    const suffix = query.toString() ? `?${query.toString()}` : "";
+    return this.http.get<WhatsAppOutboxListResponse>(this.api(`/connectors/whatsapp/outbox${suffix}`));
+  }
+
+  whatsappOutboxAction(jobId: string, action: string, body: Record<string, unknown> = {}): Observable<WhatsAppOutboxActionResponse> {
+    return this.http.post<WhatsAppOutboxActionResponse>(
+      this.api(`/connectors/whatsapp/outbox/${encodeURIComponent(jobId)}/${encodeURIComponent(action)}`),
+      body,
+    );
+  }
+
+  attachThread(id: string, body: Record<string, unknown> = {}): Observable<ThreadAttachResponse> {
+    return this.http.post<ThreadAttachResponse>(this.api(`/threads/${encodeURIComponent(id)}/attach`), body);
   }
 
   threadHistory(id: string): Observable<ThreadHistoryResponse> {

@@ -5,6 +5,9 @@ import path from "node:path";
 import test from "node:test";
 import {
   classifyThreadAttachmentPath,
+  classifyThreadAttachmentPathRedaction,
+  extractThreadAttachmentPathCandidates,
+  redactDeniedThreadAttachmentPaths,
   resolveThreadAttachments,
 } from "../packages/core/src/thread-attachments.js";
 import { appendThreadMessage, createThread, listThreadMessages } from "../packages/core/src/threads.js";
@@ -57,4 +60,46 @@ test("thread attachment policy denies secrets and arbitrary paths by default", a
   });
   assert.equal(resolved.attachments.length, 1);
   assert.equal(resolved.skipped.some((item) => item.reason === "attachment_path_forbidden"), true);
+});
+
+test("thread attachment path extraction ignores registered slash commands", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-attachment-commands-"));
+  const env = { ORKESTR_HOME: home };
+  const workspace = path.join(home, "workspace");
+  const filePath = path.join(workspace, "report.txt");
+  const thread = { id: "command-thread", cwd: workspace };
+
+  const candidates = extractThreadAttachmentPathCandidates({
+    thread,
+    text: `Reply /safe-reset or /now. Use /implement and /help. Real file: ${filePath}`,
+    env,
+  });
+
+  assert.deepEqual(candidates.map((candidate) => candidate.raw), [filePath]);
+});
+
+test("thread attachment path redaction is role-aware and always hides sensitive paths", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-attachment-redaction-"));
+  const env = { ORKESTR_HOME: home, ORKESTR_ADMIN_USER_ID: "admin" };
+  const paths = dataPaths(env);
+  const workspace = path.join(home, "workspace");
+  const allowedPath = path.join(workspace, "public-report.txt");
+  const secretPath = path.join(paths.secrets, "token.txt");
+  const adminThread = { id: "admin-thread", cwd: workspace, ownerUserId: "admin" };
+  const userThread = { id: "user-thread", cwd: workspace, ownerUserId: "alice" };
+  const text = `Open ${allowedPath}; secret ${secretPath}; reply /safe-reset or /help.`;
+
+  assert.equal(classifyThreadAttachmentPathRedaction(allowedPath, { thread: adminThread, env }).category, "ordinary_allowed");
+  assert.equal(classifyThreadAttachmentPathRedaction(secretPath, { thread: adminThread, env }).category, "sensitive_denied");
+
+  const adminText = redactDeniedThreadAttachmentPaths(text, { thread: adminThread, env });
+  assert.match(adminText, new RegExp(allowedPath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+  assert.doesNotMatch(adminText, new RegExp(secretPath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+  assert.match(adminText, /reply \/safe-reset or \/help/);
+
+  const userText = redactDeniedThreadAttachmentPaths(text, { thread: userThread, env });
+  assert.doesNotMatch(userText, new RegExp(allowedPath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+  assert.doesNotMatch(userText, new RegExp(secretPath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+  assert.match(userText, /reply \/safe-reset or \/help/);
+  assert.equal((userText.match(/\[local file path omitted]/g) || []).length, 2);
 });

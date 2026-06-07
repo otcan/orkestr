@@ -1,4 +1,7 @@
 #!/usr/bin/env node
+import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import {
   formatSummary,
   parseReleaseRegressionArgs,
@@ -19,11 +22,15 @@ Options:
   --base-url URL             Add an unnamed target URL. Repeatable.
   --header "Name: value"     Add a request header, for paired cookies or tokens.
   --artifact-dir PATH        Write detailed JSON artifacts here.
+  --orkestr-home PATH        Use PATH for artifacts and local CLI auth token lookup.
   --release-id ID            Release/check identifier for artifacts and messages.
   --desktop-slug SLUG        Require a specific desktop session to be listed.
   --required-whatsapp-accounts LIST
                              Comma/space-separated WA accounts that must be ready.
   --allow-auth-blocked       Treat protected target APIs as skipped instead of failed.
+                             Does not skip required WA account readiness.
+  --no-local-cli-auth        Do not auto-use ORKESTR_HOME/secrets/cli-auth.json
+                             for loopback targets.
   --execute                  Enable real chat injection checks.
   --thread THREAD_ID         Thread used by --execute chat injection.
   --linkedin-thread ID       LinkedIn-bound thread used by --execute delivery check.
@@ -37,7 +44,20 @@ Environment:
 `;
 }
 
-if (process.argv[1] && import.meta.url === new URL(process.argv[1], "file:").href) {
+function realPathOrSelf(value) {
+  try {
+    return fs.realpathSync.native(value);
+  } catch {
+    return path.resolve(value);
+  }
+}
+
+function isMainModule() {
+  if (!process.argv[1]) return false;
+  return realPathOrSelf(process.argv[1]) === realPathOrSelf(fileURLToPath(import.meta.url));
+}
+
+if (isMainModule()) {
   (async () => {
     const options = parseReleaseRegressionArgs(process.argv.slice(2), process.env);
     if (options.help) {

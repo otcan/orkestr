@@ -1,12 +1,16 @@
 import assert from "node:assert/strict";
+import { execFile as execFileCallback } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
+import { promisify } from "node:util";
 import {
   parseReleaseRegressionArgs,
   runReleaseRegression,
 } from "../scripts/release-regression.mjs";
+
+const execFile = promisify(execFileCallback);
 
 function jsonResponse(status, payload) {
   return {
@@ -26,7 +30,13 @@ function routeFromUrl(url) {
 function fakeFetch(routes, calls = []) {
   return async (url, options = {}) => {
     const route = routeFromUrl(url);
-    calls.push({ route, method: options.method || "GET", body: options.body ? JSON.parse(options.body) : null });
+    calls.push({
+      url: String(url),
+      route,
+      method: options.method || "GET",
+      headers: options.headers || {},
+      body: options.body ? JSON.parse(options.body) : null,
+    });
     const handler = routes[`${options.method || "GET"} ${route}`] || routes[route];
     if (!handler) return jsonResponse(404, { error: `missing test route ${route}` });
     const result = typeof handler === "function" ? await handler({ url, options, route }) : handler;
@@ -62,6 +72,8 @@ test("release regression args parse named targets and default artifact root", ()
     "remote=https://example.invalid/",
     "--desktop-slug",
     "linkedin",
+    "--orkestr-home",
+    "/tmp/orkestr-explicit-home",
   ], {
     ORKESTR_HOME: "/tmp/orkestr-home",
     ORKESTR_RELEASE_ID: "release-1",
@@ -72,7 +84,22 @@ test("release regression args parse named targets and default artifact root", ()
     { name: "remote", baseUrl: "https://example.invalid" },
   ]);
   assert.equal(options.desktopSlug, "linkedin");
-  assert.equal(options.artifactDir, "/tmp/orkestr-home/release-checks/release-1");
+  assert.equal(options.orkestrHome, "/tmp/orkestr-explicit-home");
+  assert.equal(options.artifactDir, "/tmp/orkestr-explicit-home/release-checks/release-1");
+});
+
+test("release regression CLI runs when invoked through a symlink", async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-release-regression-cli-"));
+  const link = path.join(dir, "release-regression.mjs");
+  await fs.symlink(path.resolve("scripts/release-regression.mjs"), link);
+
+  const { stdout } = await execFile(process.execPath, [link, "--help"], {
+    cwd: path.resolve("."),
+    env: { ...process.env, ORKESTR_DISABLE_CLI_AUTH: "1" },
+  });
+
+  assert.match(stdout, /Usage: npm run release:regression/);
+  assert.match(stdout, /--no-local-cli-auth/);
 });
 
 test("release regression runner records passing target artifacts without real chat sends", async () => {
@@ -221,4 +248,66 @@ test("release regression can record protected APIs as skipped for public targets
   assert.equal(summary.targets[0].scenarios.find((item) => item.name === "setup-connectors").reason, "auth_required");
   assert.equal(summary.targets[0].scenarios.find((item) => item.name === "thread-summary").reason, "auth_required");
   assert.equal(summary.targets[0].scenarios.find((item) => item.name === "whatsapp-readiness").status, "skip");
+});
+
+test("release regression fails auth-blocked WhatsApp readiness when required accounts are configured", async () => {
+  const artifactDir = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-release-regression-"));
+  const routes = healthyRoutes({
+    "/api/connectors/whatsapp/status": { status: 403, payload: { error: "pairing_required" } },
+  });
+
+  const summary = await runReleaseRegression({
+    releaseId: "release-1",
+    artifactDir,
+    targets: [{ name: "remote", baseUrl: "https://example.invalid" }],
+    timeoutMs: 100,
+    pollMs: 100,
+    headers: {},
+    execute: false,
+    allowAuthBlocked: true,
+    requiredWhatsAppAccounts: ["responder"],
+  }, {
+    fetch: fakeFetch(routes),
+  });
+
+  assert.equal(summary.ok, false);
+  const whatsapp = summary.targets[0].scenarios.find((item) => item.name === "whatsapp-readiness");
+  assert.equal(whatsapp.status, "fail");
+  assert.equal(whatsapp.statusCode, 403);
+  assert.equal(whatsapp.reason, "auth_required_for_required_whatsapp_accounts");
+  assert.deepEqual(whatsapp.requiredAccounts, ["responder"]);
+  assert.match(whatsapp.error, /Authenticated WhatsApp readiness is required/);
+});
+
+test("release regression uses stored CLI auth only for loopback targets", async () => {
+  const artifactDir = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-release-regression-"));
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-release-regression-home-"));
+  await fs.mkdir(path.join(home, "secrets"), { recursive: true });
+  await fs.writeFile(path.join(home, "secrets", "cli-auth.json"), JSON.stringify({
+    token: "local-token",
+    expiresAt: new Date(Date.now() + 60_000).toISOString(),
+  }));
+  const calls = [];
+
+  const summary = await runReleaseRegression({
+    releaseId: "release-1",
+    artifactDir,
+    orkestrHome: home,
+    targets: [
+      { name: "local", baseUrl: "http://127.0.0.1:19812" },
+      { name: "remote", baseUrl: "https://example.invalid" },
+    ],
+    timeoutMs: 100,
+    pollMs: 100,
+    headers: {},
+    execute: false,
+  }, {
+    fetch: fakeFetch(healthyRoutes(), calls),
+  });
+
+  assert.equal(summary.ok, true);
+  const localStatus = calls.find((call) => call.url.startsWith("http://127.0.0.1") && call.route === "/api/connectors/whatsapp/status");
+  const remoteStatus = calls.find((call) => call.url.startsWith("https://example.invalid") && call.route === "/api/connectors/whatsapp/status");
+  assert.equal(localStatus.headers.authorization, "Bearer local-token");
+  assert.equal(remoteStatus.headers.authorization, undefined);
 });

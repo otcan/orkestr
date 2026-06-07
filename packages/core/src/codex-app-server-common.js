@@ -10,6 +10,7 @@ import {
   containedUserDeveloperInstructions,
   threadRequiresTenantIsolation,
 } from "./tenant-policy.js";
+import { threadUsesRawTerminalMode } from "./raw-terminal-mode.js";
 import {
   appendThreadMessage,
   listThreadMessages,
@@ -451,6 +452,7 @@ export function isCodexRuntimeThread(thread) {
 }
 
 export function threadUsesCodexAppServer(thread, env = process.env) {
+  if (threadUsesRawTerminalMode(thread)) return false;
   const transport = clean(thread?.executor?.transport || thread?.runtimeKind || thread?.executor?.metadata?.transport).toLowerCase();
   if (appServerTransports.has(transport)) return true;
   if (tmuxTransports.has(transport)) return false;
@@ -458,5 +460,6 @@ export function threadUsesCodexAppServer(thread, env = process.env) {
 }
 
 export function threadNeedsCodexAppServerMigration(thread) {
+  if (threadUsesRawTerminalMode(thread)) return false;
   return isCodexRuntimeThread(thread) && !threadUsesCodexAppServer(thread);
 }

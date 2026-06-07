@@ -1,3 +1,8 @@
+import {
+  whatsappAclDeniedError,
+  whatsappBindingAclAllows,
+} from "./whatsapp-binding-acl.js";
+
 function pickString(...values) {
   for (const value of values) {
     const text = String(value || "").trim();
@@ -27,7 +32,8 @@ export function isWhatsAppGroupChatId(value) {
 export function bindingAccountIds(binding = {}) {
   return new Set([
     pickString(binding.senderAccountId, binding.inboundAccountId),
-    pickString(binding.responderAccountId, binding.outboundAccountId),
+    pickString(binding.responderConnectorAccountId, binding.responderAccountId, binding.outboundAccountId),
+    pickString(binding.targetAccountId, binding.accountId),
   ].filter(Boolean));
 }
 
@@ -79,7 +85,7 @@ export function whatsappDisplayName(input = {}, fallback = "") {
   );
 }
 
-export function whatsappInboundThreadMatchesBinding({ thread = {}, chatId = "", accountId = "", from = "", fromMe = false } = {}) {
+export function whatsappInboundThreadMatchesBinding({ thread = {}, chatId = "", accountId = "", from = "", fromMe = false, aclContext = null } = {}) {
   const binding = thread?.binding || {};
   const senderAccountId = pickString(binding.senderAccountId, binding.inboundAccountId);
   const senderContactId = pickString(binding.senderContactId);
@@ -97,7 +103,22 @@ export function whatsappInboundThreadMatchesBinding({ thread = {}, chatId = "", 
       }
     }
   }
-  return whatsappBindingIsRouteEligible(binding) &&
+  const matched = whatsappBindingIsRouteEligible(binding) &&
     String(binding.connector || "whatsapp") === "whatsapp" &&
     String(binding.chatId || "").trim() === chatId;
+  if (!matched) return false;
+  if (aclContext && !whatsappBindingAclAllows({
+    ...binding,
+    bindingId: pickString(binding.id, binding.bindingId) || (thread.id ? `thread:${thread.id}:whatsapp` : ""),
+    threadId: pickString(thread.id),
+    ownerUserId: pickString(thread.ownerUserId),
+  }, "receive", aclContext)) {
+    throw whatsappAclDeniedError("receive", {
+      ...binding,
+      bindingId: pickString(binding.id, binding.bindingId) || (thread.id ? `thread:${thread.id}:whatsapp` : ""),
+      threadId: pickString(thread.id),
+      ownerUserId: pickString(thread.ownerUserId),
+    }, aclContext);
+  }
+  return true;
 }

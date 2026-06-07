@@ -140,7 +140,7 @@
                 <input name="waitlist-connection-name" [(ngModel)]="approvalDraft.connectionName" placeholder="Applicant - Orkestr" />
               </label>
               <label>
-                <span>Primary WhatsApp account</span>
+                <span>Default WhatsApp account</span>
                 <select name="waitlist-whatsapp-account" [(ngModel)]="approvalDraft.whatsappAccountId">
                   <option value="">No account selected</option>
                   @for (account of whatsappAccountOptions(); track accountId(account)) {
@@ -149,25 +149,25 @@
                 </select>
               </label>
               <label>
-                <span>Sender account</span>
+                <span>Inbound account</span>
                 <select name="waitlist-sender-account" [(ngModel)]="approvalDraft.senderAccountId">
-                  <option value="">Use primary account</option>
+                  <option value="">Use default account</option>
                   @for (account of whatsappAccountOptions(); track accountId(account)) {
                     <option [value]="accountId(account)">{{ accountLabel(account) }}</option>
                   }
                 </select>
               </label>
               <label>
-                <span>Orkestr reply account</span>
+                <span>Reply account</span>
                 <select name="waitlist-responder-account" [(ngModel)]="approvalDraft.responderAccountId">
-                  <option value="">Use primary account</option>
+                  <option value="">Use default account</option>
                   @for (account of whatsappAccountOptions(); track accountId(account)) {
                     <option [value]="accountId(account)">{{ accountLabel(account) }}</option>
                   }
                 </select>
               </label>
               <label>
-                <span>Outbound account</span>
+                <span>Delivery account</span>
                 <select name="waitlist-outbound-account" [(ngModel)]="approvalDraft.outboundAccountId">
                   <option value="">Use reply account</option>
                   @for (account of whatsappAccountOptions(); track accountId(account)) {

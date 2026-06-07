@@ -59,8 +59,8 @@ function staleAppServerRuntime(thread, clientState = null) {
 }
 
 function staleFinalGraceMs(env = process.env) {
-  const parsed = Number(env.ORKESTR_CODEX_APP_SERVER_STALE_FINAL_GRACE_MS || 30000);
-  return Number.isFinite(parsed) ? Math.max(0, parsed) : 30000;
+  const parsed = Number(env.ORKESTR_CODEX_APP_SERVER_STALE_FINAL_GRACE_MS || 120000);
+  return Number.isFinite(parsed) ? Math.max(0, parsed) : 120000;
 }
 
 function staleRecoveryLookbackMs(env = process.env) {
@@ -77,6 +77,16 @@ function staleRecoveryScanCacheMs(env = process.env) {
 function staleRecoveryMessageScanLimit(env = process.env) {
   const parsed = Number(env.ORKESTR_CODEX_APP_SERVER_STALE_RECOVERY_MESSAGE_SCAN_LIMIT || 2000);
   return Number.isFinite(parsed) ? Math.max(0, Math.floor(parsed)) : 2000;
+}
+
+function staleRecoveryAutoSafeResetEnabled(env = process.env) {
+  const raw = clean(env.ORKESTR_CODEX_APP_SERVER_AUTO_SAFE_RESET_ON_REPEAT_STALE_TURN ?? "1").toLowerCase();
+  return !["0", "off", "false", "disabled", "no"].includes(raw);
+}
+
+function staleRecoveryAutoSafeResetCooldownMs(env = process.env) {
+  const parsed = Number(env.ORKESTR_CODEX_APP_SERVER_AUTO_SAFE_RESET_COOLDOWN_MS || 5 * 60 * 1000);
+  return Number.isFinite(parsed) ? Math.max(0, parsed) : 5 * 60 * 1000;
 }
 
 function timestampMs(value) {
@@ -117,6 +127,37 @@ function sameTurnMessage(message = {}, userMessage = {}) {
 function runtimeRecoveryMessage(message = {}) {
   return clean(message?.source).toLowerCase() === "orkestr_runtime" ||
     clean(message?.phase).toLowerCase() === "runtime_interrupted";
+}
+
+function priorRuntimeRecoveryNotice(messages = [], currentTurn = null) {
+  const latestUserId = clean(currentTurn?.latestUser?.id);
+  return (Array.isArray(messages) ? messages : []).some((message) => {
+    if (!runtimeRecoveryMessage(message)) return false;
+    if (latestUserId && clean(message?.parentMessageId) === latestUserId) return false;
+    return true;
+  });
+}
+
+function autoSafeResetCooldownActive(thread = {}, env = process.env) {
+  const cooldownMs = staleRecoveryAutoSafeResetCooldownMs(env);
+  if (cooldownMs <= 0) return false;
+  const runtime = thread?.runtime && typeof thread.runtime === "object" ? thread.runtime : {};
+  const metadata = thread?.executor?.metadata && typeof thread.executor.metadata === "object" ? thread.executor.metadata : {};
+  const lastResetMs = Math.max(
+    timestampMs(runtime.autoSafeReset?.resetAt),
+    timestampMs(metadata.lastAutoSafeReset?.resetAt),
+    timestampMs(runtime.safeReset?.resetAt),
+    timestampMs(metadata.lastSafeReset?.resetAt),
+  );
+  return Boolean(lastResetMs && Date.now() - lastResetMs < cooldownMs);
+}
+
+function shouldAutoSafeResetRepeatedStaleTurn(thread = {}, messages = [], turn = null, options = {}, env = process.env) {
+  if (!turn) return false;
+  if (typeof options.autoSafeResetThread !== "function") return false;
+  if (!staleRecoveryAutoSafeResetEnabled(env)) return false;
+  if (autoSafeResetCooldownActive(thread, env)) return false;
+  return priorRuntimeRecoveryNotice(messages, turn);
 }
 
 function newerTerminalAssistantAfterTurn(messages = [], latestUser = {}, latestUserIndex = -1, lastActivityMs = 0) {
@@ -245,11 +286,17 @@ function noticeWhatsappParent(turn, thread = null) {
 
 async function appendStaleTurnNotice(thread, messages, turn, env = process.env, options = {}) {
   const codexId = codexThreadId(thread);
-  const latestUser = turn?.latestUser || null;
-  const text = staleTurnNoticeText(turn?.reason, options);
-  const eventId = staleTurnEventId(thread, codexId, turn, options);
-  const existing = messages.find((message) => message.eventId === eventId);
-  const whatsappParent = noticeWhatsappParent(turn, thread);
+  const freshMessages = recoveryEligibleMessages(
+    thread,
+    await listThreadMessages(thread.id, env).catch(() => messages),
+  );
+  const freshTurn = refreshedTurnState(freshMessages, turn);
+  if (!freshTurn) return { notice: null, appended: false, skipped: true, messages: freshMessages, turn: null };
+  const latestUser = freshTurn?.latestUser || null;
+  const text = staleTurnNoticeText(freshTurn?.reason, options);
+  const eventId = staleTurnEventId(thread, codexId, freshTurn, options);
+  const existing = freshMessages.find((message) => message.eventId === eventId);
+  const whatsappParent = noticeWhatsappParent(freshTurn, thread);
   const notice = await appendOrUpdateEventMessage(thread, {
     role: "assistant",
     source: "orkestr_runtime",
@@ -265,7 +312,7 @@ async function appendStaleTurnNotice(thread, messages, turn, env = process.env, 
     }),
     ...whatsappProjectionFields(whatsappParent, thread),
   }, env);
-  return { notice, appended: !existing && Boolean(notice?.id) };
+  return { notice, appended: !existing && Boolean(notice?.id), skipped: false, messages: freshMessages, turn: freshTurn };
 }
 
 function incompleteTurnMatchesRuntimeTurn(thread, turn) {
@@ -290,6 +337,12 @@ function shouldRecoverIncompleteTurn(thread, clientState, turn, env = process.en
   if (["working", "queued", "pending_delivery", "awaiting_ack"].includes(threadState)) return false;
   if (!incompleteTurnMatchesRuntimeTurn(thread, turn) && !recentEnoughForStaleRecovery(turn, env)) return false;
   if (!turn.lastActivityMs) return true;
+  return Date.now() - turn.lastActivityMs >= staleFinalGraceMs(env);
+}
+
+function staleRuntimeNoticeDue(thread, turn, env = process.env) {
+  if (!incompleteTurnMatchesRuntimeTurn(thread, turn)) return false;
+  if (!turn?.lastActivityMs) return true;
   return Date.now() - turn.lastActivityMs >= staleFinalGraceMs(env);
 }
 
@@ -344,6 +397,7 @@ function recoveryScanKey(thread, clientState, messagesFingerprint, options = {},
     pendingRequest: runtime.pendingRequest || null,
     lastTurnStatus: runtime.lastTurnStatus || "",
     codexStatus: runtime.codexStatus || null,
+    autoSafeResetAvailable: typeof options.autoSafeResetThread === "function",
     clientActiveTurnId: clientState?.activeTurnId || "",
     clientStatus,
     messagesFingerprint,
@@ -373,11 +427,12 @@ function pruneRecoveryScanCache(activeThreadIds) {
 export async function recoverStaleCodexAppServerTurns(env = process.env, options = {}) {
   const threads = await listThreads(env).catch(() => []);
   const appServerThreads = threads.filter((thread) => threadUsesCodexAppServer(thread, env));
-  if (!appServerThreads.length) return { recovered: 0, appended: 0 };
+  if (!appServerThreads.length) return { recovered: 0, appended: 0, autoSafeReset: 0 };
   pruneRecoveryScanCache(new Set(appServerThreads.map((thread) => thread.id).filter(Boolean)));
   const client = await getCodexAppServerClient({ env, home: runtimeHome(env) }).catch(() => null);
   let recovered = 0;
   let appended = 0;
+  let autoSafeReset = 0;
   for (const thread of appServerThreads) {
     const codexId = codexThreadId(thread);
     if (!codexId) continue;
@@ -404,7 +459,8 @@ export async function recoverStaleCodexAppServerTurns(env = process.env, options
     const liveScanKey = clientState === (client?.threadStates.has(codexId) ? client.threadStates.get(codexId) : null)
       ? initialScanKey
       : recoveryScanKey(thread, clientState, messagesFingerprint, options, env);
-    const noticeTurn = shouldRecoverTurn || shouldRecoverActiveTurn || incompleteTurnMatchesRuntimeTurn(thread, incompleteTurn)
+    const shouldRecoverRuntimeTurn = staleRuntime && staleRuntimeNoticeDue(thread, incompleteTurn, env);
+    const noticeTurn = shouldRecoverTurn || shouldRecoverActiveTurn || shouldRecoverRuntimeTurn
       ? incompleteTurn
       : null;
     if (!staleRuntime && !shouldRecoverTurn && !shouldRecoverActiveTurn) {
@@ -426,6 +482,8 @@ export async function recoverStaleCodexAppServerTurns(env = process.env, options
         : options;
       const result = await appendStaleTurnNotice(thread, noticeMessages, freshNoticeTurn, env, noticeOptions);
       notice = result?.notice || null;
+      noticeMessages = result?.messages || noticeMessages;
+      freshNoticeTurn = result?.turn || (result?.skipped ? null : freshNoticeTurn);
       if (result?.appended) appended += 1;
     }
     const interruptedTurnIds = shouldRecoverActiveTurn ? activeTurnIdsFromClientState(clientState) : [];
@@ -460,21 +518,67 @@ export async function recoverStaleCodexAppServerTurns(env = process.env, options
       },
     }, env).catch(() => null);
     recovered += 1;
+    let autoSafeResetResult = null;
+    let autoSafeResetError = "";
+    const autoSafeResetAttempted = shouldAutoSafeResetRepeatedStaleTurn(thread, noticeMessages, freshNoticeTurn, options, env);
+    if (autoSafeResetAttempted) {
+      const resetReason = shouldRecoverActiveTurn
+        ? "stale_active_turn_auto_safe_reset"
+        : "stale_turn_auto_safe_reset";
+      try {
+        autoSafeResetResult = await options.autoSafeResetThread(thread.id, {
+          reason: resetReason,
+          threadId: thread.id,
+          codexThreadId: codexId,
+          noticeMessageId: notice?.id || null,
+          latestUserMessageId: freshNoticeTurn?.latestUser?.id || noticeTurn?.latestUser?.id || null,
+          recoveryReason: shouldRecoverActiveTurn ? "active_turn_timeout" : freshNoticeTurn?.reason || (notice ? noticeTurn?.reason : null) || (staleRuntime ? "stale_runtime" : "incomplete_turn"),
+        });
+        if (autoSafeResetResult?.ok || autoSafeResetResult?.safeReset || autoSafeResetResult?.reset) autoSafeReset += 1;
+        await appendEvent({
+          type: "codex_app_server_auto_safe_reset",
+          threadId: thread.id,
+          codexThreadId: codexId,
+          noticeMessageId: notice?.id || null,
+          latestUserMessageId: freshNoticeTurn?.latestUser?.id || noticeTurn?.latestUser?.id || null,
+          reason: resetReason,
+          oldCodexThreadId: autoSafeResetResult?.oldCodexThreadId || codexId || null,
+          newCodexThreadId: autoSafeResetResult?.newCodexThreadId || null,
+          manualCheckpointPath: autoSafeResetResult?.manualCheckpoint?.path || null,
+        }, env).catch(() => {});
+      } catch (error) {
+        autoSafeResetError = publicError(error);
+        await appendEvent({
+          type: "codex_app_server_auto_safe_reset_failed",
+          threadId: thread.id,
+          codexThreadId: codexId,
+          noticeMessageId: notice?.id || null,
+          latestUserMessageId: freshNoticeTurn?.latestUser?.id || noticeTurn?.latestUser?.id || null,
+          reason: resetReason,
+          error: autoSafeResetError,
+        }, env).catch(() => {});
+      }
+    }
     await appendEvent({
       type: "codex_app_server_stale_turn_recovered",
       threadId: thread.id,
       codexThreadId: codexId,
       noticeMessageId: notice?.id || null,
       latestUserMessageId: freshNoticeTurn?.latestUser?.id || noticeTurn?.latestUser?.id || null,
-      reason: shouldRecoverActiveTurn ? "active_turn_timeout" : freshNoticeTurn?.reason || noticeTurn?.reason || (staleRuntime ? "stale_runtime" : "incomplete_turn"),
+      reason: shouldRecoverActiveTurn ? "active_turn_timeout" : freshNoticeTurn?.reason || (notice ? noticeTurn?.reason : null) || (staleRuntime ? "stale_runtime" : "incomplete_turn"),
       interruptedTurnId: interruptedTurnIds[0] || null,
       interruptedTurnIds,
       interruptError: interruptError || null,
       noticeCause: shouldRecoverActiveTurn && !clean(options.noticeCause || options.cause)
         ? "active_turn_timeout"
         : clean(options.noticeCause || options.cause),
+      autoSafeResetAttempted,
+      autoSafeReset: Boolean(autoSafeResetResult?.ok || autoSafeResetResult?.safeReset || autoSafeResetResult?.reset),
+      autoSafeResetError: autoSafeResetError || null,
+      autoSafeResetOldCodexThreadId: autoSafeResetResult?.oldCodexThreadId || null,
+      autoSafeResetNewCodexThreadId: autoSafeResetResult?.newCodexThreadId || null,
     }, env).catch(() => {});
     recoveryScanCache.delete(thread.id);
   }
-  return { recovered, appended };
+  return { recovered, appended, autoSafeReset };
 }

@@ -22,6 +22,7 @@ import {
   startOutlookDeviceOAuth,
 } from "../../../../../packages/connectors/src/outlook.js";
 import {
+  clearWhatsAppDeliveryIdleCache,
   deliverWhatsAppReplies,
   getWhatsAppChatParticipants,
   getWhatsAppStatus,
@@ -29,6 +30,8 @@ import {
   sendWhatsAppText,
 } from "../../../../../packages/connectors/src/whatsapp.js";
 import { createAndBindWhatsAppThreadGroup } from "../../../../../packages/connectors/src/whatsapp-thread-groups.js";
+import { assertWhatsAppBridgeBindingAcl } from "../../../../../packages/connectors/src/whatsapp-account-bindings.js";
+import { assertWhatsAppBridgeTokenContext } from "../../../../../packages/connectors/src/whatsapp-binding-acl.js";
 import { loginCodexWithApiKey, startCodexDeviceAuth } from "../../../../../packages/connectors/src/codex.js";
 import { requestThreadInputDelivery } from "../../../../../packages/core/src/runtime-leases.js";
 import { appendThreadMessage, getThread, getThreadForPrincipal } from "../../../../../packages/core/src/threads.js";
@@ -40,6 +43,7 @@ import {
   generateLocalWhatsAppChatPicture,
   getLocalWhatsAppBridgeStatus,
   getLocalWhatsAppQrSvg,
+  handleInboundMessage,
   listLocalWhatsAppChats,
   listLocalWhatsAppChatMessages,
   logoutLocalWhatsAppAccount,
@@ -52,6 +56,7 @@ import {
 import { runWithRoutedWhatsAppTyping } from "../../../../../packages/connectors/src/whatsapp-router-typing.js";
 import { writeConnectorConfig } from "../../../../../packages/storage/src/config.js";
 import { ensureAttachmentsArray, httpError } from "../../common/http.js";
+import { reportServerError } from "../../watcher-reporting.js";
 
 function bodyStringArray(body: Record<string, unknown>, key: string): string[] {
   const value = body[key];
@@ -103,6 +108,18 @@ function errorSafeCode(error: any, fallback = "request_failed"): string {
     if (value) return value;
   }
   return String(error?.message || fallback).trim() || fallback;
+}
+
+function scopedBridgeAccounts(accounts: any[] = [], context: any = null): any[] {
+  if (!context || Object.keys(context).length === 0 || context.legacy === true) return accounts;
+  const accountId = String(context.accountId || "").trim();
+  if (accountId) return accounts.filter((account) => String(account?.accountId || account?.id || "").trim() === accountId);
+  if (String(context.chatId || context.bindingId || "").trim()) return [];
+  return accounts;
+}
+
+function assertBridgeAccountScope(action: string, selector: Record<string, unknown>, context: any = null) {
+  assertWhatsAppBridgeTokenContext(action, selector, context, null, { requireScopedSelector: true });
 }
 
 @Controller("api/connectors")
@@ -176,14 +193,15 @@ export class ConnectorsController {
   }
 
   @Get("whatsapp/bridge/accounts")
-  async whatsappBridgeAccounts() {
+  async whatsappBridgeAccounts(@Req() request: any) {
     const status = await getLocalWhatsAppBridgeStatus();
-    return { accounts: status.accounts, state: status.state };
+    return { accounts: scopedBridgeAccounts(status.accounts, request.orkestrMachineAuthContext), state: status.state };
   }
 
   @Post("whatsapp/bridge/accounts/:accountId/start")
   @HttpCode(202)
-  async whatsappBridgeAccountStart(@Param("accountId") accountId: string, @Body() body: Record<string, unknown> = {}) {
+  async whatsappBridgeAccountStart(@Req() request: any, @Param("accountId") accountId: string, @Body() body: Record<string, unknown> = {}) {
+    assertBridgeAccountScope("manage", { accountId }, request.orkestrMachineAuthContext);
     return {
       account: await startLocalWhatsAppAccount(accountId, process.env, {
         phoneNumber: String(body.phoneNumber || body.phone || ""),
@@ -196,7 +214,8 @@ export class ConnectorsController {
 
   @Post("whatsapp/bridge/accounts/:accountId/start-phone")
   @HttpCode(202)
-  async whatsappBridgeAccountStartPhone(@Param("accountId") accountId: string, @Body() body: Record<string, unknown> = {}) {
+  async whatsappBridgeAccountStartPhone(@Req() request: any, @Param("accountId") accountId: string, @Body() body: Record<string, unknown> = {}) {
+    assertBridgeAccountScope("manage", { accountId }, request.orkestrMachineAuthContext);
     return {
       account: await startLocalWhatsAppAccount(accountId, process.env, {
         phoneNumber: String(body.phoneNumber || body.phone || ""),
@@ -209,23 +228,29 @@ export class ConnectorsController {
 
   @Post("whatsapp/bridge/accounts/:accountId/logout")
   @HttpCode(200)
-  async whatsappBridgeAccountLogout(@Param("accountId") accountId: string) {
+  async whatsappBridgeAccountLogout(@Req() request: any, @Param("accountId") accountId: string) {
+    assertBridgeAccountScope("manage", { accountId }, request.orkestrMachineAuthContext);
     return { account: await logoutLocalWhatsAppAccount(accountId) };
   }
 
   @Get("whatsapp/bridge/accounts/:accountId/chats")
-  async whatsappBridgeAccountChats(@Param("accountId") accountId: string) {
+  async whatsappBridgeAccountChats(@Req() request: any, @Param("accountId") accountId: string) {
+    assertBridgeAccountScope("read", { accountId }, request.orkestrMachineAuthContext);
     return listLocalWhatsAppChats(accountId);
   }
 
   @Get("whatsapp/bridge/accounts/:accountId/chats/:chatId/history")
-  async whatsappBridgeChatHistory(@Param("accountId") accountId: string, @Param("chatId") chatId: string, @Query("limit") limit = "30") {
+  async whatsappBridgeChatHistory(@Req() request: any, @Param("accountId") accountId: string, @Param("chatId") chatId: string, @Query("limit") limit = "30") {
+    await assertWhatsAppBridgeBindingAcl("read", { accountId, chatId }, request.orkestrMachineAuthContext);
     return listLocalWhatsAppChatMessages({ accountId, chatId, limit: Number(limit || 30) || 30 });
   }
 
   @Post("whatsapp/bridge/chats")
   @HttpCode(200)
-  async whatsappBridgeCreateChat(@Body() body: Record<string, unknown> = {}) {
+  async whatsappBridgeCreateChat(@Req() request: any, @Body() body: Record<string, unknown> = {}) {
+    assertBridgeAccountScope("manage", {
+      accountId: String(body.responderAccountId || body.outboundAccountId || body.senderAccountId || ""),
+    }, request.orkestrMachineAuthContext);
     const requestedParticipants = bodyStringArray(body, "participantIds").concat(bodyStringArray(body, "participants"));
     const participantIds = requestedParticipants.length
       ? requestedParticipants
@@ -278,7 +303,11 @@ export class ConnectorsController {
 
   @Post("whatsapp/bridge/chats/:chatId/picture")
   @HttpCode(200)
-  async whatsappBridgeGenerateChatPicture(@Param("chatId") chatId: string, @Body() body: Record<string, unknown> = {}) {
+  async whatsappBridgeGenerateChatPicture(@Req() request: any, @Param("chatId") chatId: string, @Body() body: Record<string, unknown> = {}) {
+    await assertWhatsAppBridgeBindingAcl("manage", {
+      accountId: String(body.accountId || body.responderAccountId || body.outboundAccountId || ""),
+      chatId,
+    }, request.orkestrMachineAuthContext);
     return generateLocalWhatsAppChatPicture({
       accountId: String(body.accountId || body.responderAccountId || body.outboundAccountId || ""),
       chatId,
@@ -287,13 +316,15 @@ export class ConnectorsController {
   }
 
   @Get("whatsapp/bridge/accounts/:accountId/chats/:chatId/participants")
-  async whatsappBridgeChatParticipants(@Param("accountId") accountId: string, @Param("chatId") chatId: string) {
+  async whatsappBridgeChatParticipants(@Req() request: any, @Param("accountId") accountId: string, @Param("chatId") chatId: string) {
+    await assertWhatsAppBridgeBindingAcl("read", { accountId, chatId }, request.orkestrMachineAuthContext);
     return getWhatsAppChatParticipants({ accountId, chatId });
   }
 
   @Post("whatsapp/bridge/accounts/:accountId/chats/:chatId/recover")
   @HttpCode(200)
-  async whatsappBridgeRecoverChat(@Param("accountId") accountId: string, @Param("chatId") chatId: string, @Body() body: Record<string, unknown> = {}) {
+  async whatsappBridgeRecoverChat(@Req() request: any, @Param("accountId") accountId: string, @Param("chatId") chatId: string, @Body() body: Record<string, unknown> = {}) {
+    await assertWhatsAppBridgeBindingAcl("manage", { accountId, chatId }, request.orkestrMachineAuthContext);
     return recoverLocalWhatsAppChatMessages({
       accountId,
       chatId,
@@ -305,7 +336,8 @@ export class ConnectorsController {
 
   @Post("whatsapp/bridge/accounts/:accountId/chats/:chatId/admins")
   @HttpCode(200)
-  async whatsappBridgePromoteGroupAdmins(@Param("accountId") accountId: string, @Param("chatId") chatId: string, @Body() body: Record<string, unknown> = {}) {
+  async whatsappBridgePromoteGroupAdmins(@Req() request: any, @Param("accountId") accountId: string, @Param("chatId") chatId: string, @Body() body: Record<string, unknown> = {}) {
+    await assertWhatsAppBridgeBindingAcl("manage", { accountId, chatId }, request.orkestrMachineAuthContext);
     return promoteLocalWhatsAppGroupParticipants({
       accountId,
       chatId,
@@ -315,7 +347,15 @@ export class ConnectorsController {
 
   @Post("whatsapp/bridge/typing/clear")
   @HttpCode(200)
-  async whatsappBridgeClearTyping(@Body() body: Record<string, unknown> = {}) {
+  async whatsappBridgeClearTyping(@Req() request: any, @Body() body: Record<string, unknown> = {}) {
+    assertBridgeAccountScope("send", {
+      accountId: String(body.accountId || ""),
+      chatId: String(body.chatId || body.to || ""),
+    }, request.orkestrMachineAuthContext);
+    await assertWhatsAppBridgeBindingAcl("send", {
+      accountId: String(body.accountId || ""),
+      chatId: String(body.chatId || body.to || ""),
+    }, request.orkestrMachineAuthContext);
     return stopLocalWhatsAppTyping({
       accountId: String(body.accountId || ""),
       chatId: String(body.chatId || body.to || ""),
@@ -323,7 +363,8 @@ export class ConnectorsController {
   }
 
   @Get("whatsapp/bridge/qr.svg")
-  async whatsappBridgeQr(@Query("accountId") accountId = "", @Res() response: any) {
+  async whatsappBridgeQr(@Req() request: any, @Query("accountId") accountId = "", @Res() response: any) {
+    assertBridgeAccountScope("read", { accountId }, request.orkestrMachineAuthContext);
     const svg = await getLocalWhatsAppQrSvg(accountId);
     if (!svg) {
       return response
@@ -341,7 +382,11 @@ export class ConnectorsController {
 
   @Post("whatsapp/bridge/send-text")
   @HttpCode(200)
-  async whatsappBridgeSendText(@Body() body: Record<string, unknown> = {}) {
+  async whatsappBridgeSendText(@Req() request: any, @Body() body: Record<string, unknown> = {}) {
+    await assertWhatsAppBridgeBindingAcl("send", {
+      chatId: String(body.to || body.chatId || ""),
+      accountId: String(body.accountId || ""),
+    }, request.orkestrMachineAuthContext);
     return sendWhatsAppText({
       chatId: String(body.to || body.chatId || ""),
       text: String(body.text || ""),
@@ -351,7 +396,11 @@ export class ConnectorsController {
 
   @Post("whatsapp/bridge/send-media")
   @HttpCode(200)
-  async whatsappBridgeSendMedia(@Body() body: Record<string, unknown> = {}) {
+  async whatsappBridgeSendMedia(@Req() request: any, @Body() body: Record<string, unknown> = {}) {
+    await assertWhatsAppBridgeBindingAcl("send", {
+      chatId: String(body.to || body.chatId || ""),
+      accountId: String(body.accountId || ""),
+    }, request.orkestrMachineAuthContext);
     const paths = Array.isArray(body.paths)
       ? body.paths.map((value) => String(value || "").trim()).filter(Boolean)
       : [String(body.path || "").trim()].filter(Boolean);
@@ -363,11 +412,36 @@ export class ConnectorsController {
     });
   }
 
+  @Post("whatsapp/bridge/inject-message")
+  @HttpCode(202)
+  async whatsappBridgeInjectMessage(@Req() request: any, @Body() body: Record<string, unknown> = {}) {
+    const accountId = String(body.accountId || "").trim();
+    const chatId = String(body.chatId || body.to || body.fromChatId || "").trim();
+    const text = String(body.text || body.body || "").trim();
+    const fromMe = optionalBodyBoolean(body, "fromMe", false);
+    const from = String(body.from || body.author || "").trim();
+    const eventId = String(body.eventId || body.id || `inject_${Date.now()}`).trim();
+    if (!accountId) throw httpError("whatsapp_account_id_required", 400);
+    if (!chatId) throw httpError("whatsapp_chat_id_required", 400);
+    if (!text) throw httpError("whatsapp_text_required", 400);
+    await assertWhatsAppBridgeBindingAcl("receive", { chatId, accountId }, request.orkestrMachineAuthContext);
+    const timestamp = Number(body.timestamp || 0) || Math.floor(Date.now() / 1000);
+    return handleInboundMessage(accountId, {
+      id: { _serialized: eventId, remote: chatId },
+      from: fromMe ? (from || String(body.from || accountId).trim()) : chatId,
+      to: fromMe ? chatId : String(body.to || accountId).trim(),
+      author: fromMe ? "" : from,
+      fromMe,
+      body: text,
+      timestamp,
+    });
+  }
+
   @Post("whatsapp/inbound")
-  async whatsappInbound(@Body() body: Record<string, unknown> = {}, @Res() response: any) {
+  async whatsappInbound(@Req() request: any, @Body() body: Record<string, unknown> = {}, @Res() response: any) {
+    ensureAttachmentsArray(body);
     try {
-      ensureAttachmentsArray(body);
-      const routed = await routeWhatsAppInbound({ ...body, deferApiAgentAutoRun: true });
+      const routed = await routeWhatsAppInbound({ ...body, deferApiAgentAutoRun: true, machineAuthContext: request.orkestrMachineAuthContext || null });
       if (routed.threadId && !routed.duplicate) {
         if ((routed as any).handledCommand) {
           await deliverWhatsAppReplies().catch(() => {});
@@ -409,6 +483,29 @@ export class ConnectorsController {
         code,
         retryable: statusCode >= 500,
       });
+      const failure = (payload as any).routingFailure || {};
+      reportServerError(process.env, {
+        source: "server.whatsappInbound",
+        code: String(failure.code || code),
+        message: String(failure.reason || failure.safeMessage || code),
+        method: "POST",
+        route: "/api/connectors/whatsapp/inbound",
+        statusCode,
+        threadId: String(failure.threadId || ""),
+        routerTraceId: String((body as any).routerTraceId || (body as any).traceId || ""),
+        details: {
+          connector: "whatsapp",
+          capability: failure.capability || "whatsapp",
+          provider: failure.provider || "whatsapp",
+          instanceId: failure.instanceId || "",
+          target: failure.target || "",
+          retryable: String(Boolean(failure.retryable)),
+          userFacingCategory: failure.userFacingCategory || "",
+          chatIdPresent: String(Boolean(body.chatId || (body.chat && typeof body.chat === "object" && (body.chat as any).id) || body.fromChatId)),
+          accountId: String(body.accountId || ""),
+          eventIdPresent: String(Boolean(body.eventId || body.id || body.messageId)),
+        },
+      });
       return response
         .status(statusCode)
         .header("cache-control", "no-store")
@@ -420,6 +517,7 @@ export class ConnectorsController {
   @Post("whatsapp/deliver")
   @HttpCode(200)
   async whatsappDeliver() {
+    clearWhatsAppDeliveryIdleCache();
     return deliverWhatsAppReplies();
   }
 

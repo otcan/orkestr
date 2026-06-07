@@ -1,6 +1,7 @@
 import { readFile, stat } from "node:fs/promises";
 import path from "node:path";
 import { normalizeCodexModel, normalizeReasoningEffort } from "../../../packages/core/src/codex-app-server-common.js";
+import { RAW_TERMINAL_RUNTIME_KIND } from "../../../packages/core/src/raw-terminal-mode.js";
 import { resolveCodexThreadMetadata, runtimeStatus } from "../../../packages/core/src/runtime-leases.js";
 import { isAdminPrincipal, resourceOwnerUserId } from "../../../packages/core/src/policy.js";
 import { adminPrincipal } from "../../../packages/core/src/principal.js";
@@ -193,7 +194,7 @@ function latestAssistantPlanAvailable(messages: any[] = []): boolean {
 
 function codexMetadata(thread: any) {
   const metadata = thread?.executor?.metadata && typeof thread.executor.metadata === "object" ? thread.executor.metadata : {};
-  const runtimeKind = String(thread?.runtimeKind || thread?.executor?.transport || metadata.transport || "").trim();
+  const runtimeKind = String(thread?.runtimeKind || thread?.runtime?.runtimeKind || thread?.executor?.transport || metadata.runtimeKind || metadata.transport || "").trim();
   if (runtimeKind === "api-agent" || metadata.runtimeKind === "api-agent") {
     return {
       codexMode: null,
@@ -239,7 +240,13 @@ function codexMetadata(thread: any) {
     codexTokenUsage: tokenUsage,
     codexTotalTokenUsage: totalTokenUsage,
     codexRateLimits: rateLimits,
-    runtimeKind: runtimeKind === "app-server" || runtimeKind === "codex-app-server" ? "codex-app-server" : runtimeKind === "tmux" ? "migration_required" : null,
+    runtimeKind: runtimeKind === "app-server" || runtimeKind === "codex-app-server"
+      ? "codex-app-server"
+      : runtimeKind === RAW_TERMINAL_RUNTIME_KIND || metadata.terminalMode === RAW_TERMINAL_RUNTIME_KIND
+        ? RAW_TERMINAL_RUNTIME_KIND
+        : runtimeKind === "tmux"
+          ? "migration_required"
+          : null,
     codexSessionId: thread?.codexSessionId || thread?.executor?.codexSessionId || metadata.codexSessionId || null,
     importedFromCodex: thread?.importedFromCodex === true || metadata.importedFromCodex === true,
   };

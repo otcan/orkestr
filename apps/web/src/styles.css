@@ -2491,6 +2491,35 @@ ork-first-thread-wizard.first-thread-host {
   gap: 5px;
 }
 
+.outbox-list {
+  margin-bottom: 16px;
+}
+
+.outbox-row {
+  gap: 10px;
+}
+
+.outbox-row > div:first-child {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.outbox-row > div:first-child strong,
+.outbox-row > div:first-child small {
+  overflow-wrap: anywhere;
+}
+
+.outbox-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.outbox-actions button {
+  min-height: 34px;
+}
+
 .audit-filters {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
@@ -2775,6 +2804,23 @@ ork-first-thread-wizard.first-thread-host {
 
 .raw-terminal-host .xterm-viewport {
   background: transparent !important;
+}
+
+.raw-watch {
+  max-width: min(720px, 90vw);
+  max-height: 320px;
+  overflow: auto;
+  margin: 12px auto 0;
+  padding: 12px;
+  text-align: left;
+  white-space: pre-wrap;
+  word-break: break-word;
+  border: 1px solid rgba(119, 205, 126, 0.22);
+  border-radius: 8px;
+  background: rgba(2, 6, 2, 0.78);
+  color: #d9fbd8;
+  font-size: 12px;
+  line-height: 1.45;
 }
 
 .kv-grid,

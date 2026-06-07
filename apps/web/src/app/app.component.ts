@@ -39,6 +39,7 @@ import {
   OrkestrUser,
   WhatsAppAccount,
   WhatsAppChat,
+  WhatsAppOutboxJob,
   WhatsAppParticipant,
   WhatsAppStatusResponse,
 } from "./api.service";
@@ -47,7 +48,7 @@ import { appendPendingFiles, messageWithAttachmentPaths, PendingFile, removePend
 type Panel = "chat" | "history" | "delivery" | "timers" | "attach" | "settings" | "workers" | "runtime" | "raw" | "ops" | "files" | "userTimers" | "userDesk" | "userConnectors";
 type CodexRateLimitKey = "primary" | "secondary";
 type SetupPageMode = "setup" | "onboarding";
-type SetupSection = "system" | "security" | "maintenance" | "codex" | "whatsapp" | "browsers";
+type SetupSection = "system" | "security" | "secrets" | "maintenance" | "codex" | "whatsapp" | "browsers";
 type PersistedThreadTextField =
   | "draft"
   | "sidebarWorkerTask"
@@ -131,6 +132,8 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   readonly slashCommands = SLASH_COMMANDS;
   historyMessages: ThreadMessage[] = [];
   deliveryTraces: RouterTraceRecord[] = [];
+  deliveryOutboxJobs: WhatsAppOutboxJob[] = [];
+  deliveryOutboxBusyJobId = "";
   timers: TimerRecord[] = [];
   allTimers: TimerRecord[] = [];
   runtimeDetails: Record<string, unknown> | null = null;
@@ -431,6 +434,18 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     return this.codexConnector()?.state === "connected";
   }
 
+  private codexConnectorReason(): string {
+    return String(this.codexConnector()?.details?.["reason"] || "").trim().toLowerCase();
+  }
+
+  private setupStatusRedacted(): boolean {
+    return Boolean(this.setupStatus?.redacted);
+  }
+
+  private authContextIssue(): boolean {
+    return this.pairingRequired || this.setupStatusRedacted() || this.isPairingRequiredFromSetup();
+  }
+
   isAdminMode(): boolean {
     return String(this.currentUser?.role || "admin").trim().toLowerCase() === "admin";
   }
@@ -448,7 +463,8 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   }
 
   shouldShowCodexRequiredShell(): boolean {
-    return this.appReady && this.isAdminMode() && !this.codexAgentReady();
+    const codex = this.codexConnector();
+    return this.appReady && this.isAdminMode() && !this.authContextIssue() && Boolean(codex) && !this.codexAgentReady();
   }
 
   shouldShowCodexNotice(): boolean {
@@ -529,7 +545,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   codexAgentStateLabel(): string {
     const connector = this.codexConnector();
     const state = String(connector?.state || "checking").toLowerCase();
-    const reason = String(connector?.details?.["reason"] || "").toLowerCase();
+    const reason = this.codexConnectorReason();
     if (state === "connected") return "connected";
     if (state === "partial") return "sign-in required";
     if (state === "not_connected" && reason === "codex_missing") return "runtime missing";
@@ -540,11 +556,23 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
 
   codexAgentSummary(): string {
     if (this.codexAgentReady()) return this.codexConnector()?.summary || "Codex Agent is connected.";
+    if (this.authContextIssue()) return "This browser is not paired with the current Orkestr instance. Pair this browser or sign in before checking Codex runtime status.";
     const summary = this.codexConnector()?.summary || "Checking Codex Agent status.";
+    if (this.codexConnectorReason() !== "codex_auth_invalid" && /Stored Codex sign-in is no longer valid/i.test(summary)) {
+      return "Codex runtime status could not be confirmed for this Orkestr instance. Refresh same-origin setup status or check the browser pairing/login context.";
+    }
     return `${summary} Orkestr is locked until the Codex Agent runtime is connected. Connect Codex Agent before creating, opening, or inspecting workspaces.`;
   }
 
   codexRuntimeNoticeTitle(): string {
+    const state = String(this.codexConnector()?.state || "").toLowerCase();
+    const reason = this.codexConnectorReason();
+    if (reason === "codex_auth_invalid") return "Codex sign-in expired";
+    if (reason === "codex_app_server_auth_invalid") return "Codex app-server auth expired";
+    if (reason === "codex_app_server_unavailable") return "Codex app-server unavailable";
+    if (state === "broken") return "Codex runtime issue";
+    if (state === "partial") return "Codex sign-in required";
+    if (state === "not_connected") return "Codex runtime unavailable";
     return `Codex Agent ${this.codexAgentStateLabel()}`;
   }
 
@@ -706,6 +734,8 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   private clearThreadPanelState(): void {
     this.historyMessages = [];
     this.deliveryTraces = [];
+    this.deliveryOutboxJobs = [];
+    this.deliveryOutboxBusyJobId = "";
     this.timers = [];
     this.runtimeDetails = null;
     this.attachDetails = null;
@@ -938,7 +968,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   }
 
   async handleBrowserPaired(): Promise<void> {
-    const returnUrl = this.safePairingReturnUrl();
+    const returnUrl = this.sameOriginPairingReturnUrl();
     if (returnUrl) {
       globalThis.location.replace(returnUrl);
       return;
@@ -1271,8 +1301,14 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     if (!thread) return;
     this.busy = true;
     try {
-      const payload = await firstValueFrom(this.api.routerTraces({ threadId: thread.id }));
-      this.deliveryTraces = payload.traces || [];
+      const [tracePayload, outboxPayload] = await Promise.all([
+        firstValueFrom(this.api.routerTraces({ threadId: thread.id })),
+        this.isAdminMode()
+          ? firstValueFrom(this.api.whatsappOutbox({ threadId: thread.id, limit: 50 }))
+          : Promise.resolve({ jobs: [], count: 0, total: 0 }),
+      ]);
+      this.deliveryTraces = tracePayload.traces || [];
+      this.deliveryOutboxJobs = outboxPayload.jobs || [];
     } catch (error) {
       this.error = this.errorText(error);
     } finally {
@@ -1324,8 +1360,33 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
       ]);
       this.attachDetails = attach;
       if (runtime) this.runtimeDetails = runtime as unknown as Record<string, unknown>;
-      if (attach.ok && this.embeddedRawTerminalAvailable(thread)) this.openRawStream(thread);
+      if (attach.ok && !attach.watchOnly && this.embeddedRawTerminalAvailable(thread)) this.openRawStream(thread);
       else this.closeRawStream();
+    } catch (error) {
+      this.error = this.errorText(error);
+      this.closeRawStream();
+    } finally {
+      this.busy = false;
+    }
+  }
+
+  async takeoverRaw(): Promise<void> {
+    const thread = this.selectedThread();
+    if (!thread || !this.rawTerminalAvailable(thread)) return;
+    this.busy = true;
+    try {
+      const [attach, runtime] = await Promise.all([
+        firstValueFrom(this.api.attachThread(thread.id, { takeover: true, yes: true })),
+        firstValueFrom(this.api.threadRuntimeFull(thread.id)).catch(() => null),
+      ]);
+      this.attachDetails = attach;
+      if (runtime) this.runtimeDetails = runtime as unknown as Record<string, unknown>;
+      if (!attach.ok) {
+        this.error = attach.message || "Raw terminal takeover failed.";
+        this.closeRawStream();
+        return;
+      }
+      this.openRawStream(thread);
     } catch (error) {
       this.error = this.errorText(error);
       this.closeRawStream();
@@ -1509,9 +1570,11 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
         additionalParticipantLabels: this.whatsappAllowOtherPeople ? this.whatsappSelectedParticipantLabels(thread) : {},
         mirrorToWhatsApp: this.whatsappMirrorToWhatsApp,
         replyPrefix: this.whatsappReplyPrefix.trim() || this.defaultWhatsAppReplyPrefix(),
-        senderAccountId: this.selectedWhatsAppSenderAccountId(),
-        responderAccountId: this.selectedWhatsAppAccountId(),
-        outboundAccountId: this.selectedWhatsAppAccountId(),
+        inboundAccountId: this.selectedWhatsAppInboundAccountId(),
+        senderAccountId: this.selectedWhatsAppInboundAccountId(),
+        responderConnectorAccountId: this.selectedWhatsAppReplyAccountId(),
+        responderAccountId: this.selectedWhatsAppReplyAccountId(),
+        outboundAccountId: this.selectedWhatsAppReplyAccountId(),
       }));
       if (result.thread) this.replaceThread(result.thread);
       this.syncThreadBindingDraft(result.thread || thread, true);
@@ -1563,6 +1626,14 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     await this.loadWhatsAppParticipants();
   }
 
+  async changeWhatsAppInboundAccount(accountId: string): Promise<void> {
+    await this.changeWhatsAppSenderAccount(accountId);
+  }
+
+  async changeWhatsAppReplyAccount(accountId: string): Promise<void> {
+    await this.changeWhatsAppAccount(accountId);
+  }
+
   async startWhatsAppAccount(accountId: string): Promise<void> {
     if (!accountId || this.busy) return;
     this.busy = true;
@@ -1599,6 +1670,22 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     await this.logoutWhatsAppAccount(this.selectedWhatsAppAccountId());
   }
 
+  async startSelectedWhatsAppInboundAccount(): Promise<void> {
+    await this.startWhatsAppAccount(this.selectedWhatsAppInboundAccountId());
+  }
+
+  async logoutSelectedWhatsAppInboundAccount(): Promise<void> {
+    await this.logoutWhatsAppAccount(this.selectedWhatsAppInboundAccountId());
+  }
+
+  async startSelectedWhatsAppReplyAccount(): Promise<void> {
+    await this.startWhatsAppAccount(this.selectedWhatsAppReplyAccountId());
+  }
+
+  async logoutSelectedWhatsAppReplyAccount(): Promise<void> {
+    await this.logoutWhatsAppAccount(this.selectedWhatsAppReplyAccountId());
+  }
+
   async createAndConnectWhatsAppChat(thread: ThreadSummary | null = this.selectedThread()): Promise<void> {
     if (!thread || this.creatingWhatsAppChat || this.savingThreadBinding) return;
     const name = this.withWhatsAppChatNamePrefix(this.whatsappDisplayName.trim() || this.threadTitle(thread));
@@ -1609,8 +1696,8 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     try {
       const created = await firstValueFrom(this.api.createWhatsAppBridgeChat({
         name,
-        senderAccountId: this.selectedWhatsAppSenderAccountId(),
-        responderAccountId: this.selectedWhatsAppAccountId(),
+        senderAccountId: this.selectedWhatsAppInboundAccountId(),
+        responderAccountId: this.selectedWhatsAppReplyAccountId(),
       }));
       const chatId = String(created.chat?.id || "").trim();
       if (!chatId) throw new Error("WhatsApp chat was not created.");
@@ -1632,9 +1719,11 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
         additionalParticipantLabels: {},
         mirrorToWhatsApp: true,
         replyPrefix: this.whatsappReplyPrefix.trim() || this.defaultWhatsAppReplyPrefix(),
-        senderAccountId: created.senderAccountId || this.selectedWhatsAppSenderAccountId(),
-        responderAccountId: created.responderAccountId || this.selectedWhatsAppAccountId(),
-        outboundAccountId: created.responderAccountId || this.selectedWhatsAppAccountId(),
+        inboundAccountId: created.senderAccountId || this.selectedWhatsAppInboundAccountId(),
+        senderAccountId: created.senderAccountId || this.selectedWhatsAppInboundAccountId(),
+        responderConnectorAccountId: created.responderAccountId || this.selectedWhatsAppReplyAccountId(),
+        responderAccountId: created.responderAccountId || this.selectedWhatsAppReplyAccountId(),
+        outboundAccountId: created.responderAccountId || this.selectedWhatsAppReplyAccountId(),
         senderContactId: created.senderContactId || "",
         responderContactId: created.responderContactId || "",
         generated: true,
@@ -1673,7 +1762,9 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
         additionalParticipantLabels: {},
         mirrorToWhatsApp: false,
         replyPrefix: this.whatsappReplyPrefix.trim() || this.defaultWhatsAppReplyPrefix(),
+        inboundAccountId: "",
         senderAccountId: "",
+        responderConnectorAccountId: "",
         responderAccountId: "",
         outboundAccountId: "",
         senderContactId: "",
@@ -1695,7 +1786,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   }
 
   async loadWhatsAppChats(): Promise<void> {
-    const accountId = this.selectedWhatsAppAccountId();
+    const accountId = this.selectedWhatsAppReplyAccountId();
     if (!accountId || !this.canLoadLocalWhatsAppChats(accountId)) {
       this.whatsappChats = [];
       return;
@@ -1713,7 +1804,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   }
 
   async loadWhatsAppParticipants(): Promise<void> {
-    const accountId = this.selectedWhatsAppSenderAccountId();
+    const accountId = this.selectedWhatsAppInboundAccountId();
     const chatId = this.whatsappChatId.trim();
     if (!accountId || !chatId) {
       this.whatsappParticipants = [];
@@ -2309,8 +2400,8 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     if (!thread || this.whatsappBindingThreadId !== thread.id) return false;
     const binding = thread.binding || {};
     const chatId = this.whatsappChatId.trim();
-    const accountDirty = Boolean(chatId || binding.chatId) && this.selectedWhatsAppAccountId() !== String(binding.responderAccountId || binding.outboundAccountId || "").trim();
-    const senderDirty = Boolean(chatId || binding.chatId) && this.selectedWhatsAppSenderAccountId() !== String(binding.senderAccountId || binding.inboundAccountId || binding.outboundAccountId || "").trim();
+    const accountDirty = Boolean(chatId || binding.chatId) && this.selectedWhatsAppReplyAccountId() !== String(binding.responderConnectorAccountId || binding.responderAccountId || binding.outboundAccountId || "").trim();
+    const senderDirty = Boolean(chatId || binding.chatId) && this.selectedWhatsAppInboundAccountId() !== String(binding.inboundAccountId || binding.senderAccountId || binding.outboundAccountId || "").trim();
     const savedParticipantIds = binding.additionalParticipantsEnabled === true
       ? this.normalizeWhatsAppParticipantIds(binding.additionalParticipantIds).filter((id) => !this.whatsappSystemParticipantIds(thread).has(id.toLowerCase()))
       : [];
@@ -2374,14 +2465,21 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     return String(account["state"] || account["status"] || "").trim();
   }
 
-  whatsappAccountRole(account: WhatsAppAccount | Record<string, unknown> | null): string {
-    if (!account) return "";
-    return String(account["role"] || "").trim().toLowerCase();
-  }
-
   whatsappRelayTargetAccountId(account: WhatsAppAccount | Record<string, unknown> | null): string {
     if (!account) return "";
     return String(account["relayTargetAccountId"] || account["senderAccountId"] || account["inboundAccountId"] || "").trim();
+  }
+
+  whatsappAccountCapabilities(account: WhatsAppAccount | Record<string, unknown> | null): string[] {
+    if (!account || !Array.isArray(account["capabilities"])) return [];
+    return (account["capabilities"] as unknown[])
+      .map((capability) => String(capability || "").trim().toLowerCase())
+      .filter(Boolean);
+  }
+
+  whatsappAccountCanSend(account: WhatsAppAccount | Record<string, unknown> | null): boolean {
+    const capabilities = this.whatsappAccountCapabilities(account);
+    return capabilities.length === 0 || capabilities.includes("send");
   }
 
   whatsappAccountById(accountId: string): WhatsAppAccount | null {
@@ -2389,21 +2487,24 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     return this.whatsappAccounts().find((account) => this.whatsappAccountId(account) === id) || null;
   }
 
-  defaultWhatsAppResponderAccountId(): string {
+  defaultWhatsAppReplyAccountId(): string {
     const accounts = this.connectedWhatsAppAccounts();
-    const responder = accounts.find((account) => this.whatsappRelayTargetAccountId(account)) ||
-      accounts.find((account) => this.whatsappAccountRole(account) === "secondary") ||
-      accounts.find((account) => this.whatsappAccountConnected(account)) ||
+    const responder = accounts.find((account) => this.whatsappRelayTargetAccountId(account) && this.whatsappAccountCanSend(account)) ||
+      accounts.find((account) => this.whatsappAccountConnected(account) && this.whatsappAccountCanSend(account)) ||
       accounts[0] ||
       null;
     return this.whatsappAccountId(responder);
+  }
+
+  defaultWhatsAppResponderAccountId(): string {
+    return this.defaultWhatsAppReplyAccountId();
   }
 
   selectedWhatsAppAccountId(): string {
     const accounts = this.connectedWhatsAppAccounts();
     const selected = this.whatsappOutboundAccountId.trim();
     if (selected && accounts.some((account) => this.whatsappAccountId(account) === selected)) return selected;
-    return this.defaultWhatsAppResponderAccountId();
+    return this.defaultWhatsAppReplyAccountId();
   }
 
   selectedWhatsAppSenderAccountId(): string {
@@ -2414,11 +2515,17 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     const responder = this.whatsappAccountById(responderId);
     const relayTarget = this.whatsappRelayTargetAccountId(responder);
     if (relayTarget && accounts.some((account) => this.whatsappAccountId(account) === relayTarget)) return relayTarget;
-    const primary = accounts.find((account) => this.whatsappAccountId(account) !== responderId && this.whatsappAccountRole(account) === "primary");
-    if (primary) return this.whatsappAccountId(primary);
     const otherReady = accounts.find((account) => this.whatsappAccountId(account) !== responderId && this.whatsappAccountConnected(account));
     if (otherReady) return this.whatsappAccountId(otherReady);
     return responderId;
+  }
+
+  selectedWhatsAppReplyAccountId(): string {
+    return this.selectedWhatsAppAccountId();
+  }
+
+  selectedWhatsAppInboundAccountId(): string {
+    return this.selectedWhatsAppSenderAccountId();
   }
 
   selectedWhatsAppAccount(): WhatsAppAccount | null {
@@ -2441,6 +2548,14 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     return account ? this.whatsappAccountLabel(account) || this.selectedWhatsAppSenderAccountId() : "No connected account";
   }
 
+  selectedWhatsAppReplyAccountLabel(): string {
+    return this.selectedWhatsAppAccountLabel();
+  }
+
+  selectedWhatsAppInboundAccountLabel(): string {
+    return this.selectedWhatsAppSenderAccountLabel();
+  }
+
   selectedWhatsAppAccountStateLabel(): string {
     const account = this.selectedWhatsAppAccount();
     const state = account ? this.whatsappAccountState(account) : "";
@@ -2451,6 +2566,14 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     const account = this.selectedWhatsAppSenderAccount();
     const state = account ? this.whatsappAccountState(account) : "";
     return state || "setup required";
+  }
+
+  selectedWhatsAppReplyAccountStateLabel(): string {
+    return this.selectedWhatsAppAccountStateLabel();
+  }
+
+  selectedWhatsAppInboundAccountStateLabel(): string {
+    return this.selectedWhatsAppSenderAccountStateLabel();
   }
 
   whatsappAccountQrUrl(): string {
@@ -2531,7 +2654,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     return true;
   }
 
-  canLoadLocalWhatsAppChats(accountId = this.selectedWhatsAppAccountId()): boolean {
+  canLoadLocalWhatsAppChats(accountId = this.selectedWhatsAppReplyAccountId()): boolean {
     const mode = String(this.whatsappStatusDetails?.mode || "local").toLowerCase();
     const bridgeUrl = String(this.whatsappStatusDetails?.bridgeUrl || "").trim();
     return mode === "local" && (!bridgeUrl || bridgeUrl.startsWith("/api/connectors/whatsapp/bridge")) && /^account-\d+$/i.test(accountId);
@@ -2580,7 +2703,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     const allowPeople = this.whatsappBindingThreadId === thread.id
       ? this.whatsappAllowOtherPeople
       : binding.additionalParticipantsEnabled === true;
-    return allowPeople ? "Additional participants enabled" : "Only the linked sender account";
+    return allowPeople ? "Additional participants enabled" : "Only the linked inbound account";
   }
 
   showWhatsAppChatIcon(thread: ThreadSummary | null): boolean {
@@ -3374,6 +3497,56 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     return String(trace.diagnostics?.recovery || "").trim();
   }
 
+  outboxJobTitle(job: WhatsAppOutboxJob): string {
+    return String(job.sourceMessageId || job.id || "outbox job").trim();
+  }
+
+  outboxStateLabel(job: WhatsAppOutboxJob): string {
+    return String(job.state || "pending").replace(/_/g, " ");
+  }
+
+  outboxJobMeta(job: WhatsAppOutboxJob): string {
+    return [
+      String(job.deliveryType || "delivery").trim(),
+      String(job.accountId || "").trim() ? `acct ${job.accountId}` : "",
+      String(job.chatId || "").trim() ? `chat ${job.chatId}` : "",
+    ].filter(Boolean).join(" · ");
+  }
+
+  outboxUpdatedAt(job: WhatsAppOutboxJob): string {
+    return String(job.updatedAt || job.terminalAt || job.createdAt || "").trim();
+  }
+
+  outboxJobActions(job: WhatsAppOutboxJob): string[] {
+    const state = String(job.state || "pending").toLowerCase();
+    if (state === "delivered") return ["replay"];
+    if (["suppressed", "dead_letter", "skipped", "skipped_policy", "cancelled"].includes(state)) return ["retry", "replay", "mark-delivered"];
+    if (state === "failed_retryable") return ["retry", "suppress", "mark-delivered", "dead-letter"];
+    if (["pending", "claimed", "sent_to_broker"].includes(state)) return ["suppress", "mark-delivered", "dead-letter"];
+    return ["retry", "suppress", "mark-delivered"];
+  }
+
+  outboxActionLabel(action: string): string {
+    if (action === "mark-delivered") return "Mark delivered";
+    if (action === "dead-letter") return "Dead-letter";
+    return action.charAt(0).toUpperCase() + action.slice(1);
+  }
+
+  async applyOutboxAction(job: WhatsAppOutboxJob, action: string): Promise<void> {
+    const jobId = String(job.id || "").trim();
+    if (!jobId || this.deliveryOutboxBusyJobId) return;
+    this.deliveryOutboxBusyJobId = jobId;
+    try {
+      await firstValueFrom(this.api.whatsappOutboxAction(jobId, action, { reason: `operator_${action.replace(/-/g, "_")}` }));
+      await this.loadDeliveryTraces();
+    } catch (error) {
+      this.error = this.errorText(error);
+    } finally {
+      this.deliveryOutboxBusyJobId = "";
+      this.renderNow();
+    }
+  }
+
   runtimeValue(key: string): string {
     const runtime = this.runtimeDetails?.["runtime"];
     if (runtime && typeof runtime === "object" && key in runtime) return String((runtime as Record<string, unknown>)[key] || "");
@@ -3697,8 +3870,8 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     const ids = [
       binding.senderContactId,
       binding.responderContactId,
-      this.whatsappAccountContactId(this.selectedWhatsAppSenderAccountId()),
-      this.whatsappAccountContactId(this.selectedWhatsAppAccountId()),
+      this.whatsappAccountContactId(this.selectedWhatsAppInboundAccountId()),
+      this.whatsappAccountContactId(this.selectedWhatsAppReplyAccountId()),
     ];
     return new Set(ids.map((id) => String(id || "").trim().toLowerCase()).filter(Boolean));
   }
@@ -3782,8 +3955,8 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     this.whatsappChatId = String(binding.chatId || "");
     this.whatsappDisplayName = String(binding.displayName || this.threadTitle(thread));
     this.whatsappReplyPrefix = String(binding.replyPrefix || this.defaultWhatsAppReplyPrefix());
-    this.whatsappSenderAccountId = String(binding.senderAccountId || binding.inboundAccountId || "");
-    this.whatsappOutboundAccountId = String(binding.responderAccountId || binding.outboundAccountId || "");
+    this.whatsappSenderAccountId = String(binding.inboundAccountId || binding.senderAccountId || "");
+    this.whatsappOutboundAccountId = String(binding.responderConnectorAccountId || binding.responderAccountId || binding.outboundAccountId || "");
     this.whatsappBindingEnabled = binding.enabled !== false;
     this.whatsappAllowOtherPeople = binding.additionalParticipantsEnabled === true;
     this.whatsappAdditionalParticipantIds = this.whatsappAllowOtherPeople
@@ -4010,25 +4183,14 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     globalThis.history?.replaceState({}, "", next);
   }
 
-  private safePairingReturnUrl(): string {
+  private sameOriginPairingReturnUrl(): string {
     const raw = new URLSearchParams(globalThis.location?.search || "").get("return") || "";
     if (!raw) return "";
     try {
-      const target = new URL(raw);
+      const current = new URL(globalThis.location?.href || "http://localhost/");
+      const target = new URL(raw, current);
       if (!["http:", "https:"].includes(target.protocol)) return "";
-      const allowedOrigins = [
-        this.setupStatus?.urls?.appUrl,
-        this.setupStatus?.urls?.authUrl,
-        this.setupStatus?.security?.https?.appUrl,
-        this.setupStatus?.security?.https?.authUrl,
-      ].map((value) => {
-        try {
-          return value ? new URL(value).origin : "";
-        } catch {
-          return "";
-        }
-      }).filter(Boolean);
-      return allowedOrigins.includes(target.origin) ? target.toString() : "";
+      return target.origin === current.origin ? target.toString() : "";
     } catch {
       return "";
     }
@@ -4036,7 +4198,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
 
   private normalizeSetupSection(value: unknown): SetupSection {
     const section = String(value || "").trim().toLowerCase();
-    return ["system", "security", "maintenance", "codex", "whatsapp", "browsers"].includes(section)
+    return ["system", "security", "secrets", "maintenance", "codex", "whatsapp", "browsers"].includes(section)
       ? section as SetupSection
       : "system";
   }

@@ -430,6 +430,52 @@ test("generated WhatsApp binding persists restricted Codex defaults for tenant t
   }
 });
 
+test("thread WhatsApp binding persists neutral connector account ids", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-use-control-binding-neutral-wa-"));
+  const priorHome = process.env.ORKESTR_HOME;
+  const priorRecover = process.env.ORKESTR_RECOVER_RUNNING_ON_START;
+  process.env.ORKESTR_HOME = home;
+  process.env.ORKESTR_RECOVER_RUNNING_ON_START = "0";
+
+  let server;
+  try {
+    await createThread({
+      id: "neutral-wa",
+      name: "Neutral WA",
+      ownerUserId: "admin",
+    }, process.env);
+
+    server = await startServer({ port: 0, host: "127.0.0.1" });
+    const { port } = server.address();
+    const response = await fetch(`http://127.0.0.1:${port}/api/threads/neutral-wa/binding`, {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        connector: "whatsapp",
+        chatId: "wa-neutral@g.us",
+        displayName: "Neutral WA",
+        inboundAccountId: "account-inbound",
+        responderConnectorAccountId: "account-reply",
+        mirrorToWhatsApp: true,
+      }),
+    });
+    const payload = await response.json();
+
+    assert.equal(response.status, 200);
+    assert.equal(payload.binding.inboundAccountId, "account-inbound");
+    assert.equal(payload.binding.senderAccountId, "account-inbound");
+    assert.equal(payload.binding.responderConnectorAccountId, "account-reply");
+    assert.equal(payload.binding.responderAccountId, "account-reply");
+    assert.equal(payload.binding.outboundAccountId, "account-reply");
+  } finally {
+    if (server) await new Promise((resolve) => server.close(resolve));
+    if (priorHome === undefined) delete process.env.ORKESTR_HOME;
+    else process.env.ORKESTR_HOME = priorHome;
+    if (priorRecover === undefined) delete process.env.ORKESTR_RECOVER_RUNNING_ON_START;
+    else process.env.ORKESTR_RECOVER_RUNNING_ON_START = priorRecover;
+  }
+});
+
 test("external WhatsApp identities can provision scoped non-admin users", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-use-control-wa-"));
   const env = { ORKESTR_HOME: home };
@@ -1204,6 +1250,66 @@ test("user management API is admin-only and can pair a browser to a managed user
     const deniedConnector = await read(deniedConnectorResponse);
     assert.equal(deniedConnectorResponse.status, 403);
     assert.equal(deniedConnector.error, "connector_admin_required");
+
+    const userWhatsAppCreateResponse = await fetch(`${baseUrl}/api/connectors/whatsapp/accounts`, {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie: userCookie, connection: "close" },
+      body: JSON.stringify({
+        accountId: "alice-wa",
+        displayName: "Alice WhatsApp",
+        ownerUserId: "bob-example.test",
+      }),
+    });
+    const userWhatsAppCreate = await read(userWhatsAppCreateResponse);
+    assert.equal(userWhatsAppCreateResponse.status, 201);
+    assert.equal(userWhatsAppCreate.account.accountId, "alice-wa");
+    assert.equal(userWhatsAppCreate.account.ownerUserId, "alice-example.test");
+
+    const bobWhatsAppCreate = await read(await fetch(`${baseUrl}/api/connectors/whatsapp/accounts`, {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie: adminCookie, connection: "close" },
+      body: JSON.stringify({
+        accountId: "bob-wa",
+        displayName: "Bob WhatsApp",
+        ownerUserId: "bob-example.test",
+      }),
+    }));
+    assert.equal(bobWhatsAppCreate.account.accountId, "bob-wa");
+    assert.equal(bobWhatsAppCreate.account.ownerUserId, "bob-example.test");
+
+    const userWhatsAppAccountsResponse = await fetch(`${baseUrl}/api/connectors/whatsapp/accounts`, {
+      headers: { cookie: userCookie, connection: "close" },
+    });
+    const userWhatsAppAccounts = await read(userWhatsAppAccountsResponse);
+    assert.equal(userWhatsAppAccountsResponse.status, 200);
+    assert.deepEqual(userWhatsAppAccounts.accounts.map((account) => account.accountId), ["alice-wa"]);
+    assert.deepEqual(userWhatsAppAccounts.status.accounts.map((account) => account.accountId), ["alice-wa"]);
+    assert.doesNotMatch(JSON.stringify(userWhatsAppAccounts), /sessionRoot|clientId|whatsapp-bridge\/sessions/);
+
+    const deniedBobWhatsAppStatusResponse = await fetch(`${baseUrl}/api/connectors/whatsapp/accounts/bob-wa/status`, {
+      headers: { cookie: userCookie, connection: "close" },
+    });
+    const deniedBobWhatsAppStatus = await read(deniedBobWhatsAppStatusResponse);
+    assert.equal(deniedBobWhatsAppStatusResponse.status, 403);
+    assert.equal(deniedBobWhatsAppStatus.error, "wa_account_read_forbidden");
+
+    const userWhatsAppPairResponse = await fetch(`${baseUrl}/api/connectors/whatsapp/accounts/alice-wa/pairing-session`, {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie: userCookie, connection: "close" },
+      body: JSON.stringify({ phoneNumber: "+++" }),
+    });
+    const userWhatsAppPair = await read(userWhatsAppPairResponse);
+    assert.equal(userWhatsAppPairResponse.status, 400);
+    assert.equal(userWhatsAppPair.error, "whatsapp_pairing_phone_number_invalid");
+
+    const deniedBobWhatsAppPairResponse = await fetch(`${baseUrl}/api/connectors/whatsapp/accounts/bob-wa/pairing-session`, {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie: userCookie, connection: "close" },
+      body: JSON.stringify({ phoneNumber: "+4917632400662" }),
+    });
+    const deniedBobWhatsAppPair = await read(deniedBobWhatsAppPairResponse);
+    assert.equal(deniedBobWhatsAppPairResponse.status, 403);
+    assert.equal(deniedBobWhatsAppPair.error, "wa_account_pair_forbidden");
 
     const userGmailStatusResponse = await fetch(`${baseUrl}/api/connectors/gmail/test`, {
       method: "POST",

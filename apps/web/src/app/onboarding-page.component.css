@@ -237,6 +237,7 @@
 }
 
 .setup-form input,
+.setup-form select,
 .setup-form textarea {
   border: 1px solid rgba(128, 210, 138, 0.24);
   border-radius: 8px;
@@ -244,6 +245,10 @@
   color: #e5f4df;
   font: inherit;
   padding: 10px 12px;
+}
+
+.setup-form select {
+  color-scheme: dark;
 }
 
 .setup-form textarea {
@@ -644,6 +649,33 @@
   padding: 10px 12px;
 }
 
+.secure-secret-form {
+  display: grid;
+  gap: 12px;
+}
+
+.secure-secret-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: 12px;
+}
+
+.secure-secret-row {
+  align-items: flex-start;
+}
+
+.secure-secret-row small {
+  overflow-wrap: anywhere;
+}
+
+.secure-secret-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
 .qr-panel {
   display: grid;
   place-items: start;
@@ -765,6 +797,7 @@
 
   .check-row,
   .binding-grid,
+  .secure-secret-actions,
   .setup-nav {
     align-items: stretch;
     display: grid;

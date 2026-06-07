@@ -51,6 +51,25 @@ test("WhatsApp debug footer is gated and marks progress as update", () => {
   });
   assert.equal(disabled, "Done");
 
+  const aliasEnabled = appendWhatsAppDebugFooter("Done", {
+    env: { WA_DEBUG_FOOTER: "1" },
+    message: { source: "codex-app-server", phase: "final_answer" },
+  });
+  assert.match(aliasEnabled, /^Done\n\ndbg: /);
+
+  const appendAliasEnabled = appendWhatsAppDebugFooter("Done", {
+    env: { WA_APPEND_DEBUG_FOOTER: "1" },
+    message: { source: "codex-app-server", phase: "final_answer" },
+  });
+  assert.match(appendAliasEnabled, /^Done\n\ndbg: /);
+
+  const callerDisabled = appendWhatsAppDebugFooter("Done", {
+    env: { WA_DEBUG_FOOTER: "1" },
+    appendDebugFooter: false,
+    message: { source: "codex-app-server", phase: "final_answer" },
+  });
+  assert.equal(callerDisabled, "Done");
+
   const enabled = appendWhatsAppDebugFooter("Working", {
     env: { ORKESTR_WHATSAPP_DEBUG_FOOTER: "1", ORKESTR_DEFAULT_CODEX_MODEL: "gpt-test" },
     deliveryType: "progress",
@@ -80,7 +99,7 @@ test("WhatsApp mirror policy forwards Codex final replies and progress updates",
   assert.equal(shouldMirrorWhatsAppProgress({ source: "codex-app-server-import", phase: "commentary" }), true);
   assert.equal(shouldMirrorWhatsAppProgress({ source: "codex-app-server", phase: "awaiting_approval" }), true);
   assert.equal(shouldMirrorWhatsAppReply({ source: "codex-app-server", phase: "context_compaction" }), false);
-  assert.equal(shouldMirrorWhatsAppProgress({ source: "codex-app-server", phase: "context_compaction" }), true);
+  assert.equal(shouldMirrorWhatsAppProgress({ source: "codex-app-server", phase: "context_compaction" }), false);
   assert.equal(shouldMirrorWhatsAppReply({ source: "codex-app-server", phase: "future_codex_phase" }), true);
   assert.equal(shouldMirrorWhatsAppProgress({ source: "codex-app-server", phase: "future_codex_phase" }), false);
   assert.equal(shouldMirrorWhatsAppReply({ source: "manual", phase: "commentary" }), true);

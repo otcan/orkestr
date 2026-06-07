@@ -1,12 +1,33 @@
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { isAdminPrincipal, resourceOwnerUserId } from "./policy.js";
+import { adminUserId, normalizeUserId } from "./users.js";
 import { dataPaths } from "../../storage/src/paths.js";
 
 const explicitPathKeys = ["path", "saved_path", "filePath", "localPath"];
 const markdownLinkPattern = /!?\[[^\]\n]*]\(([^)\n]+)\)/g;
 const plainAbsolutePathPattern = /(^|[\s([{"'`])((?:\/[^\s()[\]{}<>"'`|]+)+)/g;
 const trailingPathPunctuationPattern = /[.,;:!?]+$/;
+const registeredSlashCommands = new Set([
+  "approve",
+  "code",
+  "coding",
+  "deny",
+  "hard-reset",
+  "hard_reset",
+  "help",
+  "implement",
+  "interrupt",
+  "now",
+  "plan",
+  "planning",
+  "reset",
+  "restart",
+  "safe-reset",
+  "safe_reset",
+  "stop",
+]);
 
 const mimeByExtension = new Map([
   [".csv", "text/csv"],
@@ -130,10 +151,18 @@ function decodePathCandidate(value = "") {
 function resolveTextCandidate(candidate = "", thread = {}) {
   const decoded = decodePathCandidate(candidate).replace(trailingPathPunctuationPattern, "");
   if (!decoded) return "";
+  if (registeredSlashCommandCandidate(decoded)) return "";
   if (path.isAbsolute(decoded)) return path.resolve(decoded);
   if (!decoded.startsWith("./") && !decoded.startsWith("../")) return "";
   const base = pickString(thread.cwd, thread.workspace, thread.repoPath, thread.worktreePath);
   return base ? path.resolve(base, decoded) : "";
+}
+
+export function registeredSlashCommandCandidate(value = "") {
+  const decoded = decodePathCandidate(value).replace(trailingPathPunctuationPattern, "");
+  const match = decoded.match(/^\/([a-z][a-z0-9_-]*)(?:$|[\s:.,!?])/i) || decoded.match(/^\/([a-z][a-z0-9_-]*)$/i);
+  if (!match) return false;
+  return registeredSlashCommands.has(match[1].toLowerCase());
 }
 
 function attachmentPath(attachment = {}) {
@@ -215,6 +244,36 @@ export function extractThreadAttachmentPathCandidates({ text = "", attachments =
     if (filePath) candidates.push({ path: filePath, raw: match[2], source: "plain_path" });
   }
   return candidates;
+}
+
+function canExposeOrdinaryThreadPath({ thread = {}, principal = null, env = process.env } = {}) {
+  if (principal) return isAdminPrincipal(principal);
+  const owner = normalizeUserId(thread.ownerUserId || thread.userId || "");
+  if (owner) return owner === normalizeUserId(env.ORKESTR_ADMIN_USER_ID || adminUserId);
+  return resourceOwnerUserId(thread, env) === normalizeUserId(env.ORKESTR_ADMIN_USER_ID || adminUserId);
+}
+
+export function classifyThreadAttachmentPathRedaction(filePath, { thread = {}, principal = null, env = process.env } = {}) {
+  const policy = classifyThreadAttachmentPath(filePath, { thread, env });
+  if (policy.ok) {
+    return {
+      ...policy,
+      category: "ordinary_allowed",
+      redact: !canExposeOrdinaryThreadPath({ thread, principal, env }),
+    };
+  }
+  if (policy.reason === "attachment_path_forbidden") {
+    return {
+      ...policy,
+      category: "sensitive_denied",
+      redact: true,
+    };
+  }
+  return {
+    ...policy,
+    category: "ordinary_denied",
+    redact: true,
+  };
 }
 
 function attachmentId(filePath, stats) {
@@ -347,13 +406,13 @@ export async function resolveStoredThreadAttachment({ thread = {}, messages = []
   return { found: false, reason: "attachment_not_found" };
 }
 
-export function redactDeniedThreadAttachmentPaths(text = "", { thread = {}, env = process.env } = {}) {
+export function redactDeniedThreadAttachmentPaths(text = "", { thread = {}, principal = null, env = process.env } = {}) {
   const source = String(text || "");
   let redacted = source;
   const denied = extractThreadAttachmentPathCandidates({ text: source, attachments: [], thread })
     .filter((candidate) => {
-      const policy = classifyThreadAttachmentPath(candidate.path, { thread, env });
-      return !policy.ok;
+      const decision = classifyThreadAttachmentPathRedaction(candidate.path, { thread, principal, env });
+      return decision.redact;
     })
     .map((candidate) => candidate.raw || candidate.path)
     .filter(Boolean)

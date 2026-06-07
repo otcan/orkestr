@@ -42,6 +42,7 @@ import {
 } from "./codex-app-server-whatsapp.js";
 import { requestUserInputAnswers } from "./codex-app-server-user-input.js";
 import { appendTurnLifecycleEvent } from "./turn-lifecycle.js";
+import { markConnectorDeliverySignal } from "./connector-delivery-signals.js";
 
 const execFileAsync = promisify(execFile);
 const clients = new Map();
@@ -670,6 +671,7 @@ export class CodexAppServerClient {
       ...whatsappProjectionFields(whatsappParent, thread),
     }, this.env);
     notifyMessageHandler({ thread, message });
+    markConnectorDeliverySignal(message);
     const finalAnswer = clean(phase).toLowerCase() === "final_answer";
     const completedKey = finalAnswer ? this.turnParentKey(codexId, turnId) : "";
     if (completedKey) {

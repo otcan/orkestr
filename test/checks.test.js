@@ -10,6 +10,7 @@ import { WebSocketServer } from "ws";
 import { recordCodexRuntimeAuthInvalidSignal } from "../packages/core/src/codex-auth-health.js";
 import { userPrincipal } from "../packages/core/src/principal.js";
 import { getSetupStatus } from "../packages/core/src/setup.js";
+import { systemDoctor } from "../packages/core/src/system-doctor.js";
 import { userDataPaths } from "../packages/storage/src/paths.js";
 
 async function writeFakeCodex(home, lines) {
@@ -48,6 +49,37 @@ test("setup status includes the V1 connector set", async () => {
   const status = await getSetupStatus({ env: { ORKESTR_HOME: home }, home });
   const ids = status.connectors.map((connector) => connector.id);
   assert.deepEqual(ids, ["openai", "codex", "gmail", "outlook", "jira", "shopify", "linkedin", "whatsapp", "browsers", "timers"]);
+});
+
+test("system doctor allows a separate public marketing site URL", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-url-identity-doctor-"));
+  const fakeCodex = await writeFakeCodex(home, [
+    "#!/bin/sh",
+    "if [ \"$1\" = \"--version\" ]; then echo 'codex-cli url-identity-test'; exit 0; fi",
+    "if [ \"$1\" = \"login\" ] && [ \"$2\" = \"status\" ]; then echo 'Logged in using ChatGPT'; exit 0; fi",
+    "if [ \"$1\" = \"app-server\" ] && [ \"$2\" = \"--help\" ]; then echo 'app-server help'; exit 0; fi",
+    "echo unexpected \"$@\" >&2",
+    "exit 2",
+  ]);
+  const env = {
+    ORKESTR_HOME: home,
+    ORKESTR_CODEX_BIN: fakeCodex,
+    CODEX_HOME: path.join(home, "codex-home"),
+    ORKESTR_PRIMARY_DOMAIN: "ops.oguzcanunver.com",
+    ORKESTR_APP_HOST: "orkestr.app.ops.oguzcanunver.com",
+    ORKESTR_AUTH_HOST: "auth.ops.oguzcanunver.com",
+    ORKESTR_PUBLIC_SITE_URL: "https://orkestr.de",
+    ORKESTR_PUBLIC_APP_URL: "https://orkestr.app.ops.oguzcanunver.com",
+    ORKESTR_AUTH_URL: "https://auth.ops.oguzcanunver.com",
+    ORKESTR_AUTH_REQUIRED: "1",
+  };
+
+  const doctor = await systemDoctor({ env, home });
+  const check = doctor.checks.find((item) => item.id === "public_url_identity");
+
+  assert.equal(check.status, "ok");
+  assert.match(check.summary, /one URL identity/);
+  assert.equal(doctor.issues.some((issue) => issue.code === "public_url_identity"), false);
 });
 
 test("OpenAI reports connected when OPENAI_API_KEY exists", async () => {

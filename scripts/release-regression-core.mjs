@@ -72,10 +72,17 @@ function parseHeader(raw) {
   return [text.slice(0, index).trim(), text.slice(index + 1).trim()];
 }
 
+function envEnabled(value) {
+  return ["1", "true", "yes", "on"].includes(String(value || "").trim().toLowerCase());
+}
+
 export function parseReleaseRegressionArgs(argv = [], env = process.env) {
   const options = {
     targets: [],
     headers: {},
+    orkestrHome: String(env.ORKESTR_HOME || "").trim(),
+    localCliAuthToken: String(env.ORKESTR_RELEASE_CHECK_AUTH_TOKEN || env.ORKESTR_API_TOKEN || env.ORKESTR_CLI_AUTH_TOKEN || "").trim(),
+    disableLocalCliAuth: envEnabled(env.ORKESTR_RELEASE_CHECK_DISABLE_LOCAL_CLI_AUTH || env.ORKESTR_DISABLE_CLI_AUTH),
     timeoutMs: Number(env.ORKESTR_RELEASE_CHECK_TIMEOUT_MS || 5000) || 5000,
     pollMs: Number(env.ORKESTR_RELEASE_CHECK_POLL_MS || 1000) || 1000,
     artifactDir: String(env.ORKESTR_RELEASE_CHECK_ARTIFACT_DIR || "").trim(),
@@ -98,6 +105,7 @@ export function parseReleaseRegressionArgs(argv = [], env = process.env) {
       const [name, value] = parseHeader(argv[++index]);
       options.headers[name] = value;
     } else if (arg === "--artifact-dir") options.artifactDir = String(argv[++index] || "").trim();
+    else if (arg === "--orkestr-home") options.orkestrHome = String(argv[++index] || "").trim();
     else if (arg === "--release-id") options.releaseId = String(argv[++index] || "").trim();
     else if (arg === "--timeout-ms") options.timeoutMs = Number(argv[++index] || 0) || options.timeoutMs;
     else if (arg === "--poll-ms") options.pollMs = Number(argv[++index] || 0) || options.pollMs;
@@ -107,6 +115,7 @@ export function parseReleaseRegressionArgs(argv = [], env = process.env) {
     else if (arg === "--linkedin-thread") options.linkedInThreadId = String(argv[++index] || "").trim();
     else if (arg === "--desktop-slug") options.desktopSlug = String(argv[++index] || "").trim();
     else if (arg === "--required-whatsapp-accounts") options.requiredWhatsAppAccounts = splitList(argv[++index]);
+    else if (arg === "--no-local-cli-auth") options.disableLocalCliAuth = true;
     else if (arg === "--message") options.message = String(argv[++index] || "").trim();
     else if (arg === "--expect") options.expect = String(argv[++index] || "").trim();
     else if (arg === "--help" || arg === "-h") options.help = true;
@@ -117,7 +126,7 @@ export function parseReleaseRegressionArgs(argv = [], env = process.env) {
   if (!options.targets.length) options.targets = parseTargetsFromEnv(env);
   if (!options.releaseId) options.releaseId = `release-check-${isoStamp()}`;
   if (!options.artifactDir) {
-    const home = String(env.ORKESTR_HOME || "").trim() || path.join(os.tmpdir(), "orkestr-release-checks");
+    const home = options.orkestrHome || String(env.ORKESTR_HOME || "").trim() || path.join(os.tmpdir(), "orkestr-release-checks");
     options.artifactDir = path.join(home, "release-checks", safeName(options.releaseId, "release-check"));
   }
   if (!options.message) {
@@ -157,6 +166,61 @@ class HttpStatusError extends Error {
   }
 }
 
+function hasHeader(headers = {}, wanted) {
+  const lowerWanted = String(wanted || "").toLowerCase();
+  return Object.keys(headers || {}).some((name) => String(name || "").toLowerCase() === lowerWanted);
+}
+
+function targetIsLoopback(target = {}) {
+  try {
+    const hostname = new URL(target.baseUrl).hostname.toLowerCase();
+    return hostname === "localhost" ||
+      hostname === "::1" ||
+      hostname === "[::1]" ||
+      hostname === "0.0.0.0" ||
+      /^127(?:\.\d{1,3}){3}$/.test(hostname);
+  } catch {
+    return false;
+  }
+}
+
+async function localCliAuthToken(env = process.env, options = {}) {
+  if (options.disableLocalCliAuth || envEnabled(env.ORKESTR_RELEASE_CHECK_DISABLE_LOCAL_CLI_AUTH || env.ORKESTR_DISABLE_CLI_AUTH)) {
+    return "";
+  }
+  const explicit = String(options.localCliAuthToken || env.ORKESTR_RELEASE_CHECK_AUTH_TOKEN || env.ORKESTR_API_TOKEN || env.ORKESTR_CLI_AUTH_TOKEN || "").trim();
+  if (explicit) return explicit;
+  const home = String(options.orkestrHome || env.ORKESTR_HOME || "").trim();
+  if (!home) return "";
+  try {
+    const raw = await fs.readFile(path.join(home, "secrets", "cli-auth.json"), "utf8");
+    const parsed = JSON.parse(raw);
+    const token = String(parsed?.token || "").trim();
+    if (!token) return "";
+    const expiresAt = Date.parse(String(parsed?.expiresAt || ""));
+    if (Number.isFinite(expiresAt) && expiresAt <= Date.now()) return "";
+    return token;
+  } catch {
+    return "";
+  }
+}
+
+function requestHeaders(target, options, body) {
+  const headers = {
+    ...(body ? { "content-type": "application/json" } : {}),
+    ...options.headers,
+  };
+  if (
+    options.localCliAuthToken &&
+    targetIsLoopback(target) &&
+    !hasHeader(headers, "authorization") &&
+    !hasHeader(headers, "cookie")
+  ) {
+    headers.authorization = `Bearer ${options.localCliAuthToken}`;
+  }
+  return headers;
+}
+
 async function requestJson(target, route, options, deps) {
   const url = new URL(route, `${target.baseUrl}/`).toString();
   const controller = new AbortController();
@@ -166,10 +230,7 @@ async function requestJson(target, route, options, deps) {
     const response = await deps.fetch(url, {
       method: options.method || "GET",
       signal: controller.signal,
-      headers: {
-        ...(body ? { "content-type": "application/json" } : {}),
-        ...options.headers,
-      },
+      headers: requestHeaders(target, options, body),
       body,
     });
     const text = await response.text();
@@ -355,9 +416,10 @@ async function checkThreads(target, options, artifacts, deps) {
 
 async function checkWhatsApp(target, options, artifacts, deps) {
   return runScenario("whatsapp-readiness", target, options, artifacts, async () => {
+    const requiredAccounts = splitList(options.requiredWhatsAppAccounts);
     try {
       const status = await requestJson(target, "/api/connectors/whatsapp/status", options, deps);
-      const readiness = whatsappReadiness(status.payload, options.requiredWhatsAppAccounts);
+      const readiness = whatsappReadiness(status.payload, requiredAccounts);
       if (!readiness.ok) {
         if (readiness.missing.length) throw new Error(`Required WhatsApp accounts are not ready: ${readiness.missing.join(", ")}`);
         throw new Error(`WhatsApp is not ready: ${status.payload?.state || status.payload?.status || "unknown"}`);
@@ -365,10 +427,21 @@ async function checkWhatsApp(target, options, artifacts, deps) {
       return scenarioPass("whatsapp-readiness", {
         state: status.payload?.state || status.payload?.status || null,
         accountCount: Array.isArray(status.payload?.accounts) ? status.payload.accounts.length : 0,
-        requiredAccounts: options.requiredWhatsAppAccounts || [],
+        requiredAccounts,
         readyAccounts: readiness.readyAccounts,
       });
     } catch (error) {
+      if (requiredAccounts.length && authBlockedStatuses.has(Number(error?.status || 0))) {
+        return scenarioFail(
+          "whatsapp-readiness",
+          `Authenticated WhatsApp readiness is required for required accounts: ${requiredAccounts.join(", ")}; /api/connectors/whatsapp/status returned HTTP ${error.status}`,
+          {
+            statusCode: error.status,
+            reason: "auth_required_for_required_whatsapp_accounts",
+            requiredAccounts,
+          },
+        );
+      }
       return scenarioAuthBlocked("whatsapp-readiness", error, options.allowAuthBlocked);
     }
   });
@@ -502,9 +575,11 @@ async function runTarget(target, options, artifacts, deps) {
 export async function runReleaseRegression(options, deps = {}) {
   const effective = {
     ...options,
+    headers: { ...(options.headers || {}) },
     timeoutMs: Math.max(1, Number(options.timeoutMs || 5000) || 5000),
     pollMs: Math.max(100, Number(options.pollMs || 1000) || 1000),
   };
+  effective.localCliAuthToken = await localCliAuthToken(options.env || process.env, effective);
   const artifacts = {
     root: effective.artifactDir,
     fs: deps.fs || fs,

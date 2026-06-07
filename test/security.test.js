@@ -88,6 +88,116 @@ test("public unauthenticated mode requires explicit unsafe override", async () =
   }
 });
 
+test("scoped WhatsApp machine tokens allow only declared bridge capabilities", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-security-wa-scoped-bridge-"));
+  const env = {
+    ORKESTR_HOME: home,
+    ORKESTR_AUTH_REQUIRED: "1",
+    ORKESTR_WHATSAPP_SCOPED_TOKENS_JSON: JSON.stringify([
+      {
+        id: "remote-send",
+        token: "send-token",
+        scopes: ["whatsapp:bridge:send"],
+        principalKind: "external_instance",
+        principalId: "remote-instance",
+        instanceId: "remote-instance",
+      },
+      {
+        id: "remote-read",
+        token: "read-token",
+        scopes: ["whatsapp:bridge:read"],
+        principalKind: "external_user",
+        principalId: "external-user-1",
+      },
+      {
+        id: "remote-manage",
+        token: "manage-token",
+        scopes: ["whatsapp:bridge:manage"],
+        principalKind: "external_instance",
+        principalId: "remote-manager",
+      },
+    ]),
+  };
+
+  const sendAllowed = await authorizeHttpRequest({
+    method: "POST",
+    url: "/api/connectors/whatsapp/bridge/send-text",
+    headers: { authorization: "Bearer send-token" },
+  }, env);
+  const readDenied = await authorizeHttpRequest({
+    method: "GET",
+    url: "/api/connectors/whatsapp/bridge/accounts",
+    headers: { authorization: "Bearer send-token" },
+  }, env);
+  const readAllowed = await authorizeHttpRequest({
+    method: "GET",
+    url: "/api/connectors/whatsapp/bridge/accounts",
+    headers: { authorization: "Bearer read-token" },
+  }, env);
+  const injectDenied = await authorizeHttpRequest({
+    method: "POST",
+    url: "/api/connectors/whatsapp/bridge/inject-message",
+    headers: { authorization: "Bearer send-token" },
+  }, env);
+  const injectAllowed = await authorizeHttpRequest({
+    method: "POST",
+    url: "/api/connectors/whatsapp/bridge/inject-message",
+    headers: { authorization: "Bearer manage-token" },
+  }, env);
+
+  assert.equal(sendAllowed.ok, true);
+  assert.equal(sendAllowed.machineAuth, "whatsapp_bridge");
+  assert.equal(sendAllowed.machineAuthContext.tokenId, "remote-send");
+  assert.equal(sendAllowed.machineAuthContext.instanceId, "remote-instance");
+  assert.deepEqual(sendAllowed.machineAuthContext.scopes, ["whatsapp:bridge:send"]);
+  assert.equal(readDenied.ok, false);
+  assert.equal(readDenied.statusCode, 403);
+  assert.equal(readDenied.error, "wa_token_scope_denied");
+  assert.equal(readDenied.routingFailure.code, "wa_token_scope_denied");
+  assert.equal(readAllowed.ok, true);
+  assert.equal(readAllowed.machineAuthContext.principalKind, "external_user");
+  assert.equal(injectDenied.ok, false);
+  assert.equal(injectDenied.error, "wa_token_scope_denied");
+  assert.equal(injectAllowed.ok, true);
+  assert.equal(injectAllowed.machineAuthContext.tokenId, "remote-manage");
+});
+
+test("scoped WhatsApp inbound tokens are accepted without granting bridge send", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-security-wa-scoped-inbound-"));
+  const env = {
+    ORKESTR_HOME: home,
+    ORKESTR_AUTH_REQUIRED: "1",
+    ORKESTR_WHATSAPP_SCOPED_TOKENS_JSON: JSON.stringify([
+      {
+        id: "remote-inbound",
+        token: "inbound-token",
+        scopes: ["whatsapp:inbound"],
+        principalKind: "external_instance",
+        principalId: "remote-child",
+        instanceId: "remote-child",
+      },
+    ]),
+  };
+
+  const inboundAllowed = await authorizeHttpRequest({
+    method: "POST",
+    url: "/api/connectors/whatsapp/inbound",
+    headers: { authorization: "Bearer inbound-token" },
+  }, env);
+  const bridgeDenied = await authorizeHttpRequest({
+    method: "POST",
+    url: "/api/connectors/whatsapp/bridge/send-text",
+    headers: { authorization: "Bearer inbound-token" },
+  }, env);
+
+  assert.equal(inboundAllowed.ok, true);
+  assert.equal(inboundAllowed.machineAuth, "whatsapp_inbound");
+  assert.equal(inboundAllowed.machineAuthContext.tokenId, "remote-inbound");
+  assert.equal(bridgeDenied.ok, false);
+  assert.equal(bridgeDenied.statusCode, 403);
+  assert.equal(bridgeDenied.error, "wa_token_scope_denied");
+});
+
 test("non-local bind requires pairing by default", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-security-nonlocal-"));
   const prior = saveEnv([
@@ -251,6 +361,51 @@ test("browser pairing protects API routes when auth is required", async () => {
 
     const revokedCookieList = await fetch(`${baseUrl}/api/setup/security/sessions`, { headers: { cookie } });
     assert.equal(revokedCookieList.status, 401);
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+    restoreEnv(prior);
+  }
+});
+
+test("CLI machine auth can read full setup status when pairing is required", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-security-cli-setup-"));
+  const token = "cli-setup-token";
+  const prior = saveEnv([
+    "ORKESTR_HOME",
+    "ORKESTR_AUTH_REQUIRED",
+    "ORKESTR_RECOVER_RUNNING_ON_START",
+    "ORKESTR_CODEX_BIN",
+    "CODEX_HOME",
+    "ORKESTR_PUBLIC_HTTPS_URL",
+  ]);
+  process.env.ORKESTR_HOME = home;
+  process.env.ORKESTR_AUTH_REQUIRED = "1";
+  process.env.ORKESTR_RECOVER_RUNNING_ON_START = "0";
+  process.env.ORKESTR_CODEX_BIN = "__orkestr_codex_disabled_on_macos__";
+  process.env.CODEX_HOME = path.join(home, "private-codex-home");
+  process.env.ORKESTR_PUBLIC_HTTPS_URL = "https://orkestr-private.example.test";
+  await fs.mkdir(path.join(home, "secrets"), { recursive: true });
+  await fs.writeFile(path.join(home, "secrets", "cli-auth.json"), JSON.stringify({
+    token,
+    expiresAt: new Date(Date.now() + 60_000).toISOString(),
+  }));
+
+  const server = await startServer({ port: 0, host: "127.0.0.1" });
+  const { port } = server.address();
+  const baseUrl = `http://127.0.0.1:${port}`;
+
+  try {
+    const redacted = await json(await fetch(`${baseUrl}/api/setup/status`));
+    assert.equal(redacted.redacted, true);
+    assert.deepEqual(redacted.connectors, []);
+
+    const full = await json(await fetch(`${baseUrl}/api/setup/status`, {
+      headers: { authorization: `Bearer ${token}` },
+    }));
+    assert.notEqual(full.redacted, true);
+    assert.equal(full.home, home);
+    assert.equal(full.connectors.some((connector) => connector.id === "codex"), true);
+    assert.equal(full.connectors.some((connector) => connector.id === "whatsapp"), true);
   } finally {
     await new Promise((resolve) => server.close(resolve));
     restoreEnv(prior);

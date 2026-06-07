@@ -50,6 +50,62 @@ test("system doctor reports a healthy host when required commands and paths are 
   assert.equal(doctor.paths.home, env.ORKESTR_HOME);
 });
 
+test("system doctor warns when active URL drop-ins mix public and private instances", async () => {
+  const { home, env } = await fakeHost();
+  const dropInDir = path.join(home, "dropins");
+  const publicDropIn = path.join(dropInDir, "70-orkestr-de-public-urls.conf");
+  const privateDropIn = path.join(dropInDir, "71-private-ops-urls.conf");
+  const privatePairingDropIn = path.join(dropInDir, "72-private-pairing-url.conf");
+  await fs.mkdir(dropInDir, { recursive: true });
+  await fs.writeFile(publicDropIn, [
+    "[Service]",
+    "Environment=ORKESTR_PRIMARY_DOMAIN=orkestr.de",
+    "Environment=ORKESTR_APP_HOST=app.orkestr.de",
+    "Environment=ORKESTR_AUTH_HOST=auth.orkestr.de",
+    "Environment=ORKESTR_PUBLIC_APP_URL=https://app.orkestr.de",
+    "Environment=ORKESTR_AUTH_URL=https://auth.orkestr.de",
+    "",
+  ].join("\n"));
+  await fs.writeFile(privateDropIn, [
+    "[Service]",
+    "Environment=ORKESTR_PRIMARY_DOMAIN=ops.oguzcanunver.com",
+    "Environment=ORKESTR_APP_HOST=orkestr.app.ops.oguzcanunver.com",
+    "Environment=ORKESTR_AUTH_HOST=auth.ops.oguzcanunver.com",
+    "Environment=ORKESTR_PUBLIC_SITE_URL=https://orkestr.de",
+    "Environment=ORKESTR_PUBLIC_APP_URL=https://orkestr.app.ops.oguzcanunver.com",
+    "Environment=ORKESTR_AUTH_URL=https://auth.ops.oguzcanunver.com",
+    "",
+  ].join("\n"));
+  await fs.writeFile(privatePairingDropIn, [
+    "[Service]",
+    "Environment=ORKESTR_PAIRING_URL=https://orkestr.app.ops.oguzcanunver.com/setup/pairing",
+    "",
+  ].join("\n"));
+
+  const doctor = await systemDoctor({
+    env: {
+      ...env,
+      ORKESTR_SYSTEMD_DROPIN_PATHS: `${publicDropIn} ${privateDropIn} ${privatePairingDropIn}`,
+      ORKESTR_PRIMARY_DOMAIN: "ops.oguzcanunver.com",
+      ORKESTR_APP_HOST: "orkestr.app.ops.oguzcanunver.com",
+      ORKESTR_AUTH_HOST: "auth.ops.oguzcanunver.com",
+      ORKESTR_PUBLIC_SITE_URL: "https://orkestr.de",
+      ORKESTR_PUBLIC_APP_URL: "https://orkestr.app.ops.oguzcanunver.com",
+      ORKESTR_AUTH_URL: "https://auth.ops.oguzcanunver.com",
+    },
+    home,
+  });
+  const effective = doctor.checks.find((check) => check.id === "public_url_identity");
+  const dropIns = doctor.checks.find((check) => check.id === "public_url_dropins");
+
+  assert.equal(effective?.status, "ok");
+  assert.equal(dropIns?.status, "warning");
+  assert.deepEqual((dropIns?.roots || []).map((root) => root.root), ["ops.oguzcanunver.com", "orkestr.de"]);
+  assert.match(dropIns?.summary || "", /orkestr\.de/);
+  assert.match(dropIns?.summary || "", /ops\.oguzcanunver\.com/);
+  assert.ok(doctor.issues.some((issue) => issue.code === "public_url_dropins"));
+});
+
 test("system doctor reports missing required host tools as errors", async () => {
   const { home, env } = await fakeHost({ omit: ["tmux"] });
   const doctor = await systemDoctor({ env, home });

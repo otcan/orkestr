@@ -18,8 +18,10 @@ import { cleanupLocalWhatsAppChromeLocks, clearLocalWhatsAppChatTypingState, cre
 import { routedWhatsAppTypingTarget, runWithRoutedWhatsAppTyping } from "../packages/connectors/src/whatsapp-router-typing.js";
 import { createAndBindWhatsAppThreadGroup } from "../packages/connectors/src/whatsapp-thread-groups.js";
 import { prepareWhatsAppTableAttachments } from "../packages/connectors/src/whatsapp-table-attachments.js";
-import { mergeWhatsAppOutboundIntents, mergeWhatsAppOutboundMirrorCursors } from "../packages/connectors/src/whatsapp-outbound-intents.js";
+import { canRecoverLiveWhatsAppOutboundIntent, mergeWhatsAppOutboundIntents, mergeWhatsAppOutboundMirrorCursors } from "../packages/connectors/src/whatsapp-outbound-intents.js";
 import { formatWhatsAppQueueNotice } from "../packages/connectors/src/whatsapp-outbound-mirror.js";
+import { routerUpdateWhatsAppDeliveryTarget } from "../packages/connectors/src/whatsapp-router-updates.js";
+import { upsertWhatsAppConnectorAccount } from "../packages/connectors/src/whatsapp-account-registry.js";
 import { writeConnectorConfig } from "../packages/storage/src/config.js";
 import { dataPaths, userDataPaths } from "../packages/storage/src/paths.js";
 import { listEvents } from "../packages/storage/src/store.js";
@@ -32,6 +34,10 @@ test("whatsapp outbound intent state merge is monotonic", () => {
   const cursors = mergeWhatsAppOutboundMirrorCursors(
     [{ messageSetKey: "thread||one", cursor: 42, updatedAt: "2026-06-02T12:00:00.000Z" }],
     [{ messageSetKey: "thread||one", cursor: 12, updatedAt: "2026-06-02T13:00:00.000Z" }],
+  );
+  const unchangedCursors = mergeWhatsAppOutboundMirrorCursors(
+    [{ messageSetKey: "thread||one", cursor: 42, updatedAt: "2026-06-02T12:00:00.000Z" }],
+    [{ messageSetKey: "thread||one", cursor: 42, updatedAt: "2026-06-02T13:00:00.000Z" }],
   );
   const intents = mergeWhatsAppOutboundIntents(
     [{
@@ -47,9 +53,25 @@ test("whatsapp outbound intent state merge is monotonic", () => {
       updatedAt: "2026-06-02T13:00:00.000Z",
     }],
   );
+  const skippedIntents = mergeWhatsAppOutboundIntents(
+    [{
+      intentId: "intent-2",
+      status: "pending",
+      messageId: "message-2",
+      updatedAt: "2026-06-02T12:00:00.000Z",
+    }],
+    [{
+      intentId: "intent-2",
+      status: "skipped",
+      messageId: "message-2",
+      updatedAt: "2026-06-02T13:00:00.000Z",
+    }],
+  );
 
   assert.equal(cursors[0].cursor, 42);
+  assert.equal(unchangedCursors[0].updatedAt, "2026-06-02T12:00:00.000Z");
   assert.equal(intents[0].status, "delivered");
+  assert.equal(skippedIntents[0].status, "skipped");
 });
 
 function response(payload, ok = true, status = 200) {
@@ -60,6 +82,20 @@ function response(payload, ok = true, status = 200) {
       return payload;
     },
   };
+}
+
+async function waitForWatcherAlerts(home, attempts = 25) {
+  const file = dataPaths({ ORKESTR_HOME: home }).watcherAlerts;
+  for (let index = 0; index < attempts; index += 1) {
+    try {
+      const payload = JSON.parse(await fs.readFile(file, "utf8"));
+      if (Array.isArray(payload.alerts) && payload.alerts.length) return payload.alerts;
+    } catch {
+      // The watcher writes asynchronously after the response is returned.
+    }
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  return [];
 }
 
 function binaryResponse(body, headers = {}, status = 200) {
@@ -435,6 +471,38 @@ test("local whatsapp bridge supports configured account ids", async () => {
   assert.deepEqual(status.accounts.map((account) => account.label), ["main", "secondary"]);
 });
 
+test("local whatsapp send resolves the legacy responder role to the default local account", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-responder-alias-"));
+  const env = {
+    ORKESTR_HOME: home,
+    ORKESTR_WHATSAPP_SEND_CONFIRMATION_REQUIRED: "0",
+  };
+  const sent = [];
+  const runtime = {
+    client: {
+      async sendMessage(chatId, text) {
+        sent.push({ chatId, text });
+        return { id: { _serialized: `true_${chatId}_alias` } };
+      },
+    },
+  };
+
+  try {
+    setLocalWhatsAppRuntimeForTest("account-1", runtime, {}, env);
+    const result = await sendLocalWhatsAppMessage({
+      accountId: "responder",
+      chatId: "chat-responder-alias@g.us",
+      text: "hello",
+      env,
+    });
+
+    assert.equal(result.accountId, "account-1");
+    assert.deepEqual(sent, [{ chatId: "chat-responder-alias@g.us", text: "hello" }]);
+  } finally {
+    await resetLocalWhatsAppBridgeForTest(env);
+  }
+});
+
 test("local whatsapp inbound forwarding posts mapped chats", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-forward-"));
   const env = {
@@ -561,11 +629,39 @@ test("local whatsapp bridge maps public account ids to existing LocalAuth client
     ORKESTR_WHATSAPP_ACCOUNT_SESSION_ROOTS: "main:/state/main,secondary:/state/secondary",
   };
 
+  const bridgeStatus = await getLocalWhatsAppBridgeStatus(env);
   const status = await getWhatsAppStatus(env);
 
+  assert.deepEqual(bridgeStatus.accounts.map((account) => account.accountId), ["main", "secondary"]);
+  assert.deepEqual(bridgeStatus.accounts.map((account) => account.clientId), ["codex-whatsapp", "codex-whatsapp-secondary"]);
+  assert.deepEqual(bridgeStatus.accounts.map((account) => account.sessionRoot), ["/state/main", "/state/secondary"]);
   assert.deepEqual(status.accounts.map((account) => account.accountId), ["main", "secondary"]);
-  assert.deepEqual(status.accounts.map((account) => account.clientId), ["codex-whatsapp", "codex-whatsapp-secondary"]);
-  assert.deepEqual(status.accounts.map((account) => account.sessionRoot), ["/state/main", "/state/secondary"]);
+  assert.deepEqual(status.accounts.map((account) => account.clientId), [undefined, undefined]);
+  assert.deepEqual(status.accounts.map((account) => account.sessionRoot), [undefined, undefined]);
+  assert.doesNotMatch(JSON.stringify(status.health.accounts), /clientId|sessionRoot/);
+});
+
+test("local whatsapp bridge accepts persisted connector accounts without exposing session paths in public status", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-user-owned-account-"));
+  const env = { ORKESTR_HOME: home };
+  await upsertWhatsAppConnectorAccount({
+    accountId: "alice-wa",
+    ownerUserId: "alice",
+    displayName: "Alice WhatsApp",
+  }, env);
+
+  const status = await getWhatsAppStatus(env);
+  const aliceAccount = status.accounts.find((account) => account.accountId === "alice-wa");
+
+  assert.ok(aliceAccount, JSON.stringify(status.accounts));
+  assert.deepEqual(status.accounts.map((account) => account.accountId), ["account-1", "account-2", "alice-wa"]);
+  assert.equal(Object.hasOwn(aliceAccount, "sessionRoot"), false);
+  assert.equal(Object.hasOwn(aliceAccount, "clientId"), false);
+  assert.doesNotMatch(JSON.stringify(status.health.accounts), /sessionRoot|clientId/);
+  await assert.rejects(
+    () => startLocalWhatsAppAccount("alice-wa", env, { phoneNumber: "+++" }),
+    /whatsapp_pairing_phone_number_invalid/,
+  );
 });
 
 test("local whatsapp web cache lives under orkestr home", async () => {
@@ -922,6 +1018,53 @@ test("local whatsapp inbound ignores recent outbound attachment echoes", async (
   }
 });
 
+test("local whatsapp inbound ignores outbound text echoed through another local account", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-cross-account-echo-"));
+  const env = {
+    ORKESTR_HOME: home,
+    ORKESTR_WHATSAPP_ACCOUNT_IDS: "sender,responder",
+    ORKESTR_WHATSAPP_SEND_CONFIRMATION_REQUIRED: "0",
+  };
+  const chatId = "chat-cross-account-echo@g.us";
+  const text = "The push is done. I’ll check that the workspace is clean.\n\ndbg: m:gpt-5.5/xh";
+  const sent = [];
+  const responderRuntime = {
+    client: {
+      async sendMessage(to, body) {
+        sent.push({ to, body });
+        return { id: { _serialized: `true_${chatId}_responder-outbound` } };
+      },
+    },
+  };
+
+  try {
+    setLocalWhatsAppRuntimeForTest("responder", responderRuntime, {}, env);
+    await sendLocalWhatsAppMessage({
+      accountId: "responder",
+      chatId,
+      text,
+      env,
+    });
+
+    const result = await handleInboundMessage("sender", {
+      id: { _serialized: `false_${chatId}_sender-observed-responder`, remote: chatId },
+      from: chatId,
+      to: "sender@c.us",
+      author: "responder@lid",
+      fromMe: false,
+      body: text,
+      timestamp: 1_780_000_000,
+    }, env);
+
+    assert.equal(sent.length, 1);
+    assert.equal(sent[0].to, chatId);
+    assert.equal(result.skipped, "outbound_echo_cross_account_text");
+    assert.equal(result.chatId, chatId);
+  } finally {
+    await resetLocalWhatsAppBridgeForTest(env);
+  }
+});
+
 test("local whatsapp message route fields keep own group echoes on the group chat", () => {
   assert.deepEqual(
     localWhatsAppMessageRouteFields({
@@ -967,8 +1110,8 @@ test("local whatsapp known chats include stored thread bindings while bridge is 
   const account2 = await listLocalWhatsAppChats("account-2", env);
 
   assert.equal(account1.ready, false);
-  assert.deepEqual(account1.chats.map((chat) => chat.name), ["Known Group", "Legacy Group"]);
-  assert.deepEqual(account2.chats.map((chat) => chat.name), ["Legacy Group"]);
+  assert.deepEqual(account1.chats.map((chat) => chat.name), ["Known Group"]);
+  assert.deepEqual(account2.chats.map((chat) => chat.name), []);
 });
 
 test("local whatsapp known chats honor configured responder account ids", async () => {
@@ -1113,6 +1256,76 @@ test("local whatsapp phone pairing accepts configured account ids", async () => 
     startLocalWhatsAppAccount("secondary", { ORKESTR_HOME: home, ORKESTR_WHATSAPP_ACCOUNT_IDS: "main,secondary" }, { phoneNumber: "+++" }),
     /whatsapp_pairing_phone_number_invalid/,
   );
+});
+
+test("local whatsapp phone pairing replaces an existing qr runtime", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-phone-replaces-qr-runtime-"));
+  const env = { ORKESTR_HOME: home, ORKESTR_WHATSAPP_ACCOUNT_IDS: "sender" };
+  const calls = [];
+  const existingRuntime = {
+    clearAuthReadyTimer() {
+      calls.push("clear-auth-timer");
+    },
+    clearPairingCodeUnhandledRejectionHandler() {
+      calls.push("clear-pairing-handler");
+    },
+    client: {
+      async destroy() {
+        calls.push("destroy-existing");
+      },
+    },
+  };
+
+  class LocalAuth {
+    constructor(options) {
+      calls.push(["local-auth", options.clientId, options.dataPath]);
+    }
+  }
+
+  class Client {
+    constructor(options) {
+      calls.push(["client", options.pairWithPhoneNumber?.phoneNumber]);
+    }
+
+    on(event) {
+      calls.push(["on", event]);
+      return this;
+    }
+
+    initialize() {
+      calls.push("initialize");
+      return Promise.resolve();
+    }
+
+    async destroy() {
+      calls.push("destroy-new");
+    }
+  }
+
+  try {
+    setLocalWhatsAppRuntimeForTest("sender", existingRuntime, {
+      state: "qr_needed",
+      ready: false,
+      authenticated: false,
+      started: true,
+      qrAvailable: true,
+    }, env);
+    const result = await startLocalWhatsAppAccount("sender", env, {
+      phoneNumber: "+4917632400662",
+      loadBridgeDependencies: async () => ({
+        whatsapp: { Client, LocalAuth },
+        qrcode: {},
+      }),
+    });
+
+    assert.equal(calls.includes("destroy-existing"), true);
+    assert.deepEqual(calls.find((call) => Array.isArray(call) && call[0] === "client"), ["client", "4917632400662"]);
+    assert.equal(result.state, "starting");
+    const events = await listEvents(env);
+    assert.ok(events.find((event) => event.type === "whatsapp_local_pairing_runtime_replaced"));
+  } finally {
+    await resetLocalWhatsAppBridgeForTest(env);
+  }
 });
 
 test("local whatsapp status keeps authenticated sessions in a partial setup state", async () => {
@@ -1572,6 +1785,52 @@ test("whatsapp inbound events route to configured agent and dedupe by event id",
   assert.equal(messages[0].attachments[0].kind, "image");
 });
 
+test("whatsapp inbound strips pasted debug footers before storing messages", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-inbound-debug-footer-"));
+  const env = externalBridgeEnv(home);
+  await writeConnectorConfig("whatsapp", { routes: { "chat-debug-inbound": "agent-debug-inbound" } }, env);
+
+  await routeWhatsAppInbound({
+    eventId: "wa-debug-inbound-1",
+    chatId: "chat-debug-inbound",
+    from: "sender-1",
+    text: "There are already unrelated local changes.\n\ndbg: m:gpt-5.5/xh · msg:update · q:4 · load:42% · api:95% · help:/help",
+  }, env);
+  const messages = await listAgentMessages("agent-debug-inbound", env);
+
+  assert.equal(messages.length, 1);
+  assert.equal(messages[0].text, "There are already unrelated local changes.");
+  assert.doesNotMatch(messages[0].text, /dbg:/);
+});
+
+test("whatsapp inbound ignores generated queue notices", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-inbound-generated-notice-"));
+  const env = externalBridgeEnv(home);
+  await writeConnectorConfig("whatsapp", { routes: { "chat-generated-notice": "agent-generated-notice" } }, env);
+
+  const routed = await routeWhatsAppInbound({
+    eventId: "wa-generated-notice-1",
+    chatId: "chat-generated-notice",
+    from: "sender-1",
+    text: 'Queued your message while Orkestr prepares this thread: "Queued for the next Codex turn: "Focused tests passed. I’m restarting the active Orkestr UI service so the deployed `...".',
+  }, env);
+  const duplicate = await routeWhatsAppInbound({
+    eventId: "wa-generated-notice-1",
+    chatId: "chat-generated-notice",
+    from: "sender-1",
+    text: "retry should be deduped",
+  }, env);
+  const messages = await listAgentMessages("agent-generated-notice", env);
+  const events = await listEvents(env);
+
+  assert.equal(routed.skipped, true);
+  assert.equal(routed.ignoredGeneratedQueueNotice, true);
+  assert.equal(routed.event.ignoredReason, "generated_queue_notice");
+  assert.equal(duplicate.duplicate, true);
+  assert.equal(messages.length, 0);
+  assert.equal(events.some((event) => event.type === "whatsapp_generated_queue_notice_ignored"), true);
+});
+
 test("whatsapp inbound endpoint accepts direct agent target", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-api-"));
   const priorHome = process.env.ORKESTR_HOME;
@@ -1648,6 +1907,282 @@ test("whatsapp inbound endpoint accepts inbound token when browser pairing is re
     else process.env.ORKESTR_AUTH_REQUIRED = priorAuth;
     if (priorInboundToken === undefined) delete process.env.ORKESTR_WHATSAPP_INBOUND_TOKEN;
     else process.env.ORKESTR_WHATSAPP_INBOUND_TOKEN = priorInboundToken;
+  }
+});
+
+test("whatsapp bridge scoped tokens cannot enumerate or control other account chats", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-bridge-scoped-account-"));
+  const priorHome = process.env.ORKESTR_HOME;
+  const priorAuth = process.env.ORKESTR_AUTH_REQUIRED;
+  const priorScopedTokens = process.env.ORKESTR_WHATSAPP_SCOPED_TOKENS_JSON;
+  const priorAccountIds = process.env.ORKESTR_WHATSAPP_ACCOUNT_IDS;
+  const priorAutostart = process.env.ORKESTR_WHATSAPP_AUTOSTART;
+  const priorLocalAutostart = process.env.WHATSAPP_LOCAL_AUTOSTART;
+  process.env.ORKESTR_HOME = home;
+  process.env.ORKESTR_AUTH_REQUIRED = "1";
+  process.env.ORKESTR_WHATSAPP_ACCOUNT_IDS = "acct-a acct-b";
+  process.env.ORKESTR_WHATSAPP_AUTOSTART = "0";
+  process.env.WHATSAPP_LOCAL_AUTOSTART = "0";
+  process.env.ORKESTR_WHATSAPP_SCOPED_TOKENS_JSON = JSON.stringify([
+    {
+      id: "acct-a-read",
+      token: "acct-a-read-token",
+      scopes: ["whatsapp:bridge:read"],
+      accountId: "acct-a",
+      principalKind: "external_instance",
+      principalId: "remote-a",
+    },
+    {
+      id: "chat-a-read",
+      token: "chat-a-read-token",
+      scopes: ["whatsapp:bridge:read"],
+      accountId: "acct-a",
+      chatId: "chat-a@g.us",
+      principalKind: "external_instance",
+      principalId: "remote-chat-a",
+    },
+  ]);
+  const server = await startServer({ port: 0, host: "127.0.0.1" });
+  const { port } = server.address();
+  const baseUrl = `http://127.0.0.1:${port}`;
+  try {
+    const accountsResponse = await fetch(`${baseUrl}/api/connectors/whatsapp/bridge/accounts`, {
+      headers: { authorization: "Bearer acct-a-read-token" },
+    });
+    const accounts = await accountsResponse.json();
+    const allowedChatsResponse = await fetch(`${baseUrl}/api/connectors/whatsapp/bridge/accounts/acct-a/chats`, {
+      headers: { authorization: "Bearer acct-a-read-token" },
+    });
+    const allowedChats = await allowedChatsResponse.json();
+    const deniedOtherAccount = await fetch(`${baseUrl}/api/connectors/whatsapp/bridge/accounts/acct-b/chats`, {
+      headers: { authorization: "Bearer acct-a-read-token" },
+    });
+    const deniedOtherPayload = await deniedOtherAccount.json();
+    const deniedChatScopedList = await fetch(`${baseUrl}/api/connectors/whatsapp/bridge/accounts/acct-a/chats`, {
+      headers: { authorization: "Bearer chat-a-read-token" },
+    });
+    const deniedChatPayload = await deniedChatScopedList.json();
+
+    assert.equal(accountsResponse.status, 200);
+    assert.deepEqual(accounts.accounts.map((account) => account.accountId), ["acct-a"]);
+    assert.equal(allowedChatsResponse.status, 200);
+    assert.equal(allowedChats.accountId, "acct-a");
+    assert.equal(deniedOtherAccount.status, 403);
+    assert.equal(deniedOtherPayload.error, "wa_acl_denied");
+    assert.equal(deniedChatScopedList.status, 403);
+    assert.equal(deniedChatPayload.error, "wa_acl_denied");
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+    await resetLocalWhatsAppBridgeForTest(process.env);
+    if (priorHome === undefined) delete process.env.ORKESTR_HOME;
+    else process.env.ORKESTR_HOME = priorHome;
+    if (priorAuth === undefined) delete process.env.ORKESTR_AUTH_REQUIRED;
+    else process.env.ORKESTR_AUTH_REQUIRED = priorAuth;
+    if (priorScopedTokens === undefined) delete process.env.ORKESTR_WHATSAPP_SCOPED_TOKENS_JSON;
+    else process.env.ORKESTR_WHATSAPP_SCOPED_TOKENS_JSON = priorScopedTokens;
+    if (priorAccountIds === undefined) delete process.env.ORKESTR_WHATSAPP_ACCOUNT_IDS;
+    else process.env.ORKESTR_WHATSAPP_ACCOUNT_IDS = priorAccountIds;
+    if (priorAutostart === undefined) delete process.env.ORKESTR_WHATSAPP_AUTOSTART;
+    else process.env.ORKESTR_WHATSAPP_AUTOSTART = priorAutostart;
+    if (priorLocalAutostart === undefined) delete process.env.WHATSAPP_LOCAL_AUTOSTART;
+    else process.env.WHATSAPP_LOCAL_AUTOSTART = priorLocalAutostart;
+  }
+});
+
+test("whatsapp doctor skips optional idle accounts in global health", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-doctor-optional-account-"));
+  const prior = Object.fromEntries([
+    "ORKESTR_HOME",
+    "ORKESTR_AUTH_REQUIRED",
+    "ORKESTR_PUBLIC_HTTPS_URL",
+    "ORKESTR_WHATSAPP_ACCOUNT_IDS",
+    "ORKESTR_WHATSAPP_AUTOSTART",
+    "WHATSAPP_LOCAL_AUTOSTART",
+    "ORKESTR_WHATSAPP_AUTOSTART_ACCOUNT_IDS",
+    "ORKESTR_WHATSAPP_DEFAULT_RESPONDER_ACCOUNT_ID",
+    "ORKESTR_CODEX_BIN",
+    "ORKESTR_RECOVER_RUNNING_ON_START",
+  ].map((key) => [key, process.env[key]]));
+  process.env.ORKESTR_HOME = home;
+  delete process.env.ORKESTR_AUTH_REQUIRED;
+  delete process.env.ORKESTR_PUBLIC_HTTPS_URL;
+  process.env.ORKESTR_WHATSAPP_ACCOUNT_IDS = "sender,responder";
+  process.env.ORKESTR_WHATSAPP_AUTOSTART = "0";
+  process.env.WHATSAPP_LOCAL_AUTOSTART = "0";
+  process.env.ORKESTR_WHATSAPP_AUTOSTART_ACCOUNT_IDS = "responder";
+  process.env.ORKESTR_WHATSAPP_DEFAULT_RESPONDER_ACCOUNT_ID = "responder";
+  process.env.ORKESTR_CODEX_BIN = "__orkestr_codex_disabled_for_test__";
+  process.env.ORKESTR_RECOVER_RUNNING_ON_START = "0";
+
+  await createThread({
+    id: "doctor-ready-thread",
+    name: "Doctor Ready",
+    binding: {
+      connector: "whatsapp",
+      chatId: "doctor-ready@g.us",
+      senderAccountId: "sender",
+      responderAccountId: "responder",
+      outboundAccountId: "responder",
+    },
+  }, process.env);
+  const server = await startServer({ port: 0, host: "127.0.0.1" });
+  const { port } = server.address();
+  const baseUrl = `http://127.0.0.1:${port}`;
+  const distBridge = await import("../dist/server/packages/connectors/src/whatsapp-local-bridge.js");
+  distBridge.setLocalWhatsAppRuntimeForTest("responder", {
+    client: {
+      info: { wid: { _serialized: "responder@c.us" } },
+    },
+  }, { ready: true }, process.env);
+
+  try {
+    const globalResponse = await fetch(`${baseUrl}/api/connectors/whatsapp/doctor`);
+    const globalPayload = await globalResponse.json();
+    const senderResponse = await fetch(`${baseUrl}/api/connectors/whatsapp/doctor?account=sender`);
+    const senderPayload = await senderResponse.json();
+
+    assert.equal(globalResponse.status, 200);
+    assert.equal(globalPayload.ok, true);
+    assert.equal(globalPayload.status, "ok");
+    assert.equal(globalPayload.checks.find((check) => check.type === "account" && check.id === "sender")?.skipped, true);
+    assert.equal(globalPayload.checks.find((check) => check.type === "account" && check.id === "sender")?.reason, "account_not_required");
+    assert.equal(senderResponse.status, 200);
+    assert.equal(senderPayload.ok, false);
+    assert.equal(senderPayload.checks.find((check) => check.type === "account" && check.id === "sender")?.reason, "account_not_ready");
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+    await distBridge.resetLocalWhatsAppBridgeForTest(process.env);
+    for (const [key, value] of Object.entries(prior)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
+});
+
+test("whatsapp bridge injection ignores cross-account outbound text echoes", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-bridge-inject-echo-"));
+  const priorHome = process.env.ORKESTR_HOME;
+  const priorAuth = process.env.ORKESTR_AUTH_REQUIRED;
+  const priorBridgeToken = process.env.ORKESTR_WHATSAPP_BRIDGE_TOKEN;
+  const priorAccountIds = process.env.ORKESTR_WHATSAPP_ACCOUNT_IDS;
+  const priorConfirmation = process.env.ORKESTR_WHATSAPP_SEND_CONFIRMATION_REQUIRED;
+  process.env.ORKESTR_HOME = home;
+  process.env.ORKESTR_AUTH_REQUIRED = "1";
+  process.env.ORKESTR_WHATSAPP_BRIDGE_TOKEN = "bridge-e2e-secret";
+  process.env.ORKESTR_WHATSAPP_ACCOUNT_IDS = "sender,responder";
+  process.env.ORKESTR_WHATSAPP_SEND_CONFIRMATION_REQUIRED = "0";
+  const chatId = "chat-bridge-inject-echo@g.us";
+  const text = "The push is done. I’ll check that the workspace is clean.\n\ndbg: m:gpt-5.5/xh";
+  const sent = [];
+  const runtime = {
+    client: {
+      async sendMessage(to, body) {
+        sent.push({ to, body });
+        return { id: { _serialized: `true_${chatId}_bridge-outbound` } };
+      },
+    },
+  };
+  const server = await startServer({ port: 0, host: "127.0.0.1" });
+  const { port } = server.address();
+  const baseUrl = `http://127.0.0.1:${port}`;
+  const distBridge = await import("../dist/server/packages/connectors/src/whatsapp-local-bridge.js");
+  distBridge.setLocalWhatsAppRuntimeForTest("responder", runtime, {}, process.env);
+  try {
+    const sentResponse = await fetch(`${baseUrl}/api/connectors/whatsapp/bridge/send-text`, {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: "Bearer bridge-e2e-secret" },
+      body: JSON.stringify({ accountId: "responder", chatId, text }),
+    });
+    const sentPayload = await sentResponse.json();
+    const injected = await fetch(`${baseUrl}/api/connectors/whatsapp/bridge/inject-message`, {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: "Bearer bridge-e2e-secret" },
+      body: JSON.stringify({
+        accountId: "sender",
+        chatId,
+        from: "responder@lid",
+        eventId: `false_${chatId}_sender-observed-responder`,
+        text,
+      }),
+    });
+    const payload = await injected.json();
+
+    assert.equal(sentResponse.status, 200, JSON.stringify(sentPayload));
+    assert.equal(sentPayload.ok, true);
+    assert.equal(sent.length, 1);
+    assert.equal(injected.status, 202);
+    assert.equal(payload.skipped, "outbound_echo_cross_account_text");
+    assert.equal(payload.chatId, chatId);
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+    await distBridge.resetLocalWhatsAppBridgeForTest(process.env);
+    if (priorHome === undefined) delete process.env.ORKESTR_HOME;
+    else process.env.ORKESTR_HOME = priorHome;
+    if (priorAuth === undefined) delete process.env.ORKESTR_AUTH_REQUIRED;
+    else process.env.ORKESTR_AUTH_REQUIRED = priorAuth;
+    if (priorBridgeToken === undefined) delete process.env.ORKESTR_WHATSAPP_BRIDGE_TOKEN;
+    else process.env.ORKESTR_WHATSAPP_BRIDGE_TOKEN = priorBridgeToken;
+    if (priorAccountIds === undefined) delete process.env.ORKESTR_WHATSAPP_ACCOUNT_IDS;
+    else process.env.ORKESTR_WHATSAPP_ACCOUNT_IDS = priorAccountIds;
+    if (priorConfirmation === undefined) delete process.env.ORKESTR_WHATSAPP_SEND_CONFIRMATION_REQUIRED;
+    else process.env.ORKESTR_WHATSAPP_SEND_CONFIRMATION_REQUIRED = priorConfirmation;
+  }
+});
+
+test("whatsapp inbound route failures record sanitized watcher alerts", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-inbound-watcher-"));
+  const priorHome = process.env.ORKESTR_HOME;
+  const priorAuth = process.env.ORKESTR_AUTH_REQUIRED;
+  const priorWatcherThread = process.env.ORKESTR_WATCHER_THREAD_NAME;
+  const priorWatcherDedupe = process.env.ORKESTR_WATCHER_DEDUPE_MS;
+  process.env.ORKESTR_HOME = home;
+  process.env.ORKESTR_AUTH_REQUIRED = "0";
+  process.env.ORKESTR_WATCHER_THREAD_NAME = "test-inbound-watcher";
+  process.env.ORKESTR_WATCHER_DEDUPE_MS = "0";
+  const server = await startServer({ port: 0, host: "127.0.0.1" });
+  const { port } = server.address();
+  const baseUrl = `http://127.0.0.1:${port}`;
+  try {
+    const failed = await fetch(`${baseUrl}/api/connectors/whatsapp/inbound`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        chatId: "watcher-chat@g.us",
+        accountId: "responder",
+        text: "body token=must-not-render",
+      }),
+    });
+    const payload = await failed.json();
+    const alerts = await waitForWatcherAlerts(home);
+    const watcherThreads = await listThreads({ ORKESTR_HOME: home });
+    const watcher = watcherThreads.find((thread) => thread.name === "test-inbound-watcher");
+    const messages = watcher ? await listThreadMessages(watcher.id, { ORKESTR_HOME: home }) : [];
+
+    assert.equal(failed.status, 400);
+    assert.equal(payload.error, "whatsapp_event_id_required");
+    assert.equal(payload.routingFailure.code, "whatsapp_event_id_required");
+    assert.equal(alerts.length, 1);
+    assert.equal(alerts[0].source, "server.whatsappInbound");
+    assert.equal(alerts[0].code, "whatsapp_event_id_required");
+    assert.equal(alerts[0].details.connector, "whatsapp");
+    assert.equal(alerts[0].details.chatIdPresent, "true");
+    assert.equal(alerts[0].details.eventIdPresent, "false");
+    assert.equal(alerts[0].details.accountId, "responder");
+    assert.equal(messages.length, 1);
+    assert.match(messages[0].text, /\[watcher:error\] server\.whatsappInbound/);
+    assert.match(messages[0].text, /route: POST \/api\/connectors\/whatsapp\/inbound/);
+    assert.doesNotMatch(JSON.stringify(alerts), /must-not-render/);
+    assert.doesNotMatch(messages[0].text, /must-not-render/);
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+    if (priorHome === undefined) delete process.env.ORKESTR_HOME;
+    else process.env.ORKESTR_HOME = priorHome;
+    if (priorAuth === undefined) delete process.env.ORKESTR_AUTH_REQUIRED;
+    else process.env.ORKESTR_AUTH_REQUIRED = priorAuth;
+    if (priorWatcherThread === undefined) delete process.env.ORKESTR_WATCHER_THREAD_NAME;
+    else process.env.ORKESTR_WATCHER_THREAD_NAME = priorWatcherThread;
+    if (priorWatcherDedupe === undefined) delete process.env.ORKESTR_WATCHER_DEDUPE_MS;
+    else process.env.ORKESTR_WATCHER_DEDUPE_MS = priorWatcherDedupe;
   }
 });
 
@@ -2639,12 +3174,11 @@ test("whatsapp delivery mirrors Codex updates and final messages by default", as
     return response({ ok: true, ids: ["sent-final-only"] });
   });
 
-  assert.equal(delivery.delivered.length, 3);
-  assert.deepEqual(delivery.delivered.map((item) => item.deliveryType), ["progress", "progress", "final"]);
-  assert.equal(calls.length, 3);
+  assert.equal(delivery.delivered.length, 2);
+  assert.deepEqual(delivery.delivered.map((item) => item.deliveryType), ["progress", "final"]);
+  assert.equal(calls.length, 2);
   assert.equal(stripDebugFooter(calls[0].body.text), "I am checking the repo now.");
-  assert.equal(stripDebugFooter(calls[1].body.text), "Codex compacted the conversation context.");
-  assert.equal(stripDebugFooter(calls[2].body.text), finalText);
+  assert.equal(stripDebugFooter(calls[1].body.text), finalText);
 });
 
 test("whatsapp delivery mirrors every commentary update before final replies by default", async () => {
@@ -3313,6 +3847,56 @@ test("whatsapp delivery mirrors fresh commentary even when a final answer alread
   assertDebugFooter(calls[1].body.text, { messageType: "final" });
 });
 
+test("whatsapp delivery skips delayed progress overtaken by a final answer", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-overtaken-progress-"));
+  const env = externalBridgeEnv(home, { ORKESTR_WHATSAPP_MIRROR_PROGRESS_UPDATES: "1" });
+  await createThread({ id: "thread-wa-overtaken-progress", name: "WA Overtaken Progress Thread" }, env);
+  await writeConnectorConfig("whatsapp", {
+    bridgeMode: "external",
+    bridgeUrl: "http://wa.local",
+    threadRoutes: { "chat-overtaken-progress": "thread-wa-overtaken-progress" },
+  }, env);
+
+  const routed = await routeWhatsAppInbound({ eventId: "wa-overtaken-progress-1", chatId: "chat-overtaken-progress", text: "status?" }, env);
+  const progressAt = new Date(Date.now() - 45_000).toISOString();
+  const finalAt = new Date(Date.now() - 5_000).toISOString();
+  const progress = await appendThreadMessage("thread-wa-overtaken-progress", {
+    role: "assistant",
+    source: "codex-rollout",
+    phase: "commentary",
+    state: "completed",
+    text: "Milestone: delayed progress should not be backfilled.",
+    parentMessageId: routed.message.id,
+    connector: "whatsapp",
+    chatId: "chat-overtaken-progress",
+    createdAt: progressAt,
+    timestamp: progressAt,
+  }, env);
+  await appendThreadMessage("thread-wa-overtaken-progress", {
+    role: "assistant",
+    source: "codex-rollout",
+    phase: "final_answer",
+    state: "completed",
+    text: "Final only after delayed progress.",
+    parentMessageId: routed.message.id,
+    connector: "whatsapp",
+    chatId: "chat-overtaken-progress",
+    createdAt: finalAt,
+    timestamp: finalAt,
+  }, env);
+
+  const calls = [];
+  const delivery = await deliverWhatsAppReplies(env, async (url, options) => {
+    calls.push({ url, body: JSON.parse(options.body) });
+    return response({ ok: true, ids: ["sent-overtaken-final"] });
+  });
+
+  assert.equal(delivery.delivered.length, 1);
+  assert.equal(delivery.delivered[0].deliveryType, "final");
+  assert.deepEqual(calls.map((call) => stripDebugFooter(call.body.text)), ["Final only after delayed progress."]);
+  assert.deepEqual(delivery.skipped.find((item) => item.messageId === progress.id)?.reason, "overtaken_by_final");
+});
+
 test("whatsapp delivery mirrors newer progress after an older final was already delivered", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-progress-after-final-"));
   const env = externalBridgeEnv(home, { ORKESTR_WHATSAPP_MIRROR_PROGRESS_UPDATES: "1" });
@@ -3872,6 +4456,170 @@ test("whatsapp delivery records an outbound intent for current WA replies", asyn
   assert.equal(state.outboundMirrorCursors.some((cursor) => cursor.threadId === "thread-wa-intent-current"), true);
 });
 
+test("whatsapp live output recovery keeps recent cursor-passed app-server finals eligible", () => {
+  const parent = {
+    id: "wa-parent-live-recovery",
+    role: "user",
+    source: "whatsapp_inbound",
+    connector: "whatsapp",
+    chatId: "chat-live-recovery",
+    createdAt: new Date(Date.now() - 31 * 60 * 1000).toISOString(),
+  };
+  const message = {
+    id: "wa-final-live-recovery",
+    role: "assistant",
+    source: "codex-app-server",
+    state: "completed",
+    connector: "whatsapp",
+    chatId: "chat-live-recovery",
+    parentMessageId: parent.id,
+    createdAt: new Date(Date.now() - 30 * 60 * 1000).toISOString(),
+    cursor: 42,
+  };
+  const thread = {
+    id: "thread-wa-live-recovery",
+    binding: {
+      connector: "whatsapp",
+      enabled: true,
+      routeEligible: true,
+      mirrorToWhatsApp: true,
+      chatId: "chat-live-recovery",
+    },
+  };
+  const state = {
+    inboundEvents: [{ messageId: parent.id, chatId: "chat-live-recovery" }],
+    outboundMirrorCursors: [{
+      messageSetKey: "thread||thread-wa-live-recovery",
+      kind: "thread",
+      threadId: "thread-wa-live-recovery",
+      cursor: 42,
+    }],
+  };
+
+  assert.equal(canRecoverLiveWhatsAppOutboundIntent({
+    state,
+    messageSetKey: "thread||thread-wa-live-recovery",
+    messageCursor: 42,
+    message,
+    parent,
+    thread,
+    kind: "thread",
+  }), true);
+});
+
+test("whatsapp delivery re-reads pending outbound intents after delivery claim clears", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-pending-intent-cache-"));
+  const env = externalBridgeEnv(home);
+  await createThread({ id: "thread-wa-pending-intent-cache", name: "WA Pending Intent Cache Thread" }, env);
+  await writeConnectorConfig("whatsapp", {
+    bridgeMode: "external",
+    bridgeUrl: "http://wa.local",
+    threadRoutes: { "chat-pending-intent-cache": "thread-wa-pending-intent-cache" },
+  }, env);
+
+  const routed = await routeWhatsAppInbound({ eventId: "wa-pending-intent-cache-1", chatId: "chat-pending-intent-cache", text: "current request" }, env);
+  const reply = await appendThreadMessage("thread-wa-pending-intent-cache", {
+    role: "assistant",
+    source: "codex-rollout",
+    phase: "final_answer",
+    state: "completed",
+    connector: "whatsapp",
+    chatId: "chat-pending-intent-cache",
+    parentMessageId: routed.message.id,
+    text: "claim answer",
+  }, env);
+
+  const first = await deliverWhatsAppReplies(env, async () => {
+    throw new Error("bridge temporarily unavailable");
+  });
+  assert.equal(first.failed.length, 1);
+
+  const state = JSON.parse(await fs.readFile(path.join(home, "whatsapp.json"), "utf8"));
+  const intent = state.outboundIntents.find((item) => item.messageId === reply.id);
+  assert.equal(intent.status, "pending");
+  const claimedAt = new Date().toISOString();
+  const claim = await writeTestDeliveryClaim(home, {
+    accountId: intent.accountId,
+    chatId: intent.chatId,
+    textKey: intent.textKey,
+    claimedAt,
+    expiresAt: new Date(Date.now() + 60_000).toISOString(),
+  });
+
+  const blocked = await deliverWhatsAppReplies(env, async () => {
+    throw new Error("active delivery claim should prevent bridge send");
+  });
+  assert.equal(blocked.delivered.length, 0);
+  assert.equal(blocked.failed.length, 0);
+  assert.deepEqual(blocked.skipped.find((item) => item.messageId === reply.id)?.reason, "delivery_claim_active");
+
+  await fs.unlink(claim.filePath);
+
+  const calls = [];
+  const second = await deliverWhatsAppReplies(env, async (url, options) => {
+    calls.push({ url, body: JSON.parse(options.body) });
+    return response({ ok: true, ids: ["sent-after-claim"] });
+  });
+
+  assert.equal(second.delivered.length, 1);
+  assert.equal(calls.length, 1);
+  assert.equal(stripDebugFooter(calls[0].body.text), "claim answer");
+});
+
+test("whatsapp delivery closes outbound intents when connector outbox is terminal skipped", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-terminal-outbox-intent-"));
+  const env = externalBridgeEnv(home, { ORKESTR_WHATSAPP_DEBUG_FOOTER: "0" });
+  await createThread({ id: "thread-wa-terminal-outbox-intent", name: "WA Terminal Outbox Intent Thread" }, env);
+  await writeConnectorConfig("whatsapp", {
+    bridgeMode: "external",
+    bridgeUrl: "http://wa.local",
+    threadRoutes: { "chat-terminal-outbox-intent": "thread-wa-terminal-outbox-intent" },
+  }, env);
+
+  const routed = await routeWhatsAppInbound({ eventId: "wa-terminal-outbox-intent-1", chatId: "chat-terminal-outbox-intent", text: "current request" }, env);
+  const reply = await appendThreadMessage("thread-wa-terminal-outbox-intent", {
+    role: "assistant",
+    source: "codex-rollout",
+    phase: "final_answer",
+    state: "completed",
+    connector: "whatsapp",
+    chatId: "chat-terminal-outbox-intent",
+    parentMessageId: routed.message.id,
+    text: "terminal answer",
+  }, env);
+
+  const first = await deliverWhatsAppReplies(env, async () => {
+    throw new Error("bridge temporarily unavailable");
+  });
+  assert.equal(first.failed.length, 1);
+
+  const outboxPath = dataPaths(env).connectorOutbox;
+  const outboxStore = JSON.parse(await fs.readFile(outboxPath, "utf8"));
+  const outboxJob = outboxStore.jobs.find((item) => item.sourceMessageId === reply.id);
+  assert.equal(outboxJob.state, "failed_retryable");
+  const skippedAt = new Date().toISOString();
+  outboxJob.state = "skipped";
+  outboxJob.skippedAt = skippedAt;
+  outboxJob.terminalAt = skippedAt;
+  outboxJob.error = "quarantined_stale_recovery_loop";
+  outboxJob.claimedBy = "";
+  outboxJob.claimedAt = "";
+  outboxJob.claimExpiresAt = "";
+  await fs.writeFile(outboxPath, JSON.stringify(outboxStore, null, 2) + "\n");
+
+  const second = await deliverWhatsAppReplies(env, async () => {
+    throw new Error("terminal connector outbox should prevent bridge send");
+  });
+  const state = JSON.parse(await fs.readFile(path.join(home, "whatsapp.json"), "utf8"));
+  const intent = state.outboundIntents.find((item) => item.messageId === reply.id);
+
+  assert.equal(second.delivered.length, 0);
+  assert.equal(second.failed.length, 0);
+  assert.deepEqual(second.skipped.find((item) => item.messageId === reply.id)?.reason, "connector_outbox_skipped");
+  assert.equal(intent.status, "skipped");
+  assert.equal(intent.error, "quarantined_stale_recovery_loop");
+});
+
 test("whatsapp delivery treats skipped outbound intents as terminal", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-intent-skipped-"));
   const env = externalBridgeEnv(home);
@@ -3960,6 +4708,79 @@ test("whatsapp delivery skips runtime interruption notices superseded by newer W
     text: "Still broken! Please check if messages are delivered!!!!",
     createdAt: new Date(baseMs + 2000).toISOString(),
   }, env);
+
+  const delivery = await deliverWhatsAppReplies(env, async () => {
+    throw new Error("superseded runtime notice should not be sent");
+  });
+
+  assert.equal(delivery.delivered.length, 0);
+  assert.deepEqual(delivery.skipped.find((item) => item.messageId === notice.id)?.reason, "superseded_runtime_interruption");
+});
+
+test("whatsapp delivery skips runtime interruption notices superseded by same-turn final answers", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-superseded-runtime-final-"));
+  const env = externalBridgeEnv(home);
+  await createThread({
+    id: "thread-wa-superseded-runtime-final",
+    name: "WA Superseded Runtime Final Thread",
+    binding: {
+      connector: "whatsapp",
+      chatId: "chat-superseded-runtime-final",
+      responderAccountId: "account-1",
+      outboundAccountId: "account-1",
+      mirrorToWhatsApp: true,
+    },
+  }, env);
+  await writeConnectorConfig("whatsapp", {
+    bridgeMode: "external",
+    bridgeUrl: "http://wa.local",
+  }, env);
+  const baseMs = Date.now() - 60_000;
+  const inbound = await appendThreadMessage("thread-wa-superseded-runtime-final", {
+    role: "user",
+    source: "whatsapp_inbound",
+    state: "completed",
+    deliveryState: "delivered",
+    connector: "whatsapp",
+    chatId: "chat-superseded-runtime-final",
+    accountId: "account-1",
+    text: "Status?",
+    createdAt: new Date(baseMs).toISOString(),
+  }, env);
+  const final = await appendThreadMessage("thread-wa-superseded-runtime-final", {
+    role: "assistant",
+    source: "codex-app-server",
+    phase: "final_answer",
+    state: "completed",
+    text: "Actual final answer.",
+    parentMessageId: inbound.id,
+    connector: "whatsapp",
+    chatId: "chat-superseded-runtime-final",
+    accountId: "account-1",
+    createdAt: new Date(baseMs + 1000).toISOString(),
+  }, env);
+  const notice = await appendThreadMessage("thread-wa-superseded-runtime-final", {
+    role: "assistant",
+    source: "orkestr_runtime",
+    phase: "runtime_interrupted",
+    state: "completed",
+    text: "Codex stopped before final answer\n\nOrkestr found a delivered message with no assistant response.",
+    parentMessageId: inbound.id,
+    connector: "whatsapp",
+    chatId: "chat-superseded-runtime-final",
+    accountId: "account-1",
+    createdAt: new Date(baseMs + 2000).toISOString(),
+  }, env);
+  await fs.writeFile(path.join(home, "whatsapp.json"), JSON.stringify({
+    outboundDeliveries: [{
+      deliveryType: "final",
+      messageId: final.id,
+      parentMessageId: inbound.id,
+      chatId: "chat-superseded-runtime-final",
+      accountId: "account-1",
+      deliveredAt: new Date(baseMs + 1500).toISOString(),
+    }],
+  }, null, 2));
 
   const delivery = await deliverWhatsAppReplies(env, async () => {
     throw new Error("superseded runtime notice should not be sent");
@@ -4168,8 +4989,53 @@ test("whatsapp delivery sends allowed local paths as media attachments and does 
   assert.equal(duplicate.delivered.length, 0);
   assert.equal(calls[0].url.pathname, "/send-media");
   assert.deepEqual(calls[0].body.paths, [reportPath]);
+  assert.match(stripDebugFooter(calls[0].body.text), new RegExp(reportPath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
   assert.equal(storedReply.attachments.length, 1);
   assert.match(storedReply.attachments[0].id, /^att_[a-f0-9]{32}$/);
+  assert.equal(storedReply.attachments[0].filename, "report.txt");
+});
+
+test("whatsapp delivery redacts allowed local paths for user-owned chats while sending media", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-user-path-redaction-"));
+  const env = await externalBridgeEnvWithAllowingSanitizer(home, { ORKESTR_ADMIN_USER_ID: "admin" });
+  const paths = dataPaths(env);
+  const uploadDir = path.join(paths.home, "uploads", "thread-wa-user-path-redaction");
+  await fs.mkdir(uploadDir, { recursive: true });
+  const reportPath = path.join(uploadDir, "report.txt");
+  await fs.writeFile(reportPath, "report payload", "utf8");
+  await createThread({ id: "thread-wa-user-path-redaction", ownerUserId: "alice", name: "WA User Path Redaction" }, env);
+  await writeConnectorConfig("whatsapp", {
+    bridgeMode: "external",
+    bridgeUrl: "http://wa.local",
+    threadRoutes: { "chat-user-path-redaction": "thread-wa-user-path-redaction" },
+  }, env);
+
+  const routed = await routeWhatsAppInbound({ eventId: "wa-user-path-redaction-1", chatId: "chat-user-path-redaction", text: "send report" }, env);
+  const reply = await appendThreadMessage("thread-wa-user-path-redaction", {
+    role: "assistant",
+    source: "codex-rollout",
+    phase: "final_answer",
+    state: "completed",
+    text: `Generated report: ${reportPath}`,
+    parentMessageId: routed.message.id,
+    connector: "whatsapp",
+    chatId: "chat-user-path-redaction",
+  }, env);
+
+  const calls = [];
+  const delivery = await deliverWhatsAppReplies(env, async (url, options) => {
+    calls.push({ url, body: JSON.parse(options.body) });
+    return response({ ok: true, ids: ["sent-user-report"] });
+  });
+  const storedReply = (await listThreadMessages("thread-wa-user-path-redaction", env)).find((message) => message.id === reply.id);
+  const visibleText = stripDebugFooter(calls[0].body.text);
+
+  assert.equal(delivery.delivered.length, 1);
+  assert.equal(calls[0].url.pathname, "/send-media");
+  assert.deepEqual(calls[0].body.paths, [reportPath]);
+  assert.doesNotMatch(visibleText, new RegExp(reportPath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+  assert.match(visibleText, /\[local file path omitted]/);
+  assert.equal(storedReply.attachments.length, 1);
   assert.equal(storedReply.attachments[0].filename, "report.txt");
 });
 
@@ -4210,6 +5076,42 @@ test("whatsapp delivery skips forbidden local paths and redacts them from outbou
   assert.equal(calls[0].body.paths, undefined);
   assert.doesNotMatch(calls[0].body.text, new RegExp(secretPath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
   assert.match(calls[0].body.text, /\[local file path omitted]/);
+});
+
+test("whatsapp delivery preserves recovery slash commands in outbound text", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-recovery-slash-command-"));
+  const env = await externalBridgeEnvWithAllowingSanitizer(home, { ORKESTR_ADMIN_USER_ID: "admin" });
+  await createThread({ id: "thread-wa-recovery-slash-command", ownerUserId: "alice", name: "WA Recovery Slash Command" }, env);
+  await writeConnectorConfig("whatsapp", {
+    bridgeMode: "external",
+    bridgeUrl: "http://wa.local",
+    threadRoutes: { "chat-recovery-slash-command": "thread-wa-recovery-slash-command" },
+  }, env);
+
+  const routed = await routeWhatsAppInbound({ eventId: "wa-recovery-slash-command-1", chatId: "chat-recovery-slash-command", text: "status?" }, env);
+  await appendThreadMessage("thread-wa-recovery-slash-command", {
+    role: "assistant",
+    source: "codex-app-server-recovery",
+    phase: "final_answer",
+    state: "completed",
+    text: "If this repeats, reply /safe-reset to save recent Orkestr context and start a fresh Codex session. You can also use /now, /implement, or /help.",
+    parentMessageId: routed.message.id,
+    connector: "whatsapp",
+    chatId: "chat-recovery-slash-command",
+  }, env);
+
+  const calls = [];
+  const delivery = await deliverWhatsAppReplies(env, async (url, options) => {
+    calls.push({ url, body: JSON.parse(options.body) });
+    return response({ ok: true, ids: ["sent-recovery-command"] });
+  });
+  const visibleText = stripDebugFooter(calls[0].body.text);
+
+  assert.equal(delivery.delivered.length, 1);
+  assert.equal(calls[0].url.pathname, "/send-text");
+  assert.match(visibleText, /reply \/safe-reset/);
+  assert.match(visibleText, /\/now, \/implement, or \/help/);
+  assert.doesNotMatch(visibleText, /\[local file path omitted]/);
 });
 
 test("whatsapp table attachment detection ignores fenced code blocks", async () => {
@@ -4555,6 +5457,28 @@ test("whatsapp delivery reports stale-ack recovery exhaustion as manual action",
   assert.equal(delivery.delivered.some((entry) => entry.deliveryType === "delivery_error"), false);
 });
 
+test("whatsapp router update notices strip pasted debug footers from previews", () => {
+  const target = routerUpdateWhatsAppDeliveryTarget({
+    message: {
+      id: "wa-router-update-footer",
+      role: "user",
+      source: "whatsapp_inbound",
+      connector: "whatsapp",
+      chatId: "chat-router-update-footer",
+      text: "please continue\n\ndbg: m:gpt-5.5/xh · msg:update · q:0 · load:25% · api:122% · help:/help",
+      state: "awaiting_ack",
+      deliveryState: "blocked_frozen_runtime",
+    },
+    thread: {},
+    state: {},
+    kind: "thread",
+  });
+
+  assert.equal(target.routerUpdateType, "blocked_frozen_runtime");
+  assert.match(target.text, /Your message is blocked until the pane changes or you request a manual recovery: "please continue"\./);
+  assert.doesNotMatch(target.text, /dbg:/);
+});
+
 test("whatsapp delivery reports mirror-disabled routed inputs once", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-mirror-disabled-notice-"));
   const env = externalBridgeEnv(home);
@@ -4684,6 +5608,30 @@ test("whatsapp queue notices strip pasted debug footers from previews", () => {
 
   assert.equal(notice, 'Queued for the next Codex turn: "Codex compacted the conversation context.".');
   assert.doesNotMatch(notice, /dbg:/);
+});
+
+test("whatsapp queue notices unwrap nested queue notice previews", () => {
+  const notice = formatWhatsAppQueueNotice({
+    text: 'Queued for the next Codex turn: "Queued for the next Codex turn: "Queued your message while Orkestr prepares this thread: "I’m treating this as a release hygiene issue: WA mi...".".".',
+  }, "awaiting_active_turn");
+
+  assert.equal(notice, 'Queued for the next Codex turn: "I’m treating this as a release hygiene issue: WA mi...".');
+});
+
+test("whatsapp queue notices unwrap malformed nested queue notice previews", () => {
+  const notice = formatWhatsAppQueueNotice({
+    text: 'Queued your message while Orkestr prepares this thread: "Queued for the next Codex turn: "Queued for the next Codex turn: "Codex compacted the conversation context.".',
+  }, "awaiting_active_turn");
+
+  assert.equal(notice, 'Queued for the next Codex turn: "Codex compacted the conversation context.".');
+});
+
+test("whatsapp queue notices suppress generated truncated queue previews", () => {
+  const notice = formatWhatsAppQueueNotice({
+    text: 'Queued your message while Orkestr prepares this thread: "Queued for the next Codex turn: "Queued for the next Codex turn: "Queued for the next Codex turn: "Queued for the nex...".',
+  }, "awaiting_active_turn");
+
+  assert.equal(notice, "Queued for the next Codex turn.");
 });
 
 test("whatsapp delivery reports app-server active-turn queue notices", async () => {
@@ -4947,6 +5895,48 @@ test("whatsapp inbound routes through enabled thread bindings", async () => {
   assert.equal(messages[0].accountId, "bound-account");
   assert.equal(messages[0].originSurface, "whatsapp");
   assert.equal(messages[0].originTransport, "whatsapp-local-bridge");
+});
+
+test("whatsapp inbound receive ACL denies scoped tokens outside binding grant", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-binding-receive-acl-"));
+  const env = externalBridgeEnv(home);
+  await createThread({
+    id: "receive-acl-thread",
+    name: "Receive ACL Thread",
+    binding: {
+      connector: "whatsapp",
+      chatId: "chat-receive-acl",
+      displayName: "Receive ACL Chat",
+      enabled: true,
+      outboundAccountId: "bound-account",
+      acl: {
+        receive: { mode: "users", users: ["remote-inbound"] },
+      },
+    },
+  }, env);
+
+  await assert.rejects(
+    () => routeWhatsAppInbound({
+      eventId: "wa-receive-acl-denied",
+      chatId: "chat-receive-acl",
+      accountId: "bound-account",
+      text: "blocked",
+      machineAuthContext: { principalId: "other-remote", chatId: "chat-receive-acl", accountId: "bound-account" },
+    }, env),
+    /wa_acl_denied/,
+  );
+  const routed = await routeWhatsAppInbound({
+    eventId: "wa-receive-acl-allowed",
+    chatId: "chat-receive-acl",
+    accountId: "bound-account",
+    text: "allowed",
+    machineAuthContext: { principalId: "remote-inbound", chatId: "chat-receive-acl", accountId: "bound-account" },
+  }, env);
+  const messages = await listThreadMessages("receive-acl-thread", env);
+
+  assert.equal(routed.threadId, "receive-acl-thread");
+  assert.equal(messages.length, 1);
+  assert.equal(messages[0].text, "allowed");
 });
 
 test("whatsapp /connect google creates a user-scoped workspace oauth link", async () => {

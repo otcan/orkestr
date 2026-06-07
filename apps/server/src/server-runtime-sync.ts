@@ -1,6 +1,7 @@
 import {
   consumeThreadConnectorDeliverySignalCount,
   drainAllPendingThreadInputs,
+  safeResetThreadRuntime,
   syncRuntimeLeases,
 } from "../../../packages/core/src/runtime-leases.js";
 import { markDueTimers } from "../../../packages/core/src/timers.js";
@@ -112,7 +113,11 @@ export function createRuntimeWhatsAppSyncRunner(env = process.env) {
 async function syncRuntimeAndDeliverWhatsApp(env = process.env, options: { forceWhatsapp?: boolean; recoveryCause?: string } = {}) {
   const pendingConnectorDeliveries = consumeThreadConnectorDeliverySignalCount();
   const synced = await syncRuntimeLeases(env);
-  const recovered = await recoverStaleCodexAppServerTurns(env, { noticeCause: options.recoveryCause }).catch((error) => {
+  const recovered = await recoverStaleCodexAppServerTurns(env, {
+    noticeCause: options.recoveryCause,
+    autoSafeResetThread: (threadId: string, context: Record<string, unknown> = {}) =>
+      safeResetThreadRuntime(threadId, { reason: String(context.reason || "stale_turn_auto_safe_reset") }, env),
+  }).catch((error) => {
     reportServerError(env, {
       source: "server.recoverCodexAppServerTurns",
       code: "codex_app_server_recovery_failed",
@@ -188,16 +193,7 @@ export function createWhatsAppDeliveryScheduler(env = process.env) {
       return;
     }
     running = true;
-    syncWhatsAppTypingIndicators(env)
-      .catch((error) => {
-        reportServerError(env, {
-          source: "server.whatsappDeliveryScheduler.typingBefore",
-          code: "whatsapp_typing_sync_failed",
-          message: error?.message || String(error),
-          error,
-        }, { deliverWatcher: false });
-      })
-      .then(() => deliverWhatsAppReplies(env))
+    deliverWhatsAppReplies(env)
       .then(async (result) => {
         await syncWhatsAppTypingIndicators(env).catch((error) => {
           reportServerError(env, {

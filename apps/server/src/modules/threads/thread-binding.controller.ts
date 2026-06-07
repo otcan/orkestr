@@ -57,6 +57,22 @@ function generatedWhatsAppBindingCodexPatch(thread: any, binding: Record<string,
   };
 }
 
+function optionalAccountId(body: Record<string, unknown>, current: Record<string, any>, bodyKeys: string[], currentKeys = bodyKeys): string | null {
+  const receivedAccountField = bodyKeys.some((key) => hasOwn(body, key));
+  if (receivedAccountField) {
+    for (const key of bodyKeys) {
+      const value = optionalBodyString(body, key, "");
+      if (value) return value;
+    }
+    return null;
+  }
+  for (const key of currentKeys) {
+    const value = String(current[key] || "").trim();
+    if (value) return value;
+  }
+  return null;
+}
+
 @Controller("api/threads")
 export class ThreadBindingController {
   constructor(
@@ -88,6 +104,9 @@ export class ThreadBindingController {
       Boolean(remoteBackend || remoteThreadIdValue || current.remoteBackend || current.remoteThreadId || current.remoteRuntimeBackend || current.remoteRuntimeThreadId) ||
       hasOwn(body, "remoteRuntimeEnabled") ||
       hasOwn(body, "remoteMirrorEnabled");
+    const inboundAccountId = optionalAccountId(body, current, ["inboundAccountId", "senderAccountId"]);
+    const responderConnectorAccountId = optionalAccountId(body, current, ["responderConnectorAccountId", "responderAccountId", "outboundAccountId"]);
+    const outboundAccountId = optionalAccountId(body, current, ["outboundAccountId", "responderConnectorAccountId", "responderAccountId"]) || responderConnectorAccountId;
     const binding = {
       ...current,
       connector: optionalBodyString(body, "connector", current.connector || "whatsapp") || "whatsapp",
@@ -100,12 +119,14 @@ export class ThreadBindingController {
       additionalParticipantLabels,
       mirrorToWhatsApp: optionalBodyBoolean(body, "mirrorToWhatsApp", current.mirrorToWhatsApp !== false),
       replyPrefix: optionalBodyString(body, "replyPrefix", current.replyPrefix || defaultWhatsAppReplyPrefix()) || defaultWhatsAppReplyPrefix(),
-      senderAccountId: optionalBodyString(body, "senderAccountId", current.senderAccountId || "") || null,
-      responderAccountId: optionalBodyString(body, "responderAccountId", current.responderAccountId || current.outboundAccountId || "") || null,
+      inboundAccountId,
+      senderAccountId: inboundAccountId,
+      responderConnectorAccountId,
+      responderAccountId: responderConnectorAccountId,
       senderContactId: optionalBodyString(body, "senderContactId", current.senderContactId || "") || null,
       responderContactId: optionalBodyString(body, "responderContactId", current.responderContactId || "") || null,
       generated: optionalBodyBoolean(body, "generated", current.generated === true),
-      outboundAccountId: optionalBodyString(body, "outboundAccountId", current.outboundAccountId || "") || null,
+      outboundAccountId,
       ownerAuthorTags: optionalBodyStringArray(body, "ownerAuthorTags", current.ownerAuthorTags || []),
       trustedOverrideAuthorTags: optionalBodyStringArray(body, "trustedOverrideAuthorTags", current.trustedOverrideAuthorTags || []),
       ...(hasRemoteRuntimeBinding ? {

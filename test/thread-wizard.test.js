@@ -71,15 +71,15 @@ test("main UI exposes a guided first thread generation flow", async () => {
   assert.ok(sources.includes("browser_pairing_required"));
   assert.ok(sources.includes("enterPairingRequired"));
   assert.ok(sources.includes("(paired)=\"handleBrowserPaired()\""));
-  assert.ok(sources.includes("Connect sender"));
-  assert.ok(sources.includes("Connect Orkestr account"));
+  assert.ok(sources.includes("Connect inbound account"));
+  assert.ok(sources.includes("Connect reply account"));
   assert.ok(sources.includes("connectedWhatsAppAccounts()"));
   assert.ok(sources.includes("redirectThreadSettingsToWhatsAppSetupIfNeeded"));
   assert.ok(sources.includes('this.openSetup("whatsapp", true)'));
   assert.ok(sources.includes("Connect WhatsApp in setup"));
   assert.ok(sources.includes("Create and connect chat"));
   assert.ok(sources.includes("Existing chats are not selected here."));
-  assert.ok(sources.includes("Linked sender account"));
+  assert.ok(sources.includes("Linked inbound account"));
   assert.ok(sources.includes("Additional participants are off."));
   assert.ok(sources.includes("Allow messages from additional chat participants"));
   assert.ok(sources.includes("Allowed participants"));
@@ -187,10 +187,12 @@ test("web UI exposes browser terminal attach for app-server threads", async () =
 
   assert.ok(sources.includes("embeddedRawTerminalAvailable"));
   assert.ok(!webSources.includes("nativeTerminalAttachAvailable"));
-  assert.ok(sources.includes("ensureAppServerAttachPane"));
-  assert.ok(sources.includes("browserAttachSessionName"));
-  assert.ok(sources.includes("codex-browser-attach"));
-  assert.ok(sources.includes("killTmuxSession(sessionName)"));
+  assert.ok(sources.includes("takeoverRaw"));
+  assert.ok(sources.includes("takeoverAvailable"));
+  assert.ok(sources.includes("raw-watch"));
+  assert.ok(serverSources.includes("handleRawTakeoverPrompt"));
+  assert.ok(!serverSources.includes("ensureAppServerAttachPane"));
+  assert.ok(!serverSources.includes("codex-browser-attach"));
   assert.ok(serverSources.includes("RAW_ESCAPE_KEY_MAP"));
   assert.ok(serverSources.includes("\"\\x1b[A\": \"Up\""));
   assert.ok(serverSources.includes("\"\\x1b[B\": \"Down\""));
@@ -205,27 +207,43 @@ test("web UI exposes browser terminal attach for app-server threads", async () =
   assert.ok(!webSources.includes("Host Terminal"));
 });
 
-test("browser raw attach refreshes stale app-server sessions before resume", async () => {
+test("browser raw attach prompts idle app-server threads before tmux takeover", async () => {
   const source = await fs.readFile("apps/server/src/thread-stream.ts", "utf8");
-  const attachPane = source.slice(source.indexOf("async function ensureAppServerAttachPane("), source.indexOf("async function sendRawInput("));
+  const statusIndex = source.indexOf("let status: Record<string, any> | null = await runtimeStatus");
+  const appServerIndex = source.indexOf("if (threadUsesCodexAppServer(thread))", statusIndex);
+  const promptIndex = source.indexOf("handleRawTakeoverPrompt(wss", appServerIndex);
+  const paneIndex = source.indexOf("let paneId = String(status?.paneId", appServerIndex);
+  const appServerBranch = source.slice(appServerIndex, paneIndex);
 
-  assert.ok(attachPane.includes("await killTmuxSession(sessionName)"));
-  assert.ok(attachPane.indexOf("await killTmuxSession(sessionName)") < attachPane.indexOf("new-session"));
-  assert.ok(!attachPane.includes("if (!(await tmuxHasSession(sessionName)))"));
+  assert.ok(source.includes("function handleRawTakeoverPrompt("));
+  assert.ok(appServerBranch.includes("rawStructuredTurnActive"));
+  assert.ok(appServerBranch.includes("handleRawWatchAndWait"));
+  assert.ok(appServerBranch.includes("handleRawTakeoverPrompt"));
+  assert.ok(promptIndex > appServerIndex);
+  assert.ok(paneIndex > promptIndex);
+  assert.ok(!appServerBranch.includes("new-session"));
 });
 
-test("browser raw attach sessions are cleaned up after stream close", async () => {
+test("browser raw attach watches active structured turns before creating tmux", async () => {
   const source = await fs.readFile("apps/server/src/thread-stream.ts", "utf8");
-  const streamUpgrade = source.slice(source.indexOf("wss.handleUpgrade(request, socket, head, (ws) => {"), source.lastIndexOf("});\n  });\n}"));
+  const statusIndex = source.indexOf("let status: Record<string, any> | null = await runtimeStatus");
+  const watchIndex = source.indexOf("handleRawWatchAndWait(wss", statusIndex);
+  const promptIndex = source.indexOf("handleRawTakeoverPrompt(wss", statusIndex);
+  const upgrade = source.slice(statusIndex, promptIndex);
 
-  assert.ok(source.includes("function rawAttachIdleTtlMs()"));
-  assert.ok(source.includes("ORKESTR_RAW_ATTACH_IDLE_TTL_MS"));
-  assert.ok(source.includes("function retainBrowserAttachSession(sessionName: string)"));
-  assert.ok(source.includes("function releaseBrowserAttachSession(sessionName: string)"));
-  assert.ok(source.includes("cancelBrowserAttachKill(sessionName)"));
-  assert.ok(streamUpgrade.includes('status?.runtimeKind === "codex-browser-attach"'));
-  assert.ok(streamUpgrade.includes("retainBrowserAttachSession(browserAttachSessionNameForStream)"));
-  assert.ok(streamUpgrade.includes("releaseBrowserAttachSession(browserAttachSessionNameForStream)"));
+  assert.ok(source.includes("handleRawWatchAndWait"));
+  assert.ok(upgrade.includes("rawStructuredTurnActive"));
+  assert.ok(upgrade.includes("handleRawWatchAndWait"));
+  assert.ok(watchIndex > statusIndex);
+  assert.ok(promptIndex > watchIndex);
+});
+
+test("raw terminal warm ttl is enforced by terminal-mode runtime leases", async () => {
+  const source = await fs.readFile("packages/core/src/runtime-leases.js", "utf8");
+
+  assert.ok(source.includes("rawTerminalTtlMs(env)"));
+  assert.ok(source.includes("rawTerminalSessionName(thread)"));
+  assert.ok(source.includes("takeoverRawTerminalThread"));
 });
 
 test("thread links do not persist the raw panel", async () => {
