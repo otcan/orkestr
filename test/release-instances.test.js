@@ -54,6 +54,7 @@ test("release instance broker merges local, tenant VM, and private registry targ
         releaseTrainEnabled: true,
         deployCommand: "deploy-edge {{ref}} {{channel}}",
         connectivityRecoveryCommand: "recover-edge {{id}}",
+        targetVersion: { releaseId: "main-target", commit: "abcdef1234567890" },
       },
     ],
   });
@@ -84,6 +85,13 @@ test("release instance broker merges local, tenant VM, and private registry targ
     },
   });
   assert.equal(probed.find((instance) => instance.id === "central").currentVersion.releaseId, "central-loopback");
+  const probedEdge = probed.find((instance) => instance.id === "edge");
+  assert.equal(probedEdge.currentVersion.releaseId, "remote-release");
+  assert.equal(probedEdge.targetVersion.releaseId, "main-target");
+  assert.equal(probedEdge.lastProbe.ok, true);
+  assert.equal(probedEdge.lastProbe.statusCode, 200);
+  assert.equal(probedEdge.downtime.state, "up");
+  assert.ok(probedEdge.lastReachableAt);
   assert.equal(probedUrls[0], "http://127.0.0.1:19812/api/version");
 
   const spawned = [];
@@ -482,6 +490,8 @@ test("release instances API is admin-only and returns public-safe broker records
         id: "remote-api",
         baseUrl: "https://remote.example.test",
         releaseTrainEnabled: true,
+        targetVersion: { releaseId: "next-release" },
+        downtime: { state: "down", since: "2026-06-07T20:00:00.000Z", durationSeconds: 60 },
         deployCommand: ["ssh", "remote.example.test", "orkestr", "update"],
       },
     ],
@@ -512,6 +522,8 @@ test("release instances API is admin-only and returns public-safe broker records
     assert.equal(remote.releaseTrainEnabled, true);
     assert.equal(remote.hasDeployCommand, true);
     assert.equal(remote.baseUrl, "https://remote.example.test");
+    assert.equal(remote.targetVersion.releaseId, "next-release");
+    assert.equal(remote.downtime.state, "down");
     assert.equal(Object.hasOwn(remote, "deployCommand"), false);
     assert.equal(Object.hasOwn(remote, "commandEnv"), false);
   } finally {

@@ -120,9 +120,12 @@
           <article class="compact-row instance-row">
             <strong>{{ releaseInstanceLabel(instance) }}</strong>
             <span [class.ready]="releaseInstanceStatusClass(instance) === 'ready'" [class.bad]="releaseInstanceStatusClass(instance) === 'bad'">
-              {{ instance.status || "unknown" }} · {{ releaseInstanceRolloutLabel(instance) }} · {{ brokerRemoteStatus(instance) }}
+              {{ instance.status || "unknown" }} · {{ releaseInstanceRolloutLabel(instance) }} · {{ releaseInstanceHealthLabel(instance) }} · {{ releaseInstanceDowntimeLabel(instance) }} · {{ brokerRemoteStatus(instance) }}
             </span>
             <p>{{ releaseInstanceVersion(instance) }} @if (releaseInstanceCommit(instance)) { · {{ releaseInstanceCommit(instance) }} }</p>
+            @if (releaseInstanceTargetVersion(instance)) {
+              <small>Target {{ releaseInstanceTargetVersion(instance) }}</small>
+            }
             <small>{{ releaseInstanceMeta(instance) }}</small>
             <small>{{ brokerInstanceRouteLine(instance) }}</small>
             @if (releaseInstanceEndpoint(instance)) {

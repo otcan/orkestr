@@ -797,6 +797,11 @@ export class OpsPageComponent implements OnInit, OnDestroy {
     return commit.length > 12 ? commit.slice(0, 12) : commit;
   }
 
+  releaseInstanceTargetVersion(instance: ReleaseInstance): string {
+    const version = instance.targetVersion || {};
+    return String(version.releaseId || version.describe || version.version || instance.ref || "").trim();
+  }
+
   releaseInstanceStatusClass(instance: ReleaseInstance): string {
     const status = String(instance.status || "").trim().toLowerCase();
     if (["reachable", "running", "ready", "ok", "healthy"].includes(status)) return "ready";
@@ -820,6 +825,28 @@ export class OpsPageComponent implements OnInit, OnDestroy {
 
   releaseInstanceEndpoint(instance: ReleaseInstance): string {
     return String(instance.baseUrl || instance.versionUrl || instance.healthUrl || "").trim();
+  }
+
+  releaseInstanceHealthLabel(instance: ReleaseInstance): string {
+    const probe = instance.lastProbe || {};
+    if (!probe.checkedAt) return "not probed";
+    const latency = Number(probe.latencyMs || 0);
+    const suffix = latency > 0 ? ` · ${latency}ms` : "";
+    return probe.ok ? `probe ok${suffix}` : `probe failed${suffix}`;
+  }
+
+  releaseInstanceDowntimeLabel(instance: ReleaseInstance): string {
+    const downtime = instance.downtime || {};
+    const state = String(downtime.state || "").trim().toLowerCase();
+    if (state === "down") {
+      const seconds = Number(downtime.durationSeconds || 0);
+      const duration = seconds >= 3600
+        ? `${Math.floor(seconds / 3600)}h ${Math.floor((seconds % 3600) / 60)}m`
+        : seconds >= 60 ? `${Math.floor(seconds / 60)}m` : `${seconds}s`;
+      return `down ${duration}`;
+    }
+    if (state === "up") return "up";
+    return "downtime unknown";
   }
 
   whatsappDoctorCount(key: string): number {

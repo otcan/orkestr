@@ -118,6 +118,58 @@ function normalizeVersionPayload(payload = {}) {
   return Object.fromEntries(Object.entries(version).filter(([, value]) => value !== "" && value !== null));
 }
 
+function normalizeProbePayload(payload = {}) {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) return null;
+  const checkedAt = clean(payload.checkedAt || payload.probedAt || payload.generatedAt);
+  const probe = {
+    ok: payload.ok === true,
+    checkedAt,
+    latencyMs: Number.isFinite(Number(payload.latencyMs)) ? Math.max(0, Math.round(Number(payload.latencyMs))) : null,
+    statusCode: Number.isFinite(Number(payload.statusCode)) ? Math.round(Number(payload.statusCode)) : null,
+    error: clean(payload.error),
+  };
+  return Object.fromEntries(Object.entries(probe).filter(([, value]) => value !== "" && value !== null));
+}
+
+function normalizeDowntimePayload(payload = {}) {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) return null;
+  const state = clean(payload.state);
+  const downtime = {
+    state: state || (payload.down === true ? "down" : payload.up === true ? "up" : ""),
+    since: clean(payload.since || payload.downSince || payload.upSince),
+    lastUpAt: clean(payload.lastUpAt || payload.lastReachableAt),
+    lastDownAt: clean(payload.lastDownAt || payload.lastUnreachableAt),
+    durationSeconds: Number.isFinite(Number(payload.durationSeconds)) ? Math.max(0, Math.round(Number(payload.durationSeconds))) : null,
+  };
+  return Object.fromEntries(Object.entries(downtime).filter(([, value]) => value !== "" && value !== null));
+}
+
+function probeDowntime({ ok, checkedAt, previous = null } = {}) {
+  const prior = normalizeDowntimePayload(previous) || {};
+  if (ok) {
+    return {
+      state: "up",
+      since: prior.state === "up" && prior.since ? prior.since : checkedAt,
+      lastUpAt: checkedAt,
+      lastDownAt: prior.lastDownAt || null,
+      durationSeconds: 0,
+    };
+  }
+  const since = prior.state === "down" && prior.since ? prior.since : checkedAt;
+  const sinceMs = Date.parse(since);
+  const checkedMs = Date.parse(checkedAt);
+  const durationSeconds = Number.isFinite(sinceMs) && Number.isFinite(checkedMs)
+    ? Math.max(0, Math.round((checkedMs - sinceMs) / 1000))
+    : 0;
+  return {
+    state: "down",
+    since,
+    lastUpAt: prior.lastUpAt || null,
+    lastDownAt: checkedAt,
+    durationSeconds,
+  };
+}
+
 async function readLocalReleaseManifest(env = process.env) {
   const candidates = [
     clean(env.ORKESTR_RELEASE_MANIFEST),
@@ -253,6 +305,11 @@ export function normalizeReleaseInstance(input = {}, env = process.env) {
     connectivityRecoveryCommand,
     commandEnv: normalizeCommandEnv(input.commandEnv || input.env),
     currentVersion: normalizeVersionPayload(input.currentVersion || input.version),
+    targetVersion: normalizeVersionPayload(input.targetVersion || input.desiredVersion),
+    lastProbe: normalizeProbePayload(input.lastProbe || input.probe || input.versionProbe),
+    downtime: normalizeDowntimePayload(input.downtime || input.availability),
+    lastReachableAt: clean(input.lastReachableAt),
+    lastUnreachableAt: clean(input.lastUnreachableAt),
     lastError: clean(input.lastError || input.error),
     updatedAt: clean(input.updatedAt),
     createdAt: clean(input.createdAt),
@@ -332,6 +389,11 @@ export function publicReleaseInstance(instance = {}) {
     channel: normalized.channel,
     labels: { ...normalized.labels },
     currentVersion: normalized.currentVersion ? { ...normalized.currentVersion } : null,
+    targetVersion: normalized.targetVersion ? { ...normalized.targetVersion } : null,
+    lastProbe: normalized.lastProbe ? { ...normalized.lastProbe } : null,
+    downtime: normalized.downtime ? { ...normalized.downtime } : null,
+    lastReachableAt: normalized.lastReachableAt,
+    lastUnreachableAt: normalized.lastUnreachableAt,
     lastError: normalized.lastError,
     updatedAt: normalized.updatedAt,
     createdAt: normalized.createdAt,
@@ -358,18 +420,27 @@ export async function probeReleaseInstances(instances = [], options = {}) {
   const probed = [];
   for (const instance of instances) {
     const normalized = normalizeReleaseInstance(instance);
+    const startedAt = Date.now();
+    const checkedAt = nowIso();
     const result = await fetchJsonWithTimeout(normalized.versionUrl, options);
+    const latencyMs = Date.now() - startedAt;
     if (result.ok) {
       probed.push({
         ...normalized,
         status: normalized.status === "unknown" ? "reachable" : normalized.status,
         currentVersion: normalizeVersionPayload(result.payload),
+        lastProbe: normalizeProbePayload({ ok: true, checkedAt, latencyMs, statusCode: 200 }),
+        downtime: probeDowntime({ ok: true, checkedAt, previous: normalized.downtime }),
+        lastReachableAt: checkedAt,
         lastError: "",
       });
     } else {
       probed.push({
         ...normalized,
         status: normalized.status === "unknown" || normalized.status === "running" ? "unreachable" : normalized.status,
+        lastProbe: normalizeProbePayload({ ok: false, checkedAt, latencyMs, statusCode: result.statusCode, error: result.error || "version_probe_failed" }),
+        downtime: probeDowntime({ ok: false, checkedAt, previous: normalized.downtime }),
+        lastUnreachableAt: checkedAt,
         lastError: result.error || "version_probe_failed",
       });
     }

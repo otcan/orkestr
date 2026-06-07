@@ -58,6 +58,23 @@ export interface ReleaseInstance {
   channel?: string;
   labels?: Record<string, string>;
   currentVersion?: ReleaseInstanceVersion | null;
+  targetVersion?: ReleaseInstanceVersion | null;
+  lastProbe?: {
+    ok?: boolean;
+    checkedAt?: string;
+    latencyMs?: number | null;
+    statusCode?: number | null;
+    error?: string;
+  } | null;
+  downtime?: {
+    state?: string;
+    since?: string;
+    lastUpAt?: string | null;
+    lastDownAt?: string | null;
+    durationSeconds?: number | null;
+  } | null;
+  lastReachableAt?: string;
+  lastUnreachableAt?: string;
   lastError?: string;
   updatedAt?: string;
   createdAt?: string;

@@ -134,6 +134,9 @@ test("ops page exposes release broker inventory", async () => {
   assert.match(component, /opsWhatsAppDoctor: WhatsAppDoctorResponse \| null = null/);
   assert.match(component, /opsWhatsAppOutboxJobs: WhatsAppOutboxJob\[\] = \[\]/);
   assert.match(component, /releaseInstanceVersion\(instance: ReleaseInstance\)/);
+  assert.match(component, /releaseInstanceTargetVersion\(instance: ReleaseInstance\)/);
+  assert.match(component, /releaseInstanceHealthLabel\(instance: ReleaseInstance\)/);
+  assert.match(component, /releaseInstanceDowntimeLabel\(instance: ReleaseInstance\)/);
   assert.match(component, /watcherAlertTitle\(alert: WatcherAlert\)/);
   assert.match(component, /whatsappAccountIdentity\(account: WhatsAppDoctorAccount\)/);
   assert.match(component, /visibleWhatsAppBindings\(\): WhatsAppDoctorBinding\[\]/);
@@ -141,6 +144,9 @@ test("ops page exposes release broker inventory", async () => {
   assert.match(component, /brokerAccountHistory\(\)/);
   assert.match(template, /toolsView === 'broker'/);
   assert.match(template, /releaseInstanceRolloutLabel\(instance\)/);
+  assert.match(template, /releaseInstanceHealthLabel\(instance\)/);
+  assert.match(template, /releaseInstanceDowntimeLabel\(instance\)/);
+  assert.match(template, /releaseInstanceTargetVersion\(instance\)/);
   assert.match(template, /WhatsApp Account IDs/);
   assert.match(template, /Instance Threads/);
   assert.match(template, /Account IDs/);
