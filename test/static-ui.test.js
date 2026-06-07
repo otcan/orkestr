@@ -116,6 +116,19 @@ test("server serves the public site at root and Angular UI at app routes", async
   }
 });
 
+test("ops page exposes release broker inventory", async () => {
+  const root = process.cwd();
+  const template = await fs.readFile(path.join(root, "apps/web/src/app/ops-page.component.html"), "utf8");
+  const component = await fs.readFile(path.join(root, "apps/web/src/app/ops-page.component.ts"), "utf8");
+  const api = await fs.readFile(path.join(root, "apps/web/src/app/api.service.ts"), "utf8");
+
+  assert.match(api, /releaseInstances\(probe = true\)/);
+  assert.match(component, /opsReleaseInstances: ReleaseInstance\[\]/);
+  assert.match(component, /releaseInstanceVersion\(instance: ReleaseInstance\)/);
+  assert.match(template, /toolsView === 'broker'/);
+  assert.match(template, /releaseInstanceRolloutLabel\(instance\)/);
+});
+
 test("server keeps public pages on the configured public site host only", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-static-ui-public-host-"));
   const prior = {

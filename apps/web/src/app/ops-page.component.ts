@@ -2,10 +2,10 @@ import { DatePipe } from "@angular/common";
 import { ChangeDetectorRef, Component, EventEmitter, Input, OnDestroy, OnInit, Output, inject } from "@angular/core";
 import { FormsModule } from "@angular/forms";
 import { firstValueFrom } from "rxjs";
-import { Agent, AgentTemplate, ApiService, BrowserSession, ConnectorStatus, DesktopLeaseRecord, EventRecord, OrkestrUser, OutlookOAuthPollResponse, SecurityChallenge, SecuritySession, SetupStatus, TimerDoctorResponse, TimerRecord, UserIdentity, UserOutlookOAuthStartResponse, VersionResponse } from "./api.service";
+import { Agent, AgentTemplate, ApiService, BrowserSession, ConnectorStatus, DesktopLeaseRecord, EventRecord, OrkestrUser, OutlookOAuthPollResponse, ReleaseInstance, ReleaseInstancesResponse, SecurityChallenge, SecuritySession, SetupStatus, TimerDoctorResponse, TimerRecord, UserIdentity, UserOutlookOAuthStartResponse, VersionResponse } from "./api.service";
 import { OpsWaitlistComponent } from "./ops-waitlist.component";
 
-export type ToolsView = "system" | "timers" | "desktops" | "models" | "settings" | "connectors" | "users" | "waitlist" | "audit";
+export type ToolsView = "system" | "broker" | "timers" | "desktops" | "models" | "settings" | "connectors" | "users" | "waitlist" | "audit";
 type MailIdentityProvider = "gmail" | "outlook";
 
 @Component({
@@ -30,6 +30,10 @@ export class OpsPageComponent implements OnInit, OnDestroy {
   opsWhatsApp: Record<string, unknown> | null = null;
   opsRuntimeBudget: Record<string, unknown> | null = null;
   opsConnectors: ConnectorStatus[] = [];
+  opsReleaseInstances: ReleaseInstance[] = [];
+  opsReleaseCounts: Record<string, number> = {};
+  opsReleaseGeneratedAt = "";
+  opsReleaseError = "";
   opsAgents: Agent[] = [];
   opsAgentTemplates: AgentTemplate[] = [];
   opsTimers: TimerRecord[] = [];
@@ -108,8 +112,9 @@ export class OpsPageComponent implements OnInit, OnDestroy {
         this.renderNow();
       });
     try {
-      const [version, setup, whatsapp, agents, templates, timers, timerDoctor, events, browsers, desktopLeases, runtimeLeases, executors, executions, system, processes, models, users, securityChallenges, securitySessions] = await Promise.allSettled([
+      const [version, releaseInstances, setup, whatsapp, agents, templates, timers, timerDoctor, events, browsers, desktopLeases, runtimeLeases, executors, executions, system, processes, models, users, securityChallenges, securitySessions] = await Promise.allSettled([
         firstValueFrom(this.api.version()),
+        firstValueFrom(this.api.releaseInstances(true)),
         firstValueFrom(this.api.setupStatus()),
         firstValueFrom(this.api.whatsappStatus()),
         firstValueFrom(this.api.agents()),
@@ -130,6 +135,8 @@ export class OpsPageComponent implements OnInit, OnDestroy {
         firstValueFrom(this.api.securitySessions()),
       ]);
       if (version.status === "fulfilled") this.opsVersion = version.value;
+      if (releaseInstances.status === "fulfilled") this.applyReleaseInstances(releaseInstances.value);
+      else this.applyReleaseInstancesError(releaseInstances.reason);
       if (setup.status === "fulfilled") {
         this.opsSetup = setup.value;
         this.opsConnectors = setup.value.connectors || [];
@@ -693,6 +700,58 @@ export class OpsPageComponent implements OnInit, OnDestroy {
     return Math.max(0, Math.min(100, (this.opsRuntimeLeases.length / max) * 100));
   }
 
+  releaseTrainCount(): number {
+    return Number(this.opsReleaseCounts["releaseTrainEnabled"] || 0) || this.opsReleaseInstances.filter((instance) => instance.releaseTrainEnabled).length;
+  }
+
+  releaseDeployCommandCount(): number {
+    return Number(this.opsReleaseCounts["withDeployCommand"] || 0) || this.opsReleaseInstances.filter((instance) => instance.hasDeployCommand).length;
+  }
+
+  releaseUnreachableCount(): number {
+    return this.opsReleaseInstances.filter((instance) => this.releaseInstanceStatusClass(instance) === "bad").length;
+  }
+
+  releaseInstanceLabel(instance: ReleaseInstance): string {
+    return String(instance.displayName || instance.id || "Orkestr instance").trim();
+  }
+
+  releaseInstanceVersion(instance: ReleaseInstance): string {
+    const version = instance.currentVersion || {};
+    return String(version.releaseId || version.describe || version.version || instance.ref || "unknown").trim();
+  }
+
+  releaseInstanceCommit(instance: ReleaseInstance): string {
+    const version = instance.currentVersion || {};
+    const commit = String(version.shortCommit || version.commit || "").trim();
+    return commit.length > 12 ? commit.slice(0, 12) : commit;
+  }
+
+  releaseInstanceStatusClass(instance: ReleaseInstance): string {
+    const status = String(instance.status || "").trim().toLowerCase();
+    if (["reachable", "running", "ready", "ok", "healthy"].includes(status)) return "ready";
+    if (["unreachable", "broken", "failed", "error", "down"].includes(status) || instance.lastError) return "bad";
+    return "";
+  }
+
+  releaseInstanceMeta(instance: ReleaseInstance): string {
+    return [
+      instance.kind || "service",
+      instance.source || "",
+      instance.channel ? `channel ${instance.channel}` : "",
+      instance.updateStrategy || "",
+    ].filter(Boolean).join(" · ");
+  }
+
+  releaseInstanceRolloutLabel(instance: ReleaseInstance): string {
+    if (!instance.releaseTrainEnabled) return "manual";
+    return instance.hasDeployCommand ? "train ready" : "train listed";
+  }
+
+  releaseInstanceEndpoint(instance: ReleaseInstance): string {
+    return String(instance.baseUrl || instance.versionUrl || instance.healthUrl || "").trim();
+  }
+
   jsonLine(value: unknown): string {
     try {
       return JSON.stringify(value);
@@ -883,6 +942,20 @@ export class OpsPageComponent implements OnInit, OnDestroy {
     this.opsBrowserSource = payload.source || "";
     this.opsBrowserMessage = payload.message || payload.error || "";
     this.opsBrowsersLoaded = true;
+  }
+
+  private applyReleaseInstances(payload: ReleaseInstancesResponse): void {
+    this.opsReleaseInstances = payload.instances || [];
+    this.opsReleaseCounts = payload.counts || {};
+    this.opsReleaseGeneratedAt = payload.generatedAt || "";
+    this.opsReleaseError = "";
+  }
+
+  private applyReleaseInstancesError(error: unknown): void {
+    this.opsReleaseInstances = [];
+    this.opsReleaseCounts = {};
+    this.opsReleaseGeneratedAt = "";
+    this.opsReleaseError = this.errorText(error);
   }
 
   private applyUsers(users: OrkestrUser[]): void {

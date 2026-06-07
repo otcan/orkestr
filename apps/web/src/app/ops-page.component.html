@@ -2,7 +2,7 @@
   <div class="panel-title">
     <div>
       <p class="eyebrow">Orkestr Ops</p>
-      <h3>System, resources, models, settings, desktops, users, waitlist, audit</h3>
+      <h3>System, broker, resources, models, settings, desktops, users, waitlist, audit</h3>
     </div>
     <button class="secondary" type="button" (click)="loadOps()" [disabled]="busy">Reload</button>
   </div>
@@ -16,6 +16,7 @@
 
   <nav class="tool-tabs" aria-label="Orkestr tools">
     <button type="button" [class.active]="toolsView === 'system'" (click)="setToolsView('system')">System</button>
+    <button type="button" [class.active]="toolsView === 'broker'" (click)="setToolsView('broker')">Broker</button>
     <button type="button" [class.active]="toolsView === 'timers'" (click)="setToolsView('timers')">Timers</button>
     <button type="button" [class.active]="toolsView === 'desktops'" (click)="setToolsView('desktops')">Desktops</button>
     <button type="button" [class.active]="toolsView === 'models'" (click)="setToolsView('models')">Models</button>
@@ -28,6 +29,54 @@
 
   @if (toolsView === "waitlist") {
     <ork-ops-waitlist></ork-ops-waitlist>
+  }
+
+  @if (toolsView === "broker") {
+    <div class="ops-grid">
+      <article class="ops-card">
+        <h4>Instances</h4>
+        <p>{{ opsReleaseInstances.length }}</p>
+        <small>{{ releaseTrainCount() }} on train · {{ releaseDeployCommandCount() }} deployable</small>
+      </article>
+      <article class="ops-card" [class.critical]="releaseUnreachableCount() > 0">
+        <h4>Reachability</h4>
+        <p>{{ releaseUnreachableCount() }}</p>
+        <small>unreachable or erroring</small>
+      </article>
+      <article class="ops-card">
+        <h4>Local Release</h4>
+        <p>{{ opsVersion?.releaseId || opsVersion?.describe || opsVersion?.version || "unknown" }}</p>
+        <small>{{ opsVersion?.commit || "no commit" }}</small>
+      </article>
+      <article class="ops-card">
+        <h4>Inventory</h4>
+        <p>{{ opsReleaseGeneratedAt ? (opsReleaseGeneratedAt | date: "HH:mm:ss") : "--" }}</p>
+        <small>last probe</small>
+      </article>
+    </div>
+    @if (opsReleaseError) {
+      <div class="notice error">{{ opsReleaseError }}</div>
+    }
+    <div class="compact-list">
+      @for (instance of opsReleaseInstances; track instance.id) {
+        <article class="compact-row">
+          <strong>{{ releaseInstanceLabel(instance) }}</strong>
+          <span [class.ready]="releaseInstanceStatusClass(instance) === 'ready'" [class.bad]="releaseInstanceStatusClass(instance) === 'bad'">
+            {{ instance.status || "unknown" }} · {{ releaseInstanceRolloutLabel(instance) }}
+          </span>
+          <p>{{ releaseInstanceVersion(instance) }} @if (releaseInstanceCommit(instance)) { · {{ releaseInstanceCommit(instance) }} }</p>
+          <small>{{ releaseInstanceMeta(instance) }}</small>
+          @if (releaseInstanceEndpoint(instance)) {
+            <small>{{ releaseInstanceEndpoint(instance) }}</small>
+          }
+          @if (instance.lastError) {
+            <small>{{ instance.lastError }}</small>
+          }
+        </article>
+      } @empty {
+        <p class="empty">No Broker instances loaded.</p>
+      }
+    </div>
   }
 
   @if (toolsView === "system") {

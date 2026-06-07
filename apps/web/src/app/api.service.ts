@@ -13,7 +13,60 @@ export interface VersionResponse {
   version: string;
   commit?: string;
   branch?: string;
+  tag?: string;
+  describe?: string;
+  releaseId?: string;
+  channel?: string;
+  deployedAt?: string;
   generatedAt: string;
+}
+
+export interface ReleaseInstanceVersion {
+  name?: string;
+  version?: string;
+  releaseId?: string;
+  commit?: string;
+  shortCommit?: string;
+  branch?: string;
+  tag?: string;
+  describe?: string;
+  channel?: string;
+  deployedAt?: string;
+  dirty?: boolean;
+}
+
+export interface ReleaseInstance {
+  id: string;
+  displayName?: string;
+  kind?: string;
+  source?: string;
+  sourceId?: string;
+  enabled?: boolean;
+  status?: string;
+  releaseTrainEnabled?: boolean;
+  updateStrategy?: string;
+  hasDeployCommand?: boolean;
+  hasConnectivityCommand?: boolean;
+  hasConnectivityRecoveryCommand?: boolean;
+  baseUrl?: string;
+  healthUrl?: string;
+  versionUrl?: string;
+  serviceName?: string;
+  home?: string;
+  deployRoot?: string;
+  ref?: string;
+  channel?: string;
+  labels?: Record<string, string>;
+  currentVersion?: ReleaseInstanceVersion | null;
+  lastError?: string;
+  updatedAt?: string;
+  createdAt?: string;
+}
+
+export interface ReleaseInstancesResponse {
+  instances: ReleaseInstance[];
+  counts?: Record<string, number>;
+  generatedAt?: string;
 }
 
 export interface ConnectorStatus {
@@ -1291,6 +1344,10 @@ export class ApiService {
 
   version(): Observable<VersionResponse> {
     return this.http.get<VersionResponse>(this.api("/version"));
+  }
+
+  releaseInstances(probe = true): Observable<ReleaseInstancesResponse> {
+    return this.http.get<ReleaseInstancesResponse>(this.api(`/release/instances?probe=${probe ? "1" : "0"}`));
   }
 
   setupStatus(): Observable<SetupStatus> {
