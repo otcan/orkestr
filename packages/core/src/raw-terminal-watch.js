@@ -200,6 +200,7 @@ export function rawAttachWatchText(watch = {}) {
     `Stale risk: ${watch.staleRisk || "unknown"}`,
     `Recommended action: ${watch.recommendedAction || "wait"}`,
     `Check interval: ${durationText(watch.intervalMs)}; timeout: ${durationText(watch.timeoutMs)}; next check: ${durationText(watch.nextCheckInMs)}`,
+    "Hotkeys: Ctrl-C cancel; i interrupt/take over; r read-only; s refresh; a approve; d deny",
   ];
   return `${lines.join("\n")}\n`;
 }

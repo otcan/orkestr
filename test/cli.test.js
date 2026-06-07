@@ -2182,6 +2182,107 @@ test("CLI attach takeover waits through watch-and-wait before attaching", async 
   assert.deepEqual(spawned, [{ command: "tmux", args: ["attach-session", "-t", "orkestr-thread-demo"] }]);
 });
 
+test("CLI attach interactive watch hotkey interrupts and takes over", async () => {
+  const stdout = capture();
+  const spawned = [];
+  const seen = [];
+  const stdin = new EventEmitter();
+  stdin.isTTY = true;
+  stdin.setRawMode = (value) => {
+    stdin.isRaw = value;
+  };
+  stdin.setEncoding = () => {};
+  stdin.resume = () => {};
+  stdin.pause = () => {};
+  let attempts = 0;
+  const code = await runCli(["attach", "Demo", "--interval", "0.001", "--timeout", "2s"], {
+    stdin,
+    stdout,
+    stderr: capture(),
+    sleepImpl: async () => {
+      stdin.emit("data", "i");
+    },
+    spawnImpl(command, args) {
+      spawned.push({ command, args });
+      const child = new EventEmitter();
+      queueMicrotask(() => child.emit("exit", 0));
+      return child;
+    },
+    fetchImpl: fakeFetch({
+      "POST /api/threads/Demo/attach": (request) => {
+        attempts += 1;
+        if (attempts === 1) {
+          return {
+            ok: true,
+            attachable: false,
+            watchOnly: true,
+            watchText: "watching\n",
+          };
+        }
+        assert.equal(request.body.takeover, true);
+        assert.equal(request.body.interrupt, true);
+        assert.equal(request.body.yes, true);
+        return {
+          ok: true,
+          attachKind: "raw-terminal",
+          runtime: { sessionName: "orkestr-thread-demo" },
+        };
+      },
+    }, seen),
+  });
+
+  assert.equal(code, 0);
+  assert.match(stdout.text(), /Interrupt takeover requested/);
+  assert.equal(seen.length, 2);
+  assert.deepEqual(spawned, [{ command: "tmux", args: ["attach-session", "-t", "orkestr-thread-demo"] }]);
+  assert.equal(stdin.isRaw, false);
+});
+
+test("CLI attach interactive watch approval hotkey uses thread input", async () => {
+  const stdout = capture();
+  const seen = [];
+  const stdin = new EventEmitter();
+  stdin.isTTY = true;
+  stdin.setRawMode = (value) => {
+    stdin.isRaw = value;
+  };
+  stdin.setEncoding = () => {};
+  stdin.resume = () => {};
+  stdin.pause = () => {};
+  const keys = ["a", "r"];
+  const code = await runCli(["attach", "Demo", "--interval", "0.001", "--timeout", "2s"], {
+    stdin,
+    stdout,
+    stderr: capture(),
+    sleepImpl: async () => {
+      stdin.emit("data", keys.shift() || "r");
+    },
+    fetchImpl: fakeFetch({
+      "POST /api/threads/Demo/attach": {
+        ok: true,
+        attachable: false,
+        watchOnly: true,
+        watchText: "watching\n",
+      },
+      "POST /api/threads/Demo/input": { ok: true },
+    }, seen),
+  });
+
+  assert.equal(code, 0);
+  assert.match(stdout.text(), /Approval sent/);
+  assert.match(stdout.text(), /Read-only watch enabled/);
+  assert.deepEqual(seen.map((entry) => entry.key), [
+    "POST /api/threads/Demo/attach",
+    "POST /api/threads/Demo/input",
+    "POST /api/threads/Demo/attach",
+    "POST /api/threads/Demo/attach",
+  ]);
+  assert.equal(seen[1].body.text, "Approved. Proceed.");
+  assert.equal(seen[1].body.source, "raw-attach-watch");
+  assert.equal(seen[3].body.readOnly, true);
+  assert.equal(stdin.isRaw, false);
+});
+
 test("CLI attach can execute tmux for an attachable thread", async () => {
   const spawned = [];
   const code = await runCli(["attach", "Demo"], {

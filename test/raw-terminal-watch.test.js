@@ -55,6 +55,7 @@ test("raw terminal watch detects active structured app-server turns", () => {
   assert.equal(watch.recommendedAction, "wait");
   assert.match(rawAttachWatchText(watch), /Raw attach watch-and-wait/);
   assert.match(rawAttachWatchText(watch), /Active turn: turn-1/);
+  assert.match(rawAttachWatchText(watch), /Hotkeys: Ctrl-C cancel; i interrupt\/take over; r read-only; s refresh; a approve; d deny/);
 });
 
 test("raw terminal watch does not invent active duration for idle structured runtimes", () => {

@@ -1485,30 +1485,101 @@ async function attach(argv, ctx) {
   }
   if (payload.watchOnly || payload.attachable === false) {
     ctx.stdout.write(String(payload.watchText || rawAttachWatchText(payload.watch || {})));
-    if (readOnly || printOnly || !takeover) return 0;
-    return watchAttachUntilAttachable(target, body, ctx, { printOnly });
+    if (readOnly || printOnly) return 0;
+    if (!takeover && !ctx.stdin?.isTTY) return 0;
+    return watchAttachUntilAttachable(target, body, ctx, { printOnly, interactive: Boolean(ctx.stdin?.isTTY) });
   }
   return runAttachPayload(payload, target, ctx, { printOnly });
 }
 
-async function watchAttachUntilAttachable(target, body, ctx, { printOnly = false } = {}) {
+async function watchAttachUntilAttachable(target, body, ctx, { printOnly = false, interactive = false } = {}) {
   const startedAtMs = Number(body.watchStartedAtMs || Date.now());
   const timeoutMs = Number(body.timeoutMs || 15 * 60_000);
   const intervalMs = Number(body.intervalMs || 5000);
-  for (;;) {
-    if (Date.now() - startedAtMs >= timeoutMs) throw new Error(`Attach watch timed out for ${target}`);
-    await new Promise((resolve) => setTimeout(resolve, Math.max(1000, intervalMs)));
-    const payload = await requestJson(`/api/threads/${encodeURIComponent(target)}/attach`, {
-      ...ctx,
-      method: "POST",
-      body: { ...body, watchStartedAtMs: startedAtMs },
-    });
-    if (payload.watchOnly || payload.attachable === false) {
-      ctx.stdout.write(String(payload.watchText || rawAttachWatchText(payload.watch || {})));
-      continue;
+  const keys = interactive ? createAttachWatchKeyReader(ctx.stdin) : null;
+  try {
+    for (;;) {
+      if (Date.now() - startedAtMs >= timeoutMs) throw new Error(`Attach watch timed out for ${target}`);
+      await sleep(ctx, Math.max(1000, intervalMs));
+      const key = keys?.take();
+      if (key === "r") {
+        body.readOnly = true;
+        body.takeover = false;
+        body.interrupt = false;
+        ctx.stdout.write("Read-only watch enabled.\n");
+      } else if (key === "i") {
+        body.takeover = true;
+        body.interrupt = true;
+        body.yes = true;
+        ctx.stdout.write("Interrupt takeover requested.\n");
+      } else if (key === "a" || key === "d") {
+        await sendAttachWatchApproval(target, key === "a", ctx);
+        ctx.stdout.write(key === "a" ? "Approval sent.\n" : "Denial sent.\n");
+      } else if (key && key !== "s") {
+        ctx.stdout.write("Hotkeys: Ctrl-C cancel; i interrupt/take over; r read-only; s refresh; a approve; d deny\n");
+      }
+      const payload = await requestJson(`/api/threads/${encodeURIComponent(target)}/attach`, {
+        ...ctx,
+        method: "POST",
+        body: { ...body, watchStartedAtMs: startedAtMs },
+      });
+      if (payload.watchOnly || payload.attachable === false) {
+        ctx.stdout.write(String(payload.watchText || rawAttachWatchText(payload.watch || {})));
+        if (body.readOnly) return 0;
+        continue;
+      }
+      return runAttachPayload(payload, target, ctx, { printOnly });
     }
-    return runAttachPayload(payload, target, ctx, { printOnly });
+  } finally {
+    keys?.close();
   }
+}
+
+function sleep(ctx, ms) {
+  return ctx.sleepImpl ? ctx.sleepImpl(ms) : new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function createAttachWatchKeyReader(stdin) {
+  const keys = [];
+  const previousRawMode = Boolean(stdin.isRaw);
+  const onData = (chunk) => {
+    const text = String(chunk || "");
+    if (text.includes("\u0003")) {
+      process.kill(process.pid, "SIGINT");
+      return;
+    }
+    for (const char of text) {
+      const key = char.toLowerCase();
+      if (["i", "r", "s", "a", "d"].includes(key)) keys.push(key);
+    }
+  };
+  stdin.setEncoding?.("utf8");
+  stdin.setRawMode?.(true);
+  stdin.resume?.();
+  stdin.on?.("data", onData);
+  return {
+    take() {
+      return keys.shift() || "";
+    },
+    close() {
+      stdin.off?.("data", onData);
+      stdin.setRawMode?.(previousRawMode);
+      if (!previousRawMode) stdin.pause?.();
+    },
+  };
+}
+
+async function sendAttachWatchApproval(target, approve, ctx) {
+  return requestJson(`/api/threads/${encodeURIComponent(target)}/input`, {
+    ...ctx,
+    method: "POST",
+    body: {
+      text: approve ? "Approved. Proceed." : "deny",
+      source: "raw-attach-watch",
+      parseCommands: true,
+      controlAllowed: true,
+    },
+  });
 }
 
 function runAttachPayload(payload, target, ctx, { printOnly = false } = {}) {
