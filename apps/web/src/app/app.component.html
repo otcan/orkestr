@@ -115,6 +115,16 @@
               }
             </span>
             <span class="thread-badges">
+              @if (threadRuntimeModeShortLabel(thread)) {
+                <span
+                  class="pending runtime-mode-badge"
+                  [class.attached-terminal]="threadRuntimeMode(thread) === 'attached-terminal'"
+                  [class.codex-api]="threadRuntimeMode(thread) === 'codex-api'"
+                  [class.codex-tmux]="threadRuntimeMode(thread) === 'codex-tmux'"
+                  [class.agent-runtime]="threadRuntimeMode(thread) === 'agent'"
+                  [title]="threadRuntimeModeTitle(thread)"
+                >{{ threadRuntimeModeShortLabel(thread) }}</span>
+              }
               @if (threadHasGitInfo(thread)) {
                 <span
                   class="pending git-badge"
@@ -193,6 +203,16 @@
                     }
                   </span>
                   <span class="thread-badges">
+                    @if (threadRuntimeModeShortLabel(worker)) {
+                      <span
+                        class="pending runtime-mode-badge"
+                        [class.attached-terminal]="threadRuntimeMode(worker) === 'attached-terminal'"
+                        [class.codex-api]="threadRuntimeMode(worker) === 'codex-api'"
+                        [class.codex-tmux]="threadRuntimeMode(worker) === 'codex-tmux'"
+                        [class.agent-runtime]="threadRuntimeMode(worker) === 'agent'"
+                        [title]="threadRuntimeModeTitle(worker)"
+                      >{{ threadRuntimeModeShortLabel(worker) }}</span>
+                    }
                     @if (threadHasGitInfo(worker)) {
                       <span
                         class="pending git-badge"

@@ -2908,6 +2908,52 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     return tailLines.length ? tailLines.join("\n") : this.threadProcessingLabel(thread);
   }
 
+  threadRuntimeMode(thread: ThreadSummary | null): string {
+    const mode = String(thread?.runtimeMode || this.objectValue(thread?.runtime, "runtimeMode") || "").trim().toLowerCase();
+    if (mode) return mode;
+    const runtimeKind = String(thread?.runtimeKind || this.objectValue(thread?.runtime, "runtimeKind") || "").trim().toLowerCase();
+    if (runtimeKind === "codex-app-server" || runtimeKind === "app-server") return "codex-api";
+    if (runtimeKind === "raw-terminal") return "attached-terminal";
+    if (runtimeKind === "api-agent") return "agent";
+    if (runtimeKind === "codex-tmux" || runtimeKind === "migration_required") return "codex-tmux";
+    if (thread?.paneId || thread?.tmuxTarget) return "codex-tmux";
+    return "";
+  }
+
+  threadRuntimeModeLabel(thread: ThreadSummary | null): string {
+    const explicit = String(thread?.runtimeModeLabel || this.objectValue(thread?.runtime, "runtimeModeLabel") || "").trim();
+    if (explicit) return explicit;
+    const mode = this.threadRuntimeMode(thread);
+    if (mode === "codex-api") return "Codex API";
+    if (mode === "codex-tmux") return "Codex tmux";
+    if (mode === "attached-terminal") return "Attached terminal";
+    if (mode === "agent") return "Agent";
+    if (mode === "sleeping") return "Sleeping";
+    return "";
+  }
+
+  threadRuntimeModeShortLabel(thread: ThreadSummary | null): string {
+    const mode = this.threadRuntimeMode(thread);
+    if (mode === "codex-api") return "API";
+    if (mode === "codex-tmux") return "TMUX";
+    if (mode === "attached-terminal") return "TERM";
+    if (mode === "agent") return "AGENT";
+    return "";
+  }
+
+  threadRuntimeModeTitle(thread: ThreadSummary | null): string {
+    const label = this.threadRuntimeModeLabel(thread);
+    if (!label) return "";
+    const details = [
+      `Mode: ${label}`,
+      String(thread?.runtimeTransport || this.objectValue(thread?.runtime, "runtimeTransport") || "").trim() ? `Transport: ${thread?.runtimeTransport || this.objectValue(thread?.runtime, "runtimeTransport")}` : "",
+      String(thread?.runtimeControlPath || this.objectValue(thread?.runtime, "runtimeControlPath") || "").trim() ? `Control: ${thread?.runtimeControlPath || this.objectValue(thread?.runtime, "runtimeControlPath")}` : "",
+      String(thread?.sessionName || this.objectValue(thread?.runtime, "sessionName") || "").trim() ? `Session: ${thread?.sessionName || this.objectValue(thread?.runtime, "sessionName")}` : "",
+      String(thread?.paneId || thread?.tmuxTarget || this.objectValue(thread?.runtime, "paneId") || "").trim() ? `Pane: ${thread?.paneId || thread?.tmuxTarget || this.objectValue(thread?.runtime, "paneId")}` : "",
+    ].filter(Boolean);
+    return details.join("\n");
+  }
+
   canWakeThread(thread: ThreadSummary): boolean {
     const state = this.threadState(thread);
     return state.includes("sleep") || state.includes("hibernat");
@@ -2917,7 +2963,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     const state = this.threadState(thread);
     const leaseId = String(thread.activeRuntimeLeaseId || "");
     const reason = String(this.leaseValue("reason") || this.objectValue(thread["runtime"], "reason"));
-    if (String(thread.runtimeKind || "").trim() === "codex-app-server") {
+    if (thread.isCodexAppServer || this.threadRuntimeMode(thread) === "codex-api") {
       return false;
     }
     if (!thread.activeRuntimeLeaseId && !thread.sessionName) return false;

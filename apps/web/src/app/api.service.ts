@@ -821,6 +821,16 @@ export interface ThreadSummary {
   paneId?: string | null;
   tmuxTarget?: string | null;
   runtimeKind?: string | null;
+  runtimeMode?: "codex-api" | "codex-tmux" | "attached-terminal" | "agent" | "sleeping" | "unknown" | string | null;
+  runtimeModeLabel?: string | null;
+  runtimeControlPath?: string | null;
+  runtimeTransport?: string | null;
+  isCodexAppServer?: boolean;
+  isCodexTmux?: boolean;
+  isAgentRuntime?: boolean;
+  terminalAttached?: boolean;
+  rawTerminalActive?: boolean;
+  paneAvailable?: boolean;
   threadId?: string;
   codexThreadId?: string | null;
   codexSessionId?: string | null;

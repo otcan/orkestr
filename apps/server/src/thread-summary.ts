@@ -18,6 +18,14 @@ type ThreadSummaryOptions = {
   principal?: Record<string, any> | null;
 };
 
+type ThreadRuntimeMode =
+  | "codex-api"
+  | "codex-tmux"
+  | "attached-terminal"
+  | "agent"
+  | "sleeping"
+  | "unknown";
+
 const threadMetadataCache = new Map<string, {
   cacheKey: string;
   expiresAt: number;
@@ -244,8 +252,10 @@ function codexMetadata(thread: any) {
       ? "codex-app-server"
       : runtimeKind === RAW_TERMINAL_RUNTIME_KIND || metadata.terminalMode === RAW_TERMINAL_RUNTIME_KIND
         ? RAW_TERMINAL_RUNTIME_KIND
-        : runtimeKind === "tmux"
-          ? "migration_required"
+        : runtimeKind === "codex-tmux"
+          ? "codex-tmux"
+          : runtimeKind === "tmux"
+            ? "migration_required"
           : null,
     codexSessionId: thread?.codexSessionId || thread?.executor?.codexSessionId || metadata.codexSessionId || null,
     importedFromCodex: thread?.importedFromCodex === true || metadata.importedFromCodex === true,
@@ -378,6 +388,111 @@ function threadSummaryState(thread: any, status: any): string {
 
 function hasOwnKey(value: any, key: string): boolean {
   return Boolean(value && typeof value === "object" && Object.prototype.hasOwnProperty.call(value, key));
+}
+
+function cleanRuntimeValue(value: any): string {
+  return String(value || "").trim();
+}
+
+function lowerRuntimeValue(value: any): string {
+  return cleanRuntimeValue(value).toLowerCase();
+}
+
+function firstRuntimeValue(...values: any[]): string {
+  for (const value of values) {
+    const clean = cleanRuntimeValue(value);
+    if (clean) return clean;
+  }
+  return "";
+}
+
+function threadRuntimeControlSummary(input: {
+  thread: any;
+  status: any;
+  runtime: any;
+  state: string;
+  runtimeKind: string | null;
+  sessionName: string | null;
+  paneId: string | null;
+  codexAppServerTransport: string | null;
+  codexAppServerSocket: string | null;
+}): Record<string, unknown> {
+  const metadata = input.thread?.executor?.metadata && typeof input.thread.executor.metadata === "object" ? input.thread.executor.metadata : {};
+  const runtimeKind = lowerRuntimeValue(firstRuntimeValue(
+    input.runtimeKind,
+    input.status?.runtimeKind,
+    input.status?.runtimeState,
+    input.runtime?.runtimeKind,
+    input.thread?.runtimeKind,
+    input.thread?.executor?.transport,
+    metadata.runtimeKind,
+    metadata.transport,
+  ));
+  const executorType = lowerRuntimeValue(input.thread?.executor?.type || input.thread?.executor?.id);
+  const transport = lowerRuntimeValue(firstRuntimeValue(
+    input.codexAppServerTransport,
+    input.status?.transport,
+    input.thread?.executor?.transport,
+    metadata.transport,
+    input.runtime?.transport,
+    runtimeKind,
+  ));
+  const terminalMode = lowerRuntimeValue(firstRuntimeValue(input.runtime?.terminalMode, input.thread?.terminalMode, metadata.terminalMode));
+  const paneAvailable = Boolean(cleanRuntimeValue(input.paneId));
+  const terminalAttached = runtimeKind === RAW_TERMINAL_RUNTIME_KIND || transport === RAW_TERMINAL_RUNTIME_KIND || terminalMode === RAW_TERMINAL_RUNTIME_KIND;
+  const isCodexAppServer = runtimeKind === "codex-app-server" || runtimeKind === "app-server" || transport === "codex-app-server" || transport === "app-server" || Boolean(input.codexAppServerSocket);
+  const isAgentRuntime = runtimeKind === "api-agent" || executorType === "api-agent";
+  const isCodexTmux = !terminalAttached && !isCodexAppServer && !isAgentRuntime && (
+    runtimeKind === "codex-tmux" ||
+    runtimeKind === "migration_required" ||
+    transport === "tmux" ||
+    transport === "codex-tmux" ||
+    paneAvailable
+  );
+
+  let runtimeMode: ThreadRuntimeMode = "unknown";
+  let runtimeModeLabel = "Runtime unknown";
+  let runtimeControlPath = "unknown";
+  let runtimeTransport = transport || runtimeKind || null;
+
+  if (isCodexAppServer) {
+    runtimeMode = "codex-api";
+    runtimeModeLabel = "Codex API";
+    runtimeControlPath = "app-server";
+    runtimeTransport = input.codexAppServerTransport || "codex-app-server";
+  } else if (terminalAttached) {
+    runtimeMode = "attached-terminal";
+    runtimeModeLabel = "Attached terminal";
+    runtimeControlPath = "raw-terminal";
+    runtimeTransport = RAW_TERMINAL_RUNTIME_KIND;
+  } else if (isAgentRuntime) {
+    runtimeMode = "agent";
+    runtimeModeLabel = "Agent";
+    runtimeControlPath = "agent-api";
+    runtimeTransport = "api-agent";
+  } else if (isCodexTmux) {
+    runtimeMode = "codex-tmux";
+    runtimeModeLabel = "Codex tmux";
+    runtimeControlPath = "tmux-pane";
+    runtimeTransport = "tmux";
+  } else if (input.state === "sleeping") {
+    runtimeMode = "sleeping";
+    runtimeModeLabel = "Sleeping";
+    runtimeControlPath = "none";
+  }
+
+  return {
+    runtimeMode,
+    runtimeModeLabel,
+    runtimeControlPath,
+    runtimeTransport,
+    isCodexAppServer,
+    isCodexTmux,
+    isAgentRuntime,
+    terminalAttached,
+    rawTerminalActive: terminalAttached,
+    paneAvailable,
+  };
 }
 
 export function threadSummaryRuntimeSnapshot(thread: any, status: any, state: string): any {
@@ -560,6 +675,22 @@ export async function threadRuntimeSummary(thread: any, messages: any[] = [], op
   const turnLifecycle = status?.turnLifecycle || runtime?.turnLifecycle || null;
   const codexStatus = hasOwnKey(status, "codexStatus") ? status?.codexStatus || null : thread.runtime?.codexStatus || null;
   const activeTurnId = hasOwnKey(status, "activeTurnId") ? status?.activeTurnId || null : thread.runtime?.activeTurnId || null;
+  const runtimeKind = metadata.runtimeKind || (resolvedCodexThreadId ? "migration_required" : null);
+  const sessionName = status?.sessionName || thread.runtime?.sessionName || thread.executor?.sessionName || null;
+  const paneId = status?.paneId || thread.runtime?.paneId || thread.executor?.tmuxTarget || null;
+  const codexAppServerTransport = status?.codexAppServerTransport || null;
+  const codexAppServerSocket = status?.codexAppServerSocket || null;
+  const runtimeControl = threadRuntimeControlSummary({
+    thread,
+    status,
+    runtime,
+    state,
+    runtimeKind,
+    sessionName,
+    paneId,
+    codexAppServerTransport,
+    codexAppServerSocket,
+  });
   const summary = {
     ...thread,
     ...gitState,
@@ -568,10 +699,10 @@ export async function threadRuntimeSummary(thread: any, messages: any[] = [], op
     status: state,
     state,
     routeEligible: true,
-    sessionName: status?.sessionName || thread.runtime?.sessionName || thread.executor?.sessionName || null,
-    paneId: status?.paneId || thread.runtime?.paneId || thread.executor?.tmuxTarget || null,
-    tmuxTarget: status?.paneId || thread.runtime?.paneId || thread.executor?.tmuxTarget || null,
-    runtime,
+    sessionName,
+    paneId,
+    tmuxTarget: paneId,
+    runtime: runtime ? { ...runtime, ...runtimeControl } : runtime,
     turnLifecycle,
     activeRuntimeLeaseId: status?.lease?.id || thread.activeRuntimeLeaseId || null,
     promptReady: status?.promptReady ?? ready,
@@ -605,9 +736,10 @@ export async function threadRuntimeSummary(thread: any, messages: any[] = [], op
     inferredThreadId: resolvedCodexThreadId || null,
     wakePolicy: thread.wakePolicy || "wake-on-message",
     ...metadata,
-    runtimeKind: metadata.runtimeKind || (resolvedCodexThreadId ? "migration_required" : null),
-    codexAppServerTransport: status?.codexAppServerTransport || null,
-    codexAppServerSocket: status?.codexAppServerSocket || null,
+    runtimeKind,
+    ...runtimeControl,
+    codexAppServerTransport,
+    codexAppServerSocket,
     codexSessionId: metadata.codexSessionId || null,
     codexStatus,
     activeTurnId,

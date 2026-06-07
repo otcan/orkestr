@@ -4153,11 +4153,102 @@ test("thread summary preserves raw-terminal mode for sleeping takeover threads",
     const summary = await threadRuntimeSummary(thread, [], { cacheTtlMs: 0 });
 
     assert.equal(summary.runtimeKind, "raw-terminal");
+    assert.equal(summary.runtimeMode, "attached-terminal");
+    assert.equal(summary.runtimeModeLabel, "Attached terminal");
+    assert.equal(summary.runtimeControlPath, "raw-terminal");
+    assert.equal(summary.runtimeTransport, "raw-terminal");
+    assert.equal(summary.terminalAttached, true);
+    assert.equal(summary.rawTerminalActive, true);
+    assert.equal(summary.isCodexAppServer, false);
+    assert.equal(summary.runtime.runtimeMode, "attached-terminal");
     assert.equal(summary.codexSessionId, "019ea2ca-b360-7751-bd76-cbd5fedf0a60");
     assert.equal(summary.migrationRequired, false);
   } finally {
     restoreEnvValue("ORKESTR_HOME", priorHome);
   }
+});
+
+test("thread summary differentiates Codex API, tmux Codex, and agent runtime modes", async () => {
+  const apiSummary = await threadRuntimeSummary({
+    id: "summary-codex-api-thread",
+    name: "Summary Codex API Thread",
+    runtimeKind: "codex-app-server",
+    runtime: {
+      runtimeKind: "codex-app-server",
+      state: "ready",
+    },
+    executor: {
+      type: "codex",
+      transport: "codex-app-server",
+      metadata: {
+        runtimeKind: "codex-app-server",
+        transport: "codex-app-server",
+      },
+    },
+  }, [], { cacheTtlMs: 0 });
+
+  assert.equal(apiSummary.runtimeMode, "codex-api");
+  assert.equal(apiSummary.runtimeModeLabel, "Codex API");
+  assert.equal(apiSummary.runtimeControlPath, "app-server");
+  assert.equal(apiSummary.runtimeTransport, "codex-app-server");
+  assert.equal(apiSummary.isCodexAppServer, true);
+  assert.equal(apiSummary.isCodexTmux, false);
+  assert.equal(apiSummary.terminalAttached, false);
+
+  const tmuxSummary = await threadRuntimeSummary({
+    id: "summary-codex-tmux-thread",
+    name: "Summary Codex tmux Thread",
+    runtimeKind: "codex-tmux",
+    runtime: {
+      runtimeKind: "codex-tmux",
+      state: "ready",
+      paneId: "%7",
+      sessionName: "orkestr-summary",
+    },
+    executor: {
+      type: "codex",
+      transport: "tmux",
+      tmuxTarget: "%7",
+      sessionName: "orkestr-summary",
+      metadata: {
+        runtimeKind: "codex-tmux",
+        transport: "tmux",
+      },
+    },
+  }, [], { cacheTtlMs: 0 });
+
+  assert.equal(tmuxSummary.runtimeMode, "codex-tmux");
+  assert.equal(tmuxSummary.runtimeModeLabel, "Codex tmux");
+  assert.equal(tmuxSummary.runtimeControlPath, "tmux-pane");
+  assert.equal(tmuxSummary.runtimeTransport, "tmux");
+  assert.equal(tmuxSummary.isCodexTmux, true);
+  assert.equal(tmuxSummary.paneAvailable, true);
+  assert.equal(tmuxSummary.terminalAttached, false);
+
+  const agentSummary = await threadRuntimeSummary({
+    id: "summary-api-agent-thread",
+    name: "Summary API Agent Thread",
+    runtimeKind: "api-agent",
+    runtime: {
+      runtimeKind: "api-agent",
+      state: "ready",
+    },
+    executor: {
+      type: "api-agent",
+      metadata: {
+        runtimeKind: "api-agent",
+        transport: "api-agent",
+      },
+    },
+  }, [], { cacheTtlMs: 0 });
+
+  assert.equal(agentSummary.runtimeMode, "agent");
+  assert.equal(agentSummary.runtimeModeLabel, "Agent");
+  assert.equal(agentSummary.runtimeControlPath, "agent-api");
+  assert.equal(agentSummary.runtimeTransport, "api-agent");
+  assert.equal(agentSummary.isAgentRuntime, true);
+  assert.equal(agentSummary.isCodexAppServer, false);
+  assert.equal(agentSummary.isCodexTmux, false);
 });
 
 test("thread summary ignores corrupt Codex model and reasoning metadata", async () => {

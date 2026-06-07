@@ -560,7 +560,7 @@ textarea:focus {
   border: 1px solid transparent;
   border-radius: 12px;
   color: inherit;
-  padding: 10px 64px 10px 10px;
+  padding: 10px 132px 10px 10px;
   text-decoration: none;
 }
 
@@ -732,7 +732,7 @@ textarea:focus {
   position: absolute;
   top: 10px;
   right: 10px;
-  max-width: 88px;
+  max-width: 122px;
 }
 
 .thread-item > .pending {
@@ -759,6 +759,37 @@ textarea:focus {
   max-width: none;
   text-transform: uppercase;
   animation: processing-badge-pulse 1.2s ease-in-out infinite;
+}
+
+.runtime-mode-badge {
+  border-color: rgba(145, 173, 139, 0.34);
+  background: rgba(145, 173, 139, 0.14);
+  color: #d8efcf;
+  max-width: none;
+}
+
+.runtime-mode-badge.codex-api {
+  border-color: rgba(104, 172, 219, 0.42);
+  background: rgba(104, 172, 219, 0.2);
+  color: #cfeeff;
+}
+
+.runtime-mode-badge.codex-tmux {
+  border-color: rgba(207, 184, 74, 0.42);
+  background: rgba(207, 184, 74, 0.18);
+  color: #fff2aa;
+}
+
+.runtime-mode-badge.attached-terminal {
+  border-color: rgba(255, 209, 102, 0.48);
+  background: rgba(255, 209, 102, 0.22);
+  color: #ffe7a3;
+}
+
+.runtime-mode-badge.agent-runtime {
+  border-color: rgba(99, 212, 113, 0.38);
+  background: rgba(99, 212, 113, 0.18);
+  color: #cfffca;
 }
 
 .error-badge {
