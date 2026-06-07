@@ -169,7 +169,7 @@ export function initialQueueDeliveryState(status = null, message = null) {
   if (isCodexAppServer && ["sleeping", "waking", "unloaded", "notloaded", "failed", "migration_required"].includes(state)) {
     return "waking";
   }
-  if (isCodexAppServer) return "waiting_runtime_ready";
+  if (isCodexAppServer) return "";
   if (state === "working") return "awaiting_runtime_completion";
   if (state === "waking" || state === "sleeping") return "waiting_runtime_start";
   if (!status.sessionName) return "waiting_runtime_start";

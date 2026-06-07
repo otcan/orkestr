@@ -5295,6 +5295,41 @@ test("whatsapp delivery reports queued runtime inputs without marking the input 
   assert.equal(messages.find((entry) => entry.id === routed.message.id).state, "queued");
 });
 
+test("whatsapp delivery does not report ready app-server handoff as a queue notice", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-ready-app-server-no-notice-"));
+  const env = externalBridgeEnv(home);
+  await createThread({
+    id: "thread-wa-ready-app-server-no-notice",
+    name: "WA Ready App Server No Notice Thread",
+    runtimeKind: "codex-app-server",
+  }, env);
+  await writeConnectorConfig("whatsapp", {
+    bridgeMode: "external",
+    bridgeUrl: "http://wa.local",
+    threadRoutes: { "chat-ready-app-server-no-notice": "thread-wa-ready-app-server-no-notice" },
+  }, env);
+  const routed = await routeWhatsAppInbound({
+    eventId: "wa-ready-app-server-no-notice-1",
+    chatId: "chat-ready-app-server-no-notice",
+    accountId: "account-1",
+    text: "send normally",
+  }, env);
+  await updateThreadMessage("thread-wa-ready-app-server-no-notice", routed.message.id, {
+    state: "queued",
+    deliveryState: "",
+  }, env);
+
+  const calls = [];
+  const delivery = await deliverWhatsAppReplies(env, async (url, options) => {
+    calls.push({ url, body: JSON.parse(options.body) });
+    return response({ ok: true, ids: ["unexpected-ready-queue-notice"] });
+  });
+
+  assert.equal(delivery.delivered.length, 0);
+  assert.equal(delivery.failed.length, 0);
+  assert.equal(calls.length, 0);
+});
+
 test("whatsapp delivery reports frozen runtime blocks without marking the input delivered", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-frozen-notice-"));
   const env = externalBridgeEnv(home);
@@ -5583,7 +5618,7 @@ test("whatsapp queue notices use app-server runtime states", () => {
     runtimeKind: "codex-app-server",
     sessionName: null,
     promptReady: true,
-  }, { text: "send normally" }), "waiting_runtime_ready");
+  }, { text: "send normally" }), "");
   assert.equal(initialQueueDeliveryState({
     state: "working",
     runtimeKind: "codex-app-server",

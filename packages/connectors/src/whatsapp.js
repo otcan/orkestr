@@ -44,6 +44,7 @@ import {
   claimConnectorOutboxJob,
   connectorOutboxTerminalState,
   ensureConnectorOutboxJob,
+  readConnectorOutbox,
   markConnectorOutboxJob,
   releaseConnectorOutboxClaim,
 } from "./connector-outbox.js";
@@ -959,13 +960,96 @@ function connectorOutboxJobIntentMatches(job = {}, intent = {}) {
 function connectorOutboxJobDeliveryMatches(job = {}, delivery = {}) {
   const jobId = pickString(job.id);
   if (jobId && pickString(delivery.connectorOutboxJobId) === jobId) return true;
+  const routerOutboxId = pickString(job.metadata?.routerOutboxId);
+  if (routerOutboxId && pickString(delivery.outboxId) === routerOutboxId) return true;
   const sourceMessageId = pickString(job.sourceMessageId, job.sourceEventId);
   const deliverySource = pickString(delivery.sourceMessageId, delivery.messageId);
   const sameSource = Boolean(sourceMessageId && (sourceMessageId === deliverySource || sourceMessageId === pickString(delivery.messageId)));
   return sameSource &&
     (!job.chatId || pickString(delivery.chatId) === pickString(job.chatId)) &&
     (!job.accountId || pickString(delivery.accountId) === pickString(job.accountId)) &&
-    (!job.deliveryType || pickString(delivery.deliveryType) === pickString(job.deliveryType));
+    (!job.deliveryType || pickString(delivery.deliveryType) === pickString(job.deliveryType)) &&
+    (!job.metadata?.textKey || pickString(delivery.textKey) === pickString(job.metadata.textKey));
+}
+
+function deliveredConnectorOutboxEvidence(job = {}, outboundDeliveries = [], outboundIntents = []) {
+  const delivery = [...(outboundDeliveries || [])].reverse().find((item) => connectorOutboxJobDeliveryMatches(job, item)) || null;
+  if (delivery) {
+    return {
+      deliveredAt: pickString(delivery.deliveredAt) || new Date().toISOString(),
+      brokerAck: delivery.bridgeResponse && typeof delivery.bridgeResponse === "object" && !Array.isArray(delivery.bridgeResponse)
+        ? delivery.bridgeResponse
+        : delivery.brokerAck && typeof delivery.brokerAck === "object" && !Array.isArray(delivery.brokerAck)
+          ? delivery.brokerAck
+          : null,
+      source: "whatsapp_delivery_ledger",
+    };
+  }
+  const intent = [...(outboundIntents || [])].reverse().find((item) =>
+    connectorOutboxJobIntentMatches(job, item) &&
+    pickString(item.status).toLowerCase() === "delivered"
+  ) || null;
+  if (!intent) return null;
+  return {
+    deliveredAt: pickString(intent.deliveredAt) || new Date().toISOString(),
+    brokerAck: null,
+    source: "whatsapp_outbound_intent",
+  };
+}
+
+async function reconcileWhatsAppConnectorOutboxFromLedger(state = {}, env = process.env) {
+  const outbox = await readConnectorOutbox(env).catch(() => ({ jobs: [] }));
+  const jobs = (outbox.jobs || []).filter((job) =>
+    pickString(job.connector).toLowerCase() === "whatsapp" &&
+    !connectorOutboxTerminalState(job.state)
+  );
+  if (!jobs.length) return { reconciled: 0 };
+  const outboundDeliveries = Array.isArray(state.outboundDeliveries) ? state.outboundDeliveries : [];
+  const outboundIntents = Array.isArray(state.outboundIntents) ? state.outboundIntents : [];
+  let reconciled = 0;
+  let intentsChanged = false;
+  for (const job of jobs) {
+    const evidence = deliveredConnectorOutboxEvidence(job, outboundDeliveries, outboundIntents);
+    if (!evidence) continue;
+    await markConnectorOutboxJob(job.id, {
+      state: "delivered",
+      deliveredAt: evidence.deliveredAt,
+      brokerAck: evidence.brokerAck || job.brokerAck || null,
+      error: "",
+    }, env);
+    const intent = outboundIntents.find((item) => connectorOutboxJobIntentMatches(job, item)) || null;
+    if (intent?.intentId && pickString(intent.status).toLowerCase() !== "delivered") {
+      const marked = markWhatsAppOutboundIntent(outboundIntents, intent.intentId, {
+        status: "delivered",
+        deliveredAt: evidence.deliveredAt,
+        deliveryMessageId: pickString(job.sourceMessageId, job.sourceEventId),
+        error: "",
+        connectorOutboxJobId: job.id,
+      });
+      outboundIntents.splice(0, outboundIntents.length, ...marked);
+      state.outboundIntents = outboundIntents;
+      intentsChanged = true;
+    }
+    const routerOutboxId = pickString(job.metadata?.routerOutboxId);
+    if (routerOutboxId) {
+      await markRouterOutboxItem(routerOutboxId, { status: "delivered", deliveredAt: evidence.deliveredAt }, env).catch(() => null);
+    }
+    reconciled += 1;
+    await appendEvent({
+      type: "connector_outbox_reconciled_from_whatsapp_delivery",
+      outboxJobId: job.id,
+      connector: "whatsapp",
+      source: evidence.source,
+      chatId: pickString(job.chatId),
+      accountId: pickString(job.accountId),
+      threadId: pickString(job.threadId),
+      sourceMessageId: pickString(job.sourceMessageId),
+      deliveryType: pickString(job.deliveryType),
+      deliveredAt: evidence.deliveredAt,
+    }, env).catch(() => null);
+  }
+  if (intentsChanged) await writeWhatsAppState(state, env);
+  return { reconciled };
 }
 
 function connectorOutboxIntentPatch(action = "", job = {}, options = {}) {
@@ -2573,6 +2657,9 @@ async function deliverWhatsAppRepliesOnce(env = process.env, fetchImpl = fetch) 
     appendEvent({ type: "whatsapp_remote_runtime_sync_failed", error: error.message || String(error) }, env).catch(() => null)
   );
   const state = await readWhatsAppState(env);
+  await reconcileWhatsAppConnectorOutboxFromLedger(state, env).catch((error) =>
+    appendEvent({ type: "connector_outbox_reconcile_from_whatsapp_delivery_failed", error: error.message || String(error) }, env).catch(() => null)
+  );
   const deliveredIds = new Set((state.outboundDeliveries || []).map((delivery) => delivery.messageId));
   const deliveredTextKeys = new Set((state.outboundDeliveries || []).map((delivery) => delivery.textKey).filter(Boolean));
   const batchTextKeys = new Set();

@@ -144,6 +144,65 @@ test("whatsapp connector outbox replay resets intent and delivered ledger", asyn
   assert.equal(replayedJob.brokerAck.ids[0], "wa-sent-2");
 });
 
+test("whatsapp connector outbox retry reconciles already-delivered ledger without resending", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-connector-outbox-reconcile-"));
+  const runtimeEnv = env(home);
+  await writeConnectorConfig("whatsapp", { bridgeMode: "external", bridgeUrl: "http://wa.local" }, runtimeEnv);
+  await createThread({
+    id: "thread-wa-outbox-reconcile",
+    ownerUserId: "tenant-a",
+    name: "WA Connector Outbox Reconcile Thread",
+    binding: {
+      connector: "whatsapp",
+      chatId: "shared-chat",
+      responderAccountId: "responder",
+      outboundAccountId: "responder",
+      mirrorToWhatsApp: true,
+    },
+  }, runtimeEnv);
+  const parent = await appendThreadMessage("thread-wa-outbox-reconcile", {
+    role: "user",
+    source: "whatsapp_inbound",
+    state: "completed",
+    connector: "whatsapp",
+    chatId: "shared-chat",
+    accountId: "responder",
+    text: "status?",
+  }, runtimeEnv);
+  const reply = await appendThreadMessage("thread-wa-outbox-reconcile", {
+    role: "assistant",
+    source: "codex-app-server",
+    phase: "final_answer",
+    state: "completed",
+    parentMessageId: parent.id,
+    chatId: "shared-chat",
+    accountId: "responder",
+    text: "Already sent answer.",
+  }, runtimeEnv);
+
+  await deliverWhatsAppReplies(runtimeEnv, async () => response({ ok: true, ids: ["wa-sent-1"] }));
+  const outbox = await readConnectorOutbox(runtimeEnv);
+  const job = outbox.jobs.find((item) => item.sourceMessageId === reply.id);
+  assert.equal(job?.state, "delivered");
+
+  const retry = await applyConnectorOutboxJobAction(job.id, "retry", { reason: "operator retry", operator: "tester" }, runtimeEnv);
+  assert.equal(retry.job.state, "pending");
+
+  const calls = [];
+  const delivery = await deliverWhatsAppReplies(runtimeEnv, async (url, options) => {
+    calls.push({ url, body: JSON.parse(options.body) });
+    return response({ ok: true, ids: ["unexpected-resend"] });
+  });
+  const refreshed = await readConnectorOutbox(runtimeEnv);
+  const reconciledJob = refreshed.jobs.find((item) => item.id === job.id);
+
+  assert.equal(delivery.delivered.length, 0);
+  assert.equal(delivery.failed.length, 0);
+  assert.equal(calls.length, 0);
+  assert.equal(reconciledJob.state, "delivered");
+  assert.equal(reconciledJob.brokerAck.ids[0], "wa-sent-1");
+});
+
 test("whatsapp mirrors edited assistant replies as revisioned correction notices", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-connector-outbox-edit-"));
   const runtimeEnv = env(home);
