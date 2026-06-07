@@ -35,7 +35,7 @@
     <div class="ops-grid">
       <article class="ops-card">
         <h4>Instances</h4>
-        <p>{{ opsReleaseInstances.length }}</p>
+        <p>{{ brokerInstances().length }}</p>
         <small>{{ releaseTrainCount() }} on train · {{ releaseDeployCommandCount() }} deployable</small>
       </article>
       <article class="ops-card" [class.critical]="releaseUnreachableCount() > 0">
@@ -54,7 +54,7 @@
         <small>{{ opsWatcherAlerts.length }} recent alerts</small>
       </article>
       <article class="ops-card" [class.critical]="whatsappDoctorCount('errors') > 0 || opsWhatsAppDoctorError">
-        <h4>WhatsApp Accounts</h4>
+        <h4>WhatsApp Account IDs</h4>
         <p>{{ whatsappReadyAccountCount() }} / {{ whatsappDoctorCount("accounts") || whatsappAccounts().length }}</p>
         <small>{{ opsWhatsAppDoctor?.summary || objectValue(opsWhatsApp, "summary") || "doctor not loaded" }}</small>
       </article>
@@ -75,98 +75,98 @@
     @if (opsWatcherAlertsError) {
       <div class="notice error">{{ opsWatcherAlertsError }}</div>
     }
+    @if (opsTenantVmsError) {
+      <div class="notice error">{{ opsTenantVmsError }}</div>
+    }
+    @if (opsThreadsError) {
+      <div class="notice error">{{ opsThreadsError }}</div>
+    }
     @if (opsWhatsAppDoctorError) {
       <div class="notice error">{{ opsWhatsAppDoctorError }}</div>
     }
     @if (opsWhatsAppOutboxError) {
       <div class="notice error">{{ opsWhatsAppOutboxError }}</div>
     }
-    <div class="ops-columns">
-      <section>
-        <h4>Instances</h4>
-        <div class="compact-list">
-          @for (instance of opsReleaseInstances; track instance.id) {
-            <article class="compact-row">
-              <strong>{{ releaseInstanceLabel(instance) }}</strong>
-              <span [class.ready]="releaseInstanceStatusClass(instance) === 'ready'" [class.bad]="releaseInstanceStatusClass(instance) === 'bad'">
-                {{ instance.status || "unknown" }} · {{ releaseInstanceRolloutLabel(instance) }}
-              </span>
-              <p>{{ releaseInstanceVersion(instance) }} @if (releaseInstanceCommit(instance)) { · {{ releaseInstanceCommit(instance) }} }</p>
-              <small>{{ releaseInstanceMeta(instance) }}</small>
-              @if (releaseInstanceEndpoint(instance)) {
-                <small>{{ releaseInstanceEndpoint(instance) }}</small>
+    <section>
+      <h4>WhatsApp Account IDs</h4>
+      <div class="ops-grid">
+        @for (account of whatsappAccounts(); track account.accountId || account.id) {
+          <article class="ops-card">
+            <h4>{{ whatsappAccountLabel(account) }}</h4>
+            <p>{{ whatsappAccountStatusLabel(account) }}</p>
+            <small>{{ whatsappAccountIdentity(account) }}</small>
+            <small>{{ whatsappAccountFlags(account) }}</small>
+            <small>{{ whatsappAccountMeta(account) }}</small>
+          </article>
+        } @empty {
+          <article class="ops-card"><h4>No Account IDs</h4><p>--</p><small>No WhatsApp account diagnostics loaded.</small></article>
+        }
+      </div>
+      <div class="compact-list">
+        @for (item of brokerAccountHistory(); track item.phone + item.accountId + item.source) {
+          <article class="compact-row">
+            <strong>{{ item.phone }} · Account ID {{ item.accountId || "-" }}</strong>
+            <span>{{ item.state }} · {{ item.source }}</span>
+            <small>{{ item.detail }}</small>
+          </article>
+        }
+      </div>
+    </section>
+
+    <section>
+      <h4>Instance Threads</h4>
+      <div class="compact-list instance-thread-list">
+        @for (instance of brokerInstances(); track instance.id) {
+          <article class="compact-row instance-row">
+            <strong>{{ releaseInstanceLabel(instance) }}</strong>
+            <span [class.ready]="releaseInstanceStatusClass(instance) === 'ready'" [class.bad]="releaseInstanceStatusClass(instance) === 'bad'">
+              {{ instance.status || "unknown" }} · {{ releaseInstanceRolloutLabel(instance) }} · {{ brokerRemoteStatus(instance) }}
+            </span>
+            <p>{{ releaseInstanceVersion(instance) }} @if (releaseInstanceCommit(instance)) { · {{ releaseInstanceCommit(instance) }} }</p>
+            <small>{{ releaseInstanceMeta(instance) }}</small>
+            <small>{{ brokerInstanceRouteLine(instance) }}</small>
+            @if (releaseInstanceEndpoint(instance)) {
+              <small>{{ releaseInstanceEndpoint(instance) }}</small>
+            }
+            <div class="thread-instance-table">
+              <div class="thread-instance-row head"><span>Thread</span><span>Chat</span><span>Account IDs</span><span>Queue / outbox</span><span>Actions</span></div>
+              @for (row of brokerThreads(instance); track row.id) {
+                <div class="thread-instance-row">
+                  <span>
+                    <strong>{{ row.label }}</strong>
+                    <small>{{ row.threadId || row.id }} @if (row.codexThreadId) { · {{ row.codexThreadId }} }</small>
+                    <small>{{ row.state }} @if (row.remoteStatus) { · {{ row.remoteStatus }} }</small>
+                  </span>
+                  <span><strong>{{ row.chatName || "-" }}</strong><small>{{ row.chatId || "-" }}</small></span>
+                  <span><code>{{ brokerAccountIds(row) }}</code></span>
+                  <span>
+                    <strong>{{ row.queueLabel }}</strong>
+                    <small>{{ row.outboxLabel }}</small>
+                    @if (row.latestAlert) {
+                      <small>{{ row.latestAlert.code || row.latestAlert.source }}: {{ row.latestAlert.message }}</small>
+                    }
+                  </span>
+                  <span class="row-actions">
+                    @if (row.localThread) {
+                      <a class="button-like" [href]="brokerThreadUrl(row)">Open</a>
+                      <button class="secondary" type="button" (click)="brokerWake(row)">Wake</button>
+                      <button class="secondary" type="button" (click)="brokerRecover(row)">Recover</button>
+                    } @else {
+                      <button class="secondary" type="button" disabled>Remote</button>
+                    }
+                    <button class="secondary" type="button" (click)="brokerRetryOutbox(row)">Retry</button>
+                  </span>
+                </div>
+              } @empty {
+                <p class="empty">No threads or parent-known WhatsApp route for this instance.</p>
               }
-              @if (instance.lastError) {
-                <small>{{ instance.lastError }}</small>
-              }
-            </article>
-          } @empty {
-            <p class="empty">No Broker instances loaded.</p>
-          }
-        </div>
-      </section>
-      <section>
-        <h4>WhatsApp Accounts</h4>
-        <div class="compact-list">
-          @for (account of whatsappAccounts(); track account.accountId || account.id) {
-            <article class="compact-row">
-              <strong>{{ whatsappAccountLabel(account) }}</strong>
-              <span [class.ready]="whatsappAccountStatusClass(account) === 'ready'" [class.bad]="whatsappAccountStatusClass(account) === 'bad'">
-                {{ whatsappAccountStatusLabel(account) }}
-              </span>
-              <p>{{ whatsappAccountIdentity(account) }}</p>
-              <small>{{ whatsappAccountFlags(account) }}</small>
-              <small>{{ whatsappAccountMeta(account) }}</small>
-              @if (account.error) {
-                <small>{{ account.error }}</small>
-              }
-            </article>
-          } @empty {
-            <p class="empty">No WhatsApp account diagnostics loaded.</p>
-          }
-        </div>
-      </section>
-    </div>
-    <div class="ops-columns">
-      <section>
-        <h4>WhatsApp Bindings</h4>
-        <div class="compact-list">
-          @for (binding of visibleWhatsAppBindings(); track binding.bindingId || binding.id || binding.chatId) {
-            <article class="compact-row">
-              <strong>{{ whatsappBindingTitle(binding) }}</strong>
-              <span [class.ready]="whatsappBindingStatusClass(binding) === 'ready'" [class.bad]="whatsappBindingStatusClass(binding) === 'bad'">
-                {{ whatsappBindingStatusLabel(binding) }}
-              </span>
-              <small>{{ whatsappBindingMeta(binding) }}</small>
-              @if (binding.lastEvaluationAt) {
-                <small>evaluated {{ binding.lastEvaluationAt | date: "MMM d, HH:mm:ss" }}</small>
-              }
-            </article>
-          } @empty {
-            <p class="empty">No WhatsApp bindings loaded.</p>
-          }
-        </div>
-      </section>
-      <section>
-        <h4>Latest Outbox</h4>
-        <div class="compact-list">
-          @for (job of opsWhatsAppOutboxJobs; track job.id) {
-            <article class="compact-row">
-              <strong>{{ whatsappOutboxTitle(job) }}</strong>
-              <span [class.ready]="whatsappOutboxStateClass(job) === 'ready'" [class.bad]="whatsappOutboxStateClass(job) === 'bad'">
-                {{ job.state || "unknown" }} · {{ job.updatedAt | date: "MMM d, HH:mm:ss" }}
-              </span>
-              <small>{{ whatsappOutboxMeta(job) }}</small>
-              @if (job.error) {
-                <small>{{ job.error }}</small>
-              }
-            </article>
-          } @empty {
-            <p class="empty">No WhatsApp outbox records loaded.</p>
-          }
-        </div>
-      </section>
-    </div>
+            </div>
+          </article>
+        } @empty {
+          <p class="empty">No Broker instances loaded.</p>
+        }
+      </div>
+    </section>
     <div class="ops-columns">
       <section>
         <h4>Recent Alerts</h4>

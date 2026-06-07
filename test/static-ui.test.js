@@ -123,10 +123,13 @@ test("ops page exposes release broker inventory", async () => {
   const api = await fs.readFile(path.join(root, "apps/web/src/app/api.service.ts"), "utf8");
 
   assert.match(api, /releaseInstances\(probe = true\)/);
+  assert.match(api, /tenantVms\(\)/);
   assert.match(api, /watcherAlerts\(limit = 20\)/);
   assert.match(api, /interface WhatsAppDoctorResponse/);
   assert.match(api, /whatsappDoctor\(\)/);
   assert.match(component, /opsReleaseInstances: ReleaseInstance\[\]/);
+  assert.match(component, /opsTenantVms: TenantVm\[\]/);
+  assert.match(component, /opsThreads: ThreadSummary\[\]/);
   assert.match(component, /opsWatcherAlerts: WatcherAlert\[\]/);
   assert.match(component, /opsWhatsAppDoctor: WhatsAppDoctorResponse \| null = null/);
   assert.match(component, /opsWhatsAppOutboxJobs: WhatsAppOutboxJob\[\] = \[\]/);
@@ -134,12 +137,19 @@ test("ops page exposes release broker inventory", async () => {
   assert.match(component, /watcherAlertTitle\(alert: WatcherAlert\)/);
   assert.match(component, /whatsappAccountIdentity\(account: WhatsAppDoctorAccount\)/);
   assert.match(component, /visibleWhatsAppBindings\(\): WhatsAppDoctorBinding\[\]/);
+  assert.match(component, /brokerThreads\(instance: ReleaseInstance\): BrokerThreadRow\[\]/);
+  assert.match(component, /brokerAccountHistory\(\)/);
   assert.match(template, /toolsView === 'broker'/);
   assert.match(template, /releaseInstanceRolloutLabel\(instance\)/);
-  assert.match(template, /WhatsApp Accounts/);
-  assert.match(template, /WhatsApp Bindings/);
-  assert.match(template, /Latest Outbox/);
+  assert.match(template, /WhatsApp Account IDs/);
+  assert.match(template, /Instance Threads/);
+  assert.match(template, /Account IDs/);
+  assert.match(template, /brokerThreads\(instance\)/);
+  assert.match(template, /brokerWake\(row\)/);
+  assert.match(template, /brokerRecover\(row\)/);
+  assert.match(template, /brokerRetryOutbox\(row\)/);
   assert.match(template, /Recent Alerts/);
+  assert.doesNotMatch(template, /responder account/i);
 });
 
 test("server keeps public pages on the configured public site host only", async () => {

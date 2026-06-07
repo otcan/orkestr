@@ -69,6 +69,43 @@ export interface ReleaseInstancesResponse {
   generatedAt?: string;
 }
 
+export interface TenantVmWhatsAppRoute {
+  chatId?: string;
+  chatName?: string;
+  accountId?: string;
+  target?: string;
+  routeMode?: string;
+  targetSource?: string;
+  tokenConfigured?: boolean;
+  tokenPreview?: string;
+  diagnostics?: {
+    nextAction?: string;
+    [key: string]: unknown;
+  };
+  [key: string]: unknown;
+}
+
+export interface TenantVm {
+  id: string;
+  displayName?: string;
+  ownerUserId?: string;
+  status?: string;
+  endpoint?: {
+    baseUrl?: string;
+    brokerBaseUrl?: string;
+    [key: string]: unknown;
+  };
+  whatsappRoute?: TenantVmWhatsAppRoute | null;
+  [key: string]: unknown;
+}
+
+export interface TenantVmsResponse {
+  tenantVms?: TenantVm[];
+  vms?: TenantVm[];
+  count?: number;
+  generatedAt?: string;
+}
+
 export interface WatcherAlert {
   id: string;
   severity?: string;
@@ -1426,6 +1463,10 @@ export class ApiService {
 
   releaseInstances(probe = true): Observable<ReleaseInstancesResponse> {
     return this.http.get<ReleaseInstancesResponse>(this.api(`/release/instances?probe=${probe ? "1" : "0"}`));
+  }
+
+  tenantVms(): Observable<TenantVmsResponse> {
+    return this.http.get<TenantVmsResponse>(this.api("/tenant-vms"));
   }
 
   setupStatus(): Observable<SetupStatus> {

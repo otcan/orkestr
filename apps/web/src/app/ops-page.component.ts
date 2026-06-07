@@ -2,11 +2,28 @@ import { DatePipe } from "@angular/common";
 import { ChangeDetectorRef, Component, EventEmitter, Input, OnDestroy, OnInit, Output, inject } from "@angular/core";
 import { FormsModule } from "@angular/forms";
 import { firstValueFrom } from "rxjs";
-import { Agent, AgentTemplate, ApiService, BrowserSession, ConnectorStatus, DesktopLeaseRecord, EventRecord, OrkestrUser, OutlookOAuthPollResponse, ReleaseInstance, ReleaseInstancesResponse, SecurityChallenge, SecuritySession, SetupStatus, TimerDoctorResponse, TimerRecord, UserIdentity, UserOutlookOAuthStartResponse, VersionResponse, WatcherAlert, WhatsAppDoctorAccount, WhatsAppDoctorBinding, WhatsAppDoctorResponse, WhatsAppOutboxJob } from "./api.service";
+import { Agent, AgentTemplate, ApiService, BrowserSession, ConnectorStatus, DesktopLeaseRecord, EventRecord, OrkestrUser, OutlookOAuthPollResponse, ReleaseInstance, ReleaseInstancesResponse, SecurityChallenge, SecuritySession, SetupStatus, TenantVm, TimerDoctorResponse, TimerRecord, ThreadSummary, UserIdentity, UserOutlookOAuthStartResponse, VersionResponse, WatcherAlert, WhatsAppDoctorAccount, WhatsAppDoctorBinding, WhatsAppDoctorResponse, WhatsAppOutboxJob } from "./api.service";
 import { OpsWaitlistComponent } from "./ops-waitlist.component";
 
 export type ToolsView = "system" | "broker" | "timers" | "desktops" | "models" | "settings" | "connectors" | "users" | "waitlist" | "audit";
 type MailIdentityProvider = "gmail" | "outlook";
+
+interface BrokerThreadRow {
+  id: string;
+  label: string;
+  state: string;
+  threadId?: string;
+  codexThreadId?: string | null;
+  chatId?: string;
+  chatName?: string;
+  accountIds: string[];
+  queueLabel: string;
+  outboxLabel: string;
+  latestAlert?: WatcherAlert | null;
+  routeOnly?: boolean;
+  remoteStatus?: string;
+  localThread?: ThreadSummary | null;
+}
 
 @Component({
   selector: "ork-ops-page",
@@ -39,6 +56,10 @@ export class OpsPageComponent implements OnInit, OnDestroy {
   opsReleaseCounts: Record<string, number> = {};
   opsReleaseGeneratedAt = "";
   opsReleaseError = "";
+  opsTenantVms: TenantVm[] = [];
+  opsTenantVmsError = "";
+  opsThreads: ThreadSummary[] = [];
+  opsThreadsError = "";
   opsWatcherAlerts: WatcherAlert[] = [];
   opsWatcherAlertsError = "";
   opsAgents: Agent[] = [];
@@ -119,9 +140,11 @@ export class OpsPageComponent implements OnInit, OnDestroy {
         this.renderNow();
       });
     try {
-      const [version, releaseInstances, watcherAlerts, setup, whatsapp, whatsappDoctor, whatsappOutbox, agents, templates, timers, timerDoctor, events, browsers, desktopLeases, runtimeLeases, executors, executions, system, processes, models, users, securityChallenges, securitySessions] = await Promise.allSettled([
+      const [version, releaseInstances, tenantVms, threads, watcherAlerts, setup, whatsapp, whatsappDoctor, whatsappOutbox, agents, templates, timers, timerDoctor, events, browsers, desktopLeases, runtimeLeases, executors, executions, system, processes, models, users, securityChallenges, securitySessions] = await Promise.allSettled([
         firstValueFrom(this.api.version()),
         firstValueFrom(this.api.releaseInstances(true)),
+        firstValueFrom(this.api.tenantVms()),
+        firstValueFrom(this.api.threads({ includeAllUsers: true })),
         firstValueFrom(this.api.watcherAlerts(20)),
         firstValueFrom(this.api.setupStatus()),
         firstValueFrom(this.api.whatsappStatus()),
@@ -147,6 +170,20 @@ export class OpsPageComponent implements OnInit, OnDestroy {
       if (version.status === "fulfilled") this.opsVersion = version.value;
       if (releaseInstances.status === "fulfilled") this.applyReleaseInstances(releaseInstances.value);
       else this.applyReleaseInstancesError(releaseInstances.reason);
+      if (tenantVms.status === "fulfilled") {
+        this.opsTenantVms = tenantVms.value.tenantVms || tenantVms.value.vms || [];
+        this.opsTenantVmsError = "";
+      } else {
+        this.opsTenantVms = [];
+        this.opsTenantVmsError = this.errorText(tenantVms.reason);
+      }
+      if (threads.status === "fulfilled") {
+        this.opsThreads = threads.value.threads || [];
+        this.opsThreadsError = "";
+      } else {
+        this.opsThreads = [];
+        this.opsThreadsError = this.errorText(threads.reason);
+      }
       if (watcherAlerts.status === "fulfilled") {
         this.opsWatcherAlerts = watcherAlerts.value.alerts || [];
         this.opsWatcherAlertsError = "";
@@ -816,8 +853,195 @@ export class OpsPageComponent implements OnInit, OnDestroy {
       .slice(0, 16);
   }
 
+  brokerInstances(): ReleaseInstance[] {
+    return [...this.opsReleaseInstances].sort((left, right) => {
+      const order = ["orkestr-ui", "vm-crawlerai", "vm-orkestr-de"];
+      const leftIndex = order.indexOf(left.id);
+      const rightIndex = order.indexOf(right.id);
+      if (leftIndex !== -1 || rightIndex !== -1) return (leftIndex === -1 ? 99 : leftIndex) - (rightIndex === -1 ? 99 : rightIndex);
+      return this.releaseInstanceLabel(left).localeCompare(this.releaseInstanceLabel(right));
+    });
+  }
+
+  brokerTenantVm(instance: ReleaseInstance): TenantVm | null {
+    const sourceId = String(instance.sourceId || "").trim();
+    const id = String(instance.id || "").replace(/^vm-/, "");
+    return this.opsTenantVms.find((vm) => vm.id === sourceId || vm.id === id || `vm-${vm.id}` === instance.id) || null;
+  }
+
+  brokerInstanceRoute(instance: ReleaseInstance) {
+    return this.brokerTenantVm(instance)?.whatsappRoute || null;
+  }
+
+  brokerRemoteStatus(instance: ReleaseInstance): string {
+    if (instance.id === "orkestr-ui") return "local";
+    const route = this.brokerInstanceRoute(instance);
+    if (!route) return "no parent route";
+    return route.tokenConfigured ? "remote route configured" : "route token missing";
+  }
+
+  brokerRemoteStatusClass(instance: ReleaseInstance): string {
+    const status = this.brokerRemoteStatus(instance);
+    if (status === "local" || status === "remote route configured") return "ready";
+    return "bad";
+  }
+
+  brokerInstanceRouteLine(instance: ReleaseInstance): string {
+    const route = this.brokerInstanceRoute(instance);
+    if (!route) return "No parent-known WhatsApp route";
+    return [
+      route.chatName || route.chatId || "WhatsApp route",
+      route.routeMode || "route",
+      route.accountId ? `Account ID ${route.accountId}` : "",
+    ].filter(Boolean).join(" · ");
+  }
+
+  brokerThreads(instance: ReleaseInstance): BrokerThreadRow[] {
+    const route = this.brokerInstanceRoute(instance);
+    const routeChatId = String(route?.chatId || "").trim();
+    const isLocal = instance.id === "orkestr-ui";
+    const sourceThreads = isLocal
+      ? this.opsThreads
+      : this.opsThreads.filter((thread) => String(thread.binding?.chatId || "").trim() === routeChatId && routeChatId);
+    const rows = sourceThreads.map((thread) => this.brokerThreadRowFromThread(thread, route || null));
+    if (!isLocal && routeChatId && !rows.some((row) => row.chatId === routeChatId)) {
+      rows.unshift({
+        id: `${instance.id}:${routeChatId}`,
+        label: String(route?.chatName || routeChatId),
+        state: "Remote thread list not loaded",
+        chatId: routeChatId,
+        chatName: String(route?.chatName || ""),
+        accountIds: [String(route?.accountId || "").trim()].filter(Boolean),
+        queueLabel: "remote",
+        outboxLabel: this.brokerOutboxLabelFor("", routeChatId),
+        latestAlert: this.brokerLatestAlert("", routeChatId),
+        routeOnly: true,
+        remoteStatus: route?.diagnostics?.nextAction || "remote auth required for thread details",
+        localThread: null,
+      });
+    }
+    return rows;
+  }
+
+  brokerThreadRowFromThread(thread: ThreadSummary, route: NonNullable<TenantVm["whatsappRoute"]> | null): BrokerThreadRow {
+    const chatId = String(thread.binding?.chatId || "").trim();
+    const accountIds = [
+      thread.binding?.inboundAccountId,
+      thread.binding?.senderAccountId,
+      thread.binding?.responderConnectorAccountId,
+      thread.binding?.responderAccountId,
+      thread.binding?.outboundAccountId,
+      route?.accountId,
+    ].map((value) => String(value || "").trim()).filter(Boolean);
+    return {
+      id: thread.id,
+      label: String(thread.binding?.displayName || thread.bindingName || thread.title || thread.name || thread.id),
+      state: String(thread.publicStatus || thread.state || thread.status || "unknown"),
+      threadId: thread.id,
+      codexThreadId: thread.codexThreadId,
+      chatId,
+      chatName: String(thread.binding?.displayName || ""),
+      accountIds: [...new Set(accountIds)],
+      queueLabel: `${Number(thread.pendingCount || 0)} queued · ${Number(thread.runningCount || 0)} running`,
+      outboxLabel: this.brokerOutboxLabelFor(thread.id, chatId),
+      latestAlert: this.brokerLatestAlert(thread.id, chatId),
+      localThread: thread,
+    };
+  }
+
+  brokerOutboxLabelFor(threadId = "", chatId = ""): string {
+    const jobs = this.opsWhatsAppOutboxJobs.filter((job) => {
+      return (!!threadId && job.threadId === threadId) || (!!chatId && job.chatId === chatId);
+    });
+    if (!jobs.length) return "0 outbox";
+    const failed = jobs.filter((job) => ["failed", "dead", "dead_letter", "failed_terminal"].includes(String(job.state || ""))).length;
+    const pending = jobs.filter((job) => ["pending", "queued", "claimed", "pending_retry"].includes(String(job.state || ""))).length;
+    return failed || pending ? `${failed} failed · ${pending} pending` : `${jobs.length} recent`;
+  }
+
+  brokerLatestAlert(threadId = "", chatId = ""): WatcherAlert | null {
+    return this.opsWatcherAlerts.find((alert) => {
+      const details = alert.details || {};
+      return (!!threadId && (alert.threadId === threadId || alert.watcherThreadId === threadId)) || (!!chatId && String(details["chatId"] || "") === chatId);
+    }) || null;
+  }
+
+  brokerAccountIds(row: BrokerThreadRow): string {
+    return row.accountIds.length ? row.accountIds.join(", ") : "-";
+  }
+
+  brokerThreadUrl(row: BrokerThreadRow): string {
+    return row.localThread ? `/ng/thread/${encodeURIComponent(row.localThread.id)}` : "";
+  }
+
+  brokerAccountHistory(): Array<{ phone: string; accountId: string; state: string; source: string; detail: string }> {
+    const rows: Array<{ phone: string; accountId: string; state: string; source: string; detail: string }> = [];
+    for (const account of this.whatsappAccounts()) {
+      const phone = String(account.phoneNumber || account.phone || account.number || account.pairingPhoneNumber || "").trim();
+      if (phone) {
+        rows.push({
+          phone,
+          accountId: String(account.accountId || account.id || ""),
+          state: account.ready ? "ready" : String(account.state || "not ready"),
+          source: "current diagnostics",
+          detail: "Current embedded Broker account diagnostic.",
+        });
+      }
+    }
+    if (!rows.some((row) => row.phone.includes("4917632400662") || row.phone.includes("+4917632400662"))) {
+      rows.push({
+        phone: "+4917632400662",
+        accountId: "main",
+        state: "not in current embedded Broker accounts",
+        source: "recent standalone bridge history",
+        detail: "Seen as the recently paired standalone WhatsApp bridge account, but current Broker diagnostics only expose configured IDs such as sender/responder.",
+      });
+    }
+    return rows;
+  }
+
+  async brokerWake(row: BrokerThreadRow): Promise<void> {
+    if (!row.localThread) return;
+    await this.runBrokerThreadAction(row, "wake");
+  }
+
+  async brokerRecover(row: BrokerThreadRow): Promise<void> {
+    if (!row.localThread) return;
+    await this.runBrokerThreadAction(row, "recover");
+  }
+
+  private async runBrokerThreadAction(row: BrokerThreadRow, action: "wake" | "recover"): Promise<void> {
+    try {
+      if (action === "wake") await firstValueFrom(this.api.wakeThread(row.localThread!.id));
+      else await firstValueFrom(this.api.recoverThread(row.localThread!.id));
+      this.notice = `${action} requested for ${row.label}`;
+      await this.loadOps(false);
+    } catch (error) {
+      this.notice = this.errorText(error);
+    }
+  }
+
+  async brokerRetryOutbox(row: BrokerThreadRow): Promise<void> {
+    const job = this.opsWhatsAppOutboxJobs.find((candidate) => {
+      const state = String(candidate.state || "").toLowerCase();
+      if (!["failed", "pending_retry", "queued", "pending"].includes(state)) return false;
+      return (!!row.threadId && candidate.threadId === row.threadId) || (!!row.chatId && candidate.chatId === row.chatId);
+    });
+    if (!job) {
+      this.notice = "No retryable outbox job loaded for this row.";
+      return;
+    }
+    try {
+      await firstValueFrom(this.api.whatsappOutboxAction(job.id, "retry", { reason: "operator_broker_retry" }));
+      this.notice = `Retry requested for ${row.label}`;
+      await this.loadOps(false);
+    } catch (error) {
+      this.notice = this.errorText(error);
+    }
+  }
+
   whatsappAccountLabel(account: WhatsAppDoctorAccount): string {
-    return String(account.displayName || account.label || account.name || account.accountId || account.id || "WhatsApp account").trim();
+    return String(account.accountId || account.id || account.displayName || account.label || account.name || "WhatsApp account ID").trim();
   }
 
   whatsappAccountIdentity(account: WhatsAppDoctorAccount): string {
@@ -853,7 +1077,7 @@ export class OpsPageComponent implements OnInit, OnDestroy {
 
   whatsappAccountMeta(account: WhatsAppDoctorAccount): string {
     return [
-      account.accountId ? `account ${account.accountId}` : "",
+      account.accountId ? `Account ID ${account.accountId}` : "",
       account.runtimeAccountId && account.runtimeAccountId !== account.accountId ? `runtime ${account.runtimeAccountId}` : "",
       account.pushName ? `profile ${account.pushName}` : "",
       account.autostart ? "autostart" : "manual start",
@@ -887,8 +1111,8 @@ export class OpsPageComponent implements OnInit, OnDestroy {
     return [
       binding.threadId ? `thread ${binding.threadId}` : "",
       binding.chatId ? `chat ${binding.chatId}` : "",
-      binding.responderAccountId || binding.responderConnectorAccountId ? `account ${binding.responderAccountId || binding.responderConnectorAccountId}` : "",
-      binding.accountIds?.length ? `allowed ${binding.accountIds.join(", ")}` : "",
+      binding.responderAccountId || binding.responderConnectorAccountId ? `Account ID ${binding.responderAccountId || binding.responderConnectorAccountId}` : "",
+      binding.accountIds?.length ? `Allowed IDs ${binding.accountIds.join(", ")}` : "",
     ].filter(Boolean).join(" · ");
   }
 

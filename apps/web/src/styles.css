@@ -2553,6 +2553,87 @@ ork-first-thread-wizard.first-thread-host {
   color: #ff9b88;
 }
 
+.instance-row {
+  gap: 9px;
+}
+
+.thread-instance-table {
+  overflow-x: auto;
+  border: 1px solid rgba(119, 205, 126, 0.12);
+  border-radius: 10px;
+  background: rgba(2, 7, 2, 0.48);
+}
+
+.thread-instance-row {
+  display: grid;
+  grid-template-columns: minmax(210px, 1.35fr) minmax(190px, 1fr) minmax(120px, 0.7fr) minmax(180px, 1fr) minmax(250px, 1.1fr);
+  gap: 10px;
+  min-width: 980px;
+  align-items: center;
+  border-top: 1px solid rgba(119, 205, 126, 0.08);
+  padding: 10px 12px;
+}
+
+.thread-instance-row:first-child {
+  border-top: 0;
+}
+
+.thread-instance-row.head {
+  color: #8cff9b;
+  background: rgba(2, 7, 2, 0.72);
+  font-size: 0.68rem;
+  font-weight: 900;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.thread-instance-row span {
+  min-width: 0;
+}
+
+.thread-instance-row strong,
+.thread-instance-row small {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.thread-instance-row code {
+  display: inline-block;
+  max-width: 100%;
+  overflow: hidden;
+  border: 1px solid rgba(119, 205, 126, 0.16);
+  border-radius: 7px;
+  padding: 2px 6px;
+  color: #dff6d9;
+  background: rgba(2, 7, 2, 0.7);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.row-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+}
+
+.button-like {
+  min-height: 34px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid rgba(119, 205, 126, 0.24);
+  border-radius: 999px;
+  padding: 0 12px;
+  color: #ebffe6;
+  background: rgba(119, 205, 126, 0.1);
+  font-size: 0.78rem;
+  font-weight: 900;
+  text-decoration: none;
+}
+
 .timer-row {
   display: flex;
   justify-content: space-between;
