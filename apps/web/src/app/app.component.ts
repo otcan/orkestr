@@ -446,6 +446,11 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     return this.pairingRequired || this.setupStatusRedacted() || this.isPairingRequiredFromSetup();
   }
 
+  private codexStatusAuthoritative(): boolean {
+    if (!this.setupStatus || this.authContextIssue()) return false;
+    return Array.isArray(this.setupStatus.connectors) && this.setupStatus.connectors.some((connector) => connector.id === "codex");
+  }
+
   isAdminMode(): boolean {
     return String(this.currentUser?.role || "admin").trim().toLowerCase() === "admin";
   }
@@ -455,20 +460,20 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   }
 
   uiRuntimeReady(): boolean {
-    return this.isUserMode() || this.codexAgentReady();
+    return this.isUserMode() || !this.codexStatusAuthoritative() || this.codexAgentReady();
   }
 
   threadInputReady(): boolean {
-    return this.isUserMode() || this.codexAgentReady();
+    return this.isUserMode() || !this.codexStatusAuthoritative() || this.codexAgentReady();
   }
 
   shouldShowCodexRequiredShell(): boolean {
     const codex = this.codexConnector();
-    return this.appReady && this.isAdminMode() && !this.authContextIssue() && Boolean(codex) && !this.codexAgentReady();
+    return this.appReady && this.isAdminMode() && this.codexStatusAuthoritative() && Boolean(codex) && !this.codexAgentReady();
   }
 
   shouldShowCodexNotice(): boolean {
-    return this.isAdminMode() && !this.codexAgentReady();
+    return this.isAdminMode() && this.codexStatusAuthoritative() && !this.codexAgentReady();
   }
 
   currentUserDisplayName(): string {

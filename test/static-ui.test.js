@@ -262,7 +262,9 @@ test("pairing return and Codex required shell stay same-origin and reason-aware"
 
   assert.match(component, /private authContextIssue\(\)/);
   assert.match(component, /setupStatusRedacted\(\)/);
+  assert.match(component, /private codexStatusAuthoritative\(\)/);
   assert.match(component, /Boolean\(codex\)/);
+  assert.match(component, /this\.codexStatusAuthoritative\(\) && Boolean\(codex\) && !this\.codexAgentReady\(\)/);
   assert.match(component, /reason === "codex_auth_invalid"/);
   assert.match(component, /Codex sign-in expired/);
   assert.match(component, /sameOriginPairingReturnUrl/);
@@ -597,9 +599,9 @@ test("web shell switches to a constrained non-admin user mode", async () => {
   assert.match(component, /currentUser: OrkestrUser \| null = null/);
   assert.match(component, /firstValueFrom\(this\.api\.currentUser\(\)\)/);
   assert.match(component, /shouldShowCodexRequiredShell\(\): boolean/);
-  assert.match(component, /this\.appReady && this\.isAdminMode\(\) && !this\.authContextIssue\(\) && Boolean\(codex\) && !this\.codexAgentReady\(\)/);
+  assert.match(component, /this\.appReady && this\.isAdminMode\(\) && this\.codexStatusAuthoritative\(\) && Boolean\(codex\) && !this\.codexAgentReady\(\)/);
   assert.match(component, /uiRuntimeReady\(\): boolean/);
-  assert.match(component, /return this\.isUserMode\(\) \|\| this\.codexAgentReady\(\)/);
+  assert.match(component, /return this\.isUserMode\(\) \|\| !this\.codexStatusAuthoritative\(\) \|\| this\.codexAgentReady\(\)/);
   assert.match(component, /panelAllowedForCurrentUser\(panel: Panel\): boolean/);
   assert.match(component, /\["chat", "history", "delivery", "timers", "files", "userTimers", "userDesk", "userConnectors"\]\.includes\(panel\)/);
   assert.match(component, /normalizeUserModeView\(\)/);
