@@ -42,7 +42,7 @@ test("WhatsApp connector accounts are projected as neutral accounts with legacy 
       state: "paired",
       accounts: [
         { accountId: "sender", label: "Old Sender", state: "pairing_code", ready: false, pairingCode: "123-45678", pairingCodeUpdatedAt: "2026-06-07T12:00:00.000Z", pairingPhoneNumber: "***0662", sessionRoot: "/private/session" },
-        { accountId: "responder", label: "Old Responder", state: "ready", ready: true, authenticated: true },
+        { accountId: "responder", label: "Old Responder", state: "ready", ready: true, authenticated: true, phoneNumber: "+4917632400662", contactId: "4917632400662@c.us", pushName: "Responder Phone" },
       ],
     },
   });
@@ -57,6 +57,9 @@ test("WhatsApp connector accounts are projected as neutral accounts with legacy 
   assert.deepEqual(accounts.find((account) => account.accountId === "responder").legacyRoleAliases, ["responder"]);
   assert.equal(accounts.find((account) => account.accountId === "responder").autostart, true);
   assert.equal(accounts.find((account) => account.accountId === "responder").sendReady, true);
+  assert.equal(accounts.find((account) => account.accountId === "responder").phoneNumber, "+4917632400662");
+  assert.equal(accounts.find((account) => account.accountId === "responder").contactId, "4917632400662@c.us");
+  assert.equal(accounts.find((account) => account.accountId === "responder").pushName, "Responder Phone");
   assert.equal(Object.hasOwn(accounts[0], "sessionRoot"), false);
 });
 
