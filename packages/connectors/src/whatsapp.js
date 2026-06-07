@@ -3122,7 +3122,7 @@ async function deliverWhatsAppRepliesOnce(env = process.env, fetchImpl = fetch) 
           skipped.push({ agentId, threadId, messageId: message.id, reason: "mirroring_disabled" });
           continue;
         }
-        if (progressOvertakenByFinal(messages, message, chatId, env)) {
+        if (!liveRecovery && progressOvertakenByFinal(messages, message, chatId, env)) {
           await skipWhatsAppOutboundCandidate({
             state,
             outboundIntents,

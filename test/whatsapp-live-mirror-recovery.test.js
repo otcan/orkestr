@@ -125,7 +125,7 @@ test("whatsapp delivery does not recover stale live progress outside the default
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-stale-live-recovery-"));
   const runtimeEnv = await createBoundThread(home, "thread-stale-live-recovery");
   delete runtimeEnv.ORKESTR_WHATSAPP_LIVE_OUTPUT_RECOVERY_WINDOW_MS;
-  const oldAt = new Date(Date.now() - 10 * 60 * 1000).toISOString();
+  const oldAt = new Date(Date.now() - 3 * 60 * 60 * 1000).toISOString();
   const parent = await appendThreadMessage("thread-stale-live-recovery", {
     role: "user",
     source: "whatsapp_inbound",

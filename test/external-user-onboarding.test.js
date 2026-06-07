@@ -348,6 +348,7 @@ test("admin onboarding endpoints expose invite, checklist, and offboarding", asy
   const prior = saveEnv([
     "ORKESTR_HOME",
     "ORKESTR_AUTH_REQUIRED",
+    "ORKESTR_UNSAFE_ALLOW_PUBLIC_UNAUTHENTICATED",
     "ORKESTR_RECOVER_RUNNING_ON_START",
     "ORKESTR_CODEX_BIN",
     "WHATSAPP_BRIDGE_MODE",
@@ -357,6 +358,7 @@ test("admin onboarding endpoints expose invite, checklist, and offboarding", asy
   ]);
   process.env.ORKESTR_HOME = home;
   process.env.ORKESTR_AUTH_REQUIRED = "0";
+  process.env.ORKESTR_UNSAFE_ALLOW_PUBLIC_UNAUTHENTICATED = "1";
   process.env.ORKESTR_RECOVER_RUNNING_ON_START = "0";
   process.env.ORKESTR_CODEX_BIN = "__orkestr_codex_disabled_on_macos__";
   process.env.WHATSAPP_BRIDGE_MODE = "external";

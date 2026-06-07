@@ -22,6 +22,7 @@ const knownCoreConnectorImports = new Set([
 const largeFileAllowlist = new Set([
   "apps/cli/src/commands.js",
   "apps/server/src/modules/connectors/connectors.controller.ts",
+  "apps/server/src/modules/connectors/whatsapp-diagnostics.controller.ts",
   "apps/server/src/modules/system/system.controller.ts",
   "apps/server/src/modules/threads/threads.controller.ts",
   "apps/server/src/thread-stream.ts",
@@ -38,9 +39,12 @@ const largeFileAllowlist = new Set([
   "packages/browsers/src/browsers.js",
   "packages/core/src/codex-app-server-client.js",
   "packages/core/src/codex-app-server-common.js",
+  "packages/core/src/codex-app-server-recovery.js",
   "packages/core/src/codex-app-server.js",
   "packages/core/src/runtime-leases.js",
   "packages/core/src/security.js",
+  "packages/core/src/secure-secrets.js",
+  "packages/core/src/system-doctor.js",
   "packages/core/src/tenant-api-agent-tools.js",
   "packages/core/src/tenant-api-agent.js",
   "packages/core/src/thread-workers.js",
@@ -48,7 +52,10 @@ const largeFileAllowlist = new Set([
   "packages/core/src/timers.js",
   "packages/core/src/user-skills.js",
   "packages/connectors/src/codex.js",
+  "packages/connectors/src/whatsapp-account-bindings.js",
+  "packages/connectors/src/whatsapp-broker-migration.js",
   "packages/connectors/src/whatsapp-local-bridge.js",
+  "packages/connectors/src/whatsapp-outbound-mirror.js",
   "packages/connectors/src/whatsapp.js",
 ]);
 
