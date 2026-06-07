@@ -46,6 +46,16 @@ async function capturePane(paneId: string, lines = 240): Promise<string> {
   return String(stdout || "").replace(/\s+$/g, "");
 }
 
+function errorText(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function tmuxPaneMissing(error: unknown, paneId = ""): boolean {
+  const text = errorText(error).toLowerCase();
+  const target = String(paneId || "").trim().toLowerCase();
+  return text.includes("can't find pane") && (!target || text.includes(target));
+}
+
 async function tmuxSendLiteral(paneId: string, text: string): Promise<void> {
   if (!text) return;
   await execFileAsync("tmux", ["send-keys", "-t", paneId, "-l", text]);
@@ -503,7 +513,66 @@ export function attachThreadStreamUpgrade(server: Server): void {
       let snapshotTimer: NodeJS.Timeout | null = null;
       let snapshotInFlight = false;
       let nextSnapshotIntervalMs = rawSnapshotActiveIntervalMs();
+      let lastPaneError = "";
       const rawControlState = { buffer: "" };
+
+      const refreshPane = async (reason: string): Promise<boolean> => {
+        const refreshed: Record<string, any> | null = await runtimeStatus(thread.id).catch(() => null);
+        const nextPaneId = String(refreshed?.paneId || "").trim();
+        if (!nextPaneId || nextPaneId === paneId) {
+          status = refreshed || status;
+          return false;
+        }
+        const previousPaneId = paneId;
+        paneId = nextPaneId;
+        status = refreshed;
+        lastPaneError = "";
+        await resizePane(paneId, target.cols, target.rows).catch(() => undefined);
+        wsSend(ws, {
+          type: "pane_refreshed",
+          reason,
+          previousPaneId,
+          paneId,
+          sessionName: status?.sessionName || null,
+          state: status?.state || null,
+        });
+        return true;
+      };
+
+      const captureCurrentPane = async (): Promise<string> => {
+        try {
+          return await capturePane(paneId);
+        } catch (error) {
+          if (tmuxPaneMissing(error, paneId) && await refreshPane("stale_tmux_pane")) {
+            return capturePane(paneId);
+          }
+          throw error;
+        }
+      };
+
+      const sendInputToCurrentPane = async (data: string): Promise<void> => {
+        try {
+          await sendRawInputWithControlInterception(paneId, data, rawControlState, ws);
+        } catch (error) {
+          if (tmuxPaneMissing(error, paneId) && await refreshPane("stale_tmux_pane_input")) {
+            await sendRawInputWithControlInterception(paneId, data, rawControlState, ws);
+            return;
+          }
+          throw error;
+        }
+      };
+
+      const resizeCurrentPane = async (cols: unknown, rows: unknown): Promise<void> => {
+        try {
+          await resizePane(paneId, cols, rows);
+        } catch (error) {
+          if (tmuxPaneMissing(error, paneId) && await refreshPane("stale_tmux_pane_resize")) {
+            await resizePane(paneId, cols, rows);
+            return;
+          }
+          throw error;
+        }
+      };
 
       const scheduleSnapshot = (delayMs = nextSnapshotIntervalMs) => {
         if (closed) return;
@@ -523,7 +592,7 @@ export function attachThreadStreamUpgrade(server: Server): void {
         }
         snapshotInFlight = true;
         try {
-          const screen = await capturePane(paneId);
+          const screen = await captureCurrentPane();
           if (screen !== lastScreen) {
             lastScreen = screen;
             const progress = {
@@ -540,7 +609,21 @@ export function attachThreadStreamUpgrade(server: Server): void {
             nextSnapshotIntervalMs = rawSnapshotIdleIntervalMs();
           }
         } catch (error) {
-          wsSend(ws, { type: "error", data: error instanceof Error ? error.message : String(error) });
+          const message = errorText(error);
+          if (tmuxPaneMissing(error, paneId)) {
+            nextSnapshotIntervalMs = rawSnapshotIdleIntervalMs();
+            if (message !== lastPaneError) {
+              lastPaneError = message;
+              wsSend(ws, {
+                type: "pane_unavailable",
+                paneId,
+                sessionName: status?.sessionName || null,
+                data: "The tmux pane for this terminal disappeared. Orkestr is waiting for the runtime pane to reappear.",
+              });
+            }
+          } else {
+            wsSend(ws, { type: "error", data: message });
+          }
         } finally {
           snapshotInFlight = false;
           scheduleSnapshot();
@@ -565,11 +648,11 @@ export function attachThreadStreamUpgrade(server: Server): void {
           .then(async () => {
             const payload = JSON.parse(raw.toString("utf8"));
             if (payload?.type === "input" && typeof payload.data === "string") {
-              await sendRawInputWithControlInterception(paneId, payload.data, rawControlState, ws);
+              await sendInputToCurrentPane(payload.data);
               nextSnapshotIntervalMs = rawSnapshotActiveIntervalMs();
               await pushSnapshot();
             } else if (payload?.type === "resize") {
-              await resizePane(paneId, payload.cols, payload.rows).catch(() => undefined);
+              await resizeCurrentPane(payload.cols, payload.rows).catch(() => undefined);
               nextSnapshotIntervalMs = rawSnapshotActiveIntervalMs();
               await pushSnapshot();
             }

@@ -172,12 +172,15 @@ async function writeTestDeliveryClaim(home, { accountId, chatId, textKey, claime
   return { claimKey, filePath };
 }
 
-function assertDebugFooter(text, { mode = "", messageType = "final", model = "[^·\\n]+" } = {}) {
+function assertDebugFooter(text, { mode = "", messageType = "final", model = "[^·\\n]+", queueReason = "" } = {}) {
   const escapedModel = model.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const queuePart = queueReason
+    ? ` · queue:\\d+ · reason:${queueReason}`
+    : " · q:\\d+";
   const pattern = new RegExp(
     `\\n\\ndbg: m:${model === "[^·\\n]+" ? model : escapedModel}` +
       (mode ? ` · mode:${mode}` : "") +
-      ` · msg:${messageType} · q:\\d+ · load:\\d+% · api:\\d+% · help:/help` +
+      ` · msg:${messageType}${queuePart} · load:\\d+% · api:\\d+% · help:/help` +
       (mode === "plan" ? " · switch:/code" : "") +
       "$",
   );
@@ -2349,7 +2352,7 @@ test("whatsapp remote runtime route forwards inbound input and mirrors queue not
   assert.equal(delivery.delivered.length, 1);
   assert.equal(sendCalls.length, 1);
   assert.equal(sendCalls[0].to, "chat-remote-queue");
-  assert.match(sendCalls[0].text, /^Queued for the next Codex turn/);
+  assert.match(sendCalls[0].text, /^Added after the current Codex turn/);
 });
 
 test("whatsapp remote runtime imports parent replies and mirrors them once through public bridge", async () => {
@@ -2931,7 +2934,7 @@ test("local whatsapp bridge runs api-agent tenant chats without waking legacy ru
   assert.equal(calls.some((call) => call.url.endsWith("/responses")), true);
   const sendCalls = calls.filter((call) => call.url.endsWith("/send-text") && call.body?.to === chatId);
   assert.equal(sendCalls.length, 2);
-  assert.match(sendCalls[0].body.text, /^Queued your message while Orkestr prepares this thread: "Hi"\./);
+  assert.match(sendCalls[0].body.text, /^Runtime handoff is taking longer than expected: "Hi"\./);
   assert.equal(sendCalls[1].body.text, "Hi! How can I help you today?");
 });
 
@@ -5319,8 +5322,9 @@ test("whatsapp delivery reports queued runtime inputs without marking the input 
   assert.equal(delivery.delivered[0].sourceMessageId, routed.message.id);
   assert.equal(duplicate.delivered.length, 0);
   assert.equal(calls[0].body.to, "chat-queue-notice");
-  assert.match(stripDebugFooter(calls[0].body.text), /^Queued your message while Orkestr prepares this thread: "ship it"\./);
-  assertDebugFooter(calls[0].body.text, { messageType: "update", model: "gpt-5.5/h" });
+  assert.match(stripDebugFooter(calls[0].body.text), /^Runtime handoff is taking longer than expected: "ship it"\./);
+  assertDebugFooter(calls[0].body.text, { messageType: "update", model: "gpt-5.5/h", queueReason: "handoff-delayed" });
+  assert.doesNotMatch(calls[0].body.text, /q:0/);
   assert.equal(messages.find((entry) => entry.id === routed.message.id).state, "queued");
 });
 
@@ -5614,7 +5618,7 @@ test("whatsapp /now inputs report interrupting before normal queue notices", asy
   assert.equal(delivery.delivered[0].deliveryType, "queue_notice");
   assert.match(stripDebugFooter(calls[0].body.text), /^Interrupting the current Codex turn and queued your message: "fix the pairing number"\./);
   assert.doesNotMatch(stripDebugFooter(calls[0].body.text), /\/now/);
-  assertDebugFooter(calls[0].body.text, { messageType: "update" });
+  assertDebugFooter(calls[0].body.text, { messageType: "update", queueReason: "interrupting" });
 });
 
 test("whatsapp delivery reports waking queue notices", async () => {
@@ -5637,8 +5641,8 @@ test("whatsapp delivery reports waking queue notices", async () => {
 
   assert.equal(delivery.delivered.length, 1);
   assert.equal(delivery.delivered[0].deliveryType, "queue_notice");
-  assert.match(stripDebugFooter(calls[0].body.text), /^Waking this Orkestr thread and queued your message: "wake test"\./);
-  assertDebugFooter(calls[0].body.text, { messageType: "update" });
+  assert.match(stripDebugFooter(calls[0].body.text), /^Waking this thread\. Your message will run after startup: "wake test"\./);
+  assertDebugFooter(calls[0].body.text, { messageType: "update", queueReason: "waking" });
 });
 
 test("whatsapp queue notices use app-server runtime states", () => {
@@ -5670,7 +5674,7 @@ test("whatsapp queue notices strip pasted debug footers from previews", () => {
     text: "Codex compacted the conversation context.\n\ndbg: m:gpt-5.5/xh · msg:update · q:0 · load:25% · api:122% · help:/help",
   }, "awaiting_active_turn");
 
-  assert.equal(notice, 'Queued for the next Codex turn: "Codex compacted the conversation context.".');
+  assert.equal(notice, 'Added after the current Codex turn: "Codex compacted the conversation context.". Use /now to interrupt.');
   assert.doesNotMatch(notice, /dbg:/);
 });
 
@@ -5679,7 +5683,7 @@ test("whatsapp queue notices unwrap nested queue notice previews", () => {
     text: 'Queued for the next Codex turn: "Queued for the next Codex turn: "Queued your message while Orkestr prepares this thread: "I’m treating this as a release hygiene issue: WA mi...".".".',
   }, "awaiting_active_turn");
 
-  assert.equal(notice, 'Queued for the next Codex turn: "I’m treating this as a release hygiene issue: WA mi...".');
+  assert.equal(notice, 'Added after the current Codex turn: "I’m treating this as a release hygiene issue: WA mi...". Use /now to interrupt.');
 });
 
 test("whatsapp queue notices unwrap malformed nested queue notice previews", () => {
@@ -5687,7 +5691,7 @@ test("whatsapp queue notices unwrap malformed nested queue notice previews", () 
     text: 'Queued your message while Orkestr prepares this thread: "Queued for the next Codex turn: "Queued for the next Codex turn: "Codex compacted the conversation context.".',
   }, "awaiting_active_turn");
 
-  assert.equal(notice, 'Queued for the next Codex turn: "Codex compacted the conversation context.".');
+  assert.equal(notice, 'Added after the current Codex turn: "Codex compacted the conversation context.". Use /now to interrupt.');
 });
 
 test("whatsapp queue notices suppress generated truncated queue previews", () => {
@@ -5695,7 +5699,7 @@ test("whatsapp queue notices suppress generated truncated queue previews", () =>
     text: 'Queued your message while Orkestr prepares this thread: "Queued for the next Codex turn: "Queued for the next Codex turn: "Queued for the next Codex turn: "Queued for the nex...".',
   }, "awaiting_active_turn");
 
-  assert.equal(notice, "Queued for the next Codex turn.");
+  assert.equal(notice, "Added after the current Codex turn. Use /now to interrupt.");
 });
 
 test("whatsapp delivery reports app-server active-turn queue notices", async () => {
@@ -5736,8 +5740,8 @@ test("whatsapp delivery reports app-server active-turn queue notices", async () 
   assert.equal(delivery.delivered[0].sourceMessageId, routed.message.id);
   assert.equal(duplicate.delivered.length, 0);
   assert.equal(calls[0].body.to, "chat-app-server-active-queue-notice");
-  assert.match(stripDebugFooter(calls[0].body.text), /^Queued for the next Codex turn: "queue behind app server turn"\./);
-  assertDebugFooter(calls[0].body.text, { messageType: "update" });
+  assert.match(stripDebugFooter(calls[0].body.text), /^Added after the current Codex turn: "queue behind app server turn"\. Use \/now to interrupt\./);
+  assertDebugFooter(calls[0].body.text, { messageType: "update", queueReason: "active-turn" });
   assert.equal(messages.find((entry) => entry.id === routed.message.id).state, "queued");
 });
 

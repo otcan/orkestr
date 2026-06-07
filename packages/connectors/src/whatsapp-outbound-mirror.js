@@ -455,12 +455,18 @@ function stripQueuePreviewNoticeWrapper(text) {
   const value = String(text || "").trim();
   const patterns = [
     /^Queued for the next Codex turn:\s*["“](.*)["”]\.?\s*$/i,
+    /^Added after the current Codex turn:\s*["“](.*)["”]\.\s*Use \/now to interrupt\.?\s*$/i,
     /^Queued your message while Orkestr prepares this thread:\s*["“](.*)["”]\.?\s*$/i,
+    /^Runtime handoff is taking longer than expected:\s*["“](.*)["”]\.?\s*$/i,
     /^Waking this Orkestr thread and queued your message:\s*["“](.*)["”]\.?\s*$/i,
+    /^Waking this thread\. Your message will run after startup:\s*["“](.*)["”]\.?\s*$/i,
     /^Queued your latest message while current work is still running:\s*["“](.*)["”]\.?\s*$/i,
+    /^Queued behind current work:\s*["“](.*)["”]\.?\s*$/i,
     /^Interrupting the current Codex turn and queued your message:\s*["“](.*)["”]\.?\s*$/i,
     /^Queued your latest message while Orkestr recovers this thread:\s*["“](.*)["”]\.?\s*$/i,
+    /^Delivery is paused to avoid duplicates\. Orkestr is recovering this thread:\s*["“](.*)["”]\.?\s*$/i,
     /^Queued your message while Codex is waiting for approval:\s*["“](.*)["”]\.\s*Send \/approve or \/deny to answer the approval request\.?\s*$/i,
+    /^Codex is waiting for approval\. Your message is held:\s*["“](.*)["”]\.\s*Send \/approve or \/deny\.?\s*$/i,
   ];
   for (const pattern of patterns) {
     const match = value.match(pattern);
@@ -468,18 +474,26 @@ function stripQueuePreviewNoticeWrapper(text) {
   }
   const prefixes = [
     /^Queued for the next Codex turn:\s*["“]?/i,
+    /^Added after the current Codex turn:\s*["“]?/i,
     /^Queued your message while Orkestr prepares this thread:\s*["“]?/i,
+    /^Runtime handoff is taking longer than expected:\s*["“]?/i,
     /^Waking this Orkestr thread and queued your message:\s*["“]?/i,
+    /^Waking this thread\. Your message will run after startup:\s*["“]?/i,
     /^Queued your latest message while current work is still running:\s*["“]?/i,
+    /^Queued behind current work:\s*["“]?/i,
     /^Interrupting the current Codex turn and queued your message:\s*["“]?/i,
     /^Queued your latest message while Orkestr recovers this thread:\s*["“]?/i,
+    /^Delivery is paused to avoid duplicates\. Orkestr is recovering this thread:\s*["“]?/i,
     /^Queued your message while Codex is waiting for approval:\s*["“]?/i,
+    /^Codex is waiting for approval\. Your message is held:\s*["“]?/i,
   ];
   for (const prefix of prefixes) {
     if (prefix.test(value)) {
       return value
         .replace(prefix, "")
         .replace(/\s*Send \/approve or \/deny to answer the approval request\.?\s*$/i, "")
+        .replace(/\s*Send \/approve or \/deny\.?\s*$/i, "")
+        .replace(/\s*Use \/now to interrupt\.?\s*$/i, "")
         .replace(/["”]\.?\s*$/, "")
         .trim();
     }
@@ -492,12 +506,18 @@ function generatedQueueNoticePreviewFragment(text) {
   if (!value) return false;
   const prefixes = [
     "queued for the nex",
+    "added after the current codex turn",
     "queued your message while orkestr prepares",
+    "runtime handoff is taking longer than expected",
     "waking this orkestr thread and queued",
+    "waking this thread. your message will run after startup",
     "queued your latest message while current work",
+    "queued behind current work",
     "interrupting the current codex turn and queued",
     "queued your latest message while orkestr recovers",
+    "delivery is paused to avoid duplicates",
     "queued your message while codex is waiting",
+    "codex is waiting for approval",
   ];
   return prefixes.some((prefix) => value.startsWith(prefix));
 }
@@ -510,24 +530,27 @@ export function formatWhatsAppQueueNotice(message, reason = "") {
   const preview = queueNoticePreview(message);
   const normalizedReason = String(reason || "").trim().toLowerCase();
   if (normalizedReason === "awaiting_active_turn") {
-    return `Queued for the next Codex turn${queueNoticePreviewClause(preview)}`;
+    return `Added after the current Codex turn${queueNoticePreviewClause(preview)} Use /now to interrupt.`;
   }
   if (normalizedReason === "awaiting_approval") {
-    return `Queued your message while Codex is waiting for approval${queueNoticePreviewClause(preview)} Send /approve or /deny to answer the approval request.`;
+    return `Codex is waiting for approval. Your message is held${queueNoticePreviewClause(preview)} Send /approve or /deny.`;
   }
   if (["waiting_runtime_start", "waking"].includes(normalizedReason)) {
-    return `Waking this Orkestr thread and queued your message${queueNoticePreviewClause(preview)}`;
+    return `Waking this thread. Your message will run after startup${queueNoticePreviewClause(preview)}`;
   }
   if (normalizedReason === "awaiting_runtime_completion") {
-    return `Queued your latest message while current work is still running${queueNoticePreviewClause(preview)}`;
+    return `Queued behind current work${queueNoticePreviewClause(preview)}`;
   }
   if (normalizedReason === "interrupting") {
     return `Interrupting the current Codex turn and queued your message${queueNoticePreviewClause(preview)}`;
   }
   if (["recovering_stale_ack", "retrying_delivery"].includes(normalizedReason)) {
-    return `Queued your latest message while Orkestr recovers this thread${queueNoticePreviewClause(preview)}`;
+    return `Delivery is paused to avoid duplicates. Orkestr is recovering this thread${queueNoticePreviewClause(preview)}`;
   }
-  return `Queued your message while Orkestr prepares this thread${queueNoticePreviewClause(preview)}`;
+  if (normalizedReason === "waiting_runtime_ready") {
+    return `Runtime handoff is taking longer than expected${queueNoticePreviewClause(preview)}`;
+  }
+  return `Queued for delivery${queueNoticePreviewClause(preview)}`;
 }
 
 export function queuedModeWhatsAppDeliveryTarget(message, thread, state) {

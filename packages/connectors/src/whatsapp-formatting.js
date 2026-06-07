@@ -160,6 +160,37 @@ function queueDebugCount(messages = [], currentMessage = null) {
   }).length;
 }
 
+function queueNoticeDebugCount(messages = [], currentMessage = null) {
+  const related = queueDebugCount(messages, currentMessage);
+  const state = String(currentMessage?.state || "").toLowerCase();
+  const deliveryState = String(currentMessage?.deliveryState || "").toLowerCase();
+  const currentQueued = ["queued", "pending_delivery"].includes(state) ||
+    [
+      "awaiting_active_turn",
+      "awaiting_approval",
+      "awaiting_runtime_completion",
+      "interrupting",
+      "recovering_stale_ack",
+      "retrying_delivery",
+      "waiting_runtime_ready",
+      "waiting_runtime_start",
+      "waking",
+    ].includes(deliveryState);
+  return related + (currentQueued ? 1 : 0);
+}
+
+function queueNoticeDebugReason(message = {}) {
+  const reason = String(message?.deliveryState || "").trim().toLowerCase();
+  if (reason === "awaiting_active_turn") return "active-turn";
+  if (reason === "awaiting_approval") return "awaiting-approval";
+  if (reason === "awaiting_runtime_completion") return "runtime-busy";
+  if (reason === "interrupting") return "interrupting";
+  if (["waiting_runtime_start", "waking"].includes(reason)) return "waking";
+  if (["recovering_stale_ack", "retrying_delivery"].includes(reason)) return "recovering";
+  if (reason === "waiting_runtime_ready") return "handoff-delayed";
+  return reason.replace(/_/g, "-").slice(0, 32) || "queued";
+}
+
 function loadDebugPercent() {
   const cpuCount = os.cpus().length || 1;
   const percent = Math.round(((os.loadavg()[0] || 0) / cpuCount) * 100);
@@ -199,11 +230,14 @@ function footerMessageType(deliveryType = "") {
 
 export function whatsappDebugFooter({ message = {}, thread = {}, messages = [], deliveryType = "final", env = process.env } = {}) {
   const mode = codexModeDebugValue(message, thread);
+  const queueNotice = String(deliveryType || "").trim() === "queue_notice";
   const parts = [
     `m:${codexModelDebugLabel(message, thread, env)}`,
     ...(mode ? [`mode:${mode}`] : []),
     `msg:${footerMessageType(deliveryType)}`,
-    `q:${queueDebugCount(messages, message)}`,
+    ...(queueNotice
+      ? [`queue:${queueNoticeDebugCount(messages, message)}`, `reason:${queueNoticeDebugReason(message)}`]
+      : [`q:${queueDebugCount(messages, message)}`]),
     `load:${loadDebugPercent()}%`,
     `api:${processCpuDebugPercent()}%`,
     "help:/help",
