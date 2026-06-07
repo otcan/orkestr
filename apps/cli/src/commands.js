@@ -191,8 +191,10 @@ async function secretCommand(argv, ctx) {
   }
   if (subcommand === "set" || subcommand === "put") {
     const name = positional(rest)[0] || flagValue(rest, "--name") || flagValue(rest, "--secret");
-    const value = flagValue(rest, "--value") || flagValue(rest, "--secret-value") || await secretValueFromInput(rest, ctx);
-    if (!name) throw new Error("Usage: orkestr secret set <name> --value <secret> [--global|--user user-id] [--json]");
+    const inlineValue = flagValue(rest, "--value") || flagValue(rest, "--secret-value");
+    if (inlineValue) throw new Error("secret_value_flag_disabled: use interactive TTY input or --stdin so values are not written to shell history");
+    const value = await secretValueFromInput(rest, ctx);
+    if (!name) throw new Error("Usage: orkestr secret set <name> [--global|--user user-id] [--stdin] [--json]");
     if (!value) throw new Error("secret_value_required");
     const payload = await requestJson("/api/secure-input/secrets", {
       ...ctx,

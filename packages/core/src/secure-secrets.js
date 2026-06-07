@@ -134,6 +134,29 @@ function publicSecretMetadata(record = {}) {
   };
 }
 
+function publicMissingSecretMetadata(request = {}) {
+  return {
+    id: clean(request.id),
+    requestId: clean(request.id),
+    name: clean(request.name),
+    handle: clean(request.handle),
+    scope: clean(request.scope) === "global" ? "global" : "user",
+    ownerUserId: clean(request.scope) === "global" ? null : normalizeUserId(request.ownerUserId),
+    managedBy: clean(request.managedBy) || "request",
+    setByUserId: null,
+    status: "missing",
+    configured: false,
+    createdAt: clean(request.createdAt) || null,
+    updatedAt: clean(request.updatedAt || request.lastRequestedAt) || null,
+    lastUsedAt: null,
+    usedBy: [clean(request.usedBy || request.connector)].filter(Boolean),
+    valueFingerprint: null,
+    connector: clean(request.connector),
+    threadId: clean(request.threadId),
+    chatId: clean(request.chatId),
+  };
+}
+
 function assertSecretMutationAllowed(principal = {}, target = {}, action = "secret.write", env = process.env) {
   if (target.scope === "global") {
     if (isAdminPrincipal(principal)) return true;
@@ -201,9 +224,85 @@ async function storePathForTarget(target = {}, env = process.env) {
     : userStorePath(target.ownerUserId, env);
 }
 
+async function requestStorePath(env = process.env) {
+  const paths = await ensureDataDirs(env);
+  return `${paths.secrets}/secure-input-requests.json`;
+}
+
 async function listStoreSecrets(target = {}, env = process.env) {
   const filePath = await storePathForTarget(target, env);
   return activeSecrets(await readStore(filePath));
+}
+
+async function readRequestStore(env = process.env) {
+  const filePath = await requestStorePath(env);
+  const raw = await readJson(filePath, { schemaVersion: 1, requests: [] });
+  return {
+    schemaVersion: 1,
+    requests: Array.isArray(raw.requests) ? raw.requests : [],
+    updatedAt: clean(raw.updatedAt) || null,
+  };
+}
+
+async function writeRequestStore(store = {}, env = process.env) {
+  const filePath = await requestStorePath(env);
+  const next = {
+    schemaVersion: 1,
+    requests: Array.isArray(store.requests) ? store.requests : [],
+    updatedAt: nowIso(),
+  };
+  await writeSecretJson(filePath, next);
+  return next;
+}
+
+function activeRequests(store = {}) {
+  return (Array.isArray(store.requests) ? store.requests : [])
+    .filter((record) => record && typeof record === "object" && clean(record.status || "missing") === "missing");
+}
+
+function targetHandle(target = {}) {
+  const scope = clean(target.scope) === "global" ? "global" : "user";
+  const name = normalizeSecretName(target.name);
+  if (!name) return "";
+  if (scope === "global") return `secret://global/${name}`;
+  return `secret://user/${normalizeUserId(target.ownerUserId || adminUserId)}/${name}`;
+}
+
+function requestMatchesTarget(record = {}, target = {}) {
+  const scope = clean(target.scope) === "global" ? "global" : "user";
+  if (clean(record.scope) !== scope) return false;
+  if (clean(record.name) !== normalizeSecretName(target.name)) return false;
+  if (scope === "user" && normalizeUserId(record.ownerUserId) !== normalizeUserId(target.ownerUserId)) return false;
+  return true;
+}
+
+async function closeMatchingSecureInputRequests(target = {}, env = process.env) {
+  const store = await readRequestStore(env);
+  let changed = false;
+  const now = nowIso();
+  const requests = store.requests.map((record) => {
+    if (!requestMatchesTarget(record, target) || clean(record.status || "missing") !== "missing") return record;
+    changed = true;
+    return { ...record, status: "configured", updatedAt: now, resolvedAt: now };
+  });
+  if (changed) await writeRequestStore({ ...store, requests }, env);
+}
+
+async function listRequestRecords(target = {}, env = process.env) {
+  const store = await readRequestStore(env);
+  const scope = clean(target.scope);
+  const ownerUserId = normalizeUserId(target.ownerUserId || target.userId || "");
+  return activeRequests(store)
+    .filter((record) => {
+      const recordScope = clean(record.scope) === "global" ? "global" : "user";
+      if (scope && recordScope !== scope) return false;
+      if (recordScope === "user" && ownerUserId && normalizeUserId(record.ownerUserId) !== ownerUserId) return false;
+      return true;
+    });
+}
+
+function configuredSecretKey(record = {}) {
+  return `${clean(record.scope) === "global" ? "global" : "user"}:${normalizeUserId(record.ownerUserId || "")}:${clean(record.name)}`;
 }
 
 export async function setSecureSecret(input = {}, principal = {}, env = process.env) {
@@ -237,6 +336,7 @@ export async function setSecureSecret(input = {}, principal = {}, env = process.
     managedBy: record.managedBy,
     actorUserId: normalizeUserId(principal.userId || adminUserId),
   }, env).catch(() => {});
+  await closeMatchingSecureInputRequests({ scope, ownerUserId, name }, env).catch(() => {});
   return { ok: true, secret: publicSecretMetadata(record) };
 }
 
@@ -246,13 +346,38 @@ export async function listSecureSecrets(options = {}, principal = {}, env = proc
   if (!scope || scope === "user") {
     const ownerUserId = normalizeUserId(options.ownerUserId || options.userId || principal.userId || adminUserId);
     assertSecretReadAllowed(principal, { scope: "user", ownerUserId }, "secret.list", env);
-    results.push(...(await listStoreSecrets({ scope: "user", ownerUserId }, env)).map(publicSecretMetadata));
+    const configured = (await listStoreSecrets({ scope: "user", ownerUserId }, env)).map(publicSecretMetadata);
+    const configuredKeys = new Set(configured.map(configuredSecretKey));
+    const missing = (await listRequestRecords({ scope: "user", ownerUserId }, env))
+      .map(publicMissingSecretMetadata)
+      .filter((request) => !configuredKeys.has(configuredSecretKey(request)));
+    results.push(...configured, ...missing);
   }
   if (!scope || scope === "global") {
     assertSecretReadAllowed(principal, { scope: "global" }, "secret.list", env);
-    results.push(...(await listStoreSecrets({ scope: "global" }, env)).map(publicSecretMetadata));
+    const configured = (await listStoreSecrets({ scope: "global" }, env)).map(publicSecretMetadata);
+    const configuredKeys = new Set(configured.map(configuredSecretKey));
+    const missing = (await listRequestRecords({ scope: "global" }, env))
+      .map(publicMissingSecretMetadata)
+      .filter((request) => !configuredKeys.has(configuredSecretKey(request)));
+    results.push(...configured, ...missing);
   }
   return { ok: true, secrets: results.sort((left, right) => left.handle.localeCompare(right.handle)) };
+}
+
+export async function listSecureInputRequests(options = {}, principal = {}, env = process.env) {
+  const scope = clean(options.scope);
+  const results = [];
+  if (!scope || scope === "user") {
+    const ownerUserId = normalizeUserId(options.ownerUserId || options.userId || principal.userId || adminUserId);
+    assertSecretReadAllowed(principal, { scope: "user", ownerUserId }, "secure_input.request.list", env);
+    results.push(...(await listRequestRecords({ scope: "user", ownerUserId }, env)).map(publicMissingSecretMetadata));
+  }
+  if (!scope || scope === "global") {
+    assertSecretReadAllowed(principal, { scope: "global" }, "secure_input.request.list", env);
+    results.push(...(await listRequestRecords({ scope: "global" }, env)).map(publicMissingSecretMetadata));
+  }
+  return { ok: true, requests: results.sort((left, right) => left.handle.localeCompare(right.handle)) };
 }
 
 export async function deleteSecureSecret(input = {}, principal = {}, env = process.env) {
@@ -330,6 +455,148 @@ export async function resolveSecureSecretValue(name, options = {}, env = process
   const globalRecord = (await listStoreSecrets({ scope: "global" }, env)).find((record) => record.name === normalizedName);
   if (globalRecord) return resolvedSecret(globalRecord, { scope: "global" }, env, usedBy);
   return null;
+}
+
+export function parseSecureSecretReference(reference = "", options = {}) {
+  const raw = clean(reference);
+  const match = raw.match(/^secret:\/\/(global|user)\/(.+)$/i);
+  const requestedOwnerRaw = clean(options.ownerUserId || options.userId);
+  const requestedOwner = requestedOwnerRaw ? normalizeUserId(requestedOwnerRaw) : "";
+  const fallbackOwner = requestedOwner || adminUserId;
+  if (!match) {
+    return {
+      scope: "user",
+      ownerUserId: fallbackOwner,
+      name: normalizeSecretName(raw),
+      exactScope: false,
+      handle: secureSecretHandleFor(raw, { ownerUserId: fallbackOwner }),
+    };
+  }
+  const scope = match[1].toLowerCase() === "global" ? "global" : "user";
+  const rest = clean(match[2]);
+  if (scope === "global") {
+    const name = normalizeSecretName(rest);
+    return {
+      scope,
+      ownerUserId: "",
+      name,
+      exactScope: true,
+      handle: targetHandle({ scope, name }),
+    };
+  }
+  const parts = rest.split("/").map(clean).filter(Boolean);
+  let ownerUserId = fallbackOwner;
+  let nameParts = parts;
+  if (parts.length >= 3) {
+    const explicitOwner = normalizeUserId(parts[0]);
+    if (requestedOwner && explicitOwner && explicitOwner !== fallbackOwner && clean(options.allowCrossUserHandle) !== "true") {
+      const error = new Error("secure_secret_owner_mismatch");
+      error.statusCode = 403;
+      error.ownerUserId = explicitOwner;
+      throw error;
+    }
+    if (explicitOwner) {
+      ownerUserId = explicitOwner;
+      nameParts = parts.slice(1);
+    }
+  }
+  const name = normalizeSecretName(nameParts.join("/"));
+  return {
+    scope,
+    ownerUserId,
+    name,
+    exactScope: false,
+    handle: targetHandle({ scope, ownerUserId, name }),
+  };
+}
+
+export async function createSecureInputRequest(input = {}, env = process.env) {
+  const scope = clean(input.scope) === "global" ? "global" : "user";
+  const ownerUserId = scope === "user" ? normalizeUserId(input.ownerUserId || input.userId || adminUserId) : "";
+  const name = normalizeSecretName(input.name);
+  if (!name) {
+    const error = new Error("secret_name_required");
+    error.statusCode = 400;
+    throw error;
+  }
+  const store = await readRequestStore(env);
+  const now = nowIso();
+  const handle = targetHandle({ scope, ownerUserId, name });
+  const connector = clean(input.connector || input.usedBy || "connector");
+  const usedBy = clean(input.usedBy || connector);
+  const threadId = clean(input.threadId);
+  const chatId = clean(input.chatId);
+  const keyMatches = (record) =>
+    requestMatchesTarget(record, { scope, ownerUserId, name }) &&
+    clean(record.connector) === connector &&
+    clean(record.usedBy) === usedBy &&
+    clean(record.threadId) === threadId &&
+    clean(record.chatId) === chatId &&
+    clean(record.status || "missing") === "missing";
+  const priorIndex = store.requests.findIndex(keyMatches);
+  const prior = priorIndex >= 0 ? store.requests[priorIndex] : {};
+  const request = {
+    ...prior,
+    id: clean(prior.id) || `sir_${randomUUID().slice(0, 12)}`,
+    scope,
+    ownerUserId,
+    name,
+    handle,
+    connector,
+    usedBy,
+    threadId,
+    chatId,
+    status: "missing",
+    configured: false,
+    createdAt: clean(prior.createdAt) || now,
+    updatedAt: now,
+    lastRequestedAt: now,
+    requestCount: Number(prior.requestCount || 0) + 1,
+  };
+  const requests = priorIndex >= 0
+    ? store.requests.map((item, index) => index === priorIndex ? request : item)
+    : [...store.requests, request];
+  await writeRequestStore({ ...store, requests }, env);
+  await appendEvent({
+    type: "secure_input_requested",
+    requestId: request.id,
+    scope,
+    ownerUserId: ownerUserId || null,
+    name,
+    handle,
+    connector,
+    usedBy,
+    threadId: threadId || null,
+    chatId: chatId || null,
+  }, env).catch(() => {});
+  return { ok: true, request: publicMissingSecretMetadata(request) };
+}
+
+export async function resolveSecureSecretReference(reference, options = {}, env = process.env) {
+  const target = parseSecureSecretReference(reference, options);
+  if (!target.name) return null;
+  const usedBy = clean(options.usedBy || options.connector || options.runtime || "");
+  if (target.scope === "global" && target.exactScope) {
+    const record = (await listStoreSecrets({ scope: "global" }, env)).find((item) => item.name === target.name);
+    if (record) return resolvedSecret(record, { scope: "global" }, env, usedBy);
+  } else {
+    const resolved = await resolveSecureSecretValue(target.name, { ownerUserId: target.ownerUserId, usedBy }, env);
+    if (resolved) return resolved;
+  }
+  if (options.createRequest === false) return null;
+  const request = await createSecureInputRequest({
+    ...target,
+    connector: options.connector,
+    usedBy,
+    threadId: options.threadId,
+    chatId: options.chatId,
+  }, env);
+  return {
+    value: null,
+    missing: true,
+    secret: request.request,
+    request: request.request,
+  };
 }
 
 export function secureSecretHandleFor(name, options = {}) {

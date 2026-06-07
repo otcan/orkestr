@@ -1,6 +1,7 @@
 import { Body, Controller, Delete, Get, Header, HttpCode, Param, Post, Query, Req } from "@nestjs/common";
 import {
   deleteSecureSecret,
+  listSecureInputRequests,
   listSecureSecrets,
   setSecureSecret,
 } from "../../../../../packages/core/src/secure-secrets.js";
@@ -25,6 +26,13 @@ export class SecureInputController {
   async list(@Req() request: any, @Query() query: Record<string, unknown> = {}) {
     const principal = requestPrincipal(request);
     return listSecureSecrets(secretTarget({}, query), principal);
+  }
+
+  @Get("requests")
+  @Header("X-Orkestr-Secure-Input", "noMirror,noCapture,noCodexContext,noScreenshot")
+  async requests(@Req() request: any, @Query() query: Record<string, unknown> = {}) {
+    const principal = requestPrincipal(request);
+    return listSecureInputRequests(secretTarget({}, query), principal);
   }
 
   @Post("secrets")

@@ -592,9 +592,10 @@ test("CLI prints non-secret runtime settings from local state", async () => {
 test("CLI manages secure input secrets without echoing values", async () => {
   const stdout = capture();
   const seen = [];
-  const code = await runCli(["secret", "set", "openai/api-key", "--value", "super-secret-value", "--json"], {
+  const code = await runCli(["secret", "set", "openai/api-key", "--json"], {
     stdout,
     stderr: capture(),
+    readSecretValue: async () => "super-secret-value",
     fetchImpl: fakeFetch({
       "POST /api/secure-input/secrets": {
         ok: true,
@@ -677,6 +678,18 @@ test("CLI manages secure input secrets without echoing values", async () => {
     value: "tty-secret-value",
   });
   assert.equal(ttyStdout.text().includes("tty-secret-value"), false);
+});
+
+test("CLI rejects inline secure input values so they do not enter shell history", async () => {
+  const stderr = capture();
+  const code = await runCli(["secret", "set", "openai/api-key", "--value", "super-secret-value"], {
+    stdout: capture(),
+    stderr,
+    fetchImpl: fakeFetch({}),
+  });
+
+  assert.equal(code, 1);
+  assert.match(stderr.text(), /secret_value_flag_disabled/);
 });
 
 test("CLI lists timers from the public API", async () => {
