@@ -51,11 +51,14 @@
       <article class="ops-card">
         <h4>Inventory</h4>
         <p>{{ opsReleaseGeneratedAt ? (opsReleaseGeneratedAt | date: "HH:mm:ss") : "--" }}</p>
-        <small>last probe</small>
+        <small>{{ opsWatcherAlerts.length }} recent alerts</small>
       </article>
     </div>
     @if (opsReleaseError) {
       <div class="notice error">{{ opsReleaseError }}</div>
+    }
+    @if (opsWatcherAlertsError) {
+      <div class="notice error">{{ opsWatcherAlertsError }}</div>
     }
     <div class="compact-list">
       @for (instance of opsReleaseInstances; track instance.id) {
@@ -76,6 +79,25 @@
       } @empty {
         <p class="empty">No Broker instances loaded.</p>
       }
+    </div>
+    <div class="ops-columns">
+      <section>
+        <h4>Recent Alerts</h4>
+        <div class="compact-list">
+          @for (alert of opsWatcherAlerts; track alert.id || jsonLine(alert)) {
+            <article class="compact-row">
+              <strong>{{ watcherAlertTitle(alert) }}</strong>
+              <span [class.ready]="watcherAlertStatusClass(alert) === 'ready'" [class.bad]="watcherAlertStatusClass(alert) === 'bad'">
+                {{ alert.severity || "info" }} · {{ alert.status || "recorded" }} · {{ alert.createdAt | date: "MMM d, HH:mm:ss" }}
+              </span>
+              <p>{{ alert.message }}</p>
+              <small>{{ watcherAlertMeta(alert) }}</small>
+            </article>
+          } @empty {
+            <p class="empty">No recent watcher alerts.</p>
+          }
+        </div>
+      </section>
     </div>
   }
 

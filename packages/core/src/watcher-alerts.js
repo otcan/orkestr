@@ -220,3 +220,23 @@ export async function recordWatcherAlert(input = {}, env = process.env) {
   }, env).catch(() => {});
   return { ok: true, alert: recorded, thread, message };
 }
+
+export async function listWatcherAlerts(options = {}, env = process.env) {
+  const store = await readAlertStore(env);
+  const limit = Math.max(1, Math.min(500, Number(options.limit || 100) || 100));
+  const severity = lower(options.severity || "");
+  const status = lower(options.status || "");
+  const source = lower(options.source || "");
+  const alerts = [...store.alerts]
+    .sort((left, right) => Date.parse(clean(left.createdAt)) - Date.parse(clean(right.createdAt)))
+    .filter((alert) => !severity || lower(alert.severity) === severity)
+    .filter((alert) => !status || lower(alert.status) === status)
+    .filter((alert) => !source || lower(alert.source).includes(source));
+  return {
+    alerts: alerts.slice(-limit).reverse(),
+    count: Math.min(alerts.length, limit),
+    total: alerts.length,
+    updatedAt: store.updatedAt || "",
+    generatedAt: nowIso(),
+  };
+}

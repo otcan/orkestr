@@ -8,7 +8,7 @@ import {
   bindApiSessionToThread,
   getApiSessionBinding,
 } from "../packages/core/src/api-session-bindings.js";
-import { recordWatcherAlert } from "../packages/core/src/watcher-alerts.js";
+import { listWatcherAlerts, recordWatcherAlert } from "../packages/core/src/watcher-alerts.js";
 import { createThread, listThreadMessages } from "../packages/core/src/threads.js";
 import { whereAmI } from "../packages/core/src/whereiam.js";
 import { deliverWhatsAppReplies } from "../packages/connectors/src/whatsapp.js";
@@ -126,12 +126,16 @@ test("watcher alerts create the configured watcher thread, redact secrets, and d
     threadId: "thread-1",
     routerTraceId: "trace-1",
   }, runtimeEnv);
+  const listed = await listWatcherAlerts({ limit: 10 }, runtimeEnv);
   const messages = await listThreadMessages(first.thread.id, runtimeEnv);
 
   assert.equal(first.ok, true);
   assert.equal(first.thread.name, "test-watcher");
   assert.equal(second.skipped, true);
   assert.equal(second.reason, "deduped");
+  assert.equal(listed.total, 1);
+  assert.equal(listed.alerts[0].id, first.alert.id);
+  assert.equal(listed.alerts[0].details.accountId, "responder");
   assert.equal(messages.length, 1);
   assert.match(messages[0].text, /\[watcher:error\] test\.router/);
   assert.match(messages[0].text, /routerTrace: trace-1/);
@@ -139,6 +143,7 @@ test("watcher alerts create the configured watcher thread, redact secrets, and d
   assert.match(messages[0].text, /token=\[redacted\]/);
   assert.doesNotMatch(messages[0].text, /secret-value/);
   assert.doesNotMatch(messages[0].text, /must-not-render/);
+  assert.doesNotMatch(JSON.stringify(listed), /must-not-render|secret-value/);
 });
 
 test("watcher alerts can stay out of WhatsApp mirroring for delivery anomalies", async () => {

@@ -17,6 +17,7 @@ import {
 } from "../../../../../packages/core/src/api-session-bindings.js";
 import { deliverWhatsAppReplies } from "../../../../../packages/connectors/src/whatsapp.js";
 import { listEventsForPrincipal } from "../../../../../packages/core/src/audit-events.js";
+import { listWatcherAlerts } from "../../../../../packages/core/src/watcher-alerts.js";
 import { createStateBackup, stateBackupStatus, stateRestorePlan } from "../../../../../packages/core/src/state-backups.js";
 import { migrateCodexThreadsToAppServer } from "../../../../../packages/core/src/codex-app-server-migration.js";
 import { createFolderForPrincipal, deleteFileForPrincipal, listFilesForPrincipal, listWorkspaceFoldersForPrincipal, saveFilesForPrincipal } from "../../../../../packages/core/src/workspace-files.js";
@@ -548,6 +549,18 @@ export class SystemController {
         outcome,
       }),
     };
+  }
+
+  @Get("system/alerts")
+  async watcherAlerts(
+    @Req() request: any,
+    @Query("limit") limit = "100",
+    @Query("severity") severity = "",
+    @Query("status") status = "",
+    @Query("source") source = "",
+  ) {
+    if (!isAdminPrincipal(requestPrincipal(request))) throw httpError("admin_required", 403);
+    return listWatcherAlerts({ limit: Number(limit || 100), severity, status, source }, process.env);
   }
 
   @Get("runtime-leases")

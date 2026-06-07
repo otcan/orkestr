@@ -69,6 +69,32 @@ export interface ReleaseInstancesResponse {
   generatedAt?: string;
 }
 
+export interface WatcherAlert {
+  id: string;
+  severity?: string;
+  source?: string;
+  code?: string;
+  message?: string;
+  status?: string;
+  threadId?: string;
+  messageId?: string;
+  routerTraceId?: string;
+  watcherThreadId?: string | null;
+  watcherMessageId?: string | null;
+  createdAt?: string;
+  details?: Record<string, unknown>;
+  error?: Record<string, unknown>;
+  [key: string]: unknown;
+}
+
+export interface WatcherAlertsResponse {
+  alerts: WatcherAlert[];
+  count?: number;
+  total?: number;
+  updatedAt?: string;
+  generatedAt?: string;
+}
+
 export interface ConnectorStatus {
   id: string;
   label: string;
@@ -1761,6 +1787,10 @@ export class ApiService {
       if (String(value || "").trim()) params.set(key, String(value).trim());
     }
     return this.http.get<{ events: EventRecord[] }>(this.api(`/events?${params.toString()}`));
+  }
+
+  watcherAlerts(limit = 20): Observable<WatcherAlertsResponse> {
+    return this.http.get<WatcherAlertsResponse>(this.api(`/system/alerts?limit=${encodeURIComponent(String(limit))}`));
   }
 
   browsers(): Observable<{ browsers: BrowserSession[]; sessions?: BrowserSession[]; source?: string; error?: string; message?: string }> {

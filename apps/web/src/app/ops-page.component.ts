@@ -2,7 +2,7 @@ import { DatePipe } from "@angular/common";
 import { ChangeDetectorRef, Component, EventEmitter, Input, OnDestroy, OnInit, Output, inject } from "@angular/core";
 import { FormsModule } from "@angular/forms";
 import { firstValueFrom } from "rxjs";
-import { Agent, AgentTemplate, ApiService, BrowserSession, ConnectorStatus, DesktopLeaseRecord, EventRecord, OrkestrUser, OutlookOAuthPollResponse, ReleaseInstance, ReleaseInstancesResponse, SecurityChallenge, SecuritySession, SetupStatus, TimerDoctorResponse, TimerRecord, UserIdentity, UserOutlookOAuthStartResponse, VersionResponse } from "./api.service";
+import { Agent, AgentTemplate, ApiService, BrowserSession, ConnectorStatus, DesktopLeaseRecord, EventRecord, OrkestrUser, OutlookOAuthPollResponse, ReleaseInstance, ReleaseInstancesResponse, SecurityChallenge, SecuritySession, SetupStatus, TimerDoctorResponse, TimerRecord, UserIdentity, UserOutlookOAuthStartResponse, VersionResponse, WatcherAlert } from "./api.service";
 import { OpsWaitlistComponent } from "./ops-waitlist.component";
 
 export type ToolsView = "system" | "broker" | "timers" | "desktops" | "models" | "settings" | "connectors" | "users" | "waitlist" | "audit";
@@ -34,6 +34,8 @@ export class OpsPageComponent implements OnInit, OnDestroy {
   opsReleaseCounts: Record<string, number> = {};
   opsReleaseGeneratedAt = "";
   opsReleaseError = "";
+  opsWatcherAlerts: WatcherAlert[] = [];
+  opsWatcherAlertsError = "";
   opsAgents: Agent[] = [];
   opsAgentTemplates: AgentTemplate[] = [];
   opsTimers: TimerRecord[] = [];
@@ -112,9 +114,10 @@ export class OpsPageComponent implements OnInit, OnDestroy {
         this.renderNow();
       });
     try {
-      const [version, releaseInstances, setup, whatsapp, agents, templates, timers, timerDoctor, events, browsers, desktopLeases, runtimeLeases, executors, executions, system, processes, models, users, securityChallenges, securitySessions] = await Promise.allSettled([
+      const [version, releaseInstances, watcherAlerts, setup, whatsapp, agents, templates, timers, timerDoctor, events, browsers, desktopLeases, runtimeLeases, executors, executions, system, processes, models, users, securityChallenges, securitySessions] = await Promise.allSettled([
         firstValueFrom(this.api.version()),
         firstValueFrom(this.api.releaseInstances(true)),
+        firstValueFrom(this.api.watcherAlerts(20)),
         firstValueFrom(this.api.setupStatus()),
         firstValueFrom(this.api.whatsappStatus()),
         firstValueFrom(this.api.agents()),
@@ -137,6 +140,13 @@ export class OpsPageComponent implements OnInit, OnDestroy {
       if (version.status === "fulfilled") this.opsVersion = version.value;
       if (releaseInstances.status === "fulfilled") this.applyReleaseInstances(releaseInstances.value);
       else this.applyReleaseInstancesError(releaseInstances.reason);
+      if (watcherAlerts.status === "fulfilled") {
+        this.opsWatcherAlerts = watcherAlerts.value.alerts || [];
+        this.opsWatcherAlertsError = "";
+      } else {
+        this.opsWatcherAlerts = [];
+        this.opsWatcherAlertsError = this.errorText(watcherAlerts.reason);
+      }
       if (setup.status === "fulfilled") {
         this.opsSetup = setup.value;
         this.opsConnectors = setup.value.connectors || [];
@@ -750,6 +760,26 @@ export class OpsPageComponent implements OnInit, OnDestroy {
 
   releaseInstanceEndpoint(instance: ReleaseInstance): string {
     return String(instance.baseUrl || instance.versionUrl || instance.healthUrl || "").trim();
+  }
+
+  watcherAlertStatusClass(alert: WatcherAlert): string {
+    const severity = String(alert.severity || "").trim().toLowerCase();
+    const status = String(alert.status || "").trim().toLowerCase();
+    if (["error", "critical", "fatal"].includes(severity) || ["failed", "thread_unavailable"].includes(status)) return "bad";
+    if (["warning", "warn"].includes(severity)) return "";
+    return "ready";
+  }
+
+  watcherAlertTitle(alert: WatcherAlert): string {
+    return [alert.source || "orkestr", alert.code || "alert"].filter(Boolean).join(" · ");
+  }
+
+  watcherAlertMeta(alert: WatcherAlert): string {
+    return [
+      alert.threadId ? `thread ${alert.threadId}` : "",
+      alert.routerTraceId ? `trace ${alert.routerTraceId}` : "",
+      alert.watcherThreadId ? `watcher ${alert.watcherThreadId}` : "",
+    ].filter(Boolean).join(" · ");
   }
 
   jsonLine(value: unknown): string {
