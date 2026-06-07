@@ -2570,6 +2570,18 @@ ork-first-thread-wizard.first-thread-host {
   text-transform: uppercase;
 }
 
+.broker-rollout-controls {
+  align-items: end;
+}
+
+.broker-rollout-controls button {
+  min-height: 38px;
+}
+
+.rollout-plan-row small {
+  overflow-wrap: anywhere;
+}
+
 .audit-row small {
   color: #789071;
   font-size: 0.78rem;

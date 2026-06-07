@@ -86,6 +86,30 @@ export interface ReleaseInstancesResponse {
   generatedAt?: string;
 }
 
+export interface ReleaseRolloutResult {
+  id?: string;
+  displayName?: string;
+  kind?: string;
+  status?: string;
+  reason?: string;
+  code?: number;
+  signal?: string;
+  error?: string;
+}
+
+export interface ReleaseRolloutResponse {
+  ok?: boolean;
+  ref?: string;
+  channel?: string;
+  dryRun?: boolean;
+  execute?: boolean;
+  requestedInstanceIds?: string[];
+  matchedInstanceIds?: string[];
+  counts?: Record<string, number>;
+  results?: ReleaseRolloutResult[];
+  generatedAt?: string;
+}
+
 export interface TenantVmWhatsAppRoute {
   chatId?: string;
   chatName?: string;
@@ -1490,6 +1514,10 @@ export class ApiService {
 
   releaseInstances(probe = true): Observable<ReleaseInstancesResponse> {
     return this.http.get<ReleaseInstancesResponse>(this.api(`/release/instances?probe=${probe ? "1" : "0"}`));
+  }
+
+  releaseRollout(body: { ref?: string; channel?: string; instanceIds?: string[]; execute?: boolean; skipLocal?: boolean }): Observable<ReleaseRolloutResponse> {
+    return this.http.post<ReleaseRolloutResponse>(this.api("/release/instances/rollout"), body);
   }
 
   tenantVms(): Observable<TenantVmsResponse> {

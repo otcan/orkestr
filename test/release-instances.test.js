@@ -505,6 +505,12 @@ test("release instances API is admin-only and returns public-safe broker records
     const deniedPayload = await read(denied);
     assert.equal(denied.status, 401);
     assert.ok(deniedPayload.error);
+    const deniedRollout = await fetch(`${baseUrl}/api/release/instances/rollout`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ ref: "main" }),
+    });
+    assert.equal(deniedRollout.status, 401);
 
     const challenge = await read(await fetch(`${baseUrl}/api/setup/security/challenges`, { method: "POST" }));
     await approvePairingChallenge(challenge.challengeId, { env: process.env });
@@ -526,6 +532,31 @@ test("release instances API is admin-only and returns public-safe broker records
     assert.equal(remote.downtime.state, "down");
     assert.equal(Object.hasOwn(remote, "deployCommand"), false);
     assert.equal(Object.hasOwn(remote, "commandEnv"), false);
+
+    const rollout = await read(await fetch(`${baseUrl}/api/release/instances/rollout`, {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie },
+      body: JSON.stringify({ ref: "abc123", channel: "main", instanceIds: ["remote-api"] }),
+    }));
+    assert.equal(rollout.dryRun, true);
+    assert.equal(rollout.execute, false);
+    assert.deepEqual(rollout.requestedInstanceIds, ["remote-api"]);
+    assert.deepEqual(rollout.matchedInstanceIds, ["remote-api"]);
+    assert.equal(rollout.ref, "abc123");
+    assert.equal(rollout.channel, "main");
+    assert.equal(rollout.results[0].id, "remote-api");
+    assert.equal(rollout.results[0].status, "planned");
+    assert.equal(JSON.stringify(rollout).includes("deployCommand"), false);
+    assert.equal(JSON.stringify(rollout).includes("remote.example.test\", \"orkestr"), false);
+
+    const blockedExecute = await fetch(`${baseUrl}/api/release/instances/rollout`, {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie },
+      body: JSON.stringify({ ref: "abc123", channel: "main", instanceIds: ["remote-api"], execute: true }),
+    });
+    const blockedExecutePayload = await read(blockedExecute);
+    assert.equal(blockedExecute.status, 403);
+    assert.equal(blockedExecutePayload.error, "release_ui_execute_disabled");
   } finally {
     await new Promise((resolve) => server.close(resolve));
     if (priorHome === undefined) delete process.env.ORKESTR_HOME;

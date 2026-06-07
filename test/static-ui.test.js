@@ -123,6 +123,7 @@ test("ops page exposes release broker inventory", async () => {
   const api = await fs.readFile(path.join(root, "apps/web/src/app/api.service.ts"), "utf8");
 
   assert.match(api, /releaseInstances\(probe = true\)/);
+  assert.match(api, /releaseRollout\(body:/);
   assert.match(api, /tenantVms\(\)/);
   assert.match(api, /watcherAlerts\(limit = 20\)/);
   assert.match(api, /interface WhatsAppDoctorResponse/);
@@ -137,6 +138,9 @@ test("ops page exposes release broker inventory", async () => {
   assert.match(component, /releaseInstanceTargetVersion\(instance: ReleaseInstance\)/);
   assert.match(component, /releaseInstanceHealthLabel\(instance: ReleaseInstance\)/);
   assert.match(component, /releaseInstanceDowntimeLabel\(instance: ReleaseInstance\)/);
+  assert.match(component, /planReleaseRollout\(\): Promise<void>/);
+  assert.match(component, /this\.api\.releaseRollout\(/);
+  assert.match(component, /releaseRolloutResultLine\(\): string/);
   assert.match(component, /watcherAlertTitle\(alert: WatcherAlert\)/);
   assert.match(component, /whatsappAccountIdentity\(account: WhatsAppDoctorAccount\)/);
   assert.match(component, /visibleWhatsAppBindings\(\): WhatsAppDoctorBinding\[\]/);
@@ -147,6 +151,9 @@ test("ops page exposes release broker inventory", async () => {
   assert.match(template, /releaseInstanceHealthLabel\(instance\)/);
   assert.match(template, /releaseInstanceDowntimeLabel\(instance\)/);
   assert.match(template, /releaseInstanceTargetVersion\(instance\)/);
+  assert.match(template, /name="broker-rollout-ref"/);
+  assert.match(template, /planReleaseRollout\(\)/);
+  assert.match(template, /Rollout plan/);
   assert.match(template, /WhatsApp Account IDs/);
   assert.match(template, /Instance Threads/);
   assert.match(template, /Account IDs/);

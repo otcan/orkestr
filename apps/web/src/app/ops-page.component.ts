@@ -2,7 +2,7 @@ import { DatePipe } from "@angular/common";
 import { ChangeDetectorRef, Component, EventEmitter, Input, OnDestroy, OnInit, Output, inject } from "@angular/core";
 import { FormsModule } from "@angular/forms";
 import { firstValueFrom } from "rxjs";
-import { Agent, AgentTemplate, ApiService, BrowserSession, ConnectorStatus, DesktopLeaseRecord, EventRecord, OrkestrUser, OutlookOAuthPollResponse, ReleaseInstance, ReleaseInstancesResponse, SecurityChallenge, SecuritySession, SetupStatus, TenantVm, TimerDoctorResponse, TimerRecord, ThreadSummary, UserIdentity, UserOutlookOAuthStartResponse, VersionResponse, WatcherAlert, WhatsAppDoctorAccount, WhatsAppDoctorBinding, WhatsAppDoctorResponse, WhatsAppOutboxJob } from "./api.service";
+import { Agent, AgentTemplate, ApiService, BrowserSession, ConnectorStatus, DesktopLeaseRecord, EventRecord, OrkestrUser, OutlookOAuthPollResponse, ReleaseInstance, ReleaseInstancesResponse, ReleaseRolloutResponse, SecurityChallenge, SecuritySession, SetupStatus, TenantVm, TimerDoctorResponse, TimerRecord, ThreadSummary, UserIdentity, UserOutlookOAuthStartResponse, VersionResponse, WatcherAlert, WhatsAppDoctorAccount, WhatsAppDoctorBinding, WhatsAppDoctorResponse, WhatsAppOutboxJob } from "./api.service";
 import { OpsWaitlistComponent } from "./ops-waitlist.component";
 
 export type ToolsView = "system" | "broker" | "timers" | "desktops" | "models" | "settings" | "connectors" | "users" | "waitlist" | "audit";
@@ -56,6 +56,11 @@ export class OpsPageComponent implements OnInit, OnDestroy {
   opsReleaseCounts: Record<string, number> = {};
   opsReleaseGeneratedAt = "";
   opsReleaseError = "";
+  opsReleaseRolloutRef = "main";
+  opsReleaseRolloutChannel = "main";
+  opsReleaseRolloutBusy = false;
+  opsReleaseRolloutError = "";
+  opsReleaseRolloutReport: ReleaseRolloutResponse | null = null;
   opsTenantVms: TenantVm[] = [];
   opsTenantVmsError = "";
   opsThreads: ThreadSummary[] = [];
@@ -780,6 +785,36 @@ export class OpsPageComponent implements OnInit, OnDestroy {
 
   releaseUnreachableCount(): number {
     return this.opsReleaseInstances.filter((instance) => this.releaseInstanceStatusClass(instance) === "bad").length;
+  }
+
+  async planReleaseRollout(): Promise<void> {
+    this.opsReleaseRolloutBusy = true;
+    this.opsReleaseRolloutError = "";
+    try {
+      this.opsReleaseRolloutReport = await firstValueFrom(this.api.releaseRollout({
+        ref: this.opsReleaseRolloutRef.trim() || "main",
+        channel: this.opsReleaseRolloutChannel.trim() || "main",
+        execute: false,
+      }));
+    } catch (error) {
+      this.opsReleaseRolloutReport = null;
+      this.opsReleaseRolloutError = this.errorText(error);
+    } finally {
+      this.opsReleaseRolloutBusy = false;
+      this.renderNow();
+    }
+  }
+
+  releaseRolloutResultLine(): string {
+    const report = this.opsReleaseRolloutReport;
+    if (!report) return "";
+    const counts = report.counts || {};
+    return [
+      report.dryRun ? "dry run" : "execute",
+      report.ref ? `ref ${report.ref}` : "",
+      report.channel ? `channel ${report.channel}` : "",
+      Object.entries(counts).map(([key, value]) => `${key} ${value}`).join(" · "),
+    ].filter(Boolean).join(" · ");
   }
 
   releaseInstanceLabel(instance: ReleaseInstance): string {
