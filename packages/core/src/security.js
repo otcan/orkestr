@@ -7,6 +7,7 @@ import { authorizeDesktopShareHttpRequest } from "./desktop-shares.js";
 import { adminPrincipal, principalFromSecuritySession } from "./principal.js";
 import { publicUrlConfig } from "./public-url-config.js";
 import { defaultAdminUser, getUser, normalizeUserId } from "./users.js";
+import { readWhatsAppScopedTokenRecords } from "./whatsapp-scoped-tokens.js";
 
 const execFileAsync = promisify(execFile);
 const cookieName = "orkestr_session";
@@ -277,14 +278,16 @@ function parseJsonTokens(value, defaults = {}) {
   }).filter(Boolean);
 }
 
-function scopedWhatsAppTokens(env = process.env, routeKind = "") {
+async function scopedWhatsAppTokens(env = process.env, routeKind = "") {
   const common = [
     env.ORKESTR_WHATSAPP_SCOPED_TOKENS_JSON,
     env.WHATSAPP_SCOPED_TOKENS_JSON,
   ].flatMap((value) => parseJsonTokens(value));
+  const stored = await readWhatsAppScopedTokenRecords(env).catch(() => []);
   if (routeKind === "whatsapp_inbound") {
     return [
       ...common,
+      ...stored,
       ...parseJsonTokens(env.ORKESTR_WHATSAPP_INBOUND_SCOPED_TOKENS_JSON, { scopes: ["whatsapp:inbound"] }),
       ...parseJsonTokens(env.WHATSAPP_INBOUND_SCOPED_TOKENS_JSON, { scopes: ["whatsapp:inbound"] }),
       ...parseJsonTokens(env.ORKESTR_WHATSAPP_INBOUND_TOKEN_JSON, { scopes: ["whatsapp:inbound"] }),
@@ -293,12 +296,13 @@ function scopedWhatsAppTokens(env = process.env, routeKind = "") {
   if (routeKind === "whatsapp_bridge") {
     return [
       ...common,
+      ...stored,
       ...parseJsonTokens(env.ORKESTR_WHATSAPP_BRIDGE_SCOPED_TOKENS_JSON, { scopes: ["whatsapp:bridge"] }),
       ...parseJsonTokens(env.WHATSAPP_BRIDGE_SCOPED_TOKENS_JSON, { scopes: ["whatsapp:bridge"] }),
       ...parseJsonTokens(env.ORKESTR_WHATSAPP_BRIDGE_TOKEN_JSON, { scopes: ["whatsapp:bridge"] }),
     ];
   }
-  return common;
+  return [...common, ...stored];
 }
 
 function scopedTokenMatches(record, token) {
@@ -438,12 +442,12 @@ async function authorizeCliMachineRequest(request, env = process.env) {
   };
 }
 
-function authorizeWhatsAppMachineRequest(request, env = process.env) {
+async function authorizeWhatsAppMachineRequest(request, env = process.env) {
   const route = isWhatsAppMachineRoute(request);
   if (!route) return null;
   const token = bearerToken(request?.headers?.authorization || request?.headers?.Authorization || "");
   const tokens = route.tokens(env);
-  const scopedTokens = scopedWhatsAppTokens(env, route.kind);
+  const scopedTokens = await scopedWhatsAppTokens(env, route.kind);
   if (!tokens.length && !scopedTokens.length) return whatsappMachineAuthFailure(route, "unconfigured", 503);
   if (!token) return whatsappMachineAuthFailure(route, "required", 401);
   const scopedMatch = scopedTokens.find((candidate) => scopedTokenMatches(candidate, token));
@@ -835,7 +839,7 @@ export async function authorizeHttpRequest(request, env = process.env) {
   if (shareAuth && Number(shareAuth.statusCode || 0) >= 400) {
     return { ok: false, status, statusCode: shareAuth.statusCode, error: shareAuth.error || "desktop_share_forbidden" };
   }
-  const whatsappInboundAuth = authorizeWhatsAppMachineRequest(request, env);
+  const whatsappInboundAuth = await authorizeWhatsAppMachineRequest(request, env);
   if (whatsappInboundAuth?.ok) return {
     ok: true,
     status,

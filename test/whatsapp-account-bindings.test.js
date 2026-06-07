@@ -26,6 +26,8 @@ import {
   upsertWhatsAppConnectorAccountForPrincipal,
 } from "../packages/connectors/src/whatsapp-account-registry.js";
 import { adminPrincipal, userPrincipal } from "../packages/core/src/principal.js";
+import { readWhatsAppScopedTokenRecords } from "../packages/core/src/whatsapp-scoped-tokens.js";
+import { authorizeHttpRequest } from "../packages/core/src/security.js";
 import { createThread, getThread, listThreadMessages, listThreads } from "../packages/core/src/threads.js";
 
 test("WhatsApp connector accounts are projected as neutral accounts with legacy aliases", () => {
@@ -574,6 +576,25 @@ test("WhatsApp broker migration persists accounts and canonicalizes legacy threa
   assert.equal(applied.dryRun, false);
   assert.equal(applied.counts.accountsCreated, 2);
   assert.equal(applied.counts.threadBindingsUpdated, 2);
+  assert.ok(applied.counts.scopedTokensCreated > 0);
+  assert.equal(applied.counts.tokenPlansMissing, 0);
+  assert.equal(applied.tokenPlans.every((plan) => plan.tokenConfigured === true), true);
+  assert.doesNotMatch(JSON.stringify(applied), /secret-token/);
+  const storedTokens = await readWhatsAppScopedTokenRecords(env);
+  assert.equal(storedTokens.length, applied.counts.scopedTokensCreated);
+  assert.equal(storedTokens.every((record) => record.token && record.token.startsWith("wa_")), true);
+  const sendToken = storedTokens.find((record) => record.scopes.includes("whatsapp:bridge:send"));
+  assert.ok(sendToken);
+  const auth = await authorizeHttpRequest({
+    method: "POST",
+    url: "/api/connectors/whatsapp/bridge/send-text",
+    headers: { authorization: `Bearer ${sendToken.token}` },
+    socket: { remoteAddress: "127.0.0.1" },
+  }, env);
+  assert.equal(auth.ok, true);
+  assert.equal(auth.machineAuth, "whatsapp_bridge");
+  assert.equal(auth.machineAuthContext.chatId, sendToken.chatId);
+  assert.equal(auth.machineAuthContext.accountId, sendToken.accountId);
   assert.equal(applied.watcherAlerts.length, 1);
   assert.equal(applied.watcherAlerts[0].ok, true);
   const accounts = await readWhatsAppConnectorAccounts(env);
@@ -603,4 +624,6 @@ test("WhatsApp broker migration persists accounts and canonicalizes legacy threa
   assert.equal(second.migrated, 0);
   assert.equal(second.counts.accountsUnchanged, 2);
   assert.equal(second.counts.threadBindingsUnchanged, 2);
+  assert.equal(second.counts.scopedTokensCreated, 0);
+  assert.equal(second.counts.tokenPlansMissing, 0);
 });

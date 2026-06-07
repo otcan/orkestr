@@ -1,6 +1,11 @@
 import { adminUserId, normalizeUserId } from "../../core/src/users.js";
 import { listThreads, updateThread } from "../../core/src/threads.js";
 import { recordWatcherAlert } from "../../core/src/watcher-alerts.js";
+import {
+  ensureWhatsAppScopedTokens,
+  publicWhatsAppScopedTokenRecord,
+  readWhatsAppScopedTokenRecords,
+} from "../../core/src/whatsapp-scoped-tokens.js";
 import { bindingAccountIds } from "./whatsapp-inbound-routing.js";
 import { localWhatsAppAccountIdsForEnv, localWhatsAppBridgeBasePath } from "./whatsapp-local-bridge.js";
 import { normalizeWhatsAppBindingLevel } from "./whatsapp-binding-registry.js";
@@ -283,7 +288,7 @@ function parseJsonTokenRecords(value, defaults = {}) {
   }).filter(Boolean);
 }
 
-function configuredScopedTokenRecords(env = process.env) {
+async function configuredScopedTokenRecords(env = process.env) {
   return [
     ...parseJsonTokenRecords(env.ORKESTR_WHATSAPP_SCOPED_TOKENS_JSON),
     ...parseJsonTokenRecords(env.WHATSAPP_SCOPED_TOKENS_JSON),
@@ -293,6 +298,7 @@ function configuredScopedTokenRecords(env = process.env) {
     ...parseJsonTokenRecords(env.ORKESTR_WHATSAPP_BRIDGE_SCOPED_TOKENS_JSON, { scopes: ["whatsapp:bridge"] }),
     ...parseJsonTokenRecords(env.WHATSAPP_BRIDGE_SCOPED_TOKENS_JSON, { scopes: ["whatsapp:bridge"] }),
     ...parseJsonTokenRecords(env.ORKESTR_WHATSAPP_BRIDGE_TOKEN_JSON, { scopes: ["whatsapp:bridge"] }),
+    ...(await readWhatsAppScopedTokenRecords(env)).map(publicWhatsAppScopedTokenRecord),
   ];
 }
 
@@ -421,7 +427,7 @@ export async function migrateWhatsAppBrokerConfig(options = {}, env = process.en
   const status = options.status && typeof options.status === "object" ? options.status : {};
   const generatedAt = nowIso();
   const threads = Array.isArray(options.threads) ? options.threads : await listThreads(env);
-  const configuredTokens = configuredScopedTokenRecords(env);
+  const configuredTokens = await configuredScopedTokenRecords(env);
   const registryAccounts = await readWhatsAppConnectorAccounts(env);
   const statusById = statusAccountMap(status);
   const registryById = new Map(registryAccounts
@@ -505,8 +511,21 @@ export async function migrateWhatsAppBrokerConfig(options = {}, env = process.en
     tokenPlansConfigured: tokenPlans.filter((item) => item.tokenConfigured).length,
     tokenPlansMissing: tokenPlans.filter((item) => !item.tokenConfigured).length,
   };
-  const migrated = counts.accountsCreated + counts.accountsUpdated + counts.threadBindingsUpdated;
   const warnings = compatibilityWarnings(accountResults, bindingResults, env);
+  const tokenProvisioning = dryRun
+    ? { ok: true, created: 0, reused: 0, tokens: [] }
+    : await ensureWhatsAppScopedTokens(tokenPlans.filter((item) => !item.tokenConfigured), env);
+  const finalTokenPlans = tokenProvisioning.created
+    ? tokenPlans.map((plan) => plan.tokenConfigured ? plan : { ...plan, tokenConfigured: true, tokenProvisioned: true })
+    : tokenPlans;
+  const finalCounts = {
+    ...counts,
+    tokenPlansConfigured: finalTokenPlans.filter((item) => item.tokenConfigured).length,
+    tokenPlansMissing: finalTokenPlans.filter((item) => !item.tokenConfigured).length,
+    scopedTokensCreated: Number(tokenProvisioning.created || 0),
+    scopedTokensReused: Number(tokenProvisioning.reused || 0),
+  };
+  const migrated = counts.accountsCreated + counts.accountsUpdated + counts.threadBindingsUpdated + Number(tokenProvisioning.created || 0);
   const watcherAlerts = dryRun || options.reportWarnings === false
     ? []
     : await recordMigrationWarnings(warnings, env);
@@ -515,10 +534,11 @@ export async function migrateWhatsAppBrokerConfig(options = {}, env = process.en
     dryRun,
     generatedAt,
     migrated,
-    counts,
+    counts: finalCounts,
     accounts: accountResults,
     threadBindings: bindingResults,
-    tokenPlans,
+    tokenPlans: finalTokenPlans,
+    tokenProvisioning,
     warnings,
     watcherAlerts,
     rollback: rollbackPayload(accountResults, bindingResults),
