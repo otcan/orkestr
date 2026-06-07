@@ -32,6 +32,17 @@ function accountIdFromInput(input = {}) {
   return assertWhatsAppConnectorAccountId(clean(input.accountId || input.id || input.runtimeAccountId) || `wa-${randomUUID().slice(0, 8)}`);
 }
 
+function legacyRoleNames(env = process.env) {
+  return new Set([
+    clean(env.ORKESTR_WHATSAPP_SENDER_ROLE || env.WHATSAPP_SENDER_ROLE || "sender"),
+    clean(env.ORKESTR_WHATSAPP_RESPONDER_ROLE || env.WHATSAPP_RESPONDER_ROLE || "responder"),
+  ].filter(Boolean).map((item) => item.toLowerCase()));
+}
+
+function isLegacyRoleAccountId(accountId = "", env = process.env) {
+  return legacyRoleNames(env).has(clean(accountId).toLowerCase());
+}
+
 function defaultOwnerUserId(input = {}, env = process.env) {
   return normalizeUserId(input.ownerUserId || input.userId || env.ORKESTR_ADMIN_USER_ID || adminUserId);
 }
@@ -53,6 +64,7 @@ function normalizeConnectorAccount(input = {}, prior = null, env = process.env) 
   const accountId = accountIdFromInput({ ...prior, ...input });
   const createdAt = clean(prior?.createdAt) || nowIso();
   const displayName = clean(input.displayName || input.label || input.name || prior?.displayName || prior?.label || accountId);
+  const legacyCompatibilityAlias = input.legacyCompatibilityAlias === true || prior?.legacyCompatibilityAlias === true || isLegacyRoleAccountId(accountId, env);
   return {
     id: accountId,
     accountId,
@@ -66,6 +78,7 @@ function normalizeConnectorAccount(input = {}, prior = null, env = process.env) 
     autostart: input.autostart === undefined ? Boolean(prior?.autostart) : input.autostart === true,
     capabilities: normalizeCapabilities(input.capabilities || prior?.capabilities),
     status: clean(input.status || prior?.status || "configured"),
+    legacyCompatibilityAlias,
     createdAt,
     updatedAt: nowIso(),
   };
@@ -145,6 +158,7 @@ export async function upsertWhatsAppConnectorAccountForPrincipal(input = {}, pri
   const accountId = accountIdFromInput(input);
   const accounts = await readWhatsAppConnectorAccounts(env);
   const prior = findAccount(accounts, accountId);
+  if (!prior && isLegacyRoleAccountId(accountId, env)) throw accountError("wa_account_legacy_role_id_reserved", 400);
   if (prior) assertWhatsAppConnectorAccountAccess(prior, principal, "wa_account_update", env);
   const ownerUserId = isAdminPrincipal(principal)
     ? defaultOwnerUserId(input, env)

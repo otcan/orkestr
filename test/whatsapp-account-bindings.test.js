@@ -122,6 +122,10 @@ test("WhatsApp connector accounts enforce owner isolation for user onboarding", 
     () => deleteWhatsAppConnectorAccountForPrincipal("alice-wa", bob, env),
     /wa_account_delete_forbidden/,
   );
+  await assert.rejects(
+    () => upsertWhatsAppConnectorAccountForPrincipal({ accountId: "sender", displayName: "Legacy Sender" }, bob, env),
+    /wa_account_legacy_role_id_reserved/,
+  );
 
   const bobCreated = await upsertWhatsAppConnectorAccountForPrincipal({
     accountId: "bob-new",
@@ -139,6 +143,24 @@ test("WhatsApp connector accounts enforce owner isolation for user onboarding", 
 
   const deleted = await deleteWhatsAppConnectorAccountForPrincipal("bob-wa", admin, env);
   assert.equal(deleted.deletedAt.length > 0, true);
+});
+
+test("WhatsApp legacy role account ids are migration-only compatibility aliases", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-account-legacy-alias-"));
+  const env = { ORKESTR_HOME: home, ORKESTR_ADMIN_USER_ID: "admin" };
+  const admin = adminPrincipal("admin");
+
+  await assert.rejects(
+    () => upsertWhatsAppConnectorAccountForPrincipal({ accountId: "responder", displayName: "New Responder" }, admin, env),
+    /wa_account_legacy_role_id_reserved/,
+  );
+
+  const migrated = await upsertWhatsAppConnectorAccount({ accountId: "responder", displayName: "Migrated Responder" }, env);
+  assert.equal(migrated.legacyCompatibilityAlias, true);
+
+  const updated = await upsertWhatsAppConnectorAccountForPrincipal({ accountId: "responder", displayName: "Renamed Legacy" }, admin, env);
+  assert.equal(updated.displayName, "Renamed Legacy");
+  assert.equal(updated.legacyCompatibilityAlias, true);
 });
 
 test("WhatsApp binding status explains responder readiness and ACL", async () => {
