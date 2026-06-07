@@ -49,6 +49,16 @@
         <small>{{ releaseDowntimeCount() }} down · {{ releaseDowntimeTotalLabel() }}</small>
       </article>
       <article class="ops-card">
+        <h4>Threads</h4>
+        <p>{{ brokerThreadCount() }}</p>
+        <small>{{ brokerActiveThreadCount() }} active · {{ opsThreadsError || "loaded" }}</small>
+      </article>
+      <article class="ops-card">
+        <h4>Users</h4>
+        <p>{{ brokerUserCount() }}</p>
+        <small>{{ selectedUserId || "all accounts" }}</small>
+      </article>
+      <article class="ops-card">
         <h4>Local Release</h4>
         <p>{{ opsVersion?.releaseId || opsVersion?.describe || opsVersion?.version || "unknown" }}</p>
         <small>{{ opsVersion?.commit || "no commit" }}</small>
@@ -157,6 +167,9 @@
               <small>Target {{ releaseInstanceTargetVersion(instance) }}</small>
             }
             <small>{{ releaseInstanceMeta(instance) }}</small>
+            @if (releaseInstanceInfraLabel(instance)) {
+              <small>{{ releaseInstanceInfraLabel(instance) }}</small>
+            }
             <small>{{ brokerInstanceRouteLine(instance) }}</small>
             @if (releaseInstanceEndpoint(instance)) {
               <small>{{ releaseInstanceEndpoint(instance) }}</small>

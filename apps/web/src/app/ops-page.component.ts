@@ -787,6 +787,21 @@ export class OpsPageComponent implements OnInit, OnDestroy {
     return Number(this.opsReleaseCounts["unreachable"] || 0) || this.opsReleaseInstances.filter((instance) => this.releaseInstanceStatusClass(instance) === "bad").length;
   }
 
+  brokerUserCount(): number {
+    return this.opsUsers.length;
+  }
+
+  brokerThreadCount(): number {
+    return this.opsThreads.length;
+  }
+
+  brokerActiveThreadCount(): number {
+    return this.opsThreads.filter((thread) => {
+      const state = String(thread.state || thread.status || "").toLowerCase();
+      return thread.working || thread.typingActive || ["working", "running", "queued", "waking"].includes(state);
+    }).length;
+  }
+
   releaseAvailabilityPercent(): string {
     const percent = Number(this.opsReleaseCounts["availabilityPercent"]);
     if (Number.isFinite(percent)) return `${percent}%`;
@@ -879,6 +894,22 @@ export class OpsPageComponent implements OnInit, OnDestroy {
 
   releaseInstanceEndpoint(instance: ReleaseInstance): string {
     return String(instance.baseUrl || instance.versionUrl || instance.healthUrl || "").trim();
+  }
+
+  releaseInstanceInfraLabel(instance: ReleaseInstance): string {
+    const endpoint = this.releaseInstanceEndpoint(instance);
+    let host = "";
+    try {
+      host = endpoint ? new URL(endpoint).host : "";
+    } catch {
+      host = endpoint.replace(/^https?:\/\//i, "").split("/")[0];
+    }
+    return [
+      host ? `host ${host}` : "",
+      instance.serviceName ? `service ${instance.serviceName}` : "",
+      instance.home ? `home ${instance.home}` : "",
+      instance.sourceId ? `source ${instance.sourceId}` : "",
+    ].filter(Boolean).join(" · ");
   }
 
   releaseInstanceHealthLabel(instance: ReleaseInstance): string {
