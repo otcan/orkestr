@@ -32,6 +32,7 @@ import {
   logoutLocalWhatsAppAccount,
   startLocalWhatsAppAccount,
 } from "../../../../../packages/connectors/src/whatsapp-local-bridge.js";
+import { whatsappBindingAclAllows } from "../../../../../packages/connectors/src/whatsapp-binding-acl.js";
 import { requestPrincipal } from "../../../../../packages/core/src/principal.js";
 import { httpError } from "../../common/http.js";
 
@@ -57,6 +58,33 @@ function filterBindings(payload: Record<string, any> = {}, filters: Record<strin
       if (chat && clean(binding.chatId).toLowerCase() !== chat) return false;
       return true;
     }),
+  };
+}
+
+function principalContext(principal: any = {}) {
+  const userId = clean(principal.userId);
+  return {
+    principalKind: clean(principal.kind || "user"),
+    principalId: userId,
+    userId,
+    ownerUserId: userId,
+  };
+}
+
+function bindingVisibleToPrincipal(binding: Record<string, any> = {}, principal: any = {}) {
+  if (isAdminPrincipal(principal)) return true;
+  const context = principalContext(principal);
+  if (!context.userId) return false;
+  if (clean(binding.ownerUserId || binding.userId).toLowerCase() === context.userId.toLowerCase()) return true;
+  return ["read", "send", "manage"].some((action) => (whatsappBindingAclAllows as any)(binding, action, context));
+}
+
+function filterBindingsForPrincipal(payload: Record<string, any> = {}, principal: any = {}) {
+  if (isAdminPrincipal(principal)) return payload;
+  const bindings = Array.isArray(payload.bindings) ? payload.bindings : [];
+  return {
+    ...payload,
+    bindings: bindings.filter((binding: Record<string, any> = {}) => bindingVisibleToPrincipal(binding, principal)),
   };
 }
 
@@ -137,6 +165,42 @@ function assertAccountForPrincipal(account: Record<string, any> | null, principa
   if (!account) throw httpError("wa_account_missing", 404);
   assertWhatsAppConnectorAccountAccess(account, principal, action, process.env);
   return account;
+}
+
+function responderAccountIdFromBody(body: Record<string, unknown> = {}) {
+  return clean(body.responderConnectorAccountId || body.responderAccountId || body.outboundAccountId || body.accountId);
+}
+
+function bindingBodyForPrincipal(body: Record<string, unknown> = {}, principal: any = {}) {
+  if (isAdminPrincipal(principal)) return body;
+  const userId = clean(principal.userId);
+  const acl = body.acl && typeof body.acl === "object" && !Array.isArray(body.acl)
+    ? body.acl as Record<string, unknown>
+    : {};
+  return {
+    ...body,
+    ownerUserId: userId,
+    userId,
+    acl: {
+      ...acl,
+      read: { mode: "owner-only" },
+      manage: { mode: "owner-only" },
+    },
+  };
+}
+
+async function assertResponderAccountBodyForPrincipal(body: Record<string, unknown> = {}, principal: any, status: Record<string, any>, action: string) {
+  const accountId = responderAccountIdFromBody(body);
+  if (!accountId) return null;
+  const accounts = await listPersistentWhatsAppConnectorAccounts({ status });
+  return assertAccountForPrincipal(findAccount(accounts, accountId), principal, action);
+}
+
+function assertBindingManageForPrincipal(binding: Record<string, any> | null, principal: any) {
+  if (!binding) throw httpError("wa_binding_missing", 404);
+  if (isAdminPrincipal(principal)) return binding;
+  if ((whatsappBindingAclAllows as any)(binding, "manage", principalContext(principal))) return binding;
+  throw httpError("wa_binding_manage_forbidden", 403);
 }
 
 function assertAdminRequest(request: any) {
@@ -408,9 +472,10 @@ export class WhatsAppDiagnosticsController {
   }
 
   @Get("bindings")
-  async bindings(@Query("user") user = "", @Query("userId") userId = "", @Query("thread") thread = "", @Query("threadId") threadId = "", @Query("chat") chat = "", @Query("chatId") chatId = "") {
+  async bindings(@Req() request: any, @Query("user") user = "", @Query("userId") userId = "", @Query("thread") thread = "", @Query("threadId") threadId = "", @Query("chat") chat = "", @Query("chatId") chatId = "") {
     const status = await getWhatsAppStatus();
-    return filterBindings(await listWhatsAppBindingStatuses({ status }), { user, userId, thread, threadId, chat, chatId });
+    const principal = requestPrincipal(request);
+    return filterBindings(filterBindingsForPrincipal(await listWhatsAppBindingStatuses({ status }), principal), { user, userId, thread, threadId, chat, chatId });
   }
 
   @Get("outbox")
@@ -450,9 +515,11 @@ export class WhatsAppDiagnosticsController {
 
   @Post("bindings")
   @HttpCode(201)
-  async createBinding(@Body() body: Record<string, unknown> = {}) {
-    const result = await upsertWhatsAppThreadBinding(body, process.env);
+  async createBinding(@Req() request: any, @Body() body: Record<string, unknown> = {}) {
+    const principal = requestPrincipal(request);
     const status = await getWhatsAppStatus();
+    await assertResponderAccountBodyForPrincipal(body, principal, status, "wa_account_bind");
+    const result = await upsertWhatsAppThreadBinding(bindingBodyForPrincipal(body, principal), process.env);
     const refreshed = await getWhatsAppBindingStatus(result.binding.id || result.binding.threadId, { status });
     return {
       ok: true,
@@ -468,15 +535,21 @@ export class WhatsAppDiagnosticsController {
   }
 
   @Get("bindings/:bindingId/status")
-  async bindingStatus(@Param("bindingId") bindingId: string) {
+  async bindingStatus(@Req() request: any, @Param("bindingId") bindingId: string) {
     const status = await getWhatsAppStatus();
-    return getWhatsAppBindingStatus(bindingId, { status });
+    const payload = await getWhatsAppBindingStatus(bindingId, { status });
+    if (!bindingVisibleToPrincipal(payload.binding, requestPrincipal(request))) throw httpError("wa_binding_read_forbidden", 403);
+    return payload;
   }
 
   @Put("bindings/:bindingId")
-  async updateBinding(@Param("bindingId") bindingId: string, @Body() body: Record<string, unknown> = {}) {
-    const result = await updateWhatsAppThreadBinding(bindingId, body, process.env);
+  async updateBinding(@Req() request: any, @Param("bindingId") bindingId: string, @Body() body: Record<string, unknown> = {}) {
+    const principal = requestPrincipal(request);
     const status = await getWhatsAppStatus();
+    const existing = await getWhatsAppBindingStatus(bindingId, { status });
+    assertBindingManageForPrincipal(existing.binding, principal);
+    await assertResponderAccountBodyForPrincipal(body, principal, status, "wa_account_bind");
+    const result = await updateWhatsAppThreadBinding(bindingId, bindingBodyForPrincipal(body, principal), process.env);
     const refreshed = await getWhatsAppBindingStatus(result.binding.id || result.binding.threadId, { status });
     return {
       ok: true,
@@ -486,9 +559,11 @@ export class WhatsAppDiagnosticsController {
   }
 
   @Delete("bindings/:bindingId")
-  async deleteBinding(@Param("bindingId") bindingId: string) {
-    const result = await retireWhatsAppThreadBinding(bindingId, process.env);
+  async deleteBinding(@Req() request: any, @Param("bindingId") bindingId: string) {
     const status = await getWhatsAppStatus();
+    const existing = await getWhatsAppBindingStatus(bindingId, { status });
+    assertBindingManageForPrincipal(existing.binding, requestPrincipal(request));
+    const result = await retireWhatsAppThreadBinding(bindingId, process.env);
     const refreshed = await getWhatsAppBindingStatus(result.binding.id || result.binding.threadId, { status });
     return {
       ok: true,
@@ -510,21 +585,28 @@ export class WhatsAppDiagnosticsController {
 
   @Post("codex/connect")
   @HttpCode(201)
-  async codexConnect(@Body() body: Record<string, unknown> = {}) {
+  async codexConnect(@Req() request: any, @Body() body: Record<string, unknown> = {}) {
+    const principal = requestPrincipal(request);
     const thread = clean(body.thread || body.threadId);
     const accountId = clean(body.account || body.accountId || body.responderAccountId || body.responderConnectorAccountId);
     if (!thread) throw httpError("thread_id_required", 400);
     if (!accountId) throw httpError("wa_responder_account_required", 400);
+    const status = await getWhatsAppStatus();
+    await assertResponderAccountBodyForPrincipal({
+      ...body,
+      responderConnectorAccountId: accountId,
+    }, principal, status, "wa_account_bind");
+    const safeBody = bindingBodyForPrincipal(body, principal);
     const result = await upsertWhatsAppThreadBinding({
+      ...safeBody,
       level: "thread",
       threadId: thread,
       chatId: clean(body.chat || body.chatId),
       responderConnectorAccountId: accountId,
       responderAccountId: accountId,
       outboundAccountId: accountId,
-      acl: body.acl,
+      acl: safeBody.acl,
     }, process.env);
-    const status = await getWhatsAppStatus();
     const refreshed = await getWhatsAppBindingStatus(result.binding.id || result.binding.threadId || thread, { status });
     const resolution = await resolveWhatsAppBinding({
       thread,

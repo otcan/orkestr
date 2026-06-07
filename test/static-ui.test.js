@@ -479,6 +479,23 @@ test("ops users page exposes WhatsApp identity binding controls", async () => {
   assert.match(template, /\(click\)="unlinkWhatsAppIdentity\(user, identity\)"/);
 });
 
+test("WhatsApp binding mutation routes enforce principal-scoped account ownership", async () => {
+  const controller = await fs.readFile("apps/server/src/modules/connectors/whatsapp-diagnostics.controller.ts", "utf8");
+
+  assert.match(controller, /filterBindingsForPrincipal/);
+  assert.match(controller, /bindingVisibleToPrincipal/);
+  assert.match(controller, /assertResponderAccountBodyForPrincipal/);
+  assert.match(controller, /assertBindingManageForPrincipal/);
+  assert.match(controller, /wa_binding_read_forbidden/);
+  assert.match(controller, /wa_binding_manage_forbidden/);
+  assert.match(controller, /async createBinding\(@Req\(\) request: any/);
+  assert.match(controller, /async updateBinding\(@Req\(\) request: any/);
+  assert.match(controller, /async deleteBinding\(@Req\(\) request: any/);
+  assert.match(controller, /async codexConnect\(@Req\(\) request: any/);
+  assert.match(controller, /bindingBodyForPrincipal\(body, principal\)/);
+  assert.match(controller, /whatsappBindingAclAllows as any\)\(binding, "manage"/);
+});
+
 test("ops users page exposes Gmail and Outlook account assignment controls", async () => {
   const template = await fs.readFile("apps/web/src/app/ops-page.component.html", "utf8");
   const component = await fs.readFile("apps/web/src/app/ops-page.component.ts", "utf8");
