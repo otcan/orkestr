@@ -664,6 +664,35 @@ test("local whatsapp bridge accepts persisted connector accounts without exposin
   );
 });
 
+test("local whatsapp bridge exposes public account identity without session internals", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-public-account-identity-"));
+  const env = { ORKESTR_HOME: home, ORKESTR_WHATSAPP_ACCOUNT_IDS: "responder" };
+  try {
+    setLocalWhatsAppRuntimeForTest("responder", {
+      client: {
+        info: {
+          wid: { user: "4917632400662", server: "c.us", _serialized: "4917632400662@c.us" },
+          pushname: "Responder Phone",
+        },
+      },
+    }, {}, env);
+
+    const bridgeStatus = await getLocalWhatsAppBridgeStatus(env);
+    const status = await getWhatsAppStatus(env);
+    const account = status.accounts.find((entry) => entry.accountId === "responder");
+
+    assert.equal(bridgeStatus.accounts[0].phoneNumber, "+4917632400662");
+    assert.equal(bridgeStatus.accounts[0].contactId, "4917632400662@c.us");
+    assert.equal(account.phoneNumber, "+4917632400662");
+    assert.equal(account.contactId, "4917632400662@c.us");
+    assert.equal(account.pushName, "Responder Phone");
+    assert.equal(Object.hasOwn(account, "sessionRoot"), false);
+    assert.equal(Object.hasOwn(account, "clientId"), false);
+  } finally {
+    await resetLocalWhatsAppBridgeForTest(env);
+  }
+});
+
 test("local whatsapp web cache lives under orkestr home", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-web-cache-"));
   assert.equal(webCacheRoot({ ORKESTR_HOME: home }), path.join(home, "whatsapp-bridge", "web-cache"));

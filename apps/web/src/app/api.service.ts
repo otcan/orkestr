@@ -986,6 +986,8 @@ export interface WhatsAppDoctorAccount extends WhatsAppAccount {
   phoneNumber?: string;
   phone?: string;
   number?: string;
+  contactId?: string;
+  pushName?: string;
   nextAction?: string;
   updatedAt?: string | null;
   error?: string;

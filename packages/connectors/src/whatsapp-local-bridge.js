@@ -698,6 +698,9 @@ function defaultAccountState(accountId) {
     pairingCode: "",
     pairingCodeUpdatedAt: null,
     pairingPhoneNumber: "",
+    phoneNumber: "",
+    contactId: "",
+    pushName: "",
     authenticatedAt: null,
     loadingPercent: null,
     loadingMessage: "",
@@ -887,6 +890,20 @@ function serializedId(value) {
   if (!value) return "";
   if (typeof value === "string") return value.trim();
   return String(value._serialized || value.user || value.id || "").trim();
+}
+
+function runtimeAccountIdentity(runtime = {}) {
+  const info = runtime?.client?.info || {};
+  const wid = info.wid || info.me || {};
+  const contactId = serializedId(wid);
+  const user = String(wid?.user || "").replace(/\D+/g, "").trim();
+  const server = String(wid?.server || "").trim().toLowerCase();
+  const phoneNumber = user && (server === "c.us" || /@c\.us$/i.test(contactId)) ? `+${user}` : "";
+  return {
+    phoneNumber,
+    contactId,
+    pushName: String(info.pushname || info.pushName || info.name || "").trim(),
+  };
 }
 
 function runtimeIdentity(runtime) {
@@ -1389,6 +1406,7 @@ export function setLocalWhatsAppRuntimeForTest(accountId = "", runtime = {}, sta
     started: true,
     qrAvailable: false,
     error: "",
+    ...runtimeAccountIdentity(runtime),
     ...statePatch,
   });
   return normalized;
@@ -2420,6 +2438,7 @@ export async function startLocalWhatsAppAccount(accountId = "", env = process.en
       loadingPercent: null,
       loadingMessage: "",
       error: "",
+      ...runtimeAccountIdentity({ client }),
     });
     await appendEvent({ type: "whatsapp_local_ready", accountId: normalized }, env);
   });

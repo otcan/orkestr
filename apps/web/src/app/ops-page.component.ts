@@ -822,7 +822,8 @@ export class OpsPageComponent implements OnInit, OnDestroy {
 
   whatsappAccountIdentity(account: WhatsAppDoctorAccount): string {
     const phone = String(account.phoneNumber || account.phone || account.number || account.pairingPhoneNumber || "").trim();
-    return phone || "No phone number on record";
+    const contact = String(account.contactId || "").trim();
+    return phone || (contact ? `identity ${contact}` : "No phone number on record");
   }
 
   whatsappAccountStatusClass(account: WhatsAppDoctorAccount): string {
@@ -854,6 +855,7 @@ export class OpsPageComponent implements OnInit, OnDestroy {
     return [
       account.accountId ? `account ${account.accountId}` : "",
       account.runtimeAccountId && account.runtimeAccountId !== account.accountId ? `runtime ${account.runtimeAccountId}` : "",
+      account.pushName ? `profile ${account.pushName}` : "",
       account.autostart ? "autostart" : "manual start",
       account.updatedAt ? `updated ${new Date(account.updatedAt).toLocaleString()}` : "",
     ].filter(Boolean).join(" · ");
