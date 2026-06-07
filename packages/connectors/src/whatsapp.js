@@ -1330,7 +1330,9 @@ function latestDeliveredWhatsAppSourceRevision(outboundDeliveries = [], sourceMe
     if (sourceId !== id) return false;
     return mutationNoticeSourceTypes.has(pickString(item?.deliveryType).toLowerCase());
   });
-  return delivery ? deliverySourceRevision(delivery) : 0;
+  if (!delivery) return 0;
+  if (!pickString(delivery.sourceRevision)) return Number.MAX_SAFE_INTEGER;
+  return deliverySourceRevision(delivery);
 }
 
 function whatsappMutationNoticeTarget({ message = {}, parent = null, thread = null, kind = "", outboundDeliveries = [] } = {}) {

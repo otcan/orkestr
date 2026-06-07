@@ -6,7 +6,9 @@ import test from "node:test";
 import { appendThreadMessage, createThread, deleteThreadMessage, updateThreadMessage } from "../packages/core/src/threads.js";
 import { applyConnectorOutboxJobAction, readConnectorOutbox } from "../packages/connectors/src/connector-outbox.js";
 import { applyWhatsAppConnectorOutboxAction, deliverWhatsAppReplies } from "../packages/connectors/src/whatsapp.js";
+import { dataPaths } from "../packages/storage/src/paths.js";
 import { writeConnectorConfig } from "../packages/storage/src/config.js";
+import { readJson, writeJson } from "../packages/storage/src/store.js";
 
 function response(payload, ok = true, status = 200) {
   return {
@@ -197,6 +199,66 @@ test("whatsapp mirrors edited assistant replies as revisioned correction notices
   assert.equal(job.sourceRevision, "2");
   assert.equal(job.payload.text, calls[0].body.text);
   assert.equal(job.brokerAck.ids[0], "wa-sent-correction");
+});
+
+test("whatsapp does not backfill edit notices for legacy deliveries without source revisions", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-connector-outbox-legacy-edit-"));
+  const runtimeEnv = env(home);
+  await writeConnectorConfig("whatsapp", { bridgeMode: "external", bridgeUrl: "http://wa.local" }, runtimeEnv);
+  await createThread({
+    id: "thread-wa-outbox-legacy-edit",
+    ownerUserId: "tenant-a",
+    name: "WA Connector Outbox Legacy Edit Thread",
+    binding: {
+      connector: "whatsapp",
+      chatId: "shared-chat",
+      responderAccountId: "responder",
+      outboundAccountId: "responder",
+      mirrorToWhatsApp: true,
+    },
+  }, runtimeEnv);
+  const parent = await appendThreadMessage("thread-wa-outbox-legacy-edit", {
+    role: "user",
+    source: "whatsapp_inbound",
+    state: "completed",
+    connector: "whatsapp",
+    chatId: "shared-chat",
+    accountId: "responder",
+    text: "status?",
+  }, runtimeEnv);
+  const reply = await appendThreadMessage("thread-wa-outbox-legacy-edit", {
+    role: "assistant",
+    source: "codex-app-server",
+    phase: "final_answer",
+    state: "completed",
+    parentMessageId: parent.id,
+    chatId: "shared-chat",
+    accountId: "responder",
+    text: "Original answer.",
+  }, runtimeEnv);
+
+  await deliverWhatsAppReplies(runtimeEnv, async () => response({ ok: true, ids: ["wa-sent-original"] }));
+  const statePath = dataPaths(runtimeEnv).whatsapp;
+  const state = await readJson(statePath, {});
+  state.outboundDeliveries = (state.outboundDeliveries || []).map((delivery) => {
+    if (delivery.messageId !== reply.id) return delivery;
+    const legacy = { ...delivery };
+    delete legacy.sourceRevision;
+    return legacy;
+  });
+  await writeJson(statePath, state);
+  await updateThreadMessage("thread-wa-outbox-legacy-edit", reply.id, { text: "Corrected answer." }, runtimeEnv);
+
+  const calls = [];
+  const delivery = await deliverWhatsAppReplies(runtimeEnv, async (url, options) => {
+    calls.push({ url, body: JSON.parse(options.body) });
+    return response({ ok: true, ids: ["unexpected-correction"] });
+  });
+  const outbox = await readConnectorOutbox(runtimeEnv);
+
+  assert.equal(delivery.delivered.length, 0);
+  assert.equal(calls.length, 0);
+  assert.equal(outbox.jobs.some((item) => item.sourceMessageId === reply.id && item.deliveryType === "edit_notice"), false);
 });
 
 test("whatsapp mirrors deleted assistant replies as tombstone notices", async () => {
