@@ -1398,6 +1398,88 @@ test("local whatsapp unread recovery routes missed unread messages", async () =>
   assert.equal(getChatByIdCalls, 0);
 });
 
+test("local whatsapp recent recovery routes missed seen messages in bound chats", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-recent-recovery-"));
+  const env = {
+    ORKESTR_HOME: home,
+    ORKESTR_WHATSAPP_ACCOUNT_IDS: "responder",
+    ORKESTR_WHATSAPP_RECENT_RECOVERY_MAX_AGE_MS: "600000",
+  };
+  const chatId = "wa-group-recent@g.us";
+  const nowSeconds = 1_780_000_000;
+  let sentSeen = false;
+  let getChatByIdCalls = 0;
+  const oldMessage = {
+    id: { _serialized: "old-seen-message", remote: chatId },
+    fromMe: false,
+    from: chatId,
+    author: "wa-contact-one@c.us",
+    body: "old seen hello",
+    timestamp: nowSeconds - 3600,
+  };
+  const recentMessage = {
+    id: { _serialized: "recent-seen-message", remote: chatId },
+    fromMe: false,
+    from: chatId,
+    author: "wa-contact-one@c.us",
+    body: "recent seen hello",
+    timestamp: nowSeconds,
+  };
+  const chat = {
+    id: { _serialized: chatId },
+    unreadCount: 0,
+    async fetchMessages() {
+      return [oldMessage, recentMessage];
+    },
+    async sendSeen() {
+      sentSeen = true;
+    },
+  };
+  const client = {
+    async getChats() {
+      return [chat];
+    },
+    async getChatById() {
+      getChatByIdCalls += 1;
+      throw new Error("recover should reuse the chat object from getChats");
+    },
+  };
+  const thread = await createThread({
+    id: "recent-thread",
+    name: "Recent",
+    binding: {
+      connector: "whatsapp",
+      chatId,
+      displayName: "Recent",
+      responderAccountId: "responder",
+      outboundAccountId: "responder",
+      enabled: true,
+    },
+  }, env);
+
+  const result = await recoverUnreadLocalWhatsAppMessages(env, {
+    force: true,
+    accountIds: ["responder"],
+    clients: new Map([["responder", client]]),
+    accountStates: new Map([["responder", { state: "ready", ready: true }]]),
+    threads: [thread],
+    limit: 20,
+    nowMs: nowSeconds * 1000 + 60_000,
+  });
+  const messages = await listThreadMessages("recent-thread", env);
+
+  assert.equal(result.routed, 1);
+  assert.equal(result.recovered.length, 1);
+  assert.equal(result.recovered[0].chatId, chatId);
+  assert.equal(result.recovered[0].recoveryMode, "recent");
+  assert.equal(result.recovered[0].candidates, 1);
+  assert.equal(messages.length, 1);
+  assert.equal(messages.at(-1).text, "recent seen hello");
+  assert.equal(messages.at(-1).source, "whatsapp_inbound");
+  assert.equal(sentSeen, false);
+  assert.equal(getChatByIdCalls, 0);
+});
+
 test("local whatsapp phone pairing validates phone numbers before browser launch", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-phone-invalid-"));
   await assert.rejects(

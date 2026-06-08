@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { startServer } from "../apps/server/src/server.js";
-import { runtimeStatus, wakeThread } from "../packages/core/src/runtime-leases.js";
+import { resetThreadInputDeliveryTimersForTest, runtimeStatus, wakeThread } from "../packages/core/src/runtime-leases.js";
 import { createThread } from "../packages/core/src/threads.js";
 
 async function createFakeTmux(home) {
@@ -147,6 +147,7 @@ test("thread input API returns queued message without synchronous runtime delive
     assert.equal(payload.message.clientMessageId, "browser-http-send-1");
     await new Promise((resolve) => setTimeout(resolve, 25));
   } finally {
+    resetThreadInputDeliveryTimersForTest();
     await new Promise((resolve) => server.close(resolve));
     for (const key of envKeys) restoreEnvValue(key, priorEnv[key]);
   }
