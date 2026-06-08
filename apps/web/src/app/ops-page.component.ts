@@ -19,6 +19,9 @@ interface BrokerThreadRow {
   accountIds: string[];
   queueLabel: string;
   outboxLabel: string;
+  runtimeLabel: string;
+  unansweredLabel: string;
+  hasUnanswered: boolean;
   latestAlert?: WatcherAlert | null;
   routeOnly?: boolean;
   remoteStatus?: string;
@@ -802,6 +805,23 @@ export class OpsPageComponent implements OnInit, OnDestroy {
     }).length;
   }
 
+  brokerUnansweredThreadCount(): number {
+    return this.opsThreads.filter((thread) => this.threadLooksUnanswered(thread)).length;
+  }
+
+  brokerRuntimeSplitLabel(): string {
+    const counts = this.opsThreads.reduce((acc: Record<string, number>, thread) => {
+      const mode = this.threadRuntimeLabel(thread);
+      acc[mode] = (acc[mode] || 0) + 1;
+      return acc;
+    }, {});
+    return Object.entries(counts)
+      .sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0]))
+      .slice(0, 4)
+      .map(([mode, count]) => `${mode} ${count}`)
+      .join(" · ") || "no threads";
+  }
+
   releaseAvailabilityPercent(): string {
     const percent = Number(this.opsReleaseCounts["availabilityPercent"]);
     if (Number.isFinite(percent)) return `${percent}%`;
@@ -1026,6 +1046,9 @@ export class OpsPageComponent implements OnInit, OnDestroy {
         accountIds: [String(route?.accountId || "").trim()].filter(Boolean),
         queueLabel: "remote",
         outboxLabel: this.brokerOutboxLabelFor("", routeChatId),
+        runtimeLabel: "remote",
+        unansweredLabel: "remote",
+        hasUnanswered: false,
         latestAlert: this.brokerLatestAlert("", routeChatId),
         routeOnly: true,
         remoteStatus: route?.diagnostics?.nextAction || "remote auth required for thread details",
@@ -1056,9 +1079,42 @@ export class OpsPageComponent implements OnInit, OnDestroy {
       accountIds: [...new Set(accountIds)],
       queueLabel: `${Number(thread.pendingCount || 0)} queued · ${Number(thread.runningCount || 0)} running`,
       outboxLabel: this.brokerOutboxLabelFor(thread.id, chatId),
+      runtimeLabel: this.threadRuntimeLabel(thread),
+      unansweredLabel: this.threadUnansweredLabel(thread),
+      hasUnanswered: this.threadLooksUnanswered(thread),
       latestAlert: this.brokerLatestAlert(thread.id, chatId),
       localThread: thread,
     };
+  }
+
+  private threadRuntimeLabel(thread: ThreadSummary): string {
+    const explicit = String(thread.runtimeModeLabel || "").trim();
+    if (explicit) return explicit;
+    const mode = String(thread.runtimeMode || thread.runtimeKind || "").trim().toLowerCase();
+    if (mode === "codex-api" || mode === "codex-app-server") return "Codex API";
+    if (mode === "codex-tmux" || mode === "migration_required") return "Codex tmux";
+    if (mode === "attached-terminal" || mode === "raw-terminal") return "Attached terminal";
+    if (mode === "agent" || mode === "api-agent") return "Agent";
+    return mode || "unknown";
+  }
+
+  private threadLooksUnanswered(thread: ThreadSummary): boolean {
+    const lastRole = String(thread.lastMessageRole || "").trim().toLowerCase();
+    const state = String(thread.state || thread.status || "").trim().toLowerCase();
+    if (lastRole !== "user") return false;
+    if (thread.awaitingInput || thread.working || thread.typingActive) return false;
+    if (Number(thread.pendingCount || 0) > 0 || Number(thread.runningCount || 0) > 0) return false;
+    return !["working", "running", "queued", "waking"].includes(state);
+  }
+
+  private threadUnansweredLabel(thread: ThreadSummary): string {
+    if (this.threadLooksUnanswered(thread)) return "unanswered";
+    const lastRole = String(thread.lastMessageRole || "").trim().toLowerCase();
+    if (thread.awaitingInput) return "awaiting input";
+    if (thread.working || thread.typingActive) return "answering";
+    if (Number(thread.pendingCount || 0) > 0) return "queued";
+    if (lastRole === "assistant") return "answered";
+    return lastRole || "unknown";
   }
 
   brokerOutboxLabelFor(threadId = "", chatId = ""): string {

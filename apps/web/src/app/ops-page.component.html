@@ -53,6 +53,16 @@
         <p>{{ brokerThreadCount() }}</p>
         <small>{{ brokerActiveThreadCount() }} active · {{ opsThreadsError || "loaded" }}</small>
       </article>
+      <article class="ops-card" [class.critical]="brokerUnansweredThreadCount() > 0">
+        <h4>Unanswered</h4>
+        <p>{{ brokerUnansweredThreadCount() }}</p>
+        <small>latest user messages without an active answer</small>
+      </article>
+      <article class="ops-card">
+        <h4>Runtime Modes</h4>
+        <p>{{ brokerActiveThreadCount() }}</p>
+        <small>{{ brokerRuntimeSplitLabel() }}</small>
+      </article>
       <article class="ops-card">
         <h4>Users</h4>
         <p>{{ brokerUserCount() }}</p>
@@ -181,7 +191,8 @@
                   <span>
                     <strong>{{ row.label }}</strong>
                     <small>{{ row.threadId || row.id }} @if (row.codexThreadId) { · {{ row.codexThreadId }} }</small>
-                    <small>{{ row.state }} @if (row.remoteStatus) { · {{ row.remoteStatus }} }</small>
+                    <small>{{ row.state }} · {{ row.runtimeLabel }} @if (row.remoteStatus) { · {{ row.remoteStatus }} }</small>
+                    <small [class.bad]="row.hasUnanswered">{{ row.unansweredLabel }}</small>
                   </span>
                   <span><strong>{{ row.chatName || "-" }}</strong><small>{{ row.chatId || "-" }}</small></span>
                   <span><code>{{ brokerAccountIds(row) }}</code></span>

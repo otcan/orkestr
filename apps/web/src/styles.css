@@ -2596,6 +2596,10 @@ ork-first-thread-wizard.first-thread-host {
   color: #ff9b88;
 }
 
+.compact-row small.bad {
+  color: #ff9b88;
+}
+
 .instance-row {
   gap: 9px;
 }

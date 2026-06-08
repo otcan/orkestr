@@ -142,6 +142,9 @@ test("ops page exposes release broker inventory", async () => {
   assert.match(component, /releaseDowntimeTotalLabel\(\): string/);
   assert.match(component, /brokerUserCount\(\): number/);
   assert.match(component, /brokerThreadCount\(\): number/);
+  assert.match(component, /brokerUnansweredThreadCount\(\): number/);
+  assert.match(component, /brokerRuntimeSplitLabel\(\): string/);
+  assert.match(component, /threadLooksUnanswered\(thread: ThreadSummary\): boolean/);
   assert.match(component, /releaseInstanceInfraLabel\(instance: ReleaseInstance\): string/);
   assert.match(component, /planReleaseRollout\(\): Promise<void>/);
   assert.match(component, /this\.api\.releaseRollout\(/);
@@ -161,6 +164,10 @@ test("ops page exposes release broker inventory", async () => {
   assert.match(template, /releaseDowntimeTotalLabel\(\)/);
   assert.match(template, /brokerThreadCount\(\)/);
   assert.match(template, /brokerUserCount\(\)/);
+  assert.match(template, /brokerUnansweredThreadCount\(\)/);
+  assert.match(template, /brokerRuntimeSplitLabel\(\)/);
+  assert.match(template, /row\.runtimeLabel/);
+  assert.match(template, /row\.unansweredLabel/);
   assert.match(template, /releaseInstanceInfraLabel\(instance\)/);
   assert.match(template, /name="broker-rollout-ref"/);
   assert.match(template, /planReleaseRollout\(\)/);
