@@ -634,26 +634,35 @@ test("tenant api-agent creates a persisted Gmail notification rule from chat", a
       const body = JSON.parse(options.body);
       openAiCalls.push(body);
       if (openAiCalls.length === 1) {
-        assert.equal(body.tools.some((tool) => tool.name === "orkestr_create_gmail_notification"), true);
+        assert.equal(body.tools.some((tool) => tool.name === "orkestr_list_actions"), true);
+        assert.equal(body.tools.some((tool) => tool.name === "orkestr_run_action"), true);
+        assert.equal(body.tools.some((tool) => tool.name === "orkestr_create_gmail_notification"), false);
         assert.match(body.instructions, /Do not ask for yes\/no confirmation/i);
-        assert.match(body.tools.find((tool) => tool.name === "orkestr_create_gmail_notification")?.description || "", /do not ask for yes\/no confirmation/i);
+        assert.match(body.instructions, /orkestr_run_action/i);
         return response({
           id: "resp_gmail_notification_1",
           model: "gpt-5-mini",
           output_text: "",
           output: [{
             type: "function_call",
-            name: "orkestr_create_gmail_notification",
+            name: "orkestr_run_action",
             call_id: "call_create_gmail_notification",
             arguments: JSON.stringify({
-              label: "Gmail subject notifications",
-              query: "",
-              interval: "1m",
-              targetType: "thread",
-              target: "",
-              maxItemsPerRun: 1,
-              enabled: true,
-              allowBroadQuery: false,
+              actionKey: "gmail.watch.notification",
+              provider: "",
+              verb: "",
+              object: "",
+              idempotencyKey: "gmail-subject-notifications",
+              parameters: {
+                label: "Gmail subject notifications",
+                query: "",
+                interval: "1m",
+                targetType: "thread",
+                target: "",
+                maxItemsPerRun: 1,
+                enabled: true,
+                allowBroadQuery: false,
+              },
             }),
           }],
           usage: { input_tokens: 300, output_tokens: 20 },
@@ -813,7 +822,8 @@ test("tenant api-agent repair retry can call Gmail notification tools", async ()
         });
       }
       if (openAiCalls.length === 2) {
-        assert.equal(body.tools.some((tool) => tool.name === "orkestr_create_gmail_notification"), true);
+        assert.equal(body.tools.some((tool) => tool.name === "orkestr_run_action"), true);
+        assert.equal(body.tools.some((tool) => tool.name === "orkestr_create_gmail_notification"), false);
         assert.match(body.instructions, /call the tool before finalizing/i);
         return response({
           id: "resp_gmail_notification_repair_2",
@@ -821,17 +831,24 @@ test("tenant api-agent repair retry can call Gmail notification tools", async ()
           output_text: "",
           output: [{
             type: "function_call",
-            name: "orkestr_create_gmail_notification",
+            name: "orkestr_run_action",
             call_id: "call_create_gmail_notification_repair",
             arguments: JSON.stringify({
-              label: "Gmail notifications",
-              query: "",
-              interval: "1m",
-              targetType: "thread",
-              target: "",
-              maxItemsPerRun: 1,
-              enabled: true,
-              allowBroadQuery: false,
+              actionKey: "gmail.watch.notification",
+              provider: "",
+              verb: "",
+              object: "",
+              idempotencyKey: "gmail-notification-repair",
+              parameters: {
+                label: "Gmail notifications",
+                query: "",
+                interval: "1m",
+                targetType: "thread",
+                target: "",
+                maxItemsPerRun: 1,
+                enabled: true,
+                allowBroadQuery: false,
+              },
             }),
           }],
           usage: { input_tokens: 380, output_tokens: 20 },
@@ -1461,12 +1478,12 @@ test("tenant api-agent exposes provider verb object action registry", async () =
   const env = await allowSanitizerEnv(home);
   const principal = userPrincipal({ id: "otcan", role: "user" });
 
-  const gmail = await runTenantApiAgentTool("orkestr_list_action_registry", {
+  const gmail = await runTenantApiAgentTool("orkestr_list_actions", {
     provider: "gmail",
     verb: "",
     object: "",
   }, { principal }, env);
-  const timers = await runTenantApiAgentTool("orkestr_list_action_registry", {
+  const timers = await runTenantApiAgentTool("orkestr_list_actions", {
     provider: "timer",
     verb: "create",
     object: "timer",
@@ -1476,7 +1493,58 @@ test("tenant api-agent exposes provider verb object action registry", async () =
   assert.equal(gmail.actions.some((action) => action.provider === "gmail" && action.verb === "read" && action.object === "message"), true);
   assert.equal(gmail.actions.some((action) => action.provider === "calendar"), false);
   assert.equal(timers.actions.length, 1);
-  assert.equal(timers.actions[0].tool, "orkestr_create_automation");
+  assert.equal(timers.actions[0].actionKey, "timer.create.timer");
+  assert.equal(timers.actions[0].handler, undefined);
+});
+
+test("tenant api-agent action router creates timer prompts", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-api-agent-run-action-timer-"));
+  const env = await allowSanitizerEnv(home);
+  await upsertUser({ id: "otcan", role: "user", displayName: "Otcan" }, env);
+  const thread = await createThread({
+    id: "otcan-run-action-timer",
+    ownerUserId: "otcan",
+    name: "otcan-run-action-timer",
+    runtimeKind: "api-agent",
+    executor: { type: "api-agent", metadata: { runtimeKind: "api-agent" } },
+  }, env);
+  const principal = userPrincipal({ id: "otcan", role: "user" });
+
+  const created = await runTenantApiAgentTool("orkestr_run_action", {
+    actionKey: "timer.create.timer",
+    provider: "",
+    verb: "",
+    object: "",
+    idempotencyKey: "timer-action-test",
+    parameters: {
+      label: "Action routed reminder",
+      targetType: "thread",
+      target: "",
+      cadence: "once",
+      delay: "5m",
+      runAt: "",
+      time: "",
+      timezone: "",
+      every: "",
+      prompt: "Remind me through the action router.",
+      enabled: true,
+    },
+  }, { principal, thread }, env);
+
+  assert.equal(created.ok, true);
+  assert.equal(created.action.actionKey, "timer.create.timer");
+  assert.equal(created.handler, "orkestr_create_automation");
+  assert.equal(created.timer.target, "otcan-run-action-timer");
+  assert.equal(created.timer.prompt, "Remind me through the action router.");
+  assert.equal((await listTimers(env)).some((timer) => timer.id === created.timer.id), true);
+  await runTenantApiAgentTool("orkestr_run_action", {
+    actionKey: "timer.delete.timer",
+    provider: "",
+    verb: "",
+    object: "",
+    idempotencyKey: "timer-action-test-delete",
+    parameters: { automationId: `timer:${created.timer.id}` },
+  }, { principal, thread }, env);
 });
 
 test("tenant api-agent generic automation tools manage timer prompts", async () => {
@@ -2142,9 +2210,16 @@ test("tenant api-agent reads scoped Gmail directly without repeated confirmation
             output_text: "",
             output: [{
               type: "function_call",
-              name: "orkestr_read_latest_gmail_message",
+              name: "orkestr_run_action",
               call_id: "call_gmail_read_latest",
-              arguments: JSON.stringify({ query: "" }),
+              arguments: JSON.stringify({
+                actionKey: "gmail.read.latest_message",
+                provider: "",
+                verb: "",
+                object: "",
+                idempotencyKey: "gmail-read-latest",
+                parameters: { query: "" },
+              }),
             }],
             usage: { input_tokens: 220, output_tokens: 16 },
           });
@@ -2198,11 +2273,12 @@ test("tenant api-agent reads scoped Gmail directly without repeated confirmation
 
   assert.equal(result.ok, true);
   assert.equal(openAiCalls.length, 2);
-  assert.equal(openAiCalls[0].tools.some((tool) => tool.name === "orkestr_read_latest_gmail_message"), true);
+  assert.equal(openAiCalls[0].tools.some((tool) => tool.name === "orkestr_run_action"), true);
+  assert.equal(openAiCalls[0].tools.some((tool) => tool.name === "orkestr_read_latest_gmail_message"), false);
   assert.match(openAiCalls[0].instructions, /user's request is consent/i);
   assert.equal(gmailCalls.length, 2);
   assert.equal(sanitizerEvents.some((event) =>
-    event.action === "api-agent.tool.orkestr_read_latest_gmail_message" &&
+    event.action === "api-agent.tool.orkestr_run_action" &&
     event.principal?.role === "user" &&
     event.capabilities?.gmail === true
   ), true);

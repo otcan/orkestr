@@ -29,7 +29,7 @@ import {
   runTenantApiAgentGoogleWorkspaceTool,
   tenantApiAgentGoogleWorkspaceToolDefinitions,
 } from "../../connectors/src/google-workspace-api-agent-tools.js";
-import { listActionRegistry } from "./action-registry.js";
+import { findActionRegistryEntry, listActionRegistry } from "./action-registry.js";
 import {
   createAutomationForPrincipal,
   deleteAutomationForPrincipal,
@@ -55,6 +55,116 @@ import { fileBrowserRootsForPrincipal, listFilesForPrincipal } from "./workspace
 
 function clean(value) {
   return String(value || "").trim();
+}
+
+const PROVIDER_SPECIFIC_MODEL_TOOLS = new Set([
+  "orkestr_list_action_registry",
+  "orkestr_list_timers",
+  "orkestr_create_timer",
+  "orkestr_delete_timer",
+  "orkestr_run_timer",
+  "orkestr_modify_gmail_message",
+  "orkestr_create_gmail_draft",
+  "orkestr_send_gmail_draft",
+  "orkestr_send_gmail_message",
+  "orkestr_list_google_calendar_events",
+  "orkestr_create_google_calendar_event",
+  "orkestr_update_google_calendar_event",
+  "orkestr_delete_google_calendar_event",
+  "orkestr_get_google_drive_file",
+  "orkestr_search_gmail",
+  "orkestr_read_gmail_message",
+  "orkestr_read_latest_gmail_message",
+  "orkestr_create_gmail_notification",
+  "orkestr_update_gmail_notification",
+  "orkestr_list_gmail_notifications",
+  "orkestr_delete_gmail_notification",
+  "orkestr_run_gmail_notification_now",
+]);
+
+function plainObject(value) {
+  return value && typeof value === "object" && !Array.isArray(value) ? value : {};
+}
+
+function actionParameters(args = {}) {
+  return { ...plainObject(args.parameters) };
+}
+
+function actionError(message = "action_not_available", statusCode = 400) {
+  const error = new Error(message);
+  error.statusCode = statusCode;
+  return error;
+}
+
+function automationArgsForAction(action = {}, parameters = {}, thread = null) {
+  const object = clean(action.object).toLowerCase();
+  const provider = clean(action.provider).toLowerCase();
+  const base = { ...parameters };
+  if (provider === "timer" && object === "timer") return { ...base, type: "timer", provider: "timer" };
+  if (provider === "gmail" && object === "notification") return { ...base, type: "gmail_notification", provider: "gmail" };
+  if (provider === "push" && object === "connector_push") return { ...base, type: "push", provider: clean(base.provider || "gmail") || "gmail" };
+  return base;
+}
+
+function automationIdArgsForAction(action = {}, parameters = {}) {
+  const provider = clean(action.provider).toLowerCase();
+  const object = clean(action.object).toLowerCase();
+  const type = provider === "timer" && object === "timer"
+    ? "timer"
+    : provider === "gmail" && object === "notification"
+      ? "gmail_notification"
+      : provider === "push" && object === "connector_push"
+        ? "push"
+        : clean(parameters.type);
+  const id = clean(parameters.automationId || parameters.id || parameters.timerId || parameters.notificationId);
+  return { ...parameters, automationId: id, type };
+}
+
+async function runAction(args = {}, context = {}, env = process.env) {
+  const principal = context.principal || null;
+  const thread = context.thread || null;
+  const fetchImpl = context.fetchImpl || fetch;
+  const action = findActionRegistryEntry({
+    actionKey: args.actionKey,
+    provider: args.provider,
+    verb: args.verb,
+    object: args.object,
+  });
+  if (!action) throw actionError("action_not_found", 404);
+  if (action.status && action.status !== "available") {
+    return { ok: false, error: "action_not_available", action };
+  }
+  const parameters = actionParameters(args);
+  let result = null;
+  if (action.handler === "orkestr_search_gmail") result = await searchGmail(parameters, principal, env, fetchImpl);
+  else if (action.handler === "orkestr_read_gmail_message") result = await readGmailMessage(parameters, principal, env, fetchImpl);
+  else if (action.handler === "orkestr_read_latest_gmail_message") result = await readLatestGmailMessage(parameters, principal, env, fetchImpl);
+  else if (action.handler === "orkestr_create_automation") result = await createAutomationForPrincipal(automationArgsForAction(action, parameters, thread), principal, env, { thread, fetchImpl });
+  else if (action.handler === "orkestr_update_automation") result = await updateAutomationForPrincipal(automationIdArgsForAction(action, parameters), principal, env, { thread, fetchImpl });
+  else if (action.handler === "orkestr_delete_automation") result = await deleteAutomationForPrincipal(automationIdArgsForAction(action, parameters), principal, env);
+  else if (action.handler === "orkestr_run_automation") {
+    let sourceItems = Array.isArray(parameters.sourceItems) ? parameters.sourceItems : [];
+    if (!sourceItems.length && clean(parameters.sourceItemsJson)) {
+      try {
+        const parsed = JSON.parse(parameters.sourceItemsJson);
+        sourceItems = Array.isArray(parsed) ? parsed : [];
+      } catch {
+        return { ok: false, error: "invalid_source_items_json", action };
+      }
+    }
+    result = await runAutomationForPrincipal({ ...automationIdArgsForAction(action, parameters), sourceItems }, principal, env, { thread, fetchImpl });
+  } else {
+    const googleWorkspaceTool = await runTenantApiAgentGoogleWorkspaceTool(action.handler, parameters, { principal, thread, fetchImpl }, env);
+    if (googleWorkspaceTool.handled) result = googleWorkspaceTool.result;
+  }
+  if (!result) throw actionError("action_handler_not_available", 501);
+  return {
+    ...result,
+    ok: result.ok !== false,
+    action,
+    handler: action.handler,
+    result,
+  };
 }
 
 function pathInside(parent, candidate) {
@@ -1046,17 +1156,51 @@ export function tenantApiAgentToolDefinitions() {
       },
       strict: true,
     },
-    ...tenantApiAgentTimerToolDefinitions(),
     {
       type: "function",
-      name: "orkestr_list_action_registry",
-      description: "List the tenant action registry as provider + verb + object + options. Use this to reason about available and planned connector actions across Gmail, Outlook, Calendar, Jira, WhatsApp, Drive, timers, and pushes before choosing an action.",
+      name: "orkestr_list_actions",
+      description: "List the tenant action registry as provider + verb + object + actionKey + options. Use this before running tenant-scoped Gmail, Calendar, Drive, timer, push, Jira, Outlook, or WhatsApp actions.",
       parameters: {
         type: "object",
         properties: {
           provider: { type: "string", description: "Optional provider filter such as gmail, outlook, calendar, jira, whatsapp, drive, timer, or push. Empty string returns all providers." },
           verb: { type: "string", description: "Optional verb filter such as list, read, create, update, delete, send, run, watch, pause, or resume. Empty string returns all verbs." },
           object: { type: "string", description: "Optional object filter such as message, event, issue, chat, notification, timer, connector_push, or file. Empty string returns all objects." },
+        },
+        required: ["provider", "verb", "object"],
+        additionalProperties: false,
+      },
+      strict: true,
+    },
+    {
+      type: "function",
+      name: "orkestr_run_action",
+      description: "Run one available tenant action from orkestr_list_actions. Use actionKey when available, or provider + verb + object, and put provider-specific inputs under parameters.",
+      parameters: {
+        type: "object",
+        properties: {
+          actionKey: { type: "string", description: "Stable action key from orkestr_list_actions, such as gmail.search.message. Use empty string when provider/verb/object are supplied instead." },
+          provider: { type: "string", description: "Provider such as gmail, calendar, drive, timer, or push. Use empty string when actionKey is supplied." },
+          verb: { type: "string", description: "Action verb such as search, read, create, update, delete, run, send, watch, or modify. Use empty string when actionKey is supplied." },
+          object: { type: "string", description: "Action object such as message, event, file, timer, notification, or connector_push. Use empty string when actionKey is supplied." },
+          idempotencyKey: { type: "string", description: "Optional stable key for retried user requests; empty string when not available." },
+          parameters: { type: "object", description: "Provider-specific action parameters matching the selected action options.", additionalProperties: true },
+        },
+        required: ["actionKey", "provider", "verb", "object", "idempotencyKey", "parameters"],
+        additionalProperties: false,
+      },
+      strict: true,
+    },
+    {
+      type: "function",
+      name: "orkestr_list_action_registry",
+      description: "Legacy alias for listing the action registry. Prefer orkestr_list_actions.",
+      parameters: {
+        type: "object",
+        properties: {
+          provider: { type: "string", description: "Optional provider filter." },
+          verb: { type: "string", description: "Optional verb filter." },
+          object: { type: "string", description: "Optional object filter." },
         },
         required: ["provider", "verb", "object"],
         additionalProperties: false,
@@ -1198,7 +1342,6 @@ export function tenantApiAgentToolDefinitions() {
       },
       strict: true,
     },
-    ...tenantApiAgentGoogleWorkspaceToolDefinitions(),
     {
       type: "function",
       name: "orkestr_start_connector_auth",
@@ -1377,7 +1520,7 @@ export function tenantApiAgentToolDefinitions() {
       },
       strict: true,
     },
-  ];
+  ].filter((tool) => !PROVIDER_SPECIFIC_MODEL_TOOLS.has(tool.name));
 }
 
 export async function runTenantApiAgentTool(name = "", args = {}, context = {}, env = process.env) {
@@ -1453,8 +1596,11 @@ export async function runTenantApiAgentTool(name = "", args = {}, context = {}, 
   }
   const timerTool = await runTenantApiAgentTimerTool(tool, args, { principal, thread }, env);
   if (timerTool.handled) return timerTool.result;
-  if (tool === "orkestr_list_action_registry") {
+  if (tool === "orkestr_list_actions" || tool === "orkestr_list_action_registry") {
     return { ok: true, actions: listActionRegistry(args) };
+  }
+  if (tool === "orkestr_run_action") {
+    return runAction(args, { principal, thread, fetchImpl: context.fetchImpl || fetch }, env);
   }
   if (tool === "orkestr_list_automations") {
     return { ok: true, automations: await listAutomationsForPrincipal(principal, env) };
