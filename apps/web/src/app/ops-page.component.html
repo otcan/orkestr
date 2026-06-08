@@ -112,6 +112,30 @@
     @if (opsWhatsAppOutboxError) {
       <div class="notice error">{{ opsWhatsAppOutboxError }}</div>
     }
+    <section class="broker-search-panel">
+      <div class="broker-search-row">
+        <label>
+          <span>Global broker search</span>
+          <input
+            type="search"
+            name="broker-global-search"
+            [(ngModel)]="brokerSearchText"
+            (ngModelChange)="saveBrokerViewState()"
+            placeholder="Search instances, IPs, chats, users, accounts, versions, alerts"
+          />
+        </label>
+        <button class="secondary" type="button" (click)="clearBrokerSearch()" [disabled]="!brokerSearchText">Clear</button>
+      </div>
+      <div class="broker-saved-views" aria-label="Saved broker views">
+        @for (view of brokerSavedViews; track view.id) {
+          <button type="button" [class.active]="brokerSavedViewId === view.id" (click)="setBrokerSavedView(view.id)">
+            <strong>{{ view.label }}</strong>
+            <small>{{ view.description }}</small>
+          </button>
+        }
+      </div>
+      <small>{{ brokerSearchSummary() }}</small>
+    </section>
     <section>
       <h4>WhatsApp Account IDs</h4>
       <div class="ops-grid">
@@ -166,7 +190,7 @@
         </article>
       }
       <div class="compact-list instance-thread-list">
-        @for (instance of brokerInstances(); track instance.id) {
+        @for (instance of brokerVisibleInstances(); track instance.id) {
           <article class="compact-row instance-row">
             <strong>{{ releaseInstanceLabel(instance) }}</strong>
             <span [class.ready]="releaseInstanceStatusClass(instance) === 'ready'" [class.bad]="releaseInstanceStatusClass(instance) === 'bad'">
@@ -186,7 +210,7 @@
             }
             <div class="thread-instance-table">
               <div class="thread-instance-row head"><span>Thread</span><span>Chat</span><span>Account IDs</span><span>Queue / outbox</span><span>Actions</span></div>
-              @for (row of brokerThreads(instance); track row.id) {
+              @for (row of brokerVisibleThreads(instance); track row.id) {
                 <div class="thread-instance-row">
                   <span>
                     <strong>{{ row.label }}</strong>
@@ -228,7 +252,7 @@
       <section>
         <h4>Recent Alerts</h4>
         <div class="compact-list">
-          @for (alert of opsWatcherAlerts; track alert.id || jsonLine(alert)) {
+          @for (alert of brokerVisibleAlerts(); track alert.id || jsonLine(alert)) {
             <article class="compact-row">
               <strong>{{ watcherAlertTitle(alert) }}</strong>
               <span [class.ready]="watcherAlertStatusClass(alert) === 'ready'" [class.bad]="watcherAlertStatusClass(alert) === 'bad'">

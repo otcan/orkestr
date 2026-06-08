@@ -28,6 +28,14 @@ interface BrokerThreadRow {
   localThread?: ThreadSummary | null;
 }
 
+type BrokerSavedViewId = "all" | "unanswered" | "down" | "wa-issues" | "rollout-ready" | "alerts";
+
+interface BrokerSavedView {
+  id: BrokerSavedViewId;
+  label: string;
+  description: string;
+}
+
 @Component({
   selector: "ork-ops-page",
   imports: [DatePipe, FormsModule, OpsWaitlistComponent],
@@ -118,9 +126,20 @@ export class OpsPageComponent implements OnInit, OnDestroy {
   auditResourceFilter = "";
   auditConnectorFilter = "";
   auditOutcomeFilter = "";
+  brokerSearchText = "";
+  brokerSavedViewId: BrokerSavedViewId = "all";
+  readonly brokerSavedViews: BrokerSavedView[] = [
+    { id: "all", label: "All", description: "Full broker inventory" },
+    { id: "unanswered", label: "Unanswered", description: "Threads needing a reply" },
+    { id: "down", label: "Down", description: "Unreachable or down instances" },
+    { id: "wa-issues", label: "WA issues", description: "Unpaired routes and outbox risk" },
+    { id: "rollout-ready", label: "Rollout ready", description: "Version train targets" },
+    { id: "alerts", label: "Alerts", description: "Rows with watcher alerts" },
+  ];
   userEditDraft: Record<string, { displayName: string; email: string; phoneNumber: string; role: string; status: string; maxThreads: string }> = {};
 
   ngOnInit(): void {
+    this.loadBrokerViewState();
     void this.loadOps();
     this.poller = setInterval(() => void this.loadOps(false), 30_000);
   }
@@ -809,6 +828,38 @@ export class OpsPageComponent implements OnInit, OnDestroy {
     return this.opsThreads.filter((thread) => this.threadLooksUnanswered(thread)).length;
   }
 
+  brokerVisibleInstanceCount(): number {
+    return this.brokerVisibleInstances().length;
+  }
+
+  brokerVisibleThreadCount(): number {
+    const seen = new Set<string>();
+    for (const instance of this.brokerVisibleInstances()) {
+      for (const row of this.brokerVisibleThreads(instance)) seen.add(row.threadId || row.id);
+    }
+    return seen.size;
+  }
+
+  brokerSearchSummary(): string {
+    const view = this.brokerSavedViews.find((candidate) => candidate.id === this.brokerSavedViewId);
+    return [
+      view ? `${view.label} view` : "Custom view",
+      `${this.brokerVisibleInstanceCount()} instance${this.brokerVisibleInstanceCount() === 1 ? "" : "s"}`,
+      `${this.brokerVisibleThreadCount()} thread${this.brokerVisibleThreadCount() === 1 ? "" : "s"}`,
+      `${this.brokerVisibleAlerts().length} alert${this.brokerVisibleAlerts().length === 1 ? "" : "s"}`,
+    ].join(" · ");
+  }
+
+  setBrokerSavedView(viewId: BrokerSavedViewId): void {
+    this.brokerSavedViewId = viewId;
+    this.saveBrokerViewState();
+  }
+
+  clearBrokerSearch(): void {
+    this.brokerSearchText = "";
+    this.saveBrokerViewState();
+  }
+
   brokerRuntimeSplitLabel(): string {
     const counts = this.opsThreads.reduce((acc: Record<string, number>, thread) => {
       const mode = this.threadRuntimeLabel(thread);
@@ -995,6 +1046,10 @@ export class OpsPageComponent implements OnInit, OnDestroy {
     });
   }
 
+  brokerVisibleInstances(): ReleaseInstance[] {
+    return this.brokerInstances().filter((instance) => this.brokerInstanceVisible(instance));
+  }
+
   brokerTenantVm(instance: ReleaseInstance): TenantVm | null {
     const sourceId = String(instance.sourceId || "").trim();
     const id = String(instance.id || "").replace(/^vm-/, "");
@@ -1056,6 +1111,16 @@ export class OpsPageComponent implements OnInit, OnDestroy {
       });
     }
     return rows;
+  }
+
+  brokerVisibleThreads(instance: ReleaseInstance): BrokerThreadRow[] {
+    const instanceMatchesSearch = this.brokerInstanceMatchesSearch(instance);
+    const instanceMatchesView = this.brokerInstanceMatchesSavedView(instance);
+    return this.brokerThreads(instance).filter((row) => {
+      const searchMatch = instanceMatchesSearch || this.brokerThreadRowMatchesSearch(row);
+      const viewMatch = instanceMatchesView || this.brokerThreadRowMatchesSavedView(row);
+      return searchMatch && viewMatch;
+    });
   }
 
   brokerThreadRowFromThread(thread: ThreadSummary, route: NonNullable<TenantVm["whatsappRoute"]> | null): BrokerThreadRow {
@@ -1132,6 +1197,13 @@ export class OpsPageComponent implements OnInit, OnDestroy {
       const details = alert.details || {};
       return (!!threadId && (alert.threadId === threadId || alert.watcherThreadId === threadId)) || (!!chatId && String(details["chatId"] || "") === chatId);
     }) || null;
+  }
+
+  brokerVisibleAlerts(): WatcherAlert[] {
+    return this.opsWatcherAlerts.filter((alert) => {
+      if (!this.brokerAlertMatchesSavedView(alert)) return false;
+      return this.brokerAlertMatchesSearch(alert);
+    });
   }
 
   brokerAccountIds(row: BrokerThreadRow): string {
@@ -1389,6 +1461,181 @@ export class OpsPageComponent implements OnInit, OnDestroy {
 
   private uniqueAuditOptions(values: Array<unknown>): string[] {
     return [...new Set(values.map((value) => String(value || "").trim()).filter(Boolean))].sort();
+  }
+
+  private brokerInstanceVisible(instance: ReleaseInstance): boolean {
+    const instanceSearch = this.brokerInstanceMatchesSearch(instance);
+    const instanceView = this.brokerInstanceMatchesSavedView(instance);
+    const rows = this.brokerThreads(instance);
+    const hasVisibleRow = rows.some((row) => {
+      const searchMatch = instanceSearch || this.brokerThreadRowMatchesSearch(row);
+      const viewMatch = instanceView || this.brokerThreadRowMatchesSavedView(row);
+      return searchMatch && viewMatch;
+    });
+    return (instanceSearch && instanceView) || hasVisibleRow;
+  }
+
+  private brokerInstanceMatchesSearch(instance: ReleaseInstance): boolean {
+    const route = this.brokerInstanceRoute(instance);
+    const vm = this.brokerTenantVm(instance);
+    return this.brokerMatchesSearch([
+      instance.id,
+      instance.displayName,
+      instance.kind,
+      instance.source,
+      instance.sourceId,
+      instance.status,
+      instance.serviceName,
+      instance.home,
+      instance.deployRoot,
+      instance.ref,
+      instance.channel,
+      instance.baseUrl,
+      instance.healthUrl,
+      instance.versionUrl,
+      this.releaseInstanceVersion(instance),
+      this.releaseInstanceTargetVersion(instance),
+      this.releaseInstanceCommit(instance),
+      this.releaseInstanceMeta(instance),
+      this.releaseInstanceInfraLabel(instance),
+      this.releaseInstanceHealthLabel(instance),
+      this.releaseInstanceDowntimeLabel(instance),
+      this.brokerRemoteStatus(instance),
+      route?.chatId,
+      route?.chatName,
+      route?.accountId,
+      route?.routeMode,
+      route?.target,
+      route?.diagnostics?.nextAction,
+      vm?.id,
+      vm?.displayName,
+      vm?.ownerUserId,
+      vm?.endpoint?.baseUrl,
+      vm?.endpoint?.brokerBaseUrl,
+      this.jsonLine(instance.labels || {}),
+    ]);
+  }
+
+  private brokerThreadRowMatchesSearch(row: BrokerThreadRow): boolean {
+    return this.brokerMatchesSearch([
+      row.id,
+      row.label,
+      row.state,
+      row.threadId,
+      row.codexThreadId,
+      row.chatId,
+      row.chatName,
+      row.accountIds.join(" "),
+      row.queueLabel,
+      row.outboxLabel,
+      row.runtimeLabel,
+      row.unansweredLabel,
+      row.remoteStatus,
+      row.localThread?.ownerUserId,
+      row.localThread?.name,
+      row.localThread?.title,
+      row.localThread?.bindingName,
+      row.localThread?.repoPath,
+      row.localThread?.branchName,
+      row.latestAlert?.code,
+      row.latestAlert?.message,
+    ]);
+  }
+
+  private brokerAlertMatchesSearch(alert: WatcherAlert): boolean {
+    return this.brokerMatchesSearch([
+      alert.id,
+      alert.severity,
+      alert.source,
+      alert.code,
+      alert.message,
+      alert.status,
+      alert.threadId,
+      alert.messageId,
+      alert.routerTraceId,
+      alert.watcherThreadId,
+      this.jsonLine(alert.details || {}),
+    ]);
+  }
+
+  private brokerMatchesSearch(values: Array<unknown>): boolean {
+    const tokens = this.brokerSearchTokens();
+    if (!tokens.length) return true;
+    const haystack = values.map((value) => String(value || "").toLowerCase()).join(" ");
+    return tokens.every((token) => haystack.includes(token));
+  }
+
+  private brokerSearchTokens(): string[] {
+    return this.brokerSearchText
+      .toLowerCase()
+      .split(/\s+/)
+      .map((token) => token.trim())
+      .filter(Boolean);
+  }
+
+  private brokerInstanceMatchesSavedView(instance: ReleaseInstance): boolean {
+    const view = this.brokerSavedViewId;
+    if (view === "all") return true;
+    if (view === "down") return this.releaseInstanceStatusClass(instance) === "bad" || String(instance.downtime?.state || "").toLowerCase() === "down";
+    if (view === "rollout-ready") return instance.releaseTrainEnabled === true && instance.hasDeployCommand === true;
+    if (view === "wa-issues") return this.brokerRemoteStatusClass(instance) === "bad";
+    if (view === "unanswered") return false;
+    if (view === "alerts") return false;
+    return true;
+  }
+
+  private brokerThreadRowMatchesSavedView(row: BrokerThreadRow): boolean {
+    const view = this.brokerSavedViewId;
+    if (view === "all" || view === "down" || view === "rollout-ready") return true;
+    if (view === "unanswered") return row.hasUnanswered;
+    if (view === "alerts") return Boolean(row.latestAlert);
+    if (view === "wa-issues") {
+      const outbox = row.outboxLabel.toLowerCase();
+      const remoteStatus = String(row.remoteStatus || "").toLowerCase();
+      return row.hasUnanswered || Boolean(row.latestAlert) || outbox.includes("failed") || outbox.includes("pending") || remoteStatus.includes("missing") || remoteStatus.includes("auth") || remoteStatus.includes("token");
+    }
+    return true;
+  }
+
+  private brokerAlertMatchesSavedView(alert: WatcherAlert): boolean {
+    if (this.brokerSavedViewId === "all" || this.brokerSavedViewId === "alerts") return true;
+    if (this.brokerSavedViewId === "wa-issues") {
+      const text = this.jsonLine(alert).toLowerCase();
+      return text.includes("whatsapp") || text.includes("outbox") || text.includes("account") || text.includes("connector");
+    }
+    if (this.brokerSavedViewId === "unanswered") {
+      const text = this.jsonLine(alert).toLowerCase();
+      return text.includes("unanswered") || text.includes("thread");
+    }
+    if (this.brokerSavedViewId === "down") {
+      const text = this.jsonLine(alert).toLowerCase();
+      return text.includes("down") || text.includes("unreachable") || text.includes("failed");
+    }
+    return false;
+  }
+
+  saveBrokerViewState(): void {
+    if (typeof localStorage === "undefined") return;
+    try {
+      localStorage.setItem("orkestr.ops.broker.search", this.brokerSearchText);
+      localStorage.setItem("orkestr.ops.broker.view", this.brokerSavedViewId);
+    } catch {
+      // Browser storage can be disabled in hardened operator sessions.
+    }
+  }
+
+  private loadBrokerViewState(): void {
+    if (typeof localStorage === "undefined") return;
+    try {
+      this.brokerSearchText = localStorage.getItem("orkestr.ops.broker.search") || "";
+      const view = localStorage.getItem("orkestr.ops.broker.view") || "";
+      if (this.brokerSavedViews.some((candidate) => candidate.id === view)) {
+        this.brokerSavedViewId = view as BrokerSavedViewId;
+      }
+    } catch {
+      this.brokerSearchText = "";
+      this.brokerSavedViewId = "all";
+    }
   }
 
   userAuthLabel(user: OrkestrUser): string {

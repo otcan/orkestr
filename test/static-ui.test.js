@@ -121,6 +121,7 @@ test("ops page exposes release broker inventory", async () => {
   const template = await fs.readFile(path.join(root, "apps/web/src/app/ops-page.component.html"), "utf8");
   const component = await fs.readFile(path.join(root, "apps/web/src/app/ops-page.component.ts"), "utf8");
   const api = await fs.readFile(path.join(root, "apps/web/src/app/api.service.ts"), "utf8");
+  const styles = await fs.readFile(path.join(root, "apps/web/src/styles.css"), "utf8");
 
   assert.match(api, /releaseInstances\(probe = true\)/);
   assert.match(api, /releaseRollout\(body:/);
@@ -144,6 +145,13 @@ test("ops page exposes release broker inventory", async () => {
   assert.match(component, /brokerThreadCount\(\): number/);
   assert.match(component, /brokerUnansweredThreadCount\(\): number/);
   assert.match(component, /brokerRuntimeSplitLabel\(\): string/);
+  assert.match(component, /brokerSearchText = ""/);
+  assert.match(component, /readonly brokerSavedViews: BrokerSavedView\[\]/);
+  assert.match(component, /brokerVisibleInstances\(\): ReleaseInstance\[\]/);
+  assert.match(component, /brokerVisibleThreads\(instance: ReleaseInstance\): BrokerThreadRow\[\]/);
+  assert.match(component, /brokerVisibleAlerts\(\): WatcherAlert\[\]/);
+  assert.match(component, /setBrokerSavedView\(viewId: BrokerSavedViewId\)/);
+  assert.match(component, /saveBrokerViewState\(\): void/);
   assert.match(component, /threadLooksUnanswered\(thread: ThreadSummary\): boolean/);
   assert.match(component, /releaseInstanceInfraLabel\(instance: ReleaseInstance\): string/);
   assert.match(component, /planReleaseRollout\(\): Promise<void>/);
@@ -166,6 +174,13 @@ test("ops page exposes release broker inventory", async () => {
   assert.match(template, /brokerUserCount\(\)/);
   assert.match(template, /brokerUnansweredThreadCount\(\)/);
   assert.match(template, /brokerRuntimeSplitLabel\(\)/);
+  assert.match(template, /name="broker-global-search"/);
+  assert.match(template, /Saved broker views/);
+  assert.match(template, /brokerSavedViews/);
+  assert.match(template, /brokerSearchSummary\(\)/);
+  assert.match(template, /brokerVisibleInstances\(\)/);
+  assert.match(template, /brokerVisibleThreads\(instance\)/);
+  assert.match(template, /brokerVisibleAlerts\(\)/);
   assert.match(template, /row\.runtimeLabel/);
   assert.match(template, /row\.unansweredLabel/);
   assert.match(template, /releaseInstanceInfraLabel\(instance\)/);
@@ -175,11 +190,13 @@ test("ops page exposes release broker inventory", async () => {
   assert.match(template, /WhatsApp Account IDs/);
   assert.match(template, /Instance Threads/);
   assert.match(template, /Account IDs/);
-  assert.match(template, /brokerThreads\(instance\)/);
+  assert.match(template, /brokerVisibleThreads\(instance\)/);
   assert.match(template, /brokerWake\(row\)/);
   assert.match(template, /brokerRecover\(row\)/);
   assert.match(template, /brokerRetryOutbox\(row\)/);
   assert.match(template, /Recent Alerts/);
+  assert.match(styles, /\.broker-search-panel/);
+  assert.match(styles, /\.broker-saved-views/);
   assert.doesNotMatch(template, /responder account/i);
 });
 

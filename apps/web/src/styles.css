@@ -2578,6 +2578,83 @@ ork-first-thread-wizard.first-thread-host {
   min-height: 38px;
 }
 
+.broker-search-panel {
+  display: grid;
+  gap: 12px;
+  margin: 14px 0 18px;
+  border: 1px solid rgba(119, 205, 126, 0.14);
+  border-radius: 10px;
+  padding: 14px;
+  background: rgba(2, 7, 2, 0.34);
+}
+
+.broker-search-panel > small {
+  color: #9ab594;
+  font-size: 0.78rem;
+}
+
+.broker-search-row {
+  display: grid;
+  grid-template-columns: minmax(220px, 1fr) auto;
+  gap: 10px;
+  align-items: end;
+}
+
+.broker-search-row label {
+  display: grid;
+  gap: 6px;
+}
+
+.broker-search-row span {
+  color: #91ad8b;
+  font-size: 0.75rem;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.broker-search-row input {
+  min-width: 0;
+}
+
+.broker-search-row button {
+  min-height: 38px;
+}
+
+.broker-saved-views {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(145px, 1fr));
+  gap: 8px;
+}
+
+.broker-saved-views button {
+  display: grid;
+  gap: 3px;
+  min-height: 58px;
+  border: 1px solid rgba(119, 205, 126, 0.16);
+  border-radius: 8px;
+  padding: 8px 10px;
+  background: rgba(7, 18, 6, 0.54);
+  color: #dff6d9;
+  text-align: left;
+}
+
+.broker-saved-views button.active {
+  border-color: rgba(140, 255, 155, 0.58);
+  background: rgba(55, 122, 46, 0.32);
+}
+
+.broker-saved-views strong,
+.broker-saved-views small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.broker-saved-views small {
+  color: #91ad8b;
+  font-size: 0.72rem;
+}
+
 .rollout-plan-row small {
   overflow-wrap: anywhere;
 }
