@@ -19,6 +19,10 @@ import {
   stopLocalWhatsAppBridge,
 } from "../../../packages/connectors/src/whatsapp-local-bridge.js";
 import { clearWhatsAppDeliveryIdleCache } from "../../../packages/connectors/src/whatsapp.js";
+import {
+  createConnectorRuntimeSyncSignalHandler,
+  whatsAppDeliveryFollowUpDelayMs,
+} from "../../../packages/connectors/src/whatsapp-sync-signal.js";
 import { ensureDataDirs } from "../../../packages/storage/src/paths.js";
 import { authorizeHttpRequest } from "../../../packages/core/src/security.js";
 import { getThreadForPrincipal, listThreads } from "../../../packages/core/src/threads.js";
@@ -332,21 +336,17 @@ export async function startServer({ port = 19812, host = "127.0.0.1", openBrowse
     whatsappDeliveryScheduler.schedule();
   }, whatsappDeliveryPollIntervalMs(serverEnv));
   whatsappDeliveryPoll.unref?.();
-  const whatsappDeliveryFollowUpDelayMs = () => {
-    const parsed = Number(serverEnv.ORKESTR_WHATSAPP_DELIVERY_MIN_INTERVAL_MS || 0);
-    const minIntervalMs = Number.isFinite(parsed) ? Math.max(0, Math.floor(parsed)) : 0;
-    return Math.max(1500, Math.min(30000, minIntervalMs + 500));
-  };
   const scheduleWhatsAppDeliveryFollowUp = () => {
     clearWhatsAppDeliveryIdleCache();
-    const timer = setTimeout(() => whatsappDeliveryScheduler.schedule(), whatsappDeliveryFollowUpDelayMs());
+    const timer = setTimeout(() => whatsappDeliveryScheduler.schedule(), whatsAppDeliveryFollowUpDelayMs(serverEnv));
     if (typeof timer.unref === "function") timer.unref();
   };
-  const clearConnectorDeliverySignalHandler = setThreadConnectorDeliverySignalHandler(() => {
-    clearWhatsAppDeliveryIdleCache();
-    whatsappDeliveryScheduler.schedule();
-    scheduleWhatsAppDeliveryFollowUp();
+  const connectorRuntimeSyncSignal = createConnectorRuntimeSyncSignalHandler({
+    env: serverEnv,
+    runRuntimeSync,
+    whatsappDeliveryScheduler,
   });
+  const clearConnectorDeliverySignalHandler = setThreadConnectorDeliverySignalHandler(connectorRuntimeSyncSignal.handleSignal);
   const clearDeliveryFailureHandler = setThreadInputDeliveryFailureHandler(() => {
     whatsappDeliveryScheduler.schedule();
   });
@@ -373,6 +373,7 @@ export async function startServer({ port = 19812, host = "127.0.0.1", openBrowse
 
   return serverHandle(app, timer, runtimeMonitor, paneProgressMonitor, async () => {
     clearConnectorDeliverySignalHandler();
+    connectorRuntimeSyncSignal.close();
     clearDeliveryFailureHandler();
     clearCodexAppServerMessageHandler();
     if (startupRecoveryTimer) clearTimeout(startupRecoveryTimer);
