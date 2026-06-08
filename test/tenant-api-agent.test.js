@@ -2613,12 +2613,21 @@ test("tenant api-agent does not let stale Gmail prompt-push context answer unrel
       calls.push(body);
       assert.doesNotMatch(body.instructions, /Build the business skills AI can't replace|Gmail notification summary/i);
       assert.doesNotMatch(JSON.stringify(body.input), /Build the business skills AI can't replace|Stale notification content/);
+      if (calls.length === 1) {
+        return response({
+          id: "resp_gmail_context_unrelated_1",
+          model: "gpt-5-mini",
+          output_text: "I can open the browser, inspect workspace files, and gather page contents for you.",
+          output: [],
+          usage: { input_tokens: 300, output_tokens: 18 },
+        });
+      }
       return response({
-        id: "resp_gmail_context_unrelated_1",
+        id: "resp_gmail_context_unrelated_2",
         model: "gpt-5-mini",
-        output_text: "I can help with this chat's connected Orkestr skills, questions, planning, and simple task setup.",
+        output_text: "Done.",
         output: [],
-        usage: { input_tokens: 300, output_tokens: 18 },
+        usage: { input_tokens: 360, output_tokens: 4 },
       });
     },
   });
@@ -2626,9 +2635,9 @@ test("tenant api-agent does not let stale Gmail prompt-push context answer unrel
   const assistant = messages.find((message) => message.parentMessageId === input.id);
 
   assert.equal(result.ok, true);
-  assert.equal(calls.length, 1);
-  assert.match(assistant.text, /connected Orkestr skills/i);
-  assert.doesNotMatch(assistant.text, /latest relevant Gmail notification|Build the business skills|read the full email|\/codex/i);
+  assert.equal(calls.length, 2);
+  assert.match(assistant.text, /questions, planning, drafting/i);
+  assert.doesNotMatch(assistant.text, /latest relevant Gmail notification|Build the business skills|read the full email|Codex|\/codex|workspace runtime|external account state/i);
 });
 
 test("tenant api-agent strips leaked internal thought from final chat text", async () => {

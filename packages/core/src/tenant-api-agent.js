@@ -576,6 +576,9 @@ function fallbackTenantApiAgentRepairAnswer(message = {}, options = {}) {
   const env = options.env || process.env;
   if (gmailTestingAccessDeniedMessage(message.text)) return fallbackGmailTestingAccessDeniedAnswer(message);
   if (options.pendingActionConfirmation === true) return fallbackPendingActionConfirmationAnswer(env);
+  if (/\b(?:what can you do|how can you help|what skills|which skills)\b/i.test(clean(message.text))) {
+    return fallbackWeakTenantApiAgentAnswer(message, env, options);
+  }
   if (assistantPromisesUnconfirmedAction(options.originalText) || assistantPromisesUnconfirmedAction(options.repairedText)) {
     const gmailFallback = fallbackGmailPromptPushAnswer(message) || fallbackGmailContextAnswer(message, options.gmailContext);
     if (gmailFallback) return gmailFallback;
