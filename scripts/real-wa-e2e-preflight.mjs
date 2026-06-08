@@ -131,7 +131,10 @@ export function validateWhatsAppPreflight(options = {}, statusPayload = {}, acco
     accounts,
     required: {
       responder,
-      sender: options.manualSend ? sender : assertReadyAccount({ accounts, accountId: options.senderAccountId, role: "sender" }),
+      sender: options.manualSend ? null : assertReadyAccount({ accounts, accountId: options.senderAccountId, role: "sender" }),
+    },
+    observed: {
+      sender,
     },
   };
 }

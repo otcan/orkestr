@@ -43,6 +43,7 @@ test("real WhatsApp E2E manual-send mode requires only the responder account", (
   assert.equal(preflight.manualSend, true);
   assert.equal(preflight.required.responder.runtimeAccountId, "responder");
   assert.equal(preflight.required.sender, null);
+  assert.equal(preflight.observed.sender, null);
 });
 
 test("real WhatsApp E2E preflight matches accounts by phone or contact id aliases", () => {
