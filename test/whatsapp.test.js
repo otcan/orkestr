@@ -1331,6 +1331,20 @@ test("local whatsapp unread recovery only scans bound chats for the selected acc
   assert.equal(localWhatsAppUnreadRecoveryIntervalMs({ ORKESTR_WHATSAPP_UNREAD_RECOVERY_MS: "5" }), 10000);
 });
 
+test("local whatsapp unread recovery scans inbound forward-map chats", () => {
+  const env = {
+    ORKESTR_WHATSAPP_ACCOUNT_IDS: "main,secondary",
+    ORKESTR_WHATSAPP_INBOUND_FORWARD_MAP_JSON: JSON.stringify({
+      "forward-chat@g.us": "https://remote.example/api/connectors/whatsapp/inbound",
+      "empty-target@g.us": "",
+    }),
+  };
+
+  assert.deepEqual(localWhatsAppUnreadRecoveryBoundChats([], "main", env), [
+    { chatId: "forward-chat@g.us", threadId: "", accountId: "main", source: "inbound_forward_map" },
+  ]);
+});
+
 test("local whatsapp unread recovery routes missed unread messages", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-unread-recovery-"));
   const env = { ORKESTR_HOME: home, ORKESTR_WHATSAPP_ACCOUNT_IDS: "responder" };
@@ -1397,6 +1411,76 @@ test("local whatsapp unread recovery routes missed unread messages", async () =>
   assert.equal(messages.at(-1).source, "whatsapp_inbound");
   assert.equal(sentSeen, true);
   assert.equal(getChatByIdCalls, 0);
+});
+
+test("local whatsapp recent recovery forwards missed messages for mapped external chats", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-forward-recovery-"));
+  const chatId = "wa-forward-public@g.us";
+  const nowSeconds = 1_780_000_000;
+  const env = {
+    ORKESTR_HOME: home,
+    ORKESTR_WHATSAPP_ACCOUNT_IDS: "responder",
+    ORKESTR_WHATSAPP_RECENT_RECOVERY_MAX_AGE_MS: "600000",
+    ORKESTR_WHATSAPP_INBOUND_FORWARD_MAP_JSON: JSON.stringify({
+      [chatId]: "https://public.example/api/connectors/whatsapp/inbound",
+    }),
+    ORKESTR_WHATSAPP_INBOUND_FORWARD_TOKEN: "forward-secret",
+  };
+  const message = {
+    id: { _serialized: `false_${chatId}_missed-forward_wa-contact-one@c.us`, remote: chatId },
+    fromMe: false,
+    from: chatId,
+    author: "wa-contact-one@c.us",
+    body: "missed public hello",
+    timestamp: nowSeconds,
+  };
+  const chat = {
+    id: { _serialized: chatId },
+    unreadCount: 0,
+    async fetchMessages() {
+      return [message];
+    },
+    async sendSeen() {
+      throw new Error("recent recovery should not mark mapped seen messages");
+    },
+  };
+  const client = {
+    async getChats() {
+      return [chat];
+    },
+  };
+  const calls = [];
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (url, options) => {
+    calls.push({ url: String(url), options, body: JSON.parse(options.body) });
+    return response({ ok: true, threadId: "public-thread", messageId: "public-message" }, true, 202);
+  };
+
+  try {
+    const result = await recoverUnreadLocalWhatsAppMessages(env, {
+      force: true,
+      accountIds: ["responder"],
+      clients: new Map([["responder", client]]),
+      accountStates: new Map([["responder", { state: "ready", ready: true }]]),
+      threads: [],
+      limit: 20,
+      nowMs: nowSeconds * 1000 + 60_000,
+    });
+
+    assert.equal(result.routed, 1);
+    assert.equal(result.recovered.length, 1);
+    assert.equal(result.recovered[0].chatId, chatId);
+    assert.equal(result.recovered[0].recoveryMode, "recent");
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].url, "https://public.example/api/connectors/whatsapp/inbound");
+    assert.equal(calls[0].options.headers.authorization, "Bearer forward-secret");
+    assert.equal(calls[0].body.chatId, chatId);
+    assert.equal(calls[0].body.text, "missed public hello");
+    assert.equal(calls[0].body.eventId, `false_${chatId}_missed-forward_wa-contact-one@c.us`);
+  } finally {
+    globalThis.fetch = originalFetch;
+    await resetLocalWhatsAppBridgeForTest(env);
+  }
 });
 
 test("local whatsapp recent recovery routes missed seen messages in bound chats", async () => {

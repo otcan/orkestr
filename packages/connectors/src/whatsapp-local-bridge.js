@@ -9,7 +9,10 @@ import { attachRoutingFailure, normalizeRoutingFailure, routingFailureFromError 
 import { recordRouterTraceEvent, routerTraceIdFor, turnIdFor } from "../../core/src/router-traces.js";
 import { getThread, listThreads } from "../../core/src/threads.js";
 import { setGeneratedLocalWhatsAppGroupPicture } from "./whatsapp-chat-picture.js";
-import { whatsappBindingIsRouteEligible } from "./whatsapp-inbound-routing.js";
+import {
+  bindingAccountIds as whatsappBindingAccountIds,
+  whatsappBindingIsRouteEligible,
+} from "./whatsapp-inbound-routing.js";
 import { readWhatsAppConnectorAccounts, validWhatsAppConnectorAccountId } from "./whatsapp-account-registry.js";
 
 export const localWhatsAppAccountIds = ["account-1", "account-2"];
@@ -163,6 +166,13 @@ export function localWhatsAppInboundForwardTarget({ chatId = "" } = {}, env = pr
 function localWhatsAppInboundForwardToken({ chatId = "" } = {}, env = process.env) {
   const tokens = readJsonEnvMap(env.ORKESTR_WHATSAPP_INBOUND_FORWARD_TOKEN_MAP_JSON || env.WHATSAPP_INBOUND_FORWARD_TOKEN_MAP_JSON);
   return String(tokens[String(chatId || "").trim()] || env.ORKESTR_WHATSAPP_INBOUND_FORWARD_TOKEN || env.WHATSAPP_INBOUND_FORWARD_TOKEN || "").trim();
+}
+
+function localWhatsAppInboundForwardChatIds(env = process.env) {
+  const targets = readJsonEnvMap(env.ORKESTR_WHATSAPP_INBOUND_FORWARD_MAP_JSON || env.WHATSAPP_INBOUND_FORWARD_MAP_JSON);
+  return Object.entries(targets)
+    .filter(([chatId, target]) => String(chatId || "").trim() && String(target || "").trim())
+    .map(([chatId]) => String(chatId || "").trim());
 }
 
 function falsey(value = "") {
@@ -956,7 +966,7 @@ async function knownLocalWhatsAppChats(accountId, env = process.env) {
     const binding = thread?.binding || {};
     if (String(binding.connector || "whatsapp").trim().toLowerCase() !== "whatsapp") continue;
     const chatId = String(binding.chatId || "").trim();
-    const accountIds = bindingAccountIds(binding);
+    const accountIds = [...whatsappBindingAccountIds(binding)];
     if (!chatId || (accountIds.length && !accountIds.some((candidate) => localAccountMatches(candidate, selectedAccountId, env)))) continue;
     if (!whatsappBindingIsRouteEligible(binding)) {
       suppressedChatIds.add(chatId);
@@ -1014,7 +1024,7 @@ async function suppressedLocalWhatsAppChatIds(accountId, env = process.env) {
     if (String(binding.connector || "whatsapp").trim().toLowerCase() !== "whatsapp") continue;
     if (whatsappBindingIsRouteEligible(binding)) continue;
     const chatId = String(binding.chatId || "").trim();
-    const accountIds = bindingAccountIds(binding);
+    const accountIds = [...whatsappBindingAccountIds(binding)];
     if (!chatId || (accountIds.length && !accountIds.some((candidate) => localAccountMatches(candidate, selectedAccountId, env)))) continue;
     suppressed.add(chatId);
   }
@@ -1846,12 +1856,6 @@ function localWhatsAppUnreadRecoveryMaxChats(env = process.env) {
   return Number.isFinite(parsed) ? Math.max(1, Math.min(100, parsed)) : 10;
 }
 
-function bindingAccountIds(binding = {}) {
-  return [binding.senderAccountId, binding.responderAccountId, binding.outboundAccountId]
-    .map((candidate) => String(candidate || "").trim())
-    .filter(Boolean);
-}
-
 export function localWhatsAppUnreadRecoveryBoundChats(threads = [], accountId = "", env = process.env) {
   const selectedAccountId = normalizeAccountId(accountId, env);
   const byChatId = new Map();
@@ -1861,12 +1865,21 @@ export function localWhatsAppUnreadRecoveryBoundChats(threads = [], accountId = 
     if (!whatsappBindingIsRouteEligible(binding)) continue;
     const chatId = String(binding.chatId || "").trim();
     if (!chatId) continue;
-    const accounts = bindingAccountIds(binding);
+    const accounts = [...whatsappBindingAccountIds(binding)];
     if (accounts.length && !accounts.some((candidate) => localAccountMatches(candidate, selectedAccountId, env))) continue;
     byChatId.set(chatId, {
       chatId,
       threadId: String(thread?.id || "").trim(),
       accountId: selectedAccountId,
+    });
+  }
+  for (const chatId of localWhatsAppInboundForwardChatIds(env)) {
+    if (byChatId.has(chatId)) continue;
+    byChatId.set(chatId, {
+      chatId,
+      threadId: "",
+      accountId: selectedAccountId,
+      source: "inbound_forward_map",
     });
   }
   return [...byChatId.values()];
