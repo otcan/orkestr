@@ -14,6 +14,7 @@ import { adminUserId, normalizeUserId } from "./users.js";
 import { appendTurnLifecycleEvent, turnLifecycleFromRuntimeStatus } from "./turn-lifecycle.js";
 import { actionRegistryInstructions } from "./action-registry.js";
 import { recordApiAgentFailureSuggestion } from "./api-agent-suggestions.js";
+import { desktopProvisioningMessage } from "./desktop-provisioning.js";
 
 export const API_AGENT_RUNTIME_KIND = "api-agent";
 
@@ -802,7 +803,16 @@ function readableList(values = []) {
 function skillUnavailableReason(skill = {}) {
   const reason = clean(skill.setupState);
   if (clean(skill.requiresDesktop)) {
-    if (reason === "desktop_not_available" || reason === "capability_not_available") return "the managed desktop is not configured for this chat yet";
+    const message = clean(skill.message).replace(/^Managed Desktop is /i, "it is ").replace(/\.$/, "");
+    if (message) return message;
+    if ([
+      "instance_desktops_disabled",
+      "instance_desktops_not_provisioned",
+      "user_desktop_not_provisioned",
+      "desktop_backend_unhealthy",
+      "skill_disabled",
+    ].includes(reason)) return desktopProvisioningMessage(reason).replace(/^Managed Desktop is /i, "it is ").replace(/\.$/, "");
+    if (reason === "desktop_not_available" || reason === "capability_not_available") return "the managed desktop is not provisioned for this Orkestr instance yet";
   }
   if (clean(skill.requiresConnector)) {
     if (reason === "capability_not_available") return "it is not connected for this chat yet";
@@ -1250,8 +1260,17 @@ function publicSkillActionHints(skill = {}, available = false) {
 }
 
 function publicSkillContext(skills = [], capabilities = {}, scopedConnectors = {}) {
+  const desktopProvisioning = capabilities.desktopProvisioning && typeof capabilities.desktopProvisioning === "object"
+    ? capabilities.desktopProvisioning
+    : null;
   return (Array.isArray(skills) ? skills : []).slice(0, 50).map((skill) => {
     const available = publicSkillEnabled(skill, capabilities, scopedConnectors);
+    const requiresDesktop = clean(skill.requiresDesktop);
+    const setupState = available
+      ? "available"
+      : requiresDesktop && clean(desktopProvisioning?.setupState)
+        ? clean(desktopProvisioning.setupState)
+        : skill.enabled === true ? "capability_not_available" : "skill_disabled";
     return {
       id: clean(skill.id),
       name: clean(skill.name || skill.label || skill.id),
@@ -1262,8 +1281,9 @@ function publicSkillContext(skills = [], capabilities = {}, scopedConnectors = {
       registryEnabled: skill.enabled === true,
       builtIn: skill.builtIn === true,
       requiresConnector: clean(skill.requiresConnector),
-      requiresDesktop: clean(skill.requiresDesktop),
-      setupState: available ? "available" : skill.enabled === true ? "capability_not_available" : "skill_disabled",
+      requiresDesktop,
+      setupState,
+      message: requiresDesktop && !available ? clean(desktopProvisioning?.message) || desktopProvisioningMessage(setupState) : "",
       availableActions: publicSkillActionHints(skill, available),
       actionTool: "orkestr_list_skill_actions",
     };
@@ -1284,6 +1304,27 @@ export function publicTenantCapabilities(capabilities = {}, env = process.env) {
     outlook: capabilities.outlook === true,
     linkedin: capabilities.linkedin === true,
     learning: capabilities.learning === true,
+    desktopProvisioning: capabilities.desktopProvisioning && typeof capabilities.desktopProvisioning === "object"
+      ? {
+          available: capabilities.desktopProvisioning.available === true,
+          setupState: clean(capabilities.desktopProvisioning.setupState),
+          reason: clean(capabilities.desktopProvisioning.reason),
+          message: clean(capabilities.desktopProvisioning.message),
+          instance: capabilities.desktopProvisioning.instance && typeof capabilities.desktopProvisioning.instance === "object"
+            ? {
+                mode: clean(capabilities.desktopProvisioning.instance.mode),
+                provisioned: capabilities.desktopProvisioning.instance.provisioned === true,
+                backendConfigured: capabilities.desktopProvisioning.instance.backendConfigured === true,
+                backendStatus: clean(capabilities.desktopProvisioning.instance.backendStatus),
+              }
+            : undefined,
+        }
+      : {
+          available: false,
+          setupState: "instance_desktops_not_provisioned",
+          reason: "unknown",
+          message: desktopProvisioningMessage("instance_desktops_not_provisioned"),
+        },
     workspace: {
       executionAvailable: false,
       connected: false,
@@ -1376,6 +1417,12 @@ function fallbackCapabilitiesForThread(thread = {}, env = process.env, error = n
       linkedin: false,
     },
     connectorAuth: {},
+    desktopProvisioning: {
+      available: false,
+      setupState: "instance_desktops_not_provisioned",
+      reason,
+      message: desktopProvisioningMessage("instance_desktops_not_provisioned"),
+    },
     capabilityDecision: {
       result: "fallback",
       reason,
@@ -1551,7 +1598,11 @@ function userSafeApiAgentError(error) {
   if (lowered.includes("connector_prompt_push") || (lowered.includes("gmail") && /\b(?:push|notification|notify|poll|every|background)\b/.test(lowered))) return "I couldn't manage Gmail notifications for this chat right now. Please try again in a moment.";
   if (lowered.includes("gmail")) return "Gmail is not connected or enabled for this chat yet. Ask me to connect Gmail and I will send a Google sign-in link.";
   if (lowered.includes("outlook")) return "Outlook is not connected or enabled for this chat yet. Ask me to connect Outlook and I will send Microsoft sign-in instructions.";
-  if (lowered.includes("linkedin") || lowered.includes("desktop")) return "The managed desktop is not connected or enabled for this chat yet. Ask the Orkestr admin to enable the desktop for this user, then resend.";
+  if (lowered.includes("instance_desktops_not_provisioned")) return desktopProvisioningMessage("instance_desktops_not_provisioned");
+  if (lowered.includes("instance_desktops_disabled")) return desktopProvisioningMessage("instance_desktops_disabled");
+  if (lowered.includes("user_desktop_not_provisioned")) return desktopProvisioningMessage("user_desktop_not_provisioned");
+  if (lowered.includes("desktop_backend_unhealthy")) return desktopProvisioningMessage("desktop_backend_unhealthy");
+  if (lowered.includes("linkedin") || lowered.includes("desktop")) return "Managed Desktop is not provisioned or enabled for this Orkestr instance yet.";
   if (lowered.includes("whatsapp") || lowered.includes("connector") || lowered.includes("account identity") || lowered.includes("capability")) {
     return "I can use this WhatsApp chat, but I can't expose backend WhatsApp account or connector identity from here. Ask the Orkestr admin to check connector settings.";
   }

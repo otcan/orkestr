@@ -40,6 +40,7 @@ import {
 } from "./automations.js";
 import { runTenantApiAgentTimerTool, tenantApiAgentTimerToolDefinitions } from "./tenant-api-agent-timer-tools.js";
 import { whereAmI } from "./whereiam.js";
+import { desktopProvisioningMessage } from "./desktop-provisioning.js";
 import { updateThread } from "./threads.js";
 import {
   createUserSkillForPrincipal,
@@ -537,6 +538,12 @@ async function skillActionInventory(principal = {}, thread = null, env = process
       shopify: false,
       linkedin: false,
     },
+    desktopProvisioning: {
+      available: false,
+      setupState: "instance_desktops_not_provisioned",
+      reason: "capability_lookup_failed",
+      message: desktopProvisioningMessage("instance_desktops_not_provisioned"),
+    },
     capabilityDecision: {
       result: "fallback",
       reason: clean(error?.message || error || "capability_lookup_failed"),
@@ -552,20 +559,26 @@ async function skillActionInventory(principal = {}, thread = null, env = process
       const matchingDesktop = requiredDesktop && desktops ? desktopForSkill(skill, desktops, env) : null;
       const registryEnabled = skill.enabled === true;
       const capabilityAvailable = skillAvailableFromCapabilities(skill, capabilities);
+      const desktopProvisioning = requiredDesktop && capabilities.desktopProvisioning && typeof capabilities.desktopProvisioning === "object"
+        ? capabilities.desktopProvisioning
+        : null;
       const available = capabilityAvailable && (!requiredDesktop || !desktops || Boolean(matchingDesktop));
       const unavailableReason = available
         ? ""
         : !registryEnabled
           ? "skill_disabled"
-          : requiredDesktop && desktops && !matchingDesktop
-            ? "desktop_not_available"
-            : "capability_not_available";
+          : requiredDesktop && clean(desktopProvisioning?.setupState) && clean(desktopProvisioning?.setupState) !== "available"
+            ? clean(desktopProvisioning.setupState)
+            : requiredDesktop && desktops && !matchingDesktop
+              ? "user_desktop_not_provisioned"
+              : "capability_not_available";
       return {
         ...skill,
         registryEnabled,
         available,
         enabled: capabilityAvailable,
         setupState: available ? "available" : unavailableReason,
+        message: available ? "" : clean(desktopProvisioning?.message),
         availableActions: skillActionNames(skill, capabilities, desktops, env),
         actionTool: "orkestr_run_skill_action",
         ...(requiredDesktop ? {

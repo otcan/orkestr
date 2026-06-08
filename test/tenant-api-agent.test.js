@@ -11,6 +11,7 @@ import { listGmailNotificationsForPrincipal } from "../packages/core/src/gmail-n
 import { createTimer, listTimers, markDueTimers } from "../packages/core/src/timers.js";
 import { userPrincipal } from "../packages/core/src/principal.js";
 import { appendThreadMessage, createThread, enqueueThreadInputForPrincipal, getThread, listThreadMessages } from "../packages/core/src/threads.js";
+import { createTenantVm } from "../packages/core/src/tenant-vm-registry.js";
 import { readUserPrivateIdentities, upsertUser } from "../packages/core/src/users.js";
 import { listFilesForPrincipal } from "../packages/core/src/workspace-files.js";
 import { initialQueueDeliveryState, routeWhatsAppInbound } from "../packages/connectors/src/whatsapp.js";
@@ -2883,7 +2884,8 @@ test("tenant api-agent skill actions report when a required desktop is unavailab
   assert.equal(inventory.ok, true);
   assert.equal(linkedin.registryEnabled, true);
   assert.equal(linkedin.available, false);
-  assert.equal(linkedin.setupState, "desktop_not_available");
+  assert.equal(linkedin.setupState, "user_desktop_not_provisioned");
+  assert.match(linkedin.message, /no desktop has been provisioned for this user/i);
   assert.deepEqual(linkedin.desktops, []);
   assert.deepEqual(linkedin.availableActions, ["status"]);
   assert.equal(inventory.desktopInventory.desktops.some((desktop) => desktop.slug === "linkedin"), false);
@@ -2906,8 +2908,81 @@ test("tenant api-agent does not advertise desktops when launch is disabled witho
   assert.equal(linkedin.registryEnabled, true);
   assert.equal(linkedin.enabled, false);
   assert.equal(linkedin.available, false);
-  assert.equal(linkedin.setupState, "capability_not_available");
+  assert.equal(linkedin.setupState, "instance_desktops_not_provisioned");
+  assert.match(linkedin.message, /not provisioned for this Orkestr instance/i);
   assert.deepEqual(linkedin.availableActions, ["status"]);
+});
+
+test("tenant api-agent reports disabled instance desktops distinctly", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-api-agent-desktop-disabled-"));
+  const env = {
+    ORKESTR_HOME: home,
+    ORKESTR_BROWSER_DESKTOP_MODE: "disabled",
+  };
+  const principal = userPrincipal({ id: "otcan", role: "user" });
+  await upsertUser({ id: "otcan", role: "user", displayName: "Otcan" }, env);
+
+  const inventory = await runTenantApiAgentTool("orkestr_list_skill_actions", {
+    skillId: "linkedin",
+  }, { principal }, env);
+  const linkedin = inventory.skills.find((skill) => skill.id === "linkedin");
+
+  assert.equal(linkedin.available, false);
+  assert.equal(linkedin.setupState, "instance_desktops_disabled");
+  assert.match(linkedin.message, /disabled for this Orkestr instance/i);
+});
+
+test("tenant api-agent reports unhealthy desktop backend distinctly", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-api-agent-desktop-unhealthy-"));
+  const env = {
+    ORKESTR_HOME: home,
+    ORKESTR_BROWSER_DESKTOP_MODE: "profiles",
+    ORKESTR_DESKTOP_BACKEND_STATUS: "unhealthy",
+  };
+  const principal = userPrincipal({ id: "otcan", role: "user" });
+  await upsertUser({ id: "otcan", role: "user", displayName: "Otcan" }, env);
+
+  const inventory = await runTenantApiAgentTool("orkestr_list_skill_actions", {
+    skillId: "linkedin",
+  }, { principal }, env);
+  const linkedin = inventory.skills.find((skill) => skill.id === "linkedin");
+
+  assert.equal(linkedin.available, false);
+  assert.equal(linkedin.setupState, "desktop_backend_unhealthy");
+  assert.match(linkedin.message, /desktop backend is currently unavailable/i);
+});
+
+test("tenant api-agent reports provisioned instance desktops as available", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-api-agent-desktop-provisioned-"));
+  const env = {
+    ORKESTR_HOME: home,
+    ORKESTR_BROWSER_DESKTOP_MODE: "profiles",
+    ORKESTR_BROWSER_VISIBLE_SLUGS: "desktop,linkedin",
+    ORKESTR_BROWSER_LAUNCH_DISABLED: "1",
+  };
+  const principal = userPrincipal({ id: "otcan", role: "user" });
+  await upsertUser({ id: "otcan", role: "user", displayName: "Otcan" }, env);
+  await createTenantVm({
+    id: "otcan-tenant",
+    ownerUserId: "otcan",
+    status: "running",
+    desktops: {
+      enabled: true,
+      provisioned: true,
+      backend: "profiles",
+      status: "ready",
+      visibleSlugs: ["desktop", "linkedin"],
+    },
+  }, env);
+
+  const inventory = await runTenantApiAgentTool("orkestr_list_skill_actions", {
+    skillId: "linkedin",
+  }, { principal }, env);
+  const linkedin = inventory.skills.find((skill) => skill.id === "linkedin");
+
+  assert.equal(linkedin.available, true);
+  assert.equal(linkedin.setupState, "available");
+  assert.equal(linkedin.availableActions.includes("open"), true);
 });
 
 test("tenant api-agent fallback summarizes skill actions without raw capability dumps", async () => {
@@ -2975,7 +3050,7 @@ test("tenant api-agent fallback summarizes skill actions without raw capability 
   assert.equal(result.ok, true);
   assert.equal(calls.length, 2);
   assert.match(assistant.text, /This chat can use Files, Timers, WhatsApp, and Gmail\./);
-  assert.match(assistant.text, /Managed Desktop is not available because the managed desktop is not configured for this chat yet\./);
+  assert.match(assistant.text, /Managed Desktop is not available because it is not provisioned for this Orkestr instance yet\./);
   assert.match(assistant.text, /Not connected yet: Outlook\./);
   assert.doesNotMatch(assistant.text, /Runtime Context is available/);
   assert.doesNotMatch(assistant.text, /Available actions:/);

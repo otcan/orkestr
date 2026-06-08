@@ -103,6 +103,21 @@ function normalizeBootstrap(bootstrap = {}) {
   };
 }
 
+function normalizeDesktops(desktops = {}, input = {}) {
+  const source = desktops && typeof desktops === "object" && !Array.isArray(desktops) ? desktops : {};
+  const status = clean(source.status || input.desktopStatus || "");
+  const provisioned = source.provisioned === true || ["ready", "running", "available", "provisioned"].includes(status.toLowerCase());
+  return {
+    enabled: source.enabled === false || input.desktopsEnabled === false ? false : true,
+    provisioned,
+    backend: clean(source.backend || source.mode || input.desktopBackend || input.desktopMode),
+    status: status || (provisioned ? "ready" : "not_provisioned"),
+    defaultSlug: clean(source.defaultSlug || source.default || input.defaultDesktopSlug || "desktop"),
+    visibleSlugs: normalizeStringList(source.visibleSlugs || source.slugs || input.visibleDesktopSlugs || []),
+    lastError: clean(source.lastError || source.error || input.desktopLastError),
+  };
+}
+
 function normalizeConnectors(connectors = {}) {
   const source = connectors && typeof connectors === "object" && !Array.isArray(connectors) ? connectors : {};
   return {
@@ -152,6 +167,7 @@ export function normalizeTenantVm(input = {}, env = process.env) {
       vmiName: kubevirt.vmiName || kubevirt.vmName || id,
     },
     bootstrap: normalizeBootstrap(input.bootstrap),
+    desktops: normalizeDesktops(input.desktops, input),
     connectors: normalizeConnectors(input.connectors),
     capabilities: normalizeStringList(input.capabilities || ["codex", "desks", "timers", "files", "whatsapp"]),
     trust: normalizeTrust(input.trust, input),
@@ -174,6 +190,7 @@ export function publicTenantVm(vm = {}) {
     endpoint: { ...normalized.endpoint },
     kubevirt: { ...normalized.kubevirt },
     bootstrap: { ...normalized.bootstrap },
+    desktops: { ...normalized.desktops, visibleSlugs: [...normalized.desktops.visibleSlugs] },
     connectors: { ...normalized.connectors },
     capabilities: [...normalized.capabilities],
     trust: { ...normalized.trust },
