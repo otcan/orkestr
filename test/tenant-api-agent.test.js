@@ -118,8 +118,10 @@ test("tenant api-agent answers non-admin WhatsApp thread without Codex delivery"
   assert.equal(context.capabilities.desktops, false);
   assert.equal(context.capabilities.gmail, false);
   assert.equal(context.capabilities.linkedin, false);
-  assert.equal(context.capabilities.workspace.executionAvailable, true);
-  assert.equal(context.capabilities.workspace.command, "/codex");
+  assert.equal(context.capabilities.workspace.executionAvailable, false);
+  assert.equal(context.capabilities.workspace.connected, false);
+  assert.equal(context.capabilities.workspace.connectionAvailable, true);
+  assert.equal(context.capabilities.workspace.actionTool, "orkestr_connect_workspace_runtime");
   assert.equal(Object.hasOwn(context.capabilities, "codexEscalation"), false);
   assert.equal(context.capabilities.enabledSkills.includes("whatsapp"), true);
   assert.equal(context.capabilities.enabledSkills.includes("gmail"), false);
@@ -227,7 +229,7 @@ test("tenant api-agent repairs bare acknowledgements for identity and capability
       return response({
         id: "resp_api_agent_repair_2",
         model: "gpt-5-mini",
-        output_text: "Got it, Can. I can help you here on WhatsApp with questions, planning, drafting, and any tenant features that are connected for this chat. For workspace execution, send the task with /codex.",
+        output_text: "Got it, Can. I can help you here on WhatsApp with questions, planning, drafting, and any tenant features that are connected for this chat.",
         output: [],
         usage: { input_tokens: 310, output_tokens: 37 },
       });
@@ -241,7 +243,7 @@ test("tenant api-agent repairs bare acknowledgements for identity and capability
   assert.equal(result.ok, true);
   assert.equal(calls.length, 2);
   assert.equal(current.state, "completed");
-  assert.equal(assistant.text.trim(), "Got it, Can. I can help you here on WhatsApp with questions, planning, drafting, and any tenant features that are connected for this chat. For workspace execution, send the task with /codex.");
+  assert.equal(assistant.text.trim(), "Got it, Can. I can help you here on WhatsApp with questions, planning, drafting, and any tenant features that are connected for this chat.");
   assert.notEqual(assistant.text.trim(), "Done.");
   assert.equal(usage.count, 2);
   assert.equal(usage.recent.some((record) => record.callKind === "assistant_repair"), true);
@@ -303,7 +305,7 @@ test("tenant api-agent repairs empty tool-result answers for identity and capabi
       return response({
         id: "resp_api_agent_empty_tool_repair_3",
         model: "gpt-5-mini",
-        output_text: "Got it, Can. I can help you here on WhatsApp with questions, planning, drafting, and connected tenant features. For workspace execution, send the task with /codex.",
+        output_text: "Got it, Can. I can help you here on WhatsApp with questions, planning, drafting, and connected tenant features.",
         output: [],
         usage: { input_tokens: 610, output_tokens: 33 },
       });
@@ -958,10 +960,12 @@ test("tenant api-agent prompt hides codex escalation when host codex is disabled
   const context = tenantContextFromInstructions(instructions);
 
   assert.equal(context.capabilities.workspace.executionAvailable, false);
-  assert.equal(context.capabilities.workspace.command, "");
+  assert.equal(context.capabilities.workspace.connected, false);
+  assert.equal(context.capabilities.workspace.connectionAvailable, false);
+  assert.equal(context.capabilities.workspace.actionTool, "");
   assert.equal(Object.hasOwn(context.capabilities, "codexEscalation"), false);
   assert.equal(context.capabilities.webFetch, true);
-  assert.match(instructions, /Workspace\/code execution is not available in this chat right now/i);
+  assert.match(instructions, /cannot start a workspace worker right now/i);
   assert.doesNotMatch(instructions, /\/codex/i);
   assert.doesNotMatch(instructions, /Codex/);
 });
@@ -2475,7 +2479,7 @@ test("tenant api-agent keeps Gmail prompt-push notification useful when model st
         model: "gpt-5-mini",
         output_text: body.instructions.includes("Response repair")
           ? "Done."
-          : "I can help in this chat. Tell me what you want to do. For workspace execution, send the task with /codex.",
+          : "I can help in this chat. Tell me what you want to do.",
         output: [],
         usage: { input_tokens: 300, output_tokens: 12 },
       });
@@ -2536,7 +2540,7 @@ test("tenant api-agent keeps prior Gmail context for weak follow-up fallback", a
         model: "gpt-5-mini",
         output_text: body.instructions.includes("Response repair")
           ? "Done."
-          : "I can help in this chat. Tell me what you want to do. For workspace execution, send the task with /codex.",
+          : "I can help in this chat. Tell me what you want to do.",
         output: [],
         usage: { input_tokens: 300, output_tokens: 12 },
       });
@@ -2596,7 +2600,7 @@ test("tenant api-agent strips leaked internal thought from final chat text", asy
   assert.doesNotMatch(assistant.text, /User wants|Now what|developer instructions|orkestr_create_timer|We should/i);
 });
 
-test("tenant api-agent exposes workspace escalation without internal capability fields", async () => {
+test("tenant api-agent exposes workspace runtime binding without internal capability fields", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-api-agent-workspace-context-"));
   const env = await allowSanitizerEnv(home);
   const thread = await createThread({
@@ -2612,8 +2616,10 @@ test("tenant api-agent exposes workspace escalation without internal capability 
 
   assert.equal(Object.hasOwn(context.capabilities, "codexEscalation"), false);
   assert.deepEqual(context.capabilities.workspace, {
-    executionAvailable: true,
-    command: "/codex",
+    executionAvailable: false,
+    connected: false,
+    connectionAvailable: true,
+    actionTool: "orkestr_connect_workspace_runtime",
   });
 });
 
@@ -3191,7 +3197,7 @@ test("tenant api-agent confirmation of offered browser action cannot finalize as
       return response({
         id: "resp_browser_confirmation_2",
         model: "gpt-5-mini",
-        output_text: "I opened the managed desktop to https://eksisozluk.com/. I can’t truthfully say I gathered today’s trending topics or translations from this chat, because the available desktop action only confirms that the URL was opened. Send the task with /codex for browser/content work.",
+        output_text: "I opened the managed desktop to https://eksisozluk.com/. I can’t truthfully say I gathered today’s trending topics or translations from this chat, because the available desktop action only confirms that the URL was opened. Do you want me to connect Codex to this chat for deeper browser/content work?",
         output: [],
         usage: { input_tokens: 620, output_tokens: 48 },
       });
@@ -3206,7 +3212,8 @@ test("tenant api-agent confirmation of offered browser action cannot finalize as
   assert.equal(current.state, "completed");
   assert.match(assistant.text, /opened the managed desktop/i);
   assert.match(assistant.text, /eksisozluk\.com/i);
-  assert.match(assistant.text, /\/codex/i);
+  assert.match(assistant.text, /connect Codex/i);
+  assert.doesNotMatch(assistant.text, /\/codex/i);
   assert.doesNotMatch(assistant.text, /^Done\.?$/i);
 });
 
@@ -3226,7 +3233,7 @@ test("tenant api-agent repairs bare confirmation replies when no action is pendi
     role: "assistant",
     source: "api-agent",
     phase: "final_answer",
-    text: "I can help in this chat. Tell me what you want to do, and if it needs workspace execution send the task with /codex.",
+    text: "I can help in this chat. Tell me what you want to do.",
     state: "completed",
     connector: "whatsapp",
     chatId: "chat-otcan",
@@ -3261,7 +3268,7 @@ test("tenant api-agent repairs bare confirmation replies when no action is pendi
       return response({
         id: "resp_bare_confirmation_2",
         model: "gpt-5-mini",
-        output_text: "I don’t have a concrete action to complete from that confirmation alone. Tell me the specific task you want, and use /codex if it needs browser or workspace execution.",
+        output_text: "I don’t have a concrete action to complete from that confirmation alone. Tell me the specific task you want.",
         output: [],
         usage: { input_tokens: 260, output_tokens: 34 },
       });
@@ -3273,7 +3280,7 @@ test("tenant api-agent repairs bare confirmation replies when no action is pendi
   assert.equal(result.ok, true);
   assert.equal(calls.length, 2);
   assert.match(assistant.text, /specific task/i);
-  assert.match(assistant.text, /\/codex/i);
+  assert.doesNotMatch(assistant.text, /\/codex/i);
   assert.doesNotMatch(assistant.text, /^Done\.?$/i);
 });
 
@@ -3293,7 +3300,7 @@ test("tenant api-agent repairs unconfirmed action promises for bare confirmation
     role: "assistant",
     source: "api-agent",
     phase: "final_answer",
-    text: "I can help in this chat. Tell me what you want to do, and if it needs workspace execution send the task with /codex.",
+    text: "I can help in this chat. Tell me what you want to do.",
     state: "completed",
     connector: "whatsapp",
     chatId: "chat-otcan",
@@ -3327,7 +3334,7 @@ test("tenant api-agent repairs unconfirmed action promises for bare confirmation
       return response({
         id: "resp_bare_confirmation_promise_2",
         model: "gpt-5-mini",
-        output_text: "I do not have a confirmed action to complete from that message alone. Tell me the specific task you want, and if it needs browser or workspace execution send it with /codex.",
+        output_text: "I do not have a confirmed action to complete from that message alone. Tell me the specific task you want.",
         output: [],
         usage: { input_tokens: 300, output_tokens: 35 },
       });
@@ -3339,7 +3346,7 @@ test("tenant api-agent repairs unconfirmed action promises for bare confirmation
   assert.equal(result.ok, true);
   assert.equal(calls.length, 2);
   assert.match(assistant.text, /specific task/i);
-  assert.match(assistant.text, /\/codex/i);
+  assert.doesNotMatch(assistant.text, /\/codex/i);
   assert.doesNotMatch(assistant.text, /collect today/i);
   assert.doesNotMatch(assistant.text, /Reply A, B, or C/i);
 });
@@ -3375,7 +3382,7 @@ test("tenant api-agent repairs browser research promises without tool evidence",
         return response({
           id: "resp_browser_promise_1",
           model: "gpt-5-mini",
-          output_text: "I can. The Managed LinkedIn Browser Desk is available and can open eksisozluk.com, collect today’s trending topics and translate them to English. To actually run the browser and fetch the results, resend this request prefixed with /codex.",
+          output_text: "I can open the managed browser, collect today’s trending topics, and translate them to English.",
           output: [],
           usage: { input_tokens: 260, output_tokens: 43 },
         });
@@ -3386,7 +3393,7 @@ test("tenant api-agent repairs browser research promises without tool evidence",
       return response({
         id: "resp_browser_promise_2",
         model: "gpt-5-mini",
-        output_text: "I can’t gather live page contents from this chat without a browser/workspace run. Send the task with /codex so a workspace worker can open the page and report the results.",
+        output_text: "I can’t gather live page contents from the current tools. Do you want me to connect Codex to this chat for deeper browser/content work?",
         output: [],
         usage: { input_tokens: 330, output_tokens: 34 },
       });
@@ -3397,8 +3404,9 @@ test("tenant api-agent repairs browser research promises without tool evidence",
 
   assert.equal(result.ok, true);
   assert.equal(calls.length, 2);
-  assert.match(assistant.text, /\/codex/i);
-  assert.match(assistant.text, /external browser/i);
+  assert.match(assistant.text, /connect Codex/i);
+  assert.doesNotMatch(assistant.text, /\/codex/i);
+  assert.match(assistant.text, /live page contents|browser\/content/i);
   assert.doesNotMatch(assistant.text, /collect today/i);
   assert.doesNotMatch(assistant.text, /Managed LinkedIn Browser Desk/i);
 });
@@ -3436,7 +3444,7 @@ test("tenant api-agent does not suggest codex when browser execution is disabled
         return response({
           id: "resp_browser_promise_codex_disabled_1",
           model: "gpt-5-mini",
-          output_text: "I can open the browser and collect today’s trending topics. Send the request with /codex to run it.",
+          output_text: "I can open the browser and collect today’s trending topics.",
           output: [],
           usage: { input_tokens: 260, output_tokens: 28 },
         });
@@ -3444,7 +3452,7 @@ test("tenant api-agent does not suggest codex when browser execution is disabled
       return response({
         id: "resp_browser_promise_codex_disabled_2",
         model: "gpt-5-mini",
-        output_text: "Send it with /codex so I can run a browser worker.",
+        output_text: "I cannot run a browser worker from this chat right now.",
         output: [],
         usage: { input_tokens: 330, output_tokens: 16 },
       });
@@ -3455,9 +3463,71 @@ test("tenant api-agent does not suggest codex when browser execution is disabled
 
   assert.equal(result.ok, true);
   assert.equal(calls.length, 2);
-  assert.match(assistant.text, /not available in this chat right now/i);
+  assert.match(assistant.text, /from this chat right now/i);
   assert.doesNotMatch(assistant.text, /\/codex/i);
   assert.doesNotMatch(assistant.text, /collect today/i);
+});
+
+test("tenant api-agent formats workspace runtime connection tool failures without legacy command language", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-api-agent-workspace-connect-disabled-"));
+  const env = await allowSanitizerEnv(home, {
+    ORKESTR_CODEX_BIN: "__orkestr_codex_disabled_public_instance__",
+  });
+  await upsertUser({ id: "otcan", role: "user", displayName: "Otcan" }, env);
+  await createThread({
+    id: "otcantest-workspace-connect-disabled",
+    ownerUserId: "otcan",
+    name: "otcantest",
+    runtimeKind: "api-agent",
+    executor: { type: "api-agent", metadata: { runtimeKind: "api-agent" } },
+    binding: { connector: "whatsapp", chatId: "chat-otcan", outboundAccountId: "wa-1" },
+  }, env);
+  const input = await enqueueThreadInputForPrincipal("otcantest-workspace-connect-disabled", {
+    text: "Yes, connect Codex to this chat.",
+    source: "whatsapp_inbound",
+    connector: "whatsapp",
+    chatId: "chat-otcan",
+    accountId: "wa-1",
+  }, userPrincipal({ id: "otcan", role: "user" }), env);
+
+  const calls = [];
+  const result = await processApiAgentThreadInput("otcantest-workspace-connect-disabled", env, {
+    fetchImpl: async (_url, options) => {
+      const body = JSON.parse(options.body);
+      calls.push(body);
+      if (calls.length === 1) {
+        return response({
+          id: "resp_workspace_connect_disabled_1",
+          model: "gpt-5-mini",
+          output_text: "",
+          output: [{
+            type: "function_call",
+            name: "orkestr_connect_workspace_runtime",
+            call_id: "call_workspace_connect",
+            arguments: JSON.stringify({ reason: "user accepted workspace runtime connection" }),
+          }],
+          usage: { input_tokens: 320, output_tokens: 24 },
+        });
+      }
+      return response({
+        id: "resp_workspace_connect_disabled_2",
+        model: "gpt-5-mini",
+        output_text: GENERIC_TOOL_FALLBACK_TEXT,
+        output: [],
+        usage: { input_tokens: 420, output_tokens: 20 },
+      });
+    },
+  });
+  const messages = await listThreadMessages("otcantest-workspace-connect-disabled", env);
+  const assistant = messages.find((message) => message.parentMessageId === input.id);
+  const thread = await getThread("otcantest-workspace-connect-disabled", env);
+
+  assert.equal(result.ok, true);
+  assert.equal(calls.length, 2);
+  assert.equal(thread.runtimeKind, "api-agent");
+  assert.match(assistant.text, /cannot be connected/i);
+  assert.doesNotMatch(assistant.text, /\/codex/i);
+  assert.doesNotMatch(assistant.text, /send the task|resend/i);
 });
 
 test("tenant api-agent web fetch tool extracts public page links safely", async () => {

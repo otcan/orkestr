@@ -7,6 +7,7 @@ import {
   disconnectConnectorAuth,
   startConnectorAuth as beginConnectorAuth,
 } from "../../connectors/src/connector-auth.js";
+import { startCodexAppServerThread } from "./codex-app-server.js";
 import {
   listBrowserSessions,
   openUrlInVirtualBrowser,
@@ -39,6 +40,7 @@ import {
 } from "./automations.js";
 import { runTenantApiAgentTimerTool, tenantApiAgentTimerToolDefinitions } from "./tenant-api-agent-timer-tools.js";
 import { whereAmI } from "./whereiam.js";
+import { updateThread } from "./threads.js";
 import {
   createUserSkillForPrincipal,
   deleteUserSkillForPrincipal,
@@ -300,6 +302,15 @@ function falsey(value = "") {
 
 function truthy(value = "") {
   return ["1", "true", "on", "yes"].includes(lower(value));
+}
+
+function workspaceRuntimeAvailable(env = process.env) {
+  const runtimeCommand = clean(env.ORKESTR_RUNTIME_CODEX_COMMAND);
+  const codexBin = clean(env.ORKESTR_CODEX_BIN);
+  if (/^__orkestr_codex_disabled/i.test(runtimeCommand)) return false;
+  if (/^__orkestr_codex_disabled/i.test(codexBin)) return false;
+  if (["0", "false", "off", "no"].includes(lower(env.ORKESTR_CODEX_ESCALATION_ENABLED))) return false;
+  return true;
 }
 
 function principalUserId(principal = {}) {
@@ -635,6 +646,49 @@ async function runSkillAction(args = {}, principal = {}, thread = null, env = pr
   return { ok: false, error: "skill_action_not_available", action, skill };
 }
 
+async function connectWorkspaceRuntime(args = {}, thread = null, env = process.env) {
+  if (!thread?.id) {
+    const error = new Error("thread_required");
+    error.statusCode = 400;
+    throw error;
+  }
+  if (!workspaceRuntimeAvailable(env)) {
+    return { ok: false, error: "workspace_runtime_not_available", connected: false };
+  }
+  const updated = await updateThread(thread.id, {
+    runtimeKind: "codex-app-server",
+    executorId: "codex",
+    executor: {
+      ...(thread.executor || {}),
+      type: "codex",
+      metadata: {
+        ...(thread.executor?.metadata || {}),
+        runtimeKind: "codex-app-server",
+      },
+    },
+  }, env);
+  const started = await startCodexAppServerThread(updated, env).catch((error) => ({
+    ok: false,
+    error: clean(error?.message || error || "workspace_runtime_start_failed"),
+  }));
+  if (started?.ok === false) {
+    await updateThread(thread.id, {
+      runtimeKind: clean(thread.runtimeKind || thread.runtime?.runtimeKind || "api-agent"),
+      executorId: clean(thread.executorId || thread.executor?.id || "api-agent"),
+      executor: thread.executor || { type: "api-agent", metadata: { runtimeKind: "api-agent" } },
+      runtime: thread.runtime || null,
+    }, env).catch(() => null);
+    return { ok: false, connected: false, started: false, error: started.error, reason: clean(args.reason) };
+  }
+  return {
+    ok: true,
+    connected: true,
+    started: true,
+    runtimeKind: "codex-app-server",
+    reason: clean(args.reason),
+  };
+}
+
 async function assertConnectorConnected(provider = "", principal = {}, env = process.env) {
   const status = await connectorAuthStatus(provider, env, { principal });
   if (status.connected !== true) {
@@ -915,6 +969,20 @@ export function tenantApiAgentToolDefinitions() {
           url: { type: "string", description: "Optional URL for open_url actions, otherwise empty string." },
         },
         required: ["skillId", "action", "target", "url"],
+        additionalProperties: false,
+      },
+      strict: true,
+    },
+    {
+      type: "function",
+      name: "orkestr_connect_workspace_runtime",
+      description: "Connect this chat to the stronger workspace runtime for future messages. Use only after the user explicitly asks to connect/bind Codex or accepts a suggestion to switch this chat to Codex.",
+      parameters: {
+        type: "object",
+        properties: {
+          reason: { type: "string", description: "Short reason the user gave for connecting the workspace runtime." },
+        },
+        required: ["reason"],
         additionalProperties: false,
       },
       strict: true,
@@ -1347,6 +1415,9 @@ export async function runTenantApiAgentTool(name = "", args = {}, context = {}, 
   }
   if (tool === "orkestr_run_skill_action") {
     return runSkillAction(args, principal, thread, env, context.fetchImpl || fetch);
+  }
+  if (tool === "orkestr_connect_workspace_runtime") {
+    return connectWorkspaceRuntime(args, thread, env);
   }
   if (tool === "orkestr_fetch_web_page") {
     return fetchPublicWebPage(args, env, context.fetchImpl || fetch);

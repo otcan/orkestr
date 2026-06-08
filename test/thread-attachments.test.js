@@ -71,7 +71,7 @@ test("thread attachment path extraction ignores registered slash commands", asyn
 
   const candidates = extractThreadAttachmentPathCandidates({
     thread,
-    text: `Reply /safe-reset or /now. Use /implement and /help. Real file: ${filePath}`,
+    text: `Reply /safe-reset or /now. Use /implement, /codex, /connect google, and /help. Real file: ${filePath}`,
     env,
   });
 
@@ -87,7 +87,7 @@ test("thread attachment path redaction is role-aware and always hides sensitive 
   const secretPath = path.join(paths.secrets, "token.txt");
   const adminThread = { id: "admin-thread", cwd: workspace, ownerUserId: "admin" };
   const userThread = { id: "user-thread", cwd: workspace, ownerUserId: "alice" };
-  const text = `Open ${allowedPath}; secret ${secretPath}; reply /safe-reset or /help.`;
+  const text = `Open ${allowedPath}; secret ${secretPath}; reply /safe-reset, /codex, /connect google, or /help.`;
 
   assert.equal(classifyThreadAttachmentPathRedaction(allowedPath, { thread: adminThread, env }).category, "ordinary_allowed");
   assert.equal(classifyThreadAttachmentPathRedaction(secretPath, { thread: adminThread, env }).category, "sensitive_denied");
@@ -95,11 +95,11 @@ test("thread attachment path redaction is role-aware and always hides sensitive 
   const adminText = redactDeniedThreadAttachmentPaths(text, { thread: adminThread, env });
   assert.match(adminText, new RegExp(allowedPath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
   assert.doesNotMatch(adminText, new RegExp(secretPath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
-  assert.match(adminText, /reply \/safe-reset or \/help/);
+  assert.match(adminText, /reply \/safe-reset, \/codex, \/connect google, or \/help/);
 
   const userText = redactDeniedThreadAttachmentPaths(text, { thread: userThread, env });
   assert.doesNotMatch(userText, new RegExp(allowedPath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
   assert.doesNotMatch(userText, new RegExp(secretPath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
-  assert.match(userText, /reply \/safe-reset or \/help/);
+  assert.match(userText, /reply \/safe-reset, \/codex, \/connect google, or \/help/);
   assert.equal((userText.match(/\[local file path omitted]/g) || []).length, 2);
 });

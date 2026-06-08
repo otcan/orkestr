@@ -12,7 +12,9 @@ const trailingPathPunctuationPattern = /[.,;:!?]+$/;
 const registeredSlashCommands = new Set([
   "approve",
   "code",
+  "codex",
   "coding",
+  "connect",
   "deny",
   "hard-reset",
   "hard_reset",
