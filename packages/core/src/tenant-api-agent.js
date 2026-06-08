@@ -254,8 +254,16 @@ function stripTenantApiAgentInternalThought(text = "") {
   return original;
 }
 
+function sanitizeTenantApiAgentRuntimeWording(text = "") {
+  return String(text || "")
+    .replace(/\bcontained\s+Codex worker\b/gi, "contained workspace worker")
+    .replace(/\bCodex worker\b/gi, "workspace worker")
+    .replace(/\bCodex runtime details\b/gi, "workspace runtime details")
+    .replace(/\bCodex runtime\b/gi, "workspace runtime");
+}
+
 function normalizeTenantApiAgentText(text = "") {
-  const original = stripTenantApiAgentInternalThought(text);
+  const original = sanitizeTenantApiAgentRuntimeWording(stripTenantApiAgentInternalThought(text));
   if (!/(Orkestr UI|Orkestr admin|Orkestr administrator)/i.test(original)) return original;
   const setupTarget = /gmail/i.test(original)
     ? "Gmail"
@@ -273,6 +281,23 @@ function normalizeTenantApiAgentText(text = "") {
     .replace(/(^|[.!?]\s+)[^.!?]*(?:Orkestr UI|Orkestr admin|Orkestr administrator)[^.!?]*[.!?]?/gi, (_match, prefix = "") => `${prefix}${replacement}`)
     .replace(/\s+/g, " ")
     .trim();
+}
+
+function assistantLeaksInternalRuntimeText(text = "") {
+  const value = clean(text);
+  return /\bcodexEscalation\b/i.test(value) ||
+    /\bcontained execution workspace\b/i.test(value) ||
+    /\bnot running Codex right now\b/i.test(value) ||
+    /\bworkspace does support\b/i.test(value) ||
+    /\[local file path omitted]/i.test(value);
+}
+
+function fallbackInternalRuntimeLeakAnswer(message = {}, env = process.env) {
+  const text = clean(message.text);
+  if (/\b(?:run|code|workspace|execute|terminal|script|command)\b/i.test(text) && codexEscalationAvailable(env)) {
+    return "I can help with that. Send the task as `/codex <what you want to run>` and I will route it to the workspace worker.";
+  }
+  return "I can help in this chat with connected Orkestr skills and tenant-scoped tools. Tell me the specific task you want to do.";
 }
 
 function weakTenantApiAgentText(text = "") {
@@ -510,6 +535,7 @@ function tenantApiAgentTextNeedsRepair(text = "", message = {}, options = {}) {
     gmailTestingAccessDeniedMessage(message.text) ||
     options.pendingActionConfirmation === true
   )) return true;
+  if (assistantLeaksInternalRuntimeText(text)) return true;
   if (assistantMentionsUnavailableCodex(text, options.env)) return true;
   return assistantPromisesUnconfirmedAction(text);
 }
@@ -556,6 +582,9 @@ function fallbackUnconfirmedActionAnswer(env = process.env) {
 
 function fallbackTenantApiAgentRepairAnswer(message = {}, options = {}) {
   const env = options.env || process.env;
+  if (assistantLeaksInternalRuntimeText(options.originalText) || assistantLeaksInternalRuntimeText(options.repairedText)) {
+    return fallbackInternalRuntimeLeakAnswer(message, env);
+  }
   if (gmailTestingAccessDeniedMessage(message.text)) return fallbackGmailTestingAccessDeniedAnswer(message);
   if (options.pendingActionConfirmation === true) return fallbackPendingActionConfirmationAnswer(env);
   if (assistantPromisesUnconfirmedAction(options.originalText) || assistantPromisesUnconfirmedAction(options.repairedText)) {
@@ -1179,6 +1208,7 @@ export function publicTenantCapabilities(capabilities = {}, env = process.env) {
   const scopedConnectors = capabilities.scopedConnectors && typeof capabilities.scopedConnectors === "object" ? capabilities.scopedConnectors : {};
   const connectorAuth = capabilities.connectorAuth && typeof capabilities.connectorAuth === "object" ? capabilities.connectorAuth : {};
   const skills = publicSkillContext(capabilities.skills, capabilities, scopedConnectors);
+  const workspaceExecutionAvailable = codexEscalationAvailable(env);
   return {
     files: capabilities.files === true,
     timers: capabilities.timers === true,
@@ -1188,7 +1218,10 @@ export function publicTenantCapabilities(capabilities = {}, env = process.env) {
     outlook: capabilities.outlook === true,
     linkedin: capabilities.linkedin === true,
     learning: capabilities.learning === true,
-    codexEscalation: codexEscalationAvailable(env),
+    workspace: {
+      executionAvailable: workspaceExecutionAvailable,
+      command: workspaceExecutionAvailable ? "/codex" : "",
+    },
     webFetch: webFetchAvailable(env),
     hostSkills: false,
     globalConnectorAccounts: false,
@@ -1325,14 +1358,15 @@ async function tenantContext(thread = {}, messages = [], env = process.env) {
 
 export async function buildTenantApiAgentInstructions(thread = {}, messages = [], env = process.env) {
   const context = await tenantContext(thread, messages, env);
-  const codexAvailable = context.capabilities.codexEscalation === true;
+  const codexAvailable = codexEscalationAvailable(env);
   const webFetch = context.capabilities.webFetch === true;
   return [
     "You are the user-facing assistant for one Orkestr tenant chat.",
     "Treat this as a real conversation in the user's chat, not as a job runner that answers normal messages with a completion token.",
     codexAvailable
-      ? "Be natural, concise, and helpful. Do not expose Orkestr internals, Codex runtime details, queues, tmux, shell paths, debug strings, or implementation wording unless the user explicitly asks about Orkestr operations."
+      ? "Be natural, concise, and helpful. Do not expose Orkestr internals, workspace runtime details, queues, tmux, shell paths, debug strings, or implementation wording unless the user explicitly asks about Orkestr operations."
       : "Be natural, concise, and helpful. Do not expose Orkestr internals, runtime details, queues, tmux, shell paths, debug strings, or implementation wording unless the user explicitly asks about Orkestr operations.",
+    "Never mention internal JSON field names, runtime flags, capability keys, or redaction placeholders. Convert capabilities into plain user-facing language, and do not quote bracketed placeholder text from prior messages.",
     "You are scoped to the tenant in the JSON context below. Do not claim access to files, Gmail, Outlook, LinkedIn, WhatsApp accounts, browser desktops, timers, or other chats unless the provided Orkestr tools or context show them for this tenant.",
     "Use the recent message history for conversational identity. If the user says their name or identity, acknowledge it and use it in later turns. If the user asks 'who am I?', answer from the conversation and the Tenant context instead of asking a vague clarification.",
     "When the user shares non-secret onboarding details, preferences, timezone, language, requested tools, or setup notes, save them with the onboarding profile tool. Never store passwords, tokens, recovery codes, or secrets.",
@@ -1368,7 +1402,7 @@ export async function buildTenantApiAgentInstructions(thread = {}, messages = []
     "If asked for the WhatsApp number, WhatsApp account, connector ID, backend account, or controlled identity, do not reveal phone numbers, session IDs, account IDs, tokens, or connector internals. If WhatsApp is enabled, say you are connected to this chat through Orkestr and exact account details are admin-only.",
     "Never approve security, auth, browser-pairing, connector, or SSH challenges. Tell the user to use the trusted Orkestr approval flow or SSH command shown by Orkestr.",
     codexAvailable
-      ? "If the user asks for code/workspace execution, ask them to send the same task with /codex to explicitly escalate to a contained Codex worker."
+      ? "If the user asks for code/workspace execution, ask them to send the same task with /codex to explicitly escalate to a contained workspace worker."
       : "If the user asks for code/workspace execution, say this chat cannot start a workspace worker right now. Do not claim the task was moved and do not mention a slash-command escalation path.",
     "",
     `Tenant context JSON: ${JSON.stringify(context)}`,
@@ -1513,7 +1547,7 @@ async function handleCodexEscalation(thread, message, env = process.env) {
     role: "assistant",
     source: "api-agent",
     phase: "final_answer",
-    text: "I moved this request to a contained Codex worker for workspace execution.",
+    text: "I moved this request to a contained workspace worker for execution.",
     parentMessageId: message.id,
     state: "completed",
     connector: message.connector,
