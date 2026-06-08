@@ -294,8 +294,12 @@ test("calendar and drive helpers build scoped google workspace requests", async 
 });
 
 test("google workspace disclosure html names capabilities and drive.file limit", () => {
-  const html = googleWorkspaceConnectHtml({ connectId: "connect-1" });
+  const html = googleWorkspaceConnectHtml({ connectId: "connect-1", request: { account: "user@example.com" } });
   assert.match(html, /Connect Google Workspace/);
+  assert.match(html, /name="account"/);
+  assert.match(html, /type="email"/);
+  assert.match(html, /value="user@example\.com"/);
+  assert.match(html, /required/);
   assert.match(html, /Gmail read/);
   assert.match(html, /Calendar read/);
   assert.match(html, /Calendar actions/);

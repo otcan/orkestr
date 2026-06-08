@@ -6119,6 +6119,8 @@ test("whatsapp /connect google creates a user-scoped workspace oauth link", asyn
   assert.equal(routed.googleWorkspaceConnect, true);
   assert.equal(messages.length, 2);
   assert.equal(messages[0].observedVia, "google_workspace_connect_command");
+  assert.equal(messages[0].state, "completed");
+  assert.equal(messages[0].deliveryState, "delivered");
   assert.equal(messages[1].role, "assistant");
   assert.match(messages[1].text, /https:\/\/connect\.example\.test\/connect\/google\?connect=/);
   assert.match(messages[1].text, /Gmail read, Gmail actions, Gmail send and drafts, Calendar read, Calendar actions, Drive selected files/);

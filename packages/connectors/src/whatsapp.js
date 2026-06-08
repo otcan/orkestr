@@ -2042,9 +2042,10 @@ export async function routeWhatsAppInbound(input = {}, env = process.env, fetchI
     const message = await appendThreadMessage(thread.id, {
       ...messageInput,
       role: "user",
-      state: "queued",
-      deliveryState: "pending_delivery",
+      state: "completed",
+      deliveryState: "delivered",
       observedVia: "google_workspace_connect_command",
+      deliveredAt: new Date().toISOString(),
     }, env);
     const connect = await createGoogleWorkspaceConnectLink({
       principal: principalForThread(thread, env),
