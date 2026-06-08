@@ -2848,10 +2848,36 @@ ork-first-thread-wizard.first-thread-host {
   gap: 12px;
 }
 
+.timer-row.paused {
+  border-color: rgba(255, 211, 115, 0.24);
+  background: rgba(42, 34, 8, 0.42);
+}
+
+.automation-heading {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.automation-heading span {
+  border: 1px solid rgba(119, 205, 126, 0.2);
+  border-radius: 999px;
+  padding: 2px 8px;
+  background: rgba(119, 205, 126, 0.08);
+  font-size: 0.68rem;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
 .timer-row p,
 .timer-row small {
   display: block;
   margin: 4px 0 0;
+}
+
+.timer-row small.bad {
+  color: #ff9b88;
 }
 
 .timer-editor {

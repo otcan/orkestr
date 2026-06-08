@@ -247,3 +247,34 @@ test("gmail notification update resolves the current thread rule and can suppres
   assert.equal(stored.promptTemplate, "NO_REPLY");
   assert.equal(stored.safety.noReplyBehavior, "suppress");
 });
+
+test("paused Gmail notifications are skipped by the due runner", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-gmail-notification-paused-"));
+  const env = {
+    ORKESTR_HOME: home,
+    ORKESTR_GMAIL_NOTIFICATIONS_ENABLED: "1",
+    ORKESTR_GMAIL_NOTIFICATION_MIN_INTERVAL_MS: "300000",
+  };
+  await createThread({
+    id: "gmail-notification-paused-thread",
+    name: "Paused Gmail Notification Thread",
+    binding: { connector: "whatsapp", chatId: "chat-gmail-paused", outboundAccountId: "wa-1" },
+  }, env);
+  const notification = await createGmailNotification({
+    label: "Paused unread alerts",
+    threadId: "gmail-notification-paused-thread",
+    query: "is:unread newer_than:1d",
+    interval: "5m",
+    enabled: true,
+  }, env);
+
+  const paused = await updateGmailNotificationForPrincipal(notification.id, { enabled: false }, adminPrincipal(), env);
+  const due = await runDueGmailNotifications(env, new Date(Date.now() + 10 * 60_000), async () => {
+    throw new Error("paused notification should not call Gmail");
+  });
+  const messages = await listThreadMessages("gmail-notification-paused-thread", env);
+
+  assert.equal(paused.enabled, false);
+  assert.equal(due.length, 0);
+  assert.equal(messages.length, 0);
+});

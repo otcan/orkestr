@@ -1428,6 +1428,36 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     }
   }
 
+  async runTimer(timer: TimerRecord): Promise<void> {
+    if (!timer.id || this.busy) return;
+    this.busy = true;
+    try {
+      await firstValueFrom(this.api.runTimer(timer.id));
+      await this.loadTimers();
+    } catch (error) {
+      this.error = this.errorText(error);
+    } finally {
+      this.busy = false;
+    }
+  }
+
+  async toggleTimer(timer: TimerRecord): Promise<void> {
+    const thread = this.selectedThread();
+    if (!thread || !timer.id || this.busy) return;
+    this.busy = true;
+    try {
+      const payload = timer.enabled === false
+        ? await firstValueFrom(this.api.resumeThreadTimer(thread.id, timer.id))
+        : await firstValueFrom(this.api.pauseThreadTimer(thread.id, timer.id));
+      if (payload.timer) this.allTimers = this.upsertTimer(this.allTimers, payload.timer);
+      await this.loadTimers();
+    } catch (error) {
+      this.error = this.errorText(error);
+    } finally {
+      this.busy = false;
+    }
+  }
+
   async deleteTimer(timer: TimerRecord): Promise<void> {
     const thread = this.selectedThread();
     if (!thread) return;
@@ -4583,7 +4613,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
       return;
     }
     if (this.activePanel === "userTimers") {
-      globalThis.document.title = "Timers · Orkestr";
+      globalThis.document.title = "Automations · Orkestr";
       return;
     }
     if (this.activePanel === "userDesk") {

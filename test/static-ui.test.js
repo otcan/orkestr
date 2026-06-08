@@ -745,7 +745,7 @@ test("web shell switches to a constrained non-admin user mode", async () => {
   assert.match(template, /class="user-mode-nav"/);
   assert.match(template, /\(click\)="openPanel\('chat'\)">Chat<\/button>/);
   assert.match(template, /\(click\)="openPanel\('files'\)">Files<\/button>/);
-  assert.match(template, /\(click\)="openPanel\('userTimers'\)">Timers<\/button>/);
+  assert.match(template, /\(click\)="openPanel\('userTimers'\)">Automations<\/button>/);
   assert.match(template, /\(click\)="openPanel\('userDesk'\)">Desk<\/button>/);
   assert.match(template, /\(click\)="openPanel\('userConnectors'\)">Connectors<\/button>/);
   assert.doesNotMatch(template, /\(click\)="openPanel\('userSkills'\)">Skills<\/button>/);
@@ -760,7 +760,7 @@ test("web shell switches to a constrained non-admin user mode", async () => {
   assert.match(styles, /\.user-mode-nav/);
 });
 
-test("web shell exposes a user timer management page", async () => {
+test("web shell exposes a user automation management page", async () => {
   const template = await fs.readFile("apps/web/src/app/app.component.html", "utf8");
   const component = await fs.readFile("apps/web/src/app/app.component.ts", "utf8");
   const timersComponent = await fs.readFile("apps/web/src/app/user-timers-page.component.ts", "utf8");
@@ -774,17 +774,26 @@ test("web shell exposes a user timer management page", async () => {
   assert.match(component, /parts\[0\] === "ng" && parts\[1\] === "timers"/);
   assert.match(component, /!this\.isRouteLevelUserPanel\(this\.activePanel\) && !this\.selectedId && this\.threads\.length/);
   assert.match(component, /panel === "userTimers"\) return "\/timers"/);
-  assert.match(component, /globalThis\.document\.title = "Timers · Orkestr"/);
+  assert.match(component, /globalThis\.document\.title = "Automations · Orkestr"/);
   assert.match(template, /<ork-user-timers-page><\/ork-user-timers-page>/);
   assert.match(template, /\(click\)="openPanel\('userTimers'\)"/);
   assert.match(timersComponent, /selector: "ork-user-timers-page"/);
   assert.match(timersComponent, /this\.api\.threads\(\)/);
-  assert.match(timersComponent, /this\.api\.timers\(\)/);
-  assert.match(timersComponent, /this\.api\.createTimer\(body\)/);
-  assert.match(timersComponent, /this\.api\.runTimer\(timer\.id\)/);
-  assert.match(timersComponent, /this\.api\.deleteTimer\(timer\.id\)/);
+  assert.match(timersComponent, /this\.api\.automations\(\)/);
+  assert.match(timersComponent, /this\.api\.createAutomation\(body\)/);
+  assert.match(timersComponent, /this\.api\.runAutomation\(automation\.automationId\)/);
+  assert.match(timersComponent, /this\.api\.pauseAutomation\(automation\.automationId\)/);
+  assert.match(timersComponent, /this\.api\.resumeAutomation\(automation\.automationId\)/);
+  assert.match(timersComponent, /this\.api\.deleteAutomation\(automation\.automationId\)/);
   assert.match(timersComponent, /targetType: "thread"/);
+  assert.match(timersTemplate, /Automations/);
   assert.match(timersTemplate, /name="user-timer-target"/);
+  assert.match(timersTemplate, /Run once/);
+  assert.match(timersTemplate, /Pause/);
+  assert.match(timersTemplate, /Resume/);
+  assert.match(api, /automations\(\): Observable<\{ automations: AutomationRecord\[\] \}>/);
+  assert.match(api, /pauseAutomation\(id: string\)/);
+  assert.match(api, /resumeAutomation\(id: string\)/);
   assert.match(api, /createTimer\(body: Record<string, string>\)/);
   assert.match(api, /deleteTimer\(id: string\)/);
   assert.match(api, /runTimer\(id: string\)/);
