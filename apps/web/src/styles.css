@@ -1318,6 +1318,7 @@ ork-first-thread-wizard.first-thread-host {
 .system-mini-card,
 .codex-mode-toggle,
 .codex-capacity-card,
+.runtime-surface-pill,
 .model-pill {
   border: 1px solid rgba(113, 218, 126, 0.22);
   background:
@@ -1711,17 +1712,81 @@ ork-first-thread-wizard.first-thread-host {
 }
 
 .codex-mode-toggle button {
+  display: grid;
+  place-items: center;
+  gap: 1px;
   min-height: 40px;
   border: 0;
   border-radius: 0;
   background: transparent;
   color: #91ad8b;
-  padding: 8px 12px;
+  padding: 6px 12px;
 }
 
 .codex-mode-toggle button.active {
   background: #63d471;
   color: #061006;
+}
+
+.codex-mode-toggle button small {
+  font-size: 10px;
+  line-height: 1;
+  color: inherit;
+  opacity: 0.82;
+}
+
+.runtime-surface-pill {
+  display: grid;
+  align-content: center;
+  gap: 1px;
+  min-height: 42px;
+  min-width: 92px;
+  border-color: rgba(145, 173, 139, 0.34);
+  background: rgba(145, 173, 139, 0.14);
+  color: #d8efcf;
+  padding: 6px 12px;
+  text-align: left;
+}
+
+.runtime-surface-pill span {
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0;
+}
+
+.runtime-surface-pill small {
+  max-width: 118px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 10px;
+  line-height: 1.1;
+  color: inherit;
+  opacity: 0.82;
+}
+
+.runtime-surface-pill.codex-api {
+  border-color: rgba(104, 172, 219, 0.42);
+  background: rgba(104, 172, 219, 0.2);
+  color: #cfeeff;
+}
+
+.runtime-surface-pill.codex-tmux {
+  border-color: rgba(207, 184, 74, 0.42);
+  background: rgba(207, 184, 74, 0.18);
+  color: #fff2aa;
+}
+
+.runtime-surface-pill.attached-terminal {
+  border-color: rgba(255, 209, 102, 0.48);
+  background: rgba(255, 209, 102, 0.22);
+  color: #ffe7a3;
+}
+
+.runtime-surface-pill.agent-runtime {
+  border-color: rgba(99, 212, 113, 0.38);
+  background: rgba(99, 212, 113, 0.18);
+  color: #cfffca;
 }
 
 .model-pill {

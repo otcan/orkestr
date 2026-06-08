@@ -686,6 +686,27 @@ test("runtime approval controls require an actionable pending request", async ()
   assert.match(component, /flags\.includes\("waitingOnApproval"\)/);
 });
 
+test("web shell exposes runtime surface and Codex mode shortcuts", async () => {
+  const template = await fs.readFile("apps/web/src/app/app.component.html", "utf8");
+  const component = await fs.readFile("apps/web/src/app/app.component.ts", "utf8");
+  const styles = await fs.readFile("apps/web/src/styles.css", "utf8");
+
+  assert.match(template, /class="runtime-surface-pill"/);
+  assert.match(template, /threadRuntimeModeShortLabel\(thread\)/);
+  assert.match(template, /threadRuntimeModeLabel\(thread\)/);
+  assert.match(template, /codexModeShortcutTitle\(thread\)/);
+  assert.match(template, /Switch to Code mode with \/code/);
+  assert.match(template, /Switch to Plan mode with \/plan/);
+  assert.match(component, /codexModeShortcutTitle\(thread: ThreadSummary \| null\): string/);
+  assert.match(component, /Shortcuts: \/code, \/plan/);
+  assert.match(component, /Runtime: \$\{this\.threadRuntimeModeLabel\(thread\)\}/);
+  assert.match(styles, /\.runtime-surface-pill/);
+  assert.match(styles, /\.runtime-surface-pill\.codex-api/);
+  assert.match(styles, /\.runtime-surface-pill\.codex-tmux/);
+  assert.match(styles, /\.runtime-surface-pill\.attached-terminal/);
+  assert.match(styles, /\.runtime-surface-pill\.agent-runtime/);
+});
+
 test("web shell switches to a constrained non-admin user mode", async () => {
   const template = await fs.readFile("apps/web/src/app/app.component.html", "utf8");
   const component = await fs.readFile("apps/web/src/app/app.component.ts", "utf8");

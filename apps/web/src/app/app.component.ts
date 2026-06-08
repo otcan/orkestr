@@ -2959,6 +2959,15 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     return details.join("\n");
   }
 
+  codexModeShortcutTitle(thread: ThreadSummary | null): string {
+    const details = [
+      "Live Codex mode for this Orkestr thread",
+      "Shortcuts: /code, /plan",
+      this.threadRuntimeModeLabel(thread) ? `Runtime: ${this.threadRuntimeModeLabel(thread)}` : "",
+    ].filter(Boolean);
+    return details.join("\n");
+  }
+
   canWakeThread(thread: ThreadSummary): boolean {
     const state = this.threadState(thread);
     return state.includes("sleep") || state.includes("hibernat");

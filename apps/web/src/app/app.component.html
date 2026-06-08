@@ -362,10 +362,31 @@
         <span class="panel-spacer"></span>
         @if (isAdminMode()) {
         <div class="codex-control-scroll" aria-label="Codex controls">
-          <div class="codex-mode-toggle" title="Live Codex mode for this Orkestr thread">
-            <button type="button" [class.active]="codexModeValue(thread) === 'code'" (click)="switchCodexMode('code')" [disabled]="busy || !codexAgentReady()">Code</button>
-            <button type="button" [class.active]="codexModeValue(thread) === 'plan'" (click)="switchCodexMode('plan')" [disabled]="busy || !codexAgentReady()">Plan</button>
+          <div class="codex-mode-toggle" [title]="codexModeShortcutTitle(thread)">
+            <button type="button" [class.active]="codexModeValue(thread) === 'code'" (click)="switchCodexMode('code')" [disabled]="busy || !codexAgentReady()" aria-label="Switch to Code mode with /code">
+              <span>Code</span>
+              <small>/code</small>
+            </button>
+            <button type="button" [class.active]="codexModeValue(thread) === 'plan'" (click)="switchCodexMode('plan')" [disabled]="busy || !codexAgentReady()" aria-label="Switch to Plan mode with /plan">
+              <span>Plan</span>
+              <small>/plan</small>
+            </button>
           </div>
+          @if (threadRuntimeModeShortLabel(thread)) {
+            <button
+              class="runtime-surface-pill"
+              [class.attached-terminal]="threadRuntimeMode(thread) === 'attached-terminal'"
+              [class.codex-api]="threadRuntimeMode(thread) === 'codex-api'"
+              [class.codex-tmux]="threadRuntimeMode(thread) === 'codex-tmux'"
+              [class.agent-runtime]="threadRuntimeMode(thread) === 'agent'"
+              type="button"
+              (click)="openModelDetails($event)"
+              [title]="threadRuntimeModeTitle(thread)"
+            >
+              <span>{{ threadRuntimeModeShortLabel(thread) }}</span>
+              <small>{{ threadRuntimeModeLabel(thread) }}</small>
+            </button>
+          }
           <button
             class="codex-capacity-card"
             type="button"

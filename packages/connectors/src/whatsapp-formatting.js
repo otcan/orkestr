@@ -146,6 +146,24 @@ function codexModeDebugValue(message = {}, thread = {}) {
   return mode === "plan" ? "plan" : "";
 }
 
+function runtimeSurfaceDebugValue(thread = {}) {
+  const runtime = thread?.runtime && typeof thread.runtime === "object" ? thread.runtime : {};
+  const explicit = pickString(thread.runtimeMode, runtime.runtimeMode).toLowerCase();
+  if (explicit === "codex-api") return "api";
+  if (explicit === "codex-tmux") return "tmux";
+  if (explicit === "attached-terminal") return "term";
+  if (explicit === "agent") return "agent";
+  if (explicit === "sleeping") return "sleep";
+
+  const kind = pickString(thread.runtimeKind, runtime.runtimeKind).toLowerCase();
+  if (kind === "codex-app-server" || kind === "app-server") return "api";
+  if (kind === "codex-tmux" || kind === "migration_required") return "tmux";
+  if (kind === "raw-terminal") return "term";
+  if (kind === "api-agent") return "agent";
+  if (thread.paneId || thread.tmuxTarget || runtime.paneId || runtime.tmuxTarget) return "tmux";
+  return "";
+}
+
 function queueDebugCount(messages = [], currentMessage = null) {
   const activeMessageId = pickString(currentMessage?.id);
   const activeParentId = pickString(currentMessage?.parentMessageId);
@@ -230,10 +248,12 @@ function footerMessageType(deliveryType = "") {
 
 export function whatsappDebugFooter({ message = {}, thread = {}, messages = [], deliveryType = "final", env = process.env } = {}) {
   const mode = codexModeDebugValue(message, thread);
+  const runtimeSurface = runtimeSurfaceDebugValue(thread);
   const queueNotice = String(deliveryType || "").trim() === "queue_notice";
   const parts = [
     `m:${codexModelDebugLabel(message, thread, env)}`,
     ...(mode ? [`mode:${mode}`] : []),
+    ...(runtimeSurface ? [`rt:${runtimeSurface}`] : []),
     `msg:${footerMessageType(deliveryType)}`,
     ...(queueNotice
       ? [`queue:${queueNoticeDebugCount(messages, message)}`, `reason:${queueNoticeDebugReason(message)}`]
@@ -241,7 +261,7 @@ export function whatsappDebugFooter({ message = {}, thread = {}, messages = [], 
     `load:${loadDebugPercent()}%`,
     `api:${processCpuDebugPercent()}%`,
     "help:/help",
-    ...(mode === "plan" ? ["switch:/code"] : []),
+    ...(mode === "plan" ? ["switch:/code"] : ["switch:/plan"]),
   ];
   return `dbg: ${parts.join(" · ")}`;
 }

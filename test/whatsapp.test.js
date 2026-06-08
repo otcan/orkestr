@@ -172,7 +172,7 @@ async function writeTestDeliveryClaim(home, { accountId, chatId, textKey, claime
   return { claimKey, filePath };
 }
 
-function assertDebugFooter(text, { mode = "", messageType = "final", model = "[^·\\n]+", queueReason = "" } = {}) {
+function assertDebugFooter(text, { mode = "", messageType = "final", model = "[^·\\n]+", queueReason = "", runtime = "" } = {}) {
   const escapedModel = model.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const queuePart = queueReason
     ? ` · queue:\\d+ · reason:${queueReason}`
@@ -180,8 +180,9 @@ function assertDebugFooter(text, { mode = "", messageType = "final", model = "[^
   const pattern = new RegExp(
     `\\n\\ndbg: m:${model === "[^·\\n]+" ? model : escapedModel}` +
       (mode ? ` · mode:${mode}` : "") +
+      (runtime ? ` · rt:${runtime}` : "(?: · rt:[a-z-]+)?") +
       ` · msg:${messageType}${queuePart} · load:\\d+% · api:\\d+% · help:/help` +
-      (mode === "plan" ? " · switch:/code" : "") +
+      (mode === "plan" ? " · switch:/code" : " · switch:/plan") +
       "$",
   );
   assert.match(text, pattern);
@@ -4124,7 +4125,7 @@ test("whatsapp delivery appends debug footer for app-server final replies", asyn
 
   assert.equal(delivery.delivered.length, 1);
   assert.equal(stripDebugFooter(calls[0].body.text), "Final from app server.");
-  assertDebugFooter(calls[0].body.text, { messageType: "final", model: "gpt-5.5/xh" });
+  assertDebugFooter(calls[0].body.text, { messageType: "final", model: "gpt-5.5/xh", runtime: "api" });
 });
 
 test("whatsapp debug footer can be disabled", async () => {
