@@ -2,6 +2,7 @@ import { Body, Controller, Get, Post, Query, Req } from "@nestjs/common";
 import { isAdminPrincipal } from "../../../../../packages/core/src/policy.js";
 import { requestPrincipal } from "../../../../../packages/core/src/principal.js";
 import { deployReleaseInstances, listReleaseInstances, publicReleaseInstance } from "../../../../../packages/core/src/release-instances.js";
+import { appendEvent } from "../../../../../packages/storage/src/store.js";
 import { httpError } from "../../common/http.js";
 
 function assertAdminRequest(request: any): void {
@@ -23,6 +24,11 @@ function requestedInstanceIds(body: Record<string, unknown> = {}): Set<string> {
     ? body.instanceIds
     : Array.isArray(body.instances) ? body.instances : [];
   return new Set(raw.map((value) => clean(value)).filter(Boolean));
+}
+
+function principalUserId(request: any): string {
+  const principal = requestPrincipal(request);
+  return clean(principal?.userId || principal?.id || principal?.displayName || "admin") || "admin";
 }
 
 @Controller("api/release")
@@ -66,6 +72,17 @@ export class ReleaseController {
     assertAdminRequest(request);
     const execute = body.execute === true;
     if (execute && process.env.ORKESTR_RELEASE_UI_DEPLOY_ENABLED !== "1") {
+      await appendEvent({
+        type: "broker_release_rollout_blocked",
+        action: "release.instances.rollout",
+        outcome: "denied",
+        resourceType: "release_instance",
+        operatorUserId: principalUserId(request),
+        ref: clean(body.ref) || process.env.ORKESTR_DEPLOY_REF || process.env.ORKESTR_UPDATE_REF || "main",
+        channel: clean(body.channel) || process.env.ORKESTR_DEPLOY_CHANNEL || "production",
+        requestedInstanceIds: [...requestedInstanceIds(body)],
+        reason: "release_ui_execute_disabled",
+      }).catch(() => null);
       throw httpError("release_ui_execute_disabled", 403);
     }
     const ids = requestedInstanceIds(body);
@@ -81,6 +98,19 @@ export class ReleaseController {
       skipLocal: body.skipLocal !== false,
       stdio: "pipe",
     }, process.env);
+    await appendEvent({
+      type: execute ? "broker_release_rollout_executed" : "broker_release_rollout_planned",
+      action: "release.instances.rollout",
+      outcome: report.ok === false ? "failed" : "success",
+      resourceType: "release_instance",
+      operatorUserId: principalUserId(request),
+      ref: report.ref,
+      channel: report.channel,
+      dryRun: !execute,
+      requestedInstanceIds: [...ids],
+      matchedInstanceIds: instances.map((instance) => instance.id),
+      counts: report.counts || {},
+    }).catch(() => null);
     return {
       ...report,
       dryRun: !execute,

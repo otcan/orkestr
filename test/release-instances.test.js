@@ -14,7 +14,7 @@ import {
   publicReleaseInstance,
 } from "../packages/core/src/release-instances.js";
 import { dataPaths } from "../packages/storage/src/paths.js";
-import { writeJson } from "../packages/storage/src/store.js";
+import { listEvents, writeJson } from "../packages/storage/src/store.js";
 
 async function read(response) {
   const text = await response.text();
@@ -553,6 +553,14 @@ test("release instances API is admin-only and returns public-safe broker records
     assert.equal(rollout.results[0].status, "planned");
     assert.equal(JSON.stringify(rollout).includes("deployCommand"), false);
     assert.equal(JSON.stringify(rollout).includes("remote.example.test\", \"orkestr"), false);
+    const plannedEvents = await listEvents(process.env, 200);
+    const plannedEvent = plannedEvents.find((event) => event.type === "broker_release_rollout_planned");
+    assert.ok(plannedEvent);
+    assert.equal(plannedEvent.action, "release.instances.rollout");
+    assert.equal(plannedEvent.outcome, "success");
+    assert.equal(plannedEvent.dryRun, true);
+    assert.deepEqual(plannedEvent.requestedInstanceIds, ["remote-api"]);
+    assert.equal(JSON.stringify(plannedEvent).includes("deployCommand"), false);
 
     const blockedExecute = await fetch(`${baseUrl}/api/release/instances/rollout`, {
       method: "POST",
@@ -562,6 +570,11 @@ test("release instances API is admin-only and returns public-safe broker records
     const blockedExecutePayload = await read(blockedExecute);
     assert.equal(blockedExecute.status, 403);
     assert.equal(blockedExecutePayload.error, "release_ui_execute_disabled");
+    const blockedEvents = await listEvents(process.env, 200);
+    const blockedEvent = blockedEvents.find((event) => event.type === "broker_release_rollout_blocked");
+    assert.ok(blockedEvent);
+    assert.equal(blockedEvent.outcome, "denied");
+    assert.equal(blockedEvent.reason, "release_ui_execute_disabled");
   } finally {
     await new Promise((resolve) => server.close(resolve));
     if (priorHome === undefined) delete process.env.ORKESTR_HOME;
