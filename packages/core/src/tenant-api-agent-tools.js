@@ -88,7 +88,20 @@ function plainObject(value) {
   return value && typeof value === "object" && !Array.isArray(value) ? value : {};
 }
 
+function actionParametersFromJson(value = "") {
+  const text = clean(value);
+  if (!text) return {};
+  try {
+    return plainObject(JSON.parse(text));
+  } catch {
+    const error = new Error("invalid_action_parameters_json");
+    error.statusCode = 400;
+    throw error;
+  }
+}
+
 function actionParameters(args = {}) {
+  if (typeof args.parameters === "string") return actionParametersFromJson(args.parameters);
   return { ...plainObject(args.parameters) };
 }
 
@@ -1209,7 +1222,7 @@ export function tenantApiAgentToolDefinitions() {
           verb: { type: "string", description: "Action verb such as search, read, create, update, delete, run, send, watch, or modify. Use empty string when actionKey is supplied." },
           object: { type: "string", description: "Action object such as message, event, file, timer, notification, or connector_push. Use empty string when actionKey is supplied." },
           idempotencyKey: { type: "string", description: "Optional stable key for retried user requests; empty string when not available." },
-          parameters: { type: "object", description: "Provider-specific action parameters matching the selected action options.", additionalProperties: true },
+          parameters: { type: "string", description: "JSON object string with provider-specific action parameters matching the selected action options. Use \"{}\" when no parameters are needed." },
         },
         required: ["actionKey", "provider", "verb", "object", "idempotencyKey", "parameters"],
         additionalProperties: false,

@@ -32,12 +32,28 @@ function response(payload, ok = true, status = 200) {
 const GENERIC_TOOL_FALLBACK_TEXT = "I can't truthfully complete or claim external browser, workspace, file, or account work from this chat without a tool result. Workspace and live browser execution are not available in this chat right now.";
 
 test("tenant api-agent strict tool schemas satisfy OpenAI requirements", () => {
+  const assertStrictObjectSchemas = (schema = {}, label = "schema") => {
+    const types = Array.isArray(schema.type) ? schema.type : [schema.type];
+    if (types.includes("object")) {
+      assert.equal(schema.additionalProperties, false, `${label} object schema should set additionalProperties false`);
+    }
+    for (const [key, child] of Object.entries(schema.properties || {})) {
+      assertStrictObjectSchemas(child, `${label}.${key}`);
+    }
+    if (schema.items) assertStrictObjectSchemas(schema.items, `${label}[]`);
+    for (const key of ["anyOf", "oneOf", "allOf"]) {
+      for (const [index, child] of (schema[key] || []).entries()) {
+        assertStrictObjectSchemas(child, `${label}.${key}[${index}]`);
+      }
+    }
+  };
   for (const tool of tenantApiAgentToolDefinitions()) {
     if (tool.type !== "function" || tool.strict !== true) continue;
     const properties = Object.keys(tool.parameters?.properties || {});
     const required = tool.parameters?.required;
     assert.ok(Array.isArray(required), `${tool.name} strict schema should define required`);
     assert.deepEqual(properties.filter((key) => !required.includes(key)), [], `${tool.name} strict schema should require every property`);
+    assertStrictObjectSchemas(tool.parameters, tool.name);
   }
 });
 
@@ -1545,6 +1561,49 @@ test("tenant api-agent action router creates timer prompts", async () => {
     object: "",
     idempotencyKey: "timer-action-test-delete",
     parameters: { automationId: `timer:${created.timer.id}` },
+  }, { principal, thread }, env);
+});
+
+test("tenant api-agent action router accepts JSON string parameters from model tools", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-api-agent-run-action-json-"));
+  const env = await allowSanitizerEnv(home);
+  await upsertUser({ id: "otcan", role: "user", displayName: "Otcan" }, env);
+  const thread = await createThread({
+    id: "otcan-run-action-json",
+    ownerUserId: "otcan",
+    name: "otcan-run-action-json",
+    runtimeKind: "api-agent",
+    executor: { type: "api-agent", metadata: { runtimeKind: "api-agent" } },
+  }, env);
+  const principal = userPrincipal({ id: "otcan", role: "user" });
+
+  const created = await runTenantApiAgentTool("orkestr_run_action", {
+    actionKey: "timer.create.timer",
+    provider: "",
+    verb: "",
+    object: "",
+    idempotencyKey: "timer-action-json-test",
+    parameters: JSON.stringify({
+      label: "JSON action routed reminder",
+      targetType: "thread",
+      target: "",
+      cadence: "once",
+      delay: "5m",
+      prompt: "Remind me through JSON action parameters.",
+      enabled: true,
+    }),
+  }, { principal, thread }, env);
+
+  assert.equal(created.ok, true);
+  assert.equal(created.timer.target, "otcan-run-action-json");
+  assert.equal(created.timer.prompt, "Remind me through JSON action parameters.");
+  await runTenantApiAgentTool("orkestr_run_action", {
+    actionKey: "timer.delete.timer",
+    provider: "",
+    verb: "",
+    object: "",
+    idempotencyKey: "timer-action-json-test-delete",
+    parameters: JSON.stringify({ automationId: `timer:${created.timer.id}` }),
   }, { principal, thread }, env);
 });
 
