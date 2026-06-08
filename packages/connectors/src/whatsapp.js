@@ -327,7 +327,6 @@ async function resolveBridgeRuntimeAccountId(accountId = "", { config = null, en
   const resolvedConfig = config || await readConnectorConfig("whatsapp", env).catch(() => ({}));
   const bridgeUrl = configuredBridgeUrl(resolvedConfig, env);
   if (!bridgeUrl) return requested;
-  if (bridgeMode(resolvedConfig, env) === "external") return requested;
   const status = await getWhatsAppStatus(env, fetchImpl).catch(() => null);
   const account = findWhatsAppAccountByAnyId(status?.accounts || [], requested, env);
   return pickString(account?.runtimeAccountId, requested);

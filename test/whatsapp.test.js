@@ -1799,6 +1799,13 @@ test("whatsapp chat history is read from external bridge", async () => {
   const calls = [];
   const result = await getWhatsAppChatMessages({ accountId: "responder", chatId: "chat-history@g.us", limit: 3 }, env, async (url, options) => {
     calls.push({ url, options });
+    if (url.pathname === "/health") {
+      return response({
+        ok: true,
+        ready: true,
+        accounts: [{ id: "responder", ready: true, state: "ready" }],
+      });
+    }
     assert.equal(url.pathname, "/api/chats/chat-history%40g.us/history");
     assert.equal(url.searchParams.get("accountId"), "responder");
     assert.equal(url.searchParams.get("limit"), "3");
@@ -1811,7 +1818,8 @@ test("whatsapp chat history is read from external bridge", async () => {
     });
   });
 
-  assert.equal(calls.length, 1);
+  assert.equal(calls.length, 2);
+  assert.deepEqual(calls.map((call) => call.url.pathname), ["/health", "/api/chats/chat-history%40g.us/history"]);
   assert.equal(result.ready, true);
   assert.equal(result.runtimeAccountId, "responder");
   assert.deepEqual(result.messages.map((message) => ({
@@ -1840,7 +1848,16 @@ test("whatsapp chat history falls back to bridge-root external endpoint", async 
   const calls = [];
   const result = await getWhatsAppChatMessages({ accountId: "responder", chatId: "chat-history@g.us", limit: 2 }, env, async (url) => {
     calls.push(url.pathname);
-    if (calls.length === 1) return response({ error: "not_found" }, false, 404);
+    if (url.pathname === "/api/connectors/whatsapp/bridge/health") {
+      return response({
+        ok: true,
+        ready: true,
+        accounts: [{ id: "responder", ready: true, state: "ready" }],
+      });
+    }
+    if (url.pathname === "/api/connectors/whatsapp/bridge/api/chats/chat-history%40g.us/history") {
+      return response({ error: "not_found" }, false, 404);
+    }
     assert.equal(url.pathname, "/api/connectors/whatsapp/bridge/accounts/responder/chats/chat-history%40g.us/history");
     return response({
       ok: true,
@@ -1851,11 +1868,77 @@ test("whatsapp chat history falls back to bridge-root external endpoint", async 
   });
 
   assert.deepEqual(calls, [
+    "/api/connectors/whatsapp/bridge/health",
     "/api/connectors/whatsapp/bridge/api/chats/chat-history%40g.us/history",
     "/api/connectors/whatsapp/bridge/accounts/responder/chats/chat-history%40g.us/history",
   ]);
   assert.equal(result.messages[0].body, "hello");
   assert.equal(result.messages[0].fromMe, true);
+});
+
+test("whatsapp chat history maps numeric public account ids to runtime external account ids", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-history-numeric-"));
+  const env = externalBridgeEnv(home);
+  await writeConnectorConfig("whatsapp", { bridgeMode: "external", bridgeUrl: "http://wa.local" }, env);
+
+  const calls = [];
+  const result = await getWhatsAppChatMessages({ accountId: "4917632400662", chatId: "chat-history@g.us", limit: 1 }, env, async (url) => {
+    calls.push(url.pathname);
+    if (url.pathname === "/health") {
+      return response({
+        ok: true,
+        ready: true,
+        accounts: [
+          { id: "sender", ready: true, state: "ready", phoneNumber: "+4917632400662", contactId: "4917632400662@c.us" },
+        ],
+      });
+    }
+    assert.equal(url.pathname, "/api/chats/chat-history%40g.us/history");
+    assert.equal(url.searchParams.get("accountId"), "sender");
+    return response({
+      ok: true,
+      messages: [{ id: "m-numeric", body: "/connect google", fromMe: true, timestamp: "2026-06-08T10:00:00.000Z" }],
+    });
+  });
+
+  assert.deepEqual(calls, ["/health", "/api/chats/chat-history%40g.us/history"]);
+  assert.equal(result.runtimeAccountId, "sender");
+  assert.equal(result.messages[0].id, "m-numeric");
+});
+
+test("whatsapp external sends map numeric public account ids to runtime bridge account ids", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-send-numeric-"));
+  const env = externalBridgeEnv(home);
+  await writeConnectorConfig("whatsapp", { bridgeMode: "external", bridgeUrl: "http://wa.local" }, env);
+
+  const calls = [];
+  const sent = await sendWhatsAppText({
+    accountId: "4917632400662",
+    chatId: "chat-send@g.us",
+    text: "/connect google",
+    env,
+    fetchImpl: async (url, options = {}) => {
+      calls.push(url.pathname);
+      if (url.pathname === "/health") {
+        return response({
+          ok: true,
+          ready: true,
+          accounts: [
+            { id: "sender", ready: true, state: "ready", phoneNumber: "+4917632400662", contactId: "4917632400662@c.us" },
+          ],
+        });
+      }
+      assert.equal(url.pathname, "/send-text");
+      const body = JSON.parse(options.body);
+      assert.equal(body.accountId, "sender");
+      assert.equal(body.to, "chat-send@g.us");
+      assert.equal(body.text, "/connect google");
+      return response({ ok: true, ids: ["sent-numeric"] });
+    },
+  });
+
+  assert.deepEqual(calls, ["/health", "/send-text"]);
+  assert.deepEqual(sent.ids, ["sent-numeric"]);
 });
 
 test("whatsapp external bridge delivery preserves path prefixes", async () => {
