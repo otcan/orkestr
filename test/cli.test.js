@@ -1174,6 +1174,52 @@ test("CLI doctors WhatsApp accounts through the lifecycle API", async () => {
   assert.equal(JSON.parse(stdout.text()).status, "ok");
 });
 
+test("CLI runs invariant WhatsApp/router doctor with repair options", async () => {
+  const stdout = capture();
+  const seen = [];
+  const code = await runCli(["doctor", "whatsapp", "--thread", "otcanClaw-features", "--repair", "--stale-ms", "45000", "--json"], {
+    stdout,
+    stderr: capture(),
+    fetchImpl: fakeFetch({
+      "GET /api/router-traces/doctor/whatsapp": {
+        ok: false,
+        status: "broken",
+        summary: "1 router/WhatsApp invariant error detected.",
+        checks: [{ code: "queue_notice_without_runtime_delivery", severity: "error", threadId: "otcanClaw-features" }],
+        repairs: [],
+      },
+    }, seen),
+  });
+
+  assert.equal(code, 1);
+  assert.equal(seen[0].key, "GET /api/router-traces/doctor/whatsapp");
+  assert.equal(seen[0].search, "?thread=otcanClaw-features&repair=1&staleMs=45000");
+  assert.equal(JSON.parse(stdout.text()).checks[0].code, "queue_notice_without_runtime_delivery");
+});
+
+test("CLI runs router trace doctor by trace id", async () => {
+  const stdout = capture();
+  const seen = [];
+  const code = await runCli(["doctor", "router", "--trace", "rt_123"], {
+    stdout,
+    stderr: capture(),
+    fetchImpl: fakeFetch({
+      "GET /api/router-traces/doctor/whatsapp": {
+        ok: true,
+        status: "ok",
+        summary: "WhatsApp/router invariants passed.",
+        checks: [],
+        repairs: [],
+      },
+    }, seen),
+  });
+
+  assert.equal(code, 0);
+  assert.equal(seen[0].key, "GET /api/router-traces/doctor/whatsapp");
+  assert.equal(seen[0].search, "?trace=rt_123");
+  assert.match(stdout.text(), /invariants passed/i);
+});
+
 test("CLI adds and updates neutral WhatsApp accounts", async () => {
   const stdout = capture();
   const seen = [];

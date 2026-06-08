@@ -519,7 +519,50 @@ async function doctorCommand(argv, ctx) {
   if (subject === "system" || subject === "host") return doctorSystemCommand(argv, ctx);
   if (subject === "timers" || subject === "timer") return doctorTimersCommand(argv, ctx);
   if (subject === "resources" || subject === "resource" || subject === "runtimes") return doctorResourcesCommand(argv, ctx);
-  throw new Error("Usage: orkestr doctor [system|timers|resources] [--repair] [--json]");
+  if (subject === "whatsapp" || subject === "wa") return doctorWhatsAppRouterCommand(argv.slice(1), ctx);
+  if (subject === "router") return doctorRouterCommand(argv.slice(1), ctx);
+  throw new Error("Usage: orkestr doctor [system|timers|resources|whatsapp|router] [--repair] [--json]");
+}
+
+async function doctorWhatsAppRouterCommand(argv, ctx) {
+  const json = argv.includes("--json");
+  const params = new URLSearchParams();
+  const thread = flagValue(argv, "--thread") || flagValue(argv, "--thread-id") || "";
+  const trace = flagValue(argv, "--trace") || flagValue(argv, "--router-trace") || flagValue(argv, "--router-trace-id") || "";
+  const staleMs = flagValue(argv, "--stale-ms") || flagValue(argv, "--stale");
+  if (thread) params.set("thread", thread);
+  if (trace) params.set("trace", trace);
+  if (argv.includes("--repair") || argv.includes("--repair-safe")) params.set("repair", "1");
+  if (argv.includes("--unsafe")) params.set("unsafe", "1");
+  if (staleMs) params.set("staleMs", staleMs);
+  if (argv.includes("--watch")) {
+    throw new Error("orkestr doctor whatsapp --watch is planned in ORK-290; run the command repeatedly or via a service timer for now.");
+  }
+  const payload = await requestJson(`/api/router-traces/doctor/whatsapp${params.size ? `?${params.toString()}` : ""}`, ctx);
+  if (json) ctx.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
+  else ctx.stdout.write(formatRouterDoctor(payload));
+  return payload.ok ? 0 : 1;
+}
+
+async function doctorRouterCommand(argv, ctx) {
+  const trace = flagValue(argv, "--trace") || flagValue(argv, "--router-trace") || flagValue(argv, "--router-trace-id") || positional(argv)[0] || "";
+  if (!trace) throw new Error("Usage: orkestr doctor router --trace <routerTraceId> [--repair] [--json]");
+  return doctorWhatsAppRouterCommand(["--trace", trace, ...argv.filter((item) => item !== trace)], ctx);
+}
+
+function formatRouterDoctor(payload = {}) {
+  const lines = [
+    `Doctor: ${payload.status || (payload.ok ? "ok" : "broken")} - ${payload.summary || ""}`,
+  ];
+  const checks = Array.isArray(payload.checks) ? payload.checks : [];
+  for (const check of checks.slice(0, 20)) {
+    lines.push(`- ${check.severity || "info"} ${check.code || "check"}${check.threadId ? ` thread=${check.threadId}` : ""}${check.messageId ? ` message=${check.messageId}` : ""}${check.routerTraceId ? ` trace=${check.routerTraceId}` : ""}: ${check.summary || ""}`);
+  }
+  const repairs = Array.isArray(payload.repairs) ? payload.repairs : [];
+  for (const repair of repairs.slice(0, 20)) {
+    lines.push(`repair ${repair.ok === false ? "failed" : "ok"} ${repair.code || "repair"}${repair.threadId ? ` thread=${repair.threadId}` : ""}${repair.messageId ? ` message=${repair.messageId}` : ""}${repair.outboxJobId ? ` outbox=${repair.outboxJobId}` : ""}`);
+  }
+  return `${lines.join("\n")}\n`;
 }
 
 async function timersCommand(argv, ctx) {

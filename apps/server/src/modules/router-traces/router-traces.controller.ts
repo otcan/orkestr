@@ -7,9 +7,11 @@ import {
   listRouterTurns,
   routerTraceMetrics,
 } from "../../../../../packages/core/src/router-traces.js";
+import { doctorWhatsAppRouter } from "../../../../../packages/core/src/router-doctor.js";
 import { isAdminPrincipal } from "../../../../../packages/core/src/policy.js";
 import { requestPrincipal } from "../../../../../packages/core/src/principal.js";
 import { listThreadsForPrincipal } from "../../../../../packages/core/src/threads.js";
+import { httpError } from "../../common/http.js";
 
 function clean(value: unknown): string {
   return String(value || "").trim();
@@ -28,6 +30,11 @@ async function allowedThreadIds(request: any): Promise<Set<string> | null> {
 function filterByAllowedThreads<T extends { threadId?: string }>(items: T[], allowed: Set<string> | null): T[] {
   if (!allowed) return items;
   return items.filter((item) => allowed.has(clean(item.threadId)));
+}
+
+function numberQuery(value: unknown, fallback = 0): number {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
 }
 
 @Controller("api/router-traces")
@@ -55,6 +62,34 @@ export class RouterTracesController {
       ? filterByAllowedThreads(await listRouterTraces({ threadId }, process.env), allowed)
       : [];
     return { metrics, stuck, traces };
+  }
+
+  @Get("doctor/whatsapp")
+  async whatsappDoctor(@Req() request: any, @Query() query: Record<string, unknown> = {}) {
+    const principal = requestPrincipal(request);
+    const allowed = await allowedThreadIds(request);
+    const repair = boolQuery(query.repair);
+    if (repair && !isAdminPrincipal(principal)) throw httpError("admin_required_for_router_repair", 403);
+    const thread = clean(query.thread || query.threadId);
+    if (allowed && thread && !allowed.has(thread)) throw httpError("thread_access_denied", 403);
+    const result = await doctorWhatsAppRouter({
+      thread,
+      routerTraceId: clean(query.trace || query.routerTraceId),
+      repair,
+      repairSafe: !boolQuery(query.unsafe),
+      staleMs: numberQuery(query.staleMs),
+    });
+    if (!allowed) return result;
+    return {
+      ...result,
+      checks: filterByAllowedThreads((result.checks || []) as Array<any>, allowed),
+      threads: (result.threads || []).filter((item: any) => allowed.has(clean(item.threadId))),
+    };
+  }
+
+  @Get("doctor/router")
+  async routerDoctor(@Req() request: any, @Query() query: Record<string, unknown> = {}) {
+    return this.whatsappDoctor(request, { ...query, trace: clean(query.trace || query.routerTraceId) });
   }
 
   @Get(":routerTraceId")
