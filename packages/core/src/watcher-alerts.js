@@ -154,6 +154,53 @@ function formatAlert(alert = {}) {
   return lines.join("\n");
 }
 
+function normalizeLifecycleAction(action = "") {
+  const normalized = lower(action).replace(/_/g, "-");
+  if (normalized === "ack" || normalized === "acknowledged") return "acknowledge";
+  if (normalized === "resolved") return "resolve";
+  if (normalized === "escalated") return "escalate";
+  if (normalized === "opened") return "reopen";
+  return normalized;
+}
+
+function lifecycleStatusForAction(action = "") {
+  if (action === "acknowledge") return "acknowledged";
+  if (action === "resolve") return "resolved";
+  if (action === "escalate") return "escalated";
+  if (action === "reopen") return "recorded";
+  return "";
+}
+
+function lifecycleTimestampKey(action = "") {
+  if (action === "acknowledge") return "acknowledgedAt";
+  if (action === "resolve") return "resolvedAt";
+  if (action === "escalate") return "escalatedAt";
+  if (action === "reopen") return "reopenedAt";
+  return "";
+}
+
+function lifecycleActorKey(action = "") {
+  if (action === "acknowledge") return "acknowledgedBy";
+  if (action === "resolve") return "resolvedBy";
+  if (action === "escalate") return "escalatedBy";
+  if (action === "reopen") return "reopenedBy";
+  return "";
+}
+
+function formatLifecycleAlertMessage(alert = {}, entry = {}) {
+  const lines = [
+    `[watcher:${clean(entry.action || "lifecycle")}] ${clean(alert.source || "orkestr")}`,
+    `code: ${clean(alert.code || "alert")}`,
+    `alert: ${clean(alert.id)}`,
+    `status: ${clean(alert.status || "recorded")}`,
+  ];
+  if (alert.threadId) lines.push(`thread: ${clean(alert.threadId)}`);
+  if (entry.actorUserId) lines.push(`operator: ${clean(entry.actorUserId)}`);
+  if (entry.reason) lines.push(`reason: ${redact(entry.reason, 500)}`);
+  lines.push(`time: ${clean(entry.at) || nowIso()}`);
+  return lines.join("\n");
+}
+
 export async function recordWatcherAlert(input = {}, env = process.env) {
   if (!enabled(env)) return { ok: false, skipped: true, reason: "watcher_disabled" };
   const error = safeError(input.error);
@@ -219,6 +266,85 @@ export async function recordWatcherAlert(input = {}, env = process.env) {
     status: recorded.status,
   }, env).catch(() => {});
   return { ok: true, alert: recorded, thread, message };
+}
+
+export async function updateWatcherAlertLifecycle(alertId, action, options = {}, env = process.env) {
+  const id = clean(alertId);
+  const normalizedAction = normalizeLifecycleAction(action);
+  const status = lifecycleStatusForAction(normalizedAction);
+  if (!id || !status) {
+    const error = new Error("invalid_watcher_alert_action");
+    error.statusCode = 400;
+    throw error;
+  }
+  const store = await readAlertStore(env);
+  const index = store.alerts.findIndex((alert) => clean(alert.id) === id);
+  if (index === -1) {
+    const error = new Error("watcher_alert_not_found");
+    error.statusCode = 404;
+    throw error;
+  }
+  const at = nowIso();
+  const actorUserId = clean(options.actorUserId || options.operatorUserId || "admin") || "admin";
+  const reason = redact(options.reason || "", 500);
+  const prior = store.alerts[index];
+  const entry = {
+    action: normalizedAction,
+    status,
+    at,
+    actorUserId,
+    reason,
+  };
+  const timestampKey = lifecycleTimestampKey(normalizedAction);
+  const actorKey = lifecycleActorKey(normalizedAction);
+  const next = {
+    ...prior,
+    status,
+    lifecycle: [...(Array.isArray(prior.lifecycle) ? prior.lifecycle : []), entry].slice(-50),
+    updatedAt: at,
+  };
+  if (timestampKey) next[timestampKey] = at;
+  if (actorKey) next[actorKey] = actorUserId;
+  if (reason) next.lifecycleReason = reason;
+
+  let message = null;
+  if (normalizedAction === "escalate") {
+    const thread = await resolveWatcherThread(env);
+    if (thread) {
+      message = await appendThreadMessage(thread.id, {
+        role: "assistant",
+        source: "watcher-alert-lifecycle",
+        phase: "final_answer",
+        state: "completed",
+        text: formatLifecycleAlertMessage(next, entry),
+        routerTraceId: next.routerTraceId,
+        ...watcherMessageDefaults(thread, next),
+      }, env);
+      next.escalationThreadId = thread.id;
+      next.escalationMessageId = message.id;
+    }
+  }
+
+  const alerts = [...store.alerts];
+  alerts[index] = next;
+  const written = await writeAlertStore({ ...store, alerts }, env);
+  const alert = written.alerts.find((item) => clean(item.id) === id) || next;
+  await appendEvent({
+    type: "watcher_alert_lifecycle_updated",
+    action: `watcher.alert.${normalizedAction}`,
+    outcome: "success",
+    resourceType: "watcher_alert",
+    alertId: id,
+    source: alert.source || "",
+    code: alert.code || "",
+    status: alert.status || "",
+    actorUserId,
+    reason,
+    watcherThreadId: alert.watcherThreadId || "",
+    watcherMessageId: alert.watcherMessageId || "",
+    escalationMessageId: alert.escalationMessageId || "",
+  }, env).catch(() => {});
+  return { ok: true, action: normalizedAction, alert, message };
 }
 
 export async function listWatcherAlerts(options = {}, env = process.env) {

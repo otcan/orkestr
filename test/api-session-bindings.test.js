@@ -8,7 +8,7 @@ import {
   bindApiSessionToThread,
   getApiSessionBinding,
 } from "../packages/core/src/api-session-bindings.js";
-import { listWatcherAlerts, recordWatcherAlert } from "../packages/core/src/watcher-alerts.js";
+import { listWatcherAlerts, recordWatcherAlert, updateWatcherAlertLifecycle } from "../packages/core/src/watcher-alerts.js";
 import { createThread, listThreadMessages } from "../packages/core/src/threads.js";
 import { whereAmI } from "../packages/core/src/whereiam.js";
 import { deliverWhatsAppReplies } from "../packages/connectors/src/whatsapp.js";
@@ -144,6 +144,56 @@ test("watcher alerts create the configured watcher thread, redact secrets, and d
   assert.doesNotMatch(messages[0].text, /secret-value/);
   assert.doesNotMatch(messages[0].text, /must-not-render/);
   assert.doesNotMatch(JSON.stringify(listed), /must-not-render|secret-value/);
+});
+
+test("watcher alert lifecycle actions update status and escalate to watcher thread", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-watcher-alert-lifecycle-"));
+  const runtimeEnv = env(home, {
+    ORKESTR_WATCHER_THREAD_NAME: "test-watcher-lifecycle",
+    ORKESTR_WATCHER_DEDUPE_MS: "0",
+  });
+
+  const recorded = await recordWatcherAlert({
+    source: "test.lifecycle",
+    code: "needs_operator",
+    message: "operator review needed",
+    threadId: "thread-1",
+  }, runtimeEnv);
+  const acknowledged = await updateWatcherAlertLifecycle(recorded.alert.id, "acknowledge", {
+    actorUserId: "ops-admin",
+    reason: "investigating",
+  }, runtimeEnv);
+  const escalated = await updateWatcherAlertLifecycle(recorded.alert.id, "escalate", {
+    actorUserId: "ops-admin",
+    reason: "notify owner",
+  }, runtimeEnv);
+  const resolved = await updateWatcherAlertLifecycle(recorded.alert.id, "resolve", {
+    actorUserId: "ops-admin",
+    reason: "fixed",
+  }, runtimeEnv);
+  const resolvedList = await listWatcherAlerts({ status: "resolved", limit: 10 }, runtimeEnv);
+  const reopened = await updateWatcherAlertLifecycle(recorded.alert.id, "reopen", {
+    actorUserId: "ops-admin",
+    reason: "regressed",
+  }, runtimeEnv);
+  const messages = await listThreadMessages(recorded.thread.id, runtimeEnv);
+
+  assert.equal(acknowledged.alert.status, "acknowledged");
+  assert.equal(acknowledged.alert.acknowledgedBy, "ops-admin");
+  assert.equal(escalated.alert.status, "escalated");
+  assert.equal(escalated.alert.escalatedBy, "ops-admin");
+  assert.ok(escalated.alert.escalationMessageId);
+  assert.equal(resolved.alert.status, "resolved");
+  assert.equal(resolved.alert.resolvedBy, "ops-admin");
+  assert.equal(resolvedList.total, 1);
+  assert.equal(resolvedList.alerts[0].id, recorded.alert.id);
+  assert.equal(reopened.alert.status, "recorded");
+  assert.equal(reopened.alert.reopenedBy, "ops-admin");
+  assert.ok(reopened.alert.lifecycle.length >= 4);
+  assert.equal(messages.length, 2);
+  assert.match(messages[1].text, /\[watcher:escalate\] test\.lifecycle/);
+  assert.match(messages[1].text, /operator: ops-admin/);
+  assert.match(messages[1].text, /reason: notify owner/);
 });
 
 test("watcher alerts can stay out of WhatsApp mirroring for delivery anomalies", async () => {

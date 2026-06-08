@@ -88,6 +88,7 @@ export class OpsPageComponent implements OnInit, OnDestroy {
   opsBrowsersLoaded = false;
   opsBrowserSource = "";
   opsBrowserMessage = "";
+  activeWatcherAlertActionId = "";
   opsDesktopLeases: DesktopLeaseRecord[] = [];
   activeDesktopLeaseId = "";
   opsRuntimeLeases: Array<Record<string, unknown>> = [];
@@ -1397,7 +1398,46 @@ export class OpsPageComponent implements OnInit, OnDestroy {
       alert.threadId ? `thread ${alert.threadId}` : "",
       alert.routerTraceId ? `trace ${alert.routerTraceId}` : "",
       alert.watcherThreadId ? `watcher ${alert.watcherThreadId}` : "",
+      alert["acknowledgedBy"] ? `ack ${alert["acknowledgedBy"]}` : "",
+      alert["resolvedBy"] ? `resolved ${alert["resolvedBy"]}` : "",
+      alert["escalatedBy"] ? `escalated ${alert["escalatedBy"]}` : "",
     ].filter(Boolean).join(" · ");
+  }
+
+  watcherAlertActions(alert: WatcherAlert): string[] {
+    const status = String(alert.status || "").trim().toLowerCase();
+    if (status === "resolved") return ["reopen"];
+    if (status === "acknowledged") return ["resolve", "escalate"];
+    if (status === "escalated") return ["resolve"];
+    return ["acknowledge", "resolve", "escalate"];
+  }
+
+  watcherAlertActionLabel(action: string): string {
+    if (action === "acknowledge") return "Ack";
+    if (action === "resolve") return "Resolve";
+    if (action === "escalate") return "Escalate";
+    if (action === "reopen") return "Reopen";
+    return action;
+  }
+
+  watcherAlertActionBusy(alert: WatcherAlert, action: string): boolean {
+    return this.activeWatcherAlertActionId === `${alert.id}:${action}`;
+  }
+
+  async applyWatcherAlertAction(alert: WatcherAlert, action: string): Promise<void> {
+    if (!alert.id || this.activeWatcherAlertActionId) return;
+    this.activeWatcherAlertActionId = `${alert.id}:${action}`;
+    try {
+      await firstValueFrom(this.api.watcherAlertAction(alert.id, action, { reason: "operator_broker_alert_lifecycle" }));
+      await this.loadOps(false);
+      this.notice = `Alert ${this.watcherAlertActionLabel(action).toLowerCase()} requested.`;
+      this.error = "";
+    } catch (error) {
+      this.error = this.errorText(error);
+    } finally {
+      this.activeWatcherAlertActionId = "";
+      this.renderNow();
+    }
   }
 
   jsonLine(value: unknown): string {

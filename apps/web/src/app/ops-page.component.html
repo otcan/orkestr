@@ -260,6 +260,13 @@
               </span>
               <p>{{ alert.message }}</p>
               <small>{{ watcherAlertMeta(alert) }}</small>
+              <div class="row-actions alert-actions">
+                @for (action of watcherAlertActions(alert); track action) {
+                  <button class="secondary" type="button" (click)="applyWatcherAlertAction(alert, action)" [disabled]="watcherAlertActionBusy(alert, action)">
+                    {{ watcherAlertActionBusy(alert, action) ? "Saving" : watcherAlertActionLabel(action) }}
+                  </button>
+                }
+              </div>
             </article>
           } @empty {
             <p class="empty">No recent watcher alerts.</p>

@@ -173,6 +173,13 @@ export interface WatcherAlertsResponse {
   generatedAt?: string;
 }
 
+export interface WatcherAlertActionResponse {
+  ok?: boolean;
+  action?: string;
+  alert?: WatcherAlert;
+  message?: Record<string, unknown> | null;
+}
+
 export interface ConnectorStatus {
   id: string;
   label: string;
@@ -1939,6 +1946,10 @@ export class ApiService {
 
   watcherAlerts(limit = 20): Observable<WatcherAlertsResponse> {
     return this.http.get<WatcherAlertsResponse>(this.api(`/system/alerts?limit=${encodeURIComponent(String(limit))}`));
+  }
+
+  watcherAlertAction(alertId: string, action: string, body: Record<string, unknown> = {}): Observable<WatcherAlertActionResponse> {
+    return this.http.post<WatcherAlertActionResponse>(this.api(`/system/alerts/${encodeURIComponent(alertId)}/action`), { ...body, action });
   }
 
   browsers(): Observable<{ browsers: BrowserSession[]; sessions?: BrowserSession[]; source?: string; error?: string; message?: string }> {

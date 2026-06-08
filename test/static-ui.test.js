@@ -444,6 +444,29 @@ test("ops audit view exposes normalized filterable events", async () => {
   assert.match(styles, /\.audit-row small/);
 });
 
+test("ops broker alert lifecycle controls are wired", async () => {
+  const template = await fs.readFile("apps/web/src/app/ops-page.component.html", "utf8");
+  const component = await fs.readFile("apps/web/src/app/ops-page.component.ts", "utf8");
+  const api = await fs.readFile("apps/web/src/app/api.service.ts", "utf8");
+  const controller = await fs.readFile("apps/server/src/modules/system/system.controller.ts", "utf8");
+  const watcherAlerts = await fs.readFile("packages/core/src/watcher-alerts.js", "utf8");
+  const styles = await fs.readFile("apps/web/src/styles.css", "utf8");
+
+  assert.match(api, /WatcherAlertActionResponse/);
+  assert.match(api, /watcherAlertAction\(alertId: string, action: string/);
+  assert.match(controller, /@Post\("system\/alerts\/:id\/action"\)/);
+  assert.match(controller, /updateWatcherAlertLifecycle/);
+  assert.match(watcherAlerts, /updateWatcherAlertLifecycle\(alertId, action/);
+  assert.match(watcherAlerts, /watcher_alert_lifecycle_updated/);
+  assert.match(component, /activeWatcherAlertActionId = ""/);
+  assert.match(component, /watcherAlertActions\(alert: WatcherAlert\): string\[\]/);
+  assert.match(component, /applyWatcherAlertAction\(alert: WatcherAlert, action: string\): Promise<void>/);
+  assert.match(template, /watcherAlertActions\(alert\)/);
+  assert.match(template, /applyWatcherAlertAction\(alert, action\)/);
+  assert.match(template, /watcherAlertActionLabel\(action\)/);
+  assert.match(styles, /\.alert-actions/);
+});
+
 test("thread delivery panel exposes admin WhatsApp outbox operator controls", async () => {
   const template = await fs.readFile("apps/web/src/app/app.component.html", "utf8");
   const component = await fs.readFile("apps/web/src/app/app.component.ts", "utf8");

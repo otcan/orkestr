@@ -17,7 +17,7 @@ import {
 } from "../../../../../packages/core/src/api-session-bindings.js";
 import { deliverWhatsAppReplies } from "../../../../../packages/connectors/src/whatsapp.js";
 import { listEventsForPrincipal } from "../../../../../packages/core/src/audit-events.js";
-import { listWatcherAlerts } from "../../../../../packages/core/src/watcher-alerts.js";
+import { listWatcherAlerts, updateWatcherAlertLifecycle } from "../../../../../packages/core/src/watcher-alerts.js";
 import { createStateBackup, stateBackupStatus, stateRestorePlan } from "../../../../../packages/core/src/state-backups.js";
 import { migrateCodexThreadsToAppServer } from "../../../../../packages/core/src/codex-app-server-migration.js";
 import { createFolderForPrincipal, deleteFileForPrincipal, listFilesForPrincipal, listWorkspaceFoldersForPrincipal, saveFilesForPrincipal } from "../../../../../packages/core/src/workspace-files.js";
@@ -561,6 +561,21 @@ export class SystemController {
   ) {
     if (!isAdminPrincipal(requestPrincipal(request))) throw httpError("admin_required", 403);
     return listWatcherAlerts({ limit: Number(limit || 100), severity, status, source }, process.env);
+  }
+
+  @Post("system/alerts/:id/action")
+  @HttpCode(200)
+  async watcherAlertAction(@Param("id") id: string, @Body() body: Record<string, unknown> = {}, @Req() request: any) {
+    const principal = requestPrincipal(request);
+    if (!isAdminPrincipal(principal)) throw httpError("admin_required", 403);
+    try {
+      return await updateWatcherAlertLifecycle(id, String(body.action || ""), {
+        actorUserId: String(principal?.userId || principal?.id || principal?.displayName || "admin"),
+        reason: String(body.reason || ""),
+      }, process.env);
+    } catch (error: any) {
+      throw httpError(error?.message || "watcher_alert_action_failed", Number(error?.statusCode || 500));
+    }
   }
 
   @Get("runtime-leases")

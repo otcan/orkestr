@@ -2743,6 +2743,10 @@ ork-first-thread-wizard.first-thread-host {
   gap: 7px;
 }
 
+.alert-actions {
+  margin-top: 8px;
+}
+
 .button-like {
   min-height: 34px;
   display: inline-flex;
