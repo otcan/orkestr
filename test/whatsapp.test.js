@@ -3416,7 +3416,8 @@ test("local whatsapp inbound failures explain missing user capabilities", () => 
   assert.match(token, /target Orkestr instance rejected or is missing the broker WhatsApp token/i);
   assert.match(target, /not connected to a thread/i);
   assert.doesNotMatch(target, /safely handle|private connector|account identity/i);
-  assert.match(pairing, /browser_pairing_required/);
+  assert.match(pairing, /needs browser pairing approval/i);
+  assert.doesNotMatch(pairing, /browser_pairing_required/);
   assert.match(pairing, /https:\/\/orkestr\.example\.test\//);
 });
 

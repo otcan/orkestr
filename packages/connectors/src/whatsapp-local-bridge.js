@@ -1593,7 +1593,7 @@ export function inboundRoutingFailureNoticeText(error, { env = process.env } = {
     return "Orkestr could not accept your message because the isolated-user LLM sanitizer is not configured. Ask the admin to connect the sanitizer, then resend.";
   }
   if (reason === "browser_pairing_required") {
-    return `Orkestr could not route your message: browser_pairing_required. Open ${publicHelpUrl(env)} to continue setup, then resend.`;
+    return `This Orkestr chat needs browser pairing approval before it can accept messages. Open ${publicHelpUrl(env)} to complete pairing, then resend.`;
   }
   if (reason === "whatsapp_target_required") {
     return "Orkestr could not route your message because this WhatsApp chat is not connected to a thread.";
