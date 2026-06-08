@@ -3622,6 +3622,100 @@ test("tenant api-agent routes managed desktop requests through skill tools", asy
   assert.notEqual(assistant.text.trim(), "Done.");
 });
 
+test("tenant api-agent repairs generic help replies to concrete desktop requests with tools", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-api-agent-generic-desktop-repair-"));
+  const env = await allowSanitizerEnv(home, {
+    ORKESTR_BROWSER_DESKTOP_MODE: "profiles",
+    ORKESTR_BROWSER_VISIBLE_SLUGS: "desktop,linkedin",
+    ORKESTR_DEFAULT_DESKTOP_SLUG: "desktop",
+    ORKESTR_BROWSER_LAUNCH_DISABLED: "1",
+    ORKESTR_PUBLIC_HTTPS_URL: "https://app.example.test",
+  });
+  await upsertUser({ id: "otcan", role: "user", displayName: "Otcan" }, env);
+  await createThread({
+    id: "otcantest-generic-desktop-repair",
+    ownerUserId: "otcan",
+    name: "otcantest",
+    runtimeKind: "api-agent",
+    executor: { type: "api-agent", metadata: { runtimeKind: "api-agent" } },
+    binding: { connector: "whatsapp", chatId: "chat-otcan", outboundAccountId: "wa-1" },
+  }, env);
+  const input = await enqueueThreadInputForPrincipal("otcantest-generic-desktop-repair", {
+    text: "Open the LinkedIn desktop for me.",
+    source: "whatsapp_inbound",
+    connector: "whatsapp",
+    chatId: "chat-otcan",
+    accountId: "wa-1",
+  }, userPrincipal({ id: "otcan", role: "user" }), env);
+
+  const calls = [];
+  const result = await processApiAgentThreadInput("otcantest-generic-desktop-repair", env, {
+    fetchImpl: async (_url, options = {}) => {
+      const body = JSON.parse(options.body);
+      calls.push(body);
+      if (calls.length === 1) {
+        return response({
+          id: "resp_generic_desktop_repair_1",
+          model: "gpt-5-mini",
+          output_text: "I can help in this chat. Tell me what you want to do.",
+          output: [],
+          usage: { input_tokens: 300, output_tokens: 12 },
+        });
+      }
+      if (calls.length === 2) {
+        assert.match(body.instructions, /Response repair/i);
+        assert.equal(body.tools.some((tool) => tool.name === "orkestr_list_skill_actions"), true);
+        assert.equal(body.tools.some((tool) => tool.name === "orkestr_run_skill_action"), true);
+        return response({
+          id: "resp_generic_desktop_repair_2",
+          model: "gpt-5-mini",
+          output_text: "",
+          output: [
+            {
+              type: "function_call",
+              name: "orkestr_list_skill_actions",
+              call_id: "call_generic_desktop_actions",
+              arguments: JSON.stringify({ skillId: "linkedin" }),
+            },
+            {
+              type: "function_call",
+              name: "orkestr_run_skill_action",
+              call_id: "call_generic_desktop_open",
+              arguments: JSON.stringify({ skillId: "linkedin", action: "open", target: "", url: "" }),
+            },
+          ],
+          usage: { input_tokens: 400, output_tokens: 34 },
+        });
+      }
+      const toolOutputs = body.input
+        .filter((item) => item.type === "function_call_output")
+        .map((item) => JSON.parse(item.output));
+      assert.equal(toolOutputs[0].skills[0].id, "linkedin");
+      assert.equal(toolOutputs[1].ok, true);
+      assert.equal(toolOutputs[1].desktop.slug, "linkedin");
+      assert.match(toolOutputs[1].shareUrl, /https:\/\/app\.example\.test\/desktop-share\//);
+      return response({
+        id: "resp_generic_desktop_repair_3",
+        model: "gpt-5-mini",
+        output_text: GENERIC_TOOL_FALLBACK_TEXT,
+        output: [],
+        usage: { input_tokens: 500, output_tokens: 32 },
+      });
+    },
+  });
+  const messages = await listThreadMessages("otcantest-generic-desktop-repair", env);
+  const current = messages.find((message) => message.id === input.id);
+  const assistant = messages.find((message) => message.parentMessageId === input.id);
+
+  assert.equal(result.ok, true);
+  assert.equal(calls.length, 3);
+  assert.equal(current.state, "completed");
+  assert.match(assistant.text, /LinkedIn is open/i);
+  assert.match(assistant.text, /Open this one-time desktop link: https:\/\/app\.example\.test\/desktop-share\//i);
+  assert.doesNotMatch(assistant.text, /I can help in this chat/);
+  assert.doesNotMatch(assistant.text, /\/desktop\/linkedin\/vnc\.html/);
+});
+
 test("tenant api-agent confirmation of offered browser action cannot finalize as Done", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-api-agent-browser-confirmation-"));
   const env = await allowSanitizerEnv(home, {

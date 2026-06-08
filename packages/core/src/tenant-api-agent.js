@@ -523,6 +523,7 @@ function tenantApiAgentTextNeedsRepair(text = "", message = {}, options = {}) {
   const gmailPrompt = gmailPromptPushInfo(message);
   if (gmailPrompt && (weakTenantApiAgentText(text) || genericTenantApiAgentHelpText(text))) return true;
   if (options.gmailContext && genericTenantApiAgentHelpText(text)) return true;
+  if (genericTenantApiAgentHelpText(text) && messageCapabilityIntent(message.text)) return true;
   if (weakTenantApiAgentText(text) && (
     userMessageNeedsSubstantiveAnswer(message.text) ||
     bareConfirmationText(message.text) ||
