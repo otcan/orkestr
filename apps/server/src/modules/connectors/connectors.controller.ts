@@ -436,6 +436,7 @@ export class ConnectorsController {
       chatId: String(body.to || body.chatId || ""),
       text: String(body.text || ""),
       accountId: String(body.accountId || ""),
+      crossAccountEchoSuppression: body.crossAccountEchoSuppression !== false,
     });
   }
 
@@ -454,6 +455,7 @@ export class ConnectorsController {
       text: String(body.text || ""),
       accountId: String(body.accountId || ""),
       attachments: paths.map((filePath) => ({ path: filePath })),
+      crossAccountEchoSuppression: body.crossAccountEchoSuppression !== false,
     });
   }
 

@@ -817,9 +817,9 @@ function rememberOutboundTextKey(key, env = process.env) {
   pruneOutboundTextKeys(env);
 }
 
-function rememberOutboundText(accountId, chatId, text, env = process.env) {
+function rememberOutboundText(accountId, chatId, text, env = process.env, options = {}) {
   rememberOutboundTextKey(textKey(accountId, chatId, text), env);
-  rememberOutboundTextKey(anyAccountTextKey(chatId, text), env);
+  if (options.crossAccount !== false) rememberOutboundTextKey(anyAccountTextKey(chatId, text), env);
 }
 
 function outboundTextRecentlySent(accountId, chatId, text, env = process.env) {
@@ -3028,7 +3028,7 @@ async function recoverLocalWhatsAppAccountAfterChatCreateError(accountId, error,
 /**
  * @param {{ chatId?: string, text?: string, accountId?: string, attachments?: Array<Record<string, unknown>>, env?: Record<string, string | undefined> }} [options]
  */
-export async function sendLocalWhatsAppMessage({ chatId = "", text = "", accountId = "", attachments = [], env = process.env } = {}) {
+export async function sendLocalWhatsAppMessage({ chatId = "", text = "", accountId = "", attachments = [], env = process.env, crossAccountEchoSuppression = true } = {}) {
   const selectedAccountId = accountId
     ? await normalizeManagedAccountId(accountId, env)
     : localWhatsAppAccountIdsForEnv(env).find((id) => accountStates.get(id)?.ready);
@@ -3044,7 +3044,7 @@ export async function sendLocalWhatsAppMessage({ chatId = "", text = "", account
   try {
     const cleanText = String(text || "");
     if (cleanText.trim()) {
-      rememberOutboundText(selectedAccountId, chatId, cleanText, env);
+      rememberOutboundText(selectedAccountId, chatId, cleanText, env, { crossAccount: crossAccountEchoSuppression !== false });
       const message = await sendWhatsAppTextWithConfirmation({
         client: runtime.client,
         chatId,

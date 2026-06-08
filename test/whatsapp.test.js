@@ -1125,6 +1125,54 @@ test("local whatsapp inbound ignores outbound text echoed through another local 
   }
 });
 
+test("local whatsapp e2e sender sends can be visible to responder routing", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-cross-account-visible-"));
+  const env = {
+    ORKESTR_HOME: home,
+    ORKESTR_WHATSAPP_ACCOUNT_IDS: "sender,responder",
+    ORKESTR_WHATSAPP_SEND_CONFIRMATION_REQUIRED: "0",
+  };
+  const chatId = "chat-cross-account-visible@g.us";
+  const text = "Real transport e2e should be visible to the responder account.";
+  const sent = [];
+  const senderRuntime = {
+    client: {
+      async sendMessage(to, body) {
+        sent.push({ to, body });
+        return { id: { _serialized: `true_${chatId}_sender-outbound` } };
+      },
+    },
+  };
+
+  try {
+    setLocalWhatsAppRuntimeForTest("sender", senderRuntime, {}, env);
+    await sendLocalWhatsAppMessage({
+      accountId: "sender",
+      chatId,
+      text,
+      env,
+      crossAccountEchoSuppression: false,
+    });
+
+    const result = await handleInboundMessage("responder", {
+      id: { _serialized: `false_${chatId}_responder-observed-sender`, remote: chatId },
+      from: chatId,
+      to: "responder@c.us",
+      author: "sender@lid",
+      fromMe: false,
+      body: text,
+      timestamp: 1_780_000_000,
+    }, env);
+
+    assert.equal(sent.length, 1);
+    assert.equal(sent[0].to, chatId);
+    assert.notEqual(result.skipped, "outbound_echo_cross_account_text");
+    assert.equal(result.error, "whatsapp_target_required");
+  } finally {
+    await resetLocalWhatsAppBridgeForTest(env);
+  }
+});
+
 test("local whatsapp message route fields keep own group echoes on the group chat", () => {
   assert.deepEqual(
     localWhatsAppMessageRouteFields({
