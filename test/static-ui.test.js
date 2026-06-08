@@ -68,6 +68,8 @@ test("server serves the public site at root and Angular UI at app routes", async
     const faviconIco = await faviconIcoResponse.text();
     const googleMarketingStartResponse = await fetch(`http://127.0.0.1:${port}/google-marketing/oauth/start`, { redirect: "manual" });
     const googleMarketingStartHtml = await googleMarketingStartResponse.text();
+    const googleWorkspaceConnectResponse = await fetch(`http://127.0.0.1:${port}/connect/google?connect=missing`);
+    const googleWorkspaceConnectHtml = await googleWorkspaceConnectResponse.text();
 
     assert.equal(response.status, 200);
     assertPublicShell(html);
@@ -107,6 +109,9 @@ test("server serves the public site at root and Angular UI at app routes", async
     assert.equal(googleMarketingStartResponse.status, 500);
     assert.ok(googleMarketingStartHtml.includes("Google Marketing auth failed"));
     assert.doesNotMatch(googleMarketingStartHtml, /<ork-root(?:\s|>)/);
+    assert.equal(googleWorkspaceConnectResponse.status, 400);
+    assert.ok(googleWorkspaceConnectHtml.includes("Connect Google Workspace"));
+    assert.doesNotMatch(googleWorkspaceConnectHtml, /<ork-root(?:\s|>)/);
   } finally {
     await new Promise((resolve) => server.close(resolve));
     if (priorHome === undefined) delete process.env.ORKESTR_HOME;
