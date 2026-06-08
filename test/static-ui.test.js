@@ -780,6 +780,7 @@ test("web shell exposes a user automation management page", async () => {
   assert.match(timersComponent, /selector: "ork-user-timers-page"/);
   assert.match(timersComponent, /this\.api\.threads\(\)/);
   assert.match(timersComponent, /this\.api\.automations\(\)/);
+  assert.match(timersComponent, /this\.api\.automationDoctor\(\)/);
   assert.match(timersComponent, /this\.api\.createAutomation\(body\)/);
   assert.match(timersComponent, /this\.api\.runAutomation\(automation\.automationId\)/);
   assert.match(timersComponent, /this\.api\.pauseAutomation\(automation\.automationId\)/);
@@ -787,17 +788,21 @@ test("web shell exposes a user automation management page", async () => {
   assert.match(timersComponent, /this\.api\.deleteAutomation\(automation\.automationId\)/);
   assert.match(timersComponent, /targetType: "thread"/);
   assert.match(timersTemplate, /Automations/);
+  assert.match(timersTemplate, /Doctor/);
+  assert.match(timersTemplate, /automation-doctor-counts/);
   assert.match(timersTemplate, /name="user-timer-target"/);
   assert.match(timersTemplate, /Run once/);
   assert.match(timersTemplate, /Pause/);
   assert.match(timersTemplate, /Resume/);
   assert.match(api, /automations\(\): Observable<\{ automations: AutomationRecord\[\] \}>/);
+  assert.match(api, /automationDoctor\(\): Observable<AutomationDoctorResponse>/);
   assert.match(api, /pauseAutomation\(id: string\)/);
   assert.match(api, /resumeAutomation\(id: string\)/);
   assert.match(api, /createTimer\(body: Record<string, string>\)/);
   assert.match(api, /deleteTimer\(id: string\)/);
   assert.match(api, /runTimer\(id: string\)/);
   assert.match(styles, /\.user-timer-editor/);
+  assert.match(styles, /\.automation-doctor/);
   assert.match(styles, /\.timer-actions/);
 });
 

@@ -785,6 +785,35 @@ export interface AutomationRecord {
   lastError?: string;
 }
 
+export interface AutomationDoctorIssue {
+  severity: string;
+  code: string;
+  message: string;
+  automationId?: string | null;
+  automationLabel?: string | null;
+  automationType?: string | null;
+  target?: string | null;
+  targetType?: string | null;
+  details?: Record<string, unknown>;
+}
+
+export interface AutomationDoctorResponse {
+  ok: boolean;
+  status: string;
+  summary: string;
+  generatedAt: string;
+  counts?: {
+    total?: number;
+    enabled?: number;
+    paused?: number;
+    due?: number;
+    errors?: number;
+    warnings?: number;
+    byType?: Record<string, number>;
+  };
+  issues: AutomationDoctorIssue[];
+}
+
 export interface TimerDoctorIssue {
   severity: string;
   code: string;
@@ -2003,6 +2032,10 @@ export class ApiService {
 
   automations(): Observable<{ automations: AutomationRecord[] }> {
     return this.http.get<{ automations: AutomationRecord[] }>(this.api("/automations"));
+  }
+
+  automationDoctor(): Observable<AutomationDoctorResponse> {
+    return this.http.get<AutomationDoctorResponse>(this.api("/automations/doctor"));
   }
 
   timerDoctor(): Observable<TimerDoctorResponse> {

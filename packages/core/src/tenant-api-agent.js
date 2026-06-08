@@ -1063,7 +1063,7 @@ function formatActionRegistryTool(result = {}) {
     "Registered actions:",
     ...actions.slice(0, 12).map((action) => {
       const status = clean(action.status) ? `, ${clean(action.status)}` : "";
-      return `- ${clean(action.provider)}.${clean(action.verb)}.${clean(action.object)} (${clean(action.tool)}${status})`;
+      return `- ${clean(action.provider)}.${clean(action.verb)}.${clean(action.object)} (${clean(action.actionKey || action.handler || "action")}${status})`;
     }),
   ].join("\n");
 }
@@ -1071,6 +1071,17 @@ function formatActionRegistryTool(result = {}) {
 function formatAutomationTool(result = {}) {
   const output = result.output || {};
   if (output.ok === false || clean(output.error)) return `Automation tool failed: ${clean(output.error || "tool_failed")}.`;
+  if (clean(output.status) && Array.isArray(output.issues)) {
+    const counts = output.counts || {};
+    const issueLines = output.issues.slice(0, 5).map((issue) =>
+      `- ${clean(issue.automationLabel || issue.automationId || issue.code)}: ${clean(issue.message || issue.code)}`,
+    );
+    return [
+      `Automation doctor: ${clean(output.summary || output.status)}.`,
+      `${counts.enabled ?? 0} enabled, ${counts.paused ?? 0} paused, ${counts.due ?? 0} due, ${counts.errors ?? 0} errors, ${counts.warnings ?? 0} warnings.`,
+      ...issueLines,
+    ].filter(Boolean).join("\n");
+  }
   if (Array.isArray(output.automations)) {
     return output.automations.length
       ? [
@@ -1139,11 +1150,11 @@ function formatToolResultFallback(toolResults = [], context = {}) {
         else if (output.action?.provider === "gmail" && output.action?.object === "notification" && output.result?.notification) formatted = formatGmailNotificationTool({ name: "orkestr_create_gmail_notification", output: output.result });
         else if (["orkestr_create_gmail_notification", "orkestr_update_gmail_notification", "orkestr_list_gmail_notifications", "orkestr_delete_gmail_notification", "orkestr_run_gmail_notification_now"].includes(output.handler)) formatted = formatGmailNotificationTool(legacyResult);
         else if (["orkestr_modify_gmail_message", "orkestr_create_gmail_draft", "orkestr_send_gmail_draft", "orkestr_send_gmail_message", "orkestr_list_google_calendar_events", "orkestr_create_google_calendar_event", "orkestr_update_google_calendar_event", "orkestr_delete_google_calendar_event", "orkestr_get_google_drive_file"].includes(output.handler)) formatted = formatGoogleWorkspaceTool(legacyResult);
-        else if (["orkestr_create_automation", "orkestr_update_automation", "orkestr_delete_automation", "orkestr_run_automation"].includes(output.handler)) formatted = formatAutomationTool(legacyResult);
+        else if (["orkestr_create_automation", "orkestr_update_automation", "orkestr_delete_automation", "orkestr_run_automation", "orkestr_pause_automation", "orkestr_resume_automation", "orkestr_doctor_automations"].includes(output.handler)) formatted = formatAutomationTool(legacyResult);
       }
       if (!formatted && output.ok === false) formatted = `Action failed: ${clean(output.error || "action_failed")}.`;
     }
-    else if (["orkestr_list_automations", "orkestr_create_automation", "orkestr_update_automation", "orkestr_delete_automation", "orkestr_run_automation", "orkestr_pause_automation", "orkestr_resume_automation"].includes(result.name)) formatted = formatAutomationTool(result);
+    else if (["orkestr_list_automations", "orkestr_create_automation", "orkestr_update_automation", "orkestr_delete_automation", "orkestr_run_automation", "orkestr_pause_automation", "orkestr_resume_automation", "orkestr_doctor_automations"].includes(result.name)) formatted = formatAutomationTool(result);
     else if (result.name === "orkestr_fetch_web_page") formatted = fallbackWebFetchToolAnswer([result.output]);
     else if (result.name === "orkestr_connect_workspace_runtime") formatted = formatWorkspaceRuntimeTool(result);
     if (formatted) parts.push(formatted);

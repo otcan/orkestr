@@ -7,6 +7,9 @@ import {
   setAutomationEnabledForPrincipal,
   updateAutomationForPrincipal,
 } from "../../../../../packages/core/src/automations.js";
+import { doctorAutomationsForPrincipal } from "../../../../../packages/core/src/automation-doctor.js";
+import { listBrowserSessions } from "../../../../../packages/browsers/src/browsers.js";
+import { connectorAuthStatus } from "../../../../../packages/connectors/src/connector-auth.js";
 import { requestPrincipal } from "../../../../../packages/core/src/principal.js";
 
 @Controller("api/automations")
@@ -14,6 +17,15 @@ export class AutomationsController {
   @Get()
   async list(@Req() request: any) {
     return { automations: await listAutomationsForPrincipal(requestPrincipal(request)) };
+  }
+
+  @Get("doctor")
+  async doctor(@Req() request: any) {
+    const principal = requestPrincipal(request);
+    return doctorAutomationsForPrincipal(principal, process.env, new Date(), {
+      connectorStatusProvider: (provider: string) => connectorAuthStatus(provider, process.env, { principal }),
+      browserSessionsProvider: () => listBrowserSessions(process.env, { principal }),
+    });
   }
 
   @Post()

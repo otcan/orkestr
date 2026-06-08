@@ -13,6 +13,30 @@
     <div class="notice">{{ notice }}</div>
   }
 
+  @if (doctor) {
+    <section class="automation-doctor" [class.critical]="doctor.status === 'broken'" [class.warning]="doctor.status === 'warning'">
+      <div>
+        <p class="eyebrow">Doctor</p>
+        <h4>{{ doctor.status }}</h4>
+        <small>{{ doctor.summary }}</small>
+      </div>
+      <div class="automation-doctor-counts">
+        <span>{{ doctorCount("enabled") }} enabled</span>
+        <span>{{ doctorCount("paused") }} paused</span>
+        <span>{{ doctorCount("due") }} due</span>
+        <span>{{ doctorCount("errors") }} errors</span>
+        <span>{{ doctorCount("warnings") }} warnings</span>
+      </div>
+      @if ((doctor.issues || []).length) {
+        <div class="automation-doctor-issues">
+          @for (issue of (doctor.issues || []).slice(0, 4); track issue.automationId || issue.code || issue.message) {
+            <small [class.bad]="issue.severity === 'error'">{{ doctorIssueLabel(issue) }}: {{ issue.message }}</small>
+          }
+        </div>
+      }
+    </section>
+  }
+
   <form class="timer-editor user-timer-editor" (submit)="createTimer(); $event.preventDefault()">
     <select name="user-timer-target" [(ngModel)]="targetThreadId">
       @for (thread of threads; track thread.id) {

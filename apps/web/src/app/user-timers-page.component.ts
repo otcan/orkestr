@@ -2,7 +2,7 @@ import { DatePipe } from "@angular/common";
 import { Component, OnInit, inject } from "@angular/core";
 import { FormsModule } from "@angular/forms";
 import { firstValueFrom } from "rxjs";
-import { ApiService, AutomationRecord, ThreadSummary } from "./api.service";
+import { ApiService, AutomationDoctorResponse, AutomationRecord, ThreadSummary } from "./api.service";
 
 @Component({
   selector: "ork-user-timers-page",
@@ -16,6 +16,7 @@ export class UserTimersPageComponent implements OnInit {
   error = "";
   notice = "";
   automations: AutomationRecord[] = [];
+  doctor: AutomationDoctorResponse | null = null;
   threads: ThreadSummary[] = [];
   targetThreadId = "";
   timerLabel = "Thread timer";
@@ -30,12 +31,14 @@ export class UserTimersPageComponent implements OnInit {
   async load(): Promise<void> {
     this.busy = true;
     try {
-      const [threads, automations] = await Promise.all([
+      const [threads, automations, doctor] = await Promise.all([
         firstValueFrom(this.api.threads()),
         firstValueFrom(this.api.automations()),
+        firstValueFrom(this.api.automationDoctor()),
       ]);
       this.threads = threads.threads || [];
       this.automations = this.sortAutomations(automations.automations || []);
+      this.doctor = doctor;
       if (!this.targetThreadId && this.threads[0]) this.targetThreadId = this.threads[0].id;
       this.error = "";
     } catch (error) {
@@ -160,6 +163,14 @@ export class UserTimersPageComponent implements OnInit {
       requirements.desktop ? `${requirements.desktop} desktop` : "",
     ].filter(Boolean);
     return values.join(" · ");
+  }
+
+  doctorCount(name: string): number {
+    return Number(this.doctor?.counts?.[name as keyof NonNullable<AutomationDoctorResponse["counts"]>] || 0) || 0;
+  }
+
+  doctorIssueLabel(issue: { automationLabel?: string | null; automationId?: string | null; code?: string; message?: string }): string {
+    return String(issue.automationLabel || issue.automationId || issue.code || "Automation");
   }
 
   private upsertAutomation(automation: AutomationRecord): AutomationRecord[] {

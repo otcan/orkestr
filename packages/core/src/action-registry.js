@@ -3,6 +3,11 @@ const actionRegistry = [
   { provider: "gmail", verb: "read", object: "message", handler: "orkestr_read_gmail_message", approval: "none", options: ["messageId"] },
   { provider: "gmail", verb: "read", object: "latest_message", handler: "orkestr_read_latest_gmail_message", approval: "none", options: ["query"] },
   { provider: "gmail", verb: "watch", object: "notification", handler: "orkestr_create_automation", approval: "none", options: ["query", "interval", "target", "maxItemsPerRun"] },
+  { provider: "gmail", verb: "update", object: "notification", handler: "orkestr_update_automation", approval: "none", options: ["automationId", "notificationId", "query", "interval", "target", "maxItemsPerRun", "enabled"] },
+  { provider: "gmail", verb: "pause", object: "notification", handler: "orkestr_pause_automation", approval: "none", options: ["automationId", "notificationId"] },
+  { provider: "gmail", verb: "resume", object: "notification", handler: "orkestr_resume_automation", approval: "none", options: ["automationId", "notificationId"] },
+  { provider: "gmail", verb: "run", object: "notification", handler: "orkestr_run_automation", approval: "none", options: ["automationId", "notificationId"] },
+  { provider: "gmail", verb: "delete", object: "notification", handler: "orkestr_delete_automation", approval: "confirm", options: ["automationId", "notificationId"] },
   { provider: "gmail", verb: "create", object: "draft", handler: "orkestr_create_gmail_draft", approval: "confirm", options: ["to", "cc", "bcc", "subject", "body"] },
   { provider: "gmail", verb: "send", object: "message", handler: "orkestr_send_gmail_message", approval: "explicit", options: ["to", "cc", "bcc", "subject", "body"] },
   { provider: "gmail", verb: "modify", object: "message", handler: "orkestr_modify_gmail_message", approval: "confirm", options: ["messageId", "action", "labelIds", "addLabelIds", "removeLabelIds"] },
@@ -22,12 +27,17 @@ const actionRegistry = [
   { provider: "whatsapp", verb: "route", object: "chat", handler: "orkestr_run_skill_action", approval: "confirm", options: ["chatId", "threadId"], status: "planned" },
   { provider: "timer", verb: "create", object: "timer", handler: "orkestr_create_automation", approval: "none", options: ["cadence", "delay", "runAt", "time", "timezone", "every", "prompt", "target", "enabled"] },
   { provider: "timer", verb: "update", object: "timer", handler: "orkestr_update_automation", approval: "none", options: ["automationId", "cadence", "prompt", "enabled"] },
+  { provider: "timer", verb: "pause", object: "timer", handler: "orkestr_pause_automation", approval: "none", options: ["automationId"] },
+  { provider: "timer", verb: "resume", object: "timer", handler: "orkestr_resume_automation", approval: "none", options: ["automationId"] },
   { provider: "timer", verb: "delete", object: "timer", handler: "orkestr_delete_automation", approval: "confirm", options: ["automationId"] },
   { provider: "timer", verb: "run", object: "timer", handler: "orkestr_run_automation", approval: "none", options: ["automationId"] },
   { provider: "push", verb: "create", object: "connector_push", handler: "orkestr_create_automation", approval: "none", options: ["provider", "query", "promptTemplate", "interval"] },
   { provider: "push", verb: "update", object: "connector_push", handler: "orkestr_update_automation", approval: "none", options: ["automationId", "enabled", "query", "promptTemplate"] },
+  { provider: "push", verb: "pause", object: "connector_push", handler: "orkestr_pause_automation", approval: "none", options: ["automationId"] },
+  { provider: "push", verb: "resume", object: "connector_push", handler: "orkestr_resume_automation", approval: "none", options: ["automationId"] },
   { provider: "push", verb: "delete", object: "connector_push", handler: "orkestr_delete_automation", approval: "confirm", options: ["automationId"] },
   { provider: "push", verb: "run", object: "connector_push", handler: "orkestr_run_automation", approval: "none", options: ["automationId", "sourceItemsJson"] },
+  { provider: "automation", verb: "doctor", object: "automation", handler: "orkestr_doctor_automations", approval: "none", options: [] },
 ];
 
 function clean(value = "") {
@@ -79,8 +89,8 @@ export function findActionRegistryEntry({ actionKey = "", provider = "", verb = 
 export function actionRegistryInstructions() {
   return [
     "Action registry policy: model tool choice is the generic action router. Discover actions with orkestr_list_actions, then execute available actions with orkestr_run_action using provider + verb + object or actionKey. Do not call provider-specific tool names or use stale connector context as a pre-model action selector.",
-    "Choose actions by provider + verb + object + options. Current supported automation objects are timer, gmail notification, and connector_push; Jira, Outlook, WhatsApp, and additional Drive actions are registry-described extension points until their connector tools are enabled.",
+    "Choose actions by provider + verb + object + options. Current supported automation objects are timer, gmail notification, connector_push, and automation doctor diagnostics; Jira, Outlook, WhatsApp, and additional Drive actions are registry-described extension points until their connector tools are enabled.",
     "Timers are prompts. When a timer fires, Orkestr injects the timer prompt into the target chat/thread, and that prompt may call tools under the same tenant-scoped permissions.",
-    "For timers, Gmail search/read/watch, Google Calendar, Google Drive, and Gmail draft/send/modify actions, use the action router rather than provider-named tools.",
+    "For timers, Gmail search/read/watch/update/delete/run/pause/resume, automation doctor diagnostics, Google Calendar, Google Drive, and Gmail draft/send/modify actions, use the action router rather than provider-named tools.",
   ].join("\n");
 }

@@ -1618,6 +1618,30 @@ test("tenant api-agent generic automation tools manage timer prompts", async () 
     force: false,
     sourceItemsJson: "[]",
   }, { principal, thread }, env);
+  const actionPaused = await runTenantApiAgentTool("orkestr_run_action", {
+    actionKey: "timer.pause.timer",
+    provider: "",
+    verb: "",
+    object: "",
+    idempotencyKey: "timer-action-pause",
+    parameters: { automationId },
+  }, { principal, thread }, env);
+  const actionResumed = await runTenantApiAgentTool("orkestr_run_action", {
+    actionKey: "timer.resume.timer",
+    provider: "",
+    verb: "",
+    object: "",
+    idempotencyKey: "timer-action-resume",
+    parameters: { automationId },
+  }, { principal, thread }, env);
+  const doctor = await runTenantApiAgentTool("orkestr_run_action", {
+    actionKey: "automation.doctor.automation",
+    provider: "",
+    verb: "",
+    object: "",
+    idempotencyKey: "timer-action-doctor",
+    parameters: {},
+  }, { principal, thread }, env);
   const deleted = await runTenantApiAgentTool("orkestr_delete_automation", {
     automationId,
     type: "",
@@ -1634,8 +1658,113 @@ test("tenant api-agent generic automation tools manage timer prompts", async () 
   assert.equal(updated.automation.prompt, "Check Gmail and summarize new important mail.");
   assert.equal(run.ok, true);
   assert.equal(run.event.target, "otcan-automation-timer");
+  assert.equal(actionPaused.handler, "orkestr_pause_automation");
+  assert.equal(actionPaused.automation.enabled, false);
+  assert.equal(actionResumed.handler, "orkestr_resume_automation");
+  assert.equal(actionResumed.automation.enabled, true);
+  assert.equal(doctor.handler, "orkestr_doctor_automations");
+  assert.equal(doctor.counts.total, 1);
   assert.equal(deleted.ok, true);
   assert.equal((await listTimers(env)).length, 0);
+});
+
+test("tenant api-agent pauses a Gmail watch through the generic action router", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-api-agent-pause-gmail-watch-"));
+  const env = await allowSanitizerEnv(home, {
+    ORKESTR_GMAIL_NOTIFICATIONS_ENABLED: "1",
+  });
+  await upsertUser({ id: "otcan", role: "user", displayName: "Otcan" }, env);
+  const paths = userDataPaths("otcan", env);
+  await fs.mkdir(paths.secrets, { recursive: true });
+  await fs.writeFile(path.join(paths.secrets, "gmail-token.json"), JSON.stringify({
+    accessToken: "pause-gmail-watch-access",
+    refreshToken: "pause-gmail-watch-refresh",
+    expiresAt: Math.floor(Date.now() / 1000) + 3600,
+  }), "utf8");
+  await createThread({
+    id: "otcan-pause-gmail-watch",
+    ownerUserId: "otcan",
+    name: "otcan-pause-gmail-watch",
+    runtimeKind: "api-agent",
+    executor: { type: "api-agent", metadata: { runtimeKind: "api-agent" } },
+    binding: { connector: "whatsapp", chatId: "chat-pause-gmail-watch", outboundAccountId: "wa-1" },
+  }, env);
+  const principal = userPrincipal({ id: "otcan", role: "user" });
+  const thread = await getThread("otcan-pause-gmail-watch", env);
+  const created = await runTenantApiAgentTool("orkestr_run_action", {
+    actionKey: "gmail.watch.notification",
+    provider: "",
+    verb: "",
+    object: "",
+    idempotencyKey: "create-pause-watch",
+    parameters: {
+      label: "Pause test Gmail watch",
+      query: "is:unread newer_than:1d",
+      interval: "5m",
+      targetType: "thread",
+      target: "",
+      maxItemsPerRun: 1,
+      enabled: true,
+      allowBroadQuery: false,
+    },
+  }, { principal, thread }, env);
+  await enqueueThreadInputForPrincipal("otcan-pause-gmail-watch", {
+    text: "Pause my Gmail watch for now.",
+    source: "whatsapp_inbound",
+    connector: "whatsapp",
+    chatId: "chat-pause-gmail-watch",
+    accountId: "wa-1",
+  }, principal, env);
+
+  const openAiCalls = [];
+  const result = await processApiAgentThreadInput("otcan-pause-gmail-watch", env, {
+    fetchImpl: async (_url, options = {}) => {
+      const body = JSON.parse(options.body);
+      openAiCalls.push(body);
+      if (openAiCalls.length === 1) {
+        assert.equal(body.tools.some((tool) => tool.name === "orkestr_list_actions"), true);
+        assert.equal(body.tools.some((tool) => tool.name === "orkestr_run_action"), true);
+        assert.equal(body.tools.some((tool) => tool.name === "orkestr_update_gmail_notification"), false);
+        return response({
+          id: "resp_pause_gmail_watch_1",
+          model: "gpt-5-mini",
+          output_text: "",
+          output: [{
+            type: "function_call",
+            name: "orkestr_run_action",
+            call_id: "call_pause_gmail_watch",
+            arguments: JSON.stringify({
+              actionKey: "gmail.pause.notification",
+              provider: "",
+              verb: "",
+              object: "",
+              idempotencyKey: "pause-gmail-watch",
+              parameters: {
+                automationId: created.automation.automationId,
+              },
+            }),
+          }],
+          usage: { input_tokens: 320, output_tokens: 14 },
+        });
+      }
+      const toolOutput = JSON.parse(body.input.at(-1).output);
+      assert.equal(toolOutput.handler, "orkestr_pause_automation");
+      assert.equal(toolOutput.result.automation.enabled, false);
+      return response({
+        id: "resp_pause_gmail_watch_2",
+        model: "gpt-5-mini",
+        output_text: "Paused the Gmail watch.",
+        output: [],
+        usage: { input_tokens: 360, output_tokens: 8 },
+      });
+    },
+  });
+  const listed = await runTenantApiAgentTool("orkestr_list_automations", {}, { principal, thread }, env);
+  const paused = listed.automations.find((automation) => automation.automationId === created.automation.automationId);
+
+  assert.equal(result.ok, true);
+  assert.equal(openAiCalls.length, 2);
+  assert.equal(paused.enabled, false);
 });
 
 test("tenant api-agent drains queued tenant messages while it owns the lock", async () => {

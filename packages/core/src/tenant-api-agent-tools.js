@@ -38,6 +38,7 @@ import {
   setAutomationEnabledForPrincipal,
   updateAutomationForPrincipal,
 } from "./automations.js";
+import { doctorAutomationsForPrincipal } from "./automation-doctor.js";
 import { runTenantApiAgentTimerTool, tenantApiAgentTimerToolDefinitions } from "./tenant-api-agent-timer-tools.js";
 import { whereAmI } from "./whereiam.js";
 import { desktopProvisioningMessage } from "./desktop-provisioning.js";
@@ -121,6 +122,14 @@ function automationIdArgsForAction(action = {}, parameters = {}) {
   return { ...parameters, automationId: id, type };
 }
 
+function automationDoctorOptions(context = {}, env = process.env) {
+  const principal = context.principal || null;
+  return {
+    connectorStatusProvider: (provider) => connectorAuthStatus(provider, env, { principal }),
+    browserSessionsProvider: () => listBrowserSessions(env, { principal }),
+  };
+}
+
 async function runAction(args = {}, context = {}, env = process.env) {
   const principal = context.principal || null;
   const thread = context.thread || null;
@@ -143,6 +152,9 @@ async function runAction(args = {}, context = {}, env = process.env) {
   else if (action.handler === "orkestr_create_automation") result = await createAutomationForPrincipal(automationArgsForAction(action, parameters, thread), principal, env, { thread, fetchImpl });
   else if (action.handler === "orkestr_update_automation") result = await updateAutomationForPrincipal(automationIdArgsForAction(action, parameters), principal, env, { thread, fetchImpl });
   else if (action.handler === "orkestr_delete_automation") result = await deleteAutomationForPrincipal(automationIdArgsForAction(action, parameters), principal, env);
+  else if (action.handler === "orkestr_pause_automation") result = await setAutomationEnabledForPrincipal(automationIdArgsForAction(action, parameters), false, principal, env);
+  else if (action.handler === "orkestr_resume_automation") result = await setAutomationEnabledForPrincipal(automationIdArgsForAction(action, parameters), true, principal, env);
+  else if (action.handler === "orkestr_doctor_automations") result = await doctorAutomationsForPrincipal(principal, env, new Date(), automationDoctorOptions(context, env));
   else if (action.handler === "orkestr_run_automation") {
     let sourceItems = Array.isArray(parameters.sourceItems) ? parameters.sourceItems : [];
     if (!sourceItems.length && clean(parameters.sourceItemsJson)) {
@@ -1357,6 +1369,18 @@ export function tenantApiAgentToolDefinitions() {
     },
     {
       type: "function",
+      name: "orkestr_doctor_automations",
+      description: "Inspect timers, Gmail notification watches, connector prompt pushes, required connectors, required desktops, overdue schedules, paused state, and previous run errors for this tenant.",
+      parameters: {
+        type: "object",
+        properties: {},
+        required: [],
+        additionalProperties: false,
+      },
+      strict: true,
+    },
+    {
+      type: "function",
       name: "orkestr_start_connector_auth",
       description: "Start user-owned, tenant-scoped Gmail, Outlook, Jira, or Shopify sign-in from this chat using the parent Orkestr connector app. Use this when the user asks to connect, sign in, log in, set up, or reconnect one of these connectors. Do not describe this as admin setup.",
       parameters: {
@@ -1644,6 +1668,9 @@ export async function runTenantApiAgentTool(name = "", args = {}, context = {}, 
   }
   if (tool === "orkestr_resume_automation") {
     return setAutomationEnabledForPrincipal(args, true, principal, env);
+  }
+  if (tool === "orkestr_doctor_automations") {
+    return doctorAutomationsForPrincipal(principal, env, new Date(), automationDoctorOptions({ principal }, env));
   }
   const googleWorkspaceTool = await runTenantApiAgentGoogleWorkspaceTool(tool, args, { principal, thread, fetchImpl: context.fetchImpl || fetch }, env);
   if (googleWorkspaceTool.handled) return googleWorkspaceTool.result;
