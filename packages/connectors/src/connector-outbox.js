@@ -77,11 +77,9 @@ export function connectorOutboxIdempotencyKey(input = {}) {
     clean(input.accountId),
     clean(input.chatId),
     clean(input.threadId),
-    clean(input.sourceEventId || input.sourceMessageId),
     clean(input.sourceMessageId),
     clean(input.sourceRevision || "1"),
     clean(input.deliveryType),
-    clean(input.payloadHash || connectorOutboxPayloadHash(input.payload || {})),
   ].join("|");
 }
 

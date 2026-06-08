@@ -67,6 +67,36 @@ test("connector outbox idempotency is tenant scoped and terminal states block du
   assert.equal(terminalClaim.reason, "connector_outbox_delivered");
 });
 
+test("connector outbox idempotency is scoped by source revision and delivery type", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-connector-outbox-revision-key-"));
+  const runtimeEnv = env(home);
+  const first = await ensureConnectorOutboxJob(whatsappJob({
+    tenantId: "tenant-a",
+    payload: { text: "first body" },
+  }), runtimeEnv);
+  const duplicateRevision = await ensureConnectorOutboxJob(whatsappJob({
+    tenantId: "tenant-a",
+    sourceEventId: "event-from-retry",
+    payload: { text: "same revision retry body" },
+  }), runtimeEnv);
+  const editedRevision = await ensureConnectorOutboxJob(whatsappJob({
+    tenantId: "tenant-a",
+    sourceRevision: "2",
+    deliveryType: "edit_notice",
+    payload: { text: "correction body" },
+  }), runtimeEnv);
+  const store = await readConnectorOutbox(runtimeEnv);
+
+  assert.equal(first.created, true);
+  assert.equal(duplicateRevision.created, false);
+  assert.equal(editedRevision.created, true);
+  assert.equal(store.jobs.length, 2);
+  assert.equal(store.jobs.some((job) => job.sourceRevision === "1" && job.deliveryType === "final"), true);
+  assert.equal(store.jobs.some((job) => job.sourceRevision === "2" && job.deliveryType === "edit_notice"), true);
+  assert.equal(first.job.idempotencyKey, duplicateRevision.job.idempotencyKey);
+  assert.notEqual(first.job.idempotencyKey, editedRevision.job.idempotencyKey);
+});
+
 test("connector outbox expired claims are retryable after broker downtime", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-connector-outbox-expired-"));
   const runtimeEnv = env(home);

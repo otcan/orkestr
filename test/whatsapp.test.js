@@ -74,6 +74,27 @@ test("whatsapp outbound intent state merge is monotonic", () => {
   assert.equal(skippedIntents[0].status, "skipped");
 });
 
+test("whatsapp send failures preserve structured bridge error reasons", async () => {
+  const runtimeEnv = externalBridgeEnv(await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-structured-error-")));
+  await assert.rejects(
+    () => sendWhatsAppText({
+      chatId: "chat-structured-error",
+      text: "hello",
+      accountId: "account-1",
+      config: { bridgeMode: "external", bridgeUrl: "http://wa.local" },
+      env: runtimeEnv,
+      fetchImpl: async () => response({
+        ok: false,
+        error: {
+          code: "whatsapp_local_bridge_not_ready",
+          message: "Local bridge is restarting",
+        },
+      }, false, 503),
+    }),
+    /whatsapp_local_bridge_not_ready: Local bridge is restarting/,
+  );
+});
+
 function response(payload, ok = true, status = 200) {
   return {
     ok,

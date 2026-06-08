@@ -2456,6 +2456,26 @@ function threadEligibleForWhatsAppMirrorScan(thread = {}, config = {}) {
   return threadConfiguredForWhatsAppRoute(thread, config);
 }
 
+function bridgeErrorText(value) {
+  if (!value) return "";
+  if (typeof value === "string") return value.trim();
+  if (value instanceof Error) return value.message || String(value);
+  if (typeof value !== "object") return String(value || "").trim();
+  const code = pickString(value.code, value.errorCode, value.reason, value.status);
+  const message = pickString(value.message, value.error, value.detail, value.details, value.description);
+  if (code && message && code !== message) return `${code}: ${message}`;
+  return pickString(message, code, JSON.stringify(value));
+}
+
+function whatsappSendFailureMessage(payload = {}, status = 0) {
+  return pickString(
+    bridgeErrorText(payload.error),
+    bridgeErrorText(payload.reason),
+    bridgeErrorText(payload.message),
+    status ? `whatsapp_send_failed_${status}` : "whatsapp_send_failed",
+  );
+}
+
 async function listThreadMessageSets(env, state = null, config = {}) {
   const paths = await ensureDataDirs(env);
   const sets = [];
@@ -2499,7 +2519,7 @@ export async function sendWhatsAppText({ chatId = "", text = "", accountId = "",
   });
   const payload = await response.json().catch(() => ({}));
   if (!response.ok || payload.ok === false) {
-    const error = new Error(payload.error || `whatsapp_send_failed_${response.status}`);
+    const error = new Error(whatsappSendFailureMessage(payload, response.status));
     error.statusCode = response.status || 502;
     error.payload = payload;
     throw error;
