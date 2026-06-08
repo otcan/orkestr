@@ -792,16 +792,62 @@ function skillLabel(skill = {}) {
   return clean(skill.name || skill.label || skill.id || "Skill");
 }
 
+function readableList(values = []) {
+  const items = values.map(clean).filter(Boolean);
+  if (items.length <= 1) return items[0] || "";
+  if (items.length === 2) return `${items[0]} and ${items[1]}`;
+  return `${items.slice(0, -1).join(", ")}, and ${items.at(-1)}`;
+}
+
+function skillUnavailableReason(skill = {}) {
+  const reason = clean(skill.setupState);
+  if (clean(skill.requiresDesktop)) {
+    if (reason === "desktop_not_available" || reason === "capability_not_available") return "the managed desktop is not configured for this chat yet";
+  }
+  if (clean(skill.requiresConnector)) {
+    if (reason === "capability_not_available") return "it is not connected for this chat yet";
+  }
+  if (reason === "skill_disabled") return "it is disabled for this chat";
+  return reason || "it is not available for this chat";
+}
+
+function usefulCapabilitySkill(skill = {}) {
+  const id = clean(skill.id).toLowerCase();
+  if (["whereiam", "learning"].includes(id)) return false;
+  return true;
+}
+
+function formatSkillActionSummary(skills = []) {
+  const visible = skills.filter(usefulCapabilitySkill);
+  const available = visible.filter((skill) => skill.available === true || skill.enabled === true);
+  const unavailable = visible.filter((skill) => !(skill.available === true || skill.enabled === true));
+  const lines = [];
+  if (available.length) {
+    lines.push(`This chat can use ${readableList(available.map(skillLabel))}.`);
+  } else {
+    lines.push("No user-facing skills are available in this chat yet.");
+  }
+  const desktop = unavailable.find((skill) => clean(skill.requiresDesktop));
+  if (desktop) lines.push(`${skillLabel(desktop)} is not available because ${skillUnavailableReason(desktop)}.`);
+  const missingConnectors = unavailable
+    .filter((skill) => clean(skill.requiresConnector) && !clean(skill.requiresDesktop))
+    .map(skillLabel);
+  if (missingConnectors.length) lines.push(`Not connected yet: ${readableList(missingConnectors)}.`);
+  return lines.join("\n");
+}
+
 function formatSkillActionsTool(result = {}, context = {}) {
   const output = result.output || {};
   const skills = Array.isArray(output.skills) ? output.skills : [];
   if (output.ok === false || clean(output.error)) return `Skill actions could not be checked: ${clean(output.error || "tool_failed")}.`;
   if (!skills.length) return "No matching enabled skill was found for this chat.";
+  const specificSkill = clean(result.args?.skillId || result.args?.skill || result.args?.id);
+  if (!specificSkill && skills.length > 1) return formatSkillActionSummary(skills);
   const lines = [];
   for (const skill of skills.slice(0, 6)) {
     const available = skill.available === true || skill.enabled === true;
     lines.push(`${skillLabel(skill)} is ${available ? "available" : "not available"} for this chat.`);
-    if (clean(skill.setupState) && !available) lines.push(`Reason: ${clean(skill.setupState)}.`);
+    if (!available) lines.push(`Reason: ${skillUnavailableReason(skill)}.`);
     const actions = Array.isArray(skill.availableActions) ? skill.availableActions.map(clean).filter(Boolean) : [];
     if (actions.length) lines.push(`Available actions: ${actions.join(", ")}.`);
     const desktops = Array.isArray(skill.desktops) ? skill.desktops : [];

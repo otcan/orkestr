@@ -526,6 +526,10 @@ function userDesktopSkillAvailable(skillId = "", snapshot = {}, env = process.en
   if (snapshot.userFound !== true) return false;
   const enabled = clean(env.ORKESTR_USER_DESKTOPS_ENABLED).toLowerCase();
   if (["0", "false", "no"].includes(enabled)) return false;
+  const mode = clean(env.ORKESTR_BROWSER_DESKTOP_MODE).toLowerCase();
+  if (["disabled", "none", "off"].includes(mode)) return false;
+  const hasManagedBackend = Boolean(clean(env.ORKESTR_BROWSERCTL_PATH || env.ORKESTR_BROWSERCTL || env.ORKESTR_BROWSER_API_URL || env.ORKESTR_BROWSER_SESSIONS_URL));
+  if (!mode && clean(env.ORKESTR_BROWSER_LAUNCH_DISABLED) === "1" && !hasManagedBackend) return false;
   const visible = configuredVisibleDesktopSlugs(env);
   if (!visible) return true;
   if (skillId === "linkedin") return ["linkedin", ...configuredDesktopFallbackSlugs(env)].some((slug) => visible.has(slug));

@@ -12,7 +12,15 @@ import { isBrowserctlUnavailableError, listManagedDesktopSessions, managedDeskto
 const execFileAsync = promisify(execFile);
 
 function desktopMode(env = process.env) {
-  return String(env.ORKESTR_BROWSER_DESKTOP_MODE || "").trim().toLowerCase();
+  const configured = String(env.ORKESTR_BROWSER_DESKTOP_MODE || "").trim().toLowerCase();
+  if (configured) return configured;
+  if (
+    String(env.ORKESTR_BROWSERCTL_PATH || env.ORKESTR_BROWSERCTL || "").trim() ||
+    String(env.ORKESTR_BROWSER_API_URL || env.ORKESTR_BROWSER_SESSIONS_URL || "").trim()
+  ) {
+    return "browserctl";
+  }
+  return "profiles";
 }
 
 function profileFallbackAllowed(env = process.env) {

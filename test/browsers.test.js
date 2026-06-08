@@ -55,6 +55,17 @@ test("virtual browser management exposes stop and cleanup actions", async () => 
   assert.equal(desktop.status, "not_prepared");
 });
 
+test("unconfigured browser mode uses isolated profile desktops, not ambient browserctl", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-browser-default-mode-"));
+  const env = { ORKESTR_HOME: home, ORKESTR_BROWSER_LAUNCH_DISABLED: "1" };
+
+  const payload = await listBrowserSessions(env);
+
+  assert.equal(payload.source, "profiles");
+  assert.deepEqual(payload.sessions.map((browser) => browser.slug), ["desktop", "linkedin", "gmail"]);
+  assert.equal(payload.sessions.some((browser) => String(browser.url || "").includes("desk.ops")), false);
+});
+
 test("visible browser slugs can limit the ops desktop list", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-visible-browsers-"));
   const env = {
