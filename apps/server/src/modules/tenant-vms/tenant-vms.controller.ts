@@ -30,6 +30,7 @@ function tenantVmBody(body: Record<string, unknown> = {}) {
   if (body.endpoint && typeof body.endpoint === "object") output.endpoint = body.endpoint;
   if (body.kubevirt && typeof body.kubevirt === "object") output.kubevirt = body.kubevirt;
   if (body.bootstrap && typeof body.bootstrap === "object") output.bootstrap = body.bootstrap;
+  if (body.desktops && typeof body.desktops === "object") output.desktops = body.desktops;
   if (body.connectors && typeof body.connectors === "object") output.connectors = body.connectors;
   if (body.trust && typeof body.trust === "object") output.trust = body.trust;
   if (body.capabilities !== undefined) {

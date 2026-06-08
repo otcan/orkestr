@@ -30,7 +30,7 @@ import { readWhatsAppScopedTokenRecords } from "../packages/core/src/whatsapp-sc
 import { authorizeHttpRequest } from "../packages/core/src/security.js";
 import { createThread, getThread, listThreadMessages, listThreads } from "../packages/core/src/threads.js";
 
-test("WhatsApp connector accounts are projected as neutral accounts with legacy aliases", () => {
+test("WhatsApp connector accounts use phone identities while preserving legacy runtime aliases", () => {
   const accounts = listWhatsAppConnectorAccounts({
     env: {
       ORKESTR_WHATSAPP_ACCOUNT_IDS: "sender,responder",
@@ -42,7 +42,7 @@ test("WhatsApp connector accounts are projected as neutral accounts with legacy 
       state: "paired",
       accounts: [
         { accountId: "sender", label: "Old Sender", state: "pairing_code", ready: false, pairingCode: "123-45678", pairingCodeUpdatedAt: "2026-06-07T12:00:00.000Z", pairingPhoneNumber: "***0662", sessionRoot: "/private/session" },
-        { accountId: "responder", label: "Old Responder", state: "ready", ready: true, authenticated: true, phoneNumber: "+4917632400662", contactId: "4917632400662@c.us", pushName: "Responder Phone" },
+        { accountId: "responder", label: "Old Responder", state: "ready", ready: true, authenticated: true, phoneNumber: "+15551234567", contactId: "15551234567@c.us", pushName: "Responder Phone" },
       ],
     },
   });
@@ -54,13 +54,87 @@ test("WhatsApp connector accounts are projected as neutral accounts with legacy 
   assert.equal(accounts.find((account) => account.accountId === "sender").pairingCode, "123-45678");
   assert.equal(accounts.find((account) => account.accountId === "sender").pairingPhoneNumber, "***0662");
   assert.equal(accounts.find((account) => account.accountId === "sender").nextAction, "enter_pairing_code");
-  assert.deepEqual(accounts.find((account) => account.accountId === "responder").legacyRoleAliases, ["responder"]);
-  assert.equal(accounts.find((account) => account.accountId === "responder").autostart, true);
-  assert.equal(accounts.find((account) => account.accountId === "responder").sendReady, true);
-  assert.equal(accounts.find((account) => account.accountId === "responder").phoneNumber, "+4917632400662");
-  assert.equal(accounts.find((account) => account.accountId === "responder").contactId, "4917632400662@c.us");
-  assert.equal(accounts.find((account) => account.accountId === "responder").pushName, "Responder Phone");
+  const responder = accounts.find((account) => account.accountId === "15551234567");
+  assert.ok(responder);
+  assert.equal(responder.runtimeAccountId, "responder");
+  assert.deepEqual(responder.legacyRoleAliases, ["responder"]);
+  assert.equal(responder.autostart, true);
+  assert.equal(responder.sendReady, true);
+  assert.equal(responder.phoneIdentity, "15551234567");
+  assert.equal(responder.phoneNumber, "+15551234567");
+  assert.equal(responder.contactId, "15551234567@c.us");
+  assert.equal(responder.pushName, "Responder Phone");
   assert.equal(Object.hasOwn(accounts[0], "sessionRoot"), false);
+});
+
+test("WhatsApp bindings resolve numeric identities and legacy runtime aliases", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-account-identity-binding-"));
+  const env = {
+    ORKESTR_HOME: home,
+    ORKESTR_ADMIN_USER_ID: "admin",
+    ORKESTR_WHATSAPP_ACCOUNT_IDS: "sender,responder",
+  };
+  const status = {
+    mode: "local",
+    state: "paired",
+    accounts: [
+      { accountId: "responder", state: "ready", ready: true, authenticated: true, phoneNumber: "+15551234567", contactId: "15551234567@c.us" },
+    ],
+  };
+  await createThread({
+    id: "thread-numbered-wa",
+    name: "Numbered WA",
+    binding: {
+      connector: "whatsapp",
+      chatId: "numbered@g.us",
+      responderAccountId: "responder",
+      outboundAccountId: "responder",
+      senderContactId: "15551234567@c.us",
+    },
+  }, env);
+
+  const payload = await listWhatsAppBindingStatuses({ env, status });
+  const binding = payload.bindings.find((item) => item.threadId === "thread-numbered-wa");
+  assert.equal(binding.responderAccountId, "15551234567");
+  assert.equal(binding.replyAccountId, "15551234567");
+  assert.equal(binding.runtimeAccountId, "responder");
+  assert.deepEqual(binding.authorizedContactIds, ["15551234567@c.us"]);
+  assert.ok(binding.accountIds.includes("15551234567"));
+  assert.ok(binding.accountIds.includes("responder"));
+
+  const byRuntimeAlias = await resolveWhatsAppBinding({ chatId: "numbered@g.us", accountId: "responder" }, { env, status });
+  assert.equal(byRuntimeAlias.ok, true);
+  assert.equal(byRuntimeAlias.selected.responderAccountId, "15551234567");
+
+  const byNumber = await resolveWhatsAppBinding({ chatId: "numbered@g.us", accountId: "15551234567" }, { env, status });
+  assert.equal(byNumber.ok, true);
+  assert.equal(byNumber.selected.runtimeAccountId, "responder");
+});
+
+test("WhatsApp account list deduplicates runtime aliases and numeric registry identities", () => {
+  const accounts = listWhatsAppConnectorAccounts({
+    env: {
+      ORKESTR_WHATSAPP_ACCOUNT_IDS: "responder",
+      ORKESTR_ADMIN_USER_ID: "admin",
+    },
+    registryAccounts: [
+      { accountId: "15551234567", ownerUserId: "user-1", label: "Saved Number", runtimeAccountId: "responder" },
+    ],
+    status: {
+      mode: "local",
+      state: "paired",
+      accounts: [
+        { accountId: "responder", state: "ready", ready: true, authenticated: true, phoneNumber: "+15551234567", contactId: "15551234567@c.us" },
+      ],
+    },
+  });
+
+  assert.equal(accounts.length, 1);
+  assert.equal(accounts[0].accountId, "15551234567");
+  assert.equal(accounts[0].runtimeAccountId, "responder");
+  assert.equal(accounts[0].ownerUserId, "user-1");
+  assert.equal(accounts[0].ready, true);
+  assert.equal(accounts[0].state, "ready");
 });
 
 test("WhatsApp connector accounts persist in the neutral account registry", async () => {

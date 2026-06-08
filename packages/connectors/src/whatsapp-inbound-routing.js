@@ -32,7 +32,9 @@ export function isWhatsAppGroupChatId(value) {
 export function bindingAccountIds(binding = {}) {
   return new Set([
     pickString(binding.senderAccountId, binding.inboundAccountId),
+    pickString(binding.bridgeAccountId, binding.receivingAccountId),
     pickString(binding.responderConnectorAccountId, binding.responderAccountId, binding.outboundAccountId),
+    pickString(binding.replyAccountId, binding.runtimeAccountId),
     pickString(binding.targetAccountId, binding.accountId),
   ].filter(Boolean));
 }

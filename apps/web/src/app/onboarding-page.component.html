@@ -635,7 +635,7 @@
       @if (activeStep === "whatsapp") {
         <section class="setup-form">
           <h3>WhatsApp</h3>
-          <p>{{ connector("whatsapp")?.summary || "Pair one or two WhatsApp accounts with the built-in bridge. The sender account mirrors Orkestr replies; the receiver account is optional for a second login." }}</p>
+          <p>{{ connector("whatsapp")?.summary || "Pair one or two WhatsApp identities with the built-in bridge. Orkestr receives group events through a paired identity and sends replies from the selected reply identity." }}</p>
           <div class="whatsapp-accounts">
             @for (account of whatsappAccounts; track account.id) {
               <article class="whatsapp-account">

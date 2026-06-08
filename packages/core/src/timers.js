@@ -155,6 +155,10 @@ function clockFromIso(value, fallback = "09:00") {
   return `${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
 }
 
+function cleanOptionalMetadata(value = "") {
+  return String(value || "").trim().slice(0, 120);
+}
+
 function timerOwnerUserId(timer, env = process.env) {
   return normalizeUserId(timer?.ownerUserId || timer?.userId || env.ORKESTR_ADMIN_USER_ID || adminUserId);
 }
@@ -266,6 +270,8 @@ export function normalizeStoredTimer(timer, now = new Date(), env = process.env)
     runAt: String(timer.runAt || (cadence === "once" ? legacyDueAt : "")).trim(),
     prompt: String(timer.prompt || timer.text || "").trim(),
     promptFile: String(timer.promptFile || "").trim(),
+    requiredDesktop: cleanOptionalMetadata(timer.requiredDesktop || timer.desktopSlug || timer.requiresDesktop),
+    requiredConnector: cleanOptionalMetadata(timer.requiredConnector || timer.connector || timer.requiresConnector),
     enabled,
     createdAt: timer.createdAt || now.toISOString(),
   };
@@ -460,6 +466,8 @@ export async function createTimer(input, env = process.env) {
     runAt,
     prompt,
     promptFile,
+    requiredDesktop: cleanOptionalMetadata(input.requiredDesktop || input.desktopSlug || input.requiresDesktop),
+    requiredConnector: cleanOptionalMetadata(input.requiredConnector || input.connector || input.requiresConnector),
     enabled: input.enabled !== false,
     createdAt: new Date().toISOString(),
   };

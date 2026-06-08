@@ -66,7 +66,9 @@ to attach to. This removes the old list-copy-attach workflow.
 `orkestr settings --json` prints the non-secret runtime settings contract. It is
 the preferred source for agent-facing choices such as the active Codex sandbox
 and approval mode, the managed desktop to use for manual intervention, the Gmail
-OAuth desktop slug, and WhatsApp sender/responder role names. Secrets and OAuth
+OAuth desktop slug, and WhatsApp receiving/reply aliases. WhatsApp account
+records should use numeric WhatsApp identities when available; old role names
+are compatibility aliases only. Secrets and OAuth
 tokens are never returned by this command.
 
 `orkestr api-session` is the stable bridge for API-driven agents that are not

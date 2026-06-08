@@ -1,5 +1,6 @@
 import { Module } from "@nestjs/common";
 import { AgentsModule } from "./modules/agents/agents.module.js";
+import { AutomationsModule } from "./modules/automations/automations.module.js";
 import { BrowsersModule } from "./modules/browsers/browsers.module.js";
 import { CodexModule } from "./modules/codex/codex.module.js";
 import { ConnectorsModule } from "./modules/connectors/connectors.module.js";
@@ -17,6 +18,7 @@ import { UsersModule } from "./modules/users/users.module.js";
   imports: [
     SystemModule,
     CodexModule,
+    AutomationsModule,
     ConnectorsModule,
     GmailNotificationsModule,
     ReleaseModule,

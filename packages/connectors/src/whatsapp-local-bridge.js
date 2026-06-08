@@ -817,9 +817,11 @@ function rememberOutboundTextKey(key, env = process.env) {
   pruneOutboundTextKeys(env);
 }
 
-function rememberOutboundText(accountId, chatId, text, env = process.env) {
+function rememberOutboundText(accountId, chatId, text, env = process.env, options = {}) {
   rememberOutboundTextKey(textKey(accountId, chatId, text), env);
-  rememberOutboundTextKey(anyAccountTextKey(chatId, text), env);
+  const crossAccountKey = anyAccountTextKey(chatId, text);
+  if (options.crossAccount === false) outboundMessageTextKeys.delete(crossAccountKey);
+  else rememberOutboundTextKey(crossAccountKey, env);
 }
 
 function outboundTextRecentlySent(accountId, chatId, text, env = process.env) {
@@ -869,6 +871,26 @@ function outboundAttachmentsRecentlySent(accountId, chatId, attachments = [], en
     const key = attachmentEchoKey(accountId, chatId, attachment);
     return Boolean(key && outboundAttachmentKeys.has(key));
   });
+}
+
+function inboundAttachmentEchoCandidates(message = {}) {
+  const names = [
+    message.filename,
+    message.fileName,
+    message._data?.filename,
+    message._data?.fileName,
+    message.rawData?.filename,
+    message.mediaData?.filename,
+  ].map((value) => String(value || "").trim()).filter(Boolean);
+  const seen = new Set();
+  return names
+    .filter((name) => {
+      const key = name.toLowerCase();
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    })
+    .map((filename) => ({ filename }));
 }
 
 function rememberInboundFailureNotice(accountId, eventId) {
@@ -1649,6 +1671,15 @@ export async function handleInboundMessage(accountId, message, env = process.env
   if (options.ownOnly && !fromMe) return { skipped: "not_own_message" };
   if (message?.isStatus) return { skipped: "status_message" };
   const text = String(message?.body || "").trim();
+  const { chatId, from, fromMe: routeFromMe } = localWhatsAppMessageRouteFields(message);
+  const eventId = String(message.id?._serialized || `${accountId}:${chatId}:${message.timestamp || Date.now()}`).trim();
+  if (fromMe && outboundMessageIds.has(eventId)) return { skipped: "outbound_echo_id", eventId, chatId };
+  if (outboundTextRecentlySent(accountId, chatId, text, env)) {
+    return { skipped: fromMe ? "outbound_echo_text" : "outbound_echo_cross_account_text", eventId, chatId };
+  }
+  if (fromMe && outboundAttachmentsRecentlySent(accountId, chatId, inboundAttachmentEchoCandidates(message), env)) {
+    return { skipped: "outbound_echo_attachment", eventId, chatId };
+  }
   const attachments = await saveInboundMedia(accountId, message, env).catch((error) => {
     void appendEvent({
       type: "whatsapp_local_inbound_media_save_failed",
@@ -1659,12 +1690,6 @@ export async function handleInboundMessage(accountId, message, env = process.env
     return [];
   });
   if (!text && !attachments.length) return { skipped: "empty_message" };
-  const { chatId, from, fromMe: routeFromMe } = localWhatsAppMessageRouteFields(message);
-  const eventId = String(message.id?._serialized || `${accountId}:${chatId}:${message.timestamp || Date.now()}`).trim();
-  if (fromMe && outboundMessageIds.has(eventId)) return { skipped: "outbound_echo_id", eventId, chatId };
-  if (outboundTextRecentlySent(accountId, chatId, text, env)) {
-    return { skipped: fromMe ? "outbound_echo_text" : "outbound_echo_cross_account_text", eventId, chatId };
-  }
   if (fromMe && outboundAttachmentsRecentlySent(accountId, chatId, attachments, env)) {
     return { skipped: "outbound_echo_attachment", eventId, chatId };
   }
@@ -3005,7 +3030,7 @@ async function recoverLocalWhatsAppAccountAfterChatCreateError(accountId, error,
 /**
  * @param {{ chatId?: string, text?: string, accountId?: string, attachments?: Array<Record<string, unknown>>, env?: Record<string, string | undefined> }} [options]
  */
-export async function sendLocalWhatsAppMessage({ chatId = "", text = "", accountId = "", attachments = [], env = process.env } = {}) {
+export async function sendLocalWhatsAppMessage({ chatId = "", text = "", accountId = "", attachments = [], env = process.env, crossAccountEchoSuppression = true } = {}) {
   const selectedAccountId = accountId
     ? await normalizeManagedAccountId(accountId, env)
     : localWhatsAppAccountIdsForEnv(env).find((id) => accountStates.get(id)?.ready);
@@ -3021,7 +3046,7 @@ export async function sendLocalWhatsAppMessage({ chatId = "", text = "", account
   try {
     const cleanText = String(text || "");
     if (cleanText.trim()) {
-      rememberOutboundText(selectedAccountId, chatId, cleanText, env);
+      rememberOutboundText(selectedAccountId, chatId, cleanText, env, { crossAccount: crossAccountEchoSuppression !== false });
       const message = await sendWhatsAppTextWithConfirmation({
         client: runtime.client,
         chatId,
@@ -3041,8 +3066,7 @@ export async function sendLocalWhatsAppMessage({ chatId = "", text = "", account
         })).filter((attachment) => attachment.path)
       : [];
     if (normalizedAttachments.length) {
-      const dependencies = await loadBridgeDependencies();
-      const MessageMedia = dependencies.whatsapp.MessageMedia;
+      const MessageMedia = runtime.MessageMedia || (await loadBridgeDependencies()).whatsapp.MessageMedia;
       for (const attachment of normalizedAttachments) {
         await fs.access(attachment.path);
         rememberOutboundAttachment(selectedAccountId, chatId, attachment, env);

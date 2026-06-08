@@ -613,6 +613,39 @@ test("local CLI machine token bypasses browser pairing for operator routes", asy
   assert.equal(allowed.principal.userId, "admin");
 });
 
+test("local CLI machine token can operate WhatsApp bridge routes", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-security-cli-wa-bridge-"));
+  await fs.mkdir(path.join(home, "secrets"), { recursive: true });
+  await fs.writeFile(path.join(home, "secrets", "cli-auth.json"), JSON.stringify({
+    schemaVersion: 1,
+    token: "cli-secret",
+    expiresAt: new Date(Date.now() + 60_000).toISOString(),
+  }), "utf8");
+  const env = {
+    ORKESTR_HOME: home,
+    ORKESTR_AUTH_REQUIRED: "1",
+    ORKESTR_WHATSAPP_BRIDGE_TOKEN: "wa-bridge-secret",
+  };
+
+  const allowed = await authorizeHttpRequest({
+    method: "POST",
+    url: "/api/connectors/whatsapp/bridge/send-text",
+    headers: { authorization: "Bearer cli-secret" },
+    socket: { remoteAddress: "127.0.0.1" },
+  }, env);
+  const badBridgeToken = await authorizeHttpRequest({
+    method: "POST",
+    url: "/api/connectors/whatsapp/bridge/send-text",
+    headers: { authorization: "Bearer wrong-secret" },
+    socket: { remoteAddress: "127.0.0.1" },
+  }, env);
+
+  assert.equal(allowed.ok, true);
+  assert.equal(allowed.machineAuth, "cli");
+  assert.equal(badBridgeToken.ok, false);
+  assert.equal(badBridgeToken.error, "whatsapp_bridge_token_invalid");
+});
+
 test("paired browser sessions can open desktop routes without desktop-share challenge", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-security-desktop-session-"));
   const env = {

@@ -742,8 +742,47 @@ export interface TimerRecord {
   every?: string | null;
   prompt?: string;
   promptFile?: string;
+  requiredDesktop?: string;
+  requiredConnector?: string;
   enabled?: boolean;
   createdAt?: string;
+  updatedAt?: string;
+  lastRunAt?: string;
+  lastError?: string;
+}
+
+export interface AutomationRecord {
+  automationId: string;
+  rawId: string;
+  type: string;
+  provider?: string;
+  verb?: string;
+  object?: string;
+  label: string;
+  enabled: boolean;
+  targetType?: string;
+  target?: string;
+  schedule?: {
+    cadence?: string;
+    type?: string;
+    time?: string;
+    timezone?: string;
+    every?: string;
+    runAt?: string;
+    nextRunAt?: string;
+    intervalMs?: number;
+  };
+  requirements?: {
+    desktop?: string;
+    connector?: string;
+  };
+  prompt?: string;
+  promptTemplate?: string;
+  createdAt?: string;
+  updatedAt?: string;
+  lastRunAt?: string;
+  lastDeliveredAt?: string;
+  lastError?: string;
 }
 
 export interface TimerDoctorIssue {
@@ -932,6 +971,9 @@ export interface ThreadSummary {
     additionalParticipantIds?: string[];
     additionalParticipantLabels?: Record<string, string>;
     mirrorToWhatsApp?: boolean;
+    receivingAccountId?: string | null;
+    replyAccountId?: string | null;
+    bridgeAccountId?: string | null;
     senderAccountId?: string | null;
     inboundAccountId?: string | null;
     responderConnectorAccountId?: string | null;
@@ -1088,6 +1130,8 @@ export interface WhatsAppDoctorAccount extends WhatsAppAccount {
   inboundReady?: boolean;
   autostart?: boolean;
   runtimeAccountId?: string;
+  phoneIdentity?: string;
+  legacyRoleAliases?: string[];
   pairingPhoneNumber?: string;
   phoneNumber?: string;
   phone?: string;
@@ -1114,6 +1158,10 @@ export interface WhatsAppDoctorBinding {
   mirrorToWhatsApp?: boolean;
   responderAccountId?: string;
   responderConnectorAccountId?: string;
+  replyAccountId?: string;
+  bridgeAccountId?: string;
+  runtimeAccountId?: string;
+  authorizedContactIds?: string[];
   accountIds?: string[];
   acl?: {
     send?: { mode?: string; users?: string[] };
@@ -1247,6 +1295,11 @@ export interface WhatsAppAccount {
   id?: string;
   label?: string;
   name?: string;
+  runtimeAccountId?: string;
+  phoneIdentity?: string;
+  phoneNumber?: string;
+  contactId?: string;
+  legacyRoleAliases?: string[];
   state?: string;
   ready?: boolean;
   qrUrl?: string;
@@ -1285,6 +1338,9 @@ export interface WhatsAppChatsResponse {
 export interface WhatsAppChatCreateResponse {
   ok: boolean;
   chat: WhatsAppChat;
+  receivingAccountId?: string;
+  replyAccountId?: string;
+  bridgeAccountId?: string;
   senderAccountId?: string;
   responderAccountId?: string;
   senderContactId?: string;
@@ -1945,12 +2001,52 @@ export class ApiService {
     return this.http.get<{ timers: TimerRecord[] }>(this.api("/timers"));
   }
 
+  automations(): Observable<{ automations: AutomationRecord[] }> {
+    return this.http.get<{ automations: AutomationRecord[] }>(this.api("/automations"));
+  }
+
   timerDoctor(): Observable<TimerDoctorResponse> {
     return this.http.get<TimerDoctorResponse>(this.api("/timers/doctor"));
   }
 
   createTimer(body: Record<string, string>): Observable<{ timer: TimerRecord }> {
     return this.http.post<{ timer: TimerRecord }>(this.api("/timers"), body);
+  }
+
+  createAutomation(body: Record<string, unknown>): Observable<{ automation: AutomationRecord }> {
+    return this.http.post<{ automation: AutomationRecord }>(this.api("/automations"), body);
+  }
+
+  updateAutomation(id: string, body: Record<string, unknown>): Observable<{ automation: AutomationRecord }> {
+    return this.http.patch<{ automation: AutomationRecord }>(this.api(`/automations/${encodeURIComponent(id)}`), body);
+  }
+
+  pauseAutomation(id: string): Observable<{ automation: AutomationRecord }> {
+    return this.http.post<{ automation: AutomationRecord }>(this.api(`/automations/${encodeURIComponent(id)}/pause`), {});
+  }
+
+  resumeAutomation(id: string): Observable<{ automation: AutomationRecord }> {
+    return this.http.post<{ automation: AutomationRecord }>(this.api(`/automations/${encodeURIComponent(id)}/resume`), {});
+  }
+
+  runAutomation(id: string): Observable<unknown> {
+    return this.http.post(this.api(`/automations/${encodeURIComponent(id)}/run`), {});
+  }
+
+  deleteAutomation(id: string): Observable<unknown> {
+    return this.http.delete(this.api(`/automations/${encodeURIComponent(id)}`));
+  }
+
+  updateTimer(id: string, body: Record<string, unknown>): Observable<{ timer: TimerRecord }> {
+    return this.http.patch<{ timer: TimerRecord }>(this.api(`/timers/${encodeURIComponent(id)}`), body);
+  }
+
+  pauseTimer(id: string): Observable<{ timer: TimerRecord }> {
+    return this.http.post<{ timer: TimerRecord }>(this.api(`/timers/${encodeURIComponent(id)}/pause`), {});
+  }
+
+  resumeTimer(id: string): Observable<{ timer: TimerRecord }> {
+    return this.http.post<{ timer: TimerRecord }>(this.api(`/timers/${encodeURIComponent(id)}/resume`), {});
   }
 
   runTimer(id: string): Observable<unknown> {
@@ -2186,6 +2282,14 @@ export class ApiService {
 
   createThreadTimer(id: string, body: Record<string, string>): Observable<{ timer: TimerRecord }> {
     return this.http.post<{ timer: TimerRecord }>(this.api(`/threads/${encodeURIComponent(id)}/timers`), body);
+  }
+
+  pauseThreadTimer(id: string, timerId: string): Observable<{ timer: TimerRecord }> {
+    return this.http.post<{ timer: TimerRecord }>(this.api(`/threads/${encodeURIComponent(id)}/timers/${encodeURIComponent(timerId)}/pause`), {});
+  }
+
+  resumeThreadTimer(id: string, timerId: string): Observable<{ timer: TimerRecord }> {
+    return this.http.post<{ timer: TimerRecord }>(this.api(`/threads/${encodeURIComponent(id)}/timers/${encodeURIComponent(timerId)}/resume`), {});
   }
 
   deleteThreadTimer(id: string, timerId: string): Observable<unknown> {

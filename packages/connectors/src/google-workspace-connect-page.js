@@ -14,9 +14,9 @@ function escapeHtml(value = "") {
 }
 
 export function googleWorkspaceConnectHtml({ connectId = "", request = {}, error = "" } = {}) {
-  void request;
   const capabilities = googleWorkspaceCapabilityDefinitions();
   const safeConnect = escapeHtml(connectId);
+  const safeAccount = escapeHtml(request?.account || "");
   const hidden = `<input type="hidden" name="connect" value="${safeConnect}">`;
   const rows = capabilities.map((capability, index) => {
     const checked = index === 0 ? " checked" : "";
@@ -27,6 +27,7 @@ export function googleWorkspaceConnectHtml({ connectId = "", request = {}, error
     : `<p>Choose the Google Workspace capabilities Orkestr may use for this chat before continuing to Google OAuth.</p>
       <form method="get" action="/connect/google/start">
         ${hidden}
+        <label class="field"><strong>Google account email</strong><input type="email" name="account" value="${safeAccount}" autocomplete="email" required></label>
         <div class="options">${rows}</div>
         <p class="notice">Orkestr requests only the scopes for the selected capabilities. Optional scopes that Google does not grant stay disabled. Drive uses selected-file access only.</p>
         <button type="submit">Continue to Google</button>
@@ -43,6 +44,8 @@ export function googleWorkspaceConnectHtml({ connectId = "", request = {}, error
     h1 { font-size: 32px; line-height: 1.15; margin: 0 0 12px; letter-spacing: 0; }
     p { line-height: 1.5; }
     .options { display: grid; gap: 10px; margin: 24px 0; }
+    .field { display: grid; gap: 6px; margin: 24px 0 12px; }
+    .field input { min-height: 42px; border: 1px solid #b8c1ca; border-radius: 6px; padding: 8px 10px; font: inherit; background: white; color: #172026; }
     .option { display: grid; grid-template-columns: 24px 1fr; gap: 4px 10px; align-items: start; padding: 14px; border: 1px solid #d3d8dc; border-radius: 8px; background: white; }
     .option input { margin-top: 3px; }
     .option span { grid-column: 2; color: #52606d; }

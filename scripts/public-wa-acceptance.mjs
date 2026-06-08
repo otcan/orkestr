@@ -38,7 +38,7 @@ function parseArgs(argv = [], env = process.env) {
     requireWaHistory: env.ORKESTR_PUBLIC_ACCEPTANCE_WA_HISTORY !== "0",
     thread: clean(env.ORKESTR_PUBLIC_ACCEPTANCE_THREAD || "onboarding-admin-public"),
     chatId: clean(env.ORKESTR_PUBLIC_ACCEPTANCE_CHAT_ID),
-    accountId: clean(env.ORKESTR_PUBLIC_ACCEPTANCE_ACCOUNT_ID || "sender"),
+    accountId: clean(env.ORKESTR_PUBLIC_ACCEPTANCE_ACCOUNT_ID || "responder"),
     from: clean(env.ORKESTR_PUBLIC_ACCEPTANCE_FROM),
     requireRouteMode: clean(env.ORKESTR_PUBLIC_ACCEPTANCE_REQUIRE_ROUTE_MODE),
     requireTargetSource: clean(env.ORKESTR_PUBLIC_ACCEPTANCE_REQUIRE_TARGET_SOURCE),
@@ -113,7 +113,7 @@ function parseArgs(argv = [], env = process.env) {
   if (!options.from) throw new Error("from_required");
   if (!Number.isFinite(options.timeoutMs) || options.timeoutMs < 1000) throw new Error("invalid_timeout_ms");
   if (!Number.isFinite(options.pollMs) || options.pollMs < 100) throw new Error("invalid_poll_ms");
-  if (options.mode !== "tenant-forward") throw new Error("only tenant-forward mode is implemented; pair the sender account before adding sender-web mode");
+  if (options.mode !== "tenant-forward") throw new Error("only tenant-forward mode is implemented; pair the receiving WhatsApp identity before adding sender-web mode");
   return options;
 }
 
@@ -136,7 +136,7 @@ function printHelp() {
     "  --parent-wa-token TOK  Parent WA bridge bearer token. Prefer ORKESTR_PUBLIC_ACCEPTANCE_PARENT_WA_TOKEN.",
     "  --thread ID           Public tenant thread id. Default: onboarding-admin-public",
     "  --chat-id ID          WhatsApp chat id routed to the public tenant. Required with --execute.",
-    "  --account-id ID       Parent WhatsApp inbound account id. Default: sender",
+    "  --account-id ID       Receiving bridge identity. Default: configured reply alias unless overridden.",
     "  --from ID             Sender contact id for the synthetic inbound event. Required with --execute.",
     "  --require-route-mode MODE  Require the forward result routeMode, for example broker.",
     "  --require-target-source SRC Require the forward result targetSource, for example broker.",
@@ -144,7 +144,7 @@ function printHelp() {
     "  --case LIST           exact,web,desktop,private,timer or all.",
     "  --no-wa-history       Skip parent WhatsApp history verification.",
     "",
-    "This does not exercise phone-authored inbound delivery unless the sender WhatsApp account is paired.",
+    "This does not exercise phone-authored inbound delivery unless the selected receiving WhatsApp identity is paired.",
   ].join("\n"));
 }
 

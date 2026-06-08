@@ -37,6 +37,8 @@ function splitAutomationId(id = "", fallbackType = "") {
 }
 
 function timerAutomation(timer = {}) {
+  const requiredDesktop = clean(timer.requiredDesktop || timer.desktopSlug || timer.requiresDesktop);
+  const requiredConnector = clean(timer.requiredConnector || timer.connector || timer.requiresConnector);
   return {
     automationId: `timer:${clean(timer.id)}`,
     rawId: clean(timer.id),
@@ -55,6 +57,10 @@ function timerAutomation(timer = {}) {
       every: clean(timer.every),
       runAt: clean(timer.runAt),
       nextRunAt: clean(timer.nextRunAt),
+    },
+    requirements: {
+      desktop: requiredDesktop,
+      connector: requiredConnector,
     },
     prompt: clean(timer.prompt),
     createdAt: clean(timer.createdAt),
@@ -139,13 +145,15 @@ function timerInput(args = {}, thread = null, timezone = "") {
     timezone: clean(args.timezone || args.timeZone || timezone),
     every: clean(args.every || args.interval),
     prompt: clean(args.prompt),
+    requiredDesktop: clean(args.requiredDesktop || args.desktopSlug || args.requiresDesktop),
+    requiredConnector: clean(args.requiredConnector || args.connector || args.requiresConnector),
     enabled: args.enabled !== false,
   };
 }
 
 function timerPatch(args = {}, thread = null) {
   const patch = {};
-  for (const key of ["label", "cadence", "delay", "runAt", "time", "timezone", "timeZone", "every", "prompt", "targetType", "target"]) {
+  for (const key of ["label", "cadence", "delay", "runAt", "time", "timezone", "timeZone", "every", "prompt", "targetType", "target", "requiredDesktop", "desktopSlug", "requiresDesktop", "requiredConnector", "connector", "requiresConnector"]) {
     if (hasPatchValue(args, key)) patch[key] = args[key];
   }
   const enabled = boolPatchValue(args, "enabled");

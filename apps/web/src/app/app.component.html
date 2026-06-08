@@ -60,7 +60,7 @@
       <nav class="user-mode-nav" aria-label="User navigation">
         <button class="secondary" type="button" [class.active]="isUserNavPanelActive('chat')" (click)="openPanel('chat')">Chat</button>
         <button class="secondary" type="button" [class.active]="isUserNavPanelActive('files')" (click)="openPanel('files')">Files</button>
-        <button class="secondary" type="button" [class.active]="isUserNavPanelActive('userTimers')" (click)="openPanel('userTimers')">Timers</button>
+        <button class="secondary" type="button" [class.active]="isUserNavPanelActive('userTimers')" (click)="openPanel('userTimers')">Automations</button>
         <button class="secondary" type="button" [class.active]="isUserNavPanelActive('userDesk')" (click)="openPanel('userDesk')">Desk</button>
         <button class="secondary" type="button" [class.active]="isUserNavPanelActive('userConnectors')" (click)="openPanel('userConnectors')">Connectors</button>
       </nav>
@@ -828,15 +828,32 @@
           </form>
           <div class="compact-list">
             @for (timer of timers; track timer.id) {
-              <article class="timer-row">
+              <article class="timer-row automation-row" [class.paused]="timer.enabled === false">
                 <div>
-                  <strong>{{ timer.label }}</strong>
-                  <p>{{ timer.cadence }} · next {{ timer.nextRunAt | date: "MMM d, HH:mm" }}</p>
+                  <div class="automation-heading">
+                    <strong>{{ timer.label }}</strong>
+                    <span [class.ready]="timer.enabled !== false" [class.bad]="timer.enabled === false">
+                      {{ timer.enabled === false ? "Paused" : "Enabled" }}
+                    </span>
+                  </div>
+                  <p>{{ timer.cadence }} · next {{ timer.enabled === false ? "paused" : (timer.nextRunAt | date: "MMM d, HH:mm") }}</p>
                   @if (timer.promptFile) {
                     <small>{{ timer.promptFile }}</small>
                   }
+                  @if (timer.requiredConnector || timer.requiredDesktop) {
+                    <small>{{ timer.requiredConnector ? timer.requiredConnector + " connector" : "" }}{{ timer.requiredConnector && timer.requiredDesktop ? " · " : "" }}{{ timer.requiredDesktop ? timer.requiredDesktop + " desktop" : "" }}</small>
+                  }
+                  @if (timer.lastError) {
+                    <small class="bad">Last error: {{ timer.lastError }}</small>
+                  }
                 </div>
-                <button class="secondary danger-soft" type="button" (click)="deleteTimer(timer)" [disabled]="busy">Delete</button>
+                <div class="timer-actions">
+                  <button class="secondary" type="button" (click)="runTimer(timer)" [disabled]="busy">Run once</button>
+                  <button class="secondary" type="button" (click)="toggleTimer(timer)" [disabled]="busy">
+                    {{ timer.enabled === false ? "Resume" : "Pause" }}
+                  </button>
+                  <button class="secondary danger-soft" type="button" (click)="deleteTimer(timer)" [disabled]="busy">Delete</button>
+                </div>
               </article>
             } @empty {
               <p class="empty">No timers for this thread.</p>
@@ -899,7 +916,7 @@
 
               <div class="wa-summary-strip" aria-label="WhatsApp connection summary">
                 <div>
-                  <span>Inbound account</span>
+                  <span>Receiving account</span>
                   <strong>{{ selectedWhatsAppInboundAccountLabel() }}</strong>
                   <small>{{ selectedWhatsAppInboundAccountStateLabel() }}</small>
                 </div>
@@ -930,7 +947,7 @@
                       <strong>{{ whatsappDisplayName || whatsappChatLabel(thread) }}</strong>
                       <span>Chat id</span>
                       <strong>{{ whatsappChatId || thread.binding?.chatId }}</strong>
-                      <span>Inbound account</span>
+                      <span>Receiving account</span>
                       <strong>{{ selectedWhatsAppInboundAccountLabel() }}</strong>
                       <span>Reply account</span>
                       <strong>{{ selectedWhatsAppReplyAccountLabel() }}</strong>
@@ -958,15 +975,15 @@
                       <span>Allow messages from additional chat participants</span>
                     </label>
                     <div class="settings-facts">
-                      <span>Linked inbound account</span>
-                      <strong>{{ selectedWhatsAppInboundAccountLabel() }}</strong>
+                      <span>Authorized owner contact</span>
+                      <strong>{{ whatsappOwnerContactLabel(thread) }}</strong>
                       @if (whatsappAllowOtherPeople) {
                         <span>Allowed participants</span>
                         <strong>{{ whatsappParticipantsLoading ? "Checking" : whatsappAdditionalParticipantCount(thread) }}</strong>
                       }
                     </div>
                     @if (!whatsappAllowOtherPeople) {
-                      <p class="helper">Additional participants are off. Orkestr only listens to the linked inbound account.</p>
+                      <p class="helper">Additional participants are off. Orkestr only accepts messages from the saved owner contact.</p>
                     } @else if (whatsappParticipants.length > 0 || whatsappSavedAdditionalParticipants(thread).length > 0) {
                       <div class="wa-participant-list">
                         @for (participant of whatsappSelectableParticipants(thread); track participant.id) {
@@ -999,10 +1016,10 @@
                         }
                       </div>
                       @if (whatsappSelectableParticipants(thread).length === 0 && whatsappSavedAdditionalParticipants(thread).length === 0) {
-                        <p class="helper">No extra participants are available. The linked inbound account can already message Orkestr.</p>
+                        <p class="helper">No extra participants are available. The saved owner contact can already message Orkestr.</p>
                       }
                     } @else if (!whatsappParticipantsLoading) {
-                      <p class="helper">The participant list is unavailable until the selected inbound account is connected and the chat can be inspected. Orkestr can still listen to the linked inbound account.</p>
+                      <p class="helper">The participant list is unavailable until the receiving WhatsApp account can inspect the chat. Orkestr can still listen to the saved owner contact.</p>
                     }
                     <div class="settings-actions">
                       <button type="button" (click)="saveThreadBinding(thread)" [disabled]="busy || savingThreadBinding || !threadBindingDirty(thread)">
@@ -1020,12 +1037,12 @@
                     <div class="wa-section-head">
                       <span class="wa-step">1</span>
                       <div>
-                        <h4>Inbound account</h4>
-                        <small>Select the WhatsApp account whose chat messages Orkestr should listen to.</small>
+                        <h4>Receiving account</h4>
+                        <small>Select the paired WhatsApp account that receives this chat's group events.</small>
                       </div>
                     </div>
                     <label class="settings-field">
-                      <span>Listen with</span>
+                      <span>Receive with</span>
                       <select
                         name="thread-wa-sender-account-select-{{ thread.id }}"
                         [ngModel]="selectedWhatsAppInboundAccountId()"
@@ -1042,10 +1059,10 @@
                     </label>
                     <div class="settings-actions compact-actions">
                       <button type="button" (click)="startSelectedWhatsAppInboundAccount()" [disabled]="busy || !canLoadLocalWhatsAppChats(selectedWhatsAppInboundAccountId())">
-                        Connect inbound account
+                        Connect receiving account
                       </button>
                       <button class="secondary" type="button" (click)="logoutSelectedWhatsAppInboundAccount()" [disabled]="busy || !canLoadLocalWhatsAppChats(selectedWhatsAppInboundAccountId())">
-                        Disconnect inbound account
+                        Disconnect receiving account
                       </button>
                     </div>
                   </section>

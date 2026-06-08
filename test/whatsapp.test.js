@@ -13,7 +13,7 @@ import { listRouterTraces } from "../packages/core/src/router-traces.js";
 import { getSetupStatus } from "../packages/core/src/setup.js";
 import { appendThreadMessage, createThread, enqueueThreadInput, getThread, listThreadMessages, listThreads, updateThreadMessage } from "../packages/core/src/threads.js";
 import { createUser, linkUserPrivateIdentity } from "../packages/core/src/users.js";
-import { deliverWhatsAppReplies, formatWhatsAppOutboundText, getWhatsAppChatParticipants, getWhatsAppStatus, initialQueueDeliveryState, mapLocalWhatsAppStatusFromHealth, routeWhatsAppInbound, sendWhatsAppText, syncWhatsAppTypingIndicators } from "../packages/connectors/src/whatsapp.js";
+import { deliverWhatsAppReplies, formatWhatsAppOutboundText, getWhatsAppChatMessages, getWhatsAppChatParticipants, getWhatsAppStatus, initialQueueDeliveryState, mapLocalWhatsAppStatusFromHealth, routeWhatsAppInbound, sendWhatsAppText, syncWhatsAppTypingIndicators } from "../packages/connectors/src/whatsapp.js";
 import { cleanupLocalWhatsAppChromeLocks, clearLocalWhatsAppChatTypingState, createLocalWhatsAppChat, forwardLocalWhatsAppInbound, getLocalWhatsAppBridgeStatus, handleInboundMessage, inboundRoutingFailureNoticeText, listLocalWhatsAppChats, localWhatsAppAccountIdsForEnv, localWhatsAppConnectedPageReadyFallbackEligible, localWhatsAppInboundForwardTarget, localWhatsAppMessageRouteFields, localWhatsAppReadyFallbackEligible, localWhatsAppTypingClearRetryDelaysMs, localWhatsAppUnreadRecoveryBoundChats, localWhatsAppUnreadRecoveryIntervalMs, normalizeGroupParticipantIds, recoverConfiguredLocalWhatsAppAccounts, recoverUnreadLocalWhatsAppMessages, recoverableLocalWhatsAppAccountIds, reduceLocalWhatsAppBridgeState, resetLocalWhatsAppBridgeForTest, sendLocalWhatsAppMessage, sendWhatsAppTextWithConfirmation, setLocalWhatsAppRuntimeForTest, setLocalWhatsAppRuntimeRecoveryHooksForTest, startLocalWhatsAppAccount, startLocalWhatsAppTyping, stopLocalWhatsAppTyping, webCacheRoot } from "../packages/connectors/src/whatsapp-local-bridge.js";
 import { routedWhatsAppTypingTarget, runWithRoutedWhatsAppTyping } from "../packages/connectors/src/whatsapp-router-typing.js";
 import { createAndBindWhatsAppThreadGroup } from "../packages/connectors/src/whatsapp-thread-groups.js";
@@ -696,7 +696,7 @@ test("local whatsapp bridge exposes public account identity without session inte
     setLocalWhatsAppRuntimeForTest("responder", {
       client: {
         info: {
-          wid: { user: "4917632400662", server: "c.us", _serialized: "4917632400662@c.us" },
+          wid: { user: "15551234567", server: "c.us", _serialized: "15551234567@c.us" },
           pushname: "Responder Phone",
         },
       },
@@ -704,12 +704,13 @@ test("local whatsapp bridge exposes public account identity without session inte
 
     const bridgeStatus = await getLocalWhatsAppBridgeStatus(env);
     const status = await getWhatsAppStatus(env);
-    const account = status.accounts.find((entry) => entry.accountId === "responder");
+    const account = status.accounts.find((entry) => entry.accountId === "15551234567");
 
-    assert.equal(bridgeStatus.accounts[0].phoneNumber, "+4917632400662");
-    assert.equal(bridgeStatus.accounts[0].contactId, "4917632400662@c.us");
-    assert.equal(account.phoneNumber, "+4917632400662");
-    assert.equal(account.contactId, "4917632400662@c.us");
+    assert.equal(bridgeStatus.accounts[0].phoneNumber, "+15551234567");
+    assert.equal(bridgeStatus.accounts[0].contactId, "15551234567@c.us");
+    assert.equal(account.runtimeAccountId, "responder");
+    assert.equal(account.phoneNumber, "+15551234567");
+    assert.equal(account.contactId, "15551234567@c.us");
     assert.equal(account.pushName, "Responder Phone");
     assert.equal(Object.hasOwn(account, "sessionRoot"), false);
     assert.equal(Object.hasOwn(account, "clientId"), false);
@@ -1027,6 +1028,11 @@ test("local whatsapp inbound ignores recent outbound attachment echoes", async (
   await fs.writeFile(attachmentPath, body);
   const sent = [];
   const runtime = {
+    MessageMedia: {
+      fromFilePath(filePath) {
+        return { filePath };
+      },
+    },
     client: {
       async sendMessage(to, media, options) {
         sent.push({ to, media, options });
@@ -1114,6 +1120,102 @@ test("local whatsapp inbound ignores outbound text echoed through another local 
     assert.equal(sent[0].to, chatId);
     assert.equal(result.skipped, "outbound_echo_cross_account_text");
     assert.equal(result.chatId, chatId);
+  } finally {
+    await resetLocalWhatsAppBridgeForTest(env);
+  }
+});
+
+test("local whatsapp e2e sender sends can be visible to responder routing", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-cross-account-visible-"));
+  const env = {
+    ORKESTR_HOME: home,
+    ORKESTR_WHATSAPP_ACCOUNT_IDS: "sender,responder",
+    ORKESTR_WHATSAPP_SEND_CONFIRMATION_REQUIRED: "0",
+  };
+  const chatId = "chat-cross-account-visible@g.us";
+  const text = "Real transport e2e should be visible to the responder account.";
+  const sent = [];
+  const senderRuntime = {
+    client: {
+      async sendMessage(to, body) {
+        sent.push({ to, body });
+        return { id: { _serialized: `true_${chatId}_sender-outbound` } };
+      },
+    },
+  };
+
+  try {
+    setLocalWhatsAppRuntimeForTest("sender", senderRuntime, {}, env);
+    await sendLocalWhatsAppMessage({
+      accountId: "sender",
+      chatId,
+      text,
+      env,
+      crossAccountEchoSuppression: false,
+    });
+
+    const result = await handleInboundMessage("responder", {
+      id: { _serialized: `false_${chatId}_responder-observed-sender`, remote: chatId },
+      from: chatId,
+      to: "responder@c.us",
+      author: "sender@lid",
+      fromMe: false,
+      body: text,
+      timestamp: 1_780_000_000,
+    }, env);
+
+    assert.equal(sent.length, 1);
+    assert.equal(sent[0].to, chatId);
+    assert.notEqual(result.skipped, "outbound_echo_cross_account_text");
+    assert.equal(result.error, "whatsapp_target_required");
+  } finally {
+    await resetLocalWhatsAppBridgeForTest(env);
+  }
+});
+
+test("local whatsapp e2e sender sends clear stale cross-account echo keys", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-cross-account-clear-"));
+  const env = {
+    ORKESTR_HOME: home,
+    ORKESTR_WHATSAPP_ACCOUNT_IDS: "sender,responder",
+    ORKESTR_WHATSAPP_SEND_CONFIRMATION_REQUIRED: "0",
+  };
+  const chatId = "chat-cross-account-clear@g.us";
+  const text = "/connect google";
+  const sent = [];
+  const senderRuntime = {
+    client: {
+      async sendMessage(to, body) {
+        sent.push({ to, body });
+        return { id: { _serialized: `true_${chatId}_sender-outbound-${sent.length}` } };
+      },
+    },
+  };
+
+  try {
+    setLocalWhatsAppRuntimeForTest("sender", senderRuntime, {}, env);
+    await sendLocalWhatsAppMessage({ accountId: "sender", chatId, text, env });
+    await sendLocalWhatsAppMessage({
+      accountId: "sender",
+      chatId,
+      text,
+      env,
+      crossAccountEchoSuppression: false,
+    });
+
+    const result = await handleInboundMessage("responder", {
+      id: { _serialized: `false_${chatId}_responder-observed-sender`, remote: chatId },
+      from: chatId,
+      to: "responder@c.us",
+      author: "sender@lid",
+      fromMe: false,
+      body: text,
+      timestamp: 1_780_000_000,
+    }, env);
+
+    assert.equal(sent.length, 2);
+    assert.notEqual(result.skipped, "outbound_echo_cross_account_text");
+    assert.equal(result.error, "whatsapp_target_required");
   } finally {
     await resetLocalWhatsAppBridgeForTest(env);
   }
@@ -1365,7 +1467,7 @@ test("local whatsapp phone pairing replaces an existing qr runtime", async () =>
       qrAvailable: true,
     }, env);
     const result = await startLocalWhatsAppAccount("sender", env, {
-      phoneNumber: "+4917632400662",
+      phoneNumber: "+15551234567",
       loadBridgeDependencies: async () => ({
         whatsapp: { Client, LocalAuth },
         qrcode: {},
@@ -1373,7 +1475,7 @@ test("local whatsapp phone pairing replaces an existing qr runtime", async () =>
     });
 
     assert.equal(calls.includes("destroy-existing"), true);
-    assert.deepEqual(calls.find((call) => Array.isArray(call) && call[0] === "client"), ["client", "4917632400662"]);
+    assert.deepEqual(calls.find((call) => Array.isArray(call) && call[0] === "client"), ["client", "15551234567"]);
     assert.equal(result.state, "starting");
     const events = await listEvents(env);
     assert.ok(events.find((event) => event.type === "whatsapp_local_pairing_runtime_replaced"));
@@ -1731,6 +1833,162 @@ test("whatsapp participants are discovered from external bridge chat metadata", 
   assert.equal(result.ready, true);
   assert.deepEqual(result.participants.map((participant) => participant.id), ["wa-contact-one@c.us", "wa-contact-two@c.us"]);
   assert.deepEqual(result.participants.map((participant) => participant.name), ["Saved Main", "Saved Other"]);
+});
+
+test("whatsapp chat history is read from external bridge", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-history-"));
+  const env = externalBridgeEnv(home);
+  await writeConnectorConfig("whatsapp", {
+    bridgeMode: "external",
+    bridgeUrl: "http://wa.local",
+    apiToken: "history-token",
+  }, env);
+
+  const calls = [];
+  const result = await getWhatsAppChatMessages({ accountId: "responder", chatId: "chat-history@g.us", limit: 3 }, env, async (url, options) => {
+    calls.push({ url, options });
+    if (url.pathname === "/health") {
+      return response({
+        ok: true,
+        ready: true,
+        accounts: [{ id: "responder", ready: true, state: "ready" }],
+      });
+    }
+    assert.equal(url.pathname, "/api/chats/chat-history%40g.us/history");
+    assert.equal(url.searchParams.get("accountId"), "responder");
+    assert.equal(url.searchParams.get("limit"), "3");
+    assert.equal(options.headers.authorization, "Bearer history-token");
+    return response({
+      ok: true,
+      messages: [
+        { id: "m1", body: "/connect google", fromMe: false, from: "chat-history@g.us", author: "4917632400662@c.us", timestamp: 1780910000 },
+      ],
+    });
+  });
+
+  assert.equal(calls.length, 2);
+  assert.deepEqual(calls.map((call) => call.url.pathname), ["/health", "/api/chats/chat-history%40g.us/history"]);
+  assert.equal(result.ready, true);
+  assert.equal(result.runtimeAccountId, "responder");
+  assert.deepEqual(result.messages.map((message) => ({
+    id: message.id,
+    body: message.body,
+    fromMe: message.fromMe,
+    author: message.author,
+    timestamp: message.timestamp,
+  })), [{
+    id: "m1",
+    body: "/connect google",
+    fromMe: false,
+    author: "4917632400662@c.us",
+    timestamp: "2026-06-08T09:13:20.000Z",
+  }]);
+});
+
+test("whatsapp chat history falls back to bridge-root external endpoint", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-history-prefix-"));
+  const env = externalBridgeEnv(home);
+  await writeConnectorConfig("whatsapp", {
+    bridgeMode: "external",
+    bridgeUrl: "http://parent.local/api/connectors/whatsapp/bridge",
+  }, env);
+
+  const calls = [];
+  const result = await getWhatsAppChatMessages({ accountId: "responder", chatId: "chat-history@g.us", limit: 2 }, env, async (url) => {
+    calls.push(url.pathname);
+    if (url.pathname === "/api/connectors/whatsapp/bridge/health") {
+      return response({
+        ok: true,
+        ready: true,
+        accounts: [{ id: "responder", ready: true, state: "ready" }],
+      });
+    }
+    if (url.pathname === "/api/connectors/whatsapp/bridge/api/chats/chat-history%40g.us/history") {
+      return response({ error: "not_found" }, false, 404);
+    }
+    assert.equal(url.pathname, "/api/connectors/whatsapp/bridge/accounts/responder/chats/chat-history%40g.us/history");
+    return response({
+      ok: true,
+      messages: [
+        { id: "m2", text: "hello", fromMe: true, timestamp: "2026-06-08T10:00:00.000Z" },
+      ],
+    });
+  });
+
+  assert.deepEqual(calls, [
+    "/api/connectors/whatsapp/bridge/health",
+    "/api/connectors/whatsapp/bridge/api/chats/chat-history%40g.us/history",
+    "/api/connectors/whatsapp/bridge/accounts/responder/chats/chat-history%40g.us/history",
+  ]);
+  assert.equal(result.messages[0].body, "hello");
+  assert.equal(result.messages[0].fromMe, true);
+});
+
+test("whatsapp chat history maps numeric public account ids to runtime external account ids", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-history-numeric-"));
+  const env = externalBridgeEnv(home);
+  await writeConnectorConfig("whatsapp", { bridgeMode: "external", bridgeUrl: "http://wa.local" }, env);
+
+  const calls = [];
+  const result = await getWhatsAppChatMessages({ accountId: "4917632400662", chatId: "chat-history@g.us", limit: 1 }, env, async (url) => {
+    calls.push(url.pathname);
+    if (url.pathname === "/health") {
+      return response({
+        ok: true,
+        ready: true,
+        accounts: [
+          { id: "sender", ready: true, state: "ready", phoneNumber: "+4917632400662", contactId: "4917632400662@c.us" },
+        ],
+      });
+    }
+    assert.equal(url.pathname, "/api/chats/chat-history%40g.us/history");
+    assert.equal(url.searchParams.get("accountId"), "sender");
+    return response({
+      ok: true,
+      messages: [{ id: "m-numeric", body: "/connect google", fromMe: true, timestamp: "2026-06-08T10:00:00.000Z" }],
+    });
+  });
+
+  assert.deepEqual(calls, ["/health", "/api/chats/chat-history%40g.us/history"]);
+  assert.equal(result.runtimeAccountId, "sender");
+  assert.equal(result.messages[0].id, "m-numeric");
+});
+
+test("whatsapp external sends map numeric public account ids to runtime bridge account ids", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-send-numeric-"));
+  const env = externalBridgeEnv(home);
+  await writeConnectorConfig("whatsapp", { bridgeMode: "external", bridgeUrl: "http://wa.local" }, env);
+
+  const calls = [];
+  const sent = await sendWhatsAppText({
+    accountId: "4917632400662",
+    chatId: "chat-send@g.us",
+    text: "/connect google",
+    crossAccountEchoSuppression: false,
+    env,
+    fetchImpl: async (url, options = {}) => {
+      calls.push(url.pathname);
+      if (url.pathname === "/health") {
+        return response({
+          ok: true,
+          ready: true,
+          accounts: [
+            { id: "sender", ready: true, state: "ready", phoneNumber: "+4917632400662", contactId: "4917632400662@c.us" },
+          ],
+        });
+      }
+      assert.equal(url.pathname, "/send-text");
+      const body = JSON.parse(options.body);
+      assert.equal(body.accountId, "sender");
+      assert.equal(body.to, "chat-send@g.us");
+      assert.equal(body.text, "/connect google");
+      assert.equal(body.crossAccountEchoSuppression, false);
+      return response({ ok: true, ids: ["sent-numeric"] });
+    },
+  });
+
+  assert.deepEqual(calls, ["/health", "/send-text"]);
+  assert.deepEqual(sent.ids, ["sent-numeric"]);
 });
 
 test("whatsapp external bridge delivery preserves path prefixes", async () => {
@@ -5905,6 +6163,46 @@ test("whatsapp passive mirror completes a running thread input when the reply is
   assert.equal(parent.passiveMirrorMessageId, reply.id);
 });
 
+test("whatsapp passive mirror does not complete a newer input with an older reparented runtime notice", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-passive-stale-notice-"));
+  const env = externalBridgeEnv(home);
+  await createThread({ id: "thread-wa-passive-stale-notice", name: "WA Passive Stale Notice" }, env);
+  await writeConnectorConfig("whatsapp", {
+    bridgeMode: "external",
+    bridgeUrl: "http://wa.local",
+    threadRoutes: { "chat-passive-stale-notice": "thread-wa-passive-stale-notice" },
+  }, env);
+
+  const first = await routeWhatsAppInbound({ eventId: "wa-passive-stale-1", chatId: "chat-passive-stale-notice", text: "status?" }, env);
+  const notice = await appendThreadMessage("thread-wa-passive-stale-notice", {
+    role: "assistant",
+    source: "orkestr_runtime",
+    phase: "runtime_interrupted",
+    state: "completed",
+    text: "Codex conversation interrupted\n\nCodex reported that the active turn was interrupted.",
+    parentMessageId: first.message.id,
+    connector: "whatsapp",
+    chatId: "chat-passive-stale-notice",
+    accountId: "account-1",
+  }, env);
+  await deliverWhatsAppReplies(env, async () => response({ ok: true, ids: ["sent-stale-notice-original"] }));
+
+  const second = await routeWhatsAppInbound({ eventId: "wa-passive-stale-2", chatId: "chat-passive-stale-notice", text: "continue working" }, env);
+  await updateThreadMessage("thread-wa-passive-stale-notice", notice.id, {
+    parentMessageId: second.message.id,
+    revision: 2,
+  }, env);
+
+  const delivery = await deliverWhatsAppReplies(env, async () => response({ ok: true, ids: ["sent-stale-queue-notice"] }));
+  const messages = await listThreadMessages("thread-wa-passive-stale-notice", env);
+  const parent = messages.find((entry) => entry.id === second.message.id);
+
+  assert.equal(delivery.skipped.some((item) => item.messageId === second.message.id && item.reason === "assistant_reply_available"), false);
+  assert.equal(parent.state, "queued");
+  assert.notEqual(parent.observedVia, "whatsapp_passive_mirror_delivery");
+  assert.notEqual(parent.passiveMirrorMessageId, notice.id);
+});
+
 test("whatsapp delivery mirrors pane interruption notices", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-interruption-notice-"));
   const env = externalBridgeEnv(home);
@@ -6073,6 +6371,8 @@ test("whatsapp /connect google creates a user-scoped workspace oauth link", asyn
   assert.equal(routed.googleWorkspaceConnect, true);
   assert.equal(messages.length, 2);
   assert.equal(messages[0].observedVia, "google_workspace_connect_command");
+  assert.equal(messages[0].state, "completed");
+  assert.equal(messages[0].deliveryState, "delivered");
   assert.equal(messages[1].role, "assistant");
   assert.match(messages[1].text, /https:\/\/connect\.example\.test\/connect\/google\?connect=/);
   assert.match(messages[1].text, /Gmail read, Gmail actions, Gmail send and drafts, Calendar read, Calendar actions, Drive selected files/);

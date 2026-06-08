@@ -3,6 +3,12 @@ import { dataPaths, ensureDataDirs } from "../../storage/src/paths.js";
 import { readJson, writeJson } from "../../storage/src/store.js";
 import { assertOwnerAccess, canAccessOwner, isAdminPrincipal, policyError, resourceOwnerUserId } from "../../core/src/policy.js";
 import { adminUserId, normalizeUserId } from "../../core/src/users.js";
+import {
+  canonicalWhatsAppAccountId,
+  isWhatsAppPlaceholderAccountId,
+  whatsappAccountPhoneIdentity,
+  whatsappLegacyRoleNames,
+} from "./whatsapp-account-identity.js";
 
 function clean(value) {
   return String(value || "").trim();
@@ -32,15 +38,8 @@ function accountIdFromInput(input = {}) {
   return assertWhatsAppConnectorAccountId(clean(input.accountId || input.id || input.runtimeAccountId) || `wa-${randomUUID().slice(0, 8)}`);
 }
 
-function legacyRoleNames(env = process.env) {
-  return new Set([
-    clean(env.ORKESTR_WHATSAPP_SENDER_ROLE || env.WHATSAPP_SENDER_ROLE || "sender"),
-    clean(env.ORKESTR_WHATSAPP_RESPONDER_ROLE || env.WHATSAPP_RESPONDER_ROLE || "responder"),
-  ].filter(Boolean).map((item) => item.toLowerCase()));
-}
-
 function isLegacyRoleAccountId(accountId = "", env = process.env) {
-  return legacyRoleNames(env).has(clean(accountId).toLowerCase());
+  return whatsappLegacyRoleNames(env).has(clean(accountId).toLowerCase());
 }
 
 function defaultOwnerUserId(input = {}, env = process.env) {
@@ -61,10 +60,17 @@ function normalizeCapabilities(value = []) {
 }
 
 function normalizeConnectorAccount(input = {}, prior = null, env = process.env) {
-  const accountId = accountIdFromInput({ ...prior, ...input });
+  const rawAccountId = accountIdFromInput({ ...prior, ...input });
+  const phoneIdentity = whatsappAccountPhoneIdentity(input) || whatsappAccountPhoneIdentity(prior || {});
+  const accountId = phoneIdentity && isWhatsAppPlaceholderAccountId(rawAccountId, env)
+    ? assertWhatsAppConnectorAccountId(phoneIdentity)
+    : rawAccountId;
   const createdAt = clean(prior?.createdAt) || nowIso();
   const displayName = clean(input.displayName || input.label || input.name || prior?.displayName || prior?.label || accountId);
-  const legacyCompatibilityAlias = input.legacyCompatibilityAlias === true || prior?.legacyCompatibilityAlias === true || isLegacyRoleAccountId(accountId, env);
+  const legacyCompatibilityAlias = input.legacyCompatibilityAlias === true ||
+    prior?.legacyCompatibilityAlias === true ||
+    isLegacyRoleAccountId(rawAccountId, env) ||
+    isLegacyRoleAccountId(clean(input.runtimeAccountId || prior?.runtimeAccountId), env);
   return {
     id: accountId,
     accountId,
@@ -73,7 +79,7 @@ function normalizeConnectorAccount(input = {}, prior = null, env = process.env) 
     ownerUserId: defaultOwnerUserId(input.ownerUserId || input.userId ? input : prior || input, env),
     displayName,
     label: clean(input.label || input.displayName || prior?.label || displayName),
-    runtimeAccountId: clean(input.runtimeAccountId || prior?.runtimeAccountId || accountId),
+    runtimeAccountId: clean(input.runtimeAccountId || prior?.runtimeAccountId || (accountId !== rawAccountId ? rawAccountId : accountId)),
     sessionRef: clean(input.sessionRef || prior?.sessionRef) || `whatsapp:${accountId}`,
     autostart: input.autostart === undefined ? Boolean(prior?.autostart) : input.autostart === true,
     capabilities: normalizeCapabilities(input.capabilities || prior?.capabilities),
@@ -137,7 +143,8 @@ export function assertWhatsAppConnectorAccountAccess(account = {}, principal = {
 }
 
 export async function upsertWhatsAppConnectorAccount(input = {}, env = process.env) {
-  const accountId = accountIdFromInput(input);
+  const rawAccountId = accountIdFromInput(input);
+  const accountId = canonicalWhatsAppAccountId({ ...input, accountId: rawAccountId }, env) || rawAccountId;
   const state = await readWhatsAppState(env);
   const accounts = Array.isArray(state.connectorAccounts) ? state.connectorAccounts : [];
   const index = accounts.findIndex((account) => clean(account.accountId || account.id) === accountId);

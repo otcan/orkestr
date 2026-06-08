@@ -89,15 +89,20 @@ test("api session binding persists and mirrors assistant output through the boun
   assert.equal(assistant.message.apiSessionId, "api-session-1");
 
   const calls = [];
-  const delivery = await deliverWhatsAppReplies(runtimeEnv, async (_url, options = {}) => {
-    calls.push(JSON.parse(String(options.body || "{}")));
+  const delivery = await deliverWhatsAppReplies(runtimeEnv, async (url, options = {}) => {
+    calls.push({
+      url: String(url),
+      body: JSON.parse(String(options.body || "{}")),
+    });
     return response({ ok: true, ids: ["sent-1"] });
   });
+  const sendCall = calls.find((call) => call.url.endsWith("/send-text"));
 
   assert.equal(delivery.delivered.length, 1);
   assert.equal(delivery.delivered[0].messageId, assistant.message.id);
-  assert.equal(calls[0].to, "chat-1");
-  assert.match(calls[0].text, /router skipped the outbound intent/);
+  assert.ok(sendCall);
+  assert.equal(sendCall.body.to, "chat-1");
+  assert.match(sendCall.body.text, /router skipped the outbound intent/);
 });
 
 test("watcher alerts create the configured watcher thread, redact secrets, and dedupe repeats", async () => {

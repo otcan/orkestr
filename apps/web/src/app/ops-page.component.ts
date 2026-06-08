@@ -1092,7 +1092,7 @@ export class OpsPageComponent implements OnInit, OnDestroy {
     return [
       route.chatName || route.chatId || "WhatsApp route",
       route.routeMode || "route",
-      route.accountId ? `Account ID ${route.accountId}` : "",
+      route.accountId ? `identity ${route.accountId}` : "",
     ].filter(Boolean).join(" · ");
   }
 
@@ -1353,24 +1353,15 @@ export class OpsPageComponent implements OnInit, OnDestroy {
   brokerAccountHistory(): Array<{ phone: string; accountId: string; state: string; source: string; detail: string }> {
     const rows: Array<{ phone: string; accountId: string; state: string; source: string; detail: string }> = [];
     for (const account of this.whatsappAccounts()) {
-      const phone = String(account.phoneNumber || account.phone || account.number || account.pairingPhoneNumber || "").trim();
-      if (phone) {
-        rows.push({
-          phone,
-          accountId: String(account.accountId || account.id || ""),
-          state: account.ready ? "ready" : String(account.state || "not ready"),
-          source: "current diagnostics",
-          detail: "Current embedded Broker account diagnostic.",
-        });
-      }
-    }
-    if (!rows.some((row) => row.phone.includes("4917632400662") || row.phone.includes("+4917632400662"))) {
+      const phone = String(account.phoneNumber || account.phoneIdentity || account.phone || account.number || account.pairingPhoneNumber || "").trim();
       rows.push({
-        phone: "+4917632400662",
-        accountId: "main",
-        state: "not in current embedded Broker accounts",
-        source: "recent standalone bridge history",
-        detail: "Seen as the recently paired standalone WhatsApp bridge account, but current Broker diagnostics only expose configured IDs such as sender/responder.",
+        phone: phone || "No WhatsApp number",
+        accountId: String(account.accountId || account.id || ""),
+        state: account.ready ? "ready" : String(account.state || "not ready"),
+        source: "current diagnostics",
+        detail: phone
+          ? "Current embedded Broker account diagnostic."
+          : "This account has no WhatsApp number yet; pair or reconnect it before using it as a routable identity.",
       });
     }
     return rows;
@@ -1465,7 +1456,7 @@ export class OpsPageComponent implements OnInit, OnDestroy {
   }
 
   whatsappAccountLabel(account: WhatsAppDoctorAccount): string {
-    return String(account.accountId || account.id || account.displayName || account.label || account.name || "WhatsApp account ID").trim();
+    return String(account.phoneNumber || account.phoneIdentity || account.accountId || account.id || account.displayName || account.label || account.name || "WhatsApp identity").trim();
   }
 
   whatsappAccountIdentity(account: WhatsAppDoctorAccount): string {
@@ -1501,8 +1492,9 @@ export class OpsPageComponent implements OnInit, OnDestroy {
 
   whatsappAccountMeta(account: WhatsAppDoctorAccount): string {
     return [
-      account.accountId ? `Account ID ${account.accountId}` : "",
+      account.accountId ? `identity ${account.accountId}` : "",
       account.runtimeAccountId && account.runtimeAccountId !== account.accountId ? `runtime ${account.runtimeAccountId}` : "",
+      account.legacyRoleAliases?.length ? `legacy ${account.legacyRoleAliases.join(", ")}` : "",
       account.pushName ? `profile ${account.pushName}` : "",
       account.autostart ? "autostart" : "manual start",
       account.updatedAt ? `updated ${new Date(account.updatedAt).toLocaleString()}` : "",
@@ -1535,8 +1527,10 @@ export class OpsPageComponent implements OnInit, OnDestroy {
     return [
       binding.threadId ? `thread ${binding.threadId}` : "",
       binding.chatId ? `chat ${binding.chatId}` : "",
-      binding.responderAccountId || binding.responderConnectorAccountId ? `Account ID ${binding.responderAccountId || binding.responderConnectorAccountId}` : "",
-      binding.accountIds?.length ? `Allowed IDs ${binding.accountIds.join(", ")}` : "",
+      binding.replyAccountId || binding.responderAccountId || binding.responderConnectorAccountId ? `reply identity ${binding.replyAccountId || binding.responderAccountId || binding.responderConnectorAccountId}` : "",
+      binding.runtimeAccountId ? `runtime ${binding.runtimeAccountId}` : "",
+      binding.authorizedContactIds?.length ? `authorized contacts ${binding.authorizedContactIds.join(", ")}` : "",
+      binding.accountIds?.length ? `route aliases ${binding.accountIds.join(", ")}` : "",
     ].filter(Boolean).join(" · ");
   }
 

@@ -4,6 +4,7 @@ import { connectorAuthStatus } from "../../connectors/src/connector-auth.js";
 import { parentConnectorProvider } from "../../connectors/src/parent-connector-apps.js";
 import { userDataPaths } from "../../storage/src/paths.js";
 import { appendEvent, readJson, writeJson } from "../../storage/src/store.js";
+import { resolveDesktopProvisioningState } from "./desktop-provisioning.js";
 import { assertOwnerAccess, isAdminPrincipal } from "./policy.js";
 import { getTenantVmForOwner } from "./tenant-vm-registry.js";
 import { getUser, normalizeUserId } from "./users.js";
@@ -506,32 +507,6 @@ async function userConnectorTokenExists(userId = "", connector = "", env = proce
   }
 }
 
-function configuredVisibleDesktopSlugs(env = process.env) {
-  const raw = clean(env.ORKESTR_BROWSER_VISIBLE_SLUGS || env.ORKESTR_OPS_DESKTOP_SLUGS);
-  if (!raw) return null;
-  const slugs = raw.split(/[\s,]+/g).map((slug) => clean(slug)).filter(Boolean);
-  return slugs.length ? new Set(slugs) : null;
-}
-
-function configuredDesktopFallbackSlugs(env = process.env) {
-  return [
-    clean(env.ORKESTR_LINKEDIN_DESKTOP_SLUG || env.ORKESTR_LINKEDIN_BROWSER_SLUG),
-    clean(env.ORKESTR_DEFAULT_DESKTOP_SLUG),
-    clean(env.ORKESTR_MANUAL_INTERVENTION_DESKTOP_SLUG),
-    "desktop",
-  ].filter(Boolean);
-}
-
-function userDesktopSkillAvailable(skillId = "", snapshot = {}, env = process.env) {
-  if (snapshot.userFound !== true) return false;
-  const enabled = clean(env.ORKESTR_USER_DESKTOPS_ENABLED).toLowerCase();
-  if (["0", "false", "no"].includes(enabled)) return false;
-  const visible = configuredVisibleDesktopSlugs(env);
-  if (!visible) return true;
-  if (skillId === "linkedin") return ["linkedin", ...configuredDesktopFallbackSlugs(env)].some((slug) => visible.has(slug));
-  return visible.has(skillId);
-}
-
 function publicSkillList(skills = []) {
   return skills.map((skill) => ({
     id: skill.id,
@@ -577,7 +552,13 @@ export async function userScopedCapabilityHints({ userId = "", thread = null } =
     }),
   ));
   const hasThreadWhatsAppBinding = threadHasWhatsAppBinding(thread || {});
-  const desktopLinkedinAvailable = userDesktopSkillAvailable("linkedin", snapshot, env);
+  const desktopProvisioning = resolveDesktopProvisioningState({
+    skillId: "linkedin",
+    userFound: snapshot.userFound === true,
+    tenantVm,
+    env,
+  });
+  const desktopLinkedinAvailable = desktopProvisioning.available;
   const scopedConnectors = {
     ...tenantConnectors,
     whatsapp: tenantConnectors.whatsapp || hasThreadWhatsAppBinding,
@@ -585,7 +566,7 @@ export async function userScopedCapabilityHints({ userId = "", thread = null } =
     outlook: tenantConnectors.outlook || outlookToken,
     jira: tenantConnectors.jira || jiraToken,
     shopify: tenantConnectors.shopify || shopifyToken,
-    linkedin: tenantConnectors.linkedin || desktopLinkedinAvailable,
+    linkedin: desktopLinkedinAvailable,
   };
   const enabled = (skillId) => snapshot.skillEnabled[skillId] === true;
   const whatsappAvailable = scopedConnectors.whatsapp;
@@ -603,6 +584,7 @@ export async function userScopedCapabilityHints({ userId = "", thread = null } =
     outlook: enabled("outlook") && scopedConnectors.outlook,
     linkedin: enabled("linkedin") && linkedinAvailable,
     learning: enabled("learning"),
+    desktopProvisioning,
     hostSkills: false,
     globalConnectorAccounts: false,
     privateOperatorData: false,

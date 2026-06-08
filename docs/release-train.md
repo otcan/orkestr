@@ -138,6 +138,12 @@ The release train owns tests. Run the checks appropriate to the changed surface:
 - attended deploy/regression changes: `npm run release:regression -- --target
   local=http://127.0.0.1:$ORKESTR_PORT`, adding `--execute --thread <test-id>`
   only when a real test chat is intentionally allowed
+- attended real WhatsApp/OAuth/desktop/timer checks:
+  `npm run e2e:whatsapp-real -- --execute --thread <thread-id> --chat-id <chat-id>`.
+  See `docs/real-whatsapp-e2e.md`; this sends real WhatsApp messages and must
+  be opt-in. Unattended runs require ready sender and responder accounts.
+  Attended runs can use `--manual-send` when the operator will send the real
+  WhatsApp message from a phone/contact.
 
 If tests fail, fix clear failures inside the release train. Escalate only when
 the failure implies a product decision or contradicts a worker's intent.

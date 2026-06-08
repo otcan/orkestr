@@ -6,6 +6,13 @@ import { bindingAccountIds, whatsappBindingIsRouteEligible } from "./whatsapp-in
 import { readWhatsAppConnectorAccounts } from "./whatsapp-account-registry.js";
 import { localWhatsAppAccountIdsForEnv, localWhatsAppBridgeBasePath } from "./whatsapp-local-bridge.js";
 import {
+  canonicalWhatsAppAccountId,
+  findWhatsAppAccountByAnyId,
+  isWhatsAppPlaceholderAccountId,
+  whatsappAccountLookupKeys,
+  whatsappAccountPhoneIdentity,
+} from "./whatsapp-account-identity.js";
+import {
   assertWhatsAppBridgeTokenContext,
   bindingAcl as normalizedBindingAcl,
   whatsappAclDeniedError,
@@ -83,7 +90,11 @@ function autostartAccountIdsForEnv(env = process.env) {
 function accountAutostart(accountId = "", account = {}, env = process.env) {
   if (account.autostart === true) return true;
   const selected = autostartAccountIdsForEnv(env).map((item) => item.toLowerCase());
-  return selected.includes(pickString(accountId).toLowerCase());
+  return [
+    accountId,
+    account.runtimeAccountId,
+    ...(Array.isArray(account.legacyRoleAliases) ? account.legacyRoleAliases : []),
+  ].some((item) => selected.includes(pickString(item).toLowerCase()));
 }
 
 function configuredAccountIds(status = {}, env = process.env, registryAccounts = []) {
@@ -103,9 +114,17 @@ function configuredAccountIds(status = {}, env = process.env, registryAccounts =
 
 function statusAccountMap(status = {}) {
   const entries = Array.isArray(status.accounts) ? status.accounts : [];
-  return new Map(entries
-    .map((account) => [pickString(account.accountId, account.id), account])
-    .filter(([accountId]) => accountId));
+  const map = new Map();
+  for (const account of entries) {
+    const canonicalId = canonicalWhatsAppAccountId(account);
+    const normalized = canonicalId && canonicalId !== pickString(account.accountId, account.id)
+      ? { ...account, runtimeAccountId: pickString(account.runtimeAccountId, account.accountId, account.id), accountId: canonicalId, id: canonicalId }
+      : account;
+    for (const key of whatsappAccountLookupKeys(normalized)) {
+      if (!map.has(key)) map.set(key, normalized);
+    }
+  }
+  return map;
 }
 
 function accountState(account = {}, status = {}) {
@@ -164,8 +183,13 @@ function accountReadiness(account = {}, status = {}, { runtimeConfigured = true 
 }
 
 export function normalizeWhatsAppConnectorAccount(accountId, account = {}, { status = {}, env = process.env } = {}) {
-  const id = pickString(accountId, account.accountId, account.id);
-  const aliases = legacyRoleAliases(id, env);
+  const rawId = pickString(accountId, account.accountId, account.id);
+  const id = canonicalWhatsAppAccountId({ ...account, accountId: rawId, id: rawId }, env) || rawId;
+  const runtimeAccountId = pickString(account.runtimeAccountId, id !== rawId ? rawId : "", id);
+  const aliases = unique([
+    ...legacyRoleAliases(rawId, env),
+    ...(Array.isArray(account.legacyRoleAliases) ? account.legacyRoleAliases : []),
+  ]);
   const runtimeConfigured = account.runtimeConfigured !== false;
   const readiness = accountReadiness(account, status, { runtimeConfigured });
   return {
@@ -175,8 +199,8 @@ export function normalizeWhatsAppConnectorAccount(accountId, account = {}, { sta
     kind: "connector_account",
     neutral: true,
     ownerUserId: normalizeUserId(account.ownerUserId || ownerUserIdForAccount(env)),
-    displayName: pickString(account.displayName, account.label, account.name, id),
-    label: pickString(account.label, account.displayName, account.name, id),
+    displayName: pickString(account.displayName, account.label, account.name, account.phoneNumber, id),
+    label: pickString(account.label, account.displayName, account.name, account.phoneNumber, id),
     state: readiness.state,
     ready: readiness.ready,
     authenticated: readiness.authenticated,
@@ -200,11 +224,12 @@ export function normalizeWhatsAppConnectorAccount(accountId, account = {}, { sta
     updatedAt: pickString(account.updatedAt) || null,
     capabilities: Array.isArray(account.capabilities) && account.capabilities.length ? account.capabilities : ["status", "send", "receive", "pair"],
     sessionRef: pickString(account.sessionRef) || (id ? `whatsapp:${id}` : ""),
-    runtimeAccountId: pickString(account.runtimeAccountId, id),
-    autostart: accountAutostart(id, account, env),
+    runtimeAccountId,
+    autostart: accountAutostart(id, { ...account, runtimeAccountId, legacyRoleAliases: aliases }, env),
     createdAt: pickString(account.createdAt) || null,
     legacyRoleAliases: aliases,
-    compatibilityOnly: aliases.length > 0,
+    compatibilityOnly: aliases.length > 0 || isWhatsAppPlaceholderAccountId(rawId, env),
+    phoneIdentity: whatsappAccountPhoneIdentity({ ...account, accountId: rawId }),
     runtimeConfigured,
     nextAction: readiness.nextAction,
   };
@@ -213,18 +238,44 @@ export function normalizeWhatsAppConnectorAccount(accountId, account = {}, { sta
 export function listWhatsAppConnectorAccounts({ status = {}, env = process.env, registryAccounts = [] } = {}) {
   const accountById = statusAccountMap(status);
   const registryById = new Map((Array.isArray(registryAccounts) ? registryAccounts : [])
-    .map((account) => [pickString(account.accountId, account.id), account])
+    .map((account) => [canonicalWhatsAppAccountId(account, env) || pickString(account.accountId, account.id), account])
     .filter(([accountId]) => accountId));
   const runtimeIds = new Set(configuredAccountIds(status, env));
-  return configuredAccountIds(status, env, registryAccounts).map((accountId) => {
+  const normalized = configuredAccountIds(status, env, registryAccounts).map((accountId) => {
+    const statusAccount = accountById.get(accountId) || findWhatsAppAccountByAnyId([...accountById.values()], accountId, env) || {};
+    const canonicalId = canonicalWhatsAppAccountId(statusAccount, env) || accountId;
     const account = {
-      ...(registryById.get(accountId) || {}),
-      ...(accountById.get(accountId) || {}),
+      ...(registryById.get(accountId) || registryById.get(canonicalId) || {}),
+      ...statusAccount,
       accountId,
       runtimeConfigured: runtimeIds.has(accountId),
     };
     return normalizeWhatsAppConnectorAccount(accountId, account, { status, env });
   });
+  const byCanonicalId = new Map();
+  for (const account of normalized) {
+    const key = pickString(account.accountId, account.id).toLowerCase();
+    if (!key) continue;
+    const prior = byCanonicalId.get(key) || {};
+    byCanonicalId.set(key, {
+      ...prior,
+      ...account,
+      state: prior.ready && !account.ready ? prior.state : account.state,
+      ready: Boolean(prior.ready || account.ready),
+      authenticated: Boolean(prior.authenticated || account.authenticated),
+      paired: Boolean(prior.paired || account.paired),
+      started: Boolean(prior.started || account.started),
+      commsReady: Boolean(prior.commsReady || account.commsReady),
+      sendReady: Boolean(prior.sendReady || account.sendReady),
+      inboundReady: Boolean(prior.inboundReady || account.inboundReady),
+      qrAvailable: Boolean(prior.qrAvailable || account.qrAvailable),
+      runtimeConfigured: prior.runtimeConfigured === undefined
+        ? account.runtimeConfigured !== false
+        : prior.runtimeConfigured !== false || account.runtimeConfigured !== false,
+      nextAction: prior.ready && !account.ready ? prior.nextAction : account.nextAction,
+    });
+  }
+  return [...byCanonicalId.values()];
 }
 
 export async function listPersistentWhatsAppConnectorAccounts({ status = {}, env = process.env } = {}) {
@@ -233,7 +284,7 @@ export async function listPersistentWhatsAppConnectorAccounts({ status = {}, env
 }
 
 function responderAccountIdForBinding(binding = {}) {
-  return pickString(binding.responderConnectorAccountId, binding.responderAccountId, binding.outboundAccountId);
+  return pickString(binding.replyAccountId, binding.bridgeAccountId, binding.receivingAccountId, binding.responderConnectorAccountId, binding.responderAccountId, binding.outboundAccountId);
 }
 
 function bindingIdForThread(thread = {}, binding = {}) {
@@ -312,6 +363,9 @@ function normalizeBindingAcl(input = {}, current = {}) {
 function normalizeBindingPatch(thread = {}, input = {}) {
   const current = thread?.binding && typeof thread.binding === "object" ? thread.binding : {};
   const responderAccountId = pickString(
+    input.replyAccountId,
+    input.bridgeAccountId,
+    input.receivingAccountId,
     input.responderConnectorAccountId,
     input.responderAccountId,
     input.outboundAccountId,
@@ -345,6 +399,8 @@ function normalizeBindingPatch(thread = {}, input = {}) {
     responderConnectorAccountId: responderAccountId,
     responderAccountId,
     outboundAccountId: responderAccountId,
+    replyAccountId: responderAccountId,
+    bridgeAccountId: responderAccountId,
     mirrorToWhatsApp: optionalBoolean(input.mirrorToWhatsApp, current.mirrorToWhatsApp !== false),
     replyPrefix,
     acl: normalizeBindingAcl(input, current),
@@ -429,9 +485,9 @@ export function normalizeWhatsAppBinding(input = {}, { accounts = [], env = proc
     ...binding,
     threadId: pickString(binding.threadId, sourceThread?.id),
   });
-  const responderAccountId = responderAccountIdForBinding(binding);
-  const accountById = new Map(accounts.map((account) => [account.accountId, account]));
-  const responderAccount = responderAccountId ? accountById.get(responderAccountId) || null : null;
+  const rawResponderAccountId = responderAccountIdForBinding(binding);
+  const responderAccount = rawResponderAccountId ? findWhatsAppAccountByAnyId(accounts, rawResponderAccountId, env) : null;
+  const responderAccountId = pickString(responderAccount?.accountId, rawResponderAccountId);
   const routeEligible = whatsappBindingIsRouteEligible(binding);
   const diagnostic = bindingDiagnostic({ binding, responderAccount, routeEligible });
   const ownerUserId = normalizeUserId(binding.ownerUserId || binding.userId || (sourceThread ? resourceOwnerUserId(sourceThread, env) : env.ORKESTR_ADMIN_USER_ID || adminUserId));
@@ -443,6 +499,13 @@ export function normalizeWhatsAppBinding(input = {}, { accounts = [], env = proc
   const legacyOutboundAccountId = pickString(binding.outboundAccountId);
   const reliesOnLegacyResponder = !pickString(binding.responderConnectorAccountId) && Boolean(legacyResponderAccountId || legacyOutboundAccountId);
   const reliesOnSeparateLegacySender = Boolean(legacySenderAccountId && legacySenderAccountId !== responderAccountId);
+  const accountIds = unique([
+    ...bindingAccountIds(binding),
+    pickString(binding.targetAccountId, binding.accountId),
+    rawResponderAccountId,
+    responderAccountId,
+    ...(responderAccount ? whatsappAccountLookupKeys(responderAccount, env) : []),
+  ]);
   return {
     id: bindingId,
     bindingId,
@@ -464,7 +527,14 @@ export function normalizeWhatsAppBinding(input = {}, { accounts = [], env = proc
     displayName: pickString(binding.displayName, sourceThread?.bindingName, sourceThread?.name),
     responderAccountId,
     responderConnectorAccountId: responderAccountId || null,
-    accountIds: unique([...bindingAccountIds(binding), pickString(binding.targetAccountId, binding.accountId), responderAccountId]),
+    replyAccountId: responderAccountId,
+    bridgeAccountId: responderAccountId,
+    runtimeAccountId: pickString(responderAccount?.runtimeAccountId),
+    authorizedContactIds: unique([
+      pickString(binding.senderContactId),
+      ...(Array.isArray(binding.additionalParticipantIds) ? binding.additionalParticipantIds : []),
+    ]),
+    accountIds,
     legacyFields: {
       senderAccountId: legacySenderAccountId || null,
       responderAccountId: legacyResponderAccountId || null,

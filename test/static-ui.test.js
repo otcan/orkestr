@@ -68,6 +68,8 @@ test("server serves the public site at root and Angular UI at app routes", async
     const faviconIco = await faviconIcoResponse.text();
     const googleMarketingStartResponse = await fetch(`http://127.0.0.1:${port}/google-marketing/oauth/start`, { redirect: "manual" });
     const googleMarketingStartHtml = await googleMarketingStartResponse.text();
+    const googleWorkspaceConnectResponse = await fetch(`http://127.0.0.1:${port}/connect/google?connect=missing`);
+    const googleWorkspaceConnectHtml = await googleWorkspaceConnectResponse.text();
 
     assert.equal(response.status, 200);
     assertPublicShell(html);
@@ -107,6 +109,9 @@ test("server serves the public site at root and Angular UI at app routes", async
     assert.equal(googleMarketingStartResponse.status, 500);
     assert.ok(googleMarketingStartHtml.includes("Google Marketing auth failed"));
     assert.doesNotMatch(googleMarketingStartHtml, /<ork-root(?:\s|>)/);
+    assert.equal(googleWorkspaceConnectResponse.status, 400);
+    assert.ok(googleWorkspaceConnectHtml.includes("Connect Google Workspace"));
+    assert.doesNotMatch(googleWorkspaceConnectHtml, /<ork-root(?:\s|>)/);
   } finally {
     await new Promise((resolve) => server.close(resolve));
     if (priorHome === undefined) delete process.env.ORKESTR_HOME;
@@ -213,9 +218,9 @@ test("ops page exposes release broker inventory", async () => {
   assert.match(template, /name="broker-rollout-ref"/);
   assert.match(template, /planReleaseRollout\(\)/);
   assert.match(template, /Rollout plan/);
-  assert.match(template, /WhatsApp Account IDs/);
+  assert.match(template, /WhatsApp identities/);
   assert.match(template, /Instance Threads/);
-  assert.match(template, /Account IDs/);
+  assert.match(template, /WA identities/);
   assert.match(template, /brokerVisibleThreads\(instance\)/);
   assert.match(template, /brokerWake\(row\)/);
   assert.match(template, /brokerRecover\(row\)/);
@@ -524,16 +529,21 @@ test("thread WhatsApp settings use neutral connector account labels", async () =
   const controller = await fs.readFile("apps/server/src/modules/threads/thread-binding.controller.ts", "utf8");
   const schemas = await fs.readFile("packages/shared/src/api-schemas.js", "utf8");
 
-  assert.match(template, /Inbound account/);
+  assert.match(template, /Receiving account/);
   assert.match(template, /Reply account/);
-  assert.match(template, /Listen with/);
+  assert.match(template, /Receive with/);
   assert.match(template, /Reply with/);
   assert.doesNotMatch(template, />Sender</);
   assert.doesNotMatch(template, />Responder</);
   assert.match(component, /selectedWhatsAppReplyAccountId\(\)/);
   assert.match(component, /selectedWhatsAppInboundAccountId\(\)/);
-  assert.match(component, /responderConnectorAccountId: this\.selectedWhatsAppReplyAccountId\(\)/);
+  assert.match(component, /replyAccountId,\n\s+bridgeAccountId: replyAccountId/);
+  assert.match(component, /receivingAccountId,\n\s+inboundAccountId: receivingAccountId/);
+  assert.match(controller, /replyAccountId/);
+  assert.match(controller, /receivingAccountId/);
   assert.match(controller, /responderConnectorAccountId/);
+  assert.match(schemas, /replyAccountId/);
+  assert.match(schemas, /receivingAccountId/);
   assert.match(schemas, /responderConnectorAccountId/);
 });
 
@@ -735,7 +745,7 @@ test("web shell switches to a constrained non-admin user mode", async () => {
   assert.match(template, /class="user-mode-nav"/);
   assert.match(template, /\(click\)="openPanel\('chat'\)">Chat<\/button>/);
   assert.match(template, /\(click\)="openPanel\('files'\)">Files<\/button>/);
-  assert.match(template, /\(click\)="openPanel\('userTimers'\)">Timers<\/button>/);
+  assert.match(template, /\(click\)="openPanel\('userTimers'\)">Automations<\/button>/);
   assert.match(template, /\(click\)="openPanel\('userDesk'\)">Desk<\/button>/);
   assert.match(template, /\(click\)="openPanel\('userConnectors'\)">Connectors<\/button>/);
   assert.doesNotMatch(template, /\(click\)="openPanel\('userSkills'\)">Skills<\/button>/);
@@ -750,7 +760,7 @@ test("web shell switches to a constrained non-admin user mode", async () => {
   assert.match(styles, /\.user-mode-nav/);
 });
 
-test("web shell exposes a user timer management page", async () => {
+test("web shell exposes a user automation management page", async () => {
   const template = await fs.readFile("apps/web/src/app/app.component.html", "utf8");
   const component = await fs.readFile("apps/web/src/app/app.component.ts", "utf8");
   const timersComponent = await fs.readFile("apps/web/src/app/user-timers-page.component.ts", "utf8");
@@ -764,17 +774,26 @@ test("web shell exposes a user timer management page", async () => {
   assert.match(component, /parts\[0\] === "ng" && parts\[1\] === "timers"/);
   assert.match(component, /!this\.isRouteLevelUserPanel\(this\.activePanel\) && !this\.selectedId && this\.threads\.length/);
   assert.match(component, /panel === "userTimers"\) return "\/timers"/);
-  assert.match(component, /globalThis\.document\.title = "Timers · Orkestr"/);
+  assert.match(component, /globalThis\.document\.title = "Automations · Orkestr"/);
   assert.match(template, /<ork-user-timers-page><\/ork-user-timers-page>/);
   assert.match(template, /\(click\)="openPanel\('userTimers'\)"/);
   assert.match(timersComponent, /selector: "ork-user-timers-page"/);
   assert.match(timersComponent, /this\.api\.threads\(\)/);
-  assert.match(timersComponent, /this\.api\.timers\(\)/);
-  assert.match(timersComponent, /this\.api\.createTimer\(body\)/);
-  assert.match(timersComponent, /this\.api\.runTimer\(timer\.id\)/);
-  assert.match(timersComponent, /this\.api\.deleteTimer\(timer\.id\)/);
+  assert.match(timersComponent, /this\.api\.automations\(\)/);
+  assert.match(timersComponent, /this\.api\.createAutomation\(body\)/);
+  assert.match(timersComponent, /this\.api\.runAutomation\(automation\.automationId\)/);
+  assert.match(timersComponent, /this\.api\.pauseAutomation\(automation\.automationId\)/);
+  assert.match(timersComponent, /this\.api\.resumeAutomation\(automation\.automationId\)/);
+  assert.match(timersComponent, /this\.api\.deleteAutomation\(automation\.automationId\)/);
   assert.match(timersComponent, /targetType: "thread"/);
+  assert.match(timersTemplate, /Automations/);
   assert.match(timersTemplate, /name="user-timer-target"/);
+  assert.match(timersTemplate, /Run once/);
+  assert.match(timersTemplate, /Pause/);
+  assert.match(timersTemplate, /Resume/);
+  assert.match(api, /automations\(\): Observable<\{ automations: AutomationRecord\[\] \}>/);
+  assert.match(api, /pauseAutomation\(id: string\)/);
+  assert.match(api, /resumeAutomation\(id: string\)/);
   assert.match(api, /createTimer\(body: Record<string, string>\)/);
   assert.match(api, /deleteTimer\(id: string\)/);
   assert.match(api, /runTimer\(id: string\)/);

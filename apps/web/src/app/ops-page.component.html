@@ -79,7 +79,7 @@
         <small>{{ opsWatcherAlerts.length }} recent alerts</small>
       </article>
       <article class="ops-card" [class.critical]="whatsappDoctorCount('errors') > 0 || opsWhatsAppDoctorError">
-        <h4>WhatsApp Account IDs</h4>
+        <h4>WhatsApp identities</h4>
         <p>{{ whatsappReadyAccountCount() }} / {{ whatsappDoctorCount("accounts") || whatsappAccounts().length }}</p>
         <small>{{ opsWhatsAppDoctor?.summary || objectValue(opsWhatsApp, "summary") || "doctor not loaded" }}</small>
       </article>
@@ -137,7 +137,7 @@
       <small>{{ brokerSearchSummary() }}</small>
     </section>
     <section>
-      <h4>WhatsApp Account IDs</h4>
+      <h4>WhatsApp identities</h4>
       <div class="ops-grid">
         @for (account of whatsappAccounts(); track account.accountId || account.id) {
           <article class="ops-card">
@@ -148,13 +148,13 @@
             <small>{{ whatsappAccountMeta(account) }}</small>
           </article>
         } @empty {
-          <article class="ops-card"><h4>No Account IDs</h4><p>--</p><small>No WhatsApp account diagnostics loaded.</small></article>
+          <article class="ops-card"><h4>No WhatsApp identities</h4><p>--</p><small>No WhatsApp account diagnostics loaded.</small></article>
         }
       </div>
       <div class="compact-list">
         @for (item of brokerAccountHistory(); track item.phone + item.accountId + item.source) {
           <article class="compact-row">
-            <strong>{{ item.phone }} · Account ID {{ item.accountId || "-" }}</strong>
+            <strong>{{ item.phone }} · identity {{ item.accountId || "-" }}</strong>
             <span>{{ item.state }} · {{ item.source }}</span>
             <small>{{ item.detail }}</small>
           </article>
@@ -259,7 +259,7 @@
               }
             </div>
             <div class="thread-instance-table">
-              <div class="thread-instance-row head"><span>Thread</span><span>Chat</span><span>Account IDs</span><span>Queue / outbox</span><span>Actions</span></div>
+              <div class="thread-instance-row head"><span>Thread</span><span>Chat</span><span>WA identities</span><span>Queue / outbox</span><span>Actions</span></div>
               @for (row of brokerVisibleThreads(instance); track row.id) {
                 <div class="thread-instance-row">
                   <span>

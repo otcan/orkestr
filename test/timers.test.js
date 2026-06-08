@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { listAgentMessages } from "../packages/core/src/messages.js";
-import { createTimer, doctorTimers, listTimers, markDueTimers, nextRunAt, normalizeStoredTimer, parseTimerDelayMs, timerRunAtFromDelay } from "../packages/core/src/timers.js";
+import { createTimer, doctorTimers, listTimers, markDueTimers, nextRunAt, normalizeStoredTimer, parseTimerDelayMs, runTimerNow, timerRunAtFromDelay, updateTimer } from "../packages/core/src/timers.js";
 import { createThread, listThreadMessages } from "../packages/core/src/threads.js";
 
 test("daily timers schedule the next future clock time", () => {
@@ -120,6 +120,26 @@ test("due timers are marked and rescheduled", async () => {
   const messages = await listAgentMessages("coding-agent", env);
   assert.equal(messages.length, 1);
   assert.equal(messages[0].source, "timer_due");
+});
+
+test("paused timers do not fire automatically but can run once manually", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-paused-timer-"));
+  const env = { ORKESTR_HOME: home };
+  const timer = await createTimer({ label: "Paused", prompt: "Run manually", cadence: "interval", every: "1h" }, env);
+  await updateTimer(timer.id, { enabled: false }, env, new Date("2026-05-15T09:00:00Z"));
+
+  const due = await markDueTimers(env, new Date("2026-05-15T10:00:00Z"));
+  const autoMessages = await listAgentMessages("coding-agent", env);
+  assert.equal(due.length, 0);
+  assert.equal(autoMessages.length, 0);
+
+  await runTimerNow(timer.id, env, new Date("2026-05-15T10:01:00Z"));
+  const manualMessages = await listAgentMessages("coding-agent", env);
+  const after = await listTimers(env);
+  assert.equal(manualMessages.length, 1);
+  assert.equal(manualMessages[0].source, "timer_manual_run");
+  assert.equal(after[0].enabled, false);
+  assert.equal(after[0].nextRunAt, null);
 });
 
 test("thread timers queue input on the target thread", async () => {

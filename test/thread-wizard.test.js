@@ -71,7 +71,7 @@ test("main UI exposes a guided first thread generation flow", async () => {
   assert.ok(sources.includes("browser_pairing_required"));
   assert.ok(sources.includes("enterPairingRequired"));
   assert.ok(sources.includes("(paired)=\"handleBrowserPaired()\""));
-  assert.ok(sources.includes("Connect inbound account"));
+  assert.ok(sources.includes("Connect receiving account"));
   assert.ok(sources.includes("Connect reply account"));
   assert.ok(sources.includes("connectedWhatsAppAccounts()"));
   assert.ok(sources.includes("redirectThreadSettingsToWhatsAppSetupIfNeeded"));
@@ -79,7 +79,7 @@ test("main UI exposes a guided first thread generation flow", async () => {
   assert.ok(sources.includes("Connect WhatsApp in setup"));
   assert.ok(sources.includes("Create and connect chat"));
   assert.ok(sources.includes("Existing chats are not selected here."));
-  assert.ok(sources.includes("Linked inbound account"));
+  assert.ok(sources.includes("Authorized owner contact"));
   assert.ok(sources.includes("Additional participants are off."));
   assert.ok(sources.includes("Allow messages from additional chat participants"));
   assert.ok(sources.includes("Allowed participants"));

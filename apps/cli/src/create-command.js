@@ -2,7 +2,7 @@ import { requestJson } from "./api-client.js";
 import { threadName } from "./format.js";
 import { applyWhatsAppChatNamePrefix, defaultWhatsAppReplyPrefix } from "../../../packages/core/src/whatsapp-defaults.js";
 
-const CREATE_USAGE = "Usage: orkestr create <name> [--prompt text] [--cwd path] [--command command] [--executor id] [--wa-title title] [--wa-participant jid]... [--chat-id jid] [--outbound-account id] [--reply-prefix text] [--no-wa] [--no-wa-admin] [--json]";
+const CREATE_USAGE = "Usage: orkestr create <name> [--prompt text] [--cwd path] [--command command] [--executor id] [--wa-title title] [--wa-participant jid]... [--chat-id jid] [--reply-account id] [--receiving-account id] [--reply-prefix text] [--no-wa] [--no-wa-admin] [--json]";
 
 export async function createCommand(argv, ctx) {
   const json = argv.includes("--json");
@@ -10,8 +10,8 @@ export async function createCommand(argv, ctx) {
   if (!name) throw new Error(CREATE_USAGE);
 
   const noWhatsApp = argv.includes("--no-wa");
-  const outboundAccountId = firstFlagValue(argv, ["--outbound-account", "--responder-account"]);
-  const senderAccountId = firstFlagValue(argv, ["--sender-account", "--inbound-account"]);
+  const outboundAccountId = firstFlagValue(argv, ["--reply-account", "--bridge-account", "--outbound-account", "--responder-account"]);
+  const senderAccountId = firstFlagValue(argv, ["--receiving-account", "--sender-account", "--inbound-account"]);
   const explicitDisplayName = firstFlagValue(argv, ["--wa-title", "--title"]);
   const displayName = explicitDisplayName || (noWhatsApp ? name : applyWhatsAppChatNamePrefix(name));
   const createName = !noWhatsApp && !explicitDisplayName ? displayName : name;
@@ -79,10 +79,15 @@ function createWhatsAppGroup({ argv, ctx, displayName, outboundAccountId, sender
     promoteParticipantsAsAdmins: !argv.includes("--no-wa-admin") && !argv.includes("--no-admin"),
   };
   if (outboundAccountId) {
+    body.replyAccountId = outboundAccountId;
+    body.bridgeAccountId = outboundAccountId;
     body.responderAccountId = outboundAccountId;
     body.outboundAccountId = outboundAccountId;
   }
-  if (senderAccountId) body.senderAccountId = senderAccountId;
+  if (senderAccountId) {
+    body.receivingAccountId = senderAccountId;
+    body.senderAccountId = senderAccountId;
+  }
   return requestJson("/api/connectors/whatsapp/bridge/chats", {
     ...ctx,
     method: "POST",
@@ -118,11 +123,18 @@ function bindingBody({ chatId, displayName, replyPrefix, outboundAccountId, send
     replyPrefix,
     generated,
   };
-  if (senderAccountId) body.senderAccountId = senderAccountId;
+  if (senderAccountId) {
+    body.receivingAccountId = senderAccountId;
+    body.senderAccountId = senderAccountId;
+  }
   if (outboundAccountId) {
+    body.replyAccountId = outboundAccountId;
+    body.bridgeAccountId = outboundAccountId;
     body.responderAccountId = outboundAccountId;
     body.outboundAccountId = outboundAccountId;
   } else if (whatsappGroup?.responderAccountId) {
+    body.replyAccountId = whatsappGroup.responderAccountId;
+    body.bridgeAccountId = whatsappGroup.responderAccountId;
     body.responderAccountId = whatsappGroup.responderAccountId;
     body.outboundAccountId = whatsappGroup.responderAccountId;
   }
