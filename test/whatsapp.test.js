@@ -1749,6 +1749,39 @@ test("local whatsapp recovery resets recoverable accounts before restarting", as
   assert.deepEqual(result.skipped, []);
 });
 
+test("local whatsapp recovery starts idle autostarted accounts without reset", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-recover-idle-"));
+  const env = {
+    ORKESTR_HOME: home,
+    ORKESTR_WHATSAPP_ACCOUNT_IDS: "sender-idle,responder-idle,manual-idle",
+    ORKESTR_WHATSAPP_AUTOSTART: "1",
+    ORKESTR_WHATSAPP_AUTOSTART_ACCOUNT_IDS: "sender-idle,responder-idle",
+  };
+  const calls = [];
+
+  const result = await recoverConfiguredLocalWhatsAppAccounts(env, {
+    nowMs: 10_000,
+    status: {
+      accounts: [
+        { accountId: "sender-idle", state: "idle", ready: false },
+        { accountId: "responder-idle", state: "ready", ready: true },
+        { accountId: "manual-idle", state: "idle", ready: false },
+      ],
+    },
+    async restartAccount(accountId) {
+      calls.push(["restart", accountId]);
+    },
+    async startAccount(accountId) {
+      calls.push(["start", accountId]);
+      return { accountId, state: "starting", ready: false };
+    },
+  });
+
+  assert.deepEqual(calls, [["start", "sender-idle"]]);
+  assert.deepEqual(result.recovered, [{ accountId: "sender-idle", state: "starting", ready: false }]);
+  assert.deepEqual(result.skipped, []);
+});
+
 test("local whatsapp send recovers unstarted Web comms before retrying later", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-send-comms-recover-"));
   const env = {

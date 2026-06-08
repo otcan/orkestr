@@ -3716,6 +3716,100 @@ test("tenant api-agent repairs generic help replies to concrete desktop requests
   assert.doesNotMatch(assistant.text, /\/desktop\/linkedin\/vnc\.html/);
 });
 
+test("tenant api-agent repairs generic help replies to concrete timer requests with tools", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-api-agent-generic-timer-repair-"));
+  const env = await allowSanitizerEnv(home);
+  await upsertUser({ id: "otcan", role: "user", displayName: "Otcan" }, env);
+  await createThread({
+    id: "otcantest-generic-timer-repair",
+    ownerUserId: "otcan",
+    name: "otcantest",
+    runtimeKind: "api-agent",
+    executor: { type: "api-agent", metadata: { runtimeKind: "api-agent" } },
+    binding: { connector: "whatsapp", chatId: "chat-otcan", outboundAccountId: "wa-1" },
+  }, env);
+  const input = await enqueueThreadInputForPrincipal("otcantest-generic-timer-repair", {
+    text: "Remind me in 2 minutes to check the release status.",
+    source: "whatsapp_inbound",
+    connector: "whatsapp",
+    chatId: "chat-otcan",
+    accountId: "wa-1",
+  }, userPrincipal({ id: "otcan", role: "user" }), env);
+
+  const calls = [];
+  const result = await processApiAgentThreadInput("otcantest-generic-timer-repair", env, {
+    fetchImpl: async (_url, options = {}) => {
+      const body = JSON.parse(options.body);
+      calls.push(body);
+      if (calls.length === 1) {
+        return response({
+          id: "resp_generic_timer_repair_1",
+          model: "gpt-5-mini",
+          output_text: "I can help in this chat. Tell me what you want to do.",
+          output: [],
+          usage: { input_tokens: 260, output_tokens: 12 },
+        });
+      }
+      if (calls.length === 2) {
+        assert.match(body.instructions, /Response repair/i);
+        assert.equal(body.tools.some((tool) => tool.name === "orkestr_create_automation"), true);
+        assert.equal(body.tools.some((tool) => tool.name === "orkestr_create_timer"), false);
+        return response({
+          id: "resp_generic_timer_repair_2",
+          model: "gpt-5-mini",
+          output_text: "",
+          output: [{
+            type: "function_call",
+            name: "orkestr_create_automation",
+            call_id: "call_generic_timer_create",
+            arguments: JSON.stringify({
+              type: "timer",
+              provider: "timer",
+              label: "Check release status",
+              targetType: "thread",
+              target: "",
+              cadence: "once",
+              delay: "2m",
+              runAt: "",
+              time: "",
+              timezone: "",
+              every: "",
+              prompt: "Check the release status.",
+              promptTemplate: "",
+              query: "",
+              maxItemsPerRun: 0,
+              enabled: true,
+              allowBroadQuery: false,
+            }),
+          }],
+          usage: { input_tokens: 390, output_tokens: 34 },
+        });
+      }
+      const toolOutput = JSON.parse(body.input.find((item) => item.type === "function_call_output")?.output || "{}");
+      assert.equal(toolOutput.ok, true);
+      assert.equal(toolOutput.automation.label, "Check release status");
+      return response({
+        id: "resp_generic_timer_repair_3",
+        model: "gpt-5-mini",
+        output_text: GENERIC_TOOL_FALLBACK_TEXT,
+        output: [],
+        usage: { input_tokens: 440, output_tokens: 28 },
+      });
+    },
+  });
+  const messages = await listThreadMessages("otcantest-generic-timer-repair", env);
+  const current = messages.find((message) => message.id === input.id);
+  const assistant = messages.find((message) => message.parentMessageId === input.id);
+  const timers = await listTimers(env);
+
+  assert.equal(result.ok, true);
+  assert.equal(calls.length, 3);
+  assert.equal(current.state, "completed");
+  assert.equal(timers.some((timer) => timer.label === "Check release status"), true);
+  assert.match(assistant.text, /Automation saved: Check release status/i);
+  assert.doesNotMatch(assistant.text, /I can help in this chat/);
+});
+
 test("tenant api-agent confirmation of offered browser action cannot finalize as Done", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-api-agent-browser-confirmation-"));
   const env = await allowSanitizerEnv(home, {

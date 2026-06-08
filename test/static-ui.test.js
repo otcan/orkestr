@@ -964,5 +964,7 @@ test("mobile desktop shell wraps noVNC with phone-first controls", async () => {
   assert.match(sharePage, /mobileDestination/);
   assert.match(sharePage, /id="mobile"/);
   assert.match(sharePage, /const desktopUrl = body\.desktopUrl/);
+  assert.match(sharePage, /const subdomain = parts\.length > 2 \? parts\[1\] : ''/);
+  assert.match(sharePage, /subdomain \? '&subdomain='/);
   assert.match(sharePage, /desktop\/.*\/mobile/);
 });

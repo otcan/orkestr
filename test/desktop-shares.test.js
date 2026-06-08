@@ -72,6 +72,63 @@ test("desktop shares require a random subdomain, link key, and per-browser chat 
   }, env), /desktop_share_slug_forbidden/);
 });
 
+test("desktop shares support path-based public challenge links", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-desktop-share-path-"));
+  const env = {
+    ORKESTR_HOME: home,
+    ORKESTR_PUBLIC_HTTPS_URL: "https://app.example.test",
+  };
+  const principal = userPrincipal({ id: "alice", role: "user" });
+
+  const created = await createDesktopShare({ desktopSlug: "linkedin", principal, env });
+  const { parsed, shareId, key } = urlParts(created.url);
+  const pathParts = parsed.pathname.split("/").filter(Boolean);
+  const opened = await openDesktopShare({
+    shareId,
+    key,
+    subdomain: created.subdomain,
+    env,
+    request: { headers: { "user-agent": "path-link-test" } },
+  });
+  const browserToken = opened.cookie.value.split(":")[1];
+  const pending = await desktopShareStatus({ shareId, key, browserToken, subdomain: created.subdomain, env });
+  await approveDesktopShareChallenge(opened.attempt.challenge, { env, approvedBy: "whatsapp-thread" });
+  const ready = await desktopShareStatus({ shareId, key, browserToken, subdomain: created.subdomain, env });
+
+  assert.equal(parsed.origin, "https://app.example.test");
+  assert.deepEqual(pathParts.slice(0, 2), ["desktop-share", created.subdomain]);
+  assert.equal(pathParts[2], shareId);
+  assert.equal(created.wildcardSubdomainConfigured, false);
+  assert.match(key, /^[A-Za-z0-9_-]{30,}$/);
+  assert.match(opened.attempt.challenge, /^desk-[A-Za-z0-9_-]{20,}$/);
+  assert.match(opened.cookie.header, /;\s*Secure\b/);
+  assert.equal(pending.approved, false);
+  assert.equal(pending.desktopUrl, "");
+  assert.equal(ready.approved, true);
+  assert.equal(ready.desktopUrl, "/desktop/linkedin/vnc.html?autoconnect=1&resize=scale&path=desktop/linkedin/websockify");
+});
+
+test("desktop shares reject wrong path subdomains and link keys", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-desktop-share-reject-"));
+  const env = {
+    ORKESTR_HOME: home,
+    ORKESTR_PUBLIC_HTTPS_URL: "https://app.example.test",
+  };
+  const principal = userPrincipal({ id: "alice", role: "user" });
+
+  const created = await createDesktopShare({ desktopSlug: "linkedin", principal, env });
+  const { shareId, key } = urlParts(created.url);
+
+  await assert.rejects(
+    () => openDesktopShare({ shareId, key: "wrong-key", subdomain: created.subdomain, env }),
+    /desktop_share_key_invalid/,
+  );
+  await assert.rejects(
+    () => openDesktopShare({ shareId, key, subdomain: "wrong-subdomain", env }),
+    /desktop_share_subdomain_invalid/,
+  );
+});
+
 test("thread router leaves desktop link requests for the agent skill", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-desktop-skill-"));
   const env = { ORKESTR_HOME: home };

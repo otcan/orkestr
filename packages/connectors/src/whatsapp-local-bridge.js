@@ -2183,23 +2183,44 @@ export async function recoverConfiguredLocalWhatsAppAccounts(env = process.env, 
   const selected = localWhatsAppAutostartAccountIds(env);
   if (!selected.length) return { enabled: false, recovered: [], skipped: [] };
   const status = options.status || await getLocalWhatsAppBridgeStatus(env);
-  const candidates = recoverableLocalWhatsAppAccountIds(status.accounts || [], selected);
+  const resetCandidates = recoverableLocalWhatsAppAccountIds(status.accounts || [], selected);
+  const resetCandidateSet = new Set(resetCandidates);
+  const selectedSet = new Set(selected.map((accountId) => String(accountId || "").trim()).filter(Boolean));
+  const startCandidates = (status.accounts || [])
+    .map((account) => ({
+      accountId: String(account?.accountId || "").trim(),
+      state: String(account?.state || "").trim(),
+      ready: account?.ready === true,
+    }))
+    .filter((account) =>
+      account.accountId &&
+      selectedSet.has(account.accountId) &&
+      !resetCandidateSet.has(account.accountId) &&
+      account.ready !== true &&
+      account.state === "idle"
+    )
+    .map((account) => account.accountId);
+  const candidates = [
+    ...resetCandidates.map((accountId) => ({ accountId, reset: true })),
+    ...startCandidates.map((accountId) => ({ accountId, reset: false })),
+  ];
   const cooldownMs = localWhatsAppRecoveryCooldownMs(env);
   const nowMs = Number(options.nowMs || Date.now());
   const recovered = [];
   const skipped = [];
-  for (const accountId of candidates) {
+  for (const candidate of candidates) {
+    const { accountId, reset } = candidate;
     const lastAttemptMs = Number(localWhatsAppRecoveryAttempts.get(accountId) || 0);
     if (!options.force && lastAttemptMs && nowMs - lastAttemptMs < cooldownMs) {
       skipped.push({ accountId, reason: "cooldown" });
       continue;
     }
     localWhatsAppRecoveryAttempts.set(accountId, nowMs);
-    await appendEvent({ type: "whatsapp_local_auto_recover_start", accountId }, env).catch(() => {});
+    await appendEvent({ type: reset ? "whatsapp_local_auto_recover_start" : "whatsapp_local_auto_start_start", accountId }, env).catch(() => {});
     try {
       const restartAccount = options.restartAccount || restartRecoverableLocalWhatsAppAccount;
       const startAccount = options.startAccount || startLocalWhatsAppAccount;
-      await restartAccount(accountId, env, { reason: "auto_recover" });
+      if (reset) await restartAccount(accountId, env, { reason: "auto_recover" });
       const account = await startAccount(accountId, env, options.startOptions || {});
       recovered.push({ accountId, state: account.state, ready: account.ready === true });
       await appendEvent({ type: "whatsapp_local_auto_recover_started", accountId, state: account.state, ready: account.ready === true }, env).catch(() => {});

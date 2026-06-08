@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { desktopShareApiUrl, extractDesktopShareUrlParts } from "../scripts/real-wa-e2e.mjs";
 import { validateWhatsAppPreflight } from "../scripts/real-wa-e2e-preflight.mjs";
 
 test("real WhatsApp E2E preflight fails before sending when sender is not ready", () => {
@@ -114,4 +115,37 @@ test("real WhatsApp E2E preflight matches accounts by phone or contact id aliase
 
   assert.equal(preflight.required.sender.accountId, "sender-runtime");
   assert.equal(preflight.required.responder.accountId, "responder-runtime");
+});
+
+test("real WhatsApp E2E builds desktop-share API URLs from path-based public links", () => {
+  const shareUrl = "https://app.example.test/desktop-share/d-123abc/share-1?key=secret";
+  const details = extractDesktopShareUrlParts(shareUrl);
+
+  assert.deepEqual(details, {
+    origin: "https://app.example.test",
+    shareId: "share-1",
+    key: "secret",
+    subdomain: "d-123abc",
+  });
+  assert.equal(
+    desktopShareApiUrl(shareUrl, "open", details),
+    "https://app.example.test/api/desktop-shares/share-1/open?key=secret&subdomain=d-123abc",
+  );
+  assert.equal(
+    desktopShareApiUrl(shareUrl, "status", details),
+    "https://app.example.test/api/desktop-shares/share-1/status?key=secret&subdomain=d-123abc",
+  );
+});
+
+test("real WhatsApp E2E builds desktop-share API URLs from wildcard public links", () => {
+  const shareUrl = "https://d-456def.desktop.example.test/desktop-share/share-2?key=secret-2";
+  const details = extractDesktopShareUrlParts(shareUrl);
+
+  assert.equal(details.shareId, "share-2");
+  assert.equal(details.key, "secret-2");
+  assert.equal(details.subdomain, "d-456def");
+  assert.equal(
+    desktopShareApiUrl(shareUrl, "open", details),
+    "https://d-456def.desktop.example.test/api/desktop-shares/share-2/open?key=secret-2&subdomain=d-456def",
+  );
 });
