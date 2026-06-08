@@ -3669,7 +3669,7 @@ async function appendRolloutMessages({ thread, rolloutPath, body, start, initial
     if (existingEventKeys.has(eventKey) || existingTextKeys.has(textKey)) continue;
     const whatsappParent = latestRolloutWhatsAppInput(existing, message.timestamp, thread);
     const parentTurnId = String(whatsappParent?.codexTurnId || whatsappParent?.executorTurnId || "").trim();
-    await appendThreadMessage(thread.id, {
+    const appendedMessage = await appendThreadMessage(thread.id, {
       role: "assistant",
       source: message.source,
       text: message.text,
@@ -3691,6 +3691,7 @@ async function appendRolloutMessages({ thread, rolloutPath, body, start, initial
       codexTurnId: parentTurnId || null,
       executorTurnId: parentTurnId || null,
     }, env);
+    markConnectorDeliverySignal(appendedMessage);
     existingEventKeys.add(eventKey);
     existingTextKeys.add(textKey);
     appended += 1;
@@ -3803,7 +3804,7 @@ async function syncLeaseRollout(lease, env = process.env) {
     const textKey = rolloutMessageNearTextKey(message);
     if (existingEventKeys.has(eventKey) || existingTextKeys.has(textKey)) continue;
     const whatsappParent = latestRolloutWhatsAppInput(existing, message.timestamp, thread);
-    await appendThreadMessage(lease.threadId, {
+    const appendedMessage = await appendThreadMessage(lease.threadId, {
       role: "assistant",
       source: message.source,
       text: message.text,
@@ -3817,6 +3818,7 @@ async function syncLeaseRollout(lease, env = process.env) {
       chatId: whatsappParentChatId(whatsappParent, thread),
       accountId: whatsappParentAccountId(whatsappParent, thread),
     }, env);
+    markConnectorDeliverySignal(appendedMessage);
     existingEventKeys.add(eventKey);
     existingTextKeys.add(textKey);
     appended += 1;

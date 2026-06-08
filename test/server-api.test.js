@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { recoverAfterStartup, runtimeMonitorIntervalMs, startServer, startupRecoveryDelayMs } from "../apps/server/src/server.js";
+import { createConnectorRuntimeSyncSignalHandler, whatsAppDeliveryFollowUpDelayMs } from "../packages/connectors/src/whatsapp-sync-signal.js";
 import { startCodexAppServerThread, stopCodexAppServerClients } from "../packages/core/src/codex-app-server.js";
 import { createThread, getThread, listThreadMessages, updateThread } from "../packages/core/src/threads.js";
 
@@ -121,6 +122,50 @@ test("runtime monitor default keeps Codex reply import responsive", () => {
     if (priorInterval === undefined) delete process.env.ORKESTR_RUNTIME_MONITOR_INTERVAL_MS;
     else process.env.ORKESTR_RUNTIME_MONITOR_INTERVAL_MS = priorInterval;
   }
+});
+
+test("connector delivery signal kicks runtime sync and WhatsApp delivery follow-ups", async () => {
+  const runtimeCalls = [];
+  const deliveryCalls = [];
+  const idleClears = [];
+  const errors = [];
+  const handler = createConnectorRuntimeSyncSignalHandler({
+    env: { ORKESTR_HOME: "/tmp/orkestr-test" },
+    followUpDelayMs: 5,
+    runRuntimeSync: async (options) => {
+      runtimeCalls.push(options);
+      return { ok: true };
+    },
+    whatsappDeliveryScheduler: {
+      schedule(delayMs) {
+        deliveryCalls.push(delayMs ?? 0);
+      },
+    },
+    clearIdleCache() {
+      idleClears.push(true);
+    },
+    reportError(_env, payload) {
+      errors.push(payload);
+    },
+  });
+
+  try {
+    handler.handleSignal();
+    await new Promise((resolve) => setTimeout(resolve, 25));
+
+    assert.deepEqual(runtimeCalls, [{ forceWhatsapp: true }, { forceWhatsapp: true }]);
+    assert.deepEqual(deliveryCalls, [0, 0]);
+    assert.equal(idleClears.length, 2);
+    assert.equal(errors.length, 0);
+  } finally {
+    handler.close();
+  }
+});
+
+test("WhatsApp delivery follow-up delay follows the delivery minimum interval", () => {
+  assert.equal(whatsAppDeliveryFollowUpDelayMs({}), 1500);
+  assert.equal(whatsAppDeliveryFollowUpDelayMs({ ORKESTR_WHATSAPP_DELIVERY_MIN_INTERVAL_MS: "5000" }), 5500);
+  assert.equal(whatsAppDeliveryFollowUpDelayMs({ ORKESTR_WHATSAPP_DELIVERY_MIN_INTERVAL_MS: "999999" }), 30000);
 });
 
 test("startup recovery delay is enabled by default and bounded", () => {
