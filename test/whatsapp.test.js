@@ -13,7 +13,7 @@ import { listRouterTraces } from "../packages/core/src/router-traces.js";
 import { getSetupStatus } from "../packages/core/src/setup.js";
 import { appendThreadMessage, createThread, enqueueThreadInput, getThread, listThreadMessages, listThreads, updateThreadMessage } from "../packages/core/src/threads.js";
 import { createUser, linkUserPrivateIdentity } from "../packages/core/src/users.js";
-import { deliverWhatsAppReplies, formatWhatsAppOutboundText, getWhatsAppChatParticipants, getWhatsAppStatus, initialQueueDeliveryState, mapLocalWhatsAppStatusFromHealth, routeWhatsAppInbound, sendWhatsAppText, syncWhatsAppTypingIndicators } from "../packages/connectors/src/whatsapp.js";
+import { deliverWhatsAppReplies, formatWhatsAppOutboundText, getWhatsAppChatMessages, getWhatsAppChatParticipants, getWhatsAppStatus, initialQueueDeliveryState, mapLocalWhatsAppStatusFromHealth, routeWhatsAppInbound, sendWhatsAppText, syncWhatsAppTypingIndicators } from "../packages/connectors/src/whatsapp.js";
 import { cleanupLocalWhatsAppChromeLocks, clearLocalWhatsAppChatTypingState, createLocalWhatsAppChat, forwardLocalWhatsAppInbound, getLocalWhatsAppBridgeStatus, handleInboundMessage, inboundRoutingFailureNoticeText, listLocalWhatsAppChats, localWhatsAppAccountIdsForEnv, localWhatsAppConnectedPageReadyFallbackEligible, localWhatsAppInboundForwardTarget, localWhatsAppMessageRouteFields, localWhatsAppReadyFallbackEligible, localWhatsAppTypingClearRetryDelaysMs, localWhatsAppUnreadRecoveryBoundChats, localWhatsAppUnreadRecoveryIntervalMs, normalizeGroupParticipantIds, recoverConfiguredLocalWhatsAppAccounts, recoverUnreadLocalWhatsAppMessages, recoverableLocalWhatsAppAccountIds, reduceLocalWhatsAppBridgeState, resetLocalWhatsAppBridgeForTest, sendLocalWhatsAppMessage, sendWhatsAppTextWithConfirmation, setLocalWhatsAppRuntimeForTest, setLocalWhatsAppRuntimeRecoveryHooksForTest, startLocalWhatsAppAccount, startLocalWhatsAppTyping, stopLocalWhatsAppTyping, webCacheRoot } from "../packages/connectors/src/whatsapp-local-bridge.js";
 import { routedWhatsAppTypingTarget, runWithRoutedWhatsAppTyping } from "../packages/connectors/src/whatsapp-router-typing.js";
 import { createAndBindWhatsAppThreadGroup } from "../packages/connectors/src/whatsapp-thread-groups.js";
@@ -1785,6 +1785,77 @@ test("whatsapp participants are discovered from external bridge chat metadata", 
   assert.equal(result.ready, true);
   assert.deepEqual(result.participants.map((participant) => participant.id), ["wa-contact-one@c.us", "wa-contact-two@c.us"]);
   assert.deepEqual(result.participants.map((participant) => participant.name), ["Saved Main", "Saved Other"]);
+});
+
+test("whatsapp chat history is read from external bridge", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-history-"));
+  const env = externalBridgeEnv(home);
+  await writeConnectorConfig("whatsapp", {
+    bridgeMode: "external",
+    bridgeUrl: "http://wa.local",
+    apiToken: "history-token",
+  }, env);
+
+  const calls = [];
+  const result = await getWhatsAppChatMessages({ accountId: "responder", chatId: "chat-history@g.us", limit: 3 }, env, async (url, options) => {
+    calls.push({ url, options });
+    assert.equal(url.pathname, "/api/chats/chat-history%40g.us/history");
+    assert.equal(url.searchParams.get("accountId"), "responder");
+    assert.equal(url.searchParams.get("limit"), "3");
+    assert.equal(options.headers.authorization, "Bearer history-token");
+    return response({
+      ok: true,
+      messages: [
+        { id: "m1", body: "/connect google", fromMe: false, from: "chat-history@g.us", author: "4917632400662@c.us", timestamp: 1780910000 },
+      ],
+    });
+  });
+
+  assert.equal(calls.length, 1);
+  assert.equal(result.ready, true);
+  assert.equal(result.runtimeAccountId, "responder");
+  assert.deepEqual(result.messages.map((message) => ({
+    id: message.id,
+    body: message.body,
+    fromMe: message.fromMe,
+    author: message.author,
+    timestamp: message.timestamp,
+  })), [{
+    id: "m1",
+    body: "/connect google",
+    fromMe: false,
+    author: "4917632400662@c.us",
+    timestamp: "2026-06-08T09:13:20.000Z",
+  }]);
+});
+
+test("whatsapp chat history falls back to bridge-root external endpoint", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-history-prefix-"));
+  const env = externalBridgeEnv(home);
+  await writeConnectorConfig("whatsapp", {
+    bridgeMode: "external",
+    bridgeUrl: "http://parent.local/api/connectors/whatsapp/bridge",
+  }, env);
+
+  const calls = [];
+  const result = await getWhatsAppChatMessages({ accountId: "responder", chatId: "chat-history@g.us", limit: 2 }, env, async (url) => {
+    calls.push(url.pathname);
+    if (calls.length === 1) return response({ error: "not_found" }, false, 404);
+    assert.equal(url.pathname, "/api/connectors/whatsapp/bridge/accounts/responder/chats/chat-history%40g.us/history");
+    return response({
+      ok: true,
+      messages: [
+        { id: "m2", text: "hello", fromMe: true, timestamp: "2026-06-08T10:00:00.000Z" },
+      ],
+    });
+  });
+
+  assert.deepEqual(calls, [
+    "/api/connectors/whatsapp/bridge/api/chats/chat-history%40g.us/history",
+    "/api/connectors/whatsapp/bridge/accounts/responder/chats/chat-history%40g.us/history",
+  ]);
+  assert.equal(result.messages[0].body, "hello");
+  assert.equal(result.messages[0].fromMe, true);
 });
 
 test("whatsapp external bridge delivery preserves path prefixes", async () => {

@@ -36,6 +36,7 @@ function parseArgs(argv = [], env = process.env) {
     threadId: clean(env.ORKESTR_REAL_WA_E2E_THREAD),
     chatId: clean(env.ORKESTR_REAL_WA_E2E_CHAT_ID),
     senderAccountId: clean(env.ORKESTR_REAL_WA_E2E_SENDER_ACCOUNT || "sender"),
+    senderContactId: clean(env.ORKESTR_REAL_WA_E2E_SENDER_CONTACT || ""),
     responderAccountId: clean(env.ORKESTR_REAL_WA_E2E_RESPONDER_ACCOUNT || "responder"),
     desktopSlug: clean(env.ORKESTR_REAL_WA_E2E_DESKTOP || "gmail"),
     runId: safeId(env.ORKESTR_REAL_WA_E2E_RUN_ID || new Date().toISOString().replace(/[-:.TZ]/g, "").slice(0, 14)),
@@ -59,6 +60,7 @@ function parseArgs(argv = [], env = process.env) {
     else if (arg === "--thread") options.threadId = clean(argv[++index]);
     else if (arg === "--chat-id") options.chatId = clean(argv[++index]);
     else if (arg === "--sender-account") options.senderAccountId = clean(argv[++index]);
+    else if (arg === "--sender-contact") options.senderContactId = clean(argv[++index]);
     else if (arg === "--responder-account") options.responderAccountId = clean(argv[++index]);
     else if (arg === "--desktop") options.desktopSlug = clean(argv[++index]);
     else if (arg === "--run-id") options.runId = safeId(argv[++index]);
@@ -103,6 +105,7 @@ function usage() {
     "  --api-base URL           Orkestr API base. Default: ORKESTR_API_BASE or localhost.",
     "  --orkestr-home DIR       Lets the API client use local CLI auth for that instance.",
     "  --sender-account ID      WA account that sends the real user-visible message. Default: sender.",
+    "  --sender-contact ID      Real WA contact expected to send in --manual-send mode.",
     "  --responder-account ID   WA account that Orkestr uses to reply. Default: responder.",
     "  --desktop SLUG           Managed desktop to lease/share. Default: gmail.",
     "  --manual-send            Attended mode: wait for a real person/phone to send /connect google.",
@@ -159,6 +162,35 @@ function textOf(message = {}) {
   return clean(message.body || message.text || message.message || message.content || "");
 }
 
+function contactTokens(value = "") {
+  const text = clean(value).toLowerCase();
+  if (!text) return new Set();
+  const beforeDomain = text.includes("@") ? text.split("@")[0] : text;
+  const numeric = beforeDomain.replace(/^\+/, "").replace(/[()\s.-]+/g, "");
+  return new Set([text, text.replace(/^\+/, ""), beforeDomain, numeric].filter(Boolean));
+}
+
+function contactMatches(left = "", right = "") {
+  const leftTokens = contactTokens(left);
+  const rightTokens = contactTokens(right);
+  for (const token of leftTokens) {
+    if (rightTokens.has(token)) return true;
+  }
+  return false;
+}
+
+function messageSenderFields(message = {}) {
+  return [message.author, message.from, message.sender, message.senderId, message.participant].map(clean).filter(Boolean);
+}
+
+function messageMatchesExpectedSender(message = {}, expectedContacts = []) {
+  const contacts = Array.isArray(expectedContacts) ? expectedContacts.map(clean).filter(Boolean) : [];
+  if (!contacts.length) return true;
+  const fields = messageSenderFields(message);
+  if (!fields.length) return true;
+  return fields.some((field) => contacts.some((contact) => contactMatches(field, contact)));
+}
+
 function timeMs(value = "") {
   const parsed = Date.parse(clean(value));
   return Number.isFinite(parsed) ? parsed : 0;
@@ -213,17 +245,28 @@ function connectIdFromLink(link = "") {
 }
 
 async function runWhatsAppPreflight(options, results) {
-  const [statusPayload, accountsResult] = await Promise.all([
+  const bindingQuery = new URLSearchParams();
+  if (options.threadId) bindingQuery.set("thread", options.threadId);
+  if (options.chatId) bindingQuery.set("chatId", options.chatId);
+  const [statusPayload, accountsResult, bindingResult] = await Promise.all([
     api(options, "/api/connectors/whatsapp/status"),
     api(options, "/api/connectors/whatsapp/accounts").then(
       (payload) => ({ payload }),
       (error) => ({ error }),
     ),
+    api(options, `/api/connectors/whatsapp/bindings/resolve${bindingQuery.size ? `?${bindingQuery.toString()}` : ""}`).then(
+      (payload) => ({ payload }),
+      (error) => ({ error }),
+    ),
   ]);
-  const preflight = validateWhatsAppPreflight(options, statusPayload, accountsResult.payload || {});
+  const preflight = validateWhatsAppPreflight(options, statusPayload, accountsResult.payload || {}, bindingResult.payload || {});
   if (accountsResult.error) preflight.accountsEndpointError = accountsResult.error.message || String(accountsResult.error);
+  if (bindingResult.error) preflight.bindingEndpointError = bindingResult.error.message || String(bindingResult.error);
   if (options.manualSend) {
-    preflight.operatorInstruction = `Send this exact WhatsApp message in ${options.chatId}: /connect google`;
+    const contacts = preflight.required?.senderContactIds || [];
+    preflight.operatorInstruction = contacts.length
+      ? `Send this exact WhatsApp message in ${options.chatId} from ${contacts[0]}: /connect google`
+      : `Send this exact WhatsApp message in ${options.chatId}: /connect google`;
   }
   results.preflight = preflight;
   results.status = {
@@ -323,7 +366,11 @@ async function runConnectFlow(options, results, startedAt) {
   const visibleResponder = await waitForHistoryMessage(
     options,
     options.responderAccountId,
-    (message) => textOf(message) === commandText && message.fromMe !== true && timeMs(message.timestamp) >= after,
+    (message) =>
+      textOf(message) === commandText &&
+      message.fromMe !== true &&
+      timeMs(message.timestamp) >= after &&
+      messageMatchesExpectedSender(message, results.preflight?.required?.senderContactIds),
     "responder_observed_real_message",
   );
   const userMessage = await waitForThreadMessage(
@@ -450,6 +497,7 @@ async function main() {
     threadId: options.threadId,
     chatId: options.chatId,
     senderAccountId: options.senderAccountId,
+    senderContactId: options.senderContactId,
     responderAccountId: options.responderAccountId,
     manualSend: options.manualSend === true,
     startedAt: new Date(startedAt).toISOString(),

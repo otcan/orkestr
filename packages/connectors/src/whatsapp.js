@@ -25,6 +25,7 @@ import { appendEvent, readJson, writeJson } from "../../storage/src/store.js";
 import {
   getLocalWhatsAppBridgeStatus,
   localWhatsAppBridgeBasePath,
+  listLocalWhatsAppChatMessages,
   listLocalWhatsAppChatParticipants,
   sendLocalWhatsAppMessage,
   syncLocalWhatsAppTypingTargets,
@@ -363,6 +364,40 @@ function normalizeParticipants(payload = {}) {
   return participants.map(normalizeParticipant).filter((participant) => participant.id);
 }
 
+function normalizeHistoryMessage(message = {}) {
+  const rawTimestamp = pickString(message.timestamp, message.createdAt, message.t);
+  const numericTimestamp = Number(rawTimestamp || 0);
+  const timestamp = rawTimestamp && Number.isFinite(Date.parse(rawTimestamp))
+    ? new Date(rawTimestamp).toISOString()
+    : numericTimestamp > 0
+      ? new Date((numericTimestamp < 10_000_000_000 ? numericTimestamp * 1000 : numericTimestamp)).toISOString()
+      : null;
+  return {
+    id: pickString(message.id, message.messageId, message._serialized),
+    body: pickString(message.body, message.text, message.message, message.content),
+    type: pickString(message.type),
+    fromMe: message.fromMe === true,
+    from: pickString(message.from, message.fromId, message.sender),
+    to: pickString(message.to, message.toId),
+    author: pickString(message.author, message.participant, message.senderId),
+    timestamp,
+    hasMedia: message.hasMedia === true,
+  };
+}
+
+function normalizeHistoryMessages(payload = {}) {
+  const messages = Array.isArray(payload.messages)
+    ? payload.messages
+    : Array.isArray(payload.items)
+      ? payload.items
+      : Array.isArray(payload.data)
+        ? payload.data
+        : Array.isArray(payload)
+          ? payload
+          : [];
+  return messages.map(normalizeHistoryMessage);
+}
+
 export function mapLocalWhatsAppStatusFromHealth(health) {
   const publicHealth = publicLocalBridgeHealth(health);
   const accounts = publicHealth.accounts || [];
@@ -543,6 +578,74 @@ export async function getWhatsAppChatParticipants({ accountId = "", chatId = "" 
     isGroup: Boolean(payload?.isGroup),
     participants: normalizeParticipants(payload),
   };
+}
+
+function externalHistoryUrls(bridgeUrl = "", chatId = "", runtimeAccountId = "", limit = 30) {
+  const id = encodeURIComponent(chatId);
+  const account = encodeURIComponent(runtimeAccountId || "");
+  const urls = [];
+  const standalone = whatsappBridgeEndpointUrl(bridgeUrl, `/api/chats/${id}/history`);
+  standalone.searchParams.set("limit", String(limit));
+  if (runtimeAccountId) standalone.searchParams.set("accountId", runtimeAccountId);
+  urls.push(standalone);
+  if (runtimeAccountId) {
+    const bridgeRoot = whatsappBridgeEndpointUrl(bridgeUrl, `/accounts/${account}/chats/${id}/history`);
+    bridgeRoot.searchParams.set("limit", String(limit));
+    urls.push(bridgeRoot);
+    const orkestrRoot = whatsappBridgeEndpointUrl(bridgeUrl, `/api/connectors/whatsapp/bridge/accounts/${account}/chats/${id}/history`);
+    orkestrRoot.searchParams.set("limit", String(limit));
+    urls.push(orkestrRoot);
+  }
+  return urls;
+}
+
+export async function getWhatsAppChatMessages({ accountId = "", chatId = "", limit = 30 } = {}, env = process.env, fetchImpl = fetch) {
+  const id = pickString(chatId);
+  if (!id) throw badRequest("whatsapp_chat_id_required");
+  const max = Math.max(1, Math.min(100, Number(limit || 30) || 30));
+  const config = await readConnectorConfig("whatsapp", env);
+  const bridgeUrl = configuredBridgeUrl(config, env);
+  if (!bridgeUrl && bridgeMode(config, env) === "local") {
+    return listLocalWhatsAppChatMessages({ accountId, chatId: id, limit: max, env });
+  }
+  if (!bridgeUrl) {
+    return { accountId, chatId: id, ready: false, messages: [] };
+  }
+  const runtimeAccountId = await resolveBridgeRuntimeAccountId(accountId, { config, env, fetchImpl });
+  const headers = bridgeAuthHeaders(config, env);
+  const urls = externalHistoryUrls(bridgeUrl, id, runtimeAccountId, max);
+  let lastError = null;
+  for (const url of urls) {
+    const response = await fetchImpl(url, {
+      headers,
+      signal: AbortSignal.timeout(Number(env.WHATSAPP_HISTORY_TIMEOUT_MS || env.ORKESTR_WHATSAPP_HISTORY_TIMEOUT_MS || 5000)),
+    }).catch((error) => {
+      lastError = error;
+      return null;
+    });
+    if (!response) continue;
+    const payload = await response.json().catch(() => ({}));
+    if (response.status === 404) {
+      lastError = new Error(payload?.error || `whatsapp_chat_history_failed_${response.status}`);
+      continue;
+    }
+    if (!response.ok || payload?.ok === false) {
+      const error = new Error(payload?.error || `whatsapp_chat_history_failed_${response.status}`);
+      error.statusCode = response.status || 502;
+      error.payload = payload;
+      throw error;
+    }
+    return {
+      accountId,
+      runtimeAccountId,
+      chatId: id,
+      ready: payload.ready !== false,
+      messages: normalizeHistoryMessages(payload),
+    };
+  }
+  const error = new Error(lastError?.message || "whatsapp_chat_history_unavailable");
+  error.statusCode = lastError?.statusCode || 502;
+  throw error;
 }
 
 function badRequest(message) {

@@ -9,6 +9,53 @@ function comparableAccountToken(value = "") {
   return text;
 }
 
+function unique(values = []) {
+  const seen = new Set();
+  const result = [];
+  for (const value of values) {
+    const text = clean(value);
+    const comparable = text.toLowerCase();
+    if (!text || seen.has(comparable)) continue;
+    seen.add(comparable);
+    result.push(text);
+  }
+  return result;
+}
+
+function contactTokens(value = "") {
+  const text = clean(value);
+  if (!text) return new Set();
+  const lower = text.toLowerCase();
+  const beforeDomain = lower.includes("@") ? lower.split("@")[0] : lower;
+  const numeric = beforeDomain.replace(/^\+/, "").replace(/[()\s.-]+/g, "");
+  return new Set([lower, comparableAccountToken(lower), beforeDomain, numeric].filter(Boolean));
+}
+
+function contactMatches(left = "", right = "") {
+  const leftTokens = contactTokens(left);
+  const rightTokens = contactTokens(right);
+  for (const token of leftTokens) {
+    if (rightTokens.has(token)) return true;
+  }
+  return false;
+}
+
+function bindingFromPayload(payload = {}) {
+  return payload?.selected || payload?.binding || null;
+}
+
+function senderContactsFromBinding(binding = null) {
+  if (!binding || typeof binding !== "object") return [];
+  return unique([
+    ...(Array.isArray(binding.authorizedContactIds) ? binding.authorizedContactIds : []),
+    ...(Array.isArray(binding.allowedSenderContactIds) ? binding.allowedSenderContactIds : []),
+    ...(Array.isArray(binding.additionalSenderContactIds) ? binding.additionalSenderContactIds : []),
+    ...(Array.isArray(binding.acl?.send?.users) ? binding.acl.send.users : []),
+    binding.senderContactId,
+    binding.senderPhoneNumber,
+  ]);
+}
+
 function accountTokens(account = {}) {
   const values = [
     account.accountId,
@@ -110,8 +157,27 @@ function assertReadyAccount({ accounts = [], accountId = "", role = "" } = {}) {
   return account;
 }
 
-export function validateWhatsAppPreflight(options = {}, statusPayload = {}, accountsPayload = {}) {
+export function validateWhatsAppPreflight(options = {}, statusPayload = {}, accountsPayload = {}, bindingPayload = {}) {
+  return validateWhatsAppPreflightWithBinding(options, statusPayload, accountsPayload, bindingPayload);
+}
+
+export function validateWhatsAppPreflightWithBinding(options = {}, statusPayload = {}, accountsPayload = {}, bindingPayload = {}) {
   const accounts = collectWhatsAppAccounts(statusPayload, accountsPayload);
+  const binding = bindingFromPayload(bindingPayload);
+  const bindingSenderContacts = senderContactsFromBinding(binding);
+  const requestedSenderContact = clean(options.senderContactId);
+  if (requestedSenderContact && bindingSenderContacts.length && !bindingSenderContacts.some((contact) => contactMatches(contact, requestedSenderContact))) {
+    throw preflightError("sender_contact_not_authorized", {
+      senderContactId: requestedSenderContact,
+      bindingSenderContacts,
+      bindingId: clean(binding?.bindingId || binding?.id),
+      threadId: clean(binding?.threadId),
+      chatId: clean(binding?.chatId),
+    });
+  }
+  const senderContactIds = requestedSenderContact
+    ? unique([requestedSenderContact, ...bindingSenderContacts.filter((contact) => contactMatches(contact, requestedSenderContact))])
+    : bindingSenderContacts;
   const responder = assertReadyAccount({
     accounts,
     accountId: options.responderAccountId,
@@ -132,9 +198,21 @@ export function validateWhatsAppPreflight(options = {}, statusPayload = {}, acco
     required: {
       responder,
       sender: options.manualSend ? null : assertReadyAccount({ accounts, accountId: options.senderAccountId, role: "sender" }),
+      senderContactIds: options.manualSend ? senderContactIds : [],
     },
     observed: {
       sender,
+      senderContactIds,
+      binding: binding
+        ? {
+          bindingId: clean(binding.bindingId || binding.id),
+          threadId: clean(binding.threadId),
+          chatId: clean(binding.chatId),
+          displayName: clean(binding.displayName || binding.threadName),
+          responderAccountId: clean(binding.responderAccountId || binding.replyAccountId || binding.bridgeAccountId),
+          runtimeAccountId: clean(binding.runtimeAccountId),
+        }
+        : null,
     },
   };
 }

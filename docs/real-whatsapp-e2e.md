@@ -26,6 +26,12 @@ sends a message. Automated mode requires both `--sender-account` and
 paired, the run fails early with `sender_account_not_ready` and writes the
 account state into the JSON artifact.
 
+In attended mode, the sender is a WhatsApp contact in the thread binding, not a
+second bridge session. The runner resolves the binding and discovers authorized
+sender contacts such as `+491...` or `491...@c.us`. Use `--sender-contact` to
+pin the expected contact; otherwise the runner uses the binding's authorized
+sender list.
+
 Useful release modes:
 
 - Add `--no-desktop` when a release target has no managed desktops.
@@ -35,6 +41,8 @@ Useful release modes:
   will send `/connect google` from a real phone/contact in the target WhatsApp
   chat. This still uses real WhatsApp transport and does not call the bridge
   injection endpoint, but it cannot run unattended in CI.
+- Add `--sender-contact <contact-id>` when the target chat has multiple allowed
+  people and the test should accept only one real sender.
 - Add `--open-link-in-desktop` to open the generated Google connection link in
   the managed desktop.
 - Add `--require-oauth-callback` only for attended runs where a human/operator
@@ -55,6 +63,7 @@ npm run e2e:whatsapp-real -- --execute \
   --thread onboarding-thread-id \
   --chat-id whatsapp-group-id@g.us \
   --responder-account responder \
+  --sender-contact +4917600000000 \
   --desktop gmail \
   --manual-send \
   --artifact artifacts/real-wa-e2e.json

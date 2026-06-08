@@ -24,6 +24,7 @@ import {
 import {
   clearWhatsAppDeliveryIdleCache,
   deliverWhatsAppReplies,
+  getWhatsAppChatMessages,
   getWhatsAppChatParticipants,
   getWhatsAppStatus,
   routeWhatsAppInbound,
@@ -45,7 +46,6 @@ import {
   getLocalWhatsAppQrSvg,
   handleInboundMessage,
   listLocalWhatsAppChats,
-  listLocalWhatsAppChatMessages,
   logoutLocalWhatsAppAccount,
   promoteLocalWhatsAppGroupParticipants,
   recoverLocalWhatsAppChatMessages,
@@ -257,7 +257,7 @@ export class ConnectorsController {
   @Get("whatsapp/bridge/accounts/:accountId/chats/:chatId/history")
   async whatsappBridgeChatHistory(@Req() request: any, @Param("accountId") accountId: string, @Param("chatId") chatId: string, @Query("limit") limit = "30") {
     await assertWhatsAppBridgeBindingAcl("read", { accountId, chatId }, request.orkestrMachineAuthContext);
-    return listLocalWhatsAppChatMessages({ accountId: await resolveLocalWhatsAppRuntimeAccountId(accountId), chatId, limit: Number(limit || 30) || 30 });
+    return getWhatsAppChatMessages({ accountId, chatId, limit: Number(limit || 30) || 30 });
   }
 
   @Post("whatsapp/bridge/chats")
