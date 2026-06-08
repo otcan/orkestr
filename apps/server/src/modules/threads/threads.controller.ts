@@ -27,6 +27,7 @@ import {
   enqueueThreadInputForPrincipal,
   getThread,
   listThreadMessages,
+  updateThread,
 } from "../../../../../packages/core/src/threads.js";
 import { requestPrincipal } from "../../../../../packages/core/src/principal.js";
 import { isAdminPrincipal } from "../../../../../packages/core/src/policy.js";
@@ -74,6 +75,8 @@ import {
 
 const execFileAsync = promisify(execFile);
 
+type RuntimeTypeTarget = "codex-app-server" | "api-agent" | "raw-terminal";
+
 function shouldInterruptRuntime(status: Record<string, any> | null | undefined): boolean {
   if (!status) return false;
   return Boolean(
@@ -83,6 +86,27 @@ function shouldInterruptRuntime(status: Record<string, any> | null | undefined):
     status.typingActive ||
     Number(status.runningCount || 0) > 0,
   );
+}
+
+function cleanRuntimeToken(value: unknown): string {
+  return String(value || "").trim().toLowerCase();
+}
+
+function runtimeTypeTarget(text: string): RuntimeTypeTarget | null {
+  const token = cleanRuntimeToken(String(text || "").split(/\s+/)[0]);
+  if (["api", "codex", "codex-api", "app", "app-server", "appserver", "structured"].includes(token)) return "codex-app-server";
+  if (["agent", "api-agent", "tenant-agent"].includes(token)) return "api-agent";
+  if (["terminal", "term", "tmux", "attached", "attach", "raw", "raw-terminal"].includes(token)) return "raw-terminal";
+  return null;
+}
+
+function runtimeTypeForceRequested(text: string): boolean {
+  const tokens = new Set(String(text || "").trim().toLowerCase().split(/\s+/).filter(Boolean));
+  return tokens.has("force") || tokens.has("interrupt") || tokens.has("yes");
+}
+
+function runtimeTypeCommandHelp() {
+  return "Use /rt api, /rt agent, or /rt terminal. Shortcuts: /api, /agent, /terminal.";
 }
 
 function queuedInputResponse(thread: Record<string, any>, message: Record<string, any>, reason = "pending_delivery") {
@@ -347,6 +371,133 @@ export class ThreadsController {
     return completeCodexModeCommand(thread, message, mode);
   }
 
+  private async applyRuntimeTypeCommand(thread: any, target: RuntimeTypeTarget, options: { source?: string; force?: boolean; rawText?: string } = {}) {
+    const source = options.source || "runtime_type_command";
+    const force = options.force === true;
+    let current = thread;
+    let runtime: any = await this.threadRuntimeService.status(thread.id).catch(() => null);
+    const activeStructuredTurn = threadUsesCodexAppServer(current) && runtime && rawStructuredTurnActive(current, runtime);
+    if (activeStructuredTurn && target !== "codex-app-server" && !force) {
+      const message = await appendThreadMessage(thread.id, {
+        role: "user",
+        source,
+        text: options.rawText || "/rt",
+        state: "failed",
+        deliveryState: "failed",
+        observedVia: "orkestr_runtime_type_command_blocked",
+        error: "Active Codex API turn is running. Use /rt terminal interrupt or /rt agent interrupt to force the switch.",
+      });
+      return {
+        ok: false,
+        commandHandled: true,
+        target,
+        applied: false,
+        message,
+        runtime,
+        thread: await threadRuntimeSummary(current, await listThreadMessages(thread.id)),
+        replyText: message.error,
+      };
+    }
+
+    if (target === "raw-terminal") {
+      if (activeStructuredTurn && force) {
+        await interruptCodexAppServerThread(current).catch(() => null);
+      }
+      const result: any = await takeoverRawTerminalThread(current.id, { reason: "runtime_type_switch_to_terminal" });
+      current = result.thread || await getThread(thread.id) || current;
+      runtime = result.status || await this.threadRuntimeService.status(thread.id).catch(() => null);
+    } else if (target === "codex-app-server") {
+      if (!threadUsesCodexAppServer(current)) {
+        if (current.runtimeKind === "raw-terminal" || current.terminalMode === "raw-terminal") {
+          await sleepThread(current.id, { reason: "runtime_type_switch_to_api", kill: true }).catch(() => null);
+          current = await getThread(current.id) || current;
+        }
+        current = await updateThread(current.id, {
+          state: "ready",
+          runtimeKind: "codex-app-server",
+          terminalMode: null,
+          executorId: "codex",
+          executor: {
+            ...(current.executor || {}),
+            id: "codex",
+            type: "codex",
+            transport: "app-server",
+            metadata: {
+              ...(current.executor?.metadata || {}),
+              transport: "app-server",
+              runtimeKind: "codex-app-server",
+              terminalMode: null,
+            },
+          },
+          runtime: {
+            ...(current.runtime || {}),
+            state: "ready",
+            runtimeKind: "codex-app-server",
+            terminalMode: null,
+            activeTurnId: null,
+            pendingRequest: null,
+          },
+        });
+      }
+      const started = await startCodexAppServerThread(current).catch(() => null);
+      current = (started as any)?.thread || await getThread(current.id) || current;
+      runtime = await this.threadRuntimeService.status(current.id).catch(() => null);
+    } else {
+      if (threadUsesCodexAppServer(current)) {
+        if (force) await interruptCodexAppServerThread(current).catch(() => null);
+        await archiveCodexAppServerThread(current).catch(() => null);
+      } else if (current.runtimeKind === "raw-terminal" || current.terminalMode === "raw-terminal") {
+        await sleepThread(current.id, { reason: "runtime_type_switch_to_agent", kill: true }).catch(() => null);
+        current = await getThread(current.id) || current;
+      }
+      current = await updateThread(current.id, {
+        state: "ready",
+        runtimeKind: API_AGENT_RUNTIME_KIND,
+        terminalMode: null,
+        executorId: API_AGENT_RUNTIME_KIND,
+        executor: {
+          ...(current.executor || {}),
+          id: API_AGENT_RUNTIME_KIND,
+          type: API_AGENT_RUNTIME_KIND,
+          transport: API_AGENT_RUNTIME_KIND,
+          metadata: {
+            ...(current.executor?.metadata || {}),
+            transport: API_AGENT_RUNTIME_KIND,
+            runtimeKind: API_AGENT_RUNTIME_KIND,
+            terminalMode: null,
+          },
+        },
+        runtime: {
+          state: "ready",
+          runtimeKind: API_AGENT_RUNTIME_KIND,
+        },
+      });
+      runtime = await this.threadRuntimeService.status(current.id).catch(() => null);
+    }
+
+    const label = target === "codex-app-server" ? "Codex API" : target === "api-agent" ? "API agent" : "attached terminal";
+    const message = await appendThreadMessage(thread.id, {
+      role: "user",
+      source,
+      text: options.rawText || `/rt ${target}`,
+      state: "completed",
+      deliveryState: "delivered",
+      observedVia: "orkestr_runtime_type_command",
+      deliveredAt: new Date().toISOString(),
+      runtimeKind: target,
+    });
+    return {
+      ok: true,
+      commandHandled: true,
+      target,
+      applied: true,
+      message,
+      runtime,
+      thread: await threadRuntimeSummary(current, await listThreadMessages(thread.id)),
+      replyText: `Runtime switched to ${label}.`,
+    };
+  }
+
   @Get()
   async list(@Req() request: any, @Query() query: Record<string, unknown> = {}) {
     return threadSummaryPayload({
@@ -490,6 +641,34 @@ export class ThreadsController {
         message,
         thread: await threadRuntimeSummary((result as any).thread || thread, await listThreadMessages(thread.id)),
       };
+    }
+    if (parsedCommand.command === "runtime_type") {
+      this.assertThreadAdminOnly("thread.runtime-type", principal);
+      const target = runtimeTypeTarget(parsedCommand.text || "");
+      if (!target) {
+        const message = await appendThreadMessage(thread.id, {
+          role: "user",
+          source: body.source || "runtime_type_command",
+          text: String(body.text || "/rt"),
+          state: "failed",
+          deliveryState: "failed",
+          observedVia: "orkestr_runtime_type_command_invalid",
+          error: runtimeTypeCommandHelp(),
+        });
+        return {
+          ok: false,
+          commandHandled: true,
+          applied: false,
+          message,
+          replyText: runtimeTypeCommandHelp(),
+          thread: await threadRuntimeSummary(thread, await listThreadMessages(thread.id)),
+        };
+      }
+      return this.applyRuntimeTypeCommand(thread, target, {
+        source: String(body.source || "runtime_type_command"),
+        force: runtimeTypeForceRequested(parsedCommand.text || ""),
+        rawText: String(body.text || "").trim() || `/rt ${target}`,
+      });
     }
     if (parsedCommand.command === "plan" || parsedCommand.command === "code") {
       const mode = parsedCommand.command;

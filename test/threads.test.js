@@ -5192,7 +5192,56 @@ test("thread input commands strip /now before runtime delivery", () => {
     rawCommand: "code",
     text: "",
   });
+  assert.deepEqual(parseThreadInputCommand({ text: "/rt agent" }), {
+    command: "runtime_type",
+    rawCommand: "rt",
+    text: "agent",
+  });
+  assert.deepEqual(parseThreadInputCommand({ text: "/terminal interrupt" }), {
+    command: "runtime_type",
+    rawCommand: "terminal",
+    text: "terminal interrupt",
+  });
   assert.equal(parseThreadInputCommand({ text: "normal message" }).command, null);
+});
+
+test("thread input /agent shortcut switches runtime type for admins", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-rt-agent-"));
+  const priorHome = process.env.ORKESTR_HOME;
+  const priorRecoverOnStart = process.env.ORKESTR_RECOVER_RUNNING_ON_START;
+  process.env.ORKESTR_HOME = path.join(home, "orkestr-home");
+  process.env.ORKESTR_RECOVER_RUNNING_ON_START = "0";
+
+  let server;
+  try {
+    await createThread({ id: "rt-agent-thread", name: "RT Agent Thread" });
+    server = await startServer({ port: 0, host: "127.0.0.1" });
+    const { port } = server.address();
+    const response = await fetch(`http://127.0.0.1:${port}/api/threads/rt-agent-thread/input`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ text: "/agent", source: "test", parseCommands: true }),
+    });
+    const payload = await response.json();
+    const thread = await getThread("rt-agent-thread");
+    const messages = await listThreadMessages("rt-agent-thread");
+    const command = messages.find((message) => message.text === "/agent");
+
+    assert.equal(response.status, 202);
+    assert.equal(payload.ok, true, JSON.stringify(payload));
+    assert.equal(payload.commandHandled, true);
+    assert.equal(payload.target, "api-agent");
+    assert.equal(payload.replyText, "Runtime switched to API agent.");
+    assert.equal(thread.runtimeKind, "api-agent");
+    assert.equal(thread.executorId, "api-agent");
+    assert.equal(thread.executor.type, "api-agent");
+    assert.equal(command.state, "completed");
+    assert.equal(command.observedVia, "orkestr_runtime_type_command");
+  } finally {
+    if (server) await new Promise((resolve) => server.close(resolve));
+    restoreEnvValue("ORKESTR_HOME", priorHome);
+    restoreEnvValue("ORKESTR_RECOVER_RUNNING_ON_START", priorRecoverOnStart);
+  }
 });
 
 test("thread input approves Orkestr security challenges locally before Codex delivery", async () => {
