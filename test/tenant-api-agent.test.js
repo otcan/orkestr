@@ -132,7 +132,6 @@ test("tenant api-agent answers non-admin WhatsApp thread without Codex delivery"
   assert.equal(assistant.source, "api-agent");
   assert.equal(assistant.parentMessageId, input.id);
   assert.equal(assistant.text.includes("Codex"), false);
-  assert.doesNotMatch(calls[0].body.instructions, /codexEscalation|\[local file path omitted]|workspace\.executionAvailable/);
   assert.equal(usage.count, 1);
   assert.equal(usage.byModel["gpt-5-mini"] > 0, true);
 });
@@ -965,7 +964,6 @@ test("tenant api-agent prompt hides codex escalation when host codex is disabled
   assert.match(instructions, /Workspace\/code execution is not available in this chat right now/i);
   assert.doesNotMatch(instructions, /\/codex/i);
   assert.doesNotMatch(instructions, /Codex/);
-  assert.doesNotMatch(instructions, /codexEscalation|\[local file path omitted]|workspace\.executionAvailable/);
 });
 
 test("tenant api-agent rejects explicit codex escalation when host codex is disabled", async () => {
@@ -2598,45 +2596,25 @@ test("tenant api-agent strips leaked internal thought from final chat text", asy
   assert.doesNotMatch(assistant.text, /User wants|Now what|developer instructions|orkestr_create_timer|We should/i);
 });
 
-test("tenant api-agent repairs leaked runtime escalation internals", async () => {
-  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-api-agent-runtime-leak-"));
+test("tenant api-agent exposes workspace escalation without internal capability fields", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-api-agent-workspace-context-"));
   const env = await allowSanitizerEnv(home);
-  await createThread({
-    id: "runtime-leak-chat",
+  const thread = await createThread({
+    id: "workspace-context-chat",
     ownerUserId: "otcan",
-    name: "runtime-leak-chat",
+    name: "workspace-context-chat",
     runtimeKind: "api-agent",
     executor: { type: "api-agent", metadata: { runtimeKind: "api-agent" } },
-    binding: { connector: "whatsapp", chatId: "chat-runtime-leak" },
-  }, env);
-  const input = await enqueueThreadInputForPrincipal("runtime-leak-chat", {
-    text: "Can you run code here?",
-    source: "whatsapp_inbound",
-    connector: "whatsapp",
-    chatId: "chat-runtime-leak",
-  }, userPrincipal({ id: "otcan", role: "user" }), env);
-
-  const leaked = "I’m not running Codex right now. This chat’s workspace does support codexEscalation, so if you want me to run code or use the contained execution workspace, send the task prefixed with [local file path omitted]. What would you like to run?";
-  const calls = [];
-  const result = await processApiAgentThreadInput("runtime-leak-chat", env, {
-    fetchImpl: async (_url, options) => {
-      calls.push(JSON.parse(options.body));
-      return response({
-        id: `resp_runtime_leak_${calls.length}`,
-        model: "gpt-5-mini",
-        output_text: leaked,
-        output: [],
-        usage: { input_tokens: 220, output_tokens: 46 },
-      });
-    },
+    binding: { connector: "whatsapp", chatId: "chat-workspace-context" },
   });
-  const messages = await listThreadMessages("runtime-leak-chat", env);
-  const assistant = messages.find((message) => message.parentMessageId === input.id);
+  const instructions = await buildTenantApiAgentInstructions(thread, [], env);
+  const context = tenantContextFromInstructions(instructions);
 
-  assert.equal(result.ok, true);
-  assert.equal(calls.length, 2);
-  assert.match(assistant.text, /\/codex <what you want to run>/i);
-  assert.doesNotMatch(assistant.text, /codexEscalation|\[local file path omitted]|contained execution workspace|not running Codex/i);
+  assert.equal(Object.hasOwn(context.capabilities, "codexEscalation"), false);
+  assert.deepEqual(context.capabilities.workspace, {
+    executionAvailable: true,
+    command: "/codex",
+  });
 });
 
 test("tenant api-agent tool gateway stays inside scoped file roots", async () => {
@@ -3408,7 +3386,7 @@ test("tenant api-agent repairs browser research promises without tool evidence",
       return response({
         id: "resp_browser_promise_2",
         model: "gpt-5-mini",
-        output_text: "I can’t gather live page contents from this chat without a browser/workspace run. Send the task with /codex so a Codex worker can open the page and report the results.",
+        output_text: "I can’t gather live page contents from this chat without a browser/workspace run. Send the task with /codex so a workspace worker can open the page and report the results.",
         output: [],
         usage: { input_tokens: 330, output_tokens: 34 },
       });
@@ -3421,7 +3399,6 @@ test("tenant api-agent repairs browser research promises without tool evidence",
   assert.equal(calls.length, 2);
   assert.match(assistant.text, /\/codex/i);
   assert.match(assistant.text, /external browser/i);
-  assert.doesNotMatch(assistant.text, /Codex worker/i);
   assert.doesNotMatch(assistant.text, /collect today/i);
   assert.doesNotMatch(assistant.text, /Managed LinkedIn Browser Desk/i);
 });

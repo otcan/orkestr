@@ -254,16 +254,8 @@ function stripTenantApiAgentInternalThought(text = "") {
   return original;
 }
 
-function sanitizeTenantApiAgentRuntimeWording(text = "") {
-  return String(text || "")
-    .replace(/\bcontained\s+Codex worker\b/gi, "contained workspace worker")
-    .replace(/\bCodex worker\b/gi, "workspace worker")
-    .replace(/\bCodex runtime details\b/gi, "workspace runtime details")
-    .replace(/\bCodex runtime\b/gi, "workspace runtime");
-}
-
 function normalizeTenantApiAgentText(text = "") {
-  const original = sanitizeTenantApiAgentRuntimeWording(stripTenantApiAgentInternalThought(text));
+  const original = stripTenantApiAgentInternalThought(text);
   if (!/(Orkestr UI|Orkestr admin|Orkestr administrator)/i.test(original)) return original;
   const setupTarget = /gmail/i.test(original)
     ? "Gmail"
@@ -281,23 +273,6 @@ function normalizeTenantApiAgentText(text = "") {
     .replace(/(^|[.!?]\s+)[^.!?]*(?:Orkestr UI|Orkestr admin|Orkestr administrator)[^.!?]*[.!?]?/gi, (_match, prefix = "") => `${prefix}${replacement}`)
     .replace(/\s+/g, " ")
     .trim();
-}
-
-function assistantLeaksInternalRuntimeText(text = "") {
-  const value = clean(text);
-  return /\bcodexEscalation\b/i.test(value) ||
-    /\bcontained execution workspace\b/i.test(value) ||
-    /\bnot running Codex right now\b/i.test(value) ||
-    /\bworkspace does support\b/i.test(value) ||
-    /\[local file path omitted]/i.test(value);
-}
-
-function fallbackInternalRuntimeLeakAnswer(message = {}, env = process.env) {
-  const text = clean(message.text);
-  if (/\b(?:run|code|workspace|execute|terminal|script|command)\b/i.test(text) && codexEscalationAvailable(env)) {
-    return "I can help with that. Send the task as `/codex <what you want to run>` and I will route it to the workspace worker.";
-  }
-  return "I can help in this chat with connected Orkestr skills and tenant-scoped tools. Tell me the specific task you want to do.";
 }
 
 function weakTenantApiAgentText(text = "") {
@@ -535,7 +510,6 @@ function tenantApiAgentTextNeedsRepair(text = "", message = {}, options = {}) {
     gmailTestingAccessDeniedMessage(message.text) ||
     options.pendingActionConfirmation === true
   )) return true;
-  if (assistantLeaksInternalRuntimeText(text)) return true;
   if (assistantMentionsUnavailableCodex(text, options.env)) return true;
   return assistantPromisesUnconfirmedAction(text);
 }
@@ -582,9 +556,6 @@ function fallbackUnconfirmedActionAnswer(env = process.env) {
 
 function fallbackTenantApiAgentRepairAnswer(message = {}, options = {}) {
   const env = options.env || process.env;
-  if (assistantLeaksInternalRuntimeText(options.originalText) || assistantLeaksInternalRuntimeText(options.repairedText)) {
-    return fallbackInternalRuntimeLeakAnswer(message, env);
-  }
   if (gmailTestingAccessDeniedMessage(message.text)) return fallbackGmailTestingAccessDeniedAnswer(message);
   if (options.pendingActionConfirmation === true) return fallbackPendingActionConfirmationAnswer(env);
   if (assistantPromisesUnconfirmedAction(options.originalText) || assistantPromisesUnconfirmedAction(options.repairedText)) {
