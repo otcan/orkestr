@@ -141,7 +141,9 @@ The release train owns tests. Run the checks appropriate to the changed surface:
 - attended real WhatsApp/OAuth/desktop/timer checks:
   `npm run e2e:whatsapp-real -- --execute --thread <thread-id> --chat-id <chat-id>`.
   See `docs/real-whatsapp-e2e.md`; this sends real WhatsApp messages and must
-  be opt-in.
+  be opt-in. Unattended runs require ready sender and responder accounts.
+  Attended runs can use `--manual-send` when the operator will send the real
+  WhatsApp message from a phone/contact.
 
 If tests fail, fix clear failures inside the release train. Escalate only when
 the failure implies a product decision or contradicts a worker's intent.

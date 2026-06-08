@@ -1,7 +1,9 @@
 #!/usr/bin/env node
 import fs from "node:fs/promises";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { requestJson } from "../apps/cli/src/api-client.js";
+import { validateWhatsAppPreflight } from "./real-wa-e2e-preflight.mjs";
 
 function clean(value = "") {
   return String(value || "").trim();
@@ -41,6 +43,7 @@ function parseArgs(argv = [], env = process.env) {
     pollMs: Number(env.ORKESTR_REAL_WA_E2E_POLL_MS || 2000),
     includeDesktop: !parseBool(env.ORKESTR_REAL_WA_E2E_NO_DESKTOP, false),
     includeTimer: !parseBool(env.ORKESTR_REAL_WA_E2E_NO_TIMER, false),
+    manualSend: parseBool(env.ORKESTR_REAL_WA_E2E_MANUAL_SEND, false),
     openLinkInDesktop: parseBool(env.ORKESTR_REAL_WA_E2E_OPEN_LINK_IN_DESKTOP, false),
     requireOauthCallback: parseBool(env.ORKESTR_REAL_WA_E2E_REQUIRE_OAUTH_CALLBACK, false),
     forceDesktop: parseBool(env.ORKESTR_REAL_WA_E2E_FORCE_DESKTOP, false),
@@ -63,6 +66,7 @@ function parseArgs(argv = [], env = process.env) {
     else if (arg === "--poll-ms") options.pollMs = Number(argv[++index] || 0);
     else if (arg === "--no-desktop") options.includeDesktop = false;
     else if (arg === "--no-timer") options.includeTimer = false;
+    else if (arg === "--manual-send") options.manualSend = true;
     else if (arg === "--open-link-in-desktop") options.openLinkInDesktop = true;
     else if (arg === "--require-oauth-callback") options.requireOauthCallback = true;
     else if (arg === "--force-desktop") options.forceDesktop = true;
@@ -74,9 +78,9 @@ function parseArgs(argv = [], env = process.env) {
   if (!options.apiBase) throw new Error("api_base_required");
   if (!options.threadId) throw new Error("thread_required");
   if (!options.chatId) throw new Error("chat_id_required");
-  if (!options.senderAccountId) throw new Error("sender_account_required");
+  if (!options.senderAccountId && !options.manualSend) throw new Error("sender_account_required");
   if (!options.responderAccountId) throw new Error("responder_account_required");
-  if (options.senderAccountId === options.responderAccountId) throw new Error("sender_and_responder_must_differ_for_real_transport_e2e");
+  if (!options.manualSend && options.senderAccountId === options.responderAccountId) throw new Error("sender_and_responder_must_differ_for_real_transport_e2e");
   if (!Number.isFinite(options.timeoutMs) || options.timeoutMs < 10_000) throw new Error("invalid_timeout_ms");
   if (!Number.isFinite(options.pollMs) || options.pollMs < 250) throw new Error("invalid_poll_ms");
   return options;
@@ -101,6 +105,7 @@ function usage() {
     "  --sender-account ID      WA account that sends the real user-visible message. Default: sender.",
     "  --responder-account ID   WA account that Orkestr uses to reply. Default: responder.",
     "  --desktop SLUG           Managed desktop to lease/share. Default: gmail.",
+    "  --manual-send            Attended mode: wait for a real person/phone to send /connect google.",
     "  --open-link-in-desktop   Open the generated Google connect link in the managed desktop.",
     "  --require-oauth-callback Wait for OAuth callback/success after manual approval.",
     "  --no-desktop             Skip desktop lease/share checks.",
@@ -207,6 +212,36 @@ function connectIdFromLink(link = "") {
   }
 }
 
+async function runWhatsAppPreflight(options, results) {
+  const [statusPayload, accountsResult] = await Promise.all([
+    api(options, "/api/connectors/whatsapp/status"),
+    api(options, "/api/connectors/whatsapp/accounts").then(
+      (payload) => ({ payload }),
+      (error) => ({ error }),
+    ),
+  ]);
+  const preflight = validateWhatsAppPreflight(options, statusPayload, accountsResult.payload || {});
+  if (accountsResult.error) preflight.accountsEndpointError = accountsResult.error.message || String(accountsResult.error);
+  if (options.manualSend) {
+    preflight.operatorInstruction = `Send this exact WhatsApp message in ${options.chatId}: /connect google`;
+  }
+  results.preflight = preflight;
+  results.status = {
+    mode: preflight.mode,
+    state: preflight.state,
+    accounts: preflight.accounts.map((account) => ({
+      accountId: account.accountId,
+      runtimeAccountId: account.runtimeAccountId,
+      ready: account.ready,
+      state: account.state,
+      phoneNumber: account.phoneNumber,
+      contactId: account.contactId,
+      nextAction: account.nextAction,
+    })),
+  };
+  return preflight;
+}
+
 async function runDesktopChecks(options, results) {
   if (!options.includeDesktop) return null;
   const threadName = `Real WA E2E ${options.runId}`;
@@ -261,23 +296,30 @@ async function releaseDesktop(options, results) {
 
 async function runConnectFlow(options, results, startedAt) {
   const commandText = "/connect google";
-  const sent = await api(options, "/api/connectors/whatsapp/bridge/send-text", {
-    method: "POST",
-    body: {
-      accountId: options.senderAccountId,
-      chatId: options.chatId,
-      text: commandText,
-      crossAccountEchoSuppression: false,
-    },
-  });
+  if (options.manualSend) {
+    console.error(`Manual send mode: send this exact WhatsApp message in ${options.chatId}: ${commandText}`);
+  }
+  const sent = options.manualSend
+    ? null
+    : await api(options, "/api/connectors/whatsapp/bridge/send-text", {
+      method: "POST",
+      body: {
+        accountId: options.senderAccountId,
+        chatId: options.chatId,
+        text: commandText,
+        crossAccountEchoSuppression: false,
+      },
+    });
   const sentIds = new Set((sent?.ids || sent?.sent?.map((item) => item.id) || []).map(clean).filter(Boolean));
   const after = startedAt - 30_000;
-  const visibleSender = await waitForHistoryMessage(
-    options,
-    options.senderAccountId,
-    (message) => sentIds.has(clean(message.id)) || (textOf(message) === commandText && message.fromMe === true && timeMs(message.timestamp) >= after),
-    "sender_visible_message",
-  );
+  const visibleSender = options.manualSend
+    ? null
+    : await waitForHistoryMessage(
+      options,
+      options.senderAccountId,
+      (message) => sentIds.has(clean(message.id)) || (textOf(message) === commandText && message.fromMe === true && timeMs(message.timestamp) >= after),
+      "sender_visible_message",
+    );
   const visibleResponder = await waitForHistoryMessage(
     options,
     options.responderAccountId,
@@ -312,6 +354,7 @@ async function runConnectFlow(options, results, startedAt) {
     throw new Error(`connect_page_invalid:${page.status}`);
   }
   results.connect = {
+    manualSend: options.manualSend === true,
     sentMessageId: [...sentIds][0] || clean(sent?.id),
     senderVisibleId: clean(visibleSender?.id),
     responderVisibleId: clean(visibleResponder?.id),
@@ -408,23 +451,24 @@ async function main() {
     chatId: options.chatId,
     senderAccountId: options.senderAccountId,
     responderAccountId: options.responderAccountId,
+    manualSend: options.manualSend === true,
     startedAt: new Date(startedAt).toISOString(),
   };
   try {
-    results.status = await api(options, "/api/connectors/whatsapp/status").then((payload) => ({
-      mode: clean(payload.mode),
-      state: clean(payload.state),
-      accounts: (payload.accounts || []).map((account) => ({
-        accountId: clean(account.accountId || account.id),
-        ready: account.ready === true,
-        state: clean(account.state),
-      })),
-    }));
+    await runWhatsAppPreflight(options, results);
     await runDesktopChecks(options, results);
     await runConnectFlow(options, results, startedAt);
     await runTimerWatcher(options, results);
     results.ok = true;
     results.finishedAt = new Date().toISOString();
+  } catch (error) {
+    results.error = {
+      code: clean(error.code),
+      message: clean(error.message || String(error)),
+      details: error.details || null,
+      payload: error.payload || null,
+    };
+    throw error;
   } finally {
     await releaseDesktop(options, results);
     await writeArtifact(options, results);
@@ -433,8 +477,11 @@ async function main() {
   if (!results.ok) process.exitCode = 1;
 }
 
-main().catch((error) => {
-  console.error(error?.stack || error?.message || String(error));
-  if (error?.payload) console.error(JSON.stringify(error.payload, null, 2));
-  process.exit(1);
-});
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  main().catch((error) => {
+    console.error(error?.stack || error?.message || String(error));
+    if (error?.details) console.error(JSON.stringify(error.details, null, 2));
+    if (error?.payload) console.error(JSON.stringify(error.payload, null, 2));
+    process.exit(1);
+  });
+}
