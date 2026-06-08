@@ -259,6 +259,9 @@ export function whatsappTypingTargetForThread({ thread, messages = [], status = 
 
 function passiveMirrorCanCompleteParent(parent, reply, chatId, state = null) {
   if (!parent || parent.role !== "user" || !whatsappMessageOrigin(parent, state)) return false;
+  const parentMs = messageTimeMs(parent);
+  const replyMs = messageTimeMs(reply);
+  if (parentMs && replyMs && replyMs < parentMs) return false;
   const parentState = String(parent.state || "").trim().toLowerCase();
   const parentDeliveryState = String(parent.deliveryState || "").trim().toLowerCase();
   const recoverableStates = new Set(["queued", "pending_delivery", "awaiting_ack", "running", "failed"]);

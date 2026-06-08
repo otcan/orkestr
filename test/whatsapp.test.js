@@ -5905,6 +5905,46 @@ test("whatsapp passive mirror completes a running thread input when the reply is
   assert.equal(parent.passiveMirrorMessageId, reply.id);
 });
 
+test("whatsapp passive mirror does not complete a newer input with an older reparented runtime notice", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-passive-stale-notice-"));
+  const env = externalBridgeEnv(home);
+  await createThread({ id: "thread-wa-passive-stale-notice", name: "WA Passive Stale Notice" }, env);
+  await writeConnectorConfig("whatsapp", {
+    bridgeMode: "external",
+    bridgeUrl: "http://wa.local",
+    threadRoutes: { "chat-passive-stale-notice": "thread-wa-passive-stale-notice" },
+  }, env);
+
+  const first = await routeWhatsAppInbound({ eventId: "wa-passive-stale-1", chatId: "chat-passive-stale-notice", text: "status?" }, env);
+  const notice = await appendThreadMessage("thread-wa-passive-stale-notice", {
+    role: "assistant",
+    source: "orkestr_runtime",
+    phase: "runtime_interrupted",
+    state: "completed",
+    text: "Codex conversation interrupted\n\nCodex reported that the active turn was interrupted.",
+    parentMessageId: first.message.id,
+    connector: "whatsapp",
+    chatId: "chat-passive-stale-notice",
+    accountId: "account-1",
+  }, env);
+  await deliverWhatsAppReplies(env, async () => response({ ok: true, ids: ["sent-stale-notice-original"] }));
+
+  const second = await routeWhatsAppInbound({ eventId: "wa-passive-stale-2", chatId: "chat-passive-stale-notice", text: "continue working" }, env);
+  await updateThreadMessage("thread-wa-passive-stale-notice", notice.id, {
+    parentMessageId: second.message.id,
+    revision: 2,
+  }, env);
+
+  const delivery = await deliverWhatsAppReplies(env, async () => response({ ok: true, ids: ["sent-stale-queue-notice"] }));
+  const messages = await listThreadMessages("thread-wa-passive-stale-notice", env);
+  const parent = messages.find((entry) => entry.id === second.message.id);
+
+  assert.equal(delivery.skipped.some((item) => item.messageId === second.message.id && item.reason === "assistant_reply_available"), false);
+  assert.equal(parent.state, "queued");
+  assert.notEqual(parent.observedVia, "whatsapp_passive_mirror_delivery");
+  assert.notEqual(parent.passiveMirrorMessageId, notice.id);
+});
+
 test("whatsapp delivery mirrors pane interruption notices", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-interruption-notice-"));
   const env = externalBridgeEnv(home);
