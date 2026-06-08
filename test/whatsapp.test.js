@@ -5351,6 +5351,51 @@ test("whatsapp delivery redacts allowed local paths for user-owned chats while s
   assert.equal(storedReply.attachments[0].filename, "report.txt");
 });
 
+test("whatsapp delivery exposes allowed local paths for admin-role thread owners", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-admin-role-path-"));
+  const env = await externalBridgeEnvWithAllowingSanitizer(home, { ORKESTR_ADMIN_USER_ID: "root-admin" });
+  const paths = dataPaths(env);
+  const uploadDir = path.join(paths.home, "uploads", "thread-wa-admin-role-path");
+  await fs.mkdir(uploadDir, { recursive: true });
+  const reportPath = path.join(uploadDir, "report.txt");
+  await fs.writeFile(reportPath, "report payload", "utf8");
+  await createUser({ id: "otcan", role: "admin", displayName: "Otcan Admin" }, env);
+  await createThread({ id: "thread-wa-admin-role-path", ownerUserId: "otcan", name: "WA Admin Role Path" }, env);
+  await writeConnectorConfig("whatsapp", {
+    bridgeMode: "external",
+    bridgeUrl: "http://wa.local",
+    threadRoutes: { "chat-admin-role-path": "thread-wa-admin-role-path" },
+  }, env);
+
+  const routed = await routeWhatsAppInbound({ eventId: "wa-admin-role-path-1", chatId: "chat-admin-role-path", text: "send report" }, env);
+  const reply = await appendThreadMessage("thread-wa-admin-role-path", {
+    role: "assistant",
+    source: "codex-rollout",
+    phase: "final_answer",
+    state: "completed",
+    text: `Generated report: ${reportPath}`,
+    parentMessageId: routed.message.id,
+    connector: "whatsapp",
+    chatId: "chat-admin-role-path",
+  }, env);
+
+  const calls = [];
+  const delivery = await deliverWhatsAppReplies(env, async (url, options) => {
+    calls.push({ url, body: JSON.parse(options.body) });
+    return response({ ok: true, ids: ["sent-admin-role-report"] });
+  });
+  const storedReply = (await listThreadMessages("thread-wa-admin-role-path", env)).find((message) => message.id === reply.id);
+  const visibleText = stripDebugFooter(calls[0].body.text);
+
+  assert.equal(delivery.delivered.length, 1);
+  assert.equal(calls[0].url.pathname, "/send-media");
+  assert.deepEqual(calls[0].body.paths, [reportPath]);
+  assert.match(visibleText, new RegExp(reportPath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+  assert.doesNotMatch(visibleText, /\[local file path omitted]/);
+  assert.equal(storedReply.attachments.length, 1);
+  assert.equal(storedReply.attachments[0].filename, "report.txt");
+});
+
 test("whatsapp delivery skips forbidden local paths and redacts them from outbound text", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-forbidden-path-"));
   const env = externalBridgeEnv(home);

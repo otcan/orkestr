@@ -18,7 +18,7 @@ import {
   turnIdFor,
 } from "../../core/src/router-traces.js";
 import { appendThreadMessage, createThreadForPrincipal, enqueueThreadInputForPrincipal, listThreadMessages, listThreads, listThreadsForPrincipal, updateThread, updateThreadMessage } from "../../core/src/threads.js";
-import { adminUserId, findOrCreateExternalUser, normalizeUserId } from "../../core/src/users.js";
+import { adminUserId, findOrCreateExternalUser, getUser, normalizeUserId } from "../../core/src/users.js";
 import { dataPaths, ensureDataDirs } from "../../storage/src/paths.js";
 import { readConnectorConfig } from "../../storage/src/config.js";
 import { appendEvent, readJson, writeJson } from "../../storage/src/store.js";
@@ -770,11 +770,13 @@ async function chatHasConfiguredThreadBinding({ chatId = "", accountId = "" } = 
   });
 }
 
-function principalForThread(thread = {}, env = process.env) {
+async function principalForThread(thread = {}, env = process.env) {
   const ownerUserId = resourceOwnerUserId(thread, env);
-  const adminId = normalizeUserId(env.ORKESTR_ADMIN_USER_ID || adminUserId);
-  if (ownerUserId === adminId) return adminPrincipal({ id: adminId, displayName: "Admin" });
-  return userPrincipal({ id: ownerUserId, role: "user", displayName: ownerUserId, source: "whatsapp-owner" });
+  const user = await getUser(ownerUserId, env).catch(() => null);
+  if (String(user?.role || "").trim().toLowerCase() === "admin") {
+    return adminPrincipal({ id: ownerUserId, displayName: user.displayName || ownerUserId });
+  }
+  return userPrincipal({ id: ownerUserId, role: "user", displayName: user?.displayName || ownerUserId, source: "whatsapp-owner" });
 }
 
 function explicitWhatsAppApprovalReply(text = "") {
@@ -2150,7 +2152,7 @@ export async function routeWhatsAppInbound(input = {}, env = process.env, fetchI
       deliveredAt: new Date().toISOString(),
     }, env);
     const connect = await createGoogleWorkspaceConnectLink({
-      principal: principalForThread(thread, env),
+      principal: await principalForThread(thread, env),
       thread,
       chatId,
       accountId,
@@ -2406,7 +2408,7 @@ export async function routeWhatsAppInbound(input = {}, env = process.env, fetchI
     };
   }
   let message = threadId
-    ? await enqueueThreadInputForPrincipal(threadId, messageInput, principalForThread(thread, env), env)
+    ? await enqueueThreadInputForPrincipal(threadId, messageInput, await principalForThread(thread, env), env)
     : await enqueueAgentMessage(agentId, messageInput, env);
   const contentDuplicate = Boolean(message.duplicate);
   if (threadId && !contentDuplicate) {
@@ -3524,7 +3526,7 @@ async function deliverWhatsAppRepliesOnce(env = process.env, fetchImpl = fetch) 
       const attachments = resolvedOutboundAttachments.attachments;
       const formattedText = formatWhatsAppOutboundText(redactDeniedThreadAttachmentPaths(preparedOutbound.text, {
         thread,
-        principal: principalForThread(thread || {}, env),
+        principal: await principalForThread(thread || {}, env),
         env,
       }));
       const text = appendWhatsAppDebugFooter(appendRemoteAttachmentFailureNotes(formattedText, remoteMaterialized.skipped), {
