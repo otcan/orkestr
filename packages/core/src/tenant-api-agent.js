@@ -883,14 +883,20 @@ function formatRunSkillActionTool(result = {}, context = {}) {
   }
   const desktop = output.desktop || {};
   const desktopLabel = clean(desktop.label || desktop.slug || label);
-  const url = publicFacingUrl(output.openedUrl || output.url || desktop.url, context.env);
+  const shareUrl = publicFacingUrl(output.shareUrl || output.desktopShare?.url || "", context.env);
+  const actionUrl = publicFacingUrl(output.openedUrl || "", context.env);
+  const url = shareUrl || publicFacingUrl(output.url || desktop.url, context.env);
   const lines = [];
-  if (action === "open_url") lines.push(`I opened ${url || "the requested URL"} in ${desktopLabel}.`);
-  else if (action === "open" || action === "start") lines.push(`${desktopLabel} is open${url ? ` at ${url}` : ""}.`);
+  if (action === "open_url") lines.push(`I opened ${actionUrl || "the requested URL"} in ${desktopLabel}.`);
+  else if (action === "open" || action === "start") lines.push(`${desktopLabel} is open.`);
   else if (action === "prepare") lines.push(`${desktopLabel} is prepared.`);
   else if (action === "stop") lines.push(`${desktopLabel} was stopped.`);
   else if (action === "restart") lines.push(`${desktopLabel} was restarted.`);
   else lines.push(clean(output.message) || `${label} ${action} completed.`);
+  if (shareUrl && ["open", "start", "open_url"].includes(action)) {
+    lines.push(`Open this one-time desktop link: ${shareUrl}`);
+    lines.push("The page will show an Orkestr desktop challenge. Paste that challenge back here to approve this browser.");
+  }
   if (/\blogged\s*in|login|signed\s*in/i.test(clean(context.message?.text))) {
     lines.push("The tool result only confirms the desktop action; it does not report login state, so I cannot confirm whether you are logged in.");
   } else if (/(page contents?|trending|entries|research|summary|summari[sz]e)/i.test(clean(context.message?.text))) {

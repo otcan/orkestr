@@ -9,6 +9,7 @@ import { classifyApprovalReply } from "../../core/src/runtime-settings.js";
 import { processApiAgentThreadInput, threadUsesApiAgent } from "../../core/src/tenant-api-agent.js";
 import { parseThreadInputCommand } from "../../core/src/thread-commands.js";
 import { isRemoteThreadAttachmentDescriptor, redactDeniedThreadAttachmentPaths, resolveThreadAttachments } from "../../core/src/thread-attachments.js";
+import { approveDesktopShareChallenge } from "../../core/src/desktop-shares.js";
 import {
   ensureRouterTurn,
   markRouterOutboxItem,
@@ -659,6 +660,25 @@ function pickString(...values) {
     if (text) return text;
   }
   return "";
+}
+
+function canonicalWhatsAppEventId(value = "") {
+  return String(value || "").trim().replace(/^(?:true|false)_/, "");
+}
+
+function sameWhatsAppSourceEvent(left = {}, right = {}) {
+  const leftCanonical = canonicalWhatsAppEventId(left.canonicalEventId || left.eventId);
+  const rightCanonical = canonicalWhatsAppEventId(right.canonicalEventId || right.eventId);
+  if (!leftCanonical || !rightCanonical || leftCanonical !== rightCanonical) return false;
+  const leftChat = pickString(left.chatId);
+  const rightChat = pickString(right.chatId);
+  return !leftChat || !rightChat || leftChat === rightChat;
+}
+
+function desktopShareApproveChallengeId(text = "") {
+  const value = String(text || "").trim();
+  const match = value.match(/^(?:\/?desktop\s+approve|orkestr\s+desktop\s+approve)\s+(desk-[A-Za-z0-9_-]{20,})$/i);
+  return match?.[1] || "";
 }
 
 function messageSourceRevision(message = {}) {
@@ -1965,6 +1985,7 @@ function generatedWhatsAppQueueNoticeText(text = "") {
 export async function routeWhatsAppInbound(input = {}, env = process.env, fetchImpl = fetch) {
   const config = await readConnectorConfig("whatsapp", env);
   const eventId = pickString(input.eventId, input.id, input.messageId);
+  const canonicalEventId = canonicalWhatsAppEventId(eventId);
   const initialChatId = pickString(input.chatId, input.chat?.id, input.fromChatId);
   const initialAccountId = pickString(input.accountId);
   const initialTraceId = routerTraceIdFor({
@@ -1999,7 +2020,10 @@ export async function routeWhatsAppInbound(input = {}, env = process.env, fetchI
   }, env).catch(() => {});
 
   const state = await readWhatsAppState(env);
-  const existing = (state.inboundEvents || []).find((event) => event.eventId === eventId);
+  const incomingEventIdentity = { eventId, canonicalEventId, chatId: initialChatId };
+  const existing = (state.inboundEvents || []).find((event) =>
+    event.eventId === eventId || sameWhatsAppSourceEvent(event, incomingEventIdentity)
+  );
   if (existing) {
     await recordRouterTraceEvent({
       routerTraceId: pickString(existing.routerTraceId, initialTraceId),
@@ -2011,10 +2035,19 @@ export async function routeWhatsAppInbound(input = {}, env = process.env, fetchI
       threadId: existing.threadId || null,
       messageId: existing.messageId,
       phase: "skipped",
-      reason: "duplicate_event_id",
+      reason: existing.eventId === eventId ? "duplicate_event_id" : "duplicate_source_message",
       terminal: true,
     }, env).catch(() => {});
-    await appendEvent({ type: "whatsapp_inbound_duplicate", eventId, routerTraceId: pickString(existing.routerTraceId, initialTraceId), agentId: existing.agentId || null, threadId: existing.threadId || null, messageId: existing.messageId }, env);
+    await appendEvent({
+      type: "whatsapp_inbound_duplicate",
+      eventId,
+      canonicalEventId,
+      routerTraceId: pickString(existing.routerTraceId, initialTraceId),
+      agentId: existing.agentId || null,
+      threadId: existing.threadId || null,
+      messageId: existing.messageId,
+      duplicateReason: existing.eventId === eventId ? "duplicate_event_id" : "duplicate_source_message",
+    }, env);
     return {
       duplicate: true,
       event: existing,
@@ -2069,6 +2102,7 @@ export async function routeWhatsAppInbound(input = {}, env = process.env, fetchI
   if (!promptFile && generatedWhatsAppQueueNoticeText(text)) {
     const event = {
       eventId,
+      canonicalEventId,
       routerTraceId,
       turnId,
       agentId: agentId || null,
@@ -2118,7 +2152,7 @@ export async function routeWhatsAppInbound(input = {}, env = process.env, fetchI
     originSurface: "whatsapp",
     originTransport: "whatsapp-local-bridge",
     connector: "whatsapp",
-    externalId: eventId,
+    externalId: canonicalEventId || eventId,
     sourceEventId: eventId,
     routerTraceId,
     turnId,
@@ -2142,6 +2176,86 @@ export async function routeWhatsAppInbound(input = {}, env = process.env, fetchI
     state: "received",
     mirrorPolicy: "reply_to_source",
   }, env).catch(() => null);
+  const desktopApproveChallenge = desktopShareApproveChallengeId(text);
+  if (threadId && thread && desktopApproveChallenge) {
+    const message = await appendThreadMessage(thread.id, {
+      ...messageInput,
+      role: "user",
+      state: "completed",
+      deliveryState: "delivered",
+      observedVia: "desktop_share_approve_command",
+      deliveredAt: new Date().toISOString(),
+    }, env);
+    let replyText = "";
+    let approved = null;
+    try {
+      approved = await approveDesktopShareChallenge(desktopApproveChallenge, {
+        env,
+        approvedBy: `whatsapp:${thread.id}`,
+      });
+      const desktopLabel = pickString(approved.share?.desktopSlug, "desktop");
+      replyText = `Desktop access approved for ${desktopLabel}. The desktop link should open in the browser where you generated the challenge.`;
+    } catch {
+      replyText = "That desktop challenge is not pending or has expired. Open a fresh desktop link and paste the new challenge here.";
+    }
+    await appendThreadMessage(thread.id, {
+      role: "assistant",
+      source: "desktop_share_approve",
+      phase: "final_answer",
+      text: replyText,
+      state: "completed",
+      parentMessageId: message.id,
+      connector: "whatsapp",
+      routerTraceId,
+      turnId,
+      chatId,
+      accountId,
+      desktopShareChallengeId: desktopApproveChallenge,
+      desktopShareId: pickString(approved?.share?.id),
+    }, env);
+    const event = {
+      eventId,
+      canonicalEventId,
+      routerTraceId,
+      turnId,
+      agentId: null,
+      threadId,
+      messageId: message.id,
+      chatId,
+      from,
+      accountId,
+      attachments: Array.isArray(input.attachments) ? input.attachments : [],
+      receivedAt: pickString(input.timestamp, input.receivedAt) || new Date().toISOString(),
+    };
+    state.inboundEvents = [...(state.inboundEvents || []), event];
+    await writeWhatsAppState(state, env);
+    await ensureRouterTurn({ routerTraceId, turnId, connector: "whatsapp", accountId, chatId, eventId, threadId, messageId: message.id, state: "completed" }, env).catch(() => null);
+    await recordRouterTraceEvent({ routerTraceId, turnId, connector: "whatsapp", accountId, chatId, sourceEventId: eventId, threadId, messageId: message.id, phase: "routed" }, env).catch(() => {});
+    await recordRouterTraceEvent({ routerTraceId, turnId, connector: "whatsapp", accountId, chatId, sourceEventId: eventId, threadId, messageId: message.id, phase: "completed", reason: approved ? "desktop_share_approved" : "desktop_share_approve_failed", terminal: true }, env).catch(() => {});
+    await appendEvent({
+      type: approved ? "whatsapp_desktop_share_challenge_approved" : "whatsapp_desktop_share_challenge_approve_failed",
+      eventId,
+      canonicalEventId,
+      threadId,
+      messageId: message.id,
+      chatId,
+      desktopShareChallengeId: desktopApproveChallenge,
+      desktopShareId: pickString(approved?.share?.id),
+    }, env);
+    return {
+      duplicate: false,
+      handledCommand: "desktop_share_approve",
+      desktopShareApproved: Boolean(approved),
+      event,
+      agentId: null,
+      threadId,
+      ownerUserId: resourceOwnerUserId(thread, env),
+      autoProvisioned: threadRoute.autoProvisioned === true,
+      createdThread: threadRoute.createdThread === true,
+      userId: threadRoute.user?.id || null,
+      message,
+    };
+  }
   if (threadId && thread && googleWorkspaceConnectCommand(text)) {
     const message = await appendThreadMessage(thread.id, {
       ...messageInput,
@@ -2174,6 +2288,7 @@ export async function routeWhatsAppInbound(input = {}, env = process.env, fetchI
     }, env);
     const event = {
       eventId,
+      canonicalEventId,
       routerTraceId,
       turnId,
       agentId: null,
@@ -2286,6 +2401,7 @@ export async function routeWhatsAppInbound(input = {}, env = process.env, fetchI
     }
     const event = {
       eventId,
+      canonicalEventId,
       routerTraceId,
       turnId,
       agentId: null,
@@ -2370,6 +2486,7 @@ export async function routeWhatsAppInbound(input = {}, env = process.env, fetchI
     }, env);
     const event = {
       eventId,
+      canonicalEventId,
       routerTraceId,
       turnId,
       agentId: null,
@@ -2416,6 +2533,7 @@ export async function routeWhatsAppInbound(input = {}, env = process.env, fetchI
   }
   const event = {
     eventId,
+    canonicalEventId,
     routerTraceId,
     turnId,
     agentId: agentId || null,

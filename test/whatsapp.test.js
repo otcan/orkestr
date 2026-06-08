@@ -11,6 +11,7 @@ import { listAgentMessages } from "../packages/core/src/messages.js";
 import { deliverPendingThreadInputs, listRuntimeLeases } from "../packages/core/src/runtime-leases.js";
 import { listRouterTraces } from "../packages/core/src/router-traces.js";
 import { getSetupStatus } from "../packages/core/src/setup.js";
+import { createDesktopShare, desktopShareStatus, openDesktopShare } from "../packages/core/src/desktop-shares.js";
 import { appendThreadMessage, createThread, enqueueThreadInput, getThread, listThreadMessages, listThreads, updateThreadMessage } from "../packages/core/src/threads.js";
 import { createUser, linkUserPrivateIdentity } from "../packages/core/src/users.js";
 import { deliverWhatsAppReplies, formatWhatsAppOutboundText, getWhatsAppChatMessages, getWhatsAppChatParticipants, getWhatsAppStatus, initialQueueDeliveryState, mapLocalWhatsAppStatusFromHealth, routeWhatsAppInbound, sendWhatsAppText, syncWhatsAppTypingIndicators } from "../packages/connectors/src/whatsapp.js";
@@ -3295,9 +3296,8 @@ test("local whatsapp bridge runs api-agent tenant chats without waking legacy ru
   assert.equal(events.some((event) => event.type === "thread_input_delivery_skipped" && event.threadId === "otcantest"), false);
   assert.equal(calls.some((call) => call.url.endsWith("/responses")), true);
   const sendCalls = calls.filter((call) => call.url.endsWith("/send-text") && call.body?.to === chatId);
-  assert.equal(sendCalls.length, 2);
-  assert.match(sendCalls[0].body.text, /^Runtime handoff is taking longer than expected: "Hi"\./);
-  assert.equal(sendCalls[1].body.text, "Hi! How can I help you today?");
+  assert.equal(sendCalls.length, 1);
+  assert.equal(sendCalls[0].body.text, "Hi! How can I help you today?");
 });
 
 test("local whatsapp inbound failures explain missing user capabilities", () => {
@@ -4627,6 +4627,78 @@ test("whatsapp inbound suppresses duplicate active thread inputs by content", as
   assert.equal(second.event.messageId, first.message.id);
   assert.equal(messages.length, 1);
   assert.equal(messages[0].state, "queued");
+});
+
+test("whatsapp inbound suppresses the same group message seen through sender and responder accounts", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-cross-account-source-duplicate-"));
+  const env = externalBridgeEnv(home);
+  await createThread({ id: "thread-wa-cross-account-source-duplicate", name: "WA Cross Account Source Duplicate" }, env);
+  await writeConnectorConfig("whatsapp", {
+    threadRoutes: { "chat-cross-account-source-duplicate": "thread-wa-cross-account-source-duplicate" },
+  }, env);
+
+  const first = await routeWhatsAppInbound({
+    eventId: "true_chat-cross-account-source-duplicate_msg-123_sender@lid",
+    chatId: "chat-cross-account-source-duplicate",
+    accountId: "sender",
+    from: "sender@lid",
+    fromMe: true,
+    text: "same physical group message",
+  }, env);
+  await updateThreadMessage("thread-wa-cross-account-source-duplicate", first.message.id, {
+    state: "completed",
+    deliveryState: "delivered",
+  }, env);
+  const second = await routeWhatsAppInbound({
+    eventId: "false_chat-cross-account-source-duplicate_msg-123_sender@lid",
+    chatId: "chat-cross-account-source-duplicate",
+    accountId: "responder",
+    from: "sender@lid",
+    fromMe: false,
+    text: "same physical group message",
+  }, env);
+  const messages = await listThreadMessages("thread-wa-cross-account-source-duplicate", env);
+
+  assert.equal(first.duplicate, false);
+  assert.equal(second.duplicate, true);
+  assert.equal(second.messageId, first.message.id);
+  assert.equal(messages.filter((message) => message.role === "user").length, 1);
+});
+
+test("whatsapp desktop approve command approves a pending desktop share challenge", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-desktop-share-approve-"));
+  const env = externalBridgeEnv(home, { ORKESTR_PUBLIC_HTTPS_URL: "https://app.example.test" });
+  await createThread({ id: "thread-wa-desktop-share-approve", name: "WA Desktop Share Approve" }, env);
+  await writeConnectorConfig("whatsapp", {
+    threadRoutes: { "chat-desktop-share-approve": "thread-wa-desktop-share-approve" },
+  }, env);
+  const created = await createDesktopShare({ desktopSlug: "linkedin", env });
+  const parsed = new URL(created.url);
+  const parts = parsed.pathname.split("/").filter(Boolean);
+  const shareId = parts.at(-1);
+  const key = parsed.searchParams.get("key");
+  const opened = await openDesktopShare({ shareId, key, subdomain: created.subdomain, env });
+
+  const routed = await routeWhatsAppInbound({
+    eventId: "wa-desktop-share-approve-1",
+    chatId: "chat-desktop-share-approve",
+    accountId: "responder",
+    text: `orkestr desktop approve ${opened.attempt.challenge}`,
+  }, env);
+  const ready = await desktopShareStatus({
+    shareId,
+    key,
+    subdomain: created.subdomain,
+    browserToken: opened.cookie.value.split(":")[1],
+    env,
+  });
+  const messages = await listThreadMessages("thread-wa-desktop-share-approve", env);
+  const assistant = messages.find((message) => message.parentMessageId === routed.message.id);
+
+  assert.equal(routed.handledCommand, "desktop_share_approve");
+  assert.equal(routed.desktopShareApproved, true);
+  assert.equal(ready.approved, true);
+  assert.match(assistant.text, /Desktop access approved for linkedin/);
 });
 
 test("whatsapp duplicate active tenant input is suppressed before sanitizer reruns", async () => {
@@ -6161,6 +6233,37 @@ test("whatsapp delivery reports app-server active-turn queue notices", async () 
   assert.match(stripDebugFooter(calls[0].body.text), /^Added after the current Codex turn: "queue behind app server turn"\. Use \/now to interrupt\./);
   assertDebugFooter(calls[0].body.text, { messageType: "update", queueReason: "active-turn" });
   assert.equal(messages.find((entry) => entry.id === routed.message.id).state, "queued");
+});
+
+test("whatsapp delivery suppresses premature api-agent runtime-ready queue notices", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-api-agent-handoff-notice-"));
+  const env = externalBridgeEnv(home);
+  await createThread({
+    id: "thread-wa-api-agent-handoff-notice",
+    name: "WA API Agent Handoff Notice Thread",
+    runtimeKind: "api-agent",
+    executor: { type: "api-agent", metadata: { runtimeKind: "api-agent" } },
+  }, env);
+  await writeConnectorConfig("whatsapp", {
+    bridgeMode: "external",
+    bridgeUrl: "http://wa.local",
+    threadRoutes: { "chat-api-agent-handoff-notice": "thread-wa-api-agent-handoff-notice" },
+  }, env);
+  const routed = await routeWhatsAppInbound({
+    eventId: "wa-api-agent-handoff-notice-1",
+    chatId: "chat-api-agent-handoff-notice",
+    text: "Do I have a virtual desk?",
+  }, env);
+  await updateThreadMessage("thread-wa-api-agent-handoff-notice", routed.message.id, {
+    state: "queued",
+    deliveryState: "waiting_runtime_ready",
+  }, env);
+
+  const delivery = await deliverWhatsAppReplies(env, async () => {
+    throw new Error("api-agent handoff notice should not be mirrored");
+  });
+
+  assert.equal(delivery.delivered.length, 0);
 });
 
 test("whatsapp delivery forwards failed routed inputs using inbound event metadata", async () => {

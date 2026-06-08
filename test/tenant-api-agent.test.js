@@ -3548,6 +3548,7 @@ test("tenant api-agent routes managed desktop requests through skill tools", asy
     ORKESTR_BROWSER_VISIBLE_SLUGS: "desktop,linkedin",
     ORKESTR_DEFAULT_DESKTOP_SLUG: "desktop",
     ORKESTR_BROWSER_LAUNCH_DISABLED: "1",
+    ORKESTR_PUBLIC_HTTPS_URL: "https://app.example.test",
   });
   await upsertUser({ id: "otcan", role: "user", displayName: "Otcan" }, env);
   await createThread({
@@ -4375,6 +4376,7 @@ test("tenant api-agent opens the generic desktop when public fetch hits a browse
     ORKESTR_BROWSER_VISIBLE_SLUGS: "desktop,linkedin",
     ORKESTR_DEFAULT_DESKTOP_SLUG: "desktop",
     ORKESTR_BROWSER_LAUNCH_DISABLED: "1",
+    ORKESTR_PUBLIC_HTTPS_URL: "https://app.example.test",
   });
   await upsertUser({ id: "otcan", role: "user", displayName: "Otcan" }, env);
   await createThread({
@@ -4465,7 +4467,10 @@ test("tenant api-agent opens the generic desktop when public fetch hits a browse
   assert.equal(result.ok, true);
   assert.equal(openAiCalls.length, 3);
   assert.match(assistant.text, /opened https:\/\/example\.com\/protected in LinkedIn/i);
+  assert.match(assistant.text, /Open this one-time desktop link: https:\/\/app\.example\.test\/desktop-share\//i);
+  assert.match(assistant.text, /Paste that challenge back here/i);
   assert.match(assistant.text, /does not return page contents/i);
+  assert.doesNotMatch(assistant.text, /\/desktop\/linkedin\/vnc\.html/i);
   assert.doesNotMatch(assistant.text, /Fetched Just a moment/i);
   assert.doesNotMatch(assistant.text, /\/codex/i);
 });

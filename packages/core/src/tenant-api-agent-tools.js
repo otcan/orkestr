@@ -42,6 +42,7 @@ import { doctorAutomationsForPrincipal } from "./automation-doctor.js";
 import { runTenantApiAgentTimerTool, tenantApiAgentTimerToolDefinitions } from "./tenant-api-agent-timer-tools.js";
 import { whereAmI } from "./whereiam.js";
 import { desktopProvisioningMessage } from "./desktop-provisioning.js";
+import { createDesktopShare } from "./desktop-shares.js";
 import { updateThread } from "./threads.js";
 import {
   createUserSkillForPrincipal,
@@ -550,6 +551,20 @@ function publicDesktopRecord(session = {}) {
   };
 }
 
+async function createDesktopActionShare(slug = "", label = "", principal = {}, env = process.env) {
+  const share = await createDesktopShare({
+    desktopSlug: slug,
+    principal,
+    label: clean(label || slug || "Desktop"),
+    env,
+  });
+  return {
+    url: safeUrl(share.url),
+    share: share.share || null,
+    wildcardSubdomainConfigured: share.wildcardSubdomainConfigured === true,
+  };
+}
+
 function uniqueClean(values = []) {
   const seen = new Set();
   const output = [];
@@ -769,11 +784,22 @@ async function runSkillAction(args = {}, principal = {}, thread = null, env = pr
     if (!desktop) return { ok: false, error: "desktop_not_available", action, skill, desktopInventory: inventory.desktopInventory };
     if (!desktop.availableActions.includes(action)) return { ok: false, error: "skill_action_not_available", action, skill, desktop };
     let result;
+    let share = null;
     if (action === "prepare") result = await prepareVirtualBrowser(slug, env, { principal });
     else if (action === "start") result = await openVirtualBrowser(slug, env, "", { principal });
     else if (action === "open") {
       if (desktop.url && !desktop.availableActions.includes("start")) {
-        return { ok: true, action, skill, desktop, message: "Desktop is already available.", url: desktop.url };
+        share = await createDesktopActionShare(slug, desktop.label || slug, principal, env);
+        return {
+          ok: true,
+          action,
+          skill,
+          desktop,
+          message: "Desktop is already available.",
+          shareUrl: share.url,
+          desktopShare: share.share,
+          wildcardSubdomainConfigured: share.wildcardSubdomainConfigured,
+        };
       }
       result = await openVirtualBrowser(slug, env, "", { principal });
     } else if (action === "open_url") {
@@ -781,13 +807,19 @@ async function runSkillAction(args = {}, principal = {}, thread = null, env = pr
     } else if (action === "stop") result = await stopVirtualBrowser(slug, env, { principal });
     else if (action === "restart") result = await restartVirtualBrowser(slug, env, { principal });
     else return { ok: false, error: "skill_action_not_implemented", action, skill, desktop };
+    if (["open", "start", "open_url"].includes(action)) {
+      share = await createDesktopActionShare(slug, result?.label || desktop.label || slug, principal, env);
+    }
     return {
       ok: true,
       action,
       skill: { ...skill, desktops: undefined },
       desktop: publicDesktopRecord(result),
-      url: safeUrl(result?.desk_url || result?.url),
+      url: "",
       openedUrl: safeUrl(result?.openedUrl),
+      shareUrl: share?.url || "",
+      desktopShare: share?.share || null,
+      wildcardSubdomainConfigured: share?.wildcardSubdomainConfigured === true,
       message: "Skill action completed.",
     };
   }
