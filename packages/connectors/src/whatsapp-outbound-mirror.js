@@ -388,6 +388,7 @@ export function formatWhatsAppDeliveryFailure(message) {
     "",
     "Your message could not be delivered to Codex.",
     `Reason: ${reason || "Unknown error."}`,
+    ...traceReferenceLines(message),
   ].join("\n");
 }
 
@@ -526,31 +527,50 @@ function queueNoticePreviewClause(preview) {
   return preview ? `: "${preview}".` : ".";
 }
 
+function traceReferenceLines(message = {}) {
+  const traceId = pickString(message.routerTraceId, message.traceId).slice(0, 80);
+  return traceId ? [`Trace: ${traceId}`] : [];
+}
+
+function appendTraceReference(text = "", message = {}) {
+  const lines = traceReferenceLines(message);
+  return lines.length ? `${text}\n${lines.join("\n")}` : text;
+}
+
 export function formatWhatsAppQueueNotice(message, reason = "") {
   const preview = queueNoticePreview(message);
   const normalizedReason = String(reason || "").trim().toLowerCase();
+  let notice = "";
   if (normalizedReason === "awaiting_active_turn") {
-    return `Added after the current Codex turn${queueNoticePreviewClause(preview)} Use /now to interrupt.`;
+    notice = `Added after the current Codex turn${queueNoticePreviewClause(preview)} Use /now to interrupt.`;
+    return appendTraceReference(notice, message);
   }
   if (normalizedReason === "awaiting_approval") {
-    return `Codex is waiting for approval. Your message is held${queueNoticePreviewClause(preview)} Send /approve or /deny.`;
+    notice = `Codex is waiting for approval. Your message is held${queueNoticePreviewClause(preview)} Send /approve or /deny.`;
+    return appendTraceReference(notice, message);
   }
   if (["waiting_runtime_start", "waking"].includes(normalizedReason)) {
-    return `Waking this thread. Your message will run after startup${queueNoticePreviewClause(preview)}`;
+    notice = `Waking this thread. Your message will run after startup${queueNoticePreviewClause(preview)}`;
+    return appendTraceReference(notice, message);
   }
   if (normalizedReason === "awaiting_runtime_completion") {
-    return `Queued behind current work${queueNoticePreviewClause(preview)}`;
+    notice = `Queued behind current work${queueNoticePreviewClause(preview)}`;
+    return appendTraceReference(notice, message);
   }
   if (normalizedReason === "interrupting") {
-    return `Interrupting the current Codex turn and queued your message${queueNoticePreviewClause(preview)}`;
+    notice = `Interrupting the current Codex turn and queued your message${queueNoticePreviewClause(preview)}`;
+    return appendTraceReference(notice, message);
   }
   if (["recovering_stale_ack", "retrying_delivery"].includes(normalizedReason)) {
-    return `Delivery is paused to avoid duplicates. Orkestr is recovering this thread${queueNoticePreviewClause(preview)}`;
+    notice = `Delivery is paused to avoid duplicates. Orkestr is recovering this thread${queueNoticePreviewClause(preview)}`;
+    return appendTraceReference(notice, message);
   }
   if (normalizedReason === "waiting_runtime_ready") {
-    return `Runtime handoff is taking longer than expected${queueNoticePreviewClause(preview)}`;
+    notice = `Runtime handoff is taking longer than expected${queueNoticePreviewClause(preview)}`;
+    return appendTraceReference(notice, message);
   }
-  return `Queued for delivery${queueNoticePreviewClause(preview)}`;
+  notice = `Queued for delivery${queueNoticePreviewClause(preview)}`;
+  return appendTraceReference(notice, message);
 }
 
 export function queuedModeWhatsAppDeliveryTarget(message, thread, state) {

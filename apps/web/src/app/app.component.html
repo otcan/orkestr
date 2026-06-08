@@ -314,6 +314,19 @@
           <h2>{{ threadTitle(thread) }}</h2>
           <p class="subline">
             <span class="status-pill" [class]="statusClass(thread)">{{ statusLabel(thread) }}</span>
+            @if (threadRuntimeModeShortLabel(thread)) {
+              <span
+                class="runtime-surface-chip"
+                [class.attached-terminal]="threadRuntimeMode(thread) === 'attached-terminal'"
+                [class.codex-api]="threadRuntimeMode(thread) === 'codex-api'"
+                [class.codex-tmux]="threadRuntimeMode(thread) === 'codex-tmux'"
+                [class.agent-runtime]="threadRuntimeMode(thread) === 'agent'"
+                [title]="threadRuntimeModeTitle(thread)"
+              >
+                <b>{{ threadRuntimeModeShortLabel(thread) }}</b>
+                <span>{{ threadRuntimeModeLabel(thread) }}</span>
+              </span>
+            }
             @if (threadBranchLabel(thread)) {
               <span class="branch-pill">{{ threadBranchLabel(thread) }}</span>
             }

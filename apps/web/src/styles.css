@@ -792,6 +792,67 @@ textarea:focus {
   color: #cfffca;
 }
 
+.runtime-surface-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: min(260px, 34vw);
+  overflow: hidden;
+  border: 1px solid rgba(145, 173, 139, 0.34);
+  border-radius: 999px;
+  background: rgba(145, 173, 139, 0.14);
+  color: #d8efcf;
+  padding: 5px 8px;
+  text-transform: none;
+  white-space: nowrap;
+}
+
+.runtime-surface-chip b,
+.runtime-surface-chip span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.68rem;
+  line-height: 1;
+  letter-spacing: 0;
+}
+
+.runtime-surface-chip b {
+  flex: 0 0 auto;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.runtime-surface-chip span {
+  font-weight: 800;
+  opacity: 0.86;
+}
+
+.runtime-surface-chip.codex-api {
+  border-color: rgba(104, 172, 219, 0.42);
+  background: rgba(104, 172, 219, 0.2);
+  color: #cfeeff;
+}
+
+.runtime-surface-chip.codex-tmux {
+  border-color: rgba(207, 184, 74, 0.42);
+  background: rgba(207, 184, 74, 0.18);
+  color: #fff2aa;
+}
+
+.runtime-surface-chip.attached-terminal {
+  border-color: rgba(255, 209, 102, 0.48);
+  background: rgba(255, 209, 102, 0.22);
+  color: #ffe7a3;
+}
+
+.runtime-surface-chip.agent-runtime {
+  border-color: rgba(99, 212, 113, 0.38);
+  background: rgba(99, 212, 113, 0.18);
+  color: #cfffca;
+}
+
 .error-badge {
   border-color: rgba(240, 109, 82, 0.52);
   background: rgba(240, 109, 82, 0.9);
@@ -1837,7 +1898,7 @@ ork-first-thread-wizard.first-thread-host {
   min-width: 0;
 }
 
-.subline span:last-child {
+.subline > span:last-child {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;

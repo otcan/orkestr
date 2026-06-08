@@ -692,8 +692,10 @@ test("web shell exposes runtime surface and Codex mode shortcuts", async () => {
   const styles = await fs.readFile("apps/web/src/styles.css", "utf8");
 
   assert.match(template, /class="runtime-surface-pill"/);
+  assert.match(template, /class="runtime-surface-chip"/);
   assert.match(template, /threadRuntimeModeShortLabel\(thread\)/);
   assert.match(template, /threadRuntimeModeLabel\(thread\)/);
+  assert.match(template, /\[title\]="threadRuntimeModeTitle\(thread\)"/);
   assert.match(template, /codexModeShortcutTitle\(thread\)/);
   assert.match(template, /Switch to Code mode with \/code/);
   assert.match(template, /Switch to Plan mode with \/plan/);
@@ -705,6 +707,11 @@ test("web shell exposes runtime surface and Codex mode shortcuts", async () => {
   assert.match(styles, /\.runtime-surface-pill\.codex-tmux/);
   assert.match(styles, /\.runtime-surface-pill\.attached-terminal/);
   assert.match(styles, /\.runtime-surface-pill\.agent-runtime/);
+  assert.match(styles, /\.runtime-surface-chip/);
+  assert.match(styles, /\.runtime-surface-chip\.codex-api/);
+  assert.match(styles, /\.runtime-surface-chip\.codex-tmux/);
+  assert.match(styles, /\.runtime-surface-chip\.attached-terminal/);
+  assert.match(styles, /\.runtime-surface-chip\.agent-runtime/);
 });
 
 test("web shell switches to a constrained non-admin user mode", async () => {

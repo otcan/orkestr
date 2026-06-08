@@ -5244,6 +5244,7 @@ test("whatsapp delivery forwards failed WhatsApp-origin thread inputs once", asy
   assert.equal(calls[0].body.to, "chat-failed-input");
   assert.match(calls[0].body.text, /^Delivery failed\n\nYour message could not be delivered to Codex\./);
   assert.match(calls[0].body.text, /can't find pane: %580/);
+  assert.match(calls[0].body.text, new RegExp(`Trace: ${routed.message.routerTraceId}`));
 });
 
 test("whatsapp delivery reports queued mode switches without marking the input delivered", async () => {
@@ -5324,6 +5325,7 @@ test("whatsapp delivery reports queued runtime inputs without marking the input 
   assert.equal(duplicate.delivered.length, 0);
   assert.equal(calls[0].body.to, "chat-queue-notice");
   assert.match(stripDebugFooter(calls[0].body.text), /^Runtime handoff is taking longer than expected: "ship it"\./);
+  assert.match(stripDebugFooter(calls[0].body.text), new RegExp(`Trace: ${routed.message.routerTraceId}`));
   assertDebugFooter(calls[0].body.text, { messageType: "update", model: "gpt-5.5/h", queueReason: "handoff-delayed" });
   assert.doesNotMatch(calls[0].body.text, /q:0/);
   assert.equal(messages.find((entry) => entry.id === routed.message.id).state, "queued");
@@ -5677,6 +5679,15 @@ test("whatsapp queue notices strip pasted debug footers from previews", () => {
 
   assert.equal(notice, 'Added after the current Codex turn: "Codex compacted the conversation context.". Use /now to interrupt.');
   assert.doesNotMatch(notice, /dbg:/);
+});
+
+test("whatsapp queue notices include an opaque trace reference when available", () => {
+  const notice = formatWhatsAppQueueNotice({
+    text: "ship it",
+    routerTraceId: "rt_trace_123",
+  }, "waiting_runtime_ready");
+
+  assert.equal(notice, 'Runtime handoff is taking longer than expected: "ship it".\nTrace: rt_trace_123');
 });
 
 test("whatsapp queue notices unwrap nested queue notice previews", () => {
