@@ -16,7 +16,10 @@ interface BrokerThreadRow {
   codexThreadId?: string | null;
   chatId?: string;
   chatName?: string;
+  bindingId?: string;
   accountIds: string[];
+  aclLabel: string;
+  sendAclMode: string;
   queueLabel: string;
   outboxLabel: string;
   runtimeLabel: string;
@@ -132,6 +135,9 @@ export class OpsPageComponent implements OnInit, OnDestroy {
   brokerRemediationRow: BrokerThreadRow | null = null;
   brokerRemediationAction = "";
   brokerRemediationBusy = false;
+  brokerAclRow: BrokerThreadRow | null = null;
+  brokerAclMode = "";
+  brokerAclBusy = false;
   readonly brokerSavedViews: BrokerSavedView[] = [
     { id: "all", label: "All", description: "Full broker inventory" },
     { id: "unanswered", label: "Unanswered", description: "Threads needing a reply" },
@@ -1102,7 +1108,10 @@ export class OpsPageComponent implements OnInit, OnDestroy {
         state: "Remote thread list not loaded",
         chatId: routeChatId,
         chatName: String(route?.chatName || ""),
+        bindingId: "",
         accountIds: [String(route?.accountId || "").trim()].filter(Boolean),
+        aclLabel: "remote route",
+        sendAclMode: "remote",
         queueLabel: "remote",
         outboxLabel: this.brokerOutboxLabelFor("", routeChatId),
         runtimeLabel: "remote",
@@ -1129,6 +1138,8 @@ export class OpsPageComponent implements OnInit, OnDestroy {
 
   brokerThreadRowFromThread(thread: ThreadSummary, route: NonNullable<TenantVm["whatsappRoute"]> | null): BrokerThreadRow {
     const chatId = String(thread.binding?.chatId || "").trim();
+    const binding = this.whatsappBindingForThread(thread, chatId);
+    const sendAclMode = this.whatsappBindingSendAclMode(binding || thread.binding || {});
     const accountIds = [
       thread.binding?.inboundAccountId,
       thread.binding?.senderAccountId,
@@ -1145,7 +1156,10 @@ export class OpsPageComponent implements OnInit, OnDestroy {
       codexThreadId: thread.codexThreadId,
       chatId,
       chatName: String(thread.binding?.displayName || ""),
+      bindingId: String(binding?.bindingId || binding?.id || this.objectValue(thread.binding || {}, "id") || ""),
       accountIds: [...new Set(accountIds)],
+      aclLabel: this.whatsappBindingAclLabel(binding || thread.binding || {}),
+      sendAclMode,
       queueLabel: `${Number(thread.pendingCount || 0)} queued · ${Number(thread.runningCount || 0)} running`,
       outboxLabel: this.brokerOutboxLabelFor(thread.id, chatId),
       runtimeLabel: this.threadRuntimeLabel(thread),
@@ -1212,6 +1226,55 @@ export class OpsPageComponent implements OnInit, OnDestroy {
 
   brokerAccountIds(row: BrokerThreadRow): string {
     return row.accountIds.length ? row.accountIds.join(", ") : "-";
+  }
+
+  requestBrokerAclChange(row: BrokerThreadRow, mode: string): void {
+    if (!row.bindingId || row.routeOnly) return;
+    this.brokerAclRow = row;
+    this.brokerAclMode = mode;
+  }
+
+  cancelBrokerAclChange(): void {
+    this.brokerAclRow = null;
+    this.brokerAclMode = "";
+  }
+
+  brokerAclChangeLabel(): string {
+    if (this.brokerAclMode === "owner-only") return "Restrict send ACL to owner";
+    if (this.brokerAclMode === "all-users") return "Allow all users to send";
+    return "Update send ACL";
+  }
+
+  brokerAclChangeMeta(): string {
+    const row = this.brokerAclRow;
+    if (!row) return "";
+    return [
+      row.bindingId ? `binding ${row.bindingId}` : "",
+      row.threadId ? `thread ${row.threadId}` : "",
+      row.chatId ? `chat ${row.chatId}` : "",
+      `current ${row.aclLabel}`,
+    ].filter(Boolean).join(" · ");
+  }
+
+  async confirmBrokerAclChange(): Promise<void> {
+    const row = this.brokerAclRow;
+    const mode = this.brokerAclMode;
+    if (!row?.bindingId || !mode || this.brokerAclBusy) return;
+    this.brokerAclBusy = true;
+    try {
+      await firstValueFrom(this.api.updateWhatsAppBinding(row.bindingId, {
+        acl: { send: { mode } },
+      }));
+      await this.loadOps(false);
+      this.notice = `${row.label} send ACL updated to ${mode}.`;
+      this.error = "";
+      this.cancelBrokerAclChange();
+    } catch (error) {
+      this.error = this.errorText(error);
+    } finally {
+      this.brokerAclBusy = false;
+      this.renderNow();
+    }
   }
 
   brokerThreadUrl(row: BrokerThreadRow): string {
@@ -1405,6 +1468,42 @@ export class OpsPageComponent implements OnInit, OnDestroy {
       binding.chatId ? `chat ${binding.chatId}` : "",
       binding.responderAccountId || binding.responderConnectorAccountId ? `Account ID ${binding.responderAccountId || binding.responderConnectorAccountId}` : "",
       binding.accountIds?.length ? `Allowed IDs ${binding.accountIds.join(", ")}` : "",
+    ].filter(Boolean).join(" · ");
+  }
+
+  whatsappBindingForThread(thread: ThreadSummary, chatId = ""): WhatsAppDoctorBinding | null {
+    return this.whatsappBindings().find((binding) => {
+      const bindingId = String(binding.bindingId || binding.id || "").trim();
+      const threadBindingId = String(this.objectValue(thread.binding || {}, "id") || "").trim();
+      return (!!binding.threadId && binding.threadId === thread.id) ||
+        (!!threadBindingId && bindingId === threadBindingId) ||
+        (!!chatId && binding.chatId === chatId);
+    }) || null;
+  }
+
+  whatsappBindingSendAclMode(binding: Record<string, unknown> = {}): string {
+    const acl = binding["acl"] && typeof binding["acl"] === "object" && !Array.isArray(binding["acl"])
+      ? binding["acl"] as Record<string, unknown>
+      : {};
+    const send = acl["send"] && typeof acl["send"] === "object" && !Array.isArray(acl["send"])
+      ? acl["send"] as Record<string, unknown>
+      : {};
+    return String(send["mode"] || "owner-only").trim();
+  }
+
+  whatsappBindingAclLabel(binding: Record<string, unknown> = {}): string {
+    const sendMode = this.whatsappBindingSendAclMode(binding);
+    const acl = binding["acl"] && typeof binding["acl"] === "object" && !Array.isArray(binding["acl"])
+      ? binding["acl"] as Record<string, unknown>
+      : {};
+    const read = acl["read"] && typeof acl["read"] === "object" && !Array.isArray(acl["read"]) ? acl["read"] as Record<string, unknown> : {};
+    const receive = acl["receive"] && typeof acl["receive"] === "object" && !Array.isArray(acl["receive"]) ? acl["receive"] as Record<string, unknown> : {};
+    const manage = acl["manage"] && typeof acl["manage"] === "object" && !Array.isArray(acl["manage"]) ? acl["manage"] as Record<string, unknown> : {};
+    return [
+      `send ${sendMode || "owner-only"}`,
+      read["mode"] ? `read ${read["mode"]}` : "",
+      receive["mode"] ? `receive ${receive["mode"]}` : "",
+      manage["mode"] ? `manage ${manage["mode"]}` : "",
     ].filter(Boolean).join(" · ");
   }
 
@@ -1616,7 +1715,10 @@ export class OpsPageComponent implements OnInit, OnDestroy {
       row.codexThreadId,
       row.chatId,
       row.chatName,
+      row.bindingId,
       row.accountIds.join(" "),
+      row.aclLabel,
+      row.sendAclMode,
       row.queueLabel,
       row.outboxLabel,
       row.runtimeLabel,

@@ -1104,6 +1104,13 @@ export interface WhatsAppDoctorBinding {
   responderAccountId?: string;
   responderConnectorAccountId?: string;
   accountIds?: string[];
+  acl?: {
+    send?: { mode?: string; users?: string[] };
+    read?: { mode?: string; users?: string[] };
+    receive?: { mode?: string; users?: string[] };
+    manage?: { mode?: string; users?: string[] };
+    [key: string]: unknown;
+  };
   updatedAt?: string;
   lastEvaluationAt?: string;
   [key: string]: unknown;
@@ -2136,6 +2143,13 @@ export class ApiService {
   whatsappOutboxAction(jobId: string, action: string, body: Record<string, unknown> = {}): Observable<WhatsAppOutboxActionResponse> {
     return this.http.post<WhatsAppOutboxActionResponse>(
       this.api(`/connectors/whatsapp/outbox/${encodeURIComponent(jobId)}/${encodeURIComponent(action)}`),
+      body,
+    );
+  }
+
+  updateWhatsAppBinding(bindingId: string, body: Record<string, unknown>): Observable<{ ok?: boolean; binding?: WhatsAppDoctorBinding; thread?: ThreadSummary }> {
+    return this.http.put<{ ok?: boolean; binding?: WhatsAppDoctorBinding; thread?: ThreadSummary }>(
+      this.api(`/connectors/whatsapp/bindings/${encodeURIComponent(bindingId)}`),
       body,
     );
   }

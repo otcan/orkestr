@@ -202,6 +202,19 @@
           </div>
         </article>
       }
+      @if (brokerAclRow) {
+        <article class="compact-row broker-acl-confirm">
+          <strong>{{ brokerAclChangeLabel() }}</strong>
+          <span>{{ brokerAclRow.label }}</span>
+          <small>{{ brokerAclChangeMeta() }}</small>
+          <div class="row-actions">
+            <button type="button" (click)="confirmBrokerAclChange()" [disabled]="brokerAclBusy">
+              {{ brokerAclBusy ? "Saving" : "Confirm ACL" }}
+            </button>
+            <button class="secondary" type="button" (click)="cancelBrokerAclChange()" [disabled]="brokerAclBusy">Cancel</button>
+          </div>
+        </article>
+      }
       <div class="compact-list instance-thread-list">
         @for (instance of brokerVisibleInstances(); track instance.id) {
           <article class="compact-row instance-row">
@@ -230,6 +243,7 @@
                     <small>{{ row.threadId || row.id }} @if (row.codexThreadId) { · {{ row.codexThreadId }} }</small>
                     <small>{{ row.state }} · {{ row.runtimeLabel }} @if (row.remoteStatus) { · {{ row.remoteStatus }} }</small>
                     <small [class.bad]="row.hasUnanswered">{{ row.unansweredLabel }}</small>
+                    <small>{{ row.aclLabel }}</small>
                   </span>
                   <span><strong>{{ row.chatName || "-" }}</strong><small>{{ row.chatId || "-" }}</small></span>
                   <span><code>{{ brokerAccountIds(row) }}</code></span>
@@ -249,6 +263,12 @@
                       <button class="secondary" type="button" disabled>Remote</button>
                     }
                     <button class="secondary" type="button" (click)="brokerRetryOutbox(row)">Retry</button>
+                    @if (row.bindingId && row.sendAclMode !== "owner-only") {
+                      <button class="secondary" type="button" (click)="requestBrokerAclChange(row, 'owner-only')">Owner ACL</button>
+                    }
+                    @if (row.bindingId && row.sendAclMode !== "all-users") {
+                      <button class="secondary" type="button" (click)="requestBrokerAclChange(row, 'all-users')">All ACL</button>
+                    }
                   </span>
                 </div>
               } @empty {

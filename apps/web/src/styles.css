@@ -2664,6 +2664,11 @@ ork-first-thread-wizard.first-thread-host {
   background: rgba(55, 41, 8, 0.34);
 }
 
+.broker-acl-confirm {
+  border-color: rgba(101, 198, 222, 0.28);
+  background: rgba(10, 37, 43, 0.34);
+}
+
 .audit-row small {
   color: #789071;
   font-size: 0.78rem;
