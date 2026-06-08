@@ -215,6 +215,19 @@
           </div>
         </article>
       }
+      @if (brokerTrustInstance) {
+        <article class="compact-row broker-trust-confirm">
+          <strong>{{ brokerTrustActionLabel() }}</strong>
+          <span>{{ releaseInstanceLabel(brokerTrustInstance) }}</span>
+          <small>{{ brokerInstanceTrustLabel(brokerTrustInstance) }} @if (brokerInstanceTrustMeta(brokerTrustInstance)) { · {{ brokerInstanceTrustMeta(brokerTrustInstance) }} }</small>
+          <div class="row-actions">
+            <button type="button" (click)="confirmBrokerTrust()" [disabled]="brokerTrustBusy">
+              {{ brokerTrustBusy ? "Saving" : "Confirm Trust" }}
+            </button>
+            <button class="secondary" type="button" (click)="cancelBrokerTrust()" [disabled]="brokerTrustBusy">Cancel</button>
+          </div>
+        </article>
+      }
       <div class="compact-list instance-thread-list">
         @for (instance of brokerVisibleInstances(); track instance.id) {
           <article class="compact-row instance-row">
@@ -234,6 +247,17 @@
             @if (releaseInstanceEndpoint(instance)) {
               <small>{{ releaseInstanceEndpoint(instance) }}</small>
             }
+            <small [class.ready]="brokerInstanceTrustClass(instance) === 'ready'" [class.bad]="brokerInstanceTrustClass(instance) === 'bad'">
+              Trust {{ brokerInstanceTrustLabel(instance) }} @if (brokerInstanceTrustMeta(instance)) { · {{ brokerInstanceTrustMeta(instance) }} }
+            </small>
+            <div class="row-actions">
+              @if (brokerTenantVm(instance) && brokerInstanceTrustClass(instance) !== 'ready') {
+                <button class="secondary" type="button" (click)="requestBrokerTrust(instance, 'trust')">Trust</button>
+              }
+              @if (brokerTenantVm(instance) && brokerInstanceTrustClass(instance) === 'ready') {
+                <button class="secondary" type="button" (click)="requestBrokerTrust(instance, 'revoke')">Revoke Trust</button>
+              }
+            </div>
             <div class="thread-instance-table">
               <div class="thread-instance-row head"><span>Thread</span><span>Chat</span><span>Account IDs</span><span>Queue / outbox</span><span>Actions</span></div>
               @for (row of brokerVisibleThreads(instance); track row.id) {

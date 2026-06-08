@@ -5,6 +5,8 @@ import { assertOwnerAccess, isAdminPrincipal } from "./policy.js";
 import { adminUserId, normalizeUserId } from "./users.js";
 
 const statuses = new Set(["planned", "provisioning", "running", "stopped", "error", "deleting", "deleted"]);
+const enrollmentStatuses = new Set(["not-enrolled", "pending", "enrolled", "revoked"]);
+const trustLevels = new Set(["untrusted", "pending", "trusted", "revoked"]);
 
 function nowIso() {
   return new Date().toISOString();
@@ -116,6 +118,22 @@ function normalizeConnectors(connectors = {}) {
   };
 }
 
+function normalizeTrust(trust = {}, input = {}) {
+  const source = trust && typeof trust === "object" && !Array.isArray(trust) ? trust : {};
+  const enrollmentStatus = clean(source.enrollmentStatus || source.status || input.enrollmentStatus || "not-enrolled").toLowerCase();
+  const trustLevel = clean(source.trustLevel || source.level || input.trustLevel || "untrusted").toLowerCase();
+  return {
+    enrollmentStatus: enrollmentStatuses.has(enrollmentStatus) ? enrollmentStatus : "not-enrolled",
+    trustLevel: trustLevels.has(trustLevel) ? trustLevel : "untrusted",
+    fingerprint: clean(source.fingerprint || input.fingerprint),
+    reviewedBy: clean(source.reviewedBy || input.reviewedBy),
+    enrolledAt: clean(source.enrolledAt || input.enrolledAt),
+    trustedAt: clean(source.trustedAt || input.trustedAt),
+    revokedAt: clean(source.revokedAt || input.revokedAt),
+    lastReason: clean(source.lastReason || input.lastReason || input.reason),
+  };
+}
+
 export function normalizeTenantVm(input = {}, env = process.env) {
   const ownerUserId = normalizeUserId(input.ownerUserId || input.userId || env.ORKESTR_ADMIN_USER_ID || adminUserId);
   const displayName = clean(input.displayName || input.name || ownerUserId);
@@ -136,6 +154,7 @@ export function normalizeTenantVm(input = {}, env = process.env) {
     bootstrap: normalizeBootstrap(input.bootstrap),
     connectors: normalizeConnectors(input.connectors),
     capabilities: normalizeStringList(input.capabilities || ["codex", "desks", "timers", "files", "whatsapp"]),
+    trust: normalizeTrust(input.trust, input),
     labels: normalizeLabels(input.labels),
     lastError: clean(input.lastError || input.error),
     createdAt: clean(input.createdAt) || nowIso(),
@@ -157,6 +176,7 @@ export function publicTenantVm(vm = {}) {
     bootstrap: { ...normalized.bootstrap },
     connectors: { ...normalized.connectors },
     capabilities: [...normalized.capabilities],
+    trust: { ...normalized.trust },
     labels: { ...normalized.labels },
     lastError: normalized.lastError,
     createdAt: normalized.createdAt,
@@ -241,6 +261,47 @@ export async function updateTenantVm(tenantVmId, patch = {}, env = process.env) 
 
 export async function setTenantVmStatus(tenantVmId, status, patch = {}, env = process.env) {
   return updateTenantVm(tenantVmId, { ...patch, status }, env);
+}
+
+export async function setTenantVmTrust(tenantVmId, input = {}, env = process.env) {
+  const action = clean(input.action || input.mode || "").toLowerCase();
+  const current = await getTenantVm(tenantVmId, env);
+  if (!current) throw tenantVmError("tenant_vm_not_found", 404);
+  const now = nowIso();
+  let trustPatch = {};
+  if (action === "request" || action === "pending" || action === "enroll") {
+    trustPatch = { enrollmentStatus: "pending", trustLevel: "pending", enrolledAt: current.trust.enrolledAt || now };
+  } else if (action === "trust" || action === "approve") {
+    trustPatch = { enrollmentStatus: "enrolled", trustLevel: "trusted", trustedAt: now, revokedAt: "" };
+  } else if (action === "revoke" || action === "untrust") {
+    trustPatch = { enrollmentStatus: "revoked", trustLevel: "revoked", revokedAt: now };
+  } else {
+    trustPatch = {
+      enrollmentStatus: input.enrollmentStatus,
+      trustLevel: input.trustLevel,
+    };
+  }
+  const trust = normalizeTrust({
+    ...current.trust,
+    ...trustPatch,
+    fingerprint: input.fingerprint ?? current.trust.fingerprint,
+    reviewedBy: input.reviewedBy ?? current.trust.reviewedBy,
+    lastReason: input.reason ?? input.lastReason ?? current.trust.lastReason,
+  });
+  const updated = await updateTenantVm(tenantVmId, { trust }, env);
+  await appendEvent({
+    type: "tenant_vm_trust_updated",
+    action: "tenant_vm.trust.update",
+    outcome: "success",
+    resourceType: "tenant_vm",
+    tenantVmId: updated.id,
+    ownerUserId: updated.ownerUserId,
+    enrollmentStatus: updated.trust.enrollmentStatus,
+    trustLevel: updated.trust.trustLevel,
+    reviewedBy: updated.trust.reviewedBy,
+    reason: updated.trust.lastReason,
+  }, env).catch(() => {});
+  return updated;
 }
 
 export async function deleteTenantVm(tenantVmId, env = process.env) {

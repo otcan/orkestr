@@ -6,6 +6,7 @@ import {
   listTenantVms,
   publicTenantVm,
   setTenantVmStatus,
+  setTenantVmTrust,
   updateTenantVm,
 } from "../../../../../packages/core/src/tenant-vm-registry.js";
 import { provisionTenantVm } from "../../../../../packages/core/src/tenant-vm-provisioning.js";
@@ -30,11 +31,20 @@ function tenantVmBody(body: Record<string, unknown> = {}) {
   if (body.kubevirt && typeof body.kubevirt === "object") output.kubevirt = body.kubevirt;
   if (body.bootstrap && typeof body.bootstrap === "object") output.bootstrap = body.bootstrap;
   if (body.connectors && typeof body.connectors === "object") output.connectors = body.connectors;
+  if (body.trust && typeof body.trust === "object") output.trust = body.trust;
   if (body.capabilities !== undefined) {
     output.capabilities = Array.isArray(body.capabilities) ? body.capabilities : String(body.capabilities || "").split(",");
   }
   if (body.labels && typeof body.labels === "object") output.labels = body.labels;
   if (body.lastError !== undefined || body.error !== undefined) output.lastError = String(body.lastError || body.error || "").trim();
+  return output;
+}
+
+function tenantVmTrustBody(body: Record<string, unknown> = {}) {
+  const output: Record<string, unknown> = {};
+  for (const key of ["action", "mode", "enrollmentStatus", "trustLevel", "fingerprint", "reviewedBy", "reason", "lastReason"]) {
+    if (body[key] !== undefined) output[key] = String(body[key] || "").trim();
+  }
   return output;
 }
 
@@ -145,6 +155,17 @@ export class TenantVmsController {
       String(body.status || ""),
       { lastError: String(body.lastError || body.error || "").trim() },
     );
+    return { ok: true, tenantVm: publicTenantVm(tenantVm) };
+  }
+
+  @Post(":tenantVmId/trust")
+  @HttpCode(200)
+  async trust(@Req() request: any, @Param("tenantVmId") tenantVmId: string, @Body() body: Record<string, unknown> = {}) {
+    assertAdminRequest(request);
+    const tenantVm = await setTenantVmTrust(tenantVmId, {
+      ...tenantVmTrustBody(body),
+      reviewedBy: String(requestPrincipal(request)?.userId || requestPrincipal(request)?.id || body.reviewedBy || "admin"),
+    });
     return { ok: true, tenantVm: publicTenantVm(tenantVm) };
   }
 

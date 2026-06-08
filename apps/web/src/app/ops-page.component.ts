@@ -138,6 +138,9 @@ export class OpsPageComponent implements OnInit, OnDestroy {
   brokerAclRow: BrokerThreadRow | null = null;
   brokerAclMode = "";
   brokerAclBusy = false;
+  brokerTrustInstance: ReleaseInstance | null = null;
+  brokerTrustAction = "";
+  brokerTrustBusy = false;
   readonly brokerSavedViews: BrokerSavedView[] = [
     { id: "all", label: "All", description: "Full broker inventory" },
     { id: "unanswered", label: "Unanswered", description: "Threads needing a reply" },
@@ -1093,6 +1096,72 @@ export class OpsPageComponent implements OnInit, OnDestroy {
     ].filter(Boolean).join(" · ");
   }
 
+  brokerInstanceTrustLabel(instance: ReleaseInstance): string {
+    const vm = this.brokerTenantVm(instance);
+    const trust = vm?.trust || {};
+    const level = String(trust.trustLevel || "untrusted").trim();
+    const enrollment = String(trust.enrollmentStatus || "not-enrolled").trim();
+    return `${level} · ${enrollment}`;
+  }
+
+  brokerInstanceTrustMeta(instance: ReleaseInstance): string {
+    const vm = this.brokerTenantVm(instance);
+    const trust = vm?.trust || {};
+    return [
+      trust.fingerprint ? `fingerprint ${trust.fingerprint}` : "",
+      trust.reviewedBy ? `reviewed ${trust.reviewedBy}` : "",
+      trust.trustedAt ? `trusted ${new Date(String(trust.trustedAt)).toLocaleString()}` : "",
+      trust.revokedAt ? `revoked ${new Date(String(trust.revokedAt)).toLocaleString()}` : "",
+      trust.lastReason ? `reason ${trust.lastReason}` : "",
+    ].filter(Boolean).join(" · ");
+  }
+
+  brokerInstanceTrustClass(instance: ReleaseInstance): string {
+    const level = String(this.brokerTenantVm(instance)?.trust?.trustLevel || "").toLowerCase();
+    if (level === "trusted") return "ready";
+    if (level === "revoked") return "bad";
+    return "";
+  }
+
+  requestBrokerTrust(instance: ReleaseInstance, action: "trust" | "revoke"): void {
+    if (!this.brokerTenantVm(instance)) return;
+    this.brokerTrustInstance = instance;
+    this.brokerTrustAction = action;
+  }
+
+  cancelBrokerTrust(): void {
+    this.brokerTrustInstance = null;
+    this.brokerTrustAction = "";
+  }
+
+  brokerTrustActionLabel(): string {
+    if (this.brokerTrustAction === "trust") return "Trust enrolled instance";
+    if (this.brokerTrustAction === "revoke") return "Revoke instance trust";
+    return "Update instance trust";
+  }
+
+  async confirmBrokerTrust(): Promise<void> {
+    const instance = this.brokerTrustInstance;
+    const vm = instance ? this.brokerTenantVm(instance) : null;
+    if (!vm?.id || !this.brokerTrustAction || this.brokerTrustBusy) return;
+    this.brokerTrustBusy = true;
+    try {
+      await firstValueFrom(this.api.updateTenantVmTrust(vm.id, {
+        action: this.brokerTrustAction,
+        reason: "operator_broker_trust_management",
+      }));
+      await this.loadOps(false);
+      this.notice = `${this.releaseInstanceLabel(instance!)} trust updated.`;
+      this.error = "";
+      this.cancelBrokerTrust();
+    } catch (error) {
+      this.error = this.errorText(error);
+    } finally {
+      this.brokerTrustBusy = false;
+      this.renderNow();
+    }
+  }
+
   brokerThreads(instance: ReleaseInstance): BrokerThreadRow[] {
     const route = this.brokerInstanceRoute(instance);
     const routeChatId = String(route?.chatId || "").trim();
@@ -1691,6 +1760,8 @@ export class OpsPageComponent implements OnInit, OnDestroy {
       this.releaseInstanceHealthLabel(instance),
       this.releaseInstanceDowntimeLabel(instance),
       this.brokerRemoteStatus(instance),
+      this.brokerInstanceTrustLabel(instance),
+      this.brokerInstanceTrustMeta(instance),
       route?.chatId,
       route?.chatName,
       route?.accountId,

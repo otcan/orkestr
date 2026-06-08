@@ -131,6 +131,17 @@ export interface TenantVm {
   displayName?: string;
   ownerUserId?: string;
   status?: string;
+  trust?: {
+    enrollmentStatus?: string;
+    trustLevel?: string;
+    fingerprint?: string;
+    reviewedBy?: string;
+    enrolledAt?: string;
+    trustedAt?: string;
+    revokedAt?: string;
+    lastReason?: string;
+    [key: string]: unknown;
+  };
   endpoint?: {
     baseUrl?: string;
     brokerBaseUrl?: string;
@@ -1536,6 +1547,13 @@ export class ApiService {
 
   tenantVms(): Observable<TenantVmsResponse> {
     return this.http.get<TenantVmsResponse>(this.api("/tenant-vms"));
+  }
+
+  updateTenantVmTrust(tenantVmId: string, body: Record<string, unknown>): Observable<{ ok?: boolean; tenantVm?: TenantVm }> {
+    return this.http.post<{ ok?: boolean; tenantVm?: TenantVm }>(
+      this.api(`/tenant-vms/${encodeURIComponent(tenantVmId)}/trust`),
+      body,
+    );
   }
 
   setupStatus(): Observable<SetupStatus> {

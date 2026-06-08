@@ -120,6 +120,7 @@ test("tenant VM registry API is admin-only and returns public-safe records", asy
     assert.equal(created.tenantVm.ownerUserId, "alice");
     assert.equal(created.tenantVm.resources.vcpus, 3);
     assert.equal(created.tenantVm.endpoint.baseUrl, "https://alice.example.test");
+    assert.equal(created.tenantVm.trust.trustLevel, "untrusted");
     assert.equal(Object.hasOwn(created.tenantVm, "token"), false);
 
     const duplicate = await fetch(`${baseUrl}/api/tenant-vms`, {
@@ -138,8 +139,19 @@ test("tenant VM registry API is admin-only and returns public-safe records", asy
     }));
     assert.equal(updated.tenantVm.status, "running");
 
+    const trusted = await read(await fetch(`${baseUrl}/api/tenant-vms/alice-tenant/trust`, {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie: adminCookie },
+      body: JSON.stringify({ action: "trust", fingerprint: "sha256:tenant-fingerprint", reason: "operator approved enrollment" }),
+    }));
+    assert.equal(trusted.tenantVm.trust.enrollmentStatus, "enrolled");
+    assert.equal(trusted.tenantVm.trust.trustLevel, "trusted");
+    assert.equal(trusted.tenantVm.trust.fingerprint, "sha256:tenant-fingerprint");
+    assert.equal(trusted.tenantVm.trust.lastReason, "operator approved enrollment");
+
     const listed = await read(await fetch(`${baseUrl}/api/tenant-vms`, { headers: { cookie: adminCookie } }));
     assert.deepEqual(listed.tenantVms.map((tenantVm) => tenantVm.id), ["alice-tenant"]);
+    assert.equal(listed.tenantVms[0].trust.trustLevel, "trusted");
 
     const whatsappRoute = await read(await fetch(`${baseUrl}/api/tenant-vms/alice-tenant/whatsapp-route`, {
       method: "POST",

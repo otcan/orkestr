@@ -126,6 +126,7 @@ test("ops page exposes release broker inventory", async () => {
   assert.match(api, /releaseInstances\(probe = true\)/);
   assert.match(api, /releaseRollout\(body:/);
   assert.match(api, /tenantVms\(\)/);
+  assert.match(api, /updateTenantVmTrust\(tenantVmId: string, body: Record<string, unknown>\)/);
   assert.match(api, /watcherAlerts\(limit = 20\)/);
   assert.match(api, /interface WhatsAppDoctorResponse/);
   assert.match(api, /whatsappDoctor\(\)/);
@@ -160,6 +161,10 @@ test("ops page exposes release broker inventory", async () => {
   assert.match(component, /whatsappBindingAclLabel\(binding: Record<string, unknown> = \{\}\): string/);
   assert.match(component, /requestBrokerAclChange\(row: BrokerThreadRow, mode: string\): void/);
   assert.match(component, /confirmBrokerAclChange\(\): Promise<void>/);
+  assert.match(component, /brokerTrustInstance: ReleaseInstance \| null = null/);
+  assert.match(component, /brokerInstanceTrustLabel\(instance: ReleaseInstance\): string/);
+  assert.match(component, /requestBrokerTrust\(instance: ReleaseInstance, action: "trust" \| "revoke"\): void/);
+  assert.match(component, /confirmBrokerTrust\(\): Promise<void>/);
   assert.match(component, /threadLooksUnanswered\(thread: ThreadSummary\): boolean/);
   assert.match(component, /releaseInstanceInfraLabel\(instance: ReleaseInstance\): string/);
   assert.match(component, /planReleaseRollout\(\): Promise<void>/);
@@ -197,6 +202,11 @@ test("ops page exposes release broker inventory", async () => {
   assert.match(template, /requestBrokerAclChange\(row, 'owner-only'\)/);
   assert.match(template, /requestBrokerAclChange\(row, 'all-users'\)/);
   assert.match(template, /row\.aclLabel/);
+  assert.match(template, /brokerTrustInstance/);
+  assert.match(template, /brokerInstanceTrustLabel\(instance\)/);
+  assert.match(template, /requestBrokerTrust\(instance, 'trust'\)/);
+  assert.match(template, /requestBrokerTrust\(instance, 'revoke'\)/);
+  assert.match(template, /confirmBrokerTrust\(\)/);
   assert.match(template, /row\.runtimeLabel/);
   assert.match(template, /row\.unansweredLabel/);
   assert.match(template, /releaseInstanceInfraLabel\(instance\)/);
@@ -215,6 +225,7 @@ test("ops page exposes release broker inventory", async () => {
   assert.match(styles, /\.broker-saved-views/);
   assert.match(styles, /\.broker-remediation-confirm/);
   assert.match(styles, /\.broker-acl-confirm/);
+  assert.match(styles, /\.broker-trust-confirm/);
   assert.doesNotMatch(template, /responder account/i);
 });
 
