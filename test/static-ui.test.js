@@ -152,6 +152,9 @@ test("ops page exposes release broker inventory", async () => {
   assert.match(component, /brokerVisibleAlerts\(\): WatcherAlert\[\]/);
   assert.match(component, /setBrokerSavedView\(viewId: BrokerSavedViewId\)/);
   assert.match(component, /saveBrokerViewState\(\): void/);
+  assert.match(component, /brokerRemediationRow: BrokerThreadRow \| null = null/);
+  assert.match(component, /requestBrokerRemediation\(row: BrokerThreadRow, action: "wake" \| "recover" \| "retry-outbox"\): void/);
+  assert.match(component, /confirmBrokerRemediation\(\): Promise<void>/);
   assert.match(component, /threadLooksUnanswered\(thread: ThreadSummary\): boolean/);
   assert.match(component, /releaseInstanceInfraLabel\(instance: ReleaseInstance\): string/);
   assert.match(component, /planReleaseRollout\(\): Promise<void>/);
@@ -181,6 +184,9 @@ test("ops page exposes release broker inventory", async () => {
   assert.match(template, /brokerVisibleInstances\(\)/);
   assert.match(template, /brokerVisibleThreads\(instance\)/);
   assert.match(template, /brokerVisibleAlerts\(\)/);
+  assert.match(template, /brokerRemediationRow/);
+  assert.match(template, /confirmBrokerRemediation\(\)/);
+  assert.match(template, /cancelBrokerRemediation\(\)/);
   assert.match(template, /row\.runtimeLabel/);
   assert.match(template, /row\.unansweredLabel/);
   assert.match(template, /releaseInstanceInfraLabel\(instance\)/);
@@ -197,6 +203,7 @@ test("ops page exposes release broker inventory", async () => {
   assert.match(template, /Recent Alerts/);
   assert.match(styles, /\.broker-search-panel/);
   assert.match(styles, /\.broker-saved-views/);
+  assert.match(styles, /\.broker-remediation-confirm/);
   assert.doesNotMatch(template, /responder account/i);
 });
 

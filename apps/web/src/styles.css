@@ -2659,6 +2659,11 @@ ork-first-thread-wizard.first-thread-host {
   overflow-wrap: anywhere;
 }
 
+.broker-remediation-confirm {
+  border-color: rgba(255, 211, 115, 0.28);
+  background: rgba(55, 41, 8, 0.34);
+}
+
 .audit-row small {
   color: #789071;
   font-size: 0.78rem;

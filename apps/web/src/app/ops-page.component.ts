@@ -129,6 +129,9 @@ export class OpsPageComponent implements OnInit, OnDestroy {
   auditOutcomeFilter = "";
   brokerSearchText = "";
   brokerSavedViewId: BrokerSavedViewId = "all";
+  brokerRemediationRow: BrokerThreadRow | null = null;
+  brokerRemediationAction = "";
+  brokerRemediationBusy = false;
   readonly brokerSavedViews: BrokerSavedView[] = [
     { id: "all", label: "All", description: "Full broker inventory" },
     { id: "unanswered", label: "Unanswered", description: "Threads needing a reply" },
@@ -1243,12 +1246,56 @@ export class OpsPageComponent implements OnInit, OnDestroy {
 
   async brokerWake(row: BrokerThreadRow): Promise<void> {
     if (!row.localThread) return;
-    await this.runBrokerThreadAction(row, "wake");
+    this.requestBrokerRemediation(row, "wake");
   }
 
   async brokerRecover(row: BrokerThreadRow): Promise<void> {
     if (!row.localThread) return;
-    await this.runBrokerThreadAction(row, "recover");
+    this.requestBrokerRemediation(row, "recover");
+  }
+
+  requestBrokerRemediation(row: BrokerThreadRow, action: "wake" | "recover" | "retry-outbox"): void {
+    this.brokerRemediationRow = row;
+    this.brokerRemediationAction = action;
+  }
+
+  cancelBrokerRemediation(): void {
+    this.brokerRemediationRow = null;
+    this.brokerRemediationAction = "";
+  }
+
+  brokerRemediationLabel(): string {
+    if (this.brokerRemediationAction === "wake") return "Wake thread";
+    if (this.brokerRemediationAction === "recover") return "Recover runtime";
+    if (this.brokerRemediationAction === "retry-outbox") return "Retry outbox";
+    return "Remediation";
+  }
+
+  brokerRemediationMeta(): string {
+    const row = this.brokerRemediationRow;
+    if (!row) return "";
+    return [
+      row.threadId ? `thread ${row.threadId}` : "",
+      row.chatId ? `chat ${row.chatId}` : "",
+      row.accountIds.length ? `accounts ${row.accountIds.join(", ")}` : "",
+      row.runtimeLabel,
+      row.outboxLabel,
+    ].filter(Boolean).join(" · ");
+  }
+
+  async confirmBrokerRemediation(): Promise<void> {
+    const row = this.brokerRemediationRow;
+    const action = this.brokerRemediationAction;
+    if (!row || this.brokerRemediationBusy) return;
+    this.brokerRemediationBusy = true;
+    try {
+      if (action === "wake" || action === "recover") await this.runBrokerThreadAction(row, action);
+      else if (action === "retry-outbox") await this.runBrokerOutboxRetry(row);
+      this.cancelBrokerRemediation();
+    } finally {
+      this.brokerRemediationBusy = false;
+      this.renderNow();
+    }
   }
 
   private async runBrokerThreadAction(row: BrokerThreadRow, action: "wake" | "recover"): Promise<void> {
@@ -1263,6 +1310,10 @@ export class OpsPageComponent implements OnInit, OnDestroy {
   }
 
   async brokerRetryOutbox(row: BrokerThreadRow): Promise<void> {
+    this.requestBrokerRemediation(row, "retry-outbox");
+  }
+
+  private async runBrokerOutboxRetry(row: BrokerThreadRow): Promise<void> {
     const job = this.opsWhatsAppOutboxJobs.find((candidate) => {
       const state = String(candidate.state || "").toLowerCase();
       if (!["failed", "pending_retry", "queued", "pending"].includes(state)) return false;

@@ -189,6 +189,19 @@
           }
         </article>
       }
+      @if (brokerRemediationRow) {
+        <article class="compact-row broker-remediation-confirm">
+          <strong>{{ brokerRemediationLabel() }}</strong>
+          <span>{{ brokerRemediationRow.label }}</span>
+          <small>{{ brokerRemediationMeta() }}</small>
+          <div class="row-actions">
+            <button type="button" (click)="confirmBrokerRemediation()" [disabled]="brokerRemediationBusy">
+              {{ brokerRemediationBusy ? "Running" : "Confirm" }}
+            </button>
+            <button class="secondary" type="button" (click)="cancelBrokerRemediation()" [disabled]="brokerRemediationBusy">Cancel</button>
+          </div>
+        </article>
+      }
       <div class="compact-list instance-thread-list">
         @for (instance of brokerVisibleInstances(); track instance.id) {
           <article class="compact-row instance-row">
