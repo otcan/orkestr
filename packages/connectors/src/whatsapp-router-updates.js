@@ -77,10 +77,11 @@ function recoveryActionForMessage(message) {
     return { action: parsed.rawCommand === "restart" ? "restart" : "reset", rawCommand: parsed.rawCommand || "reset" };
   }
   if (observedVia === "orkestr_interrupt_command") {
+    if (deliveryState === "interrupting" || message.forceDeliveryAfterInterrupt === true) return null;
     return {
       action: "interrupt",
       rawCommand: parsed.rawCommand || (message.forceDeliveryAfterInterrupt === true ? "now" : "interrupt"),
-      queuedPayload: deliveryState === "interrupting" || message.forceDeliveryAfterInterrupt === true,
+      queuedPayload: false,
     };
   }
   return null;

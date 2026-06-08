@@ -8,6 +8,11 @@ import {
   routerTraceMetrics,
 } from "../../../../../packages/core/src/router-traces.js";
 import { doctorWhatsAppRouter } from "../../../../../packages/core/src/router-doctor.js";
+import {
+  listConnectorOutboxJobs,
+  releaseConnectorOutboxClaim,
+} from "../../../../../packages/connectors/src/connector-outbox.js";
+import { getWhatsAppStatus } from "../../../../../packages/connectors/src/whatsapp.js";
 import { isAdminPrincipal } from "../../../../../packages/core/src/policy.js";
 import { requestPrincipal } from "../../../../../packages/core/src/principal.js";
 import { listThreadsForPrincipal } from "../../../../../packages/core/src/threads.js";
@@ -78,6 +83,9 @@ export class RouterTracesController {
       repair,
       repairSafe: !boolQuery(query.unsafe),
       staleMs: numberQuery(query.staleMs),
+      whatsappStatusFn: () => getWhatsAppStatus(),
+      listConnectorOutboxJobsFn: listConnectorOutboxJobs,
+      releaseConnectorOutboxClaimFn: releaseConnectorOutboxClaim,
     });
     if (!allowed) return result;
     return {

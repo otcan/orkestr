@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { ensureConnectorOutboxJob, readConnectorOutbox } from "../packages/connectors/src/connector-outbox.js";
+import { ensureConnectorOutboxJob, listConnectorOutboxJobs, readConnectorOutbox, releaseConnectorOutboxClaim } from "../packages/connectors/src/connector-outbox.js";
 import { doctorWhatsAppRouter } from "../packages/core/src/router-doctor.js";
 import { appendThreadMessage, createThread, listThreadMessages, updateThread } from "../packages/core/src/threads.js";
 
@@ -27,6 +27,14 @@ async function createWhatsAppThread(env) {
   }, env);
 }
 
+function readyWhatsAppStatus() {
+  return { ready: true, accounts: [{ accountId: "responder", ready: true }] };
+}
+
+function downWhatsAppStatus() {
+  return { ready: false, state: "disabled" };
+}
+
 test("WhatsApp router doctor detects and requeues terminal user input without runtime evidence", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-router-doctor-terminal-"));
   const env = runtimeEnv(home);
@@ -43,11 +51,11 @@ test("WhatsApp router doctor detects and requeues terminal user input without ru
     deliveryState: "delivered",
   }, env);
 
-  const before = await doctorWhatsAppRouter({ thread: thread.id, env });
+  const before = await doctorWhatsAppRouter({ thread: thread.id, env, whatsappStatusFn: downWhatsAppStatus });
   assert.equal(before.ok, false);
   assert.equal(before.checks.some((check) => check.code === "queued_whatsapp_input_marked_terminal_without_runtime_delivery" && check.messageId === user.id), true);
 
-  const repaired = await doctorWhatsAppRouter({ thread: thread.id, repair: true, env });
+  const repaired = await doctorWhatsAppRouter({ thread: thread.id, repair: true, env, whatsappStatusFn: downWhatsAppStatus });
   const messages = await listThreadMessages(thread.id, env);
   const updated = messages.find((message) => message.id === user.id);
 
@@ -80,10 +88,22 @@ test("WhatsApp router doctor releases stale connector outbox claims", async () =
     claimExpiresAt: expired,
   }, env);
 
-  const before = await doctorWhatsAppRouter({ thread: thread.id, env });
+  const before = await doctorWhatsAppRouter({
+    thread: thread.id,
+    env,
+    whatsappStatusFn: readyWhatsAppStatus,
+    listConnectorOutboxJobsFn: listConnectorOutboxJobs,
+  });
   assert.equal(before.checks.some((check) => check.code === "stale_outbox_claim" && check.outboxJobId === created.job.id), true);
 
-  const repaired = await doctorWhatsAppRouter({ thread: thread.id, repair: true, env });
+  const repaired = await doctorWhatsAppRouter({
+    thread: thread.id,
+    repair: true,
+    env,
+    whatsappStatusFn: readyWhatsAppStatus,
+    listConnectorOutboxJobsFn: listConnectorOutboxJobs,
+    releaseConnectorOutboxClaimFn: releaseConnectorOutboxClaim,
+  });
   const store = await readConnectorOutbox(env);
   const job = store.jobs.find((item) => item.id === created.job.id);
 
@@ -109,7 +129,7 @@ test("WhatsApp router doctor reports queued input while runtime is sleeping", as
   }, env);
   await updateThread(thread.id, { state: "sleeping", runtime: { state: "sleeping" } }, env);
 
-  const report = await doctorWhatsAppRouter({ thread: thread.id, env });
+  const report = await doctorWhatsAppRouter({ thread: thread.id, env, whatsappStatusFn: downWhatsAppStatus });
   assert.equal(report.checks.some((check) => check.code === "sleeping_thread_has_queued_whatsapp_input"), true);
   assert.equal(report.checks.some((check) => check.code === "transport_down"), true);
 });

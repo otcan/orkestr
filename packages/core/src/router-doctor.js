@@ -1,9 +1,4 @@
 import { appendEvent } from "../../storage/src/store.js";
-import {
-  listConnectorOutboxJobs,
-  releaseConnectorOutboxClaim,
-} from "../../connectors/src/connector-outbox.js";
-import { getWhatsAppStatus } from "../../connectors/src/whatsapp.js";
 import { deliverPendingThreadInputs, runtimeStatus, wakeThread } from "./runtime-leases.js";
 import { getThread, listThreadMessages, listThreads, updateThreadMessage } from "./threads.js";
 import { listRouterOutbox, listRouterTraces, recordRouterTraceEvent } from "./router-traces.js";
@@ -144,7 +139,7 @@ function runtimeReady(status = {}) {
 }
 
 async function repairIssue(item = {}, context = {}) {
-  const { env, thread, repairSafe } = context;
+  const { env, thread, repairSafe, releaseConnectorOutboxClaimFn } = context;
   if (item.code === "sleeping_thread_has_queued_whatsapp_input") {
     const result = await wakeThread(thread.id, { reason: "router_doctor_whatsapp_repair" }, env);
     return { code: "wake_thread", ok: true, threadId: thread.id, messageId: item.messageId, status: result.status || null };
@@ -164,7 +159,9 @@ async function repairIssue(item = {}, context = {}) {
     return { code: "retry_runtime_delivery", ok: true, threadId: thread.id, messageId: item.messageId, requeued, delivered };
   }
   if (item.code === "stale_outbox_claim") {
-    const released = await releaseConnectorOutboxClaim(item.outboxJobId, { reason: "router_doctor_stale_claim" }, env);
+    const released = typeof releaseConnectorOutboxClaimFn === "function"
+      ? await releaseConnectorOutboxClaimFn(item.outboxJobId, { reason: "router_doctor_stale_claim" }, env)
+      : null;
     return { code: "release_stale_outbox_claim", ok: Boolean(released), outboxJobId: item.outboxJobId, state: released?.state || "" };
   }
   if (item.code === "queued_whatsapp_input_marked_terminal_without_runtime_delivery" && repairSafe !== false) {
@@ -191,16 +188,18 @@ async function inspectThread(thread, options = {}) {
   const env = options.env || process.env;
   const repair = options.repair === true;
   const repairSafe = options.repairSafe !== false;
+  const listConnectorOutboxJobsFn = typeof options.listConnectorOutboxJobsFn === "function" ? options.listConnectorOutboxJobsFn : null;
+  const releaseConnectorOutboxClaimFn = typeof options.releaseConnectorOutboxClaimFn === "function" ? options.releaseConnectorOutboxClaimFn : null;
   const thresholdMs = Number(options.staleMs || 0) || staleQueueMs(env);
   const messages = await listThreadMessages(thread.id, env);
   const traces = await listRouterTraces({ threadId: thread.id, connector: "whatsapp" }, env);
-  const status = await (typeof options.runtimeStatusFn === "function"
+  const status = await Promise.resolve(typeof options.runtimeStatusFn === "function"
     ? options.runtimeStatusFn(thread, messages, env)
     : runtimeStatus(thread.id, env)
   ).catch(() => ({ state: thread.state || "unknown" }));
-  const whatsappStatus = await (typeof options.whatsappStatusFn === "function"
+  const whatsappStatus = await Promise.resolve(typeof options.whatsappStatusFn === "function"
     ? options.whatsappStatusFn(thread, env)
-    : getWhatsAppStatus(env)
+    : Promise.resolve({ ready: false, state: "unknown" })
   ).catch((error) => ({ state: "error", error: clean(error?.message || error) }));
   const checks = [];
   const repairs = [];
@@ -295,7 +294,9 @@ async function inspectThread(thread, options = {}) {
     }
   }
 
-  const connectorOutbox = await listConnectorOutboxJobs({ connector: "whatsapp", threadId: thread.id, state: "claimed sent_to_broker" }, env);
+  const connectorOutbox = listConnectorOutboxJobsFn
+    ? await listConnectorOutboxJobsFn({ connector: "whatsapp", threadId: thread.id, state: "claimed sent_to_broker" }, env)
+    : { jobs: [] };
   for (const job of connectorOutbox.jobs || []) {
     const claimAge = ageMs(job.claimedAt || job.updatedAt);
     const expired = clean(job.claimExpiresAt) ? dateMs(job.claimExpiresAt) <= Date.now() : claimAge >= outboxClaimTimeoutMs(env);
@@ -311,7 +312,7 @@ async function inspectThread(thread, options = {}) {
 
   if (repair) {
     for (const item of checks) {
-      const repaired = await repairIssue(item, { env, thread, repairSafe }).catch((error) => ({
+      const repaired = await repairIssue(item, { env, thread, repairSafe, releaseConnectorOutboxClaimFn }).catch((error) => ({
         code: "repair_failed",
         ok: false,
         issueCode: item.code,

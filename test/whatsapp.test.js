@@ -5491,18 +5491,18 @@ test("whatsapp delivery reports recovery action requests", async () => {
   });
 
   assert.equal(delivery.delivered.length, 3);
-  assert.deepEqual(delivery.delivered.map((entry) => entry.deliveryType), ["router_update", "router_update", "router_update"]);
-  assert.deepEqual(delivery.delivered.map((entry) => entry.routerUpdateType), ["recovery_action_requested", "recovery_action_requested", "recovery_action_requested"]);
+  assert.deepEqual(delivery.delivered.map((entry) => entry.deliveryType), ["router_update", "queue_notice", "router_update"]);
+  assert.deepEqual(delivery.delivered.map((entry) => entry.routerUpdateType || ""), ["recovery_action_requested", "", "recovery_action_requested"]);
   assert.equal(delivery.delivered[0].sourceMessageId, restart.id);
   assert.equal(delivery.delivered[1].sourceMessageId, now.id);
   assert.equal(delivery.delivered[2].sourceMessageId, safeReset.id);
   assert.equal(duplicate.delivered.length, 0);
   assert.equal(calls.every((call) => call.body.to === "chat-recovery-action"), true);
   assert.match(stripDebugFooter(calls[0].body.text), /^Restart requested\.\n\nOrkestr reset the current Codex runtime and resumed the thread\./);
-  assert.match(stripDebugFooter(calls[1].body.text), /^Interrupt requested\.\n\nOrkestr interrupted the current Codex turn and queued your message for the next turn: "fix the pairing number"\./);
+  assert.match(stripDebugFooter(calls[1].body.text), /^Interrupting the current Codex turn and queued your message: "fix the pairing number"\./);
   assert.match(stripDebugFooter(calls[2].body.text), /^Safe reset requested\.\n\nOrkestr saved recent Orkestr context and started a fresh Codex session for this thread\./);
   assertDebugFooter(calls[0].body.text, { messageType: "update" });
-  assertDebugFooter(calls[1].body.text, { messageType: "update" });
+  assertDebugFooter(calls[1].body.text, { messageType: "update", queueReason: "interrupting" });
   assertDebugFooter(calls[2].body.text, { messageType: "update" });
 });
 
