@@ -113,3 +113,68 @@ test("WhatsApp router doctor reports queued input while runtime is sleeping", as
   assert.equal(report.checks.some((check) => check.code === "sleeping_thread_has_queued_whatsapp_input"), true);
   assert.equal(report.checks.some((check) => check.code === "transport_down"), true);
 });
+
+test("WhatsApp router doctor does not treat a working runtime as ready for stale delivery", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-router-doctor-working-"));
+  const env = runtimeEnv(home);
+  const thread = await createWhatsAppThread(env);
+  const stale = new Date(Date.now() - 60_000).toISOString();
+  await appendThreadMessage(thread.id, {
+    role: "user",
+    source: "whatsapp_inbound",
+    connector: "whatsapp",
+    chatId: "chat-1",
+    accountId: "responder",
+    externalId: "wa-msg-working",
+    text: "Keep working",
+    state: "queued",
+    deliveryState: "waiting_runtime_ready",
+    createdAt: stale,
+    updatedAt: stale,
+  }, env);
+
+  const report = await doctorWhatsAppRouter({
+    thread: thread.id,
+    env,
+    runtimeStatusFn: async () => ({ state: "working", promptReady: true, working: true }),
+    whatsappStatusFn: async () => ({ ready: true, accounts: [{ accountId: "responder", ready: true }] }),
+  });
+
+  assert.equal(report.checks.some((check) => check.code === "stale_queued_whatsapp_input_ready_runtime"), false);
+});
+
+test("WhatsApp router doctor requeues stale non-ack input before retrying delivery", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-router-doctor-stale-requeue-"));
+  const env = runtimeEnv(home);
+  const thread = await createWhatsAppThread(env);
+  const stale = new Date(Date.now() - 60_000).toISOString();
+  const input = await appendThreadMessage(thread.id, {
+    role: "user",
+    source: "whatsapp_inbound",
+    connector: "whatsapp",
+    chatId: "chat-1",
+    accountId: "responder",
+    externalId: "wa-msg-running",
+    text: "Keep working",
+    state: "running",
+    deliveryState: "runtime_delivery_started",
+    createdAt: stale,
+    updatedAt: stale,
+  }, env);
+
+  const repaired = await doctorWhatsAppRouter({
+    thread: thread.id,
+    repair: true,
+    env,
+    runtimeStatusFn: async () => ({ state: "ready", promptReady: true, working: false }),
+    whatsappStatusFn: async () => ({ ready: true, accounts: [{ accountId: "responder", ready: true }] }),
+  });
+  const messages = await listThreadMessages(thread.id, env);
+  const updated = messages.find((message) => message.id === input.id);
+  const repair = repaired.repairs.find((item) => item.code === "retry_runtime_delivery" && item.messageId === input.id);
+
+  assert.equal(Boolean(repair), true);
+  assert.equal(repair.requeued, true);
+  assert.equal(updated.state, "queued");
+  assert.equal(updated.deliveryState, "waiting_runtime_start");
+});

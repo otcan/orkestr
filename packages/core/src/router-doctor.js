@@ -138,6 +138,8 @@ function queueNoticeWithoutRuntimeDelivery(message = {}, trace = null, threshold
 }
 
 function runtimeReady(status = {}) {
+  if (status.working === true) return false;
+  if (["working", "running", "busy"].includes(lower(status.state))) return false;
   return lower(status.state) === "ready" || status.promptReady === true || status.ready === true;
 }
 
@@ -148,8 +150,18 @@ async function repairIssue(item = {}, context = {}) {
     return { code: "wake_thread", ok: true, threadId: thread.id, messageId: item.messageId, status: result.status || null };
   }
   if (item.code === "stale_queued_whatsapp_input_ready_runtime") {
+    let requeued = false;
+    if (lower(item.messageState) !== "awaiting_ack") {
+      await updateThreadMessage(thread.id, item.messageId, {
+        state: "queued",
+        deliveryState: "retrying_delivery",
+        error: null,
+        deliveryNextAttemptAt: null,
+      }, env);
+      requeued = true;
+    }
     const delivered = await deliverPendingThreadInputs(thread.id, env, { processApiAgent: true });
-    return { code: "retry_runtime_delivery", ok: true, threadId: thread.id, messageId: item.messageId, delivered };
+    return { code: "retry_runtime_delivery", ok: true, threadId: thread.id, messageId: item.messageId, requeued, delivered };
   }
   if (item.code === "stale_outbox_claim") {
     const released = await releaseConnectorOutboxClaim(item.outboxJobId, { reason: "router_doctor_stale_claim" }, env);
@@ -182,8 +194,14 @@ async function inspectThread(thread, options = {}) {
   const thresholdMs = Number(options.staleMs || 0) || staleQueueMs(env);
   const messages = await listThreadMessages(thread.id, env);
   const traces = await listRouterTraces({ threadId: thread.id, connector: "whatsapp" }, env);
-  const status = await runtimeStatus(thread.id, env).catch(() => ({ state: thread.state || "unknown" }));
-  const whatsappStatus = await getWhatsAppStatus(env).catch((error) => ({ state: "error", error: clean(error?.message || error) }));
+  const status = await (typeof options.runtimeStatusFn === "function"
+    ? options.runtimeStatusFn(thread, messages, env)
+    : runtimeStatus(thread.id, env)
+  ).catch(() => ({ state: thread.state || "unknown" }));
+  const whatsappStatus = await (typeof options.whatsappStatusFn === "function"
+    ? options.whatsappStatusFn(thread, env)
+    : getWhatsAppStatus(env)
+  ).catch((error) => ({ state: "error", error: clean(error?.message || error) }));
   const checks = [];
   const repairs = [];
 
@@ -242,8 +260,13 @@ async function inspectThread(thread, options = {}) {
         threadId: thread.id,
         messageId: message.id,
         routerTraceId: trace?.routerTraceId || clean(message.routerTraceId),
+        messageState: clean(message.state),
+        deliveryState: clean(message.deliveryState),
+        deliveryNextAttemptAt: clean(message.deliveryNextAttemptAt),
         ageMs: ageMs(message.createdAt),
         runtimeState: clean(status.state),
+        runtimeWorking: status.working === true,
+        runtimePromptReady: status.promptReady === true,
       }));
     }
     if (activeQueuedMessage(message) && (["sleeping", "unloaded"].includes(lower(status.state)) || ["sleeping", "unloaded"].includes(lower(thread.state)))) {
