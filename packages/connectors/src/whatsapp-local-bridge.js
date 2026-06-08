@@ -819,7 +819,9 @@ function rememberOutboundTextKey(key, env = process.env) {
 
 function rememberOutboundText(accountId, chatId, text, env = process.env, options = {}) {
   rememberOutboundTextKey(textKey(accountId, chatId, text), env);
-  if (options.crossAccount !== false) rememberOutboundTextKey(anyAccountTextKey(chatId, text), env);
+  const crossAccountKey = anyAccountTextKey(chatId, text);
+  if (options.crossAccount === false) outboundMessageTextKeys.delete(crossAccountKey);
+  else rememberOutboundTextKey(crossAccountKey, env);
 }
 
 function outboundTextRecentlySent(accountId, chatId, text, env = process.env) {
