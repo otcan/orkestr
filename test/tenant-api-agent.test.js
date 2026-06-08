@@ -2556,6 +2556,81 @@ test("tenant api-agent keeps prior Gmail context for weak follow-up fallback", a
   assert.doesNotMatch(assistant.text, /Tell me what you want|workspace execution|\/codex/i);
 });
 
+test("tenant api-agent does not let stale Gmail prompt-push context answer unrelated capability questions", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-api-agent-gmail-context-unrelated-"));
+  const env = await allowSanitizerEnv(home);
+  await createThread({
+    id: "gmail-context-unrelated-chat",
+    ownerUserId: "otcan",
+    name: "gmail-context-unrelated-chat",
+    runtimeKind: "api-agent",
+    executor: { type: "api-agent", metadata: { runtimeKind: "api-agent" } },
+    binding: { connector: "whatsapp", chatId: "chat-gmail-context-unrelated" },
+  }, env);
+  await appendThreadMessage("gmail-context-unrelated-chat", {
+    role: "user",
+    source: "connector_prompt_push",
+    connector: "gmail",
+    originSurface: "gmail",
+    externalId: "gmail-msg-unrelated-1",
+    chatId: "chat-gmail-context-unrelated",
+    state: "completed",
+    text: [
+      "New Gmail message",
+      "From: Alerts <alerts@example.com>",
+      "Subject: Build the business skills AI can't replace",
+      "Date: Mon, 08 Jun 2026 05:00:00 +0000",
+      "Snippet: Stale notification content.",
+    ].join("\n"),
+  }, env);
+  await appendThreadMessage("gmail-context-unrelated-chat", {
+    role: "user",
+    source: "whatsapp_inbound",
+    connector: "whatsapp",
+    chatId: "chat-gmail-context-unrelated",
+    state: "completed",
+    text: "Are you connected to my Gmail?",
+  }, env);
+  await appendThreadMessage("gmail-context-unrelated-chat", {
+    role: "assistant",
+    source: "api-agent",
+    phase: "final_answer",
+    chatId: "chat-gmail-context-unrelated",
+    state: "completed",
+    text: "Gmail is connected for this chat.",
+  }, env);
+  const input = await enqueueThreadInputForPrincipal("gmail-context-unrelated-chat", {
+    text: "Release smoke test: what can you do here? Reply in one short sentence.",
+    source: "whatsapp_inbound",
+    connector: "whatsapp",
+    chatId: "chat-gmail-context-unrelated",
+  }, userPrincipal({ id: "otcan", role: "user" }), env);
+
+  const calls = [];
+  const result = await processApiAgentThreadInput("gmail-context-unrelated-chat", env, {
+    fetchImpl: async (_url, options = {}) => {
+      const body = JSON.parse(options.body);
+      calls.push(body);
+      assert.doesNotMatch(body.instructions, /Build the business skills AI can't replace|Gmail notification summary/i);
+      assert.doesNotMatch(JSON.stringify(body.input), /Build the business skills AI can't replace|Stale notification content/);
+      return response({
+        id: "resp_gmail_context_unrelated_1",
+        model: "gpt-5-mini",
+        output_text: "I can help with this chat's connected Orkestr skills, questions, planning, and simple task setup.",
+        output: [],
+        usage: { input_tokens: 300, output_tokens: 18 },
+      });
+    },
+  });
+  const messages = await listThreadMessages("gmail-context-unrelated-chat", env);
+  const assistant = messages.find((message) => message.parentMessageId === input.id);
+
+  assert.equal(result.ok, true);
+  assert.equal(calls.length, 1);
+  assert.match(assistant.text, /connected Orkestr skills/i);
+  assert.doesNotMatch(assistant.text, /latest relevant Gmail notification|Build the business skills|read the full email|\/codex/i);
+});
+
 test("tenant api-agent strips leaked internal thought from final chat text", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-api-agent-thought-strip-"));
   const env = await allowSanitizerEnv(home);

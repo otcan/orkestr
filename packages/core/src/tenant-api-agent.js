@@ -411,6 +411,24 @@ function latestGmailPromptPushBefore(messages = [], message = {}) {
   return null;
 }
 
+function latestMessageCanUsePriorGmailContext(messages = [], message = {}, gmailContext = null) {
+  if (!gmailContext) return false;
+  if (gmailPromptPushInfo(message)) return true;
+  const messageIndex = messages.findIndex((item) => clean(item.id) === clean(message.id));
+  const contextIndex = messages.findIndex((item) => clean(item.id) === clean(gmailContext.message?.id));
+  if (messageIndex < 0 || contextIndex < 0 || contextIndex >= messageIndex) return false;
+  return !messages.slice(contextIndex + 1, messageIndex).some((item) =>
+    lower(item.role) === "user" &&
+    !isGmailPromptPushMessage(item) &&
+    clean(item.text || item.promptFile)
+  );
+}
+
+function relevantGmailPromptPushBefore(messages = [], message = {}) {
+  const gmailContext = latestGmailPromptPushBefore(messages, message);
+  return latestMessageCanUsePriorGmailContext(messages, message, gmailContext) ? gmailContext : null;
+}
+
 function gmailContextInstructions(message = {}, gmailContext = null) {
   const current = gmailPromptPushInfo(message);
   const info = current || gmailContext;
@@ -588,6 +606,18 @@ function messageInputItem(message = {}) {
     role: lower(message.role) === "assistant" ? "assistant" : "user",
     content,
   };
+}
+
+function tenantApiAgentConversationMessages(messages = [], latestMessage = {}, gmailContext = null) {
+  const latestId = clean(latestMessage.id);
+  const relevantGmailMessageId = clean(gmailContext?.message?.id);
+  const latestIsGmailPrompt = Boolean(gmailPromptPushInfo(latestMessage));
+  return messages.filter((item) => {
+    if (!clean(item.text || item.promptFile)) return false;
+    if (!isGmailPromptPushMessage(item)) return true;
+    if (clean(item.id) === latestId && latestIsGmailPrompt) return true;
+    return Boolean(relevantGmailMessageId && clean(item.id) === relevantGmailMessageId);
+  });
 }
 
 function countedWebTextLines(text = "", limit = 10) {
@@ -1851,14 +1881,13 @@ async function runTenantApiAgentResponse({ thread, messages, message, env, fetch
   const model = apiAgentModel(env);
   const principal = tenantPrincipalForThread(thread, env);
   const pendingAction = pendingActionConfirmation(messages, message);
-  const gmailContext = latestGmailPromptPushBefore(messages, message);
+  const gmailContext = relevantGmailPromptPushBefore(messages, message);
   const instructions = [
     await buildTenantApiAgentInstructions(thread, messages, env),
     gmailContextInstructions(message, gmailContext),
     pendingActionConfirmationInstructions(pendingAction, env),
   ].filter(Boolean).join("\n");
-  const input = messages
-    .filter((item) => clean(item.text || item.promptFile))
+  const input = tenantApiAgentConversationMessages(messages, message, gmailContext)
     .slice(-20)
     .map(messageInputItem);
   const tools = tenantApiAgentToolDefinitions();
@@ -2155,7 +2184,7 @@ async function processNextApiAgentMessage(thread, env = process.env, options = {
     env,
     fetchImpl: options.fetchImpl || fetch,
   });
-  const gmailContext = latestGmailPromptPushBefore(latestMessages, message);
+  const gmailContext = relevantGmailPromptPushBefore(latestMessages, message);
   const text = normalizeTenantApiAgentText(clean(result.text) || fallbackTenantApiAgentRepairAnswer(message, { gmailContext, env })) ||
     fallbackTenantApiAgentRepairAnswer(message, { gmailContext, env });
   return completeApiAgentMessage(thread, message, text, env, { response: result.response });
