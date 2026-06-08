@@ -97,7 +97,7 @@ function webFetchAvailable(env = process.env) {
 
 function codexEscalationSentence(env = process.env) {
   return codexEscalationAvailable(env)
-    ? "For workspace execution, send the task with /codex."
+    ? "For deeper workspace or browser execution, I can help connect Codex to this chat when it is needed."
     : "Workspace and live browser execution are not available in this chat right now.";
 }
 
@@ -532,18 +532,18 @@ function fallbackWeakTenantApiAgentAnswer(message = {}, env = process.env, optio
   const text = clean(message.text);
   const name = introducedName(text);
   if (name) {
-    return `Got it, ${name}. I can help in this chat with questions, planning, drafting, and tenant features that are connected for this user. ${codexEscalationSentence(env)}`;
+    return `Got it, ${name}. I can help in this chat with questions, planning, drafting, and tenant features that are connected for this user.`;
   }
   if (/\bwho\s+am\s+i\b/i.test(text)) {
     return "You are the person messaging this Orkestr chat. I can use identity details you share in this conversation, but I will not guess private profile details.";
   }
   if (/\b(?:what can you do|how can you help|what skills|which skills)\b/i.test(text)) {
-    return `I can help in this chat with questions, planning, drafting, and tenant features that are connected for this user. ${codexEscalationSentence(env)}`;
+    return "I can help in this chat with questions, planning, drafting, and tenant features that are connected for this user.";
   }
   if (bareConfirmationText(text)) {
-    return `I do not have a confirmed action to complete from that message alone. Tell me the specific task you want. ${codexEscalationSentence(env)}`;
+    return "I do not have a confirmed action to complete from that message alone. Tell me the specific task you want.";
   }
-  return `I can help in this chat. Tell me what you want to do. ${codexEscalationSentence(env)}`;
+  return "I can help in this chat. Tell me what you want to do.";
 }
 
 function fallbackPendingActionConfirmationAnswer(env = process.env) {
@@ -1008,6 +1008,21 @@ function formatAutomationTool(result = {}) {
   return "";
 }
 
+function formatWorkspaceRuntimeTool(result = {}) {
+  const output = result.output || {};
+  if (output.ok === false || clean(output.error)) {
+    const error = clean(output.error);
+    if (/not_available|disabled|not_signed|auth|login/i.test(error)) {
+      return "Codex cannot be connected to this chat right now. Finish Codex setup for this Orkestr instance, then ask again.";
+    }
+    return `Codex connection failed: ${error || "workspace_runtime_failed"}.`;
+  }
+  if (output.connected === true) {
+    return "Codex is connected to this chat. Future messages here will run through Codex directly.";
+  }
+  return "";
+}
+
 function formatToolResultFallback(toolResults = [], context = {}) {
   if (!Array.isArray(toolResults) || !toolResults.length) return "";
   const hasRunSkillAction = toolResults.some((result) => result.name === "orkestr_run_skill_action");
@@ -1029,6 +1044,7 @@ function formatToolResultFallback(toolResults = [], context = {}) {
     else if (result.name === "orkestr_list_action_registry") formatted = formatActionRegistryTool(result);
     else if (["orkestr_list_automations", "orkestr_create_automation", "orkestr_update_automation", "orkestr_delete_automation", "orkestr_run_automation", "orkestr_pause_automation", "orkestr_resume_automation"].includes(result.name)) formatted = formatAutomationTool(result);
     else if (result.name === "orkestr_fetch_web_page") formatted = fallbackWebFetchToolAnswer([result.output]);
+    else if (result.name === "orkestr_connect_workspace_runtime") formatted = formatWorkspaceRuntimeTool(result);
     if (formatted) parts.push(formatted);
   }
   return parts.join("\n\n").trim();
@@ -1190,8 +1206,10 @@ export function publicTenantCapabilities(capabilities = {}, env = process.env) {
     linkedin: capabilities.linkedin === true,
     learning: capabilities.learning === true,
     workspace: {
-      executionAvailable: workspaceExecutionAvailable,
-      command: workspaceExecutionAvailable ? "/codex" : "",
+      executionAvailable: false,
+      connected: false,
+      connectionAvailable: workspaceExecutionAvailable,
+      actionTool: workspaceExecutionAvailable ? "orkestr_connect_workspace_runtime" : "",
     },
     webFetch: webFetchAvailable(env),
     hostSkills: false,
@@ -1343,8 +1361,8 @@ export async function buildTenantApiAgentInstructions(thread = {}, messages = []
     "When the user shares non-secret onboarding details, preferences, timezone, language, requested tools, or setup notes, save them with the onboarding profile tool. Never store passwords, tokens, recovery codes, or secrets.",
     "For reminders, timers, calendar scheduling, daily summaries, or any other time-specific instruction, use Tenant context JSON onboardingProfile.timezone when it is present. If it is missing, ask the user for their IANA timezone before scheduling or giving time-specific instructions. When the user gives a timezone, call orkestr_update_onboarding_profile before continuing.",
     codexAvailable
-      ? "If the user asks how you can help, what you can do, or what skills you have, answer with a short capability summary grounded in the Tenant context and enabled skills. For workspace/code execution, mention /codex as the explicit escalation path."
-      : "If the user asks how you can help, what you can do, or what skills you have, answer with a short capability summary grounded in the Tenant context and enabled skills. Workspace/code execution is not available in this chat right now; do not mention a slash-command escalation path.",
+      ? "If the user asks how you can help, what you can do, or what skills you have, answer with a short capability summary grounded in the Tenant context and enabled skills. Do not mention Codex, slash commands, workspace runtimes, or escalation in a normal capability summary."
+      : "If the user asks how you can help, what you can do, or what skills you have, answer with a short capability summary grounded in the Tenant context and enabled skills. Do not mention slash commands, workspace runtimes, or escalation in a normal capability summary.",
     "Never answer a normal chat question, introduction, or capability question with only 'Done', 'OK', 'Sure', or another bare acknowledgement.",
     "Use the provided Orkestr tools for tenant-scoped resources. If the user asks whether Gmail, Outlook, Jira, Shopify, or WhatsApp is connected, available, enabled, or accessible, use the connector status tool before answering.",
     "If the user asks to connect, sign in, log in, set up, disconnect, or reconnect Gmail, Outlook, Jira, or Shopify, use the connector auth/disconnect tools and give the returned sign-in instructions. If they ask for Google Workspace with selectable Gmail, Calendar, or Drive permissions from WhatsApp, tell them to send /connect google.",
@@ -1365,7 +1383,7 @@ export async function buildTenantApiAgentInstructions(thread = {}, messages = []
     "If the user asks you to open, start, stop, restart, check, or otherwise act through a skill, use orkestr_list_skill_actions first and then orkestr_run_skill_action only when that action is available.",
     "After running a skill action, answer from the tool result. If the tool only opens a desktop or returns status, say exactly that; do not claim that you inspected account login, page contents, messages, or external state unless a tool result explicitly confirms that.",
     codexAvailable
-      ? "Managed desktop and browser skill actions are controls, not page-reading tools. Opening a desktop or visiting a URL does not prove page contents, trending topics, translations, account login state, or successful research. For public HTTP(S) content, use orkestr_fetch_web_page. If the user asks to gather content that no Orkestr tool returns, say what was opened if a tool confirms it, then tell them to send the task with /codex for browser/content work."
+      ? "Managed desktop and browser skill actions are controls, not page-reading tools. Opening a desktop or visiting a URL does not prove page contents, trending topics, translations, account login state, or successful research. For public HTTP(S) content, use orkestr_fetch_web_page. If the user asks to gather content that no Orkestr tool returns, say what was opened if a tool confirms it, then ask whether they want to connect Codex to this chat for deeper browser/content work. Do not tell them to resend with a slash command."
       : "Managed desktop and browser skill actions are controls, not page-reading tools. Opening a desktop or visiting a URL does not prove page contents, trending topics, translations, account login state, or successful research. For public HTTP(S) content, use orkestr_fetch_web_page when available. If no Orkestr tool returns the requested content, say the chat cannot run live browser/content work right now; do not mention a slash-command escalation path.",
     "Skills are unique per user and are described by the skill records in the Tenant context. Do not force provider categories, goals, or attachment models onto them; preserve the user's wording.",
     "Users manage skills through chat. When they ask to list, view, search, create, update, enable, disable, or delete skills, use the Orkestr skill tools.",
@@ -1373,7 +1391,7 @@ export async function buildTenantApiAgentInstructions(thread = {}, messages = []
     "If asked for the WhatsApp number, WhatsApp account, connector ID, backend account, or controlled identity, do not reveal phone numbers, session IDs, account IDs, tokens, or connector internals. If WhatsApp is enabled, say you are connected to this chat through Orkestr and exact account details are admin-only.",
     "Never approve security, auth, browser-pairing, connector, or SSH challenges. Tell the user to use the trusted Orkestr approval flow or SSH command shown by Orkestr.",
     codexAvailable
-      ? "If the user asks for code/workspace execution, ask them to send the same task with /codex to explicitly escalate to a contained workspace worker."
+      ? "If the user asks for code/workspace execution, first try any available Orkestr tools that can satisfy the request. If the task requires a stronger workspace runtime, ask whether they want to connect Codex to this chat. If the user explicitly accepts or asks to connect Codex, call orkestr_connect_workspace_runtime; after it succeeds, say future messages in this chat will run through Codex directly. Do not tell the user to prefix or resend the task with a slash command."
       : "If the user asks for code/workspace execution, say this chat cannot start a workspace worker right now. Do not claim the task was moved and do not mention a slash-command escalation path.",
     "",
     `Tenant context JSON: ${JSON.stringify(context)}`,
@@ -1518,7 +1536,7 @@ async function handleCodexEscalation(thread, message, env = process.env) {
     role: "assistant",
     source: "api-agent",
     phase: "final_answer",
-    text: "I moved this request to a contained workspace worker for execution.",
+    text: "Codex is connected to this chat. I queued your task in the workspace runtime; future messages here will run through Codex directly.",
     parentMessageId: message.id,
     state: "completed",
     connector: message.connector,
@@ -1561,7 +1579,6 @@ async function repairWeakTenantApiAgentResponse({
   fetchImpl,
   allowTools = false,
 }) {
-  const codexAvailable = codexEscalationAvailable(env);
   const repairBody = {
     ...baseBody,
     instructions: [
@@ -1570,9 +1587,9 @@ async function repairWeakTenantApiAgentResponse({
       "Response repair: the previous draft was not acceptable as the final answer for the latest user message.",
       "Write the actual final answer now. Keep it concise, conversational, and grounded in the Tenant context.",
       "If the latest user message introduced a name or identity, acknowledge it and briefly say how you can help.",
-      codexAvailable
-        ? "If the latest user message asks what you can do or how you can help, provide a short practical capability summary and mention /codex for workspace execution."
-        : "If the latest user message asks what you can do or how you can help, provide a short practical capability summary and say workspace execution is not available in this chat right now.",
+      codexEscalationAvailable(env)
+        ? "If the latest user message asks what you can do or how you can help, provide a short practical capability summary. Do not mention Codex, slash commands, workspace runtimes, or escalation unless the latest user explicitly asked about Codex or lower-level workspace execution."
+        : "If the latest user message asks what you can do or how you can help, provide a short practical capability summary. Do not mention slash commands, workspace runtimes, or escalation.",
       "If the latest user message is only a confirmation like yes/ok and no tool result confirms completed work, do not say Done and do not promise future browser or workspace work. Ask for the concrete task or explain the pending limitation.",
       "If tenant tool results are present in the conversation, answer the user's latest request from those results instead of returning a raw tool dump or a generic capability fallback.",
       allowTools
@@ -1620,7 +1637,6 @@ async function repairWeakTenantApiAgentResponse({
 
 function pendingActionConfirmationInstructions(pending = null, env = process.env) {
   if (!pending) return "";
-  const codexAvailable = codexEscalationAvailable(env);
   const webFetch = webFetchAvailable(env);
   return [
     "Pending action confirmation: the latest user message is a confirmation of the previous assistant offer.",
@@ -1632,8 +1648,8 @@ function pendingActionConfirmationInstructions(pending = null, env = process.env
     webFetch
       ? "If the pending action is for current public HTTP(S) page content, use orkestr_fetch_web_page and answer from the returned title, text, links, and counts."
       : "Public web page fetching is not available in this chat right now.",
-    codexAvailable
-      ? "If no tool returns page contents, trends, translations, login state, or research output, do not claim those were gathered; say what the tool confirmed and use /codex for browser/content work."
+    codexEscalationAvailable(env)
+      ? "If no tool returns page contents, trends, translations, login state, or research output, do not claim those were gathered; say what the tool confirmed and ask whether the user wants to connect Codex to this chat for deeper browser/content work. Do not tell them to resend with a slash command."
       : "If no tool returns page contents, trends, translations, login state, or research output, do not claim those were gathered; say the content was not available from the current tools.",
   ].join("\n");
 }
