@@ -839,6 +839,8 @@ export async function authorizeHttpRequest(request, env = process.env) {
   if (shareAuth && Number(shareAuth.statusCode || 0) >= 400) {
     return { ok: false, status, statusCode: shareAuth.statusCode, error: shareAuth.error || "desktop_share_forbidden" };
   }
+  const cliAuth = await authorizeCliMachineRequest(request, env);
+  if (cliAuth?.ok) return { ok: true, status, principal: cliAuth.principal, machineAuth: cliAuth.machineAuth };
   const whatsappInboundAuth = await authorizeWhatsAppMachineRequest(request, env);
   if (whatsappInboundAuth?.ok) return {
     ok: true,
@@ -848,8 +850,6 @@ export async function authorizeHttpRequest(request, env = process.env) {
     machineAuthContext: whatsappInboundAuth.machineAuthContext || null,
   };
   if (whatsappInboundAuth && status.authEnabled) return { ...whatsappInboundAuth, status };
-  const cliAuth = await authorizeCliMachineRequest(request, env);
-  if (cliAuth?.ok) return { ok: true, status, principal: cliAuth.principal, machineAuth: cliAuth.machineAuth };
   if (!status.authEnabled) return { ok: true, status, principal: adminPrincipal(defaultAdminUser(env)) };
   const token = cookieValue(request?.headers?.cookie || "");
   const session = await securitySessionForToken(token, env, { request });
