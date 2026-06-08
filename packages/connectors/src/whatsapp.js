@@ -2639,6 +2639,7 @@ export async function sendWhatsAppText({ chatId = "", text = "", accountId = "",
       text,
       ...(runtimeAccountId ? { accountId: runtimeAccountId } : {}),
       ...(normalizedAttachments.length ? { paths: normalizedAttachments.map((attachment) => attachment.path) } : {}),
+      ...(crossAccountEchoSuppression === false ? { crossAccountEchoSuppression: false } : {}),
     }),
     signal: AbortSignal.timeout(Number(env.WHATSAPP_SEND_TIMEOUT_MS || 10_000)),
   });

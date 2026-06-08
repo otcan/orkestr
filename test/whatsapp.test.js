@@ -1916,6 +1916,7 @@ test("whatsapp external sends map numeric public account ids to runtime bridge a
     accountId: "4917632400662",
     chatId: "chat-send@g.us",
     text: "/connect google",
+    crossAccountEchoSuppression: false,
     env,
     fetchImpl: async (url, options = {}) => {
       calls.push(url.pathname);
@@ -1933,6 +1934,7 @@ test("whatsapp external sends map numeric public account ids to runtime bridge a
       assert.equal(body.accountId, "sender");
       assert.equal(body.to, "chat-send@g.us");
       assert.equal(body.text, "/connect google");
+      assert.equal(body.crossAccountEchoSuppression, false);
       return response({ ok: true, ids: ["sent-numeric"] });
     },
   });
