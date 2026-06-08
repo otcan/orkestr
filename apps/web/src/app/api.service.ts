@@ -932,6 +932,9 @@ export interface ThreadSummary {
     additionalParticipantIds?: string[];
     additionalParticipantLabels?: Record<string, string>;
     mirrorToWhatsApp?: boolean;
+    receivingAccountId?: string | null;
+    replyAccountId?: string | null;
+    bridgeAccountId?: string | null;
     senderAccountId?: string | null;
     inboundAccountId?: string | null;
     responderConnectorAccountId?: string | null;
@@ -1088,6 +1091,8 @@ export interface WhatsAppDoctorAccount extends WhatsAppAccount {
   inboundReady?: boolean;
   autostart?: boolean;
   runtimeAccountId?: string;
+  phoneIdentity?: string;
+  legacyRoleAliases?: string[];
   pairingPhoneNumber?: string;
   phoneNumber?: string;
   phone?: string;
@@ -1114,6 +1119,10 @@ export interface WhatsAppDoctorBinding {
   mirrorToWhatsApp?: boolean;
   responderAccountId?: string;
   responderConnectorAccountId?: string;
+  replyAccountId?: string;
+  bridgeAccountId?: string;
+  runtimeAccountId?: string;
+  authorizedContactIds?: string[];
   accountIds?: string[];
   acl?: {
     send?: { mode?: string; users?: string[] };
@@ -1247,6 +1256,11 @@ export interface WhatsAppAccount {
   id?: string;
   label?: string;
   name?: string;
+  runtimeAccountId?: string;
+  phoneIdentity?: string;
+  phoneNumber?: string;
+  contactId?: string;
+  legacyRoleAliases?: string[];
   state?: string;
   ready?: boolean;
   qrUrl?: string;
@@ -1285,6 +1299,9 @@ export interface WhatsAppChatsResponse {
 export interface WhatsAppChatCreateResponse {
   ok: boolean;
   chat: WhatsAppChat;
+  receivingAccountId?: string;
+  replyAccountId?: string;
+  bridgeAccountId?: string;
   senderAccountId?: string;
   responderAccountId?: string;
   senderContactId?: string;

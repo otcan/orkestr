@@ -899,7 +899,7 @@
 
               <div class="wa-summary-strip" aria-label="WhatsApp connection summary">
                 <div>
-                  <span>Inbound account</span>
+                  <span>Receiving account</span>
                   <strong>{{ selectedWhatsAppInboundAccountLabel() }}</strong>
                   <small>{{ selectedWhatsAppInboundAccountStateLabel() }}</small>
                 </div>
@@ -930,7 +930,7 @@
                       <strong>{{ whatsappDisplayName || whatsappChatLabel(thread) }}</strong>
                       <span>Chat id</span>
                       <strong>{{ whatsappChatId || thread.binding?.chatId }}</strong>
-                      <span>Inbound account</span>
+                      <span>Receiving account</span>
                       <strong>{{ selectedWhatsAppInboundAccountLabel() }}</strong>
                       <span>Reply account</span>
                       <strong>{{ selectedWhatsAppReplyAccountLabel() }}</strong>
@@ -958,15 +958,15 @@
                       <span>Allow messages from additional chat participants</span>
                     </label>
                     <div class="settings-facts">
-                      <span>Linked inbound account</span>
-                      <strong>{{ selectedWhatsAppInboundAccountLabel() }}</strong>
+                      <span>Authorized owner contact</span>
+                      <strong>{{ whatsappOwnerContactLabel(thread) }}</strong>
                       @if (whatsappAllowOtherPeople) {
                         <span>Allowed participants</span>
                         <strong>{{ whatsappParticipantsLoading ? "Checking" : whatsappAdditionalParticipantCount(thread) }}</strong>
                       }
                     </div>
                     @if (!whatsappAllowOtherPeople) {
-                      <p class="helper">Additional participants are off. Orkestr only listens to the linked inbound account.</p>
+                      <p class="helper">Additional participants are off. Orkestr only accepts messages from the saved owner contact.</p>
                     } @else if (whatsappParticipants.length > 0 || whatsappSavedAdditionalParticipants(thread).length > 0) {
                       <div class="wa-participant-list">
                         @for (participant of whatsappSelectableParticipants(thread); track participant.id) {
@@ -999,10 +999,10 @@
                         }
                       </div>
                       @if (whatsappSelectableParticipants(thread).length === 0 && whatsappSavedAdditionalParticipants(thread).length === 0) {
-                        <p class="helper">No extra participants are available. The linked inbound account can already message Orkestr.</p>
+                        <p class="helper">No extra participants are available. The saved owner contact can already message Orkestr.</p>
                       }
                     } @else if (!whatsappParticipantsLoading) {
-                      <p class="helper">The participant list is unavailable until the selected inbound account is connected and the chat can be inspected. Orkestr can still listen to the linked inbound account.</p>
+                      <p class="helper">The participant list is unavailable until the receiving WhatsApp account can inspect the chat. Orkestr can still listen to the saved owner contact.</p>
                     }
                     <div class="settings-actions">
                       <button type="button" (click)="saveThreadBinding(thread)" [disabled]="busy || savingThreadBinding || !threadBindingDirty(thread)">
@@ -1020,12 +1020,12 @@
                     <div class="wa-section-head">
                       <span class="wa-step">1</span>
                       <div>
-                        <h4>Inbound account</h4>
-                        <small>Select the WhatsApp account whose chat messages Orkestr should listen to.</small>
+                        <h4>Receiving account</h4>
+                        <small>Select the paired WhatsApp account that receives this chat's group events.</small>
                       </div>
                     </div>
                     <label class="settings-field">
-                      <span>Listen with</span>
+                      <span>Receive with</span>
                       <select
                         name="thread-wa-sender-account-select-{{ thread.id }}"
                         [ngModel]="selectedWhatsAppInboundAccountId()"
@@ -1042,10 +1042,10 @@
                     </label>
                     <div class="settings-actions compact-actions">
                       <button type="button" (click)="startSelectedWhatsAppInboundAccount()" [disabled]="busy || !canLoadLocalWhatsAppChats(selectedWhatsAppInboundAccountId())">
-                        Connect inbound account
+                        Connect receiving account
                       </button>
                       <button class="secondary" type="button" (click)="logoutSelectedWhatsAppInboundAccount()" [disabled]="busy || !canLoadLocalWhatsAppChats(selectedWhatsAppInboundAccountId())">
-                        Disconnect inbound account
+                        Disconnect receiving account
                       </button>
                     </div>
                   </section>

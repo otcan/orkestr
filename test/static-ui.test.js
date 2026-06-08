@@ -213,9 +213,9 @@ test("ops page exposes release broker inventory", async () => {
   assert.match(template, /name="broker-rollout-ref"/);
   assert.match(template, /planReleaseRollout\(\)/);
   assert.match(template, /Rollout plan/);
-  assert.match(template, /WhatsApp Account IDs/);
+  assert.match(template, /WhatsApp identities/);
   assert.match(template, /Instance Threads/);
-  assert.match(template, /Account IDs/);
+  assert.match(template, /WA identities/);
   assert.match(template, /brokerVisibleThreads\(instance\)/);
   assert.match(template, /brokerWake\(row\)/);
   assert.match(template, /brokerRecover\(row\)/);
@@ -524,16 +524,21 @@ test("thread WhatsApp settings use neutral connector account labels", async () =
   const controller = await fs.readFile("apps/server/src/modules/threads/thread-binding.controller.ts", "utf8");
   const schemas = await fs.readFile("packages/shared/src/api-schemas.js", "utf8");
 
-  assert.match(template, /Inbound account/);
+  assert.match(template, /Receiving account/);
   assert.match(template, /Reply account/);
-  assert.match(template, /Listen with/);
+  assert.match(template, /Receive with/);
   assert.match(template, /Reply with/);
   assert.doesNotMatch(template, />Sender</);
   assert.doesNotMatch(template, />Responder</);
   assert.match(component, /selectedWhatsAppReplyAccountId\(\)/);
   assert.match(component, /selectedWhatsAppInboundAccountId\(\)/);
-  assert.match(component, /responderConnectorAccountId: this\.selectedWhatsAppReplyAccountId\(\)/);
+  assert.match(component, /replyAccountId,\n\s+bridgeAccountId: replyAccountId/);
+  assert.match(component, /receivingAccountId,\n\s+inboundAccountId: receivingAccountId/);
+  assert.match(controller, /replyAccountId/);
+  assert.match(controller, /receivingAccountId/);
   assert.match(controller, /responderConnectorAccountId/);
+  assert.match(schemas, /replyAccountId/);
+  assert.match(schemas, /receivingAccountId/);
   assert.match(schemas, /responderConnectorAccountId/);
 });
 

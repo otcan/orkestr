@@ -14,6 +14,10 @@ import {
   readWhatsAppConnectorAccounts,
   upsertWhatsAppConnectorAccount,
 } from "./whatsapp-account-registry.js";
+import {
+  canonicalWhatsAppAccountId,
+  isWhatsAppPlaceholderAccountId,
+} from "./whatsapp-account-identity.js";
 
 function pickString(...values) {
   for (const value of values) {
@@ -58,7 +62,7 @@ function ownerUserIdForEnv(env = process.env) {
 
 function statusAccountMap(status = {}) {
   return new Map((Array.isArray(status.accounts) ? status.accounts : [])
-    .map((account) => [pickString(account.accountId, account.id), account])
+    .map((account) => [canonicalWhatsAppAccountId(account) || pickString(account.accountId, account.id), account])
     .filter(([accountId]) => accountId));
 }
 
@@ -120,14 +124,16 @@ function legacyAliasesForAccount(accountId = "", env = process.env) {
 }
 
 function accountDraft(accountId = "", current = {}, statusAccount = {}, env = process.env) {
+  const rawAccountId = pickString(statusAccount.accountId, statusAccount.id, accountId);
+  const canonicalAccountId = canonicalWhatsAppAccountId({ ...statusAccount, accountId: rawAccountId, id: rawAccountId }, env) || accountId;
   return {
-    accountId,
-    displayName: pickString(current.displayName, current.label, statusAccount.displayName, statusAccount.label, accountId),
-    label: pickString(current.label, current.displayName, statusAccount.label, statusAccount.displayName, accountId),
+    accountId: canonicalAccountId,
+    displayName: pickString(current.displayName, current.label, statusAccount.displayName, statusAccount.label, statusAccount.phoneNumber, canonicalAccountId),
+    label: pickString(current.label, current.displayName, statusAccount.label, statusAccount.displayName, statusAccount.phoneNumber, canonicalAccountId),
     ownerUserId: normalizeUserId(current.ownerUserId || statusAccount.ownerUserId || ownerUserIdForEnv(env)),
-    runtimeAccountId: pickString(current.runtimeAccountId, statusAccount.runtimeAccountId, accountId),
-    sessionRef: pickString(current.sessionRef, statusAccount.sessionRef) || `whatsapp:${accountId}`,
-    autostart: accountAutostart(accountId, current, statusAccount, env),
+    runtimeAccountId: pickString(current.runtimeAccountId, statusAccount.runtimeAccountId, canonicalAccountId !== rawAccountId || isWhatsAppPlaceholderAccountId(rawAccountId, env) ? rawAccountId : "", canonicalAccountId),
+    sessionRef: pickString(current.sessionRef, statusAccount.sessionRef) || `whatsapp:${canonicalAccountId}`,
+    autostart: accountAutostart(canonicalAccountId, current, statusAccount, env),
   };
 }
 
@@ -152,6 +158,9 @@ function canonicalBindingForThread(thread = {}, env = process.env) {
   if (!isWhatsAppThread(thread)) return null;
   const current = thread.binding && typeof thread.binding === "object" ? thread.binding : {};
   const responderAccountId = pickString(
+    current.replyAccountId,
+    current.bridgeAccountId,
+    current.receivingAccountId,
     current.responderConnectorAccountId,
     current.responderAccountId,
     current.outboundAccountId,
@@ -169,6 +178,8 @@ function canonicalBindingForThread(thread = {}, env = process.env) {
     responderConnectorAccountId: responderAccountId,
     responderAccountId,
     outboundAccountId: responderAccountId,
+    replyAccountId: responderAccountId,
+    bridgeAccountId: responderAccountId,
   };
   return next;
 }

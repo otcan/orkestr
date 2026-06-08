@@ -935,6 +935,8 @@ test("CLI creates Orkestr threads with integrated WhatsApp binding", async () =>
     name: "Project Fitness",
     participantIds: ["wa-contact-alice@c.us"],
     promoteParticipantsAsAdmins: true,
+    replyAccountId: "responder",
+    bridgeAccountId: "responder",
     responderAccountId: "responder",
     outboundAccountId: "responder",
   });
@@ -987,6 +989,8 @@ test("CLI binds an existing thread to a generated WhatsApp group", async () => {
     generatePicture: true,
     mirrorToWhatsApp: true,
     forceNew: false,
+    replyAccountId: "account-1",
+    bridgeAccountId: "account-1",
     responderAccountId: "account-1",
     outboundAccountId: "account-1",
   });
@@ -1237,7 +1241,7 @@ test("CLI resolves active WhatsApp bindings", async () => {
   assert.equal(seen[0].key, "GET /api/connectors/whatsapp/bindings/resolve");
   assert.equal(seen[0].search, "?thread=thread-1");
   assert.match(stdout.text(), /thread:thread-1:whatsapp/);
-  assert.match(stdout.text(), /Responder account: neutral-1/);
+  assert.match(stdout.text(), /Reply identity: neutral-1/);
 });
 
 test("CLI filters active WhatsApp binding lists", async () => {
@@ -1299,6 +1303,8 @@ test("CLI creates, updates, and deletes WhatsApp bindings", async () => {
   assert.deepEqual(seen[0].body, {
     threadId: "thread-1",
     chatId: "chat-1@g.us",
+    replyAccountId: "neutral-1",
+    bridgeAccountId: "neutral-1",
     responderConnectorAccountId: "neutral-1",
     responderAccountId: "neutral-1",
     acl: { send: { mode: "all-users" } },
@@ -1326,6 +1332,8 @@ test("CLI creates, updates, and deletes WhatsApp bindings", async () => {
   });
   assert.equal(updateCode, 0);
   assert.deepEqual(seen2[0].body, {
+    replyAccountId: "neutral-2",
+    bridgeAccountId: "neutral-2",
     responderConnectorAccountId: "neutral-2",
     responderAccountId: "neutral-2",
     acl: { send: { mode: "owner-only" } },
@@ -1384,6 +1392,8 @@ test("CLI creates multi-level WhatsApp bindings with target selectors", async ()
   assert.deepEqual(seen[0].body, {
     level: "account-default",
     targetAccountId: "neutral-1",
+    replyAccountId: "neutral-1",
+    bridgeAccountId: "neutral-1",
     responderConnectorAccountId: "neutral-1",
     responderAccountId: "neutral-1",
   });

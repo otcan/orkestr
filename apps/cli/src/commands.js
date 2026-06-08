@@ -560,14 +560,14 @@ function whatsappUsage() {
     "  orkestr whatsapp outbox [list] [--state state] [--tenant id] [--account id] [--chat-id id] [--thread id] [--limit n] [--json]",
     "  orkestr whatsapp outbox <retry|suppress|mark-delivered|replay|dead-letter> <job-id>... [--reason text] [--json]",
     "  orkestr whatsapp bindings [list] [--json]",
-    "  orkestr whatsapp bindings create --level <chat|thread|instance|user|account-default> --responder-account id [--thread id] [--chat-id id] [--instance id] [--user id] [--target-account id] [--send-acl mode] [--json]",
+    "  orkestr whatsapp bindings create --level <chat|thread|instance|user|account-default> --reply-account id [--thread id] [--chat-id id] [--instance id] [--user id] [--target-account id] [--send-acl mode] [--json]",
     "  orkestr whatsapp bindings status <binding-id|thread-id|chat-id> [--json]",
     "  orkestr whatsapp bindings resolve [--thread id] [--chat-id id] [--account id] [--json]",
-    "  orkestr whatsapp bindings update <binding-id|thread-id|chat-id> [--responder-account id] [--send-acl mode] [--json]",
+    "  orkestr whatsapp bindings update <binding-id|thread-id|chat-id> [--reply-account id] [--send-acl mode] [--json]",
     "  orkestr whatsapp bindings delete <binding-id|thread-id|chat-id> [--json]",
     "  orkestr whatsapp codex connect --thread <thread> --account <account-id> [--chat-id id] [--json]",
     "  orkestr whatsapp codex status --thread <thread> [--chat-id id] [--json]",
-    "  orkestr whatsapp bind-thread <thread> --name <group name> [--wa-participant jid]... [--sender-account id] [--outbound-account id] [--force-new] [--json]",
+    "  orkestr whatsapp bind-thread <thread> --name <group name> [--wa-participant jid]... [--receiving-account id] [--reply-account id] [--force-new] [--json]",
   ].join("\n");
 }
 
@@ -819,7 +819,7 @@ async function whatsappBindingsCommand(argv, ctx) {
   }
   if (subcommand === "update") {
     const bindingId = positional(rest)[0];
-    if (!bindingId) throw new Error("Usage: orkestr whatsapp bindings update <binding-id|thread-id|chat-id> [--responder-account id] [--send-acl mode] [--json]");
+    if (!bindingId) throw new Error("Usage: orkestr whatsapp bindings update <binding-id|thread-id|chat-id> [--reply-account id] [--send-acl mode] [--json]");
     const payload = await requestJson(`/api/connectors/whatsapp/bindings/${encodeURIComponent(bindingId)}`, {
       ...ctx,
       method: "PUT",
@@ -851,7 +851,7 @@ function whatsappBindingBody(argv = []) {
   const instanceId = flagValue(argv, "--instance") || flagValue(argv, "--instance-id");
   const ownerUserId = flagValue(argv, "--user") || flagValue(argv, "--user-id") || flagValue(argv, "--owner") || flagValue(argv, "--owner-user") || flagValue(argv, "--owner-user-id");
   const targetAccountId = flagValue(argv, "--target-account") || flagValue(argv, "--target-account-id");
-  const accountId = flagValue(argv, "--responder-account") || flagValue(argv, "--account") || flagValue(argv, "--account-id") || flagValue(argv, "--outbound-account");
+  const accountId = flagValue(argv, "--reply-account") || flagValue(argv, "--bridge-account") || flagValue(argv, "--responder-account") || flagValue(argv, "--account") || flagValue(argv, "--account-id") || flagValue(argv, "--outbound-account");
   const sendAcl = flagValue(argv, "--send-acl") || flagValue(argv, "--send");
   const displayName = flagValue(argv, "--display-name") || flagValue(argv, "--name");
   const replyPrefix = flagValue(argv, "--reply-prefix");
@@ -862,6 +862,8 @@ function whatsappBindingBody(argv = []) {
   if (ownerUserId) body.ownerUserId = ownerUserId;
   if (targetAccountId) body.targetAccountId = targetAccountId;
   if (accountId) {
+    body.replyAccountId = accountId;
+    body.bridgeAccountId = accountId;
     body.responderConnectorAccountId = accountId;
     body.responderAccountId = accountId;
   }
@@ -915,7 +917,7 @@ async function whatsappBindThreadCommand(argv, ctx) {
   const threadId = positional(argv)[0];
   const name = flagValue(argv, "--name") || flagValue(argv, "--wa-title") || flagValue(argv, "--title");
   if (!threadId || !name) {
-    throw new Error("Usage: orkestr whatsapp bind-thread <thread> --name <group name> [--wa-participant jid]... [--sender-account id] [--outbound-account id] [--force-new] [--json]");
+    throw new Error("Usage: orkestr whatsapp bind-thread <thread> --name <group name> [--wa-participant jid]... [--receiving-account id] [--reply-account id] [--force-new] [--json]");
   }
   const body = {
     threadId,
@@ -927,11 +929,16 @@ async function whatsappBindThreadCommand(argv, ctx) {
     mirrorToWhatsApp: !argv.includes("--no-mirror"),
     forceNew: argv.includes("--force-new"),
   };
-  const senderAccountId = flagValue(argv, "--sender-account") || flagValue(argv, "--inbound-account");
-  const responderAccountId = flagValue(argv, "--outbound-account") || flagValue(argv, "--responder-account");
+  const senderAccountId = flagValue(argv, "--receiving-account") || flagValue(argv, "--sender-account") || flagValue(argv, "--inbound-account");
+  const responderAccountId = flagValue(argv, "--reply-account") || flagValue(argv, "--bridge-account") || flagValue(argv, "--outbound-account") || flagValue(argv, "--responder-account");
   const replyPrefix = flagValue(argv, "--reply-prefix");
-  if (senderAccountId) body.senderAccountId = senderAccountId;
+  if (senderAccountId) {
+    body.receivingAccountId = senderAccountId;
+    body.senderAccountId = senderAccountId;
+  }
   if (responderAccountId) {
+    body.replyAccountId = responderAccountId;
+    body.bridgeAccountId = responderAccountId;
     body.responderAccountId = responderAccountId;
     body.outboundAccountId = responderAccountId;
   }
@@ -1039,7 +1046,7 @@ function formatWhatsAppMigration(payload = {}) {
     lines.push("", "Binding plans:");
     for (const binding of payload.threadBindings) {
       const acl = binding.acl || {};
-      lines.push(`- ${binding.action || "-"} ${binding.bindingId || "-"} thread=${binding.threadName || binding.threadId || "-"} responder=${binding.responderAccountId || "-"} acl(send=${acl.send?.mode || "-"} receive=${acl.receive?.mode || "-"})`);
+      lines.push(`- ${binding.action || "-"} ${binding.bindingId || "-"} thread=${binding.threadName || binding.threadId || "-"} replyIdentity=${binding.replyAccountId || binding.responderAccountId || "-"} acl(send=${acl.send?.mode || "-"} receive=${acl.receive?.mode || "-"})`);
     }
   }
   if (Array.isArray(payload.tokenPlans) && payload.tokenPlans.length) {
@@ -1085,7 +1092,7 @@ function formatWhatsAppBindingStatus(binding = {}) {
     `Reason: ${binding.reason || "-"}`,
     `Thread: ${binding.threadName || binding.threadId || "-"}`,
     `Chat: ${binding.chatId || "-"}`,
-    `Responder account: ${binding.responderAccountId || "-"}`,
+    `Reply identity: ${binding.replyAccountId || binding.responderAccountId || "-"}`,
     `Send ACL: ${binding.acl?.send?.mode || "-"}`,
     `Next: ${binding.nextAction || "-"}`,
   ].join("\n") + "\n";
@@ -1805,7 +1812,7 @@ function formatSettings(settings = {}) {
   return [
     `Codex: sandbox=${codex.sandbox || "-"} approval=${codex.approvalPolicy || "-"} yolo=${codex.bypassApprovalsAndSandbox ? "yes" : "no"}`,
     `Desktops: mode=${desktops.mode || "-"} default=${desktops.default || "-"} gmail=${desktops.gmailAuth || "-"} manual=${desktops.manualIntervention || "-"}`,
-    `WhatsApp: ${connectors.whatsapp?.bridgeMode || "-"} sender=${connectors.whatsapp?.senderRole || "sender"} responder=${connectors.whatsapp?.responderRole || "responder"}`,
+    `WhatsApp: ${connectors.whatsapp?.bridgeMode || "-"} receiveAlias=${connectors.whatsapp?.senderRole || "-"} replyAlias=${connectors.whatsapp?.responderRole || "-"}`,
     `Gmail: ${connectors.gmail?.enabled ? "enabled" : "optional"} authDesktop=${connectors.gmail?.authDesktop || "-"}`,
     `Outlook: ${connectors.outlook?.enabled ? "enabled" : "optional"}`,
   ].join("\n");
@@ -1859,6 +1866,9 @@ function positional(argv) {
     "--repo-path",
     "--reason",
     "--reply-prefix",
+    "--reply-account",
+    "--bridge-account",
+    "--receiving-account",
     "--responder-account",
     "--service",
     "--sender-account",

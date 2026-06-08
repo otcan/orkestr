@@ -1305,7 +1305,7 @@ test("user management API is admin-only and can pair a browser to a managed user
     const deniedBobWhatsAppPairResponse = await fetch(`${baseUrl}/api/connectors/whatsapp/accounts/bob-wa/pairing-session`, {
       method: "POST",
       headers: { "content-type": "application/json", cookie: userCookie, connection: "close" },
-      body: JSON.stringify({ phoneNumber: "+4917632400662" }),
+      body: JSON.stringify({ phoneNumber: "+15551234567" }),
     });
     const deniedBobWhatsAppPair = await read(deniedBobWhatsAppPairResponse);
     assert.equal(deniedBobWhatsAppPairResponse.status, 403);

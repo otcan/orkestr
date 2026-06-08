@@ -163,8 +163,12 @@ function boundWhatsAppAssistantDefaults(thread = null, input = {}) {
     chatId,
     accountId: clean(
       input.accountId ||
+      binding.replyAccountId ||
+      binding.bridgeAccountId ||
+      binding.responderConnectorAccountId ||
       binding.responderAccountId ||
       binding.outboundAccountId ||
+      binding.receivingAccountId ||
       binding.senderAccountId ||
       binding.inboundAccountId,
     ),

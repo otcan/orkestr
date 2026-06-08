@@ -696,7 +696,7 @@ test("local whatsapp bridge exposes public account identity without session inte
     setLocalWhatsAppRuntimeForTest("responder", {
       client: {
         info: {
-          wid: { user: "4917632400662", server: "c.us", _serialized: "4917632400662@c.us" },
+          wid: { user: "15551234567", server: "c.us", _serialized: "15551234567@c.us" },
           pushname: "Responder Phone",
         },
       },
@@ -704,12 +704,13 @@ test("local whatsapp bridge exposes public account identity without session inte
 
     const bridgeStatus = await getLocalWhatsAppBridgeStatus(env);
     const status = await getWhatsAppStatus(env);
-    const account = status.accounts.find((entry) => entry.accountId === "responder");
+    const account = status.accounts.find((entry) => entry.accountId === "15551234567");
 
-    assert.equal(bridgeStatus.accounts[0].phoneNumber, "+4917632400662");
-    assert.equal(bridgeStatus.accounts[0].contactId, "4917632400662@c.us");
-    assert.equal(account.phoneNumber, "+4917632400662");
-    assert.equal(account.contactId, "4917632400662@c.us");
+    assert.equal(bridgeStatus.accounts[0].phoneNumber, "+15551234567");
+    assert.equal(bridgeStatus.accounts[0].contactId, "15551234567@c.us");
+    assert.equal(account.runtimeAccountId, "responder");
+    assert.equal(account.phoneNumber, "+15551234567");
+    assert.equal(account.contactId, "15551234567@c.us");
     assert.equal(account.pushName, "Responder Phone");
     assert.equal(Object.hasOwn(account, "sessionRoot"), false);
     assert.equal(Object.hasOwn(account, "clientId"), false);
@@ -1027,6 +1028,11 @@ test("local whatsapp inbound ignores recent outbound attachment echoes", async (
   await fs.writeFile(attachmentPath, body);
   const sent = [];
   const runtime = {
+    MessageMedia: {
+      fromFilePath(filePath) {
+        return { filePath };
+      },
+    },
     client: {
       async sendMessage(to, media, options) {
         sent.push({ to, media, options });
@@ -1365,7 +1371,7 @@ test("local whatsapp phone pairing replaces an existing qr runtime", async () =>
       qrAvailable: true,
     }, env);
     const result = await startLocalWhatsAppAccount("sender", env, {
-      phoneNumber: "+4917632400662",
+      phoneNumber: "+15551234567",
       loadBridgeDependencies: async () => ({
         whatsapp: { Client, LocalAuth },
         qrcode: {},
@@ -1373,7 +1379,7 @@ test("local whatsapp phone pairing replaces an existing qr runtime", async () =>
     });
 
     assert.equal(calls.includes("destroy-existing"), true);
-    assert.deepEqual(calls.find((call) => Array.isArray(call) && call[0] === "client"), ["client", "4917632400662"]);
+    assert.deepEqual(calls.find((call) => Array.isArray(call) && call[0] === "client"), ["client", "15551234567"]);
     assert.equal(result.state, "starting");
     const events = await listEvents(env);
     assert.ok(events.find((event) => event.type === "whatsapp_local_pairing_runtime_replaced"));

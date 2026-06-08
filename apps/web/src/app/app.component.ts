@@ -1564,6 +1564,8 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     this.busy = true;
     try {
       const additionalParticipantIds = this.whatsappAllowOtherPeople ? this.whatsappSelectedAdditionalParticipantIds(thread) : [];
+      const receivingAccountId = this.selectedWhatsAppInboundAccountId();
+      const replyAccountId = this.selectedWhatsAppReplyAccountId();
       const result = await firstValueFrom(this.api.updateThreadBinding(thread.id, {
         connector: "whatsapp",
         chatId: this.whatsappChatId.trim(),
@@ -1575,11 +1577,14 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
         additionalParticipantLabels: this.whatsappAllowOtherPeople ? this.whatsappSelectedParticipantLabels(thread) : {},
         mirrorToWhatsApp: this.whatsappMirrorToWhatsApp,
         replyPrefix: this.whatsappReplyPrefix.trim() || this.defaultWhatsAppReplyPrefix(),
-        inboundAccountId: this.selectedWhatsAppInboundAccountId(),
-        senderAccountId: this.selectedWhatsAppInboundAccountId(),
-        responderConnectorAccountId: this.selectedWhatsAppReplyAccountId(),
-        responderAccountId: this.selectedWhatsAppReplyAccountId(),
-        outboundAccountId: this.selectedWhatsAppReplyAccountId(),
+        receivingAccountId,
+        inboundAccountId: receivingAccountId,
+        senderAccountId: receivingAccountId,
+        replyAccountId,
+        bridgeAccountId: replyAccountId,
+        responderConnectorAccountId: replyAccountId,
+        responderAccountId: replyAccountId,
+        outboundAccountId: replyAccountId,
       }));
       if (result.thread) this.replaceThread(result.thread);
       this.syncThreadBindingDraft(result.thread || thread, true);
@@ -1699,10 +1704,15 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     this.savingThreadBinding = true;
     this.busy = true;
     try {
+      const receivingAccountId = this.selectedWhatsAppInboundAccountId();
+      const replyAccountId = this.selectedWhatsAppReplyAccountId();
       const created = await firstValueFrom(this.api.createWhatsAppBridgeChat({
         name,
-        senderAccountId: this.selectedWhatsAppInboundAccountId(),
-        responderAccountId: this.selectedWhatsAppReplyAccountId(),
+        receivingAccountId,
+        senderAccountId: receivingAccountId,
+        replyAccountId,
+        bridgeAccountId: replyAccountId,
+        responderAccountId: replyAccountId,
       }));
       const chatId = String(created.chat?.id || "").trim();
       if (!chatId) throw new Error("WhatsApp chat was not created.");
@@ -1724,11 +1734,14 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
         additionalParticipantLabels: {},
         mirrorToWhatsApp: true,
         replyPrefix: this.whatsappReplyPrefix.trim() || this.defaultWhatsAppReplyPrefix(),
-        inboundAccountId: created.senderAccountId || this.selectedWhatsAppInboundAccountId(),
-        senderAccountId: created.senderAccountId || this.selectedWhatsAppInboundAccountId(),
-        responderConnectorAccountId: created.responderAccountId || this.selectedWhatsAppReplyAccountId(),
-        responderAccountId: created.responderAccountId || this.selectedWhatsAppReplyAccountId(),
-        outboundAccountId: created.responderAccountId || this.selectedWhatsAppReplyAccountId(),
+        receivingAccountId,
+        inboundAccountId: receivingAccountId,
+        senderAccountId: receivingAccountId,
+        replyAccountId,
+        bridgeAccountId: replyAccountId,
+        responderConnectorAccountId: replyAccountId,
+        responderAccountId: replyAccountId,
+        outboundAccountId: replyAccountId,
         senderContactId: created.senderContactId || "",
         responderContactId: created.responderContactId || "",
         generated: true,
@@ -2405,8 +2418,8 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     if (!thread || this.whatsappBindingThreadId !== thread.id) return false;
     const binding = thread.binding || {};
     const chatId = this.whatsappChatId.trim();
-    const accountDirty = Boolean(chatId || binding.chatId) && this.selectedWhatsAppReplyAccountId() !== String(binding.responderConnectorAccountId || binding.responderAccountId || binding.outboundAccountId || "").trim();
-    const senderDirty = Boolean(chatId || binding.chatId) && this.selectedWhatsAppInboundAccountId() !== String(binding.inboundAccountId || binding.senderAccountId || binding.outboundAccountId || "").trim();
+    const accountDirty = Boolean(chatId || binding.chatId) && this.selectedWhatsAppReplyAccountId() !== String(binding.replyAccountId || binding.bridgeAccountId || binding.responderConnectorAccountId || binding.responderAccountId || binding.outboundAccountId || "").trim();
+    const senderDirty = Boolean(chatId || binding.chatId) && this.selectedWhatsAppInboundAccountId() !== String(binding.receivingAccountId || binding.inboundAccountId || binding.senderAccountId || binding.outboundAccountId || "").trim();
     const savedParticipantIds = binding.additionalParticipantsEnabled === true
       ? this.normalizeWhatsAppParticipantIds(binding.additionalParticipantIds).filter((id) => !this.whatsappSystemParticipantIds(thread).has(id.toLowerCase()))
       : [];
@@ -2451,6 +2464,37 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     return String(account["accountId"] || account["id"] || account["name"] || "").trim();
   }
 
+  whatsappNumericIdentity(value: unknown): string {
+    const text = String(value || "").trim();
+    if (!text) return "";
+    const compact = text
+      .replace(/^whatsapp:/i, "")
+      .replace(/@(c\.us|s\.whatsapp\.net|lid)$/i, "")
+      .replace(/[()\s.-]+/g, "");
+    const match = compact.match(/^\+?([0-9]{5,})$/);
+    return match ? match[1] : "";
+  }
+
+  whatsappAccountLookupIds(account: WhatsAppAccount | Record<string, unknown> | null): string[] {
+    if (!account) return [];
+    return [
+      account["accountId"],
+      account["id"],
+      account["runtimeAccountId"],
+      account["relayTargetAccountId"],
+      account["phoneIdentity"],
+      account["phoneNumber"],
+      account["contactId"],
+      ...(Array.isArray(account["legacyRoleAliases"]) ? account["legacyRoleAliases"] as unknown[] : []),
+    ]
+      .flatMap((value) => {
+        const text = String(value || "").trim();
+        const numeric = this.whatsappNumericIdentity(text);
+        return [text, numeric].filter(Boolean);
+      })
+      .filter((value, index, all) => all.findIndex((item) => item.toLowerCase() === value.toLowerCase()) === index);
+  }
+
   whatsappAccountConnected(account: WhatsAppAccount | Record<string, unknown> | null): boolean {
     if (!account) return false;
     if (account["ready"] === true) return true;
@@ -2461,7 +2505,10 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   whatsappAccountLabel(account: WhatsAppAccount | Record<string, unknown> | null): string {
     if (!account) return "";
     const id = this.whatsappAccountId(account);
-    return String(account["label"] || account["displayName"] || account["name"] || id).trim();
+    const phone = String(account["phoneNumber"] || account["phoneIdentity"] || "").trim();
+    const label = String(account["label"] || account["displayName"] || account["name"] || "").trim();
+    if (phone && ["sender", "responder", "account-1", "account-2"].includes(id.toLowerCase())) return phone;
+    return phone || label || id;
   }
 
   whatsappAccountState(account: WhatsAppAccount | Record<string, unknown> | null): string {
@@ -2489,7 +2536,11 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
 
   whatsappAccountById(accountId: string): WhatsAppAccount | null {
     const id = String(accountId || "").trim();
-    return this.whatsappAccounts().find((account) => this.whatsappAccountId(account) === id) || null;
+    const numeric = this.whatsappNumericIdentity(id);
+    return this.whatsappAccounts().find((account) => {
+      const keys = this.whatsappAccountLookupIds(account);
+      return keys.some((key) => key.toLowerCase() === id.toLowerCase() || (!!numeric && this.whatsappNumericIdentity(key) === numeric));
+    }) || null;
   }
 
   defaultWhatsAppReplyAccountId(): string {
@@ -2508,18 +2559,21 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   selectedWhatsAppAccountId(): string {
     const accounts = this.connectedWhatsAppAccounts();
     const selected = this.whatsappOutboundAccountId.trim();
-    if (selected && accounts.some((account) => this.whatsappAccountId(account) === selected)) return selected;
+    const selectedAccount = selected ? this.whatsappAccountById(selected) : null;
+    if (selectedAccount && accounts.includes(selectedAccount)) return this.whatsappAccountId(selectedAccount);
     return this.defaultWhatsAppReplyAccountId();
   }
 
   selectedWhatsAppSenderAccountId(): string {
     const accounts = this.connectedWhatsAppAccounts();
     const selected = this.whatsappSenderAccountId.trim();
-    if (selected && accounts.some((account) => this.whatsappAccountId(account) === selected)) return selected;
+    const selectedAccount = selected ? this.whatsappAccountById(selected) : null;
+    if (selectedAccount && accounts.includes(selectedAccount)) return this.whatsappAccountId(selectedAccount);
     const responderId = this.selectedWhatsAppAccountId();
     const responder = this.whatsappAccountById(responderId);
     const relayTarget = this.whatsappRelayTargetAccountId(responder);
-    if (relayTarget && accounts.some((account) => this.whatsappAccountId(account) === relayTarget)) return relayTarget;
+    const relayTargetAccount = relayTarget ? this.whatsappAccountById(relayTarget) : null;
+    if (relayTargetAccount && accounts.includes(relayTargetAccount)) return this.whatsappAccountId(relayTargetAccount);
     const otherReady = accounts.find((account) => this.whatsappAccountId(account) !== responderId && this.whatsappAccountConnected(account));
     if (otherReady) return this.whatsappAccountId(otherReady);
     return responderId;
@@ -2535,12 +2589,14 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
 
   selectedWhatsAppAccount(): WhatsAppAccount | null {
     const selected = this.selectedWhatsAppAccountId();
-    return this.connectedWhatsAppAccounts().find((account) => this.whatsappAccountId(account) === selected) || null;
+    const account = this.whatsappAccountById(selected);
+    return account && this.connectedWhatsAppAccounts().includes(account) ? account : null;
   }
 
   selectedWhatsAppSenderAccount(): WhatsAppAccount | null {
     const selected = this.selectedWhatsAppSenderAccountId();
-    return this.connectedWhatsAppAccounts().find((account) => this.whatsappAccountId(account) === selected) || null;
+    const account = this.whatsappAccountById(selected);
+    return account && this.connectedWhatsAppAccounts().includes(account) ? account : null;
   }
 
   selectedWhatsAppAccountLabel(): string {
@@ -2583,7 +2639,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
 
   whatsappAccountQrUrl(): string {
     const selected = this.selectedWhatsAppAccountId();
-    const account = this.whatsappAccounts().find((item) => this.whatsappAccountId(item) === selected);
+    const account = this.whatsappAccountById(selected);
     return String(account?.qrUrl || this.whatsappStatusDetails?.qrUrl || "").trim();
   }
 
@@ -2662,7 +2718,12 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   canLoadLocalWhatsAppChats(accountId = this.selectedWhatsAppReplyAccountId()): boolean {
     const mode = String(this.whatsappStatusDetails?.mode || "local").toLowerCase();
     const bridgeUrl = String(this.whatsappStatusDetails?.bridgeUrl || "").trim();
-    return mode === "local" && (!bridgeUrl || bridgeUrl.startsWith("/api/connectors/whatsapp/bridge")) && /^account-\d+$/i.test(accountId);
+    const account = this.whatsappAccountById(accountId);
+    const runtimeAccountId = String(account?.runtimeAccountId || "").trim();
+    return mode === "local" &&
+      (!bridgeUrl || bridgeUrl.startsWith("/api/connectors/whatsapp/bridge")) &&
+      Boolean(accountId) &&
+      (/^account-\d+$/i.test(accountId) || /^account-\d+$/i.test(runtimeAccountId));
   }
 
   threadDeleteConfirmMatches(thread: ThreadSummary | null): boolean {
@@ -2708,7 +2769,20 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     const allowPeople = this.whatsappBindingThreadId === thread.id
       ? this.whatsappAllowOtherPeople
       : binding.additionalParticipantsEnabled === true;
-    return allowPeople ? "Additional participants enabled" : "Only the linked inbound account";
+    return allowPeople ? "Additional participants enabled" : "Only the saved owner contact";
+  }
+
+  whatsappOwnerContactLabel(thread: ThreadSummary | null): string {
+    const binding = thread?.binding || {};
+    const extra = binding as Record<string, unknown>;
+    const contact = String(
+      binding.senderContactId ||
+      extra["ownerContactId"] ||
+      extra["authorizedContactId"] ||
+      "",
+    ).trim();
+    if (contact) return this.whatsappParticipantName(contact) || this.whatsappParticipantNumber(contact) || contact;
+    return this.selectedWhatsAppInboundAccountLabel();
   }
 
   showWhatsAppChatIcon(thread: ThreadSummary | null): boolean {
@@ -4015,8 +4089,8 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     this.whatsappChatId = String(binding.chatId || "");
     this.whatsappDisplayName = String(binding.displayName || this.threadTitle(thread));
     this.whatsappReplyPrefix = String(binding.replyPrefix || this.defaultWhatsAppReplyPrefix());
-    this.whatsappSenderAccountId = String(binding.inboundAccountId || binding.senderAccountId || "");
-    this.whatsappOutboundAccountId = String(binding.responderConnectorAccountId || binding.responderAccountId || binding.outboundAccountId || "");
+    this.whatsappSenderAccountId = String(binding.receivingAccountId || binding.inboundAccountId || binding.senderAccountId || "");
+    this.whatsappOutboundAccountId = String(binding.replyAccountId || binding.bridgeAccountId || binding.responderConnectorAccountId || binding.responderAccountId || binding.outboundAccountId || "");
     this.whatsappBindingEnabled = binding.enabled !== false;
     this.whatsappAllowOtherPeople = binding.additionalParticipantsEnabled === true;
     this.whatsappAdditionalParticipantIds = this.whatsappAllowOtherPeople

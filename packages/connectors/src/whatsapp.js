@@ -102,6 +102,10 @@ import {
   createGoogleWorkspaceConnectLink,
   googleWorkspaceConnectCommand,
 } from "./google-workspace.js";
+import {
+  canonicalWhatsAppAccountId,
+  findWhatsAppAccountByAnyId,
+} from "./whatsapp-account-identity.js";
 
 export { formatWhatsAppOutboundText } from "./whatsapp-formatting.js";
 export { initialQueueDeliveryState } from "./whatsapp-outbound-mirror.js";
@@ -205,7 +209,8 @@ function firstAccountError(accounts = []) {
 }
 
 function publicBridgeAccount(account = {}) {
-  const id = pickString(account.accountId, account.id);
+  const rawId = pickString(account.accountId, account.id);
+  const id = canonicalWhatsAppAccountId({ ...account, accountId: rawId, id: rawId }) || rawId;
   return {
     id,
     accountId: id,
@@ -226,6 +231,8 @@ function publicBridgeAccount(account = {}) {
     loadingMessage: pickString(account.loadingMessage),
     error: pickString(account.error),
     updatedAt: pickString(account.updatedAt),
+    runtimeAccountId: pickString(account.runtimeAccountId, rawId),
+    legacyRoleAliases: id !== rawId && rawId ? [rawId] : [],
   };
 }
 
@@ -311,6 +318,18 @@ async function externalBridgeAccounts(bridgeUrl, healthPayload, fetchImpl, heade
     // Older bridges only expose /health; account discovery stays best-effort.
   }
   return [];
+}
+
+async function resolveBridgeRuntimeAccountId(accountId = "", { config = null, env = process.env, fetchImpl = fetch } = {}) {
+  const requested = pickString(accountId);
+  if (!requested) return "";
+  const resolvedConfig = config || await readConnectorConfig("whatsapp", env).catch(() => ({}));
+  const bridgeUrl = configuredBridgeUrl(resolvedConfig, env);
+  if (!bridgeUrl) return requested;
+  if (bridgeMode(resolvedConfig, env) === "external") return requested;
+  const status = await getWhatsAppStatus(env, fetchImpl).catch(() => null);
+  const account = findWhatsAppAccountByAnyId(status?.accounts || [], requested, env);
+  return pickString(account?.runtimeAccountId, requested);
 }
 
 function normalizeParticipant(participant = {}) {
@@ -504,7 +523,8 @@ export async function getWhatsAppChatParticipants({ accountId = "", chatId = "" 
     return { accountId, chatId: id, ready: false, participants: [] };
   }
   const metaUrl = whatsappBridgeEndpointUrl(bridgeUrl, `/api/chats/${encodeURIComponent(id)}/meta`);
-  if (accountId) metaUrl.searchParams.set("accountId", accountId);
+  const runtimeAccountId = await resolveBridgeRuntimeAccountId(accountId, { config, env, fetchImpl });
+  if (runtimeAccountId) metaUrl.searchParams.set("accountId", runtimeAccountId);
   const response = await fetchImpl(metaUrl, {
     headers: bridgeAuthHeaders(config, env),
     signal: AbortSignal.timeout(Number(env.WHATSAPP_PARTICIPANTS_TIMEOUT_MS || 5000)),
@@ -517,6 +537,7 @@ export async function getWhatsAppChatParticipants({ accountId = "", chatId = "" 
   }
   return {
     accountId,
+    runtimeAccountId,
     chatId: id,
     ready: true,
     isGroup: Boolean(payload?.isGroup),
@@ -2506,13 +2527,14 @@ export async function sendWhatsAppText({ chatId = "", text = "", accountId = "",
   }
   if (!bridgeUrl) throw badRequest("whatsapp_bridge_not_configured");
   const headers = { "content-type": "application/json", ...bridgeAuthHeaders(resolvedConfig, env) };
+  const runtimeAccountId = await resolveBridgeRuntimeAccountId(accountId, { config: resolvedConfig, env, fetchImpl });
   const response = await fetchImpl(whatsappBridgeEndpointUrl(bridgeUrl, normalizedAttachments.length ? "/send-media" : "/send-text"), {
     method: "POST",
     headers,
     body: JSON.stringify({
       to: chatId,
       text,
-      ...(accountId ? { accountId } : {}),
+      ...(runtimeAccountId ? { accountId: runtimeAccountId } : {}),
       ...(normalizedAttachments.length ? { paths: normalizedAttachments.map((attachment) => attachment.path) } : {}),
     }),
     signal: AbortSignal.timeout(Number(env.WHATSAPP_SEND_TIMEOUT_MS || 10_000)),
@@ -3330,7 +3352,7 @@ async function deliverWhatsAppRepliesOnce(env = process.env, fetchImpl = fetch) 
       });
       const chatId = pickString(message.chatId, parent?.chatId, thread?.binding?.chatId);
       const accountId = kind === "thread"
-        ? pickString(thread?.binding?.responderAccountId, thread?.binding?.outboundAccountId, message.accountId, parent?.accountId)
+        ? pickString(thread?.binding?.replyAccountId, thread?.binding?.bridgeAccountId, thread?.binding?.responderConnectorAccountId, thread?.binding?.responderAccountId, thread?.binding?.outboundAccountId, message.accountId, parent?.accountId)
         : pickString(message.accountId, parent?.accountId);
       const deliveryType = message.source === "orkestr_runtime" ? "router_update" : "final";
       const existingIntent = findWhatsAppOutboundIntent(outboundIntents, {

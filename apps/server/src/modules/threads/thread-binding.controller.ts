@@ -104,9 +104,9 @@ export class ThreadBindingController {
       Boolean(remoteBackend || remoteThreadIdValue || current.remoteBackend || current.remoteThreadId || current.remoteRuntimeBackend || current.remoteRuntimeThreadId) ||
       hasOwn(body, "remoteRuntimeEnabled") ||
       hasOwn(body, "remoteMirrorEnabled");
-    const inboundAccountId = optionalAccountId(body, current, ["inboundAccountId", "senderAccountId"]);
-    const responderConnectorAccountId = optionalAccountId(body, current, ["responderConnectorAccountId", "responderAccountId", "outboundAccountId"]);
-    const outboundAccountId = optionalAccountId(body, current, ["outboundAccountId", "responderConnectorAccountId", "responderAccountId"]) || responderConnectorAccountId;
+    const inboundAccountId = optionalAccountId(body, current, ["receivingAccountId", "inboundAccountId", "senderAccountId"]);
+    const responderConnectorAccountId = optionalAccountId(body, current, ["replyAccountId", "bridgeAccountId", "responderConnectorAccountId", "responderAccountId", "outboundAccountId"]);
+    const outboundAccountId = optionalAccountId(body, current, ["replyAccountId", "bridgeAccountId", "outboundAccountId", "responderConnectorAccountId", "responderAccountId"]) || responderConnectorAccountId;
     const binding = {
       ...current,
       connector: optionalBodyString(body, "connector", current.connector || "whatsapp") || "whatsapp",
@@ -119,8 +119,11 @@ export class ThreadBindingController {
       additionalParticipantLabels,
       mirrorToWhatsApp: optionalBodyBoolean(body, "mirrorToWhatsApp", current.mirrorToWhatsApp !== false),
       replyPrefix: optionalBodyString(body, "replyPrefix", current.replyPrefix || defaultWhatsAppReplyPrefix()) || defaultWhatsAppReplyPrefix(),
+      receivingAccountId: inboundAccountId,
       inboundAccountId,
       senderAccountId: inboundAccountId,
+      replyAccountId: responderConnectorAccountId,
+      bridgeAccountId: responderConnectorAccountId,
       responderConnectorAccountId,
       responderAccountId: responderConnectorAccountId,
       senderContactId: optionalBodyString(body, "senderContactId", current.senderContactId || "") || null,

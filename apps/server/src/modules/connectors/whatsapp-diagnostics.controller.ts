@@ -33,6 +33,7 @@ import {
   startLocalWhatsAppAccount,
 } from "../../../../../packages/connectors/src/whatsapp-local-bridge.js";
 import { whatsappBindingAclAllows } from "../../../../../packages/connectors/src/whatsapp-binding-acl.js";
+import { whatsappAccountLookupKeys } from "../../../../../packages/connectors/src/whatsapp-account-identity.js";
 import { requestPrincipal } from "../../../../../packages/core/src/principal.js";
 import { httpError } from "../../common/http.js";
 
@@ -115,7 +116,9 @@ function accountRequiredByBroker(account: Record<string, any> = {}, bindings: an
 
 function accountMatches(account: Record<string, any> = {}, accountId = "") {
   const id = clean(accountId);
-  return Boolean(id && (clean(account.accountId) === id || clean(account.id) === id));
+  if (!id) return false;
+  const wanted = id.toLowerCase();
+  return (whatsappAccountLookupKeys as any)(account, process.env).some((key: string) => clean(key).toLowerCase() === wanted);
 }
 
 function findAccount(accounts: any[] = [], accountId = "") {
@@ -168,7 +171,7 @@ function assertAccountForPrincipal(account: Record<string, any> | null, principa
 }
 
 function responderAccountIdFromBody(body: Record<string, unknown> = {}) {
-  return clean(body.responderConnectorAccountId || body.responderAccountId || body.outboundAccountId || body.accountId);
+  return clean(body.replyAccountId || body.bridgeAccountId || body.receivingAccountId || body.responderConnectorAccountId || body.responderAccountId || body.outboundAccountId || body.accountId);
 }
 
 function bindingBodyForPrincipal(body: Record<string, unknown> = {}, principal: any = {}) {
