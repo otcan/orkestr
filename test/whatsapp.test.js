@@ -5127,7 +5127,7 @@ test("whatsapp delivery preserves recovery slash commands in outbound text", asy
     source: "codex-app-server-recovery",
     phase: "final_answer",
     state: "completed",
-    text: "If this repeats, reply /safe-reset to save recent Orkestr context and start a fresh Codex session. You can also use /now, /implement, or /help.",
+    text: "If this repeats, reply /safe-reset to save recent Orkestr context and start a fresh Codex session. You can also use /now, /implement, /codex, /connect google, or /help.",
     parentMessageId: routed.message.id,
     connector: "whatsapp",
     chatId: "chat-recovery-slash-command",
@@ -5143,7 +5143,7 @@ test("whatsapp delivery preserves recovery slash commands in outbound text", asy
   assert.equal(delivery.delivered.length, 1);
   assert.equal(calls[0].url.pathname, "/send-text");
   assert.match(visibleText, /reply \/safe-reset/);
-  assert.match(visibleText, /\/now, \/implement, or \/help/);
+  assert.match(visibleText, /\/now, \/implement, \/codex, \/connect google, or \/help/);
   assert.doesNotMatch(visibleText, /\[local file path omitted]/);
 });
 
