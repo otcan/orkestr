@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { dataPaths } from "../../storage/src/paths.js";
 import { appendEvent } from "../../storage/src/store.js";
-import { listThreadMessages, listThreads, updateThread } from "./threads.js";
+import { enqueueThreadInput, listThreadMessages, listThreads, updateThread } from "./threads.js";
 import { getCodexAppServerClient } from "./codex-app-server-client.js";
 import {
   appendOrUpdateEventMessage,
@@ -331,6 +331,49 @@ async function appendSafeResetRecoveryNotice(thread, codexId, turn, resetResult 
   }, env);
 }
 
+function safeResetContinuationEventId(thread, codexId, turn, resetResult = {}) {
+  const latestUser = turn?.latestUser || {};
+  return threadEventId({
+    codexThreadId: resetResult?.newCodexThreadId || codexThreadId(resetResult?.thread || thread) || codexId,
+    turnId: "safe-reset-continuation",
+    itemId: `safe-reset-continue:${latestUser?.id || "latest"}`,
+    type: "turn/safe-reset-continue",
+    role: "user",
+    text: clean(latestUser?.text || latestUser?.promptFile || ""),
+  });
+}
+
+async function enqueueSafeResetContinuationInput(thread, codexId, turn, resetResult = {}, env = process.env) {
+  if (!safeResetSucceeded(resetResult)) return null;
+  const latestUser = turn?.latestUser || null;
+  const text = clean(latestUser?.text);
+  const promptFile = clean(latestUser?.promptFile);
+  if (!latestUser || (!text && !promptFile)) return null;
+  const refreshedThread = resetResult?.thread || thread;
+  const newCodexThreadId = resetResult?.newCodexThreadId || codexThreadId(refreshedThread) || codexId;
+  const whatsappParent = noticeWhatsappParent(turn, refreshedThread);
+  return enqueueThreadInput(refreshedThread.id || thread.id, {
+    role: "user",
+    source: clean(latestUser.source) || "manual",
+    connector: clean(latestUser.connector),
+    chatId: clean(latestUser.chatId),
+    from: clean(latestUser.from),
+    accountId: clean(latestUser.accountId),
+    originSurface: clean(latestUser.originSurface),
+    originTransport: clean(latestUser.originTransport),
+    ownerUserId: clean(latestUser.ownerUserId || refreshedThread?.ownerUserId),
+    text,
+    promptFile,
+    attachments: Array.isArray(latestUser.attachments) ? latestUser.attachments : [],
+    parentMessageId: latestUser.id || null,
+    visibility: "internal",
+    eventId: safeResetContinuationEventId(refreshedThread, codexId, turn, resetResult),
+    codexThreadId: newCodexThreadId,
+    executorThreadId: newCodexThreadId,
+    ...whatsappProjectionFields(whatsappParent, refreshedThread),
+  }, env);
+}
+
 function noticeWhatsappParent(turn, thread = null) {
   if (turn?.latestUser && whatsappOrigin(turn.latestUser)) return turn.latestUser;
   if (turn?.latestAssistant && whatsappOrigin(turn.latestAssistant)) return turn.latestAssistant;
@@ -520,6 +563,7 @@ export async function recoverStaleCodexAppServerTurns(env = process.env, options
   let recovered = 0;
   let appended = 0;
   let autoSafeReset = 0;
+  let continued = 0;
   for (const thread of appServerThreads) {
     const codexId = codexThreadId(thread);
     if (!codexId) continue;
@@ -640,7 +684,21 @@ export async function recoverStaleCodexAppServerTurns(env = process.env, options
         });
         if (safeResetSucceeded(autoSafeResetResult)) {
           autoSafeReset += 1;
-          await appendSafeResetRecoveryNotice(thread, codexId, freshNoticeTurn || noticeTurn, autoSafeResetResult, env).catch(() => null);
+          const continuation = await enqueueSafeResetContinuationInput(thread, codexId, freshNoticeTurn || noticeTurn, autoSafeResetResult, env).catch(() => null);
+          if (continuation?.id) {
+            continued += 1;
+            if (typeof options.continueThreadInput === "function") {
+              await options.continueThreadInput(thread.id, {
+                reason: resetReason,
+                threadId: thread.id,
+                codexThreadId: autoSafeResetResult?.newCodexThreadId || null,
+                messageId: continuation.id,
+                replayedFromMessageId: freshNoticeTurn?.latestUser?.id || noticeTurn?.latestUser?.id || null,
+              }).catch(() => null);
+            }
+          } else {
+            await appendSafeResetRecoveryNotice(thread, codexId, freshNoticeTurn || noticeTurn, autoSafeResetResult, env).catch(() => null);
+          }
         }
         await appendEvent({
           type: "codex_app_server_auto_safe_reset",
@@ -689,5 +747,5 @@ export async function recoverStaleCodexAppServerTurns(env = process.env, options
     }, env).catch(() => {});
     recoveryScanCache.delete(thread.id);
   }
-  return { recovered, appended, autoSafeReset };
+  return { recovered, appended, autoSafeReset, continued };
 }
