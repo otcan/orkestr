@@ -5661,6 +5661,47 @@ test("thread runtime sync does not scrape legacy rollout replies before migratio
   }
 });
 
+test("thread summary marks runtime interruption as recovered after safe reset", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-summary-recovered-runtime-"));
+  const env = { ORKESTR_HOME: home };
+  const resetAt = "2026-06-09T10:05:00.000Z";
+  const interruptedAt = "2026-06-09T10:04:00.000Z";
+  const thread = await createThread({
+    id: "summary-recovered-runtime-thread",
+    name: "Summary Recovered Runtime Thread",
+    state: "ready",
+    executor: {
+      type: "codex",
+      transport: "app-server",
+      codexThreadId: "summary-recovered-codex-thread",
+      metadata: {
+        runtimeKind: "codex-app-server",
+        lastSafeReset: { resetAt },
+      },
+    },
+    runtime: {
+      runtimeKind: "codex-app-server",
+      state: "ready",
+      recoveredAt: resetAt,
+      safeReset: { resetAt },
+    },
+  }, env);
+  const message = await appendThreadMessage(thread.id, {
+    role: "assistant",
+    source: "orkestr_runtime",
+    phase: "runtime_interrupted",
+    text: "Codex response timed out",
+    createdAt: interruptedAt,
+    state: "completed",
+  }, env);
+
+  const summary = await threadRuntimeSummary(await getThread(thread.id, env), await listThreadMessages(thread.id, env), { cacheTtlMs: 0 });
+
+  assert.equal(summary.lastMessageId, message.id);
+  assert.equal(summary.lastMessagePhase, "runtime_interrupted");
+  assert.equal(summary.lastMessageRecovered, true);
+});
+
 test("thread APIs create, queue, run, and list messages", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-api-"));
   const priorHome = process.env.ORKESTR_HOME;

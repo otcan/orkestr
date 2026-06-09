@@ -283,6 +283,54 @@ function staleTurnEventId(thread, codexId, turn, options = {}) {
   });
 }
 
+function safeResetSucceeded(result = null) {
+  return Boolean(result?.ok || result?.safeReset || result?.reset);
+}
+
+function safeResetRecoveryText() {
+  return [
+    "Codex session recovered",
+    "",
+    "Orkestr saved recent context and started a fresh Codex session for this thread.",
+    "Send the next instruction normally to continue.",
+  ].join("\n");
+}
+
+function safeResetRecoveryEventId(thread, codexId, turn, resetResult = {}) {
+  const latestUser = turn?.latestUser || {};
+  return threadEventId({
+    codexThreadId: resetResult?.newCodexThreadId || codexId,
+    turnId: clean(latestUser?.codexTurnId || latestUser?.executorTurnId || thread?.runtime?.activeTurnId || "safe-reset"),
+    itemId: `safe-reset-recovered:${latestUser?.id || "latest"}`,
+    type: "turn/safe-reset-recovered",
+    role: "assistant",
+    text: safeResetRecoveryText(),
+  });
+}
+
+async function appendSafeResetRecoveryNotice(thread, codexId, turn, resetResult = {}, env = process.env) {
+  if (!safeResetSucceeded(resetResult)) return null;
+  const refreshedThread = resetResult?.thread || thread;
+  const latestUser = turn?.latestUser || null;
+  const whatsappParent = noticeWhatsappParent(turn, refreshedThread);
+  return appendOrUpdateEventMessage(refreshedThread, {
+    role: "assistant",
+    source: "orkestr_runtime",
+    phase: "runtime_recovered",
+    text: safeResetRecoveryText(),
+    state: "completed",
+    eventId: safeResetRecoveryEventId(refreshedThread, codexId, turn, resetResult),
+    parentMessageId: latestUser?.id || null,
+    codexThreadId: resetResult?.newCodexThreadId || codexThreadId(refreshedThread) || codexId,
+    codexTurnId: clean(latestUser?.codexTurnId || latestUser?.executorTurnId || thread?.runtime?.activeTurnId) || null,
+    ...codexAppServerMessageFields(resetResult?.newCodexThreadId || codexThreadId(refreshedThread) || codexId, {
+      turnId: clean(latestUser?.codexTurnId || latestUser?.executorTurnId || thread?.runtime?.activeTurnId),
+      itemId: "safe-reset-recovered",
+    }),
+    ...whatsappProjectionFields(whatsappParent, refreshedThread),
+  }, env);
+}
+
 function noticeWhatsappParent(turn, thread = null) {
   if (turn?.latestUser && whatsappOrigin(turn.latestUser)) return turn.latestUser;
   if (turn?.latestAssistant && whatsappOrigin(turn.latestAssistant)) return turn.latestAssistant;
@@ -590,7 +638,10 @@ export async function recoverStaleCodexAppServerTurns(env = process.env, options
           latestUserMessageId: freshNoticeTurn?.latestUser?.id || noticeTurn?.latestUser?.id || null,
           recoveryReason: shouldRecoverActiveTurn ? "active_turn_timeout" : freshNoticeTurn?.reason || (notice ? noticeTurn?.reason : null) || (staleRuntime ? "stale_runtime" : "incomplete_turn"),
         });
-        if (autoSafeResetResult?.ok || autoSafeResetResult?.safeReset || autoSafeResetResult?.reset) autoSafeReset += 1;
+        if (safeResetSucceeded(autoSafeResetResult)) {
+          autoSafeReset += 1;
+          await appendSafeResetRecoveryNotice(thread, codexId, freshNoticeTurn || noticeTurn, autoSafeResetResult, env).catch(() => null);
+        }
         await appendEvent({
           type: "codex_app_server_auto_safe_reset",
           threadId: thread.id,

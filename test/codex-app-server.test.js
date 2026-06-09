@@ -2300,6 +2300,7 @@ test("Codex app-server recovery auto safe-resets repeated stale delivered turns"
     });
     const messages = await listThreadMessages(thread.id, env);
     const notices = messages.filter((message) => message.source === "orkestr_runtime" && message.phase === "runtime_interrupted");
+    const recoveryNotice = messages.find((message) => message.source === "orkestr_runtime" && message.phase === "runtime_recovered");
     const events = (await fs.readFile(path.join(env.ORKESTR_HOME, "events.jsonl"), "utf8"))
       .trim()
       .split("\n")
@@ -2317,6 +2318,11 @@ test("Codex app-server recovery auto safe-resets repeated stale delivered turns"
     assert.equal(resets[0].context.latestUserMessageId, latestInput.id);
     assert.equal(notices.length, 2);
     assert.equal(notices.at(-1).parentMessageId, latestInput.id);
+    assert.ok(recoveryNotice);
+    assert.equal(recoveryNotice.parentMessageId, latestInput.id);
+    assert.equal(recoveryNotice.connector, "whatsapp");
+    assert.equal(recoveryNotice.chatId, "chat-repeat-stale");
+    assert.match(recoveryNotice.text, /^Codex session recovered/);
     assert.equal(autoEvent.oldCodexThreadId, "repeat-stale-codex-thread");
     assert.equal(autoEvent.newCodexThreadId, "repeat-stale-new-codex-thread");
     assert.equal(recoveryEvent.autoSafeReset, true);

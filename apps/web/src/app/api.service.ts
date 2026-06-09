@@ -941,6 +941,7 @@ export interface ThreadSummary {
   lastMessageState?: string | null;
   lastMessageDeliveryState?: string | null;
   lastMessageError?: string | null;
+  lastMessageRecovered?: boolean;
   threadUpdatedAt?: string;
   updatedAt?: string;
   createdAt?: string;

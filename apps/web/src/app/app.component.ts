@@ -3271,20 +3271,20 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     const message = this.latestCachedThreadMessage(thread);
     if (this.latestCachedThreadMessageIsCurrent(thread, message)) {
       return String(message?.state || "").toLowerCase() === "failed" ||
-        this.messagePhase(message) === "runtime_interrupted";
+        (this.messagePhase(message) === "runtime_interrupted" && !thread.lastMessageRecovered);
     }
     return String(thread.lastMessageState || "").toLowerCase() === "failed" ||
       String(thread.lastMessageDeliveryState || "").toLowerCase() === "failed" ||
-      String(thread.lastMessagePhase || "").toLowerCase() === "runtime_interrupted";
+      (String(thread.lastMessagePhase || "").toLowerCase() === "runtime_interrupted" && !thread.lastMessageRecovered);
   }
 
   private threadLatestMessageError(thread: ThreadSummary): string {
     const message = this.latestCachedThreadMessage(thread);
     if (this.latestCachedThreadMessageIsCurrent(thread, message)) {
-      return String(message?.error || "").trim() || (message && this.messagePhase(message) === "runtime_interrupted" ? this.messageText(message) : "");
+      return String(message?.error || "").trim() || (message && this.messagePhase(message) === "runtime_interrupted" && !thread.lastMessageRecovered ? this.messageText(message) : "");
     }
     return String(thread.lastMessageError || "").trim() ||
-      (String(thread.lastMessagePhase || "").toLowerCase() === "runtime_interrupted" ? "Codex conversation was interrupted." : "");
+      (String(thread.lastMessagePhase || "").toLowerCase() === "runtime_interrupted" && !thread.lastMessageRecovered ? "Codex conversation was interrupted." : "");
   }
 
   private latestThreadMessageIsFinalAssistant(thread: ThreadSummary): boolean {
