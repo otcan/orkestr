@@ -923,6 +923,34 @@ function formatRunSkillActionTool(result = {}, context = {}) {
   return lines.join("\n");
 }
 
+function formatOperateDesktopTool(result = {}) {
+  const output = result.output || {};
+  const page = output.page || {};
+  const lines = [];
+  if (output.ok === false) {
+    return `Desktop operation failed: ${clean(output.error || output.message || "desktop_operation_failed")}.`;
+  }
+  const operation = clean(output.operation || result.args?.operation || "observe");
+  const title = clean(page.title || "(untitled)");
+  const url = clean(page.url);
+  lines.push(`Desktop ${operation} completed. Current page: ${title}${url ? ` (${url})` : ""}.`);
+  const body = clean(page.bodyText);
+  if (body) lines.push(`Page text:\n${body.slice(0, 4000)}`);
+  const fields = Array.isArray(page.fields) ? page.fields.filter((field) => clean(field.label || field.placeholder || field.name)).slice(0, 8) : [];
+  if (fields.length) {
+    lines.push(`Visible fields: ${fields.map((field) => clean(field.label || field.placeholder || field.name || field.selector)).join(", ")}.`);
+  }
+  const buttons = Array.isArray(page.buttons) ? page.buttons.filter((button) => clean(button.text)).slice(0, 10) : [];
+  if (buttons.length) {
+    lines.push(`Visible actions: ${buttons.map((button) => clean(button.text)).join(", ")}.`);
+  }
+  const links = Array.isArray(page.links) ? page.links.filter((link) => clean(link.text || link.href)).slice(0, 8) : [];
+  if (links.length) {
+    lines.push(`Visible links: ${links.map((link) => `${clean(link.text || "link")} -> ${clean(link.href)}`).join("; ")}.`);
+  }
+  return lines.join("\n\n");
+}
+
 function formatListSkillsTool(result = {}) {
   const output = result.output || {};
   const skills = Array.isArray(output.skills) ? output.skills : [];
@@ -1159,6 +1187,7 @@ function formatToolResultFallback(toolResults = [], context = {}) {
     else if (result.name === "orkestr_disconnect_connector") formatted = formatConnectorStatusTool({ ...result, output: result.output?.status || result.output });
     else if (result.name === "orkestr_list_skill_actions") formatted = formatSkillActionsTool(result, context);
     else if (result.name === "orkestr_run_skill_action") formatted = formatRunSkillActionTool(result, context);
+    else if (result.name === "orkestr_operate_desktop") formatted = formatOperateDesktopTool(result);
     else if (result.name === "orkestr_list_skills") formatted = formatListSkillsTool(result);
     else if (["orkestr_search_gmail", "orkestr_read_gmail_message", "orkestr_read_latest_gmail_message"].includes(result.name)) formatted = formatGmailTool(result);
     else if (["orkestr_create_gmail_notification", "orkestr_update_gmail_notification", "orkestr_list_gmail_notifications", "orkestr_delete_gmail_notification", "orkestr_run_gmail_notification_now"].includes(result.name)) formatted = formatGmailNotificationTool(result);
@@ -1569,10 +1598,11 @@ export async function buildTenantApiAgentInstructions(thread = {}, messages = []
     "When asked what you can do or what skills you have, list only capabilities that are true in the Tenant context JSON and skills whose enabled field is true. Do not treat registryEnabled as availability; registryEnabled only means the user has not disabled the skill.",
     "For capability and action questions, reason from skills first: use orkestr_list_skills or orkestr_list_skill_actions to inspect enabled skills, current availability, and available actions before saying what you can do.",
     "If the user asks you to open, start, stop, restart, check, or otherwise act through a skill, use orkestr_list_skill_actions first and then orkestr_run_skill_action only when that action is available.",
-    "After running a skill action, answer from the tool result. If the tool only opens a desktop or returns status, say exactly that; do not claim that you inspected account login, page contents, messages, or external state unless a tool result explicitly confirms that.",
+    "When the user asks you to work inside a managed desktop, inspect login state, gather data from a logged-in page, navigate, click, type, read visible page content, or continue after opening a desktop, use orkestr_operate_desktop after inspecting skill actions. Use observe/extract to inspect the current page, navigate for URLs, click for visible actions, and type for visible fields.",
+    "After running a skill or desktop operation, answer from the tool result. If a desktop operation returns page text, links, buttons, or fields, use that data directly. If the tool only opens a desktop or returns status, say exactly that; do not claim that you inspected account login, page contents, messages, or external state unless a tool result explicitly confirms that.",
     codexAvailable
-      ? "Managed desktop and browser skill actions are controls, not page-reading tools. Opening a desktop or visiting a URL does not prove page contents, trending topics, translations, account login state, or successful research. For public HTTP(S) content, use orkestr_fetch_web_page. If the user asks to gather content that no Orkestr tool returns, say what was opened if a tool confirms it, then ask whether they want to connect Codex to this chat for deeper browser/content work. Do not tell them to resend with a slash command."
-      : "Managed desktop and browser skill actions are controls, not page-reading tools. Opening a desktop or visiting a URL does not prove page contents, trending topics, translations, account login state, or successful research. For public HTTP(S) content, use orkestr_fetch_web_page when available. If no Orkestr tool returns the requested content, say the chat cannot run live browser/content work right now; do not mention a slash-command escalation path.",
+      ? "Managed desktop open/start actions only control availability, but orkestr_operate_desktop can inspect and interact with the live page. For public HTTP(S) content, use orkestr_fetch_web_page when it is enough; for logged-in browser state or user-owned desktop workflows, use orkestr_operate_desktop. If no Orkestr tool can complete the requested browser/content work, ask whether they want to connect Codex to this chat. Do not tell them to resend with a slash command."
+      : "Managed desktop open/start actions only control availability, but orkestr_operate_desktop can inspect and interact with the live page. For public HTTP(S) content, use orkestr_fetch_web_page when it is enough; for logged-in browser state or user-owned desktop workflows, use orkestr_operate_desktop. If no Orkestr tool can complete the requested browser/content work, say the chat cannot run that browser/content work right now; do not mention a slash-command escalation path.",
     "Skills are unique per user and are described by the skill records in the Tenant context. Do not force provider categories, goals, or attachment models onto them; preserve the user's wording.",
     "Users manage skills through chat. When they ask to list, view, search, create, update, enable, disable, or delete skills, use the Orkestr skill tools.",
     "Do not create or update a skill for phishing, scams, credential theft, unauthorized login attempts, spam, or abuse. Refuse those requests instead of calling a tool.",

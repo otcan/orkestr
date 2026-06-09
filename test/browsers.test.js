@@ -6,6 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { promisify } from "node:util";
+import { WebSocketServer } from "ws";
 import {
   cleanupVirtualBrowser,
   listBrowserSessions,
@@ -15,6 +16,7 @@ import {
   prepareVirtualBrowser,
   stopVirtualBrowser,
 } from "../packages/browsers/src/browsers.js";
+import { operateManagedDesktop } from "../packages/browsers/src/desktop-operator.js";
 import { acquireDesktopLease, activeDesktopLeaseStatus, publicDesktopLeases } from "../packages/browsers/src/desktop-leases.js";
 import { userPrincipal } from "../packages/core/src/principal.js";
 import { createThread } from "../packages/core/src/threads.js";
@@ -267,6 +269,108 @@ if (command === "list") {
     assert.deepEqual(openedUrls, [targetUrl]);
   } finally {
     await new Promise((resolve) => cdpServer.close(resolve));
+  }
+});
+
+test("managed desktop operator observes and controls a CDP page", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-desktop-operator-"));
+  let pageUrl = "https://www.linkedin.com/feed/";
+  let searchValue = "";
+  const server = http.createServer((request, response) => {
+    const requestUrl = String(request.url || "");
+    if (requestUrl === "/json/list") {
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify([{
+        id: "page-1",
+        type: "page",
+        title: "LinkedIn Feed",
+        url: pageUrl,
+        webSocketDebuggerUrl: `ws://127.0.0.1:${server.address().port}/devtools/page/page-1`,
+      }]));
+      return;
+    }
+    response.writeHead(404, { "content-type": "application/json" });
+    response.end(JSON.stringify({ ok: false }));
+  });
+  const wss = new WebSocketServer({ server });
+  wss.on("connection", (ws) => {
+    ws.on("message", (raw) => {
+      const message = JSON.parse(String(raw || "{}"));
+      if (message.method === "Runtime.evaluate") {
+        const expression = String(message.params?.expression || "");
+        if (expression.includes("desktop_click_target_not_found")) {
+          ws.send(JSON.stringify({ id: message.id, result: { result: { type: "object", value: { ok: true, clicked: "People", url: pageUrl } } } }));
+          return;
+        }
+        if (expression.includes("desktop_type_target_not_found")) {
+          const match = expression.match(/const nextValue = \"([^\"]*)\"/);
+          searchValue = match ? JSON.parse(`"${match[1]}"`) : "";
+          ws.send(JSON.stringify({ id: message.id, result: { result: { type: "object", value: { ok: true, field: "Search", url: pageUrl } } } }));
+          return;
+        }
+        ws.send(JSON.stringify({
+          id: message.id,
+          result: {
+            result: {
+              type: "object",
+              value: {
+                title: "LinkedIn Feed",
+                url: pageUrl,
+                bodyText: `Signed in as Test User. Search value: ${searchValue}. Recent update from Example GmbH.`,
+                textLength: 86,
+                links: [{ text: "Example GmbH", href: "https://www.linkedin.com/company/example", selector: "a:nth-of-type(1)" }],
+                fields: [{ label: "Search", selector: "input:nth-of-type(1)", value: searchValue }],
+                buttons: [{ text: "People", selector: "button:nth-of-type(1)" }],
+              },
+            },
+          },
+        }));
+        return;
+      }
+      ws.send(JSON.stringify({ id: message.id, result: {} }));
+    });
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const cdpUrl = `http://127.0.0.1:${server.address().port}`;
+  const browserctl = path.join(home, "browserctl.js");
+  await fs.writeFile(browserctl, `#!/usr/bin/env node
+const [command, slug] = process.argv.slice(2);
+const session = {
+  slug: slug || "linkedin",
+  label: "LinkedIn",
+  type: "desktop",
+  status: "running",
+  cdp_url: ${JSON.stringify(cdpUrl)},
+  control: { start: true, stop: true, restart: true, health: true }
+};
+if (["list", "health", "start", "stop", "restart"].includes(command)) {
+  console.log(JSON.stringify(command === "list" ? { ok: true, sessions: [session] } : { ok: true, session }));
+} else {
+  process.stderr.write("unsupported");
+  process.exit(2);
+}
+`);
+  await fs.chmod(browserctl, 0o755);
+  const env = {
+    ORKESTR_HOME: home,
+    ORKESTR_BROWSERCTL_PATH: browserctl,
+    ORKESTR_DESKTOP_LEASE_FILE: path.join(home, "desktop-leases.json"),
+  };
+
+  try {
+    const observed = await operateManagedDesktop("linkedin", { operation: "observe" }, env);
+    const typed = await operateManagedDesktop("linkedin", { operation: "type", field: "Search", value: "founder" }, env);
+    const clicked = await operateManagedDesktop("linkedin", { operation: "click", text: "People" }, env);
+
+    assert.equal(observed.ok, true);
+    assert.match(observed.page.bodyText, /Signed in as Test User/);
+    assert.equal(typed.actionResult.field, "Search");
+    assert.equal(typed.page.fields[0].value, "founder");
+    assert.equal(clicked.actionResult.clicked, "People");
+    assert.equal(clicked.page.links[0].text, "Example GmbH");
+  } finally {
+    await new Promise((resolve) => wss.close(resolve));
+    await new Promise((resolve) => server.close(resolve));
   }
 });
 

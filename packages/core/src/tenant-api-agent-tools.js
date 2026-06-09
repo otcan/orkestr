@@ -16,6 +16,7 @@ import {
   restartVirtualBrowser,
   stopVirtualBrowser,
 } from "../../browsers/src/browsers.js";
+import { operateManagedDesktop } from "../../browsers/src/desktop-operator.js";
 import { getGmailMessage, listGmailMessages } from "../../connectors/src/gmail.js";
 import {
   createGmailNotificationForPrincipal,
@@ -515,12 +516,20 @@ function desktopActions(session = {}) {
   const control = session.control && typeof session.control === "object" ? session.control : {};
   const actions = new Set(["status"]);
   const openUrl = safeUrl(session.desk_url || session.url);
+  const controllable = Boolean(session.cdp_url || control.start === true);
   if (openUrl || control.start === true) actions.add("open");
   if (control.prepare === true || control.health === true) actions.add("prepare");
   if (control.start === true) actions.add("start");
   if (control.stop === true) actions.add("stop");
   if (control.restart === true) actions.add("restart");
   if (control.start === true) actions.add("open_url");
+  if (controllable) {
+    actions.add("observe");
+    actions.add("navigate");
+    actions.add("click");
+    actions.add("type");
+    actions.add("extract");
+  }
   return [...actions];
 }
 
@@ -1155,6 +1164,29 @@ export function tenantApiAgentToolDefinitions() {
     },
     {
       type: "function",
+      name: "orkestr_operate_desktop",
+      description: "Observe and control a tenant-managed virtual desktop through Orkestr. Use this after inspecting skill actions when the user asks you to work inside a desktop, check login state, gather page data, navigate, click, or type. Returns structured page text, links, buttons, and fields.",
+      parameters: {
+        type: "object",
+        properties: {
+          skillId: { type: "string", description: "Related skill id such as linkedin, or empty string." },
+          target: { type: "string", description: "Desktop slug to operate, or empty string to use the skill default." },
+          operation: { type: "string", enum: ["observe", "navigate", "click", "type", "extract"], description: "Desktop operation to perform." },
+          url: { type: "string", description: "URL for navigate, otherwise empty string." },
+          selector: { type: "string", description: "CSS selector for click/type, otherwise empty string." },
+          text: { type: "string", description: "Visible text to click, or optional note for observe/extract." },
+          field: { type: "string", description: "Field label/name/placeholder for type, otherwise empty string." },
+          value: { type: "string", description: "Value to type into the field, otherwise empty string." },
+          waitMs: { type: "number", description: "Optional wait after the operation in milliseconds." },
+          maxText: { type: "number", description: "Maximum page text characters to return." },
+        },
+        required: ["skillId", "target", "operation", "url", "selector", "text", "field", "value", "waitMs", "maxText"],
+        additionalProperties: false,
+      },
+      strict: true,
+    },
+    {
+      type: "function",
       name: "orkestr_connect_workspace_runtime",
       description: "Connect this chat to the stronger workspace runtime for future messages. Use only after the user explicitly asks to connect/bind Codex or accepts a suggestion to switch this chat to Codex.",
       parameters: {
@@ -1640,6 +1672,27 @@ export async function runTenantApiAgentTool(name = "", args = {}, context = {}, 
   }
   if (tool === "orkestr_run_skill_action") {
     return runSkillAction(args, principal, thread, env, context.fetchImpl || fetch);
+  }
+  if (tool === "orkestr_operate_desktop") {
+    const skillId = clean(args.skillId).toLowerCase();
+    let slug = clean(args.target || args.slug);
+    if (!slug && skillId) {
+      const inventory = await skillActionInventory(principal, thread, env, { skillId, includeDesktopInventory: true });
+      const skill = inventory.skills[0] || null;
+      const desktop = skill ? desktopForSkill(skill, inventory.desktopInventory?.desktops || [], env, args) : null;
+      slug = clean(desktop?.slug || skill?.resolvedDesktop || skill?.requiresDesktop || skill?.requiredDesktop);
+    }
+    return operateManagedDesktop(slug, {
+      operation: args.operation,
+      url: args.url,
+      selector: args.selector,
+      text: args.text,
+      field: args.field,
+      target: args.field || args.target,
+      value: args.value,
+      waitMs: args.waitMs,
+      maxText: args.maxText,
+    }, env, { principal });
   }
   if (tool === "orkestr_connect_workspace_runtime") {
     return connectWorkspaceRuntime(args, thread, env);
