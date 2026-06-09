@@ -2141,6 +2141,54 @@ test("Codex app-server recovery marks stale delivered turns ready and appends on
     assert.equal(restartRecovery.appended, 1);
     assert.match(restartNotice.text, /^Orkestr restarted before Codex replied/);
     assert.match(restartNotice.text, /Orkestr restarted after this message reached Codex/);
+
+    const rebootThread = await createThread({
+      id: "app-server-host-reboot-recovery-thread",
+      name: "App Server Host Reboot Recovery Thread",
+      state: "working",
+      executorId: "codex",
+      executor: {
+        type: "codex",
+        transport: "app-server",
+        codexThreadId: "host-reboot-recovery-codex-thread",
+        codexSessionId: "host-reboot-recovery-codex-thread",
+      },
+      runtimeKind: "codex-app-server",
+      codexThreadId: "host-reboot-recovery-codex-thread",
+      codexSessionId: "host-reboot-recovery-codex-thread",
+      runtime: {
+        runtimeKind: "codex-app-server",
+        state: "working",
+        activeTurnId: "host-reboot-turn",
+      },
+    }, env);
+    await appendThreadMessage(rebootThread.id, {
+      role: "user",
+      source: "manual",
+      text: "This was active during host reboot.",
+      state: "completed",
+      deliveryState: "delivered",
+      observedVia: "codex_app_server_turn_start",
+      codexThreadId: "host-reboot-recovery-codex-thread",
+      codexTurnId: "host-reboot-turn",
+    }, env);
+
+    const rebootRecovery = await recoverStaleCodexAppServerTurns(env, { noticeCause: "host_reboot", recoverySource: "startup_recovery" });
+    const rebootMessages = await listThreadMessages(rebootThread.id, env);
+    const rebootNotice = rebootMessages.find((message) => message.source === "orkestr_runtime" && message.phase === "runtime_interrupted");
+    const events = (await fs.readFile(path.join(env.ORKESTR_HOME, "events.jsonl"), "utf8"))
+      .trim()
+      .split("\n")
+      .filter(Boolean)
+      .map((line) => JSON.parse(line));
+    const rebootEvent = events.find((event) => event.type === "codex_app_server_stale_turn_recovered" && event.threadId === rebootThread.id);
+
+    assert.equal(rebootRecovery.recovered, 1);
+    assert.equal(rebootRecovery.appended, 1);
+    assert.match(rebootNotice.text, /^Host rebooted before Codex replied/);
+    assert.match(rebootNotice.text, /The machine restarted after this message reached Codex/);
+    assert.equal(rebootEvent.noticeCause, "host_reboot");
+    assert.equal(rebootEvent.recoverySource, "startup_recovery");
   } finally {
     stopCodexAppServerClients();
   }

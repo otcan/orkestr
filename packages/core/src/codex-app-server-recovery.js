@@ -251,6 +251,22 @@ function staleTurnNoticeText(reason = "no_assistant_response", options = {}) {
       "Send the next instruction normally to continue.",
     ]);
   }
+  if (noticeCause === "host_reboot") {
+    if (reason === "no_final_answer") {
+      return withDoctor([
+        "Host rebooted before Codex finished",
+        "",
+        "The machine restarted while Codex was working on this turn. Orkestr preserved recent progress and is recovering the thread state.",
+        "Send the next instruction normally to continue.",
+      ]);
+    }
+    return withDoctor([
+      "Host rebooted before Codex replied",
+      "",
+      "The machine restarted after this message reached Codex, before a visible assistant response was recorded.",
+      "Send the next instruction normally to continue.",
+    ]);
+  }
   if (reason === "no_final_answer") {
     return withDoctor([
       "Codex stopped before final answer",
@@ -681,6 +697,7 @@ export async function recoverStaleCodexAppServerTurns(env = process.env, options
       noticeCause: shouldRecoverActiveTurn && !clean(options.noticeCause || options.cause)
         ? "active_turn_timeout"
         : clean(options.noticeCause || options.cause),
+      recoverySource: clean(options.recoverySource || ""),
       autoSafeResetAttempted,
       autoSafeReset: Boolean(autoSafeResetResult?.ok || autoSafeResetResult?.safeReset || autoSafeResetResult?.reset),
       autoSafeResetError: autoSafeResetError || null,
