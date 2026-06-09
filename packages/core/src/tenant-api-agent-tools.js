@@ -139,7 +139,7 @@ function automationIdArgsForAction(action = {}, parameters = {}) {
 function automationDoctorOptions(context = {}, env = process.env) {
   const principal = context.principal || null;
   return {
-    connectorStatusProvider: (provider) => connectorAuthStatus(provider, env, { principal }),
+    connectorStatusProvider: (provider, connectorPrincipal = principal) => connectorAuthStatus(provider, env, { principal: connectorPrincipal }),
     browserSessionsProvider: () => listBrowserSessions(env, { principal }),
   };
 }

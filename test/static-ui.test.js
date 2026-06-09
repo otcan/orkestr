@@ -806,6 +806,16 @@ test("web shell exposes a user automation management page", async () => {
   assert.match(styles, /\.timer-actions/);
 });
 
+test("automation doctor entry points forward owner connector principals", async () => {
+  const controller = await fs.readFile("apps/server/src/modules/automations/automations.controller.ts", "utf8");
+  const tenantTools = await fs.readFile("packages/core/src/tenant-api-agent-tools.js", "utf8");
+
+  assert.match(controller, /connectorStatusProvider: \(provider: string, connectorPrincipal = principal\)/);
+  assert.match(controller, /connectorAuthStatus\(provider, process\.env, \{ principal: connectorPrincipal \}\)/);
+  assert.match(tenantTools, /connectorStatusProvider: \(provider, connectorPrincipal = principal\)/);
+  assert.match(tenantTools, /connectorAuthStatus\(provider, env, \{ principal: connectorPrincipal \}\)/);
+});
+
 test("web shell exposes a user desktop desk page", async () => {
   const template = await fs.readFile("apps/web/src/app/app.component.html", "utf8");
   const component = await fs.readFile("apps/web/src/app/app.component.ts", "utf8");
