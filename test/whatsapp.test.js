@@ -3219,6 +3219,87 @@ test("whatsapp inbound can route directly to a thread and mirror its reply once"
   assert.equal(traces[0].phases.some((phase) => phase.phase === "mirror_sent"), true);
 });
 
+test("whatsapp inbound ignores fromMe attachment echoes already sent by the responder", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-thread-attachment-echo-"));
+  const env = externalBridgeEnv(home);
+  const paths = dataPaths(env);
+  const uploadDir = path.join(paths.home, "uploads", "thread-wa-echo");
+  await fs.mkdir(uploadDir, { recursive: true });
+  const reportPath = path.join(uploadDir, "report.csv");
+  await fs.writeFile(reportPath, "report payload", "utf8");
+  await writeConnectorConfig("whatsapp", {
+    bridgeMode: "external",
+    bridgeUrl: "http://wa.local",
+    threadRoutes: { "chat-thread-echo": "thread-wa-echo" },
+  }, env);
+  await createThread({
+    id: "thread-wa-echo",
+    name: "WA Echo Thread",
+    binding: {
+      connector: "whatsapp",
+      chatId: "chat-thread-echo",
+      responderAccountId: "responder",
+      outboundAccountId: "responder",
+      mirrorToWhatsApp: true,
+    },
+  }, env);
+  const parent = await appendThreadMessage("thread-wa-echo", {
+    role: "user",
+    source: "whatsapp_inbound",
+    state: "completed",
+    connector: "whatsapp",
+    chatId: "chat-thread-echo",
+    accountId: "responder",
+    text: "send the report",
+  }, env);
+  await appendThreadMessage("thread-wa-echo", {
+    role: "assistant",
+    source: "codex-app-server",
+    phase: "final_answer",
+    state: "completed",
+    parentMessageId: parent.id,
+    chatId: "chat-thread-echo",
+    accountId: "responder",
+    text: `Report attached: ${reportPath}`,
+  }, env);
+
+  const sentAttachmentId = "true_chat-thread-echo_sent-report";
+  await deliverWhatsAppReplies(env, async (url, options) => {
+    const body = JSON.parse(options.body);
+    assert.equal(new URL(url).pathname, "/send-media");
+    assert.equal(body.to, "chat-thread-echo");
+    return response({
+      ok: true,
+      ids: ["true_chat-thread-echo_sent-text", sentAttachmentId],
+      sent: [
+        { id: "true_chat-thread-echo_sent-text", kind: "text" },
+        { id: sentAttachmentId, kind: "attachment", path: reportPath, filename: "report.csv" },
+      ],
+    });
+  });
+
+  const routed = await routeWhatsAppInbound({
+    eventId: sentAttachmentId,
+    chatId: "chat-thread-echo",
+    accountId: "responder",
+    from: "responder@lid",
+    fromMe: true,
+    text: "WhatsApp attachment received.",
+    attachments: [{ path: reportPath, filename: "report.csv", mimetype: "text/csv" }],
+  }, env);
+  const messages = await listThreadMessages("thread-wa-echo", env);
+  const traces = await listRouterTraces({ threadId: "thread-wa-echo" }, env);
+
+  assert.equal(routed.skipped, "outbound_echo_delivery_ack");
+  assert.equal(routed.threadId, "thread-wa-echo");
+  assert.equal(messages.some((message) => message.externalId === sentAttachmentId), false);
+  assert.equal(messages.filter((message) => message.role === "user").length, 1);
+  assert.equal(traces.some((trace) =>
+    trace.routerTraceId === routed.event.routerTraceId &&
+    trace.phases.some((phase) => phase.reason === "outbound_echo_delivery_ack")
+  ), true);
+});
+
 test("whatsapp explicit approve command is local when no Codex approval is pending", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-approval-no-pending-"));
   const env = externalBridgeEnv(home);
