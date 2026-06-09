@@ -1180,7 +1180,7 @@ test("runtime status identifies a frozen pane without restarting it", async () =
   process.env.TMUX_CAPTURE_TEXT = [
     "• Edited scripts/install.sh (+10 -3)",
     "• Working (2m 24s • esc to interrupt)",
-    "› Use /skills to list available skills",
+    "› Write tests for @filename",
     "  gpt-5.5 xhigh · /workspace",
   ].join("\n");
 
@@ -1602,6 +1602,57 @@ test("runtime status does not treat stale working text above a prompt as typing"
   }
 });
 
+test("runtime status treats active working screen skills hint as typing", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-working-skills-hint-"));
+  const fakeTmux = await createFakeTmux(home);
+  const priorPath = process.env.PATH;
+  const priorTmuxLog = process.env.TMUX_LOG;
+  const priorTmuxState = process.env.TMUX_STATE;
+  const priorTmuxCaptureText = process.env.TMUX_CAPTURE_TEXT;
+  process.env.PATH = `${fakeTmux.bin}:${priorPath || ""}`;
+  process.env.TMUX_LOG = fakeTmux.log;
+  process.env.TMUX_STATE = fakeTmux.state;
+  process.env.TMUX_CAPTURE_TEXT = [
+    "• Ran orkestr status --json",
+    "  └ {",
+    "      \"ok\": true,",
+    "    }",
+    "────────────────────────────────────────────────────────────────────────────────",
+    "• Working (2m 39s • esc to interrupt)",
+    "› Use /skills to list available skills",
+    "  gpt-5.5 high · /workspace",
+  ].join("\n");
+
+  try {
+    const env = {
+      ORKESTR_HOME: path.join(home, "orkestr-home"),
+      HOME: path.join(home, "runtime-home"),
+      CODEX_HOME: path.join(home, "codex-home"),
+      PATH: process.env.PATH,
+      TMUX_LOG: fakeTmux.log,
+      TMUX_STATE: fakeTmux.state,
+      TMUX_CAPTURE_TEXT: process.env.TMUX_CAPTURE_TEXT,
+    };
+    await createThread({ id: "working-skills-hint-thread", name: "Working Skills Hint Thread" }, env);
+    await wakeThread("working-skills-hint-thread", { reason: "test" }, env);
+
+    const status = await runtimeStatus("working-skills-hint-thread", env);
+
+    assert.equal(status.state, "working");
+    assert.equal(status.working, true);
+    assert.equal(status.foregroundWorking, true);
+    assert.equal(status.backgroundWork, false);
+    assert.equal(status.typingActive, true);
+    assert.equal(status.promptReady, false);
+    assert.equal(status.progress.staleWorkingPrompt, false);
+  } finally {
+    restoreEnvValue("PATH", priorPath);
+    restoreEnvValue("TMUX_LOG", priorTmuxLog);
+    restoreEnvValue("TMUX_STATE", priorTmuxState);
+    restoreEnvValue("TMUX_CAPTURE_TEXT", priorTmuxCaptureText);
+  }
+});
+
 test("thread input delivery waits for runtime acknowledgement before completing", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-delivery-ack-"));
   const fakeTmux = await createFakeTmux(home);
@@ -1904,7 +1955,7 @@ test("thread input delivery does not replace a frozen runtime during stale ack r
   try {
     await fs.writeFile(captureFile, [
       "\u2022 Working (2m 24s \u2022 esc to interrupt)",
-      "\u203a Use /skills to list available skills",
+      "\u203a Write tests for @filename",
       "  gpt-5.5 xhigh \u00b7 /workspace",
     ].join("\n"), "utf8");
     const env = {
@@ -2432,7 +2483,7 @@ test("thread input delivery does not ack stale working prompts as delivered", as
       [
         "• Working (19s • esc to interrupt)",
         "",
-        "› Use /skills to list available skills",
+        "› Write tests for @filename",
         "  gpt-5.5 xhigh · /workspace",
       ].join("\n"),
       "utf8",

@@ -25,6 +25,10 @@ function clean(value) {
   return String(value || "").trim();
 }
 
+function lower(value) {
+  return clean(value).toLowerCase();
+}
+
 function delay(ms = 0) {
   return ms > 0 ? new Promise((resolve) => setTimeout(resolve, ms)) : Promise.resolve();
 }
@@ -75,6 +79,63 @@ function unavailable(reason) {
     raw: null,
     unavailable: true,
   };
+}
+
+function allowed(reason, raw = {}) {
+  return {
+    allow: true,
+    reason,
+    model: "local-policy",
+    raw: { allow: true, reason, category: "same_user_capability", ...raw },
+    unavailable: false,
+  };
+}
+
+function sameUserRequest(payload = {}) {
+  const principalUserId = clean(payload?.principal?.userId);
+  const ownerUserId = clean(payload?.resource?.ownerUserId || payload?.resource?.userId);
+  return Boolean(principalUserId && ownerUserId && principalUserId === ownerUserId);
+}
+
+function desktopCapabilityAvailable(capabilities = {}) {
+  return capabilities.linkedin === true || capabilities.desktopLeases === true || capabilities.virtualBrowsers === true || capabilities.desktops === true;
+}
+
+function httpUrlOrEmpty(value = "") {
+  const raw = clean(value);
+  if (!raw) return true;
+  try {
+    const parsed = new URL(raw);
+    return ["http:", "https:"].includes(parsed.protocol);
+  } catch {
+    return false;
+  }
+}
+
+function localSameUserToolDecision(payload = {}) {
+  if (!sameUserRequest(payload)) return null;
+  const action = lower(payload.action);
+  if (!action.startsWith("api-agent.tool.")) return null;
+  const input = payload.input && typeof payload.input === "object" ? payload.input : {};
+  const args = input.args && typeof input.args === "object" ? input.args : {};
+  const tool = lower(input.tool || action.replace(/^api-agent\.tool\./, ""));
+  const capabilities = payload.resource?.capabilities && typeof payload.resource.capabilities === "object"
+    ? payload.resource.capabilities
+    : {};
+  if (tool === "orkestr_list_skill_actions") return allowed("same_user_skill_action_inventory");
+  if (!desktopCapabilityAvailable(capabilities)) return null;
+  if (tool === "orkestr_operate_desktop") {
+    const operation = lower(args.operation || "observe");
+    const safeOperation = ["observe", "navigate", "click", "type", "extract"].includes(operation);
+    if (safeOperation && httpUrlOrEmpty(args.url)) return allowed("same_user_desktop_tool_capability_true");
+  }
+  if (tool === "orkestr_run_skill_action") {
+    const skillId = lower(args.skillId);
+    const skillAction = lower(args.action);
+    const desktopAction = skillId === "linkedin" || ["prepare", "open", "start", "stop", "restart", "open_url"].includes(skillAction);
+    if (desktopAction && httpUrlOrEmpty(args.url)) return allowed("same_user_desktop_skill_action_capability_true");
+  }
+  return null;
 }
 
 function openAIBaseUrl(env = process.env) {
@@ -137,6 +198,7 @@ async function runOpenAISanitizer(payload, env = process.env) {
             "Allow same-user api-agent.tool.orkestr_connector_status because it only returns safe connection state for the current user's connector and does not read connector data or expose tokens.",
             "Allow same-user api-agent.tool.orkestr_get_onboarding_profile and api-agent.tool.orkestr_update_onboarding_profile for non-secret setup preferences, requested tools, timezone, language, and notes.",
             "Allow same-user api-agent.tool.orkestr_create_timer, api-agent.tool.orkestr_delete_timer, and api-agent.tool.orkestr_run_timer when the timer belongs to the requesting user and targets that user's own chat or agent.",
+            "Allow same-user api-agent.tool.orkestr_list_skill_actions, api-agent.tool.orkestr_run_skill_action, and api-agent.tool.orkestr_operate_desktop when the current thread's desktop/browser capability is true and the tool operates only the tenant-managed desktop.",
             "Allow same-user connector_prompt_push.create, connector_prompt_push.update, and connector_prompt_push.execute only when the push belongs to the requesting user, targets that user's own chat or agent, and the matching connector capability is true.",
             "Deny cross-tenant access, host secrets, connector tokens, browser profile files, private overlays, sanitizer bypass, and challenge approval.",
             "Deny tool execution or actual connector data access when the matching capability is not true for the same user, except explicit same-user connector auth-start/status tools such as orkestr_start_connector_auth and orkestr_connector_status, and same-user timer management tools.",
@@ -291,6 +353,8 @@ export async function sanitizeAction(request = {}, env = process.env) {
       failClosed: true,
     },
   };
+  const localDecision = localSameUserToolDecision(payload);
+  if (localDecision) return localDecision;
   if (String(env.ORKESTR_LLM_SANITIZER_URL || "").trim()) {
     return runHttpSanitizer(payload, env);
   }
