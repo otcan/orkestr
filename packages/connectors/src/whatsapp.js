@@ -675,6 +675,70 @@ function sameWhatsAppSourceEvent(left = {}, right = {}) {
   return !leftChat || !rightChat || leftChat === rightChat;
 }
 
+function inputFromMe(input = {}) {
+  return input.fromMe === true ||
+    input.from_me === true ||
+    String(input.fromMe || input.from_me || "").trim().toLowerCase() === "true";
+}
+
+function outboundDeliveryAckIds(delivery = {}) {
+  const ack = delivery.bridgeResponse && typeof delivery.bridgeResponse === "object" && !Array.isArray(delivery.bridgeResponse)
+    ? delivery.bridgeResponse
+    : delivery.brokerAck && typeof delivery.brokerAck === "object" && !Array.isArray(delivery.brokerAck)
+      ? delivery.brokerAck
+      : null;
+  return [
+    ...(
+      Array.isArray(ack?.ids)
+        ? ack.ids
+        : pickString(ack?.id)
+          ? [ack.id]
+          : []
+    ),
+    ...(
+      Array.isArray(ack?.sent)
+        ? ack.sent.map((item) => item?.id)
+        : []
+    ),
+  ].map((value) => pickString(value)).filter(Boolean);
+}
+
+function outboundEchoDeliveryRecord(job = {}) {
+  return {
+    kind: "thread",
+    deliveryType: pickString(job.deliveryType),
+    threadId: pickString(job.threadId),
+    messageId: pickString(job.sourceMessageId),
+    connectorOutboxJobId: pickString(job.id),
+    chatId: pickString(job.chatId),
+    accountId: pickString(job.accountId),
+    brokerAck: job.brokerAck,
+  };
+}
+
+function outboundEchoDeliveryForEvent(outboundDeliveries = [], connectorOutboxJobs = [], input = {}) {
+  if (!inputFromMe(input)) return null;
+  const eventId = pickString(input.eventId, input.id, input.messageId);
+  const canonicalEventId = canonicalWhatsAppEventId(eventId);
+  const chatId = pickString(input.chatId, input.chat?.id, input.fromChatId);
+  const accountId = pickString(input.accountId);
+  if (!eventId && !canonicalEventId) return null;
+  const records = [
+    ...(outboundDeliveries || []),
+    ...(connectorOutboxJobs || []).map((job) => outboundEchoDeliveryRecord(job)),
+  ];
+  return records.reverse().find((delivery) => {
+    const deliveryChatId = pickString(delivery.chatId);
+    if (chatId && deliveryChatId && chatId !== deliveryChatId) return false;
+    const deliveryAccountId = pickString(delivery.accountId);
+    if (accountId && deliveryAccountId && accountId !== deliveryAccountId) return false;
+    return outboundDeliveryAckIds(delivery).some((ackId) =>
+      ackId === eventId ||
+      (canonicalEventId && canonicalWhatsAppEventId(ackId) === canonicalEventId)
+    );
+  }) || null;
+}
+
 function desktopShareApproveChallengeId(text = "") {
   const value = String(text || "").trim();
   const match = value.match(/^(?:\/?desktop\s+approve|orkestr\s+desktop\s+approve)\s+(desk-[A-Za-z0-9_-]{20,})$/i);
@@ -2079,6 +2143,71 @@ export async function routeWhatsAppInbound(input = {}, env = process.env, fetchI
       agentId: existing.agentId || null,
       threadId: existing.threadId || null,
       messageId: existing.messageId,
+    };
+  }
+
+  const connectorOutboxJobs = (await readConnectorOutbox(env).catch(() => ({ jobs: [] }))).jobs || [];
+  const outboundEchoDelivery = outboundEchoDeliveryForEvent(state.outboundDeliveries || [], connectorOutboxJobs, input);
+  if (outboundEchoDelivery) {
+    const event = {
+      eventId,
+      canonicalEventId,
+      routerTraceId: initialTraceId,
+      turnId: initialTurnId,
+      agentId: null,
+      threadId: pickString(outboundEchoDelivery.threadId) || null,
+      messageId: null,
+      chatId: initialChatId,
+      from: pickString(input.from, input.sender, input.author),
+      accountId: initialAccountId,
+      ignoredReason: "outbound_echo_delivery_ack",
+      outboundMessageId: pickString(outboundEchoDelivery.messageId),
+      outboundDeliveryType: pickString(outboundEchoDelivery.deliveryType),
+      connectorOutboxJobId: pickString(outboundEchoDelivery.connectorOutboxJobId),
+      receivedAt: pickString(input.timestamp, input.receivedAt) || new Date().toISOString(),
+    };
+    state.inboundEvents = [...(state.inboundEvents || []), event];
+    await writeWhatsAppState(state, env);
+    await ensureRouterTurn({
+      routerTraceId: initialTraceId,
+      turnId: initialTurnId,
+      connector: "whatsapp",
+      accountId: initialAccountId,
+      chatId: initialChatId,
+      eventId,
+      threadId: pickString(outboundEchoDelivery.threadId) || "",
+      state: "skipped",
+    }, env).catch(() => null);
+    await recordRouterTraceEvent({
+      routerTraceId: initialTraceId,
+      turnId: initialTurnId,
+      connector: "whatsapp",
+      accountId: initialAccountId,
+      chatId: initialChatId,
+      sourceEventId: eventId,
+      threadId: pickString(outboundEchoDelivery.threadId) || "",
+      phase: "skipped",
+      reason: "outbound_echo_delivery_ack",
+      terminal: true,
+    }, env).catch(() => {});
+    await appendEvent({
+      type: "whatsapp_outbound_echo_ignored",
+      eventId,
+      canonicalEventId,
+      routerTraceId: initialTraceId,
+      threadId: pickString(outboundEchoDelivery.threadId) || null,
+      chatId: initialChatId,
+      accountId: initialAccountId,
+      messageId: pickString(outboundEchoDelivery.messageId),
+      deliveryType: pickString(outboundEchoDelivery.deliveryType),
+    }, env).catch(() => {});
+    return {
+      duplicate: false,
+      skipped: "outbound_echo_delivery_ack",
+      ignoredOutboundEcho: true,
+      event,
+      agentId: null,
+      threadId: pickString(outboundEchoDelivery.threadId) || null,
     };
   }
 

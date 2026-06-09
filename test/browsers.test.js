@@ -414,6 +414,41 @@ test("oss browserctl exposes real noVNC desktop sessions in dry run", async () =
   assert.equal(cleaned.session.status, "not_prepared");
 });
 
+test("oss browserctl refreshes stale prepared ports for the current scope", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-browserctl-ports-"));
+  const script = path.resolve("scripts/browserctl.mjs");
+  const env = (debugBase, webBase, vncBase, displayBase) => ({
+    ...process.env,
+    ORKESTR_HOME: home,
+    ORKESTR_BROWSERCTL_DRY_RUN: "1",
+    ORKESTR_BROWSER_DEBUG_PORT_BASE: String(debugBase),
+    ORKESTR_DESKTOP_WEB_PORT_BASE: String(webBase),
+    ORKESTR_DESKTOP_VNC_PORT_BASE: String(vncBase),
+    ORKESTR_DESKTOP_DISPLAY_BASE: String(displayBase),
+  });
+  const run = async (runtimeEnv, ...args) => {
+    const { stdout } = await execFileAsync(process.execPath, [script, ...args], { env: runtimeEnv });
+    return JSON.parse(stdout);
+  };
+
+  const first = await run(env(19322, 16080, 15901, 190), "health", "desktop");
+  assert.equal(first.session.debugPort, 19322);
+  assert.equal(first.session.web_port, 16080);
+  assert.equal(first.session.vnc_port, 15901);
+
+  const currentScope = env(21322, 18080, 17901, 210);
+  const prepared = await run(currentScope, "health", "desktop");
+  const started = await run(currentScope, "start", "desktop");
+
+  assert.equal(prepared.session.debugPort, 21322);
+  assert.equal(prepared.session.web_port, 18080);
+  assert.equal(prepared.session.vnc_port, 17901);
+  assert.equal(started.session.debugPort, 21322);
+  assert.equal(started.session.web_port, 18080);
+  assert.equal(started.session.vnc_port, 17901);
+  assert.equal(started.session.cdp_url, "http://127.0.0.1:21322");
+});
+
 test("managed desktop mode can use the bundled oss browserctl script", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-bundled-browserctl-"));
   const script = await fs.readFile("scripts/browserctl.mjs", "utf8");

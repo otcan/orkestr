@@ -112,6 +112,26 @@ function httpUrlOrEmpty(value = "") {
   }
 }
 
+function localSameUserInputDecision(payload = {}) {
+  if (!sameUserRequest(payload)) return null;
+  const action = lower(payload.action);
+  if (!["thread.input", "api-agent.input"].includes(action)) return null;
+  const capabilities = payload.resource?.capabilities && typeof payload.resource.capabilities === "object"
+    ? payload.resource.capabilities
+    : {};
+  if (!desktopCapabilityAvailable(capabilities)) return null;
+  const input = payload.input && typeof payload.input === "object" ? payload.input : {};
+  const text = lower(input.text);
+  if (!text) return null;
+  const asksForManagedDesktop = /\b(managed desktop|virtual desktop|virtual desk|browser-control|browser control|orkestr_operate_desktop|desktop browser|live browser|desktop)\b/.test(text);
+  const asksForVisibleBrowserWork = /\b(navigate|open|observe|inspect|check|current url|page title|visible page|logged in|login state|click|type)\b/.test(text) && /\b(browser|desktop|linkedin|page)\b/.test(text);
+  if (!asksForManagedDesktop && !asksForVisibleBrowserWork) return null;
+  if (/\b(secret|token|session file|session files|browser profile|profile file|profile files|wa session|whatsapp session|bypass|disable sanitizer|approve challenge|pairing challenge|another user|other user's|other users)\b/.test(text)) {
+    return null;
+  }
+  return allowed("same_user_desktop_input_capability_true");
+}
+
 function localSameUserToolDecision(payload = {}) {
   if (!sameUserRequest(payload)) return null;
   const action = lower(payload.action);
@@ -355,6 +375,8 @@ export async function sanitizeAction(request = {}, env = process.env) {
   };
   const localDecision = localSameUserToolDecision(payload);
   if (localDecision) return localDecision;
+  const localInputDecision = localSameUserInputDecision(payload);
+  if (localInputDecision) return localInputDecision;
   if (String(env.ORKESTR_LLM_SANITIZER_URL || "").trim()) {
     return runHttpSanitizer(payload, env);
   }
