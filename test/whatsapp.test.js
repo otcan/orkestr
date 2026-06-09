@@ -12,6 +12,8 @@ import { deliverPendingThreadInputs, listRuntimeLeases } from "../packages/core/
 import { listRouterTraces } from "../packages/core/src/router-traces.js";
 import { getSetupStatus } from "../packages/core/src/setup.js";
 import { createDesktopShare, desktopShareStatus, openDesktopShare } from "../packages/core/src/desktop-shares.js";
+import { createTenantVm } from "../packages/core/src/tenant-vm-registry.js";
+import { configureTenantWhatsAppRoute } from "../packages/core/src/tenant-whatsapp-routing.js";
 import { appendThreadMessage, createThread, enqueueThreadInput, getThread, listThreadMessages, listThreads, updateThreadMessage } from "../packages/core/src/threads.js";
 import { createUser, linkUserPrivateIdentity } from "../packages/core/src/users.js";
 import { deliverWhatsAppReplies, formatWhatsAppOutboundText, getWhatsAppChatMessages, getWhatsAppChatParticipants, getWhatsAppStatus, initialQueueDeliveryState, mapLocalWhatsAppStatusFromHealth, routeWhatsAppInbound, sendWhatsAppText, syncWhatsAppTypingIndicators } from "../packages/connectors/src/whatsapp.js";
@@ -1563,6 +1565,107 @@ test("local whatsapp recent recovery routes missed seen messages in bound chats"
   assert.equal(messages.at(-1).source, "whatsapp_inbound");
   assert.equal(sentSeen, false);
   assert.equal(getChatByIdCalls, 0);
+});
+
+test("local whatsapp recent recovery skips already forwarded broker messages", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-recent-recovery-forward-dedupe-"));
+  const chatId = "wa-group-forward-dedupe@g.us";
+  const nowSeconds = 1_780_000_000;
+  const env = {
+    ORKESTR_HOME: home,
+    ORKESTR_WHATSAPP_ACCOUNT_IDS: "responder",
+    ORKESTR_WHATSAPP_RECENT_RECOVERY_MAX_AGE_MS: "600000",
+    ORKESTR_WHATSAPP_INBOUND_FORWARD_MAP_JSON: JSON.stringify({
+      [chatId]: "https://public.example/api/connectors/whatsapp/inbound",
+    }),
+    ORKESTR_WHATSAPP_INBOUND_FORWARD_TOKEN: "forward-secret",
+  };
+  const message = {
+    id: { _serialized: `false_${chatId}_forward-dedupe_wa-contact-one@c.us`, remote: chatId },
+    fromMe: false,
+    from: chatId,
+    author: "wa-contact-one@c.us",
+    body: "recover once",
+    timestamp: nowSeconds,
+  };
+  const chat = {
+    id: { _serialized: chatId },
+    unreadCount: 0,
+    async fetchMessages() {
+      return [message];
+    },
+  };
+  const client = {
+    async getChats() {
+      return [chat];
+    },
+  };
+  const calls = [];
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (url, options) => {
+    calls.push({ url: String(url), body: JSON.parse(options.body) });
+    return response({ ok: true, threadId: "public-thread", messageId: "public-message" }, true, 202);
+  };
+
+  try {
+    const options = {
+      force: true,
+      accountIds: ["responder"],
+      clients: new Map([["responder", client]]),
+      accountStates: new Map([["responder", { state: "ready", ready: true }]]),
+      threads: [],
+      limit: 20,
+      nowMs: nowSeconds * 1000 + 60_000,
+    };
+    const first = await recoverUnreadLocalWhatsAppMessages(env, options);
+    const second = await recoverUnreadLocalWhatsAppMessages(env, options);
+
+    assert.equal(first.routed, 1);
+    assert.equal(second.routed, 0);
+    assert.equal(second.recovered[0].skipped[0].reason, "duplicate");
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].body.text, "recover once");
+  } finally {
+    globalThis.fetch = originalFetch;
+    await resetLocalWhatsAppBridgeForTest(env);
+  }
+});
+
+test("local whatsapp managed tenant routes skip sender account own-message legacy fallback", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-managed-route-account-skip-"));
+  const chatId = "wa-group-managed-route@g.us";
+  const env = {
+    ORKESTR_HOME: home,
+    ORKESTR_WHATSAPP_INBOUND_FORWARD_MAP_JSON: JSON.stringify({
+      [chatId]: "https://legacy.example/api/connectors/whatsapp/inbound",
+    }),
+    ORKESTR_WHATSAPP_INBOUND_FORWARD_TOKEN: "legacy-secret",
+  };
+  await createTenantVm({
+    id: "tenant-managed-wa",
+    ownerUserId: "admin",
+    endpoint: { baseUrl: "https://tenant.example.test" },
+    connectors: { whatsappChatName: "Managed WA", whatsappAccountId: "responder" },
+  }, env);
+  await configureTenantWhatsAppRoute("tenant-managed-wa", {
+    chatId,
+    accountId: "responder",
+  }, env);
+  let fetchCalled = false;
+  const result = await forwardLocalWhatsAppInbound({
+    eventId: `true_${chatId}_source-one_sender@lid`,
+    chatId,
+    accountId: "sender",
+    from: "sender@lid",
+    fromMe: true,
+    text: "sender own message",
+  }, env, async () => {
+    fetchCalled = true;
+    return response({ ok: true }, true, 202);
+  });
+
+  assert.equal(result.skipped, "managed_route_account_mismatch");
+  assert.equal(fetchCalled, false);
 });
 
 test("local whatsapp phone pairing validates phone numbers before browser launch", async () => {
