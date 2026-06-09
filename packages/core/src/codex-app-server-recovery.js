@@ -213,68 +213,73 @@ function refreshedTurnState(messages = [], originalTurn = null) {
 
 function staleTurnNoticeText(reason = "no_assistant_response", options = {}) {
   const noticeCause = clean(options.noticeCause || options.cause).toLowerCase();
+  const doctorLines = Array.isArray(options.doctorLines)
+    ? options.doctorLines.map((line) => clean(line)).filter(Boolean)
+    : [];
+  const withDoctor = (lines) => [...lines, ...doctorLines].join("\n");
   if (noticeCause === "active_turn_timeout") {
     if (reason === "no_final_answer") {
-      return [
+      return withDoctor([
         "Codex response timed out",
         "",
         "Orkestr found progress updates for this turn, but Codex stayed active too long without a final answer.",
         "Send the next instruction normally to continue.",
         "If this repeats, reply /safe-reset to save recent Orkestr context and start a fresh Codex session for this thread.",
-      ].join("\n");
+      ]);
     }
-    return [
+    return withDoctor([
       "Codex response timed out",
       "",
       "Orkestr delivered this message to Codex, but Codex stayed active too long without producing a visible response.",
       "Send the next instruction normally to continue.",
       "If this repeats, reply /safe-reset to save recent Orkestr context and start a fresh Codex session for this thread.",
-    ].join("\n");
+    ]);
   }
   if (noticeCause === "orkestr_restart") {
     if (reason === "no_final_answer") {
-      return [
+      return withDoctor([
         "Orkestr restarted before Codex finished",
         "",
         "Orkestr restarted while Codex was working on this turn. Progress updates before the restart were preserved, but no final answer was recorded.",
         "Send the next instruction normally to continue.",
-      ].join("\n");
+      ]);
     }
-    return [
+    return withDoctor([
       "Orkestr restarted before Codex replied",
       "",
       "Orkestr restarted after this message reached Codex, before an assistant response was recorded.",
       "Send the next instruction normally to continue.",
-    ].join("\n");
+    ]);
   }
   if (reason === "no_final_answer") {
-    return [
+    return withDoctor([
       "Codex stopped before final answer",
       "",
       "Orkestr found progress updates for this turn, but Codex went idle before a final answer was recorded.",
       "Send the next instruction normally to continue.",
       "If this repeats, reply /safe-reset to save recent Orkestr context and start a fresh Codex session for this thread.",
-    ].join("\n");
+    ]);
   }
-  return [
+  return withDoctor([
     "Codex response missing",
     "",
     "Orkestr found a delivered message with no assistant response after the Codex runtime stopped, restarted, or lost the active turn.",
     "Send the next instruction normally to continue.",
     "If this repeats, reply /safe-reset to save recent Orkestr context and start a fresh Codex session for this thread.",
-  ].join("\n");
+  ]);
 }
 
 function staleTurnEventId(thread, codexId, turn, options = {}) {
   const message = turn?.latestUser || {};
   const reason = clean(turn?.reason || "no_assistant_response");
+  const stableTextOptions = { ...options, doctorLines: [] };
   return threadEventId({
     codexThreadId: codexId,
     turnId: clean(message?.codexTurnId || message?.executorTurnId || thread?.runtime?.activeTurnId || "stale-turn"),
     itemId: `stale-${reason}:${message?.id || "latest"}`,
     type: `turn/stale-${reason}`,
     role: "assistant",
-    text: staleTurnNoticeText(reason, options),
+    text: staleTurnNoticeText(reason, stableTextOptions),
   });
 }
 
@@ -282,6 +287,40 @@ function noticeWhatsappParent(turn, thread = null) {
   if (turn?.latestUser && whatsappOrigin(turn.latestUser)) return turn.latestUser;
   if (turn?.latestAssistant && whatsappOrigin(turn.latestAssistant)) return turn.latestAssistant;
   return threadWhatsAppBindingParent(thread);
+}
+
+function activeTurnInterruptPlan(thread = {}, clientState = {}, turn = null) {
+  const candidateIds = activeTurnIdsFromClientState(clientState);
+  if (!candidateIds.length) return { interruptTurnIds: [], skippedTurnIds: [], targetTurnId: "" };
+  const targetTurnId = clean(
+    messageTurnId(turn?.latestUser) ||
+    thread?.runtime?.activeTurnId ||
+    clientState?.activeTurnId,
+  );
+  const interruptTurnIds = targetTurnId
+    ? candidateIds.filter((id) => id === targetTurnId)
+    : [candidateIds[0]];
+  const selected = new Set(interruptTurnIds);
+  return {
+    interruptTurnIds,
+    skippedTurnIds: candidateIds.filter((id) => !selected.has(id)),
+    targetTurnId,
+  };
+}
+
+function activeTurnDoctorLines({ reason = "", interruptTurnIds = [], skippedTurnIds = [] } = {}) {
+  if (reason !== "active_turn_timeout") return [];
+  const targetCount = interruptTurnIds.length;
+  const skippedCount = skippedTurnIds.length;
+  const lines = [
+    "",
+    `Doctor: no final answer found, no approval pending, stale active Codex turn${targetCount === 1 ? "" : "s"} selected for recovery.`,
+  ];
+  if (skippedCount) {
+    lines.push(`Doctor: ignored ${skippedCount} stale cached active turn id${skippedCount === 1 ? "" : "s"} instead of interrupting historical turns.`);
+  }
+  lines.push("Action: interrupt the current stale turn, mark the thread ready, and safe-reset only if stale turns repeat.");
+  return lines;
 }
 
 async function appendStaleTurnNotice(thread, messages, turn, env = process.env, options = {}) {
@@ -469,6 +508,9 @@ export async function recoverStaleCodexAppServerTurns(env = process.env, options
       }
       continue;
     }
+    const preNoticeInterruptPlan = shouldRecoverActiveTurn
+      ? activeTurnInterruptPlan(thread, clientState, noticeTurn)
+      : { interruptTurnIds: [], skippedTurnIds: [], targetTurnId: "" };
     let notice = null;
     let noticeMessages = messages;
     let freshNoticeTurn = noticeTurn;
@@ -477,8 +519,19 @@ export async function recoverStaleCodexAppServerTurns(env = process.env, options
       freshNoticeTurn = refreshedTurnState(noticeMessages, noticeTurn);
     }
     if (freshNoticeTurn) {
-      const noticeOptions = shouldRecoverActiveTurn && !clean(options.noticeCause || options.cause)
-        ? { ...options, noticeCause: "active_turn_timeout" }
+      const noticeCause = shouldRecoverActiveTurn && !clean(options.noticeCause || options.cause)
+        ? "active_turn_timeout"
+        : clean(options.noticeCause || options.cause);
+      const noticeOptions = noticeCause === "active_turn_timeout"
+        ? {
+            ...options,
+            noticeCause,
+            doctorLines: activeTurnDoctorLines({
+              reason: "active_turn_timeout",
+              interruptTurnIds: preNoticeInterruptPlan.interruptTurnIds,
+              skippedTurnIds: preNoticeInterruptPlan.skippedTurnIds,
+            }),
+          }
         : options;
       const result = await appendStaleTurnNotice(thread, noticeMessages, freshNoticeTurn, env, noticeOptions);
       notice = result?.notice || null;
@@ -486,7 +539,10 @@ export async function recoverStaleCodexAppServerTurns(env = process.env, options
       freshNoticeTurn = result?.turn || (result?.skipped ? null : freshNoticeTurn);
       if (result?.appended) appended += 1;
     }
-    const interruptedTurnIds = shouldRecoverActiveTurn ? activeTurnIdsFromClientState(clientState) : [];
+    const interruptPlan = shouldRecoverActiveTurn
+      ? activeTurnInterruptPlan(thread, clientState, freshNoticeTurn || noticeTurn)
+      : { interruptTurnIds: [], skippedTurnIds: [], targetTurnId: "" };
+    const interruptedTurnIds = interruptPlan.interruptTurnIds;
     let interruptError = "";
     if (interruptedTurnIds.length && client) {
       for (const interruptedTurnId of interruptedTurnIds) {
@@ -568,6 +624,8 @@ export async function recoverStaleCodexAppServerTurns(env = process.env, options
       reason: shouldRecoverActiveTurn ? "active_turn_timeout" : freshNoticeTurn?.reason || (notice ? noticeTurn?.reason : null) || (staleRuntime ? "stale_runtime" : "incomplete_turn"),
       interruptedTurnId: interruptedTurnIds[0] || null,
       interruptedTurnIds,
+      skippedCachedActiveTurnIds: interruptPlan.skippedTurnIds,
+      activeTurnRecoveryTargetId: interruptPlan.targetTurnId || null,
       interruptError: interruptError || null,
       noticeCause: shouldRecoverActiveTurn && !clean(options.noticeCause || options.cause)
         ? "active_turn_timeout"

@@ -1862,6 +1862,8 @@ test("Codex app-server recovery interrupts stale live active turns with no visib
     assert.equal(notice.connector, "whatsapp");
     assert.equal(notice.chatId, "chat-live-active-timeout");
     assert.match(notice.text, /^Codex response timed out/);
+    assert.match(notice.text, /Doctor: no final answer found, no approval pending/);
+    assert.match(notice.text, /Action: interrupt the current stale turn/);
     assert.equal(updated.state, "ready");
     assert.equal(updated.runtime.state, "ready");
     assert.equal(updated.runtime.activeTurnId, null);
@@ -1874,7 +1876,7 @@ test("Codex app-server recovery interrupts stale live active turns with no visib
   }
 });
 
-test("Codex app-server recovery interrupts every stale live active turn", async () => {
+test("Codex app-server recovery interrupts only the matching stale live active turn", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-codex-app-server-multi-active-timeout-"));
   const fake = await createFakeCodex(home);
   const staleAt = new Date(Date.now() - 60_000).toISOString();
@@ -1940,9 +1942,22 @@ test("Codex app-server recovery interrupts every stale live active turn", async 
       .filter((call) => call.method === "turn/interrupt" && call.params?.threadId === codexId)
       .map((call) => call.params?.turnId)
       .sort();
+    const messages = await listThreadMessages(started.thread.id, env);
+    const notice = messages.find((message) => message.source === "orkestr_runtime" && message.phase === "runtime_interrupted");
+    const events = (await fs.readFile(path.join(env.ORKESTR_HOME, "events.jsonl"), "utf8"))
+      .trim()
+      .split("\n")
+      .filter(Boolean)
+      .map((line) => JSON.parse(line));
+    const recoveryEvent = events.find((event) => event.type === "codex_app_server_stale_turn_recovered");
 
     assert.equal(result.recovered, 1);
-    assert.deepEqual(interrupted, ["first-live-active-turn", "second-live-active-turn"]);
+    assert.deepEqual(interrupted, ["second-live-active-turn"]);
+    assert.match(notice.text, /ignored 1 stale cached active turn id/);
+    assert.deepEqual(recoveryEvent.interruptedTurnIds, ["second-live-active-turn"]);
+    assert.deepEqual(recoveryEvent.skippedCachedActiveTurnIds, ["first-live-active-turn"]);
+    assert.equal(recoveryEvent.activeTurnRecoveryTargetId, "second-live-active-turn");
+    assert.equal(recoveryEvent.interruptError, null);
   } finally {
     stopCodexAppServerClients();
   }
