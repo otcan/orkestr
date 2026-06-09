@@ -40,6 +40,7 @@ import { processApiAgentThreadInput, threadUsesApiAgent } from "../../../../../p
 import { requestPrincipal } from "../../../../../packages/core/src/principal.js";
 import { publicRoutingFailurePayload } from "../../../../../packages/core/src/routing-failures.js";
 import {
+  addLocalWhatsAppGroupParticipants,
   createLocalWhatsAppChat,
   generateLocalWhatsAppChatPicture,
   getLocalWhatsAppBridgeStatus,
@@ -364,6 +365,19 @@ export class ConnectorsController {
   async whatsappBridgeChatParticipants(@Req() request: any, @Param("accountId") accountId: string, @Param("chatId") chatId: string) {
     await assertWhatsAppBridgeBindingAcl("read", { accountId, chatId }, request.orkestrMachineAuthContext);
     return getWhatsAppChatParticipants({ accountId, chatId });
+  }
+
+  @Post("whatsapp/bridge/accounts/:accountId/chats/:chatId/participants")
+  @HttpCode(200)
+  async whatsappBridgeAddGroupParticipants(@Req() request: any, @Param("accountId") accountId: string, @Param("chatId") chatId: string, @Body() body: Record<string, unknown> = {}) {
+    await assertWhatsAppBridgeBindingAcl("manage", { accountId, chatId }, request.orkestrMachineAuthContext);
+    return addLocalWhatsAppGroupParticipants({
+      accountId: await resolveLocalWhatsAppRuntimeAccountId(accountId),
+      chatId,
+      participantIds: bodyStringArray(body, "participantIds").concat(bodyStringArray(body, "participants")),
+      autoSendInviteV4: optionalBodyBoolean(body, "autoSendInviteV4", true),
+      comment: String(body.comment || ""),
+    });
   }
 
   @Post("whatsapp/bridge/accounts/:accountId/chats/:chatId/recover")

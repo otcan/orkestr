@@ -3008,6 +3008,64 @@ export async function listLocalWhatsAppChatParticipants({ accountId = "", chatId
 }
 
 /**
+ * @param {{ accountId?: string, chatId?: string, participantIds?: string[] | string, autoSendInviteV4?: boolean, comment?: string, env?: Record<string, string | undefined> }} [options]
+ */
+export async function addLocalWhatsAppGroupParticipants({ accountId = "", chatId = "", participantIds = [], autoSendInviteV4 = true, comment = "", env = process.env } = {}) {
+  const normalized = normalizeAccountId(accountId, env);
+  const id = String(chatId || "").trim();
+  const participants = normalizeGroupParticipantIds(participantIds);
+  if (!id) {
+    const error = new Error("whatsapp_chat_id_required");
+    error.statusCode = 400;
+    throw error;
+  }
+  if (!isGroupChatId(id)) {
+    const error = new Error("whatsapp_group_chat_required");
+    error.statusCode = 400;
+    throw error;
+  }
+  if (!participants.length) {
+    const error = new Error("whatsapp_group_participants_required");
+    error.statusCode = 400;
+    throw error;
+  }
+  const runtime = runtimes.get(normalized);
+  const state = accountStates.get(normalized) || defaultAccountState(normalized);
+  if (!runtime?.client || !state.ready) {
+    const error = new Error("whatsapp_local_bridge_not_ready");
+    error.statusCode = 400;
+    throw error;
+  }
+  const chat = await runtime.client.getChatById(id);
+  if (!chat?.isGroup || typeof chat.addParticipants !== "function") {
+    const error = new Error("whatsapp_group_chat_required");
+    error.statusCode = 400;
+    throw error;
+  }
+  const existing = new Set((Array.isArray(chat.participants) ? chat.participants : [])
+    .map((participant) => serializedId(participant?.id || participant).toLowerCase())
+    .filter(Boolean));
+  const alreadyParticipantIds = participants.filter((participant) => existing.has(participant.toLowerCase()));
+  const missingParticipantIds = participants.filter((participant) => !existing.has(participant.toLowerCase()));
+  if (!missingParticipantIds.length) {
+    return { ok: true, accountId: normalized, chatId: id, participantIds: [], alreadyParticipantIds, result: {} };
+  }
+  const result = await chat.addParticipants(missingParticipantIds, {
+    autoSendInviteV4: autoSendInviteV4 !== false,
+    comment: String(comment || ""),
+  });
+  await appendEvent({
+    type: "whatsapp_local_group_participants_added",
+    accountId: normalized,
+    chatId: id,
+    participantIds: missingParticipantIds,
+    alreadyParticipantIds,
+    result,
+  }, env).catch(() => {});
+  return { ok: true, accountId: normalized, chatId: id, participantIds: missingParticipantIds, alreadyParticipantIds, result };
+}
+
+/**
  * @param {{ name?: string, senderAccountId?: string, responderAccountId?: string, participantIds?: string[] | string, adminParticipantIds?: string[] | string, promoteParticipantsAsAdmins?: boolean, generatePicture?: boolean, env?: Record<string, string | undefined> }} [options]
  */
 export async function createLocalWhatsAppChat({ name = "", senderAccountId = "", responderAccountId = "", participantIds = [], adminParticipantIds = [], promoteParticipantsAsAdmins = false, generatePicture = true, env = process.env } = {}) {
