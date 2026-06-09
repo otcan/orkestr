@@ -1,5 +1,6 @@
 import {
   consumeThreadConnectorDeliverySignalCount,
+  deliverPendingThreadInputs,
   drainAllPendingThreadInputs,
   safeResetThreadRuntime,
   syncRuntimeLeases,
@@ -147,6 +148,7 @@ async function syncRuntimeAndDeliverWhatsApp(env = process.env, options: { force
     recoverySource: options.recoveryCause ? "startup_recovery" : "",
     autoSafeResetThread: (threadId: string, context: Record<string, unknown> = {}) =>
       safeResetThreadRuntime(threadId, { reason: String(context.reason || "stale_turn_auto_safe_reset") }, env),
+    continueThreadInput: (threadId: string) => deliverPendingThreadInputs(threadId, env, { processApiAgent: true }),
   }).catch((error) => {
     reportServerError(env, {
       source: "server.recoverCodexAppServerTurns",
