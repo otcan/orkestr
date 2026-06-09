@@ -65,6 +65,7 @@ function promptFor(payload) {
     "- For thread.input and api-agent.input, allow a same-user request to use Gmail, Outlook, LinkedIn, files, browser desktops, or another connector even when the capability is false; the tenant assistant must then explain that the connector is not connected or start a user-scoped connector sign-in flow. This input routing step does not grant data access.",
     "- Allow same-user api-agent.tool.orkestr_list_skill_actions because it only returns tenant-scoped skill/action availability.",
     "- Allow same-user api-agent.tool.orkestr_run_skill_action when it uses an enabled tenant skill and does not request another user's data, host secrets, browser profile files, tokens, or challenge approval.",
+    "- Allow same-user api-agent.tool.orkestr_operate_desktop when resource.capabilities.linkedin, desktopLeases, or virtualBrowsers is true and the operation is limited to the tenant-managed desktop.",
     "- Allow same-user api-agent.tool.orkestr_start_connector_auth when Gmail, Outlook, Jira, or Shopify is missing because it only starts user-scoped connector sign-in and does not read connector data or expose tokens.",
     "- Allow same-user api-agent.tool.orkestr_connector_status because it only returns safe connection state for the current user's connector and does not read connector data or expose tokens.",
     "- Allow same-user api-agent.tool.orkestr_get_onboarding_profile and api-agent.tool.orkestr_update_onboarding_profile for non-secret setup preferences, requested tools, timezone, language, and notes.",

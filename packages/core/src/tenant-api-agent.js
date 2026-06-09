@@ -923,7 +923,32 @@ function formatRunSkillActionTool(result = {}, context = {}) {
   return lines.join("\n");
 }
 
-function formatOperateDesktopTool(result = {}) {
+function desktopLoginStateHint(page = {}, requestText = "") {
+  if (!/\b(?:logged\s*in|login|signed\s*in|sign\s*in)\b/i.test(requestText)) return "";
+  const title = clean(page.title);
+  const url = clean(page.url);
+  const body = clean(page.bodyText).slice(0, 3000);
+  const fieldsText = Array.isArray(page.fields)
+    ? page.fields.map((field) => clean(field.label || field.placeholder || field.name)).filter(Boolean).join(" ")
+    : "";
+  const haystack = lower(`${title} ${url} ${body} ${fieldsText}`);
+  const loginPage = /\/login\b|\/signup\b|checkpoint|authwall|join now|email or phone|password|forgot password|sign in to linkedin/.test(haystack);
+  if (loginPage) {
+    return "It looks like the desktop is on a LinkedIn sign-in page, so I cannot confirm an active login.";
+  }
+  const loggedInPage = /sales navigator|\/sales\/|\/feed\/|\/messaging\b|inmail credits|go to linkedin messaging|profile menu|compose new message/.test(haystack);
+  if (loggedInPage) {
+    return "It looks like LinkedIn is already signed in because the desktop is showing a LinkedIn/Sales Navigator account page.";
+  }
+  return "The desktop returned a page, but it does not clearly prove whether LinkedIn is signed in.";
+}
+
+function desktopRequestNeedsVisibleContent(requestText = "", operation = "") {
+  if (["extract", "read"].includes(clean(operation))) return true;
+  return /\b(?:read|extract|page contents?|visible text|what (?:do you|can you) see|summari[sz]e|messages?|inbox|trending|entries|research|translations?)\b/i.test(requestText);
+}
+
+function formatOperateDesktopTool(result = {}, context = {}) {
   const output = result.output || {};
   const page = output.page || {};
   const lines = [];
@@ -931,22 +956,35 @@ function formatOperateDesktopTool(result = {}) {
     return `Desktop operation failed: ${clean(output.error || output.message || "desktop_operation_failed")}.`;
   }
   const operation = clean(output.operation || result.args?.operation || "observe");
-  const title = clean(page.title || "(untitled)");
+  const requestText = clean(context.message?.text || context.text || "");
+  const loginHint = desktopLoginStateHint(page, requestText);
+  const includeVisibleContent = !loginHint || desktopRequestNeedsVisibleContent(requestText, operation);
+  const title = clean(page.title);
   const url = clean(page.url);
-  lines.push(`Desktop ${operation} completed. Current page: ${title}${url ? ` (${url})` : ""}.`);
+  const currentPage = title || url
+    ? `Current page: ${title || "untitled"}${url ? ` (${url})` : ""}.`
+    : "The desktop did not return a page title or URL.";
+  if (["observe", "extract", "read"].includes(operation)) {
+    lines.push(`I checked the managed desktop. ${currentPage}`);
+  } else if (operation === "navigate") {
+    lines.push(`I opened the requested page in the managed desktop. ${currentPage}`);
+  } else {
+    lines.push(`I ran the ${operation} action in the managed desktop. ${currentPage}`);
+  }
+  if (loginHint) lines.push(loginHint);
   const body = clean(page.bodyText);
-  if (body) lines.push(`Page text:\n${body.slice(0, 4000)}`);
+  if (body && includeVisibleContent) lines.push(`Visible text: ${compactField(body, 900)}`);
   const fields = Array.isArray(page.fields) ? page.fields.filter((field) => clean(field.label || field.placeholder || field.name)).slice(0, 8) : [];
-  if (fields.length) {
-    lines.push(`Visible fields: ${fields.map((field) => clean(field.label || field.placeholder || field.name || field.selector)).join(", ")}.`);
+  if (fields.length && includeVisibleContent) {
+    lines.push(`Fields I can see: ${fields.map((field) => clean(field.label || field.placeholder || field.name || field.selector)).join(", ")}.`);
   }
-  const buttons = Array.isArray(page.buttons) ? page.buttons.filter((button) => clean(button.text)).slice(0, 10) : [];
-  if (buttons.length) {
-    lines.push(`Visible actions: ${buttons.map((button) => clean(button.text)).join(", ")}.`);
+  const buttons = Array.isArray(page.buttons) ? page.buttons.filter((button) => clean(button.text)).slice(0, 8) : [];
+  if (buttons.length && includeVisibleContent) {
+    lines.push(`Actions I can see: ${buttons.map((button) => clean(button.text)).join(", ")}.`);
   }
-  const links = Array.isArray(page.links) ? page.links.filter((link) => clean(link.text || link.href)).slice(0, 8) : [];
-  if (links.length) {
-    lines.push(`Visible links: ${links.map((link) => `${clean(link.text || "link")} -> ${clean(link.href)}`).join("; ")}.`);
+  const links = Array.isArray(page.links) ? page.links.filter((link) => clean(link.text || link.href)).slice(0, 6) : [];
+  if (links.length && includeVisibleContent) {
+    lines.push(`Links I can see: ${links.map((link) => `${clean(link.text || "link")} -> ${clean(link.href)}`).join("; ")}.`);
   }
   return lines.join("\n\n");
 }
@@ -1187,7 +1225,7 @@ function formatToolResultFallback(toolResults = [], context = {}) {
     else if (result.name === "orkestr_disconnect_connector") formatted = formatConnectorStatusTool({ ...result, output: result.output?.status || result.output });
     else if (result.name === "orkestr_list_skill_actions") formatted = formatSkillActionsTool(result, context);
     else if (result.name === "orkestr_run_skill_action") formatted = formatRunSkillActionTool(result, context);
-    else if (result.name === "orkestr_operate_desktop") formatted = formatOperateDesktopTool(result);
+    else if (result.name === "orkestr_operate_desktop") formatted = formatOperateDesktopTool(result, context);
     else if (result.name === "orkestr_list_skills") formatted = formatListSkillsTool(result);
     else if (["orkestr_search_gmail", "orkestr_read_gmail_message", "orkestr_read_latest_gmail_message"].includes(result.name)) formatted = formatGmailTool(result);
     else if (["orkestr_create_gmail_notification", "orkestr_update_gmail_notification", "orkestr_list_gmail_notifications", "orkestr_delete_gmail_notification", "orkestr_run_gmail_notification_now"].includes(result.name)) formatted = formatGmailNotificationTool(result);
@@ -2418,3 +2456,7 @@ export async function processApiAgentThreadInput(threadId, env = process.env, op
     apiAgentRunning.delete(thread.id);
   }
 }
+
+export const tenantApiAgentTestHooks = {
+  formatOperateDesktopTool,
+};

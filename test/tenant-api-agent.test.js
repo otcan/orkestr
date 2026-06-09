@@ -5,7 +5,7 @@ import path from "node:path";
 import test from "node:test";
 import { recordCreditUsage, creditUsageSummary } from "../packages/core/src/credit-usage.js";
 import { drainAllPendingThreadInputs } from "../packages/core/src/runtime-leases.js";
-import { buildTenantApiAgentInstructions, processApiAgentThreadInput, threadUsesApiAgent } from "../packages/core/src/tenant-api-agent.js";
+import { buildTenantApiAgentInstructions, processApiAgentThreadInput, tenantApiAgentTestHooks, threadUsesApiAgent } from "../packages/core/src/tenant-api-agent.js";
 import { runTenantApiAgentTool, tenantApiAgentToolDefinitions } from "../packages/core/src/tenant-api-agent-tools.js";
 import { listGmailNotificationsForPrincipal } from "../packages/core/src/gmail-notifications.js";
 import { createTimer, listTimers, markDueTimers } from "../packages/core/src/timers.js";
@@ -3540,6 +3540,87 @@ test("tenant api-agent formats LinkedIn desktop tool output when model falls bac
   assert.match(assistant.text, /does not report login state/i);
   assert.doesNotMatch(assistant.text, /without a tool result|Workspace and live browser/i);
   assert.notEqual(assistant.text.trim(), "Done.");
+});
+
+test("tenant api-agent desktop observe fallback is concise and user-facing", () => {
+  const longBody = [
+    "LinkedIn",
+    "Sign in",
+    "Email or phone",
+    "Password",
+    "Forgot password?",
+    "Join now",
+    "By clicking Agree & Join or Continue, you agree to the LinkedIn User Agreement, Privacy Policy, and Cookie Policy.",
+    "This extra copied footer text should not be dumped in full. ".repeat(40),
+  ].join("\n");
+
+  const text = tenantApiAgentTestHooks.formatOperateDesktopTool({
+    name: "orkestr_operate_desktop",
+    args: { operation: "observe" },
+    output: {
+      ok: true,
+      operation: "observe",
+      desktop: { slug: "linkedin", label: "LinkedIn" },
+      page: {
+        title: "LinkedIn Login, Sign in | LinkedIn",
+        url: "https://www.linkedin.com/login",
+        bodyText: longBody,
+        fields: [
+          { label: "Email or phone" },
+          { label: "Password" },
+        ],
+        buttons: [
+          { text: "Sign in" },
+          { text: "Join now" },
+        ],
+        links: [
+          { text: "Forgot password?", href: "https://www.linkedin.com/checkpoint/rp/request-password-reset" },
+        ],
+      },
+    },
+  });
+
+  assert.match(text, /I checked the managed desktop/i);
+  assert.match(text, /Current page: LinkedIn Login, Sign in \| LinkedIn \(https:\/\/www\.linkedin\.com\/login\)\./);
+  assert.match(text, /Visible text: LinkedIn Sign in Email or phone Password/i);
+  assert.match(text, /Fields I can see: Email or phone, Password\./);
+  assert.match(text, /Actions I can see: Sign in, Join now\./);
+  assert.match(text, /Links I can see: Forgot password\?/);
+  assert.doesNotMatch(text, /Desktop observe completed/i);
+  assert.doesNotMatch(text, /Page text:/i);
+  assert.ok(text.length < 1400, "desktop fallback should not dump raw page text");
+});
+
+test("tenant api-agent desktop login fallback does not dump signed-in inbox text", () => {
+  const text = tenantApiAgentTestHooks.formatOperateDesktopTool({
+    name: "orkestr_operate_desktop",
+    args: { operation: "observe" },
+    output: {
+      ok: true,
+      operation: "observe",
+      desktop: { slug: "linkedin", label: "LinkedIn" },
+      page: {
+        title: "Inbox | Sales Navigator",
+        url: "https://www.linkedin.com/sales/inbox/thread-id",
+        bodyText: [
+          "Sales Navigator Inbox",
+          "InMail credits: 69 left",
+          "Message thread list",
+          "Private Person Hi, this private message content should not be shown.",
+        ].join("\n"),
+        fields: [{ label: "Type your message here..." }],
+        buttons: [{ text: "Send" }],
+        links: [{ text: "Private Person", href: "https://www.linkedin.com/sales/lead/private" }],
+      },
+    },
+  }, { message: { text: "Open LinkedIn. Am I logged in?" } });
+
+  assert.match(text, /I checked the managed desktop/i);
+  assert.match(text, /already signed in/i);
+  assert.doesNotMatch(text, /Private Person/i);
+  assert.doesNotMatch(text, /Visible text:/i);
+  assert.doesNotMatch(text, /Fields I can see:/i);
+  assert.doesNotMatch(text, /Links I can see:/i);
 });
 
 test("tenant api-agent routes managed desktop requests through skill tools", async () => {
