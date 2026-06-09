@@ -9,9 +9,11 @@ import {
   setAutomationEnabledForPrincipal,
 } from "../packages/core/src/automations.js";
 import { doctorAutomationsForPrincipal } from "../packages/core/src/automation-doctor.js";
-import { adminPrincipal } from "../packages/core/src/principal.js";
+import { adminPrincipal, userPrincipal } from "../packages/core/src/principal.js";
 import { createThread } from "../packages/core/src/threads.js";
 import { createTimer, listTimers } from "../packages/core/src/timers.js";
+import { createUser } from "../packages/core/src/users.js";
+import { userDataPaths } from "../packages/storage/src/paths.js";
 
 test("automation doctor covers timers, watches, desktops, connector status, and paused state", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-automations-doctor-"));
@@ -114,4 +116,57 @@ test("automation list and pause helpers keep unified ids across timer and Gmail 
   assert.deepEqual(listed.map((automation) => automation.enabled), [false, false]);
   assert.equal(listed.some((automation) => automation.automationId.startsWith("timer:")), true);
   assert.equal(listed.some((automation) => automation.automationId.startsWith("gmail_notification:")), true);
+});
+
+test("automation doctor checks connector status in the automation owner scope", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-automations-owner-"));
+  const sanitizer = path.join(home, "allow-sanitizer.mjs");
+  await fs.writeFile(
+    sanitizer,
+    [
+      "process.stdin.resume();",
+      "process.stdin.on('end', () => console.log(JSON.stringify({ allow: true, reason: 'test-allow', model: 'test' })));",
+      "",
+    ].join("\n"),
+    "utf8",
+  );
+  const env = {
+    ORKESTR_HOME: home,
+    ORKESTR_GMAIL_NOTIFICATIONS_ENABLED: "1",
+    ORKESTR_LLM_SANITIZER_COMMAND_JSON: JSON.stringify([process.execPath, sanitizer]),
+  };
+  const admin = adminPrincipal();
+  const owner = userPrincipal({ id: "otcan", role: "user", source: "test" });
+  await createUser({ id: "otcan", role: "user", displayName: "Otcan" }, env);
+  const paths = userDataPaths("otcan", env);
+  await fs.mkdir(paths.secrets, { recursive: true });
+  await fs.writeFile(path.join(paths.secrets, "gmail-token.json"), JSON.stringify({
+    accessToken: "otcan-gmail-access",
+    refreshToken: "otcan-gmail-refresh",
+    expiresAt: Math.floor(Date.now() / 1000) + 3600,
+  }), "utf8");
+  await createThread({ id: "automation-owner-thread", name: "Owner Thread", ownerUserId: "otcan" }, env);
+  await createAutomationForPrincipal({
+    type: "gmail_notification",
+    label: "Owner Gmail watch",
+    targetType: "thread",
+    target: "automation-owner-thread",
+    query: "is:unread newer_than:1d",
+    interval: "5m",
+    maxItemsPerRun: 1,
+    enabled: true,
+  }, owner, env, { thread: { id: "automation-owner-thread" } });
+
+  const inspectedPrincipals = [];
+  const result = await doctorAutomationsForPrincipal(admin, env, new Date(), {
+    connectorStatusProvider: async (_provider, principal) => {
+      inspectedPrincipals.push(principal.userId);
+      return principal.userId === "otcan"
+        ? { ok: true, state: "connected", connected: true }
+        : { ok: true, state: "not_connected", connected: false };
+    },
+  });
+
+  assert.deepEqual(inspectedPrincipals, ["otcan"]);
+  assert.equal(result.issues.some((issue) => issue.code === "connector_not_connected"), false);
 });

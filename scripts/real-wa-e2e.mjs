@@ -43,6 +43,7 @@ function parseArgs(argv = [], env = process.env) {
     timeoutMs: Number(env.ORKESTR_REAL_WA_E2E_TIMEOUT_MS || 180_000),
     pollMs: Number(env.ORKESTR_REAL_WA_E2E_POLL_MS || 2000),
     includeDesktop: !parseBool(env.ORKESTR_REAL_WA_E2E_NO_DESKTOP, false),
+    includeDesktopChallenge: !parseBool(env.ORKESTR_REAL_WA_E2E_NO_DESKTOP_CHALLENGE, false),
     includeTimer: !parseBool(env.ORKESTR_REAL_WA_E2E_NO_TIMER, false),
     manualSend: parseBool(env.ORKESTR_REAL_WA_E2E_MANUAL_SEND, false),
     openLinkInDesktop: parseBool(env.ORKESTR_REAL_WA_E2E_OPEN_LINK_IN_DESKTOP, false),
@@ -67,6 +68,7 @@ function parseArgs(argv = [], env = process.env) {
     else if (arg === "--timeout-ms") options.timeoutMs = Number(argv[++index] || 0);
     else if (arg === "--poll-ms") options.pollMs = Number(argv[++index] || 0);
     else if (arg === "--no-desktop") options.includeDesktop = false;
+    else if (arg === "--no-desktop-challenge") options.includeDesktopChallenge = false;
     else if (arg === "--no-timer") options.includeTimer = false;
     else if (arg === "--manual-send") options.manualSend = true;
     else if (arg === "--open-link-in-desktop") options.openLinkInDesktop = true;
@@ -112,6 +114,7 @@ function usage() {
     "  --open-link-in-desktop   Open the generated Google connect link in the managed desktop.",
     "  --require-oauth-callback Wait for OAuth callback/success after manual approval.",
     "  --no-desktop             Skip desktop lease/share checks.",
+    "  --no-desktop-challenge   Skip desktop public challenge approval over WhatsApp.",
     "  --no-timer               Skip timer watcher checks.",
     "  --artifact FILE          Write JSON result details.",
     "",
@@ -144,6 +147,39 @@ async function publicJson(url, request = {}) {
     payload = { raw: text };
   }
   return { ok: response.ok, status: response.status, headers: response.headers, payload, text };
+}
+
+function cookieHeaderFromResponseHeaders(headers = null) {
+  const values = typeof headers?.getSetCookie === "function"
+    ? headers.getSetCookie()
+    : [headers?.get?.("set-cookie") || ""];
+  const first = values.map(clean).find(Boolean) || "";
+  return first.split(";")[0] || "";
+}
+
+export function extractDesktopShareUrlParts(value = "", fallback = {}) {
+  const url = new URL(clean(value));
+  const parts = url.pathname.split("/").filter(Boolean).map((part) => decodeURIComponent(part));
+  if (parts[0] !== "desktop-share") {
+    throw new Error("desktop_share_url_invalid");
+  }
+  const pathSubdomain = parts.length >= 3 ? parts[1] : "";
+  const pathShareId = parts.length >= 3 ? parts[2] : parts[1];
+  const wildcardSubdomain = clean(fallback.subdomain) || (/^d-[a-z0-9-]+$/i.test(url.hostname.split(".")[0] || "") ? url.hostname.split(".")[0] : "");
+  return {
+    origin: url.origin,
+    shareId: clean(fallback.shareId || pathShareId),
+    key: clean(fallback.key || url.searchParams.get("key")),
+    subdomain: clean(fallback.subdomain || pathSubdomain || wildcardSubdomain),
+  };
+}
+
+export function desktopShareApiUrl(shareUrl = "", action = "", details = {}) {
+  const info = details.shareId && details.key ? details : extractDesktopShareUrlParts(shareUrl, details);
+  const url = new URL(`/api/desktop-shares/${encodeURIComponent(info.shareId)}/${encodeURIComponent(clean(action))}`, shareUrl);
+  url.searchParams.set("key", info.key);
+  if (info.subdomain) url.searchParams.set("subdomain", info.subdomain);
+  return url.toString();
 }
 
 function historyRoute(accountId, chatId, limit = 80) {
@@ -319,9 +355,82 @@ async function runDesktopChecks(options, results) {
     acquired: acquired?.ok === true,
     leaseId: clean(acquired?.lease?.id),
     shareUrl: clean(share?.url),
+    shareId,
     shareStatus: status?.ok === true ? "ok" : clean(status?.error || ""),
   };
+  await runDesktopShareChallenge(options, results, share);
   return acquired;
+}
+
+async function runDesktopShareChallenge(options, results, share = {}) {
+  if (!options.includeDesktop || !options.includeDesktopChallenge) return null;
+  const shareUrl = clean(share?.url);
+  const details = extractDesktopShareUrlParts(shareUrl, {
+    shareId: clean(share?.share?.id || share?.shareId),
+    key: clean(share?.key),
+    subdomain: clean(share?.subdomain || share?.share?.subdomain),
+  });
+  if (!details.shareId || !details.key) throw new Error("desktop_share_link_missing_id_or_key");
+
+  const page = await publicJson(shareUrl);
+  if (!page.ok || !page.text.includes("orkestr desktop approve")) {
+    throw new Error(`desktop_share_page_invalid:${page.status}`);
+  }
+  const open = await publicJson(desktopShareApiUrl(shareUrl, "open", details));
+  if (!open.ok || open.payload?.ok === false) {
+    const error = clean(open.payload?.error || open.payload?.message || `desktop_share_open_failed:${open.status}`);
+    throw new Error(error);
+  }
+  const challenge = clean(open.payload?.attempt?.challenge);
+  if (!challenge) throw new Error("desktop_share_challenge_missing");
+  const cookie = cookieHeaderFromResponseHeaders(open.headers);
+  const statusUrl = desktopShareApiUrl(shareUrl, "status", details);
+  const commandText = `orkestr desktop approve ${challenge}`;
+  const after = Date.now() - 30_000;
+
+  if (options.manualSend) {
+    console.error(`Manual desktop approval mode: send this exact WhatsApp message in ${options.chatId}: ${commandText}`);
+  } else {
+    await api(options, "/api/connectors/whatsapp/bridge/send-text", {
+      method: "POST",
+      body: {
+        accountId: options.senderAccountId,
+        chatId: options.chatId,
+        text: commandText,
+        crossAccountEchoSuppression: false,
+      },
+    });
+  }
+
+  const observed = await waitForHistoryMessage(
+    options,
+    options.responderAccountId,
+    (message) =>
+      textOf(message) === commandText &&
+      message.fromMe !== true &&
+      timeMs(message.timestamp) >= after &&
+      messageMatchesExpectedSender(message, results.preflight?.required?.senderContactIds),
+    "desktop_approval_message_visible",
+  );
+  const ready = await waitUntil("desktop_share_approved", options, async () => {
+    const status = await publicJson(statusUrl, cookie ? { headers: { cookie } } : {});
+    if (status.ok && status.payload?.approved && status.payload?.desktopUrl) return status.payload;
+    return null;
+  });
+
+  results.desktop = {
+    ...(results.desktop || {}),
+    challenge: {
+      shareId: details.shareId,
+      subdomain: details.subdomain,
+      challenge,
+      commandObservedId: clean(observed?.id),
+      approved: ready.approved === true,
+      desktopUrl: clean(ready.desktopUrl),
+      manualSend: options.manualSend === true,
+    },
+  };
+  return results.desktop.challenge;
 }
 
 async function releaseDesktop(options, results) {

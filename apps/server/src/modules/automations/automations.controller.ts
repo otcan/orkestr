@@ -23,7 +23,7 @@ export class AutomationsController {
   async doctor(@Req() request: any) {
     const principal = requestPrincipal(request);
     return doctorAutomationsForPrincipal(principal, process.env, new Date(), {
-      connectorStatusProvider: (provider: string) => connectorAuthStatus(provider, process.env, { principal }),
+      connectorStatusProvider: (provider: string, connectorPrincipal = principal) => connectorAuthStatus(provider, process.env, { principal: connectorPrincipal }),
       browserSessionsProvider: () => listBrowserSessions(process.env, { principal }),
     });
   }

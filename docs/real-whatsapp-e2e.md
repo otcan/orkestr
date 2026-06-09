@@ -4,7 +4,9 @@
 WhatsApp-bound Orkestr thread. In the automated mode it sends a real message
 through a configured sender WhatsApp account, verifies that the responder
 account sees and routes the message, checks that the assistant reply is visible
-in WhatsApp history, and exercises desktop lease/share and timer watcher APIs.
+in WhatsApp history, opens the desktop share challenge URL, approves that
+challenge through WhatsApp, and exercises desktop lease/share and timer watcher
+APIs.
 
 The test is disabled by default. It requires `--execute` and explicit live
 targets because it sends real WhatsApp messages.
@@ -35,6 +37,8 @@ sender list.
 Useful release modes:
 
 - Add `--no-desktop` when a release target has no managed desktops.
+- Add `--no-desktop-challenge` when the target can lease desktops but the public
+  share URL is intentionally unreachable from the runner.
 - Add `--no-timer` when only WhatsApp transport and OAuth-link creation should
   be checked.
 - Add `--manual-send` for attended real-message checks when the test operator
@@ -53,6 +57,13 @@ The default run validates the Google Workspace connect page but does not consume
 the one-time OAuth link. For attended Gmail approval, use the generated link or
 managed desktop share from the JSON output, complete Google OAuth, then rerun
 with `--require-oauth-callback` if callback verification is required.
+
+When desktop checks are enabled, the runner also opens the generated public
+desktop-share URL, obtains the `orkestr desktop approve desk-...` challenge,
+sends that challenge into the real WhatsApp chat in automated mode, waits for
+the responder account to observe it, and verifies that the share status exposes
+an approved desktop URL. In `--manual-send` mode the runner prints the approval
+command and waits for an authorized person in the chat to send it.
 
 Attended public-VM example:
 

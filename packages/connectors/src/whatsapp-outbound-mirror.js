@@ -417,12 +417,25 @@ function whatsappQueueNoticeOrigin(message, thread, state) {
   };
 }
 
+function threadLooksApiAgent(thread = {}) {
+  const runtimeKind = String(
+    thread.runtimeKind ||
+    thread.runtime?.runtimeKind ||
+    thread.executor?.metadata?.runtimeKind ||
+    thread.executor?.type ||
+    thread.executorId ||
+    "",
+  ).trim().toLowerCase();
+  return runtimeKind === "api-agent";
+}
+
 export function queuedInputWhatsAppDeliveryTarget(message, thread, state) {
   const role = String(message?.role || "").trim().toLowerCase();
   const messageState = String(message?.state || "").trim().toLowerCase();
   const deliveryState = String(message?.deliveryState || "").trim().toLowerCase();
   if (role !== "user") return null;
   if (!["queued", "pending_delivery"].includes(messageState)) return null;
+  if (threadLooksApiAgent(thread) && deliveryState === "waiting_runtime_ready") return null;
   const queueableStates = [
     "awaiting_runtime_completion", "awaiting_active_turn", "awaiting_approval", "interrupting",
     "recovering_stale_ack", "retrying_delivery", "waiting_runtime_ready", "waiting_runtime_start", "waking",

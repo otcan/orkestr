@@ -11,6 +11,7 @@ import { listAgentMessages } from "../packages/core/src/messages.js";
 import { deliverPendingThreadInputs, listRuntimeLeases } from "../packages/core/src/runtime-leases.js";
 import { listRouterTraces } from "../packages/core/src/router-traces.js";
 import { getSetupStatus } from "../packages/core/src/setup.js";
+import { createDesktopShare, desktopShareStatus, openDesktopShare } from "../packages/core/src/desktop-shares.js";
 import { appendThreadMessage, createThread, enqueueThreadInput, getThread, listThreadMessages, listThreads, updateThreadMessage } from "../packages/core/src/threads.js";
 import { createUser, linkUserPrivateIdentity } from "../packages/core/src/users.js";
 import { deliverWhatsAppReplies, formatWhatsAppOutboundText, getWhatsAppChatMessages, getWhatsAppChatParticipants, getWhatsAppStatus, initialQueueDeliveryState, mapLocalWhatsAppStatusFromHealth, routeWhatsAppInbound, sendWhatsAppText, syncWhatsAppTypingIndicators } from "../packages/connectors/src/whatsapp.js";
@@ -1330,6 +1331,20 @@ test("local whatsapp unread recovery only scans bound chats for the selected acc
   assert.equal(localWhatsAppUnreadRecoveryIntervalMs({ ORKESTR_WHATSAPP_UNREAD_RECOVERY_MS: "5" }), 10000);
 });
 
+test("local whatsapp unread recovery scans inbound forward-map chats", () => {
+  const env = {
+    ORKESTR_WHATSAPP_ACCOUNT_IDS: "main,secondary",
+    ORKESTR_WHATSAPP_INBOUND_FORWARD_MAP_JSON: JSON.stringify({
+      "forward-chat@g.us": "https://remote.example/api/connectors/whatsapp/inbound",
+      "empty-target@g.us": "",
+    }),
+  };
+
+  assert.deepEqual(localWhatsAppUnreadRecoveryBoundChats([], "main", env), [
+    { chatId: "forward-chat@g.us", threadId: "", accountId: "main", source: "inbound_forward_map" },
+  ]);
+});
+
 test("local whatsapp unread recovery routes missed unread messages", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-unread-recovery-"));
   const env = { ORKESTR_HOME: home, ORKESTR_WHATSAPP_ACCOUNT_IDS: "responder" };
@@ -1395,6 +1410,158 @@ test("local whatsapp unread recovery routes missed unread messages", async () =>
   assert.equal(messages.at(-1).text, "missed hello");
   assert.equal(messages.at(-1).source, "whatsapp_inbound");
   assert.equal(sentSeen, true);
+  assert.equal(getChatByIdCalls, 0);
+});
+
+test("local whatsapp recent recovery forwards missed messages for mapped external chats", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-forward-recovery-"));
+  const chatId = "wa-forward-public@g.us";
+  const nowSeconds = 1_780_000_000;
+  const env = {
+    ORKESTR_HOME: home,
+    ORKESTR_WHATSAPP_ACCOUNT_IDS: "responder",
+    ORKESTR_WHATSAPP_RECENT_RECOVERY_MAX_AGE_MS: "600000",
+    ORKESTR_WHATSAPP_INBOUND_FORWARD_MAP_JSON: JSON.stringify({
+      [chatId]: "https://public.example/api/connectors/whatsapp/inbound",
+    }),
+    ORKESTR_WHATSAPP_INBOUND_FORWARD_TOKEN: "forward-secret",
+  };
+  const message = {
+    id: { _serialized: `false_${chatId}_missed-forward_wa-contact-one@c.us`, remote: chatId },
+    fromMe: false,
+    from: chatId,
+    author: "wa-contact-one@c.us",
+    body: "missed public hello",
+    timestamp: nowSeconds,
+  };
+  const chat = {
+    id: { _serialized: chatId },
+    unreadCount: 0,
+    async fetchMessages() {
+      return [message];
+    },
+    async sendSeen() {
+      throw new Error("recent recovery should not mark mapped seen messages");
+    },
+  };
+  const client = {
+    async getChats() {
+      return [chat];
+    },
+  };
+  const calls = [];
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (url, options) => {
+    calls.push({ url: String(url), options, body: JSON.parse(options.body) });
+    return response({ ok: true, threadId: "public-thread", messageId: "public-message" }, true, 202);
+  };
+
+  try {
+    const result = await recoverUnreadLocalWhatsAppMessages(env, {
+      force: true,
+      accountIds: ["responder"],
+      clients: new Map([["responder", client]]),
+      accountStates: new Map([["responder", { state: "ready", ready: true }]]),
+      threads: [],
+      limit: 20,
+      nowMs: nowSeconds * 1000 + 60_000,
+    });
+
+    assert.equal(result.routed, 1);
+    assert.equal(result.recovered.length, 1);
+    assert.equal(result.recovered[0].chatId, chatId);
+    assert.equal(result.recovered[0].recoveryMode, "recent");
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].url, "https://public.example/api/connectors/whatsapp/inbound");
+    assert.equal(calls[0].options.headers.authorization, "Bearer forward-secret");
+    assert.equal(calls[0].body.chatId, chatId);
+    assert.equal(calls[0].body.text, "missed public hello");
+    assert.equal(calls[0].body.eventId, `false_${chatId}_missed-forward_wa-contact-one@c.us`);
+  } finally {
+    globalThis.fetch = originalFetch;
+    await resetLocalWhatsAppBridgeForTest(env);
+  }
+});
+
+test("local whatsapp recent recovery routes missed seen messages in bound chats", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-recent-recovery-"));
+  const env = {
+    ORKESTR_HOME: home,
+    ORKESTR_WHATSAPP_ACCOUNT_IDS: "responder",
+    ORKESTR_WHATSAPP_RECENT_RECOVERY_MAX_AGE_MS: "600000",
+  };
+  const chatId = "wa-group-recent@g.us";
+  const nowSeconds = 1_780_000_000;
+  let sentSeen = false;
+  let getChatByIdCalls = 0;
+  const oldMessage = {
+    id: { _serialized: "old-seen-message", remote: chatId },
+    fromMe: false,
+    from: chatId,
+    author: "wa-contact-one@c.us",
+    body: "old seen hello",
+    timestamp: nowSeconds - 3600,
+  };
+  const recentMessage = {
+    id: { _serialized: "recent-seen-message", remote: chatId },
+    fromMe: false,
+    from: chatId,
+    author: "wa-contact-one@c.us",
+    body: "recent seen hello",
+    timestamp: nowSeconds,
+  };
+  const chat = {
+    id: { _serialized: chatId },
+    unreadCount: 0,
+    async fetchMessages() {
+      return [oldMessage, recentMessage];
+    },
+    async sendSeen() {
+      sentSeen = true;
+    },
+  };
+  const client = {
+    async getChats() {
+      return [chat];
+    },
+    async getChatById() {
+      getChatByIdCalls += 1;
+      throw new Error("recover should reuse the chat object from getChats");
+    },
+  };
+  const thread = await createThread({
+    id: "recent-thread",
+    name: "Recent",
+    binding: {
+      connector: "whatsapp",
+      chatId,
+      displayName: "Recent",
+      responderAccountId: "responder",
+      outboundAccountId: "responder",
+      enabled: true,
+    },
+  }, env);
+
+  const result = await recoverUnreadLocalWhatsAppMessages(env, {
+    force: true,
+    accountIds: ["responder"],
+    clients: new Map([["responder", client]]),
+    accountStates: new Map([["responder", { state: "ready", ready: true }]]),
+    threads: [thread],
+    limit: 20,
+    nowMs: nowSeconds * 1000 + 60_000,
+  });
+  const messages = await listThreadMessages("recent-thread", env);
+
+  assert.equal(result.routed, 1);
+  assert.equal(result.recovered.length, 1);
+  assert.equal(result.recovered[0].chatId, chatId);
+  assert.equal(result.recovered[0].recoveryMode, "recent");
+  assert.equal(result.recovered[0].candidates, 1);
+  assert.equal(messages.length, 1);
+  assert.equal(messages.at(-1).text, "recent seen hello");
+  assert.equal(messages.at(-1).source, "whatsapp_inbound");
+  assert.equal(sentSeen, false);
   assert.equal(getChatByIdCalls, 0);
 });
 
@@ -1579,6 +1746,39 @@ test("local whatsapp recovery resets recoverable accounts before restarting", as
 
   assert.deepEqual(calls, [["restart", "responder"], ["start", "responder"]]);
   assert.deepEqual(result.recovered, [{ accountId: "responder", state: "starting", ready: false }]);
+  assert.deepEqual(result.skipped, []);
+});
+
+test("local whatsapp recovery starts idle autostarted accounts without reset", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-recover-idle-"));
+  const env = {
+    ORKESTR_HOME: home,
+    ORKESTR_WHATSAPP_ACCOUNT_IDS: "sender-idle,responder-idle,manual-idle",
+    ORKESTR_WHATSAPP_AUTOSTART: "1",
+    ORKESTR_WHATSAPP_AUTOSTART_ACCOUNT_IDS: "sender-idle,responder-idle",
+  };
+  const calls = [];
+
+  const result = await recoverConfiguredLocalWhatsAppAccounts(env, {
+    nowMs: 10_000,
+    status: {
+      accounts: [
+        { accountId: "sender-idle", state: "idle", ready: false },
+        { accountId: "responder-idle", state: "ready", ready: true },
+        { accountId: "manual-idle", state: "idle", ready: false },
+      ],
+    },
+    async restartAccount(accountId) {
+      calls.push(["restart", accountId]);
+    },
+    async startAccount(accountId) {
+      calls.push(["start", accountId]);
+      return { accountId, state: "starting", ready: false };
+    },
+  });
+
+  assert.deepEqual(calls, [["start", "sender-idle"]]);
+  assert.deepEqual(result.recovered, [{ accountId: "sender-idle", state: "starting", ready: false }]);
   assert.deepEqual(result.skipped, []);
 });
 
@@ -3213,9 +3413,8 @@ test("local whatsapp bridge runs api-agent tenant chats without waking legacy ru
   assert.equal(events.some((event) => event.type === "thread_input_delivery_skipped" && event.threadId === "otcantest"), false);
   assert.equal(calls.some((call) => call.url.endsWith("/responses")), true);
   const sendCalls = calls.filter((call) => call.url.endsWith("/send-text") && call.body?.to === chatId);
-  assert.equal(sendCalls.length, 2);
-  assert.match(sendCalls[0].body.text, /^Runtime handoff is taking longer than expected: "Hi"\./);
-  assert.equal(sendCalls[1].body.text, "Hi! How can I help you today?");
+  assert.equal(sendCalls.length, 1);
+  assert.equal(sendCalls[0].body.text, "Hi! How can I help you today?");
 });
 
 test("local whatsapp inbound failures explain missing user capabilities", () => {
@@ -3250,7 +3449,8 @@ test("local whatsapp inbound failures explain missing user capabilities", () => 
   assert.match(token, /target Orkestr instance rejected or is missing the broker WhatsApp token/i);
   assert.match(target, /not connected to a thread/i);
   assert.doesNotMatch(target, /safely handle|private connector|account identity/i);
-  assert.match(pairing, /browser_pairing_required/);
+  assert.match(pairing, /needs browser pairing approval/i);
+  assert.doesNotMatch(pairing, /browser_pairing_required/);
   assert.match(pairing, /https:\/\/orkestr\.example\.test\//);
 });
 
@@ -4545,6 +4745,78 @@ test("whatsapp inbound suppresses duplicate active thread inputs by content", as
   assert.equal(second.event.messageId, first.message.id);
   assert.equal(messages.length, 1);
   assert.equal(messages[0].state, "queued");
+});
+
+test("whatsapp inbound suppresses the same group message seen through sender and responder accounts", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-cross-account-source-duplicate-"));
+  const env = externalBridgeEnv(home);
+  await createThread({ id: "thread-wa-cross-account-source-duplicate", name: "WA Cross Account Source Duplicate" }, env);
+  await writeConnectorConfig("whatsapp", {
+    threadRoutes: { "chat-cross-account-source-duplicate": "thread-wa-cross-account-source-duplicate" },
+  }, env);
+
+  const first = await routeWhatsAppInbound({
+    eventId: "true_chat-cross-account-source-duplicate_msg-123_sender@lid",
+    chatId: "chat-cross-account-source-duplicate",
+    accountId: "sender",
+    from: "sender@lid",
+    fromMe: true,
+    text: "same physical group message",
+  }, env);
+  await updateThreadMessage("thread-wa-cross-account-source-duplicate", first.message.id, {
+    state: "completed",
+    deliveryState: "delivered",
+  }, env);
+  const second = await routeWhatsAppInbound({
+    eventId: "false_chat-cross-account-source-duplicate_msg-123_sender@lid",
+    chatId: "chat-cross-account-source-duplicate",
+    accountId: "responder",
+    from: "sender@lid",
+    fromMe: false,
+    text: "same physical group message",
+  }, env);
+  const messages = await listThreadMessages("thread-wa-cross-account-source-duplicate", env);
+
+  assert.equal(first.duplicate, false);
+  assert.equal(second.duplicate, true);
+  assert.equal(second.messageId, first.message.id);
+  assert.equal(messages.filter((message) => message.role === "user").length, 1);
+});
+
+test("whatsapp desktop approve command approves a pending desktop share challenge", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-desktop-share-approve-"));
+  const env = externalBridgeEnv(home, { ORKESTR_PUBLIC_HTTPS_URL: "https://app.example.test" });
+  await createThread({ id: "thread-wa-desktop-share-approve", name: "WA Desktop Share Approve" }, env);
+  await writeConnectorConfig("whatsapp", {
+    threadRoutes: { "chat-desktop-share-approve": "thread-wa-desktop-share-approve" },
+  }, env);
+  const created = await createDesktopShare({ desktopSlug: "linkedin", env });
+  const parsed = new URL(created.url);
+  const parts = parsed.pathname.split("/").filter(Boolean);
+  const shareId = parts.at(-1);
+  const key = parsed.searchParams.get("key");
+  const opened = await openDesktopShare({ shareId, key, subdomain: created.subdomain, env });
+
+  const routed = await routeWhatsAppInbound({
+    eventId: "wa-desktop-share-approve-1",
+    chatId: "chat-desktop-share-approve",
+    accountId: "responder",
+    text: `orkestr desktop approve ${opened.attempt.challenge}`,
+  }, env);
+  const ready = await desktopShareStatus({
+    shareId,
+    key,
+    subdomain: created.subdomain,
+    browserToken: opened.cookie.value.split(":")[1],
+    env,
+  });
+  const messages = await listThreadMessages("thread-wa-desktop-share-approve", env);
+  const assistant = messages.find((message) => message.parentMessageId === routed.message.id);
+
+  assert.equal(routed.handledCommand, "desktop_share_approve");
+  assert.equal(routed.desktopShareApproved, true);
+  assert.equal(ready.approved, true);
+  assert.match(assistant.text, /Desktop access approved for linkedin/);
 });
 
 test("whatsapp duplicate active tenant input is suppressed before sanitizer reruns", async () => {
@@ -6079,6 +6351,37 @@ test("whatsapp delivery reports app-server active-turn queue notices", async () 
   assert.match(stripDebugFooter(calls[0].body.text), /^Added after the current Codex turn: "queue behind app server turn"\. Use \/now to interrupt\./);
   assertDebugFooter(calls[0].body.text, { messageType: "update", queueReason: "active-turn" });
   assert.equal(messages.find((entry) => entry.id === routed.message.id).state, "queued");
+});
+
+test("whatsapp delivery suppresses premature api-agent runtime-ready queue notices", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-api-agent-handoff-notice-"));
+  const env = externalBridgeEnv(home);
+  await createThread({
+    id: "thread-wa-api-agent-handoff-notice",
+    name: "WA API Agent Handoff Notice Thread",
+    runtimeKind: "api-agent",
+    executor: { type: "api-agent", metadata: { runtimeKind: "api-agent" } },
+  }, env);
+  await writeConnectorConfig("whatsapp", {
+    bridgeMode: "external",
+    bridgeUrl: "http://wa.local",
+    threadRoutes: { "chat-api-agent-handoff-notice": "thread-wa-api-agent-handoff-notice" },
+  }, env);
+  const routed = await routeWhatsAppInbound({
+    eventId: "wa-api-agent-handoff-notice-1",
+    chatId: "chat-api-agent-handoff-notice",
+    text: "Do I have a virtual desk?",
+  }, env);
+  await updateThreadMessage("thread-wa-api-agent-handoff-notice", routed.message.id, {
+    state: "queued",
+    deliveryState: "waiting_runtime_ready",
+  }, env);
+
+  const delivery = await deliverWhatsAppReplies(env, async () => {
+    throw new Error("api-agent handoff notice should not be mirrored");
+  });
+
+  assert.equal(delivery.delivered.length, 0);
 });
 
 test("whatsapp delivery forwards failed routed inputs using inbound event metadata", async () => {

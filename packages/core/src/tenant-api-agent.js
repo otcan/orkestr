@@ -509,6 +509,15 @@ function pendingActionConfirmation(messages = [], message = {}) {
   };
 }
 
+function previousAssistantActionOffer(messages = [], message = {}) {
+  const index = messages.findIndex((item) => item.id === message.id);
+  const previous = (index >= 0 ? messages.slice(0, index) : messages)
+    .slice()
+    .reverse()
+    .find((item) => lower(item.role) === "assistant" && clean(item.text));
+  return previous && assistantOfferedAction(previous.text) ? previous : null;
+}
+
 function userMessageNeedsSubstantiveAnswer(text = "") {
   const value = clean(text);
   if (!value) return false;
@@ -523,6 +532,8 @@ function tenantApiAgentTextNeedsRepair(text = "", message = {}, options = {}) {
   const gmailPrompt = gmailPromptPushInfo(message);
   if (gmailPrompt && (weakTenantApiAgentText(text) || genericTenantApiAgentHelpText(text))) return true;
   if (options.gmailContext && genericTenantApiAgentHelpText(text)) return true;
+  if (options.contextActionOffer && genericTenantApiAgentHelpText(text)) return true;
+  if (genericTenantApiAgentHelpText(text) && messageCapabilityIntent(message.text)) return true;
   if (weakTenantApiAgentText(text) && (
     userMessageNeedsSubstantiveAnswer(message.text) ||
     bareConfirmationText(message.text) ||
@@ -876,6 +887,10 @@ function formatRunSkillActionTool(result = {}, context = {}) {
   const output = result.output || {};
   const args = result.args || {};
   const action = clean(output.action || args.action || "action");
+  const requestText = clean([
+    context.message?.text || "",
+    context.pendingAction?.previousAssistantText || "",
+  ].join(" "));
   const skill = output.skill || {};
   const label = skillLabel(skill);
   if (output.ok === false || clean(output.error)) {
@@ -883,20 +898,57 @@ function formatRunSkillActionTool(result = {}, context = {}) {
   }
   const desktop = output.desktop || {};
   const desktopLabel = clean(desktop.label || desktop.slug || label);
-  const url = publicFacingUrl(output.openedUrl || output.url || desktop.url, context.env);
+  const shareUrl = publicFacingUrl(output.shareUrl || output.desktopShare?.url || "", context.env);
+  const actionUrl = publicFacingUrl(output.openedUrl || "", context.env);
+  const url = shareUrl || publicFacingUrl(output.url || desktop.url, context.env);
   const lines = [];
-  if (action === "open_url") lines.push(`I opened ${url || "the requested URL"} in ${desktopLabel}.`);
-  else if (action === "open" || action === "start") lines.push(`${desktopLabel} is open${url ? ` at ${url}` : ""}.`);
+  if (action === "open_url") lines.push(`I opened ${actionUrl || "the requested URL"} in ${desktopLabel}.`);
+  else if (action === "open" || action === "start") lines.push(`${desktopLabel} is open.`);
   else if (action === "prepare") lines.push(`${desktopLabel} is prepared.`);
   else if (action === "stop") lines.push(`${desktopLabel} was stopped.`);
   else if (action === "restart") lines.push(`${desktopLabel} was restarted.`);
   else lines.push(clean(output.message) || `${label} ${action} completed.`);
-  if (/\blogged\s*in|login|signed\s*in/i.test(clean(context.message?.text))) {
+  if (shareUrl && ["open", "start", "open_url"].includes(action)) {
+    lines.push(`Open this one-time desktop link: ${shareUrl}`);
+    lines.push("The page will show an Orkestr desktop challenge. Paste that challenge back here to approve this browser.");
+  }
+  if (/\blogged\s*in|login|signed\s*in/i.test(requestText)) {
     lines.push("The tool result only confirms the desktop action; it does not report login state, so I cannot confirm whether you are logged in.");
-  } else if (/(page contents?|trending|entries|research|summary|summari[sz]e)/i.test(clean(context.message?.text))) {
+  } else if (/(page contents?|trending|entries|research|summary|summari[sz]e|translations?)/i.test(requestText)) {
     lines.push("The tool result only confirms the desktop action; it does not return page contents or research results.");
+    if (codexEscalationAvailable(context.env)) {
+      lines.push("For deeper browser/content work, connect Codex to this chat.");
+    }
   }
   return lines.join("\n");
+}
+
+function formatOperateDesktopTool(result = {}) {
+  const output = result.output || {};
+  const page = output.page || {};
+  const lines = [];
+  if (output.ok === false) {
+    return `Desktop operation failed: ${clean(output.error || output.message || "desktop_operation_failed")}.`;
+  }
+  const operation = clean(output.operation || result.args?.operation || "observe");
+  const title = clean(page.title || "(untitled)");
+  const url = clean(page.url);
+  lines.push(`Desktop ${operation} completed. Current page: ${title}${url ? ` (${url})` : ""}.`);
+  const body = clean(page.bodyText);
+  if (body) lines.push(`Page text:\n${body.slice(0, 4000)}`);
+  const fields = Array.isArray(page.fields) ? page.fields.filter((field) => clean(field.label || field.placeholder || field.name)).slice(0, 8) : [];
+  if (fields.length) {
+    lines.push(`Visible fields: ${fields.map((field) => clean(field.label || field.placeholder || field.name || field.selector)).join(", ")}.`);
+  }
+  const buttons = Array.isArray(page.buttons) ? page.buttons.filter((button) => clean(button.text)).slice(0, 10) : [];
+  if (buttons.length) {
+    lines.push(`Visible actions: ${buttons.map((button) => clean(button.text)).join(", ")}.`);
+  }
+  const links = Array.isArray(page.links) ? page.links.filter((link) => clean(link.text || link.href)).slice(0, 8) : [];
+  if (links.length) {
+    lines.push(`Visible links: ${links.map((link) => `${clean(link.text || "link")} -> ${clean(link.href)}`).join("; ")}.`);
+  }
+  return lines.join("\n\n");
 }
 
 function formatListSkillsTool(result = {}) {
@@ -1135,6 +1187,7 @@ function formatToolResultFallback(toolResults = [], context = {}) {
     else if (result.name === "orkestr_disconnect_connector") formatted = formatConnectorStatusTool({ ...result, output: result.output?.status || result.output });
     else if (result.name === "orkestr_list_skill_actions") formatted = formatSkillActionsTool(result, context);
     else if (result.name === "orkestr_run_skill_action") formatted = formatRunSkillActionTool(result, context);
+    else if (result.name === "orkestr_operate_desktop") formatted = formatOperateDesktopTool(result);
     else if (result.name === "orkestr_list_skills") formatted = formatListSkillsTool(result);
     else if (["orkestr_search_gmail", "orkestr_read_gmail_message", "orkestr_read_latest_gmail_message"].includes(result.name)) formatted = formatGmailTool(result);
     else if (["orkestr_create_gmail_notification", "orkestr_update_gmail_notification", "orkestr_list_gmail_notifications", "orkestr_delete_gmail_notification", "orkestr_run_gmail_notification_now"].includes(result.name)) formatted = formatGmailNotificationTool(result);
@@ -1160,6 +1213,21 @@ function formatToolResultFallback(toolResults = [], context = {}) {
     if (formatted) parts.push(formatted);
   }
   return parts.join("\n\n").trim();
+}
+
+function desktopShareUrlText(text = "") {
+  return /https?:\/\/\S*\/desktop-share\//i.test(clean(text));
+}
+
+function shouldPreferDesktopShareFallback(text = "", fallback = "", toolResults = []) {
+  if (!fallback || !desktopShareUrlText(fallback) || desktopShareUrlText(text)) return false;
+  return (Array.isArray(toolResults) ? toolResults : []).some((result) => {
+    if (result.name !== "orkestr_run_skill_action") return false;
+    const output = result.output || {};
+    const args = result.args || {};
+    const action = clean(output.action || args.action);
+    return Boolean(clean(output.shareUrl || output.desktopShare?.url)) && ["open", "start", "open_url"].includes(action);
+  });
 }
 
 function gmailNotificationToolResultsHaveFailure(toolResults = []) {
@@ -1530,10 +1598,11 @@ export async function buildTenantApiAgentInstructions(thread = {}, messages = []
     "When asked what you can do or what skills you have, list only capabilities that are true in the Tenant context JSON and skills whose enabled field is true. Do not treat registryEnabled as availability; registryEnabled only means the user has not disabled the skill.",
     "For capability and action questions, reason from skills first: use orkestr_list_skills or orkestr_list_skill_actions to inspect enabled skills, current availability, and available actions before saying what you can do.",
     "If the user asks you to open, start, stop, restart, check, or otherwise act through a skill, use orkestr_list_skill_actions first and then orkestr_run_skill_action only when that action is available.",
-    "After running a skill action, answer from the tool result. If the tool only opens a desktop or returns status, say exactly that; do not claim that you inspected account login, page contents, messages, or external state unless a tool result explicitly confirms that.",
+    "When the user asks you to work inside a managed desktop, inspect login state, gather data from a logged-in page, navigate, click, type, read visible page content, or continue after opening a desktop, use orkestr_operate_desktop after inspecting skill actions. Use observe/extract to inspect the current page, navigate for URLs, click for visible actions, and type for visible fields.",
+    "After running a skill or desktop operation, answer from the tool result. If a desktop operation returns page text, links, buttons, or fields, use that data directly. If the tool only opens a desktop or returns status, say exactly that; do not claim that you inspected account login, page contents, messages, or external state unless a tool result explicitly confirms that.",
     codexAvailable
-      ? "Managed desktop and browser skill actions are controls, not page-reading tools. Opening a desktop or visiting a URL does not prove page contents, trending topics, translations, account login state, or successful research. For public HTTP(S) content, use orkestr_fetch_web_page. If the user asks to gather content that no Orkestr tool returns, say what was opened if a tool confirms it, then ask whether they want to connect Codex to this chat for deeper browser/content work. Do not tell them to resend with a slash command."
-      : "Managed desktop and browser skill actions are controls, not page-reading tools. Opening a desktop or visiting a URL does not prove page contents, trending topics, translations, account login state, or successful research. For public HTTP(S) content, use orkestr_fetch_web_page when available. If no Orkestr tool returns the requested content, say the chat cannot run live browser/content work right now; do not mention a slash-command escalation path.",
+      ? "Managed desktop open/start actions only control availability, but orkestr_operate_desktop can inspect and interact with the live page. For public HTTP(S) content, use orkestr_fetch_web_page when it is enough; for logged-in browser state or user-owned desktop workflows, use orkestr_operate_desktop. If no Orkestr tool can complete the requested browser/content work, ask whether they want to connect Codex to this chat. Do not tell them to resend with a slash command."
+      : "Managed desktop open/start actions only control availability, but orkestr_operate_desktop can inspect and interact with the live page. For public HTTP(S) content, use orkestr_fetch_web_page when it is enough; for logged-in browser state or user-owned desktop workflows, use orkestr_operate_desktop. If no Orkestr tool can complete the requested browser/content work, say the chat cannot run that browser/content work right now; do not mention a slash-command escalation path.",
     "Skills are unique per user and are described by the skill records in the Tenant context. Do not force provider categories, goals, or attachment models onto them; preserve the user's wording.",
     "Users manage skills through chat. When they ask to list, view, search, create, update, enable, disable, or delete skills, use the Orkestr skill tools.",
     "Do not create or update a skill for phishing, scams, credential theft, unauthorized login attempts, spam, or abuse. Refuse those requests instead of calling a tool.",
@@ -1731,6 +1800,7 @@ async function repairWeakTenantApiAgentResponse({
   env,
   fetchImpl,
   allowTools = false,
+  requireTools = false,
 }) {
   const repairBody = {
     ...baseBody,
@@ -1746,7 +1816,9 @@ async function repairWeakTenantApiAgentResponse({
       "If the latest user message is only a confirmation like yes/ok and no tool result confirms completed work, do not say Done and do not promise future browser or workspace work. Ask for the concrete task or explain the pending limitation.",
       "If tenant tool results are present in the conversation, answer the user's latest request from those results instead of returning a raw tool dump or a generic capability fallback.",
       allowTools
-        ? "If the latest user message asks for an Orkestr action and a matching tool is available, call the tool before finalizing."
+        ? requireTools
+          ? "The previous draft was a generic fallback for a message that needs a capability action. You must call at least one available Orkestr tool before finalizing; inspect skill actions first when the exact action is ambiguous."
+          : "If the latest user message asks for an Orkestr action and a matching tool is available, call the tool before finalizing."
         : "Do not use tools during this repair step.",
       gmailContextInstructions(message, gmailContext),
     ].join("\n"),
@@ -1766,6 +1838,8 @@ async function repairWeakTenantApiAgentResponse({
     delete repairBody.tools;
     delete repairBody.tool_choice;
     delete repairBody.parallel_tool_calls;
+  } else if (requireTools) {
+    repairBody.tool_choice = "required";
   }
   const response = await postOpenAIResponse(repairBody, env, fetchImpl, `orkestr-${thread.id}-${message.id}-repair`);
   await recordResponseUsage({ response, thread, message, callKind: "assistant_repair" }, env);
@@ -1917,6 +1991,7 @@ async function runTenantApiAgentToolResultResponse({
   const fallback = customFallback || toolFallback;
   const repairGmailReadNarrative = gmailReadToolResultNeedsNarrativeRepair(toolResults, message, gmailContext);
   if (fallback && shouldPreferWebFetchFallback(text, fallback, message)) return { response: second, text: fallback };
+  if (fallback && shouldPreferDesktopShareFallback(text, fallback, toolResults)) return { response: second, text: fallback };
   if (fallback && gmailNotificationToolResultsHaveFailure(toolResults) && !repairGmailReadNarrative) return { response: second, text: fallback };
   if (fallback && genericToolFallbackText(text) && !repairGmailReadNarrative) return { response: second, text: fallback };
   if (!repairGmailReadNarrative && !tenantApiAgentTextNeedsRepair(text, message, { pendingActionConfirmation: Boolean(pendingAction), gmailContext, env })) return { response: second, text };
@@ -1959,6 +2034,7 @@ async function runTenantApiAgentToolResultResponse({
 async function retryPendingActionConfirmationWithTools({ baseBody, inputItems, thread, message, text, principal, pendingAction, env, fetchImpl }) {
   const retryBody = {
     ...baseBody,
+    tool_choice: "required",
     instructions: [
       baseBody.instructions,
       "",
@@ -2004,6 +2080,7 @@ async function runTenantApiAgentResponse({ thread, messages, message, env, fetch
   const model = apiAgentModel(env);
   const principal = tenantPrincipalForThread(thread, env);
   const pendingAction = pendingActionConfirmation(messages, message);
+  const contextActionOffer = pendingAction ? null : previousAssistantActionOffer(messages, message);
   const gmailContext = relevantGmailPromptPushBefore(messages, message);
   const instructions = [
     await buildTenantApiAgentInstructions(thread, messages, env),
@@ -2050,7 +2127,8 @@ async function runTenantApiAgentResponse({ thread, messages, message, env, fetch
         fetchImpl,
       });
     }
-    if (!tenantApiAgentTextNeedsRepair(text, message, { pendingActionConfirmation: Boolean(pendingAction), gmailContext, env })) return { response: first, text };
+    if (!tenantApiAgentTextNeedsRepair(text, message, { pendingActionConfirmation: Boolean(pendingAction), contextActionOffer, gmailContext, env })) return { response: first, text };
+    const forceToolRepair = genericTenantApiAgentHelpText(text) && (Boolean(messageCapabilityIntent(message.text)) || Boolean(contextActionOffer));
     const repaired = await repairWeakTenantApiAgentResponse({
       baseBody,
       inputItems: input,
@@ -2063,10 +2141,11 @@ async function runTenantApiAgentResponse({ thread, messages, message, env, fetch
       env,
       fetchImpl,
       allowTools: true,
+      requireTools: forceToolRepair,
     });
     return {
       response: repaired.response,
-      text: tenantApiAgentTextNeedsRepair(repaired.text, message, { pendingActionConfirmation: Boolean(pendingAction), gmailContext, env })
+      text: tenantApiAgentTextNeedsRepair(repaired.text, message, { pendingActionConfirmation: Boolean(pendingAction), contextActionOffer, gmailContext, env })
         ? fallbackTenantApiAgentRepairAnswer(message, {
           pendingActionConfirmation: Boolean(pendingAction),
           originalText: text,

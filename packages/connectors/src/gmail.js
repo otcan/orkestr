@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import fs from "node:fs/promises";
 import { appendEvent, readJson, writeJson, writeSecretJson } from "../../storage/src/store.js";
 import { connectorFile, connectorScopePaths, listConnectorScopePaths } from "./connector-storage.js";
 import {
@@ -127,6 +128,7 @@ async function saveTokenPayload(payload, env, prior = {}, options = {}) {
     updatedAt: new Date().toISOString(),
   };
   await writeSecretJson(connectorFile(scope, "secrets", "gmail-token.json"), token);
+  await fs.rm(connectorFile(scope, "secrets", "gmail-error.json"), { force: true }).catch(() => {});
   return token;
 }
 

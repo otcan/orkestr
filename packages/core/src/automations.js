@@ -50,6 +50,7 @@ function timerAutomation(timer = {}) {
     enabled: timer.enabled !== false,
     targetType: clean(timer.targetType || "agent"),
     target: clean(timer.target),
+    ownerUserId: clean(timer.ownerUserId),
     schedule: {
       cadence: clean(timer.cadence),
       time: clean(timer.time),
@@ -89,6 +90,7 @@ function pushAutomation(push = {}) {
     enabled: push.enabled === true,
     targetType: clean(push.targetType),
     target: clean(push.target),
+    ownerUserId: clean(push.ownerUserId || push.userId),
     schedule: {
       type: clean(push.schedule?.type || push.automationType),
       every: clean(push.schedule?.every),

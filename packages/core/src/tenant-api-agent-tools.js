@@ -16,6 +16,7 @@ import {
   restartVirtualBrowser,
   stopVirtualBrowser,
 } from "../../browsers/src/browsers.js";
+import { operateManagedDesktop } from "../../browsers/src/desktop-operator.js";
 import { getGmailMessage, listGmailMessages } from "../../connectors/src/gmail.js";
 import {
   createGmailNotificationForPrincipal,
@@ -42,6 +43,7 @@ import { doctorAutomationsForPrincipal } from "./automation-doctor.js";
 import { runTenantApiAgentTimerTool, tenantApiAgentTimerToolDefinitions } from "./tenant-api-agent-timer-tools.js";
 import { whereAmI } from "./whereiam.js";
 import { desktopProvisioningMessage } from "./desktop-provisioning.js";
+import { createDesktopShare } from "./desktop-shares.js";
 import { updateThread } from "./threads.js";
 import {
   createUserSkillForPrincipal,
@@ -138,7 +140,7 @@ function automationIdArgsForAction(action = {}, parameters = {}) {
 function automationDoctorOptions(context = {}, env = process.env) {
   const principal = context.principal || null;
   return {
-    connectorStatusProvider: (provider) => connectorAuthStatus(provider, env, { principal }),
+    connectorStatusProvider: (provider, connectorPrincipal = principal) => connectorAuthStatus(provider, env, { principal: connectorPrincipal }),
     browserSessionsProvider: () => listBrowserSessions(env, { principal }),
   };
 }
@@ -514,12 +516,20 @@ function desktopActions(session = {}) {
   const control = session.control && typeof session.control === "object" ? session.control : {};
   const actions = new Set(["status"]);
   const openUrl = safeUrl(session.desk_url || session.url);
+  const controllable = Boolean(session.cdp_url || control.start === true);
   if (openUrl || control.start === true) actions.add("open");
   if (control.prepare === true || control.health === true) actions.add("prepare");
   if (control.start === true) actions.add("start");
   if (control.stop === true) actions.add("stop");
   if (control.restart === true) actions.add("restart");
   if (control.start === true) actions.add("open_url");
+  if (controllable) {
+    actions.add("observe");
+    actions.add("navigate");
+    actions.add("click");
+    actions.add("type");
+    actions.add("extract");
+  }
   return [...actions];
 }
 
@@ -547,6 +557,20 @@ function publicDesktopRecord(session = {}) {
     leaseOwnerLabel: clean(session.leaseOwnerLabel),
     notes: clean(session.notes || session.purpose).slice(0, 1000),
     source: clean(session.source),
+  };
+}
+
+async function createDesktopActionShare(slug = "", label = "", principal = {}, env = process.env) {
+  const share = await createDesktopShare({
+    desktopSlug: slug,
+    principal,
+    label: clean(label || slug || "Desktop"),
+    env,
+  });
+  return {
+    url: safeUrl(share.url),
+    share: share.share || null,
+    wildcardSubdomainConfigured: share.wildcardSubdomainConfigured === true,
   };
 }
 
@@ -769,11 +793,22 @@ async function runSkillAction(args = {}, principal = {}, thread = null, env = pr
     if (!desktop) return { ok: false, error: "desktop_not_available", action, skill, desktopInventory: inventory.desktopInventory };
     if (!desktop.availableActions.includes(action)) return { ok: false, error: "skill_action_not_available", action, skill, desktop };
     let result;
+    let share = null;
     if (action === "prepare") result = await prepareVirtualBrowser(slug, env, { principal });
     else if (action === "start") result = await openVirtualBrowser(slug, env, "", { principal });
     else if (action === "open") {
       if (desktop.url && !desktop.availableActions.includes("start")) {
-        return { ok: true, action, skill, desktop, message: "Desktop is already available.", url: desktop.url };
+        share = await createDesktopActionShare(slug, desktop.label || slug, principal, env);
+        return {
+          ok: true,
+          action,
+          skill,
+          desktop,
+          message: "Desktop is already available.",
+          shareUrl: share.url,
+          desktopShare: share.share,
+          wildcardSubdomainConfigured: share.wildcardSubdomainConfigured,
+        };
       }
       result = await openVirtualBrowser(slug, env, "", { principal });
     } else if (action === "open_url") {
@@ -781,13 +816,19 @@ async function runSkillAction(args = {}, principal = {}, thread = null, env = pr
     } else if (action === "stop") result = await stopVirtualBrowser(slug, env, { principal });
     else if (action === "restart") result = await restartVirtualBrowser(slug, env, { principal });
     else return { ok: false, error: "skill_action_not_implemented", action, skill, desktop };
+    if (["open", "start", "open_url"].includes(action)) {
+      share = await createDesktopActionShare(slug, result?.label || desktop.label || slug, principal, env);
+    }
     return {
       ok: true,
       action,
       skill: { ...skill, desktops: undefined },
       desktop: publicDesktopRecord(result),
-      url: safeUrl(result?.desk_url || result?.url),
+      url: "",
       openedUrl: safeUrl(result?.openedUrl),
+      shareUrl: share?.url || "",
+      desktopShare: share?.share || null,
+      wildcardSubdomainConfigured: share?.wildcardSubdomainConfigured === true,
       message: "Skill action completed.",
     };
   }
@@ -1117,6 +1158,29 @@ export function tenantApiAgentToolDefinitions() {
           url: { type: "string", description: "Optional URL for open_url actions, otherwise empty string." },
         },
         required: ["skillId", "action", "target", "url"],
+        additionalProperties: false,
+      },
+      strict: true,
+    },
+    {
+      type: "function",
+      name: "orkestr_operate_desktop",
+      description: "Observe and control a tenant-managed virtual desktop through Orkestr. Use this after inspecting skill actions when the user asks you to work inside a desktop, check login state, gather page data, navigate, click, or type. Returns structured page text, links, buttons, and fields.",
+      parameters: {
+        type: "object",
+        properties: {
+          skillId: { type: "string", description: "Related skill id such as linkedin, or empty string." },
+          target: { type: "string", description: "Desktop slug to operate, or empty string to use the skill default." },
+          operation: { type: "string", enum: ["observe", "navigate", "click", "type", "extract"], description: "Desktop operation to perform." },
+          url: { type: "string", description: "URL for navigate, otherwise empty string." },
+          selector: { type: "string", description: "CSS selector for click/type, otherwise empty string." },
+          text: { type: "string", description: "Visible text to click, or optional note for observe/extract." },
+          field: { type: "string", description: "Field label/name/placeholder for type, otherwise empty string." },
+          value: { type: "string", description: "Value to type into the field, otherwise empty string." },
+          waitMs: { type: "number", description: "Optional wait after the operation in milliseconds." },
+          maxText: { type: "number", description: "Maximum page text characters to return." },
+        },
+        required: ["skillId", "target", "operation", "url", "selector", "text", "field", "value", "waitMs", "maxText"],
         additionalProperties: false,
       },
       strict: true,
@@ -1608,6 +1672,27 @@ export async function runTenantApiAgentTool(name = "", args = {}, context = {}, 
   }
   if (tool === "orkestr_run_skill_action") {
     return runSkillAction(args, principal, thread, env, context.fetchImpl || fetch);
+  }
+  if (tool === "orkestr_operate_desktop") {
+    const skillId = clean(args.skillId).toLowerCase();
+    let slug = clean(args.target || args.slug);
+    if (!slug && skillId) {
+      const inventory = await skillActionInventory(principal, thread, env, { skillId, includeDesktopInventory: true });
+      const skill = inventory.skills[0] || null;
+      const desktop = skill ? desktopForSkill(skill, inventory.desktopInventory?.desktops || [], env, args) : null;
+      slug = clean(desktop?.slug || skill?.resolvedDesktop || skill?.requiresDesktop || skill?.requiredDesktop);
+    }
+    return operateManagedDesktop(slug, {
+      operation: args.operation,
+      url: args.url,
+      selector: args.selector,
+      text: args.text,
+      field: args.field,
+      target: args.field || args.target,
+      value: args.value,
+      waitMs: args.waitMs,
+      maxText: args.maxText,
+    }, env, { principal });
   }
   if (tool === "orkestr_connect_workspace_runtime") {
     return connectWorkspaceRuntime(args, thread, env);

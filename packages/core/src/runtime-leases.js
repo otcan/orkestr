@@ -3442,6 +3442,11 @@ export function requestThreadInputDelivery(threadId, env = process.env, delayMs 
   scheduleThreadInputDelivery(threadId, env, delayMs);
 }
 
+export function resetThreadInputDeliveryTimersForTest() {
+  for (const timer of deliveryTimers.values()) clearTimeout(timer);
+  deliveryTimers.clear();
+}
+
 export function requestThreadWake(threadId, options = {}, env = process.env) {
   if (deployDrainActiveSync(env)) {
     setImmediate(() => {

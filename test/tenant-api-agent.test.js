@@ -3458,8 +3458,9 @@ test("tenant api-agent answers desktop action requests from skill action tool re
   assert.equal(calls[0].tools.some((tool) => tool.name === "orkestr_list_skill_actions"), true);
   assert.equal(calls[0].tools.some((tool) => tool.name === "orkestr_run_skill_action"), true);
   assert.match(calls[0].instructions, /reason from skills first/i);
-  assert.match(assistant.text, /opened the LinkedIn managed desktop/i);
-  assert.match(assistant.text, /cannot verify whether you are logged in/i);
+  assert.match(assistant.text, /LinkedIn is open/i);
+  assert.match(assistant.text, /Open this one-time desktop link: http:\/\/127\.0\.0\.1:19812\/desktop-share\//i);
+  assert.match(assistant.text, /cannot confirm whether you are logged in/i);
   assert.notEqual(assistant.text.trim(), "Done.");
 });
 
@@ -3548,6 +3549,7 @@ test("tenant api-agent routes managed desktop requests through skill tools", asy
     ORKESTR_BROWSER_VISIBLE_SLUGS: "desktop,linkedin",
     ORKESTR_DEFAULT_DESKTOP_SLUG: "desktop",
     ORKESTR_BROWSER_LAUNCH_DISABLED: "1",
+    ORKESTR_PUBLIC_HTTPS_URL: "https://app.example.test",
   });
   await upsertUser({ id: "otcan", role: "user", displayName: "Otcan" }, env);
   await createThread({
@@ -3604,7 +3606,7 @@ test("tenant api-agent routes managed desktop requests through skill tools", asy
       return response({
         id: "resp_direct_desktop_open_2",
         model: "gpt-5-mini",
-        output_text: GENERIC_TOOL_FALLBACK_TEXT,
+        output_text: "Done. I opened the LinkedIn desktop and created a temporary share link. I can't directly inspect screen contents from here, so I can't confirm whether you're logged in.",
         output: [],
         usage: { input_tokens: 450, output_tokens: 32 },
       });
@@ -3617,8 +3619,210 @@ test("tenant api-agent routes managed desktop requests through skill tools", asy
   assert.equal(calls.length, 2);
   assert.match(assistant.text, /LinkedIn is open/i);
   assert.match(assistant.text, /does not report login state/i);
+  assert.match(assistant.text, /Open this one-time desktop link: https:\/\/app\.example\.test\/desktop-share\//i);
   assert.doesNotMatch(assistant.text, /\/codex/i);
   assert.notEqual(assistant.text.trim(), "Done.");
+});
+
+test("tenant api-agent repairs generic help replies to concrete desktop requests with tools", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-api-agent-generic-desktop-repair-"));
+  const env = await allowSanitizerEnv(home, {
+    ORKESTR_BROWSER_DESKTOP_MODE: "profiles",
+    ORKESTR_BROWSER_VISIBLE_SLUGS: "desktop,linkedin",
+    ORKESTR_DEFAULT_DESKTOP_SLUG: "desktop",
+    ORKESTR_BROWSER_LAUNCH_DISABLED: "1",
+    ORKESTR_PUBLIC_HTTPS_URL: "https://app.example.test",
+  });
+  await upsertUser({ id: "otcan", role: "user", displayName: "Otcan" }, env);
+  await createThread({
+    id: "otcantest-generic-desktop-repair",
+    ownerUserId: "otcan",
+    name: "otcantest",
+    runtimeKind: "api-agent",
+    executor: { type: "api-agent", metadata: { runtimeKind: "api-agent" } },
+    binding: { connector: "whatsapp", chatId: "chat-otcan", outboundAccountId: "wa-1" },
+  }, env);
+  await appendThreadMessage("otcantest-generic-desktop-repair", {
+    role: "assistant",
+    source: "api-agent",
+    phase: "final_answer",
+    text: "Yes - your LinkedIn managed desktop is running and available. Current state: running. Actions you can take: open, prepare, start, stop, or restart. I can't confirm whether a LinkedIn account is already logged in without opening the desktop. Would you like me to open it now or restart it?",
+    state: "completed",
+    connector: "whatsapp",
+    chatId: "chat-otcan",
+    accountId: "wa-1",
+  }, env);
+  const input = await enqueueThreadInputForPrincipal("otcantest-generic-desktop-repair", {
+    text: "Open the desk now, and check if it's logged in",
+    source: "whatsapp_inbound",
+    connector: "whatsapp",
+    chatId: "chat-otcan",
+    accountId: "wa-1",
+  }, userPrincipal({ id: "otcan", role: "user" }), env);
+
+  const calls = [];
+  const result = await processApiAgentThreadInput("otcantest-generic-desktop-repair", env, {
+    fetchImpl: async (_url, options = {}) => {
+      const body = JSON.parse(options.body);
+      calls.push(body);
+      if (calls.length === 1) {
+        return response({
+          id: "resp_generic_desktop_repair_1",
+          model: "gpt-5-mini",
+          output_text: "I can help in this chat. Tell me what you want to do.",
+          output: [],
+          usage: { input_tokens: 300, output_tokens: 12 },
+        });
+      }
+      if (calls.length === 2) {
+        assert.match(body.instructions, /Response repair/i);
+        assert.equal(body.tool_choice, "required");
+        assert.equal(body.tools.some((tool) => tool.name === "orkestr_list_skill_actions"), true);
+        assert.equal(body.tools.some((tool) => tool.name === "orkestr_run_skill_action"), true);
+        return response({
+          id: "resp_generic_desktop_repair_2",
+          model: "gpt-5-mini",
+          output_text: "",
+          output: [
+            {
+              type: "function_call",
+              name: "orkestr_list_skill_actions",
+              call_id: "call_generic_desktop_actions",
+              arguments: JSON.stringify({ skillId: "linkedin" }),
+            },
+            {
+              type: "function_call",
+              name: "orkestr_run_skill_action",
+              call_id: "call_generic_desktop_open",
+              arguments: JSON.stringify({ skillId: "linkedin", action: "open", target: "", url: "" }),
+            },
+          ],
+          usage: { input_tokens: 400, output_tokens: 34 },
+        });
+      }
+      const toolOutputs = body.input
+        .filter((item) => item.type === "function_call_output")
+        .map((item) => JSON.parse(item.output));
+      assert.equal(toolOutputs[0].skills[0].id, "linkedin");
+      assert.equal(toolOutputs[1].ok, true);
+      assert.equal(toolOutputs[1].desktop.slug, "linkedin");
+      assert.match(toolOutputs[1].shareUrl, /https:\/\/app\.example\.test\/desktop-share\//);
+      return response({
+        id: "resp_generic_desktop_repair_3",
+        model: "gpt-5-mini",
+        output_text: GENERIC_TOOL_FALLBACK_TEXT,
+        output: [],
+        usage: { input_tokens: 500, output_tokens: 32 },
+      });
+    },
+  });
+  const messages = await listThreadMessages("otcantest-generic-desktop-repair", env);
+  const current = messages.find((message) => message.id === input.id);
+  const assistant = messages.find((message) => message.parentMessageId === input.id);
+
+  assert.equal(result.ok, true);
+  assert.equal(calls.length, 3);
+  assert.equal(current.state, "completed");
+  assert.match(assistant.text, /LinkedIn is open/i);
+  assert.match(assistant.text, /does not report login state/i);
+  assert.match(assistant.text, /Open this one-time desktop link: https:\/\/app\.example\.test\/desktop-share\//i);
+  assert.doesNotMatch(assistant.text, /I can help in this chat/);
+  assert.doesNotMatch(assistant.text, /\/desktop\/linkedin\/vnc\.html/);
+});
+
+test("tenant api-agent repairs generic help replies to concrete timer requests with tools", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-api-agent-generic-timer-repair-"));
+  const env = await allowSanitizerEnv(home);
+  await upsertUser({ id: "otcan", role: "user", displayName: "Otcan" }, env);
+  await createThread({
+    id: "otcantest-generic-timer-repair",
+    ownerUserId: "otcan",
+    name: "otcantest",
+    runtimeKind: "api-agent",
+    executor: { type: "api-agent", metadata: { runtimeKind: "api-agent" } },
+    binding: { connector: "whatsapp", chatId: "chat-otcan", outboundAccountId: "wa-1" },
+  }, env);
+  const input = await enqueueThreadInputForPrincipal("otcantest-generic-timer-repair", {
+    text: "Remind me in 2 minutes to check the release status.",
+    source: "whatsapp_inbound",
+    connector: "whatsapp",
+    chatId: "chat-otcan",
+    accountId: "wa-1",
+  }, userPrincipal({ id: "otcan", role: "user" }), env);
+
+  const calls = [];
+  const result = await processApiAgentThreadInput("otcantest-generic-timer-repair", env, {
+    fetchImpl: async (_url, options = {}) => {
+      const body = JSON.parse(options.body);
+      calls.push(body);
+      if (calls.length === 1) {
+        return response({
+          id: "resp_generic_timer_repair_1",
+          model: "gpt-5-mini",
+          output_text: "I can help in this chat. Tell me what you want to do.",
+          output: [],
+          usage: { input_tokens: 260, output_tokens: 12 },
+        });
+      }
+      if (calls.length === 2) {
+        assert.match(body.instructions, /Response repair/i);
+        assert.equal(body.tool_choice, "required");
+        assert.equal(body.tools.some((tool) => tool.name === "orkestr_create_automation"), true);
+        assert.equal(body.tools.some((tool) => tool.name === "orkestr_create_timer"), false);
+        return response({
+          id: "resp_generic_timer_repair_2",
+          model: "gpt-5-mini",
+          output_text: "",
+          output: [{
+            type: "function_call",
+            name: "orkestr_create_automation",
+            call_id: "call_generic_timer_create",
+            arguments: JSON.stringify({
+              type: "timer",
+              provider: "timer",
+              label: "Check release status",
+              targetType: "thread",
+              target: "",
+              cadence: "once",
+              delay: "2m",
+              runAt: "",
+              time: "",
+              timezone: "",
+              every: "",
+              prompt: "Check the release status.",
+              promptTemplate: "",
+              query: "",
+              maxItemsPerRun: 0,
+              enabled: true,
+              allowBroadQuery: false,
+            }),
+          }],
+          usage: { input_tokens: 390, output_tokens: 34 },
+        });
+      }
+      const toolOutput = JSON.parse(body.input.find((item) => item.type === "function_call_output")?.output || "{}");
+      assert.equal(toolOutput.ok, true);
+      assert.equal(toolOutput.automation.label, "Check release status");
+      return response({
+        id: "resp_generic_timer_repair_3",
+        model: "gpt-5-mini",
+        output_text: GENERIC_TOOL_FALLBACK_TEXT,
+        output: [],
+        usage: { input_tokens: 440, output_tokens: 28 },
+      });
+    },
+  });
+  const messages = await listThreadMessages("otcantest-generic-timer-repair", env);
+  const current = messages.find((message) => message.id === input.id);
+  const assistant = messages.find((message) => message.parentMessageId === input.id);
+  const timers = await listTimers(env);
+
+  assert.equal(result.ok, true);
+  assert.equal(calls.length, 3);
+  assert.equal(current.state, "completed");
+  assert.equal(timers.some((timer) => timer.label === "Check release status"), true);
+  assert.match(assistant.text, /Automation saved: Check release status/i);
+  assert.doesNotMatch(assistant.text, /I can help in this chat/);
 });
 
 test("tenant api-agent confirmation of offered browser action cannot finalize as Done", async () => {
@@ -3681,6 +3885,7 @@ test("tenant api-agent confirmation of offered browser action cannot finalize as
       }
       if (calls.length === 2) {
         assert.match(body.instructions, /Action confirmation retry/i);
+        assert.equal(body.tool_choice, "required");
         assert.equal(body.tools.some((tool) => tool.name === "orkestr_list_skill_actions"), true);
         assert.equal(body.tools.some((tool) => tool.name === "orkestr_run_skill_action"), true);
         return response({
@@ -3726,8 +3931,10 @@ test("tenant api-agent confirmation of offered browser action cannot finalize as
   assert.equal(result.ok, true);
   assert.equal(calls.length, 3);
   assert.equal(current.state, "completed");
-  assert.match(assistant.text, /opened the managed desktop/i);
+  assert.match(assistant.text, /opened https:\/\/eksisozluk\.com\//i);
   assert.match(assistant.text, /eksisozluk\.com/i);
+  assert.match(assistant.text, /Open this one-time desktop link: http:\/\/127\.0\.0\.1:19812\/desktop-share\//i);
+  assert.match(assistant.text, /does not return page contents or research results/i);
   assert.match(assistant.text, /connect Codex/i);
   assert.doesNotMatch(assistant.text, /\/codex/i);
   assert.doesNotMatch(assistant.text, /^Done\.?$/i);
@@ -4375,6 +4582,7 @@ test("tenant api-agent opens the generic desktop when public fetch hits a browse
     ORKESTR_BROWSER_VISIBLE_SLUGS: "desktop,linkedin",
     ORKESTR_DEFAULT_DESKTOP_SLUG: "desktop",
     ORKESTR_BROWSER_LAUNCH_DISABLED: "1",
+    ORKESTR_PUBLIC_HTTPS_URL: "https://app.example.test",
   });
   await upsertUser({ id: "otcan", role: "user", displayName: "Otcan" }, env);
   await createThread({
@@ -4465,7 +4673,10 @@ test("tenant api-agent opens the generic desktop when public fetch hits a browse
   assert.equal(result.ok, true);
   assert.equal(openAiCalls.length, 3);
   assert.match(assistant.text, /opened https:\/\/example\.com\/protected in LinkedIn/i);
+  assert.match(assistant.text, /Open this one-time desktop link: https:\/\/app\.example\.test\/desktop-share\//i);
+  assert.match(assistant.text, /Paste that challenge back here/i);
   assert.match(assistant.text, /does not return page contents/i);
+  assert.doesNotMatch(assistant.text, /\/desktop\/linkedin\/vnc\.html/i);
   assert.doesNotMatch(assistant.text, /Fetched Just a moment/i);
   assert.doesNotMatch(assistant.text, /\/codex/i);
 });
