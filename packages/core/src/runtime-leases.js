@@ -459,7 +459,9 @@ function paneWorkingLineStillActiveAfterPrompt(line, distanceFromTail) {
 }
 
 function panePromptLine(line) {
-  return /^(?:›|>)(?:\s|$)/.test(line) && !/^(?:›|>)\s*\d+[.)]/.test(line);
+  const text = String(line || "").trim();
+  if (/^(?:›|>)\s*Use\s+\/skills\s+to\s+list\s+available\s+skills\b/i.test(text)) return false;
+  return /^(?:›|>)(?:\s|$)/.test(text) && !/^(?:›|>)\s*\d+[.)]/.test(text);
 }
 
 function paneWorking(text) {
