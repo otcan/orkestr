@@ -289,10 +289,10 @@ async function ensurePrepared(slug) {
     profile_path: profileDir(desktop.slug),
     startUrl: prior.startUrl || desktop.startUrl,
     preparedAt: prior.preparedAt || new Date().toISOString(),
-    debugPort: prior.debugPort || ports.debugPort,
-    vncPort: prior.vncPort || ports.vncPort,
-    webPort: prior.webPort || ports.webPort,
-    display: prior.display || `:${ports.displayNumber}`,
+    debugPort: ports.debugPort,
+    vncPort: ports.vncPort,
+    webPort: ports.webPort,
+    display: `:${ports.displayNumber}`,
   });
   const identity = desktopRunIdentity();
   if (identity) await chownTree(profileDir(desktop.slug), identity.uid, identity.gid);
@@ -375,6 +375,9 @@ async function startDesktop(value) {
   if (current.status === "running") return current;
   const state = await ensurePrepared(slug);
   const ports = portsForSlug(slug);
+  const debugPort = Number(state.debugPort || ports.debugPort);
+  const vncPort = Number(state.vncPort || ports.vncPort);
+  const webPort = Number(state.webPort || ports.webPort);
   const display = String(state.display || `:${ports.displayNumber}`);
   const startUrl = String(state.startUrl || desktop.startUrl || "about:blank");
   const startedAt = new Date().toISOString();
@@ -415,19 +418,19 @@ async function startDesktop(value) {
       "-localhost",
       "-forever",
       "-shared",
-      "-rfbport", String(ports.vncPort),
+      "-rfbport", String(vncPort),
       "-nopw",
       "-quiet",
     ], { DISPLAY: display });
     const websockifyPid = await spawnManaged(websockify, [
       "--web", webDir,
-      `127.0.0.1:${ports.webPort}`,
-      `127.0.0.1:${ports.vncPort}`,
+      `127.0.0.1:${webPort}`,
+      `127.0.0.1:${vncPort}`,
     ]);
     const chromeArgs = [
       `--user-data-dir=${profileDir(slug)}`,
       "--remote-debugging-address=127.0.0.1",
-      `--remote-debugging-port=${ports.debugPort}`,
+      `--remote-debugging-port=${debugPort}`,
       "--no-first-run",
       "--disable-dev-shm-usage",
       "--window-size=1440,900",
@@ -439,8 +442,8 @@ async function startDesktop(value) {
     }
     chromeArgs.push(startUrl);
     const chromePid = await spawnManaged(chrome, chromeArgs, { DISPLAY: display });
-    const webReady = await waitUntil(() => isTcpPortOpen(ports.webPort), 7000);
-    const cdpReady = await waitUntil(() => isTcpPortOpen(ports.debugPort), 7000);
+    const webReady = await waitUntil(() => isTcpPortOpen(webPort), 7000);
+    const cdpReady = await waitUntil(() => isTcpPortOpen(debugPort), 7000);
     if (!webReady) throw new Error("novnc_failed_to_start");
     if (!cdpReady) throw new Error("chrome_cdp_failed_to_start");
     await writeState(slug, {
