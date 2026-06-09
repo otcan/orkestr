@@ -693,7 +693,7 @@ export class OnboardingPageComponent implements OnInit, OnChanges, OnDestroy {
   }
 
   canOpenApp(): boolean {
-    return this.agentRuntimeReady();
+    return true;
   }
 
   runtimeBlockTitle(): string {
@@ -703,8 +703,8 @@ export class OnboardingPageComponent implements OnInit, OnChanges, OnDestroy {
   openAppBlockReason(): string {
     if (this.canOpenApp()) return "";
     const summary = String(this.connector("codex")?.summary || "").trim();
-    const base = summary || "Codex Agent is required before opening Orkestr.";
-    return `${base} Connect Codex Agent before opening Orkestr.`;
+    const base = summary || "Codex Agent is required before starting coding agents.";
+    return `${base} Connect Codex Agent before starting coding-agent work.`;
   }
 
   isSetupMode(): boolean {
@@ -1464,12 +1464,6 @@ export class OnboardingPageComponent implements OnInit, OnChanges, OnDestroy {
   }
 
   openApp(): void {
-    if (!this.canOpenApp()) {
-      this.error = this.openAppBlockReason();
-      this.notice = "";
-      this.goToCodexSetup();
-      return;
-    }
     if (this.isSetupMode()) {
       this.skip.emit();
       return;

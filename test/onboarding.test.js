@@ -47,9 +47,10 @@ test("onboarding focuses the starter setup on virtual desktop and WhatsApp", asy
   assert.ok(onboarding.includes("agentRuntimeStateLabel()"));
   assert.ok(onboarding.includes("canOpenApp()"));
   assert.ok(onboarding.includes("openAppBlockReason()"));
-  assert.ok(onboarding.includes("Connect Codex Agent before opening Orkestr."));
+  assert.ok(!onboarding.includes("Connect Codex Agent before opening Orkestr."));
+  assert.ok(onboarding.includes("Connect Codex Agent before starting coding-agent work."));
   assert.ok(onboarding.includes("runtime-blocker"));
-  assert.ok(onboarding.includes("[disabled]=\"busy || !canOpenApp()\""));
+  assert.ok(!onboarding.includes("[disabled]=\"busy || !canOpenApp()\""));
   assert.ok(onboarding.includes("requiredConnectorSteps()"));
   assert.ok(onboarding.includes("Agents should acquire Orkestr desktop leases"));
   assert.ok(onboarding.includes("Codex from WhatsApp"));

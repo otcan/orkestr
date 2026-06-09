@@ -460,7 +460,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   }
 
   uiRuntimeReady(): boolean {
-    return this.isUserMode() || !this.codexStatusAuthoritative() || this.codexAgentReady();
+    return true;
   }
 
   threadInputReady(): boolean {
@@ -468,8 +468,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   }
 
   shouldShowCodexRequiredShell(): boolean {
-    const codex = this.codexConnector();
-    return this.appReady && this.isAdminMode() && this.codexStatusAuthoritative() && Boolean(codex) && !this.codexAgentReady();
+    return false;
   }
 
   shouldShowCodexNotice(): boolean {
@@ -566,7 +565,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     if (this.codexConnectorReason() !== "codex_auth_invalid" && /Stored Codex sign-in is no longer valid/i.test(summary)) {
       return "Codex runtime status could not be confirmed for this Orkestr instance. Refresh same-origin setup status or check the browser pairing/login context.";
     }
-    return `${summary} Orkestr is locked until the Codex Agent runtime is connected. Connect Codex Agent before creating, opening, or inspecting workspaces.`;
+    return `${summary} Connect Codex Agent before starting coding agents or sending coding-agent tasks.`;
   }
 
   codexRuntimeNoticeTitle(): string {
@@ -587,7 +586,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
 
   private guardCodexRuntime(): boolean {
     if (this.threadInputReady()) return true;
-    this.error = "Connect Codex Agent before opening Orkestr.";
+    this.error = "Connect Codex Agent before using the coding-agent runtime.";
     this.renderNow();
     return false;
   }
@@ -4598,10 +4597,6 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     }
     if (this.onboardingActive) {
       globalThis.document.title = this.setupPageMode === "setup" ? "Setup · Orkestr" : "Onboarding · Orkestr";
-      return;
-    }
-    if (this.shouldShowCodexRequiredShell()) {
-      globalThis.document.title = "Codex Agent Required · Orkestr";
       return;
     }
     if (this.activePanel === "ops") {
