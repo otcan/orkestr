@@ -887,6 +887,10 @@ function formatRunSkillActionTool(result = {}, context = {}) {
   const output = result.output || {};
   const args = result.args || {};
   const action = clean(output.action || args.action || "action");
+  const requestText = clean([
+    context.message?.text || "",
+    context.pendingAction?.previousAssistantText || "",
+  ].join(" "));
   const skill = output.skill || {};
   const label = skillLabel(skill);
   if (output.ok === false || clean(output.error)) {
@@ -908,10 +912,13 @@ function formatRunSkillActionTool(result = {}, context = {}) {
     lines.push(`Open this one-time desktop link: ${shareUrl}`);
     lines.push("The page will show an Orkestr desktop challenge. Paste that challenge back here to approve this browser.");
   }
-  if (/\blogged\s*in|login|signed\s*in/i.test(clean(context.message?.text))) {
+  if (/\blogged\s*in|login|signed\s*in/i.test(requestText)) {
     lines.push("The tool result only confirms the desktop action; it does not report login state, so I cannot confirm whether you are logged in.");
-  } else if (/(page contents?|trending|entries|research|summary|summari[sz]e)/i.test(clean(context.message?.text))) {
+  } else if (/(page contents?|trending|entries|research|summary|summari[sz]e|translations?)/i.test(requestText)) {
     lines.push("The tool result only confirms the desktop action; it does not return page contents or research results.");
+    if (codexEscalationAvailable(context.env)) {
+      lines.push("For deeper browser/content work, connect Codex to this chat.");
+    }
   }
   return lines.join("\n");
 }
@@ -1177,6 +1184,21 @@ function formatToolResultFallback(toolResults = [], context = {}) {
     if (formatted) parts.push(formatted);
   }
   return parts.join("\n\n").trim();
+}
+
+function desktopShareUrlText(text = "") {
+  return /https?:\/\/\S*\/desktop-share\//i.test(clean(text));
+}
+
+function shouldPreferDesktopShareFallback(text = "", fallback = "", toolResults = []) {
+  if (!fallback || !desktopShareUrlText(fallback) || desktopShareUrlText(text)) return false;
+  return (Array.isArray(toolResults) ? toolResults : []).some((result) => {
+    if (result.name !== "orkestr_run_skill_action") return false;
+    const output = result.output || {};
+    const args = result.args || {};
+    const action = clean(output.action || args.action);
+    return Boolean(clean(output.shareUrl || output.desktopShare?.url)) && ["open", "start", "open_url"].includes(action);
+  });
 }
 
 function gmailNotificationToolResultsHaveFailure(toolResults = []) {
@@ -1939,6 +1961,7 @@ async function runTenantApiAgentToolResultResponse({
   const fallback = customFallback || toolFallback;
   const repairGmailReadNarrative = gmailReadToolResultNeedsNarrativeRepair(toolResults, message, gmailContext);
   if (fallback && shouldPreferWebFetchFallback(text, fallback, message)) return { response: second, text: fallback };
+  if (fallback && shouldPreferDesktopShareFallback(text, fallback, toolResults)) return { response: second, text: fallback };
   if (fallback && gmailNotificationToolResultsHaveFailure(toolResults) && !repairGmailReadNarrative) return { response: second, text: fallback };
   if (fallback && genericToolFallbackText(text) && !repairGmailReadNarrative) return { response: second, text: fallback };
   if (!repairGmailReadNarrative && !tenantApiAgentTextNeedsRepair(text, message, { pendingActionConfirmation: Boolean(pendingAction), gmailContext, env })) return { response: second, text };
