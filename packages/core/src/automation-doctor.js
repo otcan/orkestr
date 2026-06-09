@@ -1,4 +1,5 @@
 import { listAutomationsForPrincipal } from "./automations.js";
+import { principalForUserId, userPrincipal } from "./principal.js";
 import { listThreadsForPrincipal } from "./threads.js";
 
 function clean(value = "") {
@@ -70,6 +71,13 @@ async function connectorStatus(connector, principal, env, options = {}) {
   return options.connectorStatusProvider(connector, principal, env);
 }
 
+async function principalForAutomationConnector(automation = {}, fallbackPrincipal = {}, env = process.env) {
+  const ownerUserId = clean(automation.ownerUserId || automation.userId);
+  if (!ownerUserId || ownerUserId === clean(fallbackPrincipal?.userId)) return fallbackPrincipal;
+  return await principalForUserId(ownerUserId, env) ||
+    userPrincipal({ id: ownerUserId, role: "user", source: "automation-owner" });
+}
+
 export async function doctorAutomationsForPrincipal(principal, env = process.env, now = new Date(), options = {}) {
   const nowMs = now.getTime();
   const graceMs = Number(options.graceMs || env.ORKESTR_AUTOMATION_DOCTOR_GRACE_MS || 2 * 60 * 1000);
@@ -125,11 +133,13 @@ export async function doctorAutomationsForPrincipal(principal, env = process.env
     }
 
     if (enabled && connector) {
-      if (!connectorStatusByProvider.has(connector)) {
+      const connectorPrincipal = await principalForAutomationConnector(automation, principal, env);
+      const connectorStatusKey = `${connector}:${clean(connectorPrincipal?.userId) || "unknown"}`;
+      if (!connectorStatusByProvider.has(connectorStatusKey)) {
         try {
-          connectorStatusByProvider.set(connector, await connectorStatus(connector, principal, env, options));
+          connectorStatusByProvider.set(connectorStatusKey, await connectorStatus(connector, connectorPrincipal, env, options));
         } catch (error) {
-          connectorStatusByProvider.set(connector, {
+          connectorStatusByProvider.set(connectorStatusKey, {
             ok: false,
             state: "unknown",
             connected: false,
@@ -137,7 +147,7 @@ export async function doctorAutomationsForPrincipal(principal, env = process.env
           });
         }
       }
-      const status = connectorStatusByProvider.get(connector);
+      const status = connectorStatusByProvider.get(connectorStatusKey);
       if (status?.ok === false) {
         issues.push(automationIssue(automation, "warning", "connector_status_unavailable", `${connector} connector status could not be inspected.`, {
           connector,

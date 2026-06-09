@@ -322,6 +322,36 @@ test("gmail oauth token failures are reflected in setup status", async () => {
   assert.equal(gmail.details.error, "Bad code");
 });
 
+test("successful gmail oauth clears previous token error status", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-gmail-error-clear-"));
+  const env = { ORKESTR_HOME: home };
+  await writeConnectorConfig("gmail", {
+    clientId: "client-id",
+    clientSecret: "client-secret",
+    redirectUri: "http://localhost/callback",
+  }, env);
+  await assert.rejects(
+    () =>
+      exchangeGmailCode("bad-code", env, async () =>
+        jsonResponse({ error: "invalid_grant", error_description: "Bad code" }, false, 400),
+      ),
+    /Bad code/,
+  );
+
+  await exchangeGmailCode("good-code", env, async () =>
+    jsonResponse({
+      access_token: "access-ok",
+      refresh_token: "refresh-ok",
+      expires_in: 3600,
+    }),
+  );
+
+  const status = await getSetupStatus({ env, home });
+  const gmail = status.connectors.find((connector) => connector.id === "gmail");
+  assert.equal(gmail.state, "connected");
+  assert.equal(gmail.details.error, undefined);
+});
+
 test("gmail message list uses stored access token", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-gmail-list-"));
   const env = { ORKESTR_HOME: home };
