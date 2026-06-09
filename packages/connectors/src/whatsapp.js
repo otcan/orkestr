@@ -1554,20 +1554,36 @@ async function skipWhatsAppOutboundCandidate({
 
 const mutationNoticeSourceTypes = new Set(["final", "progress", "router_update"]);
 
-function latestDeliveredWhatsAppSourceRevision(outboundDeliveries = [], sourceMessageId = "") {
+function latestDeliveredWhatsAppSourceDelivery(outboundDeliveries = [], sourceMessageId = "") {
   const id = pickString(sourceMessageId);
-  if (!id) return 0;
-  const delivery = [...(outboundDeliveries || [])].reverse().find((item) => {
+  if (!id) return null;
+  return [...(outboundDeliveries || [])].reverse().find((item) => {
     const sourceId = pickString(item?.sourceMessageId, item?.messageId);
     if (sourceId !== id) return false;
     return mutationNoticeSourceTypes.has(pickString(item?.deliveryType).toLowerCase());
-  });
+  }) || null;
+}
+
+function latestDeliveredWhatsAppSourceRevision(outboundDeliveries = [], sourceMessageId = "") {
+  const delivery = latestDeliveredWhatsAppSourceDelivery(outboundDeliveries, sourceMessageId);
   if (!delivery) return 0;
   if (!pickString(delivery.sourceRevision)) return Number.MAX_SAFE_INTEGER;
   return deliverySourceRevision(delivery);
 }
 
-function whatsappMutationNoticeTarget({ message = {}, parent = null, thread = null, kind = "", outboundDeliveries = [] } = {}) {
+function deliveredWhatsAppPayloadText(delivery = null, connectorOutboxJobs = []) {
+  if (!delivery) return "";
+  const ledgerText = pickString(delivery.payloadText, delivery.text);
+  if (ledgerText) return ledgerText;
+  const job = [...(connectorOutboxJobs || [])].reverse().find((item) => connectorOutboxJobDeliveryMatches(item, delivery)) || null;
+  return pickString(job?.payload?.text);
+}
+
+function comparableWhatsAppVisibleText(value = "") {
+  return stripWhatsAppDebugFooter(formatWhatsAppOutboundText(pickString(value))).trim();
+}
+
+function whatsappMutationNoticeTarget({ message = {}, parent = null, thread = null, kind = "", outboundDeliveries = [], connectorOutboxJobs = [] } = {}) {
   if (String(message?.role || "").trim().toLowerCase() !== "assistant") return null;
   if (String(message?.state || "").trim().toLowerCase() !== "completed") return null;
   if (!shouldMirrorWhatsAppReply(message) && !shouldMirrorWhatsAppProgress(message)) return null;
@@ -1578,9 +1594,17 @@ function whatsappMutationNoticeTarget({ message = {}, parent = null, thread = nu
     boundThreadWhatsAppAssistantOrigin({ message, thread, kind });
   if (!whatsappOrigin) return null;
   const sourceRevision = messageSourceRevision(message);
-  const deliveredRevision = latestDeliveredWhatsAppSourceRevision(outboundDeliveries, message.id);
+  const deliveredSource = latestDeliveredWhatsAppSourceDelivery(outboundDeliveries, message.id);
+  const deliveredRevision = deliveredSource
+    ? pickString(deliveredSource.sourceRevision) ? deliverySourceRevision(deliveredSource) : Number.MAX_SAFE_INTEGER
+    : 0;
   const deleted = Boolean(pickString(message.deletedAt));
   if (!deleted && (!deliveredRevision || sourceRevision <= deliveredRevision)) return null;
+  if (!deleted) {
+    const deliveredText = comparableWhatsAppVisibleText(deliveredWhatsAppPayloadText(deliveredSource, connectorOutboxJobs));
+    const currentText = comparableWhatsAppVisibleText(message.text);
+    if (deliveredText && currentText && deliveredText === currentText) return null;
+  }
   const chatId = pickString(message.chatId, parent?.chatId, thread?.binding?.chatId);
   if (!chatId) return null;
   const accountId = kind === "thread"
@@ -1847,6 +1871,7 @@ async function sendClaimedWhatsAppText({
       chatId,
       accountId,
       textKey,
+      payloadText: text,
       deliveredAt: new Date().toISOString(),
       bridgeResponse: payload,
       ...(attachments ? { attachments } : {}),
@@ -2929,6 +2954,7 @@ async function deliverWhatsAppRepliesOnce(env = process.env, fetchImpl = fetch) 
   await reconcileWhatsAppConnectorOutboxFromLedger(state, env).catch((error) =>
     appendEvent({ type: "connector_outbox_reconcile_from_whatsapp_delivery_failed", error: error.message || String(error) }, env).catch(() => null)
   );
+  const connectorOutboxJobs = (await readConnectorOutbox(env).catch(() => ({ jobs: [] }))).jobs || [];
   const deliveredIds = new Set((state.outboundDeliveries || []).map((delivery) => delivery.messageId));
   const deliveredTextKeys = new Set((state.outboundDeliveries || []).map((delivery) => delivery.textKey).filter(Boolean));
   const batchTextKeys = new Set();
@@ -3342,6 +3368,7 @@ async function deliverWhatsAppRepliesOnce(env = process.env, fetchImpl = fetch) 
         thread,
         kind,
         outboundDeliveries,
+        connectorOutboxJobs,
       });
       if (mutationTarget) {
         if (kind === "thread" && !threadAllowsWhatsAppMirroring(thread)) {

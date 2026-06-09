@@ -260,6 +260,63 @@ test("whatsapp mirrors edited assistant replies as revisioned correction notices
   assert.equal(job.brokerAck.ids[0], "wa-sent-correction");
 });
 
+test("whatsapp suppresses edit notices for attachment-only assistant updates", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-connector-outbox-attachment-edit-"));
+  const runtimeEnv = env(home);
+  await writeConnectorConfig("whatsapp", { bridgeMode: "external", bridgeUrl: "http://wa.local" }, runtimeEnv);
+  await createThread({
+    id: "thread-wa-outbox-attachment-edit",
+    ownerUserId: "tenant-a",
+    name: "WA Connector Outbox Attachment Edit Thread",
+    binding: {
+      connector: "whatsapp",
+      chatId: "shared-chat",
+      responderAccountId: "responder",
+      outboundAccountId: "responder",
+      mirrorToWhatsApp: true,
+    },
+  }, runtimeEnv);
+  const parent = await appendThreadMessage("thread-wa-outbox-attachment-edit", {
+    role: "user",
+    source: "whatsapp_inbound",
+    state: "completed",
+    connector: "whatsapp",
+    chatId: "shared-chat",
+    accountId: "responder",
+    text: "status?",
+  }, runtimeEnv);
+  const reply = await appendThreadMessage("thread-wa-outbox-attachment-edit", {
+    role: "assistant",
+    source: "codex-app-server",
+    phase: "final_answer",
+    state: "completed",
+    parentMessageId: parent.id,
+    chatId: "shared-chat",
+    accountId: "responder",
+    text: "Same visible answer.",
+  }, runtimeEnv);
+
+  await deliverWhatsAppReplies(runtimeEnv, async () => response({ ok: true, ids: ["wa-sent-original"] }));
+  await updateThreadMessage("thread-wa-outbox-attachment-edit", reply.id, {
+    attachments: [{
+      name: "summary.csv",
+      path: "/tmp/summary.csv",
+      size: 32,
+    }],
+  }, runtimeEnv);
+
+  const calls = [];
+  const delivery = await deliverWhatsAppReplies(runtimeEnv, async (url, options) => {
+    calls.push({ url, body: JSON.parse(options.body) });
+    return response({ ok: true, ids: ["unexpected-correction"] });
+  });
+  const outbox = await readConnectorOutbox(runtimeEnv);
+
+  assert.equal(delivery.delivered.length, 0);
+  assert.equal(calls.length, 0);
+  assert.equal(outbox.jobs.some((item) => item.sourceMessageId === reply.id && item.deliveryType === "edit_notice"), false);
+});
+
 test("whatsapp does not backfill edit notices for legacy deliveries without source revisions", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-connector-outbox-legacy-edit-"));
   const runtimeEnv = env(home);
