@@ -124,6 +124,78 @@ test("local WhatsApp bridge forwards tenant-routed chats with the scoped tenant 
   assert.equal(calls[1].body.chatName, "Bob tenant WA");
 });
 
+test("local WhatsApp bridge suppresses duplicate tenant inbound forwards by source event", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-tenant-wa-forward-dupe-"));
+  const env = { ORKESTR_HOME: home };
+  await createTenantVm({
+    id: "dupe-tenant",
+    ownerUserId: "dupe",
+    endpoint: { baseUrl: "https://dupe.example.test" },
+  }, env);
+  await configureTenantWhatsAppRoute("dupe-tenant", {
+    chatId: "wa-group-dupe@g.us",
+    accountId: "tenant-wa",
+  }, env);
+  const calls = [];
+
+  const first = await forwardLocalWhatsAppInbound({
+    eventId: "false_wa-group-dupe@g.us_msg-1",
+    chatId: "wa-group-dupe@g.us",
+    accountId: "tenant-wa",
+    from: "wa-contact-dupe@c.us",
+    text: "hello once",
+  }, env, async (url, options = {}) => {
+    calls.push({ url, options });
+    if (String(url) === "https://dupe.example.test/api/health") return response({ ok: true }, true, 200);
+    return response({ ok: true, threadId: "tenant-thread", messageId: "tenant-message" }, true, 202);
+  });
+  const duplicate = await forwardLocalWhatsAppInbound({
+    eventId: "true_wa-group-dupe@g.us_msg-1",
+    chatId: "wa-group-dupe@g.us",
+    accountId: "tenant-wa",
+    from: "wa-contact-dupe@c.us",
+    text: "hello once",
+  }, env, async () => {
+    throw new Error("duplicate source event should not be forwarded again");
+  });
+
+  assert.equal(first.forwarded, true);
+  assert.equal(duplicate.forwarded, false);
+  assert.equal(duplicate.duplicate, true);
+  assert.equal(duplicate.skipped, "duplicate_forwarded_source");
+  assert.equal(duplicate.payload.threadId, "tenant-thread");
+  assert.equal(duplicate.payload.messageId, "tenant-message");
+  assert.equal(calls.length, 2);
+});
+
+test("local WhatsApp bridge skips managed tenant routes for the wrong account", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-tenant-wa-account-mismatch-"));
+  const env = { ORKESTR_HOME: home };
+  await createTenantVm({
+    id: "mismatch-tenant",
+    ownerUserId: "mismatch",
+    endpoint: { baseUrl: "https://mismatch.example.test" },
+  }, env);
+  await configureTenantWhatsAppRoute("mismatch-tenant", {
+    chatId: "wa-group-mismatch@g.us",
+    accountId: "tenant-wa",
+  }, env);
+
+  const skipped = await forwardLocalWhatsAppInbound({
+    eventId: "mismatch-event-1",
+    chatId: "wa-group-mismatch@g.us",
+    accountId: "other-wa",
+    from: "wa-contact-mismatch@c.us",
+    text: "wrong account",
+  }, env, async () => {
+    throw new Error("mismatched managed route account should not be forwarded");
+  });
+
+  assert.equal(skipped.forwarded, false);
+  assert.equal(skipped.skipped, "managed_route_account_mismatch");
+  assert.equal(skipped.payload.reason, "managed_route_account_mismatch");
+});
+
 test("local WhatsApp bridge surfaces target inbound token failures in traces", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-tenant-wa-token-failure-"));
   const env = { ORKESTR_HOME: home, ORKESTR_WHATSAPP_INBOUND_FORWARD_HEALTH_CACHE_MS: "0" };

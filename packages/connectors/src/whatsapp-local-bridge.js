@@ -1,10 +1,10 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { dataPaths, ensureDataDirs } from "../../storage/src/paths.js";
-import { appendEvent, readJson } from "../../storage/src/store.js";
+import { appendEvent, readJson, writeJson } from "../../storage/src/store.js";
 import { requestThreadInputDelivery } from "../../core/src/runtime-leases.js";
 import { processApiAgentThreadInput, threadUsesApiAgent } from "../../core/src/tenant-api-agent.js";
-import { tenantWhatsAppInboundForwardRoute } from "../../core/src/tenant-whatsapp-routing.js";
+import { listTenantWhatsAppRoutes, tenantWhatsAppInboundForwardRoute } from "../../core/src/tenant-whatsapp-routing.js";
 import { attachRoutingFailure, normalizeRoutingFailure, routingFailureFromError } from "../../core/src/routing-failures.js";
 import { recordRouterTraceEvent, routerTraceIdFor, turnIdFor } from "../../core/src/router-traces.js";
 import { getThread, listThreads } from "../../core/src/threads.js";
@@ -24,6 +24,7 @@ const outboundMessageIds = new Set();
 const outboundMessageTextKeys = new Map();
 const outboundAttachmentKeys = new Map();
 const inboundFailureNoticeKeys = new Set();
+const inboundForwardLedgerKeys = new Set();
 const typingSessions = new Map();
 const typingStartPromises = new Map();
 const typingClearRetryTimers = new Map();
@@ -304,6 +305,95 @@ function targetInboundFailureSafeMessage(code = "", status = 0) {
   return "Target instance could not accept the brokered WhatsApp message.";
 }
 
+function canonicalLocalWhatsAppEventId(value = "") {
+  return String(value || "").trim().replace(/^(?:true|false)_/, "");
+}
+
+function inboundForwardSourceKey({ chatId = "", eventId = "" } = {}) {
+  const chat = String(chatId || "").trim();
+  const canonicalEventId = canonicalLocalWhatsAppEventId(eventId);
+  if (!chat || !canonicalEventId) return "";
+  return `${chat}:${canonicalEventId}`;
+}
+
+function inboundForwardLedgerLimit(env = process.env) {
+  const parsed = Number(env.ORKESTR_WHATSAPP_INBOUND_FORWARD_LEDGER_LIMIT || env.WHATSAPP_INBOUND_FORWARD_LEDGER_LIMIT || 1000);
+  return Number.isFinite(parsed) ? Math.max(100, Math.min(5000, Math.floor(parsed))) : 1000;
+}
+
+async function readInboundForwardLedger(env = process.env) {
+  const state = await readJson(dataPaths(env).whatsapp, {
+    inboundEvents: [],
+    outboundDeliveries: [],
+    inboundForwardLedger: [],
+  }).catch(() => ({}));
+  return Array.isArray(state.inboundForwardLedger) ? state.inboundForwardLedger : [];
+}
+
+async function findInboundForwardLedgerEntry({ chatId = "", eventId = "" } = {}, env = process.env) {
+  const key = inboundForwardSourceKey({ chatId, eventId });
+  if (!key) return null;
+  const ledger = await readInboundForwardLedger(env);
+  const entry = ledger.find((item) => String(item?.key || "") === key) || null;
+  if (entry) return entry;
+  if (inboundForwardLedgerKeys.has(key)) return { key, memoryOnly: true };
+  return null;
+}
+
+async function rememberInboundForwardLedgerEntry(input = {}, details = {}, env = process.env) {
+  const chatId = String(input.chatId || input.chat?.id || input.fromChatId || "").trim();
+  const eventId = String(input.eventId || input.id || input.messageId || "").trim();
+  const key = inboundForwardSourceKey({ chatId, eventId });
+  if (!key) return null;
+  inboundForwardLedgerKeys.add(key);
+  const paths = dataPaths(env);
+  const state = await readJson(paths.whatsapp, {
+    inboundEvents: [],
+    outboundDeliveries: [],
+    inboundForwardLedger: [],
+  }).catch(() => ({}));
+  const existing = Array.isArray(state.inboundForwardLedger) ? state.inboundForwardLedger : [];
+  const nextEntry = {
+    key,
+    eventId,
+    canonicalEventId: canonicalLocalWhatsAppEventId(eventId),
+    chatId,
+    accountId: String(input.accountId || "").trim(),
+    target: String(details.target || "").trim(),
+    tenantVmId: details.tenantVmId || null,
+    threadId: details.threadId || null,
+    messageId: details.messageId || null,
+    duplicate: details.duplicate === true,
+    forwardedAt: nowIso(),
+  };
+  const merged = new Map(existing.map((entry) => [String(entry?.key || ""), entry]).filter(([entryKey]) => entryKey));
+  merged.set(key, nextEntry);
+  const limit = inboundForwardLedgerLimit(env);
+  const inboundForwardLedger = [...merged.values()].slice(-limit);
+  await writeJson(paths.whatsapp, {
+    ...state,
+    inboundForwardLedger,
+    updatedAt: nowIso(),
+  });
+  while (inboundForwardLedgerKeys.size > limit) {
+    const [oldest] = inboundForwardLedgerKeys;
+    inboundForwardLedgerKeys.delete(oldest);
+  }
+  return nextEntry;
+}
+
+async function managedTenantRouteAccountMismatch(input = {}, chatId = "", env = process.env) {
+  const accountId = String(input.accountId || "").trim();
+  if (!chatId || !accountId) return null;
+  const routes = await listTenantWhatsAppRoutes(env).catch(() => []);
+  return (Array.isArray(routes) ? routes : []).find((route) =>
+    route?.enabled === true &&
+    String(route.chatId || "").trim() === chatId &&
+    String(route.accountId || "").trim() &&
+    String(route.accountId || "").trim() !== accountId
+  ) || null;
+}
+
 function inboundForwardTraceContext(input = {}, chatId = "") {
   const eventId = String(input.eventId || input.id || input.messageId || "").trim();
   const accountId = String(input.accountId || "").trim();
@@ -330,7 +420,53 @@ export async function forwardLocalWhatsAppInbound(input = {}, env = process.env,
   let targetSource = "";
   let routeMode = "";
   try {
+    const ledgerEntry = await findInboundForwardLedgerEntry({
+      chatId,
+      eventId: String(input.eventId || input.id || input.messageId || ""),
+    }, env);
+    if (ledgerEntry) {
+      await appendEvent({
+        type: "whatsapp_local_inbound_forward_duplicate",
+        chatId,
+        eventId: String(input.eventId || input.id || input.messageId || ""),
+        accountId: String(input.accountId || ""),
+        previousEventId: ledgerEntry.eventId || null,
+        threadId: ledgerEntry.threadId || null,
+        messageId: ledgerEntry.messageId || null,
+        tenantVmId: ledgerEntry.tenantVmId || null,
+      }, env).catch(() => {});
+      return {
+        forwarded: false,
+        duplicate: true,
+        skipped: "duplicate_forwarded_source",
+        payload: {
+          duplicate: true,
+          threadId: ledgerEntry.threadId || null,
+          messageId: ledgerEntry.messageId || null,
+          eventId: ledgerEntry.eventId || null,
+        },
+      };
+    }
     tenantRoute = await tenantWhatsAppInboundForwardRoute(input, env);
+    if (!tenantRoute) {
+      const mismatchRoute = await managedTenantRouteAccountMismatch(input, chatId, env);
+      if (mismatchRoute) {
+        await appendEvent({
+          type: "whatsapp_local_inbound_forward_account_skipped",
+          chatId,
+          eventId: String(input.eventId || input.id || input.messageId || ""),
+          accountId: String(input.accountId || ""),
+          routeAccountId: mismatchRoute.accountId || "",
+          tenantVmId: mismatchRoute.tenantVmId || null,
+          reason: "managed_route_account_mismatch",
+        }, env).catch(() => {});
+        return {
+          forwarded: false,
+          skipped: "managed_route_account_mismatch",
+          payload: { duplicate: true, reason: "managed_route_account_mismatch" },
+        };
+      }
+    }
     target = tenantRoute?.target || localWhatsAppInboundForwardTarget({ chatId }, env);
     if (!target) return null;
     targetSource = tenantRoute ? (tenantRoute.targetSource || "tenant_route") : "legacy_env_forward_map";
@@ -406,6 +542,13 @@ export async function forwardLocalWhatsAppInbound(input = {}, env = process.env,
       threadId: payload.threadId || null,
       agentId: payload.agentId || null,
       messageId: payload.messageId || null,
+    }, env).catch(() => {});
+    await rememberInboundForwardLedgerEntry(input, {
+      target,
+      tenantVmId: tenantRoute?.tenantVmId || null,
+      threadId: payload.threadId || null,
+      messageId: payload.messageId || null,
+      duplicate: payload?.duplicate === true,
     }, env).catch(() => {});
     await recordRouterTraceEvent({
       routerTraceId: trace.routerTraceId,
@@ -1451,6 +1594,7 @@ export async function resetLocalWhatsAppBridgeForTest(env = process.env) {
   outboundMessageTextKeys.clear();
   outboundAttachmentKeys.clear();
   inboundFailureNoticeKeys.clear();
+  inboundForwardLedgerKeys.clear();
   typingStartPromises.clear();
   typingClearRetryTimers.clear();
   runtimeRecoveryHooksForTest = null;
@@ -1733,6 +1877,31 @@ export async function handleInboundMessage(accountId, message, env = process.env
     return { routed, eventId, chatId, from, fromMe: routeFromMe };
   } catch (error) {
     const routingFailure = routingFailureFromError(error);
+    const deliveredElsewhere = await findInboundForwardLedgerEntry({ chatId, eventId }, env).catch(() => null);
+    if (deliveredElsewhere) {
+      await appendEvent({
+        type: "whatsapp_local_inbound_failure_notice_suppressed",
+        accountId,
+        eventId,
+        chatId,
+        reason: "source_event_already_forwarded",
+        threadId: deliveredElsewhere.threadId || null,
+        messageId: deliveredElsewhere.messageId || null,
+      }, env).catch(() => {});
+      return {
+        routed: {
+          duplicate: true,
+          threadId: deliveredElsewhere.threadId || null,
+          messageId: deliveredElsewhere.messageId || null,
+        },
+        eventId,
+        chatId,
+        from,
+        fromMe: routeFromMe,
+        skipped: "source_event_already_forwarded",
+        noticeSent: false,
+      };
+    }
     const notice = await sendInboundRoutingFailureNotice({
       accountId,
       chatId,
