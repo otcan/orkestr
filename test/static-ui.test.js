@@ -370,6 +370,7 @@ test("thread sidebar treats runtime interruption messages as errors", async () =
 
   assert.match(component, /this\.messagePhase\(message\) === "runtime_interrupted"/);
   assert.match(component, /thread\.lastMessagePhase \|\| ""\)\.toLowerCase\(\) === "runtime_interrupted"/);
+  assert.match(component, /!thread\.lastMessageRecovered/);
   assert.match(component, /Codex conversation was interrupted\./);
 });
 
@@ -382,6 +383,7 @@ test("thread reload signature tracks final message identity", async () => {
   assert.match(component, /thread\.lastMessageId \|\| ""/);
   assert.match(component, /thread\.lastMessageRole \|\| ""/);
   assert.match(component, /thread\.lastMessagePhase \|\| ""/);
+  assert.match(api, /lastMessageRecovered\?: boolean/);
   assert.match(api, /lastMessageCursor\?: number \| null/);
   assert.match(api, /lastMessageId\?: string \| null/);
 });

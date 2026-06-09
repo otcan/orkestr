@@ -71,6 +71,11 @@ function messageTimestampMs(message: any): number {
   return Number.isFinite(ms) ? ms : 0;
 }
 
+function timestampMs(value: any): number {
+  const ms = Date.parse(String(value || ""));
+  return Number.isFinite(ms) ? ms : 0;
+}
+
 function compareMessagesByTime(left: { message: any; index: number }, right: { message: any; index: number }): number {
   const leftMs = messageTimestampMs(left.message);
   const rightMs = messageTimestampMs(right.message);
@@ -186,6 +191,24 @@ function latestMessageSummary(messages: any[] = []) {
     lastMessageDeliveryState: String(message?.deliveryState || "").trim().toLowerCase() || null,
     lastMessageError: String(message?.error || "").trim() || null,
   };
+}
+
+function runtimeInterruptionRecovered(thread: any, latestMessage: any): boolean {
+  if (String(latestMessage?.lastMessagePhase || "").trim().toLowerCase() !== "runtime_interrupted") return false;
+  const lastMessageMs = timestampMs(latestMessage?.lastMessageAt);
+  const runtime = thread?.runtime && typeof thread.runtime === "object" ? thread.runtime : {};
+  const metadata = thread?.executor?.metadata && typeof thread.executor.metadata === "object" ? thread.executor.metadata : {};
+  const recoveryMs = Math.max(
+    timestampMs(runtime.recoveredAt),
+    timestampMs(runtime.safeReset?.resetAt),
+    timestampMs(metadata.lastSafeReset?.resetAt),
+  );
+  if (!recoveryMs) return false;
+  if (lastMessageMs && recoveryMs < lastMessageMs) return false;
+  const state = String(thread?.state || runtime.state || "").trim().toLowerCase();
+  const runtimeState = String(runtime.state || "").trim().toLowerCase();
+  if (String(thread?.lastError || "").trim()) return false;
+  return ["ready", "waking", "working"].includes(state) || ["ready", "waking", "working"].includes(runtimeState);
 }
 
 function latestAssistantPlanAvailable(messages: any[] = []): boolean {
@@ -662,6 +685,7 @@ export async function threadRuntimeSummary(thread: any, messages: any[] = [], op
   const inferredWorking = Boolean(status && state === "working");
   const awaitingAckCount = status?.awaitingAckCount ?? 0;
   const latestMessage = latestMessageSummary(orderedMessages);
+  const lastMessageRecovered = runtimeInterruptionRecovered(thread, latestMessage);
   const planAvailable = latestAssistantPlanAvailable(orderedMessages);
   const lastActivityAt = latestMessage.lastMessageAt || thread.updatedAt || thread.createdAt || null;
   const pendingQuestion = planImplementationPendingQuestion(thread, status) || latestPendingQuestion(orderedMessages);
@@ -731,6 +755,7 @@ export async function threadRuntimeSummary(thread: any, messages: any[] = [], op
     publicStatusCode: awaitingAckCount > 0 ? "awaiting_ack" : ready ? "ready" : state,
     hibernated: state === "sleeping",
     ...latestMessage,
+    lastMessageRecovered,
     lastActivityAt,
     threadUpdatedAt: thread.updatedAt || lastActivityAt,
     inferredThreadId: resolvedCodexThreadId || null,
