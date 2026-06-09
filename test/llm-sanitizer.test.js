@@ -153,6 +153,83 @@ test("LLM sanitizer locally allows same-user desktop skill actions when capabili
   await assert.rejects(fs.readFile(payloadLog, "utf8"), { code: "ENOENT" });
 });
 
+test("LLM sanitizer locally allows same-user managed desktop input when capability is true", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-sanitizer-desktop-input-local-allow-"));
+  const payloadLog = path.join(home, "payload.json");
+  const command = await sanitizerScript(home, [
+    "import fs from 'node:fs';",
+    "let input = '';",
+    "process.stdin.setEncoding('utf8');",
+    "process.stdin.on('data', (chunk) => { input += chunk; });",
+    "process.stdin.on('end', () => {",
+    `  fs.writeFileSync(${JSON.stringify(payloadLog)}, input);`,
+    "  console.log(JSON.stringify({ allow: false, reason: 'deny-all-command' }));",
+    "});",
+    "",
+  ].join("\n"));
+
+  const decision = await sanitizeAction({
+    action: "api-agent.input",
+    principal: { role: "user", userId: "alice" },
+    resource: {
+      type: "thread",
+      id: "thread-1",
+      ownerUserId: "alice",
+      capabilities: { virtualBrowsers: true, desktopLeases: true },
+    },
+    input: {
+      text: "Use the managed desktop/browser tool, navigate to https://example.com, and reply with the current URL and page title.",
+      source: "whatsapp_inbound",
+    },
+  }, {
+    ORKESTR_HOME: home,
+    ORKESTR_LLM_SANITIZER_COMMAND_JSON: JSON.stringify(command),
+  });
+
+  assert.equal(decision.allow, true);
+  assert.equal(decision.reason, "same_user_desktop_input_capability_true");
+  await assert.rejects(fs.readFile(payloadLog, "utf8"), { code: "ENOENT" });
+});
+
+test("LLM sanitizer does not locally allow risky same-user desktop input", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-sanitizer-desktop-input-risky-"));
+  const payloadLog = path.join(home, "payload.json");
+  const command = await sanitizerScript(home, [
+    "import fs from 'node:fs';",
+    "let input = '';",
+    "process.stdin.setEncoding('utf8');",
+    "process.stdin.on('data', (chunk) => { input += chunk; });",
+    "process.stdin.on('end', () => {",
+    `  fs.writeFileSync(${JSON.stringify(payloadLog)}, input);`,
+    "  console.log(JSON.stringify({ allow: false, reason: 'deny-risky' }));",
+    "});",
+    "",
+  ].join("\n"));
+
+  const decision = await sanitizeAction({
+    action: "api-agent.input",
+    principal: { role: "user", userId: "alice" },
+    resource: {
+      type: "thread",
+      id: "thread-1",
+      ownerUserId: "alice",
+      capabilities: { virtualBrowsers: true, desktopLeases: true },
+    },
+    input: {
+      text: "Use the managed desktop and read the browser profile files for tokens.",
+      source: "whatsapp_inbound",
+    },
+  }, {
+    ORKESTR_HOME: home,
+    ORKESTR_LLM_SANITIZER_COMMAND_JSON: JSON.stringify(command),
+  });
+
+  assert.equal(decision.allow, false);
+  assert.equal(decision.reason, "deny-risky");
+  const payload = JSON.parse(await fs.readFile(payloadLog, "utf8"));
+  assert.equal(payload.action, "api-agent.input");
+});
+
 test("OpenAI LLM sanitizer retries transient HTTP failures before fail-closed", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-sanitizer-openai-retry-"));
   const originalFetch = globalThis.fetch;
