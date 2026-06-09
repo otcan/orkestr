@@ -3640,8 +3640,18 @@ test("tenant api-agent repairs generic help replies to concrete desktop requests
     executor: { type: "api-agent", metadata: { runtimeKind: "api-agent" } },
     binding: { connector: "whatsapp", chatId: "chat-otcan", outboundAccountId: "wa-1" },
   }, env);
+  await appendThreadMessage("otcantest-generic-desktop-repair", {
+    role: "assistant",
+    source: "api-agent",
+    phase: "final_answer",
+    text: "Yes - your LinkedIn managed desktop is running and available. Current state: running. Actions you can take: open, prepare, start, stop, or restart. I can't confirm whether a LinkedIn account is already logged in without opening the desktop. Would you like me to open it now or restart it?",
+    state: "completed",
+    connector: "whatsapp",
+    chatId: "chat-otcan",
+    accountId: "wa-1",
+  }, env);
   const input = await enqueueThreadInputForPrincipal("otcantest-generic-desktop-repair", {
-    text: "Open the LinkedIn desktop for me.",
+    text: "Open the desk now, and check if it's logged in",
     source: "whatsapp_inbound",
     connector: "whatsapp",
     chatId: "chat-otcan",
@@ -3664,6 +3674,7 @@ test("tenant api-agent repairs generic help replies to concrete desktop requests
       }
       if (calls.length === 2) {
         assert.match(body.instructions, /Response repair/i);
+        assert.equal(body.tool_choice, "required");
         assert.equal(body.tools.some((tool) => tool.name === "orkestr_list_skill_actions"), true);
         assert.equal(body.tools.some((tool) => tool.name === "orkestr_run_skill_action"), true);
         return response({
@@ -3711,6 +3722,7 @@ test("tenant api-agent repairs generic help replies to concrete desktop requests
   assert.equal(calls.length, 3);
   assert.equal(current.state, "completed");
   assert.match(assistant.text, /LinkedIn is open/i);
+  assert.match(assistant.text, /does not report login state/i);
   assert.match(assistant.text, /Open this one-time desktop link: https:\/\/app\.example\.test\/desktop-share\//i);
   assert.doesNotMatch(assistant.text, /I can help in this chat/);
   assert.doesNotMatch(assistant.text, /\/desktop\/linkedin\/vnc\.html/);
@@ -3752,6 +3764,7 @@ test("tenant api-agent repairs generic help replies to concrete timer requests w
       }
       if (calls.length === 2) {
         assert.match(body.instructions, /Response repair/i);
+        assert.equal(body.tool_choice, "required");
         assert.equal(body.tools.some((tool) => tool.name === "orkestr_create_automation"), true);
         assert.equal(body.tools.some((tool) => tool.name === "orkestr_create_timer"), false);
         return response({
@@ -3870,6 +3883,7 @@ test("tenant api-agent confirmation of offered browser action cannot finalize as
       }
       if (calls.length === 2) {
         assert.match(body.instructions, /Action confirmation retry/i);
+        assert.equal(body.tool_choice, "required");
         assert.equal(body.tools.some((tool) => tool.name === "orkestr_list_skill_actions"), true);
         assert.equal(body.tools.some((tool) => tool.name === "orkestr_run_skill_action"), true);
         return response({

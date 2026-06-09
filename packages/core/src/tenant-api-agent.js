@@ -509,6 +509,15 @@ function pendingActionConfirmation(messages = [], message = {}) {
   };
 }
 
+function previousAssistantActionOffer(messages = [], message = {}) {
+  const index = messages.findIndex((item) => item.id === message.id);
+  const previous = (index >= 0 ? messages.slice(0, index) : messages)
+    .slice()
+    .reverse()
+    .find((item) => lower(item.role) === "assistant" && clean(item.text));
+  return previous && assistantOfferedAction(previous.text) ? previous : null;
+}
+
 function userMessageNeedsSubstantiveAnswer(text = "") {
   const value = clean(text);
   if (!value) return false;
@@ -523,6 +532,7 @@ function tenantApiAgentTextNeedsRepair(text = "", message = {}, options = {}) {
   const gmailPrompt = gmailPromptPushInfo(message);
   if (gmailPrompt && (weakTenantApiAgentText(text) || genericTenantApiAgentHelpText(text))) return true;
   if (options.gmailContext && genericTenantApiAgentHelpText(text)) return true;
+  if (options.contextActionOffer && genericTenantApiAgentHelpText(text)) return true;
   if (genericTenantApiAgentHelpText(text) && messageCapabilityIntent(message.text)) return true;
   if (weakTenantApiAgentText(text) && (
     userMessageNeedsSubstantiveAnswer(message.text) ||
@@ -1738,6 +1748,7 @@ async function repairWeakTenantApiAgentResponse({
   env,
   fetchImpl,
   allowTools = false,
+  requireTools = false,
 }) {
   const repairBody = {
     ...baseBody,
@@ -1753,7 +1764,9 @@ async function repairWeakTenantApiAgentResponse({
       "If the latest user message is only a confirmation like yes/ok and no tool result confirms completed work, do not say Done and do not promise future browser or workspace work. Ask for the concrete task or explain the pending limitation.",
       "If tenant tool results are present in the conversation, answer the user's latest request from those results instead of returning a raw tool dump or a generic capability fallback.",
       allowTools
-        ? "If the latest user message asks for an Orkestr action and a matching tool is available, call the tool before finalizing."
+        ? requireTools
+          ? "The previous draft was a generic fallback for a message that needs a capability action. You must call at least one available Orkestr tool before finalizing; inspect skill actions first when the exact action is ambiguous."
+          : "If the latest user message asks for an Orkestr action and a matching tool is available, call the tool before finalizing."
         : "Do not use tools during this repair step.",
       gmailContextInstructions(message, gmailContext),
     ].join("\n"),
@@ -1773,6 +1786,8 @@ async function repairWeakTenantApiAgentResponse({
     delete repairBody.tools;
     delete repairBody.tool_choice;
     delete repairBody.parallel_tool_calls;
+  } else if (requireTools) {
+    repairBody.tool_choice = "required";
   }
   const response = await postOpenAIResponse(repairBody, env, fetchImpl, `orkestr-${thread.id}-${message.id}-repair`);
   await recordResponseUsage({ response, thread, message, callKind: "assistant_repair" }, env);
@@ -1966,6 +1981,7 @@ async function runTenantApiAgentToolResultResponse({
 async function retryPendingActionConfirmationWithTools({ baseBody, inputItems, thread, message, text, principal, pendingAction, env, fetchImpl }) {
   const retryBody = {
     ...baseBody,
+    tool_choice: "required",
     instructions: [
       baseBody.instructions,
       "",
@@ -2011,6 +2027,7 @@ async function runTenantApiAgentResponse({ thread, messages, message, env, fetch
   const model = apiAgentModel(env);
   const principal = tenantPrincipalForThread(thread, env);
   const pendingAction = pendingActionConfirmation(messages, message);
+  const contextActionOffer = pendingAction ? null : previousAssistantActionOffer(messages, message);
   const gmailContext = relevantGmailPromptPushBefore(messages, message);
   const instructions = [
     await buildTenantApiAgentInstructions(thread, messages, env),
@@ -2057,7 +2074,8 @@ async function runTenantApiAgentResponse({ thread, messages, message, env, fetch
         fetchImpl,
       });
     }
-    if (!tenantApiAgentTextNeedsRepair(text, message, { pendingActionConfirmation: Boolean(pendingAction), gmailContext, env })) return { response: first, text };
+    if (!tenantApiAgentTextNeedsRepair(text, message, { pendingActionConfirmation: Boolean(pendingAction), contextActionOffer, gmailContext, env })) return { response: first, text };
+    const forceToolRepair = genericTenantApiAgentHelpText(text) && (Boolean(messageCapabilityIntent(message.text)) || Boolean(contextActionOffer));
     const repaired = await repairWeakTenantApiAgentResponse({
       baseBody,
       inputItems: input,
@@ -2070,10 +2088,11 @@ async function runTenantApiAgentResponse({ thread, messages, message, env, fetch
       env,
       fetchImpl,
       allowTools: true,
+      requireTools: forceToolRepair,
     });
     return {
       response: repaired.response,
-      text: tenantApiAgentTextNeedsRepair(repaired.text, message, { pendingActionConfirmation: Boolean(pendingAction), gmailContext, env })
+      text: tenantApiAgentTextNeedsRepair(repaired.text, message, { pendingActionConfirmation: Boolean(pendingAction), contextActionOffer, gmailContext, env })
         ? fallbackTenantApiAgentRepairAnswer(message, {
           pendingActionConfirmation: Boolean(pendingAction),
           originalText: text,
