@@ -105,9 +105,20 @@ function accountIdForThread(thread = {}) {
 function accountReady(status = {}, accountId = "") {
   const accounts = Array.isArray(status.accounts) ? status.accounts : [];
   const id = clean(accountId);
-  const relevant = id ? accounts.filter((account) => clean(account.accountId || account.id) === id) : accounts;
+  const relevant = id ? accounts.filter((account) => accountMatchesId(account, id)) : accounts;
   if (!relevant.length) return Boolean(status.ready || status.state === "ready");
   return relevant.some((account) => account.ready === true || lower(account.state) === "ready" || lower(account.status) === "ready");
+}
+
+function accountMatchesId(account = {}, id = "") {
+  const candidates = [
+    account.accountId,
+    account.id,
+    account.runtimeAccountId,
+    account.sessionRef,
+    ...(Array.isArray(account.legacyRoleAliases) ? account.legacyRoleAliases : []),
+  ].map(clean).filter(Boolean);
+  return candidates.includes(clean(id)) || candidates.includes(`whatsapp:${clean(id)}`);
 }
 
 function newerAssistant(messages = [], userMessage = {}) {

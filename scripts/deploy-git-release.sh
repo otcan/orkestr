@@ -799,12 +799,9 @@ deploy_guard_before_restart() {
 
 restart_and_verify() {
   configure_service_shutdown_timeout
-  if [ "$no_interrupt" = "1" ] && [ "$deploy_drain_started" = "1" ]; then
-    systemctl stop "${service_name}.service"
-    systemctl start "${service_name}.service"
-  else
-    systemctl restart "${service_name}.service"
-  fi
+  # Keep restart as one systemd transaction. A split stop/start can kill the
+  # deploying Orkestr-managed process before it gets to the start command.
+  systemctl restart "${service_name}.service"
   systemctl is-active --quiet "${service_name}.service"
   health_check "$health_url" 40
   deploy_public_exposure_check

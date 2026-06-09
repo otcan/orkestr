@@ -35,6 +35,31 @@ function downWhatsAppStatus() {
   return { ready: false, state: "disabled" };
 }
 
+test("WhatsApp router doctor treats runtime account aliases as ready", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-router-doctor-alias-"));
+  const env = runtimeEnv(home);
+  const thread = await createWhatsAppThread(env);
+
+  const report = await doctorWhatsAppRouter({
+    thread: thread.id,
+    env,
+    whatsappStatusFn: async () => ({
+      state: "paired",
+      ready: true,
+      accounts: [{
+        id: "905555154214",
+        accountId: "905555154214",
+        runtimeAccountId: "responder",
+        legacyRoleAliases: ["responder"],
+        ready: true,
+        state: "ready",
+      }],
+    }),
+  });
+
+  assert.equal(report.checks.some((check) => check.code === "transport_down"), false);
+});
+
 test("WhatsApp router doctor detects and requeues terminal user input without runtime evidence", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-router-doctor-terminal-"));
   const env = runtimeEnv(home);
