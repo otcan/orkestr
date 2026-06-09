@@ -1,5 +1,6 @@
 import {
   consumeThreadConnectorDeliverySignalCount,
+  deliverPendingThreadInputs,
   drainAllPendingThreadInputs,
   safeResetThreadRuntime,
   syncRuntimeLeases,
@@ -13,7 +14,12 @@ import {
   recoverConfiguredLocalWhatsAppAccounts,
   recoverUnreadLocalWhatsAppMessages,
 } from "../../../packages/connectors/src/whatsapp-local-bridge.js";
+import { appendEvent } from "../../../packages/storage/src/store.js";
 import { reportServerError, reportWhatsAppDeliveryAnomalies } from "./watcher-reporting.js";
+import {
+  recordServerStartup,
+  recoveryCauseForStartup,
+} from "./server-lifecycle.js";
 
 export function runtimeMonitorIntervalMs() {
   const parsed = Number(process.env.ORKESTR_RUNTIME_MONITOR_INTERVAL_MS || 5000);
@@ -52,11 +58,35 @@ export function scheduleStartupRecovery(env = process.env) {
 }
 
 export async function recoverAfterStartup(env = process.env) {
+  const lifecycle = await recordServerStartup(env).catch(() => null);
+  const recoveryCause = recoveryCauseForStartup(lifecycle);
+  await appendEvent({
+    type: "server_startup_recovery_started",
+    startupCause: lifecycle?.startupCause || null,
+    recoveryCause,
+    bootId: lifecycle?.bootId || null,
+    previousBootId: lifecycle?.previous?.bootId || null,
+    previousActiveThreadCount: lifecycle?.previous?.activeThreadCount || lifecycle?.previous?.activeThreads?.length || 0,
+  }, env).catch(() => {});
   if (deployDrainActiveSync(env)) {
-    return { deferred: true, reason: "deploy_draining" };
+    await appendEvent({
+      type: "server_startup_recovery_deferred",
+      reason: "deploy_draining",
+      startupCause: lifecycle?.startupCause || null,
+      recoveryCause,
+    }, env).catch(() => {});
+    return { deferred: true, reason: "deploy_draining", startupCause: lifecycle?.startupCause || null };
   }
   await drainAllPendingThreadInputs(env).catch(() => []);
-  return syncRuntimeAndDeliverWhatsApp(env, { forceWhatsapp: true, recoveryCause: "orkestr_restart" });
+  const result = await syncRuntimeAndDeliverWhatsApp(env, { forceWhatsapp: true, recoveryCause });
+  await appendEvent({
+    type: "server_startup_recovery_completed",
+    startupCause: lifecycle?.startupCause || null,
+    recoveryCause,
+    recoveredAppServerTurns: result?.recoveredAppServerTurns || 0,
+    appended: result?.appended || 0,
+  }, env).catch(() => {});
+  return { ...result, startupCause: lifecycle?.startupCause || null, recoveryCause };
 }
 
 export async function runTimerLoop(
@@ -115,8 +145,10 @@ async function syncRuntimeAndDeliverWhatsApp(env = process.env, options: { force
   const synced = await syncRuntimeLeases(env);
   const recovered = await recoverStaleCodexAppServerTurns(env, {
     noticeCause: options.recoveryCause,
+    recoverySource: options.recoveryCause ? "startup_recovery" : "",
     autoSafeResetThread: (threadId: string, context: Record<string, unknown> = {}) =>
       safeResetThreadRuntime(threadId, { reason: String(context.reason || "stale_turn_auto_safe_reset") }, env),
+    continueThreadInput: (threadId: string) => deliverPendingThreadInputs(threadId, env, { processApiAgent: true }),
   }).catch((error) => {
     reportServerError(env, {
       source: "server.recoverCodexAppServerTurns",

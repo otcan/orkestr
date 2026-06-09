@@ -2141,6 +2141,54 @@ test("Codex app-server recovery marks stale delivered turns ready and appends on
     assert.equal(restartRecovery.appended, 1);
     assert.match(restartNotice.text, /^Orkestr restarted before Codex replied/);
     assert.match(restartNotice.text, /Orkestr restarted after this message reached Codex/);
+
+    const rebootThread = await createThread({
+      id: "app-server-host-reboot-recovery-thread",
+      name: "App Server Host Reboot Recovery Thread",
+      state: "working",
+      executorId: "codex",
+      executor: {
+        type: "codex",
+        transport: "app-server",
+        codexThreadId: "host-reboot-recovery-codex-thread",
+        codexSessionId: "host-reboot-recovery-codex-thread",
+      },
+      runtimeKind: "codex-app-server",
+      codexThreadId: "host-reboot-recovery-codex-thread",
+      codexSessionId: "host-reboot-recovery-codex-thread",
+      runtime: {
+        runtimeKind: "codex-app-server",
+        state: "working",
+        activeTurnId: "host-reboot-turn",
+      },
+    }, env);
+    await appendThreadMessage(rebootThread.id, {
+      role: "user",
+      source: "manual",
+      text: "This was active during host reboot.",
+      state: "completed",
+      deliveryState: "delivered",
+      observedVia: "codex_app_server_turn_start",
+      codexThreadId: "host-reboot-recovery-codex-thread",
+      codexTurnId: "host-reboot-turn",
+    }, env);
+
+    const rebootRecovery = await recoverStaleCodexAppServerTurns(env, { noticeCause: "host_reboot", recoverySource: "startup_recovery" });
+    const rebootMessages = await listThreadMessages(rebootThread.id, env);
+    const rebootNotice = rebootMessages.find((message) => message.source === "orkestr_runtime" && message.phase === "runtime_interrupted");
+    const events = (await fs.readFile(path.join(env.ORKESTR_HOME, "events.jsonl"), "utf8"))
+      .trim()
+      .split("\n")
+      .filter(Boolean)
+      .map((line) => JSON.parse(line));
+    const rebootEvent = events.find((event) => event.type === "codex_app_server_stale_turn_recovered" && event.threadId === rebootThread.id);
+
+    assert.equal(rebootRecovery.recovered, 1);
+    assert.equal(rebootRecovery.appended, 1);
+    assert.match(rebootNotice.text, /^Host rebooted before Codex replied/);
+    assert.match(rebootNotice.text, /The machine restarted after this message reached Codex/);
+    assert.equal(rebootEvent.noticeCause, "host_reboot");
+    assert.equal(rebootEvent.recoverySource, "startup_recovery");
   } finally {
     stopCodexAppServerClients();
   }
@@ -2301,6 +2349,11 @@ test("Codex app-server recovery auto safe-resets repeated stale delivered turns"
     const messages = await listThreadMessages(thread.id, env);
     const notices = messages.filter((message) => message.source === "orkestr_runtime" && message.phase === "runtime_interrupted");
     const recoveryNotice = messages.find((message) => message.source === "orkestr_runtime" && message.phase === "runtime_recovered");
+    const continuation = messages.find((message) =>
+      message.role === "user" &&
+      message.parentMessageId === latestInput.id &&
+      message.codexThreadId === "repeat-stale-new-codex-thread"
+    );
     const events = (await fs.readFile(path.join(env.ORKESTR_HOME, "events.jsonl"), "utf8"))
       .trim()
       .split("\n")
@@ -2312,17 +2365,21 @@ test("Codex app-server recovery auto safe-resets repeated stale delivered turns"
     assert.equal(result.recovered, 1);
     assert.equal(result.appended, 1);
     assert.equal(result.autoSafeReset, 1);
+    assert.equal(result.continued, 1);
     assert.equal(resets.length, 1);
     assert.equal(resets[0].threadId, thread.id);
     assert.equal(resets[0].context.reason, "stale_turn_auto_safe_reset");
     assert.equal(resets[0].context.latestUserMessageId, latestInput.id);
     assert.equal(notices.length, 2);
     assert.equal(notices.at(-1).parentMessageId, latestInput.id);
-    assert.ok(recoveryNotice);
-    assert.equal(recoveryNotice.parentMessageId, latestInput.id);
-    assert.equal(recoveryNotice.connector, "whatsapp");
-    assert.equal(recoveryNotice.chatId, "chat-repeat-stale");
-    assert.match(recoveryNotice.text, /^Codex session recovered/);
+    assert.equal(recoveryNotice, undefined);
+    assert.ok(continuation);
+    assert.equal(continuation.text, latestInput.text);
+    assert.equal(continuation.state, "queued");
+    assert.equal(continuation.visibility, "internal");
+    assert.equal(continuation.connector, "whatsapp");
+    assert.equal(continuation.chatId, "chat-repeat-stale");
+    assert.equal(continuation.accountId, "account-repeat-stale");
     assert.equal(autoEvent.oldCodexThreadId, "repeat-stale-codex-thread");
     assert.equal(autoEvent.newCodexThreadId, "repeat-stale-new-codex-thread");
     assert.equal(recoveryEvent.autoSafeReset, true);

@@ -4,6 +4,10 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { recoverAfterStartup, runtimeMonitorIntervalMs, startServer, startupRecoveryDelayMs } from "../apps/server/src/server.js";
+import {
+  recordServerStartup,
+  recoveryCauseForStartup,
+} from "../apps/server/src/server-lifecycle.ts";
 import { createConnectorRuntimeSyncSignalHandler, whatsAppDeliveryFollowUpDelayMs } from "../packages/connectors/src/whatsapp-sync-signal.js";
 import { startCodexAppServerThread, stopCodexAppServerClients } from "../packages/core/src/codex-app-server.js";
 import { createThread, getThread, listThreadMessages, updateThread } from "../packages/core/src/threads.js";
@@ -194,7 +198,52 @@ test("startup recovery defers while a no-interrupt deploy drain is active", asyn
   }));
 
   const result = await recoverAfterStartup({ ...process.env, ORKESTR_HOME: home });
-  assert.deepEqual(result, { deferred: true, reason: "deploy_draining" });
+  assert.deepEqual(result, { deferred: true, reason: "deploy_draining", startupCause: "cold_start" });
+  const events = (await fs.readFile(path.join(home, "events.jsonl"), "utf8"))
+    .trim()
+    .split("\n")
+    .filter(Boolean)
+    .map((line) => JSON.parse(line));
+  assert.equal(events.some((event) => event.type === "server_startup_recovery_started" && event.startupCause === "cold_start"), true);
+  assert.equal(events.some((event) => event.type === "server_startup_recovery_deferred" && event.reason === "deploy_draining"), true);
+});
+
+test("server lifecycle classifies host reboot with active threads and logs context", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-lifecycle-"));
+  const envBoot1 = { ...process.env, ORKESTR_HOME: home, ORKESTR_BOOT_ID_FOR_TEST: "boot-one" };
+  const envBoot2 = { ...process.env, ORKESTR_HOME: home, ORKESTR_BOOT_ID_FOR_TEST: "boot-two" };
+  await createThread({
+    id: "lifecycle-active-thread",
+    name: "Lifecycle Active Thread",
+    state: "working",
+    runtimeKind: "codex-app-server",
+    runtime: {
+      runtimeKind: "codex-app-server",
+      state: "working",
+      activeTurnId: "turn-active-before-reboot",
+    },
+  }, envBoot1);
+
+  const first = await recordServerStartup(envBoot1);
+  assert.equal(first.startupCause, "cold_start");
+  assert.equal(first.activeThreadCount, 1);
+
+  const second = await recordServerStartup(envBoot2);
+  assert.equal(second.startupCause, "host_reboot_with_active_threads");
+  assert.equal(recoveryCauseForStartup(second), "host_reboot");
+  assert.equal(second.previous?.bootId, "boot-one");
+  assert.equal(second.previous?.activeThreadCount, 1);
+
+  const events = (await fs.readFile(path.join(home, "events.jsonl"), "utf8"))
+    .trim()
+    .split("\n")
+    .filter(Boolean)
+    .map((line) => JSON.parse(line));
+  const rebootEvent = events.find((event) => event.type === "server_startup_recovery_context" && event.startupCause === "host_reboot_with_active_threads");
+  assert.ok(rebootEvent);
+  assert.equal(rebootEvent.previousBootId, "boot-one");
+  assert.equal(rebootEvent.bootId, "boot-two");
+  assert.equal(rebootEvent.previousActiveThreadCount, 1);
 });
 
 test("server exposes health, readiness, version, and agent message APIs", async () => {

@@ -9,7 +9,7 @@
       @if (buildStamp()) {
         <small class="build-stamp">{{ buildStamp() }}</small>
       }
-      <button type="button" (click)="openApp()" [disabled]="busy || !canOpenApp()" [attr.title]="openAppBlockReason() || null">
+      <button type="button" (click)="openApp()" [disabled]="busy">
         {{ closeLabel() }}
       </button>
     </div>
@@ -666,8 +666,8 @@
         <section class="setup-form">
           <h3>{{ activeGoal().label }}</h3>
           <p>
-            Required connections for this capability are listed below. Open Orkestr when the Codex Agent runtime is connected.
-            Optional connectors can still be finished later from Setup.
+            Required connections for this capability are listed below. Open Orkestr now and finish optional connectors later from Setup.
+            Connect Codex Agent only before starting coding-agent work.
           </p>
           <div class="check-list">
             @for (step of requiredConnectorSteps(); track step) {
@@ -721,7 +721,7 @@
         <footer class="setup-nav">
           <button class="secondary" type="button" (click)="previousStep()" [disabled]="busy || isFirstStep()">Back</button>
           <span>{{ stepStateLabel(activeStep) }}</span>
-          <button type="button" (click)="nextStep()" [disabled]="busy || (activeStep === 'profile' && !timezoneDone()) || (isLastStep() && !canOpenApp())" [attr.title]="isLastStep() ? openAppBlockReason() || null : null">
+          <button type="button" (click)="nextStep()" [disabled]="busy || (activeStep === 'profile' && !timezoneDone())">
             {{ isLastStep() ? "Open Orkestr" : "Next" }}
           </button>
         </footer>

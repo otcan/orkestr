@@ -177,68 +177,6 @@ textarea:focus {
   color: #ffb9b9;
 }
 
-.codex-required-shell {
-  display: grid;
-  align-items: center;
-  min-height: 100vh;
-  min-height: 100dvh;
-  background: #070b07;
-  color: #e7f7df;
-  padding: 28px;
-}
-
-.codex-required-panel {
-  display: grid;
-  gap: 16px;
-  width: min(100%, 760px);
-  border: 1px solid rgba(255, 116, 96, 0.34);
-  border-radius: 8px;
-  background: rgba(24, 13, 10, 0.86);
-  padding: clamp(22px, 4vw, 34px);
-}
-
-.codex-required-panel h1,
-.codex-required-panel p {
-  margin: 0;
-}
-
-.codex-required-panel h1 {
-  font-size: clamp(2rem, 4vw, 3.6rem);
-  letter-spacing: 0;
-}
-
-.codex-required-panel p {
-  max-width: 680px;
-  color: #ffd1c4;
-  line-height: 1.55;
-}
-
-.codex-required-status {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  border: 1px solid rgba(255, 116, 96, 0.24);
-  border-radius: 8px;
-  background: rgba(0, 0, 0, 0.24);
-  padding: 12px 14px;
-}
-
-.codex-required-status span {
-  color: #ffd1c4;
-  font-size: 0.82rem;
-  font-weight: 800;
-}
-
-.codex-required-status strong {
-  border-radius: 999px;
-  background: rgba(255, 116, 96, 0.18);
-  color: #ffc8bd;
-  font-size: 0.72rem;
-  padding: 5px 9px;
-  text-transform: uppercase;
-}
-
 .boot-eyebrow {
   color: #66e478;
   font-size: 12px;

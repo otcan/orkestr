@@ -44,6 +44,7 @@ import {
   startupRecoveryDelayMs,
   timerLoopIntervalMs,
 } from "./server-runtime-sync.js";
+import { recordServerShutdown } from "./server-lifecycle.js";
 
 export {
   paneProgressMonitorIntervalMs,
@@ -372,6 +373,7 @@ export async function startServer({ port = 19812, host = "127.0.0.1", openBrowse
   }
 
   return serverHandle(app, timer, runtimeMonitor, paneProgressMonitor, async () => {
+    await recordServerShutdown(process.env.ORKESTR_SHUTDOWN_SIGNAL || "server_close", serverEnv).catch(() => {});
     clearConnectorDeliverySignalHandler();
     connectorRuntimeSyncSignal.close();
     clearDeliveryFailureHandler();
@@ -433,6 +435,7 @@ if (fileURLToPath(import.meta.url) === path.resolve(process.argv[1] || "")) {
       clearTimeout(forceExit);
       process.exit(0);
     }
+    process.env.ORKESTR_SHUTDOWN_SIGNAL = signal;
     handle.close((error) => {
       clearTimeout(forceExit);
       if (error) console.error(error?.stack || error?.message || String(error));
