@@ -61,6 +61,7 @@ test("LLM sanitizer prompts route same-user missing connector requests without g
   assert.match(codexPrompt, /Allow same-user api-agent\.tool\.orkestr_connector_status/i);
   assert.match(codexPrompt, /Allow same-user api-agent\.tool\.orkestr_get_onboarding_profile/i);
   assert.match(codexPrompt, /Allow same-user api-agent\.tool\.orkestr_create_timer/i);
+  assert.match(codexPrompt, /Allow same-user api-agent\.tool\.orkestr_operate_desktop/i);
   assert.match(codexPrompt, /same-user timer management tools/i);
   assert.match(codexPrompt, /This input routing step does not grant data access/i);
   assert.match(codexPrompt, /execute a tool or perform actual data access/i);
@@ -70,9 +71,86 @@ test("LLM sanitizer prompts route same-user missing connector requests without g
   assert.match(openAiPrompt, /Allow same-user api-agent\.tool\.orkestr_connector_status/i);
   assert.match(openAiPrompt, /Allow same-user api-agent\.tool\.orkestr_get_onboarding_profile/i);
   assert.match(openAiPrompt, /Allow same-user api-agent\.tool\.orkestr_create_timer/i);
+  assert.match(openAiPrompt, /Allow same-user api-agent\.tool\.orkestr_list_skill_actions, api-agent\.tool\.orkestr_run_skill_action, and api-agent\.tool\.orkestr_operate_desktop/i);
   assert.match(openAiPrompt, /same-user timer management tools/i);
   assert.match(openAiPrompt, /Do not treat this as permission for connector data access/i);
   assert.match(openAiPrompt, /Deny tool execution or actual connector data access/i);
+});
+
+test("LLM sanitizer locally allows same-user managed desktop tools when capability is true", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-sanitizer-desktop-local-allow-"));
+  const payloadLog = path.join(home, "payload.json");
+  const command = await sanitizerScript(home, [
+    "import fs from 'node:fs';",
+    "let input = '';",
+    "process.stdin.setEncoding('utf8');",
+    "process.stdin.on('data', (chunk) => { input += chunk; });",
+    "process.stdin.on('end', () => {",
+    `  fs.writeFileSync(${JSON.stringify(payloadLog)}, input);`,
+    "  console.log(JSON.stringify({ allow: false, reason: 'deny-all-command' }));",
+    "});",
+    "",
+  ].join("\n"));
+
+  const decision = await sanitizeAction({
+    action: "api-agent.tool.orkestr_operate_desktop",
+    principal: { role: "user", userId: "alice" },
+    resource: {
+      type: "thread",
+      id: "thread-1",
+      ownerUserId: "alice",
+      capabilities: { linkedin: true, desktopLeases: true },
+    },
+    input: {
+      tool: "orkestr_operate_desktop",
+      args: { operation: "navigate", target: "desktop", url: "https://example.com" },
+    },
+  }, {
+    ORKESTR_HOME: home,
+    ORKESTR_LLM_SANITIZER_COMMAND_JSON: JSON.stringify(command),
+  });
+
+  assert.equal(decision.allow, true);
+  assert.equal(decision.reason, "same_user_desktop_tool_capability_true");
+  await assert.rejects(fs.readFile(payloadLog, "utf8"), { code: "ENOENT" });
+});
+
+test("LLM sanitizer locally allows same-user desktop skill actions when capability is true", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-sanitizer-desktop-skill-local-allow-"));
+  const payloadLog = path.join(home, "payload.json");
+  const command = await sanitizerScript(home, [
+    "import fs from 'node:fs';",
+    "let input = '';",
+    "process.stdin.setEncoding('utf8');",
+    "process.stdin.on('data', (chunk) => { input += chunk; });",
+    "process.stdin.on('end', () => {",
+    `  fs.writeFileSync(${JSON.stringify(payloadLog)}, input);`,
+    "  console.log(JSON.stringify({ allow: false, reason: 'deny-all-command' }));",
+    "});",
+    "",
+  ].join("\n"));
+
+  const decision = await sanitizeAction({
+    action: "api-agent.tool.orkestr_run_skill_action",
+    principal: { role: "user", userId: "alice" },
+    resource: {
+      type: "thread",
+      id: "thread-1",
+      ownerUserId: "alice",
+      capabilities: { linkedin: true, desktopLeases: true },
+    },
+    input: {
+      tool: "orkestr_run_skill_action",
+      args: { skillId: "linkedin", action: "open_url", target: "", url: "https://example.com" },
+    },
+  }, {
+    ORKESTR_HOME: home,
+    ORKESTR_LLM_SANITIZER_COMMAND_JSON: JSON.stringify(command),
+  });
+
+  assert.equal(decision.allow, true);
+  assert.equal(decision.reason, "same_user_desktop_skill_action_capability_true");
+  await assert.rejects(fs.readFile(payloadLog, "utf8"), { code: "ENOENT" });
 });
 
 test("OpenAI LLM sanitizer retries transient HTTP failures before fail-closed", async () => {
