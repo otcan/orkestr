@@ -6,6 +6,43 @@ import test from "node:test";
 import { startServer } from "../apps/server/src/server.js";
 import { approvePairingChallenge } from "../packages/core/src/security.js";
 
+const publicRuntimeEnvKeys = [
+  "ORKESTR_PRIMARY_DOMAIN",
+  "ORKESTR_DOMAIN",
+  "ORKESTR_APP_HOST",
+  "ORKESTR_AUTH_HOST",
+  "ORKESTR_PUBLIC_SITE_URL",
+  "ORKESTR_PRIMARY_PUBLIC_URL",
+  "ORKESTR_PUBLIC_URL",
+  "ORKESTR_PUBLIC_APP_URL",
+  "ORKESTR_PUBLIC_AUTH_URL",
+  "ORKESTR_AUTH_ENTRY_URL",
+  "ORKESTR_PAIRING_URL",
+  "ORKESTR_AUTH_URL",
+  "ORKESTR_APP_URL",
+  "ORKESTR_PUBLIC_HTTPS_URL",
+  "ORKESTR_HTTPS_URL",
+  "ORKESTR_TAILSCALE_HTTPS_NAME",
+  "ORKESTR_CONNECT_PUBLIC_URL",
+  "ORKESTR_COOKIE_DOMAIN",
+  "ORKESTR_AUTH_REQUIRED",
+];
+
+function snapshotEnv(keys) {
+  return Object.fromEntries(keys.map((key) => [key, process.env[key]]));
+}
+
+function clearEnv(keys) {
+  for (const key of keys) delete process.env[key];
+}
+
+function restoreEnv(snapshot) {
+  for (const [key, value] of Object.entries(snapshot)) {
+    if (value === undefined) delete process.env[key];
+    else process.env[key] = value;
+  }
+}
+
 function assertAngularShell(html) {
   assert.match(html, /<ork-root(?:\s|>)/);
   assert.ok(html.includes("Loading Orkestr"));
@@ -31,8 +68,10 @@ test("server serves the public site at root and Angular UI at app routes", async
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-static-ui-"));
   const priorHome = process.env.ORKESTR_HOME;
   const priorOverlay = process.env.ORKESTR_OVERLAY_DIR;
+  const priorPublicRuntimeEnv = snapshotEnv(publicRuntimeEnvKeys);
   process.env.ORKESTR_HOME = home;
   delete process.env.ORKESTR_OVERLAY_DIR;
+  clearEnv(publicRuntimeEnvKeys);
   const server = await startServer({ port: 0, host: "127.0.0.1" });
   const { port } = server.address();
   try {
@@ -118,6 +157,7 @@ test("server serves the public site at root and Angular UI at app routes", async
     else process.env.ORKESTR_HOME = priorHome;
     if (priorOverlay === undefined) delete process.env.ORKESTR_OVERLAY_DIR;
     else process.env.ORKESTR_OVERLAY_DIR = priorOverlay;
+    restoreEnv(priorPublicRuntimeEnv);
   }
 });
 
@@ -338,20 +378,22 @@ test("pairing-required flow stays on the Orkestr app host", async () => {
   assert.doesNotMatch(component, /new URL\("\/setup\/pairing", authUrl\)/);
 });
 
-test("pairing return and Codex required shell stay same-origin and reason-aware", async () => {
+test("pairing return stays same-origin and Codex warnings stay non-blocking", async () => {
   const component = await fs.readFile("apps/web/src/app/app.component.ts", "utf8");
   const template = await fs.readFile("apps/web/src/app/app.component.html", "utf8");
 
   assert.match(component, /private authContextIssue\(\)/);
   assert.match(component, /setupStatusRedacted\(\)/);
   assert.match(component, /private codexStatusAuthoritative\(\)/);
-  assert.match(component, /Boolean\(codex\)/);
-  assert.match(component, /this\.codexStatusAuthoritative\(\) && Boolean\(codex\) && !this\.codexAgentReady\(\)/);
+  assert.match(component, /shouldShowCodexRequiredShell\(\): boolean\s*\{\s*return false;/);
+  assert.match(component, /shouldShowCodexNotice\(\): boolean/);
   assert.match(component, /reason === "codex_auth_invalid"/);
   assert.match(component, /Codex sign-in expired/);
+  assert.match(component, /Connect Codex Agent before starting coding agents or sending coding-agent tasks\./);
   assert.match(component, /sameOriginPairingReturnUrl/);
   assert.match(component, /target\.origin === current\.origin/);
   assert.doesNotMatch(component, /allowedOrigins\.includes\(target\.origin\)/);
+  assert.doesNotMatch(template, /codex-required-shell/);
   assert.doesNotMatch(template, /Codex Agent broken/);
 });
 
@@ -732,10 +774,9 @@ test("web shell switches to a constrained non-admin user mode", async () => {
   assert.match(usersController, /@Get\("me"\)/);
   assert.match(component, /currentUser: OrkestrUser \| null = null/);
   assert.match(component, /firstValueFrom\(this\.api\.currentUser\(\)\)/);
-  assert.match(component, /shouldShowCodexRequiredShell\(\): boolean/);
-  assert.match(component, /this\.appReady && this\.isAdminMode\(\) && this\.codexStatusAuthoritative\(\) && Boolean\(codex\) && !this\.codexAgentReady\(\)/);
+  assert.match(component, /shouldShowCodexRequiredShell\(\): boolean\s*\{\s*return false;/);
   assert.match(component, /uiRuntimeReady\(\): boolean/);
-  assert.match(component, /return this\.isUserMode\(\) \|\| !this\.codexStatusAuthoritative\(\) \|\| this\.codexAgentReady\(\)/);
+  assert.match(component, /uiRuntimeReady\(\): boolean\s*\{\s*return true;/);
   assert.match(component, /panelAllowedForCurrentUser\(panel: Panel\): boolean/);
   assert.match(component, /\["chat", "history", "delivery", "timers", "files", "userTimers", "userDesk", "userConnectors"\]\.includes\(panel\)/);
   assert.match(component, /normalizeUserModeView\(\)/);

@@ -11,25 +11,6 @@
     (skip)="leaveOnboarding(false)"
     (complete)="leaveOnboarding(true)"
   ></ork-onboarding-page>
-} @else if (shouldShowCodexRequiredShell()) {
-<main class="codex-required-shell">
-  <section class="codex-required-panel" aria-labelledby="codex-required-title">
-    <p class="eyebrow">Required runtime</p>
-    <h1 id="codex-required-title">{{ codexRuntimeNoticeTitle() }}</h1>
-    <p>{{ codexAgentSummary() }}</p>
-    @if (error) {
-      <div class="notice error">{{ error }}</div>
-    }
-    <div class="codex-required-status">
-      <span>Codex Agent</span>
-      <strong>{{ codexAgentStateLabel() }}</strong>
-    </div>
-    <div class="button-row">
-      <button type="button" (click)="openCodexSetup()">Connect Codex Agent</button>
-      <button class="secondary" type="button" (click)="refresh()" [disabled]="busy">{{ busy ? "Checking" : "Refresh status" }}</button>
-    </div>
-  </section>
-</main>
 } @else if (appReady) {
 <main class="app-shell" [class.sidebar-resizing]="sidebarResizing" [class.user-mode]="isUserMode()" [style.--sidebar-width.px]="sidebarWidth">
   <aside class="sidebar">
