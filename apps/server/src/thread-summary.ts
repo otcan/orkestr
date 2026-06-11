@@ -469,17 +469,7 @@ function threadMessagesRuntimeStatusToken(messages: any[] = []): string {
       message?.deliveryState || null,
       message?.updatedAt || message?.deliveredAt || message?.createdAt || message?.timestamp || null,
     ]);
-  const latest = latestStoredMessage(messages);
-  return JSON.stringify({
-    length: messages.length,
-    latest: latest ? [
-      latest.id || latest.eventId || null,
-      latest?.state || null,
-      latest?.deliveryState || null,
-      latest?.updatedAt || latest?.deliveredAt || latest?.createdAt || latest?.timestamp || null,
-    ] : null,
-    relevant,
-  });
+  return JSON.stringify({ relevant });
 }
 
 function threadRuntimeStatusCacheKey(thread: any, messages: any[] = []): string {
