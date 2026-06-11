@@ -96,7 +96,7 @@ test("CLI lists release instances from the broker API", async () => {
             releaseTrainEnabled: true,
             hasDeployCommand: false,
             baseUrl: "https://central.example.test",
-            currentVersion: { releaseId: "main-abc123" },
+            currentVersion: { releaseId: "main-abc123", releaseLabel: "v0.1.0-alpha.27" },
           },
           {
             id: "vm-tenant",
@@ -506,6 +506,11 @@ test("CLI version prints the active build identity", async () => {
         describe: "main-6fc115b",
         channel: "main",
         releaseId: "main-6fc115b",
+        releaseLabel: "v0.1.0-alpha.12",
+        releaseVersion: "0.1.0-alpha.12",
+        buildId: "main-6fc115b",
+        distributionKind: "oss",
+        deploymentTrack: "oss",
         dirty: false,
       },
     }),
@@ -513,7 +518,7 @@ test("CLI version prints the active build identity", async () => {
 
   assert.equal(code, 0);
   assert.match(stdout.text(), /orkestr-oss 0\.1\.0-alpha\.12/);
-  assert.match(stdout.text(), /Release: main-6fc115b/);
+  assert.match(stdout.text(), /Release: v0\.1\.0-alpha\.12/);
   assert.match(stdout.text(), /Commit: 6fc115b12345/);
 });
 

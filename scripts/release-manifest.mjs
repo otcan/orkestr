@@ -45,15 +45,20 @@ const describe = safeJsonValue(flagValue(argv, "--describe")) || await gitValue(
 const dirty = safeJsonValue(await gitValue(["status", "--porcelain"], cwd)) !== "";
 const generatedAt = new Date().toISOString();
 const shortCommit = commit.slice(0, 12);
+const releaseVersion = safeJsonValue(packageJson.version) || "0.0.0";
 const releaseId = safeJsonValue(flagValue(argv, "--release-id")) || [tag || safeJsonValue(flagValue(argv, "--ref")) || "release", shortCommit]
   .filter(Boolean)
   .join("-");
+const releaseLabel = safeJsonValue(flagValue(argv, "--release-label")) || tag || (releaseVersion ? `v${releaseVersion}` : releaseId);
 
 const manifest = {
   schemaVersion: 1,
   releaseId,
+  releaseLabel,
+  releaseVersion,
+  buildId: releaseId,
   name: packageJson.name || "orkestr",
-  version: packageJson.version || "0.0.0",
+  version: releaseVersion,
   channel: safeJsonValue(flagValue(argv, "--channel")) || "manual",
   generatedAt,
   deployedAt: safeJsonValue(flagValue(argv, "--deployed-at")),

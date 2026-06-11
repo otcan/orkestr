@@ -16,6 +16,9 @@ export interface VersionResponse {
   tag?: string;
   describe?: string;
   releaseId?: string;
+  releaseLabel?: string;
+  releaseVersion?: string;
+  buildId?: string;
   channel?: string;
   distribution?: {
     kind?: string;
@@ -41,6 +44,9 @@ export interface ReleaseInstanceVersion {
   tag?: string;
   describe?: string;
   channel?: string;
+  releaseLabel?: string;
+  releaseVersion?: string;
+  buildId?: string;
   deployedAt?: string;
   dirty?: boolean;
 }

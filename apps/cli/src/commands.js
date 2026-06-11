@@ -1787,7 +1787,7 @@ function formatStatus(payload = {}) {
     : "-";
   const counts = doctor.counts || {};
   const status = payload.ok ? "ok" : "attention";
-  const release = version.releaseId || version.describe || shortCommit(version.commit) || "-";
+  const release = releaseDisplayLabel(version);
   const versionText = [version.name || "orkestr", version.version || ""].filter(Boolean).join(" ");
   const lines = [
     `Orkestr: ${status}`,
@@ -1807,7 +1807,7 @@ function formatStatus(payload = {}) {
 }
 
 function formatVersion(version = {}) {
-  const release = version.releaseId || version.describe || shortCommit(version.commit) || "-";
+  const release = releaseDisplayLabel(version);
   return [
     `Orkestr: ${[version.name || "orkestr", version.version || ""].filter(Boolean).join(" ")}`,
     `Release: ${release}`,
@@ -1822,7 +1822,7 @@ function formatReleaseInstanceTable(instances = []) {
   if (!instances.length) return "No release instances registered.";
   const rows = instances.map((instance) => {
     const version = instance.currentVersion || {};
-    const release = version.releaseId || version.describe || shortCommit(version.commit) || "-";
+    const release = releaseDisplayLabel(version);
     const train = instance.kind === "local-service"
       ? "local"
       : instance.releaseTrainEnabled
@@ -1846,6 +1846,11 @@ function formatReleaseInstanceTable(instances = []) {
 function shortCommit(value) {
   const text = String(value || "");
   return text.length > 12 ? text.slice(0, 12) : text;
+}
+
+function releaseDisplayLabel(version = {}) {
+  const semanticVersion = String(version.releaseVersion || version.version || "").trim();
+  return String(version.releaseLabel || version.tag || (semanticVersion ? `v${semanticVersion}` : "") || version.releaseId || version.describe || shortCommit(version.commit) || "-").trim();
 }
 
 function formatSettings(settings = {}) {

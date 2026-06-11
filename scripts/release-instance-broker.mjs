@@ -30,11 +30,16 @@ function shortCommit(value) {
   return text.length > 12 ? text.slice(0, 12) : text;
 }
 
+function releaseDisplayLabel(version = {}) {
+  const semanticVersion = String(version.releaseVersion || version.version || "").trim();
+  return String(version.releaseLabel || version.tag || (semanticVersion ? `v${semanticVersion}` : "") || version.releaseId || version.describe || shortCommit(version.commit) || "-").trim();
+}
+
 function formatInstanceTable(instances = []) {
   if (!instances.length) return "No release instances registered.";
   const rows = instances.map((instance) => {
     const version = instance.currentVersion || {};
-    const release = version.releaseId || version.describe || shortCommit(version.commit) || "-";
+    const release = releaseDisplayLabel(version);
     const train = instance.kind === "local-service"
       ? "local"
       : instance.releaseTrainEnabled

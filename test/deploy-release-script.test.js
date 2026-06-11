@@ -147,10 +147,35 @@ test("release manifest generator records git and component metadata", async () =
   const manifest = JSON.parse(await fs.readFile(output, "utf8"));
   assert.equal(manifest.schemaVersion, 1);
   assert.equal(manifest.releaseId, "v0.1.7-test");
+  assert.equal(manifest.releaseLabel, "v0.1.7");
+  assert.equal(manifest.buildId, "v0.1.7-test");
   assert.equal(manifest.channel, "production");
   assert.equal(manifest.source.requestedRef, "v0.1.7");
   assert.equal(manifest.git.commit, "f0c1538c3596acae8d7535c29a6c1fe90e53c64a");
   assert.equal(manifest.git.tag, "v0.1.7");
   assert.equal(manifest.components.orkestr.commit, "f0c1538c3596acae8d7535c29a6c1fe90e53c64a");
   assert.equal(manifest.compatibility.stateSchema, 1);
+});
+
+test("release manifest generator gives untagged deploys a semantic display label", async () => {
+  const output = path.join(await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-release-label-")), "release.json");
+  await execFileAsync("node", [
+    "scripts/release-manifest.mjs",
+    "--output",
+    output,
+    "--ref",
+    "main",
+    "--channel",
+    "main",
+    "--commit",
+    "6fc115b123456789000000000000000000000000",
+    "--describe",
+    "v0.1.0-alpha.27-1-g6fc115b",
+  ]);
+
+  const manifest = JSON.parse(await fs.readFile(output, "utf8"));
+  assert.equal(manifest.releaseId, "main-6fc115b12345");
+  assert.equal(manifest.releaseLabel, `v${manifest.version}`);
+  assert.equal(manifest.releaseVersion, manifest.version);
+  assert.equal(manifest.buildId, "main-6fc115b12345");
 });

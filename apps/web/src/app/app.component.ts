@@ -3069,7 +3069,8 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   deploymentVersionLabel(): string {
     const version = this.versionInfo;
     if (!version) return "";
-    const label = String(version.releaseId || version.describe || version.tag || version.version || "").trim();
+    const semanticVersion = String(version.releaseVersion || version.version || "").trim();
+    const label = String(version.releaseLabel || version.tag || (semanticVersion ? `v${semanticVersion}` : "") || version.releaseId || version.describe || "").trim();
     if (!label) return "";
     return label.length > 28 ? `${label.slice(0, 25)}...` : label;
   }
@@ -3096,7 +3097,8 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
     const distribution = version.distribution || {};
     const details = [
       String(version.name || "").trim() ? `Name: ${version.name}` : "",
-      this.deploymentVersionLabel() ? `Release: ${String(version.releaseId || version.describe || version.tag || version.version || "").trim()}` : "",
+      this.deploymentVersionLabel() ? `Release: ${String(version.releaseLabel || version.tag || version.releaseVersion || version.version || "").trim()}` : "",
+      String(version.releaseId || "").trim() ? `Build: ${version.buildId || version.releaseId}` : "",
       String(version.version || "").trim() ? `Version: ${version.version}` : "",
       String(version.commit || "").trim() ? `Commit: ${version.commit}` : "",
       String(version.branch || "").trim() ? `Branch: ${version.branch}` : "",

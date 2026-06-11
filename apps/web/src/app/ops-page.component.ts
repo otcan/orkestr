@@ -941,7 +941,8 @@ export class OpsPageComponent implements OnInit, OnDestroy {
 
   releaseInstanceVersion(instance: ReleaseInstance): string {
     const version = instance.currentVersion || {};
-    return String(version.releaseId || version.describe || version.version || instance.ref || "unknown").trim();
+    const semanticVersion = String(version.releaseVersion || version.version || "").trim();
+    return String(version.releaseLabel || version.tag || (semanticVersion ? `v${semanticVersion}` : "") || version.releaseId || version.describe || instance.ref || "unknown").trim();
   }
 
   releaseInstanceCommit(instance: ReleaseInstance): string {
@@ -952,7 +953,8 @@ export class OpsPageComponent implements OnInit, OnDestroy {
 
   releaseInstanceTargetVersion(instance: ReleaseInstance): string {
     const version = instance.targetVersion || {};
-    return String(version.releaseId || version.describe || version.version || instance.ref || "").trim();
+    const semanticVersion = String(version.releaseVersion || version.version || "").trim();
+    return String(version.releaseLabel || version.tag || (semanticVersion ? `v${semanticVersion}` : "") || version.releaseId || version.describe || instance.ref || "").trim();
   }
 
   releaseInstanceStatusClass(instance: ReleaseInstance): string {
