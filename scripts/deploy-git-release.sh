@@ -833,9 +833,17 @@ positive_integer_env() {
 }
 
 whatsapp_account_ready() {
-  local account payload
+  local account payload cli_bin
   account="$1"
-  payload="$(ORKESTR_API_BASE="${ORKESTR_API_BASE:-http://$host:$port}" orkestr whatsapp accounts status "$account" --json 2>/dev/null)" || return 1
+  cli_bin="${ORKESTR_CLI_BIN:-}"
+  if [ -z "$cli_bin" ] && [ -f "$current_link/apps/cli/bin/orkestr-oss.js" ]; then
+    cli_bin="$current_link/apps/cli/bin/orkestr-oss.js"
+  fi
+  if [ -n "$cli_bin" ]; then
+    payload="$(ORKESTR_API_BASE="${ORKESTR_API_BASE:-http://$host:$port}" "$cli_bin" whatsapp accounts status "$account" --json 2>/dev/null)" || return 1
+  else
+    payload="$(ORKESTR_API_BASE="${ORKESTR_API_BASE:-http://$host:$port}" orkestr whatsapp accounts status "$account" --json 2>/dev/null)" || return 1
+  fi
   printf '%s' "$payload" | node -e '
 const wanted = String(process.argv[1] || "").trim().toLowerCase();
 let data = "";
