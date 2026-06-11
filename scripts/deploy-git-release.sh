@@ -1099,6 +1099,7 @@ install_command() {
       --describe "$target_describe" \
       --channel "$deploy_channel" \
       --release-id "$release_id" \
+      --release-label "${ORKESTR_RELEASE_LABEL:-}" \
       --service "$service_name" \
       --deployed-at "$deployed_at"
     if [ "$run_smoke" = "1" ]; then

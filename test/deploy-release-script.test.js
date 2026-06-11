@@ -115,6 +115,7 @@ test("release deploy script exposes versioned install, status, and rollback", as
   assert.match(script, /tags_only_arg/);
   assert.match(script, /--allow-untagged\|--allow-untagged-releases/);
   assert.match(script, /--require-tagged\|--require-tagged-releases/);
+  assert.match(script, /--release-label "\$\{ORKESTR_RELEASE_LABEL:-\}"/);
   assert.match(script, /if \[ ! -e "\$release_dir\/\.git" \]/);
   assert.match(script, /worktree add --detach/);
   assert.match(script, /LC_ALL=C tr -c 'A-Za-z0-9\._\+-' '-'/);
@@ -177,5 +178,29 @@ test("release manifest generator gives untagged deploys a semantic display label
   assert.equal(manifest.releaseId, "main-6fc115b12345");
   assert.equal(manifest.releaseLabel, `v${manifest.version}`);
   assert.equal(manifest.releaseVersion, manifest.version);
+  assert.equal(manifest.buildId, "main-6fc115b12345");
+});
+
+test("release manifest generator accepts an explicit display label override", async () => {
+  const output = path.join(await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-release-label-override-")), "release.json");
+  await execFileAsync("node", [
+    "scripts/release-manifest.mjs",
+    "--output",
+    output,
+    "--ref",
+    "main",
+    "--channel",
+    "main",
+    "--commit",
+    "6fc115b123456789000000000000000000000000",
+    "--release-id",
+    "main-6fc115b12345",
+    "--release-label",
+    "v0.1.0-alpha.27",
+  ]);
+
+  const manifest = JSON.parse(await fs.readFile(output, "utf8"));
+  assert.equal(manifest.releaseId, "main-6fc115b12345");
+  assert.equal(manifest.releaseLabel, "v0.1.0-alpha.27");
   assert.equal(manifest.buildId, "main-6fc115b12345");
 });
