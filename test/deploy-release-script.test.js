@@ -179,6 +179,8 @@ test("release manifest generator gives untagged deploys a semantic display label
     "main",
     "--commit",
     "6fc115b123456789000000000000000000000000",
+    "--release-id",
+    "main-6fc115b12345",
     "--describe",
     "v0.1.0-alpha.27-1-g6fc115b",
   ]);
