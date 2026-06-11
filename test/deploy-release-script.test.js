@@ -142,6 +142,12 @@ test("release manifest generator records git and component metadata", async () =
     "v0.1.7",
     "--describe",
     "v0.1.7-0-gf0c1538",
+    "--distribution",
+    "managed",
+    "--track",
+    "managed-production",
+    "--repo-role",
+    "managed",
   ]);
 
   const manifest = JSON.parse(await fs.readFile(output, "utf8"));
@@ -149,6 +155,9 @@ test("release manifest generator records git and component metadata", async () =
   assert.equal(manifest.releaseId, "v0.1.7-test");
   assert.equal(manifest.channel, "production");
   assert.equal(manifest.source.requestedRef, "v0.1.7");
+  assert.equal(manifest.distribution.kind, "managed");
+  assert.equal(manifest.distribution.track, "managed-production");
+  assert.equal(manifest.distribution.repoRole, "managed");
   assert.equal(manifest.git.commit, "f0c1538c3596acae8d7535c29a6c1fe90e53c64a");
   assert.equal(manifest.git.tag, "v0.1.7");
   assert.equal(manifest.components.orkestr.commit, "f0c1538c3596acae8d7535c29a6c1fe90e53c64a");

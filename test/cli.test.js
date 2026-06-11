@@ -506,6 +506,8 @@ test("CLI version prints the active build identity", async () => {
         describe: "main-6fc115b",
         channel: "main",
         releaseId: "main-6fc115b",
+        distributionKind: "oss",
+        deploymentTrack: "oss",
         dirty: false,
       },
     }),
@@ -514,6 +516,7 @@ test("CLI version prints the active build identity", async () => {
   assert.equal(code, 0);
   assert.match(stdout.text(), /orkestr-oss 0\.1\.0-alpha\.12/);
   assert.match(stdout.text(), /Release: main-6fc115b/);
+  assert.match(stdout.text(), /Distribution: oss \(oss\)/);
   assert.match(stdout.text(), /Commit: 6fc115b12345/);
 });
 

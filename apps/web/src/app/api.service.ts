@@ -17,6 +17,16 @@ export interface VersionResponse {
   describe?: string;
   releaseId?: string;
   channel?: string;
+  distribution?: {
+    kind?: string;
+    track?: string;
+    repoRole?: string;
+    managed?: boolean;
+    oss?: boolean;
+  };
+  distributionKind?: string;
+  deploymentTrack?: string;
+  repoRole?: string;
   deployedAt?: string;
   generatedAt: string;
 }

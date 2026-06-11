@@ -16,6 +16,8 @@ Start with the [user guide](docs/user-guide.md), then use the quickstart below w
 
 - [User guide](docs/user-guide.md): product concepts, first-time setup, and common workflows.
 - [Framework and deployment](docs/framework-deployment.md): local install, VPS bootstrap, updater, versioned releases, and smoke tests.
+- [OSS vs managed boundary](docs/oss-managed-boundary.md): what belongs in the public repo and what belongs in private deployment code.
+- [Secret manager](docs/secret-manager.md): secure-input handles, scopes, storage, and migration rules.
 - [Security](SECURITY.md): remote-access shape, browser pairing, and secret-handling rules.
 - [Contributing](CONTRIBUTING.md): contributor workflow, automation map, and pull request expectations.
 - [Architecture](docs/architecture.md): package boundaries, runtime boundary, and connector boundary.
@@ -59,6 +61,12 @@ The public V1 is intentionally narrow:
 - optionally connect WhatsApp
 - optionally add timers, Gmail setup, and browser desktops
 - keep private credentials and personal bindings outside the OSS repo through `ORKESTR_OVERLAY_DIR`
+
+The simplified OSS flow is the launch baseline: install, connect Codex, create or
+import a persistent thread, send work from browser or CLI, and use status,
+approval, interruption, and local history. WhatsApp, timers, and generic browser
+desktops are optional extensions. Managed/private operator features belong
+behind the [OSS vs managed boundary](docs/oss-managed-boundary.md).
 
 For invite-only external-user beta onboarding, see
 [`docs/external-user-onboarding.md`](docs/external-user-onboarding.md).

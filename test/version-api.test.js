@@ -15,7 +15,10 @@ const isolatedServerEnvKeys = [
   "ORKESTR_HOME",
   "ORKESTR_CODEX_BIN",
   "ORKESTR_DEPLOY_CHANNEL",
+  "ORKESTR_DEPLOYMENT_TRACK",
+  "ORKESTR_DISTRIBUTION",
   "ORKESTR_RELEASE_MANIFEST",
+  "ORKESTR_REPO_ROLE",
   "ORKESTR_RECOVER_RUNNING_ON_START",
   "ORKESTR_RUNTIME_MONITOR_INTERVAL_MS",
   "ORKESTR_PANE_PROGRESS_INTERVAL_MS",
@@ -69,6 +72,10 @@ test("version endpoint exposes package and build identity", async () => {
     assert.ok("describe" in version);
     assert.ok("channel" in version);
     assert.ok("releaseId" in version);
+    assert.equal(version.distributionKind, "oss");
+    assert.equal(version.deploymentTrack, "oss");
+    assert.equal(version.repoRole, "oss");
+    assert.equal(version.distribution.oss, true);
   } finally {
     await app.close();
     restoreEnv(prior);
@@ -84,6 +91,11 @@ test("version endpoint includes release manifest metadata when present", async (
     releaseId: "v0.1.7-f0c1538",
     channel: "production",
     deployedAt: "2026-05-22T09:00:00.000Z",
+    distribution: {
+      kind: "managed",
+      track: "managed-production",
+      repoRole: "managed",
+    },
     git: {
       commit: "f0c1538c3596acae8d7535c29a6c1fe90e53c64a",
       branch: "main",
@@ -110,6 +122,10 @@ test("version endpoint includes release manifest metadata when present", async (
     assert.equal(version.releaseId, "v0.1.7-f0c1538");
     assert.equal(version.deployedAt, "2026-05-22T09:00:00.000Z");
     assert.equal(version.manifestSchemaVersion, 1);
+    assert.equal(version.distributionKind, "managed");
+    assert.equal(version.deploymentTrack, "managed-production");
+    assert.equal(version.repoRole, "managed");
+    assert.equal(version.distribution.managed, true);
   } finally {
     await app.close();
     restoreEnv(prior);

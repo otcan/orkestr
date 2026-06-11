@@ -116,6 +116,7 @@ async function privacyScan() {
 
 async function main() {
   await assertRequiredFiles();
+  await run("npm", ["run", "oss:boundary-check"], "npm run oss:boundary-check");
   await privacyScan();
   await run("npm", ["run", "check"], "npm run check");
   await run("npm", ["run", "smoke"], "npm run smoke");

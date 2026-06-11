@@ -3409,7 +3409,8 @@ ork-first-thread-wizard.first-thread-host {
   align-content: start;
 }
 
-.action-card button {
+.action-card button,
+.action-card .button {
   justify-self: start;
   min-height: 34px;
 }
