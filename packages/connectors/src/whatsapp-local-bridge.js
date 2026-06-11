@@ -1009,10 +1009,16 @@ function attachmentEchoKey(accountId, chatId, attachment = {}) {
   ].join(":");
 }
 
+function anyAccountAttachmentEchoKey(chatId, attachment = {}) {
+  return attachmentEchoKey("*", chatId, attachment);
+}
+
 function rememberOutboundAttachment(accountId, chatId, attachment = {}, env = process.env) {
   const key = attachmentEchoKey(accountId, chatId, attachment);
   if (!key || key.endsWith("::")) return;
   outboundAttachmentKeys.set(key, Date.now());
+  const chatKey = anyAccountAttachmentEchoKey(chatId, attachment);
+  if (chatKey && !chatKey.endsWith("::")) outboundAttachmentKeys.set(chatKey, Date.now());
   pruneOutboundAttachmentKeys(env);
 }
 
@@ -1022,7 +1028,11 @@ function outboundAttachmentsRecentlySent(accountId, chatId, attachments = [], en
   pruneOutboundAttachmentKeys(env);
   return items.every((attachment) => {
     const key = attachmentEchoKey(accountId, chatId, attachment);
-    return Boolean(key && outboundAttachmentKeys.has(key));
+    const chatKey = anyAccountAttachmentEchoKey(chatId, attachment);
+    return Boolean(
+      (key && outboundAttachmentKeys.has(key)) ||
+      (chatKey && outboundAttachmentKeys.has(chatKey))
+    );
   });
 }
 
@@ -1831,8 +1841,8 @@ export async function handleInboundMessage(accountId, message, env = process.env
   if (outboundTextRecentlySent(accountId, chatId, text, env)) {
     return { skipped: fromMe ? "outbound_echo_text" : "outbound_echo_cross_account_text", eventId, chatId };
   }
-  if (fromMe && outboundAttachmentsRecentlySent(accountId, chatId, inboundAttachmentEchoCandidates(message), env)) {
-    return { skipped: "outbound_echo_attachment", eventId, chatId };
+  if (outboundAttachmentsRecentlySent(accountId, chatId, inboundAttachmentEchoCandidates(message), env)) {
+    return { skipped: fromMe ? "outbound_echo_attachment" : "outbound_echo_cross_account_attachment", eventId, chatId };
   }
   const attachments = await saveInboundMedia(accountId, message, env).catch((error) => {
     void appendEvent({
@@ -1844,8 +1854,8 @@ export async function handleInboundMessage(accountId, message, env = process.env
     return [];
   });
   if (!text && !attachments.length) return { skipped: "empty_message" };
-  if (fromMe && outboundAttachmentsRecentlySent(accountId, chatId, attachments, env)) {
-    return { skipped: "outbound_echo_attachment", eventId, chatId };
+  if (outboundAttachmentsRecentlySent(accountId, chatId, attachments, env)) {
+    return { skipped: fromMe ? "outbound_echo_attachment" : "outbound_echo_cross_account_attachment", eventId, chatId };
   }
   const routedText = text || attachmentSummaryText(attachments);
   const inbound = {
