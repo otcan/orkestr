@@ -332,6 +332,7 @@ textarea:focus {
 .health,
 .status-pill,
 .branch-pill,
+.version-pill,
 .pending {
   border-radius: 999px;
   background: rgba(91, 115, 79, 0.36);
@@ -890,6 +891,38 @@ textarea:focus {
   text-overflow: ellipsis;
   text-transform: none;
   white-space: nowrap;
+}
+
+.version-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: min(430px, 38vw);
+  overflow: hidden;
+  border: 1px solid rgba(113, 218, 126, 0.22);
+  background: rgba(99, 212, 113, 0.12);
+  color: #d8f9cd;
+  text-transform: none;
+  white-space: nowrap;
+}
+
+.version-pill strong,
+.version-pill em {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.version-pill strong {
+  color: #93ff9f;
+  font-style: normal;
+  text-transform: uppercase;
+}
+
+.version-pill em {
+  color: #cfeeff;
+  font-style: normal;
 }
 
 .chat {

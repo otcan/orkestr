@@ -764,7 +764,16 @@ test("web shell exposes runtime surface and Codex mode shortcuts", async () => {
   assert.match(template, /codexModeShortcutTitle\(thread\)/);
   assert.match(template, /Switch to Code mode with \/code/);
   assert.match(template, /Switch to Plan mode with \/plan/);
+  assert.match(template, /class="version-pill"/);
+  assert.match(template, /deploymentVersionLabel\(\)/);
+  assert.match(template, /deploymentTrackLabel\(\)/);
+  assert.match(template, /deploymentVersionTitle\(\)/);
   assert.match(component, /codexModeShortcutTitle\(thread: ThreadSummary \| null\): string/);
+  assert.match(component, /versionInfo: VersionResponse \| null = null/);
+  assert.match(component, /firstValueFrom\(this\.api\.version\(\)\)/);
+  assert.match(component, /deploymentVersionLabel\(\): string/);
+  assert.match(component, /deploymentTrackLabel\(\): string/);
+  assert.match(component, /deploymentVersionTitle\(\): string/);
   assert.match(component, /Shortcuts: \/code, \/plan/);
   assert.match(component, /Runtime: \$\{this\.threadRuntimeModeLabel\(thread\)\}/);
   assert.match(styles, /\.runtime-surface-pill/);
@@ -772,6 +781,7 @@ test("web shell exposes runtime surface and Codex mode shortcuts", async () => {
   assert.match(styles, /\.runtime-surface-pill\.codex-tmux/);
   assert.match(styles, /\.runtime-surface-pill\.attached-terminal/);
   assert.match(styles, /\.runtime-surface-pill\.agent-runtime/);
+  assert.match(styles, /\.version-pill/);
   assert.doesNotMatch(template, /class="runtime-surface-chip"/);
 });
 

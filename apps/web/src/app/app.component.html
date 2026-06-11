@@ -301,6 +301,12 @@
             @if (shouldShowCodexNotice()) {
               <span class="branch-pill">{{ codexRuntimeNoticeTitle() }}</span>
             }
+            @if (deploymentVersionLabel()) {
+              <span class="version-pill" [title]="deploymentVersionTitle()" aria-label="Orkestr deployment version">
+                <strong>{{ deploymentTrackLabel() }}</strong>
+                <em>{{ deploymentVersionLabel() }}</em>
+              </span>
+            }
           </p>
         </div>
         <div class="head-actions cockpit-actions">
