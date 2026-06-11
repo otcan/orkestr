@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import crypto from "node:crypto";
+import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import http from "node:http";
 import path from "node:path";
@@ -23,6 +24,51 @@ function firstValue(...values) {
   return "";
 }
 
+function isLocalUrl(value = "") {
+  try {
+    const parsed = new URL(clean(value));
+    return ["localhost", "127.0.0.1", "::1", "[::1]", "0.0.0.0"].includes(parsed.hostname);
+  } catch {
+    return false;
+  }
+}
+
+function normalizePublicBaseUrl(value = "") {
+  const text = clean(value).replace(/\/+$/, "");
+  if (!text) return "";
+  try {
+    const parsed = new URL(/^https?:\/\//i.test(text) ? text : `https://${text}`);
+    if (!["http:", "https:"].includes(parsed.protocol) || !parsed.hostname) return "";
+    parsed.hash = "";
+    parsed.search = "";
+    parsed.pathname = parsed.pathname.replace(/\/+$/, "") || "/";
+    return parsed.toString().replace(/\/+$/, "");
+  } catch {
+    return "";
+  }
+}
+
+function setupReturnPathFromUrl(value = "") {
+  try {
+    const parsed = new URL(clean(value));
+    return `${parsed.pathname || "/setup"}${parsed.search || ""}` || "/setup";
+  } catch {
+    return "/setup";
+  }
+}
+
+function pairingSetupUrl(baseOrUrl = "", { returnTo = "/setup" } = {}) {
+  const base = normalizePublicBaseUrl(baseOrUrl);
+  if (!base) return "";
+  try {
+    const url = new URL("/setup/pairing", base);
+    url.searchParams.set("return", clean(returnTo) || "/setup");
+    return url.toString();
+  } catch {
+    return "";
+  }
+}
+
 function sha256(value) {
   return crypto.createHash("sha256").update(String(value || "")).digest("hex");
 }
@@ -40,6 +86,23 @@ function demoSetupUrl(env = process.env) {
     env.ORKESTR_DEMO_SETUP_URL,
     env.ORKESTR_SETUP_URL,
     `http://127.0.0.1:${firstValue(env.ORKESTR_PORT, env.PORT, "3000")}/setup`,
+  );
+}
+
+function demoInternalUrl(env = process.env) {
+  return `http://127.0.0.1:${firstValue(env.ORKESTR_PORT, env.PORT, "3000")}`;
+}
+
+function publicSetupUrlOverride(env = process.env) {
+  return firstValue(env.ORKESTR_DEMO_PUBLIC_SETUP_URL, env.ORKESTR_DEMO_SETUP_PUBLIC_URL);
+}
+
+function publicBaseUrlOverride(env = process.env) {
+  return firstValue(
+    env.ORKESTR_DEMO_PUBLIC_BASE_URL,
+    env.ORKESTR_PUBLIC_HTTPS_URL,
+    env.ORKESTR_HTTPS_URL,
+    env.ORKESTR_TAILSCALE_HTTPS_NAME,
   );
 }
 
@@ -86,7 +149,7 @@ export function readyMessage({ setupUrl }) {
   return [
     "Orkestr demo VM is ready.",
     "",
-    "Please open setup through your VM-local browser, SSH tunnel, or port forward and complete Codex login/sign-in:",
+    "Please open this temporary challenge-gated setup link and complete Codex login/sign-in:",
     setupUrl,
     "",
     "Steps:",
@@ -94,8 +157,129 @@ export function readyMessage({ setupUrl }) {
     "2. Keep WhatsApp on Orkestr relay, or switch to your own relay.",
     "3. Start the orkest thread.",
     "",
-    "No public app URL is required for this demo.",
+    "This link is temporary. Orkestr will show a browser-pairing challenge before setup opens.",
   ].join("\n");
+}
+
+function cloudflareTunnelStatePath(env = process.env) {
+  return firstValue(
+    env.ORKESTR_DEMO_CLOUDFLARE_STATE_PATH,
+    path.join(firstValue(env.ORKESTR_HOME, "/data"), "demo-cloudflare-tunnel.json"),
+  );
+}
+
+function processAlive(pid) {
+  const parsed = Number(pid);
+  if (!Number.isInteger(parsed) || parsed <= 0) return false;
+  try {
+    process.kill(parsed, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function cloudflareQuickTunnelUrl(text = "") {
+  return clean(text).match(/https:\/\/[a-z0-9-]+\.trycloudflare\.com\b/i)?.[0] || "";
+}
+
+async function writeCloudflareTunnelState(filePath, payload) {
+  await writeJson(filePath, {
+    schemaVersion: 1,
+    ...payload,
+    updatedAt: new Date().toISOString(),
+  });
+}
+
+async function ensureCloudflareQuickTunnel(env = process.env, options = {}) {
+  if (truthy(env.ORKESTR_DEMO_CLOUDFLARE_DISABLE)) {
+    return { ok: false, reason: "cloudflare_tunnel_disabled" };
+  }
+  const filePath = cloudflareTunnelStatePath(env);
+  const target = firstValue(env.ORKESTR_DEMO_TUNNEL_TARGET_URL, demoInternalUrl(env));
+  const prior = await readJson(filePath, {});
+  if (prior.url && prior.target === target && processAlive(prior.pid)) {
+    return { ok: true, url: clean(prior.url), reused: true, pid: Number(prior.pid), statePath: filePath };
+  }
+
+  const command = firstValue(env.ORKESTR_CLOUDFLARED_BIN, "cloudflared");
+  const timeoutMs = positiveTimeoutMs(env.ORKESTR_DEMO_CLOUDFLARE_TIMEOUT_MS, 45_000);
+  const spawnImpl = options.spawnImpl || spawn;
+  const child = spawnImpl(command, ["tunnel", "--url", target, "--no-autoupdate"], {
+    env,
+    detached: true,
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+
+  if (!child || !child.stdout || !child.stderr) {
+    return { ok: false, reason: "cloudflare_tunnel_spawn_failed", statePath: filePath };
+  }
+
+  return await new Promise((resolve) => {
+    let settled = false;
+    let output = "";
+    const finish = async (result) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      if (result.ok && typeof child.unref === "function") child.unref();
+      if (result.ok && child.stdout?.unref) child.stdout.unref();
+      if (result.ok && child.stderr?.unref) child.stderr.unref();
+      await writeCloudflareTunnelState(filePath, result.ok
+        ? { state: "ready", url: result.url, pid: child.pid || null, target }
+        : { state: "blocked", reason: result.reason, pid: child.pid || null, target });
+      resolve({ ...result, pid: child.pid || null, statePath: filePath });
+    };
+    const onData = (chunk) => {
+      output += String(chunk || "");
+      const url = cloudflareQuickTunnelUrl(output);
+      if (url) void finish({ ok: true, url });
+    };
+    const timer = setTimeout(() => {
+      if (typeof child.kill === "function") child.kill("SIGTERM");
+      void finish({ ok: false, reason: "cloudflare_tunnel_timeout" });
+    }, timeoutMs);
+    child.stdout.on("data", onData);
+    child.stderr.on("data", onData);
+    child.on("error", (error) => void finish({ ok: false, reason: error?.code === "ENOENT" ? "cloudflared_not_found" : "cloudflare_tunnel_error" }));
+    child.on("exit", (code) => {
+      if (!settled) void finish({ ok: false, reason: `cloudflare_tunnel_exited_${code ?? "unknown"}` });
+    });
+  });
+}
+
+export async function demoPublicSetupUrl(env = process.env, options = {}) {
+  const explicitSetup = publicSetupUrlOverride(env);
+  if (explicitSetup) {
+    if (isLocalUrl(explicitSetup) && !truthy(env.ORKESTR_DEMO_ALLOW_LOCAL_SETUP_URL)) {
+      return { ok: false, reason: "public_setup_url_is_local" };
+    }
+    return { ok: true, setupUrl: explicitSetup, source: "public_setup_url" };
+  }
+
+  const legacySetup = demoSetupUrl(env);
+  const publicBase = publicBaseUrlOverride(env);
+  if (publicBase) {
+    const setupUrl = pairingSetupUrl(publicBase, { returnTo: setupReturnPathFromUrl(legacySetup) || "/setup" });
+    if (setupUrl) return { ok: true, setupUrl, source: "public_base_url" };
+  }
+
+  if (legacySetup && !isLocalUrl(legacySetup)) {
+    const setupUrl = pairingSetupUrl(legacySetup, { returnTo: setupReturnPathFromUrl(legacySetup) });
+    if (setupUrl) return { ok: true, setupUrl, source: "external_setup_url" };
+  }
+
+  const tunnel = await ensureCloudflareQuickTunnel(env, options);
+  if (tunnel.ok && tunnel.url) {
+    const setupUrl = pairingSetupUrl(tunnel.url, { returnTo: setupReturnPathFromUrl(legacySetup) || "/setup" });
+    return { ok: true, setupUrl, source: tunnel.reused ? "cloudflare_reused" : "cloudflare_quick_tunnel", tunnel };
+  }
+
+  if (truthy(env.ORKESTR_DEMO_ALLOW_LOCAL_SETUP_URL)) {
+    return { ok: true, setupUrl: legacySetup, source: "local_unsafe_fallback" };
+  }
+
+  return { ok: false, reason: tunnel.reason || "public_setup_url_unavailable", tunnel };
 }
 
 async function readJson(filePath, fallback) {
@@ -146,11 +330,27 @@ export async function runDemoVmReadyNotify(env = process.env, options = {}) {
   if (!phoneNumber) return { ok: true, skipped: true, reason: "missing_demo_whatsapp_number" };
   const chatId = normalizeWhatsAppChatId(phoneNumber);
   if (!chatId) return { ok: false, skipped: true, reason: "invalid_demo_whatsapp_number" };
-
-  const setupUrl = demoSetupUrl(env);
-  const targetKey = sha256(`${chatId}|${setupUrl}`);
   const filePath = statePath(env);
+  const chatHash = sha256(chatId);
   const prior = await readJson(filePath, {});
+  if (!truthy(env.ORKESTR_DEMO_NOTIFY_FORCE) && prior.sent === true && prior.chatHash === chatHash) {
+    return { ok: true, skipped: true, reason: "already_sent", statePath: filePath };
+  }
+
+  const publicSetup = await demoPublicSetupUrl(env, options);
+  if (!publicSetup.ok || !publicSetup.setupUrl) {
+    await writeJson(filePath, {
+      schemaVersion: 1,
+      sent: false,
+      state: "blocked",
+      reason: publicSetup.reason || "public_setup_url_unavailable",
+      tunnel: publicSetup.tunnel || null,
+      updatedAt: new Date().toISOString(),
+    });
+    return { ok: false, skipped: true, reason: publicSetup.reason || "public_setup_url_unavailable", statePath: filePath };
+  }
+  const setupUrl = publicSetup.setupUrl;
+  const targetKey = sha256(`${chatId}|${setupUrl}`);
   if (!truthy(env.ORKESTR_DEMO_NOTIFY_FORCE) && prior.sent === true && prior.targetKey === targetKey) {
     return { ok: true, skipped: true, reason: "already_sent", statePath: filePath };
   }
@@ -171,6 +371,7 @@ export async function runDemoVmReadyNotify(env = process.env, options = {}) {
       schemaVersion: 1,
       sent: false,
       targetKey,
+      chatHash,
       state: "blocked",
       reason: "relay_bridge_url_missing",
       setupUrl,
@@ -209,8 +410,15 @@ export async function runDemoVmReadyNotify(env = process.env, options = {}) {
     schemaVersion: 1,
     sent: true,
     targetKey,
+    chatHash,
     state: "sent",
     setupUrl,
+    setupUrlSource: publicSetup.source || "",
+    tunnel: publicSetup.tunnel ? {
+      url: publicSetup.tunnel.url || "",
+      pid: publicSetup.tunnel.pid || null,
+      reused: publicSetup.tunnel.reused === true,
+    } : null,
     result: {
       ok: result?.ok !== false,
       ids: Array.isArray(result?.ids) ? result.ids : undefined,

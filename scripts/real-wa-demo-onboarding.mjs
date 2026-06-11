@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { requestJson } from "../apps/cli/src/api-client.js";
-import { readyMessage } from "./demo-vm-ready-notify.mjs";
+import { demoPublicSetupUrl, readyMessage } from "./demo-vm-ready-notify.mjs";
 
 function clean(value = "") {
   return String(value || "").trim();
@@ -21,6 +21,15 @@ function parseBool(value, fallback = false) {
   return fallback;
 }
 
+function isLocalUrl(value = "") {
+  try {
+    const parsed = new URL(clean(value));
+    return ["localhost", "127.0.0.1", "::1", "[::1]", "0.0.0.0"].includes(parsed.hostname);
+  } catch {
+    return false;
+  }
+}
+
 function parseArgs(argv = [], env = process.env) {
   const options = {
     execute: false,
@@ -28,11 +37,12 @@ function parseArgs(argv = [], env = process.env) {
     orkestrHome: clean(env.ORKESTR_REAL_WA_E2E_HOME || env.ORKESTR_HOME),
     chatId: clean(env.ORKESTR_REAL_WA_DEMO_CHAT_ID || env.ORKESTR_REAL_WA_E2E_CHAT_ID),
     responderAccountId: clean(env.ORKESTR_REAL_WA_DEMO_RESPONDER_ACCOUNT || env.ORKESTR_REAL_WA_E2E_RESPONDER_ACCOUNT || "responder"),
-    setupUrl: clean(env.ORKESTR_DEMO_SETUP_URL || env.ORKESTR_SETUP_URL || "http://127.0.0.1:3000/setup"),
+    setupUrl: clean(env.ORKESTR_DEMO_PUBLIC_SETUP_URL || env.ORKESTR_DEMO_SETUP_PUBLIC_URL || ""),
     timeoutMs: Number(env.ORKESTR_REAL_WA_E2E_TIMEOUT_MS || 90_000),
     pollMs: Number(env.ORKESTR_REAL_WA_E2E_POLL_MS || 2000),
     artifactPath: clean(env.ORKESTR_REAL_WA_DEMO_ARTIFACT || env.ORKESTR_REAL_WA_E2E_ARTIFACT),
     skipPreflight: parseBool(env.ORKESTR_REAL_WA_DEMO_SKIP_PREFLIGHT, false),
+    allowLocalSetupUrl: parseBool(env.ORKESTR_DEMO_ALLOW_LOCAL_SETUP_URL || env.ORKESTR_REAL_WA_DEMO_ALLOW_LOCAL_SETUP_URL, false),
   };
 
   for (let index = 0; index < argv.length; index += 1) {
@@ -48,6 +58,7 @@ function parseArgs(argv = [], env = process.env) {
     else if (arg === "--poll-ms") options.pollMs = Number(argv[++index] || 0);
     else if (arg === "--artifact") options.artifactPath = clean(argv[++index]);
     else if (arg === "--skip-preflight") options.skipPreflight = true;
+    else if (arg === "--allow-local-setup-url") options.allowLocalSetupUrl = true;
     else throw new Error(`unknown_arg:${arg}`);
   }
 
@@ -55,7 +66,7 @@ function parseArgs(argv = [], env = process.env) {
   if (!options.apiBase) throw new Error("api_base_required");
   if (!options.chatId) throw new Error("chat_id_required");
   if (!options.responderAccountId) throw new Error("responder_account_required");
-  if (!options.setupUrl) throw new Error("setup_url_required");
+  if (options.setupUrl && isLocalUrl(options.setupUrl) && !options.allowLocalSetupUrl) throw new Error("setup_url_must_not_be_local");
   if (!Number.isFinite(options.timeoutMs) || options.timeoutMs < 10_000) throw new Error("invalid_timeout_ms");
   if (!Number.isFinite(options.pollMs) || options.pollMs < 250) throw new Error("invalid_poll_ms");
   return options;
@@ -76,7 +87,8 @@ function usage() {
     "  --api-base URL           Orkestr API base. Default: ORKESTR_API_BASE or localhost.",
     "  --orkestr-home DIR       Lets the API client use local CLI auth for that instance.",
     "  --responder-account ID   WA account that Orkestr uses to send. Default: responder.",
-    "  --setup-url URL          VM-local setup URL included in the prompt.",
+    "  --setup-url URL          Public setup/pairing URL included in the prompt.",
+    "  --allow-local-setup-url  Unsafe test-only override for localhost setup URLs.",
     "  --artifact FILE          Write JSON result details.",
     "",
     "The default run refuses to send real WhatsApp messages without --execute.",
@@ -84,9 +96,11 @@ function usage() {
 }
 
 function apiEnv(options) {
+  const tunnelTarget = clean(process.env.ORKESTR_DEMO_TUNNEL_TARGET_URL) || clean(options.apiBase);
   return {
     ...process.env,
     ...(options.orkestrHome ? { ORKESTR_HOME: options.orkestrHome } : {}),
+    ...(tunnelTarget ? { ORKESTR_DEMO_TUNNEL_TARGET_URL: tunnelTarget } : {}),
   };
 }
 
@@ -199,14 +213,24 @@ async function writeArtifact(options, payload) {
 
 export async function runRealWhatsAppDemoOnboarding(options) {
   const startedAt = Date.now();
-  const text = readyMessage({ setupUrl: options.setupUrl });
+  const setup = options.setupUrl
+    ? { ok: true, setupUrl: options.setupUrl, source: "cli_setup_url" }
+    : await demoPublicSetupUrl(apiEnv(options));
+  if (!setup.ok || !setup.setupUrl) throw new Error(setup.reason || "public_setup_url_unavailable");
+  const text = readyMessage({ setupUrl: setup.setupUrl });
   const result = {
     ok: false,
     flow: "demo-onboarding-codex-login",
     apiBase: options.apiBase,
     chatId: options.chatId,
     responderAccountId: options.responderAccountId,
-    setupUrl: options.setupUrl,
+    setupUrl: setup.setupUrl,
+    setupUrlSource: setup.source || "",
+    tunnel: setup.tunnel ? {
+      url: setup.tunnel.url || "",
+      pid: setup.tunnel.pid || null,
+      reused: setup.tunnel.reused === true,
+    } : null,
     startedAt: new Date(startedAt).toISOString(),
   };
 
@@ -227,8 +251,8 @@ export async function runRealWhatsAppDemoOnboarding(options) {
     result.observedMessageId = clean(observed?.id);
     result.prompt = {
       asksForCodexLogin: /Codex login\/sign-in/i.test(text),
-      includesSetupUrl: text.includes(options.setupUrl),
-      noPublicAppUrlRequired: /No public app URL is required/i.test(text),
+      includesSetupUrl: text.includes(setup.setupUrl),
+      challengeGated: /browser-pairing challenge/i.test(text),
     };
     result.ok = Boolean(result.observedMessageId) && result.prompt.asksForCodexLogin && result.prompt.includesSetupUrl;
     result.finishedAt = new Date().toISOString();

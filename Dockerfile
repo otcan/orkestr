@@ -11,6 +11,7 @@ RUN npm run build
 FROM node:22-bookworm-slim
 
 ARG ORKESTR_CODEX_VERSION=0.134.0
+ARG TARGETARCH=amd64
 ENV NODE_ENV=production \
     ORKESTR_HOME=/data \
     CODEX_HOME=/data/codex \
@@ -28,6 +29,7 @@ RUN apt-get update \
   && apt-get install -y --no-install-recommends \
     ca-certificates \
     chromium \
+    curl \
     dbus-x11 \
     git \
     novnc \
@@ -41,6 +43,14 @@ RUN apt-get update \
     x11vnc \
     xauth \
     xvfb \
+  && case "${TARGETARCH}" in \
+    amd64) cloudflared_arch=amd64 ;; \
+    arm64) cloudflared_arch=arm64 ;; \
+    *) echo "unsupported TARGETARCH for cloudflared: ${TARGETARCH}" >&2; exit 1 ;; \
+  esac \
+  && curl -fsSL -o /usr/local/bin/cloudflared "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-${cloudflared_arch}" \
+  && chmod +x /usr/local/bin/cloudflared \
+  && cloudflared --version \
   && rm -rf /var/lib/apt/lists/*
 
 COPY package.json package-lock.json ./

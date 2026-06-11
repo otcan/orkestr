@@ -34,7 +34,7 @@ spec:
             - name: ORKESTR_WHATSAPP_ACCESS_MODE
               value: "relay"
             {{- with .Values.demo.setupUrl }}
-            - name: ORKESTR_DEMO_SETUP_URL
+            - name: ORKESTR_DEMO_PUBLIC_SETUP_URL
               value: {{ . | quote }}
             {{- end }}
             {{- with .Values.demo.relay.bridgeUrl }}

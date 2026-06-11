@@ -72,12 +72,14 @@ async function staticContractCheck() {
   assert.match(dockerfile, /ORKESTR_HOME=\/data/);
   assert.match(dockerfile, /ORKESTR_PORT=3000/);
   assert.match(dockerfile, /@openai\/codex@\$\{ORKESTR_CODEX_VERSION\}/);
+  assert.match(dockerfile, /cloudflared-linux-\$\{cloudflared_arch\}/);
   assert.match(dockerfile, /ORKESTR_CHROME_NO_SANDBOX=1/);
   assert.match(entrypoint, /CODEX_HOME="\$\{CODEX_HOME:-\$ORKESTR_HOME\/codex\}"/);
   assert.match(entrypoint, /ORKESTR_DEMO_WHATSAPP_NUMBER/);
   assert.match(demoNotify, /runDemoVmReadyNotify/);
   assert.match(demoNotify, /writeConnectorConfig\("whatsapp"/);
-  assert.match(demoNotify, /No public app URL is required/);
+  assert.match(demoNotify, /trycloudflare/);
+  assert.match(demoNotify, /browser-pairing challenge/);
   assert.match(chart, /name: orkestr/);
   assert.match(values, /repository: orkestr\/orkestr/);
   assert.match(values, /ORKESTR_HOME: \/data/);

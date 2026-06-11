@@ -23,6 +23,8 @@ test("OSS demo GO path exposes Docker, Helm, and k3s smoke contracts", async () 
   assert.match(dockerfile, /ORKESTR_HOME=\/data/);
   assert.match(dockerfile, /EXPOSE 3000/);
   assert.match(dockerfile, /@openai\/codex@\$\{ORKESTR_CODEX_VERSION\}/);
+  assert.match(dockerfile, /cloudflared-linux-\$\{cloudflared_arch\}/);
+  assert.match(dockerfile, /cloudflared --version/);
   assert.match(entrypoint, /CODEX_HOME="\$\{CODEX_HOME:-\$ORKESTR_HOME\/codex\}"/);
   assert.match(chart, /name: orkestr/);
   assert.match(values, /ORKESTR_PORT: "3000"/);
@@ -30,7 +32,8 @@ test("OSS demo GO path exposes Docker, Helm, and k3s smoke contracts", async () 
   assert.match(deployment, /mountPath: \/data/);
   assert.match(deployment, /ORKESTR_DEMO_WHATSAPP_NUMBER/);
   assert.match(demoNotify, /writeConnectorConfig\("whatsapp"/);
-  assert.match(demoNotify, /No public app URL is required/);
+  assert.match(demoNotify, /trycloudflare/);
+  assert.match(demoNotify, /browser-pairing challenge/);
   assert.match(script, /ORKESTR_K3S_OSS_DEMO_EXECUTE/);
   assert.match(script, /no-noop-demo-path/);
   assert.match(script, /private-vm-demo-bootstrap/);

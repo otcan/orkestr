@@ -11,7 +11,8 @@ demo:
   enabled: false
   # User-facing demo VM input. Keep this as the only value an evaluator must edit.
   whatsappNumber: ""
-  # Private setup URL to include in the WhatsApp ready message.
+  # Optional public setup/pairing URL override. If empty, the demo notifier starts
+  # a temporary Cloudflare quick tunnel and sends a browser-pairing challenge URL.
   setupUrl: ""
   relay:
     bridgeUrl: ""
