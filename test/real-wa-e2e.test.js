@@ -9,7 +9,7 @@ test("real WhatsApp E2E preflight fails before sending when sender is not ready"
     state: "partial",
     accounts: [
       { accountId: "sender", state: "idle", ready: false, nextAction: "start_or_pair_account" },
-      { accountId: "905555154214", runtimeAccountId: "responder", state: "ready", ready: true, phoneNumber: "+905555154214" },
+      { accountId: "905555154", runtimeAccountId: "responder", state: "ready", ready: true, phoneNumber: "+905555154" },
     ],
   };
 
@@ -37,7 +37,7 @@ test("real WhatsApp E2E manual-send mode requires only the responder account", (
     mode: "local",
     state: "paired",
     accounts: [
-      { accountId: "905555154214", runtimeAccountId: "responder", state: "ready", ready: true, phoneNumber: "+905555154214" },
+      { accountId: "905555154", runtimeAccountId: "responder", state: "ready", ready: true, phoneNumber: "+905555154" },
     ],
   });
 
@@ -56,24 +56,24 @@ test("real WhatsApp E2E manual-send mode discovers authorized sender contacts fr
     mode: "local",
     state: "paired",
     accounts: [
-      { accountId: "905555154214", runtimeAccountId: "responder", state: "ready", ready: true, phoneNumber: "+905555154214" },
+      { accountId: "905555154", runtimeAccountId: "responder", state: "ready", ready: true, phoneNumber: "+905555154" },
     ],
   }, {}, {
     selected: {
       bindingId: "thread:onboarding-admin-orkestr-de:whatsapp",
       threadId: "onboarding-admin-orkestr-de",
-      chatId: "120363425280218500@g.us",
-      displayName: "orkestr.de",
-      authorizedContactIds: ["66378837028965@lid", "+4917632400662", "4917632400662@c.us"],
-      acl: { send: { mode: "users", users: ["+4917632400662", "4917632400662@c.us"] } },
-      responderAccountId: "905555154214",
+      chatId: "fixture-group@g.us",
+      displayName: "orkestr.example.test",
+      authorizedContactIds: ["663788370@lid", "+491763240", "491763240@c.us"],
+      acl: { send: { mode: "users", users: ["+491763240", "491763240@c.us"] } },
+      responderAccountId: "905555154",
       runtimeAccountId: "responder",
     },
   });
 
   assert.equal(preflight.required.sender, null);
-  assert.deepEqual(preflight.required.senderContactIds, ["66378837028965@lid", "+4917632400662", "4917632400662@c.us"]);
-  assert.equal(preflight.observed.binding.displayName, "orkestr.de");
+  assert.deepEqual(preflight.required.senderContactIds, ["663788370@lid", "+491763240", "491763240@c.us"]);
+  assert.equal(preflight.observed.binding.displayName, "orkestr.example.test");
 });
 
 test("real WhatsApp E2E rejects a requested sender contact outside the binding", () => {
@@ -87,12 +87,12 @@ test("real WhatsApp E2E rejects a requested sender contact outside the binding",
       mode: "local",
       state: "paired",
       accounts: [
-        { accountId: "905555154214", runtimeAccountId: "responder", state: "ready", ready: true, phoneNumber: "+905555154214" },
+        { accountId: "905555154", runtimeAccountId: "responder", state: "ready", ready: true, phoneNumber: "+905555154" },
       ],
     }, {}, {
       selected: {
         bindingId: "thread:onboarding-admin-orkestr-de:whatsapp",
-        authorizedContactIds: ["+4917632400662"],
+        authorizedContactIds: ["+491763240"],
       },
     }),
     /sender_contact_not_authorized/,
@@ -101,15 +101,15 @@ test("real WhatsApp E2E rejects a requested sender contact outside the binding",
 
 test("real WhatsApp E2E preflight matches accounts by phone or contact id aliases", () => {
   const preflight = validateWhatsAppPreflight({
-    senderAccountId: "+4917600000000",
-    responderAccountId: "905555154214@c.us",
+    senderAccountId: "+491760000",
+    responderAccountId: "905555154@c.us",
     manualSend: false,
   }, {
     mode: "local",
     state: "paired",
     accounts: [
-      { accountId: "sender-runtime", state: "ready", ready: true, phoneNumber: "+4917600000000", contactId: "4917600000000@c.us" },
-      { accountId: "responder-runtime", state: "ready", ready: true, phoneNumber: "+905555154214", contactId: "905555154214@c.us" },
+      { accountId: "sender-runtime", state: "ready", ready: true, phoneNumber: "+491760000", contactId: "491760000@c.us" },
+      { accountId: "responder-runtime", state: "ready", ready: true, phoneNumber: "+905555154", contactId: "905555154@c.us" },
     ],
   });
 
