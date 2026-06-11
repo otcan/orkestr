@@ -916,14 +916,34 @@ export async function authorizeHttpRequest(request, env = process.env) {
   };
 }
 
-export function sessionCookieHeader(token, env = process.env) {
+function requestCookieHost(value = "") {
+  return String(value || "")
+    .trim()
+    .split(",")[0]
+    .trim()
+    .toLowerCase()
+    .replace(/^https?:\/\//, "")
+    .replace(/\/.*$/, "")
+    .replace(/:\d+$/, "")
+    .replace(/^\.+|\.+$/g, "");
+}
+
+function cookieDomainMatchesHost(cookieDomain = "", host = "") {
+  const domain = requestCookieHost(cookieDomain).replace(/^\./, "");
+  const requestHost = requestCookieHost(host);
+  if (!domain || !requestHost) return Boolean(domain);
+  return requestHost === domain || requestHost.endsWith(`.${domain}`);
+}
+
+export function sessionCookieHeader(token, env = process.env, options = {}) {
   const urls = publicUrlConfig(env);
+  const cookieDomain = cookieDomainMatchesHost(urls.cookieDomain, options.requestHost) ? urls.cookieDomain : "";
   const secure = String(env.ORKESTR_COOKIE_SECURE || "").trim() === "1" ||
     Boolean(String(urls.appUrl || env.ORKESTR_PUBLIC_HTTPS_URL || "").startsWith("https://"));
   return [
     `${cookieName}=${encodeURIComponent(token)}`,
     "Path=/",
-    urls.cookieDomain ? `Domain=${urls.cookieDomain}` : "",
+    cookieDomain ? `Domain=${cookieDomain}` : "",
     "HttpOnly",
     "SameSite=Lax",
     `Max-Age=${Math.floor(sessionTtlMs / 1000)}`,

@@ -127,11 +127,23 @@ test("pairing session cookie can cover app and auth subdomains", () => {
     ORKESTR_PRIMARY_DOMAIN: "orkestr.example.test",
     ORKESTR_APP_HOST: "app.orkestr.example.test",
     ORKESTR_AUTH_HOST: "auth.orkestr.example.test",
-  });
+  }, { requestHost: "app.orkestr.example.test" });
 
   assert.match(header, /Domain=orkestr\.example\.test/);
   assert.match(header, /Secure/);
   assert.match(header, /SameSite=Lax/);
+});
+
+test("pairing session cookie is host-only for temporary Cloudflare hosts", () => {
+  const header = sessionCookieHeader("token-value", {
+    ORKESTR_PRIMARY_DOMAIN: "ops.oguzcanunver.com",
+    ORKESTR_APP_HOST: "orkestr.app.ops.oguzcanunver.com",
+    ORKESTR_AUTH_HOST: "auth.ops.oguzcanunver.com",
+  }, { requestHost: "doctor-interfaces-nearly-consistently.trycloudflare.com" });
+
+  assert.match(header, /orkestr_session=token-value/);
+  assert.doesNotMatch(header, /Domain=/);
+  assert.match(header, /Secure/);
 });
 
 test("setup status exposes public auth policy without secrets", async () => {

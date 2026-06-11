@@ -563,7 +563,9 @@ export class SystemController {
       userAgent: String(request?.headers?.["user-agent"] || ""),
       ip: String(request?.ip || request?.socket?.remoteAddress || request?.connection?.remoteAddress || "").replace(/^::ffff:/, ""),
     } as any);
-    response.setHeader("set-cookie", sessionCookieHeader(result.token));
+    response.setHeader("set-cookie", sessionCookieHeader(result.token, process.env, {
+      requestHost: String(request?.headers?.["x-forwarded-host"] || request?.headers?.host || ""),
+    }));
     return {
       ok: true,
       session: result.session,
