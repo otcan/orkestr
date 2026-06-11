@@ -595,12 +595,16 @@ test("Codex app-server starts threads, delivers input, and imports existing thre
         runtimeKind: "codex-app-server",
         state: "working",
         activeTurnId: "stale-turn",
+        codexStatus: { type: "idle" },
       },
     }, env);
     await enqueueThreadInput(started.thread.id, { text: "ignore stale persisted active turn" }, env);
     const staleDelivery = await deliverCodexAppServerPendingInputs(await getThread(started.thread.id, env), env);
+    const staleThreadAfterDelivery = await getThread(started.thread.id, env);
     const staleMessages = await listThreadMessages(started.thread.id, env);
     assert.equal(staleDelivery.length, 1);
+    assert.equal(staleThreadAfterDelivery.state, "ready");
+    assert.equal(staleThreadAfterDelivery.runtime.activeTurnId, null);
     assert.ok(staleMessages.some((message) => message.source === "codex-app-server" && /Reply to: ignore stale persisted active turn/.test(message.text)));
 
     const whatsappThread = await createThread({

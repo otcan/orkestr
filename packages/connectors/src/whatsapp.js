@@ -45,6 +45,7 @@ import {
 import {
   claimConnectorOutboxJob,
   connectorOutboxTerminalState,
+  connectorOutboxRetryBackoffMs,
   ensureConnectorOutboxJob,
   readConnectorOutbox,
   markConnectorOutboxJob,
@@ -1993,6 +1994,8 @@ async function sendClaimedWhatsAppText({
     }
     return { delivery };
   } catch (error) {
+    const retryBackoffMs = connectorOutboxRetryBackoffMs(env);
+    const retryAt = retryBackoffMs > 0 ? new Date(Date.now() + retryBackoffMs).toISOString() : "";
     if (intent?.intentId) {
       const previousAttempts = Number(intent.attempts || 0) || 0;
       const marked = markWhatsAppOutboundIntent(outboundIntents, intent.intentId, {
@@ -2009,6 +2012,13 @@ async function sendClaimedWhatsAppText({
       state: "failed_retryable",
       failedAt: new Date().toISOString(),
       error: error.message || String(error),
+      claimExpiresAt: retryAt,
+      claimedBy: retryAt ? "retry_backoff" : "",
+      claimedAt: "",
+      metadata: {
+        ...(outboxClaim.job.metadata || {}),
+        retryAfterAt: retryAt,
+      },
     }, env).catch(() => null);
     await markRouterOutboxItem(intent?.outboxId, {
       status: "failed",

@@ -82,6 +82,77 @@ test("whatsapp delivery terminalizes a tenant-scoped connector outbox job", asyn
   assert.equal(job.brokerAck.ids[0], "wa-sent-1");
 });
 
+test("whatsapp connector outbox backs off retryable bridge failures", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-connector-outbox-backoff-"));
+  const runtimeEnv = env(home, { ORKESTR_CONNECTOR_OUTBOX_RETRY_BACKOFF_MS: "60000" });
+  await writeConnectorConfig("whatsapp", { bridgeMode: "external", bridgeUrl: "http://wa.local" }, runtimeEnv);
+  await createThread({
+    id: "thread-wa-outbox-backoff",
+    ownerUserId: "tenant-a",
+    name: "WA Connector Outbox Backoff Thread",
+    binding: {
+      connector: "whatsapp",
+      chatId: "shared-chat",
+      responderAccountId: "responder",
+      outboundAccountId: "responder",
+      mirrorToWhatsApp: true,
+    },
+  }, runtimeEnv);
+  const parent = await appendThreadMessage("thread-wa-outbox-backoff", {
+    role: "user",
+    source: "whatsapp_inbound",
+    state: "completed",
+    connector: "whatsapp",
+    chatId: "shared-chat",
+    accountId: "responder",
+    text: "status?",
+  }, runtimeEnv);
+  const reply = await appendThreadMessage("thread-wa-outbox-backoff", {
+    role: "assistant",
+    source: "codex-app-server",
+    phase: "final_answer",
+    state: "completed",
+    parentMessageId: parent.id,
+    chatId: "shared-chat",
+    accountId: "responder",
+    text: "Retry later.",
+  }, runtimeEnv);
+
+  const calls = [];
+  const first = await deliverWhatsAppReplies(runtimeEnv, async (url) => {
+    calls.push(url.pathname);
+    throw new Error("whatsapp_local_bridge_not_ready");
+  });
+  const outboxAfterFailure = await readConnectorOutbox(runtimeEnv);
+  const failedJob = outboxAfterFailure.jobs.find((item) => item.sourceMessageId === reply.id);
+
+  assert.equal(first.failed.length, 1);
+  assert.equal(calls.filter((item) => item === "/send-text").length, 1);
+  assert.equal(failedJob.state, "failed_retryable");
+  assert.equal(failedJob.claimedBy, "retry_backoff");
+  assert.ok(Date.parse(failedJob.claimExpiresAt) > Date.now());
+  assert.equal(failedJob.metadata.retryAfterAt, failedJob.claimExpiresAt);
+
+  const second = await deliverWhatsAppReplies(runtimeEnv, async (url) => {
+    calls.push(url.pathname);
+    throw new Error("retry backoff should prevent immediate bridge send");
+  });
+
+  assert.equal(calls.filter((item) => item === "/send-text").length, 1);
+  assert.equal(second.delivered.length, 0);
+  assert.equal(second.failed.length, 0);
+  assert.equal(second.skipped.find((item) => item.messageId === reply.id)?.reason, "connector_outbox_retry_scheduled");
+
+  await applyConnectorOutboxJobAction(failedJob.id, "retry", { reason: "operator retry", operator: "tester" }, runtimeEnv);
+  const retry = await deliverWhatsAppReplies(runtimeEnv, async (url) => {
+    calls.push(url.pathname);
+    return response({ ok: true, ids: ["wa-sent-after-backoff"] });
+  });
+
+  assert.equal(calls.filter((item) => item === "/send-text").length, 2);
+  assert.equal(retry.delivered.length, 1);
+});
+
 test("whatsapp connector outbox replay resets intent and delivered ledger", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-connector-outbox-replay-"));
   const runtimeEnv = env(home);

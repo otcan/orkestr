@@ -647,6 +647,7 @@ export async function sendCodexAppServerInput(thread, message, env = process.env
   const persistedActiveTurnId = clean(thread.runtime?.activeTurnId);
   const stateActiveTurnId = clean(Object.prototype.hasOwnProperty.call(clientState, "activeTurnId") ? clientState.activeTurnId : "");
   const statusLooksActive = clean(clientState.status?.type || thread.runtime?.codexStatus?.type).toLowerCase() === "active";
+  const persistedStatusState = appServerStateFromStatus(thread.runtime?.codexStatus || null);
   const threadLooksWorking = [thread.state, thread.runtime?.state].map((value) => clean(value).toLowerCase()).includes("working");
   if (!stateActiveTurnId && !persistedActiveTurnId && (statusLooksActive || threadLooksWorking)) {
     const liveState = await readLiveCodexThreadState(client, id);
@@ -655,17 +656,18 @@ export async function sendCodexAppServerInput(thread, message, env = process.env
       clientStatusState = appServerStateFromStatus(clientState.status);
     }
   }
-  const statusClearsActiveTurn = ["ready", "failed", "unloaded", "awaiting_approval"].includes(clientStatusState);
-  if (statusClearsActiveTurn && clean(clientState.activeTurnId)) {
+  const effectiveStatusState = clientStatusState || persistedStatusState;
+  const statusClearsActiveTurn = ["ready", "failed", "unloaded", "awaiting_approval"].includes(effectiveStatusState);
+  if (statusClearsActiveTurn && (clean(clientState.activeTurnId) || persistedActiveTurnId)) {
     client.threadStates.set(id, { ...clientState, activeTurnId: "", activeTurnObservedAt: null, statusObservedAt: nowIso() });
     await updateThread(thread.id, {
-      state: clientStatusState === "ready" ? "ready" : clientStatusState,
+      state: effectiveStatusState === "ready" ? "ready" : effectiveStatusState,
       runtime: {
         ...(thread.runtime || {}),
         runtimeKind: "codex-app-server",
-        state: clientStatusState === "ready" ? "ready" : clientStatusState,
+        state: effectiveStatusState === "ready" ? "ready" : effectiveStatusState,
         activeTurnId: null,
-        pendingRequest: clientStatusState === "awaiting_approval" ? thread.runtime?.pendingRequest || null : null,
+        pendingRequest: effectiveStatusState === "awaiting_approval" ? thread.runtime?.pendingRequest || null : null,
         codexStatus: clientState.status || thread.runtime?.codexStatus || null,
       },
     }, env).catch(() => {});
@@ -674,8 +676,8 @@ export async function sendCodexAppServerInput(thread, message, env = process.env
       threadId: thread.id,
       codexThreadId: id,
       messageId: pending.id,
-      activeTurnId: clean(clientState.activeTurnId),
-      status: clientStatusState,
+      activeTurnId: clean(clientState.activeTurnId) || persistedActiveTurnId,
+      status: effectiveStatusState,
     }, env).catch(() => {});
   }
   let activeTurnId = statusClearsActiveTurn
