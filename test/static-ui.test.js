@@ -471,6 +471,21 @@ test("ops desktop links are only shown for running desktops", async () => {
   assert.match(component, /activeBrowserActionSlug/);
 });
 
+test("thread STOP control is contextual to the runtime panel", async () => {
+  const template = await fs.readFile("apps/web/src/app/app.component.html", "utf8");
+  const headerStart = template.indexOf('<header class="chat-head">');
+  const headerEnd = template.indexOf("</header>", headerStart);
+  const header = template.slice(headerStart, headerEnd);
+  const runtimeStart = template.indexOf('@if (activePanel === "runtime"');
+  const runtimeEnd = template.indexOf('@if (activePanel === "raw"', runtimeStart);
+  const runtimePanel = template.slice(runtimeStart, runtimeEnd);
+
+  assert.match(template, /openPanel\('runtime'\)/);
+  assert.doesNotMatch(header, />STOP<\/button>/);
+  assert.match(runtimePanel, />STOP<\/button>/);
+  assert.match(runtimePanel, /stopSelected\(\)/);
+});
+
 test("ops users page exposes targeted browser pairing and revocation", async () => {
   const template = await fs.readFile("apps/web/src/app/ops-page.component.html", "utf8");
   const component = await fs.readFile("apps/web/src/app/ops-page.component.ts", "utf8");

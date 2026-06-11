@@ -310,13 +310,6 @@
           </p>
         </div>
         <div class="head-actions cockpit-actions">
-          <button
-            class="danger stop-button"
-            type="button"
-            title="Interrupt the active Codex turn"
-            (click)="stopSelected()"
-            [disabled]="busy || !threadInputReady() || thread.state === 'sleeping' || thread.status === 'sleeping'"
-          >STOP</button>
           @if (isAdminMode()) {
             <button class="system-mini-card" type="button" (click)="openTools('system')" title="Open system resources">
               <span>
@@ -343,6 +336,7 @@
           <button type="button" (click)="openPanel('files')">Files</button>
         }
         @if (isAdminMode()) {
+          <button type="button" [class.active]="activePanel === 'runtime'" (click)="openPanel('runtime')" [disabled]="!codexAgentReady()">Runtime</button>
           <button type="button" [class.active]="activePanel === 'settings'" (click)="openPanel('settings')">Settings</button>
           <button type="button" [class.active]="activePanel === 'workers'" (click)="openPanel('workers')">Parallel Work</button>
         }
@@ -1295,6 +1289,13 @@
             <button class="secondary" type="button" (click)="loadRuntime()" [disabled]="busy">Reload</button>
           </div>
           <div class="runtime-actions">
+            <button
+              class="danger stop-button"
+              type="button"
+              title="Interrupt the active Codex turn"
+              (click)="stopSelected()"
+              [disabled]="busy || !threadInputReady() || thread.state === 'sleeping' || thread.status === 'sleeping'"
+            >STOP</button>
             @if (hasActionablePendingApproval(thread)) {
               <input name="approve-text" [(ngModel)]="approveText" (ngModelChange)="persistThreadTextField('approveText', $event)" placeholder="Approval text" />
               <button type="button" (click)="approveSelected()" [disabled]="busy">Approve</button>

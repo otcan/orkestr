@@ -104,6 +104,20 @@ ORKESTR_WHATSAPP_BRIDGE_ACCOUNT_ID="responder"
 ORKESTR_WHATSAPP_BRIDGE_ALLOWED_PHONE_NUMBERS="+4917600000000,+4917600000001"
 ```
 
+For a parent relay proxy in front of an already-paired Orkestr router, run the
+versioned proxy with the same narrow boundary:
+
+```bash
+ORKESTR_PARENT_WA_BRIDGE_TOKEN="..."
+ORKESTR_PARENT_WA_BRIDGE_UPSTREAM="http://127.0.0.1:18912/api/connectors/whatsapp/bridge"
+ORKESTR_PARENT_WA_BRIDGE_ALLOWED_ACCOUNTS="responder"
+ORKESTR_PARENT_WA_BRIDGE_ALLOWED_PHONE_NUMBERS="+4917600000000"
+node scripts/parent-whatsapp-bridge-proxy.mjs
+```
+
+The proxy rejects unauthenticated requests, wrong accounts, and non-allowlisted
+recipients before forwarding a send request upstream.
+
 With those allowlist variables present, bridge sends using that token are
 checked against the declared account and recipient numbers.
 
