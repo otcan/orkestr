@@ -95,6 +95,18 @@ That token can send only through the declared responder account and only to the
 listed WhatsApp recipient numbers. It is enough for the VM readiness message and
 does not grant bridge read, manage, inbound injection, or arbitrary send access.
 
+If you intentionally keep a single configured bridge token on the router, add a
+recipient allowlist next to it:
+
+```bash
+ORKESTR_WHATSAPP_BRIDGE_TOKEN="..."
+ORKESTR_WHATSAPP_BRIDGE_ACCOUNT_ID="responder"
+ORKESTR_WHATSAPP_BRIDGE_ALLOWED_PHONE_NUMBERS="+4917600000000,+4917600000001"
+```
+
+With those allowlist variables present, bridge sends using that token are
+checked against the declared account and recipient numbers.
+
 ### Helm
 
 ```bash

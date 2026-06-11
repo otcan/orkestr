@@ -568,6 +568,28 @@ test("whatsapp bridge machine token bypasses browser pairing only for bridge rou
   assert.equal(otherRoute.error, "browser_pairing_required");
 });
 
+test("configured WhatsApp bridge token can be constrained to router recipient allowlists", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-security-wa-bridge-allowlist-"));
+  const env = {
+    ORKESTR_HOME: home,
+    ORKESTR_AUTH_REQUIRED: "1",
+    ORKESTR_WHATSAPP_BRIDGE_TOKEN: "wa-bridge-secret",
+    ORKESTR_WHATSAPP_BRIDGE_ACCOUNT_ID: "responder",
+    ORKESTR_WHATSAPP_BRIDGE_ALLOWED_PHONE_NUMBERS: "+49176123456,+49176999999",
+  };
+
+  const allowed = await authorizeHttpRequest({
+    method: "POST",
+    url: "/api/connectors/whatsapp/bridge/send-text",
+    headers: { authorization: "Bearer wa-bridge-secret" },
+  }, env);
+
+  assert.equal(allowed.ok, true);
+  assert.equal(allowed.machineAuth, "whatsapp_bridge");
+  assert.equal(allowed.machineAuthContext.accountId, "responder");
+  assert.deepEqual(allowed.machineAuthContext.allowedPhoneNumbers, ["+49176123456", "+49176999999"]);
+});
+
 test("local CLI machine token bypasses browser pairing for operator routes", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-security-cli-token-"));
   await fs.mkdir(path.join(home, "secrets"), { recursive: true });

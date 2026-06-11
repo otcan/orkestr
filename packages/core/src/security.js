@@ -365,6 +365,30 @@ function publicMachineTokenContext(record, route) {
   };
 }
 
+function configuredBridgeTokenContext(env = process.env, route = {}) {
+  if (route.kind !== "whatsapp_bridge") return null;
+  const allowedChatIds = splitStringList(env.ORKESTR_WHATSAPP_BRIDGE_ALLOWED_CHAT_IDS || env.WHATSAPP_BRIDGE_ALLOWED_CHAT_IDS);
+  const allowedPhoneNumbers = splitStringList(env.ORKESTR_WHATSAPP_BRIDGE_ALLOWED_PHONE_NUMBERS || env.WHATSAPP_BRIDGE_ALLOWED_PHONE_NUMBERS);
+  const allowedRecipients = splitStringList(env.ORKESTR_WHATSAPP_BRIDGE_ALLOWED_RECIPIENTS || env.WHATSAPP_BRIDGE_ALLOWED_RECIPIENTS);
+  const accountId = String(env.ORKESTR_WHATSAPP_BRIDGE_ACCOUNT_ID || env.WHATSAPP_BRIDGE_ACCOUNT_ID || "").trim();
+  if (!allowedChatIds.length && !allowedPhoneNumbers.length && !allowedRecipients.length && !accountId) return null;
+  return {
+    tokenId: "configured-bridge-token",
+    routeKind: route.kind,
+    scopes: route.requiredScopes || ["whatsapp:bridge"],
+    principalKind: "external_instance",
+    principalId: String(env.ORKESTR_WHATSAPP_BRIDGE_PRINCIPAL_ID || env.WHATSAPP_BRIDGE_PRINCIPAL_ID || "configured-bridge-token").trim(),
+    ownerUserId: null,
+    instanceId: String(env.ORKESTR_WHATSAPP_BRIDGE_INSTANCE_ID || env.WHATSAPP_BRIDGE_INSTANCE_ID || "").trim() || null,
+    accountId: accountId || null,
+    bindingId: null,
+    chatId: null,
+    allowedChatIds,
+    allowedPhoneNumbers,
+    allowedRecipients,
+  };
+}
+
 function whatsappInboundTokens(env = process.env) {
   return [
     ...splitSecretList(env.ORKESTR_WHATSAPP_INBOUND_TOKEN),
@@ -477,10 +501,12 @@ async function authorizeWhatsAppMachineRequest(request, env = process.env) {
   }
   const matched = tokens.some((candidate) => timingSafeSecretEqual(token, candidate));
   if (!matched) return whatsappMachineAuthFailure(route, "invalid", 401);
+  const configuredContext = configuredBridgeTokenContext(env, route);
   return {
     ok: true,
     principal: adminPrincipal(defaultAdminUser(env)),
     machineAuth: route.kind,
+    ...(configuredContext ? { machineAuthContext: configuredContext } : {}),
   };
 }
 
