@@ -33,9 +33,20 @@ spec:
               value: {{ .Values.demo.whatsappNumber | quote }}
             - name: ORKESTR_WHATSAPP_ACCESS_MODE
               value: "relay"
+            {{- with .Values.demo.publicBaseUrl }}
+            - name: ORKESTR_DEMO_PUBLIC_BASE_URL
+              value: {{ . | quote }}
+            {{- end }}
             {{- with .Values.demo.setupUrl }}
             - name: ORKESTR_DEMO_PUBLIC_SETUP_URL
               value: {{ . | quote }}
+            {{- end }}
+            {{- if .Values.demo.cloudflareFallback }}
+            - name: ORKESTR_DEMO_CLOUDFLARE_FALLBACK
+              value: "1"
+            {{- else }}
+            - name: ORKESTR_DEMO_CLOUDFLARE_DISABLE
+              value: "1"
             {{- end }}
             {{- with .Values.demo.relay.bridgeUrl }}
             - name: ORKESTR_DEMO_WHATSAPP_RELAY_URL

@@ -11,9 +11,15 @@ demo:
   enabled: false
   # User-facing demo VM input. Keep this as the only value an evaluator must edit.
   whatsappNumber: ""
-  # Optional public setup/pairing URL override. If empty, the demo notifier starts
-  # a temporary Cloudflare quick tunnel and sends a browser-pairing challenge URL.
+  # Preferred stable public base URL for the VM, for example https://demo.orkestr.de.
+  # Configure DNS/TLS/reverse proxy outside the chart. If set, the notifier sends
+  # <publicBaseUrl>/setup/pairing?return=%2Fsetup.
+  publicBaseUrl: ""
+  # Optional full public setup/pairing URL override. This wins over publicBaseUrl.
   setupUrl: ""
+  # Last-resort fallback for local demos only. Production/demo-review runs should
+  # use publicBaseUrl or setupUrl because random quick tunnels can fail on mobile DNS.
+  cloudflareFallback: false
   relay:
     bridgeUrl: ""
     accountId: responder

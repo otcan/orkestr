@@ -62,12 +62,12 @@ ORKESTR_DEMO_WHATSAPP_NUMBER="+4917600000000"
 ```
 
 When the VM is up, Orkestr sends that number one WhatsApp readiness message
-through the pre-provisioned relay bridge. If no public setup URL is configured,
-Orkestr starts a temporary Cloudflare quick tunnel and sends a challenge-gated
-`/setup/pairing?return=/setup` link. That page creates a browser-pairing
-challenge before setup opens. The setup flow then lets you connect Codex, keep
-the Orkestr relay or switch to your own WhatsApp relay, and start the default
-`orkest` thread.
+through the pre-provisioned relay bridge. Configure a stable public base URL
+such as `https://demo.orkestr.de`; Orkestr sends a challenge-gated
+`/setup/pairing?return=/setup` link on that host. That page creates a
+browser-pairing challenge before setup opens. The setup flow then lets you
+connect Codex, keep the Orkestr relay or switch to your own WhatsApp relay, and
+start the default `orkest` thread.
 
 Relay operators can pre-provision these values in the VM image, Helm release, or
 secret manager so evaluators only edit the WhatsApp number:
@@ -82,11 +82,16 @@ Optional URL overrides:
 
 ```bash
 # Use a known public base URL and still route through browser pairing.
-ORKESTR_DEMO_PUBLIC_BASE_URL="https://demo-vm.example.com"
+ORKESTR_DEMO_PUBLIC_BASE_URL="https://demo.orkestr.de"
 
 # Or provide an exact public setup/pairing URL.
-ORKESTR_DEMO_PUBLIC_SETUP_URL="https://demo-vm.example.com/setup/pairing?return=%2Fsetup"
+ORKESTR_DEMO_PUBLIC_SETUP_URL="https://demo.orkestr.de/setup/pairing?return=%2Fsetup"
 ```
+
+Cloudflare quick tunnel fallback is for local ad hoc testing only. It is off by
+default; enable it explicitly with `ORKESTR_DEMO_CLOUDFLARE_FALLBACK=1` or Helm
+`demo.cloudflareFallback: true`. For demo-review runs, set
+`demo.publicBaseUrl` or `demo.setupUrl` instead.
 
 Localhost setup links are blocked by default for WhatsApp onboarding. Use
 `ORKESTR_DEMO_ALLOW_LOCAL_SETUP_URL=1` only for local tests.

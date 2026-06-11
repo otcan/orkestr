@@ -149,7 +149,7 @@ export function readyMessage({ setupUrl }) {
   return [
     "Orkestr demo VM is ready.",
     "",
-    "Please open this temporary challenge-gated setup link and complete Codex login/sign-in:",
+    "Please open this challenge-gated setup link and complete Codex login/sign-in:",
     setupUrl,
     "",
     "Steps:",
@@ -157,7 +157,7 @@ export function readyMessage({ setupUrl }) {
     "2. Keep WhatsApp on Orkestr relay, or switch to your own relay.",
     "3. Start the orkest thread.",
     "",
-    "This link is temporary. Orkestr will show a browser-pairing challenge before setup opens.",
+    "Orkestr will show a temporary browser-pairing challenge before setup opens.",
   ].join("\n");
 }
 
@@ -194,6 +194,9 @@ async function writeCloudflareTunnelState(filePath, payload) {
 async function ensureCloudflareQuickTunnel(env = process.env, options = {}) {
   if (truthy(env.ORKESTR_DEMO_CLOUDFLARE_DISABLE)) {
     return { ok: false, reason: "cloudflare_tunnel_disabled" };
+  }
+  if (!truthy(env.ORKESTR_DEMO_CLOUDFLARE_FALLBACK) && !truthy(env.ORKESTR_DEMO_CLOUDFLARE_ENABLE)) {
+    return { ok: false, reason: "cloudflare_tunnel_not_enabled" };
   }
   const filePath = cloudflareTunnelStatePath(env);
   const target = firstValue(env.ORKESTR_DEMO_TUNNEL_TARGET_URL, demoInternalUrl(env));
