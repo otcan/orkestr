@@ -160,6 +160,10 @@ function messageTimeMs(value) {
   return Math.max(timestampMs(value?.createdAt), timestampMs(value?.timestamp));
 }
 
+function messageActivityTimeMs(value) {
+  return Math.max(messageTimeMs(value), timestampMs(value?.updatedAt));
+}
+
 function tempRuntimeTtlMs(env = process.env) {
   const raw = String(env.ORKESTR_TEMP_RUNTIME_TTL_MS ?? "").trim().toLowerCase();
   if (["0", "off", "false", "disabled"].includes(raw)) return 0;
@@ -1896,13 +1900,26 @@ function runtimeLeaseTemporaryReason(lease = {}, env = process.env) {
   return "";
 }
 
-function runtimeLeaseTtlDecision(lease = {}, env = process.env) {
+function runtimeLeaseUsesSlidingActivityTtl(lease = {}) {
+  return lease.runtimeKind === RAW_TERMINAL_RUNTIME_KIND || lease.terminalMode === RAW_TERMINAL_RUNTIME_KIND;
+}
+
+function latestMessageActivityMs(messages = []) {
+  return (Array.isArray(messages) ? messages : []).reduce((latest, message) =>
+    Math.max(latest, messageActivityTimeMs(message)), 0);
+}
+
+function runtimeLeaseTtlDecision(lease = {}, env = process.env, options = {}) {
   const temporaryReason = runtimeLeaseTemporaryReason(lease, env);
   const ttlMs = Number(lease.ttlMs || 0) || (temporaryReason ? tempRuntimeTtlMs(env) : runtimeLeaseTtlMs(env));
   if (!ttlMs) return null;
   const startedAtMs = timestampMs(lease.startedAt);
   if (!startedAtMs) return null;
-  const ageMs = Date.now() - startedAtMs;
+  const activityAtMs = !temporaryReason && runtimeLeaseUsesSlidingActivityTtl(lease)
+    ? latestMessageActivityMs(options.messages)
+    : 0;
+  const referenceMs = Math.max(startedAtMs, activityAtMs);
+  const ageMs = Date.now() - referenceMs;
   if (ageMs < ttlMs) return null;
   return {
     reason: temporaryReason ? "temp_runtime_ttl" : "runtime_ttl",
@@ -1910,6 +1927,7 @@ function runtimeLeaseTtlDecision(lease = {}, env = process.env) {
     ttlMs,
     ageMs,
     startedAt: new Date(startedAtMs).toISOString(),
+    ...(activityAtMs ? { activityAt: new Date(activityAtMs).toISOString() } : {}),
   };
 }
 
@@ -3925,7 +3943,13 @@ async function syncRuntimeLeasesOnce(env = process.env) {
       changed = true;
       continue;
     }
-    const ttl = runtimeLeaseTtlDecision(lease, env);
+    const threadForTtl = runtimeLeaseUsesSlidingActivityTtl(lease)
+      ? await getThread(lease.threadId, env).catch(() => null)
+      : null;
+    const messagesForTtl = threadForTtl
+      ? await listThreadMessages(threadForTtl.id, env).catch(() => [])
+      : [];
+    const ttl = runtimeLeaseTtlDecision(lease, env, { messages: messagesForTtl });
     if (ttl) {
       const endedAt = nowIso();
       await killTmuxSession(lease.sessionName).catch(() => {});
@@ -3935,6 +3959,7 @@ async function syncRuntimeLeasesOnce(env = process.env) {
         endReason: ttl.reason,
         ttlMs: ttl.ttlMs,
         ageMs: ttl.ageMs,
+        activityAt: ttl.activityAt || lease.activityAt || null,
         temporaryReason: ttl.temporaryReason || lease.temporaryReason || null,
       });
       await updateThread(lease.threadId, {
@@ -3946,6 +3971,7 @@ async function syncRuntimeLeasesOnce(env = process.env) {
           reason: ttl.reason,
           ttlMs: ttl.ttlMs,
           ageMs: ttl.ageMs,
+          activityAt: ttl.activityAt || null,
           temporaryReason: ttl.temporaryReason,
         },
       }, env).catch(() => {});
@@ -3957,6 +3983,7 @@ async function syncRuntimeLeasesOnce(env = process.env) {
         auto: true,
         ttlMs: ttl.ttlMs,
         ageMs: ttl.ageMs,
+        activityAt: ttl.activityAt || null,
         temporaryReason: ttl.temporaryReason,
       }, env).catch(() => {});
       changed = true;

@@ -590,6 +590,78 @@ test("raw terminal takeover creates canonical tmux session and expires after war
   }
 });
 
+test("raw terminal ttl slides forward when the thread has fresh progress messages", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-raw-ttl-progress-"));
+  const fakeTmux = await createFakeTmux(home);
+  const priorPath = process.env.PATH;
+  const priorTmuxLog = process.env.TMUX_LOG;
+  const priorTmuxState = process.env.TMUX_STATE;
+  process.env.PATH = `${fakeTmux.bin}:${priorPath || ""}`;
+  process.env.TMUX_LOG = fakeTmux.log;
+  process.env.TMUX_STATE = fakeTmux.state;
+
+  try {
+    const env = {
+      ORKESTR_HOME: path.join(home, "orkestr-home"),
+      HOME: path.join(home, "runtime-home"),
+      CODEX_HOME: path.join(home, "codex-home"),
+      PATH: process.env.PATH,
+      TMUX_LOG: fakeTmux.log,
+      TMUX_STATE: fakeTmux.state,
+      ORKESTR_RAW_TERMINAL_TTL_MS: "60000",
+    };
+    await createThread({
+      id: "raw-progress-thread",
+      name: "Raw Progress Thread",
+      cwd: path.join(home, "workspace"),
+      executor: {
+        id: "codex",
+        type: "codex",
+        codexThreadId: "019ea1a1-ff15-74a2-a9d1-0eecc7c3cb95",
+        transport: "app-server",
+        metadata: {
+          transport: "app-server",
+          runtimeKind: "codex-app-server",
+        },
+      },
+      runtime: {
+        runtimeKind: "codex-app-server",
+        state: "ready",
+      },
+    }, env);
+
+    await takeoverRawTerminalThread("raw-progress-thread", { reason: "test_takeover" }, env);
+    const paths = await ensureDataDirs(env);
+    const leases = await listRuntimeLeases(env);
+    const oldIso = new Date(Date.now() - 120000).toISOString();
+    await fs.writeFile(paths.runtimeLeases, JSON.stringify(leases.map((lease) => ({
+      ...lease,
+      startedAt: oldIso,
+      heartbeatAt: oldIso,
+    })), null, 2), "utf8");
+    await appendThreadMessage("raw-progress-thread", {
+      role: "assistant",
+      source: "codex",
+      phase: "commentary",
+      text: "Still working through the implementation.",
+      state: "completed",
+    }, env);
+
+    await syncRuntimeLeases(env);
+
+    const afterLeases = await listRuntimeLeases(env);
+    const log = await fs.readFile(fakeTmux.log, "utf8");
+
+    assert.equal(afterLeases[0].endReason, undefined);
+    assert.equal(afterLeases[0].endedAt, undefined);
+    assert.doesNotMatch(log, /__CALL__\tkill-session\t-t\torkestr-thread-raw-progress-thread/);
+  } finally {
+    restoreEnvValue("PATH", priorPath);
+    restoreEnvValue("TMUX_LOG", priorTmuxLog);
+    restoreEnvValue("TMUX_STATE", priorTmuxState);
+  }
+});
+
 test("temporary test homes use a placeholder runtime command by default", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-test-runtime-command-"));
   const fakeTmux = await createFakeTmux(home);
