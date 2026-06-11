@@ -26,6 +26,33 @@ spec:
             - name: {{ $key }}
               value: {{ $value | quote }}
             {{- end }}
+            {{- if .Values.demo.enabled }}
+            - name: ORKESTR_DEMO_MODE
+              value: "1"
+            - name: ORKESTR_DEMO_WHATSAPP_NUMBER
+              value: {{ .Values.demo.whatsappNumber | quote }}
+            - name: ORKESTR_WHATSAPP_ACCESS_MODE
+              value: "relay"
+            {{- with .Values.demo.setupUrl }}
+            - name: ORKESTR_DEMO_SETUP_URL
+              value: {{ . | quote }}
+            {{- end }}
+            {{- with .Values.demo.relay.bridgeUrl }}
+            - name: ORKESTR_DEMO_WHATSAPP_RELAY_URL
+              value: {{ . | quote }}
+            {{- end }}
+            {{- with .Values.demo.relay.accountId }}
+            - name: ORKESTR_DEMO_WHATSAPP_RELAY_ACCOUNT_ID
+              value: {{ . | quote }}
+            {{- end }}
+            {{- if .Values.demo.relay.tokenSecretName }}
+            - name: ORKESTR_DEMO_WHATSAPP_RELAY_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.demo.relay.tokenSecretName | quote }}
+                  key: {{ .Values.demo.relay.tokenSecretKey | quote }}
+            {{- end }}
+            {{- end }}
             {{- with .Values.extraEnv }}
             {{- toYaml . | nindent 12 }}
             {{- end }}

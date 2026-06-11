@@ -7,6 +7,18 @@ service:
   type: ClusterIP
   port: 3000
 
+demo:
+  enabled: false
+  # User-facing demo VM input. Keep this as the only value an evaluator must edit.
+  whatsappNumber: ""
+  # Private setup URL to include in the WhatsApp ready message.
+  setupUrl: ""
+  relay:
+    bridgeUrl: ""
+    accountId: responder
+    tokenSecretName: ""
+    tokenSecretKey: token
+
 persistence:
   enabled: true
   size: 10Gi

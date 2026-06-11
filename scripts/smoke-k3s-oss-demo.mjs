@@ -57,9 +57,10 @@ async function waitForHealth(port) {
 }
 
 async function staticContractCheck() {
-  const [dockerfile, entrypoint, chart, values, deployment, wizardTs, wizardHtml, pkg] = await Promise.all([
+  const [dockerfile, entrypoint, demoNotify, chart, values, deployment, wizardTs, wizardHtml, pkg] = await Promise.all([
     read("Dockerfile"),
     read("docker-entrypoint.sh"),
+    read("scripts/demo-vm-ready-notify.mjs"),
     read("charts/orkestr/Chart.yaml"),
     read("charts/orkestr/values.yaml"),
     read("charts/orkestr/templates/deployment.yaml"),
@@ -73,12 +74,20 @@ async function staticContractCheck() {
   assert.match(dockerfile, /@openai\/codex@\$\{ORKESTR_CODEX_VERSION\}/);
   assert.match(dockerfile, /ORKESTR_CHROME_NO_SANDBOX=1/);
   assert.match(entrypoint, /CODEX_HOME="\$\{CODEX_HOME:-\$ORKESTR_HOME\/codex\}"/);
+  assert.match(entrypoint, /ORKESTR_DEMO_WHATSAPP_NUMBER/);
+  assert.match(demoNotify, /runDemoVmReadyNotify/);
+  assert.match(demoNotify, /writeConnectorConfig\("whatsapp"/);
+  assert.match(demoNotify, /No public app URL is required/);
   assert.match(chart, /name: orkestr/);
   assert.match(values, /repository: orkestr\/orkestr/);
   assert.match(values, /ORKESTR_HOME: \/data/);
   assert.match(values, /ORKESTR_PORT: "3000"/);
+  assert.match(values, /whatsappNumber: ""/);
+  assert.match(values, /type: ClusterIP/);
   assert.match(deployment, /readinessProbe/);
   assert.match(deployment, /persistentVolumeClaim/);
+  assert.match(deployment, /ORKESTR_DEMO_WHATSAPP_NUMBER/);
+  assert.match(deployment, /ORKESTR_DEMO_WHATSAPP_RELAY_TOKEN/);
   assert.match(wizardTs, /threadName = "orkest"/);
   assert.match(wizardTs, /saveSetupDemoPreferences/);
   assert.match(wizardTs, /acquireDesktopLease/);
@@ -136,6 +145,8 @@ console.log(JSON.stringify({
     "first-run-orkest",
     "whatsapp-choice",
     "virtual-desk-start",
+    "private-vm-demo-bootstrap",
+    "one-whatsapp-number-input",
     "no-noop-demo-path",
   ],
 }, null, 2));

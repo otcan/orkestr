@@ -30,6 +30,7 @@
     "smoke:vps:aws": "bash scripts/smoke-vps-aws.sh",
     "smoke:vps:k3s": "bash scripts/smoke-vps-k3s.sh",
     "smoke:k3s:oss-demo": "node scripts/smoke-k3s-oss-demo.mjs",
+    "smoke:demo-vm": "node --test test/demo-vm-bootstrap.test.js",
     "k3s:public-ip": "bash scripts/k3s-vm-public-ip.sh",
     "install:local": "bash scripts/install.sh",
     "demo:coding-agent": "node scripts/coding-agent-demo.mjs",

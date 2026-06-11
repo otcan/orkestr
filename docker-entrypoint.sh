@@ -10,12 +10,18 @@ export ORKESTR_BROWSER_DESKTOP_MODE="${ORKESTR_BROWSER_DESKTOP_MODE:-browserctl}
 export ORKESTR_BROWSERCTL_PATH="${ORKESTR_BROWSERCTL_PATH:-/app/scripts/browserctl.mjs}"
 export ORKESTR_CHROME_NO_SANDBOX="${ORKESTR_CHROME_NO_SANDBOX:-1}"
 export ORKESTR_CODEX_BIN="${ORKESTR_CODEX_BIN:-codex}"
+export ORKESTR_WHATSAPP_ACCESS_MODE="${ORKESTR_WHATSAPP_ACCESS_MODE:-relay}"
 
 mkdir -p "$ORKESTR_HOME" "$CODEX_HOME" "$ORKESTR_HOME/workspaces" "$ORKESTR_HOME/browsers" "$ORKESTR_HOME/secrets"
 chmod 700 "$ORKESTR_HOME" "$CODEX_HOME" "$ORKESTR_HOME/secrets" 2>/dev/null || true
 
 if ! command -v "$ORKESTR_CODEX_BIN" >/dev/null 2>&1; then
   echo "warning: Codex CLI not found at ORKESTR_CODEX_BIN=$ORKESTR_CODEX_BIN" >&2
+fi
+
+if [ -n "${ORKESTR_DEMO_WHATSAPP_NUMBER:-${ORKESTR_DEMO_WA_NUMBER:-}}" ]; then
+  export ORKESTR_DEMO_MODE="${ORKESTR_DEMO_MODE:-1}"
+  node /app/scripts/demo-vm-ready-notify.mjs &
 fi
 
 exec "$@"

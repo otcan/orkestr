@@ -52,6 +52,30 @@ First run:
 3. Start the default `orkest` thread.
 4. Orkestr starts Virtual Desk for that thread.
 
+### Private VM Demo
+
+The demo does not need a public app URL. Run Orkestr on a VM, expose setup only
+through a VM-local browser, SSH tunnel, or port forward, and provide one
+user-facing env value:
+
+```bash
+ORKESTR_DEMO_WHATSAPP_NUMBER="+4917600000000"
+```
+
+When the VM is up, Orkestr sends that number one WhatsApp readiness message
+through the pre-provisioned relay bridge. The message points to the private
+setup URL, then the setup flow lets you connect Codex, keep the Orkestr relay or
+switch to your own WhatsApp relay, and start the default `orkest` thread.
+
+Relay operators can pre-provision these values in the VM image, Helm release, or
+secret manager so evaluators only edit the WhatsApp number:
+
+```bash
+ORKESTR_DEMO_WHATSAPP_RELAY_URL="http://relay.internal/api/connectors/whatsapp/bridge"
+ORKESTR_DEMO_WHATSAPP_RELAY_TOKEN="..."
+ORKESTR_DEMO_WHATSAPP_RELAY_ACCOUNT_ID="responder"
+```
+
 ### Helm
 
 ```bash
