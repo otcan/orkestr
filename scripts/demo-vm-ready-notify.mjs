@@ -48,6 +48,24 @@ function normalizePublicBaseUrl(value = "") {
   }
 }
 
+function normalizeInstanceId(value = "") {
+  return clean(value)
+    .replace(/[^A-Za-z0-9._:-]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 120);
+}
+
+function demoInstanceId(env = process.env) {
+  return normalizeInstanceId(firstValue(
+    env.ORKESTR_DEMO_INSTANCE_ID,
+    env.ORKESTR_INSTANCE_ID,
+    env.ORKESTR_RELEASE_INSTANCE_ID,
+    env.ORKESTR_TENANT_VM_ID,
+    env.ORKESTR_SERVICE_NAME,
+    "local",
+  ));
+}
+
 function setupReturnPathFromUrl(value = "") {
   try {
     const parsed = new URL(clean(value));
@@ -57,15 +75,30 @@ function setupReturnPathFromUrl(value = "") {
   }
 }
 
-function pairingSetupUrl(baseOrUrl = "", { returnTo = "/setup" } = {}) {
+function pairingSetupUrl(baseOrUrl = "", { returnTo = "/setup", instanceId = "" } = {}) {
   const base = normalizePublicBaseUrl(baseOrUrl);
   if (!base) return "";
   try {
     const url = new URL("/setup/pairing", base);
+    const normalizedInstanceId = normalizeInstanceId(instanceId);
+    if (normalizedInstanceId) url.searchParams.set("instanceId", normalizedInstanceId);
     url.searchParams.set("return", clean(returnTo) || "/setup");
     return url.toString();
   } catch {
     return "";
+  }
+}
+
+function setupUrlWithInstanceId(value = "", instanceId = "") {
+  const setupUrl = clean(value);
+  const normalizedInstanceId = normalizeInstanceId(instanceId);
+  if (!setupUrl || !normalizedInstanceId) return setupUrl;
+  try {
+    const url = new URL(setupUrl);
+    if (!url.searchParams.get("instanceId")) url.searchParams.set("instanceId", normalizedInstanceId);
+    return url.toString();
+  } catch {
+    return setupUrl;
   }
 }
 
@@ -252,34 +285,35 @@ async function ensureCloudflareQuickTunnel(env = process.env, options = {}) {
 }
 
 export async function demoPublicSetupUrl(env = process.env, options = {}) {
+  const instanceId = demoInstanceId(env);
   const explicitSetup = publicSetupUrlOverride(env);
   if (explicitSetup) {
     if (isLocalUrl(explicitSetup) && !truthy(env.ORKESTR_DEMO_ALLOW_LOCAL_SETUP_URL)) {
       return { ok: false, reason: "public_setup_url_is_local" };
     }
-    return { ok: true, setupUrl: explicitSetup, source: "public_setup_url" };
+    return { ok: true, setupUrl: setupUrlWithInstanceId(explicitSetup, instanceId), source: "public_setup_url", instanceId };
   }
 
   const legacySetup = demoSetupUrl(env);
   const publicBase = publicBaseUrlOverride(env);
   if (publicBase) {
-    const setupUrl = pairingSetupUrl(publicBase, { returnTo: setupReturnPathFromUrl(legacySetup) || "/setup" });
-    if (setupUrl) return { ok: true, setupUrl, source: "public_base_url" };
+    const setupUrl = pairingSetupUrl(publicBase, { returnTo: setupReturnPathFromUrl(legacySetup) || "/setup", instanceId });
+    if (setupUrl) return { ok: true, setupUrl, source: "public_base_url", instanceId };
   }
 
   if (legacySetup && !isLocalUrl(legacySetup)) {
-    const setupUrl = pairingSetupUrl(legacySetup, { returnTo: setupReturnPathFromUrl(legacySetup) });
-    if (setupUrl) return { ok: true, setupUrl, source: "external_setup_url" };
+    const setupUrl = pairingSetupUrl(legacySetup, { returnTo: setupReturnPathFromUrl(legacySetup), instanceId });
+    if (setupUrl) return { ok: true, setupUrl, source: "external_setup_url", instanceId };
   }
 
   const tunnel = await ensureCloudflareQuickTunnel(env, options);
   if (tunnel.ok && tunnel.url) {
-    const setupUrl = pairingSetupUrl(tunnel.url, { returnTo: setupReturnPathFromUrl(legacySetup) || "/setup" });
-    return { ok: true, setupUrl, source: tunnel.reused ? "cloudflare_reused" : "cloudflare_quick_tunnel", tunnel };
+    const setupUrl = pairingSetupUrl(tunnel.url, { returnTo: setupReturnPathFromUrl(legacySetup) || "/setup", instanceId });
+    return { ok: true, setupUrl, source: tunnel.reused ? "cloudflare_reused" : "cloudflare_quick_tunnel", tunnel, instanceId };
   }
 
   if (truthy(env.ORKESTR_DEMO_ALLOW_LOCAL_SETUP_URL)) {
-    return { ok: true, setupUrl: legacySetup, source: "local_unsafe_fallback" };
+    return { ok: true, setupUrl: setupUrlWithInstanceId(legacySetup, instanceId), source: "local_unsafe_fallback", instanceId };
   }
 
   return { ok: false, reason: tunnel.reason || "public_setup_url_unavailable", tunnel };
@@ -347,6 +381,7 @@ export async function runDemoVmReadyNotify(env = process.env, options = {}) {
       sent: false,
       state: "blocked",
       reason: publicSetup.reason || "public_setup_url_unavailable",
+      instanceId: publicSetup.instanceId || "",
       tunnel: publicSetup.tunnel || null,
       updatedAt: new Date().toISOString(),
     });
@@ -378,6 +413,7 @@ export async function runDemoVmReadyNotify(env = process.env, options = {}) {
       state: "blocked",
       reason: "relay_bridge_url_missing",
       setupUrl,
+      instanceId: publicSetup.instanceId || "",
       updatedAt: new Date().toISOString(),
     });
     return { ok: false, skipped: true, reason: "relay_bridge_url_missing", statePath: filePath };
@@ -417,6 +453,7 @@ export async function runDemoVmReadyNotify(env = process.env, options = {}) {
     state: "sent",
     setupUrl,
     setupUrlSource: publicSetup.source || "",
+    instanceId: publicSetup.instanceId || "",
     tunnel: publicSetup.tunnel ? {
       url: publicSetup.tunnel.url || "",
       pid: publicSetup.tunnel.pid || null,

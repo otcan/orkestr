@@ -40,6 +40,9 @@
           <em [class]="challengeStatusClass()">{{ challenge.status }}</em>
         </div>
         <div class="challenge-meta">
+          @if (challenge.instanceId || instanceId()) {
+            <span>Instance {{ challenge.instanceId || instanceId() }}</span>
+          }
           <span>Expires {{ expiryLabel() }}</span>
           <span>Server {{ setupStatus?.urls?.authUrl || setupStatus?.security?.https?.authUrl || setupStatus?.security?.https?.url || "current host" }}</span>
         </div>

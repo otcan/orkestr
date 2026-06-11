@@ -554,6 +554,7 @@ export interface SecurityChallenge {
   status: string;
   createdAt: string;
   expiresAt: string;
+  instanceId?: string;
   userId?: string;
   role?: string;
   requestedUserAgent?: string;
@@ -568,6 +569,7 @@ export interface SecurityChallenge {
 export interface SecuritySession {
   id: string;
   challengeId?: string;
+  instanceId?: string;
   userId?: string;
   role?: string;
   userAgent?: string;
@@ -1846,8 +1848,10 @@ export class ApiService {
     return this.http.get<CreditUsageResponse>(this.api("/users/me/credit-usage"));
   }
 
-  createSecurityChallenge(): Observable<SecurityChallengeResponse> {
-    return this.http.post<SecurityChallengeResponse>(this.api("/setup/security/challenges"), {});
+  createSecurityChallenge(instanceId = ""): Observable<SecurityChallengeResponse> {
+    return this.http.post<SecurityChallengeResponse>(this.api("/setup/security/challenges"), {
+      ...(instanceId ? { instanceId } : {}),
+    });
   }
 
   createSecurityChallengeForUser(userId: string): Observable<SecurityChallengeResponse> {

@@ -280,9 +280,14 @@ test("browser pairing protects API routes when auth is required", async () => {
     assert.equal(statusText.includes(bridgeUrl), false);
     assert.equal(statusText.includes("sessionRoot"), false);
 
-    const challenge = await json(await fetch(`${baseUrl}/api/setup/security/challenges`, { method: "POST" }));
+    const challenge = await json(await fetch(`${baseUrl}/api/setup/security/challenges`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ instanceId: "demo-vm-001" }),
+    }));
     assert.equal(challenge.ok, true);
     assert.match(challenge.challengeId, /^[A-Za-z0-9_-]{20,}$/);
+    assert.equal(challenge.challenge.instanceId, "demo-vm-001");
     assert.equal(challenge.code, undefined);
 
     const badPair = await fetch(`${baseUrl}/api/setup/security/pair`, {
@@ -307,6 +312,8 @@ test("browser pairing protects API routes when auth is required", async () => {
       body: JSON.stringify({ challengeId: challenge.challengeId }),
     });
     assert.equal(pairResponse.status, 200);
+    const pairPayload = await json(pairResponse.clone());
+    assert.equal(pairPayload.session.instanceId, "demo-vm-001");
     const cookie = pairResponse.headers.get("set-cookie") || "";
     assert.match(cookie, /orkestr_session=/);
 
@@ -319,12 +326,16 @@ test("browser pairing protects API routes when auth is required", async () => {
     assert.ok(pairedStatusText.includes(codexHome));
     assert.ok(pairedStatusText.includes(bridgeUrl));
 
-    const secondChallenge = await json(await fetch(`${baseUrl}/api/setup/security/challenges`, { method: "POST" }));
+    const secondChallenge = await json(await fetch(`${baseUrl}/api/setup/security/challenges`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ instanceId: "demo-vm-002" }),
+    }));
     const unpairedList = await fetch(`${baseUrl}/api/setup/security/challenges`);
     assert.equal(unpairedList.status, 401);
 
     const pairedList = await json(await fetch(`${baseUrl}/api/setup/security/challenges`, { headers: { cookie } }));
-    assert.ok(pairedList.challenges.some((item) => item.id === secondChallenge.challengeId && item.status === "pending"));
+    assert.ok(pairedList.challenges.some((item) => item.id === secondChallenge.challengeId && item.status === "pending" && item.instanceId === "demo-vm-002"));
 
     const approveFromBrowser = await json(await fetch(`${baseUrl}/api/setup/security/challenges/${secondChallenge.challengeId}/approve`, {
       method: "POST",

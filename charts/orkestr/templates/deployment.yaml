@@ -33,6 +33,10 @@ spec:
               value: {{ .Values.demo.whatsappNumber | quote }}
             - name: ORKESTR_WHATSAPP_ACCESS_MODE
               value: "relay"
+            {{- with .Values.demo.instanceId }}
+            - name: ORKESTR_DEMO_INSTANCE_ID
+              value: {{ . | quote }}
+            {{- end }}
             {{- with .Values.demo.publicBaseUrl }}
             - name: ORKESTR_DEMO_PUBLIC_BASE_URL
               value: {{ . | quote }}

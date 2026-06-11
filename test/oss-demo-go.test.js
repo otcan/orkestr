@@ -29,10 +29,12 @@ test("OSS demo GO path exposes Docker, Helm, and k3s smoke contracts", async () 
   assert.match(chart, /name: orkestr/);
   assert.match(values, /ORKESTR_PORT: "3000"/);
   assert.match(values, /whatsappNumber: ""/);
+  assert.match(values, /instanceId: ""/);
   assert.match(values, /publicBaseUrl: ""/);
   assert.match(values, /cloudflareFallback: false/);
   assert.match(deployment, /mountPath: \/data/);
   assert.match(deployment, /ORKESTR_DEMO_WHATSAPP_NUMBER/);
+  assert.match(deployment, /ORKESTR_DEMO_INSTANCE_ID/);
   assert.match(deployment, /ORKESTR_DEMO_PUBLIC_BASE_URL/);
   assert.match(deployment, /ORKESTR_DEMO_CLOUDFLARE_FALLBACK/);
   assert.match(deployment, /ORKESTR_DEMO_CLOUDFLARE_DISABLE/);

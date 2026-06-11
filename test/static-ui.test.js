@@ -378,6 +378,7 @@ test("pairing-required flow stays on the Orkestr app host", async () => {
 
   assert.match(component, /private enterPairingRequired/);
   assert.match(component, /this\.replacePairingPath\(\)/);
+  assert.match(component, /params\.set\("instanceId", instanceId\)/);
   assert.doesNotMatch(component, /globalThis\.location\.href\s*=\s*authPairingUrl/);
   assert.doesNotMatch(component, /new URL\("\/setup\/pairing", authUrl\)/);
 });

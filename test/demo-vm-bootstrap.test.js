@@ -47,6 +47,7 @@ test("demo VM notifier sends one relay readiness message and seeds relay setting
   const env = {
     ORKESTR_HOME: home,
     ORKESTR_DEMO_WHATSAPP_NUMBER: "+49 176 123456",
+    ORKESTR_DEMO_INSTANCE_ID: "demo-vm-001",
     ORKESTR_DEMO_SETUP_URL: "http://127.0.0.1:3000/setup",
     ORKESTR_DEMO_PUBLIC_BASE_URL: "https://demo.orkestr.de",
     ORKESTR_DEMO_WHATSAPP_RELAY_URL: "http://relay.local/api/connectors/whatsapp/bridge",
@@ -67,7 +68,7 @@ test("demo VM notifier sends one relay readiness message and seeds relay setting
     assert.equal(body.accountId, "responder");
     assert.match(body.text, /Orkestr demo VM is ready/);
     assert.match(body.text, /complete Codex login\/sign-in/i);
-    assert.match(body.text, /https:\/\/demo\.orkestr\.de\/setup\/pairing\?return=%2Fsetup/);
+    assert.match(body.text, /https:\/\/demo\.orkestr\.de\/setup\/pairing\?instanceId=demo-vm-001&return=%2Fsetup/);
     assert.doesNotMatch(body.text, /127\.0\.0\.1|localhost/);
     assert.match(body.text, /Start the orkest thread/);
     assert.match(body.text, /browser-pairing challenge/);
@@ -93,8 +94,9 @@ test("demo VM notifier sends one relay readiness message and seeds relay setting
   assert.equal(connectorConfig.apiToken, "relay-secret");
   assert.equal(state.sent, true);
   assert.equal(state.state, "sent");
-  assert.equal(state.setupUrl, "https://demo.orkestr.de/setup/pairing?return=%2Fsetup");
+  assert.equal(state.setupUrl, "https://demo.orkestr.de/setup/pairing?instanceId=demo-vm-001&return=%2Fsetup");
   assert.equal(state.setupUrlSource, "public_base_url");
+  assert.equal(state.instanceId, "demo-vm-001");
   assert.equal(state.targetKey.length, 64);
   assert.doesNotMatch(JSON.stringify(state), /49176123456|176123456|relay-secret/);
 });
@@ -106,6 +108,7 @@ test("demo VM notifier can use Cloudflare quick tunnel only as explicit fallback
   const env = {
     ORKESTR_HOME: home,
     ORKESTR_DEMO_WHATSAPP_NUMBER: "+49 176 123456",
+    ORKESTR_DEMO_INSTANCE_ID: "demo-vm-001",
     ORKESTR_DEMO_SETUP_URL: "http://127.0.0.1:3000/setup",
     ORKESTR_DEMO_WHATSAPP_RELAY_URL: "http://relay.local/api/connectors/whatsapp/bridge",
     ORKESTR_DEMO_WHATSAPP_RELAY_TOKEN: "relay-secret",
@@ -119,7 +122,7 @@ test("demo VM notifier can use Cloudflare quick tunnel only as explicit fallback
       return response({ ok: true, ready: true, accounts: [{ id: "responder", ready: true, state: "ready" }] });
     }
     const body = JSON.parse(options.body);
-    assert.match(body.text, /https:\/\/demo-onboarding\.trycloudflare\.com\/setup\/pairing\?return=%2Fsetup/);
+    assert.match(body.text, /https:\/\/demo-onboarding\.trycloudflare\.com\/setup\/pairing\?instanceId=demo-vm-001&return=%2Fsetup/);
     return response({ ok: true, sent: [{ id: "sent-demo-ready" }] });
   };
 
@@ -132,6 +135,7 @@ test("demo VM notifier can use Cloudflare quick tunnel only as explicit fallback
   assert.equal(tunnelCalls.length, 1);
   assert.deepEqual(tunnelCalls[0].args, ["tunnel", "--url", "http://127.0.0.1:3000", "--no-autoupdate"]);
   assert.equal(state.setupUrlSource, "cloudflare_quick_tunnel");
+  assert.equal(state.instanceId, "demo-vm-001");
   assert.equal(tunnelState.state, "ready");
   assert.equal(tunnelState.url, "https://demo-onboarding.trycloudflare.com");
   assert.equal(calls.filter((call) => call.url.pathname.endsWith("/send-text")).length, 1);
@@ -142,6 +146,7 @@ test("demo VM notifier blocks without a pre-provisioned relay URL but keeps star
   const env = {
     ORKESTR_HOME: home,
     ORKESTR_DEMO_WHATSAPP_NUMBER: "+49 176 654321",
+    ORKESTR_DEMO_INSTANCE_ID: "demo-public-1",
     ORKESTR_DEMO_PUBLIC_BASE_URL: "https://demo-public.example.test",
     ORKESTR_DEMO_NOTIFY_HEALTH_TIMEOUT_MS: "0",
   };
@@ -159,7 +164,8 @@ test("demo VM notifier blocks without a pre-provisioned relay URL but keeps star
   assert.equal(settings.connectors.whatsapp.accessMode, "relay");
   assert.equal(state.sent, false);
   assert.equal(state.reason, "relay_bridge_url_missing");
-  assert.equal(state.setupUrl, "https://demo-public.example.test/setup/pairing?return=%2Fsetup");
+  assert.equal(state.setupUrl, "https://demo-public.example.test/setup/pairing?instanceId=demo-public-1&return=%2Fsetup");
+  assert.equal(state.instanceId, "demo-public-1");
 });
 
 test("demo VM notifier blocks instead of sending a localhost setup link when Cloudflare is unavailable", async () => {
@@ -236,10 +242,12 @@ test("demo VM contract is private, WhatsApp-number driven, and part of smoke scr
   assert.match(entrypoint, /ORKESTR_DEMO_MODE/);
   assert.match(values, /demo:/);
   assert.match(values, /whatsappNumber: ""/);
+  assert.match(values, /instanceId: ""/);
   assert.match(values, /publicBaseUrl: ""/);
   assert.match(values, /cloudflareFallback: false/);
   assert.match(values, /type: ClusterIP/);
   assert.match(deployment, /ORKESTR_DEMO_WHATSAPP_NUMBER/);
+  assert.match(deployment, /ORKESTR_DEMO_INSTANCE_ID/);
   assert.match(deployment, /ORKESTR_DEMO_PUBLIC_BASE_URL/);
   assert.match(deployment, /ORKESTR_DEMO_CLOUDFLARE_FALLBACK/);
   assert.match(deployment, /ORKESTR_DEMO_CLOUDFLARE_DISABLE/);

@@ -31,12 +31,13 @@ export class PairingRequiredPageComponent implements OnDestroy {
     this.error = "";
     this.renderNow();
     try {
-      const result = await firstValueFrom(this.api.createSecurityChallenge());
+      const result = await firstValueFrom(this.api.createSecurityChallenge(this.instanceId()));
       this.challenge = result.challenge || {
         id: result.challengeId,
         status: "pending",
         createdAt: new Date().toISOString(),
         expiresAt: result.expiresAt,
+        instanceId: this.instanceId(),
       };
       this.notice = "Challenge generated. Approve it from the server before this browser can continue.";
       this.startPolling();
@@ -89,6 +90,11 @@ export class PairingRequiredPageComponent implements OnDestroy {
   expiryLabel(): string {
     const timestamp = Date.parse(this.challenge?.expiresAt || "");
     return Number.isFinite(timestamp) ? new Date(timestamp).toLocaleString([], { dateStyle: "short", timeStyle: "short" }) : "unknown";
+  }
+
+  instanceId(): string {
+    const params = new URLSearchParams(globalThis.location?.search || "");
+    return String(params.get("instanceId") || params.get("instance") || params.get("orkestrInstanceId") || "").trim();
   }
 
   private async consumeChallenge(): Promise<void> {

@@ -36,6 +36,14 @@ function envFlag(value) {
   return ["1", "true", "yes", "on"].includes(String(value || "").trim().toLowerCase());
 }
 
+function normalizeInstanceId(value = "") {
+  return String(value || "")
+    .trim()
+    .replace(/[^A-Za-z0-9._:-]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 120);
+}
+
 function remoteAuthSignal(env = process.env, urls = publicUrlConfig(env), host = bindHost(env)) {
   const publicUrlConfigured = Boolean(
     urls.primaryDomain ||
@@ -117,6 +125,7 @@ function publicChallenge(challenge = {}, now = Date.now()) {
     status: normalized.status,
     createdAt: normalized.createdAt,
     expiresAt: normalized.expiresAt,
+    instanceId: normalized.instanceId || "",
     requestedUserAgent: normalized.requestedUserAgent || "",
     requestedIp: normalized.requestedIp || "",
     userId: normalized.userId || "",
@@ -133,6 +142,7 @@ function publicSession(session = {}) {
   return {
     id: session.id || "",
     challengeId: session.challengeId || "",
+    instanceId: session.instanceId || "",
     userId: session.userId || "",
     role: session.role || "",
     userAgent: session.userAgent || "",
@@ -586,15 +596,17 @@ export async function securityStatus(env = process.env) {
   };
 }
 
-export async function createPairingChallenge({ request, env = process.env, userId = "", role = "" } = {}) {
+export async function createPairingChallenge({ request, env = process.env, userId = "", role = "", instanceId = "" } = {}) {
   const config = await readSecurityConfig(env);
   const normalizedRole = String(role || "").trim().toLowerCase() === "user" ? "user" : "admin";
   const normalizedUserId = userId ? normalizeUserId(userId) : "";
+  const normalizedInstanceId = normalizeInstanceId(instanceId);
   const challenge = {
     id: randomToken(18),
     status: "pending",
     createdAt: nowIso(),
     expiresAt: new Date(Date.now() + challengeTtlMs).toISOString(),
+    instanceId: normalizedInstanceId,
     requestedUserAgent: String(request?.headers?.["user-agent"] || "").slice(0, 240),
     requestedIp: requestIp(request).slice(0, 80),
     userId: normalizedUserId,
@@ -604,7 +616,7 @@ export async function createPairingChallenge({ request, env = process.env, userI
     ...config,
     challenges: [...(config.challenges || []), challenge],
   }, env);
-  await appendEvent({ type: "security_pairing_challenge_created", challengeId: challenge.id, userId: challenge.userId || null, role: challenge.role || null }, env).catch(() => {});
+  await appendEvent({ type: "security_pairing_challenge_created", challengeId: challenge.id, instanceId: challenge.instanceId || null, userId: challenge.userId || null, role: challenge.role || null }, env).catch(() => {});
   return {
     ok: true,
     challengeId: challenge.id,
@@ -790,6 +802,7 @@ export async function pairBrowser({ challengeId, userAgent = "", ip = "", env = 
   const session = {
     id: randomToken(10),
     challengeId: challenge.id,
+    instanceId: challenge.instanceId || "",
     tokenHash: sha256(token),
     userId: normalizeUserId(challenge.userId || defaultAdminUser(env).id),
     role: String(challenge.role || "admin").trim().toLowerCase() === "user" ? "user" : "admin",
@@ -813,16 +826,14 @@ export async function pairBrowser({ challengeId, userAgent = "", ip = "", env = 
     type: "security_browser_paired",
     sessionId: session.id,
     challengeId: challenge.id,
+    instanceId: session.instanceId || null,
     userId: session.userId,
     role: session.role,
   }, env).catch(() => {});
   return {
     ok: true,
     token,
-    session: {
-      id: session.id,
-      expiresAt: session.expiresAt,
-    },
+    session: publicSession(session),
   };
 }
 

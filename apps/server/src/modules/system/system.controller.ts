@@ -276,7 +276,8 @@ async function systemSnapshot() {
 
 async function pairingChallengeTarget(body: Record<string, unknown> = {}, request: any) {
   const userId = String(body.userId || body.targetUserId || "").trim();
-  if (!userId) return {};
+  const instanceId = String(body.instanceId || body.instance || body.orkestrInstanceId || "").trim();
+  if (!userId) return { instanceId };
   const principal = requestPrincipal(request);
   const status = await securityStatus();
   const trustedAdminContext = isAdminPrincipal(principal) && (request?.orkestrSecuritySession || !status.authEnabled);
@@ -286,7 +287,7 @@ async function pairingChallengeTarget(body: Record<string, unknown> = {}, reques
   const user = await getUser(userId);
   if (!user) throw httpError("user_not_found", 404);
   if (user.status === "disabled") throw httpError("user_disabled", 409);
-  return { userId: user.id, role: user.role };
+  return { userId: user.id, role: user.role, instanceId };
 }
 
 function shouldRedactSetupStatus(request: any, status: any): boolean {

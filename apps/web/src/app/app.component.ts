@@ -4390,8 +4390,14 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   }
 
   private replacePairingPath(): void {
-    const returnTo = new URLSearchParams(globalThis.location?.search || "").get("return");
-    const next = returnTo ? `/setup/pairing?return=${encodeURIComponent(returnTo)}` : "/setup/pairing";
+    const source = new URLSearchParams(globalThis.location?.search || "");
+    const params = new URLSearchParams();
+    const instanceId = source.get("instanceId") || source.get("instance") || source.get("orkestrInstanceId") || "";
+    if (instanceId) params.set("instanceId", instanceId);
+    const returnTo = source.get("return");
+    if (returnTo) params.set("return", returnTo);
+    const query = params.toString();
+    const next = query ? `/setup/pairing?${query}` : "/setup/pairing";
     if (`${globalThis.location?.pathname || ""}${globalThis.location?.search || ""}` === next) return;
     globalThis.history?.replaceState({}, "", next);
   }
