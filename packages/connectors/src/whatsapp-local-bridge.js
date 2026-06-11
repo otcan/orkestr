@@ -1250,6 +1250,11 @@ function typingMaxTtlMs(env = process.env) {
   return Number.isFinite(parsed) ? Math.max(1000, parsed) : 120_000;
 }
 
+function typingStopGraceMs(env = process.env) {
+  const parsed = Number(env.ORKESTR_WHATSAPP_TYPING_STOP_GRACE_MS || env.WA_TYPING_STOP_GRACE_MS || 10_000);
+  return Number.isFinite(parsed) ? Math.max(0, parsed) : 10_000;
+}
+
 function typingRefreshFailureLimit(env = process.env) {
   const parsed = Number(
     env.ORKESTR_WHATSAPP_TYPING_REFRESH_FAILURE_LIMIT ||
@@ -1544,7 +1549,10 @@ export async function stopLocalWhatsAppTyping({ chatId = "", accountId = "", env
 export async function syncLocalWhatsAppTypingTargets(targets = [], env = process.env) {
   const active = new Set();
   const started = [];
+  const kept = [];
   const stopped = [];
+  const now = Date.now();
+  const stopGraceMs = typingStopGraceMs(env);
   for (const target of targets) {
     const chatId = String(target?.chatId || "").trim();
     if (!chatId) continue;
@@ -1565,10 +1573,17 @@ export async function syncLocalWhatsAppTypingTargets(targets = [], env = process
   }
   for (const session of [...typingSessions.values()]) {
     if (active.has(typingKey(session.accountId, session.chatId))) continue;
+    const ageMs = now - Number(session.lastSyncedAt || session.startedAt || now);
+    if (stopGraceMs > 0 && ageMs < stopGraceMs) {
+      const key = typingKey(session.accountId, session.chatId);
+      active.add(key);
+      kept.push({ ok: true, active: true, accountId: session.accountId, chatId: session.chatId, graceMs: stopGraceMs, ageMs });
+      continue;
+    }
     const result = await stopLocalWhatsAppTyping({ accountId: session.accountId, chatId: session.chatId, env });
     if (result?.ok) stopped.push(result);
   }
-  return { ok: true, active: active.size, started, stopped };
+  return { ok: true, active: active.size, started, kept, stopped };
 }
 
 export function setLocalWhatsAppRuntimeForTest(accountId = "", runtime = {}, statePatch = {}, env = process.env) {
