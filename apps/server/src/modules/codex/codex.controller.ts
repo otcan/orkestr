@@ -21,6 +21,15 @@ export class CodexController {
     return {
       ...status,
       runtimeKind: "codex-app-server",
+      docker: {
+        enabled: process.env.ORKESTR_DOCKER === "1",
+        dataHome: process.env.ORKESTR_HOME || "",
+        codexHome: process.env.CODEX_HOME || status.codexHome || "",
+        command: process.env.ORKESTR_CODEX_BIN || status.command || "codex",
+        authHint: process.env.ORKESTR_DOCKER === "1"
+          ? "Persist Codex auth under /data/codex by mounting -v orkestr-data:/data, then complete Codex login from the setup page or container shell."
+          : "",
+      },
     };
   }
 

@@ -18,11 +18,13 @@ test("public launch docs expose the minimum launch surface", async () => {
 
   assert.match(readme, /Why This Exists/);
   assert.match(readme, /Documentation Map/);
+  assert.match(readme, /docker run -p 3000:3000 -v orkestr-data:\/data orkestr\/orkestr:latest/);
+  assert.match(readme, /helm install orkestr \.\/charts\/orkestr/);
   assert.match(readme, /curl -fsSL/);
   assert.match(readme, /docs\/user-guide\.md/);
   assert.match(readme, /flowchart LR/);
   assert.match(readme, /Security Model/);
-  assert.match(readme, /out of the box/);
+  assert.match(readme, /Docker\/Helm path is the primary OSS demo path/);
   assert.match(readme, /ROADMAP\.md/);
   assert.match(userGuide, /Public Facing Layer/);
   assert.match(userGuide, /Connect WhatsApp/);
@@ -39,10 +41,10 @@ test("public launch docs expose the minimum launch surface", async () => {
   assert.doesNotMatch(roadmap, /Virtual Desktop Generation/);
   assert.match(architecture, /Legacy `\/ng\/\*` paths/);
   assert.match(demoLog, /Coding-agent demo passed/);
-  assert.match(readme, /Local Host-Native/);
-  assert.match(readme, /VPS Host-Native/);
-  assert.match(readme, /sudo bash -s -- --systemd/);
-  assert.match(readme, /orkestr security approve <challenge-id>/);
+  assert.match(readme, /smoke:k3s:oss-demo/);
+  assert.match(readme, /Start the default `orkest` thread/);
+  assert.match(readme, /Orkestr relay or your own WhatsApp bridge/);
+  assert.match(readme, /Virtual Desk startup wiring/);
   assert.match(example, /Codex signed in from the Orkestr setup page/);
   assert.doesNotMatch(example, /Codex workflow/);
 });

@@ -1073,13 +1073,15 @@ ork-first-thread-wizard.first-thread-host {
   padding: 16px;
 }
 
-.workspace-choice-grid {
+.workspace-choice-grid,
+.wizard-choice-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 10px;
 }
 
-.workspace-choice {
+.workspace-choice,
+.choice-card {
   display: grid;
   align-content: start;
   gap: 5px;
@@ -1092,12 +1094,14 @@ ork-first-thread-wizard.first-thread-host {
   text-align: left;
 }
 
-.workspace-choice.active {
+.workspace-choice.active,
+.choice-card.active {
   border-color: rgba(126, 247, 142, 0.62);
   background: rgba(52, 128, 58, 0.32);
 }
 
-.workspace-choice span {
+.workspace-choice span,
+.choice-card span {
   color: #91ad8b;
   font-size: 0.76rem;
   font-weight: 700;

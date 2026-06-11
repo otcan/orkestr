@@ -7,7 +7,7 @@ import { Body, Controller, Delete, Get, HttpCode, HttpException, Param, Post, Qu
 import { AnyFilesInterceptor } from "@nestjs/platform-express";
 import { doctorRuntimeResources, listRuntimeLeases } from "../../../../../packages/core/src/runtime-leases.js";
 import { getSetupStatus, publicSetupStatus } from "../../../../../packages/core/src/setup.js";
-import { readRuntimeSettings } from "../../../../../packages/core/src/runtime-settings.js";
+import { readRuntimeSettings, writeRuntimeSettings } from "../../../../../packages/core/src/runtime-settings.js";
 import { systemDoctor } from "../../../../../packages/core/src/system-doctor.js";
 import { whereAmI } from "../../../../../packages/core/src/whereiam.js";
 import {
@@ -295,6 +295,12 @@ function shouldRedactSetupStatus(request: any, status: any): boolean {
   return !isAdminPrincipal(requestPrincipal(request));
 }
 
+function normalizeWhatsAppAccessMode(value: unknown) {
+  const normalized = String(value || "").trim().toLowerCase();
+  if (["own", "self", "self-managed", "self_managed", "local"].includes(normalized)) return "own";
+  return "relay";
+}
+
 function apiSessionDeliveryResultForMessage(delivery: any, messageId: string) {
   const delivered = Array.isArray(delivery?.delivered)
     ? delivery.delivered.find((item: any) => String(item?.messageId || "") === messageId)
@@ -428,6 +434,26 @@ export class SystemController {
       },
     };
     return shouldRedactSetupStatus(request, status) ? publicSetupStatus(status) : status;
+  }
+
+  @Post("setup/demo-preferences")
+  @HttpCode(200)
+  async saveSetupDemoPreferences(@Body() body: Record<string, unknown> = {}) {
+    const whatsappAccessMode = normalizeWhatsAppAccessMode(body.whatsappAccessMode || body.whatsappMode || body.whatsapp);
+    const settings = await writeRuntimeSettings({
+      connectors: {
+        whatsapp: {
+          accessMode: whatsappAccessMode,
+          bridgeMode: whatsappAccessMode === "own" ? "local" : "relay",
+        },
+      },
+    });
+    return {
+      ok: true,
+      demo: { whatsappAccessMode },
+      settings,
+      generatedAt: new Date().toISOString(),
+    };
   }
 
   @Get("setup/backup/status")

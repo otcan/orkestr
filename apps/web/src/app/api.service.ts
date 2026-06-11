@@ -385,6 +385,7 @@ export interface SetupStatus {
     valid?: boolean;
   };
   security?: SecurityStatus;
+  settings?: Record<string, unknown>;
 }
 
 export interface StateBackupRecord {
@@ -1660,6 +1661,13 @@ export class ApiService {
 
   setupStatus(): Observable<SetupStatus> {
     return this.http.get<SetupStatus>(this.api("/setup/status"));
+  }
+
+  saveSetupDemoPreferences(body: Record<string, unknown>): Observable<{ ok: boolean; demo?: Record<string, unknown>; settings?: Record<string, unknown> }> {
+    return this.http.post<{ ok: boolean; demo?: Record<string, unknown>; settings?: Record<string, unknown> }>(
+      this.api("/setup/demo-preferences"),
+      body,
+    );
   }
 
   backupStatus(): Observable<BackupStatusResponse> {

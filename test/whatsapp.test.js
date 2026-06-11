@@ -1192,6 +1192,67 @@ test("local whatsapp inbound ignores recent outbound attachment echoes", async (
   }
 });
 
+test("local whatsapp inbound ignores fromMe attachment echoes with rewritten filenames", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-attachment-size-echo-"));
+  const env = {
+    ORKESTR_HOME: home,
+    ORKESTR_WHATSAPP_ACCOUNT_IDS: "responder",
+  };
+  const chatId = "chat-attachment-size-echo@g.us";
+  const filename = "Dockerfile";
+  const body = "FROM node:22\nWORKDIR /app\n";
+  const attachmentPath = path.join(home, filename);
+  await fs.writeFile(attachmentPath, body);
+  const sent = [];
+  const runtime = {
+    MessageMedia: {
+      fromFilePath(filePath) {
+        return { filePath };
+      },
+    },
+    client: {
+      async sendMessage(to, media, options) {
+        sent.push({ to, media, options });
+        return { id: { _serialized: `true_${chatId}_sent-rewritten-document` } };
+      },
+    },
+  };
+
+  try {
+    setLocalWhatsAppRuntimeForTest("responder", runtime, {}, env);
+    await sendLocalWhatsAppMessage({
+      accountId: "responder",
+      chatId,
+      attachments: [{ path: attachmentPath, filename, mimetype: "application/octet-stream" }],
+      env,
+    });
+
+    const result = await handleInboundMessage("responder", {
+      id: { _serialized: `true_${chatId}_echo-rewritten-document`, remote: chatId },
+      from: "513468373@lid",
+      to: chatId,
+      fromMe: true,
+      body: "",
+      hasMedia: true,
+      type: "document",
+      timestamp: 1_780_000_000,
+      _data: {},
+      async downloadMedia() {
+        return {
+          data: Buffer.from(body).toString("base64"),
+          mimetype: "application/octet-stream",
+        };
+      },
+    }, env, { ownOnly: true });
+
+    assert.equal(sent.length, 1);
+    assert.equal(result.skipped, "outbound_echo_attachment");
+    assert.equal(result.chatId, chatId);
+  } finally {
+    await resetLocalWhatsAppBridgeForTest(env);
+  }
+});
+
 test("local whatsapp inbound ignores outbound text echoed through another local account", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-cross-account-echo-"));
   const env = {

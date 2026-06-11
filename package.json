@@ -1,6 +1,6 @@
 {
   "name": "orkestr-oss",
-  "version": "0.1.0-alpha.28",
+  "version": "0.1.0-alpha.29",
   "description": "Self-hosted agent workstation: Codex threads, connectors, virtual browsers, WhatsApp, and timers.",
   "type": "module",
   "bin": {
@@ -29,6 +29,7 @@
     "smoke:public-kubevirt": "bash scripts/migrate-public-kubevirt.sh smoke",
     "smoke:vps:aws": "bash scripts/smoke-vps-aws.sh",
     "smoke:vps:k3s": "bash scripts/smoke-vps-k3s.sh",
+    "smoke:k3s:oss-demo": "node scripts/smoke-k3s-oss-demo.mjs",
     "k3s:public-ip": "bash scripts/k3s-vm-public-ip.sh",
     "install:local": "bash scripts/install.sh",
     "demo:coding-agent": "node scripts/coding-agent-demo.mjs",

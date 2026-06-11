@@ -3,7 +3,8 @@ import { FormsModule } from "@angular/forms";
 import { firstValueFrom } from "rxjs";
 import { ApiService, ConnectorStatus, SetupStatus, ThreadSummary } from "./api.service";
 
-type WizardStepId = "name" | "repository" | "review";
+type WizardStepId = "welcome" | "codex" | "whatsapp" | "review";
+type WhatsAppAccessMode = "relay" | "own";
 
 @Component({
   selector: "ork-first-thread-wizard",
@@ -20,16 +21,19 @@ export class FirstThreadWizardComponent {
   @Output() setupRequested = new EventEmitter<"codex">();
 
   readonly steps: Array<{ id: WizardStepId; label: string }> = [
-    { id: "name", label: "Name" },
-    { id: "repository", label: "Repository" },
-    { id: "review", label: "Create" },
+    { id: "welcome", label: "Welcome" },
+    { id: "codex", label: "Connect Codex" },
+    { id: "whatsapp", label: "WhatsApp" },
+    { id: "review", label: "Start" },
   ];
 
   stepIndex = 0;
-  threadName = "";
+  threadName = "orkest";
   repoUrl = "";
+  whatsappAccessMode: WhatsAppAccessMode = "relay";
   busy = false;
   error = "";
+  desktopWarning = "";
   creationStage = "";
   private draftName = "";
   private draftThreadId = "";
@@ -67,8 +71,9 @@ export class FirstThreadWizardComponent {
 
   canContinue(): boolean {
     const step = this.activeStep();
-    if (step === "name") return Boolean(this.agentName());
-    if (step === "repository") return true;
+    if (step === "welcome") return Boolean(this.agentName());
+    if (step === "codex") return this.codexReady();
+    if (step === "whatsapp") return Boolean(this.whatsappAccessMode);
     return true;
   }
 
@@ -90,6 +95,23 @@ export class FirstThreadWizardComponent {
 
   codebaseLabel(): string {
     return this.usesRemoteRepo() ? "Clone Git repository" : "New local git repository";
+  }
+
+  desktopSlug(): string {
+    const settings = this.setupStatus?.settings || {};
+    const desktops = settings["desktops"] && typeof settings["desktops"] === "object"
+      ? settings["desktops"] as Record<string, unknown>
+      : {};
+    return String(desktops["default"] || desktops["manualIntervention"] || "desktop").trim() || "desktop";
+  }
+
+  whatsappAccessLabel(): string {
+    return this.whatsappAccessMode === "own" ? "Own WhatsApp bridge" : "Orkestr relay";
+  }
+
+  selectWhatsAppAccessMode(mode: WhatsAppAccessMode): void {
+    if (this.busy) return;
+    this.whatsappAccessMode = mode;
   }
 
   codexConnector(): ConnectorStatus | null {
@@ -140,6 +162,7 @@ export class FirstThreadWizardComponent {
     if (!this.canCreate()) return;
     this.busy = true;
     this.error = "";
+    this.desktopWarning = "";
     try {
       let shouldWake = this.codexReady();
       if (!this.codexReady()) {
@@ -154,6 +177,10 @@ export class FirstThreadWizardComponent {
       const name = this.agentName();
       const repoUrl = this.repoUrlValue();
       const cloneRepo = Boolean(repoUrl);
+      this.creationStage = "Saving WhatsApp access choice";
+      await firstValueFrom(this.api.saveSetupDemoPreferences({
+        whatsappAccessMode: this.whatsappAccessMode,
+      }));
       this.creationStage = cloneRepo ? "Cloning repo" : "Creating local git repo";
       const response = await firstValueFrom(this.api.createThread({
         id: this.generatedWorkspaceName(),
@@ -171,6 +198,10 @@ export class FirstThreadWizardComponent {
         reason: "first_thread_created",
       }));
       const thread = response.thread;
+      this.creationStage = "Starting Virtual Desk";
+      await this.startVirtualDesk(thread).catch((error) => {
+        this.desktopWarning = `Virtual Desk did not start: ${this.errorText(error)}. Open setup desktops after the thread opens.`;
+      });
       this.creationStage = "Starting Codex in background";
       this.created.emit(thread);
     } catch (error) {
@@ -185,8 +216,20 @@ export class FirstThreadWizardComponent {
       .toLowerCase()
       .replace(/[^a-z0-9]+/g, "-")
       .replace(/^-|-$/g, "")
-      .slice(0, 48) || "coding-agent";
-    return `${slug}-${Date.now().toString(36)}`;
+      .slice(0, 48) || "orkest";
+    return slug;
+  }
+
+  private async startVirtualDesk(thread: ThreadSummary): Promise<void> {
+    const slug = this.desktopSlug();
+    await firstValueFrom(this.api.acquireDesktopLease(slug, {
+      threadId: thread.id,
+      reason: "oss_demo_first_thread",
+    }));
+    await firstValueFrom(this.api.browserAction(slug, "start", {
+      threadId: thread.id,
+      reason: "oss_demo_first_thread",
+    }));
   }
 
   private errorText(error: unknown): string {

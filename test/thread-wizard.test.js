@@ -22,7 +22,7 @@ test("main UI exposes a guided first thread generation flow", async () => {
     "apps/server/src/modules/connectors/connectors.controller.ts",
   ]);
 
-  assert.ok(sources.includes("New Coding Agent"));
+  assert.ok(sources.includes("Orkestr First Run"));
   assert.ok(sources.includes("Create first coding agent"));
   assert.ok(sources.includes("sidebarSearchPlaceholder"));
   assert.ok(sources.includes("agent, project, thread"));
@@ -30,15 +30,22 @@ test("main UI exposes a guided first thread generation flow", async () => {
   assert.ok(sources.includes("(click)=\"openTools('settings')\""));
   assert.ok(sources.includes("[setupSection]=\"setupSection\""));
   assert.ok(sources.includes("handleSetupSectionChange"));
-  assert.ok(sources.includes("Name the coding agent"));
-  assert.ok(sources.includes("Use a repo or start locally"));
+  assert.ok(sources.includes("Create the demo thread"));
+  assert.ok(sources.includes("Connect Codex"));
+  assert.ok(sources.includes("WhatsApp Access"));
   assert.ok(sources.includes("Leave blank to start with a new local git repository."));
-  assert.ok(sources.includes("No folder selection is needed."));
   assert.ok(sources.includes("generatedWorkspaceName"));
   assert.ok(sources.includes("autoWorkspace"));
   assert.ok(sources.includes("initGit"));
-  assert.ok(sources.includes("Create Agent"));
-  assert.ok(sources.includes('type WizardStepId = "name" | "repository" | "review"'));
+  assert.ok(sources.includes("Start orkest"));
+  assert.ok(sources.includes('type WizardStepId = "welcome" | "codex" | "whatsapp" | "review"'));
+  assert.ok(sources.includes('threadName = "orkest"'));
+  assert.ok(sources.includes('type WhatsAppAccessMode = "relay" | "own"'));
+  assert.ok(sources.includes("Use Orkestr relay"));
+  assert.ok(sources.includes("Use my own WhatsApp"));
+  assert.ok(sources.includes("saveSetupDemoPreferences"));
+  assert.ok(sources.includes("acquireDesktopLease"));
+  assert.ok(sources.includes('browserAction(slug, "start"'));
   assert.ok(sources.includes("repoRemoteUrl"));
   assert.ok(sources.includes("cloneRepo"));
   assert.ok(sources.includes("Codex Agent required."));
@@ -97,6 +104,7 @@ test("main UI exposes a guided first thread generation flow", async () => {
   assert.ok(!sources.includes(`<button class="secondary" type="button" [class.active]="activePanel === 'raw'" (click)="openPanel('raw')">Raw</button>`));
   assert.ok(!wizardSources.includes("this.api.sendThreadInput"));
   assert.ok(!wizardSources.includes("this.api.wakeThread"));
+  assert.ok(!wizardSources.includes('executorId: "noop"'));
 });
 
 test("web thread input allows Orkestr control commands", async () => {

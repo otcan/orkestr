@@ -67,6 +67,7 @@ test("runtime settings persist non-secret Codex, desktop, and connector routing"
   assert.equal(settings.codex.permissionPrompts.mirrorToWhatsApp, true);
   assert.equal(settings.desktops.gmailAuth, "gmail");
   assert.equal(settings.connectors.gmail.authDesktop, "gmail");
+  assert.equal(settings.connectors.whatsapp.accessMode, "relay");
   assert.equal(raw.codex.clientSecret, undefined);
   assert.equal(raw.connectors.gmail.clientSecret, undefined);
 });

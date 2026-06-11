@@ -6,10 +6,9 @@ It gives Codex a durable home: persistent threads, browser control, status,
 interruptions, WhatsApp routing, timers, and local ops from a web UI or CLI.
 Codex remains the agent. Orkestr is the control surface around it.
 
-> Public alpha. The supported remote shape works out of the box through the
-> host-native installer: Orkestr binds to `127.0.0.1`, remote access goes
-> through Tailscale or Caddy/TLS, and browser pairing gates access. Do not expose
-> raw Orkestr API, thread, or terminal routes directly to the public internet.
+> Public alpha. The Docker/Helm path is the primary OSS demo path. Browser
+> pairing gates remote access; do not expose raw Orkestr API, thread, desktop,
+> or terminal routes directly to the public internet.
 
 ![WhatsApp, TMUX, and Orkestr Web UI showing the same routed proof lines](docs/assets/orkestr-three-screen-demo.png)
 
@@ -31,51 +30,48 @@ If you only need one interactive Codex terminal, use Codex directly.
 
 ## Quickstart
 
-### Local Host-Native
+### Docker
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/otcan/orkestr/main/scripts/install.sh | bash
+docker run -p 3000:3000 -v orkestr-data:/data orkestr/orkestr:latest
 ```
 
 Then open:
 
 ```text
-http://127.0.0.1:19812/setup
+http://127.0.0.1:3000/setup
 ```
 
-The installer creates a local service, prepares `ORKESTR_HOME`, installs the CLI,
-and starts Orkestr. It asks only whether to enable YOLO mode for Codex; press
-Enter to keep the safer default.
+The container stores Orkestr state in `/data`, including workspaces, browser
+profiles, secrets, and `CODEX_HOME=/data/codex`.
 
-Useful local commands:
+First run:
+
+1. Connect Codex.
+2. Choose WhatsApp access: Orkestr relay or your own WhatsApp bridge.
+3. Start the default `orkest` thread.
+4. Orkestr starts Virtual Desk for that thread.
+
+### Helm
 
 ```bash
-orkestr service status
-orkestr service logs
-orkestr service stop
-orkestr service start
+helm install orkestr ./charts/orkestr
 ```
 
-For source work:
+### Source/Host-Native
 
 ```bash
 git clone https://github.com/otcan/orkestr.git
 cd orkestr
-./scripts/install.sh --local
+npm ci
+npm run build
+ORKESTR_HOME="$PWD/.orkestr-data" CODEX_HOME="$PWD/.orkestr-data/codex" ORKESTR_PORT=3000 ORKESTR_HOST=127.0.0.1 npm start
 ```
 
-### VPS Host-Native
-
-For a fresh Ubuntu 24.04 VPS:
+The host-native installer still exists for private workstations and VPS installs:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/otcan/orkestr/main/scripts/bootstrap-vps.sh | sudo bash
-```
-
-For lower-level systemd installation on a prepared host:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/otcan/orkestr/main/scripts/install.sh | sudo bash -s -- --systemd
+curl -fsSL https://raw.githubusercontent.com/otcan/orkestr/main/scripts/install.sh | bash
 ```
 
 Useful server commands:
@@ -88,36 +84,30 @@ orkestr security approve <challenge-id>
 orkestr security sessions
 ```
 
-## First Run
-
-1. Open `/setup`.
-2. Connect Codex.
-3. Create or import a thread.
-4. Send work from the web UI or CLI.
-5. Optionally connect WhatsApp, timers, Gmail, or browser desktops.
-
-CLI example:
-
-```bash
-orkestr thread create "Repo launch reviewer" --cwd "$PWD" --executor codex
-orkestr send repo-launch-reviewer "Inspect this repo and list launch blockers. Do not edit files."
-orkestr attach repo-launch-reviewer
-```
-
 ## Demo
 
-Run the deterministic public demo:
+Run the OSS demo contract smoke:
+
+```bash
+npm run smoke:k3s:oss-demo
+```
+
+It checks the Docker contract, Helm chart, first-run `orkest` path, WhatsApp
+trust choice, Virtual Desk startup wiring, and verifies the demo path is not
+using the noop executor.
+
+For a live k3s smoke on a host with Docker, Helm, and kubectl:
+
+```bash
+ORKESTR_K3S_OSS_DEMO_EXECUTE=1 npm run smoke:k3s:oss-demo
+```
+
+The older deterministic coding-agent demo is still available for local
+development:
 
 ```bash
 npm run demo:coding-agent
 ```
-
-It starts Orkestr with a temporary home, creates a coding-agent thread, prepares
-a virtual desktop profile, queues a repository-review task, and exits without
-requiring Codex, WhatsApp, Gmail, or LinkedIn credentials.
-
-For the full walkthrough, see
-[examples/coding-agent-demo/README.md](examples/coding-agent-demo/README.md).
 
 ## What Is Included
 
@@ -127,7 +117,7 @@ For the full walkthrough, see
 - web UI and CLI control
 - optional built-in local WhatsApp bridge
 - optional timers
-- optional browser desktop profiles
+- Virtual Desk browser profiles
 - secure-input secret manager
 - local health checks, logs, smoke tests, and release checks
 

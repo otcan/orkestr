@@ -23,6 +23,7 @@ const accountStates = new Map();
 const outboundMessageIds = new Set();
 const outboundMessageTextKeys = new Map();
 const outboundAttachmentKeys = new Map();
+const outboundAttachmentSizeKeys = new Map();
 const inboundFailureNoticeKeys = new Set();
 const inboundForwardLedgerKeys = new Set();
 const typingSessions = new Map();
@@ -989,9 +990,16 @@ function pruneOutboundAttachmentKeys(env = process.env) {
   for (const [key, rememberedAt] of outboundAttachmentKeys.entries()) {
     if (Number(rememberedAt || 0) < cutoff) outboundAttachmentKeys.delete(key);
   }
+  for (const [key, rememberedAt] of outboundAttachmentSizeKeys.entries()) {
+    if (Number(rememberedAt || 0) < cutoff) outboundAttachmentSizeKeys.delete(key);
+  }
   while (outboundAttachmentKeys.size > 500) {
     const [oldest] = outboundAttachmentKeys.keys();
     outboundAttachmentKeys.delete(oldest);
+  }
+  while (outboundAttachmentSizeKeys.size > 500) {
+    const [oldest] = outboundAttachmentSizeKeys.keys();
+    outboundAttachmentSizeKeys.delete(oldest);
   }
 }
 
@@ -1009,20 +1017,34 @@ function attachmentEchoKey(accountId, chatId, attachment = {}) {
   ].join(":");
 }
 
+function attachmentEchoSizeKey(accountId, chatId, attachment = {}) {
+  const size = Number(attachment.size);
+  if (!Number.isFinite(size) || size <= 0) return "";
+  return [
+    String(accountId || "").trim(),
+    String(chatId || "").trim(),
+    Math.floor(size),
+  ].join(":");
+}
+
 function rememberOutboundAttachment(accountId, chatId, attachment = {}, env = process.env) {
   const key = attachmentEchoKey(accountId, chatId, attachment);
-  if (!key || key.endsWith("::")) return;
-  outboundAttachmentKeys.set(key, Date.now());
+  const sizeKey = attachmentEchoSizeKey(accountId, chatId, attachment);
+  const rememberedAt = Date.now();
+  if (key && !key.endsWith("::")) outboundAttachmentKeys.set(key, rememberedAt);
+  if (sizeKey && !sizeKey.endsWith("::")) outboundAttachmentSizeKeys.set(sizeKey, rememberedAt);
   pruneOutboundAttachmentKeys(env);
 }
 
-function outboundAttachmentsRecentlySent(accountId, chatId, attachments = [], env = process.env) {
+function outboundAttachmentsRecentlySent(accountId, chatId, attachments = [], env = process.env, options = {}) {
   const items = Array.isArray(attachments) ? attachments : [];
   if (!items.length) return false;
   pruneOutboundAttachmentKeys(env);
   return items.every((attachment) => {
     const key = attachmentEchoKey(accountId, chatId, attachment);
-    return Boolean(key && outboundAttachmentKeys.has(key));
+    if (key && outboundAttachmentKeys.has(key)) return true;
+    const sizeKey = attachmentEchoSizeKey(accountId, chatId, attachment);
+    return Boolean(options.allowSizeOnly && sizeKey && outboundAttachmentSizeKeys.has(sizeKey));
   });
 }
 
@@ -1859,7 +1881,7 @@ export async function handleInboundMessage(accountId, message, env = process.env
     return [];
   });
   if (!text && !attachments.length) return { skipped: "empty_message" };
-  if (outboundAttachmentsRecentlySent(accountId, chatId, attachments, env)) {
+  if (outboundAttachmentsRecentlySent(accountId, chatId, attachments, env, { allowSizeOnly: fromMe })) {
     return { skipped: fromMe ? "outbound_echo_attachment" : "outbound_echo_cross_account_attachment", eventId, chatId };
   }
   const routedText = text || attachmentSummaryText(attachments);
@@ -3390,8 +3412,8 @@ export async function sendLocalWhatsAppMessage({ chatId = "", text = "", account
     if (normalizedAttachments.length) {
       const MessageMedia = runtime.MessageMedia || (await loadBridgeDependencies()).whatsapp.MessageMedia;
       for (const attachment of normalizedAttachments) {
-        await fs.access(attachment.path);
-        rememberOutboundAttachment(selectedAccountId, chatId, attachment, env);
+        const stat = await fs.stat(attachment.path);
+        rememberOutboundAttachment(selectedAccountId, chatId, { ...attachment, size: stat.size }, env);
         const media = MessageMedia.fromFilePath(attachment.path);
         const message = await withSendOperationTimeout(
           runtime.client.sendMessage(chatId, media, {
