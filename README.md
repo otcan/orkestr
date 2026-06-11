@@ -321,6 +321,17 @@ AWS VPS, real WhatsApp, release regression, and deploy steps are opt-in flags.
 When changing the UI, run `npm run web:build` and commit the updated `dist/web`
 bundle.
 
+### Connector Outbox Storage
+
+The connector outbox uses SQLite by default when `node:sqlite` is available.
+Existing `connector-outbox.json` state is migrated into
+`connector-outbox.sqlite` on first use, then hot outbox actions use indexed
+SQLite updates instead of rewriting the JSON file. Set
+`ORKESTR_CONNECTOR_OUTBOX_STORE=json` only as an emergency legacy fallback.
+
+`ORKESTR_CONNECTOR_OUTBOX_STORE=postgres` is reserved for a future managed-scale
+backend and currently fails closed instead of silently falling back.
+
 ## License
 
 MIT. See [LICENSE](LICENSE).

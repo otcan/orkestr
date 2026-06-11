@@ -16,6 +16,7 @@ import {
   readConnectorOutbox,
 } from "../packages/connectors/src/connector-outbox.js";
 import { approvePairingChallenge, createPairingChallenge, pairBrowser, sessionCookieHeader } from "../packages/core/src/security.js";
+import { dataPaths } from "../packages/storage/src/paths.js";
 
 function env(home, extra = {}) {
   return {
@@ -240,4 +241,71 @@ test("connector outbox retention prunes terminal history but keeps active jobs",
   assert.equal(connectorOutboxRetentionLimit(runtimeEnv), 2);
   assert.deepEqual(merged.map((job) => job.sourceMessageId), ["active-old", "terminal-2", "terminal-3"]);
   assert.equal(merged.find((job) => job.sourceMessageId === "active-old")?.state, "pending");
+});
+
+test("connector outbox migrates large JSON stores to SQLite without rewriting JSON on hot actions", async (t) => {
+  try {
+    await import("node:sqlite");
+  } catch {
+    t.skip("node:sqlite unavailable");
+    return;
+  }
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-connector-outbox-sqlite-"));
+  const runtimeEnv = env(home, {
+    ORKESTR_CONNECTOR_OUTBOX_STORE: "sqlite",
+    ORKESTR_CONNECTOR_OUTBOX_RETENTION: "10000",
+  });
+  const paths = dataPaths(runtimeEnv);
+  const jobs = [];
+  for (let index = 0; index < 10000; index += 1) {
+    jobs.push(whatsappJob({
+      tenantId: `tenant-${index % 25}`,
+      chatId: `chat-${index % 100}`,
+      threadId: `thread-${index % 50}`,
+      sourceEventId: `delivered-${index}`,
+      sourceMessageId: `delivered-${index}`,
+      state: "delivered",
+      deliveredAt: new Date(Date.now() - index * 1000).toISOString(),
+      createdAt: new Date(Date.now() - index * 1000).toISOString(),
+      updatedAt: new Date(Date.now() - index * 1000).toISOString(),
+      payload: { text: `delivered body ${index}` },
+    }));
+  }
+  for (let index = 0; index < 5; index += 1) {
+    jobs.push(whatsappJob({
+      tenantId: "tenant-hot",
+      chatId: "chat-hot",
+      threadId: "thread-hot",
+      sourceEventId: `retry-${index}`,
+      sourceMessageId: `retry-${index}`,
+      state: "failed_retryable",
+      failedAt: new Date().toISOString(),
+      error: "bridge_down",
+      payload: { text: `retry body ${index}` },
+    }));
+  }
+  await fs.writeFile(paths.connectorOutbox, `${JSON.stringify({ schemaVersion: 1, jobs }, null, 2)}\n`);
+  const before = await fs.stat(paths.connectorOutbox);
+
+  const retryable = await listConnectorOutboxJobs({
+    connector: "whatsapp",
+    state: "failed_retryable",
+    tenantId: "tenant-hot",
+  }, runtimeEnv);
+  assert.equal(retryable.backend, "sqlite");
+  assert.equal(retryable.total, 5);
+  assert.equal(retryable.count, 5);
+  assert.ok((await fs.stat(paths.connectorOutboxDb)).size > 0);
+
+  const claimed = await claimConnectorOutboxJob(retryable.jobs[0].id, { claimant: "sqlite-worker" }, runtimeEnv);
+  assert.equal(claimed.acquired, true);
+  const delivered = await markConnectorOutboxJob(claimed.job.id, {
+    state: "delivered",
+    deliveredAt: new Date().toISOString(),
+  }, runtimeEnv);
+  assert.equal(delivered.state, "delivered");
+
+  const after = await fs.stat(paths.connectorOutbox);
+  assert.equal(after.mtimeMs, before.mtimeMs);
+  assert.equal(after.size, before.size);
 });

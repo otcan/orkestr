@@ -1,9 +1,12 @@
 import crypto from "node:crypto";
+import fs from "node:fs/promises";
 import { dataPaths, ensureDataDirs } from "../../storage/src/paths.js";
 import { appendEvent, readJson, writeJson } from "../../storage/src/store.js";
 
 const terminalStates = new Set(["delivered", "skipped", "skipped_policy", "suppressed", "dead_letter", "cancelled"]);
 const operatorActions = new Set(["retry", "suppress", "mark_delivered", "mark-delivered", "replay", "dead_letter", "dead-letter"]);
+const dbCache = new Map();
+let sqliteModulePromise = null;
 
 function clean(value) {
   return String(value || "").trim();
@@ -33,6 +36,14 @@ function hash(value) {
 
 function outboxPath(env = process.env) {
   return dataPaths(env).connectorOutbox;
+}
+
+function outboxDbPath(env = process.env) {
+  return dataPaths(env).connectorOutboxDb;
+}
+
+function connectorOutboxStoreMode(env = process.env) {
+  return clean(env.ORKESTR_CONNECTOR_OUTBOX_STORE || env.ORKESTR_CONNECTOR_OUTBOX_BACKEND || "auto").toLowerCase();
 }
 
 function statusRank(value) {
@@ -69,6 +80,232 @@ export function connectorOutboxRetentionLimit(env = process.env) {
   const parsed = Number(raw || 10_000);
   const minimum = raw ? 1 : 1_000;
   return Number.isFinite(parsed) ? Math.max(minimum, Math.floor(parsed)) : 10_000;
+}
+
+async function loadSqlite(mode) {
+  try {
+    sqliteModulePromise ||= import("node:sqlite");
+    return await sqliteModulePromise;
+  } catch (error) {
+    if (mode === "sqlite") throw error;
+    return null;
+  }
+}
+
+async function openConnectorOutboxDatabase(env = process.env) {
+  const mode = connectorOutboxStoreMode(env);
+  if (mode === "json") return null;
+  if (mode === "postgres" || mode === "postgresql") {
+    const error = new Error("connector_outbox_postgres_backend_not_implemented");
+    error.statusCode = 501;
+    throw error;
+  }
+  const sqlite = await loadSqlite(mode);
+  if (!sqlite) return null;
+  const paths = await ensureDataDirs(env);
+  if (dbCache.has(paths.connectorOutboxDb)) return dbCache.get(paths.connectorOutboxDb);
+  const existed = await fs.stat(paths.connectorOutboxDb).then((stat) => stat.size > 0, () => false);
+  const db = new sqlite.DatabaseSync(paths.connectorOutboxDb);
+  db.exec("pragma journal_mode = WAL");
+  db.exec("pragma synchronous = NORMAL");
+  db.exec("pragma busy_timeout = 5000");
+  ensureConnectorOutboxSchema(db);
+  dbCache.set(paths.connectorOutboxDb, db);
+  await migrateJsonConnectorOutboxIfNeeded(db, paths, existed, env);
+  return db;
+}
+
+function ensureConnectorOutboxSchema(db) {
+  db.exec(`
+    create table if not exists orkestr_connector_outbox (
+      id text primary key,
+      idempotency_key text not null unique,
+      tenant_id text,
+      owner_user_id text,
+      connector text,
+      account_id text,
+      chat_id text,
+      thread_id text,
+      source_message_id text,
+      source_revision text,
+      delivery_type text,
+      state text,
+      claim_expires_at text,
+      created_at text,
+      updated_at text,
+      terminal_at text,
+      data text not null
+    );
+    create index if not exists idx_connector_outbox_state_updated on orkestr_connector_outbox(state, updated_at);
+    create index if not exists idx_connector_outbox_connector_state_updated on orkestr_connector_outbox(connector, state, updated_at);
+    create index if not exists idx_connector_outbox_owner_state_updated on orkestr_connector_outbox(owner_user_id, state, updated_at);
+    create index if not exists idx_connector_outbox_chat_state_updated on orkestr_connector_outbox(chat_id, state, updated_at);
+    create index if not exists idx_connector_outbox_thread_state_updated on orkestr_connector_outbox(thread_id, state, updated_at);
+    create index if not exists idx_connector_outbox_source_message on orkestr_connector_outbox(source_message_id);
+    create table if not exists orkestr_connector_outbox_meta (
+      key text primary key,
+      value text not null
+    );
+  `);
+}
+
+async function migrateJsonConnectorOutboxIfNeeded(db, paths, existed, env = process.env) {
+  const migrated = db.prepare("select value from orkestr_connector_outbox_meta where key = ?").get("json_migrated_at");
+  const count = Number(db.prepare("select count(*) as count from orkestr_connector_outbox").get().count || 0);
+  if (migrated || (existed && count > 0)) return;
+  const payload = await readJson(paths.connectorOutbox, { schemaVersion: 1, jobs: [] });
+  const jobs = Array.isArray(payload?.jobs) ? payload.jobs : Array.isArray(payload) ? payload : [];
+  if (jobs.length) replaceConnectorOutboxRows(db, mergeConnectorOutboxJobs(jobs, [], env), env);
+  setConnectorOutboxMeta(db, "json_migrated_at", nowIso());
+}
+
+function setConnectorOutboxMeta(db, key, value) {
+  db.prepare(`
+    insert into orkestr_connector_outbox_meta(key, value)
+    values (?, ?)
+    on conflict(key) do update set value = excluded.value
+  `).run(key, value);
+}
+
+function rowToConnectorOutboxJob(row, env = process.env) {
+  try {
+    return normalizeConnectorOutboxJob(JSON.parse(row.data), env);
+  } catch {
+    return normalizeConnectorOutboxJob({
+      id: row.id,
+      idempotencyKey: row.idempotency_key,
+      tenantId: row.tenant_id,
+      ownerUserId: row.owner_user_id,
+      connector: row.connector,
+      accountId: row.account_id,
+      chatId: row.chat_id,
+      threadId: row.thread_id,
+      sourceMessageId: row.source_message_id,
+      sourceRevision: row.source_revision,
+      deliveryType: row.delivery_type,
+      state: row.state,
+      claimExpiresAt: row.claim_expires_at,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+      terminalAt: row.terminal_at,
+    }, env);
+  }
+}
+
+function jobColumns(job) {
+  return [
+    job.id,
+    job.idempotencyKey,
+    job.tenantId,
+    job.ownerUserId,
+    job.connector,
+    job.accountId,
+    job.chatId,
+    job.threadId,
+    job.sourceMessageId,
+    job.sourceRevision,
+    job.deliveryType,
+    job.state,
+    job.claimExpiresAt,
+    job.createdAt,
+    job.updatedAt,
+    job.terminalAt,
+    JSON.stringify(job),
+  ];
+}
+
+function upsertConnectorOutboxJobRow(db, job) {
+  db.prepare(`
+    insert into orkestr_connector_outbox(
+      id, idempotency_key, tenant_id, owner_user_id, connector, account_id,
+      chat_id, thread_id, source_message_id, source_revision, delivery_type,
+      state, claim_expires_at, created_at, updated_at, terminal_at, data
+    ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    on conflict(idempotency_key) do update set
+      id = excluded.id,
+      tenant_id = excluded.tenant_id,
+      owner_user_id = excluded.owner_user_id,
+      connector = excluded.connector,
+      account_id = excluded.account_id,
+      chat_id = excluded.chat_id,
+      thread_id = excluded.thread_id,
+      source_message_id = excluded.source_message_id,
+      source_revision = excluded.source_revision,
+      delivery_type = excluded.delivery_type,
+      state = excluded.state,
+      claim_expires_at = excluded.claim_expires_at,
+      created_at = excluded.created_at,
+      updated_at = excluded.updated_at,
+      terminal_at = excluded.terminal_at,
+      data = excluded.data
+  `).run(...jobColumns(job));
+}
+
+function replaceConnectorOutboxRows(db, jobs = [], env = process.env) {
+  db.exec("begin immediate");
+  try {
+    db.exec("delete from orkestr_connector_outbox");
+    for (const job of mergeConnectorOutboxJobs(jobs, [], env)) upsertConnectorOutboxJobRow(db, job);
+    pruneConnectorOutboxRows(db, env);
+    setConnectorOutboxMeta(db, "updated_at", nowIso());
+    db.exec("commit");
+  } catch (error) {
+    db.exec("rollback");
+    throw error;
+  }
+}
+
+function terminalStateSqlPlaceholders() {
+  return [...terminalStates].map(() => "?").join(", ");
+}
+
+function pruneConnectorOutboxRows(db, env = process.env) {
+  const limit = connectorOutboxRetentionLimit(env);
+  const states = [...terminalStates];
+  const rows = db.prepare(`
+    select id from orkestr_connector_outbox
+    where state in (${terminalStateSqlPlaceholders()})
+    order by coalesce(nullif(updated_at, ''), nullif(terminal_at, ''), nullif(created_at, '')) desc, id desc
+    limit -1 offset ?
+  `).all(...states, limit);
+  if (!rows.length) return 0;
+  const remove = db.prepare("delete from orkestr_connector_outbox where id = ?");
+  for (const row of rows) remove.run(row.id);
+  return rows.length;
+}
+
+function connectorOutboxWhere(filters = {}) {
+  const clauses = [];
+  const values = [];
+  const add = (column, value) => {
+    const text = clean(value);
+    if (!text) return;
+    clauses.push(`${column} = ?`);
+    values.push(text);
+  };
+  add("connector", filters.connector);
+  add("tenant_id", filters.tenantId);
+  add("owner_user_id", filters.ownerUserId || filters.userId);
+  add("account_id", filters.accountId);
+  add("chat_id", filters.chatId);
+  add("thread_id", filters.threadId || filters.thread);
+  add("delivery_type", filters.deliveryType);
+  const states = clean(filters.state).toLowerCase().split(/[\s,]+/g).map(clean).filter(Boolean);
+  if (states.length) {
+    clauses.push(`state in (${states.map(() => "?").join(", ")})`);
+    values.push(...states);
+  }
+  return {
+    sql: clauses.length ? `where ${clauses.join(" and ")}` : "",
+    values,
+  };
+}
+
+function getConnectorOutboxJobRow(db, jobIdOrKey = "", env = process.env) {
+  const target = clean(jobIdOrKey);
+  if (!target) return null;
+  const row = db.prepare("select data from orkestr_connector_outbox where id = ? or idempotency_key = ? limit 1").get(target, target);
+  return row ? rowToConnectorOutboxJob(row, env) : null;
 }
 
 export function connectorOutboxPayloadHash(payload = {}) {
@@ -167,6 +404,17 @@ export function pruneConnectorOutboxJobs(jobs = [], env = process.env) {
 }
 
 export async function readConnectorOutbox(env = process.env) {
+  const db = await openConnectorOutboxDatabase(env);
+  if (db) {
+    const rows = db
+      .prepare("select data from orkestr_connector_outbox order by created_at asc, id asc")
+      .all();
+    return {
+      schemaVersion: 1,
+      jobs: rows.map((row) => rowToConnectorOutboxJob(row, env)),
+      backend: "sqlite",
+    };
+  }
   await ensureDataDirs(env);
   const payload = await readJson(outboxPath(env), { schemaVersion: 1, jobs: [] });
   const jobs = Array.isArray(payload?.jobs) ? payload.jobs : Array.isArray(payload) ? payload : [];
@@ -190,6 +438,44 @@ function stateFilterMatches(actual = "", expected = "") {
 }
 
 export async function listConnectorOutboxJobs(filters = {}, env = process.env) {
+  const db = await openConnectorOutboxDatabase(env);
+  if (db) {
+    const limit = Math.max(0, Math.floor(Number(filters.limit || 0) || 0));
+    const where = connectorOutboxWhere(filters);
+    const total = Number(db.prepare(`select count(*) as count from orkestr_connector_outbox ${where.sql}`).get(...where.values).count || 0);
+    const rows = limit
+      ? db.prepare(`
+          select data from orkestr_connector_outbox
+          ${where.sql}
+          order by coalesce(nullif(updated_at, ''), nullif(terminal_at, ''), nullif(created_at, '')) desc, id desc
+          limit ?
+        `).all(...where.values, limit)
+      : db.prepare(`
+          select data from orkestr_connector_outbox
+          ${where.sql}
+          order by coalesce(nullif(updated_at, ''), nullif(terminal_at, ''), nullif(created_at, '')) desc, id desc
+        `).all(...where.values);
+    const jobs = rows.map((row) => rowToConnectorOutboxJob(row, env));
+    return {
+      schemaVersion: 1,
+      jobs,
+      count: jobs.length,
+      total,
+      backend: "sqlite",
+      filters: {
+        connector: clean(filters.connector),
+        state: clean(filters.state),
+        tenantId: clean(filters.tenantId),
+        ownerUserId: clean(filters.ownerUserId || filters.userId),
+        accountId: clean(filters.accountId),
+        chatId: clean(filters.chatId),
+        threadId: clean(filters.threadId || filters.thread),
+        deliveryType: clean(filters.deliveryType),
+        limit,
+      },
+      generatedAt: nowIso(),
+    };
+  }
   const store = await readConnectorOutbox(env);
   const limit = Math.max(0, Math.floor(Number(filters.limit || 0) || 0));
   const jobs = store.jobs
@@ -224,6 +510,12 @@ export async function listConnectorOutboxJobs(filters = {}, env = process.env) {
 }
 
 export async function writeConnectorOutbox(store = {}, env = process.env) {
+  const db = await openConnectorOutboxDatabase(env);
+  if (db) {
+    const jobs = mergeConnectorOutboxJobs(store.jobs || [], [], env);
+    replaceConnectorOutboxRows(db, jobs, env);
+    return { schemaVersion: 1, jobs, backend: "sqlite", updatedAt: nowIso() };
+  }
   await ensureDataDirs(env);
   return writeJson(outboxPath(env), {
     schemaVersion: 1,
@@ -233,6 +525,36 @@ export async function writeConnectorOutbox(store = {}, env = process.env) {
 }
 
 export async function ensureConnectorOutboxJob(input = {}, env = process.env) {
+  const db = await openConnectorOutboxDatabase(env);
+  if (db) {
+    const job = normalizeConnectorOutboxJob(input, env);
+    const existing = getConnectorOutboxJobRow(db, job.idempotencyKey, env);
+    const nextJob = existing ? mergeJob(existing, job) : job;
+    db.exec("begin immediate");
+    try {
+      upsertConnectorOutboxJobRow(db, nextJob);
+      pruneConnectorOutboxRows(db, env);
+      setConnectorOutboxMeta(db, "updated_at", nowIso());
+      db.exec("commit");
+    } catch (error) {
+      db.exec("rollback");
+      throw error;
+    }
+    if (!existing) {
+      await appendEvent({
+        type: "connector_outbox_job_created",
+        outboxJobId: job.id,
+        tenantId: job.tenantId,
+        connector: job.connector,
+        accountId: job.accountId,
+        chatId: job.chatId,
+        threadId: job.threadId,
+        sourceMessageId: job.sourceMessageId,
+        deliveryType: job.deliveryType,
+      }, env).catch(() => {});
+    }
+    return { job: nextJob, created: !existing };
+  }
   const store = await readConnectorOutbox(env);
   const job = normalizeConnectorOutboxJob(input, env);
   const existing = store.jobs.find((item) => item.idempotencyKey === job.idempotencyKey) || null;
@@ -266,6 +588,52 @@ function claimExpired(job = {}, nowMs = Date.now()) {
 }
 
 export async function claimConnectorOutboxJob(jobIdOrKey = "", { claimant = "" } = {}, env = process.env) {
+  const db = await openConnectorOutboxDatabase(env);
+  if (db) {
+    const job = getConnectorOutboxJobRow(db, jobIdOrKey, env);
+    if (!job) return { acquired: false, reason: "connector_outbox_job_missing" };
+    const nowMs = Date.now();
+    const now = new Date(nowMs).toISOString();
+    if (connectorOutboxTerminalState(job.state)) {
+      return { acquired: false, reason: `connector_outbox_${job.state}`, terminal: true, job };
+    }
+    if (!claimExpired(job, nowMs)) {
+      const reason = clean(job.state).toLowerCase() === "failed_retryable"
+        ? "connector_outbox_retry_scheduled"
+        : "connector_outbox_claim_active";
+      return { acquired: false, reason, job };
+    }
+    const claimed = normalizeConnectorOutboxJob({
+      ...job,
+      state: "claimed",
+      claimedBy: clean(claimant) || `pid:${process.pid}`,
+      claimedAt: now,
+      claimExpiresAt: new Date(nowMs + connectorOutboxClaimTtlMs(env)).toISOString(),
+      attemptCount: Number(job.attemptCount || 0) + 1,
+      updatedAt: now,
+    }, env);
+    db.exec("begin immediate");
+    try {
+      upsertConnectorOutboxJobRow(db, claimed);
+      setConnectorOutboxMeta(db, "updated_at", now);
+      db.exec("commit");
+    } catch (error) {
+      db.exec("rollback");
+      throw error;
+    }
+    await appendEvent({
+      type: "connector_outbox_job_claimed",
+      outboxJobId: claimed.id,
+      tenantId: claimed.tenantId,
+      connector: claimed.connector,
+      chatId: claimed.chatId,
+      threadId: claimed.threadId,
+      sourceMessageId: claimed.sourceMessageId,
+      deliveryType: claimed.deliveryType,
+      claimedBy: claimed.claimedBy,
+    }, env).catch(() => {});
+    return { acquired: true, job: claimed };
+  }
   const store = await readConnectorOutbox(env);
   const target = clean(jobIdOrKey);
   const nowMs = Date.now();
@@ -309,6 +677,31 @@ export async function claimConnectorOutboxJob(jobIdOrKey = "", { claimant = "" }
 }
 
 export async function releaseConnectorOutboxClaim(jobIdOrKey = "", { reason = "" } = {}, env = process.env) {
+  const db = await openConnectorOutboxDatabase(env);
+  if (db) {
+    const job = getConnectorOutboxJobRow(db, jobIdOrKey, env);
+    if (!job) return null;
+    if (connectorOutboxTerminalState(job.state)) return job;
+    const released = normalizeConnectorOutboxJob({
+      ...job,
+      state: "pending",
+      claimedBy: "",
+      claimedAt: "",
+      claimExpiresAt: "",
+      error: clean(reason || job.error),
+      updatedAt: nowIso(),
+    }, env);
+    db.exec("begin immediate");
+    try {
+      upsertConnectorOutboxJobRow(db, released);
+      setConnectorOutboxMeta(db, "updated_at", released.updatedAt);
+      db.exec("commit");
+    } catch (error) {
+      db.exec("rollback");
+      throw error;
+    }
+    return released;
+  }
   const store = await readConnectorOutbox(env);
   const target = clean(jobIdOrKey);
   const index = store.jobs.findIndex((job) => job.id === target || job.idempotencyKey === target);
@@ -330,6 +723,44 @@ export async function releaseConnectorOutboxClaim(jobIdOrKey = "", { reason = ""
 }
 
 export async function markConnectorOutboxJob(jobIdOrKey = "", patch = {}, env = process.env) {
+  const db = await openConnectorOutboxDatabase(env);
+  if (db) {
+    const current = getConnectorOutboxJobRow(db, jobIdOrKey, env);
+    if (!current) return null;
+    const state = clean(patch.state || current.state || "pending").toLowerCase();
+    const updated = normalizeConnectorOutboxJob({
+      ...current,
+      ...patch,
+      state,
+      claimedBy: connectorOutboxTerminalState(state) ? "" : patch.claimedBy ?? current.claimedBy,
+      claimedAt: connectorOutboxTerminalState(state) ? "" : patch.claimedAt ?? current.claimedAt,
+      claimExpiresAt: connectorOutboxTerminalState(state) ? "" : patch.claimExpiresAt ?? current.claimExpiresAt,
+      terminalAt: connectorOutboxTerminalState(state) ? clean(patch.terminalAt) || nowIso() : clean(patch.terminalAt),
+      updatedAt: nowIso(),
+    }, env);
+    db.exec("begin immediate");
+    try {
+      upsertConnectorOutboxJobRow(db, updated);
+      pruneConnectorOutboxRows(db, env);
+      setConnectorOutboxMeta(db, "updated_at", updated.updatedAt);
+      db.exec("commit");
+    } catch (error) {
+      db.exec("rollback");
+      throw error;
+    }
+    await appendEvent({
+      type: "connector_outbox_job_updated",
+      outboxJobId: updated.id,
+      tenantId: updated.tenantId,
+      connector: updated.connector,
+      chatId: updated.chatId,
+      threadId: updated.threadId,
+      sourceMessageId: updated.sourceMessageId,
+      deliveryType: updated.deliveryType,
+      state: updated.state,
+    }, env).catch(() => {});
+    return updated;
+  }
   const store = await readConnectorOutbox(env);
   const target = clean(jobIdOrKey);
   const index = store.jobs.findIndex((job) => job.id === target || job.idempotencyKey === target);
@@ -453,9 +884,11 @@ export async function applyConnectorOutboxJobAction(jobIdOrKey = "", action = ""
     error.statusCode = 400;
     throw error;
   }
-  const store = await readConnectorOutbox(env);
+  const db = await openConnectorOutboxDatabase(env);
   const target = clean(jobIdOrKey);
-  const current = store.jobs.find((job) => job.id === target || job.idempotencyKey === target);
+  const current = db
+    ? getConnectorOutboxJobRow(db, target, env)
+    : (await readConnectorOutbox(env)).jobs.find((job) => job.id === target || job.idempotencyKey === target);
   if (!current) {
     const error = new Error("connector_outbox_job_missing");
     error.statusCode = 404;

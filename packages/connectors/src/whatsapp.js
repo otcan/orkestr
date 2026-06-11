@@ -47,7 +47,7 @@ import {
   connectorOutboxTerminalState,
   connectorOutboxRetryBackoffMs,
   ensureConnectorOutboxJob,
-  readConnectorOutbox,
+  listConnectorOutboxJobs,
   markConnectorOutboxJob,
   releaseConnectorOutboxClaim,
 } from "./connector-outbox.js";
@@ -1218,11 +1218,11 @@ function deliveredConnectorOutboxEvidence(job = {}, outboundDeliveries = [], out
 }
 
 async function reconcileWhatsAppConnectorOutboxFromLedger(state = {}, env = process.env) {
-  const outbox = await readConnectorOutbox(env).catch(() => ({ jobs: [] }));
-  const jobs = (outbox.jobs || []).filter((job) =>
-    pickString(job.connector).toLowerCase() === "whatsapp" &&
-    !connectorOutboxTerminalState(job.state)
-  );
+  const outbox = await listConnectorOutboxJobs({
+    connector: "whatsapp",
+    state: "pending claimed sent_to_broker failed_retryable",
+  }, env).catch(() => ({ jobs: [] }));
+  const jobs = outbox.jobs || [];
   if (!jobs.length) return { reconciled: 0 };
   const outboundDeliveries = Array.isArray(state.outboundDeliveries) ? state.outboundDeliveries : [];
   const outboundIntents = Array.isArray(state.outboundIntents) ? state.outboundIntents : [];
@@ -2163,7 +2163,10 @@ export async function routeWhatsAppInbound(input = {}, env = process.env, fetchI
     };
   }
 
-  const connectorOutboxJobs = (await readConnectorOutbox(env).catch(() => ({ jobs: [] }))).jobs || [];
+  const connectorOutboxJobs = (await listConnectorOutboxJobs({
+    connector: "whatsapp",
+    limit: 1000,
+  }, env).catch(() => ({ jobs: [] }))).jobs || [];
   const outboundEchoDelivery = outboundEchoDeliveryForEvent(state.outboundDeliveries || [], connectorOutboxJobs, input);
   if (outboundEchoDelivery) {
     const event = {
@@ -3100,7 +3103,10 @@ async function deliverWhatsAppRepliesOnce(env = process.env, fetchImpl = fetch) 
   await reconcileWhatsAppConnectorOutboxFromLedger(state, env).catch((error) =>
     appendEvent({ type: "connector_outbox_reconcile_from_whatsapp_delivery_failed", error: error.message || String(error) }, env).catch(() => null)
   );
-  const connectorOutboxJobs = (await readConnectorOutbox(env).catch(() => ({ jobs: [] }))).jobs || [];
+  const connectorOutboxJobs = (await listConnectorOutboxJobs({
+    connector: "whatsapp",
+    limit: 1000,
+  }, env).catch(() => ({ jobs: [] }))).jobs || [];
   const deliveredIds = new Set((state.outboundDeliveries || []).map((delivery) => delivery.messageId));
   const deliveredTextKeys = new Set((state.outboundDeliveries || []).map((delivery) => delivery.textKey).filter(Boolean));
   const batchTextKeys = new Set();

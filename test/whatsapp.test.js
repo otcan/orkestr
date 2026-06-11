@@ -5588,7 +5588,7 @@ test("whatsapp delivery re-reads pending outbound intents after delivery claim c
 
 test("whatsapp delivery closes outbound intents when connector outbox is terminal skipped", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-terminal-outbox-intent-"));
-  const env = externalBridgeEnv(home, { ORKESTR_WHATSAPP_DEBUG_FOOTER: "0" });
+  const env = externalBridgeEnv(home, { ORKESTR_WHATSAPP_DEBUG_FOOTER: "0", ORKESTR_CONNECTOR_OUTBOX_STORE: "json" });
   await createThread({ id: "thread-wa-terminal-outbox-intent", name: "WA Terminal Outbox Intent Thread" }, env);
   await writeConnectorConfig("whatsapp", {
     bridgeMode: "external",
