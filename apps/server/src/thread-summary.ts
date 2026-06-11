@@ -15,6 +15,7 @@ import { visibleThreadMessages } from "../../../packages/core/src/thread-message
 type ThreadSummaryOptions = {
   cacheTtlMs?: number;
   payloadCacheTtlMs?: number;
+  runtimeStatusCacheTtlMs?: number;
   includeAllUserThreads?: boolean;
   principal?: Record<string, any> | null;
   sampleRuntime?: boolean;
@@ -42,6 +43,13 @@ const threadSummaryMessagesCache = new Map<string, {
   messages: any[];
 }>();
 
+const threadRuntimeStatusSummaryCache = new Map<string, {
+  cacheKey: string;
+  expiresAt: number;
+  status: any;
+  inFlight: Promise<any> | null;
+}>();
+
 let threadSummaryPayloadCache: {
   cacheKey: string;
   expiresAt: number;
@@ -59,6 +67,7 @@ let threadSummaryPayloadCache: {
 export function resetThreadSummaryCachesForTest(): void {
   threadMetadataCache.clear();
   threadSummaryMessagesCache.clear();
+  threadRuntimeStatusSummaryCache.clear();
   threadSummaryPayloadCache = {
     cacheKey: "",
     expiresAt: 0,
@@ -324,6 +333,11 @@ function threadSummaryStalePayloadTtlMs(): number {
   return Number.isFinite(parsed) ? Math.max(0, parsed) : 30_000;
 }
 
+function threadSummaryRuntimeStatusCacheTtlMs(): number {
+  const parsed = Number(process.env.ORKESTR_THREAD_SUMMARY_RUNTIME_STATUS_CACHE_TTL_MS || 1_500);
+  return Number.isFinite(parsed) ? Math.max(0, parsed) : 1_500;
+}
+
 function threadSummaryMessagesLimit(): number {
   const parsed = Number(process.env.ORKESTR_THREAD_SUMMARY_MESSAGES_LIMIT || 200);
   return Number.isFinite(parsed) ? Math.max(0, Math.floor(parsed)) : 200;
@@ -443,6 +457,77 @@ function threadNeedsLiveRuntimeSample(thread: any, messages: any[] = []): boolea
     runtime.pendingRequest ||
     messages.some(messageNeedsLiveRuntime),
   );
+}
+
+function threadMessagesRuntimeStatusToken(messages: any[] = []): string {
+  const relevant = messages
+    .filter((message) => messageNeedsLiveRuntime(message) || isNeedInputMessage(message))
+    .map((message) => [
+      message?.id || message?.eventId || null,
+      messageCursor(message, 0),
+      message?.state || null,
+      message?.deliveryState || null,
+      message?.updatedAt || message?.deliveredAt || message?.createdAt || message?.timestamp || null,
+    ]);
+  const latest = latestStoredMessage(messages);
+  return JSON.stringify({
+    length: messages.length,
+    latest: latest ? [
+      latest.id || latest.eventId || null,
+      latest?.state || null,
+      latest?.deliveryState || null,
+      latest?.updatedAt || latest?.deliveredAt || latest?.createdAt || latest?.timestamp || null,
+    ] : null,
+    relevant,
+  });
+}
+
+function threadRuntimeStatusCacheKey(thread: any, messages: any[] = []): string {
+  const runtime = thread?.runtime && typeof thread.runtime === "object" ? thread.runtime : {};
+  return JSON.stringify({
+    home: process.env.ORKESTR_HOME || "",
+    threadId: thread?.id || null,
+    state: thread?.state || null,
+    runtimeState: runtime.state || null,
+    activeRuntimeLeaseId: thread?.activeRuntimeLeaseId || runtime.activeRuntimeLeaseId || runtime.id || null,
+    runtimeUpdatedAt: runtime.updatedAt || runtime.startedAt || runtime.endedAt || null,
+    messages: threadMessagesRuntimeStatusToken(messages),
+  });
+}
+
+async function cachedSummaryRuntimeStatus(thread: any, messages: any[] = [], ttlMs = 0): Promise<any> {
+  if (ttlMs <= 0) return runtimeStatus(thread.id, process.env, messages);
+  const threadId = String(thread?.id || "");
+  const cacheKey = threadRuntimeStatusCacheKey(thread, messages);
+  const now = Date.now();
+  const cached = threadRuntimeStatusSummaryCache.get(threadId);
+  if (cached?.cacheKey === cacheKey) {
+    if (cached.status && cached.expiresAt > now) return cached.status;
+    if (cached.inFlight) return cached.inFlight;
+  }
+  const inFlight = runtimeStatus(thread.id, process.env, messages)
+    .then((status) => {
+      threadRuntimeStatusSummaryCache.set(threadId, {
+        cacheKey,
+        expiresAt: Date.now() + ttlMs,
+        status,
+        inFlight: null,
+      });
+      return status;
+    })
+    .catch((error) => {
+      if (threadRuntimeStatusSummaryCache.get(threadId)?.inFlight === inFlight) {
+        threadRuntimeStatusSummaryCache.delete(threadId);
+      }
+      throw error;
+    });
+  threadRuntimeStatusSummaryCache.set(threadId, {
+    cacheKey,
+    expiresAt: 0,
+    status: cached?.cacheKey === cacheKey ? cached.status : null,
+    inFlight,
+  });
+  return inFlight;
 }
 
 function threadSummaryState(thread: any, status: any): string {
@@ -716,8 +801,9 @@ export async function threadRuntimeSummary(thread: any, messages: any[] = [], op
   const ttlMs = Number(options.cacheTtlMs ?? 0) || 0;
   const shouldSampleRuntime = options.sampleRuntime !== false;
   const shouldRefreshMetadata = options.refreshMetadata !== false;
+  const runtimeStatusCacheTtlMs = Number(options.runtimeStatusCacheTtlMs ?? 0) || 0;
   const status: any = shouldSampleRuntime
-    ? await runtimeStatus(thread.id, process.env, messages).catch(() => null)
+    ? await cachedSummaryRuntimeStatus(thread, messages, runtimeStatusCacheTtlMs).catch(() => null)
     : null;
   const { gitState, liveCodexMetadata } = await cachedThreadMetadata(thread, status, ttlMs, shouldRefreshMetadata);
   const orderedMessages = chronologicalMessages(messages);
@@ -836,6 +922,7 @@ export async function threadRuntimeSummary(thread: any, messages: any[] = [], op
 export async function threadSummaryPayload(options: ThreadSummaryOptions = {}) {
   const cacheTtlMs = Number(options.cacheTtlMs ?? threadSummaryCacheTtlMs()) || 0;
   const payloadCacheTtlMs = Number(options.payloadCacheTtlMs ?? threadSummaryPayloadCacheTtlMs()) || 0;
+  const runtimeStatusCacheTtlMs = Number(options.runtimeStatusCacheTtlMs ?? threadSummaryRuntimeStatusCacheTtlMs()) || 0;
   const stalePayloadTtlMs = threadSummaryStalePayloadTtlMs();
   const principal = options.principal || null;
   const includeAllUserThreads = options.includeAllUserThreads === true;
@@ -884,6 +971,9 @@ export async function threadSummaryPayload(options: ThreadSummaryOptions = {}) {
     for (const id of threadSummaryMessagesCache.keys()) {
       if (!activeThreadIds.has(id)) threadSummaryMessagesCache.delete(id);
     }
+    for (const id of threadRuntimeStatusSummaryCache.keys()) {
+      if (!activeThreadIds.has(id)) threadRuntimeStatusSummaryCache.delete(id);
+    }
     const payload = {
       generatedAt: new Date().toISOString(),
       threads: await Promise.all(threads.map(async (thread: any) => {
@@ -894,6 +984,7 @@ export async function threadSummaryPayload(options: ThreadSummaryOptions = {}) {
           messages,
           {
             cacheTtlMs,
+            runtimeStatusCacheTtlMs,
             sampleRuntime,
             refreshMetadata: sampleRuntime || refreshIdleMetadata,
           },

@@ -4355,6 +4355,65 @@ test("thread summary reuses unchanged message file summaries", async () => {
   }
 });
 
+test("thread summary reuses recent live runtime samples", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-summary-runtime-cache-"));
+  const fakeTmux = await createFakeTmux(home);
+  const priorHome = process.env.ORKESTR_HOME;
+  const priorRuntimeHome = process.env.HOME;
+  const priorCodexHome = process.env.CODEX_HOME;
+  const priorPath = process.env.PATH;
+  const priorTmuxLog = process.env.TMUX_LOG;
+  const priorTmuxState = process.env.TMUX_STATE;
+  process.env.ORKESTR_HOME = path.join(home, "orkestr-home");
+  process.env.HOME = path.join(home, "runtime-home");
+  process.env.CODEX_HOME = path.join(home, "codex-home");
+  process.env.PATH = `${fakeTmux.bin}:${priorPath || ""}`;
+  process.env.TMUX_LOG = fakeTmux.log;
+  process.env.TMUX_STATE = fakeTmux.state;
+  resetThreadSummaryCachesForTest();
+
+  try {
+    await createThread({
+      id: "summary-runtime-cache-thread",
+      name: "Summary Runtime Cache Thread",
+      cwd: path.join(home, "workspace"),
+      executor: {
+        id: "codex",
+        type: "codex",
+        transport: "app-server",
+        metadata: {
+          transport: "app-server",
+          runtimeKind: "codex-app-server",
+        },
+      },
+      runtime: {
+        runtimeKind: "codex-app-server",
+        state: "ready",
+      },
+    });
+    await takeoverRawTerminalThread("summary-runtime-cache-thread", { reason: "test_summary_cache" });
+    await fs.writeFile(fakeTmux.log, "", "utf8");
+
+    await threadSummaryPayload({ cacheTtlMs: 0, payloadCacheTtlMs: 0, runtimeStatusCacheTtlMs: 1000 });
+    const firstLog = await fs.readFile(fakeTmux.log, "utf8");
+    const firstChecks = (firstLog.match(/__CALL__\thas-session/g) || []).length;
+    assert.equal(firstChecks, 1);
+
+    await threadSummaryPayload({ cacheTtlMs: 0, payloadCacheTtlMs: 0, runtimeStatusCacheTtlMs: 1000 });
+    const secondLog = await fs.readFile(fakeTmux.log, "utf8");
+    const secondChecks = (secondLog.match(/__CALL__\thas-session/g) || []).length;
+    assert.equal(secondChecks, firstChecks);
+  } finally {
+    resetThreadSummaryCachesForTest();
+    restoreEnvValue("ORKESTR_HOME", priorHome);
+    restoreEnvValue("HOME", priorRuntimeHome);
+    restoreEnvValue("CODEX_HOME", priorCodexHome);
+    restoreEnvValue("PATH", priorPath);
+    restoreEnvValue("TMUX_LOG", priorTmuxLog);
+    restoreEnvValue("TMUX_STATE", priorTmuxState);
+  }
+});
+
 test("thread summary preserves raw-terminal mode for sleeping takeover threads", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-summary-raw-terminal-"));
   const priorHome = process.env.ORKESTR_HOME;
