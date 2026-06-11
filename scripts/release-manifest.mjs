@@ -50,7 +50,7 @@ const releaseVersion = safeJsonValue(packageJson.version) || "0.0.0";
 const releaseId = safeJsonValue(flagValue(argv, "--release-id")) || [tag || safeJsonValue(flagValue(argv, "--ref")) || "release", shortCommit]
   .filter(Boolean)
   .join("-");
-const releaseLabel = safeJsonValue(flagValue(argv, "--release-label")) || tag || (releaseVersion ? `v${releaseVersion}` : releaseId);
+const releaseLabel = safeJsonValue(flagValue(argv, "--release-label")) || safeJsonValue(process.env.ORKESTR_RELEASE_LABEL) || tag || (releaseVersion ? `v${releaseVersion}` : releaseId);
 const distribution = distributionIdentity({
   ...process.env,
   ORKESTR_DISTRIBUTION: safeJsonValue(flagValue(argv, "--distribution")) || process.env.ORKESTR_DISTRIBUTION,
