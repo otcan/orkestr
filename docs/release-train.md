@@ -127,6 +127,7 @@ Do not merge workers that are classified `needs-human`.
 
 The release train owns tests. Run the checks appropriate to the changed surface:
 
+- full local release gate: `npm run pipeline:full`
 - server/build changes: `npm run build:server`
 - web/UI changes: `npm run web:build`
 - runtime/install/deploy changes: targeted Node tests plus shell syntax checks
@@ -138,6 +139,9 @@ The release train owns tests. Run the checks appropriate to the changed surface:
 - attended deploy/regression changes: `npm run release:regression -- --target
   local=http://127.0.0.1:$ORKESTR_PORT`, adding `--execute --thread <test-id>`
   only when a real test chat is intentionally allowed
+- full release-facing run with protected/public target checks:
+  `npm run pipeline:full -- --release-regression-target
+  local=http://127.0.0.1:$ORKESTR_PORT --allow-auth-blocked`
 - attended real WhatsApp/OAuth/desktop/timer checks:
   `npm run e2e:whatsapp-real -- --execute --thread <thread-id> --chat-id <chat-id>`.
   See `docs/real-whatsapp-e2e.md`; this sends real WhatsApp messages and must

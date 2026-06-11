@@ -284,11 +284,13 @@ See [docs/oss-managed-boundary.md](docs/oss-managed-boundary.md).
 
 ```bash
 npm ci
-npm run build
-npm run smoke
-npm run demo:coding-agent
-npm run launch:check
+npm run pipeline:full
 ```
+
+`pipeline:full` runs the local release gate: build, full CI tests, OSS boundary
+check, demo/k3s contracts, VM demo smoke, app smoke, and the coding-agent demo.
+Use `npm run pipeline:full -- --plan` to inspect the exact stages. Live k3s,
+AWS VPS, real WhatsApp, release regression, and deploy steps are opt-in flags.
 
 When changing the UI, run `npm run web:build` and commit the updated `dist/web`
 bundle.

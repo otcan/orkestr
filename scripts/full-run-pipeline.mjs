@@ -1,0 +1,283 @@
+#!/usr/bin/env node
+import fs from "node:fs/promises";
+import path from "node:path";
+import { spawn } from "node:child_process";
+import { fileURLToPath } from "node:url";
+
+const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+
+function clean(value = "") {
+  return String(value || "").trim();
+}
+
+function truthy(value) {
+  return ["1", "true", "yes", "on"].includes(clean(value).toLowerCase());
+}
+
+function timestampId(date = new Date()) {
+  return date.toISOString().replace(/[:.]/g, "-");
+}
+
+function flagValue(argv, name, fallback = "") {
+  const index = argv.indexOf(name);
+  if (index === -1) return fallback;
+  return clean(argv[index + 1]);
+}
+
+function allFlagValues(argv, name) {
+  const values = [];
+  for (let index = 0; index < argv.length; index += 1) {
+    if (argv[index] === name && argv[index + 1]) values.push(clean(argv[index + 1]));
+  }
+  return values.filter(Boolean);
+}
+
+function hasFlag(argv, name) {
+  return argv.includes(name);
+}
+
+function splitList(value = "") {
+  return clean(value).split(/[\s,]+/g).map(clean).filter(Boolean);
+}
+
+function usage() {
+  return `Usage: npm run pipeline:full -- [options]
+
+Runs the full local OSS/demo release gate and writes a JSON summary artifact.
+
+Default stages:
+  npm run build
+  npm run test:ci
+  npm run oss:boundary-check
+  npm run smoke:k3s:oss-demo
+  npm run smoke:demo-vm
+  npm run smoke
+  npm run demo:coding-agent
+
+Options:
+  --plan                         Print the stage plan without running it.
+  --artifact-dir DIR             Summary output directory. Defaults to ORKESTR_HOME/full-run-pipeline/<timestamp> or .orkestr/full-run-pipeline/<timestamp>.
+  --include-launch-check         Also run npm run launch:check. This duplicates some gates but catches docs/privacy drift.
+  --skip-build                   Skip npm run build.
+  --skip-test-ci                 Skip npm run test:ci.
+  --skip-smoke                   Skip smoke stages.
+  --skip-demo                    Skip demo:coding-agent.
+  --release-regression-target NAME=URL
+                                 Run release regression for a target. Repeatable.
+  --release-regression           Run release regression using ORKESTR_RELEASE_CHECK_URLS.
+  --allow-auth-blocked           Pass through to release regression for protected public targets.
+  --execute-regression           Allow release regression chat injection checks.
+  --regression-thread ID         Thread for --execute-regression.
+  --regression-expect TEXT       Expected assistant reply for --execute-regression.
+  --live-k3s                     Run real k3s demo smoke. Requires Docker, Helm, kubectl.
+  --vps-aws                      Run AWS VPS smoke.
+  --whatsapp-real                Run real WhatsApp e2e. Requires explicit real-WA env/config.
+  --deploy-ref REF               Deploy with scripts/deploy-git-release.sh after gates pass.
+  --deploy-channel CHANNEL       Deploy channel. Default: full-run.
+  --deploy-env-file FILE         ORKESTR_ENV_FILE for deploy.
+  --deploy-allow-interrupt       Allow deploy restart while work may be active.
+  --deploy-all-instances         Fan out deploy to broker-listed instances.
+
+Environment:
+  ORKESTR_FULL_RUN_LAUNCH_CHECK=1
+  ORKESTR_FULL_RUN_LIVE_K3S=1
+  ORKESTR_FULL_RUN_VPS_AWS=1
+  ORKESTR_FULL_RUN_WHATSAPP_REAL=1
+  ORKESTR_FULL_RUN_RELEASE_TARGETS="local=http://127.0.0.1:18912,oss=http://127.0.0.1:19822"
+`;
+}
+
+export function parseFullRunPipelineArgs(argv = process.argv.slice(2), env = process.env) {
+  const releaseTargets = [
+    ...allFlagValues(argv, "--release-regression-target"),
+    ...splitList(env.ORKESTR_FULL_RUN_RELEASE_TARGETS),
+  ];
+  const runReleaseRegression = hasFlag(argv, "--release-regression") ||
+    releaseTargets.length > 0 ||
+    Boolean(clean(env.ORKESTR_RELEASE_CHECK_URLS));
+  return {
+    help: hasFlag(argv, "--help") || hasFlag(argv, "-h"),
+    plan: hasFlag(argv, "--plan"),
+    artifactDir: flagValue(argv, "--artifact-dir", clean(env.ORKESTR_FULL_RUN_ARTIFACT_DIR)),
+    includeLaunchCheck: hasFlag(argv, "--include-launch-check") || truthy(env.ORKESTR_FULL_RUN_LAUNCH_CHECK),
+    skipBuild: hasFlag(argv, "--skip-build"),
+    skipTestCi: hasFlag(argv, "--skip-test-ci"),
+    skipSmoke: hasFlag(argv, "--skip-smoke"),
+    skipDemo: hasFlag(argv, "--skip-demo"),
+    runReleaseRegression,
+    releaseTargets,
+    allowAuthBlocked: hasFlag(argv, "--allow-auth-blocked"),
+    executeRegression: hasFlag(argv, "--execute-regression"),
+    regressionThread: flagValue(argv, "--regression-thread"),
+    regressionExpect: flagValue(argv, "--regression-expect"),
+    liveK3s: hasFlag(argv, "--live-k3s") || truthy(env.ORKESTR_FULL_RUN_LIVE_K3S),
+    vpsAws: hasFlag(argv, "--vps-aws") || truthy(env.ORKESTR_FULL_RUN_VPS_AWS),
+    whatsappReal: hasFlag(argv, "--whatsapp-real") || truthy(env.ORKESTR_FULL_RUN_WHATSAPP_REAL),
+    deployRef: flagValue(argv, "--deploy-ref"),
+    deployChannel: flagValue(argv, "--deploy-channel", "full-run"),
+    deployEnvFile: flagValue(argv, "--deploy-env-file"),
+    deployAllowInterrupt: hasFlag(argv, "--deploy-allow-interrupt"),
+    deployAllInstances: hasFlag(argv, "--deploy-all-instances"),
+  };
+}
+
+function npmStage(id, script, { enabled = true, env = {}, args = [] } = {}) {
+  return { id, label: `npm run ${script}`, command: "npm", args: ["run", script, ...(args.length ? ["--", ...args] : [])], env, enabled };
+}
+
+function commandStage(id, label, command, args, { enabled = true, env = {} } = {}) {
+  return { id, label, command, args, env, enabled };
+}
+
+export function fullRunPipelineStages(options = {}) {
+  const stages = [
+    npmStage("build", "build", { enabled: !options.skipBuild }),
+    npmStage("test-ci", "test:ci", { enabled: !options.skipTestCi }),
+    npmStage("oss-boundary", "oss:boundary-check"),
+    npmStage("k3s-oss-demo-contract", "smoke:k3s:oss-demo", { enabled: !options.skipSmoke }),
+    npmStage("demo-vm", "smoke:demo-vm", { enabled: !options.skipSmoke }),
+    npmStage("smoke", "smoke", { enabled: !options.skipSmoke }),
+    npmStage("coding-agent-demo", "demo:coding-agent", { enabled: !options.skipDemo }),
+    npmStage("launch-check", "launch:check", { enabled: options.includeLaunchCheck }),
+  ];
+
+  if (options.runReleaseRegression) {
+    const args = [];
+    for (const target of options.releaseTargets || []) args.push("--target", target);
+    if (options.allowAuthBlocked) args.push("--allow-auth-blocked");
+    if (options.executeRegression) args.push("--execute");
+    if (options.regressionThread) args.push("--thread", options.regressionThread);
+    if (options.regressionExpect) args.push("--expect", options.regressionExpect);
+    stages.push(npmStage("release-regression", "release:regression", { args }));
+  }
+  stages.push(npmStage("live-k3s-oss-demo", "smoke:k3s:oss-demo", {
+    enabled: options.liveK3s,
+    env: { ORKESTR_K3S_OSS_DEMO_EXECUTE: "1" },
+  }));
+  stages.push(npmStage("vps-aws", "smoke:vps:aws", { enabled: options.vpsAws }));
+  stages.push(npmStage("whatsapp-real", "e2e:whatsapp-real", { enabled: options.whatsappReal }));
+
+  if (options.deployRef) {
+    const args = ["scripts/deploy-git-release.sh", "install", "--ref", options.deployRef, "--channel", options.deployChannel || "full-run"];
+    args.push(options.deployAllowInterrupt ? "--allow-interrupt" : "--no-interrupt");
+    args.push(options.deployAllInstances ? "--all-instances" : "--no-all-instances");
+    stages.push(commandStage("deploy", `deploy ${options.deployRef}`, "bash", args, {
+      env: {
+        ...(options.deployEnvFile ? { ORKESTR_ENV_FILE: options.deployEnvFile } : {}),
+      },
+    }));
+  }
+
+  return stages;
+}
+
+function defaultArtifactDir(env = process.env) {
+  const root = clean(env.ORKESTR_HOME) || path.join(repoRoot, ".orkestr");
+  return path.join(root, "full-run-pipeline", timestampId());
+}
+
+async function writeSummary(artifactDir, summary) {
+  await fs.mkdir(artifactDir, { recursive: true });
+  const file = path.join(artifactDir, "summary.json");
+  await fs.writeFile(file, `${JSON.stringify(summary, null, 2)}\n`, "utf8");
+  return file;
+}
+
+function runStage(stage) {
+  return new Promise((resolve) => {
+    const startedAt = new Date();
+    console.log(`\n== ${stage.label} ==`);
+    const child = spawn(stage.command, stage.args, {
+      cwd: repoRoot,
+      stdio: "inherit",
+      env: {
+        ...process.env,
+        ORKESTR_BROWSER_LAUNCH_DISABLED: process.env.ORKESTR_BROWSER_LAUNCH_DISABLED || "1",
+        ...(stage.env || {}),
+      },
+    });
+    child.once("exit", (code, signal) => {
+      const endedAt = new Date();
+      resolve({
+        id: stage.id,
+        label: stage.label,
+        command: [stage.command, ...stage.args].join(" "),
+        status: code === 0 ? "passed" : "failed",
+        code,
+        signal,
+        startedAt: startedAt.toISOString(),
+        endedAt: endedAt.toISOString(),
+        durationMs: endedAt.getTime() - startedAt.getTime(),
+      });
+    });
+  });
+}
+
+export async function runFullRunPipeline(options = {}, env = process.env) {
+  const artifactDir = path.resolve(options.artifactDir || defaultArtifactDir(env));
+  const allStages = fullRunPipelineStages(options);
+  const stages = allStages.filter((stage) => stage.enabled !== false);
+  const skipped = allStages.filter((stage) => stage.enabled === false).map((stage) => ({ id: stage.id, label: stage.label, status: "skipped" }));
+  const summary = {
+    ok: false,
+    generatedAt: new Date().toISOString(),
+    artifactDir,
+    repoRoot,
+    stages: [],
+    skipped,
+  };
+
+  if (options.plan) {
+    summary.ok = true;
+    summary.planned = stages.map((stage) => ({
+      id: stage.id,
+      label: stage.label,
+      command: [stage.command, ...stage.args].join(" "),
+      env: Object.keys(stage.env || {}).sort(),
+    }));
+    await writeSummary(artifactDir, summary);
+    return summary;
+  }
+
+  for (const stage of stages) {
+    const result = await runStage(stage);
+    summary.stages.push(result);
+    await writeSummary(artifactDir, summary);
+    if (result.status !== "passed") {
+      summary.failedStage = result.id;
+      await writeSummary(artifactDir, summary);
+      return summary;
+    }
+  }
+  summary.ok = true;
+  summary.completedAt = new Date().toISOString();
+  await writeSummary(artifactDir, summary);
+  return summary;
+}
+
+if (import.meta.url === `file://${process.argv[1]}`) {
+  const options = parseFullRunPipelineArgs(process.argv.slice(2), process.env);
+  if (options.help) {
+    console.log(usage());
+    process.exit(0);
+  }
+  runFullRunPipeline(options)
+    .then((summary) => {
+      if (options.plan) {
+        console.log(JSON.stringify({
+          ok: true,
+          artifactDir: summary.artifactDir,
+          planned: summary.planned,
+          skipped: summary.skipped,
+        }, null, 2));
+      } else {
+        console.log(`\nFull run pipeline ${summary.ok ? "passed" : "failed"}.`);
+        console.log(`Summary: ${path.join(summary.artifactDir, "summary.json")}`);
+      }
+      if (!summary.ok) process.exitCode = 1;
+    })
+    .catch((error) => {
+      console.error(error?.stack || error?.message || String(error));
+      process.exitCode = 1;
+    });
+}
