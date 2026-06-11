@@ -717,7 +717,7 @@ function outboundEchoDeliveryRecord(job = {}) {
 }
 
 function outboundEchoDeliveryForEvent(outboundDeliveries = [], connectorOutboxJobs = [], input = {}) {
-  if (!inputFromMe(input)) return null;
+  const fromMe = inputFromMe(input);
   const eventId = pickString(input.eventId, input.id, input.messageId);
   const canonicalEventId = canonicalWhatsAppEventId(eventId);
   const chatId = pickString(input.chatId, input.chat?.id, input.fromChatId);
@@ -731,7 +731,7 @@ function outboundEchoDeliveryForEvent(outboundDeliveries = [], connectorOutboxJo
     const deliveryChatId = pickString(delivery.chatId);
     if (chatId && deliveryChatId && chatId !== deliveryChatId) return false;
     const deliveryAccountId = pickString(delivery.accountId);
-    if (accountId && deliveryAccountId && accountId !== deliveryAccountId) return false;
+    if (fromMe && accountId && deliveryAccountId && accountId !== deliveryAccountId) return false;
     return outboundDeliveryAckIds(delivery).some((ackId) =>
       ackId === eventId ||
       (canonicalEventId && canonicalWhatsAppEventId(ackId) === canonicalEventId)

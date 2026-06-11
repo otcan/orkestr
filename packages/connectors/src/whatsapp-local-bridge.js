@@ -1009,16 +1009,10 @@ function attachmentEchoKey(accountId, chatId, attachment = {}) {
   ].join(":");
 }
 
-function anyAccountAttachmentEchoKey(chatId, attachment = {}) {
-  return attachmentEchoKey("*", chatId, attachment);
-}
-
 function rememberOutboundAttachment(accountId, chatId, attachment = {}, env = process.env) {
   const key = attachmentEchoKey(accountId, chatId, attachment);
   if (!key || key.endsWith("::")) return;
   outboundAttachmentKeys.set(key, Date.now());
-  const chatKey = anyAccountAttachmentEchoKey(chatId, attachment);
-  if (chatKey && !chatKey.endsWith("::")) outboundAttachmentKeys.set(chatKey, Date.now());
   pruneOutboundAttachmentKeys(env);
 }
 
@@ -1028,11 +1022,7 @@ function outboundAttachmentsRecentlySent(accountId, chatId, attachments = [], en
   pruneOutboundAttachmentKeys(env);
   return items.every((attachment) => {
     const key = attachmentEchoKey(accountId, chatId, attachment);
-    const chatKey = anyAccountAttachmentEchoKey(chatId, attachment);
-    return Boolean(
-      (key && outboundAttachmentKeys.has(key)) ||
-      (chatKey && outboundAttachmentKeys.has(chatKey))
-    );
+    return Boolean(key && outboundAttachmentKeys.has(key));
   });
 }
 

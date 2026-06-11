@@ -1135,58 +1135,6 @@ test("local whatsapp inbound ignores outbound text echoed through another local 
   }
 });
 
-test("local whatsapp inbound ignores outbound attachment echoed through another local account", async () => {
-  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-cross-account-attachment-echo-"));
-  const env = {
-    ORKESTR_HOME: home,
-    ORKESTR_WHATSAPP_ACCOUNT_IDS: "sender,responder",
-  };
-  const chatId = "chat-cross-account-attachment-echo@g.us";
-  const filename = "orkestr-table-loop.csv";
-  const attachmentPath = path.join(home, filename);
-  await fs.writeFile(attachmentPath, "a,b\n1,2\n");
-  const responderRuntime = {
-    MessageMedia: {
-      fromFilePath(filePath) {
-        return { filePath };
-      },
-    },
-    client: {
-      async sendMessage(to, media, options) {
-        return { id: { _serialized: `true_${to}_responder-document` } };
-      },
-    },
-  };
-
-  try {
-    setLocalWhatsAppRuntimeForTest("responder", responderRuntime, {}, env);
-    await sendLocalWhatsAppMessage({
-      accountId: "responder",
-      chatId,
-      attachments: [{ path: attachmentPath, filename, mimetype: "text/csv" }],
-      env,
-    });
-
-    const result = await handleInboundMessage("sender", {
-      id: { _serialized: `false_${chatId}_sender-observed-document`, remote: chatId },
-      from: chatId,
-      to: "sender@c.us",
-      author: "responder@lid",
-      fromMe: false,
-      body: filename,
-      hasMedia: true,
-      type: "document",
-      timestamp: 1_780_000_000,
-      _data: { filename },
-    }, env);
-
-    assert.equal(result.skipped, "outbound_echo_cross_account_attachment");
-    assert.equal(result.chatId, chatId);
-  } finally {
-    await resetLocalWhatsAppBridgeForTest(env);
-  }
-});
-
 test("local whatsapp e2e sender sends can be visible to responder routing", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-cross-account-visible-"));
   const env = {
@@ -3456,6 +3404,73 @@ test("whatsapp inbound ignores fromMe attachment echoes already sent by the resp
   assert.equal(routed.threadId, "thread-wa-echo");
   assert.equal(messages.some((message) => message.externalId === sentAttachmentId), false);
   assert.equal(messages.filter((message) => message.role === "user").length, 1);
+  assert.equal(traces.some((trace) =>
+    trace.routerTraceId === routed.event.routerTraceId &&
+    trace.phases.some((phase) => phase.reason === "outbound_echo_delivery_ack")
+  ), true);
+});
+
+test("whatsapp router ignores cross-account outbound attachment delivery acks", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-router-cross-account-attachment-echo-"));
+  const env = externalBridgeEnv(home);
+  await writeConnectorConfig("whatsapp", {
+    bridgeMode: "external",
+    bridgeUrl: "http://wa.local",
+    threadRoutes: { "chat-router-cross-account-echo": "thread-router-cross-account-echo" },
+  }, env);
+  await createThread({
+    id: "thread-router-cross-account-echo",
+    name: "WA Router Cross Account Echo Thread",
+    binding: {
+      connector: "whatsapp",
+      chatId: "chat-router-cross-account-echo",
+      senderAccountId: "sender",
+      responderAccountId: "responder",
+      outboundAccountId: "responder",
+      mirrorToWhatsApp: true,
+    },
+  }, env);
+  const paths = dataPaths(env);
+  await fs.mkdir(paths.home, { recursive: true });
+  await fs.writeFile(path.join(paths.home, "whatsapp.json"), JSON.stringify({
+    inboundEvents: [],
+    outboundDeliveries: [{
+      kind: "thread",
+      deliveryType: "final",
+      threadId: "thread-router-cross-account-echo",
+      messageId: "assistant-report",
+      chatId: "chat-router-cross-account-echo",
+      accountId: "responder",
+      deliveredAt: "2026-06-11T12:00:00.000Z",
+      bridgeResponse: {
+        sent: [
+          {
+            id: "true_chat-router-cross-account-echo_sent-report",
+            kind: "attachment",
+            filename: "report.csv",
+          },
+        ],
+      },
+    }],
+    outboundDeliveryClaims: [],
+    outboundIntents: [],
+  }, null, 2), "utf8");
+
+  const routed = await routeWhatsAppInbound({
+    eventId: "false_chat-router-cross-account-echo_sent-report",
+    chatId: "chat-router-cross-account-echo",
+    accountId: "sender",
+    from: "responder@c.us",
+    fromMe: false,
+    text: "WhatsApp attachment received.",
+    attachments: [{ filename: "report.csv", mimetype: "text/csv" }],
+  }, env);
+  const messages = await listThreadMessages("thread-router-cross-account-echo", env);
+  const traces = await listRouterTraces({ threadId: "thread-router-cross-account-echo" }, env);
+
+  assert.equal(routed.skipped, "outbound_echo_delivery_ack");
+  assert.equal(routed.threadId, "thread-router-cross-account-echo");
+  assert.equal(messages.length, 0);
   assert.equal(traces.some((trace) =>
     trace.routerTraceId === routed.event.routerTraceId &&
     trace.phases.some((phase) => phase.reason === "outbound_echo_delivery_ack")
