@@ -59,6 +59,11 @@ export function connectorOutboxClaimTtlMs(env = process.env) {
   return Number.isFinite(parsed) ? Math.max(5_000, Math.floor(parsed)) : 120_000;
 }
 
+export function connectorOutboxRetryBackoffMs(env = process.env) {
+  const parsed = Number(env.ORKESTR_CONNECTOR_OUTBOX_RETRY_BACKOFF_MS || env.ORKESTR_WHATSAPP_OUTBOX_RETRY_BACKOFF_MS || 30_000);
+  return Number.isFinite(parsed) ? Math.max(0, Math.floor(parsed)) : 30_000;
+}
+
 export function connectorOutboxRetentionLimit(env = process.env) {
   const raw = clean(env.ORKESTR_CONNECTOR_OUTBOX_RETENTION || env.ORKESTR_WHATSAPP_CONNECTOR_OUTBOX_RETENTION || "");
   const parsed = Number(raw || 10_000);
@@ -251,6 +256,10 @@ export async function ensureConnectorOutboxJob(input = {}, env = process.env) {
 }
 
 function claimExpired(job = {}, nowMs = Date.now()) {
+  if (clean(job.state).toLowerCase() === "failed_retryable") {
+    const retryAtMs = dateMs(job.claimExpiresAt);
+    if (retryAtMs && retryAtMs > nowMs) return false;
+  }
   if (clean(job.state).toLowerCase() !== "claimed" && clean(job.state).toLowerCase() !== "sent_to_broker") return true;
   const expiresAtMs = dateMs(job.claimExpiresAt);
   return !Number.isFinite(expiresAtMs) || expiresAtMs <= nowMs;
@@ -269,7 +278,10 @@ export async function claimConnectorOutboxJob(jobIdOrKey = "", { claimant = "" }
     return { acquired: false, reason: `connector_outbox_${job.state}`, terminal: true, job };
   }
   if (!claimExpired(job, nowMs)) {
-    return { acquired: false, reason: "connector_outbox_claim_active", job };
+    const reason = clean(job.state).toLowerCase() === "failed_retryable"
+      ? "connector_outbox_retry_scheduled"
+      : "connector_outbox_claim_active";
+    return { acquired: false, reason, job };
   }
   const claimed = normalizeConnectorOutboxJob({
     ...job,
