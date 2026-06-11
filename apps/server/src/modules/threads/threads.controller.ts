@@ -194,6 +194,12 @@ function includeAllUserThreadsQuery(query: Record<string, unknown> = {}): boolea
     optionalBodyBoolean(query, "includeAllUserThreads", false);
 }
 
+function refreshIdleThreadMetadataQuery(query: Record<string, unknown> = {}): boolean {
+  return optionalBodyBoolean(query, "refreshIdleMetadata", false) ||
+    optionalBodyBoolean(query, "refreshMetadata", false) ||
+    optionalBodyBoolean(query, "liveMetadata", false);
+}
+
 function safeCloneSegment(value: string): string {
   const withoutGitSuffix = value.replace(/\.git$/i, "");
   const tail = withoutGitSuffix.split(/[/:]/).filter(Boolean).at(-1) || "repo";
@@ -503,6 +509,7 @@ export class ThreadsController {
     return threadSummaryPayload({
       principal: requestPrincipal(request),
       includeAllUserThreads: includeAllUserThreadsQuery(query),
+      refreshIdleMetadata: refreshIdleThreadMetadataQuery(query),
     });
   }
 

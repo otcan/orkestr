@@ -16,6 +16,9 @@ type ThreadSummaryOptions = {
   payloadCacheTtlMs?: number;
   includeAllUserThreads?: boolean;
   principal?: Record<string, any> | null;
+  sampleRuntime?: boolean;
+  refreshMetadata?: boolean;
+  refreshIdleMetadata?: boolean;
 };
 
 type ThreadRuntimeMode =
@@ -305,8 +308,8 @@ function threadSummaryCacheTtlMs(): number {
 }
 
 function threadSummaryPayloadCacheTtlMs(): number {
-  const parsed = Number(process.env.ORKESTR_THREAD_SUMMARY_PAYLOAD_CACHE_TTL_MS || 5000);
-  return Number.isFinite(parsed) ? Math.max(0, parsed) : 5000;
+  const parsed = Number(process.env.ORKESTR_THREAD_SUMMARY_PAYLOAD_CACHE_TTL_MS || 15_000);
+  return Number.isFinite(parsed) ? Math.max(0, parsed) : 15_000;
 }
 
 function threadSummaryStalePayloadTtlMs(): number {
@@ -400,6 +403,25 @@ function hasOpenRuntimeLease(thread: any): boolean {
     thread?.activeRuntimeLeaseId ||
     runtime.activeRuntimeLeaseId ||
     (runtime.id && !runtime.endedAt && !runtime.ended_at),
+  );
+}
+
+function messageNeedsLiveRuntime(message: any): boolean {
+  const state = String(message?.state || "").trim().toLowerCase();
+  return ["queued", "pending_delivery", "awaiting_ack", "running"].includes(state);
+}
+
+function threadNeedsLiveRuntimeSample(thread: any, messages: any[] = []): boolean {
+  const runtime = thread?.runtime && typeof thread.runtime === "object" ? thread.runtime : {};
+  const state = nonEmptyString(thread?.state).toLowerCase();
+  const runtimeState = nonEmptyString(runtime.state).toLowerCase();
+  return Boolean(
+    hasOpenRuntimeLease(thread) ||
+    transientRuntimeStates.has(state) ||
+    transientRuntimeStates.has(runtimeState) ||
+    runtime.activeTurnId ||
+    runtime.pendingRequest ||
+    messages.some(messageNeedsLiveRuntime),
   );
 }
 
@@ -638,7 +660,14 @@ function threadMetadataCacheKey(thread: any, status: any, gitFingerprint = ""): 
   });
 }
 
-async function cachedThreadMetadata(thread: any, status: any, ttlMs: number) {
+async function cachedThreadMetadata(thread: any, status: any, ttlMs: number, refreshMetadata = true) {
+  if (!refreshMetadata) {
+    const cached = ttlMs > 0 ? threadMetadataCache.get(String(thread?.id || "")) : null;
+    if (cached && cached.expiresAt > Date.now()) {
+      return { gitState: cached.gitState, liveCodexMetadata: cached.liveCodexMetadata };
+    }
+    return { gitState: {}, liveCodexMetadata: {} };
+  }
   const gitFingerprint = ttlMs > 0 ? await threadGitCacheFingerprint(thread, status).catch(() => "") : "";
   const cacheKey = ttlMs > 0 ? threadMetadataCacheKey(thread, status, gitFingerprint) : "";
   const cached = ttlMs > 0 ? threadMetadataCache.get(String(thread?.id || "")) : null;
@@ -665,8 +694,12 @@ async function cachedThreadMetadata(thread: any, status: any, ttlMs: number) {
 
 export async function threadRuntimeSummary(thread: any, messages: any[] = [], options: ThreadSummaryOptions = {}) {
   const ttlMs = Number(options.cacheTtlMs ?? 0) || 0;
-  const status: any = await runtimeStatus(thread.id, process.env, messages).catch(() => null);
-  const { gitState, liveCodexMetadata } = await cachedThreadMetadata(thread, status, ttlMs);
+  const shouldSampleRuntime = options.sampleRuntime !== false;
+  const shouldRefreshMetadata = options.refreshMetadata !== false;
+  const status: any = shouldSampleRuntime
+    ? await runtimeStatus(thread.id, process.env, messages).catch(() => null)
+    : null;
+  const { gitState, liveCodexMetadata } = await cachedThreadMetadata(thread, status, ttlMs, shouldRefreshMetadata);
   const orderedMessages = chronologicalMessages(messages);
   const codexThread = {
     ...thread,
@@ -786,11 +819,13 @@ export async function threadSummaryPayload(options: ThreadSummaryOptions = {}) {
   const stalePayloadTtlMs = threadSummaryStalePayloadTtlMs();
   const principal = options.principal || null;
   const includeAllUserThreads = options.includeAllUserThreads === true;
+  const refreshIdleMetadata = options.refreshIdleMetadata === true;
   const effectivePrincipal = principal || adminPrincipal(defaultAdminUser());
   const payloadCacheKey = JSON.stringify({
     cacheTtlMs,
     home: process.env.ORKESTR_HOME || "",
     includeAllUserThreads,
+    refreshIdleMetadata,
     userId: effectivePrincipal?.userId || "admin",
     role: effectivePrincipal?.role || "admin",
   });
@@ -828,11 +863,19 @@ export async function threadSummaryPayload(options: ThreadSummaryOptions = {}) {
     }
     const payload = {
       generatedAt: new Date().toISOString(),
-      threads: await Promise.all(threads.map(async (thread: any) => threadRuntimeSummary(
-        thread,
-        await listThreadMessagesForSummary(thread.id),
-        { cacheTtlMs },
-      ))),
+      threads: await Promise.all(threads.map(async (thread: any) => {
+        const messages = await listThreadMessagesForSummary(thread.id);
+        const sampleRuntime = threadNeedsLiveRuntimeSample(thread, messages);
+        return threadRuntimeSummary(
+          thread,
+          messages,
+          {
+            cacheTtlMs,
+            sampleRuntime,
+            refreshMetadata: sampleRuntime || refreshIdleMetadata,
+          },
+        );
+      })),
     };
     const durationMs = Date.now() - startedAt;
     const slowMs = threadSummarySlowMs();

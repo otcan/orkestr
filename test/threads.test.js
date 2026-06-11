@@ -4207,6 +4207,67 @@ test("thread summary returns stale payload while an expired cache refreshes", as
   }
 });
 
+test("thread summary skips live git and codex probes for idle threads by default", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-summary-idle-cheap-"));
+  const bin = path.join(home, "bin");
+  const log = path.join(home, "exec.log");
+  const repo = path.join(home, "repo");
+  const priorHome = process.env.ORKESTR_HOME;
+  const priorPath = process.env.PATH;
+  const priorCodexHome = process.env.CODEX_HOME;
+  await fs.mkdir(path.join(repo, ".git", "refs", "heads"), { recursive: true });
+  await fs.writeFile(path.join(repo, ".git", "HEAD"), "ref: refs/heads/main\n", "utf8");
+  await fs.mkdir(bin, { recursive: true });
+  for (const command of ["git", "sqlite3"]) {
+    const filePath = path.join(bin, command);
+    await fs.writeFile(
+      filePath,
+      `#!/usr/bin/env bash\nprintf '%s\\t%s\\n' '${command}' \"$*\" >> '${log}'\nexit 1\n`,
+      "utf8",
+    );
+    await fs.chmod(filePath, 0o755);
+  }
+  process.env.ORKESTR_HOME = path.join(home, "orkestr-home");
+  process.env.CODEX_HOME = path.join(home, "codex-home");
+  process.env.PATH = `${bin}:${priorPath || ""}`;
+  resetThreadSummaryCachesForTest();
+
+  try {
+    await createThread({
+      id: "idle-cheap-summary-thread",
+      name: "Idle Cheap Summary Thread",
+      state: "ready",
+      repoPath: repo,
+      executor: {
+        id: "codex",
+        type: "codex",
+        codexThreadId: "019ea1a1-ff15-74a2-a9d1-0eecc7c3cb94",
+        metadata: {
+          codexThreadId: "019ea1a1-ff15-74a2-a9d1-0eecc7c3cb94",
+          codexModel: "gpt-5",
+        },
+      },
+      runtime: {
+        state: "ready",
+      },
+    });
+
+    const payload = await threadSummaryPayload({ cacheTtlMs: 120_000, payloadCacheTtlMs: 0 });
+    const summary = payload.threads.find((thread) => thread.id === "idle-cheap-summary-thread");
+    const logged = await fs.readFile(log, "utf8").catch(() => "");
+
+    assert.equal(summary.state, "ready");
+    assert.equal(summary.codexModel, "gpt-5");
+    assert.doesNotMatch(logged, new RegExp(repo.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+    assert.doesNotMatch(logged, /019ea1a1-ff15-74a2-a9d1-0eecc7c3cb94/);
+  } finally {
+    resetThreadSummaryCachesForTest();
+    restoreEnvValue("ORKESTR_HOME", priorHome);
+    restoreEnvValue("PATH", priorPath);
+    restoreEnvValue("CODEX_HOME", priorCodexHome);
+  }
+});
+
 test("thread summary message cap preserves old active delivery state", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-summary-message-cap-"));
   const priorHome = process.env.ORKESTR_HOME;
@@ -5044,7 +5105,7 @@ test("thread summary cache refreshes git state when HEAD changes", async () => {
   const { port } = server.address();
   const baseUrl = `http://127.0.0.1:${port}`;
   try {
-    const firstPayload = await fetch(`${baseUrl}/api/threads/summary`).then((response) => response.json());
+    const firstPayload = await fetch(`${baseUrl}/api/threads/summary?refreshIdleMetadata=1`).then((response) => response.json());
     const firstSummary = firstPayload.threads.find((thread) => thread.id === "summary-git-thread");
     assert.equal(firstSummary.gitAhead, 0);
     assert.equal(firstSummary.gitBehind, 0);
@@ -5055,7 +5116,7 @@ test("thread summary cache refreshes git state when HEAD changes", async () => {
     await execFileAsync("git", ["add", "local.txt"], { cwd: repo });
     await execFileAsync("git", ["commit", "-m", "local change"], { cwd: repo });
 
-    const secondPayload = await fetch(`${baseUrl}/api/threads/summary`).then((response) => response.json());
+    const secondPayload = await fetch(`${baseUrl}/api/threads/summary?refreshIdleMetadata=1`).then((response) => response.json());
     const secondSummary = secondPayload.threads.find((thread) => thread.id === "summary-git-thread");
     assert.equal(secondSummary.gitAhead, 1);
     assert.equal(secondSummary.gitBehind, 0);
@@ -5089,7 +5150,7 @@ test("thread summary cache refreshes worker parent comparison when parent HEAD c
   const { port } = server.address();
   const baseUrl = `http://127.0.0.1:${port}`;
   try {
-    const firstPayload = await fetch(`${baseUrl}/api/threads/summary`).then((response) => response.json());
+    const firstPayload = await fetch(`${baseUrl}/api/threads/summary?refreshIdleMetadata=1`).then((response) => response.json());
     const firstSummary = firstPayload.threads.find((thread) => thread.id === result.worker.id);
     assert.equal(firstSummary.gitParentAhead, 0);
     assert.equal(firstSummary.gitParentBehind, 0);
@@ -5098,7 +5159,7 @@ test("thread summary cache refreshes worker parent comparison when parent HEAD c
     await execFileAsync("git", ["add", "parent-cache.txt"], { cwd: repo });
     await execFileAsync("git", ["commit", "-m", "parent cache change"], { cwd: repo });
 
-    const secondPayload = await fetch(`${baseUrl}/api/threads/summary`).then((response) => response.json());
+    const secondPayload = await fetch(`${baseUrl}/api/threads/summary?refreshIdleMetadata=1`).then((response) => response.json());
     const secondSummary = secondPayload.threads.find((thread) => thread.id === result.worker.id);
     assert.equal(secondSummary.gitParentAhead, 0);
     assert.equal(secondSummary.gitParentBehind, 1);
