@@ -80,6 +80,7 @@ import {
   remoteWhatsAppRuntimeBinding,
   syncRemoteWhatsAppThreadMessages,
 } from "./whatsapp-remote-runtime.js";
+import { resolveWhatsAppBinding } from "./whatsapp-account-bindings.js";
 import { materializeRemoteWhatsAppAttachments } from "./whatsapp-remote-artifacts.js";
 import {
   boundThreadWhatsAppAssistantOrigin,
@@ -1066,6 +1067,12 @@ async function routeThread(input, config, env) {
     const binding = thread?.binding || null;
     if (binding && !whatsappBindingIsRouteEligible(binding)) return { threadId: "", binding: null };
     return { threadId: explicit, binding };
+  }
+  const whatsappStatus = await getLocalWhatsAppBridgeStatus(env).catch(() => ({}));
+  const registryRoute = await resolveWhatsAppBinding({ chatId, accountId }, { env, threads, status: whatsappStatus }).catch(() => null);
+  const registryBinding = registryRoute?.selected || null;
+  if (registryRoute?.ok && registryBinding?.threadId) {
+    return { threadId: registryBinding.threadId, binding: registryBinding };
   }
   const thread = threads.find((item) => whatsappInboundThreadMatchesBinding({
     thread: item,

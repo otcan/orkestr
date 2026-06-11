@@ -35,6 +35,8 @@ function parseArgs(argv = [], env = process.env) {
     orkestrHome: clean(env.ORKESTR_REAL_WA_E2E_HOME || env.ORKESTR_HOME),
     threadId: clean(env.ORKESTR_REAL_WA_E2E_THREAD),
     chatId: clean(env.ORKESTR_REAL_WA_E2E_CHAT_ID),
+    senderChatId: clean(env.ORKESTR_REAL_WA_E2E_SENDER_CHAT_ID),
+    responderChatId: clean(env.ORKESTR_REAL_WA_E2E_RESPONDER_CHAT_ID),
     senderAccountId: clean(env.ORKESTR_REAL_WA_E2E_SENDER_ACCOUNT || "sender"),
     senderContactId: clean(env.ORKESTR_REAL_WA_E2E_SENDER_CONTACT || ""),
     responderAccountId: clean(env.ORKESTR_REAL_WA_E2E_RESPONDER_ACCOUNT || "responder"),
@@ -60,6 +62,8 @@ function parseArgs(argv = [], env = process.env) {
     else if (arg === "--orkestr-home") options.orkestrHome = clean(argv[++index]);
     else if (arg === "--thread") options.threadId = clean(argv[++index]);
     else if (arg === "--chat-id") options.chatId = clean(argv[++index]);
+    else if (arg === "--sender-chat-id") options.senderChatId = clean(argv[++index]);
+    else if (arg === "--responder-chat-id") options.responderChatId = clean(argv[++index]);
     else if (arg === "--sender-account") options.senderAccountId = clean(argv[++index]);
     else if (arg === "--sender-contact") options.senderContactId = clean(argv[++index]);
     else if (arg === "--responder-account") options.responderAccountId = clean(argv[++index]);
@@ -77,6 +81,9 @@ function parseArgs(argv = [], env = process.env) {
     else if (arg === "--artifact") options.artifactPath = clean(argv[++index]);
     else throw new Error(`unknown_arg:${arg}`);
   }
+
+  options.senderChatId = clean(options.senderChatId || options.chatId);
+  options.responderChatId = clean(options.responderChatId || options.chatId);
 
   if (options.help || !options.execute) return options;
   if (!options.apiBase) throw new Error("api_base_required");
@@ -101,12 +108,14 @@ function usage() {
     "",
     "Required with --execute:",
     "  --thread ID              Existing Orkestr thread bound to the WA chat.",
-    "  --chat-id ID             Real WhatsApp chat id.",
+    "  --chat-id ID             Responder-side WhatsApp chat id used for routing.",
     "",
     "Common options:",
     "  --api-base URL           Orkestr API base. Default: ORKESTR_API_BASE or localhost.",
     "  --orkestr-home DIR       Lets the API client use local CLI auth for that instance.",
     "  --sender-account ID      WA account that sends the real user-visible message. Default: sender.",
+    "  --sender-chat-id ID      Sender-side chat id. Defaults to --chat-id; use for direct DMs.",
+    "  --responder-chat-id ID   Responder-side chat id. Defaults to --chat-id.",
     "  --sender-contact ID      Real WA contact expected to send in --manual-send mode.",
     "  --responder-account ID   WA account that Orkestr uses to reply. Default: responder.",
     "  --desktop SLUG           Managed desktop to lease/share. Default: gmail.",
@@ -248,9 +257,9 @@ async function waitUntil(label, options, fn) {
   throw lastError || new Error(`${label}_timeout`);
 }
 
-async function waitForHistoryMessage(options, accountId, predicate, label) {
+async function waitForHistoryMessage(options, accountId, predicate, label, chatId = options.chatId) {
   return waitUntil(label, options, async () => {
-    const payload = await api(options, historyRoute(accountId, options.chatId));
+    const payload = await api(options, historyRoute(accountId, chatId));
     const messages = messagesFromPayload(payload);
     return messages.find(predicate) || null;
   });
@@ -301,8 +310,8 @@ async function runWhatsAppPreflight(options, results) {
   if (options.manualSend) {
     const contacts = preflight.required?.senderContactIds || [];
     preflight.operatorInstruction = contacts.length
-      ? `Send this exact WhatsApp message in ${options.chatId} from ${contacts[0]}: /connect google`
-      : `Send this exact WhatsApp message in ${options.chatId}: /connect google`;
+      ? `Send this exact WhatsApp message in ${options.responderChatId} from ${contacts[0]}: /connect google`
+      : `Send this exact WhatsApp message in ${options.responderChatId}: /connect google`;
   }
   results.preflight = preflight;
   results.status = {
@@ -389,13 +398,13 @@ async function runDesktopShareChallenge(options, results, share = {}) {
   const after = Date.now() - 30_000;
 
   if (options.manualSend) {
-    console.error(`Manual desktop approval mode: send this exact WhatsApp message in ${options.chatId}: ${commandText}`);
+    console.error(`Manual desktop approval mode: send this exact WhatsApp message in ${options.responderChatId}: ${commandText}`);
   } else {
     await api(options, "/api/connectors/whatsapp/bridge/send-text", {
       method: "POST",
       body: {
         accountId: options.senderAccountId,
-        chatId: options.chatId,
+        chatId: options.senderChatId,
         text: commandText,
         crossAccountEchoSuppression: false,
       },
@@ -411,6 +420,7 @@ async function runDesktopShareChallenge(options, results, share = {}) {
       timeMs(message.timestamp) >= after &&
       messageMatchesExpectedSender(message, results.preflight?.required?.senderContactIds),
     "desktop_approval_message_visible",
+    options.responderChatId,
   );
   const ready = await waitUntil("desktop_share_approved", options, async () => {
     const status = await publicJson(statusUrl, cookie ? { headers: { cookie } } : {});
@@ -449,7 +459,7 @@ async function releaseDesktop(options, results) {
 async function runConnectFlow(options, results, startedAt) {
   const commandText = "/connect google";
   if (options.manualSend) {
-    console.error(`Manual send mode: send this exact WhatsApp message in ${options.chatId}: ${commandText}`);
+    console.error(`Manual send mode: send this exact WhatsApp message in ${options.responderChatId}: ${commandText}`);
   }
   const sent = options.manualSend
     ? null
@@ -457,7 +467,7 @@ async function runConnectFlow(options, results, startedAt) {
       method: "POST",
       body: {
         accountId: options.senderAccountId,
-        chatId: options.chatId,
+        chatId: options.senderChatId,
         text: commandText,
         crossAccountEchoSuppression: false,
       },
@@ -471,6 +481,7 @@ async function runConnectFlow(options, results, startedAt) {
       options.senderAccountId,
       (message) => sentIds.has(clean(message.id)) || (textOf(message) === commandText && message.fromMe === true && timeMs(message.timestamp) >= after),
       "sender_visible_message",
+      options.senderChatId,
     );
   const visibleResponder = await waitForHistoryMessage(
     options,
@@ -481,6 +492,7 @@ async function runConnectFlow(options, results, startedAt) {
       timeMs(message.timestamp) >= after &&
       messageMatchesExpectedSender(message, results.preflight?.required?.senderContactIds),
     "responder_observed_real_message",
+    options.responderChatId,
   );
   const userMessage = await waitForThreadMessage(
     options,
@@ -504,6 +516,7 @@ async function runConnectFlow(options, results, startedAt) {
     options.responderAccountId,
     (message) => textOf(message).includes(connectLink),
     "wa_connect_link_visible",
+    options.responderChatId,
   );
   const page = await publicJson(connectLink);
   if (!page.ok || !page.text.includes("/connect/google/start")) {
@@ -605,6 +618,8 @@ async function main() {
     apiBase: options.apiBase,
     threadId: options.threadId,
     chatId: options.chatId,
+    senderChatId: options.senderChatId,
+    responderChatId: options.responderChatId,
     senderAccountId: options.senderAccountId,
     senderContactId: options.senderContactId,
     responderAccountId: options.responderAccountId,
