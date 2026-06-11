@@ -37,6 +37,7 @@ import {
   ThreadSummary,
   TimerRecord,
   OrkestrUser,
+  VersionResponse,
   WhatsAppAccount,
   WhatsAppChat,
   WhatsAppOutboxJob,
@@ -140,6 +141,7 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   attachDetails: ThreadAttachResponse | null = null;
   opsSystem: Record<string, unknown> | null = null;
   setupStatus: SetupStatus | null = null;
+  versionInfo: VersionResponse | null = null;
   currentUser: OrkestrUser | null = null;
   selectedId = "";
   filterText = "";
@@ -310,19 +312,21 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
   async refresh(showBusy = true): Promise<void> {
     if (showBusy) this.busy = true;
     try {
-      const [threadsResult, systemResult, setupResult, timersResult, whatsappResult, userResult] = await Promise.allSettled([
+      const [threadsResult, systemResult, setupResult, timersResult, whatsappResult, userResult, versionResult] = await Promise.allSettled([
         firstValueFrom(this.api.threads()),
         firstValueFrom(this.api.systemSummary()),
         firstValueFrom(this.api.setupStatus()),
         firstValueFrom(this.api.timers()),
         firstValueFrom(this.api.whatsappStatus()),
         firstValueFrom(this.api.currentUser()),
+        firstValueFrom(this.api.version()),
       ]);
       if (systemResult.status === "fulfilled") this.opsSystem = systemResult.value;
       if (setupResult.status === "fulfilled") this.setupStatus = setupResult.value;
       if (timersResult.status === "fulfilled") this.allTimers = timersResult.value.timers || [];
       if (whatsappResult.status === "fulfilled") this.whatsappStatusDetails = whatsappResult.value;
       if (userResult.status === "fulfilled") this.currentUser = userResult.value.user;
+      if (versionResult.status === "fulfilled") this.versionInfo = versionResult.value;
       this.appReady = true;
       if (this.isPairingRequiredFromSetup()) {
         this.apiOnline = true;
@@ -3058,6 +3062,50 @@ export class AppComponent implements OnInit, OnDestroy, AfterViewChecked {
       String(thread?.runtimeControlPath || this.objectValue(thread?.runtime, "runtimeControlPath") || "").trim() ? `Control: ${thread?.runtimeControlPath || this.objectValue(thread?.runtime, "runtimeControlPath")}` : "",
       String(thread?.sessionName || this.objectValue(thread?.runtime, "sessionName") || "").trim() ? `Session: ${thread?.sessionName || this.objectValue(thread?.runtime, "sessionName")}` : "",
       String(thread?.paneId || thread?.tmuxTarget || this.objectValue(thread?.runtime, "paneId") || "").trim() ? `Pane: ${thread?.paneId || thread?.tmuxTarget || this.objectValue(thread?.runtime, "paneId")}` : "",
+    ].filter(Boolean);
+    return details.join("\n");
+  }
+
+  deploymentVersionLabel(): string {
+    const version = this.versionInfo;
+    if (!version) return "";
+    const label = String(version.releaseId || version.describe || version.tag || version.version || "").trim();
+    if (!label) return "";
+    return label.length > 28 ? `${label.slice(0, 25)}...` : label;
+  }
+
+  deploymentTrackLabel(): string {
+    const version = this.versionInfo;
+    if (!version) return "";
+    const distribution = version.distribution || {};
+    return String(
+      version.distributionKind ||
+      distribution.kind ||
+      version.repoRole ||
+      distribution.repoRole ||
+      version.deploymentTrack ||
+      distribution.track ||
+      version.channel ||
+      "runtime"
+    ).trim();
+  }
+
+  deploymentVersionTitle(): string {
+    const version = this.versionInfo;
+    if (!version) return "";
+    const distribution = version.distribution || {};
+    const details = [
+      String(version.name || "").trim() ? `Name: ${version.name}` : "",
+      this.deploymentVersionLabel() ? `Release: ${String(version.releaseId || version.describe || version.tag || version.version || "").trim()}` : "",
+      String(version.version || "").trim() ? `Version: ${version.version}` : "",
+      String(version.commit || "").trim() ? `Commit: ${version.commit}` : "",
+      String(version.branch || "").trim() ? `Branch: ${version.branch}` : "",
+      String(version.channel || "").trim() ? `Channel: ${version.channel}` : "",
+      String(version.distributionKind || distribution.kind || "").trim() ? `Kind: ${version.distributionKind || distribution.kind}` : "",
+      String(version.deploymentTrack || distribution.track || "").trim() ? `Track: ${version.deploymentTrack || distribution.track}` : "",
+      String(version.repoRole || distribution.repoRole || "").trim() ? `Repo: ${version.repoRole || distribution.repoRole}` : "",
+      String(version.deployedAt || "").trim() ? `Deployed: ${version.deployedAt}` : "",
+      String(version.generatedAt || "").trim() ? `Checked: ${version.generatedAt}` : "",
     ].filter(Boolean);
     return details.join("\n");
   }
