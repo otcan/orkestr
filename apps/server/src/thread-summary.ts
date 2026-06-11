@@ -9,6 +9,7 @@ import { getThread, listThreadMessages, listThreads, listThreadsForPrincipal } f
 import { detectThreadGitState } from "../../../packages/core/src/thread-workers.js";
 import { defaultAdminUser, normalizeUserId } from "../../../packages/core/src/users.js";
 import { appendEvent } from "../../../packages/storage/src/store.js";
+import { createThreadMessageRepository } from "../../../packages/storage/src/repositories.js";
 import { visibleThreadMessages } from "../../../packages/core/src/thread-message-visibility.js";
 
 type ThreadSummaryOptions = {
@@ -36,6 +37,11 @@ const threadMetadataCache = new Map<string, {
   liveCodexMetadata: Record<string, unknown>;
 }>();
 
+const threadSummaryMessagesCache = new Map<string, {
+  cacheKey: string;
+  messages: any[];
+}>();
+
 let threadSummaryPayloadCache: {
   cacheKey: string;
   expiresAt: number;
@@ -52,6 +58,7 @@ let threadSummaryPayloadCache: {
 
 export function resetThreadSummaryCachesForTest(): void {
   threadMetadataCache.clear();
+  threadSummaryMessagesCache.clear();
   threadSummaryPayloadCache = {
     cacheKey: "",
     expiresAt: 0,
@@ -339,9 +346,20 @@ async function listThreadSummaryScope(principal: Record<string, any> | null, inc
 }
 
 async function listThreadMessagesForSummary(threadId: string) {
-  const messages = await listThreadMessages(threadId);
   const limit = threadSummaryMessagesLimit();
-  if (limit <= 0 || messages.length <= limit) return messages;
+  const repository = createThreadMessageRepository(process.env);
+  const filePath = await repository.pathForThread(threadId);
+  const fileStat = await stat(filePath).catch(() => null);
+  const statToken = fileStat ? `${Math.trunc(fileStat.mtimeMs)}:${fileStat.size}` : "missing";
+  const cacheKey = JSON.stringify({ filePath, statToken, limit });
+  const cached = threadSummaryMessagesCache.get(threadId);
+  if (cached?.cacheKey === cacheKey) return cached.messages;
+
+  const messages = await listThreadMessages(threadId);
+  if (limit <= 0 || messages.length <= limit) {
+    threadSummaryMessagesCache.set(threadId, { cacheKey, messages });
+    return messages;
+  }
   const tailStart = Math.max(0, messages.length - limit);
   const tail = messages.slice(tailStart);
   const preserveStates = new Set(["queued", "pending_delivery", "awaiting_ack", "running"]);
@@ -350,7 +368,9 @@ async function listThreadMessagesForSummary(threadId: string) {
     const state = String(message?.state || "").trim().toLowerCase();
     return (role === "user" && preserveStates.has(state)) || isNeedInputMessage(message);
   });
-  return [...preserved, ...tail];
+  const summaryMessages = [...preserved, ...tail];
+  threadSummaryMessagesCache.set(threadId, { cacheKey, messages: summaryMessages });
+  return summaryMessages;
 }
 
 function storeThreadSummaryPayload(
@@ -860,6 +880,9 @@ export async function threadSummaryPayload(options: ThreadSummaryOptions = {}) {
     const activeThreadIds = new Set(threads.map((thread: any) => String(thread?.id || "")).filter(Boolean));
     for (const id of threadMetadataCache.keys()) {
       if (!activeThreadIds.has(id)) threadMetadataCache.delete(id);
+    }
+    for (const id of threadSummaryMessagesCache.keys()) {
+      if (!activeThreadIds.has(id)) threadSummaryMessagesCache.delete(id);
     }
     const payload = {
       generatedAt: new Date().toISOString(),

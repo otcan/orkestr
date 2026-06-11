@@ -4304,6 +4304,57 @@ test("thread summary message cap preserves old active delivery state", async () 
   }
 });
 
+test("thread summary reuses unchanged message file summaries", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-summary-message-cache-"));
+  const priorHome = process.env.ORKESTR_HOME;
+  const priorMessageLimit = process.env.ORKESTR_THREAD_SUMMARY_MESSAGES_LIMIT;
+  const originalReadFile = fs.readFile;
+  process.env.ORKESTR_HOME = path.join(home, "orkestr-home");
+  process.env.ORKESTR_THREAD_SUMMARY_MESSAGES_LIMIT = "2";
+  resetThreadSummaryCachesForTest();
+
+  try {
+    await createThread({ id: "summary-message-cache-thread", name: "Summary Message Cache Thread" });
+    await appendThreadMessage("summary-message-cache-thread", {
+      role: "user",
+      source: "manual",
+      text: "Still pending",
+      state: "queued",
+    });
+    for (let index = 0; index < 4; index += 1) {
+      await appendThreadMessage("summary-message-cache-thread", {
+        role: "assistant",
+        source: "test",
+        text: `Completed ${index}`,
+        state: "completed",
+      });
+    }
+
+    const paths = await ensureDataDirs(process.env);
+    const messagePath = path.join(paths.threadMessages, "summary-message-cache-thread.json");
+    let messageFileReadCount = 0;
+    fs.readFile = async (...args) => {
+      if (String(args[0]) === messagePath) messageFileReadCount += 1;
+      return originalReadFile.apply(fs, args);
+    };
+
+    const firstPayload = await threadSummaryPayload({ cacheTtlMs: 0, payloadCacheTtlMs: 0 });
+    const firstSummary = firstPayload.threads.find((thread) => thread.id === "summary-message-cache-thread");
+    assert.equal(firstSummary.pendingCount, 1);
+    assert.equal(messageFileReadCount, 1);
+
+    const secondPayload = await threadSummaryPayload({ cacheTtlMs: 0, payloadCacheTtlMs: 0 });
+    const secondSummary = secondPayload.threads.find((thread) => thread.id === "summary-message-cache-thread");
+    assert.equal(secondSummary.pendingCount, 1);
+    assert.equal(messageFileReadCount, 1);
+  } finally {
+    fs.readFile = originalReadFile;
+    resetThreadSummaryCachesForTest();
+    restoreEnvValue("ORKESTR_HOME", priorHome);
+    restoreEnvValue("ORKESTR_THREAD_SUMMARY_MESSAGES_LIMIT", priorMessageLimit);
+  }
+});
+
 test("thread summary preserves raw-terminal mode for sleeping takeover threads", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-summary-raw-terminal-"));
   const priorHome = process.env.ORKESTR_HOME;
