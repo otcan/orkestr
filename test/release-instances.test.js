@@ -81,12 +81,17 @@ test("release instance broker merges local, tenant VM, and private registry targ
     probe: true,
     fetchImpl: async (url) => {
       probedUrls.push(String(url));
-      return new Response(JSON.stringify({ releaseId: String(url).includes("127.0.0.1") ? "central-loopback" : "remote-release" }));
+      return new Response(JSON.stringify({
+        releaseId: String(url).includes("127.0.0.1") ? "central-loopback" : "remote-release",
+        releaseLabel: String(url).includes("127.0.0.1") ? "v0.1.0-alpha.27" : "v0.1.0-alpha.26",
+      }));
     },
   });
   assert.equal(probed.find((instance) => instance.id === "central").currentVersion.releaseId, "central-loopback");
+  assert.equal(probed.find((instance) => instance.id === "central").currentVersion.releaseLabel, "v0.1.0-alpha.27");
   const probedEdge = probed.find((instance) => instance.id === "edge");
   assert.equal(probedEdge.currentVersion.releaseId, "remote-release");
+  assert.equal(probedEdge.currentVersion.releaseLabel, "v0.1.0-alpha.26");
   assert.equal(probedEdge.targetVersion.releaseId, "main-target");
   assert.equal(probedEdge.lastProbe.ok, true);
   assert.equal(probedEdge.lastProbe.statusCode, 200);

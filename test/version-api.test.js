@@ -89,6 +89,9 @@ test("version endpoint includes release manifest metadata when present", async (
   await fs.writeFile(manifestPath, JSON.stringify({
     schemaVersion: 1,
     releaseId: "v0.1.7-f0c1538",
+    releaseLabel: "v0.1.7",
+    releaseVersion: "0.1.7",
+    buildId: "v0.1.7-f0c1538",
     channel: "production",
     deployedAt: "2026-05-22T09:00:00.000Z",
     distribution: {
@@ -120,6 +123,9 @@ test("version endpoint includes release manifest metadata when present", async (
     assert.equal(version.dirty, false);
     assert.equal(version.channel, "production");
     assert.equal(version.releaseId, "v0.1.7-f0c1538");
+    assert.equal(version.releaseLabel, "v0.1.7");
+    assert.equal(version.releaseVersion, "0.1.7");
+    assert.equal(version.buildId, "v0.1.7-f0c1538");
     assert.equal(version.deployedAt, "2026-05-22T09:00:00.000Z");
     assert.equal(version.manifestSchemaVersion, 1);
     assert.equal(version.distributionKind, "managed");
