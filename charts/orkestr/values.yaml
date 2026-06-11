@@ -11,12 +11,14 @@ demo:
   enabled: false
   # User-facing demo VM input.
   whatsappNumber: ""
-  # Stable Orkestr instance identifier included in setup/pairing links and
-  # challenge metadata. Use a unique value per VM when sharing one public domain.
-  instanceId: ""
+  # Broker URL used by the demo VM to register and receive its broker UUID.
+  # Defaults to the local Orkestr API when empty.
+  brokerBaseUrl: ""
+  brokerRegistrationTokenSecretName: ""
+  brokerRegistrationTokenSecretKey: token
   # Preferred stable public base URL for the VM, for example https://demo.orkestr.de.
   # Configure DNS/TLS/reverse proxy outside the chart. If set, the notifier sends
-  # <publicBaseUrl>/setup/pairing?instanceId=<id>&return=%2Fsetup.
+  # <publicBaseUrl>/setup/pairing?instanceId=<broker-uuid>&return=%2Fsetup.
   publicBaseUrl: ""
   # Optional full public setup/pairing URL override. This wins over publicBaseUrl.
   setupUrl: ""

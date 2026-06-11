@@ -5,6 +5,7 @@ import fs from "node:fs/promises";
 import http from "node:http";
 import path from "node:path";
 import { sendWhatsAppText } from "../packages/connectors/src/whatsapp.js";
+import { ensureBrokerClientRegistration } from "../packages/core/src/broker-instance-registry.js";
 import { writeRuntimeSettings } from "../packages/core/src/runtime-settings.js";
 import { writeConnectorConfig } from "../packages/storage/src/config.js";
 
@@ -64,6 +65,25 @@ function demoInstanceId(env = process.env) {
     env.ORKESTR_SERVICE_NAME,
     "local",
   ));
+}
+
+async function demoBrokerRegistration(env = process.env, options = {}) {
+  if (truthy(env.ORKESTR_DEMO_ALLOW_STATIC_INSTANCE_ID)) {
+    const instanceId = demoInstanceId(env);
+    if (instanceId) return { ok: true, instanceId, source: "static_instance_id" };
+  }
+  const brokerBaseUrl = firstValue(
+    env.ORKESTR_DEMO_BROKER_BASE_URL,
+    env.ORKESTR_BROKER_BASE_URL,
+    demoInternalUrl(env),
+  );
+  return ensureBrokerClientRegistration({
+    ...env,
+    ORKESTR_DEMO_BROKER_BASE_URL: brokerBaseUrl,
+  }, {
+    fetchImpl: options.fetchImpl || fetch,
+    brokerBaseUrl,
+  });
 }
 
 function setupReturnPathFromUrl(value = "") {
@@ -285,35 +305,43 @@ async function ensureCloudflareQuickTunnel(env = process.env, options = {}) {
 }
 
 export async function demoPublicSetupUrl(env = process.env, options = {}) {
-  const instanceId = demoInstanceId(env);
+  const registration = await demoBrokerRegistration(env, options);
+  if (!registration.ok || !registration.instanceId) {
+    return {
+      ok: false,
+      reason: registration.reason || "broker_registration_unavailable",
+      registration,
+    };
+  }
+  const instanceId = normalizeInstanceId(registration.instanceId);
   const explicitSetup = publicSetupUrlOverride(env);
   if (explicitSetup) {
     if (isLocalUrl(explicitSetup) && !truthy(env.ORKESTR_DEMO_ALLOW_LOCAL_SETUP_URL)) {
       return { ok: false, reason: "public_setup_url_is_local" };
     }
-    return { ok: true, setupUrl: setupUrlWithInstanceId(explicitSetup, instanceId), source: "public_setup_url", instanceId };
+    return { ok: true, setupUrl: setupUrlWithInstanceId(explicitSetup, instanceId), source: "public_setup_url", instanceId, registration };
   }
 
   const legacySetup = demoSetupUrl(env);
   const publicBase = publicBaseUrlOverride(env);
   if (publicBase) {
     const setupUrl = pairingSetupUrl(publicBase, { returnTo: setupReturnPathFromUrl(legacySetup) || "/setup", instanceId });
-    if (setupUrl) return { ok: true, setupUrl, source: "public_base_url", instanceId };
+    if (setupUrl) return { ok: true, setupUrl, source: "public_base_url", instanceId, registration };
   }
 
   if (legacySetup && !isLocalUrl(legacySetup)) {
     const setupUrl = pairingSetupUrl(legacySetup, { returnTo: setupReturnPathFromUrl(legacySetup), instanceId });
-    if (setupUrl) return { ok: true, setupUrl, source: "external_setup_url", instanceId };
+    if (setupUrl) return { ok: true, setupUrl, source: "external_setup_url", instanceId, registration };
   }
 
   const tunnel = await ensureCloudflareQuickTunnel(env, options);
   if (tunnel.ok && tunnel.url) {
     const setupUrl = pairingSetupUrl(tunnel.url, { returnTo: setupReturnPathFromUrl(legacySetup) || "/setup", instanceId });
-    return { ok: true, setupUrl, source: tunnel.reused ? "cloudflare_reused" : "cloudflare_quick_tunnel", tunnel, instanceId };
+    return { ok: true, setupUrl, source: tunnel.reused ? "cloudflare_reused" : "cloudflare_quick_tunnel", tunnel, instanceId, registration };
   }
 
   if (truthy(env.ORKESTR_DEMO_ALLOW_LOCAL_SETUP_URL)) {
-    return { ok: true, setupUrl: setupUrlWithInstanceId(legacySetup, instanceId), source: "local_unsafe_fallback", instanceId };
+    return { ok: true, setupUrl: setupUrlWithInstanceId(legacySetup, instanceId), source: "local_unsafe_fallback", instanceId, registration };
   }
 
   return { ok: false, reason: tunnel.reason || "public_setup_url_unavailable", tunnel };

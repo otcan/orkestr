@@ -2,6 +2,7 @@ import { Module } from "@nestjs/common";
 import { AgentsModule } from "./modules/agents/agents.module.js";
 import { AutomationsModule } from "./modules/automations/automations.module.js";
 import { BrowsersModule } from "./modules/browsers/browsers.module.js";
+import { BrokerModule } from "./modules/broker/broker.module.js";
 import { CodexModule } from "./modules/codex/codex.module.js";
 import { ConnectorsModule } from "./modules/connectors/connectors.module.js";
 import { GmailNotificationsModule } from "./modules/gmail-notifications/gmail-notifications.module.js";
@@ -23,6 +24,7 @@ import { UsersModule } from "./modules/users/users.module.js";
     GmailNotificationsModule,
     ReleaseModule,
     RouterTracesModule,
+    BrokerModule,
     SecureInputModule,
     BrowsersModule,
     AgentsModule,

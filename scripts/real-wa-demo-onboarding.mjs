@@ -9,34 +9,6 @@ function clean(value = "") {
   return String(value || "").trim();
 }
 
-function firstValue(...values) {
-  for (const value of values) {
-    const text = clean(value);
-    if (text) return text;
-  }
-  return "";
-}
-
-function normalizeInstanceId(value = "") {
-  return clean(value)
-    .replace(/[^A-Za-z0-9._:-]+/g, "-")
-    .replace(/^-+|-+$/g, "")
-    .slice(0, 120);
-}
-
-function setupUrlWithInstanceId(value = "", instanceId = "") {
-  const setupUrl = clean(value);
-  const normalizedInstanceId = normalizeInstanceId(instanceId);
-  if (!setupUrl || !normalizedInstanceId) return setupUrl;
-  try {
-    const url = new URL(setupUrl);
-    if (!url.searchParams.get("instanceId")) url.searchParams.set("instanceId", normalizedInstanceId);
-    return url.toString();
-  } catch {
-    return setupUrl;
-  }
-}
-
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, Math.max(0, Number(ms || 0))));
 }
@@ -66,15 +38,6 @@ function parseArgs(argv = [], env = process.env) {
     chatId: clean(env.ORKESTR_REAL_WA_DEMO_CHAT_ID || env.ORKESTR_REAL_WA_E2E_CHAT_ID),
     responderAccountId: clean(env.ORKESTR_REAL_WA_DEMO_RESPONDER_ACCOUNT || env.ORKESTR_REAL_WA_E2E_RESPONDER_ACCOUNT || "responder"),
     setupUrl: clean(env.ORKESTR_DEMO_PUBLIC_SETUP_URL || env.ORKESTR_DEMO_SETUP_PUBLIC_URL || ""),
-    instanceId: normalizeInstanceId(firstValue(
-      env.ORKESTR_REAL_WA_DEMO_INSTANCE_ID,
-      env.ORKESTR_DEMO_INSTANCE_ID,
-      env.ORKESTR_INSTANCE_ID,
-      env.ORKESTR_RELEASE_INSTANCE_ID,
-      env.ORKESTR_TENANT_VM_ID,
-      env.ORKESTR_SERVICE_NAME,
-      "local",
-    )),
     timeoutMs: Number(env.ORKESTR_REAL_WA_E2E_TIMEOUT_MS || 90_000),
     pollMs: Number(env.ORKESTR_REAL_WA_E2E_POLL_MS || 2000),
     artifactPath: clean(env.ORKESTR_REAL_WA_DEMO_ARTIFACT || env.ORKESTR_REAL_WA_E2E_ARTIFACT),
@@ -91,7 +54,6 @@ function parseArgs(argv = [], env = process.env) {
     else if (arg === "--chat-id") options.chatId = clean(argv[++index]);
     else if (arg === "--responder-account") options.responderAccountId = clean(argv[++index]);
     else if (arg === "--setup-url") options.setupUrl = clean(argv[++index]);
-    else if (arg === "--instance-id") options.instanceId = normalizeInstanceId(argv[++index]);
     else if (arg === "--timeout-ms") options.timeoutMs = Number(argv[++index] || 0);
     else if (arg === "--poll-ms") options.pollMs = Number(argv[++index] || 0);
     else if (arg === "--artifact") options.artifactPath = clean(argv[++index]);
@@ -125,8 +87,7 @@ function usage() {
     "  --api-base URL           Orkestr API base. Default: ORKESTR_API_BASE or localhost.",
     "  --orkestr-home DIR       Lets the API client use local CLI auth for that instance.",
     "  --responder-account ID   WA account that Orkestr uses to send. Default: responder.",
-    "  --setup-url URL          Public setup/pairing URL included in the prompt.",
-    "  --instance-id ID         Stable Orkestr instance id to add to setup links.",
+    "  --setup-url URL          Public setup/pairing URL included in the prompt after broker registration.",
     "  --allow-local-setup-url  Unsafe test-only override for localhost setup URLs.",
     "  --artifact FILE          Write JSON result details.",
     "",
@@ -252,9 +213,11 @@ async function writeArtifact(options, payload) {
 
 export async function runRealWhatsAppDemoOnboarding(options) {
   const startedAt = Date.now();
-  const setup = options.setupUrl
-    ? { ok: true, setupUrl: setupUrlWithInstanceId(options.setupUrl, options.instanceId), source: "cli_setup_url", instanceId: options.instanceId }
-    : await demoPublicSetupUrl(apiEnv(options));
+  const setup = await demoPublicSetupUrl({
+    ...apiEnv(options),
+    ...(options.setupUrl ? { ORKESTR_DEMO_PUBLIC_SETUP_URL: options.setupUrl } : {}),
+    ORKESTR_BROKER_FORCE_REREGISTER: "1",
+  });
   if (!setup.ok || !setup.setupUrl) throw new Error(setup.reason || "public_setup_url_unavailable");
   const text = readyMessage({ setupUrl: setup.setupUrl });
   const result = {

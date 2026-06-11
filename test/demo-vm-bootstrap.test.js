@@ -9,12 +9,33 @@ import { readRuntimeSettings } from "../packages/core/src/runtime-settings.js";
 import { readConnectorConfig } from "../packages/storage/src/config.js";
 import { runDemoVmReadyNotify } from "../scripts/demo-vm-ready-notify.mjs";
 
+const BROKER_UUID = "11111111-2222-4333-8444-555555555555";
+
 function response(payload, ok = true, status = 200) {
   return {
     ok,
     status,
     async json() {
       return payload;
+    },
+  };
+}
+
+function brokerRegistrationPayload(instanceId = BROKER_UUID) {
+  return {
+    ok: true,
+    instanceId,
+    channelId: "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee",
+    registeredAt: "2026-06-11T00:00:00.000Z",
+    broker: {
+      keyId: "broker-key-1",
+      publicKey: "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VuAyEA2IFd3Rdi7NTih5q0Glq82pzgjEycOnu/MpuxJdGzGn4=\n-----END PUBLIC KEY-----\n",
+    },
+    encryptedWelcome: {
+      alg: "X25519-HKDF-SHA256+A256GCM",
+      iv: "MTIzNDU2Nzg5MDEy",
+      ciphertext: "Y2lwaGVydGV4dA==",
+      tag: "MTIzNDU2Nzg5MDEyMzQ1Ng==",
     },
   };
 }
@@ -47,7 +68,7 @@ test("demo VM notifier sends one relay readiness message and seeds relay setting
   const env = {
     ORKESTR_HOME: home,
     ORKESTR_DEMO_WHATSAPP_NUMBER: "+49 176 123456",
-    ORKESTR_DEMO_INSTANCE_ID: "demo-vm-001",
+    ORKESTR_DEMO_INSTANCE_ID: "orkestr-ui",
     ORKESTR_DEMO_SETUP_URL: "http://127.0.0.1:3000/setup",
     ORKESTR_DEMO_PUBLIC_BASE_URL: "https://demo.orkestr.de",
     ORKESTR_DEMO_WHATSAPP_RELAY_URL: "http://relay.local/api/connectors/whatsapp/bridge",
@@ -58,6 +79,12 @@ test("demo VM notifier sends one relay readiness message and seeds relay setting
   };
   const fetchImpl = async (url, options = {}) => {
     calls.push({ url, options });
+    if (url.pathname === "/api/broker/instances/register") {
+      const body = JSON.parse(options.body);
+      assert.match(body.encryptionPublicKey, /BEGIN PUBLIC KEY/);
+      assert.equal(body.instanceId, undefined);
+      return response(brokerRegistrationPayload());
+    }
     if (url.pathname.endsWith("/health")) {
       return response({ ok: true, ready: true, accounts: [{ id: "responder", ready: true, state: "ready" }] });
     }
@@ -68,7 +95,8 @@ test("demo VM notifier sends one relay readiness message and seeds relay setting
     assert.equal(body.accountId, "responder");
     assert.match(body.text, /Orkestr demo VM is ready/);
     assert.match(body.text, /complete Codex login\/sign-in/i);
-    assert.match(body.text, /https:\/\/demo\.orkestr\.de\/setup\/pairing\?instanceId=demo-vm-001&return=%2Fsetup/);
+    assert.match(body.text, new RegExp(`https://demo\\.orkestr\\.de/setup/pairing\\?instanceId=${BROKER_UUID}&return=%2Fsetup`));
+    assert.doesNotMatch(body.text, /orkestr-ui/);
     assert.doesNotMatch(body.text, /127\.0\.0\.1|localhost/);
     assert.match(body.text, /Start the orkest thread/);
     assert.match(body.text, /browser-pairing challenge/);
@@ -86,6 +114,7 @@ test("demo VM notifier sends one relay readiness message and seeds relay setting
   assert.equal(second.skipped, true);
   assert.equal(second.reason, "already_sent");
   assert.equal(tunnelCalls.length, 0);
+  assert.equal(calls.filter((call) => call.url.pathname === "/api/broker/instances/register").length, 1);
   assert.equal(calls.filter((call) => call.url.pathname.endsWith("/send-text")).length, 1);
   assert.equal(settings.connectors.whatsapp.accessMode, "relay");
   assert.equal(settings.connectors.whatsapp.bridgeMode, "relay");
@@ -94,9 +123,9 @@ test("demo VM notifier sends one relay readiness message and seeds relay setting
   assert.equal(connectorConfig.apiToken, "relay-secret");
   assert.equal(state.sent, true);
   assert.equal(state.state, "sent");
-  assert.equal(state.setupUrl, "https://demo.orkestr.de/setup/pairing?instanceId=demo-vm-001&return=%2Fsetup");
+  assert.equal(state.setupUrl, `https://demo.orkestr.de/setup/pairing?instanceId=${BROKER_UUID}&return=%2Fsetup`);
   assert.equal(state.setupUrlSource, "public_base_url");
-  assert.equal(state.instanceId, "demo-vm-001");
+  assert.equal(state.instanceId, BROKER_UUID);
   assert.equal(state.targetKey.length, 64);
   assert.doesNotMatch(JSON.stringify(state), /49176123456|176123456|relay-secret/);
 });
@@ -108,7 +137,6 @@ test("demo VM notifier can use Cloudflare quick tunnel only as explicit fallback
   const env = {
     ORKESTR_HOME: home,
     ORKESTR_DEMO_WHATSAPP_NUMBER: "+49 176 123456",
-    ORKESTR_DEMO_INSTANCE_ID: "demo-vm-001",
     ORKESTR_DEMO_SETUP_URL: "http://127.0.0.1:3000/setup",
     ORKESTR_DEMO_WHATSAPP_RELAY_URL: "http://relay.local/api/connectors/whatsapp/bridge",
     ORKESTR_DEMO_WHATSAPP_RELAY_TOKEN: "relay-secret",
@@ -118,11 +146,12 @@ test("demo VM notifier can use Cloudflare quick tunnel only as explicit fallback
   };
   const fetchImpl = async (url, options = {}) => {
     calls.push({ url, options });
+    if (url.pathname === "/api/broker/instances/register") return response(brokerRegistrationPayload());
     if (url.pathname.endsWith("/health")) {
       return response({ ok: true, ready: true, accounts: [{ id: "responder", ready: true, state: "ready" }] });
     }
     const body = JSON.parse(options.body);
-    assert.match(body.text, /https:\/\/demo-onboarding\.trycloudflare\.com\/setup\/pairing\?instanceId=demo-vm-001&return=%2Fsetup/);
+    assert.match(body.text, new RegExp(`https://demo-onboarding\\.trycloudflare\\.com/setup/pairing\\?instanceId=${BROKER_UUID}&return=%2Fsetup`));
     return response({ ok: true, sent: [{ id: "sent-demo-ready" }] });
   };
 
@@ -135,7 +164,7 @@ test("demo VM notifier can use Cloudflare quick tunnel only as explicit fallback
   assert.equal(tunnelCalls.length, 1);
   assert.deepEqual(tunnelCalls[0].args, ["tunnel", "--url", "http://127.0.0.1:3000", "--no-autoupdate"]);
   assert.equal(state.setupUrlSource, "cloudflare_quick_tunnel");
-  assert.equal(state.instanceId, "demo-vm-001");
+  assert.equal(state.instanceId, BROKER_UUID);
   assert.equal(tunnelState.state, "ready");
   assert.equal(tunnelState.url, "https://demo-onboarding.trycloudflare.com");
   assert.equal(calls.filter((call) => call.url.pathname.endsWith("/send-text")).length, 1);
@@ -146,14 +175,14 @@ test("demo VM notifier blocks without a pre-provisioned relay URL but keeps star
   const env = {
     ORKESTR_HOME: home,
     ORKESTR_DEMO_WHATSAPP_NUMBER: "+49 176 654321",
-    ORKESTR_DEMO_INSTANCE_ID: "demo-public-1",
     ORKESTR_DEMO_PUBLIC_BASE_URL: "https://demo-public.example.test",
     ORKESTR_DEMO_NOTIFY_HEALTH_TIMEOUT_MS: "0",
   };
 
   const result = await runDemoVmReadyNotify(env, {
-    async fetchImpl() {
-      throw new Error("fetch_should_not_run");
+    async fetchImpl(url) {
+      assert.equal(url.pathname, "/api/broker/instances/register");
+      return response(brokerRegistrationPayload());
     },
   });
   const settings = await readRuntimeSettings(env);
@@ -164,8 +193,8 @@ test("demo VM notifier blocks without a pre-provisioned relay URL but keeps star
   assert.equal(settings.connectors.whatsapp.accessMode, "relay");
   assert.equal(state.sent, false);
   assert.equal(state.reason, "relay_bridge_url_missing");
-  assert.equal(state.setupUrl, "https://demo-public.example.test/setup/pairing?instanceId=demo-public-1&return=%2Fsetup");
-  assert.equal(state.instanceId, "demo-public-1");
+  assert.equal(state.setupUrl, `https://demo-public.example.test/setup/pairing?instanceId=${BROKER_UUID}&return=%2Fsetup`);
+  assert.equal(state.instanceId, BROKER_UUID);
 });
 
 test("demo VM notifier blocks instead of sending a localhost setup link when Cloudflare is unavailable", async () => {
@@ -189,8 +218,9 @@ test("demo VM notifier blocks instead of sending a localhost setup link when Clo
 
   const result = await runDemoVmReadyNotify(env, {
     spawnImpl,
-    async fetchImpl() {
-      throw new Error("fetch_should_not_run");
+    async fetchImpl(url) {
+      assert.equal(url.pathname, "/api/broker/instances/register");
+      return response(brokerRegistrationPayload());
     },
   });
   const state = JSON.parse(await fs.readFile(path.join(home, "demo-vm-ready-notification.json"), "utf8"));
@@ -215,8 +245,9 @@ test("demo VM notifier does not start Cloudflare unless fallback is enabled", as
     spawnImpl() {
       throw new Error("cloudflare_should_not_start");
     },
-    async fetchImpl() {
-      throw new Error("fetch_should_not_run");
+    async fetchImpl(url) {
+      assert.equal(url.pathname, "/api/broker/instances/register");
+      return response(brokerRegistrationPayload());
     },
   });
   const state = JSON.parse(await fs.readFile(path.join(home, "demo-vm-ready-notification.json"), "utf8"));
@@ -242,12 +273,14 @@ test("demo VM contract is private, WhatsApp-number driven, and part of smoke scr
   assert.match(entrypoint, /ORKESTR_DEMO_MODE/);
   assert.match(values, /demo:/);
   assert.match(values, /whatsappNumber: ""/);
-  assert.match(values, /instanceId: ""/);
+  assert.doesNotMatch(values, /instanceId: ""/);
   assert.match(values, /publicBaseUrl: ""/);
   assert.match(values, /cloudflareFallback: false/);
   assert.match(values, /type: ClusterIP/);
   assert.match(deployment, /ORKESTR_DEMO_WHATSAPP_NUMBER/);
-  assert.match(deployment, /ORKESTR_DEMO_INSTANCE_ID/);
+  assert.doesNotMatch(deployment, /ORKESTR_DEMO_INSTANCE_ID/);
+  assert.match(deployment, /ORKESTR_DEMO_BROKER_BASE_URL/);
+  assert.match(deployment, /ORKESTR_DEMO_BROKER_REGISTRATION_TOKEN/);
   assert.match(deployment, /ORKESTR_DEMO_PUBLIC_BASE_URL/);
   assert.match(deployment, /ORKESTR_DEMO_CLOUDFLARE_FALLBACK/);
   assert.match(deployment, /ORKESTR_DEMO_CLOUDFLARE_DISABLE/);

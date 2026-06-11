@@ -33,9 +33,16 @@ spec:
               value: {{ .Values.demo.whatsappNumber | quote }}
             - name: ORKESTR_WHATSAPP_ACCESS_MODE
               value: "relay"
-            {{- with .Values.demo.instanceId }}
-            - name: ORKESTR_DEMO_INSTANCE_ID
+            {{- with .Values.demo.brokerBaseUrl }}
+            - name: ORKESTR_DEMO_BROKER_BASE_URL
               value: {{ . | quote }}
+            {{- end }}
+            {{- if .Values.demo.brokerRegistrationTokenSecretName }}
+            - name: ORKESTR_DEMO_BROKER_REGISTRATION_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.demo.brokerRegistrationTokenSecretName | quote }}
+                  key: {{ .Values.demo.brokerRegistrationTokenSecretKey | quote }}
             {{- end }}
             {{- with .Values.demo.publicBaseUrl }}
             - name: ORKESTR_DEMO_PUBLIC_BASE_URL
