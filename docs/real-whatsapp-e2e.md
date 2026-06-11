@@ -11,6 +11,23 @@ APIs.
 The test is disabled by default. It requires `--execute` and explicit live
 targets because it sends real WhatsApp messages.
 
+For the private VM demo acceptance path, use
+`npm run e2e:whatsapp-demo-onboarding`. That test is intentionally
+Orkestr-initiated: it sends the first message from the serving/responder
+WhatsApp account to the target direct chat and verifies the outbound prompt asks
+the user to complete Codex login/sign-in in setup. It does not depend on the
+user sending `/connect google`.
+
+```bash
+npm run e2e:whatsapp-demo-onboarding -- --execute \
+  --api-base http://127.0.0.1:19812 \
+  --orkestr-home /path/to/orkestr-home \
+  --chat-id target-user-direct-chat@c.us \
+  --responder-account responder \
+  --setup-url http://127.0.0.1:3000/setup \
+  --artifact artifacts/real-wa-demo-onboarding.json
+```
+
 ```bash
 npm run e2e:whatsapp-real -- --execute \
   --api-base http://127.0.0.1:19812 \

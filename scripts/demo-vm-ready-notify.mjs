@@ -82,15 +82,15 @@ function positiveTimeoutMs(value, fallback) {
   return Math.max(0, Math.floor(parsed));
 }
 
-function readyMessage({ setupUrl }) {
+export function readyMessage({ setupUrl }) {
   return [
     "Orkestr demo VM is ready.",
     "",
-    "Open setup through your VM-local browser, SSH tunnel, or port forward:",
+    "Please open setup through your VM-local browser, SSH tunnel, or port forward and complete Codex login/sign-in:",
     setupUrl,
     "",
     "Steps:",
-    "1. Connect Codex and finish the Codex sign-in.",
+    "1. Complete Codex login/sign-in in setup.",
     "2. Keep WhatsApp on Orkestr relay, or switch to your own relay.",
     "3. Start the orkest thread.",
     "",

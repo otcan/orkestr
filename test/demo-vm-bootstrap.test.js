@@ -40,6 +40,7 @@ test("demo VM notifier sends one relay readiness message and seeds relay setting
     assert.equal(body.to, "49176123456@c.us");
     assert.equal(body.accountId, "responder");
     assert.match(body.text, /Orkestr demo VM is ready/);
+    assert.match(body.text, /complete Codex login\/sign-in/i);
     assert.match(body.text, /http:\/\/127\.0\.0\.1:3000\/setup/);
     assert.match(body.text, /Start the orkest thread/);
     assert.match(body.text, /No public app URL is required/);
@@ -111,6 +112,7 @@ test("demo VM contract is private, WhatsApp-number driven, and part of smoke scr
   assert.match(deployment, /ORKESTR_DEMO_WHATSAPP_RELAY_TOKEN/);
   assert.match(smoke, /demo-vm-ready-notify\.mjs/);
   assert.match(pkg, /"smoke:demo-vm": "node --test test\/demo-vm-bootstrap\.test\.js"/);
+  assert.match(pkg, /"e2e:whatsapp-demo-onboarding": "node scripts\/real-wa-demo-onboarding\.mjs"/);
   assert.match(readme, /Private VM Demo/);
   assert.match(readme, /ORKESTR_DEMO_WHATSAPP_NUMBER/);
   assert.doesNotMatch(readme, /app\.orkestr\.de/);

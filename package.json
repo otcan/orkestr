@@ -23,6 +23,7 @@
     "test:tenant-isolation": "node --test test/use-control.test.js test/security.test.js test/checks.test.js test/gmail.test.js test/outlook.test.js test/browsers.test.js test/codex-app-server.test.js test/whatsapp.test.js test/whereiam.test.js test/tenant-vm-registry.test.js test/tenant-vm-provisioning.test.js test/tenant-whatsapp-routing.test.js",
     "release:regression": "node scripts/release-regression.mjs",
     "e2e:whatsapp-real": "node scripts/real-wa-e2e.mjs",
+    "e2e:whatsapp-demo-onboarding": "node scripts/real-wa-demo-onboarding.mjs",
     "web:build": "ng build web",
     "smoke": "node scripts/smoke.mjs",
     "smoke:public-domain": "bash scripts/smoke-public-domain.sh",
