@@ -220,7 +220,11 @@ test("ops page exposes release broker inventory", async () => {
   assert.match(component, /visibleWhatsAppBindings\(\): WhatsAppDoctorBinding\[\]/);
   assert.match(component, /brokerThreads\(instance: ReleaseInstance\): BrokerThreadRow\[\]/);
   assert.match(component, /brokerAccountHistory\(\)/);
-  assert.match(template, /toolsView === 'broker'/);
+  assert.match(template, /visibleToolTabs\(\)/);
+  assert.match(component, /kind: "managed"/);
+  assert.match(component, /managedOpsEnabled\(\): boolean/);
+  assert.match(component, /normalizedToolsView\(view: ToolsView\): ToolsView/);
+  assert.match(template, /toolsView === "broker"/);
   assert.match(template, /releaseInstanceRolloutLabel\(instance\)/);
   assert.match(template, /releaseInstanceHealthLabel\(instance\)/);
   assert.match(template, /releaseInstanceDowntimeLabel\(instance\)/);
@@ -504,8 +508,9 @@ test("ops audit view exposes normalized filterable events", async () => {
 
   assert.match(component, /export type ToolsView = .*"audit"/);
   assert.match(appComponent, /"connectors", "users", "waitlist", "audit"/);
-  assert.match(template, /\[class\.active\]="toolsView === 'audit'"/);
-  assert.match(template, /setToolsView\('audit'\)">Audit<\/button>/);
+  assert.match(template, /visibleToolTabs\(\)/);
+  assert.match(template, /\[class\.active\]="toolsView === tab\.id"/);
+  assert.match(component, /id: "audit", label: "Audit", kind: "oss-core"/);
   assert.match(template, /@if \(toolsView === "audit"\)/);
   assert.match(template, /name="audit-user-filter"/);
   assert.match(template, /name="audit-resource-filter"/);
@@ -606,8 +611,8 @@ test("ops waitlist view exposes secure approval workflow", async () => {
   assert.match(opsComponent, /export type ToolsView = .*"waitlist"/);
   assert.match(opsComponent, /OpsWaitlistComponent/);
   assert.match(appComponent, /"connectors", "users", "waitlist", "audit"/);
-  assert.match(opsTemplate, /\[class\.active\]="toolsView === 'waitlist'"/);
-  assert.match(opsTemplate, /setToolsView\('waitlist'\)">Waitlist<\/button>/);
+  assert.match(opsComponent, /id: "waitlist", label: "Waitlist", kind: "managed"/);
+  assert.match(opsTemplate, /visibleToolTabs\(\)/);
   assert.match(opsTemplate, /<ork-ops-waitlist><\/ork-ops-waitlist>/);
   assert.match(waitlistComponent, /this\.api\.waitlist\("", 500\)/);
   assert.match(waitlistComponent, /this\.api\.updateWaitlistEntry\(entry\.id/);
@@ -635,6 +640,9 @@ test("secure input routes are marked no-capture and metadata-only", async () => 
   const controller = await fs.readFile("apps/server/src/modules/secure-input/secure-input.controller.ts", "utf8");
   const core = await fs.readFile("packages/core/src/secure-secrets.js", "utf8");
   const cli = await fs.readFile("apps/cli/src/commands.js", "utf8");
+  const api = await fs.readFile("apps/web/src/app/api.service.ts", "utf8");
+  const opsComponent = await fs.readFile("apps/web/src/app/ops-page.component.ts", "utf8");
+  const opsTemplate = await fs.readFile("apps/web/src/app/ops-page.component.html", "utf8");
 
   assert.match(controller, /X-Orkestr-Secure-Input/);
   assert.match(controller, /noMirror,noCapture,noCodexContext,noScreenshot/);
@@ -643,6 +651,11 @@ test("secure input routes are marked no-capture and metadata-only", async () => 
   assert.match(core, /createCipheriv\("aes-256-gcm"/);
   assert.match(cli, /\/dev\/tty/);
   assert.match(cli, /stty \$\{enabled \? "echo" : "-echo"\}/);
+  assert.match(api, /secureSecrets\(options: \{ scope\?: "user" \| "global"; userId\?: string \} = \{\}\)/);
+  assert.match(opsComponent, /opsSecureSecrets: SecureSecretMetadata\[\] = \[\]/);
+  assert.match(opsComponent, /loadOpsSecrets\(\): Promise<void>/);
+  assert.match(opsTemplate, /Secret Manager/);
+  assert.match(opsTemplate, /href="\/setup\/secrets"/);
 });
 
 test("ops users page exposes WhatsApp identity binding controls", async () => {

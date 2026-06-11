@@ -131,6 +131,7 @@ test("thread input API returns queued message without synchronous runtime delive
       body: JSON.stringify({
         source: "browser",
         clientMessageId: "browser-http-send-1",
+        autoRun: false,
         text: "hello enqueue-only",
       }),
     });
@@ -142,7 +143,7 @@ test("thread input API returns queued message without synchronous runtime delive
     assert.equal(payload.queueItemId, payload.message.id);
     assert.deepEqual(payload.delivered, []);
     assert.equal(payload.deliveryState, "queued");
-    assert.equal(payload.reason, "pending_delivery");
+    assert.equal(payload.reason, "auto_run_disabled");
     assert.equal(payload.message.state, "queued");
     assert.equal(payload.message.clientMessageId, "browser-http-send-1");
     await new Promise((resolve) => setTimeout(resolve, 25));

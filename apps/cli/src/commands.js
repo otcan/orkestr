@@ -1811,6 +1811,7 @@ function formatVersion(version = {}) {
   return [
     `Orkestr: ${[version.name || "orkestr", version.version || ""].filter(Boolean).join(" ")}`,
     `Release: ${release}`,
+    `Distribution: ${version.distributionKind || version.distribution?.kind || "-"}${version.deploymentTrack ? ` (${version.deploymentTrack})` : ""}`,
     `Commit: ${shortCommit(version.commit) || "-"}${version.dirty ? " dirty" : ""}`,
     `Ref: ${version.tag || version.branch || version.describe || "-"}`,
     `Channel: ${version.channel || "-"}`,

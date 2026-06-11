@@ -74,52 +74,52 @@ test("public URL config prefers explicit public app and auth URLs over legacy al
 
 test("public URL identity diagnostics accept one hosted URL family", () => {
   const diagnostics = publicUrlIdentityDiagnostics({
-    ORKESTR_PRIMARY_DOMAIN: "orkestr.de",
-    ORKESTR_APP_HOST: "app.orkestr.de",
-    ORKESTR_AUTH_HOST: "auth.orkestr.de",
-    ORKESTR_PUBLIC_SITE_URL: "https://orkestr.de",
-    ORKESTR_PUBLIC_APP_URL: "https://app.orkestr.de",
-    ORKESTR_AUTH_URL: "https://auth.orkestr.de",
-    ORKESTR_PAIRING_URL: "https://app.orkestr.de/setup/pairing",
-    ORKESTR_COOKIE_DOMAIN: "orkestr.de",
+    ORKESTR_PRIMARY_DOMAIN: "orkestr.example.test",
+    ORKESTR_APP_HOST: "app.orkestr.example.test",
+    ORKESTR_AUTH_HOST: "auth.orkestr.example.test",
+    ORKESTR_PUBLIC_SITE_URL: "https://orkestr.example.test",
+    ORKESTR_PUBLIC_APP_URL: "https://app.orkestr.example.test",
+    ORKESTR_AUTH_URL: "https://auth.orkestr.example.test",
+    ORKESTR_PAIRING_URL: "https://app.orkestr.example.test/setup/pairing",
+    ORKESTR_COOKIE_DOMAIN: "orkestr.example.test",
   });
 
   assert.equal(diagnostics.ok, true);
-  assert.deepEqual(diagnostics.roots.map((root) => root.root), ["orkestr.de"]);
+  assert.deepEqual(diagnostics.roots.map((root) => root.root), ["orkestr.example.test"]);
 });
 
 test("public URL identity diagnostics ignore a separate public marketing site URL", () => {
   const diagnostics = publicUrlIdentityDiagnostics({
-    ORKESTR_PRIMARY_DOMAIN: "ops.oguzcanunver.com",
-    ORKESTR_APP_HOST: "orkestr.app.ops.oguzcanunver.com",
-    ORKESTR_AUTH_HOST: "auth.ops.oguzcanunver.com",
-    ORKESTR_PUBLIC_SITE_URL: "https://orkestr.de",
-    ORKESTR_PUBLIC_APP_URL: "https://orkestr.app.ops.oguzcanunver.com",
-    ORKESTR_AUTH_URL: "https://auth.ops.oguzcanunver.com",
-    ORKESTR_PAIRING_URL: "https://orkestr.app.ops.oguzcanunver.com/setup/pairing",
+    ORKESTR_PRIMARY_DOMAIN: "ops.example.test",
+    ORKESTR_APP_HOST: "orkestr.app.ops.example.test",
+    ORKESTR_AUTH_HOST: "auth.ops.example.test",
+    ORKESTR_PUBLIC_SITE_URL: "https://orkestr.example.test",
+    ORKESTR_PUBLIC_APP_URL: "https://orkestr.app.ops.example.test",
+    ORKESTR_AUTH_URL: "https://auth.ops.example.test",
+    ORKESTR_PAIRING_URL: "https://orkestr.app.ops.example.test/setup/pairing",
   });
 
   assert.equal(diagnostics.ok, true);
-  assert.deepEqual(diagnostics.roots.map((root) => root.root), ["ops.oguzcanunver.com"]);
+  assert.deepEqual(diagnostics.roots.map((root) => root.root), ["ops.example.test"]);
   assert.equal(diagnostics.records.some((record) => record.name === "ORKESTR_PUBLIC_SITE_URL"), false);
 });
 
 test("public URL identity diagnostics warn on mixed runtime service URLs", () => {
   const diagnostics = publicUrlIdentityDiagnostics({
-    ORKESTR_PRIMARY_DOMAIN: "ops.oguzcanunver.com",
-    ORKESTR_APP_HOST: "orkestr.app.ops.oguzcanunver.com",
-    ORKESTR_AUTH_HOST: "auth.ops.oguzcanunver.com",
-    ORKESTR_PUBLIC_SITE_URL: "https://orkestr.de",
-    ORKESTR_PUBLIC_APP_URL: "https://orkestr.app.ops.oguzcanunver.com",
-    ORKESTR_AUTH_URL: "https://auth.ops.oguzcanunver.com",
-    ORKESTR_CONNECT_PUBLIC_URL: "https://connect.orkestr.de",
-    ORKESTR_PAIRING_URL: "https://orkestr.app.ops.oguzcanunver.com/setup/pairing",
+    ORKESTR_PRIMARY_DOMAIN: "ops.example.test",
+    ORKESTR_APP_HOST: "orkestr.app.ops.example.test",
+    ORKESTR_AUTH_HOST: "auth.ops.example.test",
+    ORKESTR_PUBLIC_SITE_URL: "https://orkestr.example.test",
+    ORKESTR_PUBLIC_APP_URL: "https://orkestr.app.ops.example.test",
+    ORKESTR_AUTH_URL: "https://auth.ops.example.test",
+    ORKESTR_CONNECT_PUBLIC_URL: "https://connect.orkestr.example.test",
+    ORKESTR_PAIRING_URL: "https://orkestr.app.ops.example.test/setup/pairing",
   });
 
   assert.equal(diagnostics.ok, false);
   assert.equal(diagnostics.status, "warning");
-  assert.deepEqual(diagnostics.roots.map((root) => root.root), ["ops.oguzcanunver.com", "orkestr.de"]);
-  assert.ok(diagnostics.records.some((record) => record.name === "ORKESTR_CONNECT_PUBLIC_URL" && record.root === "orkestr.de"));
+  assert.deepEqual(diagnostics.roots.map((root) => root.root), ["example.test", "ops.example.test"]);
+  assert.ok(diagnostics.records.some((record) => record.name === "ORKESTR_CONNECT_PUBLIC_URL" && record.root === "example.test"));
 });
 
 test("pairing session cookie can cover app and auth subdomains", () => {

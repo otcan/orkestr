@@ -65,12 +65,12 @@ test("system doctor allows a separate public marketing site URL", async () => {
     ORKESTR_HOME: home,
     ORKESTR_CODEX_BIN: fakeCodex,
     CODEX_HOME: path.join(home, "codex-home"),
-    ORKESTR_PRIMARY_DOMAIN: "ops.oguzcanunver.com",
-    ORKESTR_APP_HOST: "orkestr.app.ops.oguzcanunver.com",
-    ORKESTR_AUTH_HOST: "auth.ops.oguzcanunver.com",
-    ORKESTR_PUBLIC_SITE_URL: "https://orkestr.de",
-    ORKESTR_PUBLIC_APP_URL: "https://orkestr.app.ops.oguzcanunver.com",
-    ORKESTR_AUTH_URL: "https://auth.ops.oguzcanunver.com",
+    ORKESTR_PRIMARY_DOMAIN: "ops.example.test",
+    ORKESTR_APP_HOST: "orkestr.app.ops.example.test",
+    ORKESTR_AUTH_HOST: "auth.ops.example.test",
+    ORKESTR_PUBLIC_SITE_URL: "https://orkestr.example.test",
+    ORKESTR_PUBLIC_APP_URL: "https://orkestr.app.ops.example.test",
+    ORKESTR_AUTH_URL: "https://auth.ops.example.test",
     ORKESTR_AUTH_REQUIRED: "1",
   };
 

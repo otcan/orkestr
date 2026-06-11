@@ -59,26 +59,26 @@ test("system doctor warns when active URL drop-ins mix public and private instan
   await fs.mkdir(dropInDir, { recursive: true });
   await fs.writeFile(publicDropIn, [
     "[Service]",
-    "Environment=ORKESTR_PRIMARY_DOMAIN=orkestr.de",
-    "Environment=ORKESTR_APP_HOST=app.orkestr.de",
-    "Environment=ORKESTR_AUTH_HOST=auth.orkestr.de",
-    "Environment=ORKESTR_PUBLIC_APP_URL=https://app.orkestr.de",
-    "Environment=ORKESTR_AUTH_URL=https://auth.orkestr.de",
+    "Environment=ORKESTR_PRIMARY_DOMAIN=orkestr.example.test",
+    "Environment=ORKESTR_APP_HOST=app.orkestr.example.test",
+    "Environment=ORKESTR_AUTH_HOST=auth.orkestr.example.test",
+    "Environment=ORKESTR_PUBLIC_APP_URL=https://app.orkestr.example.test",
+    "Environment=ORKESTR_AUTH_URL=https://auth.orkestr.example.test",
     "",
   ].join("\n"));
   await fs.writeFile(privateDropIn, [
     "[Service]",
-    "Environment=ORKESTR_PRIMARY_DOMAIN=ops.oguzcanunver.com",
-    "Environment=ORKESTR_APP_HOST=orkestr.app.ops.oguzcanunver.com",
-    "Environment=ORKESTR_AUTH_HOST=auth.ops.oguzcanunver.com",
-    "Environment=ORKESTR_PUBLIC_SITE_URL=https://orkestr.de",
-    "Environment=ORKESTR_PUBLIC_APP_URL=https://orkestr.app.ops.oguzcanunver.com",
-    "Environment=ORKESTR_AUTH_URL=https://auth.ops.oguzcanunver.com",
+    "Environment=ORKESTR_PRIMARY_DOMAIN=ops.example.test",
+    "Environment=ORKESTR_APP_HOST=orkestr.app.ops.example.test",
+    "Environment=ORKESTR_AUTH_HOST=auth.ops.example.test",
+    "Environment=ORKESTR_PUBLIC_SITE_URL=https://orkestr.example.test",
+    "Environment=ORKESTR_PUBLIC_APP_URL=https://orkestr.app.ops.example.test",
+    "Environment=ORKESTR_AUTH_URL=https://auth.ops.example.test",
     "",
   ].join("\n"));
   await fs.writeFile(privatePairingDropIn, [
     "[Service]",
-    "Environment=ORKESTR_PAIRING_URL=https://orkestr.app.ops.oguzcanunver.com/setup/pairing",
+    "Environment=ORKESTR_PAIRING_URL=https://orkestr.app.ops.example.test/setup/pairing",
     "",
   ].join("\n"));
 
@@ -86,12 +86,12 @@ test("system doctor warns when active URL drop-ins mix public and private instan
     env: {
       ...env,
       ORKESTR_SYSTEMD_DROPIN_PATHS: `${publicDropIn} ${privateDropIn} ${privatePairingDropIn}`,
-      ORKESTR_PRIMARY_DOMAIN: "ops.oguzcanunver.com",
-      ORKESTR_APP_HOST: "orkestr.app.ops.oguzcanunver.com",
-      ORKESTR_AUTH_HOST: "auth.ops.oguzcanunver.com",
-      ORKESTR_PUBLIC_SITE_URL: "https://orkestr.de",
-      ORKESTR_PUBLIC_APP_URL: "https://orkestr.app.ops.oguzcanunver.com",
-      ORKESTR_AUTH_URL: "https://auth.ops.oguzcanunver.com",
+      ORKESTR_PRIMARY_DOMAIN: "ops.example.test",
+      ORKESTR_APP_HOST: "orkestr.app.ops.example.test",
+      ORKESTR_AUTH_HOST: "auth.ops.example.test",
+      ORKESTR_PUBLIC_SITE_URL: "https://orkestr.example.test",
+      ORKESTR_PUBLIC_APP_URL: "https://orkestr.app.ops.example.test",
+      ORKESTR_AUTH_URL: "https://auth.ops.example.test",
     },
     home,
   });
@@ -100,9 +100,9 @@ test("system doctor warns when active URL drop-ins mix public and private instan
 
   assert.equal(effective?.status, "ok");
   assert.equal(dropIns?.status, "warning");
-  assert.deepEqual((dropIns?.roots || []).map((root) => root.root), ["ops.oguzcanunver.com", "orkestr.de"]);
-  assert.match(dropIns?.summary || "", /orkestr\.de/);
-  assert.match(dropIns?.summary || "", /ops\.oguzcanunver\.com/);
+  assert.deepEqual((dropIns?.roots || []).map((root) => root.root), ["ops.example.test", "orkestr.example.test"]);
+  assert.match(dropIns?.summary || "", /example\.test/);
+  assert.match(dropIns?.summary || "", /ops\.example\.test/);
   assert.ok(doctor.issues.some((issue) => issue.code === "public_url_dropins"));
 });
 

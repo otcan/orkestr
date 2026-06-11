@@ -463,6 +463,31 @@ secrets stay in `/etc/orkestr/orkestr.env`, and mutable data stays in
 release directory or when `ORKESTR_RELEASE_MANIFEST` points to a manifest file.
 Use that endpoint after every deploy and rollback to verify the active version.
 
+### Managed And OSS Split
+
+Operators that run both a managed/private Orkestr and an OSS proof deployment
+should keep them as separate release tracks. They need distinct service names,
+ports, `ORKESTR_HOME` directories, release roots, repo caches, public URLs, and
+release manifests.
+
+Generate a dry-run profile plan:
+
+```bash
+npm run deploy:split-plan -- --domain example.test --managed-repo <managed-private-repo-url>
+npm run deploy:split-plan -- --shell --domain example.test --managed-repo <managed-private-repo-url>
+```
+
+The generated profiles set:
+
+- `ORKESTR_DISTRIBUTION=managed` and `ORKESTR_DEPLOYMENT_TRACK=managed-production`
+  for the private/operator deployment
+- `ORKESTR_DISTRIBUTION=oss` and `ORKESTR_DEPLOYMENT_TRACK=oss-production` for
+  the public-repo proof deployment
+
+After each deploy, verify `/api/version` on both public URLs. The managed
+instance should report `distribution.kind=managed`; the OSS instance should
+report `distribution.kind=oss`.
+
 ## Tailscale Demo Route
 
 For demos that must not touch a public hostname, run Orkestr on a local port and

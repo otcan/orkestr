@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
+import { distributionIdentity } from "../packages/core/src/distribution.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -31,7 +32,7 @@ function safeJsonValue(value) {
 
 const argv = process.argv.slice(2);
 if (hasFlag(argv, "--help") || hasFlag(argv, "-h")) {
-  process.stdout.write(`Usage: scripts/release-manifest.mjs [--output FILE] [--cwd DIR] [--ref REF] [--channel CHANNEL]\n`);
+  process.stdout.write(`Usage: scripts/release-manifest.mjs [--output FILE] [--cwd DIR] [--ref REF] [--channel CHANNEL] [--distribution oss|managed] [--track TRACK] [--repo-role oss|managed]\n`);
   process.exit(0);
 }
 
@@ -50,6 +51,12 @@ const releaseId = safeJsonValue(flagValue(argv, "--release-id")) || [tag || safe
   .filter(Boolean)
   .join("-");
 const releaseLabel = safeJsonValue(flagValue(argv, "--release-label")) || safeJsonValue(process.env.ORKESTR_RELEASE_LABEL) || tag || (releaseVersion ? `v${releaseVersion}` : releaseId);
+const distribution = distributionIdentity({
+  ...process.env,
+  ORKESTR_DISTRIBUTION: safeJsonValue(flagValue(argv, "--distribution")) || process.env.ORKESTR_DISTRIBUTION,
+  ORKESTR_DEPLOYMENT_TRACK: safeJsonValue(flagValue(argv, "--track")) || process.env.ORKESTR_DEPLOYMENT_TRACK,
+  ORKESTR_REPO_ROLE: safeJsonValue(flagValue(argv, "--repo-role")) || process.env.ORKESTR_REPO_ROLE,
+});
 
 const manifest = {
   schemaVersion: 1,
@@ -63,6 +70,7 @@ const manifest = {
   generatedAt,
   deployedAt: safeJsonValue(flagValue(argv, "--deployed-at")),
   serviceName: safeJsonValue(flagValue(argv, "--service")) || "",
+  distribution,
   source: {
     repository: safeJsonValue(flagValue(argv, "--repo")),
     requestedRef: safeJsonValue(flagValue(argv, "--ref")),

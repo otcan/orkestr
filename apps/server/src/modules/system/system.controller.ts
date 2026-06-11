@@ -23,6 +23,7 @@ import { migrateCodexThreadsToAppServer } from "../../../../../packages/core/src
 import { createFolderForPrincipal, deleteFileForPrincipal, listFilesForPrincipal, listWorkspaceFoldersForPrincipal, saveFilesForPrincipal } from "../../../../../packages/core/src/workspace-files.js";
 import { requestPrincipal } from "../../../../../packages/core/src/principal.js";
 import { isAdminPrincipal } from "../../../../../packages/core/src/policy.js";
+import { distributionIdentity } from "../../../../../packages/core/src/distribution.js";
 import { getUser } from "../../../../../packages/core/src/users.js";
 import { configuredWhatsAppChatNamePrefix, defaultWhatsAppReplyPrefix } from "../../../../../packages/core/src/whatsapp-defaults.js";
 import {
@@ -73,6 +74,7 @@ async function gitValue(args: string[]): Promise<string> {
 
 async function buildMetadata() {
   const release = await releaseMetadata();
+  const distribution = distributionIdentity(process.env, release || {});
   const commit = String(
     process.env.ORKESTR_BUILD_COMMIT ||
       release?.git?.commit ||
@@ -110,6 +112,7 @@ async function buildMetadata() {
     buildId: String(release?.buildId || release?.releaseId || "").trim() || null,
     deployedAt: String(release?.deployedAt || "").trim() || null,
     manifestSchemaVersion: release?.schemaVersion || null,
+    distribution,
   };
 }
 
@@ -394,6 +397,10 @@ export class SystemController {
       buildId: build.buildId,
       deployedAt: build.deployedAt,
       manifestSchemaVersion: build.manifestSchemaVersion,
+      distribution: build.distribution,
+      distributionKind: build.distribution.kind,
+      deploymentTrack: build.distribution.track,
+      repoRole: build.distribution.repoRole,
       generatedAt: new Date().toISOString(),
     };
   }

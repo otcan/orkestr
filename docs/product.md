@@ -2,7 +2,8 @@
 
 ## One-Line Pitch
 
-Run local coding agents with WhatsApp, browser desktops, timers, and inspectable logs.
+Run a self-hosted Codex control center on your workstation or VPS, keep threads
+alive, and control them from browser, phone, CLI, or WhatsApp.
 
 ## First User Journey
 
@@ -32,6 +33,21 @@ The public starter is a coding-agent loop:
 - existing Codex app-server threads can be imported from setup
 - the virtual desktop profile is prepared for browser-based work
 - timers can queue recurring work later
+
+## Simplified OSS Surface
+
+The OSS surface should stay narrow enough for a new user to understand and run:
+
+- install locally or on a private VPS
+- connect Codex
+- create or import a persistent Codex thread
+- send work from Web UI or CLI
+- view status, history, approvals, and interruptions
+- optionally add WhatsApp routing, timers, and a generic browser desktop
+
+Managed/private operator features, production account bindings, aggregated
+broker views, private tenant operations, and host-specific deployment automation
+must not be required for this flow.
 
 Run the deterministic public demo:
 

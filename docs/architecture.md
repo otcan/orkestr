@@ -67,6 +67,17 @@ Local and VPS deployments use host-native processes. A VPS should use the
 systemd installer so Caddy, Tailscale, browser desktops, logs, and pairing
 approval stay on the host where operators expect them.
 
+## Distribution Boundary
+
+The OSS distribution is the public self-hosted Codex control center. It must
+install and run from a clean checkout without managed/private operator state.
+The managed/private distribution can add production accounts, aggregated broker
+views, private overlays, and deployment-specific automation, but those additions
+must not become required imports or setup prerequisites for the OSS path.
+
+The boundary is documented in [OSS And Managed Boundary](oss-managed-boundary.md)
+and guarded by `npm run oss:boundary-check`.
+
 ## Tenant Instance Bootstrap
 
 The control plane provisions public-user isolation as a tenant VM baseline. The
@@ -89,6 +100,13 @@ credentials and session state stay outside the repo:
 - Admin browser profiles stay under `ORKESTR_HOME/browsers`; non-admin browser
   profiles stay under `ORKESTR_HOME/users/<user-id>/browsers`.
 - Host-specific bindings live in private overlays.
+
+## Secret Boundary
+
+The first-class secret manager is secure-input. APIs, CLI commands, setup UI,
+and connectors should exchange secret handles and metadata rather than raw
+values. See [Secret Manager](secret-manager.md) for storage, scope, and migration
+rules.
 
 ## Web Routes
 

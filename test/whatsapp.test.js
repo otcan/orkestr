@@ -699,7 +699,7 @@ test("local whatsapp bridge exposes public account identity without session inte
     setLocalWhatsAppRuntimeForTest("responder", {
       client: {
         info: {
-          wid: { user: "15551234567", server: "c.us", _serialized: "15551234567@c.us" },
+          wid: { user: "155512345", server: "c.us", _serialized: "155512345@c.us" },
           pushname: "Responder Phone",
         },
       },
@@ -707,13 +707,13 @@ test("local whatsapp bridge exposes public account identity without session inte
 
     const bridgeStatus = await getLocalWhatsAppBridgeStatus(env);
     const status = await getWhatsAppStatus(env);
-    const account = status.accounts.find((entry) => entry.accountId === "15551234567");
+    const account = status.accounts.find((entry) => entry.accountId === "155512345");
 
-    assert.equal(bridgeStatus.accounts[0].phoneNumber, "+15551234567");
-    assert.equal(bridgeStatus.accounts[0].contactId, "15551234567@c.us");
+    assert.equal(bridgeStatus.accounts[0].phoneNumber, "+155512345");
+    assert.equal(bridgeStatus.accounts[0].contactId, "155512345@c.us");
     assert.equal(account.runtimeAccountId, "responder");
-    assert.equal(account.phoneNumber, "+15551234567");
-    assert.equal(account.contactId, "15551234567@c.us");
+    assert.equal(account.phoneNumber, "+155512345");
+    assert.equal(account.contactId, "155512345@c.us");
     assert.equal(account.pushName, "Responder Phone");
     assert.equal(Object.hasOwn(account, "sessionRoot"), false);
     assert.equal(Object.hasOwn(account, "clientId"), false);
@@ -745,7 +745,7 @@ test("local whatsapp group participant ids are normalized for created test chats
 
 test("local whatsapp group participant add validates participant input before browser work", async () => {
   await assert.rejects(
-    () => addLocalWhatsAppGroupParticipants({ accountId: "responder", chatId: "120363400000000000@g.us" }),
+    () => addLocalWhatsAppGroupParticipants({ accountId: "responder", chatId: "fixture-group@g.us" }),
     /whatsapp_group_participants_required/,
   );
 });
@@ -1062,7 +1062,7 @@ test("local whatsapp inbound ignores recent outbound attachment echoes", async (
 
     const result = await handleInboundMessage("responder", {
       id: { _serialized: `true_${chatId}_echo-document`, remote: chatId },
-      from: "51346837356638@lid",
+      from: "513468373@lid",
       to: chatId,
       fromMe: true,
       body: "",
@@ -1744,7 +1744,7 @@ test("local whatsapp phone pairing replaces an existing qr runtime", async () =>
       qrAvailable: true,
     }, env);
     const result = await startLocalWhatsAppAccount("sender", env, {
-      phoneNumber: "+15551234567",
+      phoneNumber: "+155512345",
       loadBridgeDependencies: async () => ({
         whatsapp: { Client, LocalAuth },
         qrcode: {},
@@ -1752,7 +1752,7 @@ test("local whatsapp phone pairing replaces an existing qr runtime", async () =>
     });
 
     assert.equal(calls.includes("destroy-existing"), true);
-    assert.deepEqual(calls.find((call) => Array.isArray(call) && call[0] === "client"), ["client", "15551234567"]);
+    assert.deepEqual(calls.find((call) => Array.isArray(call) && call[0] === "client"), ["client", "155512345"]);
     assert.equal(result.state, "starting");
     const events = await listEvents(env);
     assert.ok(events.find((event) => event.type === "whatsapp_local_pairing_runtime_replaced"));
@@ -2171,7 +2171,7 @@ test("whatsapp chat history is read from external bridge", async () => {
     return response({
       ok: true,
       messages: [
-        { id: "m1", body: "/connect google", fromMe: false, from: "chat-history@g.us", author: "4917632400662@c.us", timestamp: 1780910000 },
+        { id: "m1", body: "/connect google", fromMe: false, from: "chat-history@g.us", author: "491763240@c.us", timestamp: 1780910000 },
       ],
     });
   });
@@ -2190,7 +2190,7 @@ test("whatsapp chat history is read from external bridge", async () => {
     id: "m1",
     body: "/connect google",
     fromMe: false,
-    author: "4917632400662@c.us",
+    author: "491763240@c.us",
     timestamp: "2026-06-08T09:13:20.000Z",
   }]);
 });
@@ -2240,14 +2240,14 @@ test("whatsapp chat history maps numeric public account ids to runtime external 
   await writeConnectorConfig("whatsapp", { bridgeMode: "external", bridgeUrl: "http://wa.local" }, env);
 
   const calls = [];
-  const result = await getWhatsAppChatMessages({ accountId: "4917632400662", chatId: "chat-history@g.us", limit: 1 }, env, async (url) => {
+  const result = await getWhatsAppChatMessages({ accountId: "491763240", chatId: "chat-history@g.us", limit: 1 }, env, async (url) => {
     calls.push(url.pathname);
     if (url.pathname === "/health") {
       return response({
         ok: true,
         ready: true,
         accounts: [
-          { id: "sender", ready: true, state: "ready", phoneNumber: "+4917632400662", contactId: "4917632400662@c.us" },
+          { id: "sender", ready: true, state: "ready", phoneNumber: "+491763240", contactId: "491763240@c.us" },
         ],
       });
     }
@@ -2271,7 +2271,7 @@ test("whatsapp external sends map numeric public account ids to runtime bridge a
 
   const calls = [];
   const sent = await sendWhatsAppText({
-    accountId: "4917632400662",
+    accountId: "491763240",
     chatId: "chat-send@g.us",
     text: "/connect google",
     crossAccountEchoSuppression: false,
@@ -2283,7 +2283,7 @@ test("whatsapp external sends map numeric public account ids to runtime bridge a
           ok: true,
           ready: true,
           accounts: [
-            { id: "sender", ready: true, state: "ready", phoneNumber: "+4917632400662", contactId: "4917632400662@c.us" },
+            { id: "sender", ready: true, state: "ready", phoneNumber: "+491763240", contactId: "491763240@c.us" },
           ],
         });
       }

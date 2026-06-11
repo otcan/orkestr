@@ -7,13 +7,13 @@ import {
 
 test("routing failures expose structured WhatsApp scope context without secrets", () => {
   const failure = normalizeRoutingFailure({
-    message: "token_scope_denied token=super-secret /home/openclaw/.orkestr-production/secrets/bridge.env",
+    message: "token_scope_denied token=super-secret /var/lib/orkestr-fixture/secrets/bridge.env",
     routerTraceId: "rt_scope_1",
     accountId: "responder",
     bindingId: "thread:features:whatsapp",
     instanceId: "vm-orkestr-de",
     threadId: "aeef8faaa15877f7",
-    chatId: "120363424540095970@g.us",
+    chatId: "fixture-scope@g.us",
     principalKind: "instance",
     principalId: "orkestr-de",
     safeMessage: "Bridge token lacks send scope Bearer secret-token",
@@ -27,7 +27,7 @@ test("routing failures expose structured WhatsApp scope context without secrets"
   assert.equal(failure.bindingId, "thread:features:whatsapp");
   assert.equal(failure.instanceId, "vm-orkestr-de");
   assert.equal(failure.threadId, "aeef8faaa15877f7");
-  assert.equal(failure.chatId, "120363424540095970@g.us");
+  assert.equal(failure.chatId, "fixture-scope@g.us");
   assert.equal(failure.principalKind, "instance");
   assert.equal(failure.principalId, "orkestr-de");
   assert.match(failure.reason, /token=\[redacted\]/);

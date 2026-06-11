@@ -2,11 +2,18 @@ import { DatePipe } from "@angular/common";
 import { ChangeDetectorRef, Component, EventEmitter, Input, OnDestroy, OnInit, Output, inject } from "@angular/core";
 import { FormsModule } from "@angular/forms";
 import { firstValueFrom } from "rxjs";
-import { Agent, AgentTemplate, ApiService, BrowserSession, ConnectorStatus, DesktopLeaseRecord, EventRecord, OrkestrUser, OutlookOAuthPollResponse, ReleaseInstance, ReleaseInstancesResponse, ReleaseRolloutResponse, SecurityChallenge, SecuritySession, SetupStatus, TenantVm, TimerDoctorResponse, TimerRecord, ThreadSummary, UserIdentity, UserOutlookOAuthStartResponse, VersionResponse, WatcherAlert, WhatsAppDoctorAccount, WhatsAppDoctorBinding, WhatsAppDoctorResponse, WhatsAppOutboxJob } from "./api.service";
+import { Agent, AgentTemplate, ApiService, BrowserSession, ConnectorStatus, DesktopLeaseRecord, EventRecord, OrkestrUser, OutlookOAuthPollResponse, ReleaseInstance, ReleaseInstancesResponse, ReleaseRolloutResponse, SecureSecretMetadata, SecurityChallenge, SecuritySession, SetupStatus, TenantVm, TimerDoctorResponse, TimerRecord, ThreadSummary, UserIdentity, UserOutlookOAuthStartResponse, VersionResponse, WatcherAlert, WhatsAppDoctorAccount, WhatsAppDoctorBinding, WhatsAppDoctorResponse, WhatsAppOutboxJob } from "./api.service";
 import { OpsWaitlistComponent } from "./ops-waitlist.component";
 
 export type ToolsView = "system" | "broker" | "timers" | "desktops" | "models" | "settings" | "connectors" | "users" | "waitlist" | "audit";
 type MailIdentityProvider = "gmail" | "outlook";
+type ToolTabKind = "oss-core" | "oss-optional" | "managed";
+
+interface ToolTab {
+  id: ToolsView;
+  label: string;
+  kind: ToolTabKind;
+}
 
 interface BrokerThreadRow {
   id: string;
@@ -52,6 +59,19 @@ export class OpsPageComponent implements OnInit, OnDestroy {
   @Input() toolsView: ToolsView = "system";
   @Output() toolsViewChange = new EventEmitter<ToolsView>();
 
+  readonly toolTabs: ToolTab[] = [
+    { id: "system", label: "System", kind: "oss-core" },
+    { id: "broker", label: "Broker", kind: "managed" },
+    { id: "timers", label: "Timers", kind: "oss-core" },
+    { id: "desktops", label: "Desktops", kind: "oss-optional" },
+    { id: "models", label: "Models", kind: "oss-optional" },
+    { id: "settings", label: "Overview", kind: "oss-core" },
+    { id: "connectors", label: "Connectors", kind: "oss-optional" },
+    { id: "users", label: "Users", kind: "managed" },
+    { id: "waitlist", label: "Waitlist", kind: "managed" },
+    { id: "audit", label: "Audit", kind: "oss-core" },
+  ];
+
   busy = false;
   activeBrowserActionSlug = "";
   error = "";
@@ -66,6 +86,8 @@ export class OpsPageComponent implements OnInit, OnDestroy {
   opsWhatsAppOutboxError = "";
   opsRuntimeBudget: Record<string, unknown> | null = null;
   opsConnectors: ConnectorStatus[] = [];
+  opsSecureSecrets: SecureSecretMetadata[] = [];
+  opsSecureSecretsError = "";
   opsReleaseInstances: ReleaseInstance[] = [];
   opsReleaseCounts: Record<string, number> = {};
   opsReleaseGeneratedAt = "";
@@ -162,8 +184,8 @@ export class OpsPageComponent implements OnInit, OnDestroy {
   }
 
   setToolsView(view: ToolsView): void {
-    this.toolsView = view;
-    this.toolsViewChange.emit(view);
+    this.toolsView = this.normalizedToolsView(view);
+    this.toolsViewChange.emit(this.toolsView);
   }
 
   async loadOps(showBusy = true): Promise<void> {
@@ -180,10 +202,12 @@ export class OpsPageComponent implements OnInit, OnDestroy {
         this.renderNow();
       });
     try {
-      const [version, releaseInstances, tenantVms, threads, watcherAlerts, setup, whatsapp, whatsappDoctor, whatsappOutbox, agents, templates, timers, timerDoctor, events, browsers, desktopLeases, runtimeLeases, executors, executions, system, processes, models, users, securityChallenges, securitySessions] = await Promise.allSettled([
-        firstValueFrom(this.api.version()),
-        firstValueFrom(this.api.releaseInstances(true)),
-        firstValueFrom(this.api.tenantVms()),
+      await this.loadOpsVersion();
+      const managed = this.managedOpsEnabled();
+      const secretsRequest = this.loadOpsSecrets();
+      const [releaseInstances, tenantVms, threads, watcherAlerts, setup, whatsapp, whatsappDoctor, whatsappOutbox, agents, templates, timers, timerDoctor, events, browsers, desktopLeases, runtimeLeases, executors, executions, system, processes, models, users, securityChallenges, securitySessions] = await Promise.allSettled([
+        managed ? firstValueFrom(this.api.releaseInstances(true)) : Promise.resolve({ instances: [], counts: {}, generatedAt: "" } as ReleaseInstancesResponse),
+        managed ? firstValueFrom(this.api.tenantVms()) : Promise.resolve({ tenantVms: [], vms: [] }),
         firstValueFrom(this.api.threads({ includeAllUsers: true })),
         firstValueFrom(this.api.watcherAlerts(20)),
         firstValueFrom(this.api.setupStatus()),
@@ -203,11 +227,10 @@ export class OpsPageComponent implements OnInit, OnDestroy {
         firstValueFrom(this.api.systemSummary()),
         firstValueFrom(this.api.systemProcesses("cpu")),
         firstValueFrom(this.api.modelStatus()),
-        firstValueFrom(this.api.users()),
-        firstValueFrom(this.api.securityChallenges()),
-        firstValueFrom(this.api.securitySessions()),
+        managed ? firstValueFrom(this.api.users()) : Promise.resolve({ users: [] }),
+        managed ? firstValueFrom(this.api.securityChallenges()) : Promise.resolve({ challenges: [] }),
+        managed ? firstValueFrom(this.api.securitySessions()) : Promise.resolve({ sessions: [] }),
       ]);
-      if (version.status === "fulfilled") this.opsVersion = version.value;
       if (releaseInstances.status === "fulfilled") this.applyReleaseInstances(releaseInstances.value);
       else this.applyReleaseInstancesError(releaseInstances.reason);
       if (tenantVms.status === "fulfilled") {
@@ -278,12 +301,72 @@ export class OpsPageComponent implements OnInit, OnDestroy {
       }
       if (securityChallenges.status === "fulfilled") this.opsSecurityChallenges = securityChallenges.value.challenges || [];
       if (securitySessions.status === "fulfilled") this.opsSecuritySessions = securitySessions.value.sessions || [];
+      await secretsRequest;
       this.error = "";
     } catch (error) {
       this.error = this.errorText(error);
     } finally {
       this.busy = false;
     }
+  }
+
+  async loadOpsVersion(): Promise<void> {
+    try {
+      this.opsVersion = await firstValueFrom(this.api.version());
+      this.toolsView = this.normalizedToolsView(this.toolsView);
+      this.toolsViewChange.emit(this.toolsView);
+    } catch {
+      // Keep existing ops behavior when version metadata is temporarily unavailable.
+    }
+  }
+
+  managedOpsEnabled(): boolean {
+    return String(this.opsVersion?.distributionKind || this.opsVersion?.distribution?.kind || "").toLowerCase() === "managed";
+  }
+
+  visibleToolTabs(): ToolTab[] {
+    return this.toolTabs.filter((tab) => tab.kind !== "managed" || this.managedOpsEnabled());
+  }
+
+  normalizedToolsView(view: ToolsView): ToolsView {
+    return this.visibleToolTabs().some((tab) => tab.id === view) ? view : "system";
+  }
+
+  async loadOpsSecrets(): Promise<void> {
+    const results = await Promise.allSettled([
+      firstValueFrom(this.api.secureSecrets({ scope: "user" })),
+      firstValueFrom(this.api.secureSecrets({ scope: "global" })),
+    ]);
+    const secrets: SecureSecretMetadata[] = [];
+    const errors: string[] = [];
+    for (const result of results) {
+      if (result.status === "fulfilled") secrets.push(...(result.value.secrets || []));
+      else errors.push(this.errorText(result.reason));
+    }
+    const seen = new Set<string>();
+    this.opsSecureSecrets = secrets.filter((secret) => {
+      const key = secret.handle || `${secret.scope}:${secret.ownerUserId || ""}:${secret.name}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+    this.opsSecureSecretsError = errors.join("; ");
+  }
+
+  secureSecretConfiguredCount(): number {
+    return this.opsSecureSecrets.filter((secret) => secret.configured !== false && (secret.status || "configured") !== "missing").length;
+  }
+
+  secureSecretMissingCount(): number {
+    return this.opsSecureSecrets.filter((secret) => secret.configured === false || secret.status === "missing").length;
+  }
+
+  secureSecretSummary(): string {
+    if (this.opsSecureSecretsError && !this.opsSecureSecrets.length) return this.opsSecureSecretsError;
+    const missing = this.secureSecretMissingCount();
+    const scopes = new Set(this.opsSecureSecrets.map((secret) => secret.scope || "user"));
+    const scopeLabel = scopes.size ? `${Array.from(scopes).sort().join(" + ")} scope` : "metadata-only secure input";
+    return missing ? `${missing} missing requests in ${scopeLabel}` : `${scopeLabel} ready`;
   }
 
   selectUser(user: OrkestrUser): void {
