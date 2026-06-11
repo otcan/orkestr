@@ -25,6 +25,7 @@ import { canRecoverLiveWhatsAppOutboundIntent, mergeWhatsAppOutboundIntents, mer
 import { formatWhatsAppQueueNotice } from "../packages/connectors/src/whatsapp-outbound-mirror.js";
 import { routerUpdateWhatsAppDeliveryTarget } from "../packages/connectors/src/whatsapp-router-updates.js";
 import { upsertWhatsAppConnectorAccount } from "../packages/connectors/src/whatsapp-account-registry.js";
+import { readConnectorOutbox, writeConnectorOutbox } from "../packages/connectors/src/connector-outbox.js";
 import { writeConnectorConfig } from "../packages/storage/src/config.js";
 import { dataPaths, userDataPaths } from "../packages/storage/src/paths.js";
 import { listEvents } from "../packages/storage/src/store.js";
@@ -5482,6 +5483,19 @@ test("whatsapp delivery re-reads pending outbound intents after delivery claim c
   const state = JSON.parse(await fs.readFile(path.join(home, "whatsapp.json"), "utf8"));
   const intent = state.outboundIntents.find((item) => item.messageId === reply.id);
   assert.equal(intent.status, "pending");
+  const outbox = await readConnectorOutbox(env);
+  const retryExpiredAt = new Date(Date.now() - 1000).toISOString();
+  outbox.jobs = outbox.jobs.map((job) => job.sourceMessageId === reply.id ? {
+    ...job,
+    claimExpiresAt: retryExpiredAt,
+    claimedBy: "",
+    metadata: {
+      ...(job.metadata || {}),
+      retryAfterAt: retryExpiredAt,
+    },
+  } : job);
+  await writeConnectorOutbox(outbox, env);
+
   const claimedAt = new Date().toISOString();
   const claim = await writeTestDeliveryClaim(home, {
     accountId: intent.accountId,
