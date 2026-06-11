@@ -397,6 +397,49 @@ test("WhatsApp binding ACL rejects scoped token selector mismatches before permi
   );
 });
 
+test("WhatsApp bridge ACL allows scoped demo recipient sends before a binding exists", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-demo-recipient-scope-"));
+  const env = {
+    ORKESTR_HOME: home,
+    ORKESTR_ADMIN_USER_ID: "admin",
+  };
+
+  await assertWhatsAppBridgeBindingAcl("send", { chatId: "49176123456@c.us", accountId: "responder" }, {
+    principalId: "demo-vm-1",
+    accountId: "responder",
+    allowedPhoneNumbers: ["+49 176 123456"],
+  }, env);
+  await assertWhatsAppBridgeBindingAcl("send", { chatId: "49176999999@c.us", accountId: "responder" }, {
+    principalId: "demo-vm-1",
+    accountId: "responder",
+    allowedChatIds: ["49176999999@c.us"],
+  }, env);
+  await assert.rejects(
+    () => assertWhatsAppBridgeBindingAcl("send", { chatId: "49176000000@c.us", accountId: "responder" }, {
+      principalId: "demo-vm-1",
+      accountId: "responder",
+      allowedPhoneNumbers: ["+49 176 123456"],
+    }, env),
+    /wa_acl_denied/,
+  );
+  await assert.rejects(
+    () => assertWhatsAppBridgeBindingAcl("send", { chatId: "49176123456@c.us", accountId: "other" }, {
+      principalId: "demo-vm-1",
+      accountId: "responder",
+      allowedPhoneNumbers: ["+49 176 123456"],
+    }, env),
+    /wa_acl_denied/,
+  );
+  await assert.rejects(
+    () => assertWhatsAppBridgeBindingAcl("read", { chatId: "49176123456@c.us", accountId: "responder" }, {
+      principalId: "demo-vm-1",
+      accountId: "responder",
+      allowedPhoneNumbers: ["+49 176 123456"],
+    }, env),
+    /wa_acl_denied/,
+  );
+});
+
 test("WhatsApp binding resolution fails closed when the responder account is inactive", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-bindings-inactive-"));
   const env = {

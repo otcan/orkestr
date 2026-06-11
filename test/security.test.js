@@ -101,6 +101,8 @@ test("scoped WhatsApp machine tokens allow only declared bridge capabilities", a
         principalKind: "external_instance",
         principalId: "remote-instance",
         instanceId: "remote-instance",
+        allowedPhoneNumbers: ["+49176123456"],
+        allowedChatIds: ["49176999999@c.us"],
       },
       {
         id: "remote-read",
@@ -150,6 +152,8 @@ test("scoped WhatsApp machine tokens allow only declared bridge capabilities", a
   assert.equal(sendAllowed.machineAuthContext.tokenId, "remote-send");
   assert.equal(sendAllowed.machineAuthContext.instanceId, "remote-instance");
   assert.deepEqual(sendAllowed.machineAuthContext.scopes, ["whatsapp:bridge:send"]);
+  assert.deepEqual(sendAllowed.machineAuthContext.allowedPhoneNumbers, ["+49176123456"]);
+  assert.deepEqual(sendAllowed.machineAuthContext.allowedChatIds, ["49176999999@c.us"]);
   assert.equal(readDenied.ok, false);
   assert.equal(readDenied.statusCode, 403);
   assert.equal(readDenied.error, "wa_token_scope_denied");

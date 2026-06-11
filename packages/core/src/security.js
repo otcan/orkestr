@@ -228,6 +228,11 @@ function splitScopeList(value) {
   return values.map((item) => String(item || "").trim().toLowerCase()).filter(Boolean);
 }
 
+function splitStringList(value) {
+  const values = Array.isArray(value) ? value : String(value || "").split(/[\s,]+/g);
+  return values.map((item) => String(item || "").trim()).filter(Boolean);
+}
+
 function timingSafeSecretEqual(a, b) {
   const left = String(a || "");
   const right = String(b || "");
@@ -272,6 +277,9 @@ function parseJsonTokens(value, defaults = {}) {
       accountId: String(record.accountId || defaults.accountId || "").trim(),
       bindingId: String(record.bindingId || defaults.bindingId || "").trim(),
       chatId: String(record.chatId || defaults.chatId || "").trim(),
+      allowedChatIds: splitStringList(record.allowedChatIds || record.allowedChats || record.chatIds || defaults.allowedChatIds || []),
+      allowedPhoneNumbers: splitStringList(record.allowedPhoneNumbers || record.whatsappNumbers || record.phoneNumbers || defaults.allowedPhoneNumbers || []),
+      allowedRecipients: splitStringList(record.allowedRecipients || record.allowedRecipientIds || record.recipientIds || defaults.allowedRecipients || []),
       expiresAt: String(record.expiresAt || defaults.expiresAt || "").trim(),
       disabled: record.disabled === true || record.enabled === false,
     };
@@ -351,6 +359,9 @@ function publicMachineTokenContext(record, route) {
     accountId: record.accountId || null,
     bindingId: record.bindingId || null,
     chatId: record.chatId || null,
+    allowedChatIds: Array.isArray(record.allowedChatIds) ? record.allowedChatIds : [],
+    allowedPhoneNumbers: Array.isArray(record.allowedPhoneNumbers) ? record.allowedPhoneNumbers : [],
+    allowedRecipients: Array.isArray(record.allowedRecipients) ? record.allowedRecipients : [],
   };
 }
 

@@ -76,6 +76,25 @@ ORKESTR_DEMO_WHATSAPP_RELAY_TOKEN="..."
 ORKESTR_DEMO_WHATSAPP_RELAY_ACCOUNT_ID="responder"
 ```
 
+On the relay/router, prefer a scoped bridge token for each demo VM or demo
+recipient set:
+
+```bash
+ORKESTR_WHATSAPP_BRIDGE_SCOPED_TOKENS_JSON='[
+  {
+    "id": "demo-vm-1",
+    "token": "...",
+    "scopes": ["whatsapp:bridge:send"],
+    "accountId": "responder",
+    "allowedPhoneNumbers": ["+4917600000000"]
+  }
+]'
+```
+
+That token can send only through the declared responder account and only to the
+listed WhatsApp recipient numbers. It is enough for the VM readiness message and
+does not grant bridge read, manage, inbound injection, or arbitrary send access.
+
 ### Helm
 
 ```bash

@@ -15,6 +15,7 @@ import {
 import {
   assertWhatsAppBridgeTokenContext,
   bindingAcl as normalizedBindingAcl,
+  whatsappBridgeTokenAllowsDirectSelector,
   whatsappAclDeniedError,
   whatsappBindingAclAllows,
 } from "./whatsapp-binding-acl.js";
@@ -721,7 +722,17 @@ export async function assertWhatsAppBridgeBindingAcl(action = "send", selector =
     if (accountKey && binding.accountIds.length && !binding.accountIds.includes(accountKey)) return false;
     return true;
   }) || null;
-  if (!selected) throw whatsappAclDeniedError(action, { bindingId: bindingKey, threadId: threadKey, chatId: chatKey, accountId: accountKey }, context);
+  if (!selected) {
+    if (whatsappBridgeTokenAllowsDirectSelector(action, {
+      bindingId: bindingKey,
+      threadId: threadKey,
+      chatId: chatKey,
+      accountId: accountKey,
+    }, context)) {
+      return null;
+    }
+    throw whatsappAclDeniedError(action, { bindingId: bindingKey, threadId: threadKey, chatId: chatKey, accountId: accountKey }, context);
+  }
   assertWhatsAppBridgeTokenContext(action, {
     bindingId: bindingKey,
     threadId: threadKey,

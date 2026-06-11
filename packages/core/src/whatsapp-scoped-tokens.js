@@ -12,6 +12,11 @@ function splitScopeList(value = []) {
   return clean(value).split(/[\s,]+/g).map((item) => item.toLowerCase()).filter(Boolean);
 }
 
+function splitStringList(value = []) {
+  if (Array.isArray(value)) return value.map((item) => clean(item)).filter(Boolean);
+  return clean(value).split(/[\s,]+/g).filter(Boolean);
+}
+
 function nowIso() {
   return new Date().toISOString();
 }
@@ -43,6 +48,9 @@ function normalizeTokenRecord(input = {}, prior = {}) {
     accountId: clean(input.accountId || prior.accountId),
     bindingId: clean(input.bindingId || prior.bindingId),
     chatId: clean(input.chatId || prior.chatId),
+    allowedChatIds: splitStringList(input.allowedChatIds || input.allowedChats || input.chatIds || prior.allowedChatIds),
+    allowedPhoneNumbers: splitStringList(input.allowedPhoneNumbers || input.whatsappNumbers || input.phoneNumbers || prior.allowedPhoneNumbers),
+    allowedRecipients: splitStringList(input.allowedRecipients || input.allowedRecipientIds || input.recipientIds || prior.allowedRecipients),
     routeKind: clean(input.routeKind || prior.routeKind),
     purpose: clean(input.purpose || prior.purpose),
     expiresAt: clean(input.expiresAt || prior.expiresAt),
@@ -67,6 +75,9 @@ function publicTokenRecord(record = {}) {
     accountId: clean(record.accountId),
     bindingId: clean(record.bindingId),
     chatId: clean(record.chatId),
+    allowedChatIds: splitStringList(record.allowedChatIds),
+    allowedPhoneNumbers: splitStringList(record.allowedPhoneNumbers),
+    allowedRecipients: splitStringList(record.allowedRecipients),
     routeKind: clean(record.routeKind),
     purpose: clean(record.purpose),
     expiresAt: clean(record.expiresAt),

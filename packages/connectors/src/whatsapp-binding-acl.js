@@ -23,6 +23,51 @@ function listValues(...values) {
   return unique(values.flatMap((value) => Array.isArray(value) ? value : [value]));
 }
 
+function whatsappIdentityCandidates(value = "") {
+  const text = pickString(value).toLowerCase();
+  if (!text) return [];
+  const values = [text];
+  const digits = text.replace(/[^\d]/g, "");
+  if (digits) {
+    values.push(digits, `+${digits}`, `${digits}@c.us`);
+  }
+  const contactMatch = text.match(/^(\d+)@(c\.us|lid)$/i);
+  if (contactMatch?.[1]) {
+    values.push(contactMatch[1], `+${contactMatch[1]}`, `${contactMatch[1]}@${contactMatch[2].toLowerCase()}`);
+  }
+  return unique(values);
+}
+
+function sameWhatsAppIdentity(left = "", right = "") {
+  const leftValues = new Set(whatsappIdentityCandidates(left));
+  return whatsappIdentityCandidates(right).some((value) => leftValues.has(value));
+}
+
+function contextAllowedRecipientValues(context = {}) {
+  return listValues(
+    context.chatId,
+    context.allowedChatIds,
+    context.allowedChats,
+    context.allowedRecipients,
+    context.allowedRecipientIds,
+    context.allowedPhoneNumbers,
+    context.whatsappNumbers,
+    context.phoneNumbers,
+  );
+}
+
+function contextHasRecipientScope(context = {}) {
+  return contextAllowedRecipientValues(context).length > 0;
+}
+
+function recipientScopeMatchesSelector(selectorChatId = "", context = {}) {
+  const allowed = contextAllowedRecipientValues(context);
+  if (!allowed.length) return true;
+  const chatId = pickString(selectorChatId);
+  if (!chatId) return true;
+  return allowed.some((value) => sameWhatsAppIdentity(value, chatId));
+}
+
 export function bindingAcl(binding = {}) {
   const existingAcl = binding.acl && typeof binding.acl === "object" && !Array.isArray(binding.acl)
     ? binding.acl
@@ -81,7 +126,7 @@ function contextHasScopedSelector(context = {}) {
     context &&
     Object.keys(context).length > 0 &&
     context.legacy !== true &&
-    (pickString(context.accountId) || pickString(context.chatId) || pickString(context.bindingId)),
+    (pickString(context.accountId) || pickString(context.chatId) || pickString(context.bindingId) || contextHasRecipientScope(context)),
   );
 }
 
@@ -119,11 +164,20 @@ export function whatsappBridgeTokenContextMatchesSelector(selector = {}, context
     if (!chatId && requireScopedSelector) return false;
     if (chatId && !sameContextValue(chatId, context.chatId)) return false;
   }
+  if (!recipientScopeMatchesSelector(chatId, context)) return false;
   if (context.bindingId) {
     if (!bindingId) return false;
     if (!sameContextValue(bindingId, context.bindingId)) return false;
   }
   return true;
+}
+
+export function whatsappBridgeTokenAllowsDirectSelector(action = "send", selector = {}, context = {}) {
+  if (!["send", "send-media", "send-text"].includes(pickString(action).toLowerCase())) return false;
+  if (!context || Object.keys(context).length === 0 || context.legacy === true) return false;
+  const chatId = pickString(selector.chatId, selector.to);
+  if (!chatId || !contextHasRecipientScope(context)) return false;
+  return whatsappBridgeTokenContextMatchesSelector(selector, context, null, { requireScopedSelector: true });
 }
 
 export function assertWhatsAppBridgeTokenContext(action = "send", selector = {}, context = {}, binding = null, options = {}) {
