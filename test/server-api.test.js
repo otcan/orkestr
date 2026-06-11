@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { recoverAfterStartup, runtimeMonitorIntervalMs, startServer, startupRecoveryDelayMs } from "../apps/server/src/server.js";
+import { paneProgressMonitorIntervalMs, recoverAfterStartup, runtimeMonitorIntervalMs, startServer, startupRecoveryDelayMs } from "../apps/server/src/server.js";
 import {
   recordServerStartup,
   recoveryCauseForStartup,
@@ -125,6 +125,23 @@ test("runtime monitor default keeps Codex reply import responsive", () => {
   } finally {
     if (priorInterval === undefined) delete process.env.ORKESTR_RUNTIME_MONITOR_INTERVAL_MS;
     else process.env.ORKESTR_RUNTIME_MONITOR_INTERVAL_MS = priorInterval;
+  }
+});
+
+test("pane progress monitor defaults to a VM-safe cadence", () => {
+  const priorInterval = process.env.ORKESTR_PANE_PROGRESS_INTERVAL_MS;
+  try {
+    delete process.env.ORKESTR_PANE_PROGRESS_INTERVAL_MS;
+    assert.equal(paneProgressMonitorIntervalMs(), 5000);
+
+    process.env.ORKESTR_PANE_PROGRESS_INTERVAL_MS = "1";
+    assert.equal(paneProgressMonitorIntervalMs(), 1000);
+
+    process.env.ORKESTR_PANE_PROGRESS_INTERVAL_MS = "12000";
+    assert.equal(paneProgressMonitorIntervalMs(), 12000);
+  } finally {
+    if (priorInterval === undefined) delete process.env.ORKESTR_PANE_PROGRESS_INTERVAL_MS;
+    else process.env.ORKESTR_PANE_PROGRESS_INTERVAL_MS = priorInterval;
   }
 });
 

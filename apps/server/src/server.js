@@ -15,6 +15,11 @@ export function runtimeMonitorIntervalMs() {
   return Number.isFinite(parsed) ? Math.max(5000, parsed) : 5000;
 }
 
+export function paneProgressMonitorIntervalMs() {
+  const parsed = Number(process.env.ORKESTR_PANE_PROGRESS_INTERVAL_MS || 5000);
+  return Number.isFinite(parsed) ? Math.max(1000, parsed) : 1000;
+}
+
 export function startupRecoveryDelayMs() {
   const parsed = Number(process.env.ORKESTR_STARTUP_RECOVERY_DELAY_MS || 1000);
   return Number.isFinite(parsed) ? Math.max(0, parsed) : 1000;

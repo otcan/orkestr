@@ -281,7 +281,7 @@ export function publicPaneProgress(progress) {
 }
 
 function progressCacheTtlMs(progress, env = process.env) {
-  const active = durationMs(env.ORKESTR_PANE_PROGRESS_ACTIVE_MS, 1000);
+  const active = durationMs(env.ORKESTR_PANE_PROGRESS_ACTIVE_MS, 5000);
   const idle = durationMs(env.ORKESTR_PANE_PROGRESS_IDLE_MS, 5000);
   const state = String(progress?.stateHint || "").toLowerCase();
   if (state === "working" || state === "planning" || state === "awaiting_input" || state === "frozen") return active;

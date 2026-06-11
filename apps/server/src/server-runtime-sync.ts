@@ -27,7 +27,7 @@ export function runtimeMonitorIntervalMs() {
 }
 
 export function paneProgressMonitorIntervalMs() {
-  const parsed = Number(process.env.ORKESTR_PANE_PROGRESS_INTERVAL_MS || 1000);
+  const parsed = Number(process.env.ORKESTR_PANE_PROGRESS_INTERVAL_MS || 5000);
   return Number.isFinite(parsed) ? Math.max(1000, parsed) : 1000;
 }
 

@@ -1,6 +1,15 @@
 import assert from "node:assert/strict";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import test from "node:test";
-import { codexModeFromPaneText, paneProgressFromText } from "../packages/core/src/pane-progress.js";
+import {
+  cachedPaneProgress,
+  clearPaneProgressCache,
+  codexModeFromPaneText,
+  paneProgressFromText,
+  samplePaneProgress,
+} from "../packages/core/src/pane-progress.js";
 
 test("pane progress classifies active Codex work from the pane tail", () => {
   const progress = paneProgressFromText("◦ Working (2s • esc to interrupt)\n", { tailLines: 10 });
@@ -8,6 +17,33 @@ test("pane progress classifies active Codex work from the pane tail", () => {
   assert.equal(progress.stateHint, "working");
   assert.equal(progress.summary, "Working");
   assert.equal(progress.working, true);
+});
+
+test("pane progress caches active samples for the VM-safe default window", async () => {
+  clearPaneProgressCache();
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-pane-progress-cache-"));
+  const bin = path.join(home, "bin");
+  await fs.mkdir(bin, { recursive: true });
+  const tmuxPath = path.join(bin, "tmux");
+  await fs.writeFile(
+    tmuxPath,
+    "#!/usr/bin/env bash\nprintf '◦ Working (2s • esc to interrupt)\\n'\n",
+    "utf8",
+  );
+  await fs.chmod(tmuxPath, 0o755);
+  const env = {
+    ...process.env,
+    PATH: `${bin}:${process.env.PATH || ""}`,
+  };
+  const progress = await samplePaneProgress({ threadId: "active-cache-thread", paneId: "%1" }, env);
+  const cached = cachedPaneProgress({ threadId: "active-cache-thread" }, env);
+
+  assert.equal(progress.stateHint, "working");
+  assert.equal(progress.cached, false);
+  assert.equal(cached?.cached, true);
+  assert.equal(cached?.stateHint, "working");
+  assert.ok(Number(cached?.sampledAtMs || 0) + 5000 > Date.now());
+  clearPaneProgressCache();
 });
 
 test("pane progress classifies visible background terminal work", () => {
