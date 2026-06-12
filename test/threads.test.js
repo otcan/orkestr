@@ -9,7 +9,7 @@ import { promisify } from "node:util";
 import { startServer } from "../apps/server/src/server.js";
 import { resetThreadSummaryCachesForTest, threadRuntimeSummary, threadSummaryPayload, threadSummaryRuntimeSnapshot } from "../apps/server/src/thread-summary.ts";
 import { runNextThreadMessage } from "../packages/core/src/executors.js";
-import { applyRuntimeCodexMode, consumeThreadConnectorDeliverySignalCount, deliverPendingThreadInputs, doctorRuntimeResources, drainAllPendingThreadInputs, hardResetThreadRuntime, listRuntimeLeases, recoverStalePendingThreadInputs, resetThreadRuntime, resolveCodexThreadMetadata, runtimeStatus, setThreadConnectorDeliverySignalHandler, sleepThread, syncRuntimeLeases, syncRuntimeWindowName, takeoverRawTerminalThread, wakeThread } from "../packages/core/src/runtime-leases.js";
+import { applyRuntimeCodexMode, consumeThreadConnectorDeliverySignalCount, deliverPendingThreadInputs, doctorRuntimeResources, drainAllPendingThreadInputs, hardResetThreadRuntime, listRuntimeLeases, recoverStalePendingThreadInputs, resetThreadInputDeliveryTimersForTest, resetThreadRuntime, resolveCodexThreadMetadata, runtimeStatus, setThreadConnectorDeliverySignalHandler, sleepThread, syncRuntimeLeases, syncRuntimeWindowName, takeoverRawTerminalThread, wakeThread } from "../packages/core/src/runtime-leases.js";
 import { ensureDataDirs } from "../packages/storage/src/paths.js";
 import { parseThreadInputCommand } from "../packages/core/src/thread-commands.js";
 import { createPairingChallenge, getPairingChallenge } from "../packages/core/src/security.js";
@@ -397,6 +397,7 @@ test("thread wake and sleep lifecycle updates runtime leases and status", async 
     assert.equal(sleptAgain.slept, 0);
     assert.equal(sleptAgain.thread.state, "sleeping");
   } finally {
+    resetThreadInputDeliveryTimersForTest();
     restoreEnvValue("PATH", priorPath);
     restoreEnvValue("TMUX_LOG", priorTmuxLog);
     restoreEnvValue("TMUX_STATE", priorTmuxState);
@@ -584,6 +585,7 @@ test("raw terminal takeover creates canonical tmux session and expires after war
     assert.equal(afterLeases[0].endReason, "runtime_ttl");
     assert.match(log, /__CALL__\tkill-session\t-t\torkestr-thread-raw-takeover-thread/);
   } finally {
+    resetThreadInputDeliveryTimersForTest();
     restoreEnvValue("PATH", priorPath);
     restoreEnvValue("TMUX_LOG", priorTmuxLog);
     restoreEnvValue("TMUX_STATE", priorTmuxState);
@@ -656,6 +658,7 @@ test("raw terminal ttl slides forward when the thread has fresh progress message
     assert.equal(afterLeases[0].endedAt, undefined);
     assert.doesNotMatch(log, /__CALL__\tkill-session\t-t\torkestr-thread-raw-progress-thread/);
   } finally {
+    resetThreadInputDeliveryTimersForTest();
     restoreEnvValue("PATH", priorPath);
     restoreEnvValue("TMUX_LOG", priorTmuxLog);
     restoreEnvValue("TMUX_STATE", priorTmuxState);
@@ -4653,6 +4656,7 @@ test("thread summary reuses recent live runtime samples", async () => {
       },
     });
     await takeoverRawTerminalThread("summary-runtime-cache-thread", { reason: "test_summary_cache" });
+    resetThreadInputDeliveryTimersForTest();
     await fs.writeFile(fakeTmux.log, "", "utf8");
 
     await threadSummaryPayload({ cacheTtlMs: 0, payloadCacheTtlMs: 0, runtimeStatusCacheTtlMs: 1000 });
@@ -4665,6 +4669,7 @@ test("thread summary reuses recent live runtime samples", async () => {
     const secondChecks = (secondLog.match(/__CALL__\thas-session/g) || []).length;
     assert.equal(secondChecks, firstChecks);
   } finally {
+    resetThreadInputDeliveryTimersForTest();
     resetThreadSummaryCachesForTest();
     restoreEnvValue("ORKESTR_HOME", priorHome);
     restoreEnvValue("HOME", priorRuntimeHome);
