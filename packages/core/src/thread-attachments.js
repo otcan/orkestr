@@ -255,26 +255,37 @@ function canExposeOrdinaryThreadPath({ thread = {}, principal = null, env = proc
   return resourceOwnerUserId(thread, env) === normalizeUserId(env.ORKESTR_ADMIN_USER_ID || adminUserId);
 }
 
+function localPathRedactionEnabled(env = process.env) {
+  const raw = String(
+    env.ORKESTR_REDACT_LOCAL_FILE_PATHS ||
+      env.ORKESTR_OMIT_LOCAL_FILE_PATHS ||
+      env.ORKESTR_LOCAL_FILE_PATH_OMISSION ||
+      "",
+  ).trim().toLowerCase();
+  return ["1", "true", "yes", "on"].includes(raw);
+}
+
 export function classifyThreadAttachmentPathRedaction(filePath, { thread = {}, principal = null, env = process.env } = {}) {
   const policy = classifyThreadAttachmentPath(filePath, { thread, env });
+  const redactionEnabled = localPathRedactionEnabled(env);
   if (policy.ok) {
     return {
       ...policy,
       category: "ordinary_allowed",
-      redact: !canExposeOrdinaryThreadPath({ thread, principal, env }),
+      redact: redactionEnabled && !canExposeOrdinaryThreadPath({ thread, principal, env }),
     };
   }
   if (policy.reason === "attachment_path_forbidden") {
     return {
       ...policy,
       category: "sensitive_denied",
-      redact: true,
+      redact: redactionEnabled,
     };
   }
   return {
     ...policy,
     category: "ordinary_denied",
-    redact: true,
+    redact: redactionEnabled,
   };
 }
 

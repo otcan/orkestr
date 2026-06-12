@@ -6015,7 +6015,7 @@ test("whatsapp delivery sends allowed local paths as media attachments and does 
   assert.equal(storedReply.attachments[0].filename, "report.txt");
 });
 
-test("whatsapp delivery redacts allowed local paths for user-owned chats while sending media", async () => {
+test("whatsapp delivery exposes allowed local paths for user-owned chats while sending media", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-user-path-redaction-"));
   const env = await externalBridgeEnvWithAllowingSanitizer(home, { ORKESTR_ADMIN_USER_ID: "admin" });
   const paths = dataPaths(env);
@@ -6053,8 +6053,8 @@ test("whatsapp delivery redacts allowed local paths for user-owned chats while s
   assert.equal(delivery.delivered.length, 1);
   assert.equal(calls[0].url.pathname, "/send-media");
   assert.deepEqual(calls[0].body.paths, [reportPath]);
-  assert.doesNotMatch(visibleText, new RegExp(reportPath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
-  assert.match(visibleText, /\[local file path omitted]/);
+  assert.match(visibleText, new RegExp(reportPath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+  assert.doesNotMatch(visibleText, /\[local file path omitted]/);
   assert.equal(storedReply.attachments.length, 1);
   assert.equal(storedReply.attachments[0].filename, "report.txt");
 });
@@ -6104,7 +6104,7 @@ test("whatsapp delivery exposes allowed local paths for admin-role thread owners
   assert.equal(storedReply.attachments[0].filename, "report.txt");
 });
 
-test("whatsapp delivery skips forbidden local paths and redacts them from outbound text", async () => {
+test("whatsapp delivery skips forbidden local paths without omitting them from outbound text", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-forbidden-path-"));
   const env = externalBridgeEnv(home);
   const paths = dataPaths(env);
@@ -6139,8 +6139,8 @@ test("whatsapp delivery skips forbidden local paths and redacts them from outbou
   assert.equal(delivery.delivered.length, 1);
   assert.equal(calls[0].url.pathname, "/send-text");
   assert.equal(calls[0].body.paths, undefined);
-  assert.doesNotMatch(calls[0].body.text, new RegExp(secretPath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
-  assert.match(calls[0].body.text, /\[local file path omitted]/);
+  assert.match(calls[0].body.text, new RegExp(secretPath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+  assert.doesNotMatch(calls[0].body.text, /\[local file path omitted]/);
 });
 
 test("whatsapp delivery preserves recovery slash commands in outbound text", async () => {
