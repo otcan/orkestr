@@ -480,7 +480,9 @@ function threadRuntimeStatusCacheKey(thread: any, messages: any[] = []): string 
     state: thread?.state || null,
     runtimeState: runtime.state || null,
     activeRuntimeLeaseId: thread?.activeRuntimeLeaseId || runtime.activeRuntimeLeaseId || runtime.id || null,
-    runtimeUpdatedAt: runtime.updatedAt || runtime.startedAt || runtime.endedAt || null,
+    activeTurnId: runtime.activeTurnId || null,
+    pendingRequest: runtime.pendingRequest || null,
+    codexSessionId: runtime.codexSessionId || thread?.codexSessionId || thread?.executor?.codexSessionId || null,
     messages: threadMessagesRuntimeStatusToken(messages),
   });
 }
