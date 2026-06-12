@@ -951,10 +951,21 @@ test("user management API is admin-only and can pair a browser to a managed user
   const priorWorkspaceRoot = process.env.ORKESTR_RUNTIME_WORKSPACE_ROOT;
   const priorAuth = process.env.ORKESTR_AUTH_REQUIRED;
   const priorRecover = process.env.ORKESTR_RECOVER_RUNNING_ON_START;
+  const sanitizerEnvKeys = [
+    "ORKESTR_LLM_SANITIZER_URL",
+    "ORKESTR_LLM_SANITIZER_TOKEN",
+    "ORKESTR_LLM_SANITIZER_PROVIDER",
+    "ORKESTR_LLM_SANITIZER_COMMAND",
+    "ORKESTR_LLM_SANITIZER_COMMAND_JSON",
+    "OPENAI_API_KEY",
+    "ORKESTR_OPENAI_API_KEY",
+  ];
+  const priorSanitizerEnv = Object.fromEntries(sanitizerEnvKeys.map((key) => [key, process.env[key]]));
   process.env.ORKESTR_HOME = home;
   process.env.ORKESTR_RUNTIME_WORKSPACE_ROOT = runtimeWorkspaceRoot;
   process.env.ORKESTR_AUTH_REQUIRED = "1";
   process.env.ORKESTR_RECOVER_RUNNING_ON_START = "0";
+  for (const key of sanitizerEnvKeys) delete process.env[key];
   const server = await startServer({ port: 0, host: "127.0.0.1" });
   const { port } = server.address();
   const baseUrl = `http://127.0.0.1:${port}`;
@@ -1479,5 +1490,9 @@ test("user management API is admin-only and can pair a browser to a managed user
     else process.env.ORKESTR_AUTH_REQUIRED = priorAuth;
     if (priorRecover === undefined) delete process.env.ORKESTR_RECOVER_RUNNING_ON_START;
     else process.env.ORKESTR_RECOVER_RUNNING_ON_START = priorRecover;
+    for (const key of sanitizerEnvKeys) {
+      if (priorSanitizerEnv[key] === undefined) delete process.env[key];
+      else process.env[key] = priorSanitizerEnv[key];
+    }
   }
 });
