@@ -68,6 +68,9 @@ const deliveryLocks = new Set();
 const deliveryTimers = new Map();
 let runtimeSyncInFlight = null;
 let threadInputDeliveryFailureHandler = null;
+const automaticRuntimeDoctorCache = new Map();
+const passiveTmuxSessionCache = new Map();
+const passiveTmuxPaneIdsCache = new Map();
 const pendingInputStates = new Set(["queued", "pending_delivery", "awaiting_ack"]);
 const needInputPhases = new Set(["need_input", "awaiting_input", "question", "request_user_input"]);
 const proposedPlanOpenTagPattern = /^\s*<\s*proposed[\s_-]*plan\s*>/i;
@@ -87,6 +90,24 @@ function sleep(ms) {
 
 function isoAfter(ms) {
   return new Date(Date.now() + Math.max(0, ms)).toISOString();
+}
+
+function positiveDurationMs(value, fallback, min = 0) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.max(min, parsed);
+}
+
+function automaticRuntimeDoctorIntervalMs(env = process.env) {
+  return positiveDurationMs(env.ORKESTR_RUNTIME_DOCTOR_AUTOMATIC_INTERVAL_MS, 60_000, 5_000);
+}
+
+function passiveTmuxStatusCacheTtlMs(env = process.env) {
+  return positiveDurationMs(env.ORKESTR_RUNTIME_TMUX_STATUS_CACHE_MS, 4_000, 0);
+}
+
+function runtimeCacheScope(env = process.env) {
+  return dataPaths(env).home;
 }
 
 function whatsappOrigin(message = {}) {
@@ -409,6 +430,40 @@ async function resolveLivePaneId(lease, env = process.env) {
   return paneId;
 }
 
+async function cachedPassiveTmuxHasSession(sessionName, env = process.env) {
+  const target = String(sessionName || "").trim();
+  if (!target) return false;
+  const ttlMs = passiveTmuxStatusCacheTtlMs(env);
+  if (ttlMs <= 0) return tmuxHasSession(target);
+  const cacheKey = `${runtimeCacheScope(env)}:${target}`;
+  const cached = passiveTmuxSessionCache.get(cacheKey);
+  if (cached && cached.expiresAt > Date.now()) return cached.value;
+  const value = await tmuxHasSession(target);
+  passiveTmuxSessionCache.set(cacheKey, { value, expiresAt: Date.now() + ttlMs });
+  return value;
+}
+
+async function cachedPassiveTmuxPaneIds(sessionName, env = process.env) {
+  const target = String(sessionName || "").trim();
+  if (!target) return [];
+  const ttlMs = passiveTmuxStatusCacheTtlMs(env);
+  if (ttlMs <= 0) return tmuxPaneIds(target);
+  const cacheKey = `${runtimeCacheScope(env)}:${target}`;
+  const cached = passiveTmuxPaneIdsCache.get(cacheKey);
+  if (cached && cached.expiresAt > Date.now()) return cached.value;
+  const value = await tmuxPaneIds(target).catch(() => []);
+  passiveTmuxPaneIdsCache.set(cacheKey, { value, expiresAt: Date.now() + ttlMs });
+  return value;
+}
+
+async function resolvePassiveLivePaneId(lease, env = process.env) {
+  const panes = await cachedPassiveTmuxPaneIds(lease?.sessionName, env);
+  const storedPaneId = String(lease?.paneId || "").trim();
+  const paneId = storedPaneId && panes.includes(storedPaneId) ? storedPaneId : panes[0] || null;
+  if (paneId && paneId !== storedPaneId) await saveLeasePaneId(lease?.id, paneId, env).catch(() => {});
+  return paneId;
+}
+
 async function refreshTmuxWindowName(thread, lease, env = process.env) {
   const windowName = tmuxWindowName(thread);
   if (!lease?.sessionName) return windowName;
@@ -573,11 +628,14 @@ function paneCodexUpdatePrompt(text) {
   return Boolean(paneCodexUpdatePromptChoice(text));
 }
 
-async function activeLeaseForThread(threadId, env = process.env) {
+async function activeLeaseForThread(threadId, env = process.env, options = {}) {
   const leases = await listRuntimeLeases(env);
   const active = [...leases].reverse().find((lease) => lease.threadId === threadId && !lease.endedAt) || null;
   if (!active) return null;
-  if (await tmuxHasSession(active.sessionName)) return active;
+  const hasSession = options.passiveTmuxCache
+    ? await cachedPassiveTmuxHasSession(active.sessionName, env)
+    : await tmuxHasSession(active.sessionName);
+  if (hasSession) return active;
   const ended = leases.map((lease) => lease.id === active.id ? { ...lease, endedAt: nowIso(), endReason: "tmux_session_missing" } : lease);
   await saveRuntimeLeases(ended, env);
   await updateThread(threadId, {
@@ -592,8 +650,9 @@ async function activeLeaseForThread(threadId, env = process.env) {
  * @param {string} threadId
  * @param {any} [env]
  * @param {any[] | null} [messagesOverride]
+ * @param {{ passiveTmuxCache?: boolean }} [options]
  */
-export async function runtimeStatus(threadId, env = process.env, messagesOverride = null) {
+export async function runtimeStatus(threadId, env = process.env, messagesOverride = null, options = {}) {
   const thread = await getThread(threadId, env);
   if (!thread) {
     const error = new Error("thread_not_found");
@@ -643,7 +702,7 @@ export async function runtimeStatus(threadId, env = process.env, messagesOverrid
     };
     return { ...status, turnLifecycle: turnLifecycleFromRuntimeStatus(status, messages) };
   }
-  const lease = await activeLeaseForThread(thread.id, env);
+  const lease = await activeLeaseForThread(thread.id, env, options);
   if (!lease) {
     const state = pendingCount > 0 ? "waking" : "sleeping";
     const status = {
@@ -675,7 +734,9 @@ export async function runtimeStatus(threadId, env = process.env, messagesOverrid
     return { ...status, turnLifecycle: turnLifecycleFromRuntimeStatus(status, messages) };
   }
 
-  const paneId = await resolveLivePaneId(lease, env);
+  const paneId = options.passiveTmuxCache
+    ? await resolvePassiveLivePaneId(lease, env)
+    : await resolveLivePaneId(lease, env);
   const progressSample = await samplePaneProgress({
     threadId: thread.id,
     leaseId: lease.id,
@@ -3926,8 +3987,38 @@ async function syncDetachedCodexRollouts(activeLeaseThreadIds = new Set(), env =
   return { appended };
 }
 
+async function runAutomaticRuntimeDoctor(env = process.env) {
+  const intervalMs = automaticRuntimeDoctorIntervalMs(env);
+  const scope = runtimeCacheScope(env);
+  const cached = automaticRuntimeDoctorCache.get(scope);
+  const now = Date.now();
+  if (cached?.inFlight) return cached.inFlight;
+  if (cached?.expiresAt > now) return cached.result || null;
+  const inFlight = doctorRuntimeResources({ env, repair: true, automatic: true })
+    .then((result) => {
+      automaticRuntimeDoctorCache.set(scope, {
+        result,
+        expiresAt: Date.now() + intervalMs,
+        inFlight: null,
+      });
+      return result;
+    })
+    .catch((error) => {
+      if (automaticRuntimeDoctorCache.get(scope)?.inFlight === inFlight) {
+        automaticRuntimeDoctorCache.delete(scope);
+      }
+      throw error;
+    });
+  automaticRuntimeDoctorCache.set(scope, {
+    result: cached?.result || null,
+    expiresAt: cached?.expiresAt || 0,
+    inFlight,
+  });
+  return inFlight;
+}
+
 async function syncRuntimeLeasesOnce(env = process.env) {
-  await doctorRuntimeResources({ env, repair: true, automatic: true }).catch(() => null);
+  await runAutomaticRuntimeDoctor(env).catch(() => null);
   const leases = await listRuntimeLeases(env);
   let changed = false;
   let appended = 0;
@@ -3937,7 +4028,7 @@ async function syncRuntimeLeasesOnce(env = process.env) {
       next.push(lease);
       continue;
     }
-    if (!(await tmuxHasSession(lease.sessionName))) {
+    if (!(await cachedPassiveTmuxHasSession(lease.sessionName, env))) {
       next.push({ ...lease, endedAt: nowIso(), endReason: "tmux_session_missing" });
       await updateThread(lease.threadId, { state: "sleeping", activeRuntimeLeaseId: null }, env).catch(() => {});
       changed = true;
@@ -3994,7 +4085,7 @@ async function syncRuntimeLeasesOnce(env = process.env) {
     appended += synced.appended || 0;
     const thread = await getThread(lease.threadId, env).catch(() => null);
     const messages = thread ? await listThreadMessages(thread.id, env).catch(() => []) : [];
-    let status = await runtimeStatus(lease.threadId, env, messages).catch(() => null);
+    let status = await runtimeStatus(lease.threadId, env, messages, { passiveTmuxCache: true }).catch(() => null);
     if (status) {
       leaseForStorage = {
         ...synced.lease,
@@ -4031,7 +4122,7 @@ async function syncRuntimeLeasesOnce(env = process.env) {
       }
       const restoredMode = thread ? await reapplyDesiredCodexMode(thread, status, env) : null;
       if (restoredMode?.applied) {
-        status = await runtimeStatus(lease.threadId, env, messages).catch(() => status);
+        status = await runtimeStatus(lease.threadId, env, messages, { passiveTmuxCache: true }).catch(() => status);
         changed = true;
       }
       if (thread) {
@@ -4059,8 +4150,8 @@ export async function syncPaneProgressForActiveLeases(env = process.env) {
   let changed = 0;
   for (const lease of leases) {
     if (lease.endedAt) continue;
-    if (!(await tmuxHasSession(lease.sessionName).catch(() => false))) continue;
-    const paneId = await resolveLivePaneId(lease, env).catch(() => lease.paneId || null);
+    if (!(await cachedPassiveTmuxHasSession(lease.sessionName, env).catch(() => false))) continue;
+    const paneId = await resolvePassiveLivePaneId(lease, env).catch(() => lease.paneId || null);
     if (!paneId) continue;
     const progress = publicPaneProgress(await samplePaneProgress({
       threadId: lease.threadId,

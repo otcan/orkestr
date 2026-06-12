@@ -486,7 +486,7 @@ function threadRuntimeStatusCacheKey(thread: any, messages: any[] = []): string 
 }
 
 async function cachedSummaryRuntimeStatus(thread: any, messages: any[] = [], ttlMs = 0): Promise<any> {
-  if (ttlMs <= 0) return runtimeStatus(thread.id, process.env, messages);
+  if (ttlMs <= 0) return runtimeStatus(thread.id, process.env, messages, { passiveTmuxCache: true });
   const threadId = String(thread?.id || "");
   const cacheKey = threadRuntimeStatusCacheKey(thread, messages);
   const now = Date.now();
@@ -495,7 +495,7 @@ async function cachedSummaryRuntimeStatus(thread: any, messages: any[] = [], ttl
     if (cached.status && cached.expiresAt > now) return cached.status;
     if (cached.inFlight) return cached.inFlight;
   }
-  const inFlight = runtimeStatus(thread.id, process.env, messages)
+  const inFlight = runtimeStatus(thread.id, process.env, messages, { passiveTmuxCache: true })
     .then((status) => {
       threadRuntimeStatusSummaryCache.set(threadId, {
         cacheKey,

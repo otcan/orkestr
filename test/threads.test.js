@@ -813,6 +813,38 @@ test("runtime resource doctor ignores tmux sessions owned by another Orkestr hom
   }
 });
 
+test("runtime sync throttles automatic resource doctor scans", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-runtime-doctor-throttle-"));
+  const fakeTmux = await createFakeTmux(home);
+  const priorPath = process.env.PATH;
+  const priorTmuxLog = process.env.TMUX_LOG;
+  const priorTmuxState = process.env.TMUX_STATE;
+  process.env.PATH = `${fakeTmux.bin}:${priorPath || ""}`;
+  process.env.TMUX_LOG = fakeTmux.log;
+  process.env.TMUX_STATE = fakeTmux.state;
+
+  try {
+    const env = {
+      ORKESTR_HOME: path.join(home, "orkestr-home"),
+      PATH: process.env.PATH,
+      TMUX_LOG: fakeTmux.log,
+      TMUX_STATE: fakeTmux.state,
+      ORKESTR_RUNTIME_DOCTOR_AUTOMATIC_INTERVAL_MS: "60000",
+    };
+
+    await syncRuntimeLeases(env);
+    await syncRuntimeLeases(env);
+    const log = await fs.readFile(fakeTmux.log, "utf8").catch(() => "");
+    const doctorScans = (log.match(/__CALL__\tlist-sessions/g) || []).length;
+
+    assert.equal(doctorScans, 1);
+  } finally {
+    restoreEnvValue("PATH", priorPath);
+    restoreEnvValue("TMUX_LOG", priorTmuxLog);
+    restoreEnvValue("TMUX_STATE", priorTmuxState);
+  }
+});
+
 test("relative thread workspaces resolve under the runtime workspace root", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-relative-workspace-"));
   const fakeTmux = await createFakeTmux(home);
