@@ -898,7 +898,7 @@ export function reduceLocalWhatsAppBridgeState(accounts) {
   if (accounts.some((account) => account.pairingCode || account.state === "pairing_code")) return "pairing_code";
   if (accounts.some((account) => account.qrAvailable)) return "qr_needed";
   if (accounts.some((account) => account.state === "starting")) return "starting";
-  if (accounts.some((account) => ["auth_failure", "auth_ready_timeout", "dependency_missing", "failed"].includes(account.state))) return "failed";
+  if (accounts.some((account) => ["startup_timeout", "auth_failure", "auth_ready_timeout", "dependency_missing", "failed"].includes(account.state))) return "failed";
   if (accounts.some((account) => account.authenticated || account.state === "authenticated")) return "authenticated";
   if (accounts.some((account) => account.state === "disconnected")) return "disconnected";
   return "idle";
@@ -1236,9 +1236,11 @@ async function loadBridgeDependencies() {
 
 function puppeteerOptions(env = process.env) {
   const executablePath = String(env.WA_CHROME_PATH || env.PUPPETEER_EXECUTABLE_PATH || "").trim();
+  const protocolTimeout = puppeteerProtocolTimeoutMs(env);
   return {
     headless: true,
     ...(executablePath ? { executablePath } : {}),
+    protocolTimeout,
     args: [
       "--disable-dev-shm-usage",
       "--disable-gpu",
@@ -1644,6 +1646,16 @@ export function setLocalWhatsAppRuntimeRecoveryHooksForTest(hooks = null) {
 function authReadyTimeoutMs(env = process.env, options = {}) {
   const parsed = Number(options.authReadyTimeoutMs || env.WA_AUTH_READY_TIMEOUT_MS || env.WHATSAPP_AUTH_READY_TIMEOUT_MS || 180_000);
   return Number.isFinite(parsed) ? Math.max(30_000, parsed) : 180_000;
+}
+
+function startupTimeoutMs(env = process.env, options = {}) {
+  const parsed = Number(options.startupTimeoutMs || env.WA_STARTUP_TIMEOUT_MS || env.WHATSAPP_STARTUP_TIMEOUT_MS || 90_000);
+  return Number.isFinite(parsed) ? Math.max(100, parsed) : 90_000;
+}
+
+function puppeteerProtocolTimeoutMs(env = process.env) {
+  const parsed = Number(env.WA_PUPPETEER_PROTOCOL_TIMEOUT_MS || env.WHATSAPP_PUPPETEER_PROTOCOL_TIMEOUT_MS || 300_000);
+  return Number.isFinite(parsed) ? Math.max(30_000, parsed) : 300_000;
 }
 
 export function localWhatsAppReadyFallbackEligible(state = {}) {
@@ -2220,7 +2232,7 @@ export async function startConfiguredLocalWhatsAppAccounts(env = process.env) {
 }
 
 const localWhatsAppRecoveryAttempts = new Map();
-const recoverableLocalWhatsAppStates = new Set(["auth_ready_timeout", "disconnected"]);
+const recoverableLocalWhatsAppStates = new Set(["startup_timeout", "auth_ready_timeout", "disconnected"]);
 const localWhatsAppChromeLockFiles = new Set(["SingletonCookie", "SingletonLock", "SingletonSocket"]);
 let localWhatsAppUnreadRecoveryInFlight = null;
 let localWhatsAppUnreadRecoveryLastRunMs = 0;
@@ -2454,6 +2466,7 @@ export async function startLocalWhatsAppAccount(accountId = "", env = process.en
       !state.authenticated &&
       state.state !== "pairing_code";
     if (!shouldReplaceRuntime) return accountSnapshot(normalized, env);
+    existingRuntime.clearStartupTimer?.();
     existingRuntime.clearAuthReadyTimer?.();
     existingRuntime.clearPairingCodeUnhandledRejectionHandler?.();
     await existingRuntime.client?.destroy?.().catch(() => {});
@@ -2501,6 +2514,14 @@ export async function startLocalWhatsAppAccount(accountId = "", env = process.en
 
   const { Client, LocalAuth } = dependencies.whatsapp;
   const authTimeoutMs = authReadyTimeoutMs(env, options);
+  const startTimeoutMs = startupTimeoutMs(env, options);
+  let startupTimer = null;
+  let startupSettled = false;
+  const clearStartupTimer = () => {
+    if (!startupTimer) return;
+    clearTimeout(startupTimer);
+    startupTimer = null;
+  };
   let authReadyTimer = null;
   const clearAuthReadyTimer = () => {
     if (!authReadyTimer) return;
@@ -2549,6 +2570,32 @@ export async function startLocalWhatsAppAccount(accountId = "", env = process.en
       void handleAuthReadyTimeout();
     }, authTimeoutMs);
     if (typeof authReadyTimer.unref === "function") authReadyTimer.unref();
+  };
+  const handleStartupTimeout = async () => {
+    const state = accountStates.get(normalized) || defaultAccountState(normalized);
+    if (startupSettled || state.ready || state.authenticated || state.qrAvailable || state.pairingCode || state.state !== "starting") return;
+    const message = `WhatsApp bridge did not emit QR, pairing, auth, or ready within ${Math.round(startTimeoutMs / 1000)}s. Restart the bridge or re-link the device.`;
+    setAccountState(normalized, {
+      state: "startup_timeout",
+      ready: false,
+      authenticated: false,
+      started: false,
+      pairingCode: "",
+      pairingCodeUpdatedAt: null,
+      error: message,
+    });
+    runtimes.delete(normalized);
+    clearPairingCodeUnhandledRejectionHandler();
+    clearAuthReadyTimer();
+    clearReadyFallbackTimer();
+    clearConnectedPageReadyFallbackTimer();
+    await clearQr(normalized, env).catch(() => {});
+    await appendEvent({
+      type: "whatsapp_local_startup_timeout",
+      accountId: normalized,
+      timeoutMs: startTimeoutMs,
+    }, env).catch(() => {});
+    await client.destroy().catch(() => {});
   };
   const handleAuthReadyTimeout = async () => {
     const state = accountStates.get(normalized) || defaultAccountState(normalized);
@@ -2684,6 +2731,8 @@ export async function startLocalWhatsAppAccount(accountId = "", env = process.en
 
   client.on("qr", async (qr) => {
     try {
+      startupSettled = true;
+      clearStartupTimer();
       await writeQr(normalized, qr, dependencies.qrcode, env);
       setAccountState(normalized, {
         state: "qr_needed",
@@ -2703,6 +2752,8 @@ export async function startLocalWhatsAppAccount(accountId = "", env = process.en
   });
 
   client.on("code", async (code) => {
+    startupSettled = true;
+    clearStartupTimer();
     setAccountState(normalized, {
       state: "pairing_code",
       ready: false,
@@ -2717,6 +2768,8 @@ export async function startLocalWhatsAppAccount(accountId = "", env = process.en
   });
 
   client.on("authenticated", async () => {
+    startupSettled = true;
+    clearStartupTimer();
     clearPairingCodeUnhandledRejectionHandler();
     setAccountState(normalized, {
       state: "authenticated",
@@ -2733,6 +2786,8 @@ export async function startLocalWhatsAppAccount(accountId = "", env = process.en
   });
 
   client.on("ready", async () => {
+    startupSettled = true;
+    clearStartupTimer();
     clearPairingCodeUnhandledRejectionHandler();
     clearAuthReadyTimer();
     clearReadyFallbackTimer();
@@ -2755,6 +2810,8 @@ export async function startLocalWhatsAppAccount(accountId = "", env = process.en
   });
 
   client.on("auth_failure", async (message) => {
+    startupSettled = true;
+    clearStartupTimer();
     clearPairingCodeUnhandledRejectionHandler();
     clearAuthReadyTimer();
     clearReadyFallbackTimer();
@@ -2773,6 +2830,8 @@ export async function startLocalWhatsAppAccount(accountId = "", env = process.en
   });
 
   client.on("disconnected", async (reason) => {
+    startupSettled = true;
+    clearStartupTimer();
     clearPairingCodeUnhandledRejectionHandler();
     clearAuthReadyTimer();
     clearReadyFallbackTimer();
@@ -2816,6 +2875,8 @@ export async function startLocalWhatsAppAccount(accountId = "", env = process.en
   });
 
   client.on("error", async (error) => {
+    startupSettled = true;
+    clearStartupTimer();
     clearPairingCodeUnhandledRejectionHandler();
     clearAuthReadyTimer();
     clearReadyFallbackTimer();
@@ -2843,7 +2904,13 @@ export async function startLocalWhatsAppAccount(accountId = "", env = process.en
   });
 
   armPairingCodeUnhandledRejectionHandler();
+  startupTimer = setTimeout(() => {
+    void handleStartupTimeout();
+  }, startTimeoutMs);
+  if (typeof startupTimer.unref === "function") startupTimer.unref();
   const initializePromise = client.initialize().catch(async (error) => {
+    startupSettled = true;
+    clearStartupTimer();
     clearPairingCodeUnhandledRejectionHandler();
     clearAuthReadyTimer();
     clearReadyFallbackTimer();
@@ -2859,7 +2926,7 @@ export async function startLocalWhatsAppAccount(accountId = "", env = process.en
     runtimes.delete(normalized);
     await appendEvent({ type: "whatsapp_local_start_failed", accountId: normalized, error: error.message || String(error) }, env);
   });
-  runtimes.set(normalized, { client, initializePromise, clearAuthReadyTimer, clearPairingCodeUnhandledRejectionHandler });
+  runtimes.set(normalized, { client, initializePromise, clearStartupTimer, clearAuthReadyTimer, clearPairingCodeUnhandledRejectionHandler });
   scheduleConnectedPageReadyFallback("startup_connected_page");
   await appendEvent({ type: "whatsapp_local_start_requested", accountId: normalized }, env);
   return accountSnapshot(normalized, env);
@@ -2876,6 +2943,7 @@ export async function logoutLocalWhatsAppAccount(accountId = "", env = process.e
   }
   const runtime = runtimes.get(normalized);
   if (runtime?.client) {
+    runtime.clearStartupTimer?.();
     runtime.clearAuthReadyTimer?.();
     runtime.clearPairingCodeUnhandledRejectionHandler?.();
     await runtime.client.logout().catch(() => {});
@@ -2913,6 +2981,7 @@ export async function stopLocalWhatsAppBridge(env = process.env) {
   runtimes.clear();
   await Promise.all(entries.map(async ([accountId, runtime]) => {
     if (runtime?.client) {
+      runtime.clearStartupTimer?.();
       runtime.clearAuthReadyTimer?.();
       await runtime.client.destroy().catch(() => {});
     }

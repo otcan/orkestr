@@ -1858,7 +1858,11 @@ test("local whatsapp phone pairing accepts configured account ids", async () => 
 
 test("local whatsapp phone pairing replaces an existing qr runtime", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-phone-replaces-qr-runtime-"));
-  const env = { ORKESTR_HOME: home, ORKESTR_WHATSAPP_ACCOUNT_IDS: "sender" };
+  const env = {
+    ORKESTR_HOME: home,
+    ORKESTR_WHATSAPP_ACCOUNT_IDS: "sender",
+    WA_PUPPETEER_PROTOCOL_TIMEOUT_MS: "345000",
+  };
   const calls = [];
   const existingRuntime = {
     clearAuthReadyTimer() {
@@ -1882,7 +1886,7 @@ test("local whatsapp phone pairing replaces an existing qr runtime", async () =>
 
   class Client {
     constructor(options) {
-      calls.push(["client", options.pairWithPhoneNumber?.phoneNumber]);
+      calls.push(["client", options.pairWithPhoneNumber?.phoneNumber, options.puppeteer?.protocolTimeout]);
     }
 
     on(event) {
@@ -1917,10 +1921,61 @@ test("local whatsapp phone pairing replaces an existing qr runtime", async () =>
     });
 
     assert.equal(calls.includes("destroy-existing"), true);
-    assert.deepEqual(calls.find((call) => Array.isArray(call) && call[0] === "client"), ["client", "155512345"]);
+    assert.deepEqual(calls.find((call) => Array.isArray(call) && call[0] === "client"), ["client", "155512345", 345000]);
     assert.equal(result.state, "starting");
     const events = await listEvents(env);
     assert.ok(events.find((event) => event.type === "whatsapp_local_pairing_runtime_replaced"));
+  } finally {
+    await resetLocalWhatsAppBridgeForTest(env);
+  }
+});
+
+test("local whatsapp startup timeout fails a pre-qr hang and makes it recoverable", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-startup-timeout-"));
+  const env = {
+    ORKESTR_HOME: home,
+    ORKESTR_WHATSAPP_ACCOUNT_IDS: "responder",
+  };
+  const calls = [];
+
+  class LocalAuth {}
+
+  class Client {
+    on() {
+      return this;
+    }
+
+    initialize() {
+      calls.push("initialize");
+      return new Promise(() => {});
+    }
+
+    async destroy() {
+      calls.push("destroy");
+    }
+  }
+
+  try {
+    const result = await startLocalWhatsAppAccount("responder", env, {
+      startupTimeoutMs: 100,
+      loadBridgeDependencies: async () => ({
+        whatsapp: { Client, LocalAuth },
+        qrcode: {},
+      }),
+    });
+    assert.equal(result.state, "starting");
+
+    await new Promise((resolve) => setTimeout(resolve, 160));
+    const status = await getLocalWhatsAppBridgeStatus(env);
+    const account = status.accounts.find((item) => item.accountId === "responder");
+    assert.equal(status.state, "failed");
+    assert.equal(account.state, "startup_timeout");
+    assert.equal(account.ready, false);
+    assert.match(account.error, /did not emit QR, pairing, auth, or ready/i);
+    assert.deepEqual(recoverableLocalWhatsAppAccountIds(status.accounts, ["responder"]), ["responder"]);
+    assert.ok(calls.includes("destroy"));
+    const events = await listEvents(env);
+    assert.ok(events.find((event) => event.type === "whatsapp_local_startup_timeout"));
   } finally {
     await resetLocalWhatsAppBridgeForTest(env);
   }
