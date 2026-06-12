@@ -35,6 +35,21 @@ function defaultForbiddenNames() {
   ];
 }
 
+function defaultForbiddenRoots() {
+  return [
+    "/home/openclaw/.orkestr-production",
+    "/opt/orkestr/workspace",
+    "/home/openclaw/.openclaw",
+  ];
+}
+
+function csvCaseSensitive(value = "") {
+  return clean(value)
+    .split(/[,\n]/)
+    .map((item) => clean(item))
+    .filter(Boolean);
+}
+
 function redactForScan(value) {
   return JSON.stringify(value || {}, (key, item) => {
     const lowered = String(key || "").toLowerCase();
@@ -60,6 +75,43 @@ function addCheck(checks, name, ok, details = {}) {
   checks.push({ name, ok: Boolean(ok), ...details });
 }
 
+function isLoopbackUrl(value = "") {
+  try {
+    const parsed = new URL(clean(value));
+    return ["localhost", "127.0.0.1", "::1", "[::1]", "0.0.0.0"].includes(parsed.hostname);
+  } catch {
+    return false;
+  }
+}
+
+function desktopMode(env, runtimeSettings = {}) {
+  return clean(env.ORKESTR_BROWSER_DESKTOP_MODE || runtimeSettings?.desktops?.mode).toLowerCase();
+}
+
+function browserctlPath(env) {
+  return clean(env.ORKESTR_BROWSERCTL_PATH || env.ORKESTR_BROWSERCTL);
+}
+
+function browserApiUrl(env) {
+  return clean(env.ORKESTR_BROWSER_API_URL || env.ORKESTR_BROWSER_SESSIONS_URL);
+}
+
+function allowedBrowserctlRoots(home, env) {
+  return [
+    home,
+    process.cwd(),
+    "/app",
+    ...csvCaseSensitive(env.ORKESTR_ISOLATION_ALLOWED_BROWSERCTL_ROOTS),
+  ].filter(Boolean);
+}
+
+function browserctlPathScoped(home, env) {
+  const command = browserctlPath(env);
+  if (!command) return false;
+  if (!path.isAbsolute(command)) return false;
+  return allowedBrowserctlRoots(home, env).some((root) => pathInside(command, root));
+}
+
 async function readPublicState(paths, env) {
   return {
     runtimeSettings: await readRuntimeSettings(env).catch(() => ({})),
@@ -80,7 +132,9 @@ export async function auditIsolatedDemoInstance(env = process.env, options = {})
   const forbiddenNames = csv(env.ORKESTR_ISOLATION_FORBIDDEN_NAMES).length
     ? csv(env.ORKESTR_ISOLATION_FORBIDDEN_NAMES)
     : defaultForbiddenNames();
-  const forbiddenRoots = csv(env.ORKESTR_ISOLATION_FORBIDDEN_ROOTS);
+  const forbiddenRoots = csvCaseSensitive(env.ORKESTR_ISOLATION_FORBIDDEN_ROOTS).length
+    ? csvCaseSensitive(env.ORKESTR_ISOLATION_FORBIDDEN_ROOTS)
+    : defaultForbiddenRoots();
   const state = await readPublicState(paths, env);
 
   for (const [name, value] of Object.entries({
@@ -125,6 +179,19 @@ export async function auditIsolatedDemoInstance(env = process.env, options = {})
   if (clean(env.ORKESTR_INSTANCE_DESKTOPS_PROVISIONED).toLowerCase() === "0") {
     addCheck(checks, "desktops:unprovisioned-fails-closed", browserResult.ok === false && browserSessions.length === 0, {
       error: browserResult.error || "",
+    });
+  }
+
+  const mode = desktopMode(env, state.runtimeSettings);
+  const apiUrl = browserApiUrl(env);
+  if (mode === "browserctl") {
+    const pathScoped = browserctlPathScoped(home, env);
+    const apiScoped = !apiUrl || isLoopbackUrl(apiUrl);
+    addCheck(checks, "desktops:browserctl-scoped-to-instance", pathScoped && apiScoped, {
+      mode,
+      browserctlPath: browserctlPath(env),
+      browserApiUrl: apiUrl,
+      allowedRoots: allowedBrowserctlRoots(home, env),
     });
   }
 

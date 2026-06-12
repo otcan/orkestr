@@ -199,6 +199,36 @@ test("demo VM notifier keeps legacy demo public URL env compatibility", async ()
   assert.equal(calls.filter((call) => call.url.pathname.endsWith("/send-text")).length, 1);
 });
 
+test("demo VM notifier rewrites explicit setup URLs to the fresh broker UUID", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-demo-vm-explicit-url-"));
+  const calls = [];
+  const env = {
+    ORKESTR_HOME: home,
+    ORKESTR_DEMO_WHATSAPP_NUMBER: "+49 176 123456",
+    ORKESTR_CONNECT_PUBLIC_SETUP_URL: "https://connect.orkestr.de/i/stale-demo-vm/setup?return=%2Fsetup",
+    ORKESTR_DEMO_WHATSAPP_RELAY_URL: "http://relay.local/api/connectors/whatsapp/bridge",
+    ORKESTR_DEMO_NOTIFY_HEALTH_TIMEOUT_MS: "0",
+  };
+  const fetchImpl = async (url, options = {}) => {
+    calls.push({ url, options });
+    if (url.pathname === "/api/broker/instances/register") return response(brokerRegistrationPayload());
+    if (url.pathname.endsWith("/health")) return response({ ok: true, ready: true, accounts: [{ id: "responder", ready: true, state: "ready" }] });
+    const body = JSON.parse(options.body);
+    assert.match(body.text, new RegExp(`https://connect\\.orkestr\\.de/i/${BROKER_UUID}/setup`));
+    assert.doesNotMatch(body.text, /stale-demo-vm/);
+    assert.doesNotMatch(body.text, /instanceId=/);
+    return response({ ok: true, sent: [{ id: "sent-demo-ready" }] });
+  };
+
+  const result = await runDemoVmReadyNotify(env, { fetchImpl });
+  const state = JSON.parse(await fs.readFile(path.join(home, "demo-vm-ready-notification.json"), "utf8"));
+
+  assert.equal(result.ok, true);
+  assert.equal(result.sent, true);
+  assert.equal(state.setupUrl, `https://connect.orkestr.de/i/${BROKER_UUID}/setup`);
+  assert.equal(state.instanceId, BROKER_UUID);
+});
+
 test("demo VM notifier blocks without a pre-provisioned relay URL but keeps startup non-fatal", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-demo-vm-no-relay-"));
   const env = {

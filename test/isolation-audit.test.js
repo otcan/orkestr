@@ -31,6 +31,42 @@ test("isolated demo audit passes for an empty unprovisioned VM home with sqlite 
   assert.ok(result.checks.some((check) => check.name === "desktops:unprovisioned-fails-closed" && check.ok));
 });
 
+test("isolated demo audit rejects ambient host browserctl backends", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-isolation-audit-browserctl-host-"));
+  const env = {
+    ORKESTR_HOME: home,
+    ORKESTR_BROWSER_DESKTOP_MODE: "browserctl",
+    ORKESTR_BROWSERCTL_PATH: "/usr/local/bin/browserctl",
+    ORKESTR_INSTANCE_DESKTOPS_PROVISIONED: "0",
+    ORKESTR_BROWSER_VISIBLE_SLUGS: "__none__",
+  };
+
+  const result = await auditIsolatedDemoInstance(env);
+  const check = result.checks.find((item) => item.name === "desktops:browserctl-scoped-to-instance");
+
+  assert.equal(result.ok, false);
+  assert.equal(check.ok, false);
+  assert.equal(check.browserctlPath, "/usr/local/bin/browserctl");
+});
+
+test("isolated demo audit allows packaged VM-local browserctl", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-isolation-audit-browserctl-local-"));
+  const env = {
+    ORKESTR_HOME: home,
+    ORKESTR_BROWSER_DESKTOP_MODE: "browserctl",
+    ORKESTR_BROWSERCTL_PATH: "/app/scripts/browserctl.mjs",
+    ORKESTR_BROWSER_API_URL: "http://127.0.0.1:6080",
+    ORKESTR_INSTANCE_DESKTOPS_PROVISIONED: "0",
+    ORKESTR_BROWSER_VISIBLE_SLUGS: "__none__",
+  };
+
+  const result = await auditIsolatedDemoInstance(env);
+  const check = result.checks.find((item) => item.name === "desktops:browserctl-scoped-to-instance");
+
+  assert.equal(result.ok, true);
+  assert.equal(check.ok, true);
+});
+
 test("isolated demo audit fails when parent desktop/thread names leak into state", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-isolation-audit-fail-"));
   await fs.mkdir(home, { recursive: true });

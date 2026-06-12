@@ -16,8 +16,9 @@ For the private VM demo acceptance path, use
 Orkestr-initiated: it sends the first message from the serving/responder
 WhatsApp account to the target direct chat and verifies the outbound prompt asks
 the user to complete Codex login/sign-in in setup. For demo-review runs, pass a
-stable public setup URL such as
-`https://connect.orkestr.de/i/demo-vm-001/setup`.
+stable public connect base URL such as `https://connect.orkestr.de`; the runner
+registers a fresh broker instance and sends
+`https://connect.orkestr.de/i/<fresh-broker-uuid>/setup`.
 If no public setup URL is provided, the script can still create a temporary
 Cloudflare quick tunnel for local fallback testing when
 `ORKESTR_DEMO_CLOUDFLARE_FALLBACK=1` is set, but that path is not the
@@ -30,8 +31,6 @@ npm run e2e:whatsapp-demo-onboarding -- --execute \
   --orkestr-home /path/to/orkestr-home \
   --chat-id target-user-direct-chat@c.us \
   --responder-account responder \
-  --instance-id demo-vm-001 \
-  --setup-url 'https://connect.orkestr.de/i/demo-vm-001/setup' \
   --artifact artifacts/real-wa-demo-onboarding.json
 ```
 

@@ -116,8 +116,10 @@ function setupUrlWithInstanceId(value = "", instanceId = "") {
   if (!setupUrl || !normalizedInstanceId) return setupUrl;
   try {
     const url = new URL(setupUrl);
-    if (!url.searchParams.get("instanceId")) url.searchParams.set("instanceId", normalizedInstanceId);
-    return url.toString();
+    const existingReturn = clean(url.searchParams.get("return"));
+    const staleInstanceSetup = /^\/i\/[^/]+\/setup\/?$/i.test(url.pathname);
+    const returnTo = staleInstanceSetup ? "/setup" : existingReturn || setupReturnPathFromUrl(setupUrl);
+    return pairingSetupUrl(url.origin, { returnTo, instanceId: normalizedInstanceId }) || setupUrl;
   } catch {
     return setupUrl;
   }

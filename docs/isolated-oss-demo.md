@@ -60,6 +60,9 @@ Expected audit properties:
 - broker registry is SQLite when `ORKESTR_ISOLATION_EXPECT_SQLITE_BROKER=1`
 - unprovisioned desktops return `instance_desktops_not_provisioned`
 - parent/private desktop names do not appear in runtime state
+- `browserctl` must be VM-local, for example `/app/scripts/browserctl.mjs`;
+  ambient parent-host backends such as `/usr/local/bin/browserctl` fail the
+  isolation audit
 
 Run this against the broker route:
 
@@ -85,6 +88,7 @@ The artifact must show:
 
 - a fresh UUID `instanceId`
 - a setup URL under `/i/<uuid>/setup`
+- no stale/static instance id in the setup URL
 - successful setup URL reachability
 - direct outbound WhatsApp prompt from the serving account
 
