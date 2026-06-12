@@ -21,12 +21,20 @@ const mimeTypes = new Map<string, string>([
 export function registerStaticFallback(app: INestApplication): void {
   const expressApp = app.getHttpAdapter().getInstance();
   expressApp.use(async (request: any, response: any, next: () => void) => {
-    const url = String(request.url || "");
+    const url = String(request.originalUrl || request.url || "");
     if (url.startsWith("/api/") || url.startsWith("/oauth/") || url.startsWith("/connect/") || url.startsWith("/google-marketing/oauth/")) {
       return next();
     }
     if (url.startsWith("/desktop-share/")) {
       return serveDesktopSharePage(response);
+    }
+    const instanceSetupRedirect = instanceSetupRedirectUrl(request, url);
+    if (instanceSetupRedirect) {
+      return response
+        .status(302)
+        .header("cache-control", "no-store")
+        .header("location", instanceSetupRedirect)
+        .send("Redirecting to Orkestr connect setup.");
     }
     if (url.startsWith("/public-assets/")) {
       return servePublicAsset(url, response);
@@ -49,6 +57,26 @@ export function registerStaticFallback(app: INestApplication): void {
     }
     return serveStaticPath(url || "/", response);
   });
+}
+
+function instanceSetupRedirectUrl(request: any, requestUrl: string): string {
+  const url = new URL(requestUrl || "/", "http://localhost");
+  const parts = url.pathname.split("/").filter(Boolean);
+  if (parts.length !== 3 || parts[0] !== "i" || parts[2] !== "setup") return "";
+  const instanceId = normalizeInstanceId(parts[1]);
+  if (!instanceId) return "";
+  const target = new URL("/setup/pairing", originalRequestOrigin(request));
+  target.searchParams.set("instanceId", instanceId);
+  target.searchParams.set("return", url.searchParams.get("return") || "/setup");
+  return `${target.pathname}${target.search}`;
+}
+
+function normalizeInstanceId(value = ""): string {
+  return String(value || "")
+    .trim()
+    .replace(/[^A-Za-z0-9._:-]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 120);
 }
 
 async function privatePublicPathRedirectUrl(request: any, requestUrl: string, env = process.env) {
@@ -87,10 +115,14 @@ function requestHostHeader(request: any) {
   return String(request.headers?.["x-forwarded-host"] || request.headers?.host || "");
 }
 
-function originalRequestUrl(request: any, requestUrl: string) {
+function originalRequestOrigin(request: any) {
   const proto = String(request.headers?.["x-forwarded-proto"] || request.protocol || "https").split(",")[0].trim() || "https";
   const host = String(request.headers?.["x-forwarded-host"] || request.headers?.host || "localhost").split(",")[0].trim() || "localhost";
-  return `${proto}://${host}${requestUrl || "/"}`;
+  return `${proto}://${host}`;
+}
+
+function originalRequestUrl(request: any, requestUrl: string) {
+  return `${originalRequestOrigin(request)}${requestUrl || "/"}`;
 }
 
 function serveDesktopSharePage(response: any) {

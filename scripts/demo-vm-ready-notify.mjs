@@ -99,10 +99,11 @@ function pairingSetupUrl(baseOrUrl = "", { returnTo = "/setup", instanceId = "" 
   const base = normalizePublicBaseUrl(baseOrUrl);
   if (!base) return "";
   try {
-    const url = new URL("/setup/pairing", base);
     const normalizedInstanceId = normalizeInstanceId(instanceId);
-    if (normalizedInstanceId) url.searchParams.set("instanceId", normalizedInstanceId);
-    url.searchParams.set("return", clean(returnTo) || "/setup");
+    const path = normalizedInstanceId ? `/i/${encodeURIComponent(normalizedInstanceId)}/setup` : "/setup/pairing";
+    const url = new URL(path, base);
+    const normalizedReturn = clean(returnTo) || "/setup";
+    if (!normalizedInstanceId || normalizedReturn !== "/setup") url.searchParams.set("return", normalizedReturn);
     return url.toString();
   } catch {
     return "";

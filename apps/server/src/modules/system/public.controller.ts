@@ -1,4 +1,4 @@
-import { Body, Controller, HttpCode, Post, Req } from "@nestjs/common";
+import { Body, Controller, Get, HttpCode, Param, Post, Query, Req, Res } from "@nestjs/common";
 import { submitWaitlistEntry } from "../../../../../packages/core/src/user-waitlist.js";
 import { httpError } from "../../common/http.js";
 
@@ -29,5 +29,34 @@ export class PublicController {
       sourceIp: requestIp(request),
       userAgent: String(request?.headers?.["user-agent"] || "").trim(),
     });
+  }
+}
+
+function normalizeInstanceId(value = ""): string {
+  return String(value || "")
+    .trim()
+    .replace(/[^A-Za-z0-9._:-]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 120);
+}
+
+@Controller("i")
+export class InstanceConnectController {
+  @Get(":instanceId/setup")
+  async instanceSetup(
+    @Param("instanceId") rawInstanceId: string,
+    @Query("return") returnTo = "/setup",
+    @Res() response: any,
+  ) {
+    const instanceId = normalizeInstanceId(rawInstanceId);
+    if (!instanceId) throw httpError("instance_id_required", 400);
+    const target = new URL("/setup/pairing", "http://localhost");
+    target.searchParams.set("instanceId", instanceId);
+    target.searchParams.set("return", String(returnTo || "/setup").trim() || "/setup");
+    return response
+      .status(302)
+      .header("cache-control", "no-store")
+      .header("location", `${target.pathname}${target.search}`)
+      .send("Redirecting to Orkestr connect setup.");
   }
 }

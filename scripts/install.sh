@@ -1884,7 +1884,7 @@ write_local_env_file() {
 }
 
 write_runtime_settings_file() {
-  local runtime_settings_file codex_command codex_sandbox codex_approval codex_app_server_mode codex_app_server_socket codex_app_server_service desktop_mode default_desktop gmail_desktop manual_desktop wa_sender wa_responder wa_mode gmail_enabled outlook_enabled
+  local runtime_settings_file codex_command codex_sandbox codex_approval codex_app_server_mode codex_app_server_socket codex_app_server_service desktop_mode default_desktop gmail_desktop manual_desktop desktop_provisioned desktop_enabled wa_sender wa_responder wa_mode gmail_enabled outlook_enabled
   runtime_settings_file="${ORKESTR_RUNTIME_SETTINGS_FILE:-$data_dir/runtime-settings.json}"
   codex_command="${ORKESTR_RUNTIME_CODEX_COMMAND:-$(codex_command_default)}"
   codex_sandbox="${ORKESTR_CODEX_SANDBOX:-$(codex_sandbox_default)}"
@@ -1900,6 +1900,17 @@ write_runtime_settings_file() {
   default_desktop="${ORKESTR_DEFAULT_DESKTOP_SLUG:-desktop}"
   gmail_desktop="${ORKESTR_GMAIL_AUTH_DESKTOP_SLUG:-gmail}"
   manual_desktop="${ORKESTR_MANUAL_INTERVENTION_DESKTOP_SLUG:-desktop}"
+  desktop_provisioned=true
+  case "${ORKESTR_INSTANCE_DESKTOPS_PROVISIONED:-}" in
+    0|false|False|FALSE|no|No|NO|off|Off|OFF|disabled|Disabled|DISABLED) desktop_provisioned=false ;;
+  esac
+  desktop_enabled=true
+  case "$desktop_mode" in
+    disabled|none|off) desktop_enabled=false ;;
+  esac
+  if [ "$desktop_provisioned" = "false" ]; then
+    desktop_enabled=false
+  fi
   wa_sender="${ORKESTR_WHATSAPP_SENDER_ROLE:-sender}"
   wa_responder="${ORKESTR_WHATSAPP_RESPONDER_ROLE:-responder}"
   wa_mode="${WHATSAPP_BRIDGE_MODE:-local}"
@@ -1952,7 +1963,8 @@ EOF
     }
   },
   "desktops": {
-    "enabled": true,
+    "enabled": $desktop_enabled,
+    "provisioned": $desktop_provisioned,
     "mode": $(json_string "$desktop_mode"),
     "default": $(json_string "$default_desktop"),
     "gmailAuth": $(json_string "$gmail_desktop"),

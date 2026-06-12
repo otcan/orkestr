@@ -85,6 +85,21 @@ test("legacy runtime profiles still map to Codex safety settings", async () => {
   assert.equal(settings.codex.permissionPrompts.mirrorToWhatsApp, false);
 });
 
+test("runtime settings mark instance desktops unprovisioned when explicitly disabled", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-runtime-desktops-not-provisioned-"));
+  const env = {
+    ORKESTR_HOME: home,
+    ORKESTR_BROWSER_DESKTOP_MODE: "browserctl",
+    ORKESTR_INSTANCE_DESKTOPS_PROVISIONED: "0",
+  };
+
+  const settings = await readRuntimeSettings(env);
+
+  assert.equal(settings.desktops.enabled, false);
+  assert.equal(settings.desktops.provisioned, false);
+  assert.equal(settings.desktops.mode, "browserctl");
+});
+
 test("approval replies accept slash and natural forms but reject unscoped always approval", () => {
   assert.deepEqual(classifyApprovalReply("/approve"), { action: "approve", scopedAlways: false });
   assert.deepEqual(classifyApprovalReply("approve"), { action: "approve", scopedAlways: false });
