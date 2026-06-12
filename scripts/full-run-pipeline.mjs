@@ -72,6 +72,8 @@ Options:
   --live-k3s                     Run real k3s demo smoke. Requires Docker, Helm, kubectl.
   --vps-aws                      Run AWS VPS smoke.
   --whatsapp-real                Run real WhatsApp e2e. Requires explicit real-WA env/config.
+  --skip-whatsapp-real           Skip real WhatsApp e2e. Not allowed with --deploy-ref unless --allow-release-without-e2e is also set.
+  --allow-release-without-e2e    Explicit emergency bypass for release deploys when real WhatsApp e2e cannot run.
   --deploy-ref REF               Deploy with scripts/deploy-git-release.sh after gates pass.
   --deploy-channel CHANNEL       Deploy channel. Default: full-run.
   --deploy-env-file FILE         ORKESTR_ENV_FILE for deploy.
@@ -95,7 +97,7 @@ export function parseFullRunPipelineArgs(argv = process.argv.slice(2), env = pro
   const runReleaseRegression = hasFlag(argv, "--release-regression") ||
     releaseTargets.length > 0 ||
     Boolean(clean(env.ORKESTR_RELEASE_CHECK_URLS));
-  return {
+  const options = {
     help: hasFlag(argv, "--help") || hasFlag(argv, "-h"),
     plan: hasFlag(argv, "--plan"),
     artifactDir: flagValue(argv, "--artifact-dir", clean(env.ORKESTR_FULL_RUN_ARTIFACT_DIR)),
@@ -112,13 +114,25 @@ export function parseFullRunPipelineArgs(argv = process.argv.slice(2), env = pro
     regressionExpect: flagValue(argv, "--regression-expect"),
     liveK3s: hasFlag(argv, "--live-k3s") || truthy(env.ORKESTR_FULL_RUN_LIVE_K3S),
     vpsAws: hasFlag(argv, "--vps-aws") || truthy(env.ORKESTR_FULL_RUN_VPS_AWS),
-    whatsappReal: hasFlag(argv, "--whatsapp-real") || truthy(env.ORKESTR_FULL_RUN_WHATSAPP_REAL),
+    skipWhatsappReal: hasFlag(argv, "--skip-whatsapp-real") || truthy(env.ORKESTR_FULL_RUN_SKIP_WHATSAPP_REAL),
+    allowReleaseWithoutE2e: hasFlag(argv, "--allow-release-without-e2e") || truthy(env.ORKESTR_FULL_RUN_ALLOW_RELEASE_WITHOUT_E2E),
     deployRef: flagValue(argv, "--deploy-ref"),
     deployChannel: flagValue(argv, "--deploy-channel", "full-run"),
     deployEnvFile: flagValue(argv, "--deploy-env-file"),
     deployAllowInterrupt: hasFlag(argv, "--deploy-allow-interrupt"),
     deployAllInstances: hasFlag(argv, "--deploy-all-instances"),
   };
+  options.whatsappReal = !options.skipWhatsappReal && (
+    hasFlag(argv, "--whatsapp-real") ||
+    truthy(env.ORKESTR_FULL_RUN_WHATSAPP_REAL) ||
+    Boolean(options.deployRef)
+  );
+  options.releaseE2eBypass = Boolean(options.deployRef && options.skipWhatsappReal && options.allowReleaseWithoutE2e);
+  if (options.deployRef && options.skipWhatsappReal && !options.allowReleaseWithoutE2e) {
+    options.invalid = true;
+    options.error = "release_deploy_requires_real_whatsapp_e2e";
+  }
+  return options;
 }
 
 function npmStage(id, script, { enabled = true, env = {}, args = [] } = {}) {
@@ -235,6 +249,11 @@ export async function runFullRunPipeline(options = {}, env = process.env) {
       command: [stage.command, ...stage.args].join(" "),
       env: Object.keys(stage.env || {}).sort(),
     }));
+    await writeSummary(artifactDir, summary);
+    return summary;
+  }
+  if (options.invalid) {
+    summary.error = options.error || "invalid_full_run_pipeline_options";
     await writeSummary(artifactDir, summary);
     return summary;
   }

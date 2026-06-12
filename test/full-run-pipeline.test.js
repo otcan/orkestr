@@ -66,6 +66,44 @@ test("full run pipeline can include launch, regression, live smoke, and deploy g
   assert.equal(stages.find((stage) => stage.id === "deploy").env.ORKESTR_ENV_FILE, "/etc/orkestr/orkestr.env");
 });
 
+test("full run pipeline requires real WhatsApp e2e before release deploys", () => {
+  const options = parseFullRunPipelineArgs([
+    "--deploy-ref",
+    "v0.1.0-alpha.34",
+  ], {});
+  const ids = stageIds(options);
+
+  assert.equal(options.whatsappReal, true);
+  assert.equal(options.invalid, undefined);
+  assert.ok(ids.indexOf("whatsapp-real") < ids.indexOf("deploy"));
+});
+
+test("full run pipeline blocks release deploys when real WhatsApp e2e is skipped without bypass", () => {
+  const options = parseFullRunPipelineArgs([
+    "--deploy-ref",
+    "v0.1.0-alpha.34",
+    "--skip-whatsapp-real",
+  ], {});
+
+  assert.equal(options.invalid, true);
+  assert.equal(options.error, "release_deploy_requires_real_whatsapp_e2e");
+});
+
+test("full run pipeline allows an explicit emergency release e2e bypass", () => {
+  const options = parseFullRunPipelineArgs([
+    "--deploy-ref",
+    "v0.1.0-alpha.34",
+    "--skip-whatsapp-real",
+    "--allow-release-without-e2e",
+  ], {});
+  const ids = stageIds(options);
+
+  assert.equal(options.invalid, undefined);
+  assert.equal(options.releaseE2eBypass, true);
+  assert.equal(ids.includes("whatsapp-real"), false);
+  assert.equal(ids.includes("deploy"), true);
+});
+
 test("full run pipeline CLI prints an inspectable plan", async () => {
   const { stdout } = await execFile(process.execPath, ["scripts/full-run-pipeline.mjs", "--plan", "--artifact-dir", ".orkestr/test-full-run-plan"], {
     env: { ...process.env, ORKESTR_FULL_RUN_RELEASE_TARGETS: "" },

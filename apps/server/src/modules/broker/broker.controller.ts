@@ -26,7 +26,12 @@ export class BrokerController {
   @Post("instances/register")
   @HttpCode(200)
   async registerInstance(@Req() request: any, @Body() body: Record<string, unknown> = {}) {
-    return brokerCall(() => registerBrokerInstance({ body, request, env: process.env }));
+    return brokerCall(() => registerBrokerInstance({
+      body,
+      request,
+      env: process.env,
+      trustedAdmin: isAdminPrincipal(requestPrincipal(request)),
+    }));
   }
 
   @Post("instances/:instanceId/heartbeat")

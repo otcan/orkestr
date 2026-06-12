@@ -316,7 +316,10 @@ npm run pipeline:full
 `pipeline:full` runs the local release gate: build, full CI tests, OSS boundary
 check, demo/k3s contracts, VM demo smoke, app smoke, and the coding-agent demo.
 Use `npm run pipeline:full -- --plan` to inspect the exact stages. Live k3s,
-AWS VPS, real WhatsApp, release regression, and deploy steps are opt-in flags.
+AWS VPS, release regression, and deploy steps are opt-in flags. Real WhatsApp
+E2E is opt-in for local-only runs, but it is required automatically when
+`pipeline:full` is asked to deploy with `--deploy-ref`; use
+`--allow-release-without-e2e` only as an explicit emergency bypass.
 
 When changing the UI, run `npm run web:build` and commit the updated `dist/web`
 bundle.

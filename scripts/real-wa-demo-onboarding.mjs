@@ -104,12 +104,48 @@ function apiEnv(options) {
   };
 }
 
+function sameOrigin(left = "", right = "") {
+  try {
+    return new URL(clean(left)).origin === new URL(clean(right)).origin;
+  } catch {
+    return false;
+  }
+}
+
 async function api(options, route, request = {}) {
   return requestJson(route, {
     ...request,
     baseUrl: options.apiBase,
     env: apiEnv(options),
   });
+}
+
+function authenticatedFetchForApi(options) {
+  return async (url, request = {}) => {
+    const parsed = new URL(String(url));
+    if (!sameOrigin(parsed.href, options.apiBase)) return fetch(url, request);
+    try {
+      const payload = await api(options, `${parsed.pathname}${parsed.search}`, {
+        method: request.method || "GET",
+        body: request.body ? JSON.parse(String(request.body)) : undefined,
+      });
+      return {
+        ok: true,
+        status: 200,
+        async json() {
+          return payload;
+        },
+      };
+    } catch (error) {
+      return {
+        ok: false,
+        status: Number(error?.statusCode || error?.payload?.statusCode || 500),
+        async json() {
+          return error?.payload || { ok: false, error: clean(error?.message || String(error)) };
+        },
+      };
+    }
+  };
 }
 
 function historyRoute(accountId, chatId, limit = 80) {
@@ -217,6 +253,8 @@ export async function runRealWhatsAppDemoOnboarding(options) {
     ...apiEnv(options),
     ...(options.setupUrl ? { ORKESTR_DEMO_PUBLIC_SETUP_URL: options.setupUrl } : {}),
     ORKESTR_BROKER_FORCE_REREGISTER: "1",
+  }, {
+    fetchImpl: authenticatedFetchForApi(options),
   });
   if (!setup.ok || !setup.setupUrl) throw new Error(setup.reason || "public_setup_url_unavailable");
   const text = readyMessage({ setupUrl: setup.setupUrl });

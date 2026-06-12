@@ -103,6 +103,36 @@ test("broker registration rejects missing token and enforces use/rate limits", a
   );
 });
 
+test("broker registration allows authenticated admin callers without exposing registration token", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-broker-admin-register-"));
+  const firstClient = __brokerInstanceRegistryTestInternals.createX25519Identity();
+  const secondClient = __brokerInstanceRegistryTestInternals.createX25519Identity();
+  const env = {
+    ORKESTR_HOME: home,
+    ORKESTR_BROKER_REGISTRATION_TOKEN: "register-secret",
+    ORKESTR_BROKER_REGISTRATION_TOKEN_MAX_USES: "1",
+  };
+
+  const first = await registerBrokerInstance({
+    env,
+    trustedAdmin: true,
+    request: request(),
+    body: { encryptionPublicKey: firstClient.publicKey, displayName: "admin-local-1" },
+  });
+  const second = await registerBrokerInstance({
+    env,
+    trustedAdmin: true,
+    request: request({ "x-forwarded-for": "198.51.100.11" }),
+    body: { encryptionPublicKey: secondClient.publicKey, displayName: "admin-local-2" },
+  });
+  const instances = await listBrokerInstances(env);
+
+  assert.equal(first.ok, true);
+  assert.equal(second.ok, true);
+  assert.equal(instances.instances.length, 2);
+  assert.deepEqual(instances.instances.map((instance) => instance.displayName), ["admin-local-1", "admin-local-2"]);
+});
+
 test("broker heartbeat requires encrypted channel payload", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-broker-heartbeat-"));
   const client = __brokerInstanceRegistryTestInternals.createX25519Identity();

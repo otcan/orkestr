@@ -142,6 +142,10 @@ The release train owns tests. Run the checks appropriate to the changed surface:
 - full release-facing run with protected/public target checks:
   `npm run pipeline:full -- --release-regression-target
   local=http://127.0.0.1:$ORKESTR_PORT --allow-auth-blocked`
+- release deploys: `npm run pipeline:full -- --deploy-ref <ref>`; this runs
+  real WhatsApp E2E before deployment. `--skip-whatsapp-real` is blocked for
+  deploys unless paired with the explicit emergency bypass
+  `--allow-release-without-e2e`.
 - attended real WhatsApp/OAuth/desktop/timer checks:
   `npm run e2e:whatsapp-real -- --execute --thread <thread-id> --chat-id <chat-id>`.
   See `docs/real-whatsapp-e2e.md`; this sends real WhatsApp messages and must

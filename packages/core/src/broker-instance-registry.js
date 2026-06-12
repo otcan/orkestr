@@ -188,7 +188,8 @@ function allowedTokenHashes(env = process.env) {
   return hashes;
 }
 
-function assertRegistrationToken({ body = {}, request = {}, env = process.env } = {}) {
+function assertRegistrationToken({ body = {}, request = {}, env = process.env, trustedAdmin = false } = {}) {
+  if (trustedAdmin) return { tokenHash: "authenticated-admin", open: false, trustedAdmin: true };
   const open = truthy(env.ORKESTR_BROKER_REGISTRATION_OPEN);
   const token = registrationTokenFromRequest(body, request);
   const tokenHash = token ? sha256(token) : "";
@@ -209,7 +210,7 @@ function assertLimits(registry, { tokenHash, ip, env = process.env } = {}) {
 
   const tokenMaxUses = numberEnv(env.ORKESTR_BROKER_REGISTRATION_TOKEN_MAX_USES, DEFAULT_TOKEN_MAX_USES, 1);
   const tokenUses = registry.instances.filter((instance) => instance.registrationTokenHash === tokenHash).length;
-  if (tokenHash && tokenUses >= tokenMaxUses) {
+  if (tokenHash && tokenHash !== "authenticated-admin" && tokenUses >= tokenMaxUses) {
     throw Object.assign(new Error("broker_registration_token_use_limit"), { statusCode: 429 });
   }
 
@@ -236,8 +237,8 @@ function instanceResponse(record, brokerChannel, encryptedWelcome) {
   };
 }
 
-export async function registerBrokerInstance({ body = {}, request = {}, env = process.env } = {}) {
-  const token = assertRegistrationToken({ body, request, env });
+export async function registerBrokerInstance({ body = {}, request = {}, env = process.env, trustedAdmin = false } = {}) {
+  const token = assertRegistrationToken({ body, request, env, trustedAdmin });
   const encryptionPublicKey = clean(body.encryptionPublicKey || body.publicKey);
   parsePublicKey(encryptionPublicKey);
   const ip = requestIp(request);
