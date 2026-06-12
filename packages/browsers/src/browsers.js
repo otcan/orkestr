@@ -23,6 +23,41 @@ function desktopMode(env = process.env) {
   return "profiles";
 }
 
+function boolEnv(value, fallback = null) {
+  const normalized = String(value || "").trim().toLowerCase();
+  if (!normalized) return fallback;
+  if (["1", "true", "yes", "on", "enabled"].includes(normalized)) return true;
+  if (["0", "false", "no", "off", "disabled"].includes(normalized)) return false;
+  return fallback;
+}
+
+function desktopUnavailableState(env = process.env) {
+  const mode = desktopMode(env);
+  if (["disabled", "none", "off"].includes(mode)) {
+    return {
+      error: "instance_desktops_disabled",
+      message: "Managed Desktop is disabled for this Orkestr instance.",
+    };
+  }
+  if (boolEnv(env.ORKESTR_INSTANCE_DESKTOPS_PROVISIONED, null) === false) {
+    return {
+      error: "instance_desktops_not_provisioned",
+      message: "Managed Desktop is not provisioned for this Orkestr instance yet.",
+    };
+  }
+  return null;
+}
+
+function desktopUnavailableError(env = process.env) {
+  const state = desktopUnavailableState(env);
+  if (!state) return null;
+  const error = new Error(state.error);
+  error.statusCode = state.error === "instance_desktops_disabled" ? 403 : 409;
+  error.message = state.error;
+  error.publicMessage = state.message;
+  return error;
+}
+
 function profileFallbackAllowed(env = process.env) {
   const configured = String(env.ORKESTR_BROWSER_PROFILE_FALLBACK || "").trim().toLowerCase();
   if (["1", "true", "yes"].includes(configured)) return true;
@@ -60,6 +95,15 @@ function normalizeBrowserOpenUrl(value) {
 }
 
 export async function listBrowserSessions(env = process.env, options = {}) {
+  const unavailable = desktopUnavailableState(env);
+  if (unavailable) {
+    return {
+      ok: false,
+      source: "instance",
+      sessions: [],
+      ...unavailable,
+    };
+  }
   if (desktopMode(env) !== "profiles") {
     try {
       const payload = await listManagedDesktopSessions(env, options);
@@ -322,6 +366,8 @@ export async function listVirtualBrowsers(env = process.env, options = {}) {
 }
 
 export async function prepareVirtualBrowser(slug, env = process.env, options = {}) {
+  const unavailable = desktopUnavailableError(env);
+  if (unavailable) throw unavailable;
   if (desktopMode(env) !== "profiles") {
     try {
       return await managedDesktopAction(slug, "prepare", env, options);
@@ -355,6 +401,8 @@ export async function prepareVirtualBrowser(slug, env = process.env, options = {
 }
 
 export async function openVirtualBrowser(slug, env = process.env, targetUrl = "", options = {}) {
+  const unavailable = desktopUnavailableError(env);
+  if (unavailable) throw unavailable;
   if (desktopMode(env) !== "profiles") {
     try {
       return await managedDesktopAction(slug, "start", env, options);
@@ -424,6 +472,8 @@ export async function openVirtualBrowser(slug, env = process.env, targetUrl = ""
 
 export async function openUrlInVirtualBrowser(slug, url, env = process.env, options = {}) {
   const targetUrl = normalizeBrowserOpenUrl(url);
+  const unavailable = desktopUnavailableError(env);
+  if (unavailable) throw unavailable;
   if (desktopMode(env) !== "profiles") {
     try {
       return await managedDesktopOpenUrl(slug, targetUrl, env, options);
@@ -439,6 +489,8 @@ export async function openUrlInVirtualBrowser(slug, url, env = process.env, opti
 }
 
 export async function stopVirtualBrowser(slug, env = process.env, options = {}) {
+  const unavailable = desktopUnavailableError(env);
+  if (unavailable) throw unavailable;
   if (desktopMode(env) !== "profiles") {
     try {
       return await managedDesktopAction(slug, "stop", env, options);
@@ -486,6 +538,8 @@ export async function stopVirtualBrowser(slug, env = process.env, options = {}) 
 }
 
 export async function restartVirtualBrowser(slug, env = process.env, options = {}) {
+  const unavailable = desktopUnavailableError(env);
+  if (unavailable) throw unavailable;
   if (desktopMode(env) !== "profiles") {
     try {
       return await managedDesktopAction(slug, "restart", env, options);
@@ -498,6 +552,8 @@ export async function restartVirtualBrowser(slug, env = process.env, options = {
 }
 
 export async function cleanupVirtualBrowser(slug, env = process.env, options = {}) {
+  const unavailable = desktopUnavailableError(env);
+  if (unavailable) throw unavailable;
   if (desktopMode(env) !== "profiles") {
     try {
       return await managedDesktopAction(slug, "cleanup", env, options);

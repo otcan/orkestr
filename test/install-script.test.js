@@ -158,6 +158,9 @@ test("install script exposes a host-native systemd VPS path", async () => {
   assert.match(script, /ORKESTR_MANUAL_INTERVENTION_DESKTOP_SLUG/);
   assert.match(script, /ORKESTR_BROWSER_DESKTOP_MODE=\$desktop_mode/);
   assert.match(script, /ORKESTR_BROWSERCTL_PATH=\$browserctl_path/);
+  assert.match(script, /ORKESTR_INSTANCE_DESKTOPS_PROVISIONED/);
+  assert.match(script, /"provisioned": \$desktop_provisioned/);
+  assert.match(script, /"enabled": \$desktop_enabled/);
   assert.match(script, /desktop_mode="\$\{ORKESTR_BROWSER_DESKTOP_MODE:-browserctl\}"/);
   assert.match(script, /browserctl_path="\$\{ORKESTR_BROWSERCTL_PATH:-\/usr\/local\/bin\/orkestr-browserctl\}"/);
   assert.match(script, /set_env_assignment ORKESTR_BROWSER_DESKTOP_MODE "\$desktop_mode"/);

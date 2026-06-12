@@ -92,6 +92,7 @@ test("server serves the public site at root and Angular UI at app routes", async
     const onboardingHtml = await onboardingResponse.text();
     const setupGmailResponse = await fetch(`http://127.0.0.1:${port}/setup/gmail`);
     const setupGoogleMarketingResponse = await fetch(`http://127.0.0.1:${port}/setup/google-marketing`);
+    const instanceSetupResponse = await fetch(`http://127.0.0.1:${port}/i/demo-vm-001/setup`, { redirect: "manual" });
     const workflowOnboardingResponse = await fetch(`http://127.0.0.1:${port}/onboarding`);
     const legacyOnboardingResponse = await fetch(`http://127.0.0.1:${port}/ng/onboarding`);
     const opsResponse = await fetch(`http://127.0.0.1:${port}/ops`);
@@ -129,6 +130,8 @@ test("server serves the public site at root and Angular UI at app routes", async
     assertAngularShell(onboardingHtml);
     assert.equal(setupGmailResponse.status, 200);
     assert.equal(setupGoogleMarketingResponse.status, 200);
+    assert.equal(instanceSetupResponse.status, 302);
+    assert.equal(instanceSetupResponse.headers.get("location"), "/setup/pairing?instanceId=demo-vm-001&return=%2Fsetup");
     assert.equal(workflowOnboardingResponse.status, 200);
     assert.equal(legacyOnboardingResponse.status, 200);
     assert.equal(opsResponse.status, 200);

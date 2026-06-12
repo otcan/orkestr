@@ -65,11 +65,14 @@ function defaultCodexSettings(env = process.env) {
 
 function defaultDesktopSettings(env = process.env) {
   const launchDisabled = truthy(env.ORKESTR_BROWSER_LAUNCH_DISABLED);
+  const provisioned = clean(env.ORKESTR_INSTANCE_DESKTOPS_PROVISIONED).toLowerCase();
+  const explicitlyNotProvisioned = ["0", "false", "no", "off", "disabled"].includes(provisioned);
   const mode = firstValue(env.ORKESTR_BROWSER_DESKTOP_MODE) || (launchDisabled ? "disabled" : "profiles");
   const defaultSlug = firstValue(env.ORKESTR_DEFAULT_DESKTOP_SLUG, env.ORKESTR_MANUAL_INTERVENTION_DESKTOP_SLUG) || "desktop";
   const gmailSlug = firstValue(env.ORKESTR_GMAIL_AUTH_DESKTOP_SLUG, env.ORKESTR_GOOGLE_AUTH_DESKTOP_SLUG) || "gmail";
   return {
-    enabled: mode !== "disabled",
+    enabled: mode !== "disabled" && !explicitlyNotProvisioned,
+    provisioned: !explicitlyNotProvisioned,
     mode,
     default: defaultSlug,
     gmailAuth: gmailSlug,

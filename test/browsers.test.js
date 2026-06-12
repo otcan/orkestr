@@ -85,6 +85,56 @@ test("visible browser slugs can limit the ops desktop list", async () => {
   assert.equal(payload.sessions[0].configured, true);
 });
 
+test("instance desktop provisioning gate prevents ambient browserctl discovery", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-browserctl-not-provisioned-"));
+  const browserctl = path.join(home, "browserctl.js");
+  await fs.writeFile(browserctl, `#!/usr/bin/env node
+console.log(JSON.stringify({ ok: true, sessions: [{
+  slug: "pa",
+  label: "Production PA Desktop",
+  status: "running",
+  desk_url: "https://pa.desk.ops.example.test/"
+}] }));
+`);
+  await fs.chmod(browserctl, 0o755);
+  const env = {
+    ORKESTR_HOME: home,
+    ORKESTR_BROWSER_DESKTOP_MODE: "browserctl",
+    ORKESTR_BROWSERCTL_PATH: browserctl,
+    ORKESTR_INSTANCE_DESKTOPS_PROVISIONED: "0",
+  };
+
+  const payload = await listBrowserSessions(env);
+  await assert.rejects(
+    () => openVirtualBrowser("pa", env),
+    /instance_desktops_not_provisioned/,
+  );
+
+  assert.equal(payload.ok, false);
+  assert.equal(payload.source, "instance");
+  assert.equal(payload.error, "instance_desktops_not_provisioned");
+  assert.deepEqual(payload.sessions, []);
+});
+
+test("disabled desktop mode reports no instance desktops", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-browsers-disabled-"));
+  const env = {
+    ORKESTR_HOME: home,
+    ORKESTR_BROWSER_DESKTOP_MODE: "disabled",
+  };
+
+  const payload = await listBrowserSessions(env);
+  await assert.rejects(
+    () => prepareVirtualBrowser("desktop", env),
+    /instance_desktops_disabled/,
+  );
+
+  assert.equal(payload.ok, false);
+  assert.equal(payload.source, "instance");
+  assert.equal(payload.error, "instance_desktops_disabled");
+  assert.deepEqual(payload.sessions, []);
+});
+
 test("profile desktops are isolated per non-admin user", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-user-browsers-"));
   const env = { ORKESTR_HOME: home, ORKESTR_BROWSER_LAUNCH_DISABLED: "1", ORKESTR_BROWSER_DESKTOP_MODE: "profiles" };

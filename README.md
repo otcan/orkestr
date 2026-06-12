@@ -66,12 +66,11 @@ through the pre-provisioned relay bridge. Before creating the setup link, the VM
 registers with the Orkestr broker through `POST /api/broker/instances/register`
 and receives a broker-generated UUID plus encrypted channel bootstrap material.
 Configure a stable public base URL such as `https://connect.orkestr.de`; Orkestr
-sends a challenge-gated `/setup/pairing?instanceId=<broker-uuid>&return=/setup`
-link on that host. That page creates a browser-pairing challenge before setup
-opens. The broker UUID is also stored on the challenge so operators and brokers
-can distinguish many VMs using one public domain. The setup flow then lets you
-connect Codex, keep the Orkestr relay or switch to your own WhatsApp relay, and
-start the default `orkest` thread.
+sends a challenge-gated `/i/<broker-uuid>/setup` link on that host. That path is
+the instance identity boundary: it redirects into browser pairing with the
+broker UUID attached before setup opens. The setup flow then lets you connect
+Codex, keep the Orkestr relay or switch to your own WhatsApp relay, and start
+the default `orkest` thread.
 
 Relay operators can pre-provision these values in the VM image, Helm release, or
 secret manager so evaluators only edit the WhatsApp number:
@@ -90,7 +89,7 @@ Optional URL overrides:
 ORKESTR_CONNECT_PUBLIC_BASE_URL="https://connect.orkestr.de"
 
 # Or provide an exact public setup/pairing URL without an instanceId.
-# The notifier adds instanceId=<broker-uuid> after registration.
+# Exact overrides remain supported; the notifier adds instanceId=<broker-uuid>.
 ORKESTR_CONNECT_PUBLIC_SETUP_URL="https://connect.orkestr.de/setup/pairing?return=%2Fsetup"
 ```
 

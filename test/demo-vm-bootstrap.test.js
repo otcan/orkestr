@@ -96,7 +96,7 @@ test("demo VM notifier sends one relay readiness message and seeds relay setting
     assert.match(body.text, /Orkestr connect setup is ready/);
     assert.match(body.text, /challenge-gated connect link/);
     assert.match(body.text, /complete Codex login\/sign-in/i);
-    assert.match(body.text, new RegExp(`https://connect\\.orkestr\\.de/setup/pairing\\?instanceId=${BROKER_UUID}&return=%2Fsetup`));
+    assert.match(body.text, new RegExp(`https://connect\\.orkestr\\.de/i/${BROKER_UUID}/setup`));
     assert.doesNotMatch(body.text, /orkestr-ui/);
     assert.doesNotMatch(body.text, /127\.0\.0\.1|localhost/);
     assert.match(body.text, /Start the orkest thread/);
@@ -124,7 +124,7 @@ test("demo VM notifier sends one relay readiness message and seeds relay setting
   assert.equal(connectorConfig.apiToken, "relay-secret");
   assert.equal(state.sent, true);
   assert.equal(state.state, "sent");
-  assert.equal(state.setupUrl, `https://connect.orkestr.de/setup/pairing?instanceId=${BROKER_UUID}&return=%2Fsetup`);
+  assert.equal(state.setupUrl, `https://connect.orkestr.de/i/${BROKER_UUID}/setup`);
   assert.equal(state.setupUrlSource, "public_base_url");
   assert.equal(state.instanceId, BROKER_UUID);
   assert.equal(state.targetKey.length, 64);
@@ -152,7 +152,7 @@ test("demo VM notifier can use Cloudflare quick tunnel only as explicit fallback
       return response({ ok: true, ready: true, accounts: [{ id: "responder", ready: true, state: "ready" }] });
     }
     const body = JSON.parse(options.body);
-    assert.match(body.text, new RegExp(`https://demo-onboarding\\.trycloudflare\\.com/setup/pairing\\?instanceId=${BROKER_UUID}&return=%2Fsetup`));
+    assert.match(body.text, new RegExp(`https://demo-onboarding\\.trycloudflare\\.com/i/${BROKER_UUID}/setup`));
     return response({ ok: true, sent: [{ id: "sent-demo-ready" }] });
   };
 
@@ -186,7 +186,7 @@ test("demo VM notifier keeps legacy demo public URL env compatibility", async ()
     if (url.pathname === "/api/broker/instances/register") return response(brokerRegistrationPayload());
     if (url.pathname.endsWith("/health")) return response({ ok: true, ready: true, accounts: [{ id: "responder", ready: true, state: "ready" }] });
     const body = JSON.parse(options.body);
-    assert.match(body.text, new RegExp(`https://legacy-demo\\.example\\.test/setup/pairing\\?instanceId=${BROKER_UUID}&return=%2Fsetup`));
+    assert.match(body.text, new RegExp(`https://legacy-demo\\.example\\.test/i/${BROKER_UUID}/setup`));
     return response({ ok: true, sent: [{ id: "sent-demo-ready" }] });
   };
 
@@ -220,7 +220,7 @@ test("demo VM notifier blocks without a pre-provisioned relay URL but keeps star
   assert.equal(settings.connectors.whatsapp.accessMode, "relay");
   assert.equal(state.sent, false);
   assert.equal(state.reason, "relay_bridge_url_missing");
-  assert.equal(state.setupUrl, `https://demo-public.example.test/setup/pairing?instanceId=${BROKER_UUID}&return=%2Fsetup`);
+  assert.equal(state.setupUrl, `https://demo-public.example.test/i/${BROKER_UUID}/setup`);
   assert.equal(state.instanceId, BROKER_UUID);
 });
 
@@ -330,5 +330,5 @@ test("demo VM contract is private, WhatsApp-number driven, and part of smoke scr
   assert.match(readme, /ORKESTR_CONNECT_PUBLIC_BASE_URL/);
   assert.match(readme, /https:\/\/connect\.orkestr\.de/);
   assert.match(readme, /Cloudflare quick tunnel fallback/);
-  assert.match(readme, /browser-pairing\s+challenge/);
+  assert.match(readme, /browser pairing/);
 });
