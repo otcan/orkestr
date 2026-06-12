@@ -37,9 +37,7 @@ function defaultForbiddenNames() {
 
 function defaultForbiddenRoots() {
   return [
-    "/home/openclaw/.orkestr-production",
     "/opt/orkestr/workspace",
-    "/home/openclaw/.openclaw",
   ];
 }
 
