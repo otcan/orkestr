@@ -2562,6 +2562,11 @@ function deliveryAttempt(message) {
   return Math.max(0, Number(message?.deliveryAttempt || 0) || 0);
 }
 
+function stalePendingInputRecoveryMs(env = process.env) {
+  const parsed = Number(env.ORKESTR_STALE_PENDING_INPUT_RECOVERY_MS ?? env.ORKESTR_ROUTER_DOCTOR_STALE_QUEUE_MS ?? 60_000);
+  return Number.isFinite(parsed) ? Math.max(15_000, parsed) : 60_000;
+}
+
 function deliveryAckWaitMs(env = process.env) {
   return Math.max(0, Number(env.ORKESTR_DELIVERY_ACK_WAIT_MS ?? 2500) || 0);
 }
@@ -4522,6 +4527,102 @@ export async function drainAllPendingThreadInputs(env = process.env) {
     if (messages.some((message) => message.role === "user" && pendingInputStates.has(message.state))) {
       results.push({ threadId: thread.id, delivered: await deliverPendingThreadInputs(thread.id, env, { processApiAgent: true }) });
     }
+  }
+  return results;
+}
+
+const staleReadyRuntimeDeliveryStates = new Set([
+  "interrupting",
+  "waiting_runtime_start",
+  "waiting_runtime_ready",
+  "awaiting_runtime_completion",
+  "awaiting_ack_unobserved",
+  "retrying_delivery",
+  "waking",
+]);
+
+function stalePendingInputAgeMs(message = {}) {
+  const nextAttemptMs = timestampMs(message.deliveryNextAttemptAt);
+  if (nextAttemptMs && nextAttemptMs > Date.now()) return 0;
+  const queuedMs = messageTimeMs(message) || timestampMs(message.updatedAt);
+  return queuedMs ? Math.max(0, Date.now() - queuedMs) : 0;
+}
+
+function runtimeReadyForPendingRecovery(status = {}) {
+  if (!status?.paneId) return false;
+  if (status.working === true || status.foregroundWorking === true || status.backgroundWork === true) return false;
+  if (status.frozen === true || status.state === "frozen") return false;
+  return status.promptReady === true || status.state === "ready";
+}
+
+function stalePendingRecoveryCandidate(message = {}, staleMs = 60_000) {
+  if (message.role !== "user" || !pendingInputStates.has(String(message.state || ""))) return false;
+  if (stalePendingInputAgeMs(message) < staleMs) return false;
+  const deliveryState = String(message.deliveryState || "").trim();
+  if (!deliveryState) return true;
+  return staleReadyRuntimeDeliveryStates.has(deliveryState);
+}
+
+async function recoverStalePendingInputForReadyRuntime(thread, message, status, env = process.env) {
+  const previousState = String(message.state || "");
+  const previousDeliveryState = String(message.deliveryState || "");
+  const patch = {
+    state: "queued",
+    deliveryState: "retrying_stale_ready_runtime",
+    deliveryNextAttemptAt: null,
+    error: null,
+  };
+  if (message.forceDeliveryAfterInterrupt === true || previousDeliveryState === "interrupting") {
+    patch.forceDeliveryAfterInterrupt = false;
+  }
+  const updated = await updateThreadMessage(thread.id, message.id, patch, env);
+  markConnectorDeliverySignal(updated || message);
+  await appendEvent({
+    type: "thread_input_stale_pending_recovered",
+    threadId: thread.id,
+    messageId: message.id,
+    previousState,
+    previousDeliveryState,
+    paneId: status.paneId,
+    runtimeState: status.state || null,
+  }, env).catch(() => {});
+  const delivered = await deliverPendingThreadInputs(thread.id, env, { processApiAgent: true });
+  return {
+    threadId: thread.id,
+    messageId: message.id,
+    previousState,
+    previousDeliveryState,
+    delivered,
+  };
+}
+
+export async function recoverStalePendingThreadInputs(env = process.env, options = {}) {
+  const staleMs = Number.isFinite(Number(options.staleMs))
+    ? Math.max(0, Number(options.staleMs))
+    : stalePendingInputRecoveryMs(env);
+  const threads = await listThreads(env);
+  const results = [];
+  for (const thread of threads) {
+    const messages = await listThreadMessages(thread.id, env).catch(() => []);
+    const active = messages
+      .filter((message) => message.role === "user" && pendingInputStates.has(String(message.state || "")))
+      .sort((left, right) => {
+        const leftCursor = messageCursor(left);
+        const rightCursor = messageCursor(right);
+        if (leftCursor || rightCursor) return leftCursor - rightCursor;
+        return messageTimeMs(left) - messageTimeMs(right);
+      });
+    if (!active.length) continue;
+    const candidate = active.find((message) => stalePendingRecoveryCandidate(message, staleMs));
+    if (!candidate) continue;
+    const status = await runtimeStatus(thread.id, env, messages, { passiveTmuxCache: true }).catch(() => null);
+    if (!runtimeReadyForPendingRecovery(status)) continue;
+    results.push(await recoverStalePendingInputForReadyRuntime(thread, candidate, status, env).catch((error) => ({
+      threadId: thread.id,
+      messageId: candidate.id,
+      recovered: false,
+      error: error?.message || String(error),
+    })));
   }
   return results;
 }

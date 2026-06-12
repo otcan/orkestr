@@ -9,7 +9,7 @@ import { promisify } from "node:util";
 import { startServer } from "../apps/server/src/server.js";
 import { resetThreadSummaryCachesForTest, threadRuntimeSummary, threadSummaryPayload, threadSummaryRuntimeSnapshot } from "../apps/server/src/thread-summary.ts";
 import { runNextThreadMessage } from "../packages/core/src/executors.js";
-import { applyRuntimeCodexMode, consumeThreadConnectorDeliverySignalCount, deliverPendingThreadInputs, doctorRuntimeResources, drainAllPendingThreadInputs, hardResetThreadRuntime, listRuntimeLeases, resetThreadRuntime, resolveCodexThreadMetadata, runtimeStatus, setThreadConnectorDeliverySignalHandler, sleepThread, syncRuntimeLeases, syncRuntimeWindowName, takeoverRawTerminalThread, wakeThread } from "../packages/core/src/runtime-leases.js";
+import { applyRuntimeCodexMode, consumeThreadConnectorDeliverySignalCount, deliverPendingThreadInputs, doctorRuntimeResources, drainAllPendingThreadInputs, hardResetThreadRuntime, listRuntimeLeases, recoverStalePendingThreadInputs, resetThreadRuntime, resolveCodexThreadMetadata, runtimeStatus, setThreadConnectorDeliverySignalHandler, sleepThread, syncRuntimeLeases, syncRuntimeWindowName, takeoverRawTerminalThread, wakeThread } from "../packages/core/src/runtime-leases.js";
 import { ensureDataDirs } from "../packages/storage/src/paths.js";
 import { parseThreadInputCommand } from "../packages/core/src/thread-commands.js";
 import { createPairingChallenge, getPairingChallenge } from "../packages/core/src/security.js";
@@ -2098,6 +2098,89 @@ test("forced interrupt input stays interrupting while Codex remains busy", async
     assert.equal(Date.parse(updated.deliveryNextAttemptAt) > Date.now(), true);
     assert.match(log, /__CALL__\tsend-keys\t-t\t%42\tEscape/);
     assert.match(log, /__CALL__\tsend-keys\t-t\t%42\tC-c/);
+  } finally {
+    restoreEnvValue("PATH", priorPath);
+    restoreEnvValue("TMUX_LOG", priorTmuxLog);
+    restoreEnvValue("TMUX_STATE", priorTmuxState);
+    restoreEnvValue("TMUX_CAPTURE_FILE", priorCaptureFile);
+  }
+});
+
+test("stale interrupting input is retried when the runtime is prompt-ready", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-stale-interrupt-ready-"));
+  const fakeTmux = await createFakeTmux(home);
+  const captureFile = path.join(home, "pane.txt");
+  const priorPath = process.env.PATH;
+  const priorTmuxLog = process.env.TMUX_LOG;
+  const priorTmuxState = process.env.TMUX_STATE;
+  const priorCaptureFile = process.env.TMUX_CAPTURE_FILE;
+  process.env.PATH = `${fakeTmux.bin}:${priorPath || ""}`;
+  process.env.TMUX_LOG = fakeTmux.log;
+  process.env.TMUX_STATE = fakeTmux.state;
+  process.env.TMUX_CAPTURE_FILE = captureFile;
+
+  try {
+    await fs.writeFile(captureFile, "\u203a \n\ngpt-5.5 high · /workspace/demo\n", "utf8");
+    const old = new Date(Date.now() - 120_000).toISOString();
+    const env = {
+      ORKESTR_HOME: path.join(home, "orkestr-home"),
+      HOME: path.join(home, "runtime-home"),
+      CODEX_HOME: path.join(home, "codex-home"),
+      PATH: process.env.PATH,
+      TMUX_LOG: fakeTmux.log,
+      TMUX_STATE: fakeTmux.state,
+      TMUX_CAPTURE_FILE: captureFile,
+      ORKESTR_DELIVERY_ACK_WAIT_MS: "0",
+      ORKESTR_DELIVERY_ACK_BACKOFF_MS: "10000",
+      ORKESTR_RUNTIME_SUBMIT_DELAY_MS: "0",
+    };
+    await createThread({ id: "stale-interrupt-ready-thread", name: "Stale Interrupt Ready Thread" }, env);
+    await wakeThread("stale-interrupt-ready-thread", { reason: "test" }, env);
+    const stale = await appendThreadMessage("stale-interrupt-ready-thread", {
+      role: "user",
+      source: "whatsapp_inbound",
+      connector: "whatsapp",
+      chatId: "chat-stale-interrupt-ready",
+      from: "owner",
+      text: "i need complete isolation",
+      state: "queued",
+      deliveryState: "interrupting",
+      observedVia: "orkestr_interrupt_command",
+      interruptSent: true,
+      forceDeliveryAfterInterrupt: true,
+      deliveryNextAttemptAt: old,
+      createdAt: old,
+    }, env);
+    const newer = await appendThreadMessage("stale-interrupt-ready-thread", {
+      role: "user",
+      source: "whatsapp_inbound",
+      connector: "whatsapp",
+      chatId: "chat-stale-interrupt-ready",
+      from: "owner",
+      text: "no. Stop.\n\nThe instance should be isolated. Why was it not?",
+      state: "queued",
+    }, env);
+    await updateThreadMessage("stale-interrupt-ready-thread", stale.id, {
+      deliveryState: "interrupting",
+    }, env);
+
+    const recovered = await recoverStalePendingThreadInputs(env, { staleMs: 0 });
+    const messages = await listThreadMessages("stale-interrupt-ready-thread", env);
+    const staleAfter = messages.find((message) => message.id === stale.id);
+    const newerAfter = messages.find((message) => message.id === newer.id);
+    const log = await fs.readFile(fakeTmux.log, "utf8");
+    const events = await fs.readFile(path.join(env.ORKESTR_HOME, "events.jsonl"), "utf8");
+
+    assert.equal(recovered.length, 1);
+    assert.equal(recovered[0].messageId, stale.id);
+    assert.equal(staleAfter.state, "awaiting_ack");
+    assert.equal(staleAfter.deliveryState, "awaiting_ack");
+    assert.equal(staleAfter.forceDeliveryAfterInterrupt, false);
+    assert.equal(staleAfter.deliveryPaneId, "%42");
+    assert.equal(newerAfter.state, "queued");
+    assert.match(log, /__CALL__\tpaste-buffer\t-b\torkestr-[a-f0-9]+\t-t\t%42/);
+    assert.match(log, /__CALL__\tsend-keys\t-t\t%42\tC-m/);
+    assert.match(events, /thread_input_stale_pending_recovered/);
   } finally {
     restoreEnvValue("PATH", priorPath);
     restoreEnvValue("TMUX_LOG", priorTmuxLog);

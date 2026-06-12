@@ -2,6 +2,7 @@ import {
   consumeThreadConnectorDeliverySignalCount,
   deliverPendingThreadInputs,
   drainAllPendingThreadInputs,
+  recoverStalePendingThreadInputs,
   safeResetThreadRuntime,
   syncRuntimeLeases,
 } from "../../../packages/core/src/runtime-leases.js";
@@ -143,6 +144,15 @@ export function createRuntimeWhatsAppSyncRunner(env = process.env) {
 async function syncRuntimeAndDeliverWhatsApp(env = process.env, options: { forceWhatsapp?: boolean; recoveryCause?: string } = {}) {
   const pendingConnectorDeliveries = consumeThreadConnectorDeliverySignalCount();
   const synced = await syncRuntimeLeases(env);
+  const recoveredPendingInputs = await recoverStalePendingThreadInputs(env).catch((error) => {
+    reportServerError(env, {
+      source: "server.recoverStalePendingThreadInputs",
+      code: "stale_pending_input_recovery_failed",
+      message: error?.message || String(error),
+      error,
+    });
+    return [];
+  });
   const recovered = await recoverStaleCodexAppServerTurns(env, {
     noticeCause: options.recoveryCause,
     recoverySource: options.recoveryCause ? "startup_recovery" : "",
@@ -185,7 +195,7 @@ async function syncRuntimeAndDeliverWhatsApp(env = process.env, options: { force
   });
   const connectorDeliveries = pendingConnectorDeliveries + consumeThreadConnectorDeliverySignalCount();
   const appended = (synced.appended || 0) + (recovered.appended || 0);
-  if (options.forceWhatsapp || appended > 0 || connectorDeliveries > 0 || Number(unreadRecovery.routed || 0) > 0) {
+  if (options.forceWhatsapp || appended > 0 || connectorDeliveries > 0 || recoveredPendingInputs.length > 0 || Number(unreadRecovery.routed || 0) > 0) {
     const delivery = await deliverWhatsAppReplies(env).catch((error) => {
       reportServerError(env, {
         source: "server.deliverWhatsAppReplies",
@@ -197,7 +207,7 @@ async function syncRuntimeAndDeliverWhatsApp(env = process.env, options: { force
     });
     reportWhatsAppDeliveryAnomalies(env, "server.deliverWhatsAppReplies", delivery);
   }
-  return { ...synced, appended, recoveredAppServerTurns: recovered.recovered || 0 };
+  return { ...synced, appended, recoveredAppServerTurns: recovered.recovered || 0, recoveredPendingInputs };
 }
 
 export function createWhatsAppDeliveryScheduler(env = process.env) {
