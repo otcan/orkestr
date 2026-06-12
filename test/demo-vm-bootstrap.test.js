@@ -259,8 +259,9 @@ test("demo VM notifier does not start Cloudflare unless fallback is enabled", as
 });
 
 test("demo VM contract is private, WhatsApp-number driven, and part of smoke scripts", async () => {
-  const [entrypoint, values, deployment, smoke, pkg, readme] = await Promise.all([
+  const [entrypoint, dockerfile, values, deployment, smoke, pkg, readme] = await Promise.all([
     fs.readFile("docker-entrypoint.sh", "utf8"),
+    fs.readFile("Dockerfile", "utf8"),
     fs.readFile("charts/orkestr/values.yaml", "utf8"),
     fs.readFile("charts/orkestr/templates/deployment.yaml", "utf8"),
     fs.readFile("scripts/smoke-k3s-oss-demo.mjs", "utf8"),
@@ -271,6 +272,13 @@ test("demo VM contract is private, WhatsApp-number driven, and part of smoke scr
   assert.match(entrypoint, /ORKESTR_DEMO_WHATSAPP_NUMBER/);
   assert.match(entrypoint, /demo-vm-ready-notify\.mjs/);
   assert.match(entrypoint, /ORKESTR_DEMO_MODE/);
+  assert.match(entrypoint, /ORKESTR_DESKTOP_IDLE_STOP_MS/);
+  assert.match(entrypoint, /ORKESTR_DESKTOP_GEOMETRY/);
+  assert.match(entrypoint, /MALLOC_ARENA_MAX/);
+  assert.match(dockerfile, /ORKESTR_DESKTOP_IDLE_STOP_MS=600000/);
+  assert.match(dockerfile, /ORKESTR_DESKTOP_GEOMETRY=1280x720x16/);
+  assert.match(dockerfile, /ORKESTR_DESKTOP_WINDOW_SIZE=1280,720/);
+  assert.match(dockerfile, /MALLOC_ARENA_MAX=2/);
   assert.match(values, /demo:/);
   assert.match(values, /whatsappNumber: ""/);
   assert.doesNotMatch(values, /instanceId: ""/);

@@ -414,6 +414,88 @@ test("oss browserctl exposes real noVNC desktop sessions in dry run", async () =
   assert.equal(cleaned.session.status, "not_prepared");
 });
 
+test("oss browserctl stops idle demo desktops and removes runtime cache files", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-browserctl-idle-"));
+  const script = path.resolve("scripts/browserctl.mjs");
+  const env = {
+    ...process.env,
+    ORKESTR_HOME: home,
+    ORKESTR_BROWSERCTL_DRY_RUN: "1",
+    ORKESTR_BROWSERCTL_IDLE_REAPER_DISABLED: "1",
+    ORKESTR_DESKTOP_IDLE_STOP_MS: "1000",
+  };
+  const run = async (...args) => {
+    const { stdout } = await execFileAsync(process.execPath, [script, ...args], { env });
+    return JSON.parse(stdout);
+  };
+
+  const started = await run("start", "desktop");
+  const stateFile = path.join(home, "browsers", "desktop", "desktop.json");
+  const runtimeDir = path.join(home, "browsers", "desktop", "runtime");
+  await fs.mkdir(path.join(runtimeDir, "chrome-cache"), { recursive: true });
+  await fs.writeFile(path.join(runtimeDir, "chrome-cache", "cache.bin"), "cached");
+  const oldState = JSON.parse(await fs.readFile(stateFile, "utf8"));
+  await fs.writeFile(stateFile, `${JSON.stringify({
+    ...oldState,
+    lastActivityAt: new Date(Date.now() - 10_000).toISOString(),
+    startedAt: new Date(Date.now() - 10_000).toISOString(),
+  }, null, 2)}\n`);
+
+  const reaped = await run("idle-reap", "desktop");
+  const listed = await run("list", "--json");
+  const desktop = listed.sessions.find((session) => session.slug === "desktop");
+
+  assert.equal(started.session.status, "running");
+  assert.equal(reaped.stopped, true);
+  assert.equal(reaped.reason, "idle_timeout");
+  assert.equal(desktop.status, "prepared");
+  assert.equal(await fs.stat(runtimeDir).then(() => true, () => false), false);
+});
+
+test("oss browserctl keeps idle desktops alive while a lease heartbeat is active", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-browserctl-lease-idle-"));
+  const script = path.resolve("scripts/browserctl.mjs");
+  const env = {
+    ...process.env,
+    ORKESTR_HOME: home,
+    ORKESTR_BROWSERCTL_DRY_RUN: "1",
+    ORKESTR_BROWSERCTL_IDLE_REAPER_DISABLED: "1",
+    ORKESTR_DESKTOP_IDLE_STOP_MS: "60000",
+  };
+  const run = async (...args) => {
+    const { stdout } = await execFileAsync(process.execPath, [script, ...args], { env });
+    return JSON.parse(stdout);
+  };
+
+  await run("start", "desktop");
+  const stateFile = path.join(home, "browsers", "desktop", "desktop.json");
+  const oldState = JSON.parse(await fs.readFile(stateFile, "utf8"));
+  await fs.writeFile(stateFile, `${JSON.stringify({
+    ...oldState,
+    lastActivityAt: new Date(Date.now() - 10 * 60_000).toISOString(),
+    startedAt: new Date(Date.now() - 10 * 60_000).toISOString(),
+  }, null, 2)}\n`);
+  await fs.writeFile(path.join(home, "desktop-leases.json"), `${JSON.stringify({
+    desktopLeases: [{
+      id: "lease-1",
+      desktopSlug: "desktop",
+      ownerUserId: "admin",
+      threadId: "thread-1",
+      acquiredAt: new Date().toISOString(),
+      heartbeatAt: new Date().toISOString(),
+      releasedAt: null,
+    }],
+  }, null, 2)}\n`);
+
+  const reaped = await run("idle-reap", "desktop");
+  const listed = await run("list", "--json");
+  const desktop = listed.sessions.find((session) => session.slug === "desktop");
+
+  assert.equal(reaped.stopped, false);
+  assert.equal(reaped.reason, "active_recently");
+  assert.equal(desktop.status, "running");
+});
+
 test("oss browserctl refreshes stale prepared ports for the current scope", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-browserctl-ports-"));
   const script = path.resolve("scripts/browserctl.mjs");
@@ -472,6 +554,9 @@ test("managed desktop mode can use the bundled oss browserctl script", async () 
   assert.match(script, /ORKESTR_BROWSER_RUN_USER/);
   assert.match(script, /ORKESTR_RUN_USER/);
   assert.match(script, /browserctl_root_requires_run_user_or_explicit_no_sandbox/);
+  assert.match(script, /ORKESTR_DESKTOP_IDLE_STOP_MS/);
+  assert.match(script, /--disk-cache-dir=/);
+  assert.match(script, /chrome-cache/);
   assert.doesNotMatch(script, /process\.getuid\?\.\(\) === 0 \|\| String\(process\.env\.ORKESTR_CHROME_NO_SANDBOX/);
   assert.equal(prepared.status, "prepared");
   assert.equal(started.status, "running");

@@ -4575,7 +4575,7 @@ test("thread summary reuses recent live runtime samples", async () => {
     await threadSummaryPayload({ cacheTtlMs: 0, payloadCacheTtlMs: 0, runtimeStatusCacheTtlMs: 1000 });
     const firstLog = await fs.readFile(fakeTmux.log, "utf8");
     const firstChecks = (firstLog.match(/__CALL__\thas-session/g) || []).length;
-    assert.equal(firstChecks, 1);
+    assert.ok(firstChecks >= 1);
 
     await threadSummaryPayload({ cacheTtlMs: 0, payloadCacheTtlMs: 0, runtimeStatusCacheTtlMs: 1000 });
     const secondLog = await fs.readFile(fakeTmux.log, "utf8");

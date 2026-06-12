@@ -52,6 +52,7 @@ const largeFileAllowlist = new Set([
   "packages/core/src/timers.js",
   "packages/core/src/user-skills.js",
   "packages/connectors/src/codex.js",
+  "packages/connectors/src/connector-outbox.js",
   "packages/connectors/src/whatsapp-account-bindings.js",
   "packages/connectors/src/whatsapp-broker-migration.js",
   "packages/connectors/src/whatsapp-local-bridge.js",

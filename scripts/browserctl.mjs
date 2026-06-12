@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import net from "node:net";
+import { randomUUID } from "node:crypto";
 import { constants as fsConstants } from "node:fs";
 import { execFileSync, spawn } from "node:child_process";
 
@@ -56,12 +57,33 @@ function numberEnv(name, fallback) {
   return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : fallback;
 }
 
+function durationEnvMs(name, fallback = 0) {
+  const raw = process.env[name];
+  if (raw === null || raw === undefined || raw === "") return fallback;
+  const text = String(raw || "").trim().toLowerCase();
+  if (!text || text === "0" || text === "off" || text === "false" || text === "none" || text === "never") return 0;
+  const match = text.match(/^(\d+(?:\.\d+)?)\s*(ms|s|m|h|d)?$/);
+  if (!match) return fallback;
+  const amount = Number(match[1]);
+  if (!Number.isFinite(amount) || amount <= 0) return 0;
+  const factor = { ms: 1, s: 1000, m: 60_000, h: 60 * 60_000, d: 24 * 60 * 60_000 }[match[2] || "ms"] || 1;
+  return Math.max(0, Math.round(amount * factor));
+}
+
 function profileDir(slug) {
   return path.join(browserRoot(), slug);
 }
 
 function runtimeDir(slug) {
   return path.join(profileDir(slug), "runtime");
+}
+
+function chromeCacheDir(slug) {
+  return path.join(runtimeDir(slug), "chrome-cache");
+}
+
+function chromeMediaCacheDir(slug) {
+  return path.join(runtimeDir(slug), "chrome-media-cache");
 }
 
 function statePath(slug) {
@@ -194,6 +216,36 @@ function flagEnabled(name) {
   return ["1", "true", "yes"].includes(String(process.env[name] || "").trim().toLowerCase());
 }
 
+function desktopIdleStopMs() {
+  return durationEnvMs("ORKESTR_DESKTOP_IDLE_STOP_MS", flagEnabled("ORKESTR_DOCKER") ? 10 * 60_000 : 0);
+}
+
+function desktopGeometry() {
+  const configured = String(process.env.ORKESTR_DESKTOP_GEOMETRY || "").trim();
+  if (/^\d+x\d+x\d+$/.test(configured)) return configured;
+  return flagEnabled("ORKESTR_DOCKER") ? "1280x720x16" : "1440x900x24";
+}
+
+function desktopWindowSize() {
+  const configured = String(process.env.ORKESTR_DESKTOP_WINDOW_SIZE || "").trim();
+  if (/^\d+,\d+$/.test(configured)) return configured;
+  const match = desktopGeometry().match(/^(\d+)x(\d+)x\d+$/);
+  return match ? `${match[1]},${match[2]}` : "1440,900";
+}
+
+function desktopLeaseFile() {
+  return path.resolve(process.env.ORKESTR_DESKTOP_LEASE_FILE || path.join(appHome(), "desktop-leases.json"));
+}
+
+function parseTimestampMs(value) {
+  const parsed = Date.parse(String(value || ""));
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function normalizeOwner(value) {
+  return String(value || "admin").trim().toLowerCase() || "admin";
+}
+
 function commandOutput(command, args) {
   return execFileSync(command, args, { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim();
 }
@@ -254,6 +306,98 @@ async function spawnManaged(command, args, extraEnv = {}) {
   return child.pid || null;
 }
 
+async function readActiveDesktopLease(slug) {
+  const state = await readJson(desktopLeaseFile(), { desktopLeases: [] });
+  const owner = normalizeOwner(ownerUserId());
+  const now = Date.now();
+  const leases = Array.isArray(state.desktopLeases) ? state.desktopLeases : [];
+  return leases
+    .filter((lease) => cleanSlug(lease?.desktopSlug || lease?.slug) === slug)
+    .filter((lease) => normalizeOwner(lease?.ownerUserId || lease?.userId || "admin") === owner)
+    .filter((lease) => !lease?.releasedAt)
+    .filter((lease) => {
+      const expiresMs = parseTimestampMs(lease?.expiresAt);
+      return !expiresMs || expiresMs > now;
+    })
+    .sort((left, right) => parseTimestampMs(right?.heartbeatAt || right?.acquiredAt) - parseTimestampMs(left?.heartbeatAt || left?.acquiredAt))[0] || null;
+}
+
+async function removeDesktopRuntimeFiles(slug) {
+  await fs.rm(runtimeDir(slug), { recursive: true, force: true }).catch(() => {});
+}
+
+function idleReaperDisabled() {
+  return flagEnabled("ORKESTR_BROWSERCTL_IDLE_REAPER_DISABLED");
+}
+
+async function scheduleIdleReaper(slug, delayMs, token) {
+  if (idleReaperDisabled()) return null;
+  const ttlMs = desktopIdleStopMs();
+  if (ttlMs <= 0) return null;
+  const seconds = Math.max(1, Math.ceil(Math.max(1, delayMs) / 1000));
+  const script = process.argv[1] ? path.resolve(process.argv[1]) : "";
+  if (!script) return null;
+  const command = `sleep "$1"; exec "$2" "$3" idle-reap "$4" "$5"`;
+  const child = spawn("sh", ["-c", command, "browserctl-idle", String(seconds), process.execPath, script, slug, token], {
+    detached: true,
+    stdio: "ignore",
+    env: process.env,
+  });
+  child.unref();
+  return child.pid || null;
+}
+
+async function armIdleReaper(slug, delayMs = desktopIdleStopMs()) {
+  const ttlMs = desktopIdleStopMs();
+  if (ttlMs <= 0) return null;
+  const token = randomUUID();
+  const reaperPid = await scheduleIdleReaper(slug, delayMs, token);
+  await writeState(slug, {
+    idleStopMs: ttlMs,
+    idleReaperToken: token,
+    idleReaperPid: reaperPid,
+    idleReaperDueAt: new Date(Date.now() + Math.max(1, delayMs)).toISOString(),
+  });
+  return { token, reaperPid };
+}
+
+async function idleDueMs(slug, state, ttlMs) {
+  const lease = await readActiveDesktopLease(slug);
+  const leaseActivityMs = lease ? Math.max(
+    parseTimestampMs(lease.heartbeatAt),
+    parseTimestampMs(lease.acquiredAt),
+    parseTimestampMs(lease.updatedAt),
+  ) : 0;
+  const localActivityMs = Math.max(
+    parseTimestampMs(state.lastActivityAt),
+    parseTimestampMs(state.startedAt),
+  );
+  const activityMs = Math.max(leaseActivityMs, localActivityMs);
+  return (activityMs || Date.now()) + ttlMs;
+}
+
+async function reapIdleDesktop(slug, token = "") {
+  const current = await sessionRecord(slug);
+  if (current.status !== "running") return { ok: true, stopped: false, reason: "not_running", session: current };
+  const state = await readState(slug);
+  const expectedToken = String(state.idleReaperToken || "").trim();
+  const suppliedToken = String(token || "").trim();
+  if (suppliedToken && expectedToken && suppliedToken !== expectedToken) {
+    return { ok: true, stopped: false, reason: "stale_reaper", session: current };
+  }
+  const ttlMs = desktopIdleStopMs();
+  if (ttlMs <= 0) return { ok: true, stopped: false, reason: "idle_reaper_disabled", session: current };
+  const dueMs = await idleDueMs(slug, state, ttlMs);
+  const remainingMs = dueMs - Date.now();
+  if (remainingMs > 0) {
+    await armIdleReaper(slug, remainingMs);
+    return { ok: true, stopped: false, reason: "active_recently", dueAt: new Date(dueMs).toISOString(), session: current };
+  }
+  await stopDesktop(slug, { quiet: true, idle: true });
+  const stopped = await sessionRecord(slug);
+  return { ok: true, stopped: true, reason: "idle_timeout", session: stopped };
+}
+
 async function waitUntil(check, timeoutMs = 7000) {
   const start = Date.now();
   while (Date.now() - start < timeoutMs) {
@@ -293,6 +437,7 @@ async function ensurePrepared(slug) {
     vncPort: ports.vncPort,
     webPort: ports.webPort,
     display: `:${ports.displayNumber}`,
+    idleStopMs: desktopIdleStopMs(),
   });
   const identity = desktopRunIdentity();
   if (identity) await chownTree(profileDir(desktop.slug), identity.uid, identity.gid);
@@ -381,9 +526,12 @@ async function startDesktop(value) {
   const display = String(state.display || `:${ports.displayNumber}`);
   const startUrl = String(state.startUrl || desktop.startUrl || "about:blank");
   const startedAt = new Date().toISOString();
+  const geometry = desktopGeometry();
+  const windowSize = desktopWindowSize();
 
   if (dryRun()) {
-    await writeState(slug, { dryRunRunning: true, startedAt, launchError: null });
+    await writeState(slug, { dryRunRunning: true, startedAt, lastActivityAt: startedAt, launchError: null });
+    await armIdleReaper(slug);
     return sessionRecord(slug);
   }
 
@@ -409,7 +557,9 @@ async function startDesktop(value) {
   }
 
   try {
-    const xvfbPid = await spawnManaged(xvfb, [display, "-screen", "0", "1440x900x24", "-nolisten", "tcp", "-ac"]);
+    await fs.mkdir(chromeCacheDir(slug), { recursive: true, mode: 0o700 });
+    await fs.mkdir(chromeMediaCacheDir(slug), { recursive: true, mode: 0o700 });
+    const xvfbPid = await spawnManaged(xvfb, [display, "-screen", "0", geometry, "-nolisten", "tcp", "-ac"]);
     await new Promise((resolve) => setTimeout(resolve, 300));
     if (!isPidRunning(xvfbPid)) throw new Error("xvfb_failed_to_start");
     const windowManagerPid = await spawnManaged(wm, [], { DISPLAY: display });
@@ -429,11 +579,18 @@ async function startDesktop(value) {
     ]);
     const chromeArgs = [
       `--user-data-dir=${profileDir(slug)}`,
+      `--disk-cache-dir=${chromeCacheDir(slug)}`,
+      `--media-cache-dir=${chromeMediaCacheDir(slug)}`,
       "--remote-debugging-address=127.0.0.1",
       `--remote-debugging-port=${debugPort}`,
       "--no-first-run",
       "--disable-dev-shm-usage",
-      "--window-size=1440,900",
+      "--disable-background-networking",
+      "--disable-component-update",
+      "--disable-sync",
+      "--disable-logging",
+      "--log-level=3",
+      `--window-size=${windowSize}`,
       "--start-maximized",
       "--new-window",
     ];
@@ -453,10 +610,14 @@ async function startDesktop(value) {
       websockifyPid,
       chromePid,
       startedAt,
+      lastActivityAt: startedAt,
+      geometry,
+      windowSize,
       stoppedAt: null,
       launchError: null,
       dryRunRunning: false,
     });
+    await armIdleReaper(slug);
     return sessionRecord(slug);
   } catch (error) {
     await writeState(slug, { launchError: error?.message || String(error) });
@@ -499,7 +660,9 @@ async function stopDesktop(value, options = {}) {
     xvfbPid: null,
     dryRunRunning: false,
     stoppedAt: new Date().toISOString(),
+    idleStoppedAt: options.idle ? new Date().toISOString() : state.idleStoppedAt || null,
   });
+  await removeDesktopRuntimeFiles(slug);
   return options.quiet ? null : sessionRecord(slug);
 }
 
@@ -529,6 +692,11 @@ async function main() {
   if (command === "health") session = await ensurePrepared(slug).then(() => sessionRecord(slug));
   else if (command === "start") session = await startDesktop(slug);
   else if (command === "stop") session = await stopDesktop(slug);
+  else if (command === "idle-reap") {
+    const result = await reapIdleDesktop(slug, rest[0] || "");
+    console.log(JSON.stringify({ ok: true, source: "orkestr-browserctl", ...result }));
+    return;
+  }
   else if (command === "restart") {
     await stopDesktop(slug, { quiet: true });
     session = await startDesktop(slug);
