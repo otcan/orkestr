@@ -1624,6 +1624,53 @@ async function skipWhatsAppOutboundCandidate({
   return { skipped: { reason: reason || "obsolete_outbound_notice" } };
 }
 
+function terminalWhatsAppOutboundIntentWithReason(intent = null, reason = "") {
+  const status = pickString(intent?.status).toLowerCase();
+  if (status !== "skipped" && status !== "cancelled") return false;
+  return pickString(intent?.error).toLowerCase() === pickString(reason).toLowerCase();
+}
+
+async function skipWhatsAppMirroringDisabledCandidate({
+  state,
+  outboundIntents,
+  skipped,
+  existingIntent,
+  kind,
+  deliveryType,
+  routerUpdateType,
+  agentId,
+  threadId,
+  messageId,
+  sourceMessageId,
+  chatId,
+  accountId,
+  textKey,
+  message,
+  parent,
+  env,
+} = {}) {
+  if (terminalWhatsAppOutboundIntentWithReason(existingIntent, "mirroring_disabled")) return;
+  await skipWhatsAppOutboundCandidate({
+    state,
+    outboundIntents,
+    kind,
+    deliveryType,
+    routerUpdateType,
+    agentId,
+    threadId,
+    messageId,
+    sourceMessageId,
+    chatId,
+    accountId,
+    textKey,
+    message,
+    parent,
+    reason: "mirroring_disabled",
+    env,
+  });
+  skipped?.push({ agentId, threadId, messageId, reason: "mirroring_disabled_terminal" });
+}
+
 const mutationNoticeSourceTypes = new Set(["final", "progress", "router_update"]);
 
 function latestDeliveredWhatsAppSourceDelivery(outboundDeliveries = [], sourceMessageId = "") {
@@ -3221,10 +3268,6 @@ async function deliverWhatsAppRepliesOnce(env = process.env, fetchImpl = fetch) 
       if (queuedModeTarget) {
         const deliveryId = `${message.id}:mode_queued`;
         if (deliveredIds.has(deliveryId)) continue;
-        if (kind === "thread" && !threadAllowsWhatsAppMirroring(thread)) {
-          skipped.push({ agentId, threadId, messageId: message.id, reason: "mirroring_disabled" });
-          continue;
-        }
         const chatId = queuedModeTarget.chatId;
         const text = appendWhatsAppDebugFooter(formatWhatsAppModeQueued(queuedModeTarget.mode), {
           message,
@@ -3243,6 +3286,25 @@ async function deliverWhatsAppRepliesOnce(env = process.env, fetchImpl = fetch) 
           chatId,
           accountId,
         });
+        if (kind === "thread" && !threadAllowsWhatsAppMirroring(thread)) {
+          await skipWhatsAppMirroringDisabledCandidate({
+            state,
+            outboundIntents,
+            skipped,
+            existingIntent,
+            kind,
+            deliveryType: "mode_queued",
+            agentId,
+            threadId,
+            messageId: deliveryId,
+            sourceMessageId: message.id,
+            chatId,
+            accountId,
+            message,
+            env,
+          });
+          continue;
+        }
         if (staleTerminalWhatsAppOutboundIntentPassedCursor({ state, messageSetKey, messageCursor, intent: existingIntent, env })) continue;
         if (!existingIntent && whatsappOutboundMirrorCursorPassed(state, messageSetKey, messageCursor)) continue;
         const textKey = deliveryTextKey(chatId, `${deliveryId}\n${text}`);
@@ -3294,10 +3356,6 @@ async function deliverWhatsAppRepliesOnce(env = process.env, fetchImpl = fetch) 
       if (queuedInputTarget) {
         const deliveryId = `${message.id}:queue_notice`;
         if (deliveredIds.has(deliveryId)) continue;
-        if (kind === "thread" && !threadAllowsWhatsAppMirroring(thread)) {
-          skipped.push({ agentId, threadId, messageId: message.id, reason: "mirroring_disabled" });
-          continue;
-        }
         let queueMessage = message;
         let queueMessages = messages;
         let queueTarget = queuedInputTarget;
@@ -3313,6 +3371,25 @@ async function deliverWhatsAppRepliesOnce(env = process.env, fetchImpl = fetch) 
           chatId,
           accountId,
         });
+        if (kind === "thread" && !threadAllowsWhatsAppMirroring(thread)) {
+          await skipWhatsAppMirroringDisabledCandidate({
+            state,
+            outboundIntents,
+            skipped,
+            existingIntent,
+            kind,
+            deliveryType: "queue_notice",
+            agentId,
+            threadId,
+            messageId: deliveryId,
+            sourceMessageId: message.id,
+            chatId,
+            accountId,
+            message: queueMessage,
+            env,
+          });
+          continue;
+        }
         if (staleTerminalWhatsAppOutboundIntentPassedCursor({ state, messageSetKey, messageCursor, intent: existingIntent, env })) continue;
         if (!existingIntent && whatsappOutboundMirrorCursorPassed(state, messageSetKey, messageCursor)) continue;
         if (kind === "thread") {
@@ -3427,10 +3504,6 @@ async function deliverWhatsAppRepliesOnce(env = process.env, fetchImpl = fetch) 
       const failedDeliveryTarget = failedWhatsAppDeliveryTarget(message, thread, state);
       if (failedDeliveryTarget) {
         if (deliveredIds.has(message.id)) continue;
-        if (kind === "thread" && !threadAllowsWhatsAppMirroring(thread)) {
-          skipped.push({ agentId, threadId, messageId: message.id, reason: "mirroring_disabled" });
-          continue;
-        }
         const chatId = failedDeliveryTarget.chatId;
         const accountId = kind === "thread" ? failedDeliveryTarget.accountId : pickString(message.accountId, failedDeliveryTarget.accountId);
         const existingIntent = findWhatsAppOutboundIntent(outboundIntents, {
@@ -3442,6 +3515,24 @@ async function deliverWhatsAppRepliesOnce(env = process.env, fetchImpl = fetch) 
           chatId,
           accountId,
         });
+        if (kind === "thread" && !threadAllowsWhatsAppMirroring(thread)) {
+          await skipWhatsAppMirroringDisabledCandidate({
+            state,
+            outboundIntents,
+            skipped,
+            existingIntent,
+            kind,
+            deliveryType: "delivery_error",
+            agentId,
+            threadId,
+            messageId: message.id,
+            chatId,
+            accountId,
+            message,
+            env,
+          });
+          continue;
+        }
         if (staleTerminalWhatsAppOutboundIntentPassedCursor({ state, messageSetKey, messageCursor, intent: existingIntent, env })) continue;
         if (!existingIntent && whatsappOutboundMirrorCursorPassed(state, messageSetKey, messageCursor)) continue;
         const completedReply = completedAssistantReplyForParent(messages, message, chatId, state);
@@ -3523,12 +3614,27 @@ async function deliverWhatsAppRepliesOnce(env = process.env, fetchImpl = fetch) 
         connectorOutboxJobs,
       });
       if (mutationTarget) {
-        if (kind === "thread" && !threadAllowsWhatsAppMirroring(thread)) {
-          skipped.push({ agentId, threadId, messageId: message.id, reason: "mirroring_disabled" });
-          continue;
-        }
         const deliveryId = `${message.id}:${mutationTarget.deliveryType}:${mutationTarget.sourceRevision}`;
         if (deliveredIds.has(deliveryId)) continue;
+        if (kind === "thread" && !threadAllowsWhatsAppMirroring(thread)) {
+          await skipWhatsAppMirroringDisabledCandidate({
+            state,
+            outboundIntents,
+            skipped,
+            kind,
+            deliveryType: mutationTarget.deliveryType,
+            agentId,
+            threadId,
+            messageId: deliveryId,
+            sourceMessageId: message.id,
+            chatId: mutationTarget.chatId,
+            accountId: mutationTarget.accountId,
+            message,
+            parent: mutationParent,
+            env,
+          });
+          continue;
+        }
         if (!mutationTarget.priorDelivery) {
           await markUnsupportedWhatsAppMutation({
             thread,
@@ -3654,7 +3760,22 @@ async function deliverWhatsAppRepliesOnce(env = process.env, fetchImpl = fetch) 
           continue;
         }
         if (kind === "thread" && !threadAllowsWhatsAppMirroring(thread)) {
-          skipped.push({ agentId, threadId, messageId: message.id, reason: "mirroring_disabled" });
+          await skipWhatsAppMirroringDisabledCandidate({
+            state,
+            outboundIntents,
+            skipped,
+            existingIntent,
+            kind,
+            deliveryType: "progress",
+            agentId,
+            threadId,
+            messageId: message.id,
+            chatId,
+            accountId,
+            message,
+            parent,
+            env,
+          });
           continue;
         }
         if (!liveRecovery && progressOvertakenByFinal(messages, message, chatId, env)) {
@@ -3774,7 +3895,22 @@ async function deliverWhatsAppRepliesOnce(env = process.env, fetchImpl = fetch) 
         continue;
       }
       if (kind === "thread" && !threadAllowsWhatsAppMirroring(thread)) {
-        skipped.push({ agentId, threadId, messageId: message.id, reason: "mirroring_disabled" });
+        await skipWhatsAppMirroringDisabledCandidate({
+          state,
+          outboundIntents,
+          skipped,
+          existingIntent,
+          kind,
+          deliveryType,
+          agentId,
+          threadId,
+          messageId: message.id,
+          chatId,
+          accountId,
+          message,
+          parent,
+          env,
+        });
         continue;
       }
 

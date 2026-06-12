@@ -7563,9 +7563,19 @@ test("whatsapp delivery respects thread binding mirroring toggle", async () => {
   assert.equal(delivery.delivered[0].deliveryType, "router_update");
   assert.equal(delivery.delivered[0].routerUpdateType, "mirror_disabled");
   assert.equal(delivery.failed.length, 0);
-  assert.equal(delivery.skipped.some((item) => item.reason === "mirroring_disabled"), true);
+  assert.equal(delivery.skipped.some((item) => item.reason === "mirroring_disabled"), false);
+  assert.equal(delivery.skipped.some((item) => item.reason === "mirroring_disabled_terminal"), true);
   assert.equal(calls.length, 1);
   assert.match(stripDebugFooter(calls[0].body.text), /^Message routed to Orkestr\./);
+
+  const duplicate = await deliverWhatsAppReplies(env, async (url, options) => {
+    calls.push({ url, body: JSON.parse(options.body) });
+    return response({ ok: true, ids: ["sent-mirror-off-duplicate"] });
+  });
+  assert.equal(duplicate.delivered.length, 0);
+  assert.equal(duplicate.failed.length, 0);
+  assert.equal(duplicate.skipped.length, 0);
+  assert.equal(calls.length, 1);
 });
 
 test("whatsapp delivery skips duplicate live Codex answers for the same chat", async () => {
