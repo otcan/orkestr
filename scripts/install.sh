@@ -1283,6 +1283,7 @@ ORKESTR_CURRENT_LINK=${ORKESTR_CURRENT_LINK:-/opt/orkestr/current}
 ORKESTR_RESET_ON_UPDATE=${ORKESTR_RESET_ON_UPDATE:-0}
 ORKESTR_RESET_OVERLAY=${ORKESTR_RESET_OVERLAY:-0}
 ORKESTR_RUNTIME_WORKSPACE_ROOT=$workspace_dir
+ORKESTR_REDACT_LOCAL_FILE_PATHS=${ORKESTR_REDACT_LOCAL_FILE_PATHS:-0}
 ORKESTR_CODEX_BIN=${ORKESTR_CODEX_BIN:-$(codex_bin_default)}
 ORKESTR_CODEX_SANDBOX=$codex_sandbox
 ORKESTR_CODEX_APPROVAL_POLICY=$codex_approval
@@ -1427,6 +1428,7 @@ migrate_systemd_env_file() {
   ensure_env_assignment ORKESTR_CODEX_APP_SERVER_SOCKET "$(codex_app_server_socket_default)"
   ensure_env_assignment ORKESTR_CODEX_APP_SERVER_SERVICE_NAME "$(codex_app_server_service_name)"
   ensure_env_assignment ORKESTR_RUNTIME_WORKSPACE_ROOT "$workspace_dir"
+  ensure_env_assignment ORKESTR_REDACT_LOCAL_FILE_PATHS "${ORKESTR_REDACT_LOCAL_FILE_PATHS:-0}"
   if [ -n "$primary_domain" ]; then ensure_env_assignment ORKESTR_PRIMARY_DOMAIN "$primary_domain"; fi
   if [ -n "$public_site_url" ]; then ensure_env_assignment ORKESTR_PUBLIC_SITE_URL "$public_site_url"; fi
   if [ -n "$app_host" ]; then ensure_env_assignment ORKESTR_APP_HOST "$app_host"; fi
@@ -1864,6 +1866,7 @@ write_local_env_file() {
     write_env_var ORKESTR_START_AFTER_INSTALL "$start_after_install"
     write_env_var ORKESTR_RUNTIME_SETTINGS_FILE "${ORKESTR_RUNTIME_SETTINGS_FILE:-$data_dir/runtime-settings.json}"
     write_env_var ORKESTR_RUNTIME_WORKSPACE_ROOT "$workspace_dir"
+    write_env_var ORKESTR_REDACT_LOCAL_FILE_PATHS "${ORKESTR_REDACT_LOCAL_FILE_PATHS:-0}"
     write_env_var ORKESTR_CODEX_BIN "${ORKESTR_CODEX_BIN:-$(codex_bin_default)}"
     write_env_var ORKESTR_RUNTIME_CODEX_COMMAND "${ORKESTR_RUNTIME_CODEX_COMMAND:-$(codex_command_default)}"
     write_env_var CODEX_HOME "${CODEX_HOME:-$(local_codex_home_default)}"
