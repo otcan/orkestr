@@ -845,6 +845,84 @@ test("runtime sync throttles automatic resource doctor scans", async () => {
   }
 });
 
+test("runtime sync caches Codex metadata lookups", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-runtime-metadata-cache-"));
+  const fakeTmux = await createFakeTmux(home);
+  const sqliteLog = path.join(home, "sqlite.log");
+  const rolloutPath = path.join(home, "rollout.jsonl");
+  const sqlitePath = path.join(fakeTmux.bin, "sqlite3");
+  const priorPath = process.env.PATH;
+  const priorTmuxLog = process.env.TMUX_LOG;
+  const priorTmuxState = process.env.TMUX_STATE;
+  const priorCodexHome = process.env.CODEX_HOME;
+  process.env.PATH = `${fakeTmux.bin}:${priorPath || ""}`;
+  process.env.TMUX_LOG = fakeTmux.log;
+  process.env.TMUX_STATE = fakeTmux.state;
+  process.env.CODEX_HOME = path.join(home, "codex-home");
+  await fs.mkdir(process.env.CODEX_HOME, { recursive: true });
+  await fs.writeFile(rolloutPath, "", "utf8");
+  await fs.writeFile(
+    sqlitePath,
+    `#!/usr/bin/env bash
+printf '%s\\n' "$*" >> "${sqliteLog}"
+case "$*" in
+  *"select model"*) printf 'gpt-5\\txhigh\\tcodex\\t123\\t%s\\n' "${rolloutPath}" ;;
+  *"select rollout_path"*) printf '%s\\n' "${rolloutPath}" ;;
+esac
+`,
+    "utf8",
+  );
+  await fs.chmod(sqlitePath, 0o755);
+
+  try {
+    const env = {
+      ORKESTR_HOME: path.join(home, "orkestr-home"),
+      HOME: path.join(home, "runtime-home"),
+      CODEX_HOME: process.env.CODEX_HOME,
+      PATH: process.env.PATH,
+      TMUX_LOG: fakeTmux.log,
+      TMUX_STATE: fakeTmux.state,
+      ORKESTR_RUNTIME_CODEX_METADATA_CACHE_MS: "60000",
+      ORKESTR_RUNTIME_DOCTOR_AUTOMATIC_INTERVAL_MS: "60000",
+      ORKESTR_RUNTIME_TMUX_STATUS_CACHE_MS: "60000",
+    };
+    await createThread({
+      id: "runtime-metadata-cache-thread",
+      name: "Runtime Metadata Cache Thread",
+      cwd: path.join(home, "workspace"),
+      executor: {
+        id: "codex",
+        type: "codex",
+        codexThreadId: "019ea1a1-ff15-74a2-a9d1-0eecc7c3cb94",
+        transport: "app-server",
+        metadata: {
+          codexThreadId: "019ea1a1-ff15-74a2-a9d1-0eecc7c3cb94",
+          transport: "app-server",
+          runtimeKind: "codex-app-server",
+        },
+      },
+      runtime: {
+        runtimeKind: "codex-app-server",
+        state: "ready",
+      },
+    }, env);
+    await takeoverRawTerminalThread("runtime-metadata-cache-thread", { reason: "test_metadata_cache" }, env);
+    await fs.writeFile(sqliteLog, "", "utf8");
+
+    await syncRuntimeLeases(env);
+    await syncRuntimeLeases(env);
+    const log = await fs.readFile(sqliteLog, "utf8").catch(() => "");
+    const metadataQueries = log.split("\n").filter((line) => line.includes("select model")).length;
+
+    assert.equal(metadataQueries, 1);
+  } finally {
+    restoreEnvValue("PATH", priorPath);
+    restoreEnvValue("TMUX_LOG", priorTmuxLog);
+    restoreEnvValue("TMUX_STATE", priorTmuxState);
+    restoreEnvValue("CODEX_HOME", priorCodexHome);
+  }
+});
+
 test("relative thread workspaces resolve under the runtime workspace root", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-relative-workspace-"));
   const fakeTmux = await createFakeTmux(home);

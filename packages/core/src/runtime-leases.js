@@ -71,6 +71,7 @@ let threadInputDeliveryFailureHandler = null;
 const automaticRuntimeDoctorCache = new Map();
 const passiveTmuxSessionCache = new Map();
 const passiveTmuxPaneIdsCache = new Map();
+const codexRuntimeMetadataCache = new Map();
 const pendingInputStates = new Set(["queued", "pending_delivery", "awaiting_ack"]);
 const needInputPhases = new Set(["need_input", "awaiting_input", "question", "request_user_input"]);
 const proposedPlanOpenTagPattern = /^\s*<\s*proposed[\s_-]*plan\s*>/i;
@@ -104,6 +105,10 @@ function automaticRuntimeDoctorIntervalMs(env = process.env) {
 
 function passiveTmuxStatusCacheTtlMs(env = process.env) {
   return positiveDurationMs(env.ORKESTR_RUNTIME_TMUX_STATUS_CACHE_MS, 4_000, 0);
+}
+
+function codexRuntimeMetadataCacheTtlMs(env = process.env) {
+  return positiveDurationMs(env.ORKESTR_RUNTIME_CODEX_METADATA_CACHE_MS, 60_000, 0);
 }
 
 function runtimeCacheScope(env = process.env) {
@@ -931,6 +936,19 @@ export async function resolveCodexThreadMetadata(threadOrId, env = process.env) 
   const discovered = await resolveCodexThreadByWorkspace(workspace, startedAt, env);
   if (!discovered?.codexThreadId) return {};
   return resolveCodexThreadMetadataById(discovered.codexThreadId, env);
+}
+
+async function cachedRuntimeCodexThreadMetadata(threadOrId, env = process.env) {
+  const id = String(typeof threadOrId === "string" ? threadOrId : codexThreadId(threadOrId) || "").trim();
+  if (!id) return {};
+  const ttlMs = codexRuntimeMetadataCacheTtlMs(env);
+  if (ttlMs <= 0) return resolveCodexThreadMetadata(threadOrId, env);
+  const cacheKey = `${runtimeCacheScope(env)}:${id}`;
+  const cached = codexRuntimeMetadataCache.get(cacheKey);
+  if (cached && cached.expiresAt > Date.now()) return cached.value;
+  const value = await resolveCodexThreadMetadata(threadOrId, env);
+  codexRuntimeMetadataCache.set(cacheKey, { value, expiresAt: Date.now() + ttlMs });
+  return value;
 }
 
 function codexMetadataUpdatePatch(thread = {}, codexMetadata = {}) {
@@ -3831,7 +3849,7 @@ async function reconcileDetachedRolloutCompletion(thread, runtime, completedTurn
 
 async function syncLeaseRollout(lease, env = process.env) {
   const thread = await getThread(lease.threadId, env);
-  const codexMetadata = await resolveCodexThreadMetadata(thread, env).catch(() => ({}));
+  const codexMetadata = await cachedRuntimeCodexThreadMetadata(thread, env).catch(() => ({}));
   if (Object.keys(codexMetadata).length) {
     await updateThread(lease.threadId, codexMetadataUpdatePatch(thread, codexMetadata), env).catch(() => {});
   }
