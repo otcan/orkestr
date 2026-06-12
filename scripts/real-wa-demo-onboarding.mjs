@@ -37,7 +37,7 @@ function parseArgs(argv = [], env = process.env) {
     orkestrHome: clean(env.ORKESTR_REAL_WA_E2E_HOME || env.ORKESTR_HOME),
     chatId: clean(env.ORKESTR_REAL_WA_DEMO_CHAT_ID || env.ORKESTR_REAL_WA_E2E_CHAT_ID),
     responderAccountId: clean(env.ORKESTR_REAL_WA_DEMO_RESPONDER_ACCOUNT || env.ORKESTR_REAL_WA_E2E_RESPONDER_ACCOUNT || "responder"),
-    setupUrl: clean(env.ORKESTR_DEMO_PUBLIC_SETUP_URL || env.ORKESTR_DEMO_SETUP_PUBLIC_URL || ""),
+    setupUrl: clean(env.ORKESTR_CONNECT_PUBLIC_SETUP_URL || env.ORKESTR_CONNECT_SETUP_PUBLIC_URL || env.ORKESTR_DEMO_PUBLIC_SETUP_URL || env.ORKESTR_DEMO_SETUP_PUBLIC_URL || ""),
     timeoutMs: Number(env.ORKESTR_REAL_WA_E2E_TIMEOUT_MS || 90_000),
     pollMs: Number(env.ORKESTR_REAL_WA_E2E_POLL_MS || 2000),
     artifactPath: clean(env.ORKESTR_REAL_WA_DEMO_ARTIFACT || env.ORKESTR_REAL_WA_E2E_ARTIFACT),
@@ -76,7 +76,7 @@ function usage() {
   return [
     "Usage: npm run e2e:whatsapp-demo-onboarding -- --execute [options]",
     "",
-    "Runs the demo onboarding acceptance path: Orkestr sends the first WhatsApp",
+    "Runs the connect onboarding acceptance path: Orkestr sends the first WhatsApp",
     "message from the serving/responder account to the target user and asks them",
     "to complete Codex login/sign-in in setup.",
     "",
@@ -251,7 +251,7 @@ export async function runRealWhatsAppDemoOnboarding(options) {
   const startedAt = Date.now();
   const setup = await demoPublicSetupUrl({
     ...apiEnv(options),
-    ...(options.setupUrl ? { ORKESTR_DEMO_PUBLIC_SETUP_URL: options.setupUrl } : {}),
+    ...(options.setupUrl ? { ORKESTR_CONNECT_PUBLIC_SETUP_URL: options.setupUrl } : {}),
     ORKESTR_BROKER_FORCE_REREGISTER: "1",
   }, {
     fetchImpl: authenticatedFetchForApi(options),

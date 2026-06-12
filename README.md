@@ -65,7 +65,7 @@ When the VM is up, Orkestr sends that number one WhatsApp readiness message
 through the pre-provisioned relay bridge. Before creating the setup link, the VM
 registers with the Orkestr broker through `POST /api/broker/instances/register`
 and receives a broker-generated UUID plus encrypted channel bootstrap material.
-Configure a stable public base URL such as `https://demo.orkestr.de`; Orkestr
+Configure a stable public base URL such as `https://connect.orkestr.de`; Orkestr
 sends a challenge-gated `/setup/pairing?instanceId=<broker-uuid>&return=/setup`
 link on that host. That page creates a browser-pairing challenge before setup
 opens. The broker UUID is also stored on the challenge so operators and brokers
@@ -87,11 +87,11 @@ Optional URL overrides:
 
 ```bash
 # Use a known public base URL and still route through browser pairing.
-ORKESTR_DEMO_PUBLIC_BASE_URL="https://demo.orkestr.de"
+ORKESTR_CONNECT_PUBLIC_BASE_URL="https://connect.orkestr.de"
 
 # Or provide an exact public setup/pairing URL without an instanceId.
 # The notifier adds instanceId=<broker-uuid> after registration.
-ORKESTR_DEMO_PUBLIC_SETUP_URL="https://demo.orkestr.de/setup/pairing?return=%2Fsetup"
+ORKESTR_CONNECT_PUBLIC_SETUP_URL="https://connect.orkestr.de/setup/pairing?return=%2Fsetup"
 ```
 
 Cloudflare quick tunnel fallback is for local ad hoc testing only. It is off by

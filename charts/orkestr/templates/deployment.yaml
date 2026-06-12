@@ -45,10 +45,14 @@ spec:
                   key: {{ .Values.demo.brokerRegistrationTokenSecretKey | quote }}
             {{- end }}
             {{- with .Values.demo.publicBaseUrl }}
+            - name: ORKESTR_CONNECT_PUBLIC_BASE_URL
+              value: {{ . | quote }}
             - name: ORKESTR_DEMO_PUBLIC_BASE_URL
               value: {{ . | quote }}
             {{- end }}
             {{- with .Values.demo.setupUrl }}
+            - name: ORKESTR_CONNECT_PUBLIC_SETUP_URL
+              value: {{ . | quote }}
             - name: ORKESTR_DEMO_PUBLIC_SETUP_URL
               value: {{ . | quote }}
             {{- end }}

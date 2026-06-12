@@ -147,11 +147,18 @@ function demoInternalUrl(env = process.env) {
 }
 
 function publicSetupUrlOverride(env = process.env) {
-  return firstValue(env.ORKESTR_DEMO_PUBLIC_SETUP_URL, env.ORKESTR_DEMO_SETUP_PUBLIC_URL);
+  return firstValue(
+    env.ORKESTR_CONNECT_PUBLIC_SETUP_URL,
+    env.ORKESTR_CONNECT_SETUP_PUBLIC_URL,
+    env.ORKESTR_DEMO_PUBLIC_SETUP_URL,
+    env.ORKESTR_DEMO_SETUP_PUBLIC_URL,
+  );
 }
 
 function publicBaseUrlOverride(env = process.env) {
   return firstValue(
+    env.ORKESTR_CONNECT_PUBLIC_BASE_URL,
+    env.ORKESTR_CONNECT_BASE_URL,
     env.ORKESTR_DEMO_PUBLIC_BASE_URL,
     env.ORKESTR_PUBLIC_HTTPS_URL,
     env.ORKESTR_HTTPS_URL,
@@ -200,9 +207,9 @@ function positiveTimeoutMs(value, fallback) {
 
 export function readyMessage({ setupUrl }) {
   return [
-    "Orkestr demo VM is ready.",
+    "Orkestr connect setup is ready.",
     "",
-    "Please open this challenge-gated setup link and complete Codex login/sign-in:",
+    "Please open this challenge-gated connect link and complete Codex login/sign-in:",
     setupUrl,
     "",
     "Steps:",

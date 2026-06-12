@@ -16,7 +16,7 @@ demo:
   brokerBaseUrl: ""
   brokerRegistrationTokenSecretName: ""
   brokerRegistrationTokenSecretKey: token
-  # Preferred stable public base URL for the VM, for example https://demo.orkestr.de.
+  # Preferred stable public connect URL for the VM, for example https://connect.orkestr.de.
   # Configure DNS/TLS/reverse proxy outside the chart. If set, the notifier sends
   # <publicBaseUrl>/setup/pairing?instanceId=<broker-uuid>&return=%2Fsetup.
   publicBaseUrl: ""
