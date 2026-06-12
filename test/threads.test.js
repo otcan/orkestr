@@ -923,6 +923,74 @@ esac
   }
 });
 
+test("runtime sync reuses unchanged thread message snapshots", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-runtime-message-cache-"));
+  const fakeTmux = await createFakeTmux(home);
+  const priorPath = process.env.PATH;
+  const priorTmuxLog = process.env.TMUX_LOG;
+  const priorTmuxState = process.env.TMUX_STATE;
+  const originalReadFile = fs.readFile;
+  process.env.PATH = `${fakeTmux.bin}:${priorPath || ""}`;
+  process.env.TMUX_LOG = fakeTmux.log;
+  process.env.TMUX_STATE = fakeTmux.state;
+
+  try {
+    const env = {
+      ORKESTR_HOME: path.join(home, "orkestr-home"),
+      HOME: path.join(home, "runtime-home"),
+      CODEX_HOME: path.join(home, "codex-home"),
+      PATH: process.env.PATH,
+      TMUX_LOG: fakeTmux.log,
+      TMUX_STATE: fakeTmux.state,
+      ORKESTR_RUNTIME_DOCTOR_AUTOMATIC_INTERVAL_MS: "60000",
+      ORKESTR_RUNTIME_TMUX_STATUS_CACHE_MS: "60000",
+    };
+    await createThread({
+      id: "runtime-message-cache-thread",
+      name: "Runtime Message Cache Thread",
+      cwd: path.join(home, "workspace"),
+      executor: {
+        id: "codex",
+        type: "codex",
+        transport: "app-server",
+        metadata: {
+          transport: "app-server",
+          runtimeKind: "codex-app-server",
+        },
+      },
+      runtime: {
+        runtimeKind: "codex-app-server",
+        state: "ready",
+      },
+    }, env);
+    await takeoverRawTerminalThread("runtime-message-cache-thread", { reason: "test_message_cache" }, env);
+    await appendThreadMessage("runtime-message-cache-thread", {
+      role: "assistant",
+      source: "test",
+      text: "Large enough history placeholder.",
+      state: "completed",
+    }, env);
+
+    const paths = await ensureDataDirs(env);
+    const messagePath = path.join(paths.threadMessages, "runtime-message-cache-thread.json");
+    let messageReads = 0;
+    fs.readFile = async (...args) => {
+      if (String(args[0]) === messagePath) messageReads += 1;
+      return originalReadFile.apply(fs, args);
+    };
+
+    await syncRuntimeLeases(env);
+    await syncRuntimeLeases(env);
+
+    assert.equal(messageReads, 1);
+  } finally {
+    fs.readFile = originalReadFile;
+    restoreEnvValue("PATH", priorPath);
+    restoreEnvValue("TMUX_LOG", priorTmuxLog);
+    restoreEnvValue("TMUX_STATE", priorTmuxState);
+  }
+});
+
 test("relative thread workspaces resolve under the runtime workspace root", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-relative-workspace-"));
   const fakeTmux = await createFakeTmux(home);

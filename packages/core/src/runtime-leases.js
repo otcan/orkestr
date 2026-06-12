@@ -5,6 +5,7 @@ import path from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { dataPaths, ensureDataDirs } from "../../storage/src/paths.js";
+import { createThreadMessageRepository } from "../../storage/src/repositories.js";
 import { appendEvent, readJson, writeJson } from "../../storage/src/store.js";
 import { ensureRuntimeAgentsFile } from "./agent-context.js";
 import { recordCodexRuntimeAuthInvalidSignal } from "./codex-auth-health.js";
@@ -72,6 +73,7 @@ const automaticRuntimeDoctorCache = new Map();
 const passiveTmuxSessionCache = new Map();
 const passiveTmuxPaneIdsCache = new Map();
 const codexRuntimeMetadataCache = new Map();
+const passiveRuntimeThreadMessagesCache = new Map();
 const pendingInputStates = new Set(["queued", "pending_delivery", "awaiting_ack"]);
 const needInputPhases = new Set(["need_input", "awaiting_input", "question", "request_user_input"]);
 const proposedPlanOpenTagPattern = /^\s*<\s*proposed[\s_-]*plan\s*>/i;
@@ -459,6 +461,21 @@ async function cachedPassiveTmuxPaneIds(sessionName, env = process.env) {
   const value = await tmuxPaneIds(target).catch(() => []);
   passiveTmuxPaneIdsCache.set(cacheKey, { value, expiresAt: Date.now() + ttlMs });
   return value;
+}
+
+async function cachedPassiveRuntimeThreadMessages(threadId, env = process.env) {
+  const id = String(threadId || "").trim();
+  if (!id) return [];
+  const repository = createThreadMessageRepository(env);
+  const filePath = await repository.pathForThread(id);
+  const fileStat = await fs.stat(filePath).catch(() => null);
+  const statToken = fileStat ? `${Math.trunc(fileStat.mtimeMs)}:${fileStat.size}` : "missing";
+  const cacheKey = `${runtimeCacheScope(env)}:${id}:${filePath}:${statToken}`;
+  const cached = passiveRuntimeThreadMessagesCache.get(id);
+  if (cached?.cacheKey === cacheKey) return cached.messages;
+  const messages = await listThreadMessages(id, env).catch(() => []);
+  passiveRuntimeThreadMessagesCache.set(id, { cacheKey, messages });
+  return messages;
 }
 
 async function resolvePassiveLivePaneId(lease, env = process.env) {
@@ -4056,7 +4073,7 @@ async function syncRuntimeLeasesOnce(env = process.env) {
       ? await getThread(lease.threadId, env).catch(() => null)
       : null;
     const messagesForTtl = threadForTtl
-      ? await listThreadMessages(threadForTtl.id, env).catch(() => [])
+      ? await cachedPassiveRuntimeThreadMessages(threadForTtl.id, env).catch(() => [])
       : [];
     const ttl = runtimeLeaseTtlDecision(lease, env, { messages: messagesForTtl });
     if (ttl) {
@@ -4102,7 +4119,7 @@ async function syncRuntimeLeasesOnce(env = process.env) {
     let leaseForStorage = synced.lease;
     appended += synced.appended || 0;
     const thread = await getThread(lease.threadId, env).catch(() => null);
-    const messages = thread ? await listThreadMessages(thread.id, env).catch(() => []) : [];
+    const messages = thread ? await cachedPassiveRuntimeThreadMessages(thread.id, env).catch(() => []) : [];
     let status = await runtimeStatus(lease.threadId, env, messages, { passiveTmuxCache: true }).catch(() => null);
     if (status) {
       leaseForStorage = {
@@ -4156,6 +4173,9 @@ async function syncRuntimeLeasesOnce(env = process.env) {
     changed = changed || JSON.stringify(leaseForStorage) !== JSON.stringify(lease);
   }
   const activeLeaseThreadIds = new Set(next.filter((lease) => !lease.endedAt).map((lease) => lease.threadId));
+  for (const id of passiveRuntimeThreadMessagesCache.keys()) {
+    if (!activeLeaseThreadIds.has(id)) passiveRuntimeThreadMessagesCache.delete(id);
+  }
   const detached = await syncDetachedCodexRollouts(activeLeaseThreadIds, env).catch(() => ({ appended: 0 }));
   appended += detached.appended || 0;
   if (changed) await saveRuntimeLeases(next, env);
