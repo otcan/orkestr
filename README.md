@@ -146,6 +146,14 @@ recipients before forwarding a send request upstream.
 With those allowlist variables present, bridge sends using that token are
 checked against the declared account and recipient numbers.
 
+For the full VM isolation checklist, including broker UUID routing, per-VM
+runtime homes, desktop containment, update timer checks, and the audit command,
+see [Isolated OSS Demo Runbook](docs/isolated-oss-demo.md). On a demo VM, run:
+
+```bash
+npm run audit:isolation
+```
+
 ### Helm
 
 ```bash

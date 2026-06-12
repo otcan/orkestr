@@ -83,6 +83,8 @@ test("demo VM notifier sends one relay readiness message and seeds relay setting
       const body = JSON.parse(options.body);
       assert.match(body.encryptionPublicKey, /BEGIN PUBLIC KEY/);
       assert.equal(body.instanceId, undefined);
+      assert.match(body.whatsappChatHash, /^[a-f0-9]{64}$/);
+      assert.equal(body.relayAccountId, "responder");
       return response(brokerRegistrationPayload());
     }
     if (url.pathname.endsWith("/health")) {
@@ -324,6 +326,7 @@ test("demo VM contract is private, WhatsApp-number driven, and part of smoke scr
   assert.match(deployment, /ORKESTR_DEMO_WHATSAPP_RELAY_TOKEN/);
   assert.match(smoke, /demo-vm-ready-notify\.mjs/);
   assert.match(pkg, /"smoke:demo-vm": "node --test test\/demo-vm-bootstrap\.test\.js"/);
+  assert.match(pkg, /"audit:isolation": "node scripts\/audit-isolated-demo-instance\.mjs"/);
   assert.match(pkg, /"e2e:whatsapp-demo-onboarding": "node scripts\/real-wa-demo-onboarding\.mjs"/);
   assert.match(readme, /Private VM Demo/);
   assert.match(readme, /ORKESTR_DEMO_WHATSAPP_NUMBER/);

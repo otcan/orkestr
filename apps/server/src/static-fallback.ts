@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { INestApplication } from "@nestjs/common";
+import { resolveBrokerConnectInstance } from "../../../packages/core/src/broker-instance-registry.js";
 import { securityCookieName, verifySecurityToken } from "../../../packages/core/src/security.js";
 import { publicPairingUrl, publicSiteAllowedForHost, publicSitePath, renderPublicSite } from "./public-site.js";
 
@@ -28,7 +29,19 @@ export function registerStaticFallback(app: INestApplication): void {
     if (url.startsWith("/desktop-share/")) {
       return serveDesktopSharePage(response);
     }
-    const instanceSetupRedirect = instanceSetupRedirectUrl(request, url);
+    let instanceSetupRedirect = "";
+    try {
+      instanceSetupRedirect = await instanceSetupRedirectUrl(request, url);
+    } catch (error: any) {
+      if (isInstanceSetupPath(url)) {
+        return response
+          .status(Number(error?.statusCode || 404))
+          .header("cache-control", "no-store")
+          .type("text/plain; charset=utf-8")
+          .send(String(error?.message || "broker_instance_unavailable"));
+      }
+      throw error;
+    }
     if (instanceSetupRedirect) {
       return response
         .status(302)
@@ -59,16 +72,23 @@ export function registerStaticFallback(app: INestApplication): void {
   });
 }
 
-function instanceSetupRedirectUrl(request: any, requestUrl: string): string {
+async function instanceSetupRedirectUrl(request: any, requestUrl: string): Promise<string> {
   const url = new URL(requestUrl || "/", "http://localhost");
   const parts = url.pathname.split("/").filter(Boolean);
   if (parts.length !== 3 || parts[0] !== "i" || parts[2] !== "setup") return "";
   const instanceId = normalizeInstanceId(parts[1]);
   if (!instanceId) return "";
+  await resolveBrokerConnectInstance(instanceId, process.env);
   const target = new URL("/setup/pairing", originalRequestOrigin(request));
   target.searchParams.set("instanceId", instanceId);
   target.searchParams.set("return", url.searchParams.get("return") || "/setup");
   return `${target.pathname}${target.search}`;
+}
+
+function isInstanceSetupPath(requestUrl: string): boolean {
+  const url = new URL(requestUrl || "/", "http://localhost");
+  const parts = url.pathname.split("/").filter(Boolean);
+  return parts.length === 3 && parts[0] === "i" && parts[2] === "setup";
 }
 
 function normalizeInstanceId(value = ""): string {

@@ -410,7 +410,10 @@ export async function runDemoVmReadyNotify(env = process.env, options = {}) {
     return { ok: true, skipped: true, reason: "already_sent", statePath: filePath };
   }
 
-  const publicSetup = await demoPublicSetupUrl(env, options);
+  const publicSetup = await demoPublicSetupUrl({
+    ...env,
+    ORKESTR_DEMO_WHATSAPP_CHAT_HASH: chatHash,
+  }, options);
   if (!publicSetup.ok || !publicSetup.setupUrl) {
     await writeJson(filePath, {
       schemaVersion: 1,

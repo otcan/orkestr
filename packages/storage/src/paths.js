@@ -36,6 +36,7 @@ export function dataPaths(env = process.env) {
     routerTraces: path.join(home, "router-traces.json"),
     watcherAlerts: path.join(home, "watcher-alerts.json"),
     brokerInstances: env.ORKESTR_BROKER_INSTANCES_FILE || path.join(home, "broker-instances.json"),
+    brokerInstancesDb: env.ORKESTR_BROKER_INSTANCES_DB || path.join(home, "broker-instances.sqlite"),
     brokerChannel: env.ORKESTR_BROKER_CHANNEL_FILE || path.join(home, "secrets", "broker-channel.json"),
     brokerClientIdentity: env.ORKESTR_BROKER_CLIENT_IDENTITY_FILE || path.join(home, "secrets", "broker-client-identity.json"),
     brokerClientRegistration: env.ORKESTR_BROKER_CLIENT_REGISTRATION_FILE || path.join(home, "secrets", "broker-client-registration.json"),

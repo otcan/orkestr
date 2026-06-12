@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import os from "node:os";
+import { getSqliteBrokerInstance, readSqliteBrokerRegistry, writeSqliteBrokerRegistry } from "./broker-instance-sqlite-store.js";
 import { dataPaths, ensureDataDirs } from "../../storage/src/paths.js";
 import { readJson, writeJson, writeSecretJson, appendEvent } from "../../storage/src/store.js";
 
@@ -11,11 +12,9 @@ const DEFAULT_TOKEN_MAX_USES = 1000;
 function clean(value) {
   return String(value || "").trim();
 }
-
 function truthy(value) {
   return ["1", "true", "yes", "on"].includes(clean(value).toLowerCase());
 }
-
 function numberEnv(value, fallback, min = 0, max = Number.MAX_SAFE_INTEGER) {
   const text = clean(value);
   if (!text) return fallback;
@@ -27,11 +26,9 @@ function numberEnv(value, fallback, min = 0, max = Number.MAX_SAFE_INTEGER) {
 function sha256(value) {
   return crypto.createHash("sha256").update(String(value || "")).digest("hex");
 }
-
 function hashBuffer(value) {
   return crypto.createHash("sha256").update(value).digest("hex");
 }
-
 function safeEqual(left, right) {
   const leftBuffer = Buffer.from(String(left || ""), "utf8");
   const rightBuffer = Buffer.from(String(right || ""), "utf8");
@@ -42,7 +39,6 @@ function safeEqual(left, right) {
 function nowIso() {
   return new Date().toISOString();
 }
-
 function requestIp(request) {
   const forwarded = clean(request?.headers?.["x-forwarded-for"] || request?.headers?.["X-Forwarded-For"]);
   if (forwarded) return forwarded.split(",")[0].trim();
@@ -52,7 +48,6 @@ function requestIp(request) {
 function requestUserAgent(request) {
   return clean(request?.headers?.["user-agent"] || request?.headers?.["User-Agent"]).slice(0, 300);
 }
-
 function publicKeyFingerprint(publicKey = "") {
   return sha256(clean(publicKey)).slice(0, 32);
 }
@@ -120,10 +115,13 @@ function publicBrokerRecord(channel) {
 }
 
 async function readRegistry(env = process.env) {
+  const sqliteRegistry = await readSqliteBrokerRegistry(env);
+  if (sqliteRegistry) return sqliteRegistry;
   const paths = dataPaths(env);
   const registry = await readJson(paths.brokerInstances, {});
   return {
     schemaVersion: 1,
+    backend: "json",
     broker: registry.broker && typeof registry.broker === "object" ? registry.broker : {},
     instances: Array.isArray(registry.instances) ? registry.instances : [],
     rateLimits: registry.rateLimits && typeof registry.rateLimits === "object" ? registry.rateLimits : {},
@@ -132,6 +130,7 @@ async function readRegistry(env = process.env) {
 }
 
 async function writeRegistry(registry, env = process.env) {
+  if (await writeSqliteBrokerRegistry(registry, env)) return;
   const paths = await ensureDataDirs(env);
   await writeJson(paths.brokerInstances, {
     schemaVersion: 1,
@@ -265,6 +264,11 @@ export async function registerBrokerInstance({ body = {}, request = {}, env = pr
     registrationTokenHash: token.tokenHash,
     requestIp: ip,
     userAgent: requestUserAgent(request),
+    endpointBaseUrl: clean(body.endpointBaseUrl || body.baseUrl || body.apiBaseUrl).slice(0, 500),
+    connectBaseUrl: clean(body.connectBaseUrl || body.publicBaseUrl || body.publicUrl).slice(0, 500),
+    setupUrl: clean(body.setupUrl || body.publicSetupUrl).slice(0, 800),
+    relayAccountId: clean(body.relayAccountId || body.whatsappRelayAccountId).slice(0, 120),
+    whatsappChatHash: clean(body.whatsappChatHash || body.targetChatHash).slice(0, 128),
     createdAt,
     lastSeenAt: createdAt,
     limits: {
@@ -299,6 +303,7 @@ export async function listBrokerInstances(env = process.env) {
   const registry = await readRegistry(env);
   return {
     broker: registry.broker || {},
+    backend: registry.backend || "json",
     instances: registry.instances.map((instance) => ({
       instanceId: instance.instanceId,
       channelId: instance.channelId,
@@ -306,6 +311,15 @@ export async function listBrokerInstances(env = process.env) {
       displayName: instance.displayName,
       version: instance.version,
       capabilities: instance.capabilities || [],
+      endpointBaseUrl: instance.endpointBaseUrl || "",
+      connectBaseUrl: instance.connectBaseUrl || "",
+      setupUrl: instance.setupUrl || "",
+      relayAccountId: instance.relayAccountId || "",
+      whatsappChatHashConfigured: Boolean(instance.whatsappChatHash),
+      expiresAt: instance.expiresAt || null,
+      disabledAt: instance.disabledAt || null,
+      auditStatus: instance.auditStatus || "",
+      auditUpdatedAt: instance.auditUpdatedAt || null,
       encryptionPublicKeyFingerprint: instance.encryptionPublicKeyFingerprint,
       requestIp: instance.requestIp,
       userAgent: instance.userAgent,
@@ -318,8 +332,56 @@ export async function listBrokerInstances(env = process.env) {
 }
 
 export async function brokerInstance(instanceId, env = process.env) {
+  const sqlite = await getSqliteBrokerInstance(instanceId, env);
+  if (sqlite.available) return sqlite.instance;
   const registry = await readRegistry(env);
   return registry.instances.find((instance) => instance.instanceId === clean(instanceId)) || null;
+}
+
+function expired(record) {
+  const expiresAt = Date.parse(clean(record?.expiresAt));
+  return Number.isFinite(expiresAt) && expiresAt <= Date.now();
+}
+
+function heartbeatExpired(record) {
+  const ttlSeconds = Number(record?.limits?.heartbeatTtlSeconds || 0);
+  if (!Number.isFinite(ttlSeconds) || ttlSeconds <= 0) return false;
+  const last = Date.parse(clean(record?.lastHeartbeatAt || record?.lastSeenAt || record?.createdAt));
+  return Number.isFinite(last) && last + ttlSeconds * 1000 < Date.now();
+}
+
+function publicConnectRecord(record) {
+  return {
+    instanceId: record.instanceId,
+    channelId: record.channelId,
+    status: record.status,
+    displayName: record.displayName,
+    version: record.version,
+    endpointBaseUrl: record.endpointBaseUrl || "",
+    connectBaseUrl: record.connectBaseUrl || "",
+    setupUrl: record.setupUrl || "",
+    relayAccountId: record.relayAccountId || "",
+    lastSeenAt: record.lastSeenAt || null,
+    lastHeartbeatAt: record.lastHeartbeatAt || null,
+  };
+}
+
+export async function resolveBrokerConnectInstance(instanceId, env = process.env) {
+  const record = await brokerInstance(instanceId, env);
+  if (!record) throw Object.assign(new Error("broker_instance_not_found"), { statusCode: 404 });
+  if (record.disabledAt || ["disabled", "deleted", "revoked"].includes(clean(record.status).toLowerCase())) {
+    throw Object.assign(new Error("broker_instance_disabled"), { statusCode: 410 });
+  }
+  if (expired(record)) {
+    throw Object.assign(new Error("broker_instance_expired"), { statusCode: 410 });
+  }
+  if (truthy(env.ORKESTR_BROKER_CONNECT_REQUIRE_HEARTBEAT) && heartbeatExpired(record)) {
+    throw Object.assign(new Error("broker_instance_unhealthy"), { statusCode: 503 });
+  }
+  return {
+    ok: true,
+    instance: publicConnectRecord(record),
+  };
 }
 
 export function encryptBrokerChannelPayload(payload, { clientPrivateKey, brokerPublicKey, channelId }) {
@@ -392,6 +454,11 @@ export async function ensureBrokerClientRegistration(env = process.env, options 
       version: clean(env.ORKESTR_VERSION || env.npm_package_version),
       capabilities: ["demo-onboarding", "pairing-challenge"],
       encryptionPublicKey: client.publicKey,
+      endpointBaseUrl: clean(env.ORKESTR_DEMO_INTERNAL_BASE_URL || env.ORKESTR_API_BASE || env.ORKESTR_PUBLIC_APP_URL),
+      connectBaseUrl: clean(env.ORKESTR_CONNECT_PUBLIC_BASE_URL || env.ORKESTR_DEMO_PUBLIC_BASE_URL),
+      setupUrl: clean(env.ORKESTR_CONNECT_PUBLIC_SETUP_URL || env.ORKESTR_DEMO_PUBLIC_SETUP_URL),
+      relayAccountId: clean(env.ORKESTR_DEMO_WHATSAPP_RELAY_ACCOUNT_ID || env.ORKESTR_WHATSAPP_RESPONDER_ACCOUNT_ID),
+      whatsappChatHash: clean(env.ORKESTR_DEMO_WHATSAPP_CHAT_HASH),
     }),
   });
   let payload = null;

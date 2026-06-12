@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { startServer } from "../apps/server/src/server.js";
+import { __brokerInstanceRegistryTestInternals, registerBrokerInstance } from "../packages/core/src/broker-instance-registry.js";
 import { approvePairingChallenge } from "../packages/core/src/security.js";
 
 const publicRuntimeEnvKeys = [
@@ -72,6 +73,13 @@ test("server serves the public site at root and Angular UI at app routes", async
   process.env.ORKESTR_HOME = home;
   delete process.env.ORKESTR_OVERLAY_DIR;
   clearEnv(publicRuntimeEnvKeys);
+  const client = __brokerInstanceRegistryTestInternals.createX25519Identity();
+  const brokerRegistration = await registerBrokerInstance({
+    env: process.env,
+    trustedAdmin: true,
+    request: { ip: "127.0.0.1", headers: { "user-agent": "node:test" } },
+    body: { encryptionPublicKey: client.publicKey, displayName: "static-ui-demo" },
+  });
   const server = await startServer({ port: 0, host: "127.0.0.1" });
   const { port } = server.address();
   try {
@@ -92,7 +100,7 @@ test("server serves the public site at root and Angular UI at app routes", async
     const onboardingHtml = await onboardingResponse.text();
     const setupGmailResponse = await fetch(`http://127.0.0.1:${port}/setup/gmail`);
     const setupGoogleMarketingResponse = await fetch(`http://127.0.0.1:${port}/setup/google-marketing`);
-    const instanceSetupResponse = await fetch(`http://127.0.0.1:${port}/i/demo-vm-001/setup`, { redirect: "manual" });
+    const instanceSetupResponse = await fetch(`http://127.0.0.1:${port}/i/${brokerRegistration.instanceId}/setup`, { redirect: "manual" });
     const workflowOnboardingResponse = await fetch(`http://127.0.0.1:${port}/onboarding`);
     const legacyOnboardingResponse = await fetch(`http://127.0.0.1:${port}/ng/onboarding`);
     const opsResponse = await fetch(`http://127.0.0.1:${port}/ops`);
@@ -131,7 +139,7 @@ test("server serves the public site at root and Angular UI at app routes", async
     assert.equal(setupGmailResponse.status, 200);
     assert.equal(setupGoogleMarketingResponse.status, 200);
     assert.equal(instanceSetupResponse.status, 302);
-    assert.equal(instanceSetupResponse.headers.get("location"), "/setup/pairing?instanceId=demo-vm-001&return=%2Fsetup");
+    assert.equal(instanceSetupResponse.headers.get("location"), `/setup/pairing?instanceId=${brokerRegistration.instanceId}&return=%2Fsetup`);
     assert.equal(workflowOnboardingResponse.status, 200);
     assert.equal(legacyOnboardingResponse.status, 200);
     assert.equal(opsResponse.status, 200);
@@ -161,6 +169,33 @@ test("server serves the public site at root and Angular UI at app routes", async
     if (priorOverlay === undefined) delete process.env.ORKESTR_OVERLAY_DIR;
     else process.env.ORKESTR_OVERLAY_DIR = priorOverlay;
     restoreEnv(priorPublicRuntimeEnv);
+  }
+});
+
+test("instance connect setup requires a registered broker UUID", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-static-instance-connect-"));
+  const priorHome = process.env.ORKESTR_HOME;
+  process.env.ORKESTR_HOME = home;
+  const client = __brokerInstanceRegistryTestInternals.createX25519Identity();
+  const brokerRegistration = await registerBrokerInstance({
+    env: process.env,
+    trustedAdmin: true,
+    request: { ip: "127.0.0.1", headers: { "user-agent": "node:test" } },
+    body: { encryptionPublicKey: client.publicKey, displayName: "connect-route-demo" },
+  });
+  const server = await startServer({ port: 0, host: "127.0.0.1" });
+  const { port } = server.address();
+  try {
+    const registered = await fetch(`http://127.0.0.1:${port}/i/${brokerRegistration.instanceId}/setup`, { redirect: "manual" });
+    const unknown = await fetch(`http://127.0.0.1:${port}/i/demo-vm-001/setup`, { redirect: "manual" });
+
+    assert.equal(registered.status, 302);
+    assert.equal(registered.headers.get("location"), `/setup/pairing?instanceId=${brokerRegistration.instanceId}&return=%2Fsetup`);
+    assert.equal(unknown.status, 404);
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+    if (priorHome === undefined) delete process.env.ORKESTR_HOME;
+    else process.env.ORKESTR_HOME = priorHome;
   }
 });
 

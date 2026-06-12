@@ -241,6 +241,23 @@ async function waitForOutboundPrompt(options, text, afterMs, sentIds) {
   });
 }
 
+async function verifySetupUrlReachable(setupUrl) {
+  const response = await fetch(setupUrl, { redirect: "manual" });
+  const location = clean(response.headers.get("location"));
+  const ok = [200, 302, 303, 307, 308].includes(response.status);
+  if (!ok) {
+    const error = new Error(`setup_url_unreachable_${response.status}`);
+    error.details = { setupUrl, status: response.status, location };
+    throw error;
+  }
+  if (response.status >= 300 && !/\/setup\/pairing\b/.test(location)) {
+    const error = new Error("setup_url_redirect_not_pairing");
+    error.details = { setupUrl, status: response.status, location };
+    throw error;
+  }
+  return { status: response.status, location };
+}
+
 async function writeArtifact(options, payload) {
   if (!options.artifactPath) return;
   await fs.mkdir(path.dirname(path.resolve(options.artifactPath)), { recursive: true });
@@ -277,6 +294,7 @@ export async function runRealWhatsAppDemoOnboarding(options) {
 
   try {
     result.preflight = await preflight(options);
+    result.setupUrlCheck = await verifySetupUrlReachable(setup.setupUrl);
     const sent = await api(options, "/api/connectors/whatsapp/bridge/send-text", {
       method: "POST",
       body: {
@@ -295,7 +313,7 @@ export async function runRealWhatsAppDemoOnboarding(options) {
       includesSetupUrl: text.includes(setup.setupUrl),
       challengeGated: /browser-pairing challenge/i.test(text),
     };
-    result.ok = Boolean(result.observedMessageId) && result.prompt.asksForCodexLogin && result.prompt.includesSetupUrl;
+    result.ok = Boolean(result.observedMessageId) && result.prompt.asksForCodexLogin && result.prompt.includesSetupUrl && Boolean(result.setupUrlCheck?.status);
     result.finishedAt = new Date().toISOString();
     return result;
   } catch (error) {
