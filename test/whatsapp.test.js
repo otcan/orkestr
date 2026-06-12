@@ -1886,7 +1886,7 @@ test("local whatsapp phone pairing replaces an existing qr runtime", async () =>
 
   class Client {
     constructor(options) {
-      calls.push(["client", options.pairWithPhoneNumber?.phoneNumber, options.puppeteer?.protocolTimeout]);
+      calls.push(["client", options.pairWithPhoneNumber?.phoneNumber, options.puppeteer?.protocolTimeout, options.userAgent]);
     }
 
     on(event) {
@@ -1921,7 +1921,9 @@ test("local whatsapp phone pairing replaces an existing qr runtime", async () =>
     });
 
     assert.equal(calls.includes("destroy-existing"), true);
-    assert.deepEqual(calls.find((call) => Array.isArray(call) && call[0] === "client"), ["client", "155512345", 345000]);
+    const clientCall = calls.find((call) => Array.isArray(call) && call[0] === "client");
+    assert.deepEqual(clientCall.slice(0, 3), ["client", "155512345", 345000]);
+    assert.match(clientCall[3], /Chrome\/147\.0\.0\.0/);
     assert.equal(result.state, "starting");
     const events = await listEvents(env);
     assert.ok(events.find((event) => event.type === "whatsapp_local_pairing_runtime_replaced"));
