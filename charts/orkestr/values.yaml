@@ -25,12 +25,6 @@ demo:
   # Last-resort fallback for local demos only. Production/demo-review runs should
   # use publicBaseUrl or setupUrl because random quick tunnels can fail on mobile DNS.
   cloudflareFallback: false
-  relay:
-    bridgeUrl: ""
-    accountId: responder
-    tokenSecretName: ""
-    tokenSecretKey: token
-
 persistence:
   enabled: true
   size: 10Gi

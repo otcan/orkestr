@@ -1,9 +1,8 @@
 import crypto from "node:crypto";
 import os from "node:os";
-import { getSqliteBrokerInstance, readSqliteBrokerRegistry, writeSqliteBrokerRegistry } from "./broker-instance-sqlite-store.js";
 import { dataPaths, ensureDataDirs } from "../../storage/src/paths.js";
 import { readJson, writeJson, writeSecretJson, appendEvent } from "../../storage/src/store.js";
-
+import { getSqliteBrokerInstance, readSqliteBrokerRegistry, writeSqliteBrokerRegistry } from "./broker-instance-sqlite-store.js";
 const DEFAULT_MAX_INSTANCES = 10000;
 const DEFAULT_RATE_WINDOW_MS = 60_000;
 const DEFAULT_RATE_LIMIT = 30;
@@ -26,9 +25,7 @@ function numberEnv(value, fallback, min = 0, max = Number.MAX_SAFE_INTEGER) {
 function sha256(value) {
   return crypto.createHash("sha256").update(String(value || "")).digest("hex");
 }
-function hashBuffer(value) {
-  return crypto.createHash("sha256").update(value).digest("hex");
-}
+function hashBuffer(value) { return crypto.createHash("sha256").update(value).digest("hex"); }
 function safeEqual(left, right) {
   const leftBuffer = Buffer.from(String(left || ""), "utf8");
   const rightBuffer = Buffer.from(String(right || ""), "utf8");
@@ -85,12 +82,7 @@ function encryptJson(payload, key) {
   const cipher = crypto.createCipheriv("aes-256-gcm", key, iv);
   const plaintext = Buffer.from(JSON.stringify(payload), "utf8");
   const ciphertext = Buffer.concat([cipher.update(plaintext), cipher.final()]);
-  return {
-    alg: "X25519-HKDF-SHA256+A256GCM",
-    iv: iv.toString("base64"),
-    ciphertext: ciphertext.toString("base64"),
-    tag: cipher.getAuthTag().toString("base64"),
-  };
+  return { alg: "X25519-HKDF-SHA256+A256GCM", iv: iv.toString("base64"), ciphertext: ciphertext.toString("base64"), tag: cipher.getAuthTag().toString("base64") };
 }
 
 function decryptJson(envelope, key) {
@@ -107,11 +99,7 @@ function decryptJson(envelope, key) {
 }
 
 function publicBrokerRecord(channel) {
-  return {
-    keyId: channel.keyId,
-    publicKey: channel.publicKey,
-    createdAt: channel.createdAt,
-  };
+  return { keyId: channel.keyId, publicKey: channel.publicKey, createdAt: channel.createdAt };
 }
 
 async function readRegistry(env = process.env) {
@@ -120,8 +108,7 @@ async function readRegistry(env = process.env) {
   const paths = dataPaths(env);
   const registry = await readJson(paths.brokerInstances, {});
   return {
-    schemaVersion: 1,
-    backend: "json",
+    schemaVersion: 1, backend: "json",
     broker: registry.broker && typeof registry.broker === "object" ? registry.broker : {},
     instances: Array.isArray(registry.instances) ? registry.instances : [],
     rateLimits: registry.rateLimits && typeof registry.rateLimits === "object" ? registry.rateLimits : {},
@@ -146,13 +133,7 @@ async function ensureBrokerChannel(env = process.env) {
   const prior = await readJson(paths.brokerChannel, null);
   if (prior?.privateKey && prior?.publicKey && prior?.keyId) return prior;
   const identity = createX25519Identity();
-  const channel = {
-    schemaVersion: 1,
-    keyId: crypto.randomUUID(),
-    publicKey: identity.publicKey,
-    privateKey: identity.privateKey,
-    createdAt: nowIso(),
-  };
+  const channel = { schemaVersion: 1, keyId: crypto.randomUUID(), publicKey: identity.publicKey, privateKey: identity.privateKey, createdAt: nowIso() };
   await writeSecretJson(paths.brokerChannel, channel);
   return channel;
 }
@@ -162,13 +143,7 @@ async function ensureClientIdentity(env = process.env) {
   const prior = await readJson(paths.brokerClientIdentity, null);
   if (prior?.privateKey && prior?.publicKey && prior?.keyId) return prior;
   const identity = createX25519Identity();
-  const client = {
-    schemaVersion: 1,
-    keyId: crypto.randomUUID(),
-    publicKey: identity.publicKey,
-    privateKey: identity.privateKey,
-    createdAt: nowIso(),
-  };
+  const client = { schemaVersion: 1, keyId: crypto.randomUUID(), publicKey: identity.publicKey, privateKey: identity.privateKey, createdAt: nowIso() };
   await writeSecretJson(paths.brokerClientIdentity, client);
   return client;
 }
@@ -290,11 +265,8 @@ export async function registerBrokerInstance({ body = {}, request = {}, env = pr
   }, env).catch(() => null);
 
   const encryptedWelcome = encryptJson({
-    instanceId: record.instanceId,
-    channelId: record.channelId,
-    brokerKeyId: brokerChannel.keyId,
-    issuedAt: createdAt,
-    serverNonce: crypto.randomBytes(16).toString("base64"),
+    instanceId: record.instanceId, channelId: record.channelId, brokerKeyId: brokerChannel.keyId,
+    issuedAt: createdAt, serverNonce: crypto.randomBytes(16).toString("base64"),
   }, channelKey);
   return instanceResponse(record, brokerChannel, encryptedWelcome);
 }
@@ -352,11 +324,8 @@ function heartbeatExpired(record) {
 
 function publicConnectRecord(record) {
   return {
-    instanceId: record.instanceId,
-    channelId: record.channelId,
-    status: record.status,
-    displayName: record.displayName,
-    version: record.version,
+    instanceId: record.instanceId, channelId: record.channelId, status: record.status,
+    displayName: record.displayName, version: record.version,
     endpointBaseUrl: record.endpointBaseUrl || "",
     connectBaseUrl: record.connectBaseUrl || "",
     setupUrl: record.setupUrl || "",
@@ -378,10 +347,7 @@ export async function resolveBrokerConnectInstance(instanceId, env = process.env
   if (truthy(env.ORKESTR_BROKER_CONNECT_REQUIRE_HEARTBEAT) && heartbeatExpired(record)) {
     throw Object.assign(new Error("broker_instance_unhealthy"), { statusCode: 503 });
   }
-  return {
-    ok: true,
-    instance: publicConnectRecord(record),
-  };
+  return { ok: true, instance: publicConnectRecord(record) };
 }
 
 export function encryptBrokerChannelPayload(payload, { clientPrivateKey, brokerPublicKey, channelId }) {
@@ -457,7 +423,6 @@ export async function ensureBrokerClientRegistration(env = process.env, options 
       endpointBaseUrl: clean(env.ORKESTR_DEMO_INTERNAL_BASE_URL || env.ORKESTR_API_BASE || env.ORKESTR_PUBLIC_APP_URL),
       connectBaseUrl: clean(env.ORKESTR_CONNECT_PUBLIC_BASE_URL || env.ORKESTR_DEMO_PUBLIC_BASE_URL),
       setupUrl: clean(env.ORKESTR_CONNECT_PUBLIC_SETUP_URL || env.ORKESTR_DEMO_PUBLIC_SETUP_URL),
-      relayAccountId: clean(env.ORKESTR_DEMO_WHATSAPP_RELAY_ACCOUNT_ID || env.ORKESTR_WHATSAPP_RESPONDER_ACCOUNT_ID),
       whatsappChatHash: clean(env.ORKESTR_DEMO_WHATSAPP_CHAT_HASH),
     }),
   });
@@ -487,6 +452,42 @@ export async function ensureBrokerClientRegistration(env = process.env, options 
   };
   await writeSecretJson(paths.brokerClientRegistration, registration);
   return { ok: true, reused: false, ...registration };
+}
+
+export async function encryptBrokerClientPayload(payload = {}, registration = {}, env = process.env) {
+  const paths = await ensureDataDirs(env);
+  const client = await readJson(paths.brokerClientIdentity, null);
+  const channelId = clean(registration.channelId);
+  const brokerPublicKey = clean(registration.brokerPublicKey);
+  if (!client?.privateKey || !channelId || !brokerPublicKey) {
+    throw Object.assign(new Error("broker_client_registration_missing"), { statusCode: 409 });
+  }
+  return {
+    channelId,
+    envelope: encryptBrokerChannelPayload(payload, {
+      clientPrivateKey: client.privateKey,
+      brokerPublicKey,
+      channelId,
+    }),
+  };
+}
+
+export async function decryptBrokerInstanceRequest(instanceId, body = {}, env = process.env) {
+  const record = await brokerInstance(instanceId, env);
+  if (!record) throw Object.assign(new Error("broker_instance_not_found"), { statusCode: 404 });
+  if (record.disabledAt || ["disabled", "deleted", "revoked"].includes(clean(record.status).toLowerCase())) {
+    throw Object.assign(new Error("broker_instance_disabled"), { statusCode: 410 });
+  }
+  if (clean(body.channelId) !== record.channelId) {
+    throw Object.assign(new Error("broker_channel_denied"), { statusCode: 401 });
+  }
+  const brokerChannel = await ensureBrokerChannel(env);
+  const payload = decryptBrokerChannelPayload(body.envelope || body, {
+    brokerPrivateKey: brokerChannel.privateKey,
+    instancePublicKey: record.encryptionPublicKey,
+    channelId: record.channelId,
+  });
+  return { record, payload };
 }
 
 export const __brokerInstanceRegistryTestInternals = {

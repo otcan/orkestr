@@ -77,7 +77,8 @@ async function staticContractCheck() {
   assert.match(entrypoint, /CODEX_HOME="\$\{CODEX_HOME:-\$ORKESTR_HOME\/codex\}"/);
   assert.match(entrypoint, /ORKESTR_DEMO_WHATSAPP_NUMBER/);
   assert.match(demoNotify, /runDemoVmReadyNotify/);
-  assert.match(demoNotify, /writeConnectorConfig\("whatsapp"/);
+  assert.match(demoNotify, /brokerInstanceWhatsAppRequest/);
+  assert.doesNotMatch(demoNotify, /writeConnectorConfig\("whatsapp"/);
   assert.match(demoNotify, /trycloudflare/);
   assert.match(demoNotify, /browser-pairing challenge/);
   assert.match(chart, /name: orkestr/);
@@ -100,7 +101,9 @@ async function staticContractCheck() {
   assert.match(deployment, /ORKESTR_DEMO_PUBLIC_BASE_URL/);
   assert.match(deployment, /ORKESTR_DEMO_CLOUDFLARE_FALLBACK/);
   assert.match(deployment, /ORKESTR_DEMO_CLOUDFLARE_DISABLE/);
-  assert.match(deployment, /ORKESTR_DEMO_WHATSAPP_RELAY_TOKEN/);
+  assert.doesNotMatch(deployment, /ORKESTR_DEMO_WHATSAPP_RELAY_URL/);
+  assert.doesNotMatch(deployment, /ORKESTR_DEMO_WHATSAPP_RELAY_ACCOUNT_ID/);
+  assert.doesNotMatch(deployment, /ORKESTR_DEMO_WHATSAPP_RELAY_TOKEN/);
   assert.match(wizardTs, /threadName = "orkest"/);
   assert.match(wizardTs, /saveSetupDemoPreferences/);
   assert.match(wizardTs, /acquireDesktopLease/);

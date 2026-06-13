@@ -146,11 +146,16 @@ The release train owns tests. Run the checks appropriate to the changed surface:
   real WhatsApp E2E before deployment. `--skip-whatsapp-real` is blocked for
   deploys unless paired with the explicit emergency bypass
   `--allow-release-without-e2e`.
-- isolated demo VM release deploys: add `--demo-release`. This also runs
-  `npm run audit:isolation` and
-  `npm run e2e:whatsapp-demo-onboarding` before deployment, writing live
-  WhatsApp artifacts into the full-run artifact directory. Skipping the
-  isolation audit for a demo deploy requires both `--skip-isolation-audit` and
+- isolated demo VM release deploys: add `--demo-release` and pass a direct
+  target phone number with `--demo-whatsapp-phone <phone>` or
+  `ORKESTR_REAL_WA_DEMO_PHONE_NUMBER`; existing demo VM env
+  `ORKESTR_DEMO_WHATSAPP_NUMBER` is also accepted. This also runs
+  `npm run audit:isolation` and `npm run e2e:whatsapp-demo-onboarding` before
+  deployment, writing live WhatsApp artifacts into the full-run artifact
+  directory. The OSS onboarding gate derives the direct `<digits>@c.us` chat
+  from the phone number and clears legacy demo chat-id env for that stage.
+  Skipping the isolation audit for a demo deploy requires both
+  `--skip-isolation-audit` and
   `--allow-release-without-isolation-audit`, and the skipped gate is recorded in
   the summary artifact.
 - attended real WhatsApp/OAuth/desktop/timer checks:

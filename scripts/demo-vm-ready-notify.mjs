@@ -4,10 +4,9 @@ import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import http from "node:http";
 import path from "node:path";
-import { sendWhatsAppText } from "../packages/connectors/src/whatsapp.js";
 import { ensureBrokerClientRegistration } from "../packages/core/src/broker-instance-registry.js";
 import { writeRuntimeSettings } from "../packages/core/src/runtime-settings.js";
-import { writeConnectorConfig } from "../packages/storage/src/config.js";
+import { brokerInstanceWhatsAppRequest } from "./broker-wa-router.mjs";
 
 function clean(value) {
   return String(value || "").trim();
@@ -180,23 +179,6 @@ function statePath(env = process.env) {
   return firstValue(
     env.ORKESTR_DEMO_NOTIFY_STATE_PATH,
     path.join(firstValue(env.ORKESTR_HOME, "/data"), "demo-vm-ready-notification.json"),
-  );
-}
-
-function relayUrl(env = process.env) {
-  return firstValue(env.ORKESTR_DEMO_WHATSAPP_RELAY_URL, env.WHATSAPP_BRIDGE_URL);
-}
-
-function relayToken(env = process.env) {
-  return firstValue(env.ORKESTR_DEMO_WHATSAPP_RELAY_TOKEN, env.WHATSAPP_BRIDGE_TOKEN, env.WA_HTTP_TOKEN);
-}
-
-function relayAccountId(env = process.env) {
-  return firstValue(
-    env.ORKESTR_DEMO_WHATSAPP_RELAY_ACCOUNT_ID,
-    env.ORKESTR_WHATSAPP_RESPONDER_ACCOUNT_ID,
-    env.ORKESTR_WHATSAPP_ACCOUNT_ID,
-    "responder",
   );
 }
 
@@ -444,47 +426,16 @@ export async function runDemoVmReadyNotify(env = process.env, options = {}) {
     },
   }, env);
 
-  const bridgeUrl = relayUrl(env);
-  if (!bridgeUrl) {
-    await writeJson(filePath, {
-      schemaVersion: 1,
-      sent: false,
-      targetKey,
-      chatHash,
-      state: "blocked",
-      reason: "relay_bridge_url_missing",
-      setupUrl,
-      instanceId: publicSetup.instanceId || "",
-      updatedAt: new Date().toISOString(),
-    });
-    return { ok: false, skipped: true, reason: "relay_bridge_url_missing", statePath: filePath };
-  }
-
-  await writeConnectorConfig("whatsapp", {
-    bridgeMode: "external",
-    bridgeUrl,
-    ...(relayToken(env) ? { apiToken: relayToken(env) } : {}),
-  }, env);
-
   const timeoutMs = positiveTimeoutMs(env.ORKESTR_DEMO_NOTIFY_HEALTH_TIMEOUT_MS, 120_000);
   if (timeoutMs) await waitForHealth(healthUrl(env), timeoutMs);
 
   const text = readyMessage({ setupUrl });
-  const sendEnv = {
-    ...env,
-    WHATSAPP_BRIDGE_MODE: "external",
-    ORKESTR_WHATSAPP_EXTERNAL_BRIDGE_ENABLED: "1",
-    WHATSAPP_BRIDGE_URL: bridgeUrl,
-    ...(relayToken(env) ? { WHATSAPP_BRIDGE_TOKEN: relayToken(env) } : {}),
-  };
-  const result = await sendWhatsAppText({
+  const result = await brokerInstanceWhatsAppRequest(publicSetup, "onboarding", {
     chatId,
     text,
-    accountId: relayAccountId(env),
-    config: { bridgeMode: "external", bridgeUrl, ...(relayToken(env) ? { apiToken: relayToken(env) } : {}) },
-    env: sendEnv,
-    fetchImpl: options.fetchImpl || fetch,
-  });
+    crossAccountEchoSuppression: true,
+  }, { env, fetchImpl: options.fetchImpl || fetch });
+  const sentPayload = result?.sent || result;
 
   await writeJson(filePath, {
     schemaVersion: 1,
@@ -501,9 +452,9 @@ export async function runDemoVmReadyNotify(env = process.env, options = {}) {
       reused: publicSetup.tunnel.reused === true,
     } : null,
     result: {
-      ok: result?.ok !== false,
-      ids: Array.isArray(result?.ids) ? result.ids : undefined,
-      sentCount: Array.isArray(result?.sent) ? result.sent.length : undefined,
+      ok: sentPayload?.ok !== false,
+      ids: Array.isArray(sentPayload?.ids) ? sentPayload.ids : undefined,
+      sentCount: Array.isArray(sentPayload?.sent) ? sentPayload.sent.length : undefined,
     },
     updatedAt: new Date().toISOString(),
   });
@@ -514,7 +465,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   runDemoVmReadyNotify()
     .then((result) => {
       console.log(JSON.stringify(result));
-      if (result.ok === false && result.reason !== "relay_bridge_url_missing") process.exitCode = 1;
+      if (result.ok === false) process.exitCode = 1;
     })
     .catch((error) => {
       console.error(JSON.stringify({ ok: false, error: error?.message || String(error) }));

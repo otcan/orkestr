@@ -1,5 +1,10 @@
 import assert from "node:assert/strict";
+import crypto from "node:crypto";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import test from "node:test";
+import { normalizeDirectWhatsAppTarget, runRealWhatsAppDemoOnboarding } from "../scripts/real-wa-demo-onboarding.mjs";
 import { desktopShareApiUrl, extractDesktopShareUrlParts } from "../scripts/real-wa-e2e.mjs";
 import { validateWhatsAppPreflight } from "../scripts/real-wa-e2e-preflight.mjs";
 
@@ -148,4 +153,106 @@ test("real WhatsApp E2E builds desktop-share API URLs from wildcard public links
     desktopShareApiUrl(shareUrl, "open", details),
     "https://d-456def.desktop.example.test/api/desktop-shares/share-2/open?key=secret-2&subdomain=d-456def",
   );
+});
+
+test("real WhatsApp demo onboarding derives direct chat ids from phone numbers", () => {
+  assert.deepEqual(
+    normalizeDirectWhatsAppTarget({ phoneNumber: "+49 176 0000000" }),
+    {
+      chatId: "491760000000@c.us",
+      phoneNumber: "+49 176 0000000",
+      phoneDigits: "491760000000",
+      derivedChatId: "491760000000@c.us",
+    },
+  );
+
+  assert.deepEqual(
+    normalizeDirectWhatsAppTarget({ chatId: "4917600000000@c.us" }),
+    {
+      chatId: "4917600000000@c.us",
+      phoneNumber: "+4917600000000",
+      phoneDigits: "",
+      derivedChatId: "",
+    },
+  );
+});
+
+test("real WhatsApp demo onboarding sends through broker registered WA router", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-real-wa-demo-broker-"));
+  const priorBroker = process.env.ORKESTR_DEMO_BROKER_BASE_URL;
+  const priorPublic = process.env.ORKESTR_CONNECT_PUBLIC_BASE_URL;
+  const calls = [];
+  const instanceId = "11111111-2222-4333-8444-555555555555";
+  const chatId = "491760000000@c.us";
+  const brokerPublicKey = "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VuAyEA2IFd3Rdi7NTih5q0Glq82pzgjEycOnu/MpuxJdGzGn4=\n-----END PUBLIC KEY-----\n";
+  process.env.ORKESTR_DEMO_BROKER_BASE_URL = "https://broker.example.test";
+  process.env.ORKESTR_CONNECT_PUBLIC_BASE_URL = "https://connect.example.test";
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (url, request = {}) => {
+    const parsed = new URL(String(url));
+    calls.push({ url: parsed, request });
+    if (parsed.pathname === "/api/broker/instances/register") {
+      const body = JSON.parse(String(request.body || "{}"));
+      assert.equal(body.whatsappChatHash, crypto.createHash("sha256").update(chatId).digest("hex"));
+      return new Response(JSON.stringify({
+        ok: true,
+        instanceId,
+        channelId: "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee",
+        registeredAt: "2026-06-13T00:00:00.000Z",
+        broker: { keyId: "broker-key-1", publicKey: brokerPublicKey },
+        encryptedWelcome: { alg: "test", iv: "test", ciphertext: "test", tag: "test" },
+      }), { status: 200, headers: { "content-type": "application/json" } });
+    }
+    if (parsed.pathname === `/api/broker/instances/${instanceId}/whatsapp/onboarding`) {
+      const body = JSON.parse(String(request.body || "{}"));
+      assert.equal(body.channelId, "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee");
+      assert.equal(body.envelope?.alg, "X25519-HKDF-SHA256+A256GCM");
+      return new Response(JSON.stringify({ ok: true, sent: { ids: ["sent-1"] } }), { status: 200, headers: { "content-type": "application/json" } });
+    }
+    if (parsed.pathname === `/api/broker/instances/${instanceId}/whatsapp/history`) {
+      return new Response(JSON.stringify({
+        ok: true,
+        messages: [{ id: "sent-1", fromMe: true, timestamp: new Date().toISOString(), body: "broker sent" }],
+      }), { status: 200, headers: { "content-type": "application/json" } });
+    }
+    if (parsed.href === `https://connect.example.test/i/${instanceId}/setup`) {
+      return new Response("", {
+        status: 302,
+        headers: { location: `/setup/pairing?instanceId=${instanceId}&return=%2Fsetup` },
+      });
+    }
+    throw new Error(`unexpected_fetch:${parsed.href}`);
+  };
+
+  try {
+    const result = await runRealWhatsAppDemoOnboarding({
+      execute: true,
+      apiBase: "http://oss.example.test",
+      orkestrHome: home,
+      chatId,
+      phoneNumber: "+49 176 000000",
+      responderAccountId: "responder",
+      setupUrl: "",
+      timeoutMs: 10_000,
+      pollMs: 250,
+      artifactPath: path.join(home, "artifact.json"),
+      skipPreflight: false,
+      allowLocalSetupUrl: false,
+    });
+
+    assert.equal(result.ok, true);
+    assert.equal(result.preflight.mode, "broker");
+    assert.equal(result.preflight.localWhatsAppRequired, false);
+    assert.equal(result.setupUrl, `https://connect.example.test/i/${instanceId}/setup`);
+    assert.equal(result.sentMessageId, "sent-1");
+    assert.equal(result.observedMessageId, "sent-1");
+    assert.ok(calls.some((call) => call.url.pathname.endsWith("/whatsapp/onboarding")));
+    assert.ok(calls.some((call) => call.url.pathname.endsWith("/whatsapp/history")));
+  } finally {
+    globalThis.fetch = originalFetch;
+    if (priorBroker === undefined) delete process.env.ORKESTR_DEMO_BROKER_BASE_URL;
+    else process.env.ORKESTR_DEMO_BROKER_BASE_URL = priorBroker;
+    if (priorPublic === undefined) delete process.env.ORKESTR_CONNECT_PUBLIC_BASE_URL;
+    else process.env.ORKESTR_CONNECT_PUBLIC_BASE_URL = priorPublic;
+  }
 });

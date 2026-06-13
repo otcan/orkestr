@@ -42,7 +42,8 @@ test("OSS demo GO path exposes Docker, Helm, and k3s smoke contracts", async () 
   assert.match(deployment, /ORKESTR_DEMO_PUBLIC_BASE_URL/);
   assert.match(deployment, /ORKESTR_DEMO_CLOUDFLARE_FALLBACK/);
   assert.match(deployment, /ORKESTR_DEMO_CLOUDFLARE_DISABLE/);
-  assert.match(demoNotify, /writeConnectorConfig\("whatsapp"/);
+  assert.match(demoNotify, /brokerInstanceWhatsAppRequest/);
+  assert.doesNotMatch(demoNotify, /writeConnectorConfig\("whatsapp"/);
   assert.match(demoNotify, /trycloudflare/);
   assert.match(demoNotify, /browser-pairing challenge/);
   assert.match(script, /ORKESTR_K3S_OSS_DEMO_EXECUTE/);

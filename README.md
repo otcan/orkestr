@@ -62,24 +62,24 @@ ORKESTR_DEMO_WHATSAPP_NUMBER="+4917600000000"
 ```
 
 When the VM is up, Orkestr sends that number one WhatsApp readiness message
-through the pre-provisioned relay bridge. Before creating the setup link, the VM
-registers with the Orkestr broker through `POST /api/broker/instances/register`
-and receives a broker-generated UUID plus encrypted channel bootstrap material.
+through the broker's WhatsApp router. Before creating the setup link, the VM
+registers with the Orkestr broker through `POST /api/broker/instances/register`,
+declares only a hash of the target WhatsApp chat, and receives a broker-generated
+UUID plus encrypted channel bootstrap material. The OSS VM does not need
+WhatsApp accounts, bridge URLs, bridge tokens, or router account ids.
+
 Configure a stable public base URL such as `https://connect.orkestr.de`; Orkestr
 sends a challenge-gated `/i/<broker-uuid>/setup` link on that host. That path is
 the instance identity boundary: it redirects into browser pairing with the
 broker UUID attached before setup opens. The setup flow then lets you connect
-Codex, keep the Orkestr relay or switch to your own WhatsApp relay, and start
-the default `orkest` thread.
+Codex, use the broker-provided WhatsApp relay or connect your own WhatsApp later,
+and start the default `orkest` thread.
 
-Relay operators can pre-provision these values in the VM image, Helm release, or
-secret manager so evaluators only edit the WhatsApp number:
+Operators can pre-provision these broker values in the VM image, Helm release,
+or secret manager so evaluators only edit the WhatsApp number:
 
 ```bash
 ORKESTR_BROKER_REGISTRATION_TOKEN="..."
-ORKESTR_DEMO_WHATSAPP_RELAY_URL="http://relay.internal/api/connectors/whatsapp/bridge"
-ORKESTR_DEMO_WHATSAPP_RELAY_TOKEN="..."
-ORKESTR_DEMO_WHATSAPP_RELAY_ACCOUNT_ID="responder"
 ```
 
 Optional URL overrides:
@@ -100,51 +100,6 @@ default; enable it explicitly with `ORKESTR_DEMO_CLOUDFLARE_FALLBACK=1` or Helm
 
 Localhost setup links are blocked by default for WhatsApp onboarding. Use
 `ORKESTR_DEMO_ALLOW_LOCAL_SETUP_URL=1` only for local tests.
-
-On the relay/router, prefer a scoped bridge token for each demo VM or demo
-recipient set:
-
-```bash
-ORKESTR_WHATSAPP_BRIDGE_SCOPED_TOKENS_JSON='[
-  {
-    "id": "demo-vm-1",
-    "token": "...",
-    "scopes": ["whatsapp:bridge:send"],
-    "accountId": "responder",
-    "allowedPhoneNumbers": ["+4917600000000"]
-  }
-]'
-```
-
-That token can send only through the declared responder account and only to the
-listed WhatsApp recipient numbers. It is enough for the VM readiness message and
-does not grant bridge read, manage, inbound injection, or arbitrary send access.
-
-If you intentionally keep a single configured bridge token on the router, add a
-recipient allowlist next to it:
-
-```bash
-ORKESTR_WHATSAPP_BRIDGE_TOKEN="..."
-ORKESTR_WHATSAPP_BRIDGE_ACCOUNT_ID="responder"
-ORKESTR_WHATSAPP_BRIDGE_ALLOWED_PHONE_NUMBERS="+4917600000000,+4917600000001"
-```
-
-For a parent relay proxy in front of an already-paired Orkestr router, run the
-versioned proxy with the same narrow boundary:
-
-```bash
-ORKESTR_PARENT_WA_BRIDGE_TOKEN="..."
-ORKESTR_PARENT_WA_BRIDGE_UPSTREAM="http://127.0.0.1:18912/api/connectors/whatsapp/bridge"
-ORKESTR_PARENT_WA_BRIDGE_ALLOWED_ACCOUNTS="responder"
-ORKESTR_PARENT_WA_BRIDGE_ALLOWED_PHONE_NUMBERS="+4917600000000"
-node scripts/parent-whatsapp-bridge-proxy.mjs
-```
-
-The proxy rejects unauthenticated requests, wrong accounts, and non-allowlisted
-recipients before forwarding a send request upstream.
-
-With those allowlist variables present, bridge sends using that token are
-checked against the declared account and recipient numbers.
 
 For the full VM isolation checklist, including broker UUID routing, per-VM
 runtime homes, desktop containment, update timer checks, and the audit command,
@@ -327,6 +282,9 @@ AWS VPS, release regression, and deploy steps are opt-in flags. Real WhatsApp
 E2E is opt-in for local-only runs, but it is required automatically when
 `pipeline:full` is asked to deploy with `--deploy-ref`; use
 `--allow-release-without-e2e` only as an explicit emergency bypass.
+For OSS demo releases, pass `--demo-release --demo-whatsapp-phone <phone>` so
+the onboarding E2E derives the direct WhatsApp `<digits>@c.us` target from a
+phone number instead of a raw chat id.
 
 When changing the UI, run `npm run web:build` and commit the updated `dist/web`
 bundle.

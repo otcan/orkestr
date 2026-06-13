@@ -72,6 +72,7 @@ Options:
   --live-k3s                     Run real k3s demo smoke. Requires Docker, Helm, kubectl.
   --vps-aws                      Run AWS VPS smoke.
   --demo-release                 Add isolated demo VM gates: isolation audit plus fresh-instance WhatsApp onboarding E2E.
+  --demo-whatsapp-phone PHONE    Direct WhatsApp phone number for OSS demo onboarding E2E.
   --whatsapp-real                Run real WhatsApp e2e. Requires explicit real-WA env/config.
   --skip-whatsapp-real           Skip real WhatsApp e2e. Not allowed with --deploy-ref unless --allow-release-without-e2e is also set.
   --allow-release-without-e2e    Explicit emergency bypass for release deploys when real WhatsApp e2e cannot run.
@@ -89,6 +90,7 @@ Environment:
   ORKESTR_FULL_RUN_LIVE_K3S=1
   ORKESTR_FULL_RUN_VPS_AWS=1
   ORKESTR_FULL_RUN_DEMO_RELEASE=1
+  ORKESTR_REAL_WA_DEMO_PHONE_NUMBER="+4917600000000"
   ORKESTR_FULL_RUN_WHATSAPP_REAL=1
   ORKESTR_FULL_RUN_RELEASE_TARGETS="local=http://127.0.0.1:18912,oss=http://127.0.0.1:19822"
 `;
@@ -120,6 +122,13 @@ export function parseFullRunPipelineArgs(argv = process.argv.slice(2), env = pro
     liveK3s: hasFlag(argv, "--live-k3s") || truthy(env.ORKESTR_FULL_RUN_LIVE_K3S),
     vpsAws: hasFlag(argv, "--vps-aws") || truthy(env.ORKESTR_FULL_RUN_VPS_AWS),
     demoRelease: hasFlag(argv, "--demo-release") || truthy(env.ORKESTR_FULL_RUN_DEMO_RELEASE),
+    demoWhatsappPhoneNumber: flagValue(argv, "--demo-whatsapp-phone", clean(
+      env.ORKESTR_REAL_WA_DEMO_PHONE_NUMBER ||
+      env.ORKESTR_REAL_WA_DEMO_PHONE ||
+      env.ORKESTR_DEMO_WHATSAPP_NUMBER ||
+      env.ORKESTR_DEMO_WA_NUMBER ||
+      env.ORKESTR_DEMO_WHATSAPP_TARGET_PHONE,
+    )),
     skipIsolationAudit: hasFlag(argv, "--skip-isolation-audit") || truthy(env.ORKESTR_FULL_RUN_SKIP_ISOLATION_AUDIT),
     allowReleaseWithoutIsolationAudit: hasFlag(argv, "--allow-release-without-isolation-audit") || truthy(env.ORKESTR_FULL_RUN_ALLOW_RELEASE_WITHOUT_ISOLATION_AUDIT),
     skipWhatsappReal: hasFlag(argv, "--skip-whatsapp-real") || truthy(env.ORKESTR_FULL_RUN_SKIP_WHATSAPP_REAL),
@@ -136,6 +145,10 @@ export function parseFullRunPipelineArgs(argv = process.argv.slice(2), env = pro
     Boolean(options.deployRef)
   );
   options.releaseE2eBypass = Boolean(options.deployRef && options.skipWhatsappReal && options.allowReleaseWithoutE2e);
+  if (options.demoRelease && options.whatsappReal && !options.demoWhatsappPhoneNumber) {
+    options.invalid = true;
+    options.error = "demo_release_requires_direct_whatsapp_phone";
+  }
   if (options.deployRef && options.skipWhatsappReal && !options.allowReleaseWithoutE2e) {
     options.invalid = true;
     options.error = "release_deploy_requires_real_whatsapp_e2e";
@@ -158,6 +171,15 @@ function commandStage(id, label, command, args, { enabled = true, env = {}, skip
 function artifactEnv(options = {}, name = "", envName = "") {
   if (!options.artifactDir || !name || !envName) return {};
   return { [envName]: path.join(options.artifactDir, name) };
+}
+
+function demoOnboardingEnv(options = {}) {
+  return {
+    ...artifactEnv(options, "real-wa-demo-onboarding.json", "ORKESTR_REAL_WA_DEMO_ARTIFACT"),
+    ...(options.demoWhatsappPhoneNumber ? { ORKESTR_REAL_WA_DEMO_PHONE_NUMBER: options.demoWhatsappPhoneNumber } : {}),
+    ORKESTR_REAL_WA_DEMO_CHAT_ID: "",
+    ORKESTR_REAL_WA_E2E_CHAT_ID: "",
+  };
 }
 
 export function fullRunPipelineStages(options = {}) {
@@ -197,7 +219,7 @@ export function fullRunPipelineStages(options = {}) {
   }));
   stages.push(npmStage("whatsapp-demo-onboarding", "e2e:whatsapp-demo-onboarding", {
     enabled: options.demoRelease && options.whatsappReal,
-    env: artifactEnv(options, "real-wa-demo-onboarding.json", "ORKESTR_REAL_WA_DEMO_ARTIFACT"),
+    env: demoOnboardingEnv(options),
     skipReason: options.demoRelease && options.skipWhatsappReal ? "skip_whatsapp_real" : "",
   }));
 

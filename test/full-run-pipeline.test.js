@@ -86,6 +86,8 @@ test("full run pipeline adds isolated demo gates for demo release deploys", () =
   const artifactDir = "/tmp/orkestr-full-run-artifacts";
   const options = parseFullRunPipelineArgs([
     "--demo-release",
+    "--demo-whatsapp-phone",
+    "+49 176 0000000",
     "--artifact-dir",
     artifactDir,
     "--deploy-ref",
@@ -105,6 +107,38 @@ test("full run pipeline adds isolated demo gates for demo release deploys", () =
     stages.find((stage) => stage.id === "whatsapp-demo-onboarding").env.ORKESTR_REAL_WA_DEMO_ARTIFACT,
     path.join(artifactDir, "real-wa-demo-onboarding.json"),
   );
+  assert.equal(
+    stages.find((stage) => stage.id === "whatsapp-demo-onboarding").env.ORKESTR_REAL_WA_DEMO_PHONE_NUMBER,
+    "+49 176 0000000",
+  );
+  assert.equal(stages.find((stage) => stage.id === "whatsapp-demo-onboarding").env.ORKESTR_REAL_WA_DEMO_CHAT_ID, "");
+  assert.equal(stages.find((stage) => stage.id === "whatsapp-demo-onboarding").env.ORKESTR_REAL_WA_E2E_CHAT_ID, "");
+});
+
+test("full run pipeline maps OSS demo phone env into the onboarding e2e target", () => {
+  const options = parseFullRunPipelineArgs([
+    "--demo-release",
+    "--whatsapp-real",
+  ], {
+    ORKESTR_DEMO_WHATSAPP_NUMBER: "+49 176 0000001",
+  });
+  const stage = fullRunPipelineStages(options).find((item) => item.id === "whatsapp-demo-onboarding");
+
+  assert.equal(options.demoWhatsappPhoneNumber, "+49 176 0000001");
+  assert.equal(stage.env.ORKESTR_REAL_WA_DEMO_PHONE_NUMBER, "+49 176 0000001");
+  assert.equal(stage.env.ORKESTR_REAL_WA_DEMO_CHAT_ID, "");
+});
+
+test("full run pipeline blocks OSS demo e2e without a direct phone number", () => {
+  const options = parseFullRunPipelineArgs([
+    "--demo-release",
+    "--whatsapp-real",
+  ], {
+    ORKESTR_REAL_WA_DEMO_CHAT_ID: "4917600000000@c.us",
+  });
+
+  assert.equal(options.invalid, true);
+  assert.equal(options.error, "demo_release_requires_direct_whatsapp_phone");
 });
 
 test("full run pipeline blocks release deploys when real WhatsApp e2e is skipped without bypass", () => {

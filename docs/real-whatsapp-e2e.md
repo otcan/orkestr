@@ -29,7 +29,7 @@ preferred mobile demo path. It does not depend on the user sending
 npm run e2e:whatsapp-demo-onboarding -- --execute \
   --api-base http://127.0.0.1:19812 \
   --orkestr-home /path/to/orkestr-home \
-  --chat-id target-user-direct-chat@c.us \
+  --phone +4917600000000 \
   --responder-account responder \
   --artifact artifacts/real-wa-demo-onboarding.json
 ```

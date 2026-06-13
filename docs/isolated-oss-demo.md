@@ -6,22 +6,20 @@ This runbook is for the private VM demo flow. The demo does not use
 ## Roles
 
 - Broker: public connect/auth entrypoint and instance registry.
-- Parent ops Orkestr: operator control plane and WhatsApp relay owner.
+- Parent ops Orkestr: operator control plane and WhatsApp router owner.
 - Isolated OSS VM: customer/demo runtime with its own `ORKESTR_HOME`, service,
   workspaces, browser profiles, connector config, threads, timers, and release
   updater.
 
 ## Required VM Environment
 
-Set only the demo target number and broker/relay inputs needed for this VM:
+Set only the demo target number and broker inputs needed for this VM:
 
 ```bash
 ORKESTR_DEMO_MODE=1
 ORKESTR_DEMO_WHATSAPP_NUMBER="+491700000000"
 ORKESTR_DEMO_BROKER_BASE_URL="https://connect.orkestr.de"
 ORKESTR_CONNECT_PUBLIC_BASE_URL="https://connect.orkestr.de"
-ORKESTR_DEMO_WHATSAPP_RELAY_URL="https://connect.orkestr.de/api/connectors/whatsapp/bridge"
-ORKESTR_DEMO_WHATSAPP_RELAY_ACCOUNT_ID="responder"
 ORKESTR_INSTANCE_DESKTOPS_PROVISIONED=0
 ORKESTR_BROKER_INSTANCE_STORE=sqlite
 ORKESTR_UPDATE_REF=main
@@ -29,8 +27,10 @@ ORKESTR_DEPLOY_CHANNEL=oss-main
 ORKESTR_DEPLOY_TAGS_ONLY=0
 ```
 
-Secrets such as relay tokens and registration tokens must be supplied by the
-operator secret channel, not committed into the repo or printed in logs.
+Secrets such as registration tokens must be supplied by the operator secret
+channel, not committed into the repo or printed in logs. WhatsApp router
+accounts, sessions, bridge URLs, and bridge tokens belong to the broker/router,
+not the OSS VM.
 
 ## Startup Flow
 
@@ -40,8 +40,8 @@ operator secret channel, not committed into the repo or printed in logs.
 3. The broker issues a UUID, channel id, broker public key, and encrypted
    welcome payload.
 4. The VM stores its client registration under its local secret store.
-5. The VM sends a direct WhatsApp onboarding message to
-   `ORKESTR_DEMO_WHATSAPP_NUMBER`.
+5. The VM asks the broker WhatsApp router, over the encrypted broker channel, to
+   send the direct onboarding message to `ORKESTR_DEMO_WHATSAPP_NUMBER`.
 6. The message includes `https://connect.orkestr.de/i/<uuid>/setup`.
 7. The broker verifies that `<uuid>` exists before redirecting to pairing.
 
@@ -81,8 +81,7 @@ Before a demo release, run:
 
 ```bash
 ORKESTR_CONNECT_PUBLIC_BASE_URL=https://connect.orkestr.de \
-ORKESTR_REAL_WA_DEMO_CHAT_ID='<direct-user-chat-id>' \
-ORKESTR_REAL_WA_DEMO_RESPONDER_ACCOUNT=responder \
+ORKESTR_REAL_WA_DEMO_PHONE_NUMBER='<target-user-phone-number>' \
 npm run e2e:whatsapp-demo-onboarding -- --execute
 ```
 
@@ -92,7 +91,9 @@ The artifact must show:
 - a setup URL under `/i/<uuid>/setup`
 - no stale/static instance id in the setup URL
 - successful setup URL reachability
-- direct outbound WhatsApp prompt from the serving account
+- direct outbound WhatsApp prompt from the serving account to the phone-derived
+  `<digits>@c.us` chat
+- no OSS-side WhatsApp account, bridge URL, or bridge token requirement
 
 ## Troubleshooting
 
@@ -100,8 +101,8 @@ The artifact must show:
   link points to the wrong broker.
 - `setup_url_must_not_be_local`: the onboarding URL would expose localhost;
   set `ORKESTR_CONNECT_PUBLIC_BASE_URL`.
-- `relay_bridge_url_missing`: the VM has no relay URL; configure the relay or
-  switch to a self-managed WhatsApp bridge in setup.
+- `broker_client_registration_missing`: the VM did not persist broker channel
+  bootstrap material before requesting the broker WhatsApp router.
 - `instance_desktops_not_provisioned`: expected for an idle/fresh VM until a
   desktop stack is provisioned locally inside that VM.
 - Old release reappears after deploy: check the VM update timer and ensure
