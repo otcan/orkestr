@@ -107,6 +107,10 @@ function legacyResponderRole(env = process.env) {
 function resolveLocalAccountAlias(accountId = "", env = process.env, ids = localWhatsAppAccountIdsForEnv(env)) {
   const requested = String(accountId || "").trim();
   if (!requested) return "";
+  if (requested === legacyResponderRole(env)) {
+    const fallback = defaultResponderAccountId(env);
+    if (fallback && fallback !== requested && ids.includes(fallback)) return fallback;
+  }
   if (ids.includes(requested)) return requested;
   return requested === legacyResponderRole(env)
     ? (defaultResponderAccountId(env) || requested)

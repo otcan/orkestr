@@ -51,6 +51,11 @@ of relying on static thread or workspace text in this file.
 - Use connector status APIs for Gmail and WhatsApp. Do not read Gmail tokens,
   WhatsApp session state, browser profiles, or files under `ORKESTR_HOME/secrets`
   directly.
+- When creating WhatsApp-backed threads or groups, default participants must
+  come only from explicit owner/self-account configuration. Do not infer or reuse
+  participants from prior chats, projects, or examples. If additional people or
+  accounts are ambiguous, ask the user before creating the group or promoting
+  anyone.
 - When a browser desktop is needed, acquire the desktop lease first and release
   it when finished. Do not assume a desktop is free because a profile directory
   exists.

@@ -635,6 +635,40 @@ test("local whatsapp send resolves the legacy responder role to the default loca
   }
 });
 
+test("local whatsapp send prefers configured default account over legacy responder id", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-responder-default-alias-"));
+  const env = {
+    ORKESTR_HOME: home,
+    ORKESTR_WHATSAPP_ACCOUNT_IDS: "responder,account-1",
+    ORKESTR_WHATSAPP_DEFAULT_RESPONDER_ACCOUNT_ID: "account-1",
+    ORKESTR_WHATSAPP_SEND_CONFIRMATION_REQUIRED: "0",
+  };
+  const sent = [];
+  const runtime = {
+    client: {
+      async sendMessage(chatId, text) {
+        sent.push({ chatId, text });
+        return { id: { _serialized: `true_${chatId}_default_alias` } };
+      },
+    },
+  };
+
+  try {
+    setLocalWhatsAppRuntimeForTest("account-1", runtime, {}, env);
+    const result = await sendLocalWhatsAppMessage({
+      accountId: "responder",
+      chatId: "chat-responder-default-alias@g.us",
+      text: "hello",
+      env,
+    });
+
+    assert.equal(result.accountId, "account-1");
+    assert.deepEqual(sent, [{ chatId: "chat-responder-default-alias@g.us", text: "hello" }]);
+  } finally {
+    await resetLocalWhatsAppBridgeForTest(env);
+  }
+});
+
 test("local whatsapp inbound forwarding posts mapped chats", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-forward-"));
   const env = {
