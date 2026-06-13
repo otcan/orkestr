@@ -146,6 +146,13 @@ The release train owns tests. Run the checks appropriate to the changed surface:
   real WhatsApp E2E before deployment. `--skip-whatsapp-real` is blocked for
   deploys unless paired with the explicit emergency bypass
   `--allow-release-without-e2e`.
+- isolated demo VM release deploys: add `--demo-release`. This also runs
+  `npm run audit:isolation` and
+  `npm run e2e:whatsapp-demo-onboarding` before deployment, writing live
+  WhatsApp artifacts into the full-run artifact directory. Skipping the
+  isolation audit for a demo deploy requires both `--skip-isolation-audit` and
+  `--allow-release-without-isolation-audit`, and the skipped gate is recorded in
+  the summary artifact.
 - attended real WhatsApp/OAuth/desktop/timer checks:
   `npm run e2e:whatsapp-real -- --execute --thread <thread-id> --chat-id <chat-id>`.
   See `docs/real-whatsapp-e2e.md`; this sends real WhatsApp messages and must
@@ -246,6 +253,15 @@ Web sessions can take time to reattach after the service restart. Tune with
 `ORKESTR_RELEASE_WHATSAPP_ACCOUNT_RETRY_DELAY_MS` when needed. If a routed
 instance uses an external bridge with slow health responses, tune the service
 environment with `ORKESTR_WHATSAPP_BRIDGE_STATUS_TIMEOUT_MS`.
+
+For extracted WhatsApp deployments, run the bridge as the standalone
+`orkestr-wa` service and point Orkestr instances at it with
+`WHATSAPP_BRIDGE_MODE=external`. The service/readiness contract and the
+no-copy migration path for carrying an existing linked WhatsApp Web login are in
+[`docs/orkestr-wa-service.md`](./orkestr-wa-service.md). Use
+`node scripts/orkestr-wa-readiness.mjs --bridge-url <url> --account sender` as
+the direct service gate when validating the bridge before restarting dependent
+Orkestr instances.
 
 Versioned deploys are no-interrupt by default. On current host-native installs,
 Codex app-server runs as its own service and Orkestr talks to it through a short

@@ -71,9 +71,13 @@ Options:
   --regression-expect TEXT       Expected assistant reply for --execute-regression.
   --live-k3s                     Run real k3s demo smoke. Requires Docker, Helm, kubectl.
   --vps-aws                      Run AWS VPS smoke.
+  --demo-release                 Add isolated demo VM gates: isolation audit plus fresh-instance WhatsApp onboarding E2E.
   --whatsapp-real                Run real WhatsApp e2e. Requires explicit real-WA env/config.
   --skip-whatsapp-real           Skip real WhatsApp e2e. Not allowed with --deploy-ref unless --allow-release-without-e2e is also set.
   --allow-release-without-e2e    Explicit emergency bypass for release deploys when real WhatsApp e2e cannot run.
+  --skip-isolation-audit         Skip demo isolation audit. Demo deploys require --allow-release-without-isolation-audit too.
+  --allow-release-without-isolation-audit
+                                 Explicit emergency bypass for demo deploys when the isolation audit cannot run.
   --deploy-ref REF               Deploy with scripts/deploy-git-release.sh after gates pass.
   --deploy-channel CHANNEL       Deploy channel. Default: full-run.
   --deploy-env-file FILE         ORKESTR_ENV_FILE for deploy.
@@ -84,6 +88,7 @@ Environment:
   ORKESTR_FULL_RUN_LAUNCH_CHECK=1
   ORKESTR_FULL_RUN_LIVE_K3S=1
   ORKESTR_FULL_RUN_VPS_AWS=1
+  ORKESTR_FULL_RUN_DEMO_RELEASE=1
   ORKESTR_FULL_RUN_WHATSAPP_REAL=1
   ORKESTR_FULL_RUN_RELEASE_TARGETS="local=http://127.0.0.1:18912,oss=http://127.0.0.1:19822"
 `;
@@ -114,6 +119,9 @@ export function parseFullRunPipelineArgs(argv = process.argv.slice(2), env = pro
     regressionExpect: flagValue(argv, "--regression-expect"),
     liveK3s: hasFlag(argv, "--live-k3s") || truthy(env.ORKESTR_FULL_RUN_LIVE_K3S),
     vpsAws: hasFlag(argv, "--vps-aws") || truthy(env.ORKESTR_FULL_RUN_VPS_AWS),
+    demoRelease: hasFlag(argv, "--demo-release") || truthy(env.ORKESTR_FULL_RUN_DEMO_RELEASE),
+    skipIsolationAudit: hasFlag(argv, "--skip-isolation-audit") || truthy(env.ORKESTR_FULL_RUN_SKIP_ISOLATION_AUDIT),
+    allowReleaseWithoutIsolationAudit: hasFlag(argv, "--allow-release-without-isolation-audit") || truthy(env.ORKESTR_FULL_RUN_ALLOW_RELEASE_WITHOUT_ISOLATION_AUDIT),
     skipWhatsappReal: hasFlag(argv, "--skip-whatsapp-real") || truthy(env.ORKESTR_FULL_RUN_SKIP_WHATSAPP_REAL),
     allowReleaseWithoutE2e: hasFlag(argv, "--allow-release-without-e2e") || truthy(env.ORKESTR_FULL_RUN_ALLOW_RELEASE_WITHOUT_E2E),
     deployRef: flagValue(argv, "--deploy-ref"),
@@ -132,15 +140,24 @@ export function parseFullRunPipelineArgs(argv = process.argv.slice(2), env = pro
     options.invalid = true;
     options.error = "release_deploy_requires_real_whatsapp_e2e";
   }
+  if (options.deployRef && options.demoRelease && options.skipIsolationAudit && !options.allowReleaseWithoutIsolationAudit) {
+    options.invalid = true;
+    options.error = "demo_release_deploy_requires_isolation_audit";
+  }
   return options;
 }
 
-function npmStage(id, script, { enabled = true, env = {}, args = [] } = {}) {
-  return { id, label: `npm run ${script}`, command: "npm", args: ["run", script, ...(args.length ? ["--", ...args] : [])], env, enabled };
+function npmStage(id, script, { enabled = true, env = {}, args = [], skipReason = "" } = {}) {
+  return { id, label: `npm run ${script}`, command: "npm", args: ["run", script, ...(args.length ? ["--", ...args] : [])], env, enabled, skipReason };
 }
 
-function commandStage(id, label, command, args, { enabled = true, env = {} } = {}) {
-  return { id, label, command, args, env, enabled };
+function commandStage(id, label, command, args, { enabled = true, env = {}, skipReason = "" } = {}) {
+  return { id, label, command, args, env, enabled, skipReason };
+}
+
+function artifactEnv(options = {}, name = "", envName = "") {
+  if (!options.artifactDir || !name || !envName) return {};
+  return { [envName]: path.join(options.artifactDir, name) };
 }
 
 export function fullRunPipelineStages(options = {}) {
@@ -164,12 +181,25 @@ export function fullRunPipelineStages(options = {}) {
     if (options.regressionExpect) args.push("--expect", options.regressionExpect);
     stages.push(npmStage("release-regression", "release:regression", { args }));
   }
+  stages.push(npmStage("isolation-audit", "audit:isolation", {
+    enabled: options.demoRelease && !options.skipIsolationAudit,
+    skipReason: options.demoRelease && options.skipIsolationAudit ? "skip_isolation_audit" : "",
+  }));
   stages.push(npmStage("live-k3s-oss-demo", "smoke:k3s:oss-demo", {
     enabled: options.liveK3s,
     env: { ORKESTR_K3S_OSS_DEMO_EXECUTE: "1" },
   }));
   stages.push(npmStage("vps-aws", "smoke:vps:aws", { enabled: options.vpsAws }));
-  stages.push(npmStage("whatsapp-real", "e2e:whatsapp-real", { enabled: options.whatsappReal }));
+  stages.push(npmStage("whatsapp-real", "e2e:whatsapp-real", {
+    enabled: options.whatsappReal,
+    env: artifactEnv(options, "real-wa-e2e.json", "ORKESTR_REAL_WA_E2E_ARTIFACT"),
+    skipReason: options.skipWhatsappReal ? "skip_whatsapp_real" : "",
+  }));
+  stages.push(npmStage("whatsapp-demo-onboarding", "e2e:whatsapp-demo-onboarding", {
+    enabled: options.demoRelease && options.whatsappReal,
+    env: artifactEnv(options, "real-wa-demo-onboarding.json", "ORKESTR_REAL_WA_DEMO_ARTIFACT"),
+    skipReason: options.demoRelease && options.skipWhatsappReal ? "skip_whatsapp_real" : "",
+  }));
 
   if (options.deployRef) {
     const args = ["scripts/deploy-git-release.sh", "install", "--ref", options.deployRef, "--channel", options.deployChannel || "full-run"];
@@ -229,9 +259,14 @@ function runStage(stage) {
 
 export async function runFullRunPipeline(options = {}, env = process.env) {
   const artifactDir = path.resolve(options.artifactDir || defaultArtifactDir(env));
-  const allStages = fullRunPipelineStages(options);
+  const allStages = fullRunPipelineStages({ ...options, artifactDir });
   const stages = allStages.filter((stage) => stage.enabled !== false);
-  const skipped = allStages.filter((stage) => stage.enabled === false).map((stage) => ({ id: stage.id, label: stage.label, status: "skipped" }));
+  const skipped = allStages.filter((stage) => stage.enabled === false).map((stage) => ({
+    id: stage.id,
+    label: stage.label,
+    status: "skipped",
+    ...(stage.skipReason ? { reason: stage.skipReason } : {}),
+  }));
   const summary = {
     ok: false,
     generatedAt: new Date().toISOString(),
