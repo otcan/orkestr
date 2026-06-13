@@ -463,6 +463,33 @@ test("CLI desktop share chooses the configured desktop and calls the public API"
   assert.match(stdout.text(), /desktop-share\/share-1/);
 });
 
+test("CLI desktop share warns when desktop start fails after link creation", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-cli-desktop-share-start-warning-"));
+  const env = { ORKESTR_HOME: home };
+  const stdout = capture();
+
+  const code = await runCli(["--api", "http://orkestr.test", "desktop", "share", "linkedin"], {
+    env,
+    stdout,
+    stderr: capture(),
+    fetchImpl: fakeFetch({
+      "POST /api/desktops/linkedin/share": {
+        url: "https://desktop.example.test/desktop-share/share-1?key=secret",
+        share: { desktopSlug: "linkedin", label: "LinkedIn" },
+        desktopStart: {
+          requested: true,
+          ok: false,
+          error: "browserctl_root_requires_run_user_or_explicit_no_sandbox",
+        },
+      },
+    }),
+  });
+
+  assert.equal(code, 0);
+  assert.match(stdout.text(), /Desktop link for LinkedIn/);
+  assert.match(stdout.text(), /Warning: desktop start failed: browserctl_root_requires_run_user_or_explicit_no_sandbox/);
+});
+
 test("CLI desktop approve approves a pasted mobile desktop challenge", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-cli-desktop-approve-"));
   const env = { ORKESTR_HOME: home };
@@ -490,6 +517,71 @@ test("CLI desktop approve approves a pasted mobile desktop challenge", async () 
   assert.equal(code, 0);
   assert.equal(ready.approved, true);
   assert.match(stdout.text(), /Approved desktop access for linkedin/);
+});
+
+test("CLI jira draft emits task candidates from thread history without creating issues", async () => {
+  const stdout = capture();
+  const seen = [];
+  const code = await runCli(["--api", "http://orkestr.test", "jira", "draft", "thread-1", "--json"], {
+    stdout,
+    stderr: capture(),
+    fetchImpl: fakeFetch({
+      "GET /api/threads/thread-1/history": {
+        thread: {
+          id: "thread-1",
+          name: "otcanClaw-orkestr",
+          binding: { chatId: "chat-one@g.us" },
+        },
+        messages: [
+          {
+            id: "msg-1",
+            role: "user",
+            text: "Fix WhatsApp bridge ready-state drift and add regression tests",
+            createdAt: "2026-06-13T12:00:00.000Z",
+            cursor: 1,
+            chatId: "chat-one@g.us",
+          },
+          {
+            id: "msg-2",
+            role: "assistant",
+            text: "I reproduced stale ready state and will patch the bridge.",
+            cursor: 2,
+          },
+        ],
+      },
+    }, seen),
+  });
+
+  const payload = JSON.parse(stdout.text());
+  assert.equal(code, 0);
+  assert.equal(payload.mode, "draft_only");
+  assert.match(payload.warning, /No Jira issues were created/);
+  assert.equal(payload.candidates.length, 1);
+  assert.equal(payload.candidates[0].summary, "Fix WhatsApp bridge ready-state drift and add regression tests");
+  assert.deepEqual(payload.candidates[0].labels.sort(), ["orkestr", "testing", "whatsapp"].sort());
+  assert.equal(payload.candidates[0].source.threadId, "thread-1");
+  assert.deepEqual(seen.map((entry) => entry.key), ["GET /api/threads/thread-1/history"]);
+});
+
+test("CLI jira draft text output is review-only", async () => {
+  const stdout = capture();
+  const code = await runCli(["--api", "http://orkestr.test", "jira", "draft", "thread-2"], {
+    stdout,
+    stderr: capture(),
+    fetchImpl: fakeFetch({
+      "GET /api/threads/thread-2/history": {
+        thread: { id: "thread-2", name: "Desktop Thread" },
+        messages: [
+          { id: "msg-3", role: "user", text: "Improve desktop share renewal flow for expired links", cursor: 1 },
+        ],
+      },
+    }),
+  });
+
+  assert.equal(code, 0);
+  assert.match(stdout.text(), /No Jira issues were created/);
+  assert.match(stdout.text(), /Improve desktop share renewal flow for expired links/);
+  assert.match(stdout.text(), /Acceptance criteria:/);
 });
 
 test("CLI version prints the active build identity", async () => {

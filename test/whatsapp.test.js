@@ -17,7 +17,7 @@ import { configureTenantWhatsAppRoute } from "../packages/core/src/tenant-whatsa
 import { appendThreadMessage, createThread, enqueueThreadInput, getThread, listThreadMessages, listThreads, updateThreadMessage } from "../packages/core/src/threads.js";
 import { createUser, linkUserPrivateIdentity } from "../packages/core/src/users.js";
 import { deliverWhatsAppReplies, formatWhatsAppOutboundText, getWhatsAppChatMessages, getWhatsAppChatParticipants, getWhatsAppStatus, initialQueueDeliveryState, mapLocalWhatsAppStatusFromHealth, routeWhatsAppInbound, sendWhatsAppText, syncWhatsAppTypingIndicators } from "../packages/connectors/src/whatsapp.js";
-import { addLocalWhatsAppGroupParticipants, cleanupLocalWhatsAppChromeLocks, clearLocalWhatsAppChatTypingState, createLocalWhatsAppChat, forwardLocalWhatsAppInbound, getLocalWhatsAppBridgeStatus, handleInboundMessage, inboundRoutingFailureNoticeText, listLocalWhatsAppChats, localWhatsAppAccountIdsForEnv, localWhatsAppConnectedPageReadyFallbackEligible, localWhatsAppInboundForwardTarget, localWhatsAppMessageRouteFields, localWhatsAppReadyFallbackEligible, localWhatsAppTypingClearRetryDelaysMs, localWhatsAppUnreadRecoveryBoundChats, localWhatsAppUnreadRecoveryIntervalMs, normalizeGroupParticipantIds, recoverConfiguredLocalWhatsAppAccounts, recoverUnreadLocalWhatsAppMessages, recoverableLocalWhatsAppAccountIds, reduceLocalWhatsAppBridgeState, resetLocalWhatsAppBridgeForTest, sendLocalWhatsAppMessage, sendWhatsAppTextWithConfirmation, setLocalWhatsAppRuntimeForTest, setLocalWhatsAppRuntimeRecoveryHooksForTest, startLocalWhatsAppAccount, startLocalWhatsAppTyping, stopLocalWhatsAppTyping, syncLocalWhatsAppTypingTargets, webCacheRoot } from "../packages/connectors/src/whatsapp-local-bridge.js";
+import { addLocalWhatsAppGroupParticipants, cleanupLocalWhatsAppChromeLocks, clearLocalWhatsAppChatTypingState, createLocalWhatsAppChat, demoteLocalWhatsAppGroupParticipants, forwardLocalWhatsAppInbound, getLocalWhatsAppBridgeStatus, handleInboundMessage, inboundRoutingFailureNoticeText, listLocalWhatsAppChats, listLocalWhatsAppChatParticipants, localWhatsAppAccountIdsForEnv, localWhatsAppConnectedPageReadyFallbackEligible, localWhatsAppInboundForwardTarget, localWhatsAppMessageRouteFields, localWhatsAppReadyFallbackEligible, localWhatsAppTypingClearRetryDelaysMs, localWhatsAppUnreadRecoveryBoundChats, localWhatsAppUnreadRecoveryIntervalMs, normalizeGroupParticipantIds, promoteLocalWhatsAppGroupParticipants, recoverConfiguredLocalWhatsAppAccounts, recoverUnreadLocalWhatsAppMessages, recoverableLocalWhatsAppAccountIds, reduceLocalWhatsAppBridgeState, resetLocalWhatsAppBridgeForTest, sendLocalWhatsAppMessage, sendWhatsAppTextWithConfirmation, setLocalWhatsAppRuntimeForTest, setLocalWhatsAppRuntimeRecoveryHooksForTest, startLocalWhatsAppAccount, startLocalWhatsAppTyping, stopLocalWhatsAppTyping, syncLocalWhatsAppTypingTargets, webCacheRoot } from "../packages/connectors/src/whatsapp-local-bridge.js";
 import { routedWhatsAppTypingTarget, runWithRoutedWhatsAppTyping } from "../packages/connectors/src/whatsapp-router-typing.js";
 import { createAndBindWhatsAppThreadGroup } from "../packages/connectors/src/whatsapp-thread-groups.js";
 import { prepareWhatsAppTableAttachments } from "../packages/connectors/src/whatsapp-table-attachments.js";
@@ -910,6 +910,178 @@ test("local whatsapp group participant add validates participant input before br
     () => addLocalWhatsAppGroupParticipants({ accountId: "responder", chatId: "fixture-group@g.us" }),
     /whatsapp_group_participants_required/,
   );
+});
+
+test("local whatsapp status downgrades stale ready state without a runtime client", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-stale-ready-"));
+  const env = {
+    ORKESTR_HOME: home,
+    ORKESTR_WHATSAPP_ACCOUNT_IDS: "responder",
+  };
+
+  try {
+    setLocalWhatsAppRuntimeForTest("responder", {}, {}, env);
+    const status = await getLocalWhatsAppBridgeStatus(env);
+
+    assert.equal(status.ready, false);
+    assert.equal(status.state, "failed");
+    assert.equal(status.accounts[0].accountId, "responder");
+    assert.equal(status.accounts[0].ready, false);
+    assert.equal(status.accounts[0].state, "stale_runtime");
+    assert.equal(status.accounts[0].error, "whatsapp_local_runtime_missing");
+  } finally {
+    await resetLocalWhatsAppBridgeForTest(env);
+  }
+});
+
+test("local whatsapp participant reads recover stale ready runtime", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-participant-read-recover-"));
+  const env = {
+    ORKESTR_HOME: home,
+    ORKESTR_WHATSAPP_ACCOUNT_IDS: "responder",
+  };
+  const calls = [];
+
+  try {
+    setLocalWhatsAppRuntimeForTest("responder", {}, {}, env);
+    setLocalWhatsAppRuntimeRecoveryHooksForTest({
+      async restartAccount(accountId, actualEnv, options) {
+        calls.push(["restart", accountId, actualEnv === env, options.reason]);
+      },
+      async startAccount(accountId, actualEnv, options) {
+        calls.push(["start", accountId, actualEnv === env, options.showNotification]);
+        return { accountId, state: "starting", ready: false };
+      },
+    });
+
+    await assert.rejects(
+      () => listLocalWhatsAppChatParticipants({ accountId: "responder", chatId: "fixture-group@g.us", env }),
+      (error) => {
+        assert.equal(error.message, "whatsapp_local_bridge_not_ready_recovered_after_group_read_runtime_error");
+        assert.equal(error.statusCode, 503);
+        assert.equal(error.cause.message, "whatsapp_local_bridge_stale_runtime");
+        return true;
+      },
+    );
+
+    assert.deepEqual(calls, [
+      ["restart", "responder", true, "group_read_runtime_error"],
+      ["start", "responder", true, false],
+    ]);
+  } finally {
+    await resetLocalWhatsAppBridgeForTest(env);
+  }
+});
+
+test("local whatsapp group admin promotion recovers stale or broken runtime", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-admin-recover-"));
+  const env = {
+    ORKESTR_HOME: home,
+    ORKESTR_WHATSAPP_ACCOUNT_IDS: "responder",
+  };
+  const commsError = new Error("sendIq called before startComms");
+  const calls = [];
+  const runtime = {
+    client: {
+      async getChatById(chatId) {
+        calls.push(["getChatById", chatId]);
+        return {
+          isGroup: true,
+          async promoteParticipants(participants) {
+            calls.push(["promoteParticipants", participants]);
+            throw commsError;
+          },
+        };
+      },
+    },
+  };
+
+  try {
+    setLocalWhatsAppRuntimeForTest("responder", runtime, {}, env);
+    setLocalWhatsAppRuntimeRecoveryHooksForTest({
+      async restartAccount(accountId, actualEnv, options) {
+        calls.push(["restart", accountId, actualEnv === env, options.reason]);
+      },
+      async startAccount(accountId, actualEnv, options) {
+        calls.push(["start", accountId, actualEnv === env, options.showNotification]);
+        return { accountId, state: "starting", ready: false };
+      },
+    });
+
+    await assert.rejects(
+      () => promoteLocalWhatsAppGroupParticipants({
+        accountId: "responder",
+        chatId: "fixture-group@g.us",
+        participantIds: ["owner@c.us"],
+        env,
+      }),
+      (error) => {
+        assert.equal(error.message, "whatsapp_local_bridge_not_ready_recovered_after_group_admin_runtime_error");
+        assert.equal(error.statusCode, 503);
+        assert.equal(error.cause, commsError);
+        return true;
+      },
+    );
+
+    assert.deepEqual(calls, [
+      ["getChatById", "fixture-group@g.us"],
+      ["promoteParticipants", ["owner@c.us"]],
+      ["restart", "responder", true, "group_admin_runtime_error"],
+      ["start", "responder", true, false],
+    ]);
+    const events = await listEvents(env);
+    assert.ok(events.find((event) => event.type === "whatsapp_local_group_admin_runtime_recovery_start"));
+    assert.ok(events.find((event) => event.type === "whatsapp_local_group_admin_runtime_recovery_started"));
+  } finally {
+    await resetLocalWhatsAppBridgeForTest(env);
+  }
+});
+
+test("local whatsapp group admin demotion records durable event", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-admin-demote-"));
+  const env = {
+    ORKESTR_HOME: home,
+    ORKESTR_WHATSAPP_ACCOUNT_IDS: "responder",
+  };
+  const calls = [];
+  const runtime = {
+    client: {
+      async getChatById(chatId) {
+        calls.push(["getChatById", chatId]);
+        return {
+          isGroup: true,
+          async demoteParticipants(participants) {
+            calls.push(["demoteParticipants", participants]);
+            return { status: 200 };
+          },
+        };
+      },
+    },
+  };
+
+  try {
+    setLocalWhatsAppRuntimeForTest("responder", runtime, {}, env);
+    const result = await demoteLocalWhatsAppGroupParticipants({
+      accountId: "responder",
+      chatId: "fixture-group@g.us",
+      participantIds: ["owner@c.us"],
+      env,
+    });
+
+    assert.deepEqual(calls, [
+      ["getChatById", "fixture-group@g.us"],
+      ["demoteParticipants", ["owner@c.us"]],
+    ]);
+    assert.equal(result.ok, true);
+    assert.deepEqual(result.participantIds, ["owner@c.us"]);
+    const events = await listEvents(env);
+    const event = events.find((entry) => entry.type === "whatsapp_local_group_admins_demoted");
+    assert.equal(event?.accountId, "responder");
+    assert.equal(event?.chatId, "fixture-group@g.us");
+    assert.deepEqual(event?.participantIds, ["owner@c.us"]);
+  } finally {
+    await resetLocalWhatsAppBridgeForTest(env);
+  }
 });
 
 test("routed whatsapp typing wraps api-agent work for the bound chat", async () => {

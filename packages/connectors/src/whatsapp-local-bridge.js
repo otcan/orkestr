@@ -897,9 +897,17 @@ function setAccountState(accountId, patch) {
 
 async function accountSnapshot(accountId, env = process.env) {
   const state = accountStates.get(accountId) || defaultAccountState(accountId);
+  const runtime = runtimes.get(accountId);
+  const hasClient = Boolean(runtime?.client);
+  const staleReadyRuntime = Boolean(state.ready && !hasClient);
+  const ready = Boolean(state.ready && hasClient);
+  const accountState = staleReadyRuntime ? "stale_runtime" : state.state;
   const qrAvailable = Boolean(state.qrAvailable || (await exists(qrPath(accountId, env))));
   return {
     ...state,
+    state: accountState,
+    ready,
+    error: staleReadyRuntime ? "whatsapp_local_runtime_missing" : state.error,
     clientId: clientIdForAccount(accountId, env),
     sessionRoot: sessionRootForAccount(accountId, env),
     localAuthSessionDir: localAuthSessionDirForAccount(accountId, env),
@@ -915,7 +923,7 @@ export function reduceLocalWhatsAppBridgeState(accounts) {
   if (accounts.some((account) => account.pairingCode || account.state === "pairing_code")) return "pairing_code";
   if (accounts.some((account) => account.qrAvailable)) return "qr_needed";
   if (accounts.some((account) => account.state === "starting")) return "starting";
-  if (accounts.some((account) => ["startup_timeout", "auth_failure", "auth_ready_timeout", "dependency_missing", "failed"].includes(account.state))) return "failed";
+  if (accounts.some((account) => ["startup_timeout", "auth_failure", "auth_ready_timeout", "dependency_missing", "failed", "stale_runtime"].includes(account.state))) return "failed";
   if (accounts.some((account) => account.authenticated || account.state === "authenticated")) return "authenticated";
   if (accounts.some((account) => account.state === "disconnected")) return "disconnected";
   return "idle";
@@ -2249,7 +2257,7 @@ export async function startConfiguredLocalWhatsAppAccounts(env = process.env) {
 }
 
 const localWhatsAppRecoveryAttempts = new Map();
-const recoverableLocalWhatsAppStates = new Set(["startup_timeout", "auth_ready_timeout", "disconnected"]);
+const recoverableLocalWhatsAppStates = new Set(["startup_timeout", "auth_ready_timeout", "disconnected", "stale_runtime"]);
 const localWhatsAppChromeLockFiles = new Set(["SingletonCookie", "SingletonLock", "SingletonSocket"]);
 let localWhatsAppUnreadRecoveryInFlight = null;
 let localWhatsAppUnreadRecoveryLastRunMs = 0;
@@ -3100,6 +3108,23 @@ export async function listLocalWhatsAppChatMessages({ accountId = "", chatId = "
   };
 }
 
+function localWhatsAppOperationRuntime(normalized = "") {
+  const runtime = runtimes.get(normalized);
+  const state = accountStates.get(normalized) || defaultAccountState(normalized);
+  return {
+    runtime,
+    state,
+    ready: Boolean(runtime?.client && state.ready),
+    staleReadyRuntime: Boolean(state.ready && !runtime?.client),
+  };
+}
+
+function localWhatsAppNotReadyError(message = "whatsapp_local_bridge_not_ready", statusCode = 400) {
+  const error = new Error(message);
+  error.statusCode = statusCode;
+  return error;
+}
+
 export async function listLocalWhatsAppChatParticipants({ accountId = "", chatId = "", env = process.env } = {}) {
   const normalized = normalizeAccountId(accountId, env);
   const id = String(chatId || "").trim();
@@ -3108,12 +3133,26 @@ export async function listLocalWhatsAppChatParticipants({ accountId = "", chatId
     error.statusCode = 400;
     throw error;
   }
-  const runtime = runtimes.get(normalized);
-  const state = accountStates.get(normalized) || defaultAccountState(normalized);
-  if (!runtime?.client || !state.ready) {
+  const { runtime, state, ready, staleReadyRuntime } = localWhatsAppOperationRuntime(normalized);
+  if (!ready) {
+    if (staleReadyRuntime) {
+      return recoverLocalWhatsAppAccountAfterGroupReadError(
+        normalized,
+        localWhatsAppNotReadyError("whatsapp_local_bridge_stale_runtime"),
+        env,
+      );
+    }
     return { accountId: normalized, chatId: id, ready: false, participants: [] };
   }
-  const chat = await runtime.client.getChatById(id);
+  let chat;
+  try {
+    chat = await runtime.client.getChatById(id);
+  } catch (error) {
+    if (recoverableLocalWhatsAppRuntimeError(error)) {
+      return recoverLocalWhatsAppAccountAfterGroupReadError(normalized, error, env);
+    }
+    throw error;
+  }
   const participants = Array.isArray(chat?.participants)
     ? chat.participants.map((participant) => ({
       id: serializedId(participant?.id || participant),
@@ -3125,7 +3164,7 @@ export async function listLocalWhatsAppChatParticipants({ accountId = "", chatId
   return {
     accountId: normalized,
     chatId: id,
-    ready: true,
+    ready: Boolean(state.ready),
     participants,
   };
 }
@@ -3152,40 +3191,51 @@ export async function addLocalWhatsAppGroupParticipants({ accountId = "", chatId
     error.statusCode = 400;
     throw error;
   }
-  const runtime = runtimes.get(normalized);
-  const state = accountStates.get(normalized) || defaultAccountState(normalized);
-  if (!runtime?.client || !state.ready) {
-    const error = new Error("whatsapp_local_bridge_not_ready");
-    error.statusCode = 400;
+  const { runtime, ready, staleReadyRuntime } = localWhatsAppOperationRuntime(normalized);
+  if (!ready) {
+    if (staleReadyRuntime) {
+      return recoverLocalWhatsAppAccountAfterGroupParticipantAddError(
+        normalized,
+        localWhatsAppNotReadyError("whatsapp_local_bridge_stale_runtime"),
+        env,
+      );
+    }
+    throw localWhatsAppNotReadyError();
+  }
+  try {
+    const chat = await runtime.client.getChatById(id);
+    if (!chat?.isGroup || typeof chat.addParticipants !== "function") {
+      const error = new Error("whatsapp_group_chat_required");
+      error.statusCode = 400;
+      throw error;
+    }
+    const existing = new Set((Array.isArray(chat.participants) ? chat.participants : [])
+      .map((participant) => serializedId(participant?.id || participant).toLowerCase())
+      .filter(Boolean));
+    const alreadyParticipantIds = participants.filter((participant) => existing.has(participant.toLowerCase()));
+    const missingParticipantIds = participants.filter((participant) => !existing.has(participant.toLowerCase()));
+    if (!missingParticipantIds.length) {
+      return { ok: true, accountId: normalized, chatId: id, participantIds: [], alreadyParticipantIds, result: {} };
+    }
+    const result = await chat.addParticipants(missingParticipantIds, {
+      autoSendInviteV4: autoSendInviteV4 !== false,
+      comment: String(comment || ""),
+    });
+    await appendEvent({
+      type: "whatsapp_local_group_participants_added",
+      accountId: normalized,
+      chatId: id,
+      participantIds: missingParticipantIds,
+      alreadyParticipantIds,
+      result,
+    }, env).catch(() => {});
+    return { ok: true, accountId: normalized, chatId: id, participantIds: missingParticipantIds, alreadyParticipantIds, result };
+  } catch (error) {
+    if (recoverableLocalWhatsAppRuntimeError(error)) {
+      return recoverLocalWhatsAppAccountAfterGroupParticipantAddError(normalized, error, env);
+    }
     throw error;
   }
-  const chat = await runtime.client.getChatById(id);
-  if (!chat?.isGroup || typeof chat.addParticipants !== "function") {
-    const error = new Error("whatsapp_group_chat_required");
-    error.statusCode = 400;
-    throw error;
-  }
-  const existing = new Set((Array.isArray(chat.participants) ? chat.participants : [])
-    .map((participant) => serializedId(participant?.id || participant).toLowerCase())
-    .filter(Boolean));
-  const alreadyParticipantIds = participants.filter((participant) => existing.has(participant.toLowerCase()));
-  const missingParticipantIds = participants.filter((participant) => !existing.has(participant.toLowerCase()));
-  if (!missingParticipantIds.length) {
-    return { ok: true, accountId: normalized, chatId: id, participantIds: [], alreadyParticipantIds, result: {} };
-  }
-  const result = await chat.addParticipants(missingParticipantIds, {
-    autoSendInviteV4: autoSendInviteV4 !== false,
-    comment: String(comment || ""),
-  });
-  await appendEvent({
-    type: "whatsapp_local_group_participants_added",
-    accountId: normalized,
-    chatId: id,
-    participantIds: missingParticipantIds,
-    alreadyParticipantIds,
-    result,
-  }, env).catch(() => {});
-  return { ok: true, accountId: normalized, chatId: id, participantIds: missingParticipantIds, alreadyParticipantIds, result };
 }
 
 /**
@@ -3370,28 +3420,96 @@ export async function promoteLocalWhatsAppGroupParticipants({ accountId = "", ch
     error.statusCode = 400;
     throw error;
   }
-  const runtime = runtimes.get(normalized);
-  const state = accountStates.get(normalized) || defaultAccountState(normalized);
-  if (!runtime?.client || !state.ready) {
-    const error = new Error("whatsapp_local_bridge_not_ready");
+  const { runtime, ready, staleReadyRuntime } = localWhatsAppOperationRuntime(normalized);
+  if (!ready) {
+    if (staleReadyRuntime) {
+      return recoverLocalWhatsAppAccountAfterGroupAdminError(
+        normalized,
+        localWhatsAppNotReadyError("whatsapp_local_bridge_stale_runtime"),
+        env,
+      );
+    }
+    throw localWhatsAppNotReadyError();
+  }
+  try {
+    const chat = await runtime.client.getChatById(id);
+    if (!chat?.isGroup || typeof chat.promoteParticipants !== "function") {
+      const error = new Error("whatsapp_group_chat_required");
+      error.statusCode = 400;
+      throw error;
+    }
+    const result = await chat.promoteParticipants(participants);
+    await appendEvent({
+      type: "whatsapp_local_group_admins_promoted",
+      accountId: normalized,
+      chatId: id,
+      participantIds: participants,
+      result,
+    }, env).catch(() => {});
+    return { ok: true, accountId: normalized, chatId: id, participantIds: participants, result };
+  } catch (error) {
+    if (recoverableLocalWhatsAppRuntimeError(error)) {
+      return recoverLocalWhatsAppAccountAfterGroupAdminError(normalized, error, env);
+    }
+    throw error;
+  }
+}
+
+/**
+ * @param {{ accountId?: string, chatId?: string, participantIds?: string[] | string, env?: Record<string, string | undefined> }} [options]
+ */
+export async function demoteLocalWhatsAppGroupParticipants({ accountId = "", chatId = "", participantIds = [], env = process.env } = {}) {
+  const normalized = normalizeAccountId(accountId, env);
+  const id = String(chatId || "").trim();
+  const participants = normalizeGroupParticipantIds(participantIds);
+  if (!id) {
+    const error = new Error("whatsapp_chat_id_required");
     error.statusCode = 400;
     throw error;
   }
-  const chat = await runtime.client.getChatById(id);
-  if (!chat?.isGroup || typeof chat.promoteParticipants !== "function") {
+  if (!isGroupChatId(id)) {
     const error = new Error("whatsapp_group_chat_required");
     error.statusCode = 400;
     throw error;
   }
-  const result = await chat.promoteParticipants(participants);
-  await appendEvent({
-    type: "whatsapp_local_group_admins_promoted",
-    accountId: normalized,
-    chatId: id,
-    participantIds: participants,
-    result,
-  }, env).catch(() => {});
-  return { ok: true, accountId: normalized, chatId: id, participantIds: participants, result };
+  if (!participants.length) {
+    const error = new Error("whatsapp_admin_participants_required");
+    error.statusCode = 400;
+    throw error;
+  }
+  const { runtime, ready, staleReadyRuntime } = localWhatsAppOperationRuntime(normalized);
+  if (!ready) {
+    if (staleReadyRuntime) {
+      return recoverLocalWhatsAppAccountAfterGroupAdminError(
+        normalized,
+        localWhatsAppNotReadyError("whatsapp_local_bridge_stale_runtime"),
+        env,
+      );
+    }
+    throw localWhatsAppNotReadyError();
+  }
+  try {
+    const chat = await runtime.client.getChatById(id);
+    if (!chat?.isGroup || typeof chat.demoteParticipants !== "function") {
+      const error = new Error("whatsapp_group_chat_required");
+      error.statusCode = 400;
+      throw error;
+    }
+    const result = await chat.demoteParticipants(participants);
+    await appendEvent({
+      type: "whatsapp_local_group_admins_demoted",
+      accountId: normalized,
+      chatId: id,
+      participantIds: participants,
+      result,
+    }, env).catch(() => {});
+    return { ok: true, accountId: normalized, chatId: id, participantIds: participants, result };
+  } catch (error) {
+    if (recoverableLocalWhatsAppRuntimeError(error)) {
+      return recoverLocalWhatsAppAccountAfterGroupAdminError(normalized, error, env);
+    }
+    throw error;
+  }
 }
 
 function recoverableLocalWhatsAppRuntimeError(error) {
@@ -3454,6 +3572,30 @@ async function recoverLocalWhatsAppAccountAfterChatCreateError(accountId, error,
     eventPrefix: "whatsapp_local_chat_create_runtime_recovery",
     reason: "chat_create_runtime_error",
     retryMessage: "whatsapp_local_bridge_not_ready_recovered_after_chat_create_runtime_error",
+  });
+}
+
+async function recoverLocalWhatsAppAccountAfterGroupReadError(accountId, error, env = process.env) {
+  return recoverLocalWhatsAppAccountAfterRuntimeError(accountId, error, env, {
+    eventPrefix: "whatsapp_local_group_read_runtime_recovery",
+    reason: "group_read_runtime_error",
+    retryMessage: "whatsapp_local_bridge_not_ready_recovered_after_group_read_runtime_error",
+  });
+}
+
+async function recoverLocalWhatsAppAccountAfterGroupParticipantAddError(accountId, error, env = process.env) {
+  return recoverLocalWhatsAppAccountAfterRuntimeError(accountId, error, env, {
+    eventPrefix: "whatsapp_local_group_participant_add_runtime_recovery",
+    reason: "group_participant_add_runtime_error",
+    retryMessage: "whatsapp_local_bridge_not_ready_recovered_after_group_participant_add_runtime_error",
+  });
+}
+
+async function recoverLocalWhatsAppAccountAfterGroupAdminError(accountId, error, env = process.env) {
+  return recoverLocalWhatsAppAccountAfterRuntimeError(accountId, error, env, {
+    eventPrefix: "whatsapp_local_group_admin_runtime_recovery",
+    reason: "group_admin_runtime_error",
+    retryMessage: "whatsapp_local_bridge_not_ready_recovered_after_group_admin_runtime_error",
   });
 }
 

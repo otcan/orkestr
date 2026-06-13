@@ -42,6 +42,7 @@ import { publicRoutingFailurePayload } from "../../../../../packages/core/src/ro
 import {
   addLocalWhatsAppGroupParticipants,
   createLocalWhatsAppChat,
+  demoteLocalWhatsAppGroupParticipants,
   generateLocalWhatsAppChatPicture,
   getLocalWhatsAppBridgeStatus,
   getLocalWhatsAppQrSvg,
@@ -398,6 +399,17 @@ export class ConnectorsController {
   async whatsappBridgePromoteGroupAdmins(@Req() request: any, @Param("accountId") accountId: string, @Param("chatId") chatId: string, @Body() body: Record<string, unknown> = {}) {
     await assertWhatsAppBridgeBindingAcl("manage", { accountId, chatId }, request.orkestrMachineAuthContext);
     return promoteLocalWhatsAppGroupParticipants({
+      accountId: await resolveLocalWhatsAppRuntimeAccountId(accountId),
+      chatId,
+      participantIds: bodyStringArray(body, "participantIds").concat(bodyStringArray(body, "participants")),
+    });
+  }
+
+  @Post("whatsapp/bridge/accounts/:accountId/chats/:chatId/admins/demote")
+  @HttpCode(200)
+  async whatsappBridgeDemoteGroupAdmins(@Req() request: any, @Param("accountId") accountId: string, @Param("chatId") chatId: string, @Body() body: Record<string, unknown> = {}) {
+    await assertWhatsAppBridgeBindingAcl("manage", { accountId, chatId }, request.orkestrMachineAuthContext);
+    return demoteLocalWhatsAppGroupParticipants({
       accountId: await resolveLocalWhatsAppRuntimeAccountId(accountId),
       chatId,
       participantIds: bodyStringArray(body, "participantIds").concat(bodyStringArray(body, "participants")),

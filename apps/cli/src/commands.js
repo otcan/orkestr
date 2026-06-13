@@ -17,6 +17,7 @@ import { defaultApiBase, requestJson } from "./api-client.js";
 import { createCommand } from "./create-command.js";
 import { desktopCommand } from "./desktop-command.js";
 import { formatRuntimeResources, formatSystemDoctor, formatThreadTable, formatTimerDoctor, formatTimerTable, threadName } from "./format.js";
+import { jiraCommand } from "./jira-command.js";
 import { pickThread as defaultPickThread } from "./thread-picker.js";
 
 export async function runCli(argv = process.argv.slice(2), context = {}) {
@@ -51,6 +52,7 @@ export async function runCli(argv = process.argv.slice(2), context = {}) {
     if (command === "timers" || command === "timer") return await timersCommand(args, ctx);
     if (command === "security") return await securityCommand(args, ctx);
     if (command === "desktop" || command === "desktops") return await desktopCommand(args, ctx);
+    if (command === "jira") return await jiraCommand(args, ctx);
     if (command === "codex") return await codexCommand(args, ctx);
     if (command === "service" || command === "services") return await serviceCommand(args, ctx);
     if (command === "start" || command === "stop" || command === "restart") return await serviceCommand([command, ...args], ctx);
@@ -1759,6 +1761,7 @@ Advanced:
   orkestr timers [list|doctor|run <timer-id>] [--json]
   orkestr security [challenges|sessions|approve <challenge-id>|reject <challenge-id>|revoke <session-id|all>] [--json]
   orkestr desktop [share [slug]|approve <challenge-id>] [--json]
+  orkestr jira draft <thread> [--max N] [--json]
   orkestr thread create <name> [--id id] [--cwd path] [--command command] [--executor id] [--json]
   orkestr worker create <parent-thread> [task text] [--task text] [--blank] [--label label] [--repo path] [--branch branch] [--no-wake] [--json]
   orkestr sleep <legacy-tmux-thread-name-or-id> [--json]

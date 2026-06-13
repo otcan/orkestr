@@ -19,6 +19,7 @@ import {
 import {
   createDesktopShare,
   desktopShareCookieHeader,
+  desktopShareRenewalHint,
   desktopShareStatus,
   desktopShareSubdomainFromHost,
   openDesktopShare,
@@ -119,15 +120,31 @@ export class BrowsersController {
   async shareDesktop(@Req() request: any, @Param("slug") slug: string, @Body() body: Record<string, unknown> = {}) {
     const principal = requestPrincipal(request);
     await this.assertDesktopSanitized("share", principal, slug, body);
-    const browser = body.start === false
-      ? null
-      : await openVirtualBrowser(slug, process.env, "", { principal }).catch(() => null);
-    return createDesktopShare({
+    let browser: any = null;
+    let startError = "";
+    const startRequested = body.start !== false;
+    if (startRequested) {
+      try {
+        browser = await openVirtualBrowser(slug, process.env, "", { principal });
+      } catch (error) {
+        startError = String((error as Error)?.message || error || "desktop_start_failed");
+      }
+    }
+    const share = await createDesktopShare({
       desktopSlug: slug,
       principal,
       label: String(browser?.label || body.label || "").trim(),
       env: process.env,
     });
+    return {
+      ...share,
+      browser,
+      desktopStart: {
+        requested: startRequested,
+        ok: Boolean(browser),
+        error: startError,
+      },
+    };
   }
 
   @Get("desktop-shares/:shareId/open")
@@ -139,32 +156,48 @@ export class BrowsersController {
     @Query("subdomain") subdomain = "",
   ) {
     const browserToken = this.desktopShareBrowserToken(request);
-    const result = await openDesktopShare({
-      shareId,
-      key,
-      browserToken,
-      subdomain: String(subdomain || desktopShareSubdomainFromHost(request?.headers?.host || "", process.env)).trim(),
-      request,
-      env: process.env,
-    });
+    const shareSubdomain = String(subdomain || desktopShareSubdomainFromHost(request?.headers?.host || "", process.env)).trim();
+    let result: any;
+    try {
+      result = await openDesktopShare({
+        shareId,
+        key,
+        browserToken,
+        subdomain: shareSubdomain,
+        request,
+        env: process.env,
+      });
+    } catch (error) {
+      const expired = await this.expiredDesktopShareResponse(error, response, shareId, key, shareSubdomain);
+      if (expired) return expired;
+      throw error;
+    }
     response.setHeader("set-cookie", result.cookie.header || desktopShareCookieHeader(result.cookie.value, process.env));
     return result;
   }
 
   @Get("desktop-shares/:shareId/status")
   async desktopShareStatusRequest(
+    @Res({ passthrough: true }) response: any,
     @Req() request: any,
     @Param("shareId") shareId: string,
     @Query("key") key = "",
     @Query("subdomain") subdomain = "",
   ) {
-    return desktopShareStatus({
-      shareId,
-      key,
-      browserToken: this.desktopShareBrowserToken(request),
-      subdomain: String(subdomain || desktopShareSubdomainFromHost(request?.headers?.host || "", process.env)).trim(),
-      env: process.env,
-    });
+    const shareSubdomain = String(subdomain || desktopShareSubdomainFromHost(request?.headers?.host || "", process.env)).trim();
+    try {
+      return await desktopShareStatus({
+        shareId,
+        key,
+        browserToken: this.desktopShareBrowserToken(request),
+        subdomain: shareSubdomain,
+        env: process.env,
+      });
+    } catch (error) {
+      const expired = await this.expiredDesktopShareResponse(error, response, shareId, key, shareSubdomain);
+      if (expired) return expired;
+      throw error;
+    }
   }
 
   @Post("browsers/:slug/:action")
@@ -192,6 +225,18 @@ export class BrowsersController {
     const pair = raw.split(";").map((part) => part.trim()).find((part) => part.startsWith("orkestr_desktop_share="));
     const value = pair ? decodeURIComponent(pair.split("=").slice(1).join("=") || "") : "";
     return String(value.split(":")[1] || "").trim();
+  }
+
+  private async expiredDesktopShareResponse(error: any, response: any, shareId: string, key: string, subdomain: string) {
+    if (String(error?.message || "") !== "desktop_share_expired") return null;
+    const renewal = await desktopShareRenewalHint({ shareId, key, subdomain, env: process.env });
+    if (!renewal) return null;
+    response.status(410);
+    return {
+      ok: false,
+      error: "desktop_share_expired",
+      renewal,
+    };
   }
 
   private async runAction(request: any, slug: string, action: string, body: Record<string, unknown> = {}) {

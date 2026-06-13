@@ -206,6 +206,27 @@ function assertShareSubdomain(share, subdomain = "") {
   if (value && value !== share.subdomain) throw desktopShareError("desktop_share_subdomain_invalid", 404);
 }
 
+export async function desktopShareRenewalHint({ shareId = "", key = "", subdomain = "", env = process.env } = {}) {
+  const state = await readState(env);
+  const id = String(shareId || "").trim();
+  const share = state.desktopShares.find((item) => item.id === id);
+  if (!share) return null;
+  try {
+    assertShareKey(share, key);
+    assertShareSubdomain(share, subdomain);
+  } catch {
+    return null;
+  }
+  if (share.status !== "expired" && Date.parse(share.expiresAt || "") > Date.now()) return null;
+  return {
+    desktopSlug: share.desktopSlug,
+    shareId: share.id,
+    expiredAt: share.expiresAt,
+    renewCommand: `orkestr desktop share ${share.desktopSlug}`,
+    message: `This desktop link expired. Ask the Orkestr operator to run: orkestr desktop share ${share.desktopSlug}`,
+  };
+}
+
 function desktopUrlForShare(share) {
   const slug = encodeURIComponent(share.desktopSlug);
   return `/desktop/${slug}/vnc.html?autoconnect=1&resize=scale&path=desktop/${slug}/websockify`;

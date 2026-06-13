@@ -202,8 +202,22 @@ function serveDesktopSharePage(response: any) {
     async function json(url) {
       const response = await fetch(url, { credentials: 'same-origin' });
       const body = await response.json().catch(() => ({}));
-      if (!response.ok || body.ok === false) throw new Error(body.error || body.message || 'desktop_share_failed');
+      if (!response.ok || body.ok === false) {
+        const error = new Error(body.renewal && body.renewal.message ? body.renewal.message : (body.error || body.message || 'desktop_share_failed'));
+        error.payload = body;
+        throw error;
+      }
       return body;
+    }
+    function showExpired(error) {
+      const renewal = error && error.payload ? error.payload.renewal : null;
+      if (!renewal || !renewal.renewCommand) return false;
+      challenge.textContent = renewal.renewCommand;
+      summary.textContent = 'This desktop link expired.';
+      statusNode.textContent = renewal.message || 'Ask the Orkestr operator to create a fresh desktop link.';
+      statusNode.className = 'error';
+      copy.textContent = 'Copy renewal command';
+      return true;
     }
     async function poll() {
       try {
@@ -224,6 +238,7 @@ function serveDesktopSharePage(response: any) {
         statusNode.textContent = 'Waiting for approval from chat.';
         setTimeout(poll, 2000);
       } catch (error) {
+        if (showExpired(error)) return;
         statusNode.textContent = error.message || String(error);
         statusNode.className = 'error';
       }
@@ -237,6 +252,7 @@ function serveDesktopSharePage(response: any) {
         statusNode.textContent = 'Waiting for approval from chat.';
         poll();
       } catch (error) {
+        if (showExpired(error)) return;
         challenge.textContent = 'not available';
         statusNode.textContent = error.message || String(error);
         statusNode.className = 'error';
