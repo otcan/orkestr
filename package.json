@@ -14,7 +14,7 @@
     "build:runtime": "bash scripts/build-runtime.sh",
     "build": "npm run build:server && npm run web:build",
     "web:verify-static": "node scripts/verify-static-web.mjs",
-    "check": "find apps packages scripts examples -path '*/node_modules/*' -prune -o \\( -name '*.js' -o -name '*.mjs' \\) -print | while read -r file; do node --check \"$file\"; done && npm run build && node --test",
+    "check": "find apps packages scripts examples -path '*/node_modules/*' -prune -o \\( -name '*.js' -o -name '*.mjs' \\) -print | while read -r file; do node --check \"$file\"; done && npm run build && npm run test:ci",
     "test": "node --test",
     "test:ci": "node scripts/ci-test-runner.mjs",
     "oss:boundary-check": "node scripts/oss-boundary-check.mjs",
