@@ -57,6 +57,8 @@ npm run audit:isolation
 Expected audit properties:
 
 - all runtime paths are inside this VM's `ORKESTR_HOME`
+- if the demo onboarding artifact exists, its setup URL is public,
+  `/i/<uuid>/setup` scoped, and matches the registered instance UUID
 - broker registry is SQLite when `ORKESTR_ISOLATION_EXPECT_SQLITE_BROKER=1`
 - unprovisioned desktops return `instance_desktops_not_provisioned`
 - parent/private desktop names do not appear in runtime state

@@ -31,6 +31,74 @@ test("isolated demo audit passes for an empty unprovisioned VM home with sqlite 
   assert.ok(result.checks.some((check) => check.name === "desktops:unprovisioned-fails-closed" && check.ok));
 });
 
+test("isolated demo audit accepts a public UUID-scoped setup URL artifact", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-isolation-audit-setup-pass-"));
+  const instanceId = "11111111-2222-4333-8444-555555555555";
+  const env = {
+    ORKESTR_HOME: home,
+    ORKESTR_INSTANCE_DESKTOPS_PROVISIONED: "0",
+    ORKESTR_BROWSER_VISIBLE_SLUGS: "__none__",
+    ORKESTR_ISOLATION_EXPECT_INSTANCE_ID: instanceId,
+  };
+  await fs.writeFile(path.join(home, "demo-vm-ready-notification.json"), JSON.stringify({
+    sent: true,
+    setupUrl: `https://connect.orkestr.de/i/${instanceId}/setup`,
+    instanceId,
+  }));
+
+  const result = await auditIsolatedDemoInstance(env);
+  const check = result.checks.find((item) => item.name === "setup-url:public-instance-scoped");
+
+  assert.equal(result.ok, true);
+  assert.equal(check.ok, true);
+  assert.equal(check.instanceId, instanceId);
+});
+
+test("isolated demo audit rejects unsafe or generic setup URL artifacts", async () => {
+  const cases = [
+    {
+      name: "loopback",
+      setupUrl: "http://127.0.0.1:3000/i/11111111-2222-4333-8444-555555555555/setup",
+      reason: "setup_url_loopback",
+      instanceId: "11111111-2222-4333-8444-555555555555",
+    },
+    {
+      name: "generic",
+      setupUrl: "https://connect.orkestr.de/setup",
+      reason: "setup_url_missing_instance_uuid",
+      instanceId: "11111111-2222-4333-8444-555555555555",
+    },
+    {
+      name: "mismatch",
+      setupUrl: "https://connect.orkestr.de/i/aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee/setup",
+      reason: "setup_url_instance_mismatch",
+      instanceId: "11111111-2222-4333-8444-555555555555",
+    },
+  ];
+
+  for (const item of cases) {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), `orkestr-isolation-audit-setup-${item.name}-`));
+    const env = {
+      ORKESTR_HOME: home,
+      ORKESTR_INSTANCE_DESKTOPS_PROVISIONED: "0",
+      ORKESTR_BROWSER_VISIBLE_SLUGS: "__none__",
+      ORKESTR_ISOLATION_EXPECT_INSTANCE_ID: item.instanceId,
+    };
+    await fs.writeFile(path.join(home, "demo-vm-ready-notification.json"), JSON.stringify({
+      sent: true,
+      setupUrl: item.setupUrl,
+      instanceId: item.instanceId,
+    }));
+
+    const result = await auditIsolatedDemoInstance(env);
+    const check = result.checks.find((entry) => entry.name === "setup-url:public-instance-scoped");
+
+    assert.equal(result.ok, false, item.name);
+    assert.equal(check.ok, false, item.name);
+    assert.equal(check.reason, item.reason);
+  }
+});
+
 test("isolated demo audit rejects ambient host browserctl backends", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-isolation-audit-browserctl-host-"));
   const env = {

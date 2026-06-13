@@ -69,6 +69,10 @@ async function exists(filePath) {
   return fs.stat(filePath).then(() => true, () => false);
 }
 
+function demoNotificationPath(home, env = process.env) {
+  return clean(env.ORKESTR_DEMO_NOTIFY_STATE_PATH || path.join(home, "demo-vm-ready-notification.json"));
+}
+
 function addCheck(checks, name, ok, details = {}) {
   checks.push({ name, ok: Boolean(ok), ...details });
 }
@@ -110,6 +114,31 @@ function browserctlPathScoped(home, env) {
   return allowedBrowserctlRoots(home, env).some((root) => pathInside(command, root));
 }
 
+function setupUrlAuditDetails(setupUrl = "", expectedInstanceId = "") {
+  const text = clean(setupUrl);
+  if (!text) return { ok: false, reason: "setup_url_missing" };
+  try {
+    const parsed = new URL(text);
+    const match = parsed.pathname.match(/^\/i\/([^/]+)\/setup\/?$/i);
+    const instanceId = match ? decodeURIComponent(match[1]) : "";
+    if (!["http:", "https:"].includes(parsed.protocol)) {
+      return { ok: false, reason: "setup_url_invalid_protocol", setupUrl: text };
+    }
+    if (isLoopbackUrl(text)) {
+      return { ok: false, reason: "setup_url_loopback", setupUrl: text };
+    }
+    if (!instanceId) {
+      return { ok: false, reason: "setup_url_missing_instance_uuid", setupUrl: text };
+    }
+    if (clean(expectedInstanceId) && instanceId !== clean(expectedInstanceId)) {
+      return { ok: false, reason: "setup_url_instance_mismatch", setupUrl: text, instanceId };
+    }
+    return { ok: true, setupUrl: text, instanceId };
+  } catch {
+    return { ok: false, reason: "setup_url_invalid", setupUrl: text };
+  }
+}
+
 async function readPublicState(paths, env) {
   return {
     runtimeSettings: await readRuntimeSettings(env).catch(() => ({})),
@@ -134,6 +163,9 @@ export async function auditIsolatedDemoInstance(env = process.env, options = {})
     ? csvCaseSensitive(env.ORKESTR_ISOLATION_FORBIDDEN_ROOTS)
     : defaultForbiddenRoots();
   const state = await readPublicState(paths, env);
+  const notificationPath = demoNotificationPath(home, env);
+  const notificationExists = await exists(notificationPath);
+  const notification = notificationExists ? await safeReadJson(notificationPath, {}) : {};
 
   for (const [name, value] of Object.entries({
     browsers: paths.browsers,
@@ -206,6 +238,12 @@ export async function auditIsolatedDemoInstance(env = process.env, options = {})
       instanceId: expectedInstanceId,
       runtimeMentionsInstanceId: runtimeText.includes(expectedInstanceId),
     });
+  }
+
+  if (notificationExists || truthy(env.ORKESTR_ISOLATION_EXPECT_SETUP_URL)) {
+    addCheck(checks, "setup-url:notification-present", notificationExists, { path: notificationPath });
+    const setupUrlDetails = setupUrlAuditDetails(notification.setupUrl, expectedInstanceId || notification.instanceId);
+    addCheck(checks, "setup-url:public-instance-scoped", setupUrlDetails.ok, setupUrlDetails);
   }
 
   const failed = checks.filter((check) => !check.ok);
