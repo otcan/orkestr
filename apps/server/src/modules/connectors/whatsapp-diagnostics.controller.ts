@@ -41,6 +41,15 @@ function clean(value: unknown): string {
   return String(value || "").trim();
 }
 
+function whatsappAccountNotReadyReason(account: Record<string, any> = {}) {
+  const error = clean(account.error);
+  if (!error) return "account_not_ready";
+  if (/navigating frame was detached/i.test(error)) return "account_not_ready";
+  if (/execution context was destroyed/i.test(error)) return "account_not_ready";
+  if (/target (closed|destroyed)/i.test(error)) return "account_not_ready";
+  return error;
+}
+
 function localStatusMode(status: Record<string, any> = {}): boolean {
   return clean(status.mode) === "local" || clean(status.bridgeUrl) === localWhatsAppBridgeBasePath;
 }
@@ -235,7 +244,7 @@ function whatsappDoctorPayload(accounts: any[] = [], bindings: any[] = [], accou
           ? "ready"
           : pairable
             ? "account_pairing_required"
-            : clean(account.error) || "account_not_ready",
+            : whatsappAccountNotReadyReason(account),
     };
   });
   const bindingChecks = bindings.map((binding) => {
