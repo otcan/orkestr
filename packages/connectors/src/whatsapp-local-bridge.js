@@ -100,6 +100,17 @@ function sessionRootForAccount(accountId, env = process.env) {
   return accountSessionRootMap(env).get(accountId) || sessionRoot(env);
 }
 
+function localAuthSessionDirForAccount(accountId, env = process.env) {
+  const clientId = clientIdForAccount(accountId, env);
+  return path.join(sessionRootForAccount(accountId, env), `session-${clientId}`);
+}
+
+function sessionRootAlreadyIncludesClient(accountId, env = process.env) {
+  const root = sessionRootForAccount(accountId, env);
+  const clientId = clientIdForAccount(accountId, env);
+  return path.basename(root) === `session-${clientId}`;
+}
+
 function legacyResponderRole(env = process.env) {
   return String(env.ORKESTR_WHATSAPP_RESPONDER_ROLE || env.WHATSAPP_RESPONDER_ROLE || "responder").trim();
 }
@@ -891,6 +902,8 @@ async function accountSnapshot(accountId, env = process.env) {
     ...state,
     clientId: clientIdForAccount(accountId, env),
     sessionRoot: sessionRootForAccount(accountId, env),
+    localAuthSessionDir: localAuthSessionDirForAccount(accountId, env),
+    sessionRootAlreadyIncludesClient: sessionRootAlreadyIncludesClient(accountId, env),
     qrAvailable,
     qrUrl: qrAvailable ? qrUrl(accountId) : "",
     started: Boolean(state.started || runtimes.has(accountId)),

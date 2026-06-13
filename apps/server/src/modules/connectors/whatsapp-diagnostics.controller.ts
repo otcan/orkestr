@@ -215,11 +215,13 @@ function whatsappDoctorPayload(accounts: any[] = [], bindings: any[] = [], accou
   const selectedAccount = clean(accountId);
   const accountChecks = accounts.map((account) => {
     const id = clean(account.accountId || account.id);
+    const selected = Boolean(selectedAccount && whatsappAccountLookupKeys(account).includes(selectedAccount.toLowerCase()));
     const pairable = Boolean(account.qrRequired || account.pairingCode || account.state === "pairing_code");
-    const ready = Boolean(account.ready || pairable);
+    const ready = Boolean(account.ready);
+    const acceptable = ready || (!selected && pairable);
     const required = accountRequiredByBroker(account, bindings, selectedAccount);
-    const skipped = !ready && !required;
-    const ok = ready || skipped;
+    const skipped = !acceptable && !required;
+    const ok = acceptable || skipped;
     return {
       type: "account",
       id,
@@ -227,7 +229,13 @@ function whatsappDoctorPayload(accounts: any[] = [], bindings: any[] = [], accou
       skipped,
       state: clean(account.state),
       nextAction: clean(account.nextAction),
-      reason: skipped ? "account_not_required" : ok ? "ready_or_pairable" : clean(account.error) || "account_not_ready",
+      reason: skipped
+        ? "account_not_required"
+        : ready
+          ? "ready"
+          : pairable
+            ? "account_pairing_required"
+            : clean(account.error) || "account_not_ready",
     };
   });
   const bindingChecks = bindings.map((binding) => {

@@ -801,10 +801,34 @@ test("local whatsapp bridge maps public account ids to existing LocalAuth client
   assert.deepEqual(bridgeStatus.accounts.map((account) => account.accountId), ["main", "secondary"]);
   assert.deepEqual(bridgeStatus.accounts.map((account) => account.clientId), ["codex-whatsapp", "codex-whatsapp-secondary"]);
   assert.deepEqual(bridgeStatus.accounts.map((account) => account.sessionRoot), ["/state/main", "/state/secondary"]);
+  assert.deepEqual(bridgeStatus.accounts.map((account) => account.localAuthSessionDir), [
+    "/state/main/session-codex-whatsapp",
+    "/state/secondary/session-codex-whatsapp-secondary",
+  ]);
+  assert.deepEqual(bridgeStatus.accounts.map((account) => account.sessionRootAlreadyIncludesClient), [false, false]);
   assert.deepEqual(status.accounts.map((account) => account.accountId), ["main", "secondary"]);
   assert.deepEqual(status.accounts.map((account) => account.clientId), [undefined, undefined]);
   assert.deepEqual(status.accounts.map((account) => account.sessionRoot), [undefined, undefined]);
-  assert.doesNotMatch(JSON.stringify(status.health.accounts), /clientId|sessionRoot/);
+  assert.deepEqual(status.accounts.map((account) => account.localAuthSessionDir), [undefined, undefined]);
+  assert.doesNotMatch(JSON.stringify(status.health.accounts), /clientId|sessionRoot|localAuthSessionDir/);
+});
+
+test("local whatsapp bridge flags session roots that already include LocalAuth client id", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-nested-session-root-"));
+  const env = {
+    ORKESTR_HOME: home,
+    ORKESTR_WHATSAPP_ACCOUNT_IDS: "responder",
+    ORKESTR_WHATSAPP_ACCOUNT_CLIENT_IDS: "responder:codex-whatsapp-openclaw",
+    ORKESTR_WHATSAPP_ACCOUNT_SESSION_ROOTS: "responder:/state/session-codex-whatsapp-openclaw",
+  };
+
+  const bridgeStatus = await getLocalWhatsAppBridgeStatus(env);
+  const account = bridgeStatus.accounts[0];
+
+  assert.equal(account.accountId, "responder");
+  assert.equal(account.sessionRoot, "/state/session-codex-whatsapp-openclaw");
+  assert.equal(account.localAuthSessionDir, "/state/session-codex-whatsapp-openclaw/session-codex-whatsapp-openclaw");
+  assert.equal(account.sessionRootAlreadyIncludesClient, true);
 });
 
 test("local whatsapp bridge accepts persisted connector accounts without exposing session paths in public status", async () => {
@@ -2927,6 +2951,61 @@ test("whatsapp doctor skips optional idle accounts in global health", async () =
     assert.equal(senderResponse.status, 200);
     assert.equal(senderPayload.ok, false);
     assert.equal(senderPayload.checks.find((check) => check.type === "account" && check.id === "sender")?.reason, "account_not_ready");
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+    await distBridge.resetLocalWhatsAppBridgeForTest(process.env);
+    for (const [key, value] of Object.entries(prior)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
+});
+
+test("whatsapp doctor fails selected QR-required accounts", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-doctor-selected-qr-"));
+  const prior = Object.fromEntries([
+    "ORKESTR_HOME",
+    "ORKESTR_AUTH_REQUIRED",
+    "ORKESTR_PUBLIC_HTTPS_URL",
+    "ORKESTR_WHATSAPP_ACCOUNT_IDS",
+    "ORKESTR_WHATSAPP_AUTOSTART",
+    "WHATSAPP_LOCAL_AUTOSTART",
+    "ORKESTR_WHATSAPP_AUTOSTART_ACCOUNT_IDS",
+    "ORKESTR_CODEX_BIN",
+    "ORKESTR_RECOVER_RUNNING_ON_START",
+  ].map((key) => [key, process.env[key]]));
+  process.env.ORKESTR_HOME = home;
+  delete process.env.ORKESTR_AUTH_REQUIRED;
+  delete process.env.ORKESTR_PUBLIC_HTTPS_URL;
+  process.env.ORKESTR_WHATSAPP_ACCOUNT_IDS = "responder";
+  process.env.ORKESTR_WHATSAPP_AUTOSTART = "0";
+  process.env.WHATSAPP_LOCAL_AUTOSTART = "0";
+  process.env.ORKESTR_WHATSAPP_AUTOSTART_ACCOUNT_IDS = "";
+  process.env.ORKESTR_CODEX_BIN = "__orkestr_codex_disabled_for_test__";
+  process.env.ORKESTR_RECOVER_RUNNING_ON_START = "0";
+
+  const server = await startServer({ port: 0, host: "127.0.0.1" });
+  const { port } = server.address();
+  const baseUrl = `http://127.0.0.1:${port}`;
+  const distBridge = await import("../dist/server/packages/connectors/src/whatsapp-local-bridge.js");
+  distBridge.setLocalWhatsAppRuntimeForTest("responder", {}, {
+    ready: false,
+    qrRequired: true,
+    qrAvailable: true,
+    state: "qr_required",
+    nextAction: "pair_account",
+  }, process.env);
+
+  try {
+    const response = await fetch(`${baseUrl}/api/connectors/whatsapp/doctor?account=responder`);
+    const payload = await response.json();
+
+    assert.equal(response.status, 200);
+    assert.equal(payload.ok, false);
+    assert.equal(payload.status, "broken");
+    const check = payload.checks.find((item) => item.type === "account" && item.id === "responder");
+    assert.equal(check?.ok, false);
+    assert.equal(check?.reason, "account_pairing_required");
   } finally {
     await new Promise((resolve) => server.close(resolve));
     await distBridge.resetLocalWhatsAppBridgeForTest(process.env);
