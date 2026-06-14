@@ -5976,6 +5976,78 @@ test("thread runtime summary reads Codex model and limits from live metadata", a
   }
 });
 
+test("Codex thread metadata backfills model from rollout turn context", async (t) => {
+  try {
+    await execFileAsync("sqlite3", ["--version"]);
+  } catch {
+    t.skip("sqlite3 unavailable");
+    return;
+  }
+
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-rollout-model-"));
+  const codexHome = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-codex-rollout-model-"));
+  const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-codex-rollout-workspace-"));
+  const codexThreadId = "44444444-4444-4444-8444-444444444444";
+  const rolloutPath = path.join(codexHome, "sessions", "rollout-turn-context.jsonl");
+  await fs.mkdir(path.dirname(rolloutPath), { recursive: true });
+  await fs.writeFile(rolloutPath, [
+    JSON.stringify({
+      timestamp: "2026-06-14T10:00:00.000Z",
+      type: "turn_context",
+      payload: {
+        model: "gpt-5.5",
+        effort: "high",
+        collaboration_mode: {
+          settings: {
+            reasoning_effort: "high",
+          },
+        },
+      },
+    }),
+    JSON.stringify({
+      timestamp: "2026-06-14T10:00:01.000Z",
+      type: "event_msg",
+      payload: {
+        type: "token_count",
+        info: {
+          total_token_usage: {
+            input_tokens: 220,
+            output_tokens: 40,
+            total_tokens: 260,
+          },
+          last_token_usage: {
+            input_tokens: 90,
+            output_tokens: 20,
+            total_tokens: 110,
+          },
+          model_context_window: 258400,
+        },
+      },
+    }),
+    "",
+  ].join("\n"), "utf8");
+  const nowMs = Date.now();
+  await execFileAsync("sqlite3", [path.join(codexHome, "state_5.sqlite"), [
+    "create table threads (id text primary key, rollout_path text not null, created_at integer not null, updated_at integer not null, source text not null, model_provider text not null, cwd text not null, title text not null, sandbox_policy text not null, approval_mode text not null, tokens_used integer not null default 0, archived integer not null default 0, model text, reasoning_effort text, created_at_ms integer, updated_at_ms integer);",
+    `insert into threads (id, rollout_path, created_at, updated_at, source, model_provider, cwd, title, sandbox_policy, approval_mode, tokens_used, archived, model, reasoning_effort, created_at_ms, updated_at_ms) values (${sqlQuote(codexThreadId)}, ${sqlQuote(rolloutPath)}, ${Math.floor(nowMs / 1000)}, ${Math.floor(nowMs / 1000)}, 'codex', 'openai', ${sqlQuote(workspace)}, 'Rollout Model Thread', 'workspace-write', 'never', 0, 0, null, null, ${nowMs}, ${nowMs});`,
+  ].join("\n")]);
+
+  const metadata = await resolveCodexThreadMetadata(codexThreadId, {
+    ORKESTR_HOME: path.join(home, "orkestr"),
+    CODEX_HOME: codexHome,
+    HOME: home,
+  });
+
+  assert.equal(metadata.codexThreadId, codexThreadId);
+  assert.equal(metadata.codexModel, "gpt-5.5");
+  assert.equal(metadata.codexReasoningEffort, "high");
+  assert.equal(metadata.codexModelProvider, "openai");
+  assert.equal(metadata.codexContextWindow, 258400);
+  assert.equal(metadata.codexTokenUsage.total_tokens, 110);
+  assert.equal(metadata.codexTotalTokenUsage.total_tokens, 260);
+  assert.equal(metadata.codexRolloutPath, rolloutPath);
+});
+
 test("Codex thread metadata keeps empty SQLite fields aligned", async (t) => {
   try {
     await execFileAsync("sqlite3", ["--version"]);
