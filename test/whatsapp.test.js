@@ -1161,7 +1161,7 @@ test("whatsapp thread group creation binds an existing thread idempotently", asy
 
 test("whatsapp thread group creation can use an external bridge", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-thread-group-external-"));
-  const env = externalBridgeEnv(home);
+  const env = externalBridgeEnv(home, { ORKESTR_WHATSAPP_BRIDGE_CLIENT_ID: "demo-instance-group" });
   await createThread({ id: "thread-external-group", name: "Crawlerai Linkedin", executorId: "noop" }, env);
   await writeConnectorConfig("whatsapp", {
     bridgeMode: "external",
@@ -1198,6 +1198,7 @@ test("whatsapp thread group creation can use an external bridge", async () => {
   assert.equal(calls.length, 1);
   assert.equal(calls[0].url.pathname, "/bridge/chats");
   assert.equal(calls[0].options.headers.authorization, "Bearer secret-token");
+  assert.equal(calls[0].options.headers["x-orkestr-instance-id"], "demo-instance-group");
   assert.equal(calls[0].body.name, "Sample-Linkedin");
   assert.deepEqual(calls[0].body.participantIds, ["wa-contact-one@c.us"]);
   assert.equal(result.created, true);
@@ -2550,7 +2551,7 @@ test("whatsapp status discovers external bridge accounts from dashboard", async 
 
 test("whatsapp external bridge preserves path prefixes", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-path-"));
-  const env = externalBridgeEnv(home);
+  const env = externalBridgeEnv(home, { ORKESTR_INSTANCE_ID: "demo-instance-001" });
   await writeConnectorConfig("whatsapp", {
     bridgeMode: "external",
     bridgeUrl: "http://parent.local/api/connectors/whatsapp/bridge",
@@ -2560,6 +2561,7 @@ test("whatsapp external bridge preserves path prefixes", async () => {
   const status = await getWhatsAppStatus(env, async (url, options) => {
     assert.equal(url.pathname, "/api/connectors/whatsapp/bridge/health");
     assert.equal(options.headers.authorization, "Bearer secret-token");
+    assert.equal(options.headers["x-orkestr-instance-id"], "demo-instance-001");
     return response({
       ok: true,
       ready: true,
@@ -2718,7 +2720,7 @@ test("whatsapp chat history maps numeric public account ids to runtime external 
 
 test("whatsapp external sends map numeric public account ids to runtime bridge account ids", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-send-numeric-"));
-  const env = externalBridgeEnv(home);
+  const env = externalBridgeEnv(home, { ORKESTR_WA_SERVICE_CLIENT_ID: "demo-instance-send" });
   await writeConnectorConfig("whatsapp", { bridgeMode: "external", bridgeUrl: "http://wa.local" }, env);
 
   const calls = [];
@@ -2745,6 +2747,7 @@ test("whatsapp external sends map numeric public account ids to runtime bridge a
       assert.equal(body.to, "chat-send@g.us");
       assert.equal(body.text, "/connect google");
       assert.equal(body.crossAccountEchoSuppression, false);
+      assert.equal(options.headers["x-orkestr-instance-id"], "demo-instance-send");
       return response({ ok: true, ids: ["sent-numeric"] });
     },
   });

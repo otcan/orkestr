@@ -194,6 +194,31 @@ function bridgeAuthHeaders(config = {}, env = process.env) {
   return apiToken ? { authorization: `Bearer ${apiToken}` } : {};
 }
 
+function bridgeClientId(config = {}, env = process.env) {
+  return pickString(
+    env.ORKESTR_WA_SERVICE_CLIENT_ID,
+    env.ORKESTR_WHATSAPP_BRIDGE_CLIENT_ID,
+    env.WHATSAPP_BRIDGE_CLIENT_ID,
+    env.ORKESTR_WHATSAPP_BRIDGE_INSTANCE_ID,
+    env.WHATSAPP_BRIDGE_INSTANCE_ID,
+    env.ORKESTR_INSTANCE_ID,
+    env.ORKESTR_RELEASE_INSTANCE_ID,
+    env.ORKESTR_DEMO_INSTANCE_ID,
+    config.bridgeClientId,
+    config.clientId,
+    config.instanceId,
+  );
+}
+
+export function bridgeRequestHeaders(config = {}, env = process.env, base = {}) {
+  const clientId = bridgeClientId(config, env);
+  return {
+    ...base,
+    ...bridgeAuthHeaders(config, env),
+    ...(clientId ? { "x-orkestr-instance-id": clientId } : {}),
+  };
+}
+
 function truthyEnv(value) {
   return ["1", "true", "yes", "on"].includes(String(value || "").trim().toLowerCase());
 }
@@ -503,7 +528,7 @@ export async function getWhatsAppStatus(env = process.env, fetchImpl = fetch) {
       qrAvailable: false,
     };
   }
-  const headers = bridgeAuthHeaders(config, env);
+  const headers = bridgeRequestHeaders(config, env);
   try {
     const health = await fetchJson(whatsappBridgeEndpointUrl(bridgeUrl, "/health"), fetchImpl, { headers, env });
     if (!health.ok) {
@@ -564,7 +589,7 @@ export async function getWhatsAppChatParticipants({ accountId = "", chatId = "" 
   const runtimeAccountId = await resolveBridgeRuntimeAccountId(accountId, { config, env, fetchImpl });
   if (runtimeAccountId) metaUrl.searchParams.set("accountId", runtimeAccountId);
   const response = await fetchImpl(metaUrl, {
-    headers: bridgeAuthHeaders(config, env),
+    headers: bridgeRequestHeaders(config, env),
     signal: AbortSignal.timeout(Number(env.WHATSAPP_PARTICIPANTS_TIMEOUT_MS || 5000)),
   });
   const payload = await response.json().catch(() => ({}));
@@ -615,7 +640,7 @@ export async function getWhatsAppChatMessages({ accountId = "", chatId = "", lim
     return { accountId, chatId: id, ready: false, messages: [] };
   }
   const runtimeAccountId = await resolveBridgeRuntimeAccountId(accountId, { config, env, fetchImpl });
-  const headers = bridgeAuthHeaders(config, env);
+  const headers = bridgeRequestHeaders(config, env);
   const urls = externalHistoryUrls(bridgeUrl, id, runtimeAccountId, max);
   let lastError = null;
   for (const url of urls) {
@@ -3311,7 +3336,7 @@ export async function sendWhatsAppText({ chatId = "", text = "", accountId = "",
     return sendLocalWhatsAppMessage({ chatId, text, accountId, attachments: normalizedAttachments, env, crossAccountEchoSuppression });
   }
   if (!bridgeUrl) throw badRequest("whatsapp_bridge_not_configured");
-  const headers = { "content-type": "application/json", ...bridgeAuthHeaders(resolvedConfig, env) };
+  const headers = bridgeRequestHeaders(resolvedConfig, env, { "content-type": "application/json" });
   const runtimeAccountId = await resolveBridgeRuntimeAccountId(accountId, { config: resolvedConfig, env, fetchImpl });
   const response = await fetchImpl(whatsappBridgeEndpointUrl(bridgeUrl, normalizedAttachments.length ? "/send-media" : "/send-text"), {
     method: "POST",

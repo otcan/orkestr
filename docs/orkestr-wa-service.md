@@ -114,6 +114,7 @@ WHATSAPP_BRIDGE_MODE=external
 ORKESTR_WHATSAPP_EXTERNAL_BRIDGE_ENABLED=1
 WHATSAPP_BRIDGE_URL=http://127.0.0.1:18914
 WHATSAPP_BRIDGE_TOKEN=replace-with-local-secret
+ORKESTR_WA_SERVICE_CLIENT_ID=demo-vm-001
 ORKESTR_WHATSAPP_AUTOSTART=0
 WHATSAPP_LOCAL_AUTOSTART=0
 ```
@@ -121,6 +122,13 @@ WHATSAPP_LOCAL_AUTOSTART=0
 After that restart, `orkestr-ui.service`, OSS demo instances, and managed
 instances should all see the same external account status without owning the
 WhatsApp Chrome profile themselves.
+
+When a client id is configured, Orkestr sends it to `orkestr-wa` as
+`X-Orkestr-Instance-Id`. Supported identity sources, in priority order, are
+`ORKESTR_WA_SERVICE_CLIENT_ID`, `ORKESTR_WHATSAPP_BRIDGE_CLIENT_ID`,
+`WHATSAPP_BRIDGE_CLIENT_ID`, bridge instance id env vars, and the generic
+Orkestr instance env vars. Use the same value as the corresponding
+`ORKESTR_WA_SERVICE_POLICY_JSON.clients` key.
 
 ## Readiness Gate
 
