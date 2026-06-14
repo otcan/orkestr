@@ -185,7 +185,13 @@ export function paneBackgroundWork(text) {
 
 export function panePromptReady(text) {
   const lines = normalizedLines(text).map((line) => line.trim()).slice(-8);
-  return lines.some(panePromptLine);
+  return lines.some(panePromptLine) || paneIdleSkillsHintReady(lines);
+}
+
+function paneIdleSkillsHintReady(lines = []) {
+  const hintIndex = lines.findLastIndex((line) => /^(?:›|>)\s*Use\s+\/skills\s+to\s+list\s+available\s+skills\b/i.test(line));
+  if (hintIndex < 0) return false;
+  return lines.slice(hintIndex + 1).some((line) => /\bgpt-[^\s]+\s+\S+\s+·\s+\S+/i.test(line));
 }
 
 function paneHasRecentError(lines) {
