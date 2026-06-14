@@ -139,6 +139,7 @@ isolation audits:
 node scripts/orkestr-wa-readiness.mjs \
   --bridge-url "${WHATSAPP_BRIDGE_URL:-http://127.0.0.1:18914}" \
   --require-routing-policy \
+  --require-access-policy \
   --account sender \
   --account responder
 ```
@@ -146,6 +147,9 @@ node scripts/orkestr-wa-readiness.mjs \
 The checker matches accounts by `accountId`, `id`, `label`, `runtimeAccountId`,
 phone/contact id, and legacy role aliases. With `--require-routing-policy`, it
 also verifies that the sender account queues inbound work and the responder
-account is used for outbound/tool traffic only. It exits non-zero when the
-service is unreachable, an account is missing, a required account is not ready,
-or the routing policy does not match.
+account is used for outbound/tool traffic only. With `--require-access-policy`,
+it also verifies that `ORKESTR_WA_SERVICE_POLICY_JSON` is enforced; add
+`--client-id <client-id>` when a specific Orkestr instance entry must exist. It
+exits non-zero when the service is unreachable, an account is missing, a required
+account is not ready, the routing policy does not match, or the access policy is
+not enforced.

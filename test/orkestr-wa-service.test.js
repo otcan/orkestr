@@ -314,6 +314,39 @@ test("WA readiness checker rejects responder inbound queueing policy", () => {
   ]);
 });
 
+test("WA readiness checker enforces access policy when required", () => {
+  const missing = evaluateWaServiceReadiness({
+    ok: true,
+    ready: true,
+    accounts: [{ accountId: "sender", ready: true, state: "ready" }],
+    accessPolicy: { enforced: false, clients: {} },
+  }, ["sender"], { requireAccessPolicy: true, accessPolicyClient: "demo-instance" });
+
+  assert.equal(missing.ok, false);
+  assert.equal(missing.accessPolicy.required, true);
+  assert.deepEqual(missing.accessPolicy.errors, [
+    "access_policy_not_enforced",
+    "access_policy_client_missing:demo-instance",
+  ]);
+
+  const allowed = evaluateWaServiceReadiness({
+    ok: true,
+    ready: true,
+    accounts: [{ accountId: "sender", ready: true, state: "ready" }],
+    accessPolicy: {
+      enforced: true,
+      clients: {
+        "demo-instance": { accounts: ["sender"], sendRecipients: ["15550001111@c.us"] },
+      },
+    },
+  }, ["sender"], { requireAccessPolicy: true, accessPolicyClient: "demo-instance" });
+
+  assert.equal(allowed.ok, true);
+  assert.equal(allowed.accessPolicy.enforced, true);
+  assert.equal(allowed.accessPolicy.clientCount, 1);
+  assert.deepEqual(allowed.accessPolicy.errors, []);
+});
+
 test("WA readiness checker can probe the standalone service", async () => {
   const home = await testHome("orkestr-wa-service-readiness-");
   const env = {

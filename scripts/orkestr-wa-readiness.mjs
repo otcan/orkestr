@@ -26,6 +26,8 @@ function parseArgs(argv = process.argv.slice(2), env = process.env) {
     ),
     accounts: splitList(env.ORKESTR_WA_REQUIRED_ACCOUNTS || env.ORKESTR_REQUIRED_WHATSAPP_ACCOUNTS || ""),
     requireRoutingPolicy: truthy(env.ORKESTR_WA_REQUIRE_ROUTING_POLICY),
+    requireAccessPolicy: truthy(env.ORKESTR_WA_REQUIRE_ACCESS_POLICY),
+    accessPolicyClient: clean(env.ORKESTR_WA_ACCESS_POLICY_CLIENT_ID || env.ORKESTR_WA_SERVICE_CLIENT_ID || env.ORKESTR_WHATSAPP_BRIDGE_CLIENT_ID || env.WHATSAPP_BRIDGE_CLIENT_ID),
     inboundAccount: clean(env.ORKESTR_WA_INBOUND_ACCOUNT_ID || env.ORKESTR_WHATSAPP_INBOUND_ACCOUNT_ID || env.ORKESTR_WHATSAPP_SENDER_ACCOUNT_ID || env.ORKESTR_WHATSAPP_SENDER_ROLE || "sender"),
     outboundAccount: clean(env.ORKESTR_WA_OUTBOUND_ACCOUNT_ID || env.ORKESTR_WHATSAPP_RESPONDER_ACCOUNT_ID || env.ORKESTR_WHATSAPP_RESPONDER_ROLE || "responder"),
     timeoutMs: Number(env.ORKESTR_WA_READINESS_TIMEOUT_MS || env.WHATSAPP_BRIDGE_STATUS_TIMEOUT_MS || 5000) || 5000,
@@ -44,6 +46,10 @@ function parseArgs(argv = process.argv.slice(2), env = process.env) {
       options.accounts.push(...splitList(argv[++index]));
     } else if (arg === "--require-routing-policy") {
       options.requireRoutingPolicy = true;
+    } else if (arg === "--require-access-policy") {
+      options.requireAccessPolicy = true;
+    } else if (arg === "--access-policy-client" || arg === "--client-id" || arg === "--instance-id") {
+      options.accessPolicyClient = clean(argv[++index]);
     } else if (arg === "--inbound-account" || arg === "--sender-account") {
       options.inboundAccount = clean(argv[++index]);
     } else if (arg === "--outbound-account" || arg === "--responder-account") {
@@ -70,6 +76,9 @@ label, runtimeAccountId, and legacyRoleAliases.
 Add --require-routing-policy to assert the service advertises the Orkestr
 sender/responder policy: sender queues inbound work, responder is tools/outbound
 only.
+
+Add --require-access-policy to assert the service has an enforced client
+allowlist. Use --client-id to require a specific Orkestr instance/client entry.
 `;
 }
 
@@ -164,6 +173,26 @@ function evaluateRoutingPolicy(payload = {}, accounts = [], options = {}) {
   };
 }
 
+function evaluateAccessPolicy(payload = {}, options = {}) {
+  if (!options.requireAccessPolicy) return { required: false, ok: true };
+  const policy = payload.accessPolicy && typeof payload.accessPolicy === "object" ? payload.accessPolicy : {};
+  const clientId = clean(options.accessPolicyClient);
+  const clients = policy.clients && typeof policy.clients === "object" && !Array.isArray(policy.clients)
+    ? policy.clients
+    : {};
+  const errors = [];
+  if (policy.enforced !== true) errors.push("access_policy_not_enforced");
+  if (clientId && !clients[clientId]) errors.push(`access_policy_client_missing:${clientId}`);
+  return {
+    required: true,
+    ok: errors.length === 0,
+    enforced: policy.enforced === true,
+    clientId,
+    clientCount: Object.keys(clients).length,
+    errors,
+  };
+}
+
 export function evaluateWaServiceReadiness(payload = {}, requiredAccounts = [], options = {}) {
   const accounts = Array.isArray(payload.accounts) ? payload.accounts : [];
   const missing = [];
@@ -199,10 +228,11 @@ export function evaluateWaServiceReadiness(payload = {}, requiredAccounts = [], 
       updatedAt: clean(account.updatedAt),
     })),
     routingPolicy: evaluateRoutingPolicy(payload, accounts, options),
+    accessPolicy: evaluateAccessPolicy(payload, options),
   };
   return {
     ...result,
-    ok: result.ok && result.routingPolicy.ok,
+    ok: result.ok && result.routingPolicy.ok && result.accessPolicy.ok,
   };
 }
 

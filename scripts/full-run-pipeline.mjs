@@ -204,7 +204,7 @@ function demoOnboardingEnv(options = {}) {
 }
 
 function waServiceReadinessArgs(options = {}) {
-  const args = ["scripts/orkestr-wa-readiness.mjs", "--require-routing-policy"];
+  const args = ["scripts/orkestr-wa-readiness.mjs", "--require-routing-policy", "--require-access-policy"];
   if (options.waServiceUrl) args.push("--bridge-url", options.waServiceUrl);
   for (const account of options.waServiceAccounts || []) args.push("--account", account);
   return args;

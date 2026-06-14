@@ -102,7 +102,7 @@ test("full run pipeline adds isolated demo gates for demo release deploys", () =
   assert.ok(ids.indexOf("whatsapp-demo-onboarding") < ids.indexOf("deploy"));
   assert.match(
     stages.find((stage) => stage.id === "wa-service-readiness").args.join(" "),
-    /--require-routing-policy --account sender --account responder/,
+    /--require-routing-policy --require-access-policy --account sender --account responder/,
   );
   assert.equal(
     stages.find((stage) => stage.id === "whatsapp-real").env.ORKESTR_REAL_WA_E2E_ARTIFACT,
