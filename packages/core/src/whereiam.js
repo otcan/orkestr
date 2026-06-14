@@ -172,8 +172,8 @@ function commandHints() {
     timerDoctor: "orkestr doctor timers",
     browserSessions: "curl \"$ORKESTR_API_BASE/api/browser-sessions\"",
     desktopLeases: "curl \"$ORKESTR_API_BASE/api/desktops/leases\"",
-    whatsappStatus: "curl \"$ORKESTR_API_BASE/api/connectors/whatsapp/status\"",
-    connectorStatus: "curl \"$ORKESTR_API_BASE/api/setup/status\"",
+    whatsappStatus: "orkestr whatsapp accounts list --json",
+    connectorStatus: "orkestr status --json",
   };
 }
 

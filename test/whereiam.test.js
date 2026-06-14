@@ -126,6 +126,8 @@ test("whereAmI resolves the current thread from a nested workspace path", async 
   assert.equal(payload.settings.desktops.gmailAuth, "gmail");
   assert.equal(payload.matchedBy, "thread.cwd");
   assert.match(payload.commands.postApiSessionMessage, /orkestr api-session message/);
+  assert.equal(payload.commands.whatsappStatus, "orkestr whatsapp accounts list --json");
+  assert.equal(payload.commands.connectorStatus, "orkestr status --json");
 });
 
 test("whereAmI exposes server-owned contained user runtime policy metadata", async () => {
