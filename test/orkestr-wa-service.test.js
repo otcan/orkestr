@@ -9,8 +9,8 @@ import {
   evaluateWaServiceReadiness,
 } from "../scripts/orkestr-wa-readiness.mjs";
 
-async function withWaService(env, fn) {
-  const server = createOrkestrWaService({ env });
+async function withWaService(env, fn, bridge) {
+  const server = createOrkestrWaService({ env, bridge });
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
   const address = server.address();
   const bridgeUrl = `http://127.0.0.1:${address.port}`;
@@ -23,6 +23,22 @@ async function withWaService(env, fn) {
 
 async function testHome(prefix) {
   return fs.mkdtemp(path.join(os.tmpdir(), prefix));
+}
+
+function mockBridge(overrides = {}) {
+  return {
+    createLocalWhatsAppChat: async (payload) => ({ ok: true, chatId: "demo-group@g.us", ...payload }),
+    getLocalWhatsAppBridgeStatus: async () => ({ ok: true, ready: true, state: "ready", accounts: [] }),
+    getLocalWhatsAppQrSvg: async () => "<svg></svg>",
+    listLocalWhatsAppChatMessages: async () => ({ ok: true, messages: [] }),
+    listLocalWhatsAppChats: async () => ({ ok: true, chats: [] }),
+    listLocalWhatsAppChatParticipants: async () => ({ ok: true, participants: [] }),
+    logoutLocalWhatsAppAccount: async (accountId) => ({ accountId, ready: false }),
+    recoverLocalWhatsAppChatMessages: async () => ({ ok: true, messages: [] }),
+    sendLocalWhatsAppMessage: async (payload) => ({ ok: true, id: "sent-1", ...payload }),
+    startLocalWhatsAppAccount: async (accountId) => ({ accountId, ready: true }),
+    ...overrides,
+  };
 }
 
 test("standalone WA service exposes sanitized health for configured accounts", async () => {
@@ -67,6 +83,122 @@ test("standalone WA service routing policy honors configured sender and responde
     injectedRouteAccountId: "inbound-phone",
     responderQueuesInbound: false,
   });
+});
+
+test("standalone WA service denies account use outside the client routing policy", async () => {
+  const home = await testHome("orkestr-wa-service-policy-account-");
+  const env = {
+    ORKESTR_HOME: home,
+    ORKESTR_WA_SERVICE_AUTH_DISABLED: "1",
+    ORKESTR_WA_SERVICE_POLICY_JSON: JSON.stringify({
+      clients: {
+        "demo-instance": {
+          accounts: ["sender"],
+          sendRecipients: ["15550001111@c.us"],
+        },
+      },
+    }),
+  };
+
+  await withWaService(env, async ({ bridgeUrl }) => {
+    const response = await fetch(`${bridgeUrl}/send-text`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-orkestr-instance-id": "demo-instance",
+      },
+      body: JSON.stringify({
+        accountId: "responder",
+        to: "15550001111@c.us",
+        text: "hello",
+      }),
+    });
+    assert.equal(response.status, 403);
+    const payload = await response.json();
+    assert.equal(payload.error, "wa_service_policy_denied:account_not_allowed");
+    assert.equal(payload.auditEvent.clientId, "demo-instance");
+    assert.equal(payload.auditEvent.accountId, "responder");
+  }, mockBridge());
+});
+
+test("standalone WA service denies recipient use outside the client routing policy", async () => {
+  const home = await testHome("orkestr-wa-service-policy-recipient-");
+  const env = {
+    ORKESTR_HOME: home,
+    ORKESTR_WA_SERVICE_AUTH_DISABLED: "1",
+    ORKESTR_WA_SERVICE_POLICY_JSON: JSON.stringify({
+      clients: {
+        "demo-instance": {
+          accounts: ["sender"],
+          sendRecipients: ["15550001111@c.us"],
+        },
+      },
+    }),
+  };
+
+  await withWaService(env, async ({ bridgeUrl }) => {
+    const response = await fetch(`${bridgeUrl}/send-text`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-orkestr-instance-id": "demo-instance",
+      },
+      body: JSON.stringify({
+        accountId: "sender",
+        to: "15550002222@c.us",
+        text: "hello",
+      }),
+    });
+    assert.equal(response.status, 403);
+    const payload = await response.json();
+    assert.equal(payload.error, "wa_service_policy_denied:recipient_not_allowed");
+    assert.equal(payload.auditEvent.recipient, "15550002222@c.us");
+    assert.equal(payload.auditEvent.scope, "send");
+  }, mockBridge());
+});
+
+test("standalone WA service allows demo onboarding send within routing policy", async () => {
+  const home = await testHome("orkestr-wa-service-policy-allowed-");
+  const sent = [];
+  const env = {
+    ORKESTR_HOME: home,
+    ORKESTR_WA_SERVICE_AUTH_DISABLED: "1",
+    ORKESTR_WA_SERVICE_POLICY_JSON: JSON.stringify({
+      clients: {
+        "demo-instance": {
+          accounts: ["sender"],
+          sendRecipients: ["15550001111@c.us"],
+        },
+      },
+    }),
+  };
+
+  await withWaService(env, async ({ bridgeUrl }) => {
+    const response = await fetch(`${bridgeUrl}/send-text`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-orkestr-instance-id": "demo-instance",
+      },
+      body: JSON.stringify({
+        accountId: "sender",
+        to: "15550001111@c.us",
+        text: "Open your demo setup link.",
+      }),
+    });
+    assert.equal(response.status, 200);
+    const payload = await response.json();
+    assert.equal(payload.ok, true);
+    assert.equal(sent.length, 1);
+    assert.equal(sent[0].accountId, "sender");
+    assert.equal(sent[0].chatId, "15550001111@c.us");
+    assert.equal(sent[0].text, "Open your demo setup link.");
+  }, mockBridge({
+    sendLocalWhatsAppMessage: async (payload) => {
+      sent.push(payload);
+      return { ok: true, id: "sent-demo-onboarding" };
+    },
+  }));
 });
 
 test("standalone WA service requires bearer auth when a token is configured", async () => {

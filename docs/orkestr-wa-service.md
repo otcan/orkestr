@@ -47,6 +47,42 @@ mode:
 All routes require `Authorization: Bearer <ORKESTR_WA_SERVICE_TOKEN>` unless
 `ORKESTR_WA_SERVICE_AUTH_DISABLED=1` is set for local tests.
 
+## Routing Policy
+
+When `ORKESTR_WA_SERVICE_POLICY_JSON` is unset, the service keeps the legacy
+single-client behavior and allows authenticated callers to use configured bridge
+accounts. For shared host services, set an explicit client policy and have each
+Orkestr instance send `X-Orkestr-Instance-Id: <client-id>`.
+
+Example policy with fake identifiers:
+
+```bash
+ORKESTR_WA_SERVICE_POLICY_JSON='{
+  "clients": {
+    "demo-vm-001": {
+      "accounts": ["sender"],
+      "sendRecipients": ["15550001111@c.us"],
+      "historyRecipients": ["15550001111@c.us"],
+      "createChatParticipants": ["15550001111@c.us"],
+      "pairing": false,
+      "manageAccounts": false
+    },
+    "operator": {
+      "accounts": ["sender", "responder"],
+      "recipients": ["*"],
+      "pairing": true,
+      "manageAccounts": true
+    }
+  }
+}'
+```
+
+The policy fails closed when configured: unknown clients, disallowed accounts,
+and disallowed recipients return `403` with a `wa_service_policy_denied` audit
+event in the JSON response. Recipient checks apply to send, history/meta/recover,
+and group creation participant routes. Pairing and account-management routes also
+require the corresponding boolean flag for the client.
+
 ## Carry Existing Login
 
 Do not copy WhatsApp session files into the public repo or print session paths in
