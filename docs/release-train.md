@@ -125,9 +125,19 @@ Do not merge workers that are classified `needs-human`.
 
 ## Phase 5: Test Locally
 
-The release train owns tests. Run the checks appropriate to the changed surface:
+The release train owns tests. Use
+[LLM-assisted release procedures](llm-assisted-release-procedures.md) to choose,
+run, and recover checks according to the changed surface. Npm scripts are
+command primitives, not the decision authority.
 
-- full local release gate: `npm run pipeline:full`
+The agent must produce an evidence packet that states which surfaces changed,
+which checks were selected, which checks were skipped, and why. A broad
+umbrella command such as `npm run pipeline:full` may be used as a convenience
+check only after the agent confirms that its planned stages match the current
+release.
+
+Minimum primitive guidance:
+
 - server/build changes: `npm run build:server`
 - web/UI changes: `npm run web:build`
 - runtime/install/deploy changes: targeted Node tests plus shell syntax checks
@@ -136,34 +146,20 @@ The release train owns tests. Run the checks appropriate to the changed surface:
   [tenant isolation release checklist](tenant-isolation-release-checklist.md)
 - broad release train: `npm run build` and `node --test` or the repo's CI runner
 - smoke-sensitive deploy changes: `npm run smoke`
-- attended deploy/regression changes: `npm run release:regression -- --target
-  local=http://127.0.0.1:$ORKESTR_PORT`, adding `--execute --thread <test-id>`
-  only when a real test chat is intentionally allowed
-- full release-facing run with protected/public target checks:
-  `npm run pipeline:full -- --release-regression-target
+- protected/public target checks: `npm run release:regression -- --target
   local=http://127.0.0.1:$ORKESTR_PORT --allow-auth-blocked`
-- release deploys: `npm run pipeline:full -- --deploy-ref <ref>`; this runs
-  real WhatsApp E2E before deployment. `--skip-whatsapp-real` is blocked for
-  deploys unless paired with the explicit emergency bypass
-  `--allow-release-without-e2e`.
-- isolated demo VM release deploys: add `--demo-release` and pass a direct
-  target phone number with `--demo-whatsapp-phone <phone>` or
-  `ORKESTR_REAL_WA_DEMO_PHONE_NUMBER`; existing demo VM env
-  `ORKESTR_DEMO_WHATSAPP_NUMBER` is also accepted. This also runs
-  `npm run audit:isolation` and `npm run e2e:whatsapp-demo-onboarding` before
-  deployment, writing live WhatsApp artifacts into the full-run artifact
-  directory. The OSS onboarding gate derives the direct `<digits>@c.us` chat
-  from the phone number and clears legacy demo chat-id env for that stage.
-  Skipping the isolation audit for a demo deploy requires both
-  `--skip-isolation-audit` and
-  `--allow-release-without-isolation-audit`, and the skipped gate is recorded in
-  the summary artifact.
-- attended real WhatsApp/OAuth/desktop/timer checks:
+- real WhatsApp/OAuth/desktop/timer checks:
   `npm run e2e:whatsapp-real -- --execute --thread <thread-id> --chat-id <chat-id>`.
   See `docs/real-whatsapp-e2e.md`; this sends real WhatsApp messages and must
-  be opt-in. Unattended runs require ready sender and responder accounts.
-  Attended runs can use `--manual-send` when the operator will send the real
-  WhatsApp message from a phone/contact.
+  be opt-in.
+- isolated demo VM releases: `npm run audit:isolation` plus
+  `npm run e2e:whatsapp-demo-onboarding -- --execute` with a direct target phone
+  number, as described in `docs/isolated-oss-demo.md`.
+
+Deploys require real WhatsApp E2E unless the user explicitly approves the
+emergency bypass. Demo deploys require an isolation audit unless the user
+explicitly approves the isolation-audit bypass. Record any bypass in the
+evidence packet.
 
 If tests fail, fix clear failures inside the release train. Escalate only when
 the failure implies a product decision or contradicts a worker's intent.

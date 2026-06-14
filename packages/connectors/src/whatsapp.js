@@ -656,6 +656,20 @@ function badRequest(message) {
   return error;
 }
 
+function routingConflict(message, failure = {}) {
+  const error = new Error(message);
+  error.statusCode = 409;
+  error.routingFailure = {
+    code: message,
+    capability: "whatsapp",
+    provider: "whatsapp",
+    retryable: false,
+    userFacingCategory: "connector",
+    ...failure,
+  };
+  return error;
+}
+
 function pickString(...values) {
   for (const value of values) {
     const text = String(value || "").trim();
@@ -1074,7 +1088,16 @@ async function routeThread(input, config, env) {
   if (registryRoute?.ok && registryBinding?.threadId) {
     return { threadId: registryBinding.threadId, binding: registryBinding };
   }
-  const thread = threads.find((item) => whatsappInboundThreadMatchesBinding({
+  if (registryRoute?.error === "wa_binding_ambiguous") {
+    throw routingConflict("wa_binding_ambiguous", {
+      reason: registryRoute.reason || "Multiple WhatsApp bindings matched this inbound chat.",
+      chatId,
+      accountId,
+      bindingId: (registryRoute.diagnostics?.ambiguousBindingIds || []).join(","),
+      safeMessage: "Multiple Orkestr WhatsApp bindings matched this chat. Retire one duplicate binding or create a narrower binding.",
+    });
+  }
+  const matchedThreads = threads.filter((item) => whatsappInboundThreadMatchesBinding({
     thread: item,
     chatId,
     accountId,
@@ -1082,6 +1105,16 @@ async function routeThread(input, config, env) {
     fromMe,
     aclContext: input.machineAuthContext || null,
   }));
+  if (matchedThreads.length > 1) {
+    throw routingConflict("wa_binding_ambiguous", {
+      reason: "Multiple legacy WhatsApp thread bindings matched this inbound chat.",
+      chatId,
+      accountId,
+      bindingId: matchedThreads.map((thread) => pickString(thread.binding?.id, thread.binding?.bindingId) || `thread:${thread.id}:whatsapp`).join(","),
+      safeMessage: "Multiple Orkestr WhatsApp bindings matched this chat. Retire one duplicate binding or create a narrower binding.",
+    });
+  }
+  const thread = matchedThreads[0] || null;
   return thread ? { threadId: thread.id, binding: thread.binding || null } : { threadId: "", binding: null };
 }
 

@@ -7422,6 +7422,50 @@ test("whatsapp inbound routes through enabled thread bindings", async () => {
   assert.equal(messages[0].originTransport, "whatsapp-local-bridge");
 });
 
+test("whatsapp inbound fails closed for ambiguous thread bindings", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-binding-ambiguous-route-"));
+  const env = externalBridgeEnv(home);
+  await createThread({
+    id: "bound-thread-a",
+    name: "Bound Thread A",
+    binding: {
+      connector: "whatsapp",
+      chatId: "chat-ambiguous",
+      displayName: "Ambiguous Chat A",
+      enabled: true,
+      routeEligible: true,
+      outboundAccountId: "bound-account-a",
+    },
+  }, env);
+  await createThread({
+    id: "bound-thread-b",
+    name: "Bound Thread B",
+    binding: {
+      connector: "whatsapp",
+      chatId: "chat-ambiguous",
+      displayName: "Ambiguous Chat B",
+      enabled: true,
+      routeEligible: true,
+      outboundAccountId: "bound-account-b",
+    },
+  }, env);
+
+  await assert.rejects(
+    () => routeWhatsAppInbound({ eventId: "wa-ambiguous-1", chatId: "chat-ambiguous", text: "do not guess" }, env),
+    (error) => {
+      assert.equal(error.message, "wa_binding_ambiguous");
+      assert.equal(error.statusCode, 409);
+      assert.equal(error.routingFailure.code, "wa_binding_ambiguous");
+      assert.equal(error.routingFailure.chatId, "chat-ambiguous");
+      assert.match(error.routingFailure.bindingId, /bound-thread-a/);
+      assert.match(error.routingFailure.bindingId, /bound-thread-b/);
+      return true;
+    },
+  );
+  assert.deepEqual(await listThreadMessages("bound-thread-a", env), []);
+  assert.deepEqual(await listThreadMessages("bound-thread-b", env), []);
+});
+
 test("whatsapp inbound receive ACL denies scoped tokens outside binding grant", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-binding-receive-acl-"));
   const env = externalBridgeEnv(home);

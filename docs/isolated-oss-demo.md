@@ -3,6 +3,12 @@
 This runbook is for the private VM demo flow. The demo does not use
 `app.orkestr.de` and does not send onboarding to a shared group chat.
 
+For release validation, use the demo onboarding and tenant/OSS VM isolation
+procedures in
+[LLM-assisted release procedures](llm-assisted-release-procedures.md). The
+commands below are primitives inside those procedures, not a substitute for
+preflight, failure classification, artifact inspection, and public-safe signoff.
+
 ## Roles
 
 - Broker: public connect/auth entrypoint and instance registry.
