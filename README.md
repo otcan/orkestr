@@ -262,6 +262,7 @@ See [docs/oss-managed-boundary.md](docs/oss-managed-boundary.md).
 
 - [User guide](docs/user-guide.md)
 - [Framework and deployment](docs/framework-deployment.md)
+- [LLM-assisted release procedures](docs/llm-assisted-release-procedures.md)
 - [OSS vs managed boundary](docs/oss-managed-boundary.md)
 - [Secret manager](docs/secret-manager.md)
 - [Security](SECURITY.md)
@@ -272,19 +273,16 @@ See [docs/oss-managed-boundary.md](docs/oss-managed-boundary.md).
 
 ```bash
 npm ci
-npm run pipeline:full
+npm run build
+node --test
 ```
 
-`pipeline:full` runs the local release gate: build, full CI tests, OSS boundary
-check, demo/k3s contracts, VM demo smoke, app smoke, and the coding-agent demo.
-Use `npm run pipeline:full -- --plan` to inspect the exact stages. Live k3s,
-AWS VPS, release regression, and deploy steps are opt-in flags. Real WhatsApp
-E2E is opt-in for local-only runs, but it is required automatically when
-`pipeline:full` is asked to deploy with `--deploy-ref`; use
-`--allow-release-without-e2e` only as an explicit emergency bypass.
-For OSS demo releases, pass `--demo-release --demo-whatsapp-phone <phone>` so
-the onboarding E2E derives the direct WhatsApp `<digits>@c.us` target from a
-phone number instead of a raw chat id.
+Release and live E2E work uses the
+[LLM-assisted release procedures](docs/llm-assisted-release-procedures.md).
+Those procedures inspect the current change surface, choose the required checks,
+classify failures, and produce an evidence packet. Npm scripts remain available
+as command primitives, including `npm run pipeline:full`, but the procedure is
+the source of truth for deciding which gates are required.
 
 When changing the UI, run `npm run web:build` and commit the updated `dist/web`
 bundle.

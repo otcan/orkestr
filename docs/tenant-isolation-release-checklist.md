@@ -13,7 +13,11 @@ surface or route ownership rule.
 
 ## Required Local Checks
 
-Run the named tenant isolation suite before the normal release checks:
+Use the tenant and OSS VM isolation procedure in
+[LLM-assisted release procedures](llm-assisted-release-procedures.md). The
+procedure must inspect the changed isolation surface, compare it with the
+containment and route-security matrices, and then run the named tenant isolation
+suite before the normal release checks:
 
 ```bash
 npm run test:tenant-isolation
@@ -24,6 +28,14 @@ Then run the normal release checks for the changed surface, usually:
 ```bash
 npm run build
 node --test --test-concurrency=1
+```
+
+If the release touches demo VM bootstrap, public onboarding, broker UUID
+routing, or desktop containment, add the isolation audit and preserve its
+artifact or output in the release evidence packet:
+
+```bash
+npm run audit:isolation
 ```
 
 ## Coverage Expectations

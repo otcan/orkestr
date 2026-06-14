@@ -1,12 +1,17 @@
 # Real WhatsApp E2E
 
-`npm run e2e:whatsapp-real` runs an opt-in live acceptance test for a
-WhatsApp-bound Orkestr thread. In the automated mode it sends a real message
-through a configured sender WhatsApp account, verifies that the responder
-account sees and routes the message, checks that the assistant reply is visible
-in WhatsApp history, opens the desktop share challenge URL, approves that
-challenge through WhatsApp, and exercises desktop lease/share and timer watcher
-APIs.
+Use the real WhatsApp E2E procedure in
+[LLM-assisted release procedures](llm-assisted-release-procedures.md) before
+running live transport checks. The procedure owns preflight, target validation,
+failure classification, retry decisions, and the public-safe evidence packet.
+
+`npm run e2e:whatsapp-real` is the command primitive for the opt-in live
+acceptance test for a WhatsApp-bound Orkestr thread. In the automated mode it
+sends a real message through a configured sender WhatsApp account, verifies that
+the responder account sees and routes the message, checks that the assistant
+reply is visible in WhatsApp history, opens the desktop share challenge URL,
+approves that challenge through WhatsApp, and exercises desktop lease/share and
+timer watcher APIs.
 
 The test is disabled by default. It requires `--execute` and explicit live
 targets because it sends real WhatsApp messages.
