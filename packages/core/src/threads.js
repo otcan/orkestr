@@ -418,9 +418,7 @@ export async function appendThreadMessage(threadId, input, env = process.env) {
         existing.role === "user" &&
         whatsappOrigin(existing) &&
         String(existing.externalId || "").trim() === externalId &&
-        sameOptionalMessageField(existing, input, "chatId") &&
-        sameOptionalMessageField(existing, input, "from") &&
-        sameOptionalMessageField(existing, input, "accountId")
+        sameOptionalMessageField(existing, input, "chatId")
       );
       if (duplicate) return { ...duplicate, duplicate: true, duplicateReason: "external_id" };
     }

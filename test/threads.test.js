@@ -1906,6 +1906,84 @@ test("runtime status treats active working screen skills hint as typing", async 
   }
 });
 
+test("runtime status treats idle skills hint with status footer as prompt-ready", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-idle-skills-hint-"));
+  const fakeTmux = await createFakeTmux(home);
+  const priorPath = process.env.PATH;
+  const priorTmuxLog = process.env.TMUX_LOG;
+  const priorTmuxState = process.env.TMUX_STATE;
+  const priorTmuxCaptureText = process.env.TMUX_CAPTURE_TEXT;
+  process.env.PATH = `${fakeTmux.bin}:${priorPath || ""}`;
+  process.env.TMUX_LOG = fakeTmux.log;
+  process.env.TMUX_STATE = fakeTmux.state;
+  process.env.TMUX_CAPTURE_TEXT = [
+    "• Created Jira task: ORK-331",
+    "  https://example.test/browse/ORK-331",
+    "› Use /skills to list available skills",
+    "  gpt-5.5 high · /workspace",
+  ].join("\n");
+
+  try {
+    const env = {
+      ORKESTR_HOME: path.join(home, "orkestr-home"),
+      HOME: path.join(home, "runtime-home"),
+      CODEX_HOME: path.join(home, "codex-home"),
+      PATH: process.env.PATH,
+      TMUX_LOG: fakeTmux.log,
+      TMUX_STATE: fakeTmux.state,
+      TMUX_CAPTURE_TEXT: process.env.TMUX_CAPTURE_TEXT,
+    };
+    await createThread({ id: "idle-skills-hint-thread", name: "Idle Skills Hint Thread" }, env);
+    await wakeThread("idle-skills-hint-thread", { reason: "test" }, env);
+
+    const status = await runtimeStatus("idle-skills-hint-thread", env);
+
+    assert.equal(status.state, "ready");
+    assert.equal(status.working, false);
+    assert.equal(status.promptReady, true);
+  } finally {
+    restoreEnvValue("PATH", priorPath);
+    restoreEnvValue("TMUX_LOG", priorTmuxLog);
+    restoreEnvValue("TMUX_STATE", priorTmuxState);
+    restoreEnvValue("TMUX_CAPTURE_TEXT", priorTmuxCaptureText);
+  }
+});
+
+test("whatsapp external ids suppress duplicate source messages across account views", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-wa-external-account-view-"));
+  const env = { ORKESTR_HOME: home };
+  await createThread({ id: "wa-external-account-view-thread", name: "WA External Account View Thread" }, env);
+
+  const first = await enqueueThreadInput("wa-external-account-view-thread", {
+    source: "whatsapp_inbound",
+    connector: "whatsapp",
+    externalId: "chat@g.us_msg-123_sender@lid",
+    chatId: "chat@g.us",
+    accountId: "sender",
+    from: "sender@lid",
+    text: "same source message",
+  }, env);
+  await updateThreadMessage("wa-external-account-view-thread", first.id, {
+    state: "completed",
+    deliveryState: "delivered",
+  }, env);
+  const second = await enqueueThreadInput("wa-external-account-view-thread", {
+    source: "whatsapp_inbound",
+    connector: "whatsapp",
+    externalId: "chat@g.us_msg-123_sender@lid",
+    chatId: "chat@g.us",
+    accountId: "responder",
+    from: "sender@lid",
+    text: "same source message",
+  }, env);
+  const messages = await listThreadMessages("wa-external-account-view-thread", env);
+
+  assert.equal(second.duplicate, true);
+  assert.equal(second.duplicateReason, "external_id");
+  assert.equal(second.id, first.id);
+  assert.equal(messages.filter((message) => message.role === "user").length, 1);
+});
+
 test("thread input delivery waits for runtime acknowledgement before completing", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-thread-delivery-ack-"));
   const fakeTmux = await createFakeTmux(home);

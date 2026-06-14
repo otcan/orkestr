@@ -82,6 +82,19 @@ test("pane progress classifies a ready prompt", () => {
   assert.equal(progress.promptReady, true);
 });
 
+test("pane progress classifies idle Codex skills hint with status footer as ready", () => {
+  const progress = paneProgressFromText([
+    "• Created Jira task: ORK-331",
+    "  https://example.test/browse/ORK-331",
+    "› Use /skills to list available skills",
+    "  gpt-5.5 high · /workspace/demo",
+  ].join("\n"), { tailLines: 10 });
+
+  assert.equal(progress.stateHint, "ready");
+  assert.equal(progress.summary, "Ready");
+  assert.equal(progress.promptReady, true);
+});
+
 test("pane progress detects Codex conversation interruption banners", () => {
   const progress = paneProgressFromText([
     "■ Conversation interrupted - tell the model what to do differently.",
