@@ -2404,8 +2404,12 @@ export async function routeWhatsAppInbound(input = {}, env = process.env, fetchI
   }, env).catch(() => {});
 
   const state = await readWhatsAppState(env);
+  let threadRoute = null;
   const accountPolicy = whatsappInboundAccountPolicy(input, config, state, env);
   if (!accountPolicy.allowed) {
+    threadRoute = await routeThread(input, config, env);
+  }
+  if (!accountPolicy.allowed && !threadRoute?.binding) {
     await ensureRouterTurn({
       routerTraceId: initialTraceId,
       turnId: initialTurnId,
@@ -2614,7 +2618,7 @@ export async function routeWhatsAppInbound(input = {}, env = process.env, fetchI
     return null;
   };
 
-  let threadRoute = await routeThread(input, config, env);
+  threadRoute ||= await routeThread(input, config, env);
   if (!threadRoute.threadId) threadRoute = await routeAutoProvisionedThread(input, config, env);
   const threadId = threadRoute.threadId;
   const agentId = threadId ? "" : routeAgentId(input, config);

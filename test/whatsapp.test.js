@@ -7607,6 +7607,41 @@ test("whatsapp inbound routes through enabled thread bindings", async () => {
   assert.equal(messages[0].originTransport, "whatsapp-local-bridge");
 });
 
+test("whatsapp direct bindings can receive responder-observed inbound", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-direct-responder-observed-"));
+  const env = externalBridgeEnv(home, { ORKESTR_WHATSAPP_ACCOUNT_IDS: "sender,responder" });
+  await createThread({
+    id: "direct-responder-observed-thread",
+    name: "Direct Responder Observed",
+    binding: {
+      connector: "whatsapp",
+      chatId: "sender-lid@lid",
+      displayName: "Direct Chat",
+      enabled: true,
+      responderAccountId: "responder",
+      outboundAccountId: "responder",
+    },
+  }, env);
+
+  const routed = await routeWhatsAppInbound({
+    eventId: "false_sender-lid@lid_direct-message",
+    chatId: "sender-lid@lid",
+    accountId: "responder",
+    from: "sender-lid@lid",
+    fromMe: false,
+    text: "/connect google",
+  }, env);
+  const messages = await listThreadMessages("direct-responder-observed-thread", env);
+  const userMessages = messages.filter((message) => message.role === "user");
+
+  assert.equal(routed.threadId, "direct-responder-observed-thread");
+  assert.equal(routed.ignoredNonSenderAccount, undefined);
+  assert.equal(userMessages.length, 1);
+  assert.equal(userMessages[0].text, "/connect google");
+  assert.equal(userMessages[0].accountId, "responder");
+  assert.equal(userMessages[0].from, "sender-lid@lid");
+});
+
 test("whatsapp inbound fails closed for ambiguous thread bindings", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-binding-ambiguous-route-"));
   const env = externalBridgeEnv(home);
