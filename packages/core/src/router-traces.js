@@ -67,6 +67,21 @@ function safeError(value) {
   return clean(value?.message || value).replace(/\s+/g, " ").slice(0, 500);
 }
 
+function retryableWhatsAppMirrorFailure(phase = {}, trace = {}) {
+  if (phase.phase !== "mirror_failed") return false;
+  if (lower(trace.connector) !== "whatsapp") return false;
+  const error = lower(phase.error || phase.reason || trace.lastError);
+  return error.includes("not_ready") ||
+    error.includes("bridge_not_ready") ||
+    error.includes("whatsapp_local_bridge_not_ready") ||
+    error.includes("detached frame") ||
+    error.includes("target closed") ||
+    error.includes("session closed") ||
+    error.includes("fetch failed") ||
+    error.includes("econnrefused") ||
+    error.includes("timeout");
+}
+
 function safeArray(values = [], max = 50) {
   return [...new Set((Array.isArray(values) ? values : []).map(clean).filter(Boolean))].slice(-max);
 }
@@ -276,7 +291,7 @@ export async function recordRouterTraceEvent(input = {}, env = process.env) {
     error: phase.error || "",
     terminal: next.terminal === true,
   }, env).catch(() => {});
-  if (watcherAlertPhases.has(phase.phase)) {
+  if (watcherAlertPhases.has(phase.phase) && !retryableWhatsAppMirrorFailure(phase, next)) {
     await recordWatcherAlert({
       severity: "error",
       source: `router.${phase.phase}`,

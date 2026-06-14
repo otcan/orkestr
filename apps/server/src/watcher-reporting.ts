@@ -1,5 +1,4 @@
 import { recordWatcherAlert } from "../../../packages/core/src/watcher-alerts.js";
-import { deployDrainActiveSync } from "../../../packages/core/src/deploy-drain.js";
 import { deliverWhatsAppReplies } from "../../../packages/connectors/src/whatsapp.js";
 
 export type WatcherServerErrorInput = {
@@ -100,7 +99,6 @@ export function reportWhatsAppDeliveryAnomalies(env = process.env, source: strin
     : badSkipped.length;
   const failedReasons = failed.map((item: any) => deliveryAnomalyReason(item));
   if (
-    deployDrainActiveSync(env) &&
     failed.length > 0 &&
     failedReasons.every((reason: string) => retryableBridgeReason(reason)) &&
     badSkippedCount === 0

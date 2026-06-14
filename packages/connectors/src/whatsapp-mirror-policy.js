@@ -12,11 +12,16 @@ export function codexAssistantPhase(message = {}) {
   return clean(message?.phase || "final_answer").toLowerCase();
 }
 
+export function internalAssistantSource(message = {}) {
+  return ["watcher-alert", "watcher-alert-lifecycle"].includes(clean(message?.source));
+}
+
 const codexProgressPhases = new Set(["commentary", "awaiting_approval"]);
 const codexSuppressedPhases = new Set(["context_compaction"]);
 
 export function shouldMirrorWhatsAppReply(message = {}) {
   if (isNoReplyAssistantMessage(message)) return false;
+  if (internalAssistantSource(message)) return false;
   if (codexAssistantSource(message)) {
     const phase = codexAssistantPhase(message);
     return !codexProgressPhases.has(phase) && !codexSuppressedPhases.has(phase);
@@ -26,6 +31,7 @@ export function shouldMirrorWhatsAppReply(message = {}) {
 
 export function shouldMirrorWhatsAppProgress(message = {}, env = process.env) {
   if (isNoReplyAssistantMessage(message)) return false;
+  if (internalAssistantSource(message)) return false;
   if (!codexAssistantSource(message)) return false;
   const phase = codexAssistantPhase(message);
   return codexProgressPhases.has(phase) && !codexSuppressedPhases.has(phase);
