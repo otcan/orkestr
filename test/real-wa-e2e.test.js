@@ -24,7 +24,16 @@ test("real WhatsApp E2E preflight fails before real sender transport when sender
       responderAccountId: "responder",
       manualSend: false,
       injectInbound: false,
-    }, status),
+    }, status, {}, {
+      selected: {
+        bindingId: "thread:real-wa-e2e:whatsapp",
+        threadId: "real-wa-e2e",
+        chatId: "fixture-group@g.us",
+        state: "ready",
+        enabled: true,
+        routeEligible: true,
+      },
+    }),
     (error) => {
       assert.equal(error.code, "sender_account_not_ready");
       assert.equal(error.details.account.accountId, "sender");
@@ -75,6 +84,15 @@ test("real WhatsApp E2E manual-send mode requires only the responder account", (
     accounts: [
       { accountId: "905555154", runtimeAccountId: "responder", state: "ready", ready: true, phoneNumber: "+905555154" },
     ],
+  }, {}, {
+    selected: {
+      bindingId: "thread:real-wa-e2e:whatsapp",
+      threadId: "real-wa-e2e",
+      chatId: "fixture-group@g.us",
+      state: "ready",
+      enabled: true,
+      routeEligible: true,
+    },
   });
 
   assert.equal(preflight.manualSend, true);
@@ -147,10 +165,91 @@ test("real WhatsApp E2E preflight matches accounts by phone or contact id aliase
       { accountId: "sender-runtime", state: "ready", ready: true, phoneNumber: "+491760000", contactId: "491760000@c.us" },
       { accountId: "responder-runtime", state: "ready", ready: true, phoneNumber: "+905555154", contactId: "905555154@c.us" },
     ],
+  }, {}, {
+    selected: {
+      bindingId: "thread:real-wa-e2e:whatsapp",
+      threadId: "real-wa-e2e",
+      chatId: "fixture-group@g.us",
+      state: "ready",
+      enabled: true,
+      routeEligible: true,
+    },
   });
 
   assert.equal(preflight.required.sender.accountId, "sender-runtime");
   assert.equal(preflight.required.responder.accountId, "responder-runtime");
+});
+
+test("real WhatsApp E2E rejects disabled bindings before live side effects", () => {
+  assert.throws(
+    () => validateWhatsAppPreflight({
+      senderAccountId: "sender",
+      responderAccountId: "responder",
+      manualSend: false,
+      injectInbound: true,
+    }, {
+      mode: "local",
+      state: "paired",
+      accounts: [
+        { accountId: "905555154", runtimeAccountId: "responder", state: "ready", ready: true },
+      ],
+    }, {}, {
+      selected: {
+        bindingId: "thread:real-wa-e2e:whatsapp",
+        threadId: "real-wa-e2e",
+        chatId: "fixture-group@g.us",
+        state: "disabled",
+        enabled: false,
+        routeEligible: false,
+        nextAction: "enable_binding",
+      },
+    }),
+    (error) => {
+      assert.equal(error.code, "whatsapp_binding_not_route_eligible");
+      assert.equal(error.details.nextAction, "enable_binding");
+      return true;
+    },
+  );
+});
+
+test("real WhatsApp E2E rejects production-looking bindings without explicit opt-in", () => {
+  const status = {
+    mode: "local",
+    state: "paired",
+    accounts: [
+      { accountId: "905555154", runtimeAccountId: "responder", state: "ready", ready: true },
+    ],
+  };
+  const bindingPayload = {
+    selected: {
+      bindingId: "thread:customer-project:whatsapp",
+      threadId: "customer-project",
+      threadName: "Customer Project",
+      chatId: "fixture-group@g.us",
+      state: "ready",
+      enabled: true,
+      routeEligible: true,
+    },
+  };
+
+  assert.throws(
+    () => validateWhatsAppPreflight({
+      senderAccountId: "sender",
+      responderAccountId: "responder",
+      manualSend: false,
+      injectInbound: true,
+    }, status, {}, bindingPayload),
+    /whatsapp_binding_not_isolated_test_target/,
+  );
+
+  const preflight = validateWhatsAppPreflight({
+    senderAccountId: "sender",
+    responderAccountId: "responder",
+    manualSend: false,
+    injectInbound: true,
+    allowProductionBinding: true,
+  }, status, {}, bindingPayload);
+  assert.equal(preflight.required.responder.runtimeAccountId, "responder");
 });
 
 test("real WhatsApp E2E builds desktop-share API URLs from path-based public links", () => {

@@ -53,6 +53,7 @@ function parseArgs(argv = [], env = process.env) {
     openLinkInDesktop: parseBool(env.ORKESTR_REAL_WA_E2E_OPEN_LINK_IN_DESKTOP, false),
     requireOauthCallback: parseBool(env.ORKESTR_REAL_WA_E2E_REQUIRE_OAUTH_CALLBACK, false),
     forceDesktop: parseBool(env.ORKESTR_REAL_WA_E2E_FORCE_DESKTOP, false),
+    allowProductionBinding: parseBool(env.ORKESTR_REAL_WA_E2E_ALLOW_PRODUCTION_BINDING, false),
     artifactPath: clean(env.ORKESTR_REAL_WA_E2E_ARTIFACT),
   };
 
@@ -82,6 +83,7 @@ function parseArgs(argv = [], env = process.env) {
     else if (arg === "--open-link-in-desktop") options.openLinkInDesktop = true;
     else if (arg === "--require-oauth-callback") options.requireOauthCallback = true;
     else if (arg === "--force-desktop") options.forceDesktop = true;
+    else if (arg === "--allow-production-binding") options.allowProductionBinding = true;
     else if (arg === "--artifact") options.artifactPath = clean(argv[++index]);
     else throw new Error(`unknown_arg:${arg}`);
   }
@@ -129,6 +131,8 @@ function usage() {
     "  --real-send              Send through the sender account instead of injecting. Requires sender readiness.",
     "  --open-link-in-desktop   Open the generated Google connect link in the managed desktop.",
     "  --require-oauth-callback Wait for OAuth callback/success after manual approval.",
+    "  --allow-production-binding",
+    "                           Permit a normal production-looking WA binding instead of a dedicated test target.",
     "  --no-desktop             Skip desktop lease/share checks.",
     "  --no-desktop-challenge   Skip desktop public challenge approval over WhatsApp.",
     "  --no-timer               Skip timer watcher checks.",
@@ -684,6 +688,7 @@ async function main() {
     responderAccountId: options.responderAccountId,
     manualSend: options.manualSend === true,
     injectInbound: options.injectInbound === true,
+    allowProductionBinding: options.allowProductionBinding === true,
     startedAt: new Date(startedAt).toISOString(),
   };
   try {

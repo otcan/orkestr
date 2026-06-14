@@ -17,6 +17,12 @@ The test is disabled by default. It requires `--execute` and explicit targets.
 Default automated mode uses the local bridge injection endpoint; `--real-send`
 and `--manual-send` send real WhatsApp messages.
 
+Use a dedicated test/onboarding/release-smoke WhatsApp binding. The preflight
+fails before leasing desktops or routing messages when the binding is disabled,
+not route eligible, or looks like a normal production/project chat. Passing
+`--allow-production-binding` is an explicit escape hatch for attended emergency
+runs only.
+
 For the private VM demo acceptance path, use
 `npm run e2e:whatsapp-demo-onboarding`. That test is intentionally
 Orkestr-initiated: it sends the first message from the serving/responder
@@ -84,6 +90,8 @@ Useful release modes:
   people and the test should accept only one real sender.
 - Add `--open-link-in-desktop` to open the generated Google connection link in
   the managed desktop.
+- Add `--allow-production-binding` only when the operator intentionally accepts
+  running release E2E traffic against a normal project binding.
 - Add `--require-oauth-callback` only for attended runs where a human/operator
   will complete Google OAuth before the timeout.
 - Add `--artifact artifacts/real-wa-e2e.json` to keep a machine-readable result.

@@ -167,7 +167,9 @@ LLM checkpoints:
 1. Confirm the user asked for a real transport run or a release/deploy requires
    it.
 2. Preflight target thread, chat, responder account, public URL, and desktop
-   availability.
+   availability. Use a dedicated E2E/test/onboarding binding; a normal
+   production/project chat requires the explicit `--allow-production-binding`
+   escape hatch.
 3. Choose default responder injection, `--real-send`, or attended
    `--manual-send`.
 4. After a failure, inspect the JSON artifact before any retry.
