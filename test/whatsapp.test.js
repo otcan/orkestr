@@ -7646,6 +7646,7 @@ test("generated whatsapp bindings listen to the selected sender and answer as th
     text: "selected sender via responder",
   }, env);
   const routed = await routeWhatsAppInbound({ eventId: "wa-generated-routed", chatId: "chat-generated", accountId: "account-1", fromMe: true, text: "selected sender" }, env);
+  const userMessages = (await listThreadMessages("generated-thread", env)).filter((message) => message.role === "user");
   await appendThreadMessage("generated-thread", {
     role: "assistant",
     source: "codex-rollout",
@@ -7663,10 +7664,13 @@ test("generated whatsapp bindings listen to the selected sender and answer as th
     return response({ ok: true, ids: ["sent-generated"] });
   });
 
-  assert.equal(routedViaResponder.threadId, "generated-thread");
+  assert.equal(routedViaResponder.ignoredNonSenderAccount, true);
+  assert.equal(routedViaResponder.skipped, "non_sender_account");
   assert.equal(routed.threadId, "generated-thread");
-  assert.equal(delivery.delivered.length, 2);
-  assert.equal(delivery.delivered.some((entry) => entry.deliveryType === "queue_notice"), true);
+  assert.equal(userMessages.length, 1);
+  assert.equal(userMessages[0].accountId, "account-1");
+  assert.equal(delivery.delivered.length, 1);
+  assert.equal(delivery.delivered.some((entry) => entry.deliveryType === "queue_notice"), false);
   assert.equal(calls.every((call) => call.body.to === "chat-generated"), true);
   assert.equal(calls.every((call) => call.body.accountId === "account-2"), true);
   assert.equal(calls.some((call) => stripDebugFooter(call.body.text) === "generated reply"), true);
@@ -7827,7 +7831,7 @@ test("whatsapp inbound matches saved phone sender against WhatsApp contact ids",
   const routed = await routeWhatsAppInbound({
     eventId: "wa-phone-sender-match",
     chatId: "wa-group-acceptance@g.us",
-    accountId: "responder",
+    accountId: "sender",
     from: senderContactId,
     fromMe: false,
     text: "route check",
