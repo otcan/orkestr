@@ -75,9 +75,9 @@ ORKESTR_WA_SERVICE_POLICY_JSON='{
   "clients": {
     "demo-vm-001": {
       "accounts": ["sender"],
-      "sendRecipients": ["15550001111@c.us"],
-      "historyRecipients": ["15550001111@c.us"],
-      "createChatParticipants": ["15550001111@c.us"],
+      "sendRecipients": ["demo-recipient@example.invalid"],
+      "historyRecipients": ["demo-recipient@example.invalid"],
+      "createChatParticipants": ["demo-recipient@example.invalid"],
       "pairing": false,
       "manageAccounts": false
     },
