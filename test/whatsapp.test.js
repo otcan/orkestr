@@ -1571,8 +1571,8 @@ test("local whatsapp e2e sender sends can be visible to responder routing", asyn
 
     assert.equal(sent.length, 1);
     assert.equal(sent[0].to, chatId);
-    assert.notEqual(result.skipped, "outbound_echo_cross_account_text");
-    assert.equal(result.error, "whatsapp_target_required");
+    assert.equal(result.routed.ignoredNonSenderAccount, true);
+    assert.equal(result.routed.skipped, "non_sender_account");
   } finally {
     await resetLocalWhatsAppBridgeForTest(env);
   }
@@ -1619,8 +1619,8 @@ test("local whatsapp e2e sender sends clear stale cross-account echo keys", asyn
     }, env);
 
     assert.equal(sent.length, 2);
-    assert.notEqual(result.skipped, "outbound_echo_cross_account_text");
-    assert.equal(result.error, "whatsapp_target_required");
+    assert.equal(result.routed.ignoredNonSenderAccount, true);
+    assert.equal(result.routed.skipped, "non_sender_account");
   } finally {
     await resetLocalWhatsAppBridgeForTest(env);
   }
@@ -2857,6 +2857,40 @@ test("whatsapp inbound events route to configured agent and dedupe by event id",
   assert.equal(messages[0].chatId, "chat-1");
   assert.equal(messages[0].from, "sender-1");
   assert.equal(messages[0].attachments[0].kind, "image");
+});
+
+test("whatsapp inbound only queues sender account events", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-inbound-sender-only-"));
+  const env = externalBridgeEnv(home, { ORKESTR_WHATSAPP_ACCOUNT_IDS: "sender,responder" });
+  await createThread({ id: "wa-inbound-sender-only-thread", name: "WA Inbound Sender Only" }, env);
+  await writeConnectorConfig("whatsapp", {
+    threadRoutes: { "chat-sender-only": "wa-inbound-sender-only-thread" },
+  }, env);
+
+  const responderFirst = await routeWhatsAppInbound({
+    eventId: "false_chat-sender-only_msg-1_author",
+    chatId: "chat-sender-only",
+    accountId: "responder",
+    from: "author",
+    text: "How many tasks are open?",
+  }, env);
+  const senderSecond = await routeWhatsAppInbound({
+    eventId: "true_chat-sender-only_msg-1_author",
+    chatId: "chat-sender-only",
+    accountId: "sender",
+    from: "author",
+    text: "How many tasks are open?",
+  }, env);
+  const messages = await listThreadMessages("wa-inbound-sender-only-thread", env);
+  const events = await listEvents(env);
+
+  assert.equal(responderFirst.ignoredNonSenderAccount, true);
+  assert.equal(responderFirst.skipped, "non_sender_account");
+  assert.equal(senderSecond.duplicate, false);
+  assert.equal(messages.length, 1);
+  assert.equal(messages[0].accountId, "sender");
+  assert.equal(messages[0].externalId, "chat-sender-only_msg-1_author");
+  assert.equal(events.some((event) => event.type === "whatsapp_inbound_non_sender_ignored"), true);
 });
 
 test("whatsapp inbound strips pasted debug footers before storing messages", async () => {
@@ -5512,9 +5546,9 @@ test("whatsapp inbound suppresses duplicate active thread inputs by content", as
   assert.equal(messages[0].state, "queued");
 });
 
-test("whatsapp inbound suppresses the same group message seen through sender and responder accounts", async () => {
+test("whatsapp inbound ignores responder copy of a group message after sender queues it", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-cross-account-source-duplicate-"));
-  const env = externalBridgeEnv(home);
+  const env = externalBridgeEnv(home, { ORKESTR_WHATSAPP_ACCOUNT_IDS: "sender,responder" });
   await createThread({ id: "thread-wa-cross-account-source-duplicate", name: "WA Cross Account Source Duplicate" }, env);
   await writeConnectorConfig("whatsapp", {
     threadRoutes: { "chat-cross-account-source-duplicate": "thread-wa-cross-account-source-duplicate" },
@@ -5543,8 +5577,8 @@ test("whatsapp inbound suppresses the same group message seen through sender and
   const messages = await listThreadMessages("thread-wa-cross-account-source-duplicate", env);
 
   assert.equal(first.duplicate, false);
-  assert.equal(second.duplicate, true);
-  assert.equal(second.messageId, first.message.id);
+  assert.equal(second.ignoredNonSenderAccount, true);
+  assert.equal(second.skipped, "non_sender_account");
   assert.equal(messages.filter((message) => message.role === "user").length, 1);
 });
 
