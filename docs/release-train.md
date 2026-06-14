@@ -260,9 +260,9 @@ For extracted WhatsApp deployments, run the bridge as the standalone
 `WHATSAPP_BRIDGE_MODE=external`. The service/readiness contract and the
 no-copy migration path for carrying an existing linked WhatsApp Web login are in
 [`docs/orkestr-wa-service.md`](./orkestr-wa-service.md). Use
-`node scripts/orkestr-wa-readiness.mjs --bridge-url <url> --account sender` as
-the direct service gate when validating the bridge before restarting dependent
-Orkestr instances.
+`node scripts/orkestr-wa-readiness.mjs --bridge-url <url> --require-routing-policy --account sender --account responder`
+as the direct service gate when validating the bridge before restarting
+dependent Orkestr instances.
 
 Versioned deploys are no-interrupt by default. On current host-native installs,
 Codex app-server runs as its own service and Orkestr talks to it through a short

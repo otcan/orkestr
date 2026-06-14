@@ -72,6 +72,11 @@ Options:
   --live-k3s                     Run real k3s demo smoke. Requires Docker, Helm, kubectl.
   --vps-aws                      Run AWS VPS smoke.
   --demo-release                 Add isolated demo VM gates: isolation audit plus fresh-instance WhatsApp onboarding E2E.
+  --wa-service-url URL           Standalone orkestr-wa service URL for demo release readiness. Defaults to ORKESTR_WA_SERVICE_URL or WHATSAPP_BRIDGE_URL.
+  --wa-service-account ACCOUNT   Required orkestr-wa account. Repeatable; defaults to sender,responder for demo releases.
+  --skip-wa-service-readiness    Skip standalone WA service readiness. Demo deploys require --allow-release-without-wa-service-readiness too.
+  --allow-release-without-wa-service-readiness
+                                 Explicit emergency bypass for demo deploys when the WA service gate cannot run.
   --demo-whatsapp-phone PHONE    Direct WhatsApp phone number for OSS demo onboarding E2E.
   --whatsapp-real                Run real WhatsApp e2e. Requires explicit real-WA env/config.
   --skip-whatsapp-real           Skip real WhatsApp e2e. Not allowed with --deploy-ref unless --allow-release-without-e2e is also set.
@@ -90,6 +95,8 @@ Environment:
   ORKESTR_FULL_RUN_LIVE_K3S=1
   ORKESTR_FULL_RUN_VPS_AWS=1
   ORKESTR_FULL_RUN_DEMO_RELEASE=1
+  ORKESTR_FULL_RUN_WA_SERVICE_URL=http://127.0.0.1:18914
+  ORKESTR_FULL_RUN_WA_SERVICE_ACCOUNTS="sender,responder"
   ORKESTR_REAL_WA_DEMO_PHONE_NUMBER="+4917600000000"
   ORKESTR_FULL_RUN_WHATSAPP_REAL=1
   ORKESTR_FULL_RUN_RELEASE_TARGETS="local=http://127.0.0.1:18912,oss=http://127.0.0.1:19822"
@@ -122,6 +129,13 @@ export function parseFullRunPipelineArgs(argv = process.argv.slice(2), env = pro
     liveK3s: hasFlag(argv, "--live-k3s") || truthy(env.ORKESTR_FULL_RUN_LIVE_K3S),
     vpsAws: hasFlag(argv, "--vps-aws") || truthy(env.ORKESTR_FULL_RUN_VPS_AWS),
     demoRelease: hasFlag(argv, "--demo-release") || truthy(env.ORKESTR_FULL_RUN_DEMO_RELEASE),
+    waServiceUrl: flagValue(argv, "--wa-service-url", clean(env.ORKESTR_FULL_RUN_WA_SERVICE_URL || env.ORKESTR_WA_SERVICE_URL || env.WHATSAPP_BRIDGE_URL)),
+    waServiceAccounts: [
+      ...allFlagValues(argv, "--wa-service-account"),
+      ...splitList(env.ORKESTR_FULL_RUN_WA_SERVICE_ACCOUNTS || ""),
+    ],
+    skipWaServiceReadiness: hasFlag(argv, "--skip-wa-service-readiness") || truthy(env.ORKESTR_FULL_RUN_SKIP_WA_SERVICE_READINESS),
+    allowReleaseWithoutWaServiceReadiness: hasFlag(argv, "--allow-release-without-wa-service-readiness") || truthy(env.ORKESTR_FULL_RUN_ALLOW_RELEASE_WITHOUT_WA_SERVICE_READINESS),
     demoWhatsappPhoneNumber: flagValue(argv, "--demo-whatsapp-phone", clean(
       env.ORKESTR_REAL_WA_DEMO_PHONE_NUMBER ||
       env.ORKESTR_REAL_WA_DEMO_PHONE ||
@@ -157,6 +171,13 @@ export function parseFullRunPipelineArgs(argv = process.argv.slice(2), env = pro
     options.invalid = true;
     options.error = "demo_release_deploy_requires_isolation_audit";
   }
+  if (options.deployRef && options.demoRelease && options.skipWaServiceReadiness && !options.allowReleaseWithoutWaServiceReadiness) {
+    options.invalid = true;
+    options.error = "demo_release_deploy_requires_wa_service_readiness";
+  }
+  if (options.demoRelease && (!options.waServiceAccounts || options.waServiceAccounts.length === 0)) {
+    options.waServiceAccounts = ["sender", "responder"];
+  }
   return options;
 }
 
@@ -182,6 +203,13 @@ function demoOnboardingEnv(options = {}) {
   };
 }
 
+function waServiceReadinessArgs(options = {}) {
+  const args = ["scripts/orkestr-wa-readiness.mjs", "--require-routing-policy"];
+  if (options.waServiceUrl) args.push("--bridge-url", options.waServiceUrl);
+  for (const account of options.waServiceAccounts || []) args.push("--account", account);
+  return args;
+}
+
 export function fullRunPipelineStages(options = {}) {
   const stages = [
     npmStage("build", "build", { enabled: !options.skipBuild }),
@@ -203,6 +231,10 @@ export function fullRunPipelineStages(options = {}) {
     if (options.regressionExpect) args.push("--expect", options.regressionExpect);
     stages.push(npmStage("release-regression", "release:regression", { args }));
   }
+  stages.push(commandStage("wa-service-readiness", "orkestr-wa readiness", "node", waServiceReadinessArgs(options), {
+    enabled: options.demoRelease && !options.skipWaServiceReadiness,
+    skipReason: options.demoRelease && options.skipWaServiceReadiness ? "skip_wa_service_readiness" : "",
+  }));
   stages.push(npmStage("isolation-audit", "audit:isolation", {
     enabled: options.demoRelease && !options.skipIsolationAudit,
     skipReason: options.demoRelease && options.skipIsolationAudit ? "skip_isolation_audit" : "",

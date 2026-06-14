@@ -94,10 +94,14 @@ isolation audits:
 ```bash
 node scripts/orkestr-wa-readiness.mjs \
   --bridge-url "${WHATSAPP_BRIDGE_URL:-http://127.0.0.1:18914}" \
+  --require-routing-policy \
   --account sender \
   --account responder
 ```
 
 The checker matches accounts by `accountId`, `id`, `label`, `runtimeAccountId`,
-phone/contact id, and legacy role aliases. It exits non-zero when the service is
-unreachable, an account is missing, or a required account is not ready.
+phone/contact id, and legacy role aliases. With `--require-routing-policy`, it
+also verifies that the sender account queues inbound work and the responder
+account is used for outbound/tool traffic only. It exits non-zero when the
+service is unreachable, an account is missing, a required account is not ready,
+or the routing policy does not match.

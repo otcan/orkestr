@@ -42,6 +42,42 @@ function authDisabled(env = process.env) {
   return ["1", "true", "yes", "on"].includes(clean(env.ORKESTR_WA_SERVICE_AUTH_DISABLED).toLowerCase());
 }
 
+function firstConfigured(env = process.env, keys = [], fallback = "") {
+  for (const key of keys) {
+    const value = clean(env[key]);
+    if (value) return value;
+  }
+  return fallback;
+}
+
+export function waServiceRoutingPolicy(env = process.env) {
+  const senderAccountId = firstConfigured(env, [
+    "ORKESTR_WA_INBOUND_ACCOUNT_ID",
+    "ORKESTR_WHATSAPP_INBOUND_ACCOUNT_ID",
+    "WHATSAPP_INBOUND_ACCOUNT_ID",
+    "ORKESTR_WHATSAPP_SENDER_ACCOUNT_ID",
+    "WHATSAPP_SENDER_ACCOUNT_ID",
+    "ORKESTR_WHATSAPP_SENDER_ROLE",
+    "WHATSAPP_SENDER_ROLE",
+  ], "sender");
+  const responderAccountId = firstConfigured(env, [
+    "ORKESTR_WA_OUTBOUND_ACCOUNT_ID",
+    "ORKESTR_WHATSAPP_RESPONDER_ACCOUNT_ID",
+    "WHATSAPP_RESPONDER_ACCOUNT_ID",
+    "ORKESTR_WHATSAPP_RESPONDER_ROLE",
+    "WHATSAPP_RESPONDER_ROLE",
+  ], "responder");
+  return {
+    name: "sender-queues-responder-tools",
+    inboundQueueAccountId: senderAccountId,
+    outboundAccountId: responderAccountId,
+    toolAccountId: responderAccountId,
+    injectedInboundAccountId: responderAccountId,
+    injectedRouteAccountId: senderAccountId,
+    responderQueuesInbound: false,
+  };
+}
+
 function json(res, status, payload) {
   res.writeHead(status, {
     "content-type": "application/json; charset=utf-8",
@@ -111,7 +147,7 @@ function publicAccount(account = {}) {
   };
 }
 
-function publicHealth(status = {}) {
+function publicHealth(status = {}, env = process.env) {
   const accounts = Array.isArray(status.accounts) ? status.accounts.map(publicAccount) : [];
   return {
     ok: status.ok !== false,
@@ -124,6 +160,7 @@ function publicHealth(status = {}) {
     qrUrl: clean(status.qrUrl),
     maxAccounts: Number.isFinite(Number(status.maxAccounts)) ? Number(status.maxAccounts) : accounts.length,
     accounts,
+    routingPolicy: waServiceRoutingPolicy(env),
     activeTypingCount: Number.isFinite(Number(status.activeTypingCount)) ? Number(status.activeTypingCount) : 0,
     activeTyping: Array.isArray(status.activeTyping) ? status.activeTyping : [],
     updatedAt: new Date().toISOString(),
@@ -156,12 +193,12 @@ async function handleRequest(req, res, env = process.env) {
   const url = new URL(req.url || "/", "http://orkestr-wa.local");
   if (method === "GET" && (url.pathname === "/" || url.pathname === "/health")) {
     requireAuth(req, env);
-    return json(res, 200, publicHealth(await getLocalWhatsAppBridgeStatus(env)));
+    return json(res, 200, publicHealth(await getLocalWhatsAppBridgeStatus(env), env));
   }
   if (method === "GET" && (url.pathname === "/accounts" || url.pathname === "/api/dashboard")) {
     requireAuth(req, env);
-    const health = publicHealth(await getLocalWhatsAppBridgeStatus(env));
-    return json(res, 200, { ok: true, state: health.state, accounts: health.accounts });
+    const health = publicHealth(await getLocalWhatsAppBridgeStatus(env), env);
+    return json(res, 200, { ok: true, state: health.state, accounts: health.accounts, routingPolicy: health.routingPolicy });
   }
   if (method === "GET" && url.pathname === "/qr.svg") {
     requireAuth(req, env);
