@@ -5618,6 +5618,42 @@ test("whatsapp inbound suppresses duplicate active thread inputs by content", as
   assert.equal(messages[0].state, "queued");
 });
 
+test("whatsapp inbound suppresses source timestamp replays after first input completes", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-thread-source-replay-"));
+  const env = externalBridgeEnv(home);
+  await createThread({ id: "thread-wa-source-replay", name: "WA Source Replay Thread" }, env);
+  await writeConnectorConfig("whatsapp", {
+    threadRoutes: { "chat-source-replay": "thread-wa-source-replay" },
+  }, env);
+
+  const timestamp = "2026-06-14T18:00:00.000Z";
+  const first = await routeWhatsAppInbound({
+    eventId: "true_chat-source-replay_AAAAA_sender@lid",
+    chatId: "chat-source-replay",
+    from: "sender@lid",
+    text: "same physical message",
+    timestamp,
+  }, env);
+  await updateThreadMessage("thread-wa-source-replay", first.message.id, {
+    state: "completed",
+    deliveryState: "delivered",
+  }, env);
+  const second = await routeWhatsAppInbound({
+    eventId: "false_chat-source-replay_BBBBB_sender@lid",
+    chatId: "chat-source-replay",
+    from: "sender@lid",
+    text: "same physical message",
+    timestamp,
+  }, env);
+  const messages = await listThreadMessages("thread-wa-source-replay", env);
+
+  assert.equal(first.duplicate, false);
+  assert.equal(second.duplicate, true);
+  assert.equal(second.messageId, first.message.id);
+  assert.equal(second.event.messageId, first.message.id);
+  assert.equal(messages.filter((message) => message.role === "user").length, 1);
+});
+
 test("whatsapp inbound ignores responder copy of a group message after sender queues it", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-cross-account-source-duplicate-"));
   const env = externalBridgeEnv(home, { ORKESTR_WHATSAPP_ACCOUNT_IDS: "sender,responder" });

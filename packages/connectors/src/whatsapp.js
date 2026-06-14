@@ -692,6 +692,41 @@ function sameWhatsAppSourceEvent(left = {}, right = {}) {
   return !leftChat || !rightChat || leftChat === rightChat;
 }
 
+function sameOptionalEventField(left = {}, right = {}, key = "") {
+  const leftValue = pickString(left?.[key]);
+  const rightValue = pickString(right?.[key]);
+  return !leftValue || !rightValue || leftValue === rightValue;
+}
+
+function comparableWhatsAppBody(value = "") {
+  return String(value || "").replace(/\s+/g, " ").trim();
+}
+
+function comparableWhatsAppTimestamp(value = "") {
+  const raw = pickString(value);
+  if (!raw) return "";
+  const numeric = Number(raw);
+  const ms = Number.isFinite(numeric)
+    ? (numeric > 10_000_000_000 ? numeric : numeric * 1000)
+    : Date.parse(raw);
+  return Number.isFinite(ms) && ms > 0 ? new Date(ms).toISOString() : "";
+}
+
+function whatsappInboundContentDedupeKey({ chatId = "", from = "", text = "", promptFile = "", attachments = [], timestamp = "" } = {}) {
+  const sourceTimestamp = comparableWhatsAppTimestamp(timestamp);
+  if (!sourceTimestamp) return "";
+  const attachmentKey = attachmentSetKey(attachments);
+  const bodyKey = comparableWhatsAppBody(text) || (promptFile ? `prompt:${promptFile}` : "") || (attachmentKey ? "attachments" : "");
+  if (!chatId || !bodyKey) return "";
+  return [
+    pickString(chatId),
+    pickString(from).toLowerCase(),
+    sourceTimestamp,
+    bodyKey,
+    attachmentKey,
+  ].join("\x1f");
+}
+
 function comparableAccountKey(value = "") {
   return pickString(value).toLowerCase();
 }
@@ -2573,6 +2608,53 @@ export async function routeWhatsAppInbound(input = {}, env = process.env, fetchI
   const accountId = pickString(input.accountId, threadRoute.binding?.outboundAccountId);
   const routerTraceId = initialTraceId;
   const turnId = initialTurnId;
+  const inboundDedupeKey = whatsappInboundContentDedupeKey({
+    chatId,
+    from,
+    text,
+    promptFile,
+    attachments: Array.isArray(input.attachments) ? input.attachments : [],
+    timestamp: pickString(input.timestamp, input.receivedAt),
+  });
+  const existingContentEvent = inboundDedupeKey
+    ? [...(state.inboundEvents || [])].reverse().find((event) =>
+        event.inboundDedupeKey === inboundDedupeKey &&
+        event.messageId &&
+        sameOptionalEventField(event, { chatId }, "chatId")
+      ) || null
+    : null;
+  if (existingContentEvent) {
+    await recordRouterTraceEvent({
+      routerTraceId: pickString(existingContentEvent.routerTraceId, routerTraceId),
+      turnId: pickString(existingContentEvent.turnId, turnId),
+      connector: "whatsapp",
+      accountId: pickString(existingContentEvent.accountId, accountId),
+      chatId: pickString(existingContentEvent.chatId, chatId),
+      sourceEventId: eventId,
+      threadId: existingContentEvent.threadId || null,
+      messageId: existingContentEvent.messageId,
+      phase: "skipped",
+      reason: "duplicate_source_content",
+      terminal: true,
+    }, env).catch(() => {});
+    await appendEvent({
+      type: "whatsapp_inbound_duplicate",
+      eventId,
+      canonicalEventId,
+      routerTraceId: pickString(existingContentEvent.routerTraceId, routerTraceId),
+      agentId: existingContentEvent.agentId || null,
+      threadId: existingContentEvent.threadId || null,
+      messageId: existingContentEvent.messageId,
+      duplicateReason: "duplicate_source_content",
+    }, env);
+    return {
+      duplicate: true,
+      event: existingContentEvent,
+      agentId: existingContentEvent.agentId || null,
+      threadId: existingContentEvent.threadId || null,
+      messageId: existingContentEvent.messageId,
+    };
+  }
   if (!promptFile && generatedWhatsAppQueueNoticeText(text)) {
     const event = {
       eventId,
@@ -2585,6 +2667,7 @@ export async function routeWhatsAppInbound(input = {}, env = process.env, fetchI
       chatId,
       from,
       accountId,
+      ...(inboundDedupeKey ? { inboundDedupeKey } : {}),
       ignoredReason: "generated_queue_notice",
       receivedAt: pickString(input.timestamp, input.receivedAt) || new Date().toISOString(),
     };
@@ -2699,6 +2782,7 @@ export async function routeWhatsAppInbound(input = {}, env = process.env, fetchI
       from,
       accountId,
       attachments: Array.isArray(input.attachments) ? input.attachments : [],
+      ...(inboundDedupeKey ? { inboundDedupeKey } : {}),
       receivedAt: pickString(input.timestamp, input.receivedAt) || new Date().toISOString(),
     };
     state.inboundEvents = [...(state.inboundEvents || []), event];
@@ -2772,6 +2856,7 @@ export async function routeWhatsAppInbound(input = {}, env = process.env, fetchI
       from,
       accountId,
       attachments: Array.isArray(input.attachments) ? input.attachments : [],
+      ...(inboundDedupeKey ? { inboundDedupeKey } : {}),
       receivedAt: pickString(input.timestamp, input.receivedAt) || new Date().toISOString(),
     };
     state.inboundEvents = [...(state.inboundEvents || []), event];
@@ -2885,6 +2970,7 @@ export async function routeWhatsAppInbound(input = {}, env = process.env, fetchI
       from,
       accountId,
       attachments: Array.isArray(input.attachments) ? input.attachments : [],
+      ...(inboundDedupeKey ? { inboundDedupeKey } : {}),
       receivedAt: pickString(input.timestamp, input.receivedAt) || new Date().toISOString(),
       remoteBackend: remoteRuntime.backendId,
       remoteThreadId: remoteRuntime.remoteThreadId,
@@ -2970,6 +3056,7 @@ export async function routeWhatsAppInbound(input = {}, env = process.env, fetchI
       from,
       accountId,
       attachments: Array.isArray(input.attachments) ? input.attachments : [],
+      ...(inboundDedupeKey ? { inboundDedupeKey } : {}),
       receivedAt: pickString(input.timestamp, input.receivedAt) || new Date().toISOString(),
     };
     state.inboundEvents = [...(state.inboundEvents || []), event];
@@ -3017,6 +3104,7 @@ export async function routeWhatsAppInbound(input = {}, env = process.env, fetchI
     from,
     accountId,
     attachments: Array.isArray(input.attachments) ? input.attachments : [],
+    ...(inboundDedupeKey ? { inboundDedupeKey } : {}),
     receivedAt: pickString(input.timestamp, input.receivedAt) || new Date().toISOString(),
   };
   if (contentDuplicate) event.duplicateReason = message.duplicateReason || "active_input";
