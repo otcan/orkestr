@@ -112,6 +112,9 @@ test("WhatsApp mirror policy forwards Codex final replies and progress updates",
   assert.equal(shouldMirrorWhatsAppReply({ source: "codex-app-server", phase: "future_codex_phase" }), true);
   assert.equal(shouldMirrorWhatsAppProgress({ source: "codex-app-server", phase: "future_codex_phase" }), false);
   assert.equal(shouldMirrorWhatsAppReply({ source: "manual", phase: "commentary" }), true);
+  assert.equal(shouldMirrorWhatsAppReply({ source: "watcher-alert", phase: "final_answer" }), false);
+  assert.equal(shouldMirrorWhatsAppProgress({ source: "watcher-alert", phase: "commentary" }), false);
+  assert.equal(shouldMirrorWhatsAppReply({ source: "watcher-alert-lifecycle", phase: "final_answer" }), false);
 });
 
 test("WhatsApp outbound mirror worker serializes delivery and maps app-server queue states", async () => {

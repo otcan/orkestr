@@ -120,7 +120,7 @@ async function resolveWatcherThread(env = process.env) {
 }
 
 function watcherMessageDefaults(thread = null, alert = {}) {
-  if (alert?.mirrorToConnector === false) return {};
+  if (alert?.mirrorToConnector !== true) return {};
   const binding = thread?.binding || {};
   if (lower(binding.connector || "whatsapp") !== "whatsapp") return {};
   if (binding.mirrorToWhatsApp === false || binding.mirrorReplies === false) return {};
@@ -218,7 +218,7 @@ export async function recordWatcherAlert(input = {}, env = process.env) {
     routerTraceId: clean(input.routerTraceId),
     method: clean(input.method),
     route: clean(input.route),
-    mirrorToConnector: input.mirrorToConnector !== false,
+    mirrorToConnector: input.mirrorToConnector === true,
     createdAt,
   };
   const store = await readAlertStore(env);

@@ -18,7 +18,7 @@ import {
   routerTraceIdFor,
   turnIdFor,
 } from "../../core/src/router-traces.js";
-import { appendThreadMessage, createThreadForPrincipal, enqueueThreadInputForPrincipal, listThreadMessages, listThreads, listThreadsForPrincipal, updateThread, updateThreadMessage } from "../../core/src/threads.js";
+import { appendThreadMessage, createThreadForPrincipal, enqueueThreadInputForPrincipal, getThread, listThreadMessages, listThreads, listThreadsForPrincipal, updateThread, updateThreadMessage } from "../../core/src/threads.js";
 import { adminUserId, findOrCreateExternalUser, getUser, normalizeUserId } from "../../core/src/users.js";
 import { dataPaths, ensureDataDirs } from "../../storage/src/paths.js";
 import { readConnectorConfig } from "../../storage/src/config.js";
@@ -2124,12 +2124,18 @@ function generatedWhatsAppQueueNoticeText(text = "") {
   if (!value) return false;
   return [
     /^Queued for the next Codex turn(?:[:.]\s|$)/i,
+    /^Added after the current Codex turn(?:[:.]\s|$)/i,
     /^Queued your message while Orkestr prepares this thread(?:[:.]\s|$)/i,
+    /^Runtime handoff is taking longer than expected(?:[:.]\s|$)/i,
     /^Waking this Orkestr thread and queued your message(?:[:.]\s|$)/i,
+    /^Waking this thread\. Your message will run after startup(?:[:.]\s|$)/i,
     /^Queued your latest message while current work is still running(?:[:.]\s|$)/i,
+    /^Queued behind current work(?:[:.]\s|$)/i,
     /^Interrupting the current Codex turn and queued your message(?:[:.]\s|$)/i,
     /^Queued your latest message while Orkestr recovers this thread(?:[:.]\s|$)/i,
+    /^Delivery is paused to avoid duplicates\. Orkestr is recovering this thread(?:[:.]\s|$)/i,
     /^Queued your message while Codex is waiting for approval(?:[:.]\s|$)/i,
+    /^Codex is waiting for approval\. Your message is held(?:[:.]\s|$)/i,
     /^Queued your latest message behind background work on this thread(?:[:.]\s|$)/i,
     /^Interrupting Codex and sending now(?:[:.]\s|$)/i,
   ].some((pattern) => pattern.test(value));
@@ -2278,11 +2284,76 @@ export async function routeWhatsAppInbound(input = {}, env = process.env, fetchI
     };
   }
 
+  const skipDisabledBinding = async (routedThreadId) => {
+    const routedThread = routedThreadId ? await getThread(routedThreadId, env).catch(() => null) : null;
+    const binding = routedThread?.binding || threadRoute.binding || {};
+    if (binding.connector === "whatsapp" && !whatsappBindingIsRouteEligible(binding)) {
+      const event = {
+        eventId,
+        canonicalEventId,
+        routerTraceId: initialTraceId,
+        turnId: initialTurnId,
+        agentId: null,
+        threadId: routedThreadId,
+        messageId: null,
+        chatId: initialChatId,
+        from: pickString(input.from, input.sender, input.author),
+        accountId: initialAccountId,
+        ignoredReason: "disabled_whatsapp_binding",
+        receivedAt: pickString(input.timestamp, input.receivedAt) || new Date().toISOString(),
+      };
+      state.inboundEvents = [...(state.inboundEvents || []), event];
+      await writeWhatsAppState(state, env);
+      await ensureRouterTurn({
+        routerTraceId: initialTraceId,
+        turnId: initialTurnId,
+        connector: "whatsapp",
+        accountId: initialAccountId,
+        chatId: initialChatId,
+        eventId,
+        threadId: routedThreadId,
+        state: "skipped",
+      }, env).catch(() => null);
+      await recordRouterTraceEvent({
+        routerTraceId: initialTraceId,
+        turnId: initialTurnId,
+        connector: "whatsapp",
+        accountId: initialAccountId,
+        chatId: initialChatId,
+        sourceEventId: eventId,
+        threadId: routedThreadId,
+        phase: "skipped",
+        reason: "disabled_whatsapp_binding",
+        terminal: true,
+      }, env).catch(() => {});
+      await appendEvent({
+        type: "whatsapp_disabled_binding_inbound_ignored",
+        eventId,
+        canonicalEventId,
+        routerTraceId: initialTraceId,
+        threadId: routedThreadId,
+        chatId: initialChatId,
+        accountId: initialAccountId,
+      }, env).catch(() => {});
+      return {
+        duplicate: false,
+        skipped: true,
+        ignoredDisabledBinding: true,
+        event,
+        agentId: null,
+        threadId: routedThreadId,
+      };
+    }
+    return null;
+  };
+
   let threadRoute = await routeThread(input, config, env);
   if (!threadRoute.threadId) threadRoute = await routeAutoProvisionedThread(input, config, env);
   const threadId = threadRoute.threadId;
   const agentId = threadId ? "" : routeAgentId(input, config);
   if (!threadId && !agentId) {
+    const disabledExplicit = await skipDisabledBinding(pickString(input.threadId, input.targetThreadId));
+    if (disabledExplicit) return disabledExplicit;
     await recordRouterTraceEvent({
       routerTraceId: initialTraceId,
       turnId: initialTurnId,
@@ -2296,6 +2367,8 @@ export async function routeWhatsAppInbound(input = {}, env = process.env, fetchI
     }, env).catch(() => {});
     throw badRequest("whatsapp_target_required");
   }
+  const disabledTarget = await skipDisabledBinding(threadId);
+  if (disabledTarget) return disabledTarget;
 
   const text = stripWhatsAppDebugFooter(pickString(input.text, input.body, input.message));
   const promptFile = pickString(input.promptFile);

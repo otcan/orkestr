@@ -153,6 +153,44 @@ test("whatsapp connector outbox backs off retryable bridge failures", async () =
   assert.equal(retry.delivered.length, 1);
 });
 
+test("whatsapp connector outbox does not mirror watcher alerts", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-connector-outbox-watcher-"));
+  const runtimeEnv = env(home);
+  await writeConnectorConfig("whatsapp", { bridgeMode: "external", bridgeUrl: "http://wa.local" }, runtimeEnv);
+  await createThread({
+    id: "thread-wa-outbox-watcher",
+    ownerUserId: "tenant-a",
+    name: "WA Watcher Thread",
+    binding: {
+      connector: "whatsapp",
+      chatId: "shared-chat",
+      responderAccountId: "responder",
+      outboundAccountId: "responder",
+      mirrorToWhatsApp: true,
+    },
+  }, runtimeEnv);
+  await appendThreadMessage("thread-wa-outbox-watcher", {
+    role: "assistant",
+    source: "watcher-alert",
+    state: "completed",
+    chatId: "shared-chat",
+    accountId: "responder",
+    text: "[watcher:error] router.mirror_failed\ncode: router_trace_failure",
+  }, runtimeEnv);
+
+  const calls = [];
+  const delivery = await deliverWhatsAppReplies(runtimeEnv, async (url, options) => {
+    calls.push({ url, body: JSON.parse(options.body) });
+    return response({ ok: true, ids: ["unexpected"] });
+  });
+  const outbox = await readConnectorOutbox(runtimeEnv);
+
+  assert.equal(delivery.delivered.length, 0);
+  assert.equal(delivery.failed.length, 0);
+  assert.equal(calls.length, 0);
+  assert.equal(outbox.jobs.length, 0);
+});
+
 test("whatsapp connector outbox replay resets intent and delivered ledger", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-connector-outbox-replay-"));
   const runtimeEnv = env(home);

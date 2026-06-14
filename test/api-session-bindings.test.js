@@ -226,7 +226,6 @@ test("watcher alerts can stay out of WhatsApp mirroring for delivery anomalies",
     message: "WhatsApp delivery anomaly: bridge_not_ready",
     threadId: "thread-1",
     messageId: "message-1",
-    mirrorToConnector: false,
   }, runtimeEnv);
   const messages = await listThreadMessages(watcherThread.id, runtimeEnv);
 

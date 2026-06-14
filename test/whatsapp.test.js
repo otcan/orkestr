@@ -7131,6 +7131,46 @@ test("whatsapp delivery reports app-server active-turn queue notices", async () 
   assert.equal(messages.find((entry) => entry.id === routed.message.id).state, "queued");
 });
 
+test("whatsapp inbound ignores generated queue notices with trace and debug footer", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-ignore-generated-queue-notice-"));
+  const env = externalBridgeEnv(home);
+  await createThread({
+    id: "thread-wa-ignore-generated-queue-notice",
+    name: "WA Ignore Generated Queue Notice Thread",
+    runtimeKind: "codex-app-server",
+  }, env);
+  await writeConnectorConfig("whatsapp", {
+    bridgeMode: "external",
+    bridgeUrl: "http://wa.local",
+    threadRoutes: { "chat-ignore-generated-queue-notice": "thread-wa-ignore-generated-queue-notice" },
+  }, env);
+
+  const notices = [
+    `Added after the current Codex turn: "queue behind app server turn". Use /now to interrupt.
+Trace: rt_trace_123
+
+dbg: m:unknown · rt:api · msg:update · queue:20 · reason:active-turn`,
+    `Runtime handoff is taking longer than expected: "start the agent".
+Trace: rt_trace_456
+
+dbg: m:unknown · rt:api · msg:update · q:0`,
+  ];
+  for (const [index, text] of notices.entries()) {
+    const routed = await routeWhatsAppInbound({
+      eventId: `wa-ignore-generated-queue-notice-${index + 1}`,
+      chatId: "chat-ignore-generated-queue-notice",
+      accountId: "account-1",
+      fromMe: false,
+      text,
+    }, env);
+    assert.equal(routed.skipped, true);
+    assert.equal(routed.ignoredGeneratedQueueNotice, true);
+  }
+
+  const messages = await listThreadMessages("thread-wa-ignore-generated-queue-notice", env);
+  assert.equal(messages.length, 0);
+});
+
 test("whatsapp delivery suppresses premature api-agent runtime-ready queue notices", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-api-agent-handoff-notice-"));
   const env = externalBridgeEnv(home);
@@ -7420,6 +7460,36 @@ test("whatsapp inbound routes through enabled thread bindings", async () => {
   assert.equal(messages[0].accountId, "bound-account");
   assert.equal(messages[0].originSurface, "whatsapp");
   assert.equal(messages[0].originTransport, "whatsapp-local-bridge");
+});
+
+test("whatsapp inbound skips explicit disabled thread bindings", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-disabled-binding-"));
+  const env = externalBridgeEnv(home);
+  await createThread({
+    id: "disabled-bound-thread",
+    name: "Disabled Bound Thread",
+    binding: {
+      connector: "whatsapp",
+      chatId: "chat-disabled-bound",
+      displayName: "Disabled Bound Chat",
+      enabled: false,
+      routeEligible: true,
+      outboundAccountId: "bound-account",
+    },
+  }, env);
+
+  const routed = await routeWhatsAppInbound({
+    eventId: "wa-disabled-bound-1",
+    threadId: "disabled-bound-thread",
+    chatId: "chat-disabled-bound",
+    accountId: "bound-account",
+    text: "stale recovered echo",
+  }, env);
+  const messages = await listThreadMessages("disabled-bound-thread", env);
+
+  assert.equal(routed.skipped, true);
+  assert.equal(routed.ignoredDisabledBinding, true);
+  assert.equal(messages.length, 0);
 });
 
 test("whatsapp inbound receive ACL denies scoped tokens outside binding grant", async () => {
