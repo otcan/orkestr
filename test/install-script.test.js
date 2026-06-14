@@ -221,6 +221,7 @@ test("install script exposes a host-native systemd VPS path", async () => {
   assert.match(script, /orkestr-browserctl health "\$slug"/);
   assert.match(script, /write_codex_app_server_wrapper/);
   assert.match(script, /write_systemd_codex_app_server_service/);
+  assert.match(script, /ORKESTR_INSTALL_WA_SERVICE[\s\S]*WHATSAPP_BRIDGE_MODE=\$wa_bridge_mode[\s\S]*write_systemd_wa_service[\s\S]*ORKESTR_WA_SERVICE_ENV_FILE[\s\S]*EnvironmentFile=-\$wa_env_file[\s\S]*ExecStart=\$node_bin scripts\/orkestr-wa-service\.mjs/);
   assert.match(script, /ExecStart=\/usr\/local\/bin\/orkestr-codex-app-server/);
   assert.match(script, /Wants=network-online\.target \$\{codex_service_name\}\.service/);
   assert.match(script, /After=network-online\.target \$\{codex_service_name\}\.service/);

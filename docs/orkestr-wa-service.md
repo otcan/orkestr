@@ -27,6 +27,20 @@ ORKESTR_WHATSAPP_AUTOSTART=1
 ORKESTR_WHATSAPP_AUTOSTART_ACCOUNT_IDS=sender,responder
 ```
 
+For host-native systemd installs, the installer can create the standalone unit
+and a separate private env file:
+
+```bash
+ORKESTR_INSTALL_WA_SERVICE=1 sudo -E scripts/install.sh --systemd
+```
+
+This writes `orkestr-wa.service` by default as `<orkestr-service>-wa.service`,
+uses `ORKESTR_WA_SERVICE_HOME` for WhatsApp service state, reads
+`ORKESTR_WA_SERVICE_ENV_FILE` for private account/session/policy values, and
+points the fresh `orkestr-ui` env at `WHATSAPP_BRIDGE_MODE=external` with local
+WhatsApp autostart disabled. Existing env files are preserved and should be
+migrated manually.
+
 The service exposes the bridge surface already used by Orkestr external bridge
 mode:
 
