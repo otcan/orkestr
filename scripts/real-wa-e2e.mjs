@@ -48,6 +48,8 @@ function parseArgs(argv = [], env = process.env) {
     includeDesktopChallenge: !parseBool(env.ORKESTR_REAL_WA_E2E_NO_DESKTOP_CHALLENGE, false),
     includeTimer: !parseBool(env.ORKESTR_REAL_WA_E2E_NO_TIMER, false),
     manualSend: parseBool(env.ORKESTR_REAL_WA_E2E_MANUAL_SEND, false),
+    injectInbound: !parseBool(env.ORKESTR_REAL_WA_E2E_REAL_SEND, false) &&
+      parseBool(env.ORKESTR_REAL_WA_E2E_INJECT_INBOUND, true),
     openLinkInDesktop: parseBool(env.ORKESTR_REAL_WA_E2E_OPEN_LINK_IN_DESKTOP, false),
     requireOauthCallback: parseBool(env.ORKESTR_REAL_WA_E2E_REQUIRE_OAUTH_CALLBACK, false),
     forceDesktop: parseBool(env.ORKESTR_REAL_WA_E2E_FORCE_DESKTOP, false),
@@ -75,6 +77,8 @@ function parseArgs(argv = [], env = process.env) {
     else if (arg === "--no-desktop-challenge") options.includeDesktopChallenge = false;
     else if (arg === "--no-timer") options.includeTimer = false;
     else if (arg === "--manual-send") options.manualSend = true;
+    else if (arg === "--inject-inbound") options.injectInbound = true;
+    else if (arg === "--real-send") options.injectInbound = false;
     else if (arg === "--open-link-in-desktop") options.openLinkInDesktop = true;
     else if (arg === "--require-oauth-callback") options.requireOauthCallback = true;
     else if (arg === "--force-desktop") options.forceDesktop = true;
@@ -89,9 +93,9 @@ function parseArgs(argv = [], env = process.env) {
   if (!options.apiBase) throw new Error("api_base_required");
   if (!options.threadId) throw new Error("thread_required");
   if (!options.chatId) throw new Error("chat_id_required");
-  if (!options.senderAccountId && !options.manualSend) throw new Error("sender_account_required");
+  if (!options.senderAccountId && !options.manualSend && !options.injectInbound) throw new Error("sender_account_required");
   if (!options.responderAccountId) throw new Error("responder_account_required");
-  if (!options.manualSend && options.senderAccountId === options.responderAccountId) throw new Error("sender_and_responder_must_differ_for_real_transport_e2e");
+  if (!options.manualSend && !options.injectInbound && options.senderAccountId === options.responderAccountId) throw new Error("sender_and_responder_must_differ_for_real_transport_e2e");
   if (!Number.isFinite(options.timeoutMs) || options.timeoutMs < 10_000) throw new Error("invalid_timeout_ms");
   if (!Number.isFinite(options.pollMs) || options.pollMs < 250) throw new Error("invalid_poll_ms");
   return options;
@@ -101,10 +105,11 @@ function usage() {
   return [
     "Usage: npm run e2e:whatsapp-real -- --execute [options]",
     "",
-    "Runs an opt-in, real transport WhatsApp E2E against an Orkestr instance.",
-    "It sends through a real sender account, waits for the responder account to see it,",
-    "checks the Orkestr thread/outbox path, exercises desktop lease/share APIs, and",
-    "creates/runs/cleans a timer watcher.",
+    "Runs an opt-in WhatsApp E2E against an Orkestr instance.",
+    "By default it injects inbound messages through the responder account and routes",
+    "them as the sender identity. Add --real-send to use a paired sender account.",
+    "It checks the Orkestr thread/outbox path, exercises desktop lease/share APIs,",
+    "and creates/runs/cleans a timer watcher.",
     "",
     "Required with --execute:",
     "  --thread ID              Existing Orkestr thread bound to the WA chat.",
@@ -113,13 +118,15 @@ function usage() {
     "Common options:",
     "  --api-base URL           Orkestr API base. Default: ORKESTR_API_BASE or localhost.",
     "  --orkestr-home DIR       Lets the API client use local CLI auth for that instance.",
-    "  --sender-account ID      WA account that sends the real user-visible message. Default: sender.",
+    "  --sender-account ID      WA sender account to verify in --real-send mode. Default: sender.",
     "  --sender-chat-id ID      Sender-side chat id. Defaults to --chat-id; use for direct DMs.",
     "  --responder-chat-id ID   Responder-side chat id. Defaults to --chat-id.",
     "  --sender-contact ID      Real WA contact expected to send in --manual-send mode.",
     "  --responder-account ID   WA account that Orkestr uses to reply. Default: responder.",
     "  --desktop SLUG           Managed desktop to lease/share. Default: gmail.",
     "  --manual-send            Attended mode: wait for a real person/phone to send /connect google.",
+    "  --inject-inbound         Inject inbound messages into the responder account. Default for automated tests.",
+    "  --real-send              Send through the sender account instead of injecting. Requires sender readiness.",
     "  --open-link-in-desktop   Open the generated Google connect link in the managed desktop.",
     "  --require-oauth-callback Wait for OAuth callback/success after manual approval.",
     "  --no-desktop             Skip desktop lease/share checks.",
@@ -265,6 +272,39 @@ async function waitForHistoryMessage(options, accountId, predicate, label, chatI
   });
 }
 
+function injectedSenderContact(options = {}, results = {}) {
+  return clean(
+    options.senderContactId ||
+    results.preflight?.required?.senderContactIds?.[0] ||
+    results.preflight?.observed?.senderContactIds?.[0] ||
+    results.preflight?.observed?.sender?.contactId ||
+    results.preflight?.observed?.sender?.phoneNumber ||
+    options.senderAccountId ||
+    "sender@c.us",
+  );
+}
+
+async function injectResponderInbound(options, results, text, label) {
+  const eventId = `false_${safeId(options.responderChatId || options.chatId)}_${safeId(options.runId)}_${safeId(label)}`;
+  const from = injectedSenderContact(options, results);
+  const injected = await api(options, "/api/connectors/whatsapp/bridge/inject-message", {
+    method: "POST",
+    body: {
+      accountId: options.responderAccountId,
+      routeAccountId: options.senderAccountId,
+      chatId: options.responderChatId,
+      from,
+      eventId,
+      text,
+    },
+  });
+  return {
+    injected,
+    eventId,
+    from,
+  };
+}
+
 async function threadMessages(options) {
   const payload = await api(options, `/api/threads/${encodeURIComponent(options.threadId)}/messages?limit=120`);
   return messagesFromPayload(payload);
@@ -397,8 +437,11 @@ async function runDesktopShareChallenge(options, results, share = {}) {
   const commandText = `orkestr desktop approve ${challenge}`;
   const after = Date.now() - 30_000;
 
+  let injected = null;
   if (options.manualSend) {
     console.error(`Manual desktop approval mode: send this exact WhatsApp message in ${options.responderChatId}: ${commandText}`);
+  } else if (options.injectInbound) {
+    injected = await injectResponderInbound(options, results, commandText, "desktop-approve");
   } else {
     await api(options, "/api/connectors/whatsapp/bridge/send-text", {
       method: "POST",
@@ -411,17 +454,19 @@ async function runDesktopShareChallenge(options, results, share = {}) {
     });
   }
 
-  const observed = await waitForHistoryMessage(
-    options,
-    options.responderAccountId,
-    (message) =>
-      textOf(message) === commandText &&
-      message.fromMe !== true &&
-      timeMs(message.timestamp) >= after &&
-      messageMatchesExpectedSender(message, results.preflight?.required?.senderContactIds),
-    "desktop_approval_message_visible",
-    options.responderChatId,
-  );
+  const observed = injected
+    ? null
+    : await waitForHistoryMessage(
+      options,
+      options.responderAccountId,
+      (message) =>
+        textOf(message) === commandText &&
+        message.fromMe !== true &&
+        timeMs(message.timestamp) >= after &&
+        messageMatchesExpectedSender(message, results.preflight?.required?.senderContactIds),
+      "desktop_approval_message_visible",
+      options.responderChatId,
+    );
   const ready = await waitUntil("desktop_share_approved", options, async () => {
     const status = await publicJson(statusUrl, cookie ? { headers: { cookie } } : {});
     if (status.ok && status.payload?.approved && status.payload?.desktopUrl) return status.payload;
@@ -435,9 +480,12 @@ async function runDesktopShareChallenge(options, results, share = {}) {
       subdomain: details.subdomain,
       challenge,
       commandObservedId: clean(observed?.id),
+      commandInjectedEventId: clean(injected?.eventId),
+      commandInjectedFrom: clean(injected?.from),
       approved: ready.approved === true,
       desktopUrl: clean(ready.desktopUrl),
       manualSend: options.manualSend === true,
+      injectInbound: options.injectInbound === true,
     },
   };
   return results.desktop.challenge;
@@ -458,11 +506,16 @@ async function releaseDesktop(options, results) {
 
 async function runConnectFlow(options, results, startedAt) {
   const commandText = "/connect google";
+  let injected = null;
   if (options.manualSend) {
     console.error(`Manual send mode: send this exact WhatsApp message in ${options.responderChatId}: ${commandText}`);
+  } else if (options.injectInbound) {
+    injected = await injectResponderInbound(options, results, commandText, "connect-google");
   }
   const sent = options.manualSend
     ? null
+    : options.injectInbound
+      ? null
     : await api(options, "/api/connectors/whatsapp/bridge/send-text", {
       method: "POST",
       body: {
@@ -476,6 +529,8 @@ async function runConnectFlow(options, results, startedAt) {
   const after = startedAt - 30_000;
   const visibleSender = options.manualSend
     ? null
+    : options.injectInbound
+      ? null
     : await waitForHistoryMessage(
       options,
       options.senderAccountId,
@@ -483,17 +538,19 @@ async function runConnectFlow(options, results, startedAt) {
       "sender_visible_message",
       options.senderChatId,
     );
-  const visibleResponder = await waitForHistoryMessage(
-    options,
-    options.responderAccountId,
-    (message) =>
-      textOf(message) === commandText &&
-      message.fromMe !== true &&
-      timeMs(message.timestamp) >= after &&
-      messageMatchesExpectedSender(message, results.preflight?.required?.senderContactIds),
-    "responder_observed_real_message",
-    options.responderChatId,
-  );
+  const visibleResponder = injected
+    ? null
+    : await waitForHistoryMessage(
+      options,
+      options.responderAccountId,
+      (message) =>
+        textOf(message) === commandText &&
+        message.fromMe !== true &&
+        timeMs(message.timestamp) >= after &&
+        messageMatchesExpectedSender(message, results.preflight?.required?.senderContactIds),
+      "responder_observed_real_message",
+      options.responderChatId,
+    );
   const userMessage = await waitForThreadMessage(
     options,
     (message) =>
@@ -527,6 +584,8 @@ async function runConnectFlow(options, results, startedAt) {
     sentMessageId: [...sentIds][0] || clean(sent?.id),
     senderVisibleId: clean(visibleSender?.id),
     responderVisibleId: clean(visibleResponder?.id),
+    injectedEventId: clean(injected?.eventId),
+    injectedFrom: clean(injected?.from),
     threadUserMessageId: clean(userMessage.id),
     assistantMessageId: clean(assistant.id),
     connectId: connectIdFromLink(connectLink),
@@ -624,6 +683,7 @@ async function main() {
     senderContactId: options.senderContactId,
     responderAccountId: options.responderAccountId,
     manualSend: options.manualSend === true,
+    injectInbound: options.injectInbound === true,
     startedAt: new Date(startedAt).toISOString(),
   };
   try {

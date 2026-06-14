@@ -8,7 +8,7 @@ import { normalizeDirectWhatsAppTarget, runRealWhatsAppDemoOnboarding } from "..
 import { desktopShareApiUrl, extractDesktopShareUrlParts } from "../scripts/real-wa-e2e.mjs";
 import { validateWhatsAppPreflight } from "../scripts/real-wa-e2e-preflight.mjs";
 
-test("real WhatsApp E2E preflight fails before sending when sender is not ready", () => {
+test("real WhatsApp E2E preflight fails before real sender transport when sender is not ready", () => {
   const status = {
     mode: "local",
     state: "partial",
@@ -23,6 +23,7 @@ test("real WhatsApp E2E preflight fails before sending when sender is not ready"
       senderAccountId: "sender",
       responderAccountId: "responder",
       manualSend: false,
+      injectInbound: false,
     }, status),
     (error) => {
       assert.equal(error.code, "sender_account_not_ready");
@@ -31,6 +32,36 @@ test("real WhatsApp E2E preflight fails before sending when sender is not ready"
       return true;
     },
   );
+});
+
+test("real WhatsApp E2E injected mode requires only responder and keeps sender isolated", () => {
+  const preflight = validateWhatsAppPreflight({
+    senderAccountId: "sender",
+    responderAccountId: "responder",
+    manualSend: false,
+    injectInbound: true,
+  }, {
+    mode: "local",
+    state: "partial",
+    accounts: [
+      { accountId: "sender", state: "idle", ready: false, nextAction: "start_or_pair_account" },
+      { accountId: "905555154", runtimeAccountId: "responder", state: "ready", ready: true, phoneNumber: "+905555154" },
+    ],
+  }, {}, {
+    selected: {
+      bindingId: "thread:real-wa:whatsapp",
+      authorizedContactIds: ["491763240@c.us"],
+      responderAccountId: "905555154",
+      runtimeAccountId: "responder",
+    },
+  });
+
+  assert.equal(preflight.injectInbound, true);
+  assert.equal(preflight.required.responder.runtimeAccountId, "responder");
+  assert.equal(preflight.required.sender, null);
+  assert.equal(preflight.observed.sender.accountId, "sender");
+  assert.equal(preflight.observed.sender.ready, false);
+  assert.deepEqual(preflight.required.senderContactIds, ["491763240@c.us"]);
 });
 
 test("real WhatsApp E2E manual-send mode requires only the responder account", () => {

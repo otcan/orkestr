@@ -157,16 +157,19 @@ Completion criteria:
 
 ## Procedure: Real WhatsApp E2E
 
-Use only when a release requires live WhatsApp transport evidence. This sends
-real WhatsApp messages and requires explicit live targets.
+Use only when a release requires WhatsApp routing evidence. Default automated
+mode injects inbound test messages into the responder account so the sender
+account stays isolated. Add `--real-send` only when the release explicitly
+requires live sender-account transport evidence.
 
 LLM checkpoints:
 
 1. Confirm the user asked for a real transport run or a release/deploy requires
    it.
-2. Preflight target thread, chat, sender/responder accounts, public URL, and
-   desktop availability.
-3. Choose automated mode or attended `--manual-send`.
+2. Preflight target thread, chat, responder account, public URL, and desktop
+   availability.
+3. Choose default responder injection, `--real-send`, or attended
+   `--manual-send`.
 4. After a failure, inspect the JSON artifact before any retry.
 
 Primitive:
@@ -177,13 +180,12 @@ npm run e2e:whatsapp-real -- --execute \
   --orkestr-home <orkestr-home> \
   --thread <thread-id> \
   --chat-id <chat-id> \
-  --sender-account <sender-account> \
   --responder-account <responder-account> \
   --artifact <artifact-path>
 ```
 
-Attended mode uses `--manual-send` and `--sender-contact` instead of automated
-sender injection.
+Attended mode uses `--manual-send` and `--sender-contact`. Live automated sender
+transport uses `--real-send --sender-account <sender-account>`.
 
 Completion criteria:
 

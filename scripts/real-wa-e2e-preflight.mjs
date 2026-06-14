@@ -186,7 +186,8 @@ export function validateWhatsAppPreflightWithBinding(options = {}, statusPayload
   const sender = clean(options.senderAccountId)
     ? findAccount(accounts, options.senderAccountId)
     : null;
-  if (!options.manualSend) {
+  const injectedInbound = options.injectInbound === true;
+  if (!options.manualSend && !injectedInbound) {
     if (!sender) throw preflightError("sender_account_not_found", { role: "sender", accountId: options.senderAccountId, accounts });
     if (!sender.ready) throw preflightError("sender_account_not_ready", { role: "sender", accountId: options.senderAccountId, account: sender, accounts });
   }
@@ -194,11 +195,12 @@ export function validateWhatsAppPreflightWithBinding(options = {}, statusPayload
     mode: clean(statusPayload.mode),
     state: clean(statusPayload.state),
     manualSend: options.manualSend === true,
+    injectInbound: injectedInbound,
     accounts,
     required: {
       responder,
-      sender: options.manualSend ? null : assertReadyAccount({ accounts, accountId: options.senderAccountId, role: "sender" }),
-      senderContactIds: options.manualSend ? senderContactIds : [],
+      sender: options.manualSend || injectedInbound ? null : assertReadyAccount({ accounts, accountId: options.senderAccountId, role: "sender" }),
+      senderContactIds: options.manualSend || injectedInbound ? senderContactIds : [],
     },
     observed: {
       sender,

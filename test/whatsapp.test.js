@@ -3261,10 +3261,10 @@ test("whatsapp bridge injection ignores cross-account outbound text echoes", asy
       method: "POST",
       headers: { "content-type": "application/json", authorization: "Bearer bridge-e2e-secret" },
       body: JSON.stringify({
-        accountId: "sender",
+        accountId: "responder",
         chatId,
-        from: "responder@lid",
-        eventId: `false_${chatId}_sender-observed-responder`,
+        from: "sender@lid",
+        eventId: `false_${chatId}_responder-observed-sender`,
         text,
       }),
     });
@@ -3289,6 +3289,78 @@ test("whatsapp bridge injection ignores cross-account outbound text echoes", asy
     else process.env.ORKESTR_WHATSAPP_ACCOUNT_IDS = priorAccountIds;
     if (priorConfirmation === undefined) delete process.env.ORKESTR_WHATSAPP_SEND_CONFIRMATION_REQUIRED;
     else process.env.ORKESTR_WHATSAPP_SEND_CONFIRMATION_REQUIRED = priorConfirmation;
+  }
+});
+
+test("whatsapp bridge injection can enter through responder while routing as sender", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-bridge-inject-responder-route-sender-"));
+  const priorHome = process.env.ORKESTR_HOME;
+  const priorAuth = process.env.ORKESTR_AUTH_REQUIRED;
+  const priorBridgeToken = process.env.ORKESTR_WHATSAPP_BRIDGE_TOKEN;
+  const priorAccountIds = process.env.ORKESTR_WHATSAPP_ACCOUNT_IDS;
+  const priorAutorun = process.env.ORKESTR_WHATSAPP_API_AGENT_AUTORUN;
+  process.env.ORKESTR_HOME = home;
+  process.env.ORKESTR_AUTH_REQUIRED = "1";
+  process.env.ORKESTR_WHATSAPP_BRIDGE_TOKEN = "bridge-e2e-secret";
+  process.env.ORKESTR_WHATSAPP_ACCOUNT_IDS = "sender,responder";
+  process.env.ORKESTR_WHATSAPP_API_AGENT_AUTORUN = "0";
+  const chatId = "chat-bridge-inject-route@g.us";
+  await createThread({
+    id: "bridge-inject-route-thread",
+    name: "Bridge Inject Route Thread",
+    executorId: "api-agent",
+    executor: { type: "api-agent", metadata: { runtimeKind: "api-agent" } },
+    runtimeKind: "api-agent",
+    binding: {
+      connector: "whatsapp",
+      chatId,
+      enabled: true,
+      senderAccountId: "sender",
+      responderAccountId: "responder",
+      outboundAccountId: "responder",
+      senderContactId: "sender@lid",
+    },
+  }, process.env);
+
+  const server = await startServer({ port: 0, host: "127.0.0.1" });
+  const { port } = server.address();
+  const baseUrl = `http://127.0.0.1:${port}`;
+  const distBridge = await import("../dist/server/packages/connectors/src/whatsapp-local-bridge.js");
+  distBridge.setLocalWhatsAppRuntimeForTest("responder", { client: {} }, {}, process.env);
+  try {
+    const injected = await fetch(`${baseUrl}/api/connectors/whatsapp/bridge/inject-message`, {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: "Bearer bridge-e2e-secret" },
+      body: JSON.stringify({
+        accountId: "responder",
+        routeAccountId: "sender",
+        chatId,
+        from: "sender@lid",
+        eventId: `false_${chatId}_responder-tool-sender-route`,
+        text: "route as sender",
+      }),
+    });
+    const payload = await injected.json();
+    const messages = await listThreadMessages("bridge-inject-route-thread", process.env);
+
+    assert.equal(injected.status, 202, JSON.stringify(payload));
+    assert.equal(payload.routed.threadId, "bridge-inject-route-thread");
+    assert.equal(messages.length, 1);
+    assert.equal(messages[0].accountId, "sender");
+    assert.equal(messages[0].text, "route as sender");
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+    await distBridge.resetLocalWhatsAppBridgeForTest(process.env);
+    if (priorHome === undefined) delete process.env.ORKESTR_HOME;
+    else process.env.ORKESTR_HOME = priorHome;
+    if (priorAuth === undefined) delete process.env.ORKESTR_AUTH_REQUIRED;
+    else process.env.ORKESTR_AUTH_REQUIRED = priorAuth;
+    if (priorBridgeToken === undefined) delete process.env.ORKESTR_WHATSAPP_BRIDGE_TOKEN;
+    else process.env.ORKESTR_WHATSAPP_BRIDGE_TOKEN = priorBridgeToken;
+    if (priorAccountIds === undefined) delete process.env.ORKESTR_WHATSAPP_ACCOUNT_IDS;
+    else process.env.ORKESTR_WHATSAPP_ACCOUNT_IDS = priorAccountIds;
+    if (priorAutorun === undefined) delete process.env.ORKESTR_WHATSAPP_API_AGENT_AUTORUN;
+    else process.env.ORKESTR_WHATSAPP_API_AGENT_AUTORUN = priorAutorun;
   }
 });
 
