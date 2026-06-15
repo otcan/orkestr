@@ -3,6 +3,8 @@ import { dataPaths } from "../../storage/src/paths.js";
 import { appendEvent, readJson, writeJson } from "../../storage/src/store.js";
 import { recordWatcherAlert } from "./watcher-alerts.js";
 
+export { routerTraceMetrics } from "./router-trace-metrics.js";
+
 export const routerTracePhases = [
   "received",
   "skipped",
@@ -494,18 +496,4 @@ export async function detectStuckRouterTraces(env = process.env) {
     }, env).catch(() => {});
   }
   return stuck;
-}
-
-export async function routerTraceMetrics(env = process.env) {
-  const store = await readRouterTraceStore(env);
-  const traces = await listRouterTraces({}, env);
-  return {
-    traces: traces.length,
-    turns: store.turns.length,
-    outbox: store.outbox.length,
-    stuck: traces.filter((trace) => trace.diagnostics?.stuck === true).length,
-    failed: traces.filter((trace) => failurePhases.has(trace.currentPhase)).length,
-    terminal: traces.filter((trace) => trace.terminal === true).length,
-    updatedAt: store.updatedAt || "",
-  };
 }
