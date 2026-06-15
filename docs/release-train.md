@@ -150,16 +150,19 @@ Minimum primitive guidance:
 - smoke-sensitive deploy changes: `npm run smoke`
 - protected/public target checks: `npm run release:regression -- --target
   local=http://127.0.0.1:$ORKESTR_PORT --allow-auth-blocked`
-- real WhatsApp/OAuth/desktop/timer checks:
-  `npm run e2e:whatsapp-real -- --execute --thread <thread-id> --chat-id <chat-id>`.
-  See `docs/real-whatsapp-e2e.md`; this sends real WhatsApp messages and must
-  be opt-in.
+- real WhatsApp/OAuth/desktop/timer checks use WA2WA by default:
+  `npm run e2e:whatsapp-real -- --execute --real-send --sender-account sender
+  --responder-account responder --thread <thread-id> --chat-id <chat-id>`.
+  See `docs/real-whatsapp-e2e.md`; this sends real WhatsApp messages from the
+  sender account to the responder account and must be opt-in.
 - isolated demo VM releases: `npm run audit:isolation` plus
   `npm run e2e:whatsapp-demo-onboarding -- --execute` with a direct target phone
   number, as described in `docs/isolated-oss-demo.md`.
 
-Deploys require real WhatsApp E2E unless the user explicitly approves the
-emergency bypass. Demo deploys require an isolation audit unless the user
+Deploys require WA2WA real WhatsApp E2E unless the user explicitly approves the
+emergency bypass. Use the dedicated release/E2E WhatsApp binding and
+`--real-send` sender-to-responder transport; do not ask for a different E2E
+shape unless the user changes the gate. Demo deploys require an isolation audit unless the user
 explicitly approves the isolation-audit bypass. Record any bypass in the
 evidence packet.
 

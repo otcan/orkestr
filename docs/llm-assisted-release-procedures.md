@@ -157,10 +157,15 @@ Completion criteria:
 
 ## Procedure: Real WhatsApp E2E
 
-Use only when a release requires WhatsApp routing evidence. Default automated
-mode injects inbound test messages into the responder account so the sender
-account stays isolated. Add `--real-send` only when the release explicitly
-requires live sender-account transport evidence.
+Use only when a release requires WhatsApp routing evidence. Release deploys use
+WA2WA as the default gate: the live sender WhatsApp account sends to the
+responder WhatsApp account with `--real-send`, and the responder side must route
+the message into the dedicated release/E2E Orkestr thread. Do not ask for a
+non-WA2WA E2E path unless the user explicitly changes the release gate.
+
+Default automated non-release mode can still inject inbound test messages into
+the responder account so the sender account stays isolated. That is not the
+release deploy gate.
 
 LLM checkpoints:
 
@@ -170,8 +175,9 @@ LLM checkpoints:
    availability. Use a dedicated E2E/test/onboarding binding; a normal
    production/project chat requires the explicit `--allow-production-binding`
    escape hatch.
-3. Choose default responder injection, `--real-send`, or attended
-   `--manual-send`.
+3. For release deploys, choose WA2WA `--real-send` with the `sender` and
+   `responder` accounts. Use default responder injection or attended
+   `--manual-send` only when the requested test is not a release deploy gate.
 4. After a failure, inspect the JSON artifact before any retry.
 
 Primitive:
@@ -182,6 +188,8 @@ npm run e2e:whatsapp-real -- --execute \
   --orkestr-home <orkestr-home> \
   --thread <thread-id> \
   --chat-id <chat-id> \
+  --real-send \
+  --sender-account sender \
   --responder-account <responder-account> \
   --artifact <artifact-path>
 ```
