@@ -4832,6 +4832,76 @@ test("whatsapp delivery skips delayed progress overtaken by a final answer", asy
   assert.deepEqual(delivery.skipped.find((item) => item.messageId === progress.id)?.reason, "overtaken_by_final");
 });
 
+test("whatsapp delivery suppresses retryable progress once final answer is delivered", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-retry-progress-after-final-"));
+  const env = externalBridgeEnv(home, {
+    ORKESTR_WHATSAPP_MIRROR_PROGRESS_UPDATES: "1",
+    ORKESTR_CONNECTOR_OUTBOX_STORE: "json",
+  });
+  await createThread({ id: "thread-wa-retry-progress-after-final", name: "WA Retry Progress After Final Thread" }, env);
+  await writeConnectorConfig("whatsapp", {
+    bridgeMode: "external",
+    bridgeUrl: "http://wa.local",
+    threadRoutes: { "chat-retry-progress-after-final": "thread-wa-retry-progress-after-final" },
+  }, env);
+
+  const routed = await routeWhatsAppInbound({ eventId: "wa-retry-progress-after-final-1", chatId: "chat-retry-progress-after-final", text: "status?" }, env);
+  const progressAt = new Date(Date.now() - 5_000).toISOString();
+  const finalAt = new Date().toISOString();
+  const progress = await appendThreadMessage("thread-wa-retry-progress-after-final", {
+    role: "assistant",
+    source: "codex-rollout",
+    phase: "commentary",
+    state: "completed",
+    text: "Milestone: retryable progress should be suppressed after final.",
+    parentMessageId: routed.message.id,
+    connector: "whatsapp",
+    chatId: "chat-retry-progress-after-final",
+    createdAt: progressAt,
+    timestamp: progressAt,
+  }, env);
+  const final = await appendThreadMessage("thread-wa-retry-progress-after-final", {
+    role: "assistant",
+    source: "codex-rollout",
+    phase: "final_answer",
+    state: "completed",
+    text: "Final answer wins.",
+    parentMessageId: routed.message.id,
+    connector: "whatsapp",
+    chatId: "chat-retry-progress-after-final",
+    createdAt: finalAt,
+    timestamp: finalAt,
+  }, env);
+
+  const calls = [];
+  const first = await deliverWhatsAppReplies(env, async (url, options) => {
+    const body = JSON.parse(options.body);
+    calls.push(body.text);
+    if (/retryable progress/.test(body.text)) throw new Error("bridge temporarily unavailable");
+    return response({ ok: true, ids: ["sent-final-after-progress-failure"] });
+  });
+  const outboxAfterFinal = await readConnectorOutbox(env);
+  const progressJob = outboxAfterFinal.jobs.find((job) => job.sourceMessageId === progress.id);
+  const finalJob = outboxAfterFinal.jobs.find((job) => job.sourceMessageId === final.id);
+
+  assert.equal(first.failed.length, 1);
+  assert.equal(first.delivered.length, 1);
+  assert.equal(first.delivered[0].deliveryType, "final");
+  assert.deepEqual(calls.map(stripDebugFooter), [
+    "Milestone: retryable progress should be suppressed after final.",
+    "Final answer wins.",
+  ]);
+  assert.equal(progressJob?.state, "skipped");
+  assert.equal(progressJob?.error, "overtaken_by_final");
+  assert.equal(finalJob?.state, "delivered");
+
+  const retry = await deliverWhatsAppReplies(env, async () => {
+    throw new Error("suppressed progress should not retry");
+  });
+  assert.equal(retry.delivered.length, 0);
+  assert.equal(retry.failed.length, 0);
+});
+
 test("whatsapp delivery mirrors newer progress after an older final was already delivered", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-progress-after-final-"));
   const env = externalBridgeEnv(home, { ORKESTR_WHATSAPP_MIRROR_PROGRESS_UPDATES: "1" });
