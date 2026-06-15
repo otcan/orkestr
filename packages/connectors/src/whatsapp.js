@@ -4513,7 +4513,7 @@ async function deliverWhatsAppRepliesOnce(env = process.env, fetchImpl = fetch) 
           });
           continue;
         }
-        if (progressOvertakenByFinal(messages, message, chatId, env)) {
+        if (!liveRecovery && progressOvertakenByFinal(messages, message, chatId, env)) {
           await skipWhatsAppOutboundCandidate({
             state,
             outboundIntents,
