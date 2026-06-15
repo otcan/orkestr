@@ -949,7 +949,7 @@ function outboundEchoDeliveryForEvent(outboundDeliveries = [], connectorOutboxJo
 
 function desktopShareApproveChallengeId(text = "") {
   const value = String(text || "").trim();
-  const match = value.match(/^(?:\/?desktop\s+approve|orkestr\s+desktop\s+approve)\s+(desk-[A-Za-z0-9_-]{20,})$/i);
+  const match = value.match(/^(?:(?:\/?desktop\s+approve|orkestr\s+desktop\s+approve|\/?approve)\s+)?(desk-[A-Za-z0-9_-]{20,})$/i);
   return match?.[1] || "";
 }
 

@@ -5796,6 +5796,42 @@ test("whatsapp desktop approve command approves a pending desktop share challeng
   assert.match(assistant.text, /Desktop access approved for linkedin/);
 });
 
+test("whatsapp pasted desktop challenge id approves a pending desktop share challenge", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-desktop-share-bare-approve-"));
+  const env = externalBridgeEnv(home, { ORKESTR_PUBLIC_HTTPS_URL: "https://app.example.test" });
+  await createThread({ id: "thread-wa-desktop-share-bare-approve", name: "WA Desktop Share Bare Approve" }, env);
+  await writeConnectorConfig("whatsapp", {
+    threadRoutes: { "chat-desktop-share-bare-approve": "thread-wa-desktop-share-bare-approve" },
+  }, env);
+  const created = await createDesktopShare({ desktopSlug: "linkedin", env });
+  const parsed = new URL(created.url);
+  const parts = parsed.pathname.split("/").filter(Boolean);
+  const shareId = parts.at(-1);
+  const key = parsed.searchParams.get("key");
+  const opened = await openDesktopShare({ shareId, key, subdomain: created.subdomain, env });
+
+  const routed = await routeWhatsAppInbound({
+    eventId: "wa-desktop-share-bare-approve-1",
+    chatId: "chat-desktop-share-bare-approve",
+    accountId: "responder",
+    text: opened.attempt.challenge,
+  }, env);
+  const ready = await desktopShareStatus({
+    shareId,
+    key,
+    subdomain: created.subdomain,
+    browserToken: opened.cookie.value.split(":")[1],
+    env,
+  });
+  const messages = await listThreadMessages("thread-wa-desktop-share-bare-approve", env);
+  const assistant = messages.find((message) => message.parentMessageId === routed.message.id);
+
+  assert.equal(routed.handledCommand, "desktop_share_approve");
+  assert.equal(routed.desktopShareApproved, true);
+  assert.equal(ready.approved, true);
+  assert.match(assistant.text, /Desktop access approved for linkedin/);
+});
+
 test("whatsapp duplicate active tenant input is suppressed before sanitizer reruns", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-tenant-duplicate-before-sanitizer-"));
   const countFile = path.join(home, "sanitizer-count.txt");
