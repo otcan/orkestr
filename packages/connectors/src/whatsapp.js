@@ -2557,7 +2557,7 @@ export async function routeWhatsAppInbound(input = {}, env = process.env, fetchI
 
   const skipDisabledBinding = async (routedThreadId) => {
     const routedThread = routedThreadId ? await getThread(routedThreadId, env).catch(() => null) : null;
-    const binding = routedThread?.binding || threadRoute.binding || {};
+    const binding = threadRoute.binding || routedThread?.binding || {};
     if (binding.connector === "whatsapp" && !whatsappBindingIsRouteEligible(binding)) {
       const event = {
         eventId,

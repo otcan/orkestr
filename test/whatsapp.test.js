@@ -19,6 +19,7 @@ import { createUser, linkUserPrivateIdentity } from "../packages/core/src/users.
 import { deliverWhatsAppReplies, formatWhatsAppOutboundText, getWhatsAppChatMessages, getWhatsAppChatParticipants, getWhatsAppStatus, initialQueueDeliveryState, mapLocalWhatsAppStatusFromHealth, routeWhatsAppInbound, sendWhatsAppText, syncWhatsAppTypingIndicators } from "../packages/connectors/src/whatsapp.js";
 import { addLocalWhatsAppGroupParticipants, cleanupLocalWhatsAppChromeLocks, clearLocalWhatsAppChatTypingState, createLocalWhatsAppChat, demoteLocalWhatsAppGroupParticipants, forwardLocalWhatsAppInbound, getLocalWhatsAppBridgeStatus, handleInboundMessage, inboundRoutingFailureNoticeText, listLocalWhatsAppChats, listLocalWhatsAppChatParticipants, localWhatsAppAccountIdsForEnv, localWhatsAppConnectedPageReadyFallbackEligible, localWhatsAppInboundForwardTarget, localWhatsAppMessageRouteFields, localWhatsAppReadyFallbackEligible, localWhatsAppTypingClearRetryDelaysMs, localWhatsAppUnreadRecoveryBoundChats, localWhatsAppUnreadRecoveryIntervalMs, normalizeGroupParticipantIds, promoteLocalWhatsAppGroupParticipants, recoverConfiguredLocalWhatsAppAccounts, recoverUnreadLocalWhatsAppMessages, recoverableLocalWhatsAppAccountIds, reduceLocalWhatsAppBridgeState, resetLocalWhatsAppBridgeForTest, sendLocalWhatsAppMessage, sendWhatsAppTextWithConfirmation, setLocalWhatsAppRuntimeForTest, setLocalWhatsAppRuntimeRecoveryHooksForTest, startLocalWhatsAppAccount, startLocalWhatsAppTyping, stopLocalWhatsAppTyping, syncLocalWhatsAppTypingTargets, webCacheRoot } from "../packages/connectors/src/whatsapp-local-bridge.js";
 import { routedWhatsAppTypingTarget, runWithRoutedWhatsAppTyping } from "../packages/connectors/src/whatsapp-router-typing.js";
+import { upsertWhatsAppBinding } from "../packages/connectors/src/whatsapp-account-bindings.js";
 import { createAndBindWhatsAppThreadGroup } from "../packages/connectors/src/whatsapp-thread-groups.js";
 import { prepareWhatsAppTableAttachments } from "../packages/connectors/src/whatsapp-table-attachments.js";
 import { canRecoverLiveWhatsAppOutboundIntent, mergeWhatsAppOutboundIntents, mergeWhatsAppOutboundMirrorCursors } from "../packages/connectors/src/whatsapp-outbound-intents.js";
@@ -7605,6 +7606,53 @@ test("whatsapp inbound routes through enabled thread bindings", async () => {
   assert.equal(messages[0].accountId, "bound-account");
   assert.equal(messages[0].originSurface, "whatsapp");
   assert.equal(messages[0].originTransport, "whatsapp-local-bridge");
+});
+
+test("whatsapp inbound honors selected registry binding over disabled legacy thread binding", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-registry-over-legacy-binding-"));
+  const env = externalBridgeEnv(home, { ORKESTR_WHATSAPP_ACCOUNT_IDS: "registry-responder" });
+  setLocalWhatsAppRuntimeForTest("registry-responder", {
+    client: { info: { wid: { _serialized: "registry-responder@c.us" } } },
+  }, { ready: true }, env);
+  try {
+    await createThread({
+      id: "registry-bound-thread",
+      name: "Registry Bound Thread",
+      binding: {
+        connector: "whatsapp",
+        chatId: "chat-registry-bound",
+        displayName: "Stale Disabled Chat",
+        enabled: false,
+        routeEligible: true,
+        outboundAccountId: "old-responder",
+      },
+    }, env);
+    await upsertWhatsAppBinding({
+      level: "chat",
+      threadId: "registry-bound-thread",
+      chatId: "chat-registry-bound",
+      displayName: "Selected Registry Chat",
+      accountId: "registry-responder",
+      enabled: true,
+      routeEligible: true,
+    }, env);
+
+    const routed = await routeWhatsAppInbound({
+      eventId: "wa-registry-over-legacy-1",
+      chatId: "chat-registry-bound",
+      accountId: "registry-responder",
+      text: "registry-selected message",
+    }, env);
+    const messages = await listThreadMessages("registry-bound-thread", env);
+
+    assert.equal(routed.threadId, "registry-bound-thread");
+    assert.equal(routed.ignoredDisabledBinding, undefined);
+    assert.equal(messages.length, 1);
+    assert.equal(messages[0].accountId, "registry-responder");
+    assert.equal(messages[0].text, "registry-selected message");
+  } finally {
+    await resetLocalWhatsAppBridgeForTest(env);
+  }
 });
 
 test("whatsapp direct bindings can receive responder-observed inbound", async () => {
