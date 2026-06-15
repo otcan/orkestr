@@ -1804,6 +1804,9 @@ export function inboundRoutingFailureNoticeText(error, { env = process.env } = {
   if (failure.code === "target_instance_unhealthy" || failure.userFacingCategory === "instance_health") {
     return "This Orkestr instance is temporarily unavailable for this chat. Your message was not delivered; please resend it after the instance is healthy.";
   }
+  if (failure.code === "whatsapp_binding_disabled" || failure.code === "disabled_whatsapp_binding" || reason === "whatsapp_binding_disabled") {
+    return "This WhatsApp chat is connected to Orkestr, but inbound messages are currently disabled for the bound thread. Your message was not delivered; ask the admin to enable the WhatsApp binding, then resend.";
+  }
   if (failure.capability === "timers" || failure.userFacingCategory === "timer" || lowered.includes("timer")) {
     return "Timers are not available for this chat right now. Please try again after Orkestr is healthy.";
   }
@@ -1840,6 +1843,21 @@ function inboundRoutingFailureShouldNotify(error) {
   if (reason === "whatsapp_target_required" || failure.code === "whatsapp_target_required") return false;
   if (reason === "message_text_required" || failure.code === "message_text_required") return false;
   return true;
+}
+
+function disabledBindingRoutingError(routed = {}) {
+  const error = new Error("whatsapp_binding_disabled");
+  error.routingFailure = normalizeRoutingFailure({
+    code: "whatsapp_binding_disabled",
+    reason: "disabled_whatsapp_binding",
+    threadId: String(routed?.threadId || ""),
+    safeMessage: "This WhatsApp chat is connected to Orkestr, but inbound messages are disabled for the bound thread.",
+    userFacingCategory: "connector",
+    retryable: false,
+  }, {
+    reason: "disabled_whatsapp_binding",
+  });
+  return error;
 }
 
 async function sendInboundRoutingFailureNotice({ accountId = "", chatId = "", eventId = "", error = null, client = null, env = process.env } = {}) {
@@ -1938,6 +1956,27 @@ export async function handleInboundMessage(accountId, message, env = process.env
     if (forwarded) return { routed: forwarded.payload, forwarded: true, eventId, chatId, from, fromMe: routeFromMe };
     const { deliverWhatsAppReplies, routeWhatsAppInbound } = await import("./whatsapp.js");
     const routed = await routeWhatsAppInbound({ ...inbound, deferApiAgentAutoRun: true }, env);
+    if (routed?.ignoredDisabledBinding) {
+      const error = disabledBindingRoutingError(routed);
+      const notice = await sendInboundRoutingFailureNotice({
+        accountId,
+        chatId,
+        eventId,
+        error,
+        client: options.client || null,
+        env,
+      }).catch((noticeError) => ({ sent: false, reason: noticeError?.message || String(noticeError) }));
+      return {
+        routed,
+        eventId,
+        chatId,
+        from,
+        fromMe: routeFromMe,
+        noticeSent: notice?.sent === true,
+        noticeReason: notice?.reason || "",
+        routingFailure: error.routingFailure,
+      };
+    }
     if (routed.threadId && !routed.duplicate) {
       const thread = await getThread(routed.threadId, env).catch(() => null);
       if (threadUsesApiAgent(thread || {}, env)) {

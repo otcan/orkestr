@@ -5,8 +5,69 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { normalizeDirectWhatsAppTarget, runRealWhatsAppDemoOnboarding } from "../scripts/real-wa-demo-onboarding.mjs";
-import { desktopShareApiUrl, extractDesktopShareUrlParts } from "../scripts/real-wa-e2e.mjs";
+import { desktopShareApiUrl, extractDesktopShareUrlParts, parseArgs } from "../scripts/real-wa-e2e.mjs";
 import { validateWhatsAppPreflight } from "../scripts/real-wa-e2e-preflight.mjs";
+
+test("real WhatsApp E2E refuses execute mode without an isolated runtime declaration", () => {
+  assert.throws(
+    () => parseArgs([
+      "--execute",
+      "--api-base",
+      "http://127.0.0.1:19812",
+      "--thread",
+      "real-wa-e2e",
+      "--chat-id",
+      "fixture-group@g.us",
+    ], {}),
+    /isolated_runtime_required/,
+  );
+});
+
+test("real WhatsApp E2E accepts explicit isolated runtime declaration", () => {
+  const options = parseArgs([
+    "--execute",
+    "--api-base",
+    "http://127.0.0.1:19812",
+    "--thread",
+    "real-wa-e2e",
+    "--chat-id",
+    "fixture-group@g.us",
+    "--isolated-runtime",
+  ], {});
+
+  assert.equal(options.isolatedRuntime, true);
+  assert.equal(options.allowSharedRuntime, false);
+});
+
+test("real WhatsApp E2E keeps shared-runtime runs explicit and mutually exclusive", () => {
+  const shared = parseArgs([
+    "--execute",
+    "--api-base",
+    "http://127.0.0.1:19812",
+    "--thread",
+    "real-wa-e2e",
+    "--chat-id",
+    "fixture-group@g.us",
+    "--allow-shared-runtime",
+  ], {});
+
+  assert.equal(shared.isolatedRuntime, false);
+  assert.equal(shared.allowSharedRuntime, true);
+  assert.throws(
+    () => parseArgs([
+      "--execute",
+      "--api-base",
+      "http://127.0.0.1:19812",
+      "--thread",
+      "real-wa-e2e",
+      "--chat-id",
+      "fixture-group@g.us",
+      "--isolated-runtime",
+      "--allow-shared-runtime",
+    ], {}),
+    /conflicting_runtime_isolation_flags/,
+  );
+});
 
 test("real WhatsApp E2E preflight fails before real sender transport when sender is not ready", () => {
   const status = {

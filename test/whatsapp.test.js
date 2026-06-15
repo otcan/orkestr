@@ -4426,6 +4426,52 @@ test("local whatsapp inbound stays silent for unbound chats", async () => {
   assert.equal(failed?.noticeReason, "routing_failure_not_user_notifiable");
 });
 
+test("local whatsapp inbound warns source chat when binding is disabled", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-disabled-binding-notice-"));
+  const env = externalBridgeEnv(home, {
+    ORKESTR_WHATSAPP_SEND_CONFIRMATION_REQUIRED: "0",
+  });
+  const sent = [];
+  const client = {
+    async sendMessage(chatId, text) {
+      sent.push({ chatId, text });
+      return { id: { _serialized: "sent-disabled-binding-notice" }, body: text };
+    },
+  };
+  await createThread({
+    id: "disabled-notice-thread",
+    name: "Disabled Notice Thread",
+    binding: {
+      connector: "whatsapp",
+      chatId: "disabled-notice-chat@g.us",
+      displayName: "Disabled Notice Chat",
+      enabled: false,
+      routeEligible: true,
+      responderAccountId: "responder",
+      outboundAccountId: "responder",
+    },
+  }, env);
+
+  const result = await handleInboundMessage("responder", {
+    id: { _serialized: "false_disabled-notice-chat@g.us_3AB0DISABLED_semra@c.us", remote: "disabled-notice-chat@g.us" },
+    from: "disabled-notice-chat@g.us",
+    author: "semra@c.us",
+    fromMe: false,
+    body: "hello disabled binding",
+    timestamp: 1_780_000_001,
+  }, env, { client });
+  const messages = await listThreadMessages("disabled-notice-thread", env);
+
+  assert.equal(result.routed.ignoredDisabledBinding, true);
+  assert.equal(result.noticeSent, true);
+  assert.equal(result.routingFailure.code, "whatsapp_binding_disabled");
+  assert.equal(messages.length, 0);
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0].chatId, "disabled-notice-chat@g.us");
+  assert.match(sent[0].text, /inbound messages are currently disabled/i);
+  assert.match(sent[0].text, /enable the WhatsApp binding/i);
+});
+
 test("api-agent thread pending delivery skips legacy runtime wakeups", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-api-agent-delivery-skip-"));
   const env = { ORKESTR_HOME: home };

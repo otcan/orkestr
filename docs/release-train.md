@@ -152,7 +152,8 @@ Minimum primitive guidance:
   local=http://127.0.0.1:$ORKESTR_PORT --allow-auth-blocked`
 - real WhatsApp/OAuth/desktop/timer checks use WA2WA by default:
   `npm run e2e:whatsapp-real -- --execute --real-send --sender-account sender
-  --responder-account responder --thread <thread-id> --chat-id <chat-id>`.
+  --responder-account responder --thread <thread-id> --chat-id <chat-id>
+  --isolated-runtime`.
   See `docs/real-whatsapp-e2e.md`; this sends real WhatsApp messages from the
   sender account to the responder account and must be opt-in.
 - isolated demo VM releases: `npm run audit:isolation` plus

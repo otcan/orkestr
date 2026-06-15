@@ -2788,17 +2788,31 @@ export async function routeWhatsAppInbound(input = {}, env = process.env, fetchI
     };
   }
 
-  const skipDisabledBinding = async (routedThreadId) => {
-    const routedThread = routedThreadId ? await getThread(routedThreadId, env).catch(() => null) : null;
+  const disabledThreadForInbound = async (routedThreadId = "") => {
+    if (routedThreadId) return getThread(routedThreadId, env).catch(() => null);
+    if (!initialChatId) return null;
+    const threads = await listThreads(env).catch(() => []);
+    return threads.find((thread) => {
+      const binding = thread?.binding || {};
+      if (binding.connector !== "whatsapp" || binding.enabled !== false || binding.retired === true || binding.deprecated === true) return false;
+      if (pickString(binding.chatId) !== initialChatId) return false;
+      const accounts = bindingAccountIds(binding);
+      return !accounts.size || !initialAccountId || accounts.has(initialAccountId);
+    }) || null;
+  };
+
+  const skipDisabledBinding = async (routedThreadId = "") => {
+    const routedThread = await disabledThreadForInbound(routedThreadId);
     const binding = threadRoute.binding || routedThread?.binding || {};
     if (binding.connector === "whatsapp" && !whatsappBindingIsRouteEligible(binding)) {
+      const disabledThreadId = routedThreadId || routedThread?.id || "";
       const event = {
         eventId,
         canonicalEventId,
         routerTraceId: initialTraceId,
         turnId: initialTurnId,
         agentId: null,
-        threadId: routedThreadId,
+        threadId: disabledThreadId,
         messageId: null,
         chatId: initialChatId,
         from: pickString(input.from, input.sender, input.author),
@@ -2815,7 +2829,7 @@ export async function routeWhatsAppInbound(input = {}, env = process.env, fetchI
         accountId: initialAccountId,
         chatId: initialChatId,
         eventId,
-        threadId: routedThreadId,
+        threadId: disabledThreadId,
         state: "skipped",
       }, env).catch(() => null);
       await recordRouterTraceEvent({
@@ -2825,7 +2839,7 @@ export async function routeWhatsAppInbound(input = {}, env = process.env, fetchI
         accountId: initialAccountId,
         chatId: initialChatId,
         sourceEventId: eventId,
-        threadId: routedThreadId,
+        threadId: disabledThreadId,
         phase: "skipped",
         reason: "disabled_whatsapp_binding",
         terminal: true,
@@ -2835,7 +2849,7 @@ export async function routeWhatsAppInbound(input = {}, env = process.env, fetchI
         eventId,
         canonicalEventId,
         routerTraceId: initialTraceId,
-        threadId: routedThreadId,
+        threadId: disabledThreadId,
         chatId: initialChatId,
         accountId: initialAccountId,
       }, env).catch(() => {});
@@ -2845,7 +2859,7 @@ export async function routeWhatsAppInbound(input = {}, env = process.env, fetchI
         ignoredDisabledBinding: true,
         event,
         agentId: null,
-        threadId: routedThreadId,
+        threadId: disabledThreadId,
       };
     }
     return null;

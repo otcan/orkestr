@@ -236,3 +236,43 @@ test("watcher alerts can stay out of WhatsApp mirroring for delivery anomalies",
   assert.equal(messages[0].chatId || "", "");
   assert.equal(messages[0].originSurface || "", "");
 });
+
+test("watcher alerts suppress WhatsApp mirroring when bridge is unavailable", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-watcher-alert-wa-loop-"));
+  const runtimeEnv = env(home, {
+    ORKESTR_WATCHER_THREAD_NAME: "test-watcher-wa-loop",
+  });
+  const watcherThread = await createThread({
+    id: "test-watcher-wa-loop-thread",
+    name: "test-watcher-wa-loop",
+    title: "Test watcher WA loop",
+    state: "ready",
+    binding: {
+      connector: "whatsapp",
+      chatId: "watcher-chat",
+      responderAccountId: "responder",
+      outboundAccountId: "responder",
+      mirrorToWhatsApp: true,
+    },
+  }, runtimeEnv);
+
+  const result = await recordWatcherAlert({
+    source: "server.deliverWhatsAppReplies",
+    code: "whatsapp_reply_delivery_failed",
+    message: "whatsapp_local_bridge_not_ready: Local bridge is restarting",
+    mirrorToConnector: true,
+    details: {
+      reason: "whatsapp_local_bridge_not_ready",
+      chatId: "watcher-chat",
+    },
+  }, runtimeEnv);
+  const messages = await listThreadMessages(watcherThread.id, runtimeEnv);
+
+  assert.equal(result.ok, true);
+  assert.equal(result.alert.mirrorToConnector, true);
+  assert.equal(messages.length, 1);
+  assert.match(messages[0].text, /\[watcher:error\] server\.deliverWhatsAppReplies/);
+  assert.equal(messages[0].connector || "", "");
+  assert.equal(messages[0].chatId || "", "");
+  assert.equal(messages[0].originSurface || "", "");
+});

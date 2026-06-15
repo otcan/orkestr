@@ -172,9 +172,11 @@ LLM checkpoints:
 1. Confirm the user asked for a real transport run or a release/deploy requires
    it.
 2. Preflight target thread, chat, responder account, public URL, and desktop
-   availability. Use a dedicated E2E/test/onboarding binding; a normal
-   production/project chat requires the explicit `--allow-production-binding`
-   escape hatch.
+   availability. Use a disposable E2E/demo runtime and pass
+   `--isolated-runtime`; a shared runtime requires the explicit
+   `--allow-shared-runtime` escape hatch. Use a dedicated
+   E2E/test/onboarding binding; a normal production/project chat requires the
+   explicit `--allow-production-binding` escape hatch.
 3. For release deploys, choose WA2WA `--real-send` with the `sender` and
    `responder` accounts. Use default responder injection or attended
    `--manual-send` only when the requested test is not a release deploy gate.
@@ -189,6 +191,7 @@ npm run e2e:whatsapp-real -- --execute \
   --thread <thread-id> \
   --chat-id <chat-id> \
   --real-send \
+  --isolated-runtime \
   --sender-account sender \
   --responder-account <responder-account> \
   --artifact <artifact-path>

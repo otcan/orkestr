@@ -119,6 +119,7 @@ test("full run pipeline adds isolated demo gates for demo release deploys", () =
     stages.find((stage) => stage.id === "whatsapp-real").env.ORKESTR_REAL_WA_E2E_ARTIFACT,
     path.join(artifactDir, "real-wa-e2e.json"),
   );
+  assert.equal(stages.find((stage) => stage.id === "whatsapp-real").env.ORKESTR_REAL_WA_E2E_ISOLATED_RUNTIME, "1");
   assert.equal(
     stages.find((stage) => stage.id === "whatsapp-demo-onboarding").env.ORKESTR_REAL_WA_DEMO_ARTIFACT,
     path.join(artifactDir, "real-wa-demo-onboarding.json"),
