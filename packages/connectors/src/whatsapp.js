@@ -1857,6 +1857,28 @@ async function skipWhatsAppOutboundCandidate({
       error: reason || "obsolete_outbound_notice",
     }, env).catch(() => null);
   }
+  const activeJobs = await listConnectorOutboxJobs({
+    connector: "whatsapp",
+    state: "pending claimed sent_to_broker failed_retryable",
+    chatId,
+    threadId,
+    deliveryType,
+  }, env).catch(() => ({ jobs: [] }));
+  const now = new Date().toISOString();
+  for (const job of activeJobs.jobs || []) {
+    if (pickString(job.sourceMessageId, job.sourceEventId) !== pickString(sourceMessageId, messageId)) continue;
+    if (accountId && pickString(job.accountId) && pickString(job.accountId) !== pickString(accountId)) continue;
+    await markConnectorOutboxJob(job.id, {
+      state: "skipped",
+      skippedAt: now,
+      error: reason || "obsolete_outbound_notice",
+      metadata: {
+        ...(job.metadata || {}),
+        skippedBy: "whatsapp_mirror",
+        skippedReason: reason || "obsolete_outbound_notice",
+      },
+    }, env).catch(() => null);
+  }
   await recordRouterTraceEvent({
     routerTraceId,
     turnId,
@@ -1872,6 +1894,85 @@ async function skipWhatsAppOutboundCandidate({
     terminal: true,
   }, env).catch(() => {});
   return { skipped: { reason: reason || "obsolete_outbound_notice" } };
+}
+
+async function suppressProgressRetriesAfterFinal({
+  state,
+  outboundIntents,
+  threadId,
+  chatId,
+  accountId,
+  parentMessageId,
+  finalMessageId,
+  reason = "overtaken_by_final",
+  env,
+} = {}) {
+  const parentId = pickString(parentMessageId);
+  if (!parentId || !chatId) return { suppressed: 0 };
+  const now = new Date().toISOString();
+  let suppressed = 0;
+  let intentsChanged = false;
+  const nextIntents = outboundIntents.map((intent) => {
+    if (pickString(intent.deliveryType).toLowerCase() !== "progress") return intent;
+    if (pickString(intent.parentMessageId) !== parentId) return intent;
+    if (pickString(intent.chatId) !== pickString(chatId)) return intent;
+    if (threadId && pickString(intent.threadId) && pickString(intent.threadId) !== pickString(threadId)) return intent;
+    if (accountId && pickString(intent.accountId) && pickString(intent.accountId) !== pickString(accountId)) return intent;
+    const status = pickString(intent.status).toLowerCase();
+    if (["delivered", "skipped", "cancelled"].includes(status)) return intent;
+    intentsChanged = true;
+    suppressed += 1;
+    return {
+      ...intent,
+      status: "skipped",
+      skippedAt: now,
+      error: reason,
+      supersededByMessageId: pickString(finalMessageId),
+      updatedAt: now,
+      lastChangedAt: now,
+    };
+  });
+  if (intentsChanged) {
+    outboundIntents.splice(0, outboundIntents.length, ...nextIntents);
+    state.outboundIntents = outboundIntents;
+    await writeWhatsAppState(state, env);
+  }
+  const activeJobs = await listConnectorOutboxJobs({
+    connector: "whatsapp",
+    state: "pending claimed sent_to_broker failed_retryable",
+    chatId,
+    threadId,
+    deliveryType: "progress",
+  }, env).catch(() => ({ jobs: [] }));
+  for (const job of activeJobs.jobs || []) {
+    if (pickString(job.metadata?.parentMessageId) !== parentId) continue;
+    if (accountId && pickString(job.accountId) && pickString(job.accountId) !== pickString(accountId)) continue;
+    await markConnectorOutboxJob(job.id, {
+      state: "skipped",
+      skippedAt: now,
+      error: reason,
+      metadata: {
+        ...(job.metadata || {}),
+        skippedBy: "whatsapp_mirror",
+        skippedReason: reason,
+        supersededByMessageId: pickString(finalMessageId),
+      },
+    }, env).catch(() => null);
+    suppressed += 1;
+  }
+  if (suppressed) {
+    await appendEvent({
+      type: "whatsapp_progress_retries_suppressed_after_final",
+      threadId: pickString(threadId),
+      chatId: pickString(chatId),
+      accountId: pickString(accountId),
+      parentMessageId: parentId,
+      finalMessageId: pickString(finalMessageId),
+      suppressed,
+      reason,
+    }, env).catch(() => null);
+  }
+  return { suppressed };
 }
 
 function terminalWhatsAppOutboundIntentWithReason(intent = null, reason = "") {
@@ -4412,7 +4513,7 @@ async function deliverWhatsAppRepliesOnce(env = process.env, fetchImpl = fetch) 
           });
           continue;
         }
-        if (!liveRecovery && progressOvertakenByFinal(messages, message, chatId, env)) {
+        if (progressOvertakenByFinal(messages, message, chatId, env)) {
           await skipWhatsAppOutboundCandidate({
             state,
             outboundIntents,
@@ -4650,6 +4751,18 @@ async function deliverWhatsAppRepliesOnce(env = process.env, fetchImpl = fetch) 
       if (result.delivery) {
         const delivery = result.delivery;
         delivered.push(delivery);
+        if (deliveryType === "final" || deliveryType === "router_update") {
+          await suppressProgressRetriesAfterFinal({
+            state,
+            outboundIntents,
+            threadId,
+            chatId,
+            accountId,
+            parentMessageId: message.parentMessageId,
+            finalMessageId: message.id,
+            env,
+          }).catch(() => null);
+        }
         if (parent) {
           await completePassiveMirrorParent({
             kind,
