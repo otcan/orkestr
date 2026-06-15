@@ -2,17 +2,39 @@ import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import { dataPaths, ensureDataDirs } from "../../storage/src/paths.js";
 import { appendEvent, readJson, writeJson } from "../../storage/src/store.js";
+import {
+  clearConnectorOutboxPostgresCache,
+  connectorOutboxWherePostgres,
+  getConnectorOutboxJobRowPostgres,
+  openConnectorOutboxPostgres,
+  pruneConnectorOutboxRowsPostgres,
+  replaceConnectorOutboxRowsPostgres,
+  setConnectorOutboxMetaPostgres,
+  setConnectorOutboxPostgresPoolFactory,
+  upsertConnectorOutboxJobRowPostgres,
+  withPostgresTransaction,
+} from "./connector-outbox-postgres.js";
 
-const terminalStates = new Set(["delivered", "skipped", "skipped_policy", "suppressed", "dead_letter", "cancelled"]);
+export const terminalStates = new Set(["delivered", "skipped", "skipped_policy", "suppressed", "dead_letter", "cancelled"]);
 const operatorActions = new Set(["retry", "suppress", "mark_delivered", "mark-delivered", "replay", "dead_letter", "dead-letter"]);
 const dbCache = new Map();
 let sqliteModulePromise = null;
 
-function clean(value) {
+export const __connectorOutboxTestInternals = {
+  setPostgresPoolFactory(factory = null) {
+    setConnectorOutboxPostgresPoolFactory(factory);
+  },
+  clearCaches() {
+    dbCache.clear();
+    clearConnectorOutboxPostgresCache();
+  },
+};
+
+export function clean(value) {
   return String(value || "").trim();
 }
 
-function nowIso() {
+export function nowIso() {
   return new Date().toISOString();
 }
 
@@ -44,6 +66,11 @@ function outboxDbPath(env = process.env) {
 
 function connectorOutboxStoreMode(env = process.env) {
   return clean(env.ORKESTR_CONNECTOR_OUTBOX_STORE || env.ORKESTR_CONNECTOR_OUTBOX_BACKEND || "auto").toLowerCase();
+}
+
+export function connectorOutboxPostgresMode(env = process.env) {
+  const mode = connectorOutboxStoreMode(env);
+  return mode === "postgres" || mode === "postgresql";
 }
 
 function statusRank(value) {
@@ -95,11 +122,7 @@ async function loadSqlite(mode) {
 async function openConnectorOutboxDatabase(env = process.env) {
   const mode = connectorOutboxStoreMode(env);
   if (mode === "json") return null;
-  if (mode === "postgres" || mode === "postgresql") {
-    const error = new Error("connector_outbox_postgres_backend_not_implemented");
-    error.statusCode = 501;
-    throw error;
-  }
+  if (connectorOutboxPostgresMode(env)) return null;
   const sqlite = await loadSqlite(mode);
   if (!sqlite) return null;
   const paths = await ensureDataDirs(env);
@@ -167,9 +190,10 @@ function setConnectorOutboxMeta(db, key, value) {
   `).run(key, value);
 }
 
-function rowToConnectorOutboxJob(row, env = process.env) {
+export function rowToConnectorOutboxJob(row, env = process.env) {
   try {
-    return normalizeConnectorOutboxJob(JSON.parse(row.data), env);
+    const data = typeof row.data === "string" ? JSON.parse(row.data) : row.data;
+    return normalizeConnectorOutboxJob(data, env);
   } catch {
     return normalizeConnectorOutboxJob({
       id: row.id,
@@ -192,7 +216,7 @@ function rowToConnectorOutboxJob(row, env = process.env) {
   }
 }
 
-function jobColumns(job) {
+export function jobColumns(job) {
   return [
     job.id,
     job.idempotencyKey,
@@ -404,6 +428,15 @@ export function pruneConnectorOutboxJobs(jobs = [], env = process.env) {
 }
 
 export async function readConnectorOutbox(env = process.env) {
+  const pg = await openConnectorOutboxPostgres(env);
+  if (pg) {
+    const rows = await pg.query("select data from orkestr_connector_outbox order by created_at asc, id asc");
+    return {
+      schemaVersion: 1,
+      jobs: rows.rows.map((row) => rowToConnectorOutboxJob(row, env)),
+      backend: "postgres",
+    };
+  }
   const db = await openConnectorOutboxDatabase(env);
   if (db) {
     const rows = db
@@ -438,6 +471,44 @@ function stateFilterMatches(actual = "", expected = "") {
 }
 
 export async function listConnectorOutboxJobs(filters = {}, env = process.env) {
+  const pg = await openConnectorOutboxPostgres(env);
+  if (pg) {
+    const limit = Math.max(0, Math.floor(Number(filters.limit || 0) || 0));
+    const where = connectorOutboxWherePostgres(filters);
+    const totalResult = await pg.query(`select count(*)::int as count from orkestr_connector_outbox ${where.sql}`, where.values);
+    const rows = limit
+      ? await pg.query(`
+          select data from orkestr_connector_outbox
+          ${where.sql}
+          order by coalesce(nullif(updated_at, ''), nullif(terminal_at, ''), nullif(created_at, '')) desc, id desc
+          limit $${where.values.length + 1}
+        `, [...where.values, limit])
+      : await pg.query(`
+          select data from orkestr_connector_outbox
+          ${where.sql}
+          order by coalesce(nullif(updated_at, ''), nullif(terminal_at, ''), nullif(created_at, '')) desc, id desc
+        `, where.values);
+    const jobs = rows.rows.map((row) => rowToConnectorOutboxJob(row, env));
+    return {
+      schemaVersion: 1,
+      jobs,
+      count: jobs.length,
+      total: Number(totalResult.rows[0]?.count || 0),
+      backend: "postgres",
+      filters: {
+        connector: clean(filters.connector),
+        state: clean(filters.state),
+        tenantId: clean(filters.tenantId),
+        ownerUserId: clean(filters.ownerUserId || filters.userId),
+        accountId: clean(filters.accountId),
+        chatId: clean(filters.chatId),
+        threadId: clean(filters.threadId || filters.thread),
+        deliveryType: clean(filters.deliveryType),
+        limit,
+      },
+      generatedAt: nowIso(),
+    };
+  }
   const db = await openConnectorOutboxDatabase(env);
   if (db) {
     const limit = Math.max(0, Math.floor(Number(filters.limit || 0) || 0));
@@ -510,6 +581,12 @@ export async function listConnectorOutboxJobs(filters = {}, env = process.env) {
 }
 
 export async function writeConnectorOutbox(store = {}, env = process.env) {
+  const pg = await openConnectorOutboxPostgres(env);
+  if (pg) {
+    const jobs = mergeConnectorOutboxJobs(store.jobs || [], [], env);
+    await replaceConnectorOutboxRowsPostgres(pg, jobs, env);
+    return { schemaVersion: 1, jobs, backend: "postgres", updatedAt: nowIso() };
+  }
   const db = await openConnectorOutboxDatabase(env);
   if (db) {
     const jobs = mergeConnectorOutboxJobs(store.jobs || [], [], env);
@@ -525,6 +602,34 @@ export async function writeConnectorOutbox(store = {}, env = process.env) {
 }
 
 export async function ensureConnectorOutboxJob(input = {}, env = process.env) {
+  const pg = await openConnectorOutboxPostgres(env);
+  if (pg) {
+    const job = normalizeConnectorOutboxJob(input, env);
+    let created = false;
+    const nextJob = await withPostgresTransaction(pg, async (client) => {
+      const existing = await getConnectorOutboxJobRowPostgres(client, job.idempotencyKey, env, { forUpdate: true });
+      const merged = existing ? mergeJob(existing, job) : job;
+      await upsertConnectorOutboxJobRowPostgres(client, merged);
+      await pruneConnectorOutboxRowsPostgres(client, env);
+      await setConnectorOutboxMetaPostgres(client, "updated_at", nowIso());
+      created = !existing;
+      return merged;
+    });
+    if (created) {
+      await appendEvent({
+        type: "connector_outbox_job_created",
+        outboxJobId: job.id,
+        tenantId: job.tenantId,
+        connector: job.connector,
+        accountId: job.accountId,
+        chatId: job.chatId,
+        threadId: job.threadId,
+        sourceMessageId: job.sourceMessageId,
+        deliveryType: job.deliveryType,
+      }, env).catch(() => {});
+    }
+    return { job: nextJob, created };
+  }
   const db = await openConnectorOutboxDatabase(env);
   if (db) {
     const job = normalizeConnectorOutboxJob(input, env);
@@ -588,6 +693,50 @@ function claimExpired(job = {}, nowMs = Date.now()) {
 }
 
 export async function claimConnectorOutboxJob(jobIdOrKey = "", { claimant = "" } = {}, env = process.env) {
+  const pg = await openConnectorOutboxPostgres(env);
+  if (pg) {
+    const nowMs = Date.now();
+    const now = new Date(nowMs).toISOString();
+    const result = await withPostgresTransaction(pg, async (client) => {
+      const job = await getConnectorOutboxJobRowPostgres(client, jobIdOrKey, env, { forUpdate: true });
+      if (!job) return { acquired: false, reason: "connector_outbox_job_missing" };
+      if (connectorOutboxTerminalState(job.state)) {
+        return { acquired: false, reason: `connector_outbox_${job.state}`, terminal: true, job };
+      }
+      if (!claimExpired(job, nowMs)) {
+        const reason = clean(job.state).toLowerCase() === "failed_retryable"
+          ? "connector_outbox_retry_scheduled"
+          : "connector_outbox_claim_active";
+        return { acquired: false, reason, job };
+      }
+      const claimed = normalizeConnectorOutboxJob({
+        ...job,
+        state: "claimed",
+        claimedBy: clean(claimant) || `pid:${process.pid}`,
+        claimedAt: now,
+        claimExpiresAt: new Date(nowMs + connectorOutboxClaimTtlMs(env)).toISOString(),
+        attemptCount: Number(job.attemptCount || 0) + 1,
+        updatedAt: now,
+      }, env);
+      await upsertConnectorOutboxJobRowPostgres(client, claimed);
+      await setConnectorOutboxMetaPostgres(client, "updated_at", now);
+      return { acquired: true, job: claimed };
+    });
+    if (result.acquired) {
+      await appendEvent({
+        type: "connector_outbox_job_claimed",
+        outboxJobId: result.job.id,
+        tenantId: result.job.tenantId,
+        connector: result.job.connector,
+        chatId: result.job.chatId,
+        threadId: result.job.threadId,
+        sourceMessageId: result.job.sourceMessageId,
+        deliveryType: result.job.deliveryType,
+        claimedBy: result.job.claimedBy,
+      }, env).catch(() => {});
+    }
+    return result;
+  }
   const db = await openConnectorOutboxDatabase(env);
   if (db) {
     const job = getConnectorOutboxJobRow(db, jobIdOrKey, env);
@@ -677,6 +826,26 @@ export async function claimConnectorOutboxJob(jobIdOrKey = "", { claimant = "" }
 }
 
 export async function releaseConnectorOutboxClaim(jobIdOrKey = "", { reason = "" } = {}, env = process.env) {
+  const pg = await openConnectorOutboxPostgres(env);
+  if (pg) {
+    return withPostgresTransaction(pg, async (client) => {
+      const job = await getConnectorOutboxJobRowPostgres(client, jobIdOrKey, env, { forUpdate: true });
+      if (!job) return null;
+      if (connectorOutboxTerminalState(job.state)) return job;
+      const released = normalizeConnectorOutboxJob({
+        ...job,
+        state: "pending",
+        claimedBy: "",
+        claimedAt: "",
+        claimExpiresAt: "",
+        error: clean(reason || job.error),
+        updatedAt: nowIso(),
+      }, env);
+      await upsertConnectorOutboxJobRowPostgres(client, released);
+      await setConnectorOutboxMetaPostgres(client, "updated_at", released.updatedAt);
+      return released;
+    });
+  }
   const db = await openConnectorOutboxDatabase(env);
   if (db) {
     const job = getConnectorOutboxJobRow(db, jobIdOrKey, env);
@@ -723,6 +892,42 @@ export async function releaseConnectorOutboxClaim(jobIdOrKey = "", { reason = ""
 }
 
 export async function markConnectorOutboxJob(jobIdOrKey = "", patch = {}, env = process.env) {
+  const pg = await openConnectorOutboxPostgres(env);
+  if (pg) {
+    const updated = await withPostgresTransaction(pg, async (client) => {
+      const current = await getConnectorOutboxJobRowPostgres(client, jobIdOrKey, env, { forUpdate: true });
+      if (!current) return null;
+      const state = clean(patch.state || current.state || "pending").toLowerCase();
+      const next = normalizeConnectorOutboxJob({
+        ...current,
+        ...patch,
+        state,
+        claimedBy: connectorOutboxTerminalState(state) ? "" : patch.claimedBy ?? current.claimedBy,
+        claimedAt: connectorOutboxTerminalState(state) ? "" : patch.claimedAt ?? current.claimedAt,
+        claimExpiresAt: connectorOutboxTerminalState(state) ? "" : patch.claimExpiresAt ?? current.claimExpiresAt,
+        terminalAt: connectorOutboxTerminalState(state) ? clean(patch.terminalAt) || nowIso() : clean(patch.terminalAt),
+        updatedAt: nowIso(),
+      }, env);
+      await upsertConnectorOutboxJobRowPostgres(client, next);
+      await pruneConnectorOutboxRowsPostgres(client, env);
+      await setConnectorOutboxMetaPostgres(client, "updated_at", next.updatedAt);
+      return next;
+    });
+    if (updated) {
+      await appendEvent({
+        type: "connector_outbox_job_updated",
+        outboxJobId: updated.id,
+        tenantId: updated.tenantId,
+        connector: updated.connector,
+        chatId: updated.chatId,
+        threadId: updated.threadId,
+        sourceMessageId: updated.sourceMessageId,
+        deliveryType: updated.deliveryType,
+        state: updated.state,
+      }, env).catch(() => {});
+    }
+    return updated;
+  }
   const db = await openConnectorOutboxDatabase(env);
   if (db) {
     const current = getConnectorOutboxJobRow(db, jobIdOrKey, env);

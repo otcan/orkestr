@@ -295,8 +295,11 @@ Existing `connector-outbox.json` state is migrated into
 SQLite updates instead of rewriting the JSON file. Set
 `ORKESTR_CONNECTOR_OUTBOX_STORE=json` only as an emergency legacy fallback.
 
-`ORKESTR_CONNECTOR_OUTBOX_STORE=postgres` is reserved for a future managed-scale
-backend and currently fails closed instead of silently falling back.
+For managed-scale deployments, set `ORKESTR_CONNECTOR_OUTBOX_STORE=postgres`
+and provide either `ORKESTR_CONNECTOR_OUTBOX_POSTGRES_URL` or the
+`ORKESTR_CONNECTOR_OUTBOX_PGHOST` / `PGPORT` / `PGDATABASE` / `PGUSER` /
+`PGPASSWORD` connection variables. Existing `connector-outbox.json` state is
+migrated into the Postgres table on first use when the table is empty.
 
 ## License
 
