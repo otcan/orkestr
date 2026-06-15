@@ -7988,6 +7988,61 @@ test("generated single-account whatsapp groups route lid senders through the gro
   assert.equal(messages[0].from, "wa-lid-primary@lid");
 });
 
+test("whatsapp inbound coalesces short text and attachment bursts into one thread input", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-inbound-coalesce-"));
+  const env = externalBridgeEnv(home, {
+    ORKESTR_WHATSAPP_INBOUND_COALESCE_MS: "5000",
+  });
+  await createThread({
+    id: "coalesce-thread",
+    name: "Coalesce Thread",
+    binding: {
+      connector: "whatsapp",
+      chatId: "coalesce-chat@g.us",
+      enabled: true,
+      allowOtherPeople: true,
+      responderAccountId: "sender",
+      outboundAccountId: "sender",
+      mirrorToWhatsApp: true,
+    },
+  }, env);
+  const first = await routeWhatsAppInbound({
+    eventId: "false_coalesce-chat@g.us_MSG1_user@lid",
+    chatId: "coalesce-chat@g.us",
+    accountId: "sender",
+    from: "user@lid",
+    text: "prepare the mail body",
+    timestamp: "2026-06-15T09:46:26.000Z",
+  }, env);
+  const second = await routeWhatsAppInbound({
+    eventId: "false_coalesce-chat@g.us_MSG2_user@lid",
+    chatId: "coalesce-chat@g.us",
+    accountId: "sender",
+    from: "user@lid",
+    text: "Rechnung_1775.pdf",
+    attachments: [{
+      remote: true,
+      remoteThreadId: "remote-thread-1",
+      remoteAttachmentId: "remote-pdf-1",
+      filename: "Rechnung_1775.pdf",
+      mimetype: "application/pdf",
+    }],
+    timestamp: "2026-06-15T09:46:28.000Z",
+  }, env);
+  const messages = await listThreadMessages("coalesce-thread", env);
+
+  assert.equal(first.message.id, second.message.id);
+  assert.equal(second.coalesced, true);
+  assert.equal(messages.filter((message) => message.role === "user").length, 1);
+  assert.match(messages[0].text, /prepare the mail body/);
+  assert.match(messages[0].text, /Rechnung_1775\.pdf/);
+  assert.equal(messages[0].attachments.length, 1);
+  assert.deepEqual(messages[0].coalescedEventIds, [
+    "false_coalesce-chat@g.us_MSG1_user@lid",
+    "false_coalesce-chat@g.us_MSG2_user@lid",
+  ]);
+});
+
 test("generated single-account whatsapp groups tolerate missing responder identity for lid senders", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-generated-lid-no-responder-"));
   const env = externalBridgeEnv(home);

@@ -1182,6 +1182,14 @@ function whatsappApiAgentAutoRun(env = process.env) {
   return String(env.ORKESTR_WHATSAPP_API_AGENT_AUTORUN || "1").trim().toLowerCase() !== "0";
 }
 
+const whatsappApiAgentKickTimers = new Map();
+
+function whatsappInboundCoalesceMs(env = process.env) {
+  const parsed = Number(env.ORKESTR_WHATSAPP_INBOUND_COALESCE_MS || 3000);
+  if (!Number.isFinite(parsed)) return 3000;
+  return Math.max(0, Math.min(15000, Math.floor(parsed)));
+}
+
 function kickWhatsAppApiAgentThread(thread, env = process.env) {
   if (!thread?.id || !threadUsesApiAgent(thread, env) || !whatsappApiAgentAutoRun(env)) return;
   void deliverWhatsAppReplies(env).catch(() => null)
@@ -1193,6 +1201,23 @@ function kickWhatsAppApiAgentThread(thread, env = process.env) {
       ownerUserId: resourceOwnerUserId(thread, env),
       error: error?.message || String(error),
     }, env).catch(() => null));
+}
+
+function scheduleWhatsAppApiAgentThreadKick(thread, env = process.env) {
+  if (!thread?.id || !threadUsesApiAgent(thread, env) || !whatsappApiAgentAutoRun(env)) return;
+  const delayMs = whatsappInboundCoalesceMs(env);
+  if (delayMs <= 0) {
+    kickWhatsAppApiAgentThread(thread, env);
+    return;
+  }
+  const prior = whatsappApiAgentKickTimers.get(thread.id);
+  if (prior) clearTimeout(prior);
+  const timer = setTimeout(() => {
+    whatsappApiAgentKickTimers.delete(thread.id);
+    kickWhatsAppApiAgentThread(thread, env);
+  }, delayMs);
+  if (typeof timer.unref === "function") timer.unref();
+  whatsappApiAgentKickTimers.set(thread.id, timer);
 }
 
 async function routeAutoProvisionedThread(input = {}, config = {}, env = process.env) {
@@ -2366,6 +2391,100 @@ function generatedWhatsAppQueueNoticeText(text = "") {
   ].some((pattern) => pattern.test(value));
 }
 
+function timestampMs(value) {
+  const ms = Date.parse(String(value || ""));
+  return Number.isFinite(ms) ? ms : 0;
+}
+
+function sameWhatsAppInboundSender(left = {}, right = {}) {
+  const leftFrom = pickString(left.from, left.sender, left.author);
+  const rightFrom = pickString(right.from, right.sender, right.author);
+  return !leftFrom || !rightFrom || leftFrom === rightFrom;
+}
+
+function coalescedWhatsAppText(left = "", right = "") {
+  const first = String(left || "").trim();
+  const second = String(right || "").trim();
+  if (!first) return second;
+  if (!second || first.includes(second)) return first;
+  return `${first}\n\n${second}`;
+}
+
+function coalescedWhatsAppAttachments(...groups) {
+  const seen = new Set();
+  const merged = [];
+  for (const group of groups) {
+    for (const attachment of Array.isArray(group) ? group : []) {
+      const key = [
+        pickString(attachment?.path, attachment?.url, attachment?.id),
+        pickString(attachment?.filename, attachment?.name),
+        pickString(attachment?.mimetype, attachment?.type),
+      ].join("\n");
+      if (key.trim() && seen.has(key)) continue;
+      if (key.trim()) seen.add(key);
+      merged.push(attachment);
+    }
+  }
+  return merged;
+}
+
+function recentCoalescibleWhatsAppInput(messages = [], input = {}, env = process.env) {
+  const windowMs = whatsappInboundCoalesceMs(env);
+  if (windowMs <= 0 || pickString(input.promptFile)) return null;
+  const receivedMs = timestampMs(input.receivedAt || input.timestamp) || Date.now();
+  return [...messages].reverse().find((message) => {
+    if (message?.role !== "user") return false;
+    if (message.source !== "whatsapp_inbound" || message.connector !== "whatsapp") return false;
+    if (pickString(message.promptFile)) return false;
+    if (pickString(message.chatId) !== pickString(input.chatId)) return false;
+    if (!sameWhatsAppInboundSender(message, input)) return false;
+    const state = pickString(message.state).toLowerCase();
+    if (state === "failed" || state === "cancelled") return false;
+    const messageMs = timestampMs(message.createdAt || message.timestamp);
+    if (!messageMs || receivedMs - messageMs < 0 || receivedMs - messageMs > windowMs) return false;
+    return !messages.some((candidate) =>
+      candidate?.role === "assistant" &&
+      candidate.parentMessageId === message.id &&
+      candidate.state === "completed"
+    );
+  }) || null;
+}
+
+async function coalesceWhatsAppInboundThreadMessage({ thread, messageInput, eventId, canonicalEventId, routerTraceId, turnId, accountId, env = process.env } = {}) {
+  if (!thread?.id) return null;
+  const messages = await listThreadMessages(thread.id, env).catch(() => []);
+  const existing = recentCoalescibleWhatsAppInput(messages, messageInput, env);
+  if (!existing) return null;
+  const coalescedEventIds = [
+    ...new Set([
+      ...(Array.isArray(existing.coalescedEventIds) ? existing.coalescedEventIds : []),
+      pickString(existing.sourceEventId),
+      eventId,
+    ].filter(Boolean)),
+  ];
+  const patch = {
+    text: coalescedWhatsAppText(existing.text, messageInput.text),
+    attachments: coalescedWhatsAppAttachments(existing.attachments, messageInput.attachments),
+    coalescedEventIds,
+    coalescedAt: new Date().toISOString(),
+    coalescedCount: coalescedEventIds.length,
+  };
+  const message = await updateThreadMessage(thread.id, existing.id, patch, env);
+  await appendEvent({
+    type: "whatsapp_inbound_coalesced",
+    eventId,
+    canonicalEventId,
+    routerTraceId,
+    turnId,
+    threadId: thread.id,
+    messageId: message.id,
+    chatId: pickString(messageInput.chatId),
+    accountId,
+    coalescedCount: patch.coalescedCount,
+  }, env).catch(() => {});
+  return message;
+}
+
 export async function routeWhatsAppInbound(input = {}, env = process.env, fetchImpl = fetch) {
   const config = await readConnectorConfig("whatsapp", env);
   const eventId = pickString(input.eventId, input.id, input.messageId);
@@ -3187,6 +3306,64 @@ export async function routeWhatsAppInbound(input = {}, env = process.env, fetchI
       reason: "no_pending_request",
     };
   }
+  const coalescedMessage = threadId && thread
+    ? await coalesceWhatsAppInboundThreadMessage({
+        thread,
+        messageInput,
+        eventId,
+        canonicalEventId,
+        routerTraceId,
+        turnId,
+        accountId,
+        env,
+      })
+    : null;
+  if (coalescedMessage) {
+    const event = {
+      eventId,
+      canonicalEventId,
+      routerTraceId,
+      turnId,
+      agentId: null,
+      threadId,
+      messageId: coalescedMessage.id,
+      chatId,
+      from,
+      accountId,
+      attachments: Array.isArray(input.attachments) ? input.attachments : [],
+      ...(inboundDedupeKey ? { inboundDedupeKey } : {}),
+      coalesced: true,
+      receivedAt: pickString(input.timestamp, input.receivedAt) || new Date().toISOString(),
+    };
+    state.inboundEvents = [...(state.inboundEvents || []), event];
+    await writeWhatsAppState(state, env);
+    await ensureRouterTurn({ routerTraceId, turnId, connector: "whatsapp", accountId, chatId, eventId, threadId, messageId: coalescedMessage.id, state: "queued" }, env).catch(() => null);
+    await recordRouterTraceEvent({
+      routerTraceId,
+      turnId,
+      connector: "whatsapp",
+      accountId,
+      chatId,
+      sourceEventId: eventId,
+      threadId,
+      messageId: coalescedMessage.id,
+      phase: "queued",
+      reason: "coalesced_inbound_burst",
+    }, env).catch(() => {});
+    if (thread && input.deferApiAgentAutoRun !== true) scheduleWhatsAppApiAgentThreadKick(thread, env);
+    return {
+      duplicate: false,
+      coalesced: true,
+      event,
+      agentId: null,
+      threadId,
+      ownerUserId: resourceOwnerUserId(thread, env),
+      autoProvisioned: threadRoute.autoProvisioned === true,
+      createdThread: threadRoute.createdThread === true,
+      userId: threadRoute.user?.id || null,
+      message: coalescedMessage,
+    };
+  }
   let message = threadId
     ? await enqueueThreadInputForPrincipal(threadId, messageInput, await principalForThread(thread, env), env)
     : await enqueueAgentMessage(agentId, messageInput, env);
@@ -3249,7 +3426,7 @@ export async function routeWhatsAppInbound(input = {}, env = process.env, fetchI
     chatId,
     duplicateReason: contentDuplicate ? event.duplicateReason : "",
   }, env);
-  if (thread && !contentDuplicate && input.deferApiAgentAutoRun !== true) kickWhatsAppApiAgentThread(thread, env);
+  if (thread && !contentDuplicate && input.deferApiAgentAutoRun !== true) scheduleWhatsAppApiAgentThreadKick(thread, env);
   return {
     duplicate: contentDuplicate,
     event,
