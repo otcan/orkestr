@@ -11,7 +11,7 @@
     </header>
 
     <p class="pairing-copy">
-      This browser is not paired with the Orkestr server. Generate a challenge here, then approve that exact challenge from an SSH session on the server.
+      This browser is not paired with the Orkestr server. Generate a challenge here, then run one of the exact approval commands shown below from a trusted terminal.
     </p>
 
     @if (error) {
@@ -49,10 +49,10 @@
       </section>
 
       <section class="ssh-instructions">
-        <h2>Approve From SSH</h2>
+        <h2>Approve With This Exact Command</h2>
         <ol>
           <li>Open a terminal and SSH to the server.</li>
-          <li>Run the approval command inside that SSH session.</li>
+          <li>Copy one complete command below and run it inside that SSH session.</li>
           <li>Return to this tab. It will continue automatically after approval.</li>
         </ol>
         <pre>{{ sshCommand() }}</pre>
@@ -65,7 +65,7 @@
     } @else {
       <section class="empty-challenge">
         <h2>No Challenge Yet</h2>
-        <p>Generate a challenge to start pairing this browser. Access remains blocked until the server approves it.</p>
+        <p>Generate a challenge to get the exact approval command. Access remains blocked until that command is run on the server.</p>
       </section>
     }
   </section>

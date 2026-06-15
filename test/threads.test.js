@@ -5954,7 +5954,7 @@ test("thread input approves a pasted Orkestr pairing page locally before Codex d
       "Challenge ID",
       challenge.challengeId,
       "pending",
-      "Approve From SSH",
+      "Approve With This Exact Command",
       "ssh root@orkestr.example.test",
       `orkestr security approve ${challenge.challengeId}`,
       `sudo orkestr security approve ${challenge.challengeId}`,

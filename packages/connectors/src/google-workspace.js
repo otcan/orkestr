@@ -174,7 +174,8 @@ export async function createGoogleWorkspaceConnectLink({
 
 export function googleWorkspaceConnectMessage({ link = "", expiresAt = "" } = {}) {
   return [
-    "Open this Google Workspace connection link and choose exactly what Orkestr may access:",
+    "Google Workspace is optional. To start it from chat, send this exact command: /connect google",
+    "Then open this one-time link and choose exactly what Orkestr may access:",
     clean(link),
     "",
     "Available capabilities: Gmail read, Gmail actions, Gmail send and drafts, Calendar read, Calendar actions, Drive selected files.",

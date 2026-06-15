@@ -177,7 +177,7 @@ function serveDesktopSharePage(response: any) {
     <p id="status"></p>
     <a id="open" class="button" href="#" hidden>Open desktop</a>
     <a id="mobile" class="button" href="#" hidden>Mobile controls</a>
-    <small>This link only works for this browser after the challenge is pasted back to the Orkestr chat.</small>
+    <small>This link only works for this browser after the exact command below is pasted back to the Orkestr chat.</small>
   </main>
   <script>
     const parts = location.pathname.split('/').filter(Boolean);
@@ -248,7 +248,7 @@ function serveDesktopSharePage(response: any) {
         const body = await json(api('open'));
         const value = body.attempt && body.attempt.challenge ? body.attempt.challenge : '';
         challenge.textContent = 'orkestr desktop approve ' + value;
-        summary.textContent = 'Copy this challenge and paste it into the Orkestr chat that requested the desktop.';
+        summary.textContent = 'Copy this exact command and paste it into the Orkestr chat that requested the desktop.';
         statusNode.textContent = 'Waiting for approval from chat.';
         poll();
       } catch (error) {
