@@ -1280,7 +1280,7 @@ function codexHistoryTimestamp(turn = {}, item = {}, itemIndex = 0) {
 }
 
 function codexAppServerHistorySource(value) {
-  return ["codex-app-server", "codex-app-server-import"].includes(clean(value));
+  return ["codex-rollout", "codex-app-server", "codex-app-server-import"].includes(clean(value));
 }
 
 function completedCodexTurnStatus(value) {

@@ -3048,6 +3048,45 @@ test("Codex app-server history hydration preserves non-final assistant messages"
   assert.ok(messages.find((message) => message.role === "assistant" && message.phase === "final_answer" && message.text === "Final answer survives."));
 });
 
+test("Codex app-server history hydration dedupes existing rollout messages", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-codex-app-server-rollout-dedupe-"));
+  const env = { ORKESTR_HOME: path.join(home, "orkestr") };
+  const thread = await createThread({ id: "app-server-rollout-dedupe-thread", name: "Rollout Dedupe Thread", cwd: home, executorId: "codex", executor: { type: "codex" } }, env);
+  const codexThread = {
+    id: "codex-rollout-dedupe-thread",
+    turns: [
+      {
+        id: "codex-rollout-dedupe-turn",
+        threadId: "codex-rollout-dedupe-thread",
+        status: "completed",
+        items: [
+          { type: "agentMessage", id: "rollout-dedupe-agent", text: "Same answer from rollout.", phase: "final_answer" },
+        ],
+      },
+    ],
+  };
+  const rollout = await appendThreadMessage(thread.id, {
+    role: "assistant",
+    source: "codex-rollout",
+    phase: "final_answer",
+    state: "completed",
+    text: "Same answer from rollout.",
+    codexThreadId: codexThread.id,
+    codexTurnId: "codex-rollout-dedupe-turn",
+  }, env);
+
+  const result = await hydrateCodexAppServerThreadMessages(thread, codexThread, env);
+  const messages = await listThreadMessages(thread.id, env);
+  const replies = messages.filter((message) => message.role === "assistant" && message.text === "Same answer from rollout.");
+
+  assert.equal(result.created, 0);
+  assert.equal(result.updated, 1);
+  assert.equal(replies.length, 1);
+  assert.equal(replies[0].id, rollout.id);
+  assert.equal(replies[0].source, "codex-rollout");
+  assert.equal(replies[0].codexItemId, "rollout-dedupe-agent");
+});
+
 test("Codex app-server history hydration spreads turn-level timestamps across items", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-codex-app-server-history-times-"));
   const env = { ORKESTR_HOME: path.join(home, "orkestr") };
