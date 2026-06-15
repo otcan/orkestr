@@ -246,11 +246,15 @@ orkestr instances --probe
 orkestr update --release --ref <tag-or-main-or-sha> --channel <channel>
 ```
 
-For broker fan-out:
+Release deploys fan out by default to every broker-listed instance that is
+`releaseTrainEnabled` and has a deploy command. Use the explicit flag when you
+want the default to be visible in logs:
 
 ```bash
 orkestr update --release --ref <tag-or-main-or-sha> --channel <channel> --all-instances
 ```
+
+Use `--no-all-instances` only for an intentional local-only deploy.
 
 Completion criteria:
 

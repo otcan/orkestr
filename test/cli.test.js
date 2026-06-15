@@ -1827,8 +1827,9 @@ test("CLI update can run the versioned release deployer", async () => {
   assert.equal(spawned.length, 1);
   assert.equal(spawned[0].command, "bash");
   assert.match(spawned[0].args[0], /scripts\/deploy-git-release\.sh$/);
-  assert.deepEqual(spawned[0].args.slice(1), ["install", "--ref", "v0.1.0-alpha.10", "--channel", "stage", "--no-smoke"]);
+  assert.deepEqual(spawned[0].args.slice(1), ["install", "--ref", "v0.1.0-alpha.10", "--channel", "stage", "--no-smoke", "--all-instances"]);
   assert.equal(spawned[0].env.ORKESTR_RELEASE_DEPLOY, "1");
+  assert.equal(spawned[0].env.ORKESTR_RELEASE_TRAIN_FANOUT, "1");
   assert.equal(spawned[0].env.ORKESTR_DEPLOY_REF, "v0.1.0-alpha.10");
   assert.equal(spawned[0].env.ORKESTR_DEPLOY_CHANNEL, "stage");
   assert.match(stdout.text(), /versioned release update for v0\.1\.0-alpha\.10/);
@@ -1867,6 +1868,7 @@ test("CLI update forwards no-interrupt deploy guard flags", async () => {
     "main",
     "--allow-untagged",
     "--no-smoke",
+    "--all-instances",
     "--wait-active",
     "--active-timeout",
     "30",
@@ -1899,6 +1901,32 @@ test("CLI update forwards release instance fan-out flag", async () => {
   ]);
 });
 
+test("CLI update can opt out of default release instance fan-out", async () => {
+  const spawned = [];
+  const code = await runCli(["update", "--release", "--ref", "main", "--allow-untagged", "--no-all-instances", "--no-smoke"], {
+    env: {},
+    stdout: capture(),
+    stderr: capture(),
+    spawnImpl(command, args, options) {
+      spawned.push({ command, args, env: options.env });
+      const child = new EventEmitter();
+      queueMicrotask(() => child.emit("exit", 0));
+      return child;
+    },
+  });
+
+  assert.equal(code, 0);
+  assert.equal(spawned[0].env.ORKESTR_RELEASE_TRAIN_FANOUT, "0");
+  assert.deepEqual(spawned[0].args.slice(1), [
+    "install",
+    "--ref",
+    "main",
+    "--allow-untagged",
+    "--no-smoke",
+    "--no-all-instances",
+  ]);
+});
+
 test("CLI update can track main as versioned releases", async () => {
   const stdout = capture();
   const spawned = [];
@@ -1918,8 +1946,9 @@ test("CLI update can track main as versioned releases", async () => {
   assert.equal(spawned.length, 1);
   assert.equal(spawned[0].command, "bash");
   assert.match(spawned[0].args[0], /scripts\/deploy-git-release\.sh$/);
-  assert.deepEqual(spawned[0].args.slice(1), ["install", "--ref", "main", "--channel", "main", "--allow-untagged", "--no-smoke"]);
+  assert.deepEqual(spawned[0].args.slice(1), ["install", "--ref", "main", "--channel", "main", "--allow-untagged", "--no-smoke", "--all-instances"]);
   assert.equal(spawned[0].env.ORKESTR_RELEASE_DEPLOY, "1");
+  assert.equal(spawned[0].env.ORKESTR_RELEASE_TRAIN_FANOUT, "1");
   assert.equal(spawned[0].env.ORKESTR_DEPLOY_REF, "main");
   assert.equal(spawned[0].env.ORKESTR_DEPLOY_CHANNEL, "main");
   assert.equal(spawned[0].env.ORKESTR_DEPLOY_TAGS_ONLY, "0");

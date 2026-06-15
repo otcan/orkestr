@@ -43,8 +43,10 @@ Before changing branches, identify:
   user-specified tag.
 - Required checks: at minimum build, unit tests touched by the train, smoke
   checks, and CI.
-- Deployment target: none by default. A deployment target must be named by the
-  user or host config; do not invent private hostnames.
+- Deployment target: the release train default is the local host plus every
+  broker-listed instance that host config marks `releaseTrainEnabled` and gives a
+  deploy command. Do not invent private hostnames; the concrete instance list
+  must come from private host config or broker state.
 
 ## Phase 1: Inventory
 
@@ -227,17 +229,18 @@ When a central broker owns multiple Orkestr instances, the release train must
 inventory them before deployment with `orkestr instances --probe`. Runtime state
 may list additional instances in `release-instances.json` or through
 `ORKESTR_RELEASE_INSTANCES_FILE`; keep real hosts and deploy commands in that
-private state, not in the OSS repo. Instances are updated by fan-out only when
-they are explicitly marked `releaseTrainEnabled` and have a deploy command in
-the broker registry. To deploy eligible remote instances after the local host
-passes health checks, use:
+private state, not in the OSS repo. Release deploys fan out by default after the
+local host passes health checks, but only to instances that are explicitly marked
+`releaseTrainEnabled` and have a deploy command in the broker registry.
+
+Use `--all-instances` when you want the default fan-out to be explicit in logs:
 
 ```bash
 orkestr update --release --ref <tag-or-main-or-sha> --channel <channel> --all-instances
 ```
 
-Without `--all-instances`, the deployer still prints a broker plan so skipped,
-disabled, or commandless instances are visible in the release log.
+Use `--no-all-instances` only for an intentional local-only deploy. Skipped,
+disabled, or commandless instances are still visible in the broker deploy log.
 
 For WhatsApp-routed instances, require the connector accounts that must be live
 after restart:

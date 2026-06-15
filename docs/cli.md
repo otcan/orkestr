@@ -59,6 +59,9 @@ mode. New VPS installs default to versioned `main` tracking, so the short
 command is usually enough. `orkestr rollback` rolls back to the previous
 successful versioned release by default. `orkestr logs` tails
 `orkestr.service`; use `--service`, `--lines`, or `--no-follow` when needed.
+Versioned release deploys fan out by default to every broker-listed instance
+that private host config marks `releaseTrainEnabled` and gives a deploy command;
+use `--no-all-instances` for an intentional local-only deploy.
 
 `orkestr attach` without an argument fetches live threads and asks which thread
 to attach to. This removes the old list-copy-attach workflow.
@@ -95,7 +98,7 @@ release deployer, `--in-place` for the legacy checkout updater, `--ref
 <tag-or-branch>` to choose the git ref, and `--channel <name>` to label a
 release deployment. `--allow-untagged` allows branch/SHA deploys in versioned
 mode; production deploys otherwise require exact tags by default. Versioned
-deploys are no-interrupt by default. On host-native installs, active Codex
+deploys are no-interrupt and all-instances by default. On host-native installs, active Codex
 app-server turns keep running in the separate Codex runtime service while the
 UI/API service restarts. Use `--wait-active` to wait for unsafe legacy runtime
 work, and reserve `--allow-interrupt` for an intentional restart over unsafe

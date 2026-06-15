@@ -88,7 +88,8 @@ Options:
   --deploy-channel CHANNEL       Deploy channel. Default: full-run.
   --deploy-env-file FILE         ORKESTR_ENV_FILE for deploy.
   --deploy-allow-interrupt       Allow deploy restart while work may be active.
-  --deploy-all-instances         Fan out deploy to broker-listed instances.
+  --deploy-all-instances         Fan out deploy to broker-listed instances. This is the default for release deploys.
+  --deploy-no-all-instances      Disable broker fan-out for an intentional local-only deploy.
 
 Environment:
   ORKESTR_FULL_RUN_LAUNCH_CHECK=1
@@ -151,7 +152,7 @@ export function parseFullRunPipelineArgs(argv = process.argv.slice(2), env = pro
     deployChannel: flagValue(argv, "--deploy-channel", "full-run"),
     deployEnvFile: flagValue(argv, "--deploy-env-file"),
     deployAllowInterrupt: hasFlag(argv, "--deploy-allow-interrupt"),
-    deployAllInstances: hasFlag(argv, "--deploy-all-instances"),
+    deployAllInstances: !hasFlag(argv, "--deploy-no-all-instances"),
   };
   options.whatsappReal = !options.skipWhatsappReal && (
     hasFlag(argv, "--whatsapp-real") ||

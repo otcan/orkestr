@@ -54,7 +54,6 @@ test("full run pipeline can include launch, regression, live smoke, and deploy g
     "--deploy-env-file",
     "/etc/orkestr/orkestr.env",
     "--deploy-allow-interrupt",
-    "--deploy-all-instances",
   ], {});
   const stages = fullRunPipelineStages(options).filter((stage) => stage.enabled !== false);
   const ids = stages.map((stage) => stage.id);
@@ -80,6 +79,18 @@ test("full run pipeline requires real WhatsApp e2e before release deploys", () =
   assert.equal(options.whatsappReal, true);
   assert.equal(options.invalid, undefined);
   assert.ok(ids.indexOf("whatsapp-real") < ids.indexOf("deploy"));
+  assert.match(fullRunPipelineStages(options).find((stage) => stage.id === "deploy").args.join(" "), /--all-instances/);
+});
+
+test("full run pipeline can opt out of default release instance fan-out", () => {
+  const options = parseFullRunPipelineArgs([
+    "--deploy-ref",
+    "v0.1.0-alpha.34",
+    "--deploy-no-all-instances",
+  ], {});
+  const deploy = fullRunPipelineStages(options).find((stage) => stage.id === "deploy");
+
+  assert.match(deploy.args.join(" "), /--no-all-instances/);
 });
 
 test("full run pipeline adds isolated demo gates for demo release deploys", () => {

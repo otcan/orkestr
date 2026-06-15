@@ -29,7 +29,7 @@ Environment:
   ORKESTR_DEPLOY_BACKUP_STATE   Back up ORKESTR_HOME before activation. Defaults to 1.
   ORKESTR_DEPLOY_BACKUP_EXCLUDES Space-separated paths under ORKESTR_HOME to omit from backups. Defaults to live runtime/session dirs.
   ORKESTR_DEPLOY_SYNC_WORKERS   Fast-forward and push safe stale worker branches after deploy. Defaults to 1.
-  ORKESTR_RELEASE_TRAIN_FANOUT  Deploy eligible broker-listed instances after local deploy. Defaults to 0.
+  ORKESTR_RELEASE_TRAIN_FANOUT  Deploy eligible broker-listed instances after local deploy. Defaults to 1.
   ORKESTR_RELEASE_REQUIRED_WHATSAPP_ACCOUNTS Space/comma-separated WA accounts that must be ready after restart.
   ORKESTR_RELEASE_WHATSAPP_ACCOUNT_ATTEMPTS Required WhatsApp account retry attempts. Defaults to 12.
   ORKESTR_RELEASE_WHATSAPP_ACCOUNT_RETRY_DELAY_MS Required WhatsApp account retry delay. Defaults to 15000.
@@ -993,7 +993,7 @@ release_train_instance_fanout() {
   local release_dir target_ref fanout
   release_dir="$1"
   target_ref="$2"
-  fanout="$(bool_value "${fanout_arg:-${ORKESTR_RELEASE_TRAIN_FANOUT:-0}}")"
+  fanout="$(bool_value "${fanout_arg:-${ORKESTR_RELEASE_TRAIN_FANOUT:-1}}")"
   if [ ! -f "$release_dir/scripts/release-instance-broker.mjs" ]; then
     echo "Release instance broker skipped: target release does not expose broker script."
     return 0

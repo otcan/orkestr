@@ -1283,6 +1283,7 @@ async function updateInstallCommand(argv, ctx) {
   const checkOnly = argv.includes("--check-only");
   const allInstances = argv.includes("--all-instances");
   const noAllInstances = argv.includes("--no-all-instances");
+  const deployAllInstances = release && !inPlace && !noAllInstances;
   const allowUntagged = trackMain || argv.includes("--allow-untagged") || argv.includes("--allow-untagged-releases");
   const requireTagged = argv.includes("--require-tagged") || argv.includes("--require-tagged-releases");
   const env = { ...ctx.env };
@@ -1293,7 +1294,7 @@ async function updateInstallCommand(argv, ctx) {
   if (channel) env.ORKESTR_DEPLOY_CHANNEL = channel;
   if (release && !inPlace) env.ORKESTR_RELEASE_DEPLOY = "1";
   if (inPlace) env.ORKESTR_RELEASE_DEPLOY = "0";
-  if (allInstances) env.ORKESTR_RELEASE_TRAIN_FANOUT = "1";
+  if (deployAllInstances || allInstances) env.ORKESTR_RELEASE_TRAIN_FANOUT = "1";
   if (noAllInstances) env.ORKESTR_RELEASE_TRAIN_FANOUT = "0";
   if (allowUntagged) env.ORKESTR_DEPLOY_TAGS_ONLY = "0";
   if (requireTagged) env.ORKESTR_DEPLOY_TAGS_ONLY = "1";
@@ -1307,7 +1308,7 @@ async function updateInstallCommand(argv, ctx) {
         ...(allowUntagged ? ["--allow-untagged"] : []),
         ...(requireTagged ? ["--require-tagged"] : []),
         ...(argv.includes("--no-smoke") ? ["--no-smoke"] : []),
-        ...(allInstances ? ["--all-instances"] : []),
+        ...(deployAllInstances || allInstances ? ["--all-instances"] : []),
         ...(noAllInstances ? ["--no-all-instances"] : []),
         ...deployGuardArgs(argv),
         ...(checkOnly ? ["--check-only"] : []),
