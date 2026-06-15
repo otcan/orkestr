@@ -442,23 +442,30 @@ async function runDesktopShareChallenge(options, results, share = {}) {
   const after = Date.now() - 30_000;
 
   let injected = null;
+  let sent = null;
   if (options.manualSend) {
     console.error(`Manual desktop approval mode: send this exact WhatsApp message in ${options.responderChatId}: ${commandText}`);
   } else if (options.injectInbound) {
     injected = await injectResponderInbound(options, results, commandText, "desktop-approve");
   } else {
-    await api(options, "/api/connectors/whatsapp/bridge/send-text", {
+    sent = await api(options, "/api/connectors/whatsapp/bridge/send-text", {
       method: "POST",
       body: {
         accountId: options.senderAccountId,
         chatId: options.senderChatId,
         text: commandText,
         crossAccountEchoSuppression: false,
+        routeSentMessage: true,
       },
     });
   }
+  const routedSent = Array.isArray(sent?.routed) && sent.routed.some((entry) =>
+    clean(entry.threadId) || clean(entry.messageId) || entry.duplicate === true
+  );
 
   const observed = injected
+    ? null
+    : routedSent
     ? null
     : await waitForHistoryMessage(
       options,
@@ -486,6 +493,8 @@ async function runDesktopShareChallenge(options, results, share = {}) {
       commandObservedId: clean(observed?.id),
       commandInjectedEventId: clean(injected?.eventId),
       commandInjectedFrom: clean(injected?.from),
+      commandSentMessageId: clean(sent?.ids?.[0] || sent?.id),
+      commandRouted: routedSent,
       approved: ready.approved === true,
       desktopUrl: clean(ready.desktopUrl),
       manualSend: options.manualSend === true,
@@ -527,9 +536,13 @@ async function runConnectFlow(options, results, startedAt) {
         chatId: options.senderChatId,
         text: commandText,
         crossAccountEchoSuppression: false,
+        routeSentMessage: true,
       },
     });
   const sentIds = new Set((sent?.ids || sent?.sent?.map((item) => item.id) || []).map(clean).filter(Boolean));
+  const routedSent = Array.isArray(sent?.routed) && sent.routed.some((entry) =>
+    clean(entry.threadId) || clean(entry.messageId) || entry.duplicate === true
+  );
   const after = startedAt - 30_000;
   const visibleSender = options.manualSend
     ? null
@@ -544,6 +557,8 @@ async function runConnectFlow(options, results, startedAt) {
     );
   const visibleResponder = injected
     ? null
+    : routedSent
+      ? null
     : await waitForHistoryMessage(
       options,
       options.responderAccountId,
@@ -588,6 +603,7 @@ async function runConnectFlow(options, results, startedAt) {
     sentMessageId: [...sentIds][0] || clean(sent?.id),
     senderVisibleId: clean(visibleSender?.id),
     responderVisibleId: clean(visibleResponder?.id),
+    routedSent,
     injectedEventId: clean(injected?.eventId),
     injectedFrom: clean(injected?.from),
     threadUserMessageId: clean(userMessage.id),

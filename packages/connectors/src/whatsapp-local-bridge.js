@@ -3601,9 +3601,9 @@ async function recoverLocalWhatsAppAccountAfterGroupAdminError(accountId, error,
 }
 
 /**
- * @param {{ chatId?: string, text?: string, accountId?: string, attachments?: Array<Record<string, unknown>>, env?: Record<string, string | undefined> }} [options]
+ * @param {{ chatId?: string, text?: string, accountId?: string, attachments?: Array<Record<string, unknown>>, env?: Record<string, string | undefined>, crossAccountEchoSuppression?: boolean, routeSentMessage?: boolean }} [options]
  */
-export async function sendLocalWhatsAppMessage({ chatId = "", text = "", accountId = "", attachments = [], env = process.env, crossAccountEchoSuppression = true } = {}) {
+export async function sendLocalWhatsAppMessage({ chatId = "", text = "", accountId = "", attachments = [], env = process.env, crossAccountEchoSuppression = true, routeSentMessage = false } = {}) {
   const selectedAccountId = accountId
     ? await normalizeManagedAccountId(accountId, env)
     : localWhatsAppAccountIdsForEnv(env).find((id) => accountStates.get(id)?.ready);
@@ -3616,19 +3616,46 @@ export async function sendLocalWhatsAppMessage({ chatId = "", text = "", account
   }
   await stopLocalWhatsAppTyping({ accountId: selectedAccountId, chatId, env }).catch(() => {});
   const sent = [];
+  const routed = [];
   try {
     const cleanText = String(text || "");
     if (cleanText.trim()) {
-      rememberOutboundText(selectedAccountId, chatId, cleanText, env, { crossAccount: crossAccountEchoSuppression !== false });
+      const routeOwnText = routeSentMessage === true;
+      if (!routeOwnText) {
+        rememberOutboundText(selectedAccountId, chatId, cleanText, env, { crossAccount: crossAccountEchoSuppression !== false });
+      } else {
+        outboundMessageTextKeys.delete(textKey(selectedAccountId, chatId, cleanText));
+        outboundMessageTextKeys.delete(anyAccountTextKey(chatId, cleanText));
+      }
       const message = await sendWhatsAppTextWithConfirmation({
         client: runtime.client,
         chatId,
         text: cleanText,
         env,
       });
-      rememberOutboundMessageId(serializedMessageId(message));
+      const messageId = serializedMessageId(message);
+      if (routeOwnText) {
+        const routableMessage = {
+          ...message,
+          id: message?.id || { _serialized: messageId },
+          fromMe: true,
+          to: message?.to || chatId,
+          body: sentMessageText(message) || cleanText,
+          timestamp: message?.timestamp || Math.floor(Date.now() / 1000),
+        };
+        const result = await handleInboundMessage(selectedAccountId, routableMessage, env, { client: runtime.client });
+        routed.push({
+          id: messageId,
+          threadId: result?.routed?.threadId || "",
+          messageId: result?.routed?.messageId || "",
+          skipped: result?.skipped || result?.routed?.skipped || "",
+          duplicate: result?.routed?.duplicate === true,
+        });
+      } else {
+        rememberOutboundMessageId(messageId);
+      }
       sent.push({
-        id: serializedMessageId(message),
+        id: messageId,
         kind: "text",
       });
     }
@@ -3678,6 +3705,7 @@ export async function sendLocalWhatsAppMessage({ chatId = "", text = "", account
     ids: sent.map((entry) => entry.id).filter(Boolean),
     accountId: selectedAccountId,
     sent,
+    ...(routed.length ? { routed } : {}),
   };
 }
 

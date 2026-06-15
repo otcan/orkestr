@@ -3588,9 +3588,9 @@ async function listThreadMessageSets(env, state = null, config = {}) {
 }
 
 /**
- * @param {{ chatId?: string, text?: string, accountId?: string, attachments?: Array<Record<string, unknown>>, crossAccountEchoSuppression?: boolean, config?: Record<string, unknown> | null, env?: Record<string, string | undefined>, fetchImpl?: typeof fetch }} [options]
+ * @param {{ chatId?: string, text?: string, accountId?: string, attachments?: Array<Record<string, unknown>>, crossAccountEchoSuppression?: boolean, routeSentMessage?: boolean, config?: Record<string, unknown> | null, env?: Record<string, string | undefined>, fetchImpl?: typeof fetch }} [options]
  */
-export async function sendWhatsAppText({ chatId = "", text = "", accountId = "", attachments = [], crossAccountEchoSuppression = true, config = null, env = process.env, fetchImpl = fetch } = {}) {
+export async function sendWhatsAppText({ chatId = "", text = "", accountId = "", attachments = [], crossAccountEchoSuppression = true, routeSentMessage = false, config = null, env = process.env, fetchImpl = fetch } = {}) {
   const resolvedConfig = config || await readConnectorConfig("whatsapp", env).catch(() => ({}));
   const bridgeUrl = configuredBridgeUrl(resolvedConfig, env);
   const normalizedAttachments = Array.isArray(attachments)
@@ -3600,7 +3600,7 @@ export async function sendWhatsAppText({ chatId = "", text = "", accountId = "",
       })).filter((attachment) => attachment.path)
     : [];
   if (!bridgeUrl && bridgeMode(resolvedConfig, env) === "local") {
-    return sendLocalWhatsAppMessage({ chatId, text, accountId, attachments: normalizedAttachments, env, crossAccountEchoSuppression });
+    return sendLocalWhatsAppMessage({ chatId, text, accountId, attachments: normalizedAttachments, env, crossAccountEchoSuppression, routeSentMessage });
   }
   if (!bridgeUrl) throw badRequest("whatsapp_bridge_not_configured");
   const headers = bridgeRequestHeaders(resolvedConfig, env, { "content-type": "application/json" });
@@ -3614,6 +3614,7 @@ export async function sendWhatsAppText({ chatId = "", text = "", accountId = "",
       ...(runtimeAccountId ? { accountId: runtimeAccountId } : {}),
       ...(normalizedAttachments.length ? { paths: normalizedAttachments.map((attachment) => attachment.path) } : {}),
       ...(crossAccountEchoSuppression === false ? { crossAccountEchoSuppression: false } : {}),
+      ...(routeSentMessage === true ? { routeSentMessage: true } : {}),
     }),
     signal: AbortSignal.timeout(Number(env.WHATSAPP_SEND_TIMEOUT_MS || 10_000)),
   });

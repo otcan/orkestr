@@ -1580,6 +1580,70 @@ test("local whatsapp e2e sender sends can be visible to responder routing", asyn
   }
 });
 
+test("local whatsapp real sender sends can route their own sent message when requested", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-route-own-send-"));
+  const env = {
+    ORKESTR_HOME: home,
+    ORKESTR_WHATSAPP_ACCOUNT_IDS: "sender,responder",
+    ORKESTR_WHATSAPP_SEND_CONFIRMATION_REQUIRED: "0",
+    ORKESTR_WHATSAPP_API_AGENT_AUTORUN: "0",
+  };
+  const chatId = "chat-route-own-send@g.us";
+  const text = "/connect google";
+  const sent = [];
+  const senderRuntime = {
+    client: {
+      async sendMessage(to, body) {
+        sent.push({ to, body });
+        return {
+          id: { _serialized: `true_${chatId}_sender-routed` },
+          to,
+          fromMe: true,
+          body,
+          timestamp: 1_780_000_000,
+        };
+      },
+    },
+  };
+
+  try {
+    await createThread({
+      id: "route-own-send-thread",
+      name: "Route Own Send Thread",
+      executorId: "api-agent",
+      executor: { type: "api-agent", metadata: { runtimeKind: "api-agent" } },
+      runtimeKind: "api-agent",
+      binding: {
+        connector: "whatsapp",
+        chatId,
+        enabled: true,
+        senderAccountId: "sender",
+        responderAccountId: "responder",
+        outboundAccountId: "responder",
+        senderContactId: "sender@lid",
+      },
+    }, env);
+    setLocalWhatsAppRuntimeForTest("sender", senderRuntime, {}, env);
+    const result = await sendLocalWhatsAppMessage({
+      accountId: "sender",
+      chatId,
+      text,
+      env,
+      crossAccountEchoSuppression: false,
+      routeSentMessage: true,
+    });
+    const messages = await listThreadMessages("route-own-send-thread", env);
+    const userMessage = messages.find((message) => message.role === "user" && message.text === text);
+
+    assert.ok(sent.some((entry) => entry.to === chatId && entry.body === text));
+    assert.equal(result.routed[0].threadId, "route-own-send-thread");
+    assert.ok(userMessage);
+    assert.equal(userMessage.accountId, "sender");
+  } finally {
+    await resetLocalWhatsAppBridgeForTest(env);
+  }
+});
+
 test("local whatsapp e2e sender sends clear stale cross-account echo keys", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-cross-account-clear-"));
   const env = {
@@ -2730,6 +2794,7 @@ test("whatsapp external sends map numeric public account ids to runtime bridge a
     chatId: "chat-send@g.us",
     text: "/connect google",
     crossAccountEchoSuppression: false,
+    routeSentMessage: true,
     env,
     fetchImpl: async (url, options = {}) => {
       calls.push(url.pathname);
@@ -2748,6 +2813,7 @@ test("whatsapp external sends map numeric public account ids to runtime bridge a
       assert.equal(body.to, "chat-send@g.us");
       assert.equal(body.text, "/connect google");
       assert.equal(body.crossAccountEchoSuppression, false);
+      assert.equal(body.routeSentMessage, true);
       assert.equal(options.headers["x-orkestr-instance-id"], "demo-instance-send");
       return response({ ok: true, ids: ["sent-numeric"] });
     },
