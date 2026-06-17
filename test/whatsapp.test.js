@@ -4206,6 +4206,75 @@ test("whatsapp inbound ignores fromMe attachment echoes already sent by the resp
   ), true);
 });
 
+test("whatsapp inbound ignores fromMe text echoes with rewritten message ids", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-thread-text-echo-"));
+  const env = externalBridgeEnv(home);
+  await writeConnectorConfig("whatsapp", {
+    bridgeMode: "external",
+    bridgeUrl: "http://wa.local",
+    threadRoutes: { "chat-thread-text-echo": "thread-wa-text-echo" },
+  }, env);
+  await createThread({
+    id: "thread-wa-text-echo",
+    name: "WA Text Echo Thread",
+    binding: {
+      connector: "whatsapp",
+      chatId: "chat-thread-text-echo",
+      responderAccountId: "responder",
+      outboundAccountId: "responder",
+      mirrorToWhatsApp: true,
+    },
+  }, env);
+  const parent = await appendThreadMessage("thread-wa-text-echo", {
+    role: "user",
+    source: "whatsapp_inbound",
+    state: "completed",
+    connector: "whatsapp",
+    chatId: "chat-thread-text-echo",
+    accountId: "responder",
+    text: "status please",
+  }, env);
+  await appendThreadMessage("thread-wa-text-echo", {
+    role: "assistant",
+    source: "codex-app-server",
+    phase: "final_answer",
+    state: "completed",
+    parentMessageId: parent.id,
+    chatId: "chat-thread-text-echo",
+    accountId: "responder",
+    text: "Done. I pushed the fix.",
+  }, env);
+
+  await deliverWhatsAppReplies(env, async (url, options) => {
+    const body = JSON.parse(options.body);
+    assert.equal(new URL(url).pathname, "/send-text");
+    assert.equal(body.to, "chat-thread-text-echo");
+    assert.match(body.text, /^Done\. I pushed the fix\./);
+    return response({ ok: true, ids: ["true_chat-thread-text-echo_sent-original"] });
+  });
+
+  const routed = await routeWhatsAppInbound({
+    eventId: "true_chat-thread-text-echo_echo-rewritten",
+    chatId: "chat-thread-text-echo",
+    accountId: "responder",
+    from: "responder@lid",
+    fromMe: true,
+    text: "Done. I pushed the fix.",
+  }, env);
+  const messages = await listThreadMessages("thread-wa-text-echo", env);
+  const traces = await listRouterTraces({ threadId: "thread-wa-text-echo" }, env);
+
+  assert.equal(routed.skipped, "outbound_echo_delivery_text");
+  assert.equal(routed.threadId, "thread-wa-text-echo");
+  assert.equal(routed.event.ignoredReason, "outbound_echo_delivery_text");
+  assert.equal(messages.some((message) => message.externalId === "true_chat-thread-text-echo_echo-rewritten"), false);
+  assert.equal(messages.filter((message) => message.role === "user").length, 1);
+  assert.equal(traces.some((trace) =>
+    trace.routerTraceId === routed.event.routerTraceId &&
+    trace.phases.some((phase) => phase.reason === "outbound_echo_delivery_text")
+  ), true);
+});
+
 test("whatsapp router ignores cross-account outbound attachment delivery acks", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-router-cross-account-attachment-echo-"));
   const env = externalBridgeEnv(home);

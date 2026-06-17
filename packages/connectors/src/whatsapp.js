@@ -947,6 +947,44 @@ function outboundEchoDeliveryForEvent(outboundDeliveries = [], connectorOutboxJo
   }) || null;
 }
 
+function outboundTextEchoTtlMs(env = process.env) {
+  return positiveInteger(
+    pickString(env.ORKESTR_WHATSAPP_OUTBOUND_TEXT_ECHO_TTL_MS, env.ORKESTR_WHATSAPP_OUTBOUND_ECHO_TTL_MS),
+    7 * 24 * 60 * 60 * 1000,
+    1000,
+  );
+}
+
+function outboundDeliveryRecentlySent(delivery = {}, env = process.env, nowMs = Date.now()) {
+  const deliveredAt = pickString(delivery.deliveredAt, delivery.sentAt, delivery.createdAt);
+  const deliveredAtMs = Date.parse(deliveredAt);
+  if (!Number.isFinite(deliveredAtMs)) return false;
+  return Math.abs(nowMs - deliveredAtMs) <= outboundTextEchoTtlMs(env);
+}
+
+function comparableWhatsAppEchoText(value = "") {
+  return comparableWhatsAppBody(comparableWhatsAppVisibleText(value));
+}
+
+function outboundEchoDeliveryForText(outboundDeliveries = [], connectorOutboxJobs = [], input = {}, env = process.env) {
+  if (!inputFromMe(input)) return null;
+  const inputText = comparableWhatsAppEchoText(pickString(input.text, input.body, input.message));
+  if (!inputText) return null;
+  const chatId = pickString(input.chatId, input.chat?.id, input.fromChatId);
+  const accountId = pickString(input.accountId);
+  const nowMs = Date.now();
+  const records = [...(outboundDeliveries || [])];
+  return records.reverse().find((delivery) => {
+    const deliveryChatId = pickString(delivery.chatId);
+    if (chatId && deliveryChatId && chatId !== deliveryChatId) return false;
+    const deliveryAccountId = pickString(delivery.accountId);
+    if (accountId && deliveryAccountId && accountId !== deliveryAccountId) return false;
+    if (!outboundDeliveryRecentlySent(delivery, env, nowMs)) return false;
+    const deliveryText = comparableWhatsAppEchoText(deliveredWhatsAppPayloadText(delivery, connectorOutboxJobs));
+    return deliveryText && deliveryText === inputText;
+  }) || null;
+}
+
 function desktopShareApproveChallengeId(text = "") {
   const value = String(text || "").trim();
   const match = value.match(/^(?:(?:\/?desktop\s+approve|orkestr\s+desktop\s+approve|\/?approve)\s+)?(desk-[A-Za-z0-9_-]{20,})$/i);
@@ -2724,8 +2762,13 @@ export async function routeWhatsAppInbound(input = {}, env = process.env, fetchI
     connector: "whatsapp",
     limit: 1000,
   }, env).catch(() => ({ jobs: [] }))).jobs || [];
-  const outboundEchoDelivery = outboundEchoDeliveryForEvent(state.outboundDeliveries || [], connectorOutboxJobs, input);
+  const outboundEchoDeliveryByAck = outboundEchoDeliveryForEvent(state.outboundDeliveries || [], connectorOutboxJobs, input);
+  const outboundEchoDeliveryByText = outboundEchoDeliveryByAck
+    ? null
+    : outboundEchoDeliveryForText(state.outboundDeliveries || [], connectorOutboxJobs, input, env);
+  const outboundEchoDelivery = outboundEchoDeliveryByAck || outboundEchoDeliveryByText;
   if (outboundEchoDelivery) {
+    const ignoredReason = outboundEchoDeliveryByAck ? "outbound_echo_delivery_ack" : "outbound_echo_delivery_text";
     const event = {
       eventId,
       canonicalEventId,
@@ -2737,7 +2780,7 @@ export async function routeWhatsAppInbound(input = {}, env = process.env, fetchI
       chatId: initialChatId,
       from: pickString(input.from, input.sender, input.author),
       accountId: initialAccountId,
-      ignoredReason: "outbound_echo_delivery_ack",
+      ignoredReason,
       outboundMessageId: pickString(outboundEchoDelivery.messageId),
       outboundDeliveryType: pickString(outboundEchoDelivery.deliveryType),
       connectorOutboxJobId: pickString(outboundEchoDelivery.connectorOutboxJobId),
@@ -2764,7 +2807,7 @@ export async function routeWhatsAppInbound(input = {}, env = process.env, fetchI
       sourceEventId: eventId,
       threadId: pickString(outboundEchoDelivery.threadId) || "",
       phase: "skipped",
-      reason: "outbound_echo_delivery_ack",
+      reason: ignoredReason,
       terminal: true,
     }, env).catch(() => {});
     await appendEvent({
@@ -2780,7 +2823,7 @@ export async function routeWhatsAppInbound(input = {}, env = process.env, fetchI
     }, env).catch(() => {});
     return {
       duplicate: false,
-      skipped: "outbound_echo_delivery_ack",
+      skipped: ignoredReason,
       ignoredOutboundEcho: true,
       event,
       agentId: null,
