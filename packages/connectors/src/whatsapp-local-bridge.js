@@ -1042,6 +1042,10 @@ function attachmentEchoKey(accountId, chatId, attachment = {}) {
   ].join(":");
 }
 
+function anyAccountAttachmentEchoKey(chatId, attachment = {}) {
+  return attachmentEchoKey("*", chatId, attachment);
+}
+
 function attachmentEchoSizeKey(accountId, chatId, attachment = {}) {
   const size = Number(attachment.size);
   if (!Number.isFinite(size) || size <= 0) return "";
@@ -1052,11 +1056,14 @@ function attachmentEchoSizeKey(accountId, chatId, attachment = {}) {
   ].join(":");
 }
 
-function rememberOutboundAttachment(accountId, chatId, attachment = {}, env = process.env) {
+function rememberOutboundAttachment(accountId, chatId, attachment = {}, env = process.env, options = {}) {
   const key = attachmentEchoKey(accountId, chatId, attachment);
+  const crossAccountKey = anyAccountAttachmentEchoKey(chatId, attachment);
   const sizeKey = attachmentEchoSizeKey(accountId, chatId, attachment);
   const rememberedAt = Date.now();
   if (key && !key.endsWith("::")) outboundAttachmentKeys.set(key, rememberedAt);
+  if (options.crossAccount === false) outboundAttachmentKeys.delete(crossAccountKey);
+  else if (crossAccountKey && !crossAccountKey.endsWith("::")) outboundAttachmentKeys.set(crossAccountKey, rememberedAt);
   if (sizeKey && !sizeKey.endsWith("::")) outboundAttachmentSizeKeys.set(sizeKey, rememberedAt);
   pruneOutboundAttachmentKeys(env);
 }
@@ -1068,12 +1075,15 @@ function outboundAttachmentsRecentlySent(accountId, chatId, attachments = [], en
   return items.every((attachment) => {
     const key = attachmentEchoKey(accountId, chatId, attachment);
     if (key && outboundAttachmentKeys.has(key)) return true;
+    const chatKey = anyAccountAttachmentEchoKey(chatId, attachment);
+    if (chatKey && outboundAttachmentKeys.has(chatKey)) return true;
     const sizeKey = attachmentEchoSizeKey(accountId, chatId, attachment);
     return Boolean(options.allowSizeOnly && sizeKey && outboundAttachmentSizeKeys.has(sizeKey));
   });
 }
 
 function inboundAttachmentEchoCandidates(message = {}) {
+  const body = String(message.body || "").trim();
   const names = [
     message.filename,
     message.fileName,
@@ -1081,6 +1091,7 @@ function inboundAttachmentEchoCandidates(message = {}) {
     message._data?.fileName,
     message.rawData?.filename,
     message.mediaData?.filename,
+    message.hasMedia || message.type === "document" ? body : "",
   ].map((value) => String(value || "").trim()).filter(Boolean);
   const seen = new Set();
   return names
@@ -3708,7 +3719,9 @@ export async function sendLocalWhatsAppMessage({ chatId = "", text = "", account
       const MessageMedia = runtime.MessageMedia || (await loadBridgeDependencies()).whatsapp.MessageMedia;
       for (const attachment of normalizedAttachments) {
         const stat = await fs.stat(attachment.path);
-        rememberOutboundAttachment(selectedAccountId, chatId, { ...attachment, size: stat.size }, env);
+        rememberOutboundAttachment(selectedAccountId, chatId, { ...attachment, size: stat.size }, env, {
+          crossAccount: crossAccountEchoSuppression !== false,
+        });
         const media = MessageMedia.fromFilePath(attachment.path);
         const message = await withSendOperationTimeout(
           runtime.client.sendMessage(chatId, media, {

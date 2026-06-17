@@ -3,6 +3,8 @@
 Use only public-safe state, fake prompts, and disposable workspaces when
 recording Orkestr demos.
 
+Recording manifest: [Public demo clip](demo-clip.md).
+
 ## Setup
 
 ```bash
@@ -49,4 +51,3 @@ npm run smoke:k3s:oss-demo
 - Personal WhatsApp bindings, timers, prompts, or deployment details.
 - Claims that Orkestr is a hosted multi-user SaaS or safe to expose raw to the
   public internet.
-

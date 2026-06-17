@@ -1532,6 +1532,119 @@ test("local whatsapp inbound ignores outbound text echoed through another local 
   }
 });
 
+test("local whatsapp inbound ignores outbound attachment echoed through another local account", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-cross-account-attachment-echo-"));
+  const env = {
+    ORKESTR_HOME: home,
+    ORKESTR_WHATSAPP_ACCOUNT_IDS: "sender,responder",
+    ORKESTR_WHATSAPP_SEND_CONFIRMATION_REQUIRED: "0",
+  };
+  const chatId = "chat-cross-account-attachment-echo@g.us";
+  const filename = "orkestr-table-cross-account.csv";
+  const body = "name,value\nalpha,1\n";
+  const attachmentPath = path.join(home, filename);
+  await fs.writeFile(attachmentPath, body);
+  const sent = [];
+  const responderRuntime = {
+    MessageMedia: {
+      fromFilePath(filePath) {
+        return { filePath };
+      },
+    },
+    client: {
+      async sendMessage(to, media, options) {
+        sent.push({ to, media, options });
+        return { id: { _serialized: `true_${chatId}_responder-attachment` } };
+      },
+    },
+  };
+
+  try {
+    setLocalWhatsAppRuntimeForTest("responder", responderRuntime, {}, env);
+    await sendLocalWhatsAppMessage({
+      accountId: "responder",
+      chatId,
+      attachments: [{ path: attachmentPath, filename, mimetype: "text/csv" }],
+      env,
+    });
+
+    const result = await handleInboundMessage("sender", {
+      id: { _serialized: `false_${chatId}_sender-observed-attachment`, remote: chatId },
+      from: chatId,
+      to: "sender@c.us",
+      author: "responder@lid",
+      fromMe: false,
+      body: "",
+      hasMedia: true,
+      type: "document",
+      timestamp: 1_780_000_000,
+      _data: { filename },
+      async downloadMedia() {
+        throw new Error("cross-account attachment echo should be suppressed before download");
+      },
+    }, env);
+
+    assert.equal(sent.length, 1);
+    assert.equal(sent[0].to, chatId);
+    assert.equal(result.skipped, "outbound_echo_cross_account_attachment");
+    assert.equal(result.chatId, chatId);
+  } finally {
+    await resetLocalWhatsAppBridgeForTest(env);
+  }
+});
+
+test("local whatsapp inbound ignores filename-only outbound attachment echoes", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-cross-account-filename-echo-"));
+  const env = {
+    ORKESTR_HOME: home,
+    ORKESTR_WHATSAPP_ACCOUNT_IDS: "sender,responder",
+    ORKESTR_WHATSAPP_SEND_CONFIRMATION_REQUIRED: "0",
+  };
+  const chatId = "chat-cross-account-filename-echo@g.us";
+  const filename = "orkestr-table-filename-only.csv";
+  const attachmentPath = path.join(home, filename);
+  await fs.writeFile(attachmentPath, "a,b\n1,2\n");
+  const responderRuntime = {
+    MessageMedia: {
+      fromFilePath(filePath) {
+        return { filePath };
+      },
+    },
+    client: {
+      async sendMessage() {
+        return { id: { _serialized: `true_${chatId}_responder-filename-attachment` } };
+      },
+    },
+  };
+
+  try {
+    setLocalWhatsAppRuntimeForTest("responder", responderRuntime, {}, env);
+    await sendLocalWhatsAppMessage({
+      accountId: "responder",
+      chatId,
+      attachments: [{ path: attachmentPath, filename, mimetype: "text/csv" }],
+      env,
+    });
+
+    const result = await handleInboundMessage("sender", {
+      id: { _serialized: `false_${chatId}_sender-observed-filename`, remote: chatId },
+      from: chatId,
+      to: "sender@c.us",
+      author: "responder@lid",
+      fromMe: false,
+      body: filename,
+      hasMedia: false,
+      type: "document",
+      timestamp: 1_780_000_001,
+    }, env);
+
+    assert.equal(result.skipped, "outbound_echo_cross_account_attachment");
+    assert.equal(result.chatId, chatId);
+  } finally {
+    await resetLocalWhatsAppBridgeForTest(env);
+  }
+});
+
 test("local whatsapp e2e sender sends can be visible to responder routing", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-cross-account-visible-"));
   const env = {
