@@ -303,7 +303,7 @@ async function prepareOrkestrDemoServer(home) {
   if (serverExit) throw new Error(`Disposable Orkestr server exited during startup: ${JSON.stringify(serverExit)}`);
   await request(baseUrl, "/api/connectors/openai/config", {
     method: "POST",
-    body: JSON.stringify({ openaiApiKey: "sk-public-demo-placeholder" }),
+    body: JSON.stringify({ openaiApiKey: "public-demo-placeholder" }),
   });
   await request(baseUrl, "/api/threads", {
     method: "POST",
