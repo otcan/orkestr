@@ -1,10 +1,21 @@
 # Orkestr
 
-Orkestr is a small self-hosted app around Codex.
+Orkestr is a local-first workstation for running persistent coding and
+operations agents from your laptop, browser, phone, or VPS.
 
 It gives Codex a durable home: persistent threads, browser control, status,
 interruptions, WhatsApp routing, timers, and local ops from a web UI or CLI.
 Codex remains the agent. Orkestr is the control surface around it.
+
+Use Orkestr when one interactive terminal is no longer enough and you need a
+private agent workstation with setup, routing, history, status, and recovery.
+You can run the deterministic coding-agent demo in five minutes with
+`npm run demo:coding-agent`; the full live path then connects your own Codex
+login from `/setup`.
+
+oXRM is the first workflow app built around the same model: an MCP-first
+relationship workspace that gives agents structured relationship memory,
+follow-up queues, and safe human-approved actions.
 
 > Public alpha. The Docker/Helm path is the primary OSS demo path. Browser
 > pairing gates remote access; do not expose raw Orkestr API, thread, desktop,
@@ -27,6 +38,33 @@ Use Orkestr when one terminal Codex session stops being enough:
 - you want a private workstation or VPS instead of a hosted control plane
 
 If you only need one interactive Codex terminal, use Codex directly.
+
+## Why Not Just tmux?
+
+tmux is a great primitive for keeping a terminal alive. Orkestr keeps that
+operator ergonomics but adds the parts people otherwise rebuild around tmux:
+setup, browser and phone control, thread status, interrupt and recovery paths,
+timers, connector routing, persistent history, and a safer localhost-first
+remote-access model.
+
+## How Orkestr And oXRM Fit Together
+
+Orkestr is the local-first workstation for persistent coding and operations
+agents.
+
+oXRM is the first workflow app built for that model: an MCP-first relationship
+workspace that gives agents structured relationship memory, follow-up queues,
+and safe human-approved actions.
+
+Use Orkestr when you need to run and supervise agents. Use oXRM when those
+agents need relationship state.
+
+## What Orkestr Is Not
+
+Orkestr is not a hosted SaaS, a team RBAC platform, a generic chatbot UI, or a
+replacement for Codex. It is also not safe to expose directly to the public
+internet without browser pairing plus a protected remote-access layer such as
+Tailscale, Caddy/TLS, or a VPN.
 
 ## Quickstart
 
@@ -159,12 +197,20 @@ For a live k3s smoke on a host with Docker, Helm, and kubectl:
 ORKESTR_K3S_OSS_DEMO_EXECUTE=1 npm run smoke:k3s:oss-demo
 ```
 
-The older deterministic coding-agent demo is still available for local
-development:
+The deterministic coding-agent demo is still available for local development
+and CI. It uses a temporary `ORKESTR_HOME`, a fake Codex app-server, and does
+not require Codex sign-in or connector credentials:
 
 ```bash
 npm run demo:coding-agent
 ```
+
+Expected result: the command prints `Coding-agent demo passed`, creates a
+temporary `demo-coding-agent` thread, prepares the virtual desktop profile, and
+queues one safe read-only task before cleaning up.
+
+For a real Codex walkthrough that does require Codex sign-in, use
+`examples/coding-agent-demo/README.md`.
 
 ## What Is Included
 
