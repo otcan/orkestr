@@ -32,6 +32,18 @@ The generated README asset combines a generated WhatsApp source panel, a fresh
 TMUX capture, and an Orkestr Web UI rendering. It must not contain real tokens,
 phone numbers, chat IDs, local paths, or private hosts.
 
+## Live Demo Recording
+
+[![Orkestr and oXRM live desktop demo poster](docs/assets/orkestr-oxrm-live-demo.poster.png)](docs/assets/orkestr-oxrm-live-demo.mp4)
+
+The live desktop recording shows Orkestr setup, a queued demo coding-agent
+thread, the oXRM Docker dashboard, and MCP/CLI proof using disposable state and
+synthetic demo data only. Reproduce it with:
+
+```bash
+npm run demo:record:live
+```
+
 ## Why This Exists
 
 Use Orkestr when one terminal Codex session stops being enough:

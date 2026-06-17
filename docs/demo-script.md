@@ -5,6 +5,9 @@ recording Orkestr demos.
 
 Recording manifest: [Public demo clip](demo-clip.md).
 
+Recorded public-safe desktop demo:
+[docs/assets/orkestr-oxrm-live-demo.mp4](assets/orkestr-oxrm-live-demo.mp4).
+
 ## Setup
 
 ```bash
@@ -25,14 +28,20 @@ For the OSS demo contract path:
 npm run smoke:k3s:oss-demo
 ```
 
+To reproduce the checked-in live desktop recording:
+
+```bash
+npm run demo:record:live
+```
+
 ## 60-Second Walkthrough
 
-1. Open the README and explain the split: Orkestr runs agents; oXRM gives
+1. Open with the positioning frame: Orkestr runs agents; oXRM gives
    agents relationship state.
 2. Show `/setup` as the first-run route.
 3. Show a thread view with status, queue, and history.
-4. Show `/ops` or CLI status for service visibility.
-5. Run `npm run demo:coding-agent` and show the pass line.
+4. Show the oXRM dashboard with synthetic demo data.
+5. Show `npm run demo:coding-agent` and MCP read output.
 
 ## 3-Minute Walkthrough
 

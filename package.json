@@ -37,6 +37,7 @@
     "install:local": "bash scripts/install.sh",
     "demo:coding-agent": "node scripts/coding-agent-demo.mjs",
     "demo:record": "node scripts/record-demo.mjs",
+    "demo:record:live": "node scripts/record-orkestr-oxrm-demo.mjs",
     "launch:check": "node scripts/launch-check.mjs",
     "pipeline:full": "node scripts/full-run-pipeline.mjs"
   },
