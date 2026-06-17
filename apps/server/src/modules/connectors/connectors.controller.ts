@@ -494,6 +494,7 @@ export class ConnectorsController {
     const fromMe = optionalBodyBoolean(body, "fromMe", false);
     const from = String(body.from || body.author || "").trim();
     const eventId = String(body.eventId || body.id || `inject_${Date.now()}`).trim();
+    const routeAccountId = String(body.routeAccountId || body.senderAccountId || body.inboundAccountId || "").trim();
     if (!accountId) throw httpError("whatsapp_account_id_required", 400);
     if (!chatId) throw httpError("whatsapp_chat_id_required", 400);
     if (!text) throw httpError("whatsapp_text_required", 400);
@@ -508,7 +509,7 @@ export class ConnectorsController {
       fromMe,
       body: text,
       timestamp,
-    });
+    }, process.env, { routeAccountId });
   }
 
   @Post("whatsapp/inbound")

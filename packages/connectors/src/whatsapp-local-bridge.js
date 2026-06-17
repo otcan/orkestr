@@ -1921,12 +1921,13 @@ export async function handleInboundMessage(accountId, message, env = process.env
   if (outboundAttachmentsRecentlySent(accountId, chatId, attachments, env, { allowSizeOnly: fromMe })) {
     return { skipped: fromMe ? "outbound_echo_attachment" : "outbound_echo_cross_account_attachment", eventId, chatId };
   }
+  const routeAccountId = String(options.routeAccountId || accountId || "").trim();
   const routedText = text || attachmentSummaryText(attachments);
   const inbound = {
     eventId,
     chatId,
     from,
-    accountId,
+    accountId: routeAccountId,
     fromMe: routeFromMe,
     text: routedText,
     attachments,

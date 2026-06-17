@@ -881,6 +881,25 @@ function tokenCountMetadata(payload) {
   return metadata;
 }
 
+function turnContextMetadata(payload) {
+  const metadata = {};
+  const model = normalizeCodexModel(payload?.model);
+  if (model) metadata.codexModel = model;
+  const effort = [
+    payload?.effort,
+    payload?.reasoning_effort,
+    payload?.reasoningEffort,
+    payload?.collaboration_mode?.settings?.reasoning_effort,
+    payload?.collaborationMode?.settings?.reasoningEffort,
+  ].map(normalizeReasoningEffort).find(Boolean);
+  if (effort) metadata.codexReasoningEffort = effort;
+  const provider = String(payload?.model_provider || payload?.modelProvider || "").trim();
+  if (provider && !provider.startsWith("/") && !provider.toLowerCase().endsWith(".jsonl")) {
+    metadata.codexModelProvider = provider;
+  }
+  return metadata;
+}
+
 async function resolveCodexRolloutMetadata(rolloutPath) {
   const filePath = String(rolloutPath || "").trim();
   if (!filePath) return {};
@@ -901,6 +920,9 @@ async function resolveCodexRolloutMetadata(rolloutPath) {
   }
   const lines = body.split("\n");
   if (start > 0) lines.shift();
+  const metadata = {};
+  let foundTokenCount = false;
+  let foundTurnContext = false;
   for (let index = lines.length - 1; index >= 0; index -= 1) {
     const line = lines[index]?.trim();
     if (!line) continue;
@@ -910,11 +932,23 @@ async function resolveCodexRolloutMetadata(rolloutPath) {
     } catch {
       continue;
     }
-    if (parsed?.type !== "event_msg" || parsed.payload?.type !== "token_count") continue;
-    const metadata = tokenCountMetadata(parsed.payload);
-    if (Object.keys(metadata).length) return metadata;
+    if (!foundTokenCount && parsed?.type === "event_msg" && parsed.payload?.type === "token_count") {
+      const tokenMetadata = tokenCountMetadata(parsed.payload);
+      if (Object.keys(tokenMetadata).length) {
+        Object.assign(metadata, tokenMetadata);
+        foundTokenCount = true;
+      }
+    }
+    if (!foundTurnContext && parsed?.type === "turn_context") {
+      const contextMetadata = turnContextMetadata(parsed.payload);
+      if (Object.keys(contextMetadata).length) {
+        Object.assign(metadata, contextMetadata);
+        foundTurnContext = true;
+      }
+    }
+    if (foundTokenCount && foundTurnContext) return metadata;
   }
-  return {};
+  return metadata;
 }
 
 async function resolveCodexThreadMetadataById(id, env = process.env) {

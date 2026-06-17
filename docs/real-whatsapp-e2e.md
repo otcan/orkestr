@@ -6,15 +6,16 @@ running live transport checks. The procedure owns preflight, target validation,
 failure classification, retry decisions, and the public-safe evidence packet.
 
 `npm run e2e:whatsapp-real` is the command primitive for the opt-in live
-acceptance test for a WhatsApp-bound Orkestr thread. In the automated mode it
-sends a real message through a configured sender WhatsApp account, verifies that
-the responder account sees and routes the message, checks that the assistant
-reply is visible in WhatsApp history, opens the desktop share challenge URL,
-approves that challenge through WhatsApp, and exercises desktop lease/share and
-timer watcher APIs.
+acceptance test for a WhatsApp-bound Orkestr thread. In the default automated
+mode it injects inbound test messages into the responder account, using the
+bound sender contact identity for attribution. This keeps the sender account
+isolated while verifying responder-side routing, assistant reply delivery,
+desktop share challenge approval, and timer watcher APIs. Use `--real-send`
+only when the release requires a live sender-account transport check.
 
-The test is disabled by default. It requires `--execute` and explicit live
-targets because it sends real WhatsApp messages.
+The test is disabled by default. It requires `--execute` and explicit targets.
+Default automated mode uses the local bridge injection endpoint; `--real-send`
+and `--manual-send` send real WhatsApp messages.
 
 For the private VM demo acceptance path, use
 `npm run e2e:whatsapp-demo-onboarding`. That test is intentionally
@@ -45,16 +46,19 @@ npm run e2e:whatsapp-real -- --execute \
   --orkestr-home /path/to/orkestr-home \
   --thread onboarding-thread-id \
   --chat-id whatsapp-group-id@g.us \
-  --sender-account sender \
   --responder-account responder \
   --desktop gmail
 ```
 
 The runner preflights WhatsApp account readiness before it leases a desktop or
-sends a message. Automated mode requires both `--sender-account` and
-`--responder-account` to resolve to ready WhatsApp accounts. If the sender is not
-paired, the run fails early with `sender_account_not_ready` and writes the
-account state into the JSON artifact.
+routes a message. Default injected mode requires only `--responder-account` to
+resolve to a ready WhatsApp account. If `--sender-account` is present, it is
+recorded as an observed isolation subject but it is not used to queue test
+messages. `--real-send` switches to live sender-account transport; in that mode
+both `--sender-account` and `--responder-account` must resolve to ready WhatsApp
+accounts. If the sender is not paired in `--real-send` mode, the run fails early
+with `sender_account_not_ready` and writes the account state into the JSON
+artifact.
 
 In attended mode, the sender is a WhatsApp contact in the thread binding, not a
 second bridge session. The runner resolves the binding and discovers authorized
@@ -73,6 +77,9 @@ Useful release modes:
   will send `/connect google` from a real phone/contact in the target WhatsApp
   chat. This still uses real WhatsApp transport and does not call the bridge
   injection endpoint, but it cannot run unattended in CI.
+- Add `--real-send` when automated release evidence must prove that a separate
+  paired sender account can send over live WhatsApp transport. Without this
+  flag, automated runs inject inbound messages into the responder account.
 - Add `--sender-contact <contact-id>` when the target chat has multiple allowed
   people and the test should accept only one real sender.
 - Add `--open-link-in-desktop` to open the generated Google connection link in
@@ -88,10 +95,11 @@ with `--require-oauth-callback` if callback verification is required.
 
 When desktop checks are enabled, the runner also opens the generated public
 desktop-share URL, obtains the `orkestr desktop approve desk-...` challenge,
-sends that challenge into the real WhatsApp chat in automated mode, waits for
-the responder account to observe it, and verifies that the share status exposes
-an approved desktop URL. In `--manual-send` mode the runner prints the approval
-command and waits for an authorized person in the chat to send it.
+injects that challenge into the responder account in default automated mode, and
+verifies that the share status exposes an approved desktop URL. In `--real-send`
+mode it sends the challenge through the sender account and waits for responder
+history. In `--manual-send` mode the runner prints the approval command and
+waits for an authorized person in the chat to send it.
 
 Attended public-VM example:
 

@@ -1571,8 +1571,8 @@ test("local whatsapp e2e sender sends can be visible to responder routing", asyn
 
     assert.equal(sent.length, 1);
     assert.equal(sent[0].to, chatId);
-    assert.notEqual(result.skipped, "outbound_echo_cross_account_text");
-    assert.equal(result.error, "whatsapp_target_required");
+    assert.equal(result.routed.ignoredNonSenderAccount, true);
+    assert.equal(result.routed.skipped, "non_sender_account");
   } finally {
     await resetLocalWhatsAppBridgeForTest(env);
   }
@@ -1619,8 +1619,8 @@ test("local whatsapp e2e sender sends clear stale cross-account echo keys", asyn
     }, env);
 
     assert.equal(sent.length, 2);
-    assert.notEqual(result.skipped, "outbound_echo_cross_account_text");
-    assert.equal(result.error, "whatsapp_target_required");
+    assert.equal(result.routed.ignoredNonSenderAccount, true);
+    assert.equal(result.routed.skipped, "non_sender_account");
   } finally {
     await resetLocalWhatsAppBridgeForTest(env);
   }
@@ -2859,6 +2859,40 @@ test("whatsapp inbound events route to configured agent and dedupe by event id",
   assert.equal(messages[0].attachments[0].kind, "image");
 });
 
+test("whatsapp inbound only queues sender account events", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-inbound-sender-only-"));
+  const env = externalBridgeEnv(home, { ORKESTR_WHATSAPP_ACCOUNT_IDS: "sender,responder" });
+  await createThread({ id: "wa-inbound-sender-only-thread", name: "WA Inbound Sender Only" }, env);
+  await writeConnectorConfig("whatsapp", {
+    threadRoutes: { "chat-sender-only": "wa-inbound-sender-only-thread" },
+  }, env);
+
+  const responderFirst = await routeWhatsAppInbound({
+    eventId: "false_chat-sender-only_msg-1_author",
+    chatId: "chat-sender-only",
+    accountId: "responder",
+    from: "author",
+    text: "How many tasks are open?",
+  }, env);
+  const senderSecond = await routeWhatsAppInbound({
+    eventId: "true_chat-sender-only_msg-1_author",
+    chatId: "chat-sender-only",
+    accountId: "sender",
+    from: "author",
+    text: "How many tasks are open?",
+  }, env);
+  const messages = await listThreadMessages("wa-inbound-sender-only-thread", env);
+  const events = await listEvents(env);
+
+  assert.equal(responderFirst.ignoredNonSenderAccount, true);
+  assert.equal(responderFirst.skipped, "non_sender_account");
+  assert.equal(senderSecond.duplicate, false);
+  assert.equal(messages.length, 1);
+  assert.equal(messages[0].accountId, "sender");
+  assert.equal(messages[0].externalId, "chat-sender-only_msg-1_author");
+  assert.equal(events.some((event) => event.type === "whatsapp_inbound_non_sender_ignored"), true);
+});
+
 test("whatsapp inbound strips pasted debug footers before storing messages", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-inbound-debug-footer-"));
   const env = externalBridgeEnv(home);
@@ -3227,10 +3261,10 @@ test("whatsapp bridge injection ignores cross-account outbound text echoes", asy
       method: "POST",
       headers: { "content-type": "application/json", authorization: "Bearer bridge-e2e-secret" },
       body: JSON.stringify({
-        accountId: "sender",
+        accountId: "responder",
         chatId,
-        from: "responder@lid",
-        eventId: `false_${chatId}_sender-observed-responder`,
+        from: "sender@lid",
+        eventId: `false_${chatId}_responder-observed-sender`,
         text,
       }),
     });
@@ -3255,6 +3289,78 @@ test("whatsapp bridge injection ignores cross-account outbound text echoes", asy
     else process.env.ORKESTR_WHATSAPP_ACCOUNT_IDS = priorAccountIds;
     if (priorConfirmation === undefined) delete process.env.ORKESTR_WHATSAPP_SEND_CONFIRMATION_REQUIRED;
     else process.env.ORKESTR_WHATSAPP_SEND_CONFIRMATION_REQUIRED = priorConfirmation;
+  }
+});
+
+test("whatsapp bridge injection can enter through responder while routing as sender", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-bridge-inject-responder-route-sender-"));
+  const priorHome = process.env.ORKESTR_HOME;
+  const priorAuth = process.env.ORKESTR_AUTH_REQUIRED;
+  const priorBridgeToken = process.env.ORKESTR_WHATSAPP_BRIDGE_TOKEN;
+  const priorAccountIds = process.env.ORKESTR_WHATSAPP_ACCOUNT_IDS;
+  const priorAutorun = process.env.ORKESTR_WHATSAPP_API_AGENT_AUTORUN;
+  process.env.ORKESTR_HOME = home;
+  process.env.ORKESTR_AUTH_REQUIRED = "1";
+  process.env.ORKESTR_WHATSAPP_BRIDGE_TOKEN = "bridge-e2e-secret";
+  process.env.ORKESTR_WHATSAPP_ACCOUNT_IDS = "sender,responder";
+  process.env.ORKESTR_WHATSAPP_API_AGENT_AUTORUN = "0";
+  const chatId = "chat-bridge-inject-route@g.us";
+  await createThread({
+    id: "bridge-inject-route-thread",
+    name: "Bridge Inject Route Thread",
+    executorId: "api-agent",
+    executor: { type: "api-agent", metadata: { runtimeKind: "api-agent" } },
+    runtimeKind: "api-agent",
+    binding: {
+      connector: "whatsapp",
+      chatId,
+      enabled: true,
+      senderAccountId: "sender",
+      responderAccountId: "responder",
+      outboundAccountId: "responder",
+      senderContactId: "sender@lid",
+    },
+  }, process.env);
+
+  const server = await startServer({ port: 0, host: "127.0.0.1" });
+  const { port } = server.address();
+  const baseUrl = `http://127.0.0.1:${port}`;
+  const distBridge = await import("../dist/server/packages/connectors/src/whatsapp-local-bridge.js");
+  distBridge.setLocalWhatsAppRuntimeForTest("responder", { client: {} }, {}, process.env);
+  try {
+    const injected = await fetch(`${baseUrl}/api/connectors/whatsapp/bridge/inject-message`, {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: "Bearer bridge-e2e-secret" },
+      body: JSON.stringify({
+        accountId: "responder",
+        routeAccountId: "sender",
+        chatId,
+        from: "sender@lid",
+        eventId: `false_${chatId}_responder-tool-sender-route`,
+        text: "route as sender",
+      }),
+    });
+    const payload = await injected.json();
+    const messages = await listThreadMessages("bridge-inject-route-thread", process.env);
+
+    assert.equal(injected.status, 202, JSON.stringify(payload));
+    assert.equal(payload.routed.threadId, "bridge-inject-route-thread");
+    assert.equal(messages.length, 1);
+    assert.equal(messages[0].accountId, "sender");
+    assert.equal(messages[0].text, "route as sender");
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+    await distBridge.resetLocalWhatsAppBridgeForTest(process.env);
+    if (priorHome === undefined) delete process.env.ORKESTR_HOME;
+    else process.env.ORKESTR_HOME = priorHome;
+    if (priorAuth === undefined) delete process.env.ORKESTR_AUTH_REQUIRED;
+    else process.env.ORKESTR_AUTH_REQUIRED = priorAuth;
+    if (priorBridgeToken === undefined) delete process.env.ORKESTR_WHATSAPP_BRIDGE_TOKEN;
+    else process.env.ORKESTR_WHATSAPP_BRIDGE_TOKEN = priorBridgeToken;
+    if (priorAccountIds === undefined) delete process.env.ORKESTR_WHATSAPP_ACCOUNT_IDS;
+    else process.env.ORKESTR_WHATSAPP_ACCOUNT_IDS = priorAccountIds;
+    if (priorAutorun === undefined) delete process.env.ORKESTR_WHATSAPP_API_AGENT_AUTORUN;
+    else process.env.ORKESTR_WHATSAPP_API_AGENT_AUTORUN = priorAutorun;
   }
 });
 
@@ -5512,9 +5618,9 @@ test("whatsapp inbound suppresses duplicate active thread inputs by content", as
   assert.equal(messages[0].state, "queued");
 });
 
-test("whatsapp inbound suppresses the same group message seen through sender and responder accounts", async () => {
+test("whatsapp inbound ignores responder copy of a group message after sender queues it", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-cross-account-source-duplicate-"));
-  const env = externalBridgeEnv(home);
+  const env = externalBridgeEnv(home, { ORKESTR_WHATSAPP_ACCOUNT_IDS: "sender,responder" });
   await createThread({ id: "thread-wa-cross-account-source-duplicate", name: "WA Cross Account Source Duplicate" }, env);
   await writeConnectorConfig("whatsapp", {
     threadRoutes: { "chat-cross-account-source-duplicate": "thread-wa-cross-account-source-duplicate" },
@@ -5543,8 +5649,8 @@ test("whatsapp inbound suppresses the same group message seen through sender and
   const messages = await listThreadMessages("thread-wa-cross-account-source-duplicate", env);
 
   assert.equal(first.duplicate, false);
-  assert.equal(second.duplicate, true);
-  assert.equal(second.messageId, first.message.id);
+  assert.equal(second.ignoredNonSenderAccount, true);
+  assert.equal(second.skipped, "non_sender_account");
   assert.equal(messages.filter((message) => message.role === "user").length, 1);
 });
 
@@ -7612,6 +7718,7 @@ test("generated whatsapp bindings listen to the selected sender and answer as th
     text: "selected sender via responder",
   }, env);
   const routed = await routeWhatsAppInbound({ eventId: "wa-generated-routed", chatId: "chat-generated", accountId: "account-1", fromMe: true, text: "selected sender" }, env);
+  const userMessages = (await listThreadMessages("generated-thread", env)).filter((message) => message.role === "user");
   await appendThreadMessage("generated-thread", {
     role: "assistant",
     source: "codex-rollout",
@@ -7629,10 +7736,13 @@ test("generated whatsapp bindings listen to the selected sender and answer as th
     return response({ ok: true, ids: ["sent-generated"] });
   });
 
-  assert.equal(routedViaResponder.threadId, "generated-thread");
+  assert.equal(routedViaResponder.ignoredNonSenderAccount, true);
+  assert.equal(routedViaResponder.skipped, "non_sender_account");
   assert.equal(routed.threadId, "generated-thread");
-  assert.equal(delivery.delivered.length, 2);
-  assert.equal(delivery.delivered.some((entry) => entry.deliveryType === "queue_notice"), true);
+  assert.equal(userMessages.length, 1);
+  assert.equal(userMessages[0].accountId, "account-1");
+  assert.equal(delivery.delivered.length, 1);
+  assert.equal(delivery.delivered.some((entry) => entry.deliveryType === "queue_notice"), false);
   assert.equal(calls.every((call) => call.body.to === "chat-generated"), true);
   assert.equal(calls.every((call) => call.body.accountId === "account-2"), true);
   assert.equal(calls.some((call) => stripDebugFooter(call.body.text) === "generated reply"), true);
@@ -7793,7 +7903,7 @@ test("whatsapp inbound matches saved phone sender against WhatsApp contact ids",
   const routed = await routeWhatsAppInbound({
     eventId: "wa-phone-sender-match",
     chatId: "wa-group-acceptance@g.us",
-    accountId: "responder",
+    accountId: "sender",
     from: senderContactId,
     fromMe: false,
     text: "route check",

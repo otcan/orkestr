@@ -109,6 +109,7 @@ import {
 import {
   canonicalWhatsAppAccountId,
   findWhatsAppAccountByAnyId,
+  whatsappAccountLookupKeys,
 } from "./whatsapp-account-identity.js";
 
 export { formatWhatsAppOutboundText } from "./whatsapp-formatting.js";
@@ -689,6 +690,137 @@ function sameWhatsAppSourceEvent(left = {}, right = {}) {
   const leftChat = pickString(left.chatId);
   const rightChat = pickString(right.chatId);
   return !leftChat || !rightChat || leftChat === rightChat;
+}
+
+function comparableAccountKey(value = "") {
+  return pickString(value).toLowerCase();
+}
+
+function comparableAccountKeys(values = []) {
+  return new Set(values.map(comparableAccountKey).filter(Boolean));
+}
+
+function accountLookupKeys(account = {}, env = process.env) {
+  return whatsappAccountLookupKeys(account || {}, env).map(comparableAccountKey).filter(Boolean);
+}
+
+function activeConnectorAccounts(state = {}) {
+  return (Array.isArray(state.connectorAccounts) ? state.connectorAccounts : [])
+    .filter((account) => account && typeof account === "object" && !account.deletedAt);
+}
+
+function splitAccountList(value = "") {
+  return String(value || "")
+    .split(/[\s,]+/g)
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function findConnectorAccountByAnyId(accounts = [], accountId = "", env = process.env) {
+  return findWhatsAppAccountByAnyId(accounts, accountId, env) || null;
+}
+
+function configuredSenderAccountIds(config = {}, env = process.env) {
+  return [
+    env.ORKESTR_WHATSAPP_INBOUND_ACCOUNT_ID,
+    env.WHATSAPP_INBOUND_ACCOUNT_ID,
+    env.ORKESTR_WHATSAPP_SENDER_ACCOUNT_ID,
+    env.WHATSAPP_SENDER_ACCOUNT_ID,
+    env.ORKESTR_WHATSAPP_SENDER_ROLE,
+    env.WHATSAPP_SENDER_ROLE,
+    config.inboundAccountId,
+    config.senderAccountId,
+    config.senderRole,
+    "sender",
+  ].map((value) => pickString(value)).filter(Boolean);
+}
+
+function configuredResponderAccountIds(config = {}, env = process.env) {
+  return [
+    env.ORKESTR_WHATSAPP_RESPONDER_ACCOUNT_ID,
+    env.WHATSAPP_RESPONDER_ACCOUNT_ID,
+    env.ORKESTR_WHATSAPP_RESPONDER_ROLE,
+    env.WHATSAPP_RESPONDER_ROLE,
+    config.responderAccountId,
+    config.responderRole,
+    "responder",
+  ].map((value) => pickString(value)).filter(Boolean);
+}
+
+function expandedAccountKeys(accountIds = [], accounts = [], env = process.env) {
+  const keys = [];
+  for (const accountId of accountIds) {
+    keys.push(accountId);
+    const account = findConnectorAccountByAnyId(accounts, accountId, env);
+    if (account) keys.push(...accountLookupKeys(account, env));
+  }
+  return comparableAccountKeys(keys);
+}
+
+function accountKeyIntersection(left = new Set(), right = new Set()) {
+  for (const key of left) {
+    if (right.has(key)) return true;
+  }
+  return false;
+}
+
+function senderOnlyInboundConfigured(config = {}, state = {}, env = process.env, accounts = activeConnectorAccounts(state)) {
+  const senderIds = configuredSenderAccountIds(config, env);
+  if (pickString(
+    env.ORKESTR_WHATSAPP_INBOUND_ACCOUNT_ID,
+    env.WHATSAPP_INBOUND_ACCOUNT_ID,
+    env.ORKESTR_WHATSAPP_SENDER_ACCOUNT_ID,
+    env.WHATSAPP_SENDER_ACCOUNT_ID,
+    config.inboundAccountId,
+    config.senderAccountId,
+  )) return true;
+  const configuredAccounts = splitAccountList(env.ORKESTR_WHATSAPP_ACCOUNT_IDS || env.WHATSAPP_LOCAL_ACCOUNT_IDS);
+  if (configuredAccounts.some((accountId) => senderIds.some((senderId) => comparableAccountKey(accountId) === comparableAccountKey(senderId)))) {
+    return true;
+  }
+  return senderIds.some((senderId) => findConnectorAccountByAnyId(accounts, senderId, env));
+}
+
+function whatsappInboundAccountPolicy(input = {}, config = {}, state = {}, env = process.env) {
+  const accountId = pickString(input.accountId);
+  if (!accountId) return { allowed: true };
+  const accounts = activeConnectorAccounts(state);
+  if (!senderOnlyInboundConfigured(config, state, env, accounts)) return { allowed: true };
+  const senderKeys = expandedAccountKeys(configuredSenderAccountIds(config, env), accounts, env);
+  const responderKeys = expandedAccountKeys(configuredResponderAccountIds(config, env), accounts, env);
+  const inputAccount = findConnectorAccountByAnyId(accounts, accountId, env);
+  const inputKeys = comparableAccountKeys([
+    accountId,
+    ...(inputAccount ? accountLookupKeys(inputAccount, env) : accountLookupKeys({ accountId }, env)),
+  ]);
+  if (accountKeyIntersection(inputKeys, senderKeys)) return { allowed: true };
+  if (accountKeyIntersection(inputKeys, responderKeys)) {
+    return {
+      allowed: false,
+      reason: "non_sender_account",
+      expectedAccountId: [...senderKeys][0] || "sender",
+    };
+  }
+  return { allowed: true };
+}
+
+function whatsappBindingInboundAccountPolicy(input = {}, binding = {}, state = {}, env = process.env) {
+  const accountId = pickString(input.accountId);
+  const senderAccountId = pickString(binding.senderAccountId, binding.inboundAccountId);
+  if (!accountId || !senderAccountId) return { allowed: true };
+  const accounts = activeConnectorAccounts(state);
+  const senderKeys = expandedAccountKeys([senderAccountId], accounts, env);
+  const inputAccount = findConnectorAccountByAnyId(accounts, accountId, env);
+  const inputKeys = comparableAccountKeys([
+    accountId,
+    ...(inputAccount ? accountLookupKeys(inputAccount, env) : accountLookupKeys({ accountId }, env)),
+  ]);
+  if (accountKeyIntersection(inputKeys, senderKeys)) return { allowed: true };
+  return {
+    allowed: false,
+    reason: "non_sender_account",
+    expectedAccountId: [...senderKeys][0] || senderAccountId,
+  };
 }
 
 function inputFromMe(input = {}) {
@@ -2206,6 +2338,48 @@ export async function routeWhatsAppInbound(input = {}, env = process.env, fetchI
   }, env).catch(() => {});
 
   const state = await readWhatsAppState(env);
+  const accountPolicy = whatsappInboundAccountPolicy(input, config, state, env);
+  if (!accountPolicy.allowed) {
+    await ensureRouterTurn({
+      routerTraceId: initialTraceId,
+      turnId: initialTurnId,
+      connector: "whatsapp",
+      accountId: initialAccountId,
+      chatId: initialChatId,
+      eventId,
+      threadId: "",
+      state: "skipped",
+    }, env).catch(() => null);
+    await recordRouterTraceEvent({
+      routerTraceId: initialTraceId,
+      turnId: initialTurnId,
+      connector: "whatsapp",
+      accountId: initialAccountId,
+      chatId: initialChatId,
+      sourceEventId: eventId,
+      phase: "skipped",
+      reason: accountPolicy.reason,
+      terminal: true,
+    }, env).catch(() => {});
+    await appendEvent({
+      type: "whatsapp_inbound_non_sender_ignored",
+      eventId,
+      canonicalEventId,
+      routerTraceId: initialTraceId,
+      chatId: initialChatId,
+      accountId: initialAccountId,
+      expectedAccountId: accountPolicy.expectedAccountId || "",
+      reason: accountPolicy.reason,
+    }, env).catch(() => {});
+    return {
+      duplicate: false,
+      skipped: accountPolicy.reason,
+      ignoredNonSenderAccount: true,
+      agentId: null,
+      threadId: null,
+      messageId: null,
+    };
+  }
   const incomingEventIdentity = { eventId, canonicalEventId, chatId: initialChatId };
   const existing = (state.inboundEvents || []).find((event) =>
     event.eventId === eventId || sameWhatsAppSourceEvent(event, incomingEventIdentity)
@@ -2315,6 +2489,52 @@ export async function routeWhatsAppInbound(input = {}, env = process.env, fetchI
   if (!threadRoute.threadId) threadRoute = await routeAutoProvisionedThread(input, config, env);
   const threadId = threadRoute.threadId;
   const agentId = threadId ? "" : routeAgentId(input, config);
+  const bindingAccountPolicy = threadRoute.binding
+    ? whatsappBindingInboundAccountPolicy(input, threadRoute.binding, state, env)
+    : { allowed: true };
+  if (!bindingAccountPolicy.allowed) {
+    await ensureRouterTurn({
+      routerTraceId: initialTraceId,
+      turnId: initialTurnId,
+      connector: "whatsapp",
+      accountId: initialAccountId,
+      chatId: initialChatId,
+      eventId,
+      threadId: threadId || "",
+      state: "skipped",
+    }, env).catch(() => null);
+    await recordRouterTraceEvent({
+      routerTraceId: initialTraceId,
+      turnId: initialTurnId,
+      connector: "whatsapp",
+      accountId: initialAccountId,
+      chatId: initialChatId,
+      sourceEventId: eventId,
+      threadId: threadId || "",
+      phase: "skipped",
+      reason: bindingAccountPolicy.reason,
+      terminal: true,
+    }, env).catch(() => {});
+    await appendEvent({
+      type: "whatsapp_inbound_non_sender_ignored",
+      eventId,
+      canonicalEventId,
+      routerTraceId: initialTraceId,
+      threadId: threadId || null,
+      chatId: initialChatId,
+      accountId: initialAccountId,
+      expectedAccountId: bindingAccountPolicy.expectedAccountId || "",
+      reason: bindingAccountPolicy.reason,
+    }, env).catch(() => {});
+    return {
+      duplicate: false,
+      skipped: bindingAccountPolicy.reason,
+      ignoredNonSenderAccount: true,
+      agentId: null,
+      threadId: threadId || null,
+      messageId: null,
+    };
+  }
   if (!threadId && !agentId) {
     await recordRouterTraceEvent({
       routerTraceId: initialTraceId,
