@@ -1,5 +1,10 @@
 # Orkestr
 
+[![CI](https://github.com/otcan/orkestr/actions/workflows/ci.yml/badge.svg)](https://github.com/otcan/orkestr/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Node 22+](https://img.shields.io/badge/node-22%2B-339933.svg)](package.json)
+[![Local First](https://img.shields.io/badge/default-local--first-111827.svg)](docs/oss-managed-boundary.md)
+
 Orkestr is a local-first workstation for running persistent coding and
 operations agents from your laptop, browser, phone, or VPS.
 
@@ -65,6 +70,16 @@ Orkestr is not a hosted SaaS, a team RBAC platform, a generic chatbot UI, or a
 replacement for Codex. It is also not safe to expose directly to the public
 internet without browser pairing plus a protected remote-access layer such as
 Tailscale, Caddy/TLS, or a VPN.
+
+## Known Limitations
+
+- Public alpha: the first-run loop is still optimized for technical operators.
+- The Docker/Helm OSS demo path is stronger than every host-native edge case.
+- Connector setup depends on user-owned credentials and local browser state.
+- WhatsApp, Gmail, LinkedIn desktop, and timer features should be treated as
+  optional capabilities, not mandatory cloud services.
+- Team RBAC, hosted multi-user SaaS, and plugin marketplace abstractions are
+  intentionally outside V1.
 
 ## Quickstart
 
@@ -241,6 +256,7 @@ flowchart LR
 ```
 
 More detail: [docs/architecture.md](docs/architecture.md).
+One-glance diagram: [docs/architecture-diagram.md](docs/architecture-diagram.md).
 
 ## Security Model
 
@@ -310,6 +326,9 @@ See [docs/oss-managed-boundary.md](docs/oss-managed-boundary.md).
 - [Framework and deployment](docs/framework-deployment.md)
 - [LLM-assisted release procedures](docs/llm-assisted-release-procedures.md)
 - [OSS vs managed boundary](docs/oss-managed-boundary.md)
+- [Architecture diagram](docs/architecture-diagram.md)
+- [Demo script](docs/demo-script.md)
+- [Minimal landing page](docs/landing-page.md)
 - [Secret manager](docs/secret-manager.md)
 - [Security](SECURITY.md)
 - [Contributing](CONTRIBUTING.md)
