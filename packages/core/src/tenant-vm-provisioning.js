@@ -80,8 +80,12 @@ function runtimeEnv(input = {}, env = process.env) {
     clean(source.ORKESTR_DEMO_MODE) ||
     clean(input.whatsappNumber || input.demoWhatsappNumber || env.ORKESTR_DEMO_WHATSAPP_NUMBER) ||
     clean(input.brokerBaseUrl || input.demoBrokerBaseUrl || env.ORKESTR_DEMO_BROKER_BASE_URL || env.ORKESTR_BROKER_BASE_URL);
+  const port = clean(input.port || input.orkestrPort || source.ORKESTR_PORT || env.ORKESTR_PORT || env.PORT || "19812");
   const values = {
     ORKESTR_DEMO_MODE: demoEnabled ? "1" : "",
+    ORKESTR_HOME: demoEnabled ? input.orkestrHome || source.ORKESTR_HOME || "/opt/orkestr/data" : "",
+    ORKESTR_PORT: demoEnabled ? port : "",
+    PORT: demoEnabled ? source.PORT || port : "",
     ORKESTR_DEMO_WHATSAPP_NUMBER: demoEnabled ? input.whatsappNumber || input.demoWhatsappNumber || env.ORKESTR_DEMO_WHATSAPP_NUMBER : "",
     ORKESTR_DEMO_BROKER_BASE_URL: demoEnabled ? input.brokerBaseUrl || input.demoBrokerBaseUrl || env.ORKESTR_DEMO_BROKER_BASE_URL || env.ORKESTR_BROKER_BASE_URL : "",
     ORKESTR_CONNECT_PUBLIC_BASE_URL: demoEnabled ? input.connectPublicBaseUrl || input.publicConnectBaseUrl || env.ORKESTR_CONNECT_PUBLIC_BASE_URL : "",

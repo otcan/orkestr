@@ -411,8 +411,11 @@ export async function ensureBrokerClientRegistration(env = process.env, options 
   const paths = await ensureDataDirs(env);
   const brokerBaseUrl = clean(env.ORKESTR_DEMO_BROKER_BASE_URL || env.ORKESTR_BROKER_BASE_URL || options.brokerBaseUrl);
   if (!brokerBaseUrl) return { ok: false, reason: "broker_base_url_missing" };
+  const whatsappNumber = clean(env.ORKESTR_DEMO_WHATSAPP_NUMBER || env.ORKESTR_DEMO_WA_NUMBER);
+  const whatsappTargetHash = brokerWhatsAppChatHash({ whatsappNumber });
   const cached = await readJson(paths.brokerClientRegistration, null);
-  if (cached?.instanceId && cached?.channelId && cached?.brokerBaseUrl === brokerBaseUrl && !truthy(env.ORKESTR_BROKER_FORCE_REREGISTER)) {
+  const cacheMatchesTarget = !whatsappTargetHash || cached?.whatsappTargetHash === whatsappTargetHash;
+  if (cached?.instanceId && cached?.channelId && cached?.brokerBaseUrl === brokerBaseUrl && cacheMatchesTarget && !truthy(env.ORKESTR_BROKER_FORCE_REREGISTER)) {
     return { ok: true, reused: true, ...cached };
   }
   const client = await ensureClientIdentity(env);
@@ -433,7 +436,7 @@ export async function ensureBrokerClientRegistration(env = process.env, options 
     endpointBaseUrl: clean(env.ORKESTR_DEMO_INTERNAL_BASE_URL || env.ORKESTR_API_BASE || env.ORKESTR_PUBLIC_APP_URL),
     connectBaseUrl: clean(env.ORKESTR_CONNECT_PUBLIC_BASE_URL || env.ORKESTR_DEMO_PUBLIC_BASE_URL),
     setupUrl: clean(env.ORKESTR_CONNECT_PUBLIC_SETUP_URL || env.ORKESTR_DEMO_PUBLIC_SETUP_URL),
-    whatsappNumber: clean(env.ORKESTR_DEMO_WHATSAPP_NUMBER || env.ORKESTR_DEMO_WA_NUMBER),
+    whatsappNumber,
   };
   const response = await fetchImpl(url, {
     method: "POST",
@@ -464,6 +467,7 @@ export async function ensureBrokerClientRegistration(env = process.env, options 
     brokerKeyId: payload.broker.keyId || "",
     brokerPublicKey: payload.broker.publicKey,
     clientKeyId: client.keyId,
+    whatsappTargetHash,
     registeredAt: payload.registeredAt || nowIso(),
     updatedAt: nowIso(),
   };

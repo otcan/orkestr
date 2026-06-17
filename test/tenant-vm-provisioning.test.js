@@ -74,6 +74,35 @@ test("tenant VM provisioning builds a public-safe KubeVirt plan", async () => {
   assert.equal(plan.manifest.includes("token"), false);
 });
 
+test("tenant VM demo cloud-init includes local Orkestr port for the notifier", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-tenant-vm-demo-env-"));
+  const env = { ORKESTR_HOME: home };
+  const tenantVm = await createTenantVm({
+    id: "demo-tenant",
+    ownerUserId: "demo",
+    kubevirt: { namespace: "demo", vmName: "demo-vm" },
+  }, env);
+
+  const plan = buildTenantVmProvisioningPlan(tenantVm, {
+    demoMode: true,
+    whatsappNumber: "+49 176 123456",
+    brokerBaseUrl: "https://connect.example.test",
+  }, env);
+  const manifest = JSON.parse(plan.manifest);
+  const cloudInitSecret = manifest.items.find((item) => item.kind === "Secret" && item.metadata.name === "demo-vm-cloudinit");
+  const userData = cloudInitSecret.stringData.userdata;
+  const envFile = Buffer.from(
+    userData.match(/path: \/etc\/orkestr\/orkestr\.env[\s\S]*?content: ([A-Za-z0-9+/=]+)/)[1],
+    "base64",
+  ).toString("utf8");
+
+  assert.match(envFile, /^ORKESTR_HOME='\/opt\/orkestr\/data'$/m);
+  assert.match(envFile, /^ORKESTR_PORT='19812'$/m);
+  assert.match(envFile, /^PORT='19812'$/m);
+  assert.match(envFile, /^ORKESTR_DEMO_WHATSAPP_NUMBER='\+49 176 123456'$/m);
+  assert.doesNotMatch(envFile, /whatsappChatHash|chatId/i);
+});
+
 test("tenant VM provisioning execute path applies manifest and updates registry status", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-tenant-vm-provision-exec-"));
   const env = { ORKESTR_HOME: home };

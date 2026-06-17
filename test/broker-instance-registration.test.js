@@ -8,6 +8,7 @@ import {
   __brokerInstanceRegistryTestInternals,
   encryptBrokerChannelPayload,
   decryptBrokerInstanceRequest,
+  ensureBrokerClientRegistration,
   heartbeatBrokerInstance,
   listBrokerInstances,
   registerBrokerInstance,
@@ -111,6 +112,52 @@ test("broker registry persists instances in sqlite and redacts routing metadata"
   assert.equal(JSON.stringify(listed).includes("+49 176 123456"), false);
   assert.equal(resolved.ok, true);
   assert.equal(resolved.instance.instanceId, registration.instanceId);
+});
+
+test("broker client registration cache is scoped to the declared WhatsApp number", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-broker-client-cache-"));
+  const calls = [];
+  const env = {
+    ORKESTR_HOME: home,
+    ORKESTR_DEMO_BROKER_BASE_URL: "https://broker.example.test",
+    ORKESTR_DEMO_WHATSAPP_NUMBER: "+49 176 111111",
+  };
+  const fetchImpl = async (url, options = {}) => {
+    calls.push({ url, body: JSON.parse(options.body) });
+    return {
+      ok: true,
+      status: 200,
+      async json() {
+        return {
+          ok: true,
+          instanceId: `instance-${calls.length}`,
+          channelId: `channel-${calls.length}`,
+          registeredAt: "2026-06-11T00:00:00.000Z",
+          broker: {
+            keyId: "broker-key-1",
+            publicKey: "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VuAyEA2IFd3Rdi7NTih5q0Glq82pzgjEycOnu/MpuxJdGzGn4=\n-----END PUBLIC KEY-----\n",
+          },
+        };
+      },
+    };
+  };
+
+  const first = await ensureBrokerClientRegistration(env, { fetchImpl });
+  const second = await ensureBrokerClientRegistration(env, { fetchImpl });
+  const third = await ensureBrokerClientRegistration({
+    ...env,
+    ORKESTR_DEMO_WHATSAPP_NUMBER: "+49 176 222222",
+  }, { fetchImpl });
+  const cached = JSON.parse(await fs.readFile(path.join(home, "secrets", "broker-client-registration.json"), "utf8"));
+
+  assert.equal(first.reused, false);
+  assert.equal(second.reused, true);
+  assert.equal(third.reused, false);
+  assert.equal(calls.length, 2);
+  assert.equal(calls[0].body.whatsappNumber, "+49 176 111111");
+  assert.equal(calls[1].body.whatsappNumber, "+49 176 222222");
+  assert.equal(cached.whatsappTargetHash.length, 64);
+  assert.equal(JSON.stringify(cached).includes("49176"), false);
 });
 
 test("broker registration rejects missing token and enforces use/rate limits", async () => {
