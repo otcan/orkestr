@@ -287,7 +287,7 @@ export function buildTenantVmProvisioningPlan(vm, input = {}, env = process.env)
               networks: [{ name: "default", pod: {} }],
               volumes: [
                 { name: "rootdisk", dataVolume: { name: `${vmName}-rootdisk` } },
-                { name: "cloudinitdisk", cloudInitNoCloud: { userDataSecretRef: { name: cloudInitSecretName } } },
+                { name: "cloudinitdisk", cloudInitNoCloud: { secretRef: { name: cloudInitSecretName } } },
               ],
             },
           },

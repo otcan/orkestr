@@ -51,7 +51,7 @@ test("tenant VM provisioning builds a public-safe KubeVirt plan", async () => {
   assert.equal(vm.spec.template.spec.domain.resources.requests.memory, "8192Mi");
   assert.equal(vm.spec.dataVolumeTemplates[0].spec.pvc.resources.requests.storage, "100Gi");
   assert.match(vm.spec.dataVolumeTemplates[0].spec.source.http.url, /noble-server-cloudimg-amd64\.img/);
-  assert.deepEqual(cloudInitVolume, { userDataSecretRef: { name: "alice-vm-cloudinit" } });
+  assert.deepEqual(cloudInitVolume, { secretRef: { name: "alice-vm-cloudinit" } });
   assert.ok(userData.length > 2048);
   assert.match(userData, /bootstrap-vps\.sh/);
   assert.match(userData, /write_files:/);
