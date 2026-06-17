@@ -90,7 +90,7 @@ test("broker registry persists instances in sqlite and redacts routing metadata"
       endpointBaseUrl: "http://10.0.0.12:19822",
       connectBaseUrl: "https://connect.orkestr.de",
       relayAccountId: "responder",
-      whatsappChatHash: "hash-only",
+      whatsappNumber: "+49 176 123456",
     },
   });
 
@@ -107,6 +107,8 @@ test("broker registry persists instances in sqlite and redacts routing metadata"
   assert.equal(listed.instances[0].relayAccountId, "responder");
   assert.equal(listed.instances[0].whatsappChatHashConfigured, true);
   assert.equal(listed.instances[0].whatsappChatHash, undefined);
+  assert.equal(JSON.stringify(listed).includes("49176123456"), false);
+  assert.equal(JSON.stringify(listed).includes("+49 176 123456"), false);
   assert.equal(resolved.ok, true);
   assert.equal(resolved.instance.instanceId, registration.instanceId);
 });
@@ -216,10 +218,9 @@ test("broker heartbeat requires encrypted channel payload", async () => {
   assert.ok(instances.instances[0].lastHeartbeatAt);
 });
 
-test("broker instance WhatsApp requests are encrypted and scoped to registered chat hash", async () => {
+test("broker instance WhatsApp requests are encrypted and scoped to registered WhatsApp number", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-broker-wa-request-"));
   const client = __brokerInstanceRegistryTestInternals.createX25519Identity();
-  const chatId = "4917600000000@c.us";
   const env = {
     ORKESTR_HOME: home,
     ORKESTR_BROKER_REGISTRATION_TOKEN: "register-secret",
@@ -230,14 +231,14 @@ test("broker instance WhatsApp requests are encrypted and scoped to registered c
     body: {
       encryptionPublicKey: client.publicKey,
       relayAccountId: "responder",
-      whatsappChatHash: crypto.createHash("sha256").update(chatId).digest("hex"),
+      whatsappNumber: "+49 176 0000000",
     },
   });
 
   const body = {
     channelId: registration.channelId,
     envelope: encryptBrokerChannelPayload({
-      chatId,
+      whatsappNumber: "+49 176 0000000",
       text: "hello",
     }, {
       clientPrivateKey: client.privateKey,
@@ -249,7 +250,7 @@ test("broker instance WhatsApp requests are encrypted and scoped to registered c
 
   assert.equal(decrypted.record.instanceId, registration.instanceId);
   assert.equal(decrypted.record.relayAccountId, "responder");
-  assert.equal(decrypted.payload.chatId, chatId);
+  assert.equal(decrypted.payload.whatsappNumber, "+49 176 0000000");
   assert.equal(decrypted.payload.text, "hello");
 
   await assert.rejects(

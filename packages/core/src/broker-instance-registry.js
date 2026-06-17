@@ -26,6 +26,22 @@ function sha256(value) {
   return crypto.createHash("sha256").update(String(value || "")).digest("hex");
 }
 function hashBuffer(value) { return crypto.createHash("sha256").update(value).digest("hex"); }
+function normalizeWhatsAppNumberTarget(value = "") {
+  const text = clean(value);
+  if (!text) return "";
+  const digits = text.replace(/[^\d]/g, "");
+  return digits ? `${digits}@c.us` : "";
+}
+function brokerWhatsAppChatHash(body = {}) {
+  const chatId = normalizeWhatsAppNumberTarget(
+    body.whatsappNumber ||
+      body.targetWhatsAppNumber ||
+      body.whatsappPhoneNumber ||
+      body.targetPhoneNumber ||
+      "",
+  );
+  return chatId ? sha256(chatId) : "";
+}
 function safeEqual(left, right) {
   const leftBuffer = Buffer.from(String(left || ""), "utf8");
   const rightBuffer = Buffer.from(String(right || ""), "utf8");
@@ -243,7 +259,7 @@ export async function registerBrokerInstance({ body = {}, request = {}, env = pr
     connectBaseUrl: clean(body.connectBaseUrl || body.publicBaseUrl || body.publicUrl).slice(0, 500),
     setupUrl: clean(body.setupUrl || body.publicSetupUrl).slice(0, 800),
     relayAccountId: clean(body.relayAccountId || body.whatsappRelayAccountId).slice(0, 120),
-    whatsappChatHash: clean(body.whatsappChatHash || body.targetChatHash).slice(0, 128),
+    whatsappChatHash: brokerWhatsAppChatHash(body),
     createdAt,
     lastSeenAt: createdAt,
     limits: {
@@ -409,22 +425,23 @@ export async function ensureBrokerClientRegistration(env = process.env, options 
       options.registrationToken ||
       "",
   );
+  const registrationBody = {
+    displayName: clean(env.ORKESTR_DEMO_INSTANCE_NAME || env.ORKESTR_SERVICE_NAME || os.hostname()),
+    version: clean(env.ORKESTR_VERSION || env.npm_package_version),
+    capabilities: ["demo-onboarding", "pairing-challenge"],
+    encryptionPublicKey: client.publicKey,
+    endpointBaseUrl: clean(env.ORKESTR_DEMO_INTERNAL_BASE_URL || env.ORKESTR_API_BASE || env.ORKESTR_PUBLIC_APP_URL),
+    connectBaseUrl: clean(env.ORKESTR_CONNECT_PUBLIC_BASE_URL || env.ORKESTR_DEMO_PUBLIC_BASE_URL),
+    setupUrl: clean(env.ORKESTR_CONNECT_PUBLIC_SETUP_URL || env.ORKESTR_DEMO_PUBLIC_SETUP_URL),
+    whatsappNumber: clean(env.ORKESTR_DEMO_WHATSAPP_NUMBER || env.ORKESTR_DEMO_WA_NUMBER),
+  };
   const response = await fetchImpl(url, {
     method: "POST",
     headers: {
       "content-type": "application/json",
       ...(token ? { authorization: `Bearer ${token}` } : {}),
     },
-    body: JSON.stringify({
-      displayName: clean(env.ORKESTR_DEMO_INSTANCE_NAME || env.ORKESTR_SERVICE_NAME || os.hostname()),
-      version: clean(env.ORKESTR_VERSION || env.npm_package_version),
-      capabilities: ["demo-onboarding", "pairing-challenge"],
-      encryptionPublicKey: client.publicKey,
-      endpointBaseUrl: clean(env.ORKESTR_DEMO_INTERNAL_BASE_URL || env.ORKESTR_API_BASE || env.ORKESTR_PUBLIC_APP_URL),
-      connectBaseUrl: clean(env.ORKESTR_CONNECT_PUBLIC_BASE_URL || env.ORKESTR_DEMO_PUBLIC_BASE_URL),
-      setupUrl: clean(env.ORKESTR_CONNECT_PUBLIC_SETUP_URL || env.ORKESTR_DEMO_PUBLIC_SETUP_URL),
-      whatsappChatHash: clean(env.ORKESTR_DEMO_WHATSAPP_CHAT_HASH),
-    }),
+    body: JSON.stringify(registrationBody),
   });
   let payload = null;
   try {

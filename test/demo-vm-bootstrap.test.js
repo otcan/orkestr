@@ -79,7 +79,8 @@ test("demo VM notifier sends one broker-routed readiness message and seeds relay
       const body = JSON.parse(options.body);
       assert.match(body.encryptionPublicKey, /BEGIN PUBLIC KEY/);
       assert.equal(body.instanceId, undefined);
-      assert.match(body.whatsappChatHash, /^[a-f0-9]{64}$/);
+      assert.equal(body.whatsappNumber, "+49 176 123456");
+      assert.equal(body.whatsappChatHash, undefined);
       assert.equal(body.relayAccountId, undefined);
       return response(brokerRegistrationPayload());
     }

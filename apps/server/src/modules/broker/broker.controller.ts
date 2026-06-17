@@ -22,14 +22,26 @@ function sha256(value: string): string {
   return crypto.createHash("sha256").update(String(value || "")).digest("hex");
 }
 
+function whatsAppChatIdFromNumber(value: unknown): string {
+  const digits = clean(value).replace(/[^\d]/g, "");
+  return digits ? `${digits}@c.us` : "";
+}
+
 function brokerWhatsAppAccountId(record: any): string {
   return clean(record.relayAccountId || process.env.ORKESTR_BROKER_WHATSAPP_RELAY_ACCOUNT_ID || process.env.ORKESTR_WHATSAPP_RESPONDER_ACCOUNT_ID || "responder");
 }
 
-function assertRegisteredChat(record: any, payload: any): string {
-  const chatId = clean(payload.chatId || payload.to);
-  if (!chatId) throw httpError("broker_whatsapp_chat_id_required", 400);
+function assertRegisteredWhatsAppNumber(record: any, payload: any): string {
+  const chatId = whatsAppChatIdFromNumber(
+    payload.whatsappNumber ||
+      payload.targetWhatsAppNumber ||
+      payload.whatsappPhoneNumber ||
+      payload.targetPhoneNumber ||
+      payload.toPhoneNumber,
+  );
+  if (!chatId) throw httpError("broker_whatsapp_number_required", 400);
   const expectedHash = clean(record.whatsappChatHash);
+  if (!expectedHash) throw httpError("broker_whatsapp_target_not_registered", 403);
   if (expectedHash && sha256(chatId) !== expectedHash) throw httpError("broker_whatsapp_chat_denied", 403);
   return chatId;
 }
@@ -83,7 +95,7 @@ export class BrokerController {
     @Body() body: Record<string, unknown> = {},
   ) {
     const { record, payload } = await brokerCall(() => decryptBrokerInstanceRequest(instanceId, body, process.env));
-    const chatId = assertRegisteredChat(record, payload);
+    const chatId = assertRegisteredWhatsAppNumber(record, payload);
     const text = clean(payload.text);
     if (!text) throw httpError("broker_whatsapp_text_required", 400);
     const accountId = brokerWhatsAppAccountId(record);
@@ -104,7 +116,7 @@ export class BrokerController {
     @Body() body: Record<string, unknown> = {},
   ) {
     const { record, payload } = await brokerCall(() => decryptBrokerInstanceRequest(instanceId, body, process.env));
-    const chatId = assertRegisteredChat(record, payload);
+    const chatId = assertRegisteredWhatsAppNumber(record, payload);
     const accountId = brokerWhatsAppAccountId(record);
     const history = await brokerCall(() => getWhatsAppChatMessages({
       accountId,

@@ -1,5 +1,4 @@
 import assert from "node:assert/strict";
-import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -285,24 +284,12 @@ test("real WhatsApp E2E builds desktop-share API URLs from wildcard public links
   );
 });
 
-test("real WhatsApp demo onboarding derives direct chat ids from phone numbers", () => {
+test("real WhatsApp demo onboarding normalizes direct phone numbers", () => {
   assert.deepEqual(
     normalizeDirectWhatsAppTarget({ phoneNumber: "+49 176 0000000" }),
     {
-      chatId: "491760000000@c.us",
       phoneNumber: "+49 176 0000000",
       phoneDigits: "491760000000",
-      derivedChatId: "491760000000@c.us",
-    },
-  );
-
-  assert.deepEqual(
-    normalizeDirectWhatsAppTarget({ chatId: "4917600000000@c.us" }),
-    {
-      chatId: "4917600000000@c.us",
-      phoneNumber: "+4917600000000",
-      phoneDigits: "",
-      derivedChatId: "",
     },
   );
 });
@@ -313,7 +300,6 @@ test("real WhatsApp demo onboarding sends through broker registered WA router", 
   const priorPublic = process.env.ORKESTR_CONNECT_PUBLIC_BASE_URL;
   const calls = [];
   const instanceId = "11111111-2222-4333-8444-555555555555";
-  const chatId = "491760000000@c.us";
   const brokerPublicKey = "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VuAyEA2IFd3Rdi7NTih5q0Glq82pzgjEycOnu/MpuxJdGzGn4=\n-----END PUBLIC KEY-----\n";
   process.env.ORKESTR_DEMO_BROKER_BASE_URL = "https://broker.example.test";
   process.env.ORKESTR_CONNECT_PUBLIC_BASE_URL = "https://connect.example.test";
@@ -323,7 +309,8 @@ test("real WhatsApp demo onboarding sends through broker registered WA router", 
     calls.push({ url: parsed, request });
     if (parsed.pathname === "/api/broker/instances/register") {
       const body = JSON.parse(String(request.body || "{}"));
-      assert.equal(body.whatsappChatHash, crypto.createHash("sha256").update(chatId).digest("hex"));
+      assert.equal(body.whatsappNumber, "+49 176 000000");
+      assert.equal(body.whatsappChatHash, undefined);
       return new Response(JSON.stringify({
         ok: true,
         instanceId,
@@ -359,7 +346,6 @@ test("real WhatsApp demo onboarding sends through broker registered WA router", 
       execute: true,
       apiBase: "http://oss.example.test",
       orkestrHome: home,
-      chatId,
       phoneNumber: "+49 176 000000",
       responderAccountId: "responder",
       setupUrl: "",
