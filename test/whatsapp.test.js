@@ -4275,6 +4275,63 @@ test("whatsapp inbound ignores fromMe text echoes with rewritten message ids", a
   ), true);
 });
 
+test("whatsapp inbound ignores fromMe text echoes from delivered connector outbox jobs", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-thread-outbox-text-echo-"));
+  const env = externalBridgeEnv(home);
+  await writeConnectorConfig("whatsapp", {
+    bridgeMode: "external",
+    bridgeUrl: "http://wa.local",
+    threadRoutes: { "chat-thread-outbox-text-echo": "thread-wa-outbox-text-echo" },
+  }, env);
+  await createThread({
+    id: "thread-wa-outbox-text-echo",
+    name: "WA Outbox Text Echo Thread",
+    binding: {
+      connector: "whatsapp",
+      chatId: "chat-thread-outbox-text-echo",
+      responderAccountId: "responder",
+      outboundAccountId: "responder",
+      mirrorToWhatsApp: true,
+    },
+  }, env);
+  await writeConnectorOutbox({
+    schemaVersion: 1,
+    jobs: [{
+      id: "co-wa-outbox-text-echo",
+      connector: "whatsapp",
+      state: "delivered",
+      chatId: "chat-thread-outbox-text-echo",
+      accountId: "responder",
+      threadId: "thread-wa-outbox-text-echo",
+      sourceMessageId: "assistant-outbox-text-echo",
+      deliveryType: "final",
+      payload: { text: "Delivered from the connector outbox." },
+      deliveredAt: new Date().toISOString(),
+      brokerAck: { ids: ["true_chat-thread-outbox-text-echo_sent-original"] },
+    }],
+  }, env);
+
+  const routed = await routeWhatsAppInbound({
+    eventId: "true_chat-thread-outbox-text-echo_echo-rewritten",
+    chatId: "chat-thread-outbox-text-echo",
+    accountId: "responder",
+    from: "responder@lid",
+    fromMe: true,
+    text: "Delivered from the connector outbox.",
+  }, env);
+  const messages = await listThreadMessages("thread-wa-outbox-text-echo", env);
+  const traces = await listRouterTraces({ threadId: "thread-wa-outbox-text-echo" }, env);
+
+  assert.equal(routed.skipped, "outbound_echo_delivery_text");
+  assert.equal(routed.threadId, "thread-wa-outbox-text-echo");
+  assert.equal(routed.event.connectorOutboxJobId, "co-wa-outbox-text-echo");
+  assert.equal(messages.length, 0);
+  assert.equal(traces.some((trace) =>
+    trace.routerTraceId === routed.event.routerTraceId &&
+    trace.phases.some((phase) => phase.reason === "outbound_echo_delivery_text")
+  ), true);
+});
+
 test("whatsapp router ignores cross-account outbound attachment delivery acks", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-router-cross-account-attachment-echo-"));
   const env = externalBridgeEnv(home);

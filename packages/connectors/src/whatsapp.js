@@ -917,9 +917,12 @@ function outboundEchoDeliveryRecord(job = {}) {
     deliveryType: pickString(job.deliveryType),
     threadId: pickString(job.threadId),
     messageId: pickString(job.sourceMessageId),
+    sourceMessageId: pickString(job.sourceMessageId, job.sourceEventId),
     connectorOutboxJobId: pickString(job.id),
     chatId: pickString(job.chatId),
     accountId: pickString(job.accountId),
+    payloadText: pickString(job.payload?.text),
+    deliveredAt: pickString(job.deliveredAt, job.terminalAt, job.updatedAt),
     brokerAck: job.brokerAck,
   };
 }
@@ -973,7 +976,12 @@ function outboundEchoDeliveryForText(outboundDeliveries = [], connectorOutboxJob
   const chatId = pickString(input.chatId, input.chat?.id, input.fromChatId);
   const accountId = pickString(input.accountId);
   const nowMs = Date.now();
-  const records = [...(outboundDeliveries || [])];
+  const records = [
+    ...(outboundDeliveries || []),
+    ...(connectorOutboxJobs || [])
+      .filter((job) => pickString(job.state).toLowerCase() === "delivered")
+      .map((job) => outboundEchoDeliveryRecord(job)),
+  ];
   return records.reverse().find((delivery) => {
     const deliveryChatId = pickString(delivery.chatId);
     if (chatId && deliveryChatId && chatId !== deliveryChatId) return false;
@@ -2820,6 +2828,7 @@ export async function routeWhatsAppInbound(input = {}, env = process.env, fetchI
       accountId: initialAccountId,
       messageId: pickString(outboundEchoDelivery.messageId),
       deliveryType: pickString(outboundEchoDelivery.deliveryType),
+      ignoredReason,
     }, env).catch(() => {});
     return {
       duplicate: false,
