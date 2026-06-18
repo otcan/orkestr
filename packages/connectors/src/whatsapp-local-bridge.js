@@ -49,6 +49,11 @@ export function localWhatsAppAccountIdsForEnv(env = process.env) {
   return configured.length ? [...new Set(configured)] : localWhatsAppAccountIds;
 }
 
+function strictLocalWhatsAppAccountIds(env = process.env) {
+  const raw = String(env.ORKESTR_WHATSAPP_STRICT_ACCOUNT_IDS || env.WHATSAPP_LOCAL_STRICT_ACCOUNT_IDS || "").trim().toLowerCase();
+  return ["1", "true", "yes", "on"].includes(raw);
+}
+
 function uniqueAccountIds(values = []) {
   const seen = new Set();
   const result = [];
@@ -70,8 +75,10 @@ async function persistentLocalWhatsAppAccountIds(env = process.env) {
 }
 
 async function managedLocalWhatsAppAccountIds(env = process.env) {
+  const configured = localWhatsAppAccountIdsForEnv(env);
+  if (strictLocalWhatsAppAccountIds(env)) return configured;
   return uniqueAccountIds([
-    ...localWhatsAppAccountIdsForEnv(env),
+    ...configured,
     ...(await persistentLocalWhatsAppAccountIds(env)),
   ]);
 }

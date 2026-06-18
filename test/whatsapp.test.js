@@ -873,6 +873,27 @@ test("local whatsapp bridge accepts persisted connector accounts without exposin
   );
 });
 
+test("local whatsapp strict account ids ignore persisted legacy responder accounts", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-strict-accounts-"));
+  const env = {
+    ORKESTR_HOME: home,
+    ORKESTR_WHATSAPP_ACCOUNT_IDS: "sender",
+    ORKESTR_WHATSAPP_STRICT_ACCOUNT_IDS: "1",
+  };
+  await upsertWhatsAppConnectorAccount({
+    accountId: "responder",
+    ownerUserId: "admin",
+    displayName: "Legacy responder",
+    autostart: true,
+  }, env);
+
+  const bridgeStatus = await getLocalWhatsAppBridgeStatus(env);
+  const status = await getWhatsAppStatus(env);
+
+  assert.deepEqual(bridgeStatus.accounts.map((account) => account.accountId), ["sender"]);
+  assert.deepEqual(status.accounts.map((account) => account.accountId), ["sender"]);
+});
+
 test("local whatsapp bridge exposes public account identity without session internals", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-public-account-identity-"));
   const env = { ORKESTR_HOME: home, ORKESTR_WHATSAPP_ACCOUNT_IDS: "responder" };

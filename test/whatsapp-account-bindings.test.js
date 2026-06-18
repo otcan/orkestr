@@ -747,3 +747,59 @@ test("WhatsApp broker migration persists accounts and canonicalizes legacy threa
   assert.equal(second.counts.scopedTokensCreated, 0);
   assert.equal(second.counts.tokenPlansMissing, 0);
 });
+
+test("WhatsApp broker migration honors strict configured account ids", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-wa-strict-migration-"));
+  const env = {
+    ORKESTR_HOME: home,
+    ORKESTR_ADMIN_USER_ID: "admin",
+    ORKESTR_WHATSAPP_ACCOUNT_IDS: "sender",
+    ORKESTR_WHATSAPP_DEFAULT_RESPONDER_ACCOUNT_ID: "sender",
+    ORKESTR_WHATSAPP_AUTOSTART_ACCOUNT_IDS: "sender",
+    ORKESTR_WHATSAPP_STRICT_ACCOUNT_IDS: "1",
+  };
+  await upsertWhatsAppConnectorAccount({
+    accountId: "responder",
+    ownerUserId: "admin",
+    displayName: "Old responder",
+    autostart: true,
+  }, env);
+  await createThread({
+    id: "strict-old-responder",
+    name: "Strict Old Responder",
+    binding: {
+      connector: "whatsapp",
+      chatId: "strict-old@g.us",
+      responderAccountId: "responder",
+      outboundAccountId: "responder",
+    },
+  }, env);
+
+  const result = await migrateWhatsAppBrokerConfig({
+    status: {
+      mode: "local",
+      accounts: [
+        { accountId: "sender", state: "ready", ready: true },
+        { accountId: "responder", state: "qr_required", ready: false, autostart: true },
+      ],
+    },
+  }, env);
+  const accounts = await readWhatsAppConnectorAccounts(env);
+
+  assert.ok(result.accounts.some((account) => account.accountId === "sender"));
+  assert.equal(result.accounts.some((account) => account.accountId === "responder"), false);
+  assert.deepEqual(accounts.map((account) => account.accountId), ["responder", "sender"]);
+  assert.equal(accounts.find((account) => account.accountId === "responder").autostart, true);
+  const listed = listWhatsAppConnectorAccounts({
+    env,
+    registryAccounts: accounts,
+    status: {
+      mode: "local",
+      accounts: [
+        { accountId: "sender", state: "ready", ready: true },
+        { accountId: "responder", state: "qr_required", ready: false, autostart: true },
+      ],
+    },
+  });
+  assert.deepEqual(listed.map((account) => account.accountId), ["sender"]);
+});

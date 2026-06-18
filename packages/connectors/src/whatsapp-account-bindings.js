@@ -88,6 +88,11 @@ function autostartAccountIdsForEnv(env = process.env) {
     : [];
 }
 
+function strictAccountIdsForEnv(env = process.env) {
+  const raw = pickString(env.ORKESTR_WHATSAPP_STRICT_ACCOUNT_IDS, env.WHATSAPP_LOCAL_STRICT_ACCOUNT_IDS).toLowerCase();
+  return ["1", "true", "yes", "on"].includes(raw);
+}
+
 function accountAutostart(accountId = "", account = {}, env = process.env) {
   if (account.autostart === true) return true;
   const selected = autostartAccountIdsForEnv(env).map((item) => item.toLowerCase());
@@ -110,6 +115,7 @@ function configuredAccountIds(status = {}, env = process.env, registryAccounts =
     pickString(status.bridgeUrl) === localWhatsAppBridgeBasePath ||
     (!pickString(status.mode) && !pickString(status.bridgeUrl));
   const localDefaults = localMode ? localWhatsAppAccountIdsForEnv(env) : [];
+  if (strictAccountIdsForEnv(env) && fromEnv.length) return unique([...fromEnv, ...localDefaults]);
   return unique([...fromStatus, ...fromRegistry, ...fromEnv, ...localDefaults]);
 }
 
